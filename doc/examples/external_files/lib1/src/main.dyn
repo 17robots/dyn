@@ -1,0 +1,15 @@
+// so this being the root of a lib project means this should just be a series of exports and or fns that create another lib, but that is a topic for later
+
+// in this case, since this is just a lib, we need to export some fns
+
+// we can actually import all items and re export them to make them hoisted for easier development
+
+export import * from './second.dyn'; // this will take all exports from second and export them here
+
+// you can also export *; and then import to get the same effecti, however its better practice to whitelist imports and exports
+
+// but it can be done
+
+export *;
+
+import { * } from './helpers/main.dyn';

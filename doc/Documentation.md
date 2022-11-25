@@ -1,0 +1,231 @@
+# Dyn Documentation
+
+## Table Of Contents
+- Introduction
+    - Intro to Reader
+    - Tour Of Documentation
+        - Core Programming Overview
+        - Abstraction Overview
+        - Advanced Programming Overview
+        - Package Management Overview
+        - Compiler Overview
+- Installation
+- Getting Started
+    - Hello World
+    - Structure of Dyn Program
+    - Dynfile Overview
+- Basic Programming Topics
+    - Variables
+        - Standard Variables
+        - Constants
+    - Types
+        - Primitive Types
+        - Collections
+            - Arrays
+            - Tuples
+        - Memory Types
+            - Pointers
+            - References
+        - Enums
+    - Control Flow
+        - If
+        - Loops
+        - Select
+        - Ranges
+    - Functions
+        - Creating A Function
+        - Functions With Arguments
+        - Functions That Give Back
+        - Function Scope
+        - Stateless Functions
+        - Functions As Variables
+    - Error Handling
+        - Error Handling Philosophy
+        - Generating Errors
+        - Handling Errors
+            - Try Catch
+            - Uncertainty Wrapping
+        - Creating Custom Errors
+    - Documentation
+    - Dyn CLI First Look
+        - Basic Usage
+        - Common Use Cases
+        - Confguring For Your Terminal
+    - Package Management
+        - Adding Package
+        - Package Imports
+        - Basic Package Operations
+- Abstraction Topics
+    - User-Defined Types
+        - Creating A User Defined Type
+        - Type Methods
+        - Usage
+            - Creation
+            - Access Members
+        - Extending Types
+    - Operator Overloading On User-Defined Types
+    - Interfaces
+        - Creation
+        - Implementation
+        - Binding
+    - Type Composition
+        - Locical Operators
+        - Satisfying Compositions
+    - Metaprogamming
+        - Macros
+            - Declaration
+            - Usage
+        - Generics
+            - Generics Syntax
+            - Usage In Functions
+            - Usage In User-Defined Types
+            - Generics Binding
+        - Type Aliasing
+            - Creation
+            - General Usage
+            - Argument Usage
+            - Return Type Usage
+    - The Dyn Keyword
+        - Overview
+        - Use Cases
+        - Practical Example: Zoos
+- Advanced Programming Topics
+    - Testing
+        - Testing Philosophy
+        - Unit Tests
+        - Integration Tests
+        - Running Tests
+    - Memory Management
+        - Pointers
+        - Lifetimes
+        - Manage Blocks
+    - Concurrency
+        - Tasks
+        - Resolving Tasks
+        - Getting Results From Tasks
+        - To Share Or Not To Share - Guide To Channels
+    - Dyn As A Multiparafigm Language
+        - Object Oriented (OOP) Features
+            - Virtual Functions and Late Binding
+            - Attribute Visibility Modifiers
+            - Polymorphism
+        - Functional Programming Features
+            - Iterators
+            - Closures
+            - Chaining Calls
+- Advanced Dyn Topics
+    - Package Management
+        - Advanced Package Operations
+        - Freezing
+        - Custom Packages
+    - Dyn CLI
+        - Managing Dyn Builds
+        - Dyn Repl
+        - AST Viewer
+        - Extending Dyn CLI With Runtime Flags
+    - Dynfile
+        - Overview
+        - Common Syntax
+        - Syntax Antipatterns
+        - Workspaces
+        - Changing Package Install Directory
+    - Advanced Compiler Usage
+        - Compiler Options
+        - Saving Compiler Options In Dynfile
+        - Compiler Flags List
+        - Different Build Files
+        - Transpiling
+        - Manual Fine Tuning
+            - With Bin
+            - With Source
+
+Topics to cover
+- [X] Installation
+- [X] Dyn CLI
+- [X] Structure Of Program
+- [X] Dynfile
+- [X] Variables
+- [X] Types
+    - [X] Primitive
+    - [X] Array
+    - [X] Tuple
+    - [X] Pointer
+    - [X] Enums
+    - [X] User Defined Types (Structs)
+        - [X] Creating User Defined Types
+        - [X] Extension
+        - [X] Type Methods
+    - [X] Type Compositon
+        - [X] Logical Operators On Types
+        - [X] Satisfying
+- [X] Metaprogramming
+    - [X] Defining Macros
+    - [X] Generics
+        - [X] Creating Generics
+        - [X] In Functions
+        - [X] In User-Defined Types
+        - [X] Generics Binding
+        - [X] Dyn Keyword
+    - [X] Type Declarations And Aliasing
+        - [X] Creating Type Alias
+        - [X] Using Type Aliasing
+            - [X] General Use
+            - [X] As Argument
+            - [X] As Return Type
+- [X] Functions
+    - [X] Declaration
+    - [X] Arguments
+    - [X] Return Types
+    - [X] Scope
+    - [X] Stateless Functions
+    - [X] Functions As Variables
+- [X] Error Handling
+    - [X] Generating Errors
+    - [X] Custom Errors
+    - [X] Handling Errors
+        - [X] Try/Catch
+        - [X] Uncertainty Features
+- [X] Testing
+    - [X] Testing Philosophy
+    - [X] Unit Tests
+    - [X] Integration Tests
+    - [X] Running Testing
+- [X] Package Management
+    - [X] Adding New Packages
+    - [X] Package Operations
+    - [X] Creating Custom Packages
+- [X] Concurrency
+    - [X] Tasks
+    - [X] Resolving Tasks
+    - [X] Getting Results From Tasks
+    - [X] To Share Or Not To Share - Using Channels
+- [X] Control Flow
+    - [X] If
+    - [X] Switch/Match
+    - [X] Loops
+        - [X] While
+        - [X] Do/While
+        - [X] For
+- [X] Constants
+- [X] Memory Management
+    - [X] Pointers
+    - [X] Manage Blocks
+    - [X] Lifetimes
+- [X] Documentation
+- [X] Advanced Compiler
+    - [X] Compiler Options
+    - [X] Saving Compiler Options In Dynfile
+    - [X] Compiler Flags
+    - [X] Different Build Profiles
+    - [X] Transpiling
+    - [X] Manual Fine Tuning
+- [X] Programming Paradigms
+    - [X] OOP
+        - [X] Virtual Fns
+        - [X] Changing Attribute Visibility
+        - [X] Inheritence
+    - [X] Functional
+        - [X] Iterators
+        - [X] Closures
+        - [X] Chaining
+- [X] Standard Package Overview And Documentation

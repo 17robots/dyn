@@ -1,0 +1,32 @@
+project:
+  name: "example-project"
+  author: "17robots"
+  description: "An example dyn project"
+  version: "0.1.0"
+  homepage: "google.com"
+  license: "MIT"
+  start: "src/main.dyn"
+  buildOptions:
+    type: console
+workspace:
+  - lib1:
+    src: "./lib1"
+    main: "src/main" # this could be specified if the package doesnt have a build.yml or it doesnt make sense for your project, just gives a way to pull the most crucial pieces in through one central location but this is optional and not needed if build.yml specified
+    options:
+    cache: false
+    version: "0.0.1"
+    type: lib
+  - helper:
+    src: "../otherpkg"
+    cache: true
+    version: "0.1.0"
+    type: lib
+dependencies:
+  - "md5@latest"
+  - http:
+    - verison: latest
+    - cache: false
+scripts:
+  - build: ""
+  - start: ""
+  - dev: ""

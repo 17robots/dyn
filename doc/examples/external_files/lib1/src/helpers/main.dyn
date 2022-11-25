@@ -1,0 +1,6 @@
+// since this is a hoister file, we can get away with doing an export *;
+
+export *;
+
+import * from './math2.dyn'
+import * from './other.dyn'

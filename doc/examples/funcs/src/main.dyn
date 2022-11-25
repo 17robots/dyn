@@ -1,0 +1,152 @@
+import io;
+// fns work the same way like other fns, but take the c approach and define [returntype] name (type param, ...) {body}
+
+void example() {
+	io::println("Hello World");
+}
+
+// fns can return and take in a variety of types
+i32 number() {
+	5 // implicit return here
+}
+
+// can also handle fns
+void() getNewFn() {
+	void() { // can implicitly return a fn
+		io::println("hello world");
+	}
+}
+
+// we can also take them as args
+void item(void() yes) {
+	io::println("Calling passed fn");
+	yes();
+}
+
+// these fns can also take fns that have params
+i32(i32 x, i32 y) coolFn(i32(i32 x, i32 y) adder) {
+	adder; // types and return type need to match exactly
+}
+
+// this gets tedious so we can actually define a basic type to handle the methods we want
+type AdderFn = i32(i32 x, i32 y);
+
+// now it becomes easier to manage some of these calls
+
+i32 sum(AdderFn item) {
+	AdderFn(1, 2) // we can implicitly return the call to the fn since the signature is the same
+}
+
+// we can pass types into fns as well
+type Animal {
+	char* name,
+	i32 age,
+}
+
+void animalFn(Animal a) {
+	io::println("${a.age}");
+}
+
+// however this will not change the instance when the fn ends because the item is copied in
+// and copying things is expensive so we need to do something different
+// we can reference things instead
+void referencedAnimal(Animal &a) {
+	a.age = 12;
+}
+
+// the above will copy a reference into the fn when called (and the compiler doesnt need a ref specified when calling since it knows to do that automatically)
+
+// we can also pass pointers in (which we will cover in a later section)
+
+void passPointer(i32* age) {
+	// we can do stuff with age but since its a pointer we need to dereference it still
+	io::println(*a);
+}
+
+// now for some generics because overloading is very annoying
+
+// all generics need to be defined before the context of the scope the generic is used
+// generics are defined as follows
+void genericExample<T>(T item) {
+	io::println(T);
+}
+
+// returning a type of T is a little more complicated than that
+<T> item(T item2) { item2 } // doesnt need to be on a new line
+// since we dont have a type above, the attached <T> is used as both the generic specifier and the return type to kill 2 birds with one stone
+
+// heres a generic example in a type for funsies
+type Vector<T> {
+	hidden T item,
+	T getItem(): T() { self.item }, // we dont need <T> because T was defined in the above scope when the type was defined
+	void setItem(T), void(T item) { self.item = item; }
+}
+
+// heres how to narrow in the scope of the generics
+void item<
+T where i32 & i64 & float & float64, // uses similar syntax to extending
+U where T & char, // can have multiple generics as well here, and we can use previous generic definitions as well in the fn
+>( T item1, U item2) {
+	// body
+}
+
+// fns can also return any type defined
+
+// finally, the dyn keyword
+
+// the dyn<T where T base_type> keyword
+// the dyn keyword is designed to make generics easier when dealing with objects of the same base type
+// the dyn will always resolve the types to be the most memory efficient for the given pieces of data
+
+// for example
+void letsAddInts<T where i8, i16, i32, i64, i128>(T num1, T num2) { io::println(num1 + num2); }
+
+// can be cleaned up to be
+void letsAddInts2(dyn<int> item1, dyn<int> item2) { io::println(num1 + num2); }
+
+// these can also be returned
+dyn<int> returnAddNums<dyn<int> item1, dyn<int> item2) { item1 + item2 }
+
+// where this also helps is with defined types that all extend a basic type but can be returned as different ones (factories)
+type Animal {};
+
+type Dog : Animal {};
+
+type Cat : Animal {};
+
+// 2 versions
+dyn<Animal> animalFactory1(char* type) {
+	switch(type) {
+		"Cat" => Cat(),
+		"Dog" => Dog()
+	}
+}
+
+dyn<Animal> animalFactory2(dyn<Animal> input) {
+	switch(input) {
+		Dog => Dog(...input),
+		Cat => Cat(...input),
+	}
+}
+
+// this can also be used in this case too
+void main() {
+	dyn<Animal> animal = animalFactory1("cat");
+	// we can check it with a switch
+	switch(animal) {
+		Cat => io::println("Wow Im a cat ${animal.speak()}"),
+		Dog => io::println("Wow Im a dog ${animal.speak()}"),
+	}
+}
+
+// now we can combine generics and dyn to make a clean fn
+void addToAnimal<
+T where dyn<int>,
+U where Animal
+>(T amount, U &animal) {
+
+}
+// this type of system will error if the types' required fields are not set so checking for them becomes all the more important
+
+// here we go with our own minifns
+

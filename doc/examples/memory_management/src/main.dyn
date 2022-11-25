@@ -1,0 +1,83 @@
+// so here are my thoughts on memory management
+
+// so we need heap access for more performant code when it comes to more practical pieces of data like textures and the like that get too large to be on the stack
+
+// so things on the heap can be created using pointers
+
+void pointerExample() {
+	i32 *p = NULL; // empty pointer
+	
+	i32 here = 1;
+	
+	p = &here; // & to grab address of here
+	
+	*p = 2; // change with deref op, here is 2
+	
+	i32 *q = &here; // uh oh we have a second one here that points to the same var as p
+	
+	// heres where the magic of dyn comes in, the compiler will prevent data races by ensuring there is only ever one pointer to a var and replacing calls to the freshest pointer, freeing up the other one
+	
+	// so for example
+	
+	*p = 4;
+	*q = 5;
+	
+	// here there isnt anything wrong
+	// ok so heres how I want to manage pointers
+	// pointers in dyn are dynamic, meaning the intents are read and handled accordingly
+	// all references to a piece of data are recorded and kept track of by dyn at the start of the program
+	// these intents are read based on read or write and a strategy is formulated to deal with the different intents
+	// 1. on an all read set, the pointers are left alone and they can go about their business
+	// 2. on all writes the pointers are also left alone, but the write requests are made atomically so the pieces do not alter the same piece of data at the same time
+	// 3. on read and writes each thread gets a shadow of the var, which is the estimation of the reference if only that reference was messing with the referenced value and it can be left to its own devices
+	// 4. finally, pointers to data have their lifespan calculated and the frees are automatically added in if not present already
+	// 5. if a reference is freed and then accessed again, dyn will move the deallocation until after the last time the reference is accessed
+	// 6. if the data the item is referencing is cleared, then dyn will throw an error that a stale pointer has been created and show the data it was referencing
+	// 7. if references are created and never used, dyn cuts them out
+	
+	// for example of all conditions
+	// 1 example
+	void pointerOneEx() {
+		i32 test = 6;
+		
+		i32* p1, p2, p3 = &test;
+		
+		io::println(*p1);
+		io::println(*p2);
+		io::println(*p3);
+		
+		// all read, dyn leaves them alone
+	}
+	
+	void pointerTwoExample() {
+		i32 test = 6;
+		
+		void threadFunc() {
+			i32 sum = 0;
+			for(i32 i in 0..100) {
+				sum += i;
+			}
+			
+			i32* p = &test;
+			*p += sum;
+		}
+		
+		// all write, so atomicized so they can all write
+	}
+	
+	void pointerThreeExample() {
+		i32 test = 6;
+		
+		void threadFunc(i32 num) {
+			i32 *p = &test;
+			i32 loopSize = *p * num; // read 
+			i32 sum = 0;
+			for(i32 i in 1..loopSize) {
+				sum += i;
+			}
+			
+			*p += sum; // write
+		}
+		// this will cause p to be a shadow of 6 where the val is calculated as if only the current ref is acting on it, and then it will use atomic writes at the end
+	}
+}

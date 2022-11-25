@@ -1,0 +1,18 @@
+// there are several different types in dyn
+
+/* primative
+	i8, i16, i32, i64, i128 = signed ints with 8-128bits
+	u8, u16, u32, u64, u128 = unsigned ints with 8-128bits
+	f32, f64 = floating point precision with single or double precision accoring to IEEE standards
+	char = 8 bit ascii character
+	bool = true or false bit
+*/
+
+*/ compound
+	 () tuple type
+	T[] array of type T
+*/
+
+*/ advanced
+	*T pointer to type T
+*/
