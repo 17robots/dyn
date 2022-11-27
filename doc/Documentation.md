@@ -4,29 +4,29 @@
 - Introduction
     - Intro to Reader
     - Tour Of Documentation
-        - Core Programming Overview
-        - Abstraction Overview
-        - Advanced Programming Overview
-        - Package Management Overview
-        - Compiler Overview
+        - Basic Programming
+        - Abstraction
+        - Advanced Programming
+        - Advanced Dyn
 - Installation
 - Getting Started
     - Hello World
     - Structure of Dyn Program
     - Dynfile Overview
-- Basic Programming Topics
+- Basic Programming
     - Variables
         - Standard Variables
         - Constants
+        - Casting
     - Types
         - Primitive Types
         - Collections
             - Arrays
             - Tuples
+        - Enums
         - Memory Types
             - Pointers
             - References
-        - Enums
     - Control Flow
         - If
         - Loops
@@ -46,8 +46,9 @@
             - Try Catch
             - Uncertainty Wrapping
         - Creating Custom Errors
-    - Documentation
-    - Dyn CLI First Look
+    - Documentation With Comments
+- Basic Dyn
+    - Dyn CLI: A First Look
         - Basic Usage
         - Common Use Cases
         - Confguring For Your Terminal
@@ -55,7 +56,7 @@
         - Adding Package
         - Package Imports
         - Basic Package Operations
-- Abstraction Topics
+- Abstraction
     - User-Defined Types
         - Creating A User Defined Type
         - Type Methods
@@ -89,7 +90,7 @@
         - Overview
         - Use Cases
         - Practical Example: Zoos
-- Advanced Programming Topics
+- Advanced Programming
     - Testing
         - Testing Philosophy
         - Unit Tests
@@ -97,6 +98,7 @@
         - Running Tests
     - Memory Management
         - Pointers
+        - Void Pointers
         - Lifetimes
         - Manage Blocks
     - Concurrency
@@ -113,7 +115,7 @@
             - Iterators
             - Closures
             - Chaining Calls
-- Advanced Dyn Topics
+- Advanced Dyn
     - Package Management
         - Advanced Package Operations
         - Freezing
