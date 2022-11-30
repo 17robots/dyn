@@ -1,0 +1,19 @@
+import io;
+const i32 CONSTANT = 2; // constants need initialized when declared
+
+void main() {
+  // first = 3; <- cannot use a var before it's been defined
+  // create a variable with [type] [name];
+  i32 first; // declare a variable with an i32 type
+  i32 second = 0; // declare a variable and initialize it
+
+  first = second; // assign an uninitialized variable
+  second = 1; // reassign a variable
+
+  io::println(CONSTANT); // global var still in scope here
+
+  // CONSTANT = 3; <- cannot reassign a constant
+}
+
+// variable out of scope here
+// first = 2; <- this will error since its out of scope

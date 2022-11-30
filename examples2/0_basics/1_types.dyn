@@ -1,0 +1,64 @@
+import io;
+enum Weekday {
+  MONDAY,
+  TUESDAY,
+  WEDNESDAY,
+  THURSDAY,
+  FRIDAY,
+  SATURDAY,
+  SUNDAY
+};
+
+void main() {
+  io::println(WeekDay::MONDAY); // prints "Weekday::MONDAY"
+  // primative types
+  // i8, i16, i32, i64, i128 <- signed int of specified sizes in bits
+  // u8, u16, u32, u64, u128 <- unsigned int of specified sizes in bits
+  // f32, f64 <- floating point single and double precision types
+  // char <- 256 ascii character type
+  // bool <- boolean value (true or false)
+
+  // collection types
+  // array
+  i32[3] arr1; // define with [type][[num in arr]] [name]; <- known size not initialized
+  i32[] arr2 = [1,2,3,4]; // define with [type][] [name] = [literal]; // size calculated off literal, all need to be same type
+  io::println(arr2[0]); // access elem in arr
+  arr2[0] = 2; // change val at arr
+  io::println(arr2[0]); // access elem in arr
+  // io::println(arr1[0]); <- will error because no val has been assigned
+
+  // arrays cannot be resized
+
+  // tuple
+  tuple<i32, char, char> tup1; // declare a tuple
+  (i32, char, char) tup2; // declare a tuple part 2
+
+  // access elem of tuple
+  // io::println(tup1.0, tup2.0); <- errors because not assigned
+  tup1.0 = 0;
+  tup1.1 = 'c';
+  tup1.2 = 'd';
+  tup2.0 = 0;
+  tup2.1 = 'c';
+  tup2.2 = 'd';
+
+  io::println(tup1.0);
+
+  (i32, i32) origin = (0,0); // assign with literal
+
+  io::println(origin.0, origin.1);
+
+  // memory types
+  i32* point = new(0); // define a pointer to a var on the heap
+  io::println(point, *point); // prints address, dereference with * to print value at location
+
+  i32 x;
+  i32* y = &x; // assign pointer to address of var
+  *y = 3; // change val at addressed var
+  io::println(x); // x now 3 because of y dereference
+
+  // references are just addresses in memory where the var is stored
+  // access references with &, only associated with a var itself as it's stored in memory
+  // new() returns a reference to the var it allocates on the heap, the pointer type tells it what size to allocate
+  io::println(&x); // prints memory address of x
+}
