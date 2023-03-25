@@ -1,0 +1,99 @@
+// learn dyn in one file <- single line comment
+import io; // import items with import and the package name, imports all items from io accessible with the io package keyword
+import { something, somethingelse } from otherpkg; // import selective items from package
+
+
+/*
+  this is the main function and the order doesnt matter. if not included, the file you run with during interpretation will be read as though the body of the file is the main fn
+*/
+void main() {
+  io.println("Hello world");
+  variable_specifics();
+  types(); // fn call
+  functions();
+}
+
+void variable_specifics() {
+  // variables are mutable when created
+  i32 x = 0;
+  x = 1; // valid
+
+  // specify const with ! at the end of the type: [type]!
+  i32! y = 1;
+  y = 1; // will be caught by the compiler and flagged
+
+  // specify static with !! at the end of the type: [type]!!
+  i32!! z = 1000; 
+
+  // here is a breakdown of the different types and what they do in the program
+  // normal var: can change, bound by scope. can be left uninitialized
+  // const var: cannot change, bound by scope, needs to be initialized. can be dynamically initialized
+  // static var: cannot change, scoped for entire program, needs to be initialized. cannot be dynamically initialized, needs to be something calculatable at compile time. vals baked into binary
+  // also good practice for statics to be named in all caps
+}
+
+void types() {
+  // primitive types
+  u8 short_short_unsigned; // unsigned 8 bit int
+  u16 short_unsigned; // unsigned 16 bit int
+  u32 unsigned; // unsigned 32 bit int
+  u64 long_unsigned; // unsigned 64 bit int
+  u128 long_long_unsigned; // unsigned 128 bit int
+  i8 short_short_signed; // signed int 8 bits
+  i16 short_signed; // signed int 16 bits
+  i32 signed; // signed int 32 bits
+  i64 long_signed; // signed int 64 bits
+  i128 long_long_signed; // signed int 128 bits
+  f32 single_float; // ieee single precision floating point number
+  f64 double_float; // ieee double precision floating point number
+  char utf; // 256 ascii char
+  bool ean; // true | false
+
+  // compound types
+  i32[] array;
+  arrays(); // more on arrays
+
+  tuple tup;
+  tuples(); // more on tuples
+}
+
+void arrays() {
+  // arrays are contiguous blocks of the same type
+  // arrays can be made of any type
+  i32[] arr1; // valid
+  i32[][] arr2l // also valid
+  char[] arr3; // also also valid
+
+  // initialize an array with values
+  i32[] arr4 = [1,2,3,4];
+  i32[] arr5 = [4; 0]; // initialize 4 elements with the value of 0, same as = [0,0,0,0];
+
+  // access array
+  io.println(arr4[0]); // prints 1
+
+  // set array elems with accessor
+  arr5[1] = 1;
+  arr5[2] = 2;
+  arr5[3] = 3;
+
+  // arrays have a couple other features built in:
+  io.println(arr4.sum()); // sums array
+  io.println(arr4.len()); // gets len of array in exact size
+}
+
+void tuples() {
+  // define tuple with tuple vals
+  (i8, char, bool) x = (0,'a',false);
+
+  // access tuple vals
+  io.println(y.0); // prints 1
+  x.0 = 1;
+  x.1 = 'b';
+  x.2 = true;
+  // tuple vals can only be set to vals contained within their type, so this doenst work:
+  // x.0 = 'z' -> doesnt work because x.0 is an i8 not a char
+}
+
+void functions() {
+  
+}
