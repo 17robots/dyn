@@ -1,6 +1,0 @@
-import io;
-
-void main() {
-	// dyn presents 2 types of initially collected data: arrays and tuples
-	// arrs are contiguous segments of memory of one data type that are indexed off the base
-}
