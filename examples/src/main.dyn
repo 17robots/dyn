@@ -9,8 +9,11 @@ import { something, somethingelse } from otherpkg; // import selective items fro
 void main() {
   io.println("Hello world");
   variable_specifics();
-  types(); // fn call
+  types();
+  control_flow();
   functions();
+  error_handling();
+  memory_management();
 }
 
 void variable_specifics() {
@@ -95,5 +98,205 @@ void tuples() {
 }
 
 void functions() {
+  // functions are an integral to the language
+  // functions can be declared in global scope or in the scope of other functions
+  // define a fn
+  void example_fn() {} // include type, name and parens with the body of fn
+
+  // call the fn with just parens
+  example_fn();
+
+  // this function only exists in the functions scope
   
+
+  // function that returns something
+  i32 five() {
+    return 5;
+  }
+
+  io.println(five()); // call fn that returns a val in place of actual val
+
+  // parameters in fns
+  void print_sum(i32 x, i32 y) {
+    io.println(x + y);
+  }
+
+  // parameters are pass by reference by default but ints are pass by copy since it's more performant to do it that way
+
+  // any type can be passed as a parameter, including arrs, tuples, and other fns, which can also be the return type
+  // arrs as parameters
+  void print_arr(i32[] x) {
+    for(y in x) {
+      io.println(y);
+    }
+  }
+  // call this fn using an arr literal
+  print_arr([1,2,3,4,5]);
+
+  // tuples as parameters
+  void print_tuple((i32,char,bool) my_tup) {
+    io.println(my_tup.0);
+    io.println(my_tup.1);
+    io.println(my_tup.2);
+  }
+
+  // call the fn - need to be careful since the tuple type becomes (i32,char,bool), the tuple passed needs these fields in this order, can still use a tuple literal as long as it matches the type
+  print_tuple((1,'a',true)); // anything other than these val types in this order will fail
+
+  // defining a fn that returns a fn and takes one as an argument
+  void(i32,i32) chained_fn(void(i32,i32) x) {
+    void a(i32 y, i32 z) {
+      io.println("Calling arg fn x on {y} {z}");
+      x(y,z);
+    }
+    return a;
+  }
+  // to call this fn 
+  chained_fn(print_sum)(1,2); // we can use the above fn as an argument since it matches the same type for that fn, the (1,2) is just calling the fn directly
+  // fn types are written differently than actual fn declarations, the fn type is [type]([type1],[type2]) [var name]
+  // this is done so that they can be passed as args more easily and flexibly
+
+  // inline fns(lambdas) can work too as long as it matches the fn signature passed as the arg for the fn
+  chained_fn(void(i32 x, i32 y) {
+    io.println(x);
+    io.println(y);
+  })(0,1);
+
+  // anonymous fns are created like normal fn declarations except they do not have a name
+  // for example
+  i32[] filter(i32[] to_filter, bool(i32) filter_fn) {
+    i32[] results = [];
+    for(x in to_filter) {
+      if(filter_fn(x)) {
+        results.push(x);
+      }
+    }
+    return results;
+  }
+
+  // then we can call
+  io.println(filter([1,2,3,4,5], bool(i32 y) {
+    return y > 1;
+  })); // prints [2,3,4,5]
 }
+
+void control_flow() {
+  // there are 3 different control flow structures:
+  //  - loops
+  //  - branches
+
+  /* branches */
+  // branches are different strategies for making choices
+  // if branch
+  if 3 > 1 {
+    io.println("We got the bigger number");
+  }
+
+  // can also do else and else if
+  if 3 > 1 {}
+  else if 3 == 1 {}
+  else {}
+
+  // match branch
+  match 4 {
+    1 => {},
+    2 => {},
+    3 => {},
+    4 => {},
+    _ => {},
+  }
+  // match will run the code in {} for each statement that's true
+  // _ represents catch all default case that will run if other branches do not
+  
+  // can use conditionals in match too
+  // fizbuzz
+  match 15 {
+    % 5 == 0 {io.print("fizz");}, // will run
+    % 3 == 0 {io.print("buzz")}, // will run
+    _ => {}, // will not run since other branches ran
+  } // first term in conditional is omitted in place of the item being matched, where it gets added instead when comparing
+  
+
+  /* loops */
+  // there are different loops
+  i32 counter = 0;
+  loop counter < 3 { // loop while a consition is true, not providing condition defaults to run forever
+    io.println(counter);
+    counter++;
+  }
+
+  // for loops are easier way to write the above loop
+  for i8 x in 1..10  { // range syntax
+    io.println(x);
+  }
+  for(i8 i = 0; i < 10; i*=2) { // loop structure for finer control
+    // do something
+  }
+
+  // easier result with range syntax
+  for(i8 x in 0..10..2) {} // 3rd number is the step to account for in the range, when not specified it defaults to 1
+
+  for(i8 x in 10..0..2) {} // can be done in reverse too
+
+  i32 counting = 100;
+  for(i8 x in counting..0..2) {} // can be done with vars
+}
+
+void error_handling() {
+  // since fns and control flow have been covered, we can look at how to handle errors
+  // to be more flexible, dyn provides 2 structures for handling errors: Some and Optional
+  // these are ideas taken from rust but with their own spin to them to keep it unique
+  Optional(i32) divide(i32 x, i32 y) {
+    if y == 0 {
+      return Error("Cannot divide by 0");
+    } else {
+      return Success(x / y);
+    }
+  }
+
+  // so now what does this look like?
+  // we can match it
+  match divide(1,0) {
+    Error(msg) => { io.println(msg);},
+    Success(val) => { io.println(val); },
+  } // this includes extra pattern matching called placeholders which give named vars for the items in () to be extrapolated out in the body of the scope
+  // can also check with if
+  i32 res = divide(1,0);
+  if res.success() { io.println(res.val); } // contains a success method to check if the res of the fn is Success() or error
+  else { io.println(res.msg); }
+  // best way that was copied from what rust did:
+  if Error(msg) == divide(1,0) {
+    println(msg);
+  } // doesnt handle the val here though, so if you wanted to include both options then the above if or the match are the better way to go
+
+  // the Some version is the exact same except with Thing(val) or None
+  // item.thing(), item.none()
+
+  // these vals can be propogated or passed up the chain to handle them properly, and it doesnt require the program to crash to do so
+  // this lets you clean up and properly shut down the program if there is an issue and gives you control, but there is a way to immediately cease execution of the code, and that's with abort();
+  // for example i32 val = abort(divide(1,0)); // if the code in abort is successful then the res is returned, otherwise the code will cease execution without cleanup
+}
+
+void memory_management() {
+  // everything discussed so far is said to be stored on the stack
+  // so how do we get heap access? How do we share memory
+  // one of the core pieces we can do that with are pointers
+  // pointers are memory addresses, and they can point to anything, from the heap or the stack
+  // in languages like c and c++, you are able to control and create your own raw pointers whenever and wherever but you were responsible for managing them yourself
+  // in dyn, pointers will be smart unless you tell them otherwise
+  // there are 3 different types of pointers used in dyn that all have different uses
+  // single pointer - this pointer type is created and automatically deleted when the pointer is no longer in use. It can modify the values that it points to and there cannot be multiple single references to the same address single pointers must also relinquish control of memory before they switch to a different reference
+  // multi pointer - this pointer type is created and will only automatically delete if it is the last pointer to a given reference, but the given pointer may be destroyed before then. it cannot modify the value it points to unless it is the only one pointing to it, can be changed if only looked at by look pointers
+  // look pointer - this pointer type is created and will only automatically delete if it is the last pointer to a given reference but the given reference may be destroyed before then. it cannot modify the value it points to, it will invalidate if the value it looks at changes
+}
+
+// things left to cover
+/*
+  - reading from other files/imports
+  - user defined types
+  - concurrency
+  - dyn keyword
+  - metaprogramming
+  - testing
+  - multiparadigm languages
+*/
