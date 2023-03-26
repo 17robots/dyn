@@ -288,6 +288,80 @@ void memory_management() {
   // single pointer - this pointer type is created and automatically deleted when the pointer is no longer in use. It can modify the values that it points to and there cannot be multiple single references to the same address single pointers must also relinquish control of memory before they switch to a different reference
   // multi pointer - this pointer type is created and will only automatically delete if it is the last pointer to a given reference, but the given pointer may be destroyed before then. it cannot modify the value it points to unless it is the only one pointing to it, can be changed if only looked at by look pointers
   // look pointer - this pointer type is created and will only automatically delete if it is the last pointer to a given reference but the given reference may be destroyed before then. it cannot modify the value it points to, it will invalidate if the value it looks at changes
+
+  // define a single pointer
+  
+}
+
+void user_types() {}
+
+void metaprogramming() {
+  // dyn contains several mechanisms for metaprogramming
+
+  /* macros */
+  // dyn supports the creation of macros that can be called and generated
+  // define a macro
+  
+  /* generics */
+  // generics are a way to work with multiple types of arguments in a function without having to write multiple functions for each type
+  // this also applies to user-made types as well 
+  // define a function using a generic
+  void print_arg<T>(T arg) {
+    io.println(arg);
+  }
+
+  // define a generic function that returns the type
+  T return_arg<T>(T arg) { return arg; }
+
+  // we can also constrain the types that it generates for
+  T print_only_ints<T: i8 | i16 | i32 | i64 | i128>(T arg) { io.println(arg); }
+
+  // using multiple generics
+  void print_multi_vars<T, U>(T arg1, U arg2) { io.println("{arg1} {arg2}"); }
+
+  // 
+
+  /* type aliasing */
+  
+
+}
+
+void dyn_keyword() {
+  // the dyn keyword was introduced as it reflects the core idea of dyn being flexible and easy, yet powerful
+  // it serves a couple functions
+  // 1. it serves as a shorthand for repetitive code to make it simpler and faster to write
+  // 2. it allows for finer optimization of space during runtime
+  // 3. it allows for more fluid generics binding
+  // 4. it creates a system of polymorphism for different user-defined types
+
+  // the dyn keyword only works for types that can have different types, ints (both signed and unsigned), and floats, and user types that have a root type
+
+  // define a fn using the dyn keyword
+  dyn<I> any_signed_int(i32 arg) { return arg; } 
+  dyn<U> any_unsigned_int(u32 arg) { return arg; }
+  dyn<F> any_float(f32 arg) { return arg; }
+
+  // one key feature of the dyn keyword is that when it is used it will return the smallest needed size based on usage and value.
+  // this can be overridden by using a specific type when calling the fn, but the size must be able to account for the possible value returned from the function
+  dyn<I> val = any_signed_int(3);
+
+  // override example
+  i32 val = any_signed_int(3);
+
+  // usage with user defined types
+
+  // usage with generic binding
+  // syntactically correct version
+  dyn<I> something<T: dyn<I>>(T arg) {}
+
+  // this can be tedious, for example:
+  dyn<I> something_else<T: dyn<I>, U: dyn<I>, V: dyn<I>>(T arg1, T arg2, U arg3, U arg3, V arg4, V arg5) {}
+
+  // so we have syntactical sugar to make things a little nicer if youre returning a dyn var and using the type in fns
+  dyn<I> something_else_else(I arg1, I arg2, I arg3, I arg4, I arg5) {}
+
+  // a syntactical sugar version when not returning a dyn
+  i32 something_else_else_else<T: dyn<I>>(T arg1, T arg2, T arg3, T arg4, T arg5) {}
 }
 
 // things left to cover
@@ -295,8 +369,7 @@ void memory_management() {
   - reading from other files/imports
   - user defined types
   - concurrency
-  - dyn keyword
   - metaprogramming
   - testing
-  - multiparadigm languages
+  - multiparadigm language
 */
