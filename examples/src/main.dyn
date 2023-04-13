@@ -283,14 +283,21 @@ void memory_management() {
   // one of the core pieces we can do that with are pointers
   // pointers are memory addresses, and they can point to anything, from the heap or the stack
   // in languages like c and c++, you are able to control and create your own raw pointers whenever and wherever but you were responsible for managing them yourself
-  // in dyn, pointers will be smart unless you tell them otherwise
-  // there are 3 different types of pointers used in dyn that all have different uses
-  // single pointer - this pointer type is created and automatically deleted when the pointer is no longer in use. It can modify the values that it points to and there cannot be multiple single references to the same address single pointers must also relinquish control of memory before they switch to a different reference
-  // multi pointer - this pointer type is created and will only automatically delete if it is the last pointer to a given reference, but the given pointer may be destroyed before then. it cannot modify the value it points to unless it is the only one pointing to it, can be changed if only looked at by look pointers
-  // look pointer - this pointer type is created and will only automatically delete if it is the last pointer to a given reference but the given reference may be destroyed before then. it cannot modify the value it points to, it will invalidate if the value it looks at changes
-
-  // define a single pointer
   
+  // direct memory access will be allowed, but the compiler will check the scope of the pointer and after the last time that it is used, a clear instruction will be added to reclaim the memory
+  // this is all done at compile time and will not need a garbage collector
+  // Also, the code will track the specific memory address, and not just the pointer that referenced it, so if other pointers point to that address, the compiler will not add the free command until all references are out of scope
+  // Since the compiler keeps track of the address and who points to it, the lifetime doesnt need considered
+  
+  // create a pointer
+  i32* p = new(3); // create a new i32 pointer and give it the value of 3
+  // print the mem address and value of the pointer
+  io.println("This is ${*p} stored at {p}");
+
+  // heres how to declare a pointer to a value on the stack
+  i32 np = 4;
+  // free(p); p = null; // artificially added here per below comment
+  p = &np; // nobody points to the old referenced memory starting here, so the free is added here 
 }
 
 void user_types() {}
@@ -360,7 +367,7 @@ void dyn_keyword() {
   // so we have syntactical sugar to make things a little nicer if youre returning a dyn var and using the type in fns
   dyn<I> something_else_else(I arg1, I arg2, I arg3, I arg4, I arg5) {}
 
-  // a syntactical sugar version when not returning a dyn
+  // a syntactical sugar version when not returning a dyn or overriding a dyn type
   i32 something_else_else_else<T: dyn<I>>(T arg1, T arg2, T arg3, T arg4, T arg5) {}
 }
 
