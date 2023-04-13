@@ -297,7 +297,12 @@ void memory_management() {
   // heres how to declare a pointer to a value on the stack
   i32 np = 4;
   // free(p); p = null; // artificially added here per below comment
-  p = &np; // nobody points to the old referenced memory starting here, so the free is added here 
+  p = &np; // nobody points to the old referenced memory starting here, so the free is added to free space on the heap
+  // stack pointer claims are different since they will be removed when all vars from the stack are freed, so no extra frees need to happen, but pointers are invalidated at the end so this works fine
+
+  i32* yes;
+  i32 yes2 = 1;
+  yes = &yes2; 
 }
 
 void user_types() {}
@@ -308,6 +313,7 @@ void metaprogramming() {
   /* macros */
   // dyn supports the creation of macros that can be called and generated
   // define a macro
+  macro 
   
   /* generics */
   // generics are a way to work with multiple types of arguments in a function without having to write multiple functions for each type
@@ -329,8 +335,14 @@ void metaprogramming() {
   // 
 
   /* type aliasing */
-  
+  // define a type alias
 
+  type AdderFunc = i32(i32,i32)
+
+  // we can now use this in a function definition
+  void printSum(AdderFunc a) {
+    io.println(a(1,2));
+  }
 }
 
 void dyn_keyword() {
