@@ -10,6 +10,7 @@ void main() {
   io.println("Hello world");
   variable_specifics();
   types();
+  operators();
   control_flow();
   functions();
   error_handling();
@@ -60,11 +61,91 @@ void types() {
   tuples(); // more on tuples
 }
 
+void operators() {
+  // dyn provides a couple different operators
+
+  /*
+    Arithmetic operators
+    ====================
+    +  used for addition of ints, floats; used for string concatenation; can be used with operator overloading
+    -  used for subtration of ints, floats; can be used with operator overloading
+    *  used for multiplication of ints, floats; can be used with operator overloading
+    /  used for division of ints, floats; can be used with operator overloading
+    %  used for modulus of ints, floats; can be used with operator overloading
+    ++ used for increment of ints, floats; can be used with operator overloading
+    -- used for decrement of ints, floats; can be used with operator overloading
+  */
+  
+  /*
+    Logical operators
+    ====================
+    &&  used for logical and of 2 boolean expressions ex true && false = false;
+    ||  used for logical or of 2 boolean expressions ex true && false = true;
+    !   used for logical not of a boolean expression ex !true = false;
+  */
+  
+  /*
+    Relational operators
+    ====================
+    ==  used for equal to for 2 expressions ex 1 == 1 = true;
+    !=  used for not equal for 2 expressions ex 1 != 1 = false;
+    >   used for greater than for 2 expressions ex 2 > 1 = true;
+    <   used for less than for 2 expressions ex 2 < 1 = false;
+    >=   used for greater than or equal for 2 expressions ex 2 >= 1 = true;
+    <=   used for less than or equal for 2 expressions ex 2 <= 1 = false;
+  */
+  
+  /*
+    Bitwise operators
+    ====================
+    &  used for bitwise and of 2 bit patterns ex 0101 & 1111 = 0101;
+    |  used for bitwise or of 2 bit patterns ex 0101 | 1111 = 1111;
+    ^  used for bitwise xor of 2 bit patterns ex 0101 | 1111 = 1010;
+    ~  used for bitwise flipping a bit pattern ex ~0101 = 1010;
+    << used for bitwise left shift ex 1111 << 1 = 11110;
+    >> used for bitwise left shift ex 1111 >> 1 = 111;
+  */
+  
+  /*
+    Pointer operators
+    ====================
+    *   used for dereferencing a pointer;
+    &   used for providing a reference to a variable's memory address;
+    +   used for shifting over an iterator amount to the next val in memory
+    -   used for shifting over an iterator amount to the prev val in memory
+    new used for allocating on the heap
+  */
+  
+  /*
+    Assignment operators
+    ====================
+    =    used for assigning a value to a var;
+    +=   used for adding a value to a var and saving it to that same var;
+    -=   used for subtracting a value to a var and saving it to that same var;
+    *=   used for multiplying a value to a var and saving it to that same var;
+    /=   used for dividing a value to a var and saving it to that same var;
+    %=   used for modulusing a value to a var and saving it to that same var;
+    &=   used for logical anding a value to a var and saving it to that same var;
+    |=   used for logical oring a value to a var and saving it to that same var;
+    ^=   used for logical xoring a value to a var and saving it to that same var;
+    <<=  used for logical left shifting a value to a var and saving it to that same var;
+    >>=  used for logical right shifting a value to a var and saving it to that same var;
+  */
+  
+  /*
+    Misc operators
+    ====================
+    ?  used for dereferencing a pointer;
+    ,  used for providing a reference to a variable's memory address;
+    |> used for piping a val through a series of fns, pairs with the _ symbol to hold value
+  */
+}
+
 void arrays() {
   // arrays are contiguous blocks of the same type
   // arrays can be made of any type
   i32[] arr1; // valid
-  i32[][] arr2l // also valid
+  i32[][] arr2; // also valid
   char[] arr3; // also also valid
 
   // initialize an array with values
@@ -302,10 +383,157 @@ void memory_management() {
 
   i32* yes;
   i32 yes2 = 1;
-  yes = &yes2; 
+  yes = &yes2;
+
+  // see below to understand how memory references work atomically to provide access to shared memory
 }
 
-void user_types() {}
+void user_types() {
+  // There are 2 user defined types in Dyn: Enum and struct
+
+  /* Enum */
+  // Enums are simple in dyn, but they provide flexibility to build more complex types without needing something like a struct
+  // c style enums
+  enum DaysOfWeek {
+    MONDAY,
+    TUESDAY,
+    WEDNESDAY,
+    THURSDAY,
+    FRIDAY,
+    SATURDAY,
+    SUNDAY
+  }
+
+  // you can also specify values for each of the enum variants
+  enum Numbers = {
+    ONE = 1,
+    TEN = 10,
+    HUNDRED = 100,
+    ONEOONE = 101
+  }
+
+  // This can be extended by assigning a partner that can be associated with that type
+  enum Command {
+    string DownloadFile,
+    (i32, i32) MouseClick,
+    (string, string) UploadFile,
+    Handshake, // doesnt need to have a partner to it
+  }
+
+  // instantiating variants
+  Numbers one = Numbers.One;
+  Numbers hundred = .Hundred; // shorthand
+
+  Command download = .DownloadFile("hello.txt"); // assign partner to variant instance
+
+  // can be used in matching
+  match download {
+    DownloadFile(x) => io.println("Downloading File"),
+    MouseClick(x, y) => io.println("Mouse clicked"),
+    UploadFile(x, y) => io.println("Uploading File"),
+    Handshake => io.prinln("hi"),
+  } // matching an enum without all of the variants or a _ branch will cause the switch to do nothing if none of the cases are hit, but it is good documentation to include that, either with _ => {} or adding a comment to express intent
+
+  /* structs */
+  // structs are a little different than enums, as they have fields that can be accessed and modified
+  struct Animal {
+    u16 age,
+    u32 weight,
+    string name,
+    string sound,
+  }
+
+  // make an animal
+  Animal cow = { name: "Bessie", age: 12, weight: 200, sound: "Moo" }; // struct block
+
+  // Types can also inherit things from other types
+  struct Cow : Animal {
+    // has all attributes of animal
+    sound = "moo", // can provide a default value or overrides
+    bool utters, // can add extra on top of parent params
+  }
+
+  // heres how to handle functions with structs
+  struct AnimalWithFunctions {
+    void() eat, // specifies a void function with no arguments
+    string() speak, // specifies another fn that returns a string
+    void(i32) sleep, // specifies a fn with a parameter
+  }
+
+  // you can define default behavior for a fn as well
+  struct Rectangle {
+    f64 l,
+    f64 w,
+    f64 area() = f64 (self) { return self.l * self.w; }, // can access the members with self
+    f64 perimeter() = f64 (self) { return 2 * self.l + 2 * self.w; } 
+  }
+
+  // if a fn doesnt have any default value, the value can be rewritten when instantiated
+
+  struct WeCanDoThings {
+    string msg,
+    void() something,
+    string() tostring,
+  }
+
+  WeCanDoThings we = {msg: "Hello world", something: void () {}, tostring: string(self) { return "Message is" + self.msg}}
+  we.something(); // call the fn
+  io.println(we.tostring());
+
+  // structs can inherit multiple structs; not just one
+  struct Cube : Rectangle, WeCanDoThings {
+    // define things here
+  }
+  
+  // this extends into inheritence too
+
+  // we can pass on the member fns to the children and we can exclude behavior
+  struct OverrideThis {
+    i32 one,
+    i32 two,
+    i32() three,
+  }
+
+  struct OverridingIt : OverrideThis {
+    i32() three = i32() { return 3; }, // if no default was specified then the instantiation would need to include it
+    void() other, // we can also include other member fns that dont have defaults as well
+    i32 four = 4, // and then including default members as well too
+  }
+
+  // this leads into how interfaces work in dyn
+  struct CoolInterface {
+    i32() funcOne,
+    i32() funcTwo,
+    i32() funcThree,
+  }
+
+  // to implelment an interface, just include it in the extension list
+  // extending multiple types mean that instantiating different structs of various lengths could become tedious
+  // example
+  struct ManyMembers {
+    i32 member1,
+    i32 member2,
+    i32 member3,
+    i32 member4,
+    i32 member5,
+    i32 member6,
+    i32 member7,
+    // more
+    i32 member50,
+  }
+
+  // instantiating this struct would be very tedious, so the defaults of unspecified vars can be used, as specified on the different members
+  // also, there's shorthand for specifying multiple members of the same type
+  struct ShortHandMembers {
+    i32 mem1, mem2, mem3, mem4, mem5 = 1,// can specify defaults for multiple members at one time
+    i32 mem21 = 2, // different override,
+    i32 mem22, // no override
+    string mem6, mem7, mem8, mem9, mem10 = "",
+    f32 mem11, mem12, mem13, mem14, mem15 0.,
+    f64 mem16, mem17, mem18, mem19, mem20 = 0.,
+    ManyMembers mm1, mm2, mm3, mm4, mm5, mm6 = {}, // uses default member values for ManyMembers
+  }
+}
 
 void metaprogramming() {
   // dyn contains several mechanisms for metaprogramming
@@ -313,7 +541,9 @@ void metaprogramming() {
   /* macros */
   // dyn supports the creation of macros that can be called and generated
   // define a macro
-  macro 
+  macro something {
+    
+  }
   
   /* generics */
   // generics are a way to work with multiple types of arguments in a function without having to write multiple functions for each type
@@ -332,8 +562,6 @@ void metaprogramming() {
   // using multiple generics
   void print_multi_vars<T, U>(T arg1, U arg2) { io.println("{arg1} {arg2}"); }
 
-  // 
-
   /* type aliasing */
   // define a type alias
 
@@ -343,6 +571,32 @@ void metaprogramming() {
   void printSum(AdderFunc a) {
     io.println(a(1,2));
   }
+
+  // generics can be used with interface types to denote types that extend those interfaces
+  struct SomeInterface {
+    void() needthis,
+    void() needthistoo,
+  }
+  void exclusiveToInterfaces<T: SomeInterface>(T item) {
+    // do something or call some fn
+  }
+
+  // generics can also be used for user defined types
+  enum GenericsType<T> {
+    T Something,
+    SomethingElse = 2,
+  }
+
+  // and generics can be used in a struct too
+  struct WeNeedGenerics<T> {
+    T woah, woah1, woah2,
+  }
+
+  // heres an example of instantiating the generics struct and the enum
+  GenericsType gen = .Something<i32>(2);
+  WeNeedGenerics<i32> gen2 = { woah, woah1, woah2: 3 };
+
+  // can use the dyn keyword in the same way as generics here (see below for general usage)
 }
 
 void dyn_keyword() {
@@ -359,6 +613,7 @@ void dyn_keyword() {
   dyn<I> any_signed_int(i32 arg) { return arg; } 
   dyn<U> any_unsigned_int(u32 arg) { return arg; }
   dyn<F> any_float(f32 arg) { return arg; }
+  dyn<A> any_value<T: dyn<A>>(T x) { return x; }
 
   // one key feature of the dyn keyword is that when it is used it will return the smallest needed size based on usage and value.
   // this can be overridden by using a specific type when calling the fn, but the size must be able to account for the possible value returned from the function
@@ -383,12 +638,93 @@ void dyn_keyword() {
   i32 something_else_else_else<T: dyn<I>>(T arg1, T arg2, T arg3, T arg4, T arg5) {}
 }
 
-// things left to cover
+void concurrency() {
+  // so concurrency in dyn is interesting
+  // there are 2 ways to achieve concurrency: threads and processes
+
+  // processes - individual calls running with their own memory
+  import proc; // local imports so it doesnt need global scope, cool
+  void procFn() { // we need a fn to run something, but we can also specify a fn literal
+    // we can do things in a fork here
+  }
+
+  proc.Pool pool = {initsize: 3}; // create 3 processes without a fn to run
+  pool.use(procFn, []); // pass the fn and then an arr of any args the fn takes
+
+  pool.spawn(); // spawns another process using the same parameters and fn, even if the other processes are complete
+
+  pool = {initSize: 5}; // reinitialize with a new pool size
+
+  for i in 0..pool.len() {
+    p.use(i32(i32 i) {
+      return i * 2;
+    }, [i]); // can iterate through the different threads itll spawn and use individually if they need different args, the queue 
+  }
+
+  // now to read from the queue to get our results
+  io.println(pool.results().sum());
+
+  // all results are managed by the pool
+
+  // can also spawn individual process
+  proc.Process individual_process = {};
+  individual_process.use(i32() { io.println(2); return 2;}, []);
+
+  io.println(individual_process.result()); // 2
+  
+  // threads - individual calls running with shared memory
+  // threads are a little trickier, but the shared memory can be locked and managed
+  // each thread contains a locking mechanism if it needs to maintain the data
+  void easyThreadFn(string msg) {
+    io.println(msg);
+  }
+
+  import thread;
+
+  
+  thread.Thread[] threads = [{},{},{},{}]; // generate 4 threads
+
+  for i in 0..threads.length() {
+    threads[i].run(easyThread, [i]); // run the threads
+  }
+
+  for thread in threads { thread.join(); } // wait for the threads to finish doing their job
+
+  // heres how to manage data
+  int sum = 0;
+  thread.Lock l = {};
+  threads = [{lock: &l}; 3]; // shorthand because its gonna be repeated
+  for i in 0..threads.length() {
+    threads[i].run(void(i32 x) { sum += x; }, [i]); // we can use fns that reference local context variable
+  }
+
+  io.println(sum); // 3
+
+  // heres whats happening under the hood
+  Optional<T> threads.run<T,U: dyn<A>>(self, T(U[] args) fn, U[] vals) {
+    loop self.lock.locked(); // wait till the lock is available, dont need {} since nothing happens
+    if args.length() != vals.length() { return Error("Arguments passed must be the same number as whats needed by the fn"); }
+    T val;
+    self.lock.lock();
+    val = vals.lengh() == 0 ? fn() : fn(vals);
+    val = fn();
+    self.lock.unlock();
+    return Success(val);
+  }
+}
+
+void testing() {}
+
+void multiparadigm() {
+  // dyn can be used for multiple paradigms:
+  /* oop */
+  /* funcitonal */
+  /* procedural */
+}
+
 /*
+  things left to cover
   - reading from other files/imports
-  - user defined types
-  - concurrency
-  - metaprogramming
   - testing
   - multiparadigm language
 */
