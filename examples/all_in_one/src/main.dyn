@@ -259,6 +259,11 @@ void functions() {
   io.println(filter([1,2,3,4,5], bool(i32 y) {
     return y > 1;
   })); // prints [2,3,4,5]
+
+  // functions can also return different types if specified
+  i32 | string something(i32 | string x) {
+    return x;
+  }
 }
 
 void control_flow() {
@@ -713,18 +718,44 @@ void concurrency() {
   }
 }
 
-void testing() {}
+void testing() {
+  import testing;
+  // define a test
+  #(test) // use the testing directive for the compiler to handle
+  testing.test(void() {
+    i32 x() { return 2; }
+    testing.eq(2,2);
+    testing.neq(2,3);
+    testing.eq(x(), 2);
+    testing.returns(x(), "i32");
+    testing.returns(i32|i64() {return 3 as i64;}, "i32|i64");
+  });
+  // when running `dyn test` the compiler will find the #(test) directive calls and run them in its own testing suite
+}
 
 void multiparadigm() {
   // dyn can be used for multiple paradigms:
   /* oop */
-  /* funcitonal */
+  // Encapsulation - Dyn supports struct types that can also include behaviors (both default and specified at instantiation)
+  // Inheritance - Dyn supports inheritance of types through the struct [type] : [supertype] syntax and includes passing those methods to the inheriting types
+  // Polymorphism - Since dyn supports the dyn keyword, which allows for polymorphism: 1 passing the template argument as T: dyn<Shape> func(T shape) { io.println t.area(); }
+  // Abstraction - dyn provides the ability to add empty function types as struct members to provide the ability to create interfaces and allow for abstraction
+  
+  /* functional */
+  // Immutable data - Data can be flagged as const to disallow it to be edited, adding const is as easy as [type]! var_name; but the const need their value assigned at creation
+  // Higher-Order Functions - Functions in dyn can take functions as arguments or return functions, this allows support for things like callbacks and function literals are also supported
+  // Pure Functions - functions in dyn support being pure and not having side effects, but that becomes the design of the programmer, but iterator methods are also supported
+  // Recursion - Dyn functions support recursion
+  // Lazy Evaluation - Dyn supports lazy functions by default
+  // Type System - Dyn's type system is static and allows for robust checking at compile time
+  // Algebraic Data Types - Dyns type system supports algabrainc types
+  
   /* procedural */
+  // By its very nature given the functions and variables allow it to support procedural programming
 }
 
 /*
   things left to cover
   - reading from other files/imports
-  - testing
-  - multiparadigm language
+  - compiler directives
 */
