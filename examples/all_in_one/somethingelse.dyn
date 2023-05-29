@@ -1,0 +1,25 @@
+import io; // dyn will prevent multiple imports
+
+// members are exported from files with the export keyword
+export void something() {
+ io.println("Calling something"); 
+ helperFn();
+}
+
+export struct somethingelse {
+  i32 yes,
+  i32 no,
+}
+
+// other members can be exported without being imported elsewhere
+export void notimported() {
+  io.println("We are not imported :(");
+}
+
+// methods not exported will not be importable but they can be used in other functions declared in the scoped file
+void helperFn() {
+  io.println("We help");
+}
+
+// members can be defined and exported later
+export i32 var; // can also export variables but its best used for consts, but they dont have to be assigned right away

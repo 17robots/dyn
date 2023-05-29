@@ -2,7 +2,6 @@
 import io; // import items with import and the package name, imports all items from io accessible with the io package keyword
 import { something, somethingelse } from otherpkg; // import selective items from package
 
-
 /*
   this is the main function and the order doesnt matter. if not included, the file you run with during interpretation will be read as though the body of the file is the main fn
 */
@@ -507,12 +506,27 @@ void user_types() {
 
   // this leads into how interfaces work in dyn
   struct CoolInterface {
-    i32() funcOne,
+    i32() funcOne, // these can have default values when they are inherited
     i32() funcTwo,
     i32() funcThree,
   }
 
   // to implelment an interface, just include it in the extension list
+  struct WeImplement: CoolInterface { 
+   i32() funcOne = i32() { return 1; }, // these can also be defined later
+   i32() funcTwo = i32() { return 2; },
+   i32() funcThree = i32() { return 3; },
+  }
+
+  // heres how to include variables in the fn defs for interfaces
+  struct Woah {
+    void(i32 x, i32 y) printSum = void(i32 x, i32 y) { io.println(x + y)},
+  }
+
+  struct WeWoah: Woah {
+   void(i32 x, i32 y) printSum, // this will use the default implementation 
+  }
+
   // extending multiple types mean that instantiating different structs of various lengths could become tedious
   // example
   struct ManyMembers {
@@ -584,7 +598,27 @@ void metaprogramming() {
   }
   void exclusiveToInterfaces<T: SomeInterface>(T item) {
     // do something or call some fn
+    item.needthis()
   }
+
+  // when handling interfaces and generics, you can also define a type that the interface will return
+  // as an example
+  struct GeneralizedInterface<T> {
+    T() cooloperation,
+  }
+
+  // to implement, include the type def in the extension call
+  struct WeImplementIt: GeneralizedInterface<string> {
+    string() cooloperation = string() {return "hi"; },
+  }
+
+  // to implement for generics, include the generic type def in the extension call
+  struct WeImplementIt<T>: GeneralizedInterface<T> {
+    T() cooloperation,
+  }
+
+  // then you can make a fn that implements a specific return type of the interface
+  void exclusiveToI32Interfaces<T: GeneralizedInterface<string>>() {}
 
   // generics can also be used for user defined types
   enum GenericsType<T> {
@@ -756,6 +790,5 @@ void multiparadigm() {
 
 /*
   things left to cover
-  - reading from other files/imports
   - compiler directives
 */
