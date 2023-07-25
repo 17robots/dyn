@@ -1,3 +1,23 @@
+/*
+ * TODO:
+ * 1. Redo error handling
+ * 2. Redo threads and multithreading
+ * 3. Redo variables
+ * 4. Take inventory of keywords to see how simple the language is
+ * 5. Redo memory management
+ */
+
+/*
+ * Dyn Goals of memory safety
+ * Memory safety - 
+ * Type safety - all variables have a type associated to it, there is no changing them (see below for exceptions)
+ * Concurrency safety
+ * Error handling
+ * Compiler-enforced guarantees
+ * Performance
+ * Tooling
+ */
+
 // learn dyn in one file <- single line comment
 import io; // import items with import and the package name, imports all items from io accessible with the io package keyword
 import { something, somethingelse } from otherpkg; // import selective items from package
@@ -266,7 +286,7 @@ void functions() {
 }
 
 void control_flow() {
-  // there are 3 different control flow structures:
+  // there are 2 different control flow structures:
   //  - loops
   //  - branches
 
@@ -284,11 +304,11 @@ void control_flow() {
 
   // match branch
   match 4 {
-    1 => {},
-    2 => {},
-    3 => {},
-    4 => {},
-    _ => {},
+    1: {},
+    2: {},
+    3: {},
+    4: {},
+    _: {},
   }
   // match will run the code in {} for each statement that's true
   // _ represents catch all default case that will run if other branches do not
@@ -298,14 +318,14 @@ void control_flow() {
   match 15 {
     % 5 == 0 {io.print("fizz");}, // will run
     % 3 == 0 {io.print("buzz")}, // will run
-    _ => {}, // will not run since other branches ran
+    _: {}, // will not run since other branches ran
   } // first term in conditional is omitted in place of the item being matched, where it gets added instead when comparing
   
 
   /* loops */
   // there are different loops
   i32 counter = 0;
-  loop counter < 3 { // loop while a consition is true, not providing condition defaults to run forever
+  loop counter < 3 { // loop while a condition is true, not providing condition defaults to run forever
     io.println(counter);
     counter++;
   }
@@ -788,7 +808,4 @@ void multiparadigm() {
   // By its very nature given the functions and variables allow it to support procedural programming
 }
 
-/*
-  things left to cover
-  - compiler directives
-*/
+void compiler_directives() {}
