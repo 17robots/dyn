@@ -1,0 +1,18 @@
+import io;
+import { Crosstown } from "crosstown";
+import { UserCreatedEvent } from "events";
+
+void main() {
+  Maybe<QueuePublisher> publisher = Crosstown.createPublisher("rabbitmq link");
+  match publisher {
+    Yes(p) {
+      p.publish("user_created", UserCreatedEvent { id: "1", name: "bob" });
+      p.publish("user_created", UserCreatedEvent { id: "2", name: "bill" });
+      p.publish("user_created", UserCreatedEvent { id: "3", name: "boe" });
+      p.publish("user_created", UserCreatedEvent { id: "4", name: "burt" });
+    },
+    No(e) {
+      io.println("Failed to create publisher: {}", e.to_string());
+    },
+  }
+}

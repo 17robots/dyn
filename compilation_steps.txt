@@ -1,0 +1,26 @@
+1. read dyn.mod lines
+2. check if workspace
+  - if workspace, go to step 3
+  - if not, go to step 4
+3. check memebers
+  - if member defined in same file, use that as package and go to step 4
+  - if member defined in folder, go to step 1
+4. check workspace dependencies
+  - if no @ use latest
+  - if @ and no version, error
+  - if @ and version, grab specific version, error if not available
+  - if @ and workspace, read from workspace dependencies
+  - if @ and members, read from workspace memebers
+5. check package source
+  - if invalid directory, error
+  - if valid directory, scan for main function, error if none
+6. recusively grab list of imports from main
+  - if invalid import error
+  - if import has other import, follow, but keep track of already recognized imports
+7. remove all comments
+8. lex
+9. parse
+10. semantic analysis
+11. intermediate code generation
+12. optimization
+13. code generation for given platform
