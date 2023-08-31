@@ -1,0 +1,393 @@
+import io;
+import { Unique, Shared, Weak } from "memory";
+
+void main() {
+  hello();
+  variables();
+  types();
+  statements();
+  functions();
+  symbol_visibility();
+  type_declarations();
+  memory();
+  concurrency();
+  testing();
+  documentation();
+  modules();
+}
+
+void hello() {
+  io.println("Hello World");
+}
+
+void variables() {
+  i32 normal_variable = example + 1; // immutable by default
+  i32 uninitialized;
+  uninitialized = 4; // can be done
+  mut i32 example = 1 + 2;
+  con i32 DRINKING_AGE = 3.14;
+  // const variables can be assigned once but not updated and can be calculated at runtime
+  // static variables can be assigned once but not updated and needs to be calculated at compile time
+}
+
+void types() {
+  primitive();
+  string();
+  array();
+  tuple();
+}
+void primitive() {
+  i8 signed_short_short_int;
+  i16 signed_short_int;
+  i32 signed_int;
+  i64 signed_long_int;
+  i128 signed_long_long_int;
+
+  u8 unsigned_short_short_int;
+  u16 unsigned_short_int;
+  u32 unsigned_int;
+  u64 unsigned_long_int;
+  u128 unsigned_long_long_int;
+
+  f32 single_float;
+  f64 double_float;
+
+  char character;
+
+  bool boolean;
+}
+void string() { // fill this out
+  // strings are collections of characters represented as a vector in a wrapper
+  // strings follow the same rules as variables above, strings just provide a convenient wrapper over whats actually happening
+}
+void array() { // rework this
+  // arrays are collections of similarly typed elements
+  i32[] nums = [1,2,3,4];
+  mut i32[] nums2 = [5,6,7,8];
+  io.println(nums.concat(nums2));
+  io.println(nums.len());
+  io.println(nums[0]);
+}
+void tuple() {
+  // tuples are ordered collections of different types of data (all unnamed)
+  (i32, bool, char) items = (1,true,'a');
+  mut (i32, bool, char) mutable_items = (2,false,'b'); // all items mutable
+  (mut i32, bool, mut char) conditional_mut = (3,true,'c'); // only the i32 and char are mutable
+  mutable_items.2 = 'd'; // valid
+  // conditional_mut.1 = false; - not valid
+}
+
+void statements() {
+  if_statement();
+  match_statement();
+  for_statement();
+}
+void if_statement() {
+  // if [boolean] { do stuff }
+  if true {
+    io.println("We did stuff");
+  }
+  if false {
+
+  } else {
+    io.println("We did something else");
+  }
+  if 1 == 2 {}
+  else if 1 == 3 {}
+  else io.println("math is not broken"); // if single line, no {} needed
+
+  if i32 x = 5; x > 4 {} // assign var and then check if
+}
+void match_statement() { // flesh this out based on other stuff
+  // match uses pattern matching to compare cases of a variable
+
+  i32 num = 10;
+  match num {
+    1: {io.println("something");},
+    2: io.println("look ma no {}");,
+    3: {
+      // we do some more stuff here
+      io.println("Do thing 1");
+      io.println("Do thing 2");
+    },
+    10: {io.println("this one will run");},
+    _: {}, // used to catch all other cases - default
+  }
+
+  i32 other_result = match num {
+    1: 5,
+    10: 10,
+    100: 20,
+    _: -1
+  }; // used to assign var but needs to all return same type
+  match num {
+    1 | 2 | 3 | 4 | 5 | 6 | 8 | 9: {}, // or range 
+    10..20: {}, // standard range
+    _: {}
+  }
+}
+void for_statement() {
+  for u32 i = 0; i < 10; i++ {} // standard for loop
+  for {} // infinite loop
+  while i32 condition = 0; condition > 5 {} // while
+  i32[] items = [1,2,3,4];
+  for i32 i : items {} // for loop in array
+  string name = "bobby";
+  for char i : name.chars() {} // loop chars 
+}
+
+void functions() {
+  // [return type] [name]([...params]) {}
+  i32 x() {} // basic fn
+  const i32() y = x; // secondary way to define them
+  i32 z(i32 x,y) {} // params with similar types
+  void a(i32 x, i32 y, mut resuslt) {} // mutable args
+  i32[] map(i32[] arr, i32() fn) {} // passing fns as params
+  i32() functor(i32 val) {} // return a fn
+  i32 sum(i32 x,y) => x + y; // arrow functions for immediate returns
+  i32 mult(i32 x,y) => x * y; // arrow functions for immediate returns
+}
+
+void symbol_visibility() {}
+
+void type_declarations() {
+  type_alias();
+  enum();
+  union();
+  error();
+  generic();
+  struct();
+}
+void type_alias() {
+  // type [name] = [definition]
+  type sortingFn = bool(i32,i32); // uses fn type
+  void sort(i32[] x, sortingFn fn) {} // used in place of fn to improve readability
+
+  type Pair = (i32,i32);
+  Pair x = (1,2);
+
+  type newInt = i32;
+  newInt y = 3;
+  io.println(y);
+}
+void enum() {
+  enum Weekdays {
+    MONDAY,
+    TUESDAY = 3,
+    WEDNESDAY = 10,
+    THURSDAY,
+    FRIDAY,
+    SATURDAY,
+    SUNDAY,
+  }
+  Weekdays mon = .MONDAY; // shorthand when working with vars of that enum type
+
+  enum Partnered {
+    Event1(string),
+    Event2(i32,i32),
+    Event3(string,boolean,string),
+    Event4,
+  }
+
+  Partnered my_partner = .Event1("test");
+
+  match my_partner {
+    Event1(x): {},
+    Event2(x,_): {}, // or Event2(x,..)
+    Event3(_,x,..): {},
+    Event4: {},
+  }
+
+  match my_partner { // again
+    Event1(x): {},
+    _: {}, // so we dont need to have all of the variants
+  }
+
+  Partnered x() => .Event1("Event");
+
+  if Partnered.Event1(y) = x() {
+    io.println(y); // templating like in match
+  } else {} // optional in case
+
+  while Partnered.Event2(x,y) = x() {}
+}
+void union() { // flesh this out more
+  i32|f32 divide(i32|f32 x, i32|f32 y) => x / y;
+
+  i32 x = divide(2,1);
+  f32 y = divide(1,2);
+  mut i32|f32 z; // i32|f32
+  i32|f32 z = divide(1,4); // takes on result of operation - f32
+  io.println(z); // f32
+
+  type Imprecise = i32|f32;
+
+  Imprecise a = divide(3,1); 
+}
+void error() {
+  // Optional and 
+} // work on this more
+void generic() {
+  // use int and float for dynamic bit calculations
+}
+
+void structs() {
+  // example struct
+  struct Animal {
+    u16 age;
+    f32 weight;
+  }
+  func Animal {
+    // general functions for Animal
+    void something_animals_can_do(self) {}
+
+    Animal new() {} // no self means abstract method
+    Living { // implement traits in the func block
+      void speak(self) {
+        io.println("I am an animal");
+      }
+    }
+  }
+
+  // traits
+  trait Living {
+    void breathe(self) { io.println("Breathing"); }
+    void eat(self) { io.println("Eating"); }
+    void speak(self);
+  }
+
+  // composition
+  enum DogKind {
+    CHIHUAHUA,
+    CORGI,
+    GERMAN_SHEPHARD,
+    GREYHOUND,
+  }
+  struct Dog {
+    Animal animal;
+    bool collared;
+    DogKind kind;
+  }
+
+  func Dog {
+    Living { // implement traits in the func block
+      void speak(self) {
+        io.println("I am a dog");
+      }
+    }
+  }
+
+  enum CatKind {
+    SIAMESE,
+    MAINECOONE,
+    TUXEDO,
+    ORANGE,
+  }
+  struct Cat {
+    Animal animal;
+    CatKind kind;
+    bool indoor;
+  }
+  func Cat {
+    Living { // implement traits in the func block
+      void speak(self) {
+        io.println("I am a cat");
+      }
+    }
+  }
+
+  void speak_things(Living thing) { // anything that uses the Living trait can be used here
+    thing.speak();
+  }
+  speak_things(Dog { kind: .CHIHUAHUA, collared: true, animal: Animal { age: 3, weight: 102.4 }});
+  speak_things(Cat { kind: .SIAMESE, indoor: true, animal: Animal { age: 5, weight: 35.2 }});
+
+  // anonymous structs
+  enum FishKind {
+    BETA,
+    GOLDFISH,
+    BASS,
+  }
+  speak_things(
+    struct {
+      Animal animal = Animal {};
+      FishKind kind = .BASS;
+      bool owned = false;
+      func { // func can also be inlined in the struct definition as well
+        Living {
+          void speak(self) {
+            io.println("I am a fish");
+          }
+        }
+      }
+    });
+
+  // structs in functions
+  trait Shape {
+    f32 area(self);
+    f32 perimeter(self);
+  }
+
+  struct Circle {
+    f32 radius;
+    func {
+      Circle new(f32 r) => Circle { radius: r };
+      Shape {
+        f32 area(self) {
+          return Math.PI * self.radius * self.radius;
+        }
+        f32 perimeter(self) {
+          return Math.PI * self.radius * 2;
+        }
+      }
+    }
+  }
+  struct Triangle {
+    f32 base, height;
+    func {
+      Triangle new(f32 b, Optional<f32> h) => Triangle { base: b, height: match height {
+        .Some(val): val,
+        None: base,
+      }};
+      Shape {
+        f32 area(self) => .5 * base * height;
+        f32 perimeter(self) => 0.0;
+      }
+    }
+  }
+  struct Rectangle {
+    f32 length,width;
+    func {
+      Rectangle new(f32 l, Optional<f32> w) => Rectangle { length: l, width: match w {
+        .Some(val): val,
+        .None: l,
+      }};
+      Shape {
+        f32 area(self) => length * width;
+        f32 perimeter(self) => (2 * length) + (2 * width);
+      }
+    }
+  }
+  enum ShapeType {
+    CIRCLE,
+    TRIANGLE,
+    RECTANGLE,
+  }
+  Shape factory(ShapeType type, f32 base, Optional<f32> height) => match type {
+    .Circle: Circle.new(base),
+    .TRIANGLE: Triangle.new(base, height),
+    .RECTANGLE: Rectangle.new(base, height),
+  };
+} // work on this more
+
+void memory() {
+  Unique<i32> heap_int = Unique.new(4); // single ownership smart pointer 
+  Shared<i32> heap_int_shared = Shared.new(5); // shared ownership smart pointer
+  Weak<i32> heap_int_weak = heap_int_shared.downgrade(); // weak smart pointer
+} // work on this more
+
+void concurrency() {} // work on this
+
+void testing() {} // work on this
+
+void modules() {} // work on this
