@@ -361,7 +361,7 @@ void structs() {
       Rectangle new(f32 l, Optional<f32> w) => Rectangle { length: l, width: match w {
         .Some(val): val,
         .None: l,
-      }};
+      };}
       Shape {
         f32 area(self) => length * width;
         f32 perimeter(self) => (2 * length) + (2 * width);
@@ -380,14 +380,48 @@ void structs() {
   };
 } // work on this more
 
+void struct_rework() {
+  struct AStruct {
+    i32 something, something2;
+    AStruct new(i32 x, i32 y) => AStruct { something = x, something2 = y };
+    void some_fn(self) {
+      io.println(self.something, self.something2);
+    }
+  }
+  trait ATrait {
+    void we() {}
+    void do();
+    void things();
+  }
+}
+
 void memory() {
   Unique<i32> heap_int = Unique.new(4); // single ownership smart pointer 
   Shared<i32> heap_int_shared = Shared.new(5); // shared ownership smart pointer
   Weak<i32> heap_int_weak = heap_int_shared.downgrade(); // weak smart pointer
+  // rc and weak are thread safe
+
+  // dyn also supports async by default
 } // work on this more
 
-void concurrency() {} // work on this
+void concurrency() {
+  
+} // work on this
 
 void testing() {} // work on this
 
 void modules() {} // work on this
+
+struct Circle {
+  f32 radius;
+}
+struct Rectangle {
+  f32 length, width; 
+}
+struct Triangle {}
+
+trait Shape {
+  f32 area();
+}
+
+f32 callArea(Shape s) => s.area(); 
