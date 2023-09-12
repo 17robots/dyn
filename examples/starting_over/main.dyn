@@ -1,5 +1,5 @@
 import io;
-import { Unique, Shared, Weak } from "memory";
+import math;
 
 void main() {
   hello();
@@ -7,7 +7,6 @@ void main() {
   types();
   statements();
   functions();
-  symbol_visibility();
   type_declarations();
   memory();
   concurrency();
@@ -29,12 +28,12 @@ void variables() {
   // const variables can be assigned once but not updated and can be calculated at runtime
   // static variables can be assigned once but not updated and needs to be calculated at compile time
 }
-
 void types() {
   primitive();
   string();
   array();
   tuple();
+  reference();
 }
 void primitive() {
   i8 signed_short_short_int;
@@ -76,6 +75,10 @@ void tuple() {
   mutable_items.2 = 'd'; // valid
   // conditional_mut.1 = false; - not valid
 }
+// TODO
+void reference() {
+  
+}
 
 void statements() {
   if_statement();
@@ -88,7 +91,7 @@ void if_statement() {
     io.println("We did stuff");
   }
   if false {
-
+    // nothing here
   } else {
     io.println("We did something else");
   }
@@ -148,15 +151,13 @@ void functions() {
   i32 mult(i32 x,y) => x * y; // arrow functions for immediate returns
 }
 
-void symbol_visibility() {}
-
 void type_declarations() {
   type_alias();
   enum();
   union();
   error();
   generic();
-  struct();
+  structs();
 }
 void type_alias() {
   // type [name] = [definition]
@@ -224,204 +225,106 @@ void union() { // flesh this out more
 
   Imprecise a = divide(3,1); 
 }
+// TODO
 void error() {
-  // Optional and 
-} // work on this more
+  // Option and result types
+}
+// TODO
 void generic() {
   // use int and float for dynamic bit calculations
 }
-
 void structs() {
-  // example struct
-  struct Animal {
-    u16 age;
-    f32 weight;
-  }
-  func Animal {
-    // general functions for Animal
-    void something_animals_can_do(self) {}
-
-    Animal new() {} // no self means abstract method
-    Living { // implement traits in the func block
-      void speak(self) {
-        io.println("I am an animal");
-      }
-    }
-  }
-
-  // traits
-  trait Living {
-    void breathe(self) { io.println("Breathing"); }
-    void eat(self) { io.println("Eating"); }
-    void speak(self);
-  }
-
-  // composition
-  enum DogKind {
-    CHIHUAHUA,
-    CORGI,
-    GERMAN_SHEPHARD,
-    GREYHOUND,
-  }
-  struct Dog {
-    Animal animal;
-    bool collared;
-    DogKind kind;
-  }
-
-  func Dog {
-    Living { // implement traits in the func block
-      void speak(self) {
-        io.println("I am a dog");
-      }
-    }
-  }
-
-  enum CatKind {
-    SIAMESE,
-    MAINECOONE,
-    TUXEDO,
-    ORANGE,
-  }
-  struct Cat {
-    Animal animal;
-    CatKind kind;
-    bool indoor;
-  }
-  func Cat {
-    Living { // implement traits in the func block
-      void speak(self) {
-        io.println("I am a cat");
-      }
-    }
-  }
-
-  void speak_things(Living thing) { // anything that uses the Living trait can be used here
-    thing.speak();
-  }
-  speak_things(Dog { kind: .CHIHUAHUA, collared: true, animal: Animal { age: 3, weight: 102.4 }});
-  speak_things(Cat { kind: .SIAMESE, indoor: true, animal: Animal { age: 5, weight: 35.2 }});
-
-  // anonymous structs
-  enum FishKind {
-    BETA,
-    GOLDFISH,
-    BASS,
-  }
-  speak_things(
-    struct {
-      Animal animal = Animal {};
-      FishKind kind = .BASS;
-      bool owned = false;
-      func { // func can also be inlined in the struct definition as well
-        Living {
-          void speak(self) {
-            io.println("I am a fish");
-          }
-        }
-      }
-    });
-
-  // structs in functions
-  trait Shape {
-    f32 area(self);
-    f32 perimeter(self);
-  }
-
-  struct Circle {
-    f32 radius;
-    func {
-      Circle new(f32 r) => Circle { radius: r };
-      Shape {
-        f32 area(self) {
-          return Math.PI * self.radius * self.radius;
-        }
-        f32 perimeter(self) {
-          return Math.PI * self.radius * 2;
-        }
-      }
-    }
-  }
-  struct Triangle {
-    f32 base, height;
-    func {
-      Triangle new(f32 b, Optional<f32> h) => Triangle { base: b, height: match height {
-        .Some(val): val,
-        None: base,
-      }};
-      Shape {
-        f32 area(self) => .5 * base * height;
-        f32 perimeter(self) => 0.0;
-      }
-    }
-  }
-  struct Rectangle {
-    f32 length,width;
-    func {
-      Rectangle new(f32 l, Optional<f32> w) => Rectangle { length: l, width: match w {
-        .Some(val): val,
-        .None: l,
-      };}
-      Shape {
-        f32 area(self) => length * width;
-        f32 perimeter(self) => (2 * length) + (2 * width);
-      }
-    }
-  }
-  enum ShapeType {
-    CIRCLE,
-    TRIANGLE,
-    RECTANGLE,
-  }
-  Shape factory(ShapeType type, f32 base, Optional<f32> height) => match type {
-    .Circle: Circle.new(base),
-    .TRIANGLE: Triangle.new(base, height),
-    .RECTANGLE: Rectangle.new(base, height),
-  };
-} // work on this more
-
-void struct_rework() {
-  struct AStruct {
-    i32 something, something2;
-    AStruct new(i32 x, i32 y) => AStruct { something = x, something2 = y };
-    void some_fn(self) {
-      io.println(self.something, self.something2);
-    }
-  }
   trait ATrait {
-    void we() {}
+    void we() {} // default implementation
     void do();
     void things();
   }
+  #[use(Print, Clone)]
+  struct AStruct : ATrait {
+    i32 something, something2;
+    void something(self) {}
+    AStruct new(i32 something, something2) => AStruct { something, something2 };
+    do() {}
+    things() {}
+  }
+
+  // animal example
+  trait Living {
+    void speak();
+  }
+  struct Cat : Living {
+    void speak() {
+      io.println("meow");
+    }
+  }
+  struct Dog : Living {
+    void speak() {
+      io.println("woof");
+    }
+  }
+  struct Bird : Living {
+    void speak() {
+      io.println("chirp");
+    }
+  }
+  void livingSpeak(Living &l) {
+    l.speak();
+  }
+
+  // shape example
+  trait Shape {
+    f64 area(self);
+  }
+  struct Triangle : Shape {
+    f32 base, height;
+    f32 area(self) => (1/2) * base * height;
+  }
+  struct Circle : Shape {
+    f32 radius;
+    f32 area(self) => math.PI * radius * radius;
+  }
+  struct Rectangle : Shape {
+    f32 length, width;
+    f32 area(self) => length * width;
+  }
+  void printArea(Shape &s) {
+    io.println(s.area());
+  }
+  printArea(&Rectangle { length: 2, height: 5 });
+  printArea(&Circle { radius: 2 });
+  printArea(&Triangle { base: 2, height: 5 });
+  printArea(&struct : Shape { // anon struct
+    f32 area() => 100.;
+  });
+
+  // no direct inheritence, need to use composition
+  struct InheritMe {
+    i32 else; // will inherit all members, no such thing as private
+    // heres a new fn that doesnt rely on self
+    InheritMe new() => InheritMe{}; // doesnt get inherited
+    void do_something(self) {} // this one gets inherited 
+    void override_behavior() {} // all fns in a struct need to be defined and have a body, to share other behavior use a trait
+  }
+  struct WillInherit {
+    InheritMe; // will only inherit the self methods from the struct
+    i32 something;
+    void override_behavior(self) {
+      io.println(self.something);
+    }
+  }
 }
 
+// TODO
 void memory() {
-  Unique<i32> heap_int = Unique.new(4); // single ownership smart pointer 
-  Shared<i32> heap_int_shared = Shared.new(5); // shared ownership smart pointer
-  Weak<i32> heap_int_weak = heap_int_shared.downgrade(); // weak smart pointer
-  // rc and weak are thread safe
-
-  // dyn also supports async by default
-} // work on this more
-
+  // 2 versions of memory: references and pointers
+  // references make passing an address to other functions easy
+  // pointers are heap allocated values that usually can grow or shrink depending on need
+}
+// TODO
 void concurrency() {
-  
-} // work on this
-
-void testing() {} // work on this
-
-void modules() {} // work on this
-
-struct Circle {
-  f32 radius;
+  // supports async
 }
-struct Rectangle {
-  f32 length, width; 
-}
-struct Triangle {}
-
-trait Shape {
-  f32 area();
-}
-
-f32 callArea(Shape s) => s.area(); 
+// TODO
+void testing() {}
+// TODO
+void modules() {}
