@@ -33,7 +33,7 @@ void types() {
   string();
   array();
   tuple();
-  reference();
+  reference_and_lifetimes();
 }
 void primitive() {
   i8 signed_short_short_int;
@@ -76,8 +76,45 @@ void tuple() {
   // conditional_mut.1 = false; - not valid
 }
 // TODO
-void reference() {
-  
+void reference_and_lifetimes() {
+  // references store a reference to a variable
+  i32 x = 1;
+  &i32 y = &x; // store a reference to x in y, needs to be initialized on creation
+
+  io.println(y); // 1
+
+  mut i32 a = 2;
+  &mut i32 b = &a; // make a mutable reference
+  *b = 1;
+  io.println(a); // 1
+  mut &mut i32 c = &a; // mutable ref that can be reassigned, but this is technically not allowed because of the other readonly reference to the data
+
+  // references in functions
+  #[use(Print)]
+  struct Something {}
+
+  void do_a_thing(&Something x) { io.println(x); }
+
+  // references in structs
+  struct Person {
+    string name;
+    u8 age;
+  }
+  struct Parent {}
+  struct Child {
+    Person;
+    &Parent[] parents;
+    Child new(string name, u8 age) => Child { name, age};
+    void add_parent(mut self, &Parent p) { self.parents.push(p); }
+  }
+
+  // references and anonymous structs
+  void add_parent_to_child(&mut Child c, &mut Parent p) { // make them mutable
+    c.add_parent(p);
+  }
+
+  Child x = Child.new("joe", 5);
+  add_parent_to_child(x, &Parent {}); // doesnt work because anon structs cannot be referenced
 }
 
 void statements() {
@@ -149,6 +186,8 @@ void functions() {
   i32() functor(i32 val) {} // return a fn
   i32 sum(i32 x,y) => x + y; // arrow functions for immediate returns
   i32 mult(i32 x,y) => x * y; // arrow functions for immediate returns
+  void update_something(mut i32 x, i32 y) { x += y; } // need to make arg mutable, and even then it would likely need to be a reference to keep changes after function context
+  void correct_update_something(&mut i32 x, i32 y) { x += y; } // correct way to make arg mutable, and even then it would likely need to be a reference to keep changes after change 
 }
 
 void type_declarations() {
@@ -225,13 +264,34 @@ void union() { // flesh this out more
 
   Imprecise a = divide(3,1); 
 }
-// TODO
 void error() {
   // Option and result types
+  Option<i32> some = .Some(5);
+  Option<i32> none = .None;
+
+  Result<i32> res = .Ok(4);
+  Result<i32> err = Err(Error);
+
+  Result<f32> divide(f32 x,y) { // example
+    if y <= 0 {
+      return Err("Cannot divide by zero");
+    }
+    return x / y;
+  }
+
+  match divide(1,1) {
+    .Ok(val): io.println(val),
+    .Err(s): io.println("Error: ", s),
+  }
+
+  // alternatively
+  if divide(1,0) == .Err(s) {
+    io.println("Error: ", s);
+  }
 }
 // TODO
 void generic() {
-  // use int and float for dynamic bit calculations
+  // use int, uint and float for dynamic bit calculations
 }
 void structs() {
   trait ATrait {
@@ -316,9 +376,18 @@ void structs() {
 
 // TODO
 void memory() {
-  // 2 versions of memory: references and pointers
-  // references make passing an address to other functions easy
-  // pointers are heap allocated values that usually can grow or shrink depending on need
+   // dyn supports pointers and container structs for safety
+   // there are a couple gotchas in memory
+   // for example slices
+   // slices represent views into arrs or strings
+   // also slices are immutable
+   // and if a method is called on it, it copies instead to preserve ownership
+   i32[] x = [];
+   i32[] y = x; // copied
+   mut &i32[] z = &y[0..2]; // not copied - slice
+   z.append(4); // copies z into its own memory and then returns the appended arr, can only work because z is mutable so it can be copied
+
+   // other heap stuff also work
 }
 // TODO
 void concurrency() {
@@ -328,3 +397,6 @@ void concurrency() {
 void testing() {}
 // TODO
 void modules() {}
+
+// what makes it a good systems level language
+
