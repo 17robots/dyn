@@ -27,12 +27,12 @@ fn get_tokens(stream: &str) -> Vec<TokenType> {
                 } else {
                     let buff = &stream[offset as usize..curr_pos as usize];
                     match buff {
-                        _ if COMPOUND_OPERATORS.contains_key(&buff) => {
-                            tokens.push(COMPOUND_OPERATORS.get(&buff).unwrap().clone());
+                        _ if COMPOUND_OPERATORS.contains_key(buff) => {
+                            tokens.push(COMPOUND_OPERATORS.get(buff).unwrap().clone());
                             offset = curr_pos as i32;
                         }
-                        _ if OPERATORS.contains_key(&buff) => {
-                            tokens.push(OPERATORS.get(&buff).unwrap().clone());
+                        _ if OPERATORS.contains_key(buff) => {
+                            tokens.push(OPERATORS.get(buff).unwrap().clone());
                             offset = curr_pos as i32;
                         }
                         _ => {} // nothing that I care about
@@ -45,20 +45,20 @@ fn get_tokens(stream: &str) -> Vec<TokenType> {
                     let buff = &stream[offset as usize..curr_pos as usize];
                     match buff {
                         _ if COMPOUND_OPERATORS
-                            .contains_key(&format!("{}{}", buff, ch).as_str()) =>
+                            .contains_key(format!("{}{}", buff, ch).as_str()) =>
                         {
                             tokens.push(
                                 COMPOUND_OPERATORS
-                                    .get(&format!("{}{}", buff, ch).as_str())
+                                    .get(format!("{}{}", buff, ch).as_str())
                                     .unwrap()
                                     .clone(),
                             );
                         }
-                        _ if OPERATORS.contains_key(&buff) => {
-                            tokens.push(OPERATORS.get(&buff).unwrap().clone());
+                        _ if OPERATORS.contains_key(buff) => {
+                            tokens.push(OPERATORS.get(buff).unwrap().clone());
                         }
-                        _ if KEYWORDS.contains_key(&buff) => {
-                            tokens.push(KEYWORDS.get(&buff).unwrap().clone())
+                        _ if KEYWORDS.contains_key(buff) => {
+                            tokens.push(KEYWORDS.get(buff).unwrap().clone())
                         }
 
                         _ if is_number(buff) => s = buff.to_string(), // dont do anything
@@ -108,18 +108,18 @@ fn get_tokens(stream: &str) -> Vec<TokenType> {
     if offset > -1 {
         let buff = &stream[offset as usize..curr_pos as usize];
         match buff {
-            _ if COMPOUND_OPERATORS.contains_key(&buff) => {
-                tokens.push(COMPOUND_OPERATORS.get(&buff).unwrap().clone());
+            _ if COMPOUND_OPERATORS.contains_key(buff) => {
+                tokens.push(COMPOUND_OPERATORS.get(buff).unwrap().clone());
             }
-            _ if OPERATORS.contains_key(&buff) => {
-                tokens.push(OPERATORS.get(&buff).unwrap().clone());
+            _ if OPERATORS.contains_key(buff) => {
+                tokens.push(OPERATORS.get(buff).unwrap().clone());
             }
-            _ if KEYWORDS.contains_key(&buff) => tokens.push(KEYWORDS.get(&buff).unwrap().clone()),
-            _ if SEPARATORS.contains_key(&buff) => {
-                tokens.push(SEPARATORS.get(&buff).unwrap().clone())
+            _ if KEYWORDS.contains_key(buff) => tokens.push(KEYWORDS.get(buff).unwrap().clone()),
+            _ if SEPARATORS.contains_key(buff) => {
+                tokens.push(SEPARATORS.get(buff).unwrap().clone())
             }
             "." => tokens.push(TokenType::Period),
-            _ if is_number(&buff) => tokens.push(if buff.contains('.') {
+            _ if is_number(buff) => tokens.push(if buff.contains('.') {
                 TokenType::Floating(buff.parse::<f64>().unwrap())
             } else {
                 TokenType::Integer(buff.parse::<i128>().unwrap())
@@ -131,9 +131,5 @@ fn get_tokens(stream: &str) -> Vec<TokenType> {
 }
 
 fn is_number(s: &str) -> bool {
-    if let Ok(_) = s.parse::<f64>() {
-        true
-    } else {
-        false
-    }
+    s.parse::<f64>().is_ok()
 }

@@ -67,7 +67,7 @@ impl<'a> Lexer<'a> {
     fn read_word(&mut self) -> String {
         let pos = self.position;
         loop {
-            if self.ch == None || !is_letter(&self.ch.unwrap()) {
+            if self.ch.is_none() || !is_letter(&self.ch.unwrap()) {
                 break;
             }
             self.read_char();
@@ -78,7 +78,7 @@ impl<'a> Lexer<'a> {
     fn read_number(&mut self) -> String {
         let pos = self.position;
         loop {
-            if self.ch == None || !is_letter(&self.ch.unwrap()) {
+            if self.ch.is_none() || !is_letter(&self.ch.unwrap()) {
                 break;
             }
             self.read_char();
@@ -89,7 +89,7 @@ impl<'a> Lexer<'a> {
     fn read_op(&mut self) -> String {
         let pos = self.position;
         loop {
-            if self.ch == None || !is_op(&self.ch.unwrap()) {
+            if self.ch.is_none() || !is_op(&self.ch.unwrap()) {
                 break;
             }
             self.read_char();
@@ -99,17 +99,11 @@ impl<'a> Lexer<'a> {
 }
 
 fn is_letter(c: &char) -> bool {
-    match c {
-        'a'..='z' | 'A'..='Z' | '_' => true,
-        _ => false,
-    }
+    matches!(c, 'a'..='z' | 'A'..='Z' | '_')
 }
 
 fn is_number(c: &char) -> bool {
-    match c {
-        '0'..='9' | '.' | '_' => true,
-        _ => false,
-    }
+    matches!(c, '0'..='9' | '.' | '_')
 }
 
 fn is_op(c: &char) -> bool {
