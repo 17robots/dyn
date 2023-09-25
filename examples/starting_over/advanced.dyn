@@ -1,0 +1,10 @@
+export void memory() {
+
+}
+export void concurrency() {
+
+}
+export void testing() {
+
+}
+export "./module" as mod; // exporting an import

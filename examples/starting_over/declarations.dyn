@@ -1,0 +1,20 @@
+export void declarations() {
+	alias();
+	enums();
+	unions();
+	errors();
+	generics();
+	structs();
+	tuples();
+}
+void alias() {
+    // use the type alias to assign a value over any type
+}
+void enums() {}
+void unions() {}
+void errors() {}
+void generics() {}
+void structs() {}
+void tuples() {
+    // tuples are a special struct that has no named members
+}

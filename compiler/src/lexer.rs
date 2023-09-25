@@ -33,15 +33,15 @@ impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> TokenType {
         if let Some(c) = self.ch {
             match c {
-                _ if is_op(&c) => {
-                    let x = self.read_op();
-                    if COMPOUND_OPERATORS.contains_key(&x) {
+                _ if self.is_op() => {
+                    let x = self.peak();
+                    if x != None && COMPOUND_OPERATORS.contains_key(&format!("{}{}",c,x.unwrap()).as_str()) {
                         COMPOUND_OPERATORS.get(&c.to_string()).unwrap().clone()
                     } else {
                         OPERATORS.get(&c.to_string()).unwrap().clone()
                     }
                 }
-                _ if is_letter(&c) => {
+                _ if self.is_letter() => {
                     let x = self.read_word();
                     if KEYWORDS.contains_key(&x) {
                         KEYWORDS.get(&x).unwrap().clone()
@@ -49,7 +49,7 @@ impl<'a> Lexer<'a> {
                         TokenType::Identifier(x.clone())
                     }
                 }
-                _ if is_number(&c) => {
+                _ if self.is_number() => {
                     let x = self.read_number();
                     if x.contains('.') {
                         TokenType::Floating(x.parse::<f64>().unwrap())
@@ -67,7 +67,7 @@ impl<'a> Lexer<'a> {
     fn read_word(&mut self) -> String {
         let pos = self.position;
         loop {
-            if self.ch.is_none() || !is_letter(&self.ch.unwrap()) {
+            if self.ch.is_none() || !self.is_letter() {
                 break;
             }
             self.read_char();
@@ -78,7 +78,7 @@ impl<'a> Lexer<'a> {
     fn read_number(&mut self) -> String {
         let pos = self.position;
         loop {
-            if self.ch.is_none() || !is_letter(&self.ch.unwrap()) {
+            if self.ch.is_none() || !self.is_letter() {
                 break;
             }
             self.read_char();
@@ -86,26 +86,19 @@ impl<'a> Lexer<'a> {
         self.input[pos as usize..self.position as usize].to_string()
     }
 
-    fn read_op(&mut self) -> String {
-        let pos = self.position;
-        loop {
-            if self.ch.is_none() || !is_op(&self.ch.unwrap()) {
-                break;
-            }
-            self.read_char();
-        }
-        self.input[pos as usize..self.position as usize].to_string()
+    fn is_letter(&self) -> bool {
+        matches!(&self.ch.unwrap(), 'a'..='z' | 'A'..='Z' | '_')
     }
-}
 
-fn is_letter(c: &char) -> bool {
-    matches!(c, 'a'..='z' | 'A'..='Z' | '_')
-}
+    fn is_number(&self) -> bool {
+        matches!(&self.ch.unwrap(), '0'..='9' | '.' | '_')
+    }
 
-fn is_number(c: &char) -> bool {
-    matches!(c, '0'..='9' | '.' | '_')
-}
+    fn is_op(&self) -> bool {
+        OPERATORS.contains_key(&self.ch.unwrap().to_string())
+    }
 
-fn is_op(c: &char) -> bool {
-    OPERATORS.contains_key(&c.to_string())
+    fn peak(&self) -> Option<char> {
+        if (self.position + 1) as usize > self.input.len() { None } else { self.input.chars().nth(self.position as usize + 1) }
+    }
 }

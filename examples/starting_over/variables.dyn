@@ -1,0 +1,41 @@
+import { string, vector } from "std";
+export void variables() {
+	i8 x = 5; // vars have opt in mutability
+	mut i8 y = 0;
+	y += 1; // valid
+	// other keyword is static which creates it for the whole program
+	// static cannot be mutable and must have ALL_CAPS name
+	static i32 MAX_PEOPLE = 45; // val needs set on definition
+	i2 unset; // can declare without assigning
+	unset = 0; // once set cannot change
+}
+
+export void types() {
+	primitives();
+	arrays();
+	strings();
+}
+
+void primitives() { // private since not exported
+	i2 x = 0; // ints can be any size (signed will always be size + 1 for sign bits)
+	u5 y = 1; // unsigned
+	
+	// floats cannot be nonstandard
+	f32 single_precision = 1.0;
+	f64 double_precision = 1.000001;
+
+	char character = 'a';
+	
+	bool boolean = false;
+}
+void arrays() {
+	// arrs are fixed sizes of similarly typed pieces of data
+}
+void strings() {
+	// strings are just arrs of chars in an effort to provide the user as much transparency as possible
+	// but the std lib also includes a string wrapper to help with it in case you want less control over them
+	
+	// create a string
+	char[_] x = "Hello World"; // define with no set size
+	string y = string.from("Hello World"); // using the string struct
+}
