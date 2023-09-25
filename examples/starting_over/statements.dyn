@@ -1,7 +1,7 @@
-import { io } from "std";
+import { io, arr } from "std";
 
 export void statements() {
-	if_statements();
+    if_statements();
 	match_statements();
 	loops();
 }
@@ -60,5 +60,15 @@ void loops() {
 
     for i in 1..100 {
         io.println(i);
+    }
+
+    u8[] items = [1,2,3,4,5];
+
+    for mut i = 0; i < arr.len(items); ++i {
+        io.println(arr[i]);
+    }
+
+    for i in 0..arr.len(items); {
+        io.println(arr[i]);
     }
 }
