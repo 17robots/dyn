@@ -10,10 +10,36 @@ export void declarations() {
 void alias() {
     // use the type alias to assign a value over any type
 }
-void enums() {}
+void enums() {
+    enum CLike {
+        SOME,
+        THING,
+        HERE
+    }
+
+    enum Partnered {
+        COOL(i32),
+        THING(bool),
+        HERE(char)
+    }
+
+    CLike example = .SOME;
+    Partnered example2 = .THING(false);
+
+    if example == .SOME {} else {}
+    if example2 == .THING(v) {
+        io.println(v);
+    } else {} 
+
+    match example2 {
+        .COOL(v): { io.println(v); },
+        .THING(v): { io.println(v); },
+        .HERE(v): { io.println(v); },
+    }
+}
 void unions() {}
-void errors() {}
 void generics() {}
+void errors() {}
 void structs() {}
 void tuples() {
     // tuples are a special struct that has no named members
