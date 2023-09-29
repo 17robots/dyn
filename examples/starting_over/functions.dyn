@@ -1,6 +1,6 @@
 import { io } from "std";
 
-export void functions() {
+pub void functions() {
     // function syntax <type> <name>(<args>) { <stuff> }
     i32 local, state = 0;
     mut i32 result;
@@ -33,6 +33,7 @@ i32 some_number_2() => 100; // other way to return one liners
 i32 some_math(i32 x, i32 y) => x + y;
 i32 some_more_math(i32 x, y) => x * y; // can omit if same type
 i32 math_with_references(&i32 x, y) => x * y; // pass by reference instead of copy, this is preferred instead of pointers
+i32 math_with_pointers(*i32 x, y) => *x * *y; // pass by pointers instead of copy, this is preferred instead of pointers
 
 void manipulate_numbers(&mut i32 result, i32 x, y) { // can pass by mutable ref to manipulate params
     result = x + y; 

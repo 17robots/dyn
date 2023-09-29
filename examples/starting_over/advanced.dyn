@@ -1,10 +1,11 @@
-export void memory() {
+import { heap, io } from "std";
 
+pub void memory() {
+    // dyn memory usage checks at comp time to ensure that there are no data races and that there are no double frees or accessing unallocated memory
+    // it will also recommend adding frees when done
+    // other than that, the memory allocations are left for the user to use so dyn can continue to hide stuff
+    // this needs worked on hard
 }
-export void concurrency() {
+pub void concurrency() {}
+pub void testing() {}
 
-}
-export void testing() {
-
-}
-export "./module" as mod; // exporting an import

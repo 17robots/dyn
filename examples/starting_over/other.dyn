@@ -1,4 +1,5 @@
 import { io } from "std";
-export void say_hello() {
+
+pub void say_hello() {
     io.println("Hello World");
 }

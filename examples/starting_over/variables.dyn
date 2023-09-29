@@ -1,5 +1,5 @@
 import { string, vector } from "std";
-export void variables() {
+pub void variables() {
 	i8 x = 5; // vars have opt in mutability
 	mut i8 y = 0;
 	y += 1; // valid
@@ -9,14 +9,12 @@ export void variables() {
 	i2 unset; // can declare without assigning
 	unset = 0; // once set cannot change
 }
-
-export void types() {
+pub void types() {
 	primitives();
 	arrays();
 	strings();
 }
-
-void primitives() { // private since not exported
+void primitives() { // private since not pubed
 	i2 x = 0; // ints can be any size (signed will always be size + 1 for sign bits)
 	u5 y = 1; // unsigned
 	

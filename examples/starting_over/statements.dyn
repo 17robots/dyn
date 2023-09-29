@@ -1,8 +1,9 @@
 import { io, arr } from "std";
 
-export void statements() {
+pub void statements() {
     if_statements();
 	match_statements();
+    defer_statements();
 	loops();
 }
 
@@ -44,6 +45,14 @@ void match_statements() {
             io.println("This is the default and also shouldnt run");
         }
     }
+}
+void defer_statements() {
+    // the defer statement is called when cleaning up the current scope that it's being used in (like a fn or a block
+    // defers work in reverse order of when they are called
+    // defers also only work on objects created within the same scope (so no freeing vars outside of the scope)
+    defer io.println("This executes last");
+    defer io.println("This executes second");
+    defer io.println("This executes first");
 }
 void loops() {
     loop {
