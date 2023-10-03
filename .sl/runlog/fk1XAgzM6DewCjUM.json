@@ -1,0 +1,13 @@
+{
+  "id": "fk1XAgzM6DewCjUM",
+  "command": [
+    "status"
+  ],
+  "pid": 3384,
+  "download_bytes": 0,
+  "upload_bytes": 0,
+  "start_time": "2023-09-29T17:56:43.798993700Z",
+  "end_time": "2023-09-29T17:56:46.166558200Z",
+  "exit_code": 0,
+  "progress": []
+}

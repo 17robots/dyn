@@ -1,0 +1,13 @@
+{
+  "id": "vRADIk1yEj26mJSj",
+  "command": [
+    "init"
+  ],
+  "pid": 16916,
+  "download_bytes": 0,
+  "upload_bytes": 0,
+  "start_time": "2023-09-29T20:16:26.422195Z",
+  "end_time": "2023-09-29T20:16:26.745440100Z",
+  "exit_code": 255,
+  "progress": []
+}

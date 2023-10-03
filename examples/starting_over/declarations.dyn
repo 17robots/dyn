@@ -32,27 +32,23 @@ void structs() {
     struct A {
         u8 age;
         f32 weight;
-        char[] name;
+        u8[] name;
     } 
-
-    A a = A { age: 22, weight: 100.5, name: "Bob" };
-    mut A b = A { age: 22, weight: 100.5, name = "Bob" };
+    A a = { age: 22, weight: 100.5, name: "Bob" };
+    mut A b = { age: 22, weight: 100.5, name = "Bob" };
     b.name = "Joe";
     b.age = 23;
     b.weight = 150.4;
-
     struct B {
         &A[_] parents;
-        char[_] home_city;
+        u8[_] home_city;
     }
-
-    B new_b = B { parents: [&A], home_city: "New York City" };
+    B new_b = { parents: [&A], home_city: "New York City" };
     io.println(new_b.home_city);
-
     struct C {
         A;
         B;
-        C new(char[_] name, u8 age, f32 weight, char[_] home_city, Option<&A[]> parents) C {
+        C new(u8[_] name, u8 age, f32 weight, u8[_] home_city, Option<&A[]> parents) => .{
             name,
             age,
             weight,
@@ -69,7 +65,6 @@ void structs() {
             }
         }
     }
-
     C something_else = C.new("Joe", 50, 200.45, "Cleveland", [&a, &b]);
     something_else.print(); // prints just for this instance
 
@@ -77,33 +72,28 @@ void structs() {
         u8 num_sides;
         f64 area(&self);
     }
-
     struct Triangle: Shape {
         u8 num_sides = 3;
         f64 b,h;
         f64 area(&self) => self.b * self.h * (1/2);
         Triangle new(f64 b, h) => Triangle { b, h };
     }
-
     struct Circle: Shape {
         u8 num_sides = 0; // define a default val
         f64 r;
         f64 area(&self) => math.PI * self.r * self.r;
         Circle new(f64 r) => Circle { r };
     }
-
     struct Rectangle: Shape {
         u8 num_sides = 4;
         f64 l,w;
         f64 area(&self) => l * w;
         Rectangle new(f64 l, Options<f64> w) => Rectangle { l, h: if h == Some(x) { x } else { l } };
     }
-
     void print_area(Shape x) {
        io.println(x.area()); 
     }
-
-    print_area( struct {
+    print_area({ 
         u8 num_sides = 6;
         f64 l = 5;
         f64 area(&self) => 3 * self.l * self.l;
@@ -144,7 +134,7 @@ void enums() {
     enum Partnered {
         COOL(i32),
         THING(bool),
-        HERE(char)
+        HERE(u8)
     }
     CLike example = .SOME;
     Partnered example2 = .THING(false);
@@ -166,7 +156,7 @@ void generics() {
         io.println(x);
         io.println(y);
     }
-    void print_stuff<T: i32|f32, U: char[]|i32[] >(T x,y, U z) {
+    void print_stuff<T: i32|f32, U: u8[]|i32[]>(T x,y, U z) {
        // this can be used to be more readable and more concise instead of doing union type defs
     }
     struct Node<T> { // this is better when not needing any specific restrictions
@@ -178,7 +168,7 @@ void generics() {
 void errors() {
    // no errs specifically but std provides Option and Result types like rust
    Result<i32> x = .Ok(5);
-   Result<i32> y = .Err(Error::new("Wow we broke"));
+   Result<i32> y = .Err(Error.new("Wow we broke"));
    Option<f32> a = .Some(5.0);
    Option<f32> b = .None;
    if a == .Some(x) {

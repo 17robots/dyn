@@ -1,11 +1,68 @@
-import { heap, io } from "std";
+import { heap, io, thread, vec } from "std";
 
 pub void memory() {
-    // dyn memory usage checks at comp time to ensure that there are no data races and that there are no double frees or accessing unallocated memory
-    // it will also recommend adding frees when done
-    // other than that, the memory allocations are left for the user to use so dyn can continue to hide stuff
-    // this needs worked on hard
-}
-pub void concurrency() {}
-pub void testing() {}
+    heap.GeneralAllocator gpa = heap.GeneralAllocator.new();
+    heap.ArenaAllocator aa = heap.ArenaAllocator.new(gpa);
+    mut u8[] buffer;
+    heap.FixedBufferAllocator fba = heap.FixedBufferAllocator.new(&mut buffer);
+    i32 x = 5;
+    *i32 y = &x;
 
+    io.println(*y);
+
+    *mut i32 a = aa.alloc<i32>(1);
+    *mut i32 b = aa.alloc<i32>(1);
+    io.println(*a,*b);
+    *a += 1;
+    *b += 1;
+    io.println(*a,*b);
+    mut *mut i32 c = a;
+    c = aa.alloc<i32>(1);
+    io.println(*c);
+    *c += 1;
+    io.println(*c);
+    defer aa.free(); // reset all allocations in one chunk
+    // add in how double frees and free before use get handled
+}
+pub void concurrency() { 
+    mut heap.GeneralAllocator gpa = heap.GeneralAllocator.new();
+
+    void x(i32 y) {
+       io.println("Hello from thread ", y); 
+    }
+
+    mut vec.Vec<thread.Thread> threads = vec.Vec.new(&mut gpa);
+    for i in 0..100 {
+        threads.append(thread.spawn(void() => io.println("Hello from thread ", i)));
+    }
+    for i in threads {
+        i.wait();
+    }
+
+    thread.Atomic<i32> counter = thread.Atomic.new(0);
+    threads.reset(); // remove all threads
+
+    for i in 0..100 {
+        threads.append(thread.spawn(void() => counter.do(void(i32 x) => x + 1)));
+    }
+
+    for i in threads {
+        i.wait(); // wait all threads
+    }
+    io.println("counter: ", counter.get());
+
+    thread.Channel<i32> num_channel = thread.Channel<i32>.new(&mut gpa); // all attribs in channel are atomic
+
+    threads.reset();
+
+    for i in 0..10 {
+        threads.append(thread.spawn(void() => num_channel.push(i)));
+    }
+    for i in threads {
+        i.wait(); // wait all threads
+    }
+    while num_channel.length() < 0 {
+        io.println(num_channel.pop());
+    }
+}
+pub void testing() {}

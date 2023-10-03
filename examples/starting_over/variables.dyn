@@ -22,7 +22,7 @@ void primitives() { // private since not pubed
 	f32 single_precision = 1.0;
 	f64 double_precision = 1.000001;
 
-	char character = 'a';
+	u8 character = 'a';
 	
 	bool boolean = false;
 }
@@ -43,6 +43,6 @@ void strings() {
 	// but the std lib also includes a string wrapper to help with it in case you want less control over them
 	
 	// create a string
-	char[_] x = "Hello World"; // define with no set size
+	u8[_] x = "Hello World"; // define with no set size
 	string y = string.from("Hello World"); // using the string struct
 }

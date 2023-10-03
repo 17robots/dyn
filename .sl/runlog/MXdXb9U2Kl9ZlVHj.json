@@ -1,0 +1,14 @@
+{
+  "id": "MXdXb9U2Kl9ZlVHj",
+  "command": [
+    "init",
+    "--git"
+  ],
+  "pid": 11924,
+  "download_bytes": 0,
+  "upload_bytes": 0,
+  "start_time": "2023-09-29T20:16:29.476461300Z",
+  "end_time": "2023-09-29T20:16:29.793025700Z",
+  "exit_code": 255,
+  "progress": []
+}
