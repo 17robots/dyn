@@ -61,8 +61,11 @@ pub void concurrency() {
     for i in threads {
         i.wait(); // wait all threads
     }
-    while num_channel.length() < 0 {
+    loop {
+        if num_channel.length() == 0 { break; }
         io.println(num_channel.pop());
     }
 }
-pub void testing() {}
+pub void testing() {
+    
+}
