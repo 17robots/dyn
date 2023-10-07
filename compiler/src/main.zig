@@ -86,7 +86,7 @@ const File = struct {
                 } else {
                     y = "Identifer"; // identifier
                 }
-                tok = Token.new(y, x, pos, self.curr - 1);
+                tok = Token.new(y, x, pos, self.curr - @intFromBool(self.curr > pos));
             },
             '0'...'9' => {
                 var x = self.read_num();
@@ -96,16 +96,16 @@ const File = struct {
                 } else {
                     y = "Integer"; // integer
                 }
-                tok = Token.new(y, x, pos, self.curr - 1); // int
+                tok = Token.new(y, x, pos, self.curr - @intFromBool(self.curr > pos)); // int
             },
             else => {
                 if (contains(&[_]u8{self.ch})) {
                     const x = self.read_op();
-                    tok = Token.new("Operator", x, pos, self.curr - 1);
+                    tok = Token.new("Operator", x, pos, self.curr - @intFromBool(self.curr > pos));
                 } else if (self.next >= self.input.len) {
-                    tok = Token.new("EOF", "", pos, self.curr - 1); // eof
+                    tok = Token.new("EOF", "", pos, self.curr - @intFromBool(self.curr > pos)); // eof
                 } else {
-                    tok = Token.new("Illegal", "", pos, self.curr - 1); // illegal
+                    tok = Token.new("Illegal", "", pos, self.curr - @intFromBool(self.curr > pos)); // illegal
                 }
             },
         }
@@ -143,13 +143,12 @@ const File = struct {
     }
     fn read_op(self: *File) string {
         const pos = self.curr;
-        blk: while (contains(&[_]u8{self.ch})) {
+        var y = self.peak();
+        if (contains(&[_]u8{ self.ch, y })) {
+            std.debug.print("It contains it", .{});
             self.read_char();
-            if (!contains(self.input[pos..self.curr])) {
-                break :blk;
-            }
         }
-        return self.input[pos..self.curr];
+        return self.input[pos..(self.curr + @intFromBool(self.curr == pos))];
     }
     fn read_ws(self: *File) void {
         blk: {
@@ -186,7 +185,7 @@ pub fn print_token(t: Token) void {
 }
 
 pub fn main() !void {
-    var f = File.new("main.dyn", "f32 x = 4.0;");
+    var f = File.new("main.dyn", "==");
     var token = f.get_token();
     while (std.mem.count(u8, token.type, "EOF") == 0) {
         print_token(token);
