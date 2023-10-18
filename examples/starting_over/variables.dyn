@@ -1,4 +1,5 @@
 import { string, vector } from "std";
+
 pub void variables() {
 	i8 x = 5; // vars have opt in mutability
 	mut i8 y = 0;

@@ -1,0 +1,14 @@
+import { io, Result } from "std";
+import { create_listener, QueueProperties, QueueListener } from "crosstown";
+import { UserCreatedEvent } from "events";
+
+void main() {
+    Result<QueueListener> listener = create_listener("link");
+    if listener == .Ok(l) {
+        l.listen("user_created", Result<void>(&UserCreatedEvent e) {
+            io.println("message:", message);
+        }, .{ auto_delete: false, durable: false, use_dead_letter: true});
+    } else {
+        io.println("Failed to create listener");
+    }
+}

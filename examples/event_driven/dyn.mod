@@ -1,17 +1,33 @@
+dyn 1.0.0 
+
 workspace "eventdriven"
-  members (
-    "publisher"
-    "subscriber"
-    "events"
-  )
-  dependencies (
-    "borsh@1.0.0"
-    "borsh-derive@1.0.0"
-    "crosstown@1.0.0"
-  )
+    members (
+        "events"
+        "subscriber"
+        "publisher"
+    )
+    libdir "./lib"
+    require (
+        "github.com/17robots/borsh@1.0.0"
+    )
+    optimize
+        debug 2
+        release 5
 
-configuration:debug
-  optimize "2"
-
-configuration:release
-  optimize: "5"
+mod "events"
+    src "./events/main.dyn"
+    require (
+        "github.com/17robots/borsh@workspace"
+    )
+bin "publisher"
+    src "./publisher/main.dyn"
+    require (
+        "github.com/17robots/borsh@workspace"
+        "events@workspace"
+    )
+bin "subscriber"
+    src "./subscriber/main.dyn"
+    require (
+        "github.com/17robots/borsh@workspace"
+        "events@workspace"
+    )

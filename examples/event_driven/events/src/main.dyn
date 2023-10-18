@@ -1,6 +1,0 @@
-import { BorshSerialize, BorshDeserialize } from "borsh";
-
-export struct UserCreatedEvent {
-  string id,
-  string name,
-}
