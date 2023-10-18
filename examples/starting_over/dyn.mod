@@ -1,7 +1,7 @@
 dyn 1.0.0
 
 bin "starting-over"
-    src "./main.dyn"
+    src "./src/main.dyn"
     libdir "./lib" // default
     require (
         "github.com/something/else@1.0" alias

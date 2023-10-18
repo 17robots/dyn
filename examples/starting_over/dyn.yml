@@ -1,0 +1,10 @@
+---
+version: 1.0.0
+bin:
+  name: starting-over
+  src: "./src/main.dyn"
+  require:
+    - "github.com/something/else@1.0"
+    - "github.com/something/else2@1.0"
+... 
+

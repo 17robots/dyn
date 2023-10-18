@@ -1,0 +1,31 @@
+---
+version: 1.0.0
+workspace:
+  members:
+    - events
+    - subscriber
+    - publisher
+  libdir: "./lib"
+  require:
+    - "github.com/17robots/borsh@1.0.0" borsh
+  optimize:
+    debug: 2
+    release: 5
+mod:
+  name: events
+  src: "./events/main.dyn"
+  require:
+    - workspace.borsh
+bin:
+  name: publisher
+  src: "./publisher/main.dyn"
+  require:
+    - workspace.require.borsh
+    - workspace.members.events
+bin:
+  name: subscriber
+  src: "./subscriber/main.dyn"
+  require:
+    - workspace.require.borsh
+    - workspace.members.events
+... 
