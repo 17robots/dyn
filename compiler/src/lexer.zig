@@ -1,7 +1,6 @@
 const std = @import("std");
-const string = @import("./util.zig").string;
 
-pub const language = [_]string{
+pub const language = [_][]u8{
     "con",
     "mut",
     "i8",
@@ -44,11 +43,11 @@ pub const language = [_]string{
 };
 
 pub const Token = struct {
-    type: string,
-    val: string,
+    type: []u8,
+    val: []u8,
     start: usize,
     end: usize,
-    pub fn new(_type: string, val: string, s: usize, e: usize) Token {
+    pub fn new(_type: []u8, val: []u8, s: usize, e: usize) Token {
         return .{
             .type = _type,
             .val = val,
@@ -62,7 +61,7 @@ pub fn print_token(t: Token) void {
     std.debug.print("{s}({s}), start: {d}, end: {d}\n", .{ t.type, t.val, t.start, t.end });
 }
 
-pub fn contains(val: string) bool {
+pub fn contains(val: []u8) bool {
     var found = false;
     for (language) |x| {
         if (std.mem.eql(u8, x, val)) {
@@ -73,10 +72,10 @@ pub fn contains(val: string) bool {
 }
 
 pub const File = struct {
-    name: string,
-    input: string,
+    name: []u8,
+    input: []u8,
     curr: usize,
-    pub fn new(name: string, input: string) File {
+    pub fn new(name: []u8, input: []u8) File {
         return .{
             .name = name,
             .input = input,
@@ -121,7 +120,7 @@ pub const File = struct {
     fn valid(self: *File) bool {
         return self.curr < self.input.len;
     }
-    fn r_w(self: *File) string {
+    fn r_w(self: *File) []u8 {
         const pos = self.curr;
         blk: while (self.valid()) {
             switch (self.input[self.curr]) {
@@ -139,7 +138,7 @@ pub const File = struct {
         }
         return self.sub(pos, self.curr);
     }
-    fn r_n(self: *File) string {
+    fn r_n(self: *File) []u8 {
         const pos = self.curr;
         blk: while (self.valid()) {
             switch (self.input[self.curr]) {
@@ -153,7 +152,7 @@ pub const File = struct {
         }
         return self.sub(pos, self.curr);
     }
-    fn r_o(self: *File) string {
+    fn r_o(self: *File) []u8 {
         const pos = self.curr;
         blk: while (self.valid()) {
             switch (self.input[self.curr]) {
@@ -183,7 +182,7 @@ pub const File = struct {
             }
         }
     }
-    fn sub(self: *File, s: usize, e: usize) string {
+    fn sub(self: *File, s: usize, e: usize) []u8 {
         return self.input[s..(e + @intFromBool(s == e))];
     }
 };
