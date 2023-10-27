@@ -1,7 +1,76 @@
 const std = @import("std");
-const string = @import("../util.zig").string;
-const Token = @import("./token.zig").Token;
-const lang = @import("language.zig");
+const string = @import("./util.zig").string;
+
+pub const language = [_]string{
+    "con",
+    "mut",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "f32",
+    "f64",
+    "if",
+    "void",
+    "+",
+    "-",
+    "*",
+    "/",
+    "&",
+    "|",
+    "=",
+    "!",
+    ";",
+    ",",
+    ".",
+    "(",
+    ")",
+    "[",
+    "]",
+    "{",
+    "}",
+    "++",
+    "--",
+    "&&",
+    "||",
+    "==",
+    "!=",
+};
+
+pub const Token = struct {
+    type: string,
+    val: string,
+    start: usize,
+    end: usize,
+    pub fn new(_type: string, val: string, s: usize, e: usize) Token {
+        return .{
+            .type = _type,
+            .val = val,
+            .start = s,
+            .end = e,
+        };
+    }
+};
+
+pub fn print_token(t: Token) void {
+    std.debug.print("{s}({s}), start: {d}, end: {d}\n", .{ t.type, t.val, t.start, t.end });
+}
+
+pub fn contains(val: string) bool {
+    var found = false;
+    for (language) |x| {
+        if (std.mem.eql(u8, x, val)) {
+            found = true;
+        }
+    }
+    return found;
+}
 
 pub const File = struct {
     name: string,
@@ -28,17 +97,18 @@ pub const File = struct {
             switch (self.input[self.curr]) {
                 'a'...'z', 'A'...'Z' => {
                     var x = self.r_w();
-                    tok = Token.new(if (lang.contains(x)) "Keyword" else "Identifier", x, pos, self.curr);
+                    tok = Token.new(if (contains(x)) "Keyword" else "Identifier", x, pos, pos + x.len - 1);
                 },
                 '0'...'9' => {
                     var x = self.r_n();
-                    tok = Token.new(if (std.mem.count(u8, x, ".") > 0) "Floating" else "Integer", x, pos, self.curr);
+                    tok = Token.new(if (std.mem.count(u8, x, ".") > 0) "Floating" else "Integer", x, pos, pos + x.len - 1);
                 },
                 else => {
-                    tok = if (lang.contains(self.sub(self.curr, self.curr))) {
-                        return Token.new("Operator", self.r_o(), pos, self.curr);
+                    tok = if (contains(self.sub(self.curr, self.curr))) {
+                        var x = self.r_o();
+                        return Token.new("Operator", x, pos, pos + x.len - 1);
                     } else {
-                        return Token.new("Illegal", "", pos, self.curr);
+                        return Token.new("Illegal", "", pos, pos);
                     };
                 },
             }
@@ -88,7 +158,7 @@ pub const File = struct {
         blk: while (self.valid()) {
             switch (self.input[self.curr]) {
                 else => {
-                    if (lang.contains(self.sub(pos, self.curr)) and lang.contains(self.sub(self.curr, self.curr))) {
+                    if (contains(self.sub(pos, self.curr)) and contains(self.sub(self.curr, self.curr))) {
                         self.read_char();
                     } else {
                         break :blk;
