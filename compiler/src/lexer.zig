@@ -42,11 +42,17 @@ pub const language = [_][]u8{
     "!=",
 };
 
+pub const Tag = enum { invalid, eof, plus, plus_equal, minus, minus_equal, asterisk, asterisk_equal, slash, slash_equal, ampersand, ampersand_equal, ampersand_ampersand, pipe, pipe_equal, pipe_pipe, keyword_con, keyword_pub, keyword_mut, keyword_if, keyword_loop, keyword_struct, keyword_enum };
+
+pub const Loc = struct {
+    start: usize,
+    end: usize,
+};
+
 pub const Token = struct {
     type: []u8,
     val: []u8,
-    start: usize,
-    end: usize,
+    loc: Loc,
     pub fn new(_type: []u8, val: []u8, s: usize, e: usize) Token {
         return .{
             .type = _type,

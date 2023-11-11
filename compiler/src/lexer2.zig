@@ -1,218 +1,95 @@
 const std = @import("std");
 
-pub const File = struct {
-    name: []const u8,
-    relevant_bytes: []const u8,
-};
+pub const Tag = enum { num_literal, char_literal, string_literal, identifier, invalid, eof, plus, plus_equal, minus, minus_equal, asterisk, asterisk_equal, slash, slash_equal, ampersand, ampersand_equal, ampersand_ampersand, pipe, pipe_equal, pipe_pipe, keyword_con, keyword_pub, keyword_mut, keyword_if, keyword_loop, keyword_struct, keyword_enum };
 
-pub const Tag = enum {
-    // general / literals
-    invalid,
-    eof,
-    num_literal,
-    string_literal,
-    char_literal,
-    // symbols
-    plus,
-    plus_plus,
-    plus_equal,
-    minus,
-    minus_minus,
-    plus_equal,
-    asterisk,
-    asterisk_equal,
-    slash,
-    slash_equal,
-    percent,
-    percent_equal,
-    equal,
-    equal_equal,
-    bang,
-    bang_equal,
-    ampersand,
-    ampersand_ampersand,
-    ampersand_equal,
-    pipe,
-    pipe_pipe,
-    pipe_equal,
-    less_than,
-    less_than_equal,
-    greater_than,
-    greater_than_equal,
-    l_paren,
-    r_paren,
-    l_bracket,
-    r_bracket,
-    l_brace,
-    r_brace,
-    period,
-    comma,
-    colon,
-    semicolon,
-    // keywords
-    keyword_if,
-    keyword_else,
-    keyword_struct,
-    keyword_loop,
-    keyword_true,
-    keyword_false,
-    keyword_import,
-    keyword_pub,
-    keyword_con,
-    keyword_mut,
-    keyword_type,
-    keyword_trait,
-    keyword_enum,
-};
+pub const keywords = std.ComptimeStringMap(Tag, .{
+    .{ "if", .keyword_if },
+    .{ "con", .keyword_con },
+    .{ "mut", .keyword_mut },
+    .{ "pub", .keyword_pub },
+});
 
 pub const Loc = struct {
-    file: *File,
     start: usize,
     end: usize,
 };
-
 pub const Token = struct {
-    loc: Loc,
     tag: Tag,
+    loc: Loc,
 };
 
 pub const Tokenizer = struct {
-    file: *File,
-    state: ReadStates,
+    buf: [:0]const u8,
     index: usize,
+    state: State,
 
-    pub fn init() Tokenizer {}
-
-    pub const ReadStates = enum {
-        start,
+    pub const State = enum {
+        string_literal,
+        int,
+        float,
+        char_literal,
         identifier,
-        literal_number,
-        literal_string,
-        literal_char,
+        start,
+        period,
     };
+    pub fn init(buf: [:0]const u8) Tokenizer {
+        return .{
+            .buf = buf,
+            .index = undefined,
+            .state = .start,
+        };
+    }
 
     pub fn next(self: *Tokenizer) Token {
-        const c = self.file.buf[self.index];
-        var tok: Token = .{ .loc = .{
-            .file = self.file,
-            .start = 0,
-            .end = undefined,
-        }, .tag = undefined };
-        switch (c) {
-            '0'...'9' => switch (self.state) {},
-            'a'...'z', 'A'...'Z', '_' => switch (self.state) {},
-            '"' => switch (self.state) {
-                .start => {},
-                .string_literal => {},
-                else => {},
-            },
-            '\\' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '\'' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '<' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '>' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '=' => switch (self.state) {
-                .start => {},
-                .ampersand => {},
-                .asterisk => {},
-                .percent => {},
-                .plus => {},
-                .minus => {},
-                .bang => {},
-                .pipe => {},
-                .equal => {},
-                else => {
-                    tok.tag = .equal;
+        var res = Token{ .eof = undefined, .loc = .{ .start = self.index, .end = undefined } };
+        self.state = .start;
+        while (true) : (self.index += 1) {
+            const c = self.buf[self.index];
+            switch (c) {
+                'a'...'z', 'A'...'Z', '_' => switch (self.state) {
+                    .start => {
+                        self.state = .identifier;
+                    },
+                    .identifier => {},
+                    else => {
+                        if (keywords.get(self.buf[res.loc.start..self.index])) |token| {
+                            res.tag = token;
+                        }
+                        break;
+                    },
                 },
-            },
-            '+' => switch (self.state) {
-                .start => {},
-                .plus => {},
+                '0'...'9' => switch (self.state) {
+                    .start => {
+                        self.state = .int;
+                    },
+                    .int,
+                    .float,
+                    .identifier,
+                    => {},
+                    else => {
+                        self.state = .int;
+                    },
+                },
+                '.' => switch (self.state) {
+                    .start => {
+                        self.state = .period;
+                    },
+                    .int => {
+                        self.state = .float;
+                    },
+                    .float => {
+                        break;
+                    },
+                    else => {
+                        res.tag = .period;
+                        break;
+                    },
+                },
+                ' ', '\t', '\r' => {},
                 else => {},
-            },
-            '-' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '/' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '*' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '|' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '&' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '!' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '?' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            ',' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            ';' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            ':' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '(' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            ')' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '[' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            ']' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '{' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            '}' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            ' ', '\n', '\r' => switch (self.state) {
-                .start => {},
-                else => {},
-            },
-            else => switch (self.state) {
-                .start => {},
-                else => {},
-            },
+            }
         }
+        res.loc.end = self.index;
+        return res;
     }
 };
