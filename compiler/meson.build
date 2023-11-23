@@ -1,2 +1,3 @@
 project('dyn', 'cpp')
-executable('dyn', 'main.cc')
+subdir('dync')
+subdir('dyn')

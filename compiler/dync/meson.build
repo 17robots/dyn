@@ -1,0 +1,1 @@
+executable('dyn', 'main.cc')

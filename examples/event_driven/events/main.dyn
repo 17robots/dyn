@@ -1,4 +1,0 @@
-pub struct UserCreatedEvent {
-    u8[] id,
-    u8[] name,
-}
