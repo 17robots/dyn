@@ -1,9 +1,9 @@
-import { io } from "std";
+from "std" import { io };
 import "./other" as other; // import all symbols and give alias, import "./other" also imports as "other"
-import { types, variables } from "./variables"; // pick what you want
-import { statements } from "./statements";
-import { functions } from "./functions";
-import { declarations } from "./declarations";
+from "./variables" import { types, variables }; // pick what you want
+from "./statements" import { statements };
+from "./functions" import { functions };
+from "./declarations" import { declarations };
 import "./advanced" as advanced;
 
 // comment

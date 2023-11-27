@@ -1,1 +1,0 @@
-executable('dyn', 'main.cc')
