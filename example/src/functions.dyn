@@ -1,4 +1,4 @@
-import { io } from "std";
+from "std" import { io };
 
 pub void functions() {
     // function syntax <type> <name>(<args>) { <stuff> }

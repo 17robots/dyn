@@ -1,4 +1,4 @@
-import { io, arr } from "std";
+from "std" import { io, arr };
 
 pub void statements() {
     if_statements();

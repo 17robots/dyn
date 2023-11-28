@@ -1,4 +1,4 @@
-import { heap, io, thread, vec } from "std";
+from "std" import { heap, io, thread, vec };
 pub import "./module" as mod; // import from folder and expose here
 
 pub void memory() {

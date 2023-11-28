@@ -1,4 +1,4 @@
-import { Error, Option, Result, io, math } from "std";
+from "std" import { Error, Option, Result, io, math };
 
 pub void declarations() {
 	alias();
