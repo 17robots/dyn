@@ -1,15 +1,7 @@
 #pragma once
+#include <string>
+#include <vector>
 
 namespace dyn {
-namespace token {
-
-}
-
-namespace lexer {
-
-}
-
-namespace file {
-
-}
-} 
+namespace lexer {}
+} // namespace dyn
