@@ -139,7 +139,10 @@ Token read_token(Lexer &lex, int file) {
         } else if (is_w(lex.c)) {
           lex.state = Lexer::START;
           auto val = std::string(buff.begin(), buff.end());
-          Token t = { .token = keywords.find(val) != keywords.end() ? keywords.at(val) : IDENTIFIER, .value = keywords.find(val) != keywords.end() ? "" : val };
+          Token t = {.token = keywords.find(val) != keywords.end()
+                                  ? keywords.at(val)
+                                  : IDENTIFIER,
+                     .value = keywords.find(val) != keywords.end() ? "" : val};
           buff.clear();
           return t;
         } else {
@@ -162,8 +165,46 @@ Token read_token(Lexer &lex, int file) {
         }
         break;
       case Lexer::READ_OPERATOR:
-        // go through the different possible operators to check if it matches
-        // whats available or otherwise make it illegal
+        switch (lex.c) {
+        case '(':
+          break;
+        case ')':
+          break;
+        case '{':
+          break;
+        case '}':
+          break;
+        case '[':
+          break;
+        case ']':
+          break;
+        case ';':
+          break;
+        case ':':
+          break;
+        case '.':
+          break;
+        case ',': // single
+          break;
+        case '+':
+          break;
+        case '-':
+          break;
+        case '*':
+          break;
+        case '/':
+          break;
+        case '=':
+          break;
+        case '&':
+          break;
+        case '|':
+          break;
+        case '<':
+          break;
+        case '>': // compound
+          break;
+        }
         break;
       default:
         break;
