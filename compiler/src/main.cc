@@ -3,7 +3,6 @@
 #include <vector>
 
 enum TokenType {
-  lit_beg,
   ILLEGAL,
   IDENTIFIER,
   END_OF_FILE,
@@ -11,8 +10,6 @@ enum TokenType {
   CHAR,
   INT,
   FLOAT,
-  lit_end,
-  op_beg,
   TILDE,
   SINGLE_QUOTE,
   DOUBLE_QUOTE,
@@ -45,8 +42,6 @@ enum TokenType {
   SEMICOLON,
   COMMA,
   COLON,
-  op_end,
-  kwd_beg,
   CONTINUE,
   FOR,
   IF,
@@ -55,7 +50,8 @@ enum TokenType {
   MUT,
   PUB,
   RETURN,
-  kwd_end
+  IMPORT,
+  FROM,
 };
 
 const std::unordered_map<std::string, TokenType> keywords = {
@@ -167,42 +163,61 @@ Token read_token(Lexer &lex, int file) {
       case Lexer::READ_OPERATOR:
         switch (lex.c) {
         case '(':
+          if(buff.size() > 0) {}
           break;
         case ')':
+          if(buff.size() > 0) {}
           break;
         case '{':
+          if(buff.size() > 0) {}
           break;
         case '}':
+          if(buff.size() > 0) {}
           break;
         case '[':
+          if(buff.size() > 0) {}
           break;
         case ']':
+          if(buff.size() > 0) {}
           break;
         case ';':
+          if(buff.size() > 0) {}
           break;
         case ':':
+          if(buff.size() > 0) {}
           break;
         case '.':
+          if(buff.size() > 0) {}
           break;
         case ',': // single
+          if(buff.size() > 0) {}
           break;
         case '+':
+          if(buff.size() > 0) {}
           break;
         case '-':
+          if(buff.size() > 0) {}
           break;
         case '*':
+          if(buff.size() > 0) {}
           break;
         case '/':
+          if(buff.size() > 0) {}
           break;
         case '=':
+          if(buff.size() > 0) {}
           break;
         case '&':
+          if(buff.size() > 0) {}
           break;
         case '|':
+          if(buff.size() > 0) {}
           break;
         case '<':
+          if(buff.size() > 0) {}
           break;
         case '>': // compound
+          if(buff.size() > 0) {}
           break;
         }
         break;
