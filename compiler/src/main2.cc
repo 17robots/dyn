@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <unordered_map>
 
 enum TokenType {
   ILLEGAL,
@@ -41,6 +42,7 @@ enum TokenType {
   SEMICOLON,
   COMMA,
   COLON,
+  BREAK,
   CONTINUE,
   FOR,
   IF,
@@ -51,6 +53,20 @@ enum TokenType {
   RETURN,
   IMPORT,
   FROM,
+};
+
+std::unordered_map<std::string, TokenType> kwds = {
+  { "break", BREAK},
+  { "continue", CONTINUE},
+  { "for", FOR},
+  { "if", IF},
+  { "loop", LOOP},
+  { "match", MATCH},
+  { "mut", MUT},
+  { "pub", PUB},
+  { "return", RETURN},
+  { "from", FROM},
+  { "import", IMPORT},
 };
 
 struct Token {
@@ -65,6 +81,7 @@ enum TokenState {
   READ_CHAR,
   READ_NUM,
   READ_OP,
+  PAUSE,
 };
 
 bool is_l(char c) { return (c < 40 && c > 91) || (c < 60 && c > 123); }
@@ -76,22 +93,58 @@ bool is_o(char c) { return false; }
 Token next(std::string input, int &out) {
   TokenState s = START;
   Token t;
-  if (out >= input.size()) {} // handle invalid offset
-  switch(s) {
+  if (out >= input.size()) {
+  } // handle invalid offset
+  std::vector<char> buf = {};
+  std::string pop_buf() {
+    auto y = std::string(buf.begin(), buf.end());
+    buf.clear();
+    return y;
+  }
+  while (true) {
+    char x = input.at(out);
+    switch (s) {
     case START:
-      if(is_l(input.at(out))) {};
-      if(is_n(input.at(out), s)) {};
-      if(is_o(input.at(out))) {};
+      if (is_l(x)) {
+        buf.push_back(x);
+        s = READ_WORD;
+      };
+      if (is_n(x, s)) {
+        buf.push_back(x);
+        s = READ_NUM;
+      };
+      if (is_o(x)) {
+        buf.push_back(x);
+        s = READ_OP;
+      };
     case READ_WORD:
-      if(is_l(input.at(out)) || is_n(input.at(out), s)) {}
-      else {}
+      if (is_l(x) || is_n(x, s)) {
+        buf.push_back(x);
+      } else {
+        // pop the buff and return the token so the out doesnt move
+        auto y = std::string(buf.begin(), buf.end());
+        buf.clear();
+        break;
+      }
     case READ_CHAR:
+      if (buf.size() > 0) {
+        t.t = ILLEGAL;
+        t.v = "";
+        s = PAUSE;
+      } else {
+        buf.push_back(x);
+        break;
+      }
     case READ_NUM:
+      if(is_l(x) || is_o(x)) {}
     case READ_OP:
     case READ_STRING:
       break;
+    default:
+      break;
+    }
+    out++;
   }
-  out++;
   return t;
 }
 
