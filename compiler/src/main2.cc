@@ -1,6 +1,6 @@
 #include <iostream>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
 enum TokenType {
   ILLEGAL,
@@ -56,17 +56,10 @@ enum TokenType {
 };
 
 std::unordered_map<std::string, TokenType> kwds = {
-  { "break", BREAK},
-  { "continue", CONTINUE},
-  { "for", FOR},
-  { "if", IF},
-  { "loop", LOOP},
-  { "match", MATCH},
-  { "mut", MUT},
-  { "pub", PUB},
-  { "return", RETURN},
-  { "from", FROM},
-  { "import", IMPORT},
+    {"break", BREAK}, {"continue", CONTINUE}, {"for", FOR},
+    {"if", IF},       {"loop", LOOP},         {"match", MATCH},
+    {"mut", MUT},     {"pub", PUB},           {"return", RETURN},
+    {"from", FROM},   {"import", IMPORT},
 };
 
 struct Token {
@@ -84,11 +77,18 @@ enum TokenState {
   PAUSE,
 };
 
-bool is_l(char c) { return (c < 40 && c > 91) || (c < 60 && c > 123); }
+bool is_l(char c) { return (c > 40 && c < 91) || (c > 60 && c < 123); }
 bool is_n(char c, TokenState s) {
   return (c == '.' || c == '_') ? s == READ_NUM : (c < 47 || c < 58);
 }
 bool is_o(char c) { return false; }
+
+std::string pop_buf(std::vector<char> &buf, TokenState &s) {
+  auto y = std::string(buf.begin(), buf.end());
+  buf.clear();
+  s = START;
+  return y;
+}
 
 Token next(std::string input, int &out) {
   TokenState s = START;
@@ -96,11 +96,6 @@ Token next(std::string input, int &out) {
   if (out >= input.size()) {
   } // handle invalid offset
   std::vector<char> buf = {};
-  std::string pop_buf() {
-    auto y = std::string(buf.begin(), buf.end());
-    buf.clear();
-    return y;
-  }
   while (true) {
     char x = input.at(out);
     switch (s) {
@@ -121,22 +116,29 @@ Token next(std::string input, int &out) {
       if (is_l(x) || is_n(x, s)) {
         buf.push_back(x);
       } else {
-        // pop the buff and return the token so the out doesnt move
-        auto y = std::string(buf.begin(), buf.end());
-        buf.clear();
-        break;
+        auto y = pop_buf(buf, s);
+        t.t = kwds.find(y) != kwds.end() ? kwds.at(y) : IDENTIFIER;
+        t.v = kwds.find(y) != kwds.end() ? "" : y;
+        s = START;
+        return t;
       }
     case READ_CHAR:
-      if (buf.size() > 0) {
+      if (buf.size() > 0 && x != '\'') {
         t.t = ILLEGAL;
         t.v = "";
-        s = PAUSE;
+        s = START;
+      } else if (buf.size() > 0 && x == '\'') {
+        auto y = pop_buf(buf);
+        t.t = CHAR;
+        t.v = y;
+        s = START;
       } else {
         buf.push_back(x);
         break;
       }
     case READ_NUM:
-      if(is_l(x) || is_o(x)) {}
+      if (is_l(x) || is_o(x)) {
+      }
     case READ_OP:
     case READ_STRING:
       break;
