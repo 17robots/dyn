@@ -1,0 +1,55 @@
+letter = ([a-z] | [A-Z])
+digit = [0-9]
+number = digit+
+character = (letter | digit)
+identifier = (letter | "_") (character | "_")*
+type = primitive | array | pointer | function_type | identifier | reference
+primitive = integer | float
+integer = ("i" | "u") number
+float = "f" ("32" | "64")
+array = type "[]"
+pointer = type "*"
+function_type = type "(" {"," type} ")"
+reference = type "&"
+
+program = {statement|declaration}
+
+declaration = pub | decls
+pub = "pub" decls
+decls = enum | struct | variable | function_declaration | type_declaration | array_declaration | generics_declaration | trait
+enum = "enum" identifier "{" {enum_field} "}"
+enum_field = identifier ["(" type ")"]
+struct = "struct" identifier [":" identifier{"," identifier"}] "{" {struct_memmbers} "}"
+struct_members = variable | struct_function
+struct_function = type identifier "(" ["self"|"self&"]{variable} ")" block
+variable = [("mut"|"con")] type identifier | [("mut"|"con")] identifier "=" expr
+function_declaration = type identifier "(" {function_parameter} ")"
+function_parameter = [variable {"," variable}]
+type_declaration = "type" identifier = type
+array_declaration = type "[" ("_" | digit | expr) "]" identifier ["=" "{" literal {"," literal} "}"]
+generics_declaration = "<" ">"
+
+statement = if | loop | for | variable_assign | break | continue | statement {";" statement}
+if = "if" {binary} block
+loop = "loop" block
+for = "for" 
+variable_assign = identifier "=" expr
+break = "break"
+continue = "continue"
+block = "{" {statement} "}"
+
+expr = binary | math | pointer_deref | array_access | literal | function_call
+math = number | "(" math ")" | math mop math | identifier
+mop = "+" | "-" | "*" | "/" | "&" | "|"
+binary = bool | "(" binary ")" | "!" binary | identifier | math eq math | binary eq binary | binary bop binary | math cmp math
+bop = "&&" | "||"
+bool = "true" | "false"
+eq = "==" | "!="
+cmp = ">" | ">=" | "<" | "<="
+pointer_deref = "*" identiifer
+array_access = identifier "[" math "]"
+literal = number | decimal | bool | struct_literal | lambda_function
+decimal =
+struct_literal = 
+lambda_function = 
+function_call = identifier "(" {(identifier|identifier{"," identifier})} ")"

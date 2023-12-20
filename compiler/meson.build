@@ -1,2 +1,2 @@
 project('dyn', 'cpp')
-executable('dyn', 'src/main2.cc')
+executable('dyn', ['src/main.cc', 'src/lexer.cc'])
