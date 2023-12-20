@@ -23,7 +23,7 @@ struct = "struct" identifier [":" identifier{"," identifier"}] "{" {struct_memmb
 struct_members = variable | struct_function
 struct_function = type identifier "(" ["self"|"self&"]{variable} ")" block
 variable = [("mut"|"con")] type identifier | [("mut"|"con")] identifier "=" expr
-function_declaration = type identifier "(" {function_parameter} ")"
+function_declaration = type identifier "(" {function_parameter} ")" block
 function_parameter = [variable {"," variable}]
 type_declaration = "type" identifier = type
 array_declaration = type "[" ("_" | digit | expr) "]" identifier ["=" "{" literal {"," literal} "}"]
@@ -48,8 +48,10 @@ eq = "==" | "!="
 cmp = ">" | ">=" | "<" | "<="
 pointer_deref = "*" identiifer
 array_access = identifier "[" math "]"
-literal = number | decimal | bool | struct_literal | lambda_function
+literal = number | decimal | bool | struct_literal
 decimal =
 struct_literal = 
 lambda_function = 
 function_call = identifier "(" {(identifier|identifier{"," identifier})} ")"
+anon_function = type "(" {function_parameter} ")" block
+anon_struct = "struct" "{" {struct_members} "}"
