@@ -15,11 +15,10 @@
       {
         devShell = p.mkShell.override { stdenv = p.clangStdenv; } rec {
           packages = with p; [
+            gcc
             ninja
             meson
             clang-tools
-            llvm.libstdcxxClang
-            llvm.libcxx
           ];
           name = "dyn";
         };        
