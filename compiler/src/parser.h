@@ -5,159 +5,229 @@
 
 namespace Parser {
 class Declaration {};
-class VariableDeclaration : Declaration {};
-class TraitDeclaration : Declaration {};
-class StructField {};
 class Expression {};
+class Statement {};
+class Type {};
+class VariableDeclaration : Declaration {};
+class StructField {};
+class LiteralExpression : Expression {};
+class ArrayAccessExpression : Expression {};
+  
+class TraitDeclaration : Declaration {
+    Lexer::Token Trait;
+    
+  };
 class BinaryExpression : Expression {
-  Expression left, right;
-  Lexer::Token bop;
+public:
+private:
+  Expression *left;
+  Expression *right;
+  Lexer::Token *bop;
 };
 class MathExpression : Expression {
-  Expression left, right;
-  Lexer::Token mop;
+public:
+private:
+  Expression *left;
+  Expression *right;
+  Lexer::Token *mop;
 };
 class FunctionCallExpression : Expression {
-  Lexer::Token functionIdentifier;
-  Lexer::Token LParen;
-  std::vector<Lexer::Token> parameters;
-  Lexer::Token RParen;
+public:
+private:
+  Lexer::Token *functionIdentifier;
+  Lexer::Token *LParen;
+  std::vector<Lexer::Token *> parameters;
+  Lexer::Token *RParen;
 };
-class LiteralExpression : Expression {};
+
 class NumberLiteral : LiteralExpression {
-  Lexer::Token Value;
+public:
+private:
+  Lexer::Token *Value;
 };
 class DecimalLiteral : LiteralExpression {
-  Lexer::Token Value;
+public:
+private:
+  Lexer::Token *Value;
 };
 class StructLiteral : LiteralExpression {
-  Lexer::Token Struct;
-  Lexer::Token LBrace;
-  std::vector<TraitDeclaration> traits;
-  std::vector<StructField> members;
-  Lexer::Token RBrace;
+public:
+private:
+  Lexer::Token *Struct;
+  Lexer::Token *LBrace;
+  std::vector<TraitDeclaration *> traits;
+  std::vector<StructField *> members;
+  Lexer::Token *RBrace;
 };
-class Type {};
-class FunctionLiteral : LiteralExpression {
-  Type t;
-  Lexer::Token LParen;
-  std::vector<VariableDeclaration> params;
-  Lexer::Token RParen;
-};
-class ArrayAccessExpression : Expression {};
-class PointerDereferenceExpression : Expression {};
 
+class FunctionLiteral : LiteralExpression {
+public:
+private:
+  Type *t;
+  Lexer::Token *LParen;
+  std::vector<VariableDeclaration *> params;
+  Lexer::Token *RParen;
+};
+class PointerDereferenceExpression : Expression {
+    private:
+    Lexer::Token* Asterisk;
+    Lexer::Token* Identifier;
+  };
 class PrimitiveType : Type {
-  union IntOrFloat {};
+public:
+private:
+  std::string numType;
   std::string bits;
 };
 class ArrayType : Type {
-  Type type;
-  Lexer::Token LBrack;
-  LiteralExpression amount;
-  Lexer::Token RBrack;
+public:
+private:
+  Type *type;
+  Lexer::Token *LBrack;
+  LiteralExpression *amount;
+  Lexer::Token *RBrack;
 };
 class PointerType : Type {
-  Type t;
-  Lexer::Token asterisk;
+public:
+private:
+  Type *t;
+  Lexer::Token *asterisk;
 };
 class FunctionType : Type {
-  Type t;
-  Lexer::Token LParen;
-  std::vector<Type> params;
-  Lexer::Token RParen;
+public:
+private:
+  Type *t;
+  Lexer::Token *LParen;
+  std::vector<Type *> params;
+  Lexer::Token *RParen;
 };
 class IdentifierType : Type {
-  Lexer::Token identifier;
+public:
+private:
+  Lexer::Token *identifier;
 };
 class ReferenceType : Type {
-  Type t;
-  Lexer::Token ampersand;
+public:
+private:
+  Type *t;
+  Lexer::Token *ampersand;
 };
 class MutVariableDeclaration : VariableDeclaration {
-  Lexer::Token Mut;
-  Type type;
-  Lexer::Token Identifier;
-  Lexer::Token Equal;
-  Expression expr;
+public:
+private:
+  Lexer::Token *Mut;
+  Type *type;
+  Lexer::Token *Identifier;
+  Lexer::Token *Equal;
+  Expression *expr;
 };
 class ConVariableDeclaration : VariableDeclaration {
-  Lexer::Token Con;
-  Type type;
-  Lexer::Token Identifier;
-  Lexer::Token Equal;
-  Expression expr;
+public:
+private:
+  Lexer::Token *Con;
+  Type *type;
+  Lexer::Token *Identifier;
+  Lexer::Token *Equal;
+  Expression *expr;
 };
 class PublicDeclaration : Declaration {
-  Lexer::Token PubToken;
-  std::vector<Declaration> decl;
+public:
+private:
+  Lexer::Token *PubToken;
+  std::vector<Declaration *> decl;
 };
 class EnumField {
-  Lexer::Token identifier;
-  Lexer::Token LParen;
-  Type t;
-  Lexer::Token RParen;
+public:
+private:
+  Lexer::Token *Identifier;
+  Lexer::Token *LParen;
+  Type *T;
+  Lexer::Token *RParen;
 };
 class EnumDeclaration : Declaration {
-  Lexer::Token EnumToken;
-  Lexer::Token Identifier;
-  Lexer::Token LBrace;
-  std::vector<EnumField> EnumField;
-  Lexer::Token RBrace;
+public:
+private:
+  Lexer::Token *EnumToken;
+  Lexer::Token *Identifier;
+  Lexer::Token *LBrace;
+  std::vector<EnumField *> EnumField;
+  Lexer::Token *RBrace;
 };
 class StructMember : StructField {
-  Type t;
-  Lexer::Token identifer;
+public:
+private:
+  Type *t;
+  Lexer::Token *Identifer;
 };
 class StructFunction : StructField {
-  Type t;
-  Lexer::Token identifier;
-  Lexer::Token LParen;
-  Lexer::Token self;
-  Lexer::Token ampersand;
-  std::vector<VariableDeclaration> parameters;
-  Lexer::Token RParen;
+public:
+private:
+  Type *T;
+  Lexer::Token *Identifier;
+  Lexer::Token *LParen;
+  Lexer::Token *Self;
+  Lexer::Token *Ampersand;
+  std::vector<VariableDeclaration *> parameters;
+  Lexer::Token *RParen;
 };
 class StructDeclaration : Declaration {
-  Lexer::Token StructToken;
-  Lexer::Token Identifier;
-  std::vector<Lexer::Token> TraitIdentifiers;
-  Lexer::Token LBrace;
-  std::vector<StructField> Members;
-  Lexer::Token RBrace;
+public:
+private:
+  Lexer::Token *StructToken;
+  Lexer::Token *Identifier;
+  std::vector<Lexer::Token *> TraitIdentifiers;
+  Lexer::Token *LBrace;
+  std::vector<StructField *> Members;
+  Lexer::Token *RBrace;
 };
-class Statement {};
+
 class BlockStatement : Statement {
-    Lexer::Token LBrace;
-    std::vector<Statement> statements;
-    std::vector<Declaration> decls;
-    Lexer::Token RBrace;
-  };
+public:
+private:
+  Lexer::Token *LBrace;
+  std::vector<Statement *> statements;
+  std::vector<Declaration *> decls;
+  Lexer::Token *RBrace;
+};
 class IfStatement : Statement {
-  Lexer::Token If;
-  BinaryExpression Binary;
-  BlockStatement Block;
+public:
+private:
+  Lexer::Token *If;
+  BinaryExpression *Binary;
+  BlockStatement *Block;
 };
 class LoopStatement : Statement {
-  Lexer::Token Loop;
-  BlockStatement Block;
+public:
+private:
+  Lexer::Token *Loop;
+  BlockStatement *Block;
 };
 class ForStatement : Statement {
-  Lexer::Token For;
-  BlockStatement Block;
+public:
+private:
+  Lexer::Token *For;
+  BlockStatement *Block;
 };
 class VariableAssignmentStatement : Statement {
-  Lexer::Token identifier;
-  LiteralExpression value;
+public:
+private:
+  Lexer::Token *identifier;
+  LiteralExpression *value;
 };
 class BreakStatement : Statement {
-  Lexer::Token Break;
+public:
+private:
+  Lexer::Token *Break;
 };
 class ContinueStatement : Statement {
-  Lexer::Token Continue;
+public:
+private:
+  Lexer::Token *Continue;
 };
 class Program {
-  std::vector<Declaration> declarations;
-  std::vector<Statement> statements;
+public:
+private:
+  std::vector<Declaration *> declarations;
+  std::vector<Statement *> statements;
 };
 }; // namespace Parser
