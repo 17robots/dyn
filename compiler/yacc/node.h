@@ -90,19 +90,36 @@ class NVariableDeclaration : public NStatement {
   NExpression* expr;
   NVariableDeclaration(const NIdentifier& type, NIdentifier & id) : type(type), id(id) {}
   NVariableDeclaration(const NIdentifier& type, NIdentifier & id, NExpression* expr) : type(type), id(id), expr(expr) {}
+  virtual llvm::Value *codeGen(CodeGenContext &context) {}
 };
 class NFunctionDeclaration : public NStatement {
   public:
   const NIdentifier &type;
   const NIdentifier &id;
   Variables arguments;
-  NBlock &block;
-  NFunctionDeclaration(const NIdentifier& type, const NIdentifier& id, const Variables& arguments, NBlock& block) : type(type), id(id), arguments(arguments), block(block) {}
+  NBlock *block;
+  NFunctionDeclaration(const NIdentifier& type, const NIdentifier& id, const Variables& arguments, NBlock *block) : type(type), id(id), arguments(arguments), block(block) {}
+  virtual llvm::Value *codeGen(CodeGenContext &context) {}
 };
-class StructField {};
 class NStructDeclaration : public NStatement {
   public:
   const NIdentifier &id;
-  
+  const Variables &variables;
+  const std::vector<NFunctionDeclaration*> &functions;
+  NStructDeclaration(const NIdentifier &id, Variables& variables, const std::vector<NFunctionDeclaration*> &functions) : id(id), variables(variables), functions(functions) {}
+  virtual llvm::Value *codeGen(CodeGenContext &context) {}
 };
-class NEnumDeclaration : public NStatement {};
+class NEnumField {
+  public:
+  const NIdentifier &id;
+  std::vector<NIdentifier *> partners;
+  NEnumField(const NIdentifier &id, std::vector<NIdentifier *> partners) : id(id), partners(partners) {}
+  virtual llvm::Value *codeGen(CodeGenContext &context) {}
+};
+class NEnumDeclaration : public NStatement {
+  public:
+  const NIdentifier &id;
+  std::vector<NEnumField*> members;
+  NEnumDeclaration(const NIdentifier &id, std::vector<NEnumField *> members) : id(id), members(members) {}
+  virtual llvm::Value *codeGen(CodeGenContext &context) {}
+};
