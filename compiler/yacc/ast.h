@@ -1,17 +1,13 @@
 #pragma once
 
-#include "lexer.h"
-#include <stack>
-#include <unordered_map>
+#include <string>
 #include <vector>
 
-namespace Parser {
 class Node {};
 class Statement : public Node {};
 class Expression : public Node {};
 
 typedef std::vector<Statement *> Statements;
-typedef std::vector<Expression *> Expressions;
 
 // Expressions
 class Identifier : public Expression {
@@ -54,6 +50,7 @@ class Block : public Expression {
 public:
   Statements s;
   Block(Statements s) : s(s) {}
+  Block() : s({}) {}
 };
 class Range : public Expression {
 public:
@@ -86,11 +83,11 @@ public:
 class Declaration : public Statement {};
 class Variable : public Declaration {
 public:
-  const Identifier *mutability;
+  std::string *mutability;
   const Identifier &type;
   const Identifier &id;
   Expression *value;
-  Variable(const Identifier *mutability, const Identifier &type,
+  Variable(std::string *mutability, const Identifier &type,
            const Identifier &id, Expression *value)
       : mutability(mutability), type(type), id(id), value(value) {}
 };
@@ -104,27 +101,31 @@ public:
            std::vector<Variable *> &args, Block *block)
       : type(type), id(id), args(args), block(block) {}
 };
-class Enum : public Declaration {
-  class EnumMember {
-  public:
-    const Identifier &id;
-    std::vector<Identifier *> partners;
-    EnumMember(const Identifier &id, std::vector<Identifier *> &partners)
-        : id(id), partners(partners) {}
-  };
-
+class EnumMember {
 public:
   const Identifier &id;
-  std::vector<EnumMember *> members;
-  Enum(const Identifier &id, std::vector<EnumMember *> &members)
-      : id(id), members(members) {}
+  std::vector<Identifier *> partners;
+  EnumMember(const Identifier &id, std::vector<Identifier *> &partners)
+      : id(id), partners(partners) {}
+  EnumMember(const Identifier &id) : id(id), partners({}) {}
+};
+typedef std::vector<EnumMember *> EnumMembers;
+class Enum : public Declaration {
+public:
+  const Identifier &id;
+  EnumMembers members;
+  Enum(const Identifier &id, EnumMembers &members) : id(id), members(members) {}
+};
+class StructFields {
+  public:
+  std::vector<Variable *> variables;
+  std::vector<Function *> methods;
+  StructFields(): variables({}), methods({}) {}
 };
 class Struct : public Declaration {
 public:
   const Identifier *id;
   std::vector<Struct *> traits;
-  std::vector<Variable *> variables;
-  std::vector<Function *> methods;
   Struct(const Identifier *id, std::vector<Struct *> &traits,
          std::vector<Variable *> &variables, std::vector<Function *> &methods)
       : id(id), traits(traits), variables(variables), methods(methods) {}
@@ -169,4 +170,12 @@ public:
   const Expression &expr;
   Defer(const Expression &expr) : expr(expr) {}
 };
-}; // namespace Parser
+
+typedef std::vector<Declaration *> Declarations;
+typedef std::vector<Variable *> Variables;
+class Program {
+public:
+  Declarations pub_decls;
+  Declarations decls;
+  Program() : decls({}), pub_decls({}) {}
+};

@@ -1,7 +1,7 @@
 #pragma once
+#include <string>
 #include <unordered_map>
 #include <vector>
-#include <string>
 
 namespace Lexer {
 enum TokenType {
@@ -45,18 +45,6 @@ enum TokenType {
   COMMA,
   COLON,
   PERIOD,
-  BREAK,
-  CONTINUE,
-  FOR,
-  IF,
-  LOOP,
-  MATCH,
-  MUT,
-  PUB,
-  RETURN,
-  IMPORT,
-  FROM,
-  STRUCT
 };
 
 const std::unordered_map<TokenType, std::string> tokens = {
@@ -99,26 +87,7 @@ const std::unordered_map<TokenType, std::string> tokens = {
     {SEMICOLON, "SEMICOLON"},
     {COMMA, "COMMA"},
     {COLON, "COLON"},
-    {BREAK, "BREAK"},
-    {CONTINUE, "CONTINUE"},
-    {FOR, "FOR"},
-    {IF, "IF"},
-    {LOOP, "LOOP"},
-    {MATCH, "MATCH"},
-    {MUT, "MUT"},
-    {PUB, "PUB"},
-    {RETURN, "RETURN"},
-    {IMPORT, "IMPORT"},
-    {STRUCT, "STRUCT"},
-    {PERIOD, "PERIOD"},
-    {FROM, "FROM"}};
-
-const std::unordered_map<std::string, TokenType> kwds = {
-    {"break", BREAK}, {"continue", CONTINUE}, {"for", FOR},
-    {"if", IF},       {"loop", LOOP},         {"match", MATCH},
-    {"mut", MUT},     {"pub", PUB},           {"return", RETURN},
-    {"from", FROM},   {"struct", STRUCT},     {"import", IMPORT},
-};
+    {PERIOD, "PERIOD"}};
 
 const std::unordered_map<std::string, TokenType> operators = {
     {"(", L_PAREN},
@@ -176,4 +145,4 @@ bool is_o(char c);
 std::string pop_buf(std::vector<char> &buf);
 TokenState grab_state(char x, TokenState s);
 std::vector<Token> tokenize(std::string input);
-}
+} // namespace Lexer
