@@ -31,6 +31,14 @@
 %token <token> PIPE "|" PIPE_PIPE "||" PIPE_EQUAL "|="
 %token <token> BANG "!"
 
+%type <ident> ident
+%type <expr> numeric expr
+%type <varvec>
+%type <exprvec>
+%type <block> stmts block
+%type <stmy> stmt var_decl func_decl
+%type <token> comparison
+
 %left PLUS MINUS
 %left ASTERISK DIV
 
@@ -157,8 +165,7 @@ crement: PLUS_PLUS
 	| MINUS_MINUS;
 	
 uop: ASTERISK /* deref */
-	| AMPERSAND /* addrof */
-	;
+	| AMPERSAND; /* addrof */
 	
 comparison: EQUAL_EQUAL
 	| BANG_EQUAL
@@ -170,5 +177,5 @@ comparison: EQUAL_EQUAL
 func_literal: ident L_PAREN func_args R_PAREN body { $$ = new FunctionLiteral(); };
 	
 struct_literal: "struct" L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); }
-	| "struct" COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); }
-	;
+	| "struct" L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); }
+	| "struct" COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); };
