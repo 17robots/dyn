@@ -19,23 +19,23 @@
 }
 
 %token <string> IDENTIFIER INTEGER DOUBLE
-%token <token> EQUAL_EQUAL "==" BANG_EQUAL "!=" LT "<" LT_EQUAL "<=" GT ">" GT_EQUAL ">=" EQUAL "="
-%token <token> L_PAREN "(" L_BRACK "[" L_BRACE "{" R_PAREN ")" R_BRACK "]" R_BRACE "}"
-%token <token> COMMA "," SEMICOLON ";" PERIOD "." COLON ":"
-%token <token> PLUS "+" PLUS_EQUAL "+="
-%token <token< MINUS "-" MINUS_EQUAL "-="
-%token <token> ASTERISK "*" ASTERISK_EQUAL "*="
-%token <token> AMPERSAND "&" AMPERSAND_AMPERSAND "&&" AMPERSAND_EQUAL "&="
-%token <token> PIPE "|" PIPE_PIPE "||" PIPE_EQUAL "|="
-%token <token> BANG "!"
-%token <token> UNDERSCORE "_"
+%token <token> EQUAL_EQUAL BANG_EQUAL LT LT_EQUAL GT GT_EQUAL EQUAL
+%token <token> L_PAREN L_BRACK L_BRACE R_PAREN R_BRACK R_BRACE
+%token <token> COMMA SEMICOLON PERIOD COLON
+%token <token> PLUS PLUS_EQUAL
+%token <token< MINUS MINUS_EQUAL
+%token <token> ASTERISK ASTERISK_EQUAL
+%token <token> AMPERSAND AMPERSAND_AMPERSAND AMPERSAND_EQUAL "&="
+%token <token> PIPE PIPE_PIPE PIPE_EQUAL
+%token <token> BANG
+%token <token> UNDERSCORE
 
 %type <ident> ident
 %type <expr> numeric expr
-%type <varvec>
-%type <exprvec>
+%type <vars> func_decl_args
+%type <exprs> call_args
 %type <block> stmts block
-%type <stmy> stmt var_decl func_decl
+%type <stmt> stmt var_decl func_decl
 %type <token> comparison
 
 %left PLUS MINUS
@@ -66,11 +66,11 @@ var_decl: ident ident EQUAL expr SEMICOLON { $$ = new Variable(NULL, *$1, *$2, *
 	
 func_decl: ident ident L_PAREN func_args R_PAREN body 
 	{ $$ = new Function(*$1, *$2, *$4, *$6); delete $4;}
-	| ident ident L_PAREN func_args R_PAREN { $$ = new Function(*$1, *$2, *$4, NULL); delete $4; };
+	| ident ident L_PAREN func_decl_args R_PAREN { $$ = new Function(*$1, *$2, *$4, NULL); delete $4; };
 
-func_args: %empty { $$ = new Variables(); }
+func_decl_args: %empty { $$ = new Variables(); }
 	| var_decl { $$ = new Variables(); $$->push_back($<var>1); }
-	| func_args COMMA var_decl { $1->push_back($<var>3); };
+	| func_decl_args COMMA var_decl { $1->push_back($<var>3); };
 	
 enum_decl: "enum" ident L_BRACE enum_fields R_BRACE { $$ = new Enum(*$2, *$4); delete $4; };
 
@@ -125,7 +125,7 @@ ident: IDENTIFIER { $$ = new Identifier(*$1); delete $1; };
 numeric: INTEGER { $$ = new Integer(atol($1->c_str())); delete $1; }
 	| DOUBLE { $$ = new Double(atof($1->c_str())); delete $1; };
 
-expr: ident EQUAL ident {}
+expr: ident EQUAL ident { $$ = new Assignment($1, $3); }
 	| ident L_PAREN call_args R_PAREN { $$ = new FunctionCall($<ident>1, *$3); }
 	| ident { $<ident>$ = $1; }
 	| numeric
@@ -173,7 +173,7 @@ comparison: EQUAL_EQUAL
 	| GT
 	| GT_EQUAL;
 
-func_literal: ident L_PAREN func_args R_PAREN body { $$ = new FunctionLiteral(*$1, *$3, *$5); };
+func_literal: ident L_PAREN func_decl_args R_PAREN body { $$ = new FunctionLiteral(*$1, *$3, *$5); };
 
 struct_literal: "struct" L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); }
 	| "struct" COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(*$5, *$3); };

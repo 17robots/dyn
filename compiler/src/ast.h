@@ -157,6 +157,14 @@ public:
   BinaryOp(int op, Expression &lhs, Expression &rhs)
       : op(0), lhs(lhs), rhs(rhs) {}
 };
+
+class Assignment : public Expression {
+  public:
+  Identifier &lhs;
+  Expression &rhs;
+  Assignment(Identifier &lhs, Expression &rhs): lhs(lhs), rhs(rhs) {}
+};
+
 class UnaryOp : public Expression {
 public:
   int op;
