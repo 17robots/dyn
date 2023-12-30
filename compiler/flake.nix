@@ -15,6 +15,8 @@
       {
         devShell = p.mkShell.override { stdenv = p.clangStdenv; } rec {
           packages = with p; [
+            bison
+            flexcpp
             gcc
             ninja
             meson

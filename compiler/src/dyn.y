@@ -10,12 +10,10 @@
 	Block *block;
 	Expression *expr;
 	Statement *stmt;
-	Declaration *decl;
 	Identifier *ident;
 	Variable *var;
 	std::vector<Variable*> *vars;
 	std::vector<Statement*> *stmts;
-	std::vector<Declaration*> *decls;
 	std::string *string;
 	int token;
 }
@@ -48,10 +46,10 @@
 
 program: decls { program = $1; };
 
-decls: decl { $$ = new Program(); $$->decls.push_back($<decl>1); }
-	| "pub" decl { $$ = new Program(); $$->pub_decls.push_back($<decl>1); }
-	| decls decl { $1->decls.push_back($<decl>2); }
-	| decls "pub" decl { $1->pub_decls.push_back($<decl>3); }
+decls: decl { $$ = new Program(); $$->decls.push_back($<stmt>1); }
+	| "pub" decl { $$ = new Program(); $$->pub_decls.push_back($<stmt>1); }
+	| decls decl { $1->decls.push_back($<stmt>2); }
+	| decls "pub" decl { $1->pub_decls.push_back($<stmt>3); }
 	| %empty;
 
 decl: var_decl
@@ -69,7 +67,7 @@ var_decl:
 	
 func_decl: ident ident L_PAREN func_args R_PAREN body 
 	{ $$ = new Function(*$1, *$2, *$4, *$6); delete $4;}
-	| ident ident L_PAREN func_args R_PAREN {};
+	| ident ident L_PAREN func_args R_PAREN { $$ = new Function(*$1, *$2, *$4, NULL); delete $4; };
 
 func_args: %empty { $$ = new Variables(); }
 	| var_decl { $$ = new Variables(); $$->push_back($<var>1); }
@@ -79,13 +77,11 @@ enum_decl: "enum" ident L_BRACE enum_fields R_BRACE { $$ = new Enum(*$2, *$4); d
 
 enum_fields: ident { $$ = new EnumMembers(); $$->push_back(new EnumMember(*$<ident>1));}
 	| enum_fields ident { $1->push_back(new EnumMember(*$2));}
-	| ident enum_partners { $$ = new EnumMembers(); $$->push_back(new EnumMember(*$1, *$2)); delete $2; }
+	| ident L_PAREN enum_partners R_PAREN { $$ = new EnumMembers(); $$->push_back(new EnumMember(*$1, *$2)); delete $2; }
 	| enum_fields ident enum_partners { $1->push_back(new EnumMember(*$2, *$3)); delete $3; };
 	
-enum_partners: L_PAREN partners R_PAREN;
-	
-partners: ident {}
-	| partners COMMA ident {};
+enum_partners: ident { $$ = new EnumPartners(); $$->push_back(*$1); }
+	| partners COMMA ident { $1->push_back(*$3); };
 
 struct_decl: "struct" ident L_BRACE struct_fields R_BRACE { $$ = new Struct(); }
 	| "struct" ident COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new Struct(); };
@@ -123,11 +119,11 @@ block: L_BRACE stmts R_BRACE { $$ = $2; }
 
 ident: IDENTIFIER { $$ = new Identifier(*$1); delete $1; };
 
-numeric: INTEGER { $$ = new Integer(); }
-	| DOUBLE { $$ = new Double(); };
+numeric: INTEGER { $$ = new Integer(atol($1->c_str())); delete $1; }
+	| DOUBLE { $$ = new Double(atof($1->c_str())); delete $1; };
 
 expr: ident EQUAL ident {}
-	| ident L_PAREN call_args R_PAREN { $$ = new FunctionCall(); }
+	| ident L_PAREN call_args R_PAREN { $$ = new FunctionCall($<ident>1, *$3); }
 	| ident { $<ident>$ = $1; }
 	| numeric
 	| boolean_expr
@@ -174,8 +170,7 @@ comparison: EQUAL_EQUAL
 	| GT
 	| GT_EQUAL;
 
-func_literal: ident L_PAREN func_args R_PAREN body { $$ = new FunctionLiteral(); };
-	
+func_literal: ident L_PAREN func_args R_PAREN body { $$ = new FunctionLiteral($1, *$3, *$5); };
+
 struct_literal: "struct" L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); }
-	| "struct" L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); }
-	| "struct" COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); };
+	| "struct" COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(*$5, *$3); };
