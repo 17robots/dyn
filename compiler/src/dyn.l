@@ -39,6 +39,7 @@
 "||" return TOKEN(PIPE_PIPE);
 "|=" return TOKEN(PIPE_EQUAL);
 "!" return TOKEN(BANG);
+"_" return TOKEN(UNDERSCORE);
 . printf("Unknown token!\n"); yyterminate();
 
 %%

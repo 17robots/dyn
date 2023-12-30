@@ -28,6 +28,7 @@
 %token <token> AMPERSAND "&" AMPERSAND_AMPERSAND "&&" AMPERSAND_EQUAL "&="
 %token <token> PIPE "|" PIPE_PIPE "||" PIPE_EQUAL "|="
 %token <token> BANG "!"
+%token <token> UNDERSCORE "_"
 
 %type <ident> ident
 %type <expr> numeric expr
@@ -58,12 +59,10 @@ decl: var_decl
 	| struct_decl
 	| type_decl;
 
-var_decl:
-	ident ident EQUAL expr { $$ = new Variable(NULL, *$1, *$2, *$4); }
-	| "mut" ident ident { $$ = new Variable(*$1, *$2, *$3, NULL); }
-	| "con" ident ident EQUAL expr { $$ = new Variable(*$1, *$2, *$3, *$5); }
-	| "mut" ident ident EQUAL expr { $$ = new Variable(*$1, *$2, *$3, *$5); }
-	;
+var_decl: ident ident EQUAL expr SEMICOLON { $$ = new Variable(NULL, *$1, *$2, *$4); }
+	| "mut" ident ident SEMICOLON { $$ = new Variable(*$1, *$2, *$3, NULL); }
+	| "con" ident ident EQUAL expr SEMICOLON { $$ = new Variable(*$1, *$2, *$3, *$5); }
+	| "mut" ident ident EQUAL expr SEMICOLON { $$ = new Variable(*$1, *$2, *$3, *$5); };
 	
 func_decl: ident ident L_PAREN func_args R_PAREN body 
 	{ $$ = new Function(*$1, *$2, *$4, *$6); delete $4;}
@@ -83,11 +82,11 @@ enum_fields: ident { $$ = new EnumMembers(); $$->push_back(new EnumMember(*$<ide
 enum_partners: ident { $$ = new EnumPartners(); $$->push_back(*$1); }
 	| partners COMMA ident { $1->push_back(*$3); };
 
-struct_decl: "struct" ident L_BRACE struct_fields R_BRACE { $$ = new Struct(); }
+struct_decl: "struct" ident L_BRACE struct_fields R_BRACE { $$ = new Struct(*$2, *$3); delete $3; }
 	| "struct" ident COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new Struct(); };
 
 struct_fields: %empty { $$ = new StructFields(); }
-	| var_decl { $$ = new StructFields(); $$->variables.push_back($1); }
+	| var_decl { $$ = new StructFields(); $$->vars.push_back($1); }
 	| func_decl { $$ = new StructFields(); $$->methods.push_back($1); }
 	| struct_fields var_decl { $1->variables.push_back($2); }
 	| struct_fields func_decl { $1->methods.push_back($2); };
@@ -105,14 +104,18 @@ stmts: stmt { $$ = new Block(); $$->s.push_back($<stmt>1); }
 	| %empty;
 
 stmt: decl
-	| /* if */
-	| /* loop */
-	| /* for */
-	| /* match */
-	| /* return */
-	| /* defer */
-	| "break" ';'
-	| "continue" ';';
+	| "if" boolean_expr L_BRACE block R_BRACE { $$ = new If(*$2, *$4); }
+	| "loop" block { $$ = new Loop(*$2); }
+	| for ident COLON expr LBRACE block R_BRACE { }
+	| match ident L_BRACE match_branches R_BRACE
+	| "return" expr SEMICOLON { $$ = new Return(*$2);}
+	| "return" SEMICOLON { $$ = new Return();}
+	| "defer" expr SEMICOLON { $$ = new Defer(*$2);}
+	| "break" SEMICOLON
+	| "continue" SEMICOLON;
+
+match_branches: expr COLON L_BRACE block R_BRACE { $$ = new MatchBranch(*$1, *$4); }
+	UNDERSCORE COLON L_BRACE block R_BRACE { $$ = new MatchBranch(*$4); };
 
 block: L_BRACE stmts R_BRACE { $$ = $2; }
 	| L_BRACE R_BRACE { $$ = new Block(); };
@@ -170,7 +173,7 @@ comparison: EQUAL_EQUAL
 	| GT
 	| GT_EQUAL;
 
-func_literal: ident L_PAREN func_args R_PAREN body { $$ = new FunctionLiteral($1, *$3, *$5); };
+func_literal: ident L_PAREN func_args R_PAREN body { $$ = new FunctionLiteral(*$1, *$3, *$5); };
 
 struct_literal: "struct" L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(); }
 	| "struct" COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = new StructLiteral(*$5, *$3); };

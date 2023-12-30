@@ -41,7 +41,7 @@ class Enum : public Statement {
 public:
   const Identifier &id;
   std::vector<EnumMember *> members;
-  Enum() : id(NULL), members({}) {}
+  Enum(Identifier &id, std::vector<EnumMember*> &members) : id(id), members(members) {}
 };
 class StructFields {
 public:
@@ -54,36 +54,56 @@ public:
   const Identifier &id;
   std::vector<Identifier *> traits;
   StructFields &fields;
-  Struct() : id(NULL), traits({}), fields(NULL) {}
+  Struct(Identifier &id, StructFields &fields) : id(id), traits({}), fields(fields) {}
+  Struct(Identifier &id, std::vector<Identifier*> &traits, StructFields &fields) : id(id), traits(traits), fields(fields) {}
 };
 
 class If : public Statement {
 public:
   const Expression &condition;
   const Block &block;
-  If() : condition(NULL), block(NULL) {}
+  If(Expression &condition, Block &block) : condition(condition), block(block) {}
 };
-class MatchField {
+
+class For : public Statement {
+  public:
+  const Identifier &id;
+  const Expression &expr;
+  Block &block;
+  For(Identifier &id, Expression &expr, Block &block): id(id), expr(expr), block(block) {}
+};
+
+class MatchBranch {
 public:
   Expression *branch;
   Block &block;
-  MatchField() : branch(NULL), block(NULL) {}
+  MatchBranch(Block &block) : branch(NULL), block(block) {}
+  MatchBranch(Expression *branch, Block &block) : branch(branch), block(block) {}
 };
 class Match : public Statement {
 public:
   const Identifier &id;
-  std::vector<MatchField *> branches;
-  Match() : id(NULL), branches({}) {}
+  std::vector<MatchBranch *> branches;
+  Match(Identifier &id, std::vector<MatchBranch*> branches) : id(id), branches(branches) {}
 };
+
 class Loop : public Statement {
 public:
   Block &block;
-  Loop() : block(NULL) {}
+  Loop(Block &block) : block(block) {}
 };
+
 class Defer : public Statement {
 public:
   Expression &expr;
-  Defer() : expr(NULL) {}
+  Defer(Expression &expr) : expr(expr) {}
+};
+
+class Return : public Statement {
+public:
+  Expression *expr;
+  Return(Expression *expr) : expr(NULL) {}
+  Return() : expr(NULL) {}
 };
 
 class Block : public Expression {
