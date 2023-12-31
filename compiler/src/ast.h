@@ -197,3 +197,9 @@ public:
   std::vector<Statement> decls;
   Program() : pub_decls({}), decls({}) {}
 };
+
+typedef std::vector<EnumMember> EnumMembers;
+typedef std::vector<Statement> Statements;
+typedef std::vector<Identifier> StructInherits;
+typedef std::vector<MatchBranch> MatchBranches;
+typedef std::vector<Identifier> TypeList;

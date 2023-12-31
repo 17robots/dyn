@@ -2,7 +2,7 @@
 	#include "ast.h"
 	extern int yylex();
 	void yyerror(const char *s) { printf("ERROR: %s", s); }
-	Program *program;
+	Program program = Program();
 %}
 
 %union {
@@ -16,15 +16,18 @@
 	std::vector<Statement> stmts;
 	std::string string;
 	int token;
+	Program program;
 }
 
-%token <string> IDENTIFIER INTEGER DOUBLE UNDERSCORE
+%token <string> IDENTIFIER INTEGER DOUBLE
 %token <token> EQUAL_EQUAL BANG_EQUAL LT LT_EQUAL GT GT_EQUAL EQUAL BANG
 %token <token> L_PAREN L_BRACK L_BRACE R_PAREN R_BRACK R_BRACE
 %token <token> COMMA SEMICOLON PERIOD COLON
-%token <token> PLUS PLUS_EQUAL
-%token <token< MINUS MINUS_EQUAL
+%token <token> PLUS PLUS_PLUS PLUS_EQUAL
+%token <token> MINUS MINUS_MINUS MINUS_EQUAL
 %token <token> ASTERISK ASTERISK_EQUAL
+%token <token> SLASH SLASH_EQUAL
+%token <token> PERCENT PERCENT_EQUAL
 %token <token> AMPERSAND AMPERSAND_AMPERSAND AMPERSAND_EQUAL "&="
 %token <token> PIPE PIPE_PIPE PIPE_EQUAL
 
@@ -35,6 +38,7 @@
 %type <block> stmts block
 %type <stmt> stmt var_decl func_decl
 %type <token> comparison mop uop crement
+%type <program> program
 
 %left PLUS MINUS
 %left ASTERISK DIV
@@ -43,9 +47,9 @@
 
 %%
 
-program: decls { program = $1; };
+program: decls { program = $<program>1; };
 
-decls: decl { $$ = Program(); $$.decls.push_back($<stmt>1); }
+decls: decl { $<program>$ = Program(); $$.decls.push_back($<stmt>1); }
 	| "pub" decl { $$ = Program(); $$.pub_decls.push_back($<stmt>1); }
 	| decls decl { $1.decls.push_back($<stmt>2); }
 	| decls "pub" decl { $1.pub_decls.push_back($<stmt>3); }
@@ -62,7 +66,7 @@ var_decl: ident ident EQUAL expr SEMICOLON { $$ = Variable(NULL, $1, $2, $4); }
 	| "con" ident ident EQUAL expr SEMICOLON { $$ = Variable($1, $2, $3, $5); }
 	| "mut" ident ident EQUAL expr SEMICOLON { $$ = Variable($1, $2, $3, $5); };
 	
-func_decl: ident ident L_PAREN func_args R_PAREN body 
+func_decl: ident ident L_PAREN func_decl_args R_PAREN block 
 	{ $$ = Function($1, $2, $4, $6); delete $4;}
 	| ident ident L_PAREN func_decl_args R_PAREN { $$ = Function($1, $2, $4, NULL); delete $4; };
 
@@ -78,7 +82,7 @@ enum_fields: ident { $$ = EnumMembers(); $$.push_back(EnumMember($<ident>1));}
 	| enum_fields ident enum_partners { $1.push_back(EnumMember($2, $3)); delete $3; };
 	
 enum_partners: ident { $$ = EnumPartners(); $$.push_back($1); }
-	| partners COMMA ident { $1.push_back($3); };
+	| enum_partners COMMA ident { $1.push_back($3); };
 
 struct_decl: "struct" ident L_BRACE struct_fields R_BRACE { $$ = Struct($2, $3); delete $3; }
 	| "struct" ident COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = Struct(); };
@@ -89,23 +93,23 @@ struct_fields: %empty { $$ = StructFields(); }
 	| struct_fields var_decl { $1.variables.push_back($2); }
 	| struct_fields func_decl { $1.methods.push_back($2); };
 
-struct_inherits: ident {$$; $$.push_back($<ident>1); }
+struct_inherits: ident {$$ = StructInherits(); $$.push_back($<ident>1); }
 	| struct_inherits COMMA ident { $1.push_back($<ident>2); };
 
 type_decl: "type" type_list { $$ = Type($2); };
 
-type_list: ident { $$ = ; $$.push_back($<ident>1); }
+type_list: ident { $$ = TypeList(); $$.push_back($<ident>1); }
 	| type_list PIPE ident { $1.push_back($<ident>2); };
 
 stmts: stmt { $$ = Block(); $$.s.push_back($<stmt>1); }
-	| stmts stmt { $1.push_back($<stmt>2); }
+	| stmts stmt { $1.s.push_back($<stmt>2); }
 	| %empty;
 
 stmt: decl
 	| "if" boolean_expr L_BRACE block R_BRACE { $$ = If($2, $4); }
 	| "loop" block { $$ = Loop($2); }
-	| for ident COLON expr LBRACE block R_BRACE { $$ = For($<ident>1, $4, $6); }
-	| match ident L_BRACE match_branches R_BRACE { $$ = Match($<ident>2, $4); }
+	| "for" ident COLON expr L_BRACE block R_BRACE { $$ = For($<ident>1, $4, $6); }
+	| "match" ident L_BRACE match_branches R_BRACE { $$ = Match($<ident>2, $4); }
 	| "return" expr SEMICOLON { $$ = Return($2); }
 	| "return" SEMICOLON { $$ = Return(); }
 	| "defer" expr SEMICOLON { $$ = Defer($2); }
@@ -113,11 +117,11 @@ stmt: decl
 	| "continue" SEMICOLON { $$ = Continue(); };
 
 match_branches: %empty
-	| match_branch { $$ = MatchBranch($1, $4); }
-	| match_branches match_branch { $$ = MatchBranch($1, $4); }
+	| match_branch { $$ = MatchBranches(); $$.push_back($1); }
+	| match_branches match_branch { $1.push_back($2); }
 
 match_branch: expr COLON L_BRACE block R_BRACE { $$ = MatchBranch($1, $4); }
-	UNDERSCORE COLON L_BRACE block R_BRACE { $$ = MatchBranch($4); };
+	"_" COLON L_BRACE block R_BRACE { $$ = MatchBranch($4); };
 
 block: L_BRACE stmts R_BRACE { $$ = $2; }
 	| L_BRACE R_BRACE { $$ = Block(); };
@@ -141,15 +145,15 @@ expr: ident EQUAL ident { $$ = Assignment($1, $3); }
 	| struct_literal;
 
 call_args: %empty
-	| ident {}
-	| call_args COMMA ident {};
+	| ident { $$ = Identifiers(); $$.push_back($<ident>1); }
+	| call_args COMMA ident { $1.push_back($<ident>2); };
 	
 boolean_expr: boolean {}
-	| boolen_expr lop boolean {};
+	| boolean_expr lop boolean { $$ = BinaryOp($2, $<expr>1, $<expr>2); };
 	
-boolean: expr comparison expr {}
-	| L_PAREN boolean R_PAREN {}
-	| BANG boolean {};
+boolean: expr comparison expr { $$ = BinaryOp($2, $1, $3); }
+	| L_PAREN expr comparison expr R_PAREN { $$ = BinaryOp($2, $1, $3); }
+	| BANG boolean { $$ = UnaryOp($1, $<expr>2); };
 	
 lop: AMPERSAND_AMPERSAND
 	| PIPE_PIPE;
@@ -175,7 +179,7 @@ comparison: EQUAL_EQUAL
 	| GT
 	| GT_EQUAL;
 
-func_literal: ident L_PAREN func_decl_args R_PAREN body { $$ = FunctionLiteral($1, $3, $5); };
+func_literal: ident L_PAREN func_decl_args R_PAREN block { $$ = FunctionLiteral($1, $3, $5); };
 
 struct_literal: "struct" L_BRACE struct_fields R_BRACE { $$ = StructLiteral(); }
 	| "struct" COLON struct_inherits L_BRACE struct_fields R_BRACE { $$ = StructLiteral($5, $3); };

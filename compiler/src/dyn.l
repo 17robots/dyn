@@ -28,10 +28,16 @@
 "." return TOKEN(PERIOD);
 "+" return TOKEN(PLUS);
 "+=" return TOKEN(PLUS_EQUAL);
+"++" return TOKEN(PLUS_PLUS);
 "-" return TOKEN(MINUS);
 "-=" return TOKEN(MINUS_EQUAL);
+"--" return TOKEN(MINUS_MINUS);
 "*" return TOKEN(ASTERISK);
 "*=" return TOKEN(ASTERISK_EQUAL);
+"/" return TOKEN(SLASH);
+"/=" return TOKEN(SLASH_EQUAL);
+"%" return TOKEN(PERCENT);
+"%=" return TOKEN(PERCENT_EQUAL);
 "&" return TOKEN(AMPERSAND);
 "&&" return TOKEN(AMPERSAND_AMPERSAND);
 "&=" return TOKEN(AMPERSAND_EQUAL);
@@ -39,7 +45,6 @@
 "||" return TOKEN(PIPE_PIPE);
 "|=" return TOKEN(PIPE_EQUAL);
 "!" return TOKEN(BANG);
-"_" return TOKEN(UNDERSCORE);
 . printf("Unknown token!\n"); yyterminate();
 
 %%
