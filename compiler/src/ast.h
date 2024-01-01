@@ -89,7 +89,6 @@ class MatchBranch {
 public:
   Expression *branch;
   Block &block;
-  MatchBranch(Block &block) : branch(NULL), block(block) {}
   MatchBranch(Expression* branch, Block &block) : branch(branch), block(block) {}
 };
 class Match : public Statement {
@@ -197,9 +196,3 @@ public:
   std::vector<Statement> decls;
   Program() : pub_decls({}), decls({}) {}
 };
-
-typedef std::vector<EnumMember> EnumMembers;
-typedef std::vector<Statement> Statements;
-typedef std::vector<Identifier> StructInherits;
-typedef std::vector<MatchBranch> MatchBranches;
-typedef std::vector<Identifier> TypeList;
