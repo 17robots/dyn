@@ -52,8 +52,17 @@
 %type <fields> struct_fields
 %type <match_branch> match_branch
 
-%left PLUS MINUS
-%left ASTERISK DIV
+%left COMMA
+%left AMPERSAND_AMPERSAND PIPE_PIPE
+%right EQUAL
+%right BANG PLUS_PLUS MINUS_MINUS MINUS
+%left SLASH
+%right ASTERISK AMPERSAND PIPE
+%left L_PAREN
+%left L_BRACE
+%left L_BRACK
+%nonassoc GT GT_EQUAL LT LT_EQUAL
+%nonassoc EQUAL_EQUAL BANG_EQUAL
 
 %start decls
 
@@ -63,7 +72,7 @@ decls: decl { program.decls.push_back($<stmt>1); }
 	| "pub" decl { program.pub_decls.push_back($<stmt>1); }
 	| decls decl { program.decls.push_back($<stmt>2); }
 	| decls "pub" decl { program.pub_decls.push_back($<stmt>3); }
-	| %empty;
+	| %empty { program.decls = {}; program.pub_decls = {}; };
 
 decl: var_decl
 	| func_decl
@@ -111,9 +120,9 @@ type_decl: "type" type_list { $$ = Type($2); };
 type_list: ident { $$ = {}; $$.push_back($<ident>1); }
 	| type_list PIPE ident { $1.push_back($<ident>2); };
 
-stmts: %empty { $$ = Block(); }
-	| stmt { $$ = Block(); $$.s.push_back($<stmt>1); }
+stmts: stmt { $$ = Block(); $$.s.push_back($<stmt>1); }
 	| stmts stmt { $1.s.push_back($<stmt>2); };
+	| %empty { $$ = Block(); }
 
 stmt: decl
 	| "if" boolean_expr L_BRACE block R_BRACE { $$ = If($2, $4); }
