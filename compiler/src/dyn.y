@@ -3,6 +3,8 @@
 	extern int yylex();
 	void yyerror(const char *s) { printf("ERROR: %s", s); }
 	Program program = Program();
+	program.decls = {};
+	program.pub_decls = {};
 %}
 
 %union {
@@ -34,7 +36,7 @@
 %token <token> ASTERISK ASTERISK_EQUAL
 %token <token> SLASH SLASH_EQUAL
 %token <token> PERCENT PERCENT_EQUAL
-%token <token> AMPERSAND AMPERSAND_AMPERSAND AMPERSAND_EQUAL "&="
+%token <token> AMPERSAND AMPERSAND_AMPERSAND AMPERSAND_EQUAL
 %token <token> PIPE PIPE_PIPE PIPE_EQUAL
 
 %type <ident> ident
@@ -71,8 +73,7 @@
 decls: decl { program.decls.push_back($<stmt>1); }
 	| "pub" decl { program.pub_decls.push_back($<stmt>1); }
 	| decls decl { program.decls.push_back($<stmt>2); }
-	| decls "pub" decl { program.pub_decls.push_back($<stmt>3); }
-	| %empty { program.decls = {}; program.pub_decls = {}; };
+	| decls "pub" decl { program.pub_decls.push_back($<stmt>3); };
 
 decl: var_decl
 	| func_decl
