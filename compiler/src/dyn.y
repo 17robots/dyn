@@ -1,3 +1,6 @@
+%skeleton "glr2.cc"
+%glr-parser
+
 %{
   #include "ast.h"
   extern int yylex();
@@ -14,12 +17,13 @@
 %token <std::string> INT DOUB IDENT;
 
 // types
-%type <Expression> ident expr number block;
-%type <Statement> stmt decl stmts var_decl fn_decl enum_decl;
-%type <std::vector<Variable>> fn_args;
+%type <Expression> ident expr number block fn_call;
+%type <Statement> stmt decl stmts var_decl fn_decl enum_decl struct_decl;
 %type <std::vector<EnumMember>> enum_members;
+%type <std::vector<Expression>> call_args;
 %type <std::vector<Identifier>> partners;
-// %type <std::vector<Expression>>;
+%type <std::vector<Statement>> struct_members;
+%type <std::vector<Variable>> fn_args;
 
 // precedence
 %left L_PAREN L_BRACE;
@@ -33,7 +37,20 @@ decls: "pub" decl
 
 decl: var_decl SEMICOLON
     | fn_decl
-    | enum_decl;
+    | enum_decl
+    | struct_decl;
+
+struct_decl: "struct" ident R_BRACE struct_members L_BRACE { $<Struct>$ = Struct($2, $4); };
+
+struct_members: { $$ = {}; }
+              | ident ident SEMICOLON { $$ = {}; $$.push_back(Variable("", $1, $2, NULL)); }
+              | ident ident EQUAL expr SEMICOLON { $$ = {}; $$.push_back(Variable("", $1, $2, &$3)); }
+              | ident ident L_PAREN fn_args R_PAREN block { $$ = {}; $$.push_back(Function($1, $2, &$3)); }
+              | ident ident L_PAREN fn_args R_PAREN SEMICOLON { $$ = {}; $$.push_back(Function($1, $2, NULL)); }
+              | struct_members ident ident SEMICOLON { $1.push_back(Variable("", $1, $2, NULL)); }
+              | struct_members ident ident EQUAL expr SEMICOLON { $1.push_back(Variable("", $1, $2, &$3)); }
+              | struct_members ident ident L_PAREN fn_args R_PAREN block { $1.push_back(Function($1, $2, &$3)); }
+              | struct_members ident ident L_PAREN fn_args R_PAREN SEMICOLON { $1.push_back(Function($1, $2, NULL)); };
 
 enum_decl: "enum" ident L_BRACE enum_members R_BRACE { $<Enum>$ = Enum($<Identifier>2, $2); };
 
@@ -45,9 +62,10 @@ enum_members: ident { $$ = {}; $$.push_back(EnumMember($1)); }
 partners: ident { $$ = {}; $$.push_back($1); }
         | partners COMMA ident { $1.push_back($2); };
 
-fn_decl: ident ident L_PAREN fn_args R_PAREN block { $<Function>$ = Function($1, $2, ); };
+fn_decl: ident ident L_PAREN fn_args R_PAREN block { $<Function>$ = Function($1, $2, &$3); }
+       | ident ident L_PAREN fn_args R_PAREN { $<Function>$ = Function($1, $2, NULL); } ;
 
-fn_args: { $<std::Vector<Variable>$ = {}; }
+fn_args: { $$ = {}; }
        | var_decl { $<std::Vector<Variable>$ = {}; $$.push_back($<Variable>1)}
        | fn_args COMMA var_decl { $<std::Vector<Variable>1.push_back($<Variable>2)};
 
@@ -60,12 +78,20 @@ stmts: stmt SEMICOLON{ $<Block>$ = Block(); $<Block>$.statements.push_back($<Sta
      | stmts SEMICOLON stmt {$<Block>1.statements.push_back($<Statement>1); };
 
 stmt: { $$ = Statement(); }
-    | decl;
+    | decl
+    | fn_call SEMICOLON { $$ = FunctionCallStatement($<FunctionCall>1); };
 
 block: L_BRACE stmts R_BRACE { $$ = $2; };
 
 expr: ident
-    | number;
+    | number
+    | fn_call;
+
+fn_call: ident L_PAREN call_args R_PAREN { $<FunctionCall>$ = FunctionCall($1, $3); };
+
+call_args: { $$ = {}; }
+         | expr { $$ = {}; $$.push_back($<Expression>1); }
+         | call_args COMMA expr { $1.push_back($<Expression>2); };
 
 ident: IDENT { $$ = Identifier($<std::string>1); };
 
