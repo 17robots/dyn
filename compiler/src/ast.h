@@ -45,26 +45,33 @@ public:
   Block() : statements({}) {}
 };
 
+class Var : public Statement {
+  Identifier type;
+  Identifier id;
+};
+
 class Variable : public Statement {
 public:
   std::string mutability;
-  Identifier type;
-  Identifier id;
+  Var var;
   Expression *assignment;
-  Variable(std::string &mutability, Identifier &type, Identifier &id,
-           Expression *assignment)
-      : mutability(mutability), type(type), id(id), assignment(assignment) {}
+  Variable(std::string &mutability, Var &var, Expression *assignment)
+      : mutability(mutability), var(var), assignment(assignment) {}
+};
+
+class FunctionSignature : public Statement {
+public:
+  Var var;
+  std::vector<Variable> args;
+  FunctionSignature(Var &var, std::vector<Variable> &args)
+      : var(var), args(args) {}
 };
 
 class Function : public Statement {
 public:
-  Identifier type;
-  Identifier id;
-  std::vector<Variable> args;
+  FunctionSignature sig;
   Block *block;
-  Function(Identifier &type, Identifier &id, std::vector<Variable> &args,
-           Block *block)
-      : type(type), id(id), args(args), block(block) {}
+  Function(FunctionSignature &sig, Block *block) : sig(sig), block(block) {}
 };
 
 class EnumMember {
@@ -87,5 +94,6 @@ class Struct {
 public:
   Identifier id;
   std::vector<Statement> members;
-  Struct(Identifier &id, std::vector<Statement> &members): id(id), members(members) {}
+  Struct(Identifier &id, std::vector<Statement> &members)
+      : id(id), members(members) {}
 };

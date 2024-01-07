@@ -1,50 +1,161 @@
+%option C++ noyywrap
+
 %{
   #include <string>
-  #include "ast.h"
-  #include "parser.h"
-  #define SAVE_TOKEN yylval.string = new std::string(yytext, yyleng)
-  extern "C" int yywrap() {}
 %}
 
 %%
 
 [ \t\n];
-[a-zA-Z_][a-zA-Z0-9_]* SAVE_TOKEN; rerturn IDENTIFIER;
-[0-9]+.[0-9]* SAVE_TOKEN; return DOUBLE;
-[0-9]+ SAVE_TOKEN; return INTEGER;
-"==" return TOKEN(EQUAL);
-"!=" return TOKEN(BANG_EQUAL);
-"<" return TOKEN(LT);
-"<=" return TOKEN(LT_EQUAL);
-">" return TOKEN(GT);
-">=" return TOKEN(GT_EQUAL);
-"=" return TOKEN(EQUAL);
-"(" return TOKEN(L_PAREN);
-"[" return TOKEN(L_BRACK);
-"{" return TOKEN(L_BRACE);
-"," return TOKEN(R_PAREN);
-";" return TOKEN(R_BRACK);
-":" return TOKEN(R_BRACE);
-"." return TOKEN(PERIOD);
-"+" return TOKEN(PLUS);
-"+=" return TOKEN(PLUS_EQUAL);
-"++" return TOKEN(PLUS_PLUS);
-"-" return TOKEN(MINUS);
-"-=" return TOKEN(MINUS_EQUAL);
-"--" return TOKEN(MINUS_MINUS);
-"*" return TOKEN(ASTERISK);
-"*=" return TOKEN(ASTERISK_EQUAL);
-"/" return TOKEN(SLASH);
-"/=" return TOKEN(SLASH_EQUAL);
-"%" return TOKEN(PERCENT);
-"%=" return TOKEN(PERCENT_EQUAL);
-"&" return TOKEN(AMPERSAND);
-"&&" return TOKEN(AMPERSAND_AMPERSAND);
-"&=" return TOKEN(AMPERSAND_EQUAL);
-"|" return TOKEN(PIPE);
-"||" return TOKEN(PIPE_PIPE);
-"|=" return TOKEN(PIPE_EQUAL);
-"!" return TOKEN(BANG);
+
+[a-zA-Z_][a-zA-Z0-9_]* {
+  return IDENT;
+}
+
+[0-9]+.[0-9]* {
+  return DOUB;
+}
+
+[0-9]+ {
+ return INT;
+}
+
+"==" {
+ return EQ;
+}
+
+"!=" {
+ return NEQ;
+}
+
+"<" {
+ return LT;
+}
+
+"<=" {
+ return LTE;
+}
+
+">" {
+ return GT;
+}
+
+">=" {
+ return GTE;
+}
+
+"=" {
+ return EQUAL;
+}
+
+"(" {
+ return L_PAREN;
+}
+
+"[" {
+ return L_BRACK;
+}
+
+"{" {
+ return L_BRACE;
+}
+
+"," {
+ return R_PAREN;
+}
+
+";" {
+ return R_BRACK;
+}
+
+":" {
+ return R_BRACE;
+}
+
+"." {
+ return DOT;
+}
+
+"+" {
+ return ADD;
+}
+
+"+=" {
+ return ADD_EQ;
+}
+
+"++" {
+ return ADD_ADD;
+}
+
+"-" {
+ return SUB;
+}
+
+"-=" {
+ return SUB_EQ;
+}
+
+"--" {
+ return SUB_SUB;
+}
+
+"*" {
+ return STAR;
+}
+
+"*=" {
+ return STAR_EQUAL;
+}
+
+"/" {
+ return SLASH;
+}
+
+"/=" {
+ return SLASH_EQUAL;
+}
+
+"%" {
+ return PER;
+}
+
+"%=" {
+ return PER_EQ;
+}
+
+"&" {
+ return AMP;
+}
+
+"&&" {
+ return AMP_AMP;
+}
+
+"&=" {
+ return AMP_EQ;
+}
+
+"|" {
+ return PIPE;
+}
+
+"||" {
+ return PIPE_PIPE;
+}
+
+"|=" {
+ return PIPE_EQ;
+}
+
+"!" {
+ return NOT;
+}
+
+"=>" {
+  return ARROW;
+}
+
 . printf("Unknown token!\n"); yyterminate();
 
 %%
