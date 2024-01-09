@@ -10,7 +10,7 @@
 %define parse.assert
 
 // tokens 
-%token <int> SEMICOLON EQUAL L_BRACE R_BRACE L_PAREN R_PAREN COMMA COLON;
+%token <int> SEMICOLON EQUAL L_BRACE R_BRACE L_PAREN R_PAREN COMMA COLON WHITESPACE;
 %token <std::string> INT DOUB IDENT;
 
 // types
@@ -48,8 +48,8 @@ struct_members: { $$ = {}; }
               | var EQUAL expr SEMICOLON { $$ = {}; $$.push_back(Variable("", $<Var>1, &$3)); }
               | fn_decl { $$ = {}; $$.push_back($<Function>1); }
               | struct_members var SEMICOLON { $$.push_back(Variable("", $<Var>1, NULL)); }
-              | struct_members var EQUAL expr SEMICOLON { $1.push_back(Variable("", $<Var>2, &$4)); }
-              | struct_members fn_decl { $1.push_back($<Function>2); }
+              | struct_members WHITESPACE var EQUAL expr SEMICOLON { $1.push_back(Variable("", $<Var>2, &$4)); }
+              | struct_members WHITESPACE fn_decl { $1.push_back($<Function>2); }
 
 enum_decl: "enum" ident L_BRACE enum_members R_BRACE { $<Enum>$ = Enum($<Identifier>2, $2); };
 
