@@ -10,7 +10,7 @@
 %define parse.assert
 
 // tokens 
-%token <int> SEMICOLON EQUAL L_BRACE R_BRACE L_PAREN R_PAREN COMMA COLON WHITESPACE;
+%token <int> SEMICOLON EQUAL L_BRACE R_BRACE L_PAREN R_PAREN COMMA COLON WHITESPACE ARROW;
 %token <std::string> INT DOUB IDENT;
 
 // types
@@ -47,9 +47,9 @@ struct_members: { $$ = {}; }
               | var SEMICOLON { $$ = {}; $$.push_back(Variable("", $<Var>1, NULL)); }
               | var EQUAL expr SEMICOLON { $$ = {}; $$.push_back(Variable("", $<Var>1, &$3)); }
               | fn_decl { $$ = {}; $$.push_back($<Function>1); }
-              | struct_members var SEMICOLON { $$.push_back(Variable("", $<Var>1, NULL)); }
-              | struct_members WHITESPACE var EQUAL expr SEMICOLON { $1.push_back(Variable("", $<Var>2, &$4)); }
-              | struct_members WHITESPACE fn_decl { $1.push_back($<Function>2); }
+              /*| struct_members var SEMICOLON { $$.push_back(Variable("", $<Var>1, NULL)); }
+              | struct_members var EQUAL expr SEMICOLON { $1.push_back(Variable("", $<Var>2, &$4)); }
+              | struct_members fn_decl { $1.push_back($<Function>2); }; */
 
 enum_decl: "enum" ident L_BRACE enum_members R_BRACE { $<Enum>$ = Enum($<Identifier>2, $2); };
 
@@ -62,10 +62,11 @@ enum_members: { $$ = {}; }
 partners: ident { $$ = {}; $$.push_back($1); }
         | partners COMMA ident { $1.push_back($2); };
 
-fn_sig: var L_PAREN fn_args R_PAREN { $$ = FunctionSignature($<Var>1, $<std::vector<Variable>2); }
+fn_sig: var L_PAREN fn_args R_PAREN { $$ = FunctionSignature($<Var>1, $<std::vector<Variable>2); };
 
 fn_decl: fn_sig block { $<Function>$ = Function($<FunctionSignature>1, &$<Block>2); }
-       | fn_sig SEMICOLON { $<Function>$ = Function($<FunctionSignature>1, NULL); };
+       | fn_sig SEMICOLON { $<Function>$ = Function($<FunctionSignature>1, NULL); }
+       | fn_sig ARROW expr { $<Function>$ = Function($<FunctionSignature>1, NULL); };
 
 fn_args: { $$ = {}; }
        | var { $<std::Vector<Variable>$ = {}; $$.push_back(Variable(NULL, $<Var>1, NULL)); }
