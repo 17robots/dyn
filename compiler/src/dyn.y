@@ -31,7 +31,7 @@
 
 decls: "pub" decl 
      | decl
-     | decls decl;
+     | decl decls;
 
 decl: var_decl SEMICOLON
     | fn_decl
@@ -47,20 +47,20 @@ struct_members: { $$ = {}; }
               | var SEMICOLON { $$ = {}; $$.push_back(Variable("", $<Var>1, NULL)); }
               | var EQUAL expr SEMICOLON { $$ = {}; $$.push_back(Variable("", $<Var>1, &$3)); }
               | fn_decl { $$ = {}; $$.push_back($<Function>1); }
-              /*| struct_members var SEMICOLON { $$.push_back(Variable("", $<Var>1, NULL)); }
-              | struct_members var EQUAL expr SEMICOLON { $1.push_back(Variable("", $<Var>2, &$4)); }
-              | struct_members fn_decl { $1.push_back($<Function>2); }; */
+              | var SEMICOLON struct_members { $3.push_back(Variable("", $<Var>1, NULL)); }
+              | var EQUAL expr SEMICOLON struct_members { $4.push_back(Variable("", $<Var>1, &$3)); }
+              | fn_decl struct_members { $2.push_back($<Function>1); };
 
 enum_decl: "enum" ident L_BRACE enum_members R_BRACE { $<Enum>$ = Enum($<Identifier>2, $2); };
 
 enum_members: { $$ = {}; } 
             | ident { $$ = {}; $$.push_back(EnumMember($1)); }
             | ident L_PAREN partners R_PAREN { $$ = {}; $$.push_back(EnumMember($1, $2)); }
-            | enum_members COMMA ident COMMA { $1.push_back(EnumMember($2)); }
-            | enum_members COMMA ident L_PAREN partners R_PAREN { $1.push_back(EnumMember($2, $3)); }
+            | ident COMMA enum_members { $1.push_back(EnumMember($2)); }
+            | ident L_PAREN partners R_PAREN COMMA enum_members{ $1.push_back(EnumMember($2, $3)); }
 
 partners: ident { $$ = {}; $$.push_back($1); }
-        | partners COMMA ident { $1.push_back($2); };
+        | ident COMMA partners { $2.push_back($1); };
 
 fn_sig: var L_PAREN fn_args R_PAREN { $$ = FunctionSignature($<Var>1, $<std::vector<Variable>2); };
 
@@ -69,10 +69,10 @@ fn_decl: fn_sig block { $<Function>$ = Function($<FunctionSignature>1, &$<Block>
        | fn_sig ARROW expr { $<Function>$ = Function($<FunctionSignature>1, NULL); };
 
 fn_args: { $$ = {}; }
-       | var { $<std::Vector<Variable>$ = {}; $$.push_back(Variable(NULL, $<Var>1, NULL)); }
-       | "mut" var { $<std::Vector<Variable>$ = {}; $$.push_back(Variable($<std::string>1, $<Var>1, NULL)); }
-       | fn_args COMMA var { $1.push_back(Variable(NULL, $<Var>3, NULL)); }
-       | fn_args COMMA "mut" var { $1.push_back(Variable($<std::string>3, $<Var>4, NULL)); }
+       | var { $<std::vector<Variable>$ = {}; $$.push_back(Variable(NULL, $<Var>1, NULL)); }
+       | "mut" var { $<std::vector<Variable>$ = {}; $$.push_back(Variable($<std::string>1, $<Var>1, NULL)); }
+       | var COMMA fn_args { $3.push_back(Variable(NULL, $<Var>1, NULL)); }
+       | "mut" var COMMA fn_args { $4.push_back(Variable($<std::string>1, $<Var>2, NULL)); }
 
 var: ident ident;
 
@@ -82,7 +82,7 @@ var_decl: "mut" var SEMICOLON { $$ = Variable($<std::string>1, $<Var>2, $3, NULL
    | var EQUAL expr SEMICOLON { $$ = Variable($<std::string>1, $2, $3, &$4); };
 
 stmts: stmt SEMICOLON{ $<Block>$ = Block(); $<Block>$.statements.push_back($<Statement>1); }
-     | stmts SEMICOLON stmt {$<Block>1.statements.push_back($<Statement>1); };
+     | stmt SEMICOLON stmts {$<Block>1.statements.push_back($<Statement>1); };
 
 stmt: { $$ = Statement(); }
     | decl

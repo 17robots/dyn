@@ -97,4 +97,3 @@ public:
   Struct(Identifier &id, std::vector<Statement> &members)
       : id(id), members(members) {}
 };
-
