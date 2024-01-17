@@ -3,13 +3,8 @@
 
 std::string read() {
   return R"(
-  struct Apple {
-    i32 x;
-    f32 y;
-    void eat(&self) {
-      io.println("hello world");
-    }
-  };
+  i8 x = 4;
+  mut i8 y = x;
 )";
 }
 
