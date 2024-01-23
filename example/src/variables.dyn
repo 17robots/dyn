@@ -25,7 +25,7 @@ void primitives() { // private since not pubed
 
 	u8 character = 'a';
 	
-	bool boolean = false;
+	u1 boolean = false;
 }
 void arrays() {
 	// arrs are fixed sizes of similarly typed pieces of data

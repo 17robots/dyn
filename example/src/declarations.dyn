@@ -102,7 +102,7 @@ void structs() {
 void alias() {
     // use the type alias to assign a value over any type
     type EitherOr = i32|f32;
-    type SortFn = bool(f32 x,y);
+    type SortFn = u1(f32 x,y);
     struct Earth {}
     struct Mars {}
     type Planet = Earth|Mars;
@@ -133,7 +133,7 @@ void enums() {
     }
     enum Partnered {
         COOL(i32),
-        THING(bool),
+        THING(u1),
         HERE(u8)
     }
     CLike example = .SOME;
