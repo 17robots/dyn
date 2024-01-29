@@ -98,3 +98,10 @@ public:
       : id(id), members(members) {}
 };
 
+class Program : public Node {
+public:
+  std::vector<Statement> statements;
+  Program() : statements({}){};
+};
+
+// ast v 3
