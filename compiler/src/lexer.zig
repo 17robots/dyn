@@ -79,6 +79,10 @@ pub const Tokenizer = struct {
     pub fn lex(self: *Tokenizer) !void {
         var b2 = std.ArrayList(u8).init(self.tokens.allocator);
         defer b2.deinit();
+        errdefer b2.deinit();
+        var curr = std.ArrayList(u8).init(self.tokens.allocator);
+        defer curr.deinit();
+        errdefer curr.deinit();
         for (self.stream) |c| {
             std.debug.print("character: {c}\n", .{c});
             switch (self.state) {
@@ -108,13 +112,13 @@ pub const Tokenizer = struct {
                 },
                 .READ_CHAR => {},
                 .READ_OP => {
-                    var curr = try b2.clone();
+                    curr = try b2.clone();
                     try curr.append(c);
                     if (!Tokenizer.is_o(curr.items)) {
                         try self.tokens.append(Token{ .t = 6, .v = try Tokenizer.clear_buf(&b2) });
                         self.state = self.grab_state(c);
                     }
-                    curr.deinit();
+                    curr.clearRetainingCapacity();
                 },
             }
             if (self.state != .START) {
