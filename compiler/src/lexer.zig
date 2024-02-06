@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const Token = struct {
     t: u8,
-    v: []const u8,
+    v: []u8,
 };
 
 const TokenList = std.ArrayList(Token);
@@ -16,8 +16,8 @@ const OPS = [_][]const u8{
 pub const Tokenizer = struct {
     stream: []const u8,
     tokens: std.ArrayList(Token),
-    buffer: []const u8,
     state: ParserState,
+    allocator: std.mem.Allocator,
     const ParserState = enum {
         START,
         READ_WORD,
@@ -26,15 +26,13 @@ pub const Tokenizer = struct {
         READ_CHAR,
         READ_OP,
     };
-    pub fn init(alloc: *const std.mem.Allocator, stream: []const u8) Tokenizer {
-        return Tokenizer{
-            .stream = stream,
-            .state = .START,
-            .tokens = std.ArrayList(Token).init(alloc.*),
-            .buffer = "",
-        };
+    pub fn init(allocator: std.mem.Allocator, stream: []const u8) Tokenizer {
+        return Tokenizer{ .stream = stream, .state = .START, .tokens = std.ArrayList(Token).init(allocator), .allocator = allocator };
     }
     pub fn deinit(self: *Tokenizer) void {
+        for (self.tokens.items) |t| {
+            self.allocator.free(t.v);
+        }
         self.tokens.deinit();
     }
     fn is_c(x: u8) bool {
@@ -72,19 +70,18 @@ pub const Tokenizer = struct {
         }
         return .START;
     }
-    fn clear_buf(b: *std.ArrayList(u8)) ![]const u8 {
-        const y = try b.*.toOwnedSlice();
-        return y;
+    pub fn clear_buf(self: Tokenizer, b: *std.ArrayList(u8)) ![]u8 {
+        const x = try self.allocator.dupe(u8, b.*.items);
+        defer {
+            b.deinit();
+            b.* = std.ArrayList(u8).init(self.allocator);
+        }
+        return x;
     }
     pub fn lex(self: *Tokenizer) !void {
-        var b2 = std.ArrayList(u8).init(self.tokens.allocator);
+        var b2 = std.ArrayList(u8).init(self.allocator);
         defer b2.deinit();
-        errdefer b2.deinit();
-        var curr = std.ArrayList(u8).init(self.tokens.allocator);
-        defer curr.deinit();
-        errdefer curr.deinit();
         for (self.stream) |c| {
-            std.debug.print("character: {c}\n", .{c});
             switch (self.state) {
                 .START => {
                     self.state = self.grab_state(c);
@@ -94,37 +91,36 @@ pub const Tokenizer = struct {
                 },
                 .READ_WORD => {
                     if (!(Tokenizer.is_c(c) or Tokenizer.is_n(c, self.state))) {
-                        try self.tokens.append(Token{ .t = 2, .v = try Tokenizer.clear_buf(&b2) });
+                        try self.tokens.append(Token{ .t = 2, .v = try self.clear_buf(&b2) });
                         self.state = self.grab_state(c);
                     }
                 },
                 .READ_NUM => {
                     if (!Tokenizer.is_n(c, self.state)) {
-                        try self.tokens.append(Token{ .t = 3, .v = try Tokenizer.clear_buf(&b2) });
+                        try self.tokens.append(Token{ .t = 3, .v = try self.clear_buf(&b2) });
                         self.state = self.grab_state(c);
                     }
                 },
                 .READ_STRING => {
                     if (c == '\"') {
-                        try self.tokens.append(Token{ .t = 4, .v = try Tokenizer.clear_buf(&b2) });
+                        try self.tokens.append(Token{ .t = 4, .v = try self.clear_buf(&b2) });
                         self.state = .START;
                     }
                 },
                 .READ_CHAR => {},
                 .READ_OP => {
-                    curr = try b2.clone();
-                    try curr.append(c);
-                    if (!Tokenizer.is_o(curr.items)) {
-                        try self.tokens.append(Token{ .t = 6, .v = try Tokenizer.clear_buf(&b2) });
+                    try b2.append(c);
+                    if (!Tokenizer.is_o(b2.items)) {
+                        _ = b2.pop();
+                        try self.tokens.append(Token{ .t = 6, .v = try self.clear_buf(&b2) });
                         self.state = self.grab_state(c);
                     }
-                    curr.clearRetainingCapacity();
                 },
             }
             if (self.state != .START) {
                 try b2.append(c);
             }
         }
-        try self.tokens.append(Token{ .t = @intFromEnum(self.state), .v = try Tokenizer.clear_buf(&b2) });
+        try self.tokens.append(Token{ .t = @intFromEnum(self.state), .v = try self.clear_buf(&b2) });
     }
 };
