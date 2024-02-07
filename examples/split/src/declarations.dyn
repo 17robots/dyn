@@ -3,7 +3,7 @@ from "std" import { Error, Option, Result, io, math };
 pub void declarations() {
 	alias();
 	enums();
-	unions();
+	unions_and_intersections();
 	errors();
 	generics();
 	structs();
