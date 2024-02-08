@@ -32,7 +32,43 @@ const Node = struct {
     t: NodeType,
     children: std.ArrayList(Node),
     attrs: std.StringHashMap(type),
-    const NodeType = enum {};
+    const NodeType = enum {
+        program,
+        variable,
+        struct_decl,
+        struct_variable,
+        struct_function,
+        enum_decl,
+        enum_member,
+        function,
+        function_arg,
+        type_decl,
+        import,
+        if_stmt,
+        loop_stmt,
+        for_stmt,
+        match_stmt,
+        match_branch,
+        defer_stmt,
+        break_stmt,
+        continue_stmt,
+        identifier,
+        int_lit,
+        float_lit,
+        bool_lit,
+        string_lit,
+        char_lit,
+        function_call,
+        unary,
+        binary,
+        paren_expr,
+        anon_function,
+        anon_struct,
+        anon_enum,
+        arr_lit,
+        pointer_lit,
+        ref_lit,
+    };
     pub fn init(alloc: std.mem.Allocator) Node {
         return .{
             .alloc = alloc,
@@ -117,7 +153,7 @@ const Node = struct {
         _ = index;
         _ = toks;
     }
-    pub fn match_branc_node(toks: *std.ArrayList(l.Token), index: u32) !Node {
+    pub fn match_branch_node(toks: *std.ArrayList(l.Token), index: u32) !Node {
         _ = index;
         _ = toks;
     }
