@@ -5,8 +5,6 @@ pub const Token = struct {
     v: []u8,
 };
 
-const TokenList = std.ArrayList(Token);
-
 const OPS = [_][]const u8{
     ";",  ":",  ".",  ",",  "(",  "[",  "{",  ")",  "]",  "}",  "=",
     "!",  "<",  ">",  "*",  "+",  "/",  "-",  "&",  "|",  "==", "!=",
