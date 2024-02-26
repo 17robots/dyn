@@ -1,4 +1,6 @@
 mod lexer;
+mod ast;
+mod parser;
 use crate::lexer::{Tokenizer, Token};
 fn main() {
     Tokenizer::init("i8 x = 5;")

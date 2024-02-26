@@ -29,6 +29,8 @@ void main() {
 	// advanced
 	memory();
 	concurrency();
+
+  mut *mut i3 x;
 }
 
 void primitives() {
@@ -325,3 +327,18 @@ void memory() {
 	// also works with arena, each do the same thing but with arena, no need to free memory individually
 }
 void concurrency() {}
+
+// example functions
+void immutable_copy(i32 x) {}
+void immutable_borrow(*i32 x) {}
+void mutable_value_borrow(*mut i32 x) {}
+void mutable_pointer_borrow(mut *i32 x) {}
+void mutable_pointer_value_borrow(mut *mut i32 x) {}
+
+void calling_above() {
+  mut i32 x = 4;
+  immutable_copy(3); // works because it doesnt require a reference 
+  immutable_copy(x); // also works
+  immutable_borrow(&x); // works 
+  mutable_value_borrow(&mut x);
+}
