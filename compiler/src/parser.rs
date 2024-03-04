@@ -1,5 +1,12 @@
 use crate::lexer::Token;
 
+#[derive(Debug)]
+pub enum ParserError {
+    None,
+}
+
+pub type ParsingResult = Result<Node, ParserError>;
+
 enum LiteralKind {
     Float,
     Integer,
@@ -7,7 +14,7 @@ enum LiteralKind {
     Char,
     Bool,
     Function,
-    Struct
+    Struct,
 }
 
 enum NodeKind {
@@ -49,43 +56,82 @@ struct Node {
     children: Vec<Node>,
 }
 
-pub fn parse(_toks: &Vec<Token>) -> Option<Node> {
+pub fn parse(_toks: &Vec<Token>) -> ParsingResult {
     program()
 }
 
-fn program() -> Option<Node> {
-    None
-} 
-
-fn declaration() -> Option<Node> {
-    None
+fn program() -> ParsingResult {
+    Err(ParserError::None)
 }
 
-fn variable_declaration() -> Option<Node> {
-    None
+fn declaration() -> ParsingResult {
+    Err(ParserError::None)
 }
 
-fn enum_declaraton() -> Option<Node> { None }
-fn function_declaraton() -> Option<Node> { None }
-fn struct_declaraton() -> Option<Node> { None }
+fn variable_declaration() -> ParsingResult {
+    Err(ParserError::None)
+}
 
-fn statement() -> Option<Node> { None }
-fn if_statement() -> Option<Node> { None }
-fn loop_statement() -> Option<Node> { None }
-fn for_statement() -> Option<Node> { None }
-fn match_statement() -> Option<Node> { None }
-fn continue_statement() -> Option<Node> { None }
-fn break_statement() -> Option<Node> { None }
+fn enum_declaraton() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn function_declaraton() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn struct_declaraton() -> ParsingResult {
+    Err(ParserError::None)
+}
 
-fn block() -> Option<Node> { None }
-fn function_call() -> Option<Node> { None }
-fn binary_op() -> Option<Node> { None }
-fn unary_op() -> Option<Node> { None }
-fn literal() -> Option<Node> { None }
-fn identifier() -> Option<Node> { None }
+fn statement() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn if_statement() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn loop_statement() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn for_statement() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn match_statement() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn continue_statement() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn break_statement() -> ParsingResult {
+    Err(ParserError::None)
+}
 
-fn function_parameter() -> Option<Node> { None }
-fn enum_member() -> Option<Node> { None }
-fn enum_partner() -> Option<Node> { None }
-fn match_branch() -> Option<Node> { None }
+fn block() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn function_call() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn binary_op() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn unary_op() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn literal() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn identifier() -> ParsingResult {
+    Err(ParserError::None)
+}
 
+fn function_parameter() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn enum_member() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn enum_partner() -> ParsingResult {
+    Err(ParserError::None)
+}
+fn match_branch() -> ParsingResult {
+    Err(ParserError::None)
+}
