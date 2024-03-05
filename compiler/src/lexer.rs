@@ -13,6 +13,13 @@ const OPS: [&str; 33] = [
     "|", "==", "!=", "<=", ">=", "*=", "+=", "/=", "-=", "&=", "&&", "|=", "||", "=>",
 ];
 
+#[derive(Debug)]
+enum TokenError {
+    None
+}
+
+pub type LexerResult = Result<Token, TokenError>;
+
 #[derive(PartialEq)]
 enum ParserState {
     Start,
