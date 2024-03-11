@@ -1,5 +1,10 @@
 use crate::lexer::Token;
 
+const KEYWORDS: [&str; 13] = [
+    "mut", "if", "for", "con", "match", "true", "false", "break", "continue", "defer", "loop",
+    "enum", "struct",
+];
+
 #[derive(Debug)]
 pub enum ParserError {
     None,
@@ -18,38 +23,44 @@ enum LiteralKind {
     Struct,
 }
 
+enum VariableKind {
+    Default,
+    Mutable,
+    Constant
+}
+
 enum NodeKind {
     Program,
 
     // declarations
     Declaration(bool),
-    VariableDeclaration,
-    EnumDeclaration,
-    FunctionDeclaration,
-    StructDeclaration,
+    VariableDeclaration(VariableKind),
+    // EnumDeclaration,
+    // FunctionDeclaration,
+    // StructDeclaration,
 
     // Statements
-    Statement,
-    IfStatement,
-    LoopStatement(Option<String>),
-    ForStatement(Option<String>),
-    MatchStatement,
-    ContinueStatement,
-    BreakStatement,
+    // Statement,
+    // IfStatement,
+    // LoopStatement(Option<String>),
+    // ForStatement(Option<String>),
+    // MatchStatement,
+    // ContinueStatement,
+    // BreakStatement,
 
     // Expressions
-    Block,
-    FunctionCall,
-    BinaryOp,
-    UnaryOp,
-    Literal(LiteralKind),
-    Identifier,
+    // Block,
+    // FunctionCall,
+    // BinaryOp,
+    // UnaryOp,
+    // Literal(LiteralKind),
+    // Identifier(String),
 
     // Supporting Types
-    FunctionParameter,
-    EnumMember,
-    EnumPartner,
-    MatchBranch,
+    // FunctionParameter,
+    // EnumMember,
+    // EnumPartner,
+    // MatchBranch,
 }
 
 pub struct Node {
@@ -66,106 +77,5 @@ impl Parser {
     pub fn init(toks: Vec<Token>) -> Parser {
         Parser { toks, curr: 0 }
     }
-    pub fn parse(&mut self) -> ParsingResult {
-        self.program()
-    }
-    fn program(&mut self) -> ParsingResult {
-        let mut n = Node {
-            t: NodeKind::Program,
-            children: vec![],
-        };
-        while self.curr < self.toks.len() {
-            n.children.push(self.declaration()?);
-        }
-        Ok(n)
-    }
-    fn declaration(&mut self) -> ParsingResult {
-        let mut public = false;
-        if let Token::Word(s) = self.toks.get(self.curr).unwrap() {
-            if s == "pub" {
-                public = true;
-                self.curr += 1;
-            }
-        } else {
-            return Err(ParserError::InvalidToken);
-        }
-        let mut n = Node {
-            t: NodeKind::Declaration(public),
-            children: vec![],
-        };
-        if let Token::Word(s) = self.toks.get(self.curr).unwrap() {
-            match s.as_ref() {
-                "struct" => n.children.push(self.struct_declaraton()?),
-                "enum" => n.children.push(self.enum_declaraton()?),
-                _ => n.children.push(self.fn_var_declaration()?),
-            }
-        }
-        Ok(n)
-    }
-    fn variable_declaration(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn enum_declaraton(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn fn_var_declaration(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn function_declaraton(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn struct_declaraton(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn statement(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn if_statement(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn loop_statement(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn for_statement(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn match_statement(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn continue_statement(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn break_statement(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn block(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn function_call(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn binary_op(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn unary_op(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn literal(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn identifier(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn function_parameter(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn enum_member(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn enum_partner(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
-    fn match_branch(&self) -> ParsingResult {
-        Err(ParserError::None)
-    }
+    pub fn parse(&mut self) -> Vec<Node> { vec![] }
 }
