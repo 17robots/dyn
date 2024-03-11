@@ -10,62 +10,19 @@ pub enum ParserError {
     None,
     InvalidToken,
 }
+pub type ParsingResult = Result<Action, ParserError>;
 
-pub type ParsingResult = Result<Node, ParserError>;
-
-enum LiteralKind {
-    Float,
-    Integer,
-    String,
-    Char,
-    Bool,
-    Function,
-    Struct,
+pub enum Actions {
+    PublicDeclare,
+    Declare,
+    MutableVariableDeclare,
+    ConstantVariableDeclare,
+    VariableDeclare,
 }
 
-enum VariableKind {
-    Default,
-    Mutable,
-    Constant
-}
-
-enum NodeKind {
-    Program,
-
-    // declarations
-    Declaration(bool),
-    VariableDeclaration(VariableKind),
-    // EnumDeclaration,
-    // FunctionDeclaration,
-    // StructDeclaration,
-
-    // Statements
-    // Statement,
-    // IfStatement,
-    // LoopStatement(Option<String>),
-    // ForStatement(Option<String>),
-    // MatchStatement,
-    // ContinueStatement,
-    // BreakStatement,
-
-    // Expressions
-    // Block,
-    // FunctionCall,
-    // BinaryOp,
-    // UnaryOp,
-    // Literal(LiteralKind),
-    // Identifier(String),
-
-    // Supporting Types
-    // FunctionParameter,
-    // EnumMember,
-    // EnumPartner,
-    // MatchBranch,
-}
-
-pub struct Node {
-    t: NodeKind,
-    children: Vec<Node>,
+pub struct Action {
+    t: Actions,
+    children: Vec<Action>,
 }
 
 pub struct Parser {
@@ -77,5 +34,5 @@ impl Parser {
     pub fn init(toks: Vec<Token>) -> Parser {
         Parser { toks, curr: 0 }
     }
-    pub fn parse(&mut self) -> Vec<Node> { vec![] }
+    pub fn parse(&mut self) -> Vec<Action> { vec![] }
 }
