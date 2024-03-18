@@ -56,5 +56,3 @@ impl Parser {
     // if exists return value, else error
     fn read(&self, x: Token) -> Result<String,ErrorKind> { Ok("".to_owned()) }
 }
-
-// this is a test
