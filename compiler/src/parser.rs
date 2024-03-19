@@ -1,5 +1,3 @@
-use std::io::ErrorKind;
-
 use crate::lexer::Token;
 
 const KEYWORDS: [&str; 14] = [
@@ -9,13 +7,13 @@ const KEYWORDS: [&str; 14] = [
 
 enum NodeKind {
     Program,
-    Declaration,
-    Variable(bool)
+    ModuleDeclaration(bool),
+    Variable(bool),
 }
 
 pub struct Node {
     t: NodeKind,
-    c: Vec<Node>
+    c: Vec<Node>,
 }
 
 #[derive(Debug)]
@@ -38,21 +36,60 @@ impl Parser {
     pub fn parse(&mut self) -> ParsingResult {
         self.program()
     }
-    pub fn program(&self) -> ParsingResult {
-        let mut n = Node { t: NodeKind::Program, c: vec![] };
+    pub fn program(&mut self) -> ParsingResult {
+        let mut n = Node {
+            t: NodeKind::Program,
+            c: vec![],
+        };
         while self.curr < self.toks.len() {
-            n.c.push(self.declaration()?);
+            n.c.push(self.module_declaration()?);
         }
         // Ok(n)
         Err(ParserError::None)
     }
-    pub fn declaration(&self) -> ParsingResult { Ok(Node { t: NodeKind::Declaration, c: vec![] }) }
-    // if it exists then return true, else false 
-    fn optional(&self, x: Token) -> bool { false }
-    
-    // if exists return true, else false
-    fn require(&self, x: Token) -> bool { false }
-
-    // if exists return value, else error
-    fn read(&self, x: Token) -> Result<String,ErrorKind> { Ok("".to_owned()) }
+    pub fn module_declaration(&mut self) -> ParsingResult {
+        let p = if let Token::Word(x) = self.toks.get(self.curr).unwrap() {
+            if x.as_str() == "pub" {
+                self.curr += 1;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        Ok(Node {
+            t: NodeKind::ModuleDeclaration(p),
+            c: vec![self.declaration()?],
+        })
+    }
+    pub fn declaration(&mut self) -> ParsingResult {
+        return if let Token::Word(x) = self.toks.get(self.curr).unwrap() {
+            match x.as_str() {
+                "enum" => Ok(self.enum_declaration()?),
+                "struct" => Ok(self.struct_declaration()?),
+                _ => Ok(self.other_declaration()?),
+            }
+        } else {
+            Err(ParserError::InvalidToken)
+        };
+    }
+    pub fn enum_declaration(&mut self) -> ParsingResult {
+        Err(ParserError::None)
+    }
+    pub fn struct_declaration(&mut self) -> ParsingResult {
+        Err(ParserError::None)
+    }
+    pub fn other_declaration(&mut self) -> ParsingResult {
+        // check for mut -> var
+        // read the token as an identifier type
+        // check for parentheses -> fn
+        Err(ParserError::None)
+    }
+    pub fn variable_declaration(&mut self) -> ParsingResult {
+        Err(ParserError::None)
+    }
+    pub fn function_declaration(&mut self) -> ParsingResult {
+        Err(ParserError::None)
+    }
 }
