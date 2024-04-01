@@ -201,8 +201,9 @@ impl Scanner {
             '\n' => self.line += 1,
             '"' => self.string(),
             _ => {
-                self.toks.push(Token2::Illegal(l));
                 if c.is_digit(10) {}
+                if c.is_alphabetic() {}
+                self.toks.push(Token2::Illegal(l));
             }
         }
     }
@@ -236,10 +237,10 @@ impl Scanner {
         self.source.chars().nth(self.current).unwrap()
     }
     pub fn peek_next(&mut self) -> char {
-        if self.is_end() {
+        if self.current + 1 >= self.source.len()  {
             return '\0';
         }
-        self.source.chars().nth(self.current).unwrap()
+        self.source.chars().nth(self.current + 1).unwrap()
     }
     pub fn string(&mut self) {
         while self.peek() != '"' && !self.is_end() {
