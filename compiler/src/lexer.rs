@@ -1,5 +1,8 @@
 // doing this again to see if this is better
-#[derive(Debug)]
+
+use std::collections::HashMap;
+
+#[derive(Debug,Clone)]
 pub struct Location {
     line: usize,
     start: usize,
@@ -7,7 +10,7 @@ pub struct Location {
     file_name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum Token2 {
     Illegal(Location),
     EOF,
@@ -69,6 +72,7 @@ pub enum Token2 {
 
 pub enum ScannerError {
     None,
+    UnterminatedString,
 }
 
 #[derive(Debug)]
@@ -100,11 +104,10 @@ impl Scanner {
         self.toks.push(Token2::EOF);
         Ok(())
     }
-    pub fn is_end(&mut self) -> bool {
+    fn is_end(&mut self) -> bool {
         self.current as usize >= self.source.len()
     }
-
-    pub fn scan_token(&mut self) {
+    fn scan_token(&mut self) {
         let l = self.get_location();
         let c = self.advance();
         match c {
@@ -201,14 +204,17 @@ impl Scanner {
             '\n' => self.line += 1,
             '"' => self.string(),
             _ => {
-                if c.is_digit(10) {}
-                if c.is_alphabetic() {}
-                self.toks.push(Token2::Illegal(l));
+                if c.is_digit(10) {
+                    self.number()
+                } else if c.is_alphabetic() {
+                    self.identifier()
+                } else {
+                    self.toks.push(Token2::Illegal(l));
+                }
             }
         }
     }
-
-    pub fn get_location(&mut self) -> Location {
+    fn get_location(&mut self) -> Location {
         Location {
             line: self.line,
             start: self.start,
@@ -216,11 +222,11 @@ impl Scanner {
             file_name: self.file_name.to_string(),
         }
     }
-    pub fn advance(&mut self) -> char {
+    fn advance(&mut self) -> char {
         self.current += 1;
         self.source.chars().nth(self.current - 1).unwrap()
     }
-    pub fn matches(&mut self, expected: char) -> bool {
+    fn matches(&mut self, expected: char) -> bool {
         if self.is_end() {
             return false;
         }
@@ -230,19 +236,19 @@ impl Scanner {
         self.current += 1;
         true
     }
-    pub fn peek(&mut self) -> char {
+    fn peek(&mut self) -> char {
         if self.is_end() {
             return '\0';
         }
         self.source.chars().nth(self.current).unwrap()
     }
-    pub fn peek_next(&mut self) -> char {
-        if self.current + 1 >= self.source.len()  {
+    fn peek_next(&mut self) -> char {
+        if self.current + 1 >= self.source.len() {
             return '\0';
         }
         self.source.chars().nth(self.current + 1).unwrap()
     }
-    pub fn string(&mut self) {
+    fn string(&mut self) {
         while self.peek() != '"' && !self.is_end() {
             if self.peek() == '\n' {
                 self.line += 1;
@@ -260,17 +266,54 @@ impl Scanner {
         let l = self.get_location();
         self.toks.push(Token2::String(l, value.to_string()));
     }
-    pub fn number(&mut self) {
+    fn number(&mut self) {
         while self.peek().is_digit(10) {
             self.advance();
         }
 
-        if (self.peek() == '.' && self.peek_next().is_digit(10)) {
+        if self.peek() == '.' && self.peek_next().is_digit(10) {
             self.advance();
             while self.peek().is_digit(10) {
                 self.advance();
             }
         }
+
+        let value = &self.source[self.start + 1..self.current - 1].to_string();
+        let l = self.get_location();
+        self.toks.push(if let Err(_) = value.parse::<i128>() {
+            Token2::Float(l, value.parse::<f64>().unwrap())
+        } else {
+            Token2::Int(l, value.parse::<i128>().unwrap())
+        });
+    }
+    fn identifier(&mut self) {
+        while self.peek().is_alphanumeric() {
+            self.advance();
+        }
+        let value = &self.source[self.start + 1..self.current - 1].to_string();
+        let l = self.get_location();
+        let kw = self.get_keyword(value.to_string());
+        self.toks.push( if let Some(x) = kw { x } else {Token2::Identifier(l, value.to_string())});
+    }
+    fn get_keyword(&mut self, word: String) -> Option<Token2> {
+        let l = self.get_location();
+        let kwds = HashMap::from([
+            ("mut",Token2::Mut(l.clone())),
+            ("if",Token2::If(l.clone())),
+            ("for",Token2::For(l.clone())),
+            ("con",Token2::Con(l.clone())),
+            ("match",Token2::Match(l.clone())),
+            ("true",Token2::True(l.clone())),
+            ("false",Token2::False(l.clone())),
+            ("break",Token2::Break(l.clone())),
+            ("continue",Token2::Continue(l.clone())),
+            ("defer",Token2::Defer(l.clone())),
+            ("loop",Token2::Loop(l.clone())),
+            ("enum",Token2::Enum(l.clone())),
+            ("struct",Token2::Struct(l.clone())),
+            ("pub",Token2::Pub(l.clone())),
+        ]);
+        Some(kwds.get(word.as_str()).unwrap().clone())
     }
 }
 
