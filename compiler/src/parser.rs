@@ -1,43 +1,19 @@
-use crate::lexer::Token;
-
-const KEYWORDS: [&str; 14] = [
-    "mut", "if", "for", "con", "match", "true", "false", "break", "continue", "defer", "loop",
-    "enum", "struct", "pub",
-];
-
-enum NodeKind {
-    Program,
-    ModuleDeclaration(bool),
-    Variable(bool),
-    StructDeclaration,
-    EnumDeclaration,
-    Identifier(String),
-}
-
-pub struct Node {
-    t: NodeKind,
-    c: Vec<Node>,
-}
-
-#[derive(Debug)]
-pub enum ParserError {
-    None,
-    InvalidToken,
-}
-
-pub type ParsingResult = Result<Node, ParserError>;
+use crate::{ast::Expr, lexer::Token};
 
 pub struct Parser {
-    toks: Vec<Token>,
-    curr: usize,
+    t: Vec<Token>,
+    curr: usize
 }
 
 impl Parser {
-    pub fn init(toks: Vec<Token>) -> Parser {
-        Parser { toks, curr: 0 }
+    pub fn new(toks: Vec<Token>) -> Self {
+        Self { t: toks, curr: 0 }
     }
-    pub fn parse(&mut self) -> ParsingResult {
-        self.parse_node(&mut Node{ t: NodeKind::Program, c: vec![] })
+
+    fn expression() -> Expr {
+        todo!()
     }
-    pub fn parse_node(&mut self, _node: &mut Node) -> ParsingResult { Err(ParserError::None) }
+    fn equality() -> Expr {
+        todo!()
+    }
 }

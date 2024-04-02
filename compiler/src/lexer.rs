@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct Location {
     line: usize,
     start: usize,
@@ -10,8 +10,8 @@ pub struct Location {
     file_name: String,
 }
 
-#[derive(Debug,Clone)]
-pub enum Token2 {
+#[derive(Debug, Clone)]
+pub enum Token {
     Illegal(Location),
     EOF,
 
@@ -70,6 +70,7 @@ pub enum Token2 {
     Pub(Location),
 }
 
+#[derive(Debug)]
 pub enum ScannerError {
     None,
     UnterminatedString,
@@ -77,12 +78,12 @@ pub enum ScannerError {
 
 #[derive(Debug)]
 pub struct Scanner {
-    source: String,
-    toks: Vec<Token2>,
-    file_name: String,
-    start: usize,
-    current: usize,
-    line: usize,
+    pub source: String,
+    pub toks: Vec<Result<Token, ScannerError>>,
+    pub file_name: String,
+    pub start: usize,
+    pub current: usize,
+    pub line: usize,
 }
 
 impl Scanner {
@@ -101,42 +102,42 @@ impl Scanner {
             self.start = self.current;
             self.scan_token();
         }
-        self.toks.push(Token2::EOF);
+        self.toks.push(Ok(Token::EOF));
         Ok(())
     }
     fn is_end(&mut self) -> bool {
-        self.current as usize >= self.source.len()
+        self.current >= self.source.len()
     }
     fn scan_token(&mut self) {
         let l = self.get_location();
         let c = self.advance();
         match c {
             // single character tokens
-            '(' => self.toks.push(Token2::LeftParen(l)),
-            ')' => self.toks.push(Token2::RightParen(l)),
-            '[' => self.toks.push(Token2::LeftBracket(l)),
-            ']' => self.toks.push(Token2::RightBracket(l)),
-            '{' => self.toks.push(Token2::LeftBrace(l)),
-            '}' => self.toks.push(Token2::RightBrace(l)),
-            '.' => self.toks.push(Token2::Dot(l)),
-            ',' => self.toks.push(Token2::Comma(l)),
-            ';' => self.toks.push(Token2::Semicolon(l)),
+            '(' => self.toks.push(Ok(Token::LeftParen(l))),
+            ')' => self.toks.push(Ok(Token::RightParen(l))),
+            '[' => self.toks.push(Ok(Token::LeftBracket(l))),
+            ']' => self.toks.push(Ok(Token::RightBracket(l))),
+            '{' => self.toks.push(Ok(Token::LeftBrace(l))),
+            '}' => self.toks.push(Ok(Token::RightBrace(l))),
+            '.' => self.toks.push(Ok(Token::Dot(l))),
+            ',' => self.toks.push(Ok(Token::Comma(l))),
+            ';' => self.toks.push(Ok(Token::Semicolon(l))),
             // compound character tokens
             '*' => {
                 let value = if self.matches('=') {
-                    Token2::AsteriskEqual(l)
+                    Token::AsteriskEqual(l)
                 } else {
-                    Token2::Asterisk(l)
+                    Token::Asterisk(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '%' => {
                 let value = if self.matches('=') {
-                    Token2::PercentEqual(l)
+                    Token::PercentEqual(l)
                 } else {
-                    Token2::Percent(l)
+                    Token::Percent(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '/' => {
                 if self.matches('/') {
@@ -146,70 +147,70 @@ impl Scanner {
                     return;
                 }
                 let value = if self.matches('=') {
-                    Token2::SlashEqual(l)
+                    Token::SlashEqual(l)
                 } else {
-                    Token2::Slash(l)
+                    Token::Slash(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '+' => {
                 let value = if self.matches('=') {
-                    Token2::PlusEqual(l)
+                    Token::PlusEqual(l)
                 } else {
-                    Token2::Plus(l)
+                    Token::Plus(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '-' => {
                 let value = if self.matches('=') {
-                    Token2::MinusEqual(l)
+                    Token::MinusEqual(l)
                 } else {
-                    Token2::Minus(l)
+                    Token::Minus(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '>' => {
                 let value = if self.matches('=') {
-                    Token2::GreaterThanEqual(l)
+                    Token::GreaterThanEqual(l)
                 } else {
-                    Token2::GreaterThan(l)
+                    Token::GreaterThan(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '<' => {
                 let value = if self.matches('=') {
-                    Token2::LessThanEqual(l)
+                    Token::LessThanEqual(l)
                 } else {
-                    Token2::LessThan(l)
+                    Token::LessThan(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '=' => {
                 let value = if self.matches('=') {
-                    Token2::EqualEqual(l)
+                    Token::EqualEqual(l)
                 } else {
-                    Token2::Equal(l)
+                    Token::Equal(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             '!' => {
                 let value = if self.matches('=') {
-                    Token2::BangEqual(l)
+                    Token::BangEqual(l)
                 } else {
-                    Token2::Bang(l)
+                    Token::Bang(l)
                 };
-                self.toks.push(value)
+                self.toks.push(Ok(value))
             }
             ' ' | '\r' | '\t' => {}
             '\n' => self.line += 1,
             '"' => self.string(),
             _ => {
-                if c.is_digit(10) {
+                if c.is_ascii_digit() {
                     self.number()
                 } else if c.is_alphabetic() {
                     self.identifier()
                 } else {
-                    self.toks.push(Token2::Illegal(l));
+                    self.toks.push(Ok(Token::Illegal(l)));
                 }
             }
         }
@@ -264,26 +265,26 @@ impl Scanner {
 
         let value = &self.source[self.start + 1..self.current - 1].to_string();
         let l = self.get_location();
-        self.toks.push(Token2::String(l, value.to_string()));
+        self.toks.push(Ok(Token::String(l, value.to_string())));
     }
     fn number(&mut self) {
-        while self.peek().is_digit(10) {
+        while self.peek().is_ascii_digit() {
             self.advance();
         }
 
-        if self.peek() == '.' && self.peek_next().is_digit(10) {
+        if self.peek() == '.' && self.peek_next().is_ascii_digit() {
             self.advance();
-            while self.peek().is_digit(10) {
+            while self.peek().is_ascii_digit() {
                 self.advance();
             }
         }
 
         let value = &self.source[self.start + 1..self.current - 1].to_string();
         let l = self.get_location();
-        self.toks.push(if let Err(_) = value.parse::<i128>() {
-            Token2::Float(l, value.parse::<f64>().unwrap())
+        self.toks.push(if value.parse::<i128>().is_err() {
+            Ok(Token::Float(l, value.parse::<f64>().unwrap()))
         } else {
-            Token2::Int(l, value.parse::<i128>().unwrap())
+            Ok(Token::Int(l, value.parse::<i128>().unwrap()))
         });
     }
     fn identifier(&mut self) {
@@ -293,163 +294,30 @@ impl Scanner {
         let value = &self.source[self.start + 1..self.current - 1].to_string();
         let l = self.get_location();
         let kw = self.get_keyword(value.to_string());
-        self.toks.push( if let Some(x) = kw { x } else {Token2::Identifier(l, value.to_string())});
+        self.toks.push(if let Some(x) = kw {
+            Ok(x)
+        } else {
+            Ok(Token::Identifier(l, value.to_string()))
+        });
     }
-    fn get_keyword(&mut self, word: String) -> Option<Token2> {
+    fn get_keyword(&mut self, word: String) -> Option<Token> {
         let l = self.get_location();
         let kwds = HashMap::from([
-            ("mut",Token2::Mut(l.clone())),
-            ("if",Token2::If(l.clone())),
-            ("for",Token2::For(l.clone())),
-            ("con",Token2::Con(l.clone())),
-            ("match",Token2::Match(l.clone())),
-            ("true",Token2::True(l.clone())),
-            ("false",Token2::False(l.clone())),
-            ("break",Token2::Break(l.clone())),
-            ("continue",Token2::Continue(l.clone())),
-            ("defer",Token2::Defer(l.clone())),
-            ("loop",Token2::Loop(l.clone())),
-            ("enum",Token2::Enum(l.clone())),
-            ("struct",Token2::Struct(l.clone())),
-            ("pub",Token2::Pub(l.clone())),
+            ("mut", Token::Mut(l.clone())),
+            ("if", Token::If(l.clone())),
+            ("for", Token::For(l.clone())),
+            ("con", Token::Con(l.clone())),
+            ("match", Token::Match(l.clone())),
+            ("true", Token::True(l.clone())),
+            ("false", Token::False(l.clone())),
+            ("break", Token::Break(l.clone())),
+            ("continue", Token::Continue(l.clone())),
+            ("defer", Token::Defer(l.clone())),
+            ("loop", Token::Loop(l.clone())),
+            ("enum", Token::Enum(l.clone())),
+            ("struct", Token::Struct(l.clone())),
+            ("pub", Token::Pub(l.clone())),
         ]);
         Some(kwds.get(word.as_str()).unwrap().clone())
-    }
-}
-
-#[derive(Debug)]
-pub enum Token {
-    Illegal,
-    Word(String),
-    NumberLiteral(String),
-    StringLiteral(String),
-    CharLiteral(String),
-    Operator(String),
-}
-
-const OPS: [&str; 33] = [
-    ";", ":", ".", ",", "(", "[", "{", ")", "]", "}", "=", "!", "<", ">", "*", "+", "/", "-", "&",
-    "|", "==", "!=", "<=", ">=", "*=", "+=", "/=", "-=", "&=", "&&", "|=", "||", "=>",
-];
-
-#[derive(Debug)]
-enum TokenError {
-    None,
-}
-
-pub type LexerResult = Result<Token, TokenError>;
-
-#[derive(PartialEq)]
-enum ParserState {
-    Start,
-    ReadWord,
-    ReadNum,
-    ReadString,
-    ReadChar,
-    ReadOp,
-}
-
-pub struct Tokenizer {
-    stream: String,
-    state: ParserState,
-}
-
-impl Tokenizer {
-    pub fn init(stream: &str) -> Tokenizer {
-        Tokenizer {
-            stream: stream.to_owned(),
-            state: ParserState::Start,
-        }
-    }
-    fn is_c(x: char) -> bool {
-        x.is_ascii_alphabetic()
-    }
-    fn is_n(x: char, s: &ParserState) -> bool {
-        if x == '.' {
-            *s == ParserState::ReadNum
-        } else {
-            x.is_ascii_digit()
-        }
-    }
-    fn is_o(x: &str) -> bool {
-        OPS.into_iter().any(|v| v == x)
-    }
-    fn is_w(x: char) -> bool {
-        matches!(x, ' ' | '\t' | '\n')
-    }
-    fn grab_state(&self, x: char) -> ParserState {
-        if x == '\'' {
-            ParserState::ReadChar
-        } else if x == '\"' {
-            ParserState::ReadString
-        } else if Tokenizer::is_c(x) {
-            ParserState::ReadWord
-        } else if Tokenizer::is_n(x, &self.state) {
-            ParserState::ReadNum
-        } else if Tokenizer::is_o(&x.to_string()) {
-            ParserState::ReadOp
-        } else {
-            ParserState::Start
-        }
-    }
-    fn clear_buf(b: &mut Vec<char>) -> String {
-        let x: String = b.iter().clone().collect();
-        b.clear();
-        x
-    }
-    pub fn lex(&mut self) -> Vec<Token> {
-        let mut t: Vec<Token> = vec![];
-        let mut buf: Vec<char> = vec![];
-        for c in self.stream.chars() {
-            match self.state {
-                ParserState::Start => {
-                    self.state = self.grab_state(c);
-                    if self.state == ParserState::Start && !Tokenizer::is_w(c) {
-                        t.push(Token::Illegal);
-                    }
-                }
-                ParserState::ReadWord => {
-                    if !Tokenizer::is_c(c) && !Tokenizer::is_n(c, &self.state) {
-                        t.push(Token::Word(Tokenizer::clear_buf(&mut buf)));
-                        self.state = self.grab_state(c);
-                    }
-                }
-                ParserState::ReadNum => {
-                    if !Tokenizer::is_n(c, &self.state) {
-                        t.push(Token::NumberLiteral(Tokenizer::clear_buf(&mut buf)));
-                        self.state = self.grab_state(c);
-                    }
-                }
-                ParserState::ReadString => {
-                    if c == '\"' {
-                        t.push(Token::StringLiteral(Tokenizer::clear_buf(&mut buf)));
-                        self.state = ParserState::Start;
-                    }
-                }
-                ParserState::ReadChar => {}
-                ParserState::ReadOp => {
-                    buf.push(c);
-                    let y = buf.iter().clone().collect::<String>();
-                    if !Tokenizer::is_o(&y) {
-                        _ = buf.pop();
-                        t.push(Token::Operator(Tokenizer::clear_buf(&mut buf)));
-                        self.state = self.grab_state(c);
-                    }
-                }
-            }
-            if self.state != ParserState::Start {
-                buf.push(c);
-            }
-        }
-        let x = Tokenizer::clear_buf(&mut buf);
-        t.push(match self.state {
-            ParserState::Start => Token::Illegal,
-            ParserState::ReadWord => Token::Word(x),
-            ParserState::ReadChar => Token::CharLiteral(x),
-            ParserState::ReadNum => Token::NumberLiteral(x),
-            ParserState::ReadString => Token::StringLiteral(x),
-            ParserState::ReadOp => Token::Operator(x),
-        });
-        t
     }
 }

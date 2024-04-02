@@ -1,9 +1,13 @@
 mod lexer;
+mod ast;
 mod parser;
 
-use parser::Parser;
-use crate::lexer::Tokenizer;
+use lexer::Scanner;
 
 fn main() {
-    let _x = Parser::init(Tokenizer::init("i8 x = 5;").lex()).parse();
+    let mut y = Scanner::new(&"main.dyn".to_string(), &"i8 x = 5;".to_string());
+    y.scan_toks().unwrap();
+    for x in y.toks.iter() {
+        println!("{:?}", x);
+    }
 }
