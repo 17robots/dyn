@@ -38,13 +38,23 @@ pub enum Token {
     Minus(Location),
     MinusEqual(Location),
     GreaterThan(Location),
+    LeftShift(Location),
+    LeftShiftEqual(Location),
     GreaterThanEqual(Location),
     LessThan(Location),
     LessThanEqual(Location),
+    RightShift(Location),
+    RightShiftEqual(Location),
     Equal(Location),
     EqualEqual(Location),
     Bang(Location),
     BangEqual(Location),
+    And(Location),
+    AndAnd(Location),
+    AndEqual(Location),
+    Or(Location),
+    OrOr(Location),
+    OrEqual(Location),
 
     // Literals,
     Identifier(Location, String),
@@ -198,6 +208,22 @@ impl Scanner {
                     Token::BangEqual(l)
                 } else {
                     Token::Bang(l)
+                };
+                self.toks.push(Ok(value))
+            }
+            '&' => {
+                let value = if self.matches('=') {
+                    Token::AndEqual(l)
+                } else if self.matches('&') { Token::AndAnd(l)} else {
+                    Token::And(l)
+                };
+                self.toks.push(Ok(value))
+            }
+            '|' => {
+                let value = if self.matches('=') {
+                    Token::OrEqual(l)
+                } else if self.matches('|') { Token::OrOr(l)} else {
+                    Token::Or(l)
                 };
                 self.toks.push(Ok(value))
             }

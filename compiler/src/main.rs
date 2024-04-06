@@ -1,11 +1,13 @@
-mod lexer;
-mod ast;
-mod parser;
+mod lexer2;
 
-use lexer::Scanner;
+use std::path::Path;
+
+use lexer2::Lexer;
 
 fn main() {
-    let mut y = Scanner::new(&"main.dyn".to_string(), &"i8 x = 5;".to_string());
+    let file = "./main.dyn";
+    let source = "i8 x = 5;";
+    let mut y = Lexer::new(Path::new(file), source);
     y.scan_toks().unwrap();
     for x in y.toks.iter() {
         println!("{:?}", x);

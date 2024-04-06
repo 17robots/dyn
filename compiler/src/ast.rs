@@ -1,10 +1,8 @@
-use crate::lexer::Token;
-
 pub trait Node<T> {
     fn accept<U: Visitor<T>>(&self, v: &mut U) -> T;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     // binary
     Multiply(Box<Expr>, Box<Expr>),
@@ -27,8 +25,10 @@ pub enum Expr {
     LogicalAnd(Box<Expr>, Box<Expr>),
     LogicalOr(Box<Expr>, Box<Expr>),
     And(Box<Expr>, Box<Expr>),
+    AndAnd(Box<Expr>, Box<Expr>),
     AndEqual(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
+    OrOr(Box<Expr>, Box<Expr>),
     OrEqual(Box<Expr>, Box<Expr>),
     Xor(Box<Expr>, Box<Expr>),
     XorEqual(Box<Expr>, Box<Expr>),
@@ -100,6 +100,8 @@ impl Visitor<String> for Printer {
             Expr::PointerDereference(_) => todo!(),
             Expr::ReferenceGrab(_) => todo!(),
             Expr::Negate(_) => todo!(),
+            Expr::AndAnd(_, _) => todo!(),
+            Expr::OrOr(_, _) => todo!(),
         }
     }
 
