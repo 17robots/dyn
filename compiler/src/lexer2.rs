@@ -372,9 +372,6 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
     fn char(&mut self) {
         self.start = self.curr;
         self.advance(); // lets move to the char
-        if self.matches('\\') {
-            self.escape();
-        }
         while self.peek() != '\'' && !self.is_end() {
             if self.peek() == '\n' {
                 self.line += 1;
