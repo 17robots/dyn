@@ -1,14 +1,15 @@
-mod lexer2;
+mod lexer;
 
-use std::path::Path;
+use std::{fs, path::Path};
 
-use lexer2::Lexer;
+use lexer::Lexer;
 
 fn main() {
-    let file = "./main.dyn";
-    let source = "i8 x = 5;";
-    let mut y = Lexer::new(Path::new(file), source);
+    let file = "main.dyn";
+    let contents = fs::read_to_string(file).expect("Unable to find file");
+    let mut y = Lexer::new(Path::new(&file), &contents);
     y.scan_toks().unwrap();
+    println!("{:?}", y.filename);
     for x in y.toks.iter() {
         println!("{:?}", x);
     }

@@ -1,151 +1,221 @@
-// doing this again to see if this is better
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+    path::Path,
+};
 
-use std::collections::HashMap;
-
-#[derive(Debug, Clone)]
-pub struct Location {
-    line: usize,
-    start: usize,
-    end: usize,
-    file_name: String,
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum LexingError {
+    IllegalCharacter,
+    UnterminatedString,
+    InvalidChar,
+    UnterminatedChar,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
-    Illegal(Location),
-    EOF,
+    Eof,
 
     // Single Character Tokens
-    LeftParen(Location),
-    RightParen(Location),
-    LeftBrace(Location),
-    RightBrace(Location),
-    LeftBracket(Location),
-    RightBracket(Location),
-    Dot(Location),
-    Comma(Location),
-    Semicolon(Location),
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+    Dot,
+    Comma,
+    Semicolon,
 
     // Compound Character Tokens
-    Asterisk(Location),
-    AsteriskEqual(Location),
-    Percent(Location),
-    PercentEqual(Location),
-    Slash(Location),
-    SlashEqual(Location),
-    Plus(Location),
-    PlusEqual(Location),
-    Minus(Location),
-    MinusEqual(Location),
-    GreaterThan(Location),
-    LeftShift(Location),
-    LeftShiftEqual(Location),
-    GreaterThanEqual(Location),
-    LessThan(Location),
-    LessThanEqual(Location),
-    RightShift(Location),
-    RightShiftEqual(Location),
-    Equal(Location),
-    EqualEqual(Location),
-    Bang(Location),
-    BangEqual(Location),
-    And(Location),
-    AndAnd(Location),
-    AndEqual(Location),
-    Or(Location),
-    OrOr(Location),
-    OrEqual(Location),
+    Asterisk,
+    AsteriskEqual,
+    Percent,
+    PercentEqual,
+    Slash,
+    SlashEqual,
+    Plus,
+    PlusEqual,
+    Minus,
+    MinusEqual,
+    GreaterThan,
+    LeftShift,
+    LeftShiftEqual,
+    GreaterThanEqual,
+    LessThan,
+    LessThanEqual,
+    RightShift,
+    RightShiftEqual,
+    Equal,
+    EqualEqual,
+    Bang,
+    BangEqual,
+    And,
+    AndAnd,
+    AndEqual,
+    Or,
+    OrOr,
+    OrEqual,
 
     // Literals,
-    Identifier(Location, String),
-    Float(Location, f64),
-    Int(Location, i128),
-    String(Location, String),
-    Char(Location, char),
+    Identifier(String),
+    Float(f64),
+    Int(i128),
+    String(String),
+    Char(char),
 
     // Keywords
-    Mut(Location),
-    If(Location),
-    For(Location),
-    Con(Location),
-    Match(Location),
-    True(Location),
-    False(Location),
-    Break(Location),
-    Continue(Location),
-    Defer(Location),
-    Loop(Location),
-    Enum(Location),
-    Struct(Location),
-    Pub(Location),
+    Mut,
+    If,
+    For,
+    Con,
+    Match,
+    True,
+    False,
+    Break,
+    Continue,
+    Defer,
+    Loop,
+    Enum,
+    Struct,
+    Pub,
 }
 
-#[derive(Debug)]
-pub enum ScannerError {
-    None,
-    UnterminatedString,
-}
-
-#[derive(Debug)]
-pub struct Scanner {
-    pub source: String,
-    pub toks: Vec<Result<Token, ScannerError>>,
-    pub file_name: String,
-    pub start: usize,
-    pub current: usize,
-    pub line: usize,
-}
-
-impl Scanner {
-    pub fn new(file_name: &String, source: &String) -> Self {
-        Self {
-            source: source.to_string(),
-            toks: vec![],
-            file_name: file_name.to_string(),
-            start: 0,
-            current: 0,
-            line: 0,
+impl Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Token::Eof => write!(f, "end of file"),
+            Token::LeftParen => write!(f, "("),
+            Token::RightParen => write!(f, ")"),
+            Token::LeftBrace => write!(f, "{{"),
+            Token::RightBrace => write!(f, "}}"),
+            Token::LeftBracket => write!(f, "["),
+            Token::RightBracket => write!(f, "]"),
+            Token::Dot => write!(f, "."),
+            Token::Comma => write!(f, ","),
+            Token::Semicolon => write!(f, ";"),
+            Token::Asterisk => write!(f, "*"),
+            Token::AsteriskEqual => write!(f, "*="),
+            Token::Percent => write!(f, "%"),
+            Token::PercentEqual => write!(f, "%="),
+            Token::Slash => write!(f, "/"),
+            Token::SlashEqual => write!(f, "/="),
+            Token::Plus => write!(f, "+"),
+            Token::PlusEqual => write!(f, "+="),
+            Token::Minus => write!(f, "-"),
+            Token::MinusEqual => write!(f, "-="),
+            Token::GreaterThan => write!(f, ">"),
+            Token::LeftShift => write!(f, "<<"),
+            Token::LeftShiftEqual => write!(f, "<<="),
+            Token::GreaterThanEqual => write!(f, ">="),
+            Token::LessThan => write!(f, "<"),
+            Token::LessThanEqual => write!(f, "<="),
+            Token::RightShift => write!(f, ">>"),
+            Token::RightShiftEqual => write!(f, ">>="),
+            Token::Equal => write!(f, "="),
+            Token::EqualEqual => write!(f, "=="),
+            Token::Bang => write!(f, "!"),
+            Token::BangEqual => write!(f, "!="),
+            Token::And => write!(f, "&"),
+            Token::AndAnd => write!(f, "&&"),
+            Token::AndEqual => write!(f, "&="),
+            Token::Or => write!(f, "|"),
+            Token::OrOr => write!(f, "||"),
+            Token::OrEqual => write!(f, "|="),
+            Token::Identifier(_) => write!(f, "identifier"),
+            Token::Float(_) => write!(f, "float"),
+            Token::Int(_) => write!(f, "int"),
+            Token::String(_) => write!(f, "string"),
+            Token::Char(_) => write!(f, "char"),
+            Token::Mut => write!(f, "mut"),
+            Token::If => write!(f, "if"),
+            Token::For => write!(f, "for"),
+            Token::Con => write!(f, "con"),
+            Token::Match => write!(f, "match"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
+            Token::Break => write!(f, "break"),
+            Token::Continue => write!(f, "continue"),
+            Token::Defer => write!(f, "defer"),
+            Token::Loop => write!(f, "loop"),
+            Token::Enum => write!(f, "enum"),
+            Token::Struct => write!(f, "struct"),
+            Token::Pub => write!(f, "pub"),
         }
     }
-    pub fn scan_toks(&mut self) -> Result<(), ScannerError> {
+}
+impl Display for LexingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LexingError::IllegalCharacter => write!(f, "Lexing error: Illegal character"),
+            LexingError::UnterminatedString => {
+                write!(f, "Lexing error: Unterminated string literal")
+            }
+            LexingError::UnterminatedChar => write!(f, "Lexing error: Unterminated char literal"),
+            LexingError::InvalidChar => {
+                write!(f, "Lexing error: Invalid escape sequence")
+            }
+        }
+    }
+}
+
+pub struct Lexer<'cache, 'contents> {
+    curr: usize,
+    pub filename: &'cache Path,
+    source: &'contents str,
+    start: usize,
+    line: usize,
+    pub toks: Vec<Result<Token, LexingError>>,
+}
+impl<'cache, 'contents> Lexer<'cache, 'contents> {
+    pub fn new(filename: &'cache Path, source: &'contents str) -> Lexer<'cache, 'contents> {
+        Lexer {
+            curr: 0,
+            filename,
+            source,
+            start: 0,
+            line: 0,
+            toks: vec![],
+        }
+    }
+    pub fn scan_toks(&mut self) -> Result<(), LexingError> {
         while !self.is_end() {
-            self.start = self.current;
+            self.start = self.curr;
             self.scan_token();
         }
-        self.toks.push(Ok(Token::EOF));
+        self.toks.push(Ok(Token::Eof));
         Ok(())
     }
     fn is_end(&mut self) -> bool {
-        self.current >= self.source.len()
+        self.curr >= self.source.len()
     }
     fn scan_token(&mut self) {
-        let l = self.get_location();
         let c = self.advance();
         match c {
             // single character tokens
-            '(' => self.toks.push(Ok(Token::LeftParen(l))),
-            ')' => self.toks.push(Ok(Token::RightParen(l))),
-            '[' => self.toks.push(Ok(Token::LeftBracket(l))),
-            ']' => self.toks.push(Ok(Token::RightBracket(l))),
-            '{' => self.toks.push(Ok(Token::LeftBrace(l))),
-            '}' => self.toks.push(Ok(Token::RightBrace(l))),
-            '.' => self.toks.push(Ok(Token::Dot(l))),
-            ',' => self.toks.push(Ok(Token::Comma(l))),
-            ';' => self.toks.push(Ok(Token::Semicolon(l))),
+            '(' => self.toks.push(Ok(Token::LeftParen)),
+            ')' => self.toks.push(Ok(Token::RightParen)),
+            '[' => self.toks.push(Ok(Token::LeftBracket)),
+            ']' => self.toks.push(Ok(Token::RightBracket)),
+            '{' => self.toks.push(Ok(Token::LeftBrace)),
+            '}' => self.toks.push(Ok(Token::RightBrace)),
+            '.' => self.toks.push(Ok(Token::Dot)),
+            ',' => self.toks.push(Ok(Token::Comma)),
+            ';' => self.toks.push(Ok(Token::Semicolon)),
             // compound character tokens
             '*' => {
                 let value = if self.matches('=') {
-                    Token::AsteriskEqual(l)
+                    Token::AsteriskEqual
                 } else {
-                    Token::Asterisk(l)
+                    Token::Asterisk
                 };
                 self.toks.push(Ok(value))
             }
             '%' => {
                 let value = if self.matches('=') {
-                    Token::PercentEqual(l)
+                    Token::PercentEqual
                 } else {
-                    Token::Percent(l)
+                    Token::Percent
                 };
                 self.toks.push(Ok(value))
             }
@@ -157,193 +227,221 @@ impl Scanner {
                     return;
                 }
                 let value = if self.matches('=') {
-                    Token::SlashEqual(l)
+                    Token::SlashEqual
                 } else {
-                    Token::Slash(l)
+                    Token::Slash
                 };
                 self.toks.push(Ok(value))
             }
             '+' => {
                 let value = if self.matches('=') {
-                    Token::PlusEqual(l)
+                    Token::PlusEqual
                 } else {
-                    Token::Plus(l)
+                    Token::Plus
                 };
                 self.toks.push(Ok(value))
             }
             '-' => {
                 let value = if self.matches('=') {
-                    Token::MinusEqual(l)
+                    Token::MinusEqual
                 } else {
-                    Token::Minus(l)
+                    Token::Minus
                 };
                 self.toks.push(Ok(value))
             }
             '>' => {
                 let value = if self.matches('=') {
-                    Token::GreaterThanEqual(l)
+                    Token::GreaterThanEqual
+                } else if self.matches('>') {
+                    if self.matches('=') {
+                        Token::RightShiftEqual
+                    } else {
+                        Token::RightShift
+                    }
                 } else {
-                    Token::GreaterThan(l)
+                    Token::GreaterThan
                 };
                 self.toks.push(Ok(value))
             }
             '<' => {
                 let value = if self.matches('=') {
-                    Token::LessThanEqual(l)
+                    Token::LessThanEqual
+                } else if self.matches('<') {
+                    if self.matches('=') {
+                        Token::LeftShiftEqual
+                    } else {
+                        Token::LeftShift
+                    }
                 } else {
-                    Token::LessThan(l)
+                    Token::LessThan
                 };
                 self.toks.push(Ok(value))
             }
             '=' => {
                 let value = if self.matches('=') {
-                    Token::EqualEqual(l)
+                    Token::EqualEqual
                 } else {
-                    Token::Equal(l)
+                    Token::Equal
                 };
                 self.toks.push(Ok(value))
             }
             '!' => {
                 let value = if self.matches('=') {
-                    Token::BangEqual(l)
+                    Token::BangEqual
                 } else {
-                    Token::Bang(l)
+                    Token::Bang
                 };
                 self.toks.push(Ok(value))
             }
             '&' => {
                 let value = if self.matches('=') {
-                    Token::AndEqual(l)
-                } else if self.matches('&') { Token::AndAnd(l)} else {
-                    Token::And(l)
+                    Token::AndEqual
+                } else if self.matches('&') {
+                    Token::AndAnd
+                } else {
+                    Token::And
                 };
                 self.toks.push(Ok(value))
             }
             '|' => {
                 let value = if self.matches('=') {
-                    Token::OrEqual(l)
-                } else if self.matches('|') { Token::OrOr(l)} else {
-                    Token::Or(l)
+                    Token::OrEqual
+                } else if self.matches('|') {
+                    Token::OrOr
+                } else {
+                    Token::Or
                 };
                 self.toks.push(Ok(value))
             }
             ' ' | '\r' | '\t' => {}
             '\n' => self.line += 1,
             '"' => self.string(),
+            '\'' => self.char(),
             _ => {
                 if c.is_ascii_digit() {
                     self.number()
                 } else if c.is_alphabetic() {
                     self.identifier()
                 } else {
-                    self.toks.push(Ok(Token::Illegal(l)));
+                    self.toks.push(Err(LexingError::IllegalCharacter));
                 }
             }
         }
     }
-    fn get_location(&mut self) -> Location {
-        Location {
-            line: self.line,
-            start: self.start,
-            end: self.current,
-            file_name: self.file_name.to_string(),
-        }
-    }
     fn advance(&mut self) -> char {
-        self.current += 1;
-        self.source.chars().nth(self.current - 1).unwrap()
+        self.curr += 1;
+        self.source.chars().nth(self.curr - 1).unwrap()
     }
     fn matches(&mut self, expected: char) -> bool {
         if self.is_end() {
             return false;
         }
-        if self.source.chars().nth(self.current).unwrap() != expected {
+        if self.source.chars().nth(self.curr).unwrap() != expected {
             return false;
         }
-        self.current += 1;
+        self.curr += 1;
         true
     }
     fn peek(&mut self) -> char {
         if self.is_end() {
             return '\0';
         }
-        self.source.chars().nth(self.current).unwrap()
+        self.source.chars().nth(self.curr).unwrap()
     }
     fn peek_next(&mut self) -> char {
-        if self.current + 1 >= self.source.len() {
+        if self.curr + 1 >= self.source.len() {
             return '\0';
         }
-        self.source.chars().nth(self.current + 1).unwrap()
+        self.source.chars().nth(self.curr + 1).unwrap()
     }
     fn string(&mut self) {
+        self.start = self.curr;
         while self.peek() != '"' && !self.is_end() {
             if self.peek() == '\n' {
                 self.line += 1;
             }
             self.advance();
         }
-
         if self.is_end() {
-            // we need to handle unterminated string literals
+            self.toks.push(Err(LexingError::UnterminatedString))
         }
-
         self.advance();
-
-        let value = &self.source[self.start + 1..self.current - 1].to_string();
-        let l = self.get_location();
-        self.toks.push(Ok(Token::String(l, value.to_string())));
+        let value = &self.source[self.start + 1..self.curr - 1].to_string();
+        self.toks.push(Ok(Token::String(value.to_string())));
+    }
+    fn char(&mut self) {
+        self.start = self.curr;
+        while self.peek() != '\'' && !self.is_end() {
+            if self.peek() == '\n' {
+                self.line += 1;
+            }
+            self.advance();
+        }
+        if self.is_end() {
+            self.toks.push(Err(LexingError::UnterminatedChar))
+        }
+        self.advance();
+        let value = &self.source[self.start + 1..self.curr - 1].to_string();
+        if value.len() > 1 {
+            self.toks.push(Err(LexingError::InvalidChar));
+        } else {
+            self.toks
+                .push(Ok(Token::Char(value.chars().nth(0).unwrap())));
+        }
     }
     fn number(&mut self) {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
-
         if self.peek() == '.' && self.peek_next().is_ascii_digit() {
             self.advance();
             while self.peek().is_ascii_digit() {
                 self.advance();
             }
         }
-
-        let value = &self.source[self.start + 1..self.current - 1].to_string();
-        let l = self.get_location();
+        println!("start: {} curr: {}", self.start, self.curr);
+        let value =
+            &self.source[self.start..(self.curr + (self.start == self.curr) as usize)].to_string();
+        println!("value: {}", value);
         self.toks.push(if value.parse::<i128>().is_err() {
-            Ok(Token::Float(l, value.parse::<f64>().unwrap()))
+            Ok(Token::Float(value.parse::<f64>().unwrap()))
         } else {
-            Ok(Token::Int(l, value.parse::<i128>().unwrap()))
+            Ok(Token::Int(value.parse::<i128>().unwrap()))
         });
     }
     fn identifier(&mut self) {
         while self.peek().is_alphanumeric() {
             self.advance();
         }
-        let value = &self.source[self.start + 1..self.current - 1].to_string();
-        let l = self.get_location();
+        let value = &self.source[self.start..self.curr].to_string();
         let kw = self.get_keyword(value.to_string());
         self.toks.push(if let Some(x) = kw {
             Ok(x)
         } else {
-            Ok(Token::Identifier(l, value.to_string()))
+            Ok(Token::Identifier(value.to_string()))
         });
     }
     fn get_keyword(&mut self, word: String) -> Option<Token> {
-        let l = self.get_location();
-        let kwds = HashMap::from([
-            ("mut", Token::Mut(l.clone())),
-            ("if", Token::If(l.clone())),
-            ("for", Token::For(l.clone())),
-            ("con", Token::Con(l.clone())),
-            ("match", Token::Match(l.clone())),
-            ("true", Token::True(l.clone())),
-            ("false", Token::False(l.clone())),
-            ("break", Token::Break(l.clone())),
-            ("continue", Token::Continue(l.clone())),
-            ("defer", Token::Defer(l.clone())),
-            ("loop", Token::Loop(l.clone())),
-            ("enum", Token::Enum(l.clone())),
-            ("struct", Token::Struct(l.clone())),
-            ("pub", Token::Pub(l.clone())),
+        let keywords = HashMap::from([
+            ("mut", Token::Mut),
+            ("if", Token::If),
+            ("for", Token::For),
+            ("con", Token::Con),
+            ("match", Token::Match),
+            ("true", Token::True),
+            ("false", Token::False),
+            ("break", Token::Break),
+            ("continue", Token::Continue),
+            ("defer", Token::Defer),
+            ("loop", Token::Loop),
+            ("enum", Token::Enum),
+            ("struct", Token::Struct),
+            ("pub", Token::Pub),
         ]);
-        Some(kwds.get(word.as_str()).unwrap().clone())
+        if let Some(t) = keywords.get(word.as_str()) {
+            Some(t.clone())
+        } else {
+            None
+        }
     }
 }
