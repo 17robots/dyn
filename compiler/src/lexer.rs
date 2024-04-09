@@ -6,10 +6,10 @@ use std::{
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum LexingError {
-    IllegalCharacter,
-    UnterminatedString,
-    InvalidChar,
-    UnterminatedChar,
+    IllegalCharacter(usize, usize),
+    UnterminatedString(usize, usize),
+    InvalidChar(usize, usize),
+    UnterminatedChar(usize, usize),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -147,13 +147,27 @@ impl Display for Token {
 impl Display for LexingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LexingError::IllegalCharacter => write!(f, "Lexing error: Illegal character"),
-            LexingError::UnterminatedString => {
-                write!(f, "Lexing error: Unterminated string literal")
+            LexingError::IllegalCharacter(l, c) => {
+                write!(f, "Lexing error: Illegal character line {} col {}", l, c)
             }
-            LexingError::UnterminatedChar => write!(f, "Lexing error: Unterminated char literal"),
-            LexingError::InvalidChar => {
-                write!(f, "Lexing error: Invalid escape sequence")
+            LexingError::UnterminatedString(l, c) => {
+                write!(
+                    f,
+                    "Lexing error: Unterminated string literal line {} col {}",
+                    l, c
+                )
+            }
+            LexingError::UnterminatedChar(l, c) => write!(
+                f,
+                "Lexing error: Unterminated char literal line {} col {}",
+                l, c
+            ),
+            LexingError::InvalidChar(l, c) => {
+                write!(
+                    f,
+                    "Lexing error: Invalid escape sequence line {} col {}",
+                    l, c
+                )
             }
         }
     }
@@ -165,7 +179,9 @@ pub struct Lexer<'cache, 'contents> {
     source: &'contents str,
     start: usize,
     line: usize,
-    pub toks: Vec<Result<Token, LexingError>>,
+    col: usize,
+    pub toks: Vec<Token>,
+    pub errs: Vec<LexingError>,
 }
 impl<'cache, 'contents> Lexer<'cache, 'contents> {
     pub fn new(filename: &'cache Path, source: &'contents str) -> Lexer<'cache, 'contents> {
@@ -175,33 +191,38 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
             source,
             start: 0,
             line: 0,
+            col: 0,
             toks: vec![],
+            errs: vec![],
         }
     }
     pub fn scan_toks(&mut self) -> Result<(), LexingError> {
         while !self.is_end() {
             self.start = self.curr;
             self.scan_token();
+            if self.errs.len() > 0 {
+                break;
+            }
         }
-        self.toks.push(Ok(Token::Eof));
+        self.toks.push(Token::Eof);
         Ok(())
     }
     fn is_end(&mut self) -> bool {
         self.curr >= self.source.len()
     }
     fn scan_token(&mut self) {
-        let c = self.advance();
+        let c = self.advance().unwrap();
         match c {
             // single character tokens
-            '(' => self.toks.push(Ok(Token::LeftParen)),
-            ')' => self.toks.push(Ok(Token::RightParen)),
-            '[' => self.toks.push(Ok(Token::LeftBracket)),
-            ']' => self.toks.push(Ok(Token::RightBracket)),
-            '{' => self.toks.push(Ok(Token::LeftBrace)),
-            '}' => self.toks.push(Ok(Token::RightBrace)),
-            '.' => self.toks.push(Ok(Token::Dot)),
-            ',' => self.toks.push(Ok(Token::Comma)),
-            ';' => self.toks.push(Ok(Token::Semicolon)),
+            '(' => self.toks.push(Token::LeftParen),
+            ')' => self.toks.push(Token::RightParen),
+            '[' => self.toks.push(Token::LeftBracket),
+            ']' => self.toks.push(Token::RightBracket),
+            '{' => self.toks.push(Token::LeftBrace),
+            '}' => self.toks.push(Token::RightBrace),
+            '.' => self.toks.push(Token::Dot),
+            ',' => self.toks.push(Token::Comma),
+            ';' => self.toks.push(Token::Semicolon),
             // compound character tokens
             '*' => {
                 let value = if self.matches('=') {
@@ -209,7 +230,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Asterisk
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '%' => {
                 let value = if self.matches('=') {
@@ -217,7 +238,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Percent
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '/' => {
                 if self.matches('/') {
@@ -231,7 +252,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Slash
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '+' => {
                 let value = if self.matches('=') {
@@ -239,7 +260,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Plus
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '-' => {
                 let value = if self.matches('=') {
@@ -247,7 +268,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Minus
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '>' => {
                 let value = if self.matches('=') {
@@ -261,7 +282,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::GreaterThan
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '<' => {
                 let value = if self.matches('=') {
@@ -275,7 +296,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::LessThan
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '=' => {
                 let value = if self.matches('=') {
@@ -283,7 +304,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Equal
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '!' => {
                 let value = if self.matches('=') {
@@ -291,7 +312,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Bang
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '&' => {
                 let value = if self.matches('=') {
@@ -301,7 +322,7 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::And
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             '|' => {
                 let value = if self.matches('=') {
@@ -311,10 +332,13 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else {
                     Token::Or
                 };
-                self.toks.push(Ok(value))
+                self.toks.push(value)
             }
             ' ' | '\r' | '\t' => {}
-            '\n' => self.line += 1,
+            '\n' => {
+                self.line += 1;
+                self.col = 0;
+            }
             '"' => self.string(),
             '\'' => self.char(),
             _ => {
@@ -323,14 +347,16 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
                 } else if c.is_alphabetic() {
                     self.identifier()
                 } else {
-                    self.toks.push(Err(LexingError::IllegalCharacter));
+                    self.errs
+                        .push(LexingError::IllegalCharacter(self.line, self.col));
                 }
             }
         }
     }
-    fn advance(&mut self) -> char {
+    fn advance(&mut self) -> Option<char> {
         self.curr += 1;
-        self.source.chars().nth(self.curr - 1).unwrap()
+        self.col += 1;
+        self.source.chars().nth(self.curr - 1)
     }
     fn matches(&mut self, expected: char) -> bool {
         if self.is_end() {
@@ -363,11 +389,12 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
             self.advance();
         }
         if self.is_end() {
-            self.toks.push(Err(LexingError::UnterminatedString))
+            self.errs
+                .push(LexingError::UnterminatedString(self.line, self.col))
         }
         self.advance();
-        let value = &self.source[self.start + 1..self.curr - 1].to_string();
-        self.toks.push(Ok(Token::String(value.to_string())));
+        let value = &self.source[self.start..self.curr - 1].to_string();
+        self.toks.push(Token::String(value.to_string()));
     }
     fn char(&mut self) {
         self.start = self.curr;
@@ -378,15 +405,16 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
             self.advance();
         }
         if self.is_end() {
-            self.toks.push(Err(LexingError::UnterminatedChar))
+            self.errs
+                .push(LexingError::UnterminatedChar(self.line, self.col))
         }
         self.advance();
         let value = &self.source[self.start + 1..self.curr - 1].to_string();
         if value.len() > 1 {
-            self.toks.push(Err(LexingError::InvalidChar));
+            self.errs
+                .push(LexingError::InvalidChar(self.line, self.col));
         } else {
-            self.toks
-                .push(Ok(Token::Char(value.chars().nth(0).unwrap())));
+            self.toks.push(Token::Char(value.chars().nth(0).unwrap()));
         }
     }
     fn number(&mut self) {
@@ -404,9 +432,9 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
             &self.source[self.start..(self.curr + (self.start == self.curr) as usize)].to_string();
         println!("value: {}", value);
         self.toks.push(if value.parse::<i128>().is_err() {
-            Ok(Token::Float(value.parse::<f64>().unwrap()))
+            Token::Float(value.parse::<f64>().unwrap())
         } else {
-            Ok(Token::Int(value.parse::<i128>().unwrap()))
+            Token::Int(value.parse::<i128>().unwrap())
         });
     }
     fn identifier(&mut self) {
@@ -416,9 +444,9 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
         let value = &self.source[self.start..self.curr].to_string();
         let kw = self.get_keyword(value.to_string());
         self.toks.push(if let Some(x) = kw {
-            Ok(x)
+            x
         } else {
-            Ok(Token::Identifier(value.to_string()))
+            Token::Identifier(value.to_string())
         });
     }
     fn get_keyword(&mut self, word: String) -> Option<Token> {
@@ -438,10 +466,6 @@ impl<'cache, 'contents> Lexer<'cache, 'contents> {
             ("struct", Token::Struct),
             ("pub", Token::Pub),
         ]);
-        if let Some(t) = keywords.get(word.as_str()) {
-            Some(t.clone())
-        } else {
-            None
-        }
+        keywords.get(word.as_str()).cloned()
     }
 }
