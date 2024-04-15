@@ -40,8 +40,17 @@ pub enum Expr {
     // unary
     Not(Box<Expr>),
     PointerDereference(Box<Expr>), // *x
-    ReferenceGrab(Box<Expr>), // &x
-    Negate(Box<Expr>) // -x
+    ReferenceGrab(Box<Expr>),      // &x
+    Negate(Box<Expr>),             // -x
+
+    // primary
+    FalseLiteral,
+    TrueLiteral,
+    Float(f64),
+    Int(i128),
+    Ident(String),
+    String(String),
+    Grouping(Box<Expr>),
 }
 
 pub enum Stmt {}

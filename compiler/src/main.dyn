@@ -1,5 +1,0 @@
-import io;
-
-void main() {
-	io.println("hello world);
-}
