@@ -4,6 +4,8 @@ use lexer::Lexer;
 
 mod error;
 mod lexer;
+mod parser;
+mod token;
 
 fn main() {
     let mut l = Lexer::new(fs::read_to_string("./main.dyn").unwrap());
@@ -12,7 +14,12 @@ fn main() {
     loop {
         match l.tok {
             Ok(ref s) => match s {
-                Some(t) => println!("{:?}", t),
+                Some(t) => {
+                    println!("{:?}", t);
+                    if matches!(t, token::Token::Eof) {
+                        break;
+                    }
+                }
                 None => break,
             },
             Err(e) => {

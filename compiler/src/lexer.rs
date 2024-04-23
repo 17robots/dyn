@@ -1,145 +1,6 @@
-use std::fmt::Display;
-
 use crate::error::LexerError;
+use crate::token::Token;
 use phf::phf_map;
-
-#[derive(Clone, Debug)]
-pub enum Token {
-    Eof,
-    // operators
-    LParen,
-    RParen,
-    LBrack,
-    RBrack,
-    LBrace,
-    RBrace,
-    Comma,
-    Semicolon,
-    Colon,
-    Dot,
-    DotDot,
-    AddAssign,
-    SubAssign,
-    MulAssign,
-    DivAssign,
-    ModAssign,
-    AndAssign,
-    OrAssign,
-    XorAssign,
-    Add,
-    AddAdd,
-    Sub,
-    SubSub,
-    Mul,
-    Div,
-    Mod,
-    And,
-    AndAnd,
-    Or,
-    OrOr,
-    Xor,
-    Lesser,
-    LesserEqual,
-    RightShift,
-    Greater,
-    GreaterEqual,
-    LeftShift,
-    Equal,
-    EqualEqual,
-    Bang,
-    BangEqual,
-
-    // keywords
-    Mut,
-    If,
-    For,
-    Con,
-    Match,
-    True,
-    False,
-    Break,
-    Continue,
-    Defer,
-    Enum,
-    Struct,
-    Pub,
-    Void,
-    Return,
-
-    // literals
-    Ident(String),
-    Int(u128),
-    Float(f64),
-    String(String),
-}
-
-impl Display for Token {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Token::Eof => write!(f, ""),
-            Token::LParen => write!(f, "("),
-            Token::RParen => write!(f, ")"),
-            Token::LBrack => write!(f, "["),
-            Token::RBrack => write!(f, "]"),
-            Token::LBrace => write!(f, "{{"),
-            Token::RBrace => write!(f, "}}"),
-            Token::Comma => write!(f, ","),
-            Token::Semicolon => write!(f, ";"),
-            Token::Colon => write!(f, ":"),
-            Token::Dot => write!(f, "."),
-            Token::DotDot => write!(f, ".."),
-            Token::AddAssign => write!(f, "+="),
-            Token::SubAssign => write!(f, "-="),
-            Token::MulAssign => write!(f, "*="),
-            Token::DivAssign => write!(f, "/="),
-            Token::ModAssign => write!(f, "%="),
-            Token::AndAssign => write!(f, "&="),
-            Token::OrAssign => write!(f, "|="),
-            Token::XorAssign => write!(f, "^="),
-            Token::Add => write!(f, "+"),
-            Token::AddAdd => write!(f, "++"),
-            Token::Sub => write!(f, "-"),
-            Token::SubSub => write!(f, "--"),
-            Token::Mul => write!(f, "*"),
-            Token::Div => write!(f, "/"),
-            Token::Mod => write!(f, "%"),
-            Token::And => write!(f, "&"),
-            Token::AndAnd => write!(f, "&&"),
-            Token::Or => write!(f, "|"),
-            Token::OrOr => write!(f, "||"),
-            Token::Xor => write!(f, "^"),
-            Token::Lesser => write!(f, "<"),
-            Token::LesserEqual => write!(f, "<="),
-            Token::RightShift => write!(f, ">>"),
-            Token::Greater => write!(f, ">"),
-            Token::GreaterEqual => write!(f, ">="),
-            Token::LeftShift => write!(f, "<<"),
-            Token::Equal => write!(f, "="),
-            Token::EqualEqual => write!(f, "=="),
-            Token::Bang => write!(f, "!"),
-            Token::BangEqual => write!(f, "!="),
-            Token::Mut => write!(f, "mut"),
-            Token::If => write!(f, "if"),
-            Token::For => write!(f, "for"),
-            Token::Con => write!(f, "con"),
-            Token::Match => write!(f, "match"),
-            Token::True => write!(f, "true"),
-            Token::False => write!(f, "false"),
-            Token::Break => write!(f, "break"),
-            Token::Continue => write!(f, "continue"),
-            Token::Defer => write!(f, "defer"),
-            Token::Enum => write!(f, "enum"),
-            Token::Struct => write!(f, "struct"),
-            Token::Pub => write!(f, "pub"),
-            Token::Void => write!(f, "void"),
-            Token::Return => write!(f, "return"),
-            Token::Ident(s) => write!(f, "ident: {}", s),
-            Token::Int(s) => write!(f, "int: {}", s),
-            Token::Float(s) => write!(f, "float: {}", s),
-            Token::String(s) => write!(f, "string: {}", s),
-        }
-    }
-}
 
 static KWDS: phf::Map<&'static str, Token> = phf_map! {
     "mut" => Token::Mut,
@@ -178,22 +39,23 @@ impl Lexer {
         }
     }
     fn ch(&self) -> char {
-        self.s.chars().nth(self.curr).unwrap()
+        if let Some(c) = self.s.chars().nth(self.curr) {
+            c
+        } else {
+            '\0'
+        }
     }
     pub fn next(&mut self) {
-        if let Ok(ref s) = self.tok {
-            if let Some(ref t) = s {
-                if matches!(t, Token::Eof) {
-                    return;
-                }
+        if let Ok(Some(ref t)) = self.tok {
+            if matches!(t, Token::Eof) {
+                return;
             }
         }
-        if self.curr >= self.s.len() - 1 {
-            println!("We have hit the end of the file\n");
-            self.tok = Ok(Some(Token::Eof));
-            return;
-        }
         'redo: loop {
+            if self.is_end() {
+                self.tok = Ok(Some(Token::Eof));
+                return;
+            }
             loop {
                 if !matches!(self.ch(), ' ' | '\t' | '\n' | '\r') {
                     break;
@@ -206,6 +68,7 @@ impl Lexer {
                 return;
             }
             match c {
+                '\0' => self.tok = Ok(Some(Token::Eof)),
                 '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => self.number(),
                 '"' => self.string(),
                 '`' => self.raw_string(),
@@ -239,7 +102,6 @@ impl Lexer {
                     self.tok = Ok(Some(Token::Comma));
                 }
                 ';' => {
-                    println!("We have semicolon");
                     self.advance();
                     self.tok = Ok(Some(Token::Semicolon));
                 }
@@ -253,7 +115,9 @@ impl Lexer {
                         '.' => Some(Token::DotDot),
                         _ => Some(Token::Dot),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '.') {
+                        self.advance();
+                    }
                 }
                 '+' => {
                     self.advance();
@@ -262,7 +126,9 @@ impl Lexer {
                         '+' => Some(Token::AddAdd),
                         _ => Some(Token::Add),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=' | '+') {
+                        self.advance();
+                    }
                 }
                 '-' => {
                     self.advance();
@@ -271,7 +137,9 @@ impl Lexer {
                         '-' => Some(Token::SubSub),
                         _ => Some(Token::Sub),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=' | '-') {
+                        self.advance();
+                    }
                 }
                 '*' => {
                     self.advance();
@@ -279,7 +147,9 @@ impl Lexer {
                         '=' => Some(Token::MulAssign),
                         _ => Some(Token::Mul),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=' | '*') {
+                        self.advance();
+                    }
                 }
                 '%' => {
                     self.advance();
@@ -287,7 +157,9 @@ impl Lexer {
                         '=' => Some(Token::ModAssign),
                         _ => Some(Token::Mod),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=') {
+                        self.advance();
+                    }
                 }
                 '/' => {
                     self.advance();
@@ -303,6 +175,9 @@ impl Lexer {
                         }
                         _ => self.tok = Ok(Some(Token::Div)),
                     }
+                    if matches!(self.ch(), '=') {
+                        self.advance();
+                    }
                 }
                 '^' => {
                     self.advance();
@@ -310,7 +185,9 @@ impl Lexer {
                         '=' => Some(Token::XorAssign),
                         _ => Some(Token::Xor),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=') {
+                        self.advance();
+                    }
                 }
                 '<' => {
                     self.advance();
@@ -319,7 +196,9 @@ impl Lexer {
                         '<' => Some(Token::Lesser),
                         _ => Some(Token::RightShift),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=' | '<') {
+                        self.advance();
+                    }
                 }
                 '>' => {
                     self.advance();
@@ -328,7 +207,9 @@ impl Lexer {
                         '>' => Some(Token::Greater),
                         _ => Some(Token::LeftShift),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=' | '>') {
+                        self.advance();
+                    }
                 }
                 '&' => {
                     self.advance();
@@ -337,7 +218,9 @@ impl Lexer {
                         '&' => Some(Token::AndAnd),
                         _ => Some(Token::And),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=' | '&') {
+                        self.advance();
+                    }
                 }
                 '|' => {
                     self.advance();
@@ -346,7 +229,9 @@ impl Lexer {
                         '|' => Some(Token::OrOr),
                         _ => Some(Token::Or),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=' | '|') {
+                        self.advance();
+                    }
                 }
                 '=' => {
                     self.advance();
@@ -354,7 +239,9 @@ impl Lexer {
                         '=' => Some(Token::EqualEqual),
                         _ => Some(Token::Equal),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=') {
+                        self.advance();
+                    }
                 }
                 '!' => {
                     self.advance();
@@ -362,7 +249,9 @@ impl Lexer {
                         '=' => Some(Token::BangEqual),
                         _ => Some(Token::Bang),
                     });
-                    self.advance();
+                    if matches!(self.ch(), '=') {
+                        self.advance();
+                    }
                 }
                 _ => {}
             }
@@ -375,7 +264,7 @@ impl Lexer {
     fn ident(&mut self) {
         let start = self.curr;
         let mut c = self.ch();
-        while c.is_ascii_alphanumeric() {
+        while c.is_ascii_alphanumeric() || c == '_' {
             self.advance();
             c = self.ch();
         }
@@ -429,11 +318,11 @@ impl Lexer {
                     continue;
                 }
                 '\n' => {
-                    self.tok = Err(LexerError::NewLineInString(self.l, self.curr));
+                    self.tok = Err(LexerError::NewLineInString(self.l, self.c));
                     break;
                 }
                 _ => {
-                    if self.curr >= self.s.len() {
+                    if self.is_end() {
                         self.tok = Err(LexerError::UnterminatedString(self.l, start));
                         break;
                     }
@@ -454,7 +343,7 @@ impl Lexer {
                 self.tok = Ok(Some(Token::String(self.section(start))));
                 break;
             }
-            if self.curr >= self.s.len() {
+            if self.is_end() {
                 self.tok = Err(LexerError::UnterminatedString(self.l, start));
                 break;
             }
@@ -480,7 +369,7 @@ impl Lexer {
                     self.tok = Err(LexerError::InvalidEscape(self.l, self.curr));
                 }
             }
-            if self.curr >= self.s.len() {
+            if self.is_end() {
                 self.tok = Err(LexerError::UnterminatedChar(self.l, start));
                 break;
             }
@@ -490,21 +379,25 @@ impl Lexer {
     }
     fn comment(&mut self) {
         loop {
-            if self.ch() == '\n' || self.curr >= self.s.len() {
+            if self.ch() == '\n' || self.is_end() {
                 break;
             }
             self.advance();
         }
+    }
+    fn is_end(&mut self) -> bool {
+        self.curr >= self.s.len()
     }
     fn multi_comment(&mut self) {
         loop {
             if self.ch() == '*' {
                 self.advance();
                 if self.ch() == '/' {
+                    self.advance();
                     break;
                 }
             }
-            if self.curr >= self.s.len() {
+            if self.is_end() {
                 break;
             }
             self.advance();
@@ -521,8 +414,5 @@ impl Lexer {
             self.c += 1;
         }
         self.curr += 1;
-        if self.curr >= self.s.len() {
-            // we need to error maybe?
-        }
     }
 }
