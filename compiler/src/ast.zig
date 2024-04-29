@@ -1,8 +1,46 @@
 const std = @import("std");
 
-const Operator = enum {};
+const Operator = enum {
+    // in order of precedent
+    Not, // !
+    OrOr, // ||
+    AndAnd, // &&
+    Eql, // ==
+    Neql, // !=
+    Less, // <
+    Leql, // <=
+    Gtr, // >
+    Geql, // >=
+    Add, // +
+    AddAdd, // ++
+    Sub, // -
+    SubSub, // --
+    Or, // |
+    Xor, // ^
+    Mul, // *
+    Div, // /
+    Mod, // %
+    And, // &
+    Shl, // <<
+    Shr, // >>
+};
+const OpPrec = enum {
+    PrecOrOr,
+    PrecAndAnd,
+    PrecCmp,
+    PrecAdd,
+    PrecMul,
+};
+const LitKind = enum {
+    Int,
+    Float,
+    Char,
+    String,
+};
 
-pub const Program = struct {};
+pub const Program = struct {
+    decls: std.ArrayList(ModuleDeclaration),
+};
 
 // declarations
 pub const Decl = union {
@@ -52,14 +90,38 @@ pub const Expr = union {
     o: Operation,
     fe: FuncCallExpr,
 };
-pub const BasicLit = struct {};
-pub const FuncLit = struct {};
-pub const ParenExpr = struct {};
-pub const AccessorExpr = struct {};
-pub const IndexExpr = struct {};
-pub const SliceExpr = struct {};
-pub const Operation = struct {};
-pub const FuncCallExpr = struct {};
+pub const BasicLit = struct {
+    kind: LitKind,
+    val: []const u8,
+};
+pub const FuncLit = struct {
+    type: FuncType,
+    body: ?BlockStmt,
+};
+pub const ParenExpr = struct {
+    expr: Expr,
+};
+pub const AccessorExpr = struct {
+    expr: Expr,
+    selector: []const u8,
+};
+pub const IndexExpr = struct {
+    expr: Expr,
+    index: Expr,
+};
+pub const SliceExpr = struct {
+    expr: Expr,
+    range: RangeClause,
+};
+pub const Operation = struct {
+    op: Operator,
+    lhs: ?Expr,
+    rhs: ?Expr,
+};
+pub const FuncCallExpr = struct {
+    name: []const u8,
+    args: std.ArrayList(Expr),
+};
 
 // types
 pub const ArrayType = struct {
@@ -70,7 +132,10 @@ pub const StructType = struct {
     fields: std.ArrayList(Field),
     methods: std.ArrayList(FuncDecl),
 };
-pub const FuncType = struct {};
+pub const FuncType = struct {
+    result: Expr,
+    params: std.ArrayList(Field),
+};
 
 // stmts
 pub const Stmt = union {
@@ -130,12 +195,12 @@ pub const FuncParam = struct {
 };
 pub const Field = struct {
     type: Expr,
-    name: []const u8,
+    name: ?[]const u8,
     default: ?Expr,
 };
 pub const RangeClause = struct {
-    lhs: Expr,
-    rhs: Expr,
+    lhs: ?Expr,
+    rhs: ?Expr,
 };
 pub const MatchBranch = struct {
     val: ?Expr,
