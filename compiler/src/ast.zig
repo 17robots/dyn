@@ -40,6 +40,9 @@ const LitKind = enum {
 
 pub const Program = struct {
     decls: std.ArrayList(ModuleDeclaration),
+    pub fn init(alloc: *std.mem.Allocator) Program {
+        return .{ .decls = std.ArrayList(ModuleDeclaration).init(alloc) };
+    }
 };
 
 // declarations
