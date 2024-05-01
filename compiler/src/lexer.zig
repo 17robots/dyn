@@ -19,6 +19,7 @@ const KWDS = std.ComptimeStringMap(Token.TokenType, .{
     .{ "return", .Return },
     .{ "from", .From },
     .{ "use", .Use },
+    .{ "type", .Type },
 });
 
 pub const Lexer = struct {

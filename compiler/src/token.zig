@@ -60,6 +60,7 @@ pub const TokenType = enum {
     Return,
     From,
     Use,
+    Type,
     Ident,
     Int,
     Float,
