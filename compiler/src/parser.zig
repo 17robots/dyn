@@ -90,9 +90,39 @@ pub const Parser = struct {
         if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) {} // error
 
         var str = ast.StructDecl.init(name, s.alloc);
-
+        s.expect(.LBrace);
+        // now read either fields or variables
+        while (!s.check(.RBrace)) {
+            switch (s.struct_member_declaration()) {
+                .f => |*func| str.methods.append(func),
+                .v => |*variable| str.fields.append(variable),
+            }
+        }
         return str;
     }
-    pub fn enum_declaration(s: *Parser) ast.EnumDecl {}
-    pub fn var_fn_declaration(s: *Parser) ast.Decl {}
+    pub fn enum_declaration(s: *Parser) ast.EnumDecl {
+        s.expect(.Enum);
+        if (!s.check(.Ident)) {} // error
+        const name = s.lexer.tok.lit;
+        // also check for i[digits] and u[digits]
+        if (std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64")) {} // error
+        var e = ast.EnumDecl.init(name);
+        s.expect(.LBrace);
+        while (!s.check(.RBrace)) {
+            e.members.append(s.enum_member());
+        }
+    }
+    pub fn var_fn_declaration(s: *Parser) FieldFunc {
+        _ = s;
+    }
+    pub fn struct_member_declaration(s: *Parser) FieldFunc {
+        _ = s;
+    }
+    pub fn enum_member(s: *Parser) ast.EnumMember {
+        s.expect(.Comma);
+    }
+};
+const FieldFunc = union {
+    f: ast.FuncDecl,
+    v: ast.Field,
 };
