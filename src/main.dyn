@@ -1,0 +1,8 @@
+module main
+
+use "std:io"
+
+void main() {
+  io.println("hello world");
+}
+

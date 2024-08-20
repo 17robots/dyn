@@ -1,5 +1,0 @@
-from "std" import { io };
-
-pub void say_hello() {
-    io.println("Hello World");
-}
