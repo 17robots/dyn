@@ -87,7 +87,6 @@ pub const Lexer = struct {
         read_float,
         read_string,
         read_char,
-        read_op,
         read_add,
         read_sub,
         read_mul,
@@ -118,14 +117,14 @@ pub const Lexer = struct {
 
     fn next_tok(s: *Lexer) void {
         // skip whitespace
+        while (s.is_whitespace() or s.buffer.len < s.index) {
+            if (s.buffer[s.index] == '\n') {
+                // do something with line count and col
+            }
+            s.index += 1;
+        }
         s.placeholder = s.index;
         while (s.index < s.buffer.len) {
-            while (s.is_whitespace()) {
-                if (s.buffer[s.index] == '\n') {
-                    // do something with line count and col
-                }
-                s.index += 1;
-            }
             switch (s.state) {
                 .base => switch (s.buffer[s.index]) {
                     'a'...'z', 'A'...'Z', '_' => s.state = .read_word,
@@ -133,14 +132,14 @@ pub const Lexer = struct {
                     '.' => s.state = .read_float,
                     '\"' => s.state = .read_string,
                     '\'' => s.state = .read_char,
-                    '(' => s.tok = .lparen,
-                    ')' => s.tok = .rparen,
-                    '[' => s.tok = .lbrack,
-                    ']' => s.tok = .rbrack,
-                    '{' => s.tok = .lbrace,
-                    '}' => s.tok = .rbrace,
-                    ':' => s.tok = .colon,
-                    ';' => s.tok = .semicolon,
+                    '(' => { s.tok = .lparen; s.index += 1; },
+                    ')' => { s.tok = .rparen; s.index += 1; },
+                    '[' => { s.tok = .lbrack; s.index += 1; },
+                    ']' => { s.tok = .rbrack; s.index += 1; },
+                    '{' => { s.tok = .lbrace; s.index += 1; },
+                    '}' => { s.tok = .rbrace; s.index += 1; },
+                    ':' => { s.tok = .colon; s.index += 1; },
+                    ';' => { s.tok = .semicolon; s.index += 1; },
                     '+' => s.state = .read_add,
                     '-' => s.state = .read_sub,
                     '*' => s.state = .read_mul,
@@ -165,6 +164,7 @@ pub const Lexer = struct {
                         else => {
                             if (s.get_keyword()) |k| {
                                 s.tok = k;
+                                s.literal = null;
                             } else {
                                 s.tok = .identifier;
                                 s.literal = s.buffer[s.placeholder..s.index];
@@ -173,14 +173,66 @@ pub const Lexer = struct {
                         },
                     }
                 },
+                .read_num => {
+                    switch (s.buffer[s.index]) {
+                        '0'...'9' => {},
+                        '.' => s.state = .read_float,
+                        else => {
+                            s.tok = .int;
+                            s.literal = s.buffer[s.placeholder..s.index];
+                            s.state = .base;
+                        },
+                    }
+                },
+                .read_float => {
+                    switch (s.buffer[s.index]) {
+                        '0'...'9' => {},
+                        else => {
+                            s.tok = .float;
+                            s.literal = s.buffer[s.placeholder..s.index];
+                            s.state = .base;
+                        },
+                    }
+                },
+                .read_string => {
+                    switch (s.buffer[s.index]) {
+                        '\"' => {
+                            s.tok = .string;
+                            s.literal = s.buffer[(s.placeholder + 1)..s.index];
+                        },
+                        else => {},
+                    }
+                },
                 else => {},
             }
-            s.index += 1;
             if (s.state == .base) {
                 return;
             }
+            s.index += 1;
         }
-        switch (s.state) {}
+        switch (s.state) {
+            .read_word => {
+                std.debug.print("here", .{});
+                if (s.get_keyword()) |k| {
+                    s.tok = k;
+                } else {
+                    s.tok = .identifier;
+                    s.literal = s.buffer[s.placeholder..s.index];
+                }
+                s.state = .base;
+            },
+            .read_num => {
+                s.tok = .int;
+                s.literal = s.buffer[s.placeholder..s.index];
+                s.state = .base;
+            },
+            .read_float => {
+                s.tok = .float;
+                s.literal = s.buffer[s.placeholder..s.index];
+                s.state = .base;
+            },
+            else => {},
+        }
     }
 
     fn get_keyword(s: *Lexer) ?TokenType {
@@ -265,10 +317,21 @@ pub fn main() !void {
     var l = Lexer.init(x);
 
     l.next_tok();
-
-    std.debug.assert(l.tok == .mut);
-    // std.debug.assert(std.mem.eql(u8, l.literal orelse "", "ident"));
-    // std.debug.assert(l.state == .base);
+    test_for(l, .lparen, null);
+    l.next_tok();
+    test_for(l, .rparen, null);
+    l.next_tok();
+    test_for(l, .lbrack, null);
+    l.next_tok();
+    test_for(l, .rbrack, null);
+    l.next_tok();
+    test_for(l, .lbrace, null);
+    l.next_tok();
+    test_for(l, .rbrace, null);
+    l.next_tok();
+    test_for(l, .colon, null);
+    l.next_tok();
+    test_for(l, .semicolon, null);
 }
 
 pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {
@@ -276,4 +339,11 @@ pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {
     defer file.close();
     const stat = try file.stat();
     return try file.readToEndAlloc(a, stat.size);
+}
+
+pub fn test_for(lex: Lexer, t: TokenType, l: ?[]const u8) void {
+    std.debug.assert(lex.tok == t);
+    if(l) |lit| {
+        std.debug.assert(std.mem.eql(u8, lex.literal orelse "", lit));
+    }
 }
