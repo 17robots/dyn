@@ -252,10 +252,10 @@ void metaprogramming() {
   };
 
   void printType(comp type T) {
-    std.meta.Type t = @typeOf(T);
+    std.meta.Type t = $typeOf(T);
     match t.Type {
       .Int: |int| { io.println(`integer {t.name}, {int.bits}, {bool(int.signed)}`); },
-      _: @compError("issue here, we need int type");
+      _: $compError("issue here, we need int type");
     }
   }
 }
