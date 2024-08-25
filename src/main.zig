@@ -8,6 +8,7 @@ pub const TokenType = enum {
     int,
     float,
     string,
+    char,
     // operators
     add, // +
     sub, // -
@@ -48,7 +49,12 @@ pub const TokenType = enum {
     colon, // :
     semicolon, // ;
     underscore, // _
+    comma, // ,
     arrow, // =>
+    bang, // !
+    bangeq, // !=
+    question, // ?
+    dollar, // $
     // keywords
     module,
     use,
@@ -99,9 +105,13 @@ pub const Lexer = struct {
         read_eq,
         read_gt,
         read_lt,
+        read_bang,
+        read_dot,
     };
     const LexingError = error{
         InvalidCharacter,
+        InvalidEscape,
+        InvalidCharLength,
     };
 
     fn init(buffer: []const u8) Lexer {
@@ -110,18 +120,23 @@ pub const Lexer = struct {
 
     fn is_whitespace(s: Lexer) bool {
         return switch (s.buffer[s.index]) {
-            ' ', '\t', '\n' => true,
+            ' ', '\t', '\n', '\r' => true,
             else => false,
         };
     }
 
     fn next_tok(s: *Lexer) void {
+        if (s.err != null) { // if err dont try reading the stream
+            return;
+        }
         // skip whitespace
-        while (s.is_whitespace() or s.buffer.len < s.index) {
-            if (s.buffer[s.index] == '\n') {
-                // do something with line count and col
+        if (s.state != .read_string) {
+            while (s.index < s.buffer.len and s.is_whitespace()) {
+                if (s.buffer[s.index] == '\n') {
+                    // do something with line count and col
+                }
+                s.index += 1;
             }
-            s.index += 1;
         }
         s.placeholder = s.index;
         while (s.index < s.buffer.len) {
@@ -129,17 +144,64 @@ pub const Lexer = struct {
                 .base => switch (s.buffer[s.index]) {
                     'a'...'z', 'A'...'Z', '_' => s.state = .read_word,
                     '0'...'9' => s.state = .read_num,
-                    '.' => s.state = .read_float,
+                    '.' => s.state = .read_dot,
                     '\"' => s.state = .read_string,
                     '\'' => s.state = .read_char,
-                    '(' => { s.tok = .lparen; s.index += 1; },
-                    ')' => { s.tok = .rparen; s.index += 1; },
-                    '[' => { s.tok = .lbrack; s.index += 1; },
-                    ']' => { s.tok = .rbrack; s.index += 1; },
-                    '{' => { s.tok = .lbrace; s.index += 1; },
-                    '}' => { s.tok = .rbrace; s.index += 1; },
-                    ':' => { s.tok = .colon; s.index += 1; },
-                    ';' => { s.tok = .semicolon; s.index += 1; },
+                    '(' => {
+                        s.tok = .lparen;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    ')' => {
+                        s.tok = .rparen;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    '[' => {
+                        s.tok = .lbrack;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    ']' => {
+                        s.tok = .rbrack;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    '{' => {
+                        s.tok = .lbrace;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    '}' => {
+                        s.tok = .rbrace;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    ':' => {
+                        s.tok = .colon;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    ';' => {
+                        s.tok = .semicolon;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    ',' => {
+                        s.tok = .comma;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    '?' => {
+                        s.tok = .question;
+                        s.literal = null;
+                        s.index += 1;
+                    },
+                    '$' => {
+                        s.tok = .dollar;
+                        s.literal = null;
+                        s.index += 1;
+                    },
                     '+' => s.state = .read_add,
                     '-' => s.state = .read_sub,
                     '*' => s.state = .read_mul,
@@ -152,6 +214,7 @@ pub const Lexer = struct {
                     '=' => s.state = .read_eq,
                     '>' => s.state = .read_gt,
                     '<' => s.state = .read_lt,
+                    '!' => s.state = .read_bang,
                     else => {
                         s.tok = .invalid;
                         s.err = LexingError.InvalidCharacter;
@@ -187,9 +250,39 @@ pub const Lexer = struct {
                 .read_float => {
                     switch (s.buffer[s.index]) {
                         '0'...'9' => {},
+                        '.' => {
+                            if (s.index > 0 and s.buffer[s.index - 1] == '.') {
+                                s.index -= 1;
+                                s.tok = .int;
+                                s.literal = s.buffer[s.placeholder..s.index];
+                                s.state = .base;
+                            } else {
+                                s.tok = .float;
+                                s.literal = s.buffer[s.placeholder..s.index];
+                                s.state = .base;
+                            }
+                        },
                         else => {
                             s.tok = .float;
                             s.literal = s.buffer[s.placeholder..s.index];
+                            s.state = .base;
+                        },
+                    }
+                },
+                .read_dot => {
+                    switch (s.buffer[s.index]) {
+                        '0'...'9' => {
+                            s.state = .read_float;
+                        },
+                        '.' => {
+                            s.tok = .dotdot;
+                            s.literal = null;
+                            s.state = .base;
+                            s.index += 1;
+                        },
+                        else => {
+                            s.tok = .dot;
+                            s.literal = null;
                             s.state = .base;
                         },
                     }
@@ -199,11 +292,190 @@ pub const Lexer = struct {
                         '\"' => {
                             s.tok = .string;
                             s.literal = s.buffer[(s.placeholder + 1)..s.index];
+                            s.index += 1;
+                            s.state = .base;
                         },
                         else => {},
                     }
                 },
-                else => {},
+                .read_char => {
+                    switch (s.buffer[s.index]) {
+                        '\'' => {
+                            if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
+                                s.tok = .invalid;
+                                s.err = LexingError.InvalidEscape;
+                                s.state = .base;
+                            } else {
+                                s.tok = .char;
+                                s.literal = s.buffer[(s.placeholder + 1)..s.index];
+                                s.state = .base;
+                                s.index += 1;
+                                return;
+                            }
+                        },
+                        '\\' => {
+                            s.index += 1;
+                            switch (s.buffer[s.index]) {
+                                '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
+                                else => {
+                                    s.tok = .invalid;
+                                    s.state = .base;
+                                    s.err = LexingError.InvalidEscape;
+                                    return;
+                                },
+                            }
+                        }, // check for valid escape sequences
+                        else => {},
+                    }
+                },
+                .read_add => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '+' => .addadd,
+                        '=' => .addeq,
+                        else => .add,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .add) {
+                        s.index += 1;
+                    }
+                },
+                .read_sub => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '-' => .subsub,
+                        '=' => .subeq,
+                        else => .sub,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .sub) {
+                        s.index += 1;
+                    }
+                },
+                .read_mul => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .muleq,
+                        else => .mul,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .mul) {
+                        s.index += 1;
+                    }
+                },
+                .read_div => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .diveq,
+                        else => .div,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .div) {
+                        s.index += 1;
+                    }
+                },
+                .read_mod => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .modeq,
+                        else => .mod,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .mod) {
+                        s.index += 1;
+                    }
+                },
+                .read_and => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '&' => .andand,
+                        '=' => .andeq,
+                        else => .@"and",
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .@"and") {
+                        s.index += 1;
+                    }
+                },
+                .read_or => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '|' => .oror,
+                        '=' => .oreq,
+                        else => .@"or",
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .@"or") {
+                        s.index += 1;
+                    }
+                },
+                .read_xor => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .xoreq,
+                        else => .xor,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .xor) {
+                        s.index += 1;
+                    }
+                },
+                .read_flip => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .flipeq,
+                        else => .flip,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .flip) {
+                        s.index += 1;
+                    }
+                },
+                .read_eq => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '>' => .arrow,
+                        '=' => .eqeq,
+                        else => .eq,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .eq) {
+                        s.index += 1;
+                    }
+                },
+                .read_gt => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .gteq,
+                        else => .gt,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .gt) {
+                        s.index += 1;
+                    }
+                },
+                .read_lt => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .lteq,
+                        else => .lt,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .lt) {
+                        s.index += 1;
+                    }
+                },
+                .read_bang => {
+                    s.tok = switch (s.buffer[s.index]) {
+                        '=' => .bangeq,
+                        else => .bang,
+                    };
+                    s.literal = null;
+                    s.state = .base;
+                    if (s.tok != .bang) {
+                        s.index += 1;
+                    }
+                },
             }
             if (s.state == .base) {
                 return;
@@ -211,8 +483,11 @@ pub const Lexer = struct {
             s.index += 1;
         }
         switch (s.state) {
+            .base => {
+                s.tok = .eof;
+                s.literal = null;
+            },
             .read_word => {
-                std.debug.print("here", .{});
                 if (s.get_keyword()) |k| {
                     s.tok = k;
                 } else {
@@ -231,7 +506,113 @@ pub const Lexer = struct {
                 s.literal = s.buffer[s.placeholder..s.index];
                 s.state = .base;
             },
-            else => {},
+            .read_add => {
+                s.tok = .add;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_sub => {
+                s.tok = .sub;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_mul => {
+                s.tok = .add;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_div => {
+                s.tok = .div;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_mod => {
+                s.tok = .mod;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_and => {
+                s.tok = .@"and";
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_or => {
+                s.tok = .@"or";
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_xor => {
+                s.tok = .xor;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_flip => {
+                s.tok = .flip;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_eq => {
+                s.tok = .eq;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_gt => {
+                s.tok = .gt;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_lt => {
+                s.tok = .lt;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_bang => {
+                s.tok = .bang;
+                s.literal = null;
+                s.state = .base;
+            },
+            .read_string => {
+                if (s.buffer[s.index] != '\"') {
+                    // error out
+                }
+                s.tok = .string;
+                s.literal = s.buffer[s.placeholder..s.index];
+                s.state = .base;
+            },
+            .read_char => {
+                if (s.buffer[s.index] != '\'') {
+                    // error out
+                }
+                if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
+                    s.tok = .invalid;
+                    s.err = LexingError.InvalidEscape;
+                    s.state = .base;
+                } else {
+                    s.tok = .char;
+                    s.literal = s.buffer[(s.placeholder + 1)..s.index];
+                    s.state = .base;
+                    s.index += 1;
+                }
+            },
+            .read_dot => {
+                switch (s.buffer[s.index]) {
+                    '0'...'9' => {
+                        s.state = .read_float;
+                    },
+                    '.' => {
+                        s.tok = .dotdot;
+                        s.literal = null;
+                        s.state = .base;
+                        s.index += 1;
+                    },
+                    else => {
+                        s.tok = .dot;
+                        s.literal = null;
+                        s.state = .base;
+                        s.index += 1;
+                    },
+                }
+            },
         }
     }
 
@@ -301,7 +682,9 @@ pub const Lexer = struct {
 
     fn get_error(s: *Lexer) []const u8 {
         return switch (s.err) {
-            .InvalidCharacter => "Invalid Characer",
+            .InvalidCharacter => "Invalid Character",
+            .InvalidEscape => "Invalid Escape",
+            .InvalidCharLength => "Invalid Character Length",
         };
     }
 };
@@ -312,26 +695,13 @@ pub fn main() !void {
     const alloc = arena.allocator();
     defer arena.deinit();
 
-    const x = try read_file(alloc, "./src/main.dyn");
+    const x = try read_file(alloc, "syntax.dyn");
 
     var l = Lexer.init(x);
-
-    l.next_tok();
-    test_for(l, .lparen, null);
-    l.next_tok();
-    test_for(l, .rparen, null);
-    l.next_tok();
-    test_for(l, .lbrack, null);
-    l.next_tok();
-    test_for(l, .rbrack, null);
-    l.next_tok();
-    test_for(l, .lbrace, null);
-    l.next_tok();
-    test_for(l, .rbrace, null);
-    l.next_tok();
-    test_for(l, .colon, null);
-    l.next_tok();
-    test_for(l, .semicolon, null);
+    while (l.tok != .eof and l.tok != .invalid) {
+        l.next_tok();
+        print_token(l);
+    }
 }
 
 pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {
@@ -343,7 +713,90 @@ pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {
 
 pub fn test_for(lex: Lexer, t: TokenType, l: ?[]const u8) void {
     std.debug.assert(lex.tok == t);
-    if(l) |lit| {
+    if (l) |lit| {
         std.debug.assert(std.mem.eql(u8, lex.literal orelse "", lit));
     }
+}
+
+pub fn print_token(l: Lexer) void {
+    std.debug.print("{s} {s}\n", .{
+        if (l.tok) |tok|
+            switch (tok) {
+                .eof => "eof",
+                .invalid => "invalid",
+                .identifier => "identifier",
+                .int => "int",
+                .float => "float",
+                .string => "string",
+                .char => "char",
+                .add => "add",
+                .sub => "sub",
+                .mul => "mul",
+                .div => "div",
+                .mod => "mod",
+                .@"and" => "and",
+                .@"or" => "or",
+                .xor => "xor",
+                .flip => "flip",
+                .eq => "eq",
+                .addeq => "addeq",
+                .addadd => "addadd",
+                .subeq => "subeq",
+                .subsub => "subsub",
+                .muleq => "muleq",
+                .diveq => "diveq",
+                .modeq => "modeq",
+                .andeq => "andeq",
+                .oreq => "oreq",
+                .xoreq => "xoreq",
+                .flipeq => "flipeq",
+                .andand => "andand",
+                .oror => "oror",
+                .eqeq => "eqeq",
+                .gt => "gt",
+                .lt => "lt",
+                .gteq => "gteq",
+                .lteq => "lteq",
+                .lparen => "lparen",
+                .rparen => "rparen",
+                .lbrack => "lbrack",
+                .rbrack => "rbrack",
+                .lbrace => "lbrace",
+                .rbrace => "rbrace",
+                .dot => "dot",
+                .dotdot => "dotdot",
+                .colon => "colon",
+                .semicolon => "semicolon",
+                .underscore => "underscore",
+                .comma => "comma",
+                .arrow => "arrow",
+                .bang => "bang",
+                .bangeq => "bangeq",
+                .question => "question",
+                .dollar => "dollar",
+                .module => "module",
+                .use => "use",
+                .void => "void",
+                .mut => "mut",
+                .true => "true",
+                .false => "false",
+                .@"if" => "if",
+                .@"else" => "else",
+                .match => "match",
+                .@"defer" => "defer",
+                .loop => "loop",
+                .@"for" => "for",
+                .@"enum" => "enum",
+                .@"error" => "error",
+                .@"try" => "try",
+                .@"catch" => "catch",
+                .@"union" => "union",
+                .@"struct" => "struct",
+                .type => "type",
+                .comp => "comp",
+            }
+        else
+            "",
+        l.literal orelse "",
+    });
 }

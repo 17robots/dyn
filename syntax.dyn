@@ -40,13 +40,13 @@ void optionals() {
   mut i32? optional_value_2 = null;
 
   if optional_value != null {
-    io.println(`Optional value: {optional_value.?}`);
+    io.println("Optional value: {optional_value.?}");
   } else {
     io.println("Optional value: null");
   }
 
   if optional_value_2 |x| {
-    io.println(`Optional value 2: {x}`);
+    io.println("Optional value 2: {x}");
   }
   if optional_value_2 |*x| {
     x.* = 4;
@@ -61,7 +61,7 @@ void pointers() {
   i32* a = &x;
   mut i32* b = a;
 
-  io.println(`x == dereferenced a? { x == a.*}`);
+  io.println("x == dereferenced a? { x == a.*}");
 
   b = &y;
   b.* = 5;
@@ -135,7 +135,7 @@ void functions() {
   void manipulate_numbers(i32* result, i32 x, y) => result.* = x + y;
   mut i32 y = 5;
   manipulate_numbers(&y, local, state);
-  io.println(`String interpolated values {some_math(1, 2)}`);
+  io.println("String interpolated values {some_math(1, 2)}");
 }
 
 void enums() {
@@ -173,7 +173,7 @@ void errors() {
   }
 
   try_me() catch |e| {
-    io.println(`{e} was thrown`);
+    io.println("{e} was thrown");
     return;
   }
 
@@ -221,11 +221,11 @@ void structs() {
 
   X x = { a = 1, b = 2, c = 3, x = 1.0, y = 1.0, z = 1.0 };
   Y y = { a = 1.0, b = 2.0, c = 3.0, x = 1, y = 1, z = 1 };
-  io.println(`{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}`);
-  io.println(`{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}`);
+  io.println("{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}");
+  io.println("{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}");
 
-  void printX(X x) => io.println(`{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}`);
-  void printY(Y y) => io.println(`{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}`);
+  void printX(X x) => io.println("{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}");
+  void printY(Y y) => io.println("{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}");
 
   void updateX(X* x) => x.*.a = x.*.a + 1;
 
@@ -234,7 +234,7 @@ void structs() {
   struct MethodExample {
     i32 a = 0,
     MethodExample init(i32 a) => { a = a },
-    void print(s: MethodExample) => io.println(`{s.a}`),
+    void print(s: MethodExample) => io.println("{s.a}"),
     void setADouble(s: *MethodExample) => s.*.a = s.*.a * 2
   }
 }
@@ -254,7 +254,7 @@ void metaprogramming() {
   void printType(comp type T) {
     std.meta.Type t = $typeOf(T);
     match t.Type {
-      .Int: |int| { io.println(`integer {t.name}, {int.bits}, {bool(int.signed)}`); },
+      .Int: |int| { io.println("integer {t.name}, {int.bits}, {bool(int.signed)}"); },
       _: $compError("issue here, we need int type");
     }
   }
