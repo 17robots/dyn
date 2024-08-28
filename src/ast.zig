@@ -1,34 +1,20 @@
-const lexer = @import("lexer.zig");
-
-pub const Declaration = struct {
-    public: bool,
-    metadata: anyopaque,
+pub const NodeType = enum {
+    // declarations
+    declaration,
+    packageDeclaration,
+    useDeclaration,
+    variableDeclaration,
+    typeDeclaration,
+    functionDeclaration,
+    // statements
+    // expressions
 };
 
-pub const Statement = struct {};
-
-pub const Expression = struct {};
-
-pub const Program = struct {
-    module_name: []const u8,
-    decls: []Declaration,
-    eof: ?*lexer.TokenType,
+pub const Node = struct {
+    t: NodeType,
+    l: ?*Node,
+    r: ?*Node,
+    metadata: ?anyopaque,
 };
 
-// decls
-pub const UseDecl = struct {};
-pub const VariableDecl = struct {};
-pub const TypeDecl = struct {};
-
-// stmts
-pub const BlockStmt = struct {};
-
-pub const LabeledStmt = struct {};
-
-pub const ExpressionStmt = struct {};
-
-pub const AssignStmt = struct {};
-
-pub const BranchStmt = struct {};
-
-// exprs
+// node metainformation
