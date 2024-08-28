@@ -6,8 +6,33 @@ pub const NodeType = enum {
     variableDeclaration,
     typeDeclaration,
     functionDeclaration,
+    structDeclaration,
+    unionDeclaration,
+    enumDeclaration,
     // statements
+    assignStmt,
+    returnStmt,
+    deferStmt,
+    ifStmt,
+    loopStmt,
+    forStmt,
+    matchStmt,
+    rangeClause,
+    matchBranch,
     // expressions
+    integerTypeExpression,
+    literalExpression,
+    functionLiteral,
+    parenExpression,
+    memberAccessorExpression,
+    arrayAccessorExpression,
+    sliceExpression,
+    operationExpression,
+    functionCallExpression,
+    arrayTypeExpression,
+    structLiteral,
+    functionTypeExpression,
+    structTypeExpression,
 };
 
 pub const Node = struct {
@@ -18,3 +43,38 @@ pub const Node = struct {
 };
 
 // node metainformation
+const Declaration = struct {
+
+};
+
+const PackageDeclaration = struct {
+
+};
+
+const UseDeclaration = struct {
+
+};
+
+const VariableDeclaration = struct {
+
+};
+
+const TypeDeclaration = struct {
+
+};
+
+const FunctionDeclaration = struct {
+
+};
+
+const StructDeclaration = struct {
+
+};
+
+const UnionDeclaration = struct {
+
+};
+
+const EnumDeclaration = struct {
+
+};
