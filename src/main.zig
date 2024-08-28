@@ -13,7 +13,16 @@ pub fn main() !void {
     var l = Lexer.init(x);
     while (l.tok != .eof and l.tok != .invalid) {
         l.next_tok();
-        print_token(l);
+        if (l.err) |err| {
+            switch (err) {
+                .InvalidCharacter => std.debug.print("Line {} Column {}: Invalid Character {c}", .{ l.line, l.col, l.buffer[l.index] }),
+                .InvalidEscape => std.debug.print("Line {} Col {}: Invalid Escape {c}", .{ l.line, l.col, l.buffer[l.index] }),
+                .InvalidCharLength => std.debug.print("Line {} Col {}: Invalid Char Length", .{ l.line, l.col }),
+            }
+            break;
+        } else {
+            print_token(l);
+        }
     }
 }
 

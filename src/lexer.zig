@@ -9,6 +9,8 @@ pub const Lexer = struct {
     literal: ?[]const u8,
     state: LexingState,
     err: ?LexingError,
+    line: usize,
+    col: usize,
     const LexingState = enum {
         base,
         read_word,
@@ -32,14 +34,14 @@ pub const Lexer = struct {
         read_dot,
         read_underscore,
     };
-    const LexingError = error{
+    const LexingError = enum {
         InvalidCharacter,
         InvalidEscape,
         InvalidCharLength,
     };
 
     pub fn init(buffer: []const u8) Lexer {
-        return .{ .buffer = buffer, .index = 0, .placeholder = 0, .tok = null, .literal = null, .err = null, .state = .base };
+        return .{ .buffer = buffer, .index = 0, .line = 1, .col = 1, .placeholder = 0, .tok = null, .literal = null, .err = null, .state = .base };
     }
 
     fn is_whitespace(s: Lexer) bool {
@@ -57,7 +59,8 @@ pub const Lexer = struct {
         if (s.state != .read_string) {
             while (s.index < s.buffer.len and s.is_whitespace()) {
                 if (s.buffer[s.index] == '\n') {
-                    // do something with line count and col
+                    s.line += 1;
+                    s.col = 1;
                 }
                 s.index += 1;
             }
@@ -147,7 +150,7 @@ pub const Lexer = struct {
                     },
                 },
                 .read_underscore => {
-                    switch(s.buffer[s.index]) {
+                    switch (s.buffer[s.index]) {
                         'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
                         else => {
                             s.tok = .underscore;
@@ -238,7 +241,7 @@ pub const Lexer = struct {
                         '\'' => {
                             if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                                 s.tok = .invalid;
-                                s.err = LexingError.InvalidEscape;
+                                s.err = LexingError.InvalidCharLength;
                                 s.state = .base;
                             } else {
                                 s.tok = .char;
@@ -416,6 +419,7 @@ pub const Lexer = struct {
                 return;
             }
             s.index += 1;
+            s.col += 1;
         }
         switch (s.state) {
             .base => {
@@ -601,13 +605,5 @@ pub const Lexer = struct {
             return .comp;
         }
         return null;
-    }
-
-    fn get_error(s: *Lexer) []const u8 {
-        return switch (s.err) {
-            .InvalidCharacter => "Invalid Character",
-            .InvalidEscape => "Invalid Escape",
-            .InvalidCharLength => "Invalid Character Length",
-        };
     }
 };
