@@ -1,80 +1,71 @@
+const std = @import("std");
 pub const NodeType = enum {
-    // declarations
-    declaration,
-    packageDeclaration,
+    program,
+    moduleDeclaration,
     useDeclaration,
-    variableDeclaration,
-    typeDeclaration,
-    functionDeclaration,
-    structDeclaration,
-    unionDeclaration,
-    enumDeclaration,
-    // statements
-    assignStmt,
-    returnStmt,
-    deferStmt,
-    ifStmt,
-    loopStmt,
-    forStmt,
-    matchStmt,
-    rangeClause,
-    matchBranch,
-    // expressions
-    integerTypeExpression,
-    literalExpression,
-    functionLiteral,
-    parenExpression,
-    memberAccessorExpression,
-    arrayAccessorExpression,
-    sliceExpression,
-    operationExpression,
-    functionCallExpression,
-    arrayTypeExpression,
-    structLiteral,
-    functionTypeExpression,
-    structTypeExpression,
+    useBlock,
+    literal,
+    identifier,
 };
 
 pub const Node = struct {
     t: NodeType,
-    l: ?*Node,
-    r: ?*Node,
+    nodes: std.MultiArrayList(?Node),
     metadata: ?anyopaque,
+
+    pub fn init(t: NodeType, metadata: ?anyopaque) Node {
+        return Node{ .t = t, .nodes = {}, .metadata = metadata };
+    }
 };
 
-// node metainformation
-const Declaration = struct {
-
+pub const LiteralMetadata = struct {
+    kind: LiteralKind,
+    val: []const u8,
+    pub const LiteralKind = enum {
+        string,
+        int,
+        float,
+    };
 };
 
-const PackageDeclaration = struct {
-
+pub const IdentifierMetadata = struct {
+    val: []const u8,
 };
 
-const UseDeclaration = struct {
-
-};
-
-const VariableDeclaration = struct {
-
-};
-
-const TypeDeclaration = struct {
-
-};
-
-const FunctionDeclaration = struct {
-
-};
-
-const StructDeclaration = struct {
-
-};
-
-const UnionDeclaration = struct {
-
-};
-
-const EnumDeclaration = struct {
-
-};
+// useBlock,
+// useDeclaration,
+// functionDeclaration,
+// functionCall,
+// variableDeclaration,
+// literal,
+// typeLiteral,
+// optionalType,
+// pointerType,
+// arrayType,
+// variableReference,
+// pointerDereference,
+// condition,
+// block,
+// match,
+// matchBranch,
+// deferStatement,
+// breakStatement,
+// returnStatement,
+// loop,
+// forStatement,
+// rangeClause,
+// capture,
+// loopModifier,
+// arrayLiteral,
+// structLiteral,
+// callArgs,
+// declArgs,
+// errorDecl,
+// errorMember,
+// errorType,
+// tryStatement,
+// catchStatement,
+// unionDeclaration,
+// unionMember,
+// unionLiteral,
+// selectionExpression,

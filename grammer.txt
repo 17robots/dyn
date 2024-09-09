@@ -1,0 +1,99 @@
+(* Top-level constructs *)
+Program = ModuleDeclaration UseDeclaration { FunctionDefinition | StructDefinition | EnumDefinition | UnionDefinition | ErrorDefinition | TypeDefinition } ;
+
+(* Module and use declarations *)
+ModuleDeclaration = "module" StringLiteral ;
+UseDeclaration = "use" "{" { StringLiteral } "}" | "use" Identifier StringLiteral;
+
+(* Function definition *)
+FunctionDefinition = [ "inline" ] ReturnType Identifier "(" [ ParameterList ] ")" ( Block | "=>" Expression ) ;
+ReturnType = Type | "void" | Type "!" [ ErrorType ] ;
+ParameterList = Parameter { "," Parameter } ;
+Parameter = [ "mut" ] [ "comp" ] Type [ Identifier ] ;
+
+(* Block and statements *)
+Block = "{" { Statement } "}" ;
+Statement = VariableDeclaration | AssignmentStatement | IfStatement | LoopStatement | ForStatement | MatchStatement | DeferStatement | InlineStatement | Expression ";" ;
+
+(* Variable declaration and assignment *)
+VariableDeclaration = [ "mut" ] [ "comp" ] Type Identifier [ "=" Expression ] "," ;
+AssignmentStatement = ( Identifier | DereferenceExpression ) ( "=" | "+=" | "-=" | "*=" | "/=" ) Expression ";" ;
+
+(* Control flow structures *)
+IfStatement = "if" Expression [ "|" Identifier "|" ] Block [ "else" ( IfStatement | Block ) ] ;
+LoopStatement = "loop" Block ;
+ForStatement = [ "inline" ] "for" ( RangeExpression | Identifier ) "|" Identifier "|" [ ":" "(" Expression ")" ] Block ;
+MatchStatement = "match" Expression "{" { MatchArm } "}" ;
+MatchArm = ( LiteralPattern | RangePattern | "." Identifier | "_" [ "if" Expression ] ) ":" Block ;
+DeferStatement = "defer" ( Block | "|" Identifier "|" Block ) ;
+InlineStatement = "inline" ( Block | Expression ) ;
+
+(* Types *)
+Type = PrimitiveType | CustomType | OptionalType | PointerType | ArrayType | CompTimeType ;
+PrimitiveType = IntegerType | FloatType | "u8" | "u1" ;
+IntegerType = ( "i" | "u" ) Digits ;
+FloatType = "f32" | "f64" ;
+OptionalType = Type "?" ;
+PointerType = [ "mut" ] Type "*" ;
+ArrayType = Type "[" [ Expression ] "]" ;
+CompTimeType = "comp" Type ;
+
+(* Struct, enum, and union definitions *)
+StructDefinition = "struct" Identifier [ "(" [ CompTimeParameterList ] ")" ] "{" { StructMember } "}" ;
+StructMember = FieldDeclaration | MethodDefinition ;
+FieldDeclaration = Type Identifier { "," Identifier } [ "=" Expression ] "," ;
+MethodDefinition = [ "inline" ] ReturnType Identifier "(" [ MethodParameterList ] ")" ( Block | "=>" Expression ) "," ;
+MethodParameterList = [ "s" ":" [ "*" ] Identifier ] { "," Parameter } ;
+EnumDefinition = "enum" Identifier "{" { Identifier } "}" ;
+UnionDefinition = "union" Identifier [ "(" "error" ")" ] "{" { FieldDeclaration } "}" ;
+
+(* Error definition *)
+ErrorDefinition = "error" Identifier "{" { Identifier } "}" ;
+
+(* Type definition *)
+TypeDefinition = "type" Identifier [ "(" [ CompTimeParameterList ] ")" ] "=" Type ";" ;
+
+(* Expressions *)
+Expression = LiteralExpression | IdentifierExpression | BinaryExpression | UnaryExpression | FunctionCall | MemberAccess | IndexAccess | AddressOfExpression | DereferenceExpression | TryExpression | CatchExpression | CompTimeExpression ;
+LiteralExpression = IntegerLiteral | FloatLiteral | StringLiteral | CharLiteral | BooleanLiteral | NullLiteral | "undefined" | CompTimeLiteral ;
+IdentifierExpression = Identifier ;
+BinaryExpression = Expression Operator Expression ;
+UnaryExpression = Operator Expression ;
+FunctionCall = Identifier "(" [ ArgumentList ] ")" ;
+ArgumentList = Expression { "," Expression } ;
+MemberAccess = Expression "." ( Identifier | "?" ) ;
+IndexAccess = Expression "[" Expression "]" ;
+AddressOfExpression = "&" Expression ;
+DereferenceExpression = Expression ".*" ;
+TryExpression = "try" Expression ;
+CatchExpression = Expression "catch" "|" Identifier "|" Block ;
+
+(* Metaprogramming *)
+CompTimeExpression = CompTimeFunctionCall ;
+CompTimeFunctionCall = "$" CompTimeBuiltinFunction ;
+CompTimeBuiltinFunction = "typeOf" | "bitSize" | "alignOf" | "sizeOf" | "offsetOf" | "This" | (* other built-in functions *) ;
+CompTimeParameterList = CompTimeParameter { "," CompTimeParameter } ;
+CompTimeParameter = "comp" Type Identifier ;
+CompTimeLiteral = CompTimeIntLiteral | CompTimeFloatLiteral ;
+CompTimeIntLiteral = "comp" IntegerLiteral ;
+CompTimeFloatLiteral = "comp" FloatLiteral ;
+
+(* Lexical elements *)
+Identifier = Letter { Letter | Digit | "_" } ;
+IntegerLiteral = Digit { Digit } ;
+FloatLiteral = Digit { Digit } "." Digit { Digit } ;
+StringLiteral = '"' { Character } '"' ;
+CharLiteral = "'" Character "'" ;
+BooleanLiteral = "true" | "false" ;
+NullLiteral = "null" ;
+Operator = "+" | "-" | "*" | "/" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" ;
+Letter = "A" | "B" | "C" | ... | "Z" | "a" | "b" | "c" | ... | "z" ;
+Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+Character = (* Any valid Unicode character *) ;
+
+(* Additional rules that may need to be defined *)
+RangeExpression = (* Definition for range expressions *) ;
+RangePattern = (* Definition for range patterns in match statements *) ;
+LiteralPattern = (* Definition for literal patterns in match statements *) ;
+CustomType = (* Definition for user-defined types *) ;
+ErrorType = (* Definition for error types *) ;

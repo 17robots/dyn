@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("errors.zig");
 const TokenType = @import("token.zig").TokenType;
 
 pub const Lexer = struct {
@@ -8,7 +9,7 @@ pub const Lexer = struct {
     tok: ?TokenType,
     literal: ?[]const u8,
     state: LexingState,
-    err: ?LexingError,
+    err: ?errors.Error,
     line: usize,
     col: usize,
     const LexingState = enum {
@@ -33,11 +34,6 @@ pub const Lexer = struct {
         read_bang,
         read_dot,
         read_underscore,
-    };
-    const LexingError = enum {
-        InvalidCharacter,
-        InvalidEscape,
-        InvalidCharLength,
     };
 
     pub fn init(buffer: []const u8) Lexer {
@@ -145,7 +141,7 @@ pub const Lexer = struct {
                     '_' => s.state = .read_underscore,
                     else => {
                         s.tok = .invalid;
-                        s.err = LexingError.InvalidCharacter;
+                        s.err = errors.Error.InvalidCharacter;
                         return;
                     },
                 },
@@ -241,7 +237,7 @@ pub const Lexer = struct {
                         '\'' => {
                             if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                                 s.tok = .invalid;
-                                s.err = LexingError.InvalidCharLength;
+                                s.err = errors.Error.InvalidCharLength;
                                 s.state = .base;
                             } else {
                                 s.tok = .char;
@@ -258,7 +254,7 @@ pub const Lexer = struct {
                                 else => {
                                     s.tok = .invalid;
                                     s.state = .base;
-                                    s.err = LexingError.InvalidEscape;
+                                    s.err = errors.Error.InvalidEscape;
                                     return;
                                 },
                             }
@@ -511,7 +507,7 @@ pub const Lexer = struct {
                 }
                 if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                     s.tok = .invalid;
-                    s.err = LexingError.InvalidEscape;
+                    s.err = errors.Error.InvalidEscape;
                     s.state = .base;
                 } else {
                     s.tok = .char;
@@ -603,6 +599,9 @@ pub const Lexer = struct {
         }
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "comp")) {
             return .comp;
+        }
+        if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "pub")) {
+            return .@"pub";
         }
         return null;
     }

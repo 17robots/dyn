@@ -74,5 +74,5 @@ pub const TokenType = enum {
     @"struct",
     type,
     comp,
+    @"pub",
 };
-

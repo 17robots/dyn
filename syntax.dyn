@@ -5,6 +5,7 @@ use {
   "std:heap"
   "std:sync"
   "std:math"
+  test "testLib"
 }
 
 void main() {
