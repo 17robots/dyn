@@ -17,25 +17,24 @@ pub const Parser = struct {
     }
 
     pub fn file(s: *Parser) ?ast.Node {
-        const n: ?ast.Node = null;
+        const root: ?ast.Node = null;
         s.l.next_tok();
-        // we have to have a module declaration at the top
-        n = ast.Node.init(.program, null);
+        root = ast.Node.init(.program, null);
 
         if (s.module()) |mod| {
-            n.nodes.append(s.allocator, mod);
+            root.nodes.append(s.allocator, mod);
         } else {
             // error out here because we dont want to do anything if the file is broken
         }
         while (!s.expect(.eof)) {
-            s.l.next_tok();
-            if (s.expect(.@"struct")) {} // parse struct
-            else if (s.expect(.@"enum")) {} // parse enum
-            else if (s.expect(.@"pub")) {} // parse pub decl
-            else if (s.expect(.@"union")) {} // parse union
-            else if (s.expect(.@"error")) {} // parse error
+            const dec = s.declaration();
+            if (dec) |d| {
+                root.nodes.append(s.allocator, d);
+            } else {
+                // we error out
+            }
         }
-        return n;
+        return root;
     }
 
     pub fn expect(s: *Parser, t: ?token.TokenType) bool {
@@ -53,6 +52,23 @@ pub const Parser = struct {
             }
         }
     }
+
+    pub fn declaration(s: *Parser) ?ast.Node {
+        s.l.next_tok();
+        if (s.expect(.@"struct")) {} // parse struct
+        else if (s.expect(.@"enum")) {} // parse enum
+        else if (s.expect(.@"pub")) {} // parse pub decl
+        else if (s.expect(.@"union")) {} // parse union
+        else if (s.expect(.@"error")) {} // parse error
+        else if (s.expect(.mut)) {} else {}
+    }
+
+    pub fn statement(s: *Parser) ?ast.Node {
+        s.l.next_tok();
+        if (s.expect(.@"if")) {} else if (s.expect(.loop)) {} else if (s.expect(.@"for")) {} else if (s.expect(.identifier)) {} else if (s.expect(.mut)) {} else if (s.expect(.match)) {} else if (s.expect(.@"defer")) {} else if (s.expect(.@"return")) {}
+    }
+
+    pub fn expression(s: *Parser) ?ast.Node {}
 
     pub fn module(s: *Parser) ?ast.Node {
         if (s.expect(.module)) {
