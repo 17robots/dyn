@@ -10,26 +10,27 @@ pub const NodeType = enum {
 
 pub const Node = struct {
     t: NodeType,
-    nodes: std.MultiArrayList(?Node),
-    metadata: ?anyopaque,
+    nodes: std.ArrayList(?Node),
+    metadata: ?Metadata,
 
-    pub fn init(t: NodeType, metadata: ?anyopaque) Node {
-        return Node{ .t = t, .nodes = {}, .metadata = metadata };
+    pub fn init(alloc: std.mem.Allocator, t: NodeType, metadata: ?Metadata) Node {
+        return Node{ .t = t, .nodes = std.ArrayList(?Node).init(alloc), .metadata = metadata };
+    }
+
+    pub fn deinit(s: *Node) void {
+        s.nodes.deinit();
     }
 };
 
-pub const LiteralMetadata = struct {
-    kind: LiteralKind,
-    val: []const u8,
+pub const Metadata = struct {
+    kind: ?LiteralKind,
+    val: ?[]const u8,
+
     pub const LiteralKind = enum {
         string,
         int,
         float,
     };
-};
-
-pub const IdentifierMetadata = struct {
-    val: []const u8,
 };
 
 // useBlock,

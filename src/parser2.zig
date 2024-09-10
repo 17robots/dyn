@@ -4,7 +4,7 @@ const lexer = @import("lexer.zig");
 const token = @import("token.zig");
 const errors = @import("errors.zig");
 
-const Parser = struct {
+pub const Parser = struct {
     l: lexer.Lexer,
     allocator: std.mem.Allocator,
 
@@ -12,12 +12,12 @@ const Parser = struct {
         alloc: std.mem.Allocator,
         b: []const u8,
     ) Parser {
-        return Parser{ .l = lexer.Lexer.init(b), .allcloator = alloc };
+        return Parser{ .l = lexer.Lexer.init(b), .allocator = alloc };
     }
     pub fn parse(s: *Parser) ?ast.Node {
         return s.program();
     }
-    pub fn program() ?ast.Node {
-        return ast.Node.init(.program, null);
+    pub fn program(s: Parser) ?ast.Node {
+        return ast.Node.init(s.allocator, .program, null);
     }
 };
