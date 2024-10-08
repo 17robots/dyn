@@ -1,85 +1,46 @@
 const std = @import("std");
 const token = @import("token.zig");
 const TokenType = token.TokenType;
-pub const NodeType = enum {
-    program,
-    moduleDeclaration,
-    useDeclaration,
-    useBlock,
-    literal,
-    identifier,
-};
 
-pub const LiteralType = enum {
-    integer,
-    float,
-    string,
-    character,
-    boolean,
-};
-
-pub const Node = struct {
-    t: NodeType,
-    nodes: std.ArrayList(?Node),
-    metadata: ?Metadata,
-
-    pub fn init(alloc: std.mem.Allocator, t: NodeType, metadata: ?Metadata) Node {
-        return Node{ .t = t, .nodes = std.ArrayList(?Node).init(alloc), .metadata = metadata };
-    }
-
-    pub fn deinit(s: *Node) void {
-        s.nodes.deinit();
-    }
-};
-
-pub const Metadata = struct {
-    kind: ?LiteralKind,
-    val: ?[]const u8,
-
-    pub const LiteralKind = enum {
-        string,
-        int,
-        float,
-    };
-};
-
-// useBlock,
-// useDeclaration,
-// functionDeclaration,
-// functionCall,
-// variableDeclaration,
+// useblock,
+// usedeclaration,
+// functiondeclaration,
+// functioncall,
+// variabledeclaration,
 // literal,
-// typeLiteral,
-// optionalType,
-// pointerType,
-// arrayType,
-// variableReference,
-// pointerDereference,
+// typeliteral,
+// optionaltype,
+// pointertype,
+// arraytype,
+// variablereference,
+// pointerdereference,
 // condition,
 // block,
 // match,
-// matchBranch,
-// deferStatement,
-// breakStatement,
-// returnStatement,
+// matchbranch,
+// deferstatement,
+// breakstatement,
+// returnstatement,
 // loop,
-// forStatement,
-// rangeClause,
+// forstatement,
+// rangeclause,
 // capture,
-// loopModifier,
-// arrayLiteral,
-// structLiteral,
-// callArgs,
-// declArgs,
-// errorDecl,
-// errorMember,
-// errorType,
-// tryStatement,
-// catchStatement,
-// unionDeclaration,
-// unionMember,
-// unionLiteral,
-// selectionExpression,
+// loopmodifier,
+// arrayliteral,
+// structliteral,
+// callargs,
+// declargs,
+// errordecl,
+// errormember,
+// errortype,
+// trystatement,
+// catchstatement,
+// uniondeclaration,
+// unionmember,
+// unionliteral,
+// selectionexpression,
+
+pub const LiteralType = enum {};
 
 pub const AstNode = union(enum) { Program: struct { declarations: []AstNode }, ModuleDeclaration: struct { name: []const u8 }, UseDeclaration: struct { modules: []struct { import: []const u8, alias: ?[]const u8 } }, StructDefinition: struct {
     name: []const u8,
@@ -179,4 +140,4 @@ pub const AstNode = union(enum) { Program: struct { declarations: []AstNode }, M
 }, IndexAccess: struct {
     object: AstNode,
     Index: AstNode,
-}, Range: struct { start: AstNode, end: AstNode }, NullableType: struct { type: AstNode }, PointerType: struct { type: AstNode }, Type: struct { type: []const u8 }, ArrayType: struct { type: AstNode }, StructField: struct { field_type: AstNode, name: [][]const u8 } };
+}, Range: struct { start: AstNode, end: AstNode }, NullableType: struct { type: AstNode }, PointerType: struct { type: AstNode }, Type: struct { type: []const u8 }, ArrayType: struct { type: AstNode }, StructField: struct { field_type: AstNode, name: [][]const u8 }, StructMethod: struct { return_type: AstNode, name: []const u8, parameters: []AstNode, body: AstNode } };

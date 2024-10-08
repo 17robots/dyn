@@ -112,7 +112,17 @@ pub const Parser = struct {
         }
         return ast.AstNode{ .StructField = .{ .field_type = member_type, .name = fields.toOwnedSlice() } };
     }
-    fn struct_method(s: *Parser, method_type: ast.AstNode, name: []const u8) !ast.AstNode {}
+    fn struct_method(s: *Parser, method_type: ast.AstNode, name: []const u8) !ast.AstNode {
+        try s.consume(.lparen);
+        const params = s.method_param_list();
+        try s.consume(.rparen);
+        const body: ast.AstNode = if (s.l.tok.? == .arrow) {
+            s.expr();
+        } else if (s.l.tok.? == .lbrace) {
+            s.block();
+        };
+        return ast.AstNode{};
+    }
     fn type_expr(s: *Parser) !ast.AstNode {
         var root_type = ast.AstNode{ .Type = .{ .type = try s.consume(.identifier) } };
         while (true) {
