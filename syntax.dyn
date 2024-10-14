@@ -146,7 +146,14 @@ void enums() {
     HERE
   }
 
+  enum PartneredEnum {
+    i32 SOME,
+    struct { i32 info, } THING,
+    f32 HERE,
+  }
+
   MyEnum x = .SOME;
+  PartneredEnum x = .SOME(4);
 
   match x {
     .SOME: { io.println("SOME"); }
@@ -163,8 +170,13 @@ void errors() {
   error DivideErrors {
     DivideByZero
   }
+  
+  error PartneredDivideErrors {
+    i32 DivideByZero
+  }
 
   f32!DivideErrors div(f32 x, y) => if y == 0 { DivideErrors.DivideByZero } else { x / y };
+  f32!PartneredDivideErrors div(f32 x, y) => if y == 0 { PartneredDivideErrors.DivideByZero(4) } else { x / y };
 
   defer |e| {}
   defer {}
