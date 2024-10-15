@@ -24,7 +24,7 @@ pub const AstNode = union(enum) {
     },
     EnumDefinition: struct {
         name: []const u8,
-        variants: []const []const u8,
+        variants: []AstNode,
     },
     UnionDefinition: struct {
         name: []const u8,
@@ -37,7 +37,6 @@ pub const AstNode = union(enum) {
     },
     TypeDefinition: struct {
         name: []const u8,
-        genericParams: []AstNode,
         aliasedType: AstNode,
     },
     FunctionDefinition: struct {
@@ -47,12 +46,14 @@ pub const AstNode = union(enum) {
         parameters: []AstNode,
         body: AstNode,
     },
-    MethodDefinition: struct {
-        inlineMethod: bool,
-        returnType: AstNode,
-        name: []const u8,
+    FunctionLiteral: struct {
+        function_type: AstNode,
         parameters: []AstNode,
         body: AstNode,
+    },
+    FunctionType: struct {
+        function_type: AstNode,
+        parameters: AstNode,
     },
     Parameter: struct {
         mutable: bool,
@@ -97,6 +98,10 @@ pub const AstNode = union(enum) {
         variant_type: ?AstNode,
         variant: []const u8,
     },
+    ErrorVariant: struct {
+        variant_type: ?AstNode,
+        variant: []const u8,
+    },
     RangePattern: struct {
         start: AstNode,
         end: AstNode,
@@ -131,7 +136,16 @@ pub const AstNode = union(enum) {
         operator: TokenType,
         right: AstNode,
     },
+    LogicalBinary: struct {
+        left: AstNode,
+        operator: TokenType,
+        right: AstNode,
+    },
     Unary: struct {
+        operator: TokenType,
+        right: AstNode,
+    },
+    LogicalUnary: struct {
         operator: TokenType,
         right: AstNode,
     },
@@ -186,5 +200,8 @@ pub const AstNode = union(enum) {
     },
     Grouping: struct {
         expr: AstNode,
+    },
+    PubDeclaration: struct {
+        decl: AstNode,
     },
 };

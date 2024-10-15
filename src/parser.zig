@@ -188,28 +188,113 @@ pub const Parser = struct {
         }
         return ast.AstNode{ .EnumDefinition = .{ .name = name, .variants = enum_members } };
     }
-    fn error_decl(s: *Parser) !ast.AstNode {}
-    fn type_decl(s: *Parser) !ast.AstNode {}
-    fn function_decl(s: *Parser) !ast.AstNode {}
-    fn return_type(s: *Parser) !ast.AstNode {}
-    fn param_list(s: *Parser) !ast.AstNode {}
-    fn param_type(s: *Parser) !ast.AstNode {}
-    fn primitive_type(s: *Parser) !ast.AstNode {}
-    fn block(s: *Parser) !ast.AstNode {}
-    fn stmt(s: *Parser) !ast.AstNode {}
-    fn if_stmt(s: *Parser) !ast.AstNode {}
-    fn loop_stmt(s: *Parser) !ast.AstNode {}
-    fn for_stmt(s: *Parser) !ast.AstNode {}
+    fn error_decl(s: *Parser) !ast.AstNode {
+        try s.consume(.@"error");
+        const name = try s.consume(.identifier);
+        try s.consume(.lbrack);
+        var error_members = std.ArrayList(ast.AstNode).init(s.allocator);
+        while (s.l.tok.? != .rbrack) {
+            if (s.l.tok.? == .identifier) {
+                const first = try s.consume(.identifier);
+                try error_members.append(if (s.l.tok.? == .identifier) {
+                    ast.AstNode{ .errorVariant = .{ .variant_type = .{ .Type = .{ .type = first } }, .variant = try s.consume(.identifier) } };
+                } else {
+                    ast.AstNode{ .errorVariant = .{ .variant_type = null, .variant = first } };
+                });
+            } else if (s.l.tok.? == .comma) {
+                // we error here because there was no variant supplied
+            } else {
+                const error_variant_type = try s.type_expr();
+                try error_members.append(ast.AstNode{ .errorVariant = .{ .variant_type = error_variant_type, .variant = try s.consume(.identifier) } });
+            }
+            if (s.l.tok.? == .rbrack) break;
+            s.consume(.comma);
+        }
+        return ast.AstNode{ .errorDefinition = .{ .name = name, .variants = error_members } };
+    }
+    fn type_decl(s: *Parser) !ast.AstNode {
+        try s.consume(.type);
+        const name = try s.consume(.identifier);
+        try s.consume(.eq);
+        return ast.AstNode{ .TypeDefinition = .{ .name = name, .aliasedType = try s.type_expr() } };
+    }
+    fn function_decl(s: *Parser) !ast.AstNode {
+        const fn_type = try s.type_expr();
+        const name = try s.consume(.identifier);
+        var params = std.ArrayList(ast.AstNode).init(s.allocator);
+        errdefer params.deinit();
+        try s.consume(.lparen);
+        while (s.l.tok.? != .rparen) {
+            const paramType = try s.type_expr();
+            const param_name = try s.consume(.identifier);
+            try params.append(ast.AstNode{ .Parameter = .{ .paramType = paramType, .name = param_name } });
+            if (s.l.tok.? == .rparen) break;
+            try s.consume(.comma);
+        }
+        try s.consume(.rparen);
+        // find body here
+        var body: ast.AstNode = undefined;
+        if (s.l.tok.? == .arrow) {
+            body = s.expr();
+        } else if (s.l.tok.? == .lbrace) {
+            body = s.block();
+        } else {
+            // error here
+        }
+        return ast.AstNode{ .FunctionDefinition = .{ .returnType = fn_type, .name = name, .parameters = params.toOwnedSlice(), .body = body } };
+    }
+    fn block(s: *Parser) !ast.AstNode {
+        try s.consume(.lparen);
+        var stmts = std.ArrayList(ast.AstNode).init(s.allocator);
+        errdefer stmts.deinit();
+        while (s.l.tok.? != .rbrace) {
+            try stmts.append(try s.stmt());
+        }
+        try s.consume(.rparen);
+        return ast.AstNode{ .Block = .{ .statements = stmts } };
+    }
+    fn stmt(s: *Parser) !ast.AstNode {
+        return switch (s.l.tok.?) {
+            .@"if" => try s.if_stmt(),
+            .loop => try s.loop_stmt(),
+            .@"for" => try s.for_stmt(),
+            .match => try s.match_stmt(),
+            .@"inline" => try s.inline_stmt(),
+            .@"struct" => try s.struct_decl(),
+            .@"enum" => s.enum_decl(),
+            .@"union" => s.union_decl(),
+            .@"error" => s.error_decl(),
+            .type => s.type_decl(),
+            else => s.function_decl(),
+        };
+    }
+    fn if_stmt(s: *Parser) !ast.AstNode {
+        try s.consume(.@"if");
+    }
+    fn loop_stmt(s: *Parser) !ast.AstNode {
+        try s.consume(.loop);
+    }
+    fn for_stmt(s: *Parser) !ast.AstNode {
+        try s.consume(.@"for");
+    }
     fn range_expr(s: *Parser) !ast.AstNode {}
-    fn match_stmt(s: *Parser) !ast.AstNode {}
+    fn match_stmt(s: *Parser) !ast.AstNode {
+        try s.consume(.match);
+    }
     fn match_arm(s: *Parser) !ast.AstNode {}
     fn match_pattern(s: *Parser) !ast.AstNode {}
     fn range_pattern(s: *Parser) !ast.AstNode {}
-    fn defer_stmt(s: *Parser) !ast.AstNode {}
-    fn inline_stmt(s: *Parser) !ast.AstNode {}
+    fn defer_stmt(s: *Parser) !ast.AstNode {
+        try s.consume(.@"defer");
+    }
+    fn inline_stmt(s: *Parser) !ast.AstNode {
+        try s.consume(.@"inline");
+    }
     fn var_decl(s: *Parser) !ast.AstNode {}
     fn expr_stmt(s: *Parser) !ast.AstNode {}
+    fn stmt_expr(s: *Parser) !ast.AstNode {}
     fn expr(s: *Parser) !ast.AstNode {}
+    fn logical_expr(s: *Parser) !ast.AstNode {}
     fn parse_precedence(s: *Parser, precedence: Precedence) !ast.AstNode {
         var left = s.prefix();
         while (precedence <= s.get_infix_precedence()) {
