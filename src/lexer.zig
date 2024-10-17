@@ -570,9 +570,6 @@ pub const Lexer = struct {
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "defer")) {
             return .@"defer";
         }
-        if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "loop")) {
-            return .loop;
-        }
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "for")) {
             return .@"for";
         }
@@ -587,9 +584,6 @@ pub const Lexer = struct {
         }
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "catch")) {
             return .@"catch";
-        }
-        if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "union")) {
-            return .@"union";
         }
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "struct")) {
             return .@"struct";
