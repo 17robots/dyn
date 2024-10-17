@@ -9,8 +9,8 @@ pub const LiteralType = enum {
 };
 
 pub const AstNode = union(enum) { Program: struct {
-    declarations: []*AstNode,
-    pub_declarations: []*AstNode,
+    declarations: []*const AstNode,
+    pub_declarations: []*const AstNode,
 }, ModuleDeclaration: struct {
     name: []const u8,
 }, UseDeclaration: struct {
@@ -20,142 +20,142 @@ pub const AstNode = union(enum) { Program: struct {
     },
 }, StructDefinition: struct {
     name: []const u8,
-    genericParams: ?[]*AstNode,
-    members: []*AstNode,
+    genericParams: ?[]*const AstNode,
+    members: []*const AstNode,
 }, EnumDefinition: struct {
     name: []const u8,
-    variants: []*AstNode,
+    variants: []*const AstNode,
 }, ErrorDefinition: struct {
     name: []const u8,
-    variants: []*AstNode,
+    variants: []*const AstNode,
 }, TypeDefinition: struct {
     name: []const u8,
-    aliasedType: *AstNode,
+    aliasedType: *const AstNode,
 }, FunctionDefinition: struct {
     inlineFunction: bool,
-    returnType: *AstNode,
+    returnType: *const AstNode,
     name: []const u8,
-    parameters: []*AstNode,
-    body: *AstNode,
+    parameters: []*const AstNode,
+    body: *const AstNode,
 }, FunctionLiteral: struct {
-    function_type: *AstNode,
-    parameters: []*AstNode,
-    body: *AstNode,
+    function_type: *const AstNode,
+    parameters: []*const AstNode,
+    body: *const AstNode,
 }, FunctionType: struct {
-    function_type: *AstNode,
-    parameters: *AstNode,
+    function_type: *const AstNode,
+    parameters: *const AstNode,
 }, Parameter: struct {
     mutable: bool,
     isComptime: bool,
-    paramType: ?*AstNode,
+    paramType: ?*const AstNode,
     name: []const u8,
 }, FieldDeclaration: struct {
-    fieldType: *AstNode,
+    fieldType: *const AstNode,
     names: []const []const u8,
-    defaultValue: ?*AstNode,
+    defaultValue: ?*const AstNode,
 }, Block: struct {
-    statements: []*AstNode,
+    statements: []*const AstNode,
 }, IfStatement: struct {
-    condition: *AstNode,
+    condition: *const AstNode,
     capture: ?[]const u8,
-    thenBranch: *AstNode,
-    elseBranch: ?*AstNode,
+    thenBranch: *const AstNode,
+    elseBranch: ?*const AstNode,
 }, WhileStatement: struct {
     inlineWhile: bool,
-    condition: *AstNode,
-    body: *AstNode,
+    condition: *const AstNode,
+    body: *const AstNode,
 }, ForStatement: struct {
     inlineFor: bool,
-    iterable: *AstNode,
+    iterable: *const AstNode,
     loopVar: []const u8,
-    update: ?*AstNode,
-    body: *AstNode,
+    update: ?*const AstNode,
+    body: *const AstNode,
 }, MatchStatement: struct {
-    value: *AstNode,
-    arms: []*AstNode,
+    value: *const AstNode,
+    arms: []*const AstNode,
 }, MatchArm: struct {
-    pattern: []*AstNode,
-    body: *AstNode,
+    pattern: []*const AstNode,
+    body: *const AstNode,
 }, EnumVariant: struct {
-    variant_type: ?*AstNode,
+    variant_type: ?*const AstNode,
     variant: []const u8,
 }, ErrorVariant: struct {
-    variant_type: ?*AstNode,
+    variant_type: ?*const AstNode,
     variant: []const u8,
 }, RangePattern: struct {
-    start: *AstNode,
-    end: *AstNode,
+    start: *const AstNode,
+    end: *const AstNode,
 }, WildCard: struct {}, DeferError: struct {
     errorVar: []const u8,
-    body: *AstNode,
+    body: *const AstNode,
 }, Defer: struct {
-    body: *AstNode,
+    body: *const AstNode,
 }, InlineBlock: struct {
-    body: *AstNode,
+    body: *const AstNode,
 }, VariableDeclaration: struct {
     mutable: bool,
-    varType: *AstNode,
+    varType: *const AstNode,
     name: []const u8,
-    initializer: ?*AstNode,
+    initializer: ?*const AstNode,
 }, ExpressionStatement: struct {
-    expression: *AstNode,
+    expression: *const AstNode,
 }, StatementExpression: struct {
-    statement: *AstNode,
+    statement: *const AstNode,
 }, Assignment: struct {
-    target: *AstNode,
-    value: *AstNode,
+    target: *const AstNode,
+    value: *const AstNode,
 }, Binary: struct {
-    left: *AstNode,
+    left: *const AstNode,
     operator: TokenType,
-    right: *AstNode,
+    right: *const AstNode,
 }, LogicalBinary: struct {
-    left: *AstNode,
+    left: *const AstNode,
     operator: TokenType,
-    right: *AstNode,
+    right: *const AstNode,
 }, Unary: struct {
     operator: TokenType,
-    right: *AstNode,
+    right: *const AstNode,
 }, LogicalUnary: struct {
     operator: TokenType,
-    right: *AstNode,
+    right: *const AstNode,
 }, Literal: struct {
     type: LiteralType,
     value: []const u8,
 }, Variable: struct {
     name: []const u8,
 }, FunctionCall: struct {
-    callee: *AstNode,
-    args: []*AstNode,
+    callee: *const AstNode,
+    args: []*const AstNode,
 }, MemberAccess: struct {
-    obj: *AstNode,
+    obj: *const AstNode,
     member: []const u8,
 }, IndexAccess: struct {
-    object: *AstNode,
-    index: *AstNode,
+    object: *const AstNode,
+    index: *const AstNode,
 }, Range: struct {
-    start: *AstNode,
-    end: *AstNode,
+    start: *const AstNode,
+    end: *const AstNode,
 }, NullableType: struct {
-    type: *AstNode,
+    type: *const AstNode,
 }, PointerType: struct {
-    type: *AstNode,
+    type: *const AstNode,
 }, Type: struct {
     type: []const u8,
 }, ArrayType: struct {
-    type: *AstNode,
+    type: *const AstNode,
 }, StructField: struct {
-    field_type: *AstNode,
+    field_type: *const AstNode,
     name: [][]const u8,
 }, StructMethod: struct {
-    return_type: *AstNode,
+    return_type: *const AstNode,
     name: []const u8,
-    parameters: []*AstNode,
-    body: *AstNode,
+    parameters: []*const AstNode,
+    body: *const AstNode,
 }, ErrorType: struct {
-    core_type: *AstNode,
+    core_type: *const AstNode,
     error_type: []const u8,
 }, Grouping: struct {
-    expr: *AstNode,
+    expr: *const AstNode,
 }, Identifier: struct {
     value: []const u8,
 }, Capture: struct {

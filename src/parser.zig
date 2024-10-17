@@ -103,9 +103,9 @@ pub const Parser = struct {
         const member_type = try s.type_expr();
         const name = try s.consume(.identifier);
         const member = if (s.l.tok == .lparen) {
-            s.struct_method(member_type, name);
+            try s.struct_method(member_type, name);
         } else {
-            s.struct_fields();
+            try s.struct_fields();
         };
         return &member;
     }
@@ -119,14 +119,14 @@ pub const Parser = struct {
         }
         return &ast.AstNode{ .StructField = .{ .field_type = member_type, .name = fields.toOwnedSlice() } };
     }
-    fn struct_method(s: *Parser, method_type: ast.AstNode, name: []const u8) !*const ast.AstNode {
+    fn struct_method(s: *Parser, method_type: *const ast.AstNode, name: []const u8) !*const ast.AstNode {
         _ = try s.consume(.lparen);
         const params = try s.method_param_list();
         _ = try s.consume(.rparen);
         const body: ast.AstNode = if (s.l.tok.? == .arrow) {
-            s.expr();
+            try s.expr();
         } else if (s.l.tok.? == .lbrace) {
-            s.block();
+            try s.block();
         };
         return &ast.AstNode{ .StructMethod = .{ .return_type = method_type, .name = name, .parameters = params, .body = body } };
     }
@@ -155,8 +155,8 @@ pub const Parser = struct {
         }
         return &root_type;
     }
-    fn method_param_list(s: *Parser) ![]ast.AstNode {
-        var params = std.ArrayList(*ast.AstNode).init(s.allocator);
+    fn method_param_list(s: *Parser) ![]*const ast.AstNode {
+        var params = std.ArrayList(*const ast.AstNode).init(s.allocator);
         errdefer params.deinit();
         while (s.l.tok.? != .rparen) {
             const t = try s.type_expr();
@@ -167,7 +167,7 @@ pub const Parser = struct {
             _ = try s.consume(.comma);
             try params.append(&ast.AstNode{ .Parameter = .{ .mutable = false, .isComptime = false, .paramType = t, .name = name } });
         }
-        return params.toOwnedSlice();
+        return try params.toOwnedSlice();
     }
     fn enum_decl(s: *Parser) !*const ast.AstNode {
         _ = try s.consume(.@"enum");
@@ -178,9 +178,9 @@ pub const Parser = struct {
             if (s.l.tok.? == .identifier) {
                 const first = try s.consume(.identifier);
                 try enum_members.append(if (s.l.tok.? == .identifier) {
-                    ast.AstNode{ .EnumVariant = .{ .variant_type = .{ .Type = .{ .type = first } }, .variant = try s.consume(.identifier) } };
+                    &ast.AstNode{ .EnumVariant = .{ .variant_type = &.{ .Type = .{ .type = first } }, .variant = try s.consume(.identifier) } };
                 } else {
-                    ast.AstNode{ .EnumVariant = .{ .variant_type = null, .variant = first } };
+                    &ast.AstNode{ .EnumVariant = .{ .variant_type = null, .variant = first } };
                 });
             } else if (s.l.tok.? == .comma) {
                 // we error here because there was no variant supplied
@@ -202,9 +202,9 @@ pub const Parser = struct {
             if (s.l.tok.? == .identifier) {
                 const first = try s.consume(.identifier);
                 try error_members.append(if (s.l.tok.? == .identifier) {
-                    ast.AstNode{ .ErrorVariant = .{ .variant_type = .{ .Type = .{ .type = first } }, .variant = try s.consume(.identifier) } };
+                    &ast.AstNode{ .ErrorVariant = .{ .variant_type = &.{ .Type = .{ .type = first } }, .variant = try s.consume(.identifier) } };
                 } else {
-                    ast.AstNode{ .ErrorVariant = .{ .variant_type = null, .variant = first } };
+                    &ast.AstNode{ .ErrorVariant = .{ .variant_type = null, .variant = first } };
                 });
             } else if (s.l.tok.? == .comma) {
                 // we error here because there was no variant supplied
@@ -221,9 +221,9 @@ pub const Parser = struct {
         _ = try s.consume(.type);
         const name = try s.consume(.identifier);
         _ = try s.consume(.eq);
-        return ast.AstNode{ .TypeDefinition = .{ .name = name, .aliasedType = try s.type_expr() } };
+        return &ast.AstNode{ .TypeDefinition = .{ .name = name, .aliasedType = try s.type_expr() } };
     }
-    fn function_decl(s: *Parser, fn_type: ast.AstNode, name: []const u8) !*const ast.AstNode {
+    fn function_decl(s: *Parser, fn_type: *const ast.AstNode, name: []const u8) !*const ast.AstNode {
         var params = std.ArrayList(ast.AstNode).init(s.allocator);
         errdefer params.deinit();
         _ = try s.consume(.lparen);
@@ -388,7 +388,7 @@ pub const Parser = struct {
             _ = try s.consume(.mut);
         }
         const var_type = try s.type_decl();
-        if (s.l.tok.? == .semicolon) return ast.AstNode{ .ExpressionStatement = .{ .expression = var_type } };
+        if (s.l.tok.? == .semicolon) return &ast.AstNode{ .ExpressionStatement = .{ .expression = var_type } };
         const var_name = try s.consume(.identifier);
         var initializer: ?ast.AstNode = null;
         switch (s.l.tok.?) {
@@ -425,7 +425,7 @@ pub const Parser = struct {
         return left;
     }
     fn prefix(s: *Parser) !*const ast.AstNode {
-        return switch (s.l.tok) {
+        return switch (s.l.tok.?) {
             .integer, .float => s.literal(),
             .string => s.string_literal(),
             .true, .false => s.bool_literal(),
