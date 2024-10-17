@@ -27,11 +27,18 @@ pub const Parser = struct {
     fn program(s: Parser) !ast.AstNode {
         var decls = std.ArrayList(ast.AstNode).init(s.allocator);
         try decls.append(try s.module_declaration());
+        var pub_decls = std.ArrayList(ast.AstNode).init(s.allocator);
+        try pub_decls.append(try s.module_declaration());
 
-        while (s.l.tok != .eof) {
-            try decls.append(s.decl());
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .@"pub") {
+                try s.consume(.@"pub");
+                try pub_decls.append(try s.decl());
+            } else {
+                try decls.append(try s.decl());
+            }
         }
-        return ast.AstNode{ .Program = .{ .declarations = decls.toOwnedSlice() } };
+        return ast.AstNode{ .Program = .{ .declarations = decls.toOwnedSlice(), .pub_declarations = pub_decls.toOwnedSlice() } };
     }
     fn module_declaration(s: *Parser) !ast.AstNode {
         try s.consume(.module);
@@ -46,7 +53,7 @@ pub const Parser = struct {
             .@"union" => s.union_decl(),
             .@"error" => s.error_decl(),
             .type => s.type_decl(),
-            else => s.function_decl(),
+            else => s.var_decl(),
         };
     }
     fn use(s: *Parser) !ast.AstNode {
@@ -218,9 +225,7 @@ pub const Parser = struct {
         try s.consume(.eq);
         return ast.AstNode{ .TypeDefinition = .{ .name = name, .aliasedType = try s.type_expr() } };
     }
-    fn function_decl(s: *Parser) !ast.AstNode {
-        const fn_type = try s.type_expr();
-        const name = try s.consume(.identifier);
+    fn function_decl(s: *Parser, fn_type: ast.AstNode, name: []const u8) !ast.AstNode {
         var params = std.ArrayList(ast.AstNode).init(s.allocator);
         errdefer params.deinit();
         try s.consume(.lparen);
@@ -254,47 +259,167 @@ pub const Parser = struct {
         return ast.AstNode{ .Block = .{ .statements = stmts } };
     }
     fn stmt(s: *Parser) !ast.AstNode {
-        return switch (s.l.tok.?) {
+        const item = switch (s.l.tok.?) {
             .@"if" => try s.if_stmt(),
-            .loop => try s.loop_stmt(),
+            .@"while" => try s.while_stmt(),
             .@"for" => try s.for_stmt(),
             .match => try s.match_stmt(),
             .@"inline" => try s.inline_stmt(),
             .@"struct" => try s.struct_decl(),
-            .@"enum" => s.enum_decl(),
-            .@"union" => s.union_decl(),
-            .@"error" => s.error_decl(),
-            .type => s.type_decl(),
-            else => s.function_decl(),
+            .@"enum" => try s.enum_decl(),
+            .@"union" => try s.union_decl(),
+            .@"error" => try s.error_decl(),
+            .lbrace => try s.block(),
+            .type => try s.type_decl(),
+            else => try s.var_decl(),
         };
+        try s.consume(.semicolon);
+        return item;
     }
     fn if_stmt(s: *Parser) !ast.AstNode {
         try s.consume(.@"if");
+        var var_capture: ?ast.AstNode = null;
+        var else_branch: ?ast.AstNode = null;
+        const condition = try s.expr();
+        if (s.l.tok.? == .@"or") {
+            var_capture = try s.capture();
+        }
+        const then_branch = try s.stmt();
+        if (s.l.tok.? == .@"else") {
+            try s.consume(.@"else");
+            else_branch = try s.stmt();
+        }
+        return ast.AstNode{ .IfStatement = .{ .condition = condition, .capture = var_capture, .thenBranch = then_branch, .elseBranch = else_branch } };
     }
-    fn loop_stmt(s: *Parser) !ast.AstNode {
-        try s.consume(.loop);
+    fn capture(s: *Parser) !ast.AstNode {
+        try s.consume(.@"or");
+        const captured = try s.consume(.identifier);
+        try s.consume(.@"or");
+        return ast.AstNode{ .Capture = .{ .captured_var = captured } };
+    }
+    fn while_stmt(s: *Parser) !ast.AstNode {
+        var inline_while = false;
+        if (s.l.tok.? == .@"inline") {
+            inline_while = true;
+            try s.consume(.@"inline");
+        }
+        try s.consume(.@"while");
+        const while_condition = try s.condition();
+        const body = try s.stmt();
+        return ast.AstNode{ .WhileStatement = .{ .inlineWhile = inline_while, .condition = while_condition, .body = body } };
     }
     fn for_stmt(s: *Parser) !ast.AstNode {
+        var inline_for = false;
+        if (s.l.tok.? == .@"inline") {
+            inline_for = true;
+            try s.consume(.@"inline");
+        }
         try s.consume(.@"for");
+        const iterable = try s.expr();
+        const loop_var = try s.capture();
+        const body = try s.stmt();
+        return ast.AstNode{ .ForStatement = .{ .inlineFor = inline_for, .iterable = iterable, .loopVar = loop_var, .body = body } };
     }
-    fn range_expr(s: *Parser) !ast.AstNode {}
+    fn range_expr(s: *Parser) !ast.AstNode {
+        const start = ast.AstNode{ .Literal = .{ .type = .int, .value = try s.consume(.int) } };
+        try s.consume(.dotdot);
+        const end = ast.AstNode{ .Literal = .{ .type = .int, .value = try s.consume(.int) } };
+        return ast.AstNode{ .Range = .{ .start = start, .end = end } };
+    }
     fn match_stmt(s: *Parser) !ast.AstNode {
         try s.consume(.match);
+        const value = try s.expr();
+        try s.consume(.lbrack);
+        var arms = std.ArrayList(ast.AstNode).init(s.allocator);
+        errdefer arms.deinit();
+        while (s.l.tok.? != .rbrack) {
+            try arms.append(try s.match_arm());
+            if (s.l.tok.? == .rbrack) break;
+            try s.consume(.comma);
+        }
+        try s.consume(.rbrack);
+        return ast.AstNode{ .MatchStatement = .{ .value = value, .arms = arms } };
     }
-    fn match_arm(s: *Parser) !ast.AstNode {}
-    fn match_pattern(s: *Parser) !ast.AstNode {}
-    fn range_pattern(s: *Parser) !ast.AstNode {}
+    fn match_arm(s: *Parser) !ast.AstNode {
+        var exprs = std.ArrayList(ast.AstNode).init(s.allocator);
+        errdefer exprs.deinit();
+        if (s.l.tok.? == .underscore) {
+            try s.consume(.underscore);
+            if (s.l.tok.? == .@"if") {} else {}
+        } else {
+            while (s.l.tok.? != .colon) {
+                var first = s.expr();
+                if (s.l.tok.? == .dotdot) {
+                    first = s.range_pattern(first);
+                }
+                if (s.l.tok.? == .colon) break;
+                try exprs.append(first);
+                try s.consume(.comma);
+            }
+        }
+        try s.consume(.colon);
+        const body = if (s.l.tok.? == .lbrace) {
+            try s.block();
+        } else {
+            try s.expr();
+        };
+        return ast.AstNode{ .MatchArm = .{ .pattern = exprs, .body = body } };
+    }
+    fn range_pattern(s: *Parser, first: ast.AstNode) !ast.AstNode {
+        try s.consume(.dotdot);
+        const last = try s.expr();
+        return ast.AstNode{ .Range = .{ .start = first, .end = last } };
+    }
     fn defer_stmt(s: *Parser) !ast.AstNode {
         try s.consume(.@"defer");
+        if (s.l.tok.? == .@"or") {} // we have an error capture
     }
     fn inline_stmt(s: *Parser) !ast.AstNode {
         try s.consume(.@"inline");
+        switch (s.l.tok.?) {
+            .@"for" => {},
+            .identifier => {},
+            else => {
+                // error out as this cannot be inlined
+            },
+        }
     }
-    fn var_decl(s: *Parser) !ast.AstNode {}
-    fn expr_stmt(s: *Parser) !ast.AstNode {}
-    fn stmt_expr(s: *Parser) !ast.AstNode {}
-    fn expr(s: *Parser) !ast.AstNode {}
-    fn logical_expr(s: *Parser) !ast.AstNode {}
+    fn var_decl(s: *Parser) !ast.AstNode {
+        var mut = false;
+        if (s.l.tok.? == .mut) {
+            mut = true;
+            try s.consume(.mut);
+        }
+        const var_type = try s.type_decl();
+        if (s.l.tok.? == .semicolon) return ast.AstNode{ .ExpressionStatement = .{ .expression = var_type } };
+        const var_name = try s.consume(.identifier);
+        var initializer: ?ast.AstNode = null;
+        switch (s.l.tok.?) {
+            .lparen => {
+                if (mut) {
+                    // error out
+                }
+                return try s.function_decl(var_type, var_name);
+            },
+            .eq => {
+                try s.consume(.eq);
+                initializer = try s.expr();
+                try s.consume(.semicolon);
+            },
+            .semicolon => {
+                if (!mut) {
+                    // error out
+                }
+            },
+            else => {
+                // error out
+            },
+        }
+        return ast.AstNode{ .VariableDeclaration = .{ .mutable = mut, .varType = var_type, .name = var_name, .initializer = initializer } };
+    }
+    fn expr(s: *Parser) !ast.AstNode {
+        return try s.parse_precedence(.assignment);
+    }
     fn parse_precedence(s: *Parser, precedence: Precedence) !ast.AstNode {
         var left = s.prefix();
         while (precedence <= s.get_infix_precedence()) {
@@ -310,7 +435,8 @@ pub const Parser = struct {
             .null => s.null_literal(),
             .identifier => s.variable(),
             .lparen => s.grouping(),
-            .minus, .bang => s.unaryOp(),
+            .minus, .bang, .mul => s.unary_op(),
+            else => ast.AstNode{ .StatementExpression = .{ .statement = try s.stmt() } },
         };
     }
     fn infix(s: *Parser, left: ast.AstNode) !ast.AstNode {
@@ -405,6 +531,4 @@ pub const Parser = struct {
         s.l.next_tok();
         return lit;
     }
-    fn error_type(s: *Parser, token_type: token.TokenType) bool {}
-    fn comptime_param_list(s: *Parser, token_type: token.TokenType) bool {}
 };

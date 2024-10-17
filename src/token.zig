@@ -64,7 +64,7 @@ pub const TokenType = enum {
     @"else",
     match,
     @"defer",
-    loop,
+    @"while",
     @"for",
     @"enum",
     @"error",
