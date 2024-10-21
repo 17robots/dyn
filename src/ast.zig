@@ -5,7 +5,6 @@ pub const LiteralType = enum {
     int,
     float,
     string,
-    underscore,
 };
 
 pub const AstNode = union(enum) { Program: struct {

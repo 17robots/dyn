@@ -426,20 +426,19 @@ pub const Parser = struct {
     }
     fn prefix(s: *Parser) !*const ast.AstNode {
         return switch (s.l.tok.?) {
-            .integer, .float => s.literal(),
-            .string => s.string_literal(),
+            .int, .float, .string => s.literal(),
             .true, .false => s.bool_literal(),
             .null => s.null_literal(),
             .identifier => s.variable(),
             .lparen => s.grouping(),
-            .minus, .bang, .mul => s.unary_op(),
+            .sub, .bang, .mul => s.unary_op(),
             else => ast.AstNode{ .StatementExpression = .{ .statement = try s.stmt() } },
         };
     }
     fn infix(s: *Parser, left: ast.AstNode) !*const ast.AstNode {
         return switch (s.l.tok) {
             .add, .sub, .mul, .div, .mod => s.binary_expr(left),
-            .eqeq, .bangeq, .lt, .lte, .gt, .gte => s.binary_expr(left),
+            .eqeq, .bangeq, .lt, .lteq, .gt, .gteq => s.binary_expr(left),
             .@"and", .@"or" => s.logical_operator(left),
             .lparen => s.function_call(left),
             .lbrack => s.index_access(left),
@@ -447,6 +446,7 @@ pub const Parser = struct {
         };
     }
     fn literal(s: *Parser) !*const ast.AstNode {
+        return &ast.AstNode{ .Literal = .{ .type = switch (s.l.tok.?) {}, .value = s.l.literal } };
         const val = try s.consume(.identifer);
         return ast.AstNode{ .Literal = .{ .type = {}, .value = val } };
     }
@@ -509,7 +509,7 @@ pub const Parser = struct {
             .@"or" => .@"or",
             .@"and" => .@"and",
             .eqeq, .bangeq => .equality,
-            .lt, .lte, .gt, .gte => .comparison,
+            .lt, .lteq, .gt, .gteq => .comparison,
             .add, .sub => .term,
             .mul, .div, .mod => .factor,
             .lparen => .call,

@@ -74,4 +74,5 @@ pub const TokenType = enum {
     type,
     comp,
     @"pub",
+    null,
 };
