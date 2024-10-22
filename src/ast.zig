@@ -1,162 +1,157 @@
-const token = @import("token.zig");
-const TokenType = token.TokenType;
-
+const std = @import("std");
 pub const LiteralType = enum {
     int,
     float,
     string,
 };
 
-pub const AstNode = union(enum) { Program: struct {
-    declarations: []*const AstNode,
-    pub_declarations: []*const AstNode,
-}, ModuleDeclaration: struct {
-    name: []const u8,
-}, UseDeclaration: struct {
-    modules: []struct {
-        import: []const u8,
-        alias: ?[]const u8,
-    },
-}, StructDefinition: struct {
-    name: []const u8,
-    genericParams: ?[]*const AstNode,
-    members: []*const AstNode,
-}, EnumDefinition: struct {
-    name: []const u8,
-    variants: []*const AstNode,
-}, ErrorDefinition: struct {
-    name: []const u8,
-    variants: []*const AstNode,
-}, TypeDefinition: struct {
-    name: []const u8,
-    aliasedType: *const AstNode,
-}, FunctionDefinition: struct {
-    inlineFunction: bool,
-    returnType: *const AstNode,
-    name: []const u8,
-    parameters: []*const AstNode,
-    body: *const AstNode,
-}, FunctionLiteral: struct {
-    function_type: *const AstNode,
-    parameters: []*const AstNode,
-    body: *const AstNode,
-}, FunctionType: struct {
-    function_type: *const AstNode,
-    parameters: *const AstNode,
-}, Parameter: struct {
-    mutable: bool,
-    isComptime: bool,
-    paramType: ?*const AstNode,
-    name: []const u8,
-}, FieldDeclaration: struct {
-    fieldType: *const AstNode,
-    names: []const []const u8,
-    defaultValue: ?*const AstNode,
-}, Block: struct {
-    statements: []*const AstNode,
-}, IfStatement: struct {
-    condition: *const AstNode,
-    capture: ?[]const u8,
-    thenBranch: *const AstNode,
-    elseBranch: ?*const AstNode,
-}, WhileStatement: struct {
-    inlineWhile: bool,
-    condition: *const AstNode,
-    body: *const AstNode,
-}, ForStatement: struct {
-    inlineFor: bool,
-    iterable: *const AstNode,
-    loopVar: []const u8,
-    update: ?*const AstNode,
-    body: *const AstNode,
-}, MatchStatement: struct {
-    value: *const AstNode,
-    arms: []*const AstNode,
-}, MatchArm: struct {
-    pattern: []*const AstNode,
-    body: *const AstNode,
-}, EnumVariant: struct {
-    variant_type: ?*const AstNode,
-    variant: []const u8,
-}, ErrorVariant: struct {
-    variant_type: ?*const AstNode,
-    variant: []const u8,
-}, RangePattern: struct {
-    start: *const AstNode,
-    end: *const AstNode,
-}, WildCard: struct {}, DeferError: struct {
-    errorVar: []const u8,
-    body: *const AstNode,
-}, Defer: struct {
-    body: *const AstNode,
-}, InlineBlock: struct {
-    body: *const AstNode,
-}, VariableDeclaration: struct {
-    mutable: bool,
-    varType: *const AstNode,
-    name: []const u8,
-    initializer: ?*const AstNode,
-}, ExpressionStatement: struct {
-    expression: *const AstNode,
-}, StatementExpression: struct {
-    statement: *const AstNode,
-}, Assignment: struct {
-    target: *const AstNode,
-    value: *const AstNode,
-}, Binary: struct {
-    left: *const AstNode,
-    operator: TokenType,
-    right: *const AstNode,
-}, LogicalBinary: struct {
-    left: *const AstNode,
-    operator: TokenType,
-    right: *const AstNode,
-}, Unary: struct {
-    operator: TokenType,
-    right: *const AstNode,
-}, LogicalUnary: struct {
-    operator: TokenType,
-    right: *const AstNode,
-}, Literal: struct {
-    type: LiteralType,
-    value: []const u8,
-}, Variable: struct {
-    name: []const u8,
-}, FunctionCall: struct {
-    callee: *const AstNode,
-    args: []*const AstNode,
-}, MemberAccess: struct {
-    obj: *const AstNode,
-    member: []const u8,
-}, IndexAccess: struct {
-    object: *const AstNode,
-    index: *const AstNode,
-}, Range: struct {
-    start: *const AstNode,
-    end: *const AstNode,
-}, NullableType: struct {
-    type: *const AstNode,
-}, PointerType: struct {
-    type: *const AstNode,
-}, Type: struct {
-    type: []const u8,
-}, ArrayType: struct {
-    type: *const AstNode,
-}, StructField: struct {
-    field_type: *const AstNode,
-    name: [][]const u8,
-}, StructMethod: struct {
-    return_type: *const AstNode,
-    name: []const u8,
-    parameters: []*const AstNode,
-    body: *const AstNode,
-}, ErrorType: struct {
-    core_type: *const AstNode,
-    error_type: []const u8,
-}, Grouping: struct {
-    expr: *const AstNode,
-}, Identifier: struct {
-    value: []const u8,
-}, Capture: struct {
-    captured_var: []const u8,
-} };
+pub const Node = union(enum) {
+    Program: struct { declarations: std.ArrayList(Node), pub_declarations: std.ArrayList(Node) },
+    ModuleDeclaration: struct { name: *Node },
+    UseDeclaration: struct { import: *Node, alias: ?*Node },
+    UseBlock: struct { uses: std.ArrayList(Node) },
+    Literal: struct { lit_type: LiteralType, value: []const u8 },
+    Identifier: struct { value: []const u8 },
+    EnumDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    EnumMember: struct { value: *Node },
+    ErrorDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    ErrorMember: struct { value: *Node },
+    Declaration: void,
+    pub fn deinit(n: *Node, alloc: std.mem.Allocator) void {
+        switch (n.*) {
+            .Program => |s| {
+                for (s.declarations.items) |*d| {
+                    d.deinit(alloc);
+                }
+                s.declarations.deinit();
+                for (s.pub_declarations.items) |*d| {
+                    d.deinit(alloc);
+                }
+                s.pub_declarations.deinit();
+            },
+            .ModuleDeclaration => |s| {
+                s.name.deinit(alloc);
+                alloc.destroy(s.name);
+            },
+            .UseDeclaration => |s| {
+                s.import.deinit(alloc);
+                alloc.destroy(s.import);
+                if (s.alias) |*a| {
+                    a.*.deinit(alloc);
+                    alloc.destroy(a);
+                }
+            },
+            .UseBlock => |s| {
+                for (s.uses.items) |*u| {
+                    u.deinit(alloc);
+                }
+                s.uses.deinit();
+            },
+            .EnumDeclaration => |s| {
+                s.name.deinit(alloc);
+                alloc.destroy(s.name);
+                for (s.members.items) |*m| {
+                    m.deinit(alloc);
+                }
+                s.members.deinit();
+            },
+            .EnumMember => |s| {
+                s.value.deinit(alloc);
+                alloc.destroy(s.value);
+            },
+            .ErrorDeclaration => |s| {
+                s.name.deinit(alloc);
+                alloc.destroy(s.name);
+                for (s.members.items) |*m| {
+                    m.deinit(alloc);
+                }
+                s.members.deinit();
+            },
+            .ErrorMember => |s| {
+                s.value.deinit(alloc);
+                alloc.destroy(s.value);
+            },
+            .Identifier => {},
+            .Literal => {},
+            .Declaration => {},
+        }
+    }
+    pub fn print(n: Node) void {
+        switch (n) {
+            .Program => |s| {
+                std.debug.print("Program\n", .{});
+                std.debug.print("public decls\n", .{});
+                for (s.pub_declarations.items) |d| {
+                    d.print();
+                }
+                std.debug.print("-----\n", .{});
+                std.debug.print("private decls\n", .{});
+                for (s.declarations.items) |d| {
+                    d.print();
+                }
+                std.debug.print("-----\n", .{});
+            },
+            .ModuleDeclaration => |s| {
+                std.debug.print("Module declaration\n", .{});
+                std.debug.print("Name: ", .{});
+                s.name.print();
+            },
+            .Literal => |s| {
+                std.debug.print("Literal; Type: {s}, Value: {s}\n", .{ switch (s.lit_type) {
+                    .int => "int",
+                    .float => "float",
+                    .string => "string",
+                }, s.value });
+            },
+            .Declaration => {
+                std.debug.print("Declaration\n", .{});
+            },
+            .UseDeclaration => |s| {
+                std.debug.print("Use Declaration; import: ", .{});
+                s.import.print();
+                std.debug.print("alias: ", .{});
+                if (s.alias) |a| {
+                    a.print();
+                } else {
+                    std.debug.print("none\n", .{});
+                }
+            },
+            .UseBlock => |s| {
+                std.debug.print("Use Block decls: \n", .{});
+                for (s.uses.items) |u| {
+                    u.print();
+                }
+                std.debug.print("\n-----\n", .{});
+            },
+            .EnumDeclaration => |s| {
+                std.debug.print("Enum Decl; name: ", .{});
+                s.name.print();
+                std.debug.print(", members: ", .{});
+                for (s.members.items) |m| {
+                    m.print();
+                }
+                std.debug.print("\n-----\n", .{});
+            },
+            .EnumMember => |s| {
+                std.debug.print("Enum member; value: ", .{});
+                s.value.print();
+            },
+            .ErrorDeclaration => |s| {
+                std.debug.print("Error Decl; name: ", .{});
+                s.name.print();
+                std.debug.print(", members: ", .{});
+                for (s.members.items) |m| {
+                    m.print();
+                }
+                std.debug.print("\n-----\n", .{});
+            },
+            .ErrorMember => |s| {
+                std.debug.print("Error member; value: ", .{});
+                s.value.print();
+            },
+            .Identifier => |s| {
+                std.debug.print("Identifier; Value: {s}", .{s.value});
+            },
+        }
+    }
+};
