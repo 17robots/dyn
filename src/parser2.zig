@@ -11,14 +11,15 @@ pub const Parser = struct {
     pub fn init(alloc: std.mem.Allocator, b: []const u8) Parser {
         return Parser{ .l = lexer.Lexer.init(b), .allocator = alloc };
     }
-    pub fn parse(s: *Parser) !AstNode {
+    pub fn parse(s: *Parser) !*ast.Node {
         s.l.next_tok();
-        return try s.program();
+        var tree = try s.program();
+        return tree;
     }
     fn program(s: *Parser) !AstNode {
         var decls = std.ArrayList(*const ast.Node).init(s.allocator);
         errdefer decls.deinit();
-        // try decls.append(try s.module_decl());
+        try decls.append(try s.module_decl());
         var pub_decls = std.ArrayList(*const ast.Node).init(s.allocator);
         errdefer pub_decls.deinit();
         while (s.l.tok.? != .eof) {
@@ -29,13 +30,19 @@ pub const Parser = struct {
                 try decls.append(try s.decl());
             }
         }
-        return &ast.Node{ .Program = .{ .declarations = try decls.toOwnedSlice(), .pub_declarations = try pub_decls.toOwnedSlice() } };
+        const prog = try s.allocator.create(ast.Node);
+        prog.* = ast.Node{ .Program = .{ .declarations = try decls.toOwnedSlice(), .pub_declarations = try pub_decls.toOwnedSlice() } };
+        return prog;
     }
     fn module_decl(s: *Parser) !AstNode {
         _ = try s.consume(.module);
-        const name = try s.consume(.string);
+        const name = try s.allocator.create(ast.Node);
+        name.* = ast.Node{ .Literal = .{ .lit_type = .string, .value = try s.consume(.string) } };
         _ = try s.consume(.semicolon);
-        return &ast.Node{ .ModuleDeclaration = .{ .name = name } };
+        std.debug.print("{!}", .{name});
+        const module = try s.allocator.create(ast.Node);
+        module.* = ast.Node{ .ModuleDeclaration = .{ .name = name } };
+        return module;
     }
     fn consume(s: *Parser, t: token.TokenType) ![]const u8 {
         if (s.l.tok.? != t) {} // error out
@@ -50,32 +57,32 @@ pub const Parser = struct {
         };
     }
     fn use_decl(s: *Parser) !AstNode {
+        std.debug.print("We have use\n", .{});
         _ = try s.consume(.use);
         var imports = std.ArrayList(AstNode).init(s.allocator);
         errdefer imports.deinit();
 
         if (s.l.tok.? == .lbrace) {
             _ = try s.consume(.lbrace);
-            while (s.l.tok.? != .rbrace) {
+            while (s.l.tok.? != .rbrace and s.l.tok.? != .eof) {
                 const import = ast.Node{ .Literal = .{ .lit_type = .string, .value = try s.consume(.string) } };
-                var alias: ?ast.Node = null;
+                var alias: ?*const ast.Node = null;
                 if (s.l.tok.? == .identifier) {
-                    alias = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+                    alias = &ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
                 }
-                try imports.append(&ast.Node{ .UseDeclaration = .{ .import = &import, .alias = &alias } });
+                try imports.append(&ast.Node{ .UseDeclaration = .{ .import = &import, .alias = alias } });
                 if (s.l.tok.? == .rparen) break;
                 _ = try s.consume(.comma);
             }
-            return &ast.Node{ .UseBlock = .{ .uses = &imports } };
+            return &ast.Node{ .UseBlock = .{ .uses = try imports.toOwnedSlice() } };
         } else {
             const import = ast.Node{ .Literal = .{ .lit_type = .string, .value = try s.consume(.string) } };
-            const alias: ?*const ast.Node = if (s.l.tok.? == .identifier) {
-                ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
-            } else {
-                null;
-            };
-            try s.consume(.semicolon);
-            return &ast.Node{ .UseDeclaration = .{ .import = &import, .alias = &alias } };
+            var alias: ?AstNode = null;
+            if (s.l.tok.? == .identifier) {
+                alias = &ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+            }
+            _ = try s.consume(.semicolon);
+            return &ast.Node{ .UseDeclaration = .{ .import = &import, .alias = alias } };
         }
     }
     fn var_decl(s: *Parser) !AstNode {
