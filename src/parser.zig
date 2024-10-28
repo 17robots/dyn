@@ -131,6 +131,9 @@ pub const Parser = struct {
         val.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
         return ast.Node{ .ErrorMember = .{ .value = val } };
     }
+    fn typing(s: *Parser) !ast.Node {
+        _ = s;
+    }
     fn consume(s: *Parser, t: token.TokenType) ![]const u8 {
         if (s.l.tok.? != t) {
             std.debug.print("We had a problem, wanted {any}, got {any}\n", .{ t, s.l.tok.? });
