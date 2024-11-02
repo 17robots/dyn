@@ -19,7 +19,6 @@ void main() {
   loops();
   functions();
   enums();
-  unions();
   errors();
   structs();
   metaprogramming();
@@ -170,7 +169,7 @@ void errors() {
   error DivideErrors {
     DivideByZero
   }
-  
+
   error PartneredDivideErrors {
     i32 DivideByZero
   }
@@ -191,34 +190,6 @@ void errors() {
   }
 
   try try_me();
-}
-
-void unions() {
-  union Something {
-    i32 x,
-    u8 y,
-    f32 z,
-  }
-
-  Something x = { x = 1 };
-  Something y = { y = 1 };
-  Something z = { z = 1.0 };
-
-  io.println(x.x);
-  io.println(y.y);
-  io.println(z.z);
-
-  // can use this to make a "partnered" enum
-  union Partnered {
-    i32 MouseEvent,
-    bool ButtonClick,
-    void OtherEvent,
-  }
-  // or an error enum
-  union Errors(error) {
-    u8[] UnableToAdd,
-    void DivideByZero,
-  }
 }
 
 void structs() {

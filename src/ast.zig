@@ -20,7 +20,6 @@ pub const Node = union(enum) {
     OptionalType: struct { value: *Node },
     PointerType: struct { value: *Node },
     ArrayType: struct { value: *Node },
-    UnionType: struct { value: std.ArrayList(Node) },
     pub fn deinit(n: *Node, alloc: std.mem.Allocator) void {
         switch (n.*) {
             .Program => |s| {
@@ -86,12 +85,6 @@ pub const Node = union(enum) {
             .ArrayType => |s| {
                 s.value.deinit(alloc);
                 alloc.destroy(s.value);
-            },
-            .UnionType => |s| {
-                for (s.value.items) |*i| {
-                    i.deinit(alloc);
-                }
-                s.value.deinit();
             },
             .Identifier => {},
             .Literal => {},
@@ -185,13 +178,6 @@ pub const Node = union(enum) {
             .ArrayType => |s| {
                 std.debug.print("Array type; value", .{});
                 s.value.print();
-            },
-            .UnionType => |s| {
-                std.debug.print("Union type members: \n", .{});
-                for (s.value.items) |u| {
-                    u.print();
-                }
-                std.debug.print("\n-----\n", .{});
             },
         }
     }

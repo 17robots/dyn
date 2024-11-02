@@ -16,3 +16,6 @@ enum Test2 {
 	Two,
 	Three
 }
+
+Test2*?[]
+

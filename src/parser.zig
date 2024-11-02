@@ -50,6 +50,7 @@ pub const Parser = struct {
             },
             .@"enum" => try s.enum_decl(),
             .@"error" => try s.error_decl(),
+            .identifier => try s.typing(),
             else => {
                 s.l.next_tok();
                 return ast.Node{ .Declaration = @as(void, undefined) };
@@ -132,7 +133,33 @@ pub const Parser = struct {
         return ast.Node{ .ErrorMember = .{ .value = val } };
     }
     fn typing(s: *Parser) !ast.Node {
-        _ = s;
+        // all we need to do is check for an identifier and then build from there, will add struct and enum literals later?
+        var curr_type = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+        while (s.l.tok.? != .eof) {
+            switch (s.l.tok.?) {
+                .lbrack => {
+                    _ = try s.consume(.lbrack);
+                    _ = try s.consume(.rbrack);
+                    const child = try s.allocator.create(ast.Node);
+                    child.* = curr_type;
+                    curr_type = ast.Node{ .ArrayType = .{ .value = child } };
+                },
+                .mul => {
+                    _ = try s.consume(.mul);
+                    const child = try s.allocator.create(ast.Node);
+                    child.* = curr_type;
+                    curr_type = ast.Node{ .PointerType = .{ .value = child } };
+                },
+                .question => {
+                    _ = try s.consume(.question);
+                    const child = try s.allocator.create(ast.Node);
+                    child.* = curr_type;
+                    curr_type = ast.Node{ .OptionalType = .{ .value = child } };
+                },
+                else => break,
+            }
+        }
+        return curr_type;
     }
     fn consume(s: *Parser, t: token.TokenType) ![]const u8 {
         if (s.l.tok.? != t) {
