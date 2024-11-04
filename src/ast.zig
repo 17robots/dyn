@@ -20,6 +20,12 @@ pub const Node = union(enum) {
     OptionalType: struct { value: *Node },
     PointerType: struct { value: *Node },
     ArrayType: struct { value: *Node },
+    VoidType,
+    FunctionDeclaration: struct { fn_type: *Node, fn_name: *Node, args: std.ArrayList(Node), body: *Node },
+    FunctionArg: struct { mut: bool, arg_type: *Node, arg_name: *Node, default_val: ?*Node },
+    VariableDeclaration: struct { mut: bool, var_type: *Node, var_name: *Node, default_val: ?*Node },
+    Block: struct { stmts: std.ArrayList(Node) },
+    Statement,
     pub fn deinit(n: *Node, alloc: std.mem.Allocator) void {
         switch (n.*) {
             .Program => |s| {
@@ -89,6 +95,38 @@ pub const Node = union(enum) {
             .Identifier => {},
             .Literal => {},
             .Declaration => {},
+            .FunctionDeclaration => |s| {
+                s.fn_type.deinit(alloc);
+                alloc.destroy(s.fn_type);
+                s.fn_name.deinit(alloc);
+                alloc.destroy(s.fn_name);
+                s.body.deinit(alloc);
+                alloc.destroy(s.body);
+                for (s.args.items) |arg| {
+                    arg.deinit(alloc);
+                }
+                s.args.deinit();
+            },
+            .FunctionArg => |s| {
+                s.arg_type.deinit(alloc);
+                alloc.destroy(s.arg_type);
+                s.arg_name.deinit(alloc);
+                alloc.destroy(s.arg_name);
+                if (s.default_val) |d| {
+                    d.deinit(alloc);
+                    alloc.destroy(d);
+                }
+            },
+            .VariableDeclaration => |s| {
+                s.var_type.deinit(alloc);
+                alloc.destroy(s.var_type);
+                s.var_name.deinit(alloc);
+                alloc.destroy(s.var_name);
+                if (s.default_val) |d| {
+                    d.deinit(alloc);
+                    alloc.destroy(s.default_val);
+                }
+            },
         }
     }
     pub fn print(n: Node) void {
@@ -178,6 +216,35 @@ pub const Node = union(enum) {
             .ArrayType => |s| {
                 std.debug.print("Array type; value", .{});
                 s.value.print();
+            },
+            .FunctionDeclaration => |s| {
+                std.debug.print("Function Declaration\n", .{});
+                s.fn_type.print();
+                s.fn_name.print();
+                std.debug.print("Fn Args\n", .{});
+                for (s.args.items) |a| {
+                    a.print();
+                }
+            },
+            .FunctionArg => |s| {
+                std.debug.print("Function Arg\n", .{});
+                std.debug.print("Mutable?: {any}", .{s.mut});
+                s.arg_type.print();
+                s.arg_name.print();
+                if (s.default_val) |d| {
+                    std.debug.print("Default Val\n", .{});
+                    d.print();
+                }
+            },
+            .VariableDeclaration => |s| {
+                std.debug.print("Variable Declaration\n", .{});
+                std.debug.print("Mutable?: {any}", .{s.mut});
+                s.var_type.print();
+                s.var_name.print();
+                if (s.default_val) |d| {
+                    std.debug.print("Default Val\n", .{});
+                    d.print();
+                }
             },
         }
     }

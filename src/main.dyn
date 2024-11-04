@@ -17,5 +17,6 @@ enum Test2 {
 	Three
 }
 
-Test2*?[]
+Test2*?[] testFn {
+}
 

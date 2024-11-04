@@ -50,12 +50,16 @@ pub const Parser = struct {
             },
             .@"enum" => try s.enum_decl(),
             .@"error" => try s.error_decl(),
-            .identifier => try s.typing(),
+            .identifier, .void, .mut => try s.fn_var_decl(),
             else => {
                 s.l.next_tok();
                 return ast.Node{ .Declaration = @as(void, undefined) };
             },
         };
+    }
+    fn stmt(s: *Parser) !ast.Node {
+        _ = s;
+        return ast.Node{.Statement};
     }
     fn use_block(s: *Parser) !ast.Node {
         _ = try s.consume(.lbrace);
@@ -132,6 +136,9 @@ pub const Parser = struct {
         val.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
         return ast.Node{ .ErrorMember = .{ .value = val } };
     }
+    fn block(s: *Parser) !ast.Node {
+        _ = try s.consume(.lbrace);
+    }
     fn typing(s: *Parser) !ast.Node {
         // all we need to do is check for an identifier and then build from there, will add struct and enum literals later?
         var curr_type = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
@@ -160,6 +167,57 @@ pub const Parser = struct {
             }
         }
         return curr_type;
+    }
+    fn fn_var_decl(s: *Parser) !ast.Node {
+        var is_fn = false;
+        var mut = false;
+        const fn_var_type = try s.allocator.create(ast.Node);
+        if (s.l.tok.? == .mut) {
+            mut = true;
+        }
+        if (s.l.tok.? == .void) {
+            _ = try s.consume(.void);
+            fn_var_type.* = ast.Node{.VoidType};
+        } else {
+            fn_var_type.* = try s.typing();
+        }
+        const name = try s.allocator.create(ast.Node);
+        name.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+        if (s.l.tok.? == .lparen) {
+            if (mut) {} // we have issues
+            is_fn = true;
+            _ = try s.consume(.lparen);
+            var args = std.ArrayList(ast.Node).init(s.allocator);
+            while (s.l.tok.? != .rparen and s.l.tok.? != .eof) {
+                var arg_mut = false;
+                if (s.l.tok.? == .mut) {
+                    _ = try s.consume(.mut);
+                    arg_mut = true;
+                }
+                const arg_type = try s.allocator.create(ast.Node);
+                arg_type.* = s.typing();
+                const arg_name = try s.allocator.create(ast.Node);
+                arg_name.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+                if (s.tok.? == .eq) {
+                    _ = try s.consume(.eq);
+                    // this needs to be an expression thing (which we havent made)
+                }
+                try args.append(ast.Node{ .FunctionArg = .{ .mut = arg_mut, .arg_name = arg_name, .arg_type = arg_type } });
+            }
+            const fn_body = try s.allocator.create(ast.Node);
+            if (s.l.tok.? == .lbrace) {} else if (s.l.tok.? == .arrow) {
+                _ = try s.consume(.arrow);
+            }
+            return ast.Node{ .FunctionDeclaration = .{ .args = args, .fn_type = fn_var_type, .body = fn_body } };
+        } else {
+            var var_val: ?*ast.Node = null;
+            if (s.l.tok.? == .eq) {
+                _ = try s.consume(.eq);
+                var_val = try s.allocator.create(ast.Node);
+            }
+            if (!mut and var_val == null) {} // unassigned var has to be mut
+            return ast.Node{ .VariableDeclaration = .{ .mut = mut, .var_type = fn_var_type, .var_name = name, .default_val = var_val } };
+        }
     }
     fn consume(s: *Parser, t: token.TokenType) ![]const u8 {
         if (s.l.tok.? != t) {
