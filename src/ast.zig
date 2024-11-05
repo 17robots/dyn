@@ -26,6 +26,7 @@ pub const Node = union(enum) {
     VariableDeclaration: struct { mut: bool, var_type: *Node, var_name: *Node, default_val: ?*Node },
     Block: struct { stmts: std.ArrayList(Node) },
     Statement: void,
+    Expression: void,
     pub fn deinit(n: *Node, alloc: std.mem.Allocator) void {
         switch (n.*) {
             .Program => |s| {
@@ -97,6 +98,7 @@ pub const Node = union(enum) {
             .Declaration => {},
             .VoidType => {},
             .Statement => {},
+            .Expression => {},
             .FunctionDeclaration => |s| {
                 s.fn_type.deinit(alloc);
                 alloc.destroy(s.fn_type);
@@ -227,8 +229,10 @@ pub const Node = union(enum) {
             },
             .FunctionDeclaration => |s| {
                 std.debug.print("Function Declaration\n", .{});
+                std.debug.print("Function Type: ", .{});
                 s.fn_type.print();
                 std.debug.print("\n", .{});
+                std.debug.print("Function Name: ", .{});
                 s.fn_name.print();
                 std.debug.print("\n", .{});
                 std.debug.print("Fn Args\n", .{});
@@ -236,6 +240,8 @@ pub const Node = union(enum) {
                     a.print();
                     std.debug.print("\n", .{});
                 }
+                s.body.print();
+                std.debug.print("\n", .{});
             },
             .FunctionArg => |s| {
                 std.debug.print("Function Arg\n", .{});
@@ -274,6 +280,9 @@ pub const Node = union(enum) {
             },
             .Statement => {
                 std.debug.print("Statement\n", .{});
+            },
+            .Expression => {
+                std.debug.print("Expression\n", .{});
             },
         }
     }

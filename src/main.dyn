@@ -17,4 +17,4 @@ enum Test2 {
 	Three
 }
 
-u32 do_something() {}
+mut u32 do_something = 4;

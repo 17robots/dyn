@@ -61,6 +61,10 @@ pub const Parser = struct {
         s.l.next_tok();
         return ast.Node{ .Statement = @as(void, undefined) };
     }
+    fn expr(s: *Parser) !ast.Node {
+        s.l.next_tok();
+        return ast.Node{ .Expression = @as(void, undefined) };
+    }
     fn use_block(s: *Parser) !ast.Node {
         _ = try s.consume(.lbrace);
         var use: ast.Node = undefined;
@@ -139,20 +143,28 @@ pub const Parser = struct {
     fn block(s: *Parser) !ast.Node {
         _ = try s.consume(.lbrace);
         var stmts = std.ArrayList(ast.Node).init(s.allocator);
-        while (s.l.tok.? != .eof) {
+        errdefer stmts.deinit();
+        while (s.l.tok.? != .rbrace and s.l.tok.? != .eof) {
             try stmts.append(try s.stmt());
-            if (s.l.tok.? == .rbrace) break;
         }
         _ = try s.consume(.rbrace);
         return ast.Node{ .Block = .{ .stmts = stmts } };
     }
+    fn struct_type(s: *Parser) !ast.Node {
+        _ = s;
+    }
+    fn enum_type(s: *Parser) !ast.Node {
+        _ = s;
+    }
     fn typing(s: *Parser) !ast.Node {
-        // all we need to do is check for an identifier and then build from there, will add struct and enum literals later?
         var curr_type: ast.Node = undefined;
-        if (s.l.tok.? == .void) {
-            curr_type = ast.Node{ .VoidType = @as(void, undefined) };
-        } else {
-            curr_type = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+        switch (s.l.tok.?) {
+            .void => curr_type = ast.Node{ .VoidType = @as(void, undefined) },
+            .@"struct" => curr_type = try s.struct_type(),
+            .@"enum" => curr_type = try s.enum_type(),
+            .identifier => ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } },
+            .lparen => {}, // this means we have a grouping or something that we plan to have as like struct*[]
+            else => {}, // this should throw an invalid type specifier
         }
         while (s.l.tok.? != .eof) {
             switch (s.l.tok.?) {
@@ -175,6 +187,9 @@ pub const Parser = struct {
                     child.* = curr_type;
                     curr_type = ast.Node{ .OptionalType = .{ .value = child } };
                 },
+                .lparen => {},
+                .@"struct" => {},
+                .@"enum" => {},
                 else => break,
             }
         }
@@ -184,7 +199,8 @@ pub const Parser = struct {
         _ = try s.consume(.lparen);
         var args = std.ArrayList(ast.Node).init(s.allocator);
         errdefer args.deinit();
-        while (s.l.tok.? != .rparen and s.l.tok.? != .eof) {
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .rparen) break;
             var arg_mut = false;
             if (s.l.tok.? == .mut) {
                 _ = try s.consume(.mut);
@@ -200,6 +216,10 @@ pub const Parser = struct {
                 // this needs to be an expression thing (which we havent made)
             }
             try args.append(ast.Node{ .FunctionArg = .{ .mut = arg_mut, .arg_name = arg_name, .arg_type = arg_type, .default_val = arg_default } });
+            _ = try s.consume(.comma);
+        }
+        if (s.l.tok.? == .eof) {
+            std.debug.print("We need ending )\n", .{}); // error out
         }
         _ = try s.consume(.rparen);
         return args;
@@ -215,6 +235,7 @@ pub const Parser = struct {
         const name = try s.allocator.create(ast.Node);
         name.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
         if (s.l.tok.? == .lparen) {
+            std.debug.print("We are a fn\n", .{});
             if (mut) {} // we have issues
             const args = try s.fn_args();
             const fn_body = try s.allocator.create(ast.Node);
@@ -222,6 +243,7 @@ pub const Parser = struct {
                 fn_body.* = try s.block();
             } else if (s.l.tok.? == .arrow) {
                 _ = try s.consume(.arrow);
+                fn_body.* = try s.expr();
             }
             return ast.Node{ .FunctionDeclaration = .{ .args = args, .fn_type = fn_var_type, .fn_name = name, .body = fn_body } };
         } else {
@@ -229,8 +251,10 @@ pub const Parser = struct {
             if (s.l.tok.? == .eq) {
                 _ = try s.consume(.eq);
                 var_val = try s.allocator.create(ast.Node);
+                var_val.?.* = try s.expr();
             }
             if (!mut and var_val == null) {} // unassigned var has to be mut
+            _ = try s.consume(.semicolon);
             return ast.Node{ .VariableDeclaration = .{ .mut = mut, .var_type = fn_var_type, .var_name = name, .default_val = var_val } };
         }
     }
