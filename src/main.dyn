@@ -17,6 +17,4 @@ enum Test2 {
 	Three
 }
 
-Test2*?[] testFn {
-}
-
+u32 do_something() {}
