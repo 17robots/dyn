@@ -194,8 +194,8 @@ void errors() {
 
 void structs() {
   struct X {
-    i32 a,b,c,
-    f32 x,y,z
+    i32 a,b,c;
+    f32 x,y,z;
   }
 
   type Y = struct {
@@ -218,8 +218,8 @@ void structs() {
   struct MethodExample {
     i32 a = 0,
     MethodExample init(i32 a) => { a = a },
-    void print(s: MethodExample) => io.println("{s.a}"),
-    void setADouble(s: *MethodExample) => s.*.a = s.*.a * 2
+    void print(MethodExample s) => io.println("{s.a}"),
+    void setADouble(MethodExample* s) => s.*.a = s.*.a * 2
   }
 }
 
@@ -248,9 +248,9 @@ void memory() {
   heap.GeneralPurposeAllocator gpa = heap.GeneralPurposeAllocator.init({});
   mut heap.Allocator alloc = gpa.alloc();
   defer {if gpa.deinit() == .leak { $panic("we leaked"); } }
-  *i32 p = try alloc.allocOne(i32);
+  i32* p = try alloc.allocOne(i32);
   defer alloc.free(p);
-  *i32 p1 = try alloc.allocOne(i32, 1);
+  i32* p1 = try alloc.allocOne(i32, 1);
   defer gpa.free(p1);
   i32[] p2 = try alloc.allocMany(i32, 2);
   defer alloc.free(p2);
@@ -263,10 +263,24 @@ void memory() {
   i32[] p3 = aa.allocMany(i32, 2);
 }
 
+struct { i32 hello, i32 world } something_struct() {
+}
+
+enum { cool, i32 thing, here } something_enum() {
+}
+
+struct { enum { one, two, three } x } do_a_many_thing(struct { bool do, bool we, bool think } a, enum { we, dont, like, things } b, error { weCant, doThingFailure } c) { }
+
+type SomeFancyThing(comp type t) {
+  return struct {
+    type Self = $self(),
+    u32 woah,
+    u32 there,
+  };
+}
+
 void concurrency() {
   void printStuff() => io.println("thread stuff");
-
   sync.Thread t1 = sync.spawn(printStuff());
-
   t1.join();
 }

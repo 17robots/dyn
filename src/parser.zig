@@ -135,6 +135,24 @@ pub const Parser = struct {
         }
         return ast.Node{ .ErrorDeclaration = .{ .name = error_name, .members = members } };
     }
+    fn struct_decl(s: *Parser) !ast.Node {
+        _ = try s.consume(.@"struct");
+        const struct_name = try s.allocator.create(ast.Node);
+        struct_name.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+        _ = try s.consume(.lbrace);
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .rbrace) break;
+            const member_type = try s.allocator.create(ast.Node);
+            member_type.* = try s.typing();
+            const first = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+            _ = first;
+        }
+        _ = try s.consume(.rbrace);
+    }
+    fn struct_fn_var_decl(s: *Parser) !ast.Node {
+        const t = try s.allocator.create(ast.Node);
+        t.* = try s.typing();
+    }
     fn error_member(s: *Parser) !ast.Node {
         const val = try s.allocator.create(ast.Node);
         val.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
@@ -151,10 +169,45 @@ pub const Parser = struct {
         return ast.Node{ .Block = .{ .stmts = stmts } };
     }
     fn struct_type(s: *Parser) !ast.Node {
-        _ = s;
+        _ = try s.consume(.@"struct");
+    }
+    fn error_type(s: *Parser) !ast.Node {
+        _ = try s.consume(.@"error");
+        _ = try s.consume(.lbrace);
+        var members = std.ArrayList(ast.Node).init(s.allocator);
+        while (true) {
+            try members.append(try s.error_member());
+            if (s.l.tok.? == .rbrace or s.l.tok.? == .eof) break;
+            _ = try s.consume(.comma);
+            if (s.l.tok.? == .rbrace or s.l.tok.? == .eof) break; // in case theres a comma at the end before the rbrace
+        }
+        if (s.l.tok.? == .rbrace) {
+            _ = try s.consume(.rbrace);
+        }
+        return ast.Node{ .ErrorType = .{ .members = members } };
     }
     fn enum_type(s: *Parser) !ast.Node {
+        _ = try s.consume(.@"enum");
+        _ = try s.consume(.lbrace);
+        var members = std.ArrayList(ast.Node).init(s.allocator);
+        while (true) {
+            try members.append(try s.enum_member());
+            if (s.l.tok.? == .rbrace or s.l.tok.? == .eof) break;
+            _ = try s.consume(.comma);
+            if (s.l.tok.? == .rbrace or s.l.tok.? == .eof) break; // in case theres a comma at the end before the rbrace
+        }
+        if (s.l.tok.? == .rbrace) {
+            _ = try s.consume(.rbrace);
+        }
+        return ast.Node{ .EnumType = .{ .members = members } };
+    }
+    fn fn_type(s: *Parser) !ast.Node {
         _ = s;
+        return ast.Node{ .Expression = @as(void, undefined) };
+    }
+    fn fn_lambda(s: *Parser) !ast.Node { // expression
+        _ = s;
+        return ast.Node{ .Expression = @as(void, undefined) };
     }
     fn typing(s: *Parser) !ast.Node {
         var curr_type: ast.Node = undefined;
@@ -162,8 +215,8 @@ pub const Parser = struct {
             .void => curr_type = ast.Node{ .VoidType = @as(void, undefined) },
             .@"struct" => curr_type = try s.struct_type(),
             .@"enum" => curr_type = try s.enum_type(),
-            .identifier => ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } },
-            .lparen => {}, // this means we have a grouping or something that we plan to have as like struct*[]
+            .@"error" => curr_type = try s.error_type(),
+            .identifier => curr_type = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } },
             else => {}, // this should throw an invalid type specifier
         }
         while (s.l.tok.? != .eof) {
@@ -187,9 +240,7 @@ pub const Parser = struct {
                     child.* = curr_type;
                     curr_type = ast.Node{ .OptionalType = .{ .value = child } };
                 },
-                .lparen => {},
-                .@"struct" => {},
-                .@"enum" => {},
+                .lparen => {}, // function type most likely
                 else => break,
             }
         }
@@ -201,21 +252,15 @@ pub const Parser = struct {
         errdefer args.deinit();
         while (s.l.tok.? != .eof) {
             if (s.l.tok.? == .rparen) break;
-            var arg_mut = false;
-            if (s.l.tok.? == .mut) {
-                _ = try s.consume(.mut);
-                arg_mut = true;
-            }
-            const arg_type = try s.allocator.create(ast.Node);
-            arg_type.* = try s.typing();
-            const arg_name = try s.allocator.create(ast.Node);
-            arg_name.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
-            const arg_default: ?*ast.Node = null;
+            const arg_declarator = try s.allocator.create(ast.Node);
+            arg_declarator.* = try s.declarator();
+            var arg_default: ?*ast.Node = null;
             if (s.l.tok.? == .eq) {
+                arg_default = try s.allocator.create(ast.Node);
                 _ = try s.consume(.eq);
-                // this needs to be an expression thing (which we havent made)
+                arg_default.?.* = try s.expr();
             }
-            try args.append(ast.Node{ .FunctionArg = .{ .mut = arg_mut, .arg_name = arg_name, .arg_type = arg_type, .default_val = arg_default } });
+            try args.append(ast.Node{ .FunctionArg = .{ .arg_declarator = arg_declarator, .default_val = arg_default } });
             _ = try s.consume(.comma);
         }
         if (s.l.tok.? == .eof) {
@@ -224,19 +269,28 @@ pub const Parser = struct {
         _ = try s.consume(.rparen);
         return args;
     }
-    fn fn_var_decl(s: *Parser) !ast.Node {
+    fn declarator(s: *Parser) !ast.Node {
         var mut = false;
         if (s.l.tok.? == .mut) {
             _ = try s.consume(.mut);
             mut = true;
         }
-        const fn_var_type = try s.allocator.create(ast.Node);
-        fn_var_type.* = try s.typing();
-        const name = try s.allocator.create(ast.Node);
-        name.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+        const declarator_type = try s.allocator.create(ast.Node);
+        declarator_type.* = try s.typing();
+        const declarator_name = try s.allocator.create(ast.Node);
+        declarator_name.* = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } };
+        return ast.Node{ .Declarator = .{ .mut = mut, .declarator_type = declarator_type, .declarator_name = declarator_name } };
+    }
+    fn fn_var_decl(s: *Parser) !ast.Node {
+        const var_fn_declarator = try s.allocator.create(ast.Node);
+        var_fn_declarator.* = try s.declarator();
         if (s.l.tok.? == .lparen) {
-            std.debug.print("We are a fn\n", .{});
-            if (mut) {} // we have issues
+            switch (var_fn_declarator.*) {
+                .Declarator => |d| {
+                    if (!d.mut) {} // we have issues
+                },
+                else => unreachable,
+            }
             const args = try s.fn_args();
             const fn_body = try s.allocator.create(ast.Node);
             if (s.l.tok.? == .lbrace) {
@@ -245,7 +299,7 @@ pub const Parser = struct {
                 _ = try s.consume(.arrow);
                 fn_body.* = try s.expr();
             }
-            return ast.Node{ .FunctionDeclaration = .{ .args = args, .fn_type = fn_var_type, .fn_name = name, .body = fn_body } };
+            return ast.Node{ .FunctionDeclaration = .{ .args = args, .fn_declarator = var_fn_declarator, .body = fn_body } };
         } else {
             var var_val: ?*ast.Node = null;
             if (s.l.tok.? == .eq) {
@@ -253,9 +307,14 @@ pub const Parser = struct {
                 var_val = try s.allocator.create(ast.Node);
                 var_val.?.* = try s.expr();
             }
-            if (!mut and var_val == null) {} // unassigned var has to be mut
+            switch (var_fn_declarator.*) {
+                .Declarator => |d| {
+                    if (!d.mut and var_val == null) {}
+                },
+                else => unreachable,
+            }
             _ = try s.consume(.semicolon);
-            return ast.Node{ .VariableDeclaration = .{ .mut = mut, .var_type = fn_var_type, .var_name = name, .default_val = var_val } };
+            return ast.Node{ .VariableDeclaration = .{ .var_declarator = var_fn_declarator, .default_val = var_val } };
         }
     }
     fn consume(s: *Parser, t: token.TokenType) ![]const u8 {

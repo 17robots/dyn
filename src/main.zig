@@ -1,5 +1,5 @@
 const std = @import("std");
-const Parser = @import("parser.zig").Parser;
+const Parser = @import("parser2.zig").Parser;
 const ast = @import("ast.zig");
 
 pub fn main() !void {
@@ -11,9 +11,8 @@ pub fn main() !void {
     const file_body = try read_file(alloc, "src/main.dyn");
 
     var parser = Parser.init(alloc, file_body);
-    var p = try parser.parse();
-    defer p.deinit(parser.allocator);
-    p.print();
+    _ = try parser.parse_program();
+    // defer p.deinit(parser.allocator);
 }
 
 pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {

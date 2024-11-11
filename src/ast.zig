@@ -7,26 +7,38 @@ pub const LiteralType = enum {
 
 pub const Node = union(enum) {
     Program: struct { declarations: std.ArrayList(Node), pub_declarations: std.ArrayList(Node) },
-    ModuleDeclaration: struct { name: *Node },
-    UseDeclaration: struct { import: *Node, alias: ?*Node },
-    UseBlock: struct { uses: std.ArrayList(Node) },
-    Literal: struct { lit_type: LiteralType, value: []const u8 },
-    Identifier: struct { value: []const u8 },
-    EnumDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    EnumMember: struct { value: *Node },
-    ErrorDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    ErrorMember: struct { value: *Node },
+
     Declaration: void,
-    OptionalType: struct { value: *Node },
+    UseDeclaration: struct { import: *Node, alias: ?*Node },
+    ModuleDeclaration: struct { name: *Node },
+    EnumDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    ErrorDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    VariableDeclaration: struct { var_declarator: *Node, default_val: ?*Node },
+    FunctionDeclaration: struct { fn_declarator: *Node, args: std.ArrayList(Node), body: *Node },
+    StructDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    TypeDeclaration: struct { name: *Node, typing: *Node },
+
     PointerType: struct { value: *Node },
     ArrayType: struct { value: *Node },
     VoidType: void,
-    FunctionDeclaration: struct { fn_type: *Node, fn_name: *Node, args: std.ArrayList(Node), body: *Node },
-    FunctionArg: struct { mut: bool, arg_type: *Node, arg_name: *Node, default_val: ?*Node },
-    VariableDeclaration: struct { mut: bool, var_type: *Node, var_name: *Node, default_val: ?*Node },
-    Block: struct { stmts: std.ArrayList(Node) },
-    Statement: void,
+    ErrorType: struct { members: std.ArrayList(Node) },
+    EnumType: struct { members: std.ArrayList(Node) },
+    OptionalType: struct { value: *Node },
+
     Expression: void,
+    Literal: struct { lit_type: LiteralType, value: []const u8 },
+    Identifier: struct { value: []const u8 },
+
+    Statement: void,
+    Block: struct { stmts: std.ArrayList(Node) },
+
+    ErrorMember: struct { value: *Node },
+    EnumMember: struct { value: *Node },
+    UseBlock: struct { uses: std.ArrayList(Node) },
+    Declarator: struct { mut: bool, declarator_type: *Node, declarator_name: *Node },
+    DeclaratorList: struct { mut: bool, declarator_type: *Node, declarator_names: std.ArrayList(Node) },
+    FunctionArg: struct { arg_declarator: *Node, default_val: ?*Node },
+
     pub fn deinit(n: *Node, alloc: std.mem.Allocator) void {
         switch (n.*) {
             .Program => |s| {
@@ -100,32 +112,26 @@ pub const Node = union(enum) {
             .Statement => {},
             .Expression => {},
             .FunctionDeclaration => |s| {
-                s.fn_type.deinit(alloc);
-                alloc.destroy(s.fn_type);
-                s.fn_name.deinit(alloc);
-                alloc.destroy(s.fn_name);
+                s.fn_declarator.deinit(alloc);
+                alloc.destroy(s.fn_declarator);
                 s.body.deinit(alloc);
-                alloc.destroy(s.body);
                 for (s.args.items) |*arg| {
                     arg.deinit(alloc);
                 }
                 s.args.deinit();
+                alloc.destroy(s.body);
             },
             .FunctionArg => |s| {
-                s.arg_type.deinit(alloc);
-                alloc.destroy(s.arg_type);
-                s.arg_name.deinit(alloc);
-                alloc.destroy(s.arg_name);
+                s.arg_declarator.deinit(alloc);
+                alloc.destroy(s.arg_declarator);
                 if (s.default_val) |d| {
                     d.deinit(alloc);
                     alloc.destroy(d);
                 }
             },
             .VariableDeclaration => |s| {
-                s.var_type.deinit(alloc);
-                alloc.destroy(s.var_type);
-                s.var_name.deinit(alloc);
-                alloc.destroy(s.var_name);
+                s.var_declarator.deinit(alloc);
+                alloc.destroy(s.var_declarator);
                 if (s.default_val) |d| {
                     d.deinit(alloc);
                     alloc.destroy(d);
@@ -136,6 +142,12 @@ pub const Node = union(enum) {
                     st.deinit(alloc);
                 }
                 s.stmts.deinit();
+            },
+            .Declarator => |s| {
+                s.declarator_type.deinit(alloc);
+                alloc.destroy(s.declarator_type);
+                s.declarator_name.deinit(alloc);
+                alloc.destroy(s.declarator_name);
             },
         }
     }
@@ -229,11 +241,8 @@ pub const Node = union(enum) {
             },
             .FunctionDeclaration => |s| {
                 std.debug.print("Function Declaration\n", .{});
-                std.debug.print("Function Type: ", .{});
-                s.fn_type.print();
-                std.debug.print("\n", .{});
-                std.debug.print("Function Name: ", .{});
-                s.fn_name.print();
+                std.debug.print("Function Declarator: ", .{});
+                s.fn_declarator.print();
                 std.debug.print("\n", .{});
                 std.debug.print("Fn Args\n", .{});
                 for (s.args.items) |a| {
@@ -245,10 +254,8 @@ pub const Node = union(enum) {
             },
             .FunctionArg => |s| {
                 std.debug.print("Function Arg\n", .{});
-                std.debug.print("Mutable?: {any}\n", .{s.mut});
-                s.arg_type.print();
-                std.debug.print("\n", .{});
-                s.arg_name.print();
+                std.debug.print("Arg declarator\n", .{});
+                s.arg_declarator.print();
                 std.debug.print("\n", .{});
                 if (s.default_val) |d| {
                     std.debug.print("Default Val\n", .{});
@@ -257,10 +264,8 @@ pub const Node = union(enum) {
             },
             .VariableDeclaration => |s| {
                 std.debug.print("Variable Declaration\n", .{});
-                std.debug.print("Mutable?: {any}", .{s.mut});
-                s.var_type.print();
-                std.debug.print("\n", .{});
-                s.var_name.print();
+                std.debug.print("Variable declarator\n", .{});
+                s.var_declarator.print();
                 std.debug.print("\n", .{});
                 if (s.default_val) |d| {
                     std.debug.print("Default Val\n", .{});
@@ -283,6 +288,16 @@ pub const Node = union(enum) {
             },
             .Expression => {
                 std.debug.print("Expression\n", .{});
+            },
+            .Declarator => |s| {
+                std.debug.print("Declarator\n", .{});
+                std.debug.print("Mut: {any}\n", .{s.mut});
+                std.debug.print("Type: ", .{});
+                s.declarator_type.print();
+                std.debug.print("\n", .{});
+                std.debug.print("Name: \n", .{});
+                s.declarator_name.print();
+                std.debug.print("\n", .{});
             },
         }
     }
