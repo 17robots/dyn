@@ -20,12 +20,17 @@ pub const Node = union(enum) {
     ErrorDecl: struct { name: *Node, members: std.ArrayList(Node) },
     TypeDecl: struct { name: *Node, type: *Node },
     VarDecl: struct { declarator: *Node, default_val: ?*Node },
-    FnDecl: struct { declarator: *Node, body: ?*Node },
+    FnDecl: struct { declarator: *Node, args: std.ArrayList(Node), body: *Node },
     BlockStmt: struct { stmts: std.ArrayList(Node) },
     FnType: struct { type: *Node, args: std.ArrayList(Node) },
     EnumType: struct { members: std.ArrayList(Node) },
     ErrorType: struct { members: std.ArrayList(Node) },
     StructType: struct { members: std.ArrayList(Node) },
+    PointerType: struct { type: *Node },
+    OptionalType: struct { type: *Node },
+    ArrayType: struct { type: *Node },
+    Statement, // remove this eventually
+    Expression,
 
     pub fn deinit(n: Node, alloc: std.mem.Allocator) void {
         switch (n) {
@@ -48,7 +53,7 @@ pub const Node = union(enum) {
                 s.name.deinit(alloc);
                 s.type.deinit(alloc);
             },
-            .Literal, .Identifier => {},
+            .Literal, .Identifier, .Statement, .Expression => {},
             .StructDecl, .EnumDecl, .ErrorDecl => |s| {
                 s.name.deinit(alloc);
                 alloc.destroy(s.name);
@@ -76,6 +81,10 @@ pub const Node = union(enum) {
                     i.deinit(alloc);
                 }
                 s.args.deinit();
+            },
+            .OptionalType, .ArrayType, .PointerType => |s| {
+                s.type.deinit(alloc);
+                alloc.destroy(s.type);
             },
         }
     }

@@ -97,9 +97,29 @@ pub const Parser = struct {
         return ast.Node{ .FnDecl = .{ .declarator = declarator, .body = body } };
     }
     fn parse_fn_literal(s: *Parser) !ast.Node {
-        _ = s;
+        const fn_type = try s.parse_type();
+        switch (fn_type) {
+            .StructDecl, .EnumDecl, .ErrorDecl => {}, // error out
+            else => {},
+        }
+        _ = try s.consume(.lparen);
+        var args = try s.create_node_list();
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .rparen) break;
+            try args.append(try s.parse_declarator(false));
+            if (s.l.tok.? == .rparen) break;
+            _ = try s.consume(.comma);
+        }
+        _ = try s.consume(.rparen);
+        var body: *ast.Node = undefined;
+        if (s.l.tok.? == .arrow) {
+            body = try s.create_node_ptr(try s.parse_expr());
+        } else if (s.l.tok.? == .rbrace) {
+            body = try s.create_node_ptr(try s.parse_block());
+        } else {} // error out
     }
     fn parse_enum(s: *Parser) !ast.Node {
+        _ = try s.consume(.@"enum");
         return switch (s.l.tok.?) {
             .identifier => try s.parse_enum_decl(),
             .lbrace => try s.parse_enum_type(),
@@ -107,7 +127,6 @@ pub const Parser = struct {
         };
     }
     fn parse_enum_decl(s: *Parser) !ast.Node {
-        _ = try s.consume(.@"enum");
         const name = try s.create_node_ptr(ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } });
         var members = try s.create_node_list();
         _ = try s.consume(.lbrace);
@@ -119,7 +138,6 @@ pub const Parser = struct {
         return ast.Node{ .EnumDecl = .{ .name = name, .members = members } };
     }
     fn parse_enum_type(s: *Parser) !ast.Node {
-        _ = try s.consume(.@"enum");
         var members = try s.create_node_list();
         _ = try s.consume(.lbrace);
         while (s.l.tok.? != .eof) {
@@ -130,6 +148,7 @@ pub const Parser = struct {
         return ast.Node{ .EnumType = .{ .members = members } };
     }
     fn parse_error(s: *Parser) !ast.Node {
+        _ = try s.consume(.@"error");
         return switch (s.l.tok.?) {
             .identifier => try s.parse_error_decl(),
             .lbrace => try s.parse_error_type(),
@@ -137,7 +156,6 @@ pub const Parser = struct {
         };
     }
     fn parse_error_decl(s: *Parser) !ast.Node {
-        _ = try s.consume(.@"error");
         const name = try s.create_node_ptr(ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } });
         var members = try s.create_node_list();
         _ = try s.consume(.lbrace);
@@ -149,7 +167,6 @@ pub const Parser = struct {
         return ast.Node{ .ErrorDecl = .{ .name = name, .members = members } };
     }
     fn parse_error_type(s: *Parser) !ast.Node {
-        _ = try s.consume(.@"error");
         var members = try s.create_node_list();
         _ = try s.consume(.lbrace);
         while (s.l.tok.? != .eof) {
@@ -161,6 +178,7 @@ pub const Parser = struct {
     }
 
     fn parse_struct(s: *Parser) !ast.Node {
+        _ = try s.consume(.@"struct");
         return switch (s.l.tok.?) {
             .identifier => try s.parse_struct_decl(),
             .lbrace => try s.parse_struct_type(),
@@ -168,10 +186,95 @@ pub const Parser = struct {
         };
     }
     fn parse_struct_decl(s: *Parser) !ast.Node {
-        _ = s;
+        const name = try s.create_node_ptr(ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } });
+        _ = try s.consume(.lbrace);
+        var members = try s.create_node_list();
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .rbrace) break;
+            const declarator = try s.parse_declarator(false);
+            switch (declarator) {
+                .Declarator => {
+                    switch (s.l.tok.?) {
+                        .lparen => {
+                            _ = try s.consume(.lparen);
+                            var args = try s.create_node_list();
+                            while (s.l.tok.? != .eof) {
+                                if (s.l.tok.? == .rparen) break;
+                                try args.append(try s.parse_declarator(false));
+                                if (s.l.tok.? == .rparen) break;
+                            }
+                            _ = try s.consume(.rparen);
+                            var body: *ast.Node = undefined;
+                            if (s.l.tok.? == .arrow) {
+                                _ = try s.consume(.arrow);
+                                body = try s.parse_expr();
+                            } else if (s.l.tok.? == .lbrace) {
+                                body = try s.parse_block();
+                            } else {}
+                            try members.append(ast.Node{ .FnDecl = .{ .declarator = declarator, .args = args, .body = try s.create_node_ptr(body) } });
+                        }, // function
+                        .eq => {
+                            _ = try s.consume(.eq);
+                            try members.append(ast.Node{ .VarDecl = .{ .declarator = try s.create_node_ptr(declarator), .default_val = try s.parse_expr() } });
+                        }, // variable default
+                        else => try members.append(declarator), // uhhhh dunno
+                    }
+                },
+                .StructDecl, .EnumDecl, .ErrorDecl => {
+                    try members.append(declarator);
+                },
+                else => {}, // error out
+            }
+            if (s.l.tok.? == .rbrace) break;
+            try s.consume(.comma);
+        }
+        _ = try s.consume(.rbrace);
+        return ast.Node{ .StructDecl = .{ .name = name, .members = members } };
     }
     fn parse_struct_type(s: *Parser) !ast.Node {
-        _ = s;
+        _ = try s.consume(.lbrace);
+        var members = try s.create_node_list();
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .rbrace) break;
+            const declarator = try s.parse_declarator(false);
+            switch (declarator) {
+                .Declarator => {
+                    switch (s.l.tok.?) {
+                        .lparen => {
+                            _ = try s.consume(.lparen);
+                            var args = try s.create_node_list();
+                            while (s.l.tok.? != .eof) {
+                                if (s.l.tok.? == .rparen) break;
+                                try args.append(try s.parse_declarator(false));
+                                if (s.l.tok.? == .rparen) break;
+                            }
+                            _ = try s.consume(.rparen);
+                            var body: *ast.Node = undefined;
+                            if (s.l.tok.? == .arrow) {
+                                _ = try s.consume(.arrow);
+                                body = try s.parse_expr();
+                            } else if (s.l.tok.? == .lbrace) {
+                                body = try s.parse_block();
+                            } else {}
+                            try members.append(ast.Node{ .FnDecl = .{ .declarator = declarator, .args = args, .body = try s.create_node_ptr(body) } });
+                        }, // function
+                        .eq => {
+                            _ = try s.consume(.eq);
+                            try members.append(ast.Node{ .VarDecl = .{ .declarator = try s.create_node_ptr(declarator), .default_val = try s.parse_expr() } });
+                        }, // variable default
+                        else => try members.append(declarator), // uhhhh dunno
+                    }
+                },
+                .StructDecl, .EnumDecl, .ErrorDecl => {
+                    try members.append(declarator);
+                },
+                else => {}, // error out
+            }
+            if (s.l.tok.? == .rbrace) break;
+            try s.consume(.comma);
+        }
+        _ = try s.consume(.rbrace);
+        return ast.Node{ .StructType = .{ .members = members } };
     }
 
     fn parse_type(s: *Parser) !ast.Node {
@@ -182,14 +285,40 @@ pub const Parser = struct {
             .@"error" => base_type = try s.parse_error(),
             .identifier => base_type = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } },
         }
+        switch (base_type) {
+            .StructDecl, .EnumDecl, .ErrorDecl => return base_type,
+            else => {},
+        }
         while (s.l.tok.? != .eof) {
             switch (s.l.tok.?) {
-                .lbrack => {},
-                .lparen => {},
-                .mul => {},
-                .question => {},
+                .lbrack => {
+                    _ = try s.consume(.lbrack);
+                    _ = try s.consume(.rbrack);
+                    base_type = ast.Node{ .ArrayType = .{ .type = try s.create_node_ptr(base_type) } };
+                },
+                .lparen => {
+                    _ = try s.consume(.lparen);
+                    var types = try s.create_node_list();
+                    while (s.l.tok.? != .eof) {
+                        if (s.l.tok.? == .rparen) break;
+                        try types.append(try s.parse_type());
+                        if (s.l.tok.? == .rparen) break;
+                        try s.consume(.comma);
+                    }
+                    _ = try s.consume(.rparen);
+                    base_type = ast.Node{ .FnType = .{ .type = try s.create_node_ptr(base_type), .args = types } };
+                },
+                .mul => {
+                    _ = try s.consume(.mul);
+                    base_type = ast.Node{ .PointerType = .{ .type = try s.create_node_ptr(base_type) } };
+                },
+                .question => {
+                    _ = try s.consume(.question);
+                    base_type = ast.Node{ .OptionalType = .{ .type = try s.create_node_ptr(base_type) } };
+                },
             }
         }
+        return base_type;
     }
     fn parse_declarator(s: *Parser, check_mut: bool) !ast.Node {
         var mut = false;
@@ -211,14 +340,30 @@ pub const Parser = struct {
     }
 
     fn parse_type_decl(s: *Parser) !ast.Node {
-        _ = s;
+        _ = try s.consume(.type);
+        const name = try s.create_node_ptr(ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } });
+        _ = try s.consume(.eq);
+        const res_type = try s.parse_type();
+        switch (res_type) {
+            .StructDecl, .EnumDecl, .ErrorDecl => {}, // error out
+            else => {},
+        }
+        return ast.Node{ .TypeDecl = .{ .name = name, .type = try s.create_node_ptr(res_type) } };
     }
 
     fn parse_stmt(s: *Parser) !ast.Node {
-        _ = s;
+        try s.l.next_tok();
+        return ast.Node{.Statement};
     }
     fn parse_block(s: *Parser) !ast.Node {
-        _ = s;
+        _ = try s.consume(.lbrace);
+        var stmts = try s.create_node_list();
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .rbrace) break;
+            try stmts.append(try s.parse_stmt());
+        }
+        _ = try s.consume(.rbrace);
+        return ast.Node{ .BlockStmt = .{ .stmts = stmts } };
     }
     fn parse_decl(s: *Parser) !ast.Node {
         const declarator = try s.create_node_ptr(try s.parse_declarator(true));
@@ -232,7 +377,8 @@ pub const Parser = struct {
         };
     }
     fn parse_expr(s: *Parser) !ast.Node {
-        _ = s;
+        try s.l.next_tok();
+        return ast.Node{.Expression};
     }
     fn consume(s: *Parser, t: token.TokenType) ![]const u8 {
         if (s.l.tok.? != t) {
