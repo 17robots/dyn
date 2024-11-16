@@ -597,6 +597,9 @@ pub const Lexer = struct {
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "pub")) {
             return .@"pub";
         }
+        if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "while")) {
+            return .@"while";
+        }
         return null;
     }
 };

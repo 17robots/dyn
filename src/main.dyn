@@ -1,8 +1,3 @@
 module "main";
 
-use {
-	"std:http",
-	"std:io"
-}
-
-mut struct {}*?[](struct {}*?, enum {}*?) thing;
+u32 x() => y.?.*.something(1).*.?.else3;

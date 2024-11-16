@@ -127,7 +127,8 @@ void functions() {
   mut i32 result = undefined;
   void internal_fn() {
     io.println(local, state);
-  }();
+  }
+  internal_fn();
   i32 some_number() { return 100; }
   i32 some_number_2() => 100;
   i32 some_math(i32 x, i32 y) => x + y;
@@ -194,17 +195,25 @@ void errors() {
 
 void structs() {
   struct X {
-    i32 a,b,c;
-    f32 x,y,z;
+    i32 a,
+    i32 b,
+    i32 c,
+    f32 x,
+    f32 y,
+    f32 z
   }
 
   type Y = struct {
-    f32 a,b,c,
-    i32 x,y,z
+    f32 a,
+    f32 b,
+    f32 c,
+    i32 x,
+    i32 y,
+    i32 z
   };
 
-  X x = { a = 1, b = 2, c = 3, x = 1.0, y = 1.0, z = 1.0 };
-  Y y = { a = 1.0, b = 2.0, c = 3.0, x = 1, y = 1, z = 1 };
+  X x = .{ a: 1, b: 2, c: 3, x: 1.0, y: 1.0, z: 1.0 };
+  Y y = .{ a: 1.0, b: 2.0, c: 3.0, x: 1, y: 1, z: 1 };
   io.println("{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}");
   io.println("{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}");
 

@@ -1,303 +1,453 @@
 const std = @import("std");
-pub const LiteralType = enum {
+
+pub const LiteralKind = enum {
+    // literals
+    string,
     int,
     float,
-    string,
+    char,
+    bool,
+    null,
+    undefined,
+};
+
+pub const OperatorKind = enum {
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+    eqeq,
+    bangeq,
+    lt,
+    lte,
+    gt,
+    gte,
+    andand,
+    oror,
+    dotdot,
 };
 
 pub const Node = union(enum) {
-    Program: struct { declarations: std.ArrayList(Node), pub_declarations: std.ArrayList(Node) },
-
-    Declaration: void,
-    UseDeclaration: struct { import: *Node, alias: ?*Node },
-    ModuleDeclaration: struct { name: *Node },
-    EnumDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    ErrorDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    VariableDeclaration: struct { var_declarator: *Node, default_val: ?*Node },
-    FunctionDeclaration: struct { fn_declarator: *Node, args: std.ArrayList(Node), body: *Node },
-    StructDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    TypeDeclaration: struct { name: *Node, typing: *Node },
-
-    PointerType: struct { value: *Node },
-    ArrayType: struct { value: *Node },
-    VoidType: void,
-    ErrorType: struct { members: std.ArrayList(Node) },
-    EnumType: struct { members: std.ArrayList(Node) },
-    OptionalType: struct { value: *Node },
-
-    Expression: void,
-    Literal: struct { lit_type: LiteralType, value: []const u8 },
-    Identifier: struct { value: []const u8 },
-
-    Statement: void,
-    Block: struct { stmts: std.ArrayList(Node) },
-
-    ErrorMember: struct { value: *Node },
-    EnumMember: struct { value: *Node },
+    Program: struct {
+        pub_decls: std.ArrayList(Node),
+        decls: std.ArrayList(Node),
+    },
+    ModuleDecl: struct { name: *Node },
+    UseStmt: struct { alias: ?*Node, value: *Node },
     UseBlock: struct { uses: std.ArrayList(Node) },
-    Declarator: struct { mut: bool, declarator_type: *Node, declarator_name: *Node },
-    DeclaratorList: struct { mut: bool, declarator_type: *Node, declarator_names: std.ArrayList(Node) },
-    FunctionArg: struct { arg_declarator: *Node, default_val: ?*Node },
+    Declarator: struct { mut: bool, type: *Node, name: *Node },
+    Literal: struct { kind: LiteralKind, value: []const u8 },
+    Identifier: struct { value: []const u8 },
+    StructDecl: struct { name: *Node, members: std.ArrayList(Node) },
+    EnumDecl: struct { name: *Node, members: std.ArrayList(Node) },
+    ErrorDecl: struct { name: *Node, members: std.ArrayList(Node) },
+    TypeDecl: struct { name: *Node, type: *Node },
+    VarDecl: struct { declarator: *Node, default_val: ?*Node },
+    FnDecl: struct { declarator: *Node, args: std.ArrayList(Node), body: *Node },
+    BlockStmt: struct { stmts: std.ArrayList(Node) },
+    FnType: struct { type: *Node, args: std.ArrayList(Node) },
+    EnumType: struct { members: std.ArrayList(Node) },
+    ErrorType: struct { members: std.ArrayList(Node) },
+    StructType: struct { members: std.ArrayList(Node) },
+    PointerType: struct { type: *Node },
+    OptionalType: struct { type: *Node },
+    ArrayType: struct { type: *Node },
+    Statement, // remove this eventually
+    GroupingExpr: struct { expr: *Node },
+    NotExpr: struct { expr: *Node },
+    NegateExpr: struct { expr: *Node },
+    FlipExpr: struct { expr: *Node },
+    ReferenceExpr: struct { expr: *Node },
+    PointerDereferenceExpr: struct { expr: *Node },
+    OptionalDereferenceExpr: struct { expr: *Node },
+    BinaryExpr: struct { left: *Node, op: OperatorKind, right: *Node },
+    FnCall: struct { callee: *Node, args: std.ArrayList(Node) },
+    MemberAccess: struct { root: ?*Node, access: *Node },
+    StructLiteral: struct { initializers: std.ArrayList(Node) },
+    StructInitializer: struct { ident: *Node, value: *Node },
+    BlockExpr: struct { block: *Node },
+    IfExpr: struct { expr: *Node },
+    MatchExpr: struct { expr: *Node },
+    Void,
+    IfStmt: struct { conditon: *Node, body: *Node, else_body: ?*Node },
+    DeferStmt: struct { capture: ?*Node, stmt: *Node },
+    ReturnStmt: struct { expr: *Node },
+    ForStmt: struct { expr: *Node, capture: *Node, body: *Node },
+    WhileStmt: struct { expr: *Node, body: *Node },
+    MatchStmt: struct { to_match: *Node, match_arms: std.ArrayList(Node) },
+    MatchArm: struct { branches: std.ArrayList(Node), block: *Node },
 
-    pub fn deinit(n: *Node, alloc: std.mem.Allocator) void {
-        switch (n.*) {
+    pub fn deinit(n: Node, alloc: std.mem.Allocator) void {
+        switch (n) {
             .Program => |s| {
-                for (s.declarations.items) |*d| {
-                    d.deinit(alloc);
-                }
-                s.declarations.deinit();
-                for (s.pub_declarations.items) |*d| {
-                    d.deinit(alloc);
-                }
-                s.pub_declarations.deinit();
+                for (s.decls.items) |i| i.deinit(alloc);
+                for (s.pub_decls.items) |i| i.deinit(alloc);
+                s.decls.deinit();
+                s.pub_decls.deinit();
             },
-            .ModuleDeclaration => |s| {
+            .ModuleDecl => |s| {
                 s.name.deinit(alloc);
                 alloc.destroy(s.name);
             },
-            .UseDeclaration => |s| {
-                s.import.deinit(alloc);
-                alloc.destroy(s.import);
-                if (s.alias) |a| {
-                    a.deinit(alloc);
+            .UseBlock => |s| {
+                for (s.uses.items) |i| i.deinit(alloc);
+                s.uses.deinit();
+            },
+            .UseStmt => |s| {
+                s.value.deinit(alloc);
+                alloc.destroy(s.value);
+                if (s.alias) |*a| {
+                    a.*.deinit(alloc);
                     alloc.destroy(a);
                 }
             },
-            .UseBlock => |s| {
-                for (s.uses.items) |*u| {
-                    u.deinit(alloc);
-                }
-                s.uses.deinit();
+            .Declarator => |s| {
+                defer alloc.destroy(s.type);
+                defer alloc.destroy(s.name);
+                s.name.deinit(alloc);
+                s.type.deinit(alloc);
             },
-            .EnumDeclaration => |s| {
+            .Literal, .Identifier, .Statement, .Void => {},
+            .StructDecl => |s| {
                 s.name.deinit(alloc);
                 alloc.destroy(s.name);
-                for (s.members.items) |*m| {
-                    m.deinit(alloc);
+                for (s.members.items) |i| {
+                    i.deinit(alloc);
                 }
                 s.members.deinit();
             },
-            .EnumMember => |s| {
-                s.value.deinit(alloc);
-                alloc.destroy(s.value);
-            },
-            .ErrorDeclaration => |s| {
+            .EnumDecl => |s| {
                 s.name.deinit(alloc);
                 alloc.destroy(s.name);
-                for (s.members.items) |*m| {
-                    m.deinit(alloc);
+                for (s.members.items) |i| {
+                    i.deinit(alloc);
                 }
                 s.members.deinit();
             },
-            .ErrorMember => |s| {
-                s.value.deinit(alloc);
-                alloc.destroy(s.value);
+            .ErrorDecl => |s| {
+                s.name.deinit(alloc);
+                alloc.destroy(s.name);
+                for (s.members.items) |i| {
+                    i.deinit(alloc);
+                }
+                s.members.deinit();
             },
-            .OptionalType => |s| {
-                s.value.deinit(alloc);
-                alloc.destroy(s.value);
+            .StructType => |s| {
+                for (s.members.items) |i| {
+                    i.deinit(alloc);
+                }
+                s.members.deinit();
             },
-            .PointerType => |s| {
-                s.value.deinit(alloc);
-                alloc.destroy(s.value);
+            .EnumType => |s| {
+                for (s.members.items) |i| {
+                    i.deinit(alloc);
+                }
+                s.members.deinit();
             },
-            .ArrayType => |s| {
-                s.value.deinit(alloc);
-                alloc.destroy(s.value);
+            .ErrorType => |s| {
+                for (s.members.items) |i| {
+                    i.deinit(alloc);
+                }
+                s.members.deinit();
             },
-            .Identifier => {},
-            .Literal => {},
-            .Declaration => {},
-            .VoidType => {},
-            .Statement => {},
-            .Expression => {},
-            .FunctionDeclaration => |s| {
-                s.fn_declarator.deinit(alloc);
-                alloc.destroy(s.fn_declarator);
-                s.body.deinit(alloc);
-                for (s.args.items) |*arg| {
-                    arg.deinit(alloc);
+            .TypeDecl => |s| {
+                s.name.deinit(alloc);
+                alloc.destroy(s.name);
+                s.type.deinit(alloc);
+                alloc.destroy(s.type);
+            },
+            .FnType => |s| {
+                s.type.deinit(alloc);
+                alloc.destroy(s.type);
+                for (s.args.items) |i| {
+                    i.deinit(alloc);
                 }
                 s.args.deinit();
+            },
+            .OptionalType => |s| {
+                s.type.deinit(alloc);
+                alloc.destroy(s.type);
+            },
+            .ArrayType => |s| {
+                s.type.deinit(alloc);
+                alloc.destroy(s.type);
+            },
+            .PointerType => |s| {
+                s.type.deinit(alloc);
+                alloc.destroy(s.type);
+            },
+            .VarDecl => |s| {
+                s.declarator.deinit(alloc);
+                alloc.destroy(s.declarator);
+                if (s.default_val) |d| {
+                    d.deinit(alloc);
+                    alloc.destroy(d);
+                }
+            },
+            .FnDecl => |s| {
+                s.declarator.deinit(alloc);
+                alloc.destroy(s.declarator);
+                s.body.deinit(alloc);
                 alloc.destroy(s.body);
+                for (s.args.items) |i| i.deinit(alloc);
+                s.args.deinit();
             },
-            .FunctionArg => |s| {
-                s.arg_declarator.deinit(alloc);
-                alloc.destroy(s.arg_declarator);
-                if (s.default_val) |d| {
-                    d.deinit(alloc);
-                    alloc.destroy(d);
-                }
-            },
-            .VariableDeclaration => |s| {
-                s.var_declarator.deinit(alloc);
-                alloc.destroy(s.var_declarator);
-                if (s.default_val) |d| {
-                    d.deinit(alloc);
-                    alloc.destroy(d);
-                }
-            },
-            .Block => |s| {
-                for (s.stmts.items) |*st| {
-                    st.deinit(alloc);
-                }
+            .BlockStmt => |s| {
+                for (s.stmts.items) |i| i.deinit(alloc);
                 s.stmts.deinit();
             },
-            .Declarator => |s| {
-                s.declarator_type.deinit(alloc);
-                alloc.destroy(s.declarator_type);
-                s.declarator_name.deinit(alloc);
-                alloc.destroy(s.declarator_name);
+            .GroupingExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .NotExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .NegateExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .FlipExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .ReferenceExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .PointerDereferenceExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .OptionalDereferenceExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .BinaryExpr => |s| {
+                s.left.deinit(alloc);
+                alloc.destroy(s.left);
+                s.right.deinit(alloc);
+                alloc.destroy(s.right);
+            },
+            .FnCall => |s| {
+                s.callee.deinit(alloc);
+                alloc.destroy(s.callee);
+                for (s.args.items) |i| i.deinit(alloc);
+                s.args.deinit();
+            },
+            .MemberAccess => |s| {
+                s.root.deinit(alloc);
+                alloc.destroy(s.root);
+                s.access.deinit(alloc);
+                alloc.destroy(s.access);
             },
         }
     }
     pub fn print(n: Node) void {
         switch (n) {
             .Program => |s| {
-                std.debug.print("Program\n", .{});
-                std.debug.print("public decls\n", .{});
-                for (s.pub_declarations.items) |d| {
-                    d.print();
-                }
-                std.debug.print("-----\n", .{});
-                std.debug.print("private decls\n", .{});
-                for (s.declarations.items) |d| {
-                    d.print();
-                }
-                std.debug.print("-----\n", .{});
+                for (s.decls.items) |i| i.print();
+                for (s.pub_decls.items) |i| i.print();
             },
-            .ModuleDeclaration => |s| {
-                std.debug.print("Module declaration\n", .{});
-                std.debug.print("Name: ", .{});
+            .ModuleDecl => |s| {
+                std.debug.print("Module Declaration\n", .{});
+                std.debug.print("Name: \n", .{});
                 s.name.print();
             },
-            .Literal => |s| {
-                std.debug.print("Literal; Type: {s}, Value: {s}\n", .{ switch (s.lit_type) {
-                    .int => "int",
-                    .float => "float",
-                    .string => "string",
-                }, s.value });
-            },
-            .Declaration => {
-                std.debug.print("Declaration\n", .{});
-            },
-            .UseDeclaration => |s| {
-                std.debug.print("Use Declaration; import: ", .{});
-                s.import.print();
-                std.debug.print("alias: ", .{});
+            .UseStmt => |s| {
+                std.debug.print("Use Statement\n", .{});
+                std.debug.print("Value: \n", .{});
+                s.value.print();
                 if (s.alias) |a| {
+                    std.debug.print("Alias: ", .{});
                     a.print();
-                } else {
-                    std.debug.print("none\n", .{});
                 }
             },
             .UseBlock => |s| {
-                std.debug.print("Use Block decls: \n", .{});
-                for (s.uses.items) |u| {
-                    u.print();
-                }
-                std.debug.print("\n-----\n", .{});
-            },
-            .EnumDeclaration => |s| {
-                std.debug.print("Enum Decl; name: ", .{});
-                s.name.print();
-                std.debug.print(", members: ", .{});
-                for (s.members.items) |m| {
-                    m.print();
-                }
-                std.debug.print("\n-----\n", .{});
-            },
-            .EnumMember => |s| {
-                std.debug.print("Enum member; value: ", .{});
-                s.value.print();
-            },
-            .ErrorDeclaration => |s| {
-                std.debug.print("Error Decl; name: ", .{});
-                s.name.print();
-                std.debug.print(", members: ", .{});
-                for (s.members.items) |m| {
-                    m.print();
-                }
-                std.debug.print("\n-----\n", .{});
-            },
-            .ErrorMember => |s| {
-                std.debug.print("Error member; value: ", .{});
-                s.value.print();
-            },
-            .Identifier => |s| {
-                std.debug.print("Identifier; Value: {s}", .{s.value});
-            },
-            .OptionalType => |s| {
-                std.debug.print("Optional type; value", .{});
-                s.value.print();
-            },
-            .PointerType => |s| {
-                std.debug.print("Pointer type; value", .{});
-                s.value.print();
-            },
-            .ArrayType => |s| {
-                std.debug.print("Array type; value", .{});
-                s.value.print();
-            },
-            .FunctionDeclaration => |s| {
-                std.debug.print("Function Declaration\n", .{});
-                std.debug.print("Function Declarator: ", .{});
-                s.fn_declarator.print();
-                std.debug.print("\n", .{});
-                std.debug.print("Fn Args\n", .{});
-                for (s.args.items) |a| {
-                    a.print();
-                    std.debug.print("\n", .{});
-                }
-                s.body.print();
-                std.debug.print("\n", .{});
-            },
-            .FunctionArg => |s| {
-                std.debug.print("Function Arg\n", .{});
-                std.debug.print("Arg declarator\n", .{});
-                s.arg_declarator.print();
-                std.debug.print("\n", .{});
-                if (s.default_val) |d| {
-                    std.debug.print("Default Val\n", .{});
-                    d.print();
-                }
-            },
-            .VariableDeclaration => |s| {
-                std.debug.print("Variable Declaration\n", .{});
-                std.debug.print("Variable declarator\n", .{});
-                s.var_declarator.print();
-                std.debug.print("\n", .{});
-                if (s.default_val) |d| {
-                    std.debug.print("Default Val\n", .{});
-                    d.print();
-                    std.debug.print("\n", .{});
-                }
-            },
-            .Block => |s| {
-                std.debug.print("Block of Statements\n", .{});
-                for (s.stmts.items) |st| {
-                    st.print();
-                    std.debug.print("\n", .{});
-                }
-            },
-            .VoidType => {
-                std.debug.print("Void Type\n", .{});
-            },
-            .Statement => {
-                std.debug.print("Statement\n", .{});
-            },
-            .Expression => {
-                std.debug.print("Expression\n", .{});
+                std.debug.print("Use Block\n", .{});
+                for (s.uses.items) |i| i.print();
             },
             .Declarator => |s| {
                 std.debug.print("Declarator\n", .{});
-                std.debug.print("Mut: {any}\n", .{s.mut});
-                std.debug.print("Type: ", .{});
-                s.declarator_type.print();
-                std.debug.print("\n", .{});
+                std.debug.print("Type: \n", .{});
+                s.type.print();
                 std.debug.print("Name: \n", .{});
-                s.declarator_name.print();
-                std.debug.print("\n", .{});
+                s.name.print();
+            },
+            .Literal => |s| {
+                std.debug.print("Literal\n", .{});
+                switch (s.kind) {
+                    .string => std.debug.print("Type: string\n", .{}),
+                    .int => std.debug.print("Type: int\n", .{}),
+                    .float => std.debug.print("Type: float\n", .{}),
+                    .char => std.debug.print("Type: char\n", .{}),
+                    .bool => std.debug.print("Type: bool\n", .{}),
+                    .null => std.debug.print("Type: null\n", .{}),
+                    .undefined => std.debug.print("Type: undefined\n", .{}),
+                }
+                std.debug.print("Value: {s}\n", .{s.value});
+            },
+            .Identifier => |s| {
+                std.debug.print("Identifier\n", .{});
+                std.debug.print("Value: {s}\n", .{s.value});
+            },
+            .Statement => { // remove this after
+                std.debug.print("Statement\n", .{});
+            },
+            .StructDecl => |s| {
+                std.debug.print("Struct Decl\n", .{});
+                std.debug.print("Name: \n", .{});
+                s.name.print();
+                for (s.members.items) |i| i.print();
+            },
+            .EnumDecl => |s| {
+                std.debug.print("Enum Decl\n", .{});
+                std.debug.print("Name: \n", .{});
+                s.name.print();
+                for (s.members.items) |i| {
+                    std.debug.print("Member: ", .{});
+                    i.print();
+                }
+            },
+            .ErrorDecl => |s| {
+                std.debug.print("Error Decl\n", .{});
+                std.debug.print("Name: \n", .{});
+                s.name.print();
+                for (s.members.items) |i| {
+                    std.debug.print("Member: ", .{});
+                    i.print();
+                }
+            },
+            .StructType => |s| {
+                std.debug.print("Struct Type\n", .{});
+                for (s.members.items) |i| {
+                    std.debug.print("Member: ", .{});
+                    i.print();
+                }
+            },
+            .EnumType => |s| {
+                std.debug.print("Enum Type\n", .{});
+                for (s.members.items) |i| {
+                    std.debug.print("Member: ", .{});
+                    i.print();
+                }
+            },
+            .ErrorType => |s| {
+                std.debug.print("Error Type\n", .{});
+                for (s.members.items) |i| i.print();
+            },
+            .TypeDecl => |s| {
+                std.debug.print("Type Decl\n", .{});
+                s.name.print();
+                s.type.print();
+            },
+            .FnType => |s| {
+                std.debug.print("Fn Type\n", .{});
+                s.type.print();
+                for (s.args.items) |i| {
+                    i.print();
+                }
+            },
+            .OptionalType => |s| {
+                std.debug.print("Optional Type\n", .{});
+                std.debug.print("Type: ", .{});
+                s.type.print();
+            },
+            .ArrayType => |s| {
+                std.debug.print("Array Type\n", .{});
+                std.debug.print("Type: ", .{});
+                s.type.print();
+            },
+            .PointerType => |s| {
+                std.debug.print("Pointer Type\n", .{});
+                std.debug.print("Type: ", .{});
+                s.type.print();
+            },
+            .VarDecl => |s| {
+                std.debug.print("Var Declaration\n", .{});
+                s.declarator.print();
+                if (s.default_val) |d| {
+                    std.debug.print("Default Val: ", .{});
+                    d.print();
+                }
+            },
+            .FnDecl => |s| {
+                std.debug.print("Fn Declaration\n", .{});
+                s.declarator.print();
+                for (s.args.items) |i| {
+                    std.debug.print("Arg: ", .{});
+                    i.print();
+                }
+                std.debug.print("Body: ", .{});
+                s.body.print();
+            },
+            .BlockStmt => |s| {
+                std.debug.print("Block Stmt\n", .{});
+                for (s.stmts.items) |i| i.print();
+            },
+            .Void => {
+                std.debug.print("Void\n", .{});
+            },
+            .GroupingExpr => |s| {
+                std.debug.print("Grouping Expr\n", .{});
+                std.debug.print("Expr: ", .{});
+                s.expr.print();
+            },
+            .NotExpr => |s| {
+                std.debug.print("Not Expr\n", .{});
+                std.debug.print("Expr: ", .{});
+                s.expr.print();
+            },
+            .NegateExpr => |s| {
+                std.debug.print("Negate Expr\n", .{});
+                std.debug.print("Expr: ", .{});
+                s.expr.print();
+            },
+            .FlipExpr => |s| {
+                std.debug.print("Flip Expr\n", .{});
+                std.debug.print("Expr: ", .{});
+                s.expr.print();
+            },
+            .ReferenceExpr => |s| {
+                std.debug.print("Reference Expr\n", .{});
+                std.debug.print("Expr: ", .{});
+                s.expr.print();
+            },
+            .PointerDereferenceExpr => |s| {
+                std.debug.print("Pointer Dereference Expr\n", .{});
+                std.debug.print("Expr: ", .{});
+                s.expr.print();
+            },
+            .OptionalDereferenceExpr => |s| {
+                std.debug.print("Optional Dereference Expr\n", .{});
+                std.debug.print("Expr: ", .{});
+                s.expr.print();
+            },
+            .BinaryExpr => |s| {
+                std.debug.print("Binary Expr\n", .{});
+                std.debug.print("Left Expr: ", .{});
+                s.left.print();
+                std.debug.print("Op: {any}\n", .{s.op});
+                std.debug.print("Right Expr: ", .{});
+                s.right.print();
+            },
+            .FnCall => |s| {
+                std.debug.print("Fn Call\n", .{});
+                std.debug.print("Callee: ", .{});
+                s.callee.print();
+                for (s.args.items) |i| {
+                    std.debug.print("Arg: ", .{});
+                    i.print();
+                }
+            },
+            .MemberAccess => |s| {
+                std.debug.print("Member Access\n", .{});
+                std.debug.print("Root: ", .{});
+                s.root.print();
+                std.debug.print("Access: ", .{});
+                s.access.print();
             },
         }
     }
