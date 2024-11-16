@@ -581,7 +581,7 @@ pub const Parser = struct {
                 else_body = try try s.create_node_ptr(s.parse_stmt());
             }
         }
-        return ast.Node{ .IfStmt = .{ .conditon = condition, .body = try s.create_node_ptr(body), .else_body = else_body } };
+        return ast.Node{ .IfStmt = .{ .condition = condition, .body = try s.create_node_ptr(body), .else_body = else_body } };
     }
     fn parse_match_stmt(s: *Parser) anyerror!ast.Node {
         _ = try s.consume(.match);
@@ -599,13 +599,18 @@ pub const Parser = struct {
     }
     fn parse_match_arm(s: *Parser) anyerror!ast.Node {
         var branches = try s.create_node_list();
-        // handle underscore up here
         while (s.l.tok.? != .eof) {
             if (s.l.tok.? == .colon) break;
-            try branches.append(try s.parse_expr(.none));
+            if (s.l.tok.? == .underscore) {
+                _ = try s.consume(.underscore);
+                try branches.append(ast.Node.Underscore);
+            } else {
+                try branches.append(try s.parse_expr(.none));
+            }
             if (s.l.tok.? == .colon) break;
             _ = try s.consume(.comma);
         }
+        // verify that if underscore then nothing else
         _ = try s.consume(.colon);
         const expr = try s.parse_expr(.none);
         return ast.Node{ .MatchArm = .{ .branches = branches, .block = try s.create_node_ptr(expr) } };

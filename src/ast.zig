@@ -70,7 +70,8 @@ pub const Node = union(enum) {
     IfExpr: struct { expr: *Node },
     MatchExpr: struct { expr: *Node },
     Void,
-    IfStmt: struct { conditon: *Node, body: *Node, else_body: ?*Node },
+    Underscore,
+    IfStmt: struct { condition: *Node, body: *Node, else_body: ?*Node },
     DeferStmt: struct { capture: ?*Node, stmt: *Node },
     ReturnStmt: struct { expr: *Node },
     ForStmt: struct { expr: *Node, capture: *Node, body: *Node },
@@ -108,7 +109,7 @@ pub const Node = union(enum) {
                 s.name.deinit(alloc);
                 s.type.deinit(alloc);
             },
-            .Literal, .Identifier, .Statement, .Void => {},
+            .Literal, .Identifier, .Statement, .Void, .Underscore => {},
             .StructDecl => |s| {
                 s.name.deinit(alloc);
                 alloc.destroy(s.name);
@@ -242,6 +243,76 @@ pub const Node = union(enum) {
                 alloc.destroy(s.root);
                 s.access.deinit(alloc);
                 alloc.destroy(s.access);
+            },
+            .StructLiteral => |s| {
+                for (s.initializers.items) |i| i.deinit(alloc);
+                s.initializers.deinit();
+            },
+            .StructInitializer => |s| {
+                s.ident.deinit(alloc);
+                alloc.destroy(s.ident);
+                s.value.deinit(alloc);
+                alloc.destroy(s.value);
+            },
+            .BlockExpr => |s| {
+                s.block.deinit(alloc);
+                alloc.destroy(s.block);
+            },
+            .IfExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .MatchExpr => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .IfStmt => |s| {
+                s.condition.deinit(alloc);
+                alloc.destroy(s.condition);
+                s.body.deinit(alloc);
+                alloc.destroy(s.body);
+                if (s.else_body) |eb| {
+                    eb.deinit(alloc);
+                    alloc.destroy(eb);
+                }
+            },
+            .DeferStmt => |s| {
+                s.stmt.deinit(alloc);
+                alloc.destroy(s.stmt);
+                if (s.capture) |c| {
+                    c.deinit(alloc);
+                    alloc.destroy(c);
+                }
+            },
+            .ReturnStmt => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+            },
+            .ForStmt => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+                s.capture.deinit(alloc);
+                alloc.destroy(s.capture);
+                s.body.deinit(alloc);
+                alloc.destroy(s.body);
+            },
+            .WhileStmt => |s| {
+                s.expr.deinit(alloc);
+                alloc.destroy(s.expr);
+                s.body.deinit(alloc);
+                alloc.destroy(s.body);
+            },
+            .MatchStmt => |s| {
+                s.to_match.deinit(alloc);
+                alloc.destroy(s.to_match);
+                for (s.match_arms.items) |i| i.deinit(alloc);
+                s.match_arms.deinit();
+            },
+            .MatchArm => |s| {
+                s.block.deinit(alloc);
+                alloc.destroy(s.block);
+                for (s.branches.items) |i| i.deinit(alloc);
+                s.branches.deinit();
             },
         }
     }
@@ -390,6 +461,9 @@ pub const Node = union(enum) {
             .Void => {
                 std.debug.print("Void\n", .{});
             },
+            .Underscore => {
+                std.debug.print("Underscore\n", .{});
+            },
             .GroupingExpr => |s| {
                 std.debug.print("Grouping Expr\n", .{});
                 std.debug.print("Expr: ", .{});
@@ -448,6 +522,63 @@ pub const Node = union(enum) {
                 s.root.print();
                 std.debug.print("Access: ", .{});
                 s.access.print();
+            },
+            .StructLiteral => |s| {
+                std.debug.print("Struct Literal\n", .{});
+                for (s.initializers.items) |i| i.print();
+            },
+            .StructInitializer => |s| {
+                std.debug.print("Struct Intializer\n", .{});
+                s.ident.print();
+                s.value.print();
+            },
+            .BlockExpr => |s| {
+                std.debug.print("Block Expr\n", .{});
+                s.block.print();
+            },
+            .IfExpr => |s| {
+                std.debug.print("If Expr\n", .{});
+                s.expr.print();
+            },
+            .MatchExpr => |s| {
+                std.debug.print("Match Expr\n", .{});
+                s.expr.print();
+            },
+            .IfStmt => |s| {
+                std.debug.print("If Stmt\n", .{});
+                s.condition.print();
+                s.body.print();
+                if (s.else_body) |eb| eb.print();
+            },
+            .DeferStmt => |s| {
+                std.debug.print("Defer Stmt\n", .{});
+                if (s.capture) |c| c.print();
+                s.stmt.print();
+            },
+            .ReturnStmt => |s| {
+                std.debug.print("Return Stmt\n", .{});
+                s.expr.print();
+            },
+            .ForStmt => |s| {
+                std.debug.print("For Stmt\n", .{});
+                s.expr.print();
+                s.capture.print();
+                s.body.print();
+            },
+            .WhileStmt => |s| {
+                std.debug.print("While Stmt\n", .{});
+                s.expr.print();
+                s.body.print();
+            },
+            .MatchStmt => |s| {
+                std.debug.print("Match Stmt\n", .{});
+                s.to_match.print();
+                for (s.match_arms.items) |i| i.print();
+            },
+            .MatchArm => |s| {
+                std.debug.print("Match Arm\n", .{});
+                for (s.branches.items) |i| i.print();
+                s.block.print();
             },
         }
     }
