@@ -413,7 +413,6 @@ pub const Parser = struct {
         };
     }
     fn parse_decl_stmt(s: *Parser) anyerror!ast.Node {
-        // FIX: find a way to parse out fn decls and pointer dereferences
         var mut = false;
         if (s.l.tok.? == .mut) {
             _ = try s.consume(.mut);
@@ -430,9 +429,9 @@ pub const Parser = struct {
                 the_type = try s.create_node_ptr(ast.Node.Void);
             },
             else => {
-                std.debug.print("We have a bad token: {any}\n", .{s.l.tok.?});
+                std.debug.print("We have a bad token: {any}, line: {}, col: {}\n", .{ s.l.tok.?, s.l.line, s.l.col });
                 return errors.Error.ParserError;
-            }, // error out
+            },
         }
         switch (the_type.*) {
             .StructDecl, .EnumDecl, .ErrorDecl, .TypeDecl => {
@@ -440,43 +439,99 @@ pub const Parser = struct {
                 return the_type.*;
             },
             .Identifier => {
-                if (s.l.tok.? == .dot) {
-                    _ = try s.consume(.dot);
-                    if (s.l.tok.? == .mul) {
-                        the_type = try s.create_node_ptr(ast.Node{ .PointerDereferenceExpr = .{ .expr = the_type } });
-                    } else {} // error out
-                } else if (s.l.tok.? == .lparen) {
-                    _ = try s.consume(.lparen);
-                    var args = try s.create_node_list();
-                    while (s.l.tok.? != .eof) {
-                        if (s.l.tok.? == .rparen) break;
-                        try args.append(try s.parse_expr(.none));
-                        if (s.l.tok.? == .rparen) break;
-                        _ = try s.consume(.comma);
+                while (s.l.tok.? != .eof) {
+                    switch (s.l.tok.?) {
+                        .dot => {
+                            _ = try s.consume(.dot);
+                            switch (s.l.tok.?) {
+                                .question => {
+                                    _ = try s.consume(.question);
+                                    the_type = try s.create_node_ptr(ast.Node{ .OptionalDereferenceExpr = .{ .expr = the_type } });
+                                },
+                                .mul => {
+                                    _ = try s.consume(.mul);
+                                    the_type = try s.create_node_ptr(ast.Node{ .PointerDereferenceExpr = .{ .expr = the_type } });
+                                },
+                                .identifier => {
+                                    the_type = try s.create_node_ptr(ast.Node{ .MemberAccess = .{ .root = the_type, .access = try s.create_node_ptr(ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } }) } });
+                                },
+                                .lbrack => {
+                                    _ = try s.consume(.lbrack);
+                                    const expr = try s.parse_expr(.none);
+                                    _ = expr;
+                                    _ = try s.consume(.rbrack);
+                                },
+                                else => break,
+                            }
+                        },
+                        .lparen => {
+                            _ = try s.consume(.lparen);
+                            var args = try s.create_node_list();
+                            while (s.l.tok.? != .eof) {
+                                if (s.l.tok.? == .rparen) break;
+                                try args.append(try s.parse_expr(.none));
+                                if (s.l.tok.? == .rparen) break;
+                            }
+                            _ = try s.consume(.rparen);
+                            the_type = try s.create_node_ptr(ast.Node{ .FnCall = .{ .callee = the_type, .args = args } });
+                            break;
+                        },
+                        .lbrack => {
+                            _ = try s.consume(.lbrack);
+                            the_type = try s.create_node_ptr(ast.Node{ .ArrayIndex = .{ .callee = the_type, .index = try s.create_node_ptr(try s.parse_expr(.none)) } });
+                            _ = try s.consume(.rbrack);
+                        },
+                        else => break,
                     }
-                    _ = try s.consume(.rparen);
-                    the_type = try s.create_node_ptr(ast.Node{ .FnCall = .{ .callee = the_type, .args = args } });
-                    _ = try s.consume(.semicolon);
-                    return the_type.*;
                 }
             },
             else => {},
         }
+        if (the_type.* == .FnCall) {
+            _ = try s.consume(.semicolon);
+            return the_type.*;
+        }
         switch (s.l.tok.?) {
-            .eq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .normal, .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .addeq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .add, .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .subeq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .sub, .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .muleq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .mul, .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .diveq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .div, .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .modeq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .mod, .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .xoreq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .xor, .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .andeq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .@"and", .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
-            .oreq => the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .@"or", .right = try s.create_node_ptr(try s.parse_expr(.none)) } }),
+            .eq => {
+                _ = try s.consume(.eq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .normal, .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .addeq => {
+                _ = try s.consume(.addeq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .add, .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .subeq => {
+                _ = try s.consume(.subeq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .sub, .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .muleq => {
+                _ = try s.consume(.muleq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .mul, .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .diveq => {
+                _ = try s.consume(.diveq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .div, .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .modeq => {
+                _ = try s.consume(.modeq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .mod, .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .xoreq => {
+                _ = try s.consume(.xoreq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .xor, .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .andeq => {
+                _ = try s.consume(.andeq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .@"and", .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
+            .oreq => {
+                _ = try s.consume(.oreq);
+                the_type = try s.create_node_ptr(ast.Node{ .Assignment = .{ .left = the_type, .assign = .@"or", .right = try s.create_node_ptr(try s.parse_expr(.none)) } });
+            },
             else => {},
         }
         switch (the_type.*) {
             .Assignment => {
-                std.debug.print("We have an assignment\n", .{});
                 _ = try s.consume(.semicolon);
                 return the_type.*;
             },
@@ -528,7 +583,7 @@ pub const Parser = struct {
             .string => base = ast.Node{ .Literal = .{ .kind = .string, .value = try s.consume(.string) } },
             .char => base = ast.Node{ .Literal = .{ .kind = .char, .value = try s.consume(.char) } },
             .identifier => base = ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } },
-            .undefined => base = ast.Node{ .Literal = .{ .kind = .undefined, .value = "" } },
+            .undefined => base = ast.Node{ .Literal = .{ .kind = .undefined, .value = try s.consume(.undefined) } },
             .null => base = ast.Node{ .Literal = .{ .kind = .null, .value = try s.consume(.null) } },
             .true => base = ast.Node{ .Literal = .{ .kind = .bool, .value = try s.consume(.true) } },
             .false => base = ast.Node{ .Literal = .{ .kind = .bool, .value = try s.consume(.false) } },
@@ -556,6 +611,7 @@ pub const Parser = struct {
             .lbrace => {
                 base = ast.Node{ .BlockExpr = .{ .block = try s.create_node_ptr(try s.parse_block()) } };
             },
+            .lbrack => base = try s.parse_array_literal(),
             .dot => {
                 _ = try s.consume(.dot);
                 switch (s.l.tok.?) {
@@ -605,6 +661,20 @@ pub const Parser = struct {
                         .identifier => base = ast.Node{ .MemberAccess = .{ .root = try s.create_node_ptr(base), .access = try s.create_node_ptr(ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } }) } },
                         else => break,
                     }
+                },
+                .lbrack => {
+                    _ = try s.consume(.lbrack);
+                    base = ast.Node{ .ArrayIndex = .{ .callee = try s.create_node_ptr(base), .index = try s.create_node_ptr(try s.parse_expr(.none)) } };
+                    _ = try s.consume(.rbrack);
+                },
+                .@"else" => {
+                    _ = try s.consume(.@"else");
+                    if (base != .Identifier) {
+                        std.debug.print("{}, {}:  Using else with identifier not allowed\n", .{ s.l.line, s.l.col });
+                        return errors.Error.ParserError;
+                    }
+                    base = ast.Node{ .ElseIdentifier = .{ .ident = try s.create_node_ptr(base), .else_ident = try s.create_node_ptr(try s.parse_expr(.none)) } };
+                    break;
                 },
                 else => break,
             }
@@ -660,6 +730,18 @@ pub const Parser = struct {
         const expr = try s.parse_expr(.none);
         return ast.Node{ .StructInitializer = .{ .ident = try s.create_node_ptr(ident), .value = try s.create_node_ptr(expr) } };
     }
+    fn parse_array_literal(s: *Parser) anyerror!ast.Node {
+        _ = try s.consume(.lbrack);
+        var items = try s.create_node_list();
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .rbrack) break;
+            try items.append(try s.parse_expr(.none));
+            if (s.l.tok.? == .rbrack) break;
+            _ = try s.consume(.comma);
+        }
+        _ = try s.consume(.rbrack);
+        return ast.Node{ .ArrayLiteral = .{ .items = items } };
+    }
     fn parse_stmt(s: *Parser) anyerror!ast.Node {
         return switch (s.l.tok.?) {
             .@"if" => try s.parse_if_stmt(),
@@ -668,12 +750,15 @@ pub const Parser = struct {
             .@"return" => try s.parse_return_stmt(),
             .@"for" => try s.parse_for_stmt(),
             .@"while" => try s.parse_while_stmt(),
+            .@"break" => try s.parse_break_stmt(),
             else => try s.parse_decl_stmt(),
         };
     }
     fn parse_if_stmt(s: *Parser) anyerror!ast.Node {
         _ = try s.consume(.@"if");
         const condition = try s.create_node_ptr(try s.parse_expr(.none));
+        var capture: ?*ast.Node = null;
+        if (s.l.tok.? == .@"or") capture = try s.create_node_ptr(try s.parse_capture());
         var body: ast.Node = undefined;
         var else_body: ?*ast.Node = null;
         if (s.l.tok.? == .lbrace) {
@@ -691,7 +776,7 @@ pub const Parser = struct {
                 else_body = try s.create_node_ptr(try s.parse_stmt());
             }
         }
-        return ast.Node{ .IfStmt = .{ .condition = condition, .body = try s.create_node_ptr(body), .else_body = else_body } };
+        return ast.Node{ .IfStmt = .{ .condition = condition, .capture = capture, .body = try s.create_node_ptr(body), .else_body = else_body } };
     }
     fn parse_match_stmt(s: *Parser) anyerror!ast.Node {
         _ = try s.consume(.match);
@@ -778,6 +863,11 @@ pub const Parser = struct {
             body = try s.parse_stmt();
         }
         return ast.Node{ .WhileStmt = .{ .expr = try s.create_node_ptr(expr), .body = try s.create_node_ptr(body) } };
+    }
+    fn parse_break_stmt(s: *Parser) anyerror!ast.Node {
+        _ = try s.consume(.@"break");
+        _ = try s.consume(.semicolon);
+        return ast.Node.BreakStmt;
     }
     fn consume(s: *Parser, t: token.TokenType) anyerror![]const u8 {
         if (s.l.tok.? != t) {

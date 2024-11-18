@@ -606,6 +606,9 @@ pub const Lexer = struct {
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "return")) {
             return .@"return";
         }
+        if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "break")) {
+            return .@"break";
+        }
         return null;
     }
 };

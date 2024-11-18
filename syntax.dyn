@@ -96,7 +96,6 @@ void match_statements() {
     1: { io.println("This shouldnt run"); },
     2: { io.println("This shouldnt run"); },
     4..90: { io.println("This shouldnt run"); },
-    _ if x > 90: { io.println("This shouldnt run"); },
     _: { io.println("This is the default so this should run"); },
   }
 }
@@ -110,7 +109,7 @@ void defer_statements() {
 }
 
 void loops() {
-  loop {
+  while true {
     io.println("infinite loop, needs broken");
     break;
   }
@@ -119,11 +118,12 @@ void loops() {
 
   u8[] items = [1,2,3,4,5];
   for items |i| { io.println(i); }
-  for 0..std.arr.len(items) |i|: (i += 2) { io.println(items[i]); }
+  for 0..std.arr.len(items) |i| { io.println(items[i]); }
 }
 
 void functions() {
-  mut i32 local, state = 0;
+  mut i32 local = 0;
+  mut i32 state = 0;
   mut i32 result = undefined;
   void internal_fn() {
     io.println(local, state);

@@ -83,7 +83,7 @@ pub const Node = union(enum) {
     MatchExpr: struct { expr: *Node },
     Void,
     Underscore,
-    IfStmt: struct { condition: *Node, body: *Node, else_body: ?*Node },
+    IfStmt: struct { condition: *Node, capture: ?*Node, body: *Node, else_body: ?*Node },
     DeferStmt: struct { capture: ?*Node, stmt: *Node },
     ReturnStmt: struct { expr: *Node },
     ForStmt: struct { expr: *Node, capture: *Node, body: *Node },
@@ -92,6 +92,10 @@ pub const Node = union(enum) {
     MatchArm: struct { branches: std.ArrayList(Node), block: *Node },
     Capture: struct { mut: bool, ident: *Node },
     Assignment: struct { left: *Node, assign: AssignmentKind, right: *Node },
+    ArrayIndex: struct { callee: *Node, index: *Node },
+    ElseIdentifier: struct { ident: *Node, else_ident: *Node },
+    ArrayLiteral: struct { items: std.ArrayList(Node) },
+    BreakStmt,
 
     pub fn deinit(n: Node, alloc: std.mem.Allocator) void {
         switch (n) {
@@ -123,7 +127,7 @@ pub const Node = union(enum) {
                 s.name.deinit(alloc);
                 s.type.deinit(alloc);
             },
-            .Literal, .Identifier, .Statement, .Void, .Underscore => {},
+            .Literal, .Identifier, .Statement, .Void, .Underscore, .BreakStmt => {},
             .StructDecl => |s| {
                 s.name.deinit(alloc);
                 alloc.destroy(s.name);
@@ -291,6 +295,10 @@ pub const Node = union(enum) {
                     eb.deinit(alloc);
                     alloc.destroy(eb);
                 }
+                if (s.capture) |c| {
+                    c.deinit(alloc);
+                    alloc.destroy(c);
+                }
             },
             .DeferStmt => |s| {
                 s.stmt.deinit(alloc);
@@ -339,6 +347,22 @@ pub const Node = union(enum) {
                 alloc.destroy(s.left);
                 s.right.deinit(alloc);
                 alloc.destroy(s.right);
+            },
+            .ArrayIndex => |s| {
+                s.callee.deinit(alloc);
+                alloc.destroy(s.callee);
+                s.index.deinit(alloc);
+                alloc.destroy(s.index);
+            },
+            .ElseIdentifier => |s| {
+                s.ident.deinit(alloc);
+                alloc.destroy(s.ident);
+                s.else_ident.deinit(alloc);
+                alloc.destroy(s.else_ident);
+            },
+            .ArrayLiteral => |s| {
+                for (s.items.items) |i| i.deinit(alloc);
+                s.items.deinit();
             },
         }
     }
@@ -575,6 +599,7 @@ pub const Node = union(enum) {
             .IfStmt => |s| {
                 std.debug.print("If Stmt\n", .{});
                 s.condition.print();
+                if (s.capture) |eb| eb.print();
                 s.body.print();
                 if (s.else_body) |eb| eb.print();
             },
@@ -618,6 +643,23 @@ pub const Node = union(enum) {
                 s.left.print();
                 std.debug.print("Assignment: {any}\n", .{s.assign});
                 s.right.print();
+            },
+            .ArrayIndex => |s| {
+                std.debug.print("Array Index\n", .{});
+                s.callee.print();
+                s.index.print();
+            },
+            .ElseIdentifier => |s| {
+                std.debug.print("Else Identifier\n", .{});
+                s.ident.print();
+                s.else_ident.print();
+            },
+            .ArrayLiteral => |s| {
+                std.debug.print("Array Literal\n", .{});
+                for (s.items.items) |i| i.print();
+            },
+            .BreakStmt => {
+                std.debug.print("Break Stmt\n", .{});
             },
         }
     }
