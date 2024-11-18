@@ -1,3 +1,7 @@
 module "main";
 
+use {
+  test "std:http"
+}
+
 u32 x() => y.?.*.something(1).*.?.else3;

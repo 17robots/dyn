@@ -7,7 +7,7 @@ pub fn main() !void {
     const alloc = arena.allocator();
     defer arena.deinit();
 
-    const file_body = try read_file(alloc, "src/main.dyn");
+    const file_body = try read_file(alloc, "syntax.dyn");
 
     var parser = Parser.init(alloc, file_body);
     const p = try parser.parse_program();

@@ -600,6 +600,12 @@ pub const Lexer = struct {
         if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "while")) {
             return .@"while";
         }
+        if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "undefined")) {
+            return .undefined;
+        }
+        if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "return")) {
+            return .@"return";
+        }
         return null;
     }
 };

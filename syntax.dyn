@@ -1,10 +1,10 @@
 module "main";
 
 use {
-  "std:io"
-  "std:heap"
-  "std:sync"
-  "std:math"
+  "std:io",
+  "std:heap",
+  "std:sync",
+  "std:math",
   test "testLib"
 }
 
@@ -48,7 +48,7 @@ void optionals() {
   if optional_value_2 |x| {
     io.println("Optional value 2: {x}");
   }
-  if optional_value_2 |*x| {
+  if optional_value_2 |mut x| {
     x.* = 4;
   } else { optional_value_2 = 4; }
 

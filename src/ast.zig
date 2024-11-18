@@ -28,6 +28,18 @@ pub const OperatorKind = enum {
     dotdot,
 };
 
+pub const AssignmentKind = enum {
+    normal,
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+    xor,
+    @"and",
+    @"or",
+};
+
 pub const Node = union(enum) {
     Program: struct {
         pub_decls: std.ArrayList(Node),
@@ -78,6 +90,8 @@ pub const Node = union(enum) {
     WhileStmt: struct { expr: *Node, body: *Node },
     MatchStmt: struct { to_match: *Node, match_arms: std.ArrayList(Node) },
     MatchArm: struct { branches: std.ArrayList(Node), block: *Node },
+    Capture: struct { mut: bool, ident: *Node },
+    Assignment: struct { left: *Node, assign: AssignmentKind, right: *Node },
 
     pub fn deinit(n: Node, alloc: std.mem.Allocator) void {
         switch (n) {
@@ -239,8 +253,10 @@ pub const Node = union(enum) {
                 s.args.deinit();
             },
             .MemberAccess => |s| {
-                s.root.deinit(alloc);
-                alloc.destroy(s.root);
+                if (s.root) |r| {
+                    r.deinit(alloc);
+                    alloc.destroy(r);
+                }
                 s.access.deinit(alloc);
                 alloc.destroy(s.access);
             },
@@ -313,6 +329,16 @@ pub const Node = union(enum) {
                 alloc.destroy(s.block);
                 for (s.branches.items) |i| i.deinit(alloc);
                 s.branches.deinit();
+            },
+            .Capture => |s| {
+                s.ident.deinit(alloc);
+                alloc.destroy(s.ident);
+            },
+            .Assignment => |s| {
+                s.left.deinit(alloc);
+                alloc.destroy(s.left);
+                s.right.deinit(alloc);
+                alloc.destroy(s.right);
             },
         }
     }
@@ -518,8 +544,10 @@ pub const Node = union(enum) {
             },
             .MemberAccess => |s| {
                 std.debug.print("Member Access\n", .{});
-                std.debug.print("Root: ", .{});
-                s.root.print();
+                if (s.root) |r| {
+                    std.debug.print("Root: ", .{});
+                    r.print();
+                }
                 std.debug.print("Access: ", .{});
                 s.access.print();
             },
@@ -579,6 +607,17 @@ pub const Node = union(enum) {
                 std.debug.print("Match Arm\n", .{});
                 for (s.branches.items) |i| i.print();
                 s.block.print();
+            },
+            .Capture => |s| {
+                std.debug.print("Capture\n", .{});
+                std.debug.print("Mut: {any}\n", .{s.mut});
+                s.ident.print();
+            },
+            .Assignment => |s| {
+                std.debug.print("Assignment\n", .{});
+                s.left.print();
+                std.debug.print("Assignment: {any}\n", .{s.assign});
+                s.right.print();
             },
         }
     }
