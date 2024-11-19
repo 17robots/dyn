@@ -132,8 +132,8 @@ void functions() {
   i32 some_number() { return 100; }
   i32 some_number_2() => 100;
   i32 some_math(i32 x, i32 y) => x + y;
-  i32 some_math_2(i32 x, y) => x + y;
-  void manipulate_numbers(i32* result, i32 x, y) => result.* = x + y;
+  i32 some_math_2(i32 x, i32 y) => x + y;
+  void manipulate_numbers(i32* result, i32 x, i32 y) => result.* = x + y;
   mut i32 y = 5;
   manipulate_numbers(&y, local, state);
   io.println("String interpolated values {some_math(1, 2)}");

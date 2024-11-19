@@ -115,13 +115,23 @@ pub const Parser = struct {
             if (s.l.tok.? == .rparen) break;
             try fn_params.append(try s.parse_declarator(false));
             if (s.l.tok.? == .rparen) break;
+            _ = try s.consume(.comma);
         }
         _ = try s.consume(.rparen);
         var body: ast.Node = undefined;
         if (s.l.tok.? == .arrow) {
             _ = try s.consume(.arrow);
-            body = try s.parse_expr(.none);
-            _ = try s.consume(.semicolon);
+            switch (declarator.*) {
+                .Declarator => |d| {
+                    if (d.type.* == .Void) {
+                        body = try s.parse_stmt();
+                    } else {
+                        body = try s.parse_expr(.none);
+                        _ = try s.consume(.semicolon);
+                    }
+                },
+                else => {}, // error out
+            }
         } else if (s.l.tok.? == .lbrace) {
             body = try s.parse_block();
         } else {} // error out here
@@ -163,7 +173,13 @@ pub const Parser = struct {
         _ = try s.consume(.lbrace);
         while (s.l.tok.? != .eof) {
             if (s.l.tok.? == .rbrace) break;
-            try members.append(try s.parse_declarator(false));
+            var member = try s.parse_type();
+            if (s.l.tok.? == .identifier) {
+                member = ast.Node{ .Declarator = .{ .mut = false, .type = try s.create_node_ptr(member), .name = try s.create_node_ptr(ast.Node{ .Identifier = .{ .value = try s.consume(.identifier) } }) } };
+            }
+            try members.append(member);
+            if (s.l.tok.? == .rbrace) break;
+            _ = try s.consume(.comma);
         }
         _ = try s.consume(.rbrace);
         return ast.Node{ .EnumDecl = .{ .name = name, .members = members } };
@@ -320,7 +336,7 @@ pub const Parser = struct {
                 base_type = ast.Node.Void;
             },
             else => {
-                std.debug.print("We had a problem at line {d}, col {d} \n", .{ s.l.line, s.l.col });
+                std.debug.print("We had a problem at line {d}, col {d}, {any} \n", .{ s.l.line, s.l.col, s.l.tok.? });
                 return errors.Error.ParserError;
             }, // error out
         }
@@ -471,6 +487,7 @@ pub const Parser = struct {
                                 if (s.l.tok.? == .rparen) break;
                                 try args.append(try s.parse_expr(.none));
                                 if (s.l.tok.? == .rparen) break;
+                                _ = try s.consume(.comma);
                             }
                             _ = try s.consume(.rparen);
                             the_type = try s.create_node_ptr(ast.Node{ .FnCall = .{ .callee = the_type, .args = args } });
