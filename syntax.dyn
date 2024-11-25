@@ -156,12 +156,12 @@ void enums() {
   PartneredEnum x = .SOME(4);
 
   match x {
-    .SOME: { io.println("SOME"); }
-    .THING: { io.println("THING"); }
+    .SOME: { io.println("SOME"); },
+    .THING: { io.println("THING"); },
     .HERE: { io.println("HERE"); }
   }
   match x {
-    .SOME: { io.println("SOME"); }
+    .SOME: { io.println("SOME"); },
     _: { io.println("Default"); }
   }
 }
@@ -175,13 +175,13 @@ void errors() {
     i32 DivideByZero
   }
 
-  f32!DivideErrors div(f32 x, y) => if y == 0 { DivideErrors.DivideByZero } else { x / y };
-  f32!PartneredDivideErrors div(f32 x, y) => if y == 0 { PartneredDivideErrors.DivideByZero(4) } else { x / y };
+  f32!<DivideErrors> div(f32 x, f32 y) => if y == 0 { return DivideErrors.DivideByZero; } else { return x / y; };
+  f32!<PartneredDivideErrors> div(f32 x, f32 y) => if y == 0 { return PartneredDivideErrors.DivideByZero(4); } else { return x / y; };
 
   defer |e| {}
   defer {}
 
-  void! try_me() {
+  void!<> try_me() {
     return DivideErrors.DivideByZero;
   }
 
@@ -210,7 +210,7 @@ void structs() {
     i32 x,
     i32 y,
     i32 z
-  };
+  }
 
   X x = .{ a: 1, b: 2, c: 3, x: 1.0, y: 1.0, z: 1.0 };
   Y y = .{ a: 1.0, b: 2.0, c: 3.0, x: 1, y: 1, z: 1 };
@@ -222,13 +222,13 @@ void structs() {
 
   void updateX(X* x) => x.*.a = x.*.a + 1;
 
-  i32?!DivideError otherExample => null;
+  i32?!<DivideError> otherExample = null;
 
   struct MethodExample {
     i32 a = 0,
-    MethodExample init(i32 a) => { a = a },
+    MethodExample init(i32 a) => .{ a: a },
     void print(MethodExample s) => io.println("{s.a}"),
-    void setADouble(MethodExample* s) => s.*.a = s.*.a * 2
+    void setADouble(MethodExample* s) => s.*.a *= 2
   }
 }
 

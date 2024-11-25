@@ -1,5 +1,5 @@
 const std = @import("std");
-const Parser = @import("parser.zig").Parser;
+const Parser = @import("parser.zig");
 
 pub fn main() !void {
     const page_allocator = std.heap.page_allocator;
@@ -10,7 +10,7 @@ pub fn main() !void {
     const file_body = try read_file(alloc, "syntax.dyn");
 
     var parser = Parser.init(alloc, file_body);
-    const p = try parser.parse_program();
+    const p = try parser.program();
     defer p.deinit(parser.allocator);
     p.print();
 }

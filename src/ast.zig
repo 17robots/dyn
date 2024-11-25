@@ -41,10 +41,7 @@ pub const AssignmentKind = enum {
 };
 
 pub const Node = union(enum) {
-    Program: struct {
-        pub_decls: std.ArrayList(Node),
-        decls: std.ArrayList(Node),
-    },
+    Program: struct { pub_decls: std.ArrayList(Node), decls: std.ArrayList(Node) },
     ModuleDecl: struct { name: *Node },
     UseStmt: struct { alias: ?*Node, value: *Node },
     UseBlock: struct { uses: std.ArrayList(Node) },
@@ -82,6 +79,7 @@ pub const Node = union(enum) {
     IfExpr: struct { expr: *Node },
     MatchExpr: struct { expr: *Node },
     Void,
+    Type,
     Underscore,
     IfStmt: struct { condition: *Node, capture: ?*Node, body: *Node, else_body: ?*Node },
     DeferStmt: struct { capture: ?*Node, stmt: *Node },
@@ -96,6 +94,11 @@ pub const Node = union(enum) {
     ElseIdentifier: struct { ident: *Node, else_ident: *Node },
     ArrayLiteral: struct { items: std.ArrayList(Node) },
     BreakStmt,
+    ErrorUnionType: struct { base_type: *Node, error_types: std.ArrayList(Node) },
+    TryStmt: struct { call: *Node },
+    CatchStmt: struct { call: *Node, capture: ?*Node, body: *Node },
+    CompType: struct { base_type: *Node },
+    InlineStmt: struct { base_stmt: *Node },
 
     pub fn deinit(n: Node, alloc: std.mem.Allocator) void {
         switch (n) {
@@ -127,7 +130,7 @@ pub const Node = union(enum) {
                 s.name.deinit(alloc);
                 s.type.deinit(alloc);
             },
-            .Literal, .Identifier, .Statement, .Void, .Underscore, .BreakStmt => {},
+            .Literal, .Identifier, .Statement, .Void, .Type, .Underscore, .BreakStmt => {},
             .StructDecl => |s| {
                 s.name.deinit(alloc);
                 alloc.destroy(s.name);
@@ -363,6 +366,36 @@ pub const Node = union(enum) {
             .ArrayLiteral => |s| {
                 for (s.items.items) |i| i.deinit(alloc);
                 s.items.deinit();
+            },
+            .ErrorUnionType => |s| {
+                s.base_type.deinit(alloc);
+                alloc.destroy(s.base_type);
+                for (s.error_types.items) |e| {
+                    e.deinit(alloc);
+                }
+                s.error_types.deinit();
+            },
+            .TryStmt => |s| {
+                s.call.deinit(alloc);
+                alloc.destroy(s.call);
+            },
+            .CatchStmt => |s| {
+                s.call.deinit(alloc);
+                alloc.destroy(s.call);
+                if (s.capture) |c| {
+                    c.deinit(alloc);
+                    alloc.destroy(c);
+                }
+                s.body.deinit(alloc);
+                alloc.destroy(s.body);
+            },
+            .CompType => |s| {
+                s.base_type.deinit(alloc);
+                alloc.destroy(s.base_type);
+            },
+            .InlineStmt => |s| {
+                s.base_stmt.deinit(alloc);
+                alloc.destroy(s.base_stmt);
             },
         }
     }
@@ -660,6 +693,32 @@ pub const Node = union(enum) {
             },
             .BreakStmt => {
                 std.debug.print("Break Stmt\n", .{});
+            },
+            .ErrorUnionType => |s| {
+                std.debug.print("Error Union Type\n", .{});
+                s.base_type.print();
+                for (s.error_types.items) |e| e.print();
+            },
+            .TryStmt => |s| {
+                std.debug.print("Try Stmt\n", .{});
+                s.call.print();
+            },
+            .CatchStmt => |s| {
+                std.debug.print("Catch Stmt\n", .{});
+                s.call.print();
+                if (s.capture) |c| c.print();
+                s.body.print();
+            },
+            .CompType => |s| {
+                std.debug.print("Comp Type\n", .{});
+                s.base_type.print();
+            },
+            .InlineStmt => |s| {
+                std.debug.print("Inline Stmt\n", .{});
+                s.base_stmt.print();
+            },
+            .Type => {
+                std.debug.print("Type\n", .{});
             },
         }
     }
