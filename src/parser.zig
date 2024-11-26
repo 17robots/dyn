@@ -81,27 +81,27 @@ fn use_stmt(s: *Self, semicolon: bool) anyerror!Node {
     return Node{ .UseStmt = .{ .alias = alias, .value = import } };
 }
 fn var_decl(s: *Self, _declarator: *Node) anyerror!ast.Node {
-    var default: ?*Node = null;
-    switch (s.l.tok.?) {
-        .eq => {
+    const default = switch (s.l.tok.?) {
+        .eq => blk: {
             _ = try s.eat(.eq);
-            default = try s.create_node_ptr(switch (_declarator.*) {
-                .Declarator => |d| blk: {
-                    break :blk switch (d.type.*) {
+            break :blk switch (_declarator.*) {
+                .Declarator => |d| db: {
+                    break :db try s.create_node_ptr(switch (d.type.*) {
                         .Type => try s.type_(),
                         else => try s.expr(.none),
-                    };
+                    });
                 },
                 else => return errors.Error.ParserError,
-            });
+            };
         },
         else => switch (_declarator.*) {
-            .Declarator => |d| {
-                if (!d.mut) {} // error out because var will never be mutatable
+            .Declarator => |d| blk: {
+                if (!d.mut) return errors.Error.ParserError;
+                break :blk null;
             },
-            else => {}, // error out cause not declarator
+            else => return errors.Error.ParserError,
         },
-    }
+    };
     return Node{ .VarDecl = .{ .declarator = _declarator, .default_val = default } };
 }
 fn fn_decl(s: *Self, _declarator: *Node) anyerror!ast.Node {
@@ -118,6 +118,7 @@ fn fn_decl(s: *Self, _declarator: *Node) anyerror!ast.Node {
                 .Declarator => |d| blk: {
                     break :blk switch (d.type.*) {
                         .Void => try s.stmt(),
+                        .Type => try s.type_(),
                         else => try s.expr(.none),
                     };
                 },
@@ -293,6 +294,10 @@ fn type_(s: *Self) anyerror!Node {
             _ = try s.eat(.void);
             break :void_blk .Void;
         },
+        .type => type_blk: {
+            _ = try s.eat(.type);
+            break :type_blk .Type;
+        },
         .comp => try s.comp_(),
         else => {
             std.debug.print("We had a problem at line {d}, col {d}, {any} \n", .{ s.l.line, s.l.col, s.l.tok.? });
@@ -307,8 +312,12 @@ fn type_(s: *Self) anyerror!Node {
         switch (s.l.tok.?) {
             .lbrack => {
                 _ = try s.eat(.lbrack);
+                const _expr = switch (s.l.tok.?) {
+                    .rbrack => null,
+                    else => try s.create_node_ptr(try s.expr(.none)),
+                };
                 _ = try s.eat(.rbrack);
-                base_type = Node{ .ArrayType = .{ .type = try s.create_node_ptr(base_type) } };
+                base_type = Node{ .ArrayType = .{ .type = try s.create_node_ptr(base_type), .number = _expr } };
             },
             .lparen => {
                 var types = try s.create_node_list();
@@ -336,6 +345,13 @@ fn type_(s: *Self) anyerror!Node {
                     }
                 }.func, .{ &error_types, s });
                 base_type = Node{ .ErrorUnionType = .{ .base_type = try s.create_node_ptr(base_type), .error_types = error_types } };
+            },
+            .dot => {
+                _ = try s.eat(.dot);
+                switch (base_type) {
+                    .Identifier, .MemberAccess => base_type = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(base_type), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } },
+                    else => return errors.Error.ParserError,
+                }
             },
             else => break,
         }
@@ -381,20 +397,20 @@ fn block(s: *Self) anyerror!Node {
                     }
                 },
                 .VarDecl => |d| {
-                    std.debug.print("We have a var decl\n", .{});
                     if (d.default_val) |_| {
                         switch (d.declarator.*) {
                             .Declarator => |de| {
-                                std.debug.print("We have a var declarator\n", .{});
+                                std.debug.print("{any}\n", .{d.default_val.?});
+                                std.debug.print("----------\n", .{});
                                 switch (de.type.*) {
-                                    .Type => {
-                                        std.debug.print("We have a type type\n", .{});
-                                    },
+                                    .Type => {},
                                     else => _ = try _s.eat(.semicolon),
                                 }
                             },
                             else => return errors.Error.ParserError,
                         }
+                    } else {
+                        _ = try _s.eat(.semicolon);
                     }
                 },
                 else => {},
@@ -437,6 +453,7 @@ fn try_stmt(s: *Self) anyerror!Node {
         .@"try" => return Node{ .TryStmt = .{ .call = try s.create_node_ptr(try s.try_stmt()) } },
         .lparen => return Node{ .GroupingExpr = .{ .expr = try s.create_node_ptr(try s.try_stmt()) } },
         .identifier => {
+            // MAKE THIS ALLOWED TO TRY ON MEMBER ACCESS
             var callee = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
             var args = try s.create_node_list();
             try s.loop_read(.lparen, .rparen, .comma, struct {
@@ -596,8 +613,12 @@ fn decl_stmt(s: *Self) anyerror!Node {
         switch (s.l.tok.?) {
             .lbrack => {
                 _ = try s.eat(.lbrack);
+                const _expr = switch (s.l.tok.?) {
+                    .rbrack => null,
+                    else => try s.create_node_ptr(try s.expr(.none)),
+                };
                 _ = try s.eat(.rbrack);
-                the_type = Node{ .ArrayType = .{ .type = try s.create_node_ptr(the_type) } };
+                the_type = Node{ .ArrayType = .{ .type = try s.create_node_ptr(the_type), .number = _expr } };
             },
             .lparen => {
                 _ = try s.eat(.lparen);
@@ -847,7 +868,7 @@ fn if_(s: *Self) anyerror!Node {
 }
 fn match_(s: *Self) anyerror!Node {
     _ = try s.eat(.match);
-    const to_match = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+    const to_match = try s.expr(.none);
     var match_arms = try s.create_node_list();
     try s.loop_read(.lbrace, .rbrace, .comma, struct {
         fn func(_match_arms: *std.ArrayList(Node), _s: *Self) !void {
@@ -870,8 +891,12 @@ fn match_arm(s: *Self) anyerror!Node {
         }
     }.func, .{ &branches, s });
     // verify that if underscore then nothing else
+    const capture_ = switch (s.l.tok.?) {
+        .@"or" => try s.create_node_ptr(try s.capture()),
+        else => null,
+    };
     const _expr = try s.expr(.none);
-    return Node{ .MatchArm = .{ .branches = branches, .block = try s.create_node_ptr(_expr) } };
+    return Node{ .MatchArm = .{ .branches = branches, .capture = capture_, .block = try s.create_node_ptr(_expr) } };
 }
 fn defer_(s: *Self) anyerror!Node {
     _ = try s.eat(.@"defer");
@@ -907,7 +932,14 @@ fn capture(s: *Self) anyerror!Node {
         _ = try s.eat(.mut);
         mut = true;
     }
-    const ident = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+    const ident = switch (s.l.tok.?) {
+        .underscore => blk: {
+            _ = try s.eat(.underscore);
+            if (mut) return errors.Error.ParserError;
+            break :blk Node.Underscore;
+        },
+        else => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
+    };
     _ = try s.eat(.@"or");
     return Node{ .Capture = .{ .mut = mut, .ident = try s.create_node_ptr(ident) } };
 }
@@ -927,7 +959,7 @@ fn break_(s: *Self) anyerror!Node {
 }
 fn eat(s: *Self, t: token.TokenType) anyerror![]const u8 {
     if (s.l.tok.? != t) {
-        std.debug.print("We had a problem, wanted {any}, got {any} at line {d}, col {d} \n", .{ t, s.l.tok.?, s.l.line, s.l.col });
+        std.debug.print("We had a problem, wanted {any}, got {any} {s} at line {d}, col {d} \n", .{ t, s.l.tok.?, s.l.literal orelse "", s.l.line, s.l.col });
         return errors.Error.ParserError;
     } // error out
     defer s.l.next_tok();

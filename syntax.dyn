@@ -235,12 +235,11 @@ void structs() {
 void metaprogramming() {
   type List(comp type T) => struct {
     T[] members,
-    type this = $This(),
     this init() {
       inline for 0..5 |_| {
         io.println("hi");
       }
-      return this{ members = [] };
+      return .{ members: [] };
     }
   };
 
@@ -248,7 +247,7 @@ void metaprogramming() {
     std.meta.Type t = $typeOf(T);
     match t.Type {
       .Int: |int| { io.println("integer {t.name}, {int.bits}, {bool(int.signed)}"); },
-      _: $compError("issue here, we need int type");
+      _: { $compError("issue here, we need int type"); }
     }
   }
 }
@@ -256,7 +255,11 @@ void metaprogramming() {
 void memory() {
   heap.GeneralPurposeAllocator gpa = heap.GeneralPurposeAllocator.init({});
   mut heap.Allocator alloc = gpa.alloc();
-  defer {if gpa.deinit() == .leak { $panic("we leaked"); } }
+  defer {
+    if gpa.deinit() == .leak {
+      $panic("we leaked");
+    }
+  }
   i32* p = try alloc.allocOne(i32);
   defer alloc.free(p);
   i32* p1 = try alloc.allocOne(i32, 1);

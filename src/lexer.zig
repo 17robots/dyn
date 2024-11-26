@@ -66,7 +66,7 @@ pub fn next_tok(s: *Self) void {
     while (s.index < s.buffer.len) {
         switch (s.state) {
             .base => switch (s.buffer[s.index]) {
-                'a'...'z', 'A'...'Z' => s.state = .read_word,
+                'a'...'z', 'A'...'Z', '$' => s.state = .read_word,
                 '0'...'9' => s.state = .read_num,
                 '.' => s.state = .read_dot,
                 '\"' => s.state = .read_string,
@@ -118,11 +118,6 @@ pub fn next_tok(s: *Self) void {
                 },
                 '?' => {
                     s.tok = .question;
-                    s.literal = null;
-                    s.index += 1;
-                },
-                '$' => {
-                    s.tok = .dollar;
                     s.literal = null;
                     s.index += 1;
                 },

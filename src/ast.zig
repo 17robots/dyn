@@ -61,7 +61,7 @@ pub const Node = union(enum) {
     StructType: struct { members: std.ArrayList(Node) },
     PointerType: struct { type: *Node },
     OptionalType: struct { type: *Node },
-    ArrayType: struct { type: *Node },
+    ArrayType: struct { type: *Node, number: ?*Node },
     Statement, // remove this eventually
     GroupingExpr: struct { expr: *Node },
     NotExpr: struct { expr: *Node },
@@ -87,7 +87,7 @@ pub const Node = union(enum) {
     ForStmt: struct { expr: *Node, capture: *Node, body: *Node },
     WhileStmt: struct { expr: *Node, body: *Node },
     MatchStmt: struct { to_match: *Node, match_arms: std.ArrayList(Node) },
-    MatchArm: struct { branches: std.ArrayList(Node), block: *Node },
+    MatchArm: struct { branches: std.ArrayList(Node), capture: ?*Node, block: *Node },
     Capture: struct { mut: bool, ident: *Node },
     Assignment: struct { left: *Node, assign: AssignmentKind, right: *Node },
     ArrayIndex: struct { callee: *Node, index: *Node },
@@ -194,6 +194,10 @@ pub const Node = union(enum) {
             .ArrayType => |s| {
                 s.type.deinit(alloc);
                 alloc.destroy(s.type);
+                if (s.number) |nu| {
+                    nu.deinit(alloc);
+                    alloc.destroy(nu);
+                }
             },
             .PointerType => |s| {
                 s.type.deinit(alloc);
@@ -338,6 +342,10 @@ pub const Node = union(enum) {
             .MatchArm => |s| {
                 s.block.deinit(alloc);
                 alloc.destroy(s.block);
+                if (s.capture) |c| {
+                    c.deinit(alloc);
+                    alloc.destroy(c);
+                }
                 for (s.branches.items) |i| i.deinit(alloc);
                 s.branches.deinit();
             },
@@ -511,8 +519,8 @@ pub const Node = union(enum) {
             },
             .ArrayType => |s| {
                 std.debug.print("Array Type\n", .{});
-                std.debug.print("Type: ", .{});
                 s.type.print();
+                if (s.number) |nu| nu.print();
             },
             .PointerType => |s| {
                 std.debug.print("Pointer Type\n", .{});
@@ -664,6 +672,7 @@ pub const Node = union(enum) {
             .MatchArm => |s| {
                 std.debug.print("Match Arm\n", .{});
                 for (s.branches.items) |i| i.print();
+                if (s.capture) |c| c.print();
                 s.block.print();
             },
             .Capture => |s| {
