@@ -9,8 +9,15 @@ const OperatorKind = ast.OperatorKind;
 const AssignmentKind = ast.AssignmentKind;
 
 const Self = @This();
+
+const VarData = struct {
+    name: Node,
+    v_type: Node,
+    value: ?Node,
+};
 l: Lexer,
 allocator: std.mem.Allocator,
+var_table: std.AutoHashMap([]const u8, VarData),
 
 const Precedence = enum(u8) {
     none,
@@ -23,6 +30,16 @@ const Precedence = enum(u8) {
     postfix,
     primary,
 };
+
+fn add_to_var_table(s: *Self, v_type: Node, v_name: Node, value: ?Node) !void {
+    switch (v_name) {
+        .Identifier => |i| {
+            if (s.var_table.get(i.value)) |_| return errors.Error.ParserError;
+            try s.var_table.put(i.value, VarData{ .v_type = v_type, .name = v_name, .value = value });
+        },
+        else => return errors.Error.ParserError,
+    }
+}
 
 pub fn init(alloc: std.mem.Allocator, b: []const u8) Self {
     return Self{ .l = Lexer.init(b), .allocator = alloc };
@@ -286,6 +303,7 @@ fn comp_(s: *Self) anyerror!Node {
 }
 fn type_(s: *Self) anyerror!Node {
     var base_type = switch (s.l.tok.?) {
+        .@"try" => return try s.try_stmt(),
         .@"struct" => try s.struct_(),
         .@"enum" => try s.enum_(),
         .@"error" => try s.error_(),
@@ -305,7 +323,7 @@ fn type_(s: *Self) anyerror!Node {
         },
     };
     switch (base_type) {
-        .StructDecl, .EnumDecl, .ErrorDecl, .UseStmt, .UseBlock, .TypeDecl => return base_type,
+        .StructDecl, .EnumDecl, .ErrorDecl => return base_type,
         else => {},
     }
     while (s.l.tok.? != .eof) {
@@ -323,7 +341,7 @@ fn type_(s: *Self) anyerror!Node {
                 var types = try s.create_node_list();
                 try s.loop_read(.lparen, .rparen, .comma, struct {
                     fn func(_types: *std.ArrayList(Node), _s: *Self) !void {
-                        try _types.append(try _s.declarator(false));
+                        try _types.append(try _s.type_());
                     }
                 }.func, .{ &types, s });
                 base_type = Node{ .FnType = .{ .type = try s.create_node_ptr(base_type), .args = types } };
@@ -400,8 +418,6 @@ fn block(s: *Self) anyerror!Node {
                     if (d.default_val) |_| {
                         switch (d.declarator.*) {
                             .Declarator => |de| {
-                                std.debug.print("{any}\n", .{d.default_val.?});
-                                std.debug.print("----------\n", .{});
                                 switch (de.type.*) {
                                     .Type => {},
                                     else => _ = try _s.eat(.semicolon),
@@ -455,6 +471,15 @@ fn try_stmt(s: *Self) anyerror!Node {
         .identifier => {
             // MAKE THIS ALLOWED TO TRY ON MEMBER ACCESS
             var callee = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+            while (s.l.tok.? != .eof) {
+                switch (s.l.tok.?) {
+                    .dot => {
+                        _ = try s.eat(.dot);
+                        callee = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(callee), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
+                    },
+                    else => break,
+                }
+            }
             var args = try s.create_node_list();
             try s.loop_read(.lparen, .rparen, .comma, struct {
                 fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
@@ -480,36 +505,39 @@ fn catch_stmt(s: *Self, call: *Node) anyerror!Node {
     return Node{ .CatchStmt = .{ .call = call, .capture = _capture, .body = body } };
 }
 fn decl_stmt(s: *Self) anyerror!Node {
-    var mut = false;
-    if (s.l.tok.? == .mut) {
-        _ = try s.eat(.mut);
-        mut = true;
-    }
-    var the_type: Node = switch (s.l.tok.?) {
-        .@"struct" => try s.struct_(),
-        .@"enum" => try s.enum_(),
-        .@"error" => try s.error_(),
-        .identifier => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
-        .void => void_block: {
-            _ = try s.eat(.void);
-            break :void_block Node.Void;
+    const mut = switch (s.l.tok.?) {
+        .mut => blk: {
+            _ = try s.eat(.mut);
+            break :blk true;
         },
-        .type => type_block: {
-            _ = try s.eat(.type);
-            break :type_block Node.Type;
-        },
-        .@"try" => try s.try_stmt(),
-        else => {
-            std.debug.print("We have a bad token: {any}, line: {}, col: {}\n", .{ s.l.tok.?, s.l.line, s.l.col });
-            return errors.Error.ParserError;
-        },
+        else => false,
     };
+    var the_type = try s.type_();
     switch (the_type) {
-        .StructDecl, .EnumDecl, .ErrorDecl, .TryStmt, .CatchStmt => {
-            if (mut) return errors.Error.ParserError; // then we have error
+        .StructDecl, .EnumDecl, .ErrorDecl, .TryStmt => {
+            if (mut) return errors.Error.ParserError;
             return the_type;
         },
-        .Identifier => {
+        else => {},
+    }
+    switch (s.l.tok.?) {
+        .identifier => {
+            the_type = .{ .Declarator = .{ .mut = mut, .type = try s.create_node_ptr(the_type), .name = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
+        },
+        else => switch (the_type) {
+            .ArrayType => |t| {
+                if (t.number) |n| {
+                    the_type = Node{ .ArrayIndex = .{ .callee = t.type, .index = n } };
+                } else return errors.Error.ParserError;
+            },
+            .FnType => |t| {
+                the_type = Node{ .FnCall = .{ .callee = t.type, .args = t.args } };
+            },
+            else => {},
+        },
+    }
+    switch (the_type) {
+        .Identifier, .ArrayIndex, .FnCall => {
             while (s.l.tok.? != .eof) {
                 switch (s.l.tok.?) {
                     .dot => {
@@ -523,17 +551,15 @@ fn decl_stmt(s: *Self) anyerror!Node {
                                 _ = try s.eat(.mul);
                                 the_type = Node{ .PointerDereferenceExpr = .{ .expr = try s.create_node_ptr(the_type) } };
                             },
-                            .identifier => {
-                                the_type = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(the_type), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
-                            },
-                            .lbrack => {
-                                _ = try s.eat(.lbrack);
-                                const _expr = try s.expr(.none);
-                                _ = try s.eat(.rbrack);
-                                the_type = Node{ .ArrayIndex = .{ .callee = try s.create_node_ptr(the_type), .index = try s.create_node_ptr(_expr) } };
-                            },
+                            .identifier => the_type = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(the_type), .access = try s.create_node_ptr(.{ .Identifier = .{ .value = try s.eat(.identifier) } }) } },
                             else => break,
                         }
+                    },
+                    .lbrack => {
+                        _ = try s.eat(.lbrack);
+                        const expr_ = try s.expr(.none);
+                        _ = try s.eat(.rbrack);
+                        the_type = Node{ .ArrayIndex = .{ .callee = try s.create_node_ptr(the_type), .index = try s.create_node_ptr(expr_) } };
                     },
                     .lparen => {
                         var args = try s.create_node_list();
@@ -542,30 +568,13 @@ fn decl_stmt(s: *Self) anyerror!Node {
                                 try _args.append(try _s.expr(.none));
                             }
                         }.func, .{ &args, s });
-                        the_type = Node{ .FnCall = .{ .callee = try s.create_node_ptr(the_type), .args = args } };
-                        break;
-                    },
-                    .lbrack => {
-                        _ = try s.eat(.lbrack);
-                        the_type = Node{ .ArrayIndex = .{ .callee = try s.create_node_ptr(the_type), .index = try s.create_node_ptr(try s.expr(.none)) } };
-                        _ = try s.eat(.rbrack);
+                        the_type = .{ .FnCall = .{ .callee = try s.create_node_ptr(the_type), .args = args } };
                     },
                     else => break,
                 }
             }
         },
-        .Void => {},
-        .Type => {},
-        else => {
-            std.debug.print("Error, Got {any}, {} {}\n", .{ the_type, s.l.line, s.l.col });
-            return errors.Error.ParserError;
-        },
-    }
-    if (the_type == .FnCall) {
-        if (s.l.tok.? == .@"catch") {
-            the_type = try s.catch_stmt(try s.create_node_ptr(the_type));
-        }
-        return the_type;
+        else => {},
     }
     switch (s.l.tok.?) {
         .eq => {
@@ -606,60 +615,20 @@ fn decl_stmt(s: *Self) anyerror!Node {
         },
         else => {},
     }
-    if (the_type == .Assignment) {
-        return the_type;
-    }
-    while (s.l.tok.? != .eof) {
-        switch (s.l.tok.?) {
-            .lbrack => {
-                _ = try s.eat(.lbrack);
-                const _expr = switch (s.l.tok.?) {
-                    .rbrack => null,
-                    else => try s.create_node_ptr(try s.expr(.none)),
-                };
-                _ = try s.eat(.rbrack);
-                the_type = Node{ .ArrayType = .{ .type = try s.create_node_ptr(the_type), .number = _expr } };
-            },
-            .lparen => {
-                _ = try s.eat(.lparen);
-                var types = try s.create_node_list();
-                try s.loop_read(.lparen, .rparen, .comma, struct {
-                    fn func(_types: *std.ArrayList(Node), _s: *Self) !void {
-                        try _types.append(try _s.type_());
-                    }
-                }.func, .{ &types, s });
-                the_type = Node{ .FnType = .{ .type = try s.create_node_ptr(the_type), .args = types } };
-            },
-            .mul => {
-                _ = try s.eat(.mul);
-                the_type = Node{ .PointerType = .{ .type = try s.create_node_ptr(the_type) } };
-            },
-            .question => {
-                _ = try s.eat(.question);
-                the_type = Node{ .OptionalType = .{ .type = try s.create_node_ptr(the_type) } };
-            },
-            .bang => {
-                _ = try s.eat(.bang);
-                var error_types = try s.create_node_list();
-                try s.loop_read(.lt, .gt, .@"or", struct {
-                    fn func(_error_types: *std.ArrayList(Node), _s: *Self) !void {
-                        try _error_types.append(Node{ .Identifier = .{ .value = try _s.eat(.identifier) } });
-                    }
-                }.func, .{ &error_types, s });
-                the_type = Node{ .ErrorUnionType = .{ .base_type = try s.create_node_ptr(the_type), .error_types = error_types } };
-            },
-            else => break,
-        }
-    }
-    const name = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
-    the_type = Node{ .Declarator = .{ .mut = mut, .type = try s.create_node_ptr(the_type), .name = try s.create_node_ptr(name) } };
-    return switch (s.l.tok.?) {
-        .lparen => try s.fn_decl(try s.create_node_ptr(the_type)),
-        else => try s.var_decl(try s.create_node_ptr(the_type)),
+    return switch (the_type) {
+        .Declarator => switch (s.l.tok.?) {
+            .lparen => try s.fn_decl(try s.create_node_ptr(the_type)),
+            else => try s.var_decl(try s.create_node_ptr(the_type)),
+        },
+        .FnCall => switch (s.l.tok.?) {
+            .@"catch" => try s.catch_stmt(try s.create_node_ptr(the_type)),
+            else => the_type,
+        },
+        .Assignment => the_type,
+        else => return errors.Error.ParserError,
     };
 }
 fn expr(s: *Self, precedence: Precedence) anyerror!Node {
-    var trying = false;
     var base: Node = undefined;
     // prefix
     switch (s.l.tok.?) {
@@ -705,11 +674,11 @@ fn expr(s: *Self, precedence: Precedence) anyerror!Node {
         },
         .@"if" => base = Node{ .IfExpr = .{ .expr = try s.create_node_ptr(try s.if_()) } },
         .match => base = Node{ .MatchExpr = .{ .expr = try s.create_node_ptr(try s.match_()) } },
-        .@"try" => {
-            _ = try s.eat(.@"try");
-            trying = true;
-        },
-        else => {}, // invalid prefix
+        .@"try" => base = try s.try_stmt(),
+        else => {
+            std.debug.print("Issue at {} {}", .{ s.l.line, s.l.col });
+            return errors.Error.ParserError;
+        }, // invalid prefix
     }
     // infix
     while (s.l.tok.? != .eof) {
@@ -831,6 +800,7 @@ fn stmt(s: *Self) anyerror!Node {
         .@"while" => try s.while_(),
         .@"break" => try s.break_(),
         .@"inline" => try s.inline_stmt(),
+        .@"try" => try s.try_stmt(),
         else => try s.decl_stmt(),
     };
 }
@@ -912,7 +882,10 @@ fn defer_(s: *Self) anyerror!Node {
 }
 fn return_(s: *Self) anyerror!Node {
     _ = try s.eat(.@"return");
-    const _expr = try s.expr(.none);
+    const _expr = switch (s.l.tok.?) {
+        .@"struct", .@"enum", .@"error", .type => try s.type_(),
+        else => try s.expr(.none),
+    };
     return Node{ .ReturnStmt = .{ .expr = try s.create_node_ptr(_expr) } };
 }
 fn for_(s: *Self) anyerror!Node {
