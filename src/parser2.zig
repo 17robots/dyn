@@ -80,7 +80,7 @@ fn type_expr(s: *Self) !Node {
             _ = try s.eat(.lparen);
             break :blk Node{ .GroupType = .{ ._type = try s.create_node_ptr(try s.type_expr()) } };
         },
-        .identifier => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
+        .identifier => try s.member_chain(),
         .void => blk: {
             _ = try s.eat(.void);
             break :blk Node.Void;
@@ -99,11 +99,6 @@ fn type_expr(s: *Self) !Node {
     }
     while (s.l.tok.? != .eof) {
         switch (s.l.tok.?) {
-            .dot => {
-                if (type_node != .Identifier) return Error.ParserError;
-                _ = try s.eat(.dot);
-                type_node = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(type_node), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
-            },
             .question => {
                 _ = try s.eat(.question);
                 type_node = Node{ .OptionalType = .{ .type = try s.create_node_ptr(type_node) } };
@@ -122,28 +117,13 @@ fn type_expr(s: *Self) !Node {
                 type_node = Node{ .ArrayType = .{ .type = try s.create_node_ptr(type_node), .number = expr_ } };
             },
             .lparen => {
-                var reading_fn_type = true;
-                const curr_pos = LexerState{ .index = s.l.index, .tok = s.l.tok, .line = s.l.line, .col = s.l.col };
                 var args = try s.create_node_list();
                 s.loop_read(.lparen, .rparen, .comma, struct {
                     fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
                         try _args.append(try _s.type_expr());
                     }
-                }.func, .{ &args, s }) catch {
-                    reading_fn_type = false;
-                    s.restore_lexer(curr_pos);
-                    args.clearAndFree();
-                    args = try s.create_node_list();
-                    s.loop_read(.lparen, .rparen, .comma, struct {
-                        fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
-                            try _args.append(try _s.expr());
-                        }
-                    }.func, .{ &args, s });
-                };
-                type_node = switch (reading_fn_type) {
-                    .true => Node{ .FnType = .{ .type = try s.create_node_ptr(type_node), .args = args } },
-                    else => Node{ .FnCall = .{ .callee = try s.create_node_ptr(type_node), .args = args } },
-                };
+                }.func, .{ &args, s });
+                type_node = Node{ .FnType = .{ .type = try s.create_node_ptr(type_node), .args = args } };
             },
             .lt => {
                 var errs = try s.create_node_list();
@@ -159,13 +139,169 @@ fn type_expr(s: *Self) !Node {
     return type_node;
 }
 fn decl(s: *Self) !Node {
+    const mut = switch (s.l.tok.?) {
+        .mut => blk: {
+            _ = try s.eat(.mut);
+            break :blk true;
+        },
+        else => false,
+    };
+    const type_node = try s.type_expr();
+    switch (type_node) {
+        .StructDecl, .EnumDecl, .ErrorDecl => {
+            if (mut) return Error.ParserError; // error
+            return type_node;
+        },
+        else => {},
+    }
+    const declarator_ = Node{ .Declarator = .{ .mut = mut, .type = try s.create_node_ptr(type_node), .name = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
+    return switch (s.l.tok.?) {
+        .lparen => try s.fn_decl(try s.create_node_ptr(declarator_)),
+        else => try s.var_decl(try s.create_node_ptr(declarator_)),
+    };
+}
+fn member_chain(s: *Self) !Node {
+    var member = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .dot) {
+            _ = try s.eat(.dot);
+            member = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(member), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
+        } else break;
+    }
+    return member;
+}
+fn dereference_chain(s: *Self) !Node {
+    var member = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .dot) {
+            _ = try s.eat(.dot);
+            switch (s.l.tok.?) {
+                .identifier => member = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(member), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } },
+                .question => {
+                    _ = try s.eat(.question);
+                    member = Node{ .OptionalDereference = .{ .root = try s.create_node_ptr(member) } };
+                },
+                .mul => {
+                    _ = try s.eat(.mul);
+                    member = Node{ .PointerDereference = .{ .root = try s.create_node_ptr(member) } };
+                },
+            }
+        } else if (s.l.tok.? == .lbrack) {
+            _ = try s.eat(.lbrack);
+            const expr_ = switch (s.l.tok.?) {
+                .rbrack => null,
+                else => try s.create_node_ptr(try s.expr()),
+            };
+            member = Node{ .ArrayIndex = .{ .root = try s.create_node_ptr(member), .expr = expr_ } };
+            _ = try s.eat(.rbrack);
+        } else if (s.l.tok.? == .lparen) {
+            var args = try s.create_node_list();
+            try s.loop_read(.lparen, .rparen, .comma, struct {
+                fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
+                    try _args.append(try _s.expr());
+                }
+            }.func, .{ &args, s });
+            member = Node{ .FnCall = .{ .callee = try s.create_node_ptr(member), .args = args } };
+        } else break;
+    }
+    return member;
+}
+fn expr(s: *Self, prec: u8) !Node {
+    _ = prec;
+    return try s.binary_expr(0);
+}
+fn prefix(s: *Self) !Node {
     _ = s;
 }
-fn expr(s: *Self) !Node {
+fn infix(s: *Self) !Node {
     _ = s;
+}
+fn binary_expr(s: *Self, min_prec: u8) !Node {
+    var left = try s.unary_expr();
+
+    while (s.l.tok.? != .eof) {
+        const prec = binary_precedence(s.l.tok.?);
+
+        if (prec < min_prec) break;
+        const next_min_prec = if (right_associative(s.l.tok.?)) {
+            prec;
+        } else {
+            prec + 1;
+        };
+        _ = try s.eat(s.l.tok.?);
+        left = Node{ .BinaryExpr = .{ .l = try s.create_node_ptr(left), .op = s.l.tok.?, .r = try s.create_node_ptr(blk: {
+            _ = try s.eat(s.l.tok.?);
+            break :blk try s.binary_expr(next_min_prec);
+        }) } };
+    }
+}
+fn binary_precedence(op: Token) u8 {
+    return switch (op) {
+        .mul, .div, .mod => 50,
+        .add, .sub => 40,
+        .lt, .gt, .lteq, .gteq => 30,
+        .eqeq, .bangeq => 20,
+        .andand, .oror => 15,
+        .oror => 10,
+        else => 0,
+    };
+}
+fn right_associative(op: Token) bool {
+    return switch (op) {
+        .eq, .addeq, .subeq, .modeq, .muleq, .diveq, .xoreq, .andeq, .oreq => true,
+        else => false,
+    };
+}
+fn unary_expr(s: *Self) !Node {
+    return switch (s.l.tok.?) {
+        .bang, .sub, .@"and" => {},
+        else => s.primary_expr(),
+    };
+}
+fn primary_expr(s: *Self) !Node {
+    var expr_ = try s.atom_expr();
+    while (s.l.tok.? != .eof) {
+        expr_ = switch (s.l.tok.?) {
+            .lparen => {},
+            .lbrack => {},
+            .dot => {},
+            else => break,
+        };
+    }
+    return expr_;
+}
+fn atom_expr(s: *Self) !Node {
+    return switch (s.l.tok.?) {
+        .int => Node{ .Literal = .{ .type = .int, .value = try s.eat(.int) } },
+        .float => Node{ .Literal = .{ .type = .float, .value = try s.eat(.float) } },
+        .string => Node{ .Literal = .{ .type = .string, .value = try s.eat(.string) } },
+        .char => Node{ .Literal = .{ .type = .char, .value = try s.eat(.char) } },
+        .true => Node{ .Literal = .{ .type = .boolean, .value = try s.eat(.true) } },
+        .false => Node{ .Literal = .{ .type = .boolean, .value = try s.eat(.false) } },
+        .null => blk: {
+            _ = try s.eat(.null);
+            break :blk Node.Null;
+        },
+        .undefined => blk: {
+            _ = try s.eat(.undefined);
+            break :blk Node.Undefined;
+        },
+        .lparen => Node{ .GroupExpr = .{ .expr = try s.expr() } },
+    };
 }
 fn stmt(s: *Self) !Node {
-    _ = s;
+    switch (s.l.tok.?) {
+        .@"break" => try break_(),
+        .@"for" => try for_(),
+        .@"if" => try if_(),
+        .match => try match_(),
+        .@"while" => try while_(),
+        .@"return" => try return_(),
+        else => try s.expr_stmt(), // TODO: add this after
+    }
+}
+fn expr_stmt(s: *Self) !Node {
+    switch (s.l.tok.?) {}
 }
 fn if_(s: *Self) !Node {
     _ = try s.eat(.@"if");
@@ -426,6 +562,9 @@ fn loop_read(s: *Self, l: ?Token, r: Token, sep: ?Token, func: anytype, args: an
     }
     _ = try s.eat(r);
 }
+fn save_lexer(s: *Self) LexerState {
+    return LexerState{ .index = s.l.index, .tok = s.l.tok.?, .line = s.l.line, .col = s.l.col };
+}
 fn restore_lexer(s: *Self, pos: LexerState) void {
     s.l.index = pos.index;
     s.l.tok = pos.tok;
@@ -439,41 +578,48 @@ const Node = union(enum) {
         float,
         boolean,
     };
-    GroupType: struct { _type: *Node },
-    Identifier: struct { value: []const u8 },
-    StructDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    StructType: struct { members: std.ArrayList(Node) },
+    ArrayIndex: struct { root: *Node, expr: ?*Node },
+    ArrayType: struct { type: *Node, number: ?*Node },
+    BinaryExpr: struct { l: *Node, op: Token, r: *Node },
+    BlockStmt: struct { stmts: std.ArrayList(Node) },
+    Capture: struct { identifier: *Node },
+    Declarator: struct { mut: bool, type_: *Node, name: *Node },
+    DeferStmt: struct { capture: ?*Node, body: *Node },
     EnumDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
     EnumType: struct { members: std.ArrayList(Node) },
     ErrorDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    ErrorType: struct { members: std.ArrayList(Node) },
-    MemberAccess: struct { root: ?*Node, access: *Node },
-    Declarator: struct { mut: bool, type_: *Node, name: *Node },
-    VarDecl: struct { declarator: *Node, default: ?*Node },
-    FnDecl: struct { declarator: *Node, args: std.ArrayList(Node), body: *Node },
     ErrorUnionType: struct { type: *Node, errs: std.ArrayList(Node) },
-    FnType: struct { type: *Node, args: std.ArrayList(Node) },
+    ErrorType: struct { members: std.ArrayList(Node) },
     FnCall: struct { callee: *Node, args: std.ArrayList(Node) },
-    OptionalType: struct { type: *Node },
-    PointerType: struct { type: *Node },
-    ArrayType: struct { type: *Node, number: ?*Node },
-    ModuleDeclaration: struct { name: *Node },
-    Literal: struct { type: LiteralKind, value: []const u8 },
-    BlockStmt: struct { stmts: std.ArrayList(Node) },
-    Program: struct { pub_decls: std.ArrayList(Node), decls: std.ArrayList(Node) },
-    Capture: struct { identifier: *Node },
-    ReferenceCapture: struct { identifier: *Node },
-    IfStmt: struct { condition: *Node, capture: ?*Node, body: *Node, else_body: ?*Node },
+    FnDecl: struct { declarator: *Node, args: std.ArrayList(Node), body: *Node },
+    FnType: struct { type: *Node, args: std.ArrayList(Node) },
     ForStmt: struct { condition: *Node, capture: *Node, body: *Node },
-    WhileStmt: struct { condition: *Node, body: *Node },
-    DeferStmt: struct { capture: ?*Node, body: *Node },
-    ReturnStmt: struct { result: ?*Node },
-    MatchStmt: struct { expr: *Node, arms: std.ArrayList(Node) },
+    GroupType: struct { _type: *Node },
+    GroupExpr: struct { expr: *Node },
+    Identifier: struct { value: []const u8 },
+    IfStmt: struct { condition: *Node, capture: ?*Node, body: *Node, else_body: ?*Node },
+    Literal: struct { type: LiteralKind, value: []const u8 },
     MatchArm: struct { exprs: std.ArrayList(Node), body: *Node },
-    Void,
-    Type,
-    Underscore,
+    MatchStmt: struct { expr: *Node, arms: std.ArrayList(Node) },
+    MemberAccess: struct { root: ?*Node, access: *Node },
+    ModuleDeclaration: struct { name: *Node },
+    OptionalType: struct { type: *Node },
+    OptionalDereference: struct { root: *Node },
+    PointerDereference: struct { root: *Node },
+    PointerType: struct { type: *Node },
+    Program: struct { pub_decls: std.ArrayList(Node), decls: std.ArrayList(Node) },
+    ReferenceCapture: struct { identifier: *Node },
+    ReturnStmt: struct { result: ?*Node },
+    StructDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    StructType: struct { members: std.ArrayList(Node) },
+    VarDecl: struct { declarator: *Node, default: ?*Node },
+    WhileStmt: struct { condition: *Node, body: *Node },
     BreakStmt,
+    Null,
+    Type,
+    Undefined,
+    Underscore,
+    Void,
 };
 const LexerState = struct {
     index: usize,
@@ -481,3 +627,4 @@ const LexerState = struct {
     line: usize,
     col: usize,
 };
+const Precedence = enum(u8) { none, equals, lessergreater, sum, mult, prefix, call };
