@@ -114,7 +114,12 @@ fn type_expr(s: *Self) !Node {
             },
             .lbrack => {
                 _ = try s.eat(.lbrack);
+                const expr_ = switch (s.l.tok.?) {
+                    .lbrack => null,
+                    else => try s.create_node_ptr(try s.expr()),
+                };
                 _ = try s.eat(.rbrack);
+                type_node = Node{ .ArrayType = .{ .type = try s.create_node_ptr(type_node), .number = expr_ } };
             },
             .lparen => {
                 var args = try s.create_node_list();
@@ -447,4 +452,10 @@ const Node = union(enum) {
     Type,
     Underscore,
     BreakStmt,
+};
+const LexerState = struct {
+    index: usize,
+    tok: ?Token,
+    line: usize,
+    col: usize,
 };

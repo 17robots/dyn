@@ -1,6 +1,6 @@
 const std = @import("std");
-const errors = @import("errors.zig");
-const TokenType = @import("token.zig").TokenType;
+const Error = @import("errors.zig").Error;
+const Token = @import("token.zig").TokenType;
 
 const Self = @This();
 const LexingState = enum {
@@ -30,10 +30,10 @@ const LexingState = enum {
 buffer: []const u8,
 index: usize,
 placeholder: usize,
-tok: ?TokenType,
+tok: ?Token,
 literal: ?[]const u8,
 state: LexingState,
-err: ?errors.Error,
+err: ?Error,
 line: usize,
 col: usize,
 
@@ -137,7 +137,7 @@ pub fn next_tok(s: *Self) void {
                 '_' => s.state = .read_underscore,
                 else => {
                     s.tok = .invalid;
-                    s.err = errors.Error.InvalidCharacter;
+                    s.err = Error.InvalidCharacter;
                     return;
                 },
             },
@@ -233,7 +233,7 @@ pub fn next_tok(s: *Self) void {
                     '\'' => {
                         if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                             s.tok = .invalid;
-                            s.err = errors.Error.InvalidCharLength;
+                            s.err = Error.InvalidCharLength;
                             s.state = .base;
                         } else {
                             s.tok = .char;
@@ -250,7 +250,7 @@ pub fn next_tok(s: *Self) void {
                             else => {
                                 s.tok = .invalid;
                                 s.state = .base;
-                                s.err = errors.Error.InvalidEscape;
+                                s.err = Error.InvalidEscape;
                                 return;
                             },
                         }
@@ -503,7 +503,7 @@ pub fn next_tok(s: *Self) void {
             }
             if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                 s.tok = .invalid;
-                s.err = errors.Error.InvalidEscape;
+                s.err = Error.InvalidEscape;
                 s.state = .base;
             } else {
                 s.tok = .char;
@@ -535,7 +535,7 @@ pub fn next_tok(s: *Self) void {
     s.state = .base;
 }
 
-fn get_keyword(s: *Self) ?TokenType {
+fn get_keyword(s: *Self) ?Token {
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "module")) {
         return .module;
     }
