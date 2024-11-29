@@ -122,13 +122,28 @@ fn type_expr(s: *Self) !Node {
                 type_node = Node{ .ArrayType = .{ .type = try s.create_node_ptr(type_node), .number = expr_ } };
             },
             .lparen => {
+                var reading_fn_type = true;
+                const curr_pos = LexerState{ .index = s.l.index, .tok = s.l.tok, .line = s.l.line, .col = s.l.col };
                 var args = try s.create_node_list();
-                try s.loop_read(.lparen, .rparen, .comma, struct {
+                s.loop_read(.lparen, .rparen, .comma, struct {
                     fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
                         try _args.append(try _s.type_expr());
                     }
-                }.func, .{ &args, s });
-                type_node = Node{ .FnType = .{ .type = try s.create_node_ptr(type_node), .args = args } };
+                }.func, .{ &args, s }) catch {
+                    reading_fn_type = false;
+                    s.restore_lexer(curr_pos);
+                    args.clearAndFree();
+                    args = try s.create_node_list();
+                    s.loop_read(.lparen, .rparen, .comma, struct {
+                        fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
+                            try _args.append(try _s.expr());
+                        }
+                    }.func, .{ &args, s });
+                };
+                type_node = switch (reading_fn_type) {
+                    .true => Node{ .FnType = .{ .type = try s.create_node_ptr(type_node), .args = args } },
+                    else => Node{ .FnCall = .{ .callee = try s.create_node_ptr(type_node), .args = args } },
+                };
             },
             .lt => {
                 var errs = try s.create_node_list();
@@ -411,6 +426,12 @@ fn loop_read(s: *Self, l: ?Token, r: Token, sep: ?Token, func: anytype, args: an
     }
     _ = try s.eat(r);
 }
+fn restore_lexer(s: *Self, pos: LexerState) void {
+    s.l.index = pos.index;
+    s.l.tok = pos.tok;
+    s.l.line = pos.line;
+    s.l.col = pos.col;
+}
 const Node = union(enum) {
     const LiteralKind = enum {
         string,
@@ -432,6 +453,7 @@ const Node = union(enum) {
     FnDecl: struct { declarator: *Node, args: std.ArrayList(Node), body: *Node },
     ErrorUnionType: struct { type: *Node, errs: std.ArrayList(Node) },
     FnType: struct { type: *Node, args: std.ArrayList(Node) },
+    FnCall: struct { callee: *Node, args: std.ArrayList(Node) },
     OptionalType: struct { type: *Node },
     PointerType: struct { type: *Node },
     ArrayType: struct { type: *Node, number: ?*Node },
