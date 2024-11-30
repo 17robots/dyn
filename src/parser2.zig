@@ -207,87 +207,14 @@ fn dereference_chain(s: *Self) !Node {
     return member;
 }
 fn expr(s: *Self, prec: u8) !Node {
+    _ = s;
     _ = prec;
-    return try s.binary_expr(0);
 }
 fn prefix(s: *Self) !Node {
-    _ = s;
+    return Node{ .PrefixExpr = .{ .expr = try s.create_node_ptr(try s.expr(@intFromEnum(.prefix))) } };
 }
 fn infix(s: *Self) !Node {
     _ = s;
-}
-fn binary_expr(s: *Self, min_prec: u8) !Node {
-    var left = try s.unary_expr();
-
-    while (s.l.tok.? != .eof) {
-        const prec = binary_precedence(s.l.tok.?);
-
-        if (prec < min_prec) break;
-        const next_min_prec = if (right_associative(s.l.tok.?)) {
-            prec;
-        } else {
-            prec + 1;
-        };
-        _ = try s.eat(s.l.tok.?);
-        left = Node{ .BinaryExpr = .{ .l = try s.create_node_ptr(left), .op = s.l.tok.?, .r = try s.create_node_ptr(blk: {
-            _ = try s.eat(s.l.tok.?);
-            break :blk try s.binary_expr(next_min_prec);
-        }) } };
-    }
-}
-fn binary_precedence(op: Token) u8 {
-    return switch (op) {
-        .mul, .div, .mod => 50,
-        .add, .sub => 40,
-        .lt, .gt, .lteq, .gteq => 30,
-        .eqeq, .bangeq => 20,
-        .andand, .oror => 15,
-        .oror => 10,
-        else => 0,
-    };
-}
-fn right_associative(op: Token) bool {
-    return switch (op) {
-        .eq, .addeq, .subeq, .modeq, .muleq, .diveq, .xoreq, .andeq, .oreq => true,
-        else => false,
-    };
-}
-fn unary_expr(s: *Self) !Node {
-    return switch (s.l.tok.?) {
-        .bang, .sub, .@"and" => {},
-        else => s.primary_expr(),
-    };
-}
-fn primary_expr(s: *Self) !Node {
-    var expr_ = try s.atom_expr();
-    while (s.l.tok.? != .eof) {
-        expr_ = switch (s.l.tok.?) {
-            .lparen => {},
-            .lbrack => {},
-            .dot => {},
-            else => break,
-        };
-    }
-    return expr_;
-}
-fn atom_expr(s: *Self) !Node {
-    return switch (s.l.tok.?) {
-        .int => Node{ .Literal = .{ .type = .int, .value = try s.eat(.int) } },
-        .float => Node{ .Literal = .{ .type = .float, .value = try s.eat(.float) } },
-        .string => Node{ .Literal = .{ .type = .string, .value = try s.eat(.string) } },
-        .char => Node{ .Literal = .{ .type = .char, .value = try s.eat(.char) } },
-        .true => Node{ .Literal = .{ .type = .boolean, .value = try s.eat(.true) } },
-        .false => Node{ .Literal = .{ .type = .boolean, .value = try s.eat(.false) } },
-        .null => blk: {
-            _ = try s.eat(.null);
-            break :blk Node.Null;
-        },
-        .undefined => blk: {
-            _ = try s.eat(.undefined);
-            break :blk Node.Undefined;
-        },
-        .lparen => Node{ .GroupExpr = .{ .expr = try s.expr() } },
-    };
 }
 fn stmt(s: *Self) !Node {
     switch (s.l.tok.?) {
@@ -607,6 +534,7 @@ const Node = union(enum) {
     OptionalDereference: struct { root: *Node },
     PointerDereference: struct { root: *Node },
     PointerType: struct { type: *Node },
+    PrefixExpr: struct { expr: *Node, op: Token },
     Program: struct { pub_decls: std.ArrayList(Node), decls: std.ArrayList(Node) },
     ReferenceCapture: struct { identifier: *Node },
     ReturnStmt: struct { result: ?*Node },
