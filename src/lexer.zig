@@ -613,3 +613,10 @@ fn get_keyword(s: *Self) ?Token {
     }
     return null;
 }
+
+pub const LexerState = struct {
+    index: usize,
+    tok: ?Token,
+    line: usize,
+    col: usize,
+};

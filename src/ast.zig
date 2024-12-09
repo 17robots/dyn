@@ -55,3 +55,5 @@ pub const Node = union(enum) {
     Underscore,
     Void,
 };
+
+const Precedence = enum(u8) { none, equals, lessergreater, sum, mult, prefix, call };

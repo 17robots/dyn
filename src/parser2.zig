@@ -1,5 +1,7 @@
 const std = @import("std");
-const Lexer = @import("lexer.zig").Lexer;
+const lexer = @import("lexer.zig");
+const Lexer = lexer.Lexer;
+const LexerState = lexer.LexerState;
 const Token = @import("token.zig").TokenType;
 const Error = @import("errors.zig").Error;
 const Node = @import("ast.zig").Node;
@@ -173,17 +175,36 @@ fn member_chain(s: *Self) !Node {
 }
 fn dereference_chain(s: *Self) !Node {
     var member = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+    var could_be_fn_type = true;
+    var could_be_array_type = true;
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .dot) {
             _ = try s.eat(.dot);
+            switch(member) {
+                .ArrayType => |d| {
+                    member = Node{ .ArrayIndex = .{ .root = d.type, .expr = d.number } };
+                    could_be_fn_type = false;
+                    could_be_array_type = false;
+                },
+                .FnType => |d| {
+                    member = Node{ .FnCall = .{ .callee = d.type, .args = d.args }};
+                    could_be_fn_type = false;
+                    could_be_array_type = false;
+                },
+                else => {},
+            }
             switch (s.l.tok.?) {
                 .identifier => member = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(member), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } },
                 .question => {
                     _ = try s.eat(.question);
+                    could_be_fn_type = false;
+                    could_be_array_type = false;
                     member = Node{ .OptionalDereference = .{ .root = try s.create_node_ptr(member) } };
                 },
                 .mul => {
                     _ = try s.eat(.mul);
+                    could_be_fn_type = false;
+                    could_be_array_type = false;
                     member = Node{ .PointerDereference = .{ .root = try s.create_node_ptr(member) } };
                 },
             }
@@ -199,7 +220,9 @@ fn dereference_chain(s: *Self) !Node {
             var args = try s.create_node_list();
             try s.loop_read(.lparen, .rparen, .comma, struct {
                 fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
-                    try _args.append(try _s.expr());
+                    const state = _s.save_lexer();
+                    try _args.append(blk: {
+                    });
                 }
             }.func, .{ &args, s });
             member = Node{ .FnCall = .{ .callee = try s.create_node_ptr(member), .args = args } };
@@ -211,12 +234,6 @@ fn expr(s: *Self, prec: u8) !Node {
     _ = s;
     _ = prec;
 }
-fn prefix(s: *Self) !Node {
-    return Node{ .PrefixExpr = .{ .expr = try s.create_node_ptr(try s.expr(@intFromEnum(.prefix))) } };
-}
-fn infix(s: *Self) !Node {
-    _ = s;
-}
 fn stmt(s: *Self) !Node {
     switch (s.l.tok.?) {
         .@"break" => try break_(),
@@ -225,11 +242,17 @@ fn stmt(s: *Self) !Node {
         .match => try match_(),
         .@"while" => try while_(),
         .@"return" => try return_(),
-        else => try s.expr_stmt(), // TODO: add this after
+        else => try s.decl_stmt(), // TODO: add this after
     }
 }
-fn expr_stmt(s: *Self) !Node {
-    switch (s.l.tok.?) {}
+fn decl_stmt(s: *Self) !Node {
+    switch (s.l.tok.?) {
+        .identifier => {
+            const x = try s.dereference_chain();
+        },
+        .lparen => {},
+        else => {},
+    }
 }
 fn if_(s: *Self) !Node {
     _ = try s.eat(.@"if");
@@ -515,4 +538,3 @@ const LexerState = struct {
     line: usize,
     col: usize,
 };
-const Precedence = enum(u8) { none, equals, lessergreater, sum, mult, prefix, call };
