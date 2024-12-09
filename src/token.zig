@@ -79,4 +79,5 @@ pub const TokenType = enum {
     @"return",
     @"break",
     @"inline",
+    @"fn",
 };

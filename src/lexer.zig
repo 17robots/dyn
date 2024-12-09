@@ -608,5 +608,8 @@ fn get_keyword(s: *Self) ?Token {
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "inline")) {
         return .@"inline";
     }
+    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "fn")) {
+        return .@"fn";
+    }
     return null;
 }

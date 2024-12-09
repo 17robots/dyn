@@ -2,6 +2,7 @@ const std = @import("std");
 const Lexer = @import("lexer.zig").Lexer;
 const Token = @import("token.zig").TokenType;
 const Error = @import("errors.zig").Error;
+const Node = @import("ast.zig").Node;
 
 const Self = @This();
 
@@ -92,9 +93,11 @@ fn type_expr(s: *Self) !Node {
         .@"struct" => try s.struct_(),
         .@"enum" => try s.enum_(),
         .@"error" => try s.error_(),
+        .@"fn" => try s.fn_(),
+        .bang => {},
     };
     switch (type_node) {
-        .StructDecl, .EnumDecl, .ErrorDecl => return type_node,
+        .StructDecl, .EnumDecl, .ErrorDecl, .FnDecl => return type_node,
         else => {},
     }
     while (s.l.tok.? != .eof) {
@@ -125,6 +128,7 @@ fn type_expr(s: *Self) !Node {
                 }.func, .{ &args, s });
                 type_node = Node{ .FnType = .{ .type = try s.create_node_ptr(type_node), .args = args } };
             },
+            .bang => {}, // only issue right now would be i32! test = fn_result();
             .lt => {
                 var errs = try s.create_node_list();
                 try s.loop_read(.lt, .gt, .comma, struct {
@@ -148,17 +152,14 @@ fn decl(s: *Self) !Node {
     };
     const type_node = try s.type_expr();
     switch (type_node) {
-        .StructDecl, .EnumDecl, .ErrorDecl => {
+        .StructDecl, .EnumDecl, .ErrorDecl, .FnDecl => {
             if (mut) return Error.ParserError; // error
             return type_node;
         },
         else => {},
     }
     const declarator_ = Node{ .Declarator = .{ .mut = mut, .type = try s.create_node_ptr(type_node), .name = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
-    return switch (s.l.tok.?) {
-        .lparen => try s.fn_decl(try s.create_node_ptr(declarator_)),
-        else => try s.var_decl(try s.create_node_ptr(declarator_)),
-    };
+    return try s.var_decl(try s.create_node_ptr(declarator_));
 }
 fn member_chain(s: *Self) !Node {
     var member = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
@@ -360,32 +361,45 @@ fn var_decl(s: *Self, declarator: *Node) !Node {
         else => Error.ParserError,
     };
 }
-fn fn_decl(s: *Self, declarator: *Node) !void {
-    return switch (declarator.*) {
-        .Declarator => |d| blk: {
-            var members = try s.create_node_list();
-            try s.loop_read(.lparen, .rparen, .comma, struct {
-                fn func(_members: *std.ArrayList(Node), _s: *Self) !void {
-                    const member_type = try _s.type_expr();
-                    const member_name = try Node{ .Identifier = .{ .value = try _s.eat(.identifier) } };
-                    try _members.append(Node{ .Declarator = .{ .mut = false, .type_ = try s.create_node_ptr(member_type), .name = try s.create_node_ptr(member_name) } });
-                }
-            }.func, .{ &members, s });
-            const body = switch (s.l.tok.?) {
-                .arrow => arrow_block: {
-                    _ = try s.eat(.arrow);
-                    break :arrow_block switch (d.type_.*) {
-                        .Void => try s.stmt(),
-                        .Type => try s.type_expr(),
-                        else => try s.expr(),
-                    };
-                },
-                .lbrace => try s.block(),
-            };
-            break :blk Node{ .FnDecl = .{ .declarator = declarator, .body = try s.create_node_ptr(body) } };
-        },
-        else => Error.ParserError,
+fn fn_(s: *Self) !void {
+    _ = try s.eat(.@"fn");
+    const name = switch (s.l.tok.?) {
+        .identifier => try s.create_node_ptr(.{ .Identifier = .{ .value = try s.eat(.identifier) } }),
+        else => null,
     };
+    var args = try s.create_node_list();
+    const arg_fn = if (name) |_| struct {
+        fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
+            const arg_type = try _s.type_expr();
+            const arg_name = Node{ .Identifier = .{ .value = try _s.eat(.identifier) } };
+            try _args.append(try _s.create_node_ptr(.{ .Declarator = .{ .mut = false, .type = arg_type, .name = try _s.create_node_ptr(arg_name) } }));
+        }
+    }.func else struct {
+        fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
+            try _args.append(try _s.create_node_ptr(try _s.type_expr()));
+        }
+    }.func;
+    try s.loop_read(.lparen, .rparen, .comma, arg_fn, .{ &args, s });
+    const fn_type = try s.type_expr();
+    const fn_body = switch (s.l.tok.?) {
+        .identifier => null,
+        .lbrace => try s.block(),
+        .arrow => blk: {
+            _ = try s.eat(.arrow);
+            break :blk try s.expr(.none);
+        },
+    };
+    if (name) |n| {
+        if (fn_body) |b| {
+            const fn_declarator = Node{ .Declarator = .{ .mut = false, .name = try s.create_node_ptr(n), .type_ = try s.create_node_ptr(fn_type) } };
+            return Node{ .FnDecl = .{ .declarator = try s.create_node_ptr(fn_declarator), .args = args, .body = try s.create_node_ptr(b) } };
+        } else {
+            return Error.ParserError;
+        }
+    } else {
+        if (fn_body) |_| return Error.ParserError;
+        return Node{ .FnType = .{ .type = try s.create_node_ptr(fn_type), .args = args } };
+    }
 }
 fn struct_(s: *Self) !Node {
     _ = try s.eat(.@"struct");
@@ -399,13 +413,10 @@ fn struct_(s: *Self) !Node {
         fn func(_members: *std.ArrayList(Node), _s: *Self) !void {
             const member_type = try s.type_expr();
             switch (member_type) {
-                .StructDeclaration, .EnumDeclaration, .ErrorDeclaration => try _members.append(member_type),
+                .StructDeclaration, .EnumDeclaration, .ErrorDeclaration, .FnDecl => try _members.append(member_type),
                 else => {
                     const member_declarator = Node{ .Declarator = .{ .type_ = try s.create_node_ptr(member_type), .name = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
-                    try _members.append(switch (s.l.tok.?) {
-                        .lparen => try _s.fn_decl(try _s.create_node_ptr(member_declarator)),
-                        else => try _s.var_decl(try _s.create_node_ptr(member_declarator)),
-                    });
+                    try _members.append(_s.var_decl(try _s.create_node_ptr(member_declarator)));
                 },
             }
         }
@@ -498,57 +509,6 @@ fn restore_lexer(s: *Self, pos: LexerState) void {
     s.l.line = pos.line;
     s.l.col = pos.col;
 }
-const Node = union(enum) {
-    const LiteralKind = enum {
-        string,
-        int,
-        float,
-        boolean,
-    };
-    ArrayIndex: struct { root: *Node, expr: ?*Node },
-    ArrayType: struct { type: *Node, number: ?*Node },
-    BinaryExpr: struct { l: *Node, op: Token, r: *Node },
-    BlockStmt: struct { stmts: std.ArrayList(Node) },
-    Capture: struct { identifier: *Node },
-    Declarator: struct { mut: bool, type_: *Node, name: *Node },
-    DeferStmt: struct { capture: ?*Node, body: *Node },
-    EnumDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    EnumType: struct { members: std.ArrayList(Node) },
-    ErrorDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    ErrorUnionType: struct { type: *Node, errs: std.ArrayList(Node) },
-    ErrorType: struct { members: std.ArrayList(Node) },
-    FnCall: struct { callee: *Node, args: std.ArrayList(Node) },
-    FnDecl: struct { declarator: *Node, args: std.ArrayList(Node), body: *Node },
-    FnType: struct { type: *Node, args: std.ArrayList(Node) },
-    ForStmt: struct { condition: *Node, capture: *Node, body: *Node },
-    GroupType: struct { _type: *Node },
-    GroupExpr: struct { expr: *Node },
-    Identifier: struct { value: []const u8 },
-    IfStmt: struct { condition: *Node, capture: ?*Node, body: *Node, else_body: ?*Node },
-    Literal: struct { type: LiteralKind, value: []const u8 },
-    MatchArm: struct { exprs: std.ArrayList(Node), body: *Node },
-    MatchStmt: struct { expr: *Node, arms: std.ArrayList(Node) },
-    MemberAccess: struct { root: ?*Node, access: *Node },
-    ModuleDeclaration: struct { name: *Node },
-    OptionalType: struct { type: *Node },
-    OptionalDereference: struct { root: *Node },
-    PointerDereference: struct { root: *Node },
-    PointerType: struct { type: *Node },
-    PrefixExpr: struct { expr: *Node, op: Token },
-    Program: struct { pub_decls: std.ArrayList(Node), decls: std.ArrayList(Node) },
-    ReferenceCapture: struct { identifier: *Node },
-    ReturnStmt: struct { result: ?*Node },
-    StructDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
-    StructType: struct { members: std.ArrayList(Node) },
-    VarDecl: struct { declarator: *Node, default: ?*Node },
-    WhileStmt: struct { condition: *Node, body: *Node },
-    BreakStmt,
-    Null,
-    Type,
-    Undefined,
-    Underscore,
-    Void,
-};
 const LexerState = struct {
     index: usize,
     tok: ?Token,
