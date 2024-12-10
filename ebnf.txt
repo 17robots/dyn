@@ -11,7 +11,7 @@ UseDeclaration = "use" [ Identifier ] StringLiteral ";" ;
 Declarations = { Declaration } ;
 Declaration = FunctionDeclaration | StructDeclaration | EnumDeclaration | ErrorDeclaration | VariableDeclaration ;
 
-FunctionDeclaration = TypeExpression Identifier "(" [ Parameters ] ")" ( Block | "=>" Expression ";" ) ;
+FunctionDeclaration = "fn" Identifier "(" [ Parameters ] ")" TypeExpression ( Block | "=>" Expression ";" ) ;
 Parameters = Parameter { "," Parameter } ;
 Parameter = TypeExpression Identifier [ "=" Expression ];
 

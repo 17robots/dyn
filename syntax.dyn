@@ -1,14 +1,14 @@
-module "main";
+module "main";synt
 
 use {
   "std:io",
-  "std:heap",
-  "std:sync",
-  "std:math",
-  test "testLib"
+    "std:heap",
+    "std:sync",
+    "std:math",
+    test "testLib"
 }
 
-void main() {
+fn main() {
   primitives();
   optionals();
   pointers();
@@ -24,16 +24,9 @@ void main() {
   metaprogramming();
   memory();
   concurrency();
-  i32(i32[1], i32[1], i32[2]);
-  i32(i32[1], i32[1], i32[2]) uh_oh; // fn type
-  type ArrayList(type T) {
-    return struct {
-      val: T,
-    };
-  }
 }
 
-void primitives() {
+fn primitives() {
   i2 x = 0;
   u5 y = 1;
   f32 single_precision = 1.0;
@@ -42,7 +35,7 @@ void primitives() {
   u1 boolean = false;
 }
 
-void optionals() {
+fn optionals() {
   i32? optional_value = 100;
   mut i32? optional_value_2 = null;
 
@@ -62,7 +55,7 @@ void optionals() {
   i32 y = optional_value_2 else 4;
 }
 
-void pointers() {
+fn pointers() {
   i32 x = 1;
   mut i32 y = 1;
   i32* a = &x;
@@ -74,7 +67,7 @@ void pointers() {
   b.* = 5;
 }
 
-void arrays() {
+fn arrays() {
   mut i32[] nums = [1,2,3,4,5];
   nums[0] *= 2;
   mut i32[5] nums2;
@@ -85,7 +78,7 @@ void arrays() {
   nums[4] = 4;
 }
 
-void if_statements() {
+fn if_statements() {
   u1 yes = true;
   if yes {
     io.println("This should print");
@@ -97,17 +90,17 @@ void if_statements() {
   if no { io.println("if this runs then oops"); } else if yes { io.println("This should run"); } else { io.println("This should not run"); }
 }
 
-void match_statements() {
+fn match_statements() {
   i32 x = 100;
   match x {
-    1: { io.println("This shouldnt run"); },
-    2: { io.println("This shouldnt run"); },
-    4..90: { io.println("This shouldnt run"); },
-    _: { io.println("This is the default so this should run"); },
+1: { io.println("This shouldnt run"); },
+     2: { io.println("This shouldnt run"); },
+     4..90: { io.println("This shouldnt run"); },
+     _: { io.println("This is the default so this should run"); },
   }
 }
 
-void defer_statements() {
+fn defer_statements() {
   defer io.println("This executes last");
   defer io.println("This executes second");
   defer {
@@ -115,7 +108,7 @@ void defer_statements() {
   }
 }
 
-void loops() {
+fn loops() {
   while true {
     io.println("infinite loop, needs broken");
     break;
@@ -128,25 +121,25 @@ void loops() {
   for 0..std.arr.len(items) |i| { io.println(items[i]); }
 }
 
-void functions() {
+fn functions() {
   mut i32 local = 0;
   mut i32 state = 0;
   mut i32 result = undefined;
-  void internal_fn() {
+  fn internal_fn() {
     io.println(local, state);
   }
   internal_fn();
-  i32 some_number() { return 100; }
-  i32 some_number_2() => 100;
-  i32 some_math(i32 x, i32 y) => x + y;
-  i32 some_math_2(i32 x, i32 y) => x + y;
-  void manipulate_numbers(i32* result, i32 x, i32 y) => result.* = x + y;
+  fn some_number() i32 { return 100; }
+  fn some_number_2() i32 => 100;
+  fn some_math(i32 x, i32 y) i32 => x + y;
+  fn some_math_2(i32 x, i32 y) i32 => x + y;
+  fn manipulate_numbers(i32* result, i32 x, i32 y) => result.* = x + y;
   mut i32 y = 5;
   manipulate_numbers(&y, local, state);
   io.println("String interpolated values {some_math(1, 2)}");
 }
 
-void enums() {
+fn enums() {
   enum MyEnum {
     SOME,
     THING,
@@ -164,16 +157,16 @@ void enums() {
 
   match x {
     .SOME: { io.println("SOME"); },
-    .THING: { io.println("THING"); },
-    .HERE: { io.println("HERE"); }
+      .THING: { io.println("THING"); },
+      .HERE: { io.println("HERE"); }
   }
   match x {
     .SOME: { io.println("SOME"); },
-    _: { io.println("Default"); }
+      _: { io.println("Default"); }
   }
 }
 
-void errors() {
+fn errors() {
   error DivideErrors {
     DivideByZero
   }
@@ -182,13 +175,18 @@ void errors() {
     i32 DivideByZero
   }
 
-  f32!<DivideErrors> div(f32 x, f32 y) => if y == 0 { return DivideErrors.DivideByZero; } else { return x / y; };
-  f32!<PartneredDivideErrors> div(f32 x, f32 y) => if y == 0 { return PartneredDivideErrors.DivideByZero(4); } else { return x / y; };
+  fn div(f32 x, f32 y) f32<DivideErrors> {
+    if y == 0 { return DivideErrors.DivideByZero; } else { return x / y; }
+  }
+
+  fn div(f32 x, f32 y) f32<PartneredDivideErrors> {
+    if y == 0 { return PartneredDivideErrors.DivideByZero(4); } else { return x / y; }
+  }
 
   defer |e| {}
   defer {}
 
-  void!<> try_me() {
+  try_me() void<> {
     return DivideErrors.DivideByZero;
   }
 
@@ -200,23 +198,23 @@ void errors() {
   try try_me();
 }
 
-void structs() {
+fn structs() {
   struct X {
     i32 a,
-    i32 b,
-    i32 c,
-    f32 x,
-    f32 y,
-    f32 z
+        i32 b,
+        i32 c,
+        f32 x,
+        f32 y,
+        f32 z
   }
 
   type Y = struct {
     f32 a,
-    f32 b,
-    f32 c,
-    i32 x,
-    i32 y,
-    i32 z
+        f32 b,
+        f32 c,
+        i32 x,
+        i32 y,
+        i32 z
   }
 
   X x = .{ a: 1, b: 2, c: 3, x: 1.0, y: 1.0, z: 1.0 };
@@ -224,42 +222,42 @@ void structs() {
   io.println("{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}");
   io.println("{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}");
 
-  void printX(X x) => io.println("{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}");
-  void printY(Y y) => io.println("{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}");
+  fn printX(X x) => io.println("{x.a}, {x.b}, {x.c}, {x.x}, {x.y}, {x.z}");
+  fn printY(Y y) => io.println("{y.a}, {y.b}, {y.c}, {y.x}, {y.y}, {y.z}");
 
-  void updateX(X* x) => x.*.a = x.*.a + 1;
+  fn updateX(X* x) => x.*.a = x.*.a + 1;
 
-  i32?!<DivideError> otherExample = null;
+  i32?! otherExample = null;
 
   struct MethodExample {
     i32 a = 0,
-    MethodExample init(i32 a) => .{ a: a },
-    void print(MethodExample s) => io.println("{s.a}"),
-    void setADouble(MethodExample* s) => s.*.a *= 2
+        fn init(i32 a) MethodExample => .{ a: a },
+        fn print(MethodExample s) => io.println("{s.a}"),
+        fn setADouble(MethodExample* s) => s.*.a *= 2
   }
 }
 
-void metaprogramming() {
-  type List(comp type T) => struct {
+fn metaprogramming() {
+  fn List(comp type T) type => struct {
     T[] members,
-    this init() {
-      inline for 0..5 |_| {
-        io.println("hi");
+      this init() {
+        inline for 0..5 |_| {
+          io.println("hi");
+        }
+        return .{ members: [] };
       }
-      return .{ members: [] };
-    }
   };
 
-  void printType(comp type T) {
+  fn printType(comp type T) {
     std.meta.Type t = $typeOf(T);
     match t.Type {
       .Int: |int| { io.println("integer {t.name}, {int.bits}, {bool(int.signed)}"); },
-      _: { $compError("issue here, we need int type"); }
+        _: { $compError("issue here, we need int type"); }
     }
   }
 }
 
-void memory() {
+fn memory() {
   heap.GeneralPurposeAllocator gpa = heap.GeneralPurposeAllocator.init({});
   mut heap.Allocator alloc = gpa.alloc();
   defer {
@@ -282,24 +280,27 @@ void memory() {
   i32[] p3 = aa.allocMany(i32, 2);
 }
 
-struct { i32 hello, i32 world } something_struct() {
+fn something_struct() struct { i32 hello, i32 world } {
 }
 
-enum { cool, i32 thing, here } something_enum() {
+fn something_enum() enum { cool, i32 thing, here } {
 }
 
-struct { enum { one, two, three } x } do_a_many_thing(struct { bool do, bool we, bool think } a, enum { we, dont, like, things } b, error { weCant, doThingFailure } c) { }
+fn do_a_many_thing(struct { bool do, bool we, bool think } a, enum { we, dont, like, things } b, error { weCant, doThingFailure } c) struct { enum { one, two, three } x } { }
 
-type SomeFancyThing(comp type t) {
+fn SomeFancyThing(comp type t) type {
   return struct {
     type Self = $self(),
-    u32 woah,
-    u32 there,
+         u32 woah,
+         u32 there,
   };
 }
 
-void concurrency() {
-  void printStuff() => io.println("thread stuff");
+fn concurrency() {
+  fn printStuff() => io.println("thread stuff");
   sync.Thread t1 = sync.spawn(printStuff());
   t1.join();
 }
+
+type AddFn = fn(i32,i32)i32;
+fn doAddOp(AddFn a, i32 x, i32 y) => a(x,y);
