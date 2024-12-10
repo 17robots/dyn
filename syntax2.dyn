@@ -1,4 +1,4 @@
-module "main";
+module "main";synt
 
 use {
   "std:io",
@@ -175,18 +175,18 @@ fn errors() {
     i32 DivideByZero
   }
 
-  fn div(f32 x, f32 y) f32!DivideErrors {
+  fn div(f32 x, f32 y) f32<DivideErrors> {
     if y == 0 { return DivideErrors.DivideByZero; } else { return x / y; }
   }
 
-  fn div(f32 x, f32 y) f32!PartneredDivideErrors {
+  fn div(f32 x, f32 y) f32<PartneredDivideErrors> {
     if y == 0 { return PartneredDivideErrors.DivideByZero(4); } else { return x / y; }
   }
 
   defer |e| {}
   defer {}
 
-  try_me() void! {
+  try_me() void<> {
     return DivideErrors.DivideByZero;
   }
 

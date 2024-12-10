@@ -16,11 +16,11 @@ pub const Node = union(enum) {
     BinaryExpr: struct { l: *Node, op: Token, r: *Node },
     BlockStmt: struct { stmts: std.ArrayList(Node) },
     Capture: struct { identifier: *Node },
-    Declarator: struct { mut: bool, type_: *Node, name: *Node },
+    Declarator: struct { mut: bool, type: *Node, name: *Node },
     DeferStmt: struct { capture: ?*Node, body: *Node },
-    EnumDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    EnumDecl: struct { name: *Node, members: std.ArrayList(Node) },
     EnumType: struct { members: std.ArrayList(Node) },
-    ErrorDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    ErrorDecl: struct { name: *Node, members: std.ArrayList(Node) },
     ErrorUnionType: struct { type: *Node, errs: std.ArrayList(Node) },
     ErrorType: struct { members: std.ArrayList(Node) },
     FnCall: struct { callee: *Node, args: std.ArrayList(Node) },
@@ -35,7 +35,7 @@ pub const Node = union(enum) {
     MatchArm: struct { exprs: std.ArrayList(Node), body: *Node },
     MatchStmt: struct { expr: *Node, arms: std.ArrayList(Node) },
     MemberAccess: struct { root: ?*Node, access: *Node },
-    ModuleDeclaration: struct { name: *Node },
+    ModuleDecl: struct { name: *Node },
     OptionalType: struct { type: *Node },
     OptionalDereference: struct { root: *Node },
     PointerDereference: struct { root: *Node },
@@ -44,8 +44,10 @@ pub const Node = union(enum) {
     Program: struct { pub_decls: std.ArrayList(Node), decls: std.ArrayList(Node) },
     ReferenceCapture: struct { identifier: *Node },
     ReturnStmt: struct { result: ?*Node },
-    StructDeclaration: struct { name: *Node, members: std.ArrayList(Node) },
+    StructDecl: struct { name: *Node, members: std.ArrayList(Node) },
     StructType: struct { members: std.ArrayList(Node) },
+    UseBlock: struct { uses: std.ArrayList(Node) },
+    UseStmt: struct { alias: ?*Node, value: *Node },
     VarDecl: struct { declarator: *Node, default: ?*Node },
     WhileStmt: struct { condition: *Node, body: *Node },
     BreakStmt,
@@ -54,6 +56,12 @@ pub const Node = union(enum) {
     Undefined,
     Underscore,
     Void,
+    pub fn deinit(s: *Node, alloc: std.mem.Allocator) void {
+        _ = alloc;
+        switch (s) {
+            else => {},
+        }
+    }
 };
 
 const Precedence = enum(u8) { none, equals, lessergreater, sum, mult, prefix, call };
