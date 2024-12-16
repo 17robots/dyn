@@ -1,9 +1,27 @@
 const std = @import("std");
 const Lexer = @import("lexer.zig");
-const LexerState = Lexer.LexerState;
 const Token = @import("token.zig").TokenType;
 const Error = @import("errors.zig").Error;
 const Node = @import("ast.zig").Node;
+
+const Precedence = enum(u8) {
+    none,
+    assignment,
+    logical_or,
+    logical_and,
+    equality,
+    comparison,
+    bitwise_or,
+    bitwise_xor,
+    bitwise_and,
+    shift,
+    term,
+    factor,
+    unary,
+    call,
+    member,
+    primary,
+};
 
 const Self = @This();
 
@@ -174,10 +192,47 @@ fn decl(s: *Self) !Node {
     const declarator_ = Node{ .Declarator = .{ .mut = mut, .type = try s.create_node_ptr(type_node), .name = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
     return try s.var_decl(try s.create_node_ptr(declarator_));
 }
-fn expr(s: *Self, prec: u8) !Node {
-    _ = s;
-    _ = prec;
-    return Node.Void;
+fn expr(s: *Self, prec: Precedence) !Node {
+    // prefix
+    var expr_ = switch (s.l.tok.?) {
+        .identifier => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
+        .int, .float, .string, .char, .true, .false, .undefined, .null => blk: {
+            const kind: Node.LiteralKind = switch (s.l.tok.?) {
+                .int => .int,
+                .float => .float,
+                .string => .string,
+                .char => .char,
+                .true, .false => .boolean,
+                .undefined => .undefined,
+                .null => .null,
+                else => return Error.ParserError,
+            };
+            break :blk Node{ .Literal = .{ .type = kind, .value = try s.eat(s.l.tok.?) } };
+        },
+        .lparen => blk: {
+            _ = try s.eat(.lparen);
+            const group_expr = try s.expr(.none);
+            _ = try s.eat(.rparen);
+            break :blk Node{ .GroupExpr = .{ .expr = try s.create_node_ptr(group_expr) } };
+        },
+        .sub => Node{ .NegateExpr = .{ .expr = try s.create_node_ptr(try s.expr(.none)) } },
+        .bang => Node{ .NotExpr = .{ .expr = try s.create_node_ptr(try s.expr(.none)) } },
+        .flip => Node{ .FlipExpr = .{ .expr = try s.create_node_ptr(try s.expr(.none)) } },
+        else => return Error.ParserError,
+    };
+
+    // infix
+    while (s.l.tok.? != .eof and @intFromEnum(prec) < @intFromEnum(get_infix_prec(s.l.tok.?))) {
+        switch (s.l.tok.?) {
+            .add, .sub, .mul, .div, .mod => expr_ = Node{ .BinaryExpr = .{ .l = try s.create_node_ptr(expr_), .op = try s.eat(s.l.tok.?), .r = try s.create_node_ptr(try s.expr(.none)) } },
+            .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .xoreq, .andeq, .oreq, .flipeq => Node{ .Assignment = .{ .l = try s.create_node_ptr(expr_), .op = try s.eat(s.l.tok.?), .r = try s.create_node_ptr(try s.expr(.none)) } },
+            .andand, .oror => Node{ .LogicalExpr = .{ .l = try s.create_node_ptr(expr_), .op = try s.eat(s.l.tok.?), .r = try s.create_node_ptr(try s.expr(.none)) } },
+            .lparen => {},
+            .lbrack => {},
+            .dot => {},
+            else => return Error.ParserError,
+        }
+    }
 }
 fn stmt(s: *Self) anyerror!Node {
     return switch (s.l.tok.?) {
@@ -471,12 +526,19 @@ fn loop_read(s: *Self, l: ?Token, r: Token, sep: ?Token, func: anytype, args: an
     }
     _ = try s.eat(r);
 }
-fn save_lexer(s: *Self) LexerState {
-    return LexerState{ .index = s.l.index, .tok = s.l.tok.?, .line = s.l.line, .col = s.l.col };
-}
-fn restore_lexer(s: *Self, pos: LexerState) void {
-    s.l.index = pos.index;
-    s.l.tok = pos.tok;
-    s.l.line = pos.line;
-    s.l.col = pos.col;
+fn get_infix_prec(s: Token) Precedence {
+    return switch (s) {
+        .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .xoreq, .andeq, .oreq, .flipeq => .assignment,
+        .oror => .logical_or,
+        .andand => .logical_and,
+        .eqeq, .bangeq => .equality,
+        .lt, .gt, .lteq, .gteq => .comparison,
+        .@"or" => .bitwise_or,
+        .@"and" => .bitwise_and,
+        .add, .sub => .term,
+        .mul, .div, .mod => .factor,
+        .lparen, .lbrack => .call,
+        .dot => .member,
+        else => .none,
+    };
 }

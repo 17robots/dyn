@@ -2,7 +2,7 @@ const std = @import("std");
 const Token = @import("token.zig").TokenType;
 
 pub const Node = union(enum) {
-    const LiteralKind = enum {
+    pub const LiteralKind = enum {
         string,
         int,
         float,
@@ -13,7 +13,8 @@ pub const Node = union(enum) {
     };
     ArrayIndex: struct { root: *Node, expr: ?*Node },
     ArrayType: struct { type: *Node, number: ?*Node },
-    BinaryExpr: struct { l: *Node, op: Token, r: *Node },
+    Assignment: struct { l: *Node, op: []const u8, r: *Node },
+    BinaryExpr: struct { l: *Node, op: []const u8, r: *Node },
     BlockStmt: struct { stmts: std.ArrayList(Node) },
     Capture: struct { identifier: *Node },
     Declarator: struct { mut: bool, type: *Node, name: *Node },
@@ -23,6 +24,7 @@ pub const Node = union(enum) {
     ErrorDecl: struct { name: *Node, members: std.ArrayList(Node) },
     ErrorUnionType: struct { type: *Node, errs: std.ArrayList(Node) },
     ErrorType: struct { members: std.ArrayList(Node) },
+    FlipExpr: struct { expr: *Node },
     FnCall: struct { callee: *Node, args: std.ArrayList(Node) },
     FnDecl: struct { declarator: *Node, args: std.ArrayList(Node), body: *Node },
     FnType: struct { type: *Node, args: std.ArrayList(Node) },
@@ -32,10 +34,13 @@ pub const Node = union(enum) {
     Identifier: struct { value: []const u8 },
     IfStmt: struct { condition: *Node, capture: ?*Node, body: *Node, else_body: ?*Node },
     Literal: struct { type: LiteralKind, value: []const u8 },
+    LogicalExpr: struct { l: *Node, op: []const u8, r: *Node },
     MatchArm: struct { exprs: std.ArrayList(Node), body: *Node },
     MatchStmt: struct { expr: *Node, arms: std.ArrayList(Node) },
     MemberAccess: struct { root: ?*Node, access: *Node },
     ModuleDecl: struct { name: *Node },
+    NegateExpr: struct { expr: *Node },
+    NotExpr: struct { expr: *Node },
     OptionalType: struct { type: *Node },
     OptionalDereference: struct { root: *Node },
     PointerDereference: struct { root: *Node },
@@ -62,6 +67,7 @@ pub const Node = union(enum) {
             else => {},
         }
     }
+    pub fn print(s: Node) void {
+        _ = s;
+    }
 };
-
-const Precedence = enum(u8) { none, equals, lessergreater, sum, mult, prefix, call };
