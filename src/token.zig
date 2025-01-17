@@ -71,6 +71,7 @@ pub const TokenType = enum {
     @"try",
     @"catch",
     @"struct",
+    @"packed",
     type,
     comp,
     @"pub",

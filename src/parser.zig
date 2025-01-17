@@ -192,6 +192,54 @@ fn decl(s: *Self) !Node {
     const declarator_ = Node{ .Declarator = .{ .mut = mut, .type = try s.create_node_ptr(type_node), .name = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
     return try s.var_decl(try s.create_node_ptr(declarator_));
 }
+
+fn decl2(s: *Self) !Node {
+    const mut = switch (s.l.tok.?) {
+        .mut => blk: {
+            _ = try s.eat(.mut);
+            break :blk true;
+        },
+        else => false,
+    };
+    const identifier = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+    const type_specifier = switch (s.l.tok.?) {
+        .colon => blk: {
+            _ = try s.eat(.colon);
+            break :blk try s.type_expr();
+        },
+        else => null,
+    };
+    _ = try s.eat(.eq);
+    switch (s.l.tok.?) {}
+}
+
+fn fn_2(s: *Self) !Node {
+    _ = try s.eat(.lparen);
+    // we need to figure out if there's type information for the var or just a comma
+    var tmp_var_standalone = std.ArrayList([]const u8).init();
+    var fn_vars = std.ArrayList(Node).init(s.a);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rparen) break;
+        const fn_var_identifier = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
+        switch (s.l.tok.?) {
+            .colon => {
+                _ = try s.eat(.colon);
+                const fn_var_type = try s.type_expr();
+                if (tmp_var_standalone.items.len == 0) {} // we have a problem
+                const default_val: ?Node = if (s.l.tok.? == .eq) blk: {
+                    _ = try s.eat(.eq);
+                    break :blk try s.expr();
+                } else null;
+            }, // we have a type here that we can use
+            .comma => {}, // we have another var that's going to be the same type
+            else => {}, // we have a problem
+        }
+        if (s.l.tok.? == .rparen) break;
+    }
+    if (tmp_var_standalone.items.len > 0) {} // we didnt have a type specified for the var
+    _ = try s.eat(.rparen);
+}
+
 fn expr(s: *Self, prec: Precedence) !Node {
     // prefix
     var expr_ = switch (s.l.tok.?) {
