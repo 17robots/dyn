@@ -1,7 +1,7 @@
 module "main";
 
-use {
-  test "std:http"
+main = () {
+	y: i32 = 5;
+	x: *i32 = &x;
+	something = x.* + 3 * 12;
 }
-
-fn cool_fn() void {}

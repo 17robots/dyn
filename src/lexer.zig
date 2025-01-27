@@ -49,9 +49,7 @@ fn is_whitespace(s: Self) bool {
 }
 
 pub fn next_tok(s: *Self) void {
-    if (s.err != null or s.tok == .eof) { // if err or eof dont try reading the stream
-        return;
-    }
+    if (s.err != null or s.tok == .eof) return;
     // skip whitespace
     if (s.state != .read_string) {
         while (s.index < s.buffer.len and s.is_whitespace()) {
@@ -206,6 +204,18 @@ pub fn next_tok(s: *Self) void {
                     },
                     '.' => {
                         s.tok = .dotdot;
+                        s.literal = null;
+                        s.state = .base;
+                        s.index += 1;
+                    },
+                    .question => {
+                        s.tok = .optional_deref;
+                        s.literal = null;
+                        s.state = .base;
+                        s.index += 1;
+                    },
+                    .mul => {
+                        s.tok = .pointer_deref;
                         s.literal = null;
                         s.state = .base;
                         s.index += 1;
@@ -610,6 +620,9 @@ fn get_keyword(s: *Self) ?Token {
     }
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "fn")) {
         return .@"fn";
+    }
+    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "packed")) {
+        return .@"packed";
     }
     return null;
 }

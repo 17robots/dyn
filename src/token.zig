@@ -55,8 +55,9 @@ pub const TokenType = enum {
     dollar, // $
     // keywords
     module,
+    pointer_deref,
+    optional_deref,
     use,
-    void,
     mut,
     true,
     false,

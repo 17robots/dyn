@@ -5,13 +5,6 @@ use "std:heap";
 use "std:sync";
 use test "testLib";
 
-someStruct = struct {
-	hello: i8,
-	world: struct {
-		world_inside: []u8,
-	}
-};
-
 main = () {
   primitives();
   optionals();
@@ -39,7 +32,7 @@ primitives = () {
 	boolean = false; // u1
 	/*
 		defaults
-		int: i32,
+		int: i64,
 		float: f64,
 		fn result: what the type of the fn is
 	*/
@@ -50,6 +43,7 @@ optionals = () {
 	mut optional_val_2: ?i32 = null;
 
 	io.print("Optional val: {}", if optional_val |v| v else "null");
+	io.print("Optional val: {}", optional_val.?);
 	a = optional_val_2 else 4;
 	optional_val_2 = 4;
 	b = optional_val_2 else 0;

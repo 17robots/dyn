@@ -1,0 +1,79 @@
+Progam::=ModuleDecl (PubDecl|Decl)*
+
+ModuleDecl::="module" String ";"
+
+Decl::=(UseDecl|FnDecl|VarDecl|EnumDecl|ErrorDecl|StructDecl)
+PubDecl::= "pub" Decl
+UseDecl::="use" (String|Identifier String)
+VarDecl::=MutVar|ImmutVar
+MutVar::="mut" Identifier [":" Type] ["=" Expr] ";"
+ImmutVar::=Identifier [":" Type] "=" Expr ";"
+FnDecl::=Identifier "=" Parameters ReturnType (Block|FnDeclExpr)
+FnDeclExpr::="=>" Expr;
+Parameters::="("[ParamList]*")"
+ParamList::=Identifier ["," Identifier]* ":" Type[","ParamList]
+
+Block::=[Identifier":"]"{"Stmt*"}"
+
+Stmt::=Expr|IfStmt|MatchStmt|DeferStmt|ReturnStmt|BreakStmt|ForLoop|WhileLoop|TryStmt|Decl|Call|CallCatch
+
+IfStmt::="if" Expr [Capture] Stmt ["else" Stmt]
+
+MatchStmt::="match" Expr "{"MatchArms"}"
+MatchArms::=Pattern":"Expr[","MatchArms]
+Pattern::="_"|Expr|"."Identifier|"("Expr")"
+
+DeferStmt::="defer" [Capture] Stmt
+
+ForLoop::="for" Expr Capture Stmt
+WhileLoop::="while" Expr [Capture] Stmt
+
+EnumDecl::=Identifier "=" "enum" "{"EnumMembers"}"
+EnumMembers::=(Field|Decl)[","EnumMembers]
+
+ErrorDecl::=Identifier "=" "error" "{"ErrorMembers"}"
+ErrorMembers::=(Field|Decl)[","ErrorMembers]
+
+StructDecl::=Identifier "=" "struct" "{"StructMembers"}"
+StructMembers::=(FieldGroup|Decl)[","StructMembers]
+
+CallCatch::= Call "catch" [Capture] Stmt
+
+Field::=Identifier":"Type 
+FieldGroup::=Identifier[","Identifier]*
+
+Capture::="|" Identifier [","Identifier]* "|"
+
+Type::=Identifier|ArrayType|PointerType|OptionalType|FunctionType
+ArrayType::="["[Expression]"]"Type
+PointerType::="*"Type
+OptionalType::="?"Type
+FunctionType::="fn" "(" [TypeList] ")"Type
+TypeList::=Type [","Type]*
+Primitive::=IntType|FloatType
+IntType::=("i"|"u") Number
+FloatType::="f64"|"f32"
+
+Expr::=Literal|Binary|Unary|Call|FieldAccess|ArrayAccess|Lambda|PointerDereference|OptionalDereference|StructInit|ArrayInit|EnumVariant|ErrorVariant|RangeExpr
+Literal::=String|Number|Char|Boolean|"undefined"|"null"
+Binary::=Expression Operator Expression
+Unary::= (UnaryPrefixOperator Expr | Expr UnaryPostfixOperator)
+Call::=["$"] Expr "(" [Expr[","Expr]] ")"
+FieldAccess::=Expr "." Identifier
+ArrayAccess::=Expr "[" Expr "]"
+RangeExpr::=Expr ".." Expr
+PointerDereference::=Identifier "." "*"
+OptionalDereference::=Identifier "." "?"
+StructInit::= "." "{"[StructInitializers]"}"
+StructInitializers::=(Identifier ":" Expr) ["," StructInitializers]
+EnumVariant::= "." Identifier ["(" Expr ")"]
+ErrorVariant::= "." Identifier ["(" Expr ")"]
+
+String::="""{Character}"""
+Number::=Digit+["."Digit+]
+Char::=Character
+Boolean::="true"|"false"
+Identifier::=Letter(Letter|Digit|"_")*
+Operator::="+" | "-" | "*" | "/" | "%" | "|" | "&" | "^" | "~" | "=" | "+=" | "-=" | "*=" | "/=" | "|=" | "&=" | "^=" | "~=" | "==" | "!=" | "||" | "&&"
+UnaryPrefixOperator::="-"|"!"|"&"
+UnaryPostfixOperator::="++"|"--"

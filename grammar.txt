@@ -1,32 +1,37 @@
 (* Top-level constructs *)
-Program = ModuleDeclaration UseDeclaration { FunctionDefinition | StructDefinition | EnumDefinition | UnionDefinition | ErrorDefinition | TypeDefinition } ;
+Program::= ModuleDecl UseDecl { Decl | VariableDecl }
 
 (* Module and use declarations *)
-ModuleDeclaration = "module" StringLiteral ;
-UseDeclaration = "use" "{" { StringLiteral } "}" | "use" Identifier StringLiteral;
+ModuleDecl = "module" StringLiteral ";" ;
+UseDecl = "use" (Identifier StringLiteral | StringLiteral) ;
+VariableDecl = 
+
+Decl = Identifier "=" { FunctionDecl | StructDefinition | EnumDefinition | UnionDefinition | ErrorDefinition | TypeDefinition } ;
 
 (* Function definition *)
-FunctionDefinition = [ "inline" ] ReturnType Identifier "(" [ ParameterList ] ")" ( Block | "=>" Expression ) ;
+FunctionDecl = [ "inline" ] "(" [ ParameterList ] ")" ReturnType ( Block | "=>" Expression ) ;
 ReturnType = Type | "void" | Type "!" [ ErrorType ] ;
 ParameterList = Parameter { "," Parameter } ;
-Parameter = [ "mut" ] [ "comp" ] Type [ Identifier ] ;
+Parameter = [ "comp" ] Identifier { "," Identifier } ":" Type ;
 
 (* Block and statements *)
-Block = "{" { Statement } "}" ;
-Statement = VariableDeclaration | AssignmentStatement | IfStatement | LoopStatement | ForStatement | MatchStatement | DeferStatement | InlineStatement | Expression ";" ;
+Block = [ Label ] "{" { Statement } "}" ;
+Label = Identifier ":" ;
+Statement = VariableDecl | AssignmentStatement | IfStatement | LoopStatement | ForStatement | MatchStatement | DeferStatement | InlineStatement | Expression | Decl ";" ;
 
 (* Variable declaration and assignment *)
-VariableDeclaration = [ "mut" ] [ "comp" ] Type Identifier [ "=" Expression ] "," ;
+VariableDecl = [ "mut" ] Identifier { "," Identifier } [ ":" Type ] [ "=" Expression ] ;
 AssignmentStatement = ( Identifier | DereferenceExpression ) ( "=" | "+=" | "-=" | "*=" | "/=" ) Expression ";" ;
 
 (* Control flow structures *)
 IfStatement = "if" Expression [ "|" Identifier "|" ] Block [ "else" ( IfStatement | Block ) ] ;
-LoopStatement = "loop" Block ;
-ForStatement = [ "inline" ] "for" ( RangeExpression | Identifier ) "|" Identifier "|" [ ":" "(" Expression ")" ] Block ;
+ForStatement = "for" ForCondition  Capture [ ":" "(" Expression ")" ] Block ;
+ForCondition = ( RangeExpression | Identifier ) { "," ( RangeExpression | Identifier ) } ;
 MatchStatement = "match" Expression "{" { MatchArm } "}" ;
-MatchArm = ( LiteralPattern | RangePattern | "." Identifier | "_" [ "if" Expression ] ) ":" Block ;
+MatchArm = ( LiteralPattern | RangePattern | "." Identifier | "_" ) ":" Block ;
 DeferStatement = "defer" ( Block | "|" Identifier "|" Block ) ;
-InlineStatement = "inline" ( Block | Expression ) ;
+InlineStatement = "inline" ( ForStatement, WhileStatement ) ;
+Capture = "|" Identifier { "," Identifier } "|" ;
 
 (* Types *)
 Type = PrimitiveType | CustomType | OptionalType | PointerType | ArrayType | CompTimeType ;
@@ -40,12 +45,12 @@ CompTimeType = "comp" Type ;
 
 (* Struct, enum, and union definitions *)
 StructDefinition = "struct" Identifier [ "(" [ CompTimeParameterList ] ")" ] "{" { StructMember } "}" ;
-StructMember = FieldDeclaration | MethodDefinition ;
-FieldDeclaration = Type Identifier { "," Identifier } [ "=" Expression ] "," ;
+StructMember = FieldDecl | MethodDefinition ;
+FieldDecl = Type Identifier { "," Identifier } [ "=" Expression ] "," ;
 MethodDefinition = [ "inline" ] ReturnType Identifier "(" [ MethodParameterList ] ")" ( Block | "=>" Expression ) "," ;
 MethodParameterList = [ "s" ":" [ "*" ] Identifier ] { "," Parameter } ;
 EnumDefinition = "enum" Identifier "{" { Identifier } "}" ;
-UnionDefinition = "union" Identifier [ "(" "error" ")" ] "{" { FieldDeclaration } "}" ;
+UnionDefinition = "union" Identifier [ "(" "error" ")" ] "{" { FieldDecl } "}" ;
 
 (* Error definition *)
 ErrorDefinition = "error" Identifier "{" { Identifier } "}" ;
@@ -59,7 +64,7 @@ LiteralExpression = IntegerLiteral | FloatLiteral | StringLiteral | CharLiteral 
 IdentifierExpression = Identifier ;
 BinaryExpression = Expression Operator Expression ;
 UnaryExpression = Operator Expression ;
-FunctionCall = Identifier "(" [ ArgumentList ] ")" ;
+FunctionCall = ( Identifier | Lambda ) "(" [ ArgumentList ] ")" ;
 ArgumentList = Expression { "," Expression } ;
 MemberAccess = Expression "." ( Identifier | "?" ) ;
 IndexAccess = Expression "[" Expression "]" ;

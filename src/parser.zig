@@ -3,25 +3,9 @@ const Lexer = @import("lexer.zig");
 const Token = @import("token.zig").TokenType;
 const Error = @import("errors.zig").Error;
 const Node = @import("ast.zig").Node;
-
-const Precedence = enum(u8) {
-    none,
-    assignment,
-    logical_or,
-    logical_and,
-    equality,
-    comparison,
-    bitwise_or,
-    bitwise_xor,
-    bitwise_and,
-    shift,
-    term,
-    factor,
-    unary,
-    call,
-    member,
-    primary,
-};
+const LiteralKind = @import("ast.zig").LiteralKind;
+const Op = @import("ast.zig").Op;
+const NodeList = std.ArrayList(Node);
 
 const Self = @This();
 
@@ -33,526 +17,506 @@ pub fn init(alloc: std.mem.Allocator, buf: []const u8) Self {
 }
 pub fn program(s: *Self) !Node {
     s.l.next_tok();
-    var pub_decls = s.create_node_list();
-    var decls = s.create_node_list();
+    var pub_decls = NodeList.init(s.a);
+    var decls = NodeList.init(s.a);
     try pub_decls.append(try s.module());
     while (s.l.tok.? != .eof) {
-        switch (s.l.tok.?) {
-            .@"pub" => {
-                _ = try s.eat(.@"pub");
-                const x = switch (s.l.tok.?) {
-                    .use => try s.use(),
-                    else => try s.decl(),
-                };
-                switch (x) {
-                    .UseStmt, .VarDecl => _ = try s.eat(.semicolon),
-                    else => {},
-                }
-                try pub_decls.append(x);
-            },
-            else => {
-                const x = switch (s.l.tok.?) {
-                    .use => try s.use(),
-                    else => try s.decl(),
-                };
-                switch (x) {
-                    .UseStmt, .VarDecl => _ = try s.eat(.semicolon),
-                    else => {},
-                }
-                try decls.append(x);
-            },
-        }
+        const public = if (s.l.tok.? == .@"pub") blk: {
+            _ = try s.eat(.@"pub");
+            break :blk true;
+        } else false;
+        if (s.l.tok.? == .mut) @panic("Module Level Declarations Cannot Be Mut");
+
+        if (public) try pub_decls.append(try s.decl()) else try decls.append(try s.decl());
     }
     return Node{ .Program = .{ .decls = decls, .pub_decls = pub_decls } };
 }
 fn module(s: *Self) !Node {
     _ = try s.eat(.module);
-    const module_ = Node{ .ModuleDecl = .{ .name = try s.create_node_ptr(Node{ .Literal = .{ .type = .string, .value = try s.eat(.string) } }) } };
+    const module_ = Node{ .Module = .{ .name = try s.create_node_ptr(Node{ .Literal = .{ .kind = .string, .value = try s.eat(.string) } }) } };
     _ = try s.eat(.semicolon);
     return module_;
 }
-fn use(s: *Self) anyerror!Node {
+fn use(s: *Self) !Node {
     _ = try s.eat(.use);
-    return switch (s.l.tok.?) {
-        .lbrace => try s.use_block(),
-        else => try s.use_stmt(),
-    };
-}
-fn use_block(s: *Self) anyerror!Node {
-    var uses = s.create_node_list();
-    try s.loop_read(.lbrace, .rbrace, .comma, struct {
-        fn func(_uses: *std.ArrayList(Node), _s: *Self) !void {
-            try _uses.append(try _s.use_stmt());
-        }
-    }.func, .{ &uses, s });
-    return Node{ .UseBlock = .{ .uses = uses } };
-}
-fn use_stmt(s: *Self) anyerror!Node {
     const alias = switch (s.l.tok.?) {
-        .identifier => try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }),
+        .identifier => try s.create_node_ptr(try s.identifier()),
         else => null,
     };
-    const import = try s.create_node_ptr(Node{ .Literal = .{ .type = .string, .value = try s.eat(.string) } });
-    return Node{ .UseStmt = .{ .alias = alias, .value = import } };
-}
-fn member_chain(s: *Self) !Node {
-    var member = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
-    while (s.l.tok.? != .eof) {
-        if (s.l.tok.? == .dot) {
-            _ = try s.eat(.dot);
-            member = Node{ .MemberAccess = .{ .root = try s.create_node_ptr(member), .access = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
-        } else break;
-    }
-    return member;
-}
-fn type_expr(s: *Self) anyerror!Node {
-    var type_node = switch (s.l.tok.?) {
-        .lparen => blk: {
-            _ = try s.eat(.lparen);
-            break :blk Node{ .GroupType = .{ ._type = try s.create_node_ptr(try s.type_expr()) } };
-        },
-        .identifier => try s.member_chain(),
-        .void => blk: {
-            _ = try s.eat(.void);
-            break :blk Node.Void;
-        },
-        .type => blk: {
-            _ = try s.eat(.type);
-            break :blk Node.Type;
-        },
-        .@"struct" => try s.struct_(),
-        .@"enum" => try s.enum_(),
-        .@"error" => try s.error_(),
-        .@"fn" => try s.fn_(),
-        else => return Error.ParserError,
-    };
-    switch (type_node) {
-        .StructDecl, .EnumDecl, .ErrorDecl, .FnDecl => return type_node,
-        else => {},
-    }
-    while (s.l.tok.? != .eof) {
-        switch (s.l.tok.?) {
-            .question => {
-                _ = try s.eat(.question);
-                type_node = Node{ .OptionalType = .{ .type = try s.create_node_ptr(type_node) } };
-            },
-            .mul => {
-                _ = try s.eat(.mul);
-                type_node = Node{ .PointerType = .{ .type = try s.create_node_ptr(type_node) } };
-            },
-            .lbrack => {
-                _ = try s.eat(.lbrack);
-                const expr_ = switch (s.l.tok.?) {
-                    .lbrack => null,
-                    else => try s.create_node_ptr(try s.expr(0)),
-                };
-                _ = try s.eat(.rbrack);
-                type_node = Node{ .ArrayType = .{ .type = try s.create_node_ptr(type_node), .number = expr_ } };
-            },
-            .lparen => {
-                var args = s.create_node_list();
-                try s.loop_read(.lparen, .rparen, .comma, struct {
-                    fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
-                        try _args.append(try _s.type_expr());
-                    }
-                }.func, .{ &args, s });
-                type_node = Node{ .FnType = .{ .type = try s.create_node_ptr(type_node), .args = args } };
-            },
-            .bang => {}, // only issue right now would be i32! test = fn_result();
-            .lt => {
-                var errs = s.create_node_list();
-                try s.loop_read(.lt, .gt, .comma, struct {
-                    fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
-                        try _args.append(Node{ .Identifier = .{ .value = try _s.eat(.identifier) } });
-                    }
-                }.func, .{ &errs, s });
-                type_node = Node{ .ErrorUnionType = .{ .type = try s.create_node_ptr(type_node), .errs = errs } };
-            },
-            else => break,
-        }
-    }
-    return type_node;
+    const import = try s.create_node_ptr(Node{ .Literal = .{ .kind = .string, .value = try s.eat(.string) } });
+    return Node{ .Use = .{ .alias = alias, .import = import } };
 }
 fn decl(s: *Self) !Node {
-    const mut = switch (s.l.tok.?) {
-        .mut => blk: {
-            _ = try s.eat(.mut);
-            break :blk true;
-        },
-        else => false,
-    };
-    const type_node = try s.type_expr();
-    switch (type_node) {
-        .StructDecl, .EnumDecl, .ErrorDecl, .FnDecl => {
-            if (mut) return Error.ParserError; // error
-            return type_node;
-        },
-        else => {},
+    if (s.l.tok.? == .use) {
+        const use_ = try s.use();
+        _ = try s.eat(.semicolon);
+        return use_;
     }
-    const declarator_ = Node{ .Declarator = .{ .mut = mut, .type = try s.create_node_ptr(type_node), .name = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
-    return try s.var_decl(try s.create_node_ptr(declarator_));
-}
-
-fn decl2(s: *Self) !Node {
-    const mut = switch (s.l.tok.?) {
-        .mut => blk: {
-            _ = try s.eat(.mut);
-            break :blk true;
+    const ident = try s.create_node_ptr(try s.identifier());
+    return switch (s.l.tok.?) {
+        .comma => blk: {
+            _ = try s.eat(.comma);
+            break :blk try s.var_(ident, false);
         },
-        else => false,
-    };
-    const identifier = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
-    const type_specifier = switch (s.l.tok.?) {
-        .colon => blk: {
-            _ = try s.eat(.colon);
-            break :blk try s.type_expr();
+        .colon => try s.var_(ident, false),
+        .eq => blk: {
+            _ = try s.eat(.eq);
+            break :blk switch (s.l.tok.?) {
+                .lparen, .@"inline" => try s.fn_(ident),
+                .@"struct", .@"packed" => try s.struct_(ident),
+                .@"enum" => try s.enum_(ident),
+                .@"error" => try s.error_(ident),
+                else => blk2: {
+                    const var_default = try s.create_node_ptr(try s.expr(0));
+                    var idents = NodeList.init(s.a);
+                    try idents.append(ident.*);
+                    _ = try s.eat(.semicolon);
+                    break :blk2 Node{ .Var = .{ .names = idents, .mut = false, .type = null, .default = var_default } };
+                },
+            };
         },
-        else => null,
+        else => @panic("Invalid marker for declaration"),
     };
-    _ = try s.eat(.eq);
-    switch (s.l.tok.?) {}
 }
-
-fn fn_2(s: *Self) !Node {
+fn struct_(s: *Self, ident: ?*Node) !Node {
+    const pack = if (s.l.tok.? == .@"packed") blk: {
+        _ = try s.eat(.@"packed");
+        break :blk true;
+    } else false;
+    _ = try s.eat(.@"struct");
+    var members = NodeList.init(s.a);
+    _ = try s.eat(.lbrace);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rbrace) break;
+        try members.append(try s.member(true));
+        if (s.l.tok.? == .rbrace) break;
+    }
+    _ = try s.eat(.rbrace);
+    return Node{ .Struct = .{ .pack = pack, .name = ident, .members = members } };
+}
+fn enum_(s: *Self, ident: ?*Node) !Node {
+    _ = try s.eat(.@"enum");
+    var members = NodeList.init(s.a);
+    _ = try s.eat(.lbrace);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rbrace) break;
+        try members.append(try s.member(false));
+        if (s.l.tok.? == .rbrace) break;
+        _ = try s.eat(.comma);
+    }
+    _ = try s.eat(.rbrace);
+    return Node{ .Enum = .{ .name = ident, .members = members } };
+}
+fn error_(s: *Self, ident: ?*Node) !Node {
+    _ = try s.eat(.@"error");
+    var members = NodeList.init(s.a);
+    _ = try s.eat(.lbrace);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rbrace) break;
+        try members.append(try s.member(false));
+        if (s.l.tok.? == .rbrace) break;
+        _ = try s.eat(.comma);
+    }
+    _ = try s.eat(.rbrace);
+    return Node{ .Error = .{ .name = ident, .members = members } };
+}
+fn member(s: *Self, allow_list: bool) anyerror!Node {
+    var members = NodeList.init(s.a);
+    if (allow_list) {
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .colon) break;
+            try members.append(try s.identifier());
+            if (s.l.tok.? == .colon) break;
+            _ = try s.eat(.comma);
+        }
+        _ = try s.eat(.colon);
+        const member_type = try s.create_node_ptr(try s.type_());
+        const member_default = if (s.l.tok.? == .eq) blk: {
+            _ = try s.eat(.eq);
+            break :blk try s.create_node_ptr(try s.expr(0));
+        } else null;
+        return Node{ .Member = .{ .ident = members, .type = member_type, .default = member_default } };
+    }
+    const ident = try s.identifier();
+    if (s.l.tok.? == .eq) {
+        _ = try s.eat(.eq);
+        return switch (s.l.tok.?) {
+            .lparen, .@"inline" => try s.fn_(try s.create_node_ptr(ident)),
+            .@"struct", .@"packed" => try s.struct_(try s.create_node_ptr(ident)),
+            .@"enum" => try s.enum_(try s.create_node_ptr(ident)),
+            .@"error" => try s.error_(try s.create_node_ptr(ident)),
+            else => try s.var_(try s.create_node_ptr(ident), false),
+        };
+    }
+    try members.append(ident);
+    const member_type: ?*Node = if (s.l.tok.? == .colon) blk: {
+        _ = try s.eat(.colon);
+        break :blk try s.create_node_ptr(try s.type_());
+    } else null;
+    const default = if (s.l.tok.? == .eq) blk: {
+        _ = try s.eat(.eq);
+        break :blk try s.create_node_ptr(try s.expr(0));
+    } else null;
+    return Node{ .Member = .{ .ident = members, .type = member_type, .default = default } };
+}
+fn var_(s: *Self, first_ident: ?*Node, mut: bool) !Node {
+    var idents_no_type = std.ArrayList(Node).init(s.a);
+    defer idents_no_type.deinit();
+    if (first_ident) |fi| try idents_no_type.append(fi.*) else {
+        if (mut) _ = try s.eat(.mut);
+    }
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .colon or s.l.tok.? == .eq) break;
+        try idents_no_type.append(try s.identifier());
+        if (s.l.tok.? == .colon or s.l.tok.? == .eq) break;
+        _ = try s.eat(.comma);
+    }
+    const var_type: ?*Node = if (s.l.tok.? == .colon) blk: {
+        _ = try s.eat(.colon);
+        break :blk try s.create_node_ptr(try s.type_());
+    } else null;
+    const var_default: ?*Node = if (s.l.tok.? == .eq) blk: {
+        _ = try s.eat(.eq);
+        break :blk try s.create_node_ptr(try s.expr(0));
+    } else null;
+    return Node{ .Var = .{ .names = idents_no_type, .mut = mut, .type = var_type, .default = var_default } };
+}
+fn fn_(s: *Self, ident: ?*Node) !Node {
     _ = try s.eat(.lparen);
-    // we need to figure out if there's type information for the var or just a comma
-    var tmp_var_standalone = std.ArrayList([]const u8).init();
-    var fn_vars = std.ArrayList(Node).init(s.a);
+    var fn_args_names_without_types = std.ArrayList([]const u8).init(s.a);
+    var fn_args = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rparen) break;
-        const fn_var_identifier = Node{ .Identifier = .{ .value = try s.eat(.identifier) } };
-        switch (s.l.tok.?) {
-            .colon => {
-                _ = try s.eat(.colon);
-                const fn_var_type = try s.type_expr();
-                if (tmp_var_standalone.items.len == 0) {} // we have a problem
-                const default_val: ?Node = if (s.l.tok.? == .eq) blk: {
-                    _ = try s.eat(.eq);
-                    break :blk try s.expr();
-                } else null;
-            }, // we have a type here that we can use
-            .comma => {}, // we have another var that's going to be the same type
-            else => {}, // we have a problem
+        try fn_args_names_without_types.append(try s.eat(.identifier));
+        if (s.l.tok.? == .colon) {
+            _ = try s.eat(.colon);
+            const arg_type = try s.create_node_ptr(try s.type_());
+            const arg_default: ?*Node = if (s.l.tok.? == .eq) blk: {
+                _ = try s.eat(.eq);
+                break :blk try s.create_node_ptr(try s.expr(0));
+            } else null;
+            for (fn_args_names_without_types.items) |i| {
+                const arg_ident = try s.create_node_ptr(Node{ .Ident = .{ .value = i } });
+                try fn_args.append(Node{ .Arg = .{ .name = arg_ident, .type = arg_type, .default = arg_default } });
+            }
+            fn_args_names_without_types.clearAndFree();
         }
         if (s.l.tok.? == .rparen) break;
+        _ = try s.eat(.comma);
     }
-    if (tmp_var_standalone.items.len > 0) {} // we didnt have a type specified for the var
+    if (fn_args_names_without_types.items.len > 0) @panic("Not all identifiers in the fn have a type");
     _ = try s.eat(.rparen);
+    const fn_type: ?*Node = if (s.l.tok.? == .lbrace or s.l.tok.? == .arrow) null else try s.create_node_ptr(try s.type_());
+    const fn_body = if (s.l.tok.? == .lbrace) try s.create_node_ptr(try s.block(null)) else if (s.l.tok.? == .arrow) blk: {
+        _ = try s.eat(.arrow);
+        break :blk try s.create_node_ptr(try s.expr(0));
+    } else @panic("Please use either => or {} for a fn body");
+    return Node{ .Fn = .{ .name = ident, .args = fn_args, .type = fn_type, .body = fn_body } };
 }
-
-fn expr(s: *Self, prec: Precedence) !Node {
-    // prefix
+// todo: switch this to ?*Node syntax instead of Node*?
+fn type_(s: *Self) !Node {
+    var t: Node = undefined;
+    switch (s.l.tok.?) {
+        .lbrack => {
+            _ = try s.eat(.lbrack);
+            _ = try s.eat(.rbrack);
+            t = Node{ .ArrayType = .{ .type = try s.create_node_ptr(try s.type_()) } };
+        },
+        .question => {
+            _ = try s.eat(.question);
+            t = Node{ .OptionalType = .{ .type = try s.create_node_ptr(try s.type_()) } };
+        },
+        .mul => {
+            _ = try s.eat(.mul);
+            t = Node{ .PointerType = .{ .type = try s.create_node_ptr(try s.type_()) } };
+        },
+        .identifier => {
+            var i = try s.identifier();
+            while (true) {
+                if (s.l.tok.? == .dot) {
+                    _ = try s.eat(.dot);
+                    i = Node{ .MemberAccess = .{ .accessed = try s.create_node_ptr(i), .member = try s.create_node_ptr(try s.identifier()) } };
+                } else {
+                    t = i;
+                    break;
+                }
+            }
+        },
+        .@"struct" => t = try s.struct_(null),
+        .@"enum" => t = try s.enum_(null),
+        .@"error" => t = try s.error_(null),
+        else => @panic("This is not a type"),
+    }
+    return t;
+}
+fn block(s: *Self, label: ?*Node) anyerror!Node {
+    var stmts = NodeList.init(s.a);
+    _ = try s.eat(.lbrace);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rbrace) break;
+        try stmts.append(try s.stmt());
+        if (s.l.tok.? == .rbrace) break;
+    }
+    _ = try s.eat(.rbrace);
+    return Node{ .Block = .{ .label = label, .stmts = stmts } };
+}
+fn expr(s: *Self, prec: u8) anyerror!Node {
     var expr_ = switch (s.l.tok.?) {
-        .identifier => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
+        .identifier => try s.identifier(),
         .int, .float, .string, .char, .true, .false, .undefined, .null => blk: {
-            const kind: Node.LiteralKind = switch (s.l.tok.?) {
+            const kind: LiteralKind = switch (s.l.tok.?) {
+                .string => .string,
                 .int => .int,
                 .float => .float,
-                .string => .string,
+                .true => .boolean,
+                .false => .boolean,
                 .char => .char,
-                .true, .false => .boolean,
                 .undefined => .undefined,
                 .null => .null,
-                else => return Error.ParserError,
+                else => @panic("We failed to get a proper literal kind"),
             };
-            break :blk Node{ .Literal = .{ .type = kind, .value = try s.eat(s.l.tok.?) } };
+            break :blk Node{ .Literal = .{ .kind = kind, .value = try s.eat(s.l.tok.?) } }; // literal node
         },
         .lparen => blk: {
             _ = try s.eat(.lparen);
-            const group_expr = try s.expr(.none);
+            const group_expr = try s.expr(0);
             _ = try s.eat(.rparen);
-            break :blk Node{ .GroupExpr = .{ .expr = try s.create_node_ptr(group_expr) } };
+            break :blk Node{ .Group = .{ .expr = try s.create_node_ptr(group_expr) } }; // GroupExpr
         },
-        .sub => Node{ .NegateExpr = .{ .expr = try s.create_node_ptr(try s.expr(.none)) } },
-        .bang => Node{ .NotExpr = .{ .expr = try s.create_node_ptr(try s.expr(.none)) } },
-        .flip => Node{ .FlipExpr = .{ .expr = try s.create_node_ptr(try s.expr(.none)) } },
-        else => return Error.ParserError,
+        .bang, .flip, .sub, .@"and" => Node{ .Unary = .{ .op = try s.op(), .r = try s.create_node_ptr(try s.expr(0)) } },
+        .lbrack, .mul, .question => try s.type_(),
+        .@"if" => try s.if_(true),
+        .match => try s.match(true),
+        else => @panic("Other Parser Error Here"),
     };
 
-    // infix
-    while (s.l.tok.? != .eof and @intFromEnum(prec) < @intFromEnum(get_infix_prec(s.l.tok.?))) {
-        switch (s.l.tok.?) {
-            .add, .sub, .mul, .div, .mod => expr_ = Node{ .BinaryExpr = .{ .l = try s.create_node_ptr(expr_), .op = try s.eat(s.l.tok.?), .r = try s.create_node_ptr(try s.expr(.none)) } },
-            .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .xoreq, .andeq, .oreq, .flipeq => Node{ .Assignment = .{ .l = try s.create_node_ptr(expr_), .op = try s.eat(s.l.tok.?), .r = try s.create_node_ptr(try s.expr(.none)) } },
-            .andand, .oror => Node{ .LogicalExpr = .{ .l = try s.create_node_ptr(expr_), .op = try s.eat(s.l.tok.?), .r = try s.create_node_ptr(try s.expr(.none)) } },
-            .lparen => {},
-            .lbrack => {},
-            .dot => {},
-            else => return Error.ParserError,
-        }
+    while (s.l.tok.? != .eof and prec < s.precedence()) {
+        expr_ = switch (s.l.tok.?) {
+            .add, .sub, .mul, .div, .mod, .eq, .addeq, .subeq, .muleq, .modeq, .xoreq, .andeq, .oreq, .flipeq, .andand, .oror => blk: {
+                const new_prec = s.precedence();
+                const op_ = try s.op();
+                break :blk Node{ .Binary = .{ .l = try s.create_node_ptr(expr_), .op = op_, .r = try s.create_node_ptr(try s.expr(new_prec)) } };
+            },
+            .lparen => try s.fn_call(try s.create_node_ptr(expr_)), // fn call
+            .lbrack => try s.arr_index(try s.create_node_ptr(expr_)), // arr index
+            .dot => try s.member_access(try s.create_node_ptr(expr_)),
+            else => @panic("Invalid infix operator"),
+        };
     }
+    return expr_;
+}
+fn op(s: *Self) !Op {
+    const x = s.l.tok.?;
+    _ = try s.eat(s.l.tok.?);
+    return switch (x) {
+        .add => .add,
+        .addeq => .addeq,
+        .sub => .sub,
+        .subeq => .subeq,
+        .mul => .mul,
+        .muleq => .muleq,
+        .div => .div,
+        .diveq => .diveq,
+        .mod => .mod,
+        .modeq => .modeq,
+        .xor => .xor,
+        .xoreq => .xoreq,
+        .@"and" => .@"and",
+        .andeq => .andeq,
+        .@"or" => .@"or",
+        .oreq => .oreq,
+        else => @panic(""),
+    };
+}
+fn precedence(s: *Self) u8 {
+    return switch (s.l.tok.?) {
+        .lparen, .lbrack, .dot => 17,
+        .bang, .xor => 16,
+        .mul, .div, .mod => 15,
+        .add, .sub => 14,
+        .@"and", .@"or" => 12,
+        .lt, .gt => 11,
+        .lteq, .gteq => 10,
+        .eqeq, .bangeq => 9,
+        .andand => 8,
+        .oror => 7,
+        .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .andeq, .oreq, .xoreq, .flipeq => 2,
+        else => 0,
+    };
 }
 fn stmt(s: *Self) anyerror!Node {
     return switch (s.l.tok.?) {
-        .@"break" => try s.break_(),
-        .@"for" => try s.for_(),
-        .@"if" => try s.if_(),
-        .match => try s.match_(),
+        .@"if" => try s.if_(false),
         .@"while" => try s.while_(),
-        .@"return" => try s.return_(),
-        else => try s.decl_stmt(), // TODO: add this after
-    };
-}
-fn decl_stmt(s: *Self) !Node {
-    _ = s;
-    return Node.Void;
-}
-fn if_(s: *Self) !Node {
-    _ = try s.eat(.@"if");
-    const condition = try s.expr(0);
-    const capture = switch (s.l.tok.?) {
-        .@"or" => try s.create_node_ptr(try s.capture_()),
-        else => null,
-    };
-    const body = switch (s.l.tok.?) {
-        .lbrace => try s.block(),
-        else => try s.stmt(),
-    };
-    const else_body = switch (s.l.tok.?) {
-        .@"else" => blk: {
-            _ = try s.eat(.@"else");
-            break :blk try s.create_node_ptr(switch (s.l.tok.?) {
-                .@"if" => try s.if_(),
-                .lbrace => try s.block(),
-                else => try s.stmt(),
-            });
+        .@"for" => try s.for_(),
+        .mut => blk: {
+            const v = try s.var_(null, true);
+            _ = try s.eat(.semicolon);
+            break :blk v;
         },
-        else => null,
+        .lparen => blk: {
+            const literal = try s.create_node_ptr(try s.fn_(null));
+            break :blk try s.fn_call(literal);
+        },
+        .match => try s.match(false),
+        .identifier => blk: {
+            const ident = try s.identifier();
+            break :blk switch (s.l.tok.?) {
+                .colon => {
+                    _ = try s.eat(.colon);
+                    break :blk switch (s.l.tok.?) {
+                        .lbrace => try s.block(try s.create_node_ptr(ident)),
+                        else => blk2: {
+                            var names = NodeList.init(s.a);
+                            try names.append(ident);
+                            const var_type = try s.create_node_ptr(try s.type_());
+                            _ = try s.eat(.eq);
+                            const var_default = try s.create_node_ptr(try s.expr(0));
+                            _ = try s.eat(.semicolon);
+                            break :blk2 Node{ .Var = .{ .mut = false, .names = names, .type = var_type, .default = var_default } };
+                        }, // handle this as the ending of a var decl
+                    };
+                },
+                .eq => blk2: {
+                    _ = try s.eat(.eq);
+                    const v = switch (s.l.tok.?) {
+                        .lparen, .@"inline" => try s.fn_(try s.create_node_ptr(ident)),
+                        .@"struct", .@"packed" => try s.struct_(try s.create_node_ptr(ident)),
+                        .@"enum" => try s.enum_(try s.create_node_ptr(ident)),
+                        .@"error" => try s.error_(try s.create_node_ptr(ident)),
+                        else => blk3: {
+                            const var_default = try s.create_node_ptr(try s.expr(0));
+                            var idents = NodeList.init(s.a);
+                            try idents.append(ident);
+                            break :blk3 Node{ .Var = .{ .names = idents, .mut = false, .type = null, .default = var_default } };
+                        },
+                    };
+                    _ = try s.eat(.semicolon);
+                    break :blk2 v;
+                },
+                .lparen => blk2: {
+                    const v = try s.fn_call(try s.create_node_ptr(ident));
+                    _ = try s.eat(.semicolon);
+                    break :blk2 v;
+                },
+                .comma => blk2: {
+                    _ = try s.eat(.comma);
+                    break :blk2 try s.var_(try s.create_node_ptr(ident), false);
+                },
+                else => @panic(""),
+            };
+        },
+        else => {
+            std.debug.print("Got {any}", .{s.l.tok.?});
+            @panic("");
+        },
     };
-    return Node{ .IfStmt = .{ .condition = try s.create_node_ptr(condition), .capture = capture, .body = try s.create_node_ptr(body), .else_body = else_body } };
 }
-fn for_(s: *Self) !Node {
-    _ = try s.eat(.@"for");
-    const expr_ = try s.expr(0);
-    const capture = try s.capture_();
-    const body = switch (s.l.tok.?) {
-        .lbrace => try s.block(),
-        else => try s.stmt(),
-    };
-    return Node{ .ForStmt = .{ .condition = try s.create_node_ptr(expr_), .capture = try s.create_node_ptr(capture), .body = try s.create_node_ptr(body) } };
+fn fn_call(s: *Self, caller: *Node) !Node {
+    _ = try s.eat(.lparen);
+    var args = NodeList.init(s.a);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rparen) break;
+        try args.append(try s.expr(0));
+        if (s.l.tok.? == .rparen) break;
+        _ = try s.eat(.comma);
+    }
+    _ = try s.eat(.rparen);
+    return Node{ .FnCall = .{ .caller = caller, .args = args } };
+}
+fn arr_index(s: *Self, ident: *Node) !Node {
+    _ = try s.eat(.lbrack);
+    const index = try s.create_node_ptr(try s.expr(0));
+    _ = try s.eat(.rbrack);
+    return Node{ .ArrayIndex = .{ .ident = ident, .index = index } };
+}
+fn member_access(s: *Self, ident: *Node) !Node {
+    _ = try s.eat(.dot);
+    const member_ = try s.create_node_ptr(try s.identifier());
+    return Node{ .MemberAccess = .{ .accessed = ident, .member = member_ } };
 }
 fn while_(s: *Self) !Node {
     _ = try s.eat(.@"while");
-    const condition = try s.expr(0);
-    const body = switch (s.l.tok.?) {
-        .lbrace => try s.block(),
-        else => try s.stmt(),
-    };
-    return Node{ .WhileStmt = .{ .condition = try s.create_node_ptr(condition), .body = try s.create_node_ptr(body) } };
+    const condition = try s.create_node_ptr(try s.expr(0));
+    const while_capture = if (s.l.tok.? == .@"or") try s.create_node_ptr(try s.capture()) else null;
+    const body = try s.create_node_ptr(if (s.l.tok.? == .lbrace) try s.block(null) else try s.stmt());
+    return Node{ .While = .{ .condition = condition, .capture = while_capture, .body = body } };
 }
-fn match_(s: *Self) !Node {
+fn for_(s: *Self) !Node {
+    _ = try s.eat(.@"for");
+    var conditions = NodeList.init(s.a);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .@"or") break;
+        try conditions.append(try s.expr(0));
+        if (s.l.tok.? == .@"or") break;
+        _ = try s.eat(.comma);
+    }
+    const for_capture = try s.create_node_ptr(try s.capture());
+    const body = try s.create_node_ptr(if (s.l.tok.? == .lbrace) try s.block(null) else try s.stmt());
+    return Node{ .For = .{ .condition = conditions, .capture = for_capture, .body = body } };
+}
+fn if_(s: *Self, is_expr: bool) anyerror!Node {
+    _ = try s.eat(.@"if");
+    const condition = try s.create_node_ptr(try s.expr(0));
+    const if_capture = if (s.l.tok.? == .@"or") try s.create_node_ptr(try s.capture()) else null;
+    const if_body = try s.create_node_ptr(if (is_expr) try s.expr(0) else try s.stmt());
+    const if_next = if (s.l.tok.? == .@"else") blk: {
+        _ = try s.eat(.@"else");
+        break :blk try s.create_node_ptr(if (s.l.tok.? == .@"if") try s.if_(is_expr) else if (is_expr) try s.expr(0) else try s.stmt());
+    } else null;
+    return Node{ .If = .{ .condition = condition, .capture = if_capture, .body = if_body, .if_next = if_next } };
+}
+fn match(s: *Self, expr_match: bool) !Node {
     _ = try s.eat(.match);
-    const expr_ = try s.expr(0);
-    var arms = s.create_node_list();
-    try s.loop_read(.lbrace, .rbrace, .comma, struct {
-        fn func(_arms: *std.ArrayList(Node), _s: *Self) !void {
-            try _arms.append(try _s.match_arm());
-        }
-    }.func, .{ &arms, s });
-    return Node{ .MatchStmt = .{ .expr = try s.create_node_ptr(expr_), .arms = arms } };
-}
-fn match_arm(s: *Self) !Node {
-    var exprs = s.create_node_list();
-    try s.loop_read(null, .colon, .comma, struct {
-        fn func(_exprs: *std.ArrayList(Node), _s: *Self) !void {
-            try _exprs.append(try _s.expr(0));
-        }
-    }.func, .{ &exprs, s });
-    const body = try s.expr(0);
-    return Node{ .MatchArm = .{ .exprs = exprs, .body = try s.create_node_ptr(body) } };
-}
-fn try_(s: *Self) !Node {
-    _ = try s.eat(.@"try");
-}
-fn break_(s: *Self) !Node {
-    _ = try s.eat(.@"break");
-    return Node.BreakStmt;
-}
-fn return_(s: *Self) !Node {
-    _ = try s.eat(.@"return");
-    const result = switch (s.l.tok.?) {
-        .semicolon => null,
-        else => try s.create_node_ptr(try s.expr(0)),
-    };
-    return Node{ .ReturnStmt = .{ .result = result } };
-}
-fn capture_(s: *Self) !Node {
-    _ = try s.eat(.@"or");
-    const x = switch (s.l.tok.?) {
-        .mul => blk: {
-            _ = try s.eat(.mul);
-            break :blk Node{ .ReferenceCapture = .{ .identifier = try s.create_node_ptr(Node{ .Identifier = .{ .value = try s.eat(.identifier) } }) } };
-        },
-        else => Node{ .Capture = .{ .identifier = try s.create_node_ptr(switch (s.l.tok.?) {
-            .underscore => blk: {
-                _ = try s.eat(.underscore);
-                break :blk Node.Underscore;
-            },
-            else => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
-        }) } },
-    };
-    _ = try s.eat(.@"or");
-    return x;
-}
-fn defer_(s: *Self) !Node {
-    _ = try s.eat(.@"defer");
-    const capture = switch (s.l.tok.?) {
-        .@"or" => try s.create_node_ptr(try s.capture_()),
-        else => null,
-    };
-    const body = switch (s.l.tok.?) {
-        .lbrace => try s.block(),
-        else => try s.stmt(),
-    };
-    return Node{ .DeferStmt = .{ .capture = capture, .body = try s.create_node_ptr(body) } };
-}
-fn block(s: *Self) !Node {
-    var stmts = s.create_node_list();
-    try s.loop_read(.lbrace, .rbrace, .semicolon, struct {
-        fn func(_stmts: *std.ArrayList(Node), _s: *Self) !void {
-            try _stmts.append(try _s.stmt());
-        }
-    }.func, .{ &stmts, s });
-    return Node{ .BlockStmt = .{ .stmts = stmts } };
-}
-fn var_decl(s: *Self, declarator: *Node) !Node {
-    return switch (declarator.*) {
-        .Declarator => |d| blk: {
-            const expr_ = switch (s.l.tok.?) {
-                .eq => try s.create_node_ptr(switch (d.type.*) {
-                    .Void => try s.stmt(),
-                    .Type => try s.type_expr(),
-                    else => try s.expr(0),
-                }),
-                else => null,
-            };
-            break :blk Node{ .VarDecl = .{ .declarator = declarator, .default = expr_ } };
-        },
-        else => Error.ParserError,
-    };
-}
-fn fn_(s: *Self) !Node {
-    _ = try s.eat(.@"fn");
-    const name = switch (s.l.tok.?) {
-        .identifier => try s.create_node_ptr(.{ .Identifier = .{ .value = try s.eat(.identifier) } }),
-        else => null,
-    };
-    var args = s.create_node_list();
-    if (name) |_| {
-        try s.loop_read(.lparen, .rparen, .comma, struct {
-            fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
-                const arg_type = try _s.type_expr();
-                const arg_name = Node{ .Identifier = .{ .value = try _s.eat(.identifier) } };
-                try _args.append(.{ .Declarator = .{ .mut = false, .type = try _s.create_node_ptr(arg_type), .name = try _s.create_node_ptr(arg_name) } });
-            }
-        }.func, .{ &args, s });
-    } else {
-        try s.loop_read(.lparen, .rparen, .comma, struct {
-            fn func(_args: *std.ArrayList(Node), _s: *Self) !void {
-                try _args.append(try _s.type_expr());
-            }
-        }.func, .{ &args, s });
+    const match_expression = try s.create_node_ptr(try s.expr(0));
+    var branches = NodeList.init(s.a);
+    _ = try s.eat(.lbrace);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rbrace) break;
+        try branches.append(try s.match_branch(expr_match));
+        if (s.l.tok.? == .rbrace) break;
     }
-    const fn_type = try s.type_expr();
-    const fn_body = switch (s.l.tok.?) {
-        .identifier => null,
-        .lbrace => try s.block(),
-        .arrow => blk: {
-            _ = try s.eat(.arrow);
-            break :blk try s.expr(0);
-        },
-        else => return Error.ParserError,
-    };
-    if (name) |n| {
-        if (fn_body) |b| {
-            const fn_declarator = Node{ .Declarator = .{ .mut = false, .name = n, .type = try s.create_node_ptr(fn_type) } };
-            return Node{ .FnDecl = .{ .declarator = try s.create_node_ptr(fn_declarator), .args = args, .body = try s.create_node_ptr(b) } };
-        } else {
-            return Error.ParserError;
-        }
+    _ = try s.eat(.rbrace);
+    return Node{ .Match = .{ .expr = match_expression, .branches = branches } };
+}
+fn match_branch(s: *Self, expr_branch: bool) !Node {
+    var exprs = NodeList.init(s.a);
+    if (s.l.tok.? == .underscore) {
+        try exprs.append(.Underscore);
     } else {
-        if (fn_body) |_| return Error.ParserError;
-        return Node{ .FnType = .{ .type = try s.create_node_ptr(fn_type), .args = args } };
+        while (s.l.tok.? != .eof) {
+            if (s.l.tok.? == .colon) break;
+            try exprs.append(try s.expr(0));
+            if (s.l.tok.? == .colon) break;
+            _ = try s.eat(.comma);
+        }
     }
+    _ = try s.eat(.colon);
+    const result = try s.create_node_ptr(if (expr_branch) try s.expr(0) else try s.stmt());
+    return Node{ .MatchBranch = .{ .exprs = exprs, .result = result } };
 }
-fn struct_(s: *Self) !Node {
-    _ = try s.eat(.@"struct");
-    const name = switch (s.l.tok.?) {
-        .identifier => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
-        .lbrace => null,
-        else => return Error.ParserError,
-    };
-    var members = s.create_node_list();
-    try s.loop_read(.lbrace, .rbrace, .comma, struct {
-        fn func(_members: *std.ArrayList(Node), _s: *Self) !void {
-            const member_type = try _s.type_expr();
-            switch (member_type) {
-                .StructDecl, .EnumDecl, .ErrorDecl, .FnDecl => try _members.append(member_type),
-                else => {
-                    const member_declarator = Node{ .Declarator = .{ .mut = false, .type = try _s.create_node_ptr(member_type), .name = try _s.create_node_ptr(Node{ .Identifier = .{ .value = try _s.eat(.identifier) } }) } };
-                    try _members.append(try _s.var_decl(try _s.create_node_ptr(member_declarator)));
-                },
-            }
-        }
-    }.func, .{ &members, s });
-    return if (name) |n| blk: {
-        break :blk Node{ .StructDecl = .{ .name = try s.create_node_ptr(n), .members = members } };
-    } else blk: {
-        break :blk Node{ .StructType = .{ .members = members } };
-    };
-}
-fn enum_(s: *Self) !Node {
-    _ = try s.eat(.@"enum");
-    const name = switch (s.l.tok.?) {
-        .identifier => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
-        .lbrace => null,
-        else => return Error.ParserError,
-    };
-    var members = s.create_node_list();
-    try s.loop_read(.lbrace, .rbrace, .comma, struct {
-        fn func(_members: *std.ArrayList(Node), _s: *Self) !void {
-            var x = try _s.type_expr();
-            if (_s.l.tok.? == .identifier) {
-                x = Node{ .Declarator = .{ .mut = false, .type = try _s.create_node_ptr(x), .name = try _s.create_node_ptr(Node{ .Identifier = .{ .value = try _s.eat(.identifier) } }) } };
-            } else {
-                if (x != .Identifier) return Error.ParserError;
-            }
-            try _members.append(x);
-        }
-    }.func, .{ &members, s });
-    return if (name) |n| blk: {
-        break :blk Node{ .EnumDecl = .{ .name = try s.create_node_ptr(n), .members = members } };
-    } else blk: {
-        break :blk Node{ .EnumType = .{ .members = members } };
-    };
-}
-fn error_(s: *Self) !Node {
-    _ = try s.eat(.@"error");
-    const name = switch (s.l.tok.?) {
-        .identifier => Node{ .Identifier = .{ .value = try s.eat(.identifier) } },
-        .lbrace => null,
-        else => return Error.ParserError,
-    };
-    var members = s.create_node_list();
-    try s.loop_read(.lbrace, .rbrace, .comma, struct {
-        fn func(_members: *std.ArrayList(Node), _s: *Self) !void {
-            var x = try _s.type_expr();
-            if (_s.l.tok.? == .identifier) {
-                x = Node{ .Declarator = .{ .mut = false, .type = try _s.create_node_ptr(x), .name = try _s.create_node_ptr(Node{ .Identifier = .{ .value = try _s.eat(.identifier) } }) } };
-            } else {
-                if (x != .Identifier) return Error.ParserError;
-            }
-            try _members.append(x);
-        }
-    }.func, .{ &members, s });
-    return if (name) |n| blk: {
-        break :blk Node{ .ErrorDecl = .{ .name = try s.create_node_ptr(n), .members = members } };
-    } else blk: {
-        break :blk Node{ .ErrorType = .{ .members = members } };
-    };
+fn capture(s: *Self) !Node {
+    _ = try s.eat(.@"or");
+    var captures = NodeList.init(s.a);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .@"or") break;
+        const capt_mut = if (s.l.tok.? == .mut) blk: {
+            _ = try s.eat(.mut);
+            break :blk true;
+        } else false;
+        const capt_ident = try s.create_node_ptr(try s.identifier());
+        try captures.append(Node{ .CaptureMember = .{ .mut = capt_mut, .ident = capt_ident } });
+        if (s.l.tok.? == .@"or") break;
+        _ = try s.eat(.comma);
+    }
+    _ = try s.eat(.@"or");
+    return Node{ .Capture = .{ .captures = captures } };
 }
 fn eat(s: *Self, expected: Token) ![]const u8 {
-    if (s.l.tok.? != expected) return Error.ParserError;
+    if (s.l.tok.? != expected) {
+        std.debug.print("Wanted {any}, got {any}\n", .{ expected, s.l.tok.? });
+        return Error.ParserError;
+    }
     defer s.l.next_tok();
     return s.l.literal orelse "";
 }
@@ -561,32 +525,6 @@ fn create_node_ptr(s: *Self, n: Node) !*Node {
     x.* = n;
     return x;
 }
-fn create_node_list(s: *Self) std.ArrayList(Node) {
-    return std.ArrayList(Node).init(s.a);
-}
-fn loop_read(s: *Self, l: ?Token, r: Token, sep: ?Token, func: anytype, args: anytype) !void {
-    if (l) |_l| _ = try s.eat(_l);
-    while (s.l.tok.? != .eof) {
-        if (s.l.tok.? == r) break;
-        try @call(.auto, func, args);
-        if (s.l.tok.? == r) break;
-        if (sep) |_s| _ = try s.eat(_s);
-    }
-    _ = try s.eat(r);
-}
-fn get_infix_prec(s: Token) Precedence {
-    return switch (s) {
-        .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .xoreq, .andeq, .oreq, .flipeq => .assignment,
-        .oror => .logical_or,
-        .andand => .logical_and,
-        .eqeq, .bangeq => .equality,
-        .lt, .gt, .lteq, .gteq => .comparison,
-        .@"or" => .bitwise_or,
-        .@"and" => .bitwise_and,
-        .add, .sub => .term,
-        .mul, .div, .mod => .factor,
-        .lparen, .lbrack => .call,
-        .dot => .member,
-        else => .none,
-    };
+fn identifier(s: *Self) !Node {
+    return Node{ .Ident = .{ .value = try s.eat(.identifier) } };
 }

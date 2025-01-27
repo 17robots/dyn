@@ -1,6 +1,5 @@
 const std = @import("std");
 const Parser = @import("parser.zig");
-const Lexer = @import("lexer.zig");
 
 pub fn main() !void {
     const page_allocator = std.heap.page_allocator;
@@ -11,8 +10,9 @@ pub fn main() !void {
     const file_body = try read_file(alloc, "src/main.dyn");
 
     var parser = Parser.init(alloc, file_body);
-    var p = try parser.program();
-    defer p.deinit(parser.a);
+    const x = try parser.program();
+    x.print();
+    // defer p.deinit(parser.a);
 }
 
 pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {
