@@ -62,7 +62,17 @@ fn decl(s: *Self) !Node {
         .eq => blk: {
             _ = try s.eat(.eq);
             break :blk switch (s.l.tok.?) {
-                .lparen, .@"inline" => try s.fn_(ident),
+                .lparen, .@"inline" => blk2: {
+                    const x = try s.fn_(ident);
+                    switch (x) {
+                        .Fn => |a| {
+                            if (a.body.* != .Block) _ = try s.eat(.semicolon);
+                            break :blk2 x;
+                        },
+                        else => @panic("We asked for a fn and didnt get that oops"),
+                    }
+                    break :blk2 x;
+                },
                 .@"struct", .@"packed" => try s.struct_(ident),
                 .@"enum" => try s.enum_(ident),
                 .@"error" => try s.error_(ident),
@@ -161,7 +171,6 @@ fn member(s: *Self, allow_list: bool) anyerror!Node {
 }
 fn var_(s: *Self, first_ident: ?*Node, mut: bool) !Node {
     var idents_no_type = std.ArrayList(Node).init(s.a);
-    defer idents_no_type.deinit();
     if (first_ident) |fi| try idents_no_type.append(fi.*) else {
         if (mut) _ = try s.eat(.mut);
     }
@@ -287,20 +296,27 @@ fn expr(s: *Self, prec: u8) anyerror!Node {
         .lbrack, .mul, .question => try s.type_(),
         .@"if" => try s.if_(true),
         .match => try s.match(true),
-        else => @panic("Other Parser Error Here"),
+        else => {
+            std.debug.print("{}\n", .{s.l.tok.?});
+            @panic("Other Parser Error Here");
+        },
     };
-
     while (s.l.tok.? != .eof and prec < s.precedence()) {
         expr_ = switch (s.l.tok.?) {
-            .add, .sub, .mul, .div, .mod, .eq, .addeq, .subeq, .muleq, .modeq, .xoreq, .andeq, .oreq, .flipeq, .andand, .oror => blk: {
+            .add, .sub, .mul, .div, .mod, .eq, .addeq, .subeq, .muleq, .modeq, .xoreq, .andeq, .oreq, .flipeq, .andand, .oror, .@"else", .@"or", .@"and" => blk: {
                 const new_prec = s.precedence();
                 const op_ = try s.op();
                 break :blk Node{ .Binary = .{ .l = try s.create_node_ptr(expr_), .op = op_, .r = try s.create_node_ptr(try s.expr(new_prec)) } };
             },
-            .lparen => try s.fn_call(try s.create_node_ptr(expr_)), // fn call
-            .lbrack => try s.arr_index(try s.create_node_ptr(expr_)), // arr index
+            .lparen => try s.fn_call(try s.create_node_ptr(expr_)),
+            .lbrack => try s.arr_index(try s.create_node_ptr(expr_)),
             .dot => try s.member_access(try s.create_node_ptr(expr_)),
-            else => @panic("Invalid infix operator"),
+            .pointer_deref => try s.pointer_deref(try s.create_node_ptr(expr_)),
+            .optional_deref => try s.optional_deref(try s.create_node_ptr(expr_)),
+            else => {
+                std.debug.print("{}\n", .{s.l.tok.?});
+                @panic("Invalid infix operator");
+            },
         };
     }
     return expr_;
@@ -325,6 +341,7 @@ fn op(s: *Self) !Op {
         .andeq => .andeq,
         .@"or" => .@"or",
         .oreq => .oreq,
+        .@"else" => .@"else",
         else => @panic(""),
     };
 }
@@ -340,7 +357,7 @@ fn precedence(s: *Self) u8 {
         .eqeq, .bangeq => 9,
         .andand => 8,
         .oror => 7,
-        .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .andeq, .oreq, .xoreq, .flipeq => 2,
+        .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .andeq, .oreq, .xoreq, .flipeq, .pointer_deref, .optional_deref, .@"else" => 2,
         else => 0,
     };
 }
@@ -527,4 +544,13 @@ fn create_node_ptr(s: *Self, n: Node) !*Node {
 }
 fn identifier(s: *Self) !Node {
     return Node{ .Ident = .{ .value = try s.eat(.identifier) } };
+}
+
+fn pointer_deref(s: *Self, expr_: *Node) !Node {
+    _ = try s.eat(.pointer_deref);
+    return Node{ .PointerDereference = .{ .expr = expr_ } };
+}
+fn optional_deref(s: *Self, expr_: *Node) !Node {
+    _ = try s.eat(.optional_deref);
+    return Node{ .OptionalDereference = .{ .expr = expr_ } };
 }

@@ -208,13 +208,13 @@ pub fn next_tok(s: *Self) void {
                         s.state = .base;
                         s.index += 1;
                     },
-                    .question => {
+                    '?' => {
                         s.tok = .optional_deref;
                         s.literal = null;
                         s.state = .base;
                         s.index += 1;
                     },
-                    .mul => {
+                    '*' => {
                         s.tok = .pointer_deref;
                         s.literal = null;
                         s.state = .base;
@@ -551,9 +551,6 @@ fn get_keyword(s: *Self) ?Token {
     }
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "use")) {
         return .use;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "void")) {
-        return .void;
     }
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "mut")) {
         return .mut;

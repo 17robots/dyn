@@ -37,6 +37,7 @@ pub const Op = enum {
     andeq,
     @"or",
     oreq,
+    @"else",
     pub fn to_string(s: Op) []const u8 {
         return switch (s) {
             .add => "add",
@@ -55,6 +56,7 @@ pub const Op = enum {
             .andeq => "andeq",
             .@"or" => "or",
             .oreq => "oreq",
+            .@"else" => "else",
         };
     }
 };
@@ -103,7 +105,7 @@ pub const Node = union(enum) {
                 for (a.decls.items) |i| i.print();
             },
             .Module => |a| {
-                std.debug.print("Module:\n", .{});
+                std.debug.print("Module: ", .{});
                 a.name.print();
             },
             .Use => |a| {
@@ -112,116 +114,126 @@ pub const Node = union(enum) {
                 a.import.print();
             },
             .Struct => |a| {
-                std.debug.print("Struct, packed: {}\n", .{a.pack});
+                std.debug.print("Struct, packed: {} ", .{a.pack});
                 if (a.name) |i| i.print();
                 std.debug.print("\nMembers\n", .{});
                 for (a.members.items) |i| i.print();
             },
             .Enum => |a| {
-                std.debug.print("Enum\n", .{});
+                std.debug.print("Enum ", .{});
                 if (a.name) |i| i.print();
                 std.debug.print("\nMembers\n", .{});
                 for (a.members.items) |i| i.print();
             },
             .Error => |a| {
-                std.debug.print("Error\n", .{});
+                std.debug.print("Error ", .{});
                 if (a.name) |i| i.print();
                 std.debug.print("\nMembers\n", .{});
                 for (a.members.items) |i| i.print();
+                std.debug.print("\n", .{});
             },
             .Member => |a| {
-                std.debug.print("Member", .{});
+                std.debug.print("Member ", .{});
                 for (a.ident.items) |i| i.print();
                 if (a.type) |i| i.print();
                 if (a.default) |i| i.print();
+                std.debug.print("\n", .{});
             },
             .Var => |a| {
-                std.debug.print("Var, mut: {}\n", .{a.mut});
-                for (a.names.items) |i| i.print();
+                std.debug.print("Var, mut: {} ", .{a.mut});
+                for (a.names.items) |i| {
+                    i.print();
+                }
                 if (a.type) |i| i.print();
                 if (a.default) |i| i.print();
+                std.debug.print("\n", .{});
             },
             .Fn => |a| {
-                std.debug.print("Fn", .{});
+                std.debug.print("Fn ", .{});
                 if (a.name) |i| i.print() else std.debug.print("Literal\n", .{});
                 if (a.type) |i| i.print() else std.debug.print("Void", .{});
                 for (a.args.items) |i| i.print();
                 a.body.print();
+                std.debug.print("\n", .{});
             },
-            .Ident => |a| std.debug.print("Ident: {s}", .{a.value}),
+            .Ident => |a| std.debug.print("Ident: {s}\n", .{a.value}),
             .GroupType => |a| {
-                std.debug.print("GroupType\n", .{});
+                std.debug.print("GroupType ", .{});
                 a.type.print();
+                std.debug.print("\n", .{});
             },
             .ArrayType => |a| {
-                std.debug.print("ArrayType\n", .{});
+                std.debug.print("ArrayType ", .{});
                 a.type.print();
+                std.debug.print("\n", .{});
             },
             .OptionalType => |a| {
-                std.debug.print("OptionalType\n", .{});
+                std.debug.print("OptionalType ", .{});
                 a.type.print();
+                std.debug.print("\n", .{});
             },
             .PointerType => |a| {
-                std.debug.print("PointerType\n", .{});
+                std.debug.print("PointerType ", .{});
                 a.type.print();
+                std.debug.print("\n", .{});
             },
             .Block => |a| {
-                std.debug.print("Block\n", .{});
+                std.debug.print("Block ", .{});
                 if (a.label) |i| i.print();
                 for (a.stmts.items) |i| i.print();
             },
             .MemberAccess => |a| {
-                std.debug.print("MemberAccess\n", .{});
+                std.debug.print("MemberAccess ", .{});
                 a.accessed.print();
                 a.member.print();
             },
             .While => |a| {
-                std.debug.print("While\n", .{});
+                std.debug.print("While ", .{});
                 a.condition.print();
                 if (a.capture) |i| i.print();
                 a.body.print();
             },
             .For => |a| {
-                std.debug.print("For\n", .{});
+                std.debug.print("For ", .{});
                 for (a.condition.items) |i| i.print();
                 if (a.capture) |i| i.print();
                 a.body.print();
             },
             .Match => |a| {
-                std.debug.print("Match\n", .{});
+                std.debug.print("Match ", .{});
                 a.expr.print();
                 for (a.branches.items) |i| i.print();
             },
             .MatchBranch => |a| {
-                std.debug.print("Match Branch\n", .{});
+                std.debug.print("Match Branch ", .{});
                 for (a.exprs.items) |i| i.print();
                 a.result.print();
             },
             .If => |a| {
-                std.debug.print("If\n", .{});
+                std.debug.print("If ", .{});
                 a.condition.print();
                 if (a.capture) |i| i.print();
                 a.body.print();
                 if (a.if_next) |i| i.print();
             },
             .Capture => |a| {
-                std.debug.print("Capture\n", .{});
+                std.debug.print("Capture ", .{});
                 for (a.captures.items) |i| i.print();
             },
             .CaptureMember => |a| {
-                std.debug.print("Capture Member: mut {}\n", .{a.mut});
+                std.debug.print("Capture Member: mut {} ", .{a.mut});
                 a.ident.print();
             },
             .PointerDereference => |a| {
-                std.debug.print("Pointer dereference\n", .{});
+                std.debug.print("Pointer dereference ", .{});
                 a.expr.print();
             },
             .OptionalDereference => |a| {
-                std.debug.print("Optional dereference\n", .{});
+                std.debug.print("Optional dereference ", .{});
                 a.expr.print();
             },
             .FnCall => |a| {
-                std.debug.print("Fn Call\n", .{});
+                std.debug.print("Fn Call ", .{});
                 a.caller.print();
                 for (a.args.items) |i| i.print();
             },
@@ -233,26 +245,26 @@ pub const Node = union(enum) {
                 a.r.print();
             },
             .Unary => |a| {
-                std.debug.print("Unary\n", .{});
+                std.debug.print("Unary ", .{});
                 std.debug.print("Op: {s}\n", .{a.op.to_string()});
                 a.r.print();
             },
             .Group => |a| {
-                std.debug.print("Grouped Expression\n", .{});
+                std.debug.print("Grouped Expression ", .{});
                 a.expr.print();
             },
             .ArrayIndex => |a| {
-                std.debug.print("Array Index\n", .{});
+                std.debug.print("Array Index ", .{});
                 a.ident.print();
                 a.index.print();
             },
             .Arg => |a| {
-                std.debug.print("Arg\n", .{});
+                std.debug.print("Arg ", .{});
                 a.name.print();
                 a.type.print();
                 if (a.default) |i| i.print();
             },
-            .Type => std.debug.print("Type\n", .{}),
+            .Type => std.debug.print("Type ", .{}),
             .Underscore => std.debug.print("Underscore", .{}),
         }
     }
