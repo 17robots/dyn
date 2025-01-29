@@ -9,6 +9,8 @@ const NodeList = std.ArrayList(Node);
 
 const Self = @This();
 
+const LexerState = struct { tok: ?Token, literal: ?[]const u8, line: usize, col: usize, index: usize };
+
 l: Lexer,
 a: std.mem.Allocator,
 
@@ -56,7 +58,7 @@ fn decl(s: *Self) !Node {
         return use_;
     }
     const ident = try s.create_node_ptr(try s.identifier());
-    return switch (s.l.tok.?) {
+    const a = switch (s.l.tok.?) {
         .comma => blk: {
             _ = try s.eat(.comma);
             break :blk try s.var_(ident, false);
@@ -65,17 +67,14 @@ fn decl(s: *Self) !Node {
         .eq => blk: {
             _ = try s.eat(.eq);
             break :blk switch (s.l.tok.?) {
-                .lparen, .@"inline" => blk2: {
-                    const x = try s.fn_(ident);
-                    switch (x) {
-                        .Fn => |a| {
-                            if (a.body.* != .Block) _ = try s.eat(.semicolon);
-                            break :blk2 x;
-                        },
-                        else => @panic("We asked for a fn and didnt get that oops"),
-                    }
-                    break :blk2 x;
+                .lparen => blk2: {
+                    const state = s.save_lexer_state();
+                    break :blk2 s.fn_type() catch blk3: {
+                        s.restore_lexer_state(state);
+                        break :blk3 try s.fn_(ident);
+                    };
                 },
+                .@"inline" => try s.fn_(ident),
                 .@"struct", .@"packed" => try s.struct_(ident),
                 .@"enum" => try s.enum_(ident),
                 .@"error" => try s.error_(ident),
@@ -90,6 +89,14 @@ fn decl(s: *Self) !Node {
         },
         else => @panic("Invalid marker for declaration"),
     };
+    switch (a) {
+        .Var, .FnType => _ = try s.eat(.semicolon),
+        .Fn => |b| {
+            if (b.body.* != .Block) _ = try s.eat(.semicolon);
+        },
+        else => {},
+    }
+    return a;
 }
 fn struct_(s: *Self, ident: ?*Node) !Node {
     const pack = if (s.l.tok.? == .@"packed") blk: {
@@ -267,16 +274,19 @@ fn fn_(s: *Self, ident: ?*Node) !Node {
         if (s.l.tok.? == .rparen) break;
         _ = try s.eat(.comma);
     }
-    if (fn_args_names_without_types.items.len > 0) @panic("Not all identifiers in the fn have a type");
+    if (fn_args_names_without_types.items.len > 0) {
+        std.debug.print("l: {} c: {}", .{ s.l.line, s.l.col });
+        @panic("Not all identifiers in the fn have a type");
+    }
     _ = try s.eat(.rparen);
-    const fn_type: ?*Node = if (s.l.tok.? == .lbrace or s.l.tok.? == .arrow) null else try s.create_node_ptr(try s.type_());
+    const ret_type: ?*Node = if (s.l.tok.? == .lbrace or s.l.tok.? == .arrow) null else try s.create_node_ptr(try s.type_());
     const fn_body = if (s.l.tok.? == .lbrace) try s.create_node_ptr(try s.block(null)) else if (s.l.tok.? == .arrow) blk: {
         _ = try s.eat(.arrow);
         break :blk try s.create_node_ptr(try s.expr(0));
     } else @panic("Please use either => or {} for a fn body");
-    return Node{ .Fn = .{ .name = ident, .inlined = inlined, .args = fn_args, .type = fn_type, .body = fn_body } };
+    return Node{ .Fn = .{ .name = ident, .inlined = inlined, .args = fn_args, .type = ret_type, .body = fn_body } };
 }
-fn type_(s: *Self) !Node {
+fn type_(s: *Self) anyerror!Node {
     var t: Node = undefined;
     switch (s.l.tok.?) {
         .comp => {
@@ -315,8 +325,9 @@ fn type_(s: *Self) !Node {
             _ = try s.eat(.type);
             break :blk .Type;
         },
+        .lparen => t = try s.fn_type(),
         else => {
-            std.debug.print("{}\n", .{s.l.tok.?});
+            std.debug.print("{} l: {}, c: {}\n", .{ s.l.tok.?, s.l.line, s.l.col });
             @panic("This is not a type");
         },
     }
@@ -339,7 +350,7 @@ fn block(s: *Self, label: ?*Node) anyerror!Node {
         if (s.l.tok.? == .rbrace) break;
         const x = try s.stmt();
         switch (x) {
-            .Var, .FnCall, .OpAssign, .Struct, .Enum, .Error, .Break, .Return, .Try, .CompStmt => _ = try s.eat(.semicolon),
+            .Var, .FnCall, .OpAssign, .Struct, .Enum, .Error, .Break, .Return, .Try, .CompStmt, .FnType => _ = try s.eat(.semicolon),
             .Defer => |a| {
                 if (a.body.* != .Block) _ = try s.eat(.semicolon);
             },
@@ -409,10 +420,14 @@ fn expr(s: *Self, prec: u8) anyerror!Node {
             break :blk Node{ .Literal = .{ .kind = kind, .value = try s.eat(s.l.tok.?) } }; // literal node
         },
         .lparen => blk: {
-            _ = try s.eat(.lparen);
-            const group_expr = try s.expr(0);
-            _ = try s.eat(.rparen);
-            break :blk Node{ .Group = .{ .expr = try s.create_node_ptr(group_expr) } }; // GroupExpr
+            const state = s.save_lexer_state();
+            break :blk s.fn_type() catch blk2: {
+                s.restore_lexer_state(state);
+                break :blk2 s.fn_(null) catch blk3: {
+                    s.restore_lexer_state(state);
+                    break :blk3 try s.grp_expr();
+                };
+            };
         },
         .bang, .flip, .sub, .@"and" => Node{ .Unary = .{ .op = try s.op(), .r = try s.create_node_ptr(try s.expr(0)) } },
         .lbrack, .mul, .question => try s.type_(),
@@ -714,7 +729,12 @@ fn optional_deref(s: *Self, expr_: *Node) !Node {
 fn member_initializer(s: *Self) !Node {
     const ident = try s.create_node_ptr(try s.identifier());
     if (s.l.tok.? == .lbrace) return try s.struct_init(ident);
-    const expr_ = if (s.l.tok.? == .lparen) try s.create_node_ptr(try s.expr(0)) else null;
+    const expr_ = if (s.l.tok.? == .lparen) blk: {
+        _ = try s.eat(.lparen);
+        const x = try s.create_node_ptr(try s.expr(0));
+        _ = try s.eat(.rparen);
+        break :blk x;
+    } else null;
     return Node{ .MemberInitializer = .{ .name = ident, .val = expr_ } };
 }
 fn array_init(s: *Self) !Node {
@@ -785,6 +805,42 @@ fn inline_(s: *Self) !Node {
         .@"while" => try s.while_(),
         else => @panic("Invalid statement for inline"),
     }) } };
+}
+fn grp_expr(s: *Self) !Node {
+    _ = try s.eat(.lparen);
+    const group_expr = try s.expr(0);
+    _ = try s.eat(.rparen);
+    return Node{ .Group = .{ .expr = try s.create_node_ptr(group_expr) } }; // GroupExpr
+}
+fn fn_type(s: *Self) !Node {
+    var args = NodeList.init(s.a);
+    _ = try s.eat(.lparen);
+    while (s.l.tok.? != .eof) {
+        if (s.l.tok.? == .rparen) break;
+        try args.append(try s.type_());
+        if (s.l.tok.? == .rparen) break;
+        _ = try s.eat(.comma);
+    }
+    _ = try s.eat(.rparen);
+    const return_type = if (s.l.tok.? == .semicolon or s.l.tok.? == .lbrace or s.l.tok.? == .arrow) null else try s.create_node_ptr(try s.type_());
+    if (s.l.tok.? == .lbrace or s.l.tok.? == .arrow) return Error.ParserError;
+    return Node{ .FnType = .{ .args = args, .type = return_type } };
+}
+fn save_lexer_state(s: *Self) LexerState {
+    return LexerState{
+        .tok = s.l.tok,
+        .literal = s.l.literal,
+        .line = s.l.line,
+        .col = s.l.col,
+        .index = s.l.index,
+    };
+}
+fn restore_lexer_state(s: *Self, state: LexerState) void {
+    s.l.tok = state.tok;
+    s.l.literal = state.literal;
+    s.l.line = state.line;
+    s.l.col = state.col;
+    s.l.index = state.index;
 }
 fn eat(s: *Self, expected: Token) ![]const u8 {
     if (s.l.tok.? != expected) {

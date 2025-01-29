@@ -105,6 +105,9 @@ functions = () {
     some_math = (x: i32, y: i32) i32 => x + y;
     some_math_2 = (x, y: i32) i32 => x + y;
     manipulate_numbers = (result: *i32, x, y: i32) => result.* = x + y;
+	() {
+		io.print("Hello From Fn Literal Call");
+	}();
 }
 enums = () {
 	MyEnum = enum {
@@ -179,4 +182,11 @@ metaprogramming = () {
 	inline for 0..12: |i| io.print("Woah\n"); 
 	inline_fn = inline () { io.print("This fn gets written out in place of each call");}
 	inline_fn(); 
+}
+AddFn = (i32,i32)i32;
+voidFn = (i32,i32);
+doAddOp = (a: AddFn, x,y: i32) i32 => a(x,y);
+
+somethingElse = () {
+	io.print(doAddOp((x,y: i32) i32 => x + y ), 1, 2);
 }

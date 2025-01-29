@@ -113,6 +113,7 @@ pub const Node = union(enum) {
     CompStmt: struct { stmt: *Node },
     CompExpr: struct { expr: *Node },
     InlineLoop: struct { stmt: *Node },
+    FnType: struct { args: std.ArrayList(Node), type: ?*Node },
     Type,
     Underscore,
     pub fn print(s: Node) void {
@@ -352,6 +353,11 @@ pub const Node = union(enum) {
             .InlineLoop => |a| {
                 std.debug.print("Inline Loop ", .{});
                 a.stmt.print();
+            },
+            .FnType => |a| {
+                std.debug.print("Fn Type ", .{});
+                for (a.args.items) |i| i.print();
+                if (a.type) |i| i.print();
             },
             .Type => std.debug.print("Type ", .{}),
             .Underscore => std.debug.print("Underscore", .{}),
@@ -652,6 +658,14 @@ pub const Node = union(enum) {
             .InlineLoop => |a| {
                 a.stmt.deinit(alloc);
                 alloc.destroy(a.stmt);
+            },
+            .FnType => |a| {
+                for (a.args.items) |i| i.deinit(alloc);
+                a.args.deinit();
+                if (a.type) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
             },
             .Type, .Underscore, .Module, .Ident, .Literal => {},
         }
