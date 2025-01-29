@@ -621,5 +621,8 @@ fn get_keyword(s: *Self) ?Token {
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "packed")) {
         return .@"packed";
     }
+    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "in")) {
+        return .in;
+    }
     return null;
 }

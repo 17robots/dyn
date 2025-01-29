@@ -60,7 +60,7 @@ pointers = () {
 }
 
 arrays = () {
-	mut nums: []i32 = [1,2,3,4,5];
+	mut nums: []i32 = .[1,2,3,4,5];
 	nums[0] *= 2;
 	mut [5]i32 nums2;
     nums[0] = 0;

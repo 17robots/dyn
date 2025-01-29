@@ -38,6 +38,9 @@ pub const Op = enum {
     @"or",
     oreq,
     @"else",
+    eqeq,
+    dotdot,
+    eq,
     pub fn to_string(s: Op) []const u8 {
         return switch (s) {
             .add => "add",
@@ -57,6 +60,9 @@ pub const Op = enum {
             .@"or" => "or",
             .oreq => "oreq",
             .@"else" => "else",
+            .eqeq => "eqeq",
+            .dotdot => "dotdot",
+            .eq => "eq",
         };
     }
 };
@@ -69,7 +75,7 @@ pub const Node = union(enum) {
     Error: struct { name: ?*Node, members: std.ArrayList(Node) },
     Member: struct { ident: std.ArrayList(Node), type: ?*Node, default: ?*Node },
     Var: struct { names: std.ArrayList(Node), mut: bool, type: ?*Node, default: ?*Node },
-    Fn: struct { name: ?*Node, type: ?*Node, args: std.ArrayList(Node), body: *Node },
+    Fn: struct { name: ?*Node, inlined: bool, type: ?*Node, args: std.ArrayList(Node), body: *Node },
     Ident: struct { value: []const u8 },
     GroupType: struct { type: *Node },
     ArrayType: struct { type: *Node },
@@ -78,9 +84,9 @@ pub const Node = union(enum) {
     Block: struct { label: ?*Node, stmts: std.ArrayList(Node) },
     MemberAccess: struct { accessed: *Node, member: *Node },
     While: struct { condition: *Node, capture: ?*Node, body: *Node },
-    For: struct { condition: std.ArrayList(Node), capture: ?*Node, body: *Node },
+    For: struct { condition: std.ArrayList(Node), capture: *Node, body: *Node },
     Match: struct { expr: *Node, branches: std.ArrayList(Node) },
-    MatchBranch: struct { exprs: std.ArrayList(Node), result: *Node },
+    MatchBranch: struct { exprs: std.ArrayList(Node), capture: ?*Node, result: *Node },
     If: struct { condition: *Node, capture: ?*Node, body: *Node, if_next: ?*Node },
     Capture: struct { captures: std.ArrayList(Node) },
     CaptureMember: struct { ident: *Node, mut: bool },
@@ -93,6 +99,20 @@ pub const Node = union(enum) {
     Group: struct { expr: *Node },
     ArrayIndex: struct { ident: *Node, index: *Node },
     Arg: struct { name: *Node, type: *Node, default: ?*Node },
+    MemberInitializer: struct { name: *Node, val: ?*Node },
+    ArrayInitializer: struct { exprs: std.ArrayList(Node) },
+    StructInitializer: struct { ident: ?*Node, fields: std.ArrayList(Node), exprs: std.ArrayList(Node) },
+    OpAssign: struct { l: *Node, op: Op, r: *Node },
+    Defer: struct { capture: ?*Node, body: *Node },
+    Break: struct { label: ?*Node, val: ?*Node },
+    Return: struct { val: ?*Node },
+    ErrorUnionType: struct { base: *Node, errs: std.ArrayList(Node) },
+    Try: struct { stmt: *Node },
+    Catch: struct { stmt: *Node, capture: ?*Node, body: *Node },
+    CompType: struct { type: *Node },
+    CompStmt: struct { stmt: *Node },
+    CompExpr: struct { expr: *Node },
+    InlineLoop: struct { stmt: *Node },
     Type,
     Underscore,
     pub fn print(s: Node) void {
@@ -149,7 +169,7 @@ pub const Node = union(enum) {
                 std.debug.print("\n", .{});
             },
             .Fn => |a| {
-                std.debug.print("Fn ", .{});
+                std.debug.print("Fn inlined: {} ", .{a.inlined});
                 if (a.name) |i| i.print() else std.debug.print("Literal\n", .{});
                 if (a.type) |i| i.print() else std.debug.print("Void", .{});
                 for (a.args.items) |i| i.print();
@@ -196,7 +216,7 @@ pub const Node = union(enum) {
             .For => |a| {
                 std.debug.print("For ", .{});
                 for (a.condition.items) |i| i.print();
-                if (a.capture) |i| i.print();
+                a.capture.print();
                 a.body.print();
             },
             .Match => |a| {
@@ -207,6 +227,7 @@ pub const Node = union(enum) {
             .MatchBranch => |a| {
                 std.debug.print("Match Branch ", .{});
                 for (a.exprs.items) |i| i.print();
+                if (a.capture) |i| i.print();
                 a.result.print();
             },
             .If => |a| {
@@ -264,6 +285,74 @@ pub const Node = union(enum) {
                 a.type.print();
                 if (a.default) |i| i.print();
             },
+            .MemberInitializer => |a| {
+                std.debug.print("Member Initializer ", .{});
+                a.name.print();
+                if (a.val) |i| i.print();
+            },
+            .ArrayInitializer => |a| {
+                std.debug.print("Array Initializer ", .{});
+                for (a.exprs.items) |i| i.print();
+            },
+            .StructInitializer => |a| {
+                std.debug.print("Array Initializer ", .{});
+                if (a.ident) |i| i.print();
+                for (0..a.fields.items.len) |i| {
+                    a.fields.items[i].print();
+                    a.exprs.items[i].print();
+                }
+            },
+            .OpAssign => |a| {
+                std.debug.print("Op Assign ", .{});
+                a.l.print();
+                std.debug.print(" {s} ", .{a.op.to_string()});
+                a.r.print();
+            },
+            .Defer => |a| {
+                std.debug.print("Defer ", .{});
+                if (a.capture) |i| i.print();
+                a.body.print();
+            },
+            .Break => |a| {
+                std.debug.print("Break ", .{});
+                if (a.label) |i| i.print();
+                if (a.val) |i| i.print();
+            },
+            .Return => |a| {
+                std.debug.print("Return ", .{});
+                if (a.val) |i| i.print();
+            },
+            .ErrorUnionType => |a| {
+                std.debug.print("Error Union Type ", .{});
+                a.base.print();
+                for (a.errs.items) |i| i.print();
+            },
+            .Try => |a| {
+                std.debug.print("Try ", .{});
+                a.stmt.print();
+            },
+            .Catch => |a| {
+                std.debug.print("Catch ", .{});
+                a.stmt.print();
+                if (a.capture) |i| i.print();
+                a.body.print();
+            },
+            .CompType => |a| {
+                std.debug.print("Comp Type ", .{});
+                a.type.print();
+            },
+            .CompStmt => |a| {
+                std.debug.print("Comp Stmt ", .{});
+                a.stmt.print();
+            },
+            .CompExpr => |a| {
+                std.debug.print("Comp Expr ", .{});
+                a.expr.print();
+            },
+            .InlineLoop => |a| {
+                std.debug.print("Inline Loop ", .{});
+                a.stmt.print();
+            },
             .Type => std.debug.print("Type ", .{}),
             .Underscore => std.debug.print("Underscore", .{}),
         }
@@ -273,14 +362,14 @@ pub const Node = union(enum) {
             .Program => |a| {
                 defer a.pub_decls.deinit();
                 defer a.decls.deinit();
-                for (a.pub_decls.items) |i| i.deinit();
-                for (a.decls.items) |i| i.deinit();
+                for (a.pub_decls.items) |i| i.deinit(alloc);
+                for (a.decls.items) |i| i.deinit(alloc);
             },
             .Use => |a| {
                 a.import.deinit(alloc);
                 alloc.destroy(a.import);
                 if (a.alias) |i| {
-                    i.deinit();
+                    i.deinit(alloc);
                     alloc.destroy(i);
                 }
             },
@@ -289,7 +378,7 @@ pub const Node = union(enum) {
                     i.deinit(alloc);
                     alloc.destroy(i);
                 }
-                for (a.members.items) |i| i.deinit();
+                for (a.members.items) |i| i.deinit(alloc);
                 a.members.deinit();
             },
             .Enum => |a| {
@@ -297,7 +386,7 @@ pub const Node = union(enum) {
                     i.deinit(alloc);
                     alloc.destroy(i);
                 }
-                for (a.members.items) |i| i.deinit();
+                for (a.members.items) |i| i.deinit(alloc);
                 a.members.deinit();
             },
             .Error => |a| {
@@ -305,18 +394,18 @@ pub const Node = union(enum) {
                     i.deinit(alloc);
                     alloc.destroy(i);
                 }
-                for (a.members.items) |i| i.deinit();
+                for (a.members.items) |i| i.deinit(alloc);
                 a.members.deinit();
             },
             .Member => |a| {
-                for (a.ident.items) |i| i.deinit();
+                for (a.ident.items) |i| i.deinit(alloc);
                 a.ident.deinit();
                 if (a.type) |i| {
-                    i.deinit();
+                    i.deinit(alloc);
                     alloc.destroy(i);
                 }
                 if (a.default) |i| {
-                    i.deinit();
+                    i.deinit(alloc);
                     alloc.destroy(i);
                 }
             },
@@ -367,7 +456,7 @@ pub const Node = union(enum) {
                     i.deinit(alloc);
                     alloc.destroy(i);
                 }
-                for (a.stmts.items) |i| i.deinit();
+                for (a.stmts.items) |i| i.deinit(alloc);
                 a.stmts.deinit();
             },
             .MemberAccess => |a| {
@@ -387,26 +476,28 @@ pub const Node = union(enum) {
                 alloc.destroy(a.body);
             },
             .For => |a| {
-                for (a.condition.items) |i| i.deinit();
+                for (a.condition.items) |i| i.deinit(alloc);
                 a.condition.deinit();
-                if (a.capture) |i| {
-                    i.deinit(alloc);
-                    alloc.destroy(i);
-                }
+                a.capture.deinit(alloc);
+                alloc.destroy(a.capture);
                 a.body.deinit(alloc);
                 alloc.destroy(a.body);
             },
             .Match => |a| {
                 a.expr.deinit(alloc);
                 alloc.destroy(a.expr);
-                for (a.branches.items) |i| i.deinit();
+                for (a.branches.items) |i| i.deinit(alloc);
                 a.branches.deinit();
             },
             .MatchBranch => |a| {
                 a.result.deinit(alloc);
                 alloc.destroy(a.result);
-                for (a.exprs.items) |i| i.deinit();
+                for (a.exprs.items) |i| i.deinit(alloc);
                 a.exprs.deinit();
+                if (a.capture) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
             },
             .If => |a| {
                 a.condition.deinit(alloc);
@@ -423,7 +514,7 @@ pub const Node = union(enum) {
                 }
             },
             .Capture => |a| {
-                for (a.captures.items) |i| i.deinit();
+                for (a.captures.items) |i| i.deinit(alloc);
                 a.captures.deinit();
             },
             .CaptureMember => |a| {
@@ -473,6 +564,94 @@ pub const Node = union(enum) {
                     i.deinit(alloc);
                     alloc.destroy(i);
                 }
+            },
+            .MemberInitializer => |a| {
+                a.name.deinit(alloc);
+                alloc.destroy(a.name);
+                if (a.val) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
+            },
+            .ArrayInitializer => |a| {
+                for (a.exprs.items) |i| i.deinit(alloc);
+                a.exprs.deinit();
+            },
+            .StructInitializer => |a| {
+                if (a.ident) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
+                for (a.fields.items) |i| i.deinit(alloc);
+                for (a.exprs.items) |i| i.deinit(alloc);
+                a.fields.deinit();
+                a.exprs.deinit();
+            },
+            .OpAssign => |a| {
+                a.l.deinit(alloc);
+                a.r.deinit(alloc);
+                alloc.destroy(a.l);
+                alloc.destroy(a.r);
+            },
+            .Defer => |a| {
+                if (a.capture) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
+                a.body.deinit(alloc);
+                alloc.destroy(a.body);
+            },
+            .Return => |a| {
+                if (a.val) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
+            },
+            .Break => |a| {
+                if (a.label) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
+                if (a.val) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
+            },
+            .ErrorUnionType => |a| {
+                a.base.deinit(alloc);
+                alloc.destroy(a.base);
+                for (a.errs.items) |i| i.deinit(alloc);
+                a.errs.deinit();
+            },
+            .Try => |a| {
+                a.stmt.deinit(alloc);
+                alloc.destroy(a.stmt);
+            },
+            .Catch => |a| {
+                a.stmt.deinit(alloc);
+                alloc.destroy(a.stmt);
+                if (a.capture) |i| {
+                    i.deinit(alloc);
+                    alloc.destroy(i);
+                }
+                a.body.deinit(alloc);
+                alloc.destroy(a.body);
+            },
+            .CompType => |a| {
+                a.type.deinit(alloc);
+                alloc.destroy(a.type);
+            },
+            .CompStmt => |a| {
+                a.stmt.deinit(alloc);
+                alloc.destroy(a.stmt);
+            },
+            .CompExpr => |a| {
+                a.expr.deinit(alloc);
+                alloc.destroy(a.expr);
+            },
+            .InlineLoop => |a| {
+                a.stmt.deinit(alloc);
+                alloc.destroy(a.stmt);
             },
             .Type, .Underscore, .Module, .Ident, .Literal => {},
         }

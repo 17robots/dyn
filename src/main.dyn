@@ -33,10 +33,150 @@ primitives = () {
 optionals = () {
 	optional_val: ?i32 = 100;
 	mut optional_val_2: ?i32 = null;
-
-	mut what = if optional_val |v| v else -1;
-	what = optional_val.?;
 	a = optional_val_2 else 4;
 	optional_val_2 = 4;
 	b = optional_val_2 else 0;
+	if optional_val: |i| io.print(i);
+}
+pointers = () {
+	x: i32 = 1;
+	mut y: i32 = 1;
+	a: *i32 = &x;
+	mut b: *i32 = undefined;
+	io.print("x == dereferenced a? {}", x == a.*);
+	b = &y;
+	b.* = 5;
+}
+arrays = () {
+	mut nums: []i32 = .[1,2,3,4,5];
+	nums[0] *= 2;
+    nums[0] = 0;
+    nums[1] = 1;
+    nums[2] = 2;
+    nums[3] = 3;
+    nums[4] = 4;
+}
+if_statements = () {
+	yes = true;
+	if yes {
+		io.print("This should print\n");
+	} else {
+		io.print("This should not print\n");
+	}
+	no = false;
+	if no { io.print("oops\n"); } else { io.print("Everything's ok!\n"); }
+}
+match_statements = () {
+	x = 100;
+	match x {
+		1: io.println("This shouldnt run\n"),
+		2: io.println("This shouldnt run\n"),
+		4..90: io.println("This shouldnt run\n"),
+		_: io.println("This default should run\n"),
+	}
+}
+defer_statements = () {
+    defer io.println("This executes last");
+    defer io.println("This executes second");
+    defer {
+      io.println("This executes first");
+    }
+}
+loops = () {
+	while true {
+	    io.println("infinite loop, needs broken");
+	    break;
+	}
+	for 1..100: |i| io.print("{}\n", i);
+
+	items: []u8 = .[1,2,3,4,5];
+	for items: |i| io.print("{}\n", i);
+}
+functions = () {
+	mut local: i32 = 0;
+	mut state: i32 = 0;
+	mut result: i32 = undefined;
+	internal_fn = () {
+		io.print("{} {}", local, state);
+	}
+	internal_fn();
+	some_number = () i32 { return 100; }
+	some_number2 = () i32 => 100; 
+    some_math = (x: i32, y: i32) i32 => x + y;
+    some_math_2 = (x, y: i32) i32 => x + y;
+    manipulate_numbers = (result: *i32, x, y: i32) => result.* = x + y;
+}
+enums = () {
+	MyEnum = enum {
+		SOME,
+		THING,
+		HERE
+	};
+	PartneredEnum = enum {
+		SOME: i32,
+		THING: struct { info: i32 },
+		HERE: f32
+	};
+	x: MyEnum = .SOME;
+	y: PartneredEnum = .SOME(4);
+	match x {
+		.SOME: io.print("SOME"),
+		.THING: io.print("THING"),
+		.HERE: io.print("HERE"),
+	}
+	match y {
+		.SOME: |n| io.print("SOME, {}", n),
+		.HERE: |n| io.print("HERE, {}", n),
+		_: io.print("Default")
+	}
+}
+errors = () {
+	DivideErrors = error {
+		DivideByZero,
+	};
+
+	PartneredDivideErrors = error {
+		DivideByZero: i32,
+	};
+	div = (x, y: f32) f32!DivideError {
+		return if y == 0 DivideError.DivideByZero else x / y;
+	}
+	div2 = (x, y: f32) f32!PartneredDivideError => if y == 0 PartneredDivideError.DivideByZero(4) else x / y;
+	defer |e| {}
+	defer {}
+	div(1,0) catch |e| { io.print("{} was thrown\n", e); }
+}
+structs = () {
+	X = struct {
+		a: i32,
+		b: i32,
+		c: i32,
+		x, y, z: f32,
+	};
+	Y = struct {
+		a,b,c: f32,
+		x, y, z: i32,
+	};
+	x = .X{ a: 1, b: 2, c: 3, x: 1.0, y: 2.0, z: 3.0 };
+	y: Y = .{ x: 1, y: 2, z: 3, a: 1.0, b: 2.0, c: 3.0 };
+	z = .{ a: "hello", b: "world" };
+	MethodExample = struct {
+		a: i32 = 0,
+		init = () MethodExample => .{},
+		get_double = (s: MethodExample) i32 => s.a * 2,
+	};
+}
+metaprogramming = () {
+	List = (T: comp type) type => struct {
+		this = $this(),
+		member: []T,
+		init = () this => .{ members: .[] }
+	};
+	print_thing_at_comptime = () { io.print("We are a thing\n"); }
+	comp print_thing_at_comptime();
+	return_pi = () f32 => 3.14;
+	pi = comp return_pi();
+	inline for 0..12: |i| io.print("Woah\n"); 
+	inline_fn = inline () { io.print("This fn gets written out in place of each call");}
+	inline_fn(); 
 }
