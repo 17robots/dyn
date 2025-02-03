@@ -25,6 +25,8 @@ const LexingState = enum {
     read_bang,
     read_dot,
     read_underscore,
+    read_comment,
+    read_multi_comment,
 };
 
 buffer: []const u8,
@@ -36,6 +38,7 @@ state: LexingState,
 err: ?Error,
 line: usize,
 col: usize,
+reading_comment: bool = false,
 
 pub fn init(buffer: []const u8) Self {
     return .{ .buffer = buffer, .index = 0, .line = 1, .col = 1, .placeholder = 0, .tok = null, .literal = null, .err = null, .state = .base };
@@ -50,9 +53,10 @@ fn is_whitespace(s: Self) bool {
 
 pub fn next_tok(s: *Self) void {
     if (s.err != null or s.tok == .eof) return;
+    // skip commented chars
     // skip whitespace
     if (s.state != .read_string) {
-        while (s.index < s.buffer.len and s.is_whitespace()) {
+        while (s.index < s.buffer.len and s.is_whitespace() or s.reading_comment) {
             if (s.buffer[s.index] == '\n') {
                 s.line += 1;
                 s.col = 1;
@@ -304,14 +308,47 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_div => {
-                s.tok = switch (s.buffer[s.index]) {
-                    '=' => .diveq,
-                    else => .div,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .div) {
+                switch (s.buffer[s.index]) {
+                    '/' => {
+                        s.state = .read_comment;
+                        s.index += 1;
+                    },
+                    '*' => {
+                        s.state = .read_multi_comment;
+                        s.index += 1;
+                    },
+                    else => {
+                        s.tok = switch (s.buffer[s.index]) {
+                            '=' => .diveq,
+                            else => .div,
+                        };
+                        s.literal = null;
+                        s.state = .base;
+                        if (s.tok != .div) {
+                            s.index += 1;
+                        }
+                    },
+                }
+            },
+            .read_comment => {
+                switch (s.buffer[s.index]) {
+                    '\n' => {
+                        s.state = .base;
+                        s.line += 1;
+                        s.col = 0;
+                        return s.next_tok();
+                    },
+                    else => {},
+                }
+            },
+            .read_multi_comment => {
+                if (s.buffer[s.index] == '*') {
                     s.index += 1;
+                    if (s.buffer[s.index] == '/') {
+                        s.index += 1;
+                        s.state = .base;
+                        return s.next_tok();
+                    }
                 }
             },
             .read_mod => {
@@ -427,6 +464,18 @@ pub fn next_tok(s: *Self) void {
         .base => {
             s.tok = .eof;
             s.literal = null;
+        },
+        .read_comment => {
+            s.tok = .eof;
+            s.literal = null;
+        },
+        .read_multi_comment => {
+            if (s.buffer[s.index - 1] == '/' and s.buffer[s.index - 2] == '*') {
+                s.tok = .eof;
+                s.literal = null;
+            } else {
+                @panic("UH OH unclosed multi line comment");
+            }
         },
         .read_word => {
             if (s.get_keyword()) |k| {

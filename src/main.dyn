@@ -6,7 +6,7 @@ use "std:sync";
 use test "testLib";
 
 main = () {
-  primitives();
+  primitives(); /* this is a test comment to see what happens */
   optionals();
   pointers();
   arrays();
@@ -188,5 +188,5 @@ voidFn = (i32,i32);
 doAddOp = (a: AddFn, x,y: i32) i32 => a(x,y);
 
 somethingElse = () {
-	io.print(doAddOp((x,y: i32) i32 => x + y ), 1, 2);
+	io.print(doAddOp((x,y: i32) i32 => x + y, 1, 2));
 }
