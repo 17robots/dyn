@@ -5,7 +5,7 @@ use "std:heap";
 use "std:sync";
 use test "testLib";
 
-main = () {
+main := () {
   primitives();
   optionals();
   pointers();
@@ -21,9 +21,9 @@ main = () {
   metaprogramming();
   memory();
   concurrency();
-}
+};
 
-primitives = () {
+primitives := () {
 	x: i2 = 0; // all vars must have a value, and can only be undefined if mut
 	y: u5 = 1;
 	single_precision: f32 = 1.0;
@@ -38,7 +38,7 @@ primitives = () {
 	*/
 }
 
-optionals = () {
+optionals := () {
 	optional_val: ?i32 = 100;
 	mut optional_val_2: ?i32 = null;
 
@@ -49,7 +49,7 @@ optionals = () {
 	b = optional_val_2 else 0;
 }
 
-pointers = () {
+pointers := () {
 	x: i32 = 1;
 	mut y: i32 = 1;
 	a: *i32 = &x;
@@ -59,7 +59,7 @@ pointers = () {
 	b.* = 5; // doable because y is mut
 }
 
-arrays = () {
+arrays := () {
 	mut nums: []i32 = .[1,2,3,4,5];
 	nums[0] *= 2;
 	mut [5]i32 nums2;
@@ -70,7 +70,7 @@ arrays = () {
     nums[4] = 4;
 }
 
-if_statements = () {
+if_statements := () {
 	yes = true;
 	if yes {
 		io.print("This should print\n");
@@ -81,7 +81,7 @@ if_statements = () {
 	if no { io.print("oops\n"); } else { io.print("Everything's ok!\n"); }
 }
 
-match_statements = () {
+match_statements := () {
 	x = 100;
 	match x {
 		1: io.println("This shouldnt run\n"),
@@ -91,7 +91,7 @@ match_statements = () {
 	}
 }
 
-defer_statements = () {
+defer_statements := () {
     defer io.println("This executes last");
     defer io.println("This executes second");
     defer {
@@ -99,7 +99,7 @@ defer_statements = () {
     }
 }
 
-loops = () {
+loops := () {
 	while true {
 	    io.println("infinite loop, needs broken");
 	    break;
@@ -111,16 +111,16 @@ loops = () {
 	for items |i| io.print("{}\n", i);
 }
 
-functions = () {
+functions := () {
 	mut local: i32 = 0;
 	mut state: i32 = 0;
 	mut result: i32 = undefined;
-	internal_fn = () {
+	internal_fn := () {
 		io.print("{} {}", local, state);
 	}
 	internal_fn();
-	some_number = () i32 { return 100; } 
-	some_number2 = () i32 => 100; 
+	some_number := () i32 { return 100; } 
+	some_number2 := () i32 => 100; 
     some_math = (x: i32, y: i32) i32 => x + y;
     some_math_2 = (x, y: i32) i32 => x + y;
     manipulate_numbers = (result: *i32, x, y: i32) => result.* = x + y;
@@ -129,7 +129,7 @@ functions = () {
 	}();
 }
 
-enums = () {
+enums := () {
 	MyEnum = enum {
 		SOME,
 		THING,
@@ -156,7 +156,7 @@ enums = () {
 	}
 }
 
-errors = () {
+errors := () {
 	DivideErrors = error {
 		DivideByZero,
 	};
@@ -176,7 +176,7 @@ errors = () {
 	// try div(1,0) signature will return e
 }
 
-structs = () {
+structs := () {
 	X = struct {
 		a: i32,
 		b: i32,
@@ -191,27 +191,27 @@ structs = () {
 	y: Y = .{ x: 1, y: 2, z: 3, a: 1.0, b: 2.0, c: 3.0 };
 	MethodExample = struct {
 		a: i32 = 0,
-		init = () MethodExample => .{}; // a is 0 by default
+		init := () MethodExample => .{}; // a is 0 by default
 		get_double = (s: MethodExample) i32 => s.a * 2;
 	};
 }
 
-metaprogramming = () {
+metaprogramming := () {
 	List = (T: comp type) type => struct {
 		this = $this();
 		member: T[],
 		init() this => .{ members: [] }
 	};
-	print_thing_at_comptime = () { io.print("We are a thing\n"); }
+	print_thing_at_comptime := () { io.print("We are a thing\n"); }
 	comp print_thing_at_comptime();
-	return_pi = () f32 => 3.14;
+	return_pi := () f32 => 3.14;
 	pi = comp return_pi(); // sets the val at comptime
 	inline for(0..12) |i| io.print("Woah\n"); // unravel this at comp time
 	inline_fn = inline () { io.print("This fn gets written out in place of each call");}
 	inline_fn(); // will be replaced with io.print("This fn gets written out in place of each call");
 }
 
-memory = () {
+memory := () {
 	mut gpa = heap.GeneralPurposeAllocator(.{}).init(.{});
 	alloc: = gpa.alloc();
 	defer if gpa.deinit() == .leak $panic("We leaked\n");
