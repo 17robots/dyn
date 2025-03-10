@@ -53,6 +53,7 @@ pub const TokenType = enum {
     bangeq, // !=
     question, // ?
     dollar, // $
+    walrus, // :=
     // keywords
     module,
     pointer_deref,

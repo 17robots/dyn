@@ -24,6 +24,7 @@ const LexingState = enum {
     read_lt,
     read_bang,
     read_dot,
+    read_colon,
     read_underscore,
     read_comment,
     read_multi_comment,
@@ -103,6 +104,7 @@ pub fn next_tok(s: *Self) void {
                     s.literal = null;
                     s.index += 1;
                 },
+                ':' => s.state = .read_colon,
                 ':' => {
                     s.tok = .colon;
                     s.literal = null;
@@ -228,6 +230,22 @@ pub fn next_tok(s: *Self) void {
                         s.tok = .dot;
                         s.literal = null;
                         s.state = .base;
+                    },
+                }
+            },
+            .read_colon => {
+                switch(s.buffer[s.index]) {
+                    '=' => {
+                        s.tok = .walrus;
+                        s.literal = null;
+                        s.state = .base;
+                        s.index += 1;
+                    },
+                    else => {
+                        s.tok = .colon;
+                        s.literal = null;
+                        s.state = .base;
+                        s.index += 1;
                     },
                 }
             },
