@@ -262,7 +262,12 @@ fn range_expression(s: *Self) !Node {
 fn use_expression(s: *Self) !Node {
     _ = try s.eat(.use);
 }
-fn grouped_expression(s: *Self) !Node {}
+fn grouped_expression(s: *Self) !Node {
+    _ = try s.eat(.lparen);
+    const expr = try s.create_node_ptr(try s.expression());
+    _ = try s.eat(.lparen);
+    return Node { .grouped = .{ .expression = expr }};
+}
 fn if_expression(s: *Self) !Node { // fix this for expressions
     const prefix = try s.create_node_ptr(try s.if_prefix());
     const body = try s.create_node_ptr(if(s.l.tok.? == .lbrace) try s.block() else blk: {
@@ -436,7 +441,75 @@ fn capture_item(s: *Self) !Node {
 fn identifier(s: *Self) !Node {
     return Node{ .identifier = .{ .value = try s.eat(.identifier) } };
 }
-
+fn try_(s: *Self) !Node {
+    _ = try s.eat(.@"try");
+    return Node{ .try_ = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) }};
+}
+fn catch_(s: *Self, n: Node) !Node {
+    _ = try s.eat(.@"catch");
+    const body = try s.create_node_ptr(try s.result_block());
+    return Node{ .catch_ = .{ .expression = try s.create_node_ptr(n), .body = body }}; } fn comp_expression(s: *Self) !Node {
+    _ = try s.eat(.comp);
+    return Node{ .comp_expression = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) }};
+}
+fn call(s: *Self, n: Node) !Node {
+    _ = try s.eat(.lparen);
+    var args = NodeList.init(s.a);
+    while(s.l.tok.? != .eof) {
+        if(s.l.tok.? == .rparen) break;
+        try args.append(try s.expression());
+        if(s.l.tok.? == .rparen) break;
+        _ = try s.eat(.comma);
+    }
+    _ = try s.eat(.rparen);
+    return Node{ .call = .{ .name = try s.create_node_ptr(n), .args = args }};
+}
+fn optional_dereference(s: *Self, n: Node) !Node {
+    _ = try s.eat(.question);
+    return Node{ .pointer_dereference = .{ .expression = try s.create_node_ptr(n) }};
+}
+fn optional_type(s: *Self) !Node {
+    _ = try s.eat(.question);
+    return Node{ .optional_type = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) }};
+}
+fn pointer_dereference(s: *Self, n: Node) !Node {
+    _ = try s.eat(.mul);
+    return Node{ .optional_dereference = .{ .expression = try s.create_node_ptr(n) }};
+}
+fn pointer_type(s: *Self) !Node {
+    _ = try s.eat(.mul);
+    return Node{ .pointer_type = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) }};
+}
+fn array_index(s: *Self, n: Node) !Node {
+    _ = try s.eat(.lbrack);
+    const index = try s.create_node_ptr(try s.expression());
+    _ = try s.eat(.rbrack);
+    return Node{ .array_index = .{ .name = try s.create_node_ptr(n), .index = index }};
+}
+fn array_type(s: *Self) !Node {
+    _ = try s.eat(.lbrack);
+    _ = try s.eat(.rbrack);
+    return Node{ .array_type = .{ .expression = try s.non_literal_expression() }};
+}
+fn error_union_type(s: *Self, n: Node) !Node {
+    _ = try s.eat(.bang);
+    var errors = NodeList.init(s.a);
+    while(s.l.tok.? != .eof) {
+        if(s.l.tok.? != .identifier) break;
+        try errors.append(try s.identifier());
+        if(s.l.tok.? != .bang) break;
+        _ = try s.eat(.bang);
+    }
+    return Node { .error_union_type = .{ .name = try s.create_node_ptr(n), .errors = errors }};
+}
+fn member_access(s: *Self, n: Node) !Node {
+    return Node{ .member_access = .{ .name = try s.create_node_ptr(n), .member = try s.create_node_ptr(try s.identifier()) }};
+}
+fn literal(s: *Self) !Node {
+    return switch(s.l.tok.?) {
+        .int => Node {},
+    };
+}
 fn eat(s: *Self, expected: Token) ![]const u8 {
     if (s.l.tok.? != expected) {
         std.debug.print("Wanted {any}, got {any}, l: {}, c: {} \n", .{ expected, s.l.tok.?, s.l.line, s.l.col });
