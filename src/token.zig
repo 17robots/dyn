@@ -54,6 +54,7 @@ pub const TokenType = enum {
     question, // ?
     dollar, // $
     walrus, // :=
+    nullish, // ??
     // keywords
     module,
     pointer_deref,
@@ -82,6 +83,5 @@ pub const TokenType = enum {
     @"return",
     @"break",
     @"inline",
-    @"fn",
-    in,
+    @"continue",
 };

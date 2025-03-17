@@ -26,6 +26,7 @@ const LexingState = enum {
     read_dot,
     read_colon,
     read_underscore,
+    read_question,
     read_comment,
     read_multi_comment,
 };
@@ -105,11 +106,6 @@ pub fn next_tok(s: *Self) void {
                     s.index += 1;
                 },
                 ':' => s.state = .read_colon,
-                ':' => {
-                    s.tok = .colon;
-                    s.literal = null;
-                    s.index += 1;
-                },
                 ';' => {
                     s.tok = .semicolon;
                     s.literal = null;
@@ -120,11 +116,7 @@ pub fn next_tok(s: *Self) void {
                     s.literal = null;
                     s.index += 1;
                 },
-                '?' => {
-                    s.tok = .question;
-                    s.literal = null;
-                    s.index += 1;
-                },
+                '?' => s.state = .read_question,
                 '+' => s.state = .read_add,
                 '-' => s.state = .read_sub,
                 '*' => s.state = .read_mul,
@@ -246,6 +238,21 @@ pub fn next_tok(s: *Self) void {
                         s.literal = null;
                         s.state = .base;
                         s.index += 1;
+                    },
+                }
+            },
+            .read_question => {
+                switch(s.buffer[s.index]) {
+                    '?' => {
+                        s.tok = .nullish;
+                        s.literal = null;
+                        s.state = .base;
+                        s.index += 1;
+                    },
+                    else => {
+                        s.tok = .question;
+                        s.literal = null;
+                        s.state = .base;
                     },
                 }
             },
@@ -608,6 +615,37 @@ pub fn next_tok(s: *Self) void {
                 },
             }
         },
+        .read_colon => {
+            switch(s.buffer[s.index]) {
+                '=' => {
+                    s.tok = .walrus;
+                    s.literal = null;
+                    s.state = .base;
+                    s.index += 1;
+                },
+                else => {
+                    s.tok = .colon;
+                    s.literal = null;
+                    s.state = .base;
+                },
+            }
+        },
+        .read_question => {
+            switch(s.buffer[s.index]) {
+                '?' => {
+                    s.tok = .nullish;
+                    s.literal = null;
+                    s.state = .base;
+                    s.index += 1;
+                },
+                else => {
+                    s.tok = .question;
+                    s.literal = null;
+                    s.state = .base;
+                    s.index += 1;
+                },
+            }
+        },
     }
     s.state = .base;
 }
@@ -682,14 +720,11 @@ fn get_keyword(s: *Self) ?Token {
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "inline")) {
         return .@"inline";
     }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "fn")) {
-        return .@"fn";
-    }
     if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "packed")) {
         return .@"packed";
     }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "in")) {
-        return .in;
+    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "continue")) {
+        return .@"continue";
     }
     return null;
 }
