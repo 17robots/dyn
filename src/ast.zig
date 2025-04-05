@@ -149,5 +149,5 @@ pub const Node = union(enum) {
     function_parameter: struct { names: std.ArrayList(Node), type: *Node },
     function_type: struct { parameters: std.ArrayList(Node), result: ?*Node },
     underscore,
-    @"type",
+    type,
 };

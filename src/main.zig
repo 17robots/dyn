@@ -23,7 +23,7 @@ pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {
 }
 
 pub fn print_tree(n: Node) void {
-    switch(n) {
+    switch (n) {
         .program => |i| {
             std.debug.print("Program\n", .{});
             for (i.declarations.items) |v| print_tree(v);
@@ -36,14 +36,14 @@ pub fn print_tree(n: Node) void {
         .declaration => |i| {
             std.debug.print("Declaration, public: {any}\n", .{i.pub_});
             print_tree(i.name.*);
-            if(i.type) |j| print_tree(j.*);
+            if (i.type) |j| print_tree(j.*);
             print_tree(i.val.*);
         },
         .mut_declaration => |i| {
             std.debug.print("Mut Declaration, mut: {any}\n", .{i.mut});
             print_tree(i.name.*);
-            if(i.type) |j| print_tree(j.*);
-            if(i.val) |j| print_tree(j.*);
+            if (i.type) |j| print_tree(j.*);
+            if (i.val) |j| print_tree(j.*);
         },
         .block => |i| {
             std.debug.print("Block\n", .{});
@@ -62,7 +62,7 @@ pub fn print_tree(n: Node) void {
         .if_prefix => |i| {
             std.debug.print("If Prefix\n", .{});
             print_tree(i.expression.*);
-            if(i.capture) |j| print_tree(j.*);
+            if (i.capture) |j| print_tree(j.*);
         },
         .for_prefix => |i| {
             std.debug.print("For Prefix\n", .{});
@@ -72,7 +72,7 @@ pub fn print_tree(n: Node) void {
         .while_prefix => |i| {
             std.debug.print("While Prefix\n", .{});
             print_tree(i.expression.*);
-            if(i.capture) |j| print_tree(j.*);
+            if (i.capture) |j| print_tree(j.*);
         },
         .match => |i| {
             std.debug.print("Match\n", .{});
@@ -81,14 +81,14 @@ pub fn print_tree(n: Node) void {
         },
         .arm => |i| {
             std.debug.print("Match Arm\n", .{});
-            for(i.expressions.items) |j| print_tree(j);
-            if(i.capture) |j| print_tree(j.*);
+            for (i.expressions.items) |j| print_tree(j);
+            if (i.capture) |j| print_tree(j.*);
         },
         .if_statement => |i| {
             std.debug.print("If Statement\n", .{});
             print_tree(i.prefix.*);
             print_tree(i.body.*);
-            if(i.else_body) |j| print_tree(j.*);
+            if (i.else_body) |j| print_tree(j.*);
         },
         .for_statement => |i| {
             std.debug.print("For Statement\n", .{});
@@ -102,7 +102,7 @@ pub fn print_tree(n: Node) void {
         },
         .defer_statement => |i| {
             std.debug.print("Defer\n", .{});
-            if(i.capture) |j| print_tree(j.*);
+            if (i.capture) |j| print_tree(j.*);
             print_tree(i.body.*);
         },
         .capture_val => |i| {
@@ -111,20 +111,20 @@ pub fn print_tree(n: Node) void {
         },
         .capture => |i| {
             std.debug.print("Capture\n", .{});
-            for(i.captures.items) |j| print_tree(j);
+            for (i.captures.items) |j| print_tree(j);
         },
         .return_expression => |i| {
             std.debug.print("Return\n", .{});
-            if(i.val) |j| print_tree(j.*);
+            if (i.val) |j| print_tree(j.*);
         },
         .break_expression => |i| {
             std.debug.print("Break\n", .{});
-            if(i.label) |j| print_tree(j.*);
-            if(i.val) |j| print_tree(j.*);
+            if (i.label) |j| print_tree(j.*);
+            if (i.val) |j| print_tree(j.*);
         },
         .continue_expression => |i| {
             std.debug.print("Continue\n", .{});
-            if(i.label) |j| print_tree(j.*);
+            if (i.label) |j| print_tree(j.*);
         },
         .nullish_expression => |i| {
             std.debug.print("Nullish\n", .{});
@@ -138,12 +138,12 @@ pub fn print_tree(n: Node) void {
         },
         .array_init => |i| {
             std.debug.print("Array Init\n", .{});
-            for(i.vals.items) |j| print_tree(j);
+            for (i.vals.items) |j| print_tree(j);
         },
         .struct_init => |i| {
             std.debug.print("Struct Init\n", .{});
-            if(i.name) |j| print_tree(j.*);
-            for(i.inits.items) |j| print_tree(j);
+            if (i.name) |j| print_tree(j.*);
+            for (i.inits.items) |j| print_tree(j);
         },
         .struct_init_member => |i| {
             std.debug.print("Struct Init Member\n", .{});
@@ -153,7 +153,7 @@ pub fn print_tree(n: Node) void {
         .enum_error_init => |i| {
             std.debug.print("Enum/Error Init Member\n", .{});
             print_tree(i.name.*);
-            if(i.val) |j| print_tree(j.*);
+            if (i.val) |j| print_tree(j.*);
         },
         .struct_ => |i| {
             std.debug.print("Struct Declaration\n", .{});
@@ -161,7 +161,7 @@ pub fn print_tree(n: Node) void {
         },
         .struct_member => |i| {
             std.debug.print("Struct Member\n", .{});
-            for(i.names.items) |j| print_tree(j);
+            for (i.names.items) |j| print_tree(j);
             print_tree(i.type.*);
             if (i.val) |j| print_tree(j.*);
         },
@@ -187,7 +187,7 @@ pub fn print_tree(n: Node) void {
             std.debug.print("If Expression\n", .{});
             print_tree(i.prefix.*);
             print_tree(i.body.*);
-            if(i.else_body) |j| print_tree(j.*);
+            if (i.else_body) |j| print_tree(j.*);
         },
         .for_expression => |i| {
             std.debug.print("For Expression\n", .{});
@@ -249,18 +249,18 @@ pub fn print_tree(n: Node) void {
         },
         .error_union_type => |i| {
             std.debug.print("Error Union Type\n", .{});
-            if(i.name) |j| print_tree(j.*);
+            if (i.name) |j| print_tree(j.*);
             for (i.errors.items) |j| print_tree(j);
         },
         .grouped => |i| {
             std.debug.print("Grouped\n", .{});
-            if(i.expression) |j| print_tree(j.*);
+            if (i.expression) |j| print_tree(j.*);
         },
         .use => |i| {
             std.debug.print("Use\n", .{});
             print_tree(i.path.*);
         },
-        .literal => |i| std.debug.print("Literal, {s}, {s}\n", .{i.kind.to_string(), i.val}) ,
+        .literal => |i| std.debug.print("Literal, {s}, {s}\n", .{ i.kind.to_string(), i.val }),
         .unary => |i| {
             std.debug.print("Unary\n", .{});
             std.debug.print("{s}\n", .{i.op.to_string()});
@@ -274,21 +274,21 @@ pub fn print_tree(n: Node) void {
         },
         .function => |i| {
             std.debug.print("Function\n", .{});
-            for(i.parameters.items) |j| print_tree(j);
-            if(i.result) |j| print_tree(j.*);
+            for (i.parameters.items) |j| print_tree(j);
+            if (i.result) |j| print_tree(j.*);
             print_tree(i.body.*);
         },
         .function_parameter => |i| {
             std.debug.print("Function Parameter\n", .{});
-            for(i.names.items) |j| print_tree(j);
+            for (i.names.items) |j| print_tree(j);
             print_tree(i.type.*);
         },
         .function_type => |i| {
             std.debug.print("Function Type\n", .{});
-            for(i.parameters.items) |j| print_tree(j);
-            if(i.result) |j| print_tree(j.*);
+            for (i.parameters.items) |j| print_tree(j);
+            if (i.result) |j| print_tree(j.*);
         },
         .underscore => std.debug.print("Underscore\n", .{}),
-        .@"type" => std.debug.print("Type\n", .{}),
+        .type => std.debug.print("Type\n", .{}),
     }
 }

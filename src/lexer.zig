@@ -225,7 +225,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_colon => {
-                switch(s.buffer[s.index]) {
+                switch (s.buffer[s.index]) {
                     '=' => {
                         s.tok = .walrus;
                         s.literal = null;
@@ -241,7 +241,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_question => {
-                switch(s.buffer[s.index]) {
+                switch (s.buffer[s.index]) {
                     '?' => {
                         s.tok = .nullish;
                         s.literal = null;
@@ -615,7 +615,7 @@ pub fn next_tok(s: *Self) void {
             }
         },
         .read_colon => {
-            switch(s.buffer[s.index]) {
+            switch (s.buffer[s.index]) {
                 '=' => {
                     s.tok = .walrus;
                     s.literal = null;
@@ -630,7 +630,7 @@ pub fn next_tok(s: *Self) void {
             }
         },
         .read_question => {
-            switch(s.buffer[s.index]) {
+            switch (s.buffer[s.index]) {
                 '?' => {
                     s.tok = .nullish;
                     s.literal = null;
