@@ -1,7 +1,6 @@
 const std = @import("std");
 const Lexer = @import("lexer.zig");
 const Token = @import("token.zig").TokenType;
-const Error = @import("errors.zig").Error;
 const Node = @import("ast.zig").Node;
 const LiteralKind = @import("ast.zig").LiteralKind;
 const Op = @import("ast.zig").Op;
@@ -44,11 +43,11 @@ fn declaration(s: *Self) anyerror!Node {
             _ = try s.eat(.colon);
             break :blk try s.create_node_ptr(try s.non_literal_expression());
         },
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
     switch(s.l.tok.?) {
         .walrus, .eq => _ = try s.eat(s.l.tok.?),
-        else => return Error.ParserError
+        else => return error.ParserError
     }
     const val = try s.create_node_ptr(try s.expression(0));
     _ = try s.eat(.semicolon);
@@ -66,11 +65,11 @@ fn mut_declaration(s: *Self) anyerror!Node {
             _ = try s.eat(.colon);
             break :blk try s.create_node_ptr(try s.non_literal_expression());
         },
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
     switch(s.l.tok.?) {
         .walrus, .eq => _ = try s.eat(s.l.tok.?),
-        else => return Error.ParserError
+        else => return error.ParserError
     }
     const val = try s.create_node_ptr(try s.expression(0));
     return Node{ .mut_declaration = .{ .mut = mut, .name = name, .type = type_, .val = val }};
@@ -150,7 +149,7 @@ fn function(s: *Self) anyerror!Node {
     const body = switch(s.l.tok.?) {
         .arrow => try s.create_node_ptr(try s.arrow_expression()),
         .lbrace => try s.create_node_ptr(try s.block()),
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
     return Node{ .function = .{ .inline_ = inline_, .parameters = parameters, .result = if(result) |r| try s.create_node_ptr(r) else null, .body = body }};
 }
@@ -213,7 +212,7 @@ fn assign_operator(s: *Self) !AssignOp {
         .andeq => .andeq,
         .oreq => .oreq,
         .eq => .eq,
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
     _ = try s.eat(s.l.tok.?);
     return op;
@@ -238,7 +237,7 @@ fn operator(s: *Self) !Op {
         .oror => .oror,
         .bangeq => .bangeq,
         .nullish => .nullish,
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
     _ = try s.eat(s.l.tok.?);
     return op;
@@ -270,7 +269,7 @@ fn for_prefix(s: *Self) anyerror!Node {
         if(s.l.tok.? == .colon) break;
         _ = try s.eat(.comma);
     }
-    if(expressions.items.len == 0) return Error.ParserError;
+    if(expressions.items.len == 0) return error.ParserError;
     _ = try s.eat(.colon);
     const cap = try s.create_node_ptr(try s.capture());
     return Node{ .for_prefix = .{ .expressions = expressions, .capture = cap }};
@@ -320,7 +319,7 @@ fn if_statement(s: *Self) anyerror!Node {
             _ = try s.eat(.@"else");
             break :blk try s.create_node_ptr(try s.result_block());
         },
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
     return Node{ .if_statement = .{ .prefix = prefix, .body = body, .else_body = else_body }};
 }
@@ -425,7 +424,7 @@ fn non_literal_expression(s: *Self) anyerror!Node {
                     s.restore_lexer(state);
                     break :blk2 try s.enum_error_initialization();
                 },
-                else => return Error.ParserError,
+                else => return error.ParserError,
             };
         },
         .lbrack => blk: {
@@ -435,7 +434,7 @@ fn non_literal_expression(s: *Self) anyerror!Node {
                 break :blk2 try s.array_initialization();
             };
         },
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
     switch(expr) {
         .array_type, .array_index, .pointer_type, .optional_type, .identifier, .member_access, .pointer_dereference, .optional_dereference, .struct_, .enum_, .error_, .grouped, .if_expression, .try_, .catch_ => {
@@ -462,7 +461,7 @@ fn member_chain(s: *Self) anyerror!Node {
                 _ = try s.eat(.dot);
                 chain = switch(s.l.tok.?) {
                     .identifier => try s.member_access(chain),
-                    else => return Error.ParserError,
+                    else => return error.ParserError,
                 };
             },
             .lbrack => chain = try s.array_index(chain),
@@ -537,7 +536,7 @@ fn range_expression(s: *Self, n: Node) anyerror!Node {
 }
 fn use_expression(s: *Self) anyerror!Node {
     _ = try s.eat(.use);
-    if(s.l.tok.? != .string) return Error.ParserError;
+    if(s.l.tok.? != .string) return error.ParserError;
     const path = try s.create_node_ptr(try s.literal());
     return Node{ .use = .{ .path = path }};
 }
@@ -797,11 +796,11 @@ fn literal(s: *Self) anyerror!Node {
         .string => Node { .literal = .{ .kind = .string, .val = try s.eat(.string) }},
         .undefined => Node { .literal = .{ .kind = .undefined, .val = try s.eat(.undefined) }},
         .null => Node { .literal = .{ .kind = .null, .val = try s.eat(.null) }},
-        else => return Error.ParserError,
+        else => return error.ParserError,
     };
 }
 fn eat(s: *Self, expected: Token) ![]const u8 {
-    if (s.l.tok.? != expected) return Error.ParserError;
+    if (s.l.tok.? != expected) return error.ParserError;
     defer s.l.next_tok();
     return s.l.literal orelse "";
 }

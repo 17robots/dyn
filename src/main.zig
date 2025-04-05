@@ -8,7 +8,8 @@ pub fn main() !void {
     const alloc = arena.allocator();
     defer arena.deinit();
 
-    const file_body = try read_file(alloc, "src/test.dyn");
+    // const file_body = try read_file(alloc, "test.dyn");
+    const file_body = try read_file(alloc, "main.dyn");
 
     var parser = Parser.init(alloc, file_body);
     print_tree(try parser.program());

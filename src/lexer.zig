@@ -1,5 +1,4 @@
 const std = @import("std");
-const Error = @import("errors.zig").Error;
 const Token = @import("token.zig").TokenType;
 
 const Self = @This();
@@ -37,7 +36,7 @@ placeholder: usize,
 tok: ?Token,
 literal: ?[]const u8,
 state: LexingState,
-err: ?Error,
+err: ?anyerror,
 line: usize,
 col: usize,
 reading_comment: bool = false,
@@ -133,7 +132,7 @@ pub fn next_tok(s: *Self) void {
                 '_' => s.state = .read_underscore,
                 else => {
                     s.tok = .invalid;
-                    s.err = Error.InvalidCharacter;
+                    s.err = error.InvalidCharacter;
                     return;
                 },
             },
@@ -272,7 +271,7 @@ pub fn next_tok(s: *Self) void {
                     '\'' => {
                         if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                             s.tok = .invalid;
-                            s.err = Error.InvalidCharLength;
+                            s.err = error.InvalidCharLength;
                             s.state = .base;
                         } else {
                             s.tok = .char;
@@ -289,7 +288,7 @@ pub fn next_tok(s: *Self) void {
                             else => {
                                 s.tok = .invalid;
                                 s.state = .base;
-                                s.err = Error.InvalidEscape;
+                                s.err = error.InvalidEscape;
                                 return;
                             },
                         }
@@ -587,7 +586,7 @@ pub fn next_tok(s: *Self) void {
             }
             if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                 s.tok = .invalid;
-                s.err = Error.InvalidEscape;
+                s.err = error.InvalidEscape;
                 s.state = .base;
             } else {
                 s.tok = .char;
