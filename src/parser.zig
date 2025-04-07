@@ -18,6 +18,7 @@ pub fn init(alloc: std.mem.Allocator, buf: []const u8) Self {
     return Self{ .l = Lexer.init(buf), .a = alloc };
 }
 
+// catch and report error
 pub fn program(s: *Self) anyerror!Node {
     s.l.next_tok();
     var declarations = NodeList.init(s.a);
@@ -31,6 +32,7 @@ fn module_declaration(s: *Self) anyerror!Node {
     _ = try s.eat(.semicolon);
     return Node{ .module = .{ .name = name } };
 }
+
 fn declaration(s: *Self) anyerror!Node {
     const pub_ = if (s.l.tok.? == .@"pub") blk: {
         _ = try s.eat(.@"pub");
@@ -74,6 +76,8 @@ fn mut_declaration(s: *Self) anyerror!Node {
     const val = try s.create_node_ptr(try s.expression(0));
     return Node{ .mut_declaration = .{ .mut = mut, .name = name, .type = type_, .val = val } };
 }
+
+// catch and report error
 fn statement(s: *Self) anyerror!Node {
     return switch (s.l.tok.?) {
         .@"if" => try s.if_statement(),
@@ -104,6 +108,7 @@ fn statement(s: *Self) anyerror!Node {
         },
     };
 }
+// catch and report error
 fn block(s: *Self) anyerror!Node {
     var statements = NodeList.init(s.a);
     _ = try s.eat(.lbrace);
@@ -115,6 +120,7 @@ fn block(s: *Self) anyerror!Node {
     _ = try s.eat(.rbrace);
     return Node{ .block = .{ .label = null, .statements = statements } };
 }
+// catch and report error
 fn labeled_block(s: *Self) anyerror!Node {
     const label = if (s.l.tok.? == .identifier) blk: {
         const x = try s.create_node_ptr(try s.identifier());
