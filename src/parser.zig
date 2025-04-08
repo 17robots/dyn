@@ -6,6 +6,8 @@ const LiteralKind = @import("ast.zig").LiteralKind;
 const Op = @import("ast.zig").Op;
 const AssignOp = @import("ast.zig").AssignOp;
 const NodeList = std.ArrayList(Node);
+const CompilerError = @import("compilererror.zig").CompilerError;
+const Diagnostic = @import("diagnostic.zig");
 
 const Self = @This();
 
@@ -13,6 +15,7 @@ const LexerState = struct { tok: ?Token, literal: ?[]const u8, line: usize, col:
 
 l: Lexer,
 a: std.mem.Allocator,
+d: *std.ArrayList(Diagnostic),
 
 pub fn init(alloc: std.mem.Allocator, buf: []const u8) Self {
     return Self{ .l = Lexer.init(buf), .a = alloc };
@@ -22,8 +25,31 @@ pub fn init(alloc: std.mem.Allocator, buf: []const u8) Self {
 pub fn program(s: *Self) anyerror!Node {
     s.l.next_tok();
     var declarations = NodeList.init(s.a);
+    errdefer declarations.deinit();
     try declarations.append(try s.module_declaration());
-    while (s.l.tok.? != .eof) try declarations.append(try s.declaration());
+    while (s.l.tok.? != .eof) {
+        if (s.l.err) |err| {}
+        const d = s.declaration() catch |err| switch (err) {
+            error.InvalidDeclarationToken => {
+                try s.report_diagnostic(.err, try std.fmt.allocPrint(s.a, "{}: got: {}, wanted := val or : [type] =", .{CompilerError.to_string(err), s.l.tok.?}));
+            },
+            error.InvalidFunctionBodyToken => {},
+            error.InvalidOperatorToken => {},
+            error.AtLeastOneExpressionExpected => {},
+            error.InvalidElseBodyMarker => {},
+            error.InvalidPostDotExpression => {},
+            error.InvalidPrefixExpression => {},
+            error.InvalidDotMemberExpression => {},
+            error.UnexpectedToken => {},
+            error.InvalidLiteral => {},
+            error.ExpectedStringForUsePath => {},
+            error.InvalidCharacter => {},
+            error.InvalidCharLength => {},
+            error.InvalidEscape => {},
+            else => return err,
+        };
+        try declarations.append(d);
+    }
     return Node{ .program = .{ .declarations = declarations } };
 }
 fn module_declaration(s: *Self) anyerror!Node {
@@ -45,11 +71,11 @@ fn declaration(s: *Self) anyerror!Node {
             _ = try s.eat(.colon);
             break :blk try s.create_node_ptr(try s.non_literal_expression());
         },
-        else => return error.ParserError,
+        else => return CompilerError.InvalidDeclarationToken,
     };
     switch (s.l.tok.?) {
         .walrus, .eq => _ = try s.eat(s.l.tok.?),
-        else => return error.ParserError,
+        else => return CompilerError.InvalidDeclarationToken,
     }
     const val = try s.create_node_ptr(try s.expression(0));
     _ = try s.eat(.semicolon);
@@ -67,11 +93,11 @@ fn mut_declaration(s: *Self) anyerror!Node {
             _ = try s.eat(.colon);
             break :blk try s.create_node_ptr(try s.non_literal_expression());
         },
-        else => return error.ParserError,
+        else => return CompilerError.InvalidDeclarationToken,
     };
     switch (s.l.tok.?) {
         .walrus, .eq => _ = try s.eat(s.l.tok.?),
-        else => return error.ParserError,
+        else => return CompilerError.InvalidDeclarationToken,
     }
     const val = try s.create_node_ptr(try s.expression(0));
     return Node{ .mut_declaration = .{ .mut = mut, .name = name, .type = type_, .val = val } };
@@ -155,7 +181,7 @@ fn function(s: *Self) anyerror!Node {
     const body = switch (s.l.tok.?) {
         .arrow => try s.create_node_ptr(try s.arrow_expression()),
         .lbrace => try s.create_node_ptr(try s.block()),
-        else => return error.ParserError,
+        else => return CompilerError.InvalidFunctionBodyToken,
     };
     return Node{ .function = .{ .inline_ = inline_, .parameters = parameters, .result = if (result) |r| try s.create_node_ptr(r) else null, .body = body } };
 }
@@ -218,7 +244,7 @@ fn assign_operator(s: *Self) !AssignOp {
         .andeq => .andeq,
         .oreq => .oreq,
         .eq => .eq,
-        else => return error.ParserError,
+        else => return CompilerError.InvalidOperatorToken,
     };
     _ = try s.eat(s.l.tok.?);
     return op;
@@ -243,7 +269,7 @@ fn operator(s: *Self) !Op {
         .oror => .oror,
         .bangeq => .bangeq,
         .nullish => .nullish,
-        else => return error.ParserError,
+        else => return CompilerError.InvalidOperatorToken,
     };
     _ = try s.eat(s.l.tok.?);
     return op;
@@ -275,7 +301,7 @@ fn for_prefix(s: *Self) anyerror!Node {
         if (s.l.tok.? == .colon) break;
         _ = try s.eat(.comma);
     }
-    if (expressions.items.len == 0) return error.ParserError;
+    if (expressions.items.len == 0) return CompilerError.AtLeastOneExpressionExpected;
     _ = try s.eat(.colon);
     const cap = try s.create_node_ptr(try s.capture());
     return Node{ .for_prefix = .{ .expressions = expressions, .capture = cap } };
@@ -325,7 +351,7 @@ fn if_statement(s: *Self) anyerror!Node {
             _ = try s.eat(.@"else");
             break :blk try s.create_node_ptr(try s.result_block());
         },
-        else => return error.ParserError,
+        else => return CompilerError.InvalidElseBodyMarker,
     };
     return Node{ .if_statement = .{ .prefix = prefix, .body = body, .else_body = else_body } };
 }
@@ -430,7 +456,7 @@ fn non_literal_expression(s: *Self) anyerror!Node {
                     s.restore_lexer(state);
                     break :blk2 try s.enum_error_initialization();
                 },
-                else => return error.ParserError,
+                else => return CompilerError.InvalidPostDotExpression,
             };
         },
         .lbrack => blk: {
@@ -440,7 +466,7 @@ fn non_literal_expression(s: *Self) anyerror!Node {
                 break :blk2 try s.array_initialization();
             };
         },
-        else => return error.ParserError,
+        else => return CompilerError.InvaludPrefixExpression,
     };
     switch (expr) {
         .array_type, .array_index, .pointer_type, .optional_type, .identifier, .member_access, .pointer_dereference, .optional_dereference, .struct_, .enum_, .error_, .grouped, .if_expression, .try_, .catch_ => {
@@ -467,7 +493,7 @@ fn member_chain(s: *Self) anyerror!Node {
                 _ = try s.eat(.dot);
                 chain = switch (s.l.tok.?) {
                     .identifier => try s.member_access(chain),
-                    else => return error.ParserError,
+                    else => return CompilerError.InvalidDotMemberExpression,
                 };
             },
             .lbrack => chain = try s.array_index(chain),
@@ -542,7 +568,7 @@ fn range_expression(s: *Self, n: Node) anyerror!Node {
 }
 fn use_expression(s: *Self) anyerror!Node {
     _ = try s.eat(.use);
-    if (s.l.tok.? != .string) return error.ParserError;
+    if (s.l.tok.? != .string) return CompilerError.ExpectedStringForUsePath;
     const path = try s.create_node_ptr(try s.literal());
     return Node{ .use = .{ .path = path } };
 }
@@ -802,18 +828,21 @@ fn literal(s: *Self) anyerror!Node {
         .string => Node{ .literal = .{ .kind = .string, .val = try s.eat(.string) } },
         .undefined => Node{ .literal = .{ .kind = .undefined, .val = try s.eat(.undefined) } },
         .null => Node{ .literal = .{ .kind = .null, .val = try s.eat(.null) } },
-        else => return error.ParserError,
+        else => return CompilerError.InvalidLiteral,
     };
 }
 fn eat(s: *Self, expected: Token) ![]const u8 {
-    if (s.l.tok.? != expected) return error.ParserError;
+    if (s.l.tok.? != expected) return CompilerError.UnexpectedToken;
     defer s.l.next_tok();
     return s.l.literal orelse "";
 }
-fn create_node_ptr(s: *Self, n: Node) !*Node {
+fn create_node_ptr(s: *Self, n: Node) std.mem.Allocator.Error!*Node {
     const x = try s.a.create(Node);
     x.* = n;
     return x;
+}
+fn destroy_node_ptr(s: *Self, n: *Node) void {
+    s.a.destroy(n);
 }
 fn save_lexer(s: *Self) LexerState {
     return .{ .tok = s.l.tok, .col = s.l.col, .line = s.l.line, .literal = s.l.literal, .index = s.l.index };
@@ -824,4 +853,12 @@ fn restore_lexer(s: *Self, l: LexerState) void {
     s.l.line = l.line;
     s.l.literal = l.literal;
     s.l.index = l.index;
+}
+fn report_diagnostic(s: *Self, severity: Diagnostic.Severity, msg: []const u8) !void {
+    try s.d.append(Diagnostic{
+        .message = msg,
+        .line = s.l.line,
+        .col = s.l.col,
+        .severity = severity,
+    });
 }

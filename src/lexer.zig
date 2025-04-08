@@ -1,5 +1,6 @@
 const std = @import("std");
 const Token = @import("token.zig").TokenType;
+const CompilerError = @import("compilererror.zig").CompilerError;
 
 const Self = @This();
 const LexingState = enum {
@@ -132,7 +133,7 @@ pub fn next_tok(s: *Self) void {
                 '_' => s.state = .read_underscore,
                 else => {
                     s.tok = .invalid;
-                    s.err = error.InvalidCharacter;
+                    s.err = CompilerError.InvalidCharacter;
                     return;
                 },
             },
@@ -271,7 +272,7 @@ pub fn next_tok(s: *Self) void {
                     '\'' => {
                         if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                             s.tok = .invalid;
-                            s.err = error.InvalidCharLength;
+                            s.err = CompilerError.InvalidCharLength;
                             s.state = .base;
                         } else {
                             s.tok = .char;
@@ -288,7 +289,7 @@ pub fn next_tok(s: *Self) void {
                             else => {
                                 s.tok = .invalid;
                                 s.state = .base;
-                                s.err = error.InvalidEscape;
+                                s.err = CompilerError.InvalidEscape;
                                 return;
                             },
                         }
@@ -575,18 +576,18 @@ pub fn next_tok(s: *Self) void {
         },
         .read_string => {
             if (s.buffer[s.index] != '\"') {
-                // error out
+                // CompilerError.out
             }
             s.tok = .string;
             s.literal = s.buffer[s.placeholder..s.index];
         },
         .read_char => {
             if (s.buffer[s.index] != '\'') {
-                // error out
+                // CompilerError.out
             }
             if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
                 s.tok = .invalid;
-                s.err = error.InvalidEscape;
+                s.err = CompilerError.InvalidCharLength;
                 s.state = .base;
             } else {
                 s.tok = .char;
