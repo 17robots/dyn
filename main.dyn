@@ -1,6 +1,7 @@
 module main;
 io := use "std:io";
 heap := use "std:heap";
+test := use "test";
 
 BasicEnum := enum {
 	item,
@@ -39,7 +40,8 @@ AStruct := struct {
 	here: i32,
 	other: []i32,
 	ptr: *i32,
-	optional: []?*(getType()),
+  uh: []?*getType(),
+  new2 := () i32 => 3;
 	new := () AStruct => .{ items: 0, here: 0, other: [] };
 };
 

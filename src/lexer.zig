@@ -1,8 +1,9 @@
 const std = @import("std");
 const Token = @import("token.zig").TokenType;
 const CompilerError = @import("compilererror.zig").CompilerError;
+const File = @import("file.zig");
 
-const Self = @This();
+const Lexer = @This();
 const LexingState = enum {
     base,
     read_word,
@@ -31,35 +32,33 @@ const LexingState = enum {
     read_multi_comment,
 };
 
-buffer: []const u8,
-index: usize,
-placeholder: usize,
-tok: ?Token,
-literal: ?[]const u8,
-state: LexingState,
-err: ?anyerror,
-line: usize,
-col: usize,
+index: usize = 0,
+placeholder: usize = 0,
+tok: ?Token = null,
+literal: ?[]const u8 = null,
+state: LexingState = .base,
+err: ?anyerror = null,
+line: usize = 1,
+col: usize = 1,
 reading_comment: bool = false,
+file: *File,
 
-pub fn init(buffer: []const u8) Self {
-    return .{ .buffer = buffer, .index = 0, .line = 1, .col = 1, .placeholder = 0, .tok = null, .literal = null, .err = null, .state = .base };
+pub fn init(file: *File) Lexer {
+    return Lexer{ .file = file };
 }
-
-fn is_whitespace(s: Self) bool {
-    return switch (s.buffer[s.index]) {
+fn is_whitespace(s: Lexer) bool {
+    return switch (s.file.content[s.index]) {
         ' ', '\t', '\n', '\r' => true,
         else => false,
     };
 }
-
-pub fn next_tok(s: *Self) void {
+pub fn next_tok(s: *Lexer) void {
     if (s.err != null or s.tok == .eof) return;
     // skip commented chars
     // skip whitespace
     if (s.state != .read_string) {
-        while (s.index < s.buffer.len and s.is_whitespace() or s.reading_comment) {
-            if (s.buffer[s.index] == '\n') {
+        while (s.index < s.file.content.len and s.is_whitespace() or s.reading_comment) {
+            if (s.file.content[s.index] == '\n') {
                 s.line += 1;
                 s.col = 1;
             }
@@ -67,9 +66,9 @@ pub fn next_tok(s: *Self) void {
         }
     }
     s.placeholder = s.index;
-    while (s.index < s.buffer.len) {
+    while (s.index < s.file.content.len) {
         switch (s.state) {
-            .base => switch (s.buffer[s.index]) {
+            .base => switch (s.file.content[s.index]) {
                 'a'...'z', 'A'...'Z', '$' => s.state = .read_word,
                 '0'...'9' => s.state = .read_num,
                 '.' => s.state = .read_dot,
@@ -138,7 +137,7 @@ pub fn next_tok(s: *Self) void {
                 },
             },
             .read_underscore => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
                     else => {
                         s.tok = .underscore;
@@ -148,7 +147,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_word => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     'a'...'z', 'A'...'Z', '0'...'9', '_' => {},
                     else => {
                         if (s.get_keyword()) |k| {
@@ -156,47 +155,47 @@ pub fn next_tok(s: *Self) void {
                             s.literal = null;
                         } else {
                             s.tok = .identifier;
-                            s.literal = s.buffer[s.placeholder..s.index];
+                            s.literal = s.file.content[s.placeholder..s.index];
                         }
                         s.state = .base;
                     },
                 }
             },
             .read_num => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '0'...'9' => {},
                     '.' => s.state = .read_float,
                     else => {
                         s.tok = .int;
-                        s.literal = s.buffer[s.placeholder..s.index];
+                        s.literal = s.file.content[s.placeholder..s.index];
                         s.state = .base;
                     },
                 }
             },
             .read_float => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '0'...'9' => {},
                     '.' => {
-                        if (s.index > 0 and s.buffer[s.index - 1] == '.') {
+                        if (s.index > 0 and s.file.content[s.index - 1] == '.') {
                             s.index -= 1;
                             s.tok = .int;
-                            s.literal = s.buffer[s.placeholder..s.index];
+                            s.literal = s.file.content[s.placeholder..s.index];
                             s.state = .base;
                         } else {
                             s.tok = .float;
-                            s.literal = s.buffer[s.placeholder..s.index];
+                            s.literal = s.file.content[s.placeholder..s.index];
                             s.state = .base;
                         }
                     },
                     else => {
                         s.tok = .float;
-                        s.literal = s.buffer[s.placeholder..s.index];
+                        s.literal = s.file.content[s.placeholder..s.index];
                         s.state = .base;
                     },
                 }
             },
             .read_dot => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '0'...'9' => {
                         s.state = .read_float;
                     },
@@ -226,7 +225,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_colon => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '=' => {
                         s.tok = .walrus;
                         s.literal = null;
@@ -242,7 +241,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_question => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '?' => {
                         s.tok = .nullish;
                         s.literal = null;
@@ -257,10 +256,10 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_string => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '\"' => {
                         s.tok = .string;
-                        s.literal = s.buffer[(s.placeholder + 1)..s.index];
+                        s.literal = s.file.content[(s.placeholder + 1)..s.index];
                         s.index += 1;
                         s.state = .base;
                     },
@@ -268,15 +267,15 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_char => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '\'' => {
-                        if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
+                        if (s.file.content[(s.placeholder + 1)..s.index].len > 1) {
                             s.tok = .invalid;
                             s.err = CompilerError.InvalidCharLength;
                             s.state = .base;
                         } else {
                             s.tok = .char;
-                            s.literal = s.buffer[(s.placeholder + 1)..s.index];
+                            s.literal = s.file.content[(s.placeholder + 1)..s.index];
                             s.state = .base;
                             s.index += 1;
                             return;
@@ -284,7 +283,7 @@ pub fn next_tok(s: *Self) void {
                     },
                     '\\' => {
                         s.index += 1;
-                        switch (s.buffer[s.index]) {
+                        switch (s.file.content[s.index]) {
                             '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
                             else => {
                                 s.tok = .invalid;
@@ -298,7 +297,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_add => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '+' => .addadd,
                     '=' => .addeq,
                     else => .add,
@@ -310,7 +309,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_sub => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '-' => .subsub,
                     '=' => .subeq,
                     else => .sub,
@@ -322,7 +321,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_mul => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '=' => .muleq,
                     else => .mul,
                 };
@@ -333,7 +332,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_div => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '/' => {
                         s.state = .read_comment;
                         s.index += 1;
@@ -343,7 +342,7 @@ pub fn next_tok(s: *Self) void {
                         s.index += 1;
                     },
                     else => {
-                        s.tok = switch (s.buffer[s.index]) {
+                        s.tok = switch (s.file.content[s.index]) {
                             '=' => .diveq,
                             else => .div,
                         };
@@ -356,7 +355,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_comment => {
-                switch (s.buffer[s.index]) {
+                switch (s.file.content[s.index]) {
                     '\n' => {
                         s.state = .base;
                         s.line += 1;
@@ -367,9 +366,9 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_multi_comment => {
-                if (s.buffer[s.index] == '*') {
+                if (s.file.content[s.index] == '*') {
                     s.index += 1;
-                    if (s.buffer[s.index] == '/') {
+                    if (s.file.content[s.index] == '/') {
                         s.index += 1;
                         s.state = .base;
                         return s.next_tok();
@@ -377,7 +376,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_mod => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '=' => .modeq,
                     else => .mod,
                 };
@@ -388,7 +387,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_and => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '&' => .andand,
                     '=' => .andeq,
                     else => .@"and",
@@ -400,7 +399,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_or => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '|' => .oror,
                     '=' => .oreq,
                     else => .@"or",
@@ -412,7 +411,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_xor => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '=' => .xoreq,
                     else => .xor,
                 };
@@ -423,7 +422,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_flip => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '=' => .flipeq,
                     else => .flip,
                 };
@@ -434,7 +433,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_eq => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '>' => .arrow,
                     '=' => .eqeq,
                     else => .eq,
@@ -446,7 +445,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_gt => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '=' => .gteq,
                     else => .gt,
                 };
@@ -457,7 +456,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_lt => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '=' => .lteq,
                     else => .lt,
                 };
@@ -468,7 +467,7 @@ pub fn next_tok(s: *Self) void {
                 }
             },
             .read_bang => {
-                s.tok = switch (s.buffer[s.index]) {
+                s.tok = switch (s.file.content[s.index]) {
                     '=' => .bangeq,
                     else => .bang,
                 };
@@ -495,7 +494,7 @@ pub fn next_tok(s: *Self) void {
             s.literal = null;
         },
         .read_multi_comment => {
-            if (s.buffer[s.index - 1] == '/' and s.buffer[s.index - 2] == '*') {
+            if (s.file.content[s.index - 1] == '/' and s.file.content[s.index - 2] == '*') {
                 s.tok = .eof;
                 s.literal = null;
             } else {
@@ -507,16 +506,16 @@ pub fn next_tok(s: *Self) void {
                 s.tok = k;
             } else {
                 s.tok = .identifier;
-                s.literal = s.buffer[s.placeholder..s.index];
+                s.literal = s.file.content[s.placeholder..s.index];
             }
         },
         .read_num => {
             s.tok = .int;
-            s.literal = s.buffer[s.placeholder..s.index];
+            s.literal = s.file.content[s.placeholder..s.index];
         },
         .read_float => {
             s.tok = .float;
-            s.literal = s.buffer[s.placeholder..s.index];
+            s.literal = s.file.content[s.placeholder..s.index];
         },
         .read_underscore => {
             s.tok = .underscore;
@@ -575,29 +574,29 @@ pub fn next_tok(s: *Self) void {
             s.literal = null;
         },
         .read_string => {
-            if (s.buffer[s.index] != '\"') {
+            if (s.file.content[s.index] != '\"') {
                 // CompilerError.out
             }
             s.tok = .string;
-            s.literal = s.buffer[s.placeholder..s.index];
+            s.literal = s.file.content[s.placeholder..s.index];
         },
         .read_char => {
-            if (s.buffer[s.index] != '\'') {
+            if (s.file.content[s.index] != '\'') {
                 // CompilerError.out
             }
-            if (s.buffer[(s.placeholder + 1)..s.index].len > 1) {
+            if (s.file.content[(s.placeholder + 1)..s.index].len > 1) {
                 s.tok = .invalid;
                 s.err = CompilerError.InvalidCharLength;
                 s.state = .base;
             } else {
                 s.tok = .char;
-                s.literal = s.buffer[(s.placeholder + 1)..s.index];
+                s.literal = s.file.content[(s.placeholder + 1)..s.index];
                 s.state = .base;
                 s.index += 1;
             }
         },
         .read_dot => {
-            switch (s.buffer[s.index]) {
+            switch (s.file.content[s.index]) {
                 '0'...'9' => {
                     s.state = .read_float;
                 },
@@ -616,7 +615,7 @@ pub fn next_tok(s: *Self) void {
             }
         },
         .read_colon => {
-            switch (s.buffer[s.index]) {
+            switch (s.file.content[s.index]) {
                 '=' => {
                     s.tok = .walrus;
                     s.literal = null;
@@ -631,7 +630,7 @@ pub fn next_tok(s: *Self) void {
             }
         },
         .read_question => {
-            switch (s.buffer[s.index]) {
+            switch (s.file.content[s.index]) {
                 '?' => {
                     s.tok = .nullish;
                     s.literal = null;
@@ -649,82 +648,31 @@ pub fn next_tok(s: *Self) void {
     }
     s.state = .base;
 }
-
-fn get_keyword(s: *Self) ?Token {
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "module")) {
-        return .module;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "use")) {
-        return .use;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "mut")) {
-        return .mut;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "true")) {
-        return .true;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "false")) {
-        return .false;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "if")) {
-        return .@"if";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "else")) {
-        return .@"else";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "match")) {
-        return .match;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "defer")) {
-        return .@"defer";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "for")) {
-        return .@"for";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "enum")) {
-        return .@"enum";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "error")) {
-        return .@"error";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "try")) {
-        return .@"try";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "catch")) {
-        return .@"catch";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "struct")) {
-        return .@"struct";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "type")) {
-        return .type;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "comp")) {
-        return .comp;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "pub")) {
-        return .@"pub";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "while")) {
-        return .@"while";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "undefined")) {
-        return .undefined;
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "return")) {
-        return .@"return";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "break")) {
-        return .@"break";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "inline")) {
-        return .@"inline";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "packed")) {
-        return .@"packed";
-    }
-    if (std.mem.eql(u8, s.buffer[s.placeholder..s.index], "continue")) {
-        return .@"continue";
-    }
+fn get_keyword(s: *Lexer) ?Token {
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "module")) return .module;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "use")) return .use;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "mut")) return .mut;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "true")) return .true;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "false")) return .false;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "if")) return .@"if";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "else")) return .@"else";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "match")) return .match;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "defer")) return .@"defer";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "for")) return .@"for";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "enum")) return .@"enum";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "error")) return .@"error";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "try")) return .@"try";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "catch")) return .@"catch";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "struct")) return .@"struct";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "type")) return .type;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "comp")) return .comp;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "pub")) return .@"pub";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "while")) return .@"while";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "undefined")) return .undefined;
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "return")) return .@"return";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "break")) return .@"break";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "inline")) return .@"inline";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "packed")) return .@"packed";
+    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "continue")) return .@"continue";
     return null;
 }

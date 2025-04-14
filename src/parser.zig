@@ -6,234 +6,473 @@ const LiteralKind = @import("ast.zig").LiteralKind;
 const Op = @import("ast.zig").Op;
 const AssignOp = @import("ast.zig").AssignOp;
 const NodeList = std.ArrayList(Node);
-const CompilerError = @import("compilererror.zig").CompilerError;
+const File = @import("file.zig");
 const Diagnostic = @import("diagnostic.zig");
 
-const Self = @This();
-
+const Parser = @This();
 const LexerState = struct { tok: ?Token, literal: ?[]const u8, line: usize, col: usize, index: usize };
+const ParsingResult = union(enum) { node: Node, diagnostic: Diagnostic, string: []const u8, assign_op: AssignOp, op: Op, none };
 
-l: Lexer,
+l: *Lexer,
 a: std.mem.Allocator,
-d: *std.ArrayList(Diagnostic),
+f: *File,
 
-pub fn init(alloc: std.mem.Allocator, buf: []const u8) Self {
-    return Self{ .l = Lexer.init(buf), .a = alloc };
+pub fn init(alloc: std.mem.Allocator, f: *File, l: *Lexer) Parser {
+    return Parser{ .l = l, .f = f, .a = alloc };
 }
-
-// catch and report error
-pub fn program(s: *Self) anyerror!Node {
+pub fn program(s: *Parser) ParsingResult {
     s.l.next_tok();
     var declarations = NodeList.init(s.a);
-    errdefer declarations.deinit();
-    try declarations.append(try s.module_declaration());
-    while (s.l.tok.? != .eof) {
-        if (s.l.err) |err| {}
-        const d = s.declaration() catch |err| switch (err) {
-            error.InvalidDeclarationToken => {
-                try s.report_diagnostic(.err, try std.fmt.allocPrint(s.a, "{}: got: {}, wanted := val or : [type] =", .{CompilerError.to_string(err), s.l.tok.?}));
+    append(&declarations, switch (s.module_declaration()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    blk: while (s.l.tok.? != .eof) {
+        append(&declarations, switch (s.declaration()) {
+            .diagnostic => |d| {
+                s.f.diagnostics.append(d) catch |e| @panic(@errorName(e));
+                s.recover(&[_]Token{ .rbrace, .semicolon });
+                continue :blk;
             },
-            error.InvalidFunctionBodyToken => {},
-            error.InvalidOperatorToken => {},
-            error.AtLeastOneExpressionExpected => {},
-            error.InvalidElseBodyMarker => {},
-            error.InvalidPostDotExpression => {},
-            error.InvalidPrefixExpression => {},
-            error.InvalidDotMemberExpression => {},
-            error.UnexpectedToken => {},
-            error.InvalidLiteral => {},
-            error.ExpectedStringForUsePath => {},
-            error.InvalidCharacter => {},
-            error.InvalidCharLength => {},
-            error.InvalidEscape => {},
-            else => return err,
-        };
-        try declarations.append(d);
+            .node => |n| n,
+            else => unreachable,
+        });
     }
-    return Node{ .program = .{ .declarations = declarations } };
+    return node(Node{ .program = .{ .declarations = declarations } });
 }
-fn module_declaration(s: *Self) anyerror!Node {
-    _ = try s.eat(.module);
-    const name = try s.create_node_ptr(try s.identifier());
-    _ = try s.eat(.semicolon);
-    return Node{ .module = .{ .name = name } };
+fn module_declaration(s: *Parser) ParsingResult {
+    switch (s.eat(.module)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const name = s.create_node_ptr(switch (s.identifier()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    switch (s.eat(.semicolon)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .module = .{ .name = name } });
 }
-
-fn declaration(s: *Self) anyerror!Node {
+fn declaration(s: *Parser) ParsingResult {
     const pub_ = if (s.l.tok.? == .@"pub") blk: {
-        _ = try s.eat(.@"pub");
-        break :blk true;
+        switch (s.eat(.@"pub")) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => break :blk true,
+        }
     } else false;
-    const name = try s.create_node_ptr(try s.identifier());
+    const name = s.create_node_ptr(switch (s.identifier()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
     const type_ = switch (s.l.tok.?) {
         .walrus => null,
         .colon => blk: {
-            _ = try s.eat(.colon);
-            break :blk try s.create_node_ptr(try s.non_literal_expression());
+            switch (s.eat(.colon)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            break :blk s.create_node_ptr(switch (s.non_literal_expression()) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable,
+            });
         },
-        else => return CompilerError.InvalidDeclarationToken,
+        else => return s.diagnostic(.err, "Unexpected token {any}, expected : [type] or :=", .{s.l.tok.?}),
     };
     switch (s.l.tok.?) {
-        .walrus, .eq => _ = try s.eat(s.l.tok.?),
-        else => return CompilerError.InvalidDeclarationToken,
+        .walrus, .eq => switch (s.eat(s.l.tok.?)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        },
+        else => return s.diagnostic(.err, "Unexpected token {any}, wanted := or =", .{s.l.tok.?}),
     }
-    const val = try s.create_node_ptr(try s.expression(0));
-    _ = try s.eat(.semicolon);
-    return Node{ .declaration = .{ .pub_ = pub_, .name = name, .type = type_, .val = val } };
+    const val = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    switch (s.eat(.semicolon)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .declaration = .{ .pub_ = pub_, .name = name, .type = type_, .val = val } });
 }
-fn mut_declaration(s: *Self) anyerror!Node {
+fn mut_declaration(s: *Parser) ParsingResult {
     const mut = if (s.l.tok.? == .mut) blk: {
-        _ = try s.eat(.mut);
-        break :blk true;
+        switch (s.eat(.mut)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => break :blk true,
+        }
     } else false;
-    const name = try s.create_node_ptr(try s.identifier());
+    const name = s.create_node_ptr(switch (s.identifier()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
     const type_ = switch (s.l.tok.?) {
         .walrus => null,
         .colon => blk: {
-            _ = try s.eat(.colon);
-            break :blk try s.create_node_ptr(try s.non_literal_expression());
+            switch (s.eat(.colon)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            break :blk s.create_node_ptr(switch (s.non_literal_expression()) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable,
+            });
         },
-        else => return CompilerError.InvalidDeclarationToken,
+        else => return s.diagnostic(.err, "Unexpected token {any}, expected : [type] or :=", .{s.l.tok.?}),
     };
     switch (s.l.tok.?) {
-        .walrus, .eq => _ = try s.eat(s.l.tok.?),
-        else => return CompilerError.InvalidDeclarationToken,
+        .walrus, .eq => switch (s.eat(s.l.tok.?)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        },
+        else => return s.diagnostic(.err, "Unexpected token {any}, wanted := or =", .{s.l.tok.?}),
     }
-    const val = try s.create_node_ptr(try s.expression(0));
-    return Node{ .mut_declaration = .{ .mut = mut, .name = name, .type = type_, .val = val } };
+    const val = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .mut_declaration = .{ .mut = mut, .name = name, .type = type_, .val = val } });
 }
-
-// catch and report error
-fn statement(s: *Self) anyerror!Node {
+fn statement(s: *Parser) ParsingResult {
     return switch (s.l.tok.?) {
-        .@"if" => try s.if_statement(),
-        .@"for", .@"inline" => try s.for_statement(),
-        .@"while" => try s.while_statement(),
-        .@"defer" => try s.defer_statement(),
-        .match => try s.match(),
-        .lbrace => try s.block(),
+        .@"if" => s.if_statement(),
+        .@"for", .@"inline" => s.for_statement(),
+        .@"while" => s.while_statement(),
+        .@"defer" => s.defer_statement(),
+        .match => s.match(),
+        .lbrace => s.block(),
         .mut => blk: {
-            const x = try s.mut_declaration();
-            _ = try s.eat(.semicolon);
-            break :blk x;
+            const x = switch (s.mut_declaration()) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                .node => |n| n,
+                else => unreachable,
+            };
+            switch (s.eat(.semicolon)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            break :blk node(x);
         },
         else => blk: {
             const state = s.save_lexer();
-            const x = s.labeled_block() catch blk2: {
-                s.restore_lexer(state);
-                break :blk2 s.assign_expression() catch blk3: {
+            var result: ParsingResult = undefined;
+            var max_index: usize = 0;
+            switch (s.labeled_block()) {
+                .diagnostic => |d| {
+                    if (s.l.index > max_index) {
+                        max_index = s.l.index;
+                        result = .{ .diagnostic = d };
+                    }
                     s.restore_lexer(state);
-                    break :blk3 s.mut_declaration() catch blk4: {
-                        s.restore_lexer(state);
-                        break :blk4 try s.expression(0);
-                    };
-                };
-            };
-            if (x != .block) _ = try s.eat(.semicolon);
-            break :blk x;
-        },
+                    switch (s.assign_expression()) {
+                        .diagnostic => |d2| {
+                            if (s.l.index > max_index) {
+                                max_index = s.l.index;
+                                result = .{ .diagnostic = d2 };
+                            }
+                            s.restore_lexer(state);
+                            switch (s.mut_declaration()) {
+                                .diagnostic => |d3| {
+                                    if (s.l.index > max_index) {
+                                        max_index = s.l.index;
+                                        result = .{ .diagnostic = d3 };
+                                    }
+                                    s.restore_lexer(state);
+                                    switch (s.expression(0)) {
+                                        .diagnostic => |d4| {
+                                            if (s.l.index > max_index) {
+                                                max_index = s.l.index;
+                                                result = .{ .diagnostic = d4 };
+                                            }
+                                        },
+                                        .node => |n| result = node(n),
+                                        else => unreachable
+                                    }
+                                },
+                                .node => |n| result = node(n),
+                                else => unreachable
+                            }
+                        },
+                        .node => |n| result = node(n),
+                        else => unreachable
+                    }
+                },
+                .node => |n| result = node(n),
+                else => unreachable
+            }
+            switch (result) {
+                .node => |n| {
+                    if (n != .block) {
+                        switch (s.eat(.semicolon)) {
+                            .diagnostic => |d| return .{ .diagnostic = d },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+            break :blk result;
+        }
     };
 }
-// catch and report error
-fn block(s: *Self) anyerror!Node {
+// error and recover
+fn block(s: *Parser) ParsingResult {
     var statements = NodeList.init(s.a);
-    _ = try s.eat(.lbrace);
-    while (s.l.tok.? != .eof) {
+    switch (s.eat(.lbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    blk: while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrace) break;
-        try statements.append(try s.statement());
+        switch (s.statement()) {
+            .diagnostic => |d| {
+                s.f.diagnostics.append(d) catch |e| @panic(@errorName(e));
+                s.recover(&[_]Token{ .rbrace, .semicolon });
+                continue :blk;
+            },
+            .node => |n| append(&statements, n),
+            else => {},
+        }
         if (s.l.tok.? == .rbrace) break;
     }
-    _ = try s.eat(.rbrace);
-    return Node{ .block = .{ .label = null, .statements = statements } };
+    switch (s.eat(.rbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .block = .{ .label = null, .statements = statements } });
 }
-// catch and report error
-fn labeled_block(s: *Self) anyerror!Node {
+fn labeled_block(s: *Parser) ParsingResult {
     const label = if (s.l.tok.? == .identifier) blk: {
-        const x = try s.create_node_ptr(try s.identifier());
-        _ = try s.eat(.colon);
+        const x = s.create_node_ptr(switch (s.identifier()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable,
+        });
+        switch (s.eat(.colon)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
         break :blk x;
     } else null;
     var statements = NodeList.init(s.a);
-    _ = try s.eat(.lbrace);
-    while (s.l.tok.? != .eof) {
+    switch (s.eat(.lbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    blk: while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrace) break;
-        try statements.append(try s.statement());
+        switch (s.statement()) {
+            .diagnostic => |d| {
+                s.f.diagnostics.append(d) catch |e| @panic(@errorName(e));
+                s.recover(&[_]Token{ .rbrace, .semicolon });
+                continue :blk;
+            },
+            .node => |n| append(&statements, n),
+            else => {},
+        }
         if (s.l.tok.? == .rbrace) break;
     }
-    _ = try s.eat(.rbrace);
-    return Node{ .block = .{ .label = label, .statements = statements } };
+    switch (s.eat(.rbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .block = .{ .label = label, .statements = statements } });
 }
-fn function(s: *Self) anyerror!Node {
+fn function(s: *Parser) ParsingResult {
     const inline_ = if (s.l.tok.? == .@"inline") blk: {
-        _ = try s.eat(.@"inline");
+        switch (s.eat(.@"inline")) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
         break :blk true;
     } else false;
-    _ = try s.eat(.lparen);
+    switch (s.eat(.lparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var parameters = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rparen) break;
-        try parameters.append(try s.function_parameter());
+        switch (s.function_parameter()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&parameters, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rparen) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.rparen);
-    const result = try s.function_result();
+    switch (s.eat(.rparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const result = s.function_result();
     const body = switch (s.l.tok.?) {
-        .arrow => try s.create_node_ptr(try s.arrow_expression()),
-        .lbrace => try s.create_node_ptr(try s.block()),
-        else => return CompilerError.InvalidFunctionBodyToken,
+        .arrow => s.create_node_ptr(switch (s.arrow_expression()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable,
+        }),
+        .lbrace => s.create_node_ptr(switch (s.block()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable,
+        }),
+        else => return s.diagnostic(.err, "Unexpected Function Body {any}, expected => or block", .{s.l.tok.?}),
     };
-    return Node{ .function = .{ .inline_ = inline_, .parameters = parameters, .result = if (result) |r| try s.create_node_ptr(r) else null, .body = body } };
+    return node(Node{ .function = .{ .inline_ = inline_, .parameters = parameters, .result = switch (result) {
+        .node => |n| s.create_node_ptr(n),
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .none => null,
+        else => unreachable,
+    }, .body = body } });
 }
-fn function_parameter(s: *Self) anyerror!Node {
+fn function_parameter(s: *Parser) ParsingResult {
     var names = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .colon) break;
-        try names.append(try s.identifier());
+        switch (s.identifier()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&names, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .colon) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.colon);
-    const t = try s.create_node_ptr(if (s.l.tok.? == .comp) try s.comp_expression() else try s.non_literal_expression());
-    return Node{ .function_parameter = .{ .names = names, .type = t } };
+    switch (s.eat(.colon)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const t = if (s.l.tok.? == .comp) switch (s.comp_expression()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    } else switch (s.non_literal_expression()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    };
+    return node(Node{ .function_parameter = .{ .names = names, .type = s.create_node_ptr(t) } });
 }
-fn function_result(s: *Self) anyerror!?Node {
+fn function_result(s: *Parser) ParsingResult {
     var expr = switch (s.l.tok.?) {
         .arrow, .bang, .lbrace => null,
-        else => try s.non_literal_expression(),
+        else => switch (s.non_literal_expression()) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        },
     };
-    if (s.l.tok.? == .bang) expr = try s.error_union_type(expr);
-    return expr;
+    if (s.l.tok.? == .bang) switch (s.error_union_type(expr)) {
+        .node => |n| expr = n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    };
+    return if (expr) |e| node(e) else ParsingResult.none;
 }
-fn function_type(s: *Self) anyerror!Node {
-    _ = try s.eat(.lparen);
+fn function_type(s: *Parser) ParsingResult {
+    switch (s.eat(.lparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var parameters = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rparen) break;
-        try parameters.append(try s.non_literal_expression());
+        switch (s.non_literal_expression()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&parameters, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rparen) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.rparen);
-    const result = try s.function_result();
-    return Node{ .function_type = .{ .parameters = parameters, .result = if (result) |r| try s.create_node_ptr(r) else null } };
+    switch (s.eat(.rparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const result = s.function_result();
+    return node(Node{ .function_type = .{ .parameters = parameters, .result = switch (result) {
+        .node => |n| s.create_node_ptr(n),
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .none => null,
+        else => unreachable
+    } } });
 }
-fn arrow_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.arrow);
+fn arrow_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.arrow)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     const state = s.save_lexer();
-    return Node{ .arrow_expression = .{ .expression = try s.create_node_ptr(s.assign_expression() catch blk: {
-        s.restore_lexer(state);
-        break :blk try s.expression(0);
-    }) } };
+    return node(Node{ .arrow_expression = .{ .expression = s.create_node_ptr(blk: {
+        var result: ParsingResult = undefined;
+        var max_index: usize = 0;
+        switch (s.assign_expression()) {
+            .diagnostic => |d| {
+                if (s.l.index > max_index) {
+                    max_index = s.l.index;
+                    result = .{ .diagnostic = d };
+                }
+                s.restore_lexer(state);
+                switch (s.expression(0)) {
+                    .diagnostic => |d2| {
+                        if (s.l.index > max_index) {
+                            max_index = s.l.index;
+                            result = .{ .diagnostic = d2 };
+                        }
+                    },
+                    .node => |n| result = node(n),
+                    else => unreachable
+                }
+            },
+            .node => |n| result = node(n),
+            else => unreachable
+        }
+        break :blk switch (result) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable
+        };
+    }) } });
 }
-fn assign_expression(s: *Self) anyerror!Node {
-    const l = try s.create_node_ptr(try s.expression(0));
-    const op = try s.assign_operator();
-    const r = try s.create_node_ptr(try s.expression(0));
-    return Node{ .assign_expression = .{ .left = l, .op = op, .right = r } };
+fn assign_expression(s: *Parser) ParsingResult {
+    const l = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    const op = switch (s.assign_operator()) {
+        .assign_op => |a| a,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    };
+    const r = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .assign_expression = .{ .left = l, .op = op, .right = r } });
 }
 
-fn assign_operator(s: *Self) !AssignOp {
+fn assign_operator(s: *Parser) ParsingResult {
     const op: AssignOp = switch (s.l.tok.?) {
         .addeq => .addeq,
         .subeq => .subeq,
@@ -244,12 +483,15 @@ fn assign_operator(s: *Self) !AssignOp {
         .andeq => .andeq,
         .oreq => .oreq,
         .eq => .eq,
-        else => return CompilerError.InvalidOperatorToken,
+        else => return s.diagnostic(.err, "Unexpected assign op {any}", .{s.l.tok.?}),
     };
-    _ = try s.eat(s.l.tok.?);
-    return op;
+    switch (s.eat(s.l.tok.?)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return .{ .assign_op = op };
 }
-fn operator(s: *Self) !Op {
+fn operator(s: *Parser) ParsingResult {
     const op: Op = switch (s.l.tok.?) {
         .add => .add,
         .sub => .sub,
@@ -269,243 +511,571 @@ fn operator(s: *Self) !Op {
         .oror => .oror,
         .bangeq => .bangeq,
         .nullish => .nullish,
-        else => return CompilerError.InvalidOperatorToken,
+        else => return s.diagnostic(.err, "Unexpected assign op {any}", .{s.l.tok.?}),
     };
-    _ = try s.eat(s.l.tok.?);
-    return op;
+    switch (s.eat(s.l.tok.?)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return .{ .op = op };
 }
-fn if_prefix(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"if");
-    const expr = try s.create_node_ptr(try s.expression(0));
+fn if_prefix(s: *Parser) ParsingResult {
+    switch (s.eat(.@"if")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const expr = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
     const cap = if (s.l.tok.? == .colon) blk: {
-        _ = try s.eat(.colon);
-        break :blk try s.create_node_ptr(try s.capture());
+        switch (s.eat(.colon)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
+        break :blk s.create_node_ptr(switch (s.capture()) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        });
     } else null;
-    return Node{ .if_prefix = .{ .expression = expr, .capture = cap } };
+    return node(Node{ .if_prefix = .{ .expression = expr, .capture = cap } });
 }
-fn while_prefix(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"while");
-    const expr = try s.create_node_ptr(try s.expression(0));
+fn while_prefix(s: *Parser) ParsingResult {
+    switch (s.eat(.@"while")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const expr = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
     const cap = if (s.l.tok.? == .colon) blk: {
-        _ = try s.eat(.colon);
-        break :blk try s.create_node_ptr(try s.capture());
+        switch (s.eat(.colon)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
+        break :blk s.create_node_ptr(switch (s.capture()) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        });
     } else null;
-    return Node{ .while_prefix = .{ .expression = expr, .capture = cap } };
+    return node(Node{ .while_prefix = .{ .expression = expr, .capture = cap } });
 }
-fn for_prefix(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"for");
+fn for_prefix(s: *Parser) ParsingResult {
+    switch (s.eat(.@"for")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var expressions = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .colon) break;
-        try expressions.append(try s.expression(0));
+        switch (s.expression(0)) {
+            .node => |n| append(&expressions, n),
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        }
         if (s.l.tok.? == .colon) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    if (expressions.items.len == 0) return CompilerError.AtLeastOneExpressionExpected;
-    _ = try s.eat(.colon);
-    const cap = try s.create_node_ptr(try s.capture());
-    return Node{ .for_prefix = .{ .expressions = expressions, .capture = cap } };
+    if (expressions.items.len == 0) return s.diagnostic(.err, "Expected at least 1 expression in for loop, got 0", .{});
+    switch (s.eat(.colon)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const cap = s.create_node_ptr(switch (s.capture()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .for_prefix = .{ .expressions = expressions, .capture = cap } });
 }
-fn match(s: *Self) anyerror!Node {
-    _ = try s.eat(.match);
-    const expr = try s.create_node_ptr(try s.expression(0));
+fn match(s: *Parser) ParsingResult {
+    switch (s.eat(.match)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const expr = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
     var arms = NodeList.init(s.a);
-    _ = try s.eat(.lbrace);
+    switch (s.eat(.lbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrace) break;
-        try arms.append(try s.arm());
+        switch (s.arm()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&arms, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rbrace) break;
     }
-    _ = try s.eat(.rbrace);
-    return Node{ .match = .{ .expression = expr, .arms = arms } };
+    switch (s.eat(.rbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .match = .{ .expression = expr, .arms = arms } });
 }
-fn arm(s: *Self) anyerror!Node {
+fn arm(s: *Parser) ParsingResult {
     var expressions = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .colon) break;
-        try expressions.append(try s.expression(0));
+        switch (s.expression(0)) {
+            .node => |n| append(&expressions, n),
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        }
         if (s.l.tok.? == .colon) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.colon);
-    const cap = if (s.l.tok.? == .@"or") try s.create_node_ptr(try s.capture()) else null;
-    const result = try s.create_node_ptr(try s.result_block_expression());
-    if (s.l.tok.? != .rbrace) _ = try s.eat(.comma);
-    return Node{ .arm = .{ .expressions = expressions, .capture = cap, .result = result } };
+    switch (s.eat(.colon)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const cap = if (s.l.tok.? == .@"or") s.create_node_ptr(switch (s.capture()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    }) else null;
+    const result = s.create_node_ptr(switch (s.result_block_expression()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    if (s.l.tok.? != .rbrace) switch (s.eat(.comma)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    };
+    return node(Node{ .arm = .{ .expressions = expressions, .capture = cap, .result = result } });
 }
-fn if_statement(s: *Self) anyerror!Node {
-    const prefix = try s.create_node_ptr(try s.if_prefix());
-    const body = try s.create_node_ptr(if (s.l.tok.? == .lbrace) try s.block() else blk: {
+fn if_statement(s: *Parser) ParsingResult {
+    const prefix = s.create_node_ptr(switch (s.if_prefix()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    const body = s.create_node_ptr(if (s.l.tok.? == .lbrace) switch (s.block()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    } else blk: {
         const state = s.save_lexer();
-        break :blk s.assign_expression() catch blk2: {
-            s.restore_lexer(state);
-            break :blk2 try s.expression(0);
+        var result: ParsingResult = undefined;
+        var max_index: usize = 0;
+        switch (s.assign_expression()) {
+            .node => |n| result = node(n),
+            .diagnostic => |d| {
+                if (s.l.index > max_index) {
+                    max_index = s.l.index;
+                    result = .{ .diagnostic = d };
+                }
+                s.restore_lexer(state);
+                switch (s.expression(0)) {
+                    .node => |n| result = node(n),
+                    .diagnostic => |d2| {
+                        if (s.l.index > max_index) {
+                            max_index = s.l.index;
+                            result = .{ .diagnostic = d2 };
+                        }
+                    },
+                    else => unreachable,
+                }
+            },
+            else => unreachable,
+        }
+        break :blk switch (result) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable
         };
     });
     const else_body = switch (s.l.tok.?) {
         .semicolon => blk: {
-            _ = try s.eat(.semicolon);
+            switch (s.eat(.semicolon)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
             break :blk null;
         },
         .@"else" => blk: {
-            _ = try s.eat(.@"else");
-            break :blk try s.create_node_ptr(try s.result_block());
+            switch (s.eat(.@"else")) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            break :blk s.create_node_ptr(switch (s.result_block()) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable,
+            });
         },
-        else => return CompilerError.InvalidElseBodyMarker,
+        else => return s.diagnostic(.err, "Unexpected token {any}, expected ; or else statement", .{s.l.tok.?}),
     };
-    return Node{ .if_statement = .{ .prefix = prefix, .body = body, .else_body = else_body } };
+    return node(Node{ .if_statement = .{ .prefix = prefix, .body = body, .else_body = else_body } });
 }
-fn while_statement(s: *Self) anyerror!Node {
-    const prefix = try s.create_node_ptr(try s.while_prefix());
-    const body = try s.create_node_ptr(try s.result_block());
-    return Node{ .while_statement = .{ .prefix = prefix, .body = body } };
+fn while_statement(s: *Parser) ParsingResult {
+    const prefix = s.create_node_ptr(switch (s.while_prefix()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    const body = s.create_node_ptr(switch (s.result_block()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .while_statement = .{ .prefix = prefix, .body = body } });
 }
-fn for_statement(s: *Self) anyerror!Node {
+fn for_statement(s: *Parser) ParsingResult {
     const inline_ = if (s.l.tok.? == .@"inline") blk: {
-        _ = try s.eat(.@"inline");
+        switch (s.eat(.@"inline")) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
         break :blk true;
     } else false;
-    const prefix = try s.create_node_ptr(try s.for_prefix());
-    const body = try s.create_node_ptr(try s.result_block());
-    return Node{ .for_statement = .{ .inline_ = inline_, .prefix = prefix, .body = body } };
+    const prefix = s.create_node_ptr(switch (s.for_prefix()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    const body = s.create_node_ptr(switch (s.result_block()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .for_statement = .{ .inline_ = inline_, .prefix = prefix, .body = body } });
 }
-fn defer_statement(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"defer");
-    const cap = if (s.l.tok.? == .@"or") try s.create_node_ptr(try s.capture()) else null;
-    const body = try s.create_node_ptr(try s.result_block());
-    return Node{ .defer_statement = .{ .capture = cap, .body = body } };
+fn defer_statement(s: *Parser) ParsingResult {
+    switch (s.eat(.@"defer")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const cap = if (s.l.tok.? == .@"or") s.create_node_ptr(switch (s.capture()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    }) else null;
+    const body = s.create_node_ptr(switch (s.result_block()) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .defer_statement = .{ .capture = cap, .body = body } });
 }
-fn result_block(s: *Self) anyerror!Node {
-    return if (s.l.tok.? == .lbrace) try s.labeled_block() else try s.statement();
-}
-fn result_block_expression(s: *Self) anyerror!Node {
-    const state = s.save_lexer();
-    return s.labeled_block() catch blk: {
-        s.restore_lexer(state);
-        break :blk s.assign_expression() catch blk2: {
-            s.restore_lexer(state);
-            break :blk2 try s.expression(0);
-        };
+fn result_block(s: *Parser) ParsingResult {
+    return if (s.l.tok.? == .lbrace) switch (s.labeled_block()) {
+        .node => |n| node(n),
+        .diagnostic => |d| .{ .diagnostic = d },
+        else => unreachable,
+    } else switch (s.statement()) {
+        .node => |n| node(n),
+        .diagnostic => |d| .{ .diagnostic = d },
+        else => unreachable,
     };
 }
-fn expression(s: *Self, prec: u8) anyerror!Node {
+fn result_block_expression(s: *Parser) ParsingResult {
+    const state = s.save_lexer();
+    var result: ParsingResult = undefined;
+    var max_index: usize = 0;
+    return switch (s.labeled_block()) {
+        .node => |n| node(n),
+        .diagnostic => |d| blk: {
+            if (s.l.index > max_index) {
+                max_index = s.l.index;
+                result = .{ .diagnostic = d };
+            }
+            s.restore_lexer(state);
+            switch (s.assign_expression()) {
+                .node => |n| result = node(n),
+                .diagnostic => |d2| {
+                    if (s.l.index > max_index) {
+                        max_index = s.l.index;
+                        result = .{ .diagnostic = d2 };
+                    }
+                    s.restore_lexer(state);
+                    switch (s.expression(0)) {
+                        .node => |n| result = node(n),
+                        .diagnostic => |d3| {
+                            if (s.l.index > max_index) {
+                                max_index = s.l.index;
+                                result = .{ .diagnostic = d3 };
+                            }
+                        },
+                        else => unreachable,
+                    }
+                },
+                else => unreachable,
+            }
+            break :blk result;
+        },
+        else => unreachable,
+    };
+}
+fn expression(s: *Parser, prec: u8) ParsingResult {
     switch (s.l.tok.?) {
-        .@"return" => return try s.return_expression(),
-        .@"break" => return try s.break_expression(),
-        .@"continue" => return try s.continue_expression(),
-        .@"for" => return try s.for_expression(),
-        .@"while" => return try s.while_expression(),
-        .comp => return try s.comp_expression(),
-        .use => return try s.use_expression(),
-        .@"if" => return try s.if_expression(),
+        .@"return" => return s.return_expression(),
+        .@"break" => return s.break_expression(),
+        .@"continue" => return s.continue_expression(),
+        .@"for" => return s.for_expression(),
+        .@"while" => return s.while_expression(),
+        .comp => return s.comp_expression(),
+        .use => return s.use_expression(),
+        .@"if" => return s.if_expression(),
         .underscore => {
-            _ = try s.eat(.underscore);
-            return Node.underscore;
+            switch (s.eat(.underscore)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            return node(Node.underscore);
         },
         else => {},
     }
     var expr = switch (s.l.tok.?) {
-        .int, .float, .string, .char, .true, .false, .undefined, .null => try s.literal(),
-        .bang, .flip, .sub, .@"and" => try s.unary_expression(),
-        else => try s.non_literal_expression(),
+        .int, .float, .string, .char, .true, .false, .undefined, .null => switch (s.literal()) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        },
+        .bang, .flip, .sub, .@"and" => switch (s.unary_expression()) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        },
+        else => switch (s.non_literal_expression()) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable,
+        },
     };
     while (s.l.tok.? != .eof and prec < s.precedence()) {
-        if (s.l.tok.? == .dotdot) return try s.range_expression(expr);
+        if (s.l.tok.? == .dotdot) return switch (s.range_expression(expr)) {
+            .node => |n| node(n),
+            .diagnostic => |d| .{ .diagnostic = d },
+            else => unreachable,
+        };
         const new_prec = s.precedence();
         const state = s.save_lexer();
-        const op = s.operator() catch {
-            s.restore_lexer(state);
-            return expr;
+        const op = switch (s.operator()) {
+            .diagnostic => {
+                s.restore_lexer(state);
+                return node(expr);
+            },
+            .op => |o| o,
+            else => unreachable
         };
-        expr = Node{ .binary = .{ .a = try s.create_node_ptr(expr), .op = op, .b = try s.create_node_ptr(try s.expression(new_prec)) } };
+        expr = Node{ .binary = .{ .a = s.create_node_ptr(expr), .op = op, .b = s.create_node_ptr(switch (s.expression(new_prec)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable,
+        }) } };
     }
-    return expr;
+    return node(expr);
 }
-fn non_literal_expression(s: *Self) anyerror!Node {
+fn non_literal_expression(s: *Parser) ParsingResult {
     var expr = switch (s.l.tok.?) {
-        .identifier => try s.member_chain(),
-        .question => try s.optional_type(),
-        .mul => try s.pointer_type(),
-        .@"try" => try s.try_expression(),
-        .@"if" => try s.if_expression(),
-        .@"inline" => try s.function(),
+        .identifier => s.member_chain(),
+        .question => s.optional_type(),
+        .mul => s.pointer_type(),
+        .@"try" => s.try_expression(),
+        .@"if" => s.if_expression(),
+        .@"inline" => s.function(),
         .lparen => blk: {
             const state = s.save_lexer();
-            break :blk s.function() catch blk2: {
-                s.restore_lexer(state);
-                break :blk2 s.function_type() catch blk3: {
+            var result: ParsingResult = undefined;
+            var max_index: usize = 0;
+            switch (s.function()) {
+                .node => |n| result = node(n),
+                .diagnostic => |d| {
+                    if (s.l.index > max_index) {
+                        max_index = s.l.index;
+                        result = .{ .diagnostic = d };
+                    }
                     s.restore_lexer(state);
-                    break :blk3 try s.grouped_expression();
-                };
-            };
+                    switch (s.function_type()) {
+                        .node => |n| result = node(n),
+                        .diagnostic => |d2| {
+                            if (s.l.index > max_index) {
+                                max_index = s.l.index;
+                                result = .{ .diagnostic = d2 };
+                            }
+                            s.restore_lexer(state);
+                            switch (s.grouped_expression()) {
+                                .node => |n| result = node(n),
+                                .diagnostic => |d3| {
+                                    if (s.l.index > max_index) {
+                                        max_index = s.l.index;
+                                        result = .{ .diagnostic = d3 };
+                                    }
+                                },
+                                else => unreachable
+                            }
+                        },
+                        else => unreachable
+                    }
+                },
+                else => unreachable
+            }
+            break :blk result;
         },
-        .@"struct" => try s.struct_(),
-        .@"enum" => try s.enum_(),
-        .@"error" => try s.error_(),
-        .match => try s.match(),
+        .@"struct" => s.struct_(),
+        .@"enum" => s.enum_(),
+        .@"error" => s.error_(),
+        .match => s.match(),
         .type => blk: {
-            _ = try s.eat(.type);
-            break :blk Node.type;
+            switch (s.eat(.type)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            break :blk node(Node.type);
         },
         .dot => blk: {
-            _ = try s.eat(.dot);
+            switch (s.eat(.dot)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
             const state = s.save_lexer();
             break :blk switch (s.l.tok.?) {
-                .lbrace => try s.struct_initialization(),
-                .identifier => s.struct_initialization() catch blk2: {
-                    s.restore_lexer(state);
-                    break :blk2 try s.enum_error_initialization();
+                .lbrace => s.struct_initialization(),
+                .identifier => blk2: {
+                    var result: ParsingResult = undefined;
+                    var max_index: usize = 0;
+                    switch (s.struct_initialization()) {
+                        .diagnostic => |d| {
+                            if (s.l.index > max_index) {
+                                max_index = s.l.index;
+                                result = .{ .diagnostic = d };
+                            }
+                            s.restore_lexer(state);
+                            switch (s.enum_error_initialization()) {
+                                .diagnostic => |d2| {
+                                    if (s.l.index > max_index) {
+                                        max_index = s.l.index;
+                                        result = .{ .diagnostic = d2 };
+                                    }
+                                },
+                                .node => |n| result = node(n),
+                                else => unreachable
+                            }
+                        },
+                        .node => |n| result = node(n),
+                        else => unreachable,
+                    }
+                    break :blk2 result;
                 },
-                else => return CompilerError.InvalidPostDotExpression,
+                else => break :blk s.diagnostic(.err, "", .{})
             };
         },
         .lbrack => blk: {
             const state = s.save_lexer();
-            break :blk s.array_type() catch blk2: {
-                s.restore_lexer(state);
-                break :blk2 try s.array_initialization();
-            };
+            var result: ParsingResult = undefined;
+            var max_index: usize = 0;
+            switch (s.array_type()) {
+                .diagnostic => |d| {
+                    if (s.l.index > max_index) {
+                        max_index = s.l.index;
+                        result = .{ .diagnostic = d };
+                    }
+                    s.restore_lexer(state);
+                    switch (s.array_initialization()) {
+                        .diagnostic => |d2| {
+                            if (s.l.index > max_index) {
+                                max_index = s.l.index;
+                                result = .{ .diagnostic = d2 };
+                            }
+                        },
+                        .node => |n| result = node(n),
+                        else => unreachable
+                    }
+                },
+                .node => |n| result = node(n),
+                else => unreachable
+            }
+            break :blk result;
         },
-        else => return CompilerError.InvaludPrefixExpression,
+        else => s.diagnostic(.err, "Invalid non literal expression {any}", .{s.l.tok.?}),
     };
     switch (expr) {
-        .array_type, .array_index, .pointer_type, .optional_type, .identifier, .member_access, .pointer_dereference, .optional_dereference, .struct_, .enum_, .error_, .grouped, .if_expression, .try_, .catch_ => {
-            if (s.l.tok.? == .bang) expr = try s.error_union_type(expr);
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| switch (n) {
+            .array_type, .array_index, .pointer_type, .optional_type, .identifier, .member_access, .pointer_dereference, .optional_dereference, .struct_, .enum_, .error_, .grouped, .if_expression, .try_, .catch_ => {
+                if (s.l.tok.? == .bang) expr = s.error_union_type(n);
+            },
+            .call => {
+                if (s.l.tok.? == .@"catch") expr = s.catch_(n);
+                if (s.l.tok.? == .bang) expr = s.error_union_type(n);
+            },
+            else => {},
         },
-        .call => {
-            if (s.l.tok.? == .@"catch") expr = try s.catch_(expr);
-            if (s.l.tok.? == .bang) expr = try s.error_union_type(expr);
-        },
-        else => {},
+        else => unreachable
     }
     return expr;
 }
-fn member_chain(s: *Self) anyerror!Node {
+fn member_chain(s: *Parser) ParsingResult {
     const state = s.save_lexer();
-    var chain = s.labeled_block() catch blk: {
-        s.restore_lexer(state);
-        break :blk try s.identifier();
+    var chain: Node = switch (s.labeled_block()) {
+        .node => |n| return node(n),
+        .diagnostic => |_| blk: {
+            s.restore_lexer(state);
+            break :blk switch (s.identifier()) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable
+            };
+        },
+        else => unreachable
     };
-    if (chain == .block) return chain;
     while (s.l.tok.? != .eof) {
         switch (s.l.tok.?) {
-            .dot => {
-                _ = try s.eat(.dot);
-                chain = switch (s.l.tok.?) {
-                    .identifier => try s.member_access(chain),
-                    else => return CompilerError.InvalidDotMemberExpression,
-                };
+            .dot => chain = switch (s.eat(.dot)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => switch (s.l.tok.?) {
+                    .identifier => switch (s.member_access(chain)) {
+                        .node => |n| n,
+                        .diagnostic => |d| return .{ .diagnostic = d },
+                        else => unreachable
+                    },
+                    else => return s.diagnostic(.err, "Invalid member access value {any}, wanted identifier", .{s.l.tok.?}),
+                }
             },
-            .lbrack => chain = try s.array_index(chain),
-            .lparen => chain = try s.call(chain),
-            .pointer_deref => chain = try s.pointer_dereference(chain),
-            .optional_deref => chain = try s.optional_dereference(chain),
+            .lbrack => chain = switch (s.array_index(chain)) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable
+            },
+            .lparen => chain = switch (s.call(chain)) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable
+            },
+            .pointer_deref => chain = switch (s.pointer_dereference(chain)) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable
+            },
+            .optional_deref => chain = switch (s.optional_dereference(chain)) {
+                .node => |n| n,
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => unreachable
+            },
             else => break,
         }
     }
-    return chain;
+    return node(chain);
 }
-fn precedence(s: *Self) u8 {
+fn precedence(s: *Parser) u8 {
     return switch (s.l.tok.?) {
         .lparen, .lbrack, .dot => 17,
         .bang, .xor => 16,
@@ -523,342 +1093,788 @@ fn precedence(s: *Self) u8 {
         else => 0,
     };
 }
-fn unary_expression(s: *Self) anyerror!Node {
-    const op = try s.operator();
-    const expr = try s.create_node_ptr(try s.expression(0));
-    return Node{ .unary = .{ .op = op, .b = expr } };
+fn unary_expression(s: *Parser) ParsingResult {
+    const op = switch (s.operator()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .op => |o| o,
+        else => unreachable
+    };
+    const expr = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |i| i,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .unary = .{ .op = op, .b = expr } });
 }
-fn binary_expression(s: *Self, n: Node) anyerror!Node {
-    const op = try s.operator();
-    const expr = try s.create_node_ptr(try s.expression(0));
-    return Node{ .binary = .{ .a = try s.create_node_ptr(n), .op = op, .b = expr } };
+fn binary_expression(s: *Parser, n: Node) ParsingResult {
+    const op = switch (s.operator()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable
+    };
+    const expr = s.create_node_ptr(switch (s.expression(0)) {
+        .node => |i| i,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .binary = .{ .a = s.create_node_ptr(n), .op = op, .b = expr } });
 }
-fn return_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"return");
-    const val = if (s.l.tok.? == .semicolon) null else try s.create_node_ptr(try s.expression(0));
-    return Node{ .return_expression = .{ .val = val } };
+fn return_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.@"return")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const val = if (s.l.tok.? == .semicolon) null else s.create_node_ptr(switch (s.expression(0)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable,
+    });
+    return node(Node{ .return_expression = .{ .val = val } });
 }
-fn break_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"break");
+fn break_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.@"break")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     const label = if (s.l.tok.? == .colon) blk: {
-        _ = try s.eat(.colon);
-        break :blk try s.create_node_ptr(try s.identifier());
+        switch (s.eat(.colon)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
+        break :blk s.create_node_ptr(switch (s.identifier()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable,
+        });
     } else null;
-    const val = if (s.l.tok.? == .semicolon) null else try s.create_node_ptr(try s.expression(0));
-    return Node{ .break_expression = .{ .label = label, .val = val } };
+    const val = if (s.l.tok.? == .semicolon) null else s.create_node_ptr(switch (s.expression(0)) {
+        .node => |n| n,
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => unreachable,
+    });
+    return node(Node{ .break_expression = .{ .label = label, .val = val } });
 }
-fn continue_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"continue");
+fn continue_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.@"continue")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     const label = if (s.l.tok.? == .colon) blk: {
-        _ = try s.eat(.colon);
-        break :blk try s.create_node_ptr(try s.identifier());
+        switch (s.eat(.colon)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
+        break :blk s.create_node_ptr(switch (s.identifier()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable
+        });
     } else null;
-    return Node{ .continue_expression = .{ .label = label } };
+    return node(Node{ .continue_expression = .{ .label = label } });
 }
-fn nullish_expression(s: *Self) anyerror!Node {
-    const a = try s.create_node_ptr(try s.expression(0));
-    _ = try s.eat();
-    const b = try s.create_node_ptr(try s.expression(0));
-    return Node{ .nullish_expression = .{ .a = a, .b = b } };
+fn nullish_expression(s: *Parser, n: Node) ParsingResult {
+    switch (s.eat(.nullish)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const b = s.create_node_ptr(switch (s.expression(0)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable
+    });
+    return node(Node{ .nullish_expression = .{ .a = s.create_node_ptr(n), .b = b } });
 }
-fn range_expression(s: *Self, n: Node) anyerror!Node {
-    _ = try s.eat(.dotdot);
-    const b = try s.create_node_ptr(try s.expression(0));
-    return Node{ .range_expression = .{ .a = try s.create_node_ptr(n), .b = b } };
+fn range_expression(s: *Parser, n: Node) ParsingResult {
+    switch (s.eat(.dotdot)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const b = s.create_node_ptr(switch (s.expression(0)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable
+    });
+    return node(Node{ .range_expression = .{ .a = s.create_node_ptr(n), .b = b } });
 }
-fn use_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.use);
-    if (s.l.tok.? != .string) return CompilerError.ExpectedStringForUsePath;
-    const path = try s.create_node_ptr(try s.literal());
-    return Node{ .use = .{ .path = path } };
+fn use_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.use)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    if (s.l.tok.? != .string) return s.diagnostic(.err, "String path expected for use statements", .{});
+    const path = s.create_node_ptr(switch (s.literal()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    return node(Node{ .use = .{ .path = path } });
 }
-fn grouped_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.lparen);
-    const expr = if (s.l.tok.? == .rparen) null else try s.create_node_ptr(try s.expression(0));
-    _ = try s.eat(.rparen);
-    return Node{ .grouped = .{ .expression = expr } };
+fn grouped_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.lparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const expr = if (s.l.tok.? == .rparen) null else s.create_node_ptr(switch (s.expression(0)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    switch (s.eat(.rparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .grouped = .{ .expression = expr } });
 }
-fn if_expression(s: *Self) anyerror!Node {
-    const prefix = try s.create_node_ptr(try s.if_prefix());
-    const body = try s.create_node_ptr(if (s.l.tok.? == .lbrace) try s.block() else blk: {
+fn if_expression(s: *Parser) ParsingResult {
+    const prefix = s.create_node_ptr(switch (s.if_prefix()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    const body = s.create_node_ptr(if (s.l.tok.? == .lbrace) switch (s.block()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    } else blk: {
         const state = s.save_lexer();
-        break :blk s.assign_expression() catch blk2: {
-            s.restore_lexer(state);
-            break :blk2 try s.expression(0);
+        var result: ParsingResult = undefined;
+        var max_index: usize = 0;
+        switch (s.assign_expression()) {
+            .diagnostic => |d| {
+                if (s.l.index > max_index) {
+                    max_index = s.l.index;
+                    result = .{ .diagnostic = d };
+                }
+                s.restore_lexer(state);
+                switch (s.expression(0)) {
+                    .diagnostic => |d2| {
+                        if (s.l.index > max_index) result = .{ .diagnostic = d2 };
+                    },
+                    .node => |n| result = node(n),
+                    else => unreachable,
+                }
+            },
+            .node => |n| result = node(n),
+            else => unreachable,
+        }
+        break :blk switch (result) {
+            .node => |n| n,
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => unreachable
         };
     });
     const else_body = if (s.l.tok.? == .@"else") blk: {
-        _ = try s.eat(.@"else");
-        break :blk try s.create_node_ptr(try s.result_block_expression());
+        switch (s.eat(.@"else")) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
+        break :blk s.create_node_ptr(switch (s.result_block_expression()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable,
+        });
     } else null;
-    return Node{ .if_expression = .{ .prefix = prefix, .body = body, .else_body = else_body } };
+    return node(Node{ .if_expression = .{ .prefix = prefix, .body = body, .else_body = else_body } });
 }
-fn while_expression(s: *Self) anyerror!Node {
-    const prefix = try s.create_node_ptr(try s.while_prefix());
-    const body = try s.create_node_ptr(try s.result_block());
-    return Node{ .while_expression = .{ .prefix = prefix, .body = body } };
+fn while_expression(s: *Parser) ParsingResult {
+    const prefix = s.create_node_ptr(switch (s.while_prefix()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    const body = s.create_node_ptr(switch (s.result_block()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    return node(Node{ .while_expression = .{ .prefix = prefix, .body = body } });
 }
-fn for_expression(s: *Self) anyerror!Node {
-    const prefix = try s.create_node_ptr(try s.for_prefix());
-    const body = try s.create_node_ptr(try s.result_block());
-    return Node{ .for_expression = .{ .prefix = prefix, .body = body } };
+fn for_expression(s: *Parser) ParsingResult {
+    const prefix = s.create_node_ptr(switch (s.for_prefix()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    const body = s.create_node_ptr(switch (s.result_block()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    return node(Node{ .for_expression = .{ .prefix = prefix, .body = body } });
 }
-fn array_initialization(s: *Self) anyerror!Node {
-    _ = try s.eat(.lbrack);
+fn array_initialization(s: *Parser) ParsingResult {
+    switch (s.eat(.lbrack)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var vals = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrack) break;
-        try vals.append(try s.expression(0));
+        switch (s.expression(0)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&vals, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rbrack) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.rbrack);
-    return Node{ .array_init = .{ .vals = vals } };
+    switch (s.eat(.rbrack)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .array_init = .{ .vals = vals } });
 }
-fn struct_initialization(s: *Self) anyerror!Node {
-    const name = if (s.l.tok.? == .identifier) try s.create_node_ptr(try s.identifier()) else null;
+fn struct_initialization(s: *Parser) ParsingResult {
+    const name = if (s.l.tok.? == .identifier) s.create_node_ptr(switch (s.identifier()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    }) else null;
     var inits = NodeList.init(s.a);
-    _ = try s.eat(.lbrace);
+    switch (s.eat(.lbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrace) break;
-        try inits.append(try s.struct_init_member());
+        switch (s.struct_init_member()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&inits, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rbrace) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.rbrace);
-    return Node{ .struct_init = .{ .name = name, .inits = inits } };
+    switch (s.eat(.rbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .struct_init = .{ .name = name, .inits = inits } });
 }
-fn struct_init_member(s: *Self) anyerror!Node {
-    const name = try s.create_node_ptr(try s.identifier());
-    _ = try s.eat(.colon);
-    const val = try s.create_node_ptr(try s.expression(0));
-    return Node{ .struct_init_member = .{ .name = name, .val = val } };
+fn struct_init_member(s: *Parser) ParsingResult {
+    const name = s.create_node_ptr(switch (s.identifier()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    switch (s.eat(.colon)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const val = s.create_node_ptr(switch (s.expression(0)) {
+        .diagnostic => |d| {
+            return .{ .diagnostic = d };
+        },
+        .node => |n| n,
+        else => unreachable,
+    });
+    return node(Node{ .struct_init_member = .{ .name = name, .val = val } });
 }
-fn enum_error_initialization(s: *Self) anyerror!Node {
-    const name = try s.create_node_ptr(try s.identifier());
+fn enum_error_initialization(s: *Parser) ParsingResult {
+    const name = s.create_node_ptr(switch (s.identifier()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
     const val = if (s.l.tok.? == .lparen) blk: {
-        _ = try s.eat(.lparen);
-        const expr = try s.create_node_ptr(try s.expression(0));
-        _ = try s.eat(.rparen);
+        switch (s.eat(.lparen)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
+        const expr = s.create_node_ptr(switch (s.expression(0)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| n,
+            else => unreachable,
+        });
+        switch (s.eat(.rparen)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
         break :blk expr;
     } else null;
-    return Node{ .enum_error_init = .{ .name = name, .val = val } };
+    return node(Node{ .enum_error_init = .{ .name = name, .val = val } });
 }
-fn struct_(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"struct");
-    _ = try s.eat(.lbrace);
+fn struct_(s: *Parser) ParsingResult {
+    switch (s.eat(.@"struct")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    switch (s.eat(.lbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var members = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrace) break;
-        try members.append(try s.struct_member());
-        if (s.l.tok.? == .rbrace) break;
-    }
-    _ = try s.eat(.rbrace);
-    return Node{ .struct_ = .{ .members = members } };
-}
-fn struct_member(s: *Self) anyerror!Node {
-    const state = s.save_lexer();
-    return s.declaration() catch blk: {
-        s.restore_lexer(state);
-        var names = NodeList.init(s.a);
-        while (s.l.tok.? != .eof) {
-            if (s.l.tok.? == .colon) break;
-            try names.append(try s.identifier());
-            if (s.l.tok.? == .colon) break;
-            _ = try s.eat(.comma);
+        switch (s.struct_member()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&members, n),
+            else => unreachable,
         }
-        _ = try s.eat(.colon);
-        const t = try s.create_node_ptr(try s.non_literal_expression());
-        const val = if (s.l.tok.? == .eq) blk2: {
-            _ = try s.eat(.eq);
-            break :blk2 try s.create_node_ptr(try s.expression(0));
-        } else null;
-        _ = try s.eat(.comma);
-        break :blk Node{ .struct_member = .{ .names = names, .type = t, .val = val } };
+        if (s.l.tok.? == .rbrace) break;
+    }
+    switch (s.eat(.rbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .struct_ = .{ .members = members } });
+}
+fn struct_member(s: *Parser) ParsingResult {
+    const state = s.save_lexer();
+    return switch (s.declaration()) {
+        .node => |n| node(n),
+        .diagnostic => |diag| blk: {
+            const max_index: usize = s.l.index;
+            s.restore_lexer(state);
+            var names = NodeList.init(s.a);
+            while (s.l.tok.? != .eof) {
+                if (s.l.tok.? == .colon) break;
+                switch (s.identifier()) {
+                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    .node => |n| append(&names, n),
+                    else => unreachable,
+                }
+                if (s.l.tok.? == .colon) break;
+                switch (s.eat(.comma)) {
+                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    else => {},
+                }
+            }
+            switch (s.eat(.colon)) {
+                .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                else => {},
+            }
+            const t = s.create_node_ptr(switch (s.non_literal_expression()) {
+                .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                .node => |n| n,
+                else => unreachable,
+            });
+            const val = if (s.l.tok.? == .eq) blk2: {
+                switch (s.eat(.eq)) {
+                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    else => {},
+                }
+                break :blk2 s.create_node_ptr(switch (s.expression(0)) {
+                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    .node => |n| n,
+                    else => unreachable,
+                });
+            } else null;
+            switch (s.eat(.comma)) {
+                .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                else => {},
+            }
+            break :blk node(Node{ .struct_member = .{ .names = names, .type = t, .val = val } });
+        },
+        else => unreachable,
     };
 }
-fn enum_(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"enum");
-    _ = try s.eat(.lbrace);
+fn enum_(s: *Parser) ParsingResult {
+    switch (s.eat(.@"enum")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    switch (s.eat(.lbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var members = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrace) break;
-        try members.append(try s.enum_member());
+        switch (s.enum_member()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&members, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rbrace) break;
     }
-    _ = try s.eat(.rbrace);
-    return Node{ .enum_ = .{ .members = members } };
+    switch (s.eat(.rbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .enum_ = .{ .members = members } });
 }
-fn enum_member(s: *Self) anyerror!Node {
+fn enum_member(s: *Parser) ParsingResult {
     const state = s.save_lexer();
-    return s.declaration() catch blk: {
-        s.restore_lexer(state);
-        const name = try s.create_node_ptr(try s.identifier());
-        const t = if (s.l.tok.? == .colon) blk2: {
-            _ = try s.eat(.colon);
-            break :blk2 try s.create_node_ptr(try s.non_literal_expression());
-        } else null;
-        _ = try s.eat(.comma);
-        break :blk Node{ .enum_member = .{ .name = name, .type = t } };
+    return switch (s.declaration()) {
+        .node => |n| node(n),
+        .diagnostic => blk: {
+            s.restore_lexer(state);
+            const name = s.create_node_ptr(switch (s.identifier()) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                .node => |n| n,
+                else => unreachable,
+            });
+            const t = if (s.l.tok.? == .colon) blk2: {
+                switch (s.eat(.colon)) {
+                    .diagnostic => |d| return .{ .diagnostic = d },
+                    else => {},
+                }
+                break :blk2 s.create_node_ptr(switch (s.non_literal_expression()) {
+                    .diagnostic => |d| return .{ .diagnostic = d },
+                    .node => |n| n,
+                    else => unreachable,
+                });
+            } else null;
+            switch (s.eat(.comma)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            break :blk node(Node{ .enum_member = .{ .name = name, .type = t } });
+        },
+        else => unreachable,
     };
 }
-fn error_(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"error");
-    _ = try s.eat(.lbrace);
+fn error_(s: *Parser) ParsingResult {
+    switch (s.eat(.@"error")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    switch (s.eat(.lbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var members = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rbrace) break;
-        try members.append(try s.error_member());
+        switch (s.error_member()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&members, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rbrace) break;
     }
-    _ = try s.eat(.rbrace);
-    return Node{ .error_ = .{ .members = members } };
+    switch (s.eat(.rbrace)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .error_ = .{ .members = members } });
 }
-fn error_member(s: *Self) anyerror!Node {
+fn error_member(s: *Parser) ParsingResult {
     const state = s.save_lexer();
-    return s.declaration() catch blk: {
-        s.restore_lexer(state);
-        const name = try s.create_node_ptr(try s.identifier());
-        const t = if (s.l.tok.? == .colon) blk2: {
-            _ = try s.eat(.colon);
-            break :blk2 try s.create_node_ptr(try s.non_literal_expression());
-        } else null;
-        _ = try s.eat(.comma);
-        break :blk Node{ .error_member = .{ .name = name, .type = t } };
+    return switch (s.declaration()) {
+        .node => |n| node(n),
+        .diagnostic => blk: {
+            s.restore_lexer(state);
+            const name = s.create_node_ptr(switch (s.identifier()) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                .node => |n| n,
+                else => unreachable,
+            });
+            const t = if (s.l.tok.? == .colon) blk2: {
+                switch (s.eat(.colon)) {
+                    .diagnostic => |d| return .{ .diagnostic = d },
+                    else => {},
+                }
+                break :blk2 s.create_node_ptr(switch (s.non_literal_expression()) {
+                    .diagnostic => |d| return .{ .diagnostic = d },
+                    .node => |n| n,
+                    else => unreachable,
+                });
+            } else null;
+            switch (s.eat(.comma)) {
+                .diagnostic => |d| return .{ .diagnostic = d },
+                else => {},
+            }
+            break :blk node(Node{ .error_member = .{ .name = name, .type = t } });
+        },
+        else => unreachable,
     };
 }
-fn capture(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"or");
+fn capture(s: *Parser) ParsingResult {
+    switch (s.eat(.@"or")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var captures = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .@"or") break;
-        try captures.append(try s.capture_item());
+        switch (s.capture_item()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |n| append(&captures, n),
+            else => unreachable,
+        }
         if (s.l.tok.? == .@"or") break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.@"or");
-    return Node{ .capture = .{ .captures = captures } };
+    switch (s.eat(.@"or")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .capture = .{ .captures = captures } });
 }
-fn capture_item(s: *Self) anyerror!Node {
+fn capture_item(s: *Parser) ParsingResult {
     const mut = if (s.l.tok.? == .mut) blk: {
-        _ = try s.eat(.mut);
+        switch (s.eat(.mut)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
         break :blk true;
     } else false;
-    const val = try s.create_node_ptr(try s.identifier());
-    return Node{ .capture_val = .{ .mut = mut, .val = val } };
+    const val = s.create_node_ptr(switch (s.identifier()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    });
+    return node(Node{ .capture_val = .{ .mut = mut, .val = val } });
 }
 
-fn identifier(s: *Self) anyerror!Node {
-    return Node{ .identifier = .{ .value = try s.eat(.identifier) } };
+fn identifier(s: *Parser) ParsingResult {
+    return node(Node{ .identifier = .{ .value = switch (s.eat(.identifier)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .string => |n| n,
+        else => unreachable,
+    } } });
 }
-fn try_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.@"try");
-    return Node{ .try_ = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) } };
+fn try_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.@"try")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .try_ = .{ .expression = s.create_node_ptr(switch (s.non_literal_expression()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    }) } });
 }
-fn catch_(s: *Self, n: Node) anyerror!Node {
-    _ = try s.eat(.@"catch");
-    const cap = if (s.l.tok.? == .@"or") try s.create_node_ptr(try s.capture()) else null;
-    const body = try s.create_node_ptr(try s.result_block());
-    return Node{ .catch_ = .{ .capture = cap, .expression = try s.create_node_ptr(n), .body = body } };
+fn catch_(s: *Parser, n: Node) ParsingResult {
+    switch (s.eat(.@"catch")) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const cap = if (s.l.tok.? == .@"or") s.create_node_ptr(switch (s.capture()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable,
+    }) else null;
+    const body = s.create_node_ptr(switch (s.result_block()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable,
+    });
+    return node(Node{ .catch_ = .{ .capture = cap, .expression = s.create_node_ptr(n), .body = body } });
 }
-fn comp_expression(s: *Self) anyerror!Node {
-    _ = try s.eat(.comp);
-    return Node{ .comp_expression = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) } };
+fn comp_expression(s: *Parser) ParsingResult {
+    switch (s.eat(.comp)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .comp_expression = .{ .expression = s.create_node_ptr(switch (s.non_literal_expression()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    }) } });
 }
-fn call(s: *Self, n: Node) anyerror!Node {
-    _ = try s.eat(.lparen);
+fn call(s: *Parser, n: Node) ParsingResult {
+    switch (s.eat(.lparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var args = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? == .rparen) break;
-        try args.append(try s.expression(0));
+        switch (s.expression(0)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |i| append(&args, i),
+            else => unreachable,
+        }
         if (s.l.tok.? == .rparen) break;
-        _ = try s.eat(.comma);
+        switch (s.eat(.comma)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    _ = try s.eat(.rparen);
-    return Node{ .call = .{ .name = try s.create_node_ptr(n), .args = args } };
+    switch (s.eat(.rparen)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .call = .{ .name = s.create_node_ptr(n), .args = args } });
 }
-fn optional_dereference(s: *Self, n: Node) anyerror!Node {
-    _ = try s.eat(.optional_deref);
-    return Node{ .pointer_dereference = .{ .expression = try s.create_node_ptr(n) } };
+fn optional_dereference(s: *Parser, n: Node) ParsingResult {
+    switch (s.eat(.optional_deref)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .optional_dereference = .{ .expression = s.create_node_ptr(n) } });
 }
-fn optional_type(s: *Self) anyerror!Node {
-    _ = try s.eat(.question);
-    return Node{ .optional_type = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) } };
+fn optional_type(s: *Parser) ParsingResult {
+    switch (s.eat(.question)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .optional_type = .{ .expression = s.create_node_ptr(switch (s.non_literal_expression()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    }) } });
 }
-fn pointer_dereference(s: *Self, n: Node) anyerror!Node {
-    _ = try s.eat(.pointer_deref);
-    return Node{ .pointer_dereference = .{ .expression = try s.create_node_ptr(n) } };
+fn pointer_dereference(s: *Parser, n: Node) ParsingResult {
+    switch (s.eat(.pointer_deref)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .pointer_dereference = .{ .expression = s.create_node_ptr(n) } });
 }
-fn pointer_type(s: *Self) anyerror!Node {
-    _ = try s.eat(.mul);
-    return Node{ .pointer_type = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) } };
+fn pointer_type(s: *Parser) ParsingResult {
+    switch (s.eat(.mul)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .pointer_type = .{ .expression = s.create_node_ptr(switch (s.non_literal_expression()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    }) } });
 }
-fn array_index(s: *Self, n: Node) anyerror!Node {
-    _ = try s.eat(.lbrack);
-    const index = try s.create_node_ptr(try s.expression(0));
-    _ = try s.eat(.rbrack);
-    return Node{ .array_index = .{ .name = try s.create_node_ptr(n), .index = index } };
+fn array_index(s: *Parser, n: Node) ParsingResult {
+    switch (s.eat(.lbrack)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    const index = s.create_node_ptr(switch (s.expression(0)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable,
+    });
+    switch (s.eat(.rbrack)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .array_index = .{ .name = s.create_node_ptr(n), .index = index } });
 }
-fn array_type(s: *Self) anyerror!Node {
-    _ = try s.eat(.lbrack);
-    _ = try s.eat(.rbrack);
-    return Node{ .array_type = .{ .expression = try s.create_node_ptr(try s.non_literal_expression()) } };
+fn array_type(s: *Parser) ParsingResult {
+    switch (s.eat(.lbrack)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    switch (s.eat(.rbrack)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
+    return node(Node{ .array_type = .{ .expression = s.create_node_ptr(switch (s.non_literal_expression()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |n| n,
+        else => unreachable,
+    }) } });
 }
-fn error_union_type(s: *Self, n: ?Node) anyerror!Node {
-    _ = try s.eat(.bang);
+fn error_union_type(s: *Parser, n: ?Node) ParsingResult {
+    switch (s.eat(.bang)) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        else => {},
+    }
     var errors = NodeList.init(s.a);
     while (s.l.tok.? != .eof) {
         if (s.l.tok.? != .identifier) break;
-        try errors.append(try s.identifier());
+        switch (s.identifier()) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .node => |i| append(&errors, i),
+            else => unreachable,
+        }
         if (s.l.tok.? != .bang) break;
-        _ = try s.eat(.bang);
+        switch (s.eat(.bang)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            else => {},
+        }
     }
-    return Node{ .error_union_type = .{ .name = if (n) |i| try s.create_node_ptr(i) else null, .errors = errors } };
+    return node(Node{ .error_union_type = .{ .name = if (n) |i| s.create_node_ptr(i) else null, .errors = errors } });
 }
-fn member_access(s: *Self, n: Node) anyerror!Node {
-    return Node{ .member_access = .{ .name = try s.create_node_ptr(n), .member = try s.create_node_ptr(try s.identifier()) } };
+fn member_access(s: *Parser, n: Node) ParsingResult {
+    return node(Node{ .member_access = .{ .name = s.create_node_ptr(n), .member = s.create_node_ptr(switch (s.identifier()) {
+        .diagnostic => |d| return .{ .diagnostic = d },
+        .node => |i| i,
+        else => unreachable,
+    }) } });
 }
-fn literal(s: *Self) anyerror!Node {
-    return switch (s.l.tok.?) {
-        .int => Node{ .literal = .{ .kind = .int, .val = try s.eat(.int) } },
-        .float => Node{ .literal = .{ .kind = .float, .val = try s.eat(.float) } },
-        .true => Node{ .literal = .{ .kind = .boolean, .val = try s.eat(.true) } },
-        .false => Node{ .literal = .{ .kind = .boolean, .val = try s.eat(.false) } },
-        .char => Node{ .literal = .{ .kind = .char, .val = try s.eat(.char) } },
-        .string => Node{ .literal = .{ .kind = .string, .val = try s.eat(.string) } },
-        .undefined => Node{ .literal = .{ .kind = .undefined, .val = try s.eat(.undefined) } },
-        .null => Node{ .literal = .{ .kind = .null, .val = try s.eat(.null) } },
-        else => return CompilerError.InvalidLiteral,
-    };
+fn literal(s: *Parser) ParsingResult {
+    return node(switch (s.l.tok.?) {
+        .int => Node{ .literal = .{ .kind = .int, .val = switch (s.eat(.int)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        .float => Node{ .literal = .{ .kind = .float, .val = switch (s.eat(.float)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        .true => Node{ .literal = .{ .kind = .boolean, .val = switch (s.eat(.true)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        .false => Node{ .literal = .{ .kind = .boolean, .val = switch (s.eat(.false)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        .char => Node{ .literal = .{ .kind = .char, .val = switch (s.eat(.char)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        .string => Node{ .literal = .{ .kind = .string, .val = switch (s.eat(.string)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        .undefined => Node{ .literal = .{ .kind = .undefined, .val = switch (s.eat(.undefined)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        .null => Node{ .literal = .{ .kind = .null, .val = switch (s.eat(.null)) {
+            .diagnostic => |d| return .{ .diagnostic = d },
+            .string => |i| i,
+            else => unreachable,
+        } } },
+        else => return s.diagnostic(.err, "Invalid literal {any}", .{s.l.tok.?}),
+    });
 }
-fn eat(s: *Self, expected: Token) ![]const u8 {
-    if (s.l.tok.? != expected) return CompilerError.UnexpectedToken;
+fn eat(s: *Parser, expected: Token) ParsingResult {
+    if (s.l.tok.? != expected) return s.diagnostic(.err, "Unexpected token {any}, wanted {any}", .{ s.l.tok.?, expected });
     defer s.l.next_tok();
-    return s.l.literal orelse "";
+    return ParsingResult{ .string = s.l.literal orelse "" };
 }
-fn create_node_ptr(s: *Self, n: Node) std.mem.Allocator.Error!*Node {
-    const x = try s.a.create(Node);
+fn create_node_ptr(s: *Parser, n: Node) *Node {
+    const x = s.a.create(Node) catch |e| @panic(@errorName(e));
     x.* = n;
     return x;
 }
-fn destroy_node_ptr(s: *Self, n: *Node) void {
-    s.a.destroy(n);
+fn append(a: *std.ArrayList(Node), n: Node) void {
+    a.append(n) catch |e| @panic(@errorName(e));
 }
-fn save_lexer(s: *Self) LexerState {
+fn save_lexer(s: *Parser) LexerState {
     return .{ .tok = s.l.tok, .col = s.l.col, .line = s.l.line, .literal = s.l.literal, .index = s.l.index };
 }
-fn restore_lexer(s: *Self, l: LexerState) void {
+fn restore_lexer(s: *Parser, l: LexerState) void {
     s.l.tok = l.tok;
     s.l.col = l.col;
     s.l.line = l.line;
     s.l.literal = l.literal;
     s.l.index = l.index;
 }
-fn report_diagnostic(s: *Self, severity: Diagnostic.Severity, msg: []const u8) !void {
-    try s.d.append(Diagnostic{
-        .message = msg,
-        .line = s.l.line,
-        .col = s.l.col,
-        .severity = severity,
-    });
+fn node(n: Node) ParsingResult {
+    return .{ .node = n };
+}
+fn diagnostic(s: Parser, severity: Diagnostic.Severity, comptime fmt: []const u8, args: anytype) ParsingResult {
+    const msg = std.fmt.allocPrint(s.a, fmt, args) catch |e| @panic(@errorName(e));
+    return .{ .diagnostic = Diagnostic{ .filename = s.f.path, .severity = severity, .line = s.l.line, .col = s.l.col, .message = msg } };
+}
+fn recover(s: *Parser, toks: []const Token) void {
+    while (s.l.tok.? != .eof) {
+        if (std.mem.indexOf(Token, toks, &[_]Token{s.l.tok.?})) |_| {
+            s.l.next_tok();
+            return;
+        }
+        s.l.next_tok();
+    }
 }

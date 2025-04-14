@@ -1,18 +1,28 @@
 const std = @import("std");
 const Parser = @import("parser.zig");
+const Lexer = @import("lexer.zig");
 const Node = @import("ast.zig").Node;
+const File = @import("file.zig");
+const Diagnostic = @import("diagnostic.zig");
 
 pub fn main() !void {
     const page_allocator = std.heap.page_allocator;
     var arena = std.heap.ArenaAllocator.init(page_allocator);
     const alloc = arena.allocator();
     defer arena.deinit();
+    const file_name = "test.dyn";
+    var file = File{ .path = file_name, .content = try read_file(alloc, file_name), .diagnostics = std.ArrayList(Diagnostic).init(alloc) };
 
-    // const file_body = try read_file(alloc, "test.dyn");
-    const file_body = try read_file(alloc, "main.dyn");
-
-    var parser = Parser.init(alloc, file_body);
-    print_tree(try parser.program());
+    var lexer = Lexer.init(&file);
+    var parser = Parser.init(alloc, &file, &lexer);
+    file.root = switch(parser.program()) {
+        .node => |n| n,
+        else => null,
+    };
+    //for (file.diagnostics.items) |d| std.debug.print("{any}", .{d});
+    std.debug.print("errs: {}\n", .{file.diagnostics.items.len});
+    if (file.diagnostics.items.len > 0) return;
+    if(file.root) |r| print_tree(r);
 }
 
 pub fn read_file(a: std.mem.Allocator, filename: []const u8) ![]const u8 {
