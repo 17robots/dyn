@@ -20,7 +20,6 @@ pub fn main() !void {
         else => null,
     };
     //for (file.diagnostics.items) |d| std.debug.print("{any}", .{d});
-    std.debug.print("errs: {}\n", .{file.diagnostics.items.len});
     if (file.diagnostics.items.len > 0) return;
     if(file.root) |r| print_tree(r);
 }
