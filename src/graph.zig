@@ -2,8 +2,11 @@ const std = @import("std");
 pub fn Graph(comptime T: type) type {
     return struct {
         const Edge = struct {
-            from: T,
-            to: T,
+            from: *T,
+            to: *T,
+            fn eq(s: *Edge, e: Edge) bool {
+                return s.to == e.to and s.from == e.from;
+            }
         };
         nodes: std.ArrayList(T),
         edges: std.ArrayList(Edge),
@@ -16,14 +19,15 @@ pub fn Graph(comptime T: type) type {
             };
         }
         pub fn deinit(self: *@This()) void {
-            self.nodes.deinit();
             self.edges.deinit();
+            self.nodes.deinit();
         }
         pub fn addNode(self: *@This(), node: T) void {
             self.nodes.append(node) catch unreachable;
         }
-        pub fn addEdge(self: *@This(), from: T, to: T) void {
-            self.edges.append(.{ .from = from, .to = to }) catch unreachable;
+        pub fn addEdge(s: *@This(), from: *T, to: *T) void {
+            if (std.mem.containsAtLeastScalar(Edge, s.edges.items, 1, Edge{ .from = from, .to = to })) return;
+            s.edges.append(.{ .from = from, .to = to }) catch unreachable;
         }
         pub fn getNode(self: *@This(), index: usize) ?T {
             if (index >= self.nodes.items.len) return null;
