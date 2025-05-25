@@ -74,6 +74,22 @@ pub fn next_tok(s: *Lexer) void {
                 '.' => s.state = .read_dot,
                 '\"' => s.state = .read_string,
                 '\'' => s.state = .read_char,
+                '?' => s.state = .read_question,
+                '+' => s.state = .read_add,
+                '-' => s.state = .read_sub,
+                '*' => s.state = .read_mul,
+                '/' => s.state = .read_div,
+                '%' => s.state = .read_mod,
+                '&' => s.state = .read_and,
+                '|' => s.state = .read_or,
+                '^' => s.state = .read_xor,
+                '~' => s.state = .read_flip,
+                '=' => s.state = .read_eq,
+                '>' => s.state = .read_gt,
+                '<' => s.state = .read_lt,
+                '!' => s.state = .read_bang,
+                '_' => s.state = .read_underscore,
+                ':' => s.state = .read_colon,
                 '(' => {
                     s.tok = .lparen;
                     s.literal = null;
@@ -104,7 +120,6 @@ pub fn next_tok(s: *Lexer) void {
                     s.literal = null;
                     s.index += 1;
                 },
-                ':' => s.state = .read_colon,
                 ';' => {
                     s.tok = .semicolon;
                     s.literal = null;
@@ -115,21 +130,6 @@ pub fn next_tok(s: *Lexer) void {
                     s.literal = null;
                     s.index += 1;
                 },
-                '?' => s.state = .read_question,
-                '+' => s.state = .read_add,
-                '-' => s.state = .read_sub,
-                '*' => s.state = .read_mul,
-                '/' => s.state = .read_div,
-                '%' => s.state = .read_mod,
-                '&' => s.state = .read_and,
-                '|' => s.state = .read_or,
-                '^' => s.state = .read_xor,
-                '~' => s.state = .read_flip,
-                '=' => s.state = .read_eq,
-                '>' => s.state = .read_gt,
-                '<' => s.state = .read_lt,
-                '!' => s.state = .read_bang,
-                '_' => s.state = .read_underscore,
                 else => {
                     s.tok = .invalid;
                     s.err = CompilerError.InvalidCharacter;
