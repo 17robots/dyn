@@ -1,6 +1,6 @@
 module main;
-io := use "std:io";
-heap := use "std:heap";
+io := use "std/io";
+heap := use "std/heap";
 test := use "test";
 
 BasicEnum := enum {

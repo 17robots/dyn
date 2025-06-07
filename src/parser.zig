@@ -1436,38 +1436,38 @@ fn struct_member(s: *Parser) ParsingResult {
             while (s.l.tok.? != .eof) {
                 if (s.l.tok.? == .colon) break;
                 switch (s.identifier()) {
-                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    .diagnostic => |d| return if (s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
                     .node => |n| append(&names, n),
                     else => unreachable,
                 }
                 if (s.l.tok.? == .colon) break;
                 switch (s.eat(.comma)) {
-                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    .diagnostic => |d| return if (s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
                     else => {},
                 }
             }
             switch (s.eat(.colon)) {
-                .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                .diagnostic => |d| return if (s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
                 else => {},
             }
             const t = s.create_node_ptr(switch (s.non_literal_expression()) {
-                .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                .diagnostic => |d| return if (s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
                 .node => |n| n,
                 else => unreachable,
             });
             const val = if (s.l.tok.? == .eq) blk2: {
                 switch (s.eat(.eq)) {
-                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    .diagnostic => |d| return if (s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
                     else => {},
                 }
                 break :blk2 s.create_node_ptr(switch (s.expression(0)) {
-                    .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                    .diagnostic => |d| return if (s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
                     .node => |n| n,
                     else => unreachable,
                 });
             } else null;
             switch (s.eat(.comma)) {
-                .diagnostic => |d| return if(s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
+                .diagnostic => |d| return if (s.l.index > max_index) .{ .diagnostic = d } else .{ .diagnostic = diag },
                 else => {},
             }
             break :blk node(Node{ .struct_member = .{ .names = names, .type = t, .val = val } });
