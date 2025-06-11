@@ -11,12 +11,13 @@ pub const Severity = enum {
         };
     }
 };
+
 const Diagnostic = @This();
 
-filename: []const u8 = "",
-message: []const u8,
-line: usize,
 col: usize,
+filename: []const u8 = "",
+line: usize,
+message: []const u8,
 severity: Severity,
 valid: bool = true,
 

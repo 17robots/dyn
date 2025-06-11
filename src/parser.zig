@@ -1,24 +1,35 @@
 const std = @import("std");
-const Lexer = @import("lexer.zig");
-const Token = @import("token.zig").TokenType;
-const Node = @import("ast.zig").Node;
-const LiteralKind = @import("ast.zig").LiteralKind;
-const Op = @import("ast.zig").Op;
-const AssignOp = @import("ast.zig").AssignOp;
-const NodeList = std.ArrayList(Node);
-const File = @import("file.zig");
+
 const Diagnostic = @import("diagnostic.zig");
+const File = @import("file.zig");
+const Lexer = @import("lexer.zig");
+const Node = @import("ast.zig").Node;
+const Token = @import("token.zig").TokenType;
+
+const NodeList = std.ArrayList(Node);
 
 const Parser = @This();
-const LexerState = struct { tok: ?Token, literal: ?[]const u8, line: usize, col: usize, index: usize };
-const ParsingResult = union(enum) { node: Node, diagnostic: Diagnostic, string: []const u8, assign_op: AssignOp, op: Op, none };
 
-l: *Lexer,
+const LexerState = struct {
+    tok: ?Token,
+    literal: ?[]const u8,
+    line: usize,
+    col: usize,
+    index: usize,
+};
+const ParsingResult = union(enum) {
+    node: Node,
+    diagnostic: Diagnostic,
+    string: []const u8,
+    none,
+};
+
 a: std.mem.Allocator,
 f: *File,
+l: Lexer,
 
-pub fn init(alloc: std.mem.Allocator, f: *File, l: *Lexer) Parser {
-    return Parser{ .l = l, .f = f, .a = alloc };
+pub fn init(alloc: std.mem.Allocator, f: *File) Parser {
+    return Parser{ .l = Lexer.init(f), .f = f, .a = alloc };
 }
 pub fn program(s: *Parser) ParsingResult {
     s.l.next_tok();
@@ -460,7 +471,7 @@ fn assign_expression(s: *Parser) ParsingResult {
         else => unreachable,
     });
     const op = switch (s.assign_operator()) {
-        .assign_op => |a| a,
+        .node => |n| n,
         .diagnostic => |d| return .{ .diagnostic = d },
         else => unreachable,
     };
@@ -469,55 +480,55 @@ fn assign_expression(s: *Parser) ParsingResult {
         .diagnostic => |d| return .{ .diagnostic = d },
         else => unreachable,
     });
-    return node(Node{ .assign_expression = .{ .left = l, .op = op, .right = r } });
+    return node(Node{ .assign_expression = .{ .left = l, .op = s.create_node_ptr(op), .right = r } });
 }
 
 fn assign_operator(s: *Parser) ParsingResult {
-    const op: AssignOp = switch (s.l.tok.?) {
-        .addeq => .addeq,
-        .subeq => .subeq,
-        .muleq => .muleq,
-        .diveq => .diveq,
-        .modeq => .modeq,
-        .xoreq => .xoreq,
-        .andeq => .andeq,
-        .oreq => .oreq,
-        .eq => .eq,
+    const op: Node = switch (s.l.tok.?) {
+        .addeq => Node.addeq,
+        .subeq => Node.subeq,
+        .muleq => Node.muleq,
+        .diveq => Node.diveq,
+        .modeq => Node.modeq,
+        .xoreq => Node.xoreq,
+        .andeq => Node.andeq,
+        .oreq => Node.oreq,
+        .eq => Node.eq,
         else => return s.diagnostic(.err, "Unexpected assign op {any}", .{s.l.tok.?}),
     };
     switch (s.eat(s.l.tok.?)) {
         .diagnostic => |d| return .{ .diagnostic = d },
         else => {},
     }
-    return .{ .assign_op = op };
+    return node(op);
 }
 fn operator(s: *Parser) ParsingResult {
-    const op: Op = switch (s.l.tok.?) {
-        .add => .add,
-        .sub => .sub,
-        .mul => .mul,
-        .div => .div,
-        .mod => .mod,
-        .xor => .xor,
-        .@"and" => .@"and",
-        .@"or" => .@"or",
-        .eqeq => .eqeq,
-        .bang => .bang,
-        .gt => .gt,
-        .gteq => .gte,
-        .lt => .lt,
-        .lteq => .lte,
-        .andand => .andand,
-        .oror => .oror,
-        .bangeq => .bangeq,
-        .nullish => .nullish,
+    const op: Node = switch (s.l.tok.?) {
+        .add => Node.add,
+        .sub => Node.sub,
+        .mul => Node.mul,
+        .div => Node.div,
+        .mod => Node.mod,
+        .xor => Node.xor,
+        .@"and" => Node.@"and",
+        .@"or" => Node.@"or",
+        .eqeq => Node.eqeq,
+        .bang => Node.bang,
+        .gt => Node.gt,
+        .gteq => Node.gte,
+        .lt => Node.lt,
+        .lteq => Node.lte,
+        .andand => Node.andand,
+        .oror => Node.oror,
+        .bangeq => Node.bangeq,
+        .nullish => Node.nullish,
         else => return s.diagnostic(.err, "Unexpected assign op {any}", .{s.l.tok.?}),
     };
     switch (s.eat(s.l.tok.?)) {
         .diagnostic => |d| return .{ .diagnostic = d },
         else => {},
     }
-    return .{ .op = op };
+    return node(op);
 }
 fn if_prefix(s: *Parser) ParsingResult {
     switch (s.eat(.@"if")) {
@@ -873,10 +884,10 @@ fn expression(s: *Parser, prec: u8) ParsingResult {
                 s.restore_lexer(state);
                 return node(expr);
             },
-            .op => |o| o,
+            .node => |n| n,
             else => unreachable
         };
-        expr = Node{ .binary = .{ .a = s.create_node_ptr(expr), .op = op, .b = s.create_node_ptr(switch (s.expression(new_prec)) {
+        expr = Node{ .binary = .{ .a = s.create_node_ptr(expr), .op = s.create_node_ptr(op), .b = s.create_node_ptr(switch (s.expression(new_prec)) {
             .diagnostic => |d| return .{ .diagnostic = d },
             .node => |n| n,
             else => unreachable,
@@ -1096,7 +1107,7 @@ fn precedence(s: *Parser) u8 {
 fn unary_expression(s: *Parser) ParsingResult {
     const op = switch (s.operator()) {
         .diagnostic => |d| return .{ .diagnostic = d },
-        .op => |o| o,
+        .node => |n| n,
         else => unreachable
     };
     const expr = s.create_node_ptr(switch (s.expression(0)) {
@@ -1104,7 +1115,7 @@ fn unary_expression(s: *Parser) ParsingResult {
         .diagnostic => |d| return .{ .diagnostic = d },
         else => unreachable,
     });
-    return node(Node{ .unary = .{ .op = op, .b = expr } });
+    return node(Node{ .unary = .{ .op = s.create_node_ptr(op), .b = expr } });
 }
 fn binary_expression(s: *Parser, n: Node) ParsingResult {
     const op = switch (s.operator()) {

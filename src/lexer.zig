@@ -1,9 +1,10 @@
 const std = @import("std");
-const Token = @import("token.zig").TokenType;
 const CompilerError = @import("compilererror.zig").CompilerError;
 const File = @import("file.zig");
+const Token = @import("token.zig").TokenType;
 
 const Lexer = @This();
+
 const LexingState = enum {
     base,
     read_word,
@@ -32,16 +33,16 @@ const LexingState = enum {
     read_multi_comment,
 };
 
-index: usize = 0,
-placeholder: usize = 0,
-tok: ?Token = null,
-literal: ?[]const u8 = null,
-state: LexingState = .base,
-err: ?anyerror = null,
-line: usize = 1,
 col: usize = 1,
-reading_comment: bool = false,
+err: ?anyerror = null,
 file: *File,
+index: usize = 0,
+line: usize = 1,
+literal: ?[]const u8 = null,
+placeholder: usize = 0,
+reading_comment: bool = false,
+state: LexingState = .base,
+tok: ?Token = null,
 
 pub fn init(file: *File) Lexer {
     return Lexer{ .file = file };
@@ -54,8 +55,7 @@ fn is_whitespace(s: Lexer) bool {
 }
 pub fn next_tok(s: *Lexer) void {
     if (s.err != null or s.tok == .eof) return;
-    // skip commented chars
-    // skip whitespace
+    // skip commented chars and whitespace
     if (s.state != .read_string) {
         while (s.index < s.file.content.len and s.is_whitespace() or s.reading_comment) {
             if (s.file.content[s.index] == '\n') {
