@@ -1,41 +1,29 @@
 const std = @import("std");
 const File = @import("file.zig");
+const Diagnostic = @import("diagnostic.zig");
 
-// ok so the way go does it is if the calling module has an error in imported modules, those get back instead of errors in the current module
-// so if a imports b and b imports c, and c has errors, then only c's will print
-// but if a also imports d and d has errors then it will print d's also
-// so for each module we resolve, we grab its errors and compile into the diagnostics
-// that should be fine then if we keep using the file diagnostics method
-// we also just need to try doing check stuff as well, same with checker errors
-// for checking we need a symbol pass into the symbol table and here we determine if there are duplicate symbols defined in the module
-// then we go into type checking
-// here we ALSO need to do the comptime evals as needed (lazily)
 const Module = struct {
     a: std.mem.Allocator,
-    name: []const u8,
+    diagnostics: ?std.ArrayList(Diagnostic) = null,
+    dir: []const u8,
     files: std.ArrayList(File),
-    dependencies: struct {}, // also find a way to handle dependencies better when it comes to adding diagnostics to them
-    symbols: struct {},
-    status: enum { compiling, failed, checked }, // compiling, errors
+    name: []const u8,
+    pub fn init(a: std.mem.Allocator, dir: []const u8, name: []const u8) Module {
+        return Module{ .a = a, .dir = dir, .name = name, .files = std.ArrayList(File), .status = .compiling };
+    }
     pub fn parse(s: *Module) !void {
         var threads = std.ArrayList(std.Thread).init(s.a);
+        defer threads.deinit();
         for (s.files.items) |*f| try threads.append(try std.Thread.spawn(.{}, File.parse, .{ f, s.a }));
         for (threads.items) |i| i.join();
         for (s.files.items) |f| {
-            if (f.diagnostics.items.len > 0) { // file has errors
-                s.status = .failed;
+            if (f.diagnostics.items.len > 0) {
+                if (s.diagnostics) |d| try d.appendSlice(f.diagnostics.items) else {
+                    s.diagnostics = std.ArrayList(Diagnostic).init(s.a);
+                    try s.diagnostics.?.appendSlice(f.diagnostics.items);
+                }
             }
         }
-    }
-    pub fn load_symbols(m: *Module) !void {
-        _ = m;
-    }
-    pub fn load_dependencies(m: *Module, dir: []const u8) !void {
-        _ = m;
-        _ = dir;
-    }
-    pub fn check(m: *Module) void { // this assumes that we have
-        _ = m;
     }
 };
 
@@ -74,8 +62,7 @@ pub const ModuleResolver = struct {
                     }
                 }
                 // module not found, create one
-                var mod = Module{ .name = mod_name, .files = std.ArrayList(File).init(s.a) };
-                // std.debug.print("Adding {s} to {s}\n", .{ file.name, mod.name });
+                var mod = Module.init(s.a, module_parts.path, module_parts.name);
                 try mod.files.append(file);
                 try mods.append(mod);
             }

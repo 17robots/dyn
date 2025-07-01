@@ -1,3 +1,0 @@
-module testing;
-
-test3 := struct {};

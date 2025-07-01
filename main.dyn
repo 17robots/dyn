@@ -1,9 +1,9 @@
 module main;
-io := use "std/io";
-heap := use "std/heap";
-test := use "test";
+io := use "std/io"; // type
+heap := use "std/heap"; // type
+test := use "test"; // type
 
-BasicEnum := enum {
+BasicEnum := enum { // enum
 	item,
 	other,
 	float,
@@ -11,7 +11,7 @@ BasicEnum := enum {
 	chained,
 };
 
-PartneredEnum := enum {
+PartneredEnum := enum { // enum
 	something2 := 1;
 	item: i32,
 	other: i12,
@@ -21,38 +21,39 @@ PartneredEnum := enum {
 	err: error {},
 };
 
-BasicError := error {
+BasicError := error { // enum
 	something := 1;
 	cool,
 	message,
 };
 
-PartneredError := error {
+PartneredError := error { // error
 	something := 1;
 	cool: PartneredEnum,
 	message: []u8,
 };
 
-getType := () type => i32;
+getType := () type => i32; // type
 
-AStruct := struct {
-	items: i32,
-	here: i32,
-	other: []i32,
-	ptr: *i32,
+AStruct := struct { // struct
+  items: i32,
+  here: i32,
+  other: []i32,
+  ptr: *i32,
   uh: []?*getType(),
   new2 := () i32 => 3;
-	new := () AStruct => .{ items: 0, here: 0, other: [] };
+  new := () AStruct => .{ items: 0, here: 0, other: [] };
+  aThing := (s: AStruct) { };
 };
 
-List := (comp type)!;
-something := (x, y: i32, fn: List) {};
+List := (comp type)!; // function
+something := (x, y: i32, fn: List) {}; // function
 
-Uh := (x: i32) {};
-main := () ! {
-	x := 2;
-	y: i32 = 2;
-	mut z := 2;
+Uh := (x: i32) {}; // function
+main := () ! { // function
+	x := 2; // int
+	y: i32 = 2; // int
+	mut z := 2; // int
 	single: f32 = 1.0;
 	double: f64 = 1.0;
 	char := 'a';
