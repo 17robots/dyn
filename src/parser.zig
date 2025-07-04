@@ -207,19 +207,19 @@ fn statement(s: *Parser) ParsingResult {
                                             }
                                         },
                                         .node => |n| result = node(n),
-                                        else => unreachable
+                                        else => unreachable,
                                     }
                                 },
                                 .node => |n| result = node(n),
-                                else => unreachable
+                                else => unreachable,
                             }
                         },
                         .node => |n| result = node(n),
-                        else => unreachable
+                        else => unreachable,
                     }
                 },
                 .node => |n| result = node(n),
-                else => unreachable
+                else => unreachable,
             }
             switch (result) {
                 .node => |n| {
@@ -233,7 +233,7 @@ fn statement(s: *Parser) ParsingResult {
                 else => {},
             }
             break :blk result;
-        }
+        },
     };
 }
 // error and recover
@@ -424,7 +424,7 @@ fn function_type(s: *Parser) ParsingResult {
         .node => |n| s.create_node_ptr(n),
         .diagnostic => |d| return .{ .diagnostic = d },
         .none => null,
-        else => unreachable
+        else => unreachable,
     } } });
 }
 fn arrow_expression(s: *Parser) ParsingResult {
@@ -451,16 +451,16 @@ fn arrow_expression(s: *Parser) ParsingResult {
                         }
                     },
                     .node => |n| result = node(n),
-                    else => unreachable
+                    else => unreachable,
                 }
             },
             .node => |n| result = node(n),
-            else => unreachable
+            else => unreachable,
         }
         break :blk switch (result) {
             .node => |n| n,
             .diagnostic => |d| return .{ .diagnostic = d },
-            else => unreachable
+            else => unreachable,
         };
     }) } });
 }
@@ -710,7 +710,7 @@ fn if_statement(s: *Parser) ParsingResult {
         break :blk switch (result) {
             .node => |n| n,
             .diagnostic => |d| return .{ .diagnostic = d },
-            else => unreachable
+            else => unreachable,
         };
     });
     const else_body = switch (s.l.tok.?) {
@@ -885,7 +885,7 @@ fn expression(s: *Parser, prec: u8) ParsingResult {
                 return node(expr);
             },
             .node => |n| n,
-            else => unreachable
+            else => unreachable,
         };
         expr = Node{ .binary = .{ .a = s.create_node_ptr(expr), .op = s.create_node_ptr(op), .b = s.create_node_ptr(switch (s.expression(new_prec)) {
             .diagnostic => |d| return .{ .diagnostic = d },
@@ -931,13 +931,13 @@ fn non_literal_expression(s: *Parser) ParsingResult {
                                         result = .{ .diagnostic = d3 };
                                     }
                                 },
-                                else => unreachable
+                                else => unreachable,
                             }
                         },
-                        else => unreachable
+                        else => unreachable,
                     }
                 },
-                else => unreachable
+                else => unreachable,
             }
             break :blk result;
         },
@@ -978,7 +978,7 @@ fn non_literal_expression(s: *Parser) ParsingResult {
                                     }
                                 },
                                 .node => |n| result = node(n),
-                                else => unreachable
+                                else => unreachable,
                             }
                         },
                         .node => |n| result = node(n),
@@ -986,7 +986,7 @@ fn non_literal_expression(s: *Parser) ParsingResult {
                     }
                     break :blk2 result;
                 },
-                else => break :blk s.diagnostic(.err, "", .{})
+                else => break :blk s.diagnostic(.err, "", .{}),
             };
         },
         .lbrack => blk: {
@@ -1008,11 +1008,11 @@ fn non_literal_expression(s: *Parser) ParsingResult {
                             }
                         },
                         .node => |n| result = node(n),
-                        else => unreachable
+                        else => unreachable,
                     }
                 },
                 .node => |n| result = node(n),
-                else => unreachable
+                else => unreachable,
             }
             break :blk result;
         },
@@ -1030,7 +1030,7 @@ fn non_literal_expression(s: *Parser) ParsingResult {
             },
             else => {},
         },
-        else => unreachable
+        else => unreachable,
     }
     return expr;
 }
@@ -1043,10 +1043,10 @@ fn member_chain(s: *Parser) ParsingResult {
             break :blk switch (s.identifier()) {
                 .node => |n| n,
                 .diagnostic => |d| return .{ .diagnostic = d },
-                else => unreachable
+                else => unreachable,
             };
         },
-        else => unreachable
+        else => unreachable,
     };
     while (s.l.tok.? != .eof) {
         switch (s.l.tok.?) {
@@ -1056,30 +1056,30 @@ fn member_chain(s: *Parser) ParsingResult {
                     .identifier => switch (s.member_access(chain)) {
                         .node => |n| n,
                         .diagnostic => |d| return .{ .diagnostic = d },
-                        else => unreachable
+                        else => unreachable,
                     },
                     else => return s.diagnostic(.err, "Invalid member access value {any}, wanted identifier", .{s.l.tok.?}),
-                }
+                },
             },
             .lbrack => chain = switch (s.array_index(chain)) {
                 .node => |n| n,
                 .diagnostic => |d| return .{ .diagnostic = d },
-                else => unreachable
+                else => unreachable,
             },
             .lparen => chain = switch (s.call(chain)) {
                 .node => |n| n,
                 .diagnostic => |d| return .{ .diagnostic = d },
-                else => unreachable
+                else => unreachable,
             },
             .pointer_deref => chain = switch (s.pointer_dereference(chain)) {
                 .node => |n| n,
                 .diagnostic => |d| return .{ .diagnostic = d },
-                else => unreachable
+                else => unreachable,
             },
             .optional_deref => chain = switch (s.optional_dereference(chain)) {
                 .node => |n| n,
                 .diagnostic => |d| return .{ .diagnostic = d },
-                else => unreachable
+                else => unreachable,
             },
             else => break,
         }
@@ -1108,7 +1108,7 @@ fn unary_expression(s: *Parser) ParsingResult {
     const op = switch (s.operator()) {
         .diagnostic => |d| return .{ .diagnostic = d },
         .node => |n| n,
-        else => unreachable
+        else => unreachable,
     };
     const expr = s.create_node_ptr(switch (s.expression(0)) {
         .node => |i| i,
@@ -1121,7 +1121,7 @@ fn binary_expression(s: *Parser, n: Node) ParsingResult {
     const op = switch (s.operator()) {
         .diagnostic => |d| return .{ .diagnostic = d },
         .node => |i| i,
-        else => unreachable
+        else => unreachable,
     };
     const expr = s.create_node_ptr(switch (s.expression(0)) {
         .node => |i| i,
@@ -1178,7 +1178,7 @@ fn continue_expression(s: *Parser) ParsingResult {
         break :blk s.create_node_ptr(switch (s.identifier()) {
             .diagnostic => |d| return .{ .diagnostic = d },
             .node => |n| n,
-            else => unreachable
+            else => unreachable,
         });
     } else null;
     return node(Node{ .continue_expression = .{ .label = label } });
@@ -1191,7 +1191,7 @@ fn nullish_expression(s: *Parser, n: Node) ParsingResult {
     const b = s.create_node_ptr(switch (s.expression(0)) {
         .diagnostic => |d| return .{ .diagnostic = d },
         .node => |i| i,
-        else => unreachable
+        else => unreachable,
     });
     return node(Node{ .nullish_expression = .{ .a = s.create_node_ptr(n), .b = b } });
 }
@@ -1203,7 +1203,7 @@ fn range_expression(s: *Parser, n: Node) ParsingResult {
     const b = s.create_node_ptr(switch (s.expression(0)) {
         .diagnostic => |d| return .{ .diagnostic = d },
         .node => |i| i,
-        else => unreachable
+        else => unreachable,
     });
     return node(Node{ .range_expression = .{ .a = s.create_node_ptr(n), .b = b } });
 }
@@ -1271,7 +1271,7 @@ fn if_expression(s: *Parser) ParsingResult {
         break :blk switch (result) {
             .node => |n| n,
             .diagnostic => |d| return .{ .diagnostic = d },
-            else => unreachable
+            else => unreachable,
         };
     });
     const else_body = if (s.l.tok.? == .@"else") blk: {
@@ -1878,7 +1878,7 @@ fn node(n: Node) ParsingResult {
 }
 fn diagnostic(s: Parser, severity: Diagnostic.Severity, comptime fmt: []const u8, args: anytype) ParsingResult {
     const msg = std.fmt.allocPrint(s.a, fmt, args) catch |e| @panic(@errorName(e));
-    return .{ .diagnostic = Diagnostic{ .filename = s.f.path, .severity = severity, .line = s.l.line, .col = s.l.col, .message = msg } };
+    return .{ .diagnostic = Diagnostic{ .filename = s.f.name, .severity = severity, .line = s.l.line, .col = s.l.col, .message = msg } };
 }
 fn recover(s: *Parser, toks: []const Token) void {
     while (s.l.tok.? != .eof) {

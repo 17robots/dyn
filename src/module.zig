@@ -2,14 +2,14 @@ const std = @import("std");
 const File = @import("file.zig");
 const Diagnostic = @import("diagnostic.zig");
 
-const Module = struct {
+pub const Module = struct {
     a: std.mem.Allocator,
     diagnostics: ?std.ArrayList(Diagnostic) = null,
     dir: []const u8,
     files: std.ArrayList(File),
     name: []const u8,
     pub fn init(a: std.mem.Allocator, dir: []const u8, name: []const u8) Module {
-        return Module{ .a = a, .dir = dir, .name = name, .files = std.ArrayList(File), .status = .compiling };
+        return Module{ .a = a, .dir = dir, .name = name, .files = std.ArrayList(File).init(a) };
     }
     pub fn parse(s: *Module) !void {
         var threads = std.ArrayList(std.Thread).init(s.a);
@@ -18,7 +18,7 @@ const Module = struct {
         for (threads.items) |i| i.join();
         for (s.files.items) |f| {
             if (f.diagnostics.items.len > 0) {
-                if (s.diagnostics) |d| try d.appendSlice(f.diagnostics.items) else {
+                if (s.diagnostics) |*d| try d.appendSlice(f.diagnostics.items) else {
                     s.diagnostics = std.ArrayList(Diagnostic).init(s.a);
                     try s.diagnostics.?.appendSlice(f.diagnostics.items);
                 }
@@ -35,7 +35,8 @@ pub const ModuleResolver = struct {
     }
     pub fn resolveModule(s: *ModuleResolver, calling_file_path_from_cwd: []const u8, modulePath: []const u8) !Module {
         const module_parts = try getModuleNamePath(s.a, calling_file_path_from_cwd, modulePath);
-        if (s.c.get(module_parts.path)) |modules| { // if cached then attempt to load
+        const path = try std.fs.path.resolve(s.a, &[_][]const u8{module_parts.path});
+        if (s.c.get(path)) |modules| { // if cached then attempt to load
             for (modules.items) |module| {
                 if (std.mem.eql(u8, module.name, module_parts.name)) {
                     return module;
@@ -43,10 +44,10 @@ pub const ModuleResolver = struct {
             }
             return error.ModuleNotFound;
         } else {
-            var dir = try std.fs.cwd().openDir(module_parts.path, .{ .iterate = true, .access_sub_paths = false });
+            var dir = try std.fs.cwd().openDir(path, .{ .iterate = true, .access_sub_paths = false });
             defer dir.close();
-            try s.c.put(module_parts.path, std.ArrayList(Module).init(s.a));
-            const mods = s.c.getPtr(module_parts.path).?;
+            try s.c.put(path, std.ArrayList(Module).init(s.a));
+            const mods = s.c.getPtr(path).?;
             var iterator = dir.iterate();
             outer: while (try iterator.next()) |entry| {
                 if (entry.kind != .file) continue;
@@ -62,7 +63,7 @@ pub const ModuleResolver = struct {
                     }
                 }
                 // module not found, create one
-                var mod = Module.init(s.a, module_parts.path, module_parts.name);
+                var mod = Module.init(s.a, module_parts.path, mod_name);
                 try mod.files.append(file);
                 try mods.append(mod);
             }

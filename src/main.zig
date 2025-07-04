@@ -1,6 +1,6 @@
 const std = @import("std");
-const File = @import("file.zig");
 const module = @import("module.zig");
+const Checker = @import("checker.zig");
 
 pub fn main() !void {
     const page_allocator = std.heap.page_allocator;
@@ -8,6 +8,9 @@ pub fn main() !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const mod_resolver = module.ModuleResolver.init(alloc);
-    _ = mod_resolver;
+    var checker = Checker.init(alloc);
+    var mod_resolver = module.ModuleResolver.init(alloc);
+    var a = try mod_resolver.resolveModule(".", "test");
+    try a.parse();
+    try checker.check(&a);
 }
