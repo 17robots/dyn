@@ -8,6 +8,15 @@ const Symbol = struct {
     type: ?Type,
     mut: bool,
     val: struct {}, // adjust this later
+    status: enum { unresolved, resolving, resolved },
+    kind: enum {
+        variable,
+        function,
+        @"enum",
+        @"struct",
+        @"error",
+    },
+    node: *Node,
 };
 const Scope = struct {
     symbols: std.StringHashMap(Symbol),
@@ -40,7 +49,7 @@ pub fn check(s: *Checker, m: *module.Module) !void {
                 .module => {}, // skip module declaration
                 .declaration => |d| {
                     if (global_scope.symbols.get(d.name.*.identifier.value)) {} // duplicate symbol detected
-                    global_scope.symbols.put(d.name.*.identifier.value, .{ .name = d.name.*.identifier.value, .type = null, .mut = false, .val = .{} });
+                    global_scope.symbols.put(d.name.*.identifier.value, .{ .name = d.name.*.identifier.value, .type = null, .mut = false, .val = .{}, .status = .unresolved, .kind = .variable, .node = null });
                 }, // this is the important part
                 else => unreachable,
             }
@@ -51,10 +60,7 @@ pub fn check(s: *Checker, m: *module.Module) !void {
         for (f.root.?.program.declarations.items) |decl| {
             switch (decl) {
                 .module => {}, // skip module declaration
-                .declaration => |d| {
-                    if (global_scope.symbols.get(d.name.*.identifier.value)) {} // duplicate symbol detected
-                    global_scope.symbols.put(d.name.*.identifier.value, .{ .name = d.name.*.identifier.value, .type = null, .mut = false, .val = .{} });
-                }, // this is the important part
+                .declaration => {}, // this is the important part
                 else => unreachable,
             }
         }

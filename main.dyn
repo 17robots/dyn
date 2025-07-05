@@ -46,7 +46,7 @@ AStruct := struct { // struct
   aThing := (s: AStruct) { };
 };
 
-List := (comp type)!; // function
+List : type = (comp type)!; // function type
 something := (x, y: i32, fn: List) {}; // function
 
 Uh := (x: i32) {}; // function

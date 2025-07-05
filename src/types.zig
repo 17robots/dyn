@@ -11,7 +11,7 @@ pub const Type = union(enum) {
             type: ?Type,
             alignment: ?comptime_int,
         },
-        declarations: []const Declaration,
+        enum_declarations: []const Declaration,
     },
     err_union: struct {},
     @"error": struct {
@@ -20,7 +20,7 @@ pub const Type = union(enum) {
             type: ?Type,
             alignment: ?comptime_int,
         },
-        declarations: []const Declaration,
+        error_declarations: []const Declaration,
     },
     float: struct {},
     function: struct {
