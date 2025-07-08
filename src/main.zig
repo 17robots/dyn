@@ -8,9 +8,9 @@ pub fn main() !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    var checker = Checker.init(alloc);
+    var checker = try Checker.init(alloc);
     var mod_resolver = module.ModuleResolver.init(alloc);
     var a = try mod_resolver.resolveModule(".", "test");
     try a.parse();
-    try checker.check(&a);
+    try checker.check_program(&a);
 }

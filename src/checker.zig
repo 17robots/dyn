@@ -1,123 +1,228 @@
 const std = @import("std");
-const module = @import("module.zig");
-const Node = @import("ast.zig").Node;
-const Type = @import("types.zig").Type;
-const File = @import("file.zig");
+const ast = @import("ast.zig");
+const Module = @import("module.zig").Module;
+const ModuleResolver = @import("module.zig").ModuleResolver;
+const types = @import("types.zig");
+const Visitor = @import("visitor.zig");
+
 const Symbol = struct {
     name: []const u8,
-    type: ?Type,
-    mut: bool,
-    val: struct {}, // adjust this later
-    status: enum { unresolved, resolving, resolved },
-    kind: enum {
-        variable,
-        function,
-        @"enum",
-        @"struct",
-        @"error",
-    },
-    node: *Node,
+    type: *types.Type,
+    node: *ast.Node,
 };
-const Scope = struct {
+
+pub const Scope = struct {
+    parent: ?*Scope,
     symbols: std.StringHashMap(Symbol),
-    type: ScopeType,
-    label: ?[]const u8,
-    const ScopeType = enum { function, global, @"while", @"for", @"if", block };
-    fn init(allocator: std.mem.Allocator, t: ScopeType, label: ?[]const u8) Scope {
-        return Scope{ .symbols = std.StringHashMap(Symbol).init(allocator), .type = t, .label = label };
+
+    pub fn init(allocator: std.mem.Allocator, parent: ?*Scope) Scope {
+        return .{
+            .parent = parent,
+            .symbols = std.StringHashMap(Symbol).init(allocator),
+        };
+    }
+
+    pub fn lookup(self: *const Scope, name: []const u8) ?Symbol {
+        if (self.symbols.get(name)) |symbol| {
+            return symbol;
+        }
+        if (self.parent) |p| {
+            return p.lookup(name);
+        }
+        return null;
     }
 };
-const Dependency = struct {
-    module: *module.Module,
-    status: enum { compiling, done, errored },
-};
+
 const Checker = @This();
 
-a: std.mem.Allocator,
-scopes: std.ArrayList(Scope), // last is most recent
-dependencies: std.StringHashMap(Dependency),
+const ModuleNode = struct {
+    module: *Module,
+    status: enum { unvisited, visiting, visited } = .unvisited,
+    dependencies: std.ArrayList(*ModuleNode),
+    scope: Scope,
+};
 
-pub fn init(alloc: std.mem.Allocator) Checker {
-    return .{ .scopes = std.ArrayList(Scope).init(alloc), .a = alloc, .dependencies = std.StringHashMap(Dependency).init(alloc) };
-}
-pub fn check(s: *Checker, m: *module.Module) !void {
-    // check assumes files have been parsed
-    var global_scope = Scope.init(s.a, .global, null);
-    for (m.files.items) |f| { // first pass to load
-        for (f.root.?.program.declarations.items) |decl| {
-            switch (decl) {
-                .module => {}, // skip module declaration
-                .declaration => |d| {
-                    if (global_scope.symbols.get(d.name.*.identifier.value)) {} // duplicate symbol detected
-                    global_scope.symbols.put(d.name.*.identifier.value, .{ .name = d.name.*.identifier.value, .type = null, .mut = false, .val = .{}, .status = .unresolved, .kind = .variable, .node = null });
-                }, // this is the important part
-                else => unreachable,
-            }
-        }
-        if (f.diagnostics.items.len > 0) {} // we have checking errors
-    }
-    for (m.files.items) |f| { // second pass to resolve/infer types
-        for (f.root.?.program.declarations.items) |decl| {
-            switch (decl) {
-                .module => {}, // skip module declaration
-                .declaration => {}, // this is the important part
-                else => unreachable,
-            }
-        }
-        if (f.diagnostics.items.len > 0) {} // we have checking errors
-    }
-}
-pub fn analyze(s: *Checker, node: Node, f: *File) !void {
-    _ = s;
-    _ = f;
-    switch (node) {}
+allocator: std.mem.Allocator,
+module_resolver: ModuleResolver,
+module_graph: std.StringHashMap(*ModuleNode),
+current_module: ?*ModuleNode,
+current_scope: *Scope,
+visitor: Visitor,
+
+pub fn init(allocator: std.mem.Allocator) !Checker {
+    var self = Checker{
+        .allocator = allocator,
+        .module_resolver = ModuleResolver.init(allocator),
+        .module_graph = std.StringHashMap(*ModuleNode).init(allocator),
+        .current_module = null,
+        .current_scope = undefined,
+        .visitor = Visitor{
+            .visit_fn = visit,
+        },
+    };
+
+    const global_scope = try self.allocator.create(Scope);
+    global_scope.* = Scope.init(self.allocator, null);
+    self.current_scope = global_scope;
+
+    try self.populate_global_scope();
+
+    return self;
 }
 
-// things to check
-// AST & Scoping
-// - all nodes that should have children have them
-// - check that binary ops have 2 ops and unary ops have 1
-// - ensure literals are assigned to their respective types
-// - ensure keywords arent used as identifiers
-// - scope checking
-//   - function params get added to scope in their block
-//   - global scope items get added to top level scope and their order doesnt matter
-// - type aliases are distinct entries in the symbol table and are their underlying type in type checking
-// - type inference on untyped items (proper default types)
-// - ensure types of values are compatible with an assigned type in a declaration
-// - consider implicit conversions (include checking if result is larger than given size for ints)
-// - do these on assignment too not just declaration
-// - define which vals are allowed to be used with which operator and ensure all ops have their required types (+ needing numbers, == being same type on both sides, etc)
-// - ensure only pointer types are pointer dereferenced
-// - ensure only optional types are optional dereferenced
-// - ensure only array types are array indexed
-// - ensure array indexes are usize (or can be cast to usize) and can be known at compile time
-// - ensure array indexes are within the bounds of the array
-// - ensure function signature has all required arguments
-// - ensure passed function args match parameter types
-// - ensure member access (or member function call) is done on struct (or struct pointer), and that the member exists on the struct
-// - ensure member function call is to a member function, not abstract function
-// - if abstractly calling member function, ensure that the params include an instance of the struct
-// - ensure enum and error variant are valid for given enum or error
-// - ensure enum/error variants have all needed args and that args are correct type
-// - ensure with nullish coalescing that the first var is ?T and that the default is T
-// - ensure that functions being used as a type return a type
-// - ensure comp stuff is figured out (thisll be a time)
-// - anything after a return, continue, etc, then below is unreachable
-// - break and continue must be in a loop
-// - returns must return a val that matches the return val of the fn
-// - passing a label to break needs to be valid and must have value that matches the type of the assignment
-// - all errors must be handled, either by a try or a catch
-// - try propagates error up so the function that it's used in must also return an error union that encompasses that error
-// - ensure all allocated pointers are freed at the end of their scope
-// - ensure pointers are not used after they are freed
-// - ensure pointers are not freed multiple times
-// - ensure frees cannot be called on null or undefined
-// - ensure memory is initialized before it is read
-// - ensure pointers to vars in smaller scopes are not returned (dangling pointers)
-// - ensure all allocators have freed their memory by the end of the given scopes
-// - ensure immutable vars are never reassigned
-// - ensure mutable variables are reassigned
-// - ensure immutable vars are never assigned to null or undefined
-// - ensure exhaustive match branches
-// - ensure all declared vars are used
+fn populate_global_scope(self: *Checker) !void {
+    try self.current_scope.symbols.put("i32", Symbol{
+        .name = "i32",
+        .type = try self.allocator.create(types.Type),
+        .node = undefined,
+    });
+    if ((self.current_scope.symbols.get("i32"))) |symbol| {
+        symbol.type.* = types.Type{ .Int = .{ .is_signed = true, .width = 32 } };
+    }
+}
+
+pub fn check_program(self: *Checker, root_module: *Module) !void {
+    _ = try self.resolve_module(root_module, ".");
+    var it = self.module_graph.valueIterator();
+    while (it.next()) |module_node| {
+        try self.check_module(module_node.*);
+    }
+}
+
+fn check_module(self: *Checker, module_node: *ModuleNode) !void {
+    if (module_node.status != .unvisited) return;
+    module_node.status = .visiting;
+
+    for (module_node.dependencies.items) |dep| {
+        try self.check_module(dep);
+    }
+
+    self.current_module = module_node;
+    self.current_scope = &module_node.scope;
+
+    for (module_node.module.files.items) |file| {
+        if (file.root) |ast_node| {
+            try self.visitor.walk(ast_node);
+        }
+    }
+
+    module_node.status = .visited;
+}
+
+fn open_scope(self: *Checker) void {
+    const new_scope = self.allocator.create(Scope) catch @panic("OOM");
+    new_scope.* = Scope.init(self.allocator, self.current_scope);
+    self.current_scope = new_scope;
+}
+
+fn close_scope(self: *Checker) void {
+    self.current_scope = self.current_scope.parent orelse @panic("bad scope");
+}
+
+const UseFinder = struct {
+    allocator: std.mem.Allocator,
+    checker: *Checker,
+    dependencies: std.ArrayList([]const u8),
+    visitor: Visitor,
+
+    fn visit(self: *Visitor, node: ast.Node) !void {
+        const finder: *UseFinder = @fieldParentPtr("visitor", self);
+        switch (node) {
+            .use => |n| {
+                try finder.dependencies.append(n.path.literal.val);
+            },
+            else => try finder.visitor.visit(node),
+        }
+    }
+};
+
+fn resolve_module(self: *Checker, module: *Module, calling_path: []const u8) !*ModuleNode {
+    if (self.module_graph.get(module.name)) |node| return node;
+    const module_node = try self.allocator.create(ModuleNode);
+    module_node.* = .{
+        .module = module,
+        .dependencies = std.ArrayList(*ModuleNode).init(self.allocator),
+        .scope = Scope.init(self.allocator, null),
+    };
+    try self.module_graph.put(module.name, module_node);
+
+    for (module.files.items) |file| {
+        if (file.root) |ast_node| {
+            var use_finder = UseFinder{
+                .allocator = self.allocator,
+                .checker = self,
+                .dependencies = std.ArrayList([]const u8).init(self.allocator),
+                .visitor = Visitor{
+                    .visit_fn = UseFinder.visit,
+                },
+            };
+            try use_finder.visitor.walk(ast_node);
+            for (use_finder.dependencies.items) |dep_path| {
+                var dep_module = try self.module_resolver.resolveModule(calling_path, dep_path);
+                const dep_node = try self.resolve_module(&dep_module, dep_path);
+                try module_node.dependencies.append(dep_node);
+            }
+        }
+    }
+
+    return module_node;
+}
+
+fn visit(self: *Visitor, node: ast.Node) !void {
+    const checker: *Checker = @fieldParentPtr("visitor", self);
+    try checker.visitor.visit(node);
+    switch (node) {
+        .declaration => |n| {
+            const name = n.name.identifier.value;
+            const value_type = try checker.check_expression(n.val.*);
+
+            var decl_type = value_type;
+            if (n.type) |type_node| {
+                const specified_type = try checker.resolve_type_node(type_node.*);
+                if (!types.Type.eql(value_type.*, specified_type.*)) {
+                    @panic("type mismatch");
+                }
+                decl_type = specified_type;
+            }
+
+            try checker.current_scope.symbols.put(name, Symbol{
+                .name = name,
+                .type = decl_type,
+                .node = &node,
+            });
+        },
+        .if_statement, .while_statement, .for_statement => {
+            try checker.visitor.visit(node);
+        },
+        else => {
+            _ = try checker.check_expression(node);
+        },
+    }
+}
+
+fn check_expression(self: *Checker, node: ast.Node) !*types.Type {
+    return switch (node) {
+        .use => |n| {
+            const path = n.path.literal.val;
+            var used_module = try self.module_resolver.resolveModule(".", path);
+            const module_node = try self.resolve_module(&used_module, path);
+            const mod_lit = try self.allocator.create(types.ModuleLit);
+            mod_lit.* = .{
+                .name = module_node.module.name,
+                .scope = &module_node.scope,
+            };
+            const ptr = try self.allocator.create(types.Type);
+            ptr.* = types.Type{ .Module = mod_lit };
+            return ptr;
+        },
+        // ... (other cases from before) ...
+        else => self.resolve_type_node(node),
+    };
+}
+
+fn resolve_type_node(self: *Checker, node: ast.Node) !*types.Type {
+    _ = self;
+    _ = node;
+    return error.What;
+    // ... (implementation from before) ...
+}

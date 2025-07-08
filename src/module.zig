@@ -8,6 +8,8 @@ pub const Module = struct {
     dir: []const u8,
     files: std.ArrayList(File),
     name: []const u8,
+    pub_members: ?[]const i32, // change this
+    status: enum { compiling, compiled },
     pub fn init(a: std.mem.Allocator, dir: []const u8, name: []const u8) Module {
         return Module{ .a = a, .dir = dir, .name = name, .files = std.ArrayList(File).init(a) };
     }
