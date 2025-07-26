@@ -42,15 +42,15 @@ const LexingState = enum {
 };
 
 const Lexer = @This();
-index: usize = 0,
 diag: *DiagnosticEmitter,
 source: *Source,
 state: LexingState = .base,
-reading_comment: bool = false,
+index: usize = 0,
 placeholder: usize = 0,
+reading_comment: bool = false,
 
-pub fn init() Lexer {
-    return Lexer{};
+pub fn init(source: *Source, diag: *DiagnosticEmitter) Lexer {
+    return Lexer{ .source = source, .diag = diag };
 }
 fn is_whitespace(s: Lexer) bool {
     return switch (s.source.content[s.index]) {
@@ -58,7 +58,7 @@ fn is_whitespace(s: Lexer) bool {
         else => false,
     };
 }
-pub fn next_tok(s: *Lexer) void {
+pub fn next_tok(s: *Lexer) !Token {
     if (s.index >= s.source.content.len) return Token.init(.eof, s.source.id, @intCast(s.index), null);
     if (s.state != .read_string) {
         while (s.index < s.source.content.len and s.is_whitespace() or s.reading_comment) s.index += 1;
@@ -120,7 +120,10 @@ pub fn next_tok(s: *Lexer) void {
                     s.index += 1;
                     return Token.init(.comma, s.source.id, @intCast(s.index - 1), null);
                 },
-                else => return error.InvalidCharacter,
+                else => blk: {
+                    s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Character: {s}", .{s.source.content[s.index]});
+                    break :blk error.InvalidCharacter;
+                },
             },
             .read_underscore => switch (s.source.content[s.index]) {
                 'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
@@ -210,10 +213,10 @@ pub fn next_tok(s: *Lexer) void {
             .read_char => switch (s.source.content[s.index]) {
                 '\'' => {
                     s.state = .base;
-                    return if (s.source.content[(s.placeholder + 1)..s.index].len > 1)
-                        error.InvalidCharLength
-                    else
-                        Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    return if (s.source.content[(s.placeholder + 1)..s.index].len > 1) blk: {
+                        s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Character Length", .{});
+                        break :blk error.InvalidCharLength;
+                    } else Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
                 },
                 '\\' => {
                     s.index += 1;
@@ -221,6 +224,7 @@ pub fn next_tok(s: *Lexer) void {
                         '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
                         else => {
                             s.state = .base;
+                            s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Escape: {s}", .{s.source.content[(s.placeholder + 1)..s.index]});
                             return error.InvalidEscape;
                         },
                     }
@@ -405,19 +409,35 @@ pub fn next_tok(s: *Lexer) void {
         .read_question => Token.init(.question, s.source.id, @intCast(s.index), null),
         .read_string => switch (s.source.content[s.index]) {
             '\"' => Token.init(.string, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
-            else => error.UnclosedStringLiteral,
+            else => blk: {
+                s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Unclosed String Literal", .{});
+                break :blk error.UnclosedStringLiteral;
+            },
         },
         .read_char => switch (s.source.content[s.index]) {
             '\'' => blk: {
-                if (s.source.content[(s.placeholder + 1)..s.index].len > 1) return error.InvalidCharLength;
+                if (s.source.content[(s.placeholder + 1)..s.index].len > 1) {
+                    s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Character Length", .{});
+                    return error.InvalidCharLength;
+                }
                 break :blk Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
             },
-            else => error.UnclosedCharacterLiteral,
+            else => blk: {
+                s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index)}, .err, "Unclosed Char Literal", .{});
+                break :blk error.UnclosedCharacterLiteral;
+            },
         },
     };
     s.state = .base;
     return res;
 }
+pub fn peek(s: *Lexer) !Token {
+    const idx = s.index;
+    const tok = try s.next_tok();
+    s.index = idx;
+    return tok;
+}
+
 fn get_keyword(s: *Lexer) ?TokenType {
     if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "module")) return .module;
     if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "use")) return .use;
