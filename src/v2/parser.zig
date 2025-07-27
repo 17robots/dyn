@@ -1,5 +1,6 @@
 const std = @import("std");
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
+const Diagnostic = @import("diagnostic.zig").Diagnostic;
 const Lexer = @import("lexer.zig");
 const Node = @import("ast.zig").Node;
 const Source = @import("source.zig").Source;
@@ -22,8 +23,12 @@ pub fn init(allocator: std.mem.Allocator, source: *Source, diagnostics: *Diagnos
 pub fn parse(s: *Parser) !Node {
     var declarations = std.ArrayList(Node).init(s.allocator);
     declarations.append(try s.module_declaration()) catch |e| @panic(@errorName(e));
-    while (s.lexer.index < s.source.content.len or (try s.peek()).tok_type != .eof) {
-        declarations.append(try s.declaration(true)) catch |e| @panic(@errorName(e));
+    blk: while (s.lexer.index < s.source.content.len or (try s.peek()).tok_type != .eof) {
+        const d = s.declaration(true) catch {
+            s.recover();
+            continue :blk;
+        };
+        declarations.append(d) catch |e| @panic(@errorName(e));
     }
     return Node{ .program = .{ .declarations = declarations } };
 }
@@ -50,6 +55,21 @@ fn declaration(s: *Parser, root_declaration: bool) !Node {
     } else false;
     const name = try s.identifier();
 }
+fn statement(s: *Parser) !Node {
+    return switch((try s.peek()).tok_type) {
+       .@"if" => {}, // try if_statement(),
+       .@"for" => {}, // try for_statement(),
+       .@"while" => {}, // try while_statement(),
+       .@"defer" => {}, // try defer_statement(),
+       .match => {}, // try match_statement(),
+       .lbrace => {}, // try block(),
+       .mut => try s.declaration(false),
+       else => {
+       },
+    };
+}
+fn expression(s: *Parser) !Node {}
+fn non_literal_expression(s: *Parser) !Node {}
 fn identifier(s: *Parser) !Node {
     return Node{ .identifier = (try s.expect(.identifier, true)).val.? };
 }
@@ -70,4 +90,6 @@ fn create_node_ptr(s: *Parser, n: Node) *Node {
     const x = s.a.create(Node) catch |e| @panic(@errorName(e));
     x.* = n;
     return x;
+}
+fn recover(s: *Parser) void {
 }

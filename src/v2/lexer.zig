@@ -3,6 +3,7 @@ const FileId = @import("source.zig").FileId;
 const SourceLocation = @import("source.zig").SourceLocation;
 const Source = @import("source.zig").Source;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
+const CompilerError = @import("diagnostic.zig").CompilerError;
 const TokenType = @import("token.zig").TokenType;
 
 pub const Token = struct {
@@ -48,6 +49,7 @@ state: LexingState = .base,
 index: usize = 0,
 placeholder: usize = 0,
 reading_comment: bool = false,
+errored: bool = false,
 
 pub fn init(source: *Source, diag: *DiagnosticEmitter) Lexer {
     return Lexer{ .source = source, .diag = diag };
@@ -120,10 +122,7 @@ pub fn next_tok(s: *Lexer) !Token {
                     s.index += 1;
                     return Token.init(.comma, s.source.id, @intCast(s.index - 1), null);
                 },
-                else => blk: {
-                    s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Character: {s}", .{s.source.content[s.index]});
-                    break :blk error.InvalidCharacter;
-                },
+                else => CompilerError.InvalidCharacter,
             },
             .read_underscore => switch (s.source.content[s.index]) {
                 'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
@@ -213,10 +212,7 @@ pub fn next_tok(s: *Lexer) !Token {
             .read_char => switch (s.source.content[s.index]) {
                 '\'' => {
                     s.state = .base;
-                    return if (s.source.content[(s.placeholder + 1)..s.index].len > 1) blk: {
-                        s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Character Length", .{});
-                        break :blk error.InvalidCharLength;
-                    } else Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    return if (s.source.content[(s.placeholder + 1)..s.index].len > 1) CompilerError.InvalidCharLength else Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
                 },
                 '\\' => {
                     s.index += 1;
@@ -224,8 +220,8 @@ pub fn next_tok(s: *Lexer) !Token {
                         '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
                         else => {
                             s.state = .base;
-                            s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Escape: {s}", .{s.source.content[(s.placeholder + 1)..s.index]});
-                            return error.InvalidEscape;
+                            s.errored = true;
+                            return CompilerError.InvalidEscape;
                         },
                     }
                 },
@@ -409,23 +405,14 @@ pub fn next_tok(s: *Lexer) !Token {
         .read_question => Token.init(.question, s.source.id, @intCast(s.index), null),
         .read_string => switch (s.source.content[s.index]) {
             '\"' => Token.init(.string, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
-            else => blk: {
-                s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Unclosed String Literal", .{});
-                break :blk error.UnclosedStringLiteral;
-            },
+            else => CompilerError.UnclosedStringLiteral,
         },
         .read_char => switch (s.source.content[s.index]) {
             '\'' => blk: {
-                if (s.source.content[(s.placeholder + 1)..s.index].len > 1) {
-                    s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index) }, .err, "Invalid Character Length", .{});
-                    return error.InvalidCharLength;
-                }
+                if (s.source.content[(s.placeholder + 1)..s.index].len > 1) return CompilerError.InvalidCharLength;
                 break :blk Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
             },
-            else => blk: {
-                s.diag.emit(SourceLocation{ .file_id = s.source.id, .index = @intCast(s.index)}, .err, "Unclosed Char Literal", .{});
-                break :blk error.UnclosedCharacterLiteral;
-            },
+            else => CompilerError.UnclosedCharacterLiteral,
         },
     };
     s.state = .base;
