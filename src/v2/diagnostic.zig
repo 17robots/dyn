@@ -44,16 +44,10 @@ pub const DiagnosticEmitter = struct {
         for (s.diagnostics.items) |d| s.allocator.free(d.message);
         s.diagnostics.deinit();
     }
-    pub fn emit(s: *DiagnosticEmitter, file_id:u32, index: u32, severity: Severity, err: CompilerError, args: anytype) void {
+    pub fn emit(s: *DiagnosticEmitter, file_id: u32, index: u32, severity: Severity, comptime fmt: []const u8, args: anytype) void {
         if (severity == .err) s.err_count += 1;
-        const msg = std.fmt.allocPrint(s.allocator, switch (err) {
-            .InvalidCharacter => "Invalid Character {s}",
-            .InvalidCharLength => "Invalid Character Length",
-            .InvalidEscape => "Invalid Escape {s}",
-            .UnclosedStringLiteral => "Unclosed String Literal",
-            .UnclosedCharacterLiteral => "Unclosed Character Literal",
-        }, args) catch "out of memory";
-        s.diagnostics.append(.{ .severity = severity, .location = location, .message = msg }) catch @panic("out of memory");
+        const msg = std.fmt.allocPrint(s.allocator, fmt, args) catch "out of memory";
+        s.diagnostics.append(.{ .severity = severity, .location = SourceLocation{ .file_id = file_id, .index = index }, .message = msg }) catch @panic("out of memory");
     }
     pub fn has_errors(s: DiagnosticEmitter) bool {
         return s.err_count > 0;

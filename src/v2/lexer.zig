@@ -3,17 +3,9 @@ const FileId = @import("source.zig").FileId;
 const SourceLocation = @import("source.zig").SourceLocation;
 const Source = @import("source.zig").Source;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
-const CompilerError = @import("diagnostic.zig").CompilerError;
 const TokenType = @import("token.zig").TokenType;
+const Token = @import("token.zig").Token;
 
-pub const Token = struct {
-    tok_type: TokenType,
-    loc: SourceLocation,
-    val: ?[]const u8 = null,
-    pub fn init(tok: TokenType, file_id: FileId, index: u32, val: ?[]const u8) Token {
-        return Token{ .tok_type = tok, .loc = SourceLocation{ .file_id = file_id, .index = index }, .val = val };
-    }
-};
 const LexingState = enum {
     base,
     read_word,
@@ -49,21 +41,22 @@ state: LexingState = .base,
 index: usize = 0,
 placeholder: usize = 0,
 reading_comment: bool = false,
-errored: bool = false,
+has_char_errored: bool = false,
 
 pub fn init(source: *Source, diag: *DiagnosticEmitter) Lexer {
     return Lexer{ .source = source, .diag = diag };
 }
-fn is_whitespace(s: Lexer) bool {
+fn whitespace(s: Lexer) bool {
     return switch (s.source.content[s.index]) {
         ' ', '\t', '\n', '\r' => true,
         else => false,
     };
 }
-pub fn next_tok(s: *Lexer) !Token {
+pub fn next(s: *Lexer) Token {
+    if (s.err) |e| return e;
     if (s.index >= s.source.content.len) return Token.init(.eof, s.source.id, @intCast(s.index), null);
     if (s.state != .read_string) {
-        while (s.index < s.source.content.len and s.is_whitespace() or s.reading_comment) s.index += 1;
+        while (s.index < s.source.content.len and s.whitespace() or s.reading_comment) s.index += 1;
     }
     s.placeholder = s.index;
     while (s.index < s.source.content.len) {
@@ -122,7 +115,11 @@ pub fn next_tok(s: *Lexer) !Token {
                     s.index += 1;
                     return Token.init(.comma, s.source.id, @intCast(s.index - 1), null);
                 },
-                else => CompilerError.InvalidCharacter,
+                else => {
+                    s.diag.emit(s.source.id, s.index, .err, "Invalid Character: {s}", .{s.source.content[s.index]});
+                    s.index += 1;
+                    return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
+                },
             },
             .read_underscore => switch (s.source.content[s.index]) {
                 'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
@@ -211,17 +208,25 @@ pub fn next_tok(s: *Lexer) !Token {
             },
             .read_char => switch (s.source.content[s.index]) {
                 '\'' => {
+                    const the_char = s.source.content[(s.placeholder + 1)..s.index];
                     s.state = .base;
-                    return if (s.source.content[(s.placeholder + 1)..s.index].len > 1) CompilerError.InvalidCharLength else Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    s.index += 1;
+                    if (s.has_char_errored) {
+                        s.has_char_errored = false;
+                        return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
+                    }
+                    return if (the_char.len > if (the_char[0] == '\\') 2 else 1) blk: {
+                        s.diag.emit(s.source.id, s.index, .err, "Invalid Character Length", .{});
+                        break :blk Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
+                    } else Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
                 },
                 '\\' => {
                     s.index += 1;
                     switch (s.source.content[s.index]) {
                         '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
                         else => {
-                            s.state = .base;
-                            s.errored = true;
-                            return CompilerError.InvalidEscape;
+                            s.diag.emit(s.source.id, s.index, .err, "Invalid Character Escape {s}", .{s.source.content[(s.index - 1)..s.index]});
+                            s.has_char_errored = true;
                         },
                     }
                 },
@@ -358,7 +363,7 @@ pub fn next_tok(s: *Lexer) !Token {
             .read_comment => switch (s.source.content[s.index]) {
                 '\n' => {
                     s.state = .base;
-                    return s.next_tok();
+                    return s.next();
                 },
                 else => {},
             },
@@ -368,7 +373,7 @@ pub fn next_tok(s: *Lexer) !Token {
                     if (s.source.content[s.index] == '/') {
                         s.index += 1;
                         s.state = .base;
-                        return s.next_tok();
+                        return s.next();
                     }
                 }
             },
@@ -381,7 +386,8 @@ pub fn next_tok(s: *Lexer) !Token {
         .read_comment => Token.init(.eof, s.source.id, @intCast(s.index), null),
         .read_multi_comment => blk: {
             if (std.mem.eql(u8, s.source.content[(s.index - 2)..(s.index - 1)], "*/")) break :blk Token.init(.eof, s.source.id, @intCast(s.index), null);
-            @panic("UH OH unclosed multi line comment");
+            s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Comment", .{});
+            break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
         },
         .read_word => if (s.get_keyword()) |kw| Token.init(kw, s.source.id, @intCast(s.index), null) else Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
         .read_num => Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
@@ -405,24 +411,28 @@ pub fn next_tok(s: *Lexer) !Token {
         .read_question => Token.init(.question, s.source.id, @intCast(s.index), null),
         .read_string => switch (s.source.content[s.index]) {
             '\"' => Token.init(.string, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
-            else => CompilerError.UnclosedStringLiteral,
+            else => blk: {
+                s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed String Literal", .{});
+                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+            },
         },
         .read_char => switch (s.source.content[s.index]) {
             '\'' => blk: {
-                if (s.source.content[(s.placeholder + 1)..s.index].len > 1) return CompilerError.InvalidCharLength;
+                const the_char = s.source.content[(s.placeholder + 1)..s.index];
+                if (the_char.len > if (the_char[0] == '\\') 2 else 1) {
+                    s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Length {s}", .{the_char});
+                    break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                }
                 break :blk Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
             },
-            else => CompilerError.UnclosedCharacterLiteral,
+            else => blk: {
+                s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Character Literal", .{});
+                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+            },
         },
     };
     s.state = .base;
     return res;
-}
-pub fn peek(s: *Lexer) !Token {
-    const idx = s.index;
-    const tok = try s.next_tok();
-    s.index = idx;
-    return tok;
 }
 
 fn get_keyword(s: *Lexer) ?TokenType {

@@ -44,7 +44,7 @@ pub const Node = union(enum) {
     catch_: struct { capture: ?*Node, expression: *Node, body: *Node },
     comp_expression: struct { expression: *Node },
     continue_expression: struct { label: ?*Node },
-    declaration: struct { pub_: bool, mut: bool, name: *Node, type: ?*Node, val: *Node },
+    declaration: struct { pub_: bool, mut: bool, name: *Node, type: ?*Node, val: ?*Node },
     defer_statement: struct { capture: ?*Node, body: *Node },
     div: void,
     diveq: void,
@@ -66,6 +66,7 @@ pub const Node = union(enum) {
     gt: void,
     gte: void,
     identifier: []const u8,
+    invalid: bool,
     if_prefix: struct { expression: *Node, capture: ?*Node },
     if_statement: struct { prefix: *Node, body: *Node, else_body: ?*Node },
     if_expression: struct { prefix: *Node, body: *Node, else_body: ?*Node },
@@ -107,11 +108,4 @@ pub const Node = union(enum) {
     while_statement: struct { prefix: *Node, body: *Node },
     xor: void,
     xoreq: void,
-
-    pub fn as(self: Node, comptime T: std.meta.Tag(Node)) ?@TypeOf(@field(self, @tagName(T))) {
-        if (self == T) {
-            return @field(self, @tagName(T));
-        }
-        return null;
-    }
 };
