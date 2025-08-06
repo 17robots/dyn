@@ -1,66 +1,63 @@
 module main;
-io := use "std/io"; // type
-heap := use "std/heap"; // type
-test := use "test"; // type
 
-BasicEnum := enum { // enum
-	item,
-	other,
-	float,
-	something,
-	chained,
+io := use "std/io";
+heap := use "std/heap";
+test := use "test";
+
+BasicEnum := enum {
+  item,
+  other,
+  float,
+  something,
+  chained
 };
 
-PartneredEnum := enum { // enum
-	something2 := 1;
-	item: i32,
-	other: i12,
-	float: f32,
-	something: struct {},
-	chained: enum {},
-	err: error {},
+PartneredEnum := enum {
+  something2 := 1,
+  item: i32,
+  other: i12,
+  float: f32,
+  something: struct {},
+  chained: enum {},
+  err: error {},
 };
 
-BasicError := error { // enum
-	something := 1;
+BasicError := error {
+	something := 1,
 	cool,
 	message,
 };
 
-PartneredError := error { // error
-	something := 1;
+PartneredError := error {
 	cool: PartneredEnum,
 	message: []u8,
 };
 
-getType := () type => i32; // type
+getType := fn() type => i32;
 
-AStruct := struct { // struct
+AStruct := struct {
   items: i32,
   here: i32,
   other: []i32,
   ptr: *i32,
   uh: []?*getType(),
-  new2 := () i32 => 3;
-  new := () AStruct => .{ items: 0, here: 0, other: [] };
-  aThing := (s: AStruct) { };
+  new := fn() AStruct => { items: 0, here: 0, other: [] },
+  aThing := fn(s: AStruct) {},
 };
 
-List : type = (comp type)!; // function type
-something := (x, y: i32, fn: List) {}; // function
-
-Uh := (x: i32) {}; // function
-main := () ! { // function
-	x := 2; // int
-	y: i32 = 2; // int
-	mut z := 2; // int
-	single: f32 = 1.0;
-	double: f64 = 1.0;
-	char := 'a';
-	boolean := false;
-
-	optional_val: ?i32 = 100;
-	mut optional_val2: ?i32 = null;
+List: type = fn(comp type)!;
+something := fn(x, y: i32, func: List) {};
+Uh := fn(x: i32) {};
+main := fn() ! {
+  x := 2;
+  y: i32 = 2;
+  mut z := 2;
+  single: f32 = 1.0;
+  double: f64 = 1.0;
+  char := 'a';
+  boolean := false;
+  optional_val: ?i32 = 100;
+  mut optional_val2: ?i32 = null;
 
 	io.println("Optional val: {}", if optional_val: |v| v else "null");
 	io.println("Optional_val: {}", optional_val.?);
@@ -84,18 +81,18 @@ main := () ! { // function
 	nums[1] = 4;
 	nums[2] += nums[2];
 
-	yes : u1 = true;
-	if yes {
+	yes: u1 = true;
+	if yes: {
 		io.print("Hello World\n");
 	} else {
 		io.println("Uh oh\n");
 	}
-	if yes io.print("Hello World\n") else {
+	if yes: io.print("Hello World\n") else {
 		io.print("Uh oh\n");
 	}
-	if yes io.print("Hello World\n") else io.println("Uh oh\n");
+	if yes: io.print("Hello World\n") else io.println("Uh oh\n");
 
-	io.print("{}\n", if yes "Hello World" else "Uh oh");
+	io.print("{}\n", if yes: "Hello World" else "Uh oh");
 
 	some_other_optional_val: ?i32 = null;
 
@@ -109,64 +106,60 @@ main := () ! { // function
 	for some_other_array, 0..some_other_array.len: |mut i, mut j| io.print("Arr ind: {}, arr val: {}", j, i);
 
 	mut while_val: i32 = 0;
-	while while_val < 10 i += 1;
+	while while_val < 10: i += 1;
 	while_val = 0;
-	while while_val < 10 {
+	while while_val < 10: {
 		io.print("While val: {}", while_val);
 		while_val += 1;
 	}
 	mut another_while_val: ?i32 = while_val;
 	while another_while_val: |mut i| {
 		io.print("While val: {}", i);
-		if i < 10 another_while_val = null;
+		if i < 10: another_while_val = null;
 	}
-
 	defer io.print("This prints last");
-	defer if yes io.print("This prints third");
+	defer if yes: io.print("This prints third");
 	defer {
 		io.print("This prints first");
 		io.print("This prints second");
 	}
-
-	internal_fn := () { io.print("Im an internal fn"); };
-	internal_fn();
-	some_number := () i32 { return 100; };
-	some_number2 := () i32 => 100;
-	some_math := (x: i32, y: i32) i32 => x + y;
-	some_math2 := (x, y: i32) i32 { return x + y; };
+  internal_fn := fn() { io.print("Im an internal fn"); };
+  internal_fn();
+	some_number := fn() i32 { return 100; };
+	some_number2 := fn() i32 => 100;
+	some_math := fn(x: i32, y: i32) i32 => x + y;
+	some_math2 := fn(x, y: i32) i32 { return x + y; };
 	mut res := 0;
-	manipulate_args := (x, y: i32, res: *i32) => res.* = x + y;
+	manipulate_args := fn(x, y: i32, res: *i32) => res.* = x + y;
 	manipulate_args(1,2,&res);
-	MathFn: type = (i32,i32)i32;
-	do_math : fn = (math: MathFn, x, y: i32) => math(x, y);
-	do_math((x,y: i32) => x + (2 * y), 1,2);
+	MathFn: type = fn(i32,i32)i32;
+	do_math : fn(MathFn, i32, i32) i32 = fn(math: MathFn, x, y: i32) i32 => math(x, y);
+	do_math(fn(x,y: i32) => x + (2 * y), 1,2);
 
 	basic_enum := .item;
 	partnered_enum := .item(2);
 	basic_error := .cool;
 	partnered_error := .cool(.other(1));
-	a_struct := .AStruct{ items: 12, here: 12, other: [] };
-	a_struct2 : AStruct = .{ items: 12, here: 12, other: [] };
+	a_struct := AStruct{ items: 12, here: 12, other: [] };
+	a_struct2 : AStruct = { items: 12, here: 12, other: [] };
 	a_struct3 := AStruct.new();
 	io.print("{} {} {}", a_struct.items, a_struct2.here, a_struct3.other);
-	a_function_with_stuff := (s: struct {}, en: enum {}, er: error {}) type => struct {};
+	a_function_with_stuff := fn(s: struct {}, en: enum {}, er: error {}) type => struct {};
 
 	a_cool_cool_num := 3;
-	match a_cool_cool_num {
+	match a_cool_cool_num: {
 		0: io.print("A 0"),
 		1..12: io.print("In this range"),
 		13..17, 20..30: io.print("Weird range for this but it works"),
 		_: io.print("The default case")
 	}
-
-	a_cool_match_thing := match a_cool_num {
+	a_cool_match_thing := match a_cool_num: {
 		1..12: a_cool_number,
 		_: blk: {
 			break :blk 13;
 		}
 	};
-
-	match basic_enum {
+	match basic_enum: {
 		.item: io.print("item"),
 		.other: io.print("other"),
 		.float: io.print("float"),
@@ -174,7 +167,7 @@ main := () ! { // function
 		.chained: io.print("chained")
 	}
 
-	match partnered_enum {
+	match partnered_enum: {
 		.item: |c| io.print("c: {}", c),
 		.other: |c| io.print("c: {}", c),
 		.float: |c| io.print("c: {}", c),
@@ -183,16 +176,16 @@ main := () ! { // function
 		_: io.print("We dont care about the rest")
 	}
 
-	List := (T: comp type) type => struct {};
-	print_things_at_comptime := () => io.print("We are a thing");
+	List := fn(T: comp type) type => struct {};
+	print_things_at_comptime := fn() => io.print("We are a thing");
 	comp print_thing_at_comptime();
-	return_pi := () f32 => 3.14;
+	return_pi := fn() f32 => 3.14;
 	pi := comp return_pi();
 	inline for 0..12: |i| io.print("Woah\n");
-	inline_fn := inline () => io.print("This fn gets written out in place of each call");
+	inline_fn := inline fn() => io.print("This fn gets written out in place of each call");
 	inline_fn();
 
-	label: {
+  label: {
 
   }
 
@@ -200,14 +193,13 @@ main := () ! { // function
 		DivideByZero,
 	};
 
-  divide := (x,y: f32) f32!DivideError => if y == 0 DivideError.DivideByZero else x / y;
-
+  divide := fn(x,y: f32) f32!DivideError => if y == 0: DivideError.DivideByZero else x / y;
 	try divide(1,1);
 	v := divide(1,0) catch |e| blk: {
 		io.print("We got an error {}", e);
 		break :blk 1;
 	};
-	other_error_fn := () ! {
+	other_error_fn := fn() ! {
 		defer |e| {}
 	};
 };

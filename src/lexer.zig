@@ -1,9 +1,10 @@
 const std = @import("std");
-const CompilerError = @import("compilererror.zig").CompilerError;
-const File = @import("file.zig");
-const Token = @import("token.zig").TokenType;
-
-const Lexer = @This();
+const FileId = @import("source.zig").FileId;
+const SourceLocation = @import("source.zig").SourceLocation;
+const Source = @import("source.zig").Source;
+const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
+const TokenType = @import("token.zig").TokenType;
+const Token = @import("token.zig").Token;
 
 const LexingState = enum {
     base,
@@ -33,42 +34,35 @@ const LexingState = enum {
     read_multi_comment,
 };
 
-col: usize = 1,
-err: ?anyerror = null,
-file: *File,
+const Lexer = @This();
+diag: *DiagnosticEmitter,
+source: *Source,
+state: LexingState = .base,
 index: usize = 0,
-line: usize = 1,
-literal: ?[]const u8 = null,
 placeholder: usize = 0,
 reading_comment: bool = false,
-state: LexingState = .base,
-tok: ?Token = null,
+has_char_errored: bool = false,
+errored: bool = false,
 
-pub fn init(file: *File) Lexer {
-    return Lexer{ .file = file };
+pub fn init(source: *Source, diag: *DiagnosticEmitter) Lexer {
+    return Lexer{ .source = source, .diag = diag };
 }
-fn is_whitespace(s: Lexer) bool {
-    return switch (s.file.content[s.index]) {
+fn whitespace(s: Lexer) bool {
+    return switch (s.source.content[s.index]) {
         ' ', '\t', '\n', '\r' => true,
         else => false,
     };
 }
-pub fn next_tok(s: *Lexer) void {
-    if (s.err != null or s.tok == .eof) return;
-    // skip commented chars and whitespace
+pub fn next(s: *Lexer) Token {
+    if (s.errored) return Token.init(.invalid, s.source.id, @intCast(s.index), null);
+    if (s.index >= s.source.content.len) return Token.init(.eof, s.source.id, @intCast(s.index), null);
     if (s.state != .read_string) {
-        while (s.index < s.file.content.len and s.is_whitespace() or s.reading_comment) {
-            if (s.file.content[s.index] == '\n') {
-                s.line += 1;
-                s.col = 1;
-            }
-            s.index += 1;
-        }
+        while (s.index < s.source.content.len and s.whitespace() or s.reading_comment) s.index += 1;
     }
     s.placeholder = s.index;
-    while (s.index < s.file.content.len) {
+    while (s.index < s.source.content.len) {
         switch (s.state) {
-            .base => switch (s.file.content[s.index]) {
+            .base => switch (s.source.content[s.index]) {
                 'a'...'z', 'A'...'Z', '$' => s.state = .read_word,
                 '0'...'9' => s.state = .read_num,
                 '.' => s.state = .read_dot,
@@ -91,588 +85,395 @@ pub fn next_tok(s: *Lexer) void {
                 '_' => s.state = .read_underscore,
                 ':' => s.state = .read_colon,
                 '(' => {
-                    s.tok = .lparen;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.lparen, s.source.id, @intCast(s.index - 1), null);
                 },
                 ')' => {
-                    s.tok = .rparen;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.rparen, s.source.id, @intCast(s.index - 1), null);
                 },
                 '[' => {
-                    s.tok = .lbrack;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.lbrack, s.source.id, @intCast(s.index - 1), null);
                 },
                 ']' => {
-                    s.tok = .rbrack;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.rbrack, s.source.id, @intCast(s.index - 1), null);
                 },
                 '{' => {
-                    s.tok = .lbrace;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.lbrace, s.source.id, @intCast(s.index - 1), null);
                 },
                 '}' => {
-                    s.tok = .rbrace;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.rbrace, s.source.id, @intCast(s.index - 1), null);
                 },
                 ';' => {
-                    s.tok = .semicolon;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.semicolon, s.source.id, @intCast(s.index - 1), null);
                 },
                 ',' => {
-                    s.tok = .comma;
-                    s.literal = null;
                     s.index += 1;
+                    return Token.init(.comma, s.source.id, @intCast(s.index - 1), null);
                 },
                 else => {
-                    s.tok = .invalid;
-                    s.err = CompilerError.InvalidCharacter;
-                    return;
+                    s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character: {any}", .{s.source.content[s.index]});
+                    s.index += 1;
+                    s.errored = true;
+                    return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
                 },
             },
-            .read_underscore => {
-                switch (s.file.content[s.index]) {
-                    'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
-                    else => {
-                        s.tok = .underscore;
-                        s.literal = null;
-                        s.state = .base;
-                    },
-                }
+            .read_underscore => switch (s.source.content[s.index]) {
+                'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
+                else => {
+                    s.state = .base;
+                    return Token.init(.underscore, s.source.id, @intCast(s.index), null);
+                },
             },
-            .read_word => {
-                switch (s.file.content[s.index]) {
-                    'a'...'z', 'A'...'Z', '0'...'9', '_' => {},
-                    else => {
-                        if (s.get_keyword()) |k| {
-                            s.tok = k;
-                            s.literal = null;
-                        } else {
-                            s.tok = .identifier;
-                            s.literal = s.file.content[s.placeholder..s.index];
-                        }
-                        s.state = .base;
-                    },
-                }
+            .read_word => switch (s.source.content[s.index]) {
+                'a'...'z', 'A'...'Z', '0'...'9', '_' => {},
+                else => {
+                    s.state = .base;
+                    if (s.get_keyword()) |kw| return Token.init(kw, s.source.id, @intCast(s.index), null);
+                    return Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                },
             },
-            .read_num => {
-                switch (s.file.content[s.index]) {
-                    '0'...'9' => {},
-                    '.' => s.state = .read_float,
-                    else => {
-                        s.tok = .int;
-                        s.literal = s.file.content[s.placeholder..s.index];
-                        s.state = .base;
-                    },
-                }
+            .read_num => switch (s.source.content[s.index]) {
+                '0'...'9' => {},
+                '.' => s.state = .read_float,
+                else => {
+                    s.state = .base;
+                    return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                },
             },
-            .read_float => {
-                switch (s.file.content[s.index]) {
-                    '0'...'9' => {},
-                    '.' => {
-                        if (s.index > 0 and s.file.content[s.index - 1] == '.') {
-                            s.index -= 1;
-                            s.tok = .int;
-                            s.literal = s.file.content[s.placeholder..s.index];
-                            s.state = .base;
-                        } else {
-                            s.tok = .float;
-                            s.literal = s.file.content[s.placeholder..s.index];
-                            s.state = .base;
-                        }
-                    },
-                    else => {
-                        s.tok = .float;
-                        s.literal = s.file.content[s.placeholder..s.index];
-                        s.state = .base;
-                    },
-                }
+            .read_float => switch (s.source.content[s.index]) {
+                '0'...'9' => {},
+                '.' => {
+                    s.state = .base;
+                    if (s.index > 0 and s.source.content[s.index - 1] == '.') {
+                        s.index -= 1;
+                        return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    } else return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                },
+                else => {
+                    s.state = .base;
+                    return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                },
             },
-            .read_dot => {
-                switch (s.file.content[s.index]) {
-                    '0'...'9' => {
-                        s.state = .read_float;
-                    },
-                    '.' => {
-                        s.tok = .dotdot;
-                        s.literal = null;
-                        s.state = .base;
-                        s.index += 1;
-                    },
-                    '?' => {
-                        s.tok = .optional_deref;
-                        s.literal = null;
-                        s.state = .base;
-                        s.index += 1;
-                    },
-                    '*' => {
-                        s.tok = .pointer_deref;
-                        s.literal = null;
-                        s.state = .base;
-                        s.index += 1;
-                    },
-                    else => {
-                        s.tok = .dot;
-                        s.literal = null;
-                        s.state = .base;
-                    },
-                }
+            .read_dot => switch (s.source.content[s.index]) {
+                '0'...'9' => s.state = .read_float,
+                '.' => {
+                    s.state = .base;
+                    s.index += 1;
+                    return Token.init(.dotdot, s.source.id, @intCast(s.index), null);
+                },
+                '?' => {
+                    s.state = .base;
+                    s.index += 1;
+                    return Token.init(.optional_deref, s.source.id, @intCast(s.index), null);
+                },
+                '*' => {
+                    s.state = .base;
+                    s.index += 1;
+                    return Token.init(.pointer_deref, s.source.id, @intCast(s.index), null);
+                },
+                else => {
+                    s.state = .base;
+                    return Token.init(.dot, s.source.id, @intCast(s.index), null);
+                },
             },
-            .read_colon => {
-                switch (s.file.content[s.index]) {
-                    '=' => {
-                        s.tok = .walrus;
-                        s.literal = null;
-                        s.state = .base;
-                        s.index += 1;
-                    },
-                    else => {
-                        s.tok = .colon;
-                        s.literal = null;
-                        s.state = .base;
-                        s.index += 1;
-                    },
-                }
+            .read_colon => switch (s.source.content[s.index]) {
+                '=' => {
+                    s.state = .base;
+                    s.index += 1;
+                    return Token.init(.walrus, s.source.id, @intCast(s.index - 1), null);
+                },
+                else => {
+                    s.state = .base;
+                    return Token.init(.colon, s.source.id, @intCast(s.index - 1), null);
+                },
             },
-            .read_question => {
-                switch (s.file.content[s.index]) {
-                    '?' => {
-                        s.tok = .nullish;
-                        s.literal = null;
-                        s.state = .base;
-                        s.index += 1;
-                    },
-                    else => {
-                        s.tok = .question;
-                        s.literal = null;
-                        s.state = .base;
-                    },
-                }
+            .read_question => switch (s.source.content[s.index]) {
+                '?' => {
+                    s.state = .base;
+                    s.index += 1;
+                    return Token.init(.nullish, s.source.id, @intCast(s.index - 1), null);
+                },
+                else => {
+                    s.state = .base;
+                    return Token.init(.question, s.source.id, @intCast(s.index - 1), null);
+                },
             },
-            .read_string => {
-                switch (s.file.content[s.index]) {
-                    '\"' => {
-                        s.tok = .string;
-                        s.literal = s.file.content[(s.placeholder + 1)..s.index];
-                        s.index += 1;
-                        s.state = .base;
-                    },
-                    else => {},
-                }
+            .read_string => switch (s.source.content[s.index]) {
+                '\"' => {
+                    s.state = .base;
+                    s.index += 1;
+                    return Token.init(.string, s.source.id, @intCast(s.index - 1), s.source.content[s.placeholder..(s.index - 1)]);
+                },
+                else => {},
             },
-            .read_char => {
-                switch (s.file.content[s.index]) {
-                    '\'' => {
-                        if (s.file.content[(s.placeholder + 1)..s.index].len > 1) {
-                            s.tok = .invalid;
-                            s.err = CompilerError.InvalidCharLength;
-                            s.state = .base;
-                        } else {
-                            s.tok = .char;
-                            s.literal = s.file.content[(s.placeholder + 1)..s.index];
-                            s.state = .base;
-                            s.index += 1;
-                            return;
-                        }
-                    },
-                    '\\' => {
-                        s.index += 1;
-                        switch (s.file.content[s.index]) {
-                            '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
-                            else => {
-                                s.tok = .invalid;
-                                s.state = .base;
-                                s.err = CompilerError.InvalidEscape;
-                                return;
-                            },
-                        }
-                    }, // check for valid escape sequences
-                    else => {},
-                }
+            .read_char => switch (s.source.content[s.index]) {
+                '\'' => {
+                    const the_char = s.source.content[(s.placeholder + 1)..s.index];
+                    s.state = .base;
+                    s.index += 1;
+                    if (s.has_char_errored) {
+                        s.has_char_errored = false;
+                        s.errored = true;
+                        return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
+                    }
+                    const val: u32 = if (the_char[0] == '\\') 2 else 1;
+                    return if (the_char.len > val) blk: {
+                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Length", .{});
+                        s.errored = true;
+                        break :blk Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
+                    } else Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                },
+                '\\' => {
+                    s.index += 1;
+                    switch (s.source.content[s.index]) {
+                        '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
+                        else => {
+                            s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Escape {any}", .{s.source.content[(s.index - 1)..s.index]});
+                            s.has_char_errored = true;
+                        },
+                    }
+                },
+                else => {},
             },
             .read_add => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '+' => .addadd,
                     '=' => .addeq,
                     else => .add,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .add) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .add) s.index += 1;
+                return tok;
             },
             .read_sub => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '-' => .subsub,
                     '=' => .subeq,
                     else => .sub,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .sub) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .sub) s.index += 1;
+                return tok;
             },
             .read_mul => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .muleq,
                     else => .mul,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .mul) {
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .mul) s.index += 1;
+                return tok;
+            },
+            .read_div => switch (s.source.content[s.index]) {
+                '/', '*' => {
                     s.index += 1;
-                }
-            },
-            .read_div => {
-                switch (s.file.content[s.index]) {
-                    '/' => {
-                        s.state = .read_comment;
-                        s.index += 1;
-                    },
-                    '*' => {
-                        s.state = .read_multi_comment;
-                        s.index += 1;
-                    },
-                    else => {
-                        s.tok = switch (s.file.content[s.index]) {
-                            '=' => .diveq,
-                            else => .div,
-                        };
-                        s.literal = null;
-                        s.state = .base;
-                        if (s.tok != .div) {
-                            s.index += 1;
-                        }
-                    },
-                }
-            },
-            .read_comment => {
-                switch (s.file.content[s.index]) {
-                    '\n' => {
-                        s.state = .base;
-                        s.line += 1;
-                        s.col = 0;
-                        return s.next_tok();
-                    },
-                    else => {},
-                }
-            },
-            .read_multi_comment => {
-                if (s.file.content[s.index] == '*') {
-                    s.index += 1;
-                    if (s.file.content[s.index] == '/') {
-                        s.index += 1;
-                        s.state = .base;
-                        return s.next_tok();
-                    }
-                }
+                    s.state = if (s.source.content[s.index] == '/') .read_comment else .read_multi_comment;
+                },
+                else => {
+                    s.state = .base;
+                    const tok = Token.init(switch (s.source.content[s.index]) {
+                        '=' => .diveq,
+                        else => .div,
+                    }, s.source.id, @intCast(s.index), null);
+                    if (tok.tok_type != .div) s.index += 1;
+                    return tok;
+                },
             },
             .read_mod => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .modeq,
                     else => .mod,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .mod) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .mod) s.index += 1;
+                return tok;
             },
             .read_and => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '&' => .andand,
                     '=' => .andeq,
                     else => .@"and",
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .@"and") {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .@"and") s.index += 1;
+                return tok;
             },
             .read_or => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '|' => .oror,
                     '=' => .oreq,
                     else => .@"or",
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .@"or") {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .@"or") s.index += 1;
+                return tok;
             },
             .read_xor => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .xoreq,
                     else => .xor,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .xor) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .xor) s.index += 1;
+                return tok;
             },
             .read_flip => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .flipeq,
                     else => .flip,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .flip) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .flip) s.index += 1;
+                return tok;
             },
             .read_eq => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '>' => .arrow,
                     '=' => .eqeq,
                     else => .eq,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .eq) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .eq) s.index += 1;
+                return tok;
             },
             .read_gt => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .gteq,
                     else => .gt,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .gt) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .gt) s.index += 1;
+                return tok;
             },
             .read_lt => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .lteq,
                     else => .lt,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .lt) {
-                    s.index += 1;
-                }
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .lt) s.index += 1;
+                return tok;
             },
             .read_bang => {
-                s.tok = switch (s.file.content[s.index]) {
+                s.state = .base;
+                const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .bangeq,
                     else => .bang,
-                };
-                s.literal = null;
-                s.state = .base;
-                if (s.tok != .bang) {
+                }, s.source.id, @intCast(s.index), null);
+                if (tok.tok_type != .bang) s.index += 1;
+                return tok;
+            },
+            .read_comment => switch (s.source.content[s.index]) {
+                '\n' => {
+                    s.state = .base;
+                    return s.next();
+                },
+                else => {},
+            },
+            .read_multi_comment => {
+                if (s.source.content[s.index] == '*') {
                     s.index += 1;
+                    if (s.source.content[s.index] == '/') {
+                        s.index += 1;
+                        s.state = .base;
+                        return s.next();
+                    }
                 }
             },
         }
-        if (s.state == .base) {
-            return;
-        }
         s.index += 1;
-        s.col += 1;
     }
-    switch (s.state) {
-        .base => {
-            s.tok = .eof;
-            s.literal = null;
+    const res = switch (s.state) {
+        .base => Token.init(.eof, s.source.id, @intCast(s.index), null),
+        .read_comment => Token.init(.eof, s.source.id, @intCast(s.index), null),
+        .read_multi_comment => blk: {
+            if (std.mem.eql(u8, s.source.content[(s.index - 2)..(s.index - 1)], "*/")) break :blk Token.init(.eof, s.source.id, @intCast(s.index), null);
+            s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Comment", .{});
+            s.errored = true;
+            break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
         },
-        .read_comment => {
-            s.tok = .eof;
-            s.literal = null;
+        .read_word => if (s.get_keyword()) |kw| Token.init(kw, s.source.id, @intCast(s.index), null) else Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
+        .read_num => Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
+        .read_float => Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
+        .read_underscore => Token.init(.underscore, s.source.id, @intCast(s.index), null),
+        .read_add => Token.init(.add, s.source.id, @intCast(s.index), null),
+        .read_sub => Token.init(.sub, s.source.id, @intCast(s.index), null),
+        .read_mul => Token.init(.mul, s.source.id, @intCast(s.index), null),
+        .read_div => Token.init(.div, s.source.id, @intCast(s.index), null),
+        .read_mod => Token.init(.mod, s.source.id, @intCast(s.index), null),
+        .read_and => Token.init(.@"and", s.source.id, @intCast(s.index), null),
+        .read_or => Token.init(.@"or", s.source.id, @intCast(s.index), null),
+        .read_xor => Token.init(.xor, s.source.id, @intCast(s.index), null),
+        .read_flip => Token.init(.flip, s.source.id, @intCast(s.index), null),
+        .read_eq => Token.init(.eq, s.source.id, @intCast(s.index), null),
+        .read_gt => Token.init(.gt, s.source.id, @intCast(s.index), null),
+        .read_lt => Token.init(.lt, s.source.id, @intCast(s.index), null),
+        .read_bang => Token.init(.bang, s.source.id, @intCast(s.index), null),
+        .read_dot => Token.init(.dot, s.source.id, @intCast(s.index), null),
+        .read_colon => Token.init(.colon, s.source.id, @intCast(s.index), null),
+        .read_question => Token.init(.question, s.source.id, @intCast(s.index), null),
+        .read_string => switch (s.source.content[s.index]) {
+            '\"' => Token.init(.string, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
+            else => blk: {
+                s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed String Literal", .{});
+                s.errored = true;
+                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+            },
         },
-        .read_multi_comment => {
-            if (s.file.content[s.index - 1] == '/' and s.file.content[s.index - 2] == '*') {
-                s.tok = .eof;
-                s.literal = null;
-            } else {
-                @panic("UH OH unclosed multi line comment");
-            }
+        .read_char => switch (s.source.content[s.index]) {
+            '\'' => blk: {
+                const the_char = s.source.content[(s.placeholder + 1)..s.index];
+                const val: u32 = if (the_char[0] == '\\') 2 else 1;
+                if (the_char.len > val) {
+                    s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Length {any}", .{the_char});
+                    s.errored = true;
+                    break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                }
+                break :blk Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+            },
+            else => blk: {
+                s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Character Literal", .{});
+                s.errored = true;
+                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+            },
         },
-        .read_word => {
-            if (s.get_keyword()) |k| {
-                s.tok = k;
-            } else {
-                s.tok = .identifier;
-                s.literal = s.file.content[s.placeholder..s.index];
-            }
-        },
-        .read_num => {
-            s.tok = .int;
-            s.literal = s.file.content[s.placeholder..s.index];
-        },
-        .read_float => {
-            s.tok = .float;
-            s.literal = s.file.content[s.placeholder..s.index];
-        },
-        .read_underscore => {
-            s.tok = .underscore;
-            s.literal = null;
-        },
-        .read_add => {
-            s.tok = .add;
-            s.literal = null;
-        },
-        .read_sub => {
-            s.tok = .sub;
-            s.literal = null;
-        },
-        .read_mul => {
-            s.tok = .add;
-            s.literal = null;
-        },
-        .read_div => {
-            s.tok = .div;
-            s.literal = null;
-        },
-        .read_mod => {
-            s.tok = .mod;
-            s.literal = null;
-        },
-        .read_and => {
-            s.tok = .@"and";
-            s.literal = null;
-        },
-        .read_or => {
-            s.tok = .@"or";
-            s.literal = null;
-        },
-        .read_xor => {
-            s.tok = .xor;
-            s.literal = null;
-        },
-        .read_flip => {
-            s.tok = .flip;
-            s.literal = null;
-        },
-        .read_eq => {
-            s.tok = .eq;
-            s.literal = null;
-        },
-        .read_gt => {
-            s.tok = .gt;
-            s.literal = null;
-        },
-        .read_lt => {
-            s.tok = .lt;
-            s.literal = null;
-        },
-        .read_bang => {
-            s.tok = .bang;
-            s.literal = null;
-        },
-        .read_string => {
-            if (s.file.content[s.index] != '\"') {
-                // CompilerError.out
-            }
-            s.tok = .string;
-            s.literal = s.file.content[s.placeholder..s.index];
-        },
-        .read_char => {
-            if (s.file.content[s.index] != '\'') {
-                // CompilerError.out
-            }
-            if (s.file.content[(s.placeholder + 1)..s.index].len > 1) {
-                s.tok = .invalid;
-                s.err = CompilerError.InvalidCharLength;
-                s.state = .base;
-            } else {
-                s.tok = .char;
-                s.literal = s.file.content[(s.placeholder + 1)..s.index];
-                s.state = .base;
-                s.index += 1;
-            }
-        },
-        .read_dot => {
-            switch (s.file.content[s.index]) {
-                '0'...'9' => {
-                    s.state = .read_float;
-                },
-                '.' => {
-                    s.tok = .dotdot;
-                    s.literal = null;
-                    s.state = .base;
-                    s.index += 1;
-                },
-                else => {
-                    s.tok = .dot;
-                    s.literal = null;
-                    s.state = .base;
-                    s.index += 1;
-                },
-            }
-        },
-        .read_colon => {
-            switch (s.file.content[s.index]) {
-                '=' => {
-                    s.tok = .walrus;
-                    s.literal = null;
-                    s.state = .base;
-                    s.index += 1;
-                },
-                else => {
-                    s.tok = .colon;
-                    s.literal = null;
-                    s.state = .base;
-                },
-            }
-        },
-        .read_question => {
-            switch (s.file.content[s.index]) {
-                '?' => {
-                    s.tok = .nullish;
-                    s.literal = null;
-                    s.state = .base;
-                    s.index += 1;
-                },
-                else => {
-                    s.tok = .question;
-                    s.literal = null;
-                    s.state = .base;
-                    s.index += 1;
-                },
-            }
-        },
-    }
+    };
     s.state = .base;
+    return res;
 }
-fn get_keyword(s: *Lexer) ?Token {
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "module")) return .module;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "use")) return .use;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "mut")) return .mut;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "true")) return .true;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "false")) return .false;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "if")) return .@"if";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "else")) return .@"else";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "match")) return .match;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "defer")) return .@"defer";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "for")) return .@"for";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "enum")) return .@"enum";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "error")) return .@"error";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "try")) return .@"try";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "catch")) return .@"catch";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "struct")) return .@"struct";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "type")) return .type;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "comp")) return .comp;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "pub")) return .@"pub";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "while")) return .@"while";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "undefined")) return .undefined;
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "return")) return .@"return";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "break")) return .@"break";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "inline")) return .@"inline";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "packed")) return .@"packed";
-    if (std.mem.eql(u8, s.file.content[s.placeholder..s.index], "continue")) return .@"continue";
+
+fn get_keyword(s: *Lexer) ?TokenType {
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "module")) return .module;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "use")) return .use;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "mut")) return .mut;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "true")) return .true;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "false")) return .false;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "if")) return .@"if";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "else")) return .@"else";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "match")) return .match;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "defer")) return .@"defer";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "for")) return .@"for";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "enum")) return .@"enum";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "error")) return .@"error";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "try")) return .@"try";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "catch")) return .@"catch";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "struct")) return .@"struct";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "type")) return .type;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "comp")) return .comp;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "pub")) return .@"pub";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "while")) return .@"while";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "undefined")) return .undefined;
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "return")) return .@"return";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "break")) return .@"break";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "inline")) return .@"inline";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "packed")) return .@"packed";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "continue")) return .@"continue";
+    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "fn")) return .@"fn";
     return null;
 }

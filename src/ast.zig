@@ -44,17 +44,15 @@ pub const Node = union(enum) {
     catch_: struct { capture: ?*Node, expression: *Node, body: *Node },
     comp_expression: struct { expression: *Node },
     continue_expression: struct { label: ?*Node },
-    declaration: struct { pub_: bool, name: *Node, type: ?*Node, val: *Node },
+    declaration: struct { pub_: bool, mut: bool, name: *Node, type: ?*Node, val: ?*Node },
     defer_statement: struct { capture: ?*Node, body: *Node },
     div: void,
     diveq: void,
     enum_: struct { members: std.ArrayList(Node) },
     enum_error_init: struct { name: *Node, val: ?*Node },
-    enum_member: struct { name: *Node, type: ?*Node },
     eq: void,
     eqeq: void,
     error_: struct { members: std.ArrayList(Node) },
-    error_member: struct { name: *Node, type: ?*Node },
     error_union_type: struct { name: ?*Node, errors: std.ArrayList(Node) },
     for_expression: struct { prefix: *Node, body: *Node },
     for_prefix: struct { expressions: std.ArrayList(Node), capture: *Node },
@@ -65,7 +63,8 @@ pub const Node = union(enum) {
     grouped: struct { expression: ?*Node },
     gt: void,
     gte: void,
-    identifier: struct { value: []const u8 },
+    identifier: []const u8,
+    invalid: bool,
     if_prefix: struct { expression: *Node, capture: ?*Node },
     if_statement: struct { prefix: *Node, body: *Node, else_body: ?*Node },
     if_expression: struct { prefix: *Node, body: *Node, else_body: ?*Node },
@@ -73,13 +72,13 @@ pub const Node = union(enum) {
     lt: void,
     lte: void,
     match: struct { expression: *Node, arms: std.ArrayList(Node) },
+    member: struct { names: std.ArrayList(Node), type: ?*Node, val: ?*Node },
     member_access: struct { name: *Node, member: *Node },
     mod: void,
     modeq: void,
     module: struct { name: *Node },
     mul: void,
     muleq: void,
-    mut_declaration: struct { mut: bool, name: *Node, type: ?*Node, val: ?*Node },
     nullish: void,
     nullish_expression: struct { a: *Node, b: *Node },
     optional_dereference: struct { expression: *Node },
@@ -95,7 +94,6 @@ pub const Node = union(enum) {
     struct_: struct { members: std.ArrayList(Node) },
     struct_init: struct { name: ?*Node, inits: std.ArrayList(Node) },
     struct_init_member: struct { name: *Node, val: *Node },
-    struct_member: struct { names: std.ArrayList(Node), type: *Node, val: ?*Node },
     sub: void,
     subeq: void,
     try_: struct { expression: *Node },
@@ -108,11 +106,4 @@ pub const Node = union(enum) {
     while_statement: struct { prefix: *Node, body: *Node },
     xor: void,
     xoreq: void,
-
-    pub fn as(self: Node, comptime T: std.meta.Tag(Node)) ?@TypeOf(@field(self, @tagName(T))) {
-        if (self == T) {
-            return @field(self, @tagName(T));
-        }
-        return null;
-    }
 };

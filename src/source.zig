@@ -17,7 +17,7 @@ pub const SourceManager = struct {
     allocator: std.mem.Allocator,
     sources: std.ArrayList(Source),
     lookup: std.StringHashMap(FileId),
-    fn init(allocator: std.mem.Allocator) SourceManager {
+    pub fn init(allocator: std.mem.Allocator) SourceManager {
         return .{ .allocator = allocator, .sources = std.ArrayList(Source).init(allocator), .lookup = std.StringHashMap(FileId).init(allocator) };
     }
     pub fn deinit(s: *SourceManager) void {
@@ -42,8 +42,8 @@ pub const SourceManager = struct {
     }
     pub fn resolve_location(s: *SourceManager, loc: SourceLocation) struct { file_name: []const u8, line: usize, col: usize } {
         const source = &s.sources.items[loc.file_id];
-        var line: usize = 0;
-        var line_start_index: usize = 0;
+        var line: usize = 1;
+        var line_start_index: usize = 1;
         for (source.content[0..loc.index], 0..loc.index) |char, i| {
             if (char == '\n') {
                 line += 1;

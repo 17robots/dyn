@@ -1,110 +1,117 @@
 const std = @import("std");
-const File = @import("file.zig");
-const Diagnostic = @import("diagnostic.zig");
+const ast = @import("ast.zig");
+const SourceManager = @import("source.zig").SourceManager;
+const FileId = @import("source.zig").FileId;
+const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
+const Lexer = @import("lexer.zig");
+const Parser = @import("parser.zig");
+const Token = @import("token.zig").Token;
 
 pub const Module = struct {
-    a: std.mem.Allocator,
-    diagnostics: ?std.ArrayList(Diagnostic) = null,
-    dir: []const u8,
-    files: std.ArrayList(File),
+    allocator: std.mem.Allocator,
     name: []const u8,
-    pub_members: ?[]const i32, // change this
-    status: enum { compiling, compiled },
-    pub fn init(a: std.mem.Allocator, dir: []const u8, name: []const u8) Module {
-        return Module{ .a = a, .dir = dir, .name = name, .files = std.ArrayList(File).init(a) };
+    file_ids: std.ArrayList(FileId),
+    asts: std.ArrayList(ast.Node),
+    pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
+        return .{ .allocator = allocator, .name = name, .file_ids = std.ArrayList(FileId).init(allocator), .asts = std.ArrayList(ast.Node).init(allocator) };
     }
-    pub fn parse(s: *Module) !void {
-        var threads = std.ArrayList(std.Thread).init(s.a);
-        defer threads.deinit();
-        for (s.files.items) |*f| try threads.append(try std.Thread.spawn(.{}, File.parse, .{ f, s.a }));
-        for (threads.items) |i| i.join();
-        for (s.files.items) |f| {
-            if (f.diagnostics.items.len > 0) {
-                if (s.diagnostics) |*d| try d.appendSlice(f.diagnostics.items) else {
-                    s.diagnostics = std.ArrayList(Diagnostic).init(s.a);
-                    try s.diagnostics.?.appendSlice(f.diagnostics.items);
-                }
+    pub fn deinit(s: *Module) void {
+        s.file_ids.deinit();
+        s.asts.deinit();
+    }
+    pub fn lex(s: *Module, sm: *SourceManager, d: *DiagnosticEmitter) !std.ArrayList(Token) {
+        var toks = std.ArrayList(Token).init(s.allocator);
+        for (s.file_ids.items) |f| {
+            var l = Lexer.init(&sm.sources.items[f], d);
+            var breakout: u32 = 0;
+            while (true) {
+                const tok = l.next();
+                try toks.append(tok);
+                if (tok.tok_type == .eof) break;
+                if (breakout == 200000) break;
+                breakout += 1;
             }
+        }
+        return toks;
+    }
+    pub fn parse(s: *Module, sm: *SourceManager, d: *DiagnosticEmitter) !void {
+        for (s.file_ids.items) |f| {
+            var p = Parser.init(s.allocator, &sm.sources.items[f], d);
+            if (p.parse()) |result| try s.asts.append(result);
         }
     }
 };
 
 pub const ModuleResolver = struct {
-    c: std.StringHashMap(std.ArrayList(Module)),
-    a: std.mem.Allocator,
-    pub fn init(allocator: std.mem.Allocator) ModuleResolver {
-        return .{ .a = allocator, .c = std.StringHashMap(std.ArrayList(Module)).init(allocator) };
+    allocator: std.mem.Allocator,
+    source_manager: *SourceManager,
+    diags: *DiagnosticEmitter,
+    module_cache: std.StringHashMap(*Module),
+
+    pub fn init(allocator: std.mem.Allocator, source_manager: *SourceManager, diags: *DiagnosticEmitter) ModuleResolver {
+        return .{ .allocator = allocator, .source_manager = source_manager, .diags = diags, .module_cache = std.StringHashMap(*Module).init(allocator) };
     }
-    pub fn resolveModule(s: *ModuleResolver, calling_file_path_from_cwd: []const u8, modulePath: []const u8) !Module {
-        const module_parts = try getModuleNamePath(s.a, calling_file_path_from_cwd, modulePath);
-        const path = try std.fs.path.resolve(s.a, &[_][]const u8{module_parts.path});
-        if (s.c.get(path)) |modules| { // if cached then attempt to load
-            for (modules.items) |module| {
-                if (std.mem.eql(u8, module.name, module_parts.name)) {
-                    return module;
-                }
-            }
-            return error.ModuleNotFound;
-        } else {
-            var dir = try std.fs.cwd().openDir(path, .{ .iterate = true, .access_sub_paths = false });
-            defer dir.close();
-            try s.c.put(path, std.ArrayList(Module).init(s.a));
-            const mods = s.c.getPtr(path).?;
-            var iterator = dir.iterate();
-            outer: while (try iterator.next()) |entry| {
-                if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.name, ".dyn")) continue;
-                const file = try File.init(s.a, dir, try s.a.dupe(u8, entry.name));
-                var lines = std.mem.splitScalar(u8, file.content, '\n');
-                const line = lines.next() orelse continue;
-                const mod_name = parseModuleName(line) catch continue;
-                for (mods.items) |*mod| {
-                    if (std.mem.eql(u8, mod.name, mod_name)) {
-                        try mod.files.append(file);
-                        continue :outer;
-                    }
-                }
-                // module not found, create one
-                var mod = Module.init(s.a, module_parts.path, mod_name);
-                try mod.files.append(file);
-                try mods.append(mod);
-            }
-            for (mods.items) |i| {
-                if (std.mem.eql(u8, i.name, module_parts.name)) return i;
-            }
-            return error.ModuleNotFound;
+    pub fn deinit(s: *ModuleResolver) void {
+        var it = s.module_cache.valueIterator();
+        while (it.next()) |module| {
+            module.deinit();
+            s.allocator.destroy(module);
         }
+        s.module_cache.deinit();
     }
-    fn getModuleNamePath(alloc: std.mem.Allocator, calling_file_path_from_cwd: []const u8, modulePath: []const u8) !struct { path: []const u8, name: []const u8 } {
-        var module_pieces = std.mem.splitScalar(u8, modulePath, '/');
-        var parts = std.ArrayList([]const u8).init(alloc);
-        defer parts.deinit();
-        while (module_pieces.next()) |part| try parts.append(part);
-        var path = std.ArrayList(u8).init(alloc);
-        defer path.deinit();
-        if (parts.items.len > 1) {
-            try path.appendSlice(parts.items[0]);
-            for (1..parts.items.len - 1) |i| {
-                try path.append(std.fs.path.sep);
-                try path.append(path.items[i]);
-            }
-        }
-        const module_name = parts.items[parts.items.len - 1];
-        if (module_name.len == 0) return error.InvalidModuleName;
-        return .{ .path = try std.mem.join(alloc, "/", &[_][]const u8{ calling_file_path_from_cwd, path.items }), .name = module_name };
-    }
-    fn parseModuleName(line: []const u8) ![]const u8 {
-        if (std.mem.startsWith(u8, line, "module ")) {
-            var words = std.mem.splitScalar(u8, line, ' ');
-            _ = words.next(); // skip module
-            if (words.next()) |name| {
-                if (name.len <= 2) return error.InvalidModuleName;
-                if (name[name.len - 2] == ';') {
-                    return name[0 .. name.len - 2];
-                }
-                return error.InvalidModuleName;
-            } else return error.InvalidModuleName;
-        }
+    pub fn resolveModule(s: *ModuleResolver, from_path: []const u8, import_str: []const u8) !*Module {
+        const target_dir_path = try s.determine_target_directory(from_path, import_str);
+        defer s.allocator.free(target_dir_path);
+        const module_name = std.fs.path.basename(import_str);
+        const qualified_name = try std.fmt.allocPrint(s.allocator, "{any}/{any}", .{ std.fs.path.dirname(import_str), module_name });
+        defer s.allocator.free(qualified_name);
+        if (s.module_cache.get(qualified_name)) |m| return m;
+        try s.scan_dir_for_modules(target_dir_path);
+        if (s.module_cache.get(module_name)) |m| return m;
         return error.ModuleNotFound;
+    }
+    fn scan_dir_for_modules(s: *ModuleResolver, dir_path: []const u8) !void {
+        var module_files_map = std.StringHashMap(std.ArrayList(FileId)).init(s.allocator);
+        defer {
+            var it = module_files_map.valueIterator();
+            while (it.next()) |l| l.deinit();
+            module_files_map.deinit();
+        }
+        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) return;
+            return err;
+        };
+        defer dir.close();
+        var iterator = dir.iterate();
+        while (try iterator.next()) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".dyn")) continue;
+            const full_path = try std.fs.path.join(s.allocator, &[_][]const u8{ dir_path, entry.name });
+            defer s.allocator.free(full_path);
+            const file_id = try s.source_manager.load_file(full_path);
+            if(s.source_manager.sources.items[file_id].content.len == 0) continue;
+            const mod_name = try s.find_module_name_in_src(file_id);
+            if (mod_name) |mn| {
+                if (s.module_cache.get(mn)) |m| {
+                    try m.file_ids.append(file_id);
+                } else {
+                    const mod = try s.allocator.create(Module);
+                    mod.* = Module.init(s.allocator, mn);
+                    try s.module_cache.put(mn, mod);
+                    try s.module_cache.get(mn).?.file_ids.append(file_id);
+                }
+            }
+        }
+    }
+    fn find_module_name_in_src(s: *ModuleResolver, file_id: FileId) !?[]const u8 {
+        var parser = Parser.init(s.allocator, &s.source_manager.sources.items[file_id], s.diags);
+        const module_decl = try parser.module_declaration();
+        return switch (module_decl) {
+            .module => |m| m.name.identifier,
+            else => null,
+        };
+    }
+    fn determine_target_directory(s: *ModuleResolver, from: []const u8, import: []const u8) ![]u8 {
+        const import_dir = std.fs.path.dirname(import) orelse ".";
+        return std.fs.path.resolve(s.allocator, &[_][]const u8{ from, import_dir });
     }
 };

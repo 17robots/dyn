@@ -1,3 +1,14 @@
+const FileId = @import("source.zig").FileId;
+const SourceLocation = @import("source.zig").SourceLocation;
+pub const Token = struct {
+    tok_type: TokenType,
+    loc: SourceLocation,
+    val: ?[]const u8 = null,
+    pub fn init(tok: TokenType, file_id: FileId, index: u32, val: ?[]const u8) Token {
+        return Token{ .tok_type = tok, .loc = SourceLocation{ .file_id = file_id, .index = index }, .val = val };
+    }
+};
+
 pub const TokenType = enum {
     eof,
     invalid,
@@ -84,4 +95,5 @@ pub const TokenType = enum {
     @"break",
     @"inline",
     @"continue",
+    @"fn",
 };
