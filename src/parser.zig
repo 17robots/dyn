@@ -23,8 +23,6 @@ curr_tok: Token,
 next_tok: Token,
 peek_tok: Token,
 
-// AND FIX RESULT BLOCKS SO THEY DONT NEED SEMICOLONS IF THERE ARE ELSES
-
 pub fn init(allocator: std.mem.Allocator, source: *Source, diagnostics: *DiagnosticEmitter) Parser {
     var parser = Parser{ .allocator = allocator, .source = source, .lexer = Lexer.init(source, diagnostics), .diag = diagnostics, .curr_tok = undefined, .next_tok = undefined, .peek_tok = undefined };
     parser.advance();
@@ -54,7 +52,6 @@ pub fn parse(s: *Parser) ?Node {
     return Node{ .program = .{ .declarations = declarations } };
 }
 
-// private methods
 fn arm(s: *Parser, expr: bool) ParserError!Node {
     var exprs = std.ArrayList(Node).init(s.allocator);
     while (s.curr_tok.tok_type != .eof) {
@@ -107,23 +104,15 @@ fn block(s: *Parser, labeled: bool) ParserError!Node {
             ParserError.fatal => return e,
         };
         if (should_read_semicolon(stmt)) try s.expect(.semicolon);
-        stmts.append(stmt) catch |e| @panic(@errorName(e)); // change this to synch
+        stmts.append(stmt) catch |e| @panic(@errorName(e));
         if (s.curr_tok.tok_type == .rbrace) break;
     }
     try s.expect(.rbrace);
     return Node{ .block = .{ .label = label, .statements = stmts } };
 }
-fn break_expression(s: *Parser) ParserError!Node {
-    try s.expect(.@"break");
-    const label = if (s.curr_tok.tok_type == .colon) blk: {
-        try s.expect(.colon);
-        break :blk s.create_node_ptr(try s.identifier());
-    } else null;
-    return Node{ .break_expression = .{ .label = label, .val = if (s.curr_tok.tok_type == .semicolon) null else s.create_node_ptr(try s.expression(0)) } };
-}
 fn catch_(s: *Parser, n: Node) ParserError!Node {
     try s.expect(.@"catch");
-    const cap = if (s.curr_tok.tok_type == .@"or")  s.create_node_ptr(try s.capture()) else null;
+    const cap = if (s.curr_tok.tok_type == .@"or") s.create_node_ptr(try s.capture()) else null;
     return Node{ .catch_ = .{ .expression = s.create_node_ptr(n), .capture = cap, .body = s.create_node_ptr(if (s.curr_tok.tok_type == .lbrace) try s.result_block() else try s.result_block_expression()) } };
 }
 fn capture(s: *Parser) ParserError!Node {
@@ -149,13 +138,6 @@ fn capture_item(s: *Parser) ParserError!Node {
 fn comp_expression(s: *Parser) ParserError!Node {
     try s.expect(.comp);
     return Node{ .comp_expression = .{ .expression = s.create_node_ptr(try s.non_literal_expression()) } };
-}
-fn continue_expression(s: *Parser) ParserError!Node {
-    try s.expect(.@"continue");
-    return Node{ .continue_expression = .{ .label = if (s.curr_tok.tok_type == .colon) blk: {
-        try s.expect(.colon);
-        break :blk s.create_node_ptr(try s.identifier());
-    } else null } };
 }
 fn declaration(s: *Parser, global_decl: bool) ParserError!Node {
     const pub_ = if (global_decl) blk: {
@@ -217,10 +199,6 @@ fn error_union_type(s: *Parser, n: ?Node) ParserError!Node {
 }
 fn expression(s: *Parser, prec: u8) ParserError!Node {
     switch (s.curr_tok.tok_type) {
-        .@"break" => return s.break_expression(),
-        .@"continue" => return s.continue_expression(),
-        .@"if" => return s.if_expression(),
-        .@"return" => return s.return_expression(),
         .underscore => {
             try s.expect(.underscore);
             return Node.underscore;
@@ -235,7 +213,7 @@ fn expression(s: *Parser, prec: u8) ParserError!Node {
     };
     while (s.curr_tok.tok_type != .eof and prec < s.precedence()) {
         if (s.curr_tok.tok_type == .dotdot) return try s.range_expression(expr);
-        switch(s.curr_tok.tok_type) {
+        switch (s.curr_tok.tok_type) {
             .dotdot => return try s.range_expression(expr),
             .addeq, .andeq, .diveq, .flipeq, .modeq, .muleq, .subeq, .xoreq, .eq => return try s.assign_expression(expr),
             else => {},
@@ -250,28 +228,7 @@ fn expression(s: *Parser, prec: u8) ParserError!Node {
     }
     return expr;
 }
-fn for_prefix(s: *Parser) ParserError!Node {
-    try s.expect(.@"for");
-    var expressions = std.ArrayList(Node).init(s.allocator);
-    while (s.curr_tok.tok_type != .eof) {
-        if (s.curr_tok.tok_type == .colon) break;
-        expressions.append(try s.expression(0)) catch |e| @panic(@errorName(e));
-        if (s.curr_tok.tok_type == .colon) break;
-        try s.expect(.comma);
-    }
-    try s.expect(.colon);
-    const cap = s.create_node_ptr(try s.capture());
-    return Node{ .for_prefix = .{ .expressions = expressions, .capture = cap } };
-}
-fn for_statement(s: *Parser) ParserError!Node {
-    const inline_ = if (s.curr_tok.tok_type == .@"inline") blk: {
-        try s.expect(.@"inline");
-        break :blk true;
-    } else false;
-    const prefix = s.create_node_ptr(try s.for_prefix());
-    return Node{ .for_statement = .{ .inline_ = inline_, .prefix = prefix, .body = s.create_node_ptr(try s.result_block()) } };
-}
-fn function(s: *Parser) ParserError!Node { // unfinished
+fn function(s: *Parser) ParserError!Node {
     const inline_ = if (s.curr_tok.tok_type == .@"inline") blk: {
         try s.expect(.@"inline");
         break :blk true;
@@ -311,7 +268,7 @@ fn function(s: *Parser) ParserError!Node { // unfinished
     var return_expr = switch (s.curr_tok.tok_type) {
         .arrow, .bang, .lbrace, .rparen, .semicolon, .comma => null,
         .identifier => blk: {
-            if(s.next_tok.tok_type == .colon) break :blk try s.block(true);
+            if (s.next_tok.tok_type == .colon) break :blk try s.block(true);
             var chain = try s.identifier();
             while (s.curr_tok.tok_type != .eof) switch (s.curr_tok.tok_type) {
                 .dot => chain = blk2: {
@@ -382,7 +339,7 @@ fn function(s: *Parser) ParserError!Node { // unfinished
         return ParserError.recoverable;
     }
     if (fn_parameters.items.len > 0) {
-        s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Function declaration has types without corresponding identifiers", .{}); // review this
+        s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Function declaration has types without corresponding identifiers", .{});
         return ParserError.recoverable;
     }
     if (inline_) {
@@ -396,28 +353,12 @@ fn identifier(s: *Parser) ParserError!Node {
     try s.expect(.identifier);
     return Node{ .identifier = val };
 }
-fn if_expression(s: *Parser) ParserError!Node {
-    const prefix = s.create_node_ptr(try s.if_prefix());
-    const body = s.create_node_ptr(try s.result_block_expression());
-    return Node{ .if_expression = .{ .prefix = prefix, .body = body, .else_body = if (s.curr_tok.tok_type == .@"else") blk: {
-        try s.expect(.@"else");
-        break :blk s.create_node_ptr(try s.result_block_expression());
-    } else null } };
-}
 fn if_prefix(s: *Parser) ParserError!Node {
     try s.expect(.@"if");
     const expr = s.create_node_ptr(try s.expression(0));
     try s.expect(.colon);
     const cap = if (s.curr_tok.tok_type == .@"or") s.create_node_ptr(try s.capture()) else null;
     return Node{ .if_prefix = .{ .capture = cap, .expression = expr } };
-}
-fn if_statement(s: *Parser) ParserError!Node {
-    const prefix = s.create_node_ptr(try s.if_prefix());
-    const body = s.create_node_ptr(try s.result_block());
-    return Node{ .if_statement = .{ .prefix = prefix, .body = body, .else_body = if (s.curr_tok.tok_type == .@"else") blk: {
-        try s.expect(.@"else");
-        break :blk s.create_node_ptr(try s.result_block());
-    } else null } };
 }
 fn literal(s: *Parser) ParserError!Node {
     const lit_kind = switch (s.curr_tok.tok_type) {
@@ -535,7 +476,14 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             };
             break :blk chain;
         },
-        .@"if" => try s.if_expression(),
+        .@"if" => blk: {
+            const prefix = s.create_node_ptr(try s.if_prefix());
+            const body = s.create_node_ptr(try s.result_block_expression());
+            break :blk Node{ .if_expression = .{ .prefix = prefix, .body = body, .else_body = blk2: {
+                try s.expect(.@"else");
+                break :blk2 s.create_node_ptr(try s.result_block_expression());
+            } } };
+        },
         .@"inline", .@"fn" => blk: {
             var chain = try s.function();
             if (chain == .function_type) break :blk chain;
@@ -775,19 +723,8 @@ fn result_block_expression(s: *Parser) ParserError!Node {
             else => try s.expression(0),
         },
         .lbrace => try s.block(false),
-        else => blk: {
-            var expr = try s.expression(0);
-            switch (s.curr_tok.tok_type) {
-                .addeq, .andeq, .diveq, .flipeq, .modeq, .muleq, .subeq, .xoreq, .eq => expr = try s.assign_expression(expr),
-                else => {},
-            }
-            break :blk expr;
-        },
+        else => try s.expression(0),
     };
-}
-fn return_expression(s: *Parser) ParserError!Node {
-    try s.expect(.@"return");
-    return Node{ .return_expression = .{ .val = if (s.curr_tok.tok_type == .semicolon) null else s.create_node_ptr(try s.expression(0)) } };
 }
 fn statement(s: *Parser) ParserError!Node {
     if (s.curr_tok.tok_type == .identifier) {
@@ -795,21 +732,62 @@ fn statement(s: *Parser) ParserError!Node {
         if (s.next_tok.tok_type == .walrus) return try s.declaration(false);
     }
     return switch (s.curr_tok.tok_type) {
+        .@"break" => blk: {
+            try s.expect(.@"break");
+            const label = if (s.curr_tok.tok_type == .colon) blk2: {
+                try s.expect(.colon);
+                break :blk2 s.create_node_ptr(try s.identifier());
+            } else null;
+            break :blk Node{ .break_expression = .{ .label = label, .val = if (s.curr_tok.tok_type == .semicolon) null else s.create_node_ptr(try s.expression(0)) } };
+        },
+        .@"continue" => blk: {
+            try s.expect(.@"continue");
+            break :blk Node{ .continue_expression = .{ .label = if (s.curr_tok.tok_type == .colon) blk2: {
+                try s.expect(.colon);
+                break :blk2 s.create_node_ptr(try s.identifier());
+            } else null } };
+        },
         .@"defer" => try s.defer_statement(),
-        .@"if" => try s.if_statement(),
-        .@"inline", .@"for" => try s.for_statement(),
+        .@"if" => blk: {
+            const prefix = s.create_node_ptr(try s.if_prefix());
+            const body = s.create_node_ptr(try s.result_block());
+            break :blk Node{ .if_statement = .{ .prefix = prefix, .body = body, .else_body = if (s.curr_tok.tok_type == .@"else") blk2: {
+                try s.expect(.@"else");
+                break :blk2 s.create_node_ptr(try s.result_block());
+            } else null } };
+        },
+        .@"inline", .@"for" => blk: {
+            const inline_ = if (s.curr_tok.tok_type == .@"inline") blk2: {
+                try s.expect(.@"inline");
+                break :blk2 true;
+            } else false;
+            try s.expect(.@"for");
+            var expressions = std.ArrayList(Node).init(s.allocator);
+            while (s.curr_tok.tok_type != .eof) {
+                if (s.curr_tok.tok_type == .colon) break;
+                expressions.append(try s.expression(0)) catch |e| @panic(@errorName(e));
+                if (s.curr_tok.tok_type == .colon) break;
+                try s.expect(.comma);
+            }
+            try s.expect(.colon);
+            const cap = s.create_node_ptr(try s.capture());
+            break :blk Node{ .for_statement = .{ .inline_ = inline_, .expressions = expressions, .capture = cap, .body = s.create_node_ptr(try s.result_block()) } };
+        },
         .lbrace => try s.block(false),
         .match => try s.match(false),
         .mut => try s.declaration(false),
-        .@"while" => try s.while_statement(),
-        else => blk: {
-            var expr = try s.expression(0);
-            switch (s.curr_tok.tok_type) {
-                .addeq, .andeq, .diveq, .flipeq, .modeq, .muleq, .subeq, .xoreq, .eq => expr = try s.assign_expression(expr),
-                else => {},
-            }
-            break :blk expr;
+        .@"return" => blk: {
+            try s.expect(.@"return");
+            break :blk Node{ .return_expression = .{ .val = if (s.curr_tok.tok_type == .semicolon or s.curr_tok.tok_type == .comma) null else s.create_node_ptr(try s.expression(0)) } };
         },
+        .@"while" => blk: {
+            try s.expect(.@"while");
+            const expr = s.create_node_ptr(try s.expression(0));
+            try s.expect(.colon);
+            const cap = if (s.curr_tok.tok_type == .@"or") s.create_node_ptr(try s.capture()) else null;
+            break :blk Node{ .while_statement = .{ .capture = cap, .expression = expr, .body = s.create_node_ptr(try s.result_block()) } };
+        },
+        else => try s.expression(0),
     };
 }
 fn struct_initialization(s: *Parser, current_name: ?Node) ParserError!Node {
@@ -877,19 +855,7 @@ fn use_expression(s: *Parser) ParserError!Node {
     }
     return Node{ .use = .{ .path = s.create_node_ptr(try s.literal()) } };
 }
-fn while_prefix(s: *Parser) ParserError!Node {
-    try s.expect(.@"while");
-    const expr = s.create_node_ptr(try s.expression(0));
-    try s.expect(.colon);
-    const cap = if (s.curr_tok.tok_type == .@"or") s.create_node_ptr(try s.capture()) else null;
-    return Node{ .while_prefix = .{ .capture = cap, .expression = expr } };
-}
-fn while_statement(s: *Parser) ParserError!Node {
-    const prefix = s.create_node_ptr(try s.while_prefix());
-    return Node{ .while_statement = .{ .prefix = prefix, .body = s.create_node_ptr(try s.result_block()) } };
-}
 
-// helper methods
 fn advance(s: *Parser) void {
     s.curr_tok = s.next_tok;
     s.next_tok = s.peek_tok;
@@ -936,7 +902,7 @@ fn precedence(s: *Parser) u8 {
         else => 0,
     };
 }
-fn sync(s: *Parser, toks: []const TokenType) void { // TODO: redo
+fn sync(s: *Parser, toks: []const TokenType) void {
     while (s.curr_tok.tok_type != .eof) {
         if (std.mem.indexOf(TokenType, toks, &[_]TokenType{s.curr_tok.tok_type})) |_| {
             s.advance();
