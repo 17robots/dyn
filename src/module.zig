@@ -42,11 +42,12 @@ pub const Module = struct {
     }
 };
 
+pub const ModuleKey = struct { dir: []const u8, name: []const u8 };
 pub const ModuleResolver = struct {
     allocator: std.mem.Allocator,
     source_manager: *SourceManager,
     diags: *DiagnosticEmitter,
-    module_cache: std.StringHashMap(*Module),
+    module_cache: std.AutoHashMap(ModuleKey, *Module),
 
     pub fn init(allocator: std.mem.Allocator, source_manager: *SourceManager, diags: *DiagnosticEmitter) ModuleResolver {
         return .{ .allocator = allocator, .source_manager = source_manager, .diags = diags, .module_cache = std.StringHashMap(*Module).init(allocator) };
@@ -60,13 +61,11 @@ pub const ModuleResolver = struct {
         s.module_cache.deinit();
     }
     pub fn resolveModule(s: *ModuleResolver, from_path: []const u8, import_str: []const u8) !*Module {
-        const target_dir_path = try s.determine_target_directory(from_path, import_str);
-        defer s.allocator.free(target_dir_path);
+        const import_dir = std.fs.path.dirname(import_str) orelse ".";
+        const abs_dir = try std.fs.path.resolve(s.allocator, &[_][]const u8{ from_path, import_dir });
+        defer s.allocator.free(abs_dir);
         const module_name = std.fs.path.basename(import_str);
-        const qualified_name = try std.fmt.allocPrint(s.allocator, "{any}/{any}", .{ std.fs.path.dirname(import_str), module_name });
-        defer s.allocator.free(qualified_name);
-        if (s.module_cache.get(qualified_name)) |m| return m;
-        try s.scan_dir_for_modules(target_dir_path);
+        try s.scan_dir_for_modules(abs_dir);
         if (s.module_cache.get(module_name)) |m| return m;
         return error.ModuleNotFound;
     }
@@ -88,7 +87,7 @@ pub const ModuleResolver = struct {
             const full_path = try std.fs.path.join(s.allocator, &[_][]const u8{ dir_path, entry.name });
             defer s.allocator.free(full_path);
             const file_id = try s.source_manager.load_file(full_path);
-            if(s.source_manager.sources.items[file_id].content.len == 0) continue;
+            if (s.source_manager.sources.items[file_id].content.len == 0) continue;
             const mod_name = try s.find_module_name_in_src(file_id);
             if (mod_name) |mn| {
                 if (s.module_cache.get(mn)) |m| {

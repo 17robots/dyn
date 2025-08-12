@@ -19,10 +19,6 @@ pub const Diagnostic = struct {
     severity: Severity,
     location: SourceLocation,
     message: []const u8,
-    pub fn init(s: *Diagnostic, location: SourceLocation, severity: Severity, comptime fmt: []const u8, args: anytype) Diagnostic {
-        const msg = std.fmt.allocPrint(s.allocator, fmt, args) catch "out of memory";
-        return .{ .severity = severity, .location = location, .message = msg };
-    }
 };
 
 pub const DiagnosticEmitter = struct {

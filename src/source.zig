@@ -43,7 +43,7 @@ pub const SourceManager = struct {
     pub fn resolve_location(s: *SourceManager, loc: SourceLocation) struct { file_name: []const u8, line: usize, col: usize } {
         const source = &s.sources.items[loc.file_id];
         var line: usize = 1;
-        var line_start_index: usize = 1;
+        var line_start_index: usize = 0;
         for (source.content[0..loc.index], 0..loc.index) |char, i| {
             if (char == '\n') {
                 line += 1;

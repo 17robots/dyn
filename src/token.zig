@@ -8,6 +8,12 @@ pub const Token = struct {
         return Token{ .tok_type = tok, .loc = SourceLocation{ .file_id = file_id, .index = index }, .val = val };
     }
 };
+pub const Span = struct {
+    start: u32,
+    end: u32,
+    pub fn from(start: u32, end: u32) Span { return .{ .start = start, .end = end }; }
+    pub fn from(a: Span, b: Span) Span { return .{ .start = a.start, .end = b.end }; }
+};
 
 pub const TokenType = enum {
     eof,

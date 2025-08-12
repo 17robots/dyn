@@ -57,7 +57,7 @@ pub fn next(s: *Lexer) Token {
     if (s.errored) return Token.init(.invalid, s.source.id, @intCast(s.index), null);
     if (s.index >= s.source.content.len) return Token.init(.eof, s.source.id, @intCast(s.index), null);
     if (s.state != .read_string) {
-        while (s.index < s.source.content.len and s.whitespace() or s.reading_comment) s.index += 1;
+        while (s.index < s.source.content.len and s.whitespace()) s.index += 1;
     }
     s.placeholder = s.index;
     while (s.index < s.source.content.len) {
@@ -212,29 +212,44 @@ pub fn next(s: *Lexer) Token {
                 },
                 else => {},
             },
-            .read_char => switch (s.source.content[s.index]) {
+            .read_char => switch(s.source.content[s.index]) {
                 '\'' => {
-                    const the_char = s.source.content[(s.placeholder + 1)..s.index];
+                    const body = s.source.content[(s.placeholder + 1)..s.index];
                     s.state = .base;
                     s.index += 1;
-                    if (s.has_char_errored) {
+
+                    if(s.has_char_errored) {
                         s.has_char_errored = false;
                         s.errored = true;
                         return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
                     }
-                    const val: u32 = if (the_char[0] == '\\') 2 else 1;
-                    return if (the_char.len > val) blk: {
-                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Length", .{});
+                    if(body.len == 0) {
+                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Empty character literal", .{});
                         s.errored = true;
-                        break :blk Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
-                    } else Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                        return Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                    }
+                    if(body[0] == '\\') {
+                        if(body.len != 2) {
+                            s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character escape length", .{});
+                            s.errored = true;
+                            return Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                        }
+                    } else if(body.len != 1) {
+                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character length", .{});
+                        s.errored = true;
+                        return Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                    }
+                    return Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
                 },
                 '\\' => {
                     s.index += 1;
-                    switch (s.source.content[s.index]) {
+                    if(s.index >= s.source.content.len) {
+                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Unfinished character escape", .{});
+                        s.has_char_errored = true;
+                    } else switch(s.source.content[s.index]) {
                         '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
                         else => {
-                            s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Escape {any}", .{s.source.content[(s.index - 1)..s.index]});
+                            s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character escape {any}", .{s.source.content[(s.index - 1)..s.index]});
                             s.has_char_errored = true;
                         },
                     }
@@ -378,9 +393,8 @@ pub fn next(s: *Lexer) Token {
             },
             .read_multi_comment => {
                 if (s.source.content[s.index] == '*') {
-                    s.index += 1;
-                    if (s.source.content[s.index] == '/') {
-                        s.index += 1;
+                    if(s.index + 1 < s.source.content.len and s.source.content[s.index + 1] == '/') {
+                        s.index += 2;
                         s.state = .base;
                         return s.next();
                     }
@@ -449,31 +463,49 @@ pub fn next(s: *Lexer) Token {
 }
 
 fn get_keyword(s: *Lexer) ?TokenType {
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "module")) return .module;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "use")) return .use;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "mut")) return .mut;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "true")) return .true;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "false")) return .false;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "if")) return .@"if";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "else")) return .@"else";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "match")) return .match;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "defer")) return .@"defer";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "for")) return .@"for";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "enum")) return .@"enum";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "error")) return .@"error";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "try")) return .@"try";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "catch")) return .@"catch";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "struct")) return .@"struct";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "type")) return .type;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "comp")) return .comp;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "pub")) return .@"pub";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "while")) return .@"while";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "undefined")) return .undefined;
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "return")) return .@"return";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "break")) return .@"break";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "inline")) return .@"inline";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "packed")) return .@"packed";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "continue")) return .@"continue";
-    if (std.mem.eql(u8, s.source.content[s.placeholder..s.index], "fn")) return .@"fn";
-    return null;
+    const word = s.source.content[s.placeholder..s.index];
+    switch (word.len) {
+        2 => {
+            if (std.mem.eql(u8, word, "fn")) return .@"fn";
+            if (std.mem.eql(u8, word, "if")) return .@"if";
+        },
+        3 => {
+            if (std.mem.eql(u8, word, "for")) return .@"for";
+            if (std.mem.eql(u8, word, "mod")) return .module;
+            if (std.mem.eql(u8, word, "mut")) return .mut;
+            if (std.mem.eql(u8, word, "pub")) return .@"pub";
+            if (std.mem.eql(u8, word, "try")) return .@"try";
+            if (std.mem.eql(u8, word, "use")) return .use;
+        },
+        4 => {
+            if (std.mem.eql(u8, word, "comp")) return .comp;
+            if (std.mem.eql(u8, word, "else")) return .@"else";
+            if (std.mem.eql(u8, word, "enum")) return .@"enum";
+            if (std.mem.eql(u8, word, "null")) return .null;
+            if (std.mem.eql(u8, word, "true")) return .true;
+            if (std.mem.eql(u8, word, "type")) return .type;
+        },
+        5 => {
+            if (std.mem.eql(u8, word, "break")) return .@"break";
+            if (std.mem.eql(u8, word, "catch")) return .@"catch";
+            if (std.mem.eql(u8, word, "defer")) return .@"defer";
+            if (std.mem.eql(u8, word, "error")) return .@"error";
+            if (std.mem.eql(u8, word, "false")) return .false;
+            if (std.mem.eql(u8, word, "match")) return .match;
+            if (std.mem.eql(u8, word, "while")) return .@"while";
+        },
+        6 => {
+            if (std.mem.eql(u8, word, "inline")) return .@"inline";
+            if (std.mem.eql(u8, word, "packed")) return .@"packed";
+            if (std.mem.eql(u8, word, "struct")) return .@"struct";
+            if (std.mem.eql(u8, word, "return")) return .@"return";
+        },
+        8 => {
+            if (std.mem.eql(u8, word, "continue")) return .@"continue";
+        },
+        9 => {
+            if (std.mem.eql(u8, word, "undefined")) return .undefined;
+        },
+        else => return null,
+    }
 }

@@ -269,41 +269,8 @@ fn function(s: *Parser) ParserError!Node {
         .arrow, .bang, .lbrace, .rparen, .semicolon, .comma => null,
         .identifier => blk: {
             if (s.next_tok.tok_type == .colon) break :blk try s.block(true);
-            var chain = try s.identifier();
-            while (s.curr_tok.tok_type != .eof) switch (s.curr_tok.tok_type) {
-                .dot => chain = blk2: {
-                    try s.expect(.dot);
-                    break :blk2 Node{ .member_access = .{ .name = s.create_node_ptr(chain), .member = s.create_node_ptr(try s.identifier()) } };
-                },
-                .lbrack => chain = blk2: {
-                    try s.expect(.lbrack);
-                    const expr = s.create_node_ptr(try s.expression(0));
-                    try s.expect(.rbrack);
-                    break :blk2 Node{ .array_index = .{ .name = s.create_node_ptr(chain), .index = expr } };
-                },
-                .lparen => chain = blk2: {
-                    try s.expect(.lparen);
-                    var args = std.ArrayList(Node).init(s.allocator);
-                    while (s.curr_tok.tok_type != .eof) {
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        args.append(try s.expression(0)) catch |e| @panic(@errorName(e));
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        try s.expect(.comma);
-                    }
-                    try s.expect(.rparen);
-                    break :blk2 Node{ .call = .{ .name = s.create_node_ptr(chain), .args = args } };
-                },
-                .pointer_deref => chain = blk2: {
-                    try s.expect(.pointer_deref);
-                    break :blk2 Node{ .pointer_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                .optional_deref => chain = blk2: {
-                    try s.expect(.optional_deref);
-                    break :blk2 Node{ .optional_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                else => break,
-            };
-            break :blk chain;
+            const chain = try s.identifier();
+            break :blk try s.postfix_chain(chain, false);
         },
         else => try s.non_literal_expression(),
     };
@@ -439,42 +406,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
         },
         .identifier => blk: {
             if (s.next_tok.tok_type == .lbrace) break :blk try s.struct_initialization(null);
-            var chain = try s.identifier();
-            while (s.curr_tok.tok_type != .eof) switch (s.curr_tok.tok_type) {
-                .dot => chain = blk2: {
-                    try s.expect(.dot);
-                    break :blk2 Node{ .member_access = .{ .name = s.create_node_ptr(chain), .member = s.create_node_ptr(try s.identifier()) } };
-                },
-                .lbrack => chain = blk2: {
-                    try s.expect(.lbrack);
-                    const expr = s.create_node_ptr(try s.expression(0));
-                    try s.expect(.rbrack);
-                    break :blk2 Node{ .array_index = .{ .name = s.create_node_ptr(chain), .index = expr } };
-                },
-                .lparen => chain = blk2: {
-                    try s.expect(.lparen);
-                    var args = std.ArrayList(Node).init(s.allocator);
-                    while (s.curr_tok.tok_type != .eof) {
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        args.append(try s.expression(0)) catch |e| @panic(@errorName(e));
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        try s.expect(.comma);
-                    }
-                    try s.expect(.rparen);
-                    break :blk2 Node{ .call = .{ .name = s.create_node_ptr(chain), .args = args } };
-                },
-                .lbrace => chain = try s.struct_initialization(chain),
-                .pointer_deref => chain = blk2: {
-                    try s.expect(.pointer_deref);
-                    break :blk2 Node{ .pointer_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                .optional_deref => chain = blk2: {
-                    try s.expect(.optional_deref);
-                    break :blk2 Node{ .optional_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                else => break,
-            };
-            break :blk chain;
+            break :blk try s.postfix_chain(try s.identifier(), true);
         },
         .@"if" => blk: {
             const prefix = s.create_node_ptr(try s.if_prefix());
@@ -498,78 +430,15 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             }
             try s.expect(.rparen);
             chain = .{ .call = .{ .name = s.create_node_ptr(chain), .args = call_args } };
-            while (s.curr_tok.tok_type != .eof) switch (s.curr_tok.tok_type) {
-                .dot => chain = blk2: {
-                    try s.expect(.dot);
-                    break :blk2 Node{ .member_access = .{ .name = s.create_node_ptr(chain), .member = s.create_node_ptr(try s.identifier()) } };
-                },
-                .lbrack => chain = blk2: {
-                    try s.expect(.lbrack);
-                    const expr = s.create_node_ptr(try s.expression(0));
-                    try s.expect(.rbrack);
-                    break :blk2 Node{ .array_index = .{ .name = s.create_node_ptr(chain), .index = expr } };
-                },
-                .lparen => chain = blk2: {
-                    try s.expect(.lparen);
-                    var args = std.ArrayList(Node).init(s.allocator);
-                    while (s.curr_tok.tok_type != .eof) {
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        args.append(try s.expression(0)) catch |e| @panic(@errorName(e));
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        try s.expect(.comma);
-                    }
-                    try s.expect(.rparen);
-                    break :blk2 Node{ .call = .{ .name = s.create_node_ptr(chain), .args = args } };
-                },
-                .lbrace => chain = try s.struct_initialization(chain),
-                .pointer_deref => chain = blk2: {
-                    try s.expect(.pointer_deref);
-                    break :blk2 Node{ .pointer_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                .optional_deref => chain = blk2: {
-                    try s.expect(.optional_deref);
-                    break :blk2 Node{ .optional_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                else => break,
-            };
-            break :blk chain;
+            break :blk try s.postfix_chain(chain, true);
         },
         .lbrace => blk: {
             var chain = try s.struct_initialization(null);
-            while (s.curr_tok.tok_type != .eof) switch (s.curr_tok.tok_type) {
-                .dot => chain = blk2: {
-                    try s.expect(.dot);
-                    break :blk2 Node{ .member_access = .{ .name = s.create_node_ptr(chain), .member = s.create_node_ptr(try s.identifier()) } };
-                },
-                .lbrack => chain = blk2: {
-                    try s.expect(.lbrack);
-                    const expr = s.create_node_ptr(try s.expression(0));
-                    try s.expect(.rbrack);
-                    break :blk2 Node{ .array_index = .{ .name = s.create_node_ptr(chain), .index = expr } };
-                },
-                .lparen => chain = blk2: {
-                    try s.expect(.lparen);
-                    var args = std.ArrayList(Node).init(s.allocator);
-                    while (s.curr_tok.tok_type != .eof) {
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        args.append(try s.expression(0)) catch |e| @panic(@errorName(e));
-                        if (s.curr_tok.tok_type == .rparen) break;
-                        try s.expect(.comma);
-                    }
-                    try s.expect(.rparen);
-                    break :blk2 Node{ .call = .{ .name = s.create_node_ptr(chain), .args = args } };
-                },
-                .lbrace => chain = try s.struct_initialization(chain),
-                .pointer_deref => chain = blk2: {
-                    try s.expect(.pointer_deref);
-                    break :blk2 Node{ .pointer_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                .optional_deref => chain = blk2: {
-                    try s.expect(.optional_deref);
-                    break :blk2 Node{ .optional_dereference = .{ .expression = s.create_node_ptr(chain) } };
-                },
-                else => break,
-            };
+            if (s.curr_tok.tok_type == .dot) {
+                try s.expect(.dot);
+                chain = Node{ .member_access = .{ .name = s.create_node_ptr(chain), .member = s.create_node_ptr(try s.identifier()) } };
+                break :blk try s.postfix_chain(chain, true);
+            }
             break :blk chain;
         },
         .lbrack => blk: {
@@ -855,6 +724,47 @@ fn use_expression(s: *Parser) ParserError!Node {
     }
     return Node{ .use = .{ .path = s.create_node_ptr(try s.literal()) } };
 }
+fn postfix_chain(s: *Parser, base: Node, allow_struct: bool) ParserError!Node {
+    var chain = base;
+    while (s.curr_tok.tok_type != .eof) switch (s.curr_tok.tok_type) {
+        .dot => {
+            try s.expect(.dot);
+            chain = Node{ .member_access = .{ .name = s.create_node_ptr(chain), .member = s.create_node_ptr(try s.identifier()) } };
+        },
+        .lbrack => {
+            try s.expect(.lbrack);
+            const expr = s.create_node_ptr(try s.expression(0));
+            try s.expect(.rbrack);
+            chain = Node{ .array_index = .{ .name = s.create_node_ptr(chain), .index = expr } };
+        },
+        .lbrace => {
+            if (!allow_struct) break;
+            chain = try s.struct_initialization(chain);
+        },
+        .lparen => {
+            try s.expect(.lparen);
+            var args = std.ArrayList(Node).init(s.allocator);
+            while (s.curr_tok.tok_type != .eof) {
+                if (s.curr_tok.tok_type == .rparen) break;
+                args.append(try s.expression(0)) catch |e| @panic(@errorName(e));
+                if (s.curr_tok.tok_type == .rparen) break;
+                try s.expect(.comma);
+            }
+            try s.expect(.rparen);
+            chain = Node{ .call = .{ .name = s.create_node_ptr(chain), .args = args } };
+        },
+        .pointer_deref => {
+            try s.expect(.pointer_deref);
+            chain = Node{ .pointer_dereference = .{ .expression = s.create_node_ptr(chain) } };
+        },
+        .optional_deref => {
+            try s.expect(.optional_deref);
+            chain = Node{ .optional_dereference = .{ .expression = s.create_node_ptr(chain) } };
+        },
+        else => break,
+    };
+    return chain;
+}
 
 fn advance(s: *Parser) void {
     s.curr_tok = s.next_tok;
@@ -898,7 +808,6 @@ fn precedence(s: *Parser) u8 {
         .andand => 8,
         .oror => 7,
         .dotdot => 6,
-        .eq, .addeq, .subeq, .muleq, .diveq, .modeq, .andeq, .oreq, .xoreq, .flipeq, .pointer_deref, .optional_deref, .@"else" => 2,
         else => 0,
     };
 }
