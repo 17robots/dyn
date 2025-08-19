@@ -211,13 +211,13 @@ fn expression(s: *Parser, prec: u8) ParserError!Node {
         .bang, .flip, .sub, .@"and" => try s.unary_expression(),
         else => try s.non_literal_expression(),
     };
+    switch (s.curr_tok.tok_type) {
+        .dotdot => return try s.range_expression(expr),
+        .addeq, .andeq, .diveq, .flipeq, .modeq, .muleq, .subeq, .xoreq, .eq => return try s.assign_expression(expr),
+        else => {},
+    }
     while (s.curr_tok.tok_type != .eof and prec < s.precedence()) {
         if (s.curr_tok.tok_type == .dotdot) return try s.range_expression(expr);
-        switch (s.curr_tok.tok_type) {
-            .dotdot => return try s.range_expression(expr),
-            .addeq, .andeq, .diveq, .flipeq, .modeq, .muleq, .subeq, .xoreq, .eq => return try s.assign_expression(expr),
-            else => {},
-        }
         const new_prec = s.precedence();
         switch (s.curr_tok.tok_type) {
             .add, .@"and", .andand, .bang, .bangeq, .div, .eqeq, .gt, .gteq, .lt, .lteq, .mod, .mul, .nullish, .@"or", .oror, .sub, .xor => {},
@@ -316,9 +316,14 @@ fn function(s: *Parser) ParserError!Node {
     return Node{ .function_type = .{ .parameters = types, .result = if (return_expr) |r| s.create_node_ptr(r) else null } };
 }
 fn identifier(s: *Parser) ParserError!Node {
-    const val = s.curr_tok.val.?;
-    try s.expect(.identifier);
-    return Node{ .identifier = val };
+    if (s.curr_tok.val) |v| {
+        const val = v;
+        try s.expect(.identifier);
+        return Node{ .identifier = val };
+    } else {
+        std.debug.print("Failed to get val for token type: {any}\n", .{s.curr_tok});
+        return ParserError.fatal;
+    }
 }
 fn if_prefix(s: *Parser) ParserError!Node {
     try s.expect(.@"if");

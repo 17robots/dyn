@@ -212,29 +212,29 @@ pub fn next(s: *Lexer) Token {
                 },
                 else => {},
             },
-            .read_char => switch(s.source.content[s.index]) {
+            .read_char => switch (s.source.content[s.index]) {
                 '\'' => {
                     const body = s.source.content[(s.placeholder + 1)..s.index];
                     s.state = .base;
                     s.index += 1;
 
-                    if(s.has_char_errored) {
+                    if (s.has_char_errored) {
                         s.has_char_errored = false;
                         s.errored = true;
                         return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
                     }
-                    if(body.len == 0) {
+                    if (body.len == 0) {
                         s.diag.emit(s.source.id, @intCast(s.index), .err, "Empty character literal", .{});
                         s.errored = true;
                         return Token.init(.invalid, s.source.id, @intCast(s.index), null);
                     }
-                    if(body[0] == '\\') {
-                        if(body.len != 2) {
+                    if (body[0] == '\\') {
+                        if (body.len != 2) {
                             s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character escape length", .{});
                             s.errored = true;
                             return Token.init(.invalid, s.source.id, @intCast(s.index), null);
                         }
-                    } else if(body.len != 1) {
+                    } else if (body.len != 1) {
                         s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character length", .{});
                         s.errored = true;
                         return Token.init(.invalid, s.source.id, @intCast(s.index), null);
@@ -243,10 +243,10 @@ pub fn next(s: *Lexer) Token {
                 },
                 '\\' => {
                     s.index += 1;
-                    if(s.index >= s.source.content.len) {
+                    if (s.index >= s.source.content.len) {
                         s.diag.emit(s.source.id, @intCast(s.index), .err, "Unfinished character escape", .{});
                         s.has_char_errored = true;
-                    } else switch(s.source.content[s.index]) {
+                    } else switch (s.source.content[s.index]) {
                         '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
                         else => {
                             s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character escape {any}", .{s.source.content[(s.index - 1)..s.index]});
@@ -393,7 +393,7 @@ pub fn next(s: *Lexer) Token {
             },
             .read_multi_comment => {
                 if (s.source.content[s.index] == '*') {
-                    if(s.index + 1 < s.source.content.len and s.source.content[s.index + 1] == '/') {
+                    if (s.index + 1 < s.source.content.len and s.source.content[s.index + 1] == '/') {
                         s.index += 2;
                         s.state = .base;
                         return s.next();
@@ -468,6 +468,7 @@ fn get_keyword(s: *Lexer) ?TokenType {
         2 => {
             if (std.mem.eql(u8, word, "fn")) return .@"fn";
             if (std.mem.eql(u8, word, "if")) return .@"if";
+            return null;
         },
         3 => {
             if (std.mem.eql(u8, word, "for")) return .@"for";
@@ -476,6 +477,7 @@ fn get_keyword(s: *Lexer) ?TokenType {
             if (std.mem.eql(u8, word, "pub")) return .@"pub";
             if (std.mem.eql(u8, word, "try")) return .@"try";
             if (std.mem.eql(u8, word, "use")) return .use;
+            return null;
         },
         4 => {
             if (std.mem.eql(u8, word, "comp")) return .comp;
@@ -484,6 +486,7 @@ fn get_keyword(s: *Lexer) ?TokenType {
             if (std.mem.eql(u8, word, "null")) return .null;
             if (std.mem.eql(u8, word, "true")) return .true;
             if (std.mem.eql(u8, word, "type")) return .type;
+            return null;
         },
         5 => {
             if (std.mem.eql(u8, word, "break")) return .@"break";
@@ -493,18 +496,23 @@ fn get_keyword(s: *Lexer) ?TokenType {
             if (std.mem.eql(u8, word, "false")) return .false;
             if (std.mem.eql(u8, word, "match")) return .match;
             if (std.mem.eql(u8, word, "while")) return .@"while";
+            return null;
         },
         6 => {
             if (std.mem.eql(u8, word, "inline")) return .@"inline";
+            if (std.mem.eql(u8, word, "module")) return .module;
             if (std.mem.eql(u8, word, "packed")) return .@"packed";
             if (std.mem.eql(u8, word, "struct")) return .@"struct";
             if (std.mem.eql(u8, word, "return")) return .@"return";
+            return null;
         },
         8 => {
             if (std.mem.eql(u8, word, "continue")) return .@"continue";
+            return null;
         },
         9 => {
             if (std.mem.eql(u8, word, "undefined")) return .undefined;
+            return null;
         },
         else => return null,
     }

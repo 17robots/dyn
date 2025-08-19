@@ -42,12 +42,11 @@ pub const Module = struct {
     }
 };
 
-pub const ModuleKey = struct { dir: []const u8, name: []const u8 };
 pub const ModuleResolver = struct {
     allocator: std.mem.Allocator,
     source_manager: *SourceManager,
     diags: *DiagnosticEmitter,
-    module_cache: std.AutoHashMap(ModuleKey, *Module),
+    module_cache: std.StringHashMap(*Module),
 
     pub fn init(allocator: std.mem.Allocator, source_manager: *SourceManager, diags: *DiagnosticEmitter) ModuleResolver {
         return .{ .allocator = allocator, .source_manager = source_manager, .diags = diags, .module_cache = std.StringHashMap(*Module).init(allocator) };
