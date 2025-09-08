@@ -40,6 +40,7 @@ pub const Module = struct {
             if (p.parse()) |result| try s.asts.append(result);
         }
     }
+    // pub fn check(s: *Module) void { }
 };
 
 pub const ModuleResolver = struct {

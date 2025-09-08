@@ -1,4 +1,4 @@
-module main;
+mod main;
 
 io := use "std/io";
 heap := use "std/heap";
@@ -203,3 +203,4 @@ main := fn() ! {
 		defer |e| {}
 	};
 };
+

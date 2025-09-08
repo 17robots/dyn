@@ -320,10 +320,7 @@ fn identifier(s: *Parser) ParserError!Node {
         const val = v;
         try s.expect(.identifier);
         return Node{ .identifier = val };
-    } else {
-        std.debug.print("Failed to get val for token type: {any}\n", .{s.curr_tok});
-        return ParserError.fatal;
-    }
+    } else return ParserError.fatal;
 }
 fn if_prefix(s: *Parser) ParserError!Node {
     try s.expect(.@"if");

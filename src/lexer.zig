@@ -54,8 +54,8 @@ fn whitespace(s: Lexer) bool {
     };
 }
 pub fn next(s: *Lexer) Token {
-    if (s.errored) return Token.init(.invalid, s.source.id, @intCast(s.index), null);
-    if (s.index >= s.source.content.len) return Token.init(.eof, s.source.id, @intCast(s.index), null);
+    if (s.errored) return Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
+    if (s.index >= s.source.content.len) return Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
     if (s.state != .read_string) {
         while (s.index < s.source.content.len and s.whitespace()) s.index += 1;
     }
@@ -86,56 +86,56 @@ pub fn next(s: *Lexer) Token {
                 ':' => s.state = .read_colon,
                 '(' => {
                     s.index += 1;
-                    return Token.init(.lparen, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.lparen, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 ')' => {
                     s.index += 1;
-                    return Token.init(.rparen, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.rparen, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 '[' => {
                     s.index += 1;
-                    return Token.init(.lbrack, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.lbrack, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 ']' => {
                     s.index += 1;
-                    return Token.init(.rbrack, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.rbrack, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 '{' => {
                     s.index += 1;
-                    return Token.init(.lbrace, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.lbrace, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 '}' => {
                     s.index += 1;
-                    return Token.init(.rbrace, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.rbrace, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 ';' => {
                     s.index += 1;
-                    return Token.init(.semicolon, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.semicolon, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 ',' => {
                     s.index += 1;
-                    return Token.init(.comma, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.comma, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
                 else => {
                     s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character: {any}", .{s.source.content[s.index]});
                     s.index += 1;
                     s.errored = true;
-                    return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
             },
             .read_underscore => switch (s.source.content[s.index]) {
                 'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
                 else => {
                     s.state = .base;
-                    return Token.init(.underscore, s.source.id, @intCast(s.index), null);
+                    return Token.init(.underscore, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
                 },
             },
             .read_word => switch (s.source.content[s.index]) {
                 'a'...'z', 'A'...'Z', '0'...'9', '_' => {},
                 else => {
                     s.state = .base;
-                    if (s.get_keyword()) |kw| return Token.init(kw, s.source.id, @intCast(s.index), null);
-                    return Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    if (s.get_keyword()) |kw| return Token.init(kw, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
+                    return Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
                 },
             },
             .read_num => switch (s.source.content[s.index]) {
@@ -143,7 +143,7 @@ pub fn next(s: *Lexer) Token {
                 '.' => s.state = .read_float,
                 else => {
                     s.state = .base;
-                    return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
                 },
             },
             .read_float => switch (s.source.content[s.index]) {
@@ -152,12 +152,12 @@ pub fn next(s: *Lexer) Token {
                     s.state = .base;
                     if (s.index > 0 and s.source.content[s.index - 1] == '.') {
                         s.index -= 1;
-                        return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
-                    } else return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                        return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
+                    } else return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
                 },
                 else => {
                     s.state = .base;
-                    return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
                 },
             },
             .read_dot => switch (s.source.content[s.index]) {
@@ -165,50 +165,50 @@ pub fn next(s: *Lexer) Token {
                 '.' => {
                     s.state = .base;
                     s.index += 1;
-                    return Token.init(.dotdot, s.source.id, @intCast(s.index), null);
+                    return Token.init(.dotdot, s.source.id, @intCast(s.index), null, @intCast(s.index - 1), @intCast(s.index));
                 },
                 '?' => {
                     s.state = .base;
                     s.index += 1;
-                    return Token.init(.optional_deref, s.source.id, @intCast(s.index), null);
+                    return Token.init(.optional_deref, s.source.id, @intCast(s.index), null, @intCast(s.index - 1), @intCast(s.index));
                 },
                 '*' => {
                     s.state = .base;
                     s.index += 1;
-                    return Token.init(.pointer_deref, s.source.id, @intCast(s.index), null);
+                    return Token.init(.pointer_deref, s.source.id, @intCast(s.index), null, @intCast(s.index - 1), @intCast(s.index));
                 },
                 else => {
                     s.state = .base;
-                    return Token.init(.dot, s.source.id, @intCast(s.index), null);
+                    return Token.init(.dot, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
                 },
             },
             .read_colon => switch (s.source.content[s.index]) {
                 '=' => {
                     s.state = .base;
                     s.index += 1;
-                    return Token.init(.walrus, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.walrus, s.source.id, @intCast(s.index - 1), null, @intCast(s.index), @intCast(s.index));
                 },
                 else => {
                     s.state = .base;
-                    return Token.init(.colon, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.colon, s.source.id, @intCast(s.index - 1), null, @intCast(s.index), @intCast(s.index));
                 },
             },
             .read_question => switch (s.source.content[s.index]) {
                 '?' => {
                     s.state = .base;
                     s.index += 1;
-                    return Token.init(.nullish, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.nullish, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index));
                 },
                 else => {
                     s.state = .base;
-                    return Token.init(.question, s.source.id, @intCast(s.index - 1), null);
+                    return Token.init(.question, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
                 },
             },
             .read_string => switch (s.source.content[s.index]) {
                 '\"' => {
                     s.state = .base;
                     s.index += 1;
-                    return Token.init(.string, s.source.id, @intCast(s.index - 1), s.source.content[s.placeholder..(s.index - 1)]);
+                    return Token.init(.string, s.source.id, @intCast(s.index - 1), s.source.content[s.placeholder..(s.index - 1)], @intCast(s.placeholder), @intCast(s.index - 1));
                 },
                 else => {},
             },
@@ -221,25 +221,25 @@ pub fn next(s: *Lexer) Token {
                     if (s.has_char_errored) {
                         s.has_char_errored = false;
                         s.errored = true;
-                        return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null);
+                        return Token.init(.invalid, s.source.id, @intCast(s.placeholder + 1), null, @intCast(s.placeholder), @intCast(s.index));
                     }
                     if (body.len == 0) {
                         s.diag.emit(s.source.id, @intCast(s.index), .err, "Empty character literal", .{});
                         s.errored = true;
-                        return Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                        return Token.init(.invalid, s.source.id, @intCast(s.placeholder + 1), null, @intCast(s.placeholder), @intCast(s.index));
                     }
                     if (body[0] == '\\') {
                         if (body.len != 2) {
                             s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character escape length", .{});
                             s.errored = true;
-                            return Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                            return Token.init(.invalid, s.source.id, @intCast(s.placeholder), null, @intCast(s.placeholder), @intCast(s.index));
                         }
                     } else if (body.len != 1) {
                         s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character length", .{});
                         s.errored = true;
-                        return Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                        return Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
                     }
-                    return Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                    return Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
                 },
                 '\\' => {
                     s.index += 1;
@@ -258,30 +258,42 @@ pub fn next(s: *Lexer) Token {
             },
             .read_add => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '+', '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '+' => .addadd,
                     '=' => .addeq,
                     else => .add,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .add) s.index += 1;
                 return tok;
             },
             .read_sub => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '-', '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '-' => .subsub,
                     '=' => .subeq,
                     else => .sub,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .sub) s.index += 1;
                 return tok;
             },
             .read_mul => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .muleq,
                     else => .mul,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .mul) s.index += 1;
                 return tok;
             },
@@ -292,95 +304,135 @@ pub fn next(s: *Lexer) Token {
                 },
                 else => {
                     s.state = .base;
+                    const to_remove: usize = switch (s.source.content[s.index]) {
+                        '=' => 1,
+                        else => 0,
+                    };
                     const tok = Token.init(switch (s.source.content[s.index]) {
                         '=' => .diveq,
                         else => .div,
-                    }, s.source.id, @intCast(s.index), null);
+                    }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                     if (tok.tok_type != .div) s.index += 1;
                     return tok;
                 },
             },
             .read_mod => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .modeq,
                     else => .mod,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .mod) s.index += 1;
                 return tok;
             },
             .read_and => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '&', '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '&' => .andand,
                     '=' => .andeq,
                     else => .@"and",
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .@"and") s.index += 1;
                 return tok;
             },
             .read_or => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '|', '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '|' => .oror,
                     '=' => .oreq,
                     else => .@"or",
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .@"or") s.index += 1;
                 return tok;
             },
             .read_xor => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .xoreq,
                     else => .xor,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .xor) s.index += 1;
                 return tok;
             },
             .read_flip => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .flipeq,
                     else => .flip,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .flip) s.index += 1;
                 return tok;
             },
             .read_eq => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=', '>' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '>' => .arrow,
                     '=' => .eqeq,
                     else => .eq,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .eq) s.index += 1;
                 return tok;
             },
             .read_gt => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .gteq,
                     else => .gt,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .gt) s.index += 1;
                 return tok;
             },
             .read_lt => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .lteq,
                     else => .lt,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .lt) s.index += 1;
                 return tok;
             },
             .read_bang => {
                 s.state = .base;
+                const to_remove: usize = switch (s.source.content[s.index]) {
+                    '=' => 1,
+                    else => 0,
+                };
                 const tok = Token.init(switch (s.source.content[s.index]) {
                     '=' => .bangeq,
                     else => .bang,
-                }, s.source.id, @intCast(s.index), null);
+                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
                 if (tok.tok_type != .bang) s.index += 1;
                 return tok;
             },
@@ -404,40 +456,40 @@ pub fn next(s: *Lexer) Token {
         s.index += 1;
     }
     const res = switch (s.state) {
-        .base => Token.init(.eof, s.source.id, @intCast(s.index), null),
-        .read_comment => Token.init(.eof, s.source.id, @intCast(s.index), null),
+        .base => Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_comment => Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
         .read_multi_comment => blk: {
-            if (std.mem.eql(u8, s.source.content[(s.index - 2)..(s.index - 1)], "*/")) break :blk Token.init(.eof, s.source.id, @intCast(s.index), null);
+            if (std.mem.eql(u8, s.source.content[(s.index - 2)..(s.index - 1)], "*/")) break :blk Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
             s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Comment", .{});
             s.errored = true;
-            break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+            break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
         },
-        .read_word => if (s.get_keyword()) |kw| Token.init(kw, s.source.id, @intCast(s.index), null) else Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
-        .read_num => Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
-        .read_float => Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
-        .read_underscore => Token.init(.underscore, s.source.id, @intCast(s.index), null),
-        .read_add => Token.init(.add, s.source.id, @intCast(s.index), null),
-        .read_sub => Token.init(.sub, s.source.id, @intCast(s.index), null),
-        .read_mul => Token.init(.mul, s.source.id, @intCast(s.index), null),
-        .read_div => Token.init(.div, s.source.id, @intCast(s.index), null),
-        .read_mod => Token.init(.mod, s.source.id, @intCast(s.index), null),
-        .read_and => Token.init(.@"and", s.source.id, @intCast(s.index), null),
-        .read_or => Token.init(.@"or", s.source.id, @intCast(s.index), null),
-        .read_xor => Token.init(.xor, s.source.id, @intCast(s.index), null),
-        .read_flip => Token.init(.flip, s.source.id, @intCast(s.index), null),
-        .read_eq => Token.init(.eq, s.source.id, @intCast(s.index), null),
-        .read_gt => Token.init(.gt, s.source.id, @intCast(s.index), null),
-        .read_lt => Token.init(.lt, s.source.id, @intCast(s.index), null),
-        .read_bang => Token.init(.bang, s.source.id, @intCast(s.index), null),
-        .read_dot => Token.init(.dot, s.source.id, @intCast(s.index), null),
-        .read_colon => Token.init(.colon, s.source.id, @intCast(s.index), null),
-        .read_question => Token.init(.question, s.source.id, @intCast(s.index), null),
+        .read_word => if (s.get_keyword()) |kw| Token.init(kw, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index)) else Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
+        .read_num => Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
+        .read_float => Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
+        .read_underscore => Token.init(.underscore, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_add => Token.init(.add, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_sub => Token.init(.sub, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_mul => Token.init(.mul, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_div => Token.init(.div, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_mod => Token.init(.mod, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_and => Token.init(.@"and", s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_or => Token.init(.@"or", s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_xor => Token.init(.xor, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_flip => Token.init(.flip, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_eq => Token.init(.eq, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_gt => Token.init(.gt, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_lt => Token.init(.lt, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_bang => Token.init(.bang, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_dot => Token.init(.dot, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_colon => Token.init(.colon, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
+        .read_question => Token.init(.question, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
         .read_string => switch (s.source.content[s.index]) {
-            '\"' => Token.init(.string, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]),
+            '\"' => Token.init(.string, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
             else => blk: {
                 s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed String Literal", .{});
                 s.errored = true;
-                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
             },
         },
         .read_char => switch (s.source.content[s.index]) {
@@ -447,14 +499,14 @@ pub fn next(s: *Lexer) Token {
                 if (the_char.len > val) {
                     s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Length {any}", .{the_char});
                     s.errored = true;
-                    break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                    break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
                 }
-                break :blk Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index]);
+                break :blk Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
             },
             else => blk: {
                 s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Character Literal", .{});
                 s.errored = true;
-                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null);
+                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
             },
         },
     };
