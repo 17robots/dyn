@@ -16,7 +16,7 @@ pub const Module = struct {
     symbol_table: symbol.SymbolTable,
     scopes: symbol.ScopeStack,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
-        return .{ .allocator = allocator, .name = name, .file_ids = std.ArrayList(FileId).init(allocator), .asts = std.ArrayList(ast.Node).init(allocator) };
+        return .{ .allocator = allocator, .name = name, .file_ids = std.ArrayList(FileId).init(allocator), .asts = std.ArrayList(ast.Node).init(allocator), .symbol_table = symbol.SymbolTable.init(allocator), .scopes = symbol.ScopeStack.init(allocator) };
     }
     pub fn deinit(s: *Module) void {
         s.file_ids.deinit();
@@ -43,8 +43,7 @@ pub const Module = struct {
             if (p.parse()) |result| try s.asts.append(result);
         }
     }
-    pub fn check(s: *Module) void {
-    }
+    // pub fn check(s: *Module) void {}
 };
 
 pub const ModuleResolver = struct {
@@ -108,8 +107,8 @@ pub const ModuleResolver = struct {
     fn find_module_name_in_src(s: *ModuleResolver, file_id: FileId) !?[]const u8 {
         var parser = Parser.init(s.allocator, &s.source_manager.sources.items[file_id], s.diags);
         const module_decl = try parser.module_declaration();
-        return switch (module_decl) {
-            .module => |m| m.name.identifier,
+        return switch (module_decl.type) {
+            .module => |m| m.name.type.identifier,
             else => null,
         };
     }

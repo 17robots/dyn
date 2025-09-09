@@ -29,7 +29,7 @@ pub fn process_main(s: *Compiler, step: enum { lex, parse, check }) !void {
             }
             std.debug.print("We have: {any} valid asts\n", .{main_module.asts.items.len});
             for (main_module.asts.items) |a| {
-                for (a.program.declarations.items) |d| std.debug.print("Debug: {any}\n", .{d});
+                for (a.type.program.declarations.items) |d| std.debug.print("Debug: {any}\n", .{d});
             }
         },
         .check => {},
