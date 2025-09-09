@@ -67,15 +67,15 @@ fn arm(s: *Parser, expr: bool) ParserError!Node {
 fn assign_expression(s: *Parser, n: Node) ParserError!Node {
     const a = s.create_node_ptr(n);
     const op: Node = switch (s.curr_tok.tok_type) {
-        .addeq => Node.addeq,
-        .subeq => Node.subeq,
-        .muleq => Node.muleq,
-        .diveq => Node.diveq,
-        .modeq => Node.modeq,
-        .andeq => Node.andeq,
-        .oreq => Node.oreq,
-        .xoreq => Node.xoreq,
-        .eq => Node.eq,
+        .addeq => Node{ .addeq = .{ .span = s.curr_tok.span } },
+        .subeq => Node{ .subeq = .{ .span = s.curr_tok.span } },
+        .muleq => Node{ .muleq = .{ .span = s.curr_tok.span } },
+        .diveq => Node{ .diveq = .{ .span = s.curr_tok.span } },
+        .modeq => Node{ .modeq = .{ .span = s.curr_tok.span } },
+        .andeq => Node{ .andeq = .{ .span = s.curr_tok.span } },
+        .oreq => Node{ .oreq = .{ .span = s.curr_tok.span } },
+        .xoreq => Node{ .xoreq = .{ .span = s.curr_tok.span } },
+        .eq => Node{ .eq = .{ .span = s.curr_tok.span } },
         else => {
             s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Invalid assign operator {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
@@ -547,24 +547,24 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
 }
 fn operator(s: *Parser) ParserError!Node {
     const op: Node = switch (s.curr_tok.tok_type) {
-        .add => Node.add,
-        .@"and" => Node.@"and",
-        .andand => Node.andand,
-        .bang => Node.bang,
-        .bangeq => Node.bangeq,
-        .div => Node.div,
-        .eqeq => Node.eqeq,
-        .gt => Node.gt,
-        .gteq => Node.gte,
-        .lt => Node.lt,
-        .lteq => Node.lte,
-        .mod => Node.mod,
-        .mul => Node.mul,
-        .nullish => Node.nullish,
-        .@"or" => Node.@"or",
-        .oror => Node.oror,
-        .sub => Node.sub,
-        .xor => Node.xor,
+        .add => Node{ .add = .{ .span = s.curr_tok.span } },
+        .@"and" => Node{ .@"and" = .{ .span = s.curr_tok.span } },
+        .andand => Node{ .andand = .{ .span = s.curr_tok.span } },
+        .bang => Node{ .bang = .{ .span = s.curr_tok.span } },
+        .bangeq => Node{ .bangeq = .{ .span = s.curr_tok.span } },
+        .div => Node{ .div = .{ .span = s.curr_tok.span } },
+        .eqeq => Node{ .eqeq = .{ .span = s.curr_tok.span } },
+        .gt => Node{ .gt = .{ .span = s.curr_tok.span } },
+        .gteq => Node{ .gte = .{ .span = s.curr_tok.span } },
+        .lt => Node{ .lt = .{ .span = s.curr_tok.span } },
+        .lteq => Node{ .lte = .{ .span = s.curr_tok.span } },
+        .mod => Node{ .mod = .{ .span = s.curr_tok.span } },
+        .mul => Node{ .mul = .{ .span = s.curr_tok.span } },
+        .nullish => Node{ .nullish = .{ .span = s.curr_tok.span } },
+        .@"or" => Node{ .@"or" = .{ .span = s.curr_tok.span } },
+        .oror => Node{ .oror = .{ .span = s.curr_tok.span } },
+        .sub => Node{ .sub = .{ .span = s.curr_tok.span } },
+        .xor => Node{ .xor = .{ .span = s.curr_tok.span } },
         else => {
             s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Unexpected assign op {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;

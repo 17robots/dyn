@@ -14,7 +14,7 @@ pub fn init(allocator: std.mem.Allocator, diagnostics: *diagnostic.DiagnosticEmi
     return Compiler{ .allocator = allocator, .diagnostics = diagnostics, .source_manager = source_manager, .module_resolver = module_resolver };
 }
 
-pub fn process_main(s: *Compiler, step: enum { lex, parse }) !void {
+pub fn process_main(s: *Compiler, step: enum { lex, parse, check }) !void {
     var main_module = try s.module_resolver.resolveModule(".", "main");
     switch (step) {
         .lex => {
@@ -32,5 +32,6 @@ pub fn process_main(s: *Compiler, step: enum { lex, parse }) !void {
                 for (a.program.declarations.items) |d| std.debug.print("Debug: {any}\n", .{d});
             }
         },
+        .check => {},
     }
 }

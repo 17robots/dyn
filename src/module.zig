@@ -6,12 +6,15 @@ const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const Lexer = @import("lexer.zig");
 const Parser = @import("parser.zig");
 const Token = @import("token.zig").Token;
+const symbol = @import("symbol.zig");
 
 pub const Module = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
     file_ids: std.ArrayList(FileId),
     asts: std.ArrayList(ast.Node),
+    symbol_table: symbol.SymbolTable,
+    scopes: symbol.ScopeStack,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
         return .{ .allocator = allocator, .name = name, .file_ids = std.ArrayList(FileId).init(allocator), .asts = std.ArrayList(ast.Node).init(allocator) };
     }
@@ -40,7 +43,8 @@ pub const Module = struct {
             if (p.parse()) |result| try s.asts.append(result);
         }
     }
-    // pub fn check(s: *Module) void { }
+    pub fn check(s: *Module) void {
+    }
 };
 
 pub const ModuleResolver = struct {
