@@ -2,12 +2,12 @@ const std = @import("std");
 const Span = @import("token.zig").Span;
 
 pub const LiteralKind = enum {
-    string,
-    int,
-    float,
     boolean,
     char,
+    float,
+    int,
     null,
+    string,
     undefined,
     pub fn to_string(s: LiteralKind) []const u8 {
         return switch (s) {
