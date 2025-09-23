@@ -1,19 +1,24 @@
 const std = @import("std");
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const Diagnostic = @import("diagnostic.zig").Diagnostic;
-const Lexer = @import("lexer.zig");
+const Lexer = @import("lexer2.zig");
 const NodeType = @import("ast2.zig").NodeType;
 const Node = @import("ast2.zig").Node;
 const Source = @import("source.zig").Source;
 const SourceLocation = @import("source.zig").SourceLocation;
 const Token = @import("token2.zig").Token;
 const TokenType = @import("token2.zig").TokenType;
+const TokenTag = @import("token2.zig").TokenTag;
 const Span = @import("token2.zig").Span;
-const Parser = @This();
+
+const TokType = std.meta.Tag(TokenType);
+
 const ParserError = error{
     recoverable,
     fatal,
 };
+
+const Parser = @This();
 
 allocator: std.mem.Allocator,
 diag: *DiagnosticEmitter,
@@ -30,6 +35,13 @@ pub fn init(allocator: std.mem.Allocator, source: *Source, diagnostics: *Diagnos
     parser.advance();
     return parser;
 }
+pub fn module_declaration(s: *Parser) ParserError!Node {
+    // const span_start = s.curr_tok.span;
+    try s.expect(.module);
+}
+fn identifier(s: *Parser) ParserError!Node {
+    _ = s;
+}
 fn advance(s: *Parser) void {
     s.curr_tok = s.next_tok;
     s.next_tok = s.peek_tok;
@@ -40,9 +52,12 @@ fn create_node_ptr(s: *Parser, n: Node) *Node {
     x.* = n;
     return x;
 }
-fn expect(s: *Parser, expected: TokenType) ParserError!void {
-    if (s.curr_tok.type == .invalid) return ParserError.fatal;
-    if (s.curr_tok.type != expected) {
+fn tag(t: TokenType) TokenTag {
+    return std.meta.activeTag(t);
+}
+fn expect(s: *Parser, expected: TokenTag) ParserError!void {
+    if (tag(s.curr_tok.type) == .invalid) return ParserError.fatal;
+    if (tag(s.curr_tok.type) == expected) {
         s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Unexpected token {any}, expected {any}", .{ s.curr_tok.type, expected });
         return ParserError.recoverable;
     }
@@ -75,6 +90,7 @@ fn precedence(s: *Parser) u8 {
         else => 0,
     };
 }
+
 fn sync(s: *Parser, toks: []const TokenType) void {
     while (s.curr_tok.type != .eof) {
         if (std.mem.indexOf(TokenType, toks, &[_]TokenType{s.curr_tok.type})) |_| {
