@@ -244,10 +244,6 @@ pub fn next(s: *Lexer) Token {
             s.advance(1);
             return s.tok(.comma, null, s.idx - 1, s.idx - 1);
         },
-        '_' => {
-            s.advance(1);
-            return s.tok(.underscore, null, s.idx - 1, s.idx - 1);
-        },
         '$', '_', 'a'...'z', 'A'...'Z' => return s.read_ident(),
         '0'...'9' => return s.read_num_float_range(),
         '.' => {
@@ -313,6 +309,7 @@ pub fn next(s: *Lexer) Token {
         '>' => return s.read_compound_op(.gt, &.{.{ .ch = '=', .tok = .gte }}),
         '<' => return s.read_compound_op(.lt, &.{.{ .ch = '=', .tok = .lte }}),
         '!' => return s.read_compound_op(.bang, &.{.{ .ch = '=', .tok = .bangeq }}),
+        else => return s.tok(.invalid, null, s.idx, s.idx)
     }
 }
 fn tok(s: Lexer, t: TokenType, val: ?[]const u8, start: usize, end: usize) Token {

@@ -45,7 +45,7 @@ pub const SourceManager = struct {
         const source = &s.sources.items[loc.file_id];
         var line: usize = 1;
         var line_start_index: usize = 0;
-        for (source.content[0..loc.index], 0..loc.index) |char, i| {
+        for (source.content[0..loc.span.start], 0..loc.span.start) |char, i| {
             if (char == '\n') {
                 line += 1;
                 line_start_index = i + 1;

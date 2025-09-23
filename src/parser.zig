@@ -88,7 +88,7 @@ fn assign_expression(s: *Parser, n: Node) ParserError!Node {
         .xoreq => node(NodeType.xoreq, s.curr_tok.span),
         .eq => node(NodeType.eq, s.curr_tok.span),
         else => {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Invalid assign operator {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(s.source.id, s.curr_tok.span, .err, "Invalid assign operator {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -177,7 +177,7 @@ fn declaration(s: *Parser, global_decl: bool) ParserError!Node {
             break :blk s.create_node_ptr(try s.non_literal_expression());
         },
         else => {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+            s.diag.emit(s.source.id, s.curr_tok.span, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -260,7 +260,7 @@ fn function(s: *Parser) ParserError!Node {
     } else false;
     var fn_decl = true;
     var fn_parameters = std.ArrayList(Node).empty;
-    var types = std.ArrayList(Node).init(s.allocator);
+    var types = std.ArrayList(Node).empty;
     try s.expect(.@"fn");
     try s.expect(.lparen);
     while (s.curr_tok.tok_type != .eof) {
@@ -272,9 +272,9 @@ fn function(s: *Parser) ParserError!Node {
                 if (s.curr_tok.tok_type == .colon) {
                     try s.expect(.colon);
                     const the_type = s.create_node_ptr(try s.non_literal_expression());
-                    fn_parameters.append(s.allocator, node(NodeType{ .function_parameter = .{ .names = types.clone() catch |e| @panic(@errorName(e)), .type = the_type } }, span_start2.fromSpan(s.curr_tok.span))) catch |e| @panic(@errorName(e));
-                    types.deinit();
-                    types = std.ArrayList(Node).init(s.allocator);
+                    fn_parameters.append(s.allocator, node(NodeType{ .function_parameter = .{ .names = types.clone(s.allocator) catch |e| @panic(@errorName(e)), .type = the_type } }, span_start2.fromSpan(s.curr_tok.span))) catch |e| @panic(@errorName(e));
+                    types.deinit(s.allocator);
+                    types = std.ArrayList(Node).empty;
                     span_start2 = s.curr_tok.span;
                 }
             } else {
@@ -284,7 +284,7 @@ fn function(s: *Parser) ParserError!Node {
         } else {
             types.append(s.allocator, try s.non_literal_expression()) catch |e| @panic(@errorName(e));
             if (s.curr_tok.tok_type == .colon) {
-                s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "", .{});
+                s.diag.emit(s.source.id, span_start2, .err, "", .{});
                 return ParserError.recoverable;
             }
         }
@@ -315,31 +315,31 @@ fn function(s: *Parser) ParserError!Node {
     if (fn_decl) {
         if (body) |b| {
             if (types.items.len > 0) {
-                s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Identifiers missing type in function declaration", .{});
+                s.diag.emit(s.source.id, s.curr_tok.span, .err, "Identifiers missing type in function declaration", .{});
                 return ParserError.recoverable;
             }
             return node(NodeType{ .function = .{ .inline_ = inline_, .parameters = fn_parameters, .result = if (return_expr) |r| s.create_node_ptr(r) else null, .body = b } }, span_start.fromSpan(s.curr_tok.span));
         }
         if (fn_parameters.items.len > 0) {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Function declaration requires a body", .{});
+            s.diag.emit(s.source.id, span_start, .err, "Function declaration requires a body", .{});
             return ParserError.recoverable;
         }
         if (inline_) {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Inline cannot be applied to function types", .{});
+            s.diag.emit(s.source.id, span_start, .err, "Inline cannot be applied to function types", .{});
             return ParserError.recoverable;
         }
         return node(NodeType{ .function_type = .{ .parameters = types, .result = if (return_expr) |r| s.create_node_ptr(r) else null } }, span_start.fromSpan(s.curr_tok.span));
     }
-    if (body) |_| {
-        s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Function types should not have a body", .{});
+    if (body) |b| {
+        s.diag.emit(s.source.id, b.span, .err, "Function types should not have a body", .{});
         return ParserError.recoverable;
     }
     if (fn_parameters.items.len > 0) {
-        s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Function declaration has types without corresponding identifiers", .{});
+        s.diag.emit(s.source.id, span_start, .err, "Function declaration has types without corresponding identifiers", .{});
         return ParserError.recoverable;
     }
     if (inline_) {
-        s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Inline cannot be applied to function types", .{});
+        s.diag.emit(s.source.id, span_start, .err, "Inline cannot be applied to function types", .{});
         return ParserError.recoverable;
     }
     return node(NodeType{ .function_type = .{ .parameters = types, .result = if (return_expr) |r| s.create_node_ptr(r) else null } }, span_start.fromSpan(s.curr_tok.span));
@@ -371,7 +371,7 @@ fn literal(s: *Parser) ParserError!Node {
         .undefined => LiteralKind.undefined,
         .null => LiteralKind.null,
         else => {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Invalid literal {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(s.source.id, s.curr_tok.span, .err, "Invalid literal {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -390,7 +390,7 @@ fn match(s: *Parser, is_expr: bool) ParserError!Node {
     const expr = s.create_node_ptr(try s.expression(0));
     try s.expect(.colon);
     try s.expect(.lbrace);
-    var arms = std.ArrayList(Node).init(s.allocator);
+    var arms = std.ArrayList(Node).empty;
     blk: while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .rbrace) break;
         arms.append(s.allocator, s.arm(is_expr) catch |e| switch (e) {
@@ -431,7 +431,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             const span_start = s.curr_tok.span;
             try s.expect(.@"error");
             try s.expect(.lbrace);
-            var members = std.ArrayList(Node).init(s.allocator);
+            var members = std.ArrayList(Node).empty;
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rbrace) break;
                 members.append(s.allocator, try s.member(false)) catch |e| @panic(@errorName(e));
@@ -460,7 +460,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             if (chain.type == .function_type) break :blk chain;
             if (s.curr_tok.tok_type != .lparen) break :blk chain;
             try s.expect(.lparen);
-            var call_args = std.ArrayList(Node).init(s.allocator);
+            var call_args = std.ArrayList(Node).empty;
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rparen) break;
                 call_args.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
@@ -492,7 +492,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                     },
                     else => {
                         try s.expect(.lbrack);
-                        var vals = std.ArrayList(Node).init(s.allocator);
+                        var vals = std.ArrayList(Node).empty;
                         while (s.curr_tok.tok_type != .eof) {
                             if (s.curr_tok.tok_type == .rbrack) break;
                             vals.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
@@ -505,7 +505,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                 }
             } else {
                 try s.expect(.lbrack);
-                var vals = std.ArrayList(Node).init(s.allocator);
+                var vals = std.ArrayList(Node).empty;
                 while (s.curr_tok.tok_type != .eof) {
                     if (s.curr_tok.tok_type == .rbrack) break;
                     vals.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
@@ -545,7 +545,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             const span_start = s.curr_tok.span;
             try s.expect(.@"struct");
             try s.expect(.lbrace);
-            var members = std.ArrayList(Node).init(s.allocator);
+            var members = std.ArrayList(Node).empty;
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rbrace) break;
                 members.append(s.allocator, try s.member(true)) catch |e| @panic(@errorName(e));
@@ -566,7 +566,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             break :blk node(NodeType.type, span_start.fromSpan(s.curr_tok.span));
         },
         else => {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Invalid non literal expression {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(s.source.id, s.curr_tok.span, .err, "Invalid non literal expression {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -578,7 +578,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             if (i.label) |_| {
                 if (s.curr_tok.tok_type == .bang) expr = try s.error_union_type(expr);
             } else {
-                s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Blocks must have labels to be used as expression", .{});
+                s.diag.emit(s.source.id, s.curr_tok.span, .err, "Blocks must have labels to be used as expression", .{});
                 return ParserError.recoverable;
             }
         },
@@ -611,7 +611,7 @@ fn operator(s: *Parser) ParserError!Node {
         .sub => node(NodeType.sub, s.curr_tok.span),
         .xor => node(NodeType.xor, s.curr_tok.span),
         else => {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Unexpected assign op {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(s.source.id, s.curr_tok.span, .err, "Unexpected assign op {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -682,7 +682,7 @@ fn statement(s: *Parser) ParserError!Node {
                 break :blk2 true;
             } else false;
             try s.expect(.@"for");
-            var expressions = std.ArrayList(Node).init(s.allocator);
+            var expressions = std.ArrayList(Node).empty;
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .colon) break;
                 expressions.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
@@ -716,7 +716,7 @@ fn struct_initialization(s: *Parser, current_name: ?Node) ParserError!Node {
     const span_start = s.curr_tok.span;
     const name = if (current_name) |n| s.create_node_ptr(n) else if (s.curr_tok.tok_type == .identifier) s.create_node_ptr(try s.identifier()) else null;
     try s.expect(.lbrace);
-    var inits = std.ArrayList(Node).init(s.allocator);
+    var inits = std.ArrayList(Node).empty;
     while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .rbrace) break;
         inits.append(s.allocator, try s.struct_init_member()) catch |e| @panic(@errorName(e));
@@ -734,7 +734,7 @@ fn struct_init_member(s: *Parser) ParserError!Node {
 }
 fn member(s: *Parser, is_struct: bool) ParserError!Node {
     const span_start = s.curr_tok.span;
-    var names = std.ArrayList(Node).init(s.allocator);
+    var names = std.ArrayList(Node).empty;
     while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .colon or s.curr_tok.tok_type == .walrus or s.curr_tok.tok_type == .rbrace) break;
         names.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
@@ -749,13 +749,13 @@ fn member(s: *Parser, is_struct: bool) ParserError!Node {
         },
         .rbrace => blk: {
             if (is_struct) {
-                s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+                s.diag.emit(s.source.id, s.curr_tok.span, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
                 return ParserError.recoverable;
             }
             break :blk null;
         },
         else => {
-            s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+            s.diag.emit(s.source.id, s.curr_tok.span, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -777,7 +777,7 @@ fn use_expression(s: *Parser) ParserError!Node {
     const span_start = s.curr_tok.span;
     try s.expect(.use);
     if (s.curr_tok.tok_type != .string) {
-        s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "String literal expected for use paths", .{});
+        s.diag.emit(s.source.id, span_start, .err, "String literal expected for use paths", .{});
         return ParserError.recoverable;
     }
     return node(NodeType{ .use = .{ .path = s.create_node_ptr(try s.literal()) } }, span_start.fromSpan(s.curr_tok.span));
@@ -801,7 +801,7 @@ fn postfix_chain(s: *Parser, base: Node, allow_struct: bool) ParserError!Node {
         },
         .lparen => {
             try s.expect(.lparen);
-            var args = std.ArrayList(Node).init(s.allocator);
+            var args = std.ArrayList(Node).empty;
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rparen) break;
                 args.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
@@ -847,7 +847,7 @@ fn create_node_ptr(s: *Parser, n: Node) *Node {
 fn expect(s: *Parser, expected: TokenType) ParserError!void {
     if (s.curr_tok.tok_type == .invalid) return ParserError.fatal;
     if (s.curr_tok.tok_type != expected) {
-        s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "Unexpected token {any}, expected {any}", .{ s.curr_tok.tok_type, expected });
+        s.diag.emit(s.source.id, s.curr_tok.span, .err, "Unexpected token {any}, expected {any}", .{ s.curr_tok.tok_type, expected });
         return ParserError.recoverable;
     }
     s.advance();
