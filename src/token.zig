@@ -5,8 +5,8 @@ pub const Token = struct {
     loc: SourceLocation,
     val: ?[]const u8 = null,
     span: Span,
-    pub fn init(tok: TokenType, file_id: FileId, index: u32, val: ?[]const u8, start: u32, end: u32) Token {
-        return Token{ .tok_type = tok, .loc = SourceLocation{ .file_id = file_id, .index = index }, .val = val, .span = Span.from(start, end) };
+    pub fn init(tok: TokenType, file_id: FileId, val: ?[]const u8, start: u32, end: u32) Token {
+        return Token{ .tok_type = tok, .loc = SourceLocation{ .file_id = file_id }, .val = val, .span = Span.from(start, end) };
     }
 };
 pub const Span = struct {

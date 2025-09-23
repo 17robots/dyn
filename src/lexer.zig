@@ -6,566 +6,315 @@ const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const TokenType = @import("token.zig").TokenType;
 const Token = @import("token.zig").Token;
 
-const LexingState = enum {
-    base,
-    read_word,
-    read_num,
-    read_float,
-    read_string,
-    read_char,
-    read_add,
-    read_sub,
-    read_mul,
-    read_div,
-    read_mod,
-    read_and,
-    read_or,
-    read_xor,
-    read_flip,
-    read_eq,
-    read_gt,
-    read_lt,
-    read_bang,
-    read_dot,
-    read_colon,
-    read_underscore,
-    read_question,
-    read_comment,
-    read_multi_comment,
-};
-
 const Lexer = @This();
 diag: *DiagnosticEmitter,
 source: *Source,
-state: LexingState = .base,
-index: usize = 0,
-placeholder: usize = 0,
-reading_comment: bool = false,
-has_char_errored: bool = false,
+idx: usize = 0,
 errored: bool = false,
 
 pub fn init(source: *Source, diag: *DiagnosticEmitter) Lexer {
     return Lexer{ .source = source, .diag = diag };
 }
-fn whitespace(s: Lexer) bool {
-    return switch (s.source.content[s.index]) {
-        ' ', '\t', '\n', '\r' => true,
+fn advance(s: *Lexer, n: usize) void {
+    s.idx += n;
+}
+fn peek(s: *Lexer, n: usize) ?u8 {
+    if (s.idx + n > s.source.content.len) return null;
+    return s.source.content[s.idx + n];
+}
+fn skipSpaces(s: *Lexer) void {
+    while (s.idx < s.source.content.len) {
+        switch (s.source.content[s.idx]) {
+            ' ', '\t', '\n', '\r' => s.idx += 1,
+            else => break,
+        }
+    }
+}
+fn is_alpha(c: u8) bool {
+    return switch (c) {
+        'a'...'z', 'A'...'Z', '$', '_' => true,
         else => false,
     };
 }
-pub fn next(s: *Lexer) Token {
-    if (s.errored) return Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
-    if (s.index >= s.source.content.len) return Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
-    if (s.state != .read_string) {
-        while (s.index < s.source.content.len and s.whitespace()) s.index += 1;
-    }
-    s.placeholder = s.index;
-    while (s.index < s.source.content.len) {
-        switch (s.state) {
-            .base => switch (s.source.content[s.index]) {
-                'a'...'z', 'A'...'Z', '$' => s.state = .read_word,
-                '0'...'9' => s.state = .read_num,
-                '.' => s.state = .read_dot,
-                '\"' => s.state = .read_string,
-                '\'' => s.state = .read_char,
-                '?' => s.state = .read_question,
-                '+' => s.state = .read_add,
-                '-' => s.state = .read_sub,
-                '*' => s.state = .read_mul,
-                '/' => s.state = .read_div,
-                '%' => s.state = .read_mod,
-                '&' => s.state = .read_and,
-                '|' => s.state = .read_or,
-                '^' => s.state = .read_xor,
-                '~' => s.state = .read_flip,
-                '=' => s.state = .read_eq,
-                '>' => s.state = .read_gt,
-                '<' => s.state = .read_lt,
-                '!' => s.state = .read_bang,
-                '_' => s.state = .read_underscore,
-                ':' => s.state = .read_colon,
-                '(' => {
-                    s.index += 1;
-                    return Token.init(.lparen, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                ')' => {
-                    s.index += 1;
-                    return Token.init(.rparen, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                '[' => {
-                    s.index += 1;
-                    return Token.init(.lbrack, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                ']' => {
-                    s.index += 1;
-                    return Token.init(.rbrack, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                '{' => {
-                    s.index += 1;
-                    return Token.init(.lbrace, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                '}' => {
-                    s.index += 1;
-                    return Token.init(.rbrace, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                ';' => {
-                    s.index += 1;
-                    return Token.init(.semicolon, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                ',' => {
-                    s.index += 1;
-                    return Token.init(.comma, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-                else => {
-                    s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character: {any}", .{s.source.content[s.index]});
-                    s.index += 1;
-                    s.errored = true;
-                    return Token.init(.invalid, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-            },
-            .read_underscore => switch (s.source.content[s.index]) {
-                'a'...'z', 'A'...'Z', '0'...'9' => s.state = .read_word,
-                else => {
-                    s.state = .base;
-                    return Token.init(.underscore, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
-                },
-            },
-            .read_word => switch (s.source.content[s.index]) {
-                'a'...'z', 'A'...'Z', '0'...'9', '_' => {},
-                else => {
-                    s.state = .base;
-                    if (s.get_keyword()) |kw| return Token.init(kw, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
-                    return Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
-                },
-            },
-            .read_num => switch (s.source.content[s.index]) {
-                '0'...'9' => {},
-                '.' => s.state = .read_float,
-                else => {
-                    s.state = .base;
-                    return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
-                },
-            },
-            .read_float => switch (s.source.content[s.index]) {
-                '0'...'9' => {},
-                '.' => {
-                    s.state = .base;
-                    if (s.index > 0 and s.source.content[s.index - 1] == '.') {
-                        s.index -= 1;
-                        return Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
-                    } else return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
-                },
-                else => {
-                    s.state = .base;
-                    return Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
-                },
-            },
-            .read_dot => switch (s.source.content[s.index]) {
-                '0'...'9' => s.state = .read_float,
-                '.' => {
-                    s.state = .base;
-                    s.index += 1;
-                    return Token.init(.dotdot, s.source.id, @intCast(s.index), null, @intCast(s.index - 1), @intCast(s.index));
-                },
-                '?' => {
-                    s.state = .base;
-                    s.index += 1;
-                    return Token.init(.optional_deref, s.source.id, @intCast(s.index), null, @intCast(s.index - 1), @intCast(s.index));
-                },
-                '*' => {
-                    s.state = .base;
-                    s.index += 1;
-                    return Token.init(.pointer_deref, s.source.id, @intCast(s.index), null, @intCast(s.index - 1), @intCast(s.index));
-                },
-                else => {
-                    s.state = .base;
-                    return Token.init(.dot, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index));
-                },
-            },
-            .read_colon => switch (s.source.content[s.index]) {
-                '=' => {
-                    s.state = .base;
-                    s.index += 1;
-                    return Token.init(.walrus, s.source.id, @intCast(s.index - 1), null, @intCast(s.index), @intCast(s.index));
-                },
-                else => {
-                    s.state = .base;
-                    return Token.init(.colon, s.source.id, @intCast(s.index - 1), null, @intCast(s.index), @intCast(s.index));
-                },
-            },
-            .read_question => switch (s.source.content[s.index]) {
-                '?' => {
-                    s.state = .base;
-                    s.index += 1;
-                    return Token.init(.nullish, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index));
-                },
-                else => {
-                    s.state = .base;
-                    return Token.init(.question, s.source.id, @intCast(s.index - 1), null, @intCast(s.index - 1), @intCast(s.index - 1));
-                },
-            },
-            .read_string => switch (s.source.content[s.index]) {
-                '\"' => {
-                    s.state = .base;
-                    s.index += 1;
-                    return Token.init(.string, s.source.id, @intCast(s.index - 1), s.source.content[s.placeholder..(s.index - 1)], @intCast(s.placeholder), @intCast(s.index - 1));
-                },
-                else => {},
-            },
-            .read_char => switch (s.source.content[s.index]) {
-                '\'' => {
-                    const body = s.source.content[(s.placeholder + 1)..s.index];
-                    s.state = .base;
-                    s.index += 1;
-
-                    if (s.has_char_errored) {
-                        s.has_char_errored = false;
-                        s.errored = true;
-                        return Token.init(.invalid, s.source.id, @intCast(s.placeholder + 1), null, @intCast(s.placeholder), @intCast(s.index));
-                    }
-                    if (body.len == 0) {
-                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Empty character literal", .{});
-                        s.errored = true;
-                        return Token.init(.invalid, s.source.id, @intCast(s.placeholder + 1), null, @intCast(s.placeholder), @intCast(s.index));
-                    }
-                    if (body[0] == '\\') {
-                        if (body.len != 2) {
-                            s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character escape length", .{});
-                            s.errored = true;
-                            return Token.init(.invalid, s.source.id, @intCast(s.placeholder), null, @intCast(s.placeholder), @intCast(s.index));
-                        }
-                    } else if (body.len != 1) {
-                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character length", .{});
-                        s.errored = true;
-                        return Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
-                    }
-                    return Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
-                },
-                '\\' => {
-                    s.index += 1;
-                    if (s.index >= s.source.content.len) {
-                        s.diag.emit(s.source.id, @intCast(s.index), .err, "Unfinished character escape", .{});
-                        s.has_char_errored = true;
-                    } else switch (s.source.content[s.index]) {
-                        '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
-                        else => {
-                            s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid character escape {any}", .{s.source.content[(s.index - 1)..s.index]});
-                            s.has_char_errored = true;
-                        },
-                    }
-                },
-                else => {},
-            },
-            .read_add => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '+', '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '+' => .addadd,
-                    '=' => .addeq,
-                    else => .add,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .add) s.index += 1;
-                return tok;
-            },
-            .read_sub => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '-', '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '-' => .subsub,
-                    '=' => .subeq,
-                    else => .sub,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .sub) s.index += 1;
-                return tok;
-            },
-            .read_mul => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '=' => .muleq,
-                    else => .mul,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .mul) s.index += 1;
-                return tok;
-            },
-            .read_div => switch (s.source.content[s.index]) {
-                '/', '*' => {
-                    s.index += 1;
-                    s.state = if (s.source.content[s.index] == '/') .read_comment else .read_multi_comment;
-                },
-                else => {
-                    s.state = .base;
-                    const to_remove: usize = switch (s.source.content[s.index]) {
-                        '=' => 1,
-                        else => 0,
-                    };
-                    const tok = Token.init(switch (s.source.content[s.index]) {
-                        '=' => .diveq,
-                        else => .div,
-                    }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                    if (tok.tok_type != .div) s.index += 1;
-                    return tok;
-                },
-            },
-            .read_mod => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '=' => .modeq,
-                    else => .mod,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .mod) s.index += 1;
-                return tok;
-            },
-            .read_and => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '&', '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '&' => .andand,
-                    '=' => .andeq,
-                    else => .@"and",
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .@"and") s.index += 1;
-                return tok;
-            },
-            .read_or => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '|', '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '|' => .oror,
-                    '=' => .oreq,
-                    else => .@"or",
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .@"or") s.index += 1;
-                return tok;
-            },
-            .read_xor => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '=' => .xoreq,
-                    else => .xor,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .xor) s.index += 1;
-                return tok;
-            },
-            .read_flip => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '=' => .flipeq,
-                    else => .flip,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .flip) s.index += 1;
-                return tok;
-            },
-            .read_eq => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=', '>' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '>' => .arrow,
-                    '=' => .eqeq,
-                    else => .eq,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .eq) s.index += 1;
-                return tok;
-            },
-            .read_gt => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '=' => .gteq,
-                    else => .gt,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .gt) s.index += 1;
-                return tok;
-            },
-            .read_lt => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '=' => .lteq,
-                    else => .lt,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .lt) s.index += 1;
-                return tok;
-            },
-            .read_bang => {
-                s.state = .base;
-                const to_remove: usize = switch (s.source.content[s.index]) {
-                    '=' => 1,
-                    else => 0,
-                };
-                const tok = Token.init(switch (s.source.content[s.index]) {
-                    '=' => .bangeq,
-                    else => .bang,
-                }, s.source.id, @intCast(s.index), null, @intCast(s.index - to_remove), @intCast(s.index));
-                if (tok.tok_type != .bang) s.index += 1;
-                return tok;
-            },
-            .read_comment => switch (s.source.content[s.index]) {
-                '\n' => {
-                    s.state = .base;
-                    return s.next();
-                },
-                else => {},
-            },
-            .read_multi_comment => {
-                if (s.source.content[s.index] == '*') {
-                    if (s.index + 1 < s.source.content.len and s.source.content[s.index + 1] == '/') {
-                        s.index += 2;
-                        s.state = .base;
-                        return s.next();
-                    }
-                }
-            },
-        }
-        s.index += 1;
-    }
-    const res = switch (s.state) {
-        .base => Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_comment => Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_multi_comment => blk: {
-            if (std.mem.eql(u8, s.source.content[(s.index - 2)..(s.index - 1)], "*/")) break :blk Token.init(.eof, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
-            s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Comment", .{});
-            s.errored = true;
-            break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
-        },
-        .read_word => if (s.get_keyword()) |kw| Token.init(kw, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index)) else Token.init(.identifier, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
-        .read_num => Token.init(.int, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
-        .read_float => Token.init(.float, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
-        .read_underscore => Token.init(.underscore, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_add => Token.init(.add, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_sub => Token.init(.sub, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_mul => Token.init(.mul, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_div => Token.init(.div, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_mod => Token.init(.mod, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_and => Token.init(.@"and", s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_or => Token.init(.@"or", s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_xor => Token.init(.xor, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_flip => Token.init(.flip, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_eq => Token.init(.eq, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_gt => Token.init(.gt, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_lt => Token.init(.lt, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_bang => Token.init(.bang, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_dot => Token.init(.dot, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_colon => Token.init(.colon, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_question => Token.init(.question, s.source.id, @intCast(s.index), null, @intCast(s.index), @intCast(s.index)),
-        .read_string => switch (s.source.content[s.index]) {
-            '\"' => Token.init(.string, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index)),
-            else => blk: {
-                s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed String Literal", .{});
-                s.errored = true;
-                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
-            },
-        },
-        .read_char => switch (s.source.content[s.index]) {
-            '\'' => blk: {
-                const the_char = s.source.content[(s.placeholder + 1)..s.index];
-                const val: u32 = if (the_char[0] == '\\') 2 else 1;
-                if (the_char.len > val) {
-                    s.diag.emit(s.source.id, @intCast(s.index), .err, "Invalid Character Length {any}", .{the_char});
-                    s.errored = true;
-                    break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
-                }
-                break :blk Token.init(.char, s.source.id, @intCast(s.index), s.source.content[s.placeholder..s.index], @intCast(s.placeholder), @intCast(s.index));
-            },
-            else => blk: {
-                s.diag.emit(s.source.id, @intCast(s.index), .err, "Unclosed Character Literal", .{});
-                s.errored = true;
-                break :blk Token.init(.invalid, s.source.id, @intCast(s.index), null, @intCast(s.placeholder), @intCast(s.index));
-            },
-        },
+fn is_dec(c: u8) bool {
+    return switch (c) {
+        '0'...'9' => true,
+        else => false,
     };
-    s.state = .base;
-    return res;
 }
-
-fn get_keyword(s: *Lexer) ?TokenType {
-    const word = s.source.content[s.placeholder..s.index];
+fn keyword_or_ident(s: *Lexer, start: usize, end: usize) TokenType {
+    const word = s.source.content[s.placeholder..s.idx];
     switch (word.len) {
         2 => {
-            if (std.mem.eql(u8, word, "fn")) return .@"fn";
-            if (std.mem.eql(u8, word, "if")) return .@"if";
+            if (std.mem.eql(u8, word, "fn")) return TokenType.@"fn";
+            if (std.mem.eql(u8, word, "if")) return TokenType.@"if";
             return null;
         },
         3 => {
-            if (std.mem.eql(u8, word, "for")) return .@"for";
-            if (std.mem.eql(u8, word, "mod")) return .module;
-            if (std.mem.eql(u8, word, "mut")) return .mut;
-            if (std.mem.eql(u8, word, "pub")) return .@"pub";
-            if (std.mem.eql(u8, word, "try")) return .@"try";
-            if (std.mem.eql(u8, word, "use")) return .use;
+            if (std.mem.eql(u8, word, "for")) return TokenType.@"for";
+            if (std.mem.eql(u8, word, "mod")) return TokenType.module;
+            if (std.mem.eql(u8, word, "mut")) return TokenType.mut;
+            if (std.mem.eql(u8, word, "pub")) return TokenType.@"pub";
+            if (std.mem.eql(u8, word, "try")) return TokenType.@"try";
+            if (std.mem.eql(u8, word, "use")) return TokenType.use;
             return null;
         },
         4 => {
-            if (std.mem.eql(u8, word, "comp")) return .comp;
-            if (std.mem.eql(u8, word, "else")) return .@"else";
-            if (std.mem.eql(u8, word, "enum")) return .@"enum";
-            if (std.mem.eql(u8, word, "null")) return .null;
-            if (std.mem.eql(u8, word, "true")) return .true;
-            if (std.mem.eql(u8, word, "type")) return .type;
+            if (std.mem.eql(u8, word, "comp")) return TokenType.comp;
+            if (std.mem.eql(u8, word, "else")) return TokenType.@"else";
+            if (std.mem.eql(u8, word, "enum")) return TokenType.@"enum";
+            if (std.mem.eql(u8, word, "null")) return TokenType.null;
+            if (std.mem.eql(u8, word, "true")) return TokenType.true;
+            if (std.mem.eql(u8, word, "type")) return TokenType.type;
             return null;
         },
         5 => {
-            if (std.mem.eql(u8, word, "break")) return .@"break";
-            if (std.mem.eql(u8, word, "catch")) return .@"catch";
-            if (std.mem.eql(u8, word, "defer")) return .@"defer";
-            if (std.mem.eql(u8, word, "error")) return .@"error";
-            if (std.mem.eql(u8, word, "false")) return .false;
-            if (std.mem.eql(u8, word, "match")) return .match;
-            if (std.mem.eql(u8, word, "while")) return .@"while";
+            if (std.mem.eql(u8, word, "break")) return TokenType.@"break";
+            if (std.mem.eql(u8, word, "catch")) return TokenType.@"catch";
+            if (std.mem.eql(u8, word, "defer")) return TokenType.@"defer";
+            if (std.mem.eql(u8, word, "error")) return TokenType.@"error";
+            if (std.mem.eql(u8, word, "false")) return TokenType.false;
+            if (std.mem.eql(u8, word, "match")) return TokenType.match;
+            if (std.mem.eql(u8, word, "while")) return TokenType.@"while";
             return null;
         },
         6 => {
-            if (std.mem.eql(u8, word, "inline")) return .@"inline";
-            if (std.mem.eql(u8, word, "module")) return .module;
-            if (std.mem.eql(u8, word, "packed")) return .@"packed";
-            if (std.mem.eql(u8, word, "struct")) return .@"struct";
-            if (std.mem.eql(u8, word, "return")) return .@"return";
+            if (std.mem.eql(u8, word, "inline")) return TokenType.@"inline";
+            if (std.mem.eql(u8, word, "module")) return TokenType.module;
+            if (std.mem.eql(u8, word, "packed")) return TokenType.@"packed";
+            if (std.mem.eql(u8, word, "struct")) return TokenType.@"struct";
+            if (std.mem.eql(u8, word, "return")) return TokenType.@"return";
             return null;
         },
         8 => {
-            if (std.mem.eql(u8, word, "continue")) return .@"continue";
+            if (std.mem.eql(u8, word, "continue")) return TokenType.@"continue";
             return null;
         },
         9 => {
-            if (std.mem.eql(u8, word, "undefined")) return .undefined;
+            if (std.mem.eql(u8, word, "undefined")) return TokenType.undefined;
             return null;
         },
         else => return null,
     }
+    return TokenType{ .identifier = s.source.content[start..end] };
+}
+fn read_ident(s: *Lexer) Token {
+    const start = s.idx;
+    s.advance(1);
+    while (s.idx < s.source.content.len) : (s.idx += 1) {
+        const c = s.source.content[s.idx];
+        if (!is_alpha(c) and !is_dec(c)) break;
+    }
+    return s.keyword_or_ident(start, s.idx);
+}
+fn read_num_float_range(s: *Lexer) Token {
+    const start = s.idx;
+    while (s.idx < s.source.content.len and is_dec(s.source.content[s.idx])) s.advance(1);
+    if (s.idx < s.source.content.len and s.source.content[s.idx] == '.') {
+        if (s.peek(1)) |i| {
+            if (i == '.') {
+                const end = s.idx - 1;
+                return s.tok(.int, s.source.content[start..end], start, end);
+            }
+        }
+        s.advance(1);
+        while (s.idx < s.source.content.len and is_dec(s.source.content[s.idx])) s.advance(1);
+        return s.tok(.float, s.source.content[start..s.idx], start, s.idx);
+    }
+    return s.tok(.int, s.source.content[start..s.idx], start, s.idx);
+}
+fn read_string(s: *Lexer) Token {
+    const start = s.idx;
+    s.advance(1);
+    while (s.idx < s.source.content.len) : (s.advance(1)) {
+        const c = s.source.content[s.idx];
+        if (c == '\"') {
+            const end = s.idx;
+            s.advance(1);
+            return s.tok(.string, s.source.content[start..end], start, end);
+        }
+        if (c == '\\') {
+            if (s.idx + 1 < s.source.content.len) s.idx += 1;
+        }
+    }
+    s.diag.emit(s.source.id, @intCast(s.idx - 1), .err, "Unclosed string literal", .{});
+}
+fn read_char(s: *Lexer) Token {
+    const start = s.idx;
+    s.advance(1);
+    if (s.indexs >= s.source.content.len) {
+        s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed characer literal", .{});
+        s.errored = true;
+        return s.tok(.invalid, null, start, s.idx);
+    }
+    if (s.source.content[s.idx] == '\\') {
+        s.advance(1);
+        if (s.idx >= s.source.content.len) {
+            s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed characer literal", .{});
+            s.errored = true;
+            return s.tok(.invalid, null, start, s.idx);
+        }
+        const esc = s.source.content[s.idx];
+        switch (esc) {
+            '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
+            else => {
+                s.diag.emit(s.source.id, @intCast(s.idx), .err, "Invalid character escape {s}", .{esc});
+                s.errored = true;
+                return s.tok(.invalid, null, start, s.idx);
+            },
+        }
+        s.advance(1);
+    } else s.advance(1);
+    if (s.idx >= s.source.content.len or s.source.content[s.idx] != '\'') {
+        s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed characer literal", .{});
+        s.errored = true;
+        return s.tok(.invalid, null, start, s.idx);
+    }
+    const end = s.idx;
+    s.advance(1);
+    return s.tok(.char, s.source.content[start..end], start, end);
+}
+fn skip_line_comment(s: *Lexer) void {
+    while (s.idx < s.source.content.len and s.source.content[s.idx] != '\n') s.advance(1);
+}
+fn skip_block_comment(s: *Lexer) void {
+    while (s.idx < s.source.content.len) {
+        if (s.source.content[s.idx] == '*' and s.idx + 1 < s.source.content.len and s.source.content[s.idx + 1] == '/') {
+            s.advance(2);
+            return;
+        }
+        s.advance(1);
+    }
+    s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed comment", .{});
+    s.errored = true;
+    return;
+}
+fn read_compound_op(s: *Lexer, single: TokenType, pairs: []const struct { ch: u8, tok: TokenType }) Token {
+    const start = s.idx;
+    s.advance(1);
+    if (s.idx < s.source.content.len) {
+        const c1 = s.peek(0);
+        inline for (pairs) |p| {
+            if (c1) |c| {
+                if (c == p.ch) {
+                    s.advance(1);
+                    return s.tok(p.tok, null, start, s.idx);
+                }
+            }
+        }
+    }
+    return s.tok(single, null, start, s.idx);
+}
+pub fn next(s: *Lexer) Token {
+    if (s.errored) return s.tok(.invalid, null, s.idx, s.idx);
+    if(s.idx >= s.source.content.len) return s.tok(.eof, null, s.idx, s.idx);
+    s.skipSpaces();
+    if(s.idx >= s.source.content.len) return s.tok(.eof, null, s.idx, s.idx);
+    const c = s.source.content[s.idx];
+    switch (c) {
+        '(' => {
+            s.advance(1);
+            return s.tok(.lparen, null, s.idx - 1, s.idx - 1);
+        },
+        ')' => {
+            s.advance(1);
+            return s.tok(.rparen, null, s.idx - 1, s.idx - 1);
+        },
+        '[' => {
+            s.advance(1);
+            return s.tok(.lbrack, null, s.idx - 1, s.idx - 1);
+        },
+        ']' => {
+            s.advance(1);
+            return s.tok(.rbrack, null, s.idx - 1, s.idx - 1);
+        },
+        '{' => {
+            s.advance(1);
+            return s.tok(.lbrace, null, s.idx - 1, s.idx - 1);
+        },
+        '}' => {
+            s.advance(1);
+            return s.tok(.rbrace, null, s.idx - 1, s.idx - 1);
+        },
+        ';' => {
+            s.advance(1);
+            return s.tok(.semicolon, null, s.idx - 1, s.idx - 1);
+        },
+        ',' => {
+            s.advance(1);
+            return s.tok(.comma, null, s.idx - 1, s.idx - 1);
+        },
+        '_' => {
+            s.advance(1);
+            return s.tok(.underscore, null, s.idx - 1, s.idx - 1);
+        },
+        '$', '_', 'a'...'z', 'A'...'Z' => return s.read_ident(),
+        '0'...'9' => return s.read_num_float_range(),
+        '.' => {
+            const start = s.idx;
+            s.advance(1);
+            if (s.peek(0)) |p| {
+                if (p == '.') {
+                    s.advance(1);
+                    return s.tok(.dotdot, null, start, s.idx);
+                }
+                if (p == '?') {
+                    s.advance(1);
+                    return s.tok(.optional_deref, null, start, s.idx);
+                }
+                if (p == '*') {
+                    s.advance(1);
+                    return s.tok(.pointer_deref, null, start, s.idx);
+                }
+            }
+            return s.tok(.dot, null, start, s.idx);
+        },
+        '/' => {
+            const start = s.idx;
+            if (s.peek(1)) |p| {
+                if (p == '/') {
+                    s.advance(2);
+                    s.skip_line_comment();
+                    return s.next();
+                }
+                if (p == '*') {
+                    s.advance(2);
+                    s.skip_block_comment();
+                    return s.next();
+                }
+                if (p == '=') {
+                    s.advance(2);
+                    return s.tok(.diveq, null, start, s.idx);
+                }
+            }
+            s.advance(1);
+            return s.tok(.div, null, start, s.idx - 1);
+        },
+        ':' => {
+            const start = s.idx;
+            s.advance(1);
+            if (s.peek(1)) |p| {
+                if (p == '=') {
+                    s.advance(1);
+                    return s.tok(.walrus, null, start, s.idx);
+                }
+            }
+            return s.tok(.colon, null, start, s.idx);
+        },
+        '\"' => return s.read_string(),
+        '\'' => return s.read_char(),
+        '?' => return s.read_compound_op(.question, &.{.{ .ch = '?', .tok = .nullish }}),
+        '+' => return s.read_compound_op(.add, &.{ .{ .ch = '+', .tok = .addadd }, .{ .ch = '=', .tok = .addeq } }),
+        '-' => return s.read_compound_op(.sub, &.{ .{ .ch = '-', .tok = .subsub }, .{ .ch = '=', .tok = .subeq } }),
+        '*' => return s.read_compound_op(.mul, &.{.{ .ch = '=', .tok = .muleq }}),
+        '%' => return s.read_compound_op(.mod, &.{.{ .ch = '=', .tok = .modeq }}),
+        '^' => return s.read_compound_op(.xor, &.{.{ .ch = '=', .tok = .xoreq }}),
+        '~' => return s.read_compound_op(.flip, &.{.{ .ch = '=', .tok = .flipeq }}),
+        '>' => return s.read_compound_op(.gt, &.{.{ .ch = '=', .tok = .gte }}),
+        '<' => return s.read_compound_op(.lt, &.{.{ .ch = '=', .tok = .lte }}),
+        '!' => return s.read_compound_op(.bang, &.{.{ .ch = '=', .tok = .bangeq }}),
+    }
+}
+fn tok(s: Lexer, t: TokenType, val: ?[]const u8, start: usize, end: usize) Token {
+    return Token.init(t, s.source.id, val, @intCast(start), @intCast(end));
 }

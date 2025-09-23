@@ -42,10 +42,10 @@ pub fn parse(s: *Parser) ?Node {
     const span_start = s.curr_tok.span;
     const module_decl = s.module_declaration() catch return null;
     s.expect(.semicolon) catch return null;
-    var declarations = std.ArrayList(Node).init(s.allocator);
-    declarations.append(module_decl) catch |e| @panic(@errorName(e));
+    var declarations = std.ArrayList(Node).empty;
+    declarations.append(s.allocator, module_decl) catch |e| @panic(@errorName(e));
     blk: while (s.curr_tok.tok_type != .eof) {
-        declarations.append(s.declaration(true) catch |e| switch (e) {
+        declarations.append(s.allocator, s.declaration(true) catch |e| switch (e) {
             error.recoverable => {
                 s.sync(&[_]TokenType{.semicolon});
                 continue :blk;
@@ -59,10 +59,10 @@ pub fn parse(s: *Parser) ?Node {
 
 fn arm(s: *Parser, expr: bool) ParserError!Node {
     const span_start = s.curr_tok.span;
-    var exprs = std.ArrayList(Node).init(s.allocator);
+    var exprs = std.ArrayList(Node).empty;
     while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .colon) break;
-        exprs.append(if (expr) try s.expression(0) else try s.statement()) catch |e| @panic(@errorName(e));
+        exprs.append(s.allocator, if (expr) try s.expression(0) else try s.statement()) catch |e| @panic(@errorName(e));
         if (s.curr_tok.tok_type == .colon) break;
         try s.expect(.comma);
     }
@@ -106,7 +106,7 @@ fn block(s: *Parser, labeled: bool) ParserError!Node {
         } else null;
     } else null;
     try s.expect(.lbrace);
-    var stmts = std.ArrayList(Node).init(s.allocator);
+    var stmts = std.ArrayList(Node).empty;
     blk: while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .rbrace) break;
         const stmt = s.statement() catch |e| switch (e) {
@@ -117,7 +117,7 @@ fn block(s: *Parser, labeled: bool) ParserError!Node {
             ParserError.fatal => return e,
         };
         if (should_read_semicolon(stmt)) try s.expect(.semicolon);
-        stmts.append(stmt) catch |e| @panic(@errorName(e));
+        stmts.append(s.allocator, stmt) catch |e| @panic(@errorName(e));
         if (s.curr_tok.tok_type == .rbrace) break;
     }
     try s.expect(.rbrace);
@@ -132,10 +132,10 @@ fn catch_(s: *Parser, n: Node) ParserError!Node {
 fn capture(s: *Parser) ParserError!Node {
     const span_start = s.curr_tok.span;
     try s.expect(.@"or");
-    var captures = std.ArrayList(Node).init(s.allocator);
+    var captures = std.ArrayList(Node).empty;
     while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .@"or") break;
-        captures.append(try s.capture_item()) catch |e| @panic(@errorName(e));
+        captures.append(s.allocator, try s.capture_item()) catch |e| @panic(@errorName(e));
         if (s.curr_tok.tok_type == .@"or") break;
         try s.expect(.comma);
     }
@@ -211,10 +211,10 @@ fn enum_error_initialization(s: *Parser) ParserError!Node {
 fn error_union_type(s: *Parser, n: ?Node) ParserError!Node {
     const span_start = s.curr_tok.span;
     try s.expect(.bang);
-    var errs = std.ArrayList(Node).init(s.allocator);
+    var errs = std.ArrayList(Node).empty;
     while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type != .identifier) break;
-        errs.append(try s.identifier()) catch |e| @panic(@errorName(e));
+        errs.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
         if (s.curr_tok.tok_type != .bang) break;
         try s.expect(.bang);
     }
@@ -259,7 +259,7 @@ fn function(s: *Parser) ParserError!Node {
         break :blk true;
     } else false;
     var fn_decl = true;
-    var fn_parameters = std.ArrayList(Node).init(s.allocator);
+    var fn_parameters = std.ArrayList(Node).empty;
     var types = std.ArrayList(Node).init(s.allocator);
     try s.expect(.@"fn");
     try s.expect(.lparen);
@@ -268,11 +268,11 @@ fn function(s: *Parser) ParserError!Node {
         if (s.curr_tok.tok_type == .rparen) break;
         if (fn_decl) {
             if (s.curr_tok.tok_type == .identifier) {
-                types.append(try s.identifier()) catch |e| @panic(@errorName(e));
+                types.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .colon) {
                     try s.expect(.colon);
                     const the_type = s.create_node_ptr(try s.non_literal_expression());
-                    fn_parameters.append(node(NodeType{ .function_parameter = .{ .names = types.clone() catch |e| @panic(@errorName(e)), .type = the_type } }, span_start2.fromSpan(s.curr_tok.span))) catch |e| @panic(@errorName(e));
+                    fn_parameters.append(s.allocator, node(NodeType{ .function_parameter = .{ .names = types.clone() catch |e| @panic(@errorName(e)), .type = the_type } }, span_start2.fromSpan(s.curr_tok.span))) catch |e| @panic(@errorName(e));
                     types.deinit();
                     types = std.ArrayList(Node).init(s.allocator);
                     span_start2 = s.curr_tok.span;
@@ -282,7 +282,7 @@ fn function(s: *Parser) ParserError!Node {
                 continue;
             }
         } else {
-            types.append(try s.non_literal_expression()) catch |e| @panic(@errorName(e));
+            types.append(s.allocator, try s.non_literal_expression()) catch |e| @panic(@errorName(e));
             if (s.curr_tok.tok_type == .colon) {
                 s.diag.emit(s.source.id, @intCast(s.lexer.index), .err, "", .{});
                 return ParserError.recoverable;
@@ -393,7 +393,7 @@ fn match(s: *Parser, is_expr: bool) ParserError!Node {
     var arms = std.ArrayList(Node).init(s.allocator);
     blk: while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .rbrace) break;
-        arms.append(s.arm(is_expr) catch |e| switch (e) {
+        arms.append(s.allocator, s.arm(is_expr) catch |e| switch (e) {
             ParserError.recoverable => {
                 s.sync(&[_]TokenType{ .comma, .rbrace });
                 continue :blk;
@@ -417,10 +417,10 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             const span_start = s.curr_tok.span;
             try s.expect(.@"enum");
             try s.expect(.lbrace);
-            var members = std.ArrayList(Node).init(s.allocator);
+            var members = std.ArrayList(Node).empty;
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rbrace) break;
-                members.append(try s.member(false)) catch |e| @panic(@errorName(e));
+                members.append(s.allocator, try s.member(false)) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .rbrace) break;
                 try s.expect(.comma);
             }
@@ -434,7 +434,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             var members = std.ArrayList(Node).init(s.allocator);
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rbrace) break;
-                members.append(try s.member(false)) catch |e| @panic(@errorName(e));
+                members.append(s.allocator, try s.member(false)) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .rbrace) break;
                 try s.expect(.comma);
             }
@@ -463,7 +463,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             var call_args = std.ArrayList(Node).init(s.allocator);
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rparen) break;
-                call_args.append(try s.expression(0)) catch |e| @panic(@errorName(e));
+                call_args.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .rparen) break;
                 try s.expect(.comma);
             }
@@ -495,7 +495,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                         var vals = std.ArrayList(Node).init(s.allocator);
                         while (s.curr_tok.tok_type != .eof) {
                             if (s.curr_tok.tok_type == .rbrack) break;
-                            vals.append(try s.expression(0)) catch |e| @panic(@errorName(e));
+                            vals.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
                             if (s.curr_tok.tok_type == .rbrack) break;
                             try s.expect(.comma);
                         }
@@ -508,7 +508,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                 var vals = std.ArrayList(Node).init(s.allocator);
                 while (s.curr_tok.tok_type != .eof) {
                     if (s.curr_tok.tok_type == .rbrack) break;
-                    vals.append(try s.expression(0)) catch |e| @panic(@errorName(e));
+                    vals.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
                     if (s.curr_tok.tok_type == .rbrack) break;
                     try s.expect(.comma);
                 }
@@ -548,7 +548,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             var members = std.ArrayList(Node).init(s.allocator);
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rbrace) break;
-                members.append(try s.member(true)) catch |e| @panic(@errorName(e));
+                members.append(s.allocator, try s.member(true)) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .rbrace) break;
                 try s.expect(.comma);
             }
@@ -685,7 +685,7 @@ fn statement(s: *Parser) ParserError!Node {
             var expressions = std.ArrayList(Node).init(s.allocator);
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .colon) break;
-                expressions.append(try s.expression(0)) catch |e| @panic(@errorName(e));
+                expressions.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .colon) break;
                 try s.expect(.comma);
             }
@@ -719,7 +719,7 @@ fn struct_initialization(s: *Parser, current_name: ?Node) ParserError!Node {
     var inits = std.ArrayList(Node).init(s.allocator);
     while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .rbrace) break;
-        inits.append(try s.struct_init_member()) catch |e| @panic(@errorName(e));
+        inits.append(s.allocator, try s.struct_init_member()) catch |e| @panic(@errorName(e));
         if (s.curr_tok.tok_type == .rbrace) break;
         try s.expect(.comma);
     }
@@ -737,7 +737,7 @@ fn member(s: *Parser, is_struct: bool) ParserError!Node {
     var names = std.ArrayList(Node).init(s.allocator);
     while (s.curr_tok.tok_type != .eof) {
         if (s.curr_tok.tok_type == .colon or s.curr_tok.tok_type == .walrus or s.curr_tok.tok_type == .rbrace) break;
-        names.append(try s.identifier()) catch |e| @panic(@errorName(e));
+        names.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
         if (s.curr_tok.tok_type == .colon or s.curr_tok.tok_type == .walrus or s.curr_tok.tok_type == .rbrace) break;
         try s.expect(.comma);
     }
@@ -804,7 +804,7 @@ fn postfix_chain(s: *Parser, base: Node, allow_struct: bool) ParserError!Node {
             var args = std.ArrayList(Node).init(s.allocator);
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rparen) break;
-                args.append(try s.expression(0)) catch |e| @panic(@errorName(e));
+                args.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .rparen) break;
                 try s.expect(.comma);
             }

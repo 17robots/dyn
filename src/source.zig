@@ -1,4 +1,5 @@
 const std = @import("std");
+const Span = @import("token.zig").Span;
 
 pub const FileId = u32;
 
@@ -10,7 +11,7 @@ pub const Source = struct {
 
 pub const SourceLocation = struct {
     file_id: FileId,
-    index: u32,
+    span: Span,
 };
 
 pub const SourceManager = struct {
@@ -18,7 +19,7 @@ pub const SourceManager = struct {
     sources: std.ArrayList(Source),
     lookup: std.StringHashMap(FileId),
     pub fn init(allocator: std.mem.Allocator) SourceManager {
-        return .{ .allocator = allocator, .sources = std.ArrayList(Source).init(allocator), .lookup = std.StringHashMap(FileId).init(allocator) };
+        return .{ .allocator = allocator, .sources = std.ArrayList(Source).empty, .lookup = std.StringHashMap(FileId).init(allocator) };
     }
     pub fn deinit(s: *SourceManager) void {
         s.lookup.deinit();
@@ -36,7 +37,7 @@ pub const SourceManager = struct {
         const file_id: FileId = @intCast(s.sources.items.len);
         const owned_path = try s.allocator.dupe(u8, path);
         errdefer s.allocator.free(owned_path);
-        try s.sources.append(.{ .id = file_id, .name = owned_path, .content = content });
+        try s.sources.append(s.allocator, .{ .id = file_id, .name = owned_path, .content = content });
         try s.lookup.put(owned_path, file_id);
         return file_id;
     }

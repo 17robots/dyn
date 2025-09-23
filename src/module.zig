@@ -16,20 +16,20 @@ pub const Module = struct {
     symbol_table: symbol.SymbolTable,
     scopes: symbol.ScopeStack,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
-        return .{ .allocator = allocator, .name = name, .file_ids = std.ArrayList(FileId).init(allocator), .asts = std.ArrayList(ast.Node).init(allocator), .symbol_table = symbol.SymbolTable.init(allocator), .scopes = symbol.ScopeStack.init(allocator) };
+        return .{ .allocator = allocator, .name = name, .file_ids = std.ArrayList(FileId).empty, .asts = std.ArrayList(ast.Node).empty, .symbol_table = symbol.SymbolTable.empty, .scopes = symbol.ScopeStack.empty };
     }
     pub fn deinit(s: *Module) void {
-        s.file_ids.deinit();
-        s.asts.deinit();
+        s.file_ids.deinit(s.allocator);
+        s.asts.deinit(s.allocator);
     }
     pub fn lex(s: *Module, sm: *SourceManager, d: *DiagnosticEmitter) !std.ArrayList(Token) {
-        var toks = std.ArrayList(Token).init(s.allocator);
+        var toks = std.ArrayList(Token).empty;
         for (s.file_ids.items) |f| {
             var l = Lexer.init(&sm.sources.items[f], d);
             var breakout: u32 = 0;
             while (true) {
                 const tok = l.next();
-                try toks.append(tok);
+                try toks.append(s.allocator, tok);
                 if (tok.tok_type == .eof) break;
                 if (breakout == 200000) break;
                 breakout += 1;
@@ -40,7 +40,7 @@ pub const Module = struct {
     pub fn parse(s: *Module, sm: *SourceManager, d: *DiagnosticEmitter) !void {
         for (s.file_ids.items) |f| {
             var p = Parser.init(s.allocator, &sm.sources.items[f], d);
-            if (p.parse()) |result| try s.asts.append(result);
+            if (p.parse()) |result| try s.asts.append(s.allocator, result);
         }
     }
     // pub fn check(s: *Module) void {}
@@ -76,7 +76,7 @@ pub const ModuleResolver = struct {
         var module_files_map = std.StringHashMap(std.ArrayList(FileId)).init(s.allocator);
         defer {
             var it = module_files_map.valueIterator();
-            while (it.next()) |l| l.deinit();
+            while (it.next()) |l| l.deinit(s.allocator);
             module_files_map.deinit();
         }
         var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
@@ -94,12 +94,12 @@ pub const ModuleResolver = struct {
             const mod_name = try s.find_module_name_in_src(file_id);
             if (mod_name) |mn| {
                 if (s.module_cache.get(mn)) |m| {
-                    try m.file_ids.append(file_id);
+                    try m.file_ids.append(s.allocator, file_id);
                 } else {
                     const mod = try s.allocator.create(Module);
                     mod.* = Module.init(s.allocator, mn);
                     try s.module_cache.put(mn, mod);
-                    try s.module_cache.get(mn).?.file_ids.append(file_id);
+                    try s.module_cache.get(mn).?.file_ids.append(s.allocator, file_id);
                 }
             }
         }
