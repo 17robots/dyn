@@ -51,6 +51,6 @@ pub const SourceManager = struct {
                 line_start_index = i + 1;
             }
         }
-        return .{ .file_name = source.name, .line = line, .col = loc.index - line_start_index + 1 };
+        return .{ .file_name = source.name, .line = line, .col = loc.span.start - line_start_index + 1 };
     }
 };

@@ -4,22 +4,23 @@ const SourceLocation = @import("source.zig").SourceLocation;
 const Source = @import("source.zig").Source;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const TokenType = @import("token.zig").TokenType;
+const Span = @import("token.zig").Span;
 const Token = @import("token.zig").Token;
 
 const Lexer = @This();
 diag: *DiagnosticEmitter,
 source: *Source,
-idx: usize = 0,
+idx: u32 = 0,
 errored: bool = false,
 
 pub fn init(source: *Source, diag: *DiagnosticEmitter) Lexer {
     return Lexer{ .source = source, .diag = diag };
 }
-fn advance(s: *Lexer, n: usize) void {
+fn advance(s: *Lexer, n: u32) void {
     s.idx += n;
 }
 fn peek(s: *Lexer, n: usize) ?u8 {
-    if (s.idx + n > s.source.content.len) return null;
+    if (s.idx + n >= s.source.content.len) return null;
     return s.source.content[s.idx + n];
 }
 fn skipSpaces(s: *Lexer) void {
@@ -42,61 +43,69 @@ fn is_dec(c: u8) bool {
         else => false,
     };
 }
-fn keyword_or_ident(s: *Lexer, start: usize, end: usize) TokenType {
-    const word = s.source.content[s.placeholder..s.idx];
-    switch (word.len) {
-        2 => {
-            if (std.mem.eql(u8, word, "fn")) return TokenType.@"fn";
-            if (std.mem.eql(u8, word, "if")) return TokenType.@"if";
-            return null;
+fn keyword_or_ident(s: *Lexer, start: u32, end: u32) Token {
+    const word = s.source.content[start..end];
+    const word_tok = switch (word.len) {
+        1 => blk: {
+            if (std.mem.eql(u8, word, "_")) break :blk TokenType.underscore;
+            break :blk null;
         },
-        3 => {
-            if (std.mem.eql(u8, word, "for")) return TokenType.@"for";
-            if (std.mem.eql(u8, word, "mod")) return TokenType.module;
-            if (std.mem.eql(u8, word, "mut")) return TokenType.mut;
-            if (std.mem.eql(u8, word, "pub")) return TokenType.@"pub";
-            if (std.mem.eql(u8, word, "try")) return TokenType.@"try";
-            if (std.mem.eql(u8, word, "use")) return TokenType.use;
-            return null;
+        2 => blk: {
+            if (std.mem.eql(u8, word, "fn")) break :blk TokenType.@"fn";
+            if (std.mem.eql(u8, word, "if")) break :blk TokenType.@"if";
+            break :blk null;
         },
-        4 => {
-            if (std.mem.eql(u8, word, "comp")) return TokenType.comp;
-            if (std.mem.eql(u8, word, "else")) return TokenType.@"else";
-            if (std.mem.eql(u8, word, "enum")) return TokenType.@"enum";
-            if (std.mem.eql(u8, word, "null")) return TokenType.null;
-            if (std.mem.eql(u8, word, "true")) return TokenType.true;
-            if (std.mem.eql(u8, word, "type")) return TokenType.type;
-            return null;
+        3 => blk: {
+            if (std.mem.eql(u8, word, "for")) break :blk TokenType.@"for";
+            if (std.mem.eql(u8, word, "mod")) break :blk TokenType.module;
+            if (std.mem.eql(u8, word, "mut")) break :blk TokenType.mut;
+            if (std.mem.eql(u8, word, "pub")) break :blk TokenType.@"pub";
+            if (std.mem.eql(u8, word, "try")) break :blk TokenType.@"try";
+            if (std.mem.eql(u8, word, "use")) break :blk TokenType.use;
+            break :blk null;
         },
-        5 => {
-            if (std.mem.eql(u8, word, "break")) return TokenType.@"break";
-            if (std.mem.eql(u8, word, "catch")) return TokenType.@"catch";
-            if (std.mem.eql(u8, word, "defer")) return TokenType.@"defer";
-            if (std.mem.eql(u8, word, "error")) return TokenType.@"error";
-            if (std.mem.eql(u8, word, "false")) return TokenType.false;
-            if (std.mem.eql(u8, word, "match")) return TokenType.match;
-            if (std.mem.eql(u8, word, "while")) return TokenType.@"while";
-            return null;
+        4 => blk: {
+            if (std.mem.eql(u8, word, "comp")) break :blk TokenType.comp;
+            if (std.mem.eql(u8, word, "else")) break :blk TokenType.@"else";
+            if (std.mem.eql(u8, word, "enum")) break :blk TokenType.@"enum";
+            if (std.mem.eql(u8, word, "null")) break :blk TokenType.null;
+            if (std.mem.eql(u8, word, "true")) break :blk TokenType.true;
+            if (std.mem.eql(u8, word, "type")) break :blk TokenType.type;
+            break :blk null;
         },
-        6 => {
-            if (std.mem.eql(u8, word, "inline")) return TokenType.@"inline";
-            if (std.mem.eql(u8, word, "module")) return TokenType.module;
-            if (std.mem.eql(u8, word, "packed")) return TokenType.@"packed";
-            if (std.mem.eql(u8, word, "struct")) return TokenType.@"struct";
-            if (std.mem.eql(u8, word, "return")) return TokenType.@"return";
-            return null;
+        5 => blk: {
+            if (std.mem.eql(u8, word, "break")) break :blk TokenType.@"break";
+            if (std.mem.eql(u8, word, "catch")) break :blk TokenType.@"catch";
+            if (std.mem.eql(u8, word, "defer")) break :blk TokenType.@"defer";
+            if (std.mem.eql(u8, word, "error")) break :blk TokenType.@"error";
+            if (std.mem.eql(u8, word, "false")) break :blk TokenType.false;
+            if (std.mem.eql(u8, word, "match")) break :blk TokenType.match;
+            if (std.mem.eql(u8, word, "while")) break :blk TokenType.@"while";
+            break :blk null;
         },
-        8 => {
-            if (std.mem.eql(u8, word, "continue")) return TokenType.@"continue";
-            return null;
+        6 => blk: {
+            if (std.mem.eql(u8, word, "inline")) break :blk TokenType.@"inline";
+            if (std.mem.eql(u8, word, "module")) break :blk TokenType.module;
+            if (std.mem.eql(u8, word, "packed")) break :blk TokenType.@"packed";
+            if (std.mem.eql(u8, word, "return")) break :blk TokenType.@"return";
+            if (std.mem.eql(u8, word, "struct")) break :blk TokenType.@"struct";
+            break :blk null;
         },
-        9 => {
-            if (std.mem.eql(u8, word, "undefined")) return TokenType.undefined;
-            return null;
+        8 => blk: {
+            if (std.mem.eql(u8, word, "continue")) break :blk TokenType.@"continue";
+            break :blk null;
         },
-        else => return null,
+        9 => blk: {
+            if (std.mem.eql(u8, word, "undefined")) break :blk TokenType.undefined;
+            break :blk null;
+        },
+        else => null,
+    };
+    if (word_tok) |wt| {
+        return s.tok(wt, null, start, end);
+    } else {
+        return s.tok(.identifier, word, start, end);
     }
-    return TokenType{ .identifier = s.source.content[start..end] };
 }
 fn read_ident(s: *Lexer) Token {
     const start = s.idx;
@@ -113,7 +122,7 @@ fn read_num_float_range(s: *Lexer) Token {
     if (s.idx < s.source.content.len and s.source.content[s.idx] == '.') {
         if (s.peek(1)) |i| {
             if (i == '.') {
-                const end = s.idx - 1;
+                const end = s.idx;
                 return s.tok(.int, s.source.content[start..end], start, end);
             }
         }
@@ -131,26 +140,28 @@ fn read_string(s: *Lexer) Token {
         if (c == '\"') {
             const end = s.idx;
             s.advance(1);
-            return s.tok(.string, s.source.content[start..end], start, end);
+            return s.tok(.string, s.source.content[start+1..end], start, end);
         }
         if (c == '\\') {
             if (s.idx + 1 < s.source.content.len) s.idx += 1;
         }
     }
-    s.diag.emit(s.source.id, @intCast(s.idx - 1), .err, "Unclosed string literal", .{});
+    s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed string literal", .{});
+    s.errored = true;
+    return s.tok(.invalid, null, start, s.idx);
 }
 fn read_char(s: *Lexer) Token {
     const start = s.idx;
     s.advance(1);
-    if (s.indexs >= s.source.content.len) {
-        s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed characer literal", .{});
+    if (s.idx >= s.source.content.len) {
+        s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed characer literal", .{});
         s.errored = true;
         return s.tok(.invalid, null, start, s.idx);
     }
     if (s.source.content[s.idx] == '\\') {
         s.advance(1);
         if (s.idx >= s.source.content.len) {
-            s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed characer literal", .{});
+            s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed characer literal", .{});
             s.errored = true;
             return s.tok(.invalid, null, start, s.idx);
         }
@@ -158,7 +169,7 @@ fn read_char(s: *Lexer) Token {
         switch (esc) {
             '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
             else => {
-                s.diag.emit(s.source.id, @intCast(s.idx), .err, "Invalid character escape {s}", .{esc});
+                s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Invalid character escape {c}", .{esc});
                 s.errored = true;
                 return s.tok(.invalid, null, start, s.idx);
             },
@@ -166,7 +177,7 @@ fn read_char(s: *Lexer) Token {
         s.advance(1);
     } else s.advance(1);
     if (s.idx >= s.source.content.len or s.source.content[s.idx] != '\'') {
-        s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed characer literal", .{});
+        s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed characer literal", .{});
         s.errored = true;
         return s.tok(.invalid, null, start, s.idx);
     }
@@ -185,7 +196,7 @@ fn skip_block_comment(s: *Lexer) void {
         }
         s.advance(1);
     }
-    s.diag.emit(s.source.id, @intCast(s.idx), .err, "Unclosed comment", .{});
+    s.diag.emit(s.source.id, Span.from(s.idx, s.idx), .err, "Unclosed comment", .{});
     s.errored = true;
     return;
 }
@@ -194,7 +205,7 @@ fn read_compound_op(s: *Lexer, single: TokenType, pairs: []const struct { ch: u8
     s.advance(1);
     if (s.idx < s.source.content.len) {
         const c1 = s.peek(0);
-        inline for (pairs) |p| {
+        for (pairs) |p| {
             if (c1) |c| {
                 if (c == p.ch) {
                     s.advance(1);
@@ -207,9 +218,9 @@ fn read_compound_op(s: *Lexer, single: TokenType, pairs: []const struct { ch: u8
 }
 pub fn next(s: *Lexer) Token {
     if (s.errored) return s.tok(.invalid, null, s.idx, s.idx);
-    if(s.idx >= s.source.content.len) return s.tok(.eof, null, s.idx, s.idx);
+    if (s.idx >= s.source.content.len) return s.tok(.eof, null, s.idx, s.idx);
     s.skipSpaces();
-    if(s.idx >= s.source.content.len) return s.tok(.eof, null, s.idx, s.idx);
+    if (s.idx >= s.source.content.len) return s.tok(.eof, null, s.idx, s.idx);
     const c = s.source.content[s.idx];
     switch (c) {
         '(' => {
@@ -289,7 +300,7 @@ pub fn next(s: *Lexer) Token {
         ':' => {
             const start = s.idx;
             s.advance(1);
-            if (s.peek(1)) |p| {
+            if (s.peek(0)) |p| {
                 if (p == '=') {
                     s.advance(1);
                     return s.tok(.walrus, null, start, s.idx);
@@ -306,12 +317,15 @@ pub fn next(s: *Lexer) Token {
         '%' => return s.read_compound_op(.mod, &.{.{ .ch = '=', .tok = .modeq }}),
         '^' => return s.read_compound_op(.xor, &.{.{ .ch = '=', .tok = .xoreq }}),
         '~' => return s.read_compound_op(.flip, &.{.{ .ch = '=', .tok = .flipeq }}),
-        '>' => return s.read_compound_op(.gt, &.{.{ .ch = '=', .tok = .gte }}),
-        '<' => return s.read_compound_op(.lt, &.{.{ .ch = '=', .tok = .lte }}),
+        '>' => return s.read_compound_op(.gt, &.{.{ .ch = '=', .tok = .gteq }}),
+        '<' => return s.read_compound_op(.lt, &.{.{ .ch = '=', .tok = .lteq }}),
         '!' => return s.read_compound_op(.bang, &.{.{ .ch = '=', .tok = .bangeq }}),
-        else => return s.tok(.invalid, null, s.idx, s.idx)
+        '=' => return s.read_compound_op(.eq, &.{ .{ .ch = '=', .tok = .eqeq }, .{ .ch = '>', .tok = .arrow } }),
+        '|' => return s.read_compound_op(.@"or", &.{ .{ .ch = '=', .tok = .oreq }, .{ .ch = '|', .tok = .oror } }),
+        '&' => return s.read_compound_op(.@"and", &.{ .{ .ch = '=', .tok = .andeq }, .{ .ch = '&', .tok = .andand } }),
+        else => return s.tok(.invalid, null, s.idx, s.idx),
     }
 }
-fn tok(s: Lexer, t: TokenType, val: ?[]const u8, start: usize, end: usize) Token {
-    return Token.init(t, s.source.id, val, @intCast(start), @intCast(end));
+fn tok(s: Lexer, t: TokenType, val: ?[]const u8, start: u32, end: u32) Token {
+    return Token.init(t, s.source.id, val, start, end);
 }

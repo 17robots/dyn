@@ -4,16 +4,19 @@ pub const Token = struct {
     tok_type: TokenType,
     loc: SourceLocation,
     val: ?[]const u8 = null,
-    span: Span,
     pub fn init(tok: TokenType, file_id: FileId, val: ?[]const u8, start: u32, end: u32) Token {
-        return Token{ .tok_type = tok, .loc = SourceLocation{ .file_id = file_id, .span = Span.from(start, end) }, .val = val, .span = Span.from(start, end) };
+        return Token{ .tok_type = tok, .loc = SourceLocation{ .file_id = file_id, .span = Span.from(start, end) }, .val = val };
     }
 };
 pub const Span = struct {
     start: u32,
     end: u32,
-    pub fn from(start: u32, end: u32) Span { return .{ .start = start, .end = end }; }
-    pub fn fromSpan(a: Span, b: Span) Span { return .{ .start = a.start, .end = b.end }; }
+    pub fn from(start: u32, end: u32) Span {
+        return .{ .start = start, .end = end };
+    }
+    pub fn fromSpan(a: Span, b: Span) Span {
+        return .{ .start = a.start, .end = b.end };
+    }
 };
 
 pub const TokenType = enum {

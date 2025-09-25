@@ -4,7 +4,6 @@ const source = @import("source.zig");
 const module = @import("module.zig");
 
 const Compiler = @This();
-
 allocator: std.mem.Allocator,
 diagnostics: *diagnostic.DiagnosticEmitter,
 source_manager: *source.SourceManager,
@@ -13,9 +12,8 @@ module_resolver: *module.ModuleResolver,
 pub fn init(allocator: std.mem.Allocator, diagnostics: *diagnostic.DiagnosticEmitter, source_manager: *source.SourceManager, module_resolver: *module.ModuleResolver) Compiler {
     return Compiler{ .allocator = allocator, .diagnostics = diagnostics, .source_manager = source_manager, .module_resolver = module_resolver };
 }
-
-pub fn process_main(s: *Compiler, step: enum { lex, parse, check }) !void {
-    var main_module = try s.module_resolver.resolveModule(".", "main");
+pub fn process(s: *Compiler, mod: []const u8, step: enum { lex, parse, check }) !void {
+    var main_module = try s.module_resolver.resolveModule(".", mod);
     switch (step) {
         .lex => {
             const toks = try main_module.lex(s.source_manager, s.diagnostics);

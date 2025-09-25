@@ -15,13 +15,11 @@ pub const Severity = enum {
         };
     }
 };
-
 pub const Diagnostic = struct {
     severity: Severity,
     location: SourceLocation,
     message: []const u8,
 };
-
 pub const DiagnosticEmitter = struct {
     allocator: std.mem.Allocator,
     diagnostics: std.ArrayList(Diagnostic),
@@ -42,10 +40,13 @@ pub const DiagnosticEmitter = struct {
         return s.err_count > 0;
     }
     pub fn print_all(s: *DiagnosticEmitter, source_manager: *SourceManager) void {
-        const writer = std.io.getStdErr().writer();
+        var out_buf: [1024]u8 = undefined;
+        var writer = std.fs.File.stderr().writer(&out_buf);
+        const out = &writer.interface;
         for (s.diagnostics.items) |d| {
             const resolved = source_manager.resolve_location(d.location);
-            writer.print("{s}:{d}:{d}: {s}: {s}\n", .{ resolved.file_name, resolved.line, resolved.col, d.severity.to_string(), d.message }) catch {};
+            out.print("{s}:{d}:{d}: {s}: {s}\n", .{ resolved.file_name, resolved.line, resolved.col, d.severity.to_string(), d.message }) catch {};
+            out.flush() catch {};
         }
     }
 };
