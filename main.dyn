@@ -23,7 +23,7 @@ PartneredEnum := enum {
 };
 
 BasicError := error {
-	something := 1,
+	something: i32,
 	cool,
 	message,
 };
@@ -125,10 +125,10 @@ main := fn() ! {
 	}
   internal_fn := fn() { io.print("Im an internal fn"); };
   internal_fn();
-	// some_number := fn() i32 { return 100; };
+	some_number := fn() i32 { return 100; };
 	some_number2 := fn() i32 => 100;
 	some_math := fn(x: i32, y: i32) i32 => x + y;
-	// some_math2 := fn(x, y: i32) i32 { return x + y; };
+	some_math2 := fn(x, y: i32) i32 { return x + y; };
 	mut res := 0;
 	manipulate_args := fn(x, y: i32, res: *i32) => res.* = x + y;
 	manipulate_args(1,2,&res);
@@ -138,7 +138,7 @@ main := fn() ! {
 
 	basic_enum := .item;
 	partnered_enum := .item(2);
-	basic_error := .cool;
+	basic_error : BasicError = .cool;
 	partnered_error := .cool(.other(1));
 	a_struct := AStruct{ items: 12, here: 12, other: [] };
 	a_struct2 : AStruct = { items: 12, here: 12, other: [] };

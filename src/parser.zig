@@ -434,7 +434,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             var members = std.ArrayList(Node).empty;
             while (s.curr_tok.tok_type != .eof) {
                 if (s.curr_tok.tok_type == .rbrace) break;
-                members.append(s.allocator, try s.member(false)) catch |e| @panic(@errorName(e));
+                members.append(s.allocator, try s.member_basic()) catch |e| @panic(@errorName(e));
                 if (s.curr_tok.tok_type == .rbrace) break;
                 try s.expect(.comma);
             }
@@ -767,6 +767,21 @@ fn member(s: *Parser, is_struct: bool) ParserError!Node {
         else => null,
     };
     return node(NodeType{ .member = .{ .names = names, .type = type_, .val = val } }, span_start.fromSpan(s.curr_tok.loc.span));
+}
+fn member_basic(s: *Parser) ParserError!Node {
+    const span_start = s.curr_tok.loc.span;
+    var names = std.ArrayList(Node).empty;
+    while (s.curr_tok.tok_type != .eof) {
+        if (s.curr_tok.tok_type == .colon or s.curr_tok.tok_type == .walrus or s.curr_tok.tok_type == .rbrace) break;
+        names.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
+        if (s.curr_tok.tok_type == .colon or s.curr_tok.tok_type == .walrus or s.curr_tok.tok_type == .rbrace) break;
+        try s.expect(.comma);
+    }
+    const member_type = if (s.curr_tok.tok_type == .colon) blk: {
+        try s.expect(.colon);
+        break :blk s.create_node_ptr(try s.non_literal_expression());
+    } else null;
+    return node(NodeType{ .member_basic = .{ .names = names, .type = member_type } }, span_start.fromSpan(s.curr_tok.loc.span));
 }
 fn unary_expression(s: *Parser) ParserError!Node {
     const span_start = s.curr_tok.loc.span;

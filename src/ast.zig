@@ -22,10 +22,7 @@ pub const LiteralKind = enum {
     }
 };
 
-pub const Node = struct {
-    type: NodeType,
-    span: Span
-};
+pub const Node = struct { type: NodeType, span: Span };
 
 pub const NodeType = union(enum) {
     add: void,
@@ -77,6 +74,7 @@ pub const NodeType = union(enum) {
     match: struct { expression: *Node, arms: std.ArrayList(Node) },
     member: struct { names: std.ArrayList(Node), type: ?*Node, val: ?*Node },
     member_access: struct { name: *Node, member: *Node },
+    member_basic: struct { names: std.ArrayList(Node), type: ?*Node },
     mod: void,
     modeq: void,
     module: struct { name: *Node },

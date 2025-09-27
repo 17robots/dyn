@@ -14,5 +14,5 @@ pub fn main() !void {
     var diagnostics = diagnostic.DiagnosticEmitter.init(allocator);
     var module_resolver = module.ModuleResolver.init(allocator, &source_manager, &diagnostics);
     var compiler = Compiler.init(allocator, &diagnostics, &source_manager, &module_resolver);
-    try compiler.process("test", .parse);
+    try compiler.process("main", .parse);
 }
