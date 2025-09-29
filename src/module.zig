@@ -16,7 +16,7 @@ pub const Module = struct {
     symbol_table: symbol.SymbolTable,
     scopes: symbol.ScopeStack,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
-        return .{ .allocator = allocator, .name = name, .file_ids = std.ArrayList(FileId).empty, .asts = std.ArrayList(ast.Node).empty, .symbol_table = symbol.SymbolTable.empty, .scopes = symbol.ScopeStack.empty };
+        return .{ .allocator = allocator, .name = name, .file_ids = .empty, .asts = .empty, .symbol_table = symbol.SymbolTable.empty, .scopes = symbol.ScopeStack.init(allocator) };
     }
     pub fn deinit(s: *Module) void {
         s.file_ids.deinit(s.allocator);
