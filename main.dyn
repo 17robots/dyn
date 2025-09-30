@@ -33,7 +33,7 @@ PartneredError := error {
 	message: []u8,
 };
 
-getType := fn() type => i32;
+getType := () type => i32;
 
 AStruct := struct {
   items: i32,
@@ -41,14 +41,14 @@ AStruct := struct {
   other: []i32,
   ptr: *i32,
   uh: []?*getType(),
-  new := fn() AStruct => { items: 0, here: 0, other: [] },
-  aThing := fn(s: AStruct) {},
+  new := () AStruct => { items: 0, here: 0, other: [] },
+  aThing := (s: AStruct) void {},
 };
 
-List: type = fn(comp type)!;
-something := fn(x, y: i32, func: List) {};
-Uh := fn(x: i32) {};
-main := fn() ! {
+List: type = (comp type)void!;
+something := (x, y: i32, func: List) void {};
+Uh := (x: i32) void {};
+main := () void! {
   x := 2;
   y: i32 = 2;
   mut z := 2;
@@ -106,7 +106,7 @@ main := fn() ! {
 	for some_other_array, 0..some_other_array.len: |mut i, mut j| io.print("Arr ind: {}, arr val: {}", j, i);
 
 	mut while_val: i32 = 0;
-	while while_val < 10: i += 1;
+	while while_val < 10: while_val += 1;
 	while_val = 0;
 	while while_val < 10: {
 		io.print("While val: {}", while_val);
@@ -123,18 +123,18 @@ main := fn() ! {
 		io.print("This prints first");
 		io.print("This prints second");
 	}
-  internal_fn := fn() { io.print("Im an internal fn"); };
-  internal_fn();
-	some_number := fn() i32 { return 100; };
-	some_number2 := fn() i32 => 100;
-	some_math := fn(x: i32, y: i32) i32 => x + y;
-	some_math2 := fn(x, y: i32) i32 { return x + y; };
+  internal_ := () void { io.print("Im an internal "); };
+  internal_();
+	some_number := () i32 { return 100; };
+	some_number2 := () i32 => 100;
+	some_math := (x: i32, y: i32) i32 => x + y;
+	some_math2 := (x, y: i32) i32 { return x + y; };
 	mut res := 0;
-	manipulate_args := fn(x, y: i32, res: *i32) => res.* = x + y;
+	manipulate_args := (x, y: i32, res: *i32) void => res.* = x + y;
 	manipulate_args(1,2,&res);
-	MathFn: type = fn(i32,i32)i32;
-	do_math : fn(MathFn, i32, i32) i32 = fn(math: MathFn, x, y: i32) i32 => math(x, y);
-	do_math(fn(x,y: i32) => x + (2 * y), 1,2);
+	MathFn: type = (i32,i32)i32;
+	do_math : (MathFn, i32, i32) i32 = (math: MathFn, x, y: i32) i32 => math(x, y);
+	do_math((x,y: i32) void => x + (2 * y), 1,2);
 
 	basic_enum := .item;
 	partnered_enum := .item(2);
@@ -144,7 +144,7 @@ main := fn() ! {
 	a_struct2 : AStruct = { items: 12, here: 12, other: [] };
 	a_struct3 := AStruct.new();
 	io.print("{} {} {}", a_struct.items, a_struct2.here, a_struct3.other);
-	a_function_with_stuff := fn(s: struct {}, en: enum {}, er: error {}) type => struct {};
+	a_function_with_stuff := (s: struct {}, en: enum {}, er: error {}) type => struct {};
 
 	a_cool_cool_num := 3;
 	match a_cool_cool_num: {
@@ -153,8 +153,8 @@ main := fn() ! {
 		13..17, 20..30: io.print("Weird range for this but it works"),
 		_: io.print("The default case")
 	}
-	a_cool_match_thing := match a_cool_num: {
-		1..12: a_cool_number,
+	a_cool_match_thing := match a_cool_cool_num: {
+		1..12: a_cool_cool_number,
 		_: blk: {
 			break :blk 13;
 		}
@@ -176,14 +176,14 @@ main := fn() ! {
 		_: io.print("We dont care about the rest"),
 	}
 
-	List := fn(T: comp type) type => struct {};
-	print_things_at_comptime := fn() => io.print("We are a thing");
-	comp print_thing_at_comptime();
-	return_pi := fn() f32 => 3.14;
+	List := (T: comp type) type => struct {};
+	print_things_at_comptime := () void => io.print("We are a thing");
+	comp print_things_at_comptime();
+	return_pi := () f32 => 3.14;
 	pi := comp return_pi();
 	inline for 0..12: |i| io.print("Woah\n");
-	inline_fn := inline fn() => io.print("This fn gets written out in place of each call");
-	inline_fn();
+	inline_ := inline () void => io.print("This  gets written out in place of each call");
+	inline_();
 
   label: {
 
@@ -193,13 +193,13 @@ main := fn() ! {
 		DivideByZero,
 	};
 
-  divide := fn(x,y: f32) f32!DivideError => if y == 0: DivideError.DivideByZero else x / y;
+  divide := (x,y: f32) f32!DivideError => if y == 0: DivideError.DivideByZero else x / y;
 	try divide(1,1);
 	v := divide(1,0) catch |e| blk: {
 		io.print("We got an error {}", e);
 		break :blk 1;
 	};
-	other_error_fn := fn() ! {
+	other_error_ := () void! {
 		defer |e| {}
 	};
 };

@@ -208,8 +208,8 @@ fn enum_error_initialization(s: *Parser) ParserError!Node {
     } else null;
     return node(NodeType{ .enum_error_init = .{ .name = name, .val = val } }, span_start.fromSpan(s.curr_tok.loc.span));
 }
-fn error_union_type(s: *Parser, n: ?Node) ParserError!Node {
-    const span_start = s.curr_tok.loc.span;
+fn error_union_type(s: *Parser, n: Node) ParserError!Node {
+    const main = s.create_node_ptr(n);
     try s.expect(.bang);
     var errs = std.ArrayList(Node).empty;
     while (s.curr_tok.tok_type != .eof) {
@@ -218,7 +218,7 @@ fn error_union_type(s: *Parser, n: ?Node) ParserError!Node {
         if (s.curr_tok.tok_type != .bang) break;
         try s.expect(.bang);
     }
-    return node(NodeType{ .error_union_type = .{ .name = if (n) |node_| s.create_node_ptr(node_) else null, .errors = errs } }, span_start.fromSpan(s.curr_tok.loc.span));
+    return node(NodeType{ .error_union_type = .{ .errs = errs, .name = main } }, n.span.fromSpan(s.curr_tok.loc.span));
 }
 fn expression(s: *Parser, prec: u8) ParserError!Node {
     const span_start = s.curr_tok.loc.span;
@@ -261,7 +261,6 @@ fn function(s: *Parser) ParserError!Node {
     var fn_decl = true;
     var fn_parameters = std.ArrayList(Node).empty;
     var types = std.ArrayList(Node).empty;
-    try s.expect(.@"fn");
     try s.expect(.lparen);
     while (s.curr_tok.tok_type != .eof) {
         var span_start2 = s.curr_tok.loc.span;
@@ -293,7 +292,6 @@ fn function(s: *Parser) ParserError!Node {
     }
     try s.expect(.rparen);
     var return_expr = switch (s.curr_tok.tok_type) {
-        .arrow, .bang, .lbrace, .rparen, .semicolon, .comma => null,
         .identifier => blk: {
             if (s.next_tok.tok_type == .colon) break :blk try s.block(true);
             const chain = try s.identifier();
@@ -318,7 +316,7 @@ fn function(s: *Parser) ParserError!Node {
                 s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Identifiers missing type in function declaration", .{});
                 return ParserError.recoverable;
             }
-            return node(NodeType{ .function = .{ .inline_ = inline_, .parameters = fn_parameters, .result = if (return_expr) |r| s.create_node_ptr(r) else null, .body = b } }, span_start.fromSpan(s.curr_tok.loc.span));
+            return node(NodeType{ .function = .{ .inline_ = inline_, .parameters = fn_parameters, .result = s.create_node_ptr(return_expr), .body = b } }, span_start.fromSpan(s.curr_tok.loc.span));
         }
         if (fn_parameters.items.len > 0) {
             s.diag.emit(s.source.id, span_start, .err, "Function declaration requires a body", .{});
@@ -328,7 +326,7 @@ fn function(s: *Parser) ParserError!Node {
             s.diag.emit(s.source.id, span_start, .err, "Inline cannot be applied to function types", .{});
             return ParserError.recoverable;
         }
-        return node(NodeType{ .function_type = .{ .parameters = types, .result = if (return_expr) |r| s.create_node_ptr(r) else null } }, span_start.fromSpan(s.curr_tok.loc.span));
+        return node(NodeType{ .function_type = .{ .parameters = types, .result = s.create_node_ptr(return_expr) } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
     if (body) |b| {
         s.diag.emit(s.source.id, b.span, .err, "Function types should not have a body", .{});
@@ -342,7 +340,7 @@ fn function(s: *Parser) ParserError!Node {
         s.diag.emit(s.source.id, span_start, .err, "Inline cannot be applied to function types", .{});
         return ParserError.recoverable;
     }
-    return node(NodeType{ .function_type = .{ .parameters = types, .result = if (return_expr) |r| s.create_node_ptr(r) else null } }, span_start.fromSpan(s.curr_tok.loc.span));
+    return node(NodeType{ .function_type = .{ .parameters = types, .result = s.create_node_ptr(return_expr) } }, span_start.fromSpan(s.curr_tok.loc.span));
 }
 fn identifier(s: *Parser) ParserError!Node {
     if (s.curr_tok.val) |v| {
@@ -407,6 +405,7 @@ fn match(s: *Parser, is_expr: bool) ParserError!Node {
     return node(NodeType{ .match = .{ .expression = expr, .arms = arms } }, span_start.fromSpan(s.curr_tok.loc.span));
 }
 fn non_literal_expression(s: *Parser) ParserError!Node {
+    const span_start = s.curr_tok.loc.span;
     var expr: Node = switch (s.curr_tok.tok_type) {
         .comp => return s.comp_expression(),
         .dot => blk: {
@@ -414,7 +413,6 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             break :blk try s.enum_error_initialization();
         },
         .@"enum" => blk: {
-            const span_start = s.curr_tok.loc.span;
             try s.expect(.@"enum");
             try s.expect(.lbrace);
             var members = std.ArrayList(Node).empty;
@@ -428,7 +426,6 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             break :blk node(NodeType{ .enum_ = .{ .members = members } }, span_start.fromSpan(s.curr_tok.loc.span));
         },
         .@"error" => blk: {
-            const span_start = s.curr_tok.loc.span;
             try s.expect(.@"error");
             try s.expect(.lbrace);
             var members = std.ArrayList(Node).empty;
@@ -446,7 +443,6 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             break :blk try s.postfix_chain(try s.identifier(), true);
         },
         .@"if" => blk: {
-            const span_start = s.curr_tok.loc.span;
             const prefix = s.create_node_ptr(try s.if_prefix());
             const body = s.create_node_ptr(try s.result_block_expression());
             break :blk node(NodeType{ .if_expression = .{ .prefix = prefix, .body = body, .else_body = blk2: {
@@ -454,25 +450,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                 break :blk2 s.create_node_ptr(try s.result_block_expression());
             } } }, span_start.fromSpan(s.curr_tok.loc.span));
         },
-        .@"inline", .@"fn" => blk: {
-            const span_start = s.curr_tok.loc.span;
-            var chain = try s.function();
-            if (chain.type == .function_type) break :blk chain;
-            if (s.curr_tok.tok_type != .lparen) break :blk chain;
-            try s.expect(.lparen);
-            var call_args = std.ArrayList(Node).empty;
-            while (s.curr_tok.tok_type != .eof) {
-                if (s.curr_tok.tok_type == .rparen) break;
-                call_args.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
-                if (s.curr_tok.tok_type == .rparen) break;
-                try s.expect(.comma);
-            }
-            try s.expect(.rparen);
-            chain = node(.{ .call = .{ .name = s.create_node_ptr(chain), .args = call_args } }, span_start.fromSpan(s.curr_tok.loc.span));
-            break :blk try s.postfix_chain(chain, true);
-        },
         .lbrace => blk: {
-            const span_start = s.curr_tok.loc.span;
             var chain = try s.struct_initialization(null);
             if (s.curr_tok.tok_type == .dot) {
                 try s.expect(.dot);
@@ -482,7 +460,6 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             break :blk chain;
         },
         .lbrack => blk: {
-            const span_start = s.curr_tok.loc.span;
             if (s.curr_tok.tok_type == .lbrack and s.next_tok.tok_type == .rbrack) {
                 switch (s.peek_tok.tok_type) {
                     .identifier, .lbrack, .@"struct", .@"enum", .@"error", .lparen, .@"if", .mul, .question => {
@@ -516,8 +493,32 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                 break :blk node(NodeType{ .array_init = .{ .vals = vals } }, span_start.fromSpan(s.curr_tok.loc.span));
             }
         },
-        .lparen => blk: {
-            const span_start = s.curr_tok.loc.span;
+        .lparen, .@"inline" => blk: {
+            const is_fn: bool = s.curr_tok.tok_type == .@"inline" or switch (s.next_tok.tok_type) {
+                .comp => true,
+                .identifier => s.peek_tok.tok_type == .colon or s.peek_tok.tok_type == .comma, // return fn,
+                .rparen => switch (s.peek_tok.tok_type) {
+                    .lparen, .mul, .identifier, .@"struct", .@"enum", .@"error", .lbrack, .question, .void, .comp, .type => true, // return
+                    else => false,
+                },
+                else => false,
+            };
+            if (is_fn) {
+                var chain = try s.function();
+                if (chain.type == .function_type) break :blk chain;
+                if (s.curr_tok.tok_type != .lparen) break :blk chain;
+                try s.expect(.lparen);
+                var call_args = std.ArrayList(Node).empty;
+                while (s.curr_tok.tok_type != .eof) {
+                    if (s.curr_tok.tok_type == .rparen) break;
+                    call_args.append(s.allocator, try s.expression(0)) catch |e| @panic(@errorName(e));
+                    if (s.curr_tok.tok_type == .rparen) break;
+                    try s.expect(.comma);
+                }
+                try s.expect(.rparen);
+                chain = node(.{ .call = .{ .name = s.create_node_ptr(chain), .args = call_args } }, span_start.fromSpan(s.curr_tok.loc.span));
+                break :blk try s.postfix_chain(chain, true);
+            }
             try s.expect(.lparen);
             const expr = switch (s.curr_tok.tok_type) {
                 .identifier => switch (s.next_tok.tok_type) {
@@ -532,17 +533,14 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
         },
         .match => try s.match(true),
         .mul => blk: {
-            const span_start = s.curr_tok.loc.span;
             try s.expect(.mul);
             break :blk node(NodeType{ .pointer_type = .{ .expression = s.create_node_ptr(try s.non_literal_expression()) } }, span_start.fromSpan(s.curr_tok.loc.span));
         },
         .question => blk: {
-            const span_start = s.curr_tok.loc.span;
             try s.expect(.question);
             break :blk node(NodeType{ .optional_type = .{ .expression = s.create_node_ptr(try s.non_literal_expression()) } }, span_start.fromSpan(s.curr_tok.loc.span));
         },
         .@"struct" => blk: {
-            const span_start = s.curr_tok.loc.span;
             try s.expect(.@"struct");
             try s.expect(.lbrace);
             var members = std.ArrayList(Node).empty;
@@ -556,14 +554,16 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             break :blk node(NodeType{ .struct_ = .{ .members = members } }, span_start.fromSpan(s.curr_tok.loc.span));
         },
         .@"try" => blk: {
-            const span_start = s.curr_tok.loc.span;
             try s.expect(.@"try");
             break :blk node(NodeType{ .try_ = .{ .expression = s.create_node_ptr(try s.non_literal_expression()) } }, span_start.fromSpan(s.curr_tok.loc.span));
         },
         .type => blk: {
-            const span_start = s.curr_tok.loc.span;
             try s.expect(.type);
             break :blk node(NodeType.type, span_start.fromSpan(s.curr_tok.loc.span));
+        },
+        .void => blk: {
+            try s.expect(.void);
+            break :blk node(NodeType.void, span_start.fromSpan(s.curr_tok.loc.span));
         },
         else => {
             s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Invalid non literal expression {any}", .{s.curr_tok.tok_type});
@@ -578,7 +578,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             if (i.label) |_| {
                 if (s.curr_tok.tok_type == .bang) expr = try s.error_union_type(expr);
             } else {
-                s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Blocks must have labels to be used as expression", .{});
+                s.diag.emit(s.source.id, span_start, .err, "Blocks must have labels to be used as expression", .{});
                 return ParserError.recoverable;
             }
         },
@@ -844,16 +844,6 @@ fn advance(s: *Parser) void {
     s.next_tok = s.peek_tok;
     s.peek_tok = s.lexer.next();
 }
-fn should_read_semicolon(n: Node) bool {
-    return switch (n.type) {
-        .if_statement => |i| if (i.else_body) |e| should_read_semicolon(e.*) else should_read_semicolon(i.body.*),
-        .for_statement => |i| should_read_semicolon(i.body.*),
-        .while_statement => |i| should_read_semicolon(i.body.*),
-        .block, .match => false,
-        .defer_statement => |i| should_read_semicolon(i.body.*),
-        else => true,
-    };
-}
 fn create_node_ptr(s: *Parser, n: Node) *Node {
     const x = s.allocator.create(Node) catch |e| @panic(@errorName(e));
     x.* = n;
@@ -885,6 +875,16 @@ fn precedence(s: *Parser) u8 {
         .oror => 7,
         .dotdot => 6,
         else => 0,
+    };
+}
+fn should_read_semicolon(n: Node) bool {
+    return switch (n.type) {
+        .if_statement => |i| if (i.else_body) |e| should_read_semicolon(e.*) else should_read_semicolon(i.body.*),
+        .for_statement => |i| should_read_semicolon(i.body.*),
+        .while_statement => |i| should_read_semicolon(i.body.*),
+        .block, .match => false,
+        .defer_statement => |i| should_read_semicolon(i.body.*),
+        else => true,
     };
 }
 fn sync(s: *Parser, toks: []const TokenType) void {

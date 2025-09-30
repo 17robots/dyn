@@ -33,7 +33,7 @@ fn skipSpaces(s: *Lexer) void {
 }
 fn is_alpha(c: u8) bool {
     return switch (c) {
-        'a'...'z', 'A'...'Z', '$', '_' => true,
+        'a'...'z', 'A'...'Z', '_' => true,
         else => false,
     };
 }
@@ -51,7 +51,6 @@ fn keyword_or_ident(s: *Lexer, start: u32, end: u32) Token {
             break :blk null;
         },
         2 => blk: {
-            if (std.mem.eql(u8, word, "fn")) break :blk TokenType.@"fn";
             if (std.mem.eql(u8, word, "if")) break :blk TokenType.@"if";
             break :blk null;
         },
@@ -71,6 +70,7 @@ fn keyword_or_ident(s: *Lexer, start: u32, end: u32) Token {
             if (std.mem.eql(u8, word, "null")) break :blk TokenType.null;
             if (std.mem.eql(u8, word, "true")) break :blk TokenType.true;
             if (std.mem.eql(u8, word, "type")) break :blk TokenType.type;
+            if (std.mem.eql(u8, word, "void")) break :blk TokenType.void;
             break :blk null;
         },
         5 => blk: {
@@ -92,6 +92,7 @@ fn keyword_or_ident(s: *Lexer, start: u32, end: u32) Token {
             break :blk null;
         },
         8 => blk: {
+            if (std.mem.eql(u8, word, "comptime")) break :blk TokenType.comp;
             if (std.mem.eql(u8, word, "continue")) break :blk TokenType.@"continue";
             break :blk null;
         },

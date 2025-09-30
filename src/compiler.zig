@@ -27,7 +27,13 @@ pub fn process(s: *Compiler, mod: []const u8, step: enum { lex, parse, check }) 
             }
             std.debug.print("We have: {any} valid asts\n", .{main_module.asts.items.len});
             for (main_module.asts.items) |a| {
-                for (a.type.program.declarations.items) |d| std.debug.print("Debug: {any}\n", .{d});
+                for (a.type.program.declarations.items) |d| {
+                    switch(d.type) {
+                        .module => |m| std.debug.print("Module; {any}\n", .{m}),
+                        .declaration => |decl| std.debug.print("Declaration; pub: {any}, mut: {any}, name: {any}, type: {any}, val: {any}\n", .{decl.pub_, decl.mut, decl.name, decl.type, decl.val}),
+                        else => {}
+                    }
+                }
             }
         },
         .check => {},
