@@ -47,14 +47,9 @@ pub const Checker = struct {
         }
     }
     fn collectTopLevelDecl(s: *Checker, file_id: u32, n: ast.Node) void {
-        switch (n.type) {
-            .declaration => |d| {
-                const name = d.name.type.identifier; // should be this or it dies
-                const sym = Symbol{ .name = name, .kind = .@"var", .span = n.span, .mutability = if (d.mut) .mutable else .immutable };
-                s.scopes.delcare(sym, s.diags, file_id);
-            },
-            else => {}, // error
-        }
+        const name = n.type.declaration.name.type.identifier;
+        const sym = Symbol{ .name = name, .kind = .@"var", .span = n.span, .mutability = if (n.type.declaration.mut) .mutable else .immutable };
+        s.scopes.delcare(sym, s.diags, file_id);
     }
     fn checkTopLevelDecl(s: *Checker, file_id: u32, n: ast.Node) void {
         switch (n.type) {

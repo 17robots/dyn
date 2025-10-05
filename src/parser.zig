@@ -494,6 +494,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             }
         },
         .lparen, .@"inline" => blk: {
+            var chain: Node = undefined;
             const is_fn: bool = s.curr_tok.tok_type == .@"inline" or switch (s.next_tok.tok_type) {
                 .comp => true,
                 .identifier => s.peek_tok.tok_type == .colon or s.peek_tok.tok_type == .comma, // return fn,
@@ -504,7 +505,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                 else => false,
             };
             if (is_fn) {
-                var chain = try s.function();
+                chain = try s.function();
                 if (chain.type == .function_type) break :blk chain;
                 if (s.curr_tok.tok_type != .lparen) break :blk chain;
                 try s.expect(.lparen);
@@ -529,7 +530,8 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
                 else => s.create_node_ptr(try s.expression(0)),
             };
             try s.expect(.rparen);
-            break :blk node(NodeType{ .grouped = .{ .expression = expr } }, span_start.fromSpan(s.curr_tok.loc.span));
+            chain = node(NodeType{ .grouped = .{ .expression = expr } }, span_start.fromSpan(s.curr_tok.loc.span));
+            break :blk try s.postfix_chain(chain, true);
         },
         .match => try s.match(true),
         .mul => blk: {

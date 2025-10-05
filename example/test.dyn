@@ -1,0 +1,17 @@
+module main;
+
+getType := () type => i32;
+
+AStruct := struct {
+  items: i32,
+  here: i32,
+  other: []i32,
+  ptr: *i32,
+  uh: []?*getType(),
+  new := () AStruct => { items: 0, here: 0, other: [] },
+  aThing := (s: AStruct) void {},
+};
+
+List: type = (comp type)void!;
+something := (x, y: i32, func: List) void {};
+Uh := (x: i32) void {};

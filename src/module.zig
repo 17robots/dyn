@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const SourceManager = @import("source.zig").SourceManager;
+const Source = @import("source.zig").Source;
 const FileId = @import("source.zig").FileId;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const Lexer = @import("lexer.zig");
@@ -13,8 +14,8 @@ pub const Module = struct {
     name: []const u8,
     file_ids: std.ArrayList(FileId),
     asts: std.ArrayList(ast.Node),
-    symbol_table: symbol.SymbolTable,
     scopes: symbol.ScopeStack,
+    errored: bool = false,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
         return .{ .allocator = allocator, .name = name, .file_ids = .empty, .asts = .empty, .symbol_table = symbol.SymbolTable.empty, .scopes = symbol.ScopeStack.init(allocator) };
     }
@@ -38,12 +39,33 @@ pub const Module = struct {
         return toks;
     }
     pub fn parse(s: *Module, sm: *SourceManager, d: *DiagnosticEmitter) !void {
-        for (s.file_ids.items) |f| {
-            var p = Parser.init(s.allocator, &sm.sources.items[f], d);
-            if (p.parse()) |result| try s.asts.append(s.allocator, result);
+        var pool: std.Thread.Pool = undefined;
+        try pool.init(.{ .allocator = s.allocator });
+        var wait = std.Thread.WaitGroup{};
+        for (0..s.file_ids.items.len) |i| {
+            wait.start();
+            try pool.spawn(struct {
+                pub fn parse_file(alloc: std.mem.Allocator, sources: *SourceManager, module: *Module, diag: *DiagnosticEmitter, m: *std.Thread.Mutex, idx: usize, wg: *std.Thread.WaitGroup) void {
+                    defer wg.finish();
+                    var p = Parser.init(alloc, &sources.sources.items[idx], diag);
+                    const n = p.parse();
+                    m.lock();
+                    defer m.unlock();
+                    if (n) |r| module.asts.append(alloc, r) catch {} else module.errored = true;
+                }
+            }.parse_file, .{ s.allocator, sm, s, d, &pool.mutex, i, &wait });
         }
+        wait.wait();
     }
-    // pub fn check(s: *Module) void {}
+    pub fn check(s: *Module, sources: *SourceManager, d: *DiagnosticEmitter) !void {
+        try s.parse(sources, d);
+        if (d.err_count > 0) {
+            d.print_all(sources);
+            return;
+        }
+        std.debug.print("We have: {any} valid asts\n", .{s.asts.items.len});
+    }
+    // pub fn compile(s: *Module) void {}
 };
 
 pub const ModuleResolver = struct {

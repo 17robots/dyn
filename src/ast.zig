@@ -21,9 +21,7 @@ pub const LiteralKind = enum {
         };
     }
 };
-
 pub const Node = struct { type: NodeType, span: Span };
-
 pub const NodeType = union(enum) {
     add: void,
     addeq: void,

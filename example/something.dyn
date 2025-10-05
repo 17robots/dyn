@@ -1,0 +1,30 @@
+module main;
+
+BasicEnum := enum {
+  item,
+  other,
+  float,
+  something,
+  chained
+};
+
+PartneredEnum := enum {
+  something2 := 1,
+  item: i32,
+  other: i12,
+  float: f32,
+  something: struct {},
+  chained: enum {},
+  err: error {},
+};
+
+BasicError := error {
+	something: i32,
+	cool,
+	message,
+};
+
+PartneredError := error {
+	cool: PartneredEnum,
+	message: []u8,
+};

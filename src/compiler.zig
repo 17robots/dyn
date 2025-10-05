@@ -36,6 +36,8 @@ pub fn process(s: *Compiler, mod: []const u8, step: enum { lex, parse, check }) 
                 }
             }
         },
-        .check => {},
+        .check => {
+            try main_module.check(s.source_manager, s.diagnostics);
+        },
     }
 }

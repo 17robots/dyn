@@ -1,53 +1,9 @@
 module main;
 
-io := use "std/io";
+io := (use "std/io").something;
 heap := use "std/heap";
 test := use "test";
 
-BasicEnum := enum {
-  item,
-  other,
-  float,
-  something,
-  chained
-};
-
-PartneredEnum := enum {
-  something2 := 1,
-  item: i32,
-  other: i12,
-  float: f32,
-  something: struct {},
-  chained: enum {},
-  err: error {},
-};
-
-BasicError := error {
-	something: i32,
-	cool,
-	message,
-};
-
-PartneredError := error {
-	cool: PartneredEnum,
-	message: []u8,
-};
-
-getType := () type => i32;
-
-AStruct := struct {
-  items: i32,
-  here: i32,
-  other: []i32,
-  ptr: *i32,
-  uh: []?*getType(),
-  new := () AStruct => { items: 0, here: 0, other: [] },
-  aThing := (s: AStruct) void {},
-};
-
-List: type = (comp type)void!;
-something := (x, y: i32, func: List) void {};
-Uh := (x: i32) void {};
 main := () void! {
   x := 2;
   y: i32 = 2;
@@ -185,10 +141,6 @@ main := () void! {
 	inline_ := inline () void => io.print("This  gets written out in place of each call");
 	inline_();
 
-  label: {
-
-  }
-
 	DivideError := error {
 		DivideByZero,
 	};
@@ -199,7 +151,7 @@ main := () void! {
 		io.print("We got an error {}", e);
 		break :blk 1;
 	};
-	other_error_ := () void! {
+	other_error_ := () ?void! {
 		defer |e| {}
 	};
 };
