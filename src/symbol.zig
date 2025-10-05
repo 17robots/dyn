@@ -12,6 +12,7 @@ pub const Symbol = struct {
     mutability: Mutability = .immutable,
     type_id: ?u32 = null,
     scope: ?u32 = null, // index of scope stack
+    symbols: SymbolTable,
 };
 pub const Scope = struct {
     type: union(enum) {

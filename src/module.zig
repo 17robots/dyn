@@ -17,7 +17,7 @@ pub const Module = struct {
     scopes: symbol.ScopeStack,
     errored: bool = false,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
-        return .{ .allocator = allocator, .name = name, .file_ids = .empty, .asts = .empty, .symbol_table = symbol.SymbolTable.empty, .scopes = symbol.ScopeStack.init(allocator) };
+        return .{ .allocator = allocator, .name = name, .file_ids = .empty, .asts = .empty, .scopes = .empty };
     }
     pub fn deinit(s: *Module) void {
         s.file_ids.deinit(s.allocator);
