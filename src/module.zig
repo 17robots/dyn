@@ -63,7 +63,18 @@ pub const Module = struct {
             d.print_all(sources);
             return;
         }
-        std.debug.print("We have: {any} valid asts\n", .{s.asts.items.len});
+        // load global scope first so I have access to all files' members when I check each one
+        // once we do that we can create threads to check each of the files and collect any diagnostic messages
+        try s.scopes.append(s.allocator, symbol.Scope{ .type = .global, .symbols = .empty, .types = .empty });
+        for (s.asts.items) |a| {
+            switch (a.type) {
+                .module => {},
+                .declaration => |decl| {
+                    _ = decl;
+                },
+                else => {}, // error out because we shouldnt have anything else
+            }
+        }
     }
     // pub fn compile(s: *Module) void {}
 };

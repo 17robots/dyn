@@ -11,8 +11,6 @@ pub const Symbol = struct {
     span: Span,
     mutability: Mutability = .immutable,
     type_id: ?u32 = null,
-    scope: ?u32 = null, // index of scope stack
-    symbols: SymbolTable,
 };
 pub const Scope = struct {
     type: union(enum) {
@@ -20,6 +18,8 @@ pub const Scope = struct {
         function: struct { name: []const u8, fn_result: ?u32 },
         global: void,
     },
+    symbols: std.ArrayList(Symbol),
+    types: std.ArrayList(Type),
 };
 pub const TypeTag = enum { void, boolean, char, int, float, string, undefined, null, pointer, optional, error_union, array, slice, function, struct_, enum_, error_, type, unknown };
 pub const Type = struct {
@@ -46,6 +46,4 @@ pub const Type = struct {
         unknown: void,
     },
 };
-pub const SymbolTable = std.ArrayList(Symbol);
 pub const ScopeStack = std.ArrayList(Scope);
-pub const TypeList = std.ArrayList(Type);
