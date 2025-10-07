@@ -63,16 +63,32 @@ pub const Module = struct {
             d.print_all(sources);
             return;
         }
-        // load global scope first so I have access to all files' members when I check each one
-        // once we do that we can create threads to check each of the files and collect any diagnostic messages
-        try s.scopes.append(s.allocator, symbol.Scope{ .type = .global, .symbols = .empty, .types = .empty });
-        for (s.asts.items) |a| {
-            switch (a.type) {
-                .module => {},
-                .declaration => |decl| {
-                    _ = decl;
-                },
-                else => {}, // error out because we shouldnt have anything else
+        s.scopes.push(s.allocator, symbol.Scope{ .type = .global, .symbols = .empty, .types = .empty });
+        for (0..s.asts.items.len) |i| {
+            if (s.scopes.current()) |*scope| {
+                blk: switch (s.asts.items[i].type) {
+                    .module => {},
+                    .declaration => |decl| {
+                        if (!decl.mut) {
+                            if (decl.val) |v| {
+                                if (v.type == .undefined) {
+                                    d.emit(i, decl.name.span, .err, "Immutable declaration set to undefined, did you mean to make it mutable?", .{});
+                                    break :blk;
+                                }
+                            } else {
+                                d.emit(i, decl.name.span, .err, "Immutable declaration must have a value specified", .{});
+                                break :blk;
+                            }
+                        }
+                        scope.symbols.append(s.allocator, symbol.Symbol{
+                            .mutability = if (decl.mut) .mutable else .immutable,
+                            .name = decl.name.type.identifier,
+                            .span = if (decl.type) |t| decl.name.span.fromSpan(t) else if (decl.type) |t| decl.name.span.fromSpan(t) else decl.name.span,
+                            .kind = if(decl.type) |t| switch(t) {} else switch(decl.val) {} orelse .@"var",
+                        }) catch {};
+                    },
+                    else => unreachable, // error out because we shouldnt have anything else
+                }
             }
         }
     }

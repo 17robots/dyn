@@ -3,7 +3,17 @@ const ast = @import("ast.zig");
 const Span = @import("token.zig").Span;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 
-pub const SymbolKind = enum { @"var", func, type, enum_member, error_member, label };
+pub const SymbolKind = enum {
+    @"var",
+    func,
+    type,
+    enum_member,
+    error_member,
+    label,
+    pub fn from_node(n: ast.Node) SymbolKind {
+        return switch(n) {};
+    }
+};
 pub const Mutability = enum { immutable, mutable };
 pub const Symbol = struct {
     name: []const u8,
@@ -21,10 +31,38 @@ pub const Scope = struct {
     symbols: std.ArrayList(Symbol),
     types: std.ArrayList(Type),
 };
-pub const TypeTag = enum { void, boolean, char, int, float, string, undefined, null, pointer, optional, error_union, array, slice, function, struct_, enum_, error_, type, unknown };
+pub const TypeTag = enum {
+    void,
+    boolean,
+    char,
+    int,
+    float,
+    string,
+    undefined,
+    null,
+    pointer,
+    optional,
+    error_union,
+    array,
+    slice,
+    function,
+    struct_,
+    enum_,
+    error_,
+    type,
+    unknown,
+};
 pub const Type = struct {
     tag: TypeTag,
     payload: union(TypeTag) {
+        void: void,
+        boolean: void,
+        char: void,
+        int: void,
+        float: void,
+        string: void,
+        undefined: void,
+        null: void,
         pointer: u32,
         optional: u32,
         error_union: struct { val: u32, errs: []const []const u8 },
@@ -34,16 +72,20 @@ pub const Type = struct {
         struct_: void,
         enum_: void,
         error_: void,
-        void: void,
-        boolean: void,
-        char: void,
-        int: void,
-        float: void,
-        string: void,
-        undefined: void,
-        null: void,
         type: void,
         unknown: void,
     },
 };
-pub const ScopeStack = std.ArrayList(Scope);
+pub const ScopeStack = struct {
+    scopes: std.ArrayList(Scope),
+    pub const empty = ScopeStack{ .scopes = .empty };
+    pub fn push(s: *ScopeStack, alloc: std.mem.Allocator, val: Scope) void {
+        s.scopes.append(alloc, val) catch {};
+    }
+    pub fn pop(s: *ScopeStack) ?Scope {
+        return s.scopes.pop();
+    }
+    pub fn current(s: *ScopeStack) ?Scope {
+        return if (s.scopes.items.len == 0) null else s.scopes.items[s.scopes.items.len - 1];
+    }
+};

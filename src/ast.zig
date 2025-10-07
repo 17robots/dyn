@@ -98,6 +98,7 @@ pub const NodeType = union(enum) {
     try_: struct { expression: *Node },
     type: void,
     unary: struct { op: *Node, b: *Node },
+    undefined: void,
     underscore: void,
     use: struct { path: *Node },
     void: void,

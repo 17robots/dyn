@@ -563,6 +563,10 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             try s.expect(.type);
             break :blk node(NodeType.type, span_start.fromSpan(s.curr_tok.loc.span));
         },
+        .undefined => blk: {
+            try s.expect(.undefined);
+            break :blk node(NodeType.undefined, span_start.fromSpan(s.curr_tok.loc.span));
+        },
         .void => blk: {
             try s.expect(.void);
             break :blk node(NodeType.void, span_start.fromSpan(s.curr_tok.loc.span));
