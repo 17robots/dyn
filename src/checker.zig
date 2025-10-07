@@ -17,5 +17,9 @@ pub fn check(s: *Checker) !void {
     try s.load_globals();
 }
 
-fn load_globals(s: *Checker) !void {}
-fn check_decl(s: *Checker, d: *DiagnosticEmitter) !void {}
+fn load_globals(s: *Checker) !void {
+    _ = s;
+}
+fn check_decl(s: *Checker) !void {
+    _ = s;
+}
