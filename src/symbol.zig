@@ -10,8 +10,9 @@ pub const SymbolKind = enum {
     enum_member,
     error_member,
     label,
+    unknown,
     pub fn from_node(n: ast.Node) SymbolKind {
-        return switch(n) {};
+        return switch (n) {};
     }
 };
 pub const Mutability = enum { immutable, mutable };
@@ -21,6 +22,7 @@ pub const Symbol = struct {
     span: Span,
     mutability: Mutability = .immutable,
     type_id: ?u32 = null,
+    public: bool = false,
 };
 pub const Scope = struct {
     type: union(enum) {
@@ -87,5 +89,14 @@ pub const ScopeStack = struct {
     }
     pub fn current(s: *ScopeStack) ?Scope {
         return if (s.scopes.items.len == 0) null else s.scopes.items[s.scopes.items.len - 1];
+    }
+    pub fn pub_symbols(s: *ScopeStack, allocator: std.mem.Allocator) []*Symbol {
+        var symbols: std.ArrayList(*Symbol) = .empty;
+        for (s.scopes.items) |scopes| {
+            for (scopes.symbols.items) |*symbol| {
+                if (symbol.public) symbols.append(allocator, symbol);
+            }
+        }
+        return symbols.toOwnedSlice(allocator);
     }
 };
