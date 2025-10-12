@@ -32,6 +32,7 @@ pub const Scope = struct {
     },
     symbols: std.ArrayList(Symbol),
     types: std.ArrayList(Type),
+    parent_scope: ?u32,
 };
 pub const TypeTag = enum {
     void,
@@ -88,7 +89,7 @@ pub const ScopeStack = struct {
         return s.scopes.pop();
     }
     pub fn current(s: *ScopeStack) ?Scope {
-        return if (s.scopes.items.len == 0) null else s.scopes.items[s.scopes.items.len - 1];
+        return if (s.scopes.items.len == 0 or s.current_scope > s.scopes.items.len) null else s.scopes.items[s.current_scope];
     }
     pub fn pub_symbols(s: *ScopeStack, allocator: std.mem.Allocator) []*Symbol {
         var symbols: std.ArrayList(*Symbol) = .empty;

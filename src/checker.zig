@@ -4,6 +4,7 @@ const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const Symbol = @import("symbol.zig").Symbol;
 const SymbolKind = @import("symbol.zig").SymbolKind;
 const Scope = @import("symbol.zig").Scope;
+const Type = @import("symbol.zig").Type;
 const Node = @import("ast.zig").Node;
 
 m: *Module,
@@ -14,8 +15,9 @@ pub fn init(m: *Module, d: *DiagnosticEmitter) Checker {
     return .{ .m = m, .d = d };
 }
 pub fn check(s: *Checker) !void {
-    s.m.scopes.push(s.m.allocator, Scope{ .type = .global, .symbols = .empty, .types = .empty });
+    s.m.scopes.push(s.m.allocator, Scope{ .type = .global, .symbols = .empty, .types = .empty, .parent_scope = null });
     try s.load_globals();
+    for (s.m.asts.items) |a| try s.check_node(a);
 }
 fn load_globals(s: *Checker) !void {
     // load them initially
@@ -31,7 +33,6 @@ fn load_globals(s: *Checker) !void {
     }
 }
 fn check_node(s: *Checker, node: Node) !void {
-    _ = s;
     switch (node.type) {
         .arm => |a| {},
         .array_index => |a| {},
@@ -72,7 +73,7 @@ fn check_node(s: *Checker, node: Node) !void {
         .optional_type => |o| {},
         .pointer_dereference => |p| {},
         .pointer_type => |p| {},
-        .program => |p| {},
+        .program => |p| for (p.declarations.items) |d| s.check_node(d),
         .range_expression => |r| {},
         .return_expression => |r| {},
         .struct_ => |st| {},
@@ -84,4 +85,22 @@ fn check_node(s: *Checker, node: Node) !void {
         .while_statement => |w| {},
         else => {},
     }
+}
+fn type_from_node(s: Checker, node: Node) ?Type {
+    _ = s;
+    return switch (node.type) {
+        else => null,
+    };
+}
+fn get_symbol(s: Checker, name: []const u8) ?Symbol {
+    for (s.m.scopes.scopes.items) |i| {
+        for (i.symbols.items) |j| {
+            if (std.mem.eql(u8, j.name, name)) return j;
+        }
+    }
+    return null;
+}
+fn type_from_symbol(s: Checker, name: []const u8) ?Symbol {
+    return if (s.get_symbol(name)) |symbol| blk: {
+    } else null;
 }
