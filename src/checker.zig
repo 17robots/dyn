@@ -6,13 +6,16 @@ const SymbolKind = @import("symbol.zig").SymbolKind;
 const Scope = @import("symbol.zig").Scope;
 const Type = @import("symbol.zig").Type;
 const Node = @import("ast.zig").Node;
+const SourceLocation = @import("source.zig").SourceLocation;
+const SourceManager = @import("source.zig").SourceManager;
 
 m: *Module,
 d: *DiagnosticEmitter,
+sm: *SourceManager,
 const Checker = @This();
 
-pub fn init(m: *Module, d: *DiagnosticEmitter) Checker {
-    return .{ .m = m, .d = d };
+pub fn init(m: *Module, d: *DiagnosticEmitter, sm: *SourceManager) Checker {
+    return .{ .m = m, .d = d, .sm = sm };
 }
 pub fn check(s: *Checker) !void {
     s.m.scopes.push(s.m.allocator, Scope{ .type = .global, .symbols = .empty, .types = .empty, .parent_scope = null });
@@ -21,14 +24,25 @@ pub fn check(s: *Checker) !void {
 }
 fn load_globals(s: *Checker) !void {
     // load them initially
-    for (s.m.asts.items) |a| {
+    for (s.m.asts.items, 0..s.m.asts.items.len) |a, i| {
         for (a.type.program.declarations.items) |d| {
+            if (d.type == .module) continue;
             s.m.scopes.current().?.symbols.append(s.m.allocator, Symbol{
                 .name = d.type.declaration.name.type.identifier,
                 .kind = if (d.type.declaration.type) |t| SymbolKind.from_node(t) else if (d.type.declaration.val) |v| SymbolKind.from_node(v) else .unknown,
                 .type_id = null,
-                .span = a.span,
+                .location = SourceLocation.init(s.m.file_ids[i], d.span),
             });
+        }
+    }
+    for (s.m.scopes.scopes.items[0].symbols.items) |i| {
+        for (s.m.scopes.scopes.items[0].symbols.items) |j| {
+            if (!i.location.eql(j.location)) {
+                if (std.mem.eql(u8, i.name, j.name)) {
+                    const j_location = s.sm.resolve_location(j.location);
+                    s.d.emit(i.location.file_id, i.location.span, .err, "Duplicate identifier {s}, see {}:{}:{}", .{ i.name, j_location.file_name, j_location.line, j_location.col });
+                }
+            }
         }
     }
 }
@@ -47,7 +61,12 @@ fn check_node(s: *Checker, node: Node) !void {
         .catch_ => |c| {},
         .comp_expression => |c| {},
         .continue_expression => |c| {},
-        .declaration => |d| {},
+        .declaration => |d| {
+            // check that the name isnt included
+            // check that the variable has a type, a value, or both
+            // if both ensure that the type and the value are equal
+            // if declaration not mut, enforce value
+        },
         .defer_statement => |d| {},
         .enum_ => |e| {},
         .enum_error_init => |e| {},
@@ -101,6 +120,5 @@ fn get_symbol(s: Checker, name: []const u8) ?Symbol {
     return null;
 }
 fn type_from_symbol(s: Checker, name: []const u8) ?Symbol {
-    return if (s.get_symbol(name)) |symbol| blk: {
-    } else null;
+    return if (s.get_symbol(name)) |symbol| blk: {} else null;
 }

@@ -12,6 +12,12 @@ pub const Source = struct {
 pub const SourceLocation = struct {
     file_id: FileId,
     span: Span,
+    pub fn init(file_id: FileId, span: Span) SourceLocation {
+        return .{ .file_id = file_id, .span = span };
+    }
+    pub fn eql(s: *SourceLocation, a: *SourceLocation) bool {
+        return s.file_id == a.file_id and s.span.start == a.span.start and s.span.end == s.span.end;
+    }
 };
 
 pub const SourceManager = struct {
@@ -23,14 +29,14 @@ pub const SourceManager = struct {
     }
     pub fn deinit(s: *SourceManager) void {
         s.lookup.deinit();
-        for(s.sources.items) |source| {
+        for (s.sources.items) |source| {
             s.allocator.free(source.name);
             s.allocator.free(source.content);
         }
         s.sources.deinit();
     }
     pub fn load_file(s: *SourceManager, path: []const u8) !FileId {
-        if(s.lookup.get(path)) |fileid| return fileid;
+        if (s.lookup.get(path)) |fileid| return fileid;
         const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
         defer file.close();
         const content = try file.readToEndAlloc(s.allocator, (try file.stat()).size);

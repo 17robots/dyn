@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const Span = @import("token.zig").Span;
+const SourceLocation = @import("source.zig").SourceLocation;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 
 pub const SymbolKind = enum {
@@ -19,10 +20,10 @@ pub const Mutability = enum { immutable, mutable };
 pub const Symbol = struct {
     name: []const u8,
     kind: SymbolKind,
-    span: Span,
     mutability: Mutability = .immutable,
     type_id: ?u32 = null,
     public: bool = false,
+    location: SourceLocation,
 };
 pub const Scope = struct {
     type: union(enum) {
