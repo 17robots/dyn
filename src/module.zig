@@ -57,41 +57,7 @@ pub const Module = struct {
         }
         wait.wait();
     }
-    pub fn check(s: *Module, sources: *SourceManager, d: *DiagnosticEmitter) !void {
-        try s.parse(sources, d);
-        if (d.err_count > 0) {
-            d.print_all(sources);
-            return;
-        }
-        s.scopes.push(s.allocator, symbol.Scope{ .type = .global, .symbols = .empty, .types = .empty });
-        for (0..s.asts.items.len) |i| {
-            if (s.scopes.current()) |*scope| {
-                blk: switch (s.asts.items[i].type) {
-                    .module => {},
-                    .declaration => |decl| {
-                        if (!decl.mut) {
-                            if (decl.val) |v| {
-                                if (v.type == .undefined) {
-                                    d.emit(i, decl.name.span, .err, "Immutable declaration set to undefined, did you mean to make it mutable?", .{});
-                                    break :blk;
-                                }
-                            } else {
-                                d.emit(i, decl.name.span, .err, "Immutable declaration must have a value specified", .{});
-                                break :blk;
-                            }
-                        }
-                        scope.symbols.append(s.allocator, symbol.Symbol{
-                            .mutability = if (decl.mut) .mutable else .immutable,
-                            .name = decl.name.type.identifier,
-                            .span = if (decl.type) |t| decl.name.span.fromSpan(t) else if (decl.type) |t| decl.name.span.fromSpan(t) else decl.name.span,
-                            .kind = if(decl.type) |t| switch(t) {} else switch(decl.val) {} orelse .@"var",
-                        }) catch {};
-                    },
-                    else => unreachable, // error out because we shouldnt have anything else
-                }
-            }
-        }
-    }
+    // pub fn check(s: *Module, sources: *SourceManager, d: *DiagnosticEmitter) !void {}
     // pub fn compile(s: *Module) void {}
 };
 
