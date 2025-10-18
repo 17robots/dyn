@@ -31,10 +31,10 @@ pub const DiagnosticEmitter = struct {
         for (s.diagnostics.items) |d| s.allocator.free(d.message);
         s.diagnostics.deinit();
     }
-    pub fn emit(s: *DiagnosticEmitter, file_id: u32, span: Span, severity: Severity, comptime fmt: []const u8, args: anytype) void {
+    pub fn emit(s: *DiagnosticEmitter, location: SourceLocation, severity: Severity, comptime fmt: []const u8, args: anytype) void {
         if (severity == .err) s.err_count += 1;
         const msg = std.fmt.allocPrint(s.allocator, fmt, args) catch "out of memory";
-        s.diagnostics.append(s.allocator, .{ .severity = severity, .location = SourceLocation{ .file_id = file_id, .span = span }, .message = msg }) catch @panic("out of memory");
+        s.diagnostics.append(s.allocator, .{ .severity = severity, .location = location, .message = msg }) catch @panic("out of memory");
     }
     pub fn has_errors(s: DiagnosticEmitter) bool {
         return s.err_count > 0;

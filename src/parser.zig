@@ -88,7 +88,7 @@ fn assign_expression(s: *Parser, n: Node) ParserError!Node {
         .xoreq => node(NodeType.xoreq, s.curr_tok.loc.span),
         .eq => node(NodeType.eq, s.curr_tok.loc.span),
         else => {
-            s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Invalid assign operator {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid assign operator {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -177,7 +177,7 @@ fn declaration(s: *Parser, global_decl: bool) ParserError!Node {
             break :blk s.create_node_ptr(try s.non_literal_expression());
         },
         else => {
-            s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+            s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -283,7 +283,7 @@ fn function(s: *Parser) ParserError!Node {
         } else {
             types.append(s.allocator, try s.non_literal_expression()) catch |e| @panic(@errorName(e));
             if (s.curr_tok.tok_type == .colon) {
-                s.diag.emit(s.source.id, span_start2, .err, "", .{});
+                s.diag.emit(.{ .file_id = s.source.id, .span = span_start2 }.err, "", .{});
                 return ParserError.recoverable;
             }
         }
@@ -313,31 +313,31 @@ fn function(s: *Parser) ParserError!Node {
     if (fn_decl) {
         if (body) |b| {
             if (types.items.len > 0) {
-                s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Identifiers missing type in function declaration", .{});
+                s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Identifiers missing type in function declaration", .{});
                 return ParserError.recoverable;
             }
             return node(NodeType{ .function = .{ .inline_ = inline_, .parameters = fn_parameters, .result = s.create_node_ptr(return_expr), .body = b } }, span_start.fromSpan(s.curr_tok.loc.span));
         }
         if (fn_parameters.items.len > 0) {
-            s.diag.emit(s.source.id, span_start, .err, "Function declaration requires a body", .{});
+            s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Function declaration requires a body", .{});
             return ParserError.recoverable;
         }
         if (inline_) {
-            s.diag.emit(s.source.id, span_start, .err, "Inline cannot be applied to function types", .{});
+            s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Inline cannot be applied to function types", .{});
             return ParserError.recoverable;
         }
         return node(NodeType{ .function_type = .{ .parameters = types, .result = s.create_node_ptr(return_expr) } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
     if (body) |b| {
-        s.diag.emit(s.source.id, b.span, .err, "Function types should not have a body", .{});
+        s.diag.emit(.{ .file_id = s.source.id, .span = b.span }, .err, "Function types should not have a body", .{});
         return ParserError.recoverable;
     }
     if (fn_parameters.items.len > 0) {
-        s.diag.emit(s.source.id, span_start, .err, "Function declaration has types without corresponding identifiers", .{});
+        s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Function declaration has types without corresponding identifiers", .{});
         return ParserError.recoverable;
     }
     if (inline_) {
-        s.diag.emit(s.source.id, span_start, .err, "Inline cannot be applied to function types", .{});
+        s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Inline cannot be applied to function types", .{});
         return ParserError.recoverable;
     }
     return node(NodeType{ .function_type = .{ .parameters = types, .result = s.create_node_ptr(return_expr) } }, span_start.fromSpan(s.curr_tok.loc.span));
@@ -369,7 +369,7 @@ fn literal(s: *Parser) ParserError!Node {
         .undefined => LiteralKind.undefined,
         .null => LiteralKind.null,
         else => {
-            s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Invalid literal {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid literal {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -572,7 +572,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             break :blk node(NodeType.void, span_start.fromSpan(s.curr_tok.loc.span));
         },
         else => {
-            s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Invalid non literal expression {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid non literal expression {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -584,7 +584,7 @@ fn non_literal_expression(s: *Parser) ParserError!Node {
             if (i.label) |_| {
                 if (s.curr_tok.tok_type == .bang) expr = try s.error_union_type(expr);
             } else {
-                s.diag.emit(s.source.id, span_start, .err, "Blocks must have labels to be used as expression", .{});
+                s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Blocks must have labels to be used as expression", .{});
                 return ParserError.recoverable;
             }
         },
@@ -617,7 +617,7 @@ fn operator(s: *Parser) ParserError!Node {
         .sub => node(NodeType.sub, s.curr_tok.loc.span),
         .xor => node(NodeType.xor, s.curr_tok.loc.span),
         else => {
-            s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Unexpected assign op {any}", .{s.curr_tok.tok_type});
+            s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Unexpected assign op {any}", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -755,13 +755,13 @@ fn member(s: *Parser, is_struct: bool) ParserError!Node {
         },
         .rbrace => blk: {
             if (is_struct) {
-                s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+                s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
                 return ParserError.recoverable;
             }
             break :blk null;
         },
         else => {
-            s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+            s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
             return ParserError.recoverable;
         },
     };
@@ -798,7 +798,7 @@ fn use_expression(s: *Parser) ParserError!Node {
     const span_start = s.curr_tok.loc.span;
     try s.expect(.use);
     if (s.curr_tok.tok_type != .string) {
-        s.diag.emit(s.source.id, span_start, .err, "String literal expected for use paths", .{});
+        s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "String literal expected for use paths", .{});
         return ParserError.recoverable;
     }
     return node(NodeType{ .use = .{ .path = s.create_node_ptr(try s.literal()) } }, span_start.fromSpan(s.curr_tok.loc.span));
@@ -858,7 +858,7 @@ fn create_node_ptr(s: *Parser, n: Node) *Node {
 fn expect(s: *Parser, expected: TokenType) ParserError!void {
     if (s.curr_tok.tok_type == .invalid) return ParserError.fatal;
     if (s.curr_tok.tok_type != expected) {
-        s.diag.emit(s.source.id, s.curr_tok.loc.span, .err, "Unexpected token {any}, expected {any}", .{ s.curr_tok.tok_type, expected });
+        s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Unexpected token {any}, expected {any}", .{ s.curr_tok.tok_type, expected });
         return ParserError.recoverable;
     }
     s.advance();

@@ -141,13 +141,13 @@ fn read_string(s: *Lexer) Token {
         if (c == '\"') {
             const end = s.idx;
             s.advance(1);
-            return s.tok(.string, s.source.content[start+1..end], start, end);
+            return s.tok(.string, s.source.content[start + 1 .. end], start, end);
         }
         if (c == '\\') {
             if (s.idx + 1 < s.source.content.len) s.idx += 1;
         }
     }
-    s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed string literal", .{});
+    s.diag.emit(.{ .file_id = s.source.id, .span = Span.from(start, s.idx) }, .err, "Unclosed string literal", .{});
     s.errored = true;
     return s.tok(.invalid, null, start, s.idx);
 }
@@ -155,14 +155,14 @@ fn read_char(s: *Lexer) Token {
     const start = s.idx;
     s.advance(1);
     if (s.idx >= s.source.content.len) {
-        s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed characer literal", .{});
+        s.diag.emit(.{ .file_id = s.source.id, .span = Span.from(start, s.idx) }, .err, "Unclosed characer literal", .{});
         s.errored = true;
         return s.tok(.invalid, null, start, s.idx);
     }
     if (s.source.content[s.idx] == '\\') {
         s.advance(1);
         if (s.idx >= s.source.content.len) {
-            s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed characer literal", .{});
+            s.diag.emit(.{ .file_id = s.source.id, .span = Span.from(start, s.idx) }, .err, "Unclosed characer literal", .{});
             s.errored = true;
             return s.tok(.invalid, null, start, s.idx);
         }
@@ -170,7 +170,7 @@ fn read_char(s: *Lexer) Token {
         switch (esc) {
             '\'', '\"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => {},
             else => {
-                s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Invalid character escape {c}", .{esc});
+                s.diag.emit(.{ .file_id = s.source.id, .span = Span.from(start, s.idx) }, .err, "Invalid character escape {c}", .{esc});
                 s.errored = true;
                 return s.tok(.invalid, null, start, s.idx);
             },
@@ -178,7 +178,7 @@ fn read_char(s: *Lexer) Token {
         s.advance(1);
     } else s.advance(1);
     if (s.idx >= s.source.content.len or s.source.content[s.idx] != '\'') {
-        s.diag.emit(s.source.id, Span.from(start, s.idx), .err, "Unclosed characer literal", .{});
+        s.diag.emit(.{.file_id = s.source.id, .span = Span.from(start, s.idx)}, .err, "Unclosed characer literal", .{});
         s.errored = true;
         return s.tok(.invalid, null, start, s.idx);
     }
@@ -197,7 +197,7 @@ fn skip_block_comment(s: *Lexer) void {
         }
         s.advance(1);
     }
-    s.diag.emit(s.source.id, Span.from(s.idx, s.idx), .err, "Unclosed comment", .{});
+    s.diag.emit(.{.file_id = s.source.id, .span = Span.from(s.idx, s.idx)}, .err, "Unclosed comment", .{});
     s.errored = true;
     return;
 }
