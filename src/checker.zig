@@ -4,6 +4,7 @@ const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const Node = @import("ast.zig").Node;
 const SourceManager = @import("source.zig").SourceManager;
 const SourceLocation = @import("source.zig").SourceLocation;
+const Span = @import("token.zig").Span;
 
 m: *Module,
 d: *DiagnosticEmitter,
@@ -47,12 +48,87 @@ fn add_file_globals(s: *Checker, file_id: u32, ast: Node, scope: *ScopedSymbolTa
         else => unreachable,
     }
 }
-fn check_ast(s: *Checker, file_id: u32, ast: Node) void {
-    _ = s;
-    _ = file_id;
-    _ = ast;
+
+fn check_ast(s: *Checker, file_id: u32, ast: Node, ctx: Context) void {
+    switch (ast.type) {
+        .arm => |i| {},
+        .array_index => |i| {},
+        .array_init => |i| {},
+        .arrow_expression => |i| {},
+        .assign_expression => |i| {},
+        .binary_expression => |i| {},
+        .block => |i| {},
+        .break_expression => |i| {},
+        .call => |i| {},
+        .capture => |i| {},
+        .capture_val => |i| {},
+        .catch_ => |i| {},
+        .comp_expression => |i| {},
+        .continue_expression => |i| {},
+        .declaration => |i| {
+            var add_scope = false;
+            if (i.val) |v| {
+                if (i.type) |t| {
+                    // compare type of val and type of type
+                }
+                add_scope = switch (v.type) {
+                    .function, .struct_, .struct_init, .enum_, .error_, .match => true,
+                    else => false,
+                };
+            } else {
+                if (i.mut) {
+                    if (i.type == null) s.d.emit(SourceLocation.init(file_id, ast.span), .err, "Mutable declaration {s} must have a type, value, or both", .{i.name.type.identifier});
+                } else s.d.emit(SourceLocation.init(file_id, ast.span), .err, "Immutable declaration {s} must have a value", .{i.name.type.identifier});
+            }
+            if (!ctx.is_global) {
+                if (ctx.scope.lookup_symbol(i.name.type.identifier)) s.d.emit(SourceLocation.init(file_id, ast.span), .err, "Symbol {s} already declared", .{i.name.type.identifier});
+                if (i.pub_) s.d.emit(SourceLocation.init(file_id, ast.span), .err, "Declaration {s} inside scope cannot be public", .{i.name.type.identifier});
+                ctx.scope.push_symbol(SymbolEntry{ .name = i.name.type.identifier, .val = i.val, .type = i.type, .public = i.pub_, .location = SourceLocation.init(file_id, ast.span) });
+            }
+            if(i.type) |t| s.check_ast(file_id, t, ctx);
+            if (add_scope) {
+                var new_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
+                s.check_ast(file_id, i.val.?.*, .{ .scope = &new_scope, .type = i.type });
+            } else s.check_ast(file_id, i.val.?.*, ctx);
+        },
+        .defer_statement => |i| {},
+        .enum_ => |i| {},
+        .enum_error_init => |i| {},
+        .for_statement => |i| {},
+        .function => |i| {
+            // todo: this next please and thank you
+        },
+        .function_parameter => |i| {},
+        .function_type => |i| {},
+        .grouped => |i| {},
+        .identifier => |i| {},
+        .if_expression => |i| {},
+        .if_prefix => |i| {},
+        .literal => |i| {},
+        .match => |i| {},
+        .member => |i| {},
+        .member_access => |i| {},
+        .member_basic => |i| {},
+        .nullish_expression => |i| {},
+        .optional_dereference => |i| {},
+        .optional_type => |i| {},
+        .pointer_dereference => |i| {},
+        .pointer_type => |i| {},
+        .program => |i| for (i.declarations.items) |d| s.check_ast(file_id, d, .{ .is_global = true, .scope = ctx.scope }),
+        .range_expression => |i| {},
+        .return_expression => |i| {},
+        .struct_ => |i| {},
+        .struct_init => |i| {},
+        .struct_init_member => |i| {},
+        .try_ => |i| {},
+        .unary => |i| {},
+        .use => |i| {},
+        .while_statement => |i| {},
+        else => {},
+    }
 }
 
+const Context = struct { type: ?TypeInfo = null, is_global: bool = false, scope: *ScopedSymbolTable };
 const ScopedSymbolTable = struct {
     allocator: std.mem.Allocator,
     d: *DiagnosticEmitter,
@@ -70,6 +146,16 @@ const ScopedSymbolTable = struct {
             .parent = opts.parent,
         };
     }
+    pub fn init_from_scope(opts: struct { parent: *ScopedSymbolTable, name: []const u8 }) ScopedSymbolTable {
+        return .{
+            .allocator = opts.parent.allocator,
+            .symbols = std.StringHashMap(SymbolEntry).init(opts.parent.allocator),
+            .scope_name = opts.name,
+            .scope_level = opts.parent.scope_level + 1,
+            .d = opts.parent.d,
+            .parent = opts.parent,
+        };
+    }
     pub fn push_symbol(s: *ScopedSymbolTable, sym: SymbolEntry) void {
         if (s.symbols.contains(sym.name)) {
             s.d.emit(sym.location, .err, "{s} already declared", .{sym.name});
@@ -84,7 +170,7 @@ const ScopedSymbolTable = struct {
 };
 const SymbolEntry = struct {
     name: []const u8,
-    kind: enum { variable, function, @"struct", @"enum", type },
+    // kind: enum { variable, function, @"struct", @"enum", type },
     symbol_type: ?TypeInfo,
     type: ?*Node,
     val: ?*Node,
@@ -101,4 +187,12 @@ const Type = enum {
     pointer,
     type,
 };
-const TypeInfo = union(Type) { void: null, int: struct { signed: bool, length: u16 }, float: struct { signed: bool, length: u16 }, undefined: void, nullable: struct { subtype: *TypeInfo }, pointer: struct { subtype: *TypeInfo }, type: void };
+const TypeInfo = union(Type) {
+    void: null,
+    int: struct { signed: bool, length: u16 },
+    float: struct { signed: bool, length: u16 },
+    undefined: void,
+    nullable: struct { subtype: *TypeInfo },
+    pointer: struct { subtype: *TypeInfo },
+    type: void,
+};
