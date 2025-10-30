@@ -10,6 +10,7 @@ m: *Module,
 d: *DiagnosticEmitter,
 sm: *SourceManager,
 global: *ScopedSymbolTable,
+dependency_graph: void,
 
 const Checker = @This();
 
@@ -57,7 +58,9 @@ fn check_ast(s: *Checker, file_id: u32, ast: Node, ctx: Context) void {
         .arrow_expression => |i| {},
         .assign_expression => |i| {},
         .binary_expression => |i| {},
-        .block => |i| {},
+        .block => |i| {
+            var block_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
+        },
         .break_expression => |i| {},
         .call => |i| {},
         .capture => |i| {},
@@ -66,15 +69,11 @@ fn check_ast(s: *Checker, file_id: u32, ast: Node, ctx: Context) void {
         .comp_expression => |i| {},
         .continue_expression => |i| {},
         .declaration => |i| {
-            var add_scope = false;
+            // verify that type and value match
             if (i.val) |v| {
                 if (i.type) |t| {
                     // compare type of val and type of type
                 }
-                add_scope = switch (v.type) {
-                    .function, .struct_, .struct_init, .enum_, .error_, .match => true,
-                    else => false,
-                };
             } else {
                 if (i.mut) {
                     if (i.type == null) s.d.emit(SourceLocation.init(file_id, ast.span), .err, "Mutable declaration {s} must have a type, value, or both", .{i.name.type.identifier});
@@ -85,18 +84,21 @@ fn check_ast(s: *Checker, file_id: u32, ast: Node, ctx: Context) void {
                 if (i.pub_) s.d.emit(SourceLocation.init(file_id, ast.span), .err, "Declaration {s} inside scope cannot be public", .{i.name.type.identifier});
                 ctx.scope.push_symbol(SymbolEntry{ .name = i.name.type.identifier, .val = i.val, .type = i.type, .public = i.pub_, .location = SourceLocation.init(file_id, ast.span) });
             }
-            if(i.type) |t| s.check_ast(file_id, t, ctx);
-            if (add_scope) {
-                var new_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
-                s.check_ast(file_id, i.val.?.*, .{ .scope = &new_scope, .type = i.type });
-            } else s.check_ast(file_id, i.val.?.*, ctx);
+            if (i.type) |t| s.check_ast(file_id, t.*, ctx);
+            if (i.val) |v| s.check_ast(file_id, v.*, ctx);
         },
         .defer_statement => |i| {},
-        .enum_ => |i| {},
+        .enum_ => |i| {
+            var enum_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
+        },
         .enum_error_init => |i| {},
+        .error_ => |i| {
+            var error_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
+        },
         .for_statement => |i| {},
         .function => |i| {
-            // todo: this next please and thank you
+            // so this is interesting because we need to load the symbols in from the definition, then we need to check all the statements and the return type, passing the return type as the type in the context
+            var fn_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
         },
         .function_parameter => |i| {},
         .function_type => |i| {},
@@ -105,7 +107,9 @@ fn check_ast(s: *Checker, file_id: u32, ast: Node, ctx: Context) void {
         .if_expression => |i| {},
         .if_prefix => |i| {},
         .literal => |i| {},
-        .match => |i| {},
+        .match => |i| {
+            var match_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
+        },
         .member => |i| {},
         .member_access => |i| {},
         .member_basic => |i| {},
@@ -117,8 +121,12 @@ fn check_ast(s: *Checker, file_id: u32, ast: Node, ctx: Context) void {
         .program => |i| for (i.declarations.items) |d| s.check_ast(file_id, d, .{ .is_global = true, .scope = ctx.scope }),
         .range_expression => |i| {},
         .return_expression => |i| {},
-        .struct_ => |i| {},
-        .struct_init => |i| {},
+        .struct_ => |i| {
+            var struct_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
+        },
+        .struct_init => |i| {
+            var struct_init_scope = ScopedSymbolTable.init_from_scope(.{ .name = i.name.type.identifier, .parent = ctx.scope });
+        },
         .struct_init_member => |i| {},
         .try_ => |i| {},
         .unary => |i| {},
@@ -177,6 +185,11 @@ const SymbolEntry = struct {
     mut: bool = false,
     public: bool = false,
     location: SourceLocation,
+};
+const DependencyGraph = struct {
+    scope: *ScopedSymbolTable,
+    name: []const u8,
+    dependencies: []*SymbolEntry
 };
 const Type = enum {
     void,
