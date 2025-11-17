@@ -1,8 +1,8 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const SourceManager = @import("source.zig").SourceManager;
-const Source = @import("source.zig").Source;
-const FileId = @import("source.zig").FileId;
+const SourceManager = @import("file.zig").SourceManager;
+const Source = @import("file.zig").Source;
+const FileId = @import("file.zig").FileId;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const Lexer = @import("lexer.zig");
 const Parser = @import("parser.zig");
@@ -57,7 +57,11 @@ pub const Module = struct {
         }
         wait.wait();
     }
-    // pub fn check(s: *Module, sources: *SourceManager, d: *DiagnosticEmitter) !void {}
+    pub fn check(s: *Module, sources: *SourceManager, d: *DiagnosticEmitter) !void {
+        _ = s;
+        _ = sources;
+        _ = d;
+    }
     // pub fn compile(s: *Module) void {}
 };
 

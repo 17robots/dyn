@@ -1,5 +1,5 @@
-const FileId = @import("source.zig").FileId;
-const SourceLocation = @import("source.zig").SourceLocation;
+const FileId = @import("file.zig").FileId;
+const SourceLocation = @import("file.zig").SourceLocation;
 pub const Token = struct {
     tok_type: TokenType,
     loc: SourceLocation,

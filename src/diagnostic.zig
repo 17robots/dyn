@@ -1,7 +1,7 @@
 const std = @import("std");
 const Span = @import("token.zig").Span;
-const SourceManager = @import("source.zig").SourceManager;
-const SourceLocation = @import("source.zig").SourceLocation;
+const SourceManager = @import("file.zig").SourceManager;
+const SourceLocation = @import("file.zig").SourceLocation;
 
 pub const Severity = enum {
     err,

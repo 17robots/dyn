@@ -2,8 +2,8 @@ const std = @import("std");
 const Module = @import("module.zig").Module;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 const Node = @import("ast.zig").Node;
-const SourceManager = @import("source.zig").SourceManager;
-const SourceLocation = @import("source.zig").SourceLocation;
+const SourceManager = @import("file.zig").SourceManager;
+const SourceLocation = @import("file.zig").SourceLocation;
 const Span = @import("token.zig").Span;
 
 m: *Module,

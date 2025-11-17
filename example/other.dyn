@@ -35,7 +35,7 @@ QuickSort := (T: comp type, s: []T) void {
   QuickSort(s[p+1..s.len]);
 };
 Swap := (T: comp type, a: *T, b: *T) void {
-  c := a;
+  c := a.*;
   a.* = b.*;
   b.* = c;
 };

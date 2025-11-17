@@ -4,8 +4,8 @@ const Diagnostic = @import("diagnostic.zig").Diagnostic;
 const Lexer = @import("lexer.zig");
 const NodeType = @import("ast.zig").NodeType;
 const Node = @import("ast.zig").Node;
-const Source = @import("source.zig").Source;
-const SourceLocation = @import("source.zig").SourceLocation;
+const Source = @import("file.zig").Source;
+const SourceLocation = @import("file.zig").SourceLocation;
 const TokenType = @import("token.zig").TokenType;
 const Token = @import("token.zig").Token;
 const Span = @import("token.zig").Span;
@@ -283,7 +283,7 @@ fn function(s: *Parser) ParserError!Node {
         } else {
             types.append(s.allocator, try s.non_literal_expression()) catch |e| @panic(@errorName(e));
             if (s.curr_tok.tok_type == .colon) {
-                s.diag.emit(.{ .file_id = s.source.id, .span = span_start2 }.err, "", .{});
+                s.diag.emit(.{ .file_id = s.source.id, .span = span_start2 }, .err, "", .{});
                 return ParserError.recoverable;
             }
         }

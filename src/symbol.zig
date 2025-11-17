@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const Span = @import("token.zig").Span;
-const SourceLocation = @import("source.zig").SourceLocation;
+const SourceLocation = @import("file.zig").SourceLocation;
 const DiagnosticEmitter = @import("diagnostic.zig").DiagnosticEmitter;
 
 pub const SymbolKind = enum {
