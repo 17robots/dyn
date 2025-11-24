@@ -154,7 +154,6 @@ const Lexer = struct {
                 if (std.mem.eql(u8, word, "error")) break :blk TokenType.@"error";
                 if (std.mem.eql(u8, word, "false")) break :blk TokenType.false;
                 if (std.mem.eql(u8, word, "match")) break :blk TokenType.match;
-                if (std.mem.eql(u8, word, "while")) break :blk TokenType.@"while";
                 break :blk null;
             },
             6 => blk: {
@@ -1333,14 +1332,6 @@ const Parser = struct {
                 try s.expect(.@"return");
                 break :blk node(NodeType{ .return_expression = .{ .val = if (s.curr_tok.tok_type == .semicolon or s.curr_tok.tok_type == .comma) null else s.create_node_ptr(try s.expression(0)) } }, span_start.fromSpan(s.curr_tok.loc.span));
             },
-            .@"while" => blk: {
-                const span_start = s.curr_tok.loc.span;
-                try s.expect(.@"while");
-                const expr = s.create_node_ptr(try s.expression(0));
-                try s.expect(.colon);
-                const cap = if (s.curr_tok.tok_type == .@"or") s.create_node_ptr(try s.capture()) else null;
-                break :blk node(NodeType{ .while_statement = .{ .capture = cap, .expression = expr, .body = s.create_node_ptr(try s.result_block()) } }, span_start.fromSpan(s.curr_tok.loc.span));
-            },
             else => try s.expression(0),
         };
     }
@@ -1735,7 +1726,6 @@ const TokenType = enum {
     @"else",
     match,
     @"defer",
-    @"while",
     @"for",
     @"enum",
     @"error",

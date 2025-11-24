@@ -39,3 +39,10 @@ Swap := (T: comp type, a: *T, b: *T) void {
   a.* = b.*;
   b.* = c;
 };
+
+something := () void {
+  some_fn : ?()!void = ()!void {
+    try heap.alloc(i32);
+  };
+  try some_fn.?();
+};

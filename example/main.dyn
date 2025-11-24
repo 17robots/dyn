@@ -62,14 +62,14 @@ main := () void! {
 	for some_other_array, 0..some_other_array.len: |mut i, mut j| io.print("Arr ind: {}, arr val: {}", j, i);
 
 	mut while_val: i32 = 0;
-	while while_val < 10: while_val += 1;
+	for while_val < 10: while_val += 1;
 	while_val = 0;
-	while while_val < 10: {
+	for while_val < 10: {
 		io.print("While val: {}", while_val);
 		while_val += 1;
 	}
 	mut another_while_val: ?i32 = while_val;
-	while another_while_val: |mut i| {
+	for another_while_val: |mut i| {
 		io.print("While val: {}", i);
 		if i < 10: another_while_val = null;
 	}

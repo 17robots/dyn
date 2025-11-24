@@ -1,0 +1,17 @@
+module main;
+io := use "std/io";
+
+main := () void {
+  io.print("Hello, World!");
+  x := Something.What;
+  _ = x;
+  y := Something.Else(1);
+  if y == .Else: |z| {
+    _ = z;
+  }
+};
+
+Something := enum {
+  What,
+  Else: u32
+};

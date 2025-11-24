@@ -738,6 +738,7 @@ fn struct_init_member(s: *Parser) ParserError!Node {
     try s.expect(.colon);
     return node(NodeType{ .struct_init_member = .{ .name = name, .val = s.create_node_ptr(try s.expression(0)) } }, span_start.fromSpan(s.curr_tok.loc.span));
 }
+// TODO: change this so that members here are singled on enums and errors; make structs the only ones that can do a,b,c,d: i32
 fn member(s: *Parser, is_struct: bool) ParserError!Node {
     const span_start = s.curr_tok.loc.span;
     var names = std.ArrayList(Node).empty;
