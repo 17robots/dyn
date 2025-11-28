@@ -484,7 +484,6 @@ const Module = struct {
     name: []const u8,
     file_ids: std.ArrayList(FileId),
     asts: std.ArrayList(Node),
-    scopes: ScopeStack,
     errored: bool = false,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
         return .{ .allocator = allocator, .name = name, .file_ids = .empty, .asts = .empty, .scopes = .empty };
@@ -671,7 +670,7 @@ const NodeType = union(enum) {
     oreq: void,
     oror: void,
     pointer_dereference: struct { expression: *Node },
-    pointer_type: struct { expression: *Node },
+    pointer_type: struct { expression: *Node, mut: bool },
     program: struct { declarations: std.ArrayList(Node) },
     range_expression: struct { a: *Node, b: *Node },
     return_expression: struct { val: ?*Node },
@@ -1215,7 +1214,11 @@ const Parser = struct {
             .match => try s.match(true),
             .mul => blk: {
                 try s.expect(.mul);
-                break :blk node(NodeType{ .pointer_type = .{ .expression = s.create_node_ptr(try s.non_literal_expression()) } }, span_start.fromSpan(s.curr_tok.loc.span));
+                const mut = if (s.curr_tok.tok_type == .mut) blk2: {
+                    try s.expect(.mut);
+                    break :blk2 true;
+                } else false;
+                break :blk node(NodeType{ .pointer_type = .{ .expression = s.create_node_ptr(try s.non_literal_expression()), .mut = mut } }, span_start.fromSpan(s.curr_tok.loc.span));
             },
             .question => blk: {
                 try s.expect(.question);
@@ -1585,38 +1588,6 @@ const Severity = enum {
         };
     }
 };
-const Scope = struct {
-    type: union(enum) {
-        block: ?[]const u8,
-        function: struct { name: []const u8, fn_result: ?u32 },
-        global: void,
-    },
-    symbols: std.ArrayList(Symbol),
-    types: std.ArrayList(u32),
-    parent_scope: ?u32,
-};
-const ScopeStack = struct {
-    scopes: std.ArrayList(Scope),
-    const empty = ScopeStack{ .scopes = .empty };
-    pub fn push(s: *ScopeStack, alloc: std.mem.Allocator, val: Scope) void {
-        s.scopes.append(alloc, val) catch {};
-    }
-    pub fn pop(s: *ScopeStack) ?Scope {
-        return s.scopes.pop();
-    }
-    pub fn current(s: *ScopeStack) ?Scope {
-        return if (s.scopes.items.len == 0 or s.current_scope > s.scopes.items.len) null else s.scopes.items[s.current_scope];
-    }
-    pub fn pub_symbols(s: *ScopeStack, allocator: std.mem.Allocator) []*Symbol {
-        var symbols: std.ArrayList(*Symbol) = .empty;
-        for (s.scopes.items) |scopes| {
-            for (scopes.symbols.items) |*symbol| {
-                if (symbol.public) symbols.append(allocator, symbol);
-            }
-        }
-        return symbols.toOwnedSlice(allocator);
-    }
-};
 const Span = struct {
     start: u32,
     end: u32,
@@ -1625,26 +1596,6 @@ const Span = struct {
     }
     pub fn fromSpan(a: Span, b: Span) Span {
         return .{ .start = a.start, .end = b.end };
-    }
-};
-const Symbol = struct {
-    name: []const u8,
-    kind: SymbolKind,
-    mutability: Mutability = .immutable,
-    type_id: ?u32 = null,
-    public: bool = false,
-    location: FileLocation,
-};
-const SymbolKind = enum {
-    @"var",
-    func,
-    type,
-    enum_member,
-    error_member,
-    label,
-    unknown,
-    pub fn from_node(n: Node) SymbolKind {
-        return switch (n) {};
     }
 };
 const Token = struct {
@@ -1740,7 +1691,7 @@ const TokenType = enum {
     @"break",
     @"inline",
     @"continue",
-    void
+    void,
 };
 const Type = enum {
     void,
