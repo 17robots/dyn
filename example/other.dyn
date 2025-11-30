@@ -1,7 +1,7 @@
 module main;
 io := use "std/io";
 
-pub main := () {
+pub main := () void {
   circles: []Circle = [ {r: 1.0}, {r: 2.0} ];
   PrintTotalArea(circles);
   mut items: []u32 = [ 1, 5, 6, 12, 14, 90, 29, 56, 82, 30 ];
@@ -10,13 +10,13 @@ pub main := () {
   io.print("after: {}", items);
 };
 
-Circle := struct { r f32 };
+Circle := struct { r: f32 };
 
-PrintTotalArea := (circles []Circle) {
+PrintTotalArea := (circles: []Circle) void {
   mut area: f32 = 0;
   for circles: |c| area += 3.14 * c.r * c.r;
   io.print("Total Area: {}\n", area);
-}
+};
 
 Partition := (T: comp type, s: []T) i64 {
   mut i: i64 = -1;
@@ -27,23 +27,22 @@ Partition := (T: comp type, s: []T) i64 {
     }
   }
   return i;
-}
-QuickSort := (T comp type, s []T) {
+};
+QuickSort := (T: comp type, s: []T) void {
   if s.len <= 1: return;
   p: i64 = Partition(T, s);
   QuickSort(s[0..p - 1]);
   QuickSort(s[p+1..s.len]);
-}
-Swap := (T comp type, a, b *T) {
+};
+Swap := (T: comp type, a: *T, b: *T) void {
   c := a.*;
   a.* = b.*;
   b.* = c;
-}
+};
 
-something := () {
-  some_fn : ?()! = () ! {
+something := () void {
+  some_fn : ?()!void = ()!void {
     try heap.alloc(i32);
   };
   try some_fn.?();
-}
-
+};

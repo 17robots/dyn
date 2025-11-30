@@ -180,8 +180,6 @@ const Lexer = struct {
                 break :blk null;
             },
             2 => blk: {
-                if (std.mem.eql(u8, word, "as")) break :blk TokenType.as;
-                if (std.mem.eql(u8, word, "fn")) break :blk TokenType.@"fn";
                 if (std.mem.eql(u8, word, "if")) break :blk TokenType.@"if";
                 break :blk null;
             },
@@ -201,6 +199,7 @@ const Lexer = struct {
                 if (std.mem.eql(u8, word, "null")) break :blk TokenType.null;
                 if (std.mem.eql(u8, word, "true")) break :blk TokenType.true;
                 if (std.mem.eql(u8, word, "type")) break :blk TokenType.type;
+                if (std.mem.eql(u8, word, "void")) break :blk TokenType.void;
                 break :blk null;
             },
             5 => blk: {
@@ -385,10 +384,6 @@ const Lexer = struct {
                 s.advance(1);
                 return s.tok(.comma, null, s.idx - 1, s.idx - 1);
             },
-            ':' => {
-                s.advance(1);
-                return s.tok(.colon, null, s.idx - 1, s.idx - 1);
-            },
             '$', '_', 'a'...'z', 'A'...'Z' => return s.read_ident(),
             '0'...'9' => return s.read_num_float_range(),
             '.' => {
@@ -430,6 +425,17 @@ const Lexer = struct {
                 }
                 s.advance(1);
                 return s.tok(.div, null, start, s.idx - 1);
+            },
+            ':' => {
+                const start = s.idx;
+                s.advance(1);
+                if (s.peek(0)) |p| {
+                    if (p == '=') {
+                        s.advance(1);
+                        return s.tok(.walrus, null, start, s.idx);
+                    }
+                }
+                return s.tok(.colon, null, start, s.idx);
             },
             '\"' => return s.read_string(),
             '\'' => return s.read_char(),
@@ -632,7 +638,7 @@ const NodeType = union(enum) {
     eq: void,
     eqeq: void,
     error_: struct { members: std.ArrayList(Node) },
-    error_union_type: struct { errs: ?std.ArrayList(Node), name: ?*Node },
+    error_union_type: struct { errs: ?std.ArrayList(Node), name: *Node },
     for_statement: struct { inline_: bool, expressions: std.ArrayList(Node), capture: *Node, body: *Node },
     function: struct { inline_: bool, parameters: std.ArrayList(Node), result: *Node, body: *Node },
     function_parameter: struct { names: std.ArrayList(Node), type: *Node },
@@ -758,6 +764,7 @@ const Parser = struct {
             .andeq => node(NodeType.andeq, s.curr_tok.loc.span),
             .oreq => node(NodeType.oreq, s.curr_tok.loc.span),
             .xoreq => node(NodeType.xoreq, s.curr_tok.loc.span),
+            .eq => node(NodeType.eq, s.curr_tok.loc.span),
             else => {
                 s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid assign operator {any}", .{s.curr_tok.tok_type});
                 return ParserError.recoverable;
@@ -802,13 +809,15 @@ const Parser = struct {
     }
     fn capture(s: *Parser) ParserError!Node {
         const span_start = s.curr_tok.loc.span;
-        try s.expect(.as);
+        try s.expect(.@"or");
         var captures = std.ArrayList(Node).empty;
         while (s.curr_tok.tok_type != .eof) {
+            if (s.curr_tok.tok_type == .@"or") break;
             captures.append(s.allocator, try s.capture_item()) catch |e| @panic(@errorName(e));
-            if (s.curr_tok.tok_type != .comma) break;
+            if (s.curr_tok.tok_type == .@"or") break;
             try s.expect(.comma);
         }
+        try s.expect(.@"or");
         return node(NodeType{ .capture = .{ .captures = captures } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
     fn capture_item(s: *Parser) ParserError!Node {
@@ -839,11 +848,24 @@ const Parser = struct {
             break :blk true;
         } else false;
         const name = s.create_node_ptr(try s.identifier());
-        const type_ = if (s.curr_tok.tok_type == .eq) null else s.create_node_ptr(try s.non_literal_expression());
-        const val = if (s.curr_tok.tok_type == .eq) blk: {
-            try s.expect(.eq);
-            break :blk s.create_node_ptr(try s.expression(0));
-        } else null;
+        const type_ = switch (s.curr_tok.tok_type) {
+            .walrus, .semicolon => null,
+            .colon => blk: {
+                try s.expect(.colon);
+                break :blk s.create_node_ptr(try s.non_literal_expression());
+            },
+            else => {
+                s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+                return ParserError.recoverable;
+            },
+        };
+        const val = switch (s.curr_tok.tok_type) {
+            .walrus, .eq => blk: {
+                try s.expect(s.curr_tok.tok_type);
+                break :blk s.create_node_ptr(try s.expression(0));
+            },
+            else => null,
+        };
         return node(NodeType{ .declaration = .{ .pub_ = pub_, .mut = mut, .name = name, .type = type_, .val = val } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
     fn defer_statement(s: *Parser) ParserError!Node {
@@ -864,8 +886,8 @@ const Parser = struct {
         } else null;
         return node(NodeType{ .enum_error_init = .{ .name = name, .val = val } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
-    fn error_union_type(s: *Parser, n: ?Node) ParserError!Node {
-        const main_type = if (n) |n_| s.create_node_ptr(n_) else null;
+    fn error_union_type(s: *Parser, n: Node) ParserError!Node {
+        const main_type = s.create_node_ptr(n);
         try s.expect(.bang);
         var errs = std.ArrayList(Node).empty;
         while (s.curr_tok.tok_type != .eof) {
@@ -914,20 +936,36 @@ const Parser = struct {
             try s.expect(.@"inline");
             break :blk true;
         } else false;
+        var fn_decl = true;
         var fn_parameters = std.ArrayList(Node).empty;
+        var types = std.ArrayList(Node).empty;
         try s.expect(.lparen);
         while (s.curr_tok.tok_type != .eof) {
+            var span_start2 = s.curr_tok.loc.span;
             if (s.curr_tok.tok_type == .rparen) break;
-            var names = std.ArrayList(Node).empty;
-            names.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
-            while (s.curr_tok.tok_type != .eof) {
-                if (s.curr_tok.tok_type != .comma) break;
-                try s.expect(.comma);
-                names.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
+            if (fn_decl) {
+                if (s.curr_tok.tok_type == .identifier) {
+                    types.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
+                    if (s.curr_tok.tok_type == .colon) {
+                        try s.expect(.colon);
+                        const the_type = s.create_node_ptr(try s.non_literal_expression());
+                        fn_parameters.append(s.allocator, node(NodeType{ .function_parameter = .{ .names = types.clone(s.allocator) catch |e| @panic(@errorName(e)), .type = the_type } }, span_start2.fromSpan(s.curr_tok.loc.span))) catch |e| @panic(@errorName(e));
+                        types.deinit(s.allocator);
+                        types = std.ArrayList(Node).empty;
+                        span_start2 = s.curr_tok.loc.span;
+                    }
+                } else {
+                    fn_decl = false;
+                    continue;
+                }
+            } else {
+                types.append(s.allocator, try s.non_literal_expression()) catch |e| @panic(@errorName(e));
+                if (s.curr_tok.tok_type == .colon) {
+                    s.diag.emit(.{ .file_id = s.source.id, .span = span_start2 }, .err, "", .{});
+                    return ParserError.recoverable;
+                }
             }
-            const t = s.create_node_ptr(try s.non_literal_expression());
-            fn_parameters.append(s.allocator, NodeType{ .function_parameter = .{ .names = names, .type = t } }) catch |e| @panic(@errorName(e));
-            names = .empty;
+            if (s.curr_tok.tok_type == .rparen) break;
             try s.expect(.comma);
         }
         try s.expect(.rparen);
@@ -937,7 +975,6 @@ const Parser = struct {
                 const chain = try s.identifier();
                 break :blk try s.postfix_chain(chain, false);
             },
-            .lbrace, .arrow, .bang => null,
             else => try s.non_literal_expression(),
         };
         if (s.curr_tok.tok_type == .bang) return_expr = try s.error_union_type(return_expr);
@@ -949,36 +986,39 @@ const Parser = struct {
                 break :blk s.create_node_ptr(node(NodeType{ .arrow_expression = .{ .expression = expr } }, span_start2.fromSpan(s.curr_tok.loc.span)));
             },
             .lbrace => s.create_node_ptr(try s.block(false)),
-            else => {
+            else => null,
+        };
+        if (fn_decl) {
+            if (body) |b| {
+                if (types.items.len > 0) {
+                    s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Identifiers missing type in function declaration", .{});
+                    return ParserError.recoverable;
+                }
+                return node(NodeType{ .function = .{ .inline_ = inline_, .parameters = fn_parameters, .result = s.create_node_ptr(return_expr), .body = b } }, span_start.fromSpan(s.curr_tok.loc.span));
+            }
+            if (fn_parameters.items.len > 0) {
                 s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Function declaration requires a body", .{});
                 return ParserError.recoverable;
-            },
-        };
-        return node(NodeType{ .function = .{ .inline_ = inline_, .parameters = fn_parameters, .result = s.create_node_ptr(return_expr), .body = body } }, span_start.fromSpan(s.curr_tok.loc.span));
-    }
-    fn function_type(s: *Parser) ParserError!Node {
-        const span_start = s.curr_tok.loc.span;
-        try s.expect(.@"fn");
-        try s.expect(.lparen);
-        var params = std.ArrayList(Node).empty;
-        while (s.curr_tok.tok_type != .eof) {
-            if (s.curr_tok.tok_type == .rparen) break;
-            params.append(s.allocator, try s.non_literal_expression()) catch |e| @panic(@errorName(e));
-            if (s.curr_tok.tok_type == .rparen) break;
-            try s.expect(.comma);
+            }
+            if (inline_) {
+                s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Inline cannot be applied to function types", .{});
+                return ParserError.recoverable;
+            }
+            return node(NodeType{ .function_type = .{ .parameters = types, .result = s.create_node_ptr(return_expr) } }, span_start.fromSpan(s.curr_tok.loc.span));
         }
-        try s.expect(.rparen);
-        var return_expr = switch (s.curr_tok.tok_type) {
-            .identifier => blk: {
-                if (s.next_tok.tok_type == .colon) break :blk try s.block(true);
-                const chain = try s.identifier();
-                break :blk try s.postfix_chain(chain, false);
-            },
-            .lbrace, .arrow, .bang => null,
-            else => try s.non_literal_expression(),
-        };
-        if (s.curr_tok.tok_type == .bang) return_expr = try s.error_union_type(return_expr);
-        return node(NodeType{ .function_type = .{ .parameters = params, .result = s.create_node_ptr(return_expr) } }, span_start.fromSpan(s.curr_tok.loc.span));
+        if (body) |b| {
+            s.diag.emit(.{ .file_id = s.source.id, .span = b.span }, .err, "Function types should not have a body", .{});
+            return ParserError.recoverable;
+        }
+        if (fn_parameters.items.len > 0) {
+            s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Function declaration has types without corresponding identifiers", .{});
+            return ParserError.recoverable;
+        }
+        if (inline_) {
+            s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Inline cannot be applied to function types", .{});
+            return ParserError.recoverable;
+        }
+        return node(NodeType{ .function_type = .{ .parameters = types, .result = s.create_node_ptr(return_expr) } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
     fn identifier(s: *Parser) ParserError!Node {
         if (s.curr_tok.val) |v| {
@@ -992,7 +1032,8 @@ const Parser = struct {
         const span_start = s.curr_tok.loc.span;
         try s.expect(.@"if");
         const expr = s.create_node_ptr(try s.expression(0));
-        const cap = if (s.curr_tok.tok_type == .as) s.create_node_ptr(try s.capture()) else null;
+        try s.expect(.colon);
+        const cap = if (s.curr_tok.tok_type == .@"or") s.create_node_ptr(try s.capture()) else null;
         return node(NodeType{ .if_prefix = .{ .capture = cap, .expression = expr } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
     fn literal(s: *Parser) ParserError!Node {
@@ -1023,6 +1064,7 @@ const Parser = struct {
         const span_start = s.curr_tok.loc.span;
         try s.expect(.match);
         const expr = s.create_node_ptr(try s.expression(0));
+        try s.expect(.colon);
         try s.expect(.lbrace);
         var arms = std.ArrayList(Node).empty;
         blk: while (s.curr_tok.tok_type != .eof) {
@@ -1129,13 +1171,13 @@ const Parser = struct {
                     break :blk node(NodeType{ .array_init = .{ .vals = vals } }, span_start.fromSpan(s.curr_tok.loc.span));
                 }
             },
-            .@"fn" => try s.function_type(),
             .lparen, .@"inline" => blk: {
                 var chain: Node = undefined;
                 const is_fn: bool = s.curr_tok.tok_type == .@"inline" or switch (s.next_tok.tok_type) {
+                    .comp => true,
                     .identifier => s.peek_tok.tok_type == .colon or s.peek_tok.tok_type == .comma, // return fn,
                     .rparen => switch (s.peek_tok.tok_type) {
-                        .lparen, .mul, .identifier, .@"struct", .@"enum", .@"error", .lbrack, .question, .comp, .type => true, // return
+                        .lparen, .mul, .identifier, .@"struct", .@"enum", .@"error", .lbrack, .question, .void, .comp, .type => true, // return
                         else => false,
                     },
                     else => false,
@@ -1207,20 +1249,32 @@ const Parser = struct {
                 try s.expect(.undefined);
                 break :blk node(NodeType.undefined, span_start.fromSpan(s.curr_tok.loc.span));
             },
+            .void => blk: {
+                try s.expect(.void);
+                break :blk node(NodeType.void, span_start.fromSpan(s.curr_tok.loc.span));
+            },
             else => {
                 s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid non literal expression {any}", .{s.curr_tok.tok_type});
                 return ParserError.recoverable;
             },
         };
-        if (expr.type == .block) {
-            if (expr.type.block.label == null) {
-                s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Blocks must have labels to be used as expression", .{});
-                return ParserError.recoverable;
-            }
-        } else if (expr.type == .call) {
-            if (s.curr_tok.tok_type == .@"catch") {
-                expr = try s.catch_(expr);
-            }
+        switch (expr.type) {
+            .array_index, .array_type, .catch_, .enum_, .error_, .identifier, .grouped, .if_expression, .member_access, .optional_dereference, .optional_type, .pointer_dereference, .pointer_type, .struct_, .try_ => {
+                if (s.curr_tok.tok_type == .bang) expr = try s.error_union_type(expr);
+            },
+            .block => |i| {
+                if (i.label) |_| {
+                    if (s.curr_tok.tok_type == .bang) expr = try s.error_union_type(expr);
+                } else {
+                    s.diag.emit(.{ .file_id = s.source.id, .span = span_start }, .err, "Blocks must have labels to be used as expression", .{});
+                    return ParserError.recoverable;
+                }
+            },
+            .call => {
+                if (s.curr_tok.tok_type == .@"catch") expr = try s.catch_(expr);
+                if (s.curr_tok.tok_type == .bang) expr = try s.error_union_type(expr);
+            },
+            else => {},
         }
         return expr;
     }
@@ -1323,7 +1377,8 @@ const Parser = struct {
                     if (s.curr_tok.tok_type == .colon) break;
                     try s.expect(.comma);
                 }
-                const cap = if (s.curr_tok.tok_type == .as) s.create_node_ptr(try s.capture()) else null;
+                try s.expect(.colon);
+                const cap = s.create_node_ptr(try s.capture());
                 break :blk node(NodeType{ .for_statement = .{ .inline_ = inline_, .expressions = expressions, .capture = cap, .body = s.create_node_ptr(try s.result_block()) } }, span_start.fromSpan(s.curr_tok.loc.span));
             },
             .lbrace => try s.block(false),
@@ -1368,11 +1423,32 @@ const Parser = struct {
                 try s.expect(.comma);
             }
         } else names.append(s.allocator, try s.identifier()) catch |e| @panic(@errorName(e));
-        const type_ = if (s.curr_tok.tok_type == .eq) null else try s.create_node_ptr(try s.non_literal_expression());
-        const val = if (s.curr_tok.tok_type == .eq) blk: {
-            try s.expect(.eq);
-            break :blk s.create_node_ptr(try s.expression(0));
-        } else null;
+
+        const type_ = switch (s.curr_tok.tok_type) {
+            .walrus => null,
+            .colon => blk: {
+                try s.expect(.colon);
+                break :blk s.create_node_ptr(try s.non_literal_expression());
+            },
+            .rbrace => blk: {
+                if (is_struct) {
+                    s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+                    return ParserError.recoverable;
+                }
+                break :blk null;
+            },
+            else => {
+                s.diag.emit(.{ .file_id = s.source.id, .span = s.curr_tok.loc.span }, .err, "Invalid declaration symbol {any}, wanted := or : [Type]", .{s.curr_tok.tok_type});
+                return ParserError.recoverable;
+            },
+        };
+        const val = switch (s.curr_tok.tok_type) {
+            .eq, .walrus => blk: {
+                try s.expect(s.curr_tok.tok_type);
+                break :blk s.create_node_ptr(try s.expression(0));
+            },
+            else => null,
+        };
         return node(NodeType{ .member = .{ .names = names, .type = type_, .val = val } }, span_start.fromSpan(s.curr_tok.loc.span));
     }
     fn unary_expression(s: *Parser) ParserError!Node {
@@ -1573,6 +1649,7 @@ const TokenType = enum {
     bangeq, // !=
     question, // ?
     dollar, // $
+    walrus, // :=
     nullish, // ??
     // keywords
     module,
@@ -1602,8 +1679,6 @@ const TokenType = enum {
     @"break",
     @"inline",
     @"continue",
-    as,
-    @"fn",
     void,
 };
 const Type = enum {
