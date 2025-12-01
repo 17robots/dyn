@@ -1,18 +1,18 @@
 const std = @import("std");
 const Checker = struct {
     m: *Module,
-    d: *DiagnosticEmitter,
+    d: *MessageEmitter,
     sm: *FileManager,
     // global: *ScopedSymbolTable,
     dependency_graph: void,
 };
 const Compiler = struct {
     allocator: std.mem.Allocator,
-    diagnostics: *DiagnosticEmitter,
+    diagnostics: *MessageEmitter,
     source_manager: *FileManager,
     module_resolver: *ModuleResolver,
 
-    pub fn init(allocator: std.mem.Allocator, diagnostics: *DiagnosticEmitter, source_manager: *FileManager, module_resolver: *ModuleResolver) Compiler {
+    pub fn init(allocator: std.mem.Allocator, diagnostics: *MessageEmitter, source_manager: *FileManager, module_resolver: *ModuleResolver) Compiler {
         return Compiler{ .allocator = allocator, .diagnostics = diagnostics, .source_manager = source_manager, .module_resolver = module_resolver };
     }
     pub fn compile(s: *Compiler, mod: []const u8, step: enum { lex, parse, check }) !void {
@@ -45,40 +45,8 @@ const Compiler = struct {
         }
     }
 };
-const Diagnostic = struct {
-    severity: Severity,
-    location: FileLocation,
-    message: []const u8,
-};
-const DiagnosticEmitter = struct {
-    allocator: std.mem.Allocator,
-    diagnostics: std.ArrayList(Diagnostic),
-    err_count: usize = 0,
-    pub fn init(allocator: std.mem.Allocator) DiagnosticEmitter {
-        return .{ .allocator = allocator, .diagnostics = std.ArrayList(Diagnostic).empty };
-    }
-    pub fn deinit(s: *DiagnosticEmitter) void {
-        for (s.diagnostics.items) |d| s.allocator.free(d.message);
-        s.diagnostics.deinit();
-    }
-    pub fn emit(s: *DiagnosticEmitter, location: FileLocation, severity: Severity, comptime fmt: []const u8, args: anytype) void {
-        if (severity == .err) s.err_count += 1;
-        const msg = std.fmt.allocPrint(s.allocator, fmt, args) catch "out of memory";
-        s.diagnostics.append(s.allocator, .{ .severity = severity, .location = location, .message = msg }) catch @panic("out of memory");
-    }
-    pub fn has_errors(s: DiagnosticEmitter) bool {
-        return s.err_count > 0;
-    }
-    pub fn print_all(s: *DiagnosticEmitter, source_manager: *FileManager) void {
-        var out_buf: [1024]u8 = undefined;
-        var writer = std.fs.File.stderr().writer(&out_buf);
-        const out = &writer.interface;
-        for (s.diagnostics.items) |d| {
-            const resolved = source_manager.resolve_location(d.location);
-            out.print("{s}:{d}:{d}: {s}: {s}\n", .{ resolved.file_name, resolved.line, resolved.col, d.severity.to_string(), d.message }) catch {};
-            out.flush() catch {};
-        }
-    }
+const Environment = struct {
+    scopes: void,
 };
 const File = struct {
     id: FileId,
@@ -137,12 +105,12 @@ const FileManager = struct {
     }
 };
 const Lexer = struct {
-    diag: *DiagnosticEmitter,
+    diag: *MessageEmitter,
     source: *File,
     idx: u32 = 0,
     errored: bool = false,
 
-    pub fn init(source: *File, diag: *DiagnosticEmitter) Lexer {
+    pub fn init(source: *File, diag: *MessageEmitter) Lexer {
         return Lexer{ .source = source, .diag = diag };
     }
     fn advance(s: *Lexer, n: u32) void {
@@ -479,6 +447,41 @@ const LiteralKind = enum {
         };
     }
 };
+const Message = struct {
+    severity: Severity,
+    location: FileLocation,
+    message: []const u8,
+};
+const MessageEmitter = struct {
+    allocator: std.mem.Allocator,
+    diagnostics: std.ArrayList(Message),
+    err_count: usize = 0,
+    pub fn init(allocator: std.mem.Allocator) MessageEmitter {
+        return .{ .allocator = allocator, .diagnostics = std.ArrayList(Message).empty };
+    }
+    pub fn deinit(s: *MessageEmitter) void {
+        for (s.diagnostics.items) |d| s.allocator.free(d.message);
+        s.diagnostics.deinit();
+    }
+    pub fn emit(s: *MessageEmitter, location: FileLocation, severity: Severity, comptime fmt: []const u8, args: anytype) void {
+        if (severity == .err) s.err_count += 1;
+        const msg = std.fmt.allocPrint(s.allocator, fmt, args) catch "out of memory";
+        s.diagnostics.append(s.allocator, .{ .severity = severity, .location = location, .message = msg }) catch @panic("out of memory");
+    }
+    pub fn has_errors(s: MessageEmitter) bool {
+        return s.err_count > 0;
+    }
+    pub fn print_all(s: *MessageEmitter, source_manager: *FileManager) void {
+        var out_buf: [1024]u8 = undefined;
+        var writer = std.fs.File.stderr().writer(&out_buf);
+        const out = &writer.interface;
+        for (s.diagnostics.items) |d| {
+            const resolved = source_manager.resolve_location(d.location);
+            out.print("{s}:{d}:{d}: {s}: {s}\n", .{ resolved.file_name, resolved.line, resolved.col, d.severity.to_string(), d.message }) catch {};
+            out.flush() catch {};
+        }
+    }
+};
 const Module = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
@@ -486,13 +489,13 @@ const Module = struct {
     asts: std.ArrayList(Node),
     errored: bool = false,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Module {
-        return .{ .allocator = allocator, .name = name, .file_ids = .empty, .asts = .empty, .scopes = .empty };
+        return .{ .allocator = allocator, .name = name, .file_ids = .empty, .asts = .empty };
     }
     pub fn deinit(s: *Module) void {
         s.file_ids.deinit(s.allocator);
         s.asts.deinit(s.allocator);
     }
-    pub fn lex(s: *Module, sm: *FileManager, d: *DiagnosticEmitter) !std.ArrayList(Token) {
+    pub fn lex(s: *Module, sm: *FileManager, d: *MessageEmitter) !std.ArrayList(Token) {
         var toks = std.ArrayList(Token).empty;
         for (s.file_ids.items) |f| {
             var l = Lexer.init(&sm.files.items[f], d);
@@ -507,14 +510,14 @@ const Module = struct {
         }
         return toks;
     }
-    pub fn parse(s: *Module, sm: *FileManager, d: *DiagnosticEmitter) !void {
+    pub fn parse(s: *Module, sm: *FileManager, d: *MessageEmitter) !void {
         var pool: std.Thread.Pool = undefined;
         try pool.init(.{ .allocator = s.allocator });
         var wait = std.Thread.WaitGroup{};
         for (0..s.file_ids.items.len) |i| {
             wait.start();
             try pool.spawn(struct {
-                pub fn parse_file(alloc: std.mem.Allocator, sources: *FileManager, module: *Module, diag: *DiagnosticEmitter, m: *std.Thread.Mutex, idx: usize, wg: *std.Thread.WaitGroup) void {
+                pub fn parse_file(alloc: std.mem.Allocator, sources: *FileManager, module: *Module, diag: *MessageEmitter, m: *std.Thread.Mutex, idx: usize, wg: *std.Thread.WaitGroup) void {
                     defer wg.finish();
                     var p = Parser.init(alloc, &sources.files.items[idx], diag);
                     const n = p.parse();
@@ -526,7 +529,7 @@ const Module = struct {
         }
         wait.wait();
     }
-    pub fn check(s: *Module, sources: *FileManager, d: *DiagnosticEmitter) !void {
+    pub fn check(s: *Module, sources: *FileManager, d: *MessageEmitter) !void {
         _ = s;
         _ = sources;
         _ = d;
@@ -536,10 +539,10 @@ const Module = struct {
 const ModuleResolver = struct {
     allocator: std.mem.Allocator,
     source_manager: *FileManager,
-    diags: *DiagnosticEmitter,
+    diags: *MessageEmitter,
     module_cache: std.StringHashMap(*Module),
 
-    pub fn init(allocator: std.mem.Allocator, source_manager: *FileManager, diags: *DiagnosticEmitter) ModuleResolver {
+    pub fn init(allocator: std.mem.Allocator, source_manager: *FileManager, diags: *MessageEmitter) ModuleResolver {
         return .{ .allocator = allocator, .source_manager = source_manager, .diags = diags, .module_cache = std.StringHashMap(*Module).init(allocator) };
     }
     pub fn deinit(s: *ModuleResolver) void {
@@ -639,7 +642,7 @@ const NodeType = union(enum) {
     eqeq: void,
     error_: struct { members: std.ArrayList(Node) },
     error_union_type: struct { errs: ?std.ArrayList(Node), name: *Node },
-    for_statement: struct { inline_: bool, expressions: std.ArrayList(Node), capture: *Node, body: *Node },
+    for_statement: struct { inline_: bool, expressions: std.ArrayList(Node), capture: ?*Node, body: *Node },
     function: struct { inline_: bool, parameters: std.ArrayList(Node), result: *Node, body: *Node },
     function_parameter: struct { names: std.ArrayList(Node), type: *Node },
     function_type: struct { parameters: std.ArrayList(Node), result: ?*Node },
@@ -689,6 +692,8 @@ const NodeType = union(enum) {
     xor: void,
     xoreq: void,
 };
+const Object = struct {
+};
 const Parser = struct {
     const ParserError = error{
         recoverable,
@@ -696,14 +701,14 @@ const Parser = struct {
     };
 
     allocator: std.mem.Allocator,
-    diag: *DiagnosticEmitter,
+    diag: *MessageEmitter,
     lexer: Lexer,
     source: *File,
     curr_tok: Token,
     next_tok: Token,
     peek_tok: Token,
 
-    pub fn init(allocator: std.mem.Allocator, source: *File, diagnostics: *DiagnosticEmitter) Parser {
+    pub fn init(allocator: std.mem.Allocator, source: *File, diagnostics: *MessageEmitter) Parser {
         var parser = Parser{ .allocator = allocator, .source = source, .lexer = Lexer.init(source, diagnostics), .diag = diagnostics, .curr_tok = undefined, .next_tok = undefined, .peek_tok = undefined };
         parser.advance();
         parser.advance();
@@ -1109,7 +1114,7 @@ const Parser = struct {
                 var members = std.ArrayList(Node).empty;
                 while (s.curr_tok.tok_type != .eof) {
                     if (s.curr_tok.tok_type == .rbrace) break;
-                    members.append(s.allocator, try s.member()) catch |e| @panic(@errorName(e));
+                    members.append(s.allocator, try s.member(false)) catch |e| @panic(@errorName(e));
                     if (s.curr_tok.tok_type == .rbrace) break;
                     try s.expect(.comma);
                 }
@@ -1378,7 +1383,7 @@ const Parser = struct {
                     try s.expect(.comma);
                 }
                 try s.expect(.colon);
-                const cap = s.create_node_ptr(try s.capture());
+                const cap = if(s.curr_tok.tok_type == .@"or") s.create_node_ptr(try s.capture()) else null;
                 break :blk node(NodeType{ .for_statement = .{ .inline_ = inline_, .expressions = expressions, .capture = cap, .body = s.create_node_ptr(try s.result_block()) } }, span_start.fromSpan(s.curr_tok.loc.span));
             },
             .lbrace => try s.block(false),
@@ -1564,6 +1569,10 @@ const Parser = struct {
         }
     }
 };
+const Pos = u32;
+const Scope = struct {
+    parent: ?*Scope,
+};
 const Severity = enum {
     err,
     warn,
@@ -1577,8 +1586,8 @@ const Severity = enum {
     }
 };
 const Span = struct {
-    start: u32,
-    end: u32,
+    start: Pos,
+    end: Pos,
     pub fn from(start: u32, end: u32) Span {
         return .{ .start = start, .end = end };
     }
@@ -1707,7 +1716,7 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
     var source_manager = FileManager.init(allocator);
-    var diagnostics = DiagnosticEmitter.init(allocator);
+    var diagnostics = MessageEmitter.init(allocator);
     var module_resolver = ModuleResolver.init(allocator, &source_manager, &diagnostics);
     var compiler = Compiler.init(allocator, &diagnostics, &source_manager, &module_resolver);
     try compiler.compile("example/main", .check);

@@ -38,8 +38,8 @@ const File = struct {
         return Position{ .filename = s.name, .offset = offset, .line = p.line, .column = p.col };
     }
     pub fn find_line_and_col(s: File, pos_: u32) struct { line: u32, col: u32 } {
-        const line = s.find_line(pos_);
-        return .{ .line = line, .col = pos_ - s.line_offsets.items.len };
+        const line_ = s.find_line(pos_);
+        return .{ .line = line_, .col = pos_ - s.line_offsets.items.len };
     }
     pub fn find_line(s: File, pos_: u32) u32 {
         var min = 0;
