@@ -19,11 +19,20 @@ pub fn main() !void {
     var compiler = Compiler.init(alloc, opts);
     compiler.compile();
 }
+fn Command(name: []const u8, description: []const u8, comptime option_type: type, comptime arg_type: type) type {
+    const this = @This();
+    return struct {
+        const Name = name;
+        const Description = description;
+        options: option_type,
+        arg_type: arg_type,
+    };
+}
 const CLI = struct {
     root: Command,
     pub fn parse(argv: [][:0]u8) void { }
 };
-const Command = struct {
+const Command2 = struct {
     name: []const u8,
     description: []const u8,
     usage: []const u8,
