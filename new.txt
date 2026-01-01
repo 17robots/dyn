@@ -1,0 +1,213 @@
+module main
+io := use "std/io"
+heap := use "std/heap"
+test := use "test"
+BasicEnum := enum {
+  item,
+  other,
+  float,
+  something,
+  chained
+}
+PartneredEnum := enum {
+  something2 := 1,
+  item: i32,
+  other: i12,
+  float: f32,
+  something: struct {},
+  chained: enum {},
+  err: error {},
+}
+BasicError := error {
+	something: i32,
+	cool,
+	message,
+}
+
+PartneredError := error {
+	cool: PartneredEnum,
+	message: []u8,
+}
+getType := () type => i32
+AStruct := struct {
+  items: i32,
+  here: i32,
+  other: []i32,
+  ptr: *i32,
+  uh: []?*getType(),
+  new := () AStruct => { items: 0, here: 0, other: [] },
+  aThing := (s: AStruct) void {},
+}
+List: type = (comp type)!
+something := (x, y: i32, func: List) void {}
+Uh := (x: i32) void {}
+main := () {
+  x := 2
+  y: i32 = 2
+  mut z := 2
+  single: f32 = 1.0
+  double: f64 = 1.0
+  char := 'a'
+  boolean := false
+  optional_val: ?i32 = 100
+  mut optional_val2: ?i32 = null
+
+  io.println("Optional val: {}", optional_val or "null")
+  io.println("optional val 2: {}", optional_val2.?)
+  a := optional_val or 4
+  optional_val2 = 4
+  b := optional_val2 or 0
+  immut_val: i32 = 1
+  mut mut_val: i32 = 1
+  immut_val_ptr := &immut_val
+  mut_val_ptr: *mut i32 = &mut_val // can use *i32 if you dont want to mutate the pointer
+  mut mut_mut_val_ptr: *mut i32 = &mut_val
+  io.print("immut_val == dereferenced immut_val_ptr? {}", immut_val == immut_val_ptr.*)
+
+  mut_val_ptr.* += 1
+  mut_mut_val_ptr = undefined
+
+  mut nums := [1,2,3,4,5]
+  mut nums2: []i32 = []
+  nums[0] *= 2
+  nums[1] = 4
+  nums[2] += nums[2]
+
+  yes: u1 = true
+  if yes {
+    io.print("Hello world\n")
+  } else {
+    io.print("Uh oh\n")
+  }
+  if yes: io.print("Hello world\n") else io.print("Uh oh")
+  io.print("{}\n", if yes: "Hello World" else "Uh oh")
+  some_other_optional_val: ?i32 = null
+  if some_other_optional_val: |capture| io.print("We have a val {}", capture)
+  for i in 0..10 { io.print("{}", i) }
+  for i, j in 0..10, 0..10: io.print("These increment at the same time {} {}\n", i, j)
+  for i in 0..10: for j in 0..10: io.print("These increment differently {} {}\n", i, j)
+  some_other_array := [1,2,3]
+  for i in some_other_array: io.print("Arr val: {}\n", i)
+  for i,j in some_other_array, 0..some_other_array: io.print("Arr ind: {}, Arr val: {}\n", i, j)
+
+  mut while_val: i32 = 0
+  for while_val < 10: while_val += 1
+  while_val = 0
+  for while_val < 10 {
+    io.print("While val {}\n", while_val)
+    while_val += 1
+  }
+  mut another_while_val: ?i32 = while_val
+  for *i in another_while_val {
+    io.print("While val: {}\n", i)
+    if i < 10: another_while_val = null
+  }
+  defer io.print("this prints last\n")
+  defer if yes: io.print("this prints third\n")
+  defer {
+    io.print("This prints first")
+    io.print("This prints second")
+  }
+  internal_ := () { io.print("Im an internal fn\n") }
+  internal_()
+  some_number := () i32 { return 100 }
+  some_number2 := () i32 => 100
+  some_math := (x: i32, y: i32) i32 => x + y
+  some_math2 := (x,y: i32) i32 => x + y
+  mut res := 0
+  manipulate_args := (x, y: i32, res: *mut i32) => res.* = x + y
+  manupulate_args(1,2,&res)
+  MathFn: type = (x,y: i32)i32
+  do_math : (math: MathFn, x,y: i32)i32 = (math: MathFn, x,y: i32) i32 => math(x,y)
+  do_math((x,y: i32) i32 => x + (2 * y), 1,2)
+  basic_enum := .item
+  partnered_enum := .item(2)
+  a_struct := AStruct{ items: 12, here: 12, other: [] }
+  a_struct2: AStruct = { items: 12, here: 12, other: [] }
+  a_struct3 := AStruct.new()
+  io.print("{} {} {}\n", a_struct.items, a_struct2.here, a_struct3.other)
+  a_function_with_stuff := (s: struct {}, en: enum {}) type => struct {}
+  a_cool_cool_num := 3
+  match a_cool_cool_num {
+    0: io.print("A 0\n"),
+    1..12: io.print("In this range\n"),
+    13..17, 20..30: io.print("Weird range for this but it works\n"),
+    _: io.print("The default case\n")
+  }
+  a_cool_match_thing := match a_cool_cool_num {
+    1..12: a_cool_cool_num,
+    _: blk: {
+      break :blk 13
+    }
+  }
+  match basic_enum {
+    .item: io.print("item"),
+    .other: io.print("other"),
+    .float: io.print("float"),
+    .something: io.print("something"),
+    .chained: io.print("chained"),
+  }
+  match partnered_enum as c {
+    .item: io.print("item"),
+    .other: io.print("other"),
+    .float: io.print("float"),
+    .something: io.print("something"),
+    .chained: io.print("chained"),
+  }
+  List2 := (T: comp type) type => struct {}
+  print_things_at_comptime := () => io.print("We are a thing\n")
+  comp print_things_at_comptime()
+  return_pi := () f32 => 3.14
+  pi := comp return_pi()
+  inline for i in 0..12: io.print("Woah\n")
+  inline_ := inline () => io.print("This gets written out in place of each call")
+  DivideError := enum {
+    DivideByZero
+  }
+  divide := (x,y: f32) !f32 => if y == 0: .DivideByZero else x / y
+  res := try divide(1,1)
+  v := divide(1,0) catch |e| blk: {
+    io.print("We got an error {}\n", e)
+    break :blk 1
+  }
+  other_error_ := () !?void {
+    defer |e| {}
+  }
+}
+
+Result := (s: comp type, f: comp type) type => enum {
+  ok: s,
+  err: f,
+  or := (self: Result, default: s) s => match self {
+    .ok as v: v,
+    .err: default
+  },
+  catch := (self: Result, handler: fn(f) s) => match self {
+    .ok: {},
+    .err as e: handler(e)
+  }
+  on_err := (self: Result, callback: fn(f))Result(s,f) {
+    if self.is_err() as e: callback(e)
+    return self
+  }
+  on_ok := (self: Result, callback: fn(s))Result(s,f) {
+    if self.is_ok() as o: callback(o)
+    return self
+  }
+  is_ok := (self: Result) u1 => match self { .ok: true, .err: false }
+  is_err := (self: Result) u1 => match self { .ok: false, .err: true }
+}
+
+DivideError2 := enum {
+  DivideByZero
+}
+divide_again := (x,y: f32) Result(f32, DivideError2) => if y == 0: .err(.DivideByZero) else .ok(x / y)
+
+use_divide := () Result(void, DivideError2) {
+  hm1 := divide_again(1,0).or(0.0)
+  hm2 := divide_again(1,1).catch((e) => return e)
+  hm3 := match divide_again(1,1) {
+    .ok as v: v,
+    .err as e: $panic(e)
+  }
+}
