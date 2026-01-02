@@ -1,0 +1,41 @@
+module main
+
+io := use "std/io"
+heap := use "std/heap"
+test := use "test"
+
+BasicEnum := enum {
+  item,
+  other,
+  float,
+  something,
+  chained
+}
+
+PartneredEnum := enum {
+  something2 := 1,
+  item: i32,
+  other: i12,
+  float: f32,
+  something: struct {},
+  chained: enum {},
+  err: error {},
+}
+
+getType := () type => i32
+
+AStruct := struct {
+  items: i32,
+  here: i32,
+  other: []i32,
+  ptr: *i32,
+  uh: []?*getType(),
+  new := () AStruct => .{ items: 0, here: 0, other: [] },
+  aThing := (s: AStruct) {},
+}
+
+List: type = fn(comp type)!
+
+something := (x, y: i32, func: List) {}
+
+Uh := (x: i32) {}

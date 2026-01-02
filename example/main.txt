@@ -1,0 +1,18 @@
+module main
+
+main := () {
+  variables()
+  optionals()
+  pointers()
+  arrays()
+  ifs()
+  fors()
+  defers()
+  functions()
+  enums()
+  structs()
+  matches()
+  comptime()
+  errors()
+}
+
