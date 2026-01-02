@@ -18,16 +18,6 @@ PartneredEnum := enum {
   chained: enum {},
   err: error {},
 }
-BasicError := error {
-	something: i32,
-	cool,
-	message,
-}
-
-PartneredError := error {
-	cool: PartneredEnum,
-	message: []u8,
-}
 getType := () type => i32
 AStruct := struct {
   items: i32,
@@ -38,7 +28,7 @@ AStruct := struct {
   new := () AStruct => { items: 0, here: 0, other: [] },
   aThing := (s: AStruct) void {},
 }
-List: type = fn(comp type)Result(void, null)
+List: type = fn(comp type)!
 something := (x, y: i32, func: List) void {}
 Uh := (x: i32) void {}
 main := () {
@@ -147,7 +137,7 @@ main := () {
     .something: io.print("something"),
     .chained: io.print("chained"),
   }
-  match partnered_enum as c {
+  match partnered_enum {
     .item: io.print("item"),
     .other: io.print("other"),
     .float: io.print("float"),
@@ -164,50 +154,12 @@ main := () {
   DivideError := enum {
     DivideByZero
   }
-  divide := (x,y: f32) Result(f32, DivideError) => if y == 0: .DivideByZero else x / y
-  res := try divide(1,1)
-  v := divide(1,0) catch |e| blk: {
-    io.print("We got an error {}\n", e)
+  divide := (x,y: f32) DivideError!f32 => if y == 0: .DivideByZero else x / y
+  res := divide(1,1).!
+  res2 := divide(1,0) or 0
+  res3 := divide(1,0) or as e blk: {
+    io.print("We got an error: {}\n")
     break :blk 1
   }
-  other_error_ := () !?void {
-    defer |e| {}
-  }
-}
-
-Result := (s: comp type, f: comp type) type => enum {
-  ok: s,
-  err: f,
-  or := (self: Result, default: s) s => match self {
-    .ok as v: v,
-    .err: default
-  },
-  catch := (self: Result, handler: fn(f) s) => match self {
-    .ok: {},
-    .err as e: handler(e)
-  }
-  on_err := (self: Result, callback: fn(f))Result(s,f) {
-    if self.is_err() as e: callback(e)
-    return self
-  }
-  on_ok := (self: Result, callback: fn(s))Result(s,f) {
-    if self.is_ok() as o: callback(o)
-    return self
-  }
-  is_ok := (self: Result) u1 => match self { .ok: true, .err: false }
-  is_err := (self: Result) u1 => match self { .ok: false, .err: true }
-}
-
-DivideError2 := enum {
-  DivideByZero
-}
-divide_again := (x,y: f32) Result(f32, DivideError2) => if y == 0: .err(.DivideByZero) else .ok(x / y)
-
-use_divide := () Result(void, DivideError2) {
-  hm1 := divide_again(1,0).or(0.0)
-  hm2 := divide_again(1,1).catch((e) => return e)
-  hm3 := match divide_again(1,1) {
-    .ok as v: v,
-    .err as e: $panic(e)
-  }
+  other_error_ := () !? {}
 }
