@@ -1,7 +1,6 @@
 # The Dyn Language
 
 ## Known Bugs
-* Duplicate errors get added to the diagnostics list
 
 ## TODO
 * [*] Implement Lexer
@@ -15,3 +14,4 @@
 * [ ] Implement Linker
 * [ ] Implement Built-In Functions
 * [ ] Implement C/C++ Compiler
+

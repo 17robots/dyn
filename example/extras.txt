@@ -9,7 +9,6 @@ variables := () {
   char := 'a'
   boolean := false
 }
-
 optionals := () {
   optional_val: ?i32 = 100
   mut optional_val2: ?i32 = null
