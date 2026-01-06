@@ -48,6 +48,11 @@ In dyn, integer literals can be represented as follows:
 ```
 ### Floats
 Floats are decimal numbers, and they follow IEEE single (represented by f32) or double (f64) or quadruple (f128) precision specifications
+```
+float1 : f32 = 1.0
+float2 : f64 = 1.0
+float3 : f128 = 1.0
+```
 ## Complex Types
 ### Arrays
 Arrays are continuous values of the same type, specified with `[number]typename`, they are specified as a pointer and a length
@@ -85,8 +90,53 @@ Message := enum {
     ErrorCode: enum { Unauthorized, Invalid } // use enum as literal expression
 }
 ```
+To select a variant from an enum with a partner, do the following:
+```
+variant := .Warning("This is a warning message") // again ommittable if enum can be inferred
+```
 ### Structs
+Structs are types with blocks of related data pieces. In dyn struct literals are expressions, defined as follows:
+```
+AStruct := struct {
+    item1: i32,
+    item2: i32,
+    item3: i32
+}
+```
+Struct members can also be grouped together if the types are similar:
+```
+AStruct := struct {
+    item1, item2, item3: i32,
+}
+```
+And these members can have a default value:
+```
+AStruct := struct {
+    item1, item2, item3: i32 = 0, // can be done for grouped vals
+    other: u8 = 'a', // or for single ones
+}
+```
+To instantiate a struct, do the following:
+```
+x := AStruct{ item1: 1, item2: 2, item3: 3 } // other will still be 'a'
+y := AStruct{ other: 'b' } // item1,2,3 = 0 and other is 'b'
+
+// to access a member of a struct:
+x.item1
+y.other // can be used to get or set
+```
 # Variables
+Variables are names that hold values, all variables have values and a type telling dyn which kind of values the variable can hold
+```
+// ways to create variables
+x: i32 = 1 // specify the type
+y := 1 // infer the type
+```
+Variables in dyn are immutable by default, so `x = 0` will error unless it is specified mutable:
+```
+mut z := 1 // can still infer type
+z = 0 // can now change without error
+```
 # Math
 # Control Flow
 Dyn offers a couple options for control flow
