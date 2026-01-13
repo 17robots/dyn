@@ -52,10 +52,11 @@ if you want to separate multiple statements on one line), `'\0'`
 ### Integers
 In dyn, integer types are specified as `[u or i][number of bits]` u for unsigned
 and i for signed. This grants you more control over how much data gets used in
-the program. If the int is signed, the number will be that many bits and have
-an additional sign bit added on, so signed requires one more bit to store
-But, dyn prefers "accurate representation" over convenience in a couple places,
-namely, booleans and characters
+the program. If the int is signed, the number reserves 1 bit as the sign bit
+and the rest is reserved for the number, which means a signed integer will have
+a max value of 2^(i-1)-1 where i is the number of bits
+But, dyn prefers "accurate representation" over convenience in a couple
+places, namely, booleans and characters
 
 #### Booleans
 Booleans (true and false) are represented as an unsigned 1 bit int, and is typed
@@ -86,7 +87,7 @@ Arrays are continuous values of the same type, specified with `[number]typename`
 they are specified as a pointer and a length
 
 #### Slices
-Slices are peaks into an array, stored with a pointer and a start, and a length,
+Slices are peeks into an array, stored with a pointer and a start, and a length,
 specified with `[]typename`
 
 #### Strings
@@ -161,9 +162,12 @@ a_pointing_val := &a_val
 a_pointing_val.* = 5
 ```
 
-TODO: insert something about having multiple pointers to mutable data and only
-allowing one mutable pointer or multiple readonly pointers to data like rust
-here
+In dyn, you can have multiple immutable pointers to a piece of data or you can
+have one mutable pointer to a piece of data, it will error otherwise
+Pointers also cannot point to nothing unless it's an optional type
+
+Dyn will also try to track pointers to verify that they are used and that there
+is always a pointer to allocated data, preventing leaks
 
 ### Enums
 Enums types are a variant-based, fixed set of values, defined as follows:
@@ -310,7 +314,7 @@ lower than the minimum of the integer or float being used to store the result
 
 ```
 main := () {
-    a: u8 = 0 // max size
+    a: u8 = 0 // min size
     b: u8 = 1
     c: u8 = a - b // underflows and errors
 
@@ -329,7 +333,6 @@ while loops, which means that a for can accept either a boolean or a list of
 iterable expression
 
 ### As Iterable
-
 ```
 main := () {
     for 0..10: |i| {
@@ -522,7 +525,7 @@ SomeEnum := enum {
 }
 
 main := () {
-    thing := .variant1(i32)
+    thing := SomeEnum.variant1(i32)
     match thing {
         .variant1: |i| {},
         .variant2: {}, // if you dont want to use the partner, dont include
@@ -586,16 +589,20 @@ add5 := (x,y: i32 = 0) => x + y
 ```
 
 ### Struct Methods
-Structs (and enums) can have methods attached to them, this can be done by
-specifying
+Structs can have methods attached to them, this is done by listing a function
+type as a member of the struct. This becomes a static function usable from the
+struct, accessed as `StructName.function()`, but if the function's first
+parameter is the same as the struct type, then it can be sugared to an instance
+method rather than a static one
 
 ```
 Point := struct {
-    x,y: f64
+    x,y: f64,
+    new := (x,y: f64) Point => .{ x: x, y: y} // static
+    slope := (a: Point, b: Point) => (b.y - a.y) / (b.x - a.x) // member fn
 }
-Point.new := (x, y: f64) Point => .{ x: x, y: y } // static
-Point.origin := Point{ x: 0, y: 0 } // static variable
-Point.slope := (a: Point, b: Point) => (b.y - a.y) / (b.x - a.x) // member fn
+
+origin := Point{ x: 0, y: 0 } // static variables not allowed in structs
 ```
 
 ## Calling
@@ -621,7 +628,6 @@ If a function has default parameters, you dont need to specify them, but since
 these can appear out of order, you can specify them in the call
 
 ```
-// remember add5(x,y: i32 = 0)
 z := add5(y: 1) // x = 0, y = 1
 a := add5(1) // x = 1, y = 0 since it still respects positional stuff
 ```
@@ -714,7 +720,7 @@ pub thing2 := () {} // available to anyone that uses this module
 module alphabet
 
 // both thing1 and 2 are visible here
-thing3 := () {} // only visible in a.dyn
+thing3 := () {} // only usable in a.dyn, not anywhere else
 ```
 
 ## Using Modules
@@ -795,14 +801,34 @@ main := () {
 }
 ```
 
+## Generics
+Dyn does not support generics in the traditional sense, rather dyn supports the
+ability to create types with "generic" parameters through function calls and
+using type parameters. Below is a simple example:
+
+```
+List := (t: type) type => struct {
+    items: []t
+}
+
+HashMap := (k, v: type) type => struct {} // could have multiple types
+
+main := () {
+    IntList := List(i32) // IntList now a struct that can be initialized
+    IntMap := HashMap(i32, i32)
+    ints := IntList{ items: [1,2,3,4] }
+    intMap := IntMap{}
+}
+```
+
 ## Compile time
 Dyn also allows you to run code during compilation, this lets you do conditional
 compilation, iterate out loops of code, and do tasks before runtime to prevent
 extra calculations, this is triggered with the `comp` keyword
 
 ```
-
-calc_pi := () comp if(use_f64) f64 else f32 {
+use_f64 := true // variable known at compile time
+calc_pi := () comp if(use_f64) f64 else f32 { // the if is checked at comptime
     // return some amount of pi with calculations
 }
 
@@ -859,3 +885,11 @@ main := () {
     // io.print("{}", 9)
 }
 ```
+
+TODO:
+# Memory Management
+# Concurrency
+# Builtin Functions
+# Type Coercion
+# Interop
+# Defer
