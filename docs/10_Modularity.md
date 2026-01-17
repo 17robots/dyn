@@ -1,27 +1,24 @@
 # Modularity
-Dyn organizes its code into modules, and each file starts with the module
-declaration
 
-```
+Dyn organizes its code into modules, and each file starts with module declaration.
+
+```dyn
 // in a.dyn
 module alphabet
 // rest of code
 ```
 
-And each module holds the different declarations for said module
+And each module holds different declarations for said module.
 
 ## Module Location
-Modules are not only identified by name, but also by folder location
-So a module at `src/module1` with the module name "alphabet" is different than
-a module at `src/module2` with the name "alphabet." This becomes important in
-using the module and also visibility of declarations within the module
+
+Modules are not only identified by name, but also by folder location. So a module at `src/module1` with module name "alphabet" is different than a module at `src/module2` with name "alphabet." This becomes important in using module and also visibility of declarations within module.
 
 ## Declaration Visibility
-All declarations in a module are visible to other declarations within the same
-module and are hidden from all others by default. In order to give other modules
-access to these declarations, prefix it with `pub`:
 
-```
+All declarations in a module are visible to other declarations within same module and are hidden from all others by default. In order to give other modules access to these declarations, prefix it with `pub`:
+
+```dyn
 // in a.dyn
 module alphabet
 
@@ -36,11 +33,11 @@ thing3 := () {} // only usable in a.dyn, not anywhere else
 ```
 
 ## Using Modules
-In dyn, using a module is as easy as creating a declaration, but the actual
-expression to use a module is `use "[relative-loc]/[module-name]"`
 
-```
-// given the following file structure
+In dyn, using a module is as easy as creating a declaration, but actual expression to use a module is `use "[relative-loc]/[module-name]"`.
+
+```dyn
+// given following file structure
 src
     | a.dyn // alphabet module
     | b.dyn // alphabet module
@@ -53,8 +50,8 @@ alphabet := use "alphabet"
 
 Another example:
 
-```
-// given the following file structure
+```dyn
+// given following file structure
 src
     | alphabet
         | a.dyn // alphabet module
@@ -66,18 +63,16 @@ module main
 alphabet := use "alphabet/alphabet"
 ```
 
-The goal of this is to give you flexibility in organizing the code, and it lets
-you put multiple modules in one folder for locality's sake
+Goal of this is to give you flexibility in organizing code, and it lets you put multiple modules in one folder for locality's sake.
 
-Another thing to note when using modules is that the name of the variable also
-can act as the alias
+Another thing to note when using modules is that name of variable also can act as alias.
 
-```
+```dyn
 module main
 
 alphabet1 := use "alphabet"
 alphabet2 := use "alphabet"
-// both aliases for the same module
+// both aliases for same module
 
 main := () {
     alphabet1.thing2()
@@ -85,9 +80,8 @@ main := () {
 }
 ```
 
-And if you only want a specific item from the module:
+And if you only want a specific item from module:
 
-```
+```dyn
 thing2 := (use "alphabet").thing2 // use is an expression and can be accessed
 ```
-

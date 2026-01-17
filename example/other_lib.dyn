@@ -1,0 +1,7 @@
+module other_module
+
+not_accessible_in_main := () {}
+
+pub accessible_in_main := () {
+  not_accessible_in_main()
+}

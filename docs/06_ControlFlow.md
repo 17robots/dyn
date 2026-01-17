@@ -1,13 +1,14 @@
 # Control Flow
-Dyn offers a couple options for control flow
+
+Dyn offers a couple options for control flow.
 
 ## For
-Only one loop is offered in dyn: the for loop, but it serves as the for and
-while loops, which means that a for can accept either a boolean or a list of
-iterable expression
+
+Only one loop is offered in dyn: for loop, but it serves as for and while loops, which means that a for can accept either a boolean or a list of iterable expression.
 
 ### As Iterable
-```
+
+```dyn
 main := () {
     for 0..10: |i| {
         // do things with i
@@ -17,7 +18,7 @@ main := () {
 
 You can also use single statements for a for loop as well:
 
-```
+```dyn
 main := () {
     mut sum: i32 = 0
     for 0..10: |i| sum += i
@@ -26,37 +27,35 @@ main := () {
 
 For loops also support multiple iterable conditions as well:
 
-```
+```dyn
 main := () {
     for 0..10, 0..10: |i, j| {}
 }
 ```
 
-All conditions in the for loop need to be the same length. And all conditions
-need a capture, or _ to skip it
+All conditions in for loop need to be same length. And all conditions need a capture, or _ to skip it.
 
-```
+```dyn
 main := () {
     // for 0..10, 0..10: |i| {} - invalid
     for 0..10, 0..10: |i, _| {} // valid
 }
 ```
 
-Ranges aren't the only iterable thing, you can also iterate over arrays as well:
+Ranges aren't only iterable thing, you can also iterate over arrays as well:
 
-```
+```dyn
 main := () {
     x: []i32 = [1,2,3,4,5]
     for x: |i| {
-        // do something with the value in x
+        // do something with value in x
     }
 }
 ```
 
-By default, captures of values, specifically from arrays, are immutable, so to
-change them, you need to mark the capture as default:
+By default, captures of values, specifically from arrays, are immutable, so to change them, you need to mark capture as default:
 
-```
+```dyn
 main := () {
     x: []i32 = [1,2,3,4,5]
     for x: |i| {
@@ -67,24 +66,21 @@ main := () {
 ```
 
 ### As Condition
-As mentioned above, dyn uses for loops also in place of while loops, so you can
-do something like the following:
 
-```
+As mentioned above, dyn uses for loops also in place of while loops, so you can do something like following:
+
+```dyn
 main := () {
     mut x := 1
     for x < 10 x += 1
 }
 ```
 
-Which means that for loops only accept a list of iterables or a boolean
-condition, it does not support multiple boolean conditions (unless separated)
-by `&&` or `||`
+Which means that for loops only accept a list of iterables or a boolean condition, it does not support multiple boolean conditions (unless separated) by `&&` or `||`.
 
-And if you do a for loop with a block and no condition, it acts like an infinite
-loop
+And if you do a for loop with a block and no condition, it acts like an infinite loop.
 
-```
+```dyn
 main := () {
     for {
         // do something forever
@@ -94,41 +90,39 @@ main := () {
 ```
 
 ## If
-If statements are branching logic pieces that execute based on the given logic
 
-```
+If statements are branching logic pieces that execute based on given logic.
+
+```dyn
 something := 1
 if something == 1 {
     // do something
 } else {} // else optional for statements
 ```
 
-You also dont need the {} if it's a single statement/expression
+You also dont need {} if it's a single statement/expression.
 
-```
+```dyn
 mut something := 1
 if something == 1 something = 2
 ```
 
 This also applies to else's too:
 
-```
+```dyn
 if something == 1 something = 2 else something = 3
 if something == 1 something = 2 else if something == 2 something = 3 else something = 4
 ```
 
-Ifs can also be used as expressions, doing so this way requires an ending else,
-regardless of the amount of else/ifs and each branch needs to evaluate to the
-same type
+Ifs can also be used as expressions, doing so this way requires an ending else, regardless of amount of else/ifs and each branch needs to evaluate to same type.
 
-```
+```dyn
 x := if something == 1 1 else 0
 ```
 
-Since ifs as expressions have to evaluate to the same type, blocks used also
-need to evaluate to the same type
+Since ifs as expressions have to evaluate to same type, blocks used also need to evaluate to same type.
 
-```
+```dyn
 y := if something == 1 { // y evaluates to an int
     // do something else here if you want
     break 1 // int
@@ -138,10 +132,9 @@ y := if something == 1 { // y evaluates to an int
 }
 ```
 
-The only time this changes is with optional types since it's allowed to be a
-null or a value
+Only time this changes is with optional types since it's allowed to be a null or a value.
 
-```
+```dyn
 z := if something == 1 { // y evaluates to a ?int
     // do something else here if you want
     break 1 // int
@@ -153,7 +146,7 @@ z := if something == 1 { // y evaluates to a ?int
 
 Ifs can be used for optional types as well, so you can do something like this:
 
-```
+```dyn
 maybe := null
 if maybe: |v| {
     // do something with v
@@ -161,36 +154,29 @@ if maybe: |v| {
 ```
 
 ## Match
-Match statements give you the ability to execute code based on a series of
-patterns and a value that gets matched against them. All values arrays, void
-or struct types can be matched against. The patterns you match against need to
-be the same type as the value you match.
 
-```
+Match statements give you ability to execute code based on a series of patterns and a value that gets matched against them. All values arrays, void or struct types can be matched against. Patterns you match against need to be same type as value you match.
+
+```dyn
 main := () {
     val: i32 = 2
     match val {
         1: {}, // a pattern to match, i32
         2..=10: {}, // another pattern, still seen as i32
-        _: {} // the default, covers all other cases
+        _: {} // default, covers all other cases
     }
 }
 ```
 
-Another thing to note with patterns being the same type, this also corresponds
-to int types of varying bit representations, so if you match on a u8, you can
-only match up to a u8's values, and nothing below 0, same with i8 or u/i32, etc
+Another thing to note with patterns being same type, this also corresponds to int types of varying bit representations, so if you match on a u8, you can only match up to a u8's values, and nothing below 0, same with i8 or u/i32, etc.
 
-All matches are exhaustive, meaning that every possible case needs to be
-covered in the match statement, be it with individually listing the patterns
-or with using the _ pattern to catch all others. Patterns also cannot overlap
-with each other, which should be achieved since _ is "all other values not
-specified"
+All matches are exhaustive, meaning that every possible case needs to be covered in match statement, be it with individually listing patterns or with using _ pattern to catch all others. Patterns also cannot overlap with each other, which should be achieved since _ is "all other values not specified".
 
 ### Enum Matching
-Enums are matched just by listing the variant. If the enum variant has a
-partner, then that value can be captured, both immutably and mutably
-```
+
+Enums are matched just by listing variant. If enum variant has a partner, then that value can be captured, both immutably and mutably.
+
+```dyn
 SomeEnum := enum {
     variant1: i32,
     variant2: f32,
@@ -201,7 +187,7 @@ main := () {
     thing := SomeEnum.variant1(i32)
     match thing {
         .variant1: |i| {},
-        .variant2: {}, // if you dont want to use the partner, dont include
+        .variant2: {}, // if you dont want to use partner, dont include
         .variant3: {}, // no partner so no capture required
         // _: {} - not necessary since all variants covered
     }
@@ -219,7 +205,8 @@ main := () {
 ```
 
 Matches can also be used as expressions, just like ifs can:
-```
+
+```dyn
 main := () {
     val: i32 = 2
     result := match val { // type of result is ?[]u8
@@ -232,5 +219,5 @@ main := () {
     }
 }
 ```
-Values being returned need to be the same type, at least as far as being ints
-or being all floats, etc except for having an optional type or error
+
+Values being returned need to be same type, at least as far as being ints or being all floats, etc except for having an optional type or error.

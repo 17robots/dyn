@@ -1,0 +1,10 @@
+module other_module
+
+not_accessible := () {}
+
+pub second := use "second"
+
+pub accessible := () {
+  not_accessible() // does one thing in other_module
+}
+

@@ -1,0 +1,185 @@
+// comment
+/*
+  multiline
+  or
+  block
+  comment
+*/
+
+module main
+main := () ! {
+  a := 1
+  b := 2
+  c := 3
+  d: i32 = 4
+  e: i31 = 5
+  mut f: u1 = false
+  f = true
+  g: u8 = 'a'
+  h: f32 = 1.0
+  i: f64 = 1.0
+  j: f128 = 1.0
+  k: [10]i32 = [1,2,3,4,5,5,4,3,2,1]
+  l: [1]f32 = [1.0]
+  m: []i32 = k[0..2]
+  n: []f32 = l[..]
+  o := "hello world" // []u8
+  p: ?i32 = 1
+  q: ?i32 = null
+  r: *i32 = &d
+  s: *mut u1 = &f
+  s.* = false
+  t := enum {
+    variant1,
+    variant2,
+    variant3: i32,
+    variant4: enum {
+      inner1,
+      inner2: f32,
+      inner3: []u8
+    }
+  }
+  u := struct {
+    item1, item2, item3: u32,
+    item4: []u8,
+    item5: []i32,
+    new := () u => .{}, // returns stuff
+    do_thing := (self: u) {},
+    fn_ptr := *fn(self: u),
+  }
+
+  {
+    v := "only valid here"
+  }
+  // v no longer valid
+
+  mut total = 0
+  for 0..10: |v| {
+    total += v
+  }
+  for 0..10: |v| total += i // only one line of thing
+  for k: |v| total += v
+  for total > 10 total += 1
+  for total < 0 {
+    total -= 1
+  }
+  for {
+    break // please break infinite loops
+  }
+  if total == 10 {} else if total == 9 {} else {}
+  if q: |val| {
+    // do something with val
+  }
+  if q: |_| {
+    // do something if q not null
+  }
+  w := if total % 2 == 0 total / 2 else (total - 1) / 2
+  match total {
+    0..1: {},
+    2..10: {},
+    _: {}
+  }
+  x := match total {
+    1: 1,
+    _: null
+  }
+  res := t.variant4(.inner3("hello"))
+  match res {
+    .variant1: {},
+    .variant3: |i| {},
+    .variant4: |v| match v {
+      .inner1: {},
+      .inner2: |thing| {},
+      .inner3: |thing| {}
+    },
+    _: {}
+  }
+  y := add4(add3(add2(add1(1,1), add1(1,1)), add2(add1(1,1), add1(1,1))),add3(add2(add1(1,1), add1(1,1)), add2(add1(1,1), add1(1,1))))
+  internal_fn := () {
+    // print y
+  }
+  internal_fn()
+  z := u.new()
+  z.do_thing()
+
+  defer {}
+  defer {}
+  defer |e| {}
+
+  A := divide(1,0) or 0
+  B := divide(1,1).!
+  C := divide(1,0) or {
+    // something
+    break 2
+  }
+  D := divide(1,0) or |e| {
+    // something with e
+    break 3
+  }
+  E := q or {
+    // do something
+    break 1
+  }
+  F := q.?
+  G := q or 1
+  H := IntList.init()
+  use_f64 := true
+  calc_pi := () comp if use_f64 f64 else f32 => 3.14
+  pi := calc_pi()
+  pi2 := comp calc_pi()
+  inline for 0..10: |i| {
+      // do something and it will unroll with i being passed in as the val to it
+  }
+  inline_fn() // will have its contents replaced here
+
+  for 0..10: |v| blk: {
+    for 0..10: |v2| {
+      if v2 == 1 break :blk
+    }
+  }
+  this_is_usable_in_main()
+
+  I := use "other_module"
+  I.accessible_in_main()
+  // I.not_accessible_in_main() - errors
+  J := use "subfolder/other_module"
+  K := use "subfolder/second"
+  J.accessible()
+  J.second.accessible() // does the same thing as the below line
+  K.accessible()
+}
+
+add := (x: i32, y: i32) i32 { return x + y }
+add2 := (x, y: i32) i32 { return x + y }
+add3 := (x, y: i32) i32 => x + y
+add4 := (x,y: i32 = 0) i32 => x + y
+DivideError1 := {
+  UhOh
+}
+DivideError2 := {
+  DivideByZero
+}
+divide := (x,y: f32) f32!DivideError1,DivideError2 => if y == 0 .DivideByZero else x / y
+
+List := (T: type) type => struct {
+  items: []T,
+  init := () $self() => .{ items: [] }
+}
+List2 := (T: comp type) type => struct { // comptime known type
+  items: []T,
+  init := () $self() => .{ items: [] }
+}
+IntList := List(i32)
+inline_fn := inline () i32 => 1
+
+hmm_type := get_type(){}
+hmm := hmm_type.vals.?.*.current_val or hmm_type.vals.?.*.other_vals[1]
+
+get_type := () type {
+  return struct {
+    vals: ?*struct {
+      current_val: ?*type,
+      other_vals: []*type
+    },
+  }
+}

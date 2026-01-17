@@ -1,0 +1,3 @@
+module main
+
+this_is_usable_in_main := () {}
