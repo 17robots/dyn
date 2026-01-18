@@ -1,19 +1,18 @@
-const std = @import("std");
 const dyn = @import("dyn");
 
 pub fn main() !void {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = dyn.std.fs.File.stdout().writer(&stdout_buffer);
     const stdout = &stdout_writer.interface;
     try dyn.bufferedPrint(stdout, "This is me printing stuff\n", .{});
 }
 
 test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
+    const gpa = dyn.std.testing.allocator;
+    var list: dyn.std.ArrayList(i32) = .empty;
     defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
     try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+    try dyn.std.testing.expectEqual(@as(i32, 42), list.pop());
 }
 
 test "fuzz example" {
@@ -21,8 +20,8 @@ test "fuzz example" {
         fn testOne(context: @This(), input: []const u8) anyerror!void {
             _ = context;
             // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
+            try dyn.std.testing.expect(!dyn.std.mem.eql(u8, "canyoufindme", input));
         }
     };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+    try dyn.std.testing.fuzz(Context{}, Context.testOne, .{});
 }

@@ -153,10 +153,10 @@ add := (x: i32, y: i32) i32 { return x + y }
 add2 := (x, y: i32) i32 { return x + y }
 add3 := (x, y: i32) i32 => x + y
 add4 := (x,y: i32 = 0) i32 => x + y
-DivideError1 := {
+DivideError1 := enum {
   UhOh
 }
-DivideError2 := {
+DivideError2 := enum {
   DivideByZero
 }
 divide := (x,y: f32) f32!DivideError1,DivideError2 => if y == 0 .DivideByZero else x / y
