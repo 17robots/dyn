@@ -26,7 +26,21 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8, tokens_to_lex: ?u32) []To
             ',' => toks.append(alloc, Tok{ .kind = .comma, .span = Span{ .start = idx, .end = idx } }),
             '?' => toks.append(alloc, Tok{ .kind = .question, .span = Span{ .start = idx, .end = idx } }),
             '.' => {
+                // TODO
                 placeholder = idx;
+                idx += 1;
+                if (idx > text.len and text[idx] == '.') {
+                    idx += 1;
+                    if (idx > text.len and text[idx] == '=') {
+                        toks.append(alloc, Tok{ .kind = .rangeq, .span = Span{ .start = placeholder, .end = idx } }) catch {};
+                    } else {
+                        toks.append(alloc, Tok{ .kind = .range, .span = Span{ .start = placeholder, .end = idx } }) catch {};
+                        continue :lex_loop;
+                    }
+                } else {
+                    toks.append(alloc, Tok{ .kind = .dot, .span = Span{ .start = placeholder, .end = idx } }) catch {};
+                    continue :lex_loop;
+                }
             },
             '!', '~', '+', '-', '*', '%', '^', '=' => {
                 placeholder = idx;
@@ -92,12 +106,23 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8, tokens_to_lex: ?u32) []To
                     switch (text[idx]) {
                         '<' => {
                             idx += 1;
-                            toks.append(alloc, Tok{ .kind = if (idx > text.len and text[idx] == '=') .shleq else .shl, .span = Span{ .start = placeholder, .end = idx } }) catch {};
+                            if (idx > text.len) {
+                                if (text[idx] == '=') toks.append(alloc, Tok{ .kind = .shleq, .span = Span{ .start = placeholder, .end = idx } }) catch {} else {
+                                    toks.append(alloc, Tok{ .kind = .shl, .span = Span{ .start = placeholder, .end = idx - 1 } }) catch {};
+                                    continue :lex_loop;
+                                }
+                            }
                         },
-                        '=' => toks.append(alloc, Tok{ .kind = .lte, .span = Span{ .start = placeholder, .end = idx } }) catch {},
-                        else => toks.append(alloc, Tok{ .kind = .lt, .span = Span{ .start = placeholder, .end = idx } }) catch {},
+                        '=' => toks.append(alloc, Tok{ .kind = .lte, .span = Span{ .start = placeholder, .end = idx } }),
+                        else => {
+                            toks.append(alloc, Tok{ .kind = .lt, .span = Span{ .start = placeholder, .end = idx - 1 } }) catch {};
+                            continue :lex_loop;
+                        },
                     }
-                } else toks.append(alloc, Tok{ .kind = .lt, .span = Span{ .start = placeholder, .end = idx } }) catch {};
+                } else {
+                    toks.append(alloc, Tok{ .kind = .lt, .span = Span{ .start = placeholder, .end = idx - 1 } }) catch {};
+                    continue :lex_loop;
+                }
             },
             '>' => {
                 placeholder = idx;
@@ -106,12 +131,23 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8, tokens_to_lex: ?u32) []To
                     switch (text[idx]) {
                         '>' => {
                             idx += 1;
-                            toks.append(alloc, Tok{ .kind = if (idx > text.len and text[idx] == '=') .shreq else .shr, .span = Span{ .start = placeholder, .end = idx } }) catch {};
+                            if (idx > text.len) {
+                                if (text[idx] == '=') toks.append(alloc, Tok{ .kind = .shreq, .span = Span{ .start = placeholder, .end = idx } }) catch {} else {
+                                    toks.append(alloc, Tok{ .kind = .shr, .span = Span{ .start = placeholder, .end = idx - 1 } }) catch {};
+                                    continue :lex_loop;
+                                }
+                            }
                         },
-                        '=' => toks.append(alloc, Tok{ .kind = .gte, .span = Span{ .start = placeholder, .end = idx } }) catch {},
-                        else => toks.append(alloc, Tok{ .kind = .gt, .span = Span{ .start = placeholder, .end = idx } }) catch {},
+                        '=' => toks.append(alloc, Tok{ .kind = .gte, .span = Span{ .start = placeholder, .end = idx } }),
+                        else => {
+                            toks.append(alloc, Tok{ .kind = .gt, .span = Span{ .start = placeholder, .end = idx - 1 } }) catch {};
+                            continue :lex_loop;
+                        },
                     }
-                } else toks.append(alloc, Tok{ .kind = .lt, .span = Span{ .start = placeholder, .end = idx } }) catch {};
+                } else {
+                    toks.append(alloc, Tok{ .kind = .gt, .span = Span{ .start = placeholder, .end = idx - 1 } }) catch {};
+                    continue :lex_loop;
+                }
             },
             '\'' => {
                 // TODO
@@ -275,87 +311,3 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8, tokens_to_lex: ?u32) []To
     }
     return toks.items;
 }
-// pub fn parse(toks: []Tok) void {}
-pub const Tok = struct {
-    kind: Kind,
-    span: Span,
-    const Kind = union(enum) {
-        // kw
-        @"break",
-        comp,
-        @"continue",
-        @"defer",
-        @"else",
-        @"enum",
-        @"fn",
-        @"for",
-        @"if",
-        @"inline",
-        match,
-        module,
-        mut,
-        @"or",
-        @"pub",
-        @"struct",
-        type,
-        use,
-        // operator
-        lparen, // (
-        rparen, // )
-        lbrace, // {
-        rbrace, // }
-        lbrack, // [
-        rbrack, // ]
-        dot, // .
-        sub, // -
-        not, // !
-        complement, // ~
-        mul, // *
-        div, // /
-        mod, // %
-        add, // +
-        range, // ..
-        rangeq, // ..=
-        shl, // <<
-        shr, // >>
-        @"and", // &
-        xor, // ^
-        pipe, // |
-        gt, // >
-        gte, // >=
-        lt, // >
-        lte, // >=
-        eqeq, // ==
-        neq, // !=
-        land, // &&
-        lor, // ||
-        eq, // =
-        addeq, // +=
-        subeq, // -=
-        muleq, // *=
-        modeq, // %=
-        diveq, // /=
-        oreq, // |=
-        andeq, // &=
-        xoreq, // ^=
-        compleq, // ~=
-        shleq, // <<=
-        shreq, // >>=
-        comma, // ,
-        colon, // :
-        arrow, // =>
-        question, // ?
-        // literal
-        terminator: enum { semicolon, newline },
-        int: []const u8,
-        bin_int: []const u8,
-        hex_int: []const u8,
-        oct_int: []const u8,
-        float: []const u8,
-        string: []const u8,
-        char: []const u8,
-        identifier: []const u8,
-        illegal: []const u8,
-    };
-};
-pub const Span = struct { start: u32, end: u32 };

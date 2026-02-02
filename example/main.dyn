@@ -183,3 +183,7 @@ get_type := () type {
     },
   }
 }
+
+
+pipe_example := () {
+}
