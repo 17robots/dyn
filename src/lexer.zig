@@ -19,7 +19,6 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
             ';' => Tok.Kind{ .terminator = .semicolon },
             ',' => .comma,
             '?' => .question,
-            // todo: make .number allowed
             '.' => if (idx + 1 < text.len) switch (text[idx + 1]) {
                 '.' => blk: {
                     idx += 1;
@@ -199,16 +198,26 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                         '0', '1', '_' => idx += 1,
                         else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
                     };
+                    if (text[idx] == 'b' or text[idx] == 'B') {}
                     break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                 },
                 // todo: allow for exponent decimals
-                'e', 'E' => blk: {},
+                'e', 'E' => blk: {
+                    idx += 1;
+                    while (idx + 1 < text.len) switch (text[idx + 1]) {
+                        '0'...'9', '_' => idx += 1,
+                        else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
+                    };
+                    if (text[idx] == 'e' or text[idx] == 'E') {}
+                    break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                },
                 'o', 'O' => blk: {
                     idx += 1;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
                         '0'...'7', '_' => idx += 1,
                         else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
                     };
+                    if (text[idx] == 'o' or text[idx] == 'O') {}
                     break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                 },
                 'x', 'X' => blk: {
@@ -217,31 +226,45 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                         '0'...'9', 'a'...'f', 'A'...'F', '_' => idx += 1,
                         else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
                     };
+                    if (text[idx] == 'x' or text[idx] == 'X') {}
                     break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                 },
                 '.' => blk: {
                     if (idx + 2 < text.len and text[idx + 2] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                     idx += 1;
+                    var exponent = false;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
                         '0'...'9', '_' => idx += 1,
-                        else => break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] },
+                        'e', 'E' => {
+                            if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                            if (text[idx] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                            exponent = true;
+                            idx += 1;
+                        },
+                        else => break :blk if (exponent) Tok.Kind{ .int = text[placeholder .. idx + 1] } else Tok.Kind{ .float = text[placeholder .. idx + 1] },
                     };
-                    break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] };
+                    break :blk if (exponent) Tok.Kind{ .int = text[placeholder .. idx + 1] } else Tok.Kind{ .float = text[placeholder .. idx + 1] };
                 },
             } else Tok.Kind{ .int = text[placeholder .. idx + 1] },
-            // todo: allow exponents as well
             '1'...'9' => blk: {
                 var decimal = false;
+                var exponent = false;
                 while (idx + 1 < text.len) {
                     switch (text[idx + 1]) {
                         '0'...'9' => idx += 1,
+                        'e', 'E' => {
+                            if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                            exponent = true;
+                            idx += 1;
+                        },
                         '.' => {
+                            if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                             if (decimal) break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] };
                             if (idx + 2 < text.len and text[idx + 2] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                             decimal = true;
                             idx += 1;
                         },
-                        else => break :blk if (decimal) Tok.Kind{ .float = text[placeholder .. idx + 1] } else Tok.Kind{ .int = text[placeholder .. idx + 1] },
+                        else => break :blk if (exponent) Tok.Kind{ .int = text[placeholder .. idx + 1] } else if (decimal) Tok.Kind{ .float = text[placeholder .. idx + 1] } else Tok.Kind{ .int = text[placeholder .. idx + 1] },
                     }
                 }
                 break :blk if (decimal) Tok.Kind{ .float = text[placeholder .. idx + 1] } else Tok.Kind{ .int = text[placeholder .. idx + 1] };
