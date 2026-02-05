@@ -193,49 +193,71 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
             // todo: validate that at least 1 number comes out from these
             '0' => if (idx + 1 < text.len) switch (text[idx + 1]) {
                 'b', 'B' => blk: {
+                    var has_num = false;
                     idx += 1;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0', '1', '_' => idx += 1,
-                        else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
+                        '0', '1' => {
+                            if (!has_num) has_num = true;
+                            idx += 1;
+                        },
+                        '_' => idx += 1,
+                        else => break :blk if (!has_num) Tok.Kind{} else Tok.Kind{ .bin_int = text[placeholder .. idx + 1] },
                     };
-                    if (text[idx] == 'b' or text[idx] == 'B') {}
-                    break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                    break :blk if (!has_num) Tok.Kind{} else Tok.Kind{ .bin_int = text[placeholder .. idx + 1] };
                 },
                 // todo: allow for exponent decimals
                 'e', 'E' => blk: {
+                    var has_num = false;
                     idx += 1;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0'...'9', '_' => idx += 1,
-                        else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
+                        '0'...'9' => {
+                            if (!has_num) has_num = true;
+                            idx += 1;
+                        },
+                        '_' => idx += 1,
+                        else => break :blk if (has_num) Tok.Kind{} else Tok.Kind{ .int = text[placeholder .. idx + 1] },
                     };
-                    if (text[idx] == 'e' or text[idx] == 'E') {}
-                    break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                    break :blk if (has_num) Tok.Kind{} else Tok.Kind{ .int = text[placeholder .. idx + 1] };
                 },
                 'o', 'O' => blk: {
+                    var has_num = false;
                     idx += 1;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0'...'7', '_' => idx += 1,
-                        else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
+                        '0'...'7' => {
+                            if (!has_num) has_num = true;
+                            idx += 1;
+                        },
+                        '_' => idx += 1,
+                        else => break :blk if (!has_num) Tok.Kind{} else Tok.Kind{ .oct_int = text[placeholder .. idx + 1] },
                     };
-                    if (text[idx] == 'o' or text[idx] == 'O') {}
-                    break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                    break :blk Tok.Kind{ .oct_int = text[placeholder .. idx + 1] };
                 },
                 'x', 'X' => blk: {
+                    var has_num = false;
                     idx += 1;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0'...'9', 'a'...'f', 'A'...'F', '_' => idx += 1,
-                        else => break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] },
+                        '0'...'9', 'a'...'f', 'A'...'F' => {
+                            if(!has_num) has_num = true;
+                            idx += 1;
+                        },
+                        '_' => idx += 1,
+                        else => break :blk if(!has_num) Tok.Kind{ .hex_int = text[placeholder .. idx + 1] },
                     };
-                    if (text[idx] == 'x' or text[idx] == 'X') {}
-                    break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                    break :blk if(!has_num) Tok.Kind{ .hex_int = text[placeholder .. idx + 1] };
                 },
                 '.' => blk: {
                     if (idx + 2 < text.len and text[idx + 2] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                    var has_num = false;
                     idx += 1;
                     var exponent = false;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0'...'9', '_' => idx += 1,
+                        '0'...'9' => {
+                            if(!has_num) has_num = true;
+                            idx += 1;
+                        },
+                        '_' => idx += 1,
                         'e', 'E' => {
+                            if(!has_num) break :blk Tok.Kind{};
                             if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                             if (text[idx] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                             exponent = true;
@@ -253,6 +275,7 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                     switch (text[idx + 1]) {
                         '0'...'9' => idx += 1,
                         'e', 'E' => {
+                            if(text[idx] == '.') {} // some error
                             if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                             exponent = true;
                             idx += 1;
