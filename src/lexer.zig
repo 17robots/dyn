@@ -3,8 +3,8 @@ const Tok = @import("token.zig").Tok;
 
 pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
     var toks: std.ArrayList(Tok) = .empty;
-    var idx = 0;
-    var placeholder = 0;
+    var idx: usize = 0;
+    var placeholder: usize = 0;
     var tok_to_add: ?Tok.Kind = null;
     while (idx < text.len) {
         placeholder = idx;
@@ -31,13 +31,13 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                     idx += 1;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
                         '0'...'9' => idx += 1,
-                        else => break :blk Tok.Kind{ .float = text[placeholder..idx] },
+                        else => break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] },
                     };
-                    break :blk Tok.Kind{ .float = text[placeholder..idx] };
+                    break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] };
                 },
                 else => .dot,
             } else .dot,
-            '!', '~', '+', '-', '*', '%', '^', '=' => if (idx + 1 < text.len and text[idx + 1] == '=') blk: {
+            '!', '~', '+', '-', '*', '%', '^' => if (idx + 1 < text.len and text[idx + 1] == '=') blk: {
                 idx += 1;
                 break :blk switch (text[idx - 1]) {
                     '!' => .neq,
@@ -101,11 +101,24 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                     else => .div,
                 };
             } else .div,
+            '=' => if (idx + 1 < text.len) blk: {
+                break :blk switch (text[idx + 1]) {
+                    '>' => blk2: {
+                        idx += 1;
+                        break :blk2 .arrow;
+                    },
+                    '=' => blk2: {
+                        idx += 1;
+                        break :blk2 .eqeq;
+                    },
+                    else => .eq,
+                };
+            } else .eq,
             '&' => if (idx + 1 < text.len) blk: {
                 break :blk switch (text[idx + 1]) {
                     '&' => blk2: {
                         idx += 1;
-                        break :blk2 .andand;
+                        break :blk2 .land;
                     },
                     '=' => blk2: {
                         idx += 1;
@@ -138,7 +151,7 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                     },
                     '=' => blk2: {
                         idx += 1;
-                        break :blk2 .lteq;
+                        break :blk2 .lte;
                     },
                     else => .lt,
                 };
@@ -154,7 +167,7 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                     },
                     '=' => blk2: {
                         idx += 1;
-                        break :blk2 .gteq;
+                        break :blk2 .gte;
                     },
                     else => .gt,
                 };
@@ -173,78 +186,40 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                 while (idx + 1 < text.len) {
                     switch (text[idx + 1]) {
                         'a'...'z', 'A'...'Z', '_', '0'...'9' => idx += 1,
-                        else => break :blk if (std.mem.eql(u8, text[placeholder .. idx + 1], "break")) .@"break" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "comp")) .comp else if (std.mem.eql(u8, text[placeholder .. idx + 1], "continue")) .@"continue" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "defer")) .@"defer" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "enum")) .@"enum" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "fn")) .@"fn" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "for")) .@"for" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "if")) .@"if" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "inline")) .@"inline" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "match")) .match else if (std.mem.eql(u8, text[placeholder .. idx + 1], "mut")) .mut else if (std.mem.eql(u8, text[placeholder .. idx + 1], "or")) .@"or" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "pub")) .@"pub" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "struct")) .@"struct" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "type")) .type else if (std.mem.eql(u8, text[placeholder .. idx + 1], "use")) .use else Tok.Kind{ .identifier = text[placeholder .. idx + 1] },
+                        else => break :blk keyword(text[placeholder .. idx + 1]),
                     }
                 }
-                break :blk if (std.mem.eql(u8, text[placeholder .. idx + 1], "break")) .@"break" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "comp")) .comp else if (std.mem.eql(u8, text[placeholder .. idx + 1], "continue")) .@"continue" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "defer")) .@"defer" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "enum")) .@"enum" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "fn")) .@"fn" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "for")) .@"for" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "if")) .@"if" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "inline")) .@"inline" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "match")) .match else if (std.mem.eql(u8, text[placeholder .. idx + 1], "mut")) .mut else if (std.mem.eql(u8, text[placeholder .. idx + 1], "or")) .@"or" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "pub")) .@"pub" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "struct")) .@"struct" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "type")) .type else if (std.mem.eql(u8, text[placeholder .. idx + 1], "use")) .use else Tok.Kind{ .identifier = text[placeholder .. idx + 1] };
+                break :blk keyword(text[placeholder .. idx + 1]);
             },
             '_' => if (idx + 1 < text.len) switch (text[idx + 1]) {
                 'a'...'z', 'A'...'Z', '$' => blk: {
                     while (idx + 1 < text.len) {
                         switch (text[idx + 1]) {
                             'a'...'z', 'A'...'Z', '_', '0'...'9' => idx += 1,
-                            else => break :blk if (std.mem.eql(u8, text[placeholder .. idx + 1], "break")) .@"break" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "comp")) .comp else if (std.mem.eql(u8, text[placeholder .. idx + 1], "continue")) .@"continue" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "defer")) .@"defer" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "enum")) .@"enum" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "fn")) .@"fn" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "for")) .@"for" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "if")) .@"if" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "inline")) .@"inline" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "match")) .match else if (std.mem.eql(u8, text[placeholder .. idx + 1], "mut")) .mut else if (std.mem.eql(u8, text[placeholder .. idx + 1], "or")) .@"or" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "pub")) .@"pub" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "struct")) .@"struct" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "type")) .type else if (std.mem.eql(u8, text[placeholder .. idx + 1], "use")) .use else Tok.Kind{ .identifier = text[placeholder .. idx + 1] },
+                            else => break :blk keyword(text[placeholder .. idx + 1]),
                         }
                     }
-                    break :blk if (std.mem.eql(u8, text[placeholder .. idx + 1], "break")) .@"break" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "comp")) .comp else if (std.mem.eql(u8, text[placeholder .. idx + 1], "continue")) .@"continue" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "defer")) .@"defer" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "enum")) .@"enum" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "fn")) .@"fn" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "for")) .@"for" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "if")) .@"if" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "inline")) .@"inline" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "match")) .match else if (std.mem.eql(u8, text[placeholder .. idx + 1], "mut")) .mut else if (std.mem.eql(u8, text[placeholder .. idx + 1], "or")) .@"or" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "pub")) .@"pub" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "struct")) .@"struct" else if (std.mem.eql(u8, text[placeholder .. idx + 1], "type")) .type else if (std.mem.eql(u8, text[placeholder .. idx + 1], "use")) .use else Tok.Kind{ .identifier = text[placeholder .. idx + 1] };
+                    break :blk keyword(text[placeholder .. idx + 1]);
                 },
                 else => .underscore,
             } else .underscore,
-            // todo: validate that at least 1 number comes out from these
             '0' => if (idx + 1 < text.len) switch (text[idx + 1]) {
-                'b', 'B' => blk: {
-                    var has_num = false;
-                    idx += 1;
-                    while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0', '1' => {
-                            if (!has_num) has_num = true;
-                            idx += 1;
-                        },
-                        '_' => idx += 1,
-                        else => break :blk if (!has_num) Tok.Kind{} else Tok.Kind{ .bin_int = text[placeholder .. idx + 1] },
-                    };
-                    break :blk if (!has_num) Tok.Kind{} else Tok.Kind{ .bin_int = text[placeholder .. idx + 1] };
-                },
-                // todo: allow for exponent decimals
+                'b', 'B' => read_num(text, &placeholder, &idx, .bin),
                 'e', 'E' => blk: {
                     var has_num = false;
                     idx += 1;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
                         '0'...'9' => {
-                            if (!has_num) has_num = true;
+                            has_num = true;
                             idx += 1;
                         },
                         '_' => idx += 1,
-                        else => break :blk if (has_num) Tok.Kind{} else Tok.Kind{ .int = text[placeholder .. idx + 1] },
+                        else => break,
                     };
-                    break :blk if (has_num) Tok.Kind{} else Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                    break :blk if (has_num) Tok.Kind{ .float = text[placeholder .. idx + 1] } else Tok.Kind{ .illegal = text[placeholder .. idx + 1] };
                 },
-                'o', 'O' => blk: {
-                    var has_num = false;
-                    idx += 1;
-                    while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0'...'7' => {
-                            if (!has_num) has_num = true;
-                            idx += 1;
-                        },
-                        '_' => idx += 1,
-                        else => break :blk if (!has_num) Tok.Kind{} else Tok.Kind{ .oct_int = text[placeholder .. idx + 1] },
-                    };
-                    break :blk Tok.Kind{ .oct_int = text[placeholder .. idx + 1] };
-                },
-                'x', 'X' => blk: {
-                    var has_num = false;
-                    idx += 1;
-                    while (idx + 1 < text.len) switch (text[idx + 1]) {
-                        '0'...'9', 'a'...'f', 'A'...'F' => {
-                            if(!has_num) has_num = true;
-                            idx += 1;
-                        },
-                        '_' => idx += 1,
-                        else => break :blk if(!has_num) Tok.Kind{ .hex_int = text[placeholder .. idx + 1] },
-                    };
-                    break :blk if(!has_num) Tok.Kind{ .hex_int = text[placeholder .. idx + 1] };
-                },
+                'o', 'O' => read_num(text, &placeholder, &idx, .oct),
+                'x', 'X' => read_num(text, &placeholder, &idx, .hex),
                 '.' => blk: {
                     if (idx + 2 < text.len and text[idx + 2] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
                     var has_num = false;
@@ -252,14 +227,14 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                     var exponent = false;
                     while (idx + 1 < text.len) switch (text[idx + 1]) {
                         '0'...'9' => {
-                            if(!has_num) has_num = true;
+                            if (!has_num) has_num = true;
                             idx += 1;
                         },
                         '_' => idx += 1,
                         'e', 'E' => {
-                            if(!has_num) break :blk Tok.Kind{};
-                            if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
-                            if (text[idx] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
+                            if (!has_num) break :blk Tok.Kind{ .illegal = text[placeholder .. idx + 1] };
+                            if (exponent) break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] };
+                            if (text[idx] == '.') break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] };
                             exponent = true;
                             idx += 1;
                         },
@@ -267,37 +242,66 @@ pub fn lex(alloc: std.mem.Allocator, text: []const u8) ![]Tok {
                     };
                     break :blk if (exponent) Tok.Kind{ .int = text[placeholder .. idx + 1] } else Tok.Kind{ .float = text[placeholder .. idx + 1] };
                 },
+                else => Tok.Kind{ .int = text[placeholder .. idx + 1] },
             } else Tok.Kind{ .int = text[placeholder .. idx + 1] },
             '1'...'9' => blk: {
                 var decimal = false;
                 var exponent = false;
-                while (idx + 1 < text.len) {
-                    switch (text[idx + 1]) {
-                        '0'...'9' => idx += 1,
-                        'e', 'E' => {
-                            if(text[idx] == '.') {} // some error
-                            if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
-                            exponent = true;
-                            idx += 1;
-                        },
-                        '.' => {
-                            if (exponent) break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
-                            if (decimal) break :blk Tok.Kind{ .float = text[placeholder .. idx + 1] };
-                            if (idx + 2 < text.len and text[idx + 2] == '.') break :blk Tok.Kind{ .int = text[placeholder .. idx + 1] };
-                            decimal = true;
-                            idx += 1;
-                        },
-                        else => break :blk if (exponent) Tok.Kind{ .int = text[placeholder .. idx + 1] } else if (decimal) Tok.Kind{ .float = text[placeholder .. idx + 1] } else Tok.Kind{ .int = text[placeholder .. idx + 1] },
-                    }
-                }
+                while (idx + 1 < text.len) switch (text[idx + 1]) {
+                    '0'...'9' => idx += 1,
+                    '_' => idx += 1,
+                    '.' => {
+                        if (idx + 2 < text.len and text[idx + 2] == '.') break;
+                        decimal = true;
+                        idx += 1;
+                    },
+                    'e', 'E' => {
+                        if (exponent) break;
+                        exponent = true;
+                        decimal = true;
+                        idx += 1;
+                        if (idx + 1 < text.len) switch (text[idx + 1]) {
+                            '+', '-' => idx += 1,
+                            else => {},
+                        };
+                        if (idx + 1 >= text.len or text[idx + 1] > '0' or text[idx + 1] < '9') break :blk Tok.Kind{ .illegal = text[placeholder .. idx + 1] };
+                    },
+                    else => break,
+                };
                 break :blk if (decimal) Tok.Kind{ .float = text[placeholder .. idx + 1] } else Tok.Kind{ .int = text[placeholder .. idx + 1] };
             },
             '\t', ' ', '\r' => null,
             else => Tok.Kind{ .illegal = text[placeholder .. idx + 1] },
         };
-        if (tok_to_add) |t| try toks.append(alloc, Tok.new(t, placeholder, idx));
+        if (tok_to_add) |t| try toks.append(alloc, Tok.new(t, @intCast(placeholder), @intCast(idx)));
         tok_to_add = null;
         idx += 1;
     }
     return try toks.toOwnedSlice(alloc);
+}
+
+fn keyword(str: []const u8) Tok.Kind {
+    return if (std.mem.eql(u8, str, "break")) .@"break" else if (std.mem.eql(u8, str, "comp")) .comp else if (std.mem.eql(u8, str, "continue")) .@"continue" else if (std.mem.eql(u8, str, "defer")) .@"defer" else if (std.mem.eql(u8, str, "else")) .@"else" else if (std.mem.eql(u8, str, "enum")) .@"enum" else if (std.mem.eql(u8, str, "fn")) .@"fn" else if (std.mem.eql(u8, str, "for")) .@"for" else if (std.mem.eql(u8, str, "if")) .@"if" else if (std.mem.eql(u8, str, "inline")) .@"inline" else if (std.mem.eql(u8, str, "match")) .match else if (std.mem.eql(u8, str, "module")) .module else if (std.mem.eql(u8, str, "mut")) .mut else if (std.mem.eql(u8, str, "or")) .@"or" else if (std.mem.eql(u8, str, "pub")) .@"pub" else if (std.mem.eql(u8, str, "struct")) .@"struct" else if (std.mem.eql(u8, str, "type")) .type else if (std.mem.eql(u8, str, "use")) .use else Tok.Kind{ .identifier = str };
+}
+
+fn read_num(str: []const u8, placeholder: *usize, idx: *usize, read_kind: enum { bin, hex, oct }) Tok.Kind {
+    var has_num = false;
+    idx.* += 1;
+    while (idx.* + 1 < str.len) {
+        const next = str[idx.* + 1];
+        const is_digit = switch (read_kind) {
+            .bin => next >= '0' and next <= '1',
+            .oct => next >= '0' and next <= '7',
+            .hex => (next >= '0' and next <= '9') or (next >= 'a' and next <= 'f') or (next >= 'A' and next <= 'F'),
+        };
+        if (is_digit) {
+            has_num = true;
+            idx.* += 1;
+        } else if (next == '_') idx.* += 1 else break;
+    }
+    return if (has_num) switch (read_kind) {
+        .bin => Tok.Kind{ .bin_int = str[placeholder.* .. idx.* + 1] },
+        .hex => Tok.Kind{ .hex_int = str[placeholder.* .. idx.* + 1] },
+        .oct => Tok.Kind{ .oct_int = str[placeholder.* .. idx.* + 1] },
+    } else Tok.Kind{ .illegal = str[placeholder .. idx + 1] };
 }

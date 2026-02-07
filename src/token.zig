@@ -67,6 +67,7 @@ pub const Tok = struct {
         colon, // :
         arrow, // =>
         question, // ?
+        underscore, // _
         // literal
         terminator: enum { semicolon, newline },
         int: []const u8,
