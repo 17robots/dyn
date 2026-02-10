@@ -1,7 +1,7 @@
 pub const Tok = struct {
     kind: Kind,
     span: Span,
-    pub const Kind = union(enum) {
+    pub const Kind = enum {
         // kw
         @"break",
         comp,
@@ -68,25 +68,23 @@ pub const Tok = struct {
         arrow, // =>
         question, // ?
         underscore, // _
+        semicolon, // ;
+        newline, // \n
         // literal
-        terminator: enum { semicolon, newline },
-        int: []const u8,
-        bin_int: []const u8,
-        hex_int: []const u8,
-        oct_int: []const u8,
-        float: []const u8,
-        string: []const u8,
-        char: []const u8,
-        identifier: []const u8,
-        illegal: []const u8,
-        unclosed_string: Span,
-        unclosed_block_comment: Span,
-        line_comment: []const u8,
-        block_comment: []const u8,
-        doc_comment: []const u8,
+        int,
+        float,
+        string,
+        char,
+        identifier,
+        illegal,
+        unclosed_string,
+        unclosed_block_comment,
+        line_comment,
+        block_comment,
+        doc_comment,
     };
-    pub fn new(kind: Kind, start: u32, end: u32) Tok {
+    pub fn new(kind: Kind, start: usize, end: usize) Tok {
         return .{ .kind = kind, .span = Span{ .start = start, .end = end } };
     }
 };
-pub const Span = struct { start: u32, end: u32 };
+pub const Span = struct { start: usize, end: usize };
