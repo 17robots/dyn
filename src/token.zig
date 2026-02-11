@@ -76,12 +76,17 @@ pub const Tok = struct {
         string,
         char,
         identifier,
-        illegal,
-        unclosed_string,
-        unclosed_block_comment,
-        line_comment,
         block_comment,
         doc_comment,
+        line_comment,
+        // error
+        character_too_long,
+        empty_character,
+        illegal,
+        invalid_escape,
+        unclosed_string,
+        unclosed_block_comment,
+        unclosed_character,
     };
     pub fn new(kind: Kind, start: usize, end: usize) Tok {
         return .{ .kind = kind, .span = Span{ .start = start, .end = end } };

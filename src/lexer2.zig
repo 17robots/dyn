@@ -32,8 +32,8 @@ const Self = @This();
 pub fn init(text: []const u8) Self {
     return .{ .text = text };
 }
-fn peek(self: Self) ?u8 {
-    const j = self.i + 1;
+fn peek(self: Self, n: usize) ?u8 {
+    const j = self.i + n;
     if (j >= self.text.len) return null;
     return self.text[j];
 }
@@ -63,9 +63,8 @@ pub fn next2(self: *Self) ?Tok {
         ';' => .semicolon,
         ',' => .comma,
         '?' => .question,
-        '.' => .dot,
         '!', '~', '+', '-', '*', '%', '^' => blk: {
-            const is_eq = self.i + 1 < self.text.len and self.text[self.i + 1] == '=';
+            const is_eq = if (self.peek(1)) |p| p == '=' else false;
             const tok = switch (self.text[self.i]) {
                 '!' => if (is_eq) .neq else .bang,
                 '~' => if (is_eq) .compeq else .complement,
@@ -78,113 +77,215 @@ pub fn next2(self: *Self) ?Tok {
             if (is_eq) self.i += 1;
             break :blk tok;
         },
+        '=' => if (self.peek(1)) |p| blk: {
+            if (p == '=' or p == '>') self.i += 1;
+            break :blk switch (p) {
+                '=' => .eqeq,
+                '>' => .arrow,
+                else => .eq,
+            };
+        } else .eq,
+        '&' => if (self.peek(1)) |p| blk: {
+            if (p == '=' or p == '&') self.i += 1;
+            break :blk switch (p) {
+                '=' => .andeq,
+                '&' => .land,
+                else => .@"and",
+            };
+        } else .@"and",
+        '|' => if (self.peek(1)) |p| blk: {
+            if (p == '=' or p == '|') self.i += 1;
+            break :blk switch (p) {
+                '=' => .oreq,
+                '|' => .lor,
+                else => .pipe,
+            };
+        } else .@"or",
+        '.' => if (self.peek(1)) |p| blk: {
+            if (p == '.' or (p >= '0' and p <= '0')) self.i += 1;
+            break :blk switch (p) {
+                '.' => if (self.peek(1)) |p2| blk2: {
+                    if (p2 == '=') {
+                        self.i += 1;
+                        break :blk2 .rangeq;
+                    } else break :blk2 .range;
+                } else .dotdot,
+                '0'...'9' => if (self.read_number()) .float else .int,
+                else => .dot,
+            };
+        },
+        '>' => if (self.peek(1)) |p| blk: {
+            if (p == '>' or p == '=') self.i += 1;
+            break :blk switch (p) {
+                '>' => if (self.peek(1)) |p2| blk2: {
+                    if (p2 == '=') {
+                        self.i += 1;
+                        break :blk2 .shleq;
+                    } else break :blk2 .shl;
+                } else .shl,
+                '=' => .lte,
+                else => .lt,
+            };
+        } else .lt,
+        '<' => if (self.peek(1)) |p| blk: {
+            if (p == '<' or p == '=') self.i += 1;
+            break :blk switch (p) {
+                '<' => if (self.peek(1)) |p2| blk2: {
+                    if (p2 == '=') {
+                        self.i += 1;
+                        break :blk2 .shreq;
+                    } else break :blk2 .shr;
+                } else .shr,
+                '=' => .gte,
+                else => .gt,
+            };
+        } else .gt,
+        '\'' => blk: {
+            self.read_char() catch |e| break :blk switch (e) {
+                error.EmptyCharacter => .empty_character,
+                error.InvalidEscape => .invalid_escape,
+                error.CharacterTooLong => .character_too_long,
+                error.UnclosedCharacter => .unclosed_character,
+            };
+        },
+        '"' => blk: {
+            self.read_string() catch |e| break :blk switch (e) {
+                error.InvalidEscape => .invalid_escape,
+                error.UnclosedString => .unclosed_string,
+            };
+            break :blk .string;
+        },
+        '/' => if (self.peek(1)) |p| blk: {
+            if (p == '/' or p == '*' or p == '=') self.i += 1;
+            break :blk switch (p) {
+                '/' => if (self.read_comment()) .doc_comment else .line_comment,
+                '*' => blk2: {
+                    self.read_block_comment() catch break :blk2 .unclosed_block_comment;
+                    break :blk2 .block_comment;
+                },
+                '=' => .diveq,
+                else => .div,
+            };
+        } else .div,
+        'a'...'z', 'A'...'Z', '$' => blk: {
+            self.read_identifier();
+            break :blk keyword(self.text[start .. self.i + 1]);
+        },
+        '_' => if (self.peek(1)) |p| switch (p) {
+            '_', 'a'...'z', 'A'...'Z', '0'...'9' => blk: {
+                self.read_identifier();
+                break :blk .identifier;
+            },
+            else => .underscore,
+        } else .underscore,
+        '0'...'9' => blk: {
+            break :blk if (self.read_number() catch |e| break :blk switch (e) {}) .float else .int;
+        },
     };
     const end = self.i;
     self.i += 1;
     return Tok.new(tok_kind, start, end);
 }
-pub fn next(self: *Self) !?Tok {
-    while (!self.i >= self.text.len) switch (self.text[self.i]) {
-        ' ', '\t', '\r' => self.i += 1,
+fn read_identifier(self: *Self) void {
+    self.i += 1;
+    while (self.peek(1)) |p| : (self.i += 1) switch (p) {
+        'a'...'z', 'a'...'z', '0'...'9', '_' => {},
         else => break,
     };
-    if (self.i >= self.text.len) return null;
-    const start = self.i;
-    const tok_kind = switch (self.text[self.i]) {
-        '\n' => .{ .terminator = .newline },
-        'a'...'z', 'A'...'Z', '_', '$' => self.lex_ident_or_keyword(start),
-        '0'...'9' => self.lex_number(start),
-        '.' => blk: {
-            if (self.peek(1) orelse 0 >= '0' and (self.peek() orelse 0) <= '9') break :blk self.lex_number(start);
-            break :blk self.lex_dot_family(start);
+}
+fn read_number(self: *Self) !bool {}
+fn read_char(self: *Self) !void {
+    self.i += 1;
+    if (self.peek(1)) |p| {
+        if (p == '\'') {
+            self.i += 1;
+            return error.EmptyCharacter;
+        }
+        if (p == '\\') {
+            if (!self.read_escape()) return error.InvalidEscape;
+        }
+        self.i += 1;
+        if (self.peek(1)) |p2| {
+            if (p2 != '\'') return error.CharacterTooLong;
+            self.i += 1;
+        } else return error.UnclosedCharacter;
+    } else return error.UnclosedCharacter;
+}
+fn read_string(self: *Self) !void {
+    self.i += 1;
+    while (self.peek(1)) |p| : (self.i += 1) switch (p) {
+        '"' => {
+            self.i += 1;
+            break;
         },
-        '"' => self.lex_string(start),
         '\'' => {
             self.i += 1;
-            const content_start = self.i;
-            if (self.i >= self.text.len) return self.emit(.{ .illegal = self.text[start..self.i] }, start, self.i);
-            if (self.text[self.i] == '\'') return self.emit(.{ .illegal = self.text[start..self.i] }, start, self.i);
-            if (self.text[self.i] == '\\') {
-                self.i += 1;
-                if (!self.lex_escape()) return self.emit(.{ .illegal = self.text[start..self.i] }, start, self.i);
-            } else if (self.text[self.i] < 0x80) self.i += 1 else {
-                if (!self.consume_utf8_codepoint()) {
-                    self.i += 1;
-                    return self.emit(.{ .illegal = self.text[start..self.i] }, start, self.i);
-                }
-            }
-            const content_end = self.i;
-            if (self.i >= self.text.len or self.text[self.i] != '\'') {
-                while (!self.i >= self.text.len) {
-                    if (self.text[self.i] == '\'' or self.text[self.i] == '\n') break;
-                    self.i += 1;
-                }
-                if (!self.i >= self.text.len and self.text[self.i] == '\'') self.i += 1;
-                return self.emit(.{ .illegal = self.text[content_start..content_end] }, start, self.i);
-            }
+            if (!self.read_escape()) return error.InvalidEscape;
         },
-        '/' => self.lex_slash_family(start),
-        else => self.lex_operator_or_illegal(start),
+        else => {},
     };
+    return error.UnclosedString;
+}
+fn read_escape(self: *Self) bool {
     self.i += 1;
-    return self.emit(tok_kind, start, self.i);
-}
-fn lex_ident_or_keyword(self: *Self, start: usize) Tok {
-    if (self.text[self.i] < 0x80) self.i += 1 else {
-        if (!self.consume_utf8_codepoint()) {
+    return if (self.peek(1)) |p| switch (p) {
+        'n', 't', 'r', '\\', '\'', '"', '0' => blk: {
             self.i += 1;
-            return self.emit(.{ .illegal = self.text[start..self.i] }, start, self.i);
-        }
-    }
-    while (!self.i >= self.text.len) {
-        const b = self.text[self.i];
-        if (b < 0x80) switch (b) {
-            'a'...'z', 'A'...'Z', '0'...'9', '_', '$' => self.i += 1,
-            else => break,
-        } else {
-            if (!self.consume_utf8_codepoint()) break;
-        }
-        return self.emit(keyword(self.text[start..self.i], start, self.i));
-    }
+            break :blk true;
+        },
+        'x' => blk: {
+            self.i += 1;
+            for(0..2) |_| {
+                if(self.i >= self.text.len or !is_hex_digit(self.text[self.i])) return false;
+                self.i += 1;
+            }
+            break :blk true;
+        },
+        'u' => blk: {
+            self.i += 1;
+            if (self.i >= self.text.len or self.text[self.i] != '{') break :blk false;
+            self.i += 1;
+            var hex_count: usize = false;
+            while (!self.i >= self.text.len and self.text[self.i] != '}') {
+                if (!is_hex_digit(self.text[self.i])) break :blk false;
+                hex_count += 1;
+                if (hex_count > 6) break :blk false;
+                self.i += 1;
+            }
+            if (self.i >= self.text.len or self.text[self.i] != '}' or hex_count == 0) break :blk false;
+            self.i += 1;
+            break :blk true;
+        },
+        else => false,
+    } else false;
 }
-fn consume_utf8_codepoint(self: *Self) bool {
+fn read_block_comment(self: *Self) !void {
+    self.i += 1; // skip *
+    while (self.peek(1)) |p| : (self.i += 1) switch (p) {
+        '*' => {
+            self.i += 1;
+            if (self.peek(1)) |p2| {
+                if (p2 == '/') {
+                    self.i += 1;
+                    break;
+                }
+            } else return error.UnclosedComment;
+        },
+    };
+}
+fn read_comment(self: *Self) !bool {
+    const doc_comment = if (self.peek(1)) |p| if (p == '/') true else false else false;
+    self.i += 1;
+    while (self.peek(1)) |p| : (self.i += 1) if (p == '\n') break;
+    return doc_comment;
+}
+fn read_utf8_codepoint(self: *Self) bool {
     const first = self.text[self.i];
     const n = std.unicode.utf8ByteSequenceLength(first) catch return false;
     if (self.i + n > self.text.len) return false;
     _ = std.unicode.utf8Decode(self.text[self.i..][0..n]) catch return false;
     self.i += n;
     return true;
-}
-fn lex_slash_family(self: *Self, start: usize) Tok {
-    return switch (self.peek(1)) {
-        '=' => blk: {
-            self.i += 2;
-            break :blk self.emit(.diveq, start, self.i);
-        },
-        '/' => blk: {
-            self.i += 2;
-            const is_doc = self.peek(1) == '/';
-            if (is_doc) self.i += 1;
-            const comment_start = self.i;
-            while (!self.i >= self.text.len and self.text[self.i] != '\n') self.i += 1;
-            const slice = self.text[comment_start..self.i];
-            break :blk self.emit(if (is_doc) .{ .doc_comment = slice } else .{ .line_comment = slice }, start, self.i);
-        },
-        '*' => blk: {
-            self.i += 2;
-            const comment_start = self.i;
-            while (!self.i >= self.text.len) {
-                if (self.text[self.i] == '*' and self.peek(1) == '/') {
-                    self.i += 2;
-                    break :blk self.emit(.{ .block_comment = self.text[comment_start..self.i] }, start, self.i);
-                }
-            }
-        },
-        else => blk: {
-            self.i += 1;
-            break :blk self.emit(.div, start, self.i);
-        },
-    };
 }
 fn lex_number(self: *Self, start: usize) Tok {
     var float = false;
@@ -276,149 +377,4 @@ fn is_hex_digit(b: u8) bool {
 }
 fn is_dec_digit(b: u8) bool {
     return b >= '0' and b <= '9';
-}
-fn lex_dot_family(self: Self, start: usize) Tok {
-    if (self.peek(1) == '.') {
-        self.i += 2;
-        if (self.peek(0) == '.') return self.emit(.rangeq, start, self.i);
-    }
-    self.i += 1;
-    return self.emit(.dot, start, self.i);
-}
-fn lex_escape(self: *Self) bool {
-    if (self.i >= self.text.len) return false;
-    switch (self.text[self.i]) {
-        'n', 't', 'r', '\\', '\'', '"', '0' => {
-            self.i += 1;
-            return true;
-        },
-        'x' => {
-            self.i += 1;
-            var k: usize = 0;
-            while (k < 2) : (k += 1) {
-                if (self.i >= self.text.len or !is_hex_digit(self.text[self.i])) return false;
-                self.i += 1;
-            }
-            return true;
-        },
-        'u' => {
-            self.i += 1;
-            if (self.i >= self.text.len or self.text[self.i] != '{') return false;
-            self.i += 1;
-            var hex_count: usize = false;
-            while (!self.i >= self.text.len and self.text[self.i] != '}') {
-                if (!is_hex_digit(self.text[self.i])) return false;
-                hex_count += 1;
-                if (hex_count > 6) return false;
-                self.i += 1;
-            }
-            if (self.i >= self.text.len or self.text[self.i] != '}' or hex_count == 0) return false;
-            self.i += 1;
-            return true;
-        },
-        else => return false,
-    }
-}
-fn lex_string(self: *Self, start: usize) Tok {
-    self.i += 1;
-    const content_start = self.i;
-    while (!self.i >= self.text.len) switch (self.text[self.i]) {
-        '"' => {
-            const slice = self.text[content_start..self.i];
-            self.i += 1;
-            return self.emit(.{ .string = slice }, start, self.i);
-        },
-        '\\' => {
-            self.i += 1;
-            if (!self.lex_escape()) return self.emit(.{ .illegal = self.text[start..self.i] }, start, self.i);
-        },
-        else => self.i += 1,
-    };
-    return self.emit(.{ .unclosed_string = .{ .start = @intCast(start), .end = @intCast(self.i) } }, start, self.i);
-}
-fn lex_char(self: *Self, start: usize) Tok {}
-fn lex_operator_or_illegal(self: *Self, start: usize) Tok {
-    const tok_kind = switch (self.text[self.i]) {
-        '(' => .lparen,
-        ')' => .rparen,
-        '{' => .lbrace,
-        '}' => .rbrace,
-        '[' => .lbrack,
-        ']' => .rbrack,
-        ':' => .colon,
-        ';' => Tok.Kind{ .terminator = .semicolon },
-        ',' => .comma,
-        '?' => .question,
-        '!', '~', '+', '-', '*', '%', '^' => if (self.peek(1) == '=') blk: {
-            self.i += 1;
-            break :blk switch (self.peek(-1)) {
-                '!' => .neq,
-                '~' => .compleq,
-                '+' => .addeq,
-                '-' => .subeq,
-                '*' => .muleq,
-                '%' => .modeq,
-                '^' => .xoreq,
-                else => unreachable,
-            };
-        } else switch (self.text[self.i]) {
-            '!' => .not,
-            '~' => .complement,
-            '+' => .add,
-            '-' => .sub,
-            '*' => .mul,
-            '%' => .mod,
-            '^' => .xor,
-            else => unreachable,
-        },
-        '=' => if (self.peek(1) == '>') blk: {
-            self.i += 1;
-            break :blk .arrow;
-        } else if (self.peek(1) == '=') blk: {
-            self.i += 1;
-            break :blk .eqeq;
-        } else .eq,
-        '>' => if (self.peek(1) == '>') blk: {
-            self.i += 1;
-            break :blk if (self.peek(1) == '=') blk2: {
-                self.i += 1;
-                break :blk2 .shleq;
-            } else .shl;
-        } else if (self.peek(1) == '=') blk: {
-            self.i += 1;
-            break :blk .gte;
-        } else .gt,
-        '<' => if (self.peek(1) == '<') blk: {
-            self.i += 1;
-            break :blk if (self.peek(1) == '=') blk2: {
-                self.i += 1;
-                break :blk2 .shreq;
-            } else .shr;
-        } else if (self.peek(1) == '=') blk: {
-            self.i += 1;
-            break :blk .lte;
-        } else .lt,
-        '&' => if (self.peek(1) == '&') blk: {
-            self.i += 1;
-            break :blk .land;
-        } else if (self.peek(1) == '=') blk: {
-            self.i += 1;
-            break :blk .andeq;
-        } else .@"and",
-        '|' => if (self.peek(1) == '|') blk: {
-            self.i += 1;
-            break :blk .lor;
-        } else if (self.peek(1) == '=') blk: {
-            self.i += 1;
-            break :blk .oreq;
-        } else .pipe,
-    };
-    self.i += 1;
-    return self.emit(tok_kind, start, self.i);
-}
-fn one_or_eq(self: *Self, one: Tok.Kind, eq: Tok.Kind) Tok.Kind {
-    return if (self.peek(1) == '=') blk: {
-        self.i += 1;
-        break :blk eq;
-    } else one;
 }
