@@ -1,0 +1,9 @@
+module main
+
+value := 1
+ptr: *i32 = &value
+
+main := () i32 => {
+    ptr.* = 2
+    0
+}

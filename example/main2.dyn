@@ -1,0 +1,11 @@
+// comment
+/*
+  multiline
+  or
+  block
+  comment
+*/
+
+module main
+main := fn() {
+}

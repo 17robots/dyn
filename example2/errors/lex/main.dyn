@@ -1,0 +1,6 @@
+module main
+
+main := () i32 => {
+    msg := "Hello
+    0
+}
