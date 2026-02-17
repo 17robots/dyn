@@ -1,0 +1,4 @@
+module gpa
+
+pub init := () i32 => 0
+pub deinit := () i32 => 0

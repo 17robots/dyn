@@ -1,0 +1,5 @@
+module collections
+
+ArrayList := use "collections/array_list"
+
+pub ready := () i32 => 1

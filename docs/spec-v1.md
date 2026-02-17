@@ -78,12 +78,13 @@ Type/flow constraints currently enforced:
 
 ### Type Compatibility Matrix (Current)
 
-Types in current checker: `unknown`, `void`, `bool`, `int`, `float`, `string`, `char`, function/module/aggregate placeholders.
+Types in current checker: `unknown`, `void`, `bool`, `int`, `float`, `string`, `char`, function/module/aggregate placeholders, and pointer forms (`*T`/`*mut T`) with element-type-aware semantic tracking.
 
 Pointer/unwrap baseline:
 - pointer type annotation syntax: `*T` and `*mut T`
 - address-of syntax: `&expr`
 - `expr.*` expects pointer value
+- pointer compatibility is element-type-aware at semantic check time (`*i32` is distinct from `*f32`)
 - assignment through `expr.*` requires mutable pointer (`*mut T`), otherwise error `cannot assign through immutable pointer`
 - `expr.?` requires optional-typed value (`'.?' expects optional value`)
 - `expr.!` requires error-typed value (`'.!' expects error value`)
@@ -113,12 +114,14 @@ Inference/coercion boundaries:
   - function calls
   - multi-object linking
   - rodata strings with RIP-relative addressing
+  - local/global pointer address lowering (`addr_of_local`, `addr_of_global`)
+  - pointer slot offset and dereference (`ptr_offset_slots`, `load_ptr`, `store_ptr`)
 
 ## 8. CLI Baseline
 
-- `dyn check [entry.dyn] [--json]`
-- `dyn build [entry.dyn] [-o out] [--emit-obj|--emit-asm] [--work-dir dir] [--json]`
-- `dyn run [entry.dyn] [--work-dir dir] [-- arg ...]`
+- `dyn check [entry.dyn] [--std-dir dir] [--json]`
+- `dyn build [entry.dyn] [-o out] [--emit-obj|--emit-asm] [--work-dir dir] [--std-dir dir] [--json]`
+- `dyn run [entry.dyn] [--work-dir dir] [--std-dir dir] [--json] [-- arg ...]`
 - `dyn clean [--work-dir dir] [--json]`
 
 Exit behavior:
@@ -137,8 +140,8 @@ These are not fully locked yet:
 - richer coercion system beyond current numeric rules
 - full control-flow proof for every return-path shape
 - multi-target backend support beyond Linux x86_64
-- full JSON diagnostics schema parity across all commands
-- lowering/codegen execution semantics for pointer/optional/error operators (currently diagnosed at frontend and not lowered)
+- rich per-diagnostic JSON payloads (stable error codes/spans/categories) beyond current v1 command-level summaries
+- full optional/error value-propagation semantics (runtime unwrap checks are lowered/codegen'd, but richer representation/propagation model is not finalized)
 
 ## 11. Conformance
 

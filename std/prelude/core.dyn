@@ -1,0 +1,4 @@
+module core
+
+pub bool_true := () i32 => 1
+pub bool_false := () i32 => 0

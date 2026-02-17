@@ -2,9 +2,9 @@
 
 ## Commands
 
-- `dyn check [entry.dyn] [--json]`
-- `dyn build [entry.dyn] [-o out] [--emit-obj|--emit-asm] [--work-dir dir] [--json]`
-- `dyn run [entry.dyn] [--work-dir dir] [-- arg ...]`
+- `dyn check [entry.dyn] [--std-dir dir] [--json]`
+- `dyn build [entry.dyn] [-o out] [--emit-obj|--emit-asm] [--work-dir dir] [--std-dir dir] [--json]`
+- `dyn run [entry.dyn] [--work-dir dir] [--std-dir dir] [--json] [-- arg ...]`
 - `dyn clean [--work-dir dir] [--json]`
 
 ## Exit Codes
@@ -15,18 +15,27 @@
 
 ## Machine-Readable Output
 
-`--json` is supported on `check`, `build`, and `clean`.
+`--json` is supported on `check`, `build`, `run`, and `clean`.
+
+## Std Import Fallback
+
+- `--std-dir <dir>` configures a fallback root for `use "std/..."` imports.
+- Resolution order is: local relative import first, then `--std-dir` fallback.
 
 Examples:
 
 ```json
-{"command":"check","entry":"main.dyn","graph_errors":0,"scope_errors":0,"resolve_errors":0,"semantic_errors":0,"can_codegen":true}
+{"schema":"dyn-cli.v1","command":"check","entry":"main.dyn","graph_errors":0,"scope_errors":0,"resolve_errors":0,"semantic_errors":0,"can_codegen":true,"diagnostics":[]}
 ```
 
 ```json
-{"command":"build","entry":"main.dyn","out":"a.out","work_dir":".dyn_build","emit":"exe","ok":true}
+{"schema":"dyn-cli.v1","command":"build","entry":"main.dyn","out":"a.out","work_dir":".dyn_build","emit":"exe","ok":true,"diagnostics":[]}
 ```
 
 ```json
-{"command":"clean","work_dir":".dyn_build","removed":true}
+{"schema":"dyn-cli.v1","command":"run","entry":"main.dyn","work_dir":".dyn_build","exe":".dyn_build/run.out","exit_code":0,"ok":true,"build_diagnostics":[]}
+```
+
+```json
+{"schema":"dyn-cli.v1","command":"clean","work_dir":".dyn_build","removed":true,"diagnostics":[]}
 ```

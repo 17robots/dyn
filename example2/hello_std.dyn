@@ -1,0 +1,8 @@
+module main
+
+Io := use "std/io"
+
+main := () i32 => {
+  Io.print_hello()
+  0
+}

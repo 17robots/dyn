@@ -1,0 +1,5 @@
+module debug
+
+Assert := use "debug/assert"
+
+pub assert_i32 := (cond: i32) i32 => 0

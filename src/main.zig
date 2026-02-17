@@ -76,12 +76,19 @@ fn runMain() !void {
     if (std.mem.eql(u8, cmd, "check")) {
         var entry: ?[]const u8 = null;
         var json = false;
+        var std_dir: ?[]const u8 = null;
         while (args.next()) |a| {
             if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
                 try printCheckHelp(out);
                 return;
             } else if (std.mem.eql(u8, a, "--json")) {
                 json = true;
+            } else if (std.mem.eql(u8, a, "--std-dir")) {
+                std_dir = args.next() orelse {
+                    try err.writeAll("missing value for --std-dir\n");
+                    try err.flush();
+                    return error.InvalidArgument;
+                };
             } else if (std.mem.startsWith(u8, a, "-")) {
                 try err.print("unknown check flag: {s}\n", .{a});
                 try err.flush();
@@ -99,16 +106,20 @@ fn runMain() !void {
         var diag_buf: std.ArrayList(u8) = .empty;
         defer diag_buf.deinit(gpa);
         var front = if (json)
-            try Pipeline.runFrontend(gpa, diag_buf.writer(gpa), entry_path, .{})
+            try Pipeline.runFrontend(gpa, diag_buf.writer(gpa), entry_path, .{ .std_dir = std_dir })
         else
-            try Pipeline.runFrontend(gpa, out, entry_path, .{});
+            try Pipeline.runFrontend(gpa, out, entry_path, .{ .std_dir = std_dir });
         defer front.deinit();
         const s = front.summary();
         if (json) {
+            try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"check\",\"entry\":\"");
+            try writeJsonEscaped(out, entry_path);
             try out.print(
-                "{{\"command\":\"check\",\"entry\":\"{s}\",\"graph_errors\":{d},\"scope_errors\":{d},\"resolve_errors\":{d},\"semantic_errors\":{d},\"can_codegen\":{s}}}\n",
-                .{ entry_path, s.graph_errors, s.scope_errors, s.resolve_errors, s.semantic_errors, if (s.can_codegen) "true" else "false" },
+                "\",\"graph_errors\":{d},\"scope_errors\":{d},\"resolve_errors\":{d},\"semantic_errors\":{d},\"can_codegen\":{s},\"diagnostics\":",
+                .{ s.graph_errors, s.scope_errors, s.resolve_errors, s.semantic_errors, if (s.can_codegen) "true" else "false" },
             );
+            try writeJsonLineArray(out, diag_buf.items);
+            try out.writeAll("}\n");
         } else {
             try out.print(
                 "check: graph={d} scope={d} resolve={d} semantic={d} can_codegen={any}\n",
@@ -127,6 +138,7 @@ fn runMain() !void {
         var emit_obj = false;
         var emit_asm = false;
         var json = false;
+        var std_dir: ?[]const u8 = null;
 
         while (args.next()) |a| {
             if (std.mem.eql(u8, a, "-o")) {
@@ -147,6 +159,12 @@ fn runMain() !void {
                 emit_asm = true;
             } else if (std.mem.eql(u8, a, "--json")) {
                 json = true;
+            } else if (std.mem.eql(u8, a, "--std-dir")) {
+                std_dir = args.next() orelse {
+                    try err.writeAll("missing value for --std-dir\n");
+                    try err.flush();
+                    return error.InvalidArgument;
+                };
             } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
                 try printBuildHelp(out);
                 return;
@@ -179,32 +197,37 @@ fn runMain() !void {
             const asm_path = try std.fmt.allocPrint(gpa, "{s}/out.s", .{work_dir});
             defer gpa.free(asm_path);
             if (json) {
-                try BackendDriver.buildObjectFromEntry(gpa, log_buf.writer(gpa), entry_path, asm_path, out_path);
+                try BackendDriver.buildObjectFromEntry(gpa, log_buf.writer(gpa), entry_path, asm_path, out_path, .{ .std_dir = std_dir });
             } else {
-                try BackendDriver.buildObjectFromEntry(gpa, out, entry_path, asm_path, out_path);
+                try BackendDriver.buildObjectFromEntry(gpa, out, entry_path, asm_path, out_path, .{ .std_dir = std_dir });
             }
         } else if (emit_asm) {
             const asm_path = out_path;
             const obj = try std.fmt.allocPrint(gpa, "{s}/tmp.o", .{work_dir});
             defer gpa.free(obj);
             if (json) {
-                try BackendDriver.buildObjectFromEntry(gpa, log_buf.writer(gpa), entry_path, asm_path, obj);
+                try BackendDriver.buildObjectFromEntry(gpa, log_buf.writer(gpa), entry_path, asm_path, obj, .{ .std_dir = std_dir });
             } else {
-                try BackendDriver.buildObjectFromEntry(gpa, out, entry_path, asm_path, obj);
+                try BackendDriver.buildObjectFromEntry(gpa, out, entry_path, asm_path, obj, .{ .std_dir = std_dir });
             }
         } else {
             if (json) {
-                try BackendDriver.buildExecutableFromEntryViaModules(gpa, log_buf.writer(gpa), entry_path, work_dir, out_path);
+                try BackendDriver.buildExecutableFromEntryViaModules(gpa, log_buf.writer(gpa), entry_path, work_dir, out_path, .{ .std_dir = std_dir });
             } else {
-                try BackendDriver.buildExecutableFromEntryViaModules(gpa, out, entry_path, work_dir, out_path);
+                try BackendDriver.buildExecutableFromEntryViaModules(gpa, out, entry_path, work_dir, out_path, .{ .std_dir = std_dir });
             }
         }
 
         if (json) {
-            try out.print(
-                "{{\"command\":\"build\",\"entry\":\"{s}\",\"out\":\"{s}\",\"work_dir\":\"{s}\",\"emit\":\"{s}\",\"ok\":true}}\n",
-                .{ entry_path, out_path, work_dir, if (emit_obj) "obj" else if (emit_asm) "asm" else "exe" },
-            );
+            try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"build\",\"entry\":\"");
+            try writeJsonEscaped(out, entry_path);
+            try out.writeAll("\",\"out\":\"");
+            try writeJsonEscaped(out, out_path);
+            try out.writeAll("\",\"work_dir\":\"");
+            try writeJsonEscaped(out, work_dir);
+            try out.print("\",\"emit\":\"{s}\",\"ok\":true,\"diagnostics\":", .{if (emit_obj) "obj" else if (emit_asm) "asm" else "exe"});
+            try writeJsonLineArray(out, log_buf.items);
+            try out.writeAll("}\n");
         } else {
             try out.print("built: {s}\n", .{out_path});
         }
@@ -215,6 +238,8 @@ fn runMain() !void {
     if (std.mem.eql(u8, cmd, "run")) {
         var entry: ?[]const u8 = null;
         var work_dir: []const u8 = ".dyn_build";
+        var json = false;
+        var std_dir: ?[]const u8 = null;
         var program_args: std.ArrayList([]const u8) = .empty;
         defer program_args.deinit(gpa);
 
@@ -227,6 +252,14 @@ fn runMain() !void {
             } else if (std.mem.eql(u8, a, "--work-dir")) {
                 work_dir = args.next() orelse {
                     try err.writeAll("missing value for --work-dir\n");
+                    try err.flush();
+                    return error.InvalidArgument;
+                };
+            } else if (std.mem.eql(u8, a, "--json")) {
+                json = true;
+            } else if (std.mem.eql(u8, a, "--std-dir")) {
+                std_dir = args.next() orelse {
+                    try err.writeAll("missing value for --std-dir\n");
                     try err.flush();
                     return error.InvalidArgument;
                 };
@@ -250,7 +283,13 @@ fn runMain() !void {
         const exe_path = try std.fmt.allocPrint(gpa, "{s}/run.out", .{work_dir});
         defer gpa.free(exe_path);
         std.fs.cwd().makePath(work_dir) catch {};
-        try BackendDriver.buildExecutableFromEntryViaModules(gpa, out, entry_path, work_dir, exe_path);
+        var build_log: std.ArrayList(u8) = .empty;
+        defer build_log.deinit(gpa);
+        if (json) {
+            try BackendDriver.buildExecutableFromEntryViaModules(gpa, build_log.writer(gpa), entry_path, work_dir, exe_path, .{ .std_dir = std_dir });
+        } else {
+            try BackendDriver.buildExecutableFromEntryViaModules(gpa, out, entry_path, work_dir, exe_path, .{ .std_dir = std_dir });
+        }
 
         const child_argv = try gpa.alloc([]const u8, program_args.items.len + 1);
         defer gpa.free(child_argv);
@@ -260,8 +299,36 @@ fn runMain() !void {
         var child = std.process.Child.init(child_argv, gpa);
         const term = try child.spawnAndWait();
         switch (term) {
-            .Exited => |code| std.process.exit(code),
-            else => return error.RunFailed,
+            .Exited => |code| {
+                if (json) {
+                    try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"run\",\"entry\":\"");
+                    try writeJsonEscaped(out, entry_path);
+                    try out.writeAll("\",\"work_dir\":\"");
+                    try writeJsonEscaped(out, work_dir);
+                    try out.writeAll("\",\"exe\":\"");
+                    try writeJsonEscaped(out, exe_path);
+                    try out.print("\",\"exit_code\":{d},\"ok\":true,\"build_diagnostics\":", .{code});
+                    try writeJsonLineArray(out, build_log.items);
+                    try out.writeAll("}\n");
+                    try out.flush();
+                }
+                std.process.exit(code);
+            },
+            else => {
+                if (json) {
+                    try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"run\",\"entry\":\"");
+                    try writeJsonEscaped(out, entry_path);
+                    try out.writeAll("\",\"work_dir\":\"");
+                    try writeJsonEscaped(out, work_dir);
+                    try out.writeAll("\",\"exe\":\"");
+                    try writeJsonEscaped(out, exe_path);
+                    try out.writeAll("\",\"ok\":false,\"error\":\"RunFailed\",\"build_diagnostics\":");
+                    try writeJsonLineArray(out, build_log.items);
+                    try out.writeAll("}\n");
+                    try out.flush();
+                }
+                return error.RunFailed;
+            },
         }
         return;
     }
@@ -291,7 +358,9 @@ fn runMain() !void {
         std.fs.cwd().deleteTree(work_dir) catch |e| switch (e) {
             error.ProcessNotFound => {
                 if (json) {
-                    try out.print("{{\"command\":\"clean\",\"work_dir\":\"{s}\",\"removed\":false}}\n", .{work_dir});
+                    try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"clean\",\"work_dir\":\"");
+                    try writeJsonEscaped(out, work_dir);
+                    try out.writeAll("\",\"removed\":false,\"diagnostics\":[]}\n");
                 } else {
                     try out.print("nothing to clean: {s}\n", .{work_dir});
                 }
@@ -301,7 +370,9 @@ fn runMain() !void {
             else => return e,
         };
         if (json) {
-            try out.print("{{\"command\":\"clean\",\"work_dir\":\"{s}\",\"removed\":true}}\n", .{work_dir});
+            try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"clean\",\"work_dir\":\"");
+            try writeJsonEscaped(out, work_dir);
+            try out.writeAll("\",\"removed\":true,\"diagnostics\":[]}\n");
         } else {
             try out.print("cleaned: {s}\n", .{work_dir});
         }
@@ -318,9 +389,9 @@ fn runMain() !void {
 fn printHelp(writer: *std.Io.Writer) !void {
     try writer.writeAll(
         "dyn commands:\n" ++
-            "  check [entry.dyn]\n" ++
-            "  build [entry.dyn] [-o out] [--emit-obj|--emit-asm] [--work-dir dir]\n" ++
-            "  run [entry.dyn] [--work-dir dir] [-- arg ...]\n" ++
+            "  check [entry.dyn] [--std-dir dir]\n" ++
+            "  build [entry.dyn] [-o out] [--emit-obj|--emit-asm] [--work-dir dir] [--std-dir dir]\n" ++
+            "  run [entry.dyn] [--work-dir dir] [--std-dir dir] [--json] [-- arg ...]\n" ++
             "  clean [--work-dir dir]\n" ++
             "\n" ++
             "Use 'dyn help <command>' or '<command> --help' for details.\n" ++
@@ -331,13 +402,14 @@ fn printHelp(writer: *std.Io.Writer) !void {
 
 fn printCheckHelp(writer: *std.Io.Writer) !void {
     try writer.writeAll(
-        "Usage: dyn check [entry.dyn]\n" ++
+        "Usage: dyn check [entry.dyn] [--std-dir dir]\n" ++
             "\n" ++
             "Runs frontend analysis (module graph, symbols, resolver, semantic checks).\n" ++
             "\n" ++
             "Examples:\n" ++
             "  dyn check\n" ++
             "  dyn check app/main.dyn\n" ++
+            "  dyn check app/main.dyn --std-dir ./std\n" ++
             "  dyn check app/main.dyn --json\n",
     );
     try writer.flush();
@@ -352,6 +424,7 @@ fn printBuildHelp(writer: *std.Io.Writer) !void {
             "  --emit-obj           Build object file\n" ++
             "  --emit-asm           Emit assembly file\n" ++
             "  --work-dir <dir>     Intermediate build directory (default: .dyn_build)\n" ++
+            "  --std-dir <dir>      Std module root fallback for use \"std/...\"\n" ++
             "  --json               Print machine-readable build result\n" ++
             "\n" ++
             "Examples:\n" ++
@@ -359,6 +432,7 @@ fn printBuildHelp(writer: *std.Io.Writer) !void {
             "  dyn build app/main.dyn -o app.out\n" ++
             "  dyn build app/main.dyn --emit-obj -o app.o\n" ++
             "  dyn build app/main.dyn --emit-asm -o app.s\n" ++
+            "  dyn build app/main.dyn --std-dir ./std\n" ++
             "  dyn build app/main.dyn --json\n",
     );
     try writer.flush();
@@ -366,7 +440,7 @@ fn printBuildHelp(writer: *std.Io.Writer) !void {
 
 fn printRunHelp(writer: *std.Io.Writer) !void {
     try writer.writeAll(
-        "Usage: dyn run [entry.dyn] [--work-dir dir] [-- arg ...]\n" ++
+        "Usage: dyn run [entry.dyn] [--work-dir dir] [--std-dir dir] [--json] [-- arg ...]\n" ++
             "\n" ++
             "Builds and runs the program.\n" ++
             "\n" ++
@@ -374,6 +448,8 @@ fn printRunHelp(writer: *std.Io.Writer) !void {
             "  dyn run\n" ++
             "  dyn run app/main.dyn\n" ++
             "  dyn run app/main.dyn --work-dir out/dyn\n" ++
+            "  dyn run app/main.dyn --std-dir ./std\n" ++
+            "  dyn run app/main.dyn --json\n" ++
             "  dyn run app/main.dyn -- --name dyn --count 3\n",
     );
     try writer.flush();
@@ -424,4 +500,43 @@ fn discoverEntryPathOrReport(allocator: std.mem.Allocator, err: *std.Io.Writer) 
         },
         else => return e,
     };
+}
+
+fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (c < 0x20) {
+                    try writer.print("\\u{X:0>4}", .{@as(u16, c)});
+                } else {
+                    try writer.writeByte(c);
+                }
+            },
+        }
+    }
+}
+
+fn writeJsonLineArray(writer: *std.Io.Writer, text: []const u8) !void {
+    try writer.writeByte('[');
+    var first = true;
+    var start: usize = 0;
+    while (start < text.len) {
+        var end = start;
+        while (end < text.len and text[end] != '\n') : (end += 1) {}
+        const line = text[start..end];
+        if (line.len > 0) {
+            if (!first) try writer.writeByte(',');
+            first = false;
+            try writer.writeByte('"');
+            try writeJsonEscaped(writer, line);
+            try writer.writeByte('"');
+        }
+        start = if (end < text.len and text[end] == '\n') end + 1 else end;
+    }
+    try writer.writeByte(']');
 }

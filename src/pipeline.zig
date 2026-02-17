@@ -10,6 +10,7 @@ pub const Options = struct {
     max_scope_errors: usize = 100,
     max_resolve_errors: usize = 100,
     max_semantic_errors: usize = 100,
+    std_dir: ?[]const u8 = null,
 };
 
 pub const FrontendResult = struct {
@@ -60,7 +61,7 @@ pub fn runFrontend(
     entry_path: []const u8,
     opts: Options,
 ) !FrontendResult {
-    var graph = try ModuleGraph.Self.buildFromEntry(allocator, entry_path);
+    var graph = try ModuleGraph.Self.buildFromEntryWithOptions(allocator, entry_path, .{ .std_dir = opts.std_dir });
     errdefer graph.deinit();
 
     var symbols = try Symbols.Self.collectFromGraph(allocator, &graph);

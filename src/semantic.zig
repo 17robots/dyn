@@ -16,8 +16,22 @@ pub const Type = enum {
     fn_t,
     struct_t,
     enum_t,
-    ptr_t,
-    ptr_mut_t,
+    ptr_to_unknown_t,
+    ptr_mut_to_unknown_t,
+    ptr_to_int_t,
+    ptr_mut_to_int_t,
+    ptr_to_float_t,
+    ptr_mut_to_float_t,
+    ptr_to_bool_t,
+    ptr_mut_to_bool_t,
+    ptr_to_string_t,
+    ptr_mut_to_string_t,
+    ptr_to_char_t,
+    ptr_mut_to_char_t,
+    ptr_to_optional_t,
+    ptr_mut_to_optional_t,
+    ptr_to_error_t,
+    ptr_mut_to_error_t,
     optional_t,
     error_t,
 };
@@ -188,9 +202,9 @@ fn inferNode(
                 }
             } else if (lhs_node.tag == .deref) {
                 const ptr_ty = try self.inferNode(graph, f, lhs_node.data.one.child, env, fn_bindings, ctx);
-                if (ptr_ty == .ptr_t) {
+                if (isImmutablePointerType(ptr_ty)) {
                     try self.pushErr(f.file_id, n.span, "cannot assign through immutable pointer");
-                } else if (ptr_ty != .ptr_mut_t and ptr_ty != .unknown) {
+                } else if (!isPointerType(ptr_ty) and ptr_ty != .unknown) {
                     try self.pushErr(f.file_id, n.span, "left-hand side dereference must be a pointer");
                 }
             } else {
@@ -204,13 +218,13 @@ fn inferNode(
         .address_of => blk: {
             const child = f.nodes[n.data.one.child];
             if (child.tag == .identifier) {
-                const name = graph.sm.spanSlice(f.file_id, child.span) catch break :blk .ptr_t;
+                const name = graph.sm.spanSlice(f.file_id, child.span) catch break :blk .ptr_to_unknown_t;
                 if (env.get(name)) |bnd| {
-                    break :blk if (bnd.mutable) .ptr_mut_t else .ptr_t;
+                    break :blk makePointerType(bnd.ty, bnd.mutable);
                 }
             }
             _ = try self.inferNode(graph, f, n.data.one.child, env, fn_bindings, ctx);
-            break :blk .ptr_t;
+            break :blk .ptr_to_unknown_t;
         },
         .ptr_type => .type_t,
         .field => .unknown,
@@ -392,7 +406,8 @@ fn inferNode(
         },
         .deref => blk: {
             const pt = try self.inferNode(graph, f, n.data.one.child, env, fn_bindings, ctx);
-            if (pt == .ptr_t or pt == .ptr_mut_t or pt == .unknown) break :blk .int_t;
+            if (pt == .unknown) break :blk .unknown;
+            if (isPointerType(pt)) break :blk pointerElementType(pt);
             try self.pushErr(f.file_id, n.span, "'.*' expects pointer value");
             break :blk .unknown;
         },
@@ -456,8 +471,75 @@ fn typeFromAnnotation(
             if (std.mem.eql(u8, name, "error")) break :blk .error_t;
             break :blk if (env.get(name)) |bnd| bnd.ty else .unknown;
         },
-        .ptr_type => if (n.data.ptr_type.mutable) .ptr_mut_t else .ptr_t,
+        .ptr_type => blk: {
+            const child_t = try self.typeFromAnnotation(graph, f, n.data.ptr_type.child, env, fn_bindings, ctx);
+            break :blk makePointerType(child_t, n.data.ptr_type.mutable);
+        },
         else => try self.inferNode(graph, f, node_id, env, fn_bindings, ctx),
+    };
+}
+
+fn makePointerType(elem: Type, mutable: bool) Type {
+    return switch (elem) {
+        .int_t => if (mutable) .ptr_mut_to_int_t else .ptr_to_int_t,
+        .float_t => if (mutable) .ptr_mut_to_float_t else .ptr_to_float_t,
+        .bool_t => if (mutable) .ptr_mut_to_bool_t else .ptr_to_bool_t,
+        .string_t => if (mutable) .ptr_mut_to_string_t else .ptr_to_string_t,
+        .char_t => if (mutable) .ptr_mut_to_char_t else .ptr_to_char_t,
+        .optional_t => if (mutable) .ptr_mut_to_optional_t else .ptr_to_optional_t,
+        .error_t => if (mutable) .ptr_mut_to_error_t else .ptr_to_error_t,
+        else => if (mutable) .ptr_mut_to_unknown_t else .ptr_to_unknown_t,
+    };
+}
+
+fn pointerElementType(t: Type) Type {
+    return switch (t) {
+        .ptr_to_int_t, .ptr_mut_to_int_t => .int_t,
+        .ptr_to_float_t, .ptr_mut_to_float_t => .float_t,
+        .ptr_to_bool_t, .ptr_mut_to_bool_t => .bool_t,
+        .ptr_to_string_t, .ptr_mut_to_string_t => .string_t,
+        .ptr_to_char_t, .ptr_mut_to_char_t => .char_t,
+        .ptr_to_optional_t, .ptr_mut_to_optional_t => .optional_t,
+        .ptr_to_error_t, .ptr_mut_to_error_t => .error_t,
+        else => .unknown,
+    };
+}
+
+fn isImmutablePointerType(t: Type) bool {
+    return switch (t) {
+        .ptr_to_unknown_t,
+        .ptr_to_int_t,
+        .ptr_to_float_t,
+        .ptr_to_bool_t,
+        .ptr_to_string_t,
+        .ptr_to_char_t,
+        .ptr_to_optional_t,
+        .ptr_to_error_t,
+        => true,
+        else => false,
+    };
+}
+
+fn isPointerType(t: Type) bool {
+    return switch (t) {
+        .ptr_to_unknown_t,
+        .ptr_mut_to_unknown_t,
+        .ptr_to_int_t,
+        .ptr_mut_to_int_t,
+        .ptr_to_float_t,
+        .ptr_mut_to_float_t,
+        .ptr_to_bool_t,
+        .ptr_mut_to_bool_t,
+        .ptr_to_string_t,
+        .ptr_mut_to_string_t,
+        .ptr_to_char_t,
+        .ptr_mut_to_char_t,
+        .ptr_to_optional_t,
+        .ptr_mut_to_optional_t,
+        .ptr_to_error_t,
+        .ptr_mut_to_error_t,
+        => true,
+        else => false,
     };
 }
 
@@ -994,6 +1076,43 @@ test "semantic checker enforces pointer mutability on deref assignment" {
         if (std.mem.eql(u8, e.message, "cannot assign through immutable pointer")) saw_ptr_mut_err = true;
     }
     try std.testing.expect(saw_ptr_mut_err);
+}
+
+test "semantic checker tracks pointer element types" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_sem_ptr_elem";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_sem_ptr_elem/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "mut i: i32 = 1\n" ++
+                "mut f: f32 = 1.0\n" ++
+                "pi: *mut i32 = &i\n" ++
+                "bad_ptr: *mut i32 = &f\n" ++
+                "pi.* = \"x\"\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntry(alloc, "tmp_sem_ptr_elem/main.dyn");
+    defer g.deinit();
+
+    var s = Self.init(alloc);
+    defer s.deinit();
+    try s.checkGraph(&g);
+
+    var saw_decl_mismatch = false;
+    var saw_assign_mismatch = false;
+    for (s.errors.items) |e| {
+        if (std.mem.eql(u8, e.message, "declaration type does not match initializer")) saw_decl_mismatch = true;
+        if (std.mem.eql(u8, e.message, "assignment type mismatch")) saw_assign_mismatch = true;
+    }
+    try std.testing.expect(saw_decl_mismatch);
+    try std.testing.expect(saw_assign_mismatch);
 }
 
 test "semantic checker validates assignment targets" {

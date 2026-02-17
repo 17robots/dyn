@@ -92,7 +92,7 @@ pub fn lowerMainProgram(allocator: std.mem.Allocator, graph: *ModuleGraph.Self) 
     }
 
     const ro_slice = try rodata.toOwnedSlice(allocator);
-    return .{ .functions = funcs, .rodata_strings = ro_slice };
+    return .{ .functions = funcs, .rodata_strings = ro_slice, .global_count = 0 };
 }
 
 pub fn lowerModuleProgram(allocator: std.mem.Allocator, graph: *ModuleGraph.Self, module_index: u32) !Ir.Program {
@@ -152,7 +152,7 @@ pub fn lowerModuleProgram(allocator: std.mem.Allocator, graph: *ModuleGraph.Self
     }
 
     const ro_slice = try rodata.toOwnedSlice(allocator);
-    return .{ .functions = funcs, .rodata_strings = ro_slice };
+    return .{ .functions = funcs, .rodata_strings = ro_slice, .global_count = 0 };
 }
 
 fn lowerOneFunction(
@@ -580,8 +580,13 @@ fn emitExpr(allocator: std.mem.Allocator, ctx: *LowerFunctionCtx, node_id: Ast.N
         .labeled_block => {
             try emitExpr(allocator, ctx, n.data.labeled_block.body);
         },
-        .unwrap_optional, .unwrap_error => {
+        .unwrap_optional => {
             try emitExpr(allocator, ctx, n.data.one.child);
+            try ctx.instrs.append(allocator, .{ .unwrap_optional = {} });
+        },
+        .unwrap_error => {
+            try emitExpr(allocator, ctx, n.data.one.child);
+            try ctx.instrs.append(allocator, .{ .unwrap_error = {} });
         },
         .deref => {
             try emitExpr(allocator, ctx, n.data.one.child);
@@ -866,6 +871,77 @@ test "lower pointer address and deref assignment" {
 
     const code = @import("backend_native.zig").lowerMainExitCode(p) catch return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i64, 7), code);
+}
+
+test "lower unwrap operators emit runtime IR checks" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_unwrap";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_unwrap/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "main := () i32 => {\n" ++
+                "  o: optional = 9\n" ++
+                "  e: error = 5\n" ++
+                "  e.!\n" ++
+                "  o.?\n" ++
+                "}\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntry(alloc, "tmp_lower_ir_unwrap/main.dyn");
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_optional = false;
+    var saw_error = false;
+    for (p.functions[0].instructions) |ins| {
+        switch (ins) {
+            .unwrap_optional => saw_optional = true,
+            .unwrap_error => saw_error = true,
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_optional);
+    try std.testing.expect(saw_error);
+
+    const code = @import("backend_native.zig").lowerMainExitCode(p) catch return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i64, 9), code);
+}
+
+test "lower unwrap optional fails at runtime for zero sentinel" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_unwrap_fail";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_unwrap_fail/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "main := () i32 => {\n" ++
+                "  o: optional = 0\n" ++
+                "  o.?\n" ++
+                "}\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntry(alloc, "tmp_lower_ir_unwrap_fail/main.dyn");
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectError(error.UnsupportedIr, @import("backend_native.zig").lowerMainExitCode(p));
 }
 
 test "lower interns string literal into rodata" {

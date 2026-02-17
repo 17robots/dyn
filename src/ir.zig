@@ -14,6 +14,7 @@ pub const CallConv = enum {
 pub const Program = struct {
     functions: []Function,
     rodata_strings: []StringConst,
+    global_count: u32,
 };
 
 pub const StringConst = struct {
@@ -38,8 +39,12 @@ pub const Instruction = union(enum) {
     load_local: u32,
     store_local: u32,
     addr_of_local: u32,
+    addr_of_global: u32,
+    ptr_offset_slots: i32,
     load_ptr: void,
     store_ptr: void,
+    unwrap_optional: void,
+    unwrap_error: void,
     pop: void,
     add: void,
     sub: void,
@@ -83,7 +88,7 @@ pub fn makeTinyMain(allocator: std.mem.Allocator, exit_code: i64) !Program {
         .local_count = 0,
         .instructions = instrs,
     };
-    return .{ .functions = funcs, .rodata_strings = &.{} };
+    return .{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
 }
 
 pub fn deinitProgram(allocator: std.mem.Allocator, p: *Program) void {
@@ -105,7 +110,7 @@ pub fn deinitProgram(allocator: std.mem.Allocator, p: *Program) void {
         if (s.owned) allocator.free(s.bytes);
     }
     if (p.rodata_strings.len > 0) allocator.free(p.rodata_strings);
-    p.* = .{ .functions = &.{}, .rodata_strings = &.{} };
+    p.* = .{ .functions = &.{}, .rodata_strings = &.{}, .global_count = 0 };
 }
 
 test "tiny ir program" {

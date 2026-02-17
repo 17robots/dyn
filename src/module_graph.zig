@@ -42,6 +42,10 @@ pub const GraphError = struct {
 
 pub const Self = @This();
 
+pub const BuildOptions = struct {
+    std_dir: ?[]const u8 = null,
+};
+
 allocator: std.mem.Allocator,
 sm: SourceManager,
 files: std.ArrayListUnmanaged(FileUnit) = .empty,
@@ -53,6 +57,7 @@ errors: std.ArrayListUnmanaged(GraphError) = .empty,
 path_to_file: std.StringHashMapUnmanaged(u32) = .empty,
 module_key_to_module: std.StringHashMapUnmanaged(u32) = .empty,
 file_to_module: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+std_dir_abs: ?[]u8 = null,
 
 pub fn init(allocator: std.mem.Allocator) Self {
     return .{ .allocator = allocator, .sm = SourceManager.init(allocator) };
@@ -87,11 +92,22 @@ pub fn deinit(self: *Self) void {
     while (it.next()) |k| self.allocator.free(k.*);
     self.module_key_to_module.deinit(self.allocator);
     self.file_to_module.deinit(self.allocator);
+    if (self.std_dir_abs) |p| self.allocator.free(p);
 }
 
 pub fn buildFromEntry(allocator: std.mem.Allocator, entry_path: []const u8) !Self {
+    return buildFromEntryWithOptions(allocator, entry_path, .{});
+}
+
+pub fn buildFromEntryWithOptions(allocator: std.mem.Allocator, entry_path: []const u8, opts: BuildOptions) !Self {
     var g = Self.init(allocator);
     errdefer g.deinit();
+
+    if (opts.std_dir) |std_dir| {
+        const std_rel = try std.fs.path.resolve(allocator, &.{std_dir});
+        defer allocator.free(std_rel);
+        g.std_dir_abs = try std.fs.cwd().realpathAlloc(allocator, std_rel);
+    }
 
     const rel = try std.fs.path.resolve(allocator, &.{entry_path});
     defer allocator.free(rel);
@@ -229,16 +245,29 @@ fn collectImportsForFile(self: *Self, source_mod: u32, file_idx: u32) anyerror!v
             const u = f.nodes[u_id];
             const raw = try self.extractUsePath(f.file_id, u.data.use_expr.path_span);
 
-            const target = self.resolveUseTarget(f.dir_path, raw) catch {
+            var target_opt: ?UseTarget = self.resolveUseTarget(f.dir_path, raw) catch null;
+            if (target_opt == null) {
+                target_opt = try self.tryResolveStdUseTarget(raw);
+            }
+            if (target_opt == null) {
                 try self.errors.append(self.allocator, .{ .file_id = f.file_id, .span = u.data.use_expr.path_span, .message = "unable to resolve import path" });
                 try self.edges.append(self.allocator, .{ .from_module = source_mod, .to_module = null, .raw_path = raw, .span = u.data.use_expr.path_span, .file_id = f.file_id });
                 continue;
-            };
+            }
+            const target = target_opt.?;
             defer self.allocator.free(target.dir);
             defer self.allocator.free(target.module_name);
 
             try self.loadModuleFilesInDirectory(target.dir);
-            const mod_idx = self.findModuleByDirAndName(target.dir, target.module_name);
+            var mod_idx = self.findModuleByDirAndName(target.dir, target.module_name);
+            if (mod_idx == null) {
+                if (try self.tryResolveStdUseTarget(raw)) |std_target| {
+                    defer self.allocator.free(std_target.dir);
+                    defer self.allocator.free(std_target.module_name);
+                    try self.loadModuleFilesInDirectory(std_target.dir);
+                    mod_idx = self.findModuleByDirAndName(std_target.dir, std_target.module_name);
+                }
+            }
             if (mod_idx == null) {
                 try self.errors.append(self.allocator, .{ .file_id = f.file_id, .span = u.data.use_expr.path_span, .message = "import module not found in target directory" });
                 try self.edges.append(self.allocator, .{ .from_module = source_mod, .to_module = null, .raw_path = raw, .span = u.data.use_expr.path_span, .file_id = f.file_id });
@@ -304,6 +333,26 @@ fn resolveUseTarget(self: *Self, from_dir: []const u8, raw_import: []const u8) !
     const dir_abs = try std.fs.cwd().realpathAlloc(self.allocator, dir_rel);
     errdefer self.allocator.free(dir_abs);
 
+    return .{ .dir = dir_abs, .module_name = try self.allocator.dupe(u8, mod_name) };
+}
+
+fn tryResolveStdUseTarget(self: *Self, raw_import: []const u8) !?UseTarget {
+    const std_root = self.std_dir_abs orelse return null;
+    if (!std.mem.startsWith(u8, raw_import, "std/")) return null;
+    const rest = raw_import[4..];
+    if (rest.len == 0) return null;
+
+    const slash_idx = std.mem.lastIndexOfScalar(u8, rest, '/');
+    const rel_dir = if (slash_idx) |idx| rest[0..idx] else "";
+    const mod_name = if (slash_idx) |idx| rest[idx + 1 ..] else rest;
+
+    const dir_rel = if (rel_dir.len == 0)
+        try self.allocator.dupe(u8, std_root)
+    else
+        try std.fs.path.resolve(self.allocator, &.{ std_root, rel_dir });
+    defer self.allocator.free(dir_rel);
+
+    const dir_abs = std.fs.cwd().realpathAlloc(self.allocator, dir_rel) catch return null;
     return .{ .dir = dir_abs, .module_name = try self.allocator.dupe(u8, mod_name) };
 }
 
@@ -552,4 +601,76 @@ test "module graph loads module files in deterministic lexical order" {
 
     try std.testing.expect(alpha_pos != null and zeta_pos != null);
     try std.testing.expect(alpha_pos.? < zeta_pos.?);
+}
+
+test "use std fallback resolves from configured std_dir" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_mod_std_fallback";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath("tmp_mod_std_fallback/app");
+    try std.fs.cwd().makePath("tmp_mod_std_fallback/sdk/std");
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_mod_std_fallback/app/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("module main\nIo := use \"std/io\"\n");
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_mod_std_fallback/sdk/std/io.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("module io\npub v := 1\n");
+    }
+
+    var g = try Self.buildFromEntryWithOptions(alloc, "tmp_mod_std_fallback/app/main.dyn", .{ .std_dir = "tmp_mod_std_fallback/sdk/std" });
+    defer g.deinit();
+    try std.testing.expectEqual(@as(usize, 0), g.errors.items.len);
+
+    var found = false;
+    for (g.modules.items) |m| {
+        if (std.mem.eql(u8, m.name, "io") and std.mem.endsWith(u8, m.dir_path, "tmp_mod_std_fallback/sdk/std")) {
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "local std directory takes precedence over std_dir fallback" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_mod_std_precedence";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath("tmp_mod_std_precedence/app/std");
+    try std.fs.cwd().makePath("tmp_mod_std_precedence/sdk/std");
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_mod_std_precedence/app/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("module main\nIo := use \"std/io\"\n");
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_mod_std_precedence/app/std/io.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("module io\npub from_local := 1\n");
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_mod_std_precedence/sdk/std/io.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("module io\npub from_sdk := 1\n");
+    }
+
+    var g = try Self.buildFromEntryWithOptions(alloc, "tmp_mod_std_precedence/app/main.dyn", .{ .std_dir = "tmp_mod_std_precedence/sdk/std" });
+    defer g.deinit();
+    try std.testing.expectEqual(@as(usize, 0), g.errors.items.len);
+
+    var picked_local = false;
+    for (g.edges.items) |e| {
+        if (!std.mem.eql(u8, e.raw_path, "std/io")) continue;
+        const to = e.to_module orelse continue;
+        const m = g.modules.items[to];
+        if (std.mem.eql(u8, m.name, "io") and std.mem.endsWith(u8, m.dir_path, "tmp_mod_std_precedence/app/std")) {
+            picked_local = true;
+        }
+    }
+    try std.testing.expect(picked_local);
 }

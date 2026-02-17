@@ -14,7 +14,9 @@ pub const BackendError = error{
 
 pub fn lowerMainExitCode(program: Ir.Program) BackendError!i64 {
     const main_index = findMainIndex(program) orelse return error.MissingMain;
-    return runFunction(program, main_index, &.{}) catch return error.UnsupportedIr;
+    if (program.global_count > 256) return error.UnsupportedIr;
+    var state = RuntimeState{};
+    return runFunction(program, main_index, &.{}, &state) catch return error.UnsupportedIr;
 }
 
 pub fn emitAssembly(target: Target, program: Ir.Program, writer: anytype) !void {
@@ -76,7 +78,16 @@ fn emitAssemblyDirectLinuxX64Ex(program: Ir.Program, writer: anytype, unit_prefi
         try writer.writeAll(".text\n");
     }
 
+    if (program.global_count > 0) {
+        try writer.writeAll(".section .bss\n");
+        try writer.print("{s}_globals:\n    .zero {d}\n", .{ unit_prefix, program.global_count * 8 });
+        try writer.writeAll(".text\n");
+    }
+
+    try emitRuntimeAllocatorSymbols(writer);
+
     for (program.functions, 0..) |f, fi| {
+        if (try emitStdIntrinsicFunction(writer, f.name)) continue;
         try writer.print(".global {s}\n{s}:\n", .{ f.name, f.name });
         try writer.writeAll("    push %rbp\n    mov %rsp, %rbp\n");
         if (f.local_count > 0) {
@@ -120,11 +131,33 @@ fn emitAssemblyDirectLinuxX64Ex(program: Ir.Program, writer: anytype, unit_prefi
                     try writer.print("    lea -{d}(%rbp), %rax\n", .{off});
                     try writer.writeAll("    push %rax\n");
                 },
+                .addr_of_global => |slot| {
+                    if (slot >= program.global_count) return error.UnsupportedIr;
+                    try writer.print("    lea {s}_globals+{d}(%rip), %rax\n", .{ unit_prefix, slot * 8 });
+                    try writer.writeAll("    push %rax\n");
+                },
+                .ptr_offset_slots => |slots| {
+                    try writer.print("    pop %rax\n    add ${d}, %rax\n    push %rax\n", .{slots * 8});
+                },
                 .load_ptr => {
                     try writer.writeAll("    pop %rcx\n    mov (%rcx), %rax\n    push %rax\n");
                 },
                 .store_ptr => {
                     try writer.writeAll("    pop %rax\n    pop %rcx\n    mov %rax, (%rcx)\n    push %rax\n");
+                },
+                .unwrap_optional => {
+                    try writer.writeAll("    pop %rax\n    cmp $0, %rax\n");
+                    try writer.print("    jne fn_{d}_L{d}_unwrap_optional_ok\n", .{ fi, i });
+                    try writer.writeAll("    mov $60, %rax\n    mov $2, %rdi\n    syscall\n");
+                    try writer.print("fn_{d}_L{d}_unwrap_optional_ok:\n", .{ fi, i });
+                    try writer.writeAll("    push %rax\n");
+                },
+                .unwrap_error => {
+                    try writer.writeAll("    pop %rax\n    cmp $0, %rax\n");
+                    try writer.print("    jne fn_{d}_L{d}_unwrap_error_ok\n", .{ fi, i });
+                    try writer.writeAll("    mov $60, %rax\n    mov $3, %rdi\n    syscall\n");
+                    try writer.print("fn_{d}_L{d}_unwrap_error_ok:\n", .{ fi, i });
+                    try writer.writeAll("    push %rax\n");
                 },
                 .pop => try writer.writeAll("    add $8, %rsp\n"),
                 .add => try writer.writeAll("    pop %rcx\n    pop %rax\n    add %rcx, %rax\n    push %rax\n"),
@@ -161,6 +194,210 @@ fn emitAssemblyDirectLinuxX64Ex(program: Ir.Program, writer: anytype, unit_prefi
         try writer.print("fn_{d}_L{d}:\n", .{ fi, f.instructions.len });
         try writer.writeAll("    mov $0, %rax\n    mov %rbp, %rsp\n    pop %rbp\n    ret\n");
     }
+}
+
+fn emitRuntimeAllocatorSymbols(writer: anytype) !void {
+    try writer.writeAll(
+        "__dyn_os_alloc:\n" ++
+            "    push %rbp\n" ++
+            "    mov %rsp, %rbp\n" ++
+            "    mov 24(%rbp), %rsi\n" ++
+            "    cmp $0, %rsi\n" ++
+            "    jle .Ldyn_alloc_fail\n" ++
+            "    mov $9, %rax\n" ++
+            "    xor %rdi, %rdi\n" ++
+            "    mov $3, %rdx\n" ++
+            "    mov $34, %r10\n" ++
+            "    mov $-1, %r8\n" ++
+            "    xor %r9, %r9\n" ++
+            "    syscall\n" ++
+            "    cmp $0, %rax\n" ++
+            "    jl .Ldyn_alloc_fail\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            ".Ldyn_alloc_fail:\n" ++
+            "    xor %rax, %rax\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            "__dyn_os_free:\n" ++
+            "    push %rbp\n" ++
+            "    mov %rsp, %rbp\n" ++
+            "    mov 32(%rbp), %rdi\n" ++
+            "    mov 24(%rbp), %rsi\n" ++
+            "    cmp $0, %rdi\n" ++
+            "    je .Ldyn_free_ret\n" ++
+            "    cmp $0, %rsi\n" ++
+            "    jle .Ldyn_free_ret\n" ++
+            "    mov $11, %rax\n" ++
+            "    syscall\n" ++
+            ".Ldyn_free_ret:\n" ++
+            "    xor %rax, %rax\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            "__dyn_os_realloc:\n" ++
+            "    push %rbp\n" ++
+            "    mov %rsp, %rbp\n" ++
+            "    sub $8, %rsp\n" ++
+            "    mov 48(%rbp), %rdi\n" ++
+            "    mov 40(%rbp), %r8\n" ++
+            "    mov 24(%rbp), %r9\n" ++
+            "    cmp $0, %r9\n" ++
+            "    jle .Ldyn_realloc_new_zero\n" ++
+            "    cmp $0, %rdi\n" ++
+            "    je .Ldyn_realloc_alloc_only\n" ++
+            "    mov $9, %rax\n" ++
+            "    xor %rdi, %rdi\n" ++
+            "    mov %r9, %rsi\n" ++
+            "    mov $3, %rdx\n" ++
+            "    mov $34, %r10\n" ++
+            "    mov $-1, %r8\n" ++
+            "    xor %r9, %r9\n" ++
+            "    syscall\n" ++
+            "    cmp $0, %rax\n" ++
+            "    jl .Ldyn_realloc_fail\n" ++
+            "    mov %rax, -8(%rbp)\n" ++
+            "    mov 40(%rbp), %rcx\n" ++
+            "    mov 24(%rbp), %rdx\n" ++
+            "    cmp %rdx, %rcx\n" ++
+            "    cmovg %rdx, %rcx\n" ++
+            "    cmp $0, %rcx\n" ++
+            "    jle .Ldyn_realloc_skip_copy\n" ++
+            "    mov 48(%rbp), %rsi\n" ++
+            "    mov -8(%rbp), %rdi\n" ++
+            "    cld\n" ++
+            "    rep movsb\n" ++
+            ".Ldyn_realloc_skip_copy:\n" ++
+            "    mov 40(%rbp), %rsi\n" ++
+            "    cmp $0, %rsi\n" ++
+            "    jle .Ldyn_realloc_ret_new\n" ++
+            "    mov $11, %rax\n" ++
+            "    mov 48(%rbp), %rdi\n" ++
+            "    syscall\n" ++
+            ".Ldyn_realloc_ret_new:\n" ++
+            "    mov -8(%rbp), %rax\n" ++
+            "    add $8, %rsp\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            ".Ldyn_realloc_alloc_only:\n" ++
+            "    mov $9, %rax\n" ++
+            "    xor %rdi, %rdi\n" ++
+            "    mov 24(%rbp), %rsi\n" ++
+            "    mov $3, %rdx\n" ++
+            "    mov $34, %r10\n" ++
+            "    mov $-1, %r8\n" ++
+            "    xor %r9, %r9\n" ++
+            "    syscall\n" ++
+            "    cmp $0, %rax\n" ++
+            "    jl .Ldyn_realloc_fail\n" ++
+            "    add $8, %rsp\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            ".Ldyn_realloc_new_zero:\n" ++
+            "    cmp $0, %rdi\n" ++
+            "    je .Ldyn_realloc_fail\n" ++
+            "    cmp $0, %r8\n" ++
+            "    jle .Ldyn_realloc_fail\n" ++
+            "    mov $11, %rax\n" ++
+            "    mov %r8, %rsi\n" ++
+            "    syscall\n" ++
+            ".Ldyn_realloc_fail:\n" ++
+            "    xor %rax, %rax\n" ++
+            "    add $8, %rsp\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n",
+    );
+}
+
+fn emitStdIntrinsicFunction(writer: anytype, name: []const u8) !bool {
+    if (std.mem.eql(u8, name, "mpage_allocator_alloc") or std.mem.eql(u8, name, "mheap_alloc") or std.mem.eql(u8, name, "mmem_alloc") or std.mem.eql(u8, name, "mallocator_alloc")) {
+        try writer.print(
+            ".global {s}\n{s}:\n" ++
+                "    push %rbp\n" ++
+                "    mov %rsp, %rbp\n" ++
+                "    mov 24(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    mov 16(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    call __dyn_os_alloc\n" ++
+                "    add $16, %rsp\n" ++
+                "    mov %rbp, %rsp\n" ++
+                "    pop %rbp\n" ++
+                "    ret\n",
+            .{ name, name },
+        );
+        return true;
+    }
+    if (std.mem.eql(u8, name, "mpage_allocator_free") or std.mem.eql(u8, name, "mheap_free") or std.mem.eql(u8, name, "mmem_free") or std.mem.eql(u8, name, "mallocator_free")) {
+        try writer.print(
+            ".global {s}\n{s}:\n" ++
+                "    push %rbp\n" ++
+                "    mov %rsp, %rbp\n" ++
+                "    mov 32(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    mov 24(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    mov 16(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    call __dyn_os_free\n" ++
+                "    add $24, %rsp\n" ++
+                "    mov %rbp, %rsp\n" ++
+                "    pop %rbp\n" ++
+                "    ret\n",
+            .{ name, name },
+        );
+        return true;
+    }
+    if (std.mem.eql(u8, name, "mpage_allocator_realloc") or std.mem.eql(u8, name, "mheap_realloc") or std.mem.eql(u8, name, "mmem_realloc") or std.mem.eql(u8, name, "mallocator_realloc")) {
+        try writer.print(
+            ".global {s}\n{s}:\n" ++
+                "    push %rbp\n" ++
+                "    mov %rsp, %rbp\n" ++
+                "    mov 48(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    mov 40(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    mov 32(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    mov 24(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    mov 16(%rbp), %rax\n" ++
+                "    push %rax\n" ++
+                "    call __dyn_os_realloc\n" ++
+                "    add $40, %rsp\n" ++
+                "    mov %rbp, %rsp\n" ++
+                "    pop %rbp\n" ++
+                "    ret\n",
+            .{ name, name },
+        );
+        return true;
+    }
+    if (std.mem.eql(u8, name, "mio_print") or std.mem.eql(u8, name, "mprint_print")) {
+        try writer.print(
+            ".global {s}\n{s}:\n" ++
+                "    push %rbp\n" ++
+                "    mov %rsp, %rbp\n" ++
+                "    mov 16(%rbp), %rsi\n" ++
+                "    mov %rsi, %rcx\n" ++
+                "    xor %rdx, %rdx\n" ++
+                "1:\n" ++
+                "    cmpb $0, (%rcx)\n" ++
+                "    je 2f\n" ++
+                "    inc %rcx\n" ++
+                "    inc %rdx\n" ++
+                "    jmp 1b\n" ++
+                "2:\n" ++
+                "    mov $1, %rax\n" ++
+                "    mov $1, %rdi\n" ++
+                "    syscall\n" ++
+                "    xor %rax, %rax\n" ++
+                "    mov %rbp, %rsp\n" ++
+                "    pop %rbp\n" ++
+                "    ret\n",
+            .{ name, name },
+        );
+        return true;
+    }
+    return false;
 }
 
 pub fn buildExecutableDirect(
@@ -276,9 +513,97 @@ fn findMainIndex(program: Ir.Program) ?u32 {
     return null;
 }
 
-fn runFunction(program: Ir.Program, func_index: u32, args: []const i64) !i64 {
+const RuntimeState = struct {
+    globals: [256]i64 = [_]i64{0} ** 256,
+    heap_words: [8192]i64 = [_]i64{0} ** 8192,
+    alloc_start: [256]usize = [_]usize{0} ** 256,
+    alloc_words: [256]usize = [_]usize{0} ** 256,
+    alloc_used: [256]bool = [_]bool{false} ** 256,
+    heap_next: usize = 0,
+};
+
+fn runtimeAlloc(state: *RuntimeState, size_bytes: i64, align_bytes: i64) !i64 {
+    if (align_bytes <= 0 or (align_bytes & (align_bytes - 1)) != 0) return error.UnsupportedIr;
+    if (size_bytes <= 0) return 0;
+    const words: usize = @intCast(@divFloor(size_bytes + 7, 8));
+    if (words == 0) return 0;
+    if (state.heap_next + words > state.heap_words.len) return 0;
+
+    const start = state.heap_next;
+    state.heap_next += words;
+
+    var slot: usize = 0;
+    while (slot < state.alloc_used.len) : (slot += 1) {
+        if (!state.alloc_used[slot]) {
+            state.alloc_used[slot] = true;
+            state.alloc_start[slot] = start;
+            state.alloc_words[slot] = words;
+            return 0x6000_0000 + @as(i64, @intCast(start));
+        }
+    }
+    return error.UnsupportedIr;
+}
+
+fn runtimeFree(state: *RuntimeState, ptr: i64) void {
+    if (ptr == 0) return;
+    if (ptr < 0x6000_0000) return;
+    const start: usize = @intCast(ptr - 0x6000_0000);
+    var slot: usize = 0;
+    while (slot < state.alloc_used.len) : (slot += 1) {
+        if (state.alloc_used[slot] and state.alloc_start[slot] == start) {
+            state.alloc_used[slot] = false;
+            return;
+        }
+    }
+}
+
+fn runtimeRealloc(state: *RuntimeState, ptr: i64, old_size: i64, old_align: i64, new_size: i64, new_align: i64) !i64 {
+    _ = old_align;
+    if (ptr == 0) return try runtimeAlloc(state, new_size, new_align);
+    if (new_size <= 0) {
+        runtimeFree(state, ptr);
+        return 0;
+    }
+    const new_ptr = try runtimeAlloc(state, new_size, new_align);
+    if (new_ptr == 0) return 0;
+    if (ptr < 0x6000_0000 or new_ptr < 0x6000_0000) return error.UnsupportedIr;
+    const src_start: usize = @intCast(ptr - 0x6000_0000);
+    const dst_start: usize = @intCast(new_ptr - 0x6000_0000);
+    const copy_words: usize = @intCast(@divFloor(@min(old_size, new_size) + 7, 8));
+    if (src_start + copy_words > state.heap_words.len or dst_start + copy_words > state.heap_words.len) return error.UnsupportedIr;
+    var i: usize = 0;
+    while (i < copy_words) : (i += 1) {
+        state.heap_words[dst_start + i] = state.heap_words[src_start + i];
+    }
+    runtimeFree(state, ptr);
+    return new_ptr;
+}
+
+fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *RuntimeState) !i64 {
     if (func_index >= program.functions.len) return error.UnsupportedIr;
     const f = program.functions[func_index];
+    if (std.mem.eql(u8, f.name, "mpage_allocator_alloc") or std.mem.eql(u8, f.name, "mheap_alloc") or std.mem.eql(u8, f.name, "mmem_alloc") or std.mem.eql(u8, f.name, "mallocator_alloc")) {
+        if (args.len != 2) return error.UnsupportedIr;
+        return try runtimeAlloc(state, args[0], args[1]);
+    }
+    if (std.mem.eql(u8, f.name, "mpage_allocator_free") or std.mem.eql(u8, f.name, "mheap_free") or std.mem.eql(u8, f.name, "mmem_free") or std.mem.eql(u8, f.name, "mallocator_free")) {
+        if (args.len != 3) return error.UnsupportedIr;
+        runtimeFree(state, args[0]);
+        return 0;
+    }
+    if (std.mem.eql(u8, f.name, "mpage_allocator_realloc") or std.mem.eql(u8, f.name, "mheap_realloc") or std.mem.eql(u8, f.name, "mmem_realloc") or std.mem.eql(u8, f.name, "mallocator_realloc")) {
+        if (args.len != 5) return error.UnsupportedIr;
+        return try runtimeRealloc(state, args[0], args[1], args[2], args[3], args[4]);
+    }
+    if (std.mem.eql(u8, f.name, "mio_print") or std.mem.eql(u8, f.name, "mprint_print")) {
+        if (args.len != 1) return error.UnsupportedIr;
+        const p = args[0];
+        if (p < 0x1000) return error.UnsupportedIr;
+        const idx: usize = @intCast(p - 0x1000);
+        if (idx >= program.rodata_strings.len) return error.UnsupportedIr;
+        _ = try std.posix.write(std.posix.STDOUT_FILENO, program.rodata_strings[idx].bytes);
+        return 0;
+    }
     if (f.call_conv != .stack_i64) return error.UnsupportedIr;
     if (f.param_type != .i64 and f.param_type != .bool) return error.UnsupportedIr;
     if (f.ret_type != .i64 and f.ret_type != .bool) return error.UnsupportedIr;
@@ -291,7 +616,9 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64) !i64 {
     var stack: [1024]i64 = undefined;
     var sp: usize = 0;
     var pc: usize = 0;
-    const ptr_base: i64 = 0x4000_0000;
+    const ptr_base_local: i64 = 0x4000_0000;
+    const ptr_base_global: i64 = 0x5000_0000;
+    const ptr_base_heap: i64 = 0x6000_0000;
 
     while (pc < f.instructions.len) : (pc += 1) {
         const ins = f.instructions[pc];
@@ -318,28 +645,63 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64) !i64 {
             },
             .addr_of_local => |slot| {
                 if (slot >= f.local_count or sp >= stack.len) return error.UnsupportedIr;
-                stack[sp] = ptr_base + @as(i64, @intCast(slot));
+                stack[sp] = ptr_base_local + @as(i64, @intCast(slot));
                 sp += 1;
+            },
+            .addr_of_global => |slot| {
+                if (slot >= program.global_count or sp >= stack.len) return error.UnsupportedIr;
+                stack[sp] = ptr_base_global + @as(i64, @intCast(slot));
+                sp += 1;
+            },
+            .ptr_offset_slots => |slots| {
+                if (sp == 0) return error.UnsupportedIr;
+                stack[sp - 1] += @as(i64, slots);
             },
             .load_ptr => {
                 if (sp == 0) return error.UnsupportedIr;
                 const p = stack[sp - 1];
-                if (p < ptr_base) return error.UnsupportedIr;
-                const slot: usize = @intCast(p - ptr_base);
-                if (slot >= f.local_count) return error.UnsupportedIr;
-                stack[sp - 1] = locals[slot];
+                if (p >= ptr_base_heap) {
+                    const slot: usize = @intCast(p - ptr_base_heap);
+                    if (slot >= state.heap_words.len) return error.UnsupportedIr;
+                    stack[sp - 1] = state.heap_words[slot];
+                } else if (p >= ptr_base_global) {
+                    const slot: usize = @intCast(p - ptr_base_global);
+                    if (slot >= program.global_count) return error.UnsupportedIr;
+                    stack[sp - 1] = state.globals[slot];
+                } else if (p >= ptr_base_local) {
+                    const slot: usize = @intCast(p - ptr_base_local);
+                    if (slot >= f.local_count) return error.UnsupportedIr;
+                    stack[sp - 1] = locals[slot];
+                } else return error.UnsupportedIr;
             },
             .store_ptr => {
                 if (sp < 2) return error.UnsupportedIr;
                 const val = stack[sp - 1];
                 const p = stack[sp - 2];
-                if (p < ptr_base) return error.UnsupportedIr;
-                const slot: usize = @intCast(p - ptr_base);
-                if (slot >= f.local_count) return error.UnsupportedIr;
-                locals[slot] = val;
+                if (p >= ptr_base_heap) {
+                    const slot: usize = @intCast(p - ptr_base_heap);
+                    if (slot >= state.heap_words.len) return error.UnsupportedIr;
+                    state.heap_words[slot] = val;
+                } else if (p >= ptr_base_global) {
+                    const slot: usize = @intCast(p - ptr_base_global);
+                    if (slot >= program.global_count) return error.UnsupportedIr;
+                    state.globals[slot] = val;
+                } else if (p >= ptr_base_local) {
+                    const slot: usize = @intCast(p - ptr_base_local);
+                    if (slot >= f.local_count) return error.UnsupportedIr;
+                    locals[slot] = val;
+                } else return error.UnsupportedIr;
                 sp -= 2;
                 stack[sp] = val;
                 sp += 1;
+            },
+            .unwrap_optional => {
+                if (sp == 0) return error.UnsupportedIr;
+                if (stack[sp - 1] == 0) return error.UnsupportedIr;
+            },
+            .unwrap_error => {
+                if (sp == 0) return error.UnsupportedIr;
+                if (stack[sp - 1] == 0) return error.UnsupportedIr;
             },
             .pop => {
                 if (sp == 0) return error.UnsupportedIr;
@@ -373,8 +735,23 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64) !i64 {
                 for (0..c.arg_count) |i| call_args[i] = stack[base + i];
                 sp = base;
                 const rv = switch (c.target) {
-                    .internal_index => |idx| try runFunction(program, idx, call_args[0..c.arg_count]),
-                    .external_symbol => return error.UnsupportedIr,
+                    .internal_index => |idx| try runFunction(program, idx, call_args[0..c.arg_count], state),
+                    .external_symbol => |ex| blk: {
+                        if (std.mem.eql(u8, ex.name, "__dyn_os_alloc")) {
+                            if (c.arg_count != 2) return error.UnsupportedIr;
+                            break :blk try runtimeAlloc(state, call_args[0], call_args[1]);
+                        }
+                        if (std.mem.eql(u8, ex.name, "__dyn_os_free")) {
+                            if (c.arg_count != 3) return error.UnsupportedIr;
+                            runtimeFree(state, call_args[0]);
+                            break :blk 0;
+                        }
+                        if (std.mem.eql(u8, ex.name, "__dyn_os_realloc")) {
+                            if (c.arg_count != 5) return error.UnsupportedIr;
+                            break :blk try runtimeRealloc(state, call_args[0], call_args[1], call_args[2], call_args[3], call_args[4]);
+                        }
+                        return error.UnsupportedIr;
+                    },
                 };
                 if (sp >= stack.len) return error.UnsupportedIr;
                 stack[sp] = rv;
@@ -483,7 +860,7 @@ test "emit direct asm includes rodata" {
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr };
     const rods = try alloc.alloc(Ir.StringConst, 1);
     rods[0] = .{ .bytes = "hello", .owned = false };
-    var p = Ir.Program{ .functions = funcs, .rodata_strings = rods };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = rods, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
     var out: std.ArrayList(u8) = .empty;
@@ -513,7 +890,7 @@ test "build executable direct with call" {
     const funcs = try alloc.alloc(Ir.Function, 2);
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr_main };
     funcs[1] = .{ .name = "add", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 2, .local_count = 2, .instructions = instr_add };
-    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{} };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
     const dir = "tmp_backend_direct";
@@ -591,7 +968,7 @@ test "build executable direct with branch and loop" {
 
     const funcs = try alloc.alloc(Ir.Function, 1);
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 2, .instructions = full };
-    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{} };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
     const dir = "tmp_backend_direct_flow";
@@ -622,7 +999,7 @@ test "direct asm avoids callee-saved rbx in generated ops" {
 
     const funcs = try alloc.alloc(Ir.Function, 1);
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr_main };
-    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{} };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
     var out: std.ArrayList(u8) = .empty;
@@ -643,7 +1020,7 @@ test "direct asm aligns local stack frame allocation to 16 bytes" {
 
     const funcs = try alloc.alloc(Ir.Function, 1);
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 1, .instructions = instr_main };
-    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{} };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
     var out: std.ArrayList(u8) = .empty;
@@ -672,7 +1049,7 @@ test "direct asm and interpreter support pointer load/store ops" {
 
     const funcs = try alloc.alloc(Ir.Function, 1);
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 2, .instructions = instr_main };
-    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{} };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
     const code = try lowerMainExitCode(p);
@@ -685,4 +1062,196 @@ test "direct asm and interpreter support pointer load/store ops" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "lea -8(%rbp), %rax") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "mov (%rcx), %rax") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "mov %rax, (%rcx)") != null);
+}
+
+test "direct asm and interpreter support pointer slot offsets" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 9);
+    instr_main[0] = .{ .push_const_i64 = 11 };
+    instr_main[1] = .{ .store_local = 0 };
+    instr_main[2] = .{ .push_const_i64 = 22 };
+    instr_main[3] = .{ .store_local = 1 };
+    instr_main[4] = .{ .addr_of_local = 0 };
+    instr_main[5] = .{ .ptr_offset_slots = 1 };
+    instr_main[6] = .{ .load_ptr = {} };
+    instr_main[7] = .{ .ret = {} };
+    instr_main[8] = .{ .push_const_i64 = 0 };
+
+    const funcs = try alloc.alloc(Ir.Function, 1);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 2, .instructions = instr_main };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    const code = try lowerMainExitCode(p);
+    try std.testing.expectEqual(@as(i64, 22), code);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+    try emitAssemblyDirect(.linux_x86_64, p, w);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "add $8, %rax") != null);
+}
+
+test "direct asm and interpreter support global pointer storage" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 7);
+    instr_main[0] = .{ .addr_of_global = 0 };
+    instr_main[1] = .{ .push_const_i64 = 41 };
+    instr_main[2] = .{ .store_ptr = {} };
+    instr_main[3] = .{ .pop = {} };
+    instr_main[4] = .{ .addr_of_global = 0 };
+    instr_main[5] = .{ .load_ptr = {} };
+    instr_main[6] = .{ .ret = {} };
+
+    const funcs = try alloc.alloc(Ir.Function, 1);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr_main };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 1 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    const code = try lowerMainExitCode(p);
+    try std.testing.expectEqual(@as(i64, 41), code);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+    try emitAssemblyDirect(.linux_x86_64, p, w);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, ".section .bss") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "u0_globals") != null);
+}
+
+test "runtime backing allocator symbols work via external calls" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 16);
+    instr_main[0] = .{ .push_const_i64 = 16 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .external_symbol = .{ .name = "__dyn_os_alloc", .name_owned = false } } } };
+    instr_main[3] = .{ .store_local = 0 };
+    instr_main[4] = .{ .load_local = 0 };
+    instr_main[5] = .{ .push_const_i64 = 123 };
+    instr_main[6] = .{ .store_ptr = {} };
+    instr_main[7] = .{ .pop = {} };
+    instr_main[8] = .{ .load_local = 0 };
+    instr_main[9] = .{ .load_ptr = {} };
+    instr_main[10] = .{ .load_local = 0 };
+    instr_main[11] = .{ .push_const_i64 = 16 };
+    instr_main[12] = .{ .push_const_i64 = 8 };
+    instr_main[13] = .{ .call = .{ .arg_count = 3, .target = .{ .external_symbol = .{ .name = "__dyn_os_free", .name_owned = false } } } };
+    instr_main[14] = .{ .pop = {} };
+    instr_main[15] = .{ .ret = {} };
+
+    const funcs = try alloc.alloc(Ir.Function, 1);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 1, .instructions = instr_main };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    const code = try lowerMainExitCode(p);
+    try std.testing.expectEqual(@as(i64, 123), code);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+    try emitAssemblyDirect(.linux_x86_64, p, w);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "__dyn_os_alloc:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "__dyn_os_free:") != null);
+}
+
+test "std page allocator intrinsics allocate and free" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 10);
+    instr_main[0] = .{ .push_const_i64 = 24 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .internal_index = 1 } } };
+    instr_main[3] = .{ .store_local = 0 };
+    instr_main[4] = .{ .load_local = 0 };
+    instr_main[5] = .{ .push_const_i64 = 24 };
+    instr_main[6] = .{ .push_const_i64 = 8 };
+    instr_main[7] = .{ .call = .{ .arg_count = 3, .target = .{ .internal_index = 2 } } };
+    instr_main[8] = .{ .pop = {} };
+    instr_main[9] = .{ .ret = {} };
+
+    const instr_alloc = try alloc.alloc(Ir.Instruction, 2);
+    instr_alloc[0] = .{ .push_const_i64 = 0 };
+    instr_alloc[1] = .{ .ret = {} };
+    const instr_free = try alloc.alloc(Ir.Instruction, 2);
+    instr_free[0] = .{ .push_const_i64 = 0 };
+    instr_free[1] = .{ .ret = {} };
+
+    const funcs = try alloc.alloc(Ir.Function, 3);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 1, .instructions = instr_main };
+    funcs[1] = .{ .name = "mpage_allocator_alloc", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 2, .local_count = 0, .instructions = instr_alloc };
+    funcs[2] = .{ .name = "mpage_allocator_free", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 3, .local_count = 0, .instructions = instr_free };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectEqual(@as(i64, 0), try lowerMainExitCode(p));
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+    try emitAssemblyDirect(.linux_x86_64, p, w);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "mpage_allocator_alloc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "call __dyn_os_alloc") != null);
+}
+
+test "std io print intrinsic emits and executes" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 3);
+    instr_main[0] = .{ .push_rodata_ptr = 0 };
+    instr_main[1] = .{ .call = .{ .arg_count = 1, .target = .{ .internal_index = 1 } } };
+    instr_main[2] = .{ .ret = {} };
+
+    const instr_hello = try alloc.alloc(Ir.Instruction, 2);
+    instr_hello[0] = .{ .push_const_i64 = 0 };
+    instr_hello[1] = .{ .ret = {} };
+
+    const rods = try alloc.alloc(Ir.StringConst, 1);
+    rods[0] = .{ .bytes = "Hello, world!\n", .owned = false };
+
+    const funcs = try alloc.alloc(Ir.Function, 2);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr_main };
+    funcs[1] = .{ .name = "mio_print", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 1, .local_count = 0, .instructions = instr_hello };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = rods, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectEqual(@as(i64, 0), try lowerMainExitCode(p));
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+    try emitAssemblyDirect(.linux_x86_64, p, w);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "mio_print") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "cmpb $0, (%rcx)") != null);
+}
+
+test "runtime unwrap instructions are non-pass-through" {
+    const alloc = std.testing.allocator;
+
+    const ok_instr = try alloc.alloc(Ir.Instruction, 3);
+    ok_instr[0] = .{ .push_const_i64 = 9 };
+    ok_instr[1] = .{ .unwrap_optional = {} };
+    ok_instr[2] = .{ .ret = {} };
+
+    const ok_funcs = try alloc.alloc(Ir.Function, 1);
+    ok_funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = ok_instr };
+    var ok_program = Ir.Program{ .functions = ok_funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &ok_program);
+
+    try std.testing.expectEqual(@as(i64, 9), try lowerMainExitCode(ok_program));
+
+    const fail_instr = try alloc.alloc(Ir.Instruction, 3);
+    fail_instr[0] = .{ .push_const_i64 = 0 };
+    fail_instr[1] = .{ .unwrap_error = {} };
+    fail_instr[2] = .{ .ret = {} };
+
+    const fail_funcs = try alloc.alloc(Ir.Function, 1);
+    fail_funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = fail_instr };
+    var fail_program = Ir.Program{ .functions = fail_funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &fail_program);
+
+    try std.testing.expectError(error.UnsupportedIr, lowerMainExitCode(fail_program));
 }

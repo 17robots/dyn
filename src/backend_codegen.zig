@@ -135,6 +135,10 @@ fn validateProgramsAbi(allocator: std.mem.Allocator, programs: []const Ir.Progra
     var syms: std.StringHashMapUnmanaged(AbiSig) = .empty;
     defer syms.deinit(allocator);
 
+    try syms.put(allocator, "__dyn_os_alloc", .{ .call_conv = .stack_i64, .param_type = .i64, .ret_type = .i64, .param_count = 2 });
+    try syms.put(allocator, "__dyn_os_free", .{ .call_conv = .stack_i64, .param_type = .i64, .ret_type = .i64, .param_count = 3 });
+    try syms.put(allocator, "__dyn_os_realloc", .{ .call_conv = .stack_i64, .param_type = .i64, .ret_type = .i64, .param_count = 5 });
+
     for (programs) |p| {
         for (p.functions) |f| {
             const sig = AbiSig{ .call_conv = f.call_conv, .param_type = f.param_type, .ret_type = f.ret_type, .param_count = f.param_count };
@@ -528,14 +532,14 @@ test "backend codegen detects ABI mismatch" {
     instr_a[2] = .{ .call = .{ .arg_count = 2, .target = .{ .external_symbol = .{ .name = "foo", .name_owned = false } } } };
     const fa = try alloc.alloc(Ir.Function, 1);
     fa[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr_a };
-    var pa = Ir.Program{ .functions = fa, .rodata_strings = &.{} };
+    var pa = Ir.Program{ .functions = fa, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &pa);
 
     const instr_b = try alloc.alloc(Ir.Instruction, 1);
     instr_b[0] = .{ .ret = {} };
     const fb = try alloc.alloc(Ir.Function, 1);
     fb[0] = .{ .name = "foo", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 1, .local_count = 0, .instructions = instr_b };
-    var pb = Ir.Program{ .functions = fb, .rodata_strings = &.{} };
+    var pb = Ir.Program{ .functions = fb, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &pb);
 
     var ps = [_]Ir.Program{ pa, pb };
@@ -549,7 +553,7 @@ test "backend codegen detects ABI missing symbol" {
     instr[1] = .{ .call = .{ .arg_count = 1, .target = .{ .external_symbol = .{ .name = "missing", .name_owned = false } } } };
     const funcs = try alloc.alloc(Ir.Function, 1);
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr };
-    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{} };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
     var ps = [_]Ir.Program{p};
@@ -564,14 +568,14 @@ test "backend codegen detects ABI param type mismatch" {
     instr_a[1] = .{ .call = .{ .arg_count = 1, .target = .{ .external_symbol = .{ .name = "foo", .name_owned = false } } } };
     const fa = try alloc.alloc(Ir.Function, 1);
     fa[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .bool, .param_count = 0, .local_count = 0, .instructions = instr_a };
-    var pa = Ir.Program{ .functions = fa, .rodata_strings = &.{} };
+    var pa = Ir.Program{ .functions = fa, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &pa);
 
     const instr_b = try alloc.alloc(Ir.Instruction, 1);
     instr_b[0] = .{ .ret = {} };
     const fb = try alloc.alloc(Ir.Function, 1);
     fb[0] = .{ .name = "foo", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 1, .local_count = 0, .instructions = instr_b };
-    var pb = Ir.Program{ .functions = fb, .rodata_strings = &.{} };
+    var pb = Ir.Program{ .functions = fb, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &pb);
 
     var ps = [_]Ir.Program{ pa, pb };
@@ -585,14 +589,14 @@ test "backend codegen detects ABI symbol conflict" {
     instr_a[0] = .{ .ret = {} };
     const fa = try alloc.alloc(Ir.Function, 1);
     fa[0] = .{ .name = "foo", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 1, .local_count = 0, .instructions = instr_a };
-    var pa = Ir.Program{ .functions = fa, .rodata_strings = &.{} };
+    var pa = Ir.Program{ .functions = fa, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &pa);
 
     const instr_b = try alloc.alloc(Ir.Instruction, 1);
     instr_b[0] = .{ .ret = {} };
     const fb = try alloc.alloc(Ir.Function, 1);
     fb[0] = .{ .name = "foo", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .bool, .param_count = 1, .local_count = 0, .instructions = instr_b };
-    var pb = Ir.Program{ .functions = fb, .rodata_strings = &.{} };
+    var pb = Ir.Program{ .functions = fb, .rodata_strings = &.{}, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &pb);
 
     var ps = [_]Ir.Program{ pa, pb };

@@ -25,6 +25,9 @@ The compiler loads all `.dyn` files in that directory and selects files declarin
 
 If none are found, import fails.
 
+For `use "std/..."`, the CLI flag `--std-dir <dir>` provides an optional fallback root.
+Resolution order is local relative import first, then `--std-dir` fallback.
+
 ## Example
 
 `main.dyn`

@@ -7,6 +7,7 @@ pub const BuildError = anyerror;
 
 pub const BuildOptions = struct {
     codegen: BackendCodegen.Options = .{},
+    std_dir: ?[]const u8 = null,
 };
 
 pub fn buildExecutableFromEntry(
@@ -17,7 +18,7 @@ pub fn buildExecutableFromEntry(
     out_path: []const u8,
     opts: BuildOptions,
 ) BuildError!void {
-    var front = try Pipeline.runFrontend(allocator, writer, entry_path, .{});
+    var front = try Pipeline.runFrontend(allocator, writer, entry_path, .{ .std_dir = opts.std_dir });
     defer front.deinit();
     if (!front.canCodegen()) return error.FrontendFailed;
 
@@ -33,6 +34,7 @@ pub fn buildObjectFromEntry(
     entry_path: []const u8,
     asm_path: []const u8,
     out_obj_path: []const u8,
+    opts: BuildOptions,
 ) BuildError!void {
     return buildExecutableFromEntry(
         allocator,
@@ -40,7 +42,7 @@ pub fn buildObjectFromEntry(
         entry_path,
         asm_path,
         out_obj_path,
-        .{ .codegen = .{ .kind = .object, .strategy = .direct_asm } },
+        .{ .codegen = .{ .kind = .object, .strategy = .direct_asm }, .std_dir = opts.std_dir },
     );
 }
 
@@ -50,8 +52,9 @@ pub fn buildExecutableFromEntryViaModules(
     entry_path: []const u8,
     work_dir: []const u8,
     out_exe_path: []const u8,
+    opts: BuildOptions,
 ) BuildError!void {
-    var front = try Pipeline.runFrontend(allocator, writer, entry_path, .{});
+    var front = try Pipeline.runFrontend(allocator, writer, entry_path, .{ .std_dir = opts.std_dir });
     defer front.deinit();
     if (!front.canCodegen()) return error.FrontendFailed;
 
@@ -196,7 +199,7 @@ test "builds object from entry" {
 
     const asm_path = "tmp_backend_driver_obj/out.s";
     const obj_path = "tmp_backend_driver_obj/out.o";
-    try buildObjectFromEntry(alloc, w, "tmp_backend_driver_obj/main.dyn", asm_path, obj_path);
+    try buildObjectFromEntry(alloc, w, "tmp_backend_driver_obj/main.dyn", asm_path, obj_path, .{});
     const st = try std.fs.cwd().statFile(obj_path);
     try std.testing.expect(st.size > 0);
 }
@@ -229,6 +232,7 @@ test "builds executable from entry via module objects" {
         "tmp_backend_driver_modules/main.dyn",
         "tmp_backend_driver_modules",
         "tmp_backend_driver_modules/out",
+        .{},
     );
 
     var child = std.process.Child.init(&.{"./tmp_backend_driver_modules/out"}, alloc);
@@ -252,7 +256,7 @@ fn runZigBuildRun(allocator: std.mem.Allocator, args: []const []const u8) !std.p
     return try child.spawnAndWait();
 }
 
-test "cli integration build/check/clean flow" {
+test "cli integration build/check/run/clean flow" {
     const alloc = std.testing.allocator;
     const dir = "tmp_cli_integration";
     std.fs.cwd().deleteTree(dir) catch {};
@@ -281,6 +285,14 @@ test "cli integration build/check/clean flow" {
         }
     }
     _ = try std.fs.cwd().statFile("tmp_cli_integration/out");
+
+    {
+        const t = try runZigBuildRun(alloc, &.{ "run", "tmp_cli_integration/main.dyn", "--work-dir", "tmp_cli_integration/work", "--json" });
+        switch (t) {
+            .Exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+            else => return error.TestUnexpectedResult,
+        }
+    }
 
     {
         const t = try runZigBuildRun(alloc, &.{ "clean", "--work-dir", "tmp_cli_integration/work", "--json" });
@@ -329,6 +341,7 @@ test "builds executable with nested module imports" {
         "tmp_backend_driver_nested_imports/main.dyn",
         "tmp_backend_driver_nested_imports",
         "tmp_backend_driver_nested_imports/out",
+        .{},
     );
 
     var child = std.process.Child.init(&.{"./tmp_backend_driver_nested_imports/out"}, alloc);
