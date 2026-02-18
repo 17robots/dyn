@@ -1,4 +1,0 @@
-module layout
-
-pub size_of_i32 := () i32 => 4
-pub align_of_i32 := () i32 => 4

@@ -32,14 +32,15 @@ an_error_fn := () f32!SomeError,SomeOtherError {} // specify multiple with !
 
 ## Handling Errors
 
-To manage errors, you can either do `.!` after call or use or block with an optional error capture to handle it, see below:
+To manage errors in current baseline, use `.!` or `or` with a fallback value expression.
+
+`or` capture forms like `or |e| { ... }` are planned and not fully implemented yet.
 
 ```dyn
 // imagine a divide function that errors if y value is 0
 main := () ! {
     x := divide(1,1).! // this propogates error
     y := divide(1,0) or 1 // default value
-    z := divide(1,0) or {} // do things without needing error or one thing
-    a := divide(1,0) or |e| {} // do thing(s) with error
+    z := divide(1,0) or 2 // fallback expression
 }
 ```

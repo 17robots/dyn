@@ -1,8 +1,0 @@
-module main
-
-Io := use "std/io"
-
-main := () i32 => {
-  Io.print("Hello, world!\n")
-  0
-}

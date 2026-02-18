@@ -1,3 +1,0 @@
-module assert
-
-pub assert_i32 := (cond: i32) i32 => cond

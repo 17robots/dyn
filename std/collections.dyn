@@ -1,5 +1,39 @@
 module collections
 
-ArrayList := use "collections/array_list"
+Mem := use "mem"
+
+pub ArrayList := (T: comp type) type => struct {
+    init := (self: type, initial_cap: i32) i32 => {
+        if initial_cap > 0 {
+            Mem.alloc(initial_cap * 8, 8)
+        } else {
+            0
+        }
+    }
+
+    deinit := (self: type, ptr: i32, cap: i32) i32 => {
+        if ptr > 0 {
+            Mem.free(ptr, cap * 8, 8)
+        } else {
+            0
+        }
+    }
+
+    grow := (self: type, ptr: i32, old_cap: i32, new_cap: i32) i32 => {
+        if new_cap > old_cap {
+            Mem.realloc(ptr, old_cap * 8, 8, new_cap * 8, 8)
+        } else {
+            ptr
+        }
+    }
+
+    append := (self: type, len: i32, cap: i32, value: i32) i32 => {
+        if len < cap {
+            (value - value) + len + 1
+        } else {
+            -1
+        }
+    }
+}
 
 pub ready := () i32 => 1

@@ -2,9 +2,28 @@
 
 Dyn offers a couple options for control flow.
 
+## Status
+
+This chapter mixes implemented behavior and planned behavior.
+
+Implemented baseline today:
+
+- `for <bool-expr> { ... }` condition loops
+- `for { ... }` infinite loops
+- range-based iterable loop: `for a..b: |i| ...` and `for a..=b: |i| ...`
+- slice-form iterable loop with explicit bounds: `for p[lo..hi]: |v| ...`
+- named slice-binding iteration: `s := p[lo..hi]` then `for s: |v| ...`
+- `break` and `continue` (including labels)
+- `if` expressions and `match` expressions
+
+Planned/not fully implemented yet:
+
+- non-range iterable `for` forms beyond pointer/slice-style loops (arrays/other iterables)
+- full `match` exhaustiveness/overlap checking
+
 ## For
 
-Only one loop is offered in dyn: for loop, but it serves as for and while loops, which means that a for can accept either a boolean or a list of iterable expression.
+Only one loop is offered in dyn: `for`. In the current baseline it acts as a while-style loop (`for <bool-expr>`) or infinite loop (`for { ... }`).
 
 ### As Iterable
 
@@ -12,6 +31,17 @@ Only one loop is offered in dyn: for loop, but it serves as for and while loops,
 main := () {
     for 0..10: |i| {
         // do things with i
+    }
+}
+```
+
+Range iteration is implemented. Example:
+
+```dyn
+main := () {
+    mut sum: i32 = 0
+    for 0..10: |i| {
+        sum += i
     }
 }
 ```
@@ -25,7 +55,7 @@ main := () {
 }
 ```
 
-For loops also support multiple iterable conditions as well:
+Multiple iterable conditions are planned, not currently implemented:
 
 ```dyn
 main := () {
@@ -33,7 +63,7 @@ main := () {
 }
 ```
 
-All conditions in for loop need to be same length. And all conditions need a capture, or _ to skip it.
+Matching iterable lengths/capture arity checks are planned with iterable-loop implementation.
 
 ```dyn
 main := () {
@@ -42,7 +72,7 @@ main := () {
 }
 ```
 
-Ranges aren't only iterable thing, you can also iterate over arrays as well:
+Array iteration syntax is planned, not currently implemented:
 
 ```dyn
 main := () {
@@ -53,7 +83,7 @@ main := () {
 }
 ```
 
-By default, captures of values, specifically from arrays, are immutable, so to change them, you need to mark capture as default:
+Capture mutability for iterable loops is planned, not currently implemented:
 
 ```dyn
 main := () {
@@ -65,7 +95,7 @@ main := () {
 }
 ```
 
-### As Condition
+### As Condition (Implemented)
 
 As mentioned above, dyn uses for loops also in place of while loops, so you can do something like following:
 
@@ -76,7 +106,7 @@ main := () {
 }
 ```
 
-Which means that for loops only accept a list of iterables or a boolean condition, it does not support multiple boolean conditions (unless separated) by `&&` or `||`.
+Current baseline supports a single boolean condition expression (which can itself use `&&`/`||`) or an infinite loop form.
 
 And if you do a for loop with a block and no condition, it acts like an infinite loop.
 
@@ -170,7 +200,7 @@ main := () {
 
 Another thing to note with patterns being same type, this also corresponds to int types of varying bit representations, so if you match on a u8, you can only match up to a u8's values, and nothing below 0, same with i8 or u/i32, etc.
 
-All matches are exhaustive, meaning that every possible case needs to be covered in match statement, be it with individually listing patterns or with using _ pattern to catch all others. Patterns also cannot overlap with each other, which should be achieved since _ is "all other values not specified".
+Match exhaustiveness/overlap enforcement is planned and not fully implemented in the current baseline.
 
 ### Enum Matching
 

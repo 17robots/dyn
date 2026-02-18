@@ -116,6 +116,7 @@
 - [~] Decide and implement memory/runtime model (current local/global model + `__dyn_os_*` backing allocator + std allocator intrinsic path implemented; ownership/lifetime policy still pending)
 - [ ] Add optimizer passes (constant folding, dead code elimination, simple CFG cleanup)
 - [~] Add minimal standard library / built-ins for IO (working `std/io.print(string)` + allocator intrinsic path; layered std wrappers and richer APIs still pending)
+- [~] Add minimal standard library / built-ins for IO (working byte-pointer print path + allocator intrinsic path; layered std wrappers and richer APIs still pending)
 
 ### 11) Detailed Next Steps (Handoff)
 - [ ] **Fix wrapper call semantic gap first (unblocks std layering)**

@@ -1,5 +1,0 @@
-module bytes
-
-pub copy := (dst: i32, src: i32, count: i32) i32 => 0
-pub set := (dst: i32, value: i32, count: i32) i32 => 0
-pub move := (dst: i32, src: i32, count: i32) i32 => 0

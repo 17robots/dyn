@@ -2,6 +2,15 @@
 
 Dyn provides Foreign Function Interface (FFI) capabilities to interact with code written in other languages, primarily C.
 
+## Status
+
+Current baseline supports basic extern function declarations and calls:
+
+- `name := extern fn(<param-types>) <ret-type>`
+- direct calls lower to external symbols by name
+
+Broader FFI features in this document remain roadmap-level notes.
+
 ## Calling C Functions
 
 To call an external C function, declare it with `extern` keyword:
@@ -17,6 +26,13 @@ main := () {
 
 `extern` keyword tells Dyn that function is defined elsewhere (in a C library) and will be linked at compile time.
 
+Current implementation note: only basic extern function declarations/calls are implemented; advanced ABI details here are not fully implemented yet.
+
+Current ABI note for slices:
+
+- `[]T` is lowered at call boundaries as a pair `(ptr,len)`.
+- This is currently an internal ABI detail, but it is intentionally stable for the baseline compiler/runtime behavior.
+
 ## C Types Mapping
 
 Dyn types map to C types as follows:
@@ -31,7 +47,7 @@ Dyn types map to C types as follows:
 | `f64`         | `double`    |
 | `*T`           | `T*`        |
 | `*mut T`       | `T*`        |
-| `[*]T` (array) | `T*` with length separate |
+| `[]T`         | `(T*, len)` pair |
 | `struct`       | `struct`    |
 | `enum`         | `enum`      |
 

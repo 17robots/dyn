@@ -1,5 +1,5 @@
 module os
 
-Linux := use "os/linux/sys"
-
 pub target_linux := () i32 => 1
+pub mmap_nr := () i32 => 9
+pub munmap_nr := () i32 => 11

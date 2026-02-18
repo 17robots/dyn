@@ -5,10 +5,6 @@ _start:
     mov %rax, %rdi
     mov $60, %rax
     syscall
-.section .rodata
-u0_str_0:
-    .asciz "Hello, world!\\n"
-.text
 __dyn_os_alloc:
     push %rbp
     mov %rsp, %rbp
@@ -116,33 +112,88 @@ __dyn_os_realloc:
     add $8, %rsp
     pop %rbp
     ret
-.global main
-main:
+.global mmain_mkFn
+mmain_mkFn:
     push %rbp
     mov %rsp, %rbp
 fn_0_L0:
-    lea u0_str_0(%rip), %rax
+    mov $1, %rax
     push %rax
 fn_0_L1:
-    add $8, %rsp
-fn_0_L2:
-    lea u0_str_0(%rip), %rax
-    push %rax
-fn_0_L3:
-    call mio_print
-    add $8, %rsp
-    push %rax
-fn_0_L4:
-    add $8, %rsp
-fn_0_L5:
-    mov $0, %rax
-    push %rax
-fn_0_L6:
     pop %rax
     mov %rbp, %rsp
     pop %rbp
     ret
-fn_0_L7:
+fn_0_L2:
+    mov $0, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+.global mmain_make$retfn
+mmain_make$retfn:
+    push %rbp
+    mov %rsp, %rbp
+    sub $16, %rsp
+    mov 16(%rbp), %rax
+    mov %rax, -8(%rbp)
+fn_1_L0:
+    mov -8(%rbp), %rax
+    push %rax
+fn_1_L1:
+    mov $1, %rax
+    push %rax
+fn_1_L2:
+    pop %rcx
+    pop %rax
+    add %rcx, %rax
+    push %rax
+fn_1_L3:
+    pop %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+fn_1_L4:
+    mov $0, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+.global mmain_make
+mmain_make:
+    push %rbp
+    mov %rsp, %rbp
+    sub $16, %rsp
+    mov 16(%rbp), %rax
+    mov %rax, -8(%rbp)
+fn_2_L0:
+    mov $1, %rax
+    push %rax
+fn_2_L1:
+    pop %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+fn_2_L2:
+    mov $0, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+.global main
+main:
+    push %rbp
+    mov %rsp, %rbp
+fn_3_L0:
+    mov $6, %rax
+    push %rax
+fn_3_L1:
+    call mmain_make$retfn
+    add $8, %rsp
+    push %rax
+fn_3_L2:
+    pop %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+fn_3_L3:
     mov $0, %rax
     mov %rbp, %rsp
     pop %rbp

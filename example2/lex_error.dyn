@@ -1,6 +1,0 @@
-module main
-
-main := () i32 => {
-    bad := '\q'
-    0
-}

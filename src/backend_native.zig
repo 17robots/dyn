@@ -309,7 +309,7 @@ fn emitRuntimeAllocatorSymbols(writer: anytype) !void {
 }
 
 fn emitStdIntrinsicFunction(writer: anytype, name: []const u8) !bool {
-    if (std.mem.eql(u8, name, "mpage_allocator_alloc") or std.mem.eql(u8, name, "mheap_alloc") or std.mem.eql(u8, name, "mmem_alloc") or std.mem.eql(u8, name, "mallocator_alloc")) {
+    if (std.mem.eql(u8, name, "mpage_allocator_alloc")) {
         try writer.print(
             ".global {s}\n{s}:\n" ++
                 "    push %rbp\n" ++
@@ -327,7 +327,7 @@ fn emitStdIntrinsicFunction(writer: anytype, name: []const u8) !bool {
         );
         return true;
     }
-    if (std.mem.eql(u8, name, "mpage_allocator_free") or std.mem.eql(u8, name, "mheap_free") or std.mem.eql(u8, name, "mmem_free") or std.mem.eql(u8, name, "mallocator_free")) {
+    if (std.mem.eql(u8, name, "mpage_allocator_free")) {
         try writer.print(
             ".global {s}\n{s}:\n" ++
                 "    push %rbp\n" ++
@@ -347,7 +347,7 @@ fn emitStdIntrinsicFunction(writer: anytype, name: []const u8) !bool {
         );
         return true;
     }
-    if (std.mem.eql(u8, name, "mpage_allocator_realloc") or std.mem.eql(u8, name, "mheap_realloc") or std.mem.eql(u8, name, "mmem_realloc") or std.mem.eql(u8, name, "mallocator_realloc")) {
+    if (std.mem.eql(u8, name, "mpage_allocator_realloc")) {
         try writer.print(
             ".global {s}\n{s}:\n" ++
                 "    push %rbp\n" ++
@@ -371,7 +371,7 @@ fn emitStdIntrinsicFunction(writer: anytype, name: []const u8) !bool {
         );
         return true;
     }
-    if (std.mem.eql(u8, name, "mio_print") or std.mem.eql(u8, name, "mprint_print")) {
+    if (std.mem.eql(u8, name, "mprint_print")) {
         try writer.print(
             ".global {s}\n{s}:\n" ++
                 "    push %rbp\n" ++
@@ -515,6 +515,8 @@ fn findMainIndex(program: Ir.Program) ?u32 {
 
 const RuntimeState = struct {
     globals: [256]i64 = [_]i64{0} ** 256,
+    frame_words: [16384]i64 = [_]i64{0} ** 16384,
+    frame_top: usize = 0,
     heap_words: [8192]i64 = [_]i64{0} ** 8192,
     alloc_start: [256]usize = [_]usize{0} ** 256,
     alloc_words: [256]usize = [_]usize{0} ** 256,
@@ -582,20 +584,20 @@ fn runtimeRealloc(state: *RuntimeState, ptr: i64, old_size: i64, old_align: i64,
 fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *RuntimeState) !i64 {
     if (func_index >= program.functions.len) return error.UnsupportedIr;
     const f = program.functions[func_index];
-    if (std.mem.eql(u8, f.name, "mpage_allocator_alloc") or std.mem.eql(u8, f.name, "mheap_alloc") or std.mem.eql(u8, f.name, "mmem_alloc") or std.mem.eql(u8, f.name, "mallocator_alloc")) {
+    if (std.mem.eql(u8, f.name, "mpage_allocator_alloc")) {
         if (args.len != 2) return error.UnsupportedIr;
         return try runtimeAlloc(state, args[0], args[1]);
     }
-    if (std.mem.eql(u8, f.name, "mpage_allocator_free") or std.mem.eql(u8, f.name, "mheap_free") or std.mem.eql(u8, f.name, "mmem_free") or std.mem.eql(u8, f.name, "mallocator_free")) {
+    if (std.mem.eql(u8, f.name, "mpage_allocator_free")) {
         if (args.len != 3) return error.UnsupportedIr;
         runtimeFree(state, args[0]);
         return 0;
     }
-    if (std.mem.eql(u8, f.name, "mpage_allocator_realloc") or std.mem.eql(u8, f.name, "mheap_realloc") or std.mem.eql(u8, f.name, "mmem_realloc") or std.mem.eql(u8, f.name, "mallocator_realloc")) {
+    if (std.mem.eql(u8, f.name, "mpage_allocator_realloc")) {
         if (args.len != 5) return error.UnsupportedIr;
         return try runtimeRealloc(state, args[0], args[1], args[2], args[3], args[4]);
     }
-    if (std.mem.eql(u8, f.name, "mio_print") or std.mem.eql(u8, f.name, "mprint_print")) {
+    if (std.mem.eql(u8, f.name, "mprint_print")) {
         if (args.len != 1) return error.UnsupportedIr;
         const p = args[0];
         if (p < 0x1000) return error.UnsupportedIr;
@@ -609,9 +611,14 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *
     if (f.ret_type != .i64 and f.ret_type != .bool) return error.UnsupportedIr;
     if (args.len != f.param_count) return error.UnsupportedIr;
 
-    var locals: [256]i64 = [_]i64{0} ** 256;
-    if (f.local_count > locals.len) return error.UnsupportedIr;
-    for (args, 0..) |v, i| locals[i] = v;
+    if (state.frame_top + f.local_count > state.frame_words.len) return error.UnsupportedIr;
+    const frame_base = state.frame_top;
+    state.frame_top += f.local_count;
+    defer state.frame_top = frame_base;
+
+    var li: usize = 0;
+    while (li < f.local_count) : (li += 1) state.frame_words[frame_base + li] = 0;
+    for (args, 0..) |v, i| state.frame_words[frame_base + i] = v;
 
     var stack: [1024]i64 = undefined;
     var sp: usize = 0;
@@ -635,17 +642,17 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *
             },
             .load_local => |slot| {
                 if (slot >= f.local_count or sp >= stack.len) return error.UnsupportedIr;
-                stack[sp] = locals[slot];
+                stack[sp] = state.frame_words[frame_base + slot];
                 sp += 1;
             },
             .store_local => |slot| {
                 if (slot >= f.local_count or sp == 0) return error.UnsupportedIr;
                 sp -= 1;
-                locals[slot] = stack[sp];
+                state.frame_words[frame_base + slot] = stack[sp];
             },
             .addr_of_local => |slot| {
                 if (slot >= f.local_count or sp >= stack.len) return error.UnsupportedIr;
-                stack[sp] = ptr_base_local + @as(i64, @intCast(slot));
+                stack[sp] = ptr_base_local + @as(i64, @intCast(frame_base + slot));
                 sp += 1;
             },
             .addr_of_global => |slot| {
@@ -670,8 +677,8 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *
                     stack[sp - 1] = state.globals[slot];
                 } else if (p >= ptr_base_local) {
                     const slot: usize = @intCast(p - ptr_base_local);
-                    if (slot >= f.local_count) return error.UnsupportedIr;
-                    stack[sp - 1] = locals[slot];
+                    if (slot >= state.frame_top) return error.UnsupportedIr;
+                    stack[sp - 1] = state.frame_words[slot];
                 } else return error.UnsupportedIr;
             },
             .store_ptr => {
@@ -688,8 +695,8 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *
                     state.globals[slot] = val;
                 } else if (p >= ptr_base_local) {
                     const slot: usize = @intCast(p - ptr_base_local);
-                    if (slot >= f.local_count) return error.UnsupportedIr;
-                    locals[slot] = val;
+                    if (slot >= state.frame_top) return error.UnsupportedIr;
+                    state.frame_words[slot] = val;
                 } else return error.UnsupportedIr;
                 sp -= 2;
                 stack[sp] = val;
@@ -1121,6 +1128,31 @@ test "direct asm and interpreter support global pointer storage" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "u0_globals") != null);
 }
 
+test "interpreter supports pointer to caller local across call" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 5);
+    instr_main[0] = .{ .push_const_i64 = 9 };
+    instr_main[1] = .{ .store_local = 0 };
+    instr_main[2] = .{ .addr_of_local = 0 };
+    instr_main[3] = .{ .call = .{ .arg_count = 1, .target = .{ .internal_index = 1 } } };
+    instr_main[4] = .{ .ret = {} };
+
+    const instr_read = try alloc.alloc(Ir.Instruction, 3);
+    instr_read[0] = .{ .load_local = 0 };
+    instr_read[1] = .{ .load_ptr = {} };
+    instr_read[2] = .{ .ret = {} };
+
+    const funcs = try alloc.alloc(Ir.Function, 2);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 1, .instructions = instr_main };
+    funcs[1] = .{ .name = "read_ptr", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 1, .local_count = 1, .instructions = instr_read };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    const code = try lowerMainExitCode(p);
+    try std.testing.expectEqual(@as(i64, 9), code);
+}
+
 test "runtime backing allocator symbols work via external calls" {
     const alloc = std.testing.allocator;
 
@@ -1197,6 +1229,132 @@ test "std page allocator intrinsics allocate and free" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "call __dyn_os_alloc") != null);
 }
 
+fn makeAllocatorIntrinsicProgram(alloc: std.mem.Allocator, main_instr: []Ir.Instruction, main_locals: u32) !Ir.Program {
+    const instr_alloc = try alloc.alloc(Ir.Instruction, 2);
+    instr_alloc[0] = .{ .push_const_i64 = 0 };
+    instr_alloc[1] = .{ .ret = {} };
+
+    const instr_free = try alloc.alloc(Ir.Instruction, 2);
+    instr_free[0] = .{ .push_const_i64 = 0 };
+    instr_free[1] = .{ .ret = {} };
+
+    const instr_realloc = try alloc.alloc(Ir.Instruction, 2);
+    instr_realloc[0] = .{ .push_const_i64 = 0 };
+    instr_realloc[1] = .{ .ret = {} };
+
+    const funcs = try alloc.alloc(Ir.Function, 4);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = main_locals, .instructions = main_instr };
+    funcs[1] = .{ .name = "mpage_allocator_alloc", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 2, .local_count = 0, .instructions = instr_alloc };
+    funcs[2] = .{ .name = "mpage_allocator_free", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 3, .local_count = 0, .instructions = instr_free };
+    funcs[3] = .{ .name = "mpage_allocator_realloc", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 5, .local_count = 0, .instructions = instr_realloc };
+    return .{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
+}
+
+test "allocator intrinsics alloc(0, align) returns null" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 4);
+    instr_main[0] = .{ .push_const_i64 = 0 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .internal_index = 1 } } };
+    instr_main[3] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 0);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectEqual(@as(i64, 0), try lowerMainExitCode(p));
+}
+
+test "allocator intrinsics free(0, size, align) is no-op" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 7);
+    instr_main[0] = .{ .push_const_i64 = 0 };
+    instr_main[1] = .{ .push_const_i64 = 64 };
+    instr_main[2] = .{ .push_const_i64 = 8 };
+    instr_main[3] = .{ .call = .{ .arg_count = 3, .target = .{ .internal_index = 2 } } };
+    instr_main[4] = .{ .pop = {} };
+    instr_main[5] = .{ .push_const_i64 = 0 };
+    instr_main[6] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 0);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectEqual(@as(i64, 0), try lowerMainExitCode(p));
+}
+
+test "allocator intrinsics realloc(0,0,_,new,align) allocates" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 7);
+    instr_main[0] = .{ .push_const_i64 = 0 };
+    instr_main[1] = .{ .push_const_i64 = 0 };
+    instr_main[2] = .{ .push_const_i64 = 8 };
+    instr_main[3] = .{ .push_const_i64 = 32 };
+    instr_main[4] = .{ .push_const_i64 = 8 };
+    instr_main[5] = .{ .call = .{ .arg_count = 5, .target = .{ .internal_index = 3 } } };
+    instr_main[6] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 0);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expect((try lowerMainExitCode(p)) != 0);
+}
+
+test "allocator intrinsics realloc(ptr,...,0,_) frees and returns null" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 14);
+    instr_main[0] = .{ .push_const_i64 = 24 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .internal_index = 1 } } };
+    instr_main[3] = .{ .store_local = 0 };
+    instr_main[4] = .{ .load_local = 0 };
+    instr_main[5] = .{ .push_const_i64 = 24 };
+    instr_main[6] = .{ .push_const_i64 = 8 };
+    instr_main[7] = .{ .push_const_i64 = 0 };
+    instr_main[8] = .{ .push_const_i64 = 8 };
+    instr_main[9] = .{ .call = .{ .arg_count = 5, .target = .{ .internal_index = 3 } } };
+    instr_main[10] = .{ .store_local = 1 };
+    instr_main[11] = .{ .load_local = 1 };
+    instr_main[12] = .{ .ret = {} };
+    instr_main[13] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 2);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectEqual(@as(i64, 0), try lowerMainExitCode(p));
+}
+
+test "allocator intrinsics realloc preserves prefix bytes" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 18);
+    instr_main[0] = .{ .push_const_i64 = 8 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .internal_index = 1 } } };
+    instr_main[3] = .{ .store_local = 0 };
+    instr_main[4] = .{ .load_local = 0 };
+    instr_main[5] = .{ .push_const_i64 = 42 };
+    instr_main[6] = .{ .store_ptr = {} };
+    instr_main[7] = .{ .pop = {} };
+    instr_main[8] = .{ .load_local = 0 };
+    instr_main[9] = .{ .push_const_i64 = 8 };
+    instr_main[10] = .{ .push_const_i64 = 8 };
+    instr_main[11] = .{ .push_const_i64 = 16 };
+    instr_main[12] = .{ .push_const_i64 = 8 };
+    instr_main[13] = .{ .call = .{ .arg_count = 5, .target = .{ .internal_index = 3 } } };
+    instr_main[14] = .{ .store_local = 1 };
+    instr_main[15] = .{ .load_local = 1 };
+    instr_main[16] = .{ .load_ptr = {} };
+    instr_main[17] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 2);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectEqual(@as(i64, 42), try lowerMainExitCode(p));
+}
+
 test "std io print intrinsic emits and executes" {
     const alloc = std.testing.allocator;
 
@@ -1214,7 +1372,7 @@ test "std io print intrinsic emits and executes" {
 
     const funcs = try alloc.alloc(Ir.Function, 2);
     funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr_main };
-    funcs[1] = .{ .name = "mio_print", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 1, .local_count = 0, .instructions = instr_hello };
+    funcs[1] = .{ .name = "mprint_print", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 1, .local_count = 0, .instructions = instr_hello };
     var p = Ir.Program{ .functions = funcs, .rodata_strings = rods, .global_count = 0 };
     defer Ir.deinitProgram(alloc, &p);
 
@@ -1224,7 +1382,7 @@ test "std io print intrinsic emits and executes" {
     defer out.deinit(alloc);
     const w = out.writer(alloc);
     try emitAssemblyDirect(.linux_x86_64, p, w);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "mio_print") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "mprint_print") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "cmpb $0, (%rcx)") != null);
 }
 

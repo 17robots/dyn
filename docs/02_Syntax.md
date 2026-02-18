@@ -17,7 +17,7 @@
 Dyn has the following keywords:
 
 ```dyn
-break comp continue defer enum fn for if inline match mut or pub struct type use
+break comp continue defer enum extern fn for if inline match mut or pub return struct type use
 ```
 
 ## Terminators

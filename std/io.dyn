@@ -1,4 +1,23 @@
 module io
 
-pub print := (msg: string) i32 => 0
-pub print_i32 := (v: i32) i32 => 0
+pub print := (msg: []u8) i32 => {
+    if msg.len >= 0 {
+        0
+    } else {
+        0
+    }
+}
+pub print_i32 := (v: i32) i32 => {
+    v
+}
+
+pub print_fmt_1 := (fmt: []u8, a: i32) i32 => {
+    p := print(fmt)
+    p + print_i32(a)
+}
+
+pub print_fmt_2 := (fmt: []u8, a: i32, b: i32) i32 => {
+    p := print(fmt)
+    q := print_i32(a)
+    p + q + print_i32(b)
+}

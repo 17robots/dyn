@@ -212,8 +212,13 @@ fn walkNode(
         },
         .break_stmt => if (n.data.break_stmt.has_value) try self.walkNode(graph, symbols, f, n.data.break_stmt.value, alias_to_module),
         .labeled_block => try self.walkNode(graph, symbols, f, n.data.labeled_block.body, alias_to_module),
-        .unwrap_optional, .unwrap_error, .deref, .address_of => try self.walkNode(graph, symbols, f, n.data.one.child, alias_to_module),
+        .unwrap_optional, .unwrap_error, .deref, .address_of, .inline_expr, .comp_expr => try self.walkNode(graph, symbols, f, n.data.one.child, alias_to_module),
         .ptr_type => try self.walkNode(graph, symbols, f, n.data.ptr_type.child, alias_to_module),
+        .slice_type => try self.walkNode(graph, symbols, f, n.data.one.child, alias_to_module),
+        .array_type => {
+            try self.walkNode(graph, symbols, f, n.data.array_type.len, alias_to_module);
+            try self.walkNode(graph, symbols, f, n.data.array_type.child, alias_to_module);
+        },
         else => {},
     }
 }

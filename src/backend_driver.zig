@@ -256,6 +256,29 @@ fn runZigBuildRun(allocator: std.mem.Allocator, args: []const []const u8) !std.p
     return try child.spawnAndWait();
 }
 
+const CapturedRun = struct {
+    term: std.process.Child.Term,
+    stdout: []u8,
+    stderr: []u8,
+};
+
+fn runZigBuildRunCapture(allocator: std.mem.Allocator, args: []const []const u8) !CapturedRun {
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, "zig");
+    try argv.append(allocator, "build");
+    try argv.append(allocator, "run");
+    try argv.append(allocator, "--");
+    for (args) |a| try argv.append(allocator, a);
+
+    const res = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv.items,
+        .max_output_bytes = 1024 * 1024,
+    });
+    return .{ .term = res.term, .stdout = res.stdout, .stderr = res.stderr };
+}
+
 test "cli integration build/check/run/clean flow" {
     const alloc = std.testing.allocator;
     const dir = "tmp_cli_integration";
@@ -310,6 +333,104 @@ test "cli integration reports invalid flag with nonzero exit" {
         .Exited => |code| try std.testing.expect(code != 0),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "cli json build/run frontend failure include structured diagnostics_v2" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_cli_json_frontend_fail";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_cli_json_frontend_fail/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("module main\nmain := () i32 => missing_name\n");
+    }
+
+    {
+        const r = try runZigBuildRunCapture(alloc, &.{ "build", "tmp_cli_json_frontend_fail/main.dyn", "--json" });
+        defer alloc.free(r.stdout);
+        defer alloc.free(r.stderr);
+        switch (r.term) {
+            .Exited => |code| try std.testing.expect(code != 0),
+            else => return error.TestUnexpectedResult,
+        }
+        try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"error\":\"FrontendFailed\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"diagnostics_v2\":[{") != null);
+    }
+
+    {
+        const r = try runZigBuildRunCapture(alloc, &.{ "run", "tmp_cli_json_frontend_fail/main.dyn", "--json" });
+        defer alloc.free(r.stdout);
+        defer alloc.free(r.stderr);
+        switch (r.term) {
+            .Exited => |code| try std.testing.expect(code != 0),
+            else => return error.TestUnexpectedResult,
+        }
+        try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"error\":\"FrontendFailed\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"build_diagnostics_v2\":[{") != null);
+    }
+}
+
+test "cli json diagnostics_v2 include expected and actual type fields" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_cli_json_type_mismatch_fields";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_cli_json_type_mismatch_fields/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "main := () i32 => {\n" ++
+                "  a: i32 = \"x\"\n" ++
+                "  a\n" ++
+                "}\n",
+        );
+    }
+
+    const r = try runZigBuildRunCapture(alloc, &.{ "check", "tmp_cli_json_type_mismatch_fields/main.dyn", "--json" });
+    defer alloc.free(r.stdout);
+    defer alloc.free(r.stderr);
+    switch (r.term) {
+        .Exited => |code| try std.testing.expect(code != 0),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"diagnostics_v2\":[{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"expected_type\":\"i32\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"actual_type\":\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"details\":{\"expected_type\":\"i32\",\"actual_type\":\"") != null);
+}
+
+test "cli json diagnostics_v2 include slice abi shape for mismatched slice arg" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_cli_json_slice_abi_shape";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_cli_json_slice_abi_shape/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "sum := (s: []i32) i32 => 0\n" ++
+                "main := () i32 => sum(0)\n",
+        );
+    }
+
+    const r = try runZigBuildRunCapture(alloc, &.{ "check", "tmp_cli_json_slice_abi_shape/main.dyn", "--json" });
+    defer alloc.free(r.stdout);
+    defer alloc.free(r.stderr);
+    switch (r.term) {
+        .Exited => |code| try std.testing.expect(code != 0),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"expected_type\":\"[]i32 (ptr,len)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "\"abi_shape\":\"ptr_len_pair\"") != null);
 }
 
 test "builds executable with nested module imports" {

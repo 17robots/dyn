@@ -75,6 +75,7 @@ pub const Node = struct {
     pub const Tag = enum {
         identifier,
         int_lit,
+        bool_lit,
         float_lit,
         string_lit,
         char_lit,
@@ -97,12 +98,19 @@ pub const Node = struct {
         struct_expr,
         enum_expr,
         for_stmt,
+        return_stmt,
         break_stmt,
         continue_stmt,
         defer_stmt,
         labeled_block,
         address_of,
         ptr_type,
+        slice_type,
+        array_type,
+        optional_type,
+        error_type,
+        inline_expr,
+        comp_expr,
         unwrap_optional,
         unwrap_error,
         deref,
@@ -186,7 +194,9 @@ pub const Node = struct {
             ret_node: NodeId,
             body: NodeId,
             has_ret: bool,
+            has_body: bool,
             is_errorable: bool,
+            is_extern: bool,
             concise: bool,
         },
         aggregate: struct {
@@ -222,6 +232,10 @@ pub const Node = struct {
         defer_stmt: struct {
             value: NodeId,
         },
+        return_stmt: struct {
+            value: NodeId,
+            has_value: bool,
+        },
         labeled_block: struct {
             label_span: Span,
             body: NodeId,
@@ -232,6 +246,15 @@ pub const Node = struct {
         ptr_type: struct {
             child: NodeId,
             mutable: bool,
+        },
+        array_type: struct {
+            len: NodeId,
+            child: NodeId,
+        },
+        error_type: struct {
+            child: NodeId,
+            name_start: u32,
+            name_count: u32,
         },
     };
 };

@@ -15,9 +15,12 @@ This document defines what the compiler frontend currently guarantees and what i
   - core unary/binary operator compatibility
   - function call arity/type checks for simple function-literal bindings
   - loop legality for `break`/`continue`
+  - range-based `for` loops with capture binding (`for a..b: |i| ...`)
   - basic aggregate duplicate member checks
   - immutable assignment checks
   - nested-scope shadowing checks
+  - `if`/`match` capture names are scoped and type-checked within their branch/arm bodies
+  - basic `match` overlap/exhaustiveness checks (wildcard placement, duplicate/simple-overlap patterns)
 - Diagnostics are rendered consistently with file path, line/column, source line, and caret underline.
 
 ## Current Frontend Phase Order
@@ -32,7 +35,7 @@ This document defines what the compiler frontend currently guarantees and what i
 
 - Full type system semantics for optional/error-union/pointer/slice/array operations.
 - Full function/control-flow dataflow analysis (definite assignment and full return-path proof).
-- Exhaustiveness checking for `match`.
+- Full, type-driven exhaustiveness checking for `match`.
 - Advanced generic/comptime semantics.
 
 ## Pipeline Contract

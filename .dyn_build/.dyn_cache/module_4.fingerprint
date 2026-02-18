@@ -3,4 +3,4 @@ target:linux_x86_64
 kind:executable
 strategy:direct_asm
 zig:0.15.2
-/home/mdray/17robots/dyn/std/io.dyn|82|1771290933466415127
+/home/mdray/17robots/dyn/std/io.dyn|80|1771293809520237626

@@ -119,6 +119,8 @@ fn runMain() !void {
                 .{ s.graph_errors, s.scope_errors, s.resolve_errors, s.semantic_errors, if (s.can_codegen) "true" else "false" },
             );
             try writeJsonLineArray(out, diag_buf.items);
+            try out.writeAll(",\"diagnostics_v2\":");
+            try writeJsonDiagnosticsV2(out, .{ .frontend = &front });
             try out.writeAll("}\n");
         } else {
             try out.print(
@@ -190,6 +192,29 @@ fn runMain() !void {
         const entry_path = entry orelse try discoverEntryPathOrReport(gpa, err);
         std.fs.cwd().makePath(work_dir) catch {};
 
+        if (json) {
+            var front_diag_buf: std.ArrayList(u8) = .empty;
+            defer front_diag_buf.deinit(gpa);
+            var front = try Pipeline.runFrontend(gpa, front_diag_buf.writer(gpa), entry_path, .{ .std_dir = std_dir });
+            defer front.deinit();
+            const fs = front.summary();
+            if (!fs.can_codegen) {
+                try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"build\",\"entry\":\"");
+                try writeJsonEscaped(out, entry_path);
+                try out.writeAll("\",\"out\":\"");
+                try writeJsonEscaped(out, out_path);
+                try out.writeAll("\",\"work_dir\":\"");
+                try writeJsonEscaped(out, work_dir);
+                try out.print("\",\"emit\":\"{s}\",\"ok\":false,\"error\":\"FrontendFailed\",\"diagnostics\":", .{if (emit_obj) "obj" else if (emit_asm) "asm" else "exe"});
+                try writeJsonLineArray(out, front_diag_buf.items);
+                try out.writeAll(",\"diagnostics_v2\":");
+                try writeJsonDiagnosticsV2(out, .{ .frontend = &front });
+                try out.writeAll("}\n");
+                try out.flush();
+                return error.CompilationFailed;
+            }
+        }
+
         var log_buf: std.ArrayList(u8) = .empty;
         defer log_buf.deinit(gpa);
 
@@ -227,6 +252,8 @@ fn runMain() !void {
             try writeJsonEscaped(out, work_dir);
             try out.print("\",\"emit\":\"{s}\",\"ok\":true,\"diagnostics\":", .{if (emit_obj) "obj" else if (emit_asm) "asm" else "exe"});
             try writeJsonLineArray(out, log_buf.items);
+            try out.writeAll(",\"diagnostics_v2\":");
+            try writeJsonDiagnosticsV2(out, .{ .text = log_buf.items });
             try out.writeAll("}\n");
         } else {
             try out.print("built: {s}\n", .{out_path});
@@ -283,6 +310,29 @@ fn runMain() !void {
         const exe_path = try std.fmt.allocPrint(gpa, "{s}/run.out", .{work_dir});
         defer gpa.free(exe_path);
         std.fs.cwd().makePath(work_dir) catch {};
+
+        if (json) {
+            var front_diag_buf: std.ArrayList(u8) = .empty;
+            defer front_diag_buf.deinit(gpa);
+            var front = try Pipeline.runFrontend(gpa, front_diag_buf.writer(gpa), entry_path, .{ .std_dir = std_dir });
+            defer front.deinit();
+            if (!front.canCodegen()) {
+                try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"run\",\"entry\":\"");
+                try writeJsonEscaped(out, entry_path);
+                try out.writeAll("\",\"work_dir\":\"");
+                try writeJsonEscaped(out, work_dir);
+                try out.writeAll("\",\"exe\":\"");
+                try writeJsonEscaped(out, exe_path);
+                try out.writeAll("\",\"ok\":false,\"error\":\"FrontendFailed\",\"build_diagnostics\":");
+                try writeJsonLineArray(out, front_diag_buf.items);
+                try out.writeAll(",\"build_diagnostics_v2\":");
+                try writeJsonDiagnosticsV2(out, .{ .frontend = &front });
+                try out.writeAll("}\n");
+                try out.flush();
+                return error.CompilationFailed;
+            }
+        }
+
         var build_log: std.ArrayList(u8) = .empty;
         defer build_log.deinit(gpa);
         if (json) {
@@ -309,6 +359,8 @@ fn runMain() !void {
                     try writeJsonEscaped(out, exe_path);
                     try out.print("\",\"exit_code\":{d},\"ok\":true,\"build_diagnostics\":", .{code});
                     try writeJsonLineArray(out, build_log.items);
+                    try out.writeAll(",\"build_diagnostics_v2\":");
+                    try writeJsonDiagnosticsV2(out, .{ .text = build_log.items });
                     try out.writeAll("}\n");
                     try out.flush();
                 }
@@ -324,6 +376,8 @@ fn runMain() !void {
                     try writeJsonEscaped(out, exe_path);
                     try out.writeAll("\",\"ok\":false,\"error\":\"RunFailed\",\"build_diagnostics\":");
                     try writeJsonLineArray(out, build_log.items);
+                    try out.writeAll(",\"build_diagnostics_v2\":");
+                    try writeJsonDiagnosticsV2(out, .{ .text = build_log.items });
                     try out.writeAll("}\n");
                     try out.flush();
                 }
@@ -360,7 +414,7 @@ fn runMain() !void {
                 if (json) {
                     try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"clean\",\"work_dir\":\"");
                     try writeJsonEscaped(out, work_dir);
-                    try out.writeAll("\",\"removed\":false,\"diagnostics\":[]}\n");
+                    try out.writeAll("\",\"removed\":false,\"diagnostics\":[],\"diagnostics_v2\":[]}\n");
                 } else {
                     try out.print("nothing to clean: {s}\n", .{work_dir});
                 }
@@ -372,7 +426,7 @@ fn runMain() !void {
         if (json) {
             try out.writeAll("{\"schema\":\"dyn-cli.v1\",\"command\":\"clean\",\"work_dir\":\"");
             try writeJsonEscaped(out, work_dir);
-            try out.writeAll("\",\"removed\":true,\"diagnostics\":[]}\n");
+            try out.writeAll("\",\"removed\":true,\"diagnostics\":[],\"diagnostics_v2\":[]}\n");
         } else {
             try out.print("cleaned: {s}\n", .{work_dir});
         }
@@ -539,4 +593,219 @@ fn writeJsonLineArray(writer: *std.Io.Writer, text: []const u8) !void {
         start = if (end < text.len and text[end] == '\n') end + 1 else end;
     }
     try writer.writeByte(']');
+}
+
+fn writeJsonDiagnosticObjects(writer: *std.Io.Writer, text: []const u8) !void {
+    try writer.writeByte('[');
+    var first = true;
+    var start: usize = 0;
+    while (start < text.len) {
+        var end = start;
+        while (end < text.len and text[end] != '\n') : (end += 1) {}
+        const line = text[start..end];
+        if (line.len > 0) {
+            if (parseDiagnosticLine(line)) |d| {
+                if (!first) try writer.writeByte(',');
+                first = false;
+                try writer.writeAll("{\"file\":\"");
+                try writeJsonEscaped(writer, d.file);
+                try writer.print("\",\"line\":{d},\"column\":{d},\"severity\":\"error\",\"range\":{{\"start\":{{\"line\":{d},\"column\":{d}}},\"end\":{{\"line\":{d},\"column\":{d}}}}},\"message\":\"", .{ d.line, d.column, d.line, d.column, d.line, d.column + 1 });
+                try writeJsonEscaped(writer, d.message);
+                try writer.writeAll("\",\"category\":\"");
+                try writeJsonEscaped(writer, diagnosticCategory(d.message));
+                try writer.writeAll("\",\"code\":\"");
+                try writeJsonEscaped(writer, diagnosticCode(d.message));
+                if (parseTypeMismatchDetails(d.message)) |tm| {
+                    try writer.writeAll("\",\"expected_type\":\"");
+                    try writeJsonEscaped(writer, tm.expected);
+                    try writer.writeAll("\",\"actual_type\":\"");
+                    try writeJsonEscaped(writer, tm.actual);
+                    if (tm.abi_shape.len != 0) {
+                        try writer.writeAll("\",\"abi_shape\":\"");
+                        try writeJsonEscaped(writer, tm.abi_shape);
+                    }
+                    try writer.writeAll("\",\"details\":{\"expected_type\":\"");
+                    try writeJsonEscaped(writer, tm.expected);
+                    try writer.writeAll("\",\"actual_type\":\"");
+                    try writeJsonEscaped(writer, tm.actual);
+                    if (tm.abi_shape.len != 0) {
+                        try writer.writeAll("\",\"abi_shape\":\"");
+                        try writeJsonEscaped(writer, tm.abi_shape);
+                    }
+                    try writer.writeAll("\"}");
+                }
+                try writer.writeAll("\"}");
+            }
+        }
+        start = if (end < text.len and text[end] == '\n') end + 1 else end;
+    }
+    try writer.writeByte(']');
+}
+
+const DiagnosticsV2Source = union(enum) {
+    frontend: *const Pipeline.FrontendResult,
+    text: []const u8,
+    none: void,
+};
+
+fn writeJsonDiagnosticsV2(writer: *std.Io.Writer, source: DiagnosticsV2Source) !void {
+    switch (source) {
+        .frontend => |front| try writeJsonFrontendDiagnosticsV2(writer, front),
+        .text => |text| try writeJsonDiagnosticObjects(writer, text),
+        .none => try writer.writeAll("[]"),
+    }
+}
+
+fn writeJsonFrontendDiagnosticsV2(writer: *std.Io.Writer, front: *const Pipeline.FrontendResult) !void {
+    try writer.writeByte('[');
+    var first = true;
+
+    for (front.graph.errors.items) |e| {
+        try writeDiagObjFromSpan(writer, &first, &front.graph.sm, e.file_id, e.span, e.message);
+    }
+    for (front.symbols.errors.items) |e| {
+        try writeDiagObjFromSpan(writer, &first, &front.graph.sm, e.file_id, e.span, e.message);
+    }
+    for (front.resolver.errors.items) |e| {
+        try writeDiagObjFromSpan(writer, &first, &front.graph.sm, e.file_id, e.span, e.message);
+    }
+    for (front.semantic.errors.items) |e| {
+        try writeDiagObjFromSpan(writer, &first, &front.graph.sm, e.file_id, e.span, e.message);
+    }
+
+    try writer.writeByte(']');
+}
+
+fn writeDiagObjFromSpan(
+    writer: *std.Io.Writer,
+    first: *bool,
+    sm: *const @import("source_manager.zig").Self,
+    file_id: @import("source_manager.zig").FileId,
+    span: @import("token.zig").Span,
+    message: []const u8,
+) !void {
+    const start = sm.positionOf(file_id, span.start);
+    const end_off = if (span.end >= span.start) span.end + 1 else span.start + 1;
+    const endp = sm.positionOf(file_id, end_off);
+    if (!first.*) try writer.writeByte(',');
+    first.* = false;
+
+    try writer.writeAll("{\"file\":\"");
+    try writeJsonEscaped(writer, sm.filePath(file_id));
+    try writer.print(
+        "\",\"line\":{d},\"column\":{d},\"severity\":\"error\",\"range\":{{\"start\":{{\"line\":{d},\"column\":{d}}},\"end\":{{\"line\":{d},\"column\":{d}}}}},\"message\":\"",
+        .{ start.line, start.column, start.line, start.column, endp.line, endp.column },
+    );
+    try writeJsonEscaped(writer, message);
+    try writer.writeAll("\",\"category\":\"");
+    try writeJsonEscaped(writer, diagnosticCategory(message));
+    try writer.writeAll("\",\"code\":\"");
+    try writeJsonEscaped(writer, diagnosticCode(message));
+    if (parseTypeMismatchDetails(message)) |tm| {
+        try writer.writeAll("\",\"expected_type\":\"");
+        try writeJsonEscaped(writer, tm.expected);
+        try writer.writeAll("\",\"actual_type\":\"");
+        try writeJsonEscaped(writer, tm.actual);
+        if (tm.abi_shape.len != 0) {
+            try writer.writeAll("\",\"abi_shape\":\"");
+            try writeJsonEscaped(writer, tm.abi_shape);
+        }
+        try writer.writeAll("\",\"details\":{\"expected_type\":\"");
+        try writeJsonEscaped(writer, tm.expected);
+        try writer.writeAll("\",\"actual_type\":\"");
+        try writeJsonEscaped(writer, tm.actual);
+        if (tm.abi_shape.len != 0) {
+            try writer.writeAll("\",\"abi_shape\":\"");
+            try writeJsonEscaped(writer, tm.abi_shape);
+        }
+        try writer.writeAll("\"}");
+    }
+    try writer.writeAll("\"}");
+}
+
+const TypeMismatchDetails = struct {
+    expected: []const u8,
+    actual: []const u8,
+    abi_shape: []const u8,
+};
+
+fn parseTypeMismatchDetails(message: []const u8) ?TypeMismatchDetails {
+    const expected_tok = "expected `";
+    const got_tok = "`, got `";
+
+    const expected_start = std.mem.indexOf(u8, message, expected_tok) orelse return null;
+    const expected_val_start = expected_start + expected_tok.len;
+    const got_rel = std.mem.indexOf(u8, message[expected_val_start..], got_tok) orelse return null;
+    const got_idx = expected_val_start + got_rel;
+    const actual_start = got_idx + got_tok.len;
+    const actual_end_rel = std.mem.indexOfScalar(u8, message[actual_start..], '`') orelse return null;
+
+    const expected = message[expected_val_start..got_idx];
+    const abi_shape = if (std.mem.indexOf(u8, expected, "(ptr,len)") != null) "ptr_len_pair" else "";
+
+    return .{
+        .expected = expected,
+        .actual = message[actual_start .. actual_start + actual_end_rel],
+        .abi_shape = abi_shape,
+    };
+}
+
+const ParsedDiag = struct {
+    file: []const u8,
+    line: usize,
+    column: usize,
+    message: []const u8,
+};
+
+fn parseDiagnosticLine(line: []const u8) ?ParsedDiag {
+    const c1 = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+    const c2_rel = std.mem.indexOfScalar(u8, line[c1 + 1 ..], ':') orelse return null;
+    const c2 = c1 + 1 + c2_rel;
+    const c3_rel = std.mem.indexOfScalar(u8, line[c2 + 1 ..], ':') orelse return null;
+    const c3 = c2 + 1 + c3_rel;
+    if (c3 + 2 > line.len) return null;
+    const file = line[0..c1];
+    const ln = std.fmt.parseInt(usize, line[c1 + 1 .. c2], 10) catch return null;
+    const col = std.fmt.parseInt(usize, line[c2 + 1 .. c3], 10) catch return null;
+    const msg = if (line[c3 + 1] == ' ') line[c3 + 2 ..] else line[c3 + 1 ..];
+    return .{ .file = file, .line = ln, .column = col, .message = msg };
+}
+
+fn diagnosticCategory(message: []const u8) []const u8 {
+    if (lookupDiagSpec(message)) |d| return d.category;
+    if (std.mem.indexOf(u8, message, "unknown") != null) return "name-resolution";
+    if (std.mem.indexOf(u8, message, "type") != null or std.mem.indexOf(u8, message, "operand") != null) return "type";
+    if (std.mem.indexOf(u8, message, "unreachable") != null or std.mem.indexOf(u8, message, "return") != null) return "control-flow";
+    if (std.mem.indexOf(u8, message, "pointer") != null or std.mem.indexOf(u8, message, "deref") != null or std.mem.indexOf(u8, message, "addressable") != null) return "memory";
+    return "general";
+}
+
+fn diagnosticCode(message: []const u8) []const u8 {
+    if (lookupDiagSpec(message)) |d| return d.code;
+    if (std.mem.indexOf(u8, message, "type") != null) return "E200";
+    if (std.mem.indexOf(u8, message, "return") != null) return "E300";
+    if (std.mem.indexOf(u8, message, "unreachable") != null) return "E301";
+    if (std.mem.indexOf(u8, message, "pointer") != null or std.mem.indexOf(u8, message, "deref") != null or std.mem.indexOf(u8, message, "addressable") != null) return "E400";
+    return "E000";
+}
+
+const DiagSpec = struct { message: []const u8, code: []const u8, category: []const u8 };
+
+const diag_specs = [_]DiagSpec{
+    .{ .message = "unknown identifier", .code = "E001", .category = "name-resolution" },
+    .{ .message = "if branches must have compatible comptime identities", .code = "E210", .category = "type" },
+    .{ .message = "match arms must have compatible comptime identities", .code = "E211", .category = "type" },
+    .{ .message = "'break' used outside loop", .code = "E320", .category = "control-flow" },
+    .{ .message = "'continue' used outside loop", .code = "E321", .category = "control-flow" },
+    .{ .message = "'break' label not found", .code = "E322", .category = "control-flow" },
+    .{ .message = "'continue' label not found or not loop", .code = "E323", .category = "control-flow" },
+    .{ .message = "unreachable statement", .code = "E301", .category = "control-flow" },
+    .{ .message = "'&' expects addressable expression", .code = "E410", .category = "memory" },
+};
+
+fn lookupDiagSpec(message: []const u8) ?DiagSpec {
+    for (diag_specs) |d| {
+        if (std.mem.eql(u8, d.message, message)) return d;
+    }
+    return null;
 }

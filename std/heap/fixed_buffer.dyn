@@ -1,4 +1,0 @@
-module fixed_buffer
-
-pub init := () i32 => 0
-pub alloc := (size: i32, align: i32) i32 => 0

@@ -1,5 +1,0 @@
-module sys
-
-pub mmap_nr := () i32 => 9
-pub munmap_nr := () i32 => 11
-pub linux_target := () i32 => 1

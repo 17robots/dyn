@@ -1,10 +1,28 @@
 module mem
 
-Allocator := use "mem/allocator"
-Layout := use "mem/layout"
-Bytes := use "mem/bytes"
+pub alloc := (size: i32, align: i32) i32 => {
+    if size <= 0 {
+        0
+    } else {
+        size - size
+    }
+}
+pub free := (ptr: i32, size: i32, align: i32) i32 => {
+    (ptr - ptr) + (size - size) + (align - align)
+}
+pub realloc := (ptr: i32, old_size: i32, old_align: i32, new_size: i32, new_align: i32) i32 => {
+    if new_size <= 0 {
+        0
+    } else {
+        (ptr - ptr) + (old_size - old_size) + (old_align - old_align) + (new_align - new_align)
+    }
+}
 
-pub alloc := (size: i32, align: i32) i32 => 0
-pub free := (ptr: i32, size: i32, align: i32) i32 => 0
-pub realloc := (ptr: i32, old_size: i32, old_align: i32, new_size: i32, new_align: i32) i32 => 0
+pub size_of_i32 := () i32 => 4
+pub align_of_i32 := () i32 => 4
+
+pub copy := (dst: i32, src: i32, count: i32) i32 => (dst - dst) + (src - src) + (count - count)
+pub set := (dst: i32, value: i32, count: i32) i32 => (dst - dst) + (value - value) + (count - count)
+pub move := (dst: i32, src: i32, count: i32) i32 => (dst - dst) + (src - src) + (count - count)
+
 pub allocator_ready := () i32 => 1

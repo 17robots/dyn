@@ -47,6 +47,7 @@ Implemented baseline includes:
 - `if` expressions
 - `match` expressions
 - `for`, `break`, `continue`
+- `return`
 - labeled blocks
 - `defer` (parsing/lowering path supported)
 
@@ -74,15 +75,18 @@ Type/flow constraints currently enforced:
 - mutability and shadowing checks
 - loop legality checks
 - aggregate duplicate member checks
-- typed function return-path checks: function body must produce a value on all paths
+- typed function return-path checks:
+  - expression-bodied functions (`=>`) must produce a value compatible with declared return type
+  - block-bodied functions with declared return type must use explicit `return` on all value-producing paths (no implicit last-expression return)
 
 ### Type Compatibility Matrix (Current)
 
-Types in current checker: `unknown`, `void`, `bool`, `int`, `float`, `string`, `char`, function/module/aggregate placeholders, and pointer forms (`*T`/`*mut T`) with element-type-aware semantic tracking.
+Types in current checker: `unknown`, `void`, `bool`, `int`, `float`, `char`, function/module/aggregate placeholders, and pointer forms (`*T`/`*mut T`) with element-type-aware semantic tracking.
 
 Pointer/unwrap baseline:
 - pointer type annotation syntax: `*T` and `*mut T`
 - address-of syntax: `&expr`
+- string literals are treated as immutable pointers to byte/char data (no dedicated `string` type)
 - `expr.*` expects pointer value
 - pointer compatibility is element-type-aware at semantic check time (`*i32` is distinct from `*f32`)
 - assignment through `expr.*` requires mutable pointer (`*mut T`), otherwise error `cannot assign through immutable pointer`
@@ -93,10 +97,10 @@ Compatibility rules:
 - exact type equality is compatible
 - `unknown` is compatibility-permissive (to avoid cascading failures)
 - `int` and `float` are mutually compatible for numeric operations/assignments
-- `bool`, `string`, `char` are not compatible with numeric types
+- `bool` and `char` are not compatible with numeric types
 
 Inference/coercion boundaries:
-- no implicit string/char/bool coercion to numeric
+- no implicit char/bool coercion to numeric
 - numeric merge selects `float` if either side is float, else `int`
 - function call argument checks use declared parameter annotations where present
 
@@ -108,6 +112,7 @@ Inference/coercion boundaries:
   - calling convention: `stack_i64`
   - scalar parameter model: homogeneous `param_type` with `param_count`
   - scalar return type tracked as `ret_type`
+  - slice parameter lowering uses a pair shape: `[]T` is passed as `(ptr,len)` at call boundaries
   - ABI validator rejects missing symbols, arg-count mismatch, call-conv mismatch, and param-type mismatch
 - Direct x86_64 asm path supports:
   - control flow
@@ -139,6 +144,9 @@ Exit behavior:
 These are not fully locked yet:
 - richer coercion system beyond current numeric rules
 - full control-flow proof for every return-path shape
+- full collection-iterator `for` semantics beyond current range/pointer/slice forms
+- full type-driven `match` exhaustiveness/overlap checking
+- full `extern`/FFI language surface and ABI guarantees beyond basic extern function calls
 - multi-target backend support beyond Linux x86_64
 - rich per-diagnostic JSON payloads (stable error codes/spans/categories) beyond current v1 command-level summaries
 - full optional/error value-propagation semantics (runtime unwrap checks are lowered/codegen'd, but richer representation/propagation model is not finalized)

@@ -50,14 +50,17 @@ pub fn parseFile(self: *Self) ParseAllocError!?Ast.NodeId {
     self.skipTrivia();
     if (self.atEnd()) return null;
 
-    const start_list = self.list_items.items.len;
+    var items: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+    defer items.deinit(self.allocator);
     while (!self.atEnd()) {
         const n = (try self.parseItem()) orelse break;
-        try self.list_items.append(self.allocator, n);
+        try items.append(self.allocator, n);
         self.skipSeparators();
     }
 
-    const count = self.list_items.items.len - start_list;
+    const start_list = self.list_items.items.len;
+    try self.list_items.appendSlice(self.allocator, items.items);
+    const count = items.items.len;
     if (count == 1) return self.list_items.items[start_list];
 
     const start_span = if (count > 0) self.nodes.items[self.list_items.items[start_list]].span.start else 0;
@@ -86,6 +89,7 @@ fn parseItem(self: *Self) ParseAllocError!?Ast.NodeId {
     if (try self.tryParseLabeledBlock()) |lb| return lb;
     if (self.currentIs(.module)) return try self.parseModuleDecl();
     if (self.currentIs(.@"for")) return try self.parseForStmt();
+    if (self.currentIs(.@"return")) return try self.parseReturnStmt();
     if (self.currentIs(.@"break")) return try self.parseBreakStmt();
     if (self.currentIs(.@"continue")) return try self.parseContinueStmt();
     if (self.currentIs(.@"defer")) return try self.parseDeferStmt();
@@ -102,13 +106,24 @@ fn parseItem(self: *Self) ParseAllocError!?Ast.NodeId {
 
 fn tryParseLabeledBlock(self: *Self) ParseAllocError!?Ast.NodeId {
     if (!self.currentIs(.identifier)) return null;
-    if (self.i + 2 >= self.toks.len) return null;
-    if (self.toks[self.i + 1].kind != .colon or self.toks[self.i + 2].kind != .lbrace) return null;
+    var j = self.i + 1;
+    if (j >= self.toks.len or self.toks[j].kind != .colon) return null;
+    j += 1;
+    while (j < self.toks.len) : (j += 1) {
+        switch (self.toks[j].kind) {
+            .newline, .semicolon, .line_comment, .doc_comment, .block_comment => {},
+            else => break,
+        }
+    }
+    if (j >= self.toks.len) return null;
+    const body_kind = self.toks[j].kind;
+    if (body_kind != .lbrace and body_kind != .@"for") return null;
 
     const label_tok = self.current();
     self.advance(); // ident
     _ = self.consume(.colon);
-    const body = try self.parseBlockExpr();
+    self.skipTrivia();
+    const body = if (self.currentIs(.@"for")) try self.parseForStmt() else try self.parseBlockExpr();
     return try self.pushNode(.{
         .tag = .labeled_block,
         .span = .{ .start = label_tok.span.start, .end = self.nodes.items[body].span.end },
@@ -196,6 +211,26 @@ fn parseBreakStmt(self: *Self) ParseAllocError!Ast.NodeId {
             .label_span = label_span,
             .has_label = has_label,
         } },
+    });
+}
+
+fn parseReturnStmt(self: *Self) ParseAllocError!Ast.NodeId {
+    const r = self.current();
+    self.advance();
+    self.skipTrivia();
+
+    var has_value = false;
+    var value: Ast.NodeId = Ast.NullNode;
+    if (!self.atEnd() and !isHardTerminator(self.current().kind)) {
+        has_value = true;
+        value = try self.parseAssignment();
+    }
+
+    const end_span = if (has_value) self.nodes.items[value].span.end else r.span.end;
+    return try self.pushNode(.{
+        .tag = .return_stmt,
+        .span = .{ .start = r.span.start, .end = end_span },
+        .data = .{ .return_stmt = .{ .value = value, .has_value = has_value } },
     });
 }
 
@@ -329,6 +364,64 @@ fn parsePrefix(self: *Self) ParseAllocError!Ast.NodeId {
                 .data = .{ .ptr_type = .{ .child = rhs, .mutable = is_mut } },
             });
         },
+        .lbrack => {
+            const open = tok;
+            self.advance();
+            self.skipTrivia();
+
+            if (self.consume(.rbrack)) {
+                self.skipTrivia();
+                const elem = try self.parsePrefix();
+                return self.pushNode(.{
+                    .tag = .slice_type,
+                    .span = .{ .start = open.span.start, .end = self.nodes.items[elem].span.end },
+                    .data = .{ .one = .{ .child = elem } },
+                });
+            }
+
+            const len_node = try self.parseAssignment();
+            self.skipTrivia();
+            if (!self.consume(.rbrack)) {
+                try self.pushError(open.span, "expected ']' in array type");
+            }
+            self.skipTrivia();
+            const elem = try self.parsePrefix();
+            return self.pushNode(.{
+                .tag = .array_type,
+                .span = .{ .start = open.span.start, .end = self.nodes.items[elem].span.end },
+                .data = .{ .array_type = .{ .len = len_node, .child = elem } },
+            });
+        },
+        .question => {
+            self.advance();
+            self.skipTrivia();
+            const rhs = try self.parsePrefix();
+            return self.pushNode(.{
+                .tag = .optional_type,
+                .span = .{ .start = tok.span.start, .end = self.nodes.items[rhs].span.end },
+                .data = .{ .one = .{ .child = rhs } },
+            });
+        },
+        .@"inline" => {
+            self.advance();
+            self.skipTrivia();
+            const child = try self.parsePrefix();
+            return self.pushNode(.{
+                .tag = .inline_expr,
+                .span = .{ .start = tok.span.start, .end = self.nodes.items[child].span.end },
+                .data = .{ .one = .{ .child = child } },
+            });
+        },
+        .comp => {
+            self.advance();
+            self.skipTrivia();
+            const child = try self.parseAssignment();
+            return self.pushNode(.{
+                .tag = .comp_expr,
+                .span = .{ .start = tok.span.start, .end = self.nodes.items[child].span.end },
+                .data = .{ .one = .{ .child = child } },
+            });
+        },
         else => {
             const base = try self.parsePrimary();
             return self.parsePostfix(base);
@@ -344,6 +437,10 @@ fn parsePrimary(self: *Self) ParseAllocError!Ast.NodeId {
         .identifier => {
             self.advance();
             return self.pushNode(.{ .tag = .identifier, .span = tok.span, .data = .{ .none = {} } });
+        },
+        .true, .false => {
+            self.advance();
+            return self.pushNode(.{ .tag = .bool_lit, .span = tok.span, .data = .{ .none = {} } });
         },
         .int => {
             self.advance();
@@ -377,6 +474,7 @@ fn parsePrimary(self: *Self) ParseAllocError!Ast.NodeId {
         .lbrace => return self.parseBlockExpr(),
         .@"if" => return self.parseIfExpr(),
         .match => return self.parseMatchExpr(),
+        .@"extern" => return self.parseExternFnExpr(),
         .@"fn" => return self.parseFnExprKeyword(),
         .use => return self.parseUseExpr(),
         .@"struct" => return self.parseStructExpr(),
@@ -405,11 +503,12 @@ fn parseAggregateExpr(self: *Self, tag: Ast.Node.Tag) ParseAllocError!Ast.NodeId
         return self.pushErrorNode(kw.span, "invalid aggregate expression");
     }
 
-    const item_start = self.list_items.items.len;
+    var items: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+    defer items.deinit(self.allocator);
     self.skipSeparators();
     while (!self.atEnd() and !self.currentIs(.rbrace)) {
         const item = (try self.parseItem()) orelse break;
-        try self.list_items.append(self.allocator, item);
+        try items.append(self.allocator, item);
         self.skipSeparators();
     }
 
@@ -418,7 +517,9 @@ fn parseAggregateExpr(self: *Self, tag: Ast.Node.Tag) ParseAllocError!Ast.NodeId
         break :blk kw.span;
     };
 
-    const item_count = self.list_items.items.len - item_start;
+    const item_start = self.list_items.items.len;
+    try self.list_items.appendSlice(self.allocator, items.items);
+    const item_count = items.items.len;
     return self.pushNode(.{
         .tag = tag,
         .span = .{ .start = kw.span.start, .end = close.end },
@@ -483,10 +584,11 @@ fn parsePostfix(self: *Self, start: Ast.NodeId) ParseAllocError!Ast.NodeId {
             .lparen => {
                 const start_tok = self.current();
                 self.advance();
-                const arg_start = self.list_items.items.len;
+                var args: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+                defer args.deinit(self.allocator);
                 while (!self.atEnd() and self.current().kind != .rparen) {
                     const arg = try self.parseAssignment();
-                    try self.list_items.append(self.allocator, arg);
+                    try args.append(self.allocator, arg);
                     self.skipTrivia();
                     if (!self.consume(.comma)) break;
                     self.skipTrivia();
@@ -495,7 +597,9 @@ fn parsePostfix(self: *Self, start: Ast.NodeId) ParseAllocError!Ast.NodeId {
                     try self.pushError(start_tok.span, "expected ')' after call arguments");
                     break :blk self.nodes.items[node].span;
                 };
-                const arg_count = self.list_items.items.len - arg_start;
+                const arg_start = self.list_items.items.len;
+                try self.list_items.appendSlice(self.allocator, args.items);
+                const arg_count = args.items.len;
                 node = try self.pushNode(.{
                     .tag = .call,
                     .span = .{ .start = self.nodes.items[node].span.start, .end = close_span.end },
@@ -507,6 +611,48 @@ fn parsePostfix(self: *Self, start: Ast.NodeId) ParseAllocError!Ast.NodeId {
                 });
             },
             .lbrack => node = try self.parseIndexOrSlice(node),
+            .not => {
+                const bang_tok = self.current();
+                self.advance();
+                self.skipTrivia();
+
+                var names: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+                defer names.deinit(self.allocator);
+
+                if (!self.atEnd() and self.current().kind == .identifier) {
+                    while (!self.atEnd()) {
+                        if (self.current().kind != .identifier) {
+                            try self.pushError(self.current().span, "expected error type name after '!' or ','");
+                            break;
+                        }
+                        const nm_tok = self.current();
+                        self.advance();
+                        const nm_node = try self.pushNode(.{ .tag = .identifier, .span = nm_tok.span, .data = .{ .none = {} } });
+                        try names.append(self.allocator, nm_node);
+                        self.skipTrivia();
+                        if (!self.consume(.comma)) break;
+                        self.skipTrivia();
+                        if (self.atEnd() or self.current().kind != .identifier) {
+                            try self.pushError(bang_tok.span, "expected error type name after ','");
+                            break;
+                        }
+                    }
+                } else if (!self.atEnd()) {
+                    switch (self.current().kind) {
+                        .int, .float, .string, .char => try self.pushError(self.current().span, "expected error type name after '!' or ','"),
+                        else => {},
+                    }
+                }
+
+                const name_start = self.list_items.items.len;
+                try self.list_items.appendSlice(self.allocator, names.items);
+                const end_span = if (names.items.len > 0) self.nodes.items[names.items[names.items.len - 1]].span else bang_tok.span;
+                node = try self.pushNode(.{
+                    .tag = .error_type,
+                    .span = .{ .start = self.nodes.items[node].span.start, .end = end_span.end },
+                    .data = .{ .error_type = .{ .child = node, .name_start = @intCast(name_start), .name_count = @intCast(names.items.len) } },
+                });
+            },
             else => break,
         }
     }
@@ -535,7 +681,14 @@ fn parseIndexOrSlice(self: *Self, object: Ast.NodeId) ParseAllocError!Ast.NodeId
     } else {
         const first = try self.parseAssignment();
         self.skipTrivia();
-        if (self.currentIs(.range) or self.currentIs(.rangeq)) {
+        const first_n = self.nodes.items[first];
+        if (self.currentIs(.rbrack) and first_n.tag == .binary and (first_n.data.binary.op == .range or first_n.data.binary.op == .rangeq)) {
+            has_start = true;
+            has_end = true;
+            start_node = first_n.data.binary.lhs;
+            end_node = first_n.data.binary.rhs;
+            inclusive = first_n.data.binary.op == .rangeq;
+        } else if (self.currentIs(.range) or self.currentIs(.rangeq)) {
             has_start = true;
             start_node = first;
             inclusive = self.current().kind == .rangeq;
@@ -749,11 +902,12 @@ fn parseBlockExpr(self: *Self) ParseAllocError!Ast.NodeId {
     const open = self.current();
     self.advance();
 
-    const item_start = self.list_items.items.len;
+    var items: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+    defer items.deinit(self.allocator);
     self.skipSeparators();
     while (!self.atEnd() and !self.currentIs(.rbrace)) {
         const item = (try self.parseItem()) orelse break;
-        try self.list_items.append(self.allocator, item);
+        try items.append(self.allocator, item);
         self.skipSeparators();
     }
 
@@ -762,7 +916,9 @@ fn parseBlockExpr(self: *Self) ParseAllocError!Ast.NodeId {
         break :blk open.span;
     };
 
-    const item_count = self.list_items.items.len - item_start;
+    const item_start = self.list_items.items.len;
+    try self.list_items.appendSlice(self.allocator, items.items);
+    const item_count = items.items.len;
     return self.pushNode(.{
         .tag = .block,
         .span = .{ .start = open.span.start, .end = close_span.end },
@@ -808,11 +964,85 @@ fn parseFnExprKeyword(self: *Self) ParseAllocError!Ast.NodeId {
     self.skipTrivia();
 
     if (!self.consume(.lparen)) return self.pushErrorNode(fn_tok.span, "expected '(' after 'fn'");
+    var params: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+    defer params.deinit(self.allocator);
+    try self.parseParamListInto(&params);
     const param_start = self.list_items.items.len;
-    try self.parseParamListInto(param_start);
+    try self.list_items.appendSlice(self.allocator, params.items);
+    const param_count = params.items.len;
 
-    const built = try self.finishFnExpr(fn_tok.span.start, param_start);
+    const built = try self.finishFnExpr(fn_tok.span.start, param_start, param_count);
     return built;
+}
+
+fn parseExternFnExpr(self: *Self) ParseAllocError!Ast.NodeId {
+    const ex_tok = self.current();
+    self.advance();
+    self.skipTrivia();
+
+    if (!self.consume(.@"fn")) return self.pushErrorNode(ex_tok.span, "expected 'fn' after 'extern'");
+    self.skipTrivia();
+    if (!self.consume(.lparen)) return self.pushErrorNode(ex_tok.span, "expected '(' after 'extern fn'");
+
+    var params: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+    defer params.deinit(self.allocator);
+
+    if (!self.consume(.rparen)) {
+        while (!self.atEnd()) {
+            const type_node = try self.parseAssignment();
+            const p = try self.pushNode(.{ .tag = .param, .span = self.nodes.items[type_node].span, .data = .{ .param = .{
+                .name_start = @intCast(self.param_name_items.items.len),
+                .name_count = 0,
+                .type_node = type_node,
+                .default_node = Ast.NullNode,
+                .has_type = true,
+                .has_default = false,
+                .is_comp = false,
+            } } });
+            try params.append(self.allocator, p);
+            self.skipTrivia();
+            if (self.consume(.comma)) {
+                self.skipTrivia();
+                if (self.currentIs(.rparen)) {
+                    _ = self.consume(.rparen);
+                    break;
+                }
+                continue;
+            }
+            if (!self.consume(.rparen)) try self.pushError(self.current().span, "expected ')' after extern parameter types");
+            break;
+        }
+    }
+
+    const param_start = self.list_items.items.len;
+    try self.list_items.appendSlice(self.allocator, params.items);
+    const param_count = params.items.len;
+
+    self.skipTrivia();
+
+    var has_ret = false;
+    var ret_node: Ast.NodeId = Ast.NullNode;
+    if (!self.atEnd() and !isHardTerminator(self.current().kind) and !self.currentIs(.comma) and !self.currentIs(.rbrace)) {
+        has_ret = true;
+        ret_node = try self.parseAssignment();
+    }
+
+    const end_off = if (has_ret) self.nodes.items[ret_node].span.end else self.toks[self.i - 1].span.end;
+    return try self.pushNode(.{
+        .tag = .fn_expr,
+        .span = .{ .start = ex_tok.span.start, .end = end_off },
+        .data = .{ .fn_expr = .{
+            .param_start = @intCast(param_start),
+            .param_count = @intCast(param_count),
+            .ret_node = ret_node,
+            .body = Ast.NullNode,
+            .has_ret = has_ret,
+            .has_body = false,
+            .is_errorable = false,
+            .is_extern = true,
+            .concise = false,
+        } },
+    });
 }
 
 fn tryParseFnExprFromParen(self: *Self) ParseAllocError!?Ast.NodeId {
@@ -828,14 +1058,19 @@ fn tryParseFnExprFromParen(self: *Self) ParseAllocError!?Ast.NodeId {
 
     const lparen = self.current();
     self.advance();
-    const param_start = self.list_items.items.len;
+    var params: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+    defer params.deinit(self.allocator);
 
-    if (!self.tryParseParamListInto(param_start)) {
+    if (!self.tryParseParamListInto(&params)) {
         self.restoreSnapshot(snap);
         return null;
     }
 
-    const built = try self.tryFinishFnExpr(lparen.span.start, param_start);
+    const param_start = self.list_items.items.len;
+    try self.list_items.appendSlice(self.allocator, params.items);
+    const param_count = params.items.len;
+
+    const built = try self.tryFinishFnExpr(lparen.span.start, param_start, param_count);
     if (built == null) {
         self.restoreSnapshot(snap);
         return null;
@@ -843,13 +1078,12 @@ fn tryParseFnExprFromParen(self: *Self) ParseAllocError!?Ast.NodeId {
     return built;
 }
 
-fn finishFnExpr(self: *Self, start_off: usize, param_start: usize) ParseAllocError!Ast.NodeId {
-    return (try self.tryFinishFnExpr(start_off, param_start)) orelse unreachable;
+fn finishFnExpr(self: *Self, start_off: usize, param_start: usize, param_count: usize) ParseAllocError!Ast.NodeId {
+    return (try self.tryFinishFnExpr(start_off, param_start, param_count)) orelse unreachable;
 }
 
-fn tryFinishFnExpr(self: *Self, start_off: usize, param_start: usize) ParseAllocError!?Ast.NodeId {
+fn tryFinishFnExpr(self: *Self, start_off: usize, param_start: usize, param_count: usize) ParseAllocError!?Ast.NodeId {
     self.skipTrivia();
-    const param_count = self.list_items.items.len - param_start;
 
     var is_errorable = false;
     if (self.currentIs(.not)) {
@@ -887,17 +1121,19 @@ fn tryFinishFnExpr(self: *Self, start_off: usize, param_start: usize) ParseAlloc
             .ret_node = ret_node,
             .body = body,
             .has_ret = has_ret,
+            .has_body = true,
             .is_errorable = is_errorable,
+            .is_extern = false,
             .concise = concise,
         } },
     });
 }
 
-fn parseParamListInto(self: *Self, param_start: usize) ParseAllocError!void {
-    _ = param_start;
+fn parseParamListInto(self: *Self, params: *std.ArrayListUnmanaged(Ast.NodeId)) ParseAllocError!void {
     if (self.consume(.rparen)) return;
     while (!self.atEnd()) {
-        try self.parseOneParam();
+        const p = try self.parseOneParam();
+        if (p != Ast.NullNode) try params.append(self.allocator, p);
         self.skipTrivia();
         if (self.consume(.comma)) {
             self.skipTrivia();
@@ -912,11 +1148,11 @@ fn parseParamListInto(self: *Self, param_start: usize) ParseAllocError!void {
     if (!self.consume(.rparen)) try self.pushError(self.current().span, "expected ')' after parameters");
 }
 
-fn tryParseParamListInto(self: *Self, param_start: usize) bool {
-    _ = param_start;
+fn tryParseParamListInto(self: *Self, params: *std.ArrayListUnmanaged(Ast.NodeId)) bool {
     if (self.consume(.rparen)) return true;
     while (!self.atEnd()) {
-        if (!self.tryParseOneParam()) return false;
+        const p = self.tryParseOneParam() orelse return false;
+        params.append(self.allocator, p) catch return false;
         self.skipTrivia();
         if (self.consume(.comma)) {
             self.skipTrivia();
@@ -931,25 +1167,17 @@ fn tryParseParamListInto(self: *Self, param_start: usize) bool {
     return self.consume(.rparen);
 }
 
-fn parseOneParam(self: *Self) ParseAllocError!void {
+fn parseOneParam(self: *Self) ParseAllocError!Ast.NodeId {
     const name_start = self.param_name_items.items.len;
     if (!self.currentIs(.identifier)) {
         _ = try self.pushErrorNode(self.current().span, "expected parameter name");
-        return;
+        return Ast.NullNode;
     }
 
-    while (true) {
-        const id = try self.pushNode(.{ .tag = .identifier, .span = self.current().span, .data = .{ .none = {} } });
-        try self.param_name_items.append(self.allocator, id);
-        self.advance();
-        self.skipTrivia();
-        if (self.consume(.comma)) {
-            self.skipTrivia();
-            if (!self.currentIs(.identifier)) break;
-            continue;
-        }
-        break;
-    }
+    const id = try self.pushNode(.{ .tag = .identifier, .span = self.current().span, .data = .{ .none = {} } });
+    try self.param_name_items.append(self.allocator, id);
+    self.advance();
+    self.skipTrivia();
 
     var has_type = false;
     var type_node: Ast.NodeId = Ast.NullNode;
@@ -989,10 +1217,10 @@ fn parseOneParam(self: *Self) ParseAllocError!void {
             .is_comp = is_comp,
         } },
     });
-    try self.list_items.append(self.allocator, p);
+    return p;
 }
 
-fn tryParseOneParam(self: *Self) bool {
+fn tryParseOneParam(self: *Self) ?Ast.NodeId {
     const snap = Snapshot{
         .i = self.i,
         .nodes_len = self.nodes.items.len,
@@ -1002,11 +1230,15 @@ fn tryParseOneParam(self: *Self) bool {
         .param_name_len = self.param_name_items.items.len,
         .arms_len = self.match_arms.items.len,
     };
-    self.parseOneParam() catch {
+    const p = self.parseOneParam() catch {
         self.restoreSnapshot(snap);
-        return false;
+        return null;
     };
-    return true;
+    if (p == Ast.NullNode) {
+        self.restoreSnapshot(snap);
+        return null;
+    }
+    return p;
 }
 
 fn tryParseDecl(self: *Self, is_pub: bool) ParseAllocError!?Ast.NodeId {
@@ -1052,7 +1284,17 @@ fn tryParseDecl(self: *Self, is_pub: bool) ParseAllocError!?Ast.NodeId {
     var init_node: Ast.NodeId = Ast.NullNode;
     var is_define = false;
 
-    if (self.consume(.colon)) {
+    if (self.currentIs(.lparen)) {
+        var params: std.ArrayListUnmanaged(Ast.NodeId) = .empty;
+        defer params.deinit(self.allocator);
+        self.advance();
+        try self.parseParamListInto(&params);
+        const param_start = self.list_items.items.len;
+        try self.list_items.appendSlice(self.allocator, params.items);
+        init_node = try self.finishFnExpr(self.nodes.items[self.decl_name_items.items[name_start]].span.start, param_start, params.items.len);
+        has_init = true;
+        is_define = true;
+    } else if (self.consume(.colon)) {
         if (self.consume(.eq)) {
             is_define = true;
             has_init = true;
@@ -1066,10 +1308,10 @@ fn tryParseDecl(self: *Self, is_pub: bool) ParseAllocError!?Ast.NodeId {
                 init_node = try self.parseAssignment();
             }
         }
-    } else if (is_mut and self.consume(.eq)) {
+    } else if (!has_init and is_mut and self.consume(.eq)) {
         has_init = true;
         init_node = try self.parseAssignment();
-    } else {
+    } else if (!has_init) {
         self.restoreSnapshot(snap);
         return null;
     }
@@ -1129,7 +1371,7 @@ fn pushError(self: *Self, span: Span, msg: []const u8) ParseAllocError!void {
 
 fn precedence(kind: Tok.Kind) ?u8 {
     return switch (kind) {
-        .lor => 1,
+        .lor, .@"or" => 1,
         .land => 2,
         .eqeq, .neq => 3,
         .lt, .lte, .gt, .gte => 4,
@@ -1163,7 +1405,7 @@ fn toBinaryOp(kind: Tok.Kind) ?Ast.BinaryOp {
         .eqeq => .eqeq,
         .neq => .neq,
         .land => .land,
-        .lor => .lor,
+        .lor, .@"or" => .lor,
         .range => .range,
         .rangeq => .rangeq,
         else => null,
@@ -1320,7 +1562,10 @@ test "parse declarations and grouped typed names" {
 
 test "parse function expression forms" {
     const alloc = std.testing.allocator;
-    const src = "a := (x, y: i32) i32 => x + y\nb := fn() { 1 }\n";
+    const src =
+        "a := (x, y: i32) i32 => x + y\n" ++
+        "b := fn() { 1 }\n" ++
+        "puts := extern fn(*i32) i32\n";
     const toks = try lexAll(alloc, src);
     defer alloc.free(toks);
 
@@ -1336,7 +1581,9 @@ test "parse control flow statements" {
     const src =
         "for 0..10: |v| { break :blk 1 }\n" ++
         "for { continue }\n" ++
-        "blk: { defer |e| {} }\n";
+        "f := () i32 => { return 1 }\n" ++
+        "blk: { defer |e| {} }\n" ++
+        "L: for { continue:L }\n";
     const toks = try lexAll(alloc, src);
     defer alloc.free(toks);
 
@@ -1346,6 +1593,21 @@ test "parse control flow statements" {
     const root = (try p.parseFile()).?;
     try std.testing.expect(!p.hasErrors());
     try std.testing.expectEqual(Ast.Node.Tag.block, p.nodes.items[root].tag);
+
+    var saw_labeled_for = false;
+    var saw_return = false;
+    for (p.nodes.items) |n| {
+        if (n.tag == .return_stmt) saw_return = true;
+        if (n.tag == .labeled_block) {
+            const body = p.nodes.items[n.data.labeled_block.body];
+            if (body.tag == .for_stmt) {
+                saw_labeled_for = true;
+                break;
+            }
+        }
+    }
+    try std.testing.expect(saw_labeled_for);
+    try std.testing.expect(saw_return);
 }
 
 test "parse if binding and match arm captures" {
@@ -1442,6 +1704,128 @@ test "parse edge-case if/match/for bindings" {
 test "parse postfix unwrap and deref forms" {
     const alloc = std.testing.allocator;
     const src = "module main\na := x.?\nb := y.!\nc := p.*\n";
+    const toks = try lexAll(alloc, src);
+    defer alloc.free(toks);
+
+    var p = Self.init(alloc, toks);
+    defer p.deinit();
+
+    _ = (try p.parseFile()).?;
+    try std.testing.expect(!p.hasErrors());
+}
+
+test "parse slice and array type annotations" {
+    const alloc = std.testing.allocator;
+    const src = "module main\na: []u8 = \"x\"\nb: [4]u8 = \"test\"\n";
+    const toks = try lexAll(alloc, src);
+    defer alloc.free(toks);
+
+    var p = Self.init(alloc, toks);
+    defer p.deinit();
+
+    _ = (try p.parseFile()).?;
+    try std.testing.expect(!p.hasErrors());
+
+    var saw_slice = false;
+    var saw_array = false;
+    for (p.nodes.items) |n| {
+        if (n.tag == .slice_type) saw_slice = true;
+        if (n.tag == .array_type) saw_array = true;
+    }
+    try std.testing.expect(saw_slice);
+    try std.testing.expect(saw_array);
+}
+
+test "parse slice expression with range syntax in brackets" {
+    const alloc = std.testing.allocator;
+    const src = "f := () { x := p[0..n] }\n";
+    const toks = try lexAll(alloc, src);
+    defer alloc.free(toks);
+
+    var p = Self.init(alloc, toks);
+    defer p.deinit();
+
+    _ = (try p.parseFile()).?;
+    try std.testing.expect(!p.hasErrors());
+
+    var saw_slice = false;
+    for (p.nodes.items) |n| {
+        if (n.tag == .slice) saw_slice = true;
+    }
+    try std.testing.expect(saw_slice);
+}
+
+test "parse optional and postfix error type annotations" {
+    const alloc = std.testing.allocator;
+    const src =
+        "a: ?i32 = 1\n" ++
+        "b: i32! = 1\n" ++
+        "c: f32!DivideError1 = 1\n" ++
+        "d: f32! DivideError1, DivideError2 = 1\n";
+
+    const toks = try lexAll(alloc, src);
+    defer alloc.free(toks);
+
+    var p = Self.init(alloc, toks);
+    defer p.deinit();
+    const root = (try p.parseFile()).?;
+    try std.testing.expect(!p.hasErrors());
+    try std.testing.expectEqual(Ast.Node.Tag.block, p.nodes.items[root].tag);
+
+    var saw_error_type = false;
+    for (p.nodes.items) |n| {
+        if (n.tag == .error_type) saw_error_type = true;
+    }
+    try std.testing.expect(saw_error_type);
+}
+
+test "parse malformed postfix error type annotations" {
+    const alloc = std.testing.allocator;
+    const src =
+        "a: f32!DivideError1, = 1\n" ++
+        "b: f32!DivideError1,,DivideError2 = 1\n" ++
+        "c: f32!123 = 1\n";
+
+    const toks = try lexAll(alloc, src);
+    defer alloc.free(toks);
+
+    var p = Self.init(alloc, toks);
+    defer p.deinit();
+
+    _ = (try p.parseFile()).?;
+    try std.testing.expect(p.hasErrors());
+    try std.testing.expect(p.errors.items.len >= 3);
+}
+
+test "parse inline and comp expressions" {
+    const alloc = std.testing.allocator;
+    const src = "module main\nmain := () i32 => comp inline (1 + 2)\n";
+    const toks = try lexAll(alloc, src);
+    defer alloc.free(toks);
+
+    var p = Self.init(alloc, toks);
+    defer p.deinit();
+
+    _ = (try p.parseFile()).?;
+    try std.testing.expect(!p.hasErrors());
+
+    var saw_inline = false;
+    var saw_comp = false;
+    for (p.nodes.items) |n| {
+        if (n.tag == .inline_expr) saw_inline = true;
+        if (n.tag == .comp_expr) saw_comp = true;
+    }
+    try std.testing.expect(saw_inline);
+    try std.testing.expect(saw_comp);
+}
+
+test "parse struct method declaration shorthand" {
+    const alloc = std.testing.allocator;
+    const src =
+        "module main\n" ++
+        "Thing := struct {\n" ++
+        "  do_thing(s: i32, b: i32) i32 => b + 1\n" ++
+        "}\n";
     const toks = try lexAll(alloc, src);
     defer alloc.free(toks);
 

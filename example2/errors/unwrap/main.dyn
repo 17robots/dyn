@@ -1,5 +1,0 @@
-module main
-
-x := 1
-a := x.?
-b := x.!

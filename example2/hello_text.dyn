@@ -1,5 +1,0 @@
-module main
-
-hello := "Hello, world!"
-
-hello_code := () i32 => 0

@@ -27,7 +27,9 @@ add := (x: i32, y: i32) { // void types dont need anything specified
 }
 ```
 
-To give a non void return type, specify return type after ) and before {
+To give a non-void return type, specify return type after `)` and before `{`.
+
+Block-bodied functions with a non-void return type must use explicit `return` on all value-producing paths. There is no implicit return from the last expression in a block body.
 
 ```dyn
 add2 := (x: i32, y: i32) i32 {
@@ -43,11 +45,13 @@ add3 := (x,y: i32) i32 {
 }
 ```
 
-And if you just have one thing to return, you can use => and expression.
+If you just have one expression to return, use concise form with `=>`.
 
 ```dyn
 add4 := (x,y: i32) i32 => x + y
 ```
+
+`=>` is expression-bodied function syntax. It is not required for block bodies.
 
 You can also specify default values for a function, including to grouped identifiers.
 

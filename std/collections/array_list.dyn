@@ -1,5 +1,0 @@
-module array_list
-
-pub init := () i32 => 0
-pub deinit := () i32 => 0
-pub append_i32 := (value: i32) i32 => value

@@ -2,7 +2,7 @@
 __dyn_os_alloc:
     push %rbp
     mov %rsp, %rbp
-    mov 16(%rbp), %rsi
+    mov 24(%rbp), %rsi
     cmp $0, %rsi
     jle .Ldyn_alloc_fail
     mov $9, %rax
@@ -23,7 +23,7 @@ __dyn_os_alloc:
 __dyn_os_free:
     push %rbp
     mov %rsp, %rbp
-    mov 16(%rbp), %rdi
+    mov 32(%rbp), %rdi
     mov 24(%rbp), %rsi
     cmp $0, %rdi
     je .Ldyn_free_ret
@@ -39,9 +39,9 @@ __dyn_os_realloc:
     push %rbp
     mov %rsp, %rbp
     sub $8, %rsp
-    mov 16(%rbp), %rdi
-    mov 24(%rbp), %r8
-    mov 40(%rbp), %r9
+    mov 48(%rbp), %rdi
+    mov 40(%rbp), %r8
+    mov 24(%rbp), %r9
     cmp $0, %r9
     jle .Ldyn_realloc_new_zero
     cmp $0, %rdi
@@ -57,22 +57,22 @@ __dyn_os_realloc:
     cmp $0, %rax
     jl .Ldyn_realloc_fail
     mov %rax, -8(%rbp)
-    mov 24(%rbp), %rcx
-    mov 40(%rbp), %rdx
+    mov 40(%rbp), %rcx
+    mov 24(%rbp), %rdx
     cmp %rdx, %rcx
     cmovg %rdx, %rcx
     cmp $0, %rcx
     jle .Ldyn_realloc_skip_copy
-    mov 16(%rbp), %rsi
+    mov 48(%rbp), %rsi
     mov -8(%rbp), %rdi
     cld
     rep movsb
 .Ldyn_realloc_skip_copy:
-    mov 24(%rbp), %rsi
+    mov 40(%rbp), %rsi
     cmp $0, %rsi
     jle .Ldyn_realloc_ret_new
     mov $11, %rax
-    mov 16(%rbp), %rdi
+    mov 48(%rbp), %rdi
     syscall
 .Ldyn_realloc_ret_new:
     mov -8(%rbp), %rax
@@ -82,7 +82,7 @@ __dyn_os_realloc:
 .Ldyn_realloc_alloc_only:
     mov $9, %rax
     xor %rdi, %rdi
-    mov 40(%rbp), %rsi
+    mov 24(%rbp), %rsi
     mov $3, %rdx
     mov $34, %r10
     mov $-1, %r8

@@ -1,4 +1,0 @@
-module print
-
-pub print := (msg: string) i32 => 0
-pub print_i32 := (v: i32) i32 => v
