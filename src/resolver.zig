@@ -392,3 +392,56 @@ test "errors on non-public or missing imported member" {
     try std.testing.expect(saw_suggest);
     try std.testing.expect(saw_exports_list);
 }
+
+test "resolves alias wrapper forwarding in same-file and cross-module contexts" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_resolve_alias_wrapper_forward";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_resolve_alias_wrapper_forward/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "L := use \"lib\"\n" ++
+                "Local := use \"local\"\n" ++
+                "x := L.wrap(1)\n" ++
+                "y := Local.wrap(2)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_resolve_alias_wrapper_forward/lib.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module lib\n" ++
+                "B := use \"base\"\n" ++
+                "pub wrap := (x: i32) i32 => B.id(x)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_resolve_alias_wrapper_forward/local.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module local\n" ++
+                "B := use \"base\"\n" ++
+                "pub wrap := (x: i32) i32 => B.id(x)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_resolve_alias_wrapper_forward/base.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll("module base\npub id := (x: i32) i32 => x\n");
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntry(alloc, "tmp_resolve_alias_wrapper_forward/main.dyn");
+    defer g.deinit();
+    var syms = try Symbols.Self.collectFromGraph(alloc, &g);
+    defer syms.deinit();
+
+    var r = Self.init(alloc);
+    defer r.deinit();
+    try r.resolveModuleMemberAccesses(&g, &syms);
+    try std.testing.expectEqual(@as(usize, 0), r.errors.items.len);
+}

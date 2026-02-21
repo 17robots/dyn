@@ -304,6 +304,38 @@ fn emitRuntimeAllocatorSymbols(writer: anytype) !void {
             "    xor %rax, %rax\n" ++
             "    add $8, %rsp\n" ++
             "    pop %rbp\n" ++
+            "    ret\n" ++
+            "__dyn_os_load_i32:\n" ++
+            "    push %rbp\n" ++
+            "    mov %rsp, %rbp\n" ++
+            "    mov 16(%rbp), %rax\n" ++
+            "    mov 24(%rbp), %rcx\n" ++
+            "    cmp $0, %rcx\n" ++
+            "    jl .Ldyn_load_i32_fail\n" ++
+            "    lea (%rax,%rcx,8), %rax\n" ++
+            "    mov (%rax), %rax\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            ".Ldyn_load_i32_fail:\n" ++
+            "    xor %rax, %rax\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            "__dyn_os_store_i32:\n" ++
+            "    push %rbp\n" ++
+            "    mov %rsp, %rbp\n" ++
+            "    mov 16(%rbp), %rax\n" ++
+            "    mov 24(%rbp), %rcx\n" ++
+            "    cmp $0, %rcx\n" ++
+            "    jl .Ldyn_store_i32_fail\n" ++
+            "    lea (%rax,%rcx,8), %rax\n" ++
+            "    mov 32(%rbp), %rdx\n" ++
+            "    mov %rdx, (%rax)\n" ++
+            "    xor %rax, %rax\n" ++
+            "    pop %rbp\n" ++
+            "    ret\n" ++
+            ".Ldyn_store_i32_fail:\n" ++
+            "    xor %rax, %rax\n" ++
+            "    pop %rbp\n" ++
             "    ret\n",
     );
 }
@@ -581,6 +613,23 @@ fn runtimeRealloc(state: *RuntimeState, ptr: i64, old_size: i64, old_align: i64,
     return new_ptr;
 }
 
+fn runtimeLoadI32(state: *RuntimeState, ptr: i64, index: i64) !i64 {
+    if (ptr < 0x6000_0000) return error.UnsupportedIr;
+    if (index < 0) return error.UnsupportedIr;
+    const slot: usize = @intCast((ptr - 0x6000_0000) + index);
+    if (slot >= state.heap_words.len) return error.UnsupportedIr;
+    return state.heap_words[slot];
+}
+
+fn runtimeStoreI32(state: *RuntimeState, ptr: i64, index: i64, value: i64) !i64 {
+    if (ptr < 0x6000_0000) return error.UnsupportedIr;
+    if (index < 0) return error.UnsupportedIr;
+    const slot: usize = @intCast((ptr - 0x6000_0000) + index);
+    if (slot >= state.heap_words.len) return error.UnsupportedIr;
+    state.heap_words[slot] = value;
+    return 0;
+}
+
 fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *RuntimeState) !i64 {
     if (func_index >= program.functions.len) return error.UnsupportedIr;
     const f = program.functions[func_index];
@@ -756,6 +805,14 @@ fn runFunction(program: Ir.Program, func_index: u32, args: []const i64, state: *
                         if (std.mem.eql(u8, ex.name, "__dyn_os_realloc")) {
                             if (c.arg_count != 5) return error.UnsupportedIr;
                             break :blk try runtimeRealloc(state, call_args[0], call_args[1], call_args[2], call_args[3], call_args[4]);
+                        }
+                        if (std.mem.eql(u8, ex.name, "__dyn_os_load_i32")) {
+                            if (c.arg_count != 2) return error.UnsupportedIr;
+                            break :blk try runtimeLoadI32(state, call_args[0], call_args[1]);
+                        }
+                        if (std.mem.eql(u8, ex.name, "__dyn_os_store_i32")) {
+                            if (c.arg_count != 3) return error.UnsupportedIr;
+                            break :blk try runtimeStoreI32(state, call_args[0], call_args[1], call_args[2]);
                         }
                         return error.UnsupportedIr;
                     },
@@ -1190,6 +1247,55 @@ test "runtime backing allocator symbols work via external calls" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "__dyn_os_free:") != null);
 }
 
+test "runtime backing load/store symbols work via external calls" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 24);
+    instr_main[0] = .{ .push_const_i64 = 16 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .external_symbol = .{ .name = "__dyn_os_alloc", .name_owned = false } } } };
+    instr_main[3] = .{ .store_local = 0 };
+
+    instr_main[4] = .{ .load_local = 0 };
+    instr_main[5] = .{ .push_const_i64 = 0 };
+    instr_main[6] = .{ .push_const_i64 = 41 };
+    instr_main[7] = .{ .call = .{ .arg_count = 3, .target = .{ .external_symbol = .{ .name = "__dyn_os_store_i32", .name_owned = false } } } };
+    instr_main[8] = .{ .pop = {} };
+
+    instr_main[9] = .{ .load_local = 0 };
+    instr_main[10] = .{ .push_const_i64 = 1 };
+    instr_main[11] = .{ .push_const_i64 = 1 };
+    instr_main[12] = .{ .call = .{ .arg_count = 3, .target = .{ .external_symbol = .{ .name = "__dyn_os_store_i32", .name_owned = false } } } };
+    instr_main[13] = .{ .pop = {} };
+
+    instr_main[14] = .{ .load_local = 0 };
+    instr_main[15] = .{ .push_const_i64 = 0 };
+    instr_main[16] = .{ .call = .{ .arg_count = 2, .target = .{ .external_symbol = .{ .name = "__dyn_os_load_i32", .name_owned = false } } } };
+    instr_main[17] = .{ .load_local = 0 };
+    instr_main[18] = .{ .push_const_i64 = 1 };
+    instr_main[19] = .{ .call = .{ .arg_count = 2, .target = .{ .external_symbol = .{ .name = "__dyn_os_load_i32", .name_owned = false } } } };
+    instr_main[20] = .{ .add = {} };
+    instr_main[21] = .{ .store_local = 1 };
+
+    instr_main[22] = .{ .load_local = 1 };
+    instr_main[23] = .{ .ret = {} };
+
+    const funcs = try alloc.alloc(Ir.Function, 1);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 2, .instructions = instr_main };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    const code = try lowerMainExitCode(p);
+    try std.testing.expectEqual(@as(i64, 42), code);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+    try emitAssemblyDirect(.linux_x86_64, p, w);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "__dyn_os_load_i32:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "__dyn_os_store_i32:") != null);
+}
+
 test "std page allocator intrinsics allocate and free" {
     const alloc = std.testing.allocator;
 
@@ -1265,6 +1371,36 @@ test "allocator intrinsics alloc(0, align) returns null" {
     try std.testing.expectEqual(@as(i64, 0), try lowerMainExitCode(p));
 }
 
+test "allocator intrinsics alloc(negative, align) returns null" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 4);
+    instr_main[0] = .{ .push_const_i64 = -1 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .internal_index = 1 } } };
+    instr_main[3] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 0);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectEqual(@as(i64, 0), try lowerMainExitCode(p));
+}
+
+test "allocator intrinsics alloc rejects non-power-of-two alignment" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 4);
+    instr_main[0] = .{ .push_const_i64 = 16 };
+    instr_main[1] = .{ .push_const_i64 = 3 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .internal_index = 1 } } };
+    instr_main[3] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 0);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectError(error.UnsupportedIr, lowerMainExitCode(p));
+}
+
 test "allocator intrinsics free(0, size, align) is no-op" {
     const alloc = std.testing.allocator;
 
@@ -1299,6 +1435,24 @@ test "allocator intrinsics realloc(0,0,_,new,align) allocates" {
     defer Ir.deinitProgram(alloc, &p);
 
     try std.testing.expect((try lowerMainExitCode(p)) != 0);
+}
+
+test "allocator intrinsics realloc rejects non-power-of-two new alignment" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 7);
+    instr_main[0] = .{ .push_const_i64 = 0 };
+    instr_main[1] = .{ .push_const_i64 = 0 };
+    instr_main[2] = .{ .push_const_i64 = 8 };
+    instr_main[3] = .{ .push_const_i64 = 32 };
+    instr_main[4] = .{ .push_const_i64 = 6 };
+    instr_main[5] = .{ .call = .{ .arg_count = 5, .target = .{ .internal_index = 3 } } };
+    instr_main[6] = .{ .ret = {} };
+
+    var p = try makeAllocatorIntrinsicProgram(alloc, instr_main, 0);
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectError(error.UnsupportedIr, lowerMainExitCode(p));
 }
 
 test "allocator intrinsics realloc(ptr,...,0,_) frees and returns null" {
@@ -1384,6 +1538,36 @@ test "std io print intrinsic emits and executes" {
     try emitAssemblyDirect(.linux_x86_64, p, w);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "mprint_print") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "cmpb $0, (%rcx)") != null);
+}
+
+test "legacy std intrinsic aliases are not emitted" {
+    const alloc = std.testing.allocator;
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+
+    try std.testing.expect(!(try emitStdIntrinsicFunction(w, "mmem_alloc")));
+    try std.testing.expect(!(try emitStdIntrinsicFunction(w, "mheap_alloc")));
+    try std.testing.expect(!(try emitStdIntrinsicFunction(w, "mio_print")));
+    try std.testing.expectEqual(@as(usize, 0), out.items.len);
+}
+
+test "legacy std intrinsic alias external calls are rejected" {
+    const alloc = std.testing.allocator;
+
+    const instr_main = try alloc.alloc(Ir.Instruction, 4);
+    instr_main[0] = .{ .push_const_i64 = 16 };
+    instr_main[1] = .{ .push_const_i64 = 8 };
+    instr_main[2] = .{ .call = .{ .arg_count = 2, .target = .{ .external_symbol = .{ .name = "mmem_alloc", .name_owned = false } } } };
+    instr_main[3] = .{ .ret = {} };
+
+    const funcs = try alloc.alloc(Ir.Function, 1);
+    funcs[0] = .{ .name = "main", .name_owned = false, .call_conv = .stack_i64, .ret_type = .i64, .param_type = .i64, .param_count = 0, .local_count = 0, .instructions = instr_main };
+    var p = Ir.Program{ .functions = funcs, .rodata_strings = &.{}, .global_count = 0 };
+    defer Ir.deinitProgram(alloc, &p);
+
+    try std.testing.expectError(error.UnsupportedIr, lowerMainExitCode(p));
 }
 
 test "runtime unwrap instructions are non-pass-through" {

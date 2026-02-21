@@ -243,6 +243,116 @@ test "builds executable from entry via module objects" {
     }
 }
 
+test "builds executable through page_allocator std-call path" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_backend_driver_page_allocator";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_backend_driver_page_allocator/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "P := use \"page_allocator\"\n" ++
+                "main := () i32 => P.alloc(-1, 8)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_backend_driver_page_allocator/page_allocator.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module page_allocator\n" ++
+                "pub alloc := (size: i32, align: i32) i32 => 0\n",
+        );
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+
+    try buildExecutableFromEntryViaModules(
+        alloc,
+        w,
+        "tmp_backend_driver_page_allocator/main.dyn",
+        "tmp_backend_driver_page_allocator",
+        "tmp_backend_driver_page_allocator/out",
+        .{},
+    );
+
+    var child = std.process.Child.init(&.{"./tmp_backend_driver_page_allocator/out"}, alloc);
+    const term = try child.spawnAndWait();
+    switch (term) {
+        .Exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "builds executable through mem allocator forwarding chain" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_backend_driver_mem_allocator_chain";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_backend_driver_mem_allocator_chain/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "M := use \"mem\"\n" ++
+                "main := () i32 => if M.alloc(-1, 8) == 0 && M.alloc(1, 8) > 0 7 else 3\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_backend_driver_mem_allocator_chain/mem.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module mem\n" ++
+                "A := use \"allocator\"\n" ++
+                "pub alloc := (size: i32, align: i32) i32 => A.alloc(size, align)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_backend_driver_mem_allocator_chain/allocator.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module allocator\n" ++
+                "P := use \"page_allocator\"\n" ++
+                "pub alloc := (size: i32, align: i32) i32 => P.alloc(size, align)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_backend_driver_mem_allocator_chain/page_allocator.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module page_allocator\n" ++
+                "pub alloc := (size: i32, align: i32) i32 => if size <= 0 0 else 9\n",
+        );
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    const w = out.writer(alloc);
+
+    try buildExecutableFromEntryViaModules(
+        alloc,
+        w,
+        "tmp_backend_driver_mem_allocator_chain/main.dyn",
+        "tmp_backend_driver_mem_allocator_chain",
+        "tmp_backend_driver_mem_allocator_chain/out",
+        .{},
+    );
+
+    var child = std.process.Child.init(&.{"./tmp_backend_driver_mem_allocator_chain/out"}, alloc);
+    const term = try child.spawnAndWait();
+    switch (term) {
+        .Exited => |code| try std.testing.expectEqual(@as(u8, 7), code),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 fn runZigBuildRun(allocator: std.mem.Allocator, args: []const []const u8) !std.process.Child.Term {
     var argv = std.ArrayList([]const u8).empty;
     defer argv.deinit(allocator);

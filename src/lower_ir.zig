@@ -2283,6 +2283,99 @@ test "lower alias call drops comptime type runtime argument" {
     try std.testing.expect(found);
 }
 
+test "lower supports mem allocator forwarding chain across modules" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_mem_allocator_chain";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_mem_allocator_chain/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "M := use \"mem\"\n" ++
+                "main := () i32 => M.alloc(1, 8)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_mem_allocator_chain/mem.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module mem\n" ++
+                "A := use \"allocator\"\n" ++
+                "pub alloc := (size: i32, align: i32) i32 => A.alloc(size, align)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_mem_allocator_chain/allocator.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module allocator\n" ++
+                "P := use \"page_allocator\"\n" ++
+                "pub alloc := (size: i32, align: i32) i32 => P.alloc(size, align)\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_mem_allocator_chain/page_allocator.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module page_allocator\n" ++
+                "pub alloc := (size: i32, align: i32) i32 => size\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntry(alloc, "tmp_lower_ir_mem_allocator_chain/main.dyn");
+    defer g.deinit();
+
+    var mem_module: ?u32 = null;
+    var allocator_module: ?u32 = null;
+    var mi: u32 = 0;
+    while (mi < g.modules.items.len) : (mi += 1) {
+        if (std.mem.eql(u8, g.modules.items[mi].name, "mem")) mem_module = mi;
+        if (std.mem.eql(u8, g.modules.items[mi].name, "allocator")) allocator_module = mi;
+    }
+    try std.testing.expect(mem_module != null);
+    try std.testing.expect(allocator_module != null);
+
+    var mem_prog = try lowerModuleProgram(alloc, &g, mem_module.?);
+    defer Ir.deinitProgram(alloc, &mem_prog);
+    var allocator_prog = try lowerModuleProgram(alloc, &g, allocator_module.?);
+    defer Ir.deinitProgram(alloc, &allocator_prog);
+
+    var saw_mem_to_allocator = false;
+    for (mem_prog.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "mmem_alloc")) continue;
+        for (fn_ir.instructions) |ins| switch (ins) {
+            .call => |c| switch (c.target) {
+                .external_symbol => |es| {
+                    if (std.mem.eql(u8, es.name, "mallocator_alloc")) saw_mem_to_allocator = true;
+                },
+                else => {},
+            },
+            else => {},
+        };
+    }
+
+    var saw_allocator_to_page = false;
+    for (allocator_prog.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "mallocator_alloc")) continue;
+        for (fn_ir.instructions) |ins| switch (ins) {
+            .call => |c| switch (c.target) {
+                .external_symbol => |es| {
+                    if (std.mem.eql(u8, es.name, "mpage_allocator_alloc")) saw_allocator_to_page = true;
+                },
+                else => {},
+            },
+            else => {},
+        };
+    }
+
+    try std.testing.expect(saw_mem_to_allocator);
+    try std.testing.expect(saw_allocator_to_page);
+}
+
 test "lower supports ArrayList(T) factory method sugar via imported module functions" {
     const alloc = std.testing.allocator;
     const dir = "tmp_lower_ir_arraylist_factory_method";
@@ -2329,6 +2422,843 @@ test "lower supports ArrayList(T) factory method sugar via imported module funct
         }
     }
     try std.testing.expect(found);
+}
+
+test "lower supports ArrayList append/get storage path" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_arraylist_storage_path";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_arraylist_storage_path/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "C := use \"std/collections\"\n" ++
+                "main := () i32 => {\n" ++
+                "  L := C.ArrayList(i32)\n" ++
+                "  p := L.init(2)\n" ++
+                "  mut len: i32 = 0\n" ++
+                "  len = L.append_at(p, len, 2, 41)\n" ++
+                "  len = L.append_at(p, len, 2, 59)\n" ++
+                "  a := L.get(p, 0)\n" ++
+                "  b := L.get(p, 1)\n" ++
+                "  L.deinit(p, 2)\n" ++
+                "  a + b + len\n" ++
+                "}\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_arraylist_storage_path/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_append = false;
+    var saw_get = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "mcollections_append_at")) saw_append = true;
+                        if (std.mem.eql(u8, es.name, "mcollections_get")) saw_get = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_append);
+    try std.testing.expect(saw_get);
+}
+
+test "lower supports StringInterner and StringMap storage path" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_interner_map_storage_path";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_interner_map_storage_path/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "C := use \"std/collections\"\n" ++
+                "main := () i32 => {\n" ++
+                "  I := C.StringInterner()\n" ++
+                "  ip := I.init(4)\n" ++
+                "  mut ilen: i32 = 0\n" ++
+                "  a := I.intern(ip, ilen, 4, 100, 3)\n" ++
+                "  if a == ilen ilen += 1\n" ++
+                "  b := I.intern(ip, ilen, 4, 100, 3)\n" ++
+                "  if b == ilen ilen += 1\n" ++
+                "  c := I.intern(ip, ilen, 4, 200, 5)\n" ++
+                "  if c == ilen ilen += 1\n" ++
+                "  M := C.StringMap()\n" ++
+                "  mp := M.init(4)\n" ++
+                "  mut mlen: i32 = 0\n" ++
+                "  mlen = M.put(mp, mlen, 4, a, 7)\n" ++
+                "  mlen = M.put(mp, mlen, 4, c, 9)\n" ++
+                "  mlen = M.put(mp, mlen, 4, a, 11)\n" ++
+                "  v1 := M.get_or(mp, mlen, a, 0)\n" ++
+                "  v2 := M.get_or(mp, mlen, b, 0)\n" ++
+                "  v3 := M.get_or(mp, mlen, 123, 5)\n" ++
+                "  I.deinit(ip, 4)\n" ++
+                "  M.deinit(mp, 4)\n" ++
+                "  ilen + v1 + v2 + v3\n" ++
+                "}\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_interner_map_storage_path/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_intern = false;
+    var saw_put = false;
+    var saw_get_or = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "mcollections_intern")) saw_intern = true;
+                        if (std.mem.eql(u8, es.name, "mcollections_put")) saw_put = true;
+                        if (std.mem.eql(u8, es.name, "mcollections_get_or")) saw_get_or = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_intern);
+    try std.testing.expect(saw_put);
+    try std.testing.expect(saw_get_or);
+}
+
+test "lower supports compiler-style symbol table fixture module" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_fixture";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_fixture/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "S := use \"symtab\"\n" ++
+                "main := () i32 => {\n" ++
+                "  ip := S.init_interner(8)\n" ++
+                "  mp := S.init_table(8)\n" ++
+                "  mut ilen: i32 = 0\n" ++
+                "  mut mlen: i32 = 0\n" ++
+                "  a := S.intern_name(ip, ilen, 8, 501, 3)\n" ++
+                "  if a == ilen ilen += 1\n" ++
+                "  b := S.intern_name(ip, ilen, 8, 702, 5)\n" ++
+                "  if b == ilen ilen += 1\n" ++
+                "  mlen = S.bind_symbol(mp, mlen, 8, a, 17)\n" ++
+                "  mlen = S.bind_symbol(mp, mlen, 8, b, 23)\n" ++
+                "  x := S.lookup_symbol(mp, mlen, a, 0)\n" ++
+                "  y := S.lookup_symbol(mp, mlen, b, 0)\n" ++
+                "  x + y + ilen\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_fixture/symtab.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_interner := (cap: i32) i32 => C.StringInterner().init(cap)\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub intern_name := (ip: i32, ilen: i32, cap: i32, text_ptr: i32, text_len: i32) i32 => C.StringInterner().intern(ip, ilen, cap, text_ptr, text_len)\n" ++
+                "pub bind_symbol := (mp: i32, mlen: i32, cap: i32, id: i32, value: i32) i32 => C.StringMap().put(mp, mlen, cap, id, value)\n" ++
+                "pub lookup_symbol := (mp: i32, mlen: i32, id: i32, fallback: i32) i32 => C.StringMap().get_or(mp, mlen, id, fallback)\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_fixture/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_intern_name = false;
+    var saw_bind_symbol = false;
+    var saw_lookup_symbol = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_intern_name")) saw_intern_name = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_bind_symbol")) saw_bind_symbol = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_lookup_symbol")) saw_lookup_symbol = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_intern_name);
+    try std.testing.expect(saw_bind_symbol);
+    try std.testing.expect(saw_lookup_symbol);
+}
+
+test "lower supports scope-like symbol table rebind/remove fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_scope_like";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_like/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "S := use \"symtab\"\n" ++
+                "main := () i32 => {\n" ++
+                "  ip := S.init_interner(8)\n" ++
+                "  mp := S.init_table(8)\n" ++
+                "  mut ilen: i32 = 0\n" ++
+                "  mut mlen: i32 = 0\n" ++
+                "  a := S.intern_name(ip, ilen, 8, 111, 3)\n" ++
+                "  if a == ilen ilen += 1\n" ++
+                "  b := S.intern_name(ip, ilen, 8, 222, 4)\n" ++
+                "  if b == ilen ilen += 1\n" ++
+                "  c := S.intern_name(ip, ilen, 8, 111, 3)\n" ++
+                "  if c == ilen ilen += 1\n" ++
+                "  mlen = S.bind_symbol(mp, mlen, 8, a, 10)\n" ++
+                "  mlen = S.bind_symbol(mp, mlen, 8, b, 20)\n" ++
+                "  mlen = S.bind_symbol(mp, mlen, 8, a, 30)\n" ++
+                "  h1 := S.has_symbol(mp, mlen, a)\n" ++
+                "  mlen = S.remove_symbol(mp, mlen, b)\n" ++
+                "  h2 := S.has_symbol(mp, mlen, b)\n" ++
+                "  v1 := S.lookup_symbol(mp, mlen, a, 0)\n" ++
+                "  v2 := S.lookup_symbol(mp, mlen, b, 7)\n" ++
+                "  v1 + v2 + h1 + h2 + mlen + ilen\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_like/symtab.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_interner := (cap: i32) i32 => C.StringInterner().init(cap)\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub intern_name := (ip: i32, ilen: i32, cap: i32, text_ptr: i32, text_len: i32) i32 => C.StringInterner().intern(ip, ilen, cap, text_ptr, text_len)\n" ++
+                "pub bind_symbol := (mp: i32, mlen: i32, cap: i32, id: i32, value: i32) i32 => C.StringMap().put(mp, mlen, cap, id, value)\n" ++
+                "pub lookup_symbol := (mp: i32, mlen: i32, id: i32, fallback: i32) i32 => C.StringMap().get_or(mp, mlen, id, fallback)\n" ++
+                "pub has_symbol := (mp: i32, mlen: i32, id: i32) i32 => C.StringMap().contains(mp, mlen, id)\n" ++
+                "pub remove_symbol := (mp: i32, mlen: i32, id: i32) i32 => C.StringMap().remove(mp, mlen, id)\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_scope_like/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_has_symbol = false;
+    var saw_remove_symbol = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_has_symbol")) saw_has_symbol = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_remove_symbol")) saw_remove_symbol = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_has_symbol);
+    try std.testing.expect(saw_remove_symbol);
+}
+
+test "lower supports layered scope lookup fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_layered_scope";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_layered_scope/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "S := use \"symtab_scope\"\n" ++
+                "main := () i32 => {\n" ++
+                "  gp := S.init_table(8)\n" ++
+                "  lp := S.init_table(8)\n" ++
+                "  mut glen: i32 = 0\n" ++
+                "  mut llen: i32 = 0\n" ++
+                "  glen = S.bind(gp, glen, 8, 1, 11)\n" ++
+                "  llen = S.bind(lp, llen, 8, 2, 22)\n" ++
+                "  llen = S.bind(lp, llen, 8, 1, 33)\n" ++
+                "  llen = S.remove(lp, llen, 1)\n" ++
+                "  a := S.lookup_scoped(lp, llen, gp, glen, 1, 0)\n" ++
+                "  b := S.lookup_scoped(lp, llen, gp, glen, 2, 0)\n" ++
+                "  c := S.lookup_scoped(lp, llen, gp, glen, 3, 5)\n" ++
+                "  a + b + c\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_layered_scope/symtab_scope.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab_scope\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub bind := (p: i32, len: i32, cap: i32, id: i32, value: i32) i32 => C.StringMap().put(p, len, cap, id, value)\n" ++
+                "pub remove := (p: i32, len: i32, id: i32) i32 => C.StringMap().remove(p, len, id)\n" ++
+                "pub lookup_scoped := (lp: i32, llen: i32, gp: i32, glen: i32, id: i32, fallback: i32) i32 => {\n" ++
+                "  if C.StringMap().contains(lp, llen, id) >= 1 {\n" ++
+                "    C.StringMap().get_or(lp, llen, id, fallback)\n" ++
+                "  } else {\n" ++
+                "    C.StringMap().get_or(gp, glen, id, fallback)\n" ++
+                "  }\n" ++
+                "}\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_layered_scope/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_bind = false;
+    var saw_remove = false;
+    var saw_lookup_scoped = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_scope_bind")) saw_bind = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_scope_remove")) saw_remove = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_scope_lookup_scoped")) saw_lookup_scoped = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_bind);
+    try std.testing.expect(saw_remove);
+    try std.testing.expect(saw_lookup_scoped);
+}
+
+test "lower supports scope stack push/pop fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_scope_stack";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_stack/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "S := use \"symtab_stack\"\n" ++
+                "main := () i32 => {\n" ++
+                "  gp := S.init_table(8)\n" ++
+                "  mut glen: i32 = 0\n" ++
+                "  glen = S.bind(gp, glen, 8, 1, 10)\n" ++
+                "  lp := S.push_scope(8)\n" ++
+                "  mut llen: i32 = 0\n" ++
+                "  llen = S.bind(lp, llen, 8, 1, 44)\n" ++
+                "  x := S.lookup_scoped(lp, llen, gp, glen, 1, 0)\n" ++
+                "  S.pop_scope(lp, 8)\n" ++
+                "  y := S.lookup_scoped(0, 0, gp, glen, 1, 0)\n" ++
+                "  x + y\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_stack/symtab_stack.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab_stack\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub bind := (p: i32, len: i32, cap: i32, id: i32, value: i32) i32 => C.StringMap().put(p, len, cap, id, value)\n" ++
+                "pub lookup_scoped := (lp: i32, llen: i32, gp: i32, glen: i32, id: i32, fallback: i32) i32 => {\n" ++
+                "  if lp > 0 && C.StringMap().contains(lp, llen, id) >= 1 {\n" ++
+                "    C.StringMap().get_or(lp, llen, id, fallback)\n" ++
+                "  } else {\n" ++
+                "    C.StringMap().get_or(gp, glen, id, fallback)\n" ++
+                "  }\n" ++
+                "}\n" ++
+                "pub push_scope := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub pop_scope := (lp: i32, cap: i32) i32 => C.StringMap().deinit(lp, cap)\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_scope_stack/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_push_scope = false;
+    var saw_pop_scope = false;
+    var saw_lookup_scoped = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_stack_push_scope")) saw_push_scope = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_stack_pop_scope")) saw_pop_scope = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_stack_lookup_scoped")) saw_lookup_scoped = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_push_scope);
+    try std.testing.expect(saw_pop_scope);
+    try std.testing.expect(saw_lookup_scoped);
+}
+
+test "lower supports multi-scope chain lookup fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_scope_chain";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_chain/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "S := use \"symtab_chain\"\n" ++
+                "main := () i32 => {\n" ++
+                "  gp := S.init_table(8)\n" ++
+                "  p1 := S.init_table(8)\n" ++
+                "  p2 := S.init_table(8)\n" ++
+                "  mut glen: i32 = 0\n" ++
+                "  mut l1: i32 = 0\n" ++
+                "  mut l2: i32 = 0\n" ++
+                "  glen = S.bind(gp, glen, 8, 1, 10)\n" ++
+                "  l1 = S.bind(p1, l1, 8, 2, 20)\n" ++
+                "  l2 = S.bind(p2, l2, 8, 3, 30)\n" ++
+                "  a := S.lookup3(p2, l2, p1, l1, gp, glen, 3, 0)\n" ++
+                "  b := S.lookup3(p2, l2, p1, l1, gp, glen, 2, 0)\n" ++
+                "  c := S.lookup3(p2, l2, p1, l1, gp, glen, 1, 0)\n" ++
+                "  a + b + c\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_chain/symtab_chain.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab_chain\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub bind := (p: i32, len: i32, cap: i32, id: i32, value: i32) i32 => C.StringMap().put(p, len, cap, id, value)\n" ++
+                "pub lookup3 := (p2: i32, l2: i32, p1: i32, l1: i32, gp: i32, glen: i32, id: i32, fallback: i32) i32 => {\n" ++
+                "  if C.StringMap().contains(p2, l2, id) >= 1 {\n" ++
+                "    C.StringMap().get_or(p2, l2, id, fallback)\n" ++
+                "  } else if C.StringMap().contains(p1, l1, id) >= 1 {\n" ++
+                "    C.StringMap().get_or(p1, l1, id, fallback)\n" ++
+                "  } else {\n" ++
+                "    C.StringMap().get_or(gp, glen, id, fallback)\n" ++
+                "  }\n" ++
+                "}\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_scope_chain/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_lookup3 = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_chain_lookup3")) saw_lookup3 = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_lookup3);
+}
+
+test "lower supports repeated scope push pop cycles fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_scope_cycles";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_cycles/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "S := use \"symtab_cycles\"\n" ++
+                "main := () i32 => {\n" ++
+                "  gp := S.init_table(8)\n" ++
+                "  mut glen: i32 = 0\n" ++
+                "  glen = S.bind(gp, glen, 8, 1, 10)\n" ++
+                "  p1 := S.push_scope(8)\n" ++
+                "  mut l1: i32 = 0\n" ++
+                "  l1 = S.bind(p1, l1, 8, 1, 20)\n" ++
+                "  a := S.lookup_scoped(p1, l1, gp, glen, 1, 0)\n" ++
+                "  S.pop_scope(p1, 8)\n" ++
+                "  p2 := S.push_scope(8)\n" ++
+                "  mut l2: i32 = 0\n" ++
+                "  l2 = S.bind(p2, l2, 8, 2, 30)\n" ++
+                "  b := S.lookup_scoped(p2, l2, gp, glen, 1, 0)\n" ++
+                "  S.pop_scope(p2, 8)\n" ++
+                "  a + b\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_scope_cycles/symtab_cycles.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab_cycles\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub push_scope := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub pop_scope := (p: i32, cap: i32) i32 => C.StringMap().deinit(p, cap)\n" ++
+                "pub bind := (p: i32, len: i32, cap: i32, id: i32, value: i32) i32 => C.StringMap().put(p, len, cap, id, value)\n" ++
+                "pub lookup_scoped := (lp: i32, llen: i32, gp: i32, glen: i32, id: i32, fallback: i32) i32 => {\n" ++
+                "  if lp > 0 && C.StringMap().contains(lp, llen, id) >= 1 {\n" ++
+                "    C.StringMap().get_or(lp, llen, id, fallback)\n" ++
+                "  } else {\n" ++
+                "    C.StringMap().get_or(gp, glen, id, fallback)\n" ++
+                "  }\n" ++
+                "}\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_scope_cycles/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_push_scope = false;
+    var saw_pop_scope = false;
+    var saw_lookup_scoped = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_cycles_push_scope")) saw_push_scope = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_cycles_pop_scope")) saw_pop_scope = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_cycles_lookup_scoped")) saw_lookup_scoped = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_push_scope);
+    try std.testing.expect(saw_pop_scope);
+    try std.testing.expect(saw_lookup_scoped);
+}
+
+test "lower supports symbol table with seen set fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_seen_set";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_seen_set/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "S := use \"symtab_seen\"\n" ++
+                "main := () i32 => {\n" ++
+                "  mp := S.init_table(8)\n" ++
+                "  sp := S.init_seen(8)\n" ++
+                "  mut mlen: i32 = 0\n" ++
+                "  mut slen: i32 = 0\n" ++
+                "  r1 := S.declare_symbol(mp, mlen, sp, slen, 8, 10, 101)\n" ++
+                "  if r1 >= 0 { mlen = r1; slen += 1 }\n" ++
+                "  r2 := S.declare_symbol(mp, mlen, sp, slen, 8, 10, 202)\n" ++
+                "  S.lookup_symbol(mp, mlen, 10, r2)\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_seen_set/symtab_seen.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab_seen\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub init_seen := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub declare_symbol := (mp: i32, mlen: i32, sp: i32, slen: i32, cap: i32, id: i32, value: i32) i32 => {\n" ++
+                "  if C.StringMap().contains(sp, slen, id) >= 1 {\n" ++
+                "    -1\n" ++
+                "  } else {\n" ++
+                "    m2 := C.StringMap().put(mp, mlen, cap, id, value)\n" ++
+                "    C.StringMap().put(sp, slen, cap, id, 1)\n" ++
+                "    m2\n" ++
+                "  }\n" ++
+                "}\n" ++
+                "pub lookup_symbol := (mp: i32, mlen: i32, id: i32, fallback: i32) i32 => C.StringMap().get_or(mp, mlen, id, fallback)\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_seen_set/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_declare = false;
+    var saw_lookup = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_seen_declare_symbol")) saw_declare = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_seen_lookup_symbol")) saw_lookup = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_declare);
+    try std.testing.expect(saw_lookup);
+}
+
+test "lower supports duplicate diagnostics bookkeeping fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_duplicate_diag";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_duplicate_diag/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "D := use \"symtab_diag\"\n" ++
+                "main := () i32 => {\n" ++
+                "  mp := D.init_table(8)\n" ++
+                "  sp := D.init_seen(8)\n" ++
+                "  mut mlen: i32 = 0\n" ++
+                "  mut slen: i32 = 0\n" ++
+                "  mut dup: i32 = 0\n" ++
+                "  mut first: i32 = -1\n" ++
+                "  r1 := D.declare_symbol(mp, mlen, sp, slen, 8, 10, 101)\n" ++
+                "  if r1 >= 0 {\n" ++
+                "    mlen = r1\n" ++
+                "    slen += 1\n" ++
+                "  }\n" ++
+                "  r2 := D.declare_symbol(mp, mlen, sp, slen, 8, 10, 202)\n" ++
+                "  if r2 < 0 {\n" ++
+                "    dup += 1\n" ++
+                "    if first < 0 first = D.lookup_symbol(mp, mlen, 10, -1)\n" ++
+                "  }\n" ++
+                "  r3 := D.declare_symbol(mp, mlen, sp, slen, 8, 10, 303)\n" ++
+                "  if r3 < 0 dup += 1\n" ++
+                "  dup + first\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_duplicate_diag/symtab_diag.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab_diag\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub init_seen := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub declare_symbol := (mp: i32, mlen: i32, sp: i32, slen: i32, cap: i32, id: i32, value: i32) i32 => {\n" ++
+                "  if C.StringMap().contains(sp, slen, id) >= 1 {\n" ++
+                "    -1\n" ++
+                "  } else {\n" ++
+                "    m2 := C.StringMap().put(mp, mlen, cap, id, value)\n" ++
+                "    C.StringMap().put(sp, slen, cap, id, 1)\n" ++
+                "    m2\n" ++
+                "  }\n" ++
+                "}\n" ++
+                "pub lookup_symbol := (mp: i32, mlen: i32, id: i32, fallback: i32) i32 => C.StringMap().get_or(mp, mlen, id, fallback)\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_duplicate_diag/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_declare = false;
+    var saw_lookup = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_diag_declare_symbol")) saw_declare = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_diag_lookup_symbol")) saw_lookup = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_declare);
+    try std.testing.expect(saw_lookup);
+}
+
+test "lower supports batch declarations pass fixture" {
+    const alloc = std.testing.allocator;
+    const dir = "tmp_lower_ir_symbol_table_batch_pass";
+    std.fs.cwd().deleteTree(dir) catch {};
+    try std.fs.cwd().makePath(dir);
+    defer std.fs.cwd().deleteTree(dir) catch {};
+
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_batch_pass/main.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module main\n" ++
+                "B := use \"symtab_batch\"\n" ++
+                "main := () i32 => {\n" ++
+                "  mp := B.init_table(8)\n" ++
+                "  gs := B.init_seen(8)\n" ++
+                "  ls := B.init_seen(8)\n" ++
+                "  mut mlen: i32 = 0\n" ++
+                "  mut glen: i32 = 0\n" ++
+                "  mut llen: i32 = 0\n" ++
+                "  d1 := B.process_global(mp, mlen, gs, glen, 8, 1, 11, 1, 22, 2, 33)\n" ++
+                "  mlen = B.next_len(mlen, d1)\n" ++
+                "  glen = B.next_seen(glen, d1)\n" ++
+                "  d2 := B.process_local(mp, mlen, ls, llen, 8, 1, 44, 3, 55, 3, 66)\n" ++
+                "  mlen = B.next_len(mlen, d2)\n" ++
+                "  llen = B.next_seen(llen, d2)\n" ++
+                "  B.lookup(mp, mlen, 3, 0)\n" ++
+                "}\n",
+        );
+    }
+    {
+        var f = try std.fs.cwd().createFile("tmp_lower_ir_symbol_table_batch_pass/symtab_batch.dyn", .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(
+            "module symtab_batch\n" ++
+                "C := use \"std/collections\"\n" ++
+                "pub init_table := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub init_seen := (cap: i32) i32 => C.StringMap().init(cap)\n" ++
+                "pub step := (mp: i32, mlen: i32, sp: i32, slen: i32, cap: i32, id: i32, value: i32) i32 => {\n" ++
+                "  if C.StringMap().contains(sp, slen, id) >= 1 {\n" ++
+                "    -1\n" ++
+                "  } else {\n" ++
+                "    C.StringMap().put(mp, mlen, cap, id, value)\n" ++
+                "    C.StringMap().put(sp, slen, cap, id, 1)\n" ++
+                "    1\n" ++
+                "  }\n" ++
+                "}\n" ++
+                "pub process_global := (mp: i32, mlen: i32, sp: i32, slen: i32, cap: i32, id1: i32, v1: i32, id2: i32, v2: i32, id3: i32, v3: i32) i32 => {\n" ++
+                "  a := step(mp, mlen, sp, slen, cap, id1, v1)\n" ++
+                "  m1 := if a >= 0 mlen + 1 else mlen\n" ++
+                "  s1 := if a >= 0 slen + 1 else slen\n" ++
+                "  b := step(mp, m1, sp, s1, cap, id2, v2)\n" ++
+                "  m2 := if b >= 0 m1 + 1 else m1\n" ++
+                "  s2 := if b >= 0 s1 + 1 else s1\n" ++
+                "  c := step(mp, m2, sp, s2, cap, id3, v3)\n" ++
+                "  (if a < 0 1 else 0) + (if b < 0 1 else 0) + (if c < 0 1 else 0)\n" ++
+                "}\n" ++
+                "pub process_local := (mp: i32, mlen: i32, sp: i32, slen: i32, cap: i32, id1: i32, v1: i32, id2: i32, v2: i32, id3: i32, v3: i32) i32 => process_global(mp, mlen, sp, slen, cap, id1, v1, id2, v2, id3, v3)\n" ++
+                "pub next_len := (len: i32, dup: i32) i32 => len + (3 - dup)\n" ++
+                "pub next_seen := (len: i32, dup: i32) i32 => len + (3 - dup)\n" ++
+                "pub lookup := (mp: i32, mlen: i32, id: i32, fallback: i32) i32 => C.StringMap().get_or(mp, mlen, id, fallback)\n",
+        );
+    }
+
+    var g = try ModuleGraph.Self.buildFromEntryWithOptions(alloc, "tmp_lower_ir_symbol_table_batch_pass/main.dyn", .{ .std_dir = "std" });
+    defer g.deinit();
+
+    var p = try lowerMainProgram(alloc, &g);
+    defer Ir.deinitProgram(alloc, &p);
+
+    var saw_process_global = false;
+    var saw_process_local = false;
+    var saw_lookup = false;
+    for (p.functions) |fn_ir| {
+        if (!std.mem.eql(u8, fn_ir.name, "main")) continue;
+        for (fn_ir.instructions) |ins| {
+            switch (ins) {
+                .call => |c| switch (c.target) {
+                    .external_symbol => |es| {
+                        if (std.mem.eql(u8, es.name, "msymtab_batch_process_global")) saw_process_global = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_batch_process_local")) saw_process_local = true;
+                        if (std.mem.eql(u8, es.name, "msymtab_batch_lookup")) saw_lookup = true;
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(saw_process_global);
+    try std.testing.expect(saw_process_local);
+    try std.testing.expect(saw_lookup);
 }
 
 test "lower extern fn call as external symbol" {

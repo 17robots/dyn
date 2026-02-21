@@ -1,4 +1,4 @@
-module heap
+module allocator
 
 P := use "heap/page_allocator"
 
@@ -7,21 +7,3 @@ pub free := (ptr: i32, size: i32, align: i32) i32 => P.free(ptr, size, align)
 pub realloc := (ptr: i32, old_size: i32, old_align: i32, new_size: i32, new_align: i32) i32 => P.realloc(ptr, old_size, old_align, new_size, new_align)
 pub load_i32 := (ptr: i32, index: i32) i32 => P.load_i32(ptr, index)
 pub store_i32 := (ptr: i32, index: i32, value: i32) i32 => P.store_i32(ptr, index, value)
-
-pub Gpa := () type => struct {
-    init := (self: type) i32 => 0
-    deinit := (self: type) i32 => 0
-}
-
-pub Arena := () type => struct {
-    init := (self: type) i32 => 0
-    reset := (self: type) i32 => 0
-    deinit := (self: type) i32 => 0
-}
-
-pub FixedBuffer := () type => struct {
-    init := (self: type) i32 => 0
-    alloc := (self: type, size: i32, align: i32) i32 => (size - size) + (align - align)
-}
-
-pub default_allocator := () i32 => 1

@@ -1,0 +1,5 @@
+module print
+
+mprint_print := extern fn([]u8) i32
+
+pub print := (msg: []u8) i32 => mprint_print(msg)

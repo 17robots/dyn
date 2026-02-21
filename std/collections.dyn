@@ -3,36 +3,88 @@ module collections
 Mem := use "mem"
 
 pub ArrayList := (T: comp type) type => struct {
-    init := (self: type, initial_cap: i32) i32 => {
-        if initial_cap > 0 {
-            Mem.alloc(initial_cap * 8, 8)
-        } else {
-            0
-        }
-    }
+    Self := $self(),
+    init := (self: Self, initial_cap: i32) i32 => if initial_cap > 0 Mem.alloc(initial_cap * 8, 8) else 0,
+    deinit := (self: Self, ptr: i32, cap: i32) i32 => if ptr > 0 Mem.free(ptr, cap * 8, 8) else 0,
+    grow := (self: Self, ptr: i32, old_cap: i32, new_cap: i32) i32 => if new_cap > old_cap Mem.realloc(ptr, old_cap * 8, 8, new_cap * 8, 8) else 0,
+    ensure_cap := (self: Self, ptr: i32, cap: i32, need: i32) i32 => if need <= cap ptr else self.grow(ptr, cap, need),
+    append := (self: Self, len: i32, cap: i32, value: i32) i32 => if len < cap (value - value) + len + 1 else -1,
+    append_at := (self: Self, ptr: i32, len: i32, cap: i32, value: i32) i32 => if len < cap blk: {
+      Mem.store_i32(ptr, len, value)
+      break :blk len + 1
+    } else -1,
+    get := (self: Self, ptr: i32, idx: i32) i32 => Mem.load_i32(ptr, idx)
+}
 
-    deinit := (self: type, ptr: i32, cap: i32) i32 => {
-        if ptr > 0 {
-            Mem.free(ptr, cap * 8, 8)
-        } else {
-            0
-        }
+pub StringInterner := () type => struct {
+    Self := $self(),
+    init := (self: Self, cap: i32) i32 => if cap > 0 Mem.alloc(cap * 16, 8) else 0,
+    deinit := (self: Self, ptr: i32, cap: i32) i32 => if ptr > 0 Mem.free(ptr, cap * 16, 8) else 0,
+    find := (self: Self, ptr: i32, len: i32, text_ptr: i32, text_len: i32) i32 {
+      mut i: i32 = 0
+      mut out: i32 = -1
+      for i < len {
+        p := Mem.load_i32(ptr, i * 2)
+        n := Mem.load_i32(ptr, i * 2 + 1)
+        if out < 0 && p == text_ptr && n == text_len out = i
+        i += 1
+      }
+      return out
     }
-
-    grow := (self: type, ptr: i32, old_cap: i32, new_cap: i32) i32 => {
-        if new_cap > old_cap {
-            Mem.realloc(ptr, old_cap * 8, 8, new_cap * 8, 8)
-        } else {
-            ptr
-        }
+    intern := (self: Self, ptr: i32, len: i32, cap: i32, text_ptr: i32, text_len: i32) i32 {
+      id := self.find(ptr, len, text_ptr, text_len)
+      if id >= 0 return id else if len < cap {
+        Mem.store_i32(ptr, len * 2, text_ptr)
+        Mem.store_i32(ptr, len * 2 + 1, text_len)
+        return len
+      } else return -1
     }
+    get_ptr := (self: Self, ptr: i32, id: i32) i32 => Mem.load_i32(ptr, id * 2),
+    get_len := (self: Self, ptr: i32, id: i32) i32 => Mem.load_i32(ptr, id * 2 + 1)
+}
 
-    append := (self: type, len: i32, cap: i32, value: i32) i32 => {
-        if len < cap {
-            (value - value) + len + 1
-        } else {
-            -1
-        }
+pub StringMap := () type => struct {
+    Self := $self(),
+    init := (self: Self, cap: i32) i32 => if cap > 0 Mem.alloc(cap * 16, 8) else 0,
+    deinit := (self: Self, ptr: i32, cap: i32) i32 => if ptr > 0 Mem.free(ptr, cap * 16, 8) else 0,
+    find := (self: Self, ptr: i32, len: i32, key: i32) i32 {
+      mut i: i32 = 0
+      mut out: i32 = -1
+      for i < len {
+        k := Mem.load_i32(ptr, i * 2)
+        if out < 0 && k == key out = i
+        i += 1
+      }
+      return out
+    },
+    put := (self: Self, ptr: i32, len: i32, cap: i32, key: i32, value: i32) i32 {
+      idx := self.find(ptr, len, key)
+      if idx >= 0 {
+        Mem.store_i32(ptr, idx * 2 + 1, value)
+        return len
+      } else if len < cap {
+        Mem.store_i32(ptr, len * 2, key)
+        Mem.store_i32(ptr, len * 2 + 1, value)
+        return len + 1
+      } else return -1
+    },
+    get_or := (self: Self, ptr: i32, len: i32, key: i32, fallback: i32) i32 {
+      idx := self.find(ptr, len, key)
+      return if idx >= 0 Mem.load_i32(ptr, idx * 2 + 1) else fallback
+    },
+    contains := (self: Self, ptr: i32, len: i32, key: i32) i32 => if self.find(ptr, len, key) >= 0 1 else 0,
+    remove := (self: Self, ptr: i32, len: i32, key: i32) i32 {
+      idx := self.find(ptr, len, key)
+      if idx < 0 return len
+      mut i: i32 = idx
+      for i + 1 < len {
+        nk := Mem.load_i32(ptr, (i + 1) * 2)
+        nv := Mem.load_i32(ptr, (i + 1) * 2 + 1)
+        Mem.store_i32(ptr, i * 2, nk)
+        Mem.store_i32(ptr, i * 2 + 1, nv)
+        i += 1
+      }
+      return len - 1
     }
 }
 

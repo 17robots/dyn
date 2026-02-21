@@ -56,6 +56,10 @@ pub fn printDiagnostic(
         try writer.writeByte('^');
     }
     try writer.writeByte('\n');
+
+    if (std.mem.indexOf(u8, message, "(ptr,len)") != null) {
+        try writer.writeAll("note: slice values lower to ABI pair (ptr,len) at call boundaries\n");
+    }
 }
 
 pub fn lexerErrorMessage(kind: Tok.Kind) ?[]const u8 {
@@ -252,6 +256,33 @@ test "prints diagnostic with lazy source reload" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "src/__diag_test__.dyn:2:1: example error") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "beta") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "^^^^") != null);
+}
+
+test "prints slice abi note for ptr-len mismatch diagnostics" {
+    const alloc = std.testing.allocator;
+    var sm = SourceManager.init(alloc);
+    defer sm.deinit();
+
+    const file_path = "src/__diag_slice_abi_test__.dyn";
+    const sample = "x := sum(0)\n";
+
+    {
+        var f = try std.fs.cwd().createFile(file_path, .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(sample);
+    }
+    defer std.fs.cwd().deleteFile(file_path) catch {};
+
+    const id = try sm.addFileFromDisk(file_path, true);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+
+    const w = out.writer(alloc);
+    const span = Span{ .start = 8, .end = 8 };
+    try printDiagnostic(&sm, w, id, span, "function argument type mismatch: expected `[]i32 (ptr,len)`, got `i32`");
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "note: slice values lower to ABI pair (ptr,len) at call boundaries") != null);
 }
 
 test "reports lexer error token" {
