@@ -27,7 +27,7 @@ pub fn add_file(self: *Self, path: []const u8, text: []const u8, keep_text: bool
 }
 pub fn add_file_from_disk(self: *Self, path: []const u8, keep_text: bool) !FileId {
     const data = try std.fs.cwd().readFileAlloc(self.allocator, path, std.math.maxInt(usize));
-    defer if(!keep_text) self.allocator.free(data);
+    defer if (!keep_text) self.allocator.free(data);
     return if (keep_text) try self.add_file_owned(path, data) else try self.add_file(path, data, keep_text);
 }
 pub fn add_file_owned(self: *Self, path: []const u8, owned_text: []u8) !FileId {
@@ -40,5 +40,14 @@ pub fn add_file_owned(self: *Self, path: []const u8, owned_text: []u8) !FileId {
     try self.files.append(self.allocator, .{ .path = path_copy, .text = owned_text, .line_starts = line_starts });
     return @intCast(self.files.items.len - 1);
 }
+pub fn ensure_text_loaded(self: *Self, file_id: FileId) !void {
+    const f = &self.files.items[file_id];
+}
+fn build_line_starts(allocator: std.mem.Allocator, text: []const u8) ![]u32 {
+    var starts: std.ArrayList(u32) = .empty;
+    errdefer starts.deinit(allocator);
 
-fn build_line_starts(allocator: std.mem.Allocator, text: []const u8) ![]u32 {}
+    try starts.append(allocator, 0);
+    for (text, 0..) |b, i| if (b == '\n' and i + 1 < text.len) try starts.append(allocator, @intCast(i + 1));
+    return try starts.toOwnedSlice(allocator);
+}
