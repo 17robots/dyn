@@ -42,6 +42,37 @@ pub fn add_file_owned(self: *Self, path: []const u8, owned_text: []u8) !FileId {
 }
 pub fn ensure_text_loaded(self: *Self, file_id: FileId) !void {
     const f = &self.files.items[file_id];
+    if (f.text) |_| return;
+    f.text = try std.fs.cwd().readFileAlloc(self.allocator, f.path, std.math.maxInt(usize));
+}
+pub fn position_of(self: *Self, file_id: FileId, offset: usize) Position {
+    const starts = self.files.items[file_id].line_starts;
+    const idx = line_index_for_offset(starts, @as(u32, @intCast(offset)));
+    const line_start: usize = starts[idx];
+    return .{ .line = idx + 1, .column = (offset - line_start) + 1 };
+}
+pub fn line_slice(self: *Self, file_id: FileId, line: usize) ![]const u8 {
+    const f = self.files.items[file_id];
+    const text = f.text orelse return error.SourceNotLoaded;
+    if(line == 0 or line > f.line_starts.len) return error.InvalidLine;
+    const start: usize = f.line_starts[line - 1];
+    const end: usize = if(line < f.line_starts.len) f.line_starts[line] - 1 else text.len;
+    return text[start..end];
+}
+pub fn span_slice(self: *Self, file_id: FileId, span: Span) ![]const u8 {
+    const f = self.files.items[file_id];
+    const text = f.text orelse return error.SourceNotLoaded;
+    if(span.start > span.end or span.end >= text.len) return error.InvalidSpan;
+    return text[span.start..span.end + 1];
+}
+fn line_index_for_offset(starts: []const u32, offset: u32) usize {
+    var lo: usize = 0;
+    var hi: usize = starts.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (starts[mid] <= offset) lo = mid + 1 else hi = mid;
+    }
+    return if (lo == 0) 0 else lo - 1;
 }
 fn build_line_starts(allocator: std.mem.Allocator, text: []const u8) ![]u32 {
     var starts: std.ArrayList(u32) = .empty;
