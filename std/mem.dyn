@@ -1,18 +1,10 @@
 module mem
 
-A := use "mem/allocator"
+pub copy := (dst: usize, src: usize, size: usize) u32 => __dyn_mem_copy(dst, src, size)
 
-pub alloc := (size: i32, align: i32) i32 => A.alloc(size, align)
-pub free := (ptr: i32, size: i32, align: i32) i32 => A.free(ptr, size, align)
-pub realloc := (ptr: i32, old_size: i32, old_align: i32, new_size: i32, new_align: i32) i32 => A.realloc(ptr, old_size, old_align, new_size, new_align)
-pub load_i32 := (ptr: i32, index: i32) i32 => A.load_i32(ptr, index)
-pub store_i32 := (ptr: i32, index: i32, value: i32) i32 => A.store_i32(ptr, index, value)
+pub move := (dst: usize, src: usize, size: usize) u32 => __dyn_mem_move(dst, src, size)
 
-pub size_of_i32 := () i32 => 4
-pub align_of_i32 := () i32 => 4
+pub set := (dst: usize, byte_value: u32, size: usize) u32 =>
+    __dyn_mem_set(dst, byte_value, size)
 
-pub copy := (dst: i32, src: i32, count: i32) i32 => (dst - dst) + (src - src) + (count - count)
-pub set := (dst: i32, value: i32, count: i32) i32 => (dst - dst) + (value - value) + (count - count)
-pub move := (dst: i32, src: i32, count: i32) i32 => (dst - dst) + (src - src) + (count - count)
-
-pub allocator_ready := () i32 => 1
+pub eq := (lhs: usize, rhs: usize, size: usize) u32 => __dyn_mem_eq(lhs, rhs, size)

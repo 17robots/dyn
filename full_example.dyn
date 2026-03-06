@@ -1,0 +1,149 @@
+// comment
+module main
+main := () ! { // void type but marked as errorable with !
+  a := 1
+  b: i32 = 2
+  c: i31 = 3
+  mut d: u1 = false
+  d = true
+  e: u8 = 'a'
+  f: f32 = 1.0
+  g: f64 = 1.0
+  h: f128 = 1.0
+  i: [10]i32 = [1,2,3,4,5,5,4,3,2,1]
+  j: [1]f32 = [1.0]
+  k: []i32 = i[0..2]
+  l: []f32 = j[..]
+  m := "hello world" // []u8
+  n: ?i32 = 1
+  o: ?i32 = null // this would technically be an error because anything assigned null should be mutable
+  p: *i32 = &a
+  q: *mut u1 = &d // only possible because d was marked as mut, this is the default type if the variable is mut as well
+  q.* = false
+  r := enum {
+    variant1,
+    variant2: i32,
+    variant3: enum {
+      inner1,
+      inner2: f32,
+      inner3: []u8
+    }
+  }
+  s := struct {
+    item1: u32,
+    item2: []u8,
+    item3: []i32,
+    new := () s => .{}
+    do_thing := (self: u) {},
+    fn_ptr := *fn(self: u),
+  }
+  {
+    t := "only valid here"
+  }
+  // t no longer valid
+  mut total = 0
+  for 0..10: |u| {
+    total += u
+  }
+  for 0..10: |v| total += v
+  for i: |v| total -= v // can loop through arrays
+  for total < 10: total += 1 // can use it with boolean expressions
+  for total > 0: { total -= 1 } // can use it with boolean expressions
+  for {
+    break // this is an infinite loop please break this
+  }
+  if total == 10 {} else if total == 9 {} else {}
+  if n: |v| {} // checking and grabbing value from a nullable type, if null, wont run this
+  if n: |_| {} // checking and discarding value from a nullable type, if null, wont run this
+  v := if total % 2 == 0 total / 2 else (total - 1) / 2 // ifs can be expressions, need all branches to evaluate to the same kind of value (ints, floats, etc)
+  match total {
+    0..1: {},
+    2..10: {},
+    _: {} // need this if the match isnt exhaustive
+  }
+  w := match total {
+    1: 1,
+    _: null // types need to match except for when it's null since it can be evaluated as ?i32, but if you type w as i32 then this will be an error
+  }
+  res := r.variant3(.inner2(2.0))
+  match res {
+    .variant1: {},
+    .variant2: |val| {},
+    .variant3: |val| match val {
+      .inner1: {},
+      .inner2: |val2| {},
+      .inner3: |val2| {},
+    }
+    _: {}, // again only needed if not exhaustive
+  }
+  x := add(add2(add3(x: 1), add3(y: 1)), add3())
+  internal_fn := () {}
+  internal_fn()
+  y := s.new()
+  y.do_thing()
+
+  defer {} // last
+  defer {} // second or first
+  defer |e| {} // runs first but only if error
+  A := divide(1,0) or 0
+  B := divide(1,1).!
+  C := divide(1,0) or {
+    break 0
+  }
+  D := divide(1,0) or |err| {
+    // do something with err
+  }
+  E := n or {
+    break 1
+  }
+  F := n.?
+  G := n or 1
+  H := IntList.init()
+  use_f64 := true
+  calc_pi := () comp if use_f64 f64 else f32 => 3.14
+  pi := calc_pi()
+  pi2 := comp calc_pi()
+  inline for 0..10: |z| {
+    // do something and it will unroll wih z being passed in as the val to it
+  }
+  inline_fn() // will have its contents pasted here in its own block
+
+  for 0..10: |z| blk: {
+    for 0..10: |z2| if z2 == 1 break :blk
+  }
+  I := usable_in_main
+  J := use "other"
+  K := I.usable_outside
+}
+
+add := (x: i32, y: i32) i32 { return x + y }
+add2 := (x: i32, y: i32) i32 => x + y // only doable if the only line in the body would have been return [expression]
+add3 := (x: i32 = 0, y: i32 = 0) => x + y // can have default values on all or only 1 of the parameters
+
+DivideError1 := enum { // errors can be either structs or enums
+  UhOh
+}
+DivideError2 := enum {
+  DivideByzero
+}
+divide := (x: f32, y: f32) f32!DivideError1,DivideError2 => if y == 0 .DivideByZero else x / y
+
+List := (T: type) type => struct {
+  init := () $Self() => .{}
+}
+List2 := (T: comp type) type => struct {}
+
+IntList := List(i32)
+inline_fn := inline () i32 => 1
+
+hmm_type := get_type(){}
+hmm := hmm_type.vals.?.*.current_val or hmm_type.vals.?.*.other_vals[1]
+
+get_type := () type {
+  return struct {
+    vals: ?*struct {
+      current_val: ?*type,
+      other_vals: []*type
+    }
+  }
+}

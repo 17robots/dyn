@@ -1,91 +1,85 @@
 module collections
 
-Mem := use "mem"
+heap := use "heap"
+Allocator := heap.Allocator
+AllocError := heap.AllocError
 
-pub ArrayList := (T: comp type) type => struct {
-    Self := $self(),
-    init := (self: Self, initial_cap: i32) i32 => if initial_cap > 0 Mem.alloc(initial_cap * 8, 8) else 0,
-    deinit := (self: Self, ptr: i32, cap: i32) i32 => if ptr > 0 Mem.free(ptr, cap * 8, 8) else 0,
-    grow := (self: Self, ptr: i32, old_cap: i32, new_cap: i32) i32 => if new_cap > old_cap Mem.realloc(ptr, old_cap * 8, 8, new_cap * 8, 8) else 0,
-    ensure_cap := (self: Self, ptr: i32, cap: i32, need: i32) i32 => if need <= cap ptr else self.grow(ptr, cap, need),
-    append := (self: Self, len: i32, cap: i32, value: i32) i32 => if len < cap (value - value) + len + 1 else -1,
-    append_at := (self: Self, ptr: i32, len: i32, cap: i32, value: i32) i32 => if len < cap blk: {
-      Mem.store_i32(ptr, len, value)
-      break :blk len + 1
-    } else -1,
-    get := (self: Self, ptr: i32, idx: i32) i32 => Mem.load_i32(ptr, idx)
-}
+pub Vec := (T: comp type) type => struct {
+    items: []T,
+    len: usize,
+    cap: usize,
+    allocator: Allocator,
 
-pub StringInterner := () type => struct {
-    Self := $self(),
-    init := (self: Self, cap: i32) i32 => if cap > 0 Mem.alloc(cap * 16, 8) else 0,
-    deinit := (self: Self, ptr: i32, cap: i32) i32 => if ptr > 0 Mem.free(ptr, cap * 16, 8) else 0,
-    find := (self: Self, ptr: i32, len: i32, text_ptr: i32, text_len: i32) i32 {
-      mut i: i32 = 0
-      mut out: i32 = -1
-      for i < len {
-        p := Mem.load_i32(ptr, i * 2)
-        n := Mem.load_i32(ptr, i * 2 + 1)
-        if out < 0 && p == text_ptr && n == text_len out = i
-        i += 1
-      }
-      return out
-    }
-    intern := (self: Self, ptr: i32, len: i32, cap: i32, text_ptr: i32, text_len: i32) i32 {
-      id := self.find(ptr, len, text_ptr, text_len)
-      if id >= 0 return id else if len < cap {
-        Mem.store_i32(ptr, len * 2, text_ptr)
-        Mem.store_i32(ptr, len * 2 + 1, text_len)
-        return len
-      } else return -1
-    }
-    get_ptr := (self: Self, ptr: i32, id: i32) i32 => Mem.load_i32(ptr, id * 2),
-    get_len := (self: Self, ptr: i32, id: i32) i32 => Mem.load_i32(ptr, id * 2 + 1)
-}
-
-pub StringMap := () type => struct {
-    Self := $self(),
-    init := (self: Self, cap: i32) i32 => if cap > 0 Mem.alloc(cap * 16, 8) else 0,
-    deinit := (self: Self, ptr: i32, cap: i32) i32 => if ptr > 0 Mem.free(ptr, cap * 16, 8) else 0,
-    find := (self: Self, ptr: i32, len: i32, key: i32) i32 {
-      mut i: i32 = 0
-      mut out: i32 = -1
-      for i < len {
-        k := Mem.load_i32(ptr, i * 2)
-        if out < 0 && k == key out = i
-        i += 1
-      }
-      return out
+    from_parts := (allocator: Allocator, ptr: usize, len: usize, cap: usize) Vec(T) => {
+        base := $as(*mut T, ptr)
+        return .{
+            items: base[0..len],
+            len: len,
+            cap: cap,
+            allocator: allocator,
+        }
     },
-    put := (self: Self, ptr: i32, len: i32, cap: i32, key: i32, value: i32) i32 {
-      idx := self.find(ptr, len, key)
-      if idx >= 0 {
-        Mem.store_i32(ptr, idx * 2 + 1, value)
-        return len
-      } else if len < cap {
-        Mem.store_i32(ptr, len * 2, key)
-        Mem.store_i32(ptr, len * 2 + 1, value)
-        return len + 1
-      } else return -1
-    },
-    get_or := (self: Self, ptr: i32, len: i32, key: i32, fallback: i32) i32 {
-      idx := self.find(ptr, len, key)
-      return if idx >= 0 Mem.load_i32(ptr, idx * 2 + 1) else fallback
-    },
-    contains := (self: Self, ptr: i32, len: i32, key: i32) i32 => if self.find(ptr, len, key) >= 0 1 else 0,
-    remove := (self: Self, ptr: i32, len: i32, key: i32) i32 {
-      idx := self.find(ptr, len, key)
-      if idx < 0 return len
-      mut i: i32 = idx
-      for i + 1 < len {
-        nk := Mem.load_i32(ptr, (i + 1) * 2)
-        nv := Mem.load_i32(ptr, (i + 1) * 2 + 1)
-        Mem.store_i32(ptr, i * 2, nk)
-        Mem.store_i32(ptr, i * 2 + 1, nv)
-        i += 1
-      }
-      return len - 1
-    }
-}
 
-pub ready := () i32 => 1
+    new := (allocator: Allocator) Vec(T) => Vec(T).from_parts(allocator, 0, 0, 0),
+
+    items_ptr := (self: Vec(T)) usize => if self.cap == 0 0 else $as(usize, self.items),
+
+    items_len := (self: Vec(T)) usize => self.len,
+
+    ptr := (self: Vec(T), idx: usize) usize =>
+        self.items_ptr() + (idx * comp $sizeof(T)),
+
+    reserve := (self: Vec(T), new_cap: usize) Vec(T)!AllocError => {
+        if new_cap <= self.cap return self
+        old_ptr := self.items_ptr()
+        next_ptr := if old_ptr == 0
+            self.allocator.alloc(T, new_cap) or |err| return err
+        else
+            self.allocator.realloc(T, old_ptr, self.cap, new_cap) or |err| return err
+        return Vec(T).from_parts(self.allocator, next_ptr, self.len, new_cap)
+    },
+
+    clear := (self: Vec(T)) Vec(T) =>
+        Vec(T).from_parts(self.allocator, self.items_ptr(), 0, self.cap),
+
+    deinit := (self: Vec(T)) u32 => {
+        if self.cap == 0 return 1
+        return self.allocator.free(T, self.items_ptr(), self.cap)
+    },
+
+    push_bytes := (self: Vec(T), src: usize) Vec(T)!AllocError => {
+        next := if self.len == self.cap
+            self.reserve(if self.cap == 0 4 else self.cap * 2) or |err| return err
+        else
+            self
+        if next.len == next.cap return next
+        elem_size := comp $sizeof(T)
+        dst := next.items_ptr() + (next.len * elem_size)
+        __dyn_mem_copy(dst, src, elem_size)
+        return Vec(T).from_parts(next.allocator, next.items_ptr(), next.len + 1, next.cap)
+    },
+
+    get_bytes := (self: Vec(T), idx: usize, dst: usize) u32 => {
+        if idx >= self.len return 0
+        elem_size := comp $sizeof(T)
+        src := self.items_ptr() + (idx * elem_size)
+        __dyn_mem_copy(dst, src, elem_size)
+        return 1
+    },
+
+    set_bytes := (self: Vec(T), idx: usize, src: usize) u32 => {
+        if idx >= self.len return 0
+        elem_size := comp $sizeof(T)
+        dst := self.items_ptr() + (idx * elem_size)
+        __dyn_mem_copy(dst, src, elem_size)
+        return 1
+    },
+
+    pop_bytes := (self: Vec(T), dst: usize) Vec(T) => {
+        if self.len == 0 return self
+        elem_size := comp $sizeof(T)
+        src := self.items_ptr() + ((self.len - 1) * elem_size)
+        __dyn_mem_copy(dst, src, elem_size)
+        return Vec(T).from_parts(self.allocator, self.items_ptr(), self.len - 1, self.cap)
+    },
+}

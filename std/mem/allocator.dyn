@@ -1,9 +1,0 @@
-module allocator
-
-P := use "heap/page_allocator"
-
-pub alloc := (size: i32, align: i32) i32 => P.alloc(size, align)
-pub free := (ptr: i32, size: i32, align: i32) i32 => P.free(ptr, size, align)
-pub realloc := (ptr: i32, old_size: i32, old_align: i32, new_size: i32, new_align: i32) i32 => P.realloc(ptr, old_size, old_align, new_size, new_align)
-pub load_i32 := (ptr: i32, index: i32) i32 => P.load_i32(ptr, index)
-pub store_i32 := (ptr: i32, index: i32, value: i32) i32 => P.store_i32(ptr, index, value)

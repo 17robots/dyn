@@ -1,0 +1,10 @@
+pub mod ast;
+pub mod backend;
+pub mod diagnostics;
+pub mod hir;
+pub mod lexer;
+pub mod mir;
+pub mod module_resolver;
+pub mod parser;
+pub mod pipeline;
+pub mod sema;
