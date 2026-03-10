@@ -4,18 +4,11 @@ pub AllocError := enum {
     OutOfMemory,
 }
 
-pub AllocatorOps := struct {
-    alloc_fn: *fn(ctx: usize, size: usize, align: usize) usize,
-    realloc_fn: *fn(ctx: usize, ptr: usize, old_size: usize, new_size: usize, align: usize) usize,
-    free_fn: *fn(ctx: usize, ptr: usize, size: usize, align: usize) u32,
-}
-
 pub Allocator := struct {
     ctx: usize,
-    ops: AllocatorOps,
 
     alloc_bytes := (self: Allocator, size: usize, align: usize) usize!AllocError => {
-        ptr := self.ops.alloc_fn(self.ctx, size, align)
+        ptr := $alloc_with(self.ctx, size, align)
         if ptr == 0 .OutOfMemory else ptr
     },
 
@@ -27,19 +20,19 @@ pub Allocator := struct {
             new_size: usize,
             align: usize,
         ) usize!AllocError => {
-            next := self.ops.realloc_fn(self.ctx, ptr, old_size, new_size, align)
+            next := $realloc_with(self.ctx, ptr, old_size, new_size, align)
             if next == 0 .OutOfMemory else next
         },
 
     free_bytes := (self: Allocator, ptr: usize, size: usize, align: usize) u32 =>
-        self.ops.free_fn(self.ctx, ptr, size, align),
+        $free_with(self.ctx, ptr, size, align),
 
-    alloc := (self: Allocator, T: comp type, count: usize) usize!AllocError => {
+    alloc := inline (self: Allocator, T: comp type, count: usize) usize!AllocError => {
         size := count * comp $sizeof(T)
         self.alloc_bytes(size, comp $alignof(T))
     },
 
-    realloc :=
+    realloc := inline
         (
             self: Allocator,
             T: comp type,
@@ -52,67 +45,45 @@ pub Allocator := struct {
             self.realloc_bytes(ptr, old_size, new_size, comp $alignof(T))
         },
 
-    free := (self: Allocator, T: comp type, ptr: usize, count: usize) u32 => {
+    free := inline (self: Allocator, T: comp type, ptr: usize, count: usize) u32 => {
         size := count * comp $sizeof(T)
         self.free_bytes(ptr, size, comp $alignof(T))
     },
 
-    alloc_one := (self: Allocator, T: comp type) usize!AllocError => self.alloc(T, 1),
+    alloc_one := inline (self: Allocator, T: comp type) usize!AllocError => self.alloc(T, 1),
 
-    free_one := (self: Allocator, T: comp type, ptr: usize) u32 => self.free(T, ptr, 1),
+    free_one := inline (self: Allocator, T: comp type, ptr: usize) u32 => self.free(T, ptr, 1),
 }
 
 pub CAllocator := () type => struct {
     handle: usize,
 
-    new := () CAllocator => CAllocator{ handle: __dyn_c_allocator() },
+    new := () CAllocator => CAllocator{ handle: $c_allocator() },
 
-    allocator := (self: CAllocator) Allocator => Allocator{
-        ctx: self.handle,
-        ops: AllocatorOps{
-            alloc_fn: __dyn_alloc_with,
-            realloc_fn: __dyn_realloc_with,
-            free_fn: __dyn_free_with,
-        },
-    },
+    allocator := (self: CAllocator) Allocator => Allocator{ ctx: self.handle },
 }
 
 pub FailingAllocator := () type => struct {
     handle: usize,
 
-    new := () FailingAllocator => FailingAllocator{ handle: __dyn_test_failing_allocator() },
+    new := () FailingAllocator => FailingAllocator{ handle: $test_failing_allocator() },
 
     set_fail_after := (self: FailingAllocator, remaining_successes: usize) u32 => {
-        self
-        __dyn_test_set_fail_after(remaining_successes)
+        $test_set_fail_after(remaining_successes)
     },
 
-    allocator := (self: FailingAllocator) Allocator => Allocator{
-        ctx: self.handle,
-        ops: AllocatorOps{
-            alloc_fn: __dyn_alloc_with,
-            realloc_fn: __dyn_realloc_with,
-            free_fn: __dyn_free_with,
-        },
-    },
+    allocator := (self: FailingAllocator) Allocator => Allocator{ ctx: self.handle },
 }
 
 pub ArenaAllocator := () type => struct {
     handle: usize,
 
     new := (backing: Allocator) ArenaAllocator =>
-        ArenaAllocator{ handle: __dyn_arena_allocator(backing.ctx) },
+        ArenaAllocator{ handle: $arena_allocator(backing.ctx) },
 
-    reset := (self: ArenaAllocator) u32 => __dyn_arena_reset(self.handle),
+    reset := (self: ArenaAllocator) u32 => $arena_reset(self.handle),
 
-    deinit := (self: ArenaAllocator) u32 => __dyn_arena_deinit(self.handle),
+    deinit := (self: ArenaAllocator) u32 => $arena_deinit(self.handle),
 
-    allocator := (self: ArenaAllocator) Allocator => Allocator{
-        ctx: self.handle,
-        ops: AllocatorOps{
-            alloc_fn: __dyn_alloc_with,
-            realloc_fn: __dyn_realloc_with,
-            free_fn: __dyn_free_with,
-        },
-    },
+    allocator := (self: ArenaAllocator) Allocator => Allocator{ ctx: self.handle },
 }

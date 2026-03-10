@@ -1,6 +1,6 @@
 module collections
 
-heap := use "heap"
+heap := use "std/heap"
 Allocator := heap.Allocator
 AllocError := heap.AllocError
 
@@ -9,42 +9,107 @@ pub Vec := (T: comp type) type => struct {
     len: usize,
     cap: usize,
     allocator: Allocator,
+    elem_size: usize,
+    elem_align: usize,
 
-    from_parts := (allocator: Allocator, ptr: usize, len: usize, cap: usize) Vec(T) => {
+    from_parts :=
+        (
+            allocator: Allocator,
+            ptr: usize,
+            len: usize,
+            cap: usize,
+            elem_size: usize,
+            elem_align: usize,
+        ) Vec(T) => {
         base := $as(*mut T, ptr)
         return .{
             items: base[0..len],
             len: len,
             cap: cap,
             allocator: allocator,
+            elem_size: elem_size,
+            elem_align: elem_align,
         }
     },
 
-    new := (allocator: Allocator) Vec(T) => Vec(T).from_parts(allocator, 0, 0, 0),
+    new := inline (allocator: Allocator) Vec(T) =>
+        Vec(T).from_parts(
+            allocator,
+            0,
+            0,
+            0,
+            comp $sizeof(T),
+            comp $alignof(T),
+        ),
 
-    items_ptr := (self: Vec(T)) usize => if self.cap == 0 0 else $as(usize, self.items),
+    items_ptr := (self: Vec(T)) usize => $as(usize, self.items),
 
     items_len := (self: Vec(T)) usize => self.len,
 
     ptr := (self: Vec(T), idx: usize) usize =>
-        self.items_ptr() + (idx * comp $sizeof(T)),
+        {
+            if Vec(T).mul_overflow(idx, self.elem_size) != 0 return 0
+            base := self.items_ptr()
+            offset := idx * self.elem_size
+            addr := base + offset
+            if addr < base return 0
+            return addr
+        },
+
+    mul_overflow := (lhs: usize, rhs: usize) u32 => {
+        if lhs == 0 return 0
+        if rhs == 0 return 0
+        product := lhs * rhs
+        if product / rhs != lhs return 1
+        return 0
+    },
 
     reserve := (self: Vec(T), new_cap: usize) Vec(T)!AllocError => {
         if new_cap <= self.cap return self
+        if self.elem_size == 0
+            return Vec(T).from_parts(
+                self.allocator,
+                self.items_ptr(),
+                self.len,
+                new_cap,
+                self.elem_size,
+                self.elem_align,
+            )
+        if Vec(T).mul_overflow(self.cap, self.elem_size) != 0 return .OutOfMemory
+        if Vec(T).mul_overflow(new_cap, self.elem_size) != 0 return .OutOfMemory
         old_ptr := self.items_ptr()
+        old_size := self.cap * self.elem_size
+        new_size := new_cap * self.elem_size
         next_ptr := if old_ptr == 0
-            self.allocator.alloc(T, new_cap) or |err| return err
+            self.allocator.alloc_bytes(new_size, self.elem_align)
         else
-            self.allocator.realloc(T, old_ptr, self.cap, new_cap) or |err| return err
-        return Vec(T).from_parts(self.allocator, next_ptr, self.len, new_cap)
+            self.allocator.realloc_bytes(old_ptr, old_size, new_size, self.elem_align)
+        if next_ptr == .OutOfMemory return .OutOfMemory
+        return Vec(T).from_parts(
+            self.allocator,
+            next_ptr,
+            self.len,
+            new_cap,
+            self.elem_size,
+            self.elem_align,
+        )
     },
 
     clear := (self: Vec(T)) Vec(T) =>
-        Vec(T).from_parts(self.allocator, self.items_ptr(), 0, self.cap),
+        Vec(T).from_parts(
+            self.allocator,
+            self.items_ptr(),
+            0,
+            self.cap,
+            self.elem_size,
+            self.elem_align,
+        ),
 
     deinit := (self: Vec(T)) u32 => {
         if self.cap == 0 return 1
-        return self.allocator.free(T, self.items_ptr(), self.cap)
+        if self.elem_size == 0 return 1
+        if self.items_ptr() == 0 return 1
+        return self.allocator.free_bytes(self.items_ptr(), self.cap * self.elem_size, self.elem_align)
     },
 
     push_bytes := (self: Vec(T), src: usize) Vec(T)!AllocError => {
@@ -53,33 +118,191 @@ pub Vec := (T: comp type) type => struct {
         else
             self
         if next.len == next.cap return next
-        elem_size := comp $sizeof(T)
-        dst := next.items_ptr() + (next.len * elem_size)
-        __dyn_mem_copy(dst, src, elem_size)
-        return Vec(T).from_parts(next.allocator, next.items_ptr(), next.len + 1, next.cap)
+        if next.elem_size == 0
+            return Vec(T).from_parts(
+                next.allocator,
+                next.items_ptr(),
+                next.len + 1,
+                next.cap,
+                next.elem_size,
+                next.elem_align,
+            )
+        elem_size := next.elem_size
+        dst := next.ptr(next.len)
+        if dst == 0 return .OutOfMemory
+        $mem_copy(dst, src, elem_size)
+        return Vec(T).from_parts(
+            next.allocator,
+            next.items_ptr(),
+            next.len + 1,
+            next.cap,
+            next.elem_size,
+            next.elem_align,
+        )
     },
 
     get_bytes := (self: Vec(T), idx: usize, dst: usize) u32 => {
         if idx >= self.len return 0
-        elem_size := comp $sizeof(T)
-        src := self.items_ptr() + (idx * elem_size)
-        __dyn_mem_copy(dst, src, elem_size)
+        elem_size := self.elem_size
+        if elem_size == 0 return 1
+        src := self.ptr(idx)
+        if src == 0 return 0
+        $mem_copy(dst, src, elem_size)
         return 1
     },
 
     set_bytes := (self: Vec(T), idx: usize, src: usize) u32 => {
         if idx >= self.len return 0
-        elem_size := comp $sizeof(T)
-        dst := self.items_ptr() + (idx * elem_size)
-        __dyn_mem_copy(dst, src, elem_size)
+        elem_size := self.elem_size
+        if elem_size == 0 return 1
+        dst := self.ptr(idx)
+        if dst == 0 return 0
+        $mem_copy(dst, src, elem_size)
         return 1
     },
 
     pop_bytes := (self: Vec(T), dst: usize) Vec(T) => {
         if self.len == 0 return self
-        elem_size := comp $sizeof(T)
-        src := self.items_ptr() + ((self.len - 1) * elem_size)
-        __dyn_mem_copy(dst, src, elem_size)
-        return Vec(T).from_parts(self.allocator, self.items_ptr(), self.len - 1, self.cap)
+        elem_size := self.elem_size
+        if elem_size != 0 {
+            src := self.ptr(self.len - 1)
+            if src == 0 return self
+            $mem_copy(dst, src, elem_size)
+        }
+        return Vec(T).from_parts(
+            self.allocator,
+            self.items_ptr(),
+            self.len - 1,
+            self.cap,
+            self.elem_size,
+            self.elem_align,
+        )
     },
+}
+
+pub Stack := (T: comp type) type => struct {
+    data: Vec(T),
+
+    new := inline (allocator: Allocator) Stack(T) => .{
+        data: Vec(T).from_parts(
+            allocator,
+            0,
+            0,
+            0,
+            comp $sizeof(T),
+            comp $alignof(T),
+        ),
+    },
+
+    len := inline (self: Stack(T)) usize => self.data.items_len(),
+
+    push_bytes := (self: Stack(T), src: usize) Stack(T)!AllocError => {
+        next := self.data.push_bytes(src) or |err| return err
+        return .{ data: next }
+    },
+
+    peek_bytes := (self: Stack(T), dst: usize) u32 => {
+        count := self.data.items_len()
+        if count == 0 return 0
+        return self.data.get_bytes(count - 1, dst)
+    },
+
+    pop_bytes := (self: Stack(T), dst: usize) Stack(T) =>
+        .{ data: self.data.pop_bytes(dst) },
+
+    clear := (self: Stack(T)) Stack(T) => .{ data: self.data.clear() },
+
+    deinit := (self: Stack(T)) u32 => self.data.deinit(),
+}
+
+pub Queue := (T: comp type) type => struct {
+    data: Vec(T),
+    head: usize,
+
+    new := inline (allocator: Allocator) Queue(T) => .{
+        data: Vec(T).from_parts(
+            allocator,
+            0,
+            0,
+            0,
+            comp $sizeof(T),
+            comp $alignof(T),
+        ),
+        head: 0,
+    },
+
+    len := inline (self: Queue(T)) usize => {
+        total := self.data.len
+        if self.head >= total return 0
+        return total - self.head
+    },
+
+    compact := (self: Queue(T)) Queue(T) => {
+        total := self.data.items_len()
+        if self.head == 0 return self
+        if self.head >= total return .{
+            data: self.data.clear(),
+            head: 0,
+        }
+
+        remaining := total - self.head
+        elem_size := self.data.elem_size
+        if elem_size != 0 {
+            if Vec(T).mul_overflow(remaining, elem_size) != 0
+                return .{
+                    data: self.data.clear(),
+                    head: 0,
+                }
+            src := self.data.ptr(self.head)
+            dst := self.data.items_ptr()
+            if src == 0 return .{ data: self.data.clear(), head: 0 }
+            $mem_move(dst, src, remaining * elem_size)
+        }
+        next_data := Vec(T).from_parts(
+            self.data.allocator,
+            self.data.items_ptr(),
+            remaining,
+            self.data.cap,
+            self.data.elem_size,
+            self.data.elem_align,
+        )
+        return .{
+            data: next_data,
+            head: 0,
+        }
+    },
+
+    enqueue_bytes := (self: Queue(T), src: usize) Queue(T)!AllocError => {
+        maybe_compacted := if (self.head > 0) && (self.data.items_len() == self.data.cap)
+            self.compact()
+        else
+            self
+        next_data := maybe_compacted.data.push_bytes(src) or |err| return err
+        return .{
+            data: next_data,
+            head: maybe_compacted.head,
+        }
+    },
+
+    peek_bytes := (self: Queue(T), dst: usize) u32 => {
+        if self.head >= self.data.items_len() return 0
+        return self.data.get_bytes(self.head, dst)
+    },
+
+    dequeue_bytes := (self: Queue(T), dst: usize) Queue(T) => {
+        if self.head >= self.data.items_len() return self
+        ok := self.data.get_bytes(self.head, dst)
+        if ok == 0 return self
+        return .{
+            data: self.data,
+            head: self.head + 1,
+        }
+    },
+
+    clear := (self: Queue(T)) Queue(T) => .{
+        data: self.data.clear(),
+        head: 0,
+    },
+
+    deinit := (self: Queue(T)) u32 => self.data.deinit(),
 }

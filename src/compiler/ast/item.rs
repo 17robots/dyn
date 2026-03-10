@@ -16,8 +16,8 @@ pub struct ModuleDecl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
-    Binding(Binding),
-    ExprStmt(Expr),
+    Binding(Box<Binding>),
+    ExprStmt(Box<Expr>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

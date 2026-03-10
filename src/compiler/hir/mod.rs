@@ -101,6 +101,7 @@ pub enum HirExprKind {
     Let {
         name: String,
         mutable: bool,
+        type_hint: Option<String>,
         value: Box<HirExpr>,
     },
     If {
@@ -150,6 +151,7 @@ pub enum HirExprKind {
         params: Vec<String>,
         param_types: Vec<Option<String>>,
         param_defaults: Vec<Option<HirExpr>>,
+        has_explicit_return_type: bool,
         body: Box<HirExpr>,
     },
     Unknown,

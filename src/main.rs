@@ -1,5 +1,5 @@
 use std::env;
-use std::process;
+use std::process::{self, Command};
 
 use dyn_compiler::compiler::backend::BuildOptLevel;
 use dyn_compiler::compiler::diagnostics::Diagnostic;
@@ -14,6 +14,11 @@ fn main() {
 
     if matches!(args.first().map(String::as_str), Some("build")) {
         run_build_command(&args[1..]);
+        return;
+    }
+
+    if matches!(args.first().map(String::as_str), Some("run")) {
+        run_run_command(&args[1..]);
         return;
     }
 
@@ -54,7 +59,7 @@ fn main() {
         [dir] => run_resolver(dir),
         _ => {
             eprintln!(
-                "usage: cargo run -- [resolve|lex|parse|analyze|hir|mir|build] [start_directory] [--json|--ast|-o output|-O0|-O1|-O2|-O3|--opt-level 0..3]"
+                "usage: cargo run -- [resolve|lex|parse|analyze|hir|mir|build|run] [start_directory] [--json|--ast|-o output|-O0|-O1|-O2|-O3|--opt-level 0..3|-- <program args>]"
             );
             process::exit(2);
         }
@@ -574,6 +579,65 @@ fn run_build_command(args: &[String]) {
     }
 }
 
+fn run_run_command(args: &[String]) {
+    let mut start_dir: Option<&str> = None;
+    let mut opt_level = BuildOptLevel::Default;
+    let mut program_args = Vec::<String>::new();
+    let mut passthrough = false;
+    let mut index = 0usize;
+
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if passthrough {
+            program_args.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+
+        match arg {
+            "--" => {
+                passthrough = true;
+                index += 1;
+            }
+            "--opt-level" => {
+                if index + 1 >= args.len() {
+                    eprintln!("missing optimization level after --opt-level");
+                    process::exit(2);
+                }
+                let Some(level) = parse_opt_level_flag(args[index + 1].as_str()) else {
+                    eprintln!(
+                        "invalid optimization level '{}': expected 0,1,2,3",
+                        args[index + 1]
+                    );
+                    process::exit(2);
+                };
+                opt_level = level;
+                index += 2;
+            }
+            _ if arg.starts_with("-O") => {
+                let Some(level) = parse_opt_level_flag(&arg[2..]) else {
+                    eprintln!("invalid optimization flag '{arg}': expected -O0, -O1, -O2, or -O3");
+                    process::exit(2);
+                };
+                opt_level = level;
+                index += 1;
+            }
+            _ => {
+                if start_dir.is_none() {
+                    start_dir = Some(arg);
+                    index += 1;
+                } else {
+                    eprintln!("unexpected run argument '{arg}'");
+                    process::exit(2);
+                }
+            }
+        }
+    }
+
+    let dir = start_dir.unwrap_or(".");
+    run_project(dir, opt_level, &program_args);
+}
+
 fn parse_opt_level_flag(value: &str) -> Option<BuildOptLevel> {
     match value {
         "0" => Some(BuildOptLevel::O0),
@@ -595,6 +659,34 @@ fn run_build(start_dir: &str, output: Option<&str>, opt_level: BuildOptLevel) {
 
             println!("built executable: {}", artifact.executable_path.display());
             println!("object file: {}", artifact.object_path.display());
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    }
+}
+
+fn run_project(start_dir: &str, opt_level: BuildOptLevel, program_args: &[String]) {
+    match build_project_with_opt_level(start_dir, None, opt_level) {
+        Ok((artifact, diagnostics)) => {
+            if !diagnostics.is_empty() {
+                print_diagnostics_text(&diagnostics);
+                process::exit(1);
+            }
+
+            let status = Command::new(&artifact.executable_path)
+                .args(program_args)
+                .status()
+                .unwrap_or_else(|error| {
+                    eprintln!("failed to run executable: {error}");
+                    process::exit(1);
+                });
+
+            match status.code() {
+                Some(code) => process::exit(code),
+                None => process::exit(1),
+            }
         }
         Err(error) => {
             eprintln!("{error}");
@@ -633,6 +725,29 @@ fn print_diagnostics_text(diagnostics: &[Diagnostic]) {
     eprintln!("\nDiagnostics:");
     for diagnostic in diagnostics {
         eprintln!("  - {diagnostic}");
+        let has_primary = diagnostic.labels.iter().any(|label| label.is_primary);
+        for (index, label) in diagnostic.labels.iter().enumerate() {
+            let is_primary = label.is_primary || (!has_primary && index == 0);
+            let tag = if is_primary { "at" } else { "related" };
+            if let Some(span) = label.span {
+                eprintln!(
+                    "      {tag} {}:{}:{}: {}",
+                    label.file_path.display(),
+                    span.start_line,
+                    span.start_col,
+                    label.message
+                );
+            } else {
+                eprintln!(
+                    "      {tag} {}: {}",
+                    label.file_path.display(),
+                    label.message
+                );
+            }
+        }
+        for note in &diagnostic.notes {
+            eprintln!("      note: {note}");
+        }
     }
 }
 

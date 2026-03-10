@@ -1,10 +1,10 @@
 module mem
 
-pub copy := (dst: usize, src: usize, size: usize) u32 => __dyn_mem_copy(dst, src, size)
+pub copy := (dst: usize, src: usize, size: usize) u32 => $mem_copy(dst, src, size)
 
-pub move := (dst: usize, src: usize, size: usize) u32 => __dyn_mem_move(dst, src, size)
+pub move := (dst: usize, src: usize, size: usize) u32 => $mem_move(dst, src, size)
 
 pub set := (dst: usize, byte_value: u32, size: usize) u32 =>
-    __dyn_mem_set(dst, byte_value, size)
+    $mem_set(dst, byte_value, size)
 
-pub eq := (lhs: usize, rhs: usize, size: usize) u32 => __dyn_mem_eq(lhs, rhs, size)
+pub eq := (lhs: usize, rhs: usize, size: usize) u32 => $mem_eq(lhs, rhs, size)

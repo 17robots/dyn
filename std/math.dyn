@@ -1,0 +1,16 @@
+module math
+
+abs := () {}
+ceil := () {}
+cos := () {}
+floor := () {}
+int := () {}
+intToFloat := () {}
+log := () {}
+log2 := () {}
+max := () {}
+min := () {}
+round := () {}
+sin := () {}
+sqrt := () {}
+tan := () {}

@@ -1,0 +1,34 @@
+module fs
+
+os := use "std/os"
+
+pub FsError := enum {
+    ReadFailed,
+    WriteFailed,
+    CreateDirFailed,
+    ListFailed,
+}
+
+pub exists := (path: []u8) u32 => os.fs_exists(path)
+
+pub is_dir := (path: []u8) u32 => os.fs_is_dir(path)
+
+pub read_all := (path: []u8) []u8!FsError => {
+    value := os.fs_read_all(path)
+    if value == 0 .ReadFailed else value
+}
+
+pub write_all := (path: []u8, data: []u8) u32!FsError => {
+    ok := os.fs_write_all(path, data)
+    if ok == 0 .WriteFailed else ok
+}
+
+pub mkdir_all := (path: []u8) u32!FsError => {
+    ok := os.fs_mkdir_all(path)
+    if ok == 0 .CreateDirFailed else ok
+}
+
+pub list_dir := (path: []u8) []u8!FsError => {
+    value := os.fs_list_dir(path)
+    if value == 0 .ListFailed else value
+}

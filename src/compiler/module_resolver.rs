@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::fs::File;
@@ -8,7 +8,11 @@ use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::compiler::diagnostic_utils::sort_diagnostics_by_primary_path;
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
+
+const STD_COLLECTION_DIR: &str = "std";
+const STD_PATH_ENV: &str = "DYN_STD_PATH";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleKey {
@@ -47,6 +51,43 @@ impl ModuleGraph {
     }
 }
 
+pub fn configured_std_root_dir() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var(STD_PATH_ENV) {
+        let candidate = PathBuf::from(path);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join(STD_COLLECTION_DIR);
+    if bundled.is_dir() {
+        Some(bundled)
+    } else {
+        None
+    }
+}
+
+pub fn resolve_graph_file_path(graph: &ModuleGraph, logical_file_path: &Path) -> PathBuf {
+    let project_candidate = graph.root_dir.join(logical_file_path);
+    if project_candidate.is_file() {
+        return project_candidate;
+    }
+
+    let Some(std_relative_path) = strip_std_prefix(logical_file_path) else {
+        return project_candidate;
+    };
+    let Some(std_root) = configured_std_root_dir() else {
+        return project_candidate;
+    };
+
+    let std_candidate = std_root.join(std_relative_path);
+    if std_candidate.is_file() {
+        std_candidate
+    } else {
+        project_candidate
+    }
+}
+
 #[derive(Debug)]
 pub enum ModuleResolverError {
     InvalidStartDirectory(PathBuf),
@@ -79,42 +120,52 @@ pub fn resolve_module_graph<P: AsRef<Path>>(
         return Err(ModuleResolverError::InvalidStartDirectory(start_dir));
     }
 
-    let mut dyn_files = Vec::new();
-    collect_dyn_files(&start_dir, &mut dyn_files)?;
-    dyn_files.sort();
+    let mut project_dyn_files = Vec::new();
+    collect_dyn_files(&start_dir, &mut project_dyn_files)?;
+    project_dyn_files.sort();
 
     let mut groups: ModuleGroups = BTreeMap::new();
     let mut diagnostics = Vec::new();
+    let mut seen_files = BTreeSet::<PathBuf>::new();
 
-    for path in dyn_files {
-        let module_name = match read_module_name(&path) {
-            Ok(module_name) => module_name,
-            Err(kind) => {
-                diagnostics.push(to_resolver_diagnostic(&start_dir, &path, kind));
-                continue;
+    for path in &project_dyn_files {
+        let relative_file_path = to_relative_path(&start_dir, path);
+        register_module_file(
+            path,
+            relative_file_path,
+            &mut groups,
+            &mut diagnostics,
+            &mut seen_files,
+        );
+    }
+
+    if project_requests_std_modules(&project_dyn_files) {
+        if let Some(std_root) = configured_std_root_dir() {
+            let mut std_dyn_files = Vec::new();
+            collect_dyn_files(&std_root, &mut std_dyn_files)?;
+            std_dyn_files.sort();
+
+            for std_file in std_dyn_files {
+                let Ok(within_std) = std_file.strip_prefix(&std_root) else {
+                    continue;
+                };
+                let logical_file_path = PathBuf::from(STD_COLLECTION_DIR).join(within_std);
+                register_module_file(
+                    &std_file,
+                    logical_file_path,
+                    &mut groups,
+                    &mut diagnostics,
+                    &mut seen_files,
+                );
             }
-        };
-
-        let relative_file_path = to_relative_path(&start_dir, &path);
-        let directory = relative_directory_of(&relative_file_path);
-
-        let key = ModuleKey {
-            directory,
-            module_name,
-        };
-
-        groups.entry(key).or_default().push(relative_file_path);
+        }
     }
 
     for files in groups.values_mut() {
         files.sort();
     }
 
-    diagnostics.sort_by(|left, right| {
-        let left_path = left.labels.first().map(|label| &label.file_path);
-        let right_path = right.labels.first().map(|label| &label.file_path);
-        left_path.cmp(&right_path)
-    });
+    sort_diagnostics_by_primary_path(&mut diagnostics);
 
     let mut modules = Vec::with_capacity(groups.len());
     let mut key_to_id = BTreeMap::new();
@@ -141,6 +192,46 @@ pub fn resolve_module_graph<P: AsRef<Path>>(
 pub fn resolve_modules<P: AsRef<Path>>(start_dir: P) -> Result<ModuleGroups, ModuleResolverError> {
     let graph = resolve_module_graph(start_dir)?;
     Ok(graph.groups)
+}
+
+fn register_module_file(
+    absolute_path: &Path,
+    logical_file_path: PathBuf,
+    groups: &mut ModuleGroups,
+    diagnostics: &mut Vec<Diagnostic>,
+    seen_files: &mut BTreeSet<PathBuf>,
+) {
+    if !seen_files.insert(logical_file_path.clone()) {
+        return;
+    }
+
+    let module_name = match read_module_name(absolute_path) {
+        Ok(module_name) => module_name,
+        Err(kind) => {
+            diagnostics.push(to_resolver_diagnostic(logical_file_path, kind));
+            return;
+        }
+    };
+
+    let directory = relative_directory_of(&logical_file_path);
+    let key = ModuleKey {
+        directory,
+        module_name,
+    };
+
+    groups.entry(key).or_default().push(logical_file_path);
+}
+
+fn project_requests_std_modules(project_files: &[PathBuf]) -> bool {
+    project_files.iter().any(|path| {
+        fs::read_to_string(path)
+            .map(|source| source_requests_std_import(&source))
+            .unwrap_or(false)
+    })
+}
+
+fn source_requests_std_import(source: &str) -> bool {
+    source.contains("use \"std/")
 }
 
 fn collect_dyn_files(directory: &Path, out: &mut Vec<PathBuf>) -> Result<(), ModuleResolverError> {
@@ -241,23 +332,25 @@ enum ModuleReadError {
     Io { message: String },
 }
 
-fn to_resolver_diagnostic(root_dir: &Path, path: &Path, kind: ModuleReadError) -> Diagnostic {
-    let relative_path = to_relative_path(root_dir, path);
-
+fn to_resolver_diagnostic(file_path: PathBuf, kind: ModuleReadError) -> Diagnostic {
     match kind {
         ModuleReadError::MissingModuleDeclaration => Diagnostic::error(
             DiagnosticPhase::ModuleResolver,
             DiagnosticCode::E1003,
             "missing module declaration",
         )
-        .with_primary_file_label(relative_path, None, "file must declare `module <name>`"),
+        .with_primary_file_label(
+            file_path.clone(),
+            None,
+            "file must declare `module <name>`",
+        ),
         ModuleReadError::InvalidModuleDeclaration { line } => Diagnostic::error(
             DiagnosticPhase::ModuleResolver,
             DiagnosticCode::E1004,
             format!("invalid module declaration: '{line}'"),
         )
         .with_primary_file_label(
-            relative_path,
+            file_path.clone(),
             None,
             "expected `module <name>` as first non-comment declaration",
         ),
@@ -266,7 +359,7 @@ fn to_resolver_diagnostic(root_dir: &Path, path: &Path, kind: ModuleReadError) -
             DiagnosticCode::E1002,
             format!("failed to read module file: {message}"),
         )
-        .with_primary_file_label(relative_path, None, "io error while reading file"),
+        .with_primary_file_label(file_path, None, "io error while reading file"),
     }
 }
 
@@ -320,6 +413,20 @@ fn relative_directory_of(path: &Path) -> PathBuf {
     }
 }
 
+fn strip_std_prefix(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    let first = components.next()?;
+    if first.as_os_str() != STD_COLLECTION_DIR {
+        return None;
+    }
+
+    let mut relative = PathBuf::new();
+    for component in components {
+        relative.push(component.as_os_str());
+    }
+    Some(relative)
+}
+
 fn is_valid_module_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -334,154 +441,4 @@ fn is_valid_module_name(name: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn make_temp_dir() -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should be monotonic")
-            .as_nanos();
-        for attempt in 0..1000usize {
-            let path = std::env::temp_dir().join(format!(
-                "dyn_module_resolver_{}_{}_{}",
-                std::process::id(),
-                unique,
-                attempt
-            ));
-            if fs::create_dir(&path).is_ok() {
-                return path;
-            }
-        }
-
-        panic!("failed to create unique temp directory");
-    }
-
-    #[test]
-    fn groups_by_directory_and_module_name() {
-        let root = make_temp_dir();
-        let sub = root.join("nested");
-        fs::create_dir_all(&sub).expect("nested directory should be created");
-
-        fs::write(root.join("a.dyn"), "module math\nval := 1\n").expect("file should be written");
-        fs::write(root.join("b.dyn"), "module math\nval := 2\n").expect("file should be written");
-        fs::write(root.join("c.dyn"), "module io\nval := 3\n").expect("file should be written");
-        fs::write(sub.join("d.dyn"), "module math\nval := 4\n").expect("file should be written");
-
-        let graph = resolve_module_graph(&root).expect("module resolution should succeed");
-        assert!(graph.diagnostics.is_empty());
-        assert_eq!(graph.groups.len(), 3);
-
-        let root_key_math = ModuleKey {
-            directory: PathBuf::from("."),
-            module_name: "math".to_string(),
-        };
-        let root_key_io = ModuleKey {
-            directory: PathBuf::from("."),
-            module_name: "io".to_string(),
-        };
-        let sub_key_math = ModuleKey {
-            directory: PathBuf::from("nested"),
-            module_name: "math".to_string(),
-        };
-
-        assert_eq!(graph.groups.get(&root_key_math).map(Vec::len), Some(2));
-        assert_eq!(graph.groups.get(&root_key_io).map(Vec::len), Some(1));
-        assert_eq!(graph.groups.get(&sub_key_math).map(Vec::len), Some(1));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn skips_comments_before_module_declaration() {
-        let root = make_temp_dir();
-        let file_path = root.join("comments_ok.dyn");
-
-        fs::write(
-            &file_path,
-            "// heading\n/// doc\n/* block\ncomment */\nmodule main\n",
-        )
-        .expect("file should be written");
-
-        let graph = resolve_module_graph(&root).expect("module resolution should succeed");
-        assert!(graph.diagnostics.is_empty());
-        assert_eq!(graph.groups.len(), 1);
-
-        let key = ModuleKey {
-            directory: PathBuf::from("."),
-            module_name: "main".to_string(),
-        };
-        assert_eq!(graph.groups.get(&key).map(Vec::len), Some(1));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn collects_all_bad_files_as_diagnostics() {
-        let root = make_temp_dir();
-
-        fs::write(root.join("good.dyn"), "module good\nval := 1\n")
-            .expect("file should be written");
-        fs::write(
-            root.join("bad_missing.dyn"),
-            "// only comments\n/* still comments */\n",
-        )
-        .expect("file should be written");
-        fs::write(root.join("bad_invalid.dyn"), "not_module main\n")
-            .expect("file should be written");
-
-        let graph = resolve_module_graph(&root).expect("module resolution should succeed");
-        assert_eq!(graph.groups.len(), 1);
-        assert_eq!(graph.diagnostics.len(), 2);
-        assert!(matches!(
-            graph.diagnostics[0].code,
-            DiagnosticCode::E1003 | DiagnosticCode::E1004
-        ));
-        assert!(matches!(
-            graph.diagnostics[1].code,
-            DiagnosticCode::E1003 | DiagnosticCode::E1004
-        ));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn assigns_stable_module_ids_from_sorted_keys() {
-        let root = make_temp_dir();
-        let a_dir = root.join("a");
-        let b_dir = root.join("b");
-        fs::create_dir_all(&a_dir).expect("a directory should be created");
-        fs::create_dir_all(&b_dir).expect("b directory should be created");
-
-        fs::write(a_dir.join("z.dyn"), "module zoo\n").expect("file should be written");
-        fs::write(a_dir.join("a.dyn"), "module alpha\n").expect("file should be written");
-        fs::write(b_dir.join("k.dyn"), "module alpha\n").expect("file should be written");
-
-        let graph = resolve_module_graph(&root).expect("module resolution should succeed");
-        assert!(graph.diagnostics.is_empty());
-        assert_eq!(graph.modules.len(), 3);
-
-        let key_a_alpha = ModuleKey {
-            directory: PathBuf::from("a"),
-            module_name: "alpha".to_string(),
-        };
-        let key_a_zoo = ModuleKey {
-            directory: PathBuf::from("a"),
-            module_name: "zoo".to_string(),
-        };
-        let key_b_alpha = ModuleKey {
-            directory: PathBuf::from("b"),
-            module_name: "alpha".to_string(),
-        };
-
-        assert_eq!(graph.module_id(&key_a_alpha), Some(ModuleId(0)));
-        assert_eq!(graph.module_id(&key_a_zoo), Some(ModuleId(1)));
-        assert_eq!(graph.module_id(&key_b_alpha), Some(ModuleId(2)));
-
-        let module = graph.module(ModuleId(1)).expect("module id 1 should exist");
-        assert_eq!(module.key, key_a_zoo);
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-}
+mod tests;

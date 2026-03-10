@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::compiler::ast::*;
-use crate::compiler::diagnostics::SourceSpan;
+use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase, SourceSpan};
 use crate::compiler::lexer::token::{Delimiter, Keyword, Operator, Token, TokenKind};
 
 pub struct ParseOutput {
@@ -17,16 +17,17 @@ struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
     diagnostics: Vec<crate::compiler::diagnostics::Diagnostic>,
+    file_path: PathBuf,
     disallow_ident_struct_literal: bool,
 }
 
 impl<'a> Parser<'a> {
     fn new(file_path: PathBuf, tokens: &'a [Token]) -> Self {
-        let _ = file_path;
         Self {
             tokens,
             index: 0,
             diagnostics: Vec::new(),
+            file_path,
             disallow_ident_struct_literal: false,
         }
     }
@@ -101,7 +102,7 @@ impl<'a> Parser<'a> {
         if self.match_operator(Operator::Colon) {
             if self.match_operator(Operator::Equal) {
                 let value = self.parse_expr(0)?;
-                return Some(Item::Binding(Binding {
+                return Some(Item::Binding(Box::new(Binding {
                     docs,
                     visibility,
                     mutable,
@@ -110,13 +111,13 @@ impl<'a> Parser<'a> {
                     annotation: None,
                     span: merge_span(start, value.span),
                     value,
-                }));
+                })));
             }
 
             let annotation = self.parse_type_expr()?;
             self.expect_operator(Operator::Equal, "expected '=' after typed binding");
             let value = self.parse_expr(0)?;
-            return Some(Item::Binding(Binding {
+            return Some(Item::Binding(Box::new(Binding {
                 docs,
                 visibility,
                 mutable,
@@ -125,12 +126,12 @@ impl<'a> Parser<'a> {
                 annotation: Some(annotation),
                 span: merge_span(start, value.span),
                 value,
-            }));
+            })));
         }
 
         if self.match_operator(Operator::Equal) {
             let value = self.parse_expr(0)?;
-            return Some(Item::Binding(Binding {
+            return Some(Item::Binding(Box::new(Binding {
                 docs,
                 visibility,
                 mutable,
@@ -139,7 +140,7 @@ impl<'a> Parser<'a> {
                 annotation: None,
                 span: merge_span(start, value.span),
                 value,
-            }));
+            })));
         }
 
         None
@@ -266,8 +267,7 @@ impl<'a> Parser<'a> {
         }
         if self.match_keyword(Keyword::Use) {
             let start = self.prev_span();
-            let path = self.parse_string_literal();
-            let path = path.unwrap_or_default();
+            let path = self.parse_string_literal()?;
             return Some(Expr {
                 span: merge_span(start, self.prev_span()),
                 kind: ExprKind::Use { path },
@@ -427,7 +427,7 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Some(Expr {
                     span: token.span,
-                    kind: ExprKind::Literal(Literal::String(token.lexeme)),
+                    kind: ExprKind::Literal(Literal::String(string_from_lexeme(&token.lexeme))),
                 })
             }
             TokenKind::CharLiteral => {
@@ -529,11 +529,14 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => {
+                self.report_parser_error(
+                    DiagnosticCode::E3002,
+                    "unexpected token in expression",
+                    token.span,
+                    "token cannot start an expression",
+                );
                 self.advance();
-                Some(Expr {
-                    span: token.span,
-                    kind: ExprKind::Literal(Literal::String(token.lexeme)),
-                })
+                None
             }
         }
     }
@@ -595,6 +598,18 @@ impl<'a> Parser<'a> {
             let element = self.parse_expr(0)?;
             elements.push(element);
             if !self.match_delimiter(Delimiter::Comma) {
+                if self.peek_delimiter(Delimiter::RBrace) {
+                    break;
+                }
+                if self.starts_expr() {
+                    self.report_parser_error(
+                        DiagnosticCode::E3001,
+                        "expected ',' between tuple literal elements",
+                        self.current_span(),
+                        "insert ',' to separate tuple elements",
+                    );
+                    continue;
+                }
                 break;
             }
         }
@@ -616,6 +631,18 @@ impl<'a> Parser<'a> {
             let element = self.parse_expr(0)?;
             elements.push(element);
             if !self.match_delimiter(Delimiter::Comma) {
+                if self.peek_delimiter(Delimiter::RBracket) {
+                    break;
+                }
+                if self.starts_expr() {
+                    self.report_parser_error(
+                        DiagnosticCode::E3001,
+                        "expected ',' between array literal elements",
+                        self.current_span(),
+                        "insert ',' to separate array elements",
+                    );
+                    continue;
+                }
                 break;
             }
         }
@@ -640,18 +667,25 @@ impl<'a> Parser<'a> {
         let mut tail_expr = None;
 
         while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
+            if self.match_delimiter(Delimiter::Semicolon) {
+                continue;
+            }
+
             if self.peek_kind(TokenKind::DocComment) || self.looks_like_local_binding() {
                 if let Some(Item::Binding(binding)) = self.parse_item() {
                     statements.push(Stmt::Binding(binding));
                     tail_expr = None;
+                    self.match_delimiter(Delimiter::Semicolon);
                     continue;
                 }
             }
 
+            let before = self.index;
             if let Some(expr) = self.parse_expr(0) {
                 tail_expr = Some(Box::new(expr.clone()));
-                statements.push(Stmt::Expr(expr));
-            } else {
+                statements.push(Stmt::Expr(Box::new(expr)));
+                self.match_delimiter(Delimiter::Semicolon);
+            } else if self.index == before {
                 self.advance();
             }
         }
@@ -780,7 +814,16 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            self.expect_operator(Operator::Colon, "expected ':' after match pattern");
+            if self.match_operator(Operator::FatArrow) {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "expected ':' after match pattern",
+                    self.prev_span(),
+                    "match arms use ':'; replace '=>' with ':'",
+                );
+            } else {
+                self.expect_operator(Operator::Colon, "expected ':' after match pattern");
+            }
 
             let mut capture = None;
             if self.match_operator(Operator::Pipe) {
@@ -808,7 +851,22 @@ impl<'a> Parser<'a> {
                 span: arm_span,
             });
 
-            self.match_delimiter(Delimiter::Comma);
+            if self.match_delimiter(Delimiter::Comma) {
+                continue;
+            }
+            if self.peek_delimiter(Delimiter::RBrace) {
+                break;
+            }
+            if self.looks_like_match_pattern_start() {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "expected ',' between match arms",
+                    self.current_span(),
+                    "insert ',' to separate match arms",
+                );
+                continue;
+            }
+            break;
         }
 
         let end = self.current_span();
@@ -883,7 +941,12 @@ impl<'a> Parser<'a> {
 
     fn parse_break_expr(&mut self) -> Expr {
         let start = self.prev_span();
-        let label = if self.match_operator(Operator::Colon) {
+        let label = if self.peek_operator(Operator::Colon)
+            && matches!(
+                self.tokens.get(self.index + 1).map(|token| &token.kind),
+                Some(TokenKind::Identifier) | Some(TokenKind::Keyword(_))
+            ) {
+            self.advance();
             self.parse_ident().map(|name| Label {
                 span: name.span,
                 name,
@@ -1419,6 +1482,18 @@ impl<'a> Parser<'a> {
             }
 
             if !self.match_delimiter(Delimiter::Comma) {
+                if self.peek_delimiter(Delimiter::RParen) {
+                    break;
+                }
+                if self.starts_expr() {
+                    self.report_parser_error(
+                        DiagnosticCode::E3001,
+                        "expected ',' between call arguments",
+                        self.current_span(),
+                        "insert ',' to separate call arguments",
+                    );
+                    continue;
+                }
                 break;
             }
         }
@@ -1495,9 +1570,22 @@ impl<'a> Parser<'a> {
             self.expect_operator(Operator::Colon, "expected ':' in struct literal field");
             let value = self.parse_expr(0)?;
             fields.push(StructLiteralField { name, value });
-            if !self.match_delimiter(Delimiter::Comma) {
+            if self.match_delimiter(Delimiter::Comma) {
+                continue;
+            }
+            if self.peek_delimiter(Delimiter::RBrace) {
                 break;
             }
+            if self.peek_kind(TokenKind::Identifier) {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "expected ',' between struct literal fields",
+                    self.current_span(),
+                    "insert ',' to separate struct fields",
+                );
+                continue;
+            }
+            break;
         }
         let end = self.current_span();
         self.expect_delimiter(Delimiter::RBrace, "expected '}' after struct literal");
@@ -1521,6 +1609,21 @@ impl<'a> Parser<'a> {
         let ident = self.parse_ident();
         self.expect_operator(Operator::Pipe, "expected '|' after for binding");
         ident
+    }
+
+    fn looks_like_match_pattern_start(&self) -> bool {
+        matches!(
+            self.current().map(|token| &token.kind),
+            Some(TokenKind::Identifier)
+                | Some(TokenKind::Keyword(_))
+                | Some(TokenKind::IntLiteral)
+                | Some(TokenKind::FloatLiteral)
+                | Some(TokenKind::StringLiteral)
+                | Some(TokenKind::CharLiteral)
+                | Some(TokenKind::BoolLiteral(_))
+                | Some(TokenKind::NullLiteral)
+                | Some(TokenKind::Operator(Operator::Dot))
+        )
     }
 
     fn parse_error_list(&mut self) -> Vec<Ident> {
@@ -1551,11 +1654,15 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => {
+                let found = token_description(&token);
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    format!("expected identifier, found {found}"),
+                    token.span,
+                    format!("expected an identifier here, found {found}"),
+                );
                 self.advance();
-                Some(Ident {
-                    text: token.lexeme,
-                    span: token.span,
-                })
+                None
             }
         }
     }
@@ -1563,11 +1670,18 @@ impl<'a> Parser<'a> {
     fn parse_string_literal(&mut self) -> Option<String> {
         let token = self.current()?.clone();
         if token.kind != TokenKind::StringLiteral {
+            let found = token_description(&token);
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                format!("expected string literal, found {found}"),
+                token.span,
+                format!("imports require a quoted string path; found {found}"),
+            );
             self.advance();
-            return Some(token.lexeme);
+            return None;
         }
         self.advance();
-        Some(token.lexeme)
+        Some(string_from_lexeme(&token.lexeme))
     }
 
     fn current_binary_op(&self) -> Option<(BinaryOp, u8, bool)> {
@@ -1624,6 +1738,10 @@ impl<'a> Parser<'a> {
                 TokenKind::Delimiter(Delimiter::RParen) => {
                     depth -= 1;
                     if depth == 0 {
+                        if !self.paren_contents_look_like_fn_params(self.index, idx) {
+                            return false;
+                        }
+
                         if let Some(next) = self.tokens.get(idx + 1) {
                             let close_line = self.tokens[idx].span.end_line;
                             if next.span.start_line != close_line
@@ -1658,6 +1776,92 @@ impl<'a> Parser<'a> {
             }
         }
         false
+    }
+
+    fn paren_contents_look_like_fn_params(&self, open_idx: usize, close_idx: usize) -> bool {
+        if close_idx <= open_idx + 1 {
+            return true;
+        }
+
+        let mut idx = open_idx + 1;
+        while idx < close_idx {
+            if !matches!(
+                self.tokens.get(idx).map(|token| &token.kind),
+                Some(TokenKind::Identifier) | Some(TokenKind::Keyword(_))
+            ) {
+                return false;
+            }
+            idx += 1;
+
+            let Some(next_kind) = self.tokens.get(idx).map(|token| &token.kind) else {
+                return false;
+            };
+            match next_kind {
+                TokenKind::Delimiter(Delimiter::RParen) => return idx == close_idx,
+                TokenKind::Delimiter(Delimiter::Comma) => {
+                    idx += 1;
+                    continue;
+                }
+                TokenKind::Operator(Operator::Colon) | TokenKind::Operator(Operator::Equal) => {
+                    idx += 1;
+                    if idx >= close_idx {
+                        return false;
+                    }
+
+                    let mut paren_depth = 0usize;
+                    let mut bracket_depth = 0usize;
+                    let mut brace_depth = 0usize;
+                    let mut consumed_any = false;
+
+                    while idx < close_idx {
+                        let Some(kind) = self.tokens.get(idx).map(|token| &token.kind) else {
+                            return false;
+                        };
+                        match kind {
+                            TokenKind::Delimiter(Delimiter::LParen) => paren_depth += 1,
+                            TokenKind::Delimiter(Delimiter::RParen) => {
+                                if paren_depth == 0 {
+                                    break;
+                                }
+                                paren_depth -= 1;
+                            }
+                            TokenKind::Delimiter(Delimiter::LBracket) => bracket_depth += 1,
+                            TokenKind::Delimiter(Delimiter::RBracket) => {
+                                bracket_depth = bracket_depth.saturating_sub(1)
+                            }
+                            TokenKind::Delimiter(Delimiter::LBrace) => brace_depth += 1,
+                            TokenKind::Delimiter(Delimiter::RBrace) => {
+                                brace_depth = brace_depth.saturating_sub(1)
+                            }
+                            TokenKind::Delimiter(Delimiter::Comma)
+                                if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+                            {
+                                break;
+                            }
+                            _ => {}
+                        }
+                        consumed_any = true;
+                        idx += 1;
+                    }
+
+                    if !consumed_any {
+                        return false;
+                    }
+
+                    if idx < close_idx
+                        && matches!(
+                            self.tokens.get(idx).map(|token| &token.kind),
+                            Some(TokenKind::Delimiter(Delimiter::Comma))
+                        )
+                    {
+                        idx += 1;
+                    }
+                }
+                _ => return false,
+            }
+        }
+
+        idx == close_idx
     }
 
     fn starts_expr(&self) -> bool {
@@ -1764,14 +1968,42 @@ impl<'a> Parser<'a> {
 
     fn expect_operator(&mut self, op: Operator, message: &str) {
         if !self.match_operator(op) {
-            let _ = message;
+            let found = self.current_token_description();
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                format!("{message}; found {found}"),
+                self.current_span(),
+                format!("expected operator here, found {found}"),
+            );
         }
     }
 
     fn expect_delimiter(&mut self, delimiter: Delimiter, message: &str) {
         if !self.match_delimiter(delimiter) {
-            let _ = message;
+            let found = self.current_token_description();
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                format!("{message}; found {found}"),
+                self.current_span(),
+                format!("expected delimiter here, found {found}"),
+            );
         }
+    }
+
+    fn report_parser_error(
+        &mut self,
+        code: DiagnosticCode,
+        message: impl Into<String>,
+        span: SourceSpan,
+        label: impl Into<String>,
+    ) {
+        self.diagnostics.push(
+            Diagnostic::error(DiagnosticPhase::Parser, code, message).with_primary_file_label(
+                self.file_path.clone(),
+                Some(span),
+                label,
+            ),
+        );
     }
 
     fn current(&self) -> Option<&Token> {
@@ -1789,6 +2021,12 @@ impl<'a> Parser<'a> {
                 end_line: 1,
                 end_col: 1,
             })
+    }
+
+    fn current_token_description(&self) -> String {
+        self.current()
+            .map(token_description)
+            .unwrap_or_else(|| "end of file".to_string())
     }
 
     fn prev_span(&self) -> SourceSpan {
@@ -1896,16 +2134,66 @@ fn merge_span(left: SourceSpan, right: SourceSpan) -> SourceSpan {
     }
 }
 
+fn token_description(token: &Token) -> String {
+    if token.kind == TokenKind::Eof {
+        return "end of file".to_string();
+    }
+    if token.lexeme.is_empty() {
+        return "token".to_string();
+    }
+    let escaped = token
+        .lexeme
+        .chars()
+        .flat_map(char::escape_default)
+        .collect::<String>();
+    format!("`{escaped}`")
+}
+
 fn pattern_literal_from_token(token: &Token) -> PatternLiteral {
     match &token.kind {
         TokenKind::IntLiteral => PatternLiteral::Integer(token.lexeme.clone()),
         TokenKind::FloatLiteral => PatternLiteral::Float(token.lexeme.clone()),
-        TokenKind::StringLiteral => PatternLiteral::String(token.lexeme.clone()),
+        TokenKind::StringLiteral => PatternLiteral::String(string_from_lexeme(&token.lexeme)),
         TokenKind::CharLiteral => PatternLiteral::Char(char_from_lexeme(&token.lexeme)),
         TokenKind::BoolLiteral(value) => PatternLiteral::Bool(*value),
         TokenKind::NullLiteral => PatternLiteral::Null,
         _ => PatternLiteral::String(token.lexeme.clone()),
     }
+}
+
+fn string_from_lexeme(lexeme: &str) -> String {
+    let content = if lexeme.len() >= 2 && lexeme.starts_with('"') && lexeme.ends_with('"') {
+        &lexeme[1..lexeme.len() - 1]
+    } else {
+        lexeme
+    };
+
+    let mut out = String::with_capacity(content.len());
+    let mut chars = content.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        let Some(next) = chars.next() else {
+            out.push('\\');
+            break;
+        };
+
+        match next {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            '0' => out.push('\0'),
+            '\\' => out.push('\\'),
+            '"' => out.push('"'),
+            '\'' => out.push('\''),
+            other => out.push(other),
+        }
+    }
+
+    out
 }
 
 fn char_from_lexeme(lexeme: &str) -> char {
@@ -1927,620 +2215,4 @@ fn char_from_lexeme(lexeme: &str) -> char {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::compiler::lexer::scanner::Lexer;
-    use std::fs;
-    use std::path::Path;
-
-    #[test]
-    fn parses_basic_binding_file() {
-        let src = "module main\na := 1\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        assert!(parsed.diagnostics.is_empty());
-        assert!(parsed.ast.is_some());
-        let ast = parsed.ast.expect("ast should be present");
-        assert_eq!(ast.items.len(), 1);
-    }
-
-    #[test]
-    fn parses_example_files_with_stable_top_level_segmentation() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let full = root.join("full_example.dyn");
-        let other = root.join("full_example_other.dyn");
-        let also_main = root.join("full_example_also_main.dyn");
-
-        let full_src = fs::read_to_string(&full).expect("full example should be readable");
-        let full_tokens = Lexer::new(&full_src, PathBuf::from("full_example.dyn")).lex();
-        let full_ast = parse_file(PathBuf::from("full_example.dyn"), &full_tokens.tokens)
-            .ast
-            .expect("full example should parse");
-        assert!(full_ast.items.len() >= 14);
-
-        let other_src = fs::read_to_string(&other).expect("other example should be readable");
-        let other_tokens = Lexer::new(&other_src, PathBuf::from("full_example_other.dyn")).lex();
-        let other_ast = parse_file(
-            PathBuf::from("full_example_other.dyn"),
-            &other_tokens.tokens,
-        )
-        .ast
-        .expect("other example should parse");
-        assert_eq!(other_ast.items.len(), 2);
-
-        let also_src =
-            fs::read_to_string(&also_main).expect("also-main example should be readable");
-        let also_tokens = Lexer::new(&also_src, PathBuf::from("full_example_also_main.dyn")).lex();
-        let also_ast = parse_file(
-            PathBuf::from("full_example_also_main.dyn"),
-            &also_tokens.tokens,
-        )
-        .ast
-        .expect("also-main example should parse");
-        assert_eq!(also_ast.items.len(), 1);
-    }
-
-    #[test]
-    fn keeps_top_level_binding_after_parenthesized_expr_in_struct_member_fn() {
-        let src = "module main\nVec := (T: comp type) type => struct { x: usize, f := (self: Vec(T), idx: usize) u32 => { src := (idx * 2)\ncopy := src\nreturn 1 }, }\nmain := () i32 { return 1 }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        assert!(parsed.diagnostics.is_empty());
-        let ast = parsed.ast.expect("ast should be present");
-        assert_eq!(ast.items.len(), 2);
-        let Item::Binding(binding) = &ast.items[1] else {
-            panic!("expected second top-level item to be a binding")
-        };
-        assert_eq!(binding.name.text, "main");
-    }
-
-    #[test]
-    fn parses_empty_param_fn_with_type_return() {
-        let src = "module main\nget_type := () type { return struct { vals: ?*type } }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        assert_eq!(ast.items.len(), 1);
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        assert!(matches!(binding.value.kind, ExprKind::Fn(_)));
-    }
-
-    #[test]
-    fn parses_return_with_type_literal_value() {
-        let src = "module main\nget_type := () type { return struct { vals: ?*type } }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::Block(block) = &fn_expr.body else {
-            panic!("expected block body")
-        };
-        let Some(tail) = &block.tail_expr else {
-            panic!("expected return tail expression")
-        };
-        let ExprKind::Return { value } = &tail.kind else {
-            panic!("expected return expression")
-        };
-        assert!(matches!(
-            value.as_deref().map(|expr| &expr.kind),
-            Some(ExprKind::TypeLiteral(_))
-        ));
-    }
-
-    #[test]
-    fn parses_comp_prefixed_function_followed_by_arrow_body() {
-        let src = "module main\ncalc := () comp if use_f64 f64 else f32 => 3.14\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow function body")
-        };
-        assert!(matches!(body.kind, ExprKind::Literal(Literal::Float(_))));
-    }
-
-    #[test]
-    fn parses_if_with_spaced_enum_variant_then_branch() {
-        let src = "module main\ndivide := (y: f32) f32!Err => if y == 0 .DivideByZero else y\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow function body")
-        };
-        let ExprKind::If(if_expr) = &body.kind else {
-            panic!("expected if expression")
-        };
-        let ExprKind::Binary {
-            op: BinaryOp::Eq, ..
-        } = if_expr.condition.kind
-        else {
-            panic!("expected equality condition")
-        };
-        assert!(matches!(
-            if_expr.then_branch.kind,
-            ExprKind::EnumVariantConstruct(_)
-        ));
-    }
-
-    #[test]
-    fn parses_if_capture_binding() {
-        let src = "module main\nmain := (n: ?i32) i32 => if n: |v| v else 0\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow function body")
-        };
-        let ExprKind::If(if_expr) = &body.kind else {
-            panic!("expected if expression")
-        };
-        let capture = if_expr.capture.as_ref().expect("expected if capture");
-        let binding = capture.binding.as_ref().expect("expected capture binding");
-        assert_eq!(binding.text, "v");
-    }
-
-    #[test]
-    fn parses_match_with_guard_and_range_pattern() {
-        let src = "module main\nmain := () i32 => match 2 { 0..=1: 4, 2 if true: 9, _: 0 }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow function body")
-        };
-        let ExprKind::Match(match_expr) = &body.kind else {
-            panic!("expected match expression")
-        };
-        assert_eq!(match_expr.arms.len(), 3);
-        assert!(matches!(
-            match_expr.arms[0].pattern.kind,
-            PatternKind::Range {
-                inclusive: true,
-                ..
-            }
-        ));
-        assert!(match_expr.arms[1].guard.is_some());
-    }
-
-    #[test]
-    fn parses_multiline_match_expression_body() {
-        let src = "module main\nmain := () i32 {\n  v := 3\n  match v {\n    0..1: 4,\n    2 if true: 9,\n    _: 0,\n  }\n}\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::Block(block) = &fn_expr.body else {
-            panic!("expected block body")
-        };
-        let Some(last) = block.tail_expr.as_ref() else {
-            panic!("expected match tail expression")
-        };
-        let ExprKind::Match(match_expr) = &last.kind else {
-            panic!("expected match expression")
-        };
-        assert_eq!(match_expr.arms.len(), 3);
-    }
-
-    #[test]
-    fn parses_for_iterate_with_pipe_binding() {
-        let src = "module main\na := for xs: |v| v\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::For(ForExpr::Iterate {
-            iterable, binding, ..
-        }) = &binding.value.kind
-        else {
-            panic!("expected iterate for expression")
-        };
-        assert!(matches!(iterable.kind, ExprKind::Ident(_)));
-        let Some(binding) = binding else {
-            panic!("expected iterate binding")
-        };
-        assert_eq!(binding.text, "v");
-    }
-
-    #[test]
-    fn parses_for_range_with_pipe_binding() {
-        let src = "module main\na := for 0..10: |v| v\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::For(ForExpr::Range {
-            start,
-            end,
-            binding,
-            ..
-        }) = &binding.value.kind
-        else {
-            panic!("expected range for expression")
-        };
-        assert!(matches!(start.kind, ExprKind::Literal(Literal::Integer(_))));
-        assert!(matches!(end.kind, ExprKind::Literal(Literal::Integer(_))));
-        let Some(binding) = binding else {
-            panic!("expected range binding")
-        };
-        assert_eq!(binding.text, "v");
-    }
-
-    #[test]
-    fn parses_array_literal_expression() {
-        let src = "module main\nxs := [1, 2, 3]\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::ArrayLiteral(elements) = &binding.value.kind else {
-            panic!("expected array literal")
-        };
-        assert_eq!(elements.len(), 3);
-        assert!(matches!(
-            elements[0].kind,
-            ExprKind::Literal(Literal::Integer(_))
-        ));
-    }
-
-    #[test]
-    fn parses_brace_tuple_literal_expression() {
-        let src = "module main\nxs := {1, 2, 3}\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::TupleLiteral(elements) = &binding.value.kind else {
-            panic!("expected tuple literal")
-        };
-        assert_eq!(elements.len(), 3);
-        assert!(matches!(
-            elements[1].kind,
-            ExprKind::Literal(Literal::Integer(_))
-        ));
-    }
-
-    #[test]
-    fn parses_slice_expression_inside_index_brackets() {
-        let src = "module main\nxs := arr[0..2]\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Slice(slice) = &binding.value.kind else {
-            panic!("expected slice expression")
-        };
-        assert!(matches!(slice.base.kind, ExprKind::Ident(_)));
-        assert!(matches!(
-            slice.start.as_ref().map(|expr| &expr.kind),
-            Some(ExprKind::Literal(Literal::Integer(_)))
-        ));
-        assert!(matches!(
-            slice.end.as_ref().map(|expr| &expr.kind),
-            Some(ExprKind::Literal(Literal::Integer(_)))
-        ));
-        assert!(!slice.inclusive);
-    }
-
-    #[test]
-    fn parses_plain_equals_in_block_as_assignment_expression() {
-        let src =
-            "module main\nmain := () i32 {\n  mut d: u1 = false\n  d = true\n  return if d 1 else 0\n}\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::Block(block) = &fn_expr.body else {
-            panic!("expected block body")
-        };
-        assert!(matches!(block.statements[0], Stmt::Binding(_)));
-        assert!(matches!(
-            block.statements[1],
-            Stmt::Expr(Expr {
-                kind: ExprKind::Assign {
-                    op: AssignOp::Assign,
-                    ..
-                },
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn clears_stale_tail_expr_when_binding_follows_expression() {
-        let src = "module main\nmain := () {\n  1\n  x := 2\n}\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::Block(block) = &fn_expr.body else {
-            panic!("expected block body")
-        };
-        assert_eq!(block.statements.len(), 2);
-        assert!(matches!(
-            block.statements[0],
-            Stmt::Expr(Expr {
-                kind: ExprKind::Literal(Literal::Integer(_)),
-                ..
-            })
-        ));
-        assert!(matches!(block.statements[1], Stmt::Binding(_)));
-        assert!(block.tail_expr.is_none());
-    }
-
-    #[test]
-    fn parses_enum_match_pattern_with_bindings() {
-        let src = "module main\nmain := (v: i32) i32 => match v { .Value(a, b): a, _: 0 }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow function body")
-        };
-        let ExprKind::Match(match_expr) = &body.kind else {
-            panic!("expected match expression")
-        };
-        let PatternKind::EnumVariant {
-            root,
-            variant,
-            bindings,
-        } = &match_expr.arms[0].pattern.kind
-        else {
-            panic!("expected enum variant pattern")
-        };
-        assert!(root.is_none());
-        assert_eq!(variant.text, "Value");
-        assert_eq!(bindings.len(), 2);
-    }
-
-    #[test]
-    fn desugars_match_capture_into_enum_variant_binding() {
-        let src = "module main\nmain := (v: i32) i32 => match v { .Value: |val| val, _: 0 }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow function body")
-        };
-        let ExprKind::Match(match_expr) = &body.kind else {
-            panic!("expected match expression")
-        };
-        let PatternKind::EnumVariant { bindings, .. } = &match_expr.arms[0].pattern.kind else {
-            panic!("expected enum variant pattern")
-        };
-        assert_eq!(bindings.len(), 1);
-        assert_eq!(bindings[0].text, "val");
-    }
-
-    #[test]
-    fn parses_rooted_enum_match_pattern() {
-        let src = "module main\nmain := (v: i32) i32 => match v { State.Ready: 1, _: 0 }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow function body")
-        };
-        let ExprKind::Match(match_expr) = &body.kind else {
-            panic!("expected match expression")
-        };
-        let PatternKind::EnumVariant {
-            root,
-            variant,
-            bindings,
-        } = &match_expr.arms[0].pattern.kind
-        else {
-            panic!("expected enum variant pattern")
-        };
-        assert_eq!(
-            root.as_ref().map(|ident| ident.text.as_str()),
-            Some("State")
-        );
-        assert_eq!(variant.text, "Ready");
-        assert!(bindings.is_empty());
-    }
-
-    #[test]
-    fn parses_applied_type_expression_in_binding_annotation() {
-        let src = "module main\nxs: Vec(i32) = 0\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ty = binding.annotation.as_ref().expect("expected annotation");
-        let TypeExprKind::Applied { callee, args } = &ty.kind else {
-            panic!("expected applied type")
-        };
-        assert_eq!(callee.text, "Vec");
-        assert_eq!(args.len(), 1);
-        assert!(matches!(args[0].kind, TypeExprKind::Named(_)));
-    }
-
-    #[test]
-    fn parses_mutable_slice_type_expression() {
-        let src = "module main\nxs: []mut i32 = 0\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ty = binding.annotation.as_ref().expect("expected annotation");
-        let TypeExprKind::Slice { mutable, element } = &ty.kind else {
-            panic!("expected slice type")
-        };
-        assert!(*mutable);
-        assert!(matches!(element.kind, TypeExprKind::Named(_)));
-    }
-
-    #[test]
-    fn parses_builtin_as_pointer_type_designator_argument() {
-        let src = "module main\nmain := () i32 => $as(*mut i32, __dyn_alloc(4, 4))\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::Fn(fn_expr) = &binding.value.kind else {
-            panic!("expected function value")
-        };
-        let crate::compiler::ast::FnBody::ArrowExpr(body) = &fn_expr.body else {
-            panic!("expected arrow body")
-        };
-        let ExprKind::Call(call) = &body.kind else {
-            panic!("expected call expression")
-        };
-        assert_eq!(call.args.len(), 2);
-        let ExprKind::TypeLiteral(ty) = &call.args[0].value.kind else {
-            panic!("expected type literal first argument")
-        };
-        let TypeExprKind::Pointer { mutable, inner } = &ty.kind else {
-            panic!("expected pointer type designator")
-        };
-        assert!(*mutable);
-        assert!(matches!(inner.kind, TypeExprKind::Named(_)));
-    }
-
-    #[test]
-    fn parses_struct_type_with_function_members() {
-        let src = "module main\nThing := struct { age: i32, new := () Thing => Thing{ age: 0 }, do := (self: Thing) i32 => self.age }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::TypeLiteral(ty) = &binding.value.kind else {
-            panic!("expected type literal")
-        };
-        let TypeExprKind::Struct(struct_ty) = &ty.kind else {
-            panic!("expected struct type")
-        };
-        assert_eq!(struct_ty.fields.len(), 1);
-        assert_eq!(struct_ty.members.len(), 2);
-        assert!(matches!(struct_ty.members[0].value.kind, ExprKind::Fn(_)));
-        assert!(matches!(struct_ty.members[1].value.kind, ExprKind::Fn(_)));
-    }
-
-    #[test]
-    fn parses_struct_type_with_function_typed_field() {
-        let src = "module main\nThing := struct { do: fn(self: Thing) i32 }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::TypeLiteral(ty) = &binding.value.kind else {
-            panic!("expected type literal")
-        };
-        let TypeExprKind::Struct(struct_ty) = &ty.kind else {
-            panic!("expected struct type")
-        };
-        assert_eq!(struct_ty.fields.len(), 1);
-        assert!(matches!(
-            struct_ty.fields[0].ty.kind,
-            TypeExprKind::Function(_)
-        ));
-    }
-
-    #[test]
-    fn defaults_function_type_return_to_void_when_omitted() {
-        let src = "module main\nThing := struct { do: fn(self: Thing) }\n";
-        let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
-        let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
-        let ast = parsed.ast.expect("ast should be present");
-        let Item::Binding(binding) = &ast.items[0] else {
-            panic!("expected binding item")
-        };
-        let ExprKind::TypeLiteral(ty) = &binding.value.kind else {
-            panic!("expected type literal")
-        };
-        let TypeExprKind::Struct(struct_ty) = &ty.kind else {
-            panic!("expected struct type")
-        };
-        let TypeExprKind::Function(fn_ty) = &struct_ty.fields[0].ty.kind else {
-            panic!("expected function type")
-        };
-        assert!(
-            matches!(&fn_ty.return_type.kind, TypeExprKind::Named(name) if name.text == "void")
-        );
-    }
-}
+mod tests;

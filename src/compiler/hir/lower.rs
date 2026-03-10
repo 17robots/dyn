@@ -7,15 +7,19 @@ use crate::compiler::hir::{
     HirCallArg, HirExpr, HirExprKind, HirIfCapture, HirItem, HirLiteral, HirMatchArm, HirModule,
     HirPattern, HirProgram,
 };
+use crate::compiler::module_resolver::ModuleKey;
 use crate::compiler::sema::analyze::SemanticSession;
 use crate::compiler::sema::module_unit::ModuleUnit;
 
 #[derive(Default)]
 struct MethodIndex {
     type_names: BTreeSet<String>,
+    import_aliases: BTreeSet<String>,
     static_methods: BTreeMap<(String, String), String>,
     instance_methods: BTreeMap<(String, String), MethodTarget>,
+    call_result_nominals: BTreeMap<String, String>,
     struct_field_nominals: BTreeMap<(String, String), String>,
+    struct_field_names: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Copy, Clone)]
@@ -58,10 +62,15 @@ pub fn lower_module_units_with_metadata(
         })
         .unwrap_or_default();
 
+    let units_by_key = units
+        .iter()
+        .map(|unit| (unit.key.clone(), unit))
+        .collect::<BTreeMap<_, _>>();
+
     let modules = units
         .iter()
         .map(|unit| {
-            let method_index = build_method_index(unit);
+            let method_index = build_method_index(unit, &units_by_key);
             let mut items = unit
                 .declarations
                 .iter()
@@ -94,59 +103,215 @@ pub fn lower_module_units_with_metadata(
     HirProgram { modules }
 }
 
-fn build_method_index(unit: &ModuleUnit) -> MethodIndex {
+fn build_method_index(
+    unit: &ModuleUnit,
+    units_by_key: &BTreeMap<ModuleKey, &ModuleUnit>,
+) -> MethodIndex {
     let mut index = MethodIndex::default();
-    for decl in &unit.declarations {
-        let Some(struct_ty) = decl_struct_type(decl) else {
+    let mut module_keys = vec![unit.key.clone()];
+    let mut seen_keys = BTreeSet::new();
+    seen_keys.insert(unit.key.clone());
+
+    for import in &unit.imports {
+        let alias_name = import.alias.clone().unwrap_or_else(|| "_".to_string());
+        index.import_aliases.insert(alias_name);
+        let target_key = import_path_to_module_key(&unit.key, &import.path);
+        if seen_keys.insert(target_key.clone()) {
+            module_keys.push(target_key);
+        }
+    }
+
+    for key in &module_keys {
+        let Some(target_unit) = units_by_key.get(key).copied() else {
             continue;
         };
-        index.type_names.insert(decl.name.clone());
-        for member in &struct_ty.members {
-            let ExprKind::Fn(fn_expr) = &member.value.kind else {
-                continue;
-            };
-            let synthetic = format!("{}__{}", decl.name, member.name.text);
-            index.static_methods.insert(
-                (decl.name.clone(), member.name.text.clone()),
-                synthetic.clone(),
-            );
-            if let Some(receiver) = instance_receiver_style(fn_expr, &decl.name) {
-                index.instance_methods.insert(
-                    (decl.name.clone(), member.name.text.clone()),
-                    MethodTarget {
-                        name: synthetic,
-                        receiver,
-                    },
-                );
+        for decl in &target_unit.declarations {
+            if decl_struct_type(decl).is_some() {
+                index.type_names.insert(decl.name.clone());
             }
         }
-        for field in &struct_ty.fields {
-            if let TypeExprKind::Named(named) = &field.ty.kind {
-                index.struct_field_nominals.insert(
-                    (decl.name.clone(), field.name.text.clone()),
-                    named.text.clone(),
-                );
+    }
+
+    for key in module_keys {
+        let Some(target_unit) = units_by_key.get(&key).copied() else {
+            continue;
+        };
+        for decl in &target_unit.declarations {
+            index_struct_decl_methods(&mut index, decl);
+        }
+    }
+
+    index
+}
+
+fn index_struct_decl_methods(
+    index: &mut MethodIndex,
+    decl: &crate::compiler::sema::module_unit::DeclStub,
+) {
+    let Some(struct_ty) = decl_struct_type(decl) else {
+        return;
+    };
+    index.type_names.insert(decl.name.clone());
+    for member in &struct_ty.members {
+        let Some(fn_expr) = member_fn_expr(&member.value) else {
+            continue;
+        };
+        let synthetic = format!("{}__{}", decl.name, member.name.text);
+        index.static_methods.insert(
+            (decl.name.clone(), member.name.text.clone()),
+            synthetic.clone(),
+        );
+        let receiver_style = instance_receiver_style(fn_expr, &decl.name);
+        if let Some(receiver) = receiver_style {
+            index.instance_methods.insert(
+                (decl.name.clone(), member.name.text.clone()),
+                MethodTarget {
+                    name: synthetic.clone(),
+                    receiver,
+                },
+            );
+        }
+        if let Some(nominal) = fn_expr
+            .return_type
+            .as_ref()
+            .and_then(type_expr_nominal_name)
+            .filter(|name| !is_predeclared_type_name(name))
+        {
+            index
+                .call_result_nominals
+                .insert(synthetic.clone(), nominal);
+        }
+    }
+    let mut field_names = BTreeSet::new();
+    for field in &struct_ty.fields {
+        field_names.insert(field.name.text.clone());
+        if let Some(nominal) = type_expr_nominal_name(&field.ty) {
+            if !is_predeclared_type_name(&nominal) {
+                index
+                    .struct_field_nominals
+                    .insert((decl.name.clone(), field.name.text.clone()), nominal);
             }
         }
     }
     index
+        .struct_field_names
+        .insert(decl.name.clone(), field_names);
+}
+
+fn is_predeclared_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "u1" | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "i8"
+            | "i16"
+            | "i31"
+            | "i32"
+            | "i64"
+            | "f32"
+            | "f64"
+            | "f128"
+            | "type"
+            | "any"
+            | "opaque"
+            | "void"
+            | "usize"
+            | "isize"
+            | "bool"
+    )
+}
+
+fn nominal_name_from_type_hint_text(text: &str) -> Option<String> {
+    let mut ty = text.trim();
+    if let Some(stripped) = ty.strip_prefix("*mut ") {
+        ty = stripped.trim();
+    } else if let Some(stripped) = ty.strip_prefix('*') {
+        ty = stripped.trim();
+    }
+    if let Some(stripped) = ty.strip_prefix('?') {
+        ty = stripped.trim();
+    }
+    if let Some((ok, _errs)) = ty.split_once('!') {
+        ty = ok.trim();
+    }
+
+    let nominal = if let Some((head, _)) = ty.split_once('(') {
+        head.trim()
+    } else {
+        ty
+    };
+    if nominal.is_empty() || is_predeclared_type_name(nominal) {
+        return None;
+    }
+    Some(nominal.to_string())
+}
+
+fn type_expr_nominal_name(ty: &crate::compiler::ast::TypeExpr) -> Option<String> {
+    match &ty.kind {
+        TypeExprKind::Named(ident) => Some(ident.text.clone()),
+        TypeExprKind::Applied { callee, .. } => Some(callee.text.clone()),
+        TypeExprKind::Pointer { inner, .. } | TypeExprKind::Optional { inner } => {
+            type_expr_nominal_name(inner)
+        }
+        TypeExprKind::Errorable { ok, .. } => type_expr_nominal_name(ok),
+        TypeExprKind::Array { .. }
+        | TypeExprKind::Slice { .. }
+        | TypeExprKind::Function(_)
+        | TypeExprKind::Struct(_)
+        | TypeExprKind::Enum(_) => None,
+    }
+}
+
+fn import_path_to_module_key(current: &ModuleKey, import_path: &str) -> ModuleKey {
+    let normalized = import_path.trim_matches('"');
+    let mut parts = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        return current.clone();
+    }
+
+    let module_name = parts.pop().unwrap_or_default().to_string();
+    let is_std_absolute = normalized.starts_with("std/");
+    let mut directory = if is_std_absolute || current.directory == std::path::Path::new(".") {
+        std::path::PathBuf::new()
+    } else {
+        current.directory.clone()
+    };
+    for segment in parts {
+        directory.push(segment);
+    }
+    if directory.as_os_str().is_empty() {
+        directory = std::path::PathBuf::from(".");
+    }
+
+    ModuleKey {
+        directory,
+        module_name,
+    }
 }
 
 fn instance_receiver_style(
     fn_expr: &crate::compiler::ast::FnExpr,
     type_name: &str,
 ) -> Option<ReceiverStyle> {
-    let Some(first) = fn_expr.params.first() else {
-        return None;
-    };
+    let first = fn_expr.params.first()?;
     let Some(first_ty) = &first.ty else {
         return None;
     };
-    if matches!(&first_ty.kind, TypeExprKind::Named(ident) if ident.text == type_name) {
+    if matches!(&first_ty.kind, TypeExprKind::Named(ident) if ident.text == type_name)
+        || matches!(&first_ty.kind, TypeExprKind::Applied { callee, .. } if callee.text == type_name)
+    {
         return Some(ReceiverStyle::Value);
     }
     if let TypeExprKind::Pointer { mutable, inner } = &first_ty.kind {
-        if matches!(inner.kind, TypeExprKind::Named(ref ident) if ident.text == type_name) {
+        if matches!(inner.kind, TypeExprKind::Named(ref ident) if ident.text == type_name)
+            || matches!(inner.kind, TypeExprKind::Applied { ref callee, .. } if callee.text == type_name)
+        {
             return Some(if *mutable {
                 ReceiverStyle::MutPtr
             } else {
@@ -165,8 +330,9 @@ fn append_member_function_items(
     let Some(struct_ty) = decl_struct_type(decl) else {
         return;
     };
+    let outer_type_params = decl_outer_type_params(decl);
     for member in &struct_ty.members {
-        let ExprKind::Fn(fn_expr) = &member.value.kind else {
+        let Some(fn_expr) = member_fn_expr(&member.value) else {
             continue;
         };
         let Some(name) = method_index
@@ -175,6 +341,12 @@ fn append_member_function_items(
         else {
             continue;
         };
+        let is_instance = instance_receiver_style(fn_expr, &decl.name).is_some();
+        let mut lowered_member = lower_expr(&member.value);
+        if !is_instance && !outer_type_params.is_empty() {
+            lowered_member =
+                prepend_outer_type_params_to_member_fn(lowered_member, &outer_type_params);
+        }
         items.push(HirItem {
             name: name.clone(),
             def_id: None,
@@ -182,9 +354,87 @@ fn append_member_function_items(
             mutable: false,
             type_hint: None,
             inferred_type: fn_expr.return_type.as_ref().map(type_expr_to_string),
-            value: rewrite_method_calls(lower_expr(&member.value), method_index),
+            value: rewrite_method_calls(lowered_member, method_index),
             span: member.value.span,
         });
+    }
+}
+
+fn decl_outer_type_params(
+    decl: &crate::compiler::sema::module_unit::DeclStub,
+) -> Vec<(String, Option<String>)> {
+    let fn_expr = match &decl.value.kind {
+        ExprKind::Fn(fn_expr) => Some(fn_expr),
+        ExprKind::Inline { expr } => match &expr.kind {
+            ExprKind::Fn(fn_expr) => Some(fn_expr),
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(fn_expr) = fn_expr else {
+        return Vec::new();
+    };
+    fn_expr
+        .params
+        .iter()
+        .map(|param| {
+            (
+                param.name.text.clone(),
+                param.ty.as_ref().map(type_expr_to_string),
+            )
+        })
+        .collect()
+}
+
+fn prepend_outer_type_params_to_member_fn(
+    expr: HirExpr,
+    outer_params: &[(String, Option<String>)],
+) -> HirExpr {
+    if outer_params.is_empty() {
+        return expr;
+    }
+    let span = expr.span;
+    match expr.kind {
+        HirExprKind::Function {
+            mut params,
+            mut param_types,
+            param_defaults,
+            has_explicit_return_type,
+            body,
+        } => {
+            let mut all_params = outer_params
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            all_params.append(&mut params);
+
+            let mut all_param_types = outer_params
+                .iter()
+                .map(|(_, ty)| ty.clone())
+                .collect::<Vec<_>>();
+            all_param_types.append(&mut param_types);
+
+            let mut all_param_defaults = vec![None; outer_params.len()];
+            all_param_defaults.extend(param_defaults);
+
+            HirExpr {
+                kind: HirExprKind::Function {
+                    params: all_params,
+                    param_types: all_param_types,
+                    param_defaults: all_param_defaults,
+                    has_explicit_return_type,
+                    body,
+                },
+                span,
+            }
+        }
+        HirExprKind::Inline { expr } => HirExpr {
+            kind: HirExprKind::Inline {
+                expr: Box::new(prepend_outer_type_params_to_member_fn(*expr, outer_params)),
+            },
+            span,
+        },
+        other => HirExpr { kind: other, span },
     }
 }
 
@@ -223,6 +473,17 @@ fn expr_type_literal_struct(expr: &Expr) -> Option<&crate::compiler::ast::Struct
     Some(struct_ty)
 }
 
+fn member_fn_expr(expr: &Expr) -> Option<&crate::compiler::ast::FnExpr> {
+    match &expr.kind {
+        ExprKind::Fn(fn_expr) => Some(fn_expr),
+        ExprKind::Inline { expr } => match &expr.kind {
+            ExprKind::Fn(fn_expr) => Some(fn_expr),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn rewrite_method_calls(expr: HirExpr, method_index: &MethodIndex) -> HirExpr {
     let mut scopes = vec![BTreeMap::<String, BindingInfo>::new()];
     rewrite_method_calls_with_scopes(expr, method_index, &mut scopes)
@@ -251,13 +512,44 @@ fn rewrite_method_calls_with_scopes(
                             .static_methods
                             .get(&(base_nominal, field.clone()))
                         {
+                            let mut method_args = Vec::new();
+                            if let HirExprKind::Call {
+                                args: type_args, ..
+                            } = &base.kind
+                            {
+                                method_args.extend(type_args.iter().map(|arg| HirCallArg {
+                                    name: arg.name.clone(),
+                                    value: rewrite_method_calls_with_scopes(
+                                        arg.value.clone(),
+                                        method_index,
+                                        scopes,
+                                    ),
+                                }));
+                            }
+                            method_args.append(&mut args);
+                            let rewritten_callee = if let Some(alias) =
+                                import_alias_for_type_receiver(&base, method_index)
+                            {
+                                HirExpr {
+                                    kind: HirExprKind::FieldAccess {
+                                        base: Box::new(HirExpr {
+                                            kind: HirExprKind::Ident(alias),
+                                            span,
+                                        }),
+                                        field: synth.clone(),
+                                    },
+                                    span,
+                                }
+                            } else {
+                                HirExpr {
+                                    kind: HirExprKind::Ident(synth.clone()),
+                                    span,
+                                }
+                            };
                             return HirExpr {
                                 kind: HirExprKind::Call {
-                                    callee: Box::new(HirExpr {
-                                        kind: HirExprKind::Ident(synth.clone()),
-                                        span,
-                                    }),
-                                    args,
+                                    callee: Box::new(rewritten_callee),
+                                    args: method_args,
                                 },
                                 span,
                             };
@@ -464,7 +756,7 @@ fn rewrite_method_calls_with_scopes(
             for expr in body {
                 let rewritten = rewrite_method_calls_with_scopes(expr, method_index, scopes);
                 if let HirExprKind::Let { name, value, .. } = &rewritten.kind {
-                    if let Some(nominal) = infer_nominal_type(value, scopes, method_index) {
+                    if let Some(nominal) = infer_binding_nominal(value, scopes, method_index) {
                         if let Some(scope) = scopes.last_mut() {
                             let mutable = matches!(&rewritten.kind, HirExprKind::Let { mutable, .. } if *mutable);
                             scope.insert(
@@ -485,10 +777,12 @@ fn rewrite_method_calls_with_scopes(
         HirExprKind::Let {
             name,
             mutable,
+            type_hint,
             value,
         } => HirExprKind::Let {
             name,
             mutable,
+            type_hint,
             value: Box::new(rewrite_method_calls_with_scopes(
                 *value,
                 method_index,
@@ -616,25 +910,68 @@ fn rewrite_method_calls_with_scopes(
             params,
             param_types,
             param_defaults,
+            has_explicit_return_type,
             body,
-        } => HirExprKind::Function {
-            params,
-            param_types,
-            param_defaults: param_defaults
+        } => {
+            scopes.push(BTreeMap::new());
+            if let Some(scope) = scopes.last_mut() {
+                for (idx, param_name) in params.iter().enumerate() {
+                    let Some(type_hint) = param_types.get(idx).and_then(|hint| hint.as_ref())
+                    else {
+                        continue;
+                    };
+                    let Some(nominal) = nominal_name_from_type_hint_text(type_hint) else {
+                        continue;
+                    };
+                    scope.insert(
+                        param_name.clone(),
+                        BindingInfo {
+                            nominal_type: nominal,
+                            mutable: false,
+                        },
+                    );
+                }
+            }
+
+            let rewritten_defaults = param_defaults
                 .into_iter()
                 .map(|default| {
                     default.map(|expr| rewrite_method_calls_with_scopes(expr, method_index, scopes))
                 })
-                .collect(),
-            body: Box::new(rewrite_method_calls_with_scopes(
-                *body,
-                method_index,
-                scopes,
-            )),
-        },
+                .collect();
+            let rewritten_body = rewrite_method_calls_with_scopes(*body, method_index, scopes);
+            scopes.pop();
+
+            HirExprKind::Function {
+                params,
+                param_types,
+                param_defaults: rewritten_defaults,
+                body: Box::new(rewritten_body),
+                has_explicit_return_type,
+            }
+        }
         other => other,
     };
     HirExpr { kind, span }
+}
+
+fn import_alias_for_type_receiver(expr: &HirExpr, method_index: &MethodIndex) -> Option<String> {
+    match &expr.kind {
+        HirExprKind::Call { callee, .. } => match &callee.kind {
+            HirExprKind::FieldAccess { base, field } => {
+                if let HirExprKind::Ident(alias) = &base.kind {
+                    if method_index.import_aliases.contains(alias)
+                        && method_index.type_names.contains(field)
+                    {
+                        return Some(alias.clone());
+                    }
+                }
+                None
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn infer_nominal_type(
@@ -647,6 +984,31 @@ fn infer_nominal_type(
             root_type: Some(root),
             ..
         } => Some(root.clone()),
+        HirExprKind::StructLiteral {
+            root_type: None,
+            fields,
+        } => {
+            let literal_field_names = fields
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<BTreeSet<_>>();
+            let mut matches = method_index
+                .struct_field_names
+                .iter()
+                .filter_map(|(nominal, field_names)| {
+                    if *field_names == literal_field_names {
+                        Some(nominal.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            if matches.len() == 1 {
+                matches.pop()
+            } else {
+                None
+            }
+        }
         HirExprKind::Ident(name) => scopes
             .iter()
             .rev()
@@ -669,8 +1031,24 @@ fn infer_nominal_type(
             HirExprKind::Ident(name) if method_index.type_names.contains(name) => {
                 Some(name.clone())
             }
+            HirExprKind::Ident(name) => method_index.call_result_nominals.get(name).cloned(),
             HirExprKind::FieldAccess { base, field } => {
+                if let HirExprKind::Ident(alias) = &base.kind {
+                    if method_index.import_aliases.contains(alias)
+                        && method_index.type_names.contains(field)
+                    {
+                        return Some(field.clone());
+                    }
+                }
                 let base_nominal = infer_nominal_type(base, scopes, method_index)?;
+                if let Some(synth) = method_index
+                    .static_methods
+                    .get(&(base_nominal.clone(), field.clone()))
+                {
+                    if let Some(nominal) = method_index.call_result_nominals.get(synth) {
+                        return Some(nominal.clone());
+                    }
+                }
                 if method_index
                     .instance_methods
                     .contains_key(&(base_nominal.clone(), field.clone()))
@@ -682,8 +1060,59 @@ fn infer_nominal_type(
             }
             _ => None,
         },
+        HirExprKind::OrElse { value, .. }
+        | HirExprKind::OptionalUnwrap { value }
+        | HirExprKind::ErrorUnwrap { value }
+        | HirExprKind::Comptime { expr: value }
+        | HirExprKind::Inline { expr: value } => infer_nominal_type(value, scopes, method_index),
+        HirExprKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let then_nominal = infer_nominal_type(then_branch, scopes, method_index);
+            let else_nominal = else_branch
+                .as_ref()
+                .and_then(|branch| infer_nominal_type(branch, scopes, method_index));
+            match (then_nominal, else_nominal) {
+                (Some(left), Some(right)) if left == right => Some(left),
+                (Some(left), None) => Some(left),
+                _ => None,
+            }
+        }
+        HirExprKind::Block { body } => body
+            .last()
+            .and_then(|expr| infer_nominal_type(expr, scopes, method_index)),
         _ => None,
     }
+}
+
+fn infer_binding_nominal(
+    expr: &HirExpr,
+    scopes: &[BTreeMap<String, BindingInfo>],
+    method_index: &MethodIndex,
+) -> Option<String> {
+    if let HirExprKind::Call { callee, .. } = &expr.kind {
+        let synthetic_name = match &callee.kind {
+            HirExprKind::Ident(name) => Some(name.clone()),
+            HirExprKind::FieldAccess { base, field } => {
+                if matches!(&base.kind, HirExprKind::Ident(alias) if method_index.import_aliases.contains(alias))
+                {
+                    Some(field.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(name) = synthetic_name {
+            if let Some(nominal) = method_index.call_result_nominals.get(&name).cloned() {
+                return Some(nominal);
+            }
+        }
+    }
+
+    infer_nominal_type(expr, scopes, method_index)
 }
 
 fn is_type_receiver_expr(
@@ -696,9 +1125,15 @@ fn is_type_receiver_expr(
             method_index.type_names.contains(name)
                 && !scopes.iter().rev().any(|scope| scope.contains_key(name))
         }
-        HirExprKind::Call { callee, .. } => {
-            matches!(&callee.kind, HirExprKind::Ident(name) if method_index.type_names.contains(name))
-        }
+        HirExprKind::Call { callee, .. } => match &callee.kind {
+            HirExprKind::Ident(name) => method_index.type_names.contains(name),
+            HirExprKind::FieldAccess { base, field } => {
+                matches!(&base.kind, HirExprKind::Ident(alias)
+                        if method_index.import_aliases.contains(alias)
+                            && method_index.type_names.contains(field))
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -810,6 +1245,7 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                             kind: HirExprKind::Let {
                                 name: binding.name.text.clone(),
                                 mutable: binding.mutable,
+                                type_hint: binding.annotation.as_ref().map(type_expr_to_string),
                                 value: Box::new(lower_expr(&binding.value)),
                             },
                             span: binding.span,
@@ -930,6 +1366,10 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                                         kind: HirExprKind::Let {
                                             name: binding.name.text.clone(),
                                             mutable: binding.mutable,
+                                            type_hint: binding
+                                                .annotation
+                                                .as_ref()
+                                                .map(type_expr_to_string),
                                             value: Box::new(lower_expr(&binding.value)),
                                         },
                                         span: binding.span,
@@ -963,6 +1403,7 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                     .iter()
                     .map(|param| param.default_value.as_ref().map(lower_expr))
                     .collect(),
+                has_explicit_return_type: fn_expr.return_type.is_some(),
                 body: Box::new(body),
             }
         }
@@ -1087,318 +1528,4 @@ fn type_expr_to_string(type_expr: &crate::compiler::ast::TypeExpr) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::compiler::pipeline::analyze_project;
-    use crate::compiler::sema::typeck::infer_binding_type_strings;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn make_temp_dir() -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should be monotonic")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("dyn_hir_{unique}"));
-        fs::create_dir_all(&path).expect("temp directory should be created");
-        path
-    }
-
-    #[test]
-    fn lowers_module_units_into_hir_program() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("a.dyn"),
-            "module main\na: i32 = 1\nb := use \"other\"\n",
-        )
-        .expect("file should be written");
-        fs::write(root.join("other.dyn"), "module other\nx := 1\n")
-            .expect("file should be written");
-
-        let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-        let inferred = infer_binding_type_strings(&units);
-        let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-        assert_eq!(hir.modules.len(), 2);
-        assert!(hir
-            .modules
-            .iter()
-            .any(|module| module.key.module_name == "main" && module.items.len() >= 2));
-        let main_module = hir
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        assert!(main_module
-            .items
-            .iter()
-            .any(|item| item.def_id.is_some() && item.inferred_type.is_some()));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn rewrites_struct_member_method_calls_into_synthetic_functions() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("a.dyn"),
-            "module main\nThing := struct { new := () i32 => 44, do := (self: Thing) i32 => 55 }\nmain := () i32 {\n  t := Thing{}\n  Thing.new()\n  t.do()\n}\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-        let inferred = infer_binding_type_strings(&units);
-        let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-        let main_module = hir
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        assert!(main_module
-            .items
-            .iter()
-            .any(|item| item.name == "Thing__new"));
-        assert!(main_module
-            .items
-            .iter()
-            .any(|item| item.name == "Thing__do"));
-
-        let main_item = main_module
-            .items
-            .iter()
-            .find(|item| item.name == "main")
-            .expect("main binding should exist");
-        let HirExprKind::Function { body, .. } = &main_item.value.kind else {
-            panic!("main should lower to function")
-        };
-        let HirExprKind::Block { body } = &body.kind else {
-            panic!("main body should be block")
-        };
-        assert!(body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, .. }
-                    if matches!(&callee.kind, HirExprKind::Ident(name) if name == "Thing__new")
-            )
-        }));
-        assert!(body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, .. }
-                    if matches!(&callee.kind, HirExprKind::Ident(name) if name == "Thing__do")
-            )
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn rewrites_type_constructor_static_method_call_into_synthetic_function() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("a.dyn"),
-            "module main\nVec := (T: comp type) type => struct { new := () i32 => 44 }\nmain := () i32 {\n  Vec(i32).new()\n}\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-        let inferred = infer_binding_type_strings(&units);
-        let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-        let main_module = hir
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        assert!(main_module.items.iter().any(|item| item.name == "Vec__new"));
-
-        let main_item = main_module
-            .items
-            .iter()
-            .find(|item| item.name == "main")
-            .expect("main binding should exist");
-        let HirExprKind::Function { body, .. } = &main_item.value.kind else {
-            panic!("main should lower to function")
-        };
-        let HirExprKind::Block { body } = &body.kind else {
-            panic!("main body should be block")
-        };
-        assert!(body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, .. }
-                    if matches!(&callee.kind, HirExprKind::Ident(name) if name == "Vec__new")
-            )
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn rewrites_pointer_receiver_method_call_with_implicit_ref() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("a.dyn"),
-            "module main\nThing := struct { touch := (self: *Thing) i32 => 1 }\nmain := () i32 {\n  t := Thing{}\n  t.touch()\n}\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-        let inferred = infer_binding_type_strings(&units);
-        let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-        let main_module = hir
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        let main_item = main_module
-            .items
-            .iter()
-            .find(|item| item.name == "main")
-            .expect("main binding should exist");
-        let HirExprKind::Function { body, .. } = &main_item.value.kind else {
-            panic!("main should lower to function")
-        };
-        let HirExprKind::Block { body } = &body.kind else {
-            panic!("main body should be block")
-        };
-        assert!(body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, args }
-                    if matches!(&callee.kind, HirExprKind::Ident(name) if name == "Thing__touch")
-                        && matches!(args.first().map(|arg| &arg.value.kind), Some(HirExprKind::Unary { op: UnaryOp::Ref, .. }))
-            )
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn rewrites_mut_pointer_receiver_method_call_for_mutable_binding() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("a.dyn"),
-            "module main\nThing := struct { touch := (self: *mut Thing) i32 => 1 }\nmain := () i32 {\n  mut t := Thing{}\n  t.touch()\n}\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-        let inferred = infer_binding_type_strings(&units);
-        let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-        let main_module = hir
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        let main_item = main_module
-            .items
-            .iter()
-            .find(|item| item.name == "main")
-            .expect("main binding should exist");
-        let HirExprKind::Function { body, .. } = &main_item.value.kind else {
-            panic!("main should lower to function")
-        };
-        let HirExprKind::Block { body } = &body.kind else {
-            panic!("main body should be block")
-        };
-        assert!(body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, args }
-                    if matches!(&callee.kind, HirExprKind::Ident(name) if name == "Thing__touch")
-                        && matches!(args.first().map(|arg| &arg.value.kind), Some(HirExprKind::Unary { op: UnaryOp::Ref, .. }))
-            )
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn does_not_rewrite_mut_pointer_receiver_call_for_immutable_binding() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("a.dyn"),
-            "module main\nThing := struct { touch := (self: *mut Thing) i32 => 1 }\nmain := () i32 {\n  t := Thing{}\n  t.touch()\n}\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-        let inferred = infer_binding_type_strings(&units);
-        let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-        let main_module = hir
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        let main_item = main_module
-            .items
-            .iter()
-            .find(|item| item.name == "main")
-            .expect("main binding should exist");
-        let HirExprKind::Function { body, .. } = &main_item.value.kind else {
-            panic!("main should lower to function")
-        };
-        let HirExprKind::Block { body } = &body.kind else {
-            panic!("main body should be block")
-        };
-        assert!(body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, .. }
-                    if matches!(
-                        &callee.kind,
-                        HirExprKind::FieldAccess { field, .. } if field == "touch"
-                    )
-            )
-        }));
-        assert!(!body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, .. }
-                    if matches!(&callee.kind, HirExprKind::Ident(name) if name == "Thing__touch")
-            )
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn rewrites_mut_pointer_receiver_call_for_mutable_field_binding() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("a.dyn"),
-            "module main\nThing := struct { touch := (self: *mut Thing) i32 => 1 }\nHolder := struct { item: Thing }\nmain := () i32 {\n  mut h := Holder{item: Thing{}}\n  h.item.touch()\n}\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-        let inferred = infer_binding_type_strings(&units);
-        let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-        let main_module = hir
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        let main_item = main_module
-            .items
-            .iter()
-            .find(|item| item.name == "main")
-            .expect("main binding should exist");
-        let HirExprKind::Function { body, .. } = &main_item.value.kind else {
-            panic!("main should lower to function")
-        };
-        let HirExprKind::Block { body } = &body.kind else {
-            panic!("main body should be block")
-        };
-        assert!(body.iter().any(|expr| {
-            matches!(
-                &expr.kind,
-                HirExprKind::Call { callee, args }
-                    if matches!(&callee.kind, HirExprKind::Ident(name) if name == "Thing__touch")
-                        && matches!(args.first().map(|arg| &arg.value.kind), Some(HirExprKind::Unary { op: UnaryOp::Ref, .. }))
-            )
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-}
+mod tests;

@@ -12,7 +12,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
         for function in &module.functions {
             if function.blocks.is_empty() {
                 diagnostics.push(Diagnostic::error(
-                    DiagnosticPhase::Backend,
+                    DiagnosticPhase::Mir,
                     DiagnosticCode::E5001,
                     format!("MIR function '{}' has no basic blocks", function.name),
                 ));
@@ -21,7 +21,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
 
             if function.entry.0 >= function.blocks.len() {
                 diagnostics.push(Diagnostic::error(
-                    DiagnosticPhase::Backend,
+                    DiagnosticPhase::Mir,
                     DiagnosticCode::E5001,
                     format!(
                         "MIR function '{}' has an invalid entry block",
@@ -34,7 +34,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
             for block in &function.blocks {
                 let Some(terminator) = &block.terminator else {
                     diagnostics.push(Diagnostic::error(
-                        DiagnosticPhase::Backend,
+                        DiagnosticPhase::Mir,
                         DiagnosticCode::E5001,
                         format!(
                             "MIR function '{}' has an unterminated block #{}",
@@ -48,7 +48,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                     MirTerminator::Goto(target) => {
                         if target.0 >= function.blocks.len() {
                             diagnostics.push(Diagnostic::error(
-                                DiagnosticPhase::Backend,
+                                DiagnosticPhase::Mir,
                                 DiagnosticCode::E5001,
                                 format!(
                                     "MIR function '{}' has goto to invalid block #{}",
@@ -66,7 +66,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                     } => {
                         if then_block.0 >= function.blocks.len() {
                             diagnostics.push(Diagnostic::error(
-                                DiagnosticPhase::Backend,
+                                DiagnosticPhase::Mir,
                                 DiagnosticCode::E5001,
                                 format!(
                                     "MIR function '{}' has branch to invalid then block #{}",
@@ -82,7 +82,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
 
                         if else_block.0 >= function.blocks.len() {
                             diagnostics.push(Diagnostic::error(
-                                DiagnosticPhase::Backend,
+                                DiagnosticPhase::Mir,
                                 DiagnosticCode::E5001,
                                 format!(
                                     "MIR function '{}' has branch to invalid else block #{}",
@@ -104,7 +104,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
             for (block_idx, block) in function.blocks.iter().enumerate() {
                 if block.id.0 != block_idx {
                     diagnostics.push(Diagnostic::error(
-                        DiagnosticPhase::Backend,
+                        DiagnosticPhase::Mir,
                         DiagnosticCode::E5001,
                         format!(
                             "MIR function '{}' has mismatched block id #{} at index #{}",
@@ -120,7 +120,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                             saw_non_phi = true;
                             if value_types.insert(*dest, ty.clone()).is_some() {
                                 diagnostics.push(Diagnostic::error(
-                                    DiagnosticPhase::Backend,
+                                    DiagnosticPhase::Mir,
                                     DiagnosticCode::E5003,
                                     format!(
                                         "MIR function '{}' redefines value id #{}",
@@ -133,7 +133,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                         MirInstr::Phi { dest, sources, ty } => {
                             if saw_non_phi {
                                 diagnostics.push(Diagnostic::error(
-                                    DiagnosticPhase::Backend,
+                                    DiagnosticPhase::Mir,
                                     DiagnosticCode::E5003,
                                     format!(
                                         "MIR function '{}' has phi after non-phi in block #{}",
@@ -143,7 +143,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                             }
                             if sources.is_empty() {
                                 diagnostics.push(Diagnostic::error(
-                                    DiagnosticPhase::Backend,
+                                    DiagnosticPhase::Mir,
                                     DiagnosticCode::E5001,
                                     format!(
                                         "MIR function '{}' has phi in block #{} with no sources",
@@ -155,7 +155,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                             for (pred, _source_value) in sources {
                                 if pred.0 >= function.blocks.len() {
                                     diagnostics.push(Diagnostic::error(
-                                        DiagnosticPhase::Backend,
+                                        DiagnosticPhase::Mir,
                                         DiagnosticCode::E5003,
                                         format!(
                                             "MIR function '{}' has phi in block #{} with invalid predecessor #{}",
@@ -164,7 +164,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                                     ));
                                 } else if !preds.contains(&pred.0) {
                                     diagnostics.push(Diagnostic::error(
-                                        DiagnosticPhase::Backend,
+                                        DiagnosticPhase::Mir,
                                         DiagnosticCode::E5003,
                                         format!(
                                             "MIR function '{}' has phi in block #{} with non-predecessor source block #{}",
@@ -176,7 +176,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
 
                             if value_types.insert(*dest, ty.clone()).is_some() {
                                 diagnostics.push(Diagnostic::error(
-                                    DiagnosticPhase::Backend,
+                                    DiagnosticPhase::Mir,
                                     DiagnosticCode::E5003,
                                     format!(
                                         "MIR function '{}' redefines value id #{}",
@@ -205,7 +205,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                                 match value_types.get(source_value) {
                                     Some(source_ty) if !types_compatible(ty, source_ty) => {
                                         diagnostics.push(Diagnostic::error(
-                                            DiagnosticPhase::Backend,
+                                            DiagnosticPhase::Mir,
                                             DiagnosticCode::E5003,
                                             format!(
                                                 "MIR function '{}' has phi with incompatible source type for value #{}",
@@ -216,7 +216,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                                     Some(_) => {}
                                     None => {
                                         diagnostics.push(Diagnostic::error(
-                                            DiagnosticPhase::Backend,
+                                            DiagnosticPhase::Mir,
                                             DiagnosticCode::E5003,
                                             format!(
                                                 "MIR function '{}' has phi referencing undefined value #{}",
@@ -235,7 +235,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                         MirTerminator::Return(Some(value)) => {
                             if !value_types.contains_key(value) {
                                 diagnostics.push(Diagnostic::error(
-                                    DiagnosticPhase::Backend,
+                                    DiagnosticPhase::Mir,
                                     DiagnosticCode::E5003,
                                     format!(
                                         "MIR function '{}' returns undefined value #{} in block #{}",
@@ -246,9 +246,11 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                         }
                         MirTerminator::Branch { condition, .. } => match value_types.get(condition)
                         {
-                            Some(MirValueType::Bool) | Some(MirValueType::Int { .. }) => {}
+                            Some(MirValueType::Bool)
+                            | Some(MirValueType::Int { .. })
+                            | Some(MirValueType::BytesSlice) => {}
                             Some(_) => diagnostics.push(Diagnostic::error(
-                                DiagnosticPhase::Backend,
+                                DiagnosticPhase::Mir,
                                 DiagnosticCode::E5003,
                                 format!(
                                     "MIR function '{}' has non-scalar branch condition value #{} in block #{}",
@@ -256,7 +258,7 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
                                 ),
                             )),
                             None => diagnostics.push(Diagnostic::error(
-                                DiagnosticPhase::Backend,
+                                DiagnosticPhase::Mir,
                                 DiagnosticCode::E5003,
                                 format!(
                                     "MIR function '{}' has branch on undefined value #{} in block #{}",
@@ -285,7 +287,7 @@ fn verify_eval_operands(
     let mut check_value = |id: MirValueId, what: &str| {
         if !value_types.contains_key(&id) {
             diagnostics.push(Diagnostic::error(
-                DiagnosticPhase::Backend,
+                DiagnosticPhase::Mir,
                 DiagnosticCode::E5003,
                 format!(
                     "MIR function '{}' references undefined {} value #{}",
@@ -298,6 +300,7 @@ fn verify_eval_operands(
     match value {
         MirValue::Literal(_) | MirValue::Ident(_) | MirValue::Param { .. } | MirValue::Unknown => {}
         MirValue::Unary { operand, .. } => check_value(*operand, "unary operand"),
+        MirValue::Cast { value, .. } => check_value(*value, "cast source"),
         MirValue::Binary { left, right, .. } => {
             check_value(*left, "binary left operand");
             check_value(*right, "binary right operand");
@@ -354,160 +357,15 @@ fn types_compatible(expected: &MirValueType, actual: &MirValueType) -> bool {
                 | (MirValueType::Float { .. }, MirValueType::Float { .. })
                 | (MirValueType::Bool, MirValueType::Int { .. })
                 | (MirValueType::Int { .. }, MirValueType::Bool)
+                | (MirValueType::BytesSlice, MirValueType::BytesSlice)
+                | (MirValueType::BytesSlice, MirValueType::Int { .. })
+                | (MirValueType::Int { .. }, MirValueType::BytesSlice)
+                | (MirValueType::FunctionPointer, MirValueType::Function)
+                | (MirValueType::Function, MirValueType::FunctionPointer)
+                | (MirValueType::FunctionPointer, MirValueType::Int { .. })
+                | (MirValueType::Int { .. }, MirValueType::FunctionPointer)
         )
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::compiler::mir::{MirBasicBlock, MirBlockId, MirFunction, MirModule, MirValueId};
-    use std::path::PathBuf;
-
-    #[test]
-    fn reports_unterminated_block() {
-        let program = MirProgram {
-            modules: vec![MirModule {
-                module_id: crate::compiler::module_resolver::ModuleId(0),
-                key: crate::compiler::module_resolver::ModuleKey {
-                    directory: PathBuf::from("."),
-                    module_name: "main".to_string(),
-                },
-                functions: vec![MirFunction {
-                    name: "f".to_string(),
-                    def_id: None,
-                    return_type: None,
-                    param_types: Vec::new(),
-                    entry: MirBlockId(0),
-                    blocks: vec![MirBasicBlock {
-                        id: MirBlockId(0),
-                        instructions: Vec::new(),
-                        terminator: None,
-                    }],
-                }],
-            }],
-        };
-
-        let diagnostics = verify_mir_program(&program);
-        assert!(diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E5001));
-    }
-
-    #[test]
-    fn reports_invalid_phi_source_and_undefined_return_value() {
-        let program = MirProgram {
-            modules: vec![MirModule {
-                module_id: crate::compiler::module_resolver::ModuleId(0),
-                key: crate::compiler::module_resolver::ModuleKey {
-                    directory: PathBuf::from("."),
-                    module_name: "main".to_string(),
-                },
-                functions: vec![MirFunction {
-                    name: "f".to_string(),
-                    def_id: None,
-                    return_type: None,
-                    param_types: Vec::new(),
-                    entry: MirBlockId(0),
-                    blocks: vec![
-                        MirBasicBlock {
-                            id: MirBlockId(0),
-                            instructions: vec![MirInstr::Phi {
-                                dest: MirValueId(0),
-                                sources: vec![(MirBlockId(1), MirValueId(99))],
-                                ty: MirValueType::Int {
-                                    signed: true,
-                                    bits: 32,
-                                },
-                            }],
-                            terminator: Some(MirTerminator::Return(Some(MirValueId(5)))),
-                        },
-                        MirBasicBlock {
-                            id: MirBlockId(1),
-                            instructions: Vec::new(),
-                            terminator: Some(MirTerminator::Goto(MirBlockId(0))),
-                        },
-                    ],
-                }],
-            }],
-        };
-
-        let diagnostics = verify_mir_program(&program);
-        assert!(diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E5003));
-    }
-
-    #[test]
-    fn reports_phi_after_non_phi() {
-        let program = MirProgram {
-            modules: vec![MirModule {
-                module_id: crate::compiler::module_resolver::ModuleId(0),
-                key: crate::compiler::module_resolver::ModuleKey {
-                    directory: PathBuf::from("."),
-                    module_name: "main".to_string(),
-                },
-                functions: vec![MirFunction {
-                    name: "f".to_string(),
-                    def_id: None,
-                    return_type: None,
-                    param_types: Vec::new(),
-                    entry: MirBlockId(0),
-                    blocks: vec![MirBasicBlock {
-                        id: MirBlockId(0),
-                        instructions: vec![
-                            MirInstr::Eval {
-                                dest: MirValueId(0),
-                                value: MirValue::Literal(
-                                    crate::compiler::hir::HirLiteral::Integer("1".to_string()),
-                                ),
-                                ty: MirValueType::Int {
-                                    signed: true,
-                                    bits: 32,
-                                },
-                            },
-                            MirInstr::Phi {
-                                dest: MirValueId(1),
-                                sources: vec![(MirBlockId(0), MirValueId(0))],
-                                ty: MirValueType::Int {
-                                    signed: true,
-                                    bits: 32,
-                                },
-                            },
-                        ],
-                        terminator: Some(MirTerminator::Return(Some(MirValueId(1)))),
-                    }],
-                }],
-            }],
-        };
-
-        let diagnostics = verify_mir_program(&program);
-        assert!(diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E5003));
-    }
-
-    #[test]
-    fn treats_numeric_width_and_bool_int_phi_types_as_compatible() {
-        assert!(types_compatible(
-            &MirValueType::Int {
-                signed: true,
-                bits: 32,
-            },
-            &MirValueType::Int {
-                signed: false,
-                bits: 64,
-            }
-        ));
-        assert!(types_compatible(
-            &MirValueType::Bool,
-            &MirValueType::Int {
-                signed: false,
-                bits: 8,
-            }
-        ));
-        assert!(types_compatible(
-            &MirValueType::Float { bits: 32 },
-            &MirValueType::Float { bits: 64 }
-        ));
-    }
-}
+mod tests;

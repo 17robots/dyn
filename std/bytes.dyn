@@ -1,0 +1,20 @@
+module bytes
+
+pub len := (value: []u8) usize => $bytes_len(value)
+
+pub eq := (lhs: []u8, rhs: []u8) u32 => $bytes_eq(lhs, rhs)
+
+pub starts_with := (value: []u8, prefix: []u8) u32 => $bytes_starts_with(value, prefix)
+
+pub ends_with := (value: []u8, suffix: []u8) u32 => $bytes_ends_with(value, suffix)
+
+pub index_of := (value: []u8, needle: []u8) isize => $bytes_index_of(value, needle)
+
+pub clone := (value: []u8) []u8 => $bytes_clone(value)
+
+pub slice := (value: []u8, start: usize, end: usize) []u8 =>
+    $bytes_slice(value, start, end)
+
+pub concat := (lhs: []u8, rhs: []u8) []u8 => $bytes_concat2(lhs, rhs)
+
+pub concat3 := (a: []u8, b: []u8, c: []u8) []u8 => $bytes_concat3(a, b, c)

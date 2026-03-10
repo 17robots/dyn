@@ -80,12 +80,58 @@ Build native executable with explicit output path:
 cargo run -- build <start_directory> -o <output_path>
 ```
 
+Build and run immediately:
+
+```bash
+cargo run -- run <start_directory>
+# pass program args after --
+cargo run -- run <start_directory> -- arg1 arg2
+```
+
 Build with optimization level selection:
 
 ```bash
 cargo run -- build <start_directory> -O2
 # or: cargo run -- build <start_directory> --opt-level 2
 ```
+
+Measure source LOC (counts `src/**/*.rs` + `std/**/*.dyn`, excludes build/scratch dirs):
+
+```bash
+./scripts/loc.sh
+```
+
+Benchmark key compiler pipeline stages locally:
+
+```bash
+./scripts/bench.sh . 5
+```
+
+Spec parity tracking snapshot:
+
+```bash
+docs/spec_status.md
+```
+
+Contribution guide:
+
+```bash
+CONTRIBUTING.md
+```
+
+Maintainer conventions:
+- Keep split compiler internals in focused chunk files with short snake_case names (prefer domain nouns like `expr`, `errors`, `runtime`; avoid `and` in filenames).
+- Treat dispatcher files as wiring only (`.../infer.rs`, `.../function_lowerer.rs`, `src/compiler/backend/runtime_support.rs`, `src/compiler/backend/cranelift.rs`) and add new logic to the nearest chunk file.
+- Keep tests in dedicated `tests.rs` / `tests/*.rs` modules; add new tests to the closest themed file (for example `core`, `diagnostics`, `runtime`, `builtins`, `io`, `stdlib`).
+
+Stdlib import resolution:
+- `use "std/..."` works without copying `std/` into each project.
+- The compiler first checks `<project>/std/...`, then falls back to its bundled `std/` directory.
+- Set `DYN_STD_PATH=/absolute/path/to/std` to override the fallback stdlib location.
+- Low-level runtime builtins are exposed to Dyn code as `$...` identifiers (for example `$path_normalize`, `$bytes_len`, `$io_write`).
+- `std/os` is the platform layer; it currently routes through `std/os/posix` (implemented via `std/os/linux`).
+- `std/io` supports string-first ergonomics, e.g. `io.println("Hello world\n") or return 1`.
+- Additional bundled modules now include `std/os`, `std/os/posix`, `std/os/linux`, `std/bytes`, `std/str`, `std/fmt`, `std/env`, `std/fs`, `std/path`, `std/collections`, and `std/diag`.
 
 Resolver behavior right now:
 - Recursively scans `.dyn` files
@@ -131,23 +177,18 @@ Semantic-analysis prep status:
 - HIR lowering now includes semantic metadata (declaration `def_id` and inferred binding type strings where available)
 - MIR scaffold is available in `src/compiler/mir/` with CFG blocks, terminators, and verification
 - Native build scaffold is wired through Cranelift in `src/compiler/backend/cranelift.rs` via `cargo run -- build <start_directory>`
+- Native linking now prefers the host `cc` driver and falls back to Linux `ld` wiring when needed.
 - Imported module member calls now lower to qualified function symbols, so calls like `io := use "my_io"; io.print(...)` execute reliably at runtime.
-- Printing is std/module-owned (`io.print`/`io.println` style); there is no implicit global compiler `print`/`println`.
+- Printing is std/module-owned (`io.print("...")` / `io.println("...")` and numeric helpers like `io.print_i32(...)`); there is no implicit global compiler `print`/`println`.
+- Byte string values are modeled as `[]u8` throughout the type system.
+- `comp` and `inline` now fail fast when unsupported: invalid compile-time evaluation and non-lowerable inline forms emit compile errors instead of silently falling back.
+- Match/struct parser recovery now handles accidental `=>` separators and missing commas with targeted diagnostics instead of cascading expression errors.
+- Force unwrap operators are implemented end-to-end: `.?` for optionals and `.!` for errorables.
+- Error unwrap propagation is supported: inside errorable functions, `.!` propagates errors; outside errorable functions it traps.
+- Type checking now enforces declared error-set compatibility for errorable returns/propagation.
 
-Backend planning notes are tracked in `BACKEND_PLAN.md`.
+## Next milestones (polish)
 
-## Remaining milestones before backend/codegen
-
-- Parser hardening
-  - Increase nested function/block fidelity and gradually remove fallback-only recoveries.
-  - Keep top-level segmentation stable while reducing tolerant parsing in hot paths.
-- Semantic and type completeness
-  - Expand compatibility and coercion rules for integer widths/signs and float widths.
-  - Improve optional/errorable flow typing across more expression shapes.
-  - Strengthen match exhaustiveness beyond wildcard/bool baseline (enum/range aware).
-- Typed IR pipeline
-  - HIR scaffold exists in `src/compiler/hir/`; continue enriching it with resolved symbols and explicit control-flow edges.
-  - Add type attachments to lowered nodes to make backend lowering deterministic.
-- Backend preparation
-  - Finalize runtime/data-layout assumptions and calling convention strategy.
-  - Decide LLVM IR vs bytecode VM first for codegen bring-up.
+- Harden stdlib internals (directory listing output, path normalization details, and collection ergonomics) while keeping compiler intrinsics minimal.
+- Improve parser diagnostics/recovery quality and error spans for malformed source.
+- Broaden platform support for native linking/runtime packaging beyond current Linux-first flow.

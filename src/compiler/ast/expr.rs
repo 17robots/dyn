@@ -112,8 +112,8 @@ pub struct BlockExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Binding(Binding),
-    Expr(Expr),
+    Binding(Box<Binding>),
+    Expr(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

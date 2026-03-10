@@ -1,6 +1,7 @@
 // comment
 module main
 main := () ! { // void type but marked as errorable with !
+  io := use "std/io"
   a := 1
   b: i32 = 2
   c: i31 = 3
@@ -34,8 +35,8 @@ main := () ! { // void type but marked as errorable with !
     item2: []u8,
     item3: []i32,
     new := () s => .{}
-    do_thing := (self: u) {},
-    fn_ptr := *fn(self: u),
+    do_thing := (self: s) {},
+    fn_ptr: *fn(self: s),
   }
   {
     t := "only valid here"
@@ -73,7 +74,7 @@ main := () ! { // void type but marked as errorable with !
       .inner1: {},
       .inner2: |val2| {},
       .inner3: |val2| {},
-    }
+    },
     _: {}, // again only needed if not exhaustive
   }
   x := add(add2(add3(x: 1), add3(y: 1)), add3())
@@ -126,10 +127,10 @@ DivideError1 := enum { // errors can be either structs or enums
 DivideError2 := enum {
   DivideByzero
 }
-divide := (x: f32, y: f32) f32!DivideError1,DivideError2 => if y == 0 .DivideByZero else x / y
+divide := (x: f32, y: f32) f32!DivideError1,DivideError2 => if y == 0 DivideError2.DivideByZero else x / y
 
 List := (T: type) type => struct {
-  init := () $Self() => .{}
+  init := () type => $Self()
 }
 List2 := (T: comp type) type => struct {}
 

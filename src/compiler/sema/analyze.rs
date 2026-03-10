@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use crate::compiler::ast::{
     Expr, ExprKind, FnBody, Pattern, PatternKind, Stmt, TypeExpr, TypeExprKind,
 };
-use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
+use crate::compiler::diagnostic_utils::sort_diagnostics_by_primary_path;
+use crate::compiler::diagnostics::{
+    Diagnostic, DiagnosticCode, DiagnosticLabel, DiagnosticPhase, SourceSpan,
+};
 use crate::compiler::module_resolver::{ModuleId, ModuleKey};
 use crate::compiler::sema::module_unit::ModuleUnit;
 
@@ -57,8 +60,10 @@ pub fn analyze_modules(units: &[ModuleUnit]) -> SemanticSession {
 
     for unit in units {
         let mut seen = BTreeMap::<String, DefId>::new();
+        let mut declared_spans = BTreeMap::<String, SourceSpan>::new();
         let mut declarations = Vec::new();
         let mut imports = Vec::new();
+        let mut import_alias_spans = BTreeMap::<String, SourceSpan>::new();
         let mut type_names = BTreeSet::<String>::new();
 
         for decl in &unit.declarations {
@@ -80,6 +85,7 @@ pub fn analyze_modules(units: &[ModuleUnit]) -> SemanticSession {
                 );
             } else {
                 seen.insert(decl.name.clone(), def_id);
+                declared_spans.insert(decl.name.clone(), decl.span);
             }
 
             declarations.push(ResolvedDecl {
@@ -128,6 +134,9 @@ pub fn analyze_modules(units: &[ModuleUnit]) -> SemanticSession {
 
             let alias_name = import.alias.clone().unwrap_or_else(|| "_".to_string());
             let alias_def = seen.get(&alias_name).copied();
+            import_alias_spans
+                .entry(alias_name.clone())
+                .or_insert(import.span);
             imports.push(ResolvedImport {
                 alias_def,
                 alias_name,
@@ -142,12 +151,20 @@ pub fn analyze_modules(units: &[ModuleUnit]) -> SemanticSession {
             .collect::<BTreeMap<_, _>>();
 
         for decl in &unit.declarations {
-            let mut scopes = vec![BTreeSet::<String>::new()];
-            scopes[0].extend(seen.keys().cloned());
-            scopes[0].extend(import_aliases.keys().cloned());
+            let mut scopes = vec![BTreeMap::<String, SourceSpan>::new()];
+            if let Some(scope) = scopes.last_mut() {
+                for (name, span) in &declared_spans {
+                    scope.insert(name.clone(), *span);
+                }
+                for (name, span) in &import_alias_spans {
+                    scope.insert(name.clone(), *span);
+                }
+            }
+            let mut out_of_scope = BTreeMap::<String, SourceSpan>::new();
             check_expr_resolution(
                 &decl.value,
                 &mut scopes,
+                &mut out_of_scope,
                 &seen,
                 &import_aliases,
                 &type_names,
@@ -165,11 +182,7 @@ pub fn analyze_modules(units: &[ModuleUnit]) -> SemanticSession {
         });
     }
 
-    diagnostics.sort_by(|left, right| {
-        let left_path = left.labels.first().map(|label| &label.file_path);
-        let right_path = right.labels.first().map(|label| &label.file_path);
-        left_path.cmp(&right_path)
-    });
+    sort_diagnostics_by_primary_path(&mut diagnostics);
 
     SemanticSession {
         modules,
@@ -198,80 +211,6 @@ fn is_predeclared_name(name: &str) -> bool {
             | "void"
             | "usize"
             | "isize"
-            | "bytes"
-            | "__dyn_alloc"
-            | "__dyn_realloc"
-            | "__dyn_free"
-            | "__dyn_c_allocator"
-            | "__dyn_alloc_with"
-            | "__dyn_realloc_with"
-            | "__dyn_free_with"
-            | "__dyn_mem_copy"
-            | "__dyn_mem_move"
-            | "__dyn_mem_set"
-            | "__dyn_mem_eq"
-            | "__dyn_test_failing_allocator"
-            | "__dyn_test_set_fail_after"
-            | "__dyn_test_identity_i32_fn"
-            | "__dyn_arena_allocator"
-            | "__dyn_arena_reset"
-            | "__dyn_arena_deinit"
-            | "__dyn_vec_i32_init"
-            | "__dyn_vec_i32_deinit"
-            | "__dyn_vec_i32_len"
-            | "__dyn_vec_i32_cap"
-            | "__dyn_vec_i32_push"
-            | "__dyn_vec_i32_get"
-            | "__dyn_vec_i32_set"
-            | "__dyn_vec_i32_pop"
-            | "__dyn_vec_i32_clear"
-            | "__dyn_vec_i32_reserve"
-            | "std_vec_i32_init"
-            | "std_vec_i32_deinit"
-            | "std_vec_i32_len"
-            | "std_vec_i32_cap"
-            | "std_vec_i32_push"
-            | "std_vec_i32_get"
-            | "std_vec_i32_set"
-            | "std_vec_i32_pop"
-            | "std_vec_i32_clear"
-            | "std_vec_i32_reserve"
-            | "__dyn_vec_raw_init"
-            | "__dyn_vec_raw_deinit"
-            | "__dyn_vec_raw_len"
-            | "__dyn_vec_raw_cap"
-            | "__dyn_vec_raw_push_u64"
-            | "__dyn_vec_raw_get_u64"
-            | "__dyn_vec_raw_set_u64"
-            | "__dyn_vec_raw_pop_u64"
-            | "__dyn_vec_raw_clear"
-            | "__dyn_vec_raw_reserve"
-            | "__dyn_vec_raw_ptr"
-            | "__dyn_vec_raw_push_bytes"
-            | "__dyn_vec_raw_get_bytes"
-            | "__dyn_vec_raw_set_bytes"
-            | "__dyn_vec_raw_pop_bytes"
-            | "std_vec_init"
-            | "std_vec_deinit"
-            | "std_vec_len"
-            | "std_vec_cap"
-            | "std_vec_push_u64"
-            | "std_vec_get_u64"
-            | "std_vec_set_u64"
-            | "std_vec_pop_u64"
-            | "std_vec_clear"
-            | "std_vec_reserve"
-            | "std_vec_ptr"
-            | "std_vec_push_bytes"
-            | "std_vec_get_bytes"
-            | "std_vec_set_bytes"
-            | "std_vec_pop_bytes"
-            | "__dyn_io_write_i32"
-            | "__dyn_io_write"
-            | "std_io_print_i32"
-            | "std_io_println_i32"
-            | "std_io_print"
-            | "std_io_println"
     )
 }
 
@@ -332,9 +271,30 @@ fn collect_type_names(ty: &TypeExpr, out: &mut BTreeSet<String>) {
     }
 }
 
+fn pop_scope(
+    scopes: &mut Vec<BTreeMap<String, SourceSpan>>,
+    out_of_scope: &mut BTreeMap<String, SourceSpan>,
+) {
+    if let Some(scope) = scopes.pop() {
+        for (name, span) in scope {
+            if !scopes.iter().rev().any(|active| active.contains_key(&name)) {
+                out_of_scope.insert(name, span);
+            }
+        }
+    }
+}
+
+fn bind_name(scopes: &mut [BTreeMap<String, SourceSpan>], name: &str, span: SourceSpan) {
+    if let Some(scope) = scopes.last_mut() {
+        scope.insert(name.to_string(), span);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn check_expr_resolution(
     expr: &Expr,
-    scopes: &mut Vec<BTreeSet<String>>,
+    scopes: &mut Vec<BTreeMap<String, SourceSpan>>,
+    out_of_scope: &mut BTreeMap<String, SourceSpan>,
     module_defs: &BTreeMap<String, DefId>,
     import_aliases: &BTreeMap<String, Option<ModuleId>>,
     type_names: &BTreeSet<String>,
@@ -344,7 +304,10 @@ fn check_expr_resolution(
 ) {
     match &expr.kind {
         ExprKind::Ident(ident) => {
-            let known = scopes.iter().rev().any(|scope| scope.contains(&ident.text))
+            let known = scopes
+                .iter()
+                .rev()
+                .any(|scope| scope.contains_key(&ident.text))
                 || module_defs.contains_key(&ident.text)
                 || import_aliases.contains_key(&ident.text)
                 || type_names.contains(&ident.text)
@@ -352,18 +315,38 @@ fn check_expr_resolution(
                 || looks_like_type_parameter(&ident.text);
 
             if !known {
-                diagnostics.push(
-                    Diagnostic::error(
+                if let Some(declared_span) = out_of_scope.get(&ident.text) {
+                    let mut diagnostic = Diagnostic::error(
                         DiagnosticPhase::Semantic,
                         DiagnosticCode::E4001,
-                        format!("unresolved name '{}'", ident.text),
+                        format!("name '{}' is out of scope", ident.text),
                     )
                     .with_primary_file_label(
                         file_path.clone(),
                         Some(expr.span),
-                        "name is not declared in scope",
-                    ),
-                );
+                        "name was declared in an inner scope and is not visible here",
+                    );
+                    diagnostic.labels.push(DiagnosticLabel {
+                        file_path: file_path.clone(),
+                        span: Some(*declared_span),
+                        message: "declared here".to_string(),
+                        is_primary: false,
+                    });
+                    diagnostics.push(diagnostic);
+                } else {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::Semantic,
+                            DiagnosticCode::E4001,
+                            format!("cannot resolve name '{}'", ident.text),
+                        )
+                        .with_primary_file_label(
+                            file_path.clone(),
+                            Some(expr.span),
+                            "declare it before use or check for a typo",
+                        ),
+                    );
+                }
             }
         }
         ExprKind::FieldAccess { base, field } => {
@@ -415,6 +398,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 base,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -424,13 +408,14 @@ fn check_expr_resolution(
             );
         }
         ExprKind::Block(block) => {
-            scopes.push(BTreeSet::new());
+            scopes.push(BTreeMap::new());
             for stmt in &block.statements {
                 match stmt {
                     Stmt::Binding(binding) => {
                         check_expr_resolution(
                             &binding.value,
                             scopes,
+                            out_of_scope,
                             module_defs,
                             import_aliases,
                             type_names,
@@ -438,13 +423,12 @@ fn check_expr_resolution(
                             file_path,
                             diagnostics,
                         );
-                        if let Some(scope) = scopes.last_mut() {
-                            scope.insert(binding.name.text.clone());
-                        }
+                        bind_name(scopes, &binding.name.text, binding.name.span);
                     }
                     Stmt::Expr(stmt_expr) => check_expr_resolution(
                         stmt_expr,
                         scopes,
+                        out_of_scope,
                         module_defs,
                         import_aliases,
                         type_names,
@@ -458,6 +442,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     tail,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -466,14 +451,12 @@ fn check_expr_resolution(
                     diagnostics,
                 );
             }
-            scopes.pop();
+            pop_scope(scopes, out_of_scope);
         }
         ExprKind::Fn(fn_expr) => {
-            scopes.push(BTreeSet::new());
-            if let Some(scope) = scopes.last_mut() {
-                for param in &fn_expr.params {
-                    scope.insert(param.name.text.clone());
-                }
+            scopes.push(BTreeMap::new());
+            for param in &fn_expr.params {
+                bind_name(scopes, &param.name.text, param.name.span);
             }
             match &fn_expr.body {
                 FnBody::Block(block) => {
@@ -483,6 +466,7 @@ fn check_expr_resolution(
                             span: expr.span,
                         },
                         scopes,
+                        out_of_scope,
                         module_defs,
                         import_aliases,
                         type_names,
@@ -494,6 +478,7 @@ fn check_expr_resolution(
                 FnBody::ArrowExpr(arrow) => check_expr_resolution(
                     arrow,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -502,7 +487,7 @@ fn check_expr_resolution(
                     diagnostics,
                 ),
             }
-            scopes.pop();
+            pop_scope(scopes, out_of_scope);
         }
         ExprKind::For(for_expr) => match for_expr {
             crate::compiler::ast::ForExpr::Range {
@@ -515,6 +500,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     start,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -525,6 +511,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     end,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -532,15 +519,14 @@ fn check_expr_resolution(
                     file_path,
                     diagnostics,
                 );
-                scopes.push(BTreeSet::new());
+                scopes.push(BTreeMap::new());
                 if let Some(binding) = binding {
-                    if let Some(scope) = scopes.last_mut() {
-                        scope.insert(binding.text.clone());
-                    }
+                    bind_name(scopes, &binding.text, binding.span);
                 }
                 check_expr_resolution(
                     body,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -548,7 +534,7 @@ fn check_expr_resolution(
                     file_path,
                     diagnostics,
                 );
-                scopes.pop();
+                pop_scope(scopes, out_of_scope);
             }
             crate::compiler::ast::ForExpr::Iterate {
                 iterable,
@@ -559,6 +545,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     iterable,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -566,15 +553,14 @@ fn check_expr_resolution(
                     file_path,
                     diagnostics,
                 );
-                scopes.push(BTreeSet::new());
+                scopes.push(BTreeMap::new());
                 if let Some(binding) = binding {
-                    if let Some(scope) = scopes.last_mut() {
-                        scope.insert(binding.text.clone());
-                    }
+                    bind_name(scopes, &binding.text, binding.span);
                 }
                 check_expr_resolution(
                     body,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -582,12 +568,13 @@ fn check_expr_resolution(
                     file_path,
                     diagnostics,
                 );
-                scopes.pop();
+                pop_scope(scopes, out_of_scope);
             }
             crate::compiler::ast::ForExpr::WhileLike { condition, body } => {
                 check_expr_resolution(
                     condition,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -598,6 +585,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     body,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -609,6 +597,7 @@ fn check_expr_resolution(
             crate::compiler::ast::ForExpr::Infinite { body } => check_expr_resolution(
                 body,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -621,6 +610,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 &match_expr.scrutinee,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -629,7 +619,7 @@ fn check_expr_resolution(
                 diagnostics,
             );
             for arm in &match_expr.arms {
-                scopes.push(BTreeSet::new());
+                scopes.push(BTreeMap::new());
                 collect_pattern_bindings_checked(
                     &arm.pattern,
                     scopes.last_mut().expect("scope exists"),
@@ -640,6 +630,7 @@ fn check_expr_resolution(
                     check_expr_resolution(
                         guard,
                         scopes,
+                        out_of_scope,
                         module_defs,
                         import_aliases,
                         type_names,
@@ -651,6 +642,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     &arm.value,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -658,7 +650,7 @@ fn check_expr_resolution(
                     file_path,
                     diagnostics,
                 );
-                scopes.pop();
+                pop_scope(scopes, out_of_scope);
             }
         }
         ExprKind::Unary { expr, .. }
@@ -669,6 +661,7 @@ fn check_expr_resolution(
         | ExprKind::DerefAccess { base: expr } => check_expr_resolution(
             expr,
             scopes,
+            out_of_scope,
             module_defs,
             import_aliases,
             type_names,
@@ -689,6 +682,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 left,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -699,6 +693,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 right,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -711,6 +706,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 &call.callee,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -732,6 +728,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     &arg.value,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -745,6 +742,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 &slice.base,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -756,6 +754,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     start,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -768,6 +767,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     end,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -781,6 +781,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 &if_expr.condition,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -789,15 +790,14 @@ fn check_expr_resolution(
                 diagnostics,
             );
             if let Some(capture) = &if_expr.capture {
-                scopes.push(BTreeSet::new());
+                scopes.push(BTreeMap::new());
                 if let Some(binding) = &capture.binding {
-                    if let Some(scope) = scopes.last_mut() {
-                        scope.insert(binding.text.clone());
-                    }
+                    bind_name(scopes, &binding.text, binding.span);
                 }
                 check_expr_resolution(
                     &if_expr.then_branch,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -805,11 +805,12 @@ fn check_expr_resolution(
                     file_path,
                     diagnostics,
                 );
-                scopes.pop();
+                pop_scope(scopes, out_of_scope);
             } else {
                 check_expr_resolution(
                     &if_expr.then_branch,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -822,6 +823,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     else_branch,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -836,6 +838,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     value,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -850,6 +853,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     value,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -862,6 +866,7 @@ fn check_expr_resolution(
         ExprKind::Defer(defer_expr) => check_expr_resolution(
             &defer_expr.body,
             scopes,
+            out_of_scope,
             module_defs,
             import_aliases,
             type_names,
@@ -873,6 +878,7 @@ fn check_expr_resolution(
             check_expr_resolution(
                 &or_else.value,
                 scopes,
+                out_of_scope,
                 module_defs,
                 import_aliases,
                 type_names,
@@ -881,13 +887,12 @@ fn check_expr_resolution(
                 diagnostics,
             );
             if let Some(binding) = &or_else.error_binding {
-                scopes.push(BTreeSet::new());
-                if let Some(scope) = scopes.last_mut() {
-                    scope.insert(binding.text.clone());
-                }
+                scopes.push(BTreeMap::new());
+                bind_name(scopes, &binding.text, binding.span);
                 check_expr_resolution(
                     &or_else.fallback,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -895,11 +900,12 @@ fn check_expr_resolution(
                     file_path,
                     diagnostics,
                 );
-                scopes.pop();
+                pop_scope(scopes, out_of_scope);
             } else {
                 check_expr_resolution(
                     &or_else.fallback,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -914,6 +920,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     &field.value,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -928,6 +935,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     element,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -942,6 +950,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     element,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -956,6 +965,7 @@ fn check_expr_resolution(
                 check_expr_resolution(
                     payload,
                     scopes,
+                    out_of_scope,
                     module_defs,
                     import_aliases,
                     type_names,
@@ -975,13 +985,13 @@ fn check_expr_resolution(
 
 fn collect_pattern_bindings_checked(
     pattern: &Pattern,
-    out: &mut BTreeSet<String>,
+    out: &mut BTreeMap<String, SourceSpan>,
     file_path: &PathBuf,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match &pattern.kind {
         PatternKind::IdentBind(ident) => {
-            if !out.insert(ident.text.clone()) {
+            if out.insert(ident.text.clone(), ident.span).is_some() {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::Semantic,
@@ -1002,7 +1012,7 @@ fn collect_pattern_bindings_checked(
         }
         PatternKind::EnumVariant { bindings, .. } => {
             for binding in bindings {
-                if !out.insert(binding.text.clone()) {
+                if out.insert(binding.text.clone(), binding.span).is_some() {
                     diagnostics.push(
                         Diagnostic::error(
                             DiagnosticPhase::Semantic,
@@ -1040,7 +1050,8 @@ fn import_path_to_module_key(current: &ModuleKey, import_path: &str) -> ModuleKe
     }
 
     let module_name = parts.pop().unwrap_or_default().to_string();
-    let mut directory = if current.directory == PathBuf::from(".") {
+    let is_std_absolute = normalized.starts_with("std/");
+    let mut directory = if is_std_absolute || current.directory == std::path::Path::new(".") {
         PathBuf::new()
     } else {
         current.directory.clone()
@@ -1059,241 +1070,4 @@ fn import_path_to_module_key(current: &ModuleKey, import_path: &str) -> ModuleKe
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::compiler::pipeline::parse_project_with_module_units;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn make_temp_dir() -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should be monotonic")
-            .as_nanos();
-
-        let path = std::env::temp_dir().join(format!("dyn_semantic_{unique}"));
-        fs::create_dir_all(&path).expect("temp directory should be created");
-        path
-    }
-
-    #[test]
-    fn reports_duplicate_declarations_per_module() {
-        let root = make_temp_dir();
-        fs::write(root.join("a.dyn"), "module main\na := 1\n").expect("file should be written");
-        fs::write(root.join("b.dyn"), "module main\na := 2\n").expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-        assert!(sema
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4002));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn resolves_and_reports_import_targets() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\nok := use \"other\"\nbad := use \"missing\"\n",
-        )
-        .expect("file should be written");
-        fs::write(root.join("other.dyn"), "module other\nval := 1\n")
-            .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        let main = sema
-            .modules
-            .iter()
-            .find(|module| module.key.module_name == "main")
-            .expect("main module should exist");
-        assert_eq!(main.imports.len(), 2);
-        assert!(main
-            .imports
-            .iter()
-            .any(|import| import.path == "other" && import.target.is_some()));
-        assert!(main
-            .imports
-            .iter()
-            .any(|import| import.path == "missing" && import.target.is_none()));
-        assert!(sema
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4003));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn reports_unresolved_names() {
-        let root = make_temp_dir();
-        fs::write(root.join("main.dyn"), "module main\na := missing_name\n")
-            .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(sema
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4001));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn reports_private_member_access_from_imported_module() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\nmod_ref := use \"other\"\nx := mod_ref.secret\ny := mod_ref.open\n",
-        )
-        .expect("file should be written");
-        fs::write(
-            root.join("other.dyn"),
-            "module other\nsecret := 1\npub open := 2\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(sema
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4004));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn resolves_match_binding_in_guard_scope() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\ncheck := (v: i32) i32 => match v { x if x > 0: x, _: 0 }\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(!sema
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4001));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn reports_unresolved_name_inside_match_guard() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\ncheck := (v: i32) i32 => match v { x if missing_name: x, _: 0 }\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(sema.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == DiagnosticCode::E4001 && diagnostic.message.contains("missing_name")
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn reports_duplicate_bindings_in_enum_pattern() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\ncheck := (v: i32) i32 => match v { .Value(a, a): a, _: 0 }\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(sema.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == DiagnosticCode::E4002
-                && diagnostic.message.contains("duplicate binding")
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn resolves_if_capture_binding_in_then_branch() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\ncheck := (n: ?i32) i32 => if n: |v| v else 0\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(!sema.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == DiagnosticCode::E4001 && diagnostic.message.contains("'v'")
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn resolves_or_else_capture_binding_in_fallback() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\ncheck := (n: ?i32) i32 => n or |err| err\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(!sema.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == DiagnosticCode::E4001 && diagnostic.message.contains("'err'")
-        }));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn accepts_builtin_allocator_names_as_predeclared() {
-        let root = make_temp_dir();
-        fs::write(
-            root.join("main.dyn"),
-            "module main\na := __dyn_alloc(16, 8)\n",
-        )
-        .expect("file should be written");
-
-        let (_parsed, units) =
-            parse_project_with_module_units(&root).expect("project should parse and merge");
-        let sema = analyze_modules(&units);
-
-        assert!(!sema
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4001));
-
-        fs::remove_dir_all(root).expect("temp directory should be removed");
-    }
-}
+mod tests;

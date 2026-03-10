@@ -27,6 +27,7 @@ pub struct MirFunction {
     pub name: String,
     pub def_id: Option<usize>,
     pub return_type: Option<String>,
+    pub param_type_hints: Vec<Option<String>>,
     pub param_types: Vec<MirValueType>,
     pub blocks: Vec<MirBasicBlock>,
     pub entry: MirBlockId,
@@ -37,9 +38,11 @@ pub enum MirValueType {
     Unknown,
     Type,
     Bool,
+    BytesSlice,
     Int { signed: bool, bits: u16 },
     Float { bits: u16 },
     Function,
+    FunctionPointer,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -76,6 +79,10 @@ pub enum MirValue {
     Unary {
         op: UnaryOp,
         operand: MirValueId,
+    },
+    Cast {
+        value: MirValueId,
+        target: MirValueType,
     },
     Binary {
         op: BinaryOp,

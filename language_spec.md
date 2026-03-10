@@ -78,7 +78,10 @@
   - Default value fallback: `A := divide(1,0) or 0`
   - Catch block: `C := divide(1,0) or { break 0 }`
   - Catch with error capture: `D := divide(1,0) or |err| { ... }`
-  - Panic/Force Unwrap: `divide(1,1).!`
+  - Force Unwrap / Propagation: `divide(1,1).!`
+    - In non-errorable functions, `.!` traps on error.
+    - In errorable functions, `.!` propagates the error to caller.
+    - Propagated errors must be covered by the function's declared error set.
 
 ## 8. OPTIONAL HANDLING
 - Force unwrap: `n.?`
@@ -87,8 +90,10 @@
 
 ## 9. COMPILE-TIME (COMPTIME) & METAPROGRAMMING
 - Types are First-Class: Generics are achieved by passing `type` as a function argument (e.g., `List := (T: type) type => struct {}`).
-- Comptime Evaluation: Prefixing a call with `comp` forces compile-time execution (`pi := comp calc_pi()`).
-- Inline Execution: `inline for` unrolls loops at compile time. `inline ()` pastes function contents directly into the call site.
+- Comptime Evaluation: Prefixing an expression with `comp` forces compile-time execution (`pi := comp calc_pi()`). If evaluation fails, compilation fails with an error (no runtime fallback).
+- Inline Execution: Supported inline forms are `inline for <range>`, direct inline calls, and inline function literals.
+  - `inline for` requires compile-time-evaluable range bounds.
+  - Inline calls must lower as inline expansions; if they cannot, compilation fails (no normal-call fallback).
 - `$Self()` can refer to the current instantiating type.
 
 ## 10. DEFER
@@ -107,7 +112,7 @@
 - Core Built-ins:
   - Casting: `$as(Type, value)` (e.g., `$as(f32, 5)` converts integer 5 to float 5.0).
   - Std-owned Printing: printing is provided by imported modules, not compiler-recognized global names.
-    - Example: `io := use "io"` then `io.print(i32, 12)` / `io.println(i32, 34)`.
+    - Example: `io := use "std/io"` then `io.println("Hello, world")`.
     - `print(...)` / `println(...)` are unresolved unless user code defines them explicitly.
   - Type Info: `$typeof(expr)` (Returns the type of the expression).
   - Memory: `$sizeof(Type)`, `$alignof(Type)`, `$offsetof(Type, field_name)`.
