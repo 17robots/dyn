@@ -254,3 +254,24 @@ fn accepts_allocator_dollar_builtin_in_resolution() {
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
+
+#[test]
+fn resolves_calls_to_extern_declarations() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("main.dyn"),
+        "module main\nid := extern (x: i32) i32\nmain := () i32 => id(1)\n",
+    )
+    .expect("file should be written");
+
+    let (_parsed, units) =
+        parse_project_with_module_units(&root).expect("project should parse and merge");
+    let sema = analyze_modules(&units);
+
+    assert!(!sema
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == DiagnosticCode::E4001));
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}

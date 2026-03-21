@@ -179,7 +179,7 @@ fn infers_error_set_for_implicit_union_from_local_unwrap_binding() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
-            "module main\nE := enum { Bad }\nbase := () i32!E => .Bad\nforward := () i32! => {\n  tmp := base()\n  return tmp.!\n}\n",
+            "module main\nE := enum { Bad }\nbase := () i32!E => .Bad\nforward := () i32! {\n  tmp := base()\n  return tmp.!\n}\n",
         )
         .expect("file should be written");
 

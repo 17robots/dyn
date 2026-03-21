@@ -10,3 +10,4 @@ pub mod module_resolver;
 pub mod parser;
 pub mod pipeline;
 pub mod sema;
+pub mod type_text;

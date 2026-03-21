@@ -1,0 +1,33 @@
+module writer
+
+linux := use "std/os/linux"
+
+pub WriterError := enum {
+    WriteFailed,
+}
+
+pub Writer := struct {
+    fd: isize,
+
+    write_raw := (self: Writer, ptr: isize, len: isize, newline: u32) u32!WriterError =>
+        write_fd_raw(self.fd, ptr, len, newline),
+}
+
+pub write_fd_raw := (fd: isize, ptr: isize, len: isize, newline: u32) u32!WriterError {
+    if len != 0 {
+        wrote := linux.syscall3(linux.sys_write(), fd, ptr, len)
+        if wrote != len return .WriteFailed
+    }
+
+    if newline != 0 {
+        nl_ptr := $as(isize, $as(usize, "\n"))
+        wrote_nl := linux.syscall3(linux.sys_write(), fd, nl_ptr, 1)
+        if wrote_nl != 1 return .WriteFailed
+    }
+
+    return $as(u32, 1)
+}
+
+pub stdout := () Writer => Writer{ fd: 1 }
+
+pub stderr := () Writer => Writer{ fd: 2 }

@@ -77,6 +77,11 @@ enum LoweredValue {
         len: Value,
     },
     FunctionSymbol(FuncId),
+    ErrorableScalar {
+        status: Value,
+        payload: Value,
+        payload_is_float: bool,
+    },
     Struct(BTreeMap<String, LoweredValue>),
     StructMemory {
         slot: StackSlot,
@@ -129,6 +134,17 @@ impl LoweredValue {
     fn as_int(&self) -> Option<Value> {
         match self {
             Self::Int(value) => Some(*value),
+            Self::ErrorableScalar {
+                payload,
+                payload_is_float,
+                ..
+            } => {
+                if *payload_is_float {
+                    None
+                } else {
+                    Some(*payload)
+                }
+            }
             Self::BytesSlice { ptr, .. } => Some(*ptr),
             Self::PointerSlice { base_addr, .. } => Some(*base_addr),
             Self::StructPointer { addr, status, .. } => status.or(Some(*addr)),
@@ -144,6 +160,17 @@ impl LoweredValue {
     fn as_float(&self) -> Option<Value> {
         match self {
             Self::Float(value) => Some(*value),
+            Self::ErrorableScalar {
+                payload,
+                payload_is_float,
+                ..
+            } => {
+                if *payload_is_float {
+                    Some(*payload)
+                } else {
+                    None
+                }
+            }
             Self::Int(_)
             | Self::BytesSlice { .. }
             | Self::FunctionSymbol(_)
@@ -159,6 +186,7 @@ impl LoweredValue {
     fn as_value(&self) -> Option<Value> {
         match self {
             Self::Int(value) | Self::Float(value) => Some(*value),
+            Self::ErrorableScalar { payload, .. } => Some(*payload),
             Self::BytesSlice { ptr, .. } => Some(*ptr),
             Self::PointerSlice { base_addr, .. } => Some(*base_addr),
             Self::StructPointer { addr, .. } => Some(*addr),
@@ -167,6 +195,14 @@ impl LoweredValue {
             | Self::StructMemory { .. }
             | Self::EnumVariant { .. }
             | Self::EnumMemory { .. } => None,
+        }
+    }
+
+    fn error_status(&self) -> Option<Value> {
+        match self {
+            Self::ErrorableScalar { status, .. } => Some(*status),
+            Self::StructPointer { status, .. } => *status,
+            _ => None,
         }
     }
 }
@@ -188,6 +224,7 @@ struct CallSymbolTables<'a> {
     param_types_by_id: &'a BTreeMap<u32, Vec<Type>>,
     returns_bytes_slice_by_id: &'a BTreeMap<u32, bool>,
     returns_errorable_by_id: &'a BTreeMap<u32, bool>,
+    returns_errorable_scalar_payload_ty_by_id: &'a BTreeMap<u32, MirValueType>,
     returns_aggregate_layout_by_id: &'a BTreeMap<u32, AggregateLayout>,
 }
 
@@ -206,11 +243,14 @@ struct CallReturnProfile {
     returns_bytes_slice: bool,
     returns_aggregate: Option<AggregateLayout>,
     returns_errorable: bool,
+    returns_errorable_scalar: bool,
+    errorable_scalar_payload_ty: Option<MirValueType>,
 }
 
 struct CallOutArgs {
     ret_len_slot: Option<StackSlot>,
     aggregate_out_slot: Option<StackSlot>,
+    errorable_scalar_out: Option<(StackSlot, Type)>,
 }
 
 struct IndexRefs<'a> {
@@ -251,6 +291,27 @@ struct SoftF128Operand {
     owned: bool,
 }
 
+#[derive(Clone, Copy)]
+struct LowerValueData<'a> {
+    lowered: &'a BTreeMap<MirValueId, LoweredValue>,
+    scalar: ScalarType,
+    symbols_by_name: &'a BTreeMap<String, FuncId>,
+}
+
+#[derive(Clone, Copy)]
+struct BinaryOperandsRef<'a> {
+    left: Option<&'a LoweredValue>,
+    right: Option<&'a LoweredValue>,
+}
+
+#[derive(Clone, Copy)]
+struct EnumVariantValueRef<'a> {
+    variant: &'a str,
+    tag: i64,
+    tag_bits: u16,
+    payload: &'a [MirValueId],
+}
+
 fn lower_value(
     value: &MirValue,
     value_ty: &MirValueType,
@@ -260,6 +321,11 @@ fn lower_value(
     context: &LowerValueContext<'_>,
 ) -> LoweredValue {
     let scalar = context.scalar;
+    let data = LowerValueData {
+        lowered,
+        scalar,
+        symbols_by_name: context.symbols_by_name,
+    };
     match value {
         MirValue::Literal(literal) => lower_literal(
             literal,
@@ -281,38 +347,21 @@ fn lower_value(
         MirValue::Param { index } => {
             lower_param_value(value_ty, *index, builder, context.param_access, scalar)
         }
-        MirValue::Unary { op, operand } => lower_unary_value(
-            value_ty,
-            op,
-            operand,
-            builder,
-            lowered,
-            scalar,
-            module,
-            context.symbols_by_name,
-        ),
+        MirValue::Unary { op, operand } => {
+            lower_unary_value(value_ty, op, operand, builder, module, data)
+        }
         MirValue::Cast { value, target } => lower_cast_value(
             value_ty,
             value,
             target,
             builder,
-            lowered,
             context.value_defs,
-            scalar,
             module,
-            context.symbols_by_name,
+            data,
         ),
-        MirValue::Binary { op, left, right } => lower_binary_value(
-            value_ty,
-            op,
-            left,
-            right,
-            builder,
-            lowered,
-            scalar,
-            module,
-            context.symbols_by_name,
-        ),
+        MirValue::Binary { op, left, right } => {
+            lower_binary_value(value_ty, op, left, right, builder, module, data)
+        }
         MirValue::Assign { value, .. } => lowered
             .get(value)
             .cloned()
@@ -330,6 +379,12 @@ fn lower_value(
             module,
             context.call_symbol_tables,
         ),
+        MirValue::ErrorStatus { value } => {
+            lower_error_status_value(value_ty, value, builder, lowered, scalar)
+        }
+        MirValue::ErrorPayload { value } => {
+            lower_error_payload_value(value_ty, value, builder, lowered, scalar)
+        }
         MirValue::DerefAccess { base } => {
             lower_deref_access_value(value_ty, base, builder, lowered, scalar, module)
         }
@@ -339,9 +394,24 @@ fn lower_value(
         MirValue::FieldAccess { base, field } => {
             lower_field_access_value(value_ty, base, field, builder, lowered, scalar, module)
         }
-        MirValue::EnumVariant { variant, payload } => {
-            lower_enum_variant_value(value_ty, variant, payload, builder, lowered, scalar, module)
-        }
+        MirValue::EnumVariant {
+            variant,
+            tag,
+            tag_bits,
+            payload,
+            ..
+        } => lower_enum_variant_value(
+            value_ty,
+            EnumVariantValueRef {
+                variant,
+                tag: *tag,
+                tag_bits: *tag_bits,
+                payload,
+            },
+            builder,
+            module,
+            data,
+        ),
         MirValue::Index { base, index } => lower_index_value(
             value_ty,
             IndexRefs { base, index },
@@ -475,12 +545,11 @@ fn lower_unary_value(
     op: &UnaryOp,
     operand: &MirValueId,
     builder: &mut FunctionBuilder,
-    lowered: &BTreeMap<MirValueId, LoweredValue>,
-    scalar: ScalarType,
     module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
+    data: LowerValueData<'_>,
 ) -> LoweredValue {
-    let Some(operand_value) = lowered.get(operand).cloned() else {
+    let scalar = data.scalar;
+    let Some(operand_value) = data.lowered.get(operand).cloned() else {
         return zero_lowered_for_type(builder, value_ty, scalar);
     };
     match op {
@@ -537,18 +606,17 @@ fn lower_unary_value(
                     scalar,
                     Some(&operand_value),
                     module,
-                    symbols_by_name,
+                    data.symbols_by_name,
                     default_integer_signedness(scalar),
                 );
-                let result = call_runtime_symbol(
+                let result = call_runtime_symbol_i64(
                     builder,
                     module,
-                    symbols_by_name,
+                    data.symbols_by_name,
                     "dynrt_f128_neg",
                     &[operand_soft.ptr],
-                    I64,
                 );
-                release_soft_f128_if_owned(builder, module, symbols_by_name, operand_soft);
+                release_soft_f128_if_owned(builder, module, data.symbols_by_name, operand_soft);
                 return LoweredValue::Float(result);
             }
             match (op, value_ty) {
@@ -578,13 +646,12 @@ fn lower_binary_value(
     left: &MirValueId,
     right: &MirValueId,
     builder: &mut FunctionBuilder,
-    lowered: &BTreeMap<MirValueId, LoweredValue>,
-    scalar: ScalarType,
     module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
+    data: LowerValueData<'_>,
 ) -> LoweredValue {
-    let left_val = lowered.get(left);
-    let right_val = lowered.get(right);
+    let scalar = data.scalar;
+    let left_val = data.lowered.get(left);
+    let right_val = data.lowered.get(right);
     let float_operand_ty = left_val
         .and_then(LoweredValue::as_float)
         .map(|value| builder.func.dfg.value_type(value))
@@ -613,12 +680,13 @@ fn lower_binary_value(
             value_ty,
             op,
             builder,
-            scalar,
-            left_val,
-            right_val,
+            BinaryOperandsRef {
+                left: left_val,
+                right: right_val,
+            },
             float_operand_ty,
             module,
-            symbols_by_name,
+            data,
         );
     }
 
@@ -629,13 +697,14 @@ fn lower_float_binary_value(
     value_ty: &MirValueType,
     op: &BinaryOp,
     builder: &mut FunctionBuilder,
-    scalar: ScalarType,
-    left_val: Option<&LoweredValue>,
-    right_val: Option<&LoweredValue>,
+    operands: BinaryOperandsRef<'_>,
     float_ty_hint: Option<Type>,
     module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
+    data: LowerValueData<'_>,
 ) -> LoweredValue {
+    let scalar = data.scalar;
+    let left_val = operands.left;
+    let right_val = operands.right;
     let float_ty = float_ty_hint.unwrap_or_else(|| mir_type_to_clif(value_ty, scalar));
     if is_soft_f128_type(value_ty) || !float_ty.is_float() {
         return lower_soft_f128_binary_value(
@@ -645,7 +714,7 @@ fn lower_float_binary_value(
             left_val,
             right_val,
             module,
-            symbols_by_name,
+            data.symbols_by_name,
         );
     }
     let Some(left) = left_val.and_then(LoweredValue::as_float).or_else(|| {
@@ -748,16 +817,14 @@ fn lower_soft_f128_binary_value(
         _ => None,
     };
     if let Some(symbol) = arithmetic_symbol {
-        let out = call_runtime_symbol(
+        let out = call_runtime_symbol_i64(
             builder,
             module,
             symbols_by_name,
             symbol,
             &[left.ptr, right.ptr],
-            I64,
         );
-        release_soft_f128_if_owned(builder, module, symbols_by_name, left);
-        release_soft_f128_if_owned(builder, module, symbols_by_name, right);
+        release_soft_f128_operands(builder, module, symbols_by_name, left, right);
         return LoweredValue::Float(out);
     }
 
@@ -771,22 +838,19 @@ fn lower_soft_f128_binary_value(
         _ => None,
     };
     if let Some(symbol) = compare_symbol {
-        let out = call_runtime_symbol(
+        let out = call_runtime_symbol_i32(
             builder,
             module,
             symbols_by_name,
             symbol,
             &[left.ptr, right.ptr],
-            I32,
         );
-        release_soft_f128_if_owned(builder, module, symbols_by_name, left);
-        release_soft_f128_if_owned(builder, module, symbols_by_name, right);
+        release_soft_f128_operands(builder, module, symbols_by_name, left, right);
         let cmp = builder.ins().icmp_imm(IntCC::NotEqual, out, 0);
         return LoweredValue::Int(bool_to_int(builder, bool_storage_type(scalar), cmp));
     }
 
-    release_soft_f128_if_owned(builder, module, symbols_by_name, left);
-    release_soft_f128_if_owned(builder, module, symbols_by_name, right);
+    release_soft_f128_operands(builder, module, symbols_by_name, left, right);
 
     LoweredValue::Float(runtime_soft_f128_zero(builder, module, symbols_by_name))
 }
@@ -817,13 +881,12 @@ fn lowered_to_soft_f128_ptr(
         if source_ty.is_float() {
             let as_f64 = cast_scalar(builder, raw_float, F64, scalar);
             return SoftF128Operand {
-                ptr: call_runtime_symbol(
+                ptr: call_runtime_symbol_i64(
                     builder,
                     module,
                     symbols_by_name,
                     "dynrt_f128_from_f64",
                     &[as_f64],
-                    I64,
                 ),
                 owned: true,
             };
@@ -838,7 +901,7 @@ fn lowered_to_soft_f128_ptr(
             "dynrt_f128_from_u64"
         };
         return SoftF128Operand {
-            ptr: call_runtime_symbol(builder, module, symbols_by_name, symbol, &[as_i64], I64),
+            ptr: call_runtime_symbol_i64(builder, module, symbols_by_name, symbol, &[as_i64]),
             owned: true,
         };
     }
@@ -858,14 +921,24 @@ fn release_soft_f128_if_owned(
     if !operand.owned {
         return;
     }
-    let _ = call_runtime_symbol(
+    let _ = call_runtime_symbol_i32(
         builder,
         module,
         symbols_by_name,
         "dynrt_f128_release",
         &[operand.ptr],
-        I32,
     );
+}
+
+fn release_soft_f128_operands(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    left: SoftF128Operand,
+    right: SoftF128Operand,
+) {
+    release_soft_f128_if_owned(builder, module, symbols_by_name, left);
+    release_soft_f128_if_owned(builder, module, symbols_by_name, right);
 }
 
 fn runtime_soft_f128_zero(
@@ -873,14 +946,71 @@ fn runtime_soft_f128_zero(
     module: &mut ObjectModule,
     symbols_by_name: &BTreeMap<String, FuncId>,
 ) -> Value {
-    call_runtime_symbol(
+    call_runtime_symbol_i64(builder, module, symbols_by_name, "dynrt_f128_zero", &[])
+}
+
+fn call_runtime_symbol_i64(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    symbol: &str,
+    args: &[Value],
+) -> Value {
+    call_runtime_symbol(builder, module, symbols_by_name, symbol, args, I64)
+}
+
+fn call_runtime_symbol_i32(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    symbol: &str,
+    args: &[Value],
+) -> Value {
+    call_runtime_symbol(builder, module, symbols_by_name, symbol, args, I32)
+}
+
+fn call_runtime_symbol_f64(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    symbol: &str,
+    args: &[Value],
+) -> Value {
+    call_runtime_symbol(builder, module, symbols_by_name, symbol, args, F64)
+}
+
+fn emit_declared_func_call(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    func_id: FuncId,
+    args: &[Value],
+    fallback_ty: Type,
+) -> Value {
+    let func_ref = module.declare_func_in_func(func_id, builder.func);
+    let inst = builder.ins().call(func_ref, args);
+    builder
+        .inst_results(inst)
+        .first()
+        .copied()
+        .unwrap_or_else(|| zero_for_type(builder, fallback_ty))
+}
+
+fn call_runtime_symbol_if_present(
+    builder: &mut FunctionBuilder,
+    module: &mut ObjectModule,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    symbol: &str,
+    args: &[Value],
+    fallback_ty: Type,
+) -> Option<Value> {
+    let func_id = symbols_by_name.get(symbol).copied()?;
+    Some(emit_declared_func_call(
         builder,
         module,
-        symbols_by_name,
-        "dynrt_f128_zero",
-        &[],
-        I64,
-    )
+        func_id,
+        args,
+        fallback_ty,
+    ))
 }
 
 fn call_runtime_symbol(
@@ -891,15 +1021,7 @@ fn call_runtime_symbol(
     args: &[Value],
     fallback_ty: Type,
 ) -> Value {
-    let Some(func_id) = symbols_by_name.get(symbol).copied() else {
-        return zero_for_type(builder, fallback_ty);
-    };
-    let func_ref = module.declare_func_in_func(func_id, builder.func);
-    let inst = builder.ins().call(func_ref, args);
-    builder
-        .inst_results(inst)
-        .first()
-        .copied()
+    call_runtime_symbol_if_present(builder, module, symbols_by_name, symbol, args, fallback_ty)
         .unwrap_or_else(|| zero_for_type(builder, fallback_ty))
 }
 
@@ -1107,13 +1229,12 @@ fn lower_cast_value(
     value: &MirValueId,
     target: &MirValueType,
     builder: &mut FunctionBuilder,
-    lowered: &BTreeMap<MirValueId, LoweredValue>,
     value_defs: &BTreeMap<MirValueId, MirValue>,
-    scalar: ScalarType,
     module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
+    data: LowerValueData<'_>,
 ) -> LoweredValue {
-    let Some(source) = lowered.get(value).cloned() else {
+    let scalar = data.scalar;
+    let Some(source) = data.lowered.get(value).cloned() else {
         return zero_lowered_for_type(builder, value_ty, scalar);
     };
     let source_is_soft_f128 = source
@@ -1123,14 +1244,31 @@ fn lower_cast_value(
     if matches!(target, MirValueType::Unknown) {
         return source;
     }
+    if let MirValueType::Int { bits, .. } = target {
+        if int_carrier_type_for_bits(*bits) == I128 {
+            if let Some(MirValue::Literal(HirLiteral::Integer(text))) = value_defs.get(value) {
+                let parsed = parse_int_literal_wide_bits(text).unwrap_or(0);
+                let lo = builder.ins().iconst(I64, parsed as u64 as i64);
+                let hi = builder.ins().iconst(I64, (parsed >> 64) as u64 as i64);
+                return LoweredValue::Int(builder.ins().iconcat(lo, hi));
+            }
+        }
+    }
     if is_soft_f128_type(target) {
         if let Some(MirValue::Literal(HirLiteral::Float(text))) = value_defs.get(value) {
-            return lower_soft_f128_literal_text(text, builder, module, symbols_by_name);
+            return lower_soft_f128_literal_text(text, builder, module, data.symbols_by_name);
         }
-        return lower_cast_to_soft_f128(source, builder, scalar, module, symbols_by_name);
+        return lower_cast_to_soft_f128(source, builder, scalar, module, data.symbols_by_name);
     }
     if source_is_soft_f128 {
-        return lower_cast_from_soft_f128(target, source, builder, scalar, module, symbols_by_name);
+        return lower_cast_from_soft_f128(
+            target,
+            source,
+            builder,
+            scalar,
+            module,
+            data.symbols_by_name,
+        );
     }
     let target_ty = mir_type_to_clif(target, scalar);
     if matches!(target, MirValueType::Float { .. }) {
@@ -1156,38 +1294,15 @@ fn lower_cast_to_soft_f128(
     module: &mut ObjectModule,
     symbols_by_name: &BTreeMap<String, FuncId>,
 ) -> LoweredValue {
-    if let Some(float_value) = source.as_float() {
-        let value_ty = builder.func.dfg.value_type(float_value);
-        if value_ty == I64 {
-            return LoweredValue::Float(cast_scalar(builder, float_value, I64, scalar));
-        }
-        if value_ty.is_float() {
-            let as_f64 = cast_scalar(builder, float_value, F64, scalar);
-            let out = call_runtime_symbol(
-                builder,
-                module,
-                symbols_by_name,
-                "dynrt_f128_from_f64",
-                &[as_f64],
-                I64,
-            );
-            return LoweredValue::Float(out);
-        }
-    }
-
-    if let Some(int_value) = source.as_int() {
-        let signed = default_integer_signedness(scalar);
-        let as_i64 = cast_int(builder, int_value, I64, signed);
-        let symbol = if signed {
-            "dynrt_f128_from_i64"
-        } else {
-            "dynrt_f128_from_u64"
-        };
-        let out = call_runtime_symbol(builder, module, symbols_by_name, symbol, &[as_i64], I64);
-        return LoweredValue::Float(out);
-    }
-
-    LoweredValue::Float(runtime_soft_f128_zero(builder, module, symbols_by_name))
+    let operand = lowered_to_soft_f128_ptr(
+        builder,
+        scalar,
+        Some(&source),
+        module,
+        symbols_by_name,
+        default_integer_signedness(scalar),
+    );
+    LoweredValue::Float(operand.ptr)
 }
 
 fn lower_cast_from_soft_f128(
@@ -1208,13 +1323,12 @@ fn lower_cast_from_soft_f128(
     }
 
     if matches!(target, MirValueType::Float { .. }) {
-        let as_f64 = call_runtime_symbol(
+        let as_f64 = call_runtime_symbol_f64(
             builder,
             module,
             symbols_by_name,
             "dynrt_f128_to_f64",
             &[source_ptr],
-            F64,
         );
         let target_ty = mir_type_to_clif(target, scalar);
         if target_ty == F64 {
@@ -1224,13 +1338,12 @@ fn lower_cast_from_soft_f128(
     }
 
     if matches!(target, MirValueType::Bool) {
-        let raw = call_runtime_symbol(
+        let raw = call_runtime_symbol_i64(
             builder,
             module,
             symbols_by_name,
             "dynrt_f128_to_u64",
             &[source_ptr],
-            I64,
         );
         let cmp = builder.ins().icmp_imm(IntCC::NotEqual, raw, 0);
         return LoweredValue::Int(bool_to_int(builder, bool_storage_type(scalar), cmp));
@@ -1242,7 +1355,7 @@ fn lower_cast_from_soft_f128(
         } else {
             "dynrt_f128_to_u64"
         };
-        let raw = call_runtime_symbol(builder, module, symbols_by_name, symbol, &[source_ptr], I64);
+        let raw = call_runtime_symbol_i64(builder, module, symbols_by_name, symbol, &[source_ptr]);
         let target_ty = mir_type_to_clif(target, scalar);
         let saturated = saturate_i64_to_int_width(builder, raw, *bits, *signed);
         return LoweredValue::Int(cast_int(builder, saturated, target_ty, *signed));
@@ -1273,13 +1386,12 @@ fn lower_soft_f128_literal_text(
     }
     let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
     let len = builder.ins().iconst(ptr_ty, bytes.len() as i64);
-    let out = call_runtime_symbol(
+    let out = call_runtime_symbol_i64(
         builder,
         module,
         symbols_by_name,
         "dynrt_f128_from_literal",
         &[addr, len],
-        I64,
     );
     LoweredValue::Float(out)
 }
@@ -1334,34 +1446,40 @@ fn lower_struct_literal_value(
 
 fn lower_enum_variant_value(
     value_ty: &MirValueType,
-    variant: &str,
-    payload: &[MirValueId],
+    enum_value: EnumVariantValueRef<'_>,
     builder: &mut FunctionBuilder,
-    lowered: &BTreeMap<MirValueId, LoweredValue>,
-    scalar: ScalarType,
     module: &mut ObjectModule,
+    data: LowerValueData<'_>,
 ) -> LoweredValue {
-    if payload.is_empty() {
-        let tag = builder.ins().iconst(
-            mir_type_to_clif(value_ty, scalar),
-            i64::from(variant_tag(variant)),
-        );
-        return LoweredValue::Int(tag);
+    let scalar = data.scalar;
+    if enum_value.payload.is_empty() {
+        let mut ty = int_carrier_type_for_bits(enum_value.tag_bits);
+        if !matches!(value_ty, MirValueType::Unknown) {
+            ty = mir_type_to_clif(value_ty, scalar);
+        }
+        return LoweredValue::Int(builder.ins().iconst(ty, enum_value.tag));
     }
-    let mut lowered_payload = Vec::with_capacity(payload.len());
-    for value_id in payload {
+    let mut lowered_payload = Vec::with_capacity(enum_value.payload.len());
+    for value_id in enum_value.payload {
         lowered_payload.push(
-            lowered
+            data.lowered
                 .get(value_id)
                 .cloned()
                 .unwrap_or_else(|| zero_lowered_for_type(builder, value_ty, scalar)),
         );
     }
     let lowered_enum = LoweredValue::EnumVariant {
-        variant: variant.to_string(),
+        variant: enum_value.variant.to_string(),
         payload: lowered_payload.clone(),
     };
-    materialize_enum_memory(builder, module, variant, &lowered_payload).unwrap_or(lowered_enum)
+    materialize_enum_memory(
+        builder,
+        module,
+        enum_value.tag,
+        enum_value.tag_bits,
+        &lowered_payload,
+    )
+    .unwrap_or(lowered_enum)
 }
 
 fn lower_field_access_value(
@@ -1767,9 +1885,17 @@ fn lower_call_value(
         direct_callee,
         symbol_tables.returns_bytes_slice_by_id,
         symbol_tables.returns_errorable_by_id,
+        symbol_tables.returns_errorable_scalar_payload_ty_by_id,
         symbol_tables.returns_aggregate_layout_by_id,
     );
-    let out_args = append_call_out_args(builder, pointer_ty, &mut arg_vals, &profile);
+    let out_args = append_call_out_args(
+        builder,
+        pointer_ty,
+        value_ty,
+        scalar,
+        &mut arg_vals,
+        &profile,
+    );
     let Some(ret) = emit_lowered_call(
         builder,
         module,
@@ -1850,11 +1976,13 @@ fn infer_call_return_profile(
     direct_callee: Option<FuncId>,
     returns_bytes_slice_by_id: &BTreeMap<u32, bool>,
     returns_errorable_by_id: &BTreeMap<u32, bool>,
+    returns_errorable_scalar_payload_ty_by_id: &BTreeMap<u32, MirValueType>,
     returns_aggregate_layout_by_id: &BTreeMap<u32, AggregateLayout>,
 ) -> CallReturnProfile {
     let mut returns_bytes_slice = matches!(value_ty, MirValueType::BytesSlice);
     let mut returns_aggregate = None;
     let mut returns_errorable = false;
+    let mut errorable_scalar_payload_ty = None;
     if let Some(func_id) = direct_callee {
         if let Some(returns_slice) = returns_bytes_slice_by_id.get(&func_id.as_u32()) {
             returns_bytes_slice = *returns_slice;
@@ -1862,20 +1990,29 @@ fn infer_call_return_profile(
         if let Some(is_errorable) = returns_errorable_by_id.get(&func_id.as_u32()) {
             returns_errorable = *is_errorable;
         }
+        if let Some(payload_ty) = returns_errorable_scalar_payload_ty_by_id.get(&func_id.as_u32()) {
+            errorable_scalar_payload_ty = Some(payload_ty.clone());
+        }
         if let Some(layout) = returns_aggregate_layout_by_id.get(&func_id.as_u32()) {
             returns_aggregate = Some(layout.clone());
         }
     }
+    let returns_errorable_scalar =
+        returns_errorable && !returns_bytes_slice && returns_aggregate.is_none();
     CallReturnProfile {
         returns_bytes_slice,
         returns_aggregate,
         returns_errorable,
+        returns_errorable_scalar,
+        errorable_scalar_payload_ty,
     }
 }
 
 fn append_call_out_args(
     builder: &mut FunctionBuilder,
     pointer_ty: Type,
+    value_ty: &MirValueType,
+    scalar: ScalarType,
     arg_vals: &mut Vec<Value>,
     profile: &CallReturnProfile,
 ) -> CallOutArgs {
@@ -1903,9 +2040,39 @@ fn append_call_out_args(
         arg_vals.push(out_ptr);
         slot
     });
+
+    let errorable_scalar_out = if profile.returns_errorable_scalar {
+        let payload_mir_ty = if matches!(value_ty, MirValueType::Unknown) {
+            profile
+                .errorable_scalar_payload_ty
+                .as_ref()
+                .unwrap_or(value_ty)
+        } else {
+            value_ty
+        };
+        let payload_ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
+            scalar.ty()
+        } else {
+            mir_type_to_clif(payload_mir_ty, scalar)
+        };
+        let slot_size = (payload_ty.bits() / 8).max(1);
+        let align_shift = slot_size.trailing_zeros() as u8;
+        let slot = builder.func.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            slot_size,
+            align_shift,
+        ));
+        let out_ptr = builder.ins().stack_addr(pointer_ty, slot, 0);
+        arg_vals.push(out_ptr);
+        Some((slot, payload_ty))
+    } else {
+        None
+    };
+
     CallOutArgs {
         ret_len_slot,
         aggregate_out_slot,
+        errorable_scalar_out,
     }
 }
 
@@ -1945,15 +2112,13 @@ fn emit_lowered_call(
                 *arg = cast_scalar(builder, *arg, *ty, context.scalar);
             }
         }
-        let func_ref = module.declare_func_in_func(func_id, builder.func);
-        let inst = builder.ins().call(func_ref, arg_vals);
-        return Some(
-            builder
-                .inst_results(inst)
-                .first()
-                .copied()
-                .unwrap_or_else(|| zero_for_type(builder, context.pointer_ty)),
-        );
+        return Some(emit_declared_func_call(
+            builder,
+            module,
+            func_id,
+            arg_vals,
+            context.pointer_ty,
+        ));
     }
 
     let callee_val = context
@@ -1997,6 +2162,15 @@ fn lower_call_result_value(
     profile: CallReturnProfile,
     out_args: CallOutArgs,
 ) -> LoweredValue {
+    let payload_mir_ty = if matches!(value_ty, MirValueType::Unknown) {
+        profile
+            .errorable_scalar_payload_ty
+            .as_ref()
+            .unwrap_or(value_ty)
+    } else {
+        value_ty
+    };
+
     if profile.returns_bytes_slice {
         let len = out_args
             .ret_len_slot
@@ -2028,6 +2202,25 @@ fn lower_call_result_value(
         };
     }
 
+    if profile.returns_errorable_scalar {
+        let (payload, payload_ty) = if let Some((slot, payload_ty)) = out_args.errorable_scalar_out
+        {
+            (builder.ins().stack_load(payload_ty, slot, 0), payload_ty)
+        } else {
+            let ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
+                scalar.ty()
+            } else {
+                mir_type_to_clif(payload_mir_ty, scalar)
+            };
+            (zero_for_type(builder, ty), ty)
+        };
+        return LoweredValue::ErrorableScalar {
+            status: cast_scalar(builder, ret, scalar.ty(), scalar),
+            payload,
+            payload_is_float: payload_ty.is_float() || is_soft_f128_type(payload_mir_ty),
+        };
+    }
+
     if matches!(value_ty, MirValueType::Unknown) {
         let ret_ty = builder.func.dfg.value_type(ret);
         if ret_ty.is_float() {
@@ -2050,6 +2243,82 @@ fn lower_call_result_value(
             mir_type_to_clif(value_ty, scalar),
             scalar,
         ))
+    }
+}
+
+fn lower_error_status_value(
+    value_ty: &MirValueType,
+    value: &MirValueId,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    scalar: ScalarType,
+) -> LoweredValue {
+    let status_ty = if matches!(value_ty, MirValueType::Unknown) {
+        scalar.ty()
+    } else {
+        mir_type_to_clif(value_ty, scalar)
+    };
+    let status = lowered
+        .get(value)
+        .and_then(|lowered| lowered.error_status().or_else(|| lowered.as_int()))
+        .map(|status| cast_scalar(builder, status, status_ty, scalar))
+        .unwrap_or_else(|| zero_for_type(builder, status_ty));
+    LoweredValue::Int(status)
+}
+
+fn lower_error_payload_value(
+    value_ty: &MirValueType,
+    value: &MirValueId,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    scalar: ScalarType,
+) -> LoweredValue {
+    let Some(source) = lowered.get(value).cloned() else {
+        return zero_lowered_for_type(builder, value_ty, scalar);
+    };
+
+    match source {
+        LoweredValue::ErrorableScalar {
+            payload,
+            payload_is_float: _,
+            ..
+        } => {
+            let target_ty = if matches!(value_ty, MirValueType::Unknown) {
+                builder.func.dfg.value_type(payload)
+            } else {
+                mir_type_to_clif(value_ty, scalar)
+            };
+            let casted = cast_scalar(builder, payload, target_ty, scalar);
+            if is_soft_f128_type(value_ty) || target_ty.is_float() {
+                LoweredValue::Float(casted)
+            } else {
+                LoweredValue::Int(casted)
+            }
+        }
+        LoweredValue::StructPointer {
+            addr,
+            stack_slot,
+            stack_offset,
+            fields,
+            aggregate_fields,
+            ordered,
+            scalar_leaves,
+            size,
+            align,
+            ..
+        } => LoweredValue::StructPointer {
+            addr,
+            stack_slot,
+            stack_offset,
+            status: None,
+            fields,
+            aggregate_fields,
+            ordered,
+            scalar_leaves,
+            size,
+            align,
+        },
+        other => other,
     }
 }
 
@@ -2092,11 +2361,18 @@ fn lower_literal(
     match literal {
         HirLiteral::Integer(value) => {
             let int_ty = mir_type_to_clif(value_ty, scalar);
-            LoweredValue::Int(
-                builder
-                    .ins()
-                    .iconst(int_ty, parse_int_literal(value).unwrap_or(0)),
-            )
+            if int_ty == I128 {
+                let bits = parse_int_literal_wide_bits(value).unwrap_or(0);
+                let lo = builder.ins().iconst(I64, bits as u64 as i64);
+                let hi = builder.ins().iconst(I64, (bits >> 64) as u64 as i64);
+                LoweredValue::Int(builder.ins().iconcat(lo, hi))
+            } else {
+                LoweredValue::Int(
+                    builder
+                        .ins()
+                        .iconst(int_ty, parse_int_literal(value).unwrap_or(0)),
+                )
+            }
         }
         HirLiteral::Bool(value) => {
             let ty = bool_storage_type(scalar);
@@ -2161,14 +2437,14 @@ fn lower_literal(
             ));
             let out_len = builder.ins().stack_addr(ptr_ty, len_slot, 0);
 
-            if let Some(func_id) = symbols_by_name.get("dynrt_bytes_from_ptr_len").copied() {
-                let func_ref = module.declare_func_in_func(func_id, builder.func);
-                let inst = builder.ins().call(func_ref, &[addr, len_value, out_len]);
-                let ptr = builder
-                    .inst_results(inst)
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| builder.ins().iconst(ptr_ty, 0));
+            if let Some(ptr) = call_runtime_symbol_if_present(
+                builder,
+                module,
+                symbols_by_name,
+                "dynrt_bytes_from_ptr_len",
+                &[addr, len_value, out_len],
+                ptr_ty,
+            ) {
                 let len = builder.ins().stack_load(ptr_ty, len_slot, 0);
                 LoweredValue::BytesSlice { ptr, len }
             } else {
@@ -2370,29 +2646,35 @@ fn materialize_struct_memory(
                 leaves,
                 base_offset,
             } => {
-                for (leaf_ty, leaf_offset) in leaves {
-                    let loaded = builder.ins().stack_load(leaf_ty, src_slot, leaf_offset);
-                    builder
-                        .ins()
-                        .stack_store(loaded, slot, base_offset + leaf_offset);
-                }
+                copy_scalar_leaves_to_stack_slot(
+                    builder,
+                    slot,
+                    base_offset,
+                    &leaves,
+                    |builder, leaf_ty, leaf_offset| {
+                        builder.ins().stack_load(leaf_ty, src_slot, leaf_offset)
+                    },
+                );
             }
             StorePlan::CopyFromPtr {
                 addr,
                 leaves,
                 base_offset,
             } => {
-                for (leaf_ty, leaf_offset) in leaves {
-                    let loaded = builder.ins().load(
-                        leaf_ty,
-                        cranelift_codegen::ir::MemFlags::new(),
-                        addr,
-                        leaf_offset,
-                    );
-                    builder
-                        .ins()
-                        .stack_store(loaded, slot, base_offset + leaf_offset);
-                }
+                copy_scalar_leaves_to_stack_slot(
+                    builder,
+                    slot,
+                    base_offset,
+                    &leaves,
+                    |builder, leaf_ty, leaf_offset| {
+                        builder.ins().load(
+                            leaf_ty,
+                            cranelift_codegen::ir::MemFlags::new(),
+                            addr,
+                            leaf_offset,
+                        )
+                    },
+                );
             }
         }
     }
@@ -2421,6 +2703,23 @@ fn zero_stack_slot(builder: &mut FunctionBuilder, slot: StackSlot, size: u32) {
     }
 }
 
+fn copy_scalar_leaves_to_stack_slot<F>(
+    builder: &mut FunctionBuilder,
+    dst_slot: StackSlot,
+    base_offset: i32,
+    leaves: &[(Type, i32)],
+    mut load_leaf: F,
+) where
+    F: FnMut(&mut FunctionBuilder, Type, i32) -> Value,
+{
+    for (leaf_ty, leaf_offset) in leaves {
+        let loaded = load_leaf(builder, *leaf_ty, *leaf_offset);
+        builder
+            .ins()
+            .stack_store(loaded, dst_slot, base_offset + *leaf_offset);
+    }
+}
+
 fn spill_scalar_to_stack_and_get_addr(
     builder: &mut FunctionBuilder,
     module: &ObjectModule,
@@ -2444,18 +2743,13 @@ fn spill_scalar_to_stack_and_get_addr(
 fn materialize_enum_memory(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
-    variant: &str,
+    tag: i64,
+    tag_bits: u16,
     payload: &[LoweredValue],
 ) -> Option<LoweredValue> {
     let mut values = Vec::with_capacity(payload.len() + 1);
-    let payload_ty = payload.first().and_then(|value| match value {
-        LoweredValue::Int(v) | LoweredValue::Float(v) => Some(builder.func.dfg.value_type(*v)),
-        _ => None,
-    });
-    let tag_ty = payload_ty.filter(|ty| ty.is_int()).unwrap_or(I32);
-    let tag_value = builder
-        .ins()
-        .iconst(tag_ty, i64::from(variant_tag(variant)));
+    let tag_ty = int_carrier_type_for_bits(tag_bits);
+    let tag_value = builder.ins().iconst(tag_ty, tag);
     values.push(("__tag".to_string(), LoweredValue::Int(tag_value)));
     for (idx, value) in payload.iter().cloned().enumerate() {
         values.push((format!("__payload_{idx}"), value));
@@ -2520,6 +2814,39 @@ fn cast_between_types(
     value
 }
 
+fn scalar_leaf_types_by_offset(scalar_leaves: &[(Type, i32)]) -> BTreeMap<i32, Type> {
+    scalar_leaves
+        .iter()
+        .copied()
+        .map(|(ty, offset)| (offset, ty))
+        .collect::<BTreeMap<_, _>>()
+}
+
+fn write_aggregate_leaves_with_loader<F>(
+    builder: &mut FunctionBuilder,
+    out_ptr: Value,
+    dst_leaves: &[(Type, i32)],
+    source_by_offset: &BTreeMap<i32, Type>,
+    mut load_leaf: F,
+) where
+    F: FnMut(&mut FunctionBuilder, Type, i32) -> Value,
+{
+    for (dst_ty, dst_offset) in dst_leaves {
+        let stored = if let Some(src_ty) = source_by_offset.get(dst_offset).copied() {
+            let loaded = load_leaf(builder, src_ty, *dst_offset);
+            cast_between_types(builder, loaded, src_ty, *dst_ty)
+        } else {
+            zero_for_type(builder, *dst_ty)
+        };
+        builder.ins().store(
+            cranelift_codegen::ir::MemFlags::new(),
+            stored,
+            out_ptr,
+            *dst_offset,
+        );
+    }
+}
+
 fn write_aggregate_to_pointer(
     builder: &mut FunctionBuilder,
     out_ptr: Value,
@@ -2532,31 +2859,14 @@ fn write_aggregate_to_pointer(
             scalar_leaves,
             ..
         } => {
-            let source_by_offset = scalar_leaves
-                .iter()
-                .copied()
-                .map(|(ty, offset)| (offset, ty))
-                .collect::<BTreeMap<_, _>>();
-            for (dst_ty, dst_offset) in &layout.scalar_leaves {
-                if let Some(src_ty) = source_by_offset.get(dst_offset).copied() {
-                    let loaded = builder.ins().stack_load(src_ty, *slot, *dst_offset);
-                    let casted = cast_between_types(builder, loaded, src_ty, *dst_ty);
-                    builder.ins().store(
-                        cranelift_codegen::ir::MemFlags::new(),
-                        casted,
-                        out_ptr,
-                        *dst_offset,
-                    );
-                } else {
-                    let zero = zero_for_type(builder, *dst_ty);
-                    builder.ins().store(
-                        cranelift_codegen::ir::MemFlags::new(),
-                        zero,
-                        out_ptr,
-                        *dst_offset,
-                    );
-                }
-            }
+            let source_by_offset = scalar_leaf_types_by_offset(scalar_leaves);
+            write_aggregate_leaves_with_loader(
+                builder,
+                out_ptr,
+                &layout.scalar_leaves,
+                &source_by_offset,
+                |builder, src_ty, dst_offset| builder.ins().stack_load(src_ty, *slot, dst_offset),
+            );
         }
         LoweredValue::StructPointer {
             addr,
@@ -2573,36 +2883,21 @@ fn write_aggregate_to_pointer(
                 *stack_slot,
                 *stack_offset,
             );
-            let source_by_offset = scalar_leaves
-                .iter()
-                .copied()
-                .map(|(ty, offset)| (offset, ty))
-                .collect::<BTreeMap<_, _>>();
-            for (dst_ty, dst_offset) in &layout.scalar_leaves {
-                if let Some(src_ty) = source_by_offset.get(dst_offset).copied() {
-                    let loaded = builder.ins().load(
+            let source_by_offset = scalar_leaf_types_by_offset(scalar_leaves);
+            write_aggregate_leaves_with_loader(
+                builder,
+                out_ptr,
+                &layout.scalar_leaves,
+                &source_by_offset,
+                |builder, src_ty, dst_offset| {
+                    builder.ins().load(
                         src_ty,
                         cranelift_codegen::ir::MemFlags::new(),
                         source_addr,
-                        *dst_offset,
-                    );
-                    let casted = cast_between_types(builder, loaded, src_ty, *dst_ty);
-                    builder.ins().store(
-                        cranelift_codegen::ir::MemFlags::new(),
-                        casted,
-                        out_ptr,
-                        *dst_offset,
-                    );
-                } else {
-                    let zero = zero_for_type(builder, *dst_ty);
-                    builder.ins().store(
-                        cranelift_codegen::ir::MemFlags::new(),
-                        zero,
-                        out_ptr,
-                        *dst_offset,
-                    );
-                }
-            }
+                        dst_offset,
+                    )
+                },
+            );
         }
         _ => {
             zero_aggregate_at_pointer(builder, out_ptr, layout);
@@ -2648,6 +2943,8 @@ fn mir_value_resolves_to_unknown(
         | Some(MirValue::Assign { value, .. })
         | Some(MirValue::Unary { operand: value, .. })
         | Some(MirValue::Cast { value, .. })
+        | Some(MirValue::ErrorStatus { value })
+        | Some(MirValue::ErrorPayload { value })
         | Some(MirValue::FieldAccess { base: value, .. })
         | Some(MirValue::DerefAccess { base: value })
         | Some(MirValue::Slice { base: value, .. }) => {
@@ -2690,9 +2987,92 @@ fn mir_value_resolves_to_empty_enum_variant(
         Some(MirValue::LocalSet { value, .. })
         | Some(MirValue::Assign { value, .. })
         | Some(MirValue::Unary { operand: value, .. })
+        | Some(MirValue::ErrorStatus { value })
+        | Some(MirValue::ErrorPayload { value })
         | Some(MirValue::Cast { value, .. }) => {
             mir_value_resolves_to_empty_enum_variant(*value, value_defs, depth + 1)
         }
+        _ => false,
+    }
+}
+
+fn mir_value_resolves_to_error_status(
+    value_id: MirValueId,
+    value_defs: &BTreeMap<MirValueId, MirValue>,
+    depth: usize,
+) -> bool {
+    if depth > 32 {
+        return false;
+    }
+    match value_defs.get(&value_id) {
+        Some(MirValue::ErrorStatus { .. }) => true,
+        Some(MirValue::LocalSet { value, .. })
+        | Some(MirValue::Assign { value, .. })
+        | Some(MirValue::Unary { operand: value, .. })
+        | Some(MirValue::Cast { value, .. }) => {
+            mir_value_resolves_to_error_status(*value, value_defs, depth + 1)
+        }
+        _ => false,
+    }
+}
+
+fn mir_value_resolve_callee_name(
+    value_id: MirValueId,
+    value_defs: &BTreeMap<MirValueId, MirValue>,
+    depth: usize,
+) -> Option<String> {
+    if depth > 32 {
+        return None;
+    }
+    match value_defs.get(&value_id) {
+        Some(MirValue::Ident(name)) => Some(name.clone()),
+        Some(MirValue::LocalSet { value, .. })
+        | Some(MirValue::Assign { value, .. })
+        | Some(MirValue::Unary { operand: value, .. })
+        | Some(MirValue::Cast { value, .. })
+        | Some(MirValue::ErrorPayload { value })
+        | Some(MirValue::ErrorStatus { value }) => {
+            mir_value_resolve_callee_name(*value, value_defs, depth + 1)
+        }
+        _ => None,
+    }
+}
+
+fn mir_value_resolves_to_unknown_nominal_call(
+    value_id: MirValueId,
+    value_defs: &BTreeMap<MirValueId, MirValue>,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    returns_unknown_nominal_by_id: &BTreeMap<u32, bool>,
+    depth: usize,
+) -> bool {
+    if depth > 32 {
+        return false;
+    }
+    match value_defs.get(&value_id) {
+        Some(MirValue::Call { callee, .. }) => {
+            let Some(name) = mir_value_resolve_callee_name(*callee, value_defs, depth + 1) else {
+                return false;
+            };
+            let Some(func_id) = symbols_by_name.get(&name) else {
+                return false;
+            };
+            returns_unknown_nominal_by_id
+                .get(&func_id.as_u32())
+                .copied()
+                .unwrap_or(false)
+        }
+        Some(MirValue::LocalSet { value, .. })
+        | Some(MirValue::Assign { value, .. })
+        | Some(MirValue::Unary { operand: value, .. })
+        | Some(MirValue::Cast { value, .. })
+        | Some(MirValue::ErrorPayload { value })
+        | Some(MirValue::ErrorStatus { value }) => mir_value_resolves_to_unknown_nominal_call(
+            *value,
+            value_defs,
+            symbols_by_name,
+            returns_unknown_nominal_by_id,
+            depth + 1,
+        ),
         _ => false,
     }
 }
@@ -2758,7 +3138,8 @@ fn int_carrier_type_for_bits(bits: u16) -> Type {
         0..=8 => I8,
         9..=16 => I16,
         17..=32 => I32,
-        _ => I64,
+        33..=64 => I64,
+        _ => I128,
     }
 }
 
@@ -2836,12 +3217,9 @@ fn canonicalize_int_value(
         let shifted = builder.ins().ishl_imm(casted, shift);
         builder.ins().sshr_imm(shifted, shift)
     } else {
-        let mask = if bits == 64 {
-            -1_i64
-        } else {
-            ((1_u128 << u32::from(bits)) - 1) as i64
-        };
-        builder.ins().band_imm(casted, mask)
+        let shift = i64::from(carrier_bits - bits);
+        let shifted = builder.ins().ishl_imm(casted, shift);
+        builder.ins().ushr_imm(shifted, shift)
     }
 }
 
@@ -2851,6 +3229,46 @@ fn canonicalize_lowered_value_for_type(
     value_ty: &MirValueType,
     scalar: ScalarType,
 ) -> LoweredValue {
+    if let LoweredValue::ErrorableScalar {
+        status,
+        payload,
+        payload_is_float,
+    } = lowered
+    {
+        let canonical_payload = canonicalize_lowered_value_for_type(
+            builder,
+            if payload_is_float {
+                LoweredValue::Float(payload)
+            } else {
+                LoweredValue::Int(payload)
+            },
+            value_ty,
+            scalar,
+        );
+        return match canonical_payload {
+            LoweredValue::Float(payload) => LoweredValue::ErrorableScalar {
+                status,
+                payload,
+                payload_is_float: true,
+            },
+            LoweredValue::Int(payload) => LoweredValue::ErrorableScalar {
+                status,
+                payload,
+                payload_is_float: false,
+            },
+            other => {
+                let payload = other
+                    .as_value()
+                    .unwrap_or_else(|| zero_for_type(builder, scalar.ty()));
+                LoweredValue::ErrorableScalar {
+                    status,
+                    payload,
+                    payload_is_float: builder.func.dfg.value_type(payload).is_float(),
+                }
+            }
+        };
+    }
+
     match value_ty {
         MirValueType::Int { signed, bits } => {
             if matches!(*bits, 8 | 16 | 32 | 64) {
@@ -2882,6 +3300,12 @@ fn parse_return_scalar(return_type: Option<&str>) -> ScalarType {
     if ty.starts_with("fn/") || ty.starts_with("fn(") || ty == "fn" {
         return ScalarType::Int {
             ty: I64,
+            signed: false,
+        };
+    }
+    if let Some(bits) = parse_scalar_enum_repr_bits(ty) {
+        return ScalarType::Int {
+            ty: int_carrier_type_for_bits(bits),
             signed: false,
         };
     }
@@ -2922,11 +3346,9 @@ fn parse_return_scalar(return_type: Option<&str>) -> ScalarType {
         };
     }
 
-    match ty {
-        _ => ScalarType::Int {
-            ty: I32,
-            signed: true,
-        },
+    ScalarType::Int {
+        ty: I32,
+        signed: true,
     }
 }
 

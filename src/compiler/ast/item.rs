@@ -17,7 +17,18 @@ pub struct ModuleDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Binding(Box<Binding>),
+    Extern(Box<ExternDecl>),
     ExprStmt(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternDecl {
+    pub docs: Vec<DocComment>,
+    pub visibility: Visibility,
+    pub name: Ident,
+    pub ty: TypeExpr,
+    pub link_name: Option<String>,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

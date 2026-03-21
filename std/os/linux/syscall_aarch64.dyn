@@ -1,0 +1,13 @@
+module syscall_aarch64
+
+pub read := () isize => 63
+
+pub write := () isize => 64
+
+pub openat := () isize => 56
+
+pub close := () isize => 57
+
+pub getpid := () isize => 172
+
+pub exit := () isize => 93

@@ -14,6 +14,7 @@ pub struct ModuleUnit {
     pub key: ModuleKey,
     pub files: Vec<PathBuf>,
     pub declarations: Vec<DeclStub>,
+    pub extern_declarations: Vec<ExternDeclStub>,
     pub imports: Vec<ImportStub>,
     pub name_uses: Vec<NameUseStub>,
     pub member_uses: Vec<MemberUseStub>,
@@ -28,6 +29,16 @@ pub struct DeclStub {
     pub initializer: DeclInitializer,
     pub annotation: Option<TypeExpr>,
     pub value: Expr,
+    pub file_path: PathBuf,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternDeclStub {
+    pub name: String,
+    pub visibility: Visibility,
+    pub ty: TypeExpr,
+    pub link_name: Option<String>,
     pub file_path: PathBuf,
     pub span: SourceSpan,
 }
@@ -77,6 +88,7 @@ pub fn build_module_units(graph: &ModuleGraph, parsed: &ParseSession) -> Vec<Mod
                     key: module.key.clone(),
                     files: module.files.clone(),
                     declarations: Vec::new(),
+                    extern_declarations: Vec::new(),
                     imports: Vec::new(),
                     name_uses: Vec::new(),
                     member_uses: Vec::new(),
@@ -95,18 +107,31 @@ pub fn build_module_units(graph: &ModuleGraph, parsed: &ParseSession) -> Vec<Mod
         };
 
         for item in &ast.items {
-            if let Item::Binding(binding) = item {
-                unit.declarations.push(DeclStub {
-                    name: binding.name.text.clone(),
-                    visibility: binding.visibility,
-                    mutable: binding.mutable,
-                    kind: DeclKind::Binding,
-                    initializer: DeclInitializer::Expr,
-                    annotation: binding.annotation.clone(),
-                    value: binding.value.clone(),
-                    file_path: parsed_file.file_path.clone(),
-                    span: binding.span,
-                });
+            match item {
+                Item::Binding(binding) => {
+                    unit.declarations.push(DeclStub {
+                        name: binding.name.text.clone(),
+                        visibility: binding.visibility,
+                        mutable: binding.mutable,
+                        kind: DeclKind::Binding,
+                        initializer: DeclInitializer::Expr,
+                        annotation: binding.annotation.clone(),
+                        value: binding.value.clone(),
+                        file_path: parsed_file.file_path.clone(),
+                        span: binding.span,
+                    });
+                }
+                Item::Extern(extern_decl) => {
+                    unit.extern_declarations.push(ExternDeclStub {
+                        name: extern_decl.name.text.clone(),
+                        visibility: extern_decl.visibility,
+                        ty: extern_decl.ty.clone(),
+                        link_name: extern_decl.link_name.clone(),
+                        file_path: parsed_file.file_path.clone(),
+                        span: extern_decl.span,
+                    });
+                }
+                Item::ExprStmt(_) => {}
             }
         }
 
@@ -187,6 +212,7 @@ fn collect_item_uses(
 ) {
     match item {
         Item::Binding(binding) => collect_binding_uses(binding, file_path, imports, names, members),
+        Item::Extern(_) => {}
         Item::ExprStmt(expr) => collect_expr_uses(expr, None, file_path, imports, names, members),
     }
 }
@@ -378,7 +404,7 @@ fn collect_expr_uses(
         ExprKind::Fn(_fn_expr) => {}
         ExprKind::Literal(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue
+        | ExprKind::Continue { .. }
         | ExprKind::TypeLiteral(_) => {}
     }
 }

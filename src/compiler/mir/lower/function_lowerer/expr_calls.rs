@@ -33,7 +33,10 @@ impl FunctionLowerer {
             function_return_types: shared.function_return_types,
             function_return_hints: shared.function_return_hints,
             errorable_aggregate_values: BTreeSet::new(),
+            errorable_scalar_values: BTreeSet::new(),
             named_type_literals: shared.named_type_literals,
+            enum_repr_bits_by_name: shared.enum_repr_bits_by_name,
+            enum_variant_tags_by_name: shared.enum_variant_tags_by_name,
             function_param_names: shared.function_param_names,
             function_param_defaults: shared.function_param_defaults,
             function_param_type_hints: shared.function_param_type_hints,
@@ -47,8 +50,6 @@ impl FunctionLowerer {
             loop_stack: Vec::new(),
             or_break_stack: Vec::new(),
             deferred: Vec::new(),
-            variant_tag_ids: BTreeMap::new(),
-            next_variant_tag: 0,
             diagnostics: Vec::new(),
         }
     }
@@ -131,7 +132,11 @@ impl FunctionLowerer {
                                 },
                                 ty,
                             );
-                            self.address_taken_values.insert(name.clone(), addr);
+                            if self.should_track_address_taken_local(local_value) {
+                                self.address_taken_values.insert(name.clone(), addr);
+                            } else {
+                                self.invalidate_address_taken_aggregate_view(local_value, 0);
+                            }
                             return (block, Some(addr));
                         }
                     }
@@ -261,6 +266,9 @@ impl FunctionLowerer {
                     if self.errorable_aggregate_values.contains(&assigned_value) {
                         self.errorable_aggregate_values.insert(local_set);
                     }
+                    if self.errorable_scalar_values.contains(&assigned_value) {
+                        self.errorable_scalar_values.insert(local_set);
+                    }
                     return (value_end, Some(local_set));
                 }
                 (
@@ -340,6 +348,11 @@ impl FunctionLowerer {
                 {
                     self.errorable_aggregate_values.insert(local_set);
                 }
+                if self.errorable_scalar_values.contains(&init_value)
+                    || self.errorable_scalar_values.contains(&stored_value)
+                {
+                    self.errorable_scalar_values.insert(local_set);
+                }
                 (end, Some(local_set))
             }
             HirExprKind::Call { callee, args } => self.lower_call_expr(block, callee, args, false),
@@ -380,7 +393,7 @@ impl FunctionLowerer {
                             base: base_value,
                             field: field.clone(),
                         },
-                        MirValueType::Unknown,
+                        self.infer_field_access_result_type(base_value, field, 0),
                     )),
                 )
             }
@@ -432,24 +445,13 @@ impl FunctionLowerer {
                             },
                             MirValueType::Unknown,
                         );
-
-                        if let Some(sequence) = self.aggregate_sequences.get(&base_value).cloned() {
-                            let start_idx =
-                                self.literal_int_value(start_value).unwrap_or(0).max(0) as usize;
-                            let mut end_idx = self
-                                .literal_int_value(end_value)
-                                .map(|v| v.max(0) as usize)
-                                .unwrap_or(sequence.len());
-                            if inclusive {
-                                end_idx = end_idx.saturating_add(1);
-                            }
-                            let clamped_start = start_idx.min(sequence.len());
-                            let clamped_end = end_idx.min(sequence.len());
-                            if clamped_start <= clamped_end {
-                                self.aggregate_sequences
-                                    .insert(dest, sequence[clamped_start..clamped_end].to_vec());
-                            }
-                        }
+                        self.track_aggregate_slice_view(
+                            dest,
+                            base_value,
+                            Some(start_value),
+                            Some(end_value),
+                            inclusive,
+                        );
                         return (after_end, Some(dest));
                     }
                 }
@@ -474,7 +476,7 @@ impl FunctionLowerer {
                             base: base_value,
                             index: index_value,
                         },
-                        MirValueType::Unknown,
+                        self.infer_index_result_type(base_value, 0),
                     )),
                 )
             }
@@ -508,28 +510,15 @@ impl FunctionLowerer {
                         end: end_value,
                         inclusive: *inclusive,
                     },
-                    MirValueType::Unknown,
+                    self.infer_slice_result_type(base_value, 0),
                 );
-
-                if let Some(sequence) = self.aggregate_sequences.get(&base_value).cloned() {
-                    let start_idx = start_value
-                        .and_then(|value| self.literal_int_value(value))
-                        .unwrap_or(0)
-                        .max(0) as usize;
-                    let mut end_idx = end_value
-                        .and_then(|value| self.literal_int_value(value))
-                        .map(|v| v.max(0) as usize)
-                        .unwrap_or(sequence.len());
-                    if *inclusive {
-                        end_idx = end_idx.saturating_add(1);
-                    }
-                    let clamped_start = start_idx.min(sequence.len());
-                    let clamped_end = end_idx.min(sequence.len());
-                    if clamped_start <= clamped_end {
-                        self.aggregate_sequences
-                            .insert(dest, sequence[clamped_start..clamped_end].to_vec());
-                    }
-                }
+                self.track_aggregate_slice_view(
+                    dest,
+                    base_value,
+                    start_value,
+                    end_value,
+                    *inclusive,
+                );
 
                 (after_end, Some(dest))
             }
@@ -559,7 +548,11 @@ impl FunctionLowerer {
                 self.aggregate_sequences.insert(dest, seq);
                 (end, Some(dest))
             }
-            HirExprKind::EnumVariant { variant, payload } => {
+            HirExprKind::EnumVariant {
+                root,
+                variant,
+                payload,
+            } => {
                 let mut end = block;
                 let mut lowered_payload = Vec::with_capacity(payload.len());
                 for expr in payload {
@@ -570,25 +563,59 @@ impl FunctionLowerer {
                     };
                     lowered_payload.push(payload_value);
                 }
-                let tag = self.variant_tag_for(variant);
+                let (tag, tag_bits) = if let Some((tag, bits)) =
+                    self.enum_tag_and_bits_for_variant(root.as_deref(), variant)
+                {
+                    (tag, bits)
+                } else if root.is_none() {
+                    self.anonymous_variant_tag_for(variant)
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::Mir,
+                            DiagnosticCode::E4005,
+                            format!(
+                                "cannot resolve enum variant '{}'; use an explicit enum root",
+                                variant
+                            ),
+                        )
+                        .with_primary_file_label(
+                            self.source_file_path.clone(),
+                            Some(expr.span),
+                            "qualify the enum variant (for example `MyEnum.Variant`)",
+                        ),
+                    );
+                    (0, 32)
+                };
                 let tag_value = self.push_eval(
                     end,
                     MirValue::Literal(HirLiteral::Integer(tag.to_string())),
                     MirValueType::Int {
                         signed: false,
-                        bits: 32,
+                        bits: tag_bits,
                     },
                 );
                 (
                     end,
                     Some({
+                        let enum_value_ty = if lowered_payload.is_empty() {
+                            MirValueType::Int {
+                                signed: false,
+                                bits: tag_bits,
+                            }
+                        } else {
+                            MirValueType::Unknown
+                        };
                         let dest = self.push_eval(
                             end,
                             MirValue::EnumVariant {
+                                root: root.clone(),
                                 variant: variant.clone(),
+                                tag,
+                                tag_bits,
                                 payload: lowered_payload.clone(),
                             },
-                            MirValueType::Unknown,
+                            enum_value_ty,
                         );
                         let mut aggregate = Vec::with_capacity(lowered_payload.len() + 1);
                         aggregate.push(tag_value);
@@ -653,7 +680,8 @@ impl FunctionLowerer {
                     MirValueType::Unknown,
                 );
 
-                let target_key = import_path_to_module_key(&self.module_key, path);
+                let target_key =
+                    crate::compiler::module_resolver::module_key_for_import(&self.module_key, path);
                 if let Some(target_module_id) = self.module_ids_by_key.get(&target_key).copied() {
                     if let Some(exports) = self.module_exports_by_id.get(&target_module_id).cloned()
                     {
@@ -788,8 +816,24 @@ impl FunctionLowerer {
         let then_block = self.new_block();
         let else_block = self.new_block();
         let join = self.new_block();
-        let cond = if self.errorable_aggregate_values.contains(&value_id) {
-            self.emit_int_equality_check(start, value_id, 1)
+        let mut success_value = value_id;
+        let mut error_value = value_id;
+        let cond = if self.errorable_scalar_values.contains(&value_id) {
+            let status_value = self.push_eval(
+                start,
+                MirValue::ErrorStatus { value: value_id },
+                value_ty.clone(),
+            );
+            let payload_value = self.push_eval(
+                start,
+                MirValue::ErrorPayload { value: value_id },
+                value_ty.clone(),
+            );
+            success_value = payload_value;
+            error_value = status_value;
+            self.emit_int_equality_check(start, status_value, 0)
+        } else if self.errorable_aggregate_values.contains(&value_id) {
+            self.emit_int_equality_check(start, value_id, 0)
         } else {
             self.emit_nonzero_check(start, value_id, &value_ty)
         };
@@ -814,7 +858,7 @@ impl FunctionLowerer {
         });
         let prev_error_binding = error_binding.and_then(|binding| {
             self.locals
-                .insert(binding.to_string(), value_id)
+                .insert(binding.to_string(), error_value)
                 .map(|prev| (binding.to_string(), prev))
         });
         let (else_end, else_value) = self.lower_expr(else_block, fallback);
@@ -840,10 +884,10 @@ impl FunctionLowerer {
         fallback_sources.append(&mut break_ctx.values);
 
         if fallback_sources.is_empty() {
-            return (join, Some(value_id));
+            return (join, Some(success_value));
         }
 
-        let sources = std::iter::once((then_block, value_id))
+        let sources = std::iter::once((then_block, success_value))
             .chain(fallback_sources.iter().copied())
             .collect::<Vec<_>>();
 
@@ -879,14 +923,7 @@ impl FunctionLowerer {
                 self.lower_inline_range_for(block, start, end, *inclusive, binding.as_deref(), body)
             }
             HirExprKind::Call { callee, args } => self.lower_call_expr(block, callee, args, true),
-            HirExprKind::Function { .. } => self.lower_expr(block, expr),
-            _ => {
-                self.report_unsupported_inline_expression(expr.span);
-                (
-                    block,
-                    Some(self.push_eval(block, MirValue::Unknown, MirValueType::Unknown)),
-                )
-            }
+            _ => self.lower_expr(block, expr),
         }
     }
 
@@ -900,18 +937,10 @@ impl FunctionLowerer {
         body: &HirExpr,
     ) -> (MirBlockId, Option<MirValueId>) {
         let Some(start_value) = self.comptime_i64(start) else {
-            self.report_inline_range_requires_comptime_bounds(start.span);
-            return (
-                block,
-                Some(self.push_eval(block, MirValue::Unknown, MirValueType::Unknown)),
-            );
+            return self.lower_range_loop(block, start, end, inclusive, binding, body);
         };
         let Some(end_value_raw) = self.comptime_i64(end) else {
-            self.report_inline_range_requires_comptime_bounds(end.span);
-            return (
-                block,
-                Some(self.push_eval(block, MirValue::Unknown, MirValueType::Unknown)),
-            );
+            return self.lower_range_loop(block, start, end, inclusive, binding, body);
         };
         let end_value = if inclusive {
             match end_value_raw.checked_add(1) {
@@ -1127,11 +1156,6 @@ impl FunctionLowerer {
                     return (inline_end, inline_value);
                 }
             }
-            self.report_inline_call_lowering_failure(callee.span);
-            return (
-                end,
-                Some(self.push_eval(end, MirValue::Unknown, MirValueType::Unknown)),
-            );
         }
 
         let result_ty = self.infer_call_result_type(callee_value, 0);
@@ -1146,6 +1170,8 @@ impl FunctionLowerer {
         if let Some(name) = callee_name {
             if self.function_returns_errorable_aggregate(&name) {
                 self.errorable_aggregate_values.insert(call_id);
+            } else if self.function_returns_errorable_scalar(&name) {
+                self.errorable_scalar_values.insert(call_id);
             }
         }
         (end, Some(call_id))
@@ -1177,7 +1203,8 @@ impl FunctionLowerer {
         if params.len() != args.len() {
             return None;
         }
-        if !inline_hir_body_supported(body) {
+        let inline_body = normalize_inline_hir_body(body);
+        if !inline_hir_body_supported(&inline_body) {
             return None;
         }
 
@@ -1190,7 +1217,7 @@ impl FunctionLowerer {
 
         self.inline_call_depth += 1;
         self.inline_call_stack.push(callee_name.to_string());
-        let (end, value) = self.lower_expr(block, body);
+        let (end, value) = self.lower_expr(block, &inline_body);
         self.inline_call_stack.pop();
         self.inline_call_depth -= 1;
 
@@ -1277,8 +1304,24 @@ impl FunctionLowerer {
             .get(&value_id)
             .cloned()
             .unwrap_or(MirValueType::Unknown);
-        let cond = if self.errorable_aggregate_values.contains(&value_id) {
-            self.emit_int_equality_check(start, value_id, 1)
+        let mut success_value = value_id;
+        let mut error_value = value_id;
+        let cond = if self.errorable_scalar_values.contains(&value_id) {
+            let status_value = self.push_eval(
+                start,
+                MirValue::ErrorStatus { value: value_id },
+                value_ty.clone(),
+            );
+            let payload_value = self.push_eval(
+                start,
+                MirValue::ErrorPayload { value: value_id },
+                value_ty.clone(),
+            );
+            success_value = payload_value;
+            error_value = status_value;
+            self.emit_int_equality_check(start, status_value, 0)
+        } else if self.errorable_aggregate_values.contains(&value_id) {
+            self.emit_int_equality_check(start, value_id, 0)
         } else {
             self.emit_nonzero_check(start, value_id, &value_ty)
         };
@@ -1299,7 +1342,7 @@ impl FunctionLowerer {
         let fail_end = self.emit_deferred(
             fail_block,
             if is_error_unwrap {
-                Some(value_id)
+                Some(error_value)
             } else {
                 None
             },
@@ -1308,6 +1351,8 @@ impl FunctionLowerer {
             if is_error_unwrap && self.function_returns_errorable() {
                 let return_value = if self.errorable_aggregate_values.contains(&value_id) {
                     value_id
+                } else if self.errorable_scalar_values.contains(&value_id) {
+                    error_value
                 } else {
                     let zero_literal = match value_ty {
                         MirValueType::Float { .. } => HirLiteral::Float("0.0".to_string()),
@@ -1322,7 +1367,7 @@ impl FunctionLowerer {
             }
         }
 
-        (ok_block, Some(value_id))
+        (ok_block, Some(success_value))
     }
 
     pub(super) fn function_returns_errorable(&self) -> bool {
@@ -1345,6 +1390,169 @@ impl FunctionLowerer {
                 self.return_value_is_error_variant(*value, depth + 1)
             }
             _ => false,
+        }
+    }
+
+    fn should_track_address_taken_local(&self, value_id: MirValueId) -> bool {
+        !self.value_is_aggregate_like(value_id, 0)
+    }
+
+    fn track_aggregate_slice_view(
+        &mut self,
+        dest: MirValueId,
+        base_value: MirValueId,
+        start: Option<MirValueId>,
+        end: Option<MirValueId>,
+        inclusive: bool,
+    ) {
+        let Some(sequence) = self.aggregate_sequences.get(&base_value).cloned() else {
+            return;
+        };
+        let Some((start_idx, end_idx)) =
+            self.aggregate_slice_bounds(sequence.len(), start, end, inclusive)
+        else {
+            return;
+        };
+        self.aggregate_sequences
+            .insert(dest, sequence[start_idx..end_idx].to_vec());
+    }
+
+    fn aggregate_slice_bounds(
+        &self,
+        sequence_len: usize,
+        start: Option<MirValueId>,
+        end: Option<MirValueId>,
+        inclusive: bool,
+    ) -> Option<(usize, usize)> {
+        let start_idx = start
+            .and_then(|value| self.literal_int_value(value))
+            .unwrap_or(0)
+            .max(0) as usize;
+        let mut end_idx = end
+            .and_then(|value| self.literal_int_value(value))
+            .map(|value| value.max(0) as usize)
+            .unwrap_or(sequence_len);
+        if inclusive {
+            end_idx = end_idx.saturating_add(1);
+        }
+
+        let clamped_start = start_idx.min(sequence_len);
+        let clamped_end = end_idx.min(sequence_len);
+        (clamped_start <= clamped_end).then_some((clamped_start, clamped_end))
+    }
+
+    fn next_passthrough_access_base(&self, base_value: MirValueId) -> Option<MirValueId> {
+        match self.value_defs.get(&base_value) {
+            Some(MirValue::Cast { value, .. })
+            | Some(MirValue::Assign { value, .. })
+            | Some(MirValue::LocalSet { value, .. })
+            | Some(MirValue::DerefAccess { base: value }) => Some(*value),
+            _ => None,
+        }
+    }
+
+    fn value_type_is_bytes_slice(&self, value_id: MirValueId) -> bool {
+        self.value_types
+            .get(&value_id)
+            .is_some_and(|ty| matches!(ty, MirValueType::BytesSlice))
+    }
+
+    fn infer_field_access_result_type(
+        &self,
+        base_value: MirValueId,
+        field: &str,
+        depth: usize,
+    ) -> MirValueType {
+        if depth > 16 {
+            return MirValueType::Unknown;
+        }
+        if let Some(fields) = self.struct_fields.get(&base_value) {
+            if let Some(value) = fields.get(field) {
+                return self
+                    .value_types
+                    .get(value)
+                    .cloned()
+                    .unwrap_or(MirValueType::Unknown);
+            }
+        }
+        if let Some(next_value) = self.next_passthrough_access_base(base_value) {
+            return self.infer_field_access_result_type(next_value, field, depth + 1);
+        }
+        MirValueType::Unknown
+    }
+
+    fn infer_index_result_type(&self, base_value: MirValueId, depth: usize) -> MirValueType {
+        if depth > 16 {
+            return MirValueType::Unknown;
+        }
+        if let Some(sequence) = self.aggregate_sequences.get(&base_value) {
+            if let Some(first) = sequence.first() {
+                return self
+                    .value_types
+                    .get(first)
+                    .cloned()
+                    .unwrap_or(MirValueType::Unknown);
+            }
+        }
+        if self.value_type_is_bytes_slice(base_value) {
+            return MirValueType::Int {
+                signed: false,
+                bits: 8,
+            };
+        }
+        if let Some(next_value) = self.next_passthrough_access_base(base_value) {
+            return self.infer_index_result_type(next_value, depth + 1);
+        }
+        MirValueType::Unknown
+    }
+
+    fn infer_slice_result_type(&self, base_value: MirValueId, depth: usize) -> MirValueType {
+        if depth > 16 {
+            return MirValueType::Unknown;
+        }
+        if self.value_type_is_bytes_slice(base_value) {
+            return MirValueType::BytesSlice;
+        }
+        if let Some(next_value) = self.next_passthrough_access_base(base_value) {
+            return self.infer_slice_result_type(next_value, depth + 1);
+        }
+        MirValueType::Unknown
+    }
+
+    fn value_is_aggregate_like(&self, value_id: MirValueId, depth: usize) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        if self.aggregate_sequences.contains_key(&value_id)
+            || self.struct_fields.contains_key(&value_id)
+        {
+            return true;
+        }
+        match self.value_defs.get(&value_id) {
+            Some(MirValue::StructLiteral { .. }) => true,
+            Some(MirValue::EnumVariant { payload, .. }) => !payload.is_empty(),
+            Some(MirValue::Cast { value, .. })
+            | Some(MirValue::Assign { value, .. })
+            | Some(MirValue::LocalSet { value, .. }) => {
+                self.value_is_aggregate_like(*value, depth + 1)
+            }
+            _ => false,
+        }
+    }
+
+    fn invalidate_address_taken_aggregate_view(&mut self, value_id: MirValueId, depth: usize) {
+        if depth > 16 {
+            return;
+        }
+        self.aggregate_sequences.remove(&value_id);
+        self.struct_fields.remove(&value_id);
+        match self.value_defs.get(&value_id) {
+            Some(MirValue::Cast { value, .. })
+            | Some(MirValue::Assign { value, .. })
+            | Some(MirValue::LocalSet { value, .. }) => {
+                self.invalidate_address_taken_aggregate_view(*value, depth + 1)
+            }
+            _ => {}
         }
     }
 

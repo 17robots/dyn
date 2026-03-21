@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::compiler::ast::BinaryOp;
 use crate::compiler::hir::{HirExpr, HirExprKind, HirLiteral};
 use crate::compiler::mir::MirValueType;
+use crate::compiler::type_text::parse_enum_type_descriptor;
 
 use super::ComptimeValue;
 
@@ -113,6 +114,61 @@ fn parse_struct_fields(type_name: &str) -> Option<Vec<(String, String)>> {
         fields.push((name.to_string(), ty.to_string()));
     }
     Some(fields)
+}
+
+pub(super) fn enum_type_repr_bits(type_name: &str) -> Option<u16> {
+    parse_enum_type_descriptor(type_name).map(|(bits, _)| bits)
+}
+
+pub(super) fn enum_type_variants(type_name: &str) -> Option<Vec<String>> {
+    let (_, inner) = parse_enum_type_descriptor(type_name)?;
+    if inner.trim().is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut variants = Vec::new();
+    for part in split_top_level(inner, ',') {
+        if part.trim().is_empty() {
+            continue;
+        }
+        let mut pieces = part.splitn(2, ':');
+        let name = pieces.next()?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        variants.push(name.to_string());
+    }
+    Some(variants)
+}
+
+pub(super) fn enum_type_has_payload(type_name: &str) -> Option<bool> {
+    let (_, inner) = parse_enum_type_descriptor(type_name)?;
+    if inner.trim().is_empty() {
+        return Some(false);
+    }
+    for part in split_top_level(inner, ',') {
+        if part.trim().is_empty() {
+            continue;
+        }
+        let mut depth_paren = 0i32;
+        let mut depth_brace = 0i32;
+        let mut depth_bracket = 0i32;
+        for ch in part.chars() {
+            match ch {
+                '(' => depth_paren += 1,
+                ')' => depth_paren -= 1,
+                '{' => depth_brace += 1,
+                '}' => depth_brace -= 1,
+                '[' => depth_bracket += 1,
+                ']' => depth_bracket -= 1,
+                ':' if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
+                    return Some(true);
+                }
+                _ => {}
+            }
+        }
+    }
+    Some(false)
 }
 
 fn split_top_level(input: &str, sep: char) -> Vec<String> {
@@ -365,6 +421,18 @@ pub(super) fn parse_type_hint(text: &str) -> MirValueType {
             signed: false,
             bits: 64,
         };
+    }
+
+    if normalized.starts_with("enum") {
+        if matches!(enum_type_has_payload(normalized), Some(false)) {
+            if let Some(bits) = enum_type_repr_bits(normalized) {
+                return MirValueType::Int {
+                    signed: false,
+                    bits,
+                };
+            }
+        }
+        return MirValueType::Unknown;
     }
 
     if let Some(rest) = normalized.strip_prefix('i') {

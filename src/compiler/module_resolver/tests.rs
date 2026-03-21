@@ -167,3 +167,43 @@ fn includes_bundled_std_module_when_project_imports_std_path() {
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
+
+#[test]
+fn normalizes_linux_syscall_import_alias_for_supported_arches() {
+    assert_eq!(
+        linux_syscall_import_for_arch("x86_64"),
+        "std/os/linux/syscall_x86_64"
+    );
+    assert_eq!(
+        linux_syscall_import_for_arch("amd64"),
+        "std/os/linux/syscall_x86_64"
+    );
+    assert_eq!(
+        linux_syscall_import_for_arch("aarch64"),
+        "std/os/linux/syscall_aarch64"
+    );
+    assert_eq!(
+        linux_syscall_import_for_arch("arm64"),
+        "std/os/linux/syscall_aarch64"
+    );
+}
+
+#[test]
+fn normalizes_os_platform_import_alias_for_supported_targets() {
+    assert_eq!(os_platform_import_for_target("linux"), "std/os/linux");
+    assert_eq!(os_platform_import_for_target("windows"), "std/os/windows");
+    assert_eq!(os_platform_import_for_target("darwin"), "std/os/linux");
+}
+
+#[test]
+fn normalize_import_path_leaves_non_alias_paths_unchanged() {
+    assert_eq!(normalize_import_path("std/io"), "std/io");
+    assert_eq!(
+        normalize_import_path("std/os/linux/syscall_x86_64"),
+        "std/os/linux/syscall_x86_64"
+    );
+    assert_eq!(
+        normalize_import_path("std/os/platform"),
+        os_platform_import_for_target(std::env::consts::OS)
+    );
+}

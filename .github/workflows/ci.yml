@@ -47,7 +47,10 @@ jobs:
         if: matrix.full != true
         shell: bash
         run: |
+          cargo test compiler::module_resolver::tests::
           cargo test compiler::lexer::scanner::tests::
           cargo test compiler::parser::tests::
           cargo test compiler::sema::analyze::tests::
           cargo test compiler::sema::typeck::tests::
+          cargo test compiler::mir::verify::tests::
+          cargo test compiler::backend::cranelift::tests::

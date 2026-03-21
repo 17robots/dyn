@@ -115,8 +115,27 @@ fn check_expr(
                 check_expr(value, ctx, file_path, diagnostics);
             }
         }
-        ExprKind::Continue => {
-            if ctx.loop_depth == 0 {
+        ExprKind::Continue { label } => {
+            if let Some(label) = label {
+                if !ctx
+                    .labels
+                    .iter()
+                    .any(|existing| existing == &label.name.text)
+                {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::Semantic,
+                            DiagnosticCode::E4007,
+                            format!("unknown continue label '{}'", label.name.text),
+                        )
+                        .with_primary_file_label(
+                            file_path.to_path_buf(),
+                            Some(expr.span),
+                            "label is not in scope",
+                        ),
+                    );
+                }
+            } else if ctx.loop_depth == 0 {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::Semantic,

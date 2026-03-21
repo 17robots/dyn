@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::entities::StackSlot;
 use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
-use cranelift_codegen::ir::types::{F128, F32, F64, I16, I32, I64, I8};
+use cranelift_codegen::ir::types::{F128, F32, F64, I128, I16, I32, I64, I8};
 use cranelift_codegen::ir::{
     AbiParam, InstBuilder, InstructionData, Opcode, TrapCode, Type, Value, ValueDef,
 };
@@ -19,6 +19,7 @@ use crate::compiler::intrinsics::{
 use crate::compiler::mir::{
     MirFunction, MirInstr, MirProgram, MirTerminator, MirValue, MirValueId, MirValueType,
 };
+use crate::compiler::type_text::parse_enum_type_descriptor;
 
 mod driver;
 mod layout;
@@ -34,6 +35,8 @@ struct FunctionSymbols {
     param_types_by_id: BTreeMap<u32, Vec<Type>>,
     returns_bytes_slice_by_id: BTreeMap<u32, bool>,
     returns_errorable_by_id: BTreeMap<u32, bool>,
+    returns_errorable_scalar_payload_ty_by_id: BTreeMap<u32, MirValueType>,
+    returns_unknown_nominal_by_id: BTreeMap<u32, bool>,
     returns_aggregate_layout_by_id: BTreeMap<u32, AggregateLayout>,
     nominal_aggregate_layouts: BTreeMap<String, AggregateLayout>,
 }
@@ -80,6 +83,12 @@ fn backend_hint_mir_type(type_hint: Option<&str>) -> MirValueType {
     if ty.starts_with("fn/") {
         return MirValueType::FunctionPointer;
     }
+    if let Some(bits) = parse_scalar_enum_repr_bits(ty) {
+        return MirValueType::Int {
+            signed: false,
+            bits,
+        };
+    }
     if let Some((signed, bits)) = parse_int_type_bits(ty) {
         return MirValueType::Int { signed, bits };
     }
@@ -122,6 +131,8 @@ fn declare_function_symbols(
     let mut param_types_by_id = BTreeMap::new();
     let mut returns_bytes_slice_by_id = BTreeMap::new();
     let mut returns_errorable_by_id = BTreeMap::new();
+    let mut returns_errorable_scalar_payload_ty_by_id = BTreeMap::new();
+    let mut returns_unknown_nominal_by_id = BTreeMap::new();
     let mut returns_aggregate_layout_by_id = BTreeMap::new();
     let pointer_ty = module.target_config().pointer_type();
     let nominal_aggregate_layouts = build_nominal_aggregate_layouts(mir, pointer_ty);
@@ -165,6 +176,17 @@ fn declare_function_symbols(
                     pointer_ty,
                 )
             };
+            let returns_unknown_nominal = !returns_errorable
+                && !returns_bytes_slice
+                && returns_aggregate_layout.is_none()
+                && matches!(
+                    backend_hint_mir_type(function.return_type.as_deref()),
+                    MirValueType::Unknown
+                );
+            let returns_errorable_scalar = !exported
+                && returns_errorable
+                && !returns_bytes_slice
+                && returns_aggregate_layout.is_none();
             if returns_bytes_slice {
                 signature.params.push(AbiParam::new(pointer_ty));
                 param_types.push(pointer_ty);
@@ -177,6 +199,10 @@ fn declare_function_symbols(
                 } else {
                     pointer_ty
                 }));
+            } else if returns_errorable_scalar {
+                signature.params.push(AbiParam::new(pointer_ty));
+                param_types.push(pointer_ty);
+                signature.returns.push(AbiParam::new(ret_scalar.ty()));
             } else {
                 signature
                     .returns
@@ -213,6 +239,129 @@ fn declare_function_symbols(
             param_types_by_id.insert(func_id.as_u32(), param_types);
             returns_bytes_slice_by_id.insert(func_id.as_u32(), returns_bytes_slice);
             returns_errorable_by_id.insert(func_id.as_u32(), returns_errorable);
+            if returns_errorable_scalar {
+                returns_errorable_scalar_payload_ty_by_id.insert(
+                    func_id.as_u32(),
+                    backend_hint_mir_type(function.return_type.as_deref()),
+                );
+            }
+            returns_unknown_nominal_by_id.insert(func_id.as_u32(), returns_unknown_nominal);
+            if let Some(layout) = returns_aggregate_layout {
+                returns_aggregate_layout_by_id.insert(func_id.as_u32(), layout);
+            }
+        }
+
+        for extern_fn in &mir_module.extern_functions {
+            let mut signature = module.make_signature();
+            let ret_scalar = parse_return_scalar(extern_fn.return_type.as_deref());
+            let mut param_types = Vec::with_capacity(extern_fn.param_types.len());
+            for idx in 0..extern_fn.param_types.len() {
+                let declared = extern_fn
+                    .param_types
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or(MirValueType::Unknown);
+                let param = if matches!(declared, MirValueType::Unknown) {
+                    backend_hint_mir_type(
+                        extern_fn
+                            .param_type_hints
+                            .get(idx)
+                            .and_then(|hint| hint.as_deref()),
+                    )
+                } else {
+                    declared
+                };
+
+                if matches!(param, MirValueType::BytesSlice) {
+                    signature.params.push(AbiParam::new(pointer_ty));
+                    signature.params.push(AbiParam::new(pointer_ty));
+                    param_types.push(pointer_ty);
+                    param_types.push(pointer_ty);
+                    continue;
+                }
+
+                let clif_ty = if matches!(
+                    param,
+                    MirValueType::Unknown | MirValueType::Function | MirValueType::FunctionPointer
+                ) {
+                    pointer_ty
+                } else {
+                    mir_type_to_clif(&param, ret_scalar)
+                };
+                signature.params.push(AbiParam::new(clif_ty));
+                param_types.push(clif_ty);
+            }
+
+            let returns_bytes_slice =
+                returns_bytes_slice_from_hint(extern_fn.return_type.as_deref());
+            let returns_errorable = returns_errorable_from_hint(extern_fn.return_type.as_deref());
+            let returns_aggregate_layout = if returns_bytes_slice {
+                None
+            } else {
+                parse_aggregate_layout(
+                    extern_fn.return_type.as_deref(),
+                    &nominal_aggregate_layouts,
+                    pointer_ty,
+                )
+            };
+            let returns_unknown_nominal = !returns_errorable
+                && !returns_bytes_slice
+                && returns_aggregate_layout.is_none()
+                && matches!(
+                    backend_hint_mir_type(extern_fn.return_type.as_deref()),
+                    MirValueType::Unknown
+                );
+            let returns_errorable_scalar =
+                returns_errorable && !returns_bytes_slice && returns_aggregate_layout.is_none();
+
+            if returns_bytes_slice {
+                signature.params.push(AbiParam::new(pointer_ty));
+                param_types.push(pointer_ty);
+                signature.returns.push(AbiParam::new(pointer_ty));
+            } else if returns_aggregate_layout.is_some() {
+                signature.params.push(AbiParam::new(pointer_ty));
+                param_types.push(pointer_ty);
+                signature.returns.push(AbiParam::new(if returns_errorable {
+                    ret_scalar.ty()
+                } else {
+                    pointer_ty
+                }));
+            } else if returns_errorable_scalar {
+                signature.params.push(AbiParam::new(pointer_ty));
+                param_types.push(pointer_ty);
+                signature.returns.push(AbiParam::new(ret_scalar.ty()));
+            } else {
+                signature.returns.push(AbiParam::new(ret_scalar.ty()));
+            }
+
+            let func_id = module
+                .declare_function(&extern_fn.symbol_name, Linkage::Import, &signature)
+                .map_err(|err| {
+                    format!(
+                        "failed to declare extern function '{}': {err}",
+                        extern_fn.name
+                    )
+                })?;
+
+            by_key.insert((mir_module.module_id.0, extern_fn.name.clone()), func_id);
+            by_name.entry(extern_fn.name.clone()).or_insert(func_id);
+            by_name.insert(
+                format!("#{}::{}", mir_module.module_id.0, extern_fn.name),
+                func_id,
+            );
+            by_name
+                .entry(extern_fn.symbol_name.clone())
+                .or_insert(func_id);
+            param_types_by_id.insert(func_id.as_u32(), param_types);
+            returns_bytes_slice_by_id.insert(func_id.as_u32(), returns_bytes_slice);
+            returns_errorable_by_id.insert(func_id.as_u32(), returns_errorable);
+            if returns_errorable_scalar {
+                returns_errorable_scalar_payload_ty_by_id.insert(
+                    func_id.as_u32(),
+                    backend_hint_mir_type(extern_fn.return_type.as_deref()),
+                );
+            }
+            returns_unknown_nominal_by_id.insert(func_id.as_u32(), returns_unknown_nominal);
             if let Some(layout) = returns_aggregate_layout {
                 returns_aggregate_layout_by_id.insert(func_id.as_u32(), layout);
             }
@@ -240,6 +389,7 @@ fn declare_function_symbols(
             runtime_intrinsic_returns_bytes_slice(intrinsic.name),
         );
         returns_errorable_by_id.insert(func_id.as_u32(), false);
+        returns_unknown_nominal_by_id.insert(func_id.as_u32(), false);
     }
 
     Ok(FunctionSymbols {
@@ -248,6 +398,8 @@ fn declare_function_symbols(
         param_types_by_id,
         returns_bytes_slice_by_id,
         returns_errorable_by_id,
+        returns_errorable_scalar_payload_ty_by_id,
+        returns_unknown_nominal_by_id,
         returns_aggregate_layout_by_id,
         nominal_aggregate_layouts,
     })
@@ -310,6 +462,28 @@ fn normalized_return_type_hint(return_type: Option<&str>) -> String {
         ty = ok.trim().to_string();
     }
     ty
+}
+
+fn parse_scalar_enum_repr_bits(type_text: &str) -> Option<u16> {
+    let (bits, inner) = parse_enum_type_descriptor(type_text)?;
+
+    let mut depth_paren = 0i32;
+    let mut depth_brace = 0i32;
+    let mut depth_bracket = 0i32;
+    for ch in inner.chars() {
+        match ch {
+            '(' => depth_paren += 1,
+            ')' => depth_paren -= 1,
+            '{' => depth_brace += 1,
+            '}' => depth_brace -= 1,
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket -= 1,
+            ':' if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => return None,
+            _ => {}
+        }
+    }
+
+    Some(bits)
 }
 
 fn sanitize_symbol_name(name: &str) -> String {
@@ -381,6 +555,10 @@ fn compile_function(
             pointer_ty,
         )
     };
+    let returns_errorable_scalar = !exported
+        && returns_errorable
+        && !returns_bytes_slice
+        && returns_aggregate_layout.is_none();
     let signature_ret_ty = if exported {
         I32
     } else if returns_bytes_slice || (returns_aggregate_layout.is_some() && !returns_errorable) {
@@ -467,6 +645,15 @@ fn compile_function(
         None
     };
 
+    let errorable_scalar_out_ptr_param = if returns_errorable_scalar {
+        ctx.func.signature.params.push(AbiParam::new(pointer_ty));
+        let index = block_param_index;
+        block_param_index += 1;
+        Some(index)
+    } else {
+        None
+    };
+
     let _ = block_param_index;
     ctx.func
         .signature
@@ -515,14 +702,17 @@ fn compile_function(
     }
 
     let mut value_defs = BTreeMap::<MirValueId, MirValue>::new();
+    let mut value_types = BTreeMap::<MirValueId, MirValueType>::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
             match instruction {
-                MirInstr::Eval { dest, value, .. } => {
+                MirInstr::Eval { dest, value, ty } => {
                     value_defs.insert(*dest, value.clone());
+                    value_types.insert(*dest, ty.clone());
                 }
-                MirInstr::Phi { dest, .. } => {
+                MirInstr::Phi { dest, ty, .. } => {
                     value_defs.entry(*dest).or_insert(MirValue::Unknown);
+                    value_types.insert(*dest, ty.clone());
                 }
             }
         }
@@ -539,6 +729,8 @@ fn compile_function(
             param_types_by_id: &symbols.param_types_by_id,
             returns_bytes_slice_by_id: &symbols.returns_bytes_slice_by_id,
             returns_errorable_by_id: &symbols.returns_errorable_by_id,
+            returns_errorable_scalar_payload_ty_by_id: &symbols
+                .returns_errorable_scalar_payload_ty_by_id,
             returns_aggregate_layout_by_id: &symbols.returns_aggregate_layout_by_id,
         },
     };
@@ -546,6 +738,7 @@ fn compile_function(
     let mut global_lowered = BTreeMap::<MirValueId, LoweredValue>::new();
     let mut function_out_len_ptr = None;
     let mut function_out_aggregate_ptr = None;
+    let mut function_out_errorable_scalar_ptr = None;
 
     for block in &function.blocks {
         let clif_block = clif_blocks[block.id.0];
@@ -557,6 +750,10 @@ fn compile_function(
             }
             if let Some(out_ptr_param) = aggregate_out_ptr_param {
                 function_out_aggregate_ptr =
+                    builder.block_params(clif_block).get(out_ptr_param).copied();
+            }
+            if let Some(out_ptr_param) = errorable_scalar_out_ptr_param {
+                function_out_errorable_scalar_ptr =
                     builder.block_params(clif_block).get(out_ptr_param).copied();
             }
             builder.seal_block(clif_block);
@@ -743,7 +940,7 @@ fn compile_function(
                                         layout,
                                         &ret_value,
                                     );
-                                    builder.ins().iconst(signature_ret_ty, 1)
+                                    zero_for_type(&mut builder, signature_ret_ty)
                                 }
                                 _ => ret_value
                                     .as_int()
@@ -764,26 +961,121 @@ fn compile_function(
                         }
                         builder.ins().return_(&[out_ptr]);
                     }
-                } else {
-                    let ret = if returns_errorable
-                        && value.is_some_and(|id| {
-                            mir_value_resolves_to_empty_enum_variant(id, &value_defs, 0)
-                        }) {
-                        zero_for_type(&mut builder, signature_ret_ty)
+                } else if returns_errorable_scalar {
+                    let out_ptr = function_out_errorable_scalar_ptr
+                        .unwrap_or_else(|| zero_for_type(&mut builder, pointer_ty));
+                    let payload_mir_ty = backend_hint_mir_type(Some(
+                        normalized_return_type_hint(function.return_type.as_deref()).as_str(),
+                    ));
+                    let payload_ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
+                        scalar.ty()
                     } else {
-                        value
-                            .and_then(|id| lowered.get(&id))
-                            .and_then(|value| match value {
-                                LoweredValue::FunctionSymbol(func_id) => {
-                                    let func_ref =
-                                        module.declare_func_in_func(*func_id, builder.func);
-                                    Some(builder.ins().func_addr(pointer_ty, func_ref))
-                                }
-                                _ => value.as_value(),
-                            })
-                            .map(|value| cast_scalar(&mut builder, value, signature_ret_ty, scalar))
-                            .unwrap_or_else(|| zero_for_type(&mut builder, signature_ret_ty))
+                        mir_type_to_clif(&payload_mir_ty, scalar)
                     };
+
+                    let mut status = zero_for_type(&mut builder, signature_ret_ty);
+                    let mut payload = zero_for_type(&mut builder, payload_ty);
+
+                    if let Some(value_id) = value {
+                        let ret_value = lowered.get(value_id).cloned();
+                        if let Some(ret_value) = ret_value {
+                            match ret_value {
+                                LoweredValue::ErrorableScalar {
+                                    status: inner_status,
+                                    payload: inner_payload,
+                                    ..
+                                } => {
+                                    status = cast_scalar(
+                                        &mut builder,
+                                        inner_status,
+                                        signature_ret_ty,
+                                        scalar,
+                                    );
+                                    payload = cast_scalar(
+                                        &mut builder,
+                                        inner_payload,
+                                        payload_ty,
+                                        scalar,
+                                    );
+                                }
+                                other => {
+                                    let is_explicit_error =
+                                        mir_value_resolves_to_empty_enum_variant(
+                                            *value_id,
+                                            &value_defs,
+                                            0,
+                                        ) || mir_value_resolves_to_error_status(
+                                            *value_id,
+                                            &value_defs,
+                                            0,
+                                        ) || mir_value_resolves_to_unknown_nominal_call(
+                                            *value_id,
+                                            &value_defs,
+                                            &symbols.by_name,
+                                            &symbols.returns_unknown_nominal_by_id,
+                                            0,
+                                        ) || (!matches!(payload_mir_ty, MirValueType::Unknown)
+                                            && value_types.get(value_id).is_some_and(|ty| {
+                                                matches!(ty, MirValueType::Unknown)
+                                            }));
+
+                                    if is_explicit_error {
+                                        status = other
+                                            .as_int()
+                                            .map(|v| {
+                                                cast_scalar(
+                                                    &mut builder,
+                                                    v,
+                                                    signature_ret_ty,
+                                                    scalar,
+                                                )
+                                            })
+                                            .unwrap_or_else(|| {
+                                                zero_for_type(&mut builder, signature_ret_ty)
+                                            });
+                                    } else {
+                                        payload = match other {
+                                            LoweredValue::FunctionSymbol(func_id) => {
+                                                let func_ref = module
+                                                    .declare_func_in_func(func_id, builder.func);
+                                                let addr =
+                                                    builder.ins().func_addr(pointer_ty, func_ref);
+                                                cast_scalar(&mut builder, addr, payload_ty, scalar)
+                                            }
+                                            _ => other
+                                                .as_value()
+                                                .map(|v| {
+                                                    cast_scalar(&mut builder, v, payload_ty, scalar)
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    zero_for_type(&mut builder, payload_ty)
+                                                }),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    builder.ins().store(
+                        cranelift_codegen::ir::MemFlags::new(),
+                        payload,
+                        out_ptr,
+                        0,
+                    );
+                    builder.ins().return_(&[status]);
+                } else {
+                    let ret = value
+                        .and_then(|id| lowered.get(&id))
+                        .and_then(|value| match value {
+                            LoweredValue::FunctionSymbol(func_id) => {
+                                let func_ref = module.declare_func_in_func(*func_id, builder.func);
+                                Some(builder.ins().func_addr(pointer_ty, func_ref))
+                            }
+                            _ => value.as_value(),
+                        })
+                        .map(|value| cast_scalar(&mut builder, value, signature_ret_ty, scalar))
+                        .unwrap_or_else(|| zero_for_type(&mut builder, signature_ret_ty));
                     builder.ins().return_(&[ret]);
                 }
             }
@@ -861,6 +1153,26 @@ fn compile_function(
                         zero_aggregate_at_pointer(&mut builder, out_ptr, layout);
                         builder.ins().return_(&[out_ptr]);
                     }
+                } else if returns_errorable_scalar {
+                    let out_ptr = function_out_errorable_scalar_ptr
+                        .unwrap_or_else(|| zero_for_type(&mut builder, pointer_ty));
+                    let payload_mir_ty = backend_hint_mir_type(Some(
+                        normalized_return_type_hint(function.return_type.as_deref()).as_str(),
+                    ));
+                    let payload_ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
+                        scalar.ty()
+                    } else {
+                        mir_type_to_clif(&payload_mir_ty, scalar)
+                    };
+                    let payload = zero_for_type(&mut builder, payload_ty);
+                    builder.ins().store(
+                        cranelift_codegen::ir::MemFlags::new(),
+                        payload,
+                        out_ptr,
+                        0,
+                    );
+                    let status = zero_for_type(&mut builder, signature_ret_ty);
+                    builder.ins().return_(&[status]);
                 } else {
                     let ret = zero_for_type(&mut builder, signature_ret_ty);
                     builder.ins().return_(&[ret]);
@@ -914,15 +1226,56 @@ fn compile_function(
 
 include!("cranelift/lowering.rs");
 
-fn parse_int_literal(value: &str) -> Option<i64> {
+fn parse_int_literal_parts(value: &str) -> Option<(bool, u128)> {
     let normalized = value.replace('_', "");
-    if let Some(bits) = normalized.strip_prefix("0x") {
-        i64::from_str_radix(bits, 16).ok()
-    } else if let Some(bits) = normalized.strip_prefix("0b") {
-        i64::from_str_radix(bits, 2).ok()
-    } else if let Some(bits) = normalized.strip_prefix("0o") {
-        i64::from_str_radix(bits, 8).ok()
+    let (negative, digits) = if let Some(rest) = normalized.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = normalized.strip_prefix('+') {
+        (false, rest)
     } else {
-        normalized.parse::<i64>().ok()
+        (false, normalized.as_str())
+    };
+
+    if digits.is_empty() {
+        return None;
+    }
+
+    let (radix, body) = if let Some(bits) = digits.strip_prefix("0x") {
+        (16, bits)
+    } else if let Some(bits) = digits.strip_prefix("0b") {
+        (2, bits)
+    } else if let Some(bits) = digits.strip_prefix("0o") {
+        (8, bits)
+    } else {
+        (10, digits)
+    };
+
+    if body.is_empty() {
+        return None;
+    }
+
+    let magnitude = u128::from_str_radix(body, radix).ok()?;
+    Some((negative, magnitude))
+}
+
+fn parse_int_literal(value: &str) -> Option<i64> {
+    let (negative, magnitude) = parse_int_literal_parts(value)?;
+    if negative {
+        if magnitude == (i64::MAX as u128) + 1 {
+            Some(i64::MIN)
+        } else {
+            i64::try_from(magnitude).ok().map(|parsed| -parsed)
+        }
+    } else {
+        i64::try_from(magnitude).ok()
+    }
+}
+
+fn parse_int_literal_wide_bits(value: &str) -> Option<u128> {
+    let (negative, magnitude) = parse_int_literal_parts(value)?;
+    if negative {
+        Some((0u128).wrapping_sub(magnitude))
+    } else {
+        Some(magnitude)
     }
 }

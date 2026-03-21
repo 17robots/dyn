@@ -20,6 +20,16 @@ pub struct MirModule {
     pub module_id: ModuleId,
     pub key: ModuleKey,
     pub functions: Vec<MirFunction>,
+    pub extern_functions: Vec<MirExternFunction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirExternFunction {
+    pub name: String,
+    pub symbol_name: String,
+    pub return_type: Option<String>,
+    pub param_type_hints: Vec<Option<String>>,
+    pub param_types: Vec<MirValueType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +115,12 @@ pub enum MirValue {
         callee: MirValueId,
         args: Vec<MirValueId>,
     },
+    ErrorStatus {
+        value: MirValueId,
+    },
+    ErrorPayload {
+        value: MirValueId,
+    },
     FieldAccess {
         base: MirValueId,
         field: String,
@@ -126,7 +142,10 @@ pub enum MirValue {
         fields: Vec<(String, MirValueId)>,
     },
     EnumVariant {
+        root: Option<String>,
         variant: String,
+        tag: i64,
+        tag_bits: u16,
         payload: Vec<MirValueId>,
     },
     Use {

@@ -606,6 +606,74 @@ pub const RUNTIME_INTRINSICS: &[RuntimeIntrinsicSpec] = &[
         abi_return: RuntimeAbiType::Ptr,
     },
     RuntimeIntrinsicSpec {
+        builtin: "$strconv_parse_i32",
+        symbol: "dynrt_strconv_parse_i32",
+        arity: 2,
+        return_kind: RuntimeReturnKind::U32,
+        abi_params: &[
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+        ],
+        abi_return: RuntimeAbiType::I32,
+    },
+    RuntimeIntrinsicSpec {
+        builtin: "$strconv_parse_u64",
+        symbol: "dynrt_strconv_parse_u64",
+        arity: 2,
+        return_kind: RuntimeReturnKind::U32,
+        abi_params: &[
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+        ],
+        abi_return: RuntimeAbiType::I32,
+    },
+    RuntimeIntrinsicSpec {
+        builtin: "$strconv_parse_bool",
+        symbol: "dynrt_strconv_parse_bool",
+        arity: 2,
+        return_kind: RuntimeReturnKind::U32,
+        abi_params: &[
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+        ],
+        abi_return: RuntimeAbiType::I32,
+    },
+    RuntimeIntrinsicSpec {
+        builtin: "$unicode_utf8_valid",
+        symbol: "dynrt_unicode_utf8_valid",
+        arity: 1,
+        return_kind: RuntimeReturnKind::U32,
+        abi_params: &[RuntimeAbiType::Ptr, RuntimeAbiType::Ptr],
+        abi_return: RuntimeAbiType::I32,
+    },
+    RuntimeIntrinsicSpec {
+        builtin: "$unicode_utf8_count_scalars",
+        symbol: "dynrt_unicode_utf8_count_scalars",
+        arity: 2,
+        return_kind: RuntimeReturnKind::U32,
+        abi_params: &[
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+        ],
+        abi_return: RuntimeAbiType::I32,
+    },
+    RuntimeIntrinsicSpec {
+        builtin: "$unicode_utf8_next_len",
+        symbol: "dynrt_unicode_utf8_next_len",
+        arity: 2,
+        return_kind: RuntimeReturnKind::U64,
+        abi_params: &[
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+            RuntimeAbiType::Ptr,
+        ],
+        abi_return: RuntimeAbiType::Ptr,
+    },
+    RuntimeIntrinsicSpec {
         builtin: "$env_argc",
         symbol: "dynrt_env_argc",
         arity: 0,
@@ -934,6 +1002,206 @@ pub const RUNTIME_INTRINSICS: &[RuntimeIntrinsicSpec] = &[
     },
 ];
 
+// Runtime builtin aliases kept for compatibility.
+// These are distinct from LANGUAGE_BUILTINS and map to runtime intrinsics.
+pub const STDLIB_FOUNDATION_BUILTINS: &[&str] = &[
+    "$alloc_with",
+    "$arena_allocator",
+    "$arena_deinit",
+    "$arena_reset",
+    "$bytes_clone",
+    "$bytes_concat2",
+    "$bytes_concat3",
+    "$bytes_ends_with",
+    "$bytes_eq",
+    "$bytes_from_ptr_len",
+    "$bytes_index_of",
+    "$bytes_len",
+    "$bytes_slice",
+    "$bytes_starts_with",
+    "$c_allocator",
+    "$env_argc",
+    "$env_argv",
+    "$env_cwd",
+    "$env_get",
+    "$f128_add",
+    "$f128_div",
+    "$f128_eq",
+    "$f128_from_f64",
+    "$f128_from_i64",
+    "$f128_from_literal",
+    "$f128_from_u64",
+    "$f128_ge",
+    "$f128_gt",
+    "$f128_le",
+    "$f128_lt",
+    "$f128_mul",
+    "$f128_ne",
+    "$f128_neg",
+    "$f128_release",
+    "$f128_sub",
+    "$f128_to_f64",
+    "$f128_to_i64",
+    "$f128_to_u64",
+    "$f128_zero",
+    "$fmt_i32",
+    "$fmt_u64",
+    "$fmt_usize",
+    "$free_with",
+    "$fs_exists",
+    "$fs_is_dir",
+    "$fs_list_dir",
+    "$fs_mkdir_all",
+    "$fs_read_all",
+    "$fs_write_all",
+    "$mem_copy",
+    "$mem_eq",
+    "$mem_move",
+    "$mem_set",
+    "$path_basename",
+    "$path_dirname",
+    "$path_extension",
+    "$path_is_abs",
+    "$path_join",
+    "$path_normalize",
+    "$realloc_with",
+    "$strconv_parse_bool",
+    "$strconv_parse_i32",
+    "$strconv_parse_u64",
+    "$test_failing_allocator",
+    "$test_set_fail_after",
+    "$unicode_utf8_count_scalars",
+    "$unicode_utf8_next_len",
+    "$unicode_utf8_valid",
+];
+
+pub const STDLIB_FOUNDATION_STABLE_BUILTINS: &[&str] = &[
+    "$alloc_with",
+    "$arena_allocator",
+    "$arena_deinit",
+    "$arena_reset",
+    "$bytes_clone",
+    "$bytes_concat2",
+    "$bytes_concat3",
+    "$bytes_ends_with",
+    "$bytes_eq",
+    "$bytes_from_ptr_len",
+    "$bytes_index_of",
+    "$bytes_len",
+    "$bytes_slice",
+    "$bytes_starts_with",
+    "$c_allocator",
+    "$env_argc",
+    "$env_argv",
+    "$env_cwd",
+    "$env_get",
+    "$f128_add",
+    "$f128_div",
+    "$f128_eq",
+    "$f128_from_f64",
+    "$f128_from_i64",
+    "$f128_from_literal",
+    "$f128_from_u64",
+    "$f128_ge",
+    "$f128_gt",
+    "$f128_le",
+    "$f128_lt",
+    "$f128_mul",
+    "$f128_ne",
+    "$f128_neg",
+    "$f128_release",
+    "$f128_sub",
+    "$f128_to_f64",
+    "$f128_to_i64",
+    "$f128_to_u64",
+    "$f128_zero",
+    "$fmt_i32",
+    "$fmt_u64",
+    "$fmt_usize",
+    "$free_with",
+    "$fs_exists",
+    "$fs_is_dir",
+    "$fs_list_dir",
+    "$fs_mkdir_all",
+    "$fs_read_all",
+    "$fs_write_all",
+    "$mem_copy",
+    "$mem_eq",
+    "$mem_move",
+    "$mem_set",
+    "$path_basename",
+    "$path_dirname",
+    "$path_extension",
+    "$path_is_abs",
+    "$path_join",
+    "$path_normalize",
+    "$realloc_with",
+    "$test_failing_allocator",
+    "$test_set_fail_after",
+];
+
+pub const STDLIB_FOUNDATION_TRANSITIONAL_BUILTINS: &[&str] = &[
+    "$strconv_parse_bool",
+    "$strconv_parse_i32",
+    "$strconv_parse_u64",
+    "$unicode_utf8_count_scalars",
+    "$unicode_utf8_next_len",
+    "$unicode_utf8_valid",
+];
+
+pub const LANGUAGE_BUILTINS: &[&str] = &[
+    "$Self",
+    "$alignof",
+    "$as",
+    "$compile_error",
+    "$offsetof",
+    "$panic",
+    "$sizeof",
+    "$typeof",
+    "$unreachable",
+];
+
+pub const INTERNAL_RUNTIME_BUILTINS: &[&str] = &[
+    "$alloc",
+    "$free",
+    "$io_write",
+    "$io_write_i32",
+    "$realloc",
+    "$test_identity_i32_fn",
+    "$vec_i32_cap",
+    "$vec_i32_clear",
+    "$vec_i32_deinit",
+    "$vec_i32_get",
+    "$vec_i32_init",
+    "$vec_i32_len",
+    "$vec_i32_pop",
+    "$vec_i32_push",
+    "$vec_i32_reserve",
+    "$vec_i32_set",
+    "$vec_raw_cap",
+    "$vec_raw_clear",
+    "$vec_raw_deinit",
+    "$vec_raw_get_bytes",
+    "$vec_raw_get_u64",
+    "$vec_raw_init",
+    "$vec_raw_len",
+    "$vec_raw_pop_bytes",
+    "$vec_raw_pop_u64",
+    "$vec_raw_ptr",
+    "$vec_raw_push_bytes",
+    "$vec_raw_push_u64",
+    "$vec_raw_reserve",
+    "$vec_raw_set_bytes",
+    "$vec_raw_set_u64",
+];
+
+pub const HIDDEN_RUNTIME_BUILTINS: &[&str] = STDLIB_FOUNDATION_BUILTINS;
+pub const HIDDEN_IO_RUNTIME_BUILTINS: &[&str] = &["$io_write", "$io_write_i32"];
+
+pub fn is_hidden_runtime_builtin(name: &str) -> bool {
+    HIDDEN_RUNTIME_BUILTINS.contains(&name) || HIDDEN_IO_RUNTIME_BUILTINS.contains(&name)
+}
+
 pub fn runtime_intrinsic_for_builtin(name: &str) -> Option<&'static RuntimeIntrinsicSpec> {
     RUNTIME_INTRINSICS
         .iter()
@@ -947,10 +1215,16 @@ pub fn runtime_intrinsic_for_symbol(symbol: &str) -> Option<&'static RuntimeIntr
 }
 
 pub fn runtime_symbol_for_builtin(name: &str) -> Option<&'static str> {
+    if is_hidden_runtime_builtin(name) {
+        return None;
+    }
     runtime_intrinsic_for_builtin(name).map(|intrinsic| intrinsic.symbol)
 }
 
 pub fn runtime_arity_for_builtin(name: &str) -> Option<usize> {
+    if is_hidden_runtime_builtin(name) {
+        return None;
+    }
     runtime_intrinsic_for_builtin(name).map(|intrinsic| intrinsic.arity)
 }
 
@@ -959,6 +1233,9 @@ pub fn runtime_arity_for_symbol(symbol: &str) -> Option<usize> {
 }
 
 pub fn runtime_return_kind_for_builtin(name: &str) -> Option<RuntimeReturnKind> {
+    if is_hidden_runtime_builtin(name) {
+        return None;
+    }
     runtime_intrinsic_for_builtin(name).map(|intrinsic| intrinsic.return_kind)
 }
 

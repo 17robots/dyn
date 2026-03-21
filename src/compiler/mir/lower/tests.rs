@@ -129,6 +129,70 @@ fn resolves_imported_module_member_call_to_qualified_function_ident() {
 }
 
 #[test]
+fn infers_index_and_slice_types_for_bytes_slice_values() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\nmain := () i32 {\n  b: []u8 = \"abcd\"\n  _x := b[1]\n  _s := b[1..3]\n  return 0\n}\n",
+    )
+    .expect("file should be written");
+
+    let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
+    let inferred = infer_binding_type_strings(&units);
+    let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
+    let mir = lower_hir_to_mir(&hir);
+    let main_module = mir
+        .modules
+        .iter()
+        .find(|module| module.key.module_name == "main")
+        .expect("main module should exist");
+    let function = main_module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main function should exist");
+
+    let mut saw_index_u8 = false;
+    let mut saw_slice_bytes = false;
+    for block in &function.blocks {
+        for instr in &block.instructions {
+            if let MirInstr::Eval { value, ty, .. } = instr {
+                match value {
+                    MirValue::Index { .. } => {
+                        if matches!(
+                            ty,
+                            MirValueType::Int {
+                                signed: false,
+                                bits: 8
+                            }
+                        ) {
+                            saw_index_u8 = true;
+                        }
+                    }
+                    MirValue::Slice { .. } => {
+                        if matches!(ty, MirValueType::BytesSlice) {
+                            saw_slice_bytes = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    assert!(
+        saw_index_u8,
+        "expected bytes index result type to be u8-like"
+    );
+    assert!(
+        saw_slice_bytes,
+        "expected bytes slice result type to be []u8"
+    );
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}
+
+#[test]
 fn lowers_match_into_branching_cfg() {
     let span = SourceSpan {
         start_byte: 0,
@@ -145,6 +209,7 @@ fn lowers_match_into_branching_cfg() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -637,6 +702,7 @@ fn lowers_or_else_into_branch_and_phi() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -707,6 +773,7 @@ fn lowers_or_else_fallback_break_value_into_phi_source() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -798,6 +865,7 @@ fn lowers_defer_before_return() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -880,6 +948,7 @@ fn lowers_struct_literal_field_access_to_field_value() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -970,6 +1039,7 @@ fn lowers_struct_literal_index_with_constant_to_value() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -1065,6 +1135,7 @@ fn lowers_enum_variant_index_with_constant_to_payload_value() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -1086,6 +1157,7 @@ fn lowers_enum_variant_index_with_constant_to_payload_value() {
                                 base: Box::new(HirExpr {
                                     span,
                                     kind: HirExprKind::EnumVariant {
+                                        root: None,
                                         variant: "Ok".to_string(),
                                         payload: vec![HirExpr {
                                             span,
@@ -1135,6 +1207,7 @@ fn lowers_loop_with_break_value_into_loop_result() {
                 directory: PathBuf::from("."),
                 module_name: "main".to_string(),
             },
+            extern_functions: Vec::new(),
             items: vec![HirItem {
                 name: "main".to_string(),
                 def_id: None,
@@ -1304,9 +1377,7 @@ fn lowers_f128_function_parameters_and_binary_values_as_float() {
         })
         .collect::<Vec<_>>();
     assert!(
-        call_types
-            .iter()
-            .any(|ty| *ty == MirValueType::Float { bits: 128 }),
+        call_types.contains(&MirValueType::Float { bits: 128 }),
         "{add_type_info}; call types: {call_types:#?}"
     );
 

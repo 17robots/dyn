@@ -1,20 +1,21 @@
 module bytes
 
-pub len := (value: []u8) usize => $bytes_len(value)
+rt_len := extern fn(value: []u8) usize = "dynrt_bytes_len"
+rt_eq := extern fn(lhs: []u8, rhs: []u8) u32 = "dynrt_bytes_eq"
+rt_starts_with := extern fn(value: []u8, prefix: []u8) u32 = "dynrt_bytes_starts_with"
+rt_ends_with := extern fn(value: []u8, suffix: []u8) u32 = "dynrt_bytes_ends_with"
+rt_index_of := extern fn(value: []u8, needle: []u8) isize = "dynrt_bytes_index_of"
+rt_clone := extern fn(value: []u8) []u8 = "dynrt_bytes_clone"
+rt_slice := extern fn(value: []u8, start: usize, end: usize) []u8 = "dynrt_bytes_slice"
+rt_concat2 := extern fn(lhs: []u8, rhs: []u8) []u8 = "dynrt_bytes_concat2"
+rt_concat3 := extern fn(a: []u8, b: []u8, c: []u8) []u8 = "dynrt_bytes_concat3"
 
-pub eq := (lhs: []u8, rhs: []u8) u32 => $bytes_eq(lhs, rhs)
-
-pub starts_with := (value: []u8, prefix: []u8) u32 => $bytes_starts_with(value, prefix)
-
-pub ends_with := (value: []u8, suffix: []u8) u32 => $bytes_ends_with(value, suffix)
-
-pub index_of := (value: []u8, needle: []u8) isize => $bytes_index_of(value, needle)
-
-pub clone := (value: []u8) []u8 => $bytes_clone(value)
-
-pub slice := (value: []u8, start: usize, end: usize) []u8 =>
-    $bytes_slice(value, start, end)
-
-pub concat := (lhs: []u8, rhs: []u8) []u8 => $bytes_concat2(lhs, rhs)
-
-pub concat3 := (a: []u8, b: []u8, c: []u8) []u8 => $bytes_concat3(a, b, c)
+pub len := (value: []u8) usize => rt_len(value)
+pub eq := (lhs: []u8, rhs: []u8) u32 => rt_eq(lhs, rhs)
+pub starts_with := (value: []u8, prefix: []u8) u32 => rt_starts_with(value, prefix)
+pub ends_with := (value: []u8, suffix: []u8) u32 => rt_ends_with(value, suffix)
+pub index_of := (value: []u8, needle: []u8) isize => rt_index_of(value, needle)
+pub clone := (value: []u8) []u8 => rt_clone(value)
+pub slice := (value: []u8, start: usize, end: usize) []u8 => rt_slice(value, start, end)
+pub concat := (lhs: []u8, rhs: []u8) []u8 => rt_concat2(lhs, rhs)
+pub concat3 := (a: []u8, b: []u8, c: []u8) []u8 => rt_concat3(a, b, c)

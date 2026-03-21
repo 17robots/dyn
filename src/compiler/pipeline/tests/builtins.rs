@@ -5,7 +5,7 @@ fn builds_native_executable_with_self_builtin_in_method() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
-            "module main\nThing := struct { check := (self: *Thing) i32 => { s := $Self(); return if s == s 6 else 0 } }\nmain := () i32 {\n  t := Thing{}\n  return t.check()\n}\n",
+            "module main\nThing := struct { check := (self: *Thing) i32 { s := $Self(); return if s == s 6 else 0 } }\nmain := () i32 {\n  t := Thing{}\n  return t.check()\n}\n",
         )
         .expect("file should be written");
 
@@ -320,7 +320,7 @@ fn builds_native_executable_with_typed_allocator_type_parameter_api() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
-            "module main\nalloc_t := (alloc: usize, T: comp type, count: usize) ?usize => {\n  size := count * comp $sizeof(T)\n  ptr := $alloc_with(alloc, size, comp $alignof(T))\n  if ptr == 0 null else ptr\n}\nfree_t := (alloc: usize, T: comp type, ptr: usize, count: usize) u32 =>\n  $free_with(alloc, ptr, count * comp $sizeof(T), comp $alignof(T))\nmain := () i32 {\n  alloc := $c_allocator()\n  p := alloc_t(alloc, i32, 2) or $as(usize, 0)\n  if p == 0 return 0\n  $mem_set(p, 0x22, 8)\n  ok := free_t(alloc, i32, p, 2)\n  return if ok == 1 34 else 0\n}\n",
+            "module main\nheap := use \"std/heap\"\nmem := use \"std/mem\"\nAllocator := heap.Allocator\nalloc_t := (alloc: Allocator, T: comp type, count: usize) ?usize =>\n  alloc.alloc(T, count) or null\nfree_t := (alloc: Allocator, T: comp type, ptr: usize, count: usize) u32 =>\n  alloc.free(T, ptr, count)\nmain := () i32 {\n  c := heap.CAllocator().new()\n  alloc := c.allocator()\n  p := alloc_t(alloc, i32, 2) or $as(usize, 0)\n  if p == 0 return 0\n  mem.set(p, 0x22, 8)\n  ok := free_t(alloc, i32, p, 2)\n  return if ok == 1 34 else 0\n}\n",
         )
         .expect("file should be written");
 

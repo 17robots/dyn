@@ -1,6 +1,7 @@
 module collections
 
 heap := use "std/heap"
+mem_mod := use "std/mem"
 Allocator := heap.Allocator
 AllocError := heap.AllocError
 
@@ -20,7 +21,7 @@ pub Vec := (T: comp type) type => struct {
             cap: usize,
             elem_size: usize,
             elem_align: usize,
-        ) Vec(T) => {
+        ) Vec(T) {
         base := $as(*mut T, ptr)
         return .{
             items: base[0..len],
@@ -46,8 +47,7 @@ pub Vec := (T: comp type) type => struct {
 
     items_len := (self: Vec(T)) usize => self.len,
 
-    ptr := (self: Vec(T), idx: usize) usize =>
-        {
+    ptr := (self: Vec(T), idx: usize) usize {
             if Vec(T).mul_overflow(idx, self.elem_size) != 0 return 0
             base := self.items_ptr()
             offset := idx * self.elem_size
@@ -56,7 +56,7 @@ pub Vec := (T: comp type) type => struct {
             return addr
         },
 
-    mul_overflow := (lhs: usize, rhs: usize) u32 => {
+    mul_overflow := (lhs: usize, rhs: usize) u32 {
         if lhs == 0 return 0
         if rhs == 0 return 0
         product := lhs * rhs
@@ -64,7 +64,23 @@ pub Vec := (T: comp type) type => struct {
         return 0
     },
 
-    reserve := (self: Vec(T), new_cap: usize) Vec(T)!AllocError => {
+    require_ptr := (ptr: usize) usize!AllocError {
+        if ptr == 0 return .OutOfMemory
+        return ptr
+    },
+
+    copy_bytes_with_checked_ptr := (
+        checked_ptr: usize,
+        dst: usize,
+        src: usize,
+        len: usize,
+    ) u32 {
+        if checked_ptr == 0 return 0
+        mem_mod.copy(dst, src, len)
+        return 1
+    },
+
+    reserve := (self: Vec(T), new_cap: usize) Vec(T)!AllocError {
         if new_cap <= self.cap return self
         if self.elem_size == 0
             return Vec(T).from_parts(
@@ -81,10 +97,9 @@ pub Vec := (T: comp type) type => struct {
         old_size := self.cap * self.elem_size
         new_size := new_cap * self.elem_size
         next_ptr := if old_ptr == 0
-            self.allocator.alloc_bytes(new_size, self.elem_align)
+            self.allocator.alloc_bytes(new_size, self.elem_align) or |err| return err
         else
-            self.allocator.realloc_bytes(old_ptr, old_size, new_size, self.elem_align)
-        if next_ptr == .OutOfMemory return .OutOfMemory
+            self.allocator.realloc_bytes(old_ptr, old_size, new_size, self.elem_align) or |err| return err
         return Vec(T).from_parts(
             self.allocator,
             next_ptr,
@@ -105,14 +120,14 @@ pub Vec := (T: comp type) type => struct {
             self.elem_align,
         ),
 
-    deinit := (self: Vec(T)) u32 => {
+    deinit := (self: Vec(T)) u32 {
         if self.cap == 0 return 1
         if self.elem_size == 0 return 1
         if self.items_ptr() == 0 return 1
         return self.allocator.free_bytes(self.items_ptr(), self.cap * self.elem_size, self.elem_align)
     },
 
-    push_bytes := (self: Vec(T), src: usize) Vec(T)!AllocError => {
+    push_bytes := (self: Vec(T), src: usize) Vec(T)!AllocError {
         next := if self.len == self.cap
             self.reserve(if self.cap == 0 4 else self.cap * 2) or |err| return err
         else
@@ -128,9 +143,8 @@ pub Vec := (T: comp type) type => struct {
                 next.elem_align,
             )
         elem_size := next.elem_size
-        dst := next.ptr(next.len)
-        if dst == 0 return .OutOfMemory
-        $mem_copy(dst, src, elem_size)
+        dst := Vec(T).require_ptr(next.ptr(next.len)) or |err| return err
+        mem_mod.copy(dst, src, elem_size)
         return Vec(T).from_parts(
             next.allocator,
             next.items_ptr(),
@@ -141,33 +155,29 @@ pub Vec := (T: comp type) type => struct {
         )
     },
 
-    get_bytes := (self: Vec(T), idx: usize, dst: usize) u32 => {
+    get_bytes := (self: Vec(T), idx: usize, dst: usize) u32 {
         if idx >= self.len return 0
         elem_size := self.elem_size
         if elem_size == 0 return 1
         src := self.ptr(idx)
-        if src == 0 return 0
-        $mem_copy(dst, src, elem_size)
-        return 1
+        return Vec(T).copy_bytes_with_checked_ptr(src, dst, src, elem_size)
     },
 
-    set_bytes := (self: Vec(T), idx: usize, src: usize) u32 => {
+    set_bytes := (self: Vec(T), idx: usize, src: usize) u32 {
         if idx >= self.len return 0
         elem_size := self.elem_size
         if elem_size == 0 return 1
         dst := self.ptr(idx)
-        if dst == 0 return 0
-        $mem_copy(dst, src, elem_size)
-        return 1
+        return Vec(T).copy_bytes_with_checked_ptr(dst, dst, src, elem_size)
     },
 
-    pop_bytes := (self: Vec(T), dst: usize) Vec(T) => {
+    pop_bytes := (self: Vec(T), dst: usize) Vec(T) {
         if self.len == 0 return self
         elem_size := self.elem_size
         if elem_size != 0 {
             src := self.ptr(self.len - 1)
             if src == 0 return self
-            $mem_copy(dst, src, elem_size)
+            mem_mod.copy(dst, src, elem_size)
         }
         return Vec(T).from_parts(
             self.allocator,
@@ -196,12 +206,12 @@ pub Stack := (T: comp type) type => struct {
 
     len := inline (self: Stack(T)) usize => self.data.items_len(),
 
-    push_bytes := (self: Stack(T), src: usize) Stack(T)!AllocError => {
+    push_bytes := (self: Stack(T), src: usize) Stack(T)!AllocError {
         next := self.data.push_bytes(src) or |err| return err
         return .{ data: next }
     },
 
-    peek_bytes := (self: Stack(T), dst: usize) u32 => {
+    peek_bytes := (self: Stack(T), dst: usize) u32 {
         count := self.data.items_len()
         if count == 0 return 0
         return self.data.get_bytes(count - 1, dst)
@@ -231,13 +241,13 @@ pub Queue := (T: comp type) type => struct {
         head: 0,
     },
 
-    len := inline (self: Queue(T)) usize => {
+    len := inline (self: Queue(T)) usize {
         total := self.data.len
         if self.head >= total return 0
         return total - self.head
     },
 
-    compact := (self: Queue(T)) Queue(T) => {
+    compact := (self: Queue(T)) Queue(T) {
         total := self.data.items_len()
         if self.head == 0 return self
         if self.head >= total return .{
@@ -256,7 +266,7 @@ pub Queue := (T: comp type) type => struct {
             src := self.data.ptr(self.head)
             dst := self.data.items_ptr()
             if src == 0 return .{ data: self.data.clear(), head: 0 }
-            $mem_move(dst, src, remaining * elem_size)
+            mem_mod.move(dst, src, remaining * elem_size)
         }
         next_data := Vec(T).from_parts(
             self.data.allocator,
@@ -272,7 +282,7 @@ pub Queue := (T: comp type) type => struct {
         }
     },
 
-    enqueue_bytes := (self: Queue(T), src: usize) Queue(T)!AllocError => {
+    enqueue_bytes := (self: Queue(T), src: usize) Queue(T)!AllocError {
         maybe_compacted := if (self.head > 0) && (self.data.items_len() == self.data.cap)
             self.compact()
         else
@@ -284,15 +294,10 @@ pub Queue := (T: comp type) type => struct {
         }
     },
 
-    peek_bytes := (self: Queue(T), dst: usize) u32 => {
-        if self.head >= self.data.items_len() return 0
-        return self.data.get_bytes(self.head, dst)
-    },
+    peek_bytes := (self: Queue(T), dst: usize) u32 => self.data.get_bytes(self.head, dst),
 
-    dequeue_bytes := (self: Queue(T), dst: usize) Queue(T) => {
-        if self.head >= self.data.items_len() return self
-        ok := self.data.get_bytes(self.head, dst)
-        if ok == 0 return self
+    dequeue_bytes := (self: Queue(T), dst: usize) Queue(T) {
+        if self.data.get_bytes(self.head, dst) == 0 return self
         return .{
             data: self.data,
             head: self.head + 1,

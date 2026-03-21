@@ -12,6 +12,7 @@ unsafe extern "C" {
     fn printf(fmt: *const c_char, ...) -> c_int;
     fn snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> c_int;
     fn write(fd: c_int, buf: *const c_void, count: usize) -> isize;
+    fn __errno_location() -> *mut c_int;
     fn getenv(name: *const c_char) -> *mut c_char;
     fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char;
     fn access(path: *const c_char, mode: c_int) -> c_int;
@@ -26,6 +27,7 @@ unsafe extern "C" {
     fn ftell(file: *mut c_void) -> c_long;
     fn rewind(file: *mut c_void);
     fn mkdir(path: *const c_char, mode: u32) -> c_int;
+    fn syscall(number: c_long, ...) -> c_long;
 }
 
 const DYN_ALLOCATOR_TAG_MASK: usize = 0b11;
@@ -913,16 +915,18 @@ pub unsafe extern "C" fn dynrt_mem_eq(lhs: usize, rhs: usize, size: usize) -> u3
         return 0;
     }
 
-    let equal = unsafe {
-        let left = std::slice::from_raw_parts(lhs as *const u8, size);
-        let right = std::slice::from_raw_parts(rhs as *const u8, size);
-        left == right
-    };
-    if equal {
-        1
-    } else {
-        0
+    let left = lhs as *const u8;
+    let right = rhs as *const u8;
+    let mut idx = 0usize;
+    while idx < size {
+        let l = unsafe { *left.add(idx) };
+        let r = unsafe { *right.add(idx) };
+        if l != r {
+            return 0;
+        }
+        idx += 1;
     }
+    1
 }
 
 include!("runtime_support/vec.rs");

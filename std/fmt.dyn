@@ -2,11 +2,15 @@ module fmt
 
 bytes_mod := use "std/bytes"
 
-pub i32 := (value: i32) []u8 => $fmt_i32(value)
+rt_i32 := extern fn(value: i32) []u8 = "dynrt_fmt_i32"
+rt_u64 := extern fn(value: u64) []u8 = "dynrt_fmt_u64"
+rt_usize := extern fn(value: usize) []u8 = "dynrt_fmt_usize"
 
-pub u64 := (value: u64) []u8 => $fmt_u64(value)
+pub i32 := (value: i32) []u8 => rt_i32(value)
 
-pub usize := (value: usize) []u8 => $fmt_usize(value)
+pub u64 := (value: u64) []u8 => rt_u64(value)
+
+pub usize := (value: usize) []u8 => rt_usize(value)
 
 pub join2 := (a: []u8, b: []u8) []u8 => bytes_mod.concat(a, b)
 

@@ -9,6 +9,7 @@ use crate::compiler::diagnostic_utils::sort_diagnostics_by_primary_path;
 use crate::compiler::diagnostics::{
     Diagnostic, DiagnosticCode, DiagnosticLabel, DiagnosticPhase, SourceSpan,
 };
+use crate::compiler::intrinsics::runtime_intrinsic_for_symbol;
 use crate::compiler::module_resolver::{ModuleId, ModuleKey};
 use crate::compiler::sema::module_unit::ModuleUnit;
 
@@ -114,8 +115,40 @@ pub fn analyze_modules(units: &[ModuleUnit]) -> SemanticSession {
             }
         }
 
+        for extern_decl in &unit.extern_declarations {
+            let def_id = DefId(next_def_id);
+            next_def_id += 1;
+
+            if seen.contains_key(&extern_decl.name) {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::Semantic,
+                        DiagnosticCode::E4002,
+                        format!("duplicate declaration '{}'", extern_decl.name),
+                    )
+                    .with_primary_file_label(
+                        extern_decl.file_path.clone(),
+                        Some(extern_decl.span),
+                        "name already declared in this module",
+                    ),
+                );
+            } else {
+                seen.insert(extern_decl.name.clone(), def_id);
+                declared_spans.insert(extern_decl.name.clone(), extern_decl.span);
+            }
+
+            declarations.push(ResolvedDecl {
+                def_id,
+                name: extern_decl.name.clone(),
+                file_path: extern_decl.file_path.clone(),
+            });
+
+            collect_type_names(&extern_decl.ty, &mut type_names);
+        }
+
         for import in &unit.imports {
-            let target_key = import_path_to_module_key(&unit.key, &import.path);
+            let target_key =
+                crate::compiler::module_resolver::module_key_for_import(&unit.key, &import.path);
             let target = module_index.get(&target_key).copied();
             if target.is_none() {
                 diagnostics.push(
@@ -262,6 +295,9 @@ fn collect_type_names(ty: &TypeExpr, out: &mut BTreeSet<String>) {
             }
         }
         TypeExprKind::Enum(enum_ty) => {
+            if let Some(repr) = &enum_ty.repr {
+                collect_type_names(repr, out);
+            }
             for variant in &enum_ty.variants {
                 if let Some(payload) = &variant.payload {
                     collect_type_names(payload, out);
@@ -312,6 +348,7 @@ fn check_expr_resolution(
                 || import_aliases.contains_key(&ident.text)
                 || type_names.contains(&ident.text)
                 || is_predeclared_name(&ident.text)
+                || runtime_intrinsic_for_symbol(&ident.text).is_some()
                 || looks_like_type_parameter(&ident.text);
 
             if !known {
@@ -979,7 +1016,7 @@ fn check_expr_resolution(
         | ExprKind::TypeLiteral(_)
         | ExprKind::Literal(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue => {}
+        | ExprKind::Continue { .. } => {}
     }
 }
 
@@ -1035,37 +1072,6 @@ fn collect_pattern_bindings_checked(
             collect_pattern_bindings_checked(pattern, out, file_path, diagnostics)
         }
         PatternKind::Wildcard | PatternKind::Literal(_) => {}
-    }
-}
-
-fn import_path_to_module_key(current: &ModuleKey, import_path: &str) -> ModuleKey {
-    let normalized = import_path.trim_matches('"');
-    let mut parts = normalized
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-
-    if parts.is_empty() {
-        return current.clone();
-    }
-
-    let module_name = parts.pop().unwrap_or_default().to_string();
-    let is_std_absolute = normalized.starts_with("std/");
-    let mut directory = if is_std_absolute || current.directory == std::path::Path::new(".") {
-        PathBuf::new()
-    } else {
-        current.directory.clone()
-    };
-    for segment in parts {
-        directory.push(segment);
-    }
-    if directory.as_os_str().is_empty() {
-        directory = PathBuf::from(".");
-    }
-
-    ModuleKey {
-        directory,
-        module_name,
     }
 }
 

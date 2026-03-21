@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cranelift_codegen::ir::types::{F32, F64, I16, I32, I64, I8};
+use cranelift_codegen::ir::types::{F32, F64, I128, I16, I32, I64, I8};
 use cranelift_codegen::ir::Type;
 
 use crate::compiler::mir::{
@@ -427,7 +427,8 @@ fn int_carrier_type_for_bits(bits: u16) -> Type {
         0..=8 => I8,
         9..=16 => I16,
         17..=32 => I32,
-        _ => I64,
+        33..=64 => I64,
+        _ => I128,
     }
 }
 

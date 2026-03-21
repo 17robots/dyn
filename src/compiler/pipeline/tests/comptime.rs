@@ -85,6 +85,48 @@ fn builds_native_executable_with_forced_inline_local_function_call() {
 }
 
 #[test]
+fn builds_native_executable_with_forced_inline_non_inlineable_body_fallback() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\nstep := (x: i32) i32 {\n  return x + 1\n}\nmain := () i32 {\n  return inline step(41)\n}\n",
+    )
+    .expect("file should be written");
+
+    let (artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
+    assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:#?}");
+    assert!(artifact.executable_path.exists());
+
+    let status = Command::new(&artifact.executable_path)
+        .status()
+        .expect("executable should run");
+    assert_eq!(status.code(), Some(42));
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}
+
+#[test]
+fn builds_native_executable_with_inline_for_runtime_bounds_fallback_loop() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\nlimit := () i32 => 4\nmain := () i32 {\n  mut total := 0\n  inline for 0..limit(): |i| {\n    total += i\n  }\n  return total\n}\n",
+    )
+    .expect("file should be written");
+
+    let (artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
+    assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:#?}");
+    assert!(artifact.executable_path.exists());
+
+    let status = Command::new(&artifact.executable_path)
+        .status()
+        .expect("executable should run");
+    assert_eq!(status.code(), Some(6));
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}
+
+#[test]
 fn builds_native_executable_with_comptime_local_immutable_binding() {
     let root = make_temp_dir();
     fs::write(

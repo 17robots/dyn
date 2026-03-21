@@ -29,9 +29,9 @@ pub Diagnostic := struct {
     message: []u8,
     label: Label,
 
-    header := (self: Diagnostic) []u8 => {
+    header := (self: Diagnostic) []u8 {
         sev := severity_text(self.severity)
-        fmt.join3(self.code, ": ", fmt.join3(sev, ": ", self.message))
+        return fmt.join3(self.code, ": ", fmt.join3(sev, ": ", self.message))
     },
 }
 
@@ -60,7 +60,7 @@ pub make :=
         },
     }
 
-pub severity_text := (severity: Severity) []u8 => {
+pub severity_text := (severity: Severity) []u8 {
     if severity == .Error return "error"
     if severity == .Warning return "warning"
     return "note"

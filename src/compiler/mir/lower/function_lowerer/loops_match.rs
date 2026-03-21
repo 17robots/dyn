@@ -81,6 +81,43 @@ impl FunctionLowerer {
         }
     }
 
+    fn inferred_sequence_element_type(&self, value_id: MirValueId) -> MirValueType {
+        self.aggregate_sequences
+            .get(&value_id)
+            .and_then(|sequence| sequence.first())
+            .and_then(|first| self.value_types.get(first))
+            .cloned()
+            .unwrap_or(MirValueType::Unknown)
+    }
+
+    fn value_from_sequence_or_index(
+        &mut self,
+        block: MirBlockId,
+        base: MirValueId,
+        sequence_value: Option<MirValueId>,
+        position: usize,
+        result_ty: MirValueType,
+    ) -> MirValueId {
+        sequence_value.unwrap_or_else(|| {
+            let index_value = self.push_eval(
+                block,
+                MirValue::Literal(HirLiteral::Integer(position.to_string())),
+                MirValueType::Int {
+                    signed: false,
+                    bits: 32,
+                },
+            );
+            self.push_eval(
+                block,
+                MirValue::Index {
+                    base,
+                    index: index_value,
+                },
+                result_ty,
+            )
+        })
+    }
+
     pub(super) fn lower_range_loop(
         &mut self,
         block: MirBlockId,
@@ -290,33 +327,22 @@ impl FunctionLowerer {
         });
 
         let (body_start, prev_binding) = if let Some(name) = binding {
-            let element_value =
-                if let Some(sequence) = self.aggregate_sequences.get(&iterable_value) {
-                    if let Some(first_element) = sequence.first().copied() {
-                        self.push_eval(
-                            body_block,
-                            MirValue::Index {
-                                base: iterable_value,
-                                index: index_value,
-                            },
-                            self.value_types
-                                .get(&first_element)
-                                .cloned()
-                                .unwrap_or(MirValueType::Unknown),
-                        )
-                    } else {
-                        self.push_eval(body_block, MirValue::Unknown, MirValueType::Unknown)
-                    }
-                } else {
-                    self.push_eval(
-                        body_block,
-                        MirValue::Index {
-                            base: iterable_value,
-                            index: index_value,
-                        },
-                        MirValueType::Unknown,
-                    )
-                };
+            let element_value = if self
+                .aggregate_sequences
+                .get(&iterable_value)
+                .is_some_and(Vec::is_empty)
+            {
+                self.push_eval(body_block, MirValue::Unknown, MirValueType::Unknown)
+            } else {
+                self.push_eval(
+                    body_block,
+                    MirValue::Index {
+                        base: iterable_value,
+                        index: index_value,
+                    },
+                    self.inferred_sequence_element_type(iterable_value),
+                )
+            };
             let prev = self
                 .locals
                 .insert(name.to_string(), element_value)
@@ -600,39 +626,54 @@ impl FunctionLowerer {
                     self.set_terminator(test_block, MirTerminator::Goto(then_block));
                 }
             }
-            HirPattern::EnumVariant { variant, .. } => {
+            HirPattern::EnumVariant { root, variant, .. } => {
+                let (variant_tag, tag_bits) = if let Some((tag, bits)) =
+                    self.enum_tag_and_bits_for_variant(root.as_deref(), variant)
+                {
+                    (tag, bits)
+                } else if root.is_none() {
+                    self.anonymous_variant_tag_for(variant)
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::Mir,
+                            DiagnosticCode::E4005,
+                            format!(
+                                "cannot resolve enum match pattern '{}'; use an explicit enum root",
+                                variant
+                            ),
+                        )
+                        .with_primary_file_label(
+                            self.source_file_path.clone(),
+                            None,
+                            "qualify the enum pattern (for example `MyEnum.Variant`)",
+                        ),
+                    );
+                    if !self.is_terminated(test_block) {
+                        self.set_terminator(test_block, MirTerminator::Goto(else_block));
+                    }
+                    return;
+                };
                 let scrutinee_tag = self
                     .aggregate_sequences
                     .get(&scrutinee_value)
-                    .and_then(|sequence| sequence.first().copied())
-                    .unwrap_or_else(|| {
-                        let tag_index = self.push_eval(
-                            test_block,
-                            MirValue::Literal(HirLiteral::Integer("0".to_string())),
-                            MirValueType::Int {
-                                signed: false,
-                                bits: 32,
-                            },
-                        );
-                        self.push_eval(
-                            test_block,
-                            MirValue::Index {
-                                base: scrutinee_value,
-                                index: tag_index,
-                            },
-                            MirValueType::Int {
-                                signed: false,
-                                bits: 32,
-                            },
-                        )
-                    });
-                let variant_tag = self.variant_tag_for(variant);
+                    .and_then(|sequence| sequence.first().copied());
+                let scrutinee_tag = self.value_from_sequence_or_index(
+                    test_block,
+                    scrutinee_value,
+                    scrutinee_tag,
+                    0,
+                    MirValueType::Int {
+                        signed: false,
+                        bits: tag_bits,
+                    },
+                );
                 let expected_tag = self.push_eval(
                     test_block,
                     MirValue::Literal(HirLiteral::Integer(variant_tag.to_string())),
                     MirValueType::Int {
                         signed: false,
-                        bits: 32,
+                        bits: tag_bits,
                     },
                 );
                 let cond = self.push_eval(
@@ -784,27 +825,15 @@ impl FunctionLowerer {
                         continue;
                     }
                     let payload_index = idx + 1;
-                    let payload_value = sequence
-                        .as_ref()
-                        .and_then(|values| values.get(payload_index).copied())
-                        .unwrap_or_else(|| {
-                            let index_value = self.push_eval(
-                                at,
-                                MirValue::Literal(HirLiteral::Integer(payload_index.to_string())),
-                                MirValueType::Int {
-                                    signed: false,
-                                    bits: 32,
-                                },
-                            );
-                            self.push_eval(
-                                at,
-                                MirValue::Index {
-                                    base: scrutinee_value,
-                                    index: index_value,
-                                },
-                                MirValueType::Unknown,
-                            )
-                        });
+                    let payload_value = self.value_from_sequence_or_index(
+                        at,
+                        scrutinee_value,
+                        sequence
+                            .as_ref()
+                            .and_then(|values| values.get(payload_index).copied()),
+                        payload_index,
+                        MirValueType::Unknown,
+                    );
                     out.push((name.clone(), payload_value));
                 }
                 (at, out)

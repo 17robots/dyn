@@ -58,6 +58,9 @@ pub fn build_executable(
     flag_builder
         .set("is_pic", "false")
         .map_err(|err| format!("failed to configure target flags: {err}"))?;
+    flag_builder
+        .set("enable_llvm_abi_extensions", "true")
+        .map_err(|err| format!("failed to configure target flags: {err}"))?;
     if let Some(opt) = opt_level.cranelift_opt_level() {
         flag_builder
             .set("opt_level", opt)
@@ -93,11 +96,13 @@ pub fn build_executable(
 
     fs::write(&object_path, bytes).map_err(|err| format!("failed to write object file: {err}"))?;
 
-    let runtime_object_path = build_dir.join("dyn_runtime_alloc.o");
-    compile_runtime_allocator_object(build_dir, &runtime_object_path)?;
+    let runtime_object_path =
+        build_dir.join(format!("dyn_runtime_alloc_{}.o", opt_level.file_suffix()));
+    compile_runtime_allocator_object(build_dir, &runtime_object_path, opt_level)?;
 
-    let runtime_f128_object_path = build_dir.join("dyn_runtime_f128.o");
-    compile_runtime_f128_object(build_dir, &runtime_f128_object_path)?;
+    let runtime_f128_object_path =
+        build_dir.join(format!("dyn_runtime_f128_{}.o", opt_level.file_suffix()));
+    compile_runtime_f128_object(build_dir, &runtime_f128_object_path, opt_level)?;
 
     link_executable_with_host_toolchain(
         &object_path,
@@ -115,7 +120,11 @@ pub fn build_executable(
     ))
 }
 
-fn compile_runtime_allocator_object(_build_dir: &Path, output_path: &Path) -> Result<(), String> {
+fn compile_runtime_allocator_object(
+    _build_dir: &Path,
+    output_path: &Path,
+    opt_level: BuildOptLevel,
+) -> Result<(), String> {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("compiler")
@@ -136,7 +145,8 @@ fn compile_runtime_allocator_object(_build_dir: &Path, output_path: &Path) -> Re
         .arg("--crate-type=lib")
         .arg("--emit=obj")
         .arg("--edition=2021")
-        .arg("-O")
+        .arg("-C")
+        .arg(format!("opt-level={}", opt_level.rustc_opt_level()))
         .arg("-C")
         .arg("panic=abort")
         .arg(&source_path)
@@ -151,7 +161,11 @@ fn compile_runtime_allocator_object(_build_dir: &Path, output_path: &Path) -> Re
     Ok(())
 }
 
-fn compile_runtime_f128_object(_build_dir: &Path, output_path: &Path) -> Result<(), String> {
+fn compile_runtime_f128_object(
+    _build_dir: &Path,
+    output_path: &Path,
+    opt_level: BuildOptLevel,
+) -> Result<(), String> {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("compiler")
@@ -167,7 +181,7 @@ fn compile_runtime_f128_object(_build_dir: &Path, output_path: &Path) -> Result<
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let status = Command::new(&cc)
         .arg("-std=gnu11")
-        .arg("-O2")
+        .arg(opt_level.cc_opt_flag())
         .arg("-c")
         .arg(&source_path)
         .arg("-o")
@@ -340,8 +354,6 @@ fn linker_driver_candidates() -> Vec<String> {
             "gcc".to_string(),
             "cc".to_string(),
         ]
-    } else if cfg!(target_os = "macos") {
-        vec!["cc".to_string(), "clang".to_string(), "gcc".to_string()]
     } else {
         vec!["cc".to_string(), "clang".to_string(), "gcc".to_string()]
     }
@@ -504,14 +516,14 @@ fn collect_unsupported_integer_width_diagnostics(mir: &MirProgram) -> Vec<Diagno
                 .return_type
                 .as_deref()
                 .and_then(max_int_bits_in_type_text)
-                .map(|bits| bits == 0 || bits > 64)
+                .map(|bits| bits == 0 || bits > 128)
                 .unwrap_or(false)
             {
                 reasons.push("return type".to_string());
             }
             if function.param_type_hints.iter().flatten().any(|hint| {
                 max_int_bits_in_type_text(hint)
-                    .map(|bits| bits == 0 || bits > 64)
+                    .map(|bits| bits == 0 || bits > 128)
                     .unwrap_or(false)
             }) {
                 reasons.push("parameter type hint".to_string());
@@ -536,7 +548,7 @@ fn collect_unsupported_integer_width_diagnostics(mir: &MirProgram) -> Vec<Diagno
                 DiagnosticPhase::Backend,
                 DiagnosticCode::E5002,
                 format!(
-                    "backend currently supports integer widths from i1/u1 up to i64/u64; function `{}` uses unsupported integer width ({})",
+                    "backend currently supports integer widths from i1/u1 up to i128/u128; function `{}` uses unsupported integer width ({})",
                     function.name,
                     reasons.join(", ")
                 ),
@@ -609,7 +621,7 @@ fn mir_type_uses_unsupported_float(ty: &MirValueType) -> bool {
 }
 
 fn mir_type_uses_unsupported_integer(ty: &MirValueType) -> bool {
-    matches!(ty, MirValueType::Int { bits, .. } if *bits == 0 || *bits > 64)
+    matches!(ty, MirValueType::Int { bits, .. } if *bits == 0 || *bits > 128)
 }
 
 fn max_float_bits_in_type_text(text: &str) -> Option<u16> {

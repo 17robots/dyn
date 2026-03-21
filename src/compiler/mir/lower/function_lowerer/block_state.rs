@@ -46,15 +46,26 @@ impl FunctionLowerer {
         }
     }
 
-    pub(super) fn variant_tag_for(&mut self, variant: &str) -> i64 {
-        if let Some(tag) = self.variant_tag_ids.get(variant) {
-            *tag
-        } else {
-            let tag = self.next_variant_tag;
-            self.next_variant_tag += 1;
-            self.variant_tag_ids.insert(variant.to_string(), tag);
-            tag
+    pub(super) fn enum_tag_and_bits_for_variant(
+        &self,
+        root: Option<&str>,
+        variant: &str,
+    ) -> Option<(i64, u16)> {
+        let root = root?;
+        let tags = self.enum_variant_tags_by_name.get(root)?;
+        let tag = tags.get(variant).copied()?;
+        let bits = self.enum_repr_bits_by_name.get(root).copied().unwrap_or(32);
+        Some((tag, bits))
+    }
+
+    pub(super) fn anonymous_variant_tag_for(&self, variant: &str) -> (i64, u16) {
+        let mut hash = 2166136261u32;
+        for byte in variant.as_bytes() {
+            hash ^= u32::from(*byte);
+            hash = hash.wrapping_mul(16777619);
         }
+        let tag = if hash == 0 { 1 } else { i64::from(hash) };
+        (tag, 32)
     }
 
     pub(super) fn fresh_value(&mut self) -> MirValueId {

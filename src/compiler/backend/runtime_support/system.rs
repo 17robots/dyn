@@ -1,4 +1,109 @@
 #[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_syscall0(number: isize) -> isize {
+    unsafe { syscall(number as c_long, 0 as c_long) as isize }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_syscall1(number: isize, arg0: isize) -> isize {
+    unsafe { syscall(number as c_long, arg0 as c_long) as isize }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_syscall2(number: isize, arg0: isize, arg1: isize) -> isize {
+    unsafe { syscall(number as c_long, arg0 as c_long, arg1 as c_long) as isize }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_syscall3(
+    number: isize,
+    arg0: isize,
+    arg1: isize,
+    arg2: isize,
+) -> isize {
+    unsafe {
+        syscall(
+            number as c_long,
+            arg0 as c_long,
+            arg1 as c_long,
+            arg2 as c_long,
+        ) as isize
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_syscall4(
+    number: isize,
+    arg0: isize,
+    arg1: isize,
+    arg2: isize,
+    arg3: isize,
+) -> isize {
+    unsafe {
+        syscall(
+            number as c_long,
+            arg0 as c_long,
+            arg1 as c_long,
+            arg2 as c_long,
+            arg3 as c_long,
+        ) as isize
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_syscall5(
+    number: isize,
+    arg0: isize,
+    arg1: isize,
+    arg2: isize,
+    arg3: isize,
+    arg4: isize,
+) -> isize {
+    unsafe {
+        syscall(
+            number as c_long,
+            arg0 as c_long,
+            arg1 as c_long,
+            arg2 as c_long,
+            arg3 as c_long,
+            arg4 as c_long,
+        ) as isize
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_syscall6(
+    number: isize,
+    arg0: isize,
+    arg1: isize,
+    arg2: isize,
+    arg3: isize,
+    arg4: isize,
+    arg5: isize,
+) -> isize {
+    unsafe {
+        syscall(
+            number as c_long,
+            arg0 as c_long,
+            arg1 as c_long,
+            arg2 as c_long,
+            arg3 as c_long,
+            arg4 as c_long,
+            arg5 as c_long,
+        ) as isize
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dynrt_linux_errno() -> isize {
+    let errno_ptr = unsafe { __errno_location() };
+    if errno_ptr.is_null() {
+        0
+    } else {
+        unsafe { *errno_ptr as isize }
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn dynrt_env_argc() -> usize {
     let mut len = 0usize;
     let buffer = unsafe { dyn_read_file_all(CMDLINE_PATH.as_ptr().cast::<c_char>(), &mut len) };

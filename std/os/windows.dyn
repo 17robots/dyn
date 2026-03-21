@@ -1,0 +1,22 @@
+module windows
+
+runtime := use "std/os/runtime"
+
+pub io_write := (value: []u8, newline: u32) u32 => runtime.io_write(value, newline)
+pub io_write_i32 := (value: i32, newline: u32) u32 => runtime.io_write_i32(value, newline)
+pub env_argc := () usize => runtime.env_argc()
+pub env_argv := (index: usize) []u8 => runtime.env_argv(index)
+pub env_get := (name: []u8) []u8 => runtime.env_get(name)
+pub env_cwd := () []u8 => runtime.env_cwd()
+pub fs_exists := (path: []u8) u32 => runtime.fs_exists(path)
+pub fs_is_dir := (path: []u8) u32 => runtime.fs_is_dir(path)
+pub fs_read_all := (path: []u8) []u8 => runtime.fs_read_all(path)
+pub fs_write_all := (path: []u8, data: []u8) u32 => runtime.fs_write_all(path, data)
+pub fs_mkdir_all := (path: []u8) u32 => runtime.fs_mkdir_all(path)
+pub fs_list_dir := (path: []u8) []u8 => runtime.fs_list_dir(path)
+pub path_join := (lhs: []u8, rhs: []u8) []u8 => runtime.path_join(lhs, rhs)
+pub path_normalize := (value: []u8) []u8 => runtime.path_normalize(value)
+pub path_dirname := (value: []u8) []u8 => runtime.path_dirname(value)
+pub path_basename := (value: []u8) []u8 => runtime.path_basename(value)
+pub path_extension := (value: []u8) []u8 => runtime.path_extension(value)
+pub path_is_abs := (value: []u8) u32 => runtime.path_is_abs(value)

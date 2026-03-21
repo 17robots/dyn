@@ -52,6 +52,7 @@ pub struct FnTypeParam {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructType {
+    pub packed: bool,
     pub fields: Vec<StructFieldType>,
     pub members: Vec<StructMemberType>,
 }
@@ -70,6 +71,7 @@ pub struct StructMemberType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumType {
+    pub repr: Option<Box<TypeExpr>>,
     pub variants: Vec<EnumVariantType>,
 }
 

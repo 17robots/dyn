@@ -5,8 +5,59 @@
 
 extern __float128 strtoflt128(const char *nptr, char **endptr);
 
+typedef struct DynRtF128TrackedPtr {
+    uintptr_t ptr;
+    struct DynRtF128TrackedPtr *next;
+} DynRtF128TrackedPtr;
+
+static DynRtF128TrackedPtr *dynrt_f128_tracked_ptrs = NULL;
+
+static int dynrt_f128_track_insert(uintptr_t ptr) {
+    DynRtF128TrackedPtr *node = (DynRtF128TrackedPtr *)malloc(sizeof(DynRtF128TrackedPtr));
+    if (node == NULL) {
+        return 0;
+    }
+    node->ptr = ptr;
+    node->next = dynrt_f128_tracked_ptrs;
+    dynrt_f128_tracked_ptrs = node;
+    return 1;
+}
+
+static int dynrt_f128_track_contains(uintptr_t ptr) {
+    DynRtF128TrackedPtr *cur = dynrt_f128_tracked_ptrs;
+    while (cur != NULL) {
+        if (cur->ptr == ptr) {
+            return 1;
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
+static int dynrt_f128_track_remove(uintptr_t ptr) {
+    DynRtF128TrackedPtr *cur = dynrt_f128_tracked_ptrs;
+    DynRtF128TrackedPtr *prev = NULL;
+    while (cur != NULL) {
+        if (cur->ptr == ptr) {
+            if (prev == NULL) {
+                dynrt_f128_tracked_ptrs = cur->next;
+            } else {
+                prev->next = cur->next;
+            }
+            free(cur);
+            return 1;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+    return 0;
+}
+
 static __float128 dynrt_f128_load(uintptr_t value_ptr) {
     if (value_ptr == 0) {
+        return 0.0Q;
+    }
+    if (!dynrt_f128_track_contains(value_ptr)) {
         return 0.0Q;
     }
     return *((const __float128 *)(uintptr_t)value_ptr);
@@ -18,6 +69,10 @@ static uintptr_t dynrt_f128_box(__float128 value) {
         return 0;
     }
     *out = value;
+    if (!dynrt_f128_track_insert((uintptr_t)out)) {
+        free(out);
+        return 0;
+    }
     return (uintptr_t)out;
 }
 
@@ -135,7 +190,7 @@ int32_t dynrt_f128_ge(uintptr_t lhs_ptr, uintptr_t rhs_ptr) {
 }
 
 int32_t dynrt_f128_release(uintptr_t value_ptr) {
-    if (value_ptr != 0) {
+    if (value_ptr != 0 && dynrt_f128_track_remove(value_ptr)) {
         free((void *)(uintptr_t)value_ptr);
     }
     return 1;

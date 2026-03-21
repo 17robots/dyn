@@ -40,8 +40,8 @@ impl<'a> Parser<'a> {
             if self.peek_kind(TokenKind::Eof) {
                 break;
             }
-            if self.peek_kind(TokenKind::DocComment) || self.looks_like_top_level_binding() {
-                if let Some(item) = self.parse_item() {
+            if self.peek_kind(TokenKind::DocComment) || self.looks_like_top_level_item() {
+                if let Some(item) = self.parse_item(true) {
                     items.push(item);
                 } else {
                     self.sync_to_top_level_boundary();
@@ -87,13 +87,33 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_item(&mut self) -> Option<Item> {
+    fn parse_item(&mut self, allow_extern_bindings: bool) -> Option<Item> {
         let docs = self.parse_doc_comments();
         let visibility = if self.match_keyword(Keyword::Pub) {
             Visibility::Public
         } else {
             Visibility::Private
         };
+
+        if self.match_keyword(Keyword::Extern) {
+            let span = self.prev_span();
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                "extern declarations must use binding syntax",
+                span,
+                "use `name := extern (args) ret`",
+            );
+
+            let _ = self.parse_ident();
+            if self.match_operator(Operator::Colon) {
+                let _ = self.parse_type_expr();
+                if self.match_operator(Operator::Equal) {
+                    let _ = self.parse_string_literal();
+                }
+            }
+            return None;
+        }
+
         let mutable = self.match_keyword(Keyword::Mut);
 
         let start = self.current_span();
@@ -101,6 +121,25 @@ impl<'a> Parser<'a> {
 
         if self.match_operator(Operator::Colon) {
             if self.match_operator(Operator::Equal) {
+                if allow_extern_bindings && self.match_keyword(Keyword::Extern) {
+                    if mutable {
+                        self.report_parser_error(
+                            DiagnosticCode::E3001,
+                            "extern bindings cannot be mutable",
+                            start,
+                            "remove `mut` from extern function declaration",
+                        );
+                    }
+                    let (ty, link_name, end) = self.parse_extern_binding_signature()?;
+                    return Some(Item::Extern(Box::new(ExternDecl {
+                        docs,
+                        visibility,
+                        name,
+                        ty,
+                        link_name,
+                        span: merge_span(start, end),
+                    })));
+                }
                 let value = self.parse_expr(0)?;
                 return Some(Item::Binding(Box::new(Binding {
                     docs,
@@ -130,6 +169,25 @@ impl<'a> Parser<'a> {
         }
 
         if self.match_operator(Operator::Equal) {
+            if allow_extern_bindings && self.match_keyword(Keyword::Extern) {
+                if mutable {
+                    self.report_parser_error(
+                        DiagnosticCode::E3001,
+                        "extern bindings cannot be mutable",
+                        start,
+                        "remove `mut` from extern function declaration",
+                    );
+                }
+                let (ty, link_name, end) = self.parse_extern_binding_signature()?;
+                return Some(Item::Extern(Box::new(ExternDecl {
+                    docs,
+                    visibility,
+                    name,
+                    ty,
+                    link_name,
+                    span: merge_span(start, end),
+                })));
+            }
             let value = self.parse_expr(0)?;
             return Some(Item::Binding(Box::new(Binding {
                 docs,
@@ -219,15 +277,21 @@ impl<'a> Parser<'a> {
         if self.match_keyword(Keyword::For) {
             return self.parse_for_expr();
         }
+        if self.match_keyword(Keyword::Extern) {
+            let span = self.prev_span();
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                "extern declarations must use binding syntax",
+                span,
+                "use `name := extern (args) ret`",
+            );
+            return None;
+        }
         if self.match_keyword(Keyword::Break) {
             return Some(self.parse_break_expr());
         }
         if self.match_keyword(Keyword::Continue) {
-            let span = self.prev_span();
-            return Some(Expr {
-                span,
-                kind: ExprKind::Continue,
-            });
+            return Some(self.parse_continue_expr());
         }
         if self.match_keyword(Keyword::Return) {
             let start = self.prev_span();
@@ -274,9 +338,27 @@ impl<'a> Parser<'a> {
             });
         }
 
+        if self.match_keyword(Keyword::Packed) {
+            let start = self.prev_span();
+            if !self.match_keyword(Keyword::Struct) {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "expected 'struct' after 'packed'",
+                    self.current_span(),
+                    "use `packed struct { ... }`",
+                );
+                return None;
+            }
+            let ty = self.parse_struct_type(start, true)?;
+            return Some(Expr {
+                span: ty.span,
+                kind: ExprKind::TypeLiteral(ty),
+            });
+        }
+
         if self.match_keyword(Keyword::Struct) {
             let start = self.prev_span();
-            let ty = self.parse_struct_type(start)?;
+            let ty = self.parse_struct_type(start, false)?;
             return Some(Expr {
                 span: ty.span,
                 kind: ExprKind::TypeLiteral(ty),
@@ -672,7 +754,7 @@ impl<'a> Parser<'a> {
             }
 
             if self.peek_kind(TokenKind::DocComment) || self.looks_like_local_binding() {
-                if let Some(Item::Binding(binding)) = self.parse_item() {
+                if let Some(Item::Binding(binding)) = self.parse_item(false) {
                     statements.push(Stmt::Binding(binding));
                     tail_expr = None;
                     self.match_delimiter(Delimiter::Semicolon);
@@ -773,8 +855,11 @@ impl<'a> Parser<'a> {
         };
 
         let then_branch = self.parse_expr(0)?;
+        self.report_if_single_expr_block_branch(&then_branch);
         let else_branch = if self.match_keyword(Keyword::Else) {
-            Some(Box::new(self.parse_expr(0)?))
+            let else_branch = self.parse_expr(0)?;
+            self.report_if_single_expr_block_branch(&else_branch);
+            Some(Box::new(else_branch))
         } else {
             None
         };
@@ -795,6 +880,30 @@ impl<'a> Parser<'a> {
             span: merge_span(start, end_span),
             kind: ExprKind::If(if_expr),
         })
+    }
+
+    fn report_if_single_expr_block_branch(&mut self, branch: &Expr) {
+        let ExprKind::Block(block) = &branch.kind else {
+            return;
+        };
+        let Some(tail) = &block.tail_expr else {
+            return;
+        };
+        if !block.statements.is_empty() {
+            return;
+        }
+        if matches!(
+            tail.kind,
+            ExprKind::Return { .. } | ExprKind::Break(_) | ExprKind::Continue { .. }
+        ) {
+            return;
+        }
+        self.report_parser_error(
+            DiagnosticCode::E3001,
+            "single-expression if branch must not use block braces",
+            branch.span,
+            "remove '{ ... }' and use `if cond value else other`",
+        );
     }
 
     fn parse_match_expr(&mut self) -> Option<Expr> {
@@ -941,19 +1050,7 @@ impl<'a> Parser<'a> {
 
     fn parse_break_expr(&mut self) -> Expr {
         let start = self.prev_span();
-        let label = if self.peek_operator(Operator::Colon)
-            && matches!(
-                self.tokens.get(self.index + 1).map(|token| &token.kind),
-                Some(TokenKind::Identifier) | Some(TokenKind::Keyword(_))
-            ) {
-            self.advance();
-            self.parse_ident().map(|name| Label {
-                span: name.span,
-                name,
-            })
-        } else {
-            None
-        };
+        let label = self.parse_optional_jump_label();
 
         let value = if self.starts_expr() {
             self.parse_expr(0).map(Box::new)
@@ -966,6 +1063,93 @@ impl<'a> Parser<'a> {
             span: merge_span(start, end),
             kind: ExprKind::Break(BreakExpr { label, value }),
         }
+    }
+
+    fn parse_continue_expr(&mut self) -> Expr {
+        let start = self.prev_span();
+        let label = self.parse_optional_jump_label();
+        let end = label.as_ref().map_or(start, |label| label.span);
+        Expr {
+            span: merge_span(start, end),
+            kind: ExprKind::Continue { label },
+        }
+    }
+
+    fn parse_optional_jump_label(&mut self) -> Option<Label> {
+        if self.peek_operator(Operator::Colon)
+            && matches!(
+                self.tokens.get(self.index + 1).map(|token| &token.kind),
+                Some(TokenKind::Identifier) | Some(TokenKind::Keyword(_))
+            )
+        {
+            self.advance();
+            self.parse_ident().map(|name| Label {
+                span: name.span,
+                name,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn parse_extern_binding_signature(&mut self) -> Option<(TypeExpr, Option<String>, SourceSpan)> {
+        let ty = if self.peek_delimiter(Delimiter::LParen) {
+            self.parse_extern_fn_type_from_params()?
+        } else {
+            self.parse_type_expr()?
+        };
+
+        if !matches!(ty.kind, TypeExprKind::Function(_)) {
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                "extern bindings must declare function signatures",
+                ty.span,
+                "use `extern (args) ret` or `extern fn(args) ret`",
+            );
+        }
+
+        let link_name = if self.match_operator(Operator::Equal) {
+            self.parse_string_literal()
+        } else {
+            None
+        };
+        let end = self.prev_span();
+        Some((ty, link_name, end))
+    }
+
+    fn parse_extern_fn_type_from_params(&mut self) -> Option<TypeExpr> {
+        let start = self.current_span();
+        self.expect_delimiter(Delimiter::LParen, "expected '(' after extern");
+        let params = self.parse_fn_type_params();
+        self.expect_delimiter(
+            Delimiter::RParen,
+            "expected ')' to close extern function params",
+        );
+        let return_type = if self.starts_type_expr() {
+            self.parse_type_expr().unwrap_or(TypeExpr {
+                span: self.prev_span(),
+                kind: TypeExprKind::Named(Ident {
+                    text: "void".to_string(),
+                    span: self.prev_span(),
+                }),
+            })
+        } else {
+            TypeExpr {
+                span: self.prev_span(),
+                kind: TypeExprKind::Named(Ident {
+                    text: "void".to_string(),
+                    span: self.prev_span(),
+                }),
+            }
+        };
+
+        Some(TypeExpr {
+            span: merge_span(start, return_type.span),
+            kind: TypeExprKind::Function(FnType {
+                params,
+                return_type: Box::new(return_type),
+            }),
+        })
     }
 
     fn parse_defer_expr(&mut self) -> Option<Expr> {
@@ -1009,6 +1193,18 @@ impl<'a> Parser<'a> {
                 default_value,
             });
             if !self.match_delimiter(Delimiter::Comma) {
+                if self.peek_delimiter(Delimiter::RParen) {
+                    break;
+                }
+                if self.peek_kind(TokenKind::Identifier) {
+                    self.report_parser_error(
+                        DiagnosticCode::E3001,
+                        "expected ',' between function parameters",
+                        self.current_span(),
+                        "insert ',' to separate function parameters",
+                    );
+                    continue;
+                }
                 break;
             }
         }
@@ -1046,6 +1242,15 @@ impl<'a> Parser<'a> {
         if self.match_keyword(Keyword::Comp) {
             let ret_expr = self.parse_expr(0)?;
             if self.match_operator(Operator::FatArrow) {
+                if self.peek_delimiter(Delimiter::LBrace) {
+                    let arrow_span = self.prev_span();
+                    self.report_parser_error(
+                        DiagnosticCode::E3001,
+                        "arrow function body must be a single expression",
+                        arrow_span,
+                        "remove '=>' and use a block body directly",
+                    );
+                }
                 let body_expr = self.parse_expr(0)?;
                 return Some(Expr {
                     span: merge_span(start, body_expr.span),
@@ -1071,21 +1276,36 @@ impl<'a> Parser<'a> {
             });
         }
 
-        let body = if self.match_operator(Operator::FatArrow) {
-            FnBody::ArrowExpr(Box::new(self.parse_expr(0)?))
-        } else {
-            let block_start_index = self.index;
-            let (block_expr, closed) = self.parse_block_expr_with_status()?;
+        let parse_block_body = |parser: &mut Self| -> Option<FnBody> {
+            let block_start_index = parser.index;
+            let (block_expr, closed) = parser.parse_block_expr_with_status()?;
             let block_expr = if !closed {
-                self.index = block_start_index;
-                self.parse_balanced_block_expr().unwrap_or(block_expr)
+                parser.index = block_start_index;
+                parser.parse_balanced_block_expr().unwrap_or(block_expr)
             } else {
                 block_expr
             };
-            match block_expr.kind {
+            Some(match block_expr.kind {
                 ExprKind::Block(block) => FnBody::Block(block),
                 _ => FnBody::ArrowExpr(Box::new(block_expr)),
+            })
+        };
+
+        let body = if self.match_operator(Operator::FatArrow) {
+            if self.peek_delimiter(Delimiter::LBrace) {
+                let arrow_span = self.prev_span();
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "arrow function body must be a single expression",
+                    arrow_span,
+                    "remove '=>' and use a block body directly",
+                );
+                parse_block_body(self)?
+            } else {
+                FnBody::ArrowExpr(Box::new(self.parse_expr(0)?))
             }
+        } else {
+            parse_block_body(self)?
         };
 
         let end = match &body {
@@ -1254,8 +1474,21 @@ impl<'a> Parser<'a> {
             });
         }
 
+        if self.match_keyword(Keyword::Packed) {
+            if self.match_keyword(Keyword::Struct) {
+                return self.parse_struct_type(start, true);
+            }
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                "expected 'struct' after 'packed'",
+                self.current_span(),
+                "use `packed struct { ... }`",
+            );
+            return None;
+        }
+
         if self.match_keyword(Keyword::Struct) {
-            return self.parse_struct_type(start);
+            return self.parse_struct_type(start, false);
         }
         if self.match_keyword(Keyword::Enum) {
             return self.parse_enum_type(start);
@@ -1364,7 +1597,7 @@ impl<'a> Parser<'a> {
         args
     }
 
-    fn parse_struct_type(&mut self, start: SourceSpan) -> Option<TypeExpr> {
+    fn parse_struct_type(&mut self, start: SourceSpan, packed: bool) -> Option<TypeExpr> {
         self.expect_delimiter(Delimiter::LBrace, "expected '{' after struct");
         let mut fields = Vec::new();
         let mut members = Vec::new();
@@ -1397,11 +1630,37 @@ impl<'a> Parser<'a> {
 
         Some(TypeExpr {
             span: merge_span(start, end),
-            kind: TypeExprKind::Struct(StructType { fields, members }),
+            kind: TypeExprKind::Struct(StructType {
+                packed,
+                fields,
+                members,
+            }),
         })
     }
 
     fn parse_enum_type(&mut self, start: SourceSpan) -> Option<TypeExpr> {
+        let repr = if self.match_delimiter(Delimiter::LParen) {
+            let repr = self.parse_type_expr()?;
+            self.expect_delimiter(
+                Delimiter::RParen,
+                "expected ')' after enum representation type",
+            );
+            if !matches!(
+                &repr.kind,
+                TypeExprKind::Named(name)
+                    if matches!(name.text.as_str(), "u8" | "u16" | "u32" | "u64" | "usize")
+            ) {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "enum representation type must be unsigned integer",
+                    repr.span,
+                    "use one of `u8`, `u16`, `u32`, `u64`, or `usize`",
+                );
+            }
+            Some(Box::new(repr))
+        } else {
+            None
+        };
         self.expect_delimiter(Delimiter::LBrace, "expected '{' after enum");
         let mut variants = Vec::new();
         while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
@@ -1418,7 +1677,7 @@ impl<'a> Parser<'a> {
         self.expect_delimiter(Delimiter::RBrace, "expected '}' to close enum type");
         Some(TypeExpr {
             span: merge_span(start, end),
-            kind: TypeExprKind::Enum(EnumType { variants }),
+            kind: TypeExprKind::Enum(EnumType { repr, variants }),
         })
     }
 
@@ -1760,6 +2019,7 @@ impl<'a> Parser<'a> {
                                     | TokenKind::Operator(Operator::Bang)
                                     | TokenKind::Identifier
                                     | TokenKind::Keyword(Keyword::Type)
+                                    | TokenKind::Keyword(Keyword::Packed)
                                     | TokenKind::Keyword(Keyword::Struct)
                                     | TokenKind::Keyword(Keyword::Enum)
                                     | TokenKind::Keyword(Keyword::Inline)
@@ -1886,6 +2146,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::Keyword(Keyword::Comp)
                     | TokenKind::Keyword(Keyword::Inline)
                     | TokenKind::Keyword(Keyword::Use)
+                    | TokenKind::Keyword(Keyword::Packed)
                     | TokenKind::Keyword(Keyword::Struct)
                     | TokenKind::Keyword(Keyword::Enum)
                     | TokenKind::Delimiter(Delimiter::LParen)
@@ -1900,7 +2161,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn looks_like_top_level_binding(&self) -> bool {
+    fn looks_like_top_level_item(&self) -> bool {
         let mut idx = self.index;
         while matches!(
             self.tokens.get(idx).map(|t| &t.kind),
@@ -1913,6 +2174,12 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Keyword(Keyword::Pub))
         ) {
             idx += 1;
+        }
+        if matches!(
+            self.tokens.get(idx).map(|t| &t.kind),
+            Some(TokenKind::Keyword(Keyword::Extern))
+        ) {
+            return true;
         }
         if matches!(
             self.tokens.get(idx).map(|t| &t.kind),
@@ -1936,7 +2203,7 @@ impl<'a> Parser<'a> {
         while !self.is_eof() {
             if self.peek_kind(TokenKind::Eof)
                 || self.peek_kind(TokenKind::DocComment)
-                || self.looks_like_top_level_binding()
+                || self.looks_like_top_level_item()
             {
                 break;
             }
@@ -2106,6 +2373,7 @@ impl<'a> Parser<'a> {
             self.current().map(|t| &t.kind),
             Some(TokenKind::Identifier)
                 | Some(TokenKind::Keyword(Keyword::Type))
+                | Some(TokenKind::Keyword(Keyword::Packed))
                 | Some(TokenKind::Keyword(Keyword::Struct))
                 | Some(TokenKind::Keyword(Keyword::Enum))
                 | Some(TokenKind::Keyword(Keyword::Inline))

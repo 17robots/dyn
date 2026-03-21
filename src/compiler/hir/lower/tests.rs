@@ -359,7 +359,7 @@ fn rewrites_method_calls_through_anonymous_struct_literal_binding() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
-            "module main\nBox := (T: comp type) type => struct {\n  value: T,\n  get := (self: Box(T)) T => self.value,\n}\nWrapper := (T: comp type) type => struct {\n  inner: Box(T),\n  test := (self: Wrapper(T)) T => {\n    next := .{ inner: self.inner }\n    next.inner.get()\n  },\n}\nmain := () i32 {\n  return 0\n}\n",
+            "module main\nBox := (T: comp type) type => struct {\n  value: T,\n  get := (self: Box(T)) T => self.value,\n}\nWrapper := (T: comp type) type => struct {\n  inner: Box(T),\n  test := (self: Wrapper(T)) T {\n    next := .{ inner: self.inner }\n    next.inner.get()\n  },\n}\nmain := () i32 {\n  return 0\n}\n",
         )
         .expect("file should be written");
 

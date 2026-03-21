@@ -316,6 +316,8 @@ fn verify_eval_operands(
                 check_value(*arg, "call argument");
             }
         }
+        MirValue::ErrorStatus { value } => check_value(*value, "error status source"),
+        MirValue::ErrorPayload { value } => check_value(*value, "error payload source"),
         MirValue::DerefAccess { base } => check_value(*base, "deref base"),
         MirValue::FieldAccess { base, .. } => check_value(*base, "field access base"),
         MirValue::Index { base, index } => {

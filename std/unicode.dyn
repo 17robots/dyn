@@ -1,0 +1,21 @@
+module unicode
+
+rt_utf8_valid := extern fn(value: []u8) u32 = "dynrt_unicode_utf8_valid"
+rt_utf8_count_scalars := extern fn(value: []u8, out_count_ptr: usize) u32 = "dynrt_unicode_utf8_count_scalars"
+rt_utf8_next_len := extern fn(value: []u8, offset: usize) usize = "dynrt_unicode_utf8_next_len"
+
+pub Utf8Error := enum { Invalid }
+require_u32 := (value: u32, err: Utf8Error) u32!Utf8Error {
+    if value == 0 return err
+    return value
+}
+value_or_utf8_error := (status: u32, value: usize) usize!Utf8Error {
+    require_u32(status, .Invalid) or return .Invalid
+    return value
+}
+pub is_valid_utf8 := (value: []u8) u32 => rt_utf8_valid(value)
+pub scalar_count := (value: []u8) usize!Utf8Error {
+    out: usize = 0
+    return value_or_utf8_error(rt_utf8_count_scalars(value, $as(usize, &out)), out)
+}
+pub next_scalar_len := (value: []u8, offset: usize) usize => rt_utf8_next_len(value, offset)

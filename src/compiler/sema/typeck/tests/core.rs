@@ -103,3 +103,22 @@ fn accepts_comptime_function_call_with_value_arguments() {
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
+
+#[test]
+fn type_checks_calls_to_extern_function_signatures() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\nid := extern (x: i32) i32\nmain := () i32 => id(1)\n",
+    )
+    .expect("file should be written");
+
+    let (_parsed, units) =
+        parse_project_with_module_units(&root).expect("project should parse and merge");
+    let diagnostics = type_check_modules(&units);
+    assert!(!diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == DiagnosticCode::E4005));
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}

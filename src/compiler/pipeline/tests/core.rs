@@ -1,4 +1,32 @@
 use super::*;
+use crate::compiler::intrinsics::{runtime_intrinsic_for_builtin, LANGUAGE_BUILTINS};
+use std::collections::HashSet;
+
+fn collect_builtin_tokens(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            let is_ident = byte.is_ascii_alphabetic() || byte.is_ascii_digit() || byte == b'_';
+            if !is_ident {
+                break;
+            }
+            index += 1;
+        }
+        if index > start + 1 {
+            out.push(source[start..index].to_string());
+        }
+    }
+    out
+}
 
 #[test]
 fn std_surface_has_no_internal_double_underscore_identifiers() {
@@ -24,6 +52,47 @@ fn std_surface_has_no_internal_double_underscore_identifiers() {
     assert!(
         offenders.is_empty(),
         "std surface contains internal '__' identifiers: {offenders:?}"
+    );
+}
+
+#[test]
+fn std_surface_uses_only_language_builtins_and_no_runtime_aliases() {
+    let allowed = LANGUAGE_BUILTINS.iter().copied().collect::<HashSet<_>>();
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let std_root = repo_root.join("std");
+    let mut dyn_files = Vec::new();
+    collect_files_with_extension(&std_root, "dyn", &mut dyn_files);
+
+    let mut runtime_alias_offenders = Vec::new();
+    let mut unknown_builtin_offenders = Vec::new();
+    for path in dyn_files {
+        let source = fs::read_to_string(&path).expect("std module should be readable");
+        let Some(relative) = path.strip_prefix(repo_root).ok() else {
+            continue;
+        };
+        for builtin in collect_builtin_tokens(&source) {
+            if runtime_intrinsic_for_builtin(&builtin).is_some() {
+                runtime_alias_offenders.push(format!("{}:{builtin}", relative.display()));
+                continue;
+            }
+            if !allowed.contains(builtin.as_str()) {
+                unknown_builtin_offenders.push(format!("{}:{builtin}", relative.display()));
+            }
+        }
+    }
+
+    runtime_alias_offenders.sort();
+    runtime_alias_offenders.dedup();
+    unknown_builtin_offenders.sort();
+    unknown_builtin_offenders.dedup();
+
+    assert!(
+        runtime_alias_offenders.is_empty(),
+        "std surface references runtime builtin aliases: {runtime_alias_offenders:?}"
+    );
+    assert!(
+        unknown_builtin_offenders.is_empty(),
+        "std surface references unknown builtins: {unknown_builtin_offenders:?}"
     );
 }
 
@@ -117,6 +186,7 @@ fn shakes_unreachable_functions_from_main_entry() {
                 mk_fun("used", None, 1),
                 mk_fun("unused", None, 2),
             ],
+            extern_functions: Vec::new(),
         }],
     };
 
@@ -181,6 +251,7 @@ fn keeps_all_functions_when_indirect_call_target_unknown() {
                     }],
                 },
             ],
+            extern_functions: Vec::new(),
         }],
     };
 

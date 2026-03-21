@@ -5,7 +5,7 @@ fn builds_native_executable_with_console_print_i32() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
-            "module main\nmain := () i32 {\n  $io_write_i32(12, 0)\n  $io_write_i32(34, 1)\n  return 0\n}\n",
+            "module main\nos := use \"std/os\"\nmain := () i32 {\n  os.io_write_i32(12, 0)\n  os.io_write_i32(34, 1)\n  return 0\n}\n",
         )
         .expect("file should be written");
 
@@ -28,7 +28,7 @@ fn builds_native_executable_with_console_println_bytes() {
     let root = make_temp_dir();
     fs::write(
         root.join("a.dyn"),
-        "module main\nmain := () i32 {\n  $io_write(\"Hello, world\", 1)\n  return 0\n}\n",
+        "module main\nos := use \"std/os\"\nmain := () i32 {\n  os.io_write(\"Hello, world\", 1)\n  return 0\n}\n",
     )
     .expect("file should be written");
 
@@ -56,7 +56,7 @@ fn builds_native_executable_with_io_print_module_member_call() {
     .expect("file should be written");
     fs::write(
         root.join("my_io.dyn"),
-        "module my_io\npub print := (value: i32) u32 => $io_write_i32(value, 0)\n",
+        "module my_io\nos := use \"std/os\"\npub print := (value: i32) u32 => os.io_write_i32(value, 0)\n",
     )
     .expect("file should be written");
 

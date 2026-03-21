@@ -27,14 +27,20 @@
 ## 4. FUNCTIONS
 - Syntax: `name := (args) ReturnType { ... }`
 - Arrow Syntax: Single-expression functions can use `=>` instead of `{ return ... }`.
+  - `=>` is only for expression bodies and must not be followed by a block (`{ ... }`).
+- Extern Functions:
+  - Binding-style form: `write := extern (fd: i32, ptr: *u8, len: usize) i32 = "dynrt_fd_write"`
+  - Extern declarations are function-only (no extern variables).
 - Default Arguments: Supported (e.g., `x: i32 = 0`).
 - First-Class: Functions can be stored in structs (e.g., `fn_ptr := *fn(self: u)`), and can be passed as parameters: (`do_math := (x: i32, y: i32, math_fn: fn(x: i32, y: i32) i32)`) or can be returned from a function too (`math_builder := (the_fn: (x: i32, y: i32)i32) fn(x: i32, y: i32) => (x: i32, y: i32)i32 { val := the_fn(x,y)}`).
 
 ## 5. CUSTOM TYPES (STRUCTS & ENUMS)
 - Structs: Anonymous definition assigned to a type variable: `s := struct { item: u32 }`.
+  - Packed structs are supported: `s := packed struct { item: u32 }`.
   - Instantiated using dot notation: `.{}` or `TypeName{}`.
 - Enums (Sum Types / Tagged Unions): Can hold complex payloads.
   - Definition: `r := enum { variant1, variant2: i32 }`.
+  - Explicit representation type is supported with unsigned integer widths: `r := enum(u8) { A, B }`.
   - Instantiation: `r.variant2(5)` or `.variant2(5)` if the root enum can be determined.
 
 ## 6. CONTROL FLOW (EVERYTHING IS AN EXPRESSION)
@@ -55,6 +61,9 @@
 
 ### If/Else
 - If/Else: Can be used as statements or expressions (`v := if total % 2 == 0 total / 2 else 0`).
+- Single-expression branches must not be wrapped in block braces.
+  - Valid: `v := if cond value else other_value`
+  - Invalid: `v := if cond { value } else other_value`
 
 ### Match:
 - Match: `match total { 0..1: {}, _: {} }`.
@@ -70,6 +79,7 @@
 
 ### Blocks & Breaks/Continue
 - Blocks & Breaks: Blocks can be labeled (`blk: {}`) and broken out of (`break :blk`).
+- Continue may also carry a label (`continue :blk`) when targeting a labeled context.
 - Blocks also have a type associated with them, and can either be broken with a value (`break :blk value`) or not (becomes a void block)
 
 ## 7. ERROR HANDLING

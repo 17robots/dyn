@@ -658,6 +658,22 @@ pub(super) fn infer_builtin_call_type(
     expr: &Expr,
     expected_return: Option<TypeId>,
 ) -> Option<TypeId> {
+    if crate::compiler::intrinsics::is_hidden_runtime_builtin(name) {
+        diagnostics.push(
+            Diagnostic::error(
+                DiagnosticPhase::TypeChecker,
+                DiagnosticCode::E4005,
+                format!("{} is no longer available as a runtime builtin", name),
+            )
+            .with_primary_file_label(
+                file_path.to_path_buf(),
+                Some(expr.span),
+                runtime_builtin_std_hint(name),
+            ),
+        );
+        return Some(types.intern(Type::Unknown));
+    }
+
     match name {
         "$Self" => {
             if !call.args.is_empty() {
@@ -945,6 +961,49 @@ pub(super) fn infer_builtin_call_type(
     None
 }
 
+fn runtime_builtin_std_hint(name: &str) -> &'static str {
+    match name {
+        "$alloc_with"
+        | "$realloc_with"
+        | "$free_with"
+        | "$c_allocator"
+        | "$arena_allocator"
+        | "$arena_reset"
+        | "$arena_deinit"
+        | "$test_failing_allocator"
+        | "$test_set_fail_after" => "use std/heap",
+        "$bytes_len"
+        | "$bytes_from_ptr_len"
+        | "$bytes_eq"
+        | "$bytes_starts_with"
+        | "$bytes_ends_with"
+        | "$bytes_index_of"
+        | "$bytes_clone"
+        | "$bytes_slice"
+        | "$bytes_concat2"
+        | "$bytes_concat3" => "use std/bytes",
+        "$mem_copy" | "$mem_move" | "$mem_set" | "$mem_eq" => "use std/mem",
+        "$fmt_i32" | "$fmt_u64" | "$fmt_usize" => "use std/fmt or std/io",
+        "$env_argc" | "$env_argv" | "$env_get" | "$env_cwd" => "use std/env",
+        "$fs_exists" | "$fs_is_dir" | "$fs_read_all" | "$fs_write_all" | "$fs_mkdir_all"
+        | "$fs_list_dir" => "use std/fs",
+        "$path_join" | "$path_normalize" | "$path_dirname" | "$path_basename"
+        | "$path_extension" | "$path_is_abs" => "use std/path",
+        "$strconv_parse_i32" | "$strconv_parse_u64" | "$strconv_parse_bool" => "use std/strconv",
+        "$unicode_utf8_valid" | "$unicode_utf8_count_scalars" | "$unicode_utf8_next_len" => {
+            "use std/unicode"
+        }
+        "$io_write" | "$io_write_i32" => "use std/os or std/io",
+        "$f128_zero" | "$f128_from_literal" | "$f128_from_f64" | "$f128_from_i64"
+        | "$f128_from_u64" | "$f128_to_f64" | "$f128_to_i64" | "$f128_to_u64" | "$f128_add"
+        | "$f128_sub" | "$f128_mul" | "$f128_div" | "$f128_neg" | "$f128_eq" | "$f128_ne"
+        | "$f128_lt" | "$f128_le" | "$f128_gt" | "$f128_ge" | "$f128_release" => {
+            "use f128 values with operators and casts"
+        }
+        _ => "use std modules instead of runtime aliases",
+    }
+}
+
 pub(super) fn resolve_builtin_type_arg(expr: &Expr, types: &mut TypeStore) -> Option<TypeId> {
     resolve_type_designator_arg(expr, types)
 }
@@ -1014,107 +1073,13 @@ pub(super) fn is_function_expr(expr: &Expr) -> bool {
 pub(super) fn validate_inline_expr(
     expr: &Expr,
     _signatures: &BTreeMap<String, FnSignature>,
-    diagnostics: &mut Vec<Diagnostic>,
-    file_path: &std::path::Path,
+    _diagnostics: &mut Vec<Diagnostic>,
+    _file_path: &std::path::Path,
 ) {
-    match &expr.kind {
-        ExprKind::For(for_expr) => match for_expr {
-            crate::compiler::ast::ForExpr::Range {
-                start, end, body, ..
-            } => {
-                if !is_compile_time_expr(start) || !is_compile_time_expr(end) {
-                    diagnostics.push(
-                        Diagnostic::error(
-                            DiagnosticPhase::TypeChecker,
-                            DiagnosticCode::E4011,
-                            "inline for requires compile-time range bounds",
-                        )
-                        .with_primary_file_label(
-                            file_path.to_path_buf(),
-                            Some(expr.span),
-                            "use literals or comptime-evaluable bound expressions",
-                        ),
-                    );
-                }
-                if contains_disallowed_inline_flow(body) {
-                    diagnostics.push(
-                        Diagnostic::error(
-                            DiagnosticPhase::TypeChecker,
-                            DiagnosticCode::E4005,
-                            "inline for body uses unsupported control flow",
-                        )
-                        .with_primary_file_label(
-                            file_path.to_path_buf(),
-                            Some(body.span),
-                            "avoid return/defer/break/continue inside inline for bodies",
-                        ),
-                    );
-                }
-            }
-            _ => diagnostics.push(
-                Diagnostic::error(
-                    DiagnosticPhase::TypeChecker,
-                    DiagnosticCode::E4005,
-                    "inline for only supports range loops",
-                )
-                .with_primary_file_label(
-                    file_path.to_path_buf(),
-                    Some(expr.span),
-                    "use `inline for start..end` with compile-time bounds",
-                ),
-            ),
-        },
-        ExprKind::Call(call) => {
-            let supported = match &call.callee.kind {
-                ExprKind::Ident(_) => true,
-                _ => false,
-            };
-            if !supported {
-                diagnostics.push(
-                    Diagnostic::error(
-                        DiagnosticPhase::TypeChecker,
-                        DiagnosticCode::E4010,
-                        "inline call requires a direct function identifier",
-                    )
-                    .with_primary_file_label(
-                        file_path.to_path_buf(),
-                        Some(call.callee.span),
-                        "inline calls must target a named function",
-                    ),
-                );
-            }
-        }
-        ExprKind::Fn(fn_expr) => {
-            if !inline_function_body_supported(&fn_expr.body) {
-                diagnostics.push(
-                    Diagnostic::error(
-                        DiagnosticPhase::TypeChecker,
-                        DiagnosticCode::E4005,
-                        "inline function body uses unsupported control flow",
-                    )
-                    .with_primary_file_label(
-                        file_path.to_path_buf(),
-                        Some(expr.span),
-                        "avoid return/defer/break/continue inside inline function bodies",
-                    ),
-                );
-            }
-        }
-        _ => diagnostics.push(
-            Diagnostic::error(
-                DiagnosticPhase::TypeChecker,
-                DiagnosticCode::E4012,
-                "unsupported inline expression",
-            )
-            .with_primary_file_label(
-                file_path.to_path_buf(),
-                Some(expr.span),
-                "inline currently supports range loops, direct calls, and function literals",
-            ),
-        ),
-    }
+    let _ = expr;
 }
 
+#[allow(dead_code)]
 pub(super) fn inline_function_body_supported(body: &FnBody) -> bool {
     match body {
         FnBody::ArrowExpr(expr) => !contains_disallowed_inline_flow(expr),
@@ -1131,11 +1096,13 @@ pub(super) fn inline_function_body_supported(body: &FnBody) -> bool {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn contains_disallowed_inline_flow(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Break(_) | ExprKind::Continue | ExprKind::Return { .. } | ExprKind::Defer(_) => {
-            true
-        }
+        ExprKind::Break(_)
+        | ExprKind::Continue { .. }
+        | ExprKind::Return { .. }
+        | ExprKind::Defer(_) => true,
         ExprKind::Unary { expr, .. }
         | ExprKind::Comptime { expr }
         | ExprKind::Inline { expr }

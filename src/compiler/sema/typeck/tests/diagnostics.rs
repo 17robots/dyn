@@ -103,7 +103,7 @@ fn reports_call_on_non_callable_value() {
 }
 
 #[test]
-fn reports_inline_for_with_non_comptime_bounds() {
+fn allows_inline_for_with_non_comptime_bounds() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
@@ -114,18 +114,18 @@ fn reports_inline_for_with_non_comptime_bounds() {
     let (_parsed, units) =
         parse_project_with_module_units(&root).expect("project should parse and merge");
     let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4011
-            && diagnostic
-                .message
-                .contains("inline for requires compile-time range bounds")
-    }));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4011),
+        "diagnostics: {diagnostics:#?}"
+    );
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
 
 #[test]
-fn reports_unsupported_inline_expression_kind() {
+fn allows_general_inline_expression_kind() {
     let root = make_temp_dir();
     fs::write(
         root.join("a.dyn"),
@@ -136,10 +136,12 @@ fn reports_unsupported_inline_expression_kind() {
     let (_parsed, units) =
         parse_project_with_module_units(&root).expect("project should parse and merge");
     let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4012
-            && diagnostic.message.contains("unsupported inline expression")
-    }));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4012),
+        "diagnostics: {diagnostics:#?}"
+    );
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }

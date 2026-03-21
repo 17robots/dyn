@@ -152,6 +152,7 @@ impl FunctionLowerer {
         );
     }
 
+    #[allow(dead_code)]
     pub(super) fn report_inline_call_lowering_failure(
         &mut self,
         span: crate::compiler::diagnostics::SourceSpan,
@@ -170,6 +171,7 @@ impl FunctionLowerer {
         );
     }
 
+    #[allow(dead_code)]
     pub(super) fn report_inline_range_requires_comptime_bounds(
         &mut self,
         span: crate::compiler::diagnostics::SourceSpan,
@@ -188,6 +190,7 @@ impl FunctionLowerer {
         );
     }
 
+    #[allow(dead_code)]
     pub(super) fn report_unsupported_inline_expression(
         &mut self,
         span: crate::compiler::diagnostics::SourceSpan,
@@ -239,6 +242,36 @@ impl FunctionLowerer {
                 }
             })
             .any(return_hint_is_errorable_aggregate)
+    }
+
+    pub(super) fn function_returns_errorable_scalar(&self, callee_name: &str) -> bool {
+        let is_errorable_scalar_hint = |hint: &str| {
+            if !hint.contains('!') || return_hint_is_errorable_aggregate(hint) {
+                return false;
+            }
+            let candidate = if let Some((_, ret)) = hint.rsplit_once("->") {
+                ret.trim()
+            } else {
+                hint.trim()
+            };
+            let ok = return_hint_ok_type_text(candidate);
+            !matches!(parse_type_hint(ok), MirValueType::BytesSlice)
+        };
+
+        if let Some(Some(hint)) = self.function_return_hints.get(callee_name) {
+            return is_errorable_scalar_hint(hint);
+        }
+        let suffix = format!("::{callee_name}");
+        self.function_return_hints
+            .iter()
+            .filter_map(|(name, hint)| {
+                if name.ends_with(&suffix) {
+                    hint.as_deref()
+                } else {
+                    None
+                }
+            })
+            .any(is_errorable_scalar_hint)
     }
 
     pub(super) fn eval_type_designator_name(

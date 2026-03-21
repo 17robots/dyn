@@ -336,7 +336,7 @@ pub(super) fn validate_named_struct_offsetof_calls(
         ExprKind::Literal(_)
         | ExprKind::Ident(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue
+        | ExprKind::Continue { .. }
         | ExprKind::Use { .. }
         | ExprKind::TypeLiteral(_) => {}
     }
@@ -873,7 +873,7 @@ pub(super) fn validate_mut_pointer_receiver_calls_expr(
         ExprKind::Literal(_)
         | ExprKind::Ident(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue
+        | ExprKind::Continue { .. }
         | ExprKind::Use { .. }
         | ExprKind::TypeLiteral(_) => {}
     }

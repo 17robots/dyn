@@ -119,6 +119,22 @@ fn parse_return_scalar_supports_nonstandard_int_widths() {
         }
         ScalarType::Float { .. } => panic!("expected integer scalar"),
     }
+
+    match parse_return_scalar(Some("i127")) {
+        ScalarType::Int { ty, signed } => {
+            assert_eq!(ty, I128);
+            assert!(signed);
+        }
+        ScalarType::Float { .. } => panic!("expected integer scalar"),
+    }
+
+    match parse_return_scalar(Some("u128")) {
+        ScalarType::Int { ty, signed } => {
+            assert_eq!(ty, I128);
+            assert!(!signed);
+        }
+        ScalarType::Float { .. } => panic!("expected integer scalar"),
+    }
 }
 
 #[test]

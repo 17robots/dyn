@@ -1,0 +1,40 @@
+module strconv
+
+fmt := use "std/fmt"
+
+rt_parse_i32 := extern fn(value: []u8, out_value_ptr: usize) u32 = "dynrt_strconv_parse_i32"
+rt_parse_u64 := extern fn(value: []u8, out_value_ptr: usize) u32 = "dynrt_strconv_parse_u64"
+rt_parse_bool := extern fn(value: []u8, out_value_ptr: usize) u32 = "dynrt_strconv_parse_bool"
+
+pub ParseError := enum {
+    Empty,
+    Invalid,
+    Overflow,
+}
+pub parse_i32 := (value: []u8) i32!ParseError {
+    out: i32 = 0
+    code := rt_parse_i32(value, $as(usize, &out))
+    if code == 1 return out
+    if code == 2 return .Empty
+    if code == 4 return .Overflow
+    return .Invalid
+}
+pub parse_u64 := (value: []u8) u64!ParseError {
+    out: u64 = 0
+    code := rt_parse_u64(value, $as(usize, &out))
+    if code == 1 return out
+    if code == 2 return .Empty
+    if code == 4 return .Overflow
+    return .Invalid
+}
+pub parse_bool := (value: []u8) u1!ParseError {
+    out: u32 = 0
+    code := rt_parse_bool(value, $as(usize, &out))
+    if code == 1 return out != 0
+    if code == 2 return .Empty
+    return .Invalid
+}
+pub format_i32 := (value: i32) []u8 => fmt.i32(value)
+pub format_u64 := (value: u64) []u8 => fmt.u64(value)
+pub format_usize := (value: usize) []u8 => fmt.usize(value)
+pub format_bool := (value: u1) []u8 => if value "true" else "false"

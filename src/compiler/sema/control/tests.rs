@@ -32,6 +32,40 @@ fn reports_break_continue_outside_loop() {
 }
 
 #[test]
+fn allows_labeled_continue_when_label_is_in_scope() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\na := blk: { continue :blk }\n",
+    )
+    .expect("file should be written");
+    let (_parsed, units) =
+        parse_project_with_module_units(&root).expect("project should parse and merge");
+    let diagnostics = control_check_modules(&units);
+    assert!(!diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == DiagnosticCode::E4007));
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}
+
+#[test]
+fn reports_unknown_labeled_continue() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\na := blk: { continue :other }\n",
+    )
+    .expect("file should be written");
+    let (_parsed, units) =
+        parse_project_with_module_units(&root).expect("project should parse and merge");
+    let diagnostics = control_check_modules(&units);
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == DiagnosticCode::E4007));
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}
+
+#[test]
 fn allows_break_value_inside_or_fallback_block() {
     let root = make_temp_dir();
     fs::write(

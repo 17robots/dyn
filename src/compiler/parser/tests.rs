@@ -52,7 +52,7 @@ fn parses_example_files_with_stable_top_level_segmentation() {
 
 #[test]
 fn keeps_top_level_binding_after_parenthesized_expr_in_struct_member_fn() {
-    let src = "module main\nVec := (T: comp type) type => struct { x: usize, f := (self: Vec(T), idx: usize) u32 => { src := (idx * 2)\ncopy := src\nreturn 1 }, }\nmain := () i32 { return 1 }\n";
+    let src = "module main\nVec := (T: comp type) type => struct { x: usize, f := (self: Vec(T), idx: usize) u32 { src := (idx * 2)\ncopy := src\nreturn 1 }, }\nmain := () i32 { return 1 }\n";
     let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
     let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
     assert!(parsed.diagnostics.is_empty());
@@ -123,6 +123,20 @@ fn parses_comp_prefixed_function_followed_by_arrow_body() {
 }
 
 #[test]
+fn reports_error_for_arrow_function_block_body() {
+    let src = "module main\nmain := () i32 => { return 1 }\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(parsed.ast.is_some(), "ast should still be produced");
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E3001
+            && diagnostic
+                .message
+                .contains("arrow function body must be a single expression")
+    }));
+}
+
+#[test]
 fn parses_if_with_spaced_enum_variant_then_branch() {
     let src = "module main\ndivide := (y: f32) f32!Err => if y == 0 .DivideByZero else y\n";
     let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
@@ -173,6 +187,33 @@ fn parses_if_capture_binding() {
     let capture = if_expr.capture.as_ref().expect("expected if capture");
     let binding = capture.binding.as_ref().expect("expected capture binding");
     assert_eq!(binding.text, "v");
+}
+
+#[test]
+fn reports_error_for_single_expression_if_branch_block() {
+    let src = "module main\nmain := () i32 => if true { 1 } else 0\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(parsed.ast.is_some(), "ast should still be produced");
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E3001
+            && diagnostic
+                .message
+                .contains("single-expression if branch must not use block braces")
+    }));
+}
+
+#[test]
+fn allows_if_branch_block_with_statements() {
+    let src = "module main\nmain := () i32 => if true { x := 1 x } else 0\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(!parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E3001
+            && diagnostic
+                .message
+                .contains("single-expression if branch must not use block braces")
+    }));
 }
 
 #[test]
@@ -318,6 +359,20 @@ fn recovers_missing_comma_between_call_arguments() {
             && diagnostic
                 .message
                 .contains("expected ',' between call arguments")
+    }));
+}
+
+#[test]
+fn recovers_missing_comma_between_function_parameters() {
+    let src = "module main\nmain := (a: i32 b: i32) i32 => a\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(parsed.ast.is_some(), "ast should still be produced");
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E3001
+            && diagnostic
+                .message
+                .contains("expected ',' between function parameters")
     }));
 }
 
@@ -735,7 +790,7 @@ fn parses_use_path_without_quotes() {
 #[test]
 fn parses_nested_parenthesized_arithmetic_expression() {
     let src =
-            "module main\nf := () i32 => { elem_size := 1 src := 2 + ((3 - 1) * elem_size) return src }\n";
+        "module main\nf := () i32 { elem_size := 1 src := 2 + ((3 - 1) * elem_size) return src }\n";
     let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
     let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
     assert!(
@@ -769,7 +824,7 @@ fn reports_missing_block_delimiter() {
 
 #[test]
 fn parses_semicolon_separated_block_statements() {
-    let src = "module main\nmain := () i32 => { s := $Self(); return if s == s 6 else 0 }\n";
+    let src = "module main\nmain := () i32 { s := $Self(); return if s == s 6 else 0 }\n";
     let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
     let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
     assert!(
@@ -777,4 +832,134 @@ fn parses_semicolon_separated_block_statements() {
         "diagnostics: {:#?}",
         parsed.diagnostics
     );
+}
+
+#[test]
+fn reports_error_for_legacy_extern_declaration_syntax() {
+    let src =
+        "module main\npub extern write: fn(fd: i32, ptr: *u8, len: usize) i32 = \"dynrt_fd_write\"\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E3001
+            && diagnostic
+                .message
+                .contains("extern declarations must use binding syntax")
+    }));
+}
+
+#[test]
+fn parses_extern_function_binding_with_link_name() {
+    let src =
+        "module main\nwrite := extern (fd: i32, ptr: *u8, len: usize) i32 = \"dynrt_fd_write\"\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "diagnostics: {:#?}",
+        parsed.diagnostics
+    );
+    let ast = parsed.ast.expect("ast should be present");
+    let Item::Extern(extern_decl) = &ast.items[0] else {
+        panic!("expected extern item")
+    };
+    assert_eq!(extern_decl.name.text, "write");
+    assert_eq!(extern_decl.link_name.as_deref(), Some("dynrt_fd_write"));
+    let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
+        panic!("expected function type")
+    };
+    assert_eq!(fn_ty.params.len(), 3);
+}
+
+#[test]
+fn parses_packed_struct_type_literal() {
+    let src = "module main\nThing := packed struct { value: u32 }\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "diagnostics: {:#?}",
+        parsed.diagnostics
+    );
+    let ast = parsed.ast.expect("ast should be present");
+    let Item::Binding(binding) = &ast.items[0] else {
+        panic!("expected binding item")
+    };
+    let ExprKind::TypeLiteral(ty) = &binding.value.kind else {
+        panic!("expected type literal")
+    };
+    let TypeExprKind::Struct(struct_ty) = &ty.kind else {
+        panic!("expected struct type")
+    };
+    assert!(struct_ty.packed);
+    assert_eq!(struct_ty.fields.len(), 1);
+}
+
+#[test]
+fn parses_enum_type_with_repr_width() {
+    let src = "module main\nState := enum(u8) { Ready, Busy }\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "diagnostics: {:#?}",
+        parsed.diagnostics
+    );
+    let ast = parsed.ast.expect("ast should be present");
+    let Item::Binding(binding) = &ast.items[0] else {
+        panic!("expected binding item")
+    };
+    let ExprKind::TypeLiteral(ty) = &binding.value.kind else {
+        panic!("expected type literal")
+    };
+    let TypeExprKind::Enum(enum_ty) = &ty.kind else {
+        panic!("expected enum type")
+    };
+    let repr = enum_ty.repr.as_ref().expect("expected enum repr");
+    let TypeExprKind::Named(name) = &repr.kind else {
+        panic!("expected named repr type")
+    };
+    assert_eq!(name.text, "u8");
+}
+
+#[test]
+fn reports_error_for_non_function_extern_binding() {
+    let src = "module main\nvalue := extern i32\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E3001
+            && diagnostic
+                .message
+                .contains("extern bindings must declare function signatures")
+    }));
+}
+
+#[test]
+fn reports_error_for_invalid_enum_repr_type() {
+    let src = "module main\nState := enum(i32) { Ready }\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E3001
+            && diagnostic
+                .message
+                .contains("enum representation type must be unsigned integer")
+    }));
+}
+
+#[test]
+fn parses_continue_with_label() {
+    let src = "module main\na := continue :outer\n";
+    let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
+    let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
+    let ast = parsed.ast.expect("ast should be present");
+    let Item::Binding(binding) = &ast.items[0] else {
+        panic!("expected binding item")
+    };
+    let ExprKind::Continue { label } = &binding.value.kind else {
+        panic!("expected continue expression")
+    };
+    let label = label.as_ref().expect("expected continue label");
+    assert_eq!(label.name.text, "outer");
 }

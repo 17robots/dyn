@@ -94,7 +94,7 @@ fn returns_diagnostics_for_mut_receiver_call_on_temporary() {
 }
 
 #[test]
-fn returns_diagnostics_for_unsupported_inline_expression_shape() {
+fn allows_general_inline_expression_shape() {
     let root = make_temp_dir();
     fs::write(
         root.join("a.dyn"),
@@ -103,16 +103,18 @@ fn returns_diagnostics_for_unsupported_inline_expression_shape() {
     .expect("file should be written");
 
     let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4012
-            && diagnostic.message.contains("unsupported inline expression")
-    }));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4012),
+        "diagnostics: {diagnostics:#?}"
+    );
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
 
 #[test]
-fn returns_diagnostics_when_forced_inline_call_cannot_be_lowered() {
+fn allows_forced_inline_call_with_non_inlineable_body() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
@@ -121,18 +123,18 @@ fn returns_diagnostics_when_forced_inline_call_cannot_be_lowered() {
         .expect("file should be written");
 
     let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4010
-            && diagnostic
-                .message
-                .contains("inline call could not be lowered")
-    }));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4010),
+        "diagnostics: {diagnostics:#?}"
+    );
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
 
 #[test]
-fn returns_diagnostics_when_implicit_inline_call_cannot_be_lowered() {
+fn allows_implicit_inline_call_when_inlining_falls_back_to_call() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
@@ -141,18 +143,18 @@ fn returns_diagnostics_when_implicit_inline_call_cannot_be_lowered() {
         .expect("file should be written");
 
     let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4010
-            && diagnostic
-                .message
-                .contains("inline call could not be lowered")
-    }));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4010),
+        "diagnostics: {diagnostics:#?}"
+    );
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
 
 #[test]
-fn returns_diagnostics_when_inline_for_bounds_cannot_be_evaluated() {
+fn allows_inline_for_with_runtime_evaluable_bounds() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
@@ -161,12 +163,12 @@ fn returns_diagnostics_when_inline_for_bounds_cannot_be_evaluated() {
         .expect("file should be written");
 
     let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4011
-            && diagnostic
-                .message
-                .contains("inline for requires compile-time range bounds")
-    }));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::E4011),
+        "diagnostics: {diagnostics:#?}"
+    );
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
@@ -229,6 +231,46 @@ fn returns_diagnostics_for_global_print_without_io_import() {
 }
 
 #[test]
+fn returns_diagnostics_for_removed_runtime_io_builtin_alias() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\nmain := () i32 {\n  _ok := $io_write(\"hello\", 1)\n  return 0\n}\n",
+    )
+    .expect("file should be written");
+
+    let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E4005
+            && diagnostic
+                .message
+                .contains("$io_write is no longer available as a runtime builtin")
+    }));
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}
+
+#[test]
+fn returns_diagnostics_for_removed_runtime_mem_builtin_alias() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("a.dyn"),
+        "module main\nmain := () i32 {\n  _ok := $mem_eq(0, 0, 0)\n  return 0\n}\n",
+    )
+    .expect("file should be written");
+
+    let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == DiagnosticCode::E4005
+            && diagnostic
+                .message
+                .contains("$mem_eq is no longer available as a runtime builtin")
+    }));
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}
+
+#[test]
 fn returns_diagnostics_for_backend_unsupported_float_width() {
     let root = make_temp_dir();
     fs::write(
@@ -254,7 +296,7 @@ fn returns_diagnostics_for_backend_unsupported_integer_width() {
     let root = make_temp_dir();
     fs::write(
         root.join("a.dyn"),
-        "module main\nmain := () i32 {\n  _v := $as(i96, 1)\n  return 0\n}\n",
+        "module main\nmain := () i32 {\n  _v := $as(i129, 1)\n  return 0\n}\n",
     )
     .expect("file should be written");
 

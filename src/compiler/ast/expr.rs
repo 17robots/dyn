@@ -44,7 +44,9 @@ pub enum ExprKind {
     Match(MatchExpr),
     For(ForExpr),
     Break(BreakExpr),
-    Continue,
+    Continue {
+        label: Option<Label>,
+    },
     Return {
         value: Option<Box<Expr>>,
     },

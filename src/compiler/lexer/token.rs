@@ -27,9 +27,11 @@ pub enum TokenKind {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Keyword {
     Module,
+    Extern,
     Pub,
     Mut,
     Use,
+    Packed,
     Struct,
     Enum,
     If,
@@ -48,9 +50,11 @@ pub enum Keyword {
 
 pub const KEYWORDS: &[(&str, Keyword)] = &[
     ("module", Keyword::Module),
+    ("extern", Keyword::Extern),
     ("pub", Keyword::Pub),
     ("mut", Keyword::Mut),
     ("use", Keyword::Use),
+    ("packed", Keyword::Packed),
     ("struct", Keyword::Struct),
     ("enum", Keyword::Enum),
     ("if", Keyword::If),

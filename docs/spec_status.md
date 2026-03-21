@@ -1,7 +1,7 @@
 # Dyn Spec Parity Audit
 
-Audit date: 2026-03-13
-Baseline validation: `cargo test` (388 tests passing)
+Audit date: 2026-03-19
+Baseline validation: `cargo test` (395 tests passing)
 
 This document tracks language-spec coverage at a high level so we can close gaps intentionally.
 
@@ -25,9 +25,13 @@ Legend:
 
 ## Known Gaps / Follow-ups
 
-- Backend float-width validation accepts types up to `f128` and rejects wider widths with explicit build diagnostics (`E5002`); `f128` lowering now routes through runtime-backed software quad-precision helpers (binary128 semantics on hosts with `libquadmath`), including explicit cleanup for conversion temporaries in arithmetic/compare lowering.
-- Backend integer-width validation accepts `iN`/`uN` widths in `1..=64` and rejects unsupported widths with explicit build diagnostics (`E5002`).
-- Native link/runtime pipeline is now multi-driver and configurable, but CI/runtime parity is still Linux-biased for full executable tests.
+- Address-taken aggregate mutation regressions are fixed in MIR lowering: address-taking no longer leaves stale aggregate-sequence constant folding active, and reads after pointer-based mutation now execute against runtime memory instead of stale folded values.
+- Extern symbol lookup now resolves module-local extern declarations before global unqualified extern names, preventing cross-module extern-name collisions (for example `rt_eq` in `std/bytes` vs `std/mem`).
+- MIR lowering now infers concrete result types for common bytes indexing/slicing expressions (`[]u8` index -> `u8` carrier, bytes slice -> `[]u8`) instead of defaulting these cases to `Unknown`.
+- Backend float-width validation accepts types up to `f128` and rejects wider widths with explicit build diagnostics (`E5002`); `f128` lowering now routes through runtime-backed software quad-precision helpers (binary128 semantics on hosts with `libquadmath`), including explicit cleanup for conversion temporaries in arithmetic/compare lowering and tracked-pointer guards to prevent invalid dereference/release crashes.
+- Backend integer-width validation accepts `iN`/`uN` widths in `1..=128` and rejects unsupported widths with explicit build diagnostics (`E5002`).
+- Inline call/for forms now compile without hard shape diagnostics: when a call/range cannot be lowered as a direct inline expansion, lowering falls back to regular call/loop semantics.
+- Native link/runtime pipeline is now multi-driver and configurable, but CI/runtime parity is still Linux-biased for full executable tests; non-Linux CI coverage now also includes resolver + MIR verifier + Cranelift backend unit tests to improve cross-platform regression detection.
 - Parser diagnostics now include additional recovery hints for missing separators in call, array, and tuple literals; continue expanding targeted recovery coverage.
 - Stdlib internals (especially fs/path/collections edge conditions) now include additional stress tests; continue expanding coverage for platform-specific edge behavior.
 

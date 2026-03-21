@@ -20,10 +20,10 @@ mod helpers;
 #[cfg(test)]
 use self::helpers::builtin_offsetof_value;
 use self::helpers::{
-    builtin_offsetof_for_type_name, comptime_truthy, eval_comptime_binary, eval_comptime_cast,
-    layout_for_builtin_type_name, literal_type, merge_types, parse_function_return_hint,
-    parse_i64_literal, parse_type_hint, self_type_literal_from_param_hint, substitute_type_locals,
-    type_literal_name_for_ident,
+    builtin_offsetof_for_type_name, comptime_truthy, enum_type_repr_bits, enum_type_variants,
+    eval_comptime_binary, eval_comptime_cast, layout_for_builtin_type_name, literal_type,
+    merge_types, parse_function_return_hint, parse_i64_literal, parse_type_hint,
+    self_type_literal_from_param_hint, substitute_type_locals, type_literal_name_for_ident,
 };
 
 pub fn lower_hir_to_mir(hir: &HirProgram) -> MirProgram {
@@ -49,16 +49,39 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
         .modules
         .iter()
         .map(|module| {
-            (
-                module.module_id,
+            let mut exports = module
+                .items
+                .iter()
+                .map(|item| item.name.clone())
+                .collect::<Vec<_>>();
+            exports.extend(
                 module
-                    .items
+                    .extern_functions
                     .iter()
-                    .map(|item| item.name.clone())
-                    .collect::<Vec<_>>(),
-            )
+                    .map(|extern_fn| extern_fn.name.clone()),
+            );
+            (module.module_id, exports)
         })
         .collect::<BTreeMap<_, _>>();
+
+    let global_enum_type_literals = hir
+        .modules
+        .iter()
+        .flat_map(|module| {
+            module.items.iter().filter_map(|item| {
+                if let HirExprKind::TypeLiteral(type_name) = &item.value.kind {
+                    Some((
+                        format!("#{}::{}", module.module_id.0, item.name),
+                        type_name.clone(),
+                    ))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let (global_enum_repr_bits_by_name, global_enum_variant_tags_by_name) =
+        collect_enum_type_metadata(&global_enum_type_literals);
 
     let mut qualified_function_return_types = BTreeMap::new();
     let mut qualified_function_return_hints = BTreeMap::new();
@@ -123,6 +146,24 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 _ => {}
             }
         }
+        for extern_fn in &module.extern_functions {
+            let qualified_name = qualified_function_name(module.module_id, &extern_fn.name);
+            let return_ty = extern_fn
+                .return_type
+                .as_deref()
+                .map(parse_type_hint)
+                .unwrap_or(MirValueType::Unknown);
+            qualified_function_return_types.insert(qualified_name.clone(), return_ty.clone());
+            qualified_function_return_types.insert(extern_fn.name.clone(), return_ty);
+            qualified_function_return_hints
+                .insert(qualified_name.clone(), extern_fn.return_type.clone());
+            qualified_function_return_hints
+                .insert(extern_fn.name.clone(), extern_fn.return_type.clone());
+            qualified_function_param_type_hints
+                .insert(qualified_name.clone(), extern_fn.param_type_hints.clone());
+            qualified_function_param_type_hints
+                .insert(extern_fn.name.clone(), extern_fn.param_type_hints.clone());
+        }
     }
 
     let mut diagnostics = Vec::new();
@@ -152,6 +193,20 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
+            let local_extern_return_types = module
+                .extern_functions
+                .iter()
+                .map(|extern_fn| {
+                    (
+                        extern_fn.name.clone(),
+                        extern_fn
+                            .return_type
+                            .as_deref()
+                            .map(parse_type_hint)
+                            .unwrap_or(MirValueType::Unknown),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
             let local_function_return_hints = module
                 .items
                 .iter()
@@ -164,6 +219,11 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                             .or_else(|| item.type_hint.as_ref().cloned()),
                     )
                 })
+                .collect::<BTreeMap<_, _>>();
+            let local_extern_return_hints = module
+                .extern_functions
+                .iter()
+                .map(|extern_fn| (extern_fn.name.clone(), extern_fn.return_type.clone()))
                 .collect::<BTreeMap<_, _>>();
             let local_function_param_names = module
                 .items
@@ -204,6 +264,11 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                     _ => None,
                 })
                 .collect::<BTreeMap<_, _>>();
+            let local_extern_param_type_hints = module
+                .extern_functions
+                .iter()
+                .map(|extern_fn| (extern_fn.name.clone(), extern_fn.param_type_hints.clone()))
+                .collect::<BTreeMap<_, _>>();
 
             let local_inline_function_names = module
                 .items
@@ -226,9 +291,11 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
 
             let mut function_return_types = qualified_function_return_types.clone();
             function_return_types.extend(local_function_return_types.clone());
+            function_return_types.extend(local_extern_return_types.clone());
 
             let mut function_return_hints = qualified_function_return_hints.clone();
             function_return_hints.extend(local_function_return_hints.clone());
+            function_return_hints.extend(local_extern_return_hints.clone());
 
             let mut function_param_names = qualified_function_param_names.clone();
             function_param_names.extend(local_function_param_names.clone());
@@ -238,6 +305,7 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
 
             let mut function_param_type_hints = qualified_function_param_type_hints.clone();
             function_param_type_hints.extend(local_function_param_type_hints.clone());
+            function_param_type_hints.extend(local_extern_param_type_hints.clone());
 
             let mut function_exprs = qualified_function_exprs.clone();
             function_exprs.extend(local_function_exprs.clone());
@@ -261,6 +329,8 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 function_return_types: function_return_types.clone(),
                 function_return_hints: function_return_hints.clone(),
                 named_type_literals: named_type_literals.clone(),
+                enum_repr_bits_by_name: global_enum_repr_bits_by_name.clone(),
+                enum_variant_tags_by_name: global_enum_variant_tags_by_name.clone(),
                 function_param_names: function_param_names.clone(),
                 function_param_defaults: function_param_defaults.clone(),
                 function_param_type_hints: function_param_type_hints.clone(),
@@ -420,12 +490,36 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 })
                 .collect::<Vec<_>>();
 
+            let extern_functions = module
+                .extern_functions
+                .iter()
+                .map(|extern_fn| crate::compiler::mir::MirExternFunction {
+                    name: extern_fn.name.clone(),
+                    symbol_name: extern_fn
+                        .link_name
+                        .clone()
+                        .unwrap_or_else(|| extern_fn.name.clone()),
+                    return_type: extern_fn.return_type.clone(),
+                    param_type_hints: extern_fn.param_type_hints.clone(),
+                    param_types: extern_fn
+                        .param_type_hints
+                        .iter()
+                        .map(|ty| {
+                            ty.as_deref()
+                                .map(parse_type_hint)
+                                .unwrap_or(MirValueType::Unknown)
+                        })
+                        .collect(),
+                })
+                .collect::<Vec<_>>();
+
             diagnostics.extend(module_diagnostics);
 
             MirModule {
                 module_id: module.module_id,
                 key: module.key.clone(),
                 functions,
+                extern_functions,
             }
         })
         .collect::<Vec<_>>();
@@ -445,37 +539,6 @@ fn module_key_source_path(key: &ModuleKey) -> std::path::PathBuf {
     };
     path.push(format!("{}.dyn", key.module_name));
     path
-}
-
-fn import_path_to_module_key(current: &ModuleKey, import_path: &str) -> ModuleKey {
-    let normalized = import_path.trim_matches('"');
-    let mut parts = normalized
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-
-    if parts.is_empty() {
-        return current.clone();
-    }
-
-    let module_name = parts.pop().unwrap_or_default().to_string();
-    let is_std_absolute = normalized.starts_with("std/");
-    let mut directory = if is_std_absolute || current.directory == std::path::Path::new(".") {
-        std::path::PathBuf::new()
-    } else {
-        current.directory.clone()
-    };
-    for segment in parts {
-        directory.push(segment);
-    }
-    if directory.as_os_str().is_empty() {
-        directory = std::path::PathBuf::from(".");
-    }
-
-    ModuleKey {
-        directory,
-        module_name,
-    }
 }
 
 fn has_or_return_tail(expr: &HirExpr) -> bool {
@@ -536,6 +599,37 @@ fn allows_non_i32_main_implicit_success(
     }
 }
 
+fn collect_enum_type_metadata(
+    named_type_literals: &BTreeMap<String, String>,
+) -> (
+    BTreeMap<String, u16>,
+    BTreeMap<String, BTreeMap<String, i64>>,
+) {
+    let mut enum_repr_bits_by_name = BTreeMap::new();
+    let mut enum_variant_tags_by_name = BTreeMap::new();
+
+    for (type_name, literal) in named_type_literals {
+        let Some(repr_bits) = enum_type_repr_bits(literal) else {
+            continue;
+        };
+        let Some(variants) = enum_type_variants(literal) else {
+            continue;
+        };
+
+        enum_repr_bits_by_name.insert(type_name.clone(), repr_bits);
+
+        let mut tags = BTreeMap::new();
+        for (idx, variant) in variants.iter().enumerate() {
+            let tag = idx as i64 + 1;
+            tags.insert(variant.clone(), tag);
+        }
+
+        enum_variant_tags_by_name.insert(type_name.clone(), tags);
+    }
+
+    (enum_repr_bits_by_name, enum_variant_tags_by_name)
+}
+
 struct FunctionLowerer {
     module_key: ModuleKey,
     source_file_path: std::path::PathBuf,
@@ -552,7 +646,10 @@ struct FunctionLowerer {
     function_return_types: BTreeMap<String, MirValueType>,
     function_return_hints: BTreeMap<String, Option<String>>,
     errorable_aggregate_values: BTreeSet<MirValueId>,
+    errorable_scalar_values: BTreeSet<MirValueId>,
     named_type_literals: BTreeMap<String, String>,
+    enum_repr_bits_by_name: BTreeMap<String, u16>,
+    enum_variant_tags_by_name: BTreeMap<String, BTreeMap<String, i64>>,
     function_param_names: BTreeMap<String, Vec<String>>,
     function_param_defaults: BTreeMap<String, Vec<Option<HirExpr>>>,
     function_param_type_hints: BTreeMap<String, Vec<Option<String>>>,
@@ -566,8 +663,6 @@ struct FunctionLowerer {
     loop_stack: Vec<LoopContext>,
     or_break_stack: Vec<OrBreakContext>,
     deferred: Vec<DeferredExpr>,
-    variant_tag_ids: BTreeMap<String, i64>,
-    next_variant_tag: i64,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -602,6 +697,8 @@ struct FunctionLowererShared {
     function_return_types: BTreeMap<String, MirValueType>,
     function_return_hints: BTreeMap<String, Option<String>>,
     named_type_literals: BTreeMap<String, String>,
+    enum_repr_bits_by_name: BTreeMap<String, u16>,
+    enum_variant_tags_by_name: BTreeMap<String, BTreeMap<String, i64>>,
     function_param_names: BTreeMap<String, Vec<String>>,
     function_param_defaults: BTreeMap<String, Vec<Option<HirExpr>>>,
     function_param_type_hints: BTreeMap<String, Vec<Option<String>>>,
@@ -617,6 +714,18 @@ fn extract_inline_function_body(expr: &HirExpr) -> Option<(&Vec<String>, &HirExp
         HirExprKind::Inline { expr } => extract_inline_function_body(expr),
         _ => None,
     }
+}
+
+fn normalize_inline_hir_body(expr: &HirExpr) -> HirExpr {
+    let mut normalized = expr.clone();
+    if let HirExprKind::Block { body } = &mut normalized.kind {
+        if let Some(last) = body.last_mut() {
+            if let HirExprKind::Return { value: Some(value) } = &last.kind {
+                *last = (**value).clone();
+            }
+        }
+    }
+    normalized
 }
 
 fn inline_hir_body_supported(expr: &HirExpr) -> bool {

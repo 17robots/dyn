@@ -68,6 +68,37 @@ Run HIR->MIR lowering pipeline:
 cargo run -- mir <start_directory>
 ```
 
+Initialize a Dyn project scaffold:
+
+```bash
+# current directory
+cargo run -- init
+# specific directory (created if missing)
+cargo run -- init my_project
+# overwrite existing main.dyn
+cargo run -- init --force
+```
+
+Create a new project directory and scaffold:
+
+```bash
+# create ./my_project and main.dyn
+cargo run -- new my_project
+# force overwrite if it already exists
+cargo run -- new my_project --force
+```
+
+Format `.dyn` files (line endings + trailing newline normalization):
+
+```bash
+# format in current directory
+cargo run -- fmt
+# format under specific directory
+cargo run -- fmt my_project
+# check-only mode for CI
+cargo run -- fmt --check
+```
+
 Build native executable (Go-style default output under `.dyn_build/`):
 
 ```bash
@@ -93,6 +124,18 @@ Build with optimization level selection:
 ```bash
 cargo run -- build <start_directory> -O2
 # or: cargo run -- build <start_directory> --opt-level 2
+# size-focused variants:
+cargo run -- build <start_directory> -Os
+cargo run -- build <start_directory> -Oz
+```
+
+Odin-style optimization flags (no config file required):
+
+```bash
+cargo run -- build <start_directory> -o:none
+cargo run -- build <start_directory> -o:speed
+cargo run -- build <start_directory> -o:size
+cargo run -- build <start_directory> -o:aggressive
 ```
 
 Measure source LOC (counts `src/**/*.rs` + `std/**/*.dyn`, excludes build/scratch dirs):
@@ -128,10 +171,10 @@ Stdlib import resolution:
 - `use "std/..."` works without copying `std/` into each project.
 - The compiler first checks `<project>/std/...`, then falls back to its bundled `std/` directory.
 - Set `DYN_STD_PATH=/absolute/path/to/std` to override the fallback stdlib location.
-- Low-level runtime builtins are exposed to Dyn code as `$...` identifiers (for example `$path_normalize`, `$bytes_len`, `$io_write`).
-- `std/os` is the platform layer; it currently routes through `std/os/posix` (implemented via `std/os/linux`).
+- `$...` is reserved for language/compiler builtins (for example `$as`, `$sizeof`, `$typeof`); runtime services should go through `std/*` modules (`std/heap`, `std/bytes`, `std/mem`, `std/path`, `std/fs`, `std/env`, `std/io`, etc.).
+- `std/os` is the platform layer; it routes through `use "std/os/platform"`, and the resolver maps that alias to a target module (`std/os/linux` by default, `std/os/windows` when `DYN_TARGET_OS=windows`).
 - `std/io` supports string-first ergonomics, e.g. `io.println("Hello world\n") or return 1`.
-- Additional bundled modules now include `std/os`, `std/os/posix`, `std/os/linux`, `std/bytes`, `std/str`, `std/fmt`, `std/env`, `std/fs`, `std/path`, `std/collections`, and `std/diag`.
+- Additional bundled modules now include `std/os`, `std/os/runtime`, `std/os/posix`, `std/os/linux`, `std/bytes`, `std/str`, `std/fmt`, `std/env`, `std/fs`, `std/path`, `std/collections`, and `std/diag`.
 
 Resolver behavior right now:
 - Recursively scans `.dyn` files

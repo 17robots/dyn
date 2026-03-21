@@ -14,7 +14,8 @@ impl FunctionLowerer {
         import_path: &str,
         field: &str,
     ) -> Option<String> {
-        let target_key = import_path_to_module_key(&self.module_key, import_path);
+        let target_key =
+            crate::compiler::module_resolver::module_key_for_import(&self.module_key, import_path);
         let target_module_id = self.module_ids_by_key.get(&target_key).copied()?;
         let exports = self.module_exports_by_id.get(&target_module_id)?;
         if exports.iter().any(|name| name == field) {

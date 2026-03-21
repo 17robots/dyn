@@ -7,7 +7,7 @@ use crate::compiler::ast::{
 };
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase, SourceSpan};
 use crate::compiler::intrinsics::runtime_symbol_for_builtin;
-use crate::compiler::sema::comptime::{is_compile_time_expr, is_type_designator_expr};
+use crate::compiler::sema::comptime::is_type_designator_expr;
 use crate::compiler::sema::module_unit::{DeclKind, DeclStub, ModuleUnit};
 
 mod helpers;
@@ -126,6 +126,78 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
         let struct_field_nominals = collect_struct_field_nominal_types(unit);
         let named_struct_fields = collect_named_struct_fields(unit);
         let enum_variants = collect_enum_variants(unit);
+
+        for extern_decl in &unit.extern_declarations {
+            let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        format!(
+                            "extern declaration '{}' must use a function type",
+                            extern_decl.name
+                        ),
+                    )
+                    .with_primary_file_label(
+                        extern_decl.file_path.clone(),
+                        Some(extern_decl.span),
+                        "use `fn(...) ...` for extern declarations",
+                    ),
+                );
+                continue;
+            };
+
+            for param in &fn_ty.params {
+                validate_any_usage(
+                    &param.ty,
+                    AnyUsageContext::FunctionParam,
+                    &mut diagnostics,
+                    &extern_decl.file_path,
+                );
+            }
+            validate_any_usage(
+                &fn_ty.return_type,
+                AnyUsageContext::Other,
+                &mut diagnostics,
+                &extern_decl.file_path,
+            );
+
+            let param_types = fn_ty
+                .params
+                .iter()
+                .map(|param| resolve_type_expr(&param.ty, &mut types).unwrap_or(unknown))
+                .collect::<Vec<_>>();
+            let param_names = fn_ty
+                .params
+                .iter()
+                .map(|param| param.name.as_ref().map(|ident| ident.text.clone()))
+                .collect::<Vec<_>>();
+            let return_type = resolve_type_expr(&fn_ty.return_type, &mut types).unwrap_or(unknown);
+
+            signatures.insert(
+                extern_decl.name.clone(),
+                FnSignature {
+                    params: param_names
+                        .iter()
+                        .cloned()
+                        .map(|name| FnParamSpec {
+                            name,
+                            has_default: false,
+                        })
+                        .collect(),
+                    return_type,
+                },
+            );
+            env.insert(
+                extern_decl.name.clone(),
+                types.intern(Type::Function {
+                    param_types,
+                    param_names,
+                    has_defaults: vec![false; fn_ty.params.len()],
+                    return_type,
+                }),
+            );
+        }
 
         for decl in &unit.declarations {
             if decl.kind != DeclKind::Binding {
@@ -409,6 +481,48 @@ pub fn infer_binding_type_strings(
         let mut mutability = BTreeMap::<String, bool>::new();
         let mut signatures = BTreeMap::<String, FnSignature>::new();
         insert_builtin_signatures(&mut signatures, &mut types);
+
+        for extern_decl in &unit.extern_declarations {
+            let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
+                continue;
+            };
+
+            let param_types = fn_ty
+                .params
+                .iter()
+                .map(|param| resolve_type_expr(&param.ty, &mut types).unwrap_or(unknown))
+                .collect::<Vec<_>>();
+            let param_names = fn_ty
+                .params
+                .iter()
+                .map(|param| param.name.as_ref().map(|ident| ident.text.clone()))
+                .collect::<Vec<_>>();
+            let return_type = resolve_type_expr(&fn_ty.return_type, &mut types).unwrap_or(unknown);
+
+            signatures.insert(
+                extern_decl.name.clone(),
+                FnSignature {
+                    params: param_names
+                        .iter()
+                        .cloned()
+                        .map(|name| FnParamSpec {
+                            name,
+                            has_default: false,
+                        })
+                        .collect(),
+                    return_type,
+                },
+            );
+            env.insert(
+                extern_decl.name.clone(),
+                types.intern(Type::Function {
+                    param_types,
+                    param_names,
+                    has_defaults: vec![false; fn_ty.params.len()],
+                    return_type,
+                }),
+            );
+        }
 
         for decl in &unit.declarations {
             if decl.kind != DeclKind::Binding {

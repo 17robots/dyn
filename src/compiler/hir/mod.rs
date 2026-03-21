@@ -17,6 +17,15 @@ pub struct HirModule {
     pub module_id: ModuleId,
     pub key: ModuleKey,
     pub items: Vec<HirItem>,
+    pub extern_functions: Vec<HirExternFunction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirExternFunction {
+    pub name: String,
+    pub link_name: Option<String>,
+    pub return_type: Option<String>,
+    pub param_type_hints: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +101,7 @@ pub enum HirExprKind {
         fields: Vec<(String, HirExpr)>,
     },
     EnumVariant {
+        root: Option<String>,
         variant: String,
         payload: Vec<HirExpr>,
     },

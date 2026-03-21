@@ -22,6 +22,12 @@ struct MethodIndex {
     struct_field_names: BTreeMap<String, BTreeSet<String>>,
 }
 
+#[derive(Default)]
+struct EnumRootIndex {
+    by_name: BTreeMap<String, String>,
+    by_variant: BTreeMap<String, String>,
+}
+
 #[derive(Copy, Clone)]
 enum ReceiverStyle {
     Value,
@@ -71,6 +77,7 @@ pub fn lower_module_units_with_metadata(
         .iter()
         .map(|unit| {
             let method_index = build_method_index(unit, &units_by_key);
+            let enum_root_index = build_enum_root_index(unit, &units_by_key);
             let mut items = unit
                 .declarations
                 .iter()
@@ -83,19 +90,43 @@ pub fn lower_module_units_with_metadata(
                     inferred_type: inferred_types
                         .get(&(unit.module_id, decl.name.clone()))
                         .cloned(),
-                    value: rewrite_method_calls(lower_expr(&decl.value), &method_index),
+                    value: rewrite_method_calls(
+                        lower_expr(&decl.value, &enum_root_index),
+                        &method_index,
+                    ),
                     span: decl.span,
                 })
                 .collect::<Vec<_>>();
 
+            let extern_functions = unit
+                .extern_declarations
+                .iter()
+                .filter_map(|extern_decl| {
+                    let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
+                        return None;
+                    };
+                    Some(crate::compiler::hir::HirExternFunction {
+                        name: extern_decl.name.clone(),
+                        link_name: extern_decl.link_name.clone(),
+                        return_type: Some(type_expr_to_string(&fn_ty.return_type)),
+                        param_type_hints: fn_ty
+                            .params
+                            .iter()
+                            .map(|param| Some(type_expr_to_string(&param.ty)))
+                            .collect(),
+                    })
+                })
+                .collect::<Vec<_>>();
+
             for decl in &unit.declarations {
-                append_member_function_items(&mut items, decl, &method_index);
+                append_member_function_items(&mut items, decl, &method_index, &enum_root_index);
             }
 
             HirModule {
                 module_id: unit.module_id,
                 key: unit.key.clone(),
                 items,
+                extern_functions,
             }
         })
         .collect::<Vec<_>>();
@@ -115,7 +146,8 @@ fn build_method_index(
     for import in &unit.imports {
         let alias_name = import.alias.clone().unwrap_or_else(|| "_".to_string());
         index.import_aliases.insert(alias_name);
-        let target_key = import_path_to_module_key(&unit.key, &import.path);
+        let target_key =
+            crate::compiler::module_resolver::module_key_for_import(&unit.key, &import.path);
         if seen_keys.insert(target_key.clone()) {
             module_keys.push(target_key);
         }
@@ -142,6 +174,100 @@ fn build_method_index(
     }
 
     index
+}
+
+fn build_enum_root_index(
+    unit: &ModuleUnit,
+    units_by_key: &BTreeMap<ModuleKey, &ModuleUnit>,
+) -> EnumRootIndex {
+    let mut index = EnumRootIndex::default();
+
+    for decl in &unit.declarations {
+        let Some(enum_ty) = decl_enum_type(decl) else {
+            continue;
+        };
+        let qualified = qualified_enum_root_name(unit.module_id.0, &decl.name);
+        index.by_name.insert(decl.name.clone(), qualified.clone());
+        for variant in &enum_ty.variants {
+            index
+                .by_variant
+                .insert(variant.name.text.clone(), qualified.clone());
+        }
+    }
+
+    let mut module_keys = Vec::new();
+    let mut seen_keys = BTreeSet::new();
+    seen_keys.insert(unit.key.clone());
+
+    for import in &unit.imports {
+        let target_key =
+            crate::compiler::module_resolver::module_key_for_import(&unit.key, &import.path);
+        if seen_keys.insert(target_key.clone()) {
+            module_keys.push(target_key);
+        }
+    }
+
+    let mut conflicting_names = BTreeSet::new();
+    let mut conflicting_variants = BTreeSet::new();
+    let mut import_names = BTreeMap::new();
+    let mut import_variants = BTreeMap::new();
+    for key in module_keys {
+        let Some(target_unit) = units_by_key.get(&key).copied() else {
+            continue;
+        };
+        for decl in &target_unit.declarations {
+            let Some(enum_ty) = decl_enum_type(decl) else {
+                continue;
+            };
+            let qualified = qualified_enum_root_name(target_unit.module_id.0, &decl.name);
+            insert_unique_root_mapping(
+                &mut import_names,
+                &mut conflicting_names,
+                decl.name.clone(),
+                qualified.clone(),
+            );
+            for variant in &enum_ty.variants {
+                insert_unique_root_mapping(
+                    &mut import_variants,
+                    &mut conflicting_variants,
+                    variant.name.text.clone(),
+                    qualified.clone(),
+                );
+            }
+        }
+    }
+
+    for (name, root) in import_names {
+        index.by_name.entry(name).or_insert(root);
+    }
+    for (variant, root) in import_variants {
+        index.by_variant.entry(variant).or_insert(root);
+    }
+
+    index
+}
+
+fn insert_unique_root_mapping(
+    map: &mut BTreeMap<String, String>,
+    conflicts: &mut BTreeSet<String>,
+    key: String,
+    value: String,
+) {
+    if conflicts.contains(&key) {
+        return;
+    }
+    if let Some(existing) = map.get(&key) {
+        if existing != &value {
+            map.remove(&key);
+            conflicts.insert(key);
+        }
+    } else {
+        map.insert(key, value);
+    }
+}
+
+fn qualified_enum_root_name(module_id: usize, enum_name: &str) -> String {
+    format!("#{module_id}::{enum_name}")
 }
 
 fn index_struct_decl_methods(
@@ -264,37 +390,6 @@ fn type_expr_nominal_name(ty: &crate::compiler::ast::TypeExpr) -> Option<String>
     }
 }
 
-fn import_path_to_module_key(current: &ModuleKey, import_path: &str) -> ModuleKey {
-    let normalized = import_path.trim_matches('"');
-    let mut parts = normalized
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-
-    if parts.is_empty() {
-        return current.clone();
-    }
-
-    let module_name = parts.pop().unwrap_or_default().to_string();
-    let is_std_absolute = normalized.starts_with("std/");
-    let mut directory = if is_std_absolute || current.directory == std::path::Path::new(".") {
-        std::path::PathBuf::new()
-    } else {
-        current.directory.clone()
-    };
-    for segment in parts {
-        directory.push(segment);
-    }
-    if directory.as_os_str().is_empty() {
-        directory = std::path::PathBuf::from(".");
-    }
-
-    ModuleKey {
-        directory,
-        module_name,
-    }
-}
-
 fn instance_receiver_style(
     fn_expr: &crate::compiler::ast::FnExpr,
     type_name: &str,
@@ -326,6 +421,7 @@ fn append_member_function_items(
     items: &mut Vec<HirItem>,
     decl: &crate::compiler::sema::module_unit::DeclStub,
     method_index: &MethodIndex,
+    enum_root_index: &EnumRootIndex,
 ) {
     let Some(struct_ty) = decl_struct_type(decl) else {
         return;
@@ -342,7 +438,7 @@ fn append_member_function_items(
             continue;
         };
         let is_instance = instance_receiver_style(fn_expr, &decl.name).is_some();
-        let mut lowered_member = lower_expr(&member.value);
+        let mut lowered_member = lower_expr(&member.value, enum_root_index);
         if !is_instance && !outer_type_params.is_empty() {
             lowered_member =
                 prepend_outer_type_params_to_member_fn(lowered_member, &outer_type_params);
@@ -461,6 +557,18 @@ fn decl_struct_type(
         },
         _ => None,
     }
+}
+
+fn decl_enum_type(
+    decl: &crate::compiler::sema::module_unit::DeclStub,
+) -> Option<&crate::compiler::ast::EnumType> {
+    let ExprKind::TypeLiteral(type_lit) = &decl.value.kind else {
+        return None;
+    };
+    let TypeExprKind::Enum(enum_ty) = &type_lit.kind else {
+        return None;
+    };
+    Some(enum_ty)
 }
 
 fn expr_type_literal_struct(expr: &Expr) -> Option<&crate::compiler::ast::StructType> {
@@ -743,7 +851,12 @@ fn rewrite_method_calls_with_scopes(
                 })
                 .collect(),
         },
-        HirExprKind::EnumVariant { variant, payload } => HirExprKind::EnumVariant {
+        HirExprKind::EnumVariant {
+            root,
+            variant,
+            payload,
+        } => HirExprKind::EnumVariant {
+            root,
             variant,
             payload: payload
                 .into_iter()
@@ -1152,7 +1265,7 @@ fn can_take_mut_ref(expr: &HirExpr, scopes: &[BTreeMap<String, BindingInfo>]) ->
     }
 }
 
-fn lower_expr(expr: &Expr) -> HirExpr {
+fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
     let kind = match &expr.kind {
         ExprKind::Literal(literal) => HirExprKind::Literal(match literal {
             Literal::Integer(value) => HirLiteral::Integer(value.clone()),
@@ -1167,44 +1280,50 @@ fn lower_expr(expr: &Expr) -> HirExpr {
         }
         ExprKind::Unary { expr, op } => HirExprKind::Unary {
             op: *op,
-            expr: Box::new(lower_expr(expr)),
+            expr: Box::new(lower_expr(expr, enum_root_index)),
         },
         ExprKind::Binary { left, right, op } => HirExprKind::Binary {
             op: *op,
-            left: Box::new(lower_expr(left)),
-            right: Box::new(lower_expr(right)),
+            left: Box::new(lower_expr(left, enum_root_index)),
+            right: Box::new(lower_expr(right, enum_root_index)),
         },
         ExprKind::Assign { target, value, op } => HirExprKind::Assign {
             op: *op,
-            target: Box::new(lower_expr(target)),
-            value: Box::new(lower_expr(value)),
+            target: Box::new(lower_expr(target, enum_root_index)),
+            value: Box::new(lower_expr(value, enum_root_index)),
         },
         ExprKind::Call(call) => HirExprKind::Call {
-            callee: Box::new(lower_expr(&call.callee)),
+            callee: Box::new(lower_expr(&call.callee, enum_root_index)),
             args: call
                 .args
                 .iter()
                 .map(|arg| HirCallArg {
                     name: arg.name.as_ref().map(|ident| ident.text.clone()),
-                    value: lower_expr(&arg.value),
+                    value: lower_expr(&arg.value, enum_root_index),
                 })
                 .collect(),
         },
         ExprKind::FieldAccess { base, field } => HirExprKind::FieldAccess {
-            base: Box::new(lower_expr(base)),
+            base: Box::new(lower_expr(base, enum_root_index)),
             field: field.text.clone(),
         },
         ExprKind::DerefAccess { base } => HirExprKind::DerefAccess {
-            base: Box::new(lower_expr(base)),
+            base: Box::new(lower_expr(base, enum_root_index)),
         },
         ExprKind::Index { base, index } => HirExprKind::Index {
-            base: Box::new(lower_expr(base)),
-            index: Box::new(lower_expr(index)),
+            base: Box::new(lower_expr(base, enum_root_index)),
+            index: Box::new(lower_expr(index, enum_root_index)),
         },
         ExprKind::Slice(slice) => HirExprKind::Slice {
-            base: Box::new(lower_expr(&slice.base)),
-            start: slice.start.as_ref().map(|expr| Box::new(lower_expr(expr))),
-            end: slice.end.as_ref().map(|expr| Box::new(lower_expr(expr))),
+            base: Box::new(lower_expr(&slice.base, enum_root_index)),
+            start: slice
+                .start
+                .as_ref()
+                .map(|expr| Box::new(lower_expr(expr, enum_root_index))),
+            end: slice
+                .end
+                .as_ref()
+                .map(|expr| Box::new(lower_expr(expr, enum_root_index))),
             inclusive: slice.inclusive,
         },
         ExprKind::StructLiteral(lit) => HirExprKind::StructLiteral {
@@ -1212,7 +1331,12 @@ fn lower_expr(expr: &Expr) -> HirExpr {
             fields: lit
                 .fields
                 .iter()
-                .map(|field| (field.name.text.clone(), lower_expr(&field.value)))
+                .map(|field| {
+                    (
+                        field.name.text.clone(),
+                        lower_expr(&field.value, enum_root_index),
+                    )
+                })
                 .collect(),
         },
         ExprKind::ArrayLiteral(elements) => HirExprKind::StructLiteral {
@@ -1220,7 +1344,7 @@ fn lower_expr(expr: &Expr) -> HirExpr {
             fields: elements
                 .iter()
                 .enumerate()
-                .map(|(idx, element)| (format!("__{idx}"), lower_expr(element)))
+                .map(|(idx, element)| (format!("__{idx}"), lower_expr(element, enum_root_index)))
                 .collect(),
         },
         ExprKind::TupleLiteral(elements) => HirExprKind::StructLiteral {
@@ -1228,12 +1352,27 @@ fn lower_expr(expr: &Expr) -> HirExpr {
             fields: elements
                 .iter()
                 .enumerate()
-                .map(|(idx, element)| (format!("__{idx}"), lower_expr(element)))
+                .map(|(idx, element)| (format!("__{idx}"), lower_expr(element, enum_root_index)))
                 .collect(),
         },
         ExprKind::EnumVariantConstruct(variant) => HirExprKind::EnumVariant {
+            root: variant
+                .root
+                .as_ref()
+                .map(|ident| ident.text.clone())
+                .and_then(|root| enum_root_index.by_name.get(&root).cloned().or(Some(root)))
+                .or_else(|| {
+                    enum_root_index
+                        .by_variant
+                        .get(&variant.variant.text)
+                        .cloned()
+                }),
             variant: variant.variant.text.clone(),
-            payload: variant.payload.iter().map(lower_expr).collect(),
+            payload: variant
+                .payload
+                .iter()
+                .map(|payload| lower_expr(payload, enum_root_index))
+                .collect(),
         },
         ExprKind::Block(block) => HirExprKind::Block {
             body: {
@@ -1246,52 +1385,55 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                                 name: binding.name.text.clone(),
                                 mutable: binding.mutable,
                                 type_hint: binding.annotation.as_ref().map(type_expr_to_string),
-                                value: Box::new(lower_expr(&binding.value)),
+                                value: Box::new(lower_expr(&binding.value, enum_root_index)),
                             },
                             span: binding.span,
                         },
-                        crate::compiler::ast::Stmt::Expr(expr) => lower_expr(expr),
+                        crate::compiler::ast::Stmt::Expr(expr) => lower_expr(expr, enum_root_index),
                     })
                     .collect::<Vec<_>>();
                 if let Some(tail) = &block.tail_expr {
-                    body.push(lower_expr(tail));
+                    body.push(lower_expr(tail, enum_root_index));
                 }
                 body
             },
         },
         ExprKind::If(if_expr) => HirExprKind::If {
-            condition: Box::new(lower_expr(&if_expr.condition)),
+            condition: Box::new(lower_expr(&if_expr.condition, enum_root_index)),
             capture: if_expr.capture.as_ref().map(|capture| HirIfCapture {
                 binding: capture.binding.as_ref().map(|ident| ident.text.clone()),
             }),
-            then_branch: Box::new(lower_expr(&if_expr.then_branch)),
+            then_branch: Box::new(lower_expr(&if_expr.then_branch, enum_root_index)),
             else_branch: if_expr
                 .else_branch
                 .as_ref()
-                .map(|expr| Box::new(lower_expr(expr))),
+                .map(|expr| Box::new(lower_expr(expr, enum_root_index))),
         },
         ExprKind::Match(match_expr) => HirExprKind::Match {
-            value: Box::new(lower_expr(&match_expr.scrutinee)),
+            value: Box::new(lower_expr(&match_expr.scrutinee, enum_root_index)),
             arms: match_expr
                 .arms
                 .iter()
                 .map(|arm| HirMatchArm {
-                    pattern: lower_pattern(&arm.pattern.kind),
-                    guard: arm.guard.as_ref().map(lower_expr),
-                    value: lower_expr(&arm.value),
+                    pattern: lower_pattern(&arm.pattern.kind, enum_root_index),
+                    guard: arm
+                        .guard
+                        .as_ref()
+                        .map(|guard| lower_expr(guard, enum_root_index)),
+                    value: lower_expr(&arm.value, enum_root_index),
                 })
                 .collect(),
         },
         ExprKind::For(for_expr) => HirExprKind::For(match for_expr {
             crate::compiler::ast::ForExpr::Infinite { body } => {
                 crate::compiler::hir::HirForExpr::Infinite {
-                    body: Box::new(lower_expr(body)),
+                    body: Box::new(lower_expr(body, enum_root_index)),
                 }
             }
             crate::compiler::ast::ForExpr::WhileLike { condition, body } => {
                 crate::compiler::hir::HirForExpr::WhileLike {
-                    condition: Box::new(lower_expr(condition)),
-                    body: Box::new(lower_expr(body)),
+                    condition: Box::new(lower_expr(condition, enum_root_index)),
+                    body: Box::new(lower_expr(body, enum_root_index)),
                 }
             }
             crate::compiler::ast::ForExpr::Range {
@@ -1301,57 +1443,62 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                 binding,
                 body,
             } => crate::compiler::hir::HirForExpr::Range {
-                start: Box::new(lower_expr(start)),
-                end: Box::new(lower_expr(end)),
+                start: Box::new(lower_expr(start, enum_root_index)),
+                end: Box::new(lower_expr(end, enum_root_index)),
                 inclusive: *inclusive,
                 binding: binding.as_ref().map(|ident| ident.text.clone()),
-                body: Box::new(lower_expr(body)),
+                body: Box::new(lower_expr(body, enum_root_index)),
             },
             crate::compiler::ast::ForExpr::Iterate {
                 iterable,
                 binding,
                 body,
             } => crate::compiler::hir::HirForExpr::Iterate {
-                iterable: Box::new(lower_expr(iterable)),
+                iterable: Box::new(lower_expr(iterable, enum_root_index)),
                 binding: binding.as_ref().map(|ident| ident.text.clone()),
-                body: Box::new(lower_expr(body)),
+                body: Box::new(lower_expr(body, enum_root_index)),
             },
         }),
         ExprKind::Break(brk) => HirExprKind::Break {
-            value: brk.value.as_ref().map(|value| Box::new(lower_expr(value))),
+            value: brk
+                .value
+                .as_ref()
+                .map(|value| Box::new(lower_expr(value, enum_root_index))),
         },
-        ExprKind::Continue => HirExprKind::Continue,
+        ExprKind::Continue { .. } => HirExprKind::Continue,
         ExprKind::Return { value } => HirExprKind::Return {
-            value: value.as_ref().map(|expr| Box::new(lower_expr(expr))),
+            value: value
+                .as_ref()
+                .map(|expr| Box::new(lower_expr(expr, enum_root_index))),
         },
         ExprKind::Defer(defer_expr) => HirExprKind::Defer {
             error_binding: defer_expr
                 .error_binding
                 .as_ref()
                 .map(|ident| ident.text.clone()),
-            body: Box::new(lower_expr(&defer_expr.body)),
+            body: Box::new(lower_expr(&defer_expr.body, enum_root_index)),
         },
         ExprKind::OptionalUnwrap { expr } => HirExprKind::OptionalUnwrap {
-            value: Box::new(lower_expr(expr)),
+            value: Box::new(lower_expr(expr, enum_root_index)),
         },
         ExprKind::ErrorUnwrap { expr } => HirExprKind::ErrorUnwrap {
-            value: Box::new(lower_expr(expr)),
+            value: Box::new(lower_expr(expr, enum_root_index)),
         },
         ExprKind::OrElse(or_else) => HirExprKind::OrElse {
-            value: Box::new(lower_expr(&or_else.value)),
+            value: Box::new(lower_expr(&or_else.value, enum_root_index)),
             error_binding: or_else
                 .error_binding
                 .as_ref()
                 .map(|ident| ident.text.clone()),
-            fallback: Box::new(lower_expr(&or_else.fallback)),
+            fallback: Box::new(lower_expr(&or_else.fallback, enum_root_index)),
         },
         ExprKind::Use { path } => HirExprKind::Use { path: path.clone() },
         ExprKind::TypeLiteral(ty) => HirExprKind::TypeLiteral(type_expr_to_string(ty)),
         ExprKind::Comptime { expr } => HirExprKind::Comptime {
-            expr: Box::new(lower_expr(expr)),
+            expr: Box::new(lower_expr(expr, enum_root_index)),
         },
         ExprKind::Inline { expr } => HirExprKind::Inline {
-            expr: Box::new(lower_expr(expr)),
+            expr: Box::new(lower_expr(expr, enum_root_index)),
         },
         ExprKind::Fn(fn_expr) => {
             let body = match &fn_expr.body {
@@ -1370,22 +1517,29 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                                                 .annotation
                                                 .as_ref()
                                                 .map(type_expr_to_string),
-                                            value: Box::new(lower_expr(&binding.value)),
+                                            value: Box::new(lower_expr(
+                                                &binding.value,
+                                                enum_root_index,
+                                            )),
                                         },
                                         span: binding.span,
                                     },
-                                    crate::compiler::ast::Stmt::Expr(expr) => lower_expr(expr),
+                                    crate::compiler::ast::Stmt::Expr(expr) => {
+                                        lower_expr(expr, enum_root_index)
+                                    }
                                 })
                                 .collect::<Vec<_>>();
                             if let Some(tail) = &block.tail_expr {
-                                body.push(lower_expr(tail));
+                                body.push(lower_expr(tail, enum_root_index));
                             }
                             body
                         },
                     },
                     span: expr.span,
                 },
-                crate::compiler::ast::FnBody::ArrowExpr(arrow_expr) => lower_expr(arrow_expr),
+                crate::compiler::ast::FnBody::ArrowExpr(arrow_expr) => {
+                    lower_expr(arrow_expr, enum_root_index)
+                }
             };
             HirExprKind::Function {
                 params: fn_expr
@@ -1401,7 +1555,12 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                 param_defaults: fn_expr
                     .params
                     .iter()
-                    .map(|param| param.default_value.as_ref().map(lower_expr))
+                    .map(|param| {
+                        param
+                            .default_value
+                            .as_ref()
+                            .map(|default| lower_expr(default, enum_root_index))
+                    })
                     .collect(),
                 has_explicit_return_type: fn_expr.return_type.is_some(),
                 body: Box::new(body),
@@ -1415,7 +1574,7 @@ fn lower_expr(expr: &Expr) -> HirExpr {
     }
 }
 
-fn lower_pattern(pattern: &PatternKind) -> HirPattern {
+fn lower_pattern(pattern: &PatternKind, enum_root_index: &EnumRootIndex) -> HirPattern {
     match pattern {
         PatternKind::Wildcard => HirPattern::Wildcard,
         PatternKind::IdentBind(ident) => HirPattern::IdentBind(ident.text.clone()),
@@ -1432,7 +1591,11 @@ fn lower_pattern(pattern: &PatternKind) -> HirPattern {
             variant,
             bindings,
         } => HirPattern::EnumVariant {
-            root: root.as_ref().map(|ident| ident.text.clone()),
+            root: root
+                .as_ref()
+                .map(|ident| ident.text.clone())
+                .and_then(|root| enum_root_index.by_name.get(&root).cloned().or(Some(root)))
+                .or_else(|| enum_root_index.by_variant.get(&variant.text).cloned()),
             variant: variant.text.clone(),
             bindings: bindings.iter().map(|ident| ident.text.clone()).collect(),
         },
@@ -1453,7 +1616,7 @@ fn lower_pattern(pattern: &PatternKind) -> HirPattern {
                 inclusive: *inclusive,
             }
         }
-        PatternKind::Typed { pattern, .. } => lower_pattern(&pattern.kind),
+        PatternKind::Typed { pattern, .. } => lower_pattern(&pattern.kind, enum_root_index),
     }
 }
 
@@ -1511,7 +1674,30 @@ fn type_expr_to_string(type_expr: &crate::compiler::ast::TypeExpr) -> String {
                 .map(|field| format!("{}:{}", field.name.text, type_expr_to_string(&field.ty)))
                 .collect::<Vec<_>>()
                 .join(",");
-            format!("struct{{{fields}}}")
+            if struct_ty.packed {
+                format!("packed struct{{{fields}}}")
+            } else {
+                format!("struct{{{fields}}}")
+            }
+        }
+        TypeExprKind::Enum(enum_ty) => {
+            let variants = enum_ty
+                .variants
+                .iter()
+                .map(|variant| {
+                    if let Some(payload) = &variant.payload {
+                        format!("{}:{}", variant.name.text, type_expr_to_string(payload))
+                    } else {
+                        variant.name.text.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            if let Some(repr) = &enum_ty.repr {
+                format!("enum({}){{{variants}}}", type_expr_to_string(repr))
+            } else {
+                format!("enum{{{variants}}}")
+            }
         }
         TypeExprKind::Function(fn_ty) => {
             let params = fn_ty
@@ -1523,7 +1709,6 @@ fn type_expr_to_string(type_expr: &crate::compiler::ast::TypeExpr) -> String {
             let ret = type_expr_to_string(&fn_ty.return_type);
             format!("fn({params})->{ret}")
         }
-        _ => "<complex-type>".to_string(),
     }
 }
 

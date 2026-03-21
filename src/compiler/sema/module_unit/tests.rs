@@ -49,3 +49,26 @@ fn merges_declarations_by_module_id() {
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }
+
+#[test]
+fn collects_extern_declarations_by_module_id() {
+    let root = make_temp_dir();
+    fs::write(
+        root.join("main.dyn"),
+        "module main\nwrite := extern (fd: i32, ptr: *u8, len: usize) i32\n",
+    )
+    .expect("file should be written");
+
+    let graph = resolve_module_graph(&root).expect("module graph should resolve");
+    let parsed = parse_project(&root).expect("project should parse");
+    let units = build_module_units(&graph, &parsed);
+
+    let main = units
+        .iter()
+        .find(|unit| unit.key.module_name == "main")
+        .expect("main module should exist");
+    assert_eq!(main.extern_declarations.len(), 1);
+    assert_eq!(main.extern_declarations[0].name, "write");
+
+    fs::remove_dir_all(root).expect("temp directory should be removed");
+}

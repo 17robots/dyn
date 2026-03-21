@@ -102,6 +102,33 @@ pub(super) fn infer_implicit_error_union_set(
                                 file_path,
                                 &mut inferred,
                             );
+
+                            let mut value_ty = infer_expr_type(
+                                &binding.value,
+                                &local_env,
+                                &local_mutability,
+                                signatures,
+                                types,
+                                &mut Vec::new(),
+                                file_path,
+                                None,
+                            );
+                            let final_ty = if let Some(annotation) = &binding.annotation {
+                                let expected = resolve_type_expr(annotation, types)
+                                    .unwrap_or_else(|| types.intern(Type::Unknown));
+                                value_ty = maybe_coerce_literal_to_expected(
+                                    &binding.value,
+                                    value_ty,
+                                    expected,
+                                    types,
+                                );
+                                let _ = value_ty;
+                                expected
+                            } else {
+                                value_ty
+                            };
+                            local_env.insert(binding.name.text.clone(), final_ty);
+                            local_mutability.insert(binding.name.text.clone(), binding.mutable);
                         }
                     }
                 }
@@ -456,7 +483,7 @@ pub(super) fn collect_inferred_error_set_from_return_sites(
         ExprKind::Literal(_)
         | ExprKind::Ident(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue
+        | ExprKind::Continue { .. }
         | ExprKind::Break(_)
         | ExprKind::Use { .. }
         | ExprKind::TypeLiteral(_)
@@ -895,7 +922,7 @@ pub(super) fn collect_inferred_error_set_from_return_expr(
         | ExprKind::Literal(_)
         | ExprKind::Ident(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue
+        | ExprKind::Continue { .. }
         | ExprKind::Break(_)
         | ExprKind::Use { .. }
         | ExprKind::TypeLiteral(_)
@@ -1206,7 +1233,7 @@ pub(super) fn collect_inferred_error_set_from_unwraps_expr(
         ExprKind::Literal(_)
         | ExprKind::Ident(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue
+        | ExprKind::Continue { .. }
         | ExprKind::Break(_)
         | ExprKind::Return { value: None }
         | ExprKind::Use { .. }
@@ -1643,7 +1670,7 @@ pub(super) fn validate_error_set_returns_expr(
         | ExprKind::Literal(_)
         | ExprKind::Ident(_)
         | ExprKind::BuiltinIdent(_)
-        | ExprKind::Continue
+        | ExprKind::Continue { .. }
         | ExprKind::Break(_)
         | ExprKind::Use { .. }
         | ExprKind::TypeLiteral(_) => {}

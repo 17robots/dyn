@@ -1,16 +1,35 @@
 module heap
 
+rt_alloc_with := extern fn(alloc: usize, size: usize, align: usize) usize = "dynrt_alloc_with"
+rt_realloc_with := extern fn(
+    alloc: usize,
+    ptr: usize,
+    old_size: usize,
+    new_size: usize,
+    align: usize,
+) usize = "dynrt_realloc_with"
+rt_free_with := extern fn(alloc: usize, ptr: usize, size: usize, align: usize) u32 = "dynrt_free_with"
+rt_c_allocator := extern fn() usize = "dynrt_c_allocator"
+rt_test_failing_allocator := extern fn() usize = "dynrt_test_failing_allocator"
+rt_test_set_fail_after := extern fn(remaining_successes: usize) u32 = "dynrt_test_set_fail_after"
+rt_arena_allocator := extern fn(backing: usize) usize = "dynrt_arena_allocator"
+rt_arena_reset := extern fn(arena_handle: usize) u32 = "dynrt_arena_reset"
+rt_arena_deinit := extern fn(arena_handle: usize) u32 = "dynrt_arena_deinit"
+
 pub AllocError := enum {
     OutOfMemory,
+}
+
+require_nonzero_ptr := (value: usize, err: AllocError) usize!AllocError {
+    if value == 0 return err
+    return value
 }
 
 pub Allocator := struct {
     ctx: usize,
 
-    alloc_bytes := (self: Allocator, size: usize, align: usize) usize!AllocError => {
-        ptr := $alloc_with(self.ctx, size, align)
-        if ptr == 0 .OutOfMemory else ptr
-    },
+    alloc_bytes := (self: Allocator, size: usize, align: usize) usize!AllocError =>
+        require_nonzero_ptr(rt_alloc_with(self.ctx, size, align), .OutOfMemory),
 
     realloc_bytes :=
         (
@@ -19,17 +38,19 @@ pub Allocator := struct {
             old_size: usize,
             new_size: usize,
             align: usize,
-        ) usize!AllocError => {
-            next := $realloc_with(self.ctx, ptr, old_size, new_size, align)
-            if next == 0 .OutOfMemory else next
+        ) usize!AllocError {
+            return require_nonzero_ptr(
+                rt_realloc_with(self.ctx, ptr, old_size, new_size, align),
+                .OutOfMemory,
+            )
         },
 
     free_bytes := (self: Allocator, ptr: usize, size: usize, align: usize) u32 =>
-        $free_with(self.ctx, ptr, size, align),
+        rt_free_with(self.ctx, ptr, size, align),
 
-    alloc := inline (self: Allocator, T: comp type, count: usize) usize!AllocError => {
+    alloc := inline (self: Allocator, T: comp type, count: usize) usize!AllocError {
         size := count * comp $sizeof(T)
-        self.alloc_bytes(size, comp $alignof(T))
+        return self.alloc_bytes(size, comp $alignof(T))
     },
 
     realloc := inline
@@ -39,15 +60,15 @@ pub Allocator := struct {
             ptr: usize,
             old_count: usize,
             new_count: usize,
-        ) usize!AllocError => {
+        ) usize!AllocError {
             old_size := old_count * comp $sizeof(T)
             new_size := new_count * comp $sizeof(T)
-            self.realloc_bytes(ptr, old_size, new_size, comp $alignof(T))
+            return self.realloc_bytes(ptr, old_size, new_size, comp $alignof(T))
         },
 
-    free := inline (self: Allocator, T: comp type, ptr: usize, count: usize) u32 => {
+    free := inline (self: Allocator, T: comp type, ptr: usize, count: usize) u32 {
         size := count * comp $sizeof(T)
-        self.free_bytes(ptr, size, comp $alignof(T))
+        return self.free_bytes(ptr, size, comp $alignof(T))
     },
 
     alloc_one := inline (self: Allocator, T: comp type) usize!AllocError => self.alloc(T, 1),
@@ -58,7 +79,7 @@ pub Allocator := struct {
 pub CAllocator := () type => struct {
     handle: usize,
 
-    new := () CAllocator => CAllocator{ handle: $c_allocator() },
+    new := () CAllocator => CAllocator{ handle: rt_c_allocator() },
 
     allocator := (self: CAllocator) Allocator => Allocator{ ctx: self.handle },
 }
@@ -66,10 +87,10 @@ pub CAllocator := () type => struct {
 pub FailingAllocator := () type => struct {
     handle: usize,
 
-    new := () FailingAllocator => FailingAllocator{ handle: $test_failing_allocator() },
+    new := () FailingAllocator => FailingAllocator{ handle: rt_test_failing_allocator() },
 
-    set_fail_after := (self: FailingAllocator, remaining_successes: usize) u32 => {
-        $test_set_fail_after(remaining_successes)
+    set_fail_after := (self: FailingAllocator, remaining_successes: usize) u32 {
+        return rt_test_set_fail_after(remaining_successes)
     },
 
     allocator := (self: FailingAllocator) Allocator => Allocator{ ctx: self.handle },
@@ -79,11 +100,11 @@ pub ArenaAllocator := () type => struct {
     handle: usize,
 
     new := (backing: Allocator) ArenaAllocator =>
-        ArenaAllocator{ handle: $arena_allocator(backing.ctx) },
+        ArenaAllocator{ handle: rt_arena_allocator(backing.ctx) },
 
-    reset := (self: ArenaAllocator) u32 => $arena_reset(self.handle),
+    reset := (self: ArenaAllocator) u32 => rt_arena_reset(self.handle),
 
-    deinit := (self: ArenaAllocator) u32 => $arena_deinit(self.handle),
+    deinit := (self: ArenaAllocator) u32 => rt_arena_deinit(self.handle),
 
     allocator := (self: ArenaAllocator) Allocator => Allocator{ ctx: self.handle },
 }

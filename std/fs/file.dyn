@@ -1,0 +1,69 @@
+module file
+
+bytes_mod := use "std/bytes"
+linux := use "std/os/linux"
+writer_mod := use "std/io/writer"
+Writer := writer_mod.Writer
+
+pub FileError := enum {
+    OpenFailed,
+    ReadFailed,
+    WriteFailed,
+    CloseFailed,
+}
+
+require_nonnegative := (value: isize, err: FileError) isize!FileError {
+    if value < 0 return err
+    return value
+}
+
+require_zero_status := (status: isize, err: FileError) u32!FileError {
+    if status != 0 return err
+    return $as(u32, 1)
+}
+
+pub File := struct {
+    fd: isize,
+
+    writer := (self: File) Writer => Writer{ fd: self.fd },
+
+    read_raw := (self: File, buf_ptr: isize, len: isize) isize!FileError {
+        return require_nonnegative(linux.fd_read_raw(self.fd, buf_ptr, len), .ReadFailed)
+    },
+
+    write := (self: File, value: []u8) u32!FileError {
+        ptr := $as(isize, $as(usize, value))
+        len := $as(isize, bytes_mod.len(value))
+        self.writer().write_raw(ptr, len, 0) or return .WriteFailed
+        return $as(u32, 1)
+    },
+
+    close := (self: File) u32!FileError {
+        return require_zero_status(linux.fd_close_raw(self.fd), .CloseFailed)
+    },
+}
+
+pub from_fd := (fd: isize) File => .{ fd: fd }
+
+pub close_fd := (fd: isize) u32!FileError => require_zero_status(linux.fd_close_raw(fd), .CloseFailed)
+
+pub open_read_z := (path_z: []u8) isize!FileError {
+    path_ptr := $as(isize, $as(usize, path_z))
+    return open_read_ptr(path_ptr)
+}
+
+pub open_read_ptr := (path_ptr: isize) isize!FileError {
+    return require_nonnegative(
+        linux.openat_raw(linux.at_fdcwd(), path_ptr, linux.o_rdonly(), 0),
+        .OpenFailed,
+    )
+}
+
+pub open_write_trunc_z := (path_z: []u8, mode: isize) isize!FileError {
+    flags := $as(isize, 577)
+    path_ptr := $as(isize, $as(usize, path_z))
+    return require_nonnegative(
+        linux.openat_raw(linux.at_fdcwd(), path_ptr, flags, mode),
+        .OpenFailed,
+    )
+}
