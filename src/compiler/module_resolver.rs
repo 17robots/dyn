@@ -13,8 +13,6 @@ use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 
 const STD_COLLECTION_DIR: &str = "std";
 const STD_PATH_ENV: &str = "DYN_STD_PATH";
-const TARGET_ARCH_ENV: &str = "DYN_TARGET_ARCH";
-const TARGET_OS_ENV: &str = "DYN_TARGET_OS";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleKey {
@@ -70,26 +68,7 @@ pub fn configured_std_root_dir() -> Option<PathBuf> {
 }
 
 pub fn normalize_import_path(import_path: &str) -> String {
-    let normalized = import_path.trim_matches('"').trim();
-    if normalized == "std/os/linux/syscall" {
-        let arch = std::env::var(TARGET_ARCH_ENV)
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| std::env::consts::ARCH.to_ascii_lowercase());
-
-        return linux_syscall_import_for_arch(&arch).to_string();
-    }
-    if normalized == "std/os/platform" {
-        let target_os = std::env::var(TARGET_OS_ENV)
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| std::env::consts::OS.to_ascii_lowercase());
-        return os_platform_import_for_target(&target_os).to_string();
-    }
-
-    normalized.to_string()
+    import_path.trim_matches('"').trim().to_string()
 }
 
 pub fn module_key_for_import(current: &ModuleKey, import_path: &str) -> ModuleKey {
@@ -120,22 +99,6 @@ pub fn module_key_for_import(current: &ModuleKey, import_path: &str) -> ModuleKe
     ModuleKey {
         directory,
         module_name,
-    }
-}
-
-fn linux_syscall_import_for_arch(arch: &str) -> &'static str {
-    match arch {
-        "x86_64" | "amd64" => "std/os/linux/syscall_x86_64",
-        "aarch64" | "arm64" => "std/os/linux/syscall_aarch64",
-        _ => "std/os/linux/syscall_x86_64",
-    }
-}
-
-fn os_platform_import_for_target(target_os: &str) -> &'static str {
-    match target_os {
-        "windows" => "std/os/windows",
-        "linux" => "std/os/linux",
-        _ => "std/os/linux",
     }
 }
 

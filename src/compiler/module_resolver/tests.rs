@@ -147,63 +147,11 @@ fn assigns_stable_module_ids_from_sorted_keys() {
 }
 
 #[test]
-fn includes_bundled_std_module_when_project_imports_std_path() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\nio := use \"std/io\"\nmain := () i32 => 0\n",
-    )
-    .expect("file should be written");
-
-    let graph = resolve_module_graph(&root).expect("module resolution should succeed");
-    let stdlib_io_key = ModuleKey {
-        directory: PathBuf::from("std"),
-        module_name: "io".to_string(),
-    };
-    assert!(
-        graph.module_id(&stdlib_io_key).is_some(),
-        "expected std/io to be present in resolved modules"
-    );
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn normalizes_linux_syscall_import_alias_for_supported_arches() {
-    assert_eq!(
-        linux_syscall_import_for_arch("x86_64"),
-        "std/os/linux/syscall_x86_64"
-    );
-    assert_eq!(
-        linux_syscall_import_for_arch("amd64"),
-        "std/os/linux/syscall_x86_64"
-    );
-    assert_eq!(
-        linux_syscall_import_for_arch("aarch64"),
-        "std/os/linux/syscall_aarch64"
-    );
-    assert_eq!(
-        linux_syscall_import_for_arch("arm64"),
-        "std/os/linux/syscall_aarch64"
-    );
-}
-
-#[test]
-fn normalizes_os_platform_import_alias_for_supported_targets() {
-    assert_eq!(os_platform_import_for_target("linux"), "std/os/linux");
-    assert_eq!(os_platform_import_for_target("windows"), "std/os/windows");
-    assert_eq!(os_platform_import_for_target("darwin"), "std/os/linux");
-}
-
-#[test]
-fn normalize_import_path_leaves_non_alias_paths_unchanged() {
+fn normalize_import_path_strips_quotes_and_whitespace() {
     assert_eq!(normalize_import_path("std/io"), "std/io");
+    assert_eq!(normalize_import_path("\"std/io\""), "std/io");
     assert_eq!(
         normalize_import_path("std/os/linux/syscall_x86_64"),
         "std/os/linux/syscall_x86_64"
-    );
-    assert_eq!(
-        normalize_import_path("std/os/platform"),
-        os_platform_import_for_target(std::env::consts::OS)
     );
 }

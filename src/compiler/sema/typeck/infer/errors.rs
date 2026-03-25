@@ -81,6 +81,32 @@ pub(super) fn infer_implicit_error_union_set(
                             &mut inferred,
                         );
                     }
+                    Stmt::Destructure(d) => {
+                        collect_inferred_error_set_from_return_sites(
+                            &d.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            enum_variants,
+                            file_path,
+                            &mut inferred,
+                        );
+                        collect_inferred_error_set_from_unwraps_expr(
+                            &d.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            file_path,
+                            &mut inferred,
+                        );
+                        let unknown = types.intern(Type::Unknown);
+                        for dn in &d.names {
+                            local_env.insert(dn.name.text.clone(), unknown);
+                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                        }
+                    }
                     Stmt::Binding(binding) => {
                         if !is_function_expr(&binding.value) {
                             collect_inferred_error_set_from_return_sites(
@@ -201,6 +227,23 @@ pub(super) fn collect_inferred_error_set_from_return_sites(
                         file_path,
                         inferred,
                     ),
+                    Stmt::Destructure(d) => {
+                        collect_inferred_error_set_from_return_sites(
+                            &d.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            enum_variants,
+                            file_path,
+                            inferred,
+                        );
+                        let unknown = types.intern(Type::Unknown);
+                        for dn in &d.names {
+                            local_env.insert(dn.name.text.clone(), unknown);
+                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                        }
+                    }
                     Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
                         collect_inferred_error_set_from_return_sites(
                             &binding.value,
@@ -466,6 +509,30 @@ pub(super) fn collect_inferred_error_set_from_return_sites(
                 );
             }
         }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            collect_inferred_error_set_from_return_sites(
+                ty_expr,
+                env,
+                mutability,
+                signatures,
+                types,
+                enum_variants,
+                file_path,
+                inferred,
+            );
+            for field in fields {
+                collect_inferred_error_set_from_return_sites(
+                    &field.value,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    enum_variants,
+                    file_path,
+                    inferred,
+                );
+            }
+        }
         ExprKind::ArrayLiteral(elements) | ExprKind::TupleLiteral(elements) => {
             for element in elements {
                 collect_inferred_error_set_from_return_sites(
@@ -596,6 +663,23 @@ pub(super) fn collect_inferred_error_set_from_return_expr(
                         file_path,
                         inferred,
                     ),
+                    Stmt::Destructure(d) => {
+                        collect_inferred_error_set_from_return_expr(
+                            &d.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            enum_variants,
+                            file_path,
+                            inferred,
+                        );
+                        let unknown = types.intern(Type::Unknown);
+                        for dn in &d.names {
+                            local_env.insert(dn.name.text.clone(), unknown);
+                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                        }
+                    }
                     Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
                         collect_inferred_error_set_from_return_expr(
                             &binding.value,
@@ -904,6 +988,30 @@ pub(super) fn collect_inferred_error_set_from_return_expr(
                 );
             }
         }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            collect_inferred_error_set_from_return_expr(
+                ty_expr,
+                env,
+                mutability,
+                signatures,
+                types,
+                enum_variants,
+                file_path,
+                inferred,
+            );
+            for field in fields {
+                collect_inferred_error_set_from_return_expr(
+                    &field.value,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    enum_variants,
+                    file_path,
+                    inferred,
+                );
+            }
+        }
         ExprKind::ArrayLiteral(elements) | ExprKind::TupleLiteral(elements) => {
             for element in elements {
                 collect_inferred_error_set_from_return_expr(
@@ -974,6 +1082,22 @@ pub(super) fn collect_inferred_error_set_from_unwraps_expr(
                         file_path,
                         inferred,
                     ),
+                    Stmt::Destructure(d) => {
+                        collect_inferred_error_set_from_unwraps_expr(
+                            &d.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            file_path,
+                            inferred,
+                        );
+                        let unknown = types.intern(Type::Unknown);
+                        for dn in &d.names {
+                            local_env.insert(dn.name.text.clone(), unknown);
+                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                        }
+                    }
                     Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
                         collect_inferred_error_set_from_unwraps_expr(
                             &binding.value,
@@ -1216,6 +1340,28 @@ pub(super) fn collect_inferred_error_set_from_unwraps_expr(
                 );
             }
         }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            collect_inferred_error_set_from_unwraps_expr(
+                ty_expr,
+                env,
+                mutability,
+                signatures,
+                types,
+                file_path,
+                inferred,
+            );
+            for field in fields {
+                collect_inferred_error_set_from_unwraps_expr(
+                    &field.value,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    file_path,
+                    inferred,
+                );
+            }
+        }
         ExprKind::EnumVariantConstruct(variant) => {
             for payload in &variant.payload {
                 collect_inferred_error_set_from_unwraps_expr(
@@ -1305,6 +1451,13 @@ pub(super) fn validate_function_error_set_coverage(
                         file_path,
                         diagnostics,
                     ),
+                    Stmt::Destructure(d) => validate_error_set_returns_expr(
+                        &d.value,
+                        &declared_errors,
+                        enum_variants,
+                        file_path,
+                        diagnostics,
+                    ),
                     Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
                         validate_error_set_returns_expr(
                             &binding.value,
@@ -1361,6 +1514,13 @@ pub(super) fn validate_error_set_returns_expr(
                 match stmt {
                     Stmt::Expr(inner) => validate_error_set_returns_expr(
                         inner,
+                        declared_errors,
+                        enum_variants,
+                        file_path,
+                        diagnostics,
+                    ),
+                    Stmt::Destructure(d) => validate_error_set_returns_expr(
+                        &d.value,
                         declared_errors,
                         enum_variants,
                         file_path,
@@ -1635,6 +1795,18 @@ pub(super) fn validate_error_set_returns_expr(
         }
         ExprKind::StructLiteral(lit) => {
             for field in &lit.fields {
+                validate_error_set_returns_expr(
+                    &field.value,
+                    declared_errors,
+                    enum_variants,
+                    file_path,
+                    diagnostics,
+                );
+            }
+        }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            validate_error_set_returns_expr(ty_expr, declared_errors, enum_variants, file_path, diagnostics);
+            for field in fields {
                 validate_error_set_returns_expr(
                     &field.value,
                     declared_errors,

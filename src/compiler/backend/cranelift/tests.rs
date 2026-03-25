@@ -1,7 +1,3 @@
-use std::collections::BTreeSet;
-
-use crate::compiler::intrinsics::RUNTIME_INTRINSICS;
-
 use super::*;
 
 #[test]
@@ -92,17 +88,6 @@ fn parse_return_scalar_supports_slice_type() {
 }
 
 #[test]
-fn parse_return_scalar_supports_f128() {
-    match parse_return_scalar(Some("f128")) {
-        ScalarType::Int { ty, signed } => {
-            assert_eq!(ty, I64);
-            assert!(!signed);
-        }
-        ScalarType::Float { .. } => panic!("expected pointer carrier scalar"),
-    }
-}
-
-#[test]
 fn parse_return_scalar_supports_nonstandard_int_widths() {
     match parse_return_scalar(Some("i31")) {
         ScalarType::Int { ty, signed } => {
@@ -153,35 +138,14 @@ fn variant_tag_is_stable_fnv1a_32() {
 }
 
 #[test]
-fn runtime_allocator_source_defines_intrinsic_symbols() {
-    let source = [
-        include_str!("../runtime_support.rs"),
-        include_str!("../runtime_support/vec.rs"),
-        include_str!("../runtime_support/io.rs"),
-        include_str!("../runtime_support/system.rs"),
-        include_str!("../runtime_support/f128.c"),
-    ]
-    .join("\n");
-    for builtin in RUNTIME_INTRINSICS {
-        assert!(
-            source.contains(builtin.symbol),
-            "runtime support missing symbol {}",
-            builtin.symbol
-        );
-    }
+fn runtime_syscall_machine_code_is_available_for_host() {
+    let (_, arch, _) = super::driver::host_object_format();
+    let code = super::driver::syscall_machine_code(arch);
+    assert!(
+        code.is_some(),
+        "no dyn_syscall machine code for host architecture {:?}",
+        arch
+    );
+    assert!(!code.unwrap().is_empty());
 }
 
-#[test]
-fn backend_declares_all_registered_runtime_intrinsics() {
-    let declared = runtime_intrinsics(I64)
-        .into_iter()
-        .map(|intrinsic| intrinsic.name)
-        .collect::<BTreeSet<_>>();
-    for builtin in RUNTIME_INTRINSICS {
-        assert!(
-            declared.contains(builtin.symbol),
-            "backend intrinsic declaration missing {}",
-            builtin.symbol
-        );
-    }
-}

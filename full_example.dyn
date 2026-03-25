@@ -17,7 +17,7 @@ main := () ! { // void type but marked as errorable with !
   l: []f32 = j[..]
   m := "hello world" // []u8
   n: ?i32 = 1
-  o: ?i32 = null // this would technically be an error because anything assigned null should be mutable
+  mut o: ?i32 = null
   p: *i32 = &a
   q: *mut u1 = &d // only possible because d was marked as mut, this is the default type if the variable is mut as well
   q.* = false
@@ -36,7 +36,7 @@ main := () ! { // void type but marked as errorable with !
     item3: []i32,
     new := () s => .{}
     do_thing := (self: s) {},
-    fn_ptr: *fn(self: s),
+    fn_ptr: fn(self: s) void,
   }
   {
     t := "only valid here"
@@ -93,6 +93,7 @@ main := () ! { // void type but marked as errorable with !
   }
   D := divide(1,0) or |err| {
     // do something with err
+    break 0.0
   }
   E := n or {
     break 1
@@ -119,18 +120,18 @@ main := () ! { // void type but marked as errorable with !
 
 add := (x: i32, y: i32) i32 { return x + y }
 add2 := (x: i32, y: i32) i32 => x + y // only doable if the only line in the body would have been return [expression]
-add3 := (x: i32 = 0, y: i32 = 0) => x + y // can have default values on all or only 1 of the parameters
+add3 := (x: i32 = 0, y: i32 = 0) i32 => x + y // can have default values on all or only 1 of the parameters
 
 DivideError1 := enum { // errors can be either structs or enums
   UhOh
 }
 DivideError2 := enum {
-  DivideByzero
+  DivideByZero
 }
 divide := (x: f32, y: f32) f32!DivideError1,DivideError2 => if y == 0 DivideError2.DivideByZero else x / y
 
 List := (T: type) type => struct {
-  init := () type => $Self()
+  init := () type => $self()
 }
 List2 := (T: comp type) type => struct {}
 

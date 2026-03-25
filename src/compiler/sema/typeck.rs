@@ -6,17 +6,15 @@ use crate::compiler::ast::{
     Stmt, TypeExpr, TypeExprKind, UnaryOp,
 };
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase, SourceSpan};
-use crate::compiler::intrinsics::runtime_symbol_for_builtin;
-use crate::compiler::sema::comptime::is_type_designator_expr;
+use crate::compiler::sema::comptime::{is_compile_time_expr, is_type_designator_expr};
 use crate::compiler::sema::module_unit::{DeclKind, DeclStub, ModuleUnit};
 
 mod helpers;
 mod infer;
 
 use self::helpers::{
-    bytes_type, float_literal_fits_type, insert_builtin_signatures, integer_literal_fits_type,
-    numeric_result_type, parse_float_type_name, parse_int_type_name, tuple_index_literal,
-    type_to_string,
+    bytes_type, float_literal_fits_type, integer_literal_fits_type, numeric_result_type,
+    parse_float_type_name, parse_int_type_name, tuple_index_literal, type_to_string,
 };
 
 use self::infer::*;
@@ -91,6 +89,7 @@ impl TypeStore {
 struct FnParamSpec {
     name: Option<String>,
     has_default: bool,
+    comp: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +107,8 @@ struct NominalBinding {
 #[derive(Copy, Clone)]
 enum AnyUsageContext {
     FunctionParam,
+    /// Direct inner type of a `*` pointer — `*any` is the erased pointer type.
+    PointerInner,
     Other,
 }
 
@@ -121,7 +122,6 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
         let mut mutability = BTreeMap::<String, bool>::new();
         let mut nominal_bindings = BTreeMap::<String, NominalBinding>::new();
         let mut signatures = BTreeMap::<String, FnSignature>::new();
-        insert_builtin_signatures(&mut signatures, &mut types);
         let mut_ptr_receiver_methods = collect_mut_pointer_receiver_methods(unit);
         let struct_field_nominals = collect_struct_field_nominal_types(unit);
         let named_struct_fields = collect_named_struct_fields(unit);
@@ -183,6 +183,7 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                         .map(|name| FnParamSpec {
                             name,
                             has_default: false,
+                            comp: false,
                         })
                         .collect(),
                     return_type,
@@ -233,6 +234,7 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                     .map(|param| FnParamSpec {
                         name: Some(param.name.text.clone()),
                         has_default: param.default_value.is_some(),
+                        comp: param.comp,
                     })
                     .collect::<Vec<_>>();
                 signatures.insert(
@@ -392,19 +394,38 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                 resolve_type_expr(ty, &mut types)
             });
 
-            if matches!(types.get(actual), Type::Null) && !decl.mutable {
-                diagnostics.push(
-                    Diagnostic::error(
-                        DiagnosticPhase::TypeChecker,
-                        DiagnosticCode::E4006,
-                        format!("'{}' is assigned null but is not mutable", decl.name),
-                    )
-                    .with_primary_file_label(
-                        decl.file_path.clone(),
-                        Some(decl.span),
-                        "null assignment requires mutable binding",
-                    ),
-                );
+            if matches!(types.get(actual), Type::Null) {
+                if !decl.mutable {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::TypeChecker,
+                            DiagnosticCode::E4006,
+                            format!("'{}' is assigned null but is not mutable", decl.name),
+                        )
+                        .with_primary_file_label(
+                            decl.file_path.clone(),
+                            Some(decl.span),
+                            "null assignment requires mutable binding",
+                        ),
+                    );
+                }
+                if decl.annotation.is_none() {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::TypeChecker,
+                            DiagnosticCode::E4006,
+                            format!(
+                                "'{}' is assigned null but has no explicit type annotation",
+                                decl.name
+                            ),
+                        )
+                        .with_primary_file_label(
+                            decl.file_path.clone(),
+                            Some(decl.span),
+                            "add an explicit type annotation, e.g. `mut x: ?i32 = null`",
+                        ),
+                    );
+                }
             }
 
             let mut final_type = if let Some(expected) = expected {
@@ -480,7 +501,6 @@ pub fn infer_binding_type_strings(
         let mut env = BTreeMap::<String, TypeId>::new();
         let mut mutability = BTreeMap::<String, bool>::new();
         let mut signatures = BTreeMap::<String, FnSignature>::new();
-        insert_builtin_signatures(&mut signatures, &mut types);
 
         for extern_decl in &unit.extern_declarations {
             let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
@@ -508,6 +528,7 @@ pub fn infer_binding_type_strings(
                         .map(|name| FnParamSpec {
                             name,
                             has_default: false,
+                            comp: false,
                         })
                         .collect(),
                     return_type,
@@ -540,6 +561,7 @@ pub fn infer_binding_type_strings(
                     .map(|param| FnParamSpec {
                         name: Some(param.name.text.clone()),
                         has_default: param.default_value.is_some(),
+                        comp: param.comp,
                     })
                     .collect::<Vec<_>>();
                 signatures.insert(

@@ -878,6 +878,11 @@ impl FunctionLowerer {
             },
         );
 
+        // Snapshot locals before any branch lowering so we can properly merge
+        // at the join block. Without this, assignments inside if-branches produce
+        // SSA values that don't dominate the join block, causing Cranelift errors.
+        let pre_locals = self.locals.clone();
+
         let capture_binding = capture.and_then(|capture| capture.binding.as_deref());
         let prev_capture_binding = capture_binding.and_then(|name| {
             self.locals
@@ -892,12 +897,18 @@ impl FunctionLowerer {
                 self.locals.remove(name);
             }
         }
+        let then_locals = self.locals.clone();
         let then_pred = if self.is_terminated(then_end) {
             None
         } else {
             self.set_terminator(then_end, MirTerminator::Goto(join_block));
             Some((then_end, then_value))
         };
+
+        // Restore pre-branch locals before lowering the else branch so that
+        // the else branch sees the correct incoming state, not the then-branch's
+        // modifications.
+        self.locals = pre_locals.clone();
 
         let else_pred = if let Some(else_branch) = else_branch {
             let (else_end, else_value) = self.lower_expr(else_block, else_branch);
@@ -911,6 +922,55 @@ impl FunctionLowerer {
             self.set_terminator(else_block, MirTerminator::Goto(join_block));
             Some((else_block, None))
         };
+        let else_locals = self.locals.clone();
+
+        // Merge locals at the join block.
+        match (&then_pred, &else_pred) {
+            (Some((then_end_blk, _)), Some((else_end_blk, _))) => {
+                // Both paths reach the join block — create phi nodes for any
+                // local that was modified in either branch.
+                self.locals = pre_locals.clone();
+                for name in pre_locals.keys() {
+                    let pre_val = pre_locals[name];
+                    let tv = then_locals.get(name).copied().unwrap_or(pre_val);
+                    let ev = else_locals.get(name).copied().unwrap_or(pre_val);
+                    if tv == ev {
+                        // Same value from both paths — use it directly.
+                        self.locals.insert(name.clone(), tv);
+                    } else {
+                        // Different values — create a phi.
+                        let phi = self.fresh_value();
+                        let phi_ty = [tv, ev]
+                            .iter()
+                            .filter_map(|v| self.value_types.get(v))
+                            .cloned()
+                            .reduce(|a, b| merge_types(&a, &b))
+                            .unwrap_or(MirValueType::Unknown);
+                        self.function.blocks[join_block.0]
+                            .instructions
+                            .push(MirInstr::Phi {
+                                dest: phi,
+                                sources: vec![(*then_end_blk, tv), (*else_end_blk, ev)],
+                                ty: phi_ty.clone(),
+                            });
+                        self.value_types.insert(phi, phi_ty);
+                        self.locals.insert(name.clone(), phi);
+                    }
+                }
+            }
+            (Some(_), None) => {
+                // Only the then path reaches join.
+                self.locals = then_locals;
+            }
+            (None, Some(_)) => {
+                // Only the else path reaches join.
+                self.locals = else_locals;
+            }
+            (None, None) => {
+                // Neither path reaches join (both terminate).
+                self.locals = pre_locals;
+            }
+        }
 
         let mut sources = Vec::new();
         if let Some((pred, Some(value))) = then_pred {

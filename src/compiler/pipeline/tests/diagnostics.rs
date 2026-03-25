@@ -231,46 +231,6 @@ fn returns_diagnostics_for_global_print_without_io_import() {
 }
 
 #[test]
-fn returns_diagnostics_for_removed_runtime_io_builtin_alias() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\nmain := () i32 {\n  _ok := $io_write(\"hello\", 1)\n  return 0\n}\n",
-    )
-    .expect("file should be written");
-
-    let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic
-                .message
-                .contains("$io_write is no longer available as a runtime builtin")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn returns_diagnostics_for_removed_runtime_mem_builtin_alias() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\nmain := () i32 {\n  _ok := $mem_eq(0, 0, 0)\n  return 0\n}\n",
-    )
-    .expect("file should be written");
-
-    let (_artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic
-                .message
-                .contains("$mem_eq is no longer available as a runtime builtin")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
 fn returns_diagnostics_for_backend_unsupported_float_width() {
     let root = make_temp_dir();
     fs::write(

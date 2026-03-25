@@ -824,7 +824,7 @@ fn reports_missing_block_delimiter() {
 
 #[test]
 fn parses_semicolon_separated_block_statements() {
-    let src = "module main\nmain := () i32 { s := $Self(); return if s == s 6 else 0 }\n";
+    let src = "module main\nmain := () i32 { s := $self(); return if s == s 6 else 0 }\n";
     let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
     let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
     assert!(
@@ -837,7 +837,7 @@ fn parses_semicolon_separated_block_statements() {
 #[test]
 fn reports_error_for_legacy_extern_declaration_syntax() {
     let src =
-        "module main\npub extern write: fn(fd: i32, ptr: *u8, len: usize) i32 = \"dynrt_fd_write\"\n";
+        "module main\npub extern write: fn(fd: i32, ptr: *u8, len: usize) i32 = \"write\"\n";
     let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
     let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
     assert!(parsed.diagnostics.iter().any(|diagnostic| {
@@ -851,7 +851,7 @@ fn reports_error_for_legacy_extern_declaration_syntax() {
 #[test]
 fn parses_extern_function_binding_with_link_name() {
     let src =
-        "module main\nwrite := extern (fd: i32, ptr: *u8, len: usize) i32 = \"dynrt_fd_write\"\n";
+        "module main\nwrite := extern (fd: i32, ptr: *u8, len: usize) i32 = \"write\"\n";
     let lex = Lexer::new(src, PathBuf::from("t.dyn")).lex();
     let parsed = parse_file(PathBuf::from("t.dyn"), &lex.tokens);
     assert!(
@@ -864,7 +864,7 @@ fn parses_extern_function_binding_with_link_name() {
         panic!("expected extern item")
     };
     assert_eq!(extern_decl.name.text, "write");
-    assert_eq!(extern_decl.link_name.as_deref(), Some("dynrt_fd_write"));
+    assert_eq!(extern_decl.link_name.as_deref(), Some("write"));
     let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
         panic!("expected function type")
     };

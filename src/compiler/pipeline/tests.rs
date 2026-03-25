@@ -84,6 +84,3 @@ mod comptime;
 mod core;
 mod diagnostics;
 mod execution;
-mod io;
-mod runtime;
-mod stdlib;

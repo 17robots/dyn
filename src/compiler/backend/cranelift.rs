@@ -8,21 +8,20 @@ use cranelift_codegen::ir::{
     AbiParam, InstBuilder, InstructionData, Opcode, TrapCode, Type, Value, ValueDef,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
 use crate::compiler::ast::{BinaryOp, UnaryOp};
 use crate::compiler::hir::HirLiteral;
-use crate::compiler::intrinsics::{
-    runtime_intrinsic_for_symbol, RuntimeAbiType, RuntimeReturnKind, RUNTIME_INTRINSICS,
-};
 use crate::compiler::mir::{
-    MirFunction, MirInstr, MirProgram, MirTerminator, MirValue, MirValueId, MirValueType,
+    MirFunction, MirGlobal, MirGlobalInit, MirInstr, MirProgram, MirTerminator, MirValue,
+    MirValueId, MirValueType,
 };
 use crate::compiler::type_text::parse_enum_type_descriptor;
 
 mod driver;
 mod layout;
+mod link;
 #[cfg(test)]
 mod tests;
 
@@ -39,6 +38,7 @@ struct FunctionSymbols {
     returns_unknown_nominal_by_id: BTreeMap<u32, bool>,
     returns_aggregate_layout_by_id: BTreeMap<u32, AggregateLayout>,
     nominal_aggregate_layouts: BTreeMap<String, AggregateLayout>,
+    global_data_ids: BTreeMap<String, DataId>,
 }
 
 #[derive(Debug, Clone)]
@@ -384,10 +384,7 @@ fn declare_function_symbols(
             })?;
         by_name.entry(intrinsic.name.to_string()).or_insert(func_id);
         param_types_by_id.insert(func_id.as_u32(), intrinsic.params);
-        returns_bytes_slice_by_id.insert(
-            func_id.as_u32(),
-            runtime_intrinsic_returns_bytes_slice(intrinsic.name),
-        );
+        returns_bytes_slice_by_id.insert(func_id.as_u32(), false);
         returns_errorable_by_id.insert(func_id.as_u32(), false);
         returns_unknown_nominal_by_id.insert(func_id.as_u32(), false);
     }
@@ -402,41 +399,72 @@ fn declare_function_symbols(
         returns_unknown_nominal_by_id,
         returns_aggregate_layout_by_id,
         nominal_aggregate_layouts,
+        global_data_ids: BTreeMap::new(),
     })
+}
+
+fn declare_global_data(
+    mir: &MirProgram,
+    module: &mut ObjectModule,
+) -> Result<BTreeMap<String, DataId>, String> {
+    let mut data_ids = BTreeMap::new();
+    for mir_module in &mir.modules {
+        for global in &mir_module.globals {
+            let data_id = module
+                .declare_data(&global.name, Linkage::Local, global.mutable, false)
+                .map_err(|err| format!("failed to declare global '{}': {err}", global.name))?;
+            let size = type_hint_byte_size(global.type_hint.as_deref()).unwrap_or(8) as usize;
+            let mut desc = DataDescription::new();
+            match &global.init {
+                MirGlobalInit::Zero => {
+                    desc.define_zeroinit(size);
+                }
+                MirGlobalInit::Integer(v) => {
+                    let bytes = integer_init_bytes(*v, size);
+                    desc.define(bytes.into_boxed_slice());
+                }
+                MirGlobalInit::Bool(b) => {
+                    desc.define(vec![u8::from(*b)].into_boxed_slice());
+                }
+            }
+            module
+                .define_data(data_id, &desc)
+                .map_err(|err| format!("failed to define global '{}': {err}", global.name))?;
+            data_ids.insert(global.name.clone(), data_id);
+        }
+    }
+    Ok(data_ids)
+}
+
+fn type_hint_byte_size(hint: Option<&str>) -> Option<u32> {
+    let hint = hint?.trim();
+    match hint {
+        "bool" | "i8" | "u8" => Some(1),
+        "i16" | "u16" => Some(2),
+        "i32" | "u32" | "f32" => Some(4),
+        "i64" | "u64" | "f64" | "isize" | "usize" => Some(8),
+        h if h.starts_with('*') || h.starts_with("[]") => Some(8),
+        _ => None,
+    }
+}
+
+fn integer_init_bytes(value: i64, size: usize) -> Vec<u8> {
+    let full = value.to_le_bytes();
+    full[..size.min(8)].to_vec()
 }
 
 fn returns_errorable_from_hint(return_type: Option<&str>) -> bool {
     return_type.unwrap_or("").contains('!')
 }
 
-fn runtime_intrinsics(pointer_ty: Type) -> Vec<RuntimeIntrinsic> {
-    RUNTIME_INTRINSICS
-        .iter()
-        .map(|intrinsic| RuntimeIntrinsic {
-            name: intrinsic.symbol,
-            params: intrinsic
-                .abi_params
-                .iter()
-                .map(|param| runtime_abi_type_to_clif(*param, pointer_ty))
-                .collect(),
-            ret: runtime_abi_type_to_clif(intrinsic.abi_return, pointer_ty),
-        })
-        .collect()
-}
-
-fn runtime_abi_type_to_clif(kind: RuntimeAbiType, pointer_ty: Type) -> Type {
-    match kind {
-        RuntimeAbiType::Ptr => pointer_ty,
-        RuntimeAbiType::I32 => I32,
-        RuntimeAbiType::I64 => I64,
-        RuntimeAbiType::F64 => F64,
-    }
-}
-
-fn runtime_intrinsic_returns_bytes_slice(name: &str) -> bool {
-    runtime_intrinsic_for_symbol(name)
-        .map(|intrinsic| matches!(intrinsic.return_kind, RuntimeReturnKind::BytesSlice))
-        .unwrap_or(false)
+fn runtime_intrinsics(_pointer_ty: Type) -> Vec<RuntimeIntrinsic> {
+    // dyn_syscall: backing symbol for the $syscall builtin.
+    // Signature: (i64 x 7) -> i64  — number + up to 6 args, padded with 0.
+    vec![RuntimeIntrinsic {
+        name: "dyn_syscall",
+        params: vec![I64, I64, I64, I64, I64, I64, I64],
+        ret: I64,
+    }]
 }
 
 fn returns_bytes_slice_from_hint(return_type: Option<&str>) -> bool {
@@ -720,6 +748,7 @@ fn compile_function(
 
     let lower_value_context = LowerValueContext {
         value_defs: &value_defs,
+        value_types: &value_types,
         param_access: &param_access,
         current_module_id,
         scalar,
@@ -733,6 +762,7 @@ fn compile_function(
                 .returns_errorable_scalar_payload_ty_by_id,
             returns_aggregate_layout_by_id: &symbols.returns_aggregate_layout_by_id,
         },
+        global_data_ids: &symbols.global_data_ids,
     };
 
     let mut global_lowered = BTreeMap::<MirValueId, LoweredValue>::new();

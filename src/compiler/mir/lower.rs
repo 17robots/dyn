@@ -5,12 +5,9 @@ use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 use crate::compiler::hir::{
     HirCallArg, HirExpr, HirExprKind, HirForExpr, HirLiteral, HirPattern, HirProgram,
 };
-use crate::compiler::intrinsics::{
-    runtime_return_kind_for_symbol, runtime_symbol_for_builtin, RuntimeReturnKind,
-};
 use crate::compiler::mir::{
-    MirBasicBlock, MirBlockId, MirFunction, MirInstr, MirModule, MirProgram, MirTerminator,
-    MirValue, MirValueId, MirValueType,
+    MirBasicBlock, MirBlockId, MirFunction, MirGlobal, MirGlobalInit, MirInstr, MirModule,
+    MirProgram, MirTerminator, MirValue, MirValueId, MirValueType,
 };
 use crate::compiler::module_resolver::{ModuleId, ModuleKey};
 
@@ -325,6 +322,33 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 })
                 .collect::<BTreeMap<_, _>>();
 
+            let globals = module
+                .items
+                .iter()
+                .filter(|item| item.mutable)
+                .filter_map(|item| {
+                    let type_hint = item.type_hint.clone().or_else(|| item.inferred_type.clone());
+                    let ty = type_hint.as_deref().map(parse_type_hint).unwrap_or(MirValueType::Unknown);
+                    let init = match &item.value.kind {
+                        HirExprKind::Literal(HirLiteral::Integer(v)) => {
+                            parse_i64_literal(v).map(MirGlobalInit::Integer).unwrap_or(MirGlobalInit::Zero)
+                        }
+                        HirExprKind::Literal(HirLiteral::Bool(b)) => MirGlobalInit::Bool(*b),
+                        _ => MirGlobalInit::Zero,
+                    };
+                    Some(MirGlobal {
+                        name: item.name.clone(),
+                        mutable: true,
+                        type_hint,
+                        ty,
+                        init,
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            let global_names: BTreeSet<String> =
+                globals.iter().map(|g| g.name.clone()).collect();
+
             let shared = FunctionLowererShared {
                 function_return_types: function_return_types.clone(),
                 function_return_hints: function_return_hints.clone(),
@@ -338,11 +362,13 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 inline_function_names: inline_function_names.clone(),
                 module_ids_by_key: module_ids_by_key.clone(),
                 module_exports_by_id: module_exports_by_id.clone(),
+                global_names: global_names.clone(),
             };
 
             let functions = module
                 .items
                 .iter()
+                .filter(|item| !global_names.contains(&item.name))
                 .map(|item| {
                     let mut lowerer = FunctionLowerer::new(
                         module.key.clone(),
@@ -372,6 +398,7 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                 );
 
                             lowerer.current_param_type_hints = param_types.clone();
+                            lowerer.current_self_type_hint = item.enclosing_struct.clone();
                             lowerer.function.param_type_hints = param_types.clone();
                             lowerer.function.param_types = param_types
                                 .iter()
@@ -427,6 +454,7 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                     );
 
                                 lowerer.current_param_type_hints = param_types.clone();
+                                lowerer.current_self_type_hint = item.enclosing_struct.clone();
                                 lowerer.function.param_type_hints = param_types.clone();
                                 lowerer.function.param_types = param_types
                                     .iter()
@@ -486,8 +514,11 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                     }
 
                     module_diagnostics.append(&mut lowerer.diagnostics);
-                    lowerer.function
+                    let mut result = std::mem::take(&mut lowerer.hoisted_lambdas);
+                    result.push(lowerer.function);
+                    result
                 })
+                .flatten()
                 .collect::<Vec<_>>();
 
             let extern_functions = module
@@ -518,6 +549,7 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
             MirModule {
                 module_id: module.module_id,
                 key: module.key.clone(),
+                globals,
                 functions,
                 extern_functions,
             }
@@ -658,12 +690,21 @@ struct FunctionLowerer {
     module_ids_by_key: BTreeMap<ModuleKey, ModuleId>,
     module_exports_by_id: BTreeMap<ModuleId, Vec<String>>,
     current_param_type_hints: Vec<Option<String>>,
+    /// The enclosing struct name for member functions, used to resolve `$self()` when there is
+    /// no `self` parameter in scope.
+    current_self_type_hint: Option<String>,
     inline_call_depth: usize,
     inline_call_stack: Vec<String>,
+    current_inline_module: Option<String>,
     loop_stack: Vec<LoopContext>,
     or_break_stack: Vec<OrBreakContext>,
     deferred: Vec<DeferredExpr>,
     diagnostics: Vec<Diagnostic>,
+    /// Lambdas hoisted out of inline positions, to be emitted as top-level functions.
+    hoisted_lambdas: Vec<MirFunction>,
+    /// Names of module-level mutable globals in this module; used to distinguish global
+    /// loads/stores from local variable accesses.
+    global_names: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -706,6 +747,7 @@ struct FunctionLowererShared {
     inline_function_names: BTreeSet<String>,
     module_ids_by_key: BTreeMap<ModuleKey, ModuleId>,
     module_exports_by_id: BTreeMap<ModuleId, Vec<String>>,
+    global_names: BTreeSet<String>,
 }
 
 fn extract_inline_function_body(expr: &HirExpr) -> Option<(&Vec<String>, &HirExpr)> {
@@ -837,29 +879,6 @@ fn contains_disallowed_inline_flow_hir(expr: &HirExpr) -> bool {
         | HirExprKind::Unknown
         | HirExprKind::Literal(_)
         | HirExprKind::Ident(_) => false,
-    }
-}
-
-fn mir_value_type_for_runtime_return(kind: RuntimeReturnKind) -> MirValueType {
-    match kind {
-        RuntimeReturnKind::U32 => MirValueType::Int {
-            signed: false,
-            bits: 32,
-        },
-        RuntimeReturnKind::U64 => MirValueType::Int {
-            signed: false,
-            bits: 64,
-        },
-        RuntimeReturnKind::I64 => MirValueType::Int {
-            signed: true,
-            bits: 64,
-        },
-        RuntimeReturnKind::I32 => MirValueType::Int {
-            signed: true,
-            bits: 32,
-        },
-        RuntimeReturnKind::BytesSlice => MirValueType::BytesSlice,
-        RuntimeReturnKind::IdentityI32Fn => MirValueType::FunctionPointer,
     }
 }
 

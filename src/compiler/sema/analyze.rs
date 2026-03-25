@@ -9,7 +9,6 @@ use crate::compiler::diagnostic_utils::sort_diagnostics_by_primary_path;
 use crate::compiler::diagnostics::{
     Diagnostic, DiagnosticCode, DiagnosticLabel, DiagnosticPhase, SourceSpan,
 };
-use crate::compiler::intrinsics::runtime_intrinsic_for_symbol;
 use crate::compiler::module_resolver::{ModuleId, ModuleKey};
 use crate::compiler::sema::module_unit::ModuleUnit;
 
@@ -237,7 +236,6 @@ fn is_predeclared_name(name: &str) -> bool {
             | "i64"
             | "f32"
             | "f64"
-            | "f128"
             | "type"
             | "any"
             | "opaque"
@@ -348,7 +346,6 @@ fn check_expr_resolution(
                 || import_aliases.contains_key(&ident.text)
                 || type_names.contains(&ident.text)
                 || is_predeclared_name(&ident.text)
-                || runtime_intrinsic_for_symbol(&ident.text).is_some()
                 || looks_like_type_parameter(&ident.text);
 
             if !known {
@@ -461,6 +458,22 @@ fn check_expr_resolution(
                             diagnostics,
                         );
                         bind_name(scopes, &binding.name.text, binding.name.span);
+                    }
+                    Stmt::Destructure(d) => {
+                        check_expr_resolution(
+                            &d.value,
+                            scopes,
+                            out_of_scope,
+                            module_defs,
+                            import_aliases,
+                            type_names,
+                            module_by_id,
+                            file_path,
+                            diagnostics,
+                        );
+                        for dn in &d.names {
+                            bind_name(scopes, &dn.name.text, dn.name.span);
+                        }
                     }
                     Stmt::Expr(stmt_expr) => check_expr_resolution(
                         stmt_expr,
@@ -954,6 +967,32 @@ fn check_expr_resolution(
         }
         ExprKind::StructLiteral(struct_lit) => {
             for field in &struct_lit.fields {
+                check_expr_resolution(
+                    &field.value,
+                    scopes,
+                    out_of_scope,
+                    module_defs,
+                    import_aliases,
+                    type_names,
+                    module_by_id,
+                    file_path,
+                    diagnostics,
+                );
+            }
+        }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            check_expr_resolution(
+                ty_expr,
+                scopes,
+                out_of_scope,
+                module_defs,
+                import_aliases,
+                type_names,
+                module_by_id,
+                file_path,
+                diagnostics,
+            );
+            for field in fields {
                 check_expr_resolution(
                     &field.value,
                     scopes,

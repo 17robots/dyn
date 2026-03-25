@@ -19,6 +19,7 @@ struct Parser<'a> {
     diagnostics: Vec<crate::compiler::diagnostics::Diagnostic>,
     file_path: PathBuf,
     disallow_ident_struct_literal: bool,
+    disallow_labeled_block: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -29,6 +30,7 @@ impl<'a> Parser<'a> {
             diagnostics: Vec::new(),
             file_path,
             disallow_ident_struct_literal: false,
+            disallow_labeled_block: false,
         }
     }
 
@@ -112,6 +114,10 @@ impl<'a> Parser<'a> {
                 }
             }
             return None;
+        }
+
+        if self.looks_like_destructure_binding() {
+            return self.parse_destructure_binding(docs, visibility);
         }
 
         let mutable = self.match_keyword(Keyword::Mut);
@@ -465,6 +471,43 @@ impl<'a> Parser<'a> {
                 };
                 continue;
             }
+            // `expr{}` or `expr{ field: val }` — construct a struct whose type is `expr`.
+            // Only valid when `{` is byte-adjacent to the preceding expression (no whitespace),
+            // preventing ambiguity with a following block statement on a new line.
+            if self.peek_delimiter(Delimiter::LBrace)
+                && self.current_touches_expr_end(expr.span)
+                && !self.disallow_ident_struct_literal
+            {
+                let start = expr.span;
+                self.advance(); // consume `{`
+                let mut fields = Vec::new();
+                while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
+                    let name = match self.parse_ident() {
+                        Some(n) => n,
+                        None => break,
+                    };
+                    self.expect_operator(Operator::Colon, "expected ':' in struct field");
+                    let value = match self.parse_expr(0) {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    fields.push(StructLiteralField { name, value });
+                    if self.match_delimiter(Delimiter::Comma) {
+                        continue;
+                    }
+                    break;
+                }
+                let end = self.current_span();
+                self.expect_delimiter(Delimiter::RBrace, "expected '}' after struct construction");
+                expr = Expr {
+                    span: merge_span(start, end),
+                    kind: ExprKind::TypeConstruct {
+                        ty_expr: Box::new(expr),
+                        fields,
+                    },
+                };
+                continue;
+            }
             if let Some(op) = self.current_assign_op() {
                 let op_span = self.current_span();
                 self.advance();
@@ -539,7 +582,8 @@ impl<'a> Parser<'a> {
                     text: token.lexeme.clone(),
                     span: token.span,
                 };
-                if self.peek_operator(Operator::Colon)
+                if !self.disallow_labeled_block
+                    && self.peek_operator(Operator::Colon)
                     && self.peek_next_kind(TokenKind::Delimiter(Delimiter::LBrace))
                 {
                     self.advance();
@@ -576,8 +620,12 @@ impl<'a> Parser<'a> {
                     self.parse_fn_expr()
                 } else {
                     self.advance();
-                    let expr = self.parse_expr(0)?;
+                    let mut expr = self.parse_expr(0)?;
                     self.expect_delimiter(Delimiter::RParen, "expected ')' after expression");
+                    // Extend span to include the closing ')' so that postfix operators
+                    // like '.*' are recognized as touching the paren expression.
+                    let close_span = self.prev_span();
+                    expr.span = merge_span(expr.span, close_span);
                     Some(expr)
                 }
             }
@@ -753,6 +801,15 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            if self.looks_like_destructure_binding() {
+                if let Some(Item::Destructure(d)) = self.parse_destructure_binding(vec![], Visibility::Private) {
+                    statements.push(Stmt::Destructure(d));
+                    tail_expr = None;
+                    self.match_delimiter(Delimiter::Semicolon);
+                    continue;
+                }
+            }
+
             if self.peek_kind(TokenKind::DocComment) || self.looks_like_local_binding() {
                 if let Some(Item::Binding(binding)) = self.parse_item(false) {
                     statements.push(Stmt::Binding(binding));
@@ -838,7 +895,12 @@ impl<'a> Parser<'a> {
 
     fn parse_if_expr(&mut self) -> Option<Expr> {
         let start = self.prev_span();
+        let prev_struct_literal = self.disallow_ident_struct_literal;
+        self.disallow_ident_struct_literal = true;
+        self.disallow_labeled_block = true;
         let condition = self.parse_expr(0)?;
+        self.disallow_labeled_block = false;
+        self.disallow_ident_struct_literal = prev_struct_literal;
 
         let capture = if self.match_operator(Operator::Colon) {
             self.expect_operator(Operator::Pipe, "expected '|' in if-capture");
@@ -1003,10 +1065,19 @@ impl<'a> Parser<'a> {
             });
         }
 
+        let prev_struct_literal = self.disallow_ident_struct_literal;
+        self.disallow_ident_struct_literal = true;
+        self.disallow_labeled_block = true;
         let left = self.parse_expr(11)?;
+        self.disallow_labeled_block = false;
+        self.disallow_ident_struct_literal = prev_struct_literal;
         if self.match_operator(Operator::DotDot) || self.match_operator(Operator::DotDotEq) {
             let inclusive = self.prev_kind() == Some(TokenKind::Operator(Operator::DotDotEq));
+            self.disallow_ident_struct_literal = true;
+            self.disallow_labeled_block = true;
             let right = self.parse_expr(11)?;
+            self.disallow_labeled_block = false;
+            self.disallow_ident_struct_literal = prev_struct_literal;
             self.expect_operator(Operator::Colon, "expected ':' after for range");
             let binding = self.parse_optional_pipe_binding();
             let body = self.parse_expr(0)?;
@@ -1177,10 +1248,11 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         while !self.peek_delimiter(Delimiter::RParen) && !self.is_eof() {
             let name = self.parse_ident()?;
-            let ty = if self.match_operator(Operator::Colon) {
-                Some(self.parse_type_expr()?)
+            let (comp, ty) = if self.match_operator(Operator::Colon) {
+                let comp = self.match_keyword(Keyword::Comp);
+                (comp, Some(self.parse_type_expr()?))
             } else {
-                None
+                (false, None)
             };
             let default_value = if self.match_operator(Operator::Equal) {
                 self.parse_expr(0)
@@ -1191,6 +1263,7 @@ impl<'a> Parser<'a> {
                 name,
                 ty,
                 default_value,
+                comp,
             });
             if !self.match_delimiter(Delimiter::Comma) {
                 if self.peek_delimiter(Delimiter::RParen) {
@@ -1611,7 +1684,12 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 let ty = self.parse_type_expr()?;
-                fields.push(StructFieldType { name, ty });
+                let default_value = if self.match_operator(Operator::Equal) {
+                    Some(self.parse_expr(0)?)
+                } else {
+                    None
+                };
+                fields.push(StructFieldType { name, ty, default_value });
             } else if self.match_operator(Operator::Equal) {
                 let value = self.parse_expr(0)?;
                 members.push(StructMemberType { name, value });
@@ -2209,6 +2287,87 @@ impl<'a> Parser<'a> {
             }
             self.advance();
         }
+    }
+
+    /// Returns true if the current position looks like `{ names } :=`.
+    /// Used to disambiguate destructuring from a block expression.
+    fn looks_like_destructure_binding(&self) -> bool {
+        let mut idx = self.index;
+        // Must start with `{`
+        if !matches!(
+            self.tokens.get(idx).map(|t| &t.kind),
+            Some(TokenKind::Delimiter(Delimiter::LBrace))
+        ) {
+            return false;
+        }
+        idx += 1;
+        // Must have at least one name (optionally preceded by `mut`)
+        let has_item = loop {
+            if matches!(
+                self.tokens.get(idx).map(|t| &t.kind),
+                Some(TokenKind::Keyword(Keyword::Mut))
+            ) {
+                idx += 1;
+            }
+            if !matches!(
+                self.tokens.get(idx).map(|t| &t.kind),
+                Some(TokenKind::Identifier)
+            ) {
+                break false;
+            }
+            idx += 1;
+            match self.tokens.get(idx).map(|t| &t.kind) {
+                Some(TokenKind::Delimiter(Delimiter::Comma)) => {
+                    idx += 1;
+                    continue;
+                }
+                Some(TokenKind::Delimiter(Delimiter::RBrace)) => {
+                    idx += 1;
+                    break true;
+                }
+                _ => break false,
+            }
+        };
+        if !has_item {
+            return false;
+        }
+        // Must be followed by `:=`
+        matches!(
+            self.tokens.get(idx).map(|t| &t.kind),
+            Some(TokenKind::Operator(Operator::Colon))
+        ) && matches!(
+            self.tokens.get(idx + 1).map(|t| &t.kind),
+            Some(TokenKind::Operator(Operator::Equal))
+        )
+    }
+
+    fn parse_destructure_binding(
+        &mut self,
+        docs: Vec<DocComment>,
+        visibility: Visibility,
+    ) -> Option<Item> {
+        let start = self.current_span();
+        self.expect_delimiter(Delimiter::LBrace, "expected '{' for destructure pattern");
+        let mut names = Vec::new();
+        while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
+            let mutable = self.match_keyword(Keyword::Mut);
+            let name = self.parse_ident()?;
+            names.push(DestructureName { mutable, name });
+            if !self.match_delimiter(Delimiter::Comma) {
+                break;
+            }
+        }
+        self.expect_delimiter(Delimiter::RBrace, "expected '}' after destructure names");
+        self.expect_operator(Operator::Colon, "expected ':=' after destructure pattern");
+        self.expect_operator(Operator::Equal, "expected '=' after ':' in destructure");
+        let value = self.parse_expr(0)?;
+        Some(Item::Destructure(Box::new(DestructureBinding {
+            docs,
+            visibility,
+            names,
+            span: merge_span(start, value.span),
+            value,
+        })))
     }
 
     fn looks_like_local_binding(&self) -> bool {

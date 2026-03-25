@@ -1,161 +1,6 @@
 use super::*;
 
 #[test]
-fn validates_builtin_allocator_call_arity() {
-    let root = make_temp_dir();
-    fs::write(root.join("a.dyn"), "module main\na := dynrt_alloc(16)\n")
-        .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic.message.contains("missing required argument")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn validates_builtin_memory_call_arity() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\na := dynrt_mem_set(0, 255)\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic.message.contains("missing required argument")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn validates_builtin_vec_call_arity() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\na := dynrt_vec_i32_push(0)\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic.message.contains("missing required argument")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn validates_builtin_failing_allocator_call_arity() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\na := dynrt_test_set_fail_after()\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic.message.contains("missing required argument")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn validates_raw_vec_call_arity() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\na := dynrt_vec_raw_init(1, 4)\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic.message.contains("missing required argument")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn validates_raw_vec_bytes_call_arity() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\na := dynrt_vec_raw_push_bytes(0, 0)\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == DiagnosticCode::E4005
-            && diagnostic.message.contains("missing required argument")
-    }));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn validates_identity_function_pointer_builtin_arity() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\na := dynrt_test_identity_i32_fn(1)\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == DiagnosticCode::E4005));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn validates_arena_allocator_builtin_arity() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\na := dynrt_arena_reset()\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units) =
-        parse_project_with_module_units(&root).expect("project should parse and merge");
-    let diagnostics = type_check_modules(&units);
-    assert!(diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == DiagnosticCode::E4005));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
 fn rejects_opaque_pointer_as_typed_pointer_without_cast() {
     let root = make_temp_dir();
     fs::write(
@@ -198,7 +43,7 @@ fn supports_builtin_cast_between_usize_and_pointer() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
-            "module main\nmain := () i32 {\n  p := $as(*mut i32, dynrt_alloc(4, 4))\n  q := $as(usize, p)\n  return if q != 0 1 else 0\n}\n",
+            "module main\nmain := () i32 {\n  mut x: i32 = 1\n  p := $as(*mut i32, &x)\n  q := $as(usize, p)\n  return if q != 0 1 else 0\n}\n",
         )
         .expect("file should be written");
 
@@ -296,7 +141,7 @@ fn accepts_self_builtin_in_method_context() {
     let root = make_temp_dir();
     fs::write(
         root.join("a.dyn"),
-        "module main\nThing := struct { f := (self: *Thing) type => $Self() }\n",
+        "module main\nThing := struct { f := (self: *Thing) type => $self() }\n",
     )
     .expect("file should be written");
 
@@ -307,7 +152,7 @@ fn accepts_self_builtin_in_method_context() {
         diagnostic.code == DiagnosticCode::E4005
             && diagnostic
                 .message
-                .contains("$Self is only available in self method context")
+                .contains("$self is only available in self method context")
     }));
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
@@ -316,7 +161,7 @@ fn accepts_self_builtin_in_method_context() {
 #[test]
 fn reports_self_builtin_outside_method_context() {
     let root = make_temp_dir();
-    fs::write(root.join("a.dyn"), "module main\na := $Self()\n").expect("file should be written");
+    fs::write(root.join("a.dyn"), "module main\na := $self()\n").expect("file should be written");
 
     let (_parsed, units) =
         parse_project_with_module_units(&root).expect("project should parse and merge");
@@ -325,7 +170,7 @@ fn reports_self_builtin_outside_method_context() {
         diagnostic.code == DiagnosticCode::E4005
             && diagnostic
                 .message
-                .contains("$Self is only available in self method context")
+                .contains("$self is only available in self method context")
     }));
 
     fs::remove_dir_all(root).expect("temp directory should be removed");

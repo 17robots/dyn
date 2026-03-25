@@ -17,8 +17,25 @@ pub struct ModuleDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     Binding(Box<Binding>),
+    Destructure(Box<DestructureBinding>),
     Extern(Box<ExternDecl>),
     ExprStmt(Box<Expr>),
+}
+
+/// `{a, b} := expr` — destructure the RHS by field name into multiple bindings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestructureBinding {
+    pub docs: Vec<DocComment>,
+    pub visibility: Visibility,
+    pub names: Vec<DestructureName>,
+    pub value: Expr,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestructureName {
+    pub mutable: bool,
+    pub name: Ident,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

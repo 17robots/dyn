@@ -68,6 +68,14 @@ fn is_compile_time_expr_with_locals(expr: &Expr, locals: &mut BTreeSet<String>) 
                         }
                         scope.insert(binding.name.text.clone());
                     }
+                    Stmt::Destructure(d) => {
+                        if !is_compile_time_expr_with_locals(&d.value, &mut scope) {
+                            return false;
+                        }
+                        for dn in &d.names {
+                            scope.insert(dn.name.text.clone());
+                        }
+                    }
                     Stmt::Expr(expr) => {
                         if !is_compile_time_expr_with_locals(expr, &mut scope) {
                             return false;
@@ -132,7 +140,7 @@ fn is_compile_time_expr_with_locals(expr: &Expr, locals: &mut BTreeSet<String>) 
                     call.args.len() == 1
                         && is_compile_time_expr_with_locals(&call.args[0].value, locals)
                 }
-                "$Self" => call.args.is_empty(),
+                "$self" => call.args.is_empty(),
                 _ => false,
             },
             ExprKind::Ident(_) => call

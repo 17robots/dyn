@@ -61,6 +61,12 @@ pub(super) fn validate_named_struct_offsetof_calls(
                         diagnostics,
                         file_path,
                     ),
+                    Stmt::Destructure(d) => validate_named_struct_offsetof_calls(
+                        &d.value,
+                        named_struct_fields,
+                        diagnostics,
+                        file_path,
+                    ),
                     Stmt::Expr(stmt_expr) => validate_named_struct_offsetof_calls(
                         stmt_expr,
                         named_struct_fields,
@@ -286,6 +292,12 @@ pub(super) fn validate_named_struct_offsetof_calls(
                 );
             }
         }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            validate_named_struct_offsetof_calls(ty_expr, named_struct_fields, diagnostics, file_path);
+            for field in fields {
+                validate_named_struct_offsetof_calls(&field.value, named_struct_fields, diagnostics, file_path);
+            }
+        }
         ExprKind::ArrayLiteral(elements) => {
             for element in elements {
                 validate_named_struct_offsetof_calls(
@@ -465,6 +477,16 @@ pub(super) fn validate_mut_pointer_receiver_calls_expr(
                                 );
                             }
                         }
+                    }
+                    Stmt::Destructure(d) => {
+                        validate_mut_pointer_receiver_calls_expr(
+                            &d.value,
+                            methods,
+                            struct_fields,
+                            diagnostics,
+                            file_path,
+                            scopes,
+                        );
                     }
                     Stmt::Expr(stmt_expr) => validate_mut_pointer_receiver_calls_expr(
                         stmt_expr,
@@ -790,6 +812,12 @@ pub(super) fn validate_mut_pointer_receiver_calls_expr(
                 );
             }
         }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            validate_mut_pointer_receiver_calls_expr(ty_expr, methods, struct_fields, diagnostics, file_path, scopes);
+            for field in fields {
+                validate_mut_pointer_receiver_calls_expr(&field.value, methods, struct_fields, diagnostics, file_path, scopes);
+            }
+        }
         ExprKind::ArrayLiteral(elements) => {
             for element in elements {
                 validate_mut_pointer_receiver_calls_expr(
@@ -902,6 +930,7 @@ pub(super) fn infer_nominal_type_from_expr(
 ) -> Option<String> {
     match &expr.kind {
         ExprKind::StructLiteral(lit) => lit.root_type.as_ref().map(|ident| ident.text.clone()),
+        ExprKind::TypeConstruct { .. } => None,
         ExprKind::Ident(ident) => scopes
             .iter()
             .rev()

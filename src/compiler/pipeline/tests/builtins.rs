@@ -5,7 +5,7 @@ fn builds_native_executable_with_self_builtin_in_method() {
     let root = make_temp_dir();
     fs::write(
             root.join("a.dyn"),
-            "module main\nThing := struct { check := (self: *Thing) i32 { s := $Self(); return if s == s 6 else 0 } }\nmain := () i32 {\n  t := Thing{}\n  return t.check()\n}\n",
+            "module main\nThing := struct { check := (self: *Thing) i32 { s := $self(); return if s == s 6 else 0 } }\nmain := () i32 {\n  t := Thing{}\n  return t.check()\n}\n",
         )
         .expect("file should be written");
 
@@ -311,27 +311,6 @@ fn builds_native_executable_with_comptime_builtin_expression() {
         .status()
         .expect("executable should run");
     assert_eq!(status.code(), Some(4));
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
-}
-
-#[test]
-fn builds_native_executable_with_typed_allocator_type_parameter_api() {
-    let root = make_temp_dir();
-    fs::write(
-            root.join("a.dyn"),
-            "module main\nheap := use \"std/heap\"\nmem := use \"std/mem\"\nAllocator := heap.Allocator\nalloc_t := (alloc: Allocator, T: comp type, count: usize) ?usize =>\n  alloc.alloc(T, count) or null\nfree_t := (alloc: Allocator, T: comp type, ptr: usize, count: usize) u32 =>\n  alloc.free(T, ptr, count)\nmain := () i32 {\n  c := heap.CAllocator().new()\n  alloc := c.allocator()\n  p := alloc_t(alloc, i32, 2) or $as(usize, 0)\n  if p == 0 return 0\n  mem.set(p, 0x22, 8)\n  ok := free_t(alloc, i32, p, 2)\n  return if ok == 1 34 else 0\n}\n",
-        )
-        .expect("file should be written");
-
-    let (artifact, diagnostics) = build_project(&root, None).expect("build pipeline should run");
-    assert!(diagnostics.is_empty());
-    assert!(artifact.executable_path.exists());
-
-    let status = Command::new(&artifact.executable_path)
-        .status()
-        .expect("executable should run");
-    assert_eq!(status.code(), Some(34));
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
 }

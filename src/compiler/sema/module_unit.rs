@@ -121,6 +121,21 @@ pub fn build_module_units(graph: &ModuleGraph, parsed: &ParseSession) -> Vec<Mod
                         span: binding.span,
                     });
                 }
+                Item::Destructure(d) => {
+                    for dn in &d.names {
+                        unit.declarations.push(DeclStub {
+                            name: dn.name.text.clone(),
+                            visibility: d.visibility,
+                            mutable: dn.mutable,
+                            kind: DeclKind::Binding,
+                            initializer: DeclInitializer::Expr,
+                            annotation: None,
+                            value: d.value.clone(),
+                            file_path: parsed_file.file_path.clone(),
+                            span: d.span,
+                        });
+                    }
+                }
                 Item::Extern(extern_decl) => {
                     unit.extern_declarations.push(ExternDeclStub {
                         name: extern_decl.name.text.clone(),
@@ -212,6 +227,7 @@ fn collect_item_uses(
 ) {
     match item {
         Item::Binding(binding) => collect_binding_uses(binding, file_path, imports, names, members),
+        Item::Destructure(d) => collect_expr_uses(&d.value, None, file_path, imports, names, members),
         Item::Extern(_) => {}
         Item::ExprStmt(expr) => collect_expr_uses(expr, None, file_path, imports, names, members),
     }
@@ -237,6 +253,7 @@ fn collect_stmt_uses(
 ) {
     match stmt {
         Stmt::Binding(binding) => collect_binding_uses(binding, file_path, imports, names, members),
+        Stmt::Destructure(d) => collect_expr_uses(&d.value, None, file_path, imports, names, members),
         Stmt::Expr(expr) => collect_expr_uses(expr, None, file_path, imports, names, members),
     }
 }
@@ -383,6 +400,12 @@ fn collect_expr_uses(
         }
         ExprKind::StructLiteral(struct_lit) => {
             for field in &struct_lit.fields {
+                collect_expr_uses(&field.value, None, file_path, imports, names, members);
+            }
+        }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            collect_expr_uses(ty_expr, None, file_path, imports, names, members);
+            for field in fields {
                 collect_expr_uses(&field.value, None, file_path, imports, names, members);
             }
         }

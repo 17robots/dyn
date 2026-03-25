@@ -38,6 +38,9 @@ pub struct HirItem {
     pub inferred_type: Option<String>,
     pub value: HirExpr,
     pub span: SourceSpan,
+    /// Set when this item was a member function inside a struct definition.
+    /// Used to resolve `$self()` in members that have no `self` parameter.
+    pub enclosing_struct: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -152,63 +152,6 @@ impl FunctionLowerer {
         );
     }
 
-    #[allow(dead_code)]
-    pub(super) fn report_inline_call_lowering_failure(
-        &mut self,
-        span: crate::compiler::diagnostics::SourceSpan,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                DiagnosticPhase::Mir,
-                DiagnosticCode::E4010,
-                "inline call could not be lowered",
-            )
-            .with_primary_file_label(
-                self.source_file_path.clone(),
-                Some(span),
-                "use a direct call to an inline-lowerable function body",
-            ),
-        );
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn report_inline_range_requires_comptime_bounds(
-        &mut self,
-        span: crate::compiler::diagnostics::SourceSpan,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                DiagnosticPhase::Mir,
-                DiagnosticCode::E4011,
-                "inline for requires compile-time range bounds",
-            )
-            .with_primary_file_label(
-                self.source_file_path.clone(),
-                Some(span),
-                "use literals or comptime-evaluable bound expressions",
-            ),
-        );
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn report_unsupported_inline_expression(
-        &mut self,
-        span: crate::compiler::diagnostics::SourceSpan,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                DiagnosticPhase::Mir,
-                DiagnosticCode::E4012,
-                "unsupported inline expression",
-            )
-            .with_primary_file_label(
-                self.source_file_path.clone(),
-                Some(span),
-                "inline currently supports range loops, direct calls, and function literals",
-            ),
-        );
-    }
-
     pub(super) fn should_force_comptime_call(&self, callee_name: &str) -> bool {
         if matches!(
             self.function_return_types.get(callee_name),
@@ -350,6 +293,45 @@ impl FunctionLowerer {
                 self.set_terminator(block, MirTerminator::Unreachable);
                 Some((block, None))
             }
+            "$syscall" => {
+                if args.is_empty() || args.len() > 7 {
+                    return Some((block, None));
+                }
+                let isize_ty = MirValueType::Int {
+                    signed: true,
+                    bits: 64,
+                };
+                let zero = self.push_eval(
+                    block,
+                    MirValue::Literal(crate::compiler::hir::HirLiteral::Integer("0".to_string())),
+                    isize_ty.clone(),
+                );
+                // Lower all provided args, then pad remaining slots to 7 with zero.
+                let mut end = block;
+                let mut lowered_args = Vec::with_capacity(7);
+                for arg in args {
+                    let (arg_end, value) = self.lower_expr(end, &arg.value);
+                    end = arg_end;
+                    lowered_args.push(value.unwrap_or(zero));
+                }
+                while lowered_args.len() < 7 {
+                    lowered_args.push(zero);
+                }
+                let callee = self.push_eval(
+                    end,
+                    MirValue::Ident("dyn_syscall".to_string()),
+                    MirValueType::FunctionPointer,
+                );
+                let result = self.push_eval(
+                    end,
+                    MirValue::Call {
+                        callee,
+                        args: lowered_args,
+                    },
+                    isize_ty,
+                );
+                Some((end, Some(result)))
+            }
             "$panic" => {
                 if args.len() != 1 {
                     self.set_terminator(block, MirTerminator::Unreachable);
@@ -359,15 +341,18 @@ impl FunctionLowerer {
                 self.set_terminator(arg_end, MirTerminator::Unreachable);
                 Some((arg_end, None))
             }
-            "$Self" => {
+            "$self" => {
                 if !args.is_empty() {
                     return Some((block, None));
                 }
+                // First try the first parameter's type hint (e.g. `self: *Thing` → "Thing").
+                // Fall back to the enclosing struct name for members with no self parameter.
                 let self_name = self
                     .current_param_type_hints
                     .first()
                     .and_then(|hint| hint.as_ref())
                     .map(|hint| self_type_literal_from_param_hint(hint))
+                    .or_else(|| self.current_self_type_hint.clone())
                     .unwrap_or_else(|| "unknown".to_string());
                 let value =
                     self.push_eval(block, MirValue::TypeLiteral(self_name), MirValueType::Type);
@@ -381,11 +366,8 @@ impl FunctionLowerer {
                 let Some(arg_value) = arg_value else {
                     return Some((arg_end, None));
                 };
-                let ty_name = match self
-                    .value_types
-                    .get(&arg_value)
-                    .cloned()
-                    .unwrap_or(MirValueType::Unknown)
+                let resolved_ty = self.value_types.get(&arg_value).cloned().unwrap_or(MirValueType::Unknown);
+                let ty_name = match resolved_ty
                 {
                     MirValueType::Bool => "u1".to_string(),
                     MirValueType::BytesSlice => "[]u8".to_string(),
@@ -396,7 +378,9 @@ impl FunctionLowerer {
                     } => format!("u{bits}"),
                     MirValueType::Float { bits } => format!("f{bits}"),
                     MirValueType::Type => "type".to_string(),
-                    MirValueType::Function | MirValueType::FunctionPointer => "fn".to_string(),
+                    MirValueType::Function
+                    | MirValueType::FunctionPointer
+                    | MirValueType::Closure => "fn".to_string(),
                     MirValueType::Unknown => "unknown".to_string(),
                 };
                 let value =
@@ -606,7 +590,7 @@ impl FunctionLowerer {
                         )?;
                         eval_comptime_cast(&target, value)
                     }
-                    "$Self" => {
+                    "$self" => {
                         if !args.is_empty() {
                             return None;
                         }
@@ -615,6 +599,7 @@ impl FunctionLowerer {
                             .first()
                             .and_then(|hint| hint.as_ref())
                             .map(|hint| self_type_literal_from_param_hint(hint))
+                            .or_else(|| self.current_self_type_hint.clone())
                             .unwrap_or_else(|| "unknown".to_string());
                         Some(ComptimeValue::Type(self_name))
                     }

@@ -87,9 +87,7 @@ pub(super) fn infer_expr_type(
                 | BinaryOp::Mod
                 | BinaryOp::BitAnd
                 | BinaryOp::BitOr
-                | BinaryOp::BitXor
-                | BinaryOp::Shl
-                | BinaryOp::Shr => {
+                | BinaryOp::BitXor => {
                     if !is_numeric(left_ty, types) || !is_numeric(right_ty, types) {
                         diagnostics.push(
                             Diagnostic::error(
@@ -106,6 +104,25 @@ pub(super) fn infer_expr_type(
                     }
                     numeric_result_type(left_ty, right_ty, types)
                 }
+                BinaryOp::Shl | BinaryOp::Shr => {
+                    let left_is_int = matches!(types.get(left_ty), Type::Int { .. });
+                    let right_is_int = matches!(types.get(right_ty), Type::Int { .. });
+                    if !left_is_int || !right_is_int {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                "shift operators require integer operands",
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(expr.span),
+                                "both operands must be integers, not floats",
+                            ),
+                        );
+                    }
+                    numeric_result_type(left_ty, right_ty, types)
+                }
                 BinaryOp::Eq
                 | BinaryOp::Ne
                 | BinaryOp::Lt
@@ -114,7 +131,23 @@ pub(super) fn infer_expr_type(
                 | BinaryOp::Ge
                 | BinaryOp::LogicalAnd
                 | BinaryOp::LogicalOr => types.intern(Type::Bool),
-                BinaryOp::Range | BinaryOp::RangeInclusive => types.intern(Type::Unknown),
+                BinaryOp::Range | BinaryOp::RangeInclusive => {
+                    if !is_numeric(left_ty, types) || !is_numeric(right_ty, types) {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                "range bounds must be numeric",
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(expr.span),
+                                "both range bounds must be numeric",
+                            ),
+                        );
+                    }
+                    types.intern(Type::Unknown)
+                }
             }
         }
         ExprKind::Assign { op, target, value } => {
@@ -477,6 +510,24 @@ pub(super) fn infer_expr_type(
                         local_env.insert(binding.name.text.clone(), final_ty);
                         local_mutability.insert(binding.name.text.clone(), binding.mutable);
                         result = final_ty;
+                    }
+                    crate::compiler::ast::Stmt::Destructure(d) => {
+                        infer_expr_type(
+                            &d.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            diagnostics,
+                            file_path,
+                            expected_return,
+                        );
+                        let unknown = types.intern(Type::Unknown);
+                        for dn in &d.names {
+                            local_env.insert(dn.name.text.clone(), unknown);
+                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                        }
+                        result = unknown;
                     }
                     crate::compiler::ast::Stmt::Expr(stmt_expr) => {
                         result = infer_expr_type(
@@ -1113,6 +1164,7 @@ pub(super) fn infer_expr_type(
             expected_return,
         ),
         ExprKind::Inline { expr } => {
+            let pre_len = diagnostics.len();
             let ty = infer_expr_type(
                 expr,
                 env,
@@ -1123,11 +1175,29 @@ pub(super) fn infer_expr_type(
                 file_path,
                 expected_return,
             );
+            // Inline functions must be expression-oriented (no explicit `return`) to be
+            // inlinable at call sites. Suppress the strict-returns diagnostic for the
+            // function body so that expression-style inline functions compile cleanly.
+            let added: Vec<_> = diagnostics.drain(pre_len..).collect();
+            diagnostics.extend(
+                added
+                    .into_iter()
+                    .filter(|d| !is_strict_return_mode_tail_diagnostic_for_span(d, expr.span)),
+            );
             validate_inline_expr(expr, signatures, diagnostics, file_path);
             ty
         }
         ExprKind::Use { .. } => types.intern(Type::Unknown),
         ExprKind::TypeLiteral(_) => types.intern(Type::TypeType),
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            // Walk the type expression and all field values for side-effects (diagnostics).
+            let _ = infer_expr_type(ty_expr, env, mutability, signatures, types, diagnostics, file_path, expected_return);
+            for field in fields {
+                let _ = infer_expr_type(&field.value, env, mutability, signatures, types, diagnostics, file_path, expected_return);
+            }
+            // The concrete struct type is resolved by the backend from the ty_expr's runtime value.
+            types.intern(Type::Unknown)
+        }
         ExprKind::ArrayLiteral(elements) => {
             let Some(first) = elements.first() else {
                 let unknown = types.intern(Type::Unknown);

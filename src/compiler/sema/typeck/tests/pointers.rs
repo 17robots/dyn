@@ -444,7 +444,7 @@ fn accepts_any_in_function_parameter_type() {
         diagnostic.code == DiagnosticCode::E4005
             && diagnostic
                 .message
-                .contains("only allowed in function parameter")
+                .contains("only allowed as '*any'")
     }));
 
     fs::remove_dir_all(root).expect("temp directory should be removed");
@@ -462,7 +462,7 @@ fn rejects_any_in_binding_annotation() {
         diagnostic.code == DiagnosticCode::E4005
             && diagnostic
                 .message
-                .contains("only allowed in function parameter")
+                .contains("only allowed as '*any'")
     }));
 
     fs::remove_dir_all(root).expect("temp directory should be removed");

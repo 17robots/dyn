@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::SystemTime;
+
+use object::write::{Object, StandardSection, Symbol, SymbolSection};
+use object::{Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope};
 
 use cranelift_codegen::settings;
 use cranelift_codegen::settings::Configurable;
@@ -11,7 +13,8 @@ use crate::compiler::backend::{BuildArtifact, BuildOptLevel};
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 use crate::compiler::mir::{MirFunction, MirInstr, MirProgram, MirValue, MirValueType};
 
-use super::{compile_function, declare_function_symbols};
+use super::{compile_function, declare_function_symbols, declare_global_data};
+use super::link::try_link_direct;
 
 pub fn build_executable(
     mir: &MirProgram,
@@ -76,7 +79,8 @@ pub fn build_executable(
             .map_err(|err| format!("failed to build object module: {err}"))?;
     let mut module = ObjectModule::new(object_builder);
 
-    let symbols = declare_function_symbols(mir, &mut module)?;
+    let mut symbols = declare_function_symbols(mir, &mut module)?;
+    symbols.global_data_ids = declare_global_data(mir, &mut module)?;
     for mir_module in &mir.modules {
         for function in &mir_module.functions {
             compile_function(
@@ -90,24 +94,41 @@ pub fn build_executable(
     }
 
     let object = module.finish();
-    let bytes = object
+    let obj_bytes = object
         .emit()
         .map_err(|err| format!("failed to emit object bytes: {err}"))?;
 
-    fs::write(&object_path, bytes).map_err(|err| format!("failed to write object file: {err}"))?;
+    // Always write the object file (useful for debugging).
+    fs::write(&object_path, &obj_bytes)
+        .map_err(|err| format!("failed to write object file: {err}"))?;
 
-    let runtime_object_path =
-        build_dir.join(format!("dyn_runtime_alloc_{}.o", opt_level.file_suffix()));
-    compile_runtime_allocator_object(build_dir, &runtime_object_path, opt_level)?;
+    // Try direct linking first (no external toolchain needed).
+    let (_, arch, _) = host_object_format();
+    if let Some(syscall_code) = syscall_machine_code(arch) {
+        if let Some(result) = try_link_direct(&obj_bytes, syscall_code, "main") {
+            match result {
+                Ok(exe_bytes) => {
+                    fs::write(&executable_path, &exe_bytes).map_err(|err| {
+                        format!("failed to write executable: {err}")
+                    })?;
+                    set_executable(&executable_path)?;
+                    return Ok((BuildArtifact { executable_path, object_path }, diagnostics));
+                }
+                Err(_) => {
+                    // Unsupported relocation or other link error — fall through to
+                    // external linker. The external linker error (if any) will be reported.
+                }
+            }
+        }
+    }
 
-    let runtime_f128_object_path =
-        build_dir.join(format!("dyn_runtime_f128_{}.o", opt_level.file_suffix()));
-    compile_runtime_f128_object(build_dir, &runtime_f128_object_path, opt_level)?;
+    // Fall back: write syscall object and invoke external linker.
+    let runtime_syscall_object_path = build_dir.join("dyn_runtime_syscall.o");
+    write_runtime_syscall_object(&runtime_syscall_object_path)?;
 
     link_executable_with_host_toolchain(
         &object_path,
-        &runtime_object_path,
-        &runtime_f128_object_path,
+        &runtime_syscall_object_path,
         &executable_path,
     )?;
 
@@ -120,91 +141,135 @@ pub fn build_executable(
     ))
 }
 
-fn compile_runtime_allocator_object(
-    _build_dir: &Path,
-    output_path: &Path,
-    opt_level: BuildOptLevel,
-) -> Result<(), String> {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("compiler")
-        .join("backend");
-    let source_path = source_root.join("runtime_support.rs");
-    let source_paths = vec![
-        source_path.clone(),
-        source_root.join("runtime_support").join("vec.rs"),
-        source_root.join("runtime_support").join("io.rs"),
-        source_root.join("runtime_support").join("system.rs"),
-    ];
-
-    if artifact_is_up_to_date(output_path, &source_paths) {
+fn write_runtime_syscall_object(output_path: &Path) -> Result<(), String> {
+    if output_path.exists() {
         return Ok(());
     }
-
-    let status = Command::new("rustc")
-        .arg("--crate-type=lib")
-        .arg("--emit=obj")
-        .arg("--edition=2021")
-        .arg("-C")
-        .arg(format!("opt-level={}", opt_level.rustc_opt_level()))
-        .arg("-C")
-        .arg("panic=abort")
-        .arg(&source_path)
-        .arg("-o")
-        .arg(output_path)
-        .status()
-        .map_err(|err| format!("failed to compile runtime support object (rustc): {err}"))?;
-    if !status.success() {
-        return Err("failed to compile runtime support object".to_string());
-    }
-
-    Ok(())
+    let (binary_format, architecture, endianness) = host_object_format();
+    let code = syscall_machine_code(architecture)
+        .ok_or_else(|| format!("no dyn_syscall implementation for {:?}", architecture))?;
+    let mut obj = Object::new(binary_format, architecture, endianness);
+    let section = obj.section_id(StandardSection::Text);
+    let offset = obj.append_section_data(section, code, 16);
+    let symbol_id = obj.add_symbol(Symbol {
+        name: b"dyn_syscall".to_vec(),
+        value: offset,
+        size: code.len() as u64,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(section),
+        flags: SymbolFlags::None,
+    });
+    let _ = symbol_id;
+    let bytes = obj
+        .write()
+        .map_err(|err| format!("failed to write syscall object: {err}"))?;
+    fs::write(output_path, bytes)
+        .map_err(|err| format!("failed to write syscall object file: {err}"))
 }
 
-fn compile_runtime_f128_object(
-    _build_dir: &Path,
-    output_path: &Path,
-    opt_level: BuildOptLevel,
-) -> Result<(), String> {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("compiler")
-        .join("backend")
-        .join("runtime_support");
-    let source_path = source_root.join("f128.c");
-    let source_paths = vec![source_path.clone()];
+pub(crate) fn host_object_format() -> (BinaryFormat, Architecture, Endianness) {
+    let format = if cfg!(target_os = "macos") {
+        BinaryFormat::MachO
+    } else if cfg!(target_os = "windows") {
+        BinaryFormat::Coff
+    } else {
+        BinaryFormat::Elf
+    };
+    let (arch, endian) = if cfg!(target_arch = "x86_64") {
+        (Architecture::X86_64, Endianness::Little)
+    } else if cfg!(target_arch = "aarch64") {
+        (Architecture::Aarch64, Endianness::Little)
+    } else {
+        (Architecture::Unknown, Endianness::Little)
+    };
+    (format, arch, endian)
+}
 
-    if artifact_is_up_to_date(output_path, &source_paths) {
-        return Ok(());
+/// Pre-assembled machine code for `dyn_syscall(n, a1, a2, a3, a4, a5, a6) -> isize`.
+///
+/// The function receives 7 i64 arguments via the platform calling convention and
+/// performs a raw OS syscall, returning the result in the platform return register.
+pub(crate) fn syscall_machine_code(arch: Architecture) -> Option<&'static [u8]> {
+    match arch {
+        Architecture::X86_64 => {
+            if cfg!(target_os = "macos") {
+                // macOS x86-64: syscall number offset by 0x2000000
+                // SysV params:  rdi=n, rsi=a1, rdx=a2, rcx=a3, r8=a4, r9=a5, [rsp+8]=a6
+                // macOS syscall: rax=n+0x2000000, rdi=a1, rsi=a2, rdx=a3, r10=a4, r8=a5, r9=a6
+                Some(&[
+                    0x48, 0x89, 0xF8, // mov rax, rdi
+                    0x48, 0x05, 0x00, 0x00, 0x00, 0x02, // add rax, 0x2000000
+                    0x48, 0x89, 0xF7, // mov rdi, rsi
+                    0x48, 0x89, 0xD6, // mov rsi, rdx
+                    0x48, 0x89, 0xCA, // mov rdx, rcx
+                    0x4D, 0x89, 0xC2, // mov r10, r8
+                    0x4D, 0x89, 0xC8, // mov r8,  r9
+                    0x4C, 0x8B, 0x4C, 0x24, 0x08, // mov r9, [rsp+8]
+                    0x0F, 0x05, // syscall
+                    0xC3, // ret
+                ])
+            } else {
+                // Linux x86-64
+                // SysV params:  rdi=n, rsi=a1, rdx=a2, rcx=a3, r8=a4, r9=a5, [rsp+8]=a6
+                // Linux syscall: rax=n, rdi=a1, rsi=a2, rdx=a3, r10=a4, r8=a5, r9=a6
+                Some(&[
+                    0x48, 0x89, 0xF8, // mov rax, rdi
+                    0x48, 0x89, 0xF7, // mov rdi, rsi
+                    0x48, 0x89, 0xD6, // mov rsi, rdx
+                    0x48, 0x89, 0xCA, // mov rdx, rcx
+                    0x4D, 0x89, 0xC2, // mov r10, r8
+                    0x4D, 0x89, 0xC8, // mov r8,  r9
+                    0x4C, 0x8B, 0x4C, 0x24, 0x08, // mov r9, [rsp+8]
+                    0x0F, 0x05, // syscall
+                    0xC3, // ret
+                ])
+            }
+        }
+        Architecture::Aarch64 => {
+            if cfg!(target_os = "macos") {
+                // macOS aarch64: syscall number in x16, svc #0x80
+                // SysV params: x0=n, x1=a1, x2=a2, x3=a3, x4=a4, x5=a5, x6=a6
+                Some(&[
+                    0xF0, 0x03, 0x00, 0xAA, // mov x16, x0
+                    0xE0, 0x03, 0x01, 0xAA, // mov x0,  x1
+                    0xE1, 0x03, 0x02, 0xAA, // mov x1,  x2
+                    0xE2, 0x03, 0x03, 0xAA, // mov x2,  x3
+                    0xE3, 0x03, 0x04, 0xAA, // mov x3,  x4
+                    0xE4, 0x03, 0x05, 0xAA, // mov x4,  x5
+                    0xE5, 0x03, 0x06, 0xAA, // mov x5,  x6
+                    0x01, 0x10, 0x00, 0xD4, // svc #0x80
+                    0xC0, 0x03, 0x5F, 0xD6, // ret
+                ])
+            } else {
+                // Linux aarch64: syscall number in x8, svc #0
+                // SysV params: x0=n, x1=a1, x2=a2, x3=a3, x4=a4, x5=a5, x6=a6
+                Some(&[
+                    0xE8, 0x03, 0x00, 0xAA, // mov x8,  x0
+                    0xE0, 0x03, 0x01, 0xAA, // mov x0,  x1
+                    0xE1, 0x03, 0x02, 0xAA, // mov x1,  x2
+                    0xE2, 0x03, 0x03, 0xAA, // mov x2,  x3
+                    0xE3, 0x03, 0x04, 0xAA, // mov x3,  x4
+                    0xE4, 0x03, 0x05, 0xAA, // mov x4,  x5
+                    0xE5, 0x03, 0x06, 0xAA, // mov x5,  x6
+                    0x01, 0x00, 0x00, 0xD4, // svc #0
+                    0xC0, 0x03, 0x5F, 0xD6, // ret
+                ])
+            }
+        }
+        _ => None,
     }
-
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let status = Command::new(&cc)
-        .arg("-std=gnu11")
-        .arg(opt_level.cc_opt_flag())
-        .arg("-c")
-        .arg(&source_path)
-        .arg("-o")
-        .arg(output_path)
-        .status()
-        .map_err(|err| format!("failed to compile f128 runtime support object ({cc}): {err}"))?;
-    if !status.success() {
-        return Err("failed to compile f128 runtime support object".to_string());
-    }
-
-    Ok(())
 }
 
 fn link_executable_with_host_toolchain(
     object_path: &Path,
-    runtime_object_path: &Path,
-    runtime_f128_object_path: &Path,
+    runtime_syscall_object_path: &Path,
     executable_path: &Path,
 ) -> Result<(), String> {
     let cc_link_result = try_link_with_c_driver_candidates(
         object_path,
-        runtime_object_path,
-        runtime_f128_object_path,
+        runtime_syscall_object_path,
         executable_path,
     );
     if cc_link_result.is_ok() {
@@ -214,8 +279,7 @@ fn link_executable_with_host_toolchain(
     if cfg!(target_os = "linux") {
         let ld_result = link_executable_with_linux_ld(
             object_path,
-            runtime_object_path,
-            runtime_f128_object_path,
+            runtime_syscall_object_path,
             executable_path,
         );
         if ld_result.is_ok() {
@@ -242,8 +306,7 @@ fn link_executable_with_host_toolchain(
 
 fn try_link_with_c_driver_candidates(
     object_path: &Path,
-    runtime_object_path: &Path,
-    runtime_f128_object_path: &Path,
+    runtime_syscall_object_path: &Path,
     executable_path: &Path,
 ) -> Result<(), String> {
     let mut errors = Vec::new();
@@ -251,16 +314,14 @@ fn try_link_with_c_driver_candidates(
         let result = if driver == "cl" {
             try_link_with_msvc_cl(
                 object_path,
-                runtime_object_path,
-                runtime_f128_object_path,
+                runtime_syscall_object_path,
                 executable_path,
             )
         } else {
             try_link_with_cc_like_driver(
                 &driver,
                 object_path,
-                runtime_object_path,
-                runtime_f128_object_path,
+                runtime_syscall_object_path,
                 executable_path,
             )
         };
@@ -278,16 +339,13 @@ fn try_link_with_c_driver_candidates(
 fn try_link_with_cc_like_driver(
     driver: &str,
     object_path: &Path,
-    runtime_object_path: &Path,
-    runtime_f128_object_path: &Path,
+    runtime_syscall_object_path: &Path,
     executable_path: &Path,
 ) -> Result<(), String> {
     let mut command = Command::new(driver);
     command
         .arg(object_path)
-        .arg(runtime_object_path)
-        .arg(runtime_f128_object_path)
-        .arg("-lquadmath")
+        .arg(runtime_syscall_object_path)
         .arg("-o")
         .arg(executable_path);
     if cfg!(target_os = "linux") {
@@ -308,8 +366,7 @@ fn try_link_with_cc_like_driver(
 
 fn try_link_with_msvc_cl(
     object_path: &Path,
-    runtime_object_path: &Path,
-    runtime_f128_object_path: &Path,
+    runtime_syscall_object_path: &Path,
     executable_path: &Path,
 ) -> Result<(), String> {
     if !cfg!(target_os = "windows") {
@@ -319,8 +376,7 @@ fn try_link_with_msvc_cl(
     let status = Command::new("cl")
         .arg("/nologo")
         .arg(object_path)
-        .arg(runtime_object_path)
-        .arg(runtime_f128_object_path)
+        .arg(runtime_syscall_object_path)
         .arg(output_arg)
         .status()
         .map_err(|err| format!("failed to invoke linker driver (cl): {err}"))?;
@@ -359,26 +415,21 @@ fn linker_driver_candidates() -> Vec<String> {
     }
 }
 
-fn artifact_is_up_to_date(artifact: &Path, sources: &[PathBuf]) -> bool {
-    let Ok(artifact_meta) = fs::metadata(artifact) else {
-        return false;
-    };
-    let Ok(artifact_mtime) = artifact_meta.modified() else {
-        return false;
-    };
-    sources
-        .iter()
-        .all(|source| source_mtime_not_newer(source, artifact_mtime))
-}
 
-fn source_mtime_not_newer(source: &Path, baseline: SystemTime) -> bool {
-    let Ok(meta) = fs::metadata(source) else {
-        return false;
-    };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    modified <= baseline
+fn set_executable(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path)
+            .map_err(|e| format!("failed to read permissions: {e}"))?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms)
+            .map_err(|e| format!("failed to set executable permissions: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn default_executable_name() -> &'static str {
@@ -391,8 +442,7 @@ fn default_executable_name() -> &'static str {
 
 fn link_executable_with_linux_ld(
     object_path: &Path,
-    runtime_object_path: &Path,
-    runtime_f128_object_path: &Path,
+    runtime_syscall_object_path: &Path,
     executable_path: &Path,
 ) -> Result<(), String> {
     let crt_dirs = [
@@ -427,10 +477,8 @@ fn link_executable_with_linux_ld(
         .arg(Path::new(crt_dir).join("crt1.o"))
         .arg(Path::new(crt_dir).join("crti.o"))
         .arg(object_path)
-        .arg(runtime_object_path)
-        .arg(runtime_f128_object_path)
+        .arg(runtime_syscall_object_path)
         .arg(format!("-L{crt_dir}"))
-        .arg("-lquadmath")
         .arg("-lc")
         .arg(Path::new(crt_dir).join("crtn.o"))
         .arg("-dynamic-linker")
@@ -465,14 +513,14 @@ fn collect_unsupported_float_width_diagnostics(mir: &MirProgram) -> Vec<Diagnost
                 .return_type
                 .as_deref()
                 .and_then(max_float_bits_in_type_text)
-                .map(|bits| bits > 128)
+                .map(|bits| bits > 64)
                 .unwrap_or(false)
             {
                 reasons.push("return type".to_string());
             }
             if function.param_type_hints.iter().flatten().any(|hint| {
                 max_float_bits_in_type_text(hint)
-                    .map(|bits| bits > 128)
+                    .map(|bits| bits > 64)
                     .unwrap_or(false)
             }) {
                 reasons.push("parameter type hint".to_string());
@@ -497,7 +545,7 @@ fn collect_unsupported_float_width_diagnostics(mir: &MirProgram) -> Vec<Diagnost
                 DiagnosticPhase::Backend,
                 DiagnosticCode::E5002,
                 format!(
-                    "backend currently supports float widths up to f128; function `{}` uses unsupported float width ({})",
+                    "backend currently supports float widths up to f64; function `{}` uses unsupported float width ({})",
                     function.name,
                     reasons.join(", ")
                 ),
@@ -617,7 +665,7 @@ fn mir_value_uses_unsupported_integer(value: &MirValue) -> bool {
 }
 
 fn mir_type_uses_unsupported_float(ty: &MirValueType) -> bool {
-    matches!(ty, MirValueType::Float { bits } if *bits > 128)
+    matches!(ty, MirValueType::Float { bits } if *bits > 64)
 }
 
 fn mir_type_uses_unsupported_integer(ty: &MirValueType) -> bool {

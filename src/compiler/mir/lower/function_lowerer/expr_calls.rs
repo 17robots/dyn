@@ -1,3 +1,190 @@
+use std::collections::BTreeSet;
+
+fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<String> {
+    match &expr.kind {
+        HirExprKind::Ident(name) => {
+            if !bound.contains(name) {
+                std::iter::once(name.clone()).collect()
+            } else {
+                BTreeSet::new()
+            }
+        }
+        HirExprKind::Literal(_) => BTreeSet::new(),
+        HirExprKind::Block { body } => {
+            let mut all = BTreeSet::new();
+            let mut cur = bound.clone();
+            for e in body {
+                all.extend(collect_free_vars(e, &cur));
+                if let HirExprKind::Let { name, .. } = &e.kind {
+                    cur.insert(name.clone());
+                }
+            }
+            all
+        }
+        HirExprKind::Let { value, .. } => collect_free_vars(value, bound),
+        HirExprKind::Function { params, body, .. } => {
+            let mut inner = bound.clone();
+            for p in params {
+                inner.insert(p.clone());
+            }
+            collect_free_vars(body, &inner)
+        }
+        HirExprKind::Unary { expr, .. } => collect_free_vars(expr, bound),
+        HirExprKind::Binary { left, right, .. } => {
+            let mut f = collect_free_vars(left, bound);
+            f.extend(collect_free_vars(right, bound));
+            f
+        }
+        HirExprKind::Assign { target, value, .. } => {
+            let mut f = collect_free_vars(target, bound);
+            f.extend(collect_free_vars(value, bound));
+            f
+        }
+        HirExprKind::Call { callee, args } => {
+            let mut f = collect_free_vars(callee, bound);
+            for a in args {
+                f.extend(collect_free_vars(&a.value, bound));
+            }
+            f
+        }
+        HirExprKind::FieldAccess { base, .. } | HirExprKind::DerefAccess { base } => {
+            collect_free_vars(base, bound)
+        }
+        HirExprKind::Index { base, index } => {
+            let mut f = collect_free_vars(base, bound);
+            f.extend(collect_free_vars(index, bound));
+            f
+        }
+        HirExprKind::Slice { base, start, end, .. } => {
+            let mut f = collect_free_vars(base, bound);
+            if let Some(s) = start {
+                f.extend(collect_free_vars(s, bound));
+            }
+            if let Some(e) = end {
+                f.extend(collect_free_vars(e, bound));
+            }
+            f
+        }
+        HirExprKind::StructLiteral { fields, .. } => {
+            let mut f = BTreeSet::new();
+            for (_, v) in fields {
+                f.extend(collect_free_vars(v, bound));
+            }
+            f
+        }
+        HirExprKind::EnumVariant { payload, .. } => {
+            let mut f = BTreeSet::new();
+            for p in payload {
+                f.extend(collect_free_vars(p, bound));
+            }
+            f
+        }
+        HirExprKind::If {
+            condition,
+            capture,
+            then_branch,
+            else_branch,
+        } => {
+            let mut f = collect_free_vars(condition, bound);
+            let mut then_bound = bound.clone();
+            if let Some(cap) = capture {
+                if let Some(b) = &cap.binding {
+                    then_bound.insert(b.clone());
+                }
+            }
+            f.extend(collect_free_vars(then_branch, &then_bound));
+            if let Some(eb) = else_branch {
+                f.extend(collect_free_vars(eb, bound));
+            }
+            f
+        }
+        HirExprKind::Match { value, arms } => {
+            let mut f = collect_free_vars(value, bound);
+            for arm in arms {
+                let mut arm_bound = bound.clone();
+                match &arm.pattern {
+                    HirPattern::IdentBind(n) => {
+                        arm_bound.insert(n.clone());
+                    }
+                    HirPattern::EnumVariant { bindings, .. } => {
+                        for b in bindings {
+                            arm_bound.insert(b.clone());
+                        }
+                    }
+                    _ => {}
+                }
+                if let Some(g) = &arm.guard {
+                    f.extend(collect_free_vars(g, &arm_bound));
+                }
+                f.extend(collect_free_vars(&arm.value, &arm_bound));
+            }
+            f
+        }
+        HirExprKind::For(for_expr) => match for_expr {
+            HirForExpr::Infinite { body } => collect_free_vars(body, bound),
+            HirForExpr::WhileLike { condition, body } => {
+                let mut f = collect_free_vars(condition, bound);
+                f.extend(collect_free_vars(body, bound));
+                f
+            }
+            HirForExpr::Range {
+                start,
+                end,
+                binding,
+                body,
+                ..
+            } => {
+                let mut f = collect_free_vars(start, bound);
+                f.extend(collect_free_vars(end, bound));
+                let mut bb = bound.clone();
+                if let Some(b) = binding {
+                    bb.insert(b.clone());
+                }
+                f.extend(collect_free_vars(body, &bb));
+                f
+            }
+            HirForExpr::Iterate {
+                iterable,
+                binding,
+                body,
+            } => {
+                let mut f = collect_free_vars(iterable, bound);
+                let mut bb = bound.clone();
+                if let Some(b) = binding {
+                    bb.insert(b.clone());
+                }
+                f.extend(collect_free_vars(body, &bb));
+                f
+            }
+        },
+        HirExprKind::Break { value } | HirExprKind::Return { value } => value
+            .as_deref()
+            .map(|v| collect_free_vars(v, bound))
+            .unwrap_or_default(),
+        HirExprKind::Continue => BTreeSet::new(),
+        HirExprKind::Defer { body, .. } => collect_free_vars(body, bound),
+        HirExprKind::OrElse {
+            value, fallback, error_binding, ..
+        } => {
+            let mut f = collect_free_vars(value, bound);
+            let mut fb = bound.clone();
+            if let Some(b) = error_binding {
+                fb.insert(b.clone());
+            }
+            f.extend(collect_free_vars(fallback, &fb));
+            f
+        }
+        HirExprKind::OptionalUnwrap { value } | HirExprKind::ErrorUnwrap { value } => {
+            collect_free_vars(value, bound)
+        }
+        HirExprKind::Use { .. } | HirExprKind::TypeLiteral(_) => BTreeSet::new(),
+        HirExprKind::Comptime { expr } | HirExprKind::Inline { expr } => {
+            collect_free_vars(expr, bound)
+        }
+        HirExprKind::Unknown => BTreeSet::new(),
+    }
+}
+
 impl FunctionLowerer {
     pub(super) fn new(
         module_key: ModuleKey,
@@ -45,12 +232,16 @@ impl FunctionLowerer {
             module_ids_by_key: shared.module_ids_by_key,
             module_exports_by_id: shared.module_exports_by_id,
             current_param_type_hints: Vec::new(),
+            current_self_type_hint: None,
             inline_call_depth: 0,
             inline_call_stack: Vec::new(),
+            current_inline_module: None,
             loop_stack: Vec::new(),
             or_break_stack: Vec::new(),
             deferred: Vec::new(),
             diagnostics: Vec::new(),
+            hoisted_lambdas: Vec::new(),
+            global_names: shared.global_names,
         }
     }
 
@@ -68,16 +259,6 @@ impl FunctionLowerer {
                 )
             }
             HirExprKind::Ident(name) => {
-                if let Some(runtime_symbol) = runtime_symbol_for_builtin(name) {
-                    return (
-                        block,
-                        Some(self.push_eval(
-                            block,
-                            MirValue::Ident(runtime_symbol.to_string()),
-                            MirValueType::FunctionPointer,
-                        )),
-                    );
-                }
                 if let Some(value) = self.locals.get(name).copied() {
                     if let Some(addr) = self.address_taken_values.get(name).copied() {
                         let ty = self
@@ -92,6 +273,20 @@ impl FunctionLowerer {
                     } else {
                         (block, Some(value))
                     }
+                } else if self.global_names.contains(name) {
+                    let ty = self
+                        .function_return_types
+                        .get(name)
+                        .cloned()
+                        .unwrap_or(MirValueType::Unknown);
+                    (
+                        block,
+                        Some(self.push_eval(
+                            block,
+                            MirValue::GlobalLoad { name: name.clone() },
+                            ty,
+                        )),
+                    )
                 } else if let Some(type_name) =
                     type_literal_name_for_ident(name, &self.named_type_literals)
                 {
@@ -104,14 +299,32 @@ impl FunctionLowerer {
                         )),
                     )
                 } else {
-                    let ty = if self.function_return_types.contains_key(name) {
+                    // When inlining a cross-module function, bare function calls in its body
+                    // (e.g. `render_value` inside `substitute_next` from the io module) must
+                    // be resolved to their qualified form (e.g. `#8::render_value`) so they
+                    // can be found in the caller module's inline_function_names.
+                    // Only qualify names that are actually inline functions — module import
+                    // variables (e.g. `bytes_mod`) are left unqualified and handled separately
+                    // in the FieldAccess path.
+                    let effective_name =
+                        if let Some(module_id) = &self.current_inline_module {
+                            let qualified = format!("{module_id}::{name}");
+                            if self.inline_function_names.contains(&qualified) {
+                                qualified
+                            } else {
+                                name.clone()
+                            }
+                        } else {
+                            name.clone()
+                        };
+                    let ty = if self.function_return_types.contains_key(&effective_name) {
                         MirValueType::FunctionPointer
                     } else {
                         MirValueType::Unknown
                     };
                     (
                         block,
-                        Some(self.push_eval(block, MirValue::Ident(name.clone()), ty)),
+                        Some(self.push_eval(block, MirValue::Ident(effective_name), ty)),
                     )
                 }
             }
@@ -248,6 +461,17 @@ impl FunctionLowerer {
                         .get(&assigned_value)
                         .cloned()
                         .unwrap_or(value_ty.clone());
+                    if self.global_names.contains(name) {
+                        let store = self.push_eval(
+                            value_end,
+                            MirValue::GlobalStore {
+                                name: name.clone(),
+                                value: assigned_value,
+                            },
+                            assigned_ty,
+                        );
+                        return (value_end, Some(store));
+                    }
                     self.locals.insert(name.clone(), assigned_value);
                     if matches!(op, AssignOp::Assign) {
                         self.refresh_comptime_local_from_expr(name, value);
@@ -359,9 +583,23 @@ impl FunctionLowerer {
             HirExprKind::FieldAccess { base, field } => {
                 if let HirExprKind::Ident(base_name) = &base.kind {
                     if !self.locals.contains_key(base_name) {
-                        if let Some(import_path) = self.top_level_import_path(base_name) {
+                        // Try to find the import path for the module variable. When inlining a
+                        // cross-module function, the module variable (e.g. `bytes_mod`) lives in
+                        // the source module's namespace. Try the unqualified name first, then the
+                        // qualified name (e.g. `#8::bytes_mod`) using the current inline module.
+                        let import_path = self
+                            .top_level_import_path(base_name)
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                self.current_inline_module.as_ref().and_then(|module_id| {
+                                    let qualified = format!("{module_id}::{base_name}");
+                                    self.top_level_import_path(&qualified)
+                                        .map(|s| s.to_string())
+                                })
+                            });
+                        if let Some(import_path) = import_path {
                             if let Some(qualified) =
-                                self.resolve_import_member_ident(import_path, field)
+                                self.resolve_import_member_ident(&import_path, field)
                             {
                                 return (
                                     block,
@@ -789,10 +1027,171 @@ impl FunctionLowerer {
                 error_binding,
                 fallback,
             } => self.lower_or_else(block, value, error_binding.as_deref(), fallback),
-            HirExprKind::Function { .. } => (
-                block,
-                Some(self.push_eval(block, MirValue::Unknown, MirValueType::Unknown)),
-            ),
+            HirExprKind::Function {
+                params,
+                param_types,
+                body,
+                ..
+            } => {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static LAMBDA_COUNTER: AtomicUsize = AtomicUsize::new(0);
+                let lambda_id = LAMBDA_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let lambda_name = format!("__lambda_{lambda_id}");
+
+                // Compute captures: free vars in body (minus params) that exist in outer scope
+                let param_set: BTreeSet<String> = params.iter().cloned().collect();
+                let free_vars = collect_free_vars(body, &param_set);
+                // Only capture variables that are actually in the current function's locals
+                let captures: Vec<(String, MirValueId)> = free_vars
+                    .into_iter()
+                    .filter_map(|name| self.locals.get(&name).map(|&val| (name, val)))
+                    .collect();
+
+                let capture_val_ids: Vec<MirValueId> = captures.iter().map(|(_, v)| *v).collect();
+                let capture_names: Vec<String> = captures.iter().map(|(n, _)| n.clone()).collect();
+
+                // Build the hoisted lambda function
+                let lambda_fn = MirFunction {
+                    name: lambda_name.clone(),
+                    def_id: None,
+                    return_type: None,
+                    // env_ptr as first param, then declared params
+                    param_type_hints: std::iter::once(None)
+                        .chain(param_types.iter().cloned())
+                        .collect(),
+                    param_types: std::iter::once(MirValueType::Unknown)
+                        .chain(param_types.iter().map(|pt| {
+                            pt.as_deref()
+                                .map(|s| parse_type_hint(s))
+                                .unwrap_or(MirValueType::Unknown)
+                        }))
+                        .collect(),
+                    blocks: vec![MirBasicBlock {
+                        id: MirBlockId(0),
+                        instructions: Vec::new(),
+                        terminator: None,
+                    }],
+                    entry: MirBlockId(0),
+                };
+
+                // We will build the sub-lowerer manually.
+                // First set up env_ptr param (index 0) in the lambda's block.
+                // We do this by creating a new FunctionLowerer and pushing params.
+                let shared = FunctionLowererShared {
+                    function_return_types: self.function_return_types.clone(),
+                    function_return_hints: self.function_return_hints.clone(),
+                    named_type_literals: self.named_type_literals.clone(),
+                    enum_repr_bits_by_name: self.enum_repr_bits_by_name.clone(),
+                    enum_variant_tags_by_name: self.enum_variant_tags_by_name.clone(),
+                    function_param_names: self.function_param_names.clone(),
+                    function_param_defaults: self.function_param_defaults.clone(),
+                    function_param_type_hints: self.function_param_type_hints.clone(),
+                    function_exprs: self.function_exprs.clone(),
+                    inline_function_names: self.inline_function_names.clone(),
+                    module_ids_by_key: self.module_ids_by_key.clone(),
+                    module_exports_by_id: self.module_exports_by_id.clone(),
+                    global_names: self.global_names.clone(),
+                };
+                let mut sub_lowerer = FunctionLowerer {
+                    module_key: self.module_key.clone(),
+                    source_file_path: self.source_file_path.clone(),
+                    function: lambda_fn,
+                    next_value: 0,
+                    locals: BTreeMap::new(),
+                    address_taken_values: BTreeMap::new(),
+                    comptime_known_locals: BTreeMap::new(),
+                    comptime_local_function_exprs: BTreeMap::new(),
+                    value_types: BTreeMap::new(),
+                    value_defs: BTreeMap::new(),
+                    struct_fields: BTreeMap::new(),
+                    aggregate_sequences: BTreeMap::new(),
+                    function_return_types: shared.function_return_types,
+                    function_return_hints: shared.function_return_hints,
+                    errorable_aggregate_values: BTreeSet::new(),
+                    errorable_scalar_values: BTreeSet::new(),
+                    named_type_literals: shared.named_type_literals,
+                    enum_repr_bits_by_name: shared.enum_repr_bits_by_name,
+                    enum_variant_tags_by_name: shared.enum_variant_tags_by_name,
+                    function_param_names: shared.function_param_names,
+                    function_param_defaults: shared.function_param_defaults,
+                    function_param_type_hints: shared.function_param_type_hints,
+                    function_exprs: shared.function_exprs,
+                    inline_function_names: shared.inline_function_names,
+                    module_ids_by_key: shared.module_ids_by_key,
+                    module_exports_by_id: shared.module_exports_by_id,
+                    current_param_type_hints: Vec::new(),
+                    current_self_type_hint: None,
+                    inline_call_depth: 0,
+                    inline_call_stack: Vec::new(),
+                    current_inline_module: None,
+                    loop_stack: Vec::new(),
+                    or_break_stack: Vec::new(),
+                    deferred: Vec::new(),
+                    diagnostics: Vec::new(),
+                    hoisted_lambdas: Vec::new(),
+                    global_names: shared.global_names,
+                };
+
+                let lambda_entry = sub_lowerer.function.entry;
+
+                // Push env_ptr as param 0
+                let env_ptr_vid = sub_lowerer.push_eval(
+                    lambda_entry,
+                    MirValue::Param { index: 0 },
+                    MirValueType::Unknown,
+                );
+
+                // Push capture load instructions for each capture
+                for (i, cap_name) in capture_names.iter().enumerate() {
+                    let cap_vid = sub_lowerer.push_eval(
+                        lambda_entry,
+                        MirValue::ClosureEnvField {
+                            env_ptr: env_ptr_vid,
+                            index: i,
+                        },
+                        MirValueType::Unknown,
+                    );
+                    sub_lowerer.locals.insert(cap_name.clone(), cap_vid);
+                }
+
+                // Push declared params (index 1..N in the actual function, skipping env_ptr)
+                for (idx, param_name) in params.iter().enumerate() {
+                    let param_idx = idx + 1; // +1 for env_ptr
+                    let ty = param_types
+                        .get(idx)
+                        .and_then(|s| s.as_deref())
+                        .map(|s| parse_type_hint(s))
+                        .unwrap_or(MirValueType::Unknown);
+                    let vid = sub_lowerer.push_eval(
+                        lambda_entry,
+                        MirValue::Param { index: param_idx },
+                        ty,
+                    );
+                    sub_lowerer.locals.insert(param_name.clone(), vid);
+                }
+
+                // Lower the body
+                let (end_block, ret_val) = sub_lowerer.lower_expr(lambda_entry, body);
+                if !sub_lowerer.is_terminated(end_block) {
+                    let end_block = sub_lowerer.emit_deferred(end_block, None);
+                    sub_lowerer.set_terminator(end_block, MirTerminator::Return(ret_val));
+                }
+
+                // Collect hoisted lambdas from the sub-lowerer (for nested closures)
+                self.hoisted_lambdas.extend(sub_lowerer.hoisted_lambdas);
+                self.hoisted_lambdas.push(sub_lowerer.function);
+
+                // Emit ClosureCreate in the current function
+                let closure_val = self.push_eval(
+                    block,
+                    MirValue::ClosureCreate {
+                        fn_symbol: lambda_name,
+                        captures: capture_val_ids,
+                    },
+                    MirValueType::Closure,
+                );
+                (block, Some(closure_val))
+            }
         }
     }
 
@@ -996,46 +1395,6 @@ impl FunctionLowerer {
         }
     }
 
-    pub(super) fn is_format_print_call(
-        &self,
-        callee: &HirExpr,
-        resolved_name: Option<&str>,
-    ) -> bool {
-        let is_known_name = |name: &str| {
-            name == "print"
-                || name == "println"
-                || name.ends_with("::print")
-                || name.ends_with("::println")
-        };
-
-        if let Some(name) = resolved_name {
-            if is_known_name(name) {
-                return true;
-            }
-        }
-
-        match &callee.kind {
-            HirExprKind::Ident(name) => is_known_name(name),
-            HirExprKind::FieldAccess { field, .. } => is_known_name(field),
-            _ => false,
-        }
-    }
-
-    pub(super) fn tuple_like_aggregate_values(&self, value: MirValueId) -> Option<Vec<MirValueId>> {
-        let sequence = self.aggregate_sequences.get(&value)?;
-        let fields = self.struct_fields.get(&value)?;
-        if fields.len() != sequence.len() {
-            return None;
-        }
-        for (index, element) in sequence.iter().enumerate() {
-            let key = format!("__{index}");
-            if fields.get(&key).copied() != Some(*element) {
-                return None;
-            }
-        }
-        Some(sequence.clone())
-    }
-
     pub(super) fn lower_call_expr(
         &mut self,
         block: MirBlockId,
@@ -1084,19 +1443,6 @@ impl FunctionLowerer {
         } else {
             None
         };
-
-        if lowered_named.len() == 2
-            && lowered_named.iter().all(|(name, _)| name.is_none())
-            && self.is_format_print_call(callee, callee_name.as_deref())
-        {
-            if let Some(tuple_values) = self.tuple_like_aggregate_values(lowered_named[1].1) {
-                let mut expanded = Vec::with_capacity(1 + tuple_values.len());
-                expanded.push(lowered_named[0].clone());
-                expanded.extend(tuple_values.into_iter().map(|value| (None, value)));
-                lowered_named = expanded;
-                lowered_args = lowered_named.iter().map(|(_, value)| *value).collect();
-            }
-        }
 
         if let Some(name) = &callee_name {
             if let Some(param_names) = self.function_param_names.get(name) {
@@ -1215,11 +1561,20 @@ impl FunctionLowerer {
             previous.push((param.clone(), old));
         }
 
+        // Track the module of the function being inlined so that unqualified ident
+        // references in its body (e.g. `print_impl` inside `println`) can be resolved
+        // to their qualified names (e.g. `#8::print_impl`) in the caller's context.
+        let inline_module = callee_name.find("::").map(|i| callee_name[..i].to_string());
+        let prev_inline_module = self.current_inline_module.clone();
+        if inline_module.is_some() {
+            self.current_inline_module = inline_module;
+        }
         self.inline_call_depth += 1;
         self.inline_call_stack.push(callee_name.to_string());
         let (end, value) = self.lower_expr(block, &inline_body);
         self.inline_call_stack.pop();
         self.inline_call_depth -= 1;
+        self.current_inline_module = prev_inline_module;
 
         for (name, old) in previous.into_iter().rev() {
             if let Some(old) = old {

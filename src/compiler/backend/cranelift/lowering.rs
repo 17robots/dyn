@@ -117,6 +117,11 @@ enum LoweredValue {
         slot: StackSlot,
         ordered: Vec<(Type, i32)>,
     },
+    /// Fat pointer closure: (fn_ptr, env_ptr)
+    FatPtr {
+        fn_ptr: Value,
+        env_ptr: Value,
+    },
 }
 
 impl LoweredValue {
@@ -128,6 +133,7 @@ impl LoweredValue {
             MirValueType::Function | MirValueType::FunctionPointer => Self::Int(value),
             MirValueType::Unknown => Self::Int(value),
             MirValueType::Type => Self::Int(value),
+            MirValueType::Closure => Self::Int(value),
         }
     }
 
@@ -153,7 +159,8 @@ impl LoweredValue {
             | Self::Struct(_)
             | Self::StructMemory { .. }
             | Self::EnumVariant { .. }
-            | Self::EnumMemory { .. } => None,
+            | Self::EnumMemory { .. }
+            | Self::FatPtr { .. } => None,
         }
     }
 
@@ -179,7 +186,8 @@ impl LoweredValue {
             | Self::StructPointer { .. }
             | Self::PointerSlice { .. }
             | Self::EnumVariant { .. }
-            | Self::EnumMemory { .. } => None,
+            | Self::EnumMemory { .. }
+            | Self::FatPtr { .. } => None,
         }
     }
 
@@ -194,7 +202,8 @@ impl LoweredValue {
             | Self::Struct(_)
             | Self::StructMemory { .. }
             | Self::EnumVariant { .. }
-            | Self::EnumMemory { .. } => None,
+            | Self::EnumMemory { .. }
+            | Self::FatPtr { .. } => None,
         }
     }
 
@@ -230,12 +239,14 @@ struct CallSymbolTables<'a> {
 
 struct LowerValueContext<'a> {
     value_defs: &'a BTreeMap<MirValueId, MirValue>,
+    value_types: &'a BTreeMap<MirValueId, MirValueType>,
     param_access: &'a [ParamAccess],
     current_module_id: usize,
     scalar: ScalarType,
     symbols_by_key: &'a BTreeMap<(usize, String), FuncId>,
     symbols_by_name: &'a BTreeMap<String, FuncId>,
     call_symbol_tables: CallSymbolTables<'a>,
+    global_data_ids: &'a BTreeMap<String, DataId>,
 }
 
 #[derive(Clone)]
@@ -283,12 +294,6 @@ struct EmitCallContext<'a> {
     pointer_ty: Type,
     direct_callee: Option<FuncId>,
     profile: &'a CallReturnProfile,
-}
-
-#[derive(Clone, Copy)]
-struct SoftF128Operand {
-    ptr: Value,
-    owned: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -360,7 +365,8 @@ fn lower_value(
             data,
         ),
         MirValue::Binary { op, left, right } => {
-            lower_binary_value(value_ty, op, left, right, builder, module, data)
+            let left_operand_ty = context.value_types.get(left);
+            lower_binary_value(value_ty, op, left, right, builder, module, data, left_operand_ty)
         }
         MirValue::Assign { value, .. } => lowered
             .get(value)
@@ -440,8 +446,121 @@ fn lower_value(
             module,
         ),
         MirValue::TypeLiteral(name) => lower_type_literal_value(value_ty, name, builder, scalar),
-        MirValue::Use { .. } | MirValue::Unknown => {
-            zero_lowered_for_type(builder, value_ty, scalar)
+        // Module use-import expressions (e.g. `io := use "std/io"`) occasionally
+        // appear as dead MIR instructions when a module binding is referenced in
+        // a function scope before callee resolution eliminates the reference.
+        // These instructions are never used in the actual computation, so
+        // emitting a zero is safe.  A future MIR cleanup pass should eliminate
+        // these instructions before they reach codegen.
+        MirValue::Use { .. } => zero_lowered_for_type(builder, value_ty, scalar),
+        // Unknown is used as a placeholder for void-returning function calls:
+        // the MIR Eval instruction still has a dest, but it is never read by
+        // subsequent instructions.  Emitting zero is safe because the dest is
+        // dead.  Semantic analysis must ensure void-call results are never used
+        // in an expression; if that invariant holds, this zero is never visible.
+        MirValue::Unknown => zero_lowered_for_type(builder, value_ty, scalar),
+        MirValue::ClosureCreate {
+            fn_symbol,
+            captures,
+        } => {
+            let pointer_ty = module.target_config().pointer_type();
+
+            // Resolve function pointer
+            let func_id = context
+                .symbols_by_key
+                .get(&(context.current_module_id, fn_symbol.clone()))
+                .or_else(|| context.symbols_by_name.get(fn_symbol.as_str()))
+                .copied();
+            let fn_ptr = if let Some(fid) = func_id {
+                let func_ref = module.declare_func_in_func(fid, builder.func);
+                builder.ins().func_addr(pointer_ty, func_ref)
+            } else {
+                builder.ins().iconst(pointer_ty, 0)
+            };
+
+            // Build env_ptr
+            let env_ptr = if captures.is_empty() {
+                builder.ins().iconst(pointer_ty, 0)
+            } else {
+                let ptr_bytes = pointer_ty.bytes();
+                let env_size = captures.len() as u32 * ptr_bytes;
+                let align_log2 = if ptr_bytes == 8 { 3 } else { 2 };
+                let env_slot = builder.func.create_sized_stack_slot(
+                    cranelift_codegen::ir::StackSlotData::new(
+                        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                        env_size,
+                        align_log2,
+                    ),
+                );
+                for (i, cap) in captures.iter().enumerate() {
+                    let cap_val = lowered.get(cap).and_then(|lv| lv.as_value());
+                    if let Some(val) = cap_val {
+                        let val_ty = builder.func.dfg.value_type(val);
+                        let ptr_val = if val_ty == pointer_ty {
+                            val
+                        } else if val_ty.is_int() && val_ty.bits() < pointer_ty.bits() {
+                            builder.ins().uextend(pointer_ty, val)
+                        } else if val_ty.is_int() {
+                            builder.ins().ireduce(pointer_ty, val)
+                        } else {
+                            val
+                        };
+                        builder.ins().stack_store(
+                            ptr_val,
+                            env_slot,
+                            (i as i32) * (ptr_bytes as i32),
+                        );
+                    }
+                }
+                builder.ins().stack_addr(pointer_ty, env_slot, 0)
+            };
+
+            LoweredValue::FatPtr { fn_ptr, env_ptr }
+        }
+        MirValue::ClosureEnvField { env_ptr, index } => {
+            let pointer_ty = module.target_config().pointer_type();
+            let env_val = lowered.get(env_ptr).and_then(|lv| lv.as_value());
+            if let Some(env) = env_val {
+                let offset = (*index as i32) * (pointer_ty.bytes() as i32);
+                let loaded = builder.ins().load(
+                    pointer_ty,
+                    cranelift_codegen::ir::MemFlags::new(),
+                    env,
+                    offset,
+                );
+                LoweredValue::Int(loaded)
+            } else {
+                LoweredValue::Int(builder.ins().iconst(pointer_ty, 0))
+            }
+        }
+        MirValue::GlobalLoad { name } => {
+            let pointer_ty = module.target_config().pointer_type();
+            let Some(&data_id) = context.global_data_ids.get(name) else {
+                return zero_lowered_for_type(builder, value_ty, scalar);
+            };
+            let gv = module.declare_data_in_func(data_id, builder.func);
+            let addr = builder.ins().global_value(pointer_ty, gv);
+            let clif_ty = mir_type_to_clif(value_ty, scalar);
+            let loaded =
+                builder
+                    .ins()
+                    .load(clif_ty, cranelift_codegen::ir::MemFlags::new(), addr, 0);
+            LoweredValue::from_typed_value(loaded, value_ty)
+        }
+        MirValue::GlobalStore { name, value } => {
+            let pointer_ty = module.target_config().pointer_type();
+            let Some(&data_id) = context.global_data_ids.get(name) else {
+                return zero_lowered_for_type(builder, value_ty, scalar);
+            };
+            let gv = module.declare_data_in_func(data_id, builder.func);
+            let addr = builder.ins().global_value(pointer_ty, gv);
+            let Some(val) = lowered.get(value).and_then(|lv| lv.as_value()) else {
+                return zero_lowered_for_type(builder, value_ty, scalar);
+            };
+            builder
+                .ins()
+                .store(cranelift_codegen::ir::MemFlags::new(), val, addr, 0);
+            LoweredValue::from_typed_value(val, value_ty)
         }
     }
 }
@@ -600,25 +719,6 @@ fn lower_unary_value(
             let Some(operand) = operand_value.as_value() else {
                 return zero_lowered_for_type(builder, value_ty, scalar);
             };
-            if is_soft_f128_type(value_ty) && matches!(op, UnaryOp::Neg) {
-                let operand_soft = lowered_to_soft_f128_ptr(
-                    builder,
-                    scalar,
-                    Some(&operand_value),
-                    module,
-                    data.symbols_by_name,
-                    default_integer_signedness(scalar),
-                );
-                let result = call_runtime_symbol_i64(
-                    builder,
-                    module,
-                    data.symbols_by_name,
-                    "dynrt_f128_neg",
-                    &[operand_soft.ptr],
-                );
-                release_soft_f128_if_owned(builder, module, data.symbols_by_name, operand_soft);
-                return LoweredValue::Float(result);
-            }
             match (op, value_ty) {
                 (UnaryOp::Neg, MirValueType::Float { .. }) => {
                     LoweredValue::Float(builder.ins().fneg(operand))
@@ -648,6 +748,7 @@ fn lower_binary_value(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
     data: LowerValueData<'_>,
+    left_operand_ty: Option<&MirValueType>,
 ) -> LoweredValue {
     let scalar = data.scalar;
     let left_val = data.lowered.get(left);
@@ -690,7 +791,7 @@ fn lower_binary_value(
         );
     }
 
-    lower_int_binary_value(value_ty, op, builder, scalar, left_val, right_val)
+    lower_int_binary_value(value_ty, op, builder, scalar, left_val, right_val, left_operand_ty)
 }
 
 fn lower_float_binary_value(
@@ -706,17 +807,6 @@ fn lower_float_binary_value(
     let left_val = operands.left;
     let right_val = operands.right;
     let float_ty = float_ty_hint.unwrap_or_else(|| mir_type_to_clif(value_ty, scalar));
-    if is_soft_f128_type(value_ty) || !float_ty.is_float() {
-        return lower_soft_f128_binary_value(
-            op,
-            builder,
-            scalar,
-            left_val,
-            right_val,
-            module,
-            data.symbols_by_name,
-        );
-    }
     let Some(left) = left_val.and_then(LoweredValue::as_float).or_else(|| {
         left_val
             .and_then(LoweredValue::as_int)
@@ -783,202 +873,6 @@ fn lower_float_binary_value(
     }
 }
 
-fn lower_soft_f128_binary_value(
-    op: &BinaryOp,
-    builder: &mut FunctionBuilder,
-    scalar: ScalarType,
-    left_val: Option<&LoweredValue>,
-    right_val: Option<&LoweredValue>,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-) -> LoweredValue {
-    let left = lowered_to_soft_f128_ptr(
-        builder,
-        scalar,
-        left_val,
-        module,
-        symbols_by_name,
-        default_integer_signedness(scalar),
-    );
-    let right = lowered_to_soft_f128_ptr(
-        builder,
-        scalar,
-        right_val,
-        module,
-        symbols_by_name,
-        default_integer_signedness(scalar),
-    );
-
-    let arithmetic_symbol = match op {
-        BinaryOp::Add => Some("dynrt_f128_add"),
-        BinaryOp::Sub => Some("dynrt_f128_sub"),
-        BinaryOp::Mul => Some("dynrt_f128_mul"),
-        BinaryOp::Div => Some("dynrt_f128_div"),
-        _ => None,
-    };
-    if let Some(symbol) = arithmetic_symbol {
-        let out = call_runtime_symbol_i64(
-            builder,
-            module,
-            symbols_by_name,
-            symbol,
-            &[left.ptr, right.ptr],
-        );
-        release_soft_f128_operands(builder, module, symbols_by_name, left, right);
-        return LoweredValue::Float(out);
-    }
-
-    let compare_symbol = match op {
-        BinaryOp::Eq => Some("dynrt_f128_eq"),
-        BinaryOp::Ne => Some("dynrt_f128_ne"),
-        BinaryOp::Lt => Some("dynrt_f128_lt"),
-        BinaryOp::Le => Some("dynrt_f128_le"),
-        BinaryOp::Gt => Some("dynrt_f128_gt"),
-        BinaryOp::Ge => Some("dynrt_f128_ge"),
-        _ => None,
-    };
-    if let Some(symbol) = compare_symbol {
-        let out = call_runtime_symbol_i32(
-            builder,
-            module,
-            symbols_by_name,
-            symbol,
-            &[left.ptr, right.ptr],
-        );
-        release_soft_f128_operands(builder, module, symbols_by_name, left, right);
-        let cmp = builder.ins().icmp_imm(IntCC::NotEqual, out, 0);
-        return LoweredValue::Int(bool_to_int(builder, bool_storage_type(scalar), cmp));
-    }
-
-    release_soft_f128_operands(builder, module, symbols_by_name, left, right);
-
-    LoweredValue::Float(runtime_soft_f128_zero(builder, module, symbols_by_name))
-}
-
-fn lowered_to_soft_f128_ptr(
-    builder: &mut FunctionBuilder,
-    scalar: ScalarType,
-    value: Option<&LoweredValue>,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    signed: bool,
-) -> SoftF128Operand {
-    let Some(value) = value else {
-        return SoftF128Operand {
-            ptr: runtime_soft_f128_zero(builder, module, symbols_by_name),
-            owned: true,
-        };
-    };
-
-    if let Some(raw_float) = value.as_float() {
-        let source_ty = builder.func.dfg.value_type(raw_float);
-        if source_ty == I64 {
-            return SoftF128Operand {
-                ptr: cast_scalar(builder, raw_float, I64, scalar),
-                owned: false,
-            };
-        }
-        if source_ty.is_float() {
-            let as_f64 = cast_scalar(builder, raw_float, F64, scalar);
-            return SoftF128Operand {
-                ptr: call_runtime_symbol_i64(
-                    builder,
-                    module,
-                    symbols_by_name,
-                    "dynrt_f128_from_f64",
-                    &[as_f64],
-                ),
-                owned: true,
-            };
-        }
-    }
-
-    if let Some(raw_int) = value.as_int() {
-        let as_i64 = cast_int(builder, raw_int, I64, signed);
-        let symbol = if signed {
-            "dynrt_f128_from_i64"
-        } else {
-            "dynrt_f128_from_u64"
-        };
-        return SoftF128Operand {
-            ptr: call_runtime_symbol_i64(builder, module, symbols_by_name, symbol, &[as_i64]),
-            owned: true,
-        };
-    }
-
-    SoftF128Operand {
-        ptr: runtime_soft_f128_zero(builder, module, symbols_by_name),
-        owned: true,
-    }
-}
-
-fn release_soft_f128_if_owned(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    operand: SoftF128Operand,
-) {
-    if !operand.owned {
-        return;
-    }
-    let _ = call_runtime_symbol_i32(
-        builder,
-        module,
-        symbols_by_name,
-        "dynrt_f128_release",
-        &[operand.ptr],
-    );
-}
-
-fn release_soft_f128_operands(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    left: SoftF128Operand,
-    right: SoftF128Operand,
-) {
-    release_soft_f128_if_owned(builder, module, symbols_by_name, left);
-    release_soft_f128_if_owned(builder, module, symbols_by_name, right);
-}
-
-fn runtime_soft_f128_zero(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-) -> Value {
-    call_runtime_symbol_i64(builder, module, symbols_by_name, "dynrt_f128_zero", &[])
-}
-
-fn call_runtime_symbol_i64(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    symbol: &str,
-    args: &[Value],
-) -> Value {
-    call_runtime_symbol(builder, module, symbols_by_name, symbol, args, I64)
-}
-
-fn call_runtime_symbol_i32(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    symbol: &str,
-    args: &[Value],
-) -> Value {
-    call_runtime_symbol(builder, module, symbols_by_name, symbol, args, I32)
-}
-
-fn call_runtime_symbol_f64(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    symbol: &str,
-    args: &[Value],
-) -> Value {
-    call_runtime_symbol(builder, module, symbols_by_name, symbol, args, F64)
-}
-
 fn emit_declared_func_call(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
@@ -993,40 +887,6 @@ fn emit_declared_func_call(
         .first()
         .copied()
         .unwrap_or_else(|| zero_for_type(builder, fallback_ty))
-}
-
-fn call_runtime_symbol_if_present(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    symbol: &str,
-    args: &[Value],
-    fallback_ty: Type,
-) -> Option<Value> {
-    let func_id = symbols_by_name.get(symbol).copied()?;
-    Some(emit_declared_func_call(
-        builder,
-        module,
-        func_id,
-        args,
-        fallback_ty,
-    ))
-}
-
-fn call_runtime_symbol(
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-    symbol: &str,
-    args: &[Value],
-    fallback_ty: Type,
-) -> Value {
-    call_runtime_symbol_if_present(builder, module, symbols_by_name, symbol, args, fallback_ty)
-        .unwrap_or_else(|| zero_for_type(builder, fallback_ty))
-}
-
-fn default_integer_signedness(scalar: ScalarType) -> bool {
-    matches!(scalar, ScalarType::Int { signed: true, .. })
 }
 
 fn saturate_i64_to_int_width(
@@ -1063,10 +923,28 @@ fn lower_int_binary_value(
     scalar: ScalarType,
     left_val: Option<&LoweredValue>,
     right_val: Option<&LoweredValue>,
+    left_operand_ty: Option<&MirValueType>,
 ) -> LoweredValue {
-    let signed = match value_ty {
-        MirValueType::Int { signed, .. } => *signed,
-        _ => matches!(scalar, ScalarType::Int { signed: true, .. }),
+    // For comparison operators the result type is always u1 (bool, unsigned), but the
+    // comparison direction (signed vs unsigned) must come from the OPERAND types, not
+    // the result type.  Arithmetic operators (add, sub, …) may use the result type.
+    let is_comparison = matches!(
+        op,
+        BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+    );
+    let signed = if is_comparison {
+        match left_operand_ty {
+            Some(MirValueType::Int { signed, .. }) => *signed,
+            _ => match value_ty {
+                MirValueType::Int { signed, .. } => *signed,
+                _ => matches!(scalar, ScalarType::Int { signed: true, .. }),
+            },
+        }
+    } else {
+        match value_ty {
+            MirValueType::Int { signed, .. } => *signed,
+            _ => matches!(scalar, ScalarType::Int { signed: true, .. }),
+        }
     };
     let Some(left_raw) = left_val.and_then(LoweredValue::as_int) else {
         return zero_lowered_for_type(builder, value_ty, scalar);
@@ -1237,10 +1115,6 @@ fn lower_cast_value(
     let Some(source) = data.lowered.get(value).cloned() else {
         return zero_lowered_for_type(builder, value_ty, scalar);
     };
-    let source_is_soft_f128 = source
-        .as_float()
-        .map(|raw| builder.func.dfg.value_type(raw) == I64)
-        .unwrap_or(false);
     if matches!(target, MirValueType::Unknown) {
         return source;
     }
@@ -1253,22 +1127,6 @@ fn lower_cast_value(
                 return LoweredValue::Int(builder.ins().iconcat(lo, hi));
             }
         }
-    }
-    if is_soft_f128_type(target) {
-        if let Some(MirValue::Literal(HirLiteral::Float(text))) = value_defs.get(value) {
-            return lower_soft_f128_literal_text(text, builder, module, data.symbols_by_name);
-        }
-        return lower_cast_to_soft_f128(source, builder, scalar, module, data.symbols_by_name);
-    }
-    if source_is_soft_f128 {
-        return lower_cast_from_soft_f128(
-            target,
-            source,
-            builder,
-            scalar,
-            module,
-            data.symbols_by_name,
-        );
     }
     let target_ty = mir_type_to_clif(target, scalar);
     if matches!(target, MirValueType::Float { .. }) {
@@ -1285,115 +1143,6 @@ fn lower_cast_value(
     };
     let casted = cast_scalar(builder, raw, target_ty, scalar);
     LoweredValue::from_typed_value(casted, target)
-}
-
-fn lower_cast_to_soft_f128(
-    source: LoweredValue,
-    builder: &mut FunctionBuilder,
-    scalar: ScalarType,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-) -> LoweredValue {
-    let operand = lowered_to_soft_f128_ptr(
-        builder,
-        scalar,
-        Some(&source),
-        module,
-        symbols_by_name,
-        default_integer_signedness(scalar),
-    );
-    LoweredValue::Float(operand.ptr)
-}
-
-fn lower_cast_from_soft_f128(
-    target: &MirValueType,
-    source: LoweredValue,
-    builder: &mut FunctionBuilder,
-    scalar: ScalarType,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-) -> LoweredValue {
-    let source_ptr = source
-        .as_value()
-        .map(|value| cast_scalar(builder, value, I64, scalar))
-        .unwrap_or_else(|| runtime_soft_f128_zero(builder, module, symbols_by_name));
-
-    if is_soft_f128_type(target) {
-        return LoweredValue::Float(source_ptr);
-    }
-
-    if matches!(target, MirValueType::Float { .. }) {
-        let as_f64 = call_runtime_symbol_f64(
-            builder,
-            module,
-            symbols_by_name,
-            "dynrt_f128_to_f64",
-            &[source_ptr],
-        );
-        let target_ty = mir_type_to_clif(target, scalar);
-        if target_ty == F64 {
-            return LoweredValue::Float(as_f64);
-        }
-        return LoweredValue::Float(cast_scalar(builder, as_f64, target_ty, scalar));
-    }
-
-    if matches!(target, MirValueType::Bool) {
-        let raw = call_runtime_symbol_i64(
-            builder,
-            module,
-            symbols_by_name,
-            "dynrt_f128_to_u64",
-            &[source_ptr],
-        );
-        let cmp = builder.ins().icmp_imm(IntCC::NotEqual, raw, 0);
-        return LoweredValue::Int(bool_to_int(builder, bool_storage_type(scalar), cmp));
-    }
-
-    if let MirValueType::Int { signed, bits } = target {
-        let symbol = if *signed {
-            "dynrt_f128_to_i64"
-        } else {
-            "dynrt_f128_to_u64"
-        };
-        let raw = call_runtime_symbol_i64(builder, module, symbols_by_name, symbol, &[source_ptr]);
-        let target_ty = mir_type_to_clif(target, scalar);
-        let saturated = saturate_i64_to_int_width(builder, raw, *bits, *signed);
-        return LoweredValue::Int(cast_int(builder, saturated, target_ty, *signed));
-    }
-
-    let target_ty = mir_type_to_clif(target, scalar);
-    let casted = cast_scalar(builder, source_ptr, target_ty, scalar);
-    LoweredValue::from_typed_value(casted, target)
-}
-
-fn lower_soft_f128_literal_text(
-    text: &str,
-    builder: &mut FunctionBuilder,
-    module: &mut ObjectModule,
-    symbols_by_name: &BTreeMap<String, FuncId>,
-) -> LoweredValue {
-    let normalized = text.replace('_', "");
-    let bytes = normalized.as_bytes();
-    let ptr_ty = module.target_config().pointer_type();
-    let slot = builder.func.create_sized_stack_slot(StackSlotData::new(
-        StackSlotKind::ExplicitSlot,
-        (bytes.len() as u32).max(1),
-        0,
-    ));
-    for (idx, byte) in bytes.iter().enumerate() {
-        let byte_val = builder.ins().iconst(I8, i64::from(*byte));
-        builder.ins().stack_store(byte_val, slot, idx as i32);
-    }
-    let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
-    let len = builder.ins().iconst(ptr_ty, bytes.len() as i64);
-    let out = call_runtime_symbol_i64(
-        builder,
-        module,
-        symbols_by_name,
-        "dynrt_f128_from_literal",
-        &[addr, len],
-    );
-    LoweredValue::Float(out)
 }
 
 fn lower_deref_access_value(
@@ -1872,6 +1621,44 @@ fn lower_call_value(
     symbol_tables: CallSymbolTables<'_>,
 ) -> LoweredValue {
     let pointer_ty = module.target_config().pointer_type();
+
+    // Handle fat pointer (closure) calls specially
+    if let Some(LoweredValue::FatPtr { fn_ptr, env_ptr }) = lowered.get(call.callee).cloned() {
+        let Some(arg_vals) =
+            marshal_call_arg_values(call.args, builder, lowered, module)
+        else {
+            return zero_lowered_for_type(builder, value_ty, scalar);
+        };
+        // Prepend env_ptr to args
+        let mut call_args = vec![env_ptr];
+        call_args.extend(arg_vals.iter().copied());
+
+        // Build signature: (env_ptr, ...args...) -> ret
+        let mut sig = module.make_signature();
+        sig.params.push(cranelift_codegen::ir::AbiParam::new(pointer_ty));
+        for &av in &arg_vals {
+            sig.params
+                .push(cranelift_codegen::ir::AbiParam::new(builder.func.dfg.value_type(av)));
+        }
+        let return_ty = indirect_call_return_type(value_ty, scalar, pointer_ty, &CallReturnProfile {
+            returns_bytes_slice: false,
+            returns_aggregate: None,
+            returns_errorable: false,
+            returns_errorable_scalar: false,
+            errorable_scalar_payload_ty: None,
+        });
+        sig.returns
+            .push(cranelift_codegen::ir::AbiParam::new(return_ty));
+        let sig_ref = builder.import_signature(sig);
+        let inst = builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
+        let ret = builder
+            .inst_results(inst)
+            .first()
+            .copied()
+            .unwrap_or_else(|| zero_for_type(builder, return_ty));
+        return LoweredValue::from_typed_value(ret, value_ty);
+    }
+
     let Some(mut arg_vals) = marshal_call_arg_values(call.args, builder, lowered, module) else {
         return zero_lowered_for_type(builder, value_ty, scalar);
     };
@@ -1963,6 +1750,22 @@ fn marshal_call_arg_values(
             Some(LoweredValue::BytesSlice { ptr, len }) => {
                 arg_vals.push(ptr);
                 arg_vals.push(len);
+            }
+            Some(LoweredValue::FatPtr { fn_ptr, env_ptr }) => {
+                // Stack-allocate the fat pointer and pass its address
+                let ptr_bytes = pointer_ty.bytes();
+                let align_log2 = if ptr_bytes == 8 { 3 } else { 2 };
+                let slot = builder.func.create_sized_stack_slot(
+                    cranelift_codegen::ir::StackSlotData::new(
+                        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                        ptr_bytes * 2,
+                        align_log2,
+                    ),
+                );
+                builder.ins().stack_store(fn_ptr, slot, 0);
+                builder.ins().stack_store(env_ptr, slot, ptr_bytes as i32);
+                let addr = builder.ins().stack_addr(pointer_ty, slot, 0);
+                arg_vals.push(addr);
             }
             Some(other) => arg_vals.push(other.as_value()?),
             None => return None,
@@ -2217,7 +2020,7 @@ fn lower_call_result_value(
         return LoweredValue::ErrorableScalar {
             status: cast_scalar(builder, ret, scalar.ty(), scalar),
             payload,
-            payload_is_float: payload_ty.is_float() || is_soft_f128_type(payload_mir_ty),
+            payload_is_float: payload_ty.is_float(),
         };
     }
 
@@ -2289,7 +2092,7 @@ fn lower_error_payload_value(
                 mir_type_to_clif(value_ty, scalar)
             };
             let casted = cast_scalar(builder, payload, target_ty, scalar);
-            if is_soft_f128_type(value_ty) || target_ty.is_float() {
+            if target_ty.is_float() {
                 LoweredValue::Float(casted)
             } else {
                 LoweredValue::Int(casted)
@@ -2340,9 +2143,6 @@ fn zero_lowered_for_type(
     } else {
         mir_type_to_clif(value_ty, scalar)
     };
-    if is_soft_f128_type(value_ty) {
-        return LoweredValue::Float(zero_for_type(builder, I64));
-    }
     if ty.is_float() {
         LoweredValue::Float(zero_for_type(builder, ty))
     } else {
@@ -2384,9 +2184,7 @@ fn lower_literal(
         }
         HirLiteral::Float(value) => {
             let float_ty = mir_type_to_clif(value_ty, scalar);
-            if is_soft_f128_type(value_ty) || float_ty == I64 {
-                lower_soft_f128_literal_text(value, builder, module, symbols_by_name)
-            } else if float_ty == F32 {
+            if float_ty == F32 {
                 let bits = value.parse::<f32>().unwrap_or(0.0).to_bits();
                 LoweredValue::Float(
                     builder
@@ -2430,28 +2228,9 @@ fn lower_literal(
             builder.ins().stack_store(nul, slot, bytes.len() as i32);
             let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
             let len_value = builder.ins().iconst(ptr_ty, bytes.len() as i64);
-            let len_slot = builder.func.create_sized_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                ptr_ty.bits() / 8,
-                0,
-            ));
-            let out_len = builder.ins().stack_addr(ptr_ty, len_slot, 0);
-
-            if let Some(ptr) = call_runtime_symbol_if_present(
-                builder,
-                module,
-                symbols_by_name,
-                "dynrt_bytes_from_ptr_len",
-                &[addr, len_value, out_len],
-                ptr_ty,
-            ) {
-                let len = builder.ins().stack_load(ptr_ty, len_slot, 0);
-                LoweredValue::BytesSlice { ptr, len }
-            } else {
-                LoweredValue::BytesSlice {
-                    ptr: addr,
-                    len: len_value,
-                }
+            LoweredValue::BytesSlice {
+                ptr: addr,
+                len: len_value,
             }
         }
     }
@@ -3186,10 +2965,6 @@ fn parse_float_type_bits(type_name: &str) -> Option<u16> {
     bits.parse::<u16>().ok()
 }
 
-fn is_soft_f128_type(value_ty: &MirValueType) -> bool {
-    matches!(value_ty, MirValueType::Float { bits: 128 })
-}
-
 fn canonicalize_int_value(
     builder: &mut FunctionBuilder,
     value: Value,
@@ -3355,18 +3130,13 @@ fn parse_return_scalar(return_type: Option<&str>) -> ScalarType {
 fn mir_type_to_clif(ty: &MirValueType, fallback: ScalarType) -> Type {
     match ty {
         MirValueType::Int { bits, .. } => int_carrier_type_for_bits(*bits),
-        MirValueType::Float { bits } => {
-            if *bits == 128 {
-                I64
-            } else {
-                float_carrier_type_for_bits(*bits)
-            }
-        }
+        MirValueType::Float { bits } => float_carrier_type_for_bits(*bits),
         MirValueType::Bool => bool_storage_type(fallback),
         MirValueType::BytesSlice => I64,
         MirValueType::Type => I64,
         MirValueType::Function | MirValueType::FunctionPointer => fallback.ty(),
         MirValueType::Unknown => I64,
+        MirValueType::Closure => fallback.ty(),
     }
 }
 

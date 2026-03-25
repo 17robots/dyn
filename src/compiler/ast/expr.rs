@@ -1,4 +1,6 @@
-use crate::compiler::ast::{AssignOp, BinaryOp, Binding, Ident, Label, Pattern, TypeExpr, UnaryOp};
+use crate::compiler::ast::{
+    AssignOp, BinaryOp, Binding, DestructureBinding, Ident, Label, Pattern, TypeExpr, UnaryOp,
+};
 use crate::compiler::diagnostics::SourceSpan;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +61,12 @@ pub enum ExprKind {
     },
     OrElse(OrElseExpr),
     StructLiteral(StructLiteralExpr),
+    /// `expr { field: val, ... }` — construct a struct whose type is the result of evaluating
+    /// `ty_expr`. Used for patterns like `get_type(){}` where a function returns a `type`.
+    TypeConstruct {
+        ty_expr: Box<Expr>,
+        fields: Vec<StructLiteralField>,
+    },
     ArrayLiteral(Vec<Expr>),
     TupleLiteral(Vec<Expr>),
     EnumVariantConstruct(EnumVariantExpr),
@@ -115,6 +123,7 @@ pub struct BlockExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Binding(Box<Binding>),
+    Destructure(Box<DestructureBinding>),
     Expr(Box<Expr>),
 }
 
@@ -218,6 +227,9 @@ pub struct FnParam {
     pub name: Ident,
     pub ty: Option<TypeExpr>,
     pub default_value: Option<Expr>,
+    /// True if the parameter was annotated with `comp`, meaning the argument
+    /// must be a compile-time-known value.
+    pub comp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

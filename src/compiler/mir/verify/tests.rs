@@ -24,6 +24,7 @@ fn reports_unterminated_block() {
                     terminator: None,
                 }],
             }],
+            globals: Vec::new(),
             extern_functions: Vec::new(),
         }],
     };
@@ -70,6 +71,7 @@ fn reports_invalid_phi_source_and_undefined_return_value() {
                     },
                 ],
             }],
+            globals: Vec::new(),
             extern_functions: Vec::new(),
         }],
     };
@@ -121,6 +123,7 @@ fn reports_phi_after_non_phi() {
                     terminator: Some(MirTerminator::Return(Some(MirValueId(1)))),
                 }],
             }],
+            globals: Vec::new(),
             extern_functions: Vec::new(),
         }],
     };

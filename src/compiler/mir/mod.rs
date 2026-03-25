@@ -19,8 +19,25 @@ pub struct MirProgram {
 pub struct MirModule {
     pub module_id: ModuleId,
     pub key: ModuleKey,
+    pub globals: Vec<MirGlobal>,
     pub functions: Vec<MirFunction>,
     pub extern_functions: Vec<MirExternFunction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirGlobal {
+    pub name: String,
+    pub mutable: bool,
+    pub type_hint: Option<String>,
+    pub ty: MirValueType,
+    pub init: MirGlobalInit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MirGlobalInit {
+    Zero,
+    Integer(i64),
+    Bool(bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +70,8 @@ pub enum MirValueType {
     Float { bits: u16 },
     Function,
     FunctionPointer,
+    /// Fat pointer: (fn_ptr, env_ptr) pair
+    Closure,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -153,6 +172,29 @@ pub enum MirValue {
     },
     TypeLiteral(String),
     Unknown,
+    /// Creates a fat pointer closure value: (fn_ptr, env_ptr)
+    /// fn_symbol is the hoisted lambda's MIR function name
+    /// captures are the values of variables captured from the enclosing scope (in order)
+    ClosureCreate {
+        fn_symbol: String,
+        captures: Vec<MirValueId>,
+    },
+    /// Loads a captured value from the environment pointer (first param of a closure)
+    /// env_ptr is the MirValueId of the env_ptr parameter
+    /// index is which capture to load (0-based)
+    ClosureEnvField {
+        env_ptr: MirValueId,
+        index: usize,
+    },
+    /// Loads the current value of a module-level mutable global variable.
+    GlobalLoad {
+        name: String,
+    },
+    /// Stores a value to a module-level mutable global variable.
+    GlobalStore {
+        name: String,
+        value: MirValueId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

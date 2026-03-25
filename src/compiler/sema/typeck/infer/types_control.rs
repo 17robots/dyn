@@ -272,10 +272,6 @@ pub(super) fn extract_callee_name(callee: &Expr) -> Option<String> {
     }
 }
 
-pub(super) fn runtime_builtin_symbol_name(name: &str) -> Option<&'static str> {
-    runtime_symbol_for_builtin(name)
-}
-
 pub(super) fn unify_branch_types(
     left: TypeId,
     right: TypeId,
@@ -492,17 +488,20 @@ pub(super) fn validate_any_usage(
 ) {
     match &ty.kind {
         TypeExprKind::Named(ident) if ident.text == "any" => {
-            if !matches!(context, AnyUsageContext::FunctionParam) {
+            if !matches!(
+                context,
+                AnyUsageContext::FunctionParam | AnyUsageContext::PointerInner
+            ) {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::TypeChecker,
                         DiagnosticCode::E4005,
-                        "'any' is only allowed in function parameter types",
+                        "'any' is only allowed as '*any' (erased pointer) or a function parameter type",
                     )
                     .with_primary_file_label(
                         file_path.to_path_buf(),
                         Some(ty.span),
-                        "use concrete type or opaque pointer here",
+                        "use '*any' for a type-erased pointer, or a concrete type here",
                     ),
                 );
             }
@@ -521,7 +520,30 @@ pub(super) fn validate_any_usage(
                 ),
             );
         }
-        TypeExprKind::Pointer { inner, .. } | TypeExprKind::Optional { inner } => {
+        TypeExprKind::Pointer { mutable, inner } => {
+            // *mut any is not valid — mutability belongs to the concrete type after casting
+            if *mutable {
+                if let TypeExprKind::Named(ident) = &inner.kind {
+                    if ident.text == "any" {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                "'*mut any' is not allowed; use '*any' and cast to a mutable concrete pointer",
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(ty.span),
+                                "remove 'mut' here",
+                            ),
+                        );
+                        return;
+                    }
+                }
+            }
+            validate_any_usage(inner, AnyUsageContext::PointerInner, diagnostics, file_path)
+        }
+        TypeExprKind::Optional { inner } => {
             validate_any_usage(inner, context, diagnostics, file_path)
         }
         TypeExprKind::Slice { element, .. } | TypeExprKind::Array { element, .. } => {

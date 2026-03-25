@@ -2,15 +2,16 @@ use std::collections::BTreeSet;
 
 use crate::compiler::ast::{
     BlockExpr, EnumVariantExpr, Expr, ExprKind, ForExpr, PatternKind, PatternLiteral, Stmt,
+    TypeExprKind,
 };
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 use crate::compiler::sema::module_unit::{DeclKind, ModuleUnit};
 
-#[derive(Default)]
-struct ControlContext {
+struct ControlContext<'a> {
     loop_depth: usize,
     labels: Vec<String>,
     or_fallback_depth: usize,
+    units: &'a [ModuleUnit],
 }
 
 pub fn control_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
@@ -22,7 +23,12 @@ pub fn control_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                 continue;
             }
 
-            let mut ctx = ControlContext::default();
+            let mut ctx = ControlContext {
+                loop_depth: 0,
+                labels: Vec::new(),
+                or_fallback_depth: 0,
+                units,
+            };
             check_expr(&decl.value, &mut ctx, &decl.file_path, &mut diagnostics);
         }
     }
@@ -32,7 +38,7 @@ pub fn control_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
 
 fn check_expr(
     expr: &Expr,
-    ctx: &mut ControlContext,
+    ctx: &mut ControlContext<'_>,
     file_path: &std::path::Path,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -167,7 +173,7 @@ fn check_expr(
                 check_expr(&arm.value, ctx, file_path, diagnostics);
             }
 
-            if !is_match_exhaustive(match_expr) {
+            if !is_match_exhaustive(match_expr, ctx.units) {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::Semantic,
@@ -229,6 +235,12 @@ fn check_expr(
                 check_expr(&field.value, ctx, file_path, diagnostics);
             }
         }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            check_expr(ty_expr, ctx, file_path, diagnostics);
+            for field in fields {
+                check_expr(&field.value, ctx, file_path, diagnostics);
+            }
+        }
         ExprKind::ArrayLiteral(elements) => {
             for element in elements {
                 check_expr(element, ctx, file_path, diagnostics);
@@ -265,7 +277,10 @@ fn check_expr(
     }
 }
 
-fn is_match_exhaustive(match_expr: &crate::compiler::ast::MatchExpr) -> bool {
+fn is_match_exhaustive(
+    match_expr: &crate::compiler::ast::MatchExpr,
+    units: &[ModuleUnit],
+) -> bool {
     if match_expr.arms.is_empty() {
         return false;
     }
@@ -316,22 +331,102 @@ fn is_match_exhaustive(match_expr: &crate::compiler::ast::MatchExpr) -> bool {
         ExprKind::EnumVariantConstruct(enum_variant) => match_expr.arms.iter().any(|arm| {
             arm.guard.is_none() && pattern_matches_enum_variant(&arm.pattern.kind, enum_variant)
         }),
-        _ => enum_variant_match_assumed_exhaustive(match_expr),
+        _ => enum_variant_match_exhaustive(match_expr, units),
     }
 }
 
-fn enum_variant_match_assumed_exhaustive(match_expr: &crate::compiler::ast::MatchExpr) -> bool {
-    let mut variants = BTreeSet::new();
+/// Checks exhaustiveness for enum-typed scrutinees (non-literal).
+///
+/// Two strategies are used depending on whether the match arms carry explicit
+/// root type names:
+///
+/// **Explicit root** (e.g. `MyEnum.Variant`): the compiler looks up the full
+/// variant list for that type in the module declarations and verifies every
+/// variant is covered.  Mixed root type names, guarded arms, or a root type
+/// that can't be found all cause this check to return `false`.
+///
+/// **Shorthand / no root** (e.g. `.Variant`): without type information the
+/// compiler cannot enumerate all variants, so it falls back to the conservative
+/// heuristic — assume exhaustive if every arm is an unguarded enum variant
+/// pattern.  This matches the old behaviour and avoids breaking existing code
+/// that correctly covers all variants in shorthand style.
+fn enum_variant_match_exhaustive(
+    match_expr: &crate::compiler::ast::MatchExpr,
+    units: &[ModuleUnit],
+) -> bool {
+    let mut matched_variants: BTreeSet<String> = BTreeSet::new();
+    let mut root_name: Option<String> = None;
+    let mut has_any_root = false;
+
     for arm in &match_expr.arms {
+        // Guarded arms don't guarantee coverage of a case.
         if arm.guard.is_some() {
             return false;
         }
-        let PatternKind::EnumVariant { variant, .. } = &arm.pattern.kind else {
+        let PatternKind::EnumVariant { root, variant, .. } = &arm.pattern.kind else {
             return false;
         };
-        variants.insert(variant.text.clone());
+        matched_variants.insert(variant.text.clone());
+        if let Some(r) = root {
+            has_any_root = true;
+            match &root_name {
+                None => root_name = Some(r.text.clone()),
+                Some(existing) if existing != &r.text => return false, // mixed root types
+                Some(_) => {}
+            }
+        }
     }
-    !variants.is_empty()
+
+    if matched_variants.is_empty() {
+        return false;
+    }
+
+    // If no arm used an explicit root type name, fall back to the heuristic:
+    // assume exhaustive when all arms are unguarded enum variant patterns.
+    // We cannot look up the full variant list without type information, so
+    // this is a best-effort check.  Users who want guaranteed exhaustiveness
+    // should use explicit root names (e.g. `MyEnum.Variant`) or add a `_` arm.
+    if !has_any_root {
+        return true;
+    }
+
+    // At least one explicit root type name is present.
+    let Some(type_name) = root_name else {
+        return false;
+    };
+
+    // Look up the enum declaration in any visible module unit.
+    let Some(all_variants) = find_enum_variants(&type_name, units) else {
+        // Declaration not found (e.g. imported type) — fall back to heuristic.
+        return true;
+    };
+
+    // Every declared variant must appear in the match arms.
+    all_variants.iter().all(|v| matched_variants.contains(v))
+}
+
+/// Searches module declarations for an enum type named `type_name` and returns
+/// its variant names, or `None` if no such declaration is found.
+fn find_enum_variants(type_name: &str, units: &[ModuleUnit]) -> Option<Vec<String>> {
+    for unit in units {
+        for decl in &unit.declarations {
+            if decl.name != type_name {
+                continue;
+            }
+            if let ExprKind::TypeLiteral(type_expr) = &decl.value.kind {
+                if let TypeExprKind::Enum(enum_type) = &type_expr.kind {
+                    return Some(
+                        enum_type
+                            .variants
+                            .iter()
+                            .map(|v| v.name.text.clone())
+                            .collect(),
+                    );
+                }
+            }
+        }
+    }
+    None
 }
 
 fn pattern_matches_bool(pattern: &PatternKind, scrutinee: bool) -> bool {
@@ -418,7 +513,7 @@ fn parse_int_literal(value: &str) -> Option<i64> {
 
 fn check_block(
     block: &BlockExpr,
-    ctx: &mut ControlContext,
+    ctx: &mut ControlContext<'_>,
     file_path: &std::path::Path,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -430,6 +525,7 @@ fn check_block(
     for stmt in &block.statements {
         match stmt {
             Stmt::Binding(binding) => check_expr(&binding.value, ctx, file_path, diagnostics),
+            Stmt::Destructure(d) => check_expr(&d.value, ctx, file_path, diagnostics),
             Stmt::Expr(expr) => check_expr(expr, ctx, file_path, diagnostics),
         }
     }

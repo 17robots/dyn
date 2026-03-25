@@ -346,6 +346,14 @@ fn verify_eval_operands(
             }
         }
         MirValue::Use { .. } | MirValue::TypeLiteral(_) => {}
+        MirValue::ClosureCreate { captures, .. } => {
+            for &cap in captures {
+                check_value(cap, "closure capture");
+            }
+        }
+        MirValue::ClosureEnvField { env_ptr, .. } => check_value(*env_ptr, "closure env ptr"),
+        MirValue::GlobalLoad { .. } => {}
+        MirValue::GlobalStore { value, .. } => check_value(*value, "global store value"),
     }
 }
 

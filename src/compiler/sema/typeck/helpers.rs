@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use crate::compiler::ast::{Expr, ExprKind, Literal};
-use crate::compiler::intrinsics::{RuntimeReturnKind, RUNTIME_INTRINSICS};
 use crate::compiler::sema::type_names::{parse_float_type_bits, parse_int_type_bits};
 
 use super::{FnParamSpec, FnSignature, Type, TypeId, TypeStore};
@@ -145,61 +144,6 @@ pub(super) fn bytes_type(types: &mut TypeStore) -> TypeId {
         element: u8_ty,
         mutable: false,
     })
-}
-
-pub(super) fn insert_builtin_signatures(
-    signatures: &mut BTreeMap<String, FnSignature>,
-    types: &mut TypeStore,
-) {
-    for intrinsic in RUNTIME_INTRINSICS {
-        let params = (0..intrinsic.arity)
-            .map(|_| FnParamSpec {
-                name: None,
-                has_default: false,
-            })
-            .collect::<Vec<_>>();
-        signatures.insert(
-            intrinsic.symbol.to_string(),
-            FnSignature {
-                params,
-                return_type: runtime_return_type_id(intrinsic.return_kind, types),
-            },
-        );
-    }
-}
-
-fn runtime_return_type_id(kind: RuntimeReturnKind, types: &mut TypeStore) -> TypeId {
-    match kind {
-        RuntimeReturnKind::U32 => types.intern(Type::Int {
-            signed: false,
-            bits: 32,
-        }),
-        RuntimeReturnKind::U64 => types.intern(Type::Int {
-            signed: false,
-            bits: 64,
-        }),
-        RuntimeReturnKind::I64 => types.intern(Type::Int {
-            signed: true,
-            bits: 64,
-        }),
-        RuntimeReturnKind::I32 => types.intern(Type::Int {
-            signed: true,
-            bits: 32,
-        }),
-        RuntimeReturnKind::BytesSlice => bytes_type(types),
-        RuntimeReturnKind::IdentityI32Fn => {
-            let i32_ty = types.intern(Type::Int {
-                signed: true,
-                bits: 32,
-            });
-            types.intern(Type::Function {
-                param_types: vec![i32_ty],
-                param_names: vec![None],
-                has_defaults: vec![false],
-                return_type: i32_ty,
-            })
-        }
-    }
 }
 
 pub(super) fn type_to_string(type_id: TypeId, types: &TypeStore) -> String {

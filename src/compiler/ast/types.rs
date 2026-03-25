@@ -61,6 +61,7 @@ pub struct StructType {
 pub struct StructFieldType {
     pub name: Ident,
     pub ty: TypeExpr,
+    pub default_value: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

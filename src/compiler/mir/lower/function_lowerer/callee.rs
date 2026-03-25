@@ -38,10 +38,6 @@ impl FunctionLowerer {
             if !matches!(inferred, MirValueType::Unknown) {
                 return inferred;
             }
-            if let Some(kind) = runtime_return_kind_for_symbol(&name) {
-                let intrinsic = mir_value_type_for_runtime_return(kind);
-                return intrinsic;
-            }
             return MirValueType::Unknown;
         }
         match self.value_defs.get(&callee) {

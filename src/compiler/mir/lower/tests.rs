@@ -218,6 +218,7 @@ fn lowers_match_into_branching_cfg() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -711,6 +712,7 @@ fn lowers_or_else_into_branch_and_phi() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -782,6 +784,7 @@ fn lowers_or_else_fallback_break_value_into_phi_source() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -874,6 +877,7 @@ fn lowers_defer_before_return() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -957,6 +961,7 @@ fn lowers_struct_literal_field_access_to_field_value() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -1048,6 +1053,7 @@ fn lowers_struct_literal_index_with_constant_to_value() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -1144,6 +1150,7 @@ fn lowers_enum_variant_index_with_constant_to_payload_value() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -1216,6 +1223,7 @@ fn lowers_loop_with_break_value_into_loop_result() {
                 type_hint: Some("i32".to_string()),
                 inferred_type: Some("i32".to_string()),
                 span,
+                enclosing_struct: None,
                 value: HirExpr {
                     span,
                     kind: HirExprKind::Function {
@@ -1296,90 +1304,4 @@ fn parses_nonstandard_int_and_float_type_hints() {
             bits: 7,
         }
     );
-    assert_eq!(parse_type_hint("f128"), MirValueType::Float { bits: 128 });
-}
-
-#[test]
-fn lowers_f128_function_parameters_and_binary_values_as_float() {
-    let root = make_temp_dir();
-    fs::write(
-        root.join("a.dyn"),
-        "module main\nadd := (lhs: f128, rhs: f128) f128 { return lhs + rhs }\nmain := () i32 {\n  a := $as(f128, 1.5)\n  b := $as(f128, 2.25)\n  c := add(a, b)\n  if c > $as(f128, 3.7) return 7 else return 1\n}\n",
-    )
-    .expect("file should be written");
-
-    let (_parsed, units, sema) = analyze_project(&root).expect("project should analyze");
-    let inferred = infer_binding_type_strings(&units);
-    let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred);
-    let hir_main = hir
-        .modules
-        .iter()
-        .find(|module| module.key.module_name == "main")
-        .expect("main HIR module should exist");
-    let add_item = hir_main
-        .items
-        .iter()
-        .find(|item| item.name == "add")
-        .expect("add HIR item should exist");
-    let add_type_info = format!(
-        "add HIR inferred={:?} hint={:?}",
-        add_item.inferred_type, add_item.type_hint
-    );
-    let mir = lower_hir_to_mir(&hir);
-    let main_module = mir
-        .modules
-        .iter()
-        .find(|module| module.key.module_name == "main")
-        .expect("main module should exist");
-    let add_fn = main_module
-        .functions
-        .iter()
-        .find(|function| function.name == "add")
-        .expect("add function should exist");
-    let main_fn = main_module
-        .functions
-        .iter()
-        .find(|function| function.name == "main")
-        .expect("main function should exist");
-
-    assert_eq!(
-        add_fn.param_types,
-        vec![
-            MirValueType::Float { bits: 128 },
-            MirValueType::Float { bits: 128 }
-        ]
-    );
-    assert!(add_fn
-        .blocks
-        .iter()
-        .any(|block| block.instructions.iter().any(|instr| matches!(
-            instr,
-            MirInstr::Eval {
-                value: MirValue::Binary {
-                    op: crate::compiler::ast::BinaryOp::Add,
-                    ..
-                },
-                ty: MirValueType::Float { bits: 128 },
-                ..
-            }
-        ))));
-    let call_types = main_fn
-        .blocks
-        .iter()
-        .flat_map(|block| block.instructions.iter())
-        .filter_map(|instr| match instr {
-            MirInstr::Eval {
-                value: MirValue::Call { .. },
-                ty,
-                ..
-            } => Some(ty.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        call_types.contains(&MirValueType::Float { bits: 128 }),
-        "{add_type_info}; call types: {call_types:#?}"
-    );
-
-    fs::remove_dir_all(root).expect("temp directory should be removed");
 }
