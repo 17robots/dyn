@@ -1,7 +1,6 @@
 // comment
 module main
 main := () ! { // void type but marked as errorable with !
-  io := use "std/io"
   a := 1
   b: i32 = 2
   c: i31 = 3
@@ -10,7 +9,7 @@ main := () ! { // void type but marked as errorable with !
   e: u8 = 'a'
   f: f32 = 1.0
   g: f64 = 1.0
-  h: f128 = 1.0
+  h: f64 = 1.0
   i: [10]i32 = [1,2,3,4,5,5,4,3,2,1]
   j: [1]f32 = [1.0]
   k: []i32 = i[0..2]
