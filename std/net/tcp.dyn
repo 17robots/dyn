@@ -1,0 +1,182 @@
+module net
+
+io := use "std/io"
+
+// Linux x86_64 syscall numbers:
+//   read=0, write=1, close=3, socket=41, connect=42, accept=43,
+//   send=44, recv=45, bind=49, listen=50, setsockopt=54
+
+// --- address family and socket type constants ---
+pub AF_INET      := 2
+pub SOCK_STREAM  := 1
+pub SOCK_NONBLOCK := 2048
+
+// --- setsockopt level / option for SO_REUSEADDR ---
+// SOL_SOCKET=1, SO_REUSEADDR=2
+SOL_SOCKET   := 1
+SO_REUSEADDR := 2
+
+// --- byte-order helper ---
+// Swap the two bytes of a u16 to convert between host and network byte order.
+// Available for callers that need explicit byte-order conversion.
+pub htons := (v: u16) u16 => $as(u16, (v >> 8) | (($as(u16, v) & 0xFF) << 8))
+
+// Build a sockaddr_in into a 16-byte buffer passed as *any.
+// Layout: family(2) + port(2, big-endian) + addr(4, network byte order) + pad(8)
+// addr is expected to already be in network byte order (pass 0 for INADDR_ANY).
+// port is in host byte order; this function converts it to network byte order.
+make_sockaddr := (buf: *any, addr: u32, port: u16) {
+    // Treat the buffer as a pointer to bytes via a cast to *u8 base.
+    // We index each byte position via pointer arithmetic using $as(usize, buf) + offset.
+    base := $as(usize, buf)
+    // zero all 16 bytes
+    mut i: usize = 0
+    for i < 16: {
+        $as(*u8, base + i).* = 0
+        i += 1
+    }
+    // family: AF_INET = 2, little-endian (low byte first)
+    $as(*u8, base + 0).* = 2
+    $as(*u8, base + 1).* = 0
+    // port: big-endian (network byte order)
+    $as(*u8, base + 2).* = $as(u8, port >> 8)
+    $as(*u8, base + 3).* = $as(u8, port & 0xFF)
+    // addr: already in network byte order — write low byte first
+    $as(*u8, base + 4).* = $as(u8, addr & 0xFF)
+    $as(*u8, base + 5).* = $as(u8, (addr >> 8) & 0xFF)
+    $as(*u8, base + 6).* = $as(u8, (addr >> 16) & 0xFF)
+    $as(*u8, base + 7).* = $as(u8, (addr >> 24) & 0xFF)
+    // bytes 8..15 remain zero (padding)
+}
+
+/// A TCP server socket that accepts incoming connections.
+pub TcpListener := struct {
+    fd: i32,
+
+    /// Create a listening TCP socket on the given address and port.
+    /// addr is an IPv4 address in network byte order; pass 0 for INADDR_ANY.
+    /// port is in host byte order (e.g. 8080).
+    /// Returns null if any step of socket/bind/listen fails.
+    pub bind := (addr: u32, port: u16) ?TcpListener {
+        // socket(AF_INET, SOCK_STREAM, 0)
+        fd := $as(i32, $syscall(41, $as(usize, AF_INET), $as(usize, SOCK_STREAM), 0, 0, 0, 0))
+        if fd < 0 return null
+        // setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(i32))
+        mut one: i32 = 1
+        sso_result := $as(i32, $syscall(54, $as(usize, fd), $as(usize, SOL_SOCKET), $as(usize, SO_REUSEADDR), $as(usize, &one), $sizeof(i32), 0))
+        if sso_result < 0 {
+            $syscall(3, $as(usize, fd), 0, 0, 0, 0, 0)
+            return null
+        }
+        // build sockaddr_in
+        mut sa: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        make_sockaddr($as(*any, &sa[0]), addr, port)
+        // bind(fd, &sa, 16)
+        bind_result := $as(i32, $syscall(49, $as(usize, fd), $as(usize, &sa[0]), 16, 0, 0, 0))
+        if bind_result < 0 {
+            $syscall(3, $as(usize, fd), 0, 0, 0, 0, 0)
+            return null
+        }
+        // listen(fd, backlog=128)
+        listen_result := $as(i32, $syscall(50, $as(usize, fd), 128, 0, 0, 0, 0))
+        if listen_result < 0 {
+            $syscall(3, $as(usize, fd), 0, 0, 0, 0, 0)
+            return null
+        }
+        return .{ fd: fd }
+    }
+
+    /// Accept the next incoming connection.
+    /// Returns a TcpStream for the client, or null on error.
+    pub accept := (self: TcpListener) ?TcpStream {
+        // accept(fd, NULL, NULL) — we don't capture the remote address
+        result := $as(i32, $syscall(43, $as(usize, self.fd), 0, 0, 0, 0, 0))
+        if result < 0 return null
+        return .{ fd: result }
+    }
+
+    /// Close the listener socket.
+    pub close := (self: TcpListener) {
+        $syscall(3, $as(usize, self.fd), 0, 0, 0, 0, 0)
+    }
+}
+
+/// A connected TCP stream (client connection).
+pub TcpStream := struct {
+    fd: i32,
+
+    /// Connect to a TCP server at addr:port.
+    /// addr is IPv4 in network byte order; port is host byte order.
+    /// Returns null if socket creation or connect fails.
+    pub connect := (addr: u32, port: u16) ?TcpStream {
+        // socket(AF_INET, SOCK_STREAM, 0)
+        fd := $as(i32, $syscall(41, $as(usize, AF_INET), $as(usize, SOCK_STREAM), 0, 0, 0, 0))
+        if fd < 0 return null
+
+        // build sockaddr_in
+        mut sa: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        make_sockaddr($as(*any, &sa[0]), addr, port)
+
+        // connect(fd, &sa, 16)
+        result := $as(i32, $syscall(42, $as(usize, fd), $as(usize, &sa[0]), 16, 0, 0, 0))
+        if result < 0 {
+            $syscall(3, $as(usize, fd), 0, 0, 0, 0, 0)
+            return null
+        }
+
+        return .{ fd: fd }
+    }
+
+    /// Read bytes from the stream into buf.
+    /// Returns the number of bytes received, 0 on EOF, or -1 on error.
+    pub read := (self: TcpStream, buf: []u8) i32 {
+        if buf.len == 0 return 0
+        // recv(fd, buf_ptr, len, flags=0)
+        result := $as(i32, $syscall(45, $as(usize, self.fd), $as(usize, &buf[0]), buf.len, 0, 0, 0))
+        if result < 0 return -1
+        return result
+    }
+
+    /// Write bytes from buf to the stream.
+    /// Returns the number of bytes sent, or -1 on error.
+    pub write := (self: TcpStream, buf: []u8) i32 {
+        if buf.len == 0 return 0
+        // send(fd, buf_ptr, len, flags=0)
+        result := $as(i32, $syscall(44, $as(usize, self.fd), $as(usize, &buf[0]), buf.len, 0, 0, 0))
+        if result < 0 return -1
+        return result
+    }
+
+    /// Return an io.Writer that writes to this stream.
+    pub writer := (self: TcpStream) io.Writer => .{
+        ctx:   $as(*any, $as(usize, self.fd)),
+        write: tcp_write,
+    }
+
+    /// Return an io.Reader that reads from this stream.
+    pub reader := (self: TcpStream) io.Reader => .{
+        ctx:  $as(*any, $as(usize, self.fd)),
+        read: tcp_read,
+    }
+
+    /// Close the stream.
+    pub close := (self: TcpStream) {
+        $syscall(3, $as(usize, self.fd), 0, 0, 0, 0, 0)
+    }
+}
+
+tcp_write := (ctx: *any, buf: []u8) usize {
+    fd := $as(i32, $as(usize, ctx))
+    if buf.len == 0 return 0
+    n := $as(i32, $syscall(44, $as(usize, fd), $as(usize, &buf[0]), buf.len, 0, 0, 0))
+    if n < 0 return 0
+    return $as(usize, n)
+}
+
+tcp_read := (ctx: *any, buf: []u8) usize {
+    fd := $as(i32, $as(usize, ctx))
+    if buf.len == 0 return 0
+    n := $as(i32, $syscall(45, $as(usize, fd), $as(usize, &buf[0]), buf.len, 0, 0, 0))
+    if n <= 0 return 0
+    return $as(usize, n)
+}

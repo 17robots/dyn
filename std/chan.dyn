@@ -1,0 +1,128 @@
+module chan
+
+mem  := use "std/mem"
+sync := use "std/sync"
+
+/// A bounded FIFO channel for passing usize-sized values between threads.
+/// Values are pointer-sized so any pointer or integer can be passed through.
+///
+/// Thread-safe: backed by a mutex + two condition variables + ring buffer.
+pub Channel := struct {
+    _mutex:     sync.Mutex,
+    _not_empty: sync.Condvar,
+    _not_full:  sync.Condvar,
+    _buf:       ?*any,   // ring buffer (cap * sizeof(usize) bytes)
+    _cap:       usize,
+    _head:      usize,   // index of next read
+    _tail:      usize,   // index of next write
+    _count:     usize,   // number of items currently in buffer
+    _closed:    bool,    // true after close() is called
+
+    /// Allocate a channel with the given capacity. Returns null on alloc failure.
+    init := (alloc: mem.Allocator, cap: usize) ?Channel {
+        buf := alloc.alloc(cap * 8, 8) or return null
+
+        mut ch: Channel = .{
+            _mutex:     sync.Mutex.init(),
+            _not_empty: sync.Condvar.init(),
+            _not_full:  sync.Condvar.init(),
+            _buf:       buf,
+            _cap:       cap,
+            _head:      0,
+            _tail:      0,
+            _count:     0,
+            _closed:    false,
+        }
+        return ch
+    }
+
+    /// Send a value into the channel. Blocks if the buffer is full.
+    /// Returns immediately without sending if the channel is closed.
+    send := (self: *Channel, val: usize) {
+        self._mutex.lock()
+        for self._count == self._cap and !self._closed: {
+            self._not_full.wait(&self._mutex)
+        }
+        if self._closed {
+            self._mutex.unlock()
+            return
+        }
+        slot := $as(usize, self._buf.?) + self._tail * 8
+        $as(*usize, slot).* = val
+        self._tail = (self._tail + 1) % self._cap
+        self._count += 1
+        self._not_empty.signal()
+        self._mutex.unlock()
+    }
+
+    /// Receive a value from the channel. Blocks if the buffer is empty.
+    /// Returns 0 if the channel is closed and empty.
+    recv := (self: *Channel) usize {
+        self._mutex.lock()
+        for self._count == 0 and !self._closed: {
+            self._not_empty.wait(&self._mutex)
+        }
+        if self._count == 0 {
+            self._mutex.unlock()
+            return 0
+        }
+        slot := $as(usize, self._buf.?) + self._head * 8
+        val := $as(*usize, slot).*
+        self._head = (self._head + 1) % self._cap
+        self._count -= 1
+        self._not_full.signal()
+        self._mutex.unlock()
+        return val
+    }
+
+    /// Try to receive without blocking. Returns null if empty.
+    try_recv := (self: *Channel) ?usize {
+        self._mutex.lock()
+        if self._count == 0 {
+            self._mutex.unlock()
+            return null
+        }
+        slot := $as(usize, self._buf.?) + self._head * 8
+        val := $as(*usize, slot).*
+        self._head = (self._head + 1) % self._cap
+        self._count -= 1
+        self._not_full.signal()
+        self._mutex.unlock()
+        return val
+    }
+
+    /// Send a value without blocking. Returns false if the buffer is full or channel is closed.
+    try_send := (self: *Channel, val: usize) bool {
+        self._mutex.lock()
+        if self._closed or self._count == self._cap {
+            self._mutex.unlock()
+            return false
+        }
+        slot := $as(usize, self._buf.?) + self._tail * 8
+        $as(*usize, slot).* = val
+        self._tail = (self._tail + 1) % self._cap
+        self._count += 1
+        self._not_empty.signal()
+        self._mutex.unlock()
+        return true
+    }
+
+    /// Close the channel. Unblocks any waiting receivers (they receive 0).
+    /// Further sends will return false/block immediately.
+    close := (self: *Channel) {
+        self._mutex.lock()
+        self._closed = true
+        self._not_empty.broadcast()
+        self._not_full.broadcast()
+        self._mutex.unlock()
+    }
+
+    /// Release the channel buffer back to the allocator.
+    deinit := (self: *Channel, alloc: mem.Allocator) {
+        if self._buf: |buf| alloc.free(buf, self._cap * 8)
+        self._buf = null
+        self._mutex.deinit()
+        self._not_empty.deinit()
+        self._not_full.deinit()
+    }
+}

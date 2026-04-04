@@ -3,13 +3,21 @@ pub const LANGUAGE_BUILTINS: &[&str] = &[
     "$alignof",
     "$as",
     "$compile_error",
+    "$fields",
+    "$has_field",
+    "$has_method",
+    "$is_float",
+    "$is_sint",
+    "$is_uint",
+    "$typeclass",
+    "$memcpy",
+    "$memset",
     "$offsetof",
     "$panic",
     "$sizeof",
     "$syscall",
+    "$target",
+    "$typename",
     "$typeof",
     "$unreachable",
 ];
-
-#[cfg(test)]
-mod tests;

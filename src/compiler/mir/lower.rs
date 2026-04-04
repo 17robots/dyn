@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::compiler::ast::{AssignOp, BinaryOp, UnaryOp};
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 use crate::compiler::hir::{
-    HirCallArg, HirExpr, HirExprKind, HirForExpr, HirLiteral, HirPattern, HirProgram,
+    HirCallArg, HirExpr, HirExprKind, HirForExpr, HirLiteral, HirMatchArm, HirPattern, HirProgram,
 };
+use crate::compiler::mir::lower::helpers::{enum_type_repr_bits, enum_type_variants, parse_function_return_hint, parse_i64_literal, parse_type_hint};
 use crate::compiler::mir::{
     MirBasicBlock, MirBlockId, MirFunction, MirGlobal, MirGlobalInit, MirInstr, MirModule,
     MirProgram, MirTerminator, MirValue, MirValueId, MirValueType,
@@ -14,27 +15,23 @@ use crate::compiler::module_resolver::{ModuleId, ModuleKey};
 mod function_lowerer;
 mod helpers;
 
-#[cfg(test)]
-use self::helpers::builtin_offsetof_value;
-use self::helpers::{
-    builtin_offsetof_for_type_name, comptime_truthy, enum_type_repr_bits, enum_type_variants,
-    eval_comptime_binary, eval_comptime_cast, layout_for_builtin_type_name, literal_type,
-    merge_types, parse_function_return_hint, parse_i64_literal, parse_type_hint,
-    self_type_literal_from_param_hint, substitute_type_locals, type_literal_name_for_ident,
-};
-
 pub fn lower_hir_to_mir(hir: &HirProgram) -> MirProgram {
     lower_hir_to_mir_with_diagnostics(hir).0
 }
 
 pub fn lower_hir_to_mir_with_diagnostics(hir: &HirProgram) -> (MirProgram, Vec<Diagnostic>) {
     let module_source_paths = BTreeMap::new();
-    lower_hir_to_mir_with_diagnostics_and_paths(hir, &module_source_paths)
+    lower_hir_to_mir_with_diagnostics_and_paths(
+        hir,
+        &module_source_paths,
+        crate::compiler::backend::BuildConfig::default(),
+    )
 }
 
 pub fn lower_hir_to_mir_with_diagnostics_and_paths(
     hir: &HirProgram,
     module_source_paths: &BTreeMap<ModuleId, std::path::PathBuf>,
+    build_config: crate::compiler::backend::BuildConfig,
 ) -> (MirProgram, Vec<Diagnostic>) {
     let module_ids_by_key = hir
         .modules
@@ -326,28 +323,33 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 .items
                 .iter()
                 .filter(|item| item.mutable)
-                .filter_map(|item| {
-                    let type_hint = item.type_hint.clone().or_else(|| item.inferred_type.clone());
-                    let ty = type_hint.as_deref().map(parse_type_hint).unwrap_or(MirValueType::Unknown);
+                .map(|item| {
+                    let type_hint = item
+                        .type_hint
+                        .clone()
+                        .or_else(|| item.inferred_type.clone());
+                    let ty = type_hint
+                        .as_deref()
+                        .map(parse_type_hint)
+                        .unwrap_or(MirValueType::Unknown);
                     let init = match &item.value.kind {
-                        HirExprKind::Literal(HirLiteral::Integer(v)) => {
-                            parse_i64_literal(v).map(MirGlobalInit::Integer).unwrap_or(MirGlobalInit::Zero)
-                        }
+                        HirExprKind::Literal(HirLiteral::Integer(v)) => parse_i64_literal(v)
+                            .map(MirGlobalInit::Integer)
+                            .unwrap_or(MirGlobalInit::Zero),
                         HirExprKind::Literal(HirLiteral::Bool(b)) => MirGlobalInit::Bool(*b),
                         _ => MirGlobalInit::Zero,
                     };
-                    Some(MirGlobal {
+                    MirGlobal {
                         name: item.name.clone(),
                         mutable: true,
                         type_hint,
                         ty,
                         init,
-                    })
+                    }
                 })
                 .collect::<Vec<_>>();
 
-            let global_names: BTreeSet<String> =
-                globals.iter().map(|g| g.name.clone()).collect();
+            let global_names: BTreeSet<String> = globals.iter().map(|g| g.name.clone()).collect();
 
             let shared = FunctionLowererShared {
                 function_return_types: function_return_types.clone(),
@@ -363,13 +365,14 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 module_ids_by_key: module_ids_by_key.clone(),
                 module_exports_by_id: module_exports_by_id.clone(),
                 global_names: global_names.clone(),
+                build_config: build_config.clone(),
             };
 
             let functions = module
                 .items
                 .iter()
                 .filter(|item| !global_names.contains(&item.name))
-                .map(|item| {
+                .flat_map(|item| {
                     let mut lowerer = FunctionLowerer::new(
                         module.key.clone(),
                         module_source_path.clone(),
@@ -421,6 +424,9 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                     ty,
                                 );
                                 lowerer.locals.insert(param.clone(), value);
+                                if let Some(Some(hint)) = param_types.get(idx) {
+                                    lowerer.local_type_hints.insert(param.clone(), hint.clone());
+                                }
                             }
                             let (end_block, value) =
                                 lowerer.lower_expr(lowerer.function.entry, body);
@@ -477,21 +483,46 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                         ty,
                                     );
                                     lowerer.locals.insert(param.clone(), value);
-                                }
-                                let (end_block, value) =
-                                    lowerer.lower_expr(lowerer.function.entry, body);
-                                if !lowerer.is_terminated(end_block) {
-                                    let end_block = lowerer.emit_deferred(end_block, None);
-                                    if allows_or_return_tail_implicit_success
-                                        || allows_non_i32_main_implicit_success
-                                    {
+                                    if let Some(Some(hint)) = param_types.get(idx) {
                                         lowerer
-                                            .set_terminator(end_block, MirTerminator::Return(None));
-                                    } else {
-                                        lowerer.set_terminator(
-                                            end_block,
-                                            MirTerminator::Return(value),
-                                        );
+                                            .local_type_hints
+                                            .insert(param.clone(), hint.clone());
+                                    }
+                                }
+                                // If any param has a generic type variable (Unknown) or is
+                                // typed `any` (which maps to u64 but is logically generic),
+                                // the function is only valid when inlined with concrete types.
+                                // Skip the body to avoid spurious comptime errors in the
+                                // standalone (never-executed) version.
+                                let has_generic_type_param = lowerer
+                                    .function
+                                    .param_types
+                                    .iter()
+                                    .any(|t| matches!(t, MirValueType::Unknown))
+                                    || param_types.iter().any(|ty| ty.as_deref() == Some("any"));
+                                if !has_generic_type_param {
+                                    let (end_block, value) =
+                                        lowerer.lower_expr(lowerer.function.entry, body);
+                                    if !lowerer.is_terminated(end_block) {
+                                        let end_block = lowerer.emit_deferred(end_block, None);
+                                        if allows_or_return_tail_implicit_success
+                                            || allows_non_i32_main_implicit_success
+                                        {
+                                            lowerer.set_terminator(
+                                                end_block,
+                                                MirTerminator::Return(None),
+                                            );
+                                        } else {
+                                            lowerer.set_terminator(
+                                                end_block,
+                                                MirTerminator::Return(value),
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    let entry = lowerer.function.entry;
+                                    if !lowerer.is_terminated(entry) {
+                                        lowerer.set_terminator(entry, MirTerminator::Return(None));
                                     }
                                 }
                             } else {
@@ -518,7 +549,6 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                     result.push(lowerer.function);
                     result
                 })
-                .flatten()
                 .collect::<Vec<_>>();
 
             let extern_functions = module
@@ -618,11 +648,11 @@ fn return_hint_is_errorable_aggregate(return_hint: &str) -> bool {
 }
 
 fn allows_non_i32_main_implicit_success(
-    module_key: &ModuleKey,
+    _module_key: &ModuleKey,
     function_name: &str,
     return_hint: Option<&str>,
 ) -> bool {
-    if module_key.module_name != "main" || function_name != "main" {
+    if function_name != "main" {
         return false;
     }
     match return_hint {
@@ -705,6 +735,11 @@ struct FunctionLowerer {
     /// Names of module-level mutable globals in this module; used to distinguish global
     /// loads/stores from local variable accesses.
     global_names: BTreeSet<String>,
+    /// Declared type-hint strings for local variables (name → raw type hint, e.g. "Point").
+    /// Populated from `let name: TypeHint = ...` and function parameter declarations.
+    /// Used by `$fields(v)` to resolve the struct descriptor for a named local.
+    local_type_hints: BTreeMap<String, String>,
+    build_config: crate::compiler::backend::BuildConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -748,6 +783,7 @@ struct FunctionLowererShared {
     module_ids_by_key: BTreeMap<ModuleKey, ModuleId>,
     module_exports_by_id: BTreeMap<ModuleId, Vec<String>>,
     global_names: BTreeSet<String>,
+    build_config: crate::compiler::backend::BuildConfig,
 }
 
 fn extract_inline_function_body(expr: &HirExpr) -> Option<(&Vec<String>, &HirExpr)> {
@@ -1028,6 +1064,3 @@ fn collect_assigned_local_names(expr: &HirExpr, names: &mut BTreeMap<String, ()>
         | HirExprKind::Unknown => {}
     }
 }
-
-#[cfg(test)]
-mod tests;

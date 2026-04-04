@@ -1,0 +1,91 @@
+module os
+
+Allocator := (use "std/mem/allocator").Allocator
+
+/// Returns true if path is absolute (begins with '/').
+pub is_absolute := (path: []u8) bool =>
+    path.len > 0 and path[0] == '/'
+
+/// Returns the directory component of path (everything up to and including
+/// the last '/').  Returns "." if there is no '/' in path.
+/// The returned slice is a sub-slice of path — no allocation is performed.
+pub dirname := (path: []u8) []u8 {
+    if path.len == 0 return "."
+    mut i := path.len
+    // Skip trailing slashes.
+    for i > 0 and path[i - 1] == '/': i -= 1
+    if i == 0 return "/"
+    // Walk back to the preceding slash.
+    for i > 0 and path[i - 1] != '/': i -= 1
+    if i == 0 return "."
+    // Strip trailing slashes on the result (except for root).
+    mut end := i
+    for end > 1 and path[end - 1] == '/': end -= 1
+    return path[0..end]
+}
+
+/// Returns the final component of path (after the last '/').
+/// Returns path unchanged if there is no '/'.
+/// The returned slice is a sub-slice of path — no allocation is performed.
+pub basename := (path: []u8) []u8 {
+    if path.len == 0 return path
+    mut end := path.len
+    // Strip trailing slashes.
+    for end > 0 and path[end - 1] == '/': end -= 1
+    if end == 0 return "/"
+    mut start := end
+    for start > 0 and path[start - 1] != '/': start -= 1
+    return path[start..end]
+}
+
+/// Returns the file extension of path including the leading '.', or an empty
+/// slice if path has no extension.
+/// E.g. "foo/bar.dyn" → ".dyn",  "foo/bar" → ""
+/// The returned slice is a sub-slice of path — no allocation is performed.
+pub extension := (path: []u8) []u8 {
+    base := basename(path)
+    mut i := base.len
+    for i > 0: {
+        i -= 1
+        if base[i] == '.' {
+            if i == 0 return base[0..0]   // dot-file, no extension
+            return base[i..]
+        }
+    }
+    return base[0..0]
+}
+
+/// Concatenates base and part with a '/' separator.
+/// If part is absolute it is returned as-is (with an allocation).
+/// Allocates the result; caller owns it and should free with
+/// alloc.destroy_many(u8, result).
+pub join := (base: []u8, part: []u8, alloc: Allocator) ?[]u8 {
+    if is_absolute(part) {
+        buf := alloc.create_many(u8, part.len) or return null
+        $memcpy($as(*any, buf.ptr), $as(*any, part.ptr), part.len)
+        return buf
+    }
+    if base.len == 0 {
+        buf := alloc.create_many(u8, part.len) or return null
+        $memcpy($as(*any, buf.ptr), $as(*any, part.ptr), part.len)
+        return buf
+    }
+    needs_sep := base[base.len - 1] != '/'
+    sep_len: usize = if needs_sep 1 else 0
+    total := base.len + sep_len + part.len
+    buf := alloc.create_many(u8, total) or return null
+    $memcpy($as(*any, buf.ptr), $as(*any, base.ptr), base.len)
+    if needs_sep buf[base.len] = '/'
+    $memcpy($as(*any, $as(usize, buf.ptr) + base.len + sep_len), $as(*any, part.ptr), part.len)
+    return buf
+}
+
+/// Strip a file extension from path.
+/// "foo/bar.dyn" → "foo/bar"
+/// Returns path unchanged if there is no extension.
+/// The returned slice is a sub-slice of path — no allocation is performed.
+pub strip_extension := (path: []u8) []u8 {
+    ext := extension(path)
+    if ext.len == 0 return path
+    return path[0..path.len - ext.len]
+}

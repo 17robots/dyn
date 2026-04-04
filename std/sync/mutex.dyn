@@ -1,0 +1,35 @@
+module sync
+
+pthread_mutex_init     := extern (mutex: *any, attr: *any) i32 = "pthread_mutex_init"
+pthread_mutex_lock     := extern (mutex: *any) i32 = "pthread_mutex_lock"
+pthread_mutex_unlock   := extern (mutex: *any) i32 = "pthread_mutex_unlock"
+pthread_mutex_destroy  := extern (mutex: *any) i32 = "pthread_mutex_destroy"
+pthread_mutex_trylock  := extern (mutex: *any) i32 = "pthread_mutex_trylock"
+
+/// A mutual-exclusion lock backed by a POSIX pthread_mutex_t.
+/// pthread_mutex_t is 40 bytes on Linux x86_64.
+pub Mutex := struct {
+    _data: [40]u8,
+    init := () Mutex {
+        mut m := Mutex { _data: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] }
+        pthread_mutex_init($as(*any, &m._data[0]), $as(*any, 0))
+        return m
+    }
+    lock := (self: *Mutex) {
+        pthread_mutex_lock($as(*any, &self._data[0]))
+    }
+
+    unlock := (self: *Mutex) {
+        pthread_mutex_unlock($as(*any, &self._data[0]))
+    }
+
+    deinit := (self: *Mutex) {
+        pthread_mutex_destroy($as(*any, &self._data[0]))
+    }
+
+    /// Try to acquire the lock without blocking.
+    /// Returns true if the lock was acquired, false if it was already held.
+    try_lock := (self: *Mutex) bool {
+        return pthread_mutex_trylock($as(*any, &self._data[0])) == 0
+    }
+}

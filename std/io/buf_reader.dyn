@@ -1,0 +1,70 @@
+module io
+
+/// A buffered reader wrapping any Reader.
+/// Uses a caller-provided backing buffer (can be stack or heap allocated)
+/// so that reads from the inner Reader are batched rather than per-byte.
+///
+/// Example (stack-backed):
+///   buf: [4096]u8 = [...]
+///   mut br := BufReader.init(file.reader(), buf[..])
+///   r := br.reader()
+pub BufReader := struct {
+    inner: Reader,
+    buf:   []u8,    // caller-provided backing buffer
+    start: usize,   // index of next unconsumed byte in buf
+    end:   usize,   // index one past the last valid byte in buf
+
+}
+pub BufReader.init := (inner: Reader, buf: []u8) BufReader => .{
+    inner: inner,
+    buf:   buf,
+    start: 0,
+    end:   0,
+}
+pub BufReader.reader := (self: *BufReader) Reader => .{
+    ctx:  $as(*any, self),
+    read: buf_reader_read,
+}
+pub BufReader.read_byte := (self: *BufReader) ?u8 {
+    if self.start >= self.end {
+        n := self.inner.read(self.inner.ctx, self.buf)
+        if n == 0 return null
+        self.start = 0
+        self.end   = n
+    }
+    b := self.buf[self.start]
+    self.start += 1
+    return b
+}
+pub BufReader.read_line := (self: *BufReader, out: []u8) ?[]u8 {
+    mut len: usize = 0
+    for len < out.len: {
+        b := self.read_byte() or {
+            if len == 0 return null
+            break
+        }
+        out[len] = b
+        len += 1
+        if b == '\n' break
+    }
+    return out[0..len]
+}
+pub BufReader.deinit := (self: *BufReader) {}
+
+buf_reader_read := (ctx: *any, buf: []u8) usize {
+    self := $as(*BufReader, ctx)
+    if buf.len == 0 return 0
+    // If internal buffer is empty, refill
+    if self.start >= self.end {
+        n := self.inner.read(self.inner.ctx, self.buf)
+        if n == 0 return 0
+        self.start = 0
+        self.end   = n
+    }
+    // Copy as many bytes as available and requested
+    avail := self.end - self.start
+    to_copy := if avail < buf.len avail else buf.len
+    $memcpy($as(*any, buf.ptr), $as(*any, $as(usize, self.buf.ptr) + self.start), to_copy)
+    self.start += to_copy
+    return to_copy
+}

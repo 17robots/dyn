@@ -1,0 +1,34 @@
+module hash
+
+/// FNV-1a 64-bit hash of arbitrary bytes.
+/// A fast, non-cryptographic hash suitable for hash maps and checksums.
+pub hash_bytes := (data: *any, size: usize) usize {
+    mut h: usize = 0xcbf29ce484222325
+    mut i := 0
+    for i < size: {
+        b := $as(*u8, $as(usize, data) + i).*
+        h = (h ^ $as(usize, b)) * 0x100000001b3
+        i += 1
+    }
+    return h
+}
+
+/// FNV-1a hash of a single u64 value.
+pub hash_u64 := (val: u64) usize {
+    mut h: usize = 0xcbf29ce484222325
+    mut i := 0
+    for i < 8: {
+        b := $as(usize, val >> $as(u64, i * 8)) & 0xff
+        h = (h ^ b) * 0x100000001b3
+        i += 1
+    }
+    return h
+}
+
+/// FNV-1a hash over a byte slice content.
+pub hash_str := (s: []u8) usize =>
+    hash_bytes($as(*any, s.ptr), s.len)
+
+/// Combine two hash values. Useful when hashing composite keys.
+pub hash_combine := (a: usize, b: usize) usize =>
+    a ^ (b + 0x9e3779b97f4a7c15 + (a << 6) + (a >> 2))

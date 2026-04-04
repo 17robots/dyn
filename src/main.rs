@@ -2,12 +2,12 @@ use std::env;
 use std::fs;
 use std::process::{self, Command};
 
-use dyn_compiler::compiler::backend::BuildOptLevel;
+use dyn_compiler::compiler::backend::{BuildConfig, BuildOptLevel};
 use dyn_compiler::compiler::diagnostics::Diagnostic;
 use dyn_compiler::compiler::module_resolver::resolve_module_graph;
 use dyn_compiler::compiler::pipeline::{
-    analyze_project, build_project_with_opt_level, lex_project, lower_project_hir,
-    lower_project_mir, parse_project,
+    analyze_project, build_project_with_config, build_project_with_opt_level, lex_project,
+    lower_project_hir, lower_project_mir, parse_project,
 };
 
 fn main() {
@@ -522,6 +522,8 @@ fn run_build_command(args: &[String]) {
     let mut opt_level = BuildOptLevel::Default;
     let mut opt_level_explicit = false;
     let mut all_opt_levels = false;
+    let mut sanitize = false;
+    let mut bin: Option<String> = None;
     let mut index = 0usize;
 
     while index < args.len() {
@@ -549,6 +551,22 @@ fn run_build_command(args: &[String]) {
                 all_opt_levels = true;
                 index += 1;
             }
+            "--sanitize" => {
+                sanitize = true;
+                index += 1;
+            }
+            "--no-sanitize" => {
+                sanitize = false;
+                index += 1;
+            }
+            "--bin" => {
+                if index + 1 >= args.len() {
+                    eprintln!("missing binary name after --bin");
+                    process::exit(2);
+                }
+                bin = Some(args[index + 1].clone());
+                index += 2;
+            }
             "-o" => {
                 if index + 1 >= args.len() {
                     eprintln!("missing output path after -o");
@@ -570,6 +588,7 @@ fn run_build_command(args: &[String]) {
     }
 
     let dir = start_dir.unwrap_or(".");
+    let build_config = BuildConfig { opt_level, sanitize, bin };
     if all_opt_levels {
         if opt_level_explicit {
             eprintln!("cannot combine --all-opt-levels with explicit optimization flags");
@@ -588,15 +607,17 @@ fn run_build_command(args: &[String]) {
     }
 
     if json {
-        run_build_json(dir, output, opt_level);
+        run_build_json_with_config(dir, output, build_config);
     } else {
-        run_build(dir, output, opt_level);
+        run_build_with_config(dir, output, build_config);
     }
 }
 
 fn run_run_command(args: &[String]) {
     let mut start_dir: Option<&str> = None;
     let mut opt_level = BuildOptLevel::Default;
+    let mut sanitize = false;
+    let mut bin: Option<String> = None;
     let mut program_args = Vec::<String>::new();
     let mut passthrough = false;
     let mut index = 0usize;
@@ -627,6 +648,22 @@ fn run_run_command(args: &[String]) {
                 passthrough = true;
                 index += 1;
             }
+            "--sanitize" => {
+                sanitize = true;
+                index += 1;
+            }
+            "--no-sanitize" => {
+                sanitize = false;
+                index += 1;
+            }
+            "--bin" => {
+                if index + 1 >= args.len() {
+                    eprintln!("missing binary name after --bin");
+                    process::exit(2);
+                }
+                bin = Some(args[index + 1].clone());
+                index += 2;
+            }
             _ => {
                 if start_dir.is_none() {
                     start_dir = Some(arg);
@@ -640,7 +677,7 @@ fn run_run_command(args: &[String]) {
     }
 
     let dir = start_dir.unwrap_or(".");
-    run_project(dir, opt_level, &program_args);
+    run_project_with_config(dir, BuildConfig { opt_level, sanitize, bin }, &program_args);
 }
 
 const INIT_MAIN_TEMPLATE: &str = "module main\n\nmain := () i32 => 0\n";
@@ -1030,9 +1067,9 @@ fn parse_opt_level_cli_arg(
     Ok(None)
 }
 
-fn run_build(start_dir: &str, output: Option<&str>, opt_level: BuildOptLevel) {
+fn run_build_with_config(start_dir: &str, output: Option<&str>, build_config: BuildConfig) {
     let output_path = output.map(std::path::Path::new);
-    match build_project_with_opt_level(start_dir, output_path, opt_level) {
+    match build_project_with_config(start_dir, output_path, build_config) {
         Ok((artifact, diagnostics)) => {
             if !diagnostics.is_empty() {
                 print_diagnostics_text(&diagnostics);
@@ -1081,8 +1118,8 @@ fn run_build_all(start_dir: &str, output_base: &str) {
     }
 }
 
-fn run_project(start_dir: &str, opt_level: BuildOptLevel, program_args: &[String]) {
-    match build_project_with_opt_level(start_dir, None, opt_level) {
+fn run_project_with_config(start_dir: &str, build_config: BuildConfig, program_args: &[String]) {
+    match build_project_with_config(start_dir, None, build_config) {
         Ok((artifact, diagnostics)) => {
             if !diagnostics.is_empty() {
                 print_diagnostics_text(&diagnostics);
@@ -1109,9 +1146,9 @@ fn run_project(start_dir: &str, opt_level: BuildOptLevel, program_args: &[String
     }
 }
 
-fn run_build_json(start_dir: &str, output: Option<&str>, opt_level: BuildOptLevel) {
+fn run_build_json_with_config(start_dir: &str, output: Option<&str>, build_config: BuildConfig) {
     let output_path = output.map(std::path::Path::new);
-    match build_project_with_opt_level(start_dir, output_path, opt_level) {
+    match build_project_with_config(start_dir, output_path, build_config) {
         Ok((artifact, diagnostics)) => {
             println!("{{");
             println!(

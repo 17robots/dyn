@@ -1,0 +1,308 @@
+module os
+
+Allocator := (use "std/mem/allocator").Allocator
+Vec       := (use "std/collections").Vec
+
+// Linux x86_64 syscall numbers used in this file:
+//   read=0, write=1, open=2, close=3, stat=4, fstat=5,
+//   lseek=8, getdents64=217, mkdir=83, unlink=87, rmdir=84
+
+// --- open(2) flags ---
+pub O_RDONLY := 0
+pub O_WRONLY := 1
+pub O_RDWR   := 2
+pub O_CREAT  := 64
+pub O_TRUNC  := 512
+pub O_APPEND := 1024
+
+// --- lseek(2) whence values ---
+pub SEEK_SET := 0
+pub SEEK_CUR := 1
+pub SEEK_END := 2
+
+/// Open a file.
+/// path_ptr must point to a null-terminated C string.
+/// flags should be a combination of O_RDONLY, O_WRONLY, etc.
+/// mode is the permission bits used when O_CREAT is set (e.g. 0o644 = 420).
+/// Returns the new file descriptor, or a negative errno value on error.
+pub open := (path_ptr: *any, flags: i32, mode: i32) i32 {
+    result := $syscall(2, $as(usize, path_ptr), $as(usize, flags), $as(usize, mode), 0, 0, 0)
+    return $as(i32, result)
+}
+
+/// Close a file descriptor.
+pub close := (fd: i32) {
+    $syscall(3, $as(usize, fd), 0, 0, 0, 0, 0)
+}
+
+/// Reposition the read/write offset of a file descriptor.
+/// whence is one of SEEK_SET, SEEK_CUR, or SEEK_END.
+/// Returns the resulting offset from the beginning of the file,
+/// or a negative errno value on error.
+pub lseek := (fd: i32, offset: i64, whence: i32) i64 {
+    result := $syscall(8, $as(usize, fd), $as(usize, offset), $as(usize, whence), 0, 0, 0)
+    return $as(i64, result)
+}
+
+/// Delete a file by name.
+/// path_ptr must point to a null-terminated C string.
+/// Returns 0 on success, or a negative errno value on error.
+pub unlink := (path_ptr: *any) i32 {
+    result := $syscall(87, $as(usize, path_ptr), 0, 0, 0, 0, 0)
+    return $as(i32, result)
+}
+
+/// Create a directory.
+/// path_ptr must point to a null-terminated C string.
+/// mode sets the permission bits (e.g. 0o755 = 493).
+/// Returns 0 on success, or a negative errno value on error.
+pub mkdir := (path_ptr: *any, mode: i32) i32 {
+    result := $syscall(83, $as(usize, path_ptr), $as(usize, mode), 0, 0, 0, 0)
+    return $as(i32, result)
+}
+
+/// Remove an empty directory.
+/// path_ptr must point to a null-terminated C string.
+/// Returns 0 on success, or a negative errno value on error.
+pub rmdir := (path_ptr: *any) i32 {
+    result := $syscall(84, $as(usize, path_ptr), 0, 0, 0, 0, 0)
+    return $as(i32, result)
+}
+
+/// Write data to a file, creating or truncating it.
+/// path need not be null-terminated.
+/// Returns true if all bytes were written successfully.
+pub write_file := (path: []u8, data: []u8, alloc: Allocator) bool {
+    path_buf := alloc.create_many(u8, path.len + 1) or return false
+    $memcpy($as(*any, path_buf.ptr), $as(*any, path.ptr), path.len)
+    path_buf[path.len] = 0
+
+    // O_WRONLY | O_CREAT | O_TRUNC = 1 | 64 | 512 = 577
+    // mode 0o644 = 420 (rw-r--r--)
+    fd := open($as(*any, path_buf.ptr), O_WRONLY | O_CREAT | O_TRUNC, 420)
+    alloc.destroy_many(u8, path_buf)
+    if fd < 0 return false
+
+    mut written: usize = 0
+    for written < data.len: {
+        n := $syscall(1, $as(usize, fd), $as(usize, data.ptr) + written, data.len - written)
+        if n <= 0 break
+        written += n
+    }
+    close(fd)
+    return written == data.len
+}
+
+/// Read the entire contents of a file into an allocated buffer.
+/// path is a Dyn byte slice (need not be null-terminated).
+/// Returns null if the file cannot be opened, stat'd, or if allocation fails.
+/// The caller owns the returned slice and should free it with alloc.destroy_many(u8, ...).
+pub read_file := (path: []u8, alloc: Allocator) ?[]u8 {
+    // Make a null-terminated copy of the path.
+    path_buf := alloc.create_many(u8, path.len + 1) or return null
+    $memcpy($as(*any, path_buf.ptr), $as(*any, path.ptr), path.len)
+    path_buf[path.len] = 0
+
+    fd := open($as(*any, path_buf.ptr), O_RDONLY, 0)
+    alloc.destroy_many(u8, path_buf)
+    if fd < 0 return null
+
+    // Determine file size with lseek.
+    size_raw := lseek(fd, 0, SEEK_END)
+    if size_raw < 0 {
+        close(fd)
+        return null
+    }
+    lseek(fd, 0, SEEK_SET)
+
+    file_size := $as(usize, size_raw)
+    if file_size == 0 {
+        close(fd)
+        // Return an empty (but valid) slice.
+        empty := alloc.create_many(u8, 0) or return null
+        return empty
+    }
+
+    buf := alloc.create_many(u8, file_size) or {
+        close(fd)
+        return null
+    }
+
+    // Read until we have the whole file.
+    mut total: usize = 0
+    for total < file_size: {
+        n := $syscall(0, $as(usize, fd), $as(usize, buf.ptr) + total, file_size - total)
+        if n <= 0 break
+        total += $as(usize, n)
+    }
+    close(fd)
+
+    return buf[0..total]
+}
+
+/// List the entries of a directory, excluding "." and "..".
+/// Returns a slice of []u8 name slices. Caller frees the outer slice with
+/// alloc.free(result.ptr, result.len * 16) and each name with
+/// alloc.destroy_many(u8, name).
+/// Returns null if the directory cannot be opened or allocation fails.
+pub readdir := (path: []u8, alloc: Allocator) ?[][]u8 {
+    path_buf := alloc.create_many(u8, path.len + 1) or return null
+    $memcpy($as(*any, path_buf.ptr), $as(*any, path.ptr), path.len)
+    path_buf[path.len] = 0
+
+    fd := open($as(*any, path_buf.ptr), O_RDONLY, 0)
+    alloc.destroy_many(u8, path_buf)
+    if fd < 0 return null
+
+    // sizeof([]u8) = 16 bytes (ptr: usize + len: usize).
+    ENTRY: usize = 16
+    mut cap: usize = 16
+    mut len: usize = 0
+    mut raw := alloc.alloc(cap * ENTRY, 8) or { close(fd); return null }
+    dent_buf := alloc.create_many(u8, 4096) or {
+        alloc.free(raw, cap * ENTRY)
+        close(fd)
+        return null
+    }
+
+    for {
+        nread := $syscall(217, $as(usize, fd), $as(usize, dent_buf.ptr), 4096)
+        if nread <= 0 break
+
+        mut pos: usize = 0
+        for pos < $as(usize, nread): {
+            entry    := $as(usize, dent_buf.ptr) + pos
+            reclen   := $as(usize, $as(*u16, $as(*any, entry + 16)).*)
+            name_ptr := $as(*u8, $as(*any, entry + 19))
+
+            mut name_len: usize = 0
+            for $as(*u8, $as(usize, name_ptr) + name_len).* != 0:
+                name_len += 1
+
+            // Skip "." and ".."
+            if name_len == 1 and name_ptr.* == '.' { pos += reclen; continue }
+            if name_len == 2 and name_ptr.* == '.' and
+                $as(*u8, $as(usize, name_ptr) + 1).* == '.' {
+                pos += reclen
+                continue
+            }
+
+            // Copy the name and append to result.
+            name_opt := alloc.create_many(u8, name_len)
+            if name_opt: |name_buf| {
+                $memcpy($as(*any, name_buf.ptr), $as(*any, name_ptr), name_len)
+
+                if len >= cap {
+                    new_cap := cap * 2
+                    new_raw := alloc.realloc(raw, cap * ENTRY, new_cap * ENTRY, 8)
+                    if new_raw: |nr| {
+                        raw = nr
+                        cap = new_cap
+                    } else {
+                        alloc.destroy_many(u8, name_buf)
+                        alloc.destroy_many(u8, dent_buf)
+                        close(fd)
+                        return .{ ptr: $as(*any, raw), len: len }
+                    }
+                }
+
+                slot := $as(usize, raw) + len * ENTRY
+                $as(*usize, $as(*any, slot)).* = $as(usize, name_buf.ptr)
+                $as(*usize, $as(*any, slot + 8)).* = name_len
+                len += 1
+            }
+
+            pos += reclen
+        }
+    }
+
+    alloc.destroy_many(u8, dent_buf)
+    close(fd)
+    return .{ ptr: $as(*any, raw), len: len }
+}
+
+/// File metadata returned by stat().
+pub FileStat := struct {
+    size:   usize,
+    is_dir: bool,
+}
+
+/// Query metadata for a file or directory.
+/// path need not be null-terminated.
+/// Returns null if the path cannot be stat'd or allocation fails.
+pub stat := (path: []u8, alloc: Allocator) ?FileStat {
+    path_buf := alloc.create_many(u8, path.len + 1) or return null
+    $memcpy($as(*any, path_buf.ptr), $as(*any, path.ptr), path.len)
+    path_buf[path.len] = 0
+
+    // Linux x86_64 stat(2) syscall = 4; stat64 struct is 144 bytes.
+    // We only need st_size (offset 48, i64) and st_mode (offset 24, u32).
+    buf: [144]u8 = [...]
+    result := $syscall(4, $as(usize, path_buf.ptr), $as(usize, &buf[0]), 0, 0, 0, 0)
+    alloc.destroy_many(u8, path_buf)
+    if result < 0 return null
+
+    // st_mode is at offset 24 in the Linux stat64 struct.
+    mode := $as(*u32, $as(*any, $as(usize, &buf[0]) + 24)).*
+    // S_IFDIR = 0o040000 = 16384
+    is_dir := (mode & 0xF000) == 0x4000
+
+    // st_size is at offset 48.
+    size_raw := $as(*i64, $as(*any, $as(usize, &buf[0]) + 48)).*
+    size := if size_raw > 0 $as(usize, size_raw) else 0
+
+    return FileStat.{ size: size, is_dir: is_dir }
+}
+
+/// Returns true if a file or directory exists at path.
+pub exists := (path: []u8, alloc: Allocator) bool {
+    if stat(path, alloc): |_| return true
+    return false
+}
+
+/// Rename (or move) old to new_.
+/// Both paths are Dyn byte slices (need not be null-terminated).
+/// Returns true on success.
+pub rename := (old: []u8, new_: []u8, alloc: Allocator) bool {
+    old_buf := alloc.create_many(u8, old.len + 1) or return false
+    $memcpy($as(*any, old_buf.ptr), $as(*any, old.ptr), old.len)
+    old_buf[old.len] = 0
+
+    new_buf := alloc.create_many(u8, new_.len + 1) or {
+        alloc.destroy_many(u8, old_buf)
+        return false
+    }
+    $memcpy($as(*any, new_buf.ptr), $as(*any, new_.ptr), new_.len)
+    new_buf[new_.len] = 0
+
+    // Linux x86_64 rename(2) syscall = 82
+    result := $syscall(82, $as(usize, old_buf.ptr), $as(usize, new_buf.ptr), 0, 0, 0, 0)
+    alloc.destroy_many(u8, old_buf)
+    alloc.destroy_many(u8, new_buf)
+    return $as(i64, result) >= 0
+}
+
+/// Return the current working directory as a []u8.
+/// Returns null if the syscall fails or allocation fails.
+/// The caller owns the returned slice.
+pub getcwd := (alloc: Allocator) ?[]u8 {
+    // Linux x86_64 getcwd(2) syscall = 79.
+    // Try with increasingly large buffers.
+    mut cap: usize = 256
+    for {
+        buf := alloc.create_many(u8, cap) or return null
+        result := $syscall(79, $as(usize, buf.ptr), cap, 0, 0, 0, 0)
+        if $as(i64, result) > 0 {
+            // Find the null terminator to get the actual length.
+            mut len: usize = 0
+            for len < cap and buf[len] != 0: len += 1
+            return buf[0..len]
+        }
+        alloc.destroy_many(u8, buf)
+        // ERANGE = 34: buffer too small; double and retry. Other errors: fail.
+        if $as(i64, result) != -34 return null
+        cap *= 2
+        if cap > 65536 return null
+    }
+    return null
+}

@@ -1,0 +1,31 @@
+module mem
+
+/// A page allocator backed directly by mmap/munmap.
+/// Each allocation is a separate mmap call — no bookkeeping overhead.
+/// Best used as a backing allocator for arenas and other allocators.
+///
+/// NOTE: syscall numbers are Linux x86_64 (mmap=9, munmap=11).
+pub PageAllocator := struct { }
+pub PageAllocator.init := () PageAllocator => .{}
+pub PageAllocator.allocator := (self: *PageAllocator) Allocator => .{
+    ctx: $as(*any, self),
+    impl_alloc: PageAllocator.alloc,
+    impl_free: PageAllocator.free,
+    impl_realloc: PageAllocator.page_realloc,
+}
+pub PageAllocator.alloc := (ctx: *any, size: usize, align: usize) ?*any {
+    // mmap(NULL, size, PROT_READ|PROT_WRITE=3, MAP_PRIVATE|MAP_ANONYMOUS=0x22, fd=-1, offset=0)
+    raw := $syscall(9, 0, size, 3, 0x22, -1, 0)
+    if raw > 0xFFFFFFFFFFFFFF00 return null
+    return $as(*any, raw)
+}
+pub PageAllocator.free := (ctx: *any, ptr: *any, size: usize) {
+    $syscall(11, $as(usize, ptr), size, 0, 0, 0, 0)
+}
+pub PageAllocator.page_realloc := (ctx: *any, ptr: *any, old_size: usize, new_size: usize, align: usize) ?*any {
+    // Linux mremap(old_addr, old_size, new_size, MREMAP_MAYMOVE=1)
+    // syscall 25. May extend in place or move the mapping as needed.
+    result := $syscall(25, $as(usize, ptr), old_size, new_size, 1, 0, 0)
+    if result > 0xFFFFFFFFFFFFFF00 return null
+    return $as(*any, result)
+}

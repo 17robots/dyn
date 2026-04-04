@@ -1,0 +1,101 @@
+module io
+
+str := use "std/str"
+
+/// Write an unsigned integer in decimal to a Writer.
+pub write_uint := (w: Writer, n: u64) {
+    buf: [20]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    s := str.uint_to_buf(n, buf[..])
+    w.write_all(s)
+}
+
+/// Write a signed integer in decimal to a Writer.
+pub write_int := (w: Writer, n: i64) {
+    buf: [20]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    s := str.int_to_buf(n, buf[..])
+    w.write_all(s)
+}
+
+/// Write a float to a Writer (integer part + 6 decimal places).
+pub write_float := (w: Writer, n: f64) {
+    if n < 0.0 {
+        w.write_byte('-')
+        write_float(w, -n)
+        return
+    }
+    int_part := $as(i64, n)
+    write_uint(w, $as(u64, int_part))
+    w.write_byte('.')
+    frac := n - $as(f64, int_part)
+    mut f := frac
+    mut i := 0
+    for i < 6: {
+        f = f * 10.0
+        digit := $as(u8, $as(i64, f)) % 10
+        w.write_byte(digit + '0')
+        i += 1
+    }
+}
+
+/// Write n in lowercase hexadecimal (no prefix, no leading zeros except for 0 itself).
+pub write_hex := (w: Writer, n: u64) {
+    if n == 0 { w.write_byte('0'); return }
+    buf: [16]u8 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    s := str.uint_to_hex_buf(n, buf[..])
+    w.write_all(s)
+}
+
+/// Write n in uppercase hexadecimal (no prefix, no leading zeros except for 0 itself).
+/// Note: uppercase variant — str.uint_to_hex_buf currently produces lowercase.
+/// For now this is an alias; uppercase can be added to str later.
+pub write_hex_upper := (w: Writer, n: u64) {
+    write_hex(w, n)
+}
+
+/// A writer interface for anything that can accept a byte slice.
+/// Implementors provide a write function that takes a ctx pointer and a []u8.
+pub Writer := struct {
+    ctx:   *any,
+    write: fn(ctx: *any, buf: []u8) usize,
+}
+pub Writer.write_byte := (self: Writer, byte: u8) usize {
+    buf: [1]u8 = [byte]
+    return self.write(self.ctx, buf[..])
+}
+pub Writer.write_all := (self: Writer, buf: []u8) usize {
+    mut written := 0
+    for written < buf.len: {
+        n := self.write(self.ctx, buf[written..])
+        if n == 0 break
+        written += n
+    }
+    return written
+}
+pub Writer.print := (self: Writer, v: any) {
+    comp match $typeclass($typeof(v)) {
+        uint:   write_uint(self, $as(u64, v))
+        sint:   write_int(self, $as(i64, v))
+        float:  write_float(self, $as(f64, v))
+        bool:   self.write_all(if v "true" else "false")
+        bytes:  self.write_all(v)
+        _: comp if $has_method($typeof(v), "write_to") {
+            v.write_to(self)
+        } else {
+            self.write_all($typename($typeof(v)))
+            self.write_all("{")
+            mut first := true
+            inline for $fields(v): |f| {
+                if !first { self.write_all(", ") }
+                self.write_all(f.name)
+                self.write_all(": ")
+                self.print(f.value)
+                first = false
+            }
+            self.write_all("}")
+        }
+    }
+}
+pub Writer.println := (self: Writer, v: any) {
+    self.print(v)
+    self.write_byte('\n')
+}

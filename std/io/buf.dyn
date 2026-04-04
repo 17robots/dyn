@@ -1,0 +1,61 @@
+module io
+
+mem := use "std/mem"
+
+/// A Writer that accumulates bytes into a growable heap buffer.
+/// Useful for building output strings in memory before writing to a file
+/// or sending over a socket.
+///
+/// Example:
+///   mut bw := BufWriter.init(alloc)
+///   w := bw.writer()
+///   w.print("hello ")
+///   w.print(42)
+///   os.write_file("out.txt", bw.bytes(), alloc)
+///   bw.deinit()
+pub BufWriter := struct {
+    ptr:   ?*u8,
+    len:   usize,
+    cap:   usize,
+    alloc: mem.Allocator
+}
+pub BufWriter.init := (alloc: mem.Allocator) BufWriter => .{
+    ptr: null, len: 0, cap: 0, alloc: alloc,
+}
+pub BufWriter.writer := (self: *BufWriter) Writer => .{
+    ctx:   $as(*any, self),
+    write: bw_write,
+}
+pub BufWriter.bytes := (self: BufWriter) []u8 {
+    if self.ptr: |p| return .{ ptr: p, len: self.len }
+    return .{ ptr: $as(*u8, 0), len: 0 }
+}
+pub BufWriter.reset := (self: *BufWriter) { self.len = 0 }
+pub BufWriter.deinit := (self: *BufWriter) {
+    if self.ptr: |p|
+        self.alloc.free($as(*any, p), self.cap)
+    self.ptr = null
+    self.len = 0
+    self.cap = 0
+}
+pub bw_write := (ctx: *any, buf: []u8) usize {
+    self := $as(*BufWriter, ctx)
+    if self.len + buf.len > self.cap {
+        mut new_cap := if self.cap == 0 64 else self.cap * 2
+        if new_cap < self.len + buf.len new_cap = self.len + buf.len
+        new_raw := self.alloc.alloc(new_cap, 1) or return 0
+        if self.ptr: |old| {
+            $memcpy(new_raw, $as(*any, old), self.len)
+            self.alloc.free($as(*any, old), self.cap)
+        }
+        self.ptr = $as(*u8, new_raw)
+        self.cap = new_cap
+    }
+    $memcpy(
+        $as(*any, $as(usize, self.ptr.?) + self.len),
+        $as(*any, buf.ptr),
+        buf.len,
+    )
+    self.len += buf.len
+    return buf.len
+}

@@ -1,0 +1,111 @@
+module mem
+
+/// The standard allocator interface.
+/// All allocators expose an Allocator value via an allocator() method.
+///
+/// alloc/free/realloc are the public methods; impl_* are the raw vtable
+/// pointers provided by each allocator implementation.
+pub Allocator := struct {
+    ctx:          *any,
+    impl_alloc:   fn(ctx: *any, size: usize, align: usize) ?*any,
+    impl_free:    fn(ctx: *any, ptr: *any, size: usize) void,
+    // Optional fast realloc. If null, the realloc method falls back to
+    // alloc + memcpy + free. Provide this for allocators that can grow
+    // in place (Arena, GPA same-class, mremap for PageAllocator).
+    impl_realloc: ?fn(ctx: *any, ptr: *any, old_size: usize, new_size: usize, align: usize) ?*any = null
+}
+pub Allocator.alloc := (self: Allocator, size: usize, align: usize) ?*any {
+    ptr := self.impl_alloc(self.ctx, size, align) or return null
+    if $target().sanitize debug_track(ptr, size)
+    return ptr
+}
+pub Allocator.free := (self: Allocator, ptr: *any, size: usize) {
+    if $target().sanitize debug_check_free(ptr, size)
+    self.impl_free(self.ctx, ptr, size)
+}
+pub Allocator.realloc := (self: Allocator, ptr: *any, old_size: usize, new_size: usize, align: usize) ?*any {
+    if self.impl_realloc: |r| {
+        new_ptr := r(self.ctx, ptr, old_size, new_size, align) or return null
+        if $target().sanitize {
+            debug_check_free(ptr, old_size)
+            debug_track(new_ptr, new_size)
+        }
+        return new_ptr
+    }
+    new_ptr := self.alloc(new_size, align) or return null
+    copy_size := if old_size < new_size old_size else new_size
+    $memcpy(new_ptr, ptr, copy_size)
+    self.free(ptr, old_size)
+    return new_ptr
+}
+pub Allocator.create := (self: Allocator, T: comp type) ?*T {
+    ptr := self.alloc($sizeof(T), $alignof(T)) or return null
+    return $as(*T, ptr)
+}
+pub Allocator.destroy := (self: Allocator, T: comp type, ptr: *T) {
+    self.free($as(*any, ptr), $sizeof(T))
+}
+pub Allocator.create_many := (self: Allocator, T: comp type, n: usize) ?[]T {
+    ptr := self.alloc(n * $sizeof(T), $alignof(T)) or return null
+    return .{ ptr: $as(*T, ptr), len: n }
+}
+pub Allocator.destroy_many := (self: Allocator, T: comp type, slice: []T) {
+    self.free($as(*any, slice.ptr), slice.len * $sizeof(T))
+}
+pub Allocator.resize_many := (self: Allocator, T: comp type, slice: []T, new_n: usize) ?[]T {
+    new_ptr := self.realloc(
+        $as(*any, slice.ptr),
+        slice.len * $sizeof(T),
+        new_n * $sizeof(T),
+        $alignof(T),
+    ) or return null
+    return .{ ptr: $as(*T, new_ptr), len: new_n }
+}
+mut _track_base: usize = 0
+
+_track_slots:      usize = 4096
+_track_slot_bytes: usize = 16
+_track_table_size: usize = 65536
+
+_track_init := () {
+    if _track_base != 0 return
+    raw: usize = $as(usize, $syscall(9, 0, _track_table_size, 3, 0x22, -1, 0))
+    if raw > 0xFFFFFFFFFFFFFF00 return
+    _track_base = raw
+}
+
+pub debug_track := (ptr: *any, size: usize) {
+    _track_init()
+    base := _track_base
+    if base == 0 return
+    p := $as(usize, ptr)
+    mut i: usize = 0
+    for i < _track_slots: {
+        slot_ptr := $as(*usize, $as(*any, base + i * _track_slot_bytes))
+        if slot_ptr.* == 0 {
+            slot_ptr.* = p
+            size_ptr := $as(*usize, $as(*any, base + i * _track_slot_bytes + 8))
+            size_ptr.* = size
+            return
+        }
+        i += 1
+    }
+}
+
+pub debug_check_free := (ptr: *any, size: usize) {
+    base := _track_base
+    if base == 0 return
+    p := $as(usize, ptr)
+    mut i: usize = 0
+    for i < _track_slots: {
+        slot_ptr := $as(*usize, $as(*any, base + i * _track_slot_bytes))
+        if slot_ptr.* == p {
+            slot_ptr.* = 0
+            size_ptr := $as(*usize, $as(*any, base + i * _track_slot_bytes + 8))
+            size_ptr.* = 0
+            return
+        }
+        i += 1
+    }
+    $panic("sanitizer: double-free or invalid free")
+}

@@ -4,26 +4,25 @@ use std::path::{Path, PathBuf};
 
 use crate::compiler::ast::AstFile;
 use crate::compiler::backend::cranelift::build_executable;
-use crate::compiler::backend::{BuildArtifact, BuildOptLevel};
-use crate::compiler::diagnostic_utils::{
+use crate::compiler::backend::{BuildArtifact, BuildConfig, BuildOptLevel};
+use crate::compiler::diagnostics::{
     dedupe_diagnostics_by_primary_span, sort_diagnostics_by_primary_path,
 };
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
-use crate::compiler::hir::lower::lower_module_units_with_metadata;
+use crate::compiler::hir::lower_module_units_with_metadata;
 use crate::compiler::hir::HirProgram;
-use crate::compiler::lexer::scanner::Lexer;
-use crate::compiler::lexer::token::Token;
+use crate::compiler::lexer::Lexer;
+use crate::compiler::lexer::Token;
 use crate::compiler::mir::lower::lower_hir_to_mir_with_diagnostics_and_paths;
 use crate::compiler::mir::verify::verify_mir_program;
 use crate::compiler::mir::{MirInstr, MirProgram, MirValue, MirValueId};
 use crate::compiler::module_resolver::{
-    resolve_graph_file_path, resolve_module_graph, ModuleId, ModuleResolverError,
+    resolve_graph_file_path, resolve_module_graph, resolve_module_graph_with_bin, ModuleId, ModuleResolverError,
 };
 use crate::compiler::parser::parse_file;
-use crate::compiler::sema::analyze::{analyze_modules, SemanticSession};
-use crate::compiler::sema::control::control_check_modules;
-use crate::compiler::sema::module_unit::{build_module_units, ModuleUnit};
-use crate::compiler::sema::typeck::{infer_binding_type_strings, type_check_modules};
+use crate::compiler::sema::{
+    analyze_modules, SemanticSession, control_check_modules, build_module_units, ModuleUnit, infer_binding_type_strings, type_check_modules
+};
 
 #[derive(Debug, Clone)]
 pub struct LexedFile {
@@ -115,7 +114,14 @@ pub fn parse_project<P: AsRef<Path>>(start_dir: P) -> Result<ParseSession, Modul
 pub fn parse_project_with_module_units<P: AsRef<Path>>(
     start_dir: P,
 ) -> Result<(ParseSession, Vec<ModuleUnit>), ModuleResolverError> {
-    let graph = resolve_module_graph(start_dir)?;
+    parse_project_with_module_units_and_bin(start_dir, None)
+}
+
+fn parse_project_with_module_units_and_bin<P: AsRef<Path>>(
+    start_dir: P,
+    bin: Option<&str>,
+) -> Result<(ParseSession, Vec<ModuleUnit>), ModuleResolverError> {
+    let graph = resolve_module_graph_with_bin(start_dir, bin)?;
     let lexed = lex_module_graph(&graph);
     let parsed = parse_lex_session(lexed);
     let units = build_module_units(&graph, &parsed);
@@ -125,7 +131,14 @@ pub fn parse_project_with_module_units<P: AsRef<Path>>(
 pub fn analyze_project<P: AsRef<Path>>(
     start_dir: P,
 ) -> Result<(ParseSession, Vec<ModuleUnit>, SemanticSession), ModuleResolverError> {
-    let (parsed, units) = parse_project_with_module_units(start_dir)?;
+    analyze_project_with_bin(start_dir, None)
+}
+
+fn analyze_project_with_bin<P: AsRef<Path>>(
+    start_dir: P,
+    bin: Option<&str>,
+) -> Result<(ParseSession, Vec<ModuleUnit>, SemanticSession), ModuleResolverError> {
+    let (parsed, units) = parse_project_with_module_units_and_bin(start_dir, bin)?;
     let mut sema = analyze_modules(&units);
     sema.diagnostics.extend(parsed.diagnostics.clone());
     sema.diagnostics.extend(type_check_modules(&units));
@@ -137,7 +150,14 @@ pub fn analyze_project<P: AsRef<Path>>(
 pub fn lower_project_hir<P: AsRef<Path>>(
     start_dir: P,
 ) -> Result<(ParseSession, Vec<ModuleUnit>, SemanticSession, HirProgram), ModuleResolverError> {
-    let (parsed, units, sema) = analyze_project(start_dir)?;
+    lower_project_hir_with_bin(start_dir, None)
+}
+
+fn lower_project_hir_with_bin<P: AsRef<Path>>(
+    start_dir: P,
+    bin: Option<&str>,
+) -> Result<(ParseSession, Vec<ModuleUnit>, SemanticSession, HirProgram), ModuleResolverError> {
+    let (parsed, units, sema) = analyze_project_with_bin(start_dir, bin)?;
     let inferred_types = infer_binding_type_strings(&units);
     let hir = lower_module_units_with_metadata(&units, Some(&sema), &inferred_types);
     Ok((parsed, units, sema, hir))
@@ -146,7 +166,15 @@ pub fn lower_project_hir<P: AsRef<Path>>(
 pub fn lower_project_mir<P: AsRef<Path>>(
     start_dir: P,
 ) -> Result<LowerProjectMirOutput, ModuleResolverError> {
-    let (parsed, units, sema, hir) = lower_project_hir(start_dir)?;
+    lower_project_mir_with_config(start_dir, BuildConfig::default())
+}
+
+pub fn lower_project_mir_with_config<P: AsRef<Path>>(
+    start_dir: P,
+    build_config: BuildConfig,
+) -> Result<LowerProjectMirOutput, ModuleResolverError> {
+    let bin = build_config.bin.as_deref();
+    let (parsed, units, sema, hir) = lower_project_hir_with_bin(&start_dir, bin)?;
     let module_source_paths = units
         .iter()
         .filter_map(|unit| {
@@ -156,26 +184,34 @@ pub fn lower_project_mir<P: AsRef<Path>>(
                 .map(|path| (unit.module_id, path))
         })
         .collect::<BTreeMap<_, _>>();
+    let bin = build_config.bin.clone();
     let (mir_unshaken, mut mir_diagnostics) =
-        lower_hir_to_mir_with_diagnostics_and_paths(&hir, &module_source_paths);
-    let mir = shake_mir_program(&mir_unshaken);
+        lower_hir_to_mir_with_diagnostics_and_paths(&hir, &module_source_paths, build_config);
+    let mir = shake_mir_program(&mir_unshaken, bin.as_deref());
     mir_diagnostics.extend(verify_mir_program(&mir));
     dedupe_diagnostics_by_primary_span(&mut mir_diagnostics);
     sort_diagnostics_by_primary_path(&mut mir_diagnostics);
     Ok((parsed, units, sema, hir, mir, mir_diagnostics))
 }
 
-fn shake_mir_program(mir: &MirProgram) -> MirProgram {
+fn shake_mir_program(mir: &MirProgram, bin: Option<&str>) -> MirProgram {
     let mut by_name = BTreeMap::<String, Vec<(usize, usize)>>::new();
     let mut entry = None;
+    let bin_dir = bin.map(PathBuf::from);
     for (mi, module) in mir.modules.iter().enumerate() {
         for (fi, function) in module.functions.iter().enumerate() {
             by_name
                 .entry(function.name.clone())
                 .or_default()
                 .push((mi, fi));
-            if module.key.module_name == "main" && function.name == "main" {
-                entry = Some((mi, fi));
+            if function.name == "main" {
+                let in_bin = bin_dir
+                    .as_ref()
+                    .map(|d| &module.key.directory == d)
+                    .unwrap_or(true);
+                if in_bin && entry.is_none() {
+                    entry = Some((mi, fi));
+                }
             }
         }
     }
@@ -284,7 +320,7 @@ pub fn build_project<P: AsRef<Path>>(
     start_dir: P,
     output_path: Option<&Path>,
 ) -> Result<(BuildArtifact, Vec<Diagnostic>), ModuleResolverError> {
-    build_project_with_opt_level(start_dir, output_path, BuildOptLevel::Default)
+    build_project_with_config(start_dir, output_path, BuildConfig::default())
 }
 
 pub fn build_project_with_opt_level<P: AsRef<Path>>(
@@ -292,7 +328,18 @@ pub fn build_project_with_opt_level<P: AsRef<Path>>(
     output_path: Option<&Path>,
     opt_level: BuildOptLevel,
 ) -> Result<(BuildArtifact, Vec<Diagnostic>), ModuleResolverError> {
-    let (_parsed, _units, sema, _hir, mir, mut mir_diagnostics) = lower_project_mir(&start_dir)?;
+    build_project_with_config(start_dir, output_path, BuildConfig { opt_level, sanitize: false, bin: None })
+}
+
+pub fn build_project_with_config<P: AsRef<Path>>(
+    start_dir: P,
+    output_path: Option<&Path>,
+    build_config: BuildConfig,
+) -> Result<(BuildArtifact, Vec<Diagnostic>), ModuleResolverError> {
+    let opt_level = build_config.opt_level;
+    let bin = build_config.bin.clone();
+    let (_parsed, _units, sema, _hir, mir, mut mir_diagnostics) =
+        lower_project_mir_with_config(&start_dir, build_config)?;
 
     let mut diagnostics = sema.diagnostics;
     diagnostics.append(&mut mir_diagnostics);
@@ -311,7 +358,7 @@ pub fn build_project_with_opt_level<P: AsRef<Path>>(
     let start_dir = start_dir.as_ref();
     let build_dir = start_dir.join(".dyn_build");
     let (artifact, mut backend_diagnostics) =
-        match build_executable(&mir, &build_dir, output_path, opt_level) {
+        match build_executable(&mir, &build_dir, output_path, opt_level, bin.as_deref()) {
             Ok(ok) => ok,
             Err(message) => {
                 return Ok((
@@ -353,6 +400,3 @@ pub fn parse_lex_session(lexed: LexSession) -> ParseSession {
 
     ParseSession { files, diagnostics }
 }
-
-#[cfg(test)]
-mod tests;

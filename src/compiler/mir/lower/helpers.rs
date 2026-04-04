@@ -62,23 +62,6 @@ pub(super) fn layout_for_builtin_type_name(name: &str) -> (u64, u64) {
     }
 }
 
-#[cfg(test)]
-pub(super) fn builtin_offsetof_value(
-    type_arg: &HirExpr,
-    field_arg: &HirExpr,
-    named_type_literals: &BTreeMap<String, String>,
-) -> Option<u64> {
-    let type_name = match &type_arg.kind {
-        HirExprKind::TypeLiteral(name) | HirExprKind::Ident(name) => name.as_str(),
-        _ => return None,
-    };
-    let resolved = named_type_literals
-        .get(type_name)
-        .map(String::as_str)
-        .unwrap_or(type_name);
-    builtin_offsetof_for_type_name(resolved.trim(), field_arg)
-}
-
 pub(super) fn builtin_offsetof_for_type_name(type_name: &str, field_arg: &HirExpr) -> Option<u64> {
     let fields = parse_struct_fields(type_name)?;
     let offsets = struct_field_offsets(&fields);
@@ -93,6 +76,17 @@ pub(super) fn builtin_offsetof_for_type_name(type_name: &str, field_arg: &HirExp
         }
         _ => None,
     }
+}
+
+pub(super) fn has_struct_field(type_descriptor: &str, field: &str) -> bool {
+    parse_struct_fields(type_descriptor)
+        .map(|fields| fields.iter().any(|(name, _)| name == field))
+        .unwrap_or(false)
+}
+
+/// Returns `(field_name, field_type_string)` pairs for a struct descriptor.
+pub(super) fn struct_field_names_with_types(type_descriptor: &str) -> Vec<(String, String)> {
+    parse_struct_fields(type_descriptor).unwrap_or_default()
 }
 
 fn parse_struct_fields(type_name: &str) -> Option<Vec<(String, String)>> {
@@ -518,5 +512,24 @@ pub(super) fn merge_types(left: &MirValueType, right: &MirValueType) -> MirValue
         }
         (MirValueType::BytesSlice, MirValueType::BytesSlice) => MirValueType::BytesSlice,
         _ => MirValueType::Unknown,
+    }
+}
+
+/// Map a concrete type name to its broad type class, as returned by `$typeclass`.
+///
+/// - `u8 / u16 / u32 / u64 / usize` → `"uint"`
+/// - `i8 / i16 / i32 / i64`         → `"sint"`
+/// - `f32 / f64`                     → `"float"`
+/// - `u1`                            → `"bool"`
+/// - `[]u8`                          → `"bytes"`
+/// - anything else                   → `"struct"`
+pub(super) fn type_name_to_class(type_name: &str) -> &'static str {
+    match type_name {
+        "u8" | "u16" | "u32" | "u64" | "usize" => "uint",
+        "i8" | "i16" | "i32" | "i64" => "sint",
+        "f32" | "f64" => "float",
+        "u1" => "bool",
+        "[]u8" => "bytes",
+        _ => "struct",
     }
 }

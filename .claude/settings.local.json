@@ -14,7 +14,8 @@
       "Bash(cargo build:*)",
       "Bash(timeout 5 /tmp/test_mem_binary)",
       "Bash(echo \"Exit: $?\")",
-      "Bash(timeout 5 /tmp/test_mem7)"
+      "Bash(timeout 5 /tmp/test_mem7)",
+      "Read(//tmp/**)"
     ]
   }
 }

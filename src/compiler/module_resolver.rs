@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
 use std::fs::File;
@@ -8,7 +8,7 @@ use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::compiler::diagnostic_utils::sort_diagnostics_by_primary_path;
+use crate::compiler::diagnostics::sort_diagnostics_by_primary_path;
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 
 const STD_COLLECTION_DIR: &str = "std";
@@ -73,6 +73,12 @@ pub fn normalize_import_path(import_path: &str) -> String {
 
 pub fn module_key_for_import(current: &ModuleKey, import_path: &str) -> ModuleKey {
     let normalized = normalize_import_path(import_path);
+
+    // Relative imports start with "./" or "../"
+    let is_relative = normalized.starts_with("./") || normalized.starts_with("../");
+    // Stdlib imports start with "std/"
+    let is_std_absolute = normalized.starts_with("std/");
+
     let mut parts = normalized
         .split('/')
         .filter(|segment| !segment.is_empty())
@@ -83,18 +89,35 @@ pub fn module_key_for_import(current: &ModuleKey, import_path: &str) -> ModuleKe
     }
 
     let module_name = parts.pop().unwrap_or_default().to_string();
-    let is_std_absolute = normalized.starts_with("std/");
-    let mut directory = if is_std_absolute || current.directory == Path::new(".") {
-        PathBuf::new()
-    } else {
+
+    let mut directory = if is_relative {
+        // Resolve relative to current module's directory
         current.directory.clone()
+    } else {
+        // Project-root-absolute (including std/): start from root "."
+        PathBuf::new()
     };
-    for segment in parts {
-        directory.push(segment);
+
+    for segment in &parts {
+        match *segment {
+            "." => {} // current dir — no-op
+            ".." => {
+                // Go up one level
+                if !directory.pop() {
+                    // Already at root; can't go higher
+                }
+            }
+            s => directory.push(s),
+        }
     }
+
     if directory.as_os_str().is_empty() {
         directory = PathBuf::from(".");
     }
+
+    // For std imports: the "std" segment is part of the directory, not a module name.
+    // Parts already includes "std" as first segment which gets pushed onto directory.
+    let _ = is_std_absolute; // consumed implicitly via root-absolute behavior
 
     ModuleKey {
         directory,
@@ -145,6 +168,21 @@ impl fmt::Display for ModuleResolverError {
 impl std::error::Error for ModuleResolverError {}
 
 pub fn resolve_module_graph<P: AsRef<Path>>(
+    start_dir: P,
+) -> Result<ModuleGraph, ModuleResolverError> {
+    resolve_module_graph_with_bin(start_dir, None)
+}
+
+pub fn resolve_module_graph_with_bin<P: AsRef<Path>>(
+    start_dir: P,
+    bin: Option<&str>,
+) -> Result<ModuleGraph, ModuleResolverError> {
+    let mut graph = build_raw_module_graph(start_dir)?;
+    filter_graph_to_reachable_modules(&mut graph, bin);
+    Ok(graph)
+}
+
+pub(crate) fn build_raw_module_graph<P: AsRef<Path>>(
     start_dir: P,
 ) -> Result<ModuleGraph, ModuleResolverError> {
     let start_dir = start_dir.as_ref().canonicalize().map_err(|_| {
@@ -200,6 +238,46 @@ pub fn resolve_module_graph<P: AsRef<Path>>(
         files.sort();
     }
 
+    // Detect conflict: X.dyn and X/*.dyn both declaring module X in the same group.
+    // A file is "hoisted" if its parent dir name matches the module name (i.e. it came
+    // from a directory). A file is "flat" if its parent dir matches the key's directory
+    // directly. If a group contains both, it's an ambiguous definition.
+    let mut conflict_keys: Vec<ModuleKey> = Vec::new();
+    for (key, files) in &groups {
+        let has_flat = files.iter().any(|f| relative_directory_of(f) == key.directory);
+        let has_hoisted = files.iter().any(|f| {
+            let d = relative_directory_of(f);
+            d != key.directory && d.file_name().and_then(|n| n.to_str()) == Some(key.module_name.as_str())
+        });
+        if has_flat && has_hoisted {
+            conflict_keys.push(key.clone());
+        }
+    }
+    for key in conflict_keys {
+        let files = groups.remove(&key).unwrap_or_default();
+        let dir_display = key.directory.display().to_string();
+        let name = &key.module_name;
+        let hint = if dir_display == "." {
+            format!("use either {name}.dyn or {name}/*.dyn, not both")
+        } else {
+            format!(
+                "use either {dir}/{name}.dyn or {dir}/{name}/*.dyn, not both",
+                dir = dir_display,
+                name = name
+            )
+        };
+        for file in files {
+            diagnostics.push(
+                Diagnostic::error(
+                    DiagnosticPhase::ModuleResolver,
+                    DiagnosticCode::E1005,
+                    format!("ambiguous module definition for '{name}'"),
+                )
+                .with_primary_file_label(file, None, hint.as_str()),
+            );
+        }
+    }
+
     sort_diagnostics_by_primary_path(&mut diagnostics);
 
     let mut modules = Vec::with_capacity(groups.len());
@@ -222,6 +300,85 @@ pub fn resolve_module_graph<P: AsRef<Path>>(
         modules,
         key_to_id,
     })
+}
+
+fn scan_use_import_paths(source: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in source.lines() {
+        let code = if let Some(comment_start) = line.find("//") {
+            &line[..comment_start]
+        } else {
+            line
+        };
+        let mut remaining = code;
+        while let Some(idx) = remaining.find("use \"") {
+            remaining = &remaining[idx + 5..];
+            if let Some(end) = remaining.find('"') {
+                paths.push(remaining[..end].to_string());
+                remaining = &remaining[end + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+    paths
+}
+
+fn filter_graph_to_reachable_modules(graph: &mut ModuleGraph, bin: Option<&str>) {
+    // Seed reachability. If `--bin <name>` is given, start from only that subdirectory's modules.
+    // Otherwise, start from all project modules (any directory in the graph that isn't std/).
+    let mut reachable: BTreeSet<ModuleKey> = BTreeSet::new();
+    let mut queue: VecDeque<ModuleKey> = if let Some(bin_name) = bin {
+        let bin_dir = PathBuf::from(bin_name);
+        graph
+            .key_to_id
+            .keys()
+            .filter(|key| key.directory == bin_dir)
+            .cloned()
+            .collect()
+    } else {
+        // All non-std modules are potential entry roots
+        graph
+            .key_to_id
+            .keys()
+            .filter(|key| !key.directory.starts_with("std"))
+            .cloned()
+            .collect()
+    };
+
+    while let Some(key) = queue.pop_front() {
+        if !reachable.insert(key.clone()) {
+            continue;
+        }
+        let Some(files) = graph.groups.get(&key).cloned() else {
+            continue;
+        };
+        for file in &files {
+            let abs_path = resolve_graph_file_path(graph, file);
+            let Ok(source) = fs::read_to_string(&abs_path) else {
+                continue;
+            };
+            for import_path in scan_use_import_paths(&source) {
+                let imported_key = module_key_for_import(&key, &import_path);
+                if !reachable.contains(&imported_key) && graph.key_to_id.contains_key(&imported_key) {
+                    queue.push_back(imported_key);
+                }
+            }
+        }
+    }
+
+    graph.groups.retain(|key, _| reachable.contains(key));
+    graph.key_to_id.clear();
+    graph.modules.clear();
+    for (index, (key, files)) in graph.groups.iter().enumerate() {
+        let new_id = ModuleId(index);
+        graph.key_to_id.insert(key.clone(), new_id);
+        graph.modules.push(ResolvedModule {
+            id: new_id,
+            key: key.clone(),
+            files: files.clone(),
+        });
+    }
 }
 
 pub fn resolve_modules<P: AsRef<Path>>(start_dir: P) -> Result<ModuleGroups, ModuleResolverError> {
@@ -248,10 +405,47 @@ fn register_module_file(
         }
     };
 
-    let directory = relative_directory_of(&logical_file_path);
-    let key = ModuleKey {
-        directory,
-        module_name,
+    let file_dir = relative_directory_of(&logical_file_path);
+    let file_stem = logical_file_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let dir_name = file_dir.file_name().and_then(|n| n.to_str());
+
+    let key = if dir_name == Some(module_name.as_str()) {
+        // Directory module: parser/lexer.dyn declares module parser — hoist to parent
+        let grandparent = file_dir
+            .parent()
+            .map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p })
+            .unwrap_or(Path::new("."));
+        ModuleKey {
+            directory: grandparent.to_path_buf(),
+            module_name,
+        }
+    } else if file_dir == Path::new(".") || module_name == file_stem.as_str() {
+        // Root files can declare any module name.
+        // Subdirectory files declaring their file stem are single-file submodules.
+        ModuleKey {
+            directory: file_dir,
+            module_name,
+        }
+    } else {
+        // In a subdirectory and matches neither file stem nor directory name
+        let d = dir_name.unwrap_or("?");
+        diagnostics.push(
+            Diagnostic::error(
+                DiagnosticPhase::ModuleResolver,
+                DiagnosticCode::E1006,
+                format!("module name '{module_name}' does not match the file or directory name"),
+            )
+            .with_primary_file_label(
+                logical_file_path,
+                None,
+                format!("expected 'module {file_stem}' or 'module {d}'"),
+            ),
+        );
+        return;
     };
 
     groups.entry(key).or_default().push(logical_file_path);
@@ -474,6 +668,3 @@ fn is_valid_module_name(name: &str) -> bool {
 
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,0 +1,41 @@
+module sync
+
+pthread_cond_init      := extern (cond: *any, attr: *any) i32 = "pthread_cond_init"
+pthread_cond_wait      := extern (cond: *any, mutex: *any) i32 = "pthread_cond_wait"
+pthread_cond_signal    := extern (cond: *any) i32 = "pthread_cond_signal"
+pthread_cond_broadcast := extern (cond: *any) i32 = "pthread_cond_broadcast"
+pthread_cond_destroy   := extern (cond: *any) i32 = "pthread_cond_destroy"
+
+/// A condition variable backed by a POSIX pthread_cond_t.
+/// pthread_cond_t is 48 bytes on Linux x86_64.
+pub Condvar := struct {
+    _data: [48]u8,
+
+    init := () Condvar {
+        mut cv := Condvar.{ _data: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] }
+        pthread_cond_init($as(*any, &cv._data[0]), $as(*any, 0))
+        return cv
+    }
+
+    /// Atomically release mutex and block until signalled. Mutex must be locked.
+    wait := (self: *Condvar, mutex: *Mutex) {
+        pthread_cond_wait(
+            $as(*any, &self._data[0]),
+            $as(*any, &mutex._data[0]),
+        )
+    }
+
+    /// Wake one waiting thread.
+    signal := (self: *Condvar) {
+        pthread_cond_signal($as(*any, &self._data[0]))
+    }
+
+    /// Wake all waiting threads.
+    broadcast := (self: *Condvar) {
+        pthread_cond_broadcast($as(*any, &self._data[0]))
+    }
+
+    deinit := (self: *Condvar) {
+        pthread_cond_destroy($as(*any, &self._data[0]))
+    }
+}

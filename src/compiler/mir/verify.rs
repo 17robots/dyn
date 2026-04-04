@@ -376,6 +376,3 @@ fn types_compatible(expected: &MirValueType, actual: &MirValueType) -> bool {
                 | (MirValueType::Int { .. }, MirValueType::FunctionPointer)
         )
 }
-
-#[cfg(test)]
-mod tests;

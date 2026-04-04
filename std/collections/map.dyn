@@ -1,0 +1,157 @@
+module collections
+
+/// Open-addressing hash map with linear probing and tombstones.
+/// Usage: Map(u64, i32), Map([]u8, usize), etc.
+///
+/// Keys are hashed with FNV-1a over their raw bytes and compared byte-wise.
+pub Map := (K: comp type, V: comp type) type {
+  Internal := struct {
+    buckets: ?*any,
+    count:   usize,
+    cap:     usize,
+    alloc:   Allocator,
+  }
+  Internal.init := (alloc: Allocator) Self => .{ buckets: null, count: 0, cap: 0, alloc: alloc, }
+  Internal.insert := (self: *Self, key: K, val: V) bool {
+      if self.cap == 0 or self.count * 2 >= self.cap {
+          if !Self.grow(self) return false
+      }
+      bsz  := 1 + $sizeof(K) + $sizeof(V)
+      h    := Self.hash_key($as(*any, &key))
+      mut slot      := h & (self.cap - 1)
+      mut tombstone := self.cap
+      for {
+          b     := $as(usize, self.buckets.?) + slot * bsz
+          state := $as(*u8, b).*
+          if state == 0 {
+              target := if tombstone < self.cap tombstone else slot
+              tb     := $as(usize, self.buckets.?) + target * bsz
+              $as(*u8, tb).* = 1
+              $as(*K, $as(*any, tb + 1)).* = key
+              $as(*V, $as(*any, tb + 1 + $sizeof(K))).* = val
+              self.count += 1
+              return true
+          }
+          if state == 2 and tombstone == self.cap tombstone = slot
+          if state == 1 and Self.keq($as(*any, b + 1), $as(*any, &key)) {
+              $as(*V, $as(*any, b + 1 + $sizeof(K))).* = val
+              return true
+          }
+          slot = (slot + 1) & (self.cap - 1)
+      }
+      return false
+  }
+  Internal.get := (self: Self, key: K) ?*V {
+      if self.cap == 0 return null
+      bsz := 1 + $sizeof(K) + $sizeof(V)
+      h   := Self.hash_key($as(*any, &key))
+      mut slot := h & (self.cap - 1)
+      for {
+          b     := $as(usize, self.buckets.?) + slot * bsz
+          state := $as(*u8, b).*
+          if state == 0 return null
+          if state == 1 and Self.keq($as(*any, b + 1), $as(*any, &key))
+              return $as(*V, $as(*any, b + 1 + $sizeof(K)))
+          slot = (slot + 1) & (self.cap - 1)
+      }
+      return null
+  }
+  Internal.remove := (self: *Self, key: K) bool {
+      if self.cap == 0 return false
+      bsz := 1 + $sizeof(K) + $sizeof(V)
+      h   := Self.hash_key($as(*any, &key))
+      mut slot := h & (self.cap - 1)
+      for {
+          b     := $as(usize, self.buckets.?) + slot * bsz
+          state := $as(*u8, b).*
+          if state == 0 return false
+          if state == 1 and Self.keq($as(*any, b + 1), $as(*any, &key)) {
+              $as(*u8, b).* = 2
+              self.count -= 1
+              return true
+          }
+          slot = (slot + 1) & (self.cap - 1)
+      }
+      return false
+  }
+  Internal.clone := (self: Self, alloc: Allocator) ?Self {
+      if self.cap == 0 return Self.init(alloc)
+      bsz := 1 + $sizeof(K) + $sizeof(V)
+      new_buckets := alloc.alloc(self.cap * bsz, 8) or return null
+      mut i := 0
+      for i < self.cap: {
+          src := $as(usize, self.buckets.?) + i * bsz
+          if $as(*u8, src).* == 1 {
+              h    := Self.hash_key($as(*any, src + 1))
+              mut slot := h & (self.cap - 1)
+              for $as(*u8, $as(usize, new_buckets) + slot * bsz).* != 0:
+                  slot = (slot + 1) & (self.cap - 1)
+              dst := $as(usize, new_buckets) + slot * bsz
+              $as(*u8, dst).* = 1
+              $memcpy($as(*any, dst + 1), $as(*any, src + 1), $sizeof(K) + $sizeof(V))
+          }
+          i += 1
+      }
+      return .{ buckets: new_buckets, count: self.count, cap: self.cap, alloc: alloc }
+  }
+  Internal.deinit := (self: *Self) {
+      if self.buckets: |b| {
+          bsz := self.cap * (1 + $sizeof(K) + $sizeof(V))
+          self.alloc.free(b, bsz)
+      }
+      self.buckets = null
+      self.count   = 0
+      self.cap     = 0
+  }
+  Internal.for_each := (self: Self, f: fn(key: K, val: *V) void) {
+      if self.cap == 0 return
+      bsz := 1 + $sizeof(K) + $sizeof(V)
+      mut i := 0
+      for i < self.cap: {
+          b     := $as(usize, self.buckets.?) + i * bsz
+          state := $as(*u8, b).*
+          if state == 1 {
+              key := $as(*K, $as(*any, b + 1)).*
+              val := $as(*V, $as(*any, b + 1 + $sizeof(K)))
+              f(key, val)
+          }
+          i += 1
+      }
+  }
+  Internal.hash_key := (key: *any) usize => hash.hash_bytes(key, $sizeof(K))
+
+  Internal.keq := (a: *any, b: *any) bool {
+      mut i := 0
+      for i < $sizeof(K): {
+          if $as(*u8, $as(usize, a) + i).* != $as(*u8, $as(usize, b) + i).* return false
+          i += 1
+      }
+      return true
+  }
+  Internal.grow := (self: *Self) bool {
+      new_cap := if self.cap == 0 8 else self.cap * 2
+      bsz := 1 + $sizeof(K) + $sizeof(V)
+      new_buckets := self.alloc.alloc(new_cap * bsz, 8) or return false
+      if self.buckets: |old| {
+          mut i := 0
+          for i < self.cap: {
+              src := $as(usize, old) + i * bsz
+              if $as(*u8, src).* == 1 {
+                  h    := Self.hash_key($as(*any, src + 1))
+                  mut slot := h & (new_cap - 1)
+                  for $as(*u8, $as(usize, new_buckets) + slot * bsz).* != 0:
+                      slot = (slot + 1) & (new_cap - 1)
+                  dst := $as(usize, new_buckets) + slot * bsz
+                  $as(*u8, dst).* = 1
+                  $memcpy($as(*any, dst + 1), $as(*any, src + 1), $sizeof(K) + $sizeof(V))
+              }
+              i += 1
+          }
+          self.alloc.free(old, self.cap * bsz)
+      }
+      self.buckets = new_buckets
+      self.cap = new_cap
+      return true
+  }
+  return Internal
+}

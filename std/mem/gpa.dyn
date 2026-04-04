@@ -1,0 +1,133 @@
+module mem
+
+/// General-purpose allocator with segregated free lists and leak detection.
+///
+/// Size classes (bytes): 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096.
+/// Allocations larger than 4096 bytes go directly to mmap/munmap.
+/// Freed small blocks store their free-list "next" pointer in their own first bytes.
+///
+/// Each 4096-byte page carved into free blocks also reserves its last 8 bytes
+/// (offset 4088) as a page-list "next" pointer so that deinit() can munmap
+/// every page. Blocks are therefore carved from [0..4088) within each page.
+///
+/// Call deinit() when done — returns live allocation count. Non-zero = leak.
+///
+/// NOTE: syscall numbers are Linux x86_64 (mmap=9, munmap=11).
+pub GpaAllocator := struct {
+    free_lists: [10]?*any,
+    page_list:  ?*any,   // linked list of all mmap'd slab pages via offset 4088
+    live:       usize,
+}
+
+pub GpaAllocator.init := () GpaAllocator => .{
+    free_lists: [null, null, null, null, null, null, null, null, null, null],
+    page_list:  null,
+    live:       0,
+}
+pub GpaAllocator.allocator := (self: *GpaAllocator) Allocator => .{
+    ctx:          $as(*any, self),
+    impl_alloc:   alloc,
+    impl_free:    free,
+    impl_realloc: gpa_realloc,
+}
+pub GpaAllocator.deinit := (self: *GpaAllocator) usize {
+    mut cur := self.page_list
+    for cur: |page| {
+        page_addr := $as(usize, page)
+        next_val  := $as(*usize, $as(*any, page_addr + 4088)).*
+        $syscall(11, page_addr, 4096, 0, 0, 0, 0)
+        cur = if next_val == 0 null else $as(*any, next_val)
+    }
+    self.page_list = null
+    return self.live
+}
+pub GpaAllocator.alloc := (ctx: *any, size: usize, align: usize) ?*any {
+    self  := $as(*GpaAllocator, ctx)
+    class := GpaAllocator.size_class(size)
+    if size > 4096 {
+        raw := $syscall(9, 0, size, 3, 0x22, -1, 0)
+        if raw > 0xFFFFFFFFFFFFFF00 return null
+        self.live += 1
+        return $as(*any, raw)
+    }
+    ptr := GpaAllocator.pop_slab(self, class) or return null
+    self.live += 1
+    return ptr
+}
+pub GpaAllocator.free := (ctx: *any, ptr: *any, size: usize) {
+    self  := $as(*GpaAllocator, ctx)
+    self.live -= 1
+    if size > 4096 {
+        $syscall(11, $as(usize, ptr), size, 0, 0, 0, 0)
+        return
+    }
+    class    := GpaAllocator.size_class(size)
+    head_val := if self.free_lists[class]: |h| $as(usize, h) else 0
+    $as(*usize, ptr).* = head_val
+    self.free_lists[class] = ptr
+}
+pub GpaAllocator.size_class := (size: usize) usize {
+    if size <= 8    return 0
+    if size <= 16   return 1
+    if size <= 32   return 2
+    if size <= 64   return 3
+    if size <= 128  return 4
+    if size <= 256  return 5
+    if size <= 512  return 6
+    if size <= 1024 return 7
+    if size <= 2048 return 8
+    9
+}
+pub GpaAllocator.class_size := (class: usize) usize {
+    if class == 0 return 8
+    if class == 1 return 16
+    if class == 2 return 32
+    if class == 3 return 64
+    if class == 4 return 128
+    if class == 5 return 256
+    if class == 6 return 512
+    if class == 7 return 1024
+    if class == 8 return 2048
+    return 4096
+}
+pub GpaAllocator.gpa_realloc := (ctx: *any, ptr: *any, old_size: usize, new_size: usize, align: usize) ?*any {
+    self := $as(*GpaAllocator, ctx)
+    // If old and new fit in the same size class, return same pointer — no copy needed.
+    if old_size <= 4096 and new_size <= 4096 {
+        if GpaAllocator.size_class(old_size) == GpaAllocator.size_class(new_size) return ptr
+    }
+    // Different class or large alloc: alloc new, copy, free old.
+    new_ptr := GpaAllocator.alloc(ctx, new_size, align) or return null
+    copy_size := if old_size < new_size old_size else new_size
+    $memcpy(new_ptr, ptr, copy_size)
+    GpaAllocator.free(ctx, ptr, old_size)
+    return new_ptr
+}
+pub GpaAllocator.pop_slab := (self: *GpaAllocator, class: usize) ?*any {
+    if self.free_lists[class]: |head| {
+        next_val := $as(*usize, head).*
+        self.free_lists[class] = if next_val == 0 null else $as(*any, next_val)
+        return head
+    }
+    block_size := GpaAllocator.class_size(class)
+    raw        := $syscall(9, 0, 4096, 3, 0x22, -1, 0)
+    if raw > 0xFFFFFFFFFFFFFF00 return null
+
+    // Store old page_list head at offset 4088 (last 8 bytes), then prepend this
+    // page to the list so deinit() can munmap it later.
+    old_page_head := if self.page_list: |p| $as(usize, p) else 0
+    $as(*usize, $as(*any, raw + 4088)).* = old_page_head
+    self.page_list = $as(*any, raw)
+
+    // Carve blocks from [0..4088) — last 8 bytes are reserved for the page list.
+    count := 4088 / block_size
+    mut i := 1
+    for i < count: {
+        curr := raw + i * block_size
+        next := if i + 1 < count raw + (i + 1) * block_size else 0
+        $as(*usize, $as(*any, curr)).* = next
+        i += 1
+    }
+    self.free_lists[class] = if count > 1 $as(*any, raw + block_size) else null
+    return $as(*any, raw)
+}

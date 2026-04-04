@@ -1,6 +1,5 @@
 pub mod ast;
 pub mod backend;
-pub mod diagnostic_utils;
 pub mod diagnostics;
 pub mod hir;
 pub mod intrinsics;

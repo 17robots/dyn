@@ -3,6 +3,10 @@ name = "dyn_compiler"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "dyn"
+path = "src/main.rs"
+
 [dependencies]
 cranelift-codegen = "0.116"
 cranelift-frontend = "0.116"

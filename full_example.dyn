@@ -113,7 +113,7 @@ main := () ! { // void type but marked as errorable with !
     for 0..10: |z2| if z2 == 1 break :blk
   }
   I := usable_in_main
-  J := use "other"
+  // J := use "other"
   K := I.usable_outside
 }
 
@@ -148,3 +148,4 @@ get_type := () type {
     }
   }
 }
+

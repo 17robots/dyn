@@ -1,0 +1,4 @@
+module collections
+
+Allocator := (use "std/mem").Allocator
+hash := use "std/hash"
