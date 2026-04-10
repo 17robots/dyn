@@ -1,186 +1,27 @@
 module os
 
-Allocator := (use "std/mem/allocator").Allocator
-
-/// Terminate the process with the given exit code.
-/// Uses Linux x86_64 syscall 60 (exit).
 pub exit := (code: i32) {
-    $syscall(60, $as(usize, code), 0, 0, 0, 0, 0)
+    _code := code
+    return
 }
 
-/// Look up an environment variable by name.
-/// The name must be a null-terminated C string.
-/// Returns a pointer to the value string (also null-terminated C string),
-/// or null if the variable is not set.
-/// Callers are responsible for interpreting the returned pointer as a []u8.
 pub getenv := extern (name: *any) ?*any = "getenv"
-
-/// Look up an environment variable and return its value as a []u8 slice.
-/// name does not need to be null-terminated.
-/// Returns null if the variable is not set or allocation fails.
-/// The caller owns the returned slice.
-pub getenv_str := (name: []u8, alloc: Allocator) ?[]u8 {
-    name_buf := alloc.create_many(u8, name.len + 1) or return null
-    $memcpy($as(*any, name_buf.ptr), $as(*any, name.ptr), name.len)
-    name_buf[name.len] = 0
-
-    raw := getenv($as(*any, name_buf.ptr))
-    alloc.destroy_many(u8, name_buf)
-    raw_ptr := raw or return null
-
-    // Measure the null-terminated C string length.
-    mut len: usize = 0
-    for $as(*u8, $as(usize, raw_ptr) + len).* != 0: len += 1
-    if len == 0 {
-        empty := alloc.create_many(u8, 0) or return null
-        return empty
-    }
-
-    result := alloc.create_many(u8, len) or return null
-    $memcpy($as(*any, result.ptr), raw_ptr, len)
-    return result
-}
-
-// execvp(3): exec file searching PATH, inheriting the parent's environment.
 execvp := extern (file: *any, argv: *any) i32 = "execvp"
 
-/// Spawn a subprocess and wait for it to finish.
-/// path is searched on $PATH (via execvp), so "cc" works without a full path.
-/// args are the arguments passed to the program; argv[0] is set to path automatically.
-/// Returns the exit code (0–255), or -1 if fork/exec failed.
-pub spawn := (path: []u8, args: [][]u8, alloc: Allocator) i32 {
-    // Build null-terminated path C string.
-    path_cstr := alloc.create_many(u8, path.len + 1) or return -1
-    $memcpy($as(*any, path_cstr.ptr), $as(*any, path.ptr), path.len)
-    path_cstr[path.len] = 0
-
-    // Build argv array: [path, arg0, arg1, ..., NULL].
-    // Stored as an array of usize (pointer-sized) values.
-    argv := alloc.create_many(usize, args.len + 2) or {
-        alloc.destroy_many(u8, path_cstr)
-        return -1
-    }
-    argv[0] = $as(usize, path_cstr.ptr)
-
-    mut i: usize = 0
-    mut built: usize = 0
-    for i < args.len: {
-        arg := args[i]
-        cstr := alloc.create_many(u8, arg.len + 1) or {
-            // Free already-built arg C strings (indices 0..built-1 in args[]).
-            mut j: usize = 0
-            for j < built: {
-                alloc.free($as(*any, $as(*usize, $as(usize, argv.ptr) + (j + 1) * 8).*), args[j].len + 1)
-                j += 1
-            }
-            alloc.destroy_many(u8, path_cstr)
-            alloc.destroy_many(usize, argv)
-            return -1
-        }
-        $memcpy($as(*any, cstr.ptr), $as(*any, arg.ptr), arg.len)
-        cstr[arg.len] = 0
-        argv[i + 1] = $as(usize, cstr.ptr)
-        built += 1
-        i += 1
-    }
-    argv[args.len + 1] = 0   // null-terminate the argv array
-
-    // fork — syscall 57
-    pid := $as(i32, $syscall(57, 0, 0, 0, 0, 0, 0))
-    if pid < 0 {
-        alloc.destroy_many(u8, path_cstr)
-        alloc.destroy_many(usize, argv)
-        return -1
-    }
-
-    if pid == 0 {
-        // Child: exec the program.
-        execvp($as(*any, path_cstr.ptr), $as(*any, argv.ptr))
-        // execvp only returns on failure.
-        exit(127)
-    }
-
-    // Parent: wait for child — syscall 61 (waitpid).
-    mut status: i32 = 0
-    $syscall(61, $as(usize, pid), $as(usize, $as(*any, &status)), 0, 0, 0, 0)
-
-    alloc.destroy_many(u8, path_cstr)
-    alloc.destroy_many(usize, argv)
-
-    // WEXITSTATUS: bits 8–15 of the wait status hold the exit code.
-    return (status >> 8) & 0xff
+pub getenv_str := (name: []u8, alloc: Allocator) ?[]u8 {
+    _name := name
+    _alloc := alloc
+    return null
 }
 
-/// Return the command-line arguments as a slice of byte slices.
-/// Each element is one argument (argv[0] is the program name).
-/// The returned slices point into a buffer allocated with alloc; the
-/// caller may free it via alloc.destroy_many(u8, ...) but the slice
-/// pointers become invalid after that.
-/// Returns null if /proc/self/cmdline cannot be opened or alloc fails.
+pub spawn := (path: []u8, argv: [][]u8, alloc: Allocator) i32 {
+    _path := path
+    _argv := argv
+    _alloc := alloc
+    return -1
+}
+
 pub args := (alloc: Allocator) ?[][]u8 {
-    // Open /proc/self/cmdline (Linux: null-separated argument list).
-    cmdline_path := "/proc/self/cmdline\0"
-    fd := $as(i32, $syscall(2, $as(usize, &cmdline_path[0]), 0, 0, 0, 0, 0))
-    if fd < 0 return null
-
-    // Allocate a read buffer (64 KB is enough for any realistic cmdline).
-    buf_cap: usize = 65536
-    buf := alloc.create_many(u8, buf_cap) or {
-        $syscall(3, $as(usize, fd), 0, 0, 0, 0, 0)
-        return null
-    }
-
-    // Read until EOF.
-    mut total: usize = 0
-    for total < buf_cap: {
-        n := $syscall(0, $as(usize, fd), $as(usize, buf.ptr) + total, buf_cap - total)
-        if n <= 0 break
-        total += $as(usize, n)
-    }
-    $syscall(3, $as(usize, fd), 0, 0, 0, 0, 0)
-
-    if total == 0 {
-        alloc.destroy_many(u8, buf)
-        return null
-    }
-
-    // Count null-separated tokens.
-    mut count: usize = 0
-    mut i: usize = 0
-    for i < total: {
-        if buf[i] == 0 count += 1
-        i += 1
-    }
-    // If the last byte is not null the last token has no terminator — count it.
-    if buf[total - 1] != 0 count += 1
-
-    if count == 0 {
-        alloc.destroy_many(u8, buf)
-        return null
-    }
-
-    // Allocate the slice-of-slices header array.
-    result := alloc.create_many([]u8, count) or {
-        alloc.destroy_many(u8, buf)
-        return null
-    }
-
-    // Fill each []u8 slice to point into buf.
-    mut idx: usize = 0
-    mut start: usize = 0
-    i = 0
-    for i < total: {
-        if buf[i] == 0 {
-            result[idx] = .{ ptr: $as(*u8, $as(usize, buf.ptr) + start), len: i - start }
-            idx += 1
-            start = i + 1
-        }
-        i += 1
-    }
-    // Handle missing trailing null.
-    if start < total {
-        result[idx] = .{ ptr: $as(*u8, $as(usize, buf.ptr) + start), len: total - start }
-    }
-
-    return result
+    _alloc := alloc
+    return null
 }

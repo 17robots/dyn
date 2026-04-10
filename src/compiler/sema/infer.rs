@@ -1369,6 +1369,1545 @@ pub(super) fn collect_named_struct_fields(unit: &ModuleUnit) -> BTreeMap<String,
     out
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct StructLiteralSpec {
+    pub fields: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(super) enum NominalValueKind {
+    Struct,
+    PlainEnum,
+    PayloadEnum,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(super) enum EqualityValueKind {
+    Unknown,
+    Scalar,
+    Pointer,
+    Array,
+    Slice,
+    Tuple,
+    Struct,
+    PlainEnum,
+    PayloadEnum,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum BorrowKind {
+    Shared,
+    Mutable,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct BorrowState {
+    mutability: BTreeMap<String, bool>,
+    binding_borrows: BTreeMap<String, (String, BorrowKind)>,
+    active_by_origin: BTreeMap<String, Vec<(String, BorrowKind)>>,
+}
+
+impl BorrowState {
+    fn with_params(params: &[crate::compiler::ast::FnParam]) -> Self {
+        let mut state = Self::default();
+        for param in params {
+            state.mutability.insert(param.name.text.clone(), false);
+        }
+        state
+    }
+
+    fn bind_local(&mut self, name: &str, mutable: bool) {
+        self.mutability.insert(name.to_string(), mutable);
+    }
+
+    fn release_binding_borrow(&mut self, name: &str) {
+        let Some((origin, _)) = self.binding_borrows.remove(name) else {
+            return;
+        };
+        let Some(active) = self.active_by_origin.get_mut(&origin) else {
+            return;
+        };
+        active.retain(|(binding, _)| binding != name);
+        if active.is_empty() {
+            self.active_by_origin.remove(&origin);
+        }
+    }
+
+    fn record_binding_borrow(&mut self, binding: &str, origin: &str, kind: BorrowKind) {
+        self.release_binding_borrow(binding);
+        self.binding_borrows
+            .insert(binding.to_string(), (origin.to_string(), kind));
+        self.active_by_origin
+            .entry(origin.to_string())
+            .or_default()
+            .push((binding.to_string(), kind));
+    }
+}
+
+pub(super) fn collect_struct_literal_specs(
+    unit: &ModuleUnit,
+) -> BTreeMap<String, StructLiteralSpec> {
+    let mut out = BTreeMap::new();
+    for decl in &unit.declarations {
+        let ExprKind::TypeLiteral(type_lit) = &decl.value.kind else {
+            continue;
+        };
+        let TypeExprKind::Struct(struct_ty) = &type_lit.kind else {
+            continue;
+        };
+        let fields = struct_ty
+            .fields
+            .iter()
+            .map(|field| (field.name.text.clone(), field.default_value.is_some()))
+            .collect::<BTreeMap<_, _>>();
+        out.insert(decl.name.clone(), StructLiteralSpec { fields });
+    }
+    out
+}
+
+pub(super) fn collect_nominal_value_kinds(unit: &ModuleUnit) -> BTreeMap<String, NominalValueKind> {
+    let mut out = BTreeMap::new();
+    for decl in &unit.declarations {
+        let ExprKind::TypeLiteral(type_lit) = &decl.value.kind else {
+            continue;
+        };
+        match &type_lit.kind {
+            TypeExprKind::Struct(_) => {
+                out.insert(decl.name.clone(), NominalValueKind::Struct);
+            }
+            TypeExprKind::Enum(enum_ty) => {
+                let has_payload = enum_ty
+                    .variants
+                    .iter()
+                    .any(|variant| variant.payload.is_some());
+                out.insert(
+                    decl.name.clone(),
+                    if has_payload {
+                        NominalValueKind::PayloadEnum
+                    } else {
+                        NominalValueKind::PlainEnum
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+pub(super) fn visit_expr_children(expr: &Expr, mut visit: impl FnMut(&Expr)) {
+    match &expr.kind {
+        ExprKind::Literal(_)
+        | ExprKind::Ident(_)
+        | ExprKind::BuiltinIdent(_)
+        | ExprKind::Continue { .. }
+        | ExprKind::Use { .. }
+        | ExprKind::TypeLiteral(_) => {}
+        ExprKind::Unary { expr, .. }
+        | ExprKind::Comptime { expr }
+        | ExprKind::Inline { expr }
+        | ExprKind::OptionalUnwrap { expr }
+        | ExprKind::ErrorUnwrap { expr }
+        | ExprKind::DerefAccess { base: expr } => visit(expr),
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Assign {
+            target: left,
+            value: right,
+            ..
+        }
+        | ExprKind::Index {
+            base: left,
+            index: right,
+        } => {
+            visit(left);
+            visit(right);
+        }
+        ExprKind::Call(call) => {
+            visit(&call.callee);
+            for arg in &call.args {
+                visit(&arg.value);
+            }
+        }
+        ExprKind::FieldAccess { base, .. } => visit(base),
+        ExprKind::Slice(slice) => {
+            visit(&slice.base);
+            if let Some(start) = &slice.start {
+                visit(start);
+            }
+            if let Some(end) = &slice.end {
+                visit(end);
+            }
+        }
+        ExprKind::Block(block) => {
+            for stmt in &block.statements {
+                match stmt {
+                    Stmt::Binding(binding) => visit(&binding.value),
+                    Stmt::Destructure(destructure) => visit(&destructure.value),
+                    Stmt::Expr(stmt_expr) => visit(stmt_expr),
+                }
+            }
+            if let Some(tail_expr) = &block.tail_expr {
+                visit(tail_expr);
+            }
+        }
+        ExprKind::If(if_expr) => {
+            visit(&if_expr.condition);
+            visit(&if_expr.then_branch);
+            if let Some(else_branch) = &if_expr.else_branch {
+                visit(else_branch);
+            }
+        }
+        ExprKind::Match(match_expr) => {
+            visit(&match_expr.scrutinee);
+            for arm in &match_expr.arms {
+                if let Some(guard) = &arm.guard {
+                    visit(guard);
+                }
+                visit(&arm.value);
+            }
+        }
+        ExprKind::For(for_expr) => match for_expr {
+            crate::compiler::ast::ForExpr::Range {
+                start, end, body, ..
+            } => {
+                visit(start);
+                visit(end);
+                visit(body);
+            }
+            crate::compiler::ast::ForExpr::Iterate { iterable, body, .. } => {
+                visit(iterable);
+                visit(body);
+            }
+            crate::compiler::ast::ForExpr::WhileLike { condition, body } => {
+                visit(condition);
+                visit(body);
+            }
+            crate::compiler::ast::ForExpr::Infinite { body } => visit(body),
+        },
+        ExprKind::Break(break_expr) => {
+            if let Some(value) = &break_expr.value {
+                visit(value);
+            }
+        }
+        ExprKind::Return { value } => {
+            if let Some(value) = value {
+                visit(value);
+            }
+        }
+        ExprKind::Defer(defer_expr) => visit(&defer_expr.body),
+        ExprKind::OrElse(or_else) => {
+            visit(&or_else.value);
+            visit(&or_else.fallback);
+        }
+        ExprKind::StructLiteral(struct_lit) => {
+            for field in &struct_lit.fields {
+                visit(&field.value);
+            }
+        }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            visit(ty_expr);
+            for field in fields {
+                visit(&field.value);
+            }
+        }
+        ExprKind::ArrayLiteral(elements) | ExprKind::TupleLiteral(elements) => {
+            for element in elements {
+                visit(element);
+            }
+        }
+        ExprKind::EnumVariantConstruct(variant) => {
+            for payload in &variant.payload {
+                visit(payload);
+            }
+        }
+        ExprKind::Fn(fn_expr) => match &fn_expr.body {
+            FnBody::Block(block) => visit(&Expr {
+                kind: ExprKind::Block(block.clone()),
+                span: expr.span,
+            }),
+            FnBody::ArrowExpr(body) => visit(body),
+        },
+    }
+}
+
+pub(super) fn validate_typed_struct_literals(
+    expr: &Expr,
+    struct_specs: &BTreeMap<String, StructLiteralSpec>,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+) {
+    if let ExprKind::StructLiteral(struct_lit) = &expr.kind {
+        if let Some(root_type) = &struct_lit.root_type {
+            if let Some(spec) = struct_specs.get(&root_type.text) {
+                let mut provided = BTreeSet::new();
+                for field in &struct_lit.fields {
+                    if !spec.fields.contains_key(&field.name.text) {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                format!(
+                                    "unknown field '{}' in typed struct literal '{}'",
+                                    field.name.text, root_type.text
+                                ),
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(field.name.span),
+                                "field is not declared on this struct type",
+                            ),
+                        );
+                        continue;
+                    }
+                    if !provided.insert(field.name.text.clone()) {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                format!(
+                                    "duplicate field '{}' in typed struct literal '{}'",
+                                    field.name.text, root_type.text
+                                ),
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(field.name.span),
+                                "each struct field may be provided at most once",
+                            ),
+                        );
+                    }
+                }
+                for (field_name, has_default) in &spec.fields {
+                    if !has_default && !provided.contains(field_name) {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                format!(
+                                    "missing required field '{}' in typed struct literal '{}'",
+                                    field_name, root_type.text
+                                ),
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(expr.span),
+                                "provide all non-default struct fields",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    visit_expr_children(expr, |child| {
+        validate_typed_struct_literals(child, struct_specs, diagnostics, file_path)
+    });
+}
+
+pub(super) fn validate_supported_builtin_type_expr(
+    ty: &TypeExpr,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+) {
+    match &ty.kind {
+        TypeExprKind::Named(name)
+            if name
+                .text
+                .strip_prefix('i')
+                .or_else(|| name.text.strip_prefix('u'))
+                .is_some_and(|rest| {
+                    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+                })
+                && name.text != "u1"
+                && parse_int_type_bits(&name.text).is_none() =>
+        {
+            diagnostics.push(
+                Diagnostic::error(
+                    DiagnosticPhase::TypeChecker,
+                    DiagnosticCode::E4005,
+                    format!("unsupported integer type '{}'", name.text),
+                )
+                .with_primary_file_label(
+                    file_path.to_path_buf(),
+                    Some(name.span),
+                    "use integer widths from 1 to 128 bits",
+                ),
+            );
+        }
+        TypeExprKind::Named(name)
+            if name.text.starts_with('f') && parse_float_type_bits(&name.text).is_none() =>
+        {
+            diagnostics.push(
+                Diagnostic::error(
+                    DiagnosticPhase::TypeChecker,
+                    DiagnosticCode::E4005,
+                    format!("unsupported float type '{}'", name.text),
+                )
+                .with_primary_file_label(
+                    file_path.to_path_buf(),
+                    Some(name.span),
+                    "use f32 or f64",
+                ),
+            );
+        }
+        TypeExprKind::Applied { args, .. } => {
+            for arg in args {
+                validate_supported_builtin_type_expr(arg, diagnostics, file_path);
+            }
+        }
+        TypeExprKind::Pointer { inner, .. }
+        | TypeExprKind::Optional { inner }
+        | TypeExprKind::Errorable { ok: inner, .. } => {
+            validate_supported_builtin_type_expr(inner, diagnostics, file_path);
+        }
+        TypeExprKind::Array { element, .. } | TypeExprKind::Slice { element } => {
+            validate_supported_builtin_type_expr(element, diagnostics, file_path);
+        }
+        TypeExprKind::Function(fn_ty) => {
+            for param in &fn_ty.params {
+                validate_supported_builtin_type_expr(&param.ty, diagnostics, file_path);
+            }
+            validate_supported_builtin_type_expr(&fn_ty.return_type, diagnostics, file_path);
+        }
+        TypeExprKind::Struct(struct_ty) => {
+            for field in &struct_ty.fields {
+                validate_supported_builtin_type_expr(&field.ty, diagnostics, file_path);
+            }
+        }
+        TypeExprKind::Enum(enum_ty) => {
+            if let Some(repr) = &enum_ty.repr {
+                validate_supported_builtin_type_expr(repr, diagnostics, file_path);
+            }
+            for variant in &enum_ty.variants {
+                if let Some(payload) = &variant.payload {
+                    validate_supported_builtin_type_expr(payload, diagnostics, file_path);
+                }
+            }
+        }
+        TypeExprKind::Named(_) => {}
+    }
+}
+
+pub(super) fn validate_supported_builtin_types_in_expr(
+    expr: &Expr,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+) {
+    match &expr.kind {
+        ExprKind::Block(block) => {
+            for stmt in &block.statements {
+                match stmt {
+                    Stmt::Binding(binding) => {
+                        if let Some(annotation) = &binding.annotation {
+                            validate_supported_builtin_type_expr(
+                                annotation,
+                                diagnostics,
+                                file_path,
+                            );
+                        }
+                        validate_supported_builtin_types_in_expr(
+                            &binding.value,
+                            diagnostics,
+                            file_path,
+                        );
+                    }
+                    Stmt::Destructure(destructure) => validate_supported_builtin_types_in_expr(
+                        &destructure.value,
+                        diagnostics,
+                        file_path,
+                    ),
+                    Stmt::Expr(stmt_expr) => {
+                        validate_supported_builtin_types_in_expr(stmt_expr, diagnostics, file_path);
+                    }
+                }
+            }
+            if let Some(tail_expr) = &block.tail_expr {
+                validate_supported_builtin_types_in_expr(tail_expr, diagnostics, file_path);
+            }
+        }
+        ExprKind::Fn(fn_expr) => {
+            for param in &fn_expr.params {
+                if let Some(ty) = &param.ty {
+                    validate_supported_builtin_type_expr(ty, diagnostics, file_path);
+                }
+            }
+            if let Some(ret) = &fn_expr.return_type {
+                validate_supported_builtin_type_expr(ret, diagnostics, file_path);
+            }
+            match &fn_expr.body {
+                FnBody::Block(block) => validate_supported_builtin_types_in_expr(
+                    &Expr {
+                        kind: ExprKind::Block(block.clone()),
+                        span: expr.span,
+                    },
+                    diagnostics,
+                    file_path,
+                ),
+                FnBody::ArrowExpr(body) => {
+                    validate_supported_builtin_types_in_expr(body, diagnostics, file_path)
+                }
+            }
+        }
+        ExprKind::TypeLiteral(ty) => {
+            validate_supported_builtin_type_expr(ty, diagnostics, file_path);
+        }
+        _ => visit_expr_children(expr, |child| {
+            validate_supported_builtin_types_in_expr(child, diagnostics, file_path)
+        }),
+    }
+}
+
+fn classify_type_for_equality(
+    ty: TypeId,
+    types: &TypeStore,
+    nominal_kinds: &BTreeMap<String, NominalValueKind>,
+) -> EqualityValueKind {
+    match types.get(ty) {
+        Type::Unknown
+        | Type::TypeType
+        | Type::Any
+        | Type::Opaque
+        | Type::Void
+        | Type::Null
+        | Type::Optional(_)
+        | Type::Errorable { .. }
+        | Type::Function { .. } => EqualityValueKind::Unknown,
+        Type::Bool | Type::Int { .. } | Type::Float { .. } => EqualityValueKind::Scalar,
+        Type::Pointer { .. } => EqualityValueKind::Pointer,
+        Type::Array(_) => EqualityValueKind::Array,
+        Type::Slice { .. } => EqualityValueKind::Slice,
+        Type::Tuple(_) => EqualityValueKind::Tuple,
+        Type::TypeParam(name) | Type::Applied { callee: name, .. } => {
+            match nominal_kinds.get(name) {
+                Some(NominalValueKind::Struct) => EqualityValueKind::Struct,
+                Some(NominalValueKind::PlainEnum) => EqualityValueKind::PlainEnum,
+                Some(NominalValueKind::PayloadEnum) => EqualityValueKind::PayloadEnum,
+                None => EqualityValueKind::Unknown,
+            }
+        }
+    }
+}
+
+fn infer_expr_type_silently(
+    expr: &Expr,
+    env: &BTreeMap<String, TypeId>,
+    mutability: &BTreeMap<String, bool>,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+    file_path: &std::path::Path,
+    expected_return: Option<TypeId>,
+) -> TypeId {
+    let mut scratch = Vec::new();
+    infer_expr_type(
+        expr,
+        env,
+        mutability,
+        signatures,
+        types,
+        &mut scratch,
+        file_path,
+        expected_return,
+    )
+}
+
+fn classify_expr_for_equality(
+    expr: &Expr,
+    env_shapes: &BTreeMap<String, EqualityValueKind>,
+    env_types: &BTreeMap<String, TypeId>,
+    mutability: &BTreeMap<String, bool>,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+    nominal_kinds: &BTreeMap<String, NominalValueKind>,
+    file_path: &std::path::Path,
+    expected_return: Option<TypeId>,
+) -> EqualityValueKind {
+    match &expr.kind {
+        ExprKind::Literal(Literal::String(_)) => EqualityValueKind::Slice,
+        ExprKind::Literal(_) => EqualityValueKind::Scalar,
+        ExprKind::Unary {
+            op: UnaryOp::Ref, ..
+        } => EqualityValueKind::Pointer,
+        ExprKind::StructLiteral(_) => EqualityValueKind::Struct,
+        ExprKind::ArrayLiteral(_) => EqualityValueKind::Array,
+        ExprKind::TupleLiteral(_) => EqualityValueKind::Tuple,
+        ExprKind::EnumVariantConstruct(variant) => {
+            if let Some(root) = &variant.root {
+                match nominal_kinds.get(&root.text) {
+                    Some(NominalValueKind::PlainEnum) => EqualityValueKind::PlainEnum,
+                    Some(NominalValueKind::PayloadEnum) => EqualityValueKind::PayloadEnum,
+                    Some(NominalValueKind::Struct) | None => {
+                        if variant.payload.is_empty() {
+                            EqualityValueKind::PlainEnum
+                        } else {
+                            EqualityValueKind::PayloadEnum
+                        }
+                    }
+                }
+            } else if variant.payload.is_empty() {
+                EqualityValueKind::PlainEnum
+            } else {
+                EqualityValueKind::PayloadEnum
+            }
+        }
+        ExprKind::Ident(ident) => env_shapes.get(&ident.text).copied().unwrap_or_else(|| {
+            env_types
+                .get(&ident.text)
+                .map(|ty| classify_type_for_equality(*ty, types, nominal_kinds))
+                .unwrap_or(EqualityValueKind::Unknown)
+        }),
+        ExprKind::Call(call) => {
+            if let Some(name) = extract_callee_name(&call.callee) {
+                if let Some(signature) = signatures.get(&name) {
+                    return classify_type_for_equality(signature.return_type, types, nominal_kinds);
+                }
+            }
+            let inferred = infer_expr_type_silently(
+                expr,
+                env_types,
+                mutability,
+                signatures,
+                types,
+                file_path,
+                expected_return,
+            );
+            classify_type_for_equality(inferred, types, nominal_kinds)
+        }
+        _ => {
+            let inferred = infer_expr_type_silently(
+                expr,
+                env_types,
+                mutability,
+                signatures,
+                types,
+                file_path,
+                expected_return,
+            );
+            classify_type_for_equality(inferred, types, nominal_kinds)
+        }
+    }
+}
+
+pub(super) fn validate_unsupported_equality(
+    expr: &Expr,
+    env_shapes: &BTreeMap<String, EqualityValueKind>,
+    env: &BTreeMap<String, TypeId>,
+    mutability: &BTreeMap<String, bool>,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+    nominal_kinds: &BTreeMap<String, NominalValueKind>,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    expected_return: Option<TypeId>,
+) {
+    match &expr.kind {
+        ExprKind::Binary {
+            op: BinaryOp::Eq | BinaryOp::Ne,
+            left,
+            right,
+        } => {
+            validate_unsupported_equality(
+                left,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+            validate_unsupported_equality(
+                right,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+
+            let left_kind = classify_expr_for_equality(
+                left,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                file_path,
+                expected_return,
+            );
+            let right_kind = classify_expr_for_equality(
+                right,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                file_path,
+                expected_return,
+            );
+            if let Some(kind) = unsupported_equality_kind(left_kind, right_kind) {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        format!(
+                            "unsupported equality on {} values",
+                            equality_kind_name(kind)
+                        ),
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "use == and != only with scalars, pointers, and plain enums",
+                    ),
+                );
+            }
+        }
+        ExprKind::Block(block) => {
+            let mut local_env = env.clone();
+            let mut local_shapes = env_shapes.clone();
+            let mut local_mutability = mutability.clone();
+            for stmt in &block.statements {
+                match stmt {
+                    Stmt::Binding(binding) => {
+                        validate_unsupported_equality(
+                            &binding.value,
+                            &local_shapes,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            nominal_kinds,
+                            diagnostics,
+                            file_path,
+                            expected_return,
+                        );
+                        let mut value_ty = infer_expr_type_silently(
+                            &binding.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            file_path,
+                            expected_return,
+                        );
+                        let final_ty = if let Some(annotation) = &binding.annotation {
+                            let expected = resolve_type_expr(annotation, types)
+                                .unwrap_or_else(|| types.intern(Type::Unknown));
+                            value_ty = maybe_coerce_literal_to_expected(
+                                &binding.value,
+                                value_ty,
+                                expected,
+                                types,
+                            );
+                            expected
+                        } else {
+                            value_ty
+                        };
+                        let final_shape = if binding.annotation.is_some() {
+                            classify_type_for_equality(final_ty, types, nominal_kinds)
+                        } else {
+                            classify_expr_for_equality(
+                                &binding.value,
+                                &local_shapes,
+                                &local_env,
+                                &local_mutability,
+                                signatures,
+                                types,
+                                nominal_kinds,
+                                file_path,
+                                expected_return,
+                            )
+                        };
+                        local_env.insert(binding.name.text.clone(), final_ty);
+                        local_shapes.insert(binding.name.text.clone(), final_shape);
+                        local_mutability.insert(binding.name.text.clone(), binding.mutable);
+                    }
+                    Stmt::Destructure(destructure) => {
+                        validate_unsupported_equality(
+                            &destructure.value,
+                            &local_shapes,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            nominal_kinds,
+                            diagnostics,
+                            file_path,
+                            expected_return,
+                        );
+                        let unknown = types.intern(Type::Unknown);
+                        for name in &destructure.names {
+                            local_env.insert(name.name.text.clone(), unknown);
+                            local_shapes.insert(name.name.text.clone(), EqualityValueKind::Unknown);
+                            local_mutability.insert(name.name.text.clone(), name.mutable);
+                        }
+                    }
+                    Stmt::Expr(stmt_expr) => validate_unsupported_equality(
+                        stmt_expr,
+                        &local_shapes,
+                        &local_env,
+                        &local_mutability,
+                        signatures,
+                        types,
+                        nominal_kinds,
+                        diagnostics,
+                        file_path,
+                        expected_return,
+                    ),
+                }
+            }
+            if let Some(tail_expr) = &block.tail_expr {
+                validate_unsupported_equality(
+                    tail_expr,
+                    &local_shapes,
+                    &local_env,
+                    &local_mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+            }
+        }
+        ExprKind::Fn(fn_expr) => {
+            let mut local_env = env.clone();
+            let mut local_shapes = env_shapes.clone();
+            let mut local_mutability = mutability.clone();
+            for param in &fn_expr.params {
+                let param_ty = param
+                    .ty
+                    .as_ref()
+                    .and_then(|ty| resolve_type_expr(ty, types))
+                    .unwrap_or_else(|| types.intern(Type::Unknown));
+                local_env.insert(param.name.text.clone(), param_ty);
+                local_shapes.insert(
+                    param.name.text.clone(),
+                    classify_type_for_equality(param_ty, types, nominal_kinds),
+                );
+                local_mutability.insert(param.name.text.clone(), false);
+            }
+            let nested_expected = fn_expr
+                .return_type
+                .as_ref()
+                .and_then(|ty| resolve_type_expr(ty, types));
+            match &fn_expr.body {
+                FnBody::Block(block) => validate_unsupported_equality(
+                    &Expr {
+                        kind: ExprKind::Block(block.clone()),
+                        span: expr.span,
+                    },
+                    &local_shapes,
+                    &local_env,
+                    &local_mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    nested_expected,
+                ),
+                FnBody::ArrowExpr(body) => validate_unsupported_equality(
+                    body,
+                    &local_shapes,
+                    &local_env,
+                    &local_mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    nested_expected,
+                ),
+            }
+        }
+        ExprKind::If(if_expr) => {
+            validate_unsupported_equality(
+                &if_expr.condition,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+            let mut then_env = env.clone();
+            let mut then_shapes = env_shapes.clone();
+            let mut then_mutability = mutability.clone();
+            if let Some(capture) = &if_expr.capture {
+                for binding in &capture.bindings {
+                    if let Some(binding) = binding {
+                        then_env.insert(binding.text.clone(), types.intern(Type::Unknown));
+                        then_shapes.insert(binding.text.clone(), EqualityValueKind::Unknown);
+                        then_mutability.insert(binding.text.clone(), false);
+                    }
+                }
+            }
+            validate_unsupported_equality(
+                &if_expr.then_branch,
+                &then_shapes,
+                &then_env,
+                &then_mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+            if let Some(else_branch) = &if_expr.else_branch {
+                validate_unsupported_equality(
+                    else_branch,
+                    env_shapes,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+            }
+        }
+        ExprKind::Match(match_expr) => {
+            validate_unsupported_equality(
+                &match_expr.scrutinee,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+            let scrutinee_ty = infer_expr_type_silently(
+                &match_expr.scrutinee,
+                env,
+                mutability,
+                signatures,
+                types,
+                file_path,
+                expected_return,
+            );
+            for arm in &match_expr.arms {
+                let mut arm_env = env.clone();
+                let mut arm_shapes = env_shapes.clone();
+                let mut arm_mutability = mutability.clone();
+                bind_pattern_names(
+                    &arm.pattern.kind,
+                    scrutinee_ty,
+                    types,
+                    &mut arm_env,
+                    &mut arm_mutability,
+                );
+                match &arm.pattern.kind {
+                    PatternKind::IdentBind(ident) => {
+                        arm_shapes.insert(
+                            ident.text.clone(),
+                            classify_type_for_equality(scrutinee_ty, types, nominal_kinds),
+                        );
+                    }
+                    PatternKind::EnumVariant { bindings, .. } => {
+                        for ident in bindings {
+                            arm_shapes.insert(ident.text.clone(), EqualityValueKind::Unknown);
+                        }
+                    }
+                    PatternKind::Range { start, end, .. } => {
+                        if let PatternKind::IdentBind(ident) = &start.kind {
+                            arm_shapes.insert(ident.text.clone(), EqualityValueKind::Unknown);
+                        }
+                        if let PatternKind::IdentBind(ident) = &end.kind {
+                            arm_shapes.insert(ident.text.clone(), EqualityValueKind::Unknown);
+                        }
+                    }
+                    PatternKind::Typed { pattern, .. } => {
+                        if let PatternKind::IdentBind(ident) = &pattern.kind {
+                            arm_shapes.insert(
+                                ident.text.clone(),
+                                classify_type_for_equality(scrutinee_ty, types, nominal_kinds),
+                            );
+                        }
+                    }
+                    PatternKind::Wildcard
+                    | PatternKind::Literal(_)
+                    | PatternKind::TypeLiteral(_) => {}
+                }
+                if let Some(guard) = &arm.guard {
+                    validate_unsupported_equality(
+                        guard,
+                        &arm_shapes,
+                        &arm_env,
+                        &arm_mutability,
+                        signatures,
+                        types,
+                        nominal_kinds,
+                        diagnostics,
+                        file_path,
+                        expected_return,
+                    );
+                }
+                validate_unsupported_equality(
+                    &arm.value,
+                    &arm_shapes,
+                    &arm_env,
+                    &arm_mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+            }
+        }
+        ExprKind::For(for_expr) => match for_expr {
+            ForExpr::Range {
+                start,
+                end,
+                binding,
+                body,
+                ..
+            } => {
+                validate_unsupported_equality(
+                    start,
+                    env_shapes,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+                validate_unsupported_equality(
+                    end,
+                    env_shapes,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+                let mut body_env = env.clone();
+                let mut body_shapes = env_shapes.clone();
+                let mut body_mutability = mutability.clone();
+                if let Some(binding) = binding {
+                    let start_ty = infer_expr_type_silently(
+                        start,
+                        env,
+                        mutability,
+                        signatures,
+                        types,
+                        file_path,
+                        expected_return,
+                    );
+                    let end_ty = infer_expr_type_silently(
+                        end,
+                        env,
+                        mutability,
+                        signatures,
+                        types,
+                        file_path,
+                        expected_return,
+                    );
+                    let binding_ty = if is_numeric(start_ty, types) && is_numeric(end_ty, types) {
+                        numeric_result_type(start_ty, end_ty, types)
+                    } else {
+                        types.intern(Type::Unknown)
+                    };
+                    body_env.insert(binding.text.clone(), binding_ty);
+                    body_shapes.insert(
+                        binding.text.clone(),
+                        classify_type_for_equality(binding_ty, types, nominal_kinds),
+                    );
+                    body_mutability.insert(binding.text.clone(), false);
+                }
+                validate_unsupported_equality(
+                    body,
+                    &body_shapes,
+                    &body_env,
+                    &body_mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+            }
+            ForExpr::Iterate {
+                iterable,
+                binding,
+                body,
+            } => {
+                validate_unsupported_equality(
+                    iterable,
+                    env_shapes,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+                let mut body_env = env.clone();
+                let mut body_shapes = env_shapes.clone();
+                let mut body_mutability = mutability.clone();
+                if let Some(binding) = binding {
+                    let iterable_ty = infer_expr_type_silently(
+                        iterable,
+                        env,
+                        mutability,
+                        signatures,
+                        types,
+                        file_path,
+                        expected_return,
+                    );
+                    let binding_ty = match types.get(iterable_ty) {
+                        Type::Array(element)
+                        | Type::Slice { element }
+                        | Type::Pointer { inner: element } => *element,
+                        _ => types.intern(Type::Unknown),
+                    };
+                    body_env.insert(binding.text.clone(), binding_ty);
+                    body_shapes.insert(
+                        binding.text.clone(),
+                        classify_type_for_equality(binding_ty, types, nominal_kinds),
+                    );
+                    body_mutability.insert(binding.text.clone(), false);
+                }
+                validate_unsupported_equality(
+                    body,
+                    &body_shapes,
+                    &body_env,
+                    &body_mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+            }
+            ForExpr::WhileLike { condition, body } => {
+                validate_unsupported_equality(
+                    condition,
+                    env_shapes,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+                validate_unsupported_equality(
+                    body,
+                    env_shapes,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    nominal_kinds,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+            }
+            ForExpr::Infinite { body } => validate_unsupported_equality(
+                body,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            ),
+        },
+        ExprKind::OrElse(or_else) => {
+            validate_unsupported_equality(
+                &or_else.value,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+            let mut fallback_env = env.clone();
+            let mut fallback_shapes = env_shapes.clone();
+            let mut fallback_mutability = mutability.clone();
+            if let Some(binding) = &or_else.error_binding {
+                fallback_env.insert(binding.text.clone(), types.intern(Type::Unknown));
+                fallback_shapes.insert(binding.text.clone(), EqualityValueKind::Unknown);
+                fallback_mutability.insert(binding.text.clone(), false);
+            }
+            validate_unsupported_equality(
+                &or_else.fallback,
+                &fallback_shapes,
+                &fallback_env,
+                &fallback_mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+        }
+        _ => visit_expr_children(expr, |child| {
+            validate_unsupported_equality(
+                child,
+                env_shapes,
+                env,
+                mutability,
+                signatures,
+                types,
+                nominal_kinds,
+                diagnostics,
+                file_path,
+                expected_return,
+            )
+        }),
+    }
+}
+
+fn borrow_origin(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Ident(ident) => Some(ident.text.clone()),
+        ExprKind::FieldAccess { base, .. } | ExprKind::Index { base, .. } => borrow_origin(base),
+        ExprKind::DerefAccess { .. } => None,
+        _ => None,
+    }
+}
+
+fn borrow_kind_for_origin(state: &BorrowState, origin: &str) -> Option<BorrowKind> {
+    state.mutability.get(origin).map(|mutable| {
+        if *mutable {
+            BorrowKind::Mutable
+        } else {
+            BorrowKind::Shared
+        }
+    })
+}
+
+fn borrowed_binding(expr: &Expr, state: &BorrowState) -> Option<(String, BorrowKind, String)> {
+    let ExprKind::Ident(ident) = &expr.kind else {
+        return None;
+    };
+    state
+        .binding_borrows
+        .get(&ident.text)
+        .map(|(origin, kind)| (origin.clone(), *kind, ident.text.clone()))
+}
+
+fn first_borrow_conflict<'a>(
+    state: &'a BorrowState,
+    origin: &str,
+    kind: BorrowKind,
+    ignore_binding: Option<&str>,
+) -> Option<(&'a str, BorrowKind)> {
+    let active = state.active_by_origin.get(origin)?;
+    match kind {
+        BorrowKind::Mutable => active
+            .iter()
+            .find(|(binding, _)| ignore_binding != Some(binding.as_str()))
+            .map(|(binding, active_kind)| (binding.as_str(), *active_kind)),
+        BorrowKind::Shared => active
+            .iter()
+            .find(|(binding, active_kind)| {
+                ignore_binding != Some(binding.as_str()) && *active_kind == BorrowKind::Mutable
+            })
+            .map(|(binding, active_kind)| (binding.as_str(), *active_kind)),
+    }
+}
+
+fn validate_borrow_binding_initializer(
+    expr: &Expr,
+    state: &BorrowState,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+) -> Option<(String, BorrowKind)> {
+    let ExprKind::Unary {
+        op: UnaryOp::Ref,
+        expr: inner,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    let origin = borrow_origin(inner)?;
+    let kind = borrow_kind_for_origin(state, &origin)?;
+    if let Some((binding, active_kind)) = first_borrow_conflict(state, &origin, kind, None) {
+        let active_kind = match active_kind {
+            BorrowKind::Shared => "shared",
+            BorrowKind::Mutable => "mutable",
+        };
+        diagnostics.push(
+            Diagnostic::error(
+                DiagnosticPhase::TypeChecker,
+                DiagnosticCode::E4005,
+                format!("conflicting borrow of '{}'", origin),
+            )
+            .with_primary_file_label(
+                file_path.to_path_buf(),
+                Some(expr.span),
+                format!(
+                    "conflicts with existing {active_kind} borrow held by '{}'",
+                    binding
+                ),
+            ),
+        );
+    }
+    Some((origin, kind))
+}
+
+fn validate_borrow_stmt(
+    stmt: &Stmt,
+    state: &mut BorrowState,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+) {
+    match stmt {
+        Stmt::Binding(binding) => {
+            validate_borrow_rules(&binding.value, state, diagnostics, file_path);
+            state.bind_local(&binding.name.text, binding.mutable);
+            if let Some((origin, kind)) =
+                validate_borrow_binding_initializer(&binding.value, state, diagnostics, file_path)
+            {
+                state.record_binding_borrow(&binding.name.text, &origin, kind);
+            }
+        }
+        Stmt::Destructure(destructure) => {
+            validate_borrow_rules(&destructure.value, state, diagnostics, file_path);
+            for name in &destructure.names {
+                state.bind_local(&name.name.text, name.mutable);
+            }
+        }
+        Stmt::Expr(expr) => validate_borrow_rules(expr, state, diagnostics, file_path),
+    }
+}
+
+pub(super) fn validate_borrow_rules(
+    expr: &Expr,
+    state: &mut BorrowState,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+) {
+    match &expr.kind {
+        ExprKind::Block(block) => {
+            let mut local_state = state.clone();
+            for stmt in &block.statements {
+                validate_borrow_stmt(stmt, &mut local_state, diagnostics, file_path);
+            }
+            if let Some(tail_expr) = &block.tail_expr {
+                validate_borrow_rules(tail_expr, &mut local_state, diagnostics, file_path);
+            }
+        }
+        ExprKind::Fn(fn_expr) => {
+            let mut local_state = BorrowState::with_params(&fn_expr.params);
+            match &fn_expr.body {
+                FnBody::Block(block) => validate_borrow_rules(
+                    &Expr {
+                        kind: ExprKind::Block(block.clone()),
+                        span: expr.span,
+                    },
+                    &mut local_state,
+                    diagnostics,
+                    file_path,
+                ),
+                FnBody::ArrowExpr(body) => {
+                    validate_borrow_rules(body, &mut local_state, diagnostics, file_path)
+                }
+            }
+        }
+        ExprKind::Call(call) => {
+            validate_borrow_rules(&call.callee, state, diagnostics, file_path);
+            let mut arg_state = state.clone();
+            for arg in &call.args {
+                validate_borrow_rules(&arg.value, &mut arg_state, diagnostics, file_path);
+                if let Some((origin, kind)) = validate_borrow_binding_initializer(
+                    &arg.value,
+                    &arg_state,
+                    diagnostics,
+                    file_path,
+                ) {
+                    arg_state.record_binding_borrow(
+                        &format!(
+                            "$call_arg:{}:{}",
+                            expr.span.start_line, arg.value.span.start_col
+                        ),
+                        &origin,
+                        kind,
+                    );
+                }
+            }
+        }
+        ExprKind::Assign { target, value, .. } => {
+            validate_borrow_rules(value, state, diagnostics, file_path);
+            validate_borrow_rules(target, state, diagnostics, file_path);
+
+            if let Some(origin) = borrow_origin(target) {
+                if state.active_by_origin.contains_key(&origin) {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::TypeChecker,
+                            DiagnosticCode::E4005,
+                            format!("cannot assign to '{}' while it is borrowed", origin),
+                        )
+                        .with_primary_file_label(
+                            file_path.to_path_buf(),
+                            Some(expr.span),
+                            "assignment conflicts with a live borrow of this storage",
+                        ),
+                    );
+                }
+            }
+
+            if let ExprKind::DerefAccess { base } = &target.kind {
+                if let Some((origin, kind, binding)) = borrowed_binding(base, state) {
+                    if kind == BorrowKind::Shared {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                format!("cannot write through shared borrow '{}'", binding),
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(expr.span),
+                                "shared borrows are read-only",
+                            ),
+                        );
+                    }
+                    if let Some((conflict_binding, _)) =
+                        first_borrow_conflict(state, &origin, BorrowKind::Mutable, Some(&binding))
+                    {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                format!(
+                                    "mutable dereference of '{}' conflicts with another live borrow",
+                                    origin
+                                ),
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(expr.span),
+                                format!(
+                                    "mutable access must be exclusive; '{}' is also live",
+                                    conflict_binding
+                                ),
+                            ),
+                        );
+                    }
+                }
+            }
+
+            if let ExprKind::Ident(ident) = &target.kind {
+                state.release_binding_borrow(&ident.text);
+            }
+        }
+        ExprKind::If(if_expr) => {
+            validate_borrow_rules(&if_expr.condition, state, diagnostics, file_path);
+            let mut then_state = state.clone();
+            validate_borrow_rules(
+                &if_expr.then_branch,
+                &mut then_state,
+                diagnostics,
+                file_path,
+            );
+            if let Some(else_branch) = &if_expr.else_branch {
+                let mut else_state = state.clone();
+                validate_borrow_rules(else_branch, &mut else_state, diagnostics, file_path);
+            }
+        }
+        ExprKind::Match(match_expr) => {
+            validate_borrow_rules(&match_expr.scrutinee, state, diagnostics, file_path);
+            for arm in &match_expr.arms {
+                let mut arm_state = state.clone();
+                if let Some(guard) = &arm.guard {
+                    validate_borrow_rules(guard, &mut arm_state, diagnostics, file_path);
+                }
+                validate_borrow_rules(&arm.value, &mut arm_state, diagnostics, file_path);
+            }
+        }
+        ExprKind::For(for_expr) => match for_expr {
+            ForExpr::Range {
+                start, end, body, ..
+            } => {
+                validate_borrow_rules(start, state, diagnostics, file_path);
+                validate_borrow_rules(end, state, diagnostics, file_path);
+                let mut body_state = state.clone();
+                validate_borrow_rules(body, &mut body_state, diagnostics, file_path);
+            }
+            ForExpr::Iterate { iterable, body, .. } => {
+                validate_borrow_rules(iterable, state, diagnostics, file_path);
+                let mut body_state = state.clone();
+                validate_borrow_rules(body, &mut body_state, diagnostics, file_path);
+            }
+            ForExpr::WhileLike { condition, body } => {
+                validate_borrow_rules(condition, state, diagnostics, file_path);
+                let mut body_state = state.clone();
+                validate_borrow_rules(body, &mut body_state, diagnostics, file_path);
+            }
+            ForExpr::Infinite { body } => {
+                let mut body_state = state.clone();
+                validate_borrow_rules(body, &mut body_state, diagnostics, file_path);
+            }
+        },
+        ExprKind::OrElse(or_else) => {
+            validate_borrow_rules(&or_else.value, state, diagnostics, file_path);
+            let mut fallback_state = state.clone();
+            validate_borrow_rules(
+                &or_else.fallback,
+                &mut fallback_state,
+                diagnostics,
+                file_path,
+            );
+        }
+        ExprKind::Unary {
+            op: UnaryOp::Ref,
+            expr: inner,
+        } => {
+            validate_borrow_rules(inner, state, diagnostics, file_path);
+            let _ = validate_borrow_binding_initializer(expr, state, diagnostics, file_path);
+        }
+        _ => visit_expr_children(expr, |child| {
+            validate_borrow_rules(child, state, diagnostics, file_path)
+        }),
+    }
+}
+
 pub(super) fn collect_enum_variants(unit: &ModuleUnit) -> BTreeMap<String, BTreeSet<String>> {
     let mut out = BTreeMap::new();
     for decl in &unit.declarations {
@@ -2869,6 +4408,203 @@ pub(super) fn validate_function_error_set_coverage(
     }
 }
 
+pub(super) fn validate_value_required_exprs(
+    expr: &Expr,
+    value_required: bool,
+    file_path: &std::path::Path,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match &expr.kind {
+        ExprKind::If(if_expr) => {
+            if value_required && if_expr.else_branch.is_none() {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "if expression requires an else branch",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "add an `else` branch or use the `if` in statement position",
+                    ),
+                );
+            }
+            validate_value_required_exprs(&if_expr.condition, true, file_path, diagnostics);
+            validate_value_required_exprs(
+                &if_expr.then_branch,
+                value_required,
+                file_path,
+                diagnostics,
+            );
+            if let Some(else_branch) = &if_expr.else_branch {
+                validate_value_required_exprs(else_branch, value_required, file_path, diagnostics);
+            }
+        }
+        ExprKind::Match(match_expr) => {
+            validate_value_required_exprs(&match_expr.scrutinee, true, file_path, diagnostics);
+            for arm in &match_expr.arms {
+                if let Some(guard) = &arm.guard {
+                    validate_value_required_exprs(guard, true, file_path, diagnostics);
+                }
+                validate_value_required_exprs(&arm.value, value_required, file_path, diagnostics);
+            }
+        }
+        ExprKind::Block(block) => {
+            for stmt in &block.statements {
+                match stmt {
+                    Stmt::Binding(binding) => {
+                        validate_value_required_exprs(&binding.value, true, file_path, diagnostics)
+                    }
+                    Stmt::Destructure(d) => {
+                        validate_value_required_exprs(&d.value, true, file_path, diagnostics)
+                    }
+                    Stmt::Expr(stmt_expr) => {
+                        validate_value_required_exprs(stmt_expr, false, file_path, diagnostics)
+                    }
+                }
+            }
+            if let Some(tail_expr) = &block.tail_expr {
+                validate_value_required_exprs(tail_expr, value_required, file_path, diagnostics);
+            }
+        }
+        ExprKind::Fn(fn_expr) => match &fn_expr.body {
+            FnBody::Block(block) => {
+                for stmt in &block.statements {
+                    match stmt {
+                        Stmt::Binding(binding) => validate_value_required_exprs(
+                            &binding.value,
+                            true,
+                            file_path,
+                            diagnostics,
+                        ),
+                        Stmt::Destructure(d) => {
+                            validate_value_required_exprs(&d.value, true, file_path, diagnostics)
+                        }
+                        Stmt::Expr(stmt_expr) => {
+                            validate_value_required_exprs(stmt_expr, false, file_path, diagnostics)
+                        }
+                    }
+                }
+                if let Some(tail_expr) = &block.tail_expr {
+                    validate_value_required_exprs(tail_expr, false, file_path, diagnostics);
+                }
+            }
+            FnBody::ArrowExpr(body) => {
+                validate_value_required_exprs(body, true, file_path, diagnostics)
+            }
+        },
+        ExprKind::Unary { expr, .. }
+        | ExprKind::OptionalUnwrap { expr }
+        | ExprKind::ErrorUnwrap { expr }
+        | ExprKind::Comptime { expr }
+        | ExprKind::Inline { expr }
+        | ExprKind::DerefAccess { base: expr } => {
+            validate_value_required_exprs(expr, true, file_path, diagnostics)
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Assign {
+            target: left,
+            value: right,
+            ..
+        }
+        | ExprKind::Index {
+            base: left,
+            index: right,
+        } => {
+            validate_value_required_exprs(left, true, file_path, diagnostics);
+            validate_value_required_exprs(right, true, file_path, diagnostics);
+        }
+        ExprKind::Call(call) => {
+            validate_value_required_exprs(&call.callee, true, file_path, diagnostics);
+            for arg in &call.args {
+                validate_value_required_exprs(&arg.value, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::FieldAccess { base, .. } => {
+            validate_value_required_exprs(base, true, file_path, diagnostics)
+        }
+        ExprKind::Slice(slice) => {
+            validate_value_required_exprs(&slice.base, true, file_path, diagnostics);
+            if let Some(start) = &slice.start {
+                validate_value_required_exprs(start, true, file_path, diagnostics);
+            }
+            if let Some(end) = &slice.end {
+                validate_value_required_exprs(end, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::For(for_expr) => match for_expr {
+            ForExpr::Range {
+                start, end, body, ..
+            } => {
+                validate_value_required_exprs(start, true, file_path, diagnostics);
+                validate_value_required_exprs(end, true, file_path, diagnostics);
+                validate_value_required_exprs(body, false, file_path, diagnostics);
+            }
+            ForExpr::Iterate { iterable, body, .. } => {
+                validate_value_required_exprs(iterable, true, file_path, diagnostics);
+                validate_value_required_exprs(body, false, file_path, diagnostics);
+            }
+            ForExpr::WhileLike { condition, body } => {
+                validate_value_required_exprs(condition, true, file_path, diagnostics);
+                validate_value_required_exprs(body, false, file_path, diagnostics);
+            }
+            ForExpr::Infinite { body } => {
+                validate_value_required_exprs(body, false, file_path, diagnostics)
+            }
+        },
+        ExprKind::Return { value } => {
+            if let Some(value) = value {
+                validate_value_required_exprs(value, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::Break(break_expr) => {
+            if let Some(value) = &break_expr.value {
+                validate_value_required_exprs(value, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::Defer(defer_expr) => {
+            validate_value_required_exprs(&defer_expr.body, false, file_path, diagnostics)
+        }
+        ExprKind::OrElse(or_else) => {
+            validate_value_required_exprs(&or_else.value, true, file_path, diagnostics);
+            validate_value_required_exprs(
+                &or_else.fallback,
+                value_required,
+                file_path,
+                diagnostics,
+            );
+        }
+        ExprKind::StructLiteral(struct_lit) => {
+            for field in &struct_lit.fields {
+                validate_value_required_exprs(&field.value, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::TypeConstruct { ty_expr, fields } => {
+            validate_value_required_exprs(ty_expr, true, file_path, diagnostics);
+            for field in fields {
+                validate_value_required_exprs(&field.value, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::ArrayLiteral(elements) | ExprKind::TupleLiteral(elements) => {
+            for element in elements {
+                validate_value_required_exprs(element, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::EnumVariantConstruct(enum_variant) => {
+            for payload in &enum_variant.payload {
+                validate_value_required_exprs(payload, true, file_path, diagnostics);
+            }
+        }
+        ExprKind::Literal(_)
+        | ExprKind::Ident(_)
+        | ExprKind::BuiltinIdent(_)
+        | ExprKind::Continue { .. }
+        | ExprKind::Use { .. }
+        | ExprKind::TypeLiteral(_) => {}
+    }
+}
+
 pub(super) fn validate_error_set_returns_expr(
     expr: &Expr,
     declared_errors: &BTreeSet<String>,
@@ -3810,6 +5546,190 @@ pub(super) fn validate_named_struct_offsetof_calls(
     }
 }
 
+fn report_called_value_not_function(
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    span: SourceSpan,
+) {
+    diagnostics.push(
+        Diagnostic::error(
+            DiagnosticPhase::TypeChecker,
+            DiagnosticCode::E4005,
+            "called value is not a function",
+        )
+        .with_primary_file_label(
+            file_path.to_path_buf(),
+            Some(span),
+            "call target must be a function or function value",
+        ),
+    );
+}
+
+fn report_call_arg_must_be_type_designator(
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    span: SourceSpan,
+) {
+    diagnostics.push(
+        Diagnostic::error(
+            DiagnosticPhase::TypeChecker,
+            DiagnosticCode::E4005,
+            "call argument must be a type designator",
+        )
+        .with_primary_file_label(
+            file_path.to_path_buf(),
+            Some(span),
+            "pass a type name or type literal",
+        ),
+    );
+}
+
+fn report_call_arg_type_mismatch(
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    span: SourceSpan,
+) {
+    diagnostics.push(
+        Diagnostic::error(
+            DiagnosticPhase::TypeChecker,
+            DiagnosticCode::E4005,
+            "call argument type mismatch",
+        )
+        .with_primary_file_label(
+            file_path.to_path_buf(),
+            Some(span),
+            "argument type does not match parameter type",
+        ),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_direct_call_arg(
+    arg: &crate::compiler::ast::CallArg,
+    expected_ty: TypeId,
+    param_name: Option<&String>,
+    env: &BTreeMap<String, TypeId>,
+    mutability: &BTreeMap<String, bool>,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    expected_return: Option<TypeId>,
+    type_param_bindings: &mut BTreeMap<String, TypeId>,
+) {
+    let resolved_expected = match types.get(expected_ty) {
+        Type::TypeParam(name) => type_param_bindings
+            .get(name)
+            .copied()
+            .unwrap_or(expected_ty),
+        _ => expected_ty,
+    };
+
+    if matches!(types.get(expected_ty), Type::TypeType) && !is_type_designator_expr(&arg.value) {
+        report_call_arg_must_be_type_designator(diagnostics, file_path, arg.value.span);
+    }
+
+    let mut actual_ty = infer_expr_type(
+        &arg.value,
+        env,
+        mutability,
+        signatures,
+        types,
+        diagnostics,
+        file_path,
+        expected_return,
+    );
+    actual_ty = maybe_coerce_literal_to_expected(&arg.value, actual_ty, resolved_expected, types);
+
+    if let Some(param_name) = param_name {
+        if matches!(types.get(expected_ty), Type::TypeType) {
+            if let Some(designated) = resolve_type_designator_arg(&arg.value, types) {
+                if let Some(bound) = type_param_bindings.get(param_name).copied() {
+                    if bound != designated {
+                        report_call_arg_type_mismatch(diagnostics, file_path, arg.value.span);
+                    }
+                } else {
+                    type_param_bindings.insert(param_name.clone(), designated);
+                }
+            }
+        }
+    }
+
+    if let Type::TypeParam(name) = types.get(expected_ty) {
+        if let Some(bound) = type_param_bindings.get(name).copied() {
+            if !types_compatible(bound, actual_ty, types) {
+                report_call_arg_type_mismatch(diagnostics, file_path, arg.value.span);
+            }
+        } else {
+            type_param_bindings.insert(name.clone(), actual_ty);
+        }
+    }
+
+    if !types_compatible(resolved_expected, actual_ty, types) {
+        report_call_arg_type_mismatch(diagnostics, file_path, arg.value.span);
+    }
+}
+
+fn param_is_generic_type_var(param_ty: Option<&TypeId>, types: &TypeStore) -> bool {
+    param_ty
+        .map(|pt| {
+            matches!(
+                types.get(*pt),
+                Type::TypeParam(_) | Type::Unknown | Type::Any
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn equality_kind_name(kind: EqualityValueKind) -> &'static str {
+    match kind {
+        EqualityValueKind::Scalar => "scalar",
+        EqualityValueKind::Pointer => "pointer",
+        EqualityValueKind::PlainEnum => "plain enum",
+        EqualityValueKind::PayloadEnum => "payload enum",
+        EqualityValueKind::Struct => "struct",
+        EqualityValueKind::Array => "array",
+        EqualityValueKind::Slice => "slice",
+        EqualityValueKind::Tuple => "tuple",
+        EqualityValueKind::Unknown => "value",
+    }
+}
+
+fn unsupported_equality_kind(
+    left: EqualityValueKind,
+    right: EqualityValueKind,
+) -> Option<EqualityValueKind> {
+    [left, right].into_iter().find(|kind| {
+        matches!(
+            kind,
+            EqualityValueKind::Struct
+                | EqualityValueKind::PayloadEnum
+                | EqualityValueKind::Array
+                | EqualityValueKind::Slice
+                | EqualityValueKind::Tuple
+        )
+    })
+}
+
+fn report_named_arg_order_error(
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    span: SourceSpan,
+) {
+    diagnostics.push(
+        Diagnostic::error(
+            DiagnosticPhase::TypeChecker,
+            DiagnosticCode::E4005,
+            "positional arguments cannot follow named arguments",
+        )
+        .with_primary_file_label(
+            file_path.to_path_buf(),
+            Some(span),
+            "move positional arguments before the first named argument",
+        ),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn infer_function_value_call_type(
     call: &crate::compiler::ast::CallExpr,
@@ -3834,8 +5754,11 @@ pub(super) fn infer_function_value_call_type(
 
     let required = has_defaults.iter().filter(|d| !**d).count();
     let mut ordered_args = vec![None; param_types.len()];
+    let mut named_seen = false;
+    let mut positional_cursor = 0usize;
     for arg in &call.args {
         if let Some(name) = &arg.name {
+            named_seen = true;
             let Some(index) = param_names.iter().position(|param| {
                 param
                     .as_ref()
@@ -3872,12 +5795,20 @@ pub(super) fn infer_function_value_call_type(
                 continue;
             }
             ordered_args[index] = Some(arg);
+            continue;
         }
-    }
-    let mut positional_iter = call.args.iter().filter(|arg| arg.name.is_none());
-    for slot in &mut ordered_args {
-        if slot.is_none() {
-            *slot = positional_iter.next();
+
+        if named_seen {
+            report_named_arg_order_error(diagnostics, file_path, arg.value.span);
+            continue;
+        }
+
+        while positional_cursor < ordered_args.len() && ordered_args[positional_cursor].is_some() {
+            positional_cursor += 1;
+        }
+        if positional_cursor < ordered_args.len() {
+            ordered_args[positional_cursor] = Some(arg);
+            positional_cursor += 1;
         }
     }
     let provided = ordered_args.iter().filter(|slot| slot.is_some()).count();
@@ -4021,18 +5952,7 @@ pub(super) fn infer_call_type(
                 | Type::TypeParam(_)
                 | Type::Any
         ) {
-            diagnostics.push(
-                Diagnostic::error(
-                    DiagnosticPhase::TypeChecker,
-                    DiagnosticCode::E4005,
-                    "called value is not a function",
-                )
-                .with_primary_file_label(
-                    file_path.to_path_buf(),
-                    Some(call.callee.span),
-                    "call target must be a function or function value",
-                ),
-            );
+            report_called_value_not_function(diagnostics, file_path, call.callee.span);
         }
         return types.intern(Type::Unknown);
     };
@@ -4075,23 +5995,13 @@ pub(super) fn infer_call_type(
                 | Type::TypeParam(_)
                 | Type::Any
         ) {
-            diagnostics.push(
-                Diagnostic::error(
-                    DiagnosticPhase::TypeChecker,
-                    DiagnosticCode::E4005,
-                    "called value is not a function",
-                )
-                .with_primary_file_label(
-                    file_path.to_path_buf(),
-                    Some(call.callee.span),
-                    "call target must be a function or function value",
-                ),
-            );
+            report_called_value_not_function(diagnostics, file_path, call.callee.span);
         }
         return types.intern(Type::Unknown);
     };
 
     let mut named_seen = BTreeSet::<String>::new();
+    let mut saw_named_arg = false;
     let mut positional_count = 0usize;
     let mut used_params = BTreeSet::<usize>::new();
     let mut specialized_return = None;
@@ -4118,6 +6028,7 @@ pub(super) fn infer_call_type(
 
     for arg in &call.args {
         if let Some(name) = &arg.name {
+            saw_named_arg = true;
             let Some(param_index) = sig
                 .params
                 .iter()
@@ -4140,31 +6051,10 @@ pub(super) fn infer_call_type(
 
             if let Some(param_types) = &direct_param_types {
                 if let Some(expected_ty) = param_types.get(param_index) {
-                    let resolved_expected = match types.get(*expected_ty) {
-                        Type::TypeParam(name) => type_param_bindings
-                            .get(name)
-                            .copied()
-                            .unwrap_or(*expected_ty),
-                        _ => *expected_ty,
-                    };
-                    if matches!(types.get(*expected_ty), Type::TypeType)
-                        && !is_type_designator_expr(&arg.value)
-                    {
-                        diagnostics.push(
-                            Diagnostic::error(
-                                DiagnosticPhase::TypeChecker,
-                                DiagnosticCode::E4005,
-                                "call argument must be a type designator",
-                            )
-                            .with_primary_file_label(
-                                file_path.to_path_buf(),
-                                Some(arg.value.span),
-                                "pass a type name or type literal",
-                            ),
-                        );
-                    }
-                    let mut actual_ty = infer_expr_type(
-                        &arg.value,
+                    validate_direct_call_arg(
+                        arg,
+                        *expected_ty,
+                        sig.params[param_index].name.as_ref(),
                         env,
                         mutability,
                         signatures,
@@ -4172,72 +6062,8 @@ pub(super) fn infer_call_type(
                         diagnostics,
                         file_path,
                         expected_return,
+                        &mut type_param_bindings,
                     );
-                    actual_ty = maybe_coerce_literal_to_expected(
-                        &arg.value,
-                        actual_ty,
-                        resolved_expected,
-                        types,
-                    );
-                    if let Some(param_name) = sig.params[param_index].name.as_ref() {
-                        if matches!(types.get(*expected_ty), Type::TypeType) {
-                            if let Some(designated) = resolve_type_designator_arg(&arg.value, types)
-                            {
-                                if let Some(bound) = type_param_bindings.get(param_name).copied() {
-                                    if bound != designated {
-                                        diagnostics.push(
-                                            Diagnostic::error(
-                                                DiagnosticPhase::TypeChecker,
-                                                DiagnosticCode::E4005,
-                                                "call argument type mismatch",
-                                            )
-                                            .with_primary_file_label(
-                                                file_path.to_path_buf(),
-                                                Some(arg.value.span),
-                                                "argument type does not match parameter type",
-                                            ),
-                                        );
-                                    }
-                                } else {
-                                    type_param_bindings.insert(param_name.clone(), designated);
-                                }
-                            }
-                        }
-                    }
-                    if let Type::TypeParam(name) = types.get(*expected_ty) {
-                        if let Some(bound) = type_param_bindings.get(name).copied() {
-                            if !types_compatible(bound, actual_ty, types) {
-                                diagnostics.push(
-                                    Diagnostic::error(
-                                        DiagnosticPhase::TypeChecker,
-                                        DiagnosticCode::E4005,
-                                        "call argument type mismatch",
-                                    )
-                                    .with_primary_file_label(
-                                        file_path.to_path_buf(),
-                                        Some(arg.value.span),
-                                        "argument type does not match parameter type",
-                                    ),
-                                );
-                            }
-                        } else {
-                            type_param_bindings.insert(name.clone(), actual_ty);
-                        }
-                    }
-                    if !types_compatible(resolved_expected, actual_ty, types) {
-                        diagnostics.push(
-                            Diagnostic::error(
-                                DiagnosticPhase::TypeChecker,
-                                DiagnosticCode::E4005,
-                                "call argument type mismatch",
-                            )
-                            .with_primary_file_label(
-                                file_path.to_path_buf(),
-                                Some(arg.value.span),
-                                "argument type does not match parameter type",
-                            ),
-                        );
-                    }
                 }
             }
 
@@ -4255,16 +6081,12 @@ pub(super) fn infer_call_type(
                     ),
                 );
             }
-            let param_is_generic_type_var = direct_param_types
-                .as_ref()
-                .and_then(|pts| pts.get(param_index))
-                .map(|pt| {
-                    matches!(
-                        types.get(*pt),
-                        Type::TypeParam(_) | Type::Unknown | Type::Any
-                    )
-                })
-                .unwrap_or(false);
+            let param_is_generic_type_var = param_is_generic_type_var(
+                direct_param_types
+                    .as_ref()
+                    .and_then(|pts| pts.get(param_index)),
+                types,
+            );
             if sig.params[param_index].comp
                 && !param_is_generic_type_var
                 && !is_compile_time_expr(&arg.value)
@@ -4291,6 +6113,10 @@ pub(super) fn infer_call_type(
                     resolve_type_designator_arg(&arg.value, types).or(specialized_return);
             }
         } else {
+            if saw_named_arg {
+                report_named_arg_order_error(diagnostics, file_path, arg.value.span);
+                continue;
+            }
             if positional_count >= sig.params.len() {
                 diagnostics.push(
                     Diagnostic::error(
@@ -4309,31 +6135,10 @@ pub(super) fn infer_call_type(
 
             if let Some(param_types) = &direct_param_types {
                 if let Some(expected_ty) = param_types.get(positional_count) {
-                    let resolved_expected = match types.get(*expected_ty) {
-                        Type::TypeParam(name) => type_param_bindings
-                            .get(name)
-                            .copied()
-                            .unwrap_or(*expected_ty),
-                        _ => *expected_ty,
-                    };
-                    if matches!(types.get(*expected_ty), Type::TypeType)
-                        && !is_type_designator_expr(&arg.value)
-                    {
-                        diagnostics.push(
-                            Diagnostic::error(
-                                DiagnosticPhase::TypeChecker,
-                                DiagnosticCode::E4005,
-                                "call argument must be a type designator",
-                            )
-                            .with_primary_file_label(
-                                file_path.to_path_buf(),
-                                Some(arg.value.span),
-                                "pass a type name or type literal",
-                            ),
-                        );
-                    }
-                    let mut actual_ty = infer_expr_type(
-                        &arg.value,
+                    validate_direct_call_arg(
+                        arg,
+                        *expected_ty,
+                        sig.params[positional_count].name.as_ref(),
                         env,
                         mutability,
                         signatures,
@@ -4341,85 +6146,17 @@ pub(super) fn infer_call_type(
                         diagnostics,
                         file_path,
                         expected_return,
+                        &mut type_param_bindings,
                     );
-                    actual_ty = maybe_coerce_literal_to_expected(
-                        &arg.value,
-                        actual_ty,
-                        resolved_expected,
-                        types,
-                    );
-                    if let Some(param_name) = sig.params[positional_count].name.as_ref() {
-                        if matches!(types.get(*expected_ty), Type::TypeType) {
-                            if let Some(designated) = resolve_type_designator_arg(&arg.value, types)
-                            {
-                                if let Some(bound) = type_param_bindings.get(param_name).copied() {
-                                    if bound != designated {
-                                        diagnostics.push(
-                                            Diagnostic::error(
-                                                DiagnosticPhase::TypeChecker,
-                                                DiagnosticCode::E4005,
-                                                "call argument type mismatch",
-                                            )
-                                            .with_primary_file_label(
-                                                file_path.to_path_buf(),
-                                                Some(arg.value.span),
-                                                "argument type does not match parameter type",
-                                            ),
-                                        );
-                                    }
-                                } else {
-                                    type_param_bindings.insert(param_name.clone(), designated);
-                                }
-                            }
-                        }
-                    }
-                    if let Type::TypeParam(name) = types.get(*expected_ty) {
-                        if let Some(bound) = type_param_bindings.get(name).copied() {
-                            if !types_compatible(bound, actual_ty, types) {
-                                diagnostics.push(
-                                    Diagnostic::error(
-                                        DiagnosticPhase::TypeChecker,
-                                        DiagnosticCode::E4005,
-                                        "call argument type mismatch",
-                                    )
-                                    .with_primary_file_label(
-                                        file_path.to_path_buf(),
-                                        Some(arg.value.span),
-                                        "argument type does not match parameter type",
-                                    ),
-                                );
-                            }
-                        } else {
-                            type_param_bindings.insert(name.clone(), actual_ty);
-                        }
-                    }
-                    if !types_compatible(resolved_expected, actual_ty, types) {
-                        diagnostics.push(
-                            Diagnostic::error(
-                                DiagnosticPhase::TypeChecker,
-                                DiagnosticCode::E4005,
-                                "call argument type mismatch",
-                            )
-                            .with_primary_file_label(
-                                file_path.to_path_buf(),
-                                Some(arg.value.span),
-                                "argument type does not match parameter type",
-                            ),
-                        );
-                    }
                 }
             }
 
-            let param_is_generic_type_var = direct_param_types
-                .as_ref()
-                .and_then(|pts| pts.get(positional_count))
-                .map(|pt| {
-                    matches!(
-                        types.get(*pt),
-                        Type::TypeParam(_) | Type::Unknown | Type::Any
-                    )
-                })
-                .unwrap_or(false);
+            let param_is_generic_type_var = param_is_generic_type_var(
+                direct_param_types
+                    .as_ref()
+                    .and_then(|pts| pts.get(positional_count)),
+                types,
+            );
             if sig.params[positional_count].comp
                 && !param_is_generic_type_var
                 && !is_compile_time_expr(&arg.value)
@@ -5210,7 +6947,7 @@ pub(super) fn return_ok_type_is_i32(ty: TypeId, types: &TypeStore) -> bool {
 }
 
 pub(super) fn should_allow_implicit_tail_for_main(
-    unit: &ModuleUnit,
+    _unit: &ModuleUnit,
     decl: &DeclStub,
     types: &mut TypeStore,
 ) -> bool {

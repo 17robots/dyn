@@ -1,0 +1,9 @@
+module main
+
+Point := struct { x: i32 }
+
+main := () {
+  a := Point{ x: 1 }
+  b := Point{ x: 1 }
+  _ = a == b
+}

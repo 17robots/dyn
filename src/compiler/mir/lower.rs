@@ -5,7 +5,10 @@ use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 use crate::compiler::hir::{
     HirCallArg, HirExpr, HirExprKind, HirForExpr, HirLiteral, HirMatchArm, HirPattern, HirProgram,
 };
-use crate::compiler::mir::lower::helpers::{enum_type_repr_bits, enum_type_variants, parse_function_return_hint, parse_i64_literal, parse_type_hint};
+use crate::compiler::mir::lower::helpers::{
+    enum_type_repr_bits, enum_type_variants, parse_function_return_hint, parse_i64_literal,
+    parse_type_hint,
+};
 use crate::compiler::mir::{
     MirBasicBlock, MirBlockId, MirFunction, MirGlobal, MirGlobalInit, MirInstr, MirModule,
     MirProgram, MirTerminator, MirValue, MirValueId, MirValueType,

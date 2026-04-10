@@ -1,0 +1,3 @@
+module main
+
+main := () i32 => 0

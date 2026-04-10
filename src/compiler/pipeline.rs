@@ -17,11 +17,13 @@ use crate::compiler::mir::lower::lower_hir_to_mir_with_diagnostics_and_paths;
 use crate::compiler::mir::verify::verify_mir_program;
 use crate::compiler::mir::{MirInstr, MirProgram, MirValue, MirValueId};
 use crate::compiler::module_resolver::{
-    resolve_graph_file_path, resolve_module_graph, resolve_module_graph_with_bin, ModuleId, ModuleResolverError,
+    resolve_graph_file_path, resolve_module_graph, resolve_module_graph_with_bin, ModuleId,
+    ModuleResolverError,
 };
 use crate::compiler::parser::parse_file;
 use crate::compiler::sema::{
-    analyze_modules, SemanticSession, control_check_modules, build_module_units, ModuleUnit, infer_binding_type_strings, type_check_modules
+    analyze_modules, build_module_units, control_check_modules, infer_binding_type_strings,
+    type_check_modules, ModuleUnit, SemanticSession,
 };
 
 #[derive(Debug, Clone)]
@@ -328,7 +330,15 @@ pub fn build_project_with_opt_level<P: AsRef<Path>>(
     output_path: Option<&Path>,
     opt_level: BuildOptLevel,
 ) -> Result<(BuildArtifact, Vec<Diagnostic>), ModuleResolverError> {
-    build_project_with_config(start_dir, output_path, BuildConfig { opt_level, sanitize: false, bin: None })
+    build_project_with_config(
+        start_dir,
+        output_path,
+        BuildConfig {
+            opt_level,
+            sanitize: false,
+            bin: None,
+        },
+    )
 }
 
 pub fn build_project_with_config<P: AsRef<Path>>(

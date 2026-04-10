@@ -8,7 +8,8 @@ fn find_comptime_match_arm<'a>(
     value: &ComptimeValue,
     arms: &'a [HirMatchArm],
 ) -> Option<&'a HirMatchArm> {
-    arms.iter().find(|arm| comptime_pattern_matches(value, &arm.pattern))
+    arms.iter()
+        .find(|arm| comptime_pattern_matches(value, &arm.pattern))
 }
 
 fn comptime_pattern_matches(value: &ComptimeValue, pattern: &HirPattern) -> bool {
@@ -92,7 +93,9 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
             f.extend(collect_free_vars(index, bound));
             f
         }
-        HirExprKind::Slice { base, start, end, .. } => {
+        HirExprKind::Slice {
+            base, start, end, ..
+        } => {
             let mut f = collect_free_vars(base, bound);
             if let Some(s) = start {
                 f.extend(collect_free_vars(s, bound));
@@ -201,7 +204,10 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
         HirExprKind::Continue => BTreeSet::new(),
         HirExprKind::Defer { body, .. } => collect_free_vars(body, bound),
         HirExprKind::OrElse {
-            value, fallback, error_binding, ..
+            value,
+            fallback,
+            error_binding,
+            ..
         } => {
             let mut f = collect_free_vars(value, bound);
             let mut fb = bound.clone();
@@ -345,17 +351,16 @@ impl FunctionLowerer {
                     // Only qualify names that are actually inline functions — module import
                     // variables (e.g. `bytes_mod`) are left unqualified and handled separately
                     // in the FieldAccess path.
-                    let effective_name =
-                        if let Some(module_id) = &self.current_inline_module {
-                            let qualified = format!("{module_id}::{name}");
-                            if self.inline_function_names.contains(&qualified) {
-                                qualified
-                            } else {
-                                name.clone()
-                            }
+                    let effective_name = if let Some(module_id) = &self.current_inline_module {
+                        let qualified = format!("{module_id}::{name}");
+                        if self.inline_function_names.contains(&qualified) {
+                            qualified
                         } else {
                             name.clone()
-                        };
+                        }
+                    } else {
+                        name.clone()
+                    };
                     let ty = if self.function_return_types.contains_key(&effective_name) {
                         MirValueType::FunctionPointer
                     } else {
@@ -1001,7 +1006,8 @@ impl FunctionLowerer {
                 // regular runtime MIR (only the selected arm is emitted).
                 if let HirExprKind::Match { value, arms } = &expr.kind {
                     // First try pure comptime evaluation of the discriminant.
-                    let ct_val = self.try_eval_comptime_expr(value, 0)
+                    let ct_val = self
+                        .try_eval_comptime_expr(value, 0)
                         // Fallback: if the discriminant is `$typeof(expr)`, lower `expr`
                         // as MIR and use its inferred type. This handles `comp match
                         // $typeof(v)` when `v` is a runtime parameter whose type is still
@@ -1016,7 +1022,13 @@ impl FunctionLowerer {
                 // Special case: `comp if cond { ... } else { ... }` — evaluate the
                 // condition at comptime, then lower only the selected branch as regular
                 // runtime MIR (the other branch is never emitted).
-                if let HirExprKind::If { condition, then_branch, else_branch, .. } = &expr.kind {
+                if let HirExprKind::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                    ..
+                } = &expr.kind
+                {
                     if let Some(ct_cond) = self.try_eval_comptime_expr(condition, 0) {
                         if comptime_truthy(&ct_cond) {
                             return self.lower_expr(block, then_branch);
@@ -1407,15 +1419,20 @@ impl FunctionLowerer {
                 iterable,
                 binding,
                 body,
-            }) if matches!(&iterable.kind, HirExprKind::Call { callee, .. } if matches!(&callee.kind, HirExprKind::Ident(n) if n == "$fields")) => {
-                let HirExprKind::Call { args, .. } = &iterable.kind else { unreachable!() };
+            }) if matches!(&iterable.kind, HirExprKind::Call { callee, .. } if matches!(&callee.kind, HirExprKind::Ident(n) if n == "$fields")) =>
+            {
+                let HirExprKind::Call { args, .. } = &iterable.kind else {
+                    unreachable!()
+                };
                 let arg_expr = args.first().map(|a| a.value.clone());
                 let (v_end, v_value) = if let Some(ref e) = arg_expr {
                     self.lower_expr(block, e)
                 } else {
                     return (block, None);
                 };
-                let Some(v_value) = v_value else { return (v_end, None) };
+                let Some(v_value) = v_value else {
+                    return (v_end, None);
+                };
 
                 // Resolve the struct type descriptor.
                 // First try struct_fields map (when v came from a literal).
@@ -1431,7 +1448,9 @@ impl FunctionLowerer {
                         // Try to get type name from the HIR ident and local_type_hints.
                         let type_name = arg_expr.as_ref().and_then(|e| {
                             if let HirExprKind::Ident(n) = &e.kind {
-                                self.local_type_hints.get(n).cloned()
+                                self.local_type_hints
+                                    .get(n)
+                                    .cloned()
                                     .or_else(|| Some(n.clone()))
                             } else {
                                 None
@@ -1439,7 +1458,8 @@ impl FunctionLowerer {
                         });
                         if let Some(raw_name) = type_name {
                             // Resolve through named_type_literals to get the struct descriptor.
-                            let descriptor = self.named_type_literals
+                            let descriptor = self
+                                .named_type_literals
                                 .get(&raw_name)
                                 .cloned()
                                 .unwrap_or_else(|| raw_name.clone());
@@ -1464,7 +1484,10 @@ impl FunctionLowerer {
                     // Emit f.value = v.field_name (runtime field access).
                     let val_value = self.push_eval(
                         at,
-                        MirValue::FieldAccess { base: v_value, field: field_name.clone() },
+                        MirValue::FieldAccess {
+                            base: v_value,
+                            field: field_name.clone(),
+                        },
                         self.infer_field_access_result_type(v_value, field_name, 0),
                     );
                     // Build a synthetic struct value for `f` with fields `name` and `value`.
@@ -1483,28 +1506,25 @@ impl FunctionLowerer {
                     field_map.insert("value".to_string(), val_value);
                     self.struct_fields.insert(f_value, field_map);
 
-                    let previous = binding.as_ref().map(|bind_name| {
-                        let old = self.locals.get(bind_name).copied();
-                        self.locals.insert(bind_name.clone(), f_value);
-                        old
-                    });
+                    let previous = binding
+                        .as_deref()
+                        .map(|bind_name| self.save_local_binding(bind_name, f_value));
 
                     let (body_end, _) = self.lower_expr(at, body);
                     at = body_end;
 
-                    if let Some((bind_name, old)) = binding.as_ref().zip(previous) {
-                        if let Some(old) = old {
-                            self.locals.insert(bind_name.clone(), old);
-                        } else {
-                            self.locals.remove(bind_name);
-                        }
+                    if let Some(saved) = previous {
+                        self.restore_saved_local_binding(saved);
                     }
                 }
                 if !self.is_terminated(at) {
                     let unit = self.push_eval(
                         at,
                         MirValue::Literal(HirLiteral::Integer("0".to_string())),
-                        MirValueType::Int { signed: false, bits: 64 },
+                        MirValueType::Int {
+                            signed: false,
+                            bits: 64,
+                        },
                     );
                     return (at, Some(unit));
                 }
@@ -1515,7 +1535,14 @@ impl FunctionLowerer {
                 iterable,
                 binding,
                 body,
-            }) if matches!(&iterable.kind, HirExprKind::StructLiteral { root_type: None, .. }) => {
+            }) if matches!(
+                &iterable.kind,
+                HirExprKind::StructLiteral {
+                    root_type: None,
+                    ..
+                }
+            ) =>
+            {
                 let HirExprKind::StructLiteral { fields, .. } = &iterable.kind else {
                     unreachable!()
                 };
@@ -1529,10 +1556,10 @@ impl FunctionLowerer {
                     at = elem_end;
 
                     let previous = if let Some(name) = binding {
-                        let Some(elem_value) = elem_value else { continue };
-                        let old = self.locals.get(name).copied();
-                        self.locals.insert(name.clone(), elem_value);
-                        old
+                        let Some(elem_value) = elem_value else {
+                            continue;
+                        };
+                        Some(self.save_local_binding(name, elem_value))
                     } else {
                         None
                     };
@@ -1540,19 +1567,18 @@ impl FunctionLowerer {
                     let (body_end, _) = self.lower_expr(at, body);
                     at = body_end;
 
-                    if let Some(name) = binding {
-                        if let Some(old) = previous {
-                            self.locals.insert(name.clone(), old);
-                        } else {
-                            self.locals.remove(name);
-                        }
+                    if let Some(saved) = previous {
+                        self.restore_saved_local_binding(saved);
                     }
                 }
                 if !self.is_terminated(at) {
                     let unit = self.push_eval(
                         at,
                         MirValue::Literal(HirLiteral::Integer("0".to_string())),
-                        MirValueType::Int { signed: false, bits: 64 },
+                        MirValueType::Int {
+                            signed: false,
+                            bits: 64,
+                        },
                     );
                     return (at, Some(unit));
                 }
@@ -1565,7 +1591,9 @@ impl FunctionLowerer {
                 binding,
                 body,
             }) if matches!(&iterable.kind, HirExprKind::Ident(_)) => {
-                let HirExprKind::Ident(ident_name) = &iterable.kind else { unreachable!() };
+                let HirExprKind::Ident(ident_name) = &iterable.kind else {
+                    unreachable!()
+                };
                 let maybe_fields: Option<Vec<MirValueId>> =
                     self.locals.get(ident_name.as_str()).copied().and_then(|v| {
                         self.struct_fields.get(&v).map(|fields| {
@@ -1588,26 +1616,23 @@ impl FunctionLowerer {
                         if self.is_terminated(at) {
                             break;
                         }
-                        let previous = binding.as_ref().map(|name| {
-                            let old = self.locals.get(name).copied();
-                            self.locals.insert(name.clone(), elem_value);
-                            old
-                        });
+                        let previous = binding
+                            .as_deref()
+                            .map(|name| self.save_local_binding(name, elem_value));
                         let (body_end, _) = self.lower_expr(at, body);
                         at = body_end;
-                        if let Some((name, old)) = binding.as_ref().zip(previous) {
-                            if let Some(old) = old {
-                                self.locals.insert(name.clone(), old);
-                            } else {
-                                self.locals.remove(name);
-                            }
+                        if let Some(saved) = previous {
+                            self.restore_saved_local_binding(saved);
                         }
                     }
                     if !self.is_terminated(at) {
                         let unit = self.push_eval(
                             at,
                             MirValue::Literal(HirLiteral::Integer("0".to_string())),
-                            MirValueType::Int { signed: false, bits: 64 },
+                            MirValueType::Int {
+                                signed: false,
+                                bits: 64,
+                            },
                         );
                         return (at, Some(unit));
                     }
@@ -1661,9 +1686,7 @@ impl FunctionLowerer {
                             bits: 64,
                         },
                     );
-                    let old = self.locals.get(name).copied();
-                    self.locals.insert(name.to_string(), iter_value);
-                    old
+                    Some(self.save_local_binding(name, iter_value))
                 } else {
                     None
                 };
@@ -1671,12 +1694,8 @@ impl FunctionLowerer {
                 let (next, _) = self.lower_expr(at, body);
                 at = next;
 
-                if let Some(name) = binding {
-                    if let Some(old) = previous {
-                        self.locals.insert(name.to_string(), old);
-                    } else {
-                        self.locals.remove(name);
-                    }
+                if let Some(saved) = previous {
+                    self.restore_saved_local_binding(saved);
                 }
             }
         }
@@ -1742,27 +1761,7 @@ impl FunctionLowerer {
 
         if let Some(name) = &callee_name {
             if let Some(param_names) = self.function_param_names.get(name) {
-                let mut ordered = vec![None; param_names.len()];
-                for (arg_name, value) in &lowered_named {
-                    if let Some(arg_name) = arg_name {
-                        if let Some(index) = param_names.iter().position(|param| param == arg_name)
-                        {
-                            ordered[index] = Some(*value);
-                        }
-                    }
-                }
-                let mut positional_iter = lowered_named.iter().filter_map(|(arg_name, value)| {
-                    if arg_name.is_none() {
-                        Some(*value)
-                    } else {
-                        None
-                    }
-                });
-                for slot in &mut ordered {
-                    if slot.is_none() {
-                        *slot = positional_iter.next();
-                    }
-                }
+                let mut ordered = self.order_named_call_items(param_names, &lowered_named);
 
                 if let Some(defaults) = self.function_param_defaults.get(name).cloned() {
                     for (idx, slot) in ordered.iter_mut().enumerate() {
@@ -1852,9 +1851,7 @@ impl FunctionLowerer {
 
         let mut previous = Vec::with_capacity(params.len());
         for (param, value) in params.iter().zip(args.iter()) {
-            let old = self.locals.get(param).copied();
-            self.locals.insert(param.clone(), *value);
-            previous.push((param.clone(), old));
+            previous.push(self.save_local_binding(param, *value));
         }
 
         // Track the module of the function being inlined so that unqualified ident
@@ -1872,12 +1869,8 @@ impl FunctionLowerer {
         self.inline_call_depth -= 1;
         self.current_inline_module = prev_inline_module;
 
-        for (name, old) in previous.into_iter().rev() {
-            if let Some(old) = old {
-                self.locals.insert(name, old);
-            } else {
-                self.locals.remove(&name);
-            }
+        for saved in previous.into_iter().rev() {
+            self.restore_saved_local_binding(saved);
         }
 
         Some((end, value))
@@ -2235,14 +2228,10 @@ impl FunctionLowerer {
             }
             match (&deferred_expr.error_binding, error_value) {
                 (Some(binding), Some(value)) => {
-                    let prev = self.locals.insert(binding.clone(), value);
+                    let prev = self.save_local_binding(binding, value);
                     let (end, _) = self.lower_expr(at, &deferred_expr.body);
                     at = end;
-                    if let Some(prev) = prev {
-                        self.locals.insert(binding.clone(), prev);
-                    } else {
-                        self.locals.remove(binding);
-                    }
+                    self.restore_saved_local_binding(prev);
                 }
                 (Some(_), None) => {}
                 (None, _) => {
@@ -2278,6 +2267,42 @@ impl FunctionLowerer {
                 binding,
                 body,
             } => self.lower_iterate_loop(block, iterable, binding.as_deref(), body),
+        }
+    }
+
+    pub(super) fn set_goto_if_not_terminated(&mut self, from: MirBlockId, to: MirBlockId) {
+        if !self.is_terminated(from) {
+            self.set_terminator(from, MirTerminator::Goto(to));
+        }
+    }
+
+    pub(super) fn push_loop_context(
+        &mut self,
+        continue_target: MirBlockId,
+        break_target: MirBlockId,
+    ) {
+        self.loop_stack.push(LoopContext {
+            continue_target,
+            break_target,
+            break_values: Vec::new(),
+        });
+    }
+
+    pub(super) fn finish_loop(&mut self, exit: MirBlockId) -> (MirBlockId, Option<MirValueId>) {
+        let ctx = self.loop_stack.pop().expect("loop context should exist");
+        (exit, self.build_loop_break_value(exit, ctx.break_values))
+    }
+
+    pub(super) fn append_loop_phi_source(
+        &mut self,
+        header: MirBlockId,
+        backedge_block: MirBlockId,
+        next_value: MirValueId,
+    ) {
+        if let Some(MirInstr::Phi { sources, .. }) =
+            self.function.blocks[header.0].instructions.first_mut()
+        {
+            sources.push((backedge_block, next_value));
         }
     }
 
@@ -2411,9 +2436,7 @@ impl FunctionLowerer {
         let step_block = self.new_block();
         let exit = self.new_block();
 
-        if !self.is_terminated(after_end) {
-            self.set_terminator(after_end, MirTerminator::Goto(header));
-        }
+        self.set_goto_if_not_terminated(after_end, header);
 
         let iter_value = self.fresh_value();
         self.function.blocks[header.0]
@@ -2452,28 +2475,14 @@ impl FunctionLowerer {
             );
         }
 
-        self.loop_stack.push(LoopContext {
-            continue_target: step_block,
-            break_target: exit,
-            break_values: Vec::new(),
-        });
+        self.push_loop_context(step_block, exit);
 
-        let prev_binding = binding.and_then(|name| {
-            self.locals
-                .insert(name.to_string(), iter_value)
-                .map(|prev| (name.to_string(), prev))
-        });
+        let prev_binding = binding.map(|name| self.save_local_binding(name, iter_value));
         let (body_end, _) = self.lower_expr(body_block, body);
-        if let Some(name) = binding {
-            if let Some((saved_name, prev)) = prev_binding {
-                self.locals.insert(saved_name, prev);
-            } else {
-                self.locals.remove(name);
-            }
+        if let Some(saved) = prev_binding {
+            self.restore_saved_local_binding(saved);
         }
-        if !self.is_terminated(body_end) {
-            self.set_terminator(body_end, MirTerminator::Goto(step_block));
-        }
+        self.set_goto_if_not_terminated(body_end, step_block);
 
         let one_literal = match iter_ty {
             MirValueType::Float { .. } => HirLiteral::Float("1.0".to_string()),
@@ -2489,18 +2498,11 @@ impl FunctionLowerer {
             },
             iter_ty,
         );
-        if let Some(MirInstr::Phi { sources, .. }) =
-            self.function.blocks[header.0].instructions.first_mut()
-        {
-            sources.push((step_block, next_iter));
-        }
+        self.append_loop_phi_source(header, step_block, next_iter);
         self.finalize_loop_carried_locals(header, step_block, &carried);
-        if !self.is_terminated(step_block) {
-            self.set_terminator(step_block, MirTerminator::Goto(header));
-        }
+        self.set_goto_if_not_terminated(step_block, header);
 
-        let ctx = self.loop_stack.pop().expect("loop context should exist");
-        (exit, self.build_loop_break_value(exit, ctx.break_values))
+        self.finish_loop(exit)
     }
 
     pub(super) fn lower_iterate_loop(
@@ -2541,9 +2543,7 @@ impl FunctionLowerer {
         let step_block = self.new_block();
         let exit = self.new_block();
 
-        if !self.is_terminated(after_iterable) {
-            self.set_terminator(after_iterable, MirTerminator::Goto(header));
-        }
+        self.set_goto_if_not_terminated(after_iterable, header);
 
         let index_value = self.fresh_value();
         self.function.blocks[header.0]
@@ -2577,11 +2577,7 @@ impl FunctionLowerer {
             );
         }
 
-        self.loop_stack.push(LoopContext {
-            continue_target: step_block,
-            break_target: exit,
-            break_values: Vec::new(),
-        });
+        self.push_loop_context(step_block, exit);
 
         let (body_start, prev_binding) = if let Some(name) = binding {
             let element_value = if self
@@ -2600,26 +2596,17 @@ impl FunctionLowerer {
                     self.inferred_sequence_element_type(iterable_value),
                 )
             };
-            let prev = self
-                .locals
-                .insert(name.to_string(), element_value)
-                .map(|existing| (name.to_string(), existing));
-            (body_block, prev)
+            let prev = self.save_local_binding(name, element_value);
+            (body_block, Some(prev))
         } else {
             (body_block, None)
         };
 
         let (body_end, _) = self.lower_expr(body_start, body);
-        if let Some(name) = binding {
-            if let Some((saved_name, prev)) = prev_binding {
-                self.locals.insert(saved_name, prev);
-            } else {
-                self.locals.remove(name);
-            }
+        if let Some(saved) = prev_binding {
+            self.restore_saved_local_binding(saved);
         }
-        if !self.is_terminated(body_end) {
-            self.set_terminator(body_end, MirTerminator::Goto(step_block));
-        }
+        self.set_goto_if_not_terminated(body_end, step_block);
 
         let one = self.push_eval(
             step_block,
@@ -2635,18 +2622,11 @@ impl FunctionLowerer {
             },
             index_ty,
         );
-        if let Some(MirInstr::Phi { sources, .. }) =
-            self.function.blocks[header.0].instructions.first_mut()
-        {
-            sources.push((step_block, next_index));
-        }
+        self.append_loop_phi_source(header, step_block, next_index);
         self.finalize_loop_carried_locals(header, step_block, &carried);
-        if !self.is_terminated(step_block) {
-            self.set_terminator(step_block, MirTerminator::Goto(header));
-        }
+        self.set_goto_if_not_terminated(step_block, header);
 
-        let ctx = self.loop_stack.pop().expect("loop context should exist");
-        (exit, self.build_loop_break_value(exit, ctx.break_values))
+        self.finish_loop(exit)
     }
 
     pub(super) fn lower_infinite_loop(
@@ -2658,26 +2638,15 @@ impl FunctionLowerer {
         let body_block = self.new_block();
         let exit = self.new_block();
 
-        if !self.is_terminated(block) {
-            self.set_terminator(block, MirTerminator::Goto(header));
-        }
-        if !self.is_terminated(header) {
-            self.set_terminator(header, MirTerminator::Goto(body_block));
-        }
+        self.set_goto_if_not_terminated(block, header);
+        self.set_goto_if_not_terminated(header, body_block);
 
-        self.loop_stack.push(LoopContext {
-            continue_target: header,
-            break_target: exit,
-            break_values: Vec::new(),
-        });
+        self.push_loop_context(header, exit);
 
         let (body_end, _) = self.lower_expr(body_block, body);
-        if !self.is_terminated(body_end) {
-            self.set_terminator(body_end, MirTerminator::Goto(header));
-        }
-        let ctx = self.loop_stack.pop().expect("loop context should exist");
+        self.set_goto_if_not_terminated(body_end, header);
 
-        (exit, self.build_loop_break_value(exit, ctx.break_values))
+        self.finish_loop(exit)
     }
 
     pub(super) fn lower_while_like_loop(
@@ -2691,9 +2660,7 @@ impl FunctionLowerer {
         let step_block = self.new_block();
         let exit = self.new_block();
 
-        if !self.is_terminated(block) {
-            self.set_terminator(block, MirTerminator::Goto(header));
-        }
+        self.set_goto_if_not_terminated(block, header);
 
         let carried = self.prepare_loop_carried_locals(header, block, body);
 
@@ -2716,22 +2683,13 @@ impl FunctionLowerer {
             );
         }
 
-        self.loop_stack.push(LoopContext {
-            continue_target: step_block,
-            break_target: exit,
-            break_values: Vec::new(),
-        });
+        self.push_loop_context(step_block, exit);
         let (body_end, _) = self.lower_expr(body_block, body);
-        if !self.is_terminated(body_end) {
-            self.set_terminator(body_end, MirTerminator::Goto(step_block));
-        }
+        self.set_goto_if_not_terminated(body_end, step_block);
         self.finalize_loop_carried_locals(header, step_block, &carried);
-        if !self.is_terminated(step_block) {
-            self.set_terminator(step_block, MirTerminator::Goto(header));
-        }
-        let ctx = self.loop_stack.pop().expect("loop context should exist");
+        self.set_goto_if_not_terminated(step_block, header);
 
-        (exit, self.build_loop_break_value(exit, ctx.break_values))
+        self.finish_loop(exit)
     }
 
     pub(super) fn build_loop_break_value(
@@ -2762,6 +2720,34 @@ impl FunctionLowerer {
             });
         self.value_types.insert(dest, phi_ty);
         Some(dest)
+    }
+
+    fn order_named_call_items<T: Copy>(
+        &self,
+        param_names: &[String],
+        args: &[(Option<String>, T)],
+    ) -> Vec<Option<T>> {
+        let mut ordered = vec![None; param_names.len()];
+        let mut positional_cursor = 0usize;
+
+        for (arg_name, value) in args {
+            if let Some(arg_name) = arg_name {
+                if let Some(index) = param_names.iter().position(|param| param == arg_name) {
+                    ordered[index] = Some(*value);
+                }
+                continue;
+            }
+
+            while positional_cursor < ordered.len() && ordered[positional_cursor].is_some() {
+                positional_cursor += 1;
+            }
+            if positional_cursor < ordered.len() {
+                ordered[positional_cursor] = Some(*value);
+                positional_cursor += 1;
+            }
+        }
+
+        ordered
     }
 
     pub(super) fn lower_match(
@@ -3050,19 +3036,33 @@ impl FunctionLowerer {
         let (end, bindings) = self.pattern_binding_values(block, scrutinee_value, pattern);
         let mut saved = Vec::with_capacity(bindings.len());
         for (name, value) in bindings {
-            let prev = self.locals.insert(name.clone(), value);
-            saved.push((name, prev));
+            saved.push(self.save_local_binding(&name, value));
         }
         (end, saved)
     }
 
+    pub(super) fn save_local_binding(
+        &mut self,
+        name: &str,
+        value: MirValueId,
+    ) -> (String, Option<MirValueId>) {
+        let name = name.to_string();
+        let previous = self.locals.insert(name.clone(), value);
+        (name, previous)
+    }
+
+    pub(super) fn restore_saved_local_binding(&mut self, saved: (String, Option<MirValueId>)) {
+        let (name, previous) = saved;
+        if let Some(previous) = previous {
+            self.locals.insert(name, previous);
+        } else {
+            self.locals.remove(&name);
+        }
+    }
+
     pub(super) fn restore_local_bindings(&mut self, saved: Vec<(String, Option<MirValueId>)>) {
-        for (name, previous) in saved {
-            if let Some(previous) = previous {
-                self.locals.insert(name, previous);
-            } else {
-                self.locals.remove(&name);
-            }
+        for saved_binding in saved {
+            self.restore_saved_local_binding(saved_binding);
         }
     }
 
@@ -3144,18 +3144,11 @@ impl FunctionLowerer {
         let pre_locals = self.locals.clone();
 
         let capture_binding = capture.and_then(|capture| capture.binding.as_deref());
-        let prev_capture_binding = capture_binding.and_then(|name| {
-            self.locals
-                .insert(name.to_string(), cond_value)
-                .map(|prev| (name.to_string(), prev))
-        });
+        let prev_capture_binding =
+            capture_binding.map(|name| self.save_local_binding(name, cond_value));
         let (then_end, then_value) = self.lower_expr(then_block, then_branch);
-        if let Some(name) = capture_binding {
-            if let Some((saved_name, prev)) = prev_capture_binding {
-                self.locals.insert(saved_name, prev);
-            } else {
-                self.locals.remove(name);
-            }
+        if let Some(saved) = prev_capture_binding {
+            self.restore_saved_local_binding(saved);
         }
         let then_locals = self.locals.clone();
         let then_pred = if self.is_terminated(then_end) {
@@ -3649,7 +3642,10 @@ impl FunctionLowerer {
                 if args.len() != 3 {
                     return Some((block, None));
                 }
-                let ptr_ty = MirValueType::Int { signed: false, bits: 64 };
+                let ptr_ty = MirValueType::Int {
+                    signed: false,
+                    bits: 64,
+                };
                 let mut end = block;
                 let mut lowered_args = Vec::with_capacity(3);
                 for arg in args {
@@ -3657,12 +3653,18 @@ impl FunctionLowerer {
                     end = arg_end;
                     let zero = self.push_eval(
                         end,
-                        MirValue::Literal(crate::compiler::hir::HirLiteral::Integer("0".to_string())),
+                        MirValue::Literal(crate::compiler::hir::HirLiteral::Integer(
+                            "0".to_string(),
+                        )),
                         ptr_ty.clone(),
                     );
                     lowered_args.push(value.unwrap_or(zero));
                 }
-                let sym = if name == "$memcpy" { "memcpy" } else { "memset" };
+                let sym = if name == "$memcpy" {
+                    "memcpy"
+                } else {
+                    "memset"
+                };
                 let callee = self.push_eval(
                     end,
                     MirValue::Ident(sym.to_string()),
@@ -3670,7 +3672,10 @@ impl FunctionLowerer {
                 );
                 let result = self.push_eval(
                     end,
-                    MirValue::Call { callee, args: lowered_args },
+                    MirValue::Call {
+                        callee,
+                        args: lowered_args,
+                    },
                     ptr_ty,
                 );
                 Some((end, Some(result)))
@@ -3748,9 +3753,12 @@ impl FunctionLowerer {
                 let Some(arg_value) = arg_value else {
                     return Some((arg_end, None));
                 };
-                let resolved_ty = self.value_types.get(&arg_value).cloned().unwrap_or(MirValueType::Unknown);
-                let ty_name = match resolved_ty
-                {
+                let resolved_ty = self
+                    .value_types
+                    .get(&arg_value)
+                    .cloned()
+                    .unwrap_or(MirValueType::Unknown);
+                let ty_name = match resolved_ty {
                     MirValueType::Bool => "u1".to_string(),
                     MirValueType::BytesSlice => "[]u8".to_string(),
                     MirValueType::Int { signed: true, bits } => format!("i{bits}"),
@@ -3778,10 +3786,9 @@ impl FunctionLowerer {
                     .eval_type_designator_name(&args[0].value, &ct_locals)
                     .unwrap_or_default();
                 let result = match name {
-                    "$is_uint" => matches!(
-                        type_name.as_str(),
-                        "u8" | "u16" | "u32" | "u64" | "usize"
-                    ),
+                    "$is_uint" => {
+                        matches!(type_name.as_str(), "u8" | "u16" | "u32" | "u64" | "usize")
+                    }
                     "$is_sint" => matches!(type_name.as_str(), "i8" | "i16" | "i32" | "i64"),
                     "$is_float" => matches!(type_name.as_str(), "f32" | "f64"),
                     _ => false,
@@ -3883,7 +3890,10 @@ impl FunctionLowerer {
                 if !args.is_empty() {
                     return Some((block, None));
                 }
-                let enum_u8 = MirValueType::Int { signed: false, bits: 8 };
+                let enum_u8 = MirValueType::Int {
+                    signed: false,
+                    bits: 8,
+                };
                 let (mode_variant, mode_tag) = match self.build_config.opt_level {
                     crate::compiler::backend::BuildOptLevel::Default
                     | crate::compiler::backend::BuildOptLevel::O0 => ("debug", 0i64),
@@ -4136,18 +4146,28 @@ impl FunctionLowerer {
                         // ComptimeValue literal.
                         if let HirExprKind::Ident(ident_name) = &args[0].value.kind {
                             if let Some(&mir_id) = self.locals.get(ident_name.as_str()) {
-                                let mir_ty_name = self.value_types.get(&mir_id).and_then(|mir_ty| {
-                                    match mir_ty {
-                                        MirValueType::Bool => Some("u1".to_string()),
-                                        MirValueType::BytesSlice => Some("[]u8".to_string()),
-                                        MirValueType::Int { signed: true, bits } => Some(format!("i{bits}")),
-                                        MirValueType::Int { signed: false, bits } => Some(format!("u{bits}")),
-                                        MirValueType::Float { bits } => Some(format!("f{bits}")),
-                                        MirValueType::Type => Some("type".to_string()),
-                                        MirValueType::Function | MirValueType::FunctionPointer | MirValueType::Closure => Some("fn".to_string()),
-                                        MirValueType::Unknown => None,
-                                    }
-                                });
+                                let mir_ty_name =
+                                    self.value_types
+                                        .get(&mir_id)
+                                        .and_then(|mir_ty| match mir_ty {
+                                            MirValueType::Bool => Some("u1".to_string()),
+                                            MirValueType::BytesSlice => Some("[]u8".to_string()),
+                                            MirValueType::Int { signed: true, bits } => {
+                                                Some(format!("i{bits}"))
+                                            }
+                                            MirValueType::Int {
+                                                signed: false,
+                                                bits,
+                                            } => Some(format!("u{bits}")),
+                                            MirValueType::Float { bits } => {
+                                                Some(format!("f{bits}"))
+                                            }
+                                            MirValueType::Type => Some("type".to_string()),
+                                            MirValueType::Function
+                                            | MirValueType::FunctionPointer
+                                            | MirValueType::Closure => Some("fn".to_string()),
+                                            MirValueType::Unknown => None,
+                                        });
                                 if let Some(ty_name) = mir_ty_name {
                                     return Some(ComptimeValue::Type(ty_name));
                                 }
@@ -4207,10 +4227,9 @@ impl FunctionLowerer {
                             .eval_type_designator_name(&args[0].value, locals)
                             .unwrap_or_default();
                         let result = match name.as_str() {
-                            "$is_uint" => matches!(
-                                type_name.as_str(),
-                                "u8" | "u16" | "u32" | "u64" | "usize"
-                            ),
+                            "$is_uint" => {
+                                matches!(type_name.as_str(), "u8" | "u16" | "u32" | "u64" | "usize")
+                            }
                             "$is_sint" => {
                                 matches!(type_name.as_str(), "i8" | "i16" | "i32" | "i64")
                             }
@@ -4243,7 +4262,11 @@ impl FunctionLowerer {
                             }
                             _ => {
                                 // Try evaluating the first arg as a comptime expression (e.g. `$typeof(v)`).
-                                match self.try_eval_comptime_expr_with_locals(&args[0].value, depth + 1, locals) {
+                                match self.try_eval_comptime_expr_with_locals(
+                                    &args[0].value,
+                                    depth + 1,
+                                    locals,
+                                ) {
                                     Some(ComptimeValue::Type(t)) => t,
                                     _ => return None,
                                 }
@@ -4282,7 +4305,11 @@ impl FunctionLowerer {
             }
             HirExprKind::FieldAccess { base, field } => {
                 // Comptime field access: only $target().field is supported.
-                if let HirExprKind::Call { callee, args: call_args } = &base.kind {
+                if let HirExprKind::Call {
+                    callee,
+                    args: call_args,
+                } = &base.kind
+                {
                     let callee_name = match &callee.kind {
                         HirExprKind::Ident(n) => n.as_str(),
                         _ => return None,
@@ -4371,22 +4398,11 @@ impl FunctionLowerer {
                     return None;
                 }
 
-                let mut ordered = vec![None; params.len()];
-                for arg in args {
-                    if let Some(name) = &arg.name {
-                        let index = params.iter().position(|param| param == name)?;
-                        if ordered[index].is_some() {
-                            return None;
-                        }
-                        ordered[index] = Some(&arg.value);
-                    }
-                }
-                let mut positional = args.iter().filter(|arg| arg.name.is_none());
-                for slot in &mut ordered {
-                    if slot.is_none() {
-                        *slot = positional.next().map(|arg| &arg.value);
-                    }
-                }
+                let lowered_args = args
+                    .iter()
+                    .map(|arg| (arg.name.clone(), &arg.value))
+                    .collect::<Vec<_>>();
+                let ordered = self.order_named_call_items(params, &lowered_args);
 
                 let mut locals = if captures_caller_locals {
                     caller_locals.clone()
@@ -4482,7 +4498,10 @@ impl FunctionLowerer {
             MirValueType::Bool => "u1".to_string(),
             MirValueType::BytesSlice => "[]u8".to_string(),
             MirValueType::Int { signed: true, bits } => format!("i{bits}"),
-            MirValueType::Int { signed: false, bits } => format!("u{bits}"),
+            MirValueType::Int {
+                signed: false,
+                bits,
+            } => format!("u{bits}"),
             MirValueType::Float { bits } => format!("f{bits}"),
             MirValueType::Type => "type".to_string(),
             MirValueType::Function | MirValueType::FunctionPointer | MirValueType::Closure => {

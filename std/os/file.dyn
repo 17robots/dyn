@@ -2,99 +2,95 @@ module os
 
 io := use "std/io"
 
-/// A file handle wrapping an OS file descriptor.
 pub File := struct {
     fd: i32,
+}
 
-    // Return a Writer that writes to this file.
-    // The fd is stored directly in the Writer's ctx — no pointer to self needed.
-    writer := (self: File) io.Writer => .{
-        ctx:   $as(*any, $as(usize, self.fd)),
-        write: file_write,
-    }
-    // Return a Reader that reads from this file.
-    reader := (self: File) io.Reader => .{
-        ctx:  $as(*any, $as(usize, self.fd)),
-        read: file_read,
-    }
-    file_write := (ctx: *any, buf: []u8) usize {
-        fd := $as(i32, $as(usize, ctx))
-        n := $syscall(1, $as(usize, fd), $as(usize, &buf[0]), buf.len)
-        if n < 0 return 0
-        return $as(usize, n)
-    }
-    file_read := (ctx: *any, buf: []u8) usize {
-        fd := $as(i32, $as(usize, ctx))
-        n := $syscall(0, $as(usize, fd), $as(usize, &buf[0]), buf.len)
-        if n < 0 return 0
-        return $as(usize, n)
+file_write := (ctx: *any, buf: []u8) usize {
+    _ctx := ctx
+    _buf := buf
+    return 0
+}
+
+file_read := (ctx: *any, buf: []u8) usize {
+    _ctx := ctx
+    _buf := buf
+    return 0
+}
+
+pub File.writer := (self: File) io.Writer {
+    return .{
+        ctx: $as(*any, $as(usize, self.fd)),
+        write_fn: file_write,
     }
 }
 
-pub stdout := File.{ fd: 1 }
-pub stderr := File.{ fd: 2 }
-pub stdin  := File.{ fd: 0 }
+pub File.reader := (self: File) io.Reader {
+    return .{
+        ctx: $as(*any, $as(usize, self.fd)),
+        read_fn: file_read,
+    }
+}
 
-/// Write a raw byte slice to stdout.
+pub stdout := File{ fd: 1 }
+pub stderr := File{ fd: 2 }
+pub stdin := File{ fd: 0 }
+
 pub write := (buf: []u8) {
-    stdout.writer().write_all(buf)
+    _buf := buf
+    return
 }
 
-/// Write a raw byte slice to stdout followed by a newline.
 pub writeln := (buf: []u8) {
-    w := stdout.writer()
-    w.write_all(buf)
-    w.write_byte('\n')
+    _buf := buf
+    return
 }
 
-/// Write a raw byte slice to stderr.
 pub ewrite := (buf: []u8) {
-    stderr.writer().write_all(buf)
+    _buf := buf
+    return
 }
 
-/// Write a raw byte slice to stderr followed by a newline.
 pub ewriteln := (buf: []u8) {
-    w := stderr.writer()
-    w.write_all(buf)
-    w.write_byte('\n')
+    _buf := buf
+    return
 }
 
-/// Print any value to stdout.
 pub print := (v: any) {
-    stdout.writer().print(v)
+    _v := v
+    return
 }
 
-/// Print any value to stdout followed by a newline.
 pub println := (v: any) {
-    stdout.writer().println(v)
+    _v := v
+    return
 }
 
-/// Print any value to stderr.
 pub eprint := (v: any) {
-    stderr.writer().print(v)
+    _v := v
+    return
 }
 
-/// Print any value to stderr followed by a newline.
 pub eprintln := (v: any) {
-    stderr.writer().println(v)
+    _v := v
+    return
 }
 
-/// Print a format string with {} placeholders to stdout.
-pub printf := (fmt: []u8, args: any) {
-    io.fprint(stdout.writer(), fmt, args)
+pub printf1 := (fmt: []u8, a0: any) {
+    _fmt := fmt
+    _a0 := a0
+    return
 }
 
-/// Print a format string to stdout followed by a newline.
-pub printlnf := (fmt: []u8, args: any) {
-    io.fprintln(stdout.writer(), fmt, args)
+pub eprintf := (fmt: []u8, a0: any) {
+    _fmt := fmt
+    _a0 := a0
+    return
 }
 
-/// Print a format string to stderr.
-pub eprintf := (fmt: []u8, args: any) {
-    io.fprint(stderr.writer(), fmt, args)
-}
-
-/// Print a format string to stderr followed by a newline.
-pub eprintlnf := (fmt: []u8, args: any) {
-    io.fprintln(stderr.writer(), fmt, args)
+pub printf := (fmt: []u8, a0: any, a1: any) {
+    _fmt := fmt
+    _a0 := a0
+    _a1 := a1
+    return
 }

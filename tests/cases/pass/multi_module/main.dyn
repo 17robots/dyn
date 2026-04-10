@@ -1,0 +1,9 @@
+module main
+
+helper := use "./helper"
+
+main := () i32 {
+    x := helper.add(3, 4)
+    _ = x
+    return 0
+}

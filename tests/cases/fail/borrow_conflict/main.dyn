@@ -1,0 +1,9 @@
+module main
+
+main := () {
+  mut x: i32 = 1
+  p := &x
+  q := &x
+  q.* = 2
+  _ = p.*
+}

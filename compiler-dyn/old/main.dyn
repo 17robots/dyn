@@ -1,0 +1,205 @@
+module main
+
+Allocator := (use "std/mem").Allocator
+Vec := (use "std/collections").Vec
+mem := use "std/mem"
+os  := use "std/os"
+str := use "std/str"
+
+main := () {
+    // perm: AST nodes and IR that live for the whole compilation.
+    // scratch: tokens and other temporaries reset between files.
+    mut perm    := mem.Arena.init()
+    mut scratch := mem.Arena.init()
+    defer perm.deinit()
+    defer scratch.deinit()
+
+    alloc     := perm.allocator()
+    ast_alloc := perm.allocator()
+
+    prog_args := os.args(alloc) or {
+        os.eprintln("error: could not read arguments")
+        os.exit(1)
+        return
+    }
+
+    // prog_args[0] is the executable name, [1..] are user-provided args
+    if prog_args.len < 2 {
+        print_usage(prog_args[0])
+        os.exit(1)
+    }
+
+    cmd := prog_args[1]
+
+    if str.eq(cmd, "lex") {
+        if prog_args.len < 3 {
+            os.eprintln("usage: dync lex <file>")
+            os.exit(1)
+        }
+        cmd_lex(prog_args[2], alloc)
+        return
+    }
+
+    if str.eq(cmd, "parse") {
+        if prog_args.len < 3 {
+            os.eprintln("usage: dync parse <file>")
+            os.exit(1)
+        }
+        cmd_parse(prog_args[2], alloc, ast_alloc)
+        return
+    }
+
+    if str.eq(cmd, "sema") {
+        if prog_args.len < 3 {
+            os.eprintln("usage: dync sema <file>")
+            os.exit(1)
+        }
+        cmd_sema(prog_args[2], alloc, ast_alloc)
+        return
+    }
+
+    if str.eq(cmd, "build") {
+        if prog_args.len < 3 {
+            os.eprintln("usage: dymc build <file>")
+            os.exit(1)
+        }
+        cmd_build(prog_args[2], alloc, ast_alloc)
+        return
+    }
+
+    os.eprintf("unknown command: {}\n", cmd)
+    print_usage(prog_args[0])
+    os.exit(1)
+}
+
+print_usage := (prog: []u8) {
+    os.eprintf("usage: {} <command> [args]\n", prog)
+    os.eprintln("commands:")
+    os.eprintln("  lex   <file>   tokenise and print token count")
+    os.eprintln("  parse <file>   parse and report any errors")
+    os.eprintln("  sema  <file>   parse + semantic analysis (name resolution)")
+    os.eprintln("  build <file>   compile to native binary (not yet implemented)")
+}
+
+// ── lex command ───────────────────────────────────────────────────────────────
+
+cmd_lex := (path: []u8, alloc: mem.Allocator) {
+    src := os.read_file(path, alloc) or {
+        os.eprintf("error: cannot read {}\n", path)
+        os.exit(1)
+        return
+    }
+
+    mut tokens := lex(src, alloc)
+    os.printf("{}: {} tokens\n", path, tokens.len)
+
+    // Print each token kind and its text for inspection
+    mut i: usize = 0
+    for i < tokens.len: {
+        t := tokens.get(i) or break
+        tok := t.*
+        text := token_text(tok, src)
+        os.printf("  [{}] ", i)
+        print_token_kind(tok.kind)
+        os.printf(" `{}`\n", text)
+        i += 1
+    }
+
+    tokens.deinit()
+    alloc.destroy_many(u8, src)
+}
+
+print_token_kind := (kind: TokenKind) {
+    match kind {
+        .int_lit:       os.print("int_lit"),
+        .float_lit:     os.print("float_lit"),
+        .string_lit:    os.print("string_lit"),
+        .char_lit:      os.print("char_lit"),
+        .ident:         os.print("ident"),
+        .builtin_ident: os.print("builtin"),
+        .doc_comment:   os.print("doc_comment"),
+        .eof:           os.print("eof"),
+        .kw_if:         os.print("kw_if"),
+        .kw_for:        os.print("kw_for"),
+        .kw_return:     os.print("kw_return"),
+        .kw_mut:        os.print("kw_mut"),
+        .kw_pub:        os.print("kw_pub"),
+        .kw_struct:     os.print("kw_struct"),
+        .kw_enum:       os.print("kw_enum"),
+        .kw_use:        os.print("kw_use"),
+        .kw_module:     os.print("kw_module"),
+        _:              os.print("tok"),
+    }
+}
+
+// ── parse command ─────────────────────────────────────────────────────────────
+cmd_parse := (path: []u8, alloc: mem.Allocator, ast_alloc: mem.Allocator) {
+    src := os.read_file(path, alloc) or {
+        os.eprintf("error: cannot read {}\n", path)
+        os.exit(1)
+        return
+    }
+
+    tokens := lex(src, alloc)
+    module_ := parse(src, path, tokens, ast_alloc)
+
+    if module_.errors.len == 0 {
+        os.printf("{}: ok ({} items)\n", path, module_.items.len)
+    } else {
+        mut i: usize = 0
+        for i < module_.errors.len: {
+            ep := module_.errors.get(i) or break
+            e  := ep.*
+            os.eprintf("{}:{}: error: {}\n", path, e.start, e.msg)
+            i += 1
+        }
+        os.exit(1)
+    }
+
+    alloc.destroy_many(u8, src)
+}
+
+// ── sema command ──────────────────────────────────────────────────────────────
+cmd_sema := (path: []u8, alloc: mem.Allocator, ast_alloc: mem.Allocator) {
+    src := os.read_file(path, alloc) or {
+        os.eprintf("error: cannot read {}\n", path)
+        os.exit(1)
+        return
+    }
+
+    tokens := lex(src, alloc)
+    module_ := parse(src, path, tokens, ast_alloc)
+
+    if module_.errors.len > 0 {
+        mut i: usize = 0
+        for i < module_.errors.len: {
+            ep := module_.errors.get(i) or break
+            e  := ep.*
+            os.eprintf("{}:{}: parse error: {}\n", path, e.start, e.msg)
+            i += 1
+        }
+        os.exit(1)
+    }
+
+    diags := analyse_module(&module_, alloc)
+
+    if diags.len == 0 {
+        os.printf("{}: ok\n", path)
+    } else {
+        mut i: usize = 0
+        for i < diags.len: {
+            dp := diags.get(i) or break
+            dp.*.emit(src)
+            i += 1
+        }
+        os.exit(1)
+    }
+
+    alloc.destroy_many(u8, src)
+}
+
+// ── build command ─────────────────────────────────────────────────────────────
+cmd_build := (path: []u8, alloc: mem.Allocator, ast_alloc: mem.Allocator) {
+    os.eprintln("build: not yet implemented")
+    os.exit(1)
+}

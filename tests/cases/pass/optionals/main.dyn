@@ -1,0 +1,25 @@
+module main
+
+find_positive := (n: i32) ?i32 {
+    if n > 0 return n
+    return null
+}
+
+main := () i32 {
+    a := find_positive(5)
+    b := find_positive(-1)
+
+    x := a or 0
+    y := b or 0
+    _ = x
+    _ = y
+
+    if a: |v| {
+        _ = v
+    }
+
+    z := a or return 1
+    _ = z
+
+    return 0
+}

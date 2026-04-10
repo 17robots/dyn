@@ -1,0 +1,6 @@
+module main
+
+foo := () i32 => 1
+foo := () i32 => 2
+
+main := () i32 => foo()

@@ -378,7 +378,10 @@ pub(super) fn literal_type(literal: &HirLiteral) -> MirValueType {
 
 pub(super) fn parse_type_hint(text: &str) -> MirValueType {
     let trimmed = text.trim();
-    if trimmed.starts_with("fn/") || trimmed.starts_with("fn(") {
+    if trimmed.starts_with("fn/")
+        || trimmed.starts_with("fn(")
+        || (trimmed.starts_with('(') && trimmed.contains(")->"))
+    {
         return MirValueType::FunctionPointer;
     }
     let mut normalized = trimmed;
@@ -444,7 +447,9 @@ pub(super) fn parse_type_hint(text: &str) -> MirValueType {
     }
     if let Some(rest) = normalized.strip_prefix('f') {
         if let Ok(bits) = rest.parse::<u16>() {
-            return MirValueType::Float { bits };
+            if matches!(bits, 32 | 64) {
+                return MirValueType::Float { bits };
+            }
         }
     }
 

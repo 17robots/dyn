@@ -4,7 +4,10 @@ use std::process::{self, Command};
 
 use dyn_compiler::compiler::backend::{BuildConfig, BuildOptLevel};
 use dyn_compiler::compiler::diagnostics::Diagnostic;
+use dyn_compiler::compiler::fmt::format_ast;
+use dyn_compiler::compiler::lexer::Lexer;
 use dyn_compiler::compiler::module_resolver::resolve_module_graph;
+use dyn_compiler::compiler::parser::parse_file;
 use dyn_compiler::compiler::pipeline::{
     analyze_project, build_project_with_config, build_project_with_opt_level, lex_project,
     lower_project_hir, lower_project_mir, parse_project,
@@ -588,7 +591,11 @@ fn run_build_command(args: &[String]) {
     }
 
     let dir = start_dir.unwrap_or(".");
-    let build_config = BuildConfig { opt_level, sanitize, bin };
+    let build_config = BuildConfig {
+        opt_level,
+        sanitize,
+        bin,
+    };
     if all_opt_levels {
         if opt_level_explicit {
             eprintln!("cannot combine --all-opt-levels with explicit optimization flags");
@@ -677,7 +684,15 @@ fn run_run_command(args: &[String]) {
     }
 
     let dir = start_dir.unwrap_or(".");
-    run_project_with_config(dir, BuildConfig { opt_level, sanitize, bin }, &program_args);
+    run_project_with_config(
+        dir,
+        BuildConfig {
+            opt_level,
+            sanitize,
+            bin,
+        },
+        &program_args,
+    );
 }
 
 const INIT_MAIN_TEMPLATE: &str = "module main\n\nmain := () i32 => 0\n";
@@ -923,7 +938,10 @@ fn run_fmt_command(args: &[String]) {
                 process::exit(1);
             }
         };
-        let formatted = normalize_dyn_text(&original);
+
+        // Try AST-based formatting first; fall back to text normalisation on parse error.
+        let formatted = fmt_source_file(&path, &original);
+
         if formatted == original {
             continue;
         }
@@ -1004,6 +1022,23 @@ fn should_skip_fmt_dir(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|name| FMT_SKIPPED_DIRS.contains(&name))
+}
+
+/// Format a single source file via the AST formatter.
+/// Falls back to text normalisation when the file has parse errors.
+fn fmt_source_file(path: &std::path::Path, source: &str) -> String {
+    let lex_output = Lexer::new(source, path.to_path_buf()).lex();
+    // Only format if there are no lex errors.
+    if lex_output.diagnostics.is_empty() {
+        let parse_output = parse_file(path.to_path_buf(), &lex_output.tokens);
+        if let Some(ast) = parse_output.ast {
+            if parse_output.diagnostics.is_empty() {
+                return format_ast(&ast);
+            }
+        }
+    }
+    // Fall back: just normalise whitespace so the file is at least well-formed.
+    normalize_dyn_text(source)
 }
 
 fn normalize_dyn_text(input: &str) -> String {

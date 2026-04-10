@@ -1,0 +1,563 @@
+module main
+
+mem := use "std/mem"
+os  := use "std/os"
+str := use "std/str"
+
+Allocator := (use "std/mem").Allocator
+
+// ── Symbol table ─────────────────────────────────────────────────────────────
+
+pub SymKind := enum { function, type_, binding, import_, param }
+
+pub Symbol := struct {
+    name:   []u8,
+    kind:   SymKind,
+    tok:    u32,
+    is_pub: bool,
+}
+
+pub SymTable := struct {
+    syms:  Vec(Symbol),
+    alloc: Allocator,
+}
+
+SymTable.init := (alloc: Allocator) SymTable => .{
+    syms:  Vec(Symbol).init(alloc),
+    alloc: alloc,
+}
+
+SymTable.define := (self: *SymTable, name: []u8, kind: SymKind, tok: u32, is_pub: bool) {
+    self.syms.push(Symbol.{ name: name, kind: kind, tok: tok, is_pub: is_pub })
+}
+
+SymTable.lookup := (self: *SymTable, name: []u8) ?Symbol {
+    mut i: usize = 0
+    for i < self.syms.len: {
+        sym := self.syms.ptr_at(i) or break
+        if str.eq(sym.name, name) return sym.*
+        i += 1
+    }
+    return null
+}
+
+SymTable.deinit := (self: *SymTable) {
+    self.syms.deinit()
+}
+
+// ── Scope stack ───────────────────────────────────────────────────────────────
+
+pub ScopeStack := struct {
+    frames: Vec(SymTable),
+    alloc:  Allocator,
+    depth:  usize,
+}
+
+ScopeStack.init := (alloc: Allocator) ScopeStack => .{
+    frames: Vec(SymTable).init(alloc),
+    alloc:  alloc,
+    depth:  0,
+}
+
+ScopeStack.push := (self: *ScopeStack) {
+    self.frames.push(SymTable.init(self.alloc))
+    self.depth += 1
+}
+
+ScopeStack.pop := (self: *ScopeStack) {
+    if self.depth == 0 { return }
+    frame := self.frames.ptr_at(self.depth - 1) or return
+    frame.deinit()
+    self.depth -= 1
+}
+
+ScopeStack.define := (self: *ScopeStack, name: []u8, kind: SymKind, tok: u32, is_pub: bool) {
+    if self.depth == 0 { return }
+    frame := self.frames.ptr_at(self.depth - 1) or return
+    frame.define(name, kind, tok, is_pub)
+}
+
+ScopeStack.lookup := (self: *ScopeStack, name: []u8) ?Symbol {
+    mut i := self.depth
+    for i > 0: {
+        i -= 1
+        frame := self.frames.ptr_at(i) or break
+        if frame.lookup(name): |sym| return sym
+    }
+    return null
+}
+
+ScopeStack.deinit := (self: *ScopeStack) {
+    mut i: usize = 0
+    for i < self.depth: {
+        frame := self.frames.ptr_at(i) or break
+        frame.deinit()
+        i += 1
+    }
+    self.frames.deinit()
+}
+
+// ── Sema context ──────────────────────────────────────────────────────────────
+
+pub SemaCtx := struct {
+    src:   []u8,
+    path:  []u8,
+    toks:  []Token,
+    diags: Vec(Diagnostic),
+    scope: ScopeStack,
+    alloc: Allocator,
+}
+
+SemaCtx.init := (src: []u8, path: []u8, toks: []Token, alloc: Allocator) SemaCtx => .{
+    src:   src,
+    path:  path,
+    toks:  toks,
+    diags: Vec(Diagnostic).init(alloc),
+    scope: ScopeStack.init(alloc),
+    alloc: alloc,
+}
+
+SemaCtx.deinit := (self: *SemaCtx) {
+    self.scope.deinit()
+}
+
+SemaCtx.tok_text := (self: *SemaCtx, tok_idx: u32) []u8 {
+    idx := $as(usize, tok_idx)
+    if idx >= self.toks.len { return "" }
+    t := self.toks[idx]
+    return self.src[t.start..t.end]
+}
+
+SemaCtx.emit_error := (self: *SemaCtx, code: DiagnosticCode, msg: []u8, tok_idx: u32) {
+    mut d := Diagnostic.error(self.alloc, .semantic, code, msg)
+    idx := $as(usize, tok_idx)
+    if idx < self.toks.len {
+        t := self.toks[idx]
+        d.label(self.path, $as(usize, t.start), $as(usize, t.end), msg, true)
+    }
+    self.diags.push(d)
+}
+
+// ── Public entry point ────────────────────────────────────────────────────────
+
+pub analyse_module := (module_: *Module, alloc: Allocator) Vec(Diagnostic) {
+    toks := module_.tokens.slice()
+    mut ctx := SemaCtx.init(module_.src, module_.path, toks, alloc)
+    defer ctx.deinit()
+
+    ctx.scope.push()
+    define_builtins(&ctx)
+    collect_module_decls(module_, &ctx)
+    check_module_items(module_, &ctx)
+    ctx.scope.pop()
+
+    return ctx.diags
+}
+
+// ── Built-in names ────────────────────────────────────────────────────────────
+
+define_builtins := (ctx: *SemaCtx) {
+    ctx.scope.define("void",   .type_, 0, false)
+    ctx.scope.define("bool",   .type_, 0, false)
+    ctx.scope.define("u1",     .type_, 0, false)
+    ctx.scope.define("u8",     .type_, 0, false)
+    ctx.scope.define("u16",    .type_, 0, false)
+    ctx.scope.define("u32",    .type_, 0, false)
+    ctx.scope.define("u64",    .type_, 0, false)
+    ctx.scope.define("usize",  .type_, 0, false)
+    ctx.scope.define("i8",     .type_, 0, false)
+    ctx.scope.define("i16",    .type_, 0, false)
+    ctx.scope.define("i32",    .type_, 0, false)
+    ctx.scope.define("i64",    .type_, 0, false)
+    ctx.scope.define("isize",  .type_, 0, false)
+    ctx.scope.define("f32",    .type_, 0, false)
+    ctx.scope.define("f64",    .type_, 0, false)
+    ctx.scope.define("type",   .type_, 0, false)
+    ctx.scope.define("any",    .type_, 0, false)
+    ctx.scope.define("null",   .binding, 0, false)
+    ctx.scope.define("true",   .binding, 0, false)
+    ctx.scope.define("false",  .binding, 0, false)
+    ctx.scope.define("$as",            .function, 0, false)
+    ctx.scope.define("$sizeof",        .function, 0, false)
+    ctx.scope.define("$alignof",       .function, 0, false)
+    ctx.scope.define("$offsetof",      .function, 0, false)
+    ctx.scope.define("$typeof",        .function, 0, false)
+    ctx.scope.define("$memcpy",        .function, 0, false)
+    ctx.scope.define("$memset",        .function, 0, false)
+    ctx.scope.define("$panic",         .function, 0, false)
+    ctx.scope.define("$unreachable",   .function, 0, false)
+    ctx.scope.define("$compile_error", .function, 0, false)
+    ctx.scope.define("$target",        .function, 0, false)
+    ctx.scope.define("$fields",        .function, 0, false)
+    ctx.scope.define("$typeclass",     .function, 0, false)
+    ctx.scope.define("$has_method",    .function, 0, false)
+    ctx.scope.define("$typename",      .function, 0, false)
+    ctx.scope.define("$self",          .function, 0, false)
+    ctx.scope.define("$syscall",       .function, 0, false)
+}
+
+// ── Pass 1: collect top-level declarations ────────────────────────────────────
+
+collect_module_decls := (module_: *Module, ctx: *SemaCtx) {
+    mut i: usize = 0
+    for i < module_.items.len: {
+        ip := module_.items.ptr_at(i) or break
+        collect_decl(ip.*, ctx)
+        i += 1
+    }
+}
+
+collect_decl := (item: *Item, ctx: *SemaCtx) {
+    if item.name == 0 { return }
+
+    match item.tag {
+        .fn_item: {
+            name := ctx.tok_text(item.name)
+            if name.len == 0 { return }
+            if ctx.scope.lookup(name): |_| {
+                ctx.emit_error(.E4002, "duplicate declaration", item.name)
+                return
+            }
+            ctx.scope.define(name, .function, item.name, item.is_pub)
+        }
+        .let_item: {
+            name := ctx.tok_text(item.name)
+            if name.len == 0 { return }
+            if ctx.scope.lookup(name): |_| {
+                ctx.emit_error(.E4002, "duplicate declaration", item.name)
+                return
+            }
+            ctx.scope.define(name, .binding, item.name, item.is_pub)
+        }
+        .struct_item: {
+            name := ctx.tok_text(item.name)
+            if name.len == 0 { return }
+            if ctx.scope.lookup(name): |_| {
+                ctx.emit_error(.E4002, "duplicate declaration", item.name)
+                return
+            }
+            ctx.scope.define(name, .type_, item.name, item.is_pub)
+        }
+        .enum_item: {
+            name := ctx.tok_text(item.name)
+            if name.len == 0 { return }
+            if ctx.scope.lookup(name): |_| {
+                ctx.emit_error(.E4002, "duplicate declaration", item.name)
+                return
+            }
+            ctx.scope.define(name, .type_, item.name, item.is_pub)
+        }
+        .use_item: {
+            name := ctx.tok_text(item.name)
+            if name.len == 0 { return }
+            ctx.scope.define(name, .import_, item.name, item.is_pub)
+        }
+        .module_decl: {}
+    }
+}
+
+// ── Pass 2: check item bodies ─────────────────────────────────────────────────
+
+check_module_items := (module_: *Module, ctx: *SemaCtx) {
+    mut i: usize = 0
+    for i < module_.items.len: {
+        ip := module_.items.ptr_at(i) or break
+        check_item(ip.*, ctx)
+        i += 1
+    }
+}
+
+check_item := (item: *Item, ctx: *SemaCtx) {
+    match item.tag {
+        .fn_item: {
+            ctx.scope.push()
+            if item.sig: |sig| {
+                mut pi: usize = 0
+                for pi < sig.params.len: {
+                    pp := sig.params.ptr_at(pi) or break
+                    pname := ctx.tok_text(pp.name)
+                    if pname.len > 0 {
+                        ctx.scope.define(pname, .param, pp.name, false)
+                    }
+                    pi += 1
+                }
+            }
+            if item.body: |body| check_expr(body, ctx)
+            ctx.scope.pop()
+        }
+        .let_item: {
+            if item.value: |val| check_expr(val, ctx)
+        }
+        _: {}
+    }
+}
+
+check_expr := (expr: *Expr, ctx: *SemaCtx) {
+    match expr.tag {
+        .ident: {
+            name := ctx.tok_text(expr.tok)
+            if name.len == 0 { return }
+            if str.eq(name, "_") { return }
+            if ctx.scope.lookup(name): |_| {
+                // found — ok
+            } else {
+                ctx.emit_error(.E4001, "cannot resolve name", expr.tok)
+            }
+        }
+        .decl_assign: {
+            if expr.b: |rhs| check_expr(rhs, ctx)
+            bname := ctx.tok_text(expr.tok)
+            if bname.len > 0 and !str.eq(bname, "_") {
+                ctx.scope.define(bname, .binding, expr.tok, false)
+            }
+        }
+        .block: {
+            ctx.scope.push()
+            if expr.a: |a| check_expr(a, ctx)
+            if expr.b: |b| check_expr(b, ctx)
+            if expr.c: |c| check_expr(c, ctx)
+            ctx.scope.pop()
+        }
+        .if_expr: {
+            if expr.a: |cond| check_expr(cond, ctx)
+            if expr.b: |then| check_expr(then, ctx)
+            if expr.c: |els|  check_expr(els, ctx)
+        }
+        .for_while: {
+            if expr.a: |cond| check_expr(cond, ctx)
+            if expr.b: |body| check_expr(body, ctx)
+        }
+        .for_range: {
+            ctx.scope.push()
+            if expr.tok != 0 {
+                bname := ctx.tok_text(expr.tok)
+                if bname.len > 0 { ctx.scope.define(bname, .binding, expr.tok, false) }
+            }
+            if expr.a: |lo|   check_expr(lo, ctx)
+            if expr.b: |hi|   check_expr(hi, ctx)
+            if expr.c: |body| check_expr(body, ctx)
+            ctx.scope.pop()
+        }
+        .for_each: {
+            ctx.scope.push()
+            if expr.tok != 0 {
+                bname := ctx.tok_text(expr.tok)
+                if bname.len > 0 { ctx.scope.define(bname, .binding, expr.tok, false) }
+            }
+            if expr.a: |iter| check_expr(iter, ctx)
+            if expr.b: |body| check_expr(body, ctx)
+            ctx.scope.pop()
+        }
+        .for_inf: {
+            if expr.a: |body| check_expr(body, ctx)
+        }
+        .lambda: {
+            ctx.scope.push()
+            if expr.sig: |sig| {
+                mut pi: usize = 0
+                for pi < sig.params.len: {
+                    pp := sig.params.ptr_at(pi) or break
+                    pname := ctx.tok_text(pp.name)
+                    if pname.len > 0 {
+                        ctx.scope.define(pname, .param, pp.name, false)
+                    }
+                    pi += 1
+                }
+            }
+            if expr.a: |body| check_expr(body, ctx)
+            ctx.scope.pop()
+        }
+        .match_expr: {
+            if expr.a: |subj| check_expr(subj, ctx)
+        }
+        .call: {
+            if expr.a: |callee| check_expr(callee, ctx)
+        }
+        .field: {
+            if expr.a: |base| check_expr(base, ctx)
+        }
+        .or_expr: {
+            if expr.a: |lhs| check_expr(lhs, ctx)
+            if expr.b: |rhs| check_expr(rhs, ctx)
+        }
+        .index: {
+            if expr.a: |base| check_expr(base, ctx)
+            if expr.b: |idx|  check_expr(idx, ctx)
+        }
+        .slice_expr: {
+            if expr.a: |base| check_expr(base, ctx)
+            if expr.b: |lo|   check_expr(lo, ctx)
+            if expr.c: |hi|   check_expr(hi, ctx)
+        }
+        .as_cast: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .comp_expr: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .return_expr: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .break_expr: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .unwrap_opt: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .unwrap_err: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .deref: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .addr_of: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .addr_of_mut: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .unary_neg: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .unary_not: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .unary_bit_not: {
+            if expr.a: |val| check_expr(val, ctx)
+        }
+        .labeled_block: {
+            if expr.a: |body| check_expr(body, ctx)
+        }
+        .defer_expr: {
+            if expr.a: |body| check_expr(body, ctx)
+        }
+        .defer_err: {
+            if expr.a: |body| check_expr(body, ctx)
+        }
+        .add: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .sub: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .mul: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .div: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .mod_: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .eq_: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .neq: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .lt_: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .lte: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .gt_: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .gte: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .logic_and: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .logic_or: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .bit_and: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .bit_or: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .bit_xor: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .shl: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .shr: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .range_excl: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .range_incl: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_add: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_sub: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_mul: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_div: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_mod: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_and: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_or: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_xor: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_shl: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        .assign_shr: {
+            if expr.a: |l| check_expr(l, ctx)
+            if expr.b: |r| check_expr(r, ctx)
+        }
+        _: {}
+    }
+}

@@ -3,9 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::compiler::ast::{
-    AssignOp, BinaryOp, Binding, BlockExpr, EnumVariantExpr, Expr, ExprKind, FnBody, ForExpr, Item,
-    Literal, MatchArm, Pattern, PatternKind, PatternLiteral, Stmt, TypeExpr, TypeExprKind, UnaryOp,
-    Visibility,
+    AssignOp, BinaryOp, Binding, BlockExpr, EnumVariantExpr, Expr, ExprKind, FnBody, ForExpr,
+    Ident, Item, Literal, MatchArm, Pattern, PatternKind, PatternLiteral, Stmt, TypeExpr,
+    TypeExprKind, UnaryOp, Visibility,
 };
 use crate::compiler::diagnostics::{
     sort_diagnostics_by_primary_path, Diagnostic, DiagnosticCode, DiagnosticLabel, DiagnosticPhase,
@@ -324,6 +324,40 @@ fn bind_name(scopes: &mut [BTreeMap<String, SourceSpan>], name: &str, span: Sour
     }
 }
 
+fn bind_name_checked(
+    scopes: &mut [BTreeMap<String, SourceSpan>],
+    ident: &Ident,
+    file_path: &PathBuf,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(existing_span) = scopes
+        .iter()
+        .rev()
+        .find_map(|scope| scope.get(&ident.text).copied())
+    {
+        let mut diagnostic = Diagnostic::error(
+            DiagnosticPhase::Semantic,
+            DiagnosticCode::E4002,
+            format!("'{}' shadows an existing visible name", ident.text),
+        )
+        .with_primary_file_label(
+            file_path.clone(),
+            Some(ident.span),
+            "rename this binding to avoid shadowing",
+        );
+        diagnostic.labels.push(DiagnosticLabel {
+            file_path: file_path.clone(),
+            span: Some(existing_span),
+            message: "previously declared here".to_string(),
+            is_primary: false,
+        });
+        diagnostics.push(diagnostic);
+        return;
+    }
+
+    bind_name(scopes, &ident.text, ident.span);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_expr_resolution(
     expr: &Expr,
@@ -457,7 +491,7 @@ fn check_expr_resolution(
                             file_path,
                             diagnostics,
                         );
-                        bind_name(scopes, &binding.name.text, binding.name.span);
+                        bind_name_checked(scopes, &binding.name, file_path, diagnostics);
                     }
                     Stmt::Destructure(d) => {
                         check_expr_resolution(
@@ -472,7 +506,7 @@ fn check_expr_resolution(
                             diagnostics,
                         );
                         for dn in &d.names {
-                            bind_name(scopes, &dn.name.text, dn.name.span);
+                            bind_name_checked(scopes, &dn.name, file_path, diagnostics);
                         }
                     }
                     Stmt::Expr(stmt_expr) => check_expr_resolution(
@@ -506,7 +540,7 @@ fn check_expr_resolution(
         ExprKind::Fn(fn_expr) => {
             scopes.push(BTreeMap::new());
             for param in &fn_expr.params {
-                bind_name(scopes, &param.name.text, param.name.span);
+                bind_name_checked(scopes, &param.name, file_path, diagnostics);
             }
             match &fn_expr.body {
                 FnBody::Block(block) => {
@@ -571,7 +605,7 @@ fn check_expr_resolution(
                 );
                 scopes.push(BTreeMap::new());
                 if let Some(binding) = binding {
-                    bind_name(scopes, &binding.text, binding.span);
+                    bind_name_checked(scopes, binding, file_path, diagnostics);
                 }
                 check_expr_resolution(
                     body,
@@ -605,7 +639,7 @@ fn check_expr_resolution(
                 );
                 scopes.push(BTreeMap::new());
                 if let Some(binding) = binding {
-                    bind_name(scopes, &binding.text, binding.span);
+                    bind_name_checked(scopes, binding, file_path, diagnostics);
                 }
                 check_expr_resolution(
                     body,
@@ -670,12 +704,7 @@ fn check_expr_resolution(
             );
             for arm in &match_expr.arms {
                 scopes.push(BTreeMap::new());
-                collect_pattern_bindings_checked(
-                    &arm.pattern,
-                    scopes.last_mut().expect("scope exists"),
-                    file_path,
-                    diagnostics,
-                );
+                collect_pattern_bindings_checked(&arm.pattern, scopes, file_path, diagnostics);
                 if let Some(guard) = &arm.guard {
                     check_expr_resolution(
                         guard,
@@ -843,7 +872,7 @@ fn check_expr_resolution(
                 scopes.push(BTreeMap::new());
                 for binding_opt in &capture.bindings {
                     if let Some(binding) = binding_opt {
-                        bind_name(scopes, &binding.text, binding.span);
+                        bind_name_checked(scopes, binding, file_path, diagnostics);
                     }
                 }
                 check_expr_resolution(
@@ -940,7 +969,7 @@ fn check_expr_resolution(
             );
             if let Some(binding) = &or_else.error_binding {
                 scopes.push(BTreeMap::new());
-                bind_name(scopes, &binding.text, binding.span);
+                bind_name_checked(scopes, binding, file_path, diagnostics);
                 check_expr_resolution(
                     &or_else.fallback,
                     scopes,
@@ -1063,54 +1092,25 @@ fn check_expr_resolution(
 
 fn collect_pattern_bindings_checked(
     pattern: &Pattern,
-    out: &mut BTreeMap<String, SourceSpan>,
+    scopes: &mut [BTreeMap<String, SourceSpan>],
     file_path: &PathBuf,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match &pattern.kind {
         PatternKind::IdentBind(ident) => {
-            if out.insert(ident.text.clone(), ident.span).is_some() {
-                diagnostics.push(
-                    Diagnostic::error(
-                        DiagnosticPhase::Semantic,
-                        DiagnosticCode::E4002,
-                        format!("duplicate binding '{}' in match pattern", ident.text),
-                    )
-                    .with_primary_file_label(
-                        file_path.clone(),
-                        Some(ident.span),
-                        "binding name appears more than once in this pattern",
-                    ),
-                );
-            }
+            bind_name_checked(scopes, ident, file_path, diagnostics);
         }
         PatternKind::Range { start, end, .. } => {
-            collect_pattern_bindings_checked(start, out, file_path, diagnostics);
-            collect_pattern_bindings_checked(end, out, file_path, diagnostics);
+            collect_pattern_bindings_checked(start, scopes, file_path, diagnostics);
+            collect_pattern_bindings_checked(end, scopes, file_path, diagnostics);
         }
         PatternKind::EnumVariant { bindings, .. } => {
             for binding in bindings {
-                if out.insert(binding.text.clone(), binding.span).is_some() {
-                    diagnostics.push(
-                        Diagnostic::error(
-                            DiagnosticPhase::Semantic,
-                            DiagnosticCode::E4002,
-                            format!(
-                                "duplicate binding '{}' in enum variant pattern",
-                                binding.text
-                            ),
-                        )
-                        .with_primary_file_label(
-                            file_path.clone(),
-                            Some(binding.span),
-                            "binding name appears more than once in this pattern",
-                        ),
-                    );
-                }
+                bind_name_checked(scopes, binding, file_path, diagnostics);
             }
         }
         PatternKind::Typed { pattern, .. } => {
-            collect_pattern_bindings_checked(pattern, out, file_path, diagnostics)
+            collect_pattern_bindings_checked(pattern, scopes, file_path, diagnostics)
         }
         PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::TypeLiteral(_) => {}
     }
@@ -2055,7 +2055,14 @@ fn collect_item_uses(
         Item::ExprStmt(expr) => collect_expr_uses(expr, None, file_path, imports, names, members),
         Item::TypeBinding(tb) => {
             let synthetic = format!("{}__{}", tb.type_name.text, tb.member_name.text);
-            collect_expr_uses(&tb.value, Some(synthetic), file_path, imports, names, members);
+            collect_expr_uses(
+                &tb.value,
+                Some(synthetic),
+                file_path,
+                imports,
+                names,
+                members,
+            );
         }
     }
 }
@@ -2280,7 +2287,11 @@ pub fn parse_int_type_bits(name: &str) -> Option<(bool, u16)> {
         return None;
     }
     let bits = rest.parse::<u16>().ok()?;
-    Some((signed, bits))
+    if (1..=128).contains(&bits) {
+        Some((signed, bits))
+    } else {
+        None
+    }
 }
 
 pub fn parse_float_type_bits(name: &str) -> Option<u16> {
@@ -2288,7 +2299,10 @@ pub fn parse_float_type_bits(name: &str) -> Option<u16> {
     if rest.is_empty() {
         return None;
     }
-    rest.parse::<u16>().ok()
+    match rest.parse::<u16>().ok()? {
+        32 | 64 => Some(rest.parse::<u16>().ok()?),
+        _ => None,
+    }
 }
 
 pub fn is_int_type_name(name: &str) -> bool {
@@ -2384,20 +2398,27 @@ enum AnyUsageContext {
     Other,
 }
 
-pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+fn fn_param_spec(param: &crate::compiler::ast::FnParam) -> FnParamSpec {
+    FnParamSpec {
+        name: Some(param.name.text.clone()),
+        has_default: param.default_value.is_some(),
+        comp: param.comp
+            || matches!(param.ty.as_ref(), Some(ty) if matches!(&ty.kind, crate::compiler::ast::TypeExprKind::Named(n) if n.text == "any")),
+    }
+}
 
-    for unit in units {
-        let mut types = TypeStore::default();
-        let unknown = types.intern(Type::Unknown);
-        let mut env = BTreeMap::<String, TypeId>::new();
-        let mut mutability = BTreeMap::<String, bool>::new();
-        let mut signatures = BTreeMap::<String, FnSignature>::new();
-        let named_struct_fields = collect_named_struct_fields(unit);
-        let enum_variants = collect_enum_variants(unit);
-
-        for extern_decl in &unit.extern_declarations {
-            let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
+fn register_extern_function_types(
+    unit: &ModuleUnit,
+    types: &mut TypeStore,
+    unknown: TypeId,
+    env: &mut BTreeMap<String, TypeId>,
+    signatures: &mut BTreeMap<String, FnSignature>,
+    diagnostics: &mut Vec<Diagnostic>,
+    validate_usage: bool,
+) {
+    for extern_decl in &unit.extern_declarations {
+        let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
+            if validate_usage {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::TypeChecker,
@@ -2410,197 +2431,306 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                     .with_primary_file_label(
                         extern_decl.file_path.clone(),
                         Some(extern_decl.span),
-                        "use `fn(...) ...` for extern declarations",
+                        "use `(args) ret` for extern declarations",
                     ),
                 );
-                continue;
-            };
+            }
+            continue;
+        };
 
+        if validate_usage {
             for param in &fn_ty.params {
                 validate_any_usage(
                     &param.ty,
                     AnyUsageContext::FunctionParam,
-                    &mut diagnostics,
+                    diagnostics,
                     &extern_decl.file_path,
                 );
             }
             validate_any_usage(
                 &fn_ty.return_type,
                 AnyUsageContext::Other,
-                &mut diagnostics,
+                diagnostics,
                 &extern_decl.file_path,
             );
+        }
 
-            let param_types = fn_ty
-                .params
-                .iter()
-                .map(|param| resolve_type_expr(&param.ty, &mut types).unwrap_or(unknown))
-                .collect::<Vec<_>>();
-            let param_names = fn_ty
-                .params
-                .iter()
-                .map(|param| param.name.as_ref().map(|ident| ident.text.clone()))
-                .collect::<Vec<_>>();
-            let return_type = resolve_type_expr(&fn_ty.return_type, &mut types).unwrap_or(unknown);
+        let param_types = fn_ty
+            .params
+            .iter()
+            .map(|param| resolve_type_expr(&param.ty, types).unwrap_or(unknown))
+            .collect::<Vec<_>>();
+        let param_names = fn_ty
+            .params
+            .iter()
+            .map(|param| param.name.as_ref().map(|ident| ident.text.clone()))
+            .collect::<Vec<_>>();
+        let return_type = resolve_type_expr(&fn_ty.return_type, types).unwrap_or(unknown);
 
-            signatures.insert(
-                extern_decl.name.clone(),
-                FnSignature {
-                    params: param_names
-                        .iter()
-                        .cloned()
-                        .map(|name| FnParamSpec {
-                            name,
-                            has_default: false,
-                            comp: false,
-                        })
-                        .collect(),
-                    return_type,
-                },
-            );
+        signatures.insert(
+            extern_decl.name.clone(),
+            FnSignature {
+                params: param_names
+                    .iter()
+                    .cloned()
+                    .map(|name| FnParamSpec {
+                        name,
+                        has_default: false,
+                        comp: false,
+                    })
+                    .collect(),
+                return_type,
+            },
+        );
+        env.insert(
+            extern_decl.name.clone(),
+            types.intern(Type::Function {
+                param_types,
+                param_names,
+                has_defaults: vec![false; fn_ty.params.len()],
+                return_type,
+            }),
+        );
+    }
+}
+
+fn register_decl_function_types(
+    unit: &ModuleUnit,
+    types: &mut TypeStore,
+    unknown: TypeId,
+    env: &mut BTreeMap<String, TypeId>,
+    signatures: &mut BTreeMap<String, FnSignature>,
+    diagnostics: &mut Vec<Diagnostic>,
+    validate_usage: bool,
+) {
+    for decl in &unit.declarations {
+        if decl.kind != DeclKind::Binding {
+            continue;
+        }
+        let Some(fn_expr) = extract_fn_expr(&decl.value) else {
+            continue;
+        };
+
+        if validate_usage {
+            for param in &fn_expr.params {
+                if let Some(param_ty) = &param.ty {
+                    validate_any_usage(
+                        param_ty,
+                        AnyUsageContext::FunctionParam,
+                        diagnostics,
+                        &decl.file_path,
+                    );
+                }
+            }
+            if let Some(return_ty) = &fn_expr.return_type {
+                validate_any_usage(
+                    return_ty,
+                    AnyUsageContext::Other,
+                    diagnostics,
+                    &decl.file_path,
+                );
+            }
+        }
+
+        let return_type = fn_expr
+            .return_type
+            .as_ref()
+            .and_then(|ty| resolve_type_expr(ty, types))
+            .unwrap_or(unknown);
+        signatures.insert(
+            decl.name.clone(),
+            FnSignature {
+                params: fn_expr.params.iter().map(fn_param_spec).collect(),
+                return_type,
+            },
+        );
+
+        let param_types = fn_expr
+            .params
+            .iter()
+            .map(|param| {
+                param
+                    .ty
+                    .as_ref()
+                    .and_then(|ty| resolve_type_expr(ty, types))
+                    .unwrap_or(unknown)
+            })
+            .collect::<Vec<_>>();
+        let param_names = fn_expr
+            .params
+            .iter()
+            .map(|param| Some(param.name.text.clone()))
+            .collect::<Vec<_>>();
+        let has_defaults = fn_expr
+            .params
+            .iter()
+            .map(|param| param.default_value.is_some())
+            .collect::<Vec<_>>();
+        env.insert(
+            decl.name.clone(),
+            types.intern(Type::Function {
+                param_types,
+                param_names,
+                has_defaults,
+                return_type,
+            }),
+        );
+    }
+}
+
+fn overwrite_function_return_type(
+    name: &str,
+    return_type: TypeId,
+    env: &mut BTreeMap<String, TypeId>,
+    signatures: &mut BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+) {
+    if let Some(signature) = signatures.get_mut(name) {
+        signature.return_type = return_type;
+    }
+
+    if let Some(function_ty) = env.get(name).copied() {
+        if let Type::Function {
+            param_types,
+            param_names,
+            has_defaults,
+            ..
+        } = types.get(function_ty).clone()
+        {
             env.insert(
-                extern_decl.name.clone(),
+                name.to_string(),
                 types.intern(Type::Function {
                     param_types,
                     param_names,
-                    has_defaults: vec![false; fn_ty.params.len()],
+                    has_defaults,
                     return_type,
                 }),
             );
         }
+    }
+}
 
-        for decl in &unit.declarations {
-            if decl.kind != DeclKind::Binding {
-                continue;
-            }
-            if let Some(fn_expr) = extract_fn_expr(&decl.value) {
-                for param in &fn_expr.params {
-                    if let Some(param_ty) = &param.ty {
-                        validate_any_usage(
-                            param_ty,
-                            AnyUsageContext::FunctionParam,
-                            &mut diagnostics,
-                            &decl.file_path,
-                        );
-                    }
-                }
-                if let Some(return_ty) = &fn_expr.return_type {
-                    validate_any_usage(
-                        return_ty,
-                        AnyUsageContext::Other,
-                        &mut diagnostics,
-                        &decl.file_path,
-                    );
-                }
-                let return_type = fn_expr
-                    .return_type
-                    .as_ref()
-                    .and_then(|ty| resolve_type_expr(ty, &mut types))
-                    .unwrap_or(unknown);
-                let params = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| FnParamSpec {
-                        name: Some(param.name.text.clone()),
-                        has_default: param.default_value.is_some(),
-                        comp: param.comp || matches!(param.ty.as_ref(), Some(ty) if matches!(&ty.kind, crate::compiler::ast::TypeExprKind::Named(n) if n.text == "any")),
-                    })
-                    .collect::<Vec<_>>();
-                signatures.insert(
-                    decl.name.clone(),
-                    FnSignature {
-                        params,
-                        return_type,
-                    },
-                );
-                let param_types = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| {
-                        param
-                            .ty
-                            .as_ref()
-                            .and_then(|ty| resolve_type_expr(ty, &mut types))
-                            .unwrap_or(unknown)
-                    })
-                    .collect();
-                let param_names = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| Some(param.name.text.clone()))
-                    .collect();
-                let has_defaults = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| param.default_value.is_some())
-                    .collect();
-                env.insert(
-                    decl.name.clone(),
-                    types.intern(Type::Function {
-                        param_types,
-                        param_names,
-                        has_defaults,
-                        return_type,
-                    }),
-                );
-            }
+fn apply_inferred_error_return_types(
+    unit: &ModuleUnit,
+    env: &mut BTreeMap<String, TypeId>,
+    mutability: &BTreeMap<String, bool>,
+    signatures: &mut BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+    enum_variants: &BTreeMap<String, BTreeSet<String>>,
+) {
+    for decl in &unit.declarations {
+        if decl.kind != DeclKind::Binding {
+            continue;
         }
+        let Some(fn_expr) = extract_fn_expr(&decl.value) else {
+            continue;
+        };
+        let Some(ok_ty_expr) = implicit_error_union_ok_type(fn_expr) else {
+            continue;
+        };
 
-        for decl in &unit.declarations {
-            if decl.kind != DeclKind::Binding {
-                continue;
-            }
-            let Some(fn_expr) = extract_fn_expr(&decl.value) else {
-                continue;
-            };
-            let Some(ok_ty_expr) = implicit_error_union_ok_type(fn_expr) else {
-                continue;
-            };
+        let inferred_errors = infer_implicit_error_union_set(
+            fn_expr,
+            env,
+            mutability,
+            signatures,
+            types,
+            enum_variants,
+            &decl.file_path,
+        );
+        if inferred_errors.is_empty() {
+            continue;
+        }
+        let Some(ok_ty) = resolve_type_expr(ok_ty_expr, types) else {
+            continue;
+        };
 
-            let inferred_errors = infer_implicit_error_union_set(
-                fn_expr,
-                &env,
-                &mutability,
-                &signatures,
-                &mut types,
-                &enum_variants,
-                &decl.file_path,
-            );
-            if inferred_errors.is_empty() {
-                continue;
-            }
-            let Some(ok_ty) = resolve_type_expr(ok_ty_expr, &mut types) else {
-                continue;
-            };
-            let inferred_return = types.intern(Type::Errorable {
+        overwrite_function_return_type(
+            &decl.name,
+            types.intern(Type::Errorable {
                 ok: ok_ty,
                 errors: inferred_errors,
-            });
+            }),
+            env,
+            signatures,
+            types,
+        );
+    }
+}
 
-            if let Some(signature) = signatures.get_mut(&decl.name) {
-                signature.return_type = inferred_return;
-            }
+fn apply_signature_return_type_if_needed(
+    name: &str,
+    ty: TypeId,
+    value: &Expr,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+) -> TypeId {
+    let Some(fn_expr) = extract_fn_expr(value) else {
+        return ty;
+    };
+    if implicit_error_union_ok_type(fn_expr).is_none() {
+        return ty;
+    }
+    let Some(signature) = signatures.get(name) else {
+        return ty;
+    };
+    if let Type::Function {
+        param_types,
+        param_names,
+        has_defaults,
+        ..
+    } = types.get(ty).clone()
+    {
+        return types.intern(Type::Function {
+            param_types,
+            param_names,
+            has_defaults,
+            return_type: signature.return_type,
+        });
+    }
+    ty
+}
 
-            if let Some(function_ty) = env.get(&decl.name).copied() {
-                if let Type::Function {
-                    param_types,
-                    param_names,
-                    has_defaults,
-                    ..
-                } = types.get(function_ty).clone()
-                {
-                    env.insert(
-                        decl.name.clone(),
-                        types.intern(Type::Function {
-                            param_types,
-                            param_names,
-                            has_defaults,
-                            return_type: inferred_return,
-                        }),
-                    );
-                }
-            }
-        }
+pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    for unit in units {
+        let mut types = TypeStore::default();
+        let unknown = types.intern(Type::Unknown);
+        let mut env = BTreeMap::<String, TypeId>::new();
+        let mut mutability = BTreeMap::<String, bool>::new();
+        let mut signatures = BTreeMap::<String, FnSignature>::new();
+        let equality_shapes = BTreeMap::new();
+        let named_struct_fields = collect_named_struct_fields(unit);
+        let struct_literal_specs = collect_struct_literal_specs(unit);
+        let nominal_value_kinds = collect_nominal_value_kinds(unit);
+        let enum_variants = collect_enum_variants(unit);
+        register_extern_function_types(
+            unit,
+            &mut types,
+            unknown,
+            &mut env,
+            &mut signatures,
+            &mut diagnostics,
+            true,
+        );
+        register_decl_function_types(
+            unit,
+            &mut types,
+            unknown,
+            &mut env,
+            &mut signatures,
+            &mut diagnostics,
+            true,
+        );
+        apply_inferred_error_return_types(
+            unit,
+            &mut env,
+            &mutability,
+            &mut signatures,
+            &mut types,
+            &enum_variants,
+        );
 
         for decl in &unit.declarations {
             if decl.kind != DeclKind::Binding {
@@ -2615,6 +2745,17 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                     &mut diagnostics,
                 );
             }
+
+            if let Some(annotation) = &decl.annotation {
+                validate_supported_builtin_type_expr(annotation, &mut diagnostics, &decl.file_path);
+            }
+            validate_supported_builtin_types_in_expr(
+                &decl.value,
+                &mut diagnostics,
+                &decl.file_path,
+            );
+
+            validate_value_required_exprs(&decl.value, true, &decl.file_path, &mut diagnostics);
 
             let allow_main_implicit_tail =
                 should_allow_implicit_tail_for_main(unit, decl, &mut types);
@@ -2637,11 +2778,37 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                 diagnostics.extend(new_diagnostics);
             }
             if let ExprKind::TypeLiteral(ty) = &decl.value.kind {
+                validate_supported_builtin_type_expr(ty, &mut diagnostics, &decl.file_path);
                 validate_struct_type_members(ty, &decl.name, &mut diagnostics, &decl.file_path);
             }
             validate_named_struct_offsetof_calls(
                 &decl.value,
                 &named_struct_fields,
+                &mut diagnostics,
+                &decl.file_path,
+            );
+            validate_typed_struct_literals(
+                &decl.value,
+                &struct_literal_specs,
+                &mut diagnostics,
+                &decl.file_path,
+            );
+            validate_unsupported_equality(
+                &decl.value,
+                &equality_shapes,
+                &env,
+                &mutability,
+                &signatures,
+                &mut types,
+                &nominal_value_kinds,
+                &mut diagnostics,
+                &decl.file_path,
+                None,
+            );
+            let mut borrow_state = BorrowState::default();
+            validate_borrow_rules(
+                &decl.value,
+                &mut borrow_state,
                 &mut diagnostics,
                 &decl.file_path,
             );
@@ -2713,26 +2880,13 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                 actual
             };
 
-            if let Some(fn_expr) = extract_fn_expr(&decl.value) {
-                if implicit_error_union_ok_type(fn_expr).is_some() {
-                    if let Some(signature) = signatures.get(&decl.name) {
-                        if let Type::Function {
-                            param_types,
-                            param_names,
-                            has_defaults,
-                            ..
-                        } = types.get(final_type).clone()
-                        {
-                            final_type = types.intern(Type::Function {
-                                param_types,
-                                param_names,
-                                has_defaults,
-                                return_type: signature.return_type,
-                            });
-                        }
-                    }
-                }
-            }
+            final_type = apply_signature_return_type_if_needed(
+                &decl.name,
+                final_type,
+                &decl.value,
+                &signatures,
+                &mut types,
+            );
 
             env.insert(decl.name.clone(), final_type);
             mutability.insert(decl.name.clone(), decl.mutable);
@@ -2753,165 +2907,35 @@ pub fn infer_binding_type_strings(
         let mut env = BTreeMap::<String, TypeId>::new();
         let mut mutability = BTreeMap::<String, bool>::new();
         let mut signatures = BTreeMap::<String, FnSignature>::new();
-
-        for extern_decl in &unit.extern_declarations {
-            let TypeExprKind::Function(fn_ty) = &extern_decl.ty.kind else {
-                continue;
-            };
-
-            let param_types = fn_ty
-                .params
-                .iter()
-                .map(|param| resolve_type_expr(&param.ty, &mut types).unwrap_or(unknown))
-                .collect::<Vec<_>>();
-            let param_names = fn_ty
-                .params
-                .iter()
-                .map(|param| param.name.as_ref().map(|ident| ident.text.clone()))
-                .collect::<Vec<_>>();
-            let return_type = resolve_type_expr(&fn_ty.return_type, &mut types).unwrap_or(unknown);
-
-            signatures.insert(
-                extern_decl.name.clone(),
-                FnSignature {
-                    params: param_names
-                        .iter()
-                        .cloned()
-                        .map(|name| FnParamSpec {
-                            name,
-                            has_default: false,
-                            comp: false,
-                        })
-                        .collect(),
-                    return_type,
-                },
-            );
-            env.insert(
-                extern_decl.name.clone(),
-                types.intern(Type::Function {
-                    param_types,
-                    param_names,
-                    has_defaults: vec![false; fn_ty.params.len()],
-                    return_type,
-                }),
-            );
-        }
-
-        for decl in &unit.declarations {
-            if decl.kind != DeclKind::Binding {
-                continue;
-            }
-            if let Some(fn_expr) = extract_fn_expr(&decl.value) {
-                let return_type = fn_expr
-                    .return_type
-                    .as_ref()
-                    .and_then(|ty| resolve_type_expr(ty, &mut types))
-                    .unwrap_or(unknown);
-                let params = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| FnParamSpec {
-                        name: Some(param.name.text.clone()),
-                        has_default: param.default_value.is_some(),
-                        comp: param.comp || matches!(param.ty.as_ref(), Some(ty) if matches!(&ty.kind, crate::compiler::ast::TypeExprKind::Named(n) if n.text == "any")),
-                    })
-                    .collect::<Vec<_>>();
-                signatures.insert(
-                    decl.name.clone(),
-                    FnSignature {
-                        params,
-                        return_type,
-                    },
-                );
-                let param_types = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| {
-                        param
-                            .ty
-                            .as_ref()
-                            .and_then(|ty| resolve_type_expr(ty, &mut types))
-                            .unwrap_or(unknown)
-                    })
-                    .collect();
-                let param_names = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| Some(param.name.text.clone()))
-                    .collect();
-                let has_defaults = fn_expr
-                    .params
-                    .iter()
-                    .map(|param| param.default_value.is_some())
-                    .collect();
-                env.insert(
-                    decl.name.clone(),
-                    types.intern(Type::Function {
-                        param_types,
-                        param_names,
-                        has_defaults,
-                        return_type,
-                    }),
-                );
-            }
-        }
+        let mut scratch_diagnostics = Vec::new();
+        register_extern_function_types(
+            unit,
+            &mut types,
+            unknown,
+            &mut env,
+            &mut signatures,
+            &mut scratch_diagnostics,
+            false,
+        );
+        register_decl_function_types(
+            unit,
+            &mut types,
+            unknown,
+            &mut env,
+            &mut signatures,
+            &mut scratch_diagnostics,
+            false,
+        );
 
         let enum_variants = collect_enum_variants(unit);
-        for decl in &unit.declarations {
-            if decl.kind != DeclKind::Binding {
-                continue;
-            }
-            let Some(fn_expr) = extract_fn_expr(&decl.value) else {
-                continue;
-            };
-            let Some(ok_ty_expr) = implicit_error_union_ok_type(fn_expr) else {
-                continue;
-            };
-
-            let inferred_errors = infer_implicit_error_union_set(
-                fn_expr,
-                &env,
-                &mutability,
-                &signatures,
-                &mut types,
-                &enum_variants,
-                &decl.file_path,
-            );
-            if inferred_errors.is_empty() {
-                continue;
-            }
-            let Some(ok_ty) = resolve_type_expr(ok_ty_expr, &mut types) else {
-                continue;
-            };
-            let inferred_return = types.intern(Type::Errorable {
-                ok: ok_ty,
-                errors: inferred_errors,
-            });
-
-            if let Some(signature) = signatures.get_mut(&decl.name) {
-                signature.return_type = inferred_return;
-            }
-
-            if let Some(function_ty) = env.get(&decl.name).copied() {
-                if let Type::Function {
-                    param_types,
-                    param_names,
-                    has_defaults,
-                    ..
-                } = types.get(function_ty).clone()
-                {
-                    env.insert(
-                        decl.name.clone(),
-                        types.intern(Type::Function {
-                            param_types,
-                            param_names,
-                            has_defaults,
-                            return_type: inferred_return,
-                        }),
-                    );
-                }
-            }
-        }
+        apply_inferred_error_return_types(
+            unit,
+            &mut env,
+            &mut mutability,
+            &mut signatures,
+            &mut types,
+            &enum_variants,
+        );
 
         for decl in &unit.declarations {
             if decl.kind != DeclKind::Binding {
@@ -2933,26 +2957,13 @@ pub fn infer_binding_type_strings(
                 .and_then(|ty| resolve_type_expr(ty, &mut types))
                 .unwrap_or(actual);
 
-            if let Some(fn_expr) = extract_fn_expr(&decl.value) {
-                if implicit_error_union_ok_type(fn_expr).is_some() {
-                    if let Some(signature) = signatures.get(&decl.name) {
-                        if let Type::Function {
-                            param_types,
-                            param_names,
-                            has_defaults,
-                            ..
-                        } = types.get(final_ty).clone()
-                        {
-                            final_ty = types.intern(Type::Function {
-                                param_types,
-                                param_names,
-                                has_defaults,
-                                return_type: signature.return_type,
-                            });
-                        }
-                    }
-                }
-            }
+            final_ty = apply_signature_return_type_if_needed(
+                &decl.name,
+                final_ty,
+                &decl.value,
+                &signatures,
+                &mut types,
+            );
 
             env.insert(decl.name.clone(), final_ty);
             mutability.insert(decl.name.clone(), decl.mutable);

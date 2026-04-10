@@ -1,5 +1,5 @@
 // cursor
-use crate::compiler::diagnostics::SourceSpan;
+use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase, SourceSpan};
 use std::path::PathBuf;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -78,9 +78,6 @@ impl<'a> Cursor<'a> {
         }
     }
 }
-// scanner
-
-use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 
 pub struct LexOutput {
     pub tokens: Vec<Token>,
@@ -969,16 +966,6 @@ pub enum Delimiter {
     Comma,
     Semicolon,
 }
-
-pub const NUMERIC_RULES: &[&str] = &[
-    "Integer prefixes: 0b, 0o, 0x, and decimal without prefix",
-    "Decimal floats support exponent markers e/E",
-    "Hex floats use p/P exponent markers and require p/P when fractional",
-    "Underscores are allowed only between digits",
-    "Range operators .. and ..= must win over float-dot ambiguity",
-    "The pair ':' and '=' are always separate tokens",
-    "Invalid numbers emit diagnostics and lexer recovers by consuming full malformed span",
-];
 
 pub fn keyword_from_identifier(identifier: &str) -> Option<TokenKind> {
     if identifier == "true" {

@@ -244,10 +244,13 @@ pub(crate) fn build_raw_module_graph<P: AsRef<Path>>(
     // directly. If a group contains both, it's an ambiguous definition.
     let mut conflict_keys: Vec<ModuleKey> = Vec::new();
     for (key, files) in &groups {
-        let has_flat = files.iter().any(|f| relative_directory_of(f) == key.directory);
+        let has_flat = files
+            .iter()
+            .any(|f| relative_directory_of(f) == key.directory);
         let has_hoisted = files.iter().any(|f| {
             let d = relative_directory_of(f);
-            d != key.directory && d.file_name().and_then(|n| n.to_str()) == Some(key.module_name.as_str())
+            d != key.directory
+                && d.file_name().and_then(|n| n.to_str()) == Some(key.module_name.as_str())
         });
         if has_flat && has_hoisted {
             conflict_keys.push(key.clone());
@@ -279,19 +282,7 @@ pub(crate) fn build_raw_module_graph<P: AsRef<Path>>(
     }
 
     sort_diagnostics_by_primary_path(&mut diagnostics);
-
-    let mut modules = Vec::with_capacity(groups.len());
-    let mut key_to_id = BTreeMap::new();
-
-    for (index, (key, files)) in groups.iter().enumerate() {
-        let id = ModuleId(index);
-        key_to_id.insert(key.clone(), id);
-        modules.push(ResolvedModule {
-            id,
-            key: key.clone(),
-            files: files.clone(),
-        });
-    }
+    let (modules, key_to_id) = build_module_index(&groups);
 
     Ok(ModuleGraph {
         root_dir: start_dir,
@@ -360,7 +351,8 @@ fn filter_graph_to_reachable_modules(graph: &mut ModuleGraph, bin: Option<&str>)
             };
             for import_path in scan_use_import_paths(&source) {
                 let imported_key = module_key_for_import(&key, &import_path);
-                if !reachable.contains(&imported_key) && graph.key_to_id.contains_key(&imported_key) {
+                if !reachable.contains(&imported_key) && graph.key_to_id.contains_key(&imported_key)
+                {
                     queue.push_back(imported_key);
                 }
             }
@@ -368,22 +360,33 @@ fn filter_graph_to_reachable_modules(graph: &mut ModuleGraph, bin: Option<&str>)
     }
 
     graph.groups.retain(|key, _| reachable.contains(key));
-    graph.key_to_id.clear();
-    graph.modules.clear();
-    for (index, (key, files)) in graph.groups.iter().enumerate() {
-        let new_id = ModuleId(index);
-        graph.key_to_id.insert(key.clone(), new_id);
-        graph.modules.push(ResolvedModule {
-            id: new_id,
-            key: key.clone(),
-            files: files.clone(),
-        });
-    }
+    let (modules, key_to_id) = build_module_index(&graph.groups);
+    graph.key_to_id = key_to_id;
+    graph.modules = modules;
 }
 
 pub fn resolve_modules<P: AsRef<Path>>(start_dir: P) -> Result<ModuleGroups, ModuleResolverError> {
     let graph = resolve_module_graph(start_dir)?;
     Ok(graph.groups)
+}
+
+fn build_module_index(
+    groups: &ModuleGroups,
+) -> (Vec<ResolvedModule>, BTreeMap<ModuleKey, ModuleId>) {
+    let mut modules = Vec::with_capacity(groups.len());
+    let mut key_to_id = BTreeMap::new();
+
+    for (index, (key, files)) in groups.iter().enumerate() {
+        let id = ModuleId(index);
+        key_to_id.insert(key.clone(), id);
+        modules.push(ResolvedModule {
+            id,
+            key: key.clone(),
+            files: files.clone(),
+        });
+    }
+
+    (modules, key_to_id)
 }
 
 fn register_module_file(
@@ -417,7 +420,13 @@ fn register_module_file(
         // Directory module: parser/lexer.dyn declares module parser — hoist to parent
         let grandparent = file_dir
             .parent()
-            .map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p })
+            .map(|p| {
+                if p.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    p
+                }
+            })
             .unwrap_or(Path::new("."));
         ModuleKey {
             directory: grandparent.to_path_buf(),

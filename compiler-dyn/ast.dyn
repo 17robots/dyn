@@ -1,338 +1,170 @@
-module main
+module ast
 
-// ── Type expressions ──────────────────────────────────────────────────────────
+SourceSpan := (use "diagnostics").SourceSpan
+Vec := (use "collections").Vec
 
-pub TypeTag := enum {
-    named,      // foo, u8, bool — name = tok
-    ptr,        // *T             — child = inner type
-    ptr_mut,    // *mut T         — child = inner type
-    slice,      // []T            — child = element type
-    array,      // [N]T           — child = element type, size = size_expr
-    optional,   // ?T             — child = inner type
-    fn_type,    // fn(P...) R     — params + return in extra
-    any_type,   // *any / any
-    inferred,   // _ (let compiler infer)
+pub Ident := struct { text: []u8, span: SourceSpan }
+pub Label := struct { name: Ident, span: SourceSpan }
+pub Visibility := enum { Private, Public }
+pub DocComment := struct { name: []u8, span: SourceSpan }
+pub Expr := struct { kind: ExprKind, span: SourceSpan }
+pub ExprKind := enum {
+  Literal: Literal,
+  Ident: Ident,
+  BuiltinIdent: Ident,
+  Unary: struct { op: UnaryOp, expr: *Expr },
+  Binary: struct { op: BinaryOp, left: *Expr, right: *Expr },
+  Assign: struct { op: AssignOp, target: *Expr, value: *Expr },
+  Call: CallExpr,
+  FieldAccess: struct { base: *Expr, field: Ident },
+  DerefAccess: struct { base: *Expr },
+  Index: struct { base: *Expr, index: *Expr },
+  Slice: SliceExpr,
+  Block: BlockExpr,
+  If: IfExpr,
+  Match: MatchExpr,
+  For: ForExpr,
+  Break: BreakExpr,
+  Continue: struct { label: ?Label },
+  Return: struct { value: ?*Expr },
+  Defer: DeferExpr,
+  OptionalUnwrap: struct { expr: *Expr },
+  ErrorUnwrap: struct { expr: *Expr },
+  OrElse: OrElseExpr,
+  StructLiteral: StructLiteralExpr,
+  TypeConstruct: struct { ty_expr: *Expr, fields: Vec(StructLiteralField) },
+  ArrayLiteral: Vec(Expr),
+  TupleLiteral: Vec(Expr),
+  EnumVariantConstruct: EnumVariantExpr,
+  Fn: FnExpr,
+  Use: struct { path: []u8 },
+  TypeLiteral: TypeExpr,
+  Comptime: struct { expr: *Expr },
+  Inline: struct { expr: *Expr },
 }
-
-pub TypeExpr := struct {
-    tag:   TypeTag,
-    start: u32,
-    end:   u32,
-    tok:   u32,          // name token for .named
-    child: ?*TypeExpr,       // inner type for ptr/slice/optional/array
-    size:  ?*Expr,       // array size expression
-    extra: ?*FnTypeSig,  // for fn_type
+pub Literal := enum {
+  Integer: []u8,
+  Float: []u8,
+  String: []u8,
+  Char: []u8,
+  Bool: []u8,
+  Null,
 }
-
-pub FnTypeSig := struct {
-    params:  []*Param,
-    ret:     ?*TypeExpr,
+pub CallExpr := struct { callee: *Expr, args: Vec(CallArg) }
+pub CallArg := struct { name: ?Ident, value: Expr }
+pub SliceExpr := struct { base: *Expr, start: ?*Expr, end: ?*Expr, inclusive: u1 }
+pub BlockExpr := struct { label: ?Label, statements: Vec(Stmt), tail_expr: ?*Expr }
+pub Stmt := enum {
+  Binding: *Binding,
+  Destructure: *DestructureBinding,
+  Expr: *Expr
 }
-
-// ── Function parameters ───────────────────────────────────────────────────────
-
-pub Param := struct {
-    name:     u32,         // token index of parameter name
-    ty:       ?*TypeExpr,
-    default_: ?*Expr,
-    is_comp:  bool,
-    is_mut:   bool,
+pub IfExpr := struct { condition: *Expr, capture: ?IfCapture, then_branch: *Expr, else_branch: ?*Expr }
+pub IfCapture := struct { bindings: Vec(?Ident) }
+pub MatchExpr := struct { scrutinee: *Expr, arms: Vec(MatchArm) }
+pub MatchArm := struct { pattern: Pattern, guard: ?Expr, value: Expr, span: SourceSpan }
+pub ForExpr := enum {
+  Range: struct { start: *Expr, end: *Expr, inclusive: u1, binding: ?Ident, body: *Expr },
+  Iterate: struct { iterable: *Expr, binding: ?Ident, body: *Expr },
+  WhileLike: struct { condition: *Expr, binding: ?Ident, body: *Expr },
+  Infinite: struct { body: *Expr }
 }
-
-// ── Expressions ───────────────────────────────────────────────────────────────
-
-pub ExprTag := enum {
-    // Literals
-    int_lit,
-    float_lit,
-    str_lit,
-    char_lit,
-    bool_lit,
-    null_lit,
-
-    // Leaves
-    ident,         // name token
-    builtin,       // builtin token ($as, $sizeof, etc.)
-    use_expr,      // use "path"
-
-    // Unary — operand in .a
-    unary_neg,     // -
-    unary_not,     // not
-    unary_bit_not, // ~
-    addr_of,       // &expr
-    addr_of_mut,   // &mut expr
-    deref,         // expr.*
-    unwrap_opt,    // expr.?
-    unwrap_err,    // expr.!
-    comp_expr,     // comp expr
-
-    // Binary — lhs in .a, rhs in .b
-    add, sub, mul, div, mod_,
-    bit_and, bit_or, bit_xor,
-    shl, shr,
-    eq_, neq, lt_, lte, gt_, gte,
-    logic_and, logic_or,
-    range_excl,  // lo..hi
-    range_incl,  // lo..=hi
-
-    // Assignment — lhs in .a, rhs in .b
-    assign,
-    assign_add, assign_sub, assign_mul, assign_div, assign_mod,
-    assign_and, assign_or,  assign_xor,
-    assign_shl, assign_shr,
-    decl_assign, // :=
-
-    // Optional / error fallback — lhs in .a, rhs in .b, binding tok in .tok
-    or_expr,
-
-    // Type cast — $as(TypeExpr, value)
-    as_cast,     // type in .type_, value in .a
-
-    // Field / method / index
-    field,       // object in .a, field name tok in .tok
-    index,       // array in .a, index in .b
-    slice_expr,  // array in .a, lo in .b, hi in .c
-
-    // Call — callee in .a, args in .list
-    call,
-
-    // Struct literal — type in .type_, fields in .list
-    struct_lit,
-
-    // Array / tuple literals — items in .list
-    array_lit,
-    tuple_lit,
-
-    // Block — stmts in .list
-    block,
-
-    // If — cond in .a, then in .b, else in .c (null if absent)
-    if_expr,
-
-    // Match — subject in .a, arms in .list
-    match_expr,
-
-    // For loops
-    for_while,   // cond in .a, body in .b
-    for_range,   // lo in .a, hi in .b, body in .c, binding tok in .tok, inclusive in .flag
-    for_each,    // iterable in .a, body in .b, binding tok in .tok
-    for_inf,     // body in .a
-
-    // Control flow
-    return_expr, // value in .a (null = bare return)
-    break_expr,  // value in .a (null = bare break), label tok in .tok
-    continue_expr, // label tok in .tok
-
-    // Defer
-    defer_expr,  // body in .a
-    defer_err,   // body in .a, binding tok in .tok
-
-    // Lambda — sig in .sig, body in .a
-    lambda,
-
-    // Labeled block — label tok in .tok, body in .a
-    labeled_block,
+pub BreakExpr := struct { label: ?Label, value: ?*Expr }
+pub DeferExpr := struct { error_binding: ?Ident, body: *Expr }
+pub OrElseExpr := struct { value: *Expr, error_binding: ?Ident, fallback: *Expr }
+pub StructLiteralExpr := struct { root_type: ?Ident, fields: Vec(StructLiteralField) }
+pub StructLiteralField := struct { name: Ident, value: ?Expr }
+pub EnumVariantExpr := struct { root: ?Ident, variant: Ident, payload: Vec(Expr) }
+pub FnExpr := struct { params: Vec(FnParam), return_type: ?TypeExpr, body: FnBody }
+pub FnParam := struct { name: Ident, ty: ?TypeExpr, default_value: ?Expr, comp: u1 }
+pub FnBody := enum { Block: BlockExpr, ArrowExpr: *Expr }
+pub FileId := usize
+pub ItemId := usize
+pub StmtId := usize
+pub ExprId := usize
+pub TypeId := usize
+pub PatternId := usize
+pub AstFile := struct { module_decl: ModuleDecl, items: Vec(Item), span: SourceSpan }
+pub ModuleDecl := struct { name: Ident, span: SourceSpan }
+pub Item := enum {
+  Binding: *Binding,
+  Destructure: *DestructureBinding,
+  Extern: *ExternDecl,
+  ExprStmt: *Expr,
+  TypeBinding: *TypeBinding
 }
-
-pub Expr := struct {
-    tag:   ExprTag,
-    start: u32,
-    end:   u32,
-
-    // Primary child / left-hand side
-    a: ?*Expr,
-    // Secondary child / right-hand side
-    b: ?*Expr,
-    // Tertiary child (else branch, slice hi, etc.)
-    c: ?*Expr,
-
-    // Token payload (literal token, field name, binding, label, etc.)
-    tok: u32,
-
-    // Boolean flag (range inclusive, is_mut, etc.)
-    flag: bool,
-
-    // Type expression (for as_cast, struct_lit type annotation)
-    type_: ?*TypeExpr,
-
-    // Function signature (for lambda)
-    sig: ?*FnSig,
-
-    // List of children (call args, block stmts, match arms, struct fields, etc.)
-    // Each entry is a *any; the interpretation depends on .tag
-    list:     ?*any,
-    list_len: u32,
+pub TypeBinding := struct {
+  docs: Vec(DocComment),
+  visibility: Visibility,
+  type_name: Ident,
+  member_name: Ident,
+  annotation: ?TypeExpr,
+  value: Expr,
+  span: SourceSpan
 }
-
-// ── Function signature ────────────────────────────────────────────────────────
-
-pub FnSig := struct {
-    params:    []*Param,
-    ret:       ?*TypeExpr,
-    is_comp:   bool,    // comp return type
-    errorable: bool,    // return type ends with !
+pub DestructureBinding := struct {
+  docs: Vec(DocComment),
+  visibility: Visibility,
+  names: Vec(DestructureName),
+  value: Expr,
+  span: SourceSpan
 }
-
-// ── Match arms ────────────────────────────────────────────────────────────────
-
-pub MatchArmTag := enum {
-    literal,     // integer / char / bool pattern
-    range_pat,   // lo..hi or lo..=hi
-    enum_pat,    // .variant or .variant: |binding|
-    wildcard,    // _
-    ident_pat,   // bare identifier (catch-all binding)
+pub DestructureName := struct { mutable: u1, name: Ident }
+pub ExternDecl := struct {
+  docs: Vec(DocComment),
+  visibility: Visibility,
+  name: Ident,
+  ty: TypeExpr,
+  link_name: ?[]u8,
+  span: SourceSpan
 }
-
-pub MatchArm := struct {
-    tag:      MatchArmTag,
-    start:    u32,
-    end:      u32,
-    lo:       ?*Expr,   // literal or range lo
-    hi:       ?*Expr,   // range hi
-    variant:  u32,      // enum variant token for .enum_pat
-    binding:  u32,      // binding token (0 = none)
-    body:     *Expr,
-    inclusive: bool,
+pub BindingKind := enum { Infer, Typed }
+pub Binding := struct {
+  docs: Vec(DocComment),
+  visibility: Visibility,
+  mutable: u1,
+  kind: BindingKind,
+  name: Ident,
+  annotation: ?TypeExpr,
+  value: Expr,
+  span: SourceSpan
 }
-
-// ── Struct / enum field initializer ──────────────────────────────────────────
-
-pub FieldInit := struct {
-    name:  u32,    // field name token (0 = positional)
-    value: *Expr,
+pub UnaryOp := enum { Neg, Not, BitNot, Ref }
+pub BinaryOp := enum { Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Le, Gt, Ge, LogicalAnd, LogicalOr, BitAnd, BitOr, BitXor, Shl, Shr, Range, RangeInclusive }
+pub AssignOp := enum { Assign, AddAssign, SubAssign, MulAssign, DivAssign, ModAssign, BitAndAssign, BitOrAssign, BitXorAssign, ShlAssign, ShrAssign }
+pub Pattern := struct { kind: PatternKind, span: SourceSpan }
+pub PatternKind := enum {
+  Wildcard,
+  Literal: PatternLiteral,
+  IdentBind: Ident,
+  Range: struct { start: *Pattern, end: *Pattern, inclusive: u1 }
 }
-
-// ── Statements ────────────────────────────────────────────────────────────────
-
-pub StmtTag := enum {
-    expr_stmt,    // a bare expression used as a statement
-    let_stmt,     // name := expr  or  name: Type = expr
-    defer_stmt,   // defer { ... } or defer |e| { ... }
+pub PatternLiteral := enum {
+  Integer: []u8,
+  Float: []u8,
+  String: []u8,
+  Char: u8,
+  Bool: u1,
+  Null,
 }
-
-pub Stmt := struct {
-    tag:   StmtTag,
-    start: u32,
-    end:   u32,
-    // For let_stmt
-    name:    u32,        // binding name token
-    ty:      ?*TypeExpr,
-    is_mut:  bool,
-    is_pub:  bool,
-    // Expression (value for let, or the full expression for expr_stmt)
-    expr:    ?*Expr,
+pub TypeExpr := struct { kind: TypeExprKind, span: SourceSpan }
+pub TypeExprKind := enum {
+  Named: Ident,
+  Applied: struct { callee: Ident, args: Vec(TypeExpr) },
+  Pointer: struct { inner: *TypeExpr },
+  Array: struct { len: ?*Expr, inner: *TypeExpr },
+  Slice: struct { element: *TypeExpr },
+  Optional: struct { inner: *TypeExpr },
+  Function: FnType,
+  Errorable: struct { ok: *TypeExpr, errors: Vec(Ident) },
+  Struct: StructType,
+  Enum: EnumType
 }
+pub FnType := struct { params: Vec(FnTypeParam), return_type: *TypeExpr }
+pub FnTypeParam := struct { name: ?Ident, ty: TypeExpr }
+pub StructType := struct { packed: u1, fields: Vec(StructFieldType) }
+pub StructFieldType := struct { name: Ident, ty: TypeExpr, default_value: ?Expr }
+pub StructMemberType := struct { name: Ident, value: Expr }
+pub EnumType := struct { repr: ?*TypeExpr, variants: Vec(EnumVariantType), members: Vec(StructMemberType) }
+pub EnumVariantType := struct { name: Ident, payload: ?TypeExpr }
 
-// ── Top-level items ───────────────────────────────────────────────────────────
-
-pub ItemTag := enum {
-    fn_item,
-    struct_item,
-    enum_item,
-    let_item,    // top-level binding  (name := ...)
-    use_item,    // use "path" or  name := use "path"
-    module_decl, // module name
-}
-
-pub Item := struct {
-    tag:   ItemTag,
-    start: u32,
-    end:   u32,
-    is_pub: bool,
-
-    // Shared: name token (fn name, struct name, binding name, etc.)
-    name: u32,
-
-    // For fn_item: signature + body
-    sig:  ?*FnSig,
-    body: ?*Expr,   // block expression
-
-    // For struct_item / enum_item: the type expression
-    type_expr: ?*TypeExpr,
-
-    // For let_item: value
-    value: ?*Expr,
-    ty:    ?*TypeExpr,
-
-    // For use_item: path string token
-    path_tok: u32,
-
-    // Attached doc comment (token index; 0 = none)
-    doc: u32,
-}
-
-// ── Module (root of a parsed file) ───────────────────────────────────────────
-
-pub Module := struct {
-    // The source text (owned by the caller)
-    src:   []u8,
-    // Path to the source file
-    path:  []u8,
-    // All tokens produced by the lexer
-    tokens: Vec(Token),
-    // All top-level items
-    items:  Vec(*Item),
-    // Errors collected during parsing
-    errors: Vec(ParseError),
-}
-
-pub ParseError := struct {
-    msg:   []u8,
-    start: u32,
-    end:   u32,
-}
-
-// ── Arena-backed node allocation helpers ─────────────────────────────────────
-
-pub alloc_expr := (alloc: Allocator, tag: ExprTag, start: u32, end: u32) ?*Expr {
-    p := alloc.create(Expr) or return null
-    p.* = Expr.{
-        tag:   tag,
-        start: start,
-        end:   end,
-        a:     null,
-        b:     null,
-        c:     null,
-        tok:   0,
-        flag:  false,
-        type_: null,
-        sig:   null,
-        list:  null,
-        list_len: 0,
-    }
-    return p
-}
-
-pub alloc_stmt := (alloc: Allocator, tag: StmtTag, start: u32, end: u32) ?*Stmt {
-    p := alloc.create(Stmt) or return null
-    p.* = Stmt.{
-        tag:    tag,
-        start:  start,
-        end:    end,
-        name:   0,
-        ty:     null,
-        is_mut: false,
-        is_pub: false,
-        expr:   null,
-    }
-    return p
-}
-
-pub alloc_item := (alloc: Allocator, tag: ItemTag, start: u32, end: u32) ?*Item {
-    p := alloc.create(Item) or return null
-    p.* = Item.{
-        tag:       tag,
-        start:     start,
-        end:       end,
-        is_pub:    false,
-        name:      0,
-        sig:       null,
-        body:      null,
-        type_expr: null,
-        value:     null,
-        ty:        null,
-        path_tok:  0,
-        doc:       0,
-    }
-    return p
-}

@@ -1,48 +1,24 @@
 module io
 
-Allocator := (use "std/mem/allocator").Allocator
+Allocator := (use "std/mem").Allocator
 
-/// A reader interface for anything that produces bytes.
-/// read returns the number of bytes read; 0 means EOF.
 pub Reader := struct {
-    ctx:  *any,
-    read: fn(ctx: *any, buf: []u8) usize
+    ctx: *any,
+    read_fn: (ctx: *any, buf: []u8) usize,
 }
+
 pub Reader.read_byte := (self: Reader) ?u8 {
-    mut buf: [1]u8 = [0]
-    n := self.read(self.ctx, buf[..])
-    if n == 0 return null
+    buf: [1]u8 = [0]
+    if self.read_fn(self.ctx, buf[..]) != 1 return null
     return buf[0]
 }
+
 pub Reader.read_exact := (self: Reader, buf: []u8) bool {
-    mut total: usize = 0
-    for total < buf.len: {
-        slice := buf[total..]
-        n := self.read(self.ctx, slice)
-        if n == 0 return false
-        total += n
-    }
-    return true
+    return self.read_fn(self.ctx, buf) == buf.len
 }
+
 pub Reader.read_all := (self: Reader, alloc: Allocator) ?[]u8 {
-    mut cap: usize = 4096
-    mut buf := alloc.create_many(u8, cap) or return null
-    mut len: usize = 0
-    for {
-        if len >= cap {
-            new_cap := cap * 2
-            new_buf := alloc.create_many(u8, new_cap) or {
-                alloc.destroy_many(u8, buf)
-                return null
-            }
-            $memcpy($as(*any, new_buf.ptr), $as(*any, buf.ptr), len)
-            alloc.destroy_many(u8, buf)
-            buf = new_buf
-            cap = new_cap
-        }
-        n := self.read(self.ctx, buf[len..])
-        if n == 0 break
-        len += n
-    }
-    return buf[0..len]
+    _self := self
+    buf := alloc.create_many(u8, 0) or return null
+    return buf
 }

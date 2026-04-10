@@ -51,6 +51,19 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            if self.starts_expr() {
+                let start = self.current_span();
+                let span = self.parse_expr(0).map(|expr| expr.span).unwrap_or(start);
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "top-level statements are not allowed",
+                    span,
+                    "move this expression into a declaration or function body",
+                );
+                self.match_delimiter(Delimiter::Semicolon);
+                continue;
+            }
+
             self.sync_to_top_level_boundary();
         }
 
@@ -276,6 +289,28 @@ impl<'a> Parser<'a> {
                         error_binding: capture,
                         fallback: Box::new(fallback),
                     }),
+                };
+                continue;
+            }
+
+            if self.peek_identifier_text("and") {
+                let and_span = self.current_span();
+                self.advance();
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "word-form `and` operator is not supported",
+                    and_span,
+                    "replace `and` with `&&`",
+                );
+                let right = self.parse_expr(31)?;
+                let span = merge_span(left.span, right.span);
+                left = Expr {
+                    span,
+                    kind: ExprKind::Binary {
+                        op: BinaryOp::LogicalAnd,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
                 };
                 continue;
             }
@@ -510,23 +545,7 @@ impl<'a> Parser<'a> {
             {
                 let start = expr.span;
                 self.advance(); // consume `{`
-                let mut fields = Vec::new();
-                while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
-                    let name = match self.parse_ident() {
-                        Some(n) => n,
-                        None => break,
-                    };
-                    self.expect_operator(Operator::Colon, "expected ':' in struct field");
-                    let value = match self.parse_expr(0) {
-                        Some(v) => v,
-                        None => break,
-                    };
-                    fields.push(StructLiteralField { name, value });
-                    if self.match_delimiter(Delimiter::Comma) {
-                        continue;
-                    }
-                    break;
-                }
+                let fields = self.parse_struct_literal_fields(true)?;
                 let end = self.current_span();
                 self.expect_delimiter(Delimiter::RBrace, "expected '}' after struct construction");
                 expr = Expr {
@@ -624,7 +643,10 @@ impl<'a> Parser<'a> {
                         return Some(Expr {
                             span,
                             kind: ExprKind::Block(BlockExpr {
-                                label: Some(Label { name: ident, span: token.span }),
+                                label: Some(Label {
+                                    name: ident,
+                                    span: token.span,
+                                }),
                                 statements: Vec::new(),
                                 tail_expr: Some(Box::new(for_expr)),
                             }),
@@ -845,7 +867,9 @@ impl<'a> Parser<'a> {
             }
 
             if self.looks_like_destructure_binding() {
-                if let Some(Item::Destructure(d)) = self.parse_destructure_binding(vec![], Visibility::Private) {
+                if let Some(Item::Destructure(d)) =
+                    self.parse_destructure_binding(vec![], Visibility::Private)
+                {
                     statements.push(Stmt::Destructure(d));
                     tail_expr = None;
                     self.match_delimiter(Delimiter::Semicolon);
@@ -1227,7 +1251,7 @@ impl<'a> Parser<'a> {
                 DiagnosticCode::E3001,
                 "extern bindings must declare function signatures",
                 ty.span,
-                "use `extern (args) ret` or `extern fn(args) ret`",
+                "use `extern (args) ret`",
             );
         }
 
@@ -1248,23 +1272,7 @@ impl<'a> Parser<'a> {
             Delimiter::RParen,
             "expected ')' to close extern function params",
         );
-        let return_type = if self.starts_type_expr() {
-            self.parse_type_expr().unwrap_or(TypeExpr {
-                span: self.prev_span(),
-                kind: TypeExprKind::Named(Ident {
-                    text: "void".to_string(),
-                    span: self.prev_span(),
-                }),
-            })
-        } else {
-            TypeExpr {
-                span: self.prev_span(),
-                kind: TypeExprKind::Named(Ident {
-                    text: "void".to_string(),
-                    span: self.prev_span(),
-                }),
-            }
-        };
+        let return_type = self.parse_type_expr_or_void();
 
         Some(TypeExpr {
             span: merge_span(start, return_type.span),
@@ -1302,7 +1310,7 @@ impl<'a> Parser<'a> {
             let name = self.parse_ident()?;
             let (comp, ty) = if self.match_operator(Operator::Colon) {
                 let comp = self.match_keyword(Keyword::Comp);
-                (comp, Some(self.parse_type_expr()?))
+                (comp, Some(self.parse_param_type_expr()?))
             } else {
                 (false, None)
             };
@@ -1568,6 +1576,37 @@ impl<'a> Parser<'a> {
         bindings
     }
 
+    fn parse_param_type_expr(&mut self) -> Option<TypeExpr> {
+        let start = self.current_span();
+        if self.match_operator(Operator::Star) {
+            let _mutable = self.match_keyword(Keyword::Mut);
+            let inner = self.parse_type_expr()?;
+            return Some(TypeExpr {
+                span: merge_span(start, inner.span),
+                kind: TypeExprKind::Pointer {
+                    inner: Box::new(inner),
+                },
+            });
+        }
+
+        if self.peek_delimiter(Delimiter::LBracket)
+            && self.peek_next_kind(TokenKind::Delimiter(Delimiter::RBracket))
+        {
+            self.advance();
+            self.advance();
+            let _mutable = self.match_keyword(Keyword::Mut);
+            let element = self.parse_type_expr()?;
+            return Some(TypeExpr {
+                span: merge_span(start, element.span),
+                kind: TypeExprKind::Slice {
+                    element: Box::new(element),
+                },
+            });
+        }
+
+        self.parse_type_expr()
+    }
+
     fn parse_type_expr(&mut self) -> Option<TypeExpr> {
         let start = self.current_span();
         if self.match_keyword(Keyword::Comp) || self.match_keyword(Keyword::Inline) {
@@ -1616,6 +1655,22 @@ impl<'a> Parser<'a> {
             });
         }
 
+        if self.match_delimiter(Delimiter::LParen) {
+            let params = self.parse_fn_type_params();
+            self.expect_delimiter(
+                Delimiter::RParen,
+                "expected ')' to close function type params",
+            );
+            let return_type = self.parse_type_expr_or_void();
+            return Some(TypeExpr {
+                span: merge_span(start, return_type.span),
+                kind: TypeExprKind::Function(FnType {
+                    params,
+                    return_type: Box::new(return_type),
+                }),
+            });
+        }
+
         if self.match_keyword(Keyword::Packed) {
             if self.match_keyword(Keyword::Struct) {
                 return self.parse_struct_type(start, true);
@@ -1639,45 +1694,23 @@ impl<'a> Parser<'a> {
         let mut name = self.parse_ident()?;
         // Handle qualified types like `io.Writer`
         while self.peek_operator(Operator::Dot) {
-            if matches!(self.tokens.get(self.index + 1).map(|t| &t.kind), Some(TokenKind::Identifier)) {
+            if matches!(
+                self.tokens.get(self.index + 1).map(|t| &t.kind),
+                Some(TokenKind::Identifier)
+            ) {
                 self.advance(); // consume `.`
                 let field = self.parse_ident()?;
                 let span = merge_span(name.span, field.span);
-                name = Ident { text: format!("{}.{}", name.text, field.text), span };
+                name = Ident {
+                    text: format!("{}.{}", name.text, field.text),
+                    span,
+                };
             } else {
                 break;
             }
         }
-        if name.text == "fn" && self.match_delimiter(Delimiter::LParen) {
-            let params = self.parse_fn_type_params();
-            self.expect_delimiter(
-                Delimiter::RParen,
-                "expected ')' to close function type params",
-            );
-            let return_type = if self.starts_type_expr() {
-                self.parse_type_expr().unwrap_or(TypeExpr {
-                    span: self.prev_span(),
-                    kind: TypeExprKind::Named(Ident {
-                        text: "void".to_string(),
-                        span: self.prev_span(),
-                    }),
-                })
-            } else {
-                TypeExpr {
-                    span: self.prev_span(),
-                    kind: TypeExprKind::Named(Ident {
-                        text: "void".to_string(),
-                        span: self.prev_span(),
-                    }),
-                }
-            };
-            return Some(TypeExpr {
-                span: merge_span(name.span, return_type.span),
-                kind: TypeExprKind::Function(FnType {
-                    params,
-                    return_type: Box::new(return_type),
-                }),
-            });
+        if name.text == "fn" && self.peek_delimiter(Delimiter::LParen) {
+            return self.parse_removed_fn_keyword_type(name);
         }
         let mut ty = if self.match_delimiter(Delimiter::LParen) {
             let args = self.parse_type_args();
@@ -1707,6 +1740,49 @@ impl<'a> Parser<'a> {
         Some(ty)
     }
 
+    fn parse_removed_fn_keyword_type(&mut self, name: Ident) -> Option<TypeExpr> {
+        self.report_parser_error(
+            DiagnosticCode::E3001,
+            "`fn(...)` type syntax has been removed",
+            name.span,
+            "use `(param: Type, ...) ReturnType` instead",
+        );
+        self.expect_delimiter(Delimiter::LParen, "expected '(' after `fn`");
+        let params = self.parse_fn_type_params();
+        self.expect_delimiter(
+            Delimiter::RParen,
+            "expected ')' to close function type params",
+        );
+        let return_type = self.parse_type_expr_or_void();
+        Some(TypeExpr {
+            span: merge_span(name.span, return_type.span),
+            kind: TypeExprKind::Function(FnType {
+                params,
+                return_type: Box::new(return_type),
+            }),
+        })
+    }
+
+    fn parse_type_expr_or_void(&mut self) -> TypeExpr {
+        if self.starts_type_expr() {
+            self.parse_type_expr().unwrap_or(TypeExpr {
+                span: self.prev_span(),
+                kind: TypeExprKind::Named(Ident {
+                    text: "void".to_string(),
+                    span: self.prev_span(),
+                }),
+            })
+        } else {
+            TypeExpr {
+                span: self.prev_span(),
+                kind: TypeExprKind::Named(Ident {
+                    text: "void".to_string(),
+                    span: self.prev_span(),
+                }),
+            }
+        }
+    }
+
     fn parse_fn_type_params(&mut self) -> Vec<FnTypeParam> {
         let mut params = Vec::new();
         while !self.peek_delimiter(Delimiter::RParen) && !self.is_eof() {
@@ -1715,13 +1791,13 @@ impl<'a> Parser<'a> {
             {
                 let name = self.parse_ident();
                 self.expect_operator(Operator::Colon, "expected ':' in function type param");
-                let ty = match self.parse_type_expr() {
+                let ty = match self.parse_param_type_expr() {
                     Some(ty) => ty,
                     None => break,
                 };
                 (name, ty)
             } else {
-                let Some(ty) = self.parse_type_expr() else {
+                let Some(ty) = self.parse_param_type_expr() else {
                     break;
                 };
                 (None, ty)
@@ -1769,7 +1845,11 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                fields.push(StructFieldType { name, ty, default_value });
+                fields.push(StructFieldType {
+                    name,
+                    ty,
+                    default_value,
+                });
             }
             self.match_delimiter(Delimiter::Comma);
             if self.peek_delimiter(Delimiter::RBrace) {
@@ -1814,20 +1894,27 @@ impl<'a> Parser<'a> {
         };
         self.expect_delimiter(Delimiter::LBrace, "expected '{' after enum");
         let mut variants = Vec::new();
-        let mut members = Vec::new();
         while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
             let name = self.parse_ident()?;
             if self.match_operator(Operator::Colon) {
                 if self.match_operator(Operator::Equal) {
-                    let value = self.parse_expr(0)?;
-                    members.push(StructMemberType { name, value });
+                    self.report_parser_error(
+                        DiagnosticCode::E3001,
+                        "enum body members are not supported",
+                        name.span,
+                        "keep only enum variants inside `enum { ... }`",
+                    );
+                    let _ = self.parse_expr(0);
                     self.match_delimiter(Delimiter::Comma);
                     continue;
                 }
                 let payload = self.parse_type_expr();
                 variants.push(EnumVariantType { name, payload });
             } else {
-                variants.push(EnumVariantType { name, payload: None });
+                variants.push(EnumVariantType {
+                    name,
+                    payload: None,
+                });
             }
             self.match_delimiter(Delimiter::Comma);
         }
@@ -1835,7 +1922,11 @@ impl<'a> Parser<'a> {
         self.expect_delimiter(Delimiter::RBrace, "expected '}' to close enum type");
         Some(TypeExpr {
             span: merge_span(start, end),
-            kind: TypeExprKind::Enum(EnumType { repr, variants, members }),
+            kind: TypeExprKind::Enum(EnumType {
+                repr,
+                variants,
+                members: Vec::new(),
+            }),
         })
     }
 
@@ -1852,7 +1943,11 @@ impl<'a> Parser<'a> {
     }
 
     fn should_parse_builtin_type_arg(&self, callee: Option<&Expr>, arg_index: usize) -> bool {
-        let Some(Expr { kind: ExprKind::BuiltinIdent(Ident { text, .. }), .. }) = callee else {
+        let Some(Expr {
+            kind: ExprKind::BuiltinIdent(Ident { text, .. }),
+            ..
+        }) = callee
+        else {
             return false;
         };
         match text.as_str() {
@@ -2003,11 +2098,35 @@ impl<'a> Parser<'a> {
             });
         }
 
+        let fields = self.parse_struct_literal_fields(root_type.is_some())?;
+        let end = self.current_span();
+        self.expect_delimiter(Delimiter::RBrace, "expected '}' after struct literal");
+        Some(Expr {
+            span: merge_span(start, end),
+            kind: ExprKind::StructLiteral(StructLiteralExpr { root_type, fields }),
+        })
+    }
+
+    fn parse_struct_literal_fields(
+        &mut self,
+        allow_shorthand: bool,
+    ) -> Option<Vec<StructLiteralField>> {
         let mut fields = Vec::new();
         while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
             let name = self.parse_ident()?;
-            self.expect_operator(Operator::Colon, "expected ':' in struct literal field");
-            let value = self.parse_expr(0)?;
+            let value = if self.match_operator(Operator::Colon) {
+                self.parse_expr(0)?
+            } else if allow_shorthand
+                && (self.peek_delimiter(Delimiter::Comma) || self.peek_delimiter(Delimiter::RBrace))
+            {
+                Expr {
+                    span: name.span,
+                    kind: ExprKind::Ident(name.clone()),
+                }
+            } else {
+                self.expect_operator(Operator::Colon, "expected ':' in struct literal field");
+                self.parse_expr(0)?
+            };
             fields.push(StructLiteralField { name, value });
             if self.match_delimiter(Delimiter::Comma) {
                 continue;
@@ -2026,12 +2145,7 @@ impl<'a> Parser<'a> {
             }
             break;
         }
-        let end = self.current_span();
-        self.expect_delimiter(Delimiter::RBrace, "expected '}' after struct literal");
-        Some(Expr {
-            span: merge_span(start, end),
-            kind: ExprKind::StructLiteral(StructLiteralExpr { root_type, fields }),
-        })
+        Some(fields)
     }
 
     /// Returns true when the next tokens look like the start of a named struct field (`ident:`).
@@ -2212,6 +2326,7 @@ impl<'a> Parser<'a> {
                             return matches!(
                                 next.kind,
                                 TokenKind::Delimiter(Delimiter::LBrace)
+                                    | TokenKind::Delimiter(Delimiter::LParen)
                                     | TokenKind::Operator(Operator::FatArrow)
                                     | TokenKind::Operator(Operator::Bang)
                                     | TokenKind::Identifier
@@ -2672,6 +2787,7 @@ impl<'a> Parser<'a> {
                 | Some(TokenKind::Operator(Operator::Question))
                 | Some(TokenKind::Operator(Operator::Star))
                 | Some(TokenKind::Delimiter(Delimiter::LBracket))
+                | Some(TokenKind::Delimiter(Delimiter::LParen))
         )
     }
 

@@ -27,10 +27,10 @@
   - `mut` can prefix individual names: `{mut a, b} := expr`.
 
 ## 3. DATA TYPES
-- Integers: Arbitrary bit-width signed and unsigned integers (e.g., `i8`, `i16`, `i32`, `i64`, `u1`, `u8`, `u16`, `u32`, `u64`, `i31`, etc.).
+- Integers: Signed and unsigned integers from 1 to 128 bits (e.g., `i8`, `i16`, `i32`, `i64`, `i128`, `u1`, `u8`, `u16`, `u32`, `u64`, `u128`).
   - Platform-sized: `usize` (unsigned pointer-sized integer) and `isize` (signed pointer-sized integer) are keywords.
   - Arithmetic uses **wrapping semantics** — overflow wraps around silently. No trapping on overflow.
-- Floats: `f32`, `f64`, `f128`.
+- Floats: `f32`, `f64`.
 - Bool: `bool` is an alias for `u1`. `true` and `false` are `u1` literals (the same way `'a'` is a `u8` literal). There is no separate boolean type.
 - Strings/Chars: Strings (`"hello"`) resolve to `[]u8`. Characters (`'a'`) resolve to `u8`.
   - Storage: An immutable string binding is stored in the binary's read-only data segment. A `mut []u8` binding is stored on the stack (or heap if explicitly allocated).
@@ -57,15 +57,15 @@
   - Binding-style form: `write := extern (fd: i32, ptr: *u8, len: usize) i32 = "dynrt_fd_write"`
   - Extern declarations are function-only (no extern variables).
 - Default Arguments: Supported (e.g., `x: i32 = 0`).
-- Named Arguments: Call sites may pass arguments by name in any order (e.g., `add3(y: 1, x: 2)`). The compiler validates that named arguments match declared parameter names.
-- First-Class Functions: `fn(params) ReturnType` is the function type. It is valid anywhere a type is valid — parameter annotations, struct fields, return types, and variable bindings.
-  - **Fat pointer representation**: Every `fn(...)` value is always two words: a function pointer and an environment pointer. This is true regardless of whether the function captures variables. Non-capturing functions have a null environment pointer; the type is the same either way.
+- Named Arguments: Call sites may pass arguments by name, but once a named argument is used, all following arguments must also be named (e.g., `add3(1, z: 2)`). The compiler validates that named arguments match declared parameter names.
+- First-Class Functions: `(params) ReturnType` is the function type. It is valid anywhere a type is valid — parameter annotations, struct fields, return types, and variable bindings. Void-returning function types may omit the return type.
+  - **Fat pointer representation**: Every function value is always two words: a function pointer and an environment pointer. This is true regardless of whether the function captures variables. Non-capturing functions have a null environment pointer; the type is the same either way.
   - **Closures**: A lambda that references variables from the enclosing scope automatically captures them. The captured variables are stored in a heap- or stack-allocated environment struct; the environment pointer in the fat pointer points to that struct.
-  - **Non-capturing functions**: Named functions and lambdas that do not close over any variable have a null environment pointer. They are assignment-compatible with `fn(...)` types.
-  - Example parameter: `do_math := (x: i32, y: i32, math_fn: fn(x: i32, y: i32) i32) i32 { ... }`
-  - Example struct field: `fn_ptr: fn(self: s) void`
-  - Example return type: `math_builder := (the_fn: fn(x: i32, y: i32) i32) fn(x: i32, y: i32) i32 { ... }`
-  - Example closure: `make_adder := (n: i32) fn(x: i32) i32 => (x: i32) i32 => x + n` — the returned lambda captures `n`.
+  - **Non-capturing functions**: Named functions and lambdas that do not close over any variable have a null environment pointer. They are assignment-compatible with function types of the same signature.
+  - Example parameter: `do_math := (x: i32, y: i32, math_fn: (x: i32, y: i32) i32) i32 { ... }`
+  - Example struct field: `fn_ptr: (self: s)`
+  - Example return type: `math_builder := (the_fn: (x: i32, y: i32) i32) (x: i32, y: i32) i32 { ... }`
+  - Example closure: `make_adder := (n: i32) (x: i32) i32 => (x: i32) i32 => x + n` — the returned lambda captures `n`.
 - Comptime Return Type: Prefixing the return type with `comp` means the return type expression is evaluated at compile time. The function produces a value whose concrete type is resolved at the call site.
   - Example: `calc_pi := () comp if use_f64 f64 else f32 => 3.14` — the return type is either `f64` or `f32` depending on the comptime flag.
 
@@ -83,6 +83,7 @@
 - Enums (Sum Types / Tagged Unions): Can hold complex payloads.
   - Definition: `r := enum { variant1, variant2: i32 }`.
   - Explicit representation type is supported with unsigned integer widths: `r := enum(u8) { A, B }`.
+  - Enum bodies contain variants only. Associated values/functions use separate associated declarations such as `r.invalid := 255`.
   - Instantiation: `r.variant2(5)` or `.variant2(5)` if the root enum can be determined from context.
 
 ## 6. CONTROL FLOW (EVERYTHING IS AN EXPRESSION)
@@ -197,8 +198,8 @@
   ```dyn
   Allocator := struct {
       ctx:   *any,
-      alloc: fn(ctx: *any, size: usize, align: usize) ?*any,
-      free:  fn(ctx: *any, ptr: *any, size: usize) void,
+      alloc: (ctx: *any, size: usize, align: usize) ?*any,
+      free:  (ctx: *any, ptr: *any, size: usize),
   }
   ```
 - Specific allocator implementations (arena, page, libc, etc.) are provided by `std` modules and satisfy this interface via the `*any` context pointer.

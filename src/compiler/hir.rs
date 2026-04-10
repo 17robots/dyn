@@ -1,5 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::compiler::ast::{
     AssignOp, BinaryOp, DestructureBinding, Expr, ExprKind, Literal, PatternKind, PatternLiteral,
     TypeExprKind, UnaryOp, Visibility,
@@ -7,6 +5,8 @@ use crate::compiler::ast::{
 use crate::compiler::diagnostics::SourceSpan;
 use crate::compiler::module_resolver::{ModuleId, ModuleKey};
 use crate::compiler::sema::{ModuleUnit, SemanticSession};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirProgram {
@@ -304,7 +304,12 @@ pub fn lower_module_units_with_metadata(
             let enclosing_by_name: BTreeMap<String, String> = unit
                 .type_associations
                 .iter()
-                .map(|a| (format!("{}__{}", a.type_name, a.member_name), a.type_name.clone()))
+                .map(|a| {
+                    (
+                        format!("{}__{}", a.type_name, a.member_name),
+                        a.type_name.clone(),
+                    )
+                })
                 .collect();
             let mut items = unit
                 .declarations
@@ -585,9 +590,10 @@ fn index_type_association(
     decls: &[crate::compiler::sema::DeclStub],
 ) {
     let synthetic = format!("{}__{}", assoc.type_name, assoc.member_name);
-    index
-        .static_methods
-        .insert((assoc.type_name.clone(), assoc.member_name.clone()), synthetic.clone());
+    index.static_methods.insert(
+        (assoc.type_name.clone(), assoc.member_name.clone()),
+        synthetic.clone(),
+    );
     // For functions, also register UFCS instance dispatch and return-type nominal tracking.
     let fn_expr = decls
         .iter()
@@ -600,7 +606,10 @@ fn index_type_association(
     if let Some(receiver) = receiver_style {
         index.instance_methods.insert(
             (assoc.type_name.clone(), assoc.member_name.clone()),
-            MethodTarget { name: synthetic.clone(), receiver },
+            MethodTarget {
+                name: synthetic.clone(),
+                receiver,
+            },
         );
     }
     if let Some(nominal) = fn_expr
@@ -744,7 +753,6 @@ fn append_enum_member_items(
         });
     }
 }
-
 
 /// Returns the type parameters from a generic struct declaration (e.g. `T: comp type` from
 /// `Vec := (T: comp type) type => struct { ... }`). Used when prepending outer params to
@@ -2231,7 +2239,7 @@ fn type_expr_to_string(type_expr: &crate::compiler::ast::TypeExpr) -> String {
                 .collect::<Vec<_>>()
                 .join(",");
             let ret = type_expr_to_string(&fn_ty.return_type);
-            format!("fn({params})->{ret}")
+            format!("({params})->{ret}")
         }
     }
 }

@@ -1,0 +1,8 @@
+module main
+
+nonexistent := use "totally/nonexistent"
+
+main := () i32 {
+    _ = nonexistent.foo()
+    return 0
+}

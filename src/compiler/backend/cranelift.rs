@@ -5,7 +5,7 @@ use cranelift_codegen::{
         entities::StackSlot,
         stackslot::{StackSlotData, StackSlotKind},
         types::{F128, F32, F64, I128, I16, I32, I64, I8},
-        AbiParam, InstBuilder, InstructionData, Opcode, TrapCode, Type, Value, ValueDef,
+        AbiParam, Block, InstBuilder, InstructionData, Opcode, TrapCode, Type, Value, ValueDef,
     },
     settings,
 };
@@ -34,8 +34,8 @@ use crate::compiler::{
     diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase},
     hir::HirLiteral,
     mir::{
-        MirFunction, MirGlobalInit, MirInstr, MirModule, MirProgram, MirTerminator, MirValue,
-        MirValueId, MirValueType,
+        MirBlockId, MirFunction, MirGlobalInit, MirInstr, MirModule, MirProgram, MirTerminator,
+        MirValue, MirValueId, MirValueType,
     },
     type_text::parse_enum_type_descriptor,
 };
@@ -92,7 +92,7 @@ fn backend_hint_mir_type(type_hint: Option<&str>) -> MirValueType {
             bits: 64,
         };
     }
-    if ty.starts_with("fn/") {
+    if ty.starts_with("fn/") || (ty.starts_with('(') && ty.contains(")->")) {
         return MirValueType::FunctionPointer;
     }
     if let Some(bits) = parse_scalar_enum_repr_bits(ty) {
@@ -625,12 +625,25 @@ fn compile_function(
         && returns_errorable
         && !returns_bytes_slice
         && returns_aggregate_layout.is_none();
+    let errorable_scalar_payload_ty = backend_hint_mir_type(Some(
+        normalized_return_type_hint(function.return_type.as_deref()).as_str(),
+    ));
     let signature_ret_ty = if exported {
         I32
     } else if returns_bytes_slice || (returns_aggregate_layout.is_some() && !returns_errorable) {
         pointer_ty
     } else {
         scalar.ty()
+    };
+    let return_profile = FunctionReturnProfile {
+        signature_ret_ty,
+        pointer_ty,
+        scalar,
+        returns_bytes_slice,
+        returns_aggregate_layout: returns_aggregate_layout.as_ref(),
+        returns_errorable,
+        returns_errorable_scalar,
+        errorable_scalar_payload_ty,
     };
 
     let mut param_access = Vec::with_capacity(function.param_types.len());
@@ -826,6 +839,11 @@ fn compile_function(
             }
             builder.seal_block(clif_block);
         }
+        let return_out_ptrs = FunctionReturnOutPtrs {
+            out_len_ptr: function_out_len_ptr,
+            out_aggregate_ptr: function_out_aggregate_ptr,
+            out_errorable_scalar_ptr: function_out_errorable_scalar_ptr,
+        };
 
         let mut lowered = global_lowered.clone();
         if let Some(phi_entries) = phi_layout.get(&block.id.0) {
@@ -942,336 +960,64 @@ fn compile_function(
         }
 
         match &block.terminator {
-            Some(MirTerminator::Return(value)) => {
-                if returns_bytes_slice {
-                    let (ret_ptr, ret_len) = value
-                        .and_then(|id| lowered.get(&id))
-                        .map(|value| match value {
-                            LoweredValue::BytesSlice { ptr, len } => (*ptr, *len),
-                            LoweredValue::FunctionSymbol(func_id) => {
-                                let func_ref = module.declare_func_in_func(*func_id, builder.func);
-                                let ptr = builder.ins().func_addr(pointer_ty, func_ref);
-                                let len = zero_for_type(&mut builder, pointer_ty);
-                                (ptr, len)
-                            }
-                            _ => (
-                                value
-                                    .as_value()
-                                    .map(|v| cast_scalar(&mut builder, v, pointer_ty, scalar))
-                                    .unwrap_or_else(|| zero_for_type(&mut builder, pointer_ty)),
-                                zero_for_type(&mut builder, pointer_ty),
-                            ),
-                        })
-                        .unwrap_or_else(|| {
-                            (
-                                zero_for_type(&mut builder, pointer_ty),
-                                zero_for_type(&mut builder, pointer_ty),
-                            )
-                        });
-
-                    if let Some(out_len_ptr) = function_out_len_ptr {
-                        builder.ins().store(
-                            cranelift_codegen::ir::MemFlags::new(),
-                            ret_len,
-                            out_len_ptr,
-                            0,
-                        );
-                    }
-
-                    builder.ins().return_(&[ret_ptr]);
-                } else if let Some(layout) = returns_aggregate_layout.as_ref() {
-                    let out_ptr = function_out_aggregate_ptr
-                        .unwrap_or_else(|| zero_for_type(&mut builder, pointer_ty));
-                    if returns_errorable {
-                        let status = if let Some(ret_value) =
-                            value.and_then(|id| lowered.get(&id)).cloned()
-                        {
-                            match ret_value {
-                                LoweredValue::StructPointer {
-                                    status: Some(status),
-                                    ..
-                                } => {
-                                    write_aggregate_to_pointer(
-                                        &mut builder,
-                                        out_ptr,
-                                        layout,
-                                        &ret_value,
-                                    );
-                                    cast_scalar(&mut builder, status, signature_ret_ty, scalar)
-                                }
-                                LoweredValue::StructMemory { .. }
-                                | LoweredValue::StructPointer { .. }
-                                | LoweredValue::Struct(_) => {
-                                    write_aggregate_to_pointer(
-                                        &mut builder,
-                                        out_ptr,
-                                        layout,
-                                        &ret_value,
-                                    );
-                                    zero_for_type(&mut builder, signature_ret_ty)
-                                }
-                                _ => ret_value
-                                    .as_int()
-                                    .map(|v| cast_scalar(&mut builder, v, signature_ret_ty, scalar))
-                                    .unwrap_or_else(|| {
-                                        zero_for_type(&mut builder, signature_ret_ty)
-                                    }),
-                            }
-                        } else {
-                            zero_for_type(&mut builder, signature_ret_ty)
-                        };
-                        builder.ins().return_(&[status]);
-                    } else {
-                        if let Some(ret_value) = value.and_then(|id| lowered.get(&id)).cloned() {
-                            write_aggregate_to_pointer(&mut builder, out_ptr, layout, &ret_value);
-                        } else {
-                            zero_aggregate_at_pointer(&mut builder, out_ptr, layout);
-                        }
-                        builder.ins().return_(&[out_ptr]);
-                    }
-                } else if returns_errorable_scalar {
-                    let out_ptr = function_out_errorable_scalar_ptr
-                        .unwrap_or_else(|| zero_for_type(&mut builder, pointer_ty));
-                    let payload_mir_ty = backend_hint_mir_type(Some(
-                        normalized_return_type_hint(function.return_type.as_deref()).as_str(),
-                    ));
-                    let payload_ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
-                        scalar.ty()
-                    } else {
-                        mir_type_to_clif(&payload_mir_ty, scalar)
-                    };
-
-                    let mut status = zero_for_type(&mut builder, signature_ret_ty);
-                    let mut payload = zero_for_type(&mut builder, payload_ty);
-
-                    if let Some(value_id) = value {
-                        let ret_value = lowered.get(value_id).cloned();
-                        if let Some(ret_value) = ret_value {
-                            match ret_value {
-                                LoweredValue::ErrorableScalar {
-                                    status: inner_status,
-                                    payload: inner_payload,
-                                    ..
-                                } => {
-                                    status = cast_scalar(
-                                        &mut builder,
-                                        inner_status,
-                                        signature_ret_ty,
-                                        scalar,
-                                    );
-                                    payload = cast_scalar(
-                                        &mut builder,
-                                        inner_payload,
-                                        payload_ty,
-                                        scalar,
-                                    );
-                                }
-                                other => {
-                                    let is_explicit_error =
-                                        mir_value_resolves_to_empty_enum_variant(
-                                            *value_id,
-                                            &value_defs,
-                                            0,
-                                        ) || mir_value_resolves_to_error_status(
-                                            *value_id,
-                                            &value_defs,
-                                            0,
-                                        ) || mir_value_resolves_to_unknown_nominal_call(
-                                            *value_id,
-                                            &value_defs,
-                                            &symbols.by_name,
-                                            &symbols.returns_unknown_nominal_by_id,
-                                            0,
-                                        ) || (!matches!(payload_mir_ty, MirValueType::Unknown)
-                                            && value_types.get(value_id).is_some_and(|ty| {
-                                                matches!(ty, MirValueType::Unknown)
-                                            }));
-
-                                    if is_explicit_error {
-                                        status = other
-                                            .as_int()
-                                            .map(|v| {
-                                                cast_scalar(
-                                                    &mut builder,
-                                                    v,
-                                                    signature_ret_ty,
-                                                    scalar,
-                                                )
-                                            })
-                                            .unwrap_or_else(|| {
-                                                zero_for_type(&mut builder, signature_ret_ty)
-                                            });
-                                    } else {
-                                        payload = match other {
-                                            LoweredValue::FunctionSymbol(func_id) => {
-                                                let func_ref = module
-                                                    .declare_func_in_func(func_id, builder.func);
-                                                let addr =
-                                                    builder.ins().func_addr(pointer_ty, func_ref);
-                                                cast_scalar(&mut builder, addr, payload_ty, scalar)
-                                            }
-                                            _ => other
-                                                .as_value()
-                                                .map(|v| {
-                                                    cast_scalar(&mut builder, v, payload_ty, scalar)
-                                                })
-                                                .unwrap_or_else(|| {
-                                                    zero_for_type(&mut builder, payload_ty)
-                                                }),
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    builder.ins().store(
-                        cranelift_codegen::ir::MemFlags::new(),
-                        payload,
-                        out_ptr,
-                        0,
-                    );
-                    builder.ins().return_(&[status]);
-                } else {
-                    let ret = value
-                        .and_then(|id| lowered.get(&id))
-                        .and_then(|value| match value {
-                            LoweredValue::FunctionSymbol(func_id) => {
-                                let func_ref = module.declare_func_in_func(*func_id, builder.func);
-                                Some(builder.ins().func_addr(pointer_ty, func_ref))
-                            }
-                            _ => value.as_value(),
-                        })
-                        .map(|value| cast_scalar(&mut builder, value, signature_ret_ty, scalar))
-                        .unwrap_or_else(|| zero_for_type(&mut builder, signature_ret_ty));
-                    builder.ins().return_(&[ret]);
-                }
-            }
-            Some(MirTerminator::Goto(target)) => {
-                let args = edge_args(
-                    block.id.0,
-                    target.0,
-                    &phi_layout,
-                    &lowered,
-                    pointer_ty,
-                    scalar,
-                    &mut builder,
-                );
-                builder.ins().jump(clif_blocks[target.0], &args);
-            }
+            Some(MirTerminator::Return(value)) => emit_function_return(
+                module,
+                &mut builder,
+                &lowered,
+                *value,
+                &return_profile,
+                return_out_ptrs,
+                &value_defs,
+                &value_types,
+                &symbols.by_name,
+                &symbols.returns_unknown_nominal_by_id,
+            ),
+            Some(MirTerminator::Goto(target)) => emit_goto_terminator(
+                block.id.0,
+                *target,
+                &phi_layout,
+                &lowered,
+                pointer_ty,
+                scalar,
+                &clif_blocks,
+                &mut builder,
+            ),
             Some(MirTerminator::Branch {
                 condition,
                 then_block,
                 else_block,
-            }) => {
-                let cond = lowered
-                    .get(condition)
-                    .and_then(LoweredValue::as_int)
-                    .unwrap_or_else(|| zero_for_scalar(&mut builder, scalar));
-                let then_args = edge_args(
-                    block.id.0,
-                    then_block.0,
-                    &phi_layout,
-                    &lowered,
-                    pointer_ty,
-                    scalar,
-                    &mut builder,
-                );
-                let else_args = edge_args(
-                    block.id.0,
-                    else_block.0,
-                    &phi_layout,
-                    &lowered,
-                    pointer_ty,
-                    scalar,
-                    &mut builder,
-                );
-                builder.ins().brif(
-                    cond,
-                    clif_blocks[then_block.0],
-                    &then_args,
-                    clif_blocks[else_block.0],
-                    &else_args,
-                );
-            }
-            Some(MirTerminator::Unreachable) => {
-                builder.ins().trap(TrapCode::unwrap_user(1));
-            }
-            None => {
-                if returns_bytes_slice {
-                    let ret_ptr = zero_for_type(&mut builder, pointer_ty);
-                    let ret_len = zero_for_type(&mut builder, pointer_ty);
-                    if let Some(out_len_ptr) = function_out_len_ptr {
-                        builder.ins().store(
-                            cranelift_codegen::ir::MemFlags::new(),
-                            ret_len,
-                            out_len_ptr,
-                            0,
-                        );
-                    }
-                    builder.ins().return_(&[ret_ptr]);
-                } else if let Some(layout) = returns_aggregate_layout.as_ref() {
-                    let out_ptr = function_out_aggregate_ptr
-                        .unwrap_or_else(|| zero_for_type(&mut builder, pointer_ty));
-                    if returns_errorable {
-                        zero_aggregate_at_pointer(&mut builder, out_ptr, layout);
-                        let status = zero_for_type(&mut builder, signature_ret_ty);
-                        builder.ins().return_(&[status]);
-                    } else {
-                        zero_aggregate_at_pointer(&mut builder, out_ptr, layout);
-                        builder.ins().return_(&[out_ptr]);
-                    }
-                } else if returns_errorable_scalar {
-                    let out_ptr = function_out_errorable_scalar_ptr
-                        .unwrap_or_else(|| zero_for_type(&mut builder, pointer_ty));
-                    let payload_mir_ty = backend_hint_mir_type(Some(
-                        normalized_return_type_hint(function.return_type.as_deref()).as_str(),
-                    ));
-                    let payload_ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
-                        scalar.ty()
-                    } else {
-                        mir_type_to_clif(&payload_mir_ty, scalar)
-                    };
-                    let payload = zero_for_type(&mut builder, payload_ty);
-                    builder.ins().store(
-                        cranelift_codegen::ir::MemFlags::new(),
-                        payload,
-                        out_ptr,
-                        0,
-                    );
-                    let status = zero_for_type(&mut builder, signature_ret_ty);
-                    builder.ins().return_(&[status]);
-                } else {
-                    let ret = zero_for_type(&mut builder, signature_ret_ty);
-                    builder.ins().return_(&[ret]);
-                }
-            }
+            }) => emit_branch_terminator(
+                block.id.0,
+                *condition,
+                *then_block,
+                *else_block,
+                &phi_layout,
+                &lowered,
+                pointer_ty,
+                scalar,
+                &clif_blocks,
+                &mut builder,
+            ),
+            Some(MirTerminator::Unreachable) => emit_unreachable_terminator(&mut builder),
+            None => emit_function_return(
+                module,
+                &mut builder,
+                &lowered,
+                None,
+                &return_profile,
+                return_out_ptrs,
+                &value_defs,
+                &value_types,
+                &symbols.by_name,
+                &symbols.returns_unknown_nominal_by_id,
+            ),
         }
     }
 
     let mut sealed = std::collections::BTreeSet::new();
     sealed.insert(function.entry.0);
     for block in &function.blocks {
-        match &block.terminator {
-            Some(MirTerminator::Goto(target)) => {
-                if sealed.insert(target.0) {
-                    builder.seal_block(clif_blocks[target.0]);
-                }
-            }
-            Some(MirTerminator::Branch {
-                then_block,
-                else_block,
-                ..
-            }) => {
-                if sealed.insert(then_block.0) {
-                    builder.seal_block(clif_blocks[then_block.0]);
-                }
-                if sealed.insert(else_block.0) {
-                    builder.seal_block(clif_blocks[else_block.0]);
-                }
-            }
-            _ => {}
-        }
+        seal_terminator_successors(&block.terminator, &clif_blocks, &mut sealed, &mut builder);
     }
 
     for (idx, clif_block) in clif_blocks.iter().enumerate() {
@@ -1634,7 +1380,13 @@ pub fn build_executable(
             DiagnosticCode::E5002,
             "no main function found",
         ));
-        return Ok((BuildArtifact { executable_path, object_path }, diagnostics));
+        return Ok((
+            BuildArtifact {
+                executable_path,
+                object_path,
+            },
+            diagnostics,
+        ));
     }
     if main_fns.len() > 1 {
         let names = main_fns
@@ -1647,7 +1399,13 @@ pub fn build_executable(
             DiagnosticCode::E5002,
             format!("ambiguous entry point: main is defined in multiple modules ({names})"),
         ));
-        return Ok((BuildArtifact { executable_path, object_path }, diagnostics));
+        return Ok((
+            BuildArtifact {
+                executable_path,
+                object_path,
+            },
+            diagnostics,
+        ));
     }
 
     diagnostics.extend(collect_unsupported_integer_width_diagnostics(mir));
@@ -2099,7 +1857,10 @@ fn link_executable_with_linux_ld(
     Ok(())
 }
 
-fn find_main_functions<'a>(mir: &'a MirProgram, bin: Option<&str>) -> Vec<(&'a MirModule, &'a MirFunction)> {
+fn find_main_functions<'a>(
+    mir: &'a MirProgram,
+    bin: Option<&str>,
+) -> Vec<(&'a MirModule, &'a MirFunction)> {
     let bin_dir = bin.map(PathBuf::from);
     mir.modules
         .iter()
@@ -2714,7 +2475,11 @@ fn parse_int_type_bits(type_name: &str) -> Option<(bool, u16)> {
         return None;
     }
     let bits = rest.parse::<u16>().ok()?;
-    Some((signed, bits))
+    if (1..=128).contains(&bits) {
+        Some((signed, bits))
+    } else {
+        None
+    }
 }
 
 fn parse_float_type_bits(type_name: &str) -> Option<u16> {
@@ -2722,7 +2487,10 @@ fn parse_float_type_bits(type_name: &str) -> Option<u16> {
     if bits.is_empty() {
         return None;
     }
-    bits.parse::<u16>().ok()
+    match bits.parse::<u16>().ok()? {
+        32 | 64 => Some(bits.parse::<u16>().ok()?),
+        _ => None,
+    }
 }
 
 fn int_carrier_type_for_bits(bits: u16) -> Type {
@@ -5434,6 +5202,337 @@ fn edge_args(
     args
 }
 
+fn emit_goto_terminator(
+    from_block: usize,
+    target: MirBlockId,
+    phi_layout: &PhiLayout,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    pointer_ty: Type,
+    scalar: ScalarType,
+    clif_blocks: &[Block],
+    builder: &mut FunctionBuilder,
+) {
+    let args = edge_args(
+        from_block, target.0, phi_layout, lowered, pointer_ty, scalar, builder,
+    );
+    builder.ins().jump(clif_blocks[target.0], &args);
+}
+
+fn emit_branch_terminator(
+    from_block: usize,
+    condition: MirValueId,
+    then_block: MirBlockId,
+    else_block: MirBlockId,
+    phi_layout: &PhiLayout,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    pointer_ty: Type,
+    scalar: ScalarType,
+    clif_blocks: &[Block],
+    builder: &mut FunctionBuilder,
+) {
+    let cond = lowered
+        .get(&condition)
+        .and_then(LoweredValue::as_int)
+        .unwrap_or_else(|| zero_for_scalar(builder, scalar));
+    let then_args = edge_args(
+        from_block,
+        then_block.0,
+        phi_layout,
+        lowered,
+        pointer_ty,
+        scalar,
+        builder,
+    );
+    let else_args = edge_args(
+        from_block,
+        else_block.0,
+        phi_layout,
+        lowered,
+        pointer_ty,
+        scalar,
+        builder,
+    );
+    builder.ins().brif(
+        cond,
+        clif_blocks[then_block.0],
+        &then_args,
+        clif_blocks[else_block.0],
+        &else_args,
+    );
+}
+
+fn emit_unreachable_terminator(builder: &mut FunctionBuilder) {
+    builder.ins().trap(TrapCode::unwrap_user(1));
+}
+
+fn seal_terminator_successors(
+    terminator: &Option<MirTerminator>,
+    clif_blocks: &[Block],
+    sealed: &mut BTreeSet<usize>,
+    builder: &mut FunctionBuilder,
+) {
+    match terminator {
+        Some(MirTerminator::Goto(target)) => {
+            seal_block_if_needed(*target, clif_blocks, sealed, builder);
+        }
+        Some(MirTerminator::Branch {
+            then_block,
+            else_block,
+            ..
+        }) => {
+            seal_block_if_needed(*then_block, clif_blocks, sealed, builder);
+            seal_block_if_needed(*else_block, clif_blocks, sealed, builder);
+        }
+        _ => {}
+    }
+}
+
+fn seal_block_if_needed(
+    block: MirBlockId,
+    clif_blocks: &[Block],
+    sealed: &mut BTreeSet<usize>,
+    builder: &mut FunctionBuilder,
+) {
+    if sealed.insert(block.0) {
+        builder.seal_block(clif_blocks[block.0]);
+    }
+}
+
+fn emit_function_return(
+    module: &mut ObjectModule,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    value: Option<MirValueId>,
+    profile: &FunctionReturnProfile<'_>,
+    out_ptrs: FunctionReturnOutPtrs,
+    value_defs: &BTreeMap<MirValueId, MirValue>,
+    value_types: &BTreeMap<MirValueId, MirValueType>,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    returns_unknown_nominal_by_id: &BTreeMap<u32, bool>,
+) {
+    if profile.returns_bytes_slice {
+        emit_bytes_slice_return(module, builder, lowered, value, profile, out_ptrs);
+    } else if let Some(layout) = profile.returns_aggregate_layout {
+        emit_aggregate_return(builder, lowered, value, profile, out_ptrs, layout);
+    } else if profile.returns_errorable_scalar {
+        emit_errorable_scalar_return(
+            module,
+            builder,
+            lowered,
+            value,
+            profile,
+            out_ptrs,
+            value_defs,
+            value_types,
+            symbols_by_name,
+            returns_unknown_nominal_by_id,
+        );
+    } else {
+        emit_scalar_return(module, builder, lowered, value, profile);
+    }
+}
+
+fn emit_bytes_slice_return(
+    module: &mut ObjectModule,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    value: Option<MirValueId>,
+    profile: &FunctionReturnProfile<'_>,
+    out_ptrs: FunctionReturnOutPtrs,
+) {
+    let (ret_ptr, ret_len) = value
+        .and_then(|id| lowered.get(&id))
+        .map(|value| match value {
+            LoweredValue::BytesSlice { ptr, len } => (*ptr, *len),
+            LoweredValue::FunctionSymbol(func_id) => {
+                let func_ref = module.declare_func_in_func(*func_id, builder.func);
+                let ptr = builder.ins().func_addr(profile.pointer_ty, func_ref);
+                let len = zero_for_type(builder, profile.pointer_ty);
+                (ptr, len)
+            }
+            _ => (
+                value
+                    .as_value()
+                    .map(|v| cast_scalar(builder, v, profile.pointer_ty, profile.scalar))
+                    .unwrap_or_else(|| zero_for_type(builder, profile.pointer_ty)),
+                zero_for_type(builder, profile.pointer_ty),
+            ),
+        })
+        .unwrap_or_else(|| {
+            (
+                zero_for_type(builder, profile.pointer_ty),
+                zero_for_type(builder, profile.pointer_ty),
+            )
+        });
+
+    if let Some(out_len_ptr) = out_ptrs.out_len_ptr {
+        builder.ins().store(
+            cranelift_codegen::ir::MemFlags::new(),
+            ret_len,
+            out_len_ptr,
+            0,
+        );
+    }
+
+    builder.ins().return_(&[ret_ptr]);
+}
+
+fn emit_aggregate_return(
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    value: Option<MirValueId>,
+    profile: &FunctionReturnProfile<'_>,
+    out_ptrs: FunctionReturnOutPtrs,
+    layout: &AggregateLayout,
+) {
+    let out_ptr = out_ptrs
+        .out_aggregate_ptr
+        .unwrap_or_else(|| zero_for_type(builder, profile.pointer_ty));
+    if profile.returns_errorable {
+        let status = if let Some(ret_value) = value.and_then(|id| lowered.get(&id)).cloned() {
+            match ret_value {
+                LoweredValue::StructPointer {
+                    status: Some(status),
+                    ..
+                } => {
+                    write_aggregate_to_pointer(builder, out_ptr, layout, &ret_value);
+                    cast_scalar(builder, status, profile.signature_ret_ty, profile.scalar)
+                }
+                LoweredValue::StructMemory { .. }
+                | LoweredValue::StructPointer { .. }
+                | LoweredValue::Struct(_) => {
+                    write_aggregate_to_pointer(builder, out_ptr, layout, &ret_value);
+                    zero_for_type(builder, profile.signature_ret_ty)
+                }
+                _ => ret_value
+                    .as_int()
+                    .map(|v| cast_scalar(builder, v, profile.signature_ret_ty, profile.scalar))
+                    .unwrap_or_else(|| zero_for_type(builder, profile.signature_ret_ty)),
+            }
+        } else {
+            zero_for_type(builder, profile.signature_ret_ty)
+        };
+        builder.ins().return_(&[status]);
+    } else {
+        if let Some(ret_value) = value.and_then(|id| lowered.get(&id)).cloned() {
+            write_aggregate_to_pointer(builder, out_ptr, layout, &ret_value);
+        } else {
+            zero_aggregate_at_pointer(builder, out_ptr, layout);
+        }
+        builder.ins().return_(&[out_ptr]);
+    }
+}
+
+fn emit_errorable_scalar_return(
+    module: &mut ObjectModule,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    value: Option<MirValueId>,
+    profile: &FunctionReturnProfile<'_>,
+    out_ptrs: FunctionReturnOutPtrs,
+    value_defs: &BTreeMap<MirValueId, MirValue>,
+    value_types: &BTreeMap<MirValueId, MirValueType>,
+    symbols_by_name: &BTreeMap<String, FuncId>,
+    returns_unknown_nominal_by_id: &BTreeMap<u32, bool>,
+) {
+    let out_ptr = out_ptrs
+        .out_errorable_scalar_ptr
+        .unwrap_or_else(|| zero_for_type(builder, profile.pointer_ty));
+    let payload_ty = if matches!(profile.errorable_scalar_payload_ty, MirValueType::Unknown) {
+        profile.scalar.ty()
+    } else {
+        mir_type_to_clif(&profile.errorable_scalar_payload_ty, profile.scalar)
+    };
+
+    let mut status = zero_for_type(builder, profile.signature_ret_ty);
+    let mut payload = zero_for_type(builder, payload_ty);
+
+    if let Some(value_id) = value {
+        if let Some(ret_value) = lowered.get(&value_id).cloned() {
+            match ret_value {
+                LoweredValue::ErrorableScalar {
+                    status: inner_status,
+                    payload: inner_payload,
+                    ..
+                } => {
+                    status = cast_scalar(
+                        builder,
+                        inner_status,
+                        profile.signature_ret_ty,
+                        profile.scalar,
+                    );
+                    payload = cast_scalar(builder, inner_payload, payload_ty, profile.scalar);
+                }
+                other => {
+                    let is_explicit_error =
+                        mir_value_resolves_to_empty_enum_variant(value_id, value_defs, 0)
+                            || mir_value_resolves_to_error_status(value_id, value_defs, 0)
+                            || mir_value_resolves_to_unknown_nominal_call(
+                                value_id,
+                                value_defs,
+                                symbols_by_name,
+                                returns_unknown_nominal_by_id,
+                                0,
+                            )
+                            || (!matches!(
+                                profile.errorable_scalar_payload_ty,
+                                MirValueType::Unknown
+                            ) && value_types
+                                .get(&value_id)
+                                .is_some_and(|ty| matches!(ty, MirValueType::Unknown)));
+
+                    if is_explicit_error {
+                        status = other
+                            .as_int()
+                            .map(|v| {
+                                cast_scalar(builder, v, profile.signature_ret_ty, profile.scalar)
+                            })
+                            .unwrap_or_else(|| zero_for_type(builder, profile.signature_ret_ty));
+                    } else {
+                        payload = match other {
+                            LoweredValue::FunctionSymbol(func_id) => {
+                                let func_ref = module.declare_func_in_func(func_id, builder.func);
+                                let addr = builder.ins().func_addr(profile.pointer_ty, func_ref);
+                                cast_scalar(builder, addr, payload_ty, profile.scalar)
+                            }
+                            _ => other
+                                .as_value()
+                                .map(|v| cast_scalar(builder, v, payload_ty, profile.scalar))
+                                .unwrap_or_else(|| zero_for_type(builder, payload_ty)),
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    builder
+        .ins()
+        .store(cranelift_codegen::ir::MemFlags::new(), payload, out_ptr, 0);
+    builder.ins().return_(&[status]);
+}
+
+fn emit_scalar_return(
+    module: &mut ObjectModule,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    value: Option<MirValueId>,
+    profile: &FunctionReturnProfile<'_>,
+) {
+    let ret = value
+        .and_then(|id| lowered.get(&id))
+        .and_then(|value| match value {
+            LoweredValue::FunctionSymbol(func_id) => {
+                let func_ref = module.declare_func_in_func(*func_id, builder.func);
+                Some(builder.ins().func_addr(profile.pointer_ty, func_ref))
+            }
+            _ => value.as_value(),
+        })
+        .map(|value| cast_scalar(builder, value, profile.signature_ret_ty, profile.scalar))
+        .unwrap_or_else(|| zero_for_type(builder, profile.signature_ret_ty));
+    builder.ins().return_(&[ret]);
+}
+
 #[derive(Debug, Clone)]
 enum LoweredValue {
     Int(Value),
@@ -5622,6 +5721,25 @@ struct CallReturnProfile {
     returns_errorable: bool,
     returns_errorable_scalar: bool,
     errorable_scalar_payload_ty: Option<MirValueType>,
+}
+
+#[derive(Clone)]
+struct FunctionReturnProfile<'a> {
+    signature_ret_ty: Type,
+    pointer_ty: Type,
+    scalar: ScalarType,
+    returns_bytes_slice: bool,
+    returns_aggregate_layout: Option<&'a AggregateLayout>,
+    returns_errorable: bool,
+    returns_errorable_scalar: bool,
+    errorable_scalar_payload_ty: MirValueType,
+}
+
+#[derive(Clone, Copy)]
+struct FunctionReturnOutPtrs {
+    out_len_ptr: Option<Value>,
+    out_aggregate_ptr: Option<Value>,
+    out_errorable_scalar_ptr: Option<Value>,
 }
 
 struct CallOutArgs {
@@ -7018,45 +7136,10 @@ fn lower_call_value(
     let pointer_ty = module.target_config().pointer_type();
 
     // Handle fat pointer (closure) calls specially
-    if let Some(LoweredValue::FatPtr { fn_ptr, env_ptr }) = lowered.get(call.callee).cloned() {
-        let Some(arg_vals) = marshal_call_arg_values(call.args, builder, lowered, module) else {
-            return zero_lowered_for_type(builder, value_ty, scalar);
-        };
-        // Prepend env_ptr to args
-        let mut call_args = vec![env_ptr];
-        call_args.extend(arg_vals.iter().copied());
-
-        // Build signature: (env_ptr, ...args...) -> ret
-        let mut sig = module.make_signature();
-        sig.params
-            .push(cranelift_codegen::ir::AbiParam::new(pointer_ty));
-        for &av in &arg_vals {
-            sig.params.push(cranelift_codegen::ir::AbiParam::new(
-                builder.func.dfg.value_type(av),
-            ));
-        }
-        let return_ty = indirect_call_return_type(
-            value_ty,
-            scalar,
-            pointer_ty,
-            &CallReturnProfile {
-                returns_bytes_slice: false,
-                returns_aggregate: None,
-                returns_errorable: false,
-                returns_errorable_scalar: false,
-                errorable_scalar_payload_ty: None,
-            },
-        );
-        sig.returns
-            .push(cranelift_codegen::ir::AbiParam::new(return_ty));
-        let sig_ref = builder.import_signature(sig);
-        let inst = builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
-        let ret = builder
-            .inst_results(inst)
-            .first()
-            .copied()
-            .unwrap_or_else(|| zero_for_type(builder, return_ty));
-        return LoweredValue::from_typed_value(ret, value_ty);
+    if let Some(lowered_value) = lower_fat_pointer_call(
+        value_ty, &call, builder, lowered, scalar, module, pointer_ty,
+    ) {
+        return lowered_value;
     }
 
     let Some(mut arg_vals) = marshal_call_arg_values(call.args, builder, lowered, module) else {
@@ -7103,6 +7186,59 @@ fn lower_call_value(
     lower_call_result_value(
         value_ty, builder, scalar, pointer_ty, ret, profile, out_args,
     )
+}
+
+fn lower_fat_pointer_call(
+    value_ty: &MirValueType,
+    call: &CallSiteRef<'_>,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    scalar: ScalarType,
+    module: &mut ObjectModule,
+    pointer_ty: Type,
+) -> Option<LoweredValue> {
+    let LoweredValue::FatPtr { fn_ptr, env_ptr } = lowered.get(call.callee).cloned()? else {
+        return None;
+    };
+    let arg_vals =
+        marshal_call_arg_values(call.args, builder, lowered, module).unwrap_or_else(|| Vec::new());
+    if arg_vals.is_empty() && !call.args.is_empty() {
+        return Some(zero_lowered_for_type(builder, value_ty, scalar));
+    }
+
+    let mut call_args = vec![env_ptr];
+    call_args.extend(arg_vals.iter().copied());
+
+    let mut sig = module.make_signature();
+    sig.params
+        .push(cranelift_codegen::ir::AbiParam::new(pointer_ty));
+    for &arg_value in &arg_vals {
+        sig.params.push(cranelift_codegen::ir::AbiParam::new(
+            builder.func.dfg.value_type(arg_value),
+        ));
+    }
+    let return_ty = indirect_call_return_type(
+        value_ty,
+        scalar,
+        pointer_ty,
+        &CallReturnProfile {
+            returns_bytes_slice: false,
+            returns_aggregate: None,
+            returns_errorable: false,
+            returns_errorable_scalar: false,
+            errorable_scalar_payload_ty: None,
+        },
+    );
+    sig.returns
+        .push(cranelift_codegen::ir::AbiParam::new(return_ty));
+    let sig_ref = builder.import_signature(sig);
+    let inst = builder.ins().call_indirect(sig_ref, fn_ptr, &call_args);
+    let ret = builder
+        .inst_results(inst)
+        .first()
+        .copied()
+        .unwrap_or_else(|| zero_for_type(builder, return_ty));
+    Some(LoweredValue::from_typed_value(ret, value_ty))
 }
 
 fn marshal_call_arg_values(
@@ -7365,6 +7501,83 @@ fn lower_call_result_value(
     profile: CallReturnProfile,
     out_args: CallOutArgs,
 ) -> LoweredValue {
+    if profile.returns_bytes_slice {
+        return lower_bytes_slice_call_result(builder, scalar, pointer_ty, ret, out_args);
+    }
+
+    if let (Some(layout), Some(slot)) = (
+        profile.returns_aggregate.clone(),
+        out_args.aggregate_out_slot,
+    ) {
+        return lower_aggregate_call_result(
+            builder,
+            scalar,
+            pointer_ty,
+            ret,
+            profile.returns_errorable,
+            layout,
+            slot,
+        );
+    }
+
+    if profile.returns_errorable_scalar {
+        return lower_errorable_scalar_call_result(
+            value_ty, builder, scalar, ret, profile, out_args,
+        );
+    }
+
+    lower_scalar_call_result(value_ty, builder, scalar, ret)
+}
+
+fn lower_bytes_slice_call_result(
+    builder: &mut FunctionBuilder,
+    scalar: ScalarType,
+    pointer_ty: Type,
+    ret: Value,
+    out_args: CallOutArgs,
+) -> LoweredValue {
+    let len = out_args
+        .ret_len_slot
+        .map(|slot| builder.ins().stack_load(pointer_ty, slot, 0))
+        .unwrap_or_else(|| zero_for_type(builder, pointer_ty));
+    LoweredValue::BytesSlice {
+        ptr: cast_scalar(builder, ret, pointer_ty, scalar),
+        len,
+    }
+}
+
+fn lower_aggregate_call_result(
+    builder: &mut FunctionBuilder,
+    scalar: ScalarType,
+    pointer_ty: Type,
+    ret: Value,
+    returns_errorable: bool,
+    layout: AggregateLayout,
+    slot: StackSlot,
+) -> LoweredValue {
+    let addr = builder.ins().stack_addr(pointer_ty, slot, 0);
+    LoweredValue::StructPointer {
+        addr,
+        stack_slot: Some(slot),
+        stack_offset: 0,
+        status: returns_errorable.then(|| cast_scalar(builder, ret, scalar.ty(), scalar)),
+        fields: layout.fields,
+        aggregate_fields: layout.aggregate_fields,
+        ordered: layout.ordered,
+        scalar_leaves: layout.scalar_leaves,
+        size: layout.size,
+        align: layout.align,
+    }
+}
+
+fn lower_errorable_scalar_call_result(
+    value_ty: &MirValueType,
+    builder: &mut FunctionBuilder,
+    scalar: ScalarType,
+    ret: Value,
+    profile: CallReturnProfile,
+    out_args: CallOutArgs,
+) -> LoweredValue {
     let payload_mir_ty = if matches!(value_ty, MirValueType::Unknown) {
         profile
             .errorable_scalar_payload_ty
@@ -7373,57 +7586,29 @@ fn lower_call_result_value(
     } else {
         value_ty
     };
-
-    if profile.returns_bytes_slice {
-        let len = out_args
-            .ret_len_slot
-            .map(|slot| builder.ins().stack_load(pointer_ty, slot, 0))
-            .unwrap_or_else(|| zero_for_type(builder, pointer_ty));
-        return LoweredValue::BytesSlice {
-            ptr: cast_scalar(builder, ret, pointer_ty, scalar),
-            len,
-        };
-    }
-
-    if let (Some(layout), Some(slot)) = (profile.returns_aggregate, out_args.aggregate_out_slot) {
-        let addr = builder.ins().stack_addr(pointer_ty, slot, 0);
-        return LoweredValue::StructPointer {
-            addr,
-            stack_slot: Some(slot),
-            stack_offset: 0,
-            status: if profile.returns_errorable {
-                Some(cast_scalar(builder, ret, scalar.ty(), scalar))
-            } else {
-                None
-            },
-            fields: layout.fields,
-            aggregate_fields: layout.aggregate_fields,
-            ordered: layout.ordered,
-            scalar_leaves: layout.scalar_leaves,
-            size: layout.size,
-            align: layout.align,
-        };
-    }
-
-    if profile.returns_errorable_scalar {
-        let (payload, payload_ty) = if let Some((slot, payload_ty)) = out_args.errorable_scalar_out
-        {
-            (builder.ins().stack_load(payload_ty, slot, 0), payload_ty)
+    let (payload, payload_ty) = if let Some((slot, payload_ty)) = out_args.errorable_scalar_out {
+        (builder.ins().stack_load(payload_ty, slot, 0), payload_ty)
+    } else {
+        let ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
+            scalar.ty()
         } else {
-            let ty = if matches!(payload_mir_ty, MirValueType::Unknown) {
-                scalar.ty()
-            } else {
-                mir_type_to_clif(payload_mir_ty, scalar)
-            };
-            (zero_for_type(builder, ty), ty)
+            mir_type_to_clif(payload_mir_ty, scalar)
         };
-        return LoweredValue::ErrorableScalar {
-            status: cast_scalar(builder, ret, scalar.ty(), scalar),
-            payload,
-            payload_is_float: payload_ty.is_float(),
-        };
+        (zero_for_type(builder, ty), ty)
+    };
+    LoweredValue::ErrorableScalar {
+        status: cast_scalar(builder, ret, scalar.ty(), scalar),
+        payload,
+        payload_is_float: payload_ty.is_float(),
     }
+}
 
+fn lower_scalar_call_result(
+    value_ty: &MirValueType,
+    builder: &mut FunctionBuilder,
+    scalar: ScalarType,
+    ret: Value,
+) -> LoweredValue {
     if matches!(value_ty, MirValueType::Unknown) {
         let ret_ty = builder.func.dfg.value_type(ret);
         if ret_ty.is_float() {
@@ -8419,7 +8604,11 @@ fn canonicalize_lowered_value_for_type(
 fn parse_return_scalar(return_type: Option<&str>) -> ScalarType {
     let ty_text = normalized_return_type_hint(return_type);
     let ty = ty_text.as_str();
-    if ty.starts_with("fn/") || ty.starts_with("fn(") || ty == "fn" {
+    if ty.starts_with("fn/")
+        || ty.starts_with("fn(")
+        || (ty.starts_with('(') && ty.contains(")->"))
+        || ty == "fn"
+    {
         return ScalarType::Int {
             ty: I64,
             signed: false,

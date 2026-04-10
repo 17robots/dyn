@@ -1,0 +1,656 @@
+module lexer
+
+/// Lex a complete source buffer. Returns a Vec(Token) the caller owns.
+pub lex := (src: []u8, alloc: Allocator) Vec(Token) {
+    mut l := LexState.init(src, alloc)
+    l.run()
+    return l.tokens
+}
+
+/// Extract the source text for a token.
+pub token_text := (tok: Token, src: []u8) []u8 {
+    s := $as(usize, tok.start)
+    e := s + $as(usize, tok.len)
+    if e > src.len e = src.len
+    return src[s..e]
+}
+
+is_ident_start := (b: u8) bool => (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or b == '_'
+is_ident_cont := (b: u8) bool => is_ident_start(b) or (b >= '0' and b <= '9')
+is_digit := (b: u8) bool => b >= '0' and b <= '9'
+is_hex_digit := (b: u8) bool => (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
+is_ws := (b: u8) bool => b == ' ' or b == '\t' or b == '\n' or b == '\r'
+
+/// Return the keyword kind for a given identifier text, or .ident.
+keyword_or_ident := (text: []u8) TokenKind {
+    s := use "std/str"
+    match text.len {
+        2: {
+            if s.eq(text, "if") return .kw_if
+            if s.eq(text, "or") return .kw_or
+        },
+        3: {
+            if s.eq(text, "and") return .kw_and
+            if s.eq(text, "any") return .kw_any
+            if s.eq(text, "for") return .kw_for
+            if s.eq(text, "mut") return .kw_mut
+            if s.eq(text, "not") return .kw_not
+            if s.eq(text, "pub") return .kw_pub
+            if s.eq(text, "use") return .kw_use
+        },
+        4: {
+            if s.eq(text, "comp")   return .kw_comp
+            if s.eq(text, "else")   return .kw_else
+            if s.eq(text, "enum")   return .kw_enum
+            if s.eq(text, "null")   return .kw_null
+            if s.eq(text, "true")   return .kw_true
+            if s.eq(text, "type")   return .kw_type
+            if s.eq(text, "void")   return .kw_void
+        },
+        5: {
+            if s.eq(text, "break")  return .kw_break
+            if s.eq(text, "defer")  return .kw_defer
+            if s.eq(text, "false")  return .kw_false
+            if s.eq(text, "match")  return .kw_match
+        },
+        6: {
+            if s.eq(text, "extern") return .kw_extern
+            if s.eq(text, "inline") return .kw_inline
+            if s.eq(text, "module") return .kw_module
+            if s.eq(text, "packed") return .kw_packed
+            if s.eq(text, "return") return .kw_return
+            if s.eq(text, "struct") return .kw_struct
+        },
+        8: {
+            if s.eq(text, "continue") return .kw_continue
+        },
+        _: {},
+    }
+    return .ident
+}
+
+// ── lexer state ───────────────────────────────────────────────────────────────
+
+LexState := struct {
+    src:    []u8,
+    pos:    usize,
+    tokens: Vec(Token),
+
+    init := (src: []u8, alloc: Allocator) LexState => .{
+        src:    src,
+        pos:    0,
+        tokens: Vec(Token).init(alloc),
+    }
+
+    peek := (self: LexState) ?u8 {
+        if self.pos >= self.src.len return null
+        return self.src[self.pos]
+    }
+
+    peek_at := (self: LexState, offset: usize) ?u8 {
+        p := self.pos + offset
+        if p >= self.src.len return null
+        return self.src[p]
+    }
+
+    bump := (self: *LexState) {
+        if self.pos < self.src.len
+            self.pos += 1
+    }
+
+    /// Emit a token whose span is [start, self.pos).
+    push := (self: *LexState, kind: TokenKind, start: usize) {
+        self.tokens.push(Token.{
+            kind:  kind,
+            start: $as(u32, start),
+            len:   $as(u32, self.pos - start),
+        })
+    }
+
+    // Skip whitespace and non-doc comments.
+    // Stops when it hits a doc comment (///) so lex_one can emit it.
+    skip_trivia := (self: *LexState) {
+        for {
+            b := self.peek() or return
+            if is_ws(b) {
+                self.pos += 1
+                continue
+            }
+            if b == '/' {
+                c1 := self.peek_at(1) or return
+                // Block comment /* ... */
+                if c1 == '*' {
+                    self.pos += 2
+                    for {
+                        x := self.peek() or return
+                        if x == '*' and (self.peek_at(1) or 0) == '/' {
+                            self.pos += 2
+                            break
+                        }
+                        self.pos += 1
+                    }
+                    continue
+                }
+                // Doc comment (///) — stop; lex_one will handle it
+                if c1 == '/' and (self.peek_at(2) or 0) == '/'
+                    return
+                // Line comment
+                if c1 == '/' {
+                    for {
+                        x := self.peek() or return
+                        if x == '\n' break
+                        self.pos += 1
+                    }
+                    continue
+                }
+            }
+            return
+        }
+    }
+
+    // Lex and emit one token.
+    lex_one := (self: *LexState) {
+        start := self.pos
+        b := self.peek() or return
+
+        // Doc comment ///
+        if b == '/' and (self.peek_at(1) or 0) == '/' and (self.peek_at(2) or 0) == '/' {
+            for {
+                x := self.peek() or break
+                if x == '\n' break
+                self.pos += 1
+            }
+            self.push(.doc_comment, start)
+            return
+        }
+
+        // Identifier or keyword
+        if is_ident_start(b) {
+            self.pos += 1
+            for {
+                c := self.peek() or break
+                if !is_ident_cont(c) break
+                self.pos += 1
+            }
+            text := self.src[start..self.pos]
+            self.push(keyword_or_ident(text), start)
+            return
+        }
+
+        // Builtin $name
+        if b == '$' {
+            self.pos += 1
+            for {
+                c := self.peek() or break
+                if !is_ident_cont(c) break
+                self.pos += 1
+            }
+            self.push(.builtin_ident, start)
+            return
+        }
+
+        // Numeric literal
+        if is_digit(b) {
+            self.lex_number(start)
+            return
+        }
+
+        // String literal
+        if b == '"' {
+            self.pos += 1
+            for {
+                c := self.peek() or break
+                self.pos += 1
+                if c == '"' break
+                if c == '\\' self.lex_escape()
+            }
+            self.push(.string_lit, start)
+            return
+        }
+
+        // Character literal
+        if b == '\'' {
+            self.pos += 1
+            c := self.peek() or {
+                self.push(.char_lit, start)
+                return
+            }
+            self.pos += 1
+            if c == '\\' self.lex_escape()
+            if (self.peek() or 0) == '\'' self.pos += 1
+            self.push(.char_lit, start)
+            return
+        }
+
+        // Operators and punctuation — consume first char, then multi-char lookahead
+        self.pos += 1
+
+        if b == '(' { self.push(.lparen,    start); return }
+        if b == ')' { self.push(.rparen,    start); return }
+        if b == '{' { self.push(.lbrace,    start); return }
+        if b == '}' { self.push(.rbrace,    start); return }
+        if b == '[' { self.push(.lbracket,  start); return }
+        if b == ']' { self.push(.rbracket,  start); return }
+        if b == ',' { self.push(.comma,     start); return }
+        if b == ';' { self.push(.semicolon, start); return }
+        if b == '@' { self.push(.at,        start); return }
+        if b == '~' { self.push(.tilde,     start); return }
+        if b == '?' { self.push(.question,  start); return }
+
+        if b == ':' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.colon_eq, start)
+            } else {
+                self.push(.colon, start)
+            }
+            return
+        }
+
+        if b == '.' {
+            next := self.peek() or 0
+            if next == '.' {
+                self.pos += 1
+                if (self.peek() or 0) == '=' {
+                    self.pos += 1
+                    self.push(.dot_dot_eq, start)
+                } else {
+                    self.push(.dot_dot, start)
+                }
+            } else if next == '*' {
+                self.pos += 1
+                self.push(.dot_star, start)
+            } else if next == '?' {
+                self.pos += 1
+                self.push(.dot_question, start)
+            } else if next == '!' {
+                self.pos += 1
+                self.push(.dot_bang, start)
+            } else {
+                self.push(.dot, start)
+            }
+            return
+        }
+
+        if b == '=' {
+            next := self.peek() or 0
+            if next == '=' {
+                self.pos += 1
+                self.push(.eq_eq, start)
+            } else if next == '>' {
+                self.pos += 1
+                self.push(.fat_arrow, start)
+            } else {
+                self.push(.eq, start)
+            }
+            return
+        }
+
+        if b == '!' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.bang_eq, start)
+            } else {
+                self.push(.bang, start)
+            }
+            return
+        }
+
+        if b == '+' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.plus_eq, start)
+            } else {
+                self.push(.plus, start)
+            }
+            return
+        }
+
+        if b == '-' {
+            next := self.peek() or 0
+            if next == '=' {
+                self.pos += 1
+                self.push(.minus_eq, start)
+            } else if next == '>' {
+                self.pos += 1
+                self.push(.thin_arrow, start)
+            } else {
+                self.push(.minus, start)
+            }
+            return
+        }
+
+        if b == '*' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.star_eq, start)
+            } else {
+                self.push(.star, start)
+            }
+            return
+        }
+
+        if b == '/' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.slash_eq, start)
+            } else {
+                self.push(.slash, start)
+            }
+            return
+        }
+
+        if b == '%' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.percent_eq, start)
+            } else {
+                self.push(.percent, start)
+            }
+            return
+        }
+
+        if b == '&' {
+            next := self.peek() or 0
+            if next == '&' {
+                self.pos += 1
+                self.push(.amp_amp, start)
+            } else if next == '=' {
+                self.pos += 1
+                self.push(.amp_eq, start)
+            } else {
+                self.push(.amp, start)
+            }
+            return
+        }
+
+        if b == '|' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.pipe_eq, start)
+            } else {
+                self.push(.pipe, start)
+            }
+            return
+        }
+
+        if b == '^' {
+            if (self.peek() or 0) == '=' {
+                self.pos += 1
+                self.push(.caret_eq, start)
+            } else {
+                self.push(.caret, start)
+            }
+            return
+        }
+
+        if b == '<' {
+            next := self.peek() or 0
+            if next == '=' {
+                self.pos += 1
+                self.push(.lt_eq, start)
+            } else if next == '<' {
+                self.pos += 1
+                if (self.peek() or 0) == '=' {
+                    self.pos += 1
+                    self.push(.lt_lt_eq, start)
+                } else {
+                    self.push(.lt_lt, start)
+                }
+            } else {
+                self.push(.lt, start)
+            }
+            return
+        }
+
+        if b == '>' {
+            next := self.peek() or 0
+            if next == '=' {
+                self.pos += 1
+                self.push(.gt_eq, start)
+            } else if next == '>' {
+                self.pos += 1
+                if (self.peek() or 0) == '=' {
+                    self.pos += 1
+                    self.push(.gt_gt_eq, start)
+                } else {
+                    self.push(.gt_gt, start)
+                }
+            } else {
+                self.push(.gt, start)
+            }
+            return
+        }
+
+        // Unknown character — already consumed, silently skip
+    }
+
+    // Consume a string/char escape sequence starting after the backslash.
+    lex_escape := (self: *LexState) {
+        esc := self.peek() or return
+        self.pos += 1
+        if esc == 'x' {
+            // \xNN — up to two hex digits
+            if is_hex_digit(self.peek() or 0) self.pos += 1
+            if is_hex_digit(self.peek() or 0) self.pos += 1
+        } else if esc == 'u' {
+            // \u{...}
+            if (self.peek() or 0) == '{' {
+                self.pos += 1
+                for {
+                    c := self.peek() or break
+                    if c == '}' {
+                        self.pos += 1
+                        break
+                    }
+                    self.pos += 1
+                }
+            }
+        }
+        // \n \t \\ \" \' \r \0 — escape char already consumed above
+    }
+
+    lex_number := (self: *LexState, start: usize) {
+        b := self.src[start]
+
+        // Detect integer prefix: 0x 0o 0b
+        if b == '0' {
+            next := self.peek_at(1) or 0
+            if next == 'x' or next == 'X' {
+                self.pos += 2
+                for {
+                    c := self.peek() or break
+                    if !is_hex_digit(c) and c != '_' break
+                    self.pos += 1
+                }
+                self.push(.int_lit, start)
+                return
+            }
+            if next == 'o' or next == 'O' {
+                self.pos += 2
+                for {
+                    c := self.peek() or break
+                    if (c < '0' or c > '7') and c != '_' break
+                    self.pos += 1
+                }
+                self.push(.int_lit, start)
+                return
+            }
+            if next == 'b' or next == 'B' {
+                self.pos += 2
+                for {
+                    c := self.peek() or break
+                    if c != '0' and c != '1' and c != '_' break
+                    self.pos += 1
+                }
+                self.push(.int_lit, start)
+                return
+            }
+        }
+
+        // Decimal integer or float
+        self.pos += 1
+        for {
+            c := self.peek() or break
+            if !is_digit(c) and c != '_' break
+            self.pos += 1
+        }
+
+        mut is_float := false
+
+        // Fractional part: digits '.' digits (only if next char after '.' is a digit)
+        if (self.peek() or 0) == '.' and is_digit(self.peek_at(1) or 0) {
+            is_float = true
+            self.pos += 1
+            for {
+                c := self.peek() or break
+                if !is_digit(c) and c != '_' break
+                self.pos += 1
+            }
+        }
+
+        // Exponent
+        e := self.peek() or 0
+        if e == 'e' or e == 'E' {
+            is_float = true
+            self.pos += 1
+            sign := self.peek() or 0
+            if sign == '+' or sign == '-' self.pos += 1
+            for {
+                c := self.peek() or break
+                if !is_digit(c) break
+                self.pos += 1
+            }
+        }
+
+        if is_float
+            self.push(.float_lit, start)
+        else
+            self.push(.int_lit, start)
+    }
+
+    run := (self: *LexState) {
+        for {
+            self.skip_trivia()
+            if self.pos >= self.src.len break
+            self.lex_one()
+        }
+        // Always terminate with EOF
+        self.tokens.push(Token.{
+            kind:  .eof,
+            start: $as(u32, self.pos),
+            len:   0,
+        })
+    }
+}
+
+/// Every token kind the lexer can produce.
+pub TokenKind := enum {
+    // Literals
+    int_lit,
+    float_lit,
+    string_lit,
+    char_lit,
+
+    // Identifiers
+    ident,
+    builtin_ident,   // $name
+
+    // Special type identifier
+    kw_any,          // any
+
+    // Keywords
+    kw_and,
+    kw_break,
+    kw_comp,
+    kw_continue,
+    kw_defer,
+    kw_else,
+    kw_enum,
+    kw_extern,
+    kw_false,
+    kw_for,
+    kw_if,
+    kw_inline,
+    kw_match,
+    kw_module,
+    kw_mut,
+    kw_not,
+    kw_null,
+    kw_or,
+    kw_packed,
+    kw_pub,
+    kw_return,
+    kw_struct,
+    kw_true,
+    kw_type,
+    kw_use,
+    kw_void,
+
+    // Delimiters
+    lparen,
+    rparen,
+    lbrace,
+    rbrace,
+    lbracket,
+    rbracket,
+    comma,
+    semicolon,
+
+    // Operators / punctuation
+    colon,         // :
+    colon_eq,      // :=
+    dot,           // .
+    dot_dot,       // ..
+    dot_dot_eq,    // ..=
+    dot_star,      // .*
+    dot_question,  // .?
+    dot_bang,      // .!
+    question,      // ?
+    bang,          // !
+    bang_eq,       // !=
+    tilde,         // ~
+    at,            // @
+    eq,            // =
+    eq_eq,         // ==
+    fat_arrow,     // =>
+    thin_arrow,    // ->
+    plus,          // +
+    plus_eq,       // +=
+    minus,         // -
+    minus_eq,      // -=
+    star,          // *
+    star_eq,       // *=
+    slash,         // /
+    slash_eq,      // /=
+    percent,       // %
+    percent_eq,    // %=
+    amp,           // &
+    amp_amp,       // &&
+    amp_eq,        // &=
+    pipe,          // |
+    pipe_eq,       // |=
+    caret,         // ^
+    caret_eq,      // ^=
+    lt,            // <
+    lt_eq,         // <=
+    lt_lt,         // <<
+    lt_lt_eq,      // <<=
+    gt,            // >
+    gt_eq,         // >=
+    gt_gt,         // >>
+    gt_gt_eq,      // >>=
+
+    // Trivia (kept in token stream)
+    doc_comment,
+
+    // End of input
+    eof,
+}
+
+/// A single token: its kind and position within the source buffer.
+pub Token := struct {
+    kind:  TokenKind,
+    start: u32,   // byte offset of first character
+    len:   u32,   // byte count
+}

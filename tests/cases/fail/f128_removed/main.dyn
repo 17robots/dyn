@@ -1,0 +1,6 @@
+module main
+
+main := () {
+  x: f128 = 1.0
+  _ = x
+}

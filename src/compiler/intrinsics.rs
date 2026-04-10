@@ -19,5 +19,6 @@ pub const LANGUAGE_BUILTINS: &[&str] = &[
     "$target",
     "$typename",
     "$typeof",
+    "$type",
     "$unreachable",
 ];

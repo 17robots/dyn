@@ -1,103 +1,36 @@
 module mem
 
-/// Virtual-memory bump allocator using Linux overcommit.
-///
-/// Reserves RESERVE bytes of address space once; the kernel commits physical
-/// RAM lazily as pages are first written. Pointers are always stable —
-/// data never moves. Individual frees are no-ops; use save/restore for
-/// scoped lifetimes, or reset/deinit to reclaim all memory at once.
-///
-/// Usage pattern:
-///   mut arena := mem.Arena.init()
-///   defer arena.deinit()
-///
-///   // Scoped temporary work:
-///   mark := arena.save()
-///   defer arena.restore(mark)
-///   tmp := do_work(arena.allocator())
-///   // tmp freed when mark is restored
-///
-/// Linux x86_64: mmap=9, munmap=11, madvise=28 (MADV_DONTNEED=4).
-pub Arena := struct {
-    base: ?*u8,
-    pos:  usize,
-}
-pub Arena.RESERVE: usize = 8 * 1024 * 1024 * 1024,
-pub Arena.init := () Arena => .{ base: null, pos: 0 }
-pub Arena.allocator := (self: *Arena) Allocator => .{
-    ctx:          $as(*any, self),
-    impl_alloc:   arena_alloc,
-    impl_free:    arena_free,
-    impl_realloc: arena_realloc,
-}
-pub Arena.save := (self: Arena) ArenaPos => self.pos
-pub Arena.restore := (self: *Arena, mark: ArenaPos) {
-    if $target().sanitize {
-        if self.base: |b| {
-            if self.pos > mark $memset($as(*any, $as(usize, b) + mark), 0xDD, self.pos - mark)
-        }
-    }
-    self.pos = mark
-}
-pub Arena.reset := (self: *Arena) {
-    if self.base: |b|
-        if self.pos > 0
-            $syscall(28, $as(usize, b), self.pos, 4, 0, 0, 0)
-    self.pos = 0
-}
-pub Arena.deinit := (self: *Arena) {
-    if self.base: |b| $syscall(11, $as(usize, b), Arena.RESERVE, 0, 0, 0, 0)
-    self.base = null
-    self.pos  = 0
-}
-/// A saved position in an Arena. Restore it to free everything allocated
-/// since the save. Use with defer for automatic scoped cleanup.
 pub ArenaPos := usize
 
-// ── Arena vtable implementations ──────────────────────────────────────────────
-
-arena_ensure := (self: *Arena) bool {
-    if self.base != null return true
-    raw := $syscall(9, 0, Arena.RESERVE, 3, 0x22, -1, 0)
-    if raw > 0xFFFFFFFFFFFFFF00 return false
-    self.base = $as(*u8, raw)
-    return true
+pub Arena := struct {
+    page: PageAllocator,
 }
-arena_alloc := (ctx: *any, size: usize, align: usize) ?*any {
-    self := $as(*Arena, ctx)
-    if !arena_ensure(self) return null
-    base := $as(usize, self.base.?)
-    mut aligned := self.pos
-    if align > 1 {
-        rem := (base + self.pos) % align
-        if rem != 0 aligned = self.pos + (align - rem)
-    }
-    if aligned + size > Arena.RESERVE return null
-    ptr := $as(*any, base + aligned)
-    self.pos = aligned + size
-    return ptr
-}
-arena_free := (ctx: *any, ptr: *any, size: usize) {}
 
-/// In-place realloc: if ptr is the last arena allocation, extend it without
-/// copying. Otherwise fall back to alloc-new + memcpy (old stays in arena,
-/// freed on next reset).
-arena_realloc := (ctx: *any, ptr: *any, old_size: usize, new_size: usize, align: usize) ?*any {
-    self := $as(*Arena, ctx)
-    if self.base: |b|
-        // Fast path: ptr is at the top of the arena — extend in place.
-        if $as(usize, ptr) + old_size == $as(usize, b) + self.pos {
-            new_pos := self.pos - old_size + new_size
-            if new_pos <= Arena.RESERVE {
-                self.pos = new_pos
-                return ptr
-            }
-            return null
-        }
-    // Slow path: not the last allocation — alloc new and copy.
-    new_ptr := arena_alloc(ctx, new_size, align) or return null
-    copy_size := if old_size < new_size old_size else new_size
-    $memcpy(new_ptr, ptr, copy_size)
-    // No free needed — arena reclaims everything on reset.
-    return new_ptr
+pub Arena.init := () Arena {
+    return .{ page: PageAllocator.init() }
+}
+
+pub Arena.allocator := (self: *Arena) Allocator {
+    return self.page.allocator()
+}
+
+pub Arena.save := (self: Arena) ArenaPos {
+    _self := self
+    return 0
+}
+
+pub Arena.restore := (self: *Arena, mark: ArenaPos) {
+    _self := self
+    _mark := mark
+    return
+}
+
+pub Arena.reset := (self: *Arena) {
+    _self := self
+    return
+}
+
+pub Arena.deinit := (self: *Arena) {
+    _self := self
+    return
 }

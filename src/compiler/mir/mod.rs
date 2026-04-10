@@ -66,8 +66,13 @@ pub enum MirValueType {
     Type,
     Bool,
     BytesSlice,
-    Int { signed: bool, bits: u16 },
-    Float { bits: u16 },
+    Int {
+        signed: bool,
+        bits: u16,
+    },
+    Float {
+        bits: u16,
+    },
     Function,
     FunctionPointer,
     /// Fat pointer: (fn_ptr, env_ptr) pair

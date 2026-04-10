@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod backend;
 pub mod diagnostics;
+pub mod fmt;
 pub mod hir;
 pub mod intrinsics;
 pub mod lexer;
