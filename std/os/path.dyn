@@ -1,15 +1,29 @@
 module os
 
 pub is_abs := (path: []u8) bool {
-    _path := path
-    return false
+    return path.len != 0 && path[0] == '/'
 }
 
 pub dirname := (path: []u8) []u8 {
-    return path
+    if path.len == 0 return "."
+    mut i := path.len
+    for i > 0: {
+        i -= 1
+        if path[i] == '/' {
+            if i == 0 return "/"
+            return path[0..i]
+        }
+    }
+    return "."
 }
 
 pub basename := (path: []u8) []u8 {
+    if path.len == 0 return path
+    mut i := path.len
+    for i > 0: {
+        i -= 1
+        if path[i] == '/' return path[i + 1..]
+    }
     return path
 }
 

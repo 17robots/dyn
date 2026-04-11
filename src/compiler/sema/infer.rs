@@ -1124,10 +1124,11 @@ pub(super) fn infer_expr_type(
                 file_path,
                 expected_return,
             );
+            let fallback_exits = fallback_exits_scope(&or_else.fallback);
 
             match types.get(value_ty) {
                 Type::Optional(inner) => {
-                    if types_compatible(*inner, fallback_ty, types) {
+                    if fallback_exits || types_compatible(*inner, fallback_ty, types) {
                         *inner
                     } else {
                         diagnostics.push(
@@ -1146,7 +1147,7 @@ pub(super) fn infer_expr_type(
                     }
                 }
                 Type::Errorable { ok: inner, .. } => {
-                    if types_compatible(*inner, fallback_ty, types) {
+                    if fallback_exits || types_compatible(*inner, fallback_ty, types) {
                         *inner
                     } else {
                         diagnostics.push(
@@ -5929,7 +5930,18 @@ pub(super) fn infer_call_type(
         expected_return,
     );
 
-    let Some(callee_name) = extract_callee_name(&call.callee) else {
+    let callee_lookup = resolve_callee_lookup(
+        &call.callee,
+        env,
+        mutability,
+        signatures,
+        types,
+        diagnostics,
+        file_path,
+        expected_return,
+    );
+
+    let Some(callee_lookup) = callee_lookup else {
         if let Some(return_ty) = infer_function_value_call_type(
             call,
             callee_ty,
@@ -5956,6 +5968,8 @@ pub(super) fn infer_call_type(
         }
         return types.intern(Type::Unknown);
     };
+    let callee_name = callee_lookup.name;
+    let implicit_receiver = callee_lookup.implicit_receiver;
 
     if let Some(builtin_ty) = infer_builtin_call_type(
         &callee_name,
@@ -6025,6 +6039,7 @@ pub(super) fn infer_call_type(
         }),
         _ => None,
     };
+    let param_offset = usize::from(implicit_receiver);
 
     for arg in &call.args {
         if let Some(name) = &arg.name {
@@ -6032,7 +6047,11 @@ pub(super) fn infer_call_type(
             let Some(param_index) = sig
                 .params
                 .iter()
-                .position(|param| param.name.as_deref() == Some(name.text.as_str()))
+                .enumerate()
+                .skip(param_offset)
+                .find_map(|(idx, param)| {
+                    (param.name.as_deref() == Some(name.text.as_str())).then_some(idx)
+                })
             else {
                 diagnostics.push(
                     Diagnostic::error(
@@ -6117,7 +6136,7 @@ pub(super) fn infer_call_type(
                 report_named_arg_order_error(diagnostics, file_path, arg.value.span);
                 continue;
             }
-            if positional_count >= sig.params.len() {
+            if positional_count >= sig.params.len().saturating_sub(param_offset) {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::TypeChecker,
@@ -6132,13 +6151,14 @@ pub(super) fn infer_call_type(
                 );
                 continue;
             }
+            let param_index = positional_count + param_offset;
 
             if let Some(param_types) = &direct_param_types {
-                if let Some(expected_ty) = param_types.get(positional_count) {
+                if let Some(expected_ty) = param_types.get(param_index) {
                     validate_direct_call_arg(
                         arg,
                         *expected_ty,
-                        sig.params[positional_count].name.as_ref(),
+                        sig.params[param_index].name.as_ref(),
                         env,
                         mutability,
                         signatures,
@@ -6154,10 +6174,10 @@ pub(super) fn infer_call_type(
             let param_is_generic_type_var = param_is_generic_type_var(
                 direct_param_types
                     .as_ref()
-                    .and_then(|pts| pts.get(positional_count)),
+                    .and_then(|pts| pts.get(param_index)),
                 types,
             );
-            if sig.params[positional_count].comp
+            if sig.params[param_index].comp
                 && !param_is_generic_type_var
                 && !is_compile_time_expr(&arg.value)
             {
@@ -6177,8 +6197,8 @@ pub(super) fn infer_call_type(
                     ),
                 );
             }
-            used_params.insert(positional_count);
-            if return_from_type_param_idx == Some(positional_count) {
+            used_params.insert(param_index);
+            if return_from_type_param_idx == Some(param_index) {
                 specialized_return =
                     resolve_type_designator_arg(&arg.value, types).or(specialized_return);
             }
@@ -6186,7 +6206,7 @@ pub(super) fn infer_call_type(
         }
     }
 
-    for (idx, param) in sig.params.iter().enumerate() {
+    for (idx, param) in sig.params.iter().enumerate().skip(param_offset) {
         if !used_params.contains(&idx) && !param.has_default {
             diagnostics.push(
                 Diagnostic::error(
@@ -6925,6 +6945,22 @@ fn contains_disallowed_inline_flow(expr: &Expr) -> bool {
     }
 }
 
+fn fallback_exits_scope(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Return { .. } | ExprKind::Break(_) | ExprKind::Continue { .. } => true,
+        ExprKind::Block(block) => {
+            if let Some(tail) = &block.tail_expr {
+                return fallback_exits_scope(tail);
+            }
+            block.statements.last().is_some_and(|stmt| match stmt {
+                Stmt::Expr(expr) => fallback_exits_scope(expr),
+                _ => false,
+            })
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn strict_explicit_returns_enabled() -> bool {
     let env = std::env::var("DYN_STRICT_RETURNS").ok();
     let parse = |v: &str| matches!(v, "1" | "true" | "TRUE" | "on" | "ON");
@@ -7197,6 +7233,71 @@ pub(super) fn extract_callee_name(callee: &Expr) -> Option<String> {
         ExprKind::Ident(ident) | ExprKind::BuiltinIdent(ident) => Some(ident.text.clone()),
         _ => None,
     }
+}
+
+struct CalleeLookup {
+    name: String,
+    implicit_receiver: bool,
+}
+
+fn resolve_callee_lookup(
+    callee: &Expr,
+    env: &BTreeMap<String, TypeId>,
+    mutability: &BTreeMap<String, bool>,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    expected_return: Option<TypeId>,
+) -> Option<CalleeLookup> {
+    match &callee.kind {
+        ExprKind::FieldAccess { base, field } => {
+            let base_ty = infer_expr_type(
+                base,
+                env,
+                mutability,
+                signatures,
+                types,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+            if let Some(name) = method_lookup_key(base_ty, &field.text, signatures, types) {
+                Some(CalleeLookup {
+                    name,
+                    implicit_receiver: true,
+                })
+            } else {
+                Some(CalleeLookup {
+                    name: field.text.clone(),
+                    implicit_receiver: false,
+                })
+            }
+        }
+        _ => extract_callee_name(callee).map(|name| CalleeLookup {
+            name,
+            implicit_receiver: false,
+        }),
+    }
+}
+
+fn method_lookup_key(
+    receiver_ty: TypeId,
+    field_name: &str,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &TypeStore,
+) -> Option<String> {
+    let method_key = match types.get(receiver_ty) {
+        Type::Pointer { inner } | Type::Optional(inner) => {
+            return method_lookup_key(*inner, field_name, signatures, types);
+        }
+        Type::TypeParam(type_name) | Type::Applied { callee: type_name, .. } => {
+            format!("{type_name}__{field_name}")
+        }
+        _ => return None,
+    };
+
+    signatures.contains_key(&method_key).then_some(method_key)
 }
 
 pub(super) fn unify_branch_types(

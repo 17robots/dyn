@@ -1,0 +1,31 @@
+module main
+
+str := use "std/str"
+
+main := () i32 {
+    a: []u8 = "alpha"
+    b: []u8 = "alpha"
+    c: []u8 = "beta"
+
+    _ = str.eq(a, b)
+    _ = str.is_empty("")
+    _ = str.is_whitespace(' ')
+    _ = str.starts_with(a, "al")
+    _ = str.ends_with(a, "ha")
+    _ = str.find_byte(a, 'p')
+    _ = str.find(a, "ph")
+    _ = str.contains(a, "lp")
+    _ = str.rfind_byte(a, 'a')
+    _ = str.rfind(a, "a")
+    _ = str.trim("  hi \n")
+    _ = str.trim_start("  hi")
+    _ = str.trim_end("hi  ")
+    _ = str.split_once("left:right", ':')
+    _ = str.parse_uint("123")
+    _ = str.parse_int("-45")
+    _ = str.parse_hex_uint("ff")
+    _ = str.parse_float("3.5")
+
+    _ = c
+    return 0
+}

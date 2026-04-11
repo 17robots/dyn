@@ -1,5 +1,9 @@
 module mem
 
+malloc := extern (size: usize) ?*any = "malloc"
+free_raw := extern (ptr: *any) = "free"
+realloc_raw := extern (ptr: *any, size: usize) ?*any = "realloc"
+
 pub PageAllocator := struct {}
 
 pub PageAllocator.init := () PageAllocator {
@@ -17,23 +21,31 @@ pub PageAllocator.allocator := (self: *PageAllocator) Allocator {
 
 page_alloc := (ctx: *any, size: usize, align: usize) ?*any {
     _ctx := ctx
-    _size := size
     _align := align
-    return null
+    if size == 0 return malloc(1)
+    return malloc(size)
 }
 
 page_free := (ctx: *any, ptr: *any, size: usize) {
     _ctx := ctx
-    _ptr := ptr
     _size := size
+    if $as(usize, ptr) == 1 return
+    free_raw(ptr)
     return
 }
 
 page_realloc := (ctx: *any, ptr: *any, old_size: usize, new_size: usize, align: usize) ?*any {
     _ctx := ctx
-    _ptr := ptr
     _old_size := old_size
-    _new_size := new_size
     _align := align
-    return null
+    if new_size == 0 {
+        if $as(usize, ptr) != 1 {
+            free_raw(ptr)
+        }
+        return malloc(1)
+    }
+    if $as(usize, ptr) == 1 {
+        return malloc(new_size)
+    }
+    return realloc_raw(ptr, new_size)
 }

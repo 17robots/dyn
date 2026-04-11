@@ -1,0 +1,13 @@
+module main
+
+mem := use "std/mem"
+collections := use "std/collections"
+
+main := () i32 {
+    mut arena := mem.Arena.init()
+    v := collections.Vec(i32).init(arena.allocator())
+    _ = v.push(1)
+    _ = v.get(0)
+    _ = v.slice()
+    return 0
+}

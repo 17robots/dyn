@@ -170,6 +170,21 @@ fn pass_if_statement_without_else() {
     assert_compiles("if_statement_without_else");
 }
 
+#[test]
+fn pass_std_str() {
+    assert_compiles("std_str");
+}
+
+#[test]
+fn pass_std_collections() {
+    assert_compiles("std_collections");
+}
+
+#[test]
+fn pass_std_os() {
+    assert_compiles("std_os");
+}
+
 // ── fail tests ────────────────────────────────────────────────────────────────
 
 #[test]

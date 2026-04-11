@@ -1,6 +1,8 @@
 module os
 
 Allocator := (use "std/mem").Allocator
+open_ro := extern (path: *any, flags: i32, mode: i32) i32 = "open"
+close_fd := extern (fd: i32) i32 = "close"
 
 pub read_file := (path: []u8, alloc: Allocator) ?[]u8 {
     _path := path

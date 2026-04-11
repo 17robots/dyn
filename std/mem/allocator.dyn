@@ -22,40 +22,80 @@ pub Allocator.realloc := (self: Allocator, ptr: *any, old_size: usize, new_size:
         resized := r(self.ctx, ptr, old_size, new_size, align) or return null
         return resized
     }
-    return null
+    if new_size == 0 {
+        self.free(ptr, old_size)
+        return $as(*any, $as(usize, 1))
+    }
+    fresh := self.alloc(new_size, align) or return null
+    copy_size := if old_size < new_size old_size else new_size
+    if copy_size != 0 {
+        $memcpy(fresh, ptr, copy_size)
+    }
+    if old_size != 0 {
+        self.free(ptr, old_size)
+    }
+    return fresh
 }
 
 pub Allocator.create := (self: Allocator, T: comp type) ?*T {
-    _self := self
-    _T := T
-    return null
+    size := $as(usize, $sizeof(T))
+    if size == 0 return $as(*T, $as(usize, 1))
+    raw := self.alloc(size, $as(usize, $alignof(T))) or return null
+    return $as(*T, raw)
 }
 
 pub Allocator.destroy := (self: Allocator, T: comp type, ptr: *T) {
-    _self := self
-    _T := T
-    _ptr := ptr
+    size := $sizeof(T)
+    if size == 0 return
+    self.free($as(*any, ptr), size)
     return
 }
 
 pub Allocator.create_many := (self: Allocator, T: comp type, n: usize) ?[]T {
-    _self := self
-    _T := T
-    _n := n
-    return null
+    elem_size := $as(usize, $sizeof(T))
+    if n == 0 || elem_size == 0 {
+        return .{ ptr: $as(*T, $as(usize, 1)), len: n }
+    }
+    mut size := n
+    size *= elem_size
+    raw := self.alloc(size, $as(usize, $alignof(T))) or return null
+    return .{ ptr: $as(*T, raw), len: n }
 }
 
 pub Allocator.destroy_many := (self: Allocator, T: comp type, slice: []T) {
-    _self := self
-    _T := T
-    _slice := slice
+    elem_size := $as(usize, $sizeof(T))
+    if slice.len == 0 || elem_size == 0 {
+        return
+    }
+    mut size := slice.len
+    size *= elem_size
+    self.free($as(*any, slice.ptr), size)
     return
 }
 
 pub Allocator.resize_many := (self: Allocator, T: comp type, slice: []T, new_n: usize) ?[]T {
-    _self := self
-    _T := T
-    _slice := slice
-    _new_n := new_n
-    return null
+    elem_size := $as(usize, $sizeof(T))
+    if elem_size == 0 {
+        return .{ ptr: $as(*T, $as(usize, 1)), len: new_n }
+    }
+
+    mut old_size := slice.len
+    old_size *= elem_size
+    mut new_size := new_n
+    new_size *= elem_size
+
+    if new_size == 0 {
+        if old_size != 0 {
+            self.free($as(*any, slice.ptr), old_size)
+        }
+        return .{ ptr: $as(*T, $as(usize, 1)), len: 0 }
+    }
+
+    raw := self.realloc(
+        $as(*any, slice.ptr),
+        old_size,
+        new_size,
+        $as(usize, $alignof(T)),
+    ) or return null
+    return .{ ptr: $as(*T, raw), len: new_n }
 }

@@ -2,20 +2,25 @@ module os
 
 io := use "std/io"
 
+c_read := extern (fd: i32, buf: *any, len: usize) isize = "read"
+c_write := extern (fd: i32, buf: *any, len: usize) isize = "write"
+
 pub File := struct {
     fd: i32,
 }
 
 file_write := (ctx: *any, buf: []u8) usize {
-    _ctx := ctx
-    _buf := buf
-    return 0
+    fd := $as(i32, $as(usize, ctx))
+    wrote := c_write(fd, $as(*any, buf.ptr), buf.len)
+    if wrote < 0 return 0
+    return $as(usize, wrote)
 }
 
 file_read := (ctx: *any, buf: []u8) usize {
-    _ctx := ctx
-    _buf := buf
-    return 0
+    fd := $as(i32, $as(usize, ctx))
+    got := c_read(fd, $as(*any, buf.ptr), buf.len)
+    if got < 0 return 0
+    return $as(usize, got)
 }
 
 pub File.writer := (self: File) io.Writer {
@@ -37,42 +42,44 @@ pub stderr := File{ fd: 2 }
 pub stdin := File{ fd: 0 }
 
 pub write := (buf: []u8) {
-    _buf := buf
+    _ = stdout.writer().write_all(buf)
     return
 }
 
 pub writeln := (buf: []u8) {
-    _buf := buf
+    _ = stdout.writer().write_all(buf)
+    _ = stdout.writer().write_byte('\n')
     return
 }
 
 pub ewrite := (buf: []u8) {
-    _buf := buf
+    _ = stderr.writer().write_all(buf)
     return
 }
 
 pub ewriteln := (buf: []u8) {
-    _buf := buf
+    _ = stderr.writer().write_all(buf)
+    _ = stderr.writer().write_byte('\n')
     return
 }
 
 pub print := (v: any) {
-    _v := v
+    stdout.writer().print(v)
     return
 }
 
 pub println := (v: any) {
-    _v := v
+    stdout.writer().println(v)
     return
 }
 
 pub eprint := (v: any) {
-    _v := v
+    stderr.writer().print(v)
     return
 }
 
 pub eprintln := (v: any) {
-    _v := v
+    stderr.writer().println(v)
     return
 }
 

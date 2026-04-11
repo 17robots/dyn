@@ -2569,12 +2569,73 @@ fn register_decl_function_types(
         env.insert(
             decl.name.clone(),
             types.intern(Type::Function {
-                param_types,
-                param_names,
-                has_defaults,
+                param_types: param_types.clone(),
+                param_names: param_names.clone(),
+                has_defaults: has_defaults.clone(),
                 return_type,
             }),
         );
+    }
+}
+
+fn register_associated_function_types_from_units(
+    units: &[ModuleUnit],
+    types: &mut TypeStore,
+    unknown: TypeId,
+    env: &mut BTreeMap<String, TypeId>,
+    signatures: &mut BTreeMap<String, FnSignature>,
+) {
+    for unit in units {
+        for decl in &unit.declarations {
+            if decl.kind != DeclKind::Binding || !decl.name.contains("__") {
+                continue;
+            }
+            let Some(fn_expr) = extract_fn_expr(&decl.value) else {
+                continue;
+            };
+
+            let return_type = fn_expr
+                .return_type
+                .as_ref()
+                .and_then(|ty| resolve_type_expr(ty, types))
+                .unwrap_or(unknown);
+            signatures
+                .entry(decl.name.clone())
+                .or_insert_with(|| FnSignature {
+                    params: fn_expr.params.iter().map(fn_param_spec).collect(),
+                    return_type,
+                });
+
+            let param_types = fn_expr
+                .params
+                .iter()
+                .map(|param| {
+                    param
+                        .ty
+                        .as_ref()
+                        .and_then(|ty| resolve_type_expr(ty, types))
+                        .unwrap_or(unknown)
+                })
+                .collect::<Vec<_>>();
+            let param_names = fn_expr
+                .params
+                .iter()
+                .map(|param| Some(param.name.text.clone()))
+                .collect::<Vec<_>>();
+            let has_defaults = fn_expr
+                .params
+                .iter()
+                .map(|param| param.default_value.is_some())
+                .collect::<Vec<_>>();
+            env.entry(decl.name.clone()).or_insert_with(|| {
+                types.intern(Type::Function {
+                    param_types,
+                    param_names,
+                    has_defaults,
+                    return_type,
+                })
+            });
+        }
     }
 }
 
@@ -2722,6 +2783,13 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
             &mut signatures,
             &mut diagnostics,
             true,
+        );
+        register_associated_function_types_from_units(
+            units,
+            &mut types,
+            unknown,
+            &mut env,
+            &mut signatures,
         );
         apply_inferred_error_return_types(
             unit,
@@ -2925,6 +2993,13 @@ pub fn infer_binding_type_strings(
             &mut signatures,
             &mut scratch_diagnostics,
             false,
+        );
+        register_associated_function_types_from_units(
+            units,
+            &mut types,
+            unknown,
+            &mut env,
+            &mut signatures,
         );
 
         let enum_variants = collect_enum_variants(unit);

@@ -9,28 +9,362 @@ pub SplitResult := struct {
 
 pub eq := (a: []u8, b: []u8) bool {
     if a.len != b.len return false
+    mut i: usize = 0
+    for i < a.len: {
+        if a[i] != b[i] return false
+        i += 1
+    }
     return true
 }
 
 pub is_empty := (s: []u8) bool => s.len == 0
-pub is_whitespace := (b: u8) bool => b == ' '
-pub starts_with := (s: []u8, prefix: []u8) bool { _s := s; _prefix := prefix; return false }
-pub ends_with := (s: []u8, suffix: []u8) bool { _s := s; _suffix := suffix; return false }
-pub find_byte := (s: []u8, b: u8) ?usize { _s := s; _b := b; return null }
-pub find := (s: []u8, needle: []u8) ?usize { _s := s; _needle := needle; return null }
-pub contains := (s: []u8, needle: []u8) bool { _s := s; _needle := needle; return false }
-pub rfind_byte := (s: []u8, b: u8) ?usize { _s := s; _b := b; return null }
-pub rfind := (s: []u8, needle: []u8) ?usize { _s := s; _needle := needle; return null }
-pub trim_start := (s: []u8) []u8 { return s }
-pub trim_end := (s: []u8) []u8 { return s }
-pub trim := (s: []u8) []u8 { return s }
-pub split_once := (s: []u8, delim: u8) ?SplitResult { _s := s; _delim := delim; return null }
-pub parse_uint := (s: []u8) ?u64 { _s := s; return null }
-pub parse_int := (s: []u8) ?i64 { _s := s; return null }
-pub parse_hex_uint := (s: []u8) ?u64 { _s := s; return null }
-pub parse_float := (s: []u8) ?f64 { _s := s; return null }
-pub uint_to_buf := (n: u64, buf: []u8) []u8 { _n := n; return buf }
-pub int_to_buf := (n: i64, buf: []u8) []u8 { _n := n; return buf }
-pub uint_to_hex_buf := (n: u64, buf: []u8) []u8 { _n := n; return buf }
-pub split := (s: []u8, delim: u8, alloc: Allocator) ?[][]u8 { _s := s; _delim := delim; _alloc := alloc; return null }
-pub repeat := (s: []u8, n: usize, alloc: Allocator) ?[]u8 { _s := s; _n := n; _alloc := alloc; return null }
+pub is_whitespace := (b: u8) bool => b == ' ' || b == '\t' || b == '\n' || b == '\r'
+
+pub starts_with := (s: []u8, prefix: []u8) bool {
+    if prefix.len > s.len return false
+    mut i: usize = 0
+    for i < prefix.len: {
+        if s[i] != prefix[i] return false
+        i += 1
+    }
+    return true
+}
+
+pub ends_with := (s: []u8, suffix: []u8) bool {
+    s_len: usize = s.len
+    suffix_len: usize = suffix.len
+    if suffix_len > s_len return false
+    start: usize = s_len - suffix_len
+    mut i: usize = 0
+    for i < suffix_len: {
+        if s[start + i] != suffix[i] return false
+        i += 1
+    }
+    return true
+}
+
+pub find_byte := (s: []u8, b: u8) ?usize {
+    mut i: usize = 0
+    for i < s.len: {
+        if s[i] == b return i
+        i += 1
+    }
+    return null
+}
+
+pub find := (s: []u8, needle: []u8) ?usize {
+    s_len: usize = s.len
+    needle_len: usize = needle.len
+    if needle_len == 0 return null
+    if needle_len > s_len return null
+    mut i: usize = 0
+    mut limit: usize = s_len - needle_len
+    limit += 1
+    for i < limit: {
+        mut j: usize = 0
+        mut matches := true
+        for j < needle_len: {
+            if s[i + j] != needle[j] {
+                matches = false
+                break
+            }
+            j += 1
+        }
+        if matches return i
+        i += 1
+    }
+    return null
+}
+
+pub contains := (s: []u8, needle: []u8) bool {
+    return find(s, needle) != null
+}
+
+pub rfind_byte := (s: []u8, b: u8) ?usize {
+    if s.len == 0 return null
+    mut i := s.len
+    for i > 0: {
+        i -= 1
+        if s[i] == b return i
+    }
+    return null
+}
+
+pub rfind := (s: []u8, needle: []u8) ?usize {
+    s_len: usize = s.len
+    needle_len: usize = needle.len
+    if needle_len == 0 return null
+    if needle_len > s_len return null
+    mut i: usize = s_len - needle_len
+    i += 1
+    for i > 0: {
+        i -= 1
+        mut j: usize = 0
+        mut matches := true
+        for j < needle_len: {
+            if s[i + j] != needle[j] {
+                matches = false
+                break
+            }
+            j += 1
+        }
+        if matches return i
+    }
+    return null
+}
+
+pub trim_start := (s: []u8) []u8 {
+    mut start: usize = 0
+    for start < s.len: {
+        if !is_whitespace(s[start]) {
+            break
+        }
+        start += 1
+    }
+    return s[start..]
+}
+
+pub trim_end := (s: []u8) []u8 {
+    mut end: usize = s.len
+    for end > 0: {
+        if !is_whitespace(s[end - 1]) {
+            break
+        }
+        end -= 1
+    }
+    return s[0..end]
+}
+
+pub trim := (s: []u8) []u8 {
+    return trim_end(trim_start(s))
+}
+
+pub split_once := (s: []u8, delim: u8) ?SplitResult {
+    idx := find_byte(s, delim)
+    if idx: |found| {
+        return .{
+            left: s[0..found],
+            right: s[found + 1..],
+        }
+    }
+    return null
+}
+
+pub parse_uint := (s: []u8) ?u64 {
+    if s.len == 0 return null
+    mut value: u64 = 0
+    mut i: usize = 0
+    for i < s.len: {
+        ch := s[i]
+        if ch < '0' || ch > '9' return null
+        digit := $as(u64, ch - '0')
+        next := value * 10 + digit
+        if next < value return null
+        value = next
+        i += 1
+    }
+    return value
+}
+
+pub parse_int := (s: []u8) ?i64 {
+    if s.len == 0 return null
+    mut i: usize = 0
+    mut negative := false
+    if s[0] == '-' {
+        negative = true
+        i = 1
+    } else if s[0] == '+' {
+        i = 1
+    }
+    if i >= s.len return null
+
+    if negative {
+        mut value: i64 = 0
+        for i < s.len: {
+            ch := s[i]
+            if ch < '0' || ch > '9' return null
+            digit := $as(i64, ch - '0')
+            next := value * 10 - digit
+            if next > value return null
+            value = next
+            i += 1
+        }
+        return value
+    }
+
+    mut value: i64 = 0
+    for i < s.len: {
+        ch := s[i]
+        if ch < '0' || ch > '9' return null
+        digit := $as(i64, ch - '0')
+        next := value * 10 + digit
+        if next < value return null
+        value = next
+        i += 1
+    }
+    return value
+}
+
+pub parse_hex_uint := (s: []u8) ?u64 {
+    if s.len == 0 return null
+    mut value: u64 = 0
+    mut i: usize = 0
+    for i < s.len: {
+        ch := s[i]
+        mut digit: u64 = 0
+        mut ok := false
+        if ch >= '0' && ch <= '9' {
+            digit = $as(u64, ch - '0')
+            ok = true
+        }
+        if !ok && ch >= 'a' && ch <= 'f' {
+            digit = $as(u64, ch - 'a') + $as(u64, 10)
+            ok = true
+        }
+        if !ok && ch >= 'A' && ch <= 'F' {
+            digit = $as(u64, ch - 'A') + $as(u64, 10)
+            ok = true
+        }
+        if !ok return null
+        next := value * 16 + digit
+        if next < value return null
+        value = next
+        i += 1
+    }
+    return value
+}
+
+pub parse_float := (s: []u8) ?f64 {
+    if s.len == 0 return null
+    mut i: usize = 0
+    mut negative := false
+    if s[0] == '-' {
+        negative = true
+        i = 1
+    } else if s[0] == '+' {
+        i = 1
+    }
+    if i >= s.len return null
+
+    mut whole: f64 = 0.0
+    mut saw_digit := false
+    for i < s.len: {
+        ch := s[i]
+        if ch < '0' || ch > '9' {
+            break
+        }
+        whole = whole * 10.0 + $as(f64, ch - '0')
+        saw_digit = true
+        i += 1
+    }
+
+    mut frac: f64 = 0.0
+    mut scale: f64 = 0.1
+    if i < s.len && s[i] == '.' {
+        i += 1
+        for i < s.len: {
+            ch := s[i]
+            if ch < '0' || ch > '9' return null
+            frac += $as(f64, ch - '0') * scale
+            scale *= 0.1
+            saw_digit = true
+            i += 1
+        }
+    } else if i != s.len {
+        return null
+    }
+
+    if !saw_digit return null
+    value := whole + frac
+    if negative return -value
+    return value
+}
+
+pub uint_to_buf := (n: u64, buf: []u8) []u8 {
+    if buf.len == 0 return buf[0..0]
+    if n == 0 {
+        buf[0] = '0'
+        return buf[0..1]
+    }
+
+    mut digits: usize = 0
+    mut count_value := n
+    for count_value > 0: {
+        digits += 1
+        count_value /= 10
+    }
+    if digits > buf.len return buf[0..0]
+
+    mut value: u64 = n
+    mut write := digits
+    for value > 0: {
+        write -= 1
+        buf[write] = '0' + $as(u8, value % 10)
+        value /= 10
+    }
+    return buf[0..digits]
+}
+
+pub int_to_buf := (n: i64, buf: []u8) []u8 {
+    if buf.len == 0 return buf[0..0]
+    if n >= 0 return uint_to_buf($as(u64, n), buf)
+    if buf.len < 2 return buf[0..0]
+
+    buf[0] = '-'
+    if n == -9223372036854775808 {
+        min_text := "9223372036854775808"
+        min_len: usize = min_text.len
+        mut need: usize = min_len
+        need += 1
+        if buf.len < need return buf[0..0]
+        mut i: usize = 0
+        for i < min_len: {
+            buf[i + 1] = min_text[i]
+            i += 1
+        }
+        return buf[0..need]
+    }
+
+    digits := uint_to_buf($as(u64, -n), buf[1..])
+    return buf[0..1 + digits.len]
+}
+
+pub uint_to_hex_buf := (n: u64, buf: []u8) []u8 {
+    if buf.len == 0 return buf[0..0]
+    if n == 0 {
+        buf[0] = '0'
+        return buf[0..1]
+    }
+
+    digits_text := "0123456789abcdef"
+    mut digits: usize = 0
+    mut count_value: u64 = n
+    for count_value > 0: {
+        digits += 1
+        count_value /= 16
+    }
+    if digits > buf.len return buf[0..0]
+
+    mut value: u64 = n
+    mut write := digits
+    for value > 0: {
+        write -= 1
+        buf[write] = digits_text[$as(usize, value % 16)]
+        value /= 16
+    }
+    return buf[0..digits]
+}
+
+pub split := (s: []u8, delim: u8, alloc: Allocator) ?[][]u8 {
+    _s := s
+    _delim := delim
+    _alloc := alloc
+    return null
+}
+
+pub repeat := (s: []u8, n: usize, alloc: Allocator) ?[]u8 {
+    _s := s
+    _n := n
+    _alloc := alloc
+    return null
+}

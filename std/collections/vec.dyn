@@ -1,5 +1,83 @@
 module collections
 
+Allocator := (use "std/mem").Allocator
+
 pub Vec := (T: comp type) type => struct {
+    alloc: Allocator,
+    buf: []T,
     len: usize = 0,
+    cap: usize = 0,
+}
+
+pub Vec(T).init := (alloc: Allocator) Vec(T) {
+    return .{
+        alloc: alloc,
+        buf: .{ ptr: $as(*T, 1), len: 0 },
+        len: 0,
+        cap: 0,
+    }
+}
+
+pub Vec(T).deinit := (self: *Vec(T)) {
+    if self.cap != 0 {
+        self.alloc.destroy_many(T, self.buf)
+    }
+    self.buf = .{ ptr: $as(*T, 1), len: 0 }
+    self.len = 0
+    self.cap = 0
+    return
+}
+
+pub Vec(T).push := (self: *Vec(T), item: T) bool {
+    if self.len == self.cap {
+        mut new_cap: usize = 8
+        if self.cap != 0 {
+            new_cap = self.cap
+            new_cap += self.cap
+        }
+        grown := self.alloc.resize_many(T, self.buf, new_cap) or return false
+        self.buf = grown
+        self.cap = new_cap
+    }
+    self.buf[self.len] = item
+    self.len += 1
+    return true
+}
+
+pub Vec(T).pop := (self: *Vec(T)) ?T {
+    if self.len == 0 return null
+    self.len -= 1
+    return self.buf[self.len]
+}
+
+pub Vec(T).get := (self: Vec(T), i: usize) ?*T {
+    if i >= self.len return null
+    return &self.buf[i]
+}
+
+pub Vec(T).ptr_at := (self: *Vec(T), i: usize) ?*T {
+    if i >= self.len return null
+    return &self.buf[i]
+}
+
+pub Vec(T).slice := (self: Vec(T)) []T {
+    return self.buf[0..self.len]
+}
+
+pub Vec(T).clear := (self: *Vec(T)) {
+    self.len = 0
+    return
+}
+
+pub Vec(T).clone := (self: Vec(T), alloc: Allocator) ?Vec(T) {
+    mut out := Vec(T).init(alloc)
+    if self.len == 0 return out
+    copied := alloc.create_many(T, self.len) or return null
+    mut bytes := self.len
+    bytes *= $as(usize, $sizeof(T))
+    $memcpy($as(*any, copied.ptr), $as(*any, self.buf.ptr), bytes)
+    out.buf = copied
+    out.len = self.len
+    out.cap = self.len
+    return out
 }
