@@ -156,6 +156,11 @@ fn pass_struct_literal_shorthand() {
 }
 
 #[test]
+fn pass_typed_struct_literal_shorthand() {
+    assert_compiles("typed_struct_literal_shorthand");
+}
+
+#[test]
 fn pass_mut_param_types() {
     assert_compiles("mut_param_types");
 }
@@ -171,6 +176,51 @@ fn pass_if_statement_without_else() {
 }
 
 #[test]
+fn pass_one_liner_control_flow() {
+    assert_compiles("one_liner_control_flow");
+}
+
+#[test]
+fn pass_nested_one_liner_if() {
+    assert_compiles("nested_one_liner_if");
+}
+
+#[test]
+fn pass_block_break_value() {
+    assert_compiles("block_break_value");
+}
+
+#[test]
+fn pass_labeled_loops() {
+    assert_compiles("labeled_loops");
+}
+
+#[test]
+fn pass_match_surface() {
+    assert_compiles("match_surface");
+}
+
+#[test]
+fn pass_comp_match_typeof() {
+    assert_compiles("comp_match_typeof");
+}
+
+#[test]
+fn pass_builtin_type_args() {
+    assert_compiles("builtin_type_args");
+}
+
+#[test]
+fn pass_generic_comptime_functions() {
+    assert_compiles("generic_comptime_functions");
+}
+
+#[test]
+fn pass_function_surface_parity() {
+    assert_compiles("function_surface_parity");
+}
+
+#[test]
 fn pass_std_str() {
     assert_compiles("std_str");
 }
@@ -183,6 +233,16 @@ fn pass_std_collections() {
 #[test]
 fn pass_std_os() {
     assert_compiles("std_os");
+}
+
+#[test]
+fn pass_std_io() {
+    assert_compiles("std_io");
+}
+
+#[test]
+fn pass_std_mem() {
+    assert_compiles("std_mem");
 }
 
 // ── fail tests ────────────────────────────────────────────────────────────────
@@ -215,6 +275,31 @@ fn fail_shadowing() {
 #[test]
 fn fail_if_expr_missing_else() {
     assert_fails("if_expr_missing_else");
+}
+
+#[test]
+fn fail_match_fat_arrow() {
+    assert_fails("match_fat_arrow");
+}
+
+#[test]
+fn fail_enum_repr_signed() {
+    assert_fails("enum_repr_signed");
+}
+
+#[test]
+fn fail_missing_comma_fn_params() {
+    assert_fails("missing_comma_fn_params");
+}
+
+#[test]
+fn fail_missing_comma_call_args() {
+    assert_fails("missing_comma_call_args");
+}
+
+#[test]
+fn fail_missing_comma_struct_fields() {
+    assert_fails("missing_comma_struct_fields");
 }
 
 #[test]

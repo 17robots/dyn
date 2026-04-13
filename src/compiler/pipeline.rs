@@ -336,6 +336,7 @@ pub fn build_project_with_opt_level<P: AsRef<Path>>(
         BuildConfig {
             opt_level,
             sanitize: false,
+            target: None,
             bin: None,
         },
     )

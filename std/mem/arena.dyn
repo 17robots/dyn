@@ -5,33 +5,144 @@ ARENA_CAPACITY := 64 * 1024 * 1024
 
 pub Arena := struct {
     page: PageAllocator,
+    buf: []u8,
+    used: usize = 0,
 }
 
 pub Arena.init := () Arena {
-    return .{ page: PageAllocator.init() }
+    mut page := PageAllocator.init()
+    alloc := page.allocator()
+    if alloc.create_many(u8, ARENA_CAPACITY): |buf| {
+        return .{ page: page, buf: buf, used: 0 }
+    }
+    return .{
+        page: page,
+        buf: .{ ptr: $as(*u8, $as(usize, 1)), len: 0 },
+        used: 0,
+    }
 }
 
 pub Arena.allocator := (self: *Arena) Allocator {
-    return self.page.allocator()
+    return .{
+        ctx: $as(*any, self),
+        impl_alloc: arena_alloc,
+        impl_free: arena_free,
+        impl_realloc: arena_realloc,
+    }
 }
 
 pub Arena.save := (self: Arena) ArenaPos {
-    _self := self
-    return 0
+    return self.used
 }
 
 pub Arena.restore := (self: *Arena, mark: ArenaPos) {
-    _self := self
-    _mark := mark
+    if mark <= self.buf.len {
+        self.used = mark
+        return
+    }
+    self.used = self.buf.len
     return
 }
 
 pub Arena.reset := (self: *Arena) {
-    _self := self
+    self.used = 0
     return
 }
 
 pub Arena.deinit := (self: *Arena) {
-    _self := self
+    if self.buf.len != 0 {
+        self.page.allocator().destroy_many(u8, self.buf)
+    }
+    self.buf = .{ ptr: $as(*u8, $as(usize, 1)), len: 0 }
+    self.used = 0
     return
+}
+
+arena_align_up := (n: usize, align: usize) usize {
+    if align <= 1 {
+        return n
+    }
+    rem := n % align
+    if rem == 0 {
+        return n
+    }
+    return n + (align - rem)
+}
+
+arena_alloc := (ctx: *any, size: usize, align: usize) ?*any {
+    arena := $as(*Arena, ctx)
+    if size == 0 {
+        return $as(*any, $as(usize, 1))
+    }
+    if arena.buf.len == 0 {
+        return null
+    }
+
+    start := arena_align_up(arena.used, align)
+    end := start + size
+    if end > arena.buf.len return null
+
+    base := $as(usize, arena.buf.ptr)
+    arena.used = end
+    return $as(*any, base + start)
+}
+
+arena_free := (ctx: *any, ptr: *any, size: usize) {
+    arena := $as(*Arena, ctx)
+    if size == 0 || $as(usize, ptr) == 1 {
+        return
+    }
+    if arena.buf.len == 0 {
+        return
+    }
+
+    base := $as(usize, arena.buf.ptr)
+    ptr_addr := $as(usize, ptr)
+    if ptr_addr < base {
+        return
+    }
+
+    start := ptr_addr - base
+    end := start + size
+    if end == arena.used {
+        arena.used = start
+    }
+    return
+}
+
+arena_realloc := (ctx: *any, ptr: *any, old_size: usize, new_size: usize, align: usize) ?*any {
+    arena := $as(*Arena, ctx)
+    if new_size == 0 {
+        arena_free(ctx, ptr, old_size)
+        return $as(*any, $as(usize, 1))
+    }
+    if $as(usize, ptr) == 1 {
+        return arena_alloc(ctx, new_size, align)
+    }
+    if arena.buf.len == 0 {
+        return null
+    }
+
+    base := $as(usize, arena.buf.ptr)
+    ptr_addr := $as(usize, ptr)
+    if ptr_addr < base {
+        return null
+    }
+
+    start := ptr_addr - base
+    end := start + old_size
+    if end == arena.used {
+        next_end := start + new_size
+        if next_end <= arena.buf.len {
+            arena.used = next_end
+            return ptr
+        }
+    }
+
+    fresh := arena_alloc(ctx, new_size, align) or return null
+    copy_size := if old_size < new_size old_size else new_size
+    if copy_size != 0 {
+        $memcpy(fresh, ptr, copy_size)
+    }
+    return fresh
 }

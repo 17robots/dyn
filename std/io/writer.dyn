@@ -1,37 +1,52 @@
 module io
 
+str := use "std/str"
+
 pub Writer := struct {
     ctx: *any,
     write_fn: (ctx: *any, buf: []u8) usize,
 }
 
 pub write_uint := (w: Writer, n: u64) {
-    _w := w
-    _n := n
+    buf: [32]u8 = [0]
+    text := str.uint_to_buf(n, buf[..])
+    _ = w.write_all(text)
     return
 }
 
 pub write_int := (w: Writer, n: i64) {
-    _w := w
-    _n := n
+    buf: [32]u8 = [0]
+    text := str.int_to_buf(n, buf[..])
+    _ = w.write_all(text)
     return
 }
 
 pub write_float := (w: Writer, n: f64) {
-    _w := w
-    _n := n
+    buf: [64]u8 = [0]
+    text := str.float_to_buf(n, buf[..])
+    _ = w.write_all(text)
     return
 }
 
 pub write_hex := (w: Writer, n: u64) {
-    _w := w
-    _n := n
+    buf: [32]u8 = [0]
+    text := str.uint_to_hex_buf(n, buf[..])
+    _ = w.write_all(text)
     return
 }
 
 pub write_hex_upper := (w: Writer, n: u64) {
-    _w := w
-    _n := n
+    buf: [32]u8 = [0]
+    text := str.uint_to_hex_buf(n, buf[..])
+    mut i: usize = 0
+    for i < text.len: {
+        ch := text[i]
+        if ch >= 'a' && ch <= 'f' {
+            text[i] = $as(u8, $as(u64, ch) - $as(u64, 'a') + $as(u64, 'A'))
+        }
+        i += 1
+    }
+    _ = w.write_all(text)
     return
 }
 

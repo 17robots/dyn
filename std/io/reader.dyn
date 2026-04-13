@@ -13,12 +13,31 @@ pub Reader.read_byte := (self: Reader) ?u8 {
     return buf[0]
 }
 
-pub Reader.read_exact := (self: Reader, buf: []u8) bool {
+pub Reader.read_exact := (self: Reader, buf: []u8) u1 {
     return self.read_fn(self.ctx, buf) == buf.len
 }
 
 pub Reader.read_all := (self: Reader, alloc: Allocator) ?[]u8 {
-    _self := self
-    buf := alloc.create_many(u8, 0) or return null
-    return buf
+    mut buf := alloc.create_many(u8, 0) or return null
+    mut used: usize = 0
+
+    for {
+        if used == buf.len {
+            mut next_cap: usize = 256
+            if buf.len != 0 {
+                next_cap = buf.len
+                next_cap += buf.len
+            }
+            buf = alloc.resize_many(u8, buf, next_cap) or return null
+        }
+
+        got := self.read_fn(self.ctx, buf[used..])
+        if got == 0 {
+            break
+        }
+        used += got
+    }
+
+    if used == buf.len return buf
+    return alloc.resize_many(u8, buf, used)
 }

@@ -33,5 +33,5 @@ pub Target := struct {
     mode:     BuildMode,
     arch:     Arch,
     os:       Os,
-    sanitize: bool,
+    sanitize: u1,
 }

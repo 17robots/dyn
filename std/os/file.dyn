@@ -1,9 +1,9 @@
 module os
 
 io := use "std/io"
-
-c_read := extern (fd: i32, buf: *any, len: usize) isize = "read"
-c_write := extern (fd: i32, buf: *any, len: usize) isize = "write"
+host_file_platform := use "std/platform/host"
+host_read_fn := host_file_platform.read
+host_write_fn := host_file_platform.write
 
 pub File := struct {
     fd: i32,
@@ -11,14 +11,14 @@ pub File := struct {
 
 file_write := (ctx: *any, buf: []u8) usize {
     fd := $as(i32, $as(usize, ctx))
-    wrote := c_write(fd, $as(*any, buf.ptr), buf.len)
+    wrote := host_write_fn(fd, $as(*any, buf.ptr), buf.len)
     if wrote < 0 return 0
     return $as(usize, wrote)
 }
 
 file_read := (ctx: *any, buf: []u8) usize {
     fd := $as(i32, $as(usize, ctx))
-    got := c_read(fd, $as(*any, buf.ptr), buf.len)
+    got := host_read_fn(fd, $as(*any, buf.ptr), buf.len)
     if got < 0 return 0
     return $as(usize, got)
 }
@@ -84,20 +84,20 @@ pub eprintln := (v: any) {
 }
 
 pub printf1 := (fmt: []u8, a0: any) {
-    _fmt := fmt
-    _a0 := a0
+    stdout.writer().write_all(fmt)
+    stdout.writer().print(a0)
     return
 }
 
 pub eprintf := (fmt: []u8, a0: any) {
-    _fmt := fmt
-    _a0 := a0
+    stderr.writer().write_all(fmt)
+    stderr.writer().print(a0)
     return
 }
 
 pub printf := (fmt: []u8, a0: any, a1: any) {
-    _fmt := fmt
-    _a0 := a0
-    _a1 := a1
+    stdout.writer().write_all(fmt)
+    stdout.writer().print(a0)
+    stdout.writer().print(a1)
     return
 }

@@ -1,0 +1,14 @@
+module main
+
+AStruct := struct {
+    thing: i32,
+}
+
+main := () i32 {
+    thing := 1
+    what := AStruct{ thing }
+    if what.thing != 1 {
+        return 1
+    }
+    return 0
+}

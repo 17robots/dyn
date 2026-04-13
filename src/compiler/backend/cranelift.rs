@@ -77,7 +77,7 @@ fn backend_hint_mir_type(type_hint: Option<&str>) -> MirValueType {
     let normalized = normalized_return_type_hint(type_hint);
     let ty = normalized.as_str();
 
-    if ty == "bool" || ty == "u1" {
+    if ty == "u1" {
         return MirValueType::Bool;
     }
     if ty == "[]u8" {
@@ -451,7 +451,7 @@ fn declare_global_data(
 fn type_hint_byte_size(hint: Option<&str>) -> Option<u32> {
     let hint = hint?.trim();
     match hint {
-        "bool" | "i8" | "u8" => Some(1),
+        "u1" | "i8" | "u8" => Some(1),
         "i16" | "u16" => Some(2),
         "i32" | "u32" | "f32" => Some(4),
         "i64" | "u64" | "f64" | "isize" | "usize" => Some(8),
@@ -2449,7 +2449,7 @@ fn scalar_type_for_layout(type_text: &str, pointer_ty: Type) -> Type {
     }
 
     match ty.as_str() {
-        "bool" => I8,
+        "u1" => I8,
         "type" | "any" | "opaque" => I64,
         _ => pointer_ty,
     }
@@ -8627,7 +8627,7 @@ fn parse_return_scalar(return_type: Option<&str>) -> ScalarType {
         };
     }
 
-    if ty == "bool" {
+    if ty == "u1" {
         return ScalarType::Int {
             ty: I8,
             signed: false,

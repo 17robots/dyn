@@ -51,7 +51,7 @@ pub(super) fn layout_for_builtin_type_name(name: &str) -> (u64, u64) {
         return layout_for_struct_fields(&fields);
     }
     match name {
-        "bool" | "u1" | "i8" | "u8" => (1, 1),
+        "u1" | "i8" | "u8" => (1, 1),
         "i16" | "u16" => (2, 2),
         "i32" | "u32" | "f32" => (4, 4),
         "i64" | "u64" | "isize" | "usize" | "f64" | "type" => (8, 8),
@@ -349,7 +349,7 @@ pub(super) fn eval_comptime_cast(target: &str, value: ComptimeValue) -> Option<C
                 (parsed as u64).to_string(),
             )))
         }
-        ("u1" | "bool", ComptimeValue::Literal(HirLiteral::Bool(v))) => {
+        ("u1", ComptimeValue::Literal(HirLiteral::Bool(v))) => {
             Some(ComptimeValue::Literal(HirLiteral::Bool(v)))
         }
         (_, other) => Some(other),
@@ -395,7 +395,7 @@ pub(super) fn parse_type_hint(text: &str) -> MirValueType {
     }
 
     match normalized {
-        "bool" | "u1" => return MirValueType::Bool,
+        "u1" => return MirValueType::Bool,
         "[]u8" => return MirValueType::BytesSlice,
         "type" => return MirValueType::Type,
         "isize" => {
@@ -525,7 +525,7 @@ pub(super) fn merge_types(left: &MirValueType, right: &MirValueType) -> MirValue
 /// - `u8 / u16 / u32 / u64 / usize` → `"uint"`
 /// - `i8 / i16 / i32 / i64`         → `"sint"`
 /// - `f32 / f64`                     → `"float"`
-/// - `u1`                            → `"bool"`
+/// - `u1`                            → `"bool-class"`
 /// - `[]u8`                          → `"bytes"`
 /// - anything else                   → `"struct"`
 pub(super) fn type_name_to_class(type_name: &str) -> &'static str {

@@ -1,0 +1,9 @@
+main := () i32 {
+    mut i: i32 = 0
+    loop: for i < 10 {
+        i += 1
+        if i < 3 continue :loop
+        if i == 5 break :loop
+    }
+    return i
+}

@@ -1,3 +1,65 @@
 module main
 
-main := () {}
+diagnostics := use "diagnostics"
+lexer := use "lexer"
+mem := use "std/mem"
+parser := use "parser"
+sema := use "sema"
+Vec := (use "std/collections").Vec
+
+pub smoke_diag := () diagnostics.Diagnostic {
+  span := diagnostics.SourceSpan.{
+    start_byte: 0,
+    start_line: 1,
+    start_col: 1,
+    end_byte: 0,
+    end_line: 1,
+    end_col: 1,
+  }
+  diag := diagnostics.Diagnostic.error(.Lexer, .E2001, "smoke")
+  return diag.with_primary_file_label("memory", span, "smoke")
+}
+
+pub lex_source := (source: []u8) lexer.LexOutput! {
+  mut arena := mem.Arena.init()
+  mut l := lexer.Lexer.init(arena.allocator(), source, "memory")
+  out := l.lex().!
+  return out
+}
+
+pub parse_source := (source: []u8) parser.ParseOutput! {
+  mut arena := mem.Arena.init()
+  mut l := lexer.Lexer.init(arena.allocator(), source, "memory")
+  lexed := l.lex().!
+  mut p := parser.Parser.new(arena.allocator(), "memory", lexed.tokens.slice())
+  out := p.parse_file()
+  return out
+}
+
+pub analyze_source := (source: []u8) sema.SemanticOutput! {
+  mut arena := mem.Arena.init()
+  mut l := lexer.Lexer.init(arena.allocator(), source, "memory")
+  lexed := l.lex().!
+  mut p := parser.Parser.new(arena.allocator(), "memory", lexed.tokens.slice())
+  parsed := p.parse_file()
+  file := parsed.ast or return .{
+    diagnostics: parsed.diagnostics,
+    decls: Vec(sema.DeclStub).init(arena.allocator()),
+  }
+  out := sema.analyze_file(arena.allocator(), "memory", file)
+  mut all_diags := parsed.diagnostics
+  mut i: usize = 0
+  for i < out.diagnostics.len: {
+    all_diags.push(out.diagnostics[i]).!
+    i += 1
+  }
+  return .{
+    diagnostics: all_diags,
+    decls: out.decls,
+  }
+}
+
+main := () i32 {
+  _ = smoke_diag()
+  return 0
+}

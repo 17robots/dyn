@@ -1,497 +1,524 @@
+module lexer
+
+Vec := (use "std/collections").Vec
+str := (use "std/str")
+Allocator := (use "std/mem").Allocator
+
 diagnostics := use "diagnostics"
+SourceSpan := diagnostics.SourceSpan
+Diagnostic := diagnostics.Diagnostic
 
-pub CursorPosition := struct {
-  byte: usize,
-  line: usize,
-  col: usize
-}
+pub CursorPosition := struct { byte: usize, line: usize, col: usize }
 
-pub Cursor := struct {
-  source: []u8,
-  index: usize,
-  line: usize,
-  col: usize
-}
-
-pub Cursor.init := (source: []u8) Cursor => .{source: source, index: 0, line: 1, col: 1 }
-
+pub Cursor := struct { source: []u8, index: usize, line: usize, col: usize }
+pub Cursor.init := (source: []u8) Cursor => .{ source, index: 0, line: 1, col: 1 }
 pub Cursor.is_eof := (self: Cursor) u1 => self.index >= self.source.len
-
 pub Cursor.position := (self: Cursor) CursorPosition => .{ byte: self.index, line: self.line, col: self.col }
+pub Cursor.peek := (self: Cursor) ?u8 {
+  if self.index >= self.source.len return null
+  return self.source[self.index]
+}
+pub Cursor.peek_next := (self: Cursor) ?u8 {
+  mut next: usize = self.index
+  next += 1
+  if next >= self.source.len return null
+  return self.source[next]
+}
 
-pub Cursor.peek(self: Cursor) ?u8 => if self.is_eof() null else self.source[self.index]
-
-pub Cursor.peek_next(self: Cursor) ?u8 => if self.is_eof() || self.index + 1 >= self.source.len null else self.source[self.index + 1]
-
-pub Cursor.bump := (*mut Cursor) ?u8 {
-  ch := self.peek()
-  // self.index += unicode size
+pub Cursor.bump := (self: *mut Cursor) ?u8 {
+  ch := self.peek() or return null
+  self.index += 1
   if ch == '\n' {
     self.line += 1
     self.col = 1
   } else self.col += 1
   return ch
 }
-
-pub Cursor.match_char(*mut Cursor, expected: u8) u1 => if self.peek() |p| {
+pub Cursor.match_char := (self: *mut Cursor, expected: u8) u1 {
+  ch := self.peek() or return false
+  if ch != expected return false
   _ = self.bump()
-  break true
-} else false
-
-pub Cursor.span_from := (self: *Cursor, start: CursorPosition) SourceSpan => .{
-  start_byte: start.byte,
-  start_line: start.line,
-  start_col: start.col,
-  end_byte: self.byte,
-  end_line: self.line,
-  end_col: self.col,
+  return true
 }
+pub Cursor.span_from := (self: Cursor, start: CursorPosition) SourceSpan => .{ start_byte: start.byte, start_line: start.line, start_col: start.col, end_byte: self.index, end_line: self.line, end_col: self.col }
 
-pub LexOutput := struct {
-  tokens: Vec(Token),
-  diagnostics: Vec(Diagnostic)
-}
+pub LexOutput := struct { tokens: Vec(Token), diagnostics: Vec(Diagnostic) }
 
-pub Lexer := struct {
-  cursor: *Cursor,
-  source: []u8,
-  file_path: []u8,
-  diagnostics: Vec(Diagnostic),
-  tokens: Vec(Token)
-}
-pub Lexer.init := (allocator: Allocator, source: []u8, file_path: []u8) Lexer => .{
-  cursor: Cursor.init(source),
-  source: source,
-  file_path: file_path,
-  diagnostics: Vec(Diagnostic).init(allocator),
-  tokens: Vec(Token).init(allocator)
-}
-
+pub Lexer := struct { cursor: Cursor, source: []u8, file_path: []u8, diagnostics: Vec(Diagnostic), tokens: Vec(Token) }
+pub Lexer.init := (allocator: Allocator, source: []u8, file_path: []u8) Lexer => .{ cursor: Cursor.init(source), source, file_path, diagnostics: Vec(Diagnostic).init(allocator), tokens: Vec(Token).init(allocator) }
 pub Lexer.lex := (self: *mut Lexer) LexOutput! {
-  for !self.cursor.is_eof() {
+  for {
     self.skip_whitespace()
     if self.cursor.is_eof() break
     if self.lex_comment_or_doc_comment() continue
+
     start := self.cursor.position()
-    current := self.cursor.peek() or break
-    if is_identifier_start(current) {
-      self.lex_identifier(start)
+    ch := self.cursor.peek() or break
+
+    if is_identifier_start(ch) {
+      self.lex_identifier(start).!
       continue
     }
-    if current == '$' {
+
+    if ch == '$' {
       self.lex_builtin_identifier(start).!
       continue
     }
-    if current == '\"' {
+
+    if is_ascii_digit(ch) {
+      self.lex_number(start).!
+      continue
+    }
+
+    if ch == '"' {
       self.lex_string_literal(start).!
       continue
     }
-    if current == '\'' {
+
+    if ch == '\'' {
       self.lex_char_literal(start).!
       continue
     }
-    if p >= '0' && p <= '9' {
-      self.lex_number(start, false).!
-      continue
-    }
-    if current == '.' && self.cursor.peek(): |p| {
-      if p >= '0' && p <= '9' {
-        self.lex_number(start, false).!
-        continue
-      }
-    }
-    if self.lex_operator_or_delimiter(start) continue
-    self.emit_unexpected_character(self, current)
+
+    if self.lex_operator_or_delimiter(start).! continue
+
+    self.emit_unexpected_character(start).!
     _ = self.cursor.bump()
   }
+
   eof_pos := self.cursor.position()
-  self.tokens.append(.{kind: .eof, lexeme: "", span: self.cursor.span_from(eof_pos)}).!
+  self.tokens.append(.{ kind: .Eof, lexeme: "", span: self.cursor.span_from(eof_pos), }).!
   return .{ tokens: self.tokens, diagnostics: self.diagnostics }
 }
 
 Lexer.skip_whitespace := (self: *mut Lexer) {
-  for self.peek(): |p| match p {
-    ' ', '\t', '\n': _ = self.cursor.bump(),
-    _: {},
-  }
-}
-
-Lexer.lex_comment_or_doc_comment := (self: *mut Lexer) u1! {
-  if self.peek(): |p| {
-    if p != '/' return false
-  } else return false
-  return if self.peek_next(): |p| match p {
-    '/': {
-      start := self.cursor.position()
-      _ = self.cursor.bump()
-      _ = self.cursor.bump()
-      if self.cursor.match_char('/') {
-        text_start := self.cursor.position().byte
-        for self.cursor.peek(): |p| {
-          if(p == '\n') break
-          _ = self.cursor.bump()
-        }
-        text_end := self.cursor.position().byte
-        lexeme := self.source[text_start..text_end];
-        self.tokens.append(.{ kind: TokenKind.DocComment, lexeme: lexeme, span: self.cursor.span_from(start)}).!
-      } else loop: for self.cursor.peek(): |p| {
-        if p == '\n' break :loop
-        _ = self.cursor.bump()
-      }
-      break true
-    },
-    '*': {
-      start := self.cursor.position()
-      _ = self.cursor.bump()
-      _ = self.cursor.bump()
-      mut closed := false
-      loop: for self.cursor.bump(): |ch| if ch == '*' && self.cursor.match_char('/') {
-        closed = true
-        break :loop
-      }
-      if !closed {
-        span := self.cursor.span_from(start)
-        self.diagnostics.append(Diagnostic.error(.Lexer, .E2004, "unterminated block comment").with_primary_file_label(self.file_path, span, "block comment start here but is never closed")).!
-      }
-      break true
-    },
-    _: false
-  } else false
-}
-
-Lexer.lex_identifier := (*mut Lexer, start: CursorPosition) ! {
-  for self.cursor.peek(): |p| if is_identifier_continue(p) _ = self.cursor.bump()
-  span := self.cursor.span_from(start)
-  lexeme := self.source[span.start_byte..span.end_byte]
-  self.tokens.append(.{ kind: keyword_from_identifier(self.source[span.start_byte..span.end_byte]), lexeme: lexeme, span: span}).!
-}
-
-Lexer.lex_builtin_identifier := (self: *mut Lexer, start: CursorPosition) ! {
-  _ = self.cursor.bump()
-  if self.cursor.peek(): |p| if is_identifier_start(p) {
-    for self.cursor.peek(): |p2| if is_identifier_continue(p2) { _ = self.cursor.bump() }
-    span := self.cursor.span_from(start)
-    lexeme := self.source[span.start_byte..span.end_byte]
-    self.tokens.append(.{ kind: .BuiltinIdentifier, lexeme: lexeme, span: span }).!
-  } else {
-    span := self.cursor.span_from(start)
-    self.diagnostics.append(diagnostics.Diagnostic.error(.Lexer, .E2006, "invalid builtin identifier").with_primary_file_label(self.file_path, span, "expected identifier after $")).!
-  }
-}
-
-Lexer.lex_string_literal := (self: *mut Lexer, start: CursorPosition) ! {
-  _ = self.cursor.bump()
-  mut terminated := false
-  for self.cursor.peek(): |p| {
-    if p == '"' {
-      _ = self.cursor.bump()
-      terminated = true
-      break
-    }
-    if ch == '\n' break
-    if ch == '\\' {
-      next := self.cursor.peek() or break
-      if next == 'x' {
-        _ = self.cursor.bump()
-        for 0..2: |_| if self.cursor.peek(): |c| if is_ascii_hexdigit(c) { _ = self.cursor.bump() }
-      } else if is_valid_escape_char(next) {_ = self.cursor.bump()} else break
-      continue
-    }
-    _ = self.cursor.bump()
-  }
-  span := self.cursor.span_from(start)
-  lexeme := self.source[span.start_byte..span.end_byte]
-  if !terminated self.diagnostics.append(diagnostics.Diagnostic.error(.Lexer, .E2002, "unterminated string literal").with_primary_file_label(self.file_path, span, "string literal starts here but does not terminate")).!
-  self.tokens.append(.{ kind: .StringLiteral, lexeme: lexeme, span: span }).!
-}
-
-Lexer.lex_char_literal := (self: *mut Lexer, start: CursorPosition) ! {
-  _ = self.cursor.bump()
-  mut valid := true
-  mut terminate := false
-
-  if self.cursor.peek(): |c| match next {
-    '\\': {
-      _ = self.cursor.bump()
-      if self.cursor.peek(): |escape| {
-        if escape == 'x' {
-          _ = self.cursor.bump()
-          for 0..2: |_| if self.cursor.peek(): |c2| if is_ascii_hexdigit(c2) { _ = self.cursor.bump() }
-        }
-        else if is_valid_escape_char(escape) { _ = self.cursor.bump() }
-        else valid = false
-      } else valid = false
-    },
-    '\'', '\n': valid = false,
-    _: _ = self.cursor.bump()
-  } else valid = false
-  if self.cursor.match_char('\'') terminated = true else {
-    valid = false
-    if self.cursor.peek(): |c3| if c3 != '\n' && c3 != '\'' _ = self.cursor.bump()
-      if self.cursor.match_char('\'') terminated = true
-  }
-  span := self.cursor.span_from(start)
-  lexeme := self.source[span.start_byte..span.end_byte]
-  if !valid || !terminated self.diagnostics.append(diagnostics.Diagnostic.error(.Lexer, .E2003, "invalid char literal").with_primary_file_label(self.file_path, span, "char literal must contain one character or one valid escape")).!
-  self.tokens.append(.{ kind: .CharLiteral, lexeme: lexeme, span: span }).!
-}
-
-Lexer.lex_number := (*mut Lexer, start: CursorPosition, starts_with_dot: u1) ! {
-  mut is_float = false
-  mut is_valid = true
-  if starts_with_dot {
-    is_float = true
-    _ = self.cursor.bump()
-    { has_frac_digits, frac_valid } := self.consume_digits_with_underscores()
-    is_valid &= has_frac_digits && frac_valid
-    if self.consume_decimal_exponent() is_valid &= self.last_exponent_valid()
-    if self.has_invalid_numeric_trailer() {
-      is_valid = false
-      self.consume_invalid_numeric_trailer()
-    }
-  } else if self.cursor.peek() && self.cursor.peek_next(): |p, p2| if p == '0' match p2 {
-    'b', 'B': {
-      _ = self.cursor.bump()
-      _ = self.cursor.bump()
-      { has_digits, digits_valid } = self.consume_digits_with_underscores()
-      is_valid &= has_digits && digits_valid
-      if self.has_invalid_numeric_trailer() {
-        is_valid = false
-        self.consume_invalid_numeric_trailer()
-      }
-    },
-    'o', 'O': {
-      _ = self.cursor.bump()
-      _ = self.cursor.bump()
-      { has_digits, digits_valid } = self.consume_digits_with_underscores()
-      is_valid &= has_digits && digits_valid
-      if self.has_invalid_numeric_trailer() {
-        is_valid = false
-        self.consume_invalid_numeric_trailer()
-      }
-    },
-    'x', 'X': {
-      _ = self.cursor.bump()
-      _ = self.cursor.bump()
-      { has_digits, digits_valid } = self.consume_digits_with_underscores()
-      is_valid &= has_digits && digits_valid
-      mut has_dot := false
-      mut has_frac_digits := false
-      mut frac_valid := true
-      if self.cursor.peek() && self.cursor.peek_next(): |p3, p4|  if p3 == '.' && p4 != '.' {
-        _ = self.cursor.bump()
-        { frac_digits, frac_ok } := self.consume_digits_with_underscores()
-        has_frac_digits = frac_digits
-        frac_valid = frac_ok
-      }
-      has_p_exponent := self.consume_hex_exponent()
-      if has_p_exponent {
-        is_float = true
-        is_valid &= self.last_exponent_valid()
-      }
-      if has_dot && !has_p_exponent is_valid = false
-      if !(has_int_digits || has_frac_digits) is_valid = false
-      is_valid &= frac_valid
-      if self.has_invalid_numeric_trailer() {
-        is_valid = false
-        self.consume_invalid_numeric_trailer()
-      }
-    },
-    _: {
-      { has_digits, digits_valid } = self.consume_digits_with_underscores()
-      is_valid &= has_digits && digits_valid
-      if self.cursor.peek() && self.cursor.peek_next(): |p3, p4| if p3 == '0' && p4 != '.' {
-        is_float = true
-        _ = self.cursor.bump()
-        { _, frac_valid } := self.consume_digits_with_underscores()
-        is_valid &= frac_valid
-      }
-      if self.consume_decimal_exponent() {
-        is_float = true
-        is_valid &= self.last_exponent_valid()
-      }
-      if self.has_invalid_numeric_trailer() {
-        is_valid = false
-        self.consume_invalid_numeric_trailer()
-      }
-    }
-  } else {
-    { has_digits, digits_valid } = self.consume_digits_with_underscores()
-    is_valid &= has_digits && digits_valid
-    if self.cursor.peek() && self.cursor.peek_next(): |p3, p4| if p3 == '0' && p4 != '.' {
-      is_float = true
-      _ = self.cursor.bump()
-      { _, frac_valid } := self.consume_digits_with_underscores()
-      is_valid &= frac_valid
-    }
-    if self.consume_decimal_exponent() {
-      is_float = true
-      is_valid &= self.last_exponent_valid()
-    }
-    if self.has_invalid_numeric_trailer() {
-      is_valid = false
-      self.consume_invalid_numeric_trailer()
-    }
-  }
-  span := self.cursor.span_from(start)
-  lexeme := self.source[span.start_byte..span.end_byte]
-  if !is_valid self.diagnostics.append(diagnostics.Diagnostic.error(.Lexer, .E2005, "invalid numeric literal").with_primary_file_label(self.file_path, span, "numeric literal does not follow language rules")).!
-  self.tokens.append(.{ kind: if is_float .FloatLiteral else IntLiteral, lexeme: lexeme, span: span }).!
-}
-
-Lexer.consume_digits_with_underscores := (self: *mut Lexer, is_valid_digit: (digit: u8) u1) .{u1, u1} {
-  mut saw_digit := false
-  mut prev_was_underscore := false
-  mut valid := true
-  for self.cursor.peek(): |ch| {
-    if ch == '_' {
-      if !saw_digit || prev_was_underscore valid = false
-        prev_was_underscore = true
-        _ = self.cursor.bump()
-        continue
-    }
-    if is_valid_digit(ch) {
-      saw_digit = true
-      prev_was_underscore = false
+  for {
+    ch := self.cursor.peek() or break
+    if str.is_whitespace(ch) {
       _ = self.cursor.bump()
       continue
     }
     break
   }
-  if prev_was_underscore valid = false
-  return .{ saw_digit, valid }
+  return
 }
 
-Lexer.consume_decimal_exponent := (self: *mut Lexer) u1 {
-  if self.cursor.peek(): |p| if p != 'e' && p != 'E' return false
+Lexer.lex_comment_or_doc_comment := (self: *mut Lexer) u1 {
+  first := self.cursor.peek() or return false
+  if first != '/' return false
+
+  second := self.cursor.peek_next() or return false
+  if second == '/' {
+    start := self.cursor.position()
     _ = self.cursor.bump()
-    if self.cursor.peek(): |p| if p == '+' || p == '-' _ = self.cursor.bump()
+    _ = self.cursor.bump()
+
+    mut is_doc := false
+    if self.cursor.peek(): |third| {
+      if third == '/' {
+        is_doc = true
+        _ = self.cursor.bump()
+      }
+    }
+    for self.cursor.peek(): |ch| {
+      if ch == '\n' break
+      _ = self.cursor.bump()
+    }
+    if is_doc {
+      span := self.cursor.span_from(start)
+      lexeme := self.source[span.start_byte..span.end_byte]
+      self.tokens.append(.{ kind: .DocComment, lexeme, span }).!
+    }
     return true
-}
-
-Lexer.consume_hex_exponent := (self: *mut Lexer) u1 {
-  if self.cursor.peek(): |p| if p != 'p' && p != 'P' return false
-  _ = self.cursor.bump()
-  if self.cursor.peek(): |p| if p == '+' || p == '-' _ = self.cursor.bump()
-  return true
-}
-
-Lexer.last_exponent_valid := (self: *mut Lexer) u1 {
-  { has_digits, digits_valid } := self.consume_digits_with_underscores()
-  return has_digits && digits_valid
-}
-
-Lexer.has_invalid_numeric_trailer := (self: *Lexer) u1 => if self.cursor.peek(): |p| match p {
-  '.': if self.cursor.peek_next(): |p2| { break p2 != '.' } else false,
-  _: is_ascii_alphanumeric(p) || p == '_' || p == '.',
-} else false
-
-Lexer.consume_invalid_numeric_trailer := (self: *mut Lexer) {
-  for self.cursor.peek(): |p| if is_ascii_alphanumeric(p) || p == '_' || p == '.' _ = self.cursor.bump()
-}
-
-Lexer.lex_operator_or_delimiter := (self: *mut Lexer, start: CursorPosition) u1 {
-  ch := self.cursor.bump() or return false
-  kind := match ch {
-    '(': .Delimiter(.LParen),
-    ')': .Delimiter(.RParen),
-    '{': .Delimiter(.LBrace),
-    '}': .Delimiter(.RBrace),
-    '[': .Delimiter(.LBrack),
-    ']': .Delimiter(.RBrack),
-    ',': .Delimiter(.Comma),
-    ';': .Delimiter(.Semicolon),
-    ':': .Delimiter(.Colon),
-    '=': .Operator(if self.cursor.match_char('>') .FatArrow else if self.cursor.match_char('=') .EqualEqual else .Equal),
-    '+': .Operator(if self.cursor.match_char('=') .PlusEqual else .Plus),
-    '-': .Operator(if self.cursor.match_char('=') .MinusEqual else .Minus),
-    '*': .Operator(if self.cursor.match_char('=') .StarEqual else .Star),
-    '/': .Operator(if self.cursor.match_char('=') .SlashEqual else .Slash),
-    '%': .Operator(if self.cursor.match_char('=') .PercentEqual else .Percent),
-    '.': .Operator(
-      if self.cursor.match_char('.') { break if self.cursor.match_char('=') .DotDotEq else .DotDot }
-      else if self.cursor.match_char('*') .DotStar
-      else if self.cursor.match_char('!') .DotBang
-      else if self.cursor.match_char('?') .DotQuestion
-      else .Dot
-    ),
-    '<': .Operator(if self.cursor.match_char('<') { break if self.cursor.match_char('=') .LeftShiftEqual else .LeftShift} else if self.cursor.match_char('=') .LessEqual else .Less),
-    '>': .Operator(if self.cursor.match_char('>') { break if self.cursor.match_char('=') .RightShiftEqual else .RightShift} else if self.cursor.match_char('=') .GreaterEqual else .Greater),
-    '!': .Operator(if self.cursor.match_char('=') .BangEqual else .Bang),
-    '&': .Operator(if self.cursor.match_char('&') .AndAnd else if self.cursor.match_char('=') .AmpersandEqual else .Ampersand),
-    '|': .Operator(if self.cursor.match_char('|') .OrOr else if self.cursor.match_char('=') .PipeEqual else .Pipe),
-    '^': .Operator(if self.cursor.match_char('=') .CaretEqual else .Caret),
-    '~': .Operator(.Tilde),
-    '?': .Operator(.Question),
-    _: return false
   }
+
+  if second == '*' {
+    start := self.cursor.position()
+    _ = self.cursor.bump()
+    _ = self.cursor.bump()
+
+    mut closed := false
+    for self.cursor.bump(): |ch| {
+      if ch == '*' {
+        if self.cursor.peek(): |next| {
+          if next == '/' {
+            _ = self.cursor.bump()
+            closed = true
+            break
+          }
+        }
+      }
+    }
+    if !closed {
+      span := self.cursor.span_from(start)
+      diag := Diagnostic.error(.Lexer, .E2004, "unterminated block comment")
+      self.diagnostics.append(diag.with_primary_file_label(self.file_path, span, "block comment starts here")).!
+    }
+    return true
+  }
+
+  return false
+}
+Lexer.lex_identifier := (self: *mut Lexer, start: CursorPosition) ! {
+  _ = self.cursor.bump()
+  for {
+    ch := self.cursor.peek() or break
+    if !is_identifier_continue(ch) break
+    _ = self.cursor.bump()
+  }
+  span := self.cursor.span_from(start)
+  lexeme := self.source[span.start_byte..span.end_byte]
+  self.tokens.append(.{ kind: keyword_from_identifier(lexeme), lexeme, span }).!
+  return
+}
+
+Lexer.lex_builtin_identifier := (self: *mut Lexer, start: CursorPosition) ! {
+  _ = self.cursor.bump()
+  if self.cursor.peek(): |ch| {
+    if is_identifier_start(ch) {
+      _ = self.cursor.bump()
+      for {
+        next := self.cursor.peek() or break
+        if !is_identifier_continue(next) break
+        _ = self.cursor.bump()
+      }
+    } else {
+      span := self.cursor.span_from(start)
+      diag := Diagnostic.error(.Lexer, .E2006, "invalid builtin identifier")
+      self.diagnostics.append(diag.with_primary_file_label(self.file_path, span, "expected identifier after $")).!
+    }
+  } else {
+    span := self.cursor.span_from(start)
+    diag := Diagnostic.error(.Lexer, .E2006, "invalid builtin identifier")
+    self.diagnostics.append(diag.with_primary_file_label(self.file_path, span, "expected identifier after $")).!
+  }
+  span := self.cursor.span_from(start)
+  lexeme := self.source[span.start_byte..span.end_byte]
+  self.tokens.append(.{ kind: .BuiltinIdentifier, lexeme, span }).!
+  return
+}
+
+Lexer.lex_string_literal := (self: *mut Lexer, start: CursorPosition) ! {
+  _ = self.cursor.bump()
+  mut terminated := false
+
+  for {
+    ch := self.cursor.peek() or break
+    _ = self.cursor.bump()
+
+    if ch == '"' {
+      terminated = true
+      break
+    }
+
+    if ch == '\n' break
+
+    if ch == '\\' {
+      if self.cursor.peek(): |escape| {
+        if escape == 'x' {
+          _ = self.cursor.bump()
+          self.consume_hex_digits(2)
+        } else _ = self.cursor.bump()
+      }
+    }
+  }
+  span := self.cursor.span_from(start)
+  lexeme := self.source[span.start_byte..span.end_byte]
+  if !terminated {
+    diag := Diagnostic.error(.Lexer, .E2002, "unterminated string literal")
+    self.diagnostics.append(diag.with_primary_file_label(self.file_path, span, "string literal starts here")).!
+  }
+  self.tokens.append(.{ kind: .StringLiteral, lexeme, span }).!
+  return
+}
+
+Lexer.lex_char_literal := (self: *mut Lexer, start: CursorPosition) ! {
+  _ = self.cursor.bump()
+  mut valid := true
+  mut terminated := false
+
+  if self.cursor.peek(): |ch| {
+    if ch == '\\' {
+      _ = self.cursor.bump()
+      if self.cursor.peek(): |escape| {
+        if escape == 'x' {
+          _ = self.cursor.bump()
+          self.consume_hex_digits(2)
+        } else {
+          _ = self.cursor.bump()
+        }
+      } else {
+        valid = false
+      }
+    } else if ch == '\'' || ch == '\n' {
+      valid = false
+    } else {
+      _ = self.cursor.bump()
+    }
+  } else {
+    valid = false
+  }
+
+  if self.cursor.peek(): |end| {
+    if end == '\'' {
+      _ = self.cursor.bump()
+      terminated = true
+    }
+  }
+
+  if !terminated valid = false
+
+  span := self.cursor.span_from(start)
+  lexeme := self.source[span.start_byte..span.end_byte]
+  if !valid {
+    diag := Diagnostic.error(.Lexer, .E2003, "invalid char literal")
+    self.diagnostics.append(diag.with_primary_file_label(self.file_path, span, "char literal must contain one character")).!
+  }
+  self.tokens.append(.{ kind: .CharLiteral, lexeme, span }).!
+  return
+}
+
+Lexer.lex_number := (self: *mut Lexer, start: CursorPosition) ! {
+  mut is_float := false
+  _ = self.cursor.bump()
+
+  if self.source[start.byte] == '0' {
+    if self.cursor.peek(): |prefix| {
+      if prefix == 'x' || prefix == 'X' {
+        _ = self.cursor.bump()
+        self.consume_hex_or_underscore()
+        span := self.cursor.span_from(start)
+        lexeme := self.source[span.start_byte..span.end_byte]
+        self.tokens.append(.{ kind: .IntLiteral, lexeme, span }).!
+        return
+      }
+      if prefix == 'b' || prefix == 'B' {
+        _ = self.cursor.bump()
+        self.consume_binary_or_underscore()
+        span := self.cursor.span_from(start)
+        lexeme := self.source[span.start_byte..span.end_byte]
+        self.tokens.append(.{ kind: .IntLiteral, lexeme, span }).!
+        return
+      }
+      if prefix == 'o' || prefix == 'O' {
+        _ = self.cursor.bump()
+        self.consume_octal_or_underscore()
+        span := self.cursor.span_from(start)
+        lexeme := self.source[span.start_byte..span.end_byte]
+        self.tokens.append(.{ kind: .IntLiteral, lexeme, span }).!
+        return
+      }
+    }
+  }
+
+  self.consume_decimal_or_underscore()
+
+  if self.cursor.peek(): |dot| if dot == '.' if self.cursor.peek_next(): |next| if is_ascii_digit(next) {
+    is_float = true
+    _ = self.cursor.bump()
+    self.consume_decimal_or_underscore()
+  }
+  if self.cursor.peek(): |exp| if exp == 'e' || exp == 'E' {
+    is_float = true
+    _ = self.cursor.bump()
+    if self.cursor.peek(): |sign| if sign == '+' || sign == '-' _ = self.cursor.bump()
+    self.consume_decimal_or_underscore()
+  }
+  span := self.cursor.span_from(start)
+  lexeme := self.source[span.start_byte..span.end_byte]
+  self.tokens.append(.{ kind: if is_float .FloatLiteral else .IntLiteral, lexeme, span }).!
+  return
+}
+
+Lexer.consume_decimal_or_underscore := (self: *mut Lexer) {
+  for {
+    ch := self.cursor.peek() or break
+    if is_ascii_digit(ch) {
+      _ = self.cursor.bump()
+      continue
+    }
+    if ch == '_' {
+      _ = self.cursor.bump()
+      continue
+    }
+    break
+  }
+  return
+}
+
+Lexer.consume_binary_or_underscore := (self: *mut Lexer) {
+  for {
+    ch := self.cursor.peek() or break
+    if ch == '0' || ch == '1' {
+      _ = self.cursor.bump()
+      continue
+    }
+    if ch == '_' {
+      _ = self.cursor.bump()
+      continue
+    }
+    break
+  }
+  return
+}
+
+Lexer.consume_octal_or_underscore := (self: *mut Lexer) {
+  for {
+    ch := self.cursor.peek() or break
+    if ch >= '0' && ch <= '7' {
+      _ = self.cursor.bump()
+      continue
+    }
+    if ch == '_' {
+      _ = self.cursor.bump()
+      continue
+    }
+    break
+  }
+  return
+}
+
+Lexer.consume_hex_or_underscore := (self: *mut Lexer) {
+  for {
+    ch := self.cursor.peek() or break
+    if is_ascii_hexdigit(ch) {
+      _ = self.cursor.bump()
+      continue
+    }
+    if ch == '_' {
+      _ = self.cursor.bump()
+      continue
+    }
+    break
+  }
+  return
+}
+
+Lexer.consume_hex_digits := (self: *mut Lexer, max: usize) {
+  mut count: usize = 0
+  for count < max: {
+    ch := self.cursor.peek() or break
+    if !is_ascii_hexdigit(ch) break
+    _ = self.cursor.bump()
+    count += 1
+  }
+  return
+}
+
+Lexer.lex_operator_or_delimiter := (self: *mut Lexer, start: CursorPosition) u1! {
+  ch := self.cursor.bump() or return false
+  mut kind: TokenKind = .Eof
+  if ch == '(' kind = .LParen
+  else if ch == ')' kind = .RParen
+  else if ch == '{' kind = .LBrace
+  else if ch == '}' kind = .RBrace
+  else if ch == '[' kind = .LBracket
+  else if ch == ']' kind = .RBracket
+  else if ch == ',' kind = .Comma
+  else if ch == ';' kind = .Semicolon
+  else if ch == ':' kind = .Colon
+  else if ch == '=' {
+    if self.cursor.match_char('>') kind = .FatArrow
+    else if self.cursor.match_char('=') kind = .EqualEqual
+    else kind = .Equal
+  } else if ch == '+' {
+    if self.cursor.match_char('=') kind = .PlusEqual
+    else kind = .Plus
+  } else if ch == '-' {
+    if self.cursor.match_char('=') kind = .MinusEqual
+    else kind = .Minus
+  } else if ch == '*' {
+    if self.cursor.match_char('=') kind = .StarEqual
+    else kind = .Star
+  } else if ch == '/' {
+    if self.cursor.match_char('=') kind = .SlashEqual
+    else kind = .Slash
+  } else if ch == '%' {
+    if self.cursor.match_char('=') kind = .PercentEqual
+    else kind = .Percent
+  } else if ch == '.' {
+    if self.cursor.match_char('.') {
+      if self.cursor.match_char('=') kind = .DotDotEq
+      else kind = .DotDot
+    } else if self.cursor.match_char('*') kind = .DotStar
+    else if self.cursor.match_char('!') kind = .DotBang
+    else if self.cursor.match_char('?') kind = .DotQuestion
+    else kind = .Dot
+  } else if ch == '<' {
+    if self.cursor.match_char('<') {
+      if self.cursor.match_char('=') kind = .LeftShiftEqual
+      else kind = .LeftShift
+    } else if self.cursor.match_char('=') kind = .LessEqual
+    else kind = .Less
+  } else if ch == '>' {
+    if self.cursor.match_char('>') {
+      if self.cursor.match_char('=') kind = .RightShiftEqual
+      else kind = .RightShift
+    } else if self.cursor.match_char('=') kind = .GreaterEqual
+    else kind = .Greater
+  } else if ch == '!' {
+    if self.cursor.match_char('=') kind = .BangEqual
+    else kind = .Bang
+  } else if ch == '&' {
+    if self.cursor.match_char('&') kind = .AndAnd
+    else if self.cursor.match_char('=') kind = .AmpersandEqual
+    else kind = .Ampersand
+  } else if ch == '|' {
+    if self.cursor.match_char('|') kind = .OrOr
+    else if self.cursor.match_char('=') kind = .PipeEqual
+    else kind = .Pipe
+  } else if ch == '^' {
+    if self.cursor.match_char('=') kind = .CaretEqual
+    else kind = .Caret
+  } else if ch == '~' kind = .Tilde
+  else if ch == '?' kind = .Question
+  else return false
   span := self.cursor.span_from(start)
   lexeme := self.source[span.start_byte..span.end_byte]
   self.tokens.append(.{ kind: kind, lexeme: lexeme, span: span }).!
   return true
 }
 
-Lexer.emit_unexpected_character := (self: *mut Lexer, start: CursorPosition, ch: u8) ! {
+Lexer.emit_unexpected_character := (self: *mut Lexer, start: CursorPosition) ! {
   span := self.cursor.span_from(start)
-  self.diagnostics.append(diagnostics.Diagnostic.error(.Lexer, .E2001, "unexpected character {}").with_primary_file_label(self.file_path, span, "remove or replace this character")).!
+  diag := Diagnostic.error(.Lexer, .E2001, "unexpected character")
+  self.diagnostics.append(diag.with_primary_file_label(self.file_path, span, "remove or replace this character")).!
+  return
 }
 
-is_identifier_start := (ch: u8) u1 => is_ascii_alphanumeric(ch) || ch == '_'
-is_identifier_continue := (ch: u8) u1 => is_ascii_alphanumeric(ch) || ch == '_'
+is_identifier_start := (ch: u8) u1 => (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
+is_identifier_continue := (ch: u8) u1 => is_identifier_start(ch) || (ch >= '0' && ch <= '9')
+is_ascii_digit := (ch: u8) u1 => ch >= '0' && ch <= '9'
+is_ascii_hexdigit := (ch: u8) u1 => (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
 
-is_ascii_alphanumeric := (ch: u8) u1 => (ch >= 'a' && ch <='z') || (ch >= 'A' && ch <='Z') || (ch >= '0' && ch <='9')
-is_ascii_hexdigit := (ch: u8) u1 => (ch >= 'a' && ch <='f') || (ch >= 'A' && ch <='F') || (ch >= '0' && ch <='9')
-
-keyword_from_identifier := (identifier: []u8) TokenKind => match identifier.len {
-  2: {
-    if mem.eql(u8, identifier, "if") break .Keyword(.If)
-    if mem.eql(u8, identifier, "or") break .Keyword(.Or)
-    break .Identifier
-  },
-  3: {
-    if mem.eql(u8, identifier, "for") break .Keyword(.For)
-    if mem.eql(u8, identifier, "mut") break .Keyword(.Mut)
-    if mem.eql(u8, identifier, "pub") break .Keyword(.Pub)
-    if mem.eql(u8, identifier, "use") break .Keyword(.Use)
-    break .Identifier
-  },
-  4: {
-    if mem.eql(u8, identifier, "comp") break .Keyword(.Comp)
-    if mem.eql(u8, identifier, "else") break .Keyword(.Else)
-    if mem.eql(u8, identifier, "enum") break .Keyword(.Enum)
-    if mem.eql(u8, identifier, "null") break .NullLiteral
-    if mem.eql(u8, identifier, "type") break .Keyword(.Type)
-    if mem.eql(u8, identifier, "true") break .BoolLiteral(false)
-    break .Identifier
-  },
-  5: {
-    if mem.eql(u8, identifier, "break") break .Keyword(.Break)
-    if mem.eql(u8, identifier, "defer") break .Keyword(.Defer)
-    if mem.eql(u8, identifier, "false") break .BoolLiteral(false)
-    if mem.eql(u8, identifier, "match") break .Keyword(.Match)
-    break .Identifier
-  },
-  6: {
-    if mem.eql(u8, identifier, "extern") break .Keyword(.Extern)
-    if mem.eql(u8, identifier, "inline") break .Keyword(.Inline)
-    if mem.eql(u8, identifier, "module") break .Keyword(.Module)
-    if mem.eql(u8, identifier, "packed") break .Keyword(.Packed)
-    if mem.eql(u8, identifier, "return") break .Keyword(.Return)
-    if mem.eql(u8, identifier, "struct") break .Keyword(.Struct)
-    break .Identifier
-  },
-  8: {
-    if mem.eql(u8, identifier, "continue") break .Keyword(.Continue)
-    break .Identifier
-  },
-  _: .Identifier
+keyword_from_identifier := (identifier: []u8) TokenKind {
+  if str.eq(identifier, "if") return .KwIf
+  if str.eq(identifier, "or") return .KwOr
+  if str.eq(identifier, "pub") return .KwPub
+  if str.eq(identifier, "mut") return .KwMut
+  if str.eq(identifier, "use") return .KwUse
+  if str.eq(identifier, "for") return .KwFor
+  if str.eq(identifier, "else") return .KwElse
+  if str.eq(identifier, "enum") return .KwEnum
+  if str.eq(identifier, "type") return .KwType
+  if str.eq(identifier, "comp") return .KwComp
+  if str.eq(identifier, "true") return .TrueLiteral
+  if str.eq(identifier, "null") return .NullLiteral
+  if str.eq(identifier, "false") return .FalseLiteral
+  if str.eq(identifier, "match") return .KwMatch
+  if str.eq(identifier, "break") return .KwBreak
+  if str.eq(identifier, "defer") return .KwDefer
+  if str.eq(identifier, "module") return .KwModule
+  if str.eq(identifier, "extern") return .KwExtern
+  if str.eq(identifier, "packed") return .KwPacked
+  if str.eq(identifier, "struct") return .KwStruct
+  if str.eq(identifier, "return") return .KwReturn
+  if str.eq(identifier, "inline") return .KwInline
+  if str.eq(identifier, "continue") return .KwContinue
+  return .Identifier
 }
 
-pub Token := struct {
-  kind: TokenKind,
-  lexeme: []u8,
-  span: diagnostics.SourceSpan
-}
+pub Token := struct { kind: TokenKind, lexeme: []u8, span: SourceSpan }
 
 pub TokenKind := enum {
   Identifier,
@@ -500,79 +527,77 @@ pub TokenKind := enum {
   FloatLiteral,
   StringLiteral,
   CharLiteral,
-  BoolLiteral: u1,
+  TrueLiteral,
+  FalseLiteral,
   NullLiteral,
   DocComment,
-  Keyword: Keyword,
-  Operator: Operator,
-  Delimiter: Delimiter,
-  Eof
-}
-
-pub Keyword := enum {
-  Module,
-  Extern,
-  Pub,
-  Mut,
-  Use,
-  Packed,
-  Struct,
-  Enum,
-  If,
-  Else,
-  Match,
-  For,
-  Break,
-  Continue,
-  Return,
-  Defer,
-  Inline,
-  Comp,
-  Or,
-  Type
-}
-
-pub Operator := enum {
-  Dot,
-  DotDot,
-  DotDotEq,
-  DotStar,
-  DotBang,
-  DotQuestion,
+  KwModule,
+  KwExtern,
+  KwPacked,
+  KwStruct,
+  KwEnum,
+  KwType,
+  KwComp,
+  KwPub,
+  KwMut,
+  KwUse,
+  KwIf,
+  KwElse,
+  KwFor,
+  KwMatch,
+  KwReturn,
+  KwBreak,
+  KwContinue,
+  KwDefer,
+  KwInline,
+  KwOr,
+  LParen,
+  RParen,
+  LBrace,
+  RBrace,
+  LBracket,
+  RBracket,
+  Comma,
+  Semicolon,
   Colon,
   Equal,
+  EqualEqual,
   FatArrow,
   Plus,
-  Minus,
-  Star,
-  Slash,
-  Percent,
   PlusEqual,
+  Minus,
   MinusEqual,
+  Star,
   StarEqual,
+  Slash,
   SlashEqual,
+  Percent,
   PercentEqual,
-  EqualEqual,
-  BangEqual,
+  Dot,
+  DotDot,
+  DotDotEqual,
+  DotStar,
+  DotQuestion,
+  DotBang,
   Less,
   LessEqual,
+  LeftShift,
+  LeftShiftEqual,
   Greater,
   GreaterEqual,
-  AndAnd,
-  OrOr,
-  Bang,
-  Ampersand,
-  Pipe,
-  Caret,
-  Tilde,
-  LeftShift,
   RightShift,
-  AmpersandEqual,
-  PipeEqual,
-  CaretEqual,
-  LeftShiftEqual,
   RightShiftEqual,
-  Question
+  Bang,
+  BangEqual,
+  Ampersand,
+  AmpersandEqual,
+  AndAnd,
+  Pipe,
+  PipeEqual,
+  OrOr,
+  Caret,
+  CaretEqual,
+  Tilde,
+  Question,
+  Eof,
 }
-
-pub Delimiter := enum { LParen, RParen, LBrace, RBrace, LBrack, RBrack, Comma, Semicolon }

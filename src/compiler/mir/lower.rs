@@ -608,7 +608,7 @@ fn module_key_source_path(key: &ModuleKey) -> std::path::PathBuf {
 
 fn has_or_return_tail(expr: &HirExpr) -> bool {
     match &expr.kind {
-        HirExprKind::Block { body } => body.last().is_some_and(has_or_return_tail),
+        HirExprKind::Block { body, .. } => body.last().is_some_and(has_or_return_tail),
         HirExprKind::OrElse { fallback, .. } => {
             matches!(fallback.kind, HirExprKind::Return { .. })
         }
@@ -730,6 +730,7 @@ struct FunctionLowerer {
     inline_call_stack: Vec<String>,
     current_inline_module: Option<String>,
     loop_stack: Vec<LoopContext>,
+    block_break_stack: Vec<BlockBreakContext>,
     or_break_stack: Vec<OrBreakContext>,
     deferred: Vec<DeferredExpr>,
     diagnostics: Vec<Diagnostic>,
@@ -747,9 +748,18 @@ struct FunctionLowerer {
 
 #[derive(Debug, Clone)]
 struct LoopContext {
+    label: Option<String>,
     continue_target: MirBlockId,
     break_target: MirBlockId,
     break_values: Vec<(MirBlockId, MirValueId)>,
+}
+
+#[derive(Debug, Clone)]
+struct BlockBreakContext {
+    label: Option<String>,
+    target: MirBlockId,
+    values: Vec<(MirBlockId, MirValueId)>,
+    defer_scope_start: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -799,7 +809,7 @@ fn extract_inline_function_body(expr: &HirExpr) -> Option<(&Vec<String>, &HirExp
 
 fn normalize_inline_hir_body(expr: &HirExpr) -> HirExpr {
     let mut normalized = expr.clone();
-    if let HirExprKind::Block { body } = &mut normalized.kind {
+    if let HirExprKind::Block { body, .. } = &mut normalized.kind {
         if let Some(last) = body.last_mut() {
             if let HirExprKind::Return { value: Some(value) } = &last.kind {
                 *last = (**value).clone();
@@ -816,7 +826,7 @@ fn inline_hir_body_supported(expr: &HirExpr) -> bool {
 fn contains_disallowed_inline_flow_hir(expr: &HirExpr) -> bool {
     match &expr.kind {
         HirExprKind::Break { .. }
-        | HirExprKind::Continue
+        | HirExprKind::Continue { .. }
         | HirExprKind::Return { .. }
         | HirExprKind::Defer { .. } => true,
         HirExprKind::Unary { expr, .. }
@@ -863,7 +873,7 @@ fn contains_disallowed_inline_flow_hir(expr: &HirExpr) -> bool {
         HirExprKind::EnumVariant { payload, .. } => {
             payload.iter().any(contains_disallowed_inline_flow_hir)
         }
-        HirExprKind::Block { body } => body.iter().any(contains_disallowed_inline_flow_hir),
+        HirExprKind::Block { body, .. } => body.iter().any(contains_disallowed_inline_flow_hir),
         HirExprKind::Let { value, .. } => contains_disallowed_inline_flow_hir(value),
         HirExprKind::If {
             condition,
@@ -889,8 +899,8 @@ fn contains_disallowed_inline_flow_hir(expr: &HirExpr) -> bool {
                 })
         }
         HirExprKind::For(for_expr) => match for_expr {
-            HirForExpr::Infinite { body } => contains_disallowed_inline_flow_hir(body),
-            HirForExpr::WhileLike { condition, body } => {
+            HirForExpr::Infinite { body, .. } => contains_disallowed_inline_flow_hir(body),
+            HirForExpr::WhileLike { condition, body, .. } => {
                 contains_disallowed_inline_flow_hir(condition)
                     || contains_disallowed_inline_flow_hir(body)
             }
@@ -957,7 +967,9 @@ fn collect_assigned_local_names(expr: &HirExpr, names: &mut BTreeMap<String, ()>
         | HirExprKind::DerefAccess { base: expr }
         | HirExprKind::OptionalUnwrap { value: expr }
         | HirExprKind::ErrorUnwrap { value: expr }
-        | HirExprKind::Break { value: Some(expr) }
+        | HirExprKind::Break {
+            value: Some(expr), ..
+        }
         | HirExprKind::Return { value: Some(expr) }
         | HirExprKind::Defer { body: expr, .. }
         | HirExprKind::Comptime { expr }
@@ -1012,7 +1024,7 @@ fn collect_assigned_local_names(expr: &HirExpr, names: &mut BTreeMap<String, ()>
                 collect_assigned_local_names(&arm.value, names);
             }
         }
-        HirExprKind::Block { body } => {
+        HirExprKind::Block { body, .. } => {
             for value in body {
                 collect_assigned_local_names(value, names);
             }
@@ -1039,10 +1051,10 @@ fn collect_assigned_local_names(expr: &HirExpr, names: &mut BTreeMap<String, ()>
             }
             collect_assigned_local_names(body, names);
         }
-        HirExprKind::For(HirForExpr::Infinite { body }) => {
+        HirExprKind::For(HirForExpr::Infinite { body, .. }) => {
             collect_assigned_local_names(body, names);
         }
-        HirExprKind::For(HirForExpr::WhileLike { condition, body }) => {
+        HirExprKind::For(HirForExpr::WhileLike { condition, body, .. }) => {
             collect_assigned_local_names(condition, names);
             collect_assigned_local_names(body, names);
         }
@@ -1057,8 +1069,8 @@ fn collect_assigned_local_names(expr: &HirExpr, names: &mut BTreeMap<String, ()>
             collect_assigned_local_names(iterable, names);
             collect_assigned_local_names(body, names);
         }
-        HirExprKind::Break { value: None }
-        | HirExprKind::Continue
+        HirExprKind::Break { value: None, .. }
+        | HirExprKind::Continue { .. }
         | HirExprKind::Return { value: None }
         | HirExprKind::Use { .. }
         | HirExprKind::TypeLiteral(_)

@@ -1,0 +1,22 @@
+module main
+
+Pair := (A: comp type, B: comp type) type => struct {
+    first: A,
+    second: B,
+}
+
+identity := (T: comp type, x: T) T => x
+add := (x: i32 = 4, y: i32 = 3) i32 => x + y
+
+main := () i32 {
+    P := Pair(i32, i32)
+    p := P.{ first: 1, second: 2 }
+    _ = p.first
+    _ = p.second
+
+    if identity(i32, 9) != 9 return 1
+    if add() != 7 return 2
+    if add(2) != 5 return 3
+    if add(2, 8) != 10 return 4
+    return 0
+}

@@ -1,0 +1,241 @@
+module linux
+
+unix := use "std/platform/unix"
+Allocator := (use "std/mem").Allocator
+
+pub open_readonly := (path: *any) i32 {
+    return unix.open_readonly(path)
+}
+
+pub close := (fd: i32) i32 {
+    return unix.close(fd)
+}
+
+pub read := (fd: i32, buf: *any, len: usize) isize {
+    return unix.read(fd, buf, len)
+}
+
+pub write := (fd: i32, buf: *any, len: usize) isize {
+    return unix.write(fd, buf, len)
+}
+
+pub getenv := (name: *any) ?*any {
+    return unix.getenv(name)
+}
+
+pub fork := () i32 {
+    return unix.fork()
+}
+
+pub execvp := (file: *any, argv: *any) i32 {
+    return unix.execvp(file, argv)
+}
+
+pub waitpid := (pid: i32, status: *i32, options: i32) i32 {
+    return unix.waitpid(pid, status, options)
+}
+
+pub exit := (code: i32) {
+    unix.exit(code)
+    return
+}
+
+pub wexitstatus := (status: i32) i32 {
+    return unix.wexitstatus(status)
+}
+
+pub spawn_process := (file: *any, argv: *any) i32 {
+    pid := fork()
+    if pid < 0 {
+        return -1
+    }
+    if pid == 0 {
+        _ = execvp(file, argv)
+        exit(127)
+        return 127
+    }
+    status: i32 = 0
+    waited := waitpid(pid, &status, 0)
+    if waited < 0 return -1
+    return wexitstatus(status)
+}
+
+pub path_sep := () u8 {
+    return '/'
+}
+
+pub path_is_abs := (path: []u8) u1 {
+    return path.len != 0 && path[0] == '/'
+}
+
+pub path_dirname := (path: []u8) []u8 {
+    if path.len == 0 return "."
+    mut i := path.len
+    for i > 0: {
+        i -= 1
+        if path[i] == '/' {
+            if i == 0 return "/"
+            return path[0..i]
+        }
+    }
+    return "."
+}
+
+pub path_basename := (path: []u8) []u8 {
+    if path.len == 0 return path
+    mut i := path.len
+    for i > 0: {
+        i -= 1
+        if path[i] == '/' return path[i + 1..]
+    }
+    return path
+}
+
+pub path_join := (base: []u8, part: []u8, alloc: Allocator) ?[]u8 {
+    if part.len == 0 {
+        return clone_path(part: base, alloc: alloc)
+    }
+    if path_is_abs(part) {
+        return clone_path(part: part, alloc: alloc)
+    }
+    if base.len == 0 {
+        return clone_path(part: part, alloc: alloc)
+    }
+
+    mut needs_sep: u1 = true
+    if base[base.len - 1] == '/' {
+        needs_sep = false
+    }
+
+    mut total := base.len
+    if needs_sep {
+        total += 1
+    }
+    total += part.len
+
+    raw := alloc.alloc(total, $as(usize, $alignof(u8))) or return null
+    out: []u8 = .{ ptr: $as(*u8, raw), len: total }
+
+    mut at: usize = 0
+    mut i: usize = 0
+    for i < base.len: {
+        out[at] = base[i]
+        at += 1
+        i += 1
+    }
+    if needs_sep {
+        out[at] = '/'
+        at += 1
+    }
+    i = 0
+    for i < part.len: {
+        out[at] = part[i]
+        at += 1
+        i += 1
+    }
+    return out
+}
+
+pub process_args := (alloc: Allocator) ?[][]u8 {
+    path := "/proc/self/cmdline"
+    raw_path := alloc.alloc(path.len + 1, $as(usize, $alignof(u8))) or return null
+    c_path: []u8 = .{ ptr: $as(*u8, raw_path), len: path.len + 1 }
+    mut i: usize = 0
+    for i < path.len: {
+        c_path[i] = path[i]
+        i += 1
+    }
+    c_path[path.len] = 0
+
+    fd := open_readonly($as(*any, c_path.ptr))
+    alloc.destroy_many(u8, c_path)
+    if fd < 0 return null
+
+    data := read_all_fd(fd, alloc)
+    _ = close(fd)
+    data_buf := data or return null
+    if data_buf.len == 0 {
+        return .{ ptr: $as(*[]u8, $as(usize, 1)), len: 0 }
+    }
+
+    mut count: usize = 0
+    i = 0
+    for i < data_buf.len: {
+        if data_buf[i] == 0 {
+            count += 1
+        }
+        i += 1
+    }
+    if data_buf[data_buf.len - 1] != 0 {
+        count += 1
+    }
+
+    bytes := count * $as(usize, $sizeof([]u8))
+    raw_parts := alloc.alloc(bytes, $as(usize, $alignof([]u8))) or return null
+    out: [][]u8 = .{ ptr: $as(*[]u8, raw_parts), len: count }
+
+    mut out_i: usize = 0
+    mut start: usize = 0
+    i = 0
+    for i <= data_buf.len: {
+        at_end := i == data_buf.len
+        if at_end || data_buf[i] == 0 {
+            part_len := i - start
+            raw_part := alloc.alloc(part_len, $as(usize, $alignof(u8))) or return null
+            part: []u8 = .{ ptr: $as(*u8, raw_part), len: part_len }
+            mut j: usize = 0
+            for j < part_len: {
+                part[j] = data_buf[start + j]
+                j += 1
+            }
+            out[out_i] = part
+            out_i += 1
+            start = i + 1
+        }
+        i += 1
+    }
+
+    alloc.destroy_many(u8, data_buf)
+    return out
+}
+
+read_all_fd := (fd: i32, alloc: Allocator) ?[]u8 {
+    mut buf: []u8 = .{ ptr: $as(*u8, $as(usize, 1)), len: 0 }
+    mut used: usize = 0
+
+    for {
+        if used == buf.len {
+            mut next_cap: usize = 256
+            if buf.len != 0 {
+                next_cap = buf.len
+                next_cap += buf.len
+            }
+            buf = alloc.resize_many(u8, buf, next_cap) or return null
+        }
+
+        ptr := $as(*u8, $as(usize, buf.ptr) + used)
+        got := read(fd, $as(*any, ptr), buf.len - used)
+        if got < 0 {
+            alloc.destroy_many(u8, buf)
+            return null
+        }
+        if got == 0 {
+            break
+        }
+        used += $as(usize, got)
+    }
+
+    if used == buf.len return buf
+    return alloc.resize_many(u8, buf, used)
+}
+
+clone_path := (part: []u8, alloc: Allocator) ?[]u8 {
+    raw := alloc.alloc(part.len, $as(usize, $alignof(u8))) or return null
+    out: []u8 = .{ ptr: $as(*u8, raw), len: part.len }
+    mut i: usize = 0
+    for i < part.len: {
+        out[i] = part[i]
+        i += 1
+    }
+    return out
+}

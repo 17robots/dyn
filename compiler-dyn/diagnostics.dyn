@@ -1,3 +1,9 @@
+module diagnostics
+
+Vec := (use "std/collections").Vec
+mem := (use "std/mem")
+str := (use "std/str")
+
 pub DiagnosticPhase := enum { ModuleResolver, Lexer, Parser, Semantic, TypeChecker, Mir, Backend }
 pub DiagnosticSeverity := enum { Error, Warning }
 pub DiagnosticCode := enum {
@@ -84,18 +90,175 @@ pub Diagnostic := struct {
   code: DiagnosticCode,
   message: []u8,
   labels: Vec(DiagnosticLabel),
-  notes: Vec([]u8)
+  notes: []u8
 }
-Diagnostic.error := (phase: DiagnosticPhase, code: DiagnosticCode, message: []u8) Diagnostic => .{
-  phaes: phase,
-  severity: .Error,
-  code: code,
-  message: message,
-  labels: Vec(DiagnosticLabel).init(),
-  notes: Vec([]u8).init()
+Diagnostic.error := (phase: DiagnosticPhase, code: DiagnosticCode, message: []u8) Diagnostic {
+  mut page := mem.PageAllocator.init()
+  labels := Vec(DiagnosticLabel).init(page.allocator())
+  return .{
+    phase: phase,
+    severity: .Error,
+    code: code,
+    message: message,
+    labels: labels,
+    notes: "",
+  }
 }
 
-pub sort_diagnostics_by_primary_path := (diagnostics: []mut Diagnostic) {}
-pub dedupe_diagnostics_by_primary_span := (diagnostics: *mut Vec(Diagnostic)) {}
-pub normalize_diagnostic_path := (path: []u8) []u8 {}
+Diagnostic.with_primary_file_label := (self: Diagnostic, file_path: []u8, span: SourceSpan, message: []u8) Diagnostic {
+  mut out := self
+  out.labels.append(.{
+    file_path: file_path,
+    span: span,
+    message: message,
+    is_primary: true,
+  }).!
+  return out
+}
 
+pub sort_diagnostics_by_primary_path := (diagnostics: []mut Diagnostic) {
+  if diagnostics.len < 2 return
+
+  mut i: usize = 0
+  for i < diagnostics.len: {
+    mut best := i
+    mut j := i + 1
+    for j < diagnostics.len: {
+      if diagnostic_sort_before(&diagnostics[j], &diagnostics[best]) {
+        best = j
+      }
+      j += 1
+    }
+    if best != i { swap_diagnostic(diagnostics, i, best) }
+    i += 1
+  }
+  return
+}
+
+pub dedupe_diagnostics_by_primary_span := (diagnostics: *mut Vec(Diagnostic)) {
+  if diagnostics.len < 2 return
+
+  mut write_i: usize = 0
+  mut read_i: usize = 0
+  for read_i < diagnostics.len: {
+    item := diagnostics.buf[read_i]
+    mut duplicate := false
+    mut seen_i: usize = 0
+    for seen_i < write_i: {
+      if same_diagnostic_key(&diagnostics.buf[seen_i], &item) {
+        duplicate = true
+        break
+      }
+      seen_i += 1
+    }
+    if !duplicate { keep_diagnostic(diagnostics, write_i, item); write_i += 1 }
+    read_i += 1
+  }
+  diagnostics.len = write_i
+  return
+}
+
+pub normalize_diagnostic_path := (path: []u8) []u8 {
+  mut out := path
+  for str.starts_with(out, "./"): {
+    out = out[2..]
+  }
+  return out
+}
+
+diagnostic_sort_before := (left: *Diagnostic, right: *Diagnostic) u1 {
+  left_path := primary_path(left)
+  right_path := primary_path(right)
+  if path_less(left_path, right_path) return true
+  if path_less(right_path, left_path) return false
+
+  left_span := primary_span(left)
+  right_span := primary_span(right)
+  if span_less(left_span, right_span) return true
+  if span_less(right_span, left_span) return false
+
+  if $as(u32, left.phase) < $as(u32, right.phase) return true
+  if $as(u32, left.phase) > $as(u32, right.phase) return false
+  if $as(u32, left.code) < $as(u32, right.code) return true
+  if $as(u32, left.code) > $as(u32, right.code) return false
+  return path_less(left.message, right.message)
+}
+
+same_diagnostic_key := (left: *Diagnostic, right: *Diagnostic) u1 {
+  if left.phase != right.phase return false
+  if left.code != right.code return false
+  if !str.eq(left.message, right.message) return false
+  if !str.eq(primary_path(left), primary_path(right)) return false
+  return span_eq(primary_span(left), primary_span(right))
+}
+
+primary_path := (diagnostic: *Diagnostic) []u8 {
+  if diagnostic.labels.len == 0 return ""
+  label := diagnostic.labels.buf[0]
+  path := label.file_path
+  return normalize_diagnostic_path(path)
+}
+
+primary_span := (diagnostic: *Diagnostic) ?SourceSpan {
+  if diagnostic.labels.len == 0 return null
+  label := diagnostic.labels.buf[0]
+  return label.span
+}
+
+path_less := (left: []u8, right: []u8) u1 {
+  mut i: usize = 0
+  mut limit := left.len
+  if right.len < limit { limit = right.len }
+  for i < limit: {
+    if left[i] < right[i] return true
+    if left[i] > right[i] return false
+    i += 1
+  }
+  return left.len < right.len
+}
+
+span_less := (left: ?SourceSpan, right: ?SourceSpan) u1 {
+  if left == null && right != null return true
+  if left != null && right == null return false
+  if left == null && right == null return false
+
+  l := left.?
+  r := right.?
+  if l.start_byte < r.start_byte return true
+  if l.start_byte > r.start_byte return false
+  if l.end_byte < r.end_byte return true
+  if l.end_byte > r.end_byte return false
+  if l.start_line < r.start_line return true
+  if l.start_line > r.start_line return false
+  if l.start_col < r.start_col return true
+  if l.start_col > r.start_col return false
+  if l.end_line < r.end_line return true
+  if l.end_line > r.end_line return false
+  return l.end_col < r.end_col
+}
+
+span_eq := (left: ?SourceSpan, right: ?SourceSpan) u1 {
+  if left == null && right == null return true
+  if left == null || right == null return false
+
+  l := left.?
+  r := right.?
+  return l.start_byte == r.start_byte &&
+    l.end_byte == r.end_byte &&
+    l.start_line == r.start_line &&
+    l.start_col == r.start_col &&
+    l.end_line == r.end_line &&
+    l.end_col == r.end_col
+}
+
+swap_diagnostic := (diagnostics: []mut Diagnostic, left: usize, right: usize) {
+  tmp := diagnostics[left]
+  diagnostics[left] = diagnostics[right]
+  diagnostics[right] = tmp
+  return
+}
+
+keep_diagnostic := (diagnostics: *mut Vec(Diagnostic), at: usize, item: Diagnostic) {
+  diagnostics.buf[at] = item
+  return
+}

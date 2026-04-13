@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub struct BuildConfig {
     pub opt_level: BuildOptLevel,
     pub sanitize: bool,
+    pub target: Option<String>,
     /// When `Some`, only the module with this name (relative to project root, e.g. `"bin1"`)
     /// is treated as an entry point. When `None`, any `main` function is accepted.
     pub bin: Option<String>,
@@ -16,6 +17,7 @@ impl Default for BuildConfig {
         Self {
             opt_level: BuildOptLevel::Default,
             sanitize: false,
+            target: None,
             bin: None,
         }
     }
@@ -107,7 +109,7 @@ pub enum AggregateRepr {
 
 pub fn scalar_layout(type_name: &str) -> Option<TypeLayout> {
     match type_name.trim() {
-        "bool" | "i8" | "u8" => Some(TypeLayout { size: 1, align: 1 }),
+        "u1" | "i8" | "u8" => Some(TypeLayout { size: 1, align: 1 }),
         "i16" | "u16" => Some(TypeLayout { size: 2, align: 2 }),
         "i32" | "u32" | "f32" => Some(TypeLayout { size: 4, align: 4 }),
         "i64" | "u64" | "isize" | "usize" | "f64" => Some(TypeLayout { size: 8, align: 8 }),

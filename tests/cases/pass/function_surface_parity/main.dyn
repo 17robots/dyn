@@ -1,0 +1,17 @@
+module main
+
+call_adder := (f: (lhs: i32, rhs: i32) i32, x: i32, y: i32) i32 => f(x, y)
+
+make_value := () i32 comp 7
+make_inline := () i32 => inline 9
+fallible := () i32!IoError => 1
+
+sum := (lhs: i32, rhs: i32) i32 => lhs + rhs
+
+main := () i32 {
+    if call_adder(sum, 2, 3) != 5 return 1
+    if make_value() != 7 return 2
+    if make_inline() != 9 return 3
+    if fallible() != 1 return 4
+    return 0
+}

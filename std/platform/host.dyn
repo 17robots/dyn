@@ -1,0 +1,22 @@
+module host
+
+platform := use "std/platform/linux"
+Allocator := (use "std/mem").Allocator
+
+pub open_readonly := (path: *any) i32 => platform.open_readonly(path)
+pub close := (fd: i32) i32 => platform.close(fd)
+pub read := (fd: i32, buf: *any, len: usize) isize => platform.read(fd, buf, len)
+pub write := (fd: i32, buf: *any, len: usize) isize => platform.write(fd, buf, len)
+pub getenv := (name: *any) ?*any => platform.getenv(name)
+pub fork := () i32 => platform.fork()
+pub execvp := (file: *any, argv: *any) i32 => platform.execvp(file, argv)
+pub waitpid := (pid: i32, status: *i32, options: i32) i32 => platform.waitpid(pid, status, options)
+pub exit := (code: i32) { platform.exit(code); return }
+pub wexitstatus := (status: i32) i32 => platform.wexitstatus(status)
+pub spawn_process := (file: *any, argv: *any) i32 => platform.spawn_process(file, argv)
+pub path_sep := () u8 => platform.path_sep()
+pub path_is_abs := (path: []u8) u1 => platform.path_is_abs(path)
+pub path_dirname := (path: []u8) []u8 => platform.path_dirname(path)
+pub path_basename := (path: []u8) []u8 => platform.path_basename(path)
+pub path_join := (base: []u8, part: []u8, alloc: Allocator) ?[]u8 => platform.path_join(base, part, alloc)
+pub process_args := (alloc: Allocator) ?[][]u8 => platform.process_args(alloc)

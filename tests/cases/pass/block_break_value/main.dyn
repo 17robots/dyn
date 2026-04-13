@@ -1,0 +1,8 @@
+main := () i32 {
+    cond := 1
+    value := {
+        if cond == 1 break 7
+        9
+    }
+    return value
+}

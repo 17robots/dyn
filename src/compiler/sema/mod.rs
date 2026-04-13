@@ -258,10 +258,12 @@ fn is_predeclared_name(name: &str) -> bool {
 }
 
 fn looks_like_type_parameter(name: &str) -> bool {
-    name.chars()
-        .next()
-        .map(|ch| ch.is_ascii_uppercase())
-        .unwrap_or(false)
+    name.len() == 1
+        && name
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_uppercase())
+            .unwrap_or(false)
 }
 
 fn collect_type_names(ty: &TypeExpr, out: &mut BTreeSet<String>) {
@@ -330,6 +332,10 @@ fn bind_name_checked(
     file_path: &PathBuf,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    if ident.text == "_" {
+        return;
+    }
+
     if let Some(existing_span) = scopes
         .iter()
         .rev()
@@ -1271,7 +1277,9 @@ fn is_compile_time_expr_with_locals(expr: &Expr, locals: &mut BTreeSet<String>) 
 }
 struct ControlContext<'a> {
     loop_depth: usize,
+    block_depth: usize,
     labels: Vec<String>,
+    loop_labels: Vec<String>,
     or_fallback_depth: usize,
     units: &'a [ModuleUnit],
 }
@@ -1287,7 +1295,9 @@ pub fn control_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
 
             let mut ctx = ControlContext {
                 loop_depth: 0,
+                block_depth: 0,
                 labels: Vec::new(),
+                loop_labels: Vec::new(),
                 or_fallback_depth: 0,
                 units,
             };
@@ -1329,18 +1339,24 @@ fn check_expr(
         }
         ExprKind::Break(break_expr) => {
             let in_or_fallback = ctx.or_fallback_depth > 0;
+            let in_breakable_block = ctx.block_depth > 0;
 
-            if break_expr.value.is_some() && break_expr.label.is_none() && !in_or_fallback {
+            if break_expr.value.is_some()
+                && break_expr.label.is_none()
+                && !in_or_fallback
+                && !in_breakable_block
+                && ctx.loop_depth == 0
+            {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::Semantic,
                         DiagnosticCode::E4007,
-                        "break with value requires labeled block target",
+                        "break with value requires a breakable target",
                     )
                     .with_primary_file_label(
                         file_path.to_path_buf(),
                         Some(expr.span),
-                        "add a label target like `break :lbl value`",
+                        "use `break` inside a loop, block, or `or` fallback",
                     ),
                 );
             }
@@ -1364,17 +1380,17 @@ fn check_expr(
                         ),
                     );
                 }
-            } else if ctx.loop_depth == 0 && !in_or_fallback {
+            } else if ctx.loop_depth == 0 && !in_or_fallback && !in_breakable_block {
                 diagnostics.push(
                     Diagnostic::error(
                         DiagnosticPhase::Semantic,
                         DiagnosticCode::E4007,
-                        "break used outside loop or labeled block",
+                        "break used outside a breakable context",
                     )
                     .with_primary_file_label(
                         file_path.to_path_buf(),
                         Some(expr.span),
-                        "break requires loop or label context",
+                        "break requires a loop, block, label, or `or` fallback",
                     ),
                 );
             }
@@ -1386,7 +1402,7 @@ fn check_expr(
         ExprKind::Continue { label } => {
             if let Some(label) = label {
                 if !ctx
-                    .labels
+                    .loop_labels
                     .iter()
                     .any(|existing| existing == &label.name.text)
                 {
@@ -1399,7 +1415,7 @@ fn check_expr(
                         .with_primary_file_label(
                             file_path.to_path_buf(),
                             Some(expr.span),
-                            "label is not in scope",
+                            "loop label is not in scope",
                         ),
                     );
                 }
@@ -1777,8 +1793,15 @@ fn check_block(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let initial_label_depth = ctx.labels.len();
+    let initial_loop_label_depth = ctx.loop_labels.len();
+    ctx.block_depth += 1;
     if let Some(label) = &block.label {
         ctx.labels.push(label.name.text.clone());
+        if block.statements.is_empty()
+            && matches!(block.tail_expr.as_deref().map(|expr| &expr.kind), Some(ExprKind::For(_)))
+        {
+            ctx.loop_labels.push(label.name.text.clone());
+        }
     }
 
     for stmt in &block.statements {
@@ -1793,6 +1816,8 @@ fn check_block(
     }
 
     ctx.labels.truncate(initial_label_depth);
+    ctx.loop_labels.truncate(initial_loop_label_depth);
+    ctx.block_depth -= 1;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2754,6 +2779,11 @@ fn apply_signature_return_type_if_needed(
 
 pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    let mut field_types = BTreeMap::<String, BTreeMap<String, TypeExpr>>::new();
+    for unit in units {
+        field_types.extend(collect_named_struct_field_types(unit));
+    }
+    set_named_struct_field_types(field_types);
 
     for unit in units {
         let mut types = TypeStore::default();
@@ -2968,6 +2998,11 @@ pub fn infer_binding_type_strings(
     units: &[ModuleUnit],
 ) -> BTreeMap<(crate::compiler::module_resolver::ModuleId, String), String> {
     let mut out = BTreeMap::new();
+    let mut field_types = BTreeMap::<String, BTreeMap<String, TypeExpr>>::new();
+    for unit in units {
+        field_types.extend(collect_named_struct_field_types(unit));
+    }
+    set_named_struct_field_types(field_types);
 
     for unit in units {
         let mut types = TypeStore::default();

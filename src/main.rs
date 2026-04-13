@@ -13,8 +13,15 @@ use dyn_compiler::compiler::pipeline::{
     lower_project_hir, lower_project_mir, parse_project,
 };
 
+const BUILD_TARGET_ENV: &str = "DYN_BUILD_TARGET";
+
 fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+    let (args, target) = strip_target_arg(&raw_args);
+    if let Some(target) = target {
+        env::set_var(BUILD_TARGET_ENV, &target);
+        env::set_var("DYN_STD_HOST_PLATFORM", target_os_name(&target));
+    }
 
     if matches!(args.first().map(String::as_str), Some("build")) {
         run_build_command(&args[1..]);
@@ -78,11 +85,57 @@ fn main() {
         [dir] => run_resolver(dir),
         _ => {
             eprintln!(
-                "usage: cargo run -- [resolve|lex|parse|analyze|hir|mir|init|new|fmt|build|run] [start_directory] [--json|--ast|--force|--check|-o output|--all-opt-levels|-O0|-O1|-O2|-O3|-Os|-Oz|-o:none|-o:speed|-o:size|-o:aggressive|--opt-level 0|1|2|3|s|z|none|speed|size|aggressive|-- <program args>]"
+                "usage: cargo run -- [--target linux|macos|windows|x86_64-linux|aarch64-macos|x86_64-windows] [resolve|lex|parse|analyze|hir|mir|init|new|fmt|build|run] [start_directory] [--json|--ast|--force|--check|-o output|--all-opt-levels|-O0|-O1|-O2|-O3|-Os|-Oz|-o:none|-o:speed|-o:size|-o:aggressive|--opt-level 0|1|2|3|s|z|none|speed|size|aggressive|-- <program args>]"
             );
             process::exit(2);
         }
     }
+}
+
+fn strip_target_arg(args: &[String]) -> (Vec<String>, Option<String>) {
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut target = None;
+    let mut index = 0usize;
+
+    while index < args.len() {
+        if args[index] == "--target" {
+            if index + 1 >= args.len() {
+                eprintln!("missing target after --target");
+                process::exit(2);
+            }
+            let value = args[index + 1].clone();
+            if normalize_target_arg(&value).is_none() {
+                eprintln!(
+                    "unsupported target '{}'; expected linux, macos, windows, x86_64-linux, aarch64-macos, or x86_64-windows",
+                    value
+                );
+                process::exit(2);
+            }
+            target = normalize_target_arg(&value);
+            index += 2;
+            continue;
+        }
+
+        filtered.push(args[index].clone());
+        index += 1;
+    }
+
+    (filtered, target)
+}
+
+fn normalize_target_arg(value: &str) -> Option<String> {
+    match value {
+        "linux" => Some("x86_64-linux".to_string()),
+        "macos" => Some("x86_64-macos".to_string()),
+        "windows" => Some("x86_64-windows".to_string()),
+        "x86_64-linux" | "aarch64-linux" | "x86_64-macos" | "aarch64-macos"
+        | "x86_64-windows" | "aarch64-windows" => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn target_os_name(target: &str) -> &str {
+    target.rsplit('-').next().unwrap_or("linux")
 }
 
 fn run_resolver(start_dir: &str) {
@@ -594,6 +647,7 @@ fn run_build_command(args: &[String]) {
     let build_config = BuildConfig {
         opt_level,
         sanitize,
+        target: target_platform_from_env(),
         bin,
     };
     if all_opt_levels {
@@ -689,10 +743,19 @@ fn run_run_command(args: &[String]) {
         BuildConfig {
             opt_level,
             sanitize,
+            target: target_platform_from_env(),
             bin,
         },
         &program_args,
     );
+}
+
+fn target_platform_from_env() -> Option<String> {
+    env::var(BUILD_TARGET_ENV).ok().or_else(|| {
+        env::var("DYN_STD_HOST_PLATFORM")
+            .ok()
+            .and_then(|value| normalize_target_arg(&value))
+    })
 }
 
 const INIT_MAIN_TEMPLATE: &str = "module main\n\nmain := () i32 => 0\n";

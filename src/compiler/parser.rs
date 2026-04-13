@@ -366,7 +366,7 @@ impl<'a> Parser<'a> {
         }
         if self.match_keyword(Keyword::Return) {
             let start = self.prev_span();
-            let value = if self.starts_expr() {
+            let value = if self.starts_expr() && self.current_starts_on_line(start.end_line) {
                 self.parse_expr(0).map(Box::new)
             } else {
                 None
@@ -888,8 +888,14 @@ impl<'a> Parser<'a> {
 
             let before = self.index;
             if let Some(expr) = self.parse_expr(0) {
-                tail_expr = Some(Box::new(expr.clone()));
                 statements.push(Stmt::Expr(Box::new(expr)));
+                if let Some(Stmt::Expr(expr)) = statements.last() {
+                    if expr_can_be_block_tail(expr) {
+                        tail_expr = Some(expr.clone());
+                    } else {
+                        tail_expr = None;
+                    }
+                }
                 self.match_delimiter(Delimiter::Semicolon);
             } else if self.index == before {
                 self.advance();
@@ -1199,7 +1205,7 @@ impl<'a> Parser<'a> {
         let start = self.prev_span();
         let label = self.parse_optional_jump_label();
 
-        let value = if self.starts_expr() {
+        let value = if self.starts_expr() && self.current_starts_on_line(start.end_line) {
             self.parse_expr(0).map(Box::new)
         } else {
             None
@@ -2079,9 +2085,11 @@ impl<'a> Parser<'a> {
         root_type: Option<Ident>,
         start: SourceSpan,
     ) -> Option<Expr> {
-        // If there is no root type and the first element is not `ident:`, treat it
-        // as a positional tuple literal: .{ a, b, c } → TupleLiteral([a, b, c]).
-        if root_type.is_none() && !self.looks_like_named_struct_field() {
+        let anonymous_struct = root_type.is_none() && self.looks_like_inferred_struct_field_list();
+
+        // If there is no root type and the field list is not clearly struct-shaped,
+        // treat it as a positional tuple literal: .{ a, b, c }.
+        if root_type.is_none() && !anonymous_struct {
             let mut elements = Vec::new();
             while !self.peek_delimiter(Delimiter::RBrace) && !self.is_eof() {
                 let element = self.parse_expr(0)?;
@@ -2098,7 +2106,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        let fields = self.parse_struct_literal_fields(root_type.is_some())?;
+        let fields = self.parse_struct_literal_fields(root_type.is_some() || anonymous_struct)?;
         let end = self.current_span();
         self.expect_delimiter(Delimiter::RBrace, "expected '}' after struct literal");
         Some(Expr {
@@ -2148,21 +2156,79 @@ impl<'a> Parser<'a> {
         Some(fields)
     }
 
-    /// Returns true when the next tokens look like the start of a named struct field (`ident:`).
-    fn looks_like_named_struct_field(&self) -> bool {
-        // Need at least two tokens: an identifier followed by `:`
-        if self.index >= self.tokens.len() {
-            return false;
+    /// Returns true when an anonymous `.{ ... }` literal is unambiguously struct-shaped.
+    /// Bare shorthand fields only become valid when at least one explicit `name: value`
+    /// field appears in the same literal; otherwise `.{ a, b }` remains a tuple.
+    fn looks_like_inferred_struct_field_list(&self) -> bool {
+        let mut cursor = self.index;
+        let mut saw_explicit_field = false;
+
+        while cursor < self.tokens.len() {
+            if matches!(
+                self.tokens[cursor].kind,
+                TokenKind::Delimiter(Delimiter::RBrace)
+            ) {
+                break;
+            }
+
+            if self.tokens[cursor].kind != TokenKind::Identifier {
+                return false;
+            }
+
+            let explicit = cursor + 1 < self.tokens.len()
+                && matches!(
+                    self.tokens[cursor + 1].kind,
+                    TokenKind::Operator(Operator::Colon)
+                );
+            if explicit {
+                saw_explicit_field = true;
+                cursor += 2;
+            } else {
+                cursor += 1;
+            }
+
+            let mut paren_depth = 0usize;
+            let mut bracket_depth = 0usize;
+            let mut brace_depth = 0usize;
+            while cursor < self.tokens.len() {
+                match &self.tokens[cursor].kind {
+                    TokenKind::Delimiter(Delimiter::LParen) => paren_depth += 1,
+                    TokenKind::Delimiter(Delimiter::RParen) => {
+                        if paren_depth == 0 {
+                            return false;
+                        }
+                        paren_depth -= 1;
+                    }
+                    TokenKind::Delimiter(Delimiter::LBracket) => bracket_depth += 1,
+                    TokenKind::Delimiter(Delimiter::RBracket) => {
+                        if bracket_depth == 0 {
+                            return false;
+                        }
+                        bracket_depth -= 1;
+                    }
+                    TokenKind::Delimiter(Delimiter::LBrace) => brace_depth += 1,
+                    TokenKind::Delimiter(Delimiter::RBrace) => {
+                        if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                            return saw_explicit_field;
+                        }
+                        if brace_depth == 0 {
+                            return false;
+                        }
+                        brace_depth -= 1;
+                    }
+                    TokenKind::Delimiter(Delimiter::Comma) => {
+                        if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                            cursor += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                cursor += 1;
+            }
         }
-        let first = &self.tokens[self.index];
-        if first.kind != TokenKind::Identifier {
-            return false;
-        }
-        if self.index + 1 >= self.tokens.len() {
-            return false;
-        }
-        let second = &self.tokens[self.index + 1];
-        matches!(second.kind, TokenKind::Operator(Operator::Colon))
+
+        saw_explicit_field
     }
 
     fn parse_optional_pipe_binding(&mut self) -> Option<Ident> {
@@ -2471,6 +2537,12 @@ impl<'a> Parser<'a> {
                     | TokenKind::Operator(Operator::Dot)
             )
         )
+    }
+
+    fn current_starts_on_line(&self, line: usize) -> bool {
+        self.current()
+            .map(|token| token.span.start_line == line)
+            .unwrap_or(false)
     }
 
     fn looks_like_top_level_item(&self) -> bool {
@@ -2806,6 +2878,14 @@ fn merge_span(left: SourceSpan, right: SourceSpan) -> SourceSpan {
         start_col: left.start_col,
         end_line: right.end_line,
         end_col: right.end_col,
+    }
+}
+
+fn expr_can_be_block_tail(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::If(if_expr) => if_expr.else_branch.is_some(),
+        ExprKind::Break(_) | ExprKind::Continue { .. } | ExprKind::Return { .. } => false,
+        _ => true,
     }
 }
 

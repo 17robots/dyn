@@ -1,5 +1,11 @@
 use super::*;
 
+thread_local! {
+    static NAMED_STRUCT_FIELD_TYPES:
+        std::cell::RefCell<BTreeMap<String, BTreeMap<String, TypeExpr>>> =
+            std::cell::RefCell::new(BTreeMap::new());
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn infer_expr_type(
     expr: &Expr,
@@ -869,6 +875,71 @@ pub(super) fn infer_expr_type(
                 return_type,
             })
         }
+        ExprKind::FieldAccess { base, field } => {
+            let base_ty = infer_expr_type(
+                base,
+                env,
+                mutability,
+                signatures,
+                types,
+                diagnostics,
+                file_path,
+                expected_return,
+            );
+            match types.get(base_ty) {
+                Type::Slice { element } => match field.text.as_str() {
+                    "len" => types.intern(Type::Int {
+                        signed: false,
+                        bits: 64,
+                    }),
+                    "ptr" => types.intern(Type::Pointer { inner: *element }),
+                    _ => types.intern(Type::Unknown),
+                },
+                Type::Array(element) => match field.text.as_str() {
+                    "len" => types.intern(Type::Int {
+                        signed: false,
+                        bits: 64,
+                    }),
+                    "ptr" => types.intern(Type::Pointer { inner: *element }),
+                    _ => types.intern(Type::Unknown),
+                },
+                Type::Pointer { inner } => match types.get(*inner) {
+                    Type::Slice { element } => match field.text.as_str() {
+                        "len" => types.intern(Type::Int {
+                            signed: false,
+                            bits: 64,
+                        }),
+                        "ptr" => types.intern(Type::Pointer { inner: *element }),
+                        _ => types.intern(Type::Unknown),
+                    },
+                    Type::Applied { callee, .. } | Type::TypeParam(callee) => {
+                        let resolved = NAMED_STRUCT_FIELD_TYPES.with(|cell| {
+                            cell.borrow()
+                                .get(callee)
+                                .and_then(|fields| fields.get(&field.text))
+                                .cloned()
+                        });
+                        resolved
+                            .and_then(|ty| resolve_type_expr(&ty, types))
+                            .unwrap_or_else(|| types.intern(Type::Unknown))
+                    }
+                    _ => types.intern(Type::Unknown),
+                },
+                Type::Applied { callee, .. } | Type::TypeParam(callee) => {
+                    let resolved = NAMED_STRUCT_FIELD_TYPES.with(|cell| {
+                        cell.borrow()
+                            .get(callee)
+                            .and_then(|fields| fields.get(&field.text))
+                            .cloned()
+                    });
+                    resolved
+                        .and_then(|ty| resolve_type_expr(&ty, types))
+                        .unwrap_or_else(|| types.intern(Type::Unknown))
+                }
+                Type::Unknown => types.intern(Type::Unknown),
+                _ => types.intern(Type::Unknown),
+            }
+        }
         ExprKind::Index { base, index } => {
             let base_ty = infer_expr_type(
                 base,
@@ -1368,6 +1439,35 @@ pub(super) fn collect_named_struct_fields(unit: &ModuleUnit) -> BTreeMap<String,
         out.insert(decl.name.clone(), names);
     }
     out
+}
+
+pub(super) fn collect_named_struct_field_types(
+    unit: &ModuleUnit,
+) -> BTreeMap<String, BTreeMap<String, TypeExpr>> {
+    let mut out = BTreeMap::new();
+    for decl in &unit.declarations {
+        let ExprKind::TypeLiteral(type_lit) = &decl.value.kind else {
+            continue;
+        };
+        let TypeExprKind::Struct(struct_ty) = &type_lit.kind else {
+            continue;
+        };
+        let fields = struct_ty
+            .fields
+            .iter()
+            .map(|field| (field.name.text.clone(), field.ty.clone()))
+            .collect::<BTreeMap<_, _>>();
+        out.insert(decl.name.clone(), fields);
+    }
+    out
+}
+
+pub(super) fn set_named_struct_field_types(
+    field_types: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+) {
+    NAMED_STRUCT_FIELD_TYPES.with(|cell| {
+        *cell.borrow_mut() = field_types;
+    });
 }
 
 #[derive(Debug, Clone)]
@@ -5618,13 +5718,7 @@ fn validate_direct_call_arg(
     expected_return: Option<TypeId>,
     type_param_bindings: &mut BTreeMap<String, TypeId>,
 ) {
-    let resolved_expected = match types.get(expected_ty) {
-        Type::TypeParam(name) => type_param_bindings
-            .get(name)
-            .copied()
-            .unwrap_or(expected_ty),
-        _ => expected_ty,
-    };
+    let resolved_expected = substitute_type_params(expected_ty, type_param_bindings, types);
 
     if matches!(types.get(expected_ty), Type::TypeType) && !is_type_designator_expr(&arg.value) {
         report_call_arg_must_be_type_designator(diagnostics, file_path, arg.value.span);
@@ -5729,6 +5823,69 @@ fn report_named_arg_order_error(
             "move positional arguments before the first named argument",
         ),
     );
+}
+
+fn substitute_type_params(
+    ty: TypeId,
+    bindings: &BTreeMap<String, TypeId>,
+    types: &mut TypeStore,
+) -> TypeId {
+    match types.get(ty).clone() {
+        Type::TypeParam(name) => bindings.get(&name).copied().unwrap_or(ty),
+        Type::Optional(inner) => {
+            let inner = substitute_type_params(inner, bindings, types);
+            types.intern(Type::Optional(inner))
+        }
+        Type::Errorable { ok, errors } => {
+            let ok = substitute_type_params(ok, bindings, types);
+            types.intern(Type::Errorable { ok, errors })
+        }
+        Type::Pointer { inner } => {
+            let inner = substitute_type_params(inner, bindings, types);
+            types.intern(Type::Pointer { inner })
+        }
+        Type::Array(inner) => {
+            let inner = substitute_type_params(inner, bindings, types);
+            types.intern(Type::Array(inner))
+        }
+        Type::Slice { element } => {
+            let element = substitute_type_params(element, bindings, types);
+            types.intern(Type::Slice { element })
+        }
+        Type::Tuple(elements) => {
+            let elements = elements
+                .into_iter()
+                .map(|element| substitute_type_params(element, bindings, types))
+                .collect();
+            types.intern(Type::Tuple(elements))
+        }
+        Type::Applied { callee, args } => {
+            let args = args
+                .into_iter()
+                .map(|arg| substitute_type_params(arg, bindings, types))
+                .collect();
+            types.intern(Type::Applied { callee, args })
+        }
+        Type::Function {
+            param_types,
+            param_names,
+            has_defaults,
+            return_type,
+        } => {
+            let param_types = param_types
+                .into_iter()
+                .map(|param| substitute_type_params(param, bindings, types))
+                .collect();
+            let return_type = substitute_type_params(return_type, bindings, types);
+            types.intern(Type::Function {
+                param_types,
+                param_names,
+                has_defaults,
+                return_type,
+            })
+        }
+        _ => ty,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5879,7 +6036,7 @@ pub(super) fn infer_function_value_call_type(
                         actual_ty
                     }
                 }
-                _ => *expected_ty,
+                _ => substitute_type_params(*expected_ty, &type_param_bindings, types),
             };
             actual_ty =
                 maybe_coerce_literal_to_expected(&arg.value, actual_ty, resolved_expected, types);
@@ -5899,12 +6056,11 @@ pub(super) fn infer_function_value_call_type(
             }
         }
     }
-    if let Type::TypeParam(name) = types.get(return_type) {
-        if let Some(bound) = type_param_bindings.get(name).copied() {
-            return Some(bound);
-        }
-    }
-    Some(return_type)
+    Some(substitute_type_params(
+        return_type,
+        &type_param_bindings,
+        types,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6223,13 +6379,9 @@ pub(super) fn infer_call_type(
         }
     }
 
-    if let Type::TypeParam(name) = types.get(sig.return_type) {
-        if let Some(bound) = type_param_bindings.get(name).copied() {
-            return bound;
-        }
-    }
-
-    specialized_return.unwrap_or(sig.return_type)
+    specialized_return.unwrap_or_else(|| {
+        substitute_type_params(sig.return_type, &type_param_bindings, types)
+    })
 }
 
 pub(super) fn bind_pattern_names(
@@ -7401,12 +7553,13 @@ pub(super) fn resolve_type_expr(ty: &TypeExpr, types: &mut TypeStore) -> Option<
             if name.text == "void" {
                 return Some(types.intern(Type::Void));
             }
-            if name
-                .text
-                .chars()
-                .next()
-                .map(|ch| ch.is_ascii_uppercase())
-                .unwrap_or(false)
+            if name.text.len() == 1
+                && name
+                    .text
+                    .chars()
+                    .next()
+                    .map(|ch| ch.is_ascii_uppercase())
+                    .unwrap_or(false)
             {
                 return Some(types.intern(Type::TypeParam(name.text.clone())));
             }

@@ -28,7 +28,7 @@ pub Vec(T).deinit := (self: *Vec(T)) {
     return
 }
 
-pub Vec(T).push := (self: *Vec(T), item: T) bool {
+pub Vec(T).push := (self: *Vec(T), item: T) u1 {
     if self.len == self.cap {
         mut new_cap: usize = 8
         if self.cap != 0 {

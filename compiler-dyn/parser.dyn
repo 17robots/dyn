@@ -3,6 +3,9 @@ module parser
 ast := use "ast"
 diagnostics := use "diagnostics"
 lexer := use "lexer"
+Vec := (use "std/collections").Vec
+Allocator := (use "std/mem").Allocator
+str := use "std/str"
 
 pub ParseOutput := struct {
   ast: ?ast.AstFile,
@@ -17,18 +20,1793 @@ pub Parser := struct {
   file_path: []u8,
 }
 
-Parser.new := (alloc: Allocator, file_path: []u8, tokens: []Token) Parser => .{
-  allocator: Allocator,
+Parser.new := (alloc: Allocator, file_path: []u8, tokens: []lexer.Token) Parser => .{
+  allocator: alloc,
   tokens: tokens,
   index: 0,
   diagnostics: Vec(diagnostics.Diagnostic).init(alloc),
   file_path: file_path
 }
 
-Parser.parse_file := (self: *mut Parser) ParseOutput {
-  module_decl := self.parse_module_decl()
-  mut items := Vec(ast.Item).init(self.allocator)
-  for !self.is_eof() {
-    if self.peek_kind(.Eof) break
+Parser.parse_file := (parser: *mut Parser) ParseOutput {
+  module_decl := parser.parse_module_decl() or return .{
+    ast: null,
+    diagnostics: parser.diagnostics,
   }
+
+  items := Vec(ast.Item).init(parser.allocator)
+  for {
+    parser.consume_semicolons()
+    parser.consume_doc_comments()
+    parser.consume_semicolons()
+    tok := parser.current() or break
+    if tok.kind == .Eof break
+    next_item := parser.parse_item()
+    if next_item: |item| {
+      items.push(item).!
+      parser.consume_semicolons()
+      continue
+    }
+    parser.advance()
+  }
+  file_span := merge_span(module_decl.span, parser.previous_span())
+  return .{
+    ast: ast.AstFile.{
+      module_decl: module_decl,
+      items: items,
+      span: file_span,
+    },
+    diagnostics: parser.diagnostics,
+  }
+}
+
+Parser.parse_module_decl := (parser: *mut Parser) ?ast.ModuleDecl {
+  for parser.consume_kind(.DocComment) {}
+
+  start := parser.current_span()
+  if !parser.consume_kind(.KwModule) {
+    parser.error_here(.E3001, "expected module declaration")
+    return null
+  }
+
+  name := parser.parse_ident() or return null
+  return .{
+    name: name,
+    span: merge_span(start, name.span),
+  }
+}
+
+Parser.parse_item := (parser: *mut Parser) ?ast.Item {
+  docs := parser.take_doc_comments()
+  visibility := parser.parse_visibility()
+  mutable := parser.consume_kind(.KwMut)
+
+  name := parser.parse_ident() or return null
+
+  if parser.consume_kind(.Dot) {
+    member := parser.parse_ident() or return null
+    parser.expect_kind(.Colon, "expected ':' after type member name")
+    parser.expect_kind(.Equal, "expected '=' after ':'")
+    value := parser.parse_expr() or return null
+    binding := parser.alloc_type_binding(.{
+      docs: docs,
+      visibility: visibility,
+      type_name: name,
+      member_name: member,
+      annotation: null,
+      value: value,
+      span: merge_span(name.span, value.span),
+    }) or return null
+    return ast.Item.TypeBinding(binding)
+  }
+
+  annotation := if parser.consume_kind(.Colon) parser.parse_type_expr() else null
+
+  parser.expect_kind(.Colon, "expected ':' in binding")
+  parser.expect_kind(.Equal, "expected '=' in binding")
+
+  if parser.consume_kind(.KwExtern) {
+    ty := parser.parse_type_expr() or return null
+    ext := parser.alloc_extern(.{
+      docs: docs,
+      visibility: visibility,
+      name: name,
+      ty: ty,
+      link_name: null,
+      span: merge_span(name.span, ty.span),
+    }) or return null
+    return ast.Item.Extern(ext)
+  }
+
+  value := parser.parse_expr() or return null
+  mut binding_kind := ast.BindingKind.Infer
+  if annotation != null {
+    binding_kind = .Typed
+  }
+  binding := parser.alloc_binding(.{
+    docs: docs,
+    visibility: visibility,
+    mutable: mutable,
+    kind: binding_kind,
+    name: name,
+    annotation: annotation,
+    value: value,
+    span: merge_span(name.span, value.span),
+  }) or return null
+  return ast.Item.Binding(binding)
+}
+
+Parser.parse_ident := (parser: *mut Parser) ?ast.Ident {
+  tok := parser.current() or return null
+  if !parser.token_can_be_ident(tok.kind) {
+    parser.error_here(.E3001, "expected identifier")
+    return null
+  }
+  parser.advance()
+  return .{
+    text: tok.lexeme,
+    span: tok.span,
+  }
+}
+
+Parser.parse_visibility := (parser: *mut Parser) ast.Visibility {
+  if parser.consume_kind(.KwPub) return .Public
+  return .Private
+}
+
+Parser.take_doc_comments := (parser: *mut Parser) Vec(ast.DocComment) {
+  docs := Vec(ast.DocComment).init(parser.allocator)
+  for parser.current(): |tok| {
+    if tok.kind != .DocComment break
+    docs.push(.{ name: tok.lexeme, span: tok.span }).!
+    parser.advance()
+  }
+  return docs
+}
+
+Parser.consume_doc_comments := (parser: *mut Parser) {
+  for parser.current(): |tok| {
+    if tok.kind != .DocComment break
+    parser.advance()
+  }
+  return
+}
+
+Parser.consume_semicolons := (parser: *mut Parser) {
+  for parser.consume_kind(.Semicolon) {}
+  return
+}
+
+Parser.parse_type_expr := (parser: *mut Parser) ?ast.TypeExpr {
+  tok := parser.current() or return null
+
+  if parser.consume_kind(.KwType) {
+    ident := ast.Ident.{ text: tok.lexeme, span: tok.span }
+    return .{
+      kind: ast.TypeExprKind.Named(ident),
+      span: ident.span,
+    }
+  }
+
+  if parser.consume_kind(.KwPacked) {
+    parser.expect_kind(.KwStruct, "expected 'struct' after 'packed'")
+    return parser.parse_struct_type(tok.span, true)
+  }
+
+  if parser.consume_kind(.KwStruct) {
+    return parser.parse_struct_type(tok.span, false)
+  }
+
+  if parser.consume_kind(.KwEnum) {
+    return parser.parse_enum_type(tok.span)
+  }
+
+  if parser.consume_kind(.Question) {
+    inner_ty := parser.parse_type_expr() or return null
+    inner_ptr := parser.alloc_type_expr(inner_ty) or return null
+    return .{
+      kind: ast.TypeExprKind.Optional(.{ inner: inner_ptr }),
+      span: merge_span(tok.span, inner_ty.span),
+    }
+  }
+
+  if parser.consume_kind(.Star) {
+    inner_ty := parser.parse_type_expr() or return null
+    inner_ptr := parser.alloc_type_expr(inner_ty) or return null
+    return .{
+      kind: ast.TypeExprKind.Pointer(.{ inner: inner_ptr }),
+      span: merge_span(tok.span, inner_ty.span),
+    }
+  }
+
+  if parser.consume_kind(.LBracket) {
+    parser.expect_kind(.RBracket, "expected ']' in slice type")
+    inner_ty := parser.parse_type_expr() or return null
+    inner_ptr := parser.alloc_type_expr(inner_ty) or return null
+    return .{
+      kind: ast.TypeExprKind.Slice(.{ element: inner_ptr }),
+      span: merge_span(tok.span, inner_ty.span),
+    }
+  }
+
+  if !parser.consume_kind(.LParen) {
+    name := parser.parse_field_name() or return null
+    if parser.consume_kind(.LParen) {
+      args := Vec(ast.TypeExpr).init(parser.allocator)
+      for {
+        if parser.consume_kind(.RParen) break
+        arg := parser.parse_type_expr() or return null
+        args.push(arg).!
+        if parser.consume_kind(.Comma) continue
+        parser.expect_kind(.RParen, "expected ')' after type args")
+        break
+      }
+      end := parser.previous_span()
+      return .{
+        kind: ast.TypeExprKind.Applied(.{ callee: name, args: args }),
+        span: merge_span(name.span, end),
+      }
+    }
+    return .{
+      kind: ast.TypeExprKind.Named(name),
+      span: name.span,
+    }
+  }
+
+  params := Vec(ast.FnTypeParam).init(parser.allocator)
+  for {
+    if parser.consume_kind(.RParen) break
+    param_name := if parser.current_is_ident() && parser.next_is_colon() {
+      name := parser.parse_ident() or return null
+      parser.expect_kind(.Colon, "expected ':' in function type param")
+      name
+    } else {
+      null
+    }
+    param_ty := parser.parse_type_expr() or return null
+    params.push(.{ name: param_name, ty: param_ty }).!
+    if parser.consume_kind(.Comma) continue
+    parser.expect_kind(.RParen, "expected ')' after function type params")
+    break
+  }
+  ret := parser.parse_type_expr_or_void()
+  ret_ptr := parser.alloc_type_expr(ret) or return null
+  return .{
+    kind: ast.TypeExprKind.Function(.{ params: params, return_type: ret_ptr }),
+    span: merge_span(tok.span, ret.span),
+  }
+}
+
+Parser.parse_expr := (parser: *mut Parser) ?ast.Expr {
+  return parser.parse_assignment_expr()
+}
+
+Parser.parse_assignment_expr := (parser: *mut Parser) ?ast.Expr {
+  left := parser.parse_logical_or_expr() or return null
+  tok := parser.current() or return left
+
+  assign_op := parser.token_assign_op(tok.kind)
+  if assign_op == null return left
+  op := assign_op or return null
+
+  parser.advance()
+  right := parser.parse_assignment_expr() or return null
+  left_ptr := parser.alloc_expr(left) or return null
+  right_ptr := parser.alloc_expr(right) or return null
+  return .{
+    kind: ast.ExprKind.Assign(.{
+      op: op,
+      target: left_ptr,
+      value: right_ptr,
+    }),
+    span: merge_span(left.span, right.span),
+  }
+}
+
+Parser.parse_logical_or_expr := (parser: *mut Parser) ?ast.Expr {
+  mut left := parser.parse_logical_and_expr() or return null
+  for {
+    is_or_else := parser.consume_kind(.KwOr)
+    mut is_logical_or := false
+    if !is_or_else {
+      is_logical_or = parser.consume_kind(.OrOr)
+    }
+    if !is_or_else && !is_logical_or break
+    right := parser.parse_logical_and_expr() or return null
+    left_ptr := parser.alloc_expr(left) or return null
+    right_ptr := parser.alloc_expr(right) or return null
+    if is_or_else {
+      left = .{
+        kind: ast.ExprKind.OrElse(.{
+          value: left_ptr,
+          error_binding: null,
+          fallback: right_ptr,
+        }),
+        span: merge_span(left.span, right.span),
+      }
+    } else {
+      left = .{
+        kind: ast.ExprKind.Binary(.{
+          op: .LogicalOr,
+          left: left_ptr,
+          right: right_ptr,
+        }),
+        span: merge_span(left.span, right.span),
+      }
+    }
+  }
+  return left
+}
+
+Parser.parse_logical_and_expr := (parser: *mut Parser) ?ast.Expr {
+  mut left := parser.parse_equality_expr() or return null
+  for parser.consume_kind(.AndAnd): {
+    right := parser.parse_equality_expr() or return null
+    left_ptr := parser.alloc_expr(left) or return null
+    right_ptr := parser.alloc_expr(right) or return null
+    left = .{
+      kind: ast.ExprKind.Binary(.{
+        op: .LogicalAnd,
+        left: left_ptr,
+        right: right_ptr,
+      }),
+      span: merge_span(left.span, right.span),
+    }
+  }
+  return left
+}
+
+Parser.parse_equality_expr := (parser: *mut Parser) ?ast.Expr {
+  mut left := parser.parse_compare_expr() or return null
+  for {
+    mut op := ast.BinaryOp.Eq
+    if parser.consume_kind(.EqualEqual) op = .Eq
+    else if parser.consume_kind(.BangEqual) op = .Ne
+    else break
+    right := parser.parse_compare_expr() or return null
+    left_ptr := parser.alloc_expr(left) or return null
+    right_ptr := parser.alloc_expr(right) or return null
+    left = .{
+      kind: ast.ExprKind.Binary(.{
+        op: op,
+        left: left_ptr,
+        right: right_ptr,
+      }),
+      span: merge_span(left.span, right.span),
+    }
+  }
+  return left
+}
+
+Parser.parse_compare_expr := (parser: *mut Parser) ?ast.Expr {
+  mut left := parser.parse_add_expr() or return null
+  for {
+    mut op := ast.BinaryOp.Lt
+    if parser.consume_kind(.Less) op = .Lt
+    else if parser.consume_kind(.LessEqual) op = .Le
+    else if parser.consume_kind(.Greater) op = .Gt
+    else if parser.consume_kind(.GreaterEqual) op = .Ge
+    else break
+    right := parser.parse_add_expr() or return null
+    left_ptr := parser.alloc_expr(left) or return null
+    right_ptr := parser.alloc_expr(right) or return null
+    left = .{
+      kind: ast.ExprKind.Binary(.{
+        op: op,
+        left: left_ptr,
+        right: right_ptr,
+      }),
+      span: merge_span(left.span, right.span),
+    }
+  }
+  return left
+}
+
+Parser.parse_add_expr := (parser: *mut Parser) ?ast.Expr {
+  mut left := parser.parse_mul_expr() or return null
+  for {
+    mut op := ast.BinaryOp.Add
+    if parser.consume_kind(.Plus) op = .Add
+    else if parser.consume_kind(.Minus) op = .Sub
+    else break
+    right := parser.parse_mul_expr() or return null
+    left_ptr := parser.alloc_expr(left) or return null
+    right_ptr := parser.alloc_expr(right) or return null
+    left = .{
+      kind: ast.ExprKind.Binary(.{
+        op: op,
+        left: left_ptr,
+        right: right_ptr,
+      }),
+      span: merge_span(left.span, right.span),
+    }
+  }
+  return left
+}
+
+Parser.parse_mul_expr := (parser: *mut Parser) ?ast.Expr {
+  mut left := parser.parse_unary_expr() or return null
+  for {
+    mut op := ast.BinaryOp.Mul
+    if parser.consume_kind(.Star) op = .Mul
+    else if parser.consume_kind(.Slash) op = .Div
+    else if parser.consume_kind(.Percent) op = .Mod
+    else break
+    right := parser.parse_unary_expr() or return null
+    left_ptr := parser.alloc_expr(left) or return null
+    right_ptr := parser.alloc_expr(right) or return null
+    left = .{
+      kind: ast.ExprKind.Binary(.{
+        op: op,
+        left: left_ptr,
+        right: right_ptr,
+      }),
+      span: merge_span(left.span, right.span),
+    }
+  }
+  return left
+}
+
+Parser.parse_unary_expr := (parser: *mut Parser) ?ast.Expr {
+  tok := parser.current() or return null
+  unary := parser.token_unary_op(tok.kind)
+  if unary: |op| {
+    parser.advance()
+    operand := parser.parse_unary_expr() or return null
+    operand_ptr := parser.alloc_expr(operand) or return null
+    return .{
+      kind: ast.ExprKind.Unary(.{
+        op: op,
+        expr: operand_ptr,
+      }),
+      span: merge_span(tok.span, operand.span),
+    }
+  }
+  expr := parser.parse_primary_expr() or return null
+  return parser.finish_postfix_expr(expr)
+}
+
+Parser.parse_primary_expr := (parser: *mut Parser) ?ast.Expr {
+  tok := parser.current() or return null
+
+  if tok.kind == .KwIf return parser.parse_if_expr()
+  if tok.kind == .KwMatch return parser.parse_match_expr()
+  if tok.kind == .KwFor return parser.parse_for_expr()
+  if tok.kind == .KwPacked || tok.kind == .KwStruct || tok.kind == .KwEnum return parser.parse_type_literal_expr()
+  if tok.kind == .LParen return parser.parse_fn_or_group_expr()
+  if tok.kind == .LBrace return parser.parse_block_expr()
+  if tok.kind == .LBracket return parser.parse_array_literal()
+  if tok.kind == .Dot return parser.parse_dot_literal_or_variant()
+  if tok.kind == .KwComp return parser.parse_comptime_expr()
+  if tok.kind == .KwInline return parser.parse_inline_expr()
+  if tok.kind == .KwUse return parser.parse_use_expr()
+  if tok.kind == .KwReturn return parser.parse_return_expr()
+  if tok.kind == .KwBreak return parser.parse_break_expr()
+  if tok.kind == .KwContinue return parser.parse_continue_expr()
+  if tok.kind == .StringLiteral || tok.kind == .CharLiteral || tok.kind == .IntLiteral || tok.kind == .FloatLiteral || tok.kind == .TrueLiteral || tok.kind == .FalseLiteral || tok.kind == .NullLiteral {
+    return parser.parse_literal_expr()
+  }
+  if tok.kind == .Identifier || tok.kind == .BuiltinIdentifier {
+    parser.advance()
+    ident := ast.Ident.{ text: tok.lexeme, span: tok.span }
+    if tok.kind == .BuiltinIdentifier {
+      return .{
+        kind: ast.ExprKind.BuiltinIdent(ident),
+        span: tok.span,
+      }
+    }
+    return .{
+      kind: ast.ExprKind.Ident(ident),
+      span: tok.span,
+    }
+  }
+
+  parser.error_here(.E3002, "unexpected token in expression")
+  return null
+}
+
+Parser.parse_if_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwIf) return null
+  cond := parser.parse_expr() or return null
+  then_branch := parser.parse_expr() or return null
+  mut else_ptr: ?*ast.Expr = null
+  mut end := then_branch.span
+  if parser.consume_kind(.KwElse) {
+    else_branch := parser.parse_expr() or return null
+    else_ptr = parser.alloc_expr(else_branch) or return null
+    end = else_branch.span
+  }
+  cond_ptr := parser.alloc_expr(cond) or return null
+  then_ptr := parser.alloc_expr(then_branch) or return null
+  return .{
+    kind: ast.ExprKind.If(.{
+      condition: cond_ptr,
+      capture: null,
+      then_branch: then_ptr,
+      else_branch: else_ptr,
+    }),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_match_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwMatch) return null
+  scrutinee := parser.parse_expr() or return null
+  parser.expect_kind(.LBrace, "expected '{' after match expression")
+  arms := Vec(ast.MatchArm).init(parser.allocator)
+  mut end := scrutinee.span
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RBrace {
+      end = tok.span
+      parser.advance()
+      break
+    }
+    mut pattern := parser.parse_pattern() or return null
+    extra_patterns := Vec(ast.Pattern).init(parser.allocator)
+    for parser.consume_kind(.Comma): {
+      if !parser.current_can_start_pattern() break
+      extra_pattern := parser.parse_pattern() or return null
+      extra_patterns.push(extra_pattern).!
+    }
+    guard := if parser.consume_kind(.KwIf) parser.parse_expr() else null
+    if parser.consume_kind(.FatArrow) {
+      parser.error_here(.E3001, "expected ':' after match pattern")
+    } else {
+      parser.expect_kind(.Colon, "expected ':' after match pattern")
+    }
+    capture := parser.parse_optional_match_capture()
+    value := parser.parse_expr() or return null
+    if capture: |binding| {
+      pattern = parser.attach_match_capture(pattern, binding)
+    }
+    arm_span := merge_span(pattern.span, value.span)
+    mut i: usize = 0
+    for i < extra_patterns.len: {
+      mut extra := extra_patterns[i]
+      if capture: |binding| {
+        extra = parser.attach_match_capture(extra, binding)
+      }
+      arms.push(.{
+        pattern: extra,
+        guard: guard,
+        value: value,
+        span: arm_span,
+      }).!
+      i += 1
+    }
+    arms.push(.{
+      pattern: pattern,
+      guard: guard,
+      value: value,
+      span: arm_span,
+    }).!
+    end = value.span
+    if parser.consume_kind(.Comma) continue
+  }
+  scrutinee_ptr := parser.alloc_expr(scrutinee) or return null
+  return .{
+    kind: ast.ExprKind.Match(.{
+      scrutinee: scrutinee_ptr,
+      arms: arms,
+    }),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_for_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwFor) return null
+  tok := parser.current() or return null
+  if tok.kind == .LBrace {
+    body := parser.parse_expr() or return null
+    body_ptr := parser.alloc_expr(body) or return null
+    return .{
+      kind: ast.ExprKind.For(ast.ForExpr.Infinite(.{ body: body_ptr })),
+      span: merge_span(start, body.span),
+    }
+  }
+
+  left := parser.parse_expr() or return null
+  if parser.consume_kind(.DotDot) || parser.consume_kind(.DotDotEqual) {
+    inclusive := parser.previous_is_dot_dot_equal()
+    right := parser.parse_expr() or return null
+    binding := parser.parse_optional_pipe_binding()
+    body := parser.parse_expr() or return null
+    left_ptr := parser.alloc_expr(left) or return null
+    right_ptr := parser.alloc_expr(right) or return null
+    body_ptr := parser.alloc_expr(body) or return null
+    return .{
+      kind: ast.ExprKind.For(ast.ForExpr.Range(.{
+        start: left_ptr,
+        end: right_ptr,
+        inclusive: inclusive,
+        binding: binding,
+        body: body_ptr,
+      })),
+      span: merge_span(start, body.span),
+    }
+  }
+
+  binding := parser.parse_optional_pipe_binding()
+  body := parser.parse_expr() or return null
+  left_ptr := parser.alloc_expr(left) or return null
+  body_ptr := parser.alloc_expr(body) or return null
+  if binding != null {
+    return .{
+      kind: ast.ExprKind.For(ast.ForExpr.Iterate(.{
+        iterable: left_ptr,
+        binding: binding,
+        body: body_ptr,
+      })),
+      span: merge_span(start, body.span),
+    }
+  }
+  return .{
+    kind: ast.ExprKind.For(ast.ForExpr.WhileLike(.{
+      condition: left_ptr,
+      binding: null,
+      body: body_ptr,
+    })),
+    span: merge_span(start, body.span),
+  }
+}
+
+Parser.finish_postfix_expr := (parser: *mut Parser, base_expr: ast.Expr) ?ast.Expr {
+  mut expr := base_expr
+  for {
+    tok := parser.current() or break
+    if tok.kind == .LParen {
+      parser.advance()
+      args := parser.parse_call_args(expr)
+      callee_ptr := parser.alloc_expr(expr) or return null
+      end := parser.previous_span()
+      expr = .{
+        kind: ast.ExprKind.Call(.{
+          callee: callee_ptr,
+          args: args,
+        }),
+        span: merge_span(expr.span, end),
+      }
+      continue
+    }
+    if tok.kind == .LBrace {
+      parser.advance()
+      if parser.expr_as_ident(expr) != null {
+        expr = parser.finish_struct_literal(expr) or return null
+      } else {
+        expr = parser.finish_type_construct(expr) or return null
+      }
+      continue
+    }
+    if tok.kind == .Dot {
+      parser.advance()
+      field := parser.parse_ident() or return null
+      base_ptr := parser.alloc_expr(expr) or return null
+      expr = .{
+        kind: ast.ExprKind.FieldAccess(.{
+          base: base_ptr,
+          field: field,
+        }),
+        span: merge_span(base_expr.span, field.span),
+      }
+      continue
+    }
+    if tok.kind == .LBracket {
+      parser.advance()
+      index_expr := parser.parse_expr() or return null
+      parser.expect_kind(.RBracket, "expected ']' after index")
+      base_ptr := parser.alloc_expr(expr) or return null
+      index_ptr := parser.alloc_expr(index_expr) or return null
+      expr = .{
+        kind: ast.ExprKind.Index(.{
+          base: base_ptr,
+          index: index_ptr,
+        }),
+        span: merge_span(base_expr.span, index_expr.span),
+      }
+      continue
+    }
+    break
+  }
+  return expr
+}
+
+Parser.finish_struct_literal := (parser: *mut Parser, root_expr: ast.Expr) ?ast.Expr {
+  root_ident := parser.expr_as_ident(root_expr) or return null
+  fields := Vec(ast.StructLiteralField).init(parser.allocator)
+  mut end := root_ident.span
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RBrace {
+      end = tok.span
+      parser.advance()
+      break
+    }
+    name := parser.parse_field_name() or return null
+    value := if parser.consume_kind(.Colon) {
+      parser.parse_expr() or return null
+    } else {
+      .{
+        kind: ast.ExprKind.Ident(name),
+        span: name.span,
+      }
+    }
+    end = value.span
+    fields.push(.{ name: name, value: value }).!
+    if parser.consume_kind(.Comma) continue
+    if parser.current_is_field_name() {
+      parser.error_here(.E3001, "expected ',' between struct literal fields")
+      continue
+    }
+    parser.expect_kind(.RBrace, "expected '}' after struct literal")
+    end = parser.previous_span()
+    break
+  }
+  return .{
+    kind: ast.ExprKind.StructLiteral(.{
+      root_type: root_ident,
+      fields: fields,
+    }),
+    span: merge_span(root_expr.span, end),
+  }
+}
+
+Parser.finish_type_construct := (parser: *mut Parser, ty_expr: ast.Expr) ?ast.Expr {
+  fields := Vec(ast.StructLiteralField).init(parser.allocator)
+  mut end := ty_expr.span
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RBrace {
+      end = tok.span
+      parser.advance()
+      break
+    }
+    name := parser.parse_field_name() or return null
+    value := if parser.consume_kind(.Colon) {
+      parser.parse_expr() or return null
+    } else {
+      .{
+        kind: ast.ExprKind.Ident(name),
+        span: name.span,
+      }
+    }
+    end = value.span
+    fields.push(.{ name: name, value: value }).!
+    if parser.consume_kind(.Comma) continue
+    if parser.current_is_field_name() {
+      parser.error_here(.E3001, "expected ',' between struct literal fields")
+      continue
+    }
+    parser.expect_kind(.RBrace, "expected '}' after struct construction")
+    end = parser.previous_span()
+    break
+  }
+  ty_expr_ptr := parser.alloc_expr(ty_expr) or return null
+  return .{
+    kind: ast.ExprKind.TypeConstruct(.{
+      ty_expr: ty_expr_ptr,
+      fields: fields,
+    }),
+    span: merge_span(ty_expr.span, end),
+  }
+}
+
+Parser.parse_type_literal_expr := (parser: *mut Parser) ?ast.Expr {
+  ty := parser.parse_type_expr() or return null
+  return .{
+    kind: ast.ExprKind.TypeLiteral(ty),
+    span: ty.span,
+  }
+}
+
+Parser.parse_struct_type := (parser: *mut Parser, start: diagnostics.SourceSpan, is_packed: u1) ?ast.TypeExpr {
+  parser.expect_kind(.LBrace, "expected '{' after struct")
+  fields := Vec(ast.StructFieldType).init(parser.allocator)
+  for {
+    mut tok := parser.current() or break
+    if tok.kind == .RBrace {
+      parser.advance()
+      break
+    }
+    parser.consume_doc_comments()
+    tok = parser.current() or break
+    if tok.kind == .RBrace {
+      parser.advance()
+      break
+    }
+    name := parser.parse_field_name() or return null
+    if parser.consume_kind(.Colon) {
+      ty := parser.parse_type_expr() or return null
+      default_value := if parser.consume_kind(.Equal) parser.parse_expr() else null
+      fields.push(.{
+        name: name,
+        ty: ty,
+        default_value: default_value,
+      }).!
+    }
+    parser.consume_kind(.Comma)
+  }
+  end := parser.previous_span()
+  return .{
+    kind: ast.TypeExprKind.Struct(parser.make_struct_type(is_packed, fields)),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_enum_type := (parser: *mut Parser, start: diagnostics.SourceSpan) ?ast.TypeExpr {
+  repr := if parser.consume_kind(.LParen) {
+    value := parser.parse_type_expr() or return null
+    parser.expect_kind(.RParen, "expected ')' after enum representation type")
+    if !parser.type_expr_is_unsigned_enum_repr(value) {
+      parser.error_here(.E3001, "enum representation type must be unsigned integer")
+    }
+    parser.alloc_type_expr(value)
+  } else {
+    null
+  }
+  parser.expect_kind(.LBrace, "expected '{' after enum")
+  variants := Vec(ast.EnumVariantType).init(parser.allocator)
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RBrace {
+      parser.advance()
+      break
+    }
+    name := parser.parse_field_name() or return null
+    payload := if parser.consume_kind(.Colon) {
+      if parser.consume_kind(.Equal) {
+        parser.error_here(.E3001, "enum body members are not supported")
+        parser.parse_expr()
+        null
+      } else {
+        parser.parse_type_expr()
+      }
+    } else {
+      null
+    }
+    variants.push(.{ name: name, payload: payload }).!
+    parser.consume_kind(.Comma)
+  }
+  end := parser.previous_span()
+  return .{
+    kind: ast.TypeExprKind.Enum(parser.make_enum_type(repr, variants)),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_literal_expr := (parser: *mut Parser) ?ast.Expr {
+  tok := parser.current() or return null
+  parser.advance()
+  if tok.kind == .IntLiteral return .{ kind: ast.ExprKind.Literal(ast.Literal.Integer(tok.lexeme)), span: tok.span }
+  if tok.kind == .FloatLiteral return .{ kind: ast.ExprKind.Literal(ast.Literal.Float(tok.lexeme)), span: tok.span }
+  if tok.kind == .StringLiteral return .{ kind: ast.ExprKind.Literal(ast.Literal.String(tok.lexeme)), span: tok.span }
+  if tok.kind == .CharLiteral return .{ kind: ast.ExprKind.Literal(ast.Literal.Char(0)), span: tok.span }
+  if tok.kind == .TrueLiteral return .{ kind: ast.ExprKind.Literal(ast.Literal.U1(true)), span: tok.span }
+  if tok.kind == .FalseLiteral return .{ kind: ast.ExprKind.Literal(ast.Literal.U1(false)), span: tok.span }
+  if tok.kind == .NullLiteral return .{ kind: ast.ExprKind.Literal(ast.Literal.Null), span: tok.span }
+  return null
+}
+
+Parser.parse_array_literal := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.LBracket) return null
+  elements := Vec(ast.Expr).init(parser.allocator)
+  mut end := start
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RBracket {
+      end = tok.span
+      parser.advance()
+      break
+    }
+    element := parser.parse_expr() or return null
+    end = element.span
+    elements.push(element).!
+    if parser.consume_kind(.Comma) continue
+    parser.expect_kind(.RBracket, "expected ']' after array literal")
+    end = parser.previous_span()
+    break
+  }
+  return .{
+    kind: ast.ExprKind.ArrayLiteral(elements),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_dot_literal_or_variant := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.Dot) return null
+  if parser.consume_kind(.LBrace) {
+    return parser.finish_anonymous_literal(start)
+  }
+  variant := parser.parse_ident() or return null
+  payload := Vec(ast.Expr).init(parser.allocator)
+  if parser.consume_kind(.LParen) {
+    args := parser.parse_arg_values()
+    for args.slice(): |arg| payload.push(arg).!
+  }
+  return .{
+    kind: ast.ExprKind.EnumVariantConstruct(.{
+      root: null,
+      variant: variant,
+      payload: payload,
+    }),
+    span: merge_span(start, parser.previous_span()),
+  }
+}
+
+Parser.finish_anonymous_literal := (parser: *mut Parser, start: diagnostics.SourceSpan) ?ast.Expr {
+  fields := Vec(ast.StructLiteralField).init(parser.allocator)
+  elements := Vec(ast.Expr).init(parser.allocator)
+  mut saw_named := false
+  mut end := start
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RBrace {
+      end = tok.span
+      parser.advance()
+      break
+    }
+    if parser.current_is_field_name() && parser.next_is_colon() {
+      saw_named = true
+      name := parser.parse_field_name() or return null
+      parser.expect_kind(.Colon, "expected ':' in struct literal field")
+      value := parser.parse_expr() or return null
+      end = value.span
+      fields.push(.{ name: name, value: value }).!
+    } else {
+      value := parser.parse_expr() or return null
+      end = value.span
+      elements.push(value).!
+    }
+    if parser.consume_kind(.Comma) continue
+    if parser.current_is_field_name() {
+      parser.error_here(.E3001, "expected ',' between struct literal fields")
+      continue
+    }
+    parser.expect_kind(.RBrace, "expected '}' after literal")
+    end = parser.previous_span()
+    break
+  }
+  if saw_named {
+    return .{
+      kind: ast.ExprKind.StructLiteral(.{
+        root_type: null,
+        fields: fields,
+      }),
+      span: merge_span(start, end),
+    }
+  }
+  return .{
+    kind: ast.ExprKind.TupleLiteral(elements),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_use_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwUse) return null
+  path := parser.current() or return null
+  if path.kind != .StringLiteral {
+    parser.error_here(.E3001, "expected string literal after use")
+    return null
+  }
+  parser.advance()
+  return .{
+    kind: ast.ExprKind.Use(.{ path: path.lexeme }),
+    span: merge_span(start, path.span),
+  }
+}
+
+Parser.parse_fn_or_group_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  saved := parser.index
+  parser.advance()
+
+  params := Vec(ast.FnParam).init(parser.allocator)
+  mut ok := true
+  for {
+    tok := parser.current() or {
+      ok = false
+      break
+    }
+    if tok.kind == .RParen {
+      parser.advance()
+      break
+    }
+    name := parser.parse_ident() or {
+      ok = false
+      break
+    }
+    mut is_comp := false
+    ty := if parser.consume_kind(.Colon) {
+      is_comp = parser.consume_kind(.KwComp)
+      parser.parse_type_expr()
+    } else {
+      null
+    }
+    default_value := if parser.consume_kind(.Equal) parser.parse_expr() else null
+    params.push(.{ name: name, ty: ty, default_value: default_value, is_comp: is_comp }).!
+    if parser.consume_kind(.Comma) continue
+    if parser.consume_kind(.RParen) break
+    if parser.current_is_ident() {
+      parser.error_here(.E3001, "expected ',' between function parameters")
+      continue
+    }
+    ok = false
+    break
+  }
+
+  if ok {
+    mut ret: ?ast.TypeExpr = null
+    if parser.current_is_type_start() {
+      ret = parser.parse_type_expr()
+    }
+    if parser.consume_kind(.Bang) {
+      base := if ret: |value| value else parser.void_type_expr()
+      errors := parser.parse_error_list()
+      base_ptr := parser.alloc_type_expr(base) or return null
+      ret = .{
+        kind: ast.TypeExprKind.Errorable(.{
+          ok: base_ptr,
+          errors: errors,
+        }),
+        span: merge_span(base.span, parser.previous_span()),
+      }
+    }
+    if parser.consume_kind(.KwComp) {
+      mut body_expr := parser.parse_expr() or return null
+      inner_ptr := parser.alloc_expr(body_expr) or return null
+      body_expr = .{
+        kind: ast.ExprKind.Comptime(.{ expr: inner_ptr }),
+        span: body_expr.span,
+      }
+      body_ptr := parser.alloc_expr(body_expr) or return null
+      return .{
+        kind: ast.ExprKind.Fn(.{
+          params: params,
+          return_type: ret,
+          body: ast.FnBody.ArrowExpr(body_ptr),
+        }),
+        span: merge_span(start, body_expr.span),
+      }
+    }
+    if parser.consume_kind(.KwInline) {
+      mut body_expr := parser.parse_expr() or return null
+      inner_ptr := parser.alloc_expr(body_expr) or return null
+      body_expr = .{
+        kind: ast.ExprKind.Inline(.{ expr: inner_ptr }),
+        span: body_expr.span,
+      }
+      body_ptr := parser.alloc_expr(body_expr) or return null
+      return .{
+        kind: ast.ExprKind.Fn(.{
+          params: params,
+          return_type: ret,
+          body: ast.FnBody.ArrowExpr(body_ptr),
+        }),
+        span: merge_span(start, body_expr.span),
+      }
+    }
+    if parser.consume_kind(.FatArrow) {
+      body_expr := parser.parse_expr() or return null
+      body_ptr := parser.alloc_expr(body_expr) or return null
+      return .{
+        kind: ast.ExprKind.Fn(.{
+          params: params,
+          return_type: ret,
+          body: ast.FnBody.ArrowExpr(body_ptr),
+        }),
+        span: merge_span(start, body_expr.span),
+      }
+    }
+    block_expr := parser.parse_balanced_block_expr()
+    if block_expr: |block| {
+      return .{
+        kind: ast.ExprKind.Fn(.{
+          params: params,
+          return_type: ret,
+          body: ast.FnBody.Block(block.kind.Block),
+        }),
+        span: merge_span(start, block.span),
+      }
+    }
+  }
+
+  parser.index = saved
+  parser.expect_kind(.LParen, "expected '('")
+  grouped := parser.parse_expr() or return null
+  parser.expect_kind(.RParen, "expected ')'")
+  return grouped
+}
+
+Parser.parse_block_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.LBrace) return null
+
+  statements := Vec(ast.Stmt).init(parser.allocator)
+  mut tail_expr: ?*ast.Expr = null
+  mut end := start
+
+  for {
+    parser.consume_semicolons()
+    tok := parser.current() or break
+    if tok.kind == .RBrace {
+      end = tok.span
+      parser.advance()
+      break
+    }
+
+    stmt_binding := parser.try_parse_local_binding()
+    if stmt_binding: |binding| {
+      binding_ptr := parser.alloc_binding(binding) or return null
+      statements.push(ast.Stmt.Binding(binding_ptr)).!
+      tail_expr = null
+      parser.consume_semicolons()
+      continue
+    }
+
+    stmt_expr := parser.parse_expr() or return null
+    stmt_expr_ptr := parser.alloc_expr(stmt_expr) or return null
+    statements.push(ast.Stmt.Expr(stmt_expr_ptr)).!
+    end = stmt_expr.span
+    if parser.consume_kind(.Semicolon) {
+      tail_expr = null
+    } else {
+      tail_expr = stmt_expr_ptr
+    }
+  }
+
+  return .{
+    kind: ast.ExprKind.Block(.{
+      label: null,
+      statements: statements,
+      tail_expr: tail_expr,
+    }),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_balanced_block_expr := (parser: *mut Parser) ?ast.Expr => parser.parse_block_expr()
+
+Parser.parse_pattern := (parser: *mut Parser) ?ast.Pattern {
+  tok := parser.current() or return null
+  if tok.kind == .LBracket || tok.kind == .Star || tok.kind == .Question {
+    start := tok.span
+    ty := parser.parse_type_expr() or return null
+    return .{
+      kind: ast.PatternKind.TypeLiteral(ty),
+      span: merge_span(start, ty.span),
+    }
+  }
+  if tok.kind == .Dot {
+    parser.advance()
+    variant := parser.parse_ident() or return null
+    bindings := if parser.consume_kind(.LParen) parser.parse_pattern_binding_list() else Vec(ast.Ident).init(parser.allocator)
+    return .{
+      kind: ast.PatternKind.EnumVariant(.{
+        root: null,
+        variant: variant,
+        bindings: bindings,
+      }),
+      span: merge_span(tok.span, parser.previous_span()),
+    }
+  }
+  mut pattern := if tok.kind == .Identifier && parser.lexeme_is(tok.lexeme, "_") {
+    parser.advance()
+    .{
+      kind: ast.PatternKind.Wildcard,
+      span: tok.span,
+    }
+  } else {
+    lit := parser.pattern_literal_from_token(tok)
+    if lit != null {
+      literal := lit or return null
+      parser.advance()
+      .{
+        kind: ast.PatternKind.Literal(literal),
+        span: tok.span,
+      }
+    } else {
+      ident := parser.parse_ident() or return null
+      if parser.consume_kind(.Dot) {
+        variant := parser.parse_ident() or return null
+        bindings := if parser.consume_kind(.LParen) parser.parse_pattern_binding_list() else Vec(ast.Ident).init(parser.allocator)
+        .{
+          kind: ast.PatternKind.EnumVariant(.{
+            root: ident,
+            variant: variant,
+            bindings: bindings,
+          }),
+          span: merge_span(ident.span, parser.previous_span()),
+        }
+      } else {
+        .{
+          kind: ast.PatternKind.IdentBind(ident),
+          span: ident.span,
+        }
+      }
+    }
+  }
+  if parser.consume_kind(.DotDot) || parser.consume_kind(.DotDotEqual) {
+    inclusive := parser.previous_is_dot_dot_equal()
+    end := parser.parse_pattern() or return null
+    start_ptr := parser.alloc_pattern(pattern) or return null
+    end_ptr := parser.alloc_pattern(end) or return null
+    pattern = .{
+      kind: ast.PatternKind.Range(.{
+        start: start_ptr,
+        end: end_ptr,
+        inclusive: inclusive,
+      }),
+      span: merge_span(pattern.span, end.span),
+    }
+  }
+  return pattern
+}
+
+Parser.try_parse_local_binding := (parser: *mut Parser) ?ast.Binding {
+  saved := parser.index
+  mutable := parser.consume_kind(.KwMut)
+  name := parser.parse_ident()
+  if name == null {
+    parser.index = saved
+    return null
+  }
+  binding_name := name or return null
+  annotation := if parser.consume_kind(.Colon) parser.parse_type_expr() else null
+  if !parser.consume_kind(.Colon) || !parser.consume_kind(.Equal) {
+    parser.index = saved
+    return null
+  }
+  value := parser.parse_expr() or {
+    parser.index = saved
+    return null
+  }
+  mut binding_kind := ast.BindingKind.Infer
+  if annotation != null binding_kind = .Typed
+  return .{
+    docs: Vec(ast.DocComment).init(parser.allocator),
+    visibility: .Private,
+    mutable: mutable,
+    kind: binding_kind,
+    name: binding_name,
+    annotation: annotation,
+    value: value,
+    span: merge_span(binding_name.span, value.span),
+  }
+}
+
+Parser.parse_optional_pipe_binding := (parser: *mut Parser) ?ast.Ident {
+  if !parser.consume_kind(.Colon) return null
+  if !parser.consume_kind(.Pipe) return null
+  binding := parser.parse_ident() or return null
+  parser.expect_kind(.Pipe, "expected closing '|' in for binding")
+  return binding
+}
+
+Parser.parse_optional_match_capture := (parser: *mut Parser) ?ast.Ident {
+  if !parser.consume_kind(.Pipe) return null
+  binding := if parser.current_is_discard_ident() {
+    parser.advance()
+    null
+  } else {
+    parser.parse_ident()
+  }
+  parser.expect_kind(.Pipe, "expected closing '|' in match capture")
+  return binding
+}
+
+Parser.parse_pattern_binding_list := (parser: *mut Parser) Vec(ast.Ident) {
+  bindings := Vec(ast.Ident).init(parser.allocator)
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RParen {
+      parser.advance()
+      break
+    }
+    binding := parser.parse_ident() or break
+    bindings.push(binding).!
+    if parser.consume_kind(.Comma) continue
+    parser.expect_kind(.RParen, "expected ')' to close pattern bindings")
+    break
+  }
+  return bindings
+}
+
+Parser.parse_call_args := (parser: *mut Parser, callee: ast.Expr) Vec(ast.CallArg) {
+  args := Vec(ast.CallArg).init(parser.allocator)
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RParen {
+      parser.advance()
+      break
+    }
+    if parser.current_is_field_name() && parser.next_is_colon() {
+      name := parser.parse_field_name() or break
+      parser.expect_kind(.Colon, "expected ':' in named argument")
+      value := parser.parse_expr() or break
+      args.push(.{ name: name, value: value }).!
+    } else if parser.should_parse_builtin_type_arg(callee, args.len) {
+      ty := parser.parse_type_expr()
+      if ty: |value| {
+        args.push(.{
+          name: null,
+          value: .{
+            kind: ast.ExprKind.TypeLiteral(value),
+            span: value.span,
+          },
+        }).!
+      } else {
+        value := parser.parse_expr() or break
+        args.push(.{ name: null, value: value }).!
+      }
+    } else {
+      value := parser.parse_expr() or break
+      args.push(.{ name: null, value: value }).!
+    }
+    if parser.consume_kind(.Comma) continue
+    if parser.current_can_start_expr() {
+      parser.error_here(.E3001, "expected ',' between call arguments")
+      continue
+    }
+    parser.expect_kind(.RParen, "expected ')' to close call arguments")
+    break
+  }
+  return args
+}
+
+Parser.parse_arg_values := (parser: *mut Parser) Vec(ast.Expr) {
+  values := Vec(ast.Expr).init(parser.allocator)
+  for {
+    tok := parser.current() or break
+    if tok.kind == .RParen {
+      parser.advance()
+      break
+    }
+    value := parser.parse_expr() or break
+    values.push(value).!
+    if parser.consume_kind(.Comma) continue
+    parser.expect_kind(.RParen, "expected ')' to close arguments")
+    break
+  }
+  return values
+}
+
+Parser.should_parse_builtin_type_arg := (parser: Parser, callee: ast.Expr, arg_index: usize) u1 {
+  return match callee.kind {
+    .BuiltinIdent: {
+      name := callee.kind.BuiltinIdent.text
+      if parser.lexeme_is(name, "$as") return arg_index == 0
+      if parser.lexeme_is(name, "$sizeof") return arg_index == 0
+      if parser.lexeme_is(name, "$alignof") return arg_index == 0
+      if parser.lexeme_is(name, "$offsetof") return arg_index == 0
+      break false
+    },
+    _: false,
+  }
+}
+
+Parser.make_struct_type := (parser: Parser, is_packed: u1, fields: Vec(ast.StructFieldType)) ast.StructType {
+  _ = parser
+  return ast.StructType{ packed: is_packed, fields: fields }
+}
+
+Parser.make_enum_type := (parser: Parser, repr: ?*ast.TypeExpr, variants: Vec(ast.EnumVariantType)) ast.EnumType {
+  return ast.EnumType{
+    repr: repr,
+    variants: variants,
+    members: Vec(ast.StructMemberType).init(parser.allocator),
+  }
+}
+
+Parser.parse_return_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwReturn) return null
+  value_expr := parser.parse_expr()
+  value_ptr := if value_expr: |expr| parser.alloc_expr(expr) else null
+  end := if value_expr: |expr| expr.span else start
+  return .{
+    kind: ast.ExprKind.Return(.{ value: value_ptr }),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_break_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwBreak) return null
+  value_expr := parser.parse_expr()
+  value_ptr := if value_expr: |expr| parser.alloc_expr(expr) else null
+  end := if value_expr: |expr| expr.span else start
+  return .{
+    kind: ast.ExprKind.Break(.{ label: null, value: value_ptr }),
+    span: merge_span(start, end),
+  }
+}
+
+Parser.parse_continue_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwContinue) return null
+  return .{
+    kind: ast.ExprKind.Continue(.{ label: null }),
+    span: start,
+  }
+}
+
+Parser.parse_comptime_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwComp) return null
+  expr := parser.parse_expr() or return null
+  expr_ptr := parser.alloc_expr(expr) or return null
+  return .{
+    kind: ast.ExprKind.Comptime(.{ expr: expr_ptr }),
+    span: merge_span(start, expr.span),
+  }
+}
+
+Parser.parse_inline_expr := (parser: *mut Parser) ?ast.Expr {
+  start := parser.current_span()
+  if !parser.consume_kind(.KwInline) return null
+  expr := parser.parse_expr() or return null
+  expr_ptr := parser.alloc_expr(expr) or return null
+  return .{
+    kind: ast.ExprKind.Inline(.{ expr: expr_ptr }),
+    span: merge_span(start, expr.span),
+  }
+}
+
+Parser.pattern_literal_from_token := (parser: Parser, tok: lexer.Token) ?ast.PatternLiteral {
+  _ = parser
+  if tok.kind == .IntLiteral return ast.PatternLiteral.Integer(tok.lexeme)
+  if tok.kind == .FloatLiteral return ast.PatternLiteral.Float(tok.lexeme)
+  if tok.kind == .StringLiteral return ast.PatternLiteral.String(tok.lexeme)
+  if tok.kind == .CharLiteral return ast.PatternLiteral.Char(0)
+  if tok.kind == .TrueLiteral return ast.PatternLiteral.Bool(true)
+  if tok.kind == .FalseLiteral return ast.PatternLiteral.Bool(false)
+  if tok.kind == .NullLiteral return ast.PatternLiteral.Null
+  return null
+}
+
+Parser.attach_match_capture := (parser: *mut Parser, pattern: ast.Pattern, binding: ast.Ident) ast.Pattern {
+  _ = parser
+  return match pattern.kind {
+    .EnumVariant: {
+      variant := pattern.kind.EnumVariant
+      if variant.bindings.len == 0 {
+        variant.bindings.push(binding).!
+      }
+      break .{
+        kind: ast.PatternKind.EnumVariant(variant),
+        span: pattern.span,
+      }
+    },
+    _: pattern,
+  }
+}
+
+Parser.token_unary_op := (parser: Parser, kind: lexer.TokenKind) ?ast.UnaryOp {
+  _ = parser
+  if kind == .Minus return .Neg
+  if kind == .Bang return .Not
+  if kind == .Tilde return .BitNot
+  if kind == .Ampersand return .Ref
+  return null
+}
+
+Parser.token_assign_op := (parser: Parser, kind: lexer.TokenKind) ?ast.AssignOp {
+  _ = parser
+  if kind == .Equal return .Assign
+  if kind == .PlusEqual return .AddAssign
+  if kind == .MinusEqual return .SubAssign
+  if kind == .StarEqual return .MulAssign
+  if kind == .SlashEqual return .DivAssign
+  if kind == .PercentEqual return .ModAssign
+  if kind == .AmpersandEqual return .BitAndAssign
+  if kind == .PipeEqual return .BitOrAssign
+  if kind == .CaretEqual return .BitXorAssign
+  if kind == .LeftShiftEqual return .ShlAssign
+  if kind == .RightShiftEqual return .ShrAssign
+  return null
+}
+
+Parser.current_is_ident := (parser: Parser) u1 {
+  tok := parser.current() or return false
+  return tok.kind == .Identifier
+}
+
+Parser.current_is_field_name := (parser: Parser) u1 {
+  tok := parser.current() or return false
+  return parser.token_can_be_field_name(tok.kind)
+}
+
+Parser.current_is_discard_ident := (parser: Parser) u1 {
+  tok := parser.current() or return false
+  if tok.kind != .Identifier return false
+  return parser.lexeme_is(tok.lexeme, "_")
+}
+
+Parser.current_can_start_pattern := (parser: Parser) u1 {
+  tok := parser.current() or return false
+  if tok.kind == .Identifier return true
+  if tok.kind == .Dot return true
+  if tok.kind == .IntLiteral return true
+  if tok.kind == .FloatLiteral return true
+  if tok.kind == .StringLiteral return true
+  if tok.kind == .CharLiteral return true
+  if tok.kind == .TrueLiteral return true
+  if tok.kind == .FalseLiteral return true
+  if tok.kind == .NullLiteral return true
+  if tok.kind == .LBracket return true
+  if tok.kind == .Star return true
+  if tok.kind == .Question return true
+  return false
+}
+
+Parser.next_is_colon := (parser: Parser) u1 {
+  mut next := parser.index
+  next += 1
+  if next >= parser.tokens.len return false
+  if parser.tokens[next].kind == .Colon return true
+  return false
+}
+
+Parser.parse_field_name := (parser: *mut Parser) ?ast.Ident {
+  tok := parser.current() or return null
+  if !parser.token_can_be_field_name(tok.kind) return null
+  parser.advance()
+  return .{
+    text: tok.lexeme,
+    span: tok.span,
+  }
+}
+
+Parser.previous_is_dot_dot_equal := (parser: Parser) u1 {
+  if parser.index == 0 return false
+  mut prev := parser.index
+  prev -= 1
+  if parser.tokens[prev].kind == .DotDotEqual return true
+  return false
+}
+
+Parser.lexeme_is := (parser: Parser, left: []u8, right: []u8) u1 {
+  _ = parser
+  if left.len != right.len return false
+  mut i: usize = 0
+  for i < left.len: {
+    if left[i] != right[i] return false
+    i += 1
+  }
+  return true
+}
+
+Parser.token_can_be_field_name := (parser: Parser, kind: lexer.TokenKind) u1 {
+  _ = parser
+  if kind == .Identifier return true
+  if kind == .KwPacked return true
+  if kind == .KwStruct return true
+  if kind == .KwEnum return true
+  if kind == .KwType return true
+  if kind == .KwComp return true
+  if kind == .KwPub return true
+  if kind == .KwMut return true
+  if kind == .KwUse return true
+  if kind == .KwIf return true
+  if kind == .KwElse return true
+  if kind == .KwFor return true
+  if kind == .KwMatch return true
+  if kind == .KwReturn return true
+  if kind == .KwBreak return true
+  if kind == .KwContinue return true
+  if kind == .KwDefer return true
+  if kind == .KwInline return true
+  if kind == .KwOr return true
+  return false
+}
+
+Parser.token_can_be_ident := (parser: Parser, kind: lexer.TokenKind) u1 {
+  return parser.token_can_be_field_name(kind) || kind == .KwModule || kind == .KwExtern
+}
+
+Parser.type_expr_is_unsigned_enum_repr := (parser: Parser, ty: ast.TypeExpr) u1 {
+  _ = parser
+  return match ty.kind {
+    .Named: {
+      name := ty.kind.Named.text
+      if str.eq(name, "u8") break true
+      if str.eq(name, "u16") break true
+      if str.eq(name, "u32") break true
+      if str.eq(name, "u64") break true
+      if str.eq(name, "usize") break true
+      break false
+    },
+    _: false,
+  }
+}
+
+Parser.expr_as_ident := (parser: Parser, expr: ast.Expr) ?ast.Ident {
+  _ = parser
+  return match expr.kind {
+    .Ident: { break expr.kind.Ident },
+    _: null,
+  }
+}
+
+Parser.current_is_type_start := (parser: Parser) u1 {
+  tok := parser.current() or return false
+  return tok.kind == .Identifier || tok.kind == .Question || tok.kind == .Star || tok.kind == .LBracket || tok.kind == .LParen || tok.kind == .KwType || tok.kind == .KwPacked || tok.kind == .KwStruct || tok.kind == .KwEnum
+}
+
+Parser.parse_type_expr_or_void := (parser: *mut Parser) ast.TypeExpr {
+  if parser.current_is_type_start() {
+    ty := parser.parse_type_expr()
+    if ty: |value| return value
+  }
+  return parser.void_type_expr()
+}
+
+Parser.void_type_expr := (parser: Parser) ast.TypeExpr {
+  span := parser.previous_span()
+  ident := ast.Ident.{ text: "void", span: span }
+  return .{
+    kind: ast.TypeExprKind.Named(ident),
+    span: span,
+  }
+}
+
+Parser.parse_error_list := (parser: *mut Parser) Vec(ast.Ident) {
+  errors := Vec(ast.Ident).init(parser.allocator)
+  for {
+    tok := parser.current() or break
+    if !parser.token_can_be_ident(tok.kind) break
+    error_ident := parser.parse_ident() or break
+    errors.push(error_ident).!
+    if !parser.consume_kind(.Comma) break
+  }
+  return errors
+}
+
+Parser.current_can_start_expr := (parser: Parser) u1 {
+  tok := parser.current() or return false
+  if tok.kind == .Identifier return true
+  if tok.kind == .BuiltinIdentifier return true
+  if tok.kind == .IntLiteral return true
+  if tok.kind == .FloatLiteral return true
+  if tok.kind == .StringLiteral return true
+  if tok.kind == .CharLiteral return true
+  if tok.kind == .TrueLiteral return true
+  if tok.kind == .FalseLiteral return true
+  if tok.kind == .NullLiteral return true
+  if tok.kind == .LParen return true
+  if tok.kind == .LBrace return true
+  if tok.kind == .LBracket return true
+  if tok.kind == .Dot return true
+  if tok.kind == .KwIf return true
+  if tok.kind == .KwMatch return true
+  if tok.kind == .KwFor return true
+  if tok.kind == .KwUse return true
+  if tok.kind == .KwReturn return true
+  if tok.kind == .KwBreak return true
+  if tok.kind == .KwContinue return true
+  if tok.kind == .KwComp return true
+  if tok.kind == .KwInline return true
+  if tok.kind == .KwPacked return true
+  if tok.kind == .KwStruct return true
+  if tok.kind == .KwEnum return true
+  if tok.kind == .KwType return true
+  if tok.kind == .Minus return true
+  if tok.kind == .Bang return true
+  if tok.kind == .Tilde return true
+  if tok.kind == .Ampersand return true
+  return false
+}
+
+Parser.expect_kind := (parser: *mut Parser, kind: lexer.TokenKind, message: []u8) u1 {
+  if parser.consume_kind(kind) return true
+  parser.error_here(.E3001, message)
+  return false
+}
+
+Parser.alloc_binding := (parser: *mut Parser, value: ast.Binding) ?*ast.Binding {
+  slice := parser.allocator.create_many(ast.Binding, 1) or return null
+  ptr := slice.ptr
+  ptr[0] = value
+  return ptr
+}
+
+Parser.alloc_extern := (parser: *mut Parser, value: ast.ExternDecl) ?*ast.ExternDecl {
+  slice := parser.allocator.create_many(ast.ExternDecl, 1) or return null
+  ptr := slice.ptr
+  ptr[0] = value
+  return ptr
+}
+
+Parser.alloc_type_binding := (parser: *mut Parser, value: ast.TypeBinding) ?*ast.TypeBinding {
+  slice := parser.allocator.create_many(ast.TypeBinding, 1) or return null
+  ptr := slice.ptr
+  ptr[0] = value
+  return ptr
+}
+
+Parser.alloc_expr := (parser: *mut Parser, value: ast.Expr) ?*ast.Expr {
+  slice := parser.allocator.create_many(ast.Expr, 1) or return null
+  ptr := slice.ptr
+  ptr[0] = value
+  return ptr
+}
+
+Parser.alloc_pattern := (parser: *mut Parser, value: ast.Pattern) ?*ast.Pattern {
+  slice := parser.allocator.create_many(ast.Pattern, 1) or return null
+  ptr := slice.ptr
+  ptr[0] = value
+  return ptr
+}
+
+Parser.alloc_type_expr := (parser: *mut Parser, value: ast.TypeExpr) ?*ast.TypeExpr {
+  slice := parser.allocator.create_many(ast.TypeExpr, 1) or return null
+  ptr := slice.ptr
+  ptr[0] = value
+  return ptr
+}
+
+Parser.consume_kind := (parser: *mut Parser, kind: lexer.TokenKind) u1 {
+  tok := parser.current() or return false
+  if tok.kind != kind return false
+  parser.advance()
+  return true
+}
+
+Parser.current := (parser: Parser) ?lexer.Token {
+  if parser.index >= parser.tokens.len return null
+  return parser.tokens[parser.index]
+}
+
+Parser.advance := (parser: *mut Parser) {
+  if parser.index < parser.tokens.len {
+    parser.index += 1
+  }
+  return
+}
+
+Parser.previous_span := (parser: Parser) diagnostics.SourceSpan {
+  if parser.index != 0 {
+    mut prev: usize = 0
+    for prev + $as(usize, 1) < parser.index: {
+      prev += 1
+    }
+    return parser.tokens[prev].span
+  }
+  return empty_span()
+}
+
+Parser.current_span := (parser: Parser) diagnostics.SourceSpan {
+  tok := parser.current() or return empty_span()
+  return tok.span
+}
+
+Parser.error_here := (parser: *mut Parser, code: diagnostics.DiagnosticCode, message: []u8) {
+  span := parser.current_span()
+  diag := diagnostics.Diagnostic.error(.Parser, code, message)
+  parser.diagnostics.push(diag.with_primary_file_label(parser.file_path, span, message)).!
+  return
+}
+
+pub merge_span := (left: diagnostics.SourceSpan, right: diagnostics.SourceSpan) diagnostics.SourceSpan => .{
+  start_byte: left.start_byte,
+  start_line: left.start_line,
+  start_col: left.start_col,
+  end_byte: right.end_byte,
+  end_line: right.end_line,
+  end_col: right.end_col,
+}
+
+pub empty_span := () diagnostics.SourceSpan => .{
+  start_byte: 0,
+  start_line: 0,
+  start_col: 0,
+  end_byte: 0,
+  end_line: 0,
+  end_col: 0,
 }

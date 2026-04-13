@@ -1,0 +1,17 @@
+module main
+
+main := () i32 {
+    mut sum := 0
+
+    if true sum = 1
+    if sum != 1 return 1
+
+    for 0..5: |i| {
+        if i == 1 continue
+        if i == 4 break
+        sum += i
+    }
+
+    if sum != 6 return 2
+    return 0
+}

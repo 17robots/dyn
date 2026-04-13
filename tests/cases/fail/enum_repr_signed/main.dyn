@@ -1,0 +1,10 @@
+module main
+
+Bad := enum(i32) {
+    thing,
+}
+
+main := () i32 {
+    _ = Bad.thing
+    return 0
+}

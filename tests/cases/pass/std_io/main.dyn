@@ -1,0 +1,21 @@
+module main
+
+io := use "std/io"
+mem := use "std/mem"
+os := use "std/os"
+
+main := () i32 {
+    mut arena := mem.Arena.init()
+    reader: io.Reader = os.stdin.reader()
+    writer := os.stdout.writer()
+    all := reader.read_all(arena.allocator()) or return 1
+    _ = all.len
+    io.write_uint(writer, 123)
+    io.write_int(writer, -45)
+    io.write_hex(writer, 255)
+    io.write_hex_upper(writer, 255)
+    io.write_float(writer, 1.5)
+    writer.println("x")
+    arena.deinit()
+    return 0
+}

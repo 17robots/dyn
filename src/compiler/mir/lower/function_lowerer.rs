@@ -48,7 +48,7 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
             }
         }
         HirExprKind::Literal(_) => BTreeSet::new(),
-        HirExprKind::Block { body } => {
+        HirExprKind::Block { body, .. } => {
             let mut all = BTreeSet::new();
             let mut cur = bound.clone();
             for e in body {
@@ -161,8 +161,8 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
             f
         }
         HirExprKind::For(for_expr) => match for_expr {
-            HirForExpr::Infinite { body } => collect_free_vars(body, bound),
-            HirForExpr::WhileLike { condition, body } => {
+            HirForExpr::Infinite { body, .. } => collect_free_vars(body, bound),
+            HirForExpr::WhileLike { condition, body, .. } => {
                 let mut f = collect_free_vars(condition, bound);
                 f.extend(collect_free_vars(body, bound));
                 f
@@ -187,6 +187,7 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
                 iterable,
                 binding,
                 body,
+                ..
             } => {
                 let mut f = collect_free_vars(iterable, bound);
                 let mut bb = bound.clone();
@@ -197,11 +198,11 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
                 f
             }
         },
-        HirExprKind::Break { value } | HirExprKind::Return { value } => value
+        HirExprKind::Break { value, .. } | HirExprKind::Return { value } => value
             .as_deref()
             .map(|v| collect_free_vars(v, bound))
             .unwrap_or_default(),
-        HirExprKind::Continue => BTreeSet::new(),
+        HirExprKind::Continue { .. } => BTreeSet::new(),
         HirExprKind::Defer { body, .. } => collect_free_vars(body, bound),
         HirExprKind::OrElse {
             value,
@@ -280,6 +281,7 @@ impl FunctionLowerer {
             inline_call_stack: Vec::new(),
             current_inline_module: None,
             loop_stack: Vec::new(),
+            block_break_stack: Vec::new(),
             or_break_stack: Vec::new(),
             deferred: Vec::new(),
             diagnostics: Vec::new(),
@@ -914,8 +916,15 @@ impl FunctionLowerer {
                     }),
                 )
             }
-            HirExprKind::Block { body } => {
+            HirExprKind::Block { label, body } => {
                 let defer_scope_start = self.deferred.len();
+                let join = self.new_block();
+                self.block_break_stack.push(BlockBreakContext {
+                    label: label.clone(),
+                    target: join,
+                    values: Vec::new(),
+                    defer_scope_start,
+                });
                 let mut end = block;
                 let mut last = None;
                 for value in body {
@@ -926,11 +935,25 @@ impl FunctionLowerer {
                     end = lowered.0;
                     last = lowered.1;
                 }
+                let mut break_ctx = self
+                    .block_break_stack
+                    .pop()
+                    .expect("block break context should exist");
+                let mut incoming_values = Vec::new();
                 if !self.is_terminated(end) {
                     end = self.emit_deferred_since(end, defer_scope_start, None);
+                    self.set_terminator(end, MirTerminator::Goto(join));
+                    if let Some(value) = last {
+                        incoming_values.push((end, value));
+                    }
                 }
+                incoming_values.append(&mut break_ctx.values);
                 self.deferred.truncate(defer_scope_start);
-                (end, last)
+                if self.is_terminated(end) && incoming_values.is_empty() {
+                    (end, None)
+                } else {
+                    (join, self.build_phi_value(join, incoming_values))
+                }
             }
             HirExprKind::If {
                 condition,
@@ -1056,7 +1079,7 @@ impl FunctionLowerer {
                 Some(self.push_eval(block, MirValue::Unknown, MirValueType::Unknown)),
             ),
             HirExprKind::For(for_expr) => self.lower_for(block, for_expr),
-            HirExprKind::Break { value } => {
+            HirExprKind::Break { label, value } => {
                 let mut at = block;
                 let mut break_value = None;
                 if let Some(value) = value {
@@ -1064,7 +1087,44 @@ impl FunctionLowerer {
                     at = end;
                     break_value = lowered;
                 }
-                if let Some(ctx) = self.loop_stack.last_mut() {
+                let loop_break_index = if let Some(label) = label {
+                    self.loop_stack
+                        .iter()
+                        .rposition(|ctx| ctx.label.as_deref() == Some(label.as_str()))
+                } else {
+                    None
+                };
+                let block_break_index = if let Some(label) = label {
+                    self.block_break_stack
+                        .iter()
+                        .rposition(|ctx| ctx.label.as_deref() == Some(label.as_str()))
+                } else if break_value.is_some() {
+                    self.block_break_stack.len().checked_sub(1)
+                } else {
+                    None
+                };
+                if let Some(idx) = loop_break_index {
+                    let break_target = self.loop_stack[idx].break_target;
+                    if let Some(value) = break_value {
+                        self.loop_stack[idx].break_values.push((at, value));
+                    }
+                    self.set_terminator(at, MirTerminator::Goto(break_target));
+                    (at, None)
+                } else if let Some(idx) = block_break_index {
+                    let (target, defer_scope_start) = {
+                        let ctx = self
+                            .block_break_stack
+                            .get(idx)
+                            .expect("block break context should exist");
+                        (ctx.target, ctx.defer_scope_start)
+                    };
+                    at = self.emit_deferred_since(at, defer_scope_start, None);
+                    if let Some(value) = break_value {
+                        self.block_break_stack[idx].values.push((at, value));
+                    }
+                    self.set_terminator(at, MirTerminator::Goto(target));
+                    (at, None)
+                } else if let Some(ctx) = self.loop_stack.last_mut() {
                     let break_target = ctx.break_target;
                     if let Some(value) = break_value {
                         ctx.break_values.push((at, value));
@@ -1085,8 +1145,16 @@ impl FunctionLowerer {
                     )
                 }
             }
-            HirExprKind::Continue => {
-                if let Some(ctx) = self.loop_stack.last().cloned() {
+            HirExprKind::Continue { label } => {
+                let loop_ctx = if let Some(label) = label {
+                    self.loop_stack
+                        .iter()
+                        .rfind(|ctx| ctx.label.as_deref() == Some(label.as_str()))
+                        .cloned()
+                } else {
+                    self.loop_stack.last().cloned()
+                };
+                if let Some(ctx) = loop_ctx {
                     self.set_terminator(block, MirTerminator::Goto(ctx.continue_target));
                     (block, None)
                 } else {
@@ -1215,6 +1283,7 @@ impl FunctionLowerer {
                     inline_call_stack: Vec::new(),
                     current_inline_module: None,
                     loop_stack: Vec::new(),
+                    block_break_stack: Vec::new(),
                     or_break_stack: Vec::new(),
                     deferred: Vec::new(),
                     diagnostics: Vec::new(),
@@ -1410,6 +1479,7 @@ impl FunctionLowerer {
                 inclusive,
                 binding,
                 body,
+                ..
             }) => {
                 self.lower_inline_range_for(block, start, end, *inclusive, binding.as_deref(), body)
             }
@@ -1419,6 +1489,7 @@ impl FunctionLowerer {
                 iterable,
                 binding,
                 body,
+                ..
             }) if matches!(&iterable.kind, HirExprKind::Call { callee, .. } if matches!(&callee.kind, HirExprKind::Ident(n) if n == "$fields")) =>
             {
                 let HirExprKind::Call { args, .. } = &iterable.kind else {
@@ -1535,6 +1606,7 @@ impl FunctionLowerer {
                 iterable,
                 binding,
                 body,
+                ..
             }) if matches!(
                 &iterable.kind,
                 HirExprKind::StructLiteral {
@@ -1590,6 +1662,7 @@ impl FunctionLowerer {
                 iterable,
                 binding,
                 body,
+                ..
             }) if matches!(&iterable.kind, HirExprKind::Ident(_)) => {
                 let HirExprKind::Ident(ident_name) = &iterable.kind else {
                     unreachable!()
@@ -1657,10 +1730,10 @@ impl FunctionLowerer {
         body: &HirExpr,
     ) -> (MirBlockId, Option<MirValueId>) {
         let Some(start_value) = self.comptime_i64(start) else {
-            return self.lower_range_loop(block, start, end, inclusive, binding, body);
+            return self.lower_range_loop(block, None, start, end, inclusive, binding, body);
         };
         let Some(end_value_raw) = self.comptime_i64(end) else {
-            return self.lower_range_loop(block, start, end, inclusive, binding, body);
+            return self.lower_range_loop(block, None, start, end, inclusive, binding, body);
         };
         let end_value = if inclusive {
             match end_value_raw.checked_add(1) {
@@ -2251,22 +2324,36 @@ impl FunctionLowerer {
         for_expr: &HirForExpr,
     ) -> (MirBlockId, Option<MirValueId>) {
         match for_expr {
-            HirForExpr::Infinite { body } => self.lower_infinite_loop(block, body),
-            HirForExpr::WhileLike { condition, body } => {
-                self.lower_while_like_loop(block, condition, body)
+            HirForExpr::Infinite { label, body } => {
+                self.lower_infinite_loop(block, label.as_deref(), body)
             }
+            HirForExpr::WhileLike {
+                label,
+                condition,
+                body,
+            } => self.lower_while_like_loop(block, label.as_deref(), condition, body),
             HirForExpr::Range {
+                label,
                 start,
                 end,
                 inclusive,
                 binding,
                 body,
-            } => self.lower_range_loop(block, start, end, *inclusive, binding.as_deref(), body),
+            } => self.lower_range_loop(
+                block,
+                label.as_deref(),
+                start,
+                end,
+                *inclusive,
+                binding.as_deref(),
+                body,
+            ),
             HirForExpr::Iterate {
+                label,
                 iterable,
                 binding,
                 body,
-            } => self.lower_iterate_loop(block, iterable, binding.as_deref(), body),
+            } => self.lower_iterate_loop(block, label.as_deref(), iterable, binding.as_deref(), body),
         }
     }
 
@@ -2278,10 +2365,12 @@ impl FunctionLowerer {
 
     pub(super) fn push_loop_context(
         &mut self,
+        label: Option<&str>,
         continue_target: MirBlockId,
         break_target: MirBlockId,
     ) {
         self.loop_stack.push(LoopContext {
+            label: label.map(ToString::to_string),
             continue_target,
             break_target,
             break_values: Vec::new(),
@@ -2403,6 +2492,7 @@ impl FunctionLowerer {
     pub(super) fn lower_range_loop(
         &mut self,
         block: MirBlockId,
+        label: Option<&str>,
         start: &HirExpr,
         end: &HirExpr,
         inclusive: bool,
@@ -2475,7 +2565,7 @@ impl FunctionLowerer {
             );
         }
 
-        self.push_loop_context(step_block, exit);
+        self.push_loop_context(label, step_block, exit);
 
         let prev_binding = binding.map(|name| self.save_local_binding(name, iter_value));
         let (body_end, _) = self.lower_expr(body_block, body);
@@ -2508,6 +2598,7 @@ impl FunctionLowerer {
     pub(super) fn lower_iterate_loop(
         &mut self,
         block: MirBlockId,
+        label: Option<&str>,
         iterable: &HirExpr,
         binding: Option<&str>,
         body: &HirExpr,
@@ -2577,7 +2668,7 @@ impl FunctionLowerer {
             );
         }
 
-        self.push_loop_context(step_block, exit);
+        self.push_loop_context(label, step_block, exit);
 
         let (body_start, prev_binding) = if let Some(name) = binding {
             let element_value = if self
@@ -2632,6 +2723,7 @@ impl FunctionLowerer {
     pub(super) fn lower_infinite_loop(
         &mut self,
         block: MirBlockId,
+        label: Option<&str>,
         body: &HirExpr,
     ) -> (MirBlockId, Option<MirValueId>) {
         let header = self.new_block();
@@ -2641,7 +2733,7 @@ impl FunctionLowerer {
         self.set_goto_if_not_terminated(block, header);
         self.set_goto_if_not_terminated(header, body_block);
 
-        self.push_loop_context(header, exit);
+        self.push_loop_context(label, header, exit);
 
         let (body_end, _) = self.lower_expr(body_block, body);
         self.set_goto_if_not_terminated(body_end, header);
@@ -2652,6 +2744,7 @@ impl FunctionLowerer {
     pub(super) fn lower_while_like_loop(
         &mut self,
         block: MirBlockId,
+        label: Option<&str>,
         condition: &HirExpr,
         body: &HirExpr,
     ) -> (MirBlockId, Option<MirValueId>) {
@@ -2683,7 +2776,7 @@ impl FunctionLowerer {
             );
         }
 
-        self.push_loop_context(step_block, exit);
+        self.push_loop_context(label, step_block, exit);
         let (body_end, _) = self.lower_expr(body_block, body);
         self.set_goto_if_not_terminated(body_end, step_block);
         self.finalize_loop_carried_locals(header, step_block, &carried);
@@ -2697,15 +2790,23 @@ impl FunctionLowerer {
         exit: MirBlockId,
         break_values: Vec<(MirBlockId, MirValueId)>,
     ) -> Option<MirValueId> {
-        if break_values.is_empty() {
+        self.build_phi_value(exit, break_values)
+    }
+
+    pub(super) fn build_phi_value(
+        &mut self,
+        exit: MirBlockId,
+        sources: Vec<(MirBlockId, MirValueId)>,
+    ) -> Option<MirValueId> {
+        if sources.is_empty() {
             return None;
         }
-        if break_values.len() == 1 {
-            return Some(break_values[0].1);
+        if sources.len() == 1 {
+            return Some(sources[0].1);
         }
 
         let dest = self.fresh_value();
-        let phi_ty = break_values
+        let phi_ty = sources
             .iter()
             .filter_map(|(_, value)| self.value_types.get(value))
             .cloned()
@@ -2715,7 +2816,7 @@ impl FunctionLowerer {
             .instructions
             .push(MirInstr::Phi {
                 dest,
-                sources: break_values,
+                sources,
                 ty: phi_ty.clone(),
             });
         self.value_types.insert(dest, phi_ty);
@@ -3914,12 +4015,12 @@ impl FunctionLowerer {
                     },
                     enum_u8.clone(),
                 );
-                #[cfg(target_arch = "x86_64")]
-                let (arch_variant, arch_tag) = ("x86_64", 0i64);
-                #[cfg(target_arch = "aarch64")]
-                let (arch_variant, arch_tag) = ("aarch64", 1i64);
-                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                let (arch_variant, arch_tag) = ("x86_64", 0i64);
+                let (arch_variant, arch_tag) = match self.build_config.target.as_deref() {
+                    Some(target) if target.starts_with("aarch64-") => ("aarch64", 1i64),
+                    Some(target) if target.starts_with("riscv64-") => ("riscv64", 2i64),
+                    Some(target) if target.starts_with("wasm32-") => ("wasm32", 3i64),
+                    _ => ("x86_64", 0i64),
+                };
                 let arch = self.push_eval(
                     block,
                     MirValue::EnumVariant {
@@ -3931,14 +4032,12 @@ impl FunctionLowerer {
                     },
                     enum_u8.clone(),
                 );
-                #[cfg(target_os = "linux")]
-                let (os_variant, os_tag) = ("linux", 0i64);
-                #[cfg(target_os = "macos")]
-                let (os_variant, os_tag) = ("macos", 1i64);
-                #[cfg(target_os = "windows")]
-                let (os_variant, os_tag) = ("windows", 2i64);
-                #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-                let (os_variant, os_tag) = ("freestanding", 3i64);
+                let (os_variant, os_tag) = match self.build_config.target.as_deref() {
+                    Some("linux") => ("linux", 0i64),
+                    Some("macos") => ("macos", 1i64),
+                    Some("windows") => ("windows", 2i64),
+                    _ => ("freestanding", 3i64),
+                };
                 let os = self.push_eval(
                     block,
                     MirValue::EnumVariant {
@@ -4060,7 +4159,7 @@ impl FunctionLowerer {
                 locals.insert(name.clone(), value.clone());
                 Some(value)
             }
-            HirExprKind::Block { body } => {
+            HirExprKind::Block { body, .. } => {
                 let mut scope = locals.clone();
                 let mut last = None;
                 for value in body {
@@ -4332,27 +4431,21 @@ impl FunctionLowerer {
                                 Some(ComptimeValue::Literal(HirLiteral::Integer(tag.to_string())))
                             }
                             "arch" => {
-                                #[cfg(target_arch = "x86_64")]
-                                let tag = 0i64;
-                                #[cfg(target_arch = "aarch64")]
-                                let tag = 1i64;
-                                #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-                                let tag = 0i64;
+                                let tag = match self.build_config.target.as_deref() {
+                                    Some(target) if target.starts_with("aarch64-") => 1i64,
+                                    Some(target) if target.starts_with("riscv64-") => 2i64,
+                                    Some(target) if target.starts_with("wasm32-") => 3i64,
+                                    _ => 0i64,
+                                };
                                 Some(ComptimeValue::Literal(HirLiteral::Integer(tag.to_string())))
                             }
                             "os" => {
-                                #[cfg(target_os = "linux")]
-                                let tag = 0i64;
-                                #[cfg(target_os = "macos")]
-                                let tag = 1i64;
-                                #[cfg(target_os = "windows")]
-                                let tag = 2i64;
-                                #[cfg(not(any(
-                                    target_os = "linux",
-                                    target_os = "macos",
-                                    target_os = "windows"
-                                )))]
-                                let tag = 3i64;
+                                let tag = match self.build_config.target.as_deref() {
+                                    Some("linux") => 0i64,
+                                    Some("macos") => 1i64,
+                                    Some("windows") => 2i64,
+                                    _ => 3i64,
+                                };
                                 Some(ComptimeValue::Literal(HirLiteral::Integer(tag.to_string())))
                             }
                             _ => None,

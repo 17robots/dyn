@@ -8,11 +8,14 @@ use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::compiler::diagnostics::normalize_diagnostic_path;
 use crate::compiler::diagnostics::sort_diagnostics_by_primary_path;
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
 
 const STD_COLLECTION_DIR: &str = "std";
 const STD_PATH_ENV: &str = "DYN_STD_PATH";
+const STD_HOST_PLATFORM_ENV: &str = "DYN_STD_HOST_PLATFORM";
+const STD_HOST_LOGICAL_PATH: &str = "std/platform/host.dyn";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleKey {
@@ -65,6 +68,45 @@ pub fn configured_std_root_dir() -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+fn configured_std_host_platform() -> &'static str {
+    match std::env::var(STD_HOST_PLATFORM_ENV).ok().as_deref() {
+        Some("linux") => "linux",
+        Some("macos") => "macos",
+        Some("windows") => "windows",
+        _ => {
+            if cfg!(target_os = "windows") {
+                "windows"
+            } else if cfg!(target_os = "macos") {
+                "macos"
+            } else {
+                "linux"
+            }
+        }
+    }
+}
+
+fn generated_std_host_platform_source() -> String {
+    let platform = configured_std_host_platform();
+    format!(
+        "module host\n\nplatform := use \"std/platform/{platform}\"\nAllocator := (use \"std/mem\").Allocator\n\npub open_readonly := (path: *any) i32 => platform.open_readonly(path)\npub close := (fd: i32) i32 => platform.close(fd)\npub read := (fd: i32, buf: *any, len: usize) isize => platform.read(fd, buf, len)\npub write := (fd: i32, buf: *any, len: usize) isize => platform.write(fd, buf, len)\npub getenv := (name: *any) ?*any => platform.getenv(name)\npub fork := () i32 => platform.fork()\npub execvp := (file: *any, argv: *any) i32 => platform.execvp(file, argv)\npub waitpid := (pid: i32, status: *i32, options: i32) i32 => platform.waitpid(pid, status, options)\npub exit := (code: i32) {{ platform.exit(code); return }}\npub wexitstatus := (status: i32) i32 => platform.wexitstatus(status)\npub spawn_process := (file: *any, argv: *any) i32 => platform.spawn_process(file, argv)\npub path_sep := () u8 => platform.path_sep()\npub path_is_abs := (path: []u8) u1 => platform.path_is_abs(path)\npub path_dirname := (path: []u8) []u8 => platform.path_dirname(path)\npub path_basename := (path: []u8) []u8 => platform.path_basename(path)\npub path_join := (base: []u8, part: []u8, alloc: Allocator) ?[]u8 => platform.path_join(base, part, alloc)\npub process_args := (alloc: Allocator) ?[][]u8 => platform.process_args(alloc)\n"
+    )
+}
+
+fn generated_std_host_platform_file() -> Result<PathBuf, ModuleResolverError> {
+    let platform = configured_std_host_platform();
+    let path = std::env::temp_dir().join(format!("dyn_std_host_{platform}.dyn"));
+    let desired = generated_std_host_platform_source();
+    let current = fs::read_to_string(&path).unwrap_or_default();
+    if current == desired {
+        return Ok(path);
+    }
+    fs::write(&path, desired).map_err(|source| ModuleResolverError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(path)
 }
 
 pub fn normalize_import_path(import_path: &str) -> String {
@@ -126,6 +168,12 @@ pub fn module_key_for_import(current: &ModuleKey, import_path: &str) -> ModuleKe
 }
 
 pub fn resolve_graph_file_path(graph: &ModuleGraph, logical_file_path: &Path) -> PathBuf {
+    if normalize_diagnostic_path(logical_file_path) == STD_HOST_LOGICAL_PATH {
+        if let Ok(path) = generated_std_host_platform_file() {
+            return path;
+        }
+    }
+
     let project_candidate = graph.root_dir.join(logical_file_path);
     if project_candidate.is_file() {
         return project_candidate;
@@ -316,8 +364,9 @@ fn scan_use_import_paths(source: &str) -> Vec<String> {
 }
 
 fn filter_graph_to_reachable_modules(graph: &mut ModuleGraph, bin: Option<&str>) {
-    // Seed reachability. If `--bin <name>` is given, start from only that subdirectory's modules.
-    // Otherwise, start from all project modules (any directory in the graph that isn't std/).
+    // Seed reachability from explicit entry modules.
+    // If `--bin <name>` is given, start from that directory's modules.
+    // Otherwise, start from root project modules only (`.`), then follow imports.
     let mut reachable: BTreeSet<ModuleKey> = BTreeSet::new();
     let mut queue: VecDeque<ModuleKey> = if let Some(bin_name) = bin {
         let bin_dir = PathBuf::from(bin_name);
@@ -328,13 +377,21 @@ fn filter_graph_to_reachable_modules(graph: &mut ModuleGraph, bin: Option<&str>)
             .cloned()
             .collect()
     } else {
-        // All non-std modules are potential entry roots
-        graph
+        let mut roots = graph
             .key_to_id
             .keys()
-            .filter(|key| !key.directory.starts_with("std"))
+            .filter(|key| key.directory == Path::new("."))
             .cloned()
-            .collect()
+            .collect::<VecDeque<_>>();
+        if roots.is_empty() {
+            roots = graph
+                .key_to_id
+                .keys()
+                .filter(|key| !key.directory.starts_with("std"))
+                .cloned()
+                .collect();
+        }
+        roots
     };
 
     while let Some(key) = queue.pop_front() {
@@ -360,6 +417,20 @@ fn filter_graph_to_reachable_modules(graph: &mut ModuleGraph, bin: Option<&str>)
     }
 
     graph.groups.retain(|key, _| reachable.contains(key));
+    let retained_files = graph
+        .groups
+        .values()
+        .flat_map(|files| files.iter())
+        .map(|path| normalize_diagnostic_path(path))
+        .collect::<BTreeSet<_>>();
+    graph.diagnostics.retain(|diagnostic| {
+        diagnostic.labels.is_empty()
+            || diagnostic
+                .labels
+                .iter()
+                .any(|label| retained_files.contains(&normalize_diagnostic_path(&label.file_path)))
+    });
+    sort_diagnostics_by_primary_path(&mut graph.diagnostics);
     let (modules, key_to_id) = build_module_index(&graph.groups);
     graph.key_to_id = key_to_id;
     graph.modules = modules;

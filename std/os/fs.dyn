@@ -1,11 +1,25 @@
 module os
 
-Allocator := (use "std/mem").Allocator
-open_ro := extern (path: *any, flags: i32, mode: i32) i32 = "open"
-close_fd := extern (fd: i32) i32 = "close"
+host_fs_platform := use "std/platform/host"
+host_open_readonly_fn := host_fs_platform.open_readonly
+host_close_fn := host_fs_platform.close
 
 pub read_file := (path: []u8, alloc: Allocator) ?[]u8 {
-    _path := path
-    _alloc := alloc
-    return null
+    raw := alloc.alloc(path.len + 1, $as(usize, $alignof(u8))) or return null
+    c_path: []u8 = .{ ptr: $as(*u8, raw), len: path.len + 1 }
+    mut i: usize = 0
+    for i < path.len: {
+        c_path[i] = path[i]
+        i += 1
+    }
+    c_path[path.len] = 0
+
+    fd := host_open_readonly_fn($as(*any, c_path.ptr))
+    alloc.destroy_many(u8, c_path)
+    if fd < 0 return null
+
+    file := File.{ fd: fd }
+    data := file.reader().read_all(alloc)
+    _ = host_close_fn(fd)
+    return data
 }

@@ -1,0 +1,11 @@
+module main
+
+Pair := struct {
+    first: i32,
+    second: i32,
+}
+
+main := () i32 {
+    _ = Pair{ first: 1 second: 2 }
+    return 0
+}

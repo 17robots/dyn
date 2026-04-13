@@ -1,0 +1,13 @@
+module main
+
+classify_bytes := (bytes: []u8) i32 {
+    return comp match $typeof(bytes) {
+        []u8: 1,
+        _: 0,
+    }
+}
+
+main := () i32 {
+    if classify_bytes("hello") != 1 return 1
+    return 0
+}

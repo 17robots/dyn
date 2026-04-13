@@ -1,8 +1,10 @@
 module main
 
+mem := use "std/mem"
 str := use "std/str"
 
 main := () i32 {
+    mut arena := mem.Arena.init()
     a: []u8 = "alpha"
     b: []u8 = "alpha"
     c: []u8 = "beta"
@@ -25,7 +27,12 @@ main := () i32 {
     _ = str.parse_int("-45")
     _ = str.parse_hex_uint("ff")
     _ = str.parse_float("3.5")
+    parts := str.split("a:b:c", ':', arena.allocator()) or return 1
+    _ = parts.len
+    repeated := str.repeat("xy", 3, arena.allocator()) or return 2
+    _ = repeated.len
 
     _ = c
+    arena.deinit()
     return 0
 }

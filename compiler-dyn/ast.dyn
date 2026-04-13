@@ -1,7 +1,7 @@
 module ast
 
 SourceSpan := (use "diagnostics").SourceSpan
-Vec := (use "collections").Vec
+Vec := (use "std/collections").Vec
 
 pub Ident := struct { text: []u8, span: SourceSpan }
 pub Label := struct { name: Ident, span: SourceSpan }
@@ -47,7 +47,7 @@ pub Literal := enum {
   Float: []u8,
   String: []u8,
   Char: []u8,
-  Bool: []u8,
+  U1: u1,
   Null,
 }
 pub CallExpr := struct { callee: *Expr, args: Vec(CallArg) }
@@ -76,7 +76,7 @@ pub StructLiteralExpr := struct { root_type: ?Ident, fields: Vec(StructLiteralFi
 pub StructLiteralField := struct { name: Ident, value: ?Expr }
 pub EnumVariantExpr := struct { root: ?Ident, variant: Ident, payload: Vec(Expr) }
 pub FnExpr := struct { params: Vec(FnParam), return_type: ?TypeExpr, body: FnBody }
-pub FnParam := struct { name: Ident, ty: ?TypeExpr, default_value: ?Expr, comp: u1 }
+pub FnParam := struct { name: Ident, ty: ?TypeExpr, default_value: ?Expr, is_comp: u1 }
 pub FnBody := enum { Block: BlockExpr, ArrowExpr: *Expr }
 pub FileId := usize
 pub ItemId := usize
@@ -137,7 +137,10 @@ pub PatternKind := enum {
   Wildcard,
   Literal: PatternLiteral,
   IdentBind: Ident,
-  Range: struct { start: *Pattern, end: *Pattern, inclusive: u1 }
+  Range: struct { start: *Pattern, end: *Pattern, inclusive: u1 },
+  EnumVariant: struct { root: ?Ident, variant: Ident, bindings: Vec(Ident) },
+  Typed: struct { pattern: *Pattern, ty: TypeExpr },
+  TypeLiteral: TypeExpr
 }
 pub PatternLiteral := enum {
   Integer: []u8,
@@ -167,4 +170,3 @@ pub StructFieldType := struct { name: Ident, ty: TypeExpr, default_value: ?Expr 
 pub StructMemberType := struct { name: Ident, value: Expr }
 pub EnumType := struct { repr: ?*TypeExpr, variants: Vec(EnumVariantType), members: Vec(StructMemberType) }
 pub EnumVariantType := struct { name: Ident, payload: ?TypeExpr }
-

@@ -110,6 +110,7 @@ pub enum HirExprKind {
         payload: Vec<HirExpr>,
     },
     Block {
+        label: Option<String>,
         body: Vec<HirExpr>,
     },
     Let {
@@ -130,9 +131,12 @@ pub enum HirExprKind {
     },
     For(HirForExpr),
     Break {
+        label: Option<String>,
         value: Option<Box<HirExpr>>,
     },
-    Continue,
+    Continue {
+        label: Option<String>,
+    },
     Return {
         value: Option<Box<HirExpr>>,
     },
@@ -174,13 +178,16 @@ pub enum HirExprKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirForExpr {
     Infinite {
+        label: Option<String>,
         body: Box<HirExpr>,
     },
     WhileLike {
+        label: Option<String>,
         condition: Box<HirExpr>,
         body: Box<HirExpr>,
     },
     Range {
+        label: Option<String>,
         start: Box<HirExpr>,
         end: Box<HirExpr>,
         inclusive: bool,
@@ -188,6 +195,7 @@ pub enum HirForExpr {
         body: Box<HirExpr>,
     },
     Iterate {
+        label: Option<String>,
         iterable: Box<HirExpr>,
         binding: Option<String>,
         body: Box<HirExpr>,
@@ -642,7 +650,6 @@ fn is_predeclared_type_name(name: &str) -> bool {
             | "void"
             | "usize"
             | "isize"
-            | "bool"
     )
 }
 
@@ -1161,7 +1168,7 @@ fn rewrite_method_calls_with_scopes(
                 .map(|expr| rewrite_method_calls_with_scopes(expr, method_index, scopes))
                 .collect(),
         },
-        HirExprKind::Block { body } => {
+        HirExprKind::Block { label, body } => {
             scopes.push(BTreeMap::new());
             let mut out = Vec::with_capacity(body.len());
             for expr in body {
@@ -1200,7 +1207,7 @@ fn rewrite_method_calls_with_scopes(
                 out.push(rewritten);
             }
             scopes.pop();
-            HirExprKind::Block { body: out }
+            HirExprKind::Block { label, body: out }
         }
         HirExprKind::Let {
             name,
@@ -1260,7 +1267,8 @@ fn rewrite_method_calls_with_scopes(
                 .collect(),
         },
         HirExprKind::For(for_expr) => HirExprKind::For(for_expr),
-        HirExprKind::Break { value } => HirExprKind::Break {
+        HirExprKind::Break { label, value } => HirExprKind::Break {
+            label,
             value: value.map(|expr| {
                 Box::new(rewrite_method_calls_with_scopes(
                     *expr,
@@ -1518,7 +1526,7 @@ fn infer_nominal_type(
                 _ => None,
             }
         }
-        HirExprKind::Block { body } => body
+        HirExprKind::Block { body, .. } => body
             .last()
             .and_then(|expr| infer_nominal_type(expr, scopes, method_index)),
         _ => None,
@@ -1807,36 +1815,54 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
                 .map(|payload| lower_expr(payload, enum_root_index))
                 .collect(),
         },
-        ExprKind::Block(block) => HirExprKind::Block {
-            body: {
-                let mut body = Vec::new();
-                for stmt in &block.statements {
-                    match stmt {
-                        crate::compiler::ast::Stmt::Binding(binding) => {
-                            body.push(HirExpr {
-                                kind: HirExprKind::Let {
-                                    name: binding.name.text.clone(),
-                                    mutable: binding.mutable,
-                                    type_hint: binding.annotation.as_ref().map(type_expr_to_string),
-                                    value: Box::new(lower_expr(&binding.value, enum_root_index)),
-                                },
-                                span: binding.span,
-                            });
-                        }
-                        crate::compiler::ast::Stmt::Destructure(d) => {
-                            lower_destructure_stmt(d, enum_root_index, &mut body);
-                        }
-                        crate::compiler::ast::Stmt::Expr(expr) => {
-                            body.push(lower_expr(expr, enum_root_index));
-                        }
+        ExprKind::Block(block) => {
+            if block.statements.is_empty() {
+                if let (Some(label), Some(tail)) = (&block.label, &block.tail_expr) {
+                    if let ExprKind::For(for_expr) = &tail.kind {
+                        return HirExpr {
+                            kind: HirExprKind::For(lower_for_expr(
+                                for_expr,
+                                Some(label.name.text.clone()),
+                                enum_root_index,
+                            )),
+                            span: expr.span,
+                        };
                     }
                 }
-                if let Some(tail) = &block.tail_expr {
-                    body.push(lower_expr(tail, enum_root_index));
-                }
-                body
-            },
-        },
+            }
+
+            HirExprKind::Block {
+                label: block.label.as_ref().map(|label| label.name.text.clone()),
+                body: {
+                    let mut body = Vec::new();
+                    for stmt in &block.statements {
+                        match stmt {
+                            crate::compiler::ast::Stmt::Binding(binding) => {
+                                body.push(HirExpr {
+                                    kind: HirExprKind::Let {
+                                        name: binding.name.text.clone(),
+                                        mutable: binding.mutable,
+                                        type_hint: binding.annotation.as_ref().map(type_expr_to_string),
+                                        value: Box::new(lower_expr(&binding.value, enum_root_index)),
+                                    },
+                                    span: binding.span,
+                                });
+                            }
+                            crate::compiler::ast::Stmt::Destructure(d) => {
+                                lower_destructure_stmt(d, enum_root_index, &mut body);
+                            }
+                            crate::compiler::ast::Stmt::Expr(expr) => {
+                                body.push(lower_expr(expr, enum_root_index));
+                            }
+                        }
+                    }
+                    if let Some(tail) = &block.tail_expr {
+                        body.push(lower_expr(tail, enum_root_index));
+                    }
+                    body
+                },
+            }
+        }
         ExprKind::If(if_expr) => {
             let n_bindings = if_expr
                 .capture
@@ -1897,48 +1923,17 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
                 })
                 .collect(),
         },
-        ExprKind::For(for_expr) => HirExprKind::For(match for_expr {
-            crate::compiler::ast::ForExpr::Infinite { body } => {
-                crate::compiler::hir::HirForExpr::Infinite {
-                    body: Box::new(lower_expr(body, enum_root_index)),
-                }
-            }
-            crate::compiler::ast::ForExpr::WhileLike { condition, body } => {
-                crate::compiler::hir::HirForExpr::WhileLike {
-                    condition: Box::new(lower_expr(condition, enum_root_index)),
-                    body: Box::new(lower_expr(body, enum_root_index)),
-                }
-            }
-            crate::compiler::ast::ForExpr::Range {
-                start,
-                end,
-                inclusive,
-                binding,
-                body,
-            } => crate::compiler::hir::HirForExpr::Range {
-                start: Box::new(lower_expr(start, enum_root_index)),
-                end: Box::new(lower_expr(end, enum_root_index)),
-                inclusive: *inclusive,
-                binding: binding.as_ref().map(|ident| ident.text.clone()),
-                body: Box::new(lower_expr(body, enum_root_index)),
-            },
-            crate::compiler::ast::ForExpr::Iterate {
-                iterable,
-                binding,
-                body,
-            } => crate::compiler::hir::HirForExpr::Iterate {
-                iterable: Box::new(lower_expr(iterable, enum_root_index)),
-                binding: binding.as_ref().map(|ident| ident.text.clone()),
-                body: Box::new(lower_expr(body, enum_root_index)),
-            },
-        }),
+        ExprKind::For(for_expr) => HirExprKind::For(lower_for_expr(for_expr, None, enum_root_index)),
         ExprKind::Break(brk) => HirExprKind::Break {
+            label: brk.label.as_ref().map(|label| label.name.text.clone()),
             value: brk
                 .value
                 .as_ref()
                 .map(|value| Box::new(lower_expr(value, enum_root_index))),
         },
-        ExprKind::Continue { .. } => HirExprKind::Continue,
+        ExprKind::Continue { label } => HirExprKind::Continue {
+            label: label.as_ref().map(|label| label.name.text.clone()),
+        },
         ExprKind::Return { value } => HirExprKind::Return {
             value: value
                 .as_ref()
@@ -1977,6 +1972,7 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
             let body = match &fn_expr.body {
                 crate::compiler::ast::FnBody::Block(block) => HirExpr {
                     kind: HirExprKind::Block {
+                        label: None,
                         body: {
                             let mut body = Vec::new();
                             for stmt in &block.statements {
@@ -2067,6 +2063,50 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
     HirExpr {
         kind,
         span: expr.span,
+    }
+}
+
+fn lower_for_expr(
+    for_expr: &crate::compiler::ast::ForExpr,
+    label: Option<String>,
+    enum_root_index: &EnumRootIndex,
+) -> crate::compiler::hir::HirForExpr {
+    match for_expr {
+        crate::compiler::ast::ForExpr::Infinite { body } => crate::compiler::hir::HirForExpr::Infinite {
+            label,
+            body: Box::new(lower_expr(body, enum_root_index)),
+        },
+        crate::compiler::ast::ForExpr::WhileLike { condition, body } => {
+            crate::compiler::hir::HirForExpr::WhileLike {
+                label,
+                condition: Box::new(lower_expr(condition, enum_root_index)),
+                body: Box::new(lower_expr(body, enum_root_index)),
+            }
+        }
+        crate::compiler::ast::ForExpr::Range {
+            start,
+            end,
+            inclusive,
+            binding,
+            body,
+        } => crate::compiler::hir::HirForExpr::Range {
+            label,
+            start: Box::new(lower_expr(start, enum_root_index)),
+            end: Box::new(lower_expr(end, enum_root_index)),
+            inclusive: *inclusive,
+            binding: binding.as_ref().map(|ident| ident.text.clone()),
+            body: Box::new(lower_expr(body, enum_root_index)),
+        },
+        crate::compiler::ast::ForExpr::Iterate {
+            iterable,
+            binding,
+            body,
+        } => crate::compiler::hir::HirForExpr::Iterate {
+            label,
+            iterable: Box::new(lower_expr(iterable, enum_root_index)),
+            binding: binding.as_ref().map(|ident| ident.text.clone()),
+            body: Box::new(lower_expr(body, enum_root_index)),
+        },
     }
 }
 

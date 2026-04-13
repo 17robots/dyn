@@ -38,10 +38,8 @@ pub Allocator.realloc := (self: Allocator, ptr: *any, old_size: usize, new_size:
 }
 
 pub Allocator.create := (self: Allocator, T: comp type) ?*T {
-    size := $as(usize, $sizeof(T))
-    if size == 0 return $as(*T, $as(usize, 1))
-    raw := self.alloc(size, $as(usize, $alignof(T))) or return null
-    return $as(*T, raw)
+    one := self.create_many(T, 1) or return null
+    return one.ptr
 }
 
 pub Allocator.destroy := (self: Allocator, T: comp type, ptr: *T) {
@@ -98,4 +96,30 @@ pub Allocator.resize_many := (self: Allocator, T: comp type, slice: []T, new_n: 
         $as(usize, $alignof(T)),
     ) or return null
     return .{ ptr: $as(*T, raw), len: new_n }
+}
+
+pub eql := (T: comp type, a: []T, b: []T) u1 {
+    if a.len != b.len return false
+
+    elem_size := $as(usize, $sizeof(T))
+    if elem_size == 0 return true
+
+    mut bytes := a.len
+    bytes *= elem_size
+    return eql_bytes($as(*u8, a.ptr), $as(*u8, b.ptr), bytes)
+}
+
+pub eql_value := (T: comp type, a: *T, b: *T) u1 {
+    elem_size := $as(usize, $sizeof(T))
+    if elem_size == 0 return true
+    return eql_bytes($as(*u8, a), $as(*u8, b), elem_size)
+}
+
+eql_bytes := (a: *u8, b: *u8, len: usize) u1 {
+    mut i: usize = 0
+    for i < len: {
+        if a[i] != b[i] return false
+        i += 1
+    }
+    return true
 }

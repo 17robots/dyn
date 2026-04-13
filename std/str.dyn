@@ -7,7 +7,7 @@ pub SplitResult := struct {
     right: []u8,
 }
 
-pub eq := (a: []u8, b: []u8) bool {
+pub eq := (a: []u8, b: []u8) u1 {
     if a.len != b.len return false
     mut i: usize = 0
     for i < a.len: {
@@ -17,10 +17,10 @@ pub eq := (a: []u8, b: []u8) bool {
     return true
 }
 
-pub is_empty := (s: []u8) bool => s.len == 0
-pub is_whitespace := (b: u8) bool => b == ' ' || b == '\t' || b == '\n' || b == '\r'
+pub is_empty := (s: []u8) u1 => s.len == 0
+pub is_whitespace := (b: u8) u1 => b == ' ' || b == '\t' || b == '\n' || b == '\r'
 
-pub starts_with := (s: []u8, prefix: []u8) bool {
+pub starts_with := (s: []u8, prefix: []u8) u1 {
     if prefix.len > s.len return false
     mut i: usize = 0
     for i < prefix.len: {
@@ -30,7 +30,7 @@ pub starts_with := (s: []u8, prefix: []u8) bool {
     return true
 }
 
-pub ends_with := (s: []u8, suffix: []u8) bool {
+pub ends_with := (s: []u8, suffix: []u8) u1 {
     s_len: usize = s.len
     suffix_len: usize = suffix.len
     if suffix_len > s_len return false
@@ -76,7 +76,7 @@ pub find := (s: []u8, needle: []u8) ?usize {
     return null
 }
 
-pub contains := (s: []u8, needle: []u8) bool {
+pub contains := (s: []u8, needle: []u8) u1 {
     return find(s, needle) != null
 }
 
@@ -355,16 +355,116 @@ pub uint_to_hex_buf := (n: u64, buf: []u8) []u8 {
     return buf[0..digits]
 }
 
+pub float_to_buf := (n: f64, buf: []u8) []u8 {
+    if buf.len == 0 return buf[0..0]
+
+    mut out := buf
+    mut value := n
+    if value < 0.0 {
+        if out.len < 2 return buf[0..0]
+        out[0] = '-'
+        value = -value
+        out = out[1..]
+    }
+
+    whole := $as(u64, value)
+    whole_text := uint_to_buf(whole, out)
+    if whole_text.len == 0 return buf[0..0]
+
+    frac := value - $as(f64, whole)
+    if frac <= 0.0 {
+        if n < 0.0 return buf[0..1 + whole_text.len]
+        return buf[0..whole_text.len]
+    }
+
+    mut prefix_len := whole_text.len
+    if n < 0.0 {
+        prefix_len += 1
+    }
+    if buf.len <= prefix_len + 1 {
+        return buf[0..prefix_len]
+    }
+
+    buf[prefix_len] = '.'
+    mut write := prefix_len + 1
+    mut remain := frac
+    mut digits: usize = 0
+    for digits < 6: {
+        remain *= 10.0
+        digit := $as(u8, remain)
+        buf[write] = '0' + digit
+        remain -= $as(f64, digit)
+        write += 1
+        digits += 1
+        if write >= buf.len break
+    }
+
+    for write > prefix_len + 1: {
+        if buf[write - 1] != '0' {
+            break
+        }
+        write -= 1
+    }
+
+    if write == prefix_len + 1 {
+        return buf[0..prefix_len]
+    }
+    return buf[0..write]
+}
+
 pub split := (s: []u8, delim: u8, alloc: Allocator) ?[][]u8 {
-    _s := s
-    _delim := delim
-    _alloc := alloc
-    return null
+    mut count: usize = 1
+    mut i: usize = 0
+    for i < s.len: {
+        if s[i] == delim {
+            count += 1
+        }
+        i += 1
+    }
+
+    elem_size := $as(usize, $sizeof([]u8))
+    if count == 0 || elem_size == 0 {
+        return .{ ptr: $as(*[]u8, $as(usize, 1)), len: count }
+    }
+    mut total := count
+    total *= elem_size
+    raw := alloc.alloc(total, $as(usize, $alignof([]u8))) or return null
+    parts: [][]u8 = .{ ptr: $as(*[]u8, raw), len: count }
+    mut part_i: usize = 0
+    mut start: usize = 0
+    i = 0
+    for i < s.len: {
+        if s[i] == delim {
+            parts[part_i] = s[start..i]
+            part_i += 1
+            start = i + 1
+        }
+        i += 1
+    }
+    parts[part_i] = s[start..]
+    return parts
 }
 
 pub repeat := (s: []u8, n: usize, alloc: Allocator) ?[]u8 {
-    _s := s
-    _n := n
-    _alloc := alloc
-    return null
+    if n == 0 || s.len == 0 {
+        return alloc.create_many(u8, 0)
+    }
+
+    mut total := s.len
+    total *= n
+    raw := alloc.alloc(total, $as(usize, $alignof(u8))) or return null
+    out: []u8 = .{ ptr: $as(*u8, raw), len: total }
+
+    mut write: usize = 0
+    mut copies: usize = 0
+    for copies < n: {
+        mut i: usize = 0
+        for i < s.len: {
+            out[write] = s[i]
+            write += 1
+            i += 1
+        }
+        copies += 1
+    }
+    return out
 }
