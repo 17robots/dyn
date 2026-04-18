@@ -1,0 +1,7 @@
+module parser2
+
+ast := use "ast"
+diagnostics := use "diagnostics"
+lexer := use "lexer"
+Vec := (use "std/collections").Vec
+Allocator := (use "std/mem").Allocator

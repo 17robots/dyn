@@ -1,0 +1,9 @@
+module main
+
+main := () i32 {
+    s: []i32 = []
+    if s.len == 0 {
+        return 7
+    }
+    return 0
+}

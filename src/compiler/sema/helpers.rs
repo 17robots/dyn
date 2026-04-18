@@ -138,7 +138,10 @@ pub(super) fn bytes_type(types: &mut TypeStore) -> TypeId {
         signed: false,
         bits: 8,
     });
-    types.intern(Type::Slice { element: u8_ty })
+    types.intern(Type::Slice {
+        mutable: false,
+        element: u8_ty,
+    })
 }
 
 pub(super) fn type_to_string(type_id: TypeId, types: &TypeStore) -> String {
@@ -168,9 +171,21 @@ pub(super) fn type_to_string(type_id: TypeId, types: &TypeStore) -> String {
                 format!("{}!{}", type_to_string(*ok, types), rendered_errors)
             }
         }
-        Type::Pointer { inner } => format!("*{}", type_to_string(*inner, types)),
+        Type::Pointer { inner, mutable } => {
+            if *mutable {
+                format!("*mut {}", type_to_string(*inner, types))
+            } else {
+                format!("*{}", type_to_string(*inner, types))
+            }
+        }
         Type::Array(elem) => format!("[?]{}", type_to_string(*elem, types)),
-        Type::Slice { element } => format!("[]{}", type_to_string(*element, types)),
+        Type::Slice { element, mutable } => {
+            if *mutable {
+                format!("[]mut {}", type_to_string(*element, types))
+            } else {
+                format!("[]{}", type_to_string(*element, types))
+            }
+        }
         Type::Tuple(elements) => {
             let rendered = elements
                 .iter()
@@ -179,6 +194,7 @@ pub(super) fn type_to_string(type_id: TypeId, types: &TypeStore) -> String {
                 .join(", ");
             format!("{{{rendered}}}")
         }
+        Type::Named(name) => name.clone(),
         Type::Applied { callee, args } => {
             let rendered = args
                 .iter()

@@ -256,16 +256,26 @@ A shorthand enum variant like `.Red` is valid when the enum type can be inferred
 
 # 4. Declarations and bindings
 
-## 4.1 Binding declarations
+## 4.1 Unified declarations
 
 Normative grammar:
 ```text
-BindingDecl
-  := Visibility? 'mut'? Identifier ':=' Expr
-   | Visibility? 'mut'? Identifier ':' Type '=' Expr
+Decl
+  := Visibility? NameDecl
+   | Visibility? AssociatedDecl
 
-ExternDecl
-  := Visibility? Identifier ':=' 'extern' ExternSig
+NameDecl
+  := 'mut'? Identifier ':=' DeclValue
+   | 'mut'? Identifier ':' Type '=' DeclValue
+
+AssociatedDecl
+  := TypePath '.' Identifier ':=' DeclValue
+   | TypePath '.' Identifier ':' Type '=' DeclValue
+
+DeclValue
+  := Expr
+   | 'inline' FunctionExpr
+   | 'extern' ExternSig
 
 ExternSig
   := '(' FunctionTypeParamList? ')' Type? LinkNameOpt
@@ -281,6 +291,9 @@ x := 1
 mut y := 2
 z: i32 = 3
 mut w: i32 = 4
+Point.origin := Point{}
+Point.new := inline (x: i32, y: i32) Point => .{ x, y }
+write := extern (fd: i32, ptr: *u8, len: usize) i32 = "dynrt_fd_write"
 ```
 
 ## 4.2 Initialization requirement
@@ -316,10 +329,10 @@ x = 2
 
 ## 4.4 Associated declarations
 
-Normative grammar:
-```text
-AssociatedDecl := Visibility? TypePath '.' Identifier ':=' Expr
-```
+Normative:
+- associated declarations are declarations, not a separate syntactic category
+- they may bind values or functions
+- in v0.1, `TypePath` should be restricted to named type expressions for implementation simplicity
 
 Examples:
 ```dyn
@@ -327,13 +340,34 @@ Point.origin := Point{}
 Point.new := (x: i32, y: i32) Point => .{ x, y }
 ```
 
-Normative:
-In v0.1, `TypePath` should be restricted to named type expressions for implementation simplicity.
-
-## 4.5 Extern bindings
+## 4.5 Declaration modifiers
 
 Normative:
-Extern declarations are function-only and must use binding syntax.
+- `pub` is a declaration visibility modifier
+- `mut` is a declaration modifier for name targets
+- `inline` is a declaration-value modifier for function declarations and also a loop modifier in `inline for`
+- `extern` is a declaration-value modifier for extern function declarations
+
+Valid:
+```dyn
+id := inline (x: i32) i32 => x
+write := extern (fd: i32, ptr: *u8, len: usize) i32 = "dynrt_fd_write"
+```
+
+Invalid:
+```dyn
+extern write: (fd: i32, ptr: *u8, len: usize) i32 = "dynrt_fd_write"
+f := () i32 => inline 9
+```
+
+## 4.6 Extern bindings
+
+Normative:
+Extern declarations are function-only and must use declaration binding syntax.
+
+Normative:
+- `extern` is only valid on name targets
+- `extern` declarations cannot be `mut`
 
 Valid:
 ```dyn
@@ -420,7 +454,7 @@ f32!MyErr
 ```
 
 Normative:
-`*mut T` and `[]mut T` are not ordinary type forms in v0.1. They are only valid in parameter/receiver type positions.
+`*mut T` and `[]mut T` are not ordinary type forms in v0.1. They are only valid in function parameter and receiver type positions.
 
 ## 5.4 Struct types
 
@@ -792,7 +826,7 @@ A block introduces a new lexical scope.
 Normative:
 ```text
 Statement
-  := BindingDecl
+  := Decl
    | AssignmentStmt
    | ReturnStmt
    | BreakStmt
@@ -803,7 +837,6 @@ Statement
    | MatchStmt
    | LabeledStmt
    | ExprStmt
-   | DestructureDecl
    | DestructureAssign
 ```
 
@@ -934,12 +967,32 @@ Examples:
 x: i32
 p: *i32
 p: *mut i32
+block: *[64]u8
+out: *mut [64]u8
 buf: []u8
 buf: []mut u8
 ```
 
 Normative:
-`*mut T` and `[]mut T` are only valid in parameter/receiver positions in v0.1.
+`*mut T` and `[]mut T` are only valid in function parameter and receiver positions in v0.1.
+
+Normative:
+Direct fixed-size array types are not allowed at function boundaries.
+Use pointer or slice forms instead.
+
+Valid:
+```dyn
+hash := (block: *[64]u8) {}
+fill := (block: *mut [64]u8) {}
+read := (buf: []u8) {}
+write := (buf: []mut u8) {}
+```
+
+Invalid:
+```dyn
+hash := (block: [64]u8) {}
+make := () [64]u8 => ...
+```
 
 ## 9.4 Function calls
 
@@ -1003,7 +1056,7 @@ Conditions must be `bool`, except for optional-capture conditions.
 
 Normative grammar:
 ```text
-OptionalCaptureCond := Expr ':' '|' Identifier? '|'
+OptionalCaptureCond := Expr ':' ('|' Identifier? '|')?
 ```
 
 Example:
@@ -1021,6 +1074,74 @@ Normative semantics:
 
 Provisional:
 Multiple captures in a single condition are omitted from v0.1 unless already implemented.
+
+## 10.2.1 Enum variant capture conditions
+
+Normative grammar:
+```text
+EnumVariantCaptureCond := EnumVariantCheck (':' ('|' Identifier? '|'))?
+EnumVariantCheck       := Expr '==' EnumVariantPattern
+                        | EnumVariantCheck '||' EnumVariantCheck
+EnumVariantPattern     := '.' Identifier
+```
+
+Normative:
+`expr == .variant` is a tag equality check. It compares only the discriminant of a payload enum,
+not the payload. Valid for all enum types regardless of whether variants carry payloads.
+Returns `bool` when used as a standalone expression.
+
+Examples:
+```dyn
+done := token == .eof          // bool, tag check only
+
+if token == .ident: |s| {      // check + capture payload
+    use(s)
+}
+
+if token == .eof: {            // check, no payload to capture
+    return
+}
+```
+
+Normative capture semantics — single variant:
+- if the variant matches, the body executes
+- if the variant has a payload, `|binding|` captures it as that payload type
+- if the variant has no payload, `|binding|` is a compile error
+- the capture binding is omitted with `: {` or by omitting the colon entirely when no capture is needed
+
+Normative capture semantics — multiple variants via `||`:
+```dyn
+if token == .ident || token == .keyword: |s| { }
+if token == .ident || token == .eof: |s| { }
+if token == .eof   || token == .error: { }
+```
+
+- all variants must reference the same enum type
+- if all matched variants carry payloads of the same type `T`: capture is `T`
+- if matched variants carry payloads of the same type `T` and some carry no payload: capture is `?T`, null when the payloadless variant matched
+- if matched variants carry payloads of differing types: compile error — use `match` instead
+- if no matched variant carries a payload: no capture binding is valid
+
+Examples:
+```dyn
+// same payload type — capture is []u8
+if token == .ident || token == .keyword: |name| {
+    use(name)
+}
+
+// mixed payload and payloadless — capture is ?[]u8
+if token == .ident || token == .eof: |name| {
+    if name: |s| { use(s) }   // was .ident
+}
+
+// all payloadless — no capture
+if token == .eof || token == .error: {
+    handle_terminal()
+}
+
+// different payload types — compile error
+if token == .ident || token == .number: |x| { }  // error: []u8 vs i32
+```
 
 ## 10.3 Block values
 
@@ -1224,12 +1345,16 @@ Normative:
 - char/code-unit integer values
 
 Normative:
-`==` and `!=` are not supported for:
+`==` and `!=` are not supported for structural comparison of:
 - structs
-- payload enums
 - arrays
 - slices
 - string values as `[]u8`
+
+Normative:
+Payload enums do not support structural equality (`token == other_token` is a compile error).
+However, tag equality (`token == .ident`) is valid for all enum types — it compares only the
+discriminant and returns `bool`. See section 10.2.1 for use with payload capture.
 
 Examples:
 - `"a" == "a"` is invalid
@@ -1294,7 +1419,7 @@ Tuple indices in `tuple[index]` must be compile-time constant integers when the 
 
 Normative grammar:
 ```text
-DestructureDecl
+DestructureDeclaration
   := '{' DestructureItems '}' ':=' Expr
    | '{' DestructureItems '}' ':' TupleType '=' Expr
 
@@ -1302,7 +1427,7 @@ DestructureAssign
   := '{' DestructureItems '}' '=' Expr
 
 DestructureItems := DestructureItem (',' DestructureItem)* ','?
-DestructureItem := Identifier | '_'
+DestructureItem := 'mut'? Identifier | '_'
 ```
 
 Examples:
@@ -1599,6 +1724,12 @@ Normative builtin set in v0.1 includes:
 - `$as`
 - `$compile_error`
 - `$fields`
+- `$field`
+- `$field_type`
+- `$declaration`
+- `$declare`
+- `$fn_return`
+- `$fn_params`
 - `$has_field`
 - `$has_method`
 - `$is_float`
@@ -1635,7 +1766,87 @@ Normative:
 Provisional:
 Exact metadata record shape is implementation-defined in v0.1 but should be stable within a compiler implementation.
 
-## 18.5 Type construction
+## 18.5 `$field`
+
+Normative:
+`$field(val, "name")` gets or sets a field on a struct value by comptime string name.
+The name must be a comptime-known string literal.
+The result type is the type of that field.
+Valid in both read and write position:
+```dyn
+v := $field(point, "x")        // read
+$field(point, "x") = 10        // write
+```
+It is a compile error if the field name does not exist on the type.
+
+## 18.6 `$field_type`
+
+Normative:
+`$field_type(T, "name")` returns the type of the named field of struct type `T` as a comptime `type` value.
+The name must be a comptime-known string literal.
+It is a compile error if the field name does not exist on `T`.
+
+Example:
+```dyn
+FT := $field_type(Point, "x")   // FT == i32
+```
+
+## 18.7 `$declaration`
+
+Normative:
+`$declaration(T, "name")` returns the value of the associated declaration `T.name` as a comptime value.
+The name must be a comptime-known string literal.
+It is a compile error if no associated declaration with that name exists on `T`.
+
+Example:
+```dyn
+fn := $declaration(FileWriter, "write")   // same as FileWriter.write
+```
+
+Useful in conjunction with `$fields` and `inline for` for comptime vtable construction.
+
+## 18.8 `$declare`
+
+Normative:
+`$declare(T, "name", value)` adds a new associated declaration `T.name` with `value`.
+The name must be a comptime-known string literal.
+Valid only in comptime contexts (inside `comp` blocks or comptime functions).
+It is a compile error if a declaration with that name already exists on `T`, consistent with the no-shadowing rule.
+Enables dynamic generation of associated declarations from loops or other comptime logic.
+
+Example:
+```dyn
+inline for $fields(Methods): |f| {
+    $declare(Result, f.name, wrap(f))
+}
+```
+
+## 18.9 `$fn_return`
+
+Normative:
+`$fn_return(FT)` returns the return type of function type `FT` as a comptime `type` value.
+`FT` must be a function type. It is a compile error otherwise.
+For void-returning functions, returns the absence-of-return-type sentinel.
+
+Example:
+```dyn
+RT := $fn_return((*any) []u8)   // RT == []u8
+```
+
+## 18.10 `$fn_params`
+
+Normative:
+`$fn_params(FT)` returns the parameter types of function type `FT` as a comptime tuple type,
+excluding the first parameter.
+`FT` must be a function type. It is a compile error otherwise.
+Useful for generating forwarding wrappers in comptime code.
+
+Example:
+```dyn
+PT := $fn_params((*any, []u8, usize))   // PT == { []u8, usize }
+```
+
+## 18.11 Type construction
 
 Provisional:
 Dyn intends a builtin such as `$type(...)` for compile-time type construction.

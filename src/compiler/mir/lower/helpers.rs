@@ -50,6 +50,10 @@ pub(super) fn layout_for_builtin_type_name(name: &str) -> (u64, u64) {
     if let Some(fields) = parse_struct_fields(name) {
         return layout_for_struct_fields(&fields);
     }
+    if let Some((len, element)) = parse_fixed_array_descriptor(name) {
+        let (elem_size, elem_align) = layout_for_builtin_type_name(&element);
+        return (elem_size.saturating_mul(len as u64), elem_align);
+    }
     match name {
         "u1" | "i8" | "u8" => (1, 1),
         "i16" | "u16" => (2, 2),
@@ -87,6 +91,21 @@ pub(super) fn has_struct_field(type_descriptor: &str, field: &str) -> bool {
 /// Returns `(field_name, field_type_string)` pairs for a struct descriptor.
 pub(super) fn struct_field_names_with_types(type_descriptor: &str) -> Vec<(String, String)> {
     parse_struct_fields(type_descriptor).unwrap_or_default()
+}
+
+pub(super) fn parse_fixed_array_descriptor(type_name: &str) -> Option<(usize, String)> {
+    let trimmed = type_name.trim();
+    if !trimmed.starts_with('[') || trimmed.starts_with("[]") {
+        return None;
+    }
+    let close = trimmed.find(']')?;
+    let len_text = trimmed[1..close].trim();
+    let len = len_text.parse::<usize>().ok()?;
+    let element = trimmed[close + 1..].trim();
+    if element.is_empty() {
+        return None;
+    }
+    Some((len, element.to_string()))
 }
 
 fn parse_struct_fields(type_name: &str) -> Option<Vec<(String, String)>> {
@@ -244,7 +263,7 @@ pub(super) fn comptime_truthy(value: &ComptimeValue) -> bool {
             .unwrap_or(false),
         ComptimeValue::Literal(HirLiteral::Char(v)) => *v != '\0',
         ComptimeValue::Literal(HirLiteral::String(v)) => !v.is_empty(),
-        ComptimeValue::Type(_) | ComptimeValue::Function(_) => true,
+        ComptimeValue::Type(_) | ComptimeValue::Function(_) | ComptimeValue::Struct(_) => true,
     }
 }
 

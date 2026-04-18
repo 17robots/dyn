@@ -56,7 +56,32 @@ pub(super) fn infer_expr_type(
                 UnaryOp::Not => types.intern(Type::Bool),
                 UnaryOp::Neg => inner,
                 UnaryOp::BitNot => inner,
-                UnaryOp::Ref => types.intern(Type::Pointer { inner }),
+                UnaryOp::Ref => types.intern(Type::Pointer {
+                    mutable: false,
+                    inner,
+                }),
+                UnaryOp::RefMut => {
+                    if let Some(origin) = borrow_origin(expr) {
+                        if !mutability.get(&origin).copied().unwrap_or(false) {
+                            diagnostics.push(
+                                Diagnostic::error(
+                                    DiagnosticPhase::TypeChecker,
+                                    DiagnosticCode::E4005,
+                                    format!("cannot take mutable reference to immutable binding '{origin}'"),
+                                )
+                                .with_primary_file_label(
+                                    file_path.to_path_buf(),
+                                    Some(expr.span),
+                                    "mark the binding as mut before taking &mut",
+                                ),
+                            );
+                        }
+                    }
+                    types.intern(Type::Pointer {
+                        mutable: true,
+                        inner,
+                    })
+                }
             }
         }
         ExprKind::Binary { op, left, right } => {
@@ -152,64 +177,6 @@ pub(super) fn infer_expr_type(
                 }
             }
         }
-        ExprKind::Assign { op, target, value } => {
-            let value_ty = infer_expr_type(
-                value,
-                env,
-                mutability,
-                signatures,
-                types,
-                diagnostics,
-                file_path,
-                expected_return,
-            );
-            let target_ty = infer_expr_type(
-                target,
-                env,
-                mutability,
-                signatures,
-                types,
-                diagnostics,
-                file_path,
-                expected_return,
-            );
-
-            if let ExprKind::Ident(ident) = &target.kind {
-                if ident.text != "_" && !mutability.get(&ident.text).copied().unwrap_or(false) {
-                    diagnostics.push(
-                        Diagnostic::error(
-                            DiagnosticPhase::TypeChecker,
-                            DiagnosticCode::E4006,
-                            format!("cannot assign to immutable binding '{}'", ident.text),
-                        )
-                        .with_primary_file_label(
-                            file_path.to_path_buf(),
-                            Some(expr.span),
-                            "mark binding as mut to reassign",
-                        ),
-                    );
-                }
-            }
-            if *op != AssignOp::Assign
-                && !matches!(types.get(target_ty), Type::Unknown)
-                && !matches!(types.get(value_ty), Type::Unknown)
-                && (!is_numeric(target_ty, types) || !is_numeric(value_ty, types))
-            {
-                diagnostics.push(
-                    Diagnostic::error(
-                        DiagnosticPhase::TypeChecker,
-                        DiagnosticCode::E4005,
-                        "compound assignment requires numeric target and value",
-                    )
-                    .with_primary_file_label(
-                        file_path.to_path_buf(),
-                        Some(expr.span),
-                        "use numeric operands for compound assignment",
-                    ),
-                );
-            }
-            target_ty
-        }
         ExprKind::Call(call) => infer_call_type(
             call,
             env,
@@ -260,7 +227,111 @@ pub(super) fn infer_expr_type(
                         ..
                     }
                 );
-                if uses_and_chain || n > 1 {
+                let uses_or_chain = matches!(
+                    &if_expr.condition.kind,
+                    ExprKind::Binary {
+                        op: BinaryOp::LogicalOr,
+                        ..
+                    }
+                );
+                if uses_or_chain {
+                    // || chain capture: all operands must be enum variant checks.
+                    // Capture type is unified across all variants:
+                    //   - all have same payload T     → capture is T
+                    //   - some have payload, some not → capture is ?T
+                    //   - different payload types     → compile error
+                    //   - all payloadless             → no capture binding valid
+                    let operands = collect_or_operands(&if_expr.condition);
+                    let all_variant_checks = operands.iter().all(|op| is_enum_variant_check(op));
+                    if !all_variant_checks {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                "|| capture condition requires all operands to be enum variant checks (expr == .Variant)",
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(if_expr.condition.span),
+                                "use expr == .Variant on each side of ||",
+                            ),
+                        );
+                    }
+                    if n > 1 {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                "|| variant capture produces a single binding, not one per variant",
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(if_expr.condition.span),
+                                "use a single capture binding",
+                            ),
+                        );
+                    }
+                    if let Some(binding) = capture.bindings.first().and_then(|b| b.as_ref()) {
+                        // Collect payload types for each operand and unify:
+                        //   all same T          → T
+                        //   mix payload/none    → ?T
+                        //   different types     → compile error (Unknown)
+                        let unknown = types.intern(Type::Unknown);
+                        let payload_types: Vec<Option<TypeId>> = operands
+                            .iter()
+                            .map(|op| {
+                                let ty = enum_variant_check_payload(
+                                    op,
+                                    env,
+                                    mutability,
+                                    signatures,
+                                    types,
+                                    diagnostics,
+                                    file_path,
+                                    expected_return,
+                                );
+                                if matches!(types.get(ty), Type::Unknown) {
+                                    None
+                                } else {
+                                    Some(ty)
+                                }
+                            })
+                            .collect();
+                        let has_payload = payload_types.iter().any(|p| p.is_some());
+                        let has_none = payload_types.iter().any(|p| p.is_none());
+                        let distinct: BTreeMap<TypeId, ()> = payload_types
+                            .iter()
+                            .filter_map(|p| *p)
+                            .map(|ty| (ty, ()))
+                            .collect();
+                        let unified = if !has_payload {
+                            unknown
+                        } else if distinct.len() > 1 {
+                            diagnostics.push(
+                                Diagnostic::error(
+                                    DiagnosticPhase::TypeChecker,
+                                    DiagnosticCode::E4005,
+                                    "|| variant capture has incompatible payload types across variants",
+                                )
+                                .with_primary_file_label(
+                                    file_path.to_path_buf(),
+                                    Some(if_expr.condition.span),
+                                    "all captured variants must have the same payload type",
+                                ),
+                            );
+                            unknown
+                        } else {
+                            let inner = *distinct.keys().next().unwrap();
+                            if has_none {
+                                types.intern(Type::Optional(inner))
+                            } else {
+                                inner
+                            }
+                        };
+                        then_env.insert(binding.text.clone(), unified);
+                        then_mutability.insert(binding.text.clone(), false);
+                    }
+                } else if uses_and_chain || n > 1 {
                     // && chain capture: identify capturable operands in order,
                     // validate slot count, bind each named slot to its type.
                     let operands = collect_and_operands(&if_expr.condition);
@@ -313,13 +384,48 @@ pub(super) fn infer_expr_type(
                     }
 
                     // Bind each named slot to its capturable type.
-                    for (binding_opt, op_ty) in capture.bindings.iter().zip(capturable.iter()) {
+                    let capturable_ops: Vec<&Expr> = operands
+                        .iter()
+                        .filter(|op| {
+                            let op_ty = infer_expr_type(
+                                op,
+                                env,
+                                mutability,
+                                signatures,
+                                types,
+                                diagnostics,
+                                file_path,
+                                expected_return,
+                            );
+                            matches!(types.get(op_ty), Type::Optional(_))
+                                || is_enum_variant_check(op)
+                        })
+                        .copied()
+                        .collect();
+                    for (binding_opt, op) in capture.bindings.iter().zip(capturable_ops.iter()) {
                         if let Some(binding) = binding_opt {
-                            let binding_ty = match types.get(*op_ty) {
-                                Type::Optional(inner) => *inner,
-                                // Enum variant check — payload type (Unknown until full enum
-                                // type system maps variant → payload type).
-                                _ => types.intern(Type::Unknown),
+                            let op_ty = infer_expr_type(
+                                op,
+                                env,
+                                mutability,
+                                signatures,
+                                types,
+                                diagnostics,
+                                file_path,
+                                expected_return,
+                            );
+                            let binding_ty = match types.get(op_ty).clone() {
+                                Type::Optional(inner) => inner,
+                                _ => enum_variant_check_payload(
+                                    op,
+                                    env,
+                                    mutability,
+                                    signatures,
+                                    types,
+                                    diagnostics,
+                                    file_path,
+                                    expected_return,
+                                ),
                             };
                             then_env.insert(binding.text.clone(), binding_ty);
                             then_mutability.insert(binding.text.clone(), false);
@@ -345,11 +451,18 @@ pub(super) fn infer_expr_type(
                         );
                     }
                     if let Some(binding) = capture.bindings.first().and_then(|b| b.as_ref()) {
-                        let binding_ty = match types.get(cond_ty) {
-                            Type::Optional(inner) => *inner,
-                            // Enum variant check — payload type is Unknown until full
-                            // enum type resolution is implemented.
-                            _ => types.intern(Type::Unknown),
+                        let binding_ty = match types.get(cond_ty).clone() {
+                            Type::Optional(inner) => inner,
+                            _ => enum_variant_check_payload(
+                                &if_expr.condition,
+                                env,
+                                mutability,
+                                signatures,
+                                types,
+                                diagnostics,
+                                file_path,
+                                expected_return,
+                            ),
                         };
                         then_env.insert(binding.text.clone(), binding_ty);
                         then_mutability.insert(binding.text.clone(), false);
@@ -487,9 +600,86 @@ pub(super) fn infer_expr_type(
 
             for stmt in &block.statements {
                 match stmt {
-                    crate::compiler::ast::Stmt::Binding(binding) => {
-                        let mut value_ty = infer_expr_type(
-                            &binding.value,
+                    crate::compiler::ast::Stmt::Declaration(decl) => {
+                        let Some(value) = decl.expr_value() else {
+                            continue;
+                        };
+                        match &decl.target {
+                            DeclTarget::Name(name) => {
+                                let mut value_ty = infer_expr_type(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    diagnostics,
+                                    file_path,
+                                    expected_return,
+                                );
+                                let final_ty = if let Some(annotation) = &decl.annotation {
+                                    validate_any_usage(
+                                        annotation,
+                                        AnyUsageContext::Other,
+                                        diagnostics,
+                                        file_path,
+                                    );
+                                    let expected = resolve_type_expr(annotation, types)
+                                        .unwrap_or_else(|| types.intern(Type::Unknown));
+                                    value_ty = maybe_coerce_literal_to_expected(
+                                        value,
+                                        value_ty,
+                                        expected,
+                                        types,
+                                    );
+                                    if !types_compatible(expected, value_ty, types) {
+                                        diagnostics.push(
+                                            Diagnostic::error(
+                                                DiagnosticPhase::TypeChecker,
+                                                DiagnosticCode::E4005,
+                                                format!(
+                                                    "type mismatch for '{}' in block binding",
+                                                    name.text
+                                                ),
+                                            )
+                                            .with_primary_file_label(
+                                                file_path.to_path_buf(),
+                                                Some(decl.span),
+                                                "annotation and initializer disagree",
+                                            ),
+                                        );
+                                    }
+                                    expected
+                                } else {
+                                    value_ty
+                                };
+                                local_env.insert(name.text.clone(), final_ty);
+                                local_mutability.insert(name.text.clone(), decl.modifiers.mutable);
+                                result = final_ty;
+                            }
+                            DeclTarget::Destructure(names) => {
+                                infer_expr_type(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    diagnostics,
+                                    file_path,
+                                    expected_return,
+                                );
+                                let unknown = types.intern(Type::Unknown);
+                                for dn in names {
+                                    local_env.insert(dn.name.text.clone(), unknown);
+                                    local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                                }
+                                result = unknown;
+                            }
+                            DeclTarget::Associated { .. } => {}
+                        }
+                    }
+                    crate::compiler::ast::Stmt::Assignment(assign) => {
+                        let value_ty = infer_expr_type(
+                            &assign.value,
                             &local_env,
                             &local_mutability,
                             signatures,
@@ -498,63 +688,57 @@ pub(super) fn infer_expr_type(
                             file_path,
                             expected_return,
                         );
-                        let final_ty = if let Some(annotation) = &binding.annotation {
-                            validate_any_usage(
-                                annotation,
-                                AnyUsageContext::Other,
-                                diagnostics,
-                                file_path,
-                            );
-                            let expected = resolve_type_expr(annotation, types)
-                                .unwrap_or_else(|| types.intern(Type::Unknown));
-                            value_ty = maybe_coerce_literal_to_expected(
-                                &binding.value,
-                                value_ty,
-                                expected,
-                                types,
-                            );
-                            if !types_compatible(expected, value_ty, types) {
+                        let target_ty = infer_expr_type(
+                            &assign.target,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            diagnostics,
+                            file_path,
+                            expected_return,
+                        );
+
+                        if let ExprKind::Ident(ident) = &assign.target.kind {
+                            if ident.text != "_"
+                                && !local_mutability.get(&ident.text).copied().unwrap_or(false)
+                            {
                                 diagnostics.push(
                                     Diagnostic::error(
                                         DiagnosticPhase::TypeChecker,
-                                        DiagnosticCode::E4005,
+                                        DiagnosticCode::E4006,
                                         format!(
-                                            "type mismatch for '{}' in block binding",
-                                            binding.name.text
+                                            "cannot assign to immutable binding '{}'",
+                                            ident.text
                                         ),
                                     )
                                     .with_primary_file_label(
                                         file_path.to_path_buf(),
-                                        Some(binding.span),
-                                        "annotation and initializer disagree",
+                                        Some(assign.span),
+                                        "mark binding as mut to reassign",
                                     ),
                                 );
                             }
-                            expected
-                        } else {
-                            value_ty
-                        };
-                        local_env.insert(binding.name.text.clone(), final_ty);
-                        local_mutability.insert(binding.name.text.clone(), binding.mutable);
-                        result = final_ty;
-                    }
-                    crate::compiler::ast::Stmt::Destructure(d) => {
-                        infer_expr_type(
-                            &d.value,
-                            &local_env,
-                            &local_mutability,
-                            signatures,
-                            types,
-                            diagnostics,
-                            file_path,
-                            expected_return,
-                        );
-                        let unknown = types.intern(Type::Unknown);
-                        for dn in &d.names {
-                            local_env.insert(dn.name.text.clone(), unknown);
-                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
                         }
-                        result = unknown;
+                        if assign.op != AssignOp::Assign
+                            && !matches!(types.get(target_ty), Type::Unknown)
+                            && !matches!(types.get(value_ty), Type::Unknown)
+                            && (!is_numeric(target_ty, types) || !is_numeric(value_ty, types))
+                        {
+                            diagnostics.push(
+                                Diagnostic::error(
+                                    DiagnosticPhase::TypeChecker,
+                                    DiagnosticCode::E4005,
+                                    "compound assignment requires numeric target and value",
+                                )
+                                .with_primary_file_label(
+                                    file_path.to_path_buf(),
+                                    Some(assign.span),
+                                    "use numeric operands for compound assignment",
+                                ),
+                            );
+                        }
+                        result = target_ty;
                     }
                     crate::compiler::ast::Stmt::Expr(stmt_expr) => {
                         result = infer_expr_type(
@@ -887,12 +1071,15 @@ pub(super) fn infer_expr_type(
                 expected_return,
             );
             match types.get(base_ty) {
-                Type::Slice { element } => match field.text.as_str() {
+                Type::Slice { element, mutable } => match field.text.as_str() {
                     "len" => types.intern(Type::Int {
                         signed: false,
                         bits: 64,
                     }),
-                    "ptr" => types.intern(Type::Pointer { inner: *element }),
+                    "ptr" => types.intern(Type::Pointer {
+                        mutable: *mutable,
+                        inner: *element,
+                    }),
                     _ => types.intern(Type::Unknown),
                 },
                 Type::Array(element) => match field.text.as_str() {
@@ -900,16 +1087,22 @@ pub(super) fn infer_expr_type(
                         signed: false,
                         bits: 64,
                     }),
-                    "ptr" => types.intern(Type::Pointer { inner: *element }),
+                    "ptr" => types.intern(Type::Pointer {
+                        mutable: false,
+                        inner: *element,
+                    }),
                     _ => types.intern(Type::Unknown),
                 },
-                Type::Pointer { inner } => match types.get(*inner) {
-                    Type::Slice { element } => match field.text.as_str() {
+                Type::Pointer { inner, .. } => match types.get(*inner) {
+                    Type::Slice { element, mutable } => match field.text.as_str() {
                         "len" => types.intern(Type::Int {
                             signed: false,
                             bits: 64,
                         }),
-                        "ptr" => types.intern(Type::Pointer { inner: *element }),
+                        "ptr" => types.intern(Type::Pointer {
+                            mutable: *mutable,
+                            inner: *element,
+                        }),
                         _ => types.intern(Type::Unknown),
                     },
                     Type::Applied { callee, .. } | Type::TypeParam(callee) => {
@@ -1029,9 +1222,23 @@ pub(super) fn infer_expr_type(
                 expected_return,
             );
             match types.get(base_ty) {
-                Type::Array(elem) => types.intern(Type::Slice { element: *elem }),
-                Type::Slice { element } => types.intern(Type::Slice { element: *element }),
-                Type::Pointer { inner } => types.intern(Type::Slice { element: *inner }),
+                Type::Array(elem) => {
+                    let mutable = borrow_origin(&slice.base)
+                        .and_then(|name| mutability.get(&name).copied())
+                        .unwrap_or(false);
+                    types.intern(Type::Slice {
+                        mutable,
+                        element: *elem,
+                    })
+                }
+                Type::Slice { element, mutable } => types.intern(Type::Slice {
+                    mutable: *mutable,
+                    element: *element,
+                }),
+                Type::Pointer { inner, mutable } => types.intern(Type::Slice {
+                    mutable: *mutable,
+                    element: *inner,
+                }),
                 Type::Unknown => base_ty,
                 _ => {
                     diagnostics.push(
@@ -1391,6 +1598,21 @@ fn collect_and_operands(expr: &Expr) -> Vec<&Expr> {
     }
 }
 
+fn collect_or_operands(expr: &Expr) -> Vec<&Expr> {
+    match &expr.kind {
+        ExprKind::Binary {
+            op: BinaryOp::LogicalOr,
+            left,
+            right,
+        } => {
+            let mut ops = collect_or_operands(left);
+            ops.push(right);
+            ops
+        }
+        _ => vec![expr],
+    }
+}
+
 /// Returns true if this expression is an enum-variant tag check of the form
 /// `expr == .Variant` or `expr != .Variant`. These can produce a capture binding
 /// (the variant's payload) in an if condition.
@@ -1403,6 +1625,42 @@ fn is_enum_variant_check(op: &Expr) -> bool {
             ..
         } if matches!(&right.kind, ExprKind::EnumVariantConstruct(_))
     )
+}
+
+fn enum_variant_check_payload(
+    check_expr: &Expr,
+    env: &BTreeMap<String, TypeId>,
+    mutability: &BTreeMap<String, bool>,
+    signatures: &BTreeMap<String, FnSignature>,
+    types: &mut TypeStore,
+    diagnostics: &mut Vec<Diagnostic>,
+    file_path: &std::path::Path,
+    expected_return: Option<TypeId>,
+) -> TypeId {
+    let ExprKind::Binary { left, right, .. } = &check_expr.kind else {
+        return types.intern(Type::Unknown);
+    };
+    let ExprKind::EnumVariantConstruct(variant) = &right.kind else {
+        return types.intern(Type::Unknown);
+    };
+    let variant_name = variant.variant.text.clone();
+    let left_ty = infer_expr_type(
+        left,
+        env,
+        mutability,
+        signatures,
+        types,
+        diagnostics,
+        file_path,
+        expected_return,
+    );
+    let Type::Named(enum_name) = types.get(left_ty).clone() else {
+        return types.intern(Type::Unknown);
+    };
+    match types.variant_payload_type(&enum_name, &variant_name) {
+        Some(Some(ty)) => ty,
+        _ => types.intern(Type::Unknown),
+    }
 }
 
 pub(super) fn validate_struct_type_members(
@@ -1611,11 +1869,6 @@ pub(super) fn visit_expr_children(expr: &Expr, mut visit: impl FnMut(&Expr)) {
         | ExprKind::ErrorUnwrap { expr }
         | ExprKind::DerefAccess { base: expr } => visit(expr),
         ExprKind::Binary { left, right, .. }
-        | ExprKind::Assign {
-            target: left,
-            value: right,
-            ..
-        }
         | ExprKind::Index {
             base: left,
             index: right,
@@ -1642,8 +1895,15 @@ pub(super) fn visit_expr_children(expr: &Expr, mut visit: impl FnMut(&Expr)) {
         ExprKind::Block(block) => {
             for stmt in &block.statements {
                 match stmt {
-                    Stmt::Binding(binding) => visit(&binding.value),
-                    Stmt::Destructure(destructure) => visit(&destructure.value),
+                    Stmt::Declaration(decl) => {
+                        if let Some(value) = decl.expr_value() {
+                            visit(value);
+                        }
+                    }
+                    Stmt::Assignment(assign) => {
+                        visit(&assign.target);
+                        visit(&assign.value);
+                    }
                     Stmt::Expr(stmt_expr) => visit(stmt_expr),
                 }
             }
@@ -1862,7 +2122,7 @@ pub(super) fn validate_supported_builtin_type_expr(
         | TypeExprKind::Errorable { ok: inner, .. } => {
             validate_supported_builtin_type_expr(inner, diagnostics, file_path);
         }
-        TypeExprKind::Array { element, .. } | TypeExprKind::Slice { element } => {
+        TypeExprKind::Array { element, .. } | TypeExprKind::Slice { element, .. } => {
             validate_supported_builtin_type_expr(element, diagnostics, file_path);
         }
         TypeExprKind::Function(fn_ty) => {
@@ -1899,25 +2159,34 @@ pub(super) fn validate_supported_builtin_types_in_expr(
         ExprKind::Block(block) => {
             for stmt in &block.statements {
                 match stmt {
-                    Stmt::Binding(binding) => {
-                        if let Some(annotation) = &binding.annotation {
+                    Stmt::Declaration(decl) => {
+                        if let Some(annotation) = &decl.annotation {
                             validate_supported_builtin_type_expr(
                                 annotation,
                                 diagnostics,
                                 file_path,
                             );
                         }
+                        if let Some(value) = decl.expr_value() {
+                            validate_supported_builtin_types_in_expr(
+                                value,
+                                diagnostics,
+                                file_path,
+                            );
+                        }
+                    }
+                    Stmt::Assignment(assign) => {
                         validate_supported_builtin_types_in_expr(
-                            &binding.value,
+                            &assign.target,
+                            diagnostics,
+                            file_path,
+                        );
+                        validate_supported_builtin_types_in_expr(
+                            &assign.value,
                             diagnostics,
                             file_path,
                         );
                     }
-                    Stmt::Destructure(destructure) => validate_supported_builtin_types_in_expr(
-                        &destructure.value,
-                        diagnostics,
-                        file_path,
-                    ),
                     Stmt::Expr(stmt_expr) => {
                         validate_supported_builtin_types_in_expr(stmt_expr, diagnostics, file_path);
                     }
@@ -1979,7 +2248,7 @@ fn classify_type_for_equality(
         Type::Array(_) => EqualityValueKind::Array,
         Type::Slice { .. } => EqualityValueKind::Slice,
         Type::Tuple(_) => EqualityValueKind::Tuple,
-        Type::TypeParam(name) | Type::Applied { callee: name, .. } => {
+        Type::TypeParam(name) | Type::Applied { callee: name, .. } | Type::Named(name) => {
             match nominal_kinds.get(name) {
                 Some(NominalValueKind::Struct) => EqualityValueKind::Struct,
                 Some(NominalValueKind::PlainEnum) => EqualityValueKind::PlainEnum,
@@ -2027,7 +2296,8 @@ fn classify_expr_for_equality(
         ExprKind::Literal(Literal::String(_)) => EqualityValueKind::Slice,
         ExprKind::Literal(_) => EqualityValueKind::Scalar,
         ExprKind::Unary {
-            op: UnaryOp::Ref, ..
+            op: UnaryOp::Ref | UnaryOp::RefMut,
+            ..
         } => EqualityValueKind::Pointer,
         ExprKind::StructLiteral(_) => EqualityValueKind::Struct,
         ExprKind::ArrayLiteral(_) => EqualityValueKind::Array,
@@ -2132,6 +2402,10 @@ pub(super) fn validate_unsupported_equality(
                 expected_return,
             );
 
+            if matches!(&right.kind, ExprKind::EnumVariantConstruct(_)) {
+                return;
+            }
+
             let left_kind = classify_expr_for_equality(
                 left,
                 env_shapes,
@@ -2178,79 +2452,116 @@ pub(super) fn validate_unsupported_equality(
             let mut local_mutability = mutability.clone();
             for stmt in &block.statements {
                 match stmt {
-                    Stmt::Binding(binding) => {
-                        validate_unsupported_equality(
-                            &binding.value,
-                            &local_shapes,
-                            &local_env,
-                            &local_mutability,
-                            signatures,
-                            types,
-                            nominal_kinds,
-                            diagnostics,
-                            file_path,
-                            expected_return,
-                        );
-                        let mut value_ty = infer_expr_type_silently(
-                            &binding.value,
-                            &local_env,
-                            &local_mutability,
-                            signatures,
-                            types,
-                            file_path,
-                            expected_return,
-                        );
-                        let final_ty = if let Some(annotation) = &binding.annotation {
-                            let expected = resolve_type_expr(annotation, types)
-                                .unwrap_or_else(|| types.intern(Type::Unknown));
-                            value_ty = maybe_coerce_literal_to_expected(
-                                &binding.value,
-                                value_ty,
-                                expected,
-                                types,
-                            );
-                            expected
-                        } else {
-                            value_ty
+                    Stmt::Declaration(decl) => {
+                        let Some(value) = decl.expr_value() else {
+                            continue;
                         };
-                        let final_shape = if binding.annotation.is_some() {
-                            classify_type_for_equality(final_ty, types, nominal_kinds)
-                        } else {
-                            classify_expr_for_equality(
-                                &binding.value,
-                                &local_shapes,
-                                &local_env,
-                                &local_mutability,
-                                signatures,
-                                types,
-                                nominal_kinds,
-                                file_path,
-                                expected_return,
-                            )
-                        };
-                        local_env.insert(binding.name.text.clone(), final_ty);
-                        local_shapes.insert(binding.name.text.clone(), final_shape);
-                        local_mutability.insert(binding.name.text.clone(), binding.mutable);
-                    }
-                    Stmt::Destructure(destructure) => {
-                        validate_unsupported_equality(
-                            &destructure.value,
-                            &local_shapes,
-                            &local_env,
-                            &local_mutability,
-                            signatures,
-                            types,
-                            nominal_kinds,
-                            diagnostics,
-                            file_path,
-                            expected_return,
-                        );
-                        let unknown = types.intern(Type::Unknown);
-                        for name in &destructure.names {
-                            local_env.insert(name.name.text.clone(), unknown);
-                            local_shapes.insert(name.name.text.clone(), EqualityValueKind::Unknown);
-                            local_mutability.insert(name.name.text.clone(), name.mutable);
+                        match &decl.target {
+                            DeclTarget::Name(name) => {
+                                validate_unsupported_equality(
+                                    value,
+                                    &local_shapes,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    nominal_kinds,
+                                    diagnostics,
+                                    file_path,
+                                    expected_return,
+                                );
+                                let mut value_ty = infer_expr_type_silently(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    file_path,
+                                    expected_return,
+                                );
+                                let final_ty = if let Some(annotation) = &decl.annotation {
+                                    let expected = resolve_type_expr(annotation, types)
+                                        .unwrap_or_else(|| types.intern(Type::Unknown));
+                                    value_ty = maybe_coerce_literal_to_expected(
+                                        value,
+                                        value_ty,
+                                        expected,
+                                        types,
+                                    );
+                                    expected
+                                } else {
+                                    value_ty
+                                };
+                                let final_shape = if decl.annotation.is_some() {
+                                    classify_type_for_equality(final_ty, types, nominal_kinds)
+                                } else {
+                                    classify_expr_for_equality(
+                                        value,
+                                        &local_shapes,
+                                        &local_env,
+                                        &local_mutability,
+                                        signatures,
+                                        types,
+                                        nominal_kinds,
+                                        file_path,
+                                        expected_return,
+                                    )
+                                };
+                                local_env.insert(name.text.clone(), final_ty);
+                                local_shapes.insert(name.text.clone(), final_shape);
+                                local_mutability.insert(name.text.clone(), decl.modifiers.mutable);
+                            }
+                            DeclTarget::Destructure(names) => {
+                                validate_unsupported_equality(
+                                    value,
+                                    &local_shapes,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    nominal_kinds,
+                                    diagnostics,
+                                    file_path,
+                                    expected_return,
+                                );
+                                let unknown = types.intern(Type::Unknown);
+                                for name in names {
+                                    local_env.insert(name.name.text.clone(), unknown);
+                                    local_shapes.insert(
+                                        name.name.text.clone(),
+                                        EqualityValueKind::Unknown,
+                                    );
+                                    local_mutability.insert(name.name.text.clone(), name.mutable);
+                                }
+                            }
+                            DeclTarget::Associated { .. } => {}
                         }
+                    }
+                    Stmt::Assignment(assign) => {
+                        validate_unsupported_equality(
+                            &assign.target,
+                            &local_shapes,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            nominal_kinds,
+                            diagnostics,
+                            file_path,
+                            expected_return,
+                        );
+                        validate_unsupported_equality(
+                            &assign.value,
+                            &local_shapes,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            nominal_kinds,
+                            diagnostics,
+                            file_path,
+                            expected_return,
+                        );
                     }
                     Stmt::Expr(stmt_expr) => validate_unsupported_equality(
                         stmt_expr,
@@ -2588,8 +2899,8 @@ pub(super) fn validate_unsupported_equality(
                     );
                     let binding_ty = match types.get(iterable_ty) {
                         Type::Array(element)
-                        | Type::Slice { element }
-                        | Type::Pointer { inner: element } => *element,
+                        | Type::Slice { element, .. }
+                        | Type::Pointer { inner: element, .. } => *element,
                         _ => types.intern(Type::Unknown),
                     };
                     body_env.insert(binding.text.clone(), binding_ty);
@@ -2758,15 +3069,36 @@ fn validate_borrow_binding_initializer(
     diagnostics: &mut Vec<Diagnostic>,
     file_path: &std::path::Path,
 ) -> Option<(String, BorrowKind)> {
-    let ExprKind::Unary {
-        op: UnaryOp::Ref,
-        expr: inner,
-    } = &expr.kind
-    else {
+    let ExprKind::Unary { op, expr: inner } = &expr.kind else {
         return None;
     };
+    let borrow_kind = match op {
+        UnaryOp::Ref => BorrowKind::Shared,
+        UnaryOp::RefMut => BorrowKind::Mutable,
+        _ => return None,
+    };
     let origin = borrow_origin(inner)?;
-    let kind = borrow_kind_for_origin(state, &origin)?;
+    if matches!(borrow_kind, BorrowKind::Mutable)
+        && !state.mutability.get(&origin).copied().unwrap_or(false)
+    {
+        diagnostics.push(
+            Diagnostic::error(
+                DiagnosticPhase::TypeChecker,
+                DiagnosticCode::E4005,
+                format!("cannot mutably borrow immutable binding '{origin}'"),
+            )
+            .with_primary_file_label(
+                file_path.to_path_buf(),
+                Some(expr.span),
+                "mark the binding as mut before taking &mut",
+            ),
+        );
+    }
+    let kind = if matches!(borrow_kind, BorrowKind::Mutable) {
+        BorrowKind::Mutable
+    } else {
+        borrow_kind_for_origin(state, &origin)?
+    };
     if let Some((binding, active_kind)) = first_borrow_conflict(state, &origin, kind, None) {
         let active_kind = match active_kind {
             BorrowKind::Shared => "shared",
@@ -2798,19 +3130,92 @@ fn validate_borrow_stmt(
     file_path: &std::path::Path,
 ) {
     match stmt {
-        Stmt::Binding(binding) => {
-            validate_borrow_rules(&binding.value, state, diagnostics, file_path);
-            state.bind_local(&binding.name.text, binding.mutable);
-            if let Some((origin, kind)) =
-                validate_borrow_binding_initializer(&binding.value, state, diagnostics, file_path)
-            {
-                state.record_binding_borrow(&binding.name.text, &origin, kind);
+        Stmt::Declaration(decl) => {
+            let Some(value) = decl.expr_value() else {
+                return;
+            };
+            validate_borrow_rules(value, state, diagnostics, file_path);
+            match &decl.target {
+                DeclTarget::Name(name) => {
+                    state.bind_local(&name.text, decl.modifiers.mutable);
+                    if let Some((origin, kind)) =
+                        validate_borrow_binding_initializer(value, state, diagnostics, file_path)
+                    {
+                        state.record_binding_borrow(&name.text, &origin, kind);
+                    }
+                }
+                DeclTarget::Destructure(names) => {
+                    for name in names {
+                        state.bind_local(&name.name.text, name.mutable);
+                    }
+                }
+                DeclTarget::Associated { .. } => {}
             }
         }
-        Stmt::Destructure(destructure) => {
-            validate_borrow_rules(&destructure.value, state, diagnostics, file_path);
-            for name in &destructure.names {
-                state.bind_local(&name.name.text, name.mutable);
+        Stmt::Assignment(assign) => {
+            validate_borrow_rules(&assign.value, state, diagnostics, file_path);
+            validate_borrow_rules(&assign.target, state, diagnostics, file_path);
+
+            if let Some(origin) = borrow_origin(&assign.target) {
+                if state.active_by_origin.contains_key(&origin) {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::TypeChecker,
+                            DiagnosticCode::E4005,
+                            format!("cannot assign to '{}' while it is borrowed", origin),
+                        )
+                        .with_primary_file_label(
+                            file_path.to_path_buf(),
+                            Some(assign.span),
+                            "assignment conflicts with a live borrow of this storage",
+                        ),
+                    );
+                }
+            }
+
+            if let ExprKind::DerefAccess { base } = &assign.target.kind {
+                if let Some((origin, kind, binding)) = borrowed_binding(base, state) {
+                    if kind == BorrowKind::Shared {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                format!("cannot write through shared borrow '{}'", binding),
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(assign.span),
+                                "shared borrows are read-only",
+                            ),
+                        );
+                    }
+                    if let Some((conflict_binding, _)) =
+                        first_borrow_conflict(state, &origin, BorrowKind::Mutable, Some(&binding))
+                    {
+                        diagnostics.push(
+                            Diagnostic::error(
+                                DiagnosticPhase::TypeChecker,
+                                DiagnosticCode::E4005,
+                                format!(
+                                    "mutable dereference of '{}' conflicts with another live borrow",
+                                    origin
+                                ),
+                            )
+                            .with_primary_file_label(
+                                file_path.to_path_buf(),
+                                Some(assign.span),
+                                format!(
+                                    "mutable access must be exclusive; '{}' is also live",
+                                    conflict_binding
+                                ),
+                            ),
+                        );
+                    }
+                }
+            }
+
+            if let ExprKind::Ident(ident) = &assign.target.kind {
+                state.release_binding_borrow(&ident.text);
             }
         }
         Stmt::Expr(expr) => validate_borrow_rules(expr, state, diagnostics, file_path),
@@ -2872,72 +3277,6 @@ pub(super) fn validate_borrow_rules(
                 }
             }
         }
-        ExprKind::Assign { target, value, .. } => {
-            validate_borrow_rules(value, state, diagnostics, file_path);
-            validate_borrow_rules(target, state, diagnostics, file_path);
-
-            if let Some(origin) = borrow_origin(target) {
-                if state.active_by_origin.contains_key(&origin) {
-                    diagnostics.push(
-                        Diagnostic::error(
-                            DiagnosticPhase::TypeChecker,
-                            DiagnosticCode::E4005,
-                            format!("cannot assign to '{}' while it is borrowed", origin),
-                        )
-                        .with_primary_file_label(
-                            file_path.to_path_buf(),
-                            Some(expr.span),
-                            "assignment conflicts with a live borrow of this storage",
-                        ),
-                    );
-                }
-            }
-
-            if let ExprKind::DerefAccess { base } = &target.kind {
-                if let Some((origin, kind, binding)) = borrowed_binding(base, state) {
-                    if kind == BorrowKind::Shared {
-                        diagnostics.push(
-                            Diagnostic::error(
-                                DiagnosticPhase::TypeChecker,
-                                DiagnosticCode::E4005,
-                                format!("cannot write through shared borrow '{}'", binding),
-                            )
-                            .with_primary_file_label(
-                                file_path.to_path_buf(),
-                                Some(expr.span),
-                                "shared borrows are read-only",
-                            ),
-                        );
-                    }
-                    if let Some((conflict_binding, _)) =
-                        first_borrow_conflict(state, &origin, BorrowKind::Mutable, Some(&binding))
-                    {
-                        diagnostics.push(
-                            Diagnostic::error(
-                                DiagnosticPhase::TypeChecker,
-                                DiagnosticCode::E4005,
-                                format!(
-                                    "mutable dereference of '{}' conflicts with another live borrow",
-                                    origin
-                                ),
-                            )
-                            .with_primary_file_label(
-                                file_path.to_path_buf(),
-                                Some(expr.span),
-                                format!(
-                                    "mutable access must be exclusive; '{}' is also live",
-                                    conflict_binding
-                                ),
-                            ),
-                        );
-                    }
-                }
-            }
-
-            if let ExprKind::Ident(ident) = &target.kind {
-                state.release_binding_borrow(&ident.text);
-            }
-        }
         ExprKind::If(if_expr) => {
             validate_borrow_rules(&if_expr.condition, state, diagnostics, file_path);
             let mut then_state = state.clone();
@@ -2997,7 +3336,7 @@ pub(super) fn validate_borrow_rules(
             );
         }
         ExprKind::Unary {
-            op: UnaryOp::Ref,
+            op: UnaryOp::Ref | UnaryOp::RefMut,
             expr: inner,
         } => {
             validate_borrow_rules(inner, state, diagnostics, file_path);
@@ -3006,6 +3345,29 @@ pub(super) fn validate_borrow_rules(
         _ => visit_expr_children(expr, |child| {
             validate_borrow_rules(child, state, diagnostics, file_path)
         }),
+    }
+}
+
+pub(super) fn collect_and_register_enum_variant_payloads(unit: &ModuleUnit, types: &mut TypeStore) {
+    for decl in &unit.declarations {
+        let ExprKind::TypeLiteral(type_lit) = &decl.value.kind else {
+            continue;
+        };
+        let TypeExprKind::Enum(enum_ty) = &type_lit.kind else {
+            continue;
+        };
+        let variants = enum_ty
+            .variants
+            .iter()
+            .map(|variant| {
+                let payload_ty = variant
+                    .payload
+                    .as_ref()
+                    .and_then(|p| resolve_type_expr(p, types));
+                (variant.name.text.clone(), payload_ty)
+            })
+            .collect::<BTreeMap<_, _>>();
+        types.register_enum_payloads(decl.name.clone(), variants);
     }
 }
 
@@ -3113,9 +3475,102 @@ pub(super) fn infer_implicit_error_union_set(
                             &mut inferred,
                         );
                     }
-                    Stmt::Destructure(d) => {
+                    Stmt::Declaration(decl) => {
+                        let Some(value) = decl.expr_value() else {
+                            continue;
+                        };
+                        match &decl.target {
+                            DeclTarget::Destructure(names) => {
+                                collect_inferred_error_set_from_return_sites(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    enum_variants,
+                                    file_path,
+                                    &mut inferred,
+                                );
+                                collect_inferred_error_set_from_unwraps_expr(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    file_path,
+                                    &mut inferred,
+                                );
+                                let unknown = types.intern(Type::Unknown);
+                                for dn in names {
+                                    local_env.insert(dn.name.text.clone(), unknown);
+                                    local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                                }
+                            }
+                            DeclTarget::Name(name) if !is_function_expr(value) => {
+                                collect_inferred_error_set_from_return_sites(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    enum_variants,
+                                    file_path,
+                                    &mut inferred,
+                                );
+                                collect_inferred_error_set_from_unwraps_expr(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    file_path,
+                                    &mut inferred,
+                                );
+
+                                let mut value_ty = infer_expr_type(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    &mut Vec::new(),
+                                    file_path,
+                                    None,
+                                );
+                                let final_ty = if let Some(annotation) = &decl.annotation {
+                                    let expected = resolve_type_expr(annotation, types)
+                                        .unwrap_or_else(|| types.intern(Type::Unknown));
+                                    value_ty = maybe_coerce_literal_to_expected(
+                                        value,
+                                        value_ty,
+                                        expected,
+                                        types,
+                                    );
+                                    let _ = value_ty;
+                                    expected
+                                } else {
+                                    value_ty
+                                };
+                                local_env.insert(name.text.clone(), final_ty);
+                                local_mutability
+                                    .insert(name.text.clone(), decl.modifiers.mutable);
+                            }
+                            DeclTarget::Name(_) | DeclTarget::Associated { .. } => {}
+                        }
+                    }
+                    Stmt::Assignment(assign) => {
                         collect_inferred_error_set_from_return_sites(
-                            &d.value,
+                            &assign.target,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            enum_variants,
+                            file_path,
+                            &mut inferred,
+                        );
+                        collect_inferred_error_set_from_return_sites(
+                            &assign.value,
                             &local_env,
                             &local_mutability,
                             signatures,
@@ -3125,7 +3580,7 @@ pub(super) fn infer_implicit_error_union_set(
                             &mut inferred,
                         );
                         collect_inferred_error_set_from_unwraps_expr(
-                            &d.value,
+                            &assign.target,
                             &local_env,
                             &local_mutability,
                             signatures,
@@ -3133,61 +3588,15 @@ pub(super) fn infer_implicit_error_union_set(
                             file_path,
                             &mut inferred,
                         );
-                        let unknown = types.intern(Type::Unknown);
-                        for dn in &d.names {
-                            local_env.insert(dn.name.text.clone(), unknown);
-                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
-                        }
-                    }
-                    Stmt::Binding(binding) => {
-                        if !is_function_expr(&binding.value) {
-                            collect_inferred_error_set_from_return_sites(
-                                &binding.value,
-                                &local_env,
-                                &local_mutability,
-                                signatures,
-                                types,
-                                enum_variants,
-                                file_path,
-                                &mut inferred,
-                            );
-                            collect_inferred_error_set_from_unwraps_expr(
-                                &binding.value,
-                                &local_env,
-                                &local_mutability,
-                                signatures,
-                                types,
-                                file_path,
-                                &mut inferred,
-                            );
-
-                            let mut value_ty = infer_expr_type(
-                                &binding.value,
-                                &local_env,
-                                &local_mutability,
-                                signatures,
-                                types,
-                                &mut Vec::new(),
-                                file_path,
-                                None,
-                            );
-                            let final_ty = if let Some(annotation) = &binding.annotation {
-                                let expected = resolve_type_expr(annotation, types)
-                                    .unwrap_or_else(|| types.intern(Type::Unknown));
-                                value_ty = maybe_coerce_literal_to_expected(
-                                    &binding.value,
-                                    value_ty,
-                                    expected,
-                                    types,
-                                );
-                                let _ = value_ty;
-                                expected
-                            } else {
-                                value_ty
-                            };
-                            local_env.insert(binding.name.text.clone(), final_ty);
-                            local_mutability.insert(binding.name.text.clone(), binding.mutable);
-                        }
+                        collect_inferred_error_set_from_unwraps_expr(
+                            &assign.value,
+                            &local_env,
+                            &local_mutability,
+                            signatures,
+                            types,
+                            file_path,
+                            &mut inferred,
+                        );
                     }
                 }
             }
@@ -3259,26 +3668,73 @@ pub(super) fn collect_inferred_error_set_from_return_sites(
                         file_path,
                         inferred,
                     ),
-                    Stmt::Destructure(d) => {
-                        collect_inferred_error_set_from_return_sites(
-                            &d.value,
-                            &local_env,
-                            &local_mutability,
-                            signatures,
-                            types,
-                            enum_variants,
-                            file_path,
-                            inferred,
-                        );
-                        let unknown = types.intern(Type::Unknown);
-                        for dn in &d.names {
-                            local_env.insert(dn.name.text.clone(), unknown);
-                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                    Stmt::Declaration(decl) => {
+                        let Some(value) = decl.expr_value() else {
+                            continue;
+                        };
+                        match &decl.target {
+                            DeclTarget::Destructure(names) => {
+                                collect_inferred_error_set_from_return_sites(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    enum_variants,
+                                    file_path,
+                                    inferred,
+                                );
+                                let unknown = types.intern(Type::Unknown);
+                                for dn in names {
+                                    local_env.insert(dn.name.text.clone(), unknown);
+                                    local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                                }
+                            }
+                            DeclTarget::Name(name) if !is_function_expr(value) => {
+                                collect_inferred_error_set_from_return_sites(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    enum_variants,
+                                    file_path,
+                                    inferred,
+                                );
+                                let mut value_ty = infer_expr_type(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    &mut Vec::new(),
+                                    file_path,
+                                    None,
+                                );
+                                let final_ty = if let Some(annotation) = &decl.annotation {
+                                    let expected = resolve_type_expr(annotation, types)
+                                        .unwrap_or_else(|| types.intern(Type::Unknown));
+                                    value_ty = maybe_coerce_literal_to_expected(
+                                        value,
+                                        value_ty,
+                                        expected,
+                                        types,
+                                    );
+                                    let _ = value_ty;
+                                    expected
+                                } else {
+                                    value_ty
+                                };
+                                local_env.insert(name.text.clone(), final_ty);
+                                local_mutability
+                                    .insert(name.text.clone(), decl.modifiers.mutable);
+                            }
+                            DeclTarget::Name(_) | DeclTarget::Associated { .. } => {}
                         }
                     }
-                    Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
+                    Stmt::Assignment(assign) => {
                         collect_inferred_error_set_from_return_sites(
-                            &binding.value,
+                            &assign.target,
                             &local_env,
                             &local_mutability,
                             signatures,
@@ -3287,34 +3743,17 @@ pub(super) fn collect_inferred_error_set_from_return_sites(
                             file_path,
                             inferred,
                         );
-                        let mut value_ty = infer_expr_type(
-                            &binding.value,
+                        collect_inferred_error_set_from_return_sites(
+                            &assign.value,
                             &local_env,
                             &local_mutability,
                             signatures,
                             types,
-                            &mut Vec::new(),
+                            enum_variants,
                             file_path,
-                            None,
+                            inferred,
                         );
-                        let final_ty = if let Some(annotation) = &binding.annotation {
-                            let expected = resolve_type_expr(annotation, types)
-                                .unwrap_or_else(|| types.intern(Type::Unknown));
-                            value_ty = maybe_coerce_literal_to_expected(
-                                &binding.value,
-                                value_ty,
-                                expected,
-                                types,
-                            );
-                            let _ = value_ty;
-                            expected
-                        } else {
-                            value_ty
-                        };
-                        local_env.insert(binding.name.text.clone(), final_ty);
-                        local_mutability.insert(binding.name.text.clone(), binding.mutable);
                     }
-                    Stmt::Binding(_) => {}
                 }
             }
             if let Some(tail) = &block.tail_expr {
@@ -3405,11 +3844,6 @@ pub(super) fn collect_inferred_error_set_from_return_sites(
             )
         }
         ExprKind::Binary { left, right, .. }
-        | ExprKind::Assign {
-            target: left,
-            value: right,
-            ..
-        }
         | ExprKind::Index {
             base: left,
             index: right,
@@ -3695,26 +4129,73 @@ pub(super) fn collect_inferred_error_set_from_return_expr(
                         file_path,
                         inferred,
                     ),
-                    Stmt::Destructure(d) => {
-                        collect_inferred_error_set_from_return_expr(
-                            &d.value,
-                            &local_env,
-                            &local_mutability,
-                            signatures,
-                            types,
-                            enum_variants,
-                            file_path,
-                            inferred,
-                        );
-                        let unknown = types.intern(Type::Unknown);
-                        for dn in &d.names {
-                            local_env.insert(dn.name.text.clone(), unknown);
-                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                    Stmt::Declaration(decl) => {
+                        let Some(value) = decl.expr_value() else {
+                            continue;
+                        };
+                        match &decl.target {
+                            DeclTarget::Destructure(names) => {
+                                collect_inferred_error_set_from_return_expr(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    enum_variants,
+                                    file_path,
+                                    inferred,
+                                );
+                                let unknown = types.intern(Type::Unknown);
+                                for dn in names {
+                                    local_env.insert(dn.name.text.clone(), unknown);
+                                    local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                                }
+                            }
+                            DeclTarget::Name(name) if !is_function_expr(value) => {
+                                collect_inferred_error_set_from_return_expr(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    enum_variants,
+                                    file_path,
+                                    inferred,
+                                );
+                                let mut value_ty = infer_expr_type(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    &mut Vec::new(),
+                                    file_path,
+                                    None,
+                                );
+                                let final_ty = if let Some(annotation) = &decl.annotation {
+                                    let expected = resolve_type_expr(annotation, types)
+                                        .unwrap_or_else(|| types.intern(Type::Unknown));
+                                    value_ty = maybe_coerce_literal_to_expected(
+                                        value,
+                                        value_ty,
+                                        expected,
+                                        types,
+                                    );
+                                    let _ = value_ty;
+                                    expected
+                                } else {
+                                    value_ty
+                                };
+                                local_env.insert(name.text.clone(), final_ty);
+                                local_mutability
+                                    .insert(name.text.clone(), decl.modifiers.mutable);
+                            }
+                            DeclTarget::Name(_) | DeclTarget::Associated { .. } => {}
                         }
                     }
-                    Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
+                    Stmt::Assignment(assign) => {
                         collect_inferred_error_set_from_return_expr(
-                            &binding.value,
+                            &assign.target,
                             &local_env,
                             &local_mutability,
                             signatures,
@@ -3723,34 +4204,17 @@ pub(super) fn collect_inferred_error_set_from_return_expr(
                             file_path,
                             inferred,
                         );
-                        let mut value_ty = infer_expr_type(
-                            &binding.value,
+                        collect_inferred_error_set_from_return_expr(
+                            &assign.value,
                             &local_env,
                             &local_mutability,
                             signatures,
                             types,
-                            &mut Vec::new(),
+                            enum_variants,
                             file_path,
-                            None,
+                            inferred,
                         );
-                        let final_ty = if let Some(annotation) = &binding.annotation {
-                            let expected = resolve_type_expr(annotation, types)
-                                .unwrap_or_else(|| types.intern(Type::Unknown));
-                            value_ty = maybe_coerce_literal_to_expected(
-                                &binding.value,
-                                value_ty,
-                                expected,
-                                types,
-                            );
-                            let _ = value_ty;
-                            expected
-                        } else {
-                            value_ty
-                        };
-                        local_env.insert(binding.name.text.clone(), final_ty);
-                        local_mutability.insert(binding.name.text.clone(), binding.mutable);
                     }
-                    Stmt::Binding(_) => {}
                 }
             }
             if let Some(tail) = &block.tail_expr {
@@ -3881,28 +4345,6 @@ pub(super) fn collect_inferred_error_set_from_return_expr(
                     inferred,
                 );
             }
-        }
-        ExprKind::Assign { target, value, .. } => {
-            collect_inferred_error_set_from_return_expr(
-                target,
-                env,
-                mutability,
-                signatures,
-                types,
-                enum_variants,
-                file_path,
-                inferred,
-            );
-            collect_inferred_error_set_from_return_expr(
-                value,
-                env,
-                mutability,
-                signatures,
-                types,
-                enum_variants,
-                file_path,
-                inferred,
-            );
         }
         ExprKind::Binary { left, right, .. }
         | ExprKind::Index {
@@ -4114,25 +4556,71 @@ pub(super) fn collect_inferred_error_set_from_unwraps_expr(
                         file_path,
                         inferred,
                     ),
-                    Stmt::Destructure(d) => {
-                        collect_inferred_error_set_from_unwraps_expr(
-                            &d.value,
-                            &local_env,
-                            &local_mutability,
-                            signatures,
-                            types,
-                            file_path,
-                            inferred,
-                        );
-                        let unknown = types.intern(Type::Unknown);
-                        for dn in &d.names {
-                            local_env.insert(dn.name.text.clone(), unknown);
-                            local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                    Stmt::Declaration(decl) => {
+                        let Some(value) = decl.expr_value() else {
+                            continue;
+                        };
+                        match &decl.target {
+                            DeclTarget::Destructure(names) => {
+                                collect_inferred_error_set_from_unwraps_expr(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    file_path,
+                                    inferred,
+                                );
+                                let unknown = types.intern(Type::Unknown);
+                                for dn in names {
+                                    local_env.insert(dn.name.text.clone(), unknown);
+                                    local_mutability.insert(dn.name.text.clone(), dn.mutable);
+                                }
+                            }
+                            DeclTarget::Name(name) if !is_function_expr(value) => {
+                                collect_inferred_error_set_from_unwraps_expr(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    file_path,
+                                    inferred,
+                                );
+                                let mut value_ty = infer_expr_type(
+                                    value,
+                                    &local_env,
+                                    &local_mutability,
+                                    signatures,
+                                    types,
+                                    &mut Vec::new(),
+                                    file_path,
+                                    None,
+                                );
+                                let final_ty = if let Some(annotation) = &decl.annotation {
+                                    let expected = resolve_type_expr(annotation, types)
+                                        .unwrap_or_else(|| types.intern(Type::Unknown));
+                                    value_ty = maybe_coerce_literal_to_expected(
+                                        value,
+                                        value_ty,
+                                        expected,
+                                        types,
+                                    );
+                                    let _ = value_ty;
+                                    expected
+                                } else {
+                                    value_ty
+                                };
+                                local_env.insert(name.text.clone(), final_ty);
+                                local_mutability
+                                    .insert(name.text.clone(), decl.modifiers.mutable);
+                            }
+                            DeclTarget::Name(_) | DeclTarget::Associated { .. } => {}
                         }
                     }
-                    Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
+                    Stmt::Assignment(assign) => {
                         collect_inferred_error_set_from_unwraps_expr(
-                            &binding.value,
+                            &assign.target,
                             &local_env,
                             &local_mutability,
                             signatures,
@@ -4140,34 +4628,16 @@ pub(super) fn collect_inferred_error_set_from_unwraps_expr(
                             file_path,
                             inferred,
                         );
-                        let mut value_ty = infer_expr_type(
-                            &binding.value,
+                        collect_inferred_error_set_from_unwraps_expr(
+                            &assign.value,
                             &local_env,
                             &local_mutability,
                             signatures,
                             types,
-                            &mut Vec::new(),
                             file_path,
-                            None,
+                            inferred,
                         );
-                        let final_ty = if let Some(annotation) = &binding.annotation {
-                            let expected = resolve_type_expr(annotation, types)
-                                .unwrap_or_else(|| types.intern(Type::Unknown));
-                            value_ty = maybe_coerce_literal_to_expected(
-                                &binding.value,
-                                value_ty,
-                                expected,
-                                types,
-                            );
-                            let _ = value_ty;
-                            expected
-                        } else {
-                            value_ty
-                        };
-                        local_env.insert(binding.name.text.clone(), final_ty);
-                        local_mutability.insert(binding.name.text.clone(), binding.mutable);
                     }
-                    Stmt::Binding(_) => {}
                 }
             }
             if let Some(tail) = &block.tail_expr {
@@ -4285,14 +4755,6 @@ pub(super) fn collect_inferred_error_set_from_unwraps_expr(
                     &arg.value, env, mutability, signatures, types, file_path, inferred,
                 );
             }
-        }
-        ExprKind::Assign { target, value, .. } => {
-            collect_inferred_error_set_from_unwraps_expr(
-                target, env, mutability, signatures, types, file_path, inferred,
-            );
-            collect_inferred_error_set_from_unwraps_expr(
-                value, env, mutability, signatures, types, file_path, inferred,
-            );
         }
         ExprKind::Binary { left, right, .. }
         | ExprKind::Index {
@@ -4477,23 +4939,35 @@ pub(super) fn validate_function_error_set_coverage(
                         file_path,
                         diagnostics,
                     ),
-                    Stmt::Destructure(d) => validate_error_set_returns_expr(
-                        &d.value,
-                        &declared_errors,
-                        enum_variants,
-                        file_path,
-                        diagnostics,
-                    ),
-                    Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
+                    Stmt::Declaration(decl) => {
+                        if let Some(value) = decl.expr_value() {
+                            if !is_function_expr(value) {
+                                validate_error_set_returns_expr(
+                                    value,
+                                    &declared_errors,
+                                    enum_variants,
+                                    file_path,
+                                    diagnostics,
+                                );
+                            }
+                        }
+                    }
+                    Stmt::Assignment(assign) => {
                         validate_error_set_returns_expr(
-                            &binding.value,
+                            &assign.target,
                             &declared_errors,
                             enum_variants,
                             file_path,
                             diagnostics,
-                        )
+                        );
+                        validate_error_set_returns_expr(
+                            &assign.value,
+                            &declared_errors,
+                            enum_variants,
+                            file_path,
+                            diagnostics,
+                        );
                     }
-                    Stmt::Binding(_) => {}
                 }
             }
             if let Some(tail) = &block.tail_expr {
@@ -4554,11 +5028,14 @@ pub(super) fn validate_value_required_exprs(
         ExprKind::Block(block) => {
             for stmt in &block.statements {
                 match stmt {
-                    Stmt::Binding(binding) => {
-                        validate_value_required_exprs(&binding.value, true, file_path, diagnostics)
+                    Stmt::Declaration(decl) => {
+                        if let Some(value) = decl.expr_value() {
+                            validate_value_required_exprs(value, true, file_path, diagnostics)
+                        }
                     }
-                    Stmt::Destructure(d) => {
-                        validate_value_required_exprs(&d.value, true, file_path, diagnostics)
+                    Stmt::Assignment(assign) => {
+                        validate_value_required_exprs(&assign.target, true, file_path, diagnostics);
+                        validate_value_required_exprs(&assign.value, true, file_path, diagnostics);
                     }
                     Stmt::Expr(stmt_expr) => {
                         validate_value_required_exprs(stmt_expr, false, file_path, diagnostics)
@@ -4573,14 +5050,29 @@ pub(super) fn validate_value_required_exprs(
             FnBody::Block(block) => {
                 for stmt in &block.statements {
                     match stmt {
-                        Stmt::Binding(binding) => validate_value_required_exprs(
-                            &binding.value,
-                            true,
-                            file_path,
-                            diagnostics,
-                        ),
-                        Stmt::Destructure(d) => {
-                            validate_value_required_exprs(&d.value, true, file_path, diagnostics)
+                        Stmt::Declaration(decl) => {
+                            if let Some(value) = decl.expr_value() {
+                                validate_value_required_exprs(
+                                    value,
+                                    true,
+                                    file_path,
+                                    diagnostics,
+                                )
+                            }
+                        }
+                        Stmt::Assignment(assign) => {
+                            validate_value_required_exprs(
+                                &assign.target,
+                                true,
+                                file_path,
+                                diagnostics,
+                            );
+                            validate_value_required_exprs(
+                                &assign.value,
+                                true,
+                                file_path,
+                                diagnostics,
+                            );
                         }
                         Stmt::Expr(stmt_expr) => {
                             validate_value_required_exprs(stmt_expr, false, file_path, diagnostics)
@@ -4604,11 +5096,6 @@ pub(super) fn validate_value_required_exprs(
             validate_value_required_exprs(expr, true, file_path, diagnostics)
         }
         ExprKind::Binary { left, right, .. }
-        | ExprKind::Assign {
-            target: left,
-            value: right,
-            ..
-        }
         | ExprKind::Index {
             base: left,
             index: right,
@@ -4742,23 +5229,35 @@ pub(super) fn validate_error_set_returns_expr(
                         file_path,
                         diagnostics,
                     ),
-                    Stmt::Destructure(d) => validate_error_set_returns_expr(
-                        &d.value,
-                        declared_errors,
-                        enum_variants,
-                        file_path,
-                        diagnostics,
-                    ),
-                    Stmt::Binding(binding) if !is_function_expr(&binding.value) => {
+                    Stmt::Declaration(decl) => {
+                        if let Some(value) = decl.expr_value() {
+                            if !is_function_expr(value) {
+                                validate_error_set_returns_expr(
+                                    value,
+                                    declared_errors,
+                                    enum_variants,
+                                    file_path,
+                                    diagnostics,
+                                )
+                            }
+                        }
+                    }
+                    Stmt::Assignment(assign) => {
                         validate_error_set_returns_expr(
-                            &binding.value,
+                            &assign.target,
                             declared_errors,
                             enum_variants,
                             file_path,
                             diagnostics,
-                        )
+                        );
+                        validate_error_set_returns_expr(
+                            &assign.value,
+                            declared_errors,
+                            enum_variants,
+                            file_path,
+                            diagnostics,
+                        );
                     }
-                    Stmt::Binding(_) => {}
                 }
             }
             if let Some(tail) = &block.tail_expr {
@@ -4908,22 +5407,6 @@ pub(super) fn validate_error_set_returns_expr(
                     diagnostics,
                 );
             }
-        }
-        ExprKind::Assign { target, value, .. } => {
-            validate_error_set_returns_expr(
-                target,
-                declared_errors,
-                enum_variants,
-                file_path,
-                diagnostics,
-            );
-            validate_error_set_returns_expr(
-                value,
-                declared_errors,
-                enum_variants,
-                file_path,
-                diagnostics,
-            );
         }
         ExprKind::Binary { left, right, .. } => {
             validate_error_set_returns_expr(
@@ -5338,18 +5821,30 @@ pub(super) fn validate_named_struct_offsetof_calls(
         ExprKind::Block(block) => {
             for stmt in &block.statements {
                 match stmt {
-                    Stmt::Binding(binding) => validate_named_struct_offsetof_calls(
-                        &binding.value,
-                        named_struct_fields,
-                        diagnostics,
-                        file_path,
-                    ),
-                    Stmt::Destructure(d) => validate_named_struct_offsetof_calls(
-                        &d.value,
-                        named_struct_fields,
-                        diagnostics,
-                        file_path,
-                    ),
+                    Stmt::Declaration(decl) => {
+                        if let Some(value) = decl.expr_value() {
+                            validate_named_struct_offsetof_calls(
+                                value,
+                                named_struct_fields,
+                                diagnostics,
+                                file_path,
+                            );
+                        }
+                    }
+                    Stmt::Assignment(assign) => {
+                        validate_named_struct_offsetof_calls(
+                            &assign.target,
+                            named_struct_fields,
+                            diagnostics,
+                            file_path,
+                        );
+                        validate_named_struct_offsetof_calls(
+                            &assign.value,
+                            named_struct_fields,
+                            diagnostics,
+                            file_path,
+                        );
+                    }
                     Stmt::Expr(stmt_expr) => validate_named_struct_offsetof_calls(
                         stmt_expr,
                         named_struct_fields,
@@ -5375,11 +5870,6 @@ pub(super) fn validate_named_struct_offsetof_calls(
             validate_named_struct_offsetof_calls(expr, named_struct_fields, diagnostics, file_path)
         }
         ExprKind::Binary { left, right, .. }
-        | ExprKind::Assign {
-            target: left,
-            value: right,
-            ..
-        }
         | ExprKind::Index {
             base: left,
             index: right,
@@ -5840,17 +6330,17 @@ fn substitute_type_params(
             let ok = substitute_type_params(ok, bindings, types);
             types.intern(Type::Errorable { ok, errors })
         }
-        Type::Pointer { inner } => {
+        Type::Pointer { inner, mutable } => {
             let inner = substitute_type_params(inner, bindings, types);
-            types.intern(Type::Pointer { inner })
+            types.intern(Type::Pointer { mutable, inner })
         }
         Type::Array(inner) => {
             let inner = substitute_type_params(inner, bindings, types);
             types.intern(Type::Array(inner))
         }
-        Type::Slice { element } => {
+        Type::Slice { element, mutable } => {
             let element = substitute_type_params(element, bindings, types);
-            types.intern(Type::Slice { element })
+            types.intern(Type::Slice { mutable, element })
         }
         Type::Tuple(elements) => {
             let elements = elements
@@ -6200,14 +6690,14 @@ pub(super) fn infer_call_type(
     for arg in &call.args {
         if let Some(name) = &arg.name {
             saw_named_arg = true;
-            let Some(param_index) = sig
-                .params
-                .iter()
-                .enumerate()
-                .skip(param_offset)
-                .find_map(|(idx, param)| {
-                    (param.name.as_deref() == Some(name.text.as_str())).then_some(idx)
-                })
+            let Some(param_index) =
+                sig.params
+                    .iter()
+                    .enumerate()
+                    .skip(param_offset)
+                    .find_map(|(idx, param)| {
+                        (param.name.as_deref() == Some(name.text.as_str())).then_some(idx)
+                    })
             else {
                 diagnostics.push(
                     Diagnostic::error(
@@ -6379,9 +6869,8 @@ pub(super) fn infer_call_type(
         }
     }
 
-    specialized_return.unwrap_or_else(|| {
-        substitute_type_params(sig.return_type, &type_param_bindings, types)
-    })
+    specialized_return
+        .unwrap_or_else(|| substitute_type_params(sig.return_type, &type_param_bindings, types))
 }
 
 pub(super) fn bind_pattern_names(
@@ -6635,18 +7124,6 @@ pub(super) fn infer_builtin_call_type(
             return Some(target_ty);
         }
         "$compile_error" => {
-            diagnostics.push(
-                Diagnostic::error(
-                    DiagnosticPhase::TypeChecker,
-                    DiagnosticCode::E4005,
-                    "$compile_error invoked",
-                )
-                .with_primary_file_label(
-                    file_path.to_path_buf(),
-                    Some(expr.span),
-                    "remove compile error or gate it behind compile-time condition",
-                ),
-            );
             return Some(types.intern(Type::Unknown));
         }
         "$panic" => {
@@ -6803,7 +7280,7 @@ pub(super) fn infer_builtin_call_type(
             // it doesn't cause spurious type errors when used in that context.
             return Some(types.intern(Type::Unknown));
         }
-        "$has_method" | "$has_field" => {
+        "$has" | "$has_method" | "$has_field" => {
             if call.args.len() != 2 {
                 diagnostics.push(
                     Diagnostic::error(
@@ -6817,15 +7294,141 @@ pub(super) fn infer_builtin_call_type(
                     .with_primary_file_label(
                         file_path.to_path_buf(),
                         Some(expr.span),
-                        if name == "$has_method" {
-                            "use $has_method(Type, \"method_name\")"
-                        } else {
-                            "use $has_field(Type, \"field_name\")"
-                        },
+                        "use $has(Type, \"name\")",
                     ),
                 );
             }
             return Some(types.intern(Type::Bool));
+        }
+        "$field" => {
+            if call.args.len() != 2 {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "$field expects two arguments: a struct value and a comptime field name string",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "use $field(val, \"field_name\")",
+                    ),
+                );
+            }
+            // Return type is the type of the named field — resolved at comptime.
+            return Some(types.intern(Type::Unknown));
+        }
+        "$field_type" => {
+            if call.args.len() != 2 {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "$field_type expects two arguments: a struct type and a comptime field name string",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "use $field_type(Type, \"field_name\")",
+                    ),
+                );
+            }
+            return Some(types.intern(Type::TypeType));
+        }
+        "$declaration" => {
+            if call.args.len() != 2 {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "$declaration expects two arguments: a type and a comptime declaration name string",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "use $declaration(Type, \"name\")",
+                    ),
+                );
+            }
+            return Some(types.intern(Type::Unknown));
+        }
+        "$declare" => {
+            if call.args.len() != 3 {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "$declare expects three arguments: a type, a comptime name string, and a value",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "use $declare(Type, \"name\", value)",
+                    ),
+                );
+                return Some(types.intern(Type::Unknown));
+            }
+            // Check that the name arg is a string literal and that T__name doesn't already exist.
+            let type_name = match &call.args[0].value.kind {
+                ExprKind::Ident(n) => Some(n.text.clone()),
+                _ => None,
+            };
+            let method_name = match &call.args[1].value.kind {
+                ExprKind::Literal(crate::compiler::ast::Literal::String(s)) => Some(s.clone()),
+                _ => None,
+            };
+            if let (Some(t), Some(m)) = (type_name, method_name) {
+                let qualified = format!("{}__{}", t, m);
+                if signatures.contains_key(&qualified) {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            DiagnosticPhase::TypeChecker,
+                            DiagnosticCode::E4005,
+                            format!("$declare: '{}' is already declared on type '{}'", m, t),
+                        )
+                        .with_primary_file_label(
+                            file_path.to_path_buf(),
+                            Some(expr.span),
+                            "remove the duplicate declaration",
+                        ),
+                    );
+                }
+            }
+            return Some(types.intern(Type::Unknown));
+        }
+        "$fn_return" => {
+            if call.args.len() != 1 {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "$fn_return expects one argument: a function type",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "use $fn_return(FunctionType)",
+                    ),
+                );
+            }
+            return Some(types.intern(Type::TypeType));
+        }
+        "$fn_params" => {
+            if call.args.len() != 1 {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "$fn_params expects one argument: a function type",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(expr.span),
+                        "use $fn_params(FunctionType)",
+                    ),
+                );
+            }
+            return Some(types.intern(Type::TypeType));
         }
         "$typename" => {
             if call.args.len() != 1 {
@@ -6965,8 +7568,14 @@ fn inline_function_body_supported(body: &FnBody) -> bool {
         FnBody::ArrowExpr(expr) => !contains_disallowed_inline_flow(expr),
         FnBody::Block(block) => {
             !block.statements.iter().any(|stmt| match stmt {
-                Stmt::Binding(binding) => contains_disallowed_inline_flow(&binding.value),
-                Stmt::Destructure(d) => contains_disallowed_inline_flow(&d.value),
+                Stmt::Declaration(decl) => decl
+                    .expr_value()
+                    .map(contains_disallowed_inline_flow)
+                    .unwrap_or(false),
+                Stmt::Assignment(assign) => {
+                    contains_disallowed_inline_flow(&assign.target)
+                        || contains_disallowed_inline_flow(&assign.value)
+                }
                 Stmt::Expr(expr) => contains_disallowed_inline_flow(expr),
             }) && block
                 .tail_expr
@@ -6990,11 +7599,6 @@ fn contains_disallowed_inline_flow(expr: &Expr) -> bool {
         | ExprKind::ErrorUnwrap { expr }
         | ExprKind::DerefAccess { base: expr } => contains_disallowed_inline_flow(expr),
         ExprKind::Binary { left, right, .. }
-        | ExprKind::Assign {
-            target: left,
-            value: right,
-            ..
-        }
         | ExprKind::Index {
             base: left,
             index: right,
@@ -7022,8 +7626,14 @@ fn contains_disallowed_inline_flow(expr: &Expr) -> bool {
         }
         ExprKind::Block(block) => {
             block.statements.iter().any(|stmt| match stmt {
-                Stmt::Binding(binding) => contains_disallowed_inline_flow(&binding.value),
-                Stmt::Destructure(d) => contains_disallowed_inline_flow(&d.value),
+                Stmt::Declaration(decl) => decl
+                    .expr_value()
+                    .map(contains_disallowed_inline_flow)
+                    .unwrap_or(false),
+                Stmt::Assignment(assign) => {
+                    contains_disallowed_inline_flow(&assign.target)
+                        || contains_disallowed_inline_flow(&assign.value)
+                }
                 Stmt::Expr(expr) => contains_disallowed_inline_flow(expr),
             }) || block
                 .tail_expr
@@ -7267,7 +7877,7 @@ pub(super) fn pattern_compatibility_issue(
             }
         }
         PatternKind::EnumVariant { .. } => match types.get(scrutinee) {
-            Type::Unknown => None,
+            Type::Unknown | Type::Named(_) => None,
             _ => Some("enum pattern requires enum-typed scrutinee".to_string()),
         },
         PatternKind::Typed { pattern, ty } => {
@@ -7440,10 +8050,13 @@ fn method_lookup_key(
     types: &TypeStore,
 ) -> Option<String> {
     let method_key = match types.get(receiver_ty) {
-        Type::Pointer { inner } | Type::Optional(inner) => {
+        Type::Pointer { inner, .. } | Type::Optional(inner) => {
             return method_lookup_key(*inner, field_name, signatures, types);
         }
-        Type::TypeParam(type_name) | Type::Applied { callee: type_name, .. } => {
+        Type::TypeParam(type_name)
+        | Type::Applied {
+            callee: type_name, ..
+        } => {
             format!("{type_name}__{field_name}")
         }
         _ => return None,
@@ -7511,6 +8124,8 @@ pub(super) fn unify_branch_types(
         }
         (Type::Unknown, _) => right,
         (_, Type::Unknown) => left,
+        (Type::Named(_), _) => right,
+        (_, Type::Named(_)) => left,
         _ => {
             diagnostics.push(
                 Diagnostic::error(
@@ -7563,7 +8178,7 @@ pub(super) fn resolve_type_expr(ty: &TypeExpr, types: &mut TypeStore) -> Option<
             {
                 return Some(types.intern(Type::TypeParam(name.text.clone())));
             }
-            Some(types.intern(Type::Unknown))
+            Some(types.intern(Type::Named(name.text.clone())))
         }
         TypeExprKind::Applied { callee, args } => {
             let resolved_args = args
@@ -7593,17 +8208,23 @@ pub(super) fn resolve_type_expr(ty: &TypeExpr, types: &mut TypeStore) -> Option<
                 }),
             )
         }
-        TypeExprKind::Pointer { inner } => {
+        TypeExprKind::Pointer { inner, mutable } => {
             let inner = resolve_type_expr(inner, types)?;
-            Some(types.intern(Type::Pointer { inner }))
+            Some(types.intern(Type::Pointer {
+                mutable: *mutable,
+                inner,
+            }))
         }
         TypeExprKind::Array { element, .. } => {
             let elem = resolve_type_expr(element, types)?;
             Some(types.intern(Type::Array(elem)))
         }
-        TypeExprKind::Slice { element } => {
+        TypeExprKind::Slice { element, mutable } => {
             let elem = resolve_type_expr(element, types)?;
-            Some(types.intern(Type::Slice { element: elem }))
+            Some(types.intern(Type::Slice {
+                mutable: *mutable,
+                element: elem,
+            }))
         }
         TypeExprKind::Function(fn_ty) => {
             let param_types = fn_ty
@@ -7653,7 +8274,10 @@ pub(super) fn validate_any_usage(
         TypeExprKind::Named(ident) if ident.text == "any" => {
             if !matches!(
                 context,
-                AnyUsageContext::FunctionParam | AnyUsageContext::PointerInner
+                AnyUsageContext::FunctionParam
+                    | AnyUsageContext::FunctionReturn
+                    | AnyUsageContext::FunctionParamInner
+                    | AnyUsageContext::PointerInner
             ) {
                 diagnostics.push(
                     Diagnostic::error(
@@ -7683,13 +8307,87 @@ pub(super) fn validate_any_usage(
                 ),
             );
         }
-        TypeExprKind::Pointer { inner } => {
-            validate_any_usage(inner, AnyUsageContext::PointerInner, diagnostics, file_path)
+        TypeExprKind::Pointer { inner, mutable } => {
+            if *mutable
+                && !matches!(
+                    context,
+                    AnyUsageContext::FunctionParam | AnyUsageContext::FunctionParamInner
+                )
+            {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "`*mut T` is only allowed in function parameter or receiver type positions",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(ty.span),
+                        "use `*T` here, or move the mutable pointer type to a function parameter",
+                    ),
+                );
+            }
+            let next_context = if matches!(
+                context,
+                AnyUsageContext::FunctionParam | AnyUsageContext::FunctionParamInner
+            ) {
+                AnyUsageContext::FunctionParamInner
+            } else {
+                AnyUsageContext::PointerInner
+            };
+            validate_any_usage(inner, next_context, diagnostics, file_path)
         }
         TypeExprKind::Optional { inner } => {
             validate_any_usage(inner, context, diagnostics, file_path)
         }
-        TypeExprKind::Slice { element, .. } | TypeExprKind::Array { element, .. } => {
+        TypeExprKind::Slice { element, mutable } => {
+            if *mutable
+                && !matches!(
+                    context,
+                    AnyUsageContext::FunctionParam | AnyUsageContext::FunctionParamInner
+                )
+            {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "`[]mut T` is only allowed in function parameter or receiver type positions",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(ty.span),
+                        "use `[]T` here, or move the mutable slice type to a function parameter",
+                    ),
+                );
+            }
+            let next_context = if matches!(
+                context,
+                AnyUsageContext::FunctionParam | AnyUsageContext::FunctionParamInner
+            ) {
+                AnyUsageContext::FunctionParamInner
+            } else {
+                context
+            };
+            validate_any_usage(element, next_context, diagnostics, file_path)
+        }
+        TypeExprKind::Array { element, .. } => {
+            if matches!(
+                context,
+                AnyUsageContext::FunctionParam | AnyUsageContext::FunctionReturn
+            ) {
+                diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::TypeChecker,
+                        DiagnosticCode::E4005,
+                        "`[N]T` is not allowed as direct function parameter or return type",
+                    )
+                    .with_primary_file_label(
+                        file_path.to_path_buf(),
+                        Some(ty.span),
+                        "use `*[N]T`, `*mut [N]T`, `[]T`, or `[]mut T` at function boundaries",
+                    ),
+                );
+            }
             validate_any_usage(element, context, diagnostics, file_path)
         }
         TypeExprKind::Errorable { ok, .. } => {
@@ -7711,7 +8409,7 @@ pub(super) fn validate_any_usage(
             }
             validate_any_usage(
                 &fn_ty.return_type,
-                AnyUsageContext::Other,
+                AnyUsageContext::FunctionReturn,
                 diagnostics,
                 file_path,
             );
@@ -7750,6 +8448,7 @@ pub(super) fn types_compatible(expected: TypeId, actual: TypeId, types: &TypeSto
                 && (expected_errors.is_empty() || actual_errors.is_subset(expected_errors))
         }
         (Type::Unknown, _) | (_, Type::Unknown) => true,
+        (Type::Named(_), _) | (_, Type::Named(_)) => true,
         (Type::TypeParam(_), _) | (_, Type::TypeParam(_)) => true,
         (Type::Any, _) => true,
         (
@@ -7781,27 +8480,39 @@ pub(super) fn types_compatible(expected: TypeId, actual: TypeId, types: &TypeSto
         (Type::Float { .. }, Type::Int { .. }) => true,
         (
             Type::Pointer {
+                mutable: expected_mutable,
                 inner: expected_inner,
             },
             Type::Pointer {
+                mutable: actual_mutable,
                 inner: actual_inner,
             },
         ) => {
             let expected_is_opaque = matches!(types.get(*expected_inner), Type::Opaque);
-            expected_is_opaque || types_compatible(*expected_inner, *actual_inner, types)
+            (expected_is_opaque || types_compatible(*expected_inner, *actual_inner, types))
+                && (!*expected_mutable || *actual_mutable)
         }
         (
             Type::Slice {
+                mutable: expected_mutable,
                 element: expected_elem,
             },
             Type::Slice {
+                mutable: actual_mutable,
                 element: actual_elem,
             },
-        ) => types_compatible(*expected_elem, *actual_elem, types),
+        ) => types_compatible(*expected_elem, *actual_elem, types)
+            && (!*expected_mutable || *actual_mutable),
         (Type::Array(expected_elem), Type::Array(actual_elem)) => {
             types_compatible(*expected_elem, *actual_elem, types)
         }
-        (Type::Slice { element, .. }, Type::Array(actual_elem)) => {
+        (
+            Type::Slice {
+                mutable: false,
+                element,
+            },
+            Type::Array(actual_elem),
+        ) => {
             types_compatible(*element, *actual_elem, types)
         }
         (Type::Tuple(expected_elements), Type::Tuple(actual_elements)) => {

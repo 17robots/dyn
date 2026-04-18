@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::compiler::ast::{AssignOp, BinaryOp, UnaryOp};
 use crate::compiler::diagnostics::{Diagnostic, DiagnosticCode, DiagnosticPhase};
@@ -310,7 +312,7 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
             let mut inline_function_names = qualified_inline_function_names.clone();
             inline_function_names.extend(local_inline_function_names.clone());
 
-            let named_type_literals = module
+            let mut named_type_literals = module
                 .items
                 .iter()
                 .filter_map(|item| {
@@ -354,6 +356,46 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
 
             let global_names: BTreeSet<String> = globals.iter().map(|g| g.name.clone()).collect();
 
+            let declared_functions = Rc::new(RefCell::new(DeclaredFunctionRegistry::default()));
+            let type_eval_shared = FunctionLowererShared {
+                function_return_types: function_return_types.clone(),
+                function_return_hints: function_return_hints.clone(),
+                named_type_literals: named_type_literals.clone(),
+                enum_repr_bits_by_name: global_enum_repr_bits_by_name.clone(),
+                enum_variant_tags_by_name: global_enum_variant_tags_by_name.clone(),
+                function_param_names: function_param_names.clone(),
+                function_param_defaults: function_param_defaults.clone(),
+                function_param_type_hints: function_param_type_hints.clone(),
+                function_exprs: function_exprs.clone(),
+                inline_function_names: inline_function_names.clone(),
+                declared_functions: declared_functions.clone(),
+                module_ids_by_key: module_ids_by_key.clone(),
+                module_exports_by_id: module_exports_by_id.clone(),
+                global_names: global_names.clone(),
+                build_config: build_config.clone(),
+            };
+            let mut predeclared_functions = Vec::new();
+            for item in &module.items {
+                if named_type_literals.contains_key(&item.name) {
+                    continue;
+                }
+                if global_names.contains(&item.name) {
+                    continue;
+                }
+                let mut lowerer = FunctionLowerer::new(
+                    module.key.clone(),
+                    module_source_path.clone(),
+                    item.name.clone(),
+                    type_eval_shared.clone(),
+                );
+                if let Some(ComptimeValue::Type(type_name)) =
+                    lowerer.try_eval_comptime_expr(&item.value, 0)
+                {
+                    named_type_literals.insert(item.name.clone(), type_name);
+                }
+                predeclared_functions.extend(std::mem::take(&mut lowerer.hoisted_lambdas));
+            }
+
             let shared = FunctionLowererShared {
                 function_return_types: function_return_types.clone(),
                 function_return_hints: function_return_hints.clone(),
@@ -365,94 +407,38 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 function_param_type_hints: function_param_type_hints.clone(),
                 function_exprs: function_exprs.clone(),
                 inline_function_names: inline_function_names.clone(),
+                declared_functions: declared_functions.clone(),
                 module_ids_by_key: module_ids_by_key.clone(),
                 module_exports_by_id: module_exports_by_id.clone(),
                 global_names: global_names.clone(),
                 build_config: build_config.clone(),
             };
 
-            let functions = module
-                .items
-                .iter()
-                .filter(|item| !global_names.contains(&item.name))
-                .flat_map(|item| {
-                    let mut lowerer = FunctionLowerer::new(
-                        module.key.clone(),
-                        module_source_path.clone(),
-                        item.name.clone(),
-                        shared.clone(),
-                    );
-                    lowerer.function.def_id = item.def_id;
-                    lowerer.function.return_type =
-                        item.type_hint.clone().or(item.inferred_type.clone());
+            let mut functions = predeclared_functions;
+            functions.extend(
+                module
+                    .items
+                    .iter()
+                    .filter(|item| !global_names.contains(&item.name))
+                    .flat_map(|item| {
+                        let mut lowerer = FunctionLowerer::new(
+                            module.key.clone(),
+                            module_source_path.clone(),
+                            item.name.clone(),
+                            shared.clone(),
+                        );
+                        lowerer.function.def_id = item.def_id;
+                        lowerer.function.return_type =
+                            item.type_hint.clone().or(item.inferred_type.clone());
 
-                    match &item.value.kind {
-                        HirExprKind::Function {
-                            params,
-                            param_types,
-                            param_defaults: _,
-                            has_explicit_return_type,
-                            body,
-                        } => {
-                            let allows_or_return_tail_implicit_success =
-                                has_or_return_tail(body) && !has_explicit_return_type;
-                            let allows_non_i32_main_implicit_success =
-                                allows_non_i32_main_implicit_success(
-                                    &module.key,
-                                    &item.name,
-                                    item.type_hint.as_deref().or(item.inferred_type.as_deref()),
-                                );
-
-                            lowerer.current_param_type_hints = param_types.clone();
-                            lowerer.current_self_type_hint = item.enclosing_struct.clone();
-                            lowerer.function.param_type_hints = param_types.clone();
-                            lowerer.function.param_types = param_types
-                                .iter()
-                                .map(|ty| {
-                                    ty.as_deref()
-                                        .map(parse_type_hint)
-                                        .unwrap_or(MirValueType::Unknown)
-                                })
-                                .collect();
-                            for (idx, param) in params.iter().enumerate() {
-                                let ty = lowerer
-                                    .function
-                                    .param_types
-                                    .get(idx)
-                                    .cloned()
-                                    .unwrap_or(MirValueType::Unknown);
-                                let value = lowerer.push_eval(
-                                    lowerer.function.entry,
-                                    MirValue::Param { index: idx },
-                                    ty,
-                                );
-                                lowerer.locals.insert(param.clone(), value);
-                                if let Some(Some(hint)) = param_types.get(idx) {
-                                    lowerer.local_type_hints.insert(param.clone(), hint.clone());
-                                }
-                            }
-                            let (end_block, value) =
-                                lowerer.lower_expr(lowerer.function.entry, body);
-                            if !lowerer.is_terminated(end_block) {
-                                let end_block = lowerer.emit_deferred(end_block, None);
-                                if allows_or_return_tail_implicit_success
-                                    || allows_non_i32_main_implicit_success
-                                {
-                                    lowerer.set_terminator(end_block, MirTerminator::Return(None));
-                                } else {
-                                    lowerer.set_terminator(end_block, MirTerminator::Return(value));
-                                }
-                            }
-                        }
-                        HirExprKind::Inline { expr } => {
-                            if let HirExprKind::Function {
+                        match &item.value.kind {
+                            HirExprKind::Function {
                                 params,
                                 param_types,
                                 param_defaults: _,
                                 has_explicit_return_type,
                                 body,
-                            } = &expr.kind
-                            {
+                            } => {
                                 let allows_or_return_tail_implicit_success =
                                     has_or_return_tail(body) && !has_explicit_return_type;
                                 let allows_non_i32_main_implicit_success =
@@ -492,43 +478,121 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                             .insert(param.clone(), hint.clone());
                                     }
                                 }
-                                // If any param has a generic type variable (Unknown) or is
-                                // typed `any` (which maps to u64 but is logically generic),
-                                // the function is only valid when inlined with concrete types.
-                                // Skip the body to avoid spurious comptime errors in the
-                                // standalone (never-executed) version.
-                                let has_generic_type_param = lowerer
-                                    .function
-                                    .param_types
-                                    .iter()
-                                    .any(|t| matches!(t, MirValueType::Unknown))
-                                    || param_types.iter().any(|ty| ty.as_deref() == Some("any"));
-                                if !has_generic_type_param {
-                                    let (end_block, value) =
-                                        lowerer.lower_expr(lowerer.function.entry, body);
-                                    if !lowerer.is_terminated(end_block) {
-                                        let end_block = lowerer.emit_deferred(end_block, None);
-                                        if allows_or_return_tail_implicit_success
-                                            || allows_non_i32_main_implicit_success
-                                        {
-                                            lowerer.set_terminator(
-                                                end_block,
-                                                MirTerminator::Return(None),
-                                            );
-                                        } else {
-                                            lowerer.set_terminator(
-                                                end_block,
-                                                MirTerminator::Return(value),
-                                            );
+                                let (end_block, value) =
+                                    lowerer.lower_expr(lowerer.function.entry, body);
+                                if !lowerer.is_terminated(end_block) {
+                                    let end_block = lowerer.emit_deferred(end_block, None);
+                                    if allows_or_return_tail_implicit_success
+                                        || allows_non_i32_main_implicit_success
+                                    {
+                                        lowerer
+                                            .set_terminator(end_block, MirTerminator::Return(None));
+                                    } else {
+                                        lowerer.set_terminator(
+                                            end_block,
+                                            MirTerminator::Return(value),
+                                        );
+                                    }
+                                }
+                            }
+                            HirExprKind::Inline { expr } => {
+                                if let HirExprKind::Function {
+                                    params,
+                                    param_types,
+                                    param_defaults: _,
+                                    has_explicit_return_type,
+                                    body,
+                                } = &expr.kind
+                                {
+                                    let allows_or_return_tail_implicit_success =
+                                        has_or_return_tail(body) && !has_explicit_return_type;
+                                    let allows_non_i32_main_implicit_success =
+                                        allows_non_i32_main_implicit_success(
+                                            &module.key,
+                                            &item.name,
+                                            item.type_hint
+                                                .as_deref()
+                                                .or(item.inferred_type.as_deref()),
+                                        );
+
+                                    lowerer.current_param_type_hints = param_types.clone();
+                                    lowerer.current_self_type_hint = item.enclosing_struct.clone();
+                                    lowerer.function.param_type_hints = param_types.clone();
+                                    lowerer.function.param_types = param_types
+                                        .iter()
+                                        .map(|ty| {
+                                            ty.as_deref()
+                                                .map(parse_type_hint)
+                                                .unwrap_or(MirValueType::Unknown)
+                                        })
+                                        .collect();
+                                    for (idx, param) in params.iter().enumerate() {
+                                        let ty = lowerer
+                                            .function
+                                            .param_types
+                                            .get(idx)
+                                            .cloned()
+                                            .unwrap_or(MirValueType::Unknown);
+                                        let value = lowerer.push_eval(
+                                            lowerer.function.entry,
+                                            MirValue::Param { index: idx },
+                                            ty,
+                                        );
+                                        lowerer.locals.insert(param.clone(), value);
+                                        if let Some(Some(hint)) = param_types.get(idx) {
+                                            lowerer
+                                                .local_type_hints
+                                                .insert(param.clone(), hint.clone());
+                                        }
+                                    }
+                                    // If any param has a generic type variable (Unknown), the
+                                    // function is only valid when inlined with concrete types.
+                                    // Skip the body to avoid spurious comptime errors in the
+                                    // standalone (never-executed) version.
+                                    let has_generic_type_param = lowerer
+                                        .function
+                                        .param_types
+                                        .iter()
+                                        .any(|t| matches!(t, MirValueType::Unknown));
+                                    if !has_generic_type_param {
+                                        let (end_block, value) =
+                                            lowerer.lower_expr(lowerer.function.entry, body);
+                                        if !lowerer.is_terminated(end_block) {
+                                            let end_block = lowerer.emit_deferred(end_block, None);
+                                            if allows_or_return_tail_implicit_success
+                                                || allows_non_i32_main_implicit_success
+                                            {
+                                                lowerer.set_terminator(
+                                                    end_block,
+                                                    MirTerminator::Return(None),
+                                                );
+                                            } else {
+                                                lowerer.set_terminator(
+                                                    end_block,
+                                                    MirTerminator::Return(value),
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        let entry = lowerer.function.entry;
+                                        if !lowerer.is_terminated(entry) {
+                                            lowerer
+                                                .set_terminator(entry, MirTerminator::Return(None));
                                         }
                                     }
                                 } else {
-                                    let entry = lowerer.function.entry;
-                                    if !lowerer.is_terminated(entry) {
-                                        lowerer.set_terminator(entry, MirTerminator::Return(None));
+                                    let (end_block, value) =
+                                        lowerer.lower_expr(lowerer.function.entry, &item.value);
+                                    if !lowerer.is_terminated(end_block) {
+                                        let end_block = lowerer.emit_deferred(end_block, None);
+                                        lowerer.set_terminator(
+                                            end_block,
+                                            MirTerminator::Return(value),
+                                        );
                                     }
                                 }
-                            } else {
+                            }
+                            _ => {
                                 let (end_block, value) =
                                     lowerer.lower_expr(lowerer.function.entry, &item.value);
                                 if !lowerer.is_terminated(end_block) {
@@ -537,22 +601,14 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                 }
                             }
                         }
-                        _ => {
-                            let (end_block, value) =
-                                lowerer.lower_expr(lowerer.function.entry, &item.value);
-                            if !lowerer.is_terminated(end_block) {
-                                let end_block = lowerer.emit_deferred(end_block, None);
-                                lowerer.set_terminator(end_block, MirTerminator::Return(value));
-                            }
-                        }
-                    }
 
-                    module_diagnostics.append(&mut lowerer.diagnostics);
-                    let mut result = std::mem::take(&mut lowerer.hoisted_lambdas);
-                    result.push(lowerer.function);
-                    result
-                })
-                .collect::<Vec<_>>();
+                        module_diagnostics.append(&mut lowerer.diagnostics);
+                        let mut result = std::mem::take(&mut lowerer.hoisted_lambdas);
+                        result.push(lowerer.function);
+                        result
+                    })
+                    .collect::<Vec<_>>(),
+            );
 
             let extern_functions = module
                 .extern_functions
@@ -720,6 +776,7 @@ struct FunctionLowerer {
     function_param_type_hints: BTreeMap<String, Vec<Option<String>>>,
     function_exprs: BTreeMap<String, HirExpr>,
     inline_function_names: BTreeSet<String>,
+    declared_functions: Rc<RefCell<DeclaredFunctionRegistry>>,
     module_ids_by_key: BTreeMap<ModuleKey, ModuleId>,
     module_exports_by_id: BTreeMap<ModuleId, Vec<String>>,
     current_param_type_hints: Vec<Option<String>>,
@@ -779,6 +836,16 @@ enum ComptimeValue {
     Literal(HirLiteral),
     Type(String),
     Function(String),
+    Struct(BTreeMap<String, ComptimeValue>),
+}
+
+#[derive(Default)]
+struct DeclaredFunctionRegistry {
+    function_exprs: BTreeMap<String, HirExpr>,
+    function_param_names: BTreeMap<String, Vec<String>>,
+    function_param_defaults: BTreeMap<String, Vec<Option<HirExpr>>>,
+    function_param_type_hints: BTreeMap<String, Vec<Option<String>>>,
+    inline_function_names: BTreeSet<String>,
 }
 
 #[derive(Clone)]
@@ -793,6 +860,7 @@ struct FunctionLowererShared {
     function_param_type_hints: BTreeMap<String, Vec<Option<String>>>,
     function_exprs: BTreeMap<String, HirExpr>,
     inline_function_names: BTreeSet<String>,
+    declared_functions: Rc<RefCell<DeclaredFunctionRegistry>>,
     module_ids_by_key: BTreeMap<ModuleKey, ModuleId>,
     module_exports_by_id: BTreeMap<ModuleId, Vec<String>>,
     global_names: BTreeSet<String>,
@@ -808,14 +876,117 @@ fn extract_inline_function_body(expr: &HirExpr) -> Option<(&Vec<String>, &HirExp
 }
 
 fn normalize_inline_hir_body(expr: &HirExpr) -> HirExpr {
-    let mut normalized = expr.clone();
-    if let HirExprKind::Block { body, .. } = &mut normalized.kind {
-        if let Some(last) = body.last_mut() {
-            if let HirExprKind::Return { value: Some(value) } = &last.kind {
-                *last = (**value).clone();
+    fn normalize_expr(expr: &mut HirExpr) {
+        match &mut expr.kind {
+            HirExprKind::Block { body, .. } => {
+                for value in body.iter_mut() {
+                    normalize_expr(value);
+                }
+                let remove_trailing_void_return = body
+                    .last()
+                    .is_some_and(|last| matches!(last.kind, HirExprKind::Return { value: None }));
+                if remove_trailing_void_return {
+                    body.pop();
+                } else if let Some(last) = body.last_mut() {
+                    if let HirExprKind::Return { value: Some(value) } = &last.kind {
+                        *last = (**value).clone();
+                        normalize_expr(last);
+                    }
+                }
             }
+            HirExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                normalize_expr(condition);
+                normalize_expr(then_branch);
+                if let Some(else_branch) = else_branch {
+                    normalize_expr(else_branch);
+                }
+            }
+            HirExprKind::Match { value, arms } => {
+                normalize_expr(value);
+                for arm in arms {
+                    if let Some(guard) = &mut arm.guard {
+                        normalize_expr(guard);
+                    }
+                    normalize_expr(&mut arm.value);
+                }
+            }
+            HirExprKind::Inline { expr } | HirExprKind::Comptime { expr } => normalize_expr(expr),
+            HirExprKind::Function { body, .. } => normalize_expr(body),
+            HirExprKind::Unary { expr, .. }
+            | HirExprKind::DerefAccess { base: expr }
+            | HirExprKind::OptionalUnwrap { value: expr }
+            | HirExprKind::ErrorUnwrap { value: expr } => normalize_expr(expr),
+            HirExprKind::Binary { left, right, .. }
+            | HirExprKind::Assign {
+                target: left,
+                value: right,
+                ..
+            }
+            | HirExprKind::Index {
+                base: left,
+                index: right,
+            } => {
+                normalize_expr(left);
+                normalize_expr(right);
+            }
+            HirExprKind::Call { callee, args } => {
+                normalize_expr(callee);
+                for arg in args {
+                    normalize_expr(&mut arg.value);
+                }
+            }
+            HirExprKind::FieldAccess { base, .. } => normalize_expr(base),
+            HirExprKind::Slice {
+                base, start, end, ..
+            } => {
+                normalize_expr(base);
+                if let Some(start) = start {
+                    normalize_expr(start);
+                }
+                if let Some(end) = end {
+                    normalize_expr(end);
+                }
+            }
+            HirExprKind::StructLiteral { fields, .. } => {
+                for (_, value) in fields {
+                    normalize_expr(value);
+                }
+            }
+            HirExprKind::EnumVariant { payload, .. } => {
+                for value in payload {
+                    normalize_expr(value);
+                }
+            }
+            HirExprKind::Let { value, .. } => normalize_expr(value),
+            HirExprKind::Break { value, .. } => {
+                if let Some(value) = value {
+                    normalize_expr(value);
+                }
+            }
+            HirExprKind::Return { value } => {
+                if let Some(value) = value {
+                    normalize_expr(value);
+                }
+            }
+            HirExprKind::For(_)
+            | HirExprKind::Defer { .. }
+            | HirExprKind::OrElse { .. }
+            | HirExprKind::Continue { .. }
+            | HirExprKind::Use { .. }
+            | HirExprKind::Literal(_)
+            | HirExprKind::Ident(_)
+            | HirExprKind::TypeLiteral(_)
+            | HirExprKind::Unknown => {}
         }
     }
+
+    let mut normalized = expr.clone();
+    normalize_expr(&mut normalized);
     normalized
 }
 
@@ -900,7 +1071,9 @@ fn contains_disallowed_inline_flow_hir(expr: &HirExpr) -> bool {
         }
         HirExprKind::For(for_expr) => match for_expr {
             HirForExpr::Infinite { body, .. } => contains_disallowed_inline_flow_hir(body),
-            HirForExpr::WhileLike { condition, body, .. } => {
+            HirForExpr::WhileLike {
+                condition, body, ..
+            } => {
                 contains_disallowed_inline_flow_hir(condition)
                     || contains_disallowed_inline_flow_hir(body)
             }
@@ -1054,7 +1227,9 @@ fn collect_assigned_local_names(expr: &HirExpr, names: &mut BTreeMap<String, ()>
         HirExprKind::For(HirForExpr::Infinite { body, .. }) => {
             collect_assigned_local_names(body, names);
         }
-        HirExprKind::For(HirForExpr::WhileLike { condition, body, .. }) => {
+        HirExprKind::For(HirForExpr::WhileLike {
+            condition, body, ..
+        }) => {
             collect_assigned_local_names(condition, names);
             collect_assigned_local_names(body, names);
         }

@@ -1,13 +1,10 @@
 module os
 
 io := use "std/io"
+str := use "std/str"
 host_file_platform := use "std/platform/host"
 host_read_fn := host_file_platform.read
 host_write_fn := host_file_platform.write
-
-pub File := struct {
-    fd: i32,
-}
 
 file_write := (ctx: *any, buf: []u8) usize {
     fd := $as(i32, $as(usize, ctx))
@@ -15,7 +12,6 @@ file_write := (ctx: *any, buf: []u8) usize {
     if wrote < 0 return 0
     return $as(usize, wrote)
 }
-
 file_read := (ctx: *any, buf: []u8) usize {
     fd := $as(i32, $as(usize, ctx))
     got := host_read_fn(fd, $as(*any, buf.ptr), buf.len)
@@ -23,63 +19,148 @@ file_read := (ctx: *any, buf: []u8) usize {
     return $as(usize, got)
 }
 
-pub File.writer := (self: File) io.Writer {
-    return .{
-        ctx: $as(*any, $as(usize, self.fd)),
-        write_fn: file_write,
+fd_write_all := (fd: i32, buf: []u8) {
+    mut wrote: usize = 0
+    for wrote < buf.len: {
+        chunk := host_write_fn(fd, $as(*any, $as(usize, buf.ptr) + wrote), buf.len - wrote)
+        if chunk <= 0 return
+        wrote += $as(usize, chunk)
+    }
+    return
+}
+
+fd_write_byte := (fd: i32, byte: u8) {
+    buf: [1]u8 = [byte]
+    fd_write_all(fd, buf[..])
+    return
+}
+
+fd_print := (fd: i32, v: any) {
+    return comp match $typeof(v) {
+        []u8: { fd_write_all(fd, $as([]u8, v)); return },
+        u1: {
+            if $as(u1, v) != false {
+                fd_write_all(fd, "true")
+            } else {
+                fd_write_all(fd, "false")
+            }
+            return
+        },
+        u8: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.uint_to_buf($as(u64, v), buf[..]))
+            return
+        },
+        u16: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.uint_to_buf($as(u64, v), buf[..]))
+            return
+        },
+        u32: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.uint_to_buf($as(u64, v), buf[..]))
+            return
+        },
+        u64: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.uint_to_buf($as(u64, v), buf[..]))
+            return
+        },
+        usize: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.uint_to_buf($as(u64, v), buf[..]))
+            return
+        },
+        i8: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.int_to_buf($as(i64, v), buf[..]))
+            return
+        },
+        i16: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.int_to_buf($as(i64, v), buf[..]))
+            return
+        },
+        i32: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.int_to_buf($as(i64, v), buf[..]))
+            return
+        },
+        i64: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.int_to_buf($as(i64, v), buf[..]))
+            return
+        },
+        isize: {
+            buf: [32]u8 = []
+            fd_write_all(fd, str.int_to_buf($as(i64, v), buf[..]))
+            return
+        },
+        f32: {
+            buf: [64]u8 = []
+            fd_write_all(fd, str.float_to_buf($as(f64, v), buf[..]))
+            return
+        },
+        f64: {
+            buf: [64]u8 = []
+            fd_write_all(fd, str.float_to_buf($as(f64, v), buf[..]))
+            return
+        },
+        _: {
+            fd_write_all(fd, "<value>")
+            return
+        },
     }
 }
 
-pub File.reader := (self: File) io.Reader {
-    return .{
-        ctx: $as(*any, $as(usize, self.fd)),
-        read_fn: file_read,
-    }
-}
-
+pub File := struct { fd: i32, }
+pub File.writer := (self: File) io.Writer => .{ ctx: $as(*any, $as(usize, self.fd)), write_fn: file_write }
+pub File.reader := (self: File) io.Reader => .{ ctx: $as(*any, $as(usize, self.fd)), read_fn: file_read }
 pub stdout := File{ fd: 1 }
 pub stderr := File{ fd: 2 }
 pub stdin := File{ fd: 0 }
 
 pub write := (buf: []u8) {
-    _ = stdout.writer().write_all(buf)
+    fd_write_all(1, buf)
     return
 }
 
 pub writeln := (buf: []u8) {
-    _ = stdout.writer().write_all(buf)
-    _ = stdout.writer().write_byte('\n')
+    fd_write_all(1, buf)
+    fd_write_byte(1, '\n')
     return
 }
 
 pub ewrite := (buf: []u8) {
-    _ = stderr.writer().write_all(buf)
+    fd_write_all(2, buf)
     return
 }
 
 pub ewriteln := (buf: []u8) {
-    _ = stderr.writer().write_all(buf)
-    _ = stderr.writer().write_byte('\n')
+    fd_write_all(2, buf)
+    fd_write_byte(2, '\n')
     return
 }
 
 pub print := (v: any) {
-    stdout.writer().print(v)
+    fd_print(1, v)
     return
 }
 
 pub println := (v: any) {
-    stdout.writer().println(v)
+    fd_print(1, v)
+    fd_write_byte(1, '\n')
     return
 }
 
 pub eprint := (v: any) {
-    stderr.writer().print(v)
+    fd_print(2, v)
     return
 }
 
 pub eprintln := (v: any) {
-    stderr.writer().println(v)
+    fd_print(2, v)
+    fd_write_byte(2, '\n')
     return
 }
 

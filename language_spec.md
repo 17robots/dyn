@@ -15,7 +15,7 @@
 ## 2. VARIABLES & MUTABILITY
 - Variables are immutable by default.
 - Assignment uses `:=` for type inference, or `: type =` for explicit typing. `:` and `=` are distinct tokens; omitting the type (`:=`) tells the compiler to infer it.
-- Mutability is strictly opt-in using the `mut` keyword (e.g., `mut total = 0` or `mut d: u1 = false`).
+- Mutability is strictly opt-in using the `mut` keyword (e.g., `mut total := 0` or `mut d: bool = false`).
 - Null assignment rules (local variables only):
   - If the initial value is `null`, the variable **must** be declared `mut` and the type **must** be explicitly annotated (e.g., `mut o: ?i32 = null`). The type cannot be inferred from `null` alone.
   - Any local variable with a nullable type (`?T`) must have its type explicitly annotated.
@@ -34,8 +34,11 @@
 - Bool: `bool` is an alias for `u1`. `true` and `false` are `u1` literals (the same way `'a'` is a `u8` literal). There is no separate boolean type.
 - Strings/Chars: Strings (`"hello"`) resolve to `[]u8`. Characters (`'a'`) resolve to `u8`.
   - Storage: An immutable string binding is stored in the binary's read-only data segment. A `mut []u8` binding is stored on the stack (or heap if explicitly allocated).
-- Void: `void` is a keyword representing the absence of a value. Functions that do not return a value have return type `void`. Omitting the return type in a function declaration is equivalent to writing `void`.
+- Void functions omit the return type in source syntax. `void` is not written in source declarations.
 - Arrays/Slices: Fixed arrays `[10]i32`. Slices `[]i32` (can be sliced via `i[0..2]` or `j[..]`).
+  - Fixed arrays are storage/value types.
+  - Direct `[N]T` is not used as function parameter or return type.
+  - Function boundaries use `*[N]T`, `*mut [N]T`, `[]T`, or `[]mut T`.
 - Tuples: `{val1, val2, val3}` is an anonymous positional struct literal — equivalent to `.{}` with unnamed positional fields. Indexed with compile-time integer literals (`t[0]`). The type of `{1, true, "x"}` is an anonymous struct with three positional fields.
 - Pointers: `*i32` (immutable pointer) and `*mut u1` (mutable pointer). Dereferenced using `.*` (e.g., `q.* = false`).
   - Address-of: `&expr` produces a pointer to the value. On an immutable binding it gives `*T`; on a `mut` binding it gives `*mut T`. Example: `p: *i32 = &a`, `q: *mut u1 = &d`.
@@ -68,6 +71,14 @@
   - Example closure: `make_adder := (n: i32) (x: i32) i32 => (x: i32) i32 => x + n` — the returned lambda captures `n`.
 - Comptime Return Type: Prefixing the return type with `comp` means the return type expression is evaluated at compile time. The function produces a value whose concrete type is resolved at the call site.
   - Example: `calc_pi := () comp if use_f64 f64 else f32 => 3.14` — the return type is either `f64` or `f32` depending on the comptime flag.
+
+### Function Boundary Contracts
+- Read-only exact-size block: `hash := (block: *[64]u8) {}`
+- Mutable exact-size block: `fill_block := (block: *mut [64]u8) {}`
+- Read-only variable-size buffer: `read := (buf: []u8) {}`
+- Mutable variable-size buffer: `write := (buf: []mut u8) {}`
+- Cursor-style API that updates caller view: `next := (input: *mut []u8) {}`
+- Invalid direct array boundary: `bad := (buf: [64]u8) {}` and `bad := () [64]u8 => ...`
 
 ## 5. CUSTOM TYPES (STRUCTS & ENUMS)
 - Structs: Anonymous definition assigned to a type variable: `s := struct { item: u32 }`.
@@ -162,8 +173,9 @@
   - `(T: comp type)` — T must be a compile-time-known type.
   - `(x: get_my_type())` — the type annotation is the result of calling `get_my_type()` at compile time.
 - Comptime Evaluation: Prefixing an expression with `comp` forces compile-time execution (`pi := comp calc_pi()`). If evaluation fails, compilation fails (no runtime fallback).
-- Inline Execution: Supported inline forms are `inline for <range>`, direct inline calls, and inline function literals.
-  - `inline for` requires compile-time-evaluable range bounds and unrolls the loop body. Calling non-inline functions from inside an inline for body is permitted (they execute normally). Calling an inline function from inside pastes that function's body at the call site. `break` is not allowed inside `inline for`.
+- Inline Execution: Supported inline forms are declaration-modifier `inline` on function declarations and `inline for <range>`.
+  - `inline for` requires compile-time-evaluable range bounds and unrolls the loop body. `break` is not allowed inside `inline for`.
+  - `name := inline (...) ...` marks a function declaration inline. `inline` is not a general-purpose expression modifier for arbitrary bodies.
   - Inline calls paste the function body at the call site; if inlining is impossible, compilation fails.
 - `$self()` refers to the type currently being instantiated (valid inside struct/type definitions).
 

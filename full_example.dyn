@@ -1,6 +1,7 @@
 // comment
 module main
-main := () ! { // void type but marked as errorable with !
+
+main := () ! { // errorable void function
   a := 1
   b: i32 = 2
   c: i31 = 3
@@ -18,7 +19,7 @@ main := () ! { // void type but marked as errorable with !
   n: ?i32 = 1
   mut o: ?i32 = null
   p: *i32 = &a
-  q: *mut u1 = &d // only possible because d was marked as mut, this is the default type if the variable is mut as well
+  q: *u1 = &d // only possible because d was marked as mut, this is the default type if the variable is mut as well
   q.* = false
   r := enum {
     variant1,
@@ -29,19 +30,12 @@ main := () ! { // void type but marked as errorable with !
       inner3: []u8
     }
   }
-  s := struct {
-    item1: u32,
-    item2: []u8,
-    item3: []i32,
-    new := () s => .{}
-    do_thing := (self: s) {},
-    fn_ptr: fn(self: s) void,
-  }
-  {
-    t := "only valid here"
-  }
-  // t no longer valid
-  mut total = 0
+  s := struct { item1: u32 }
+  s.new := () s => .{ }
+  s.do_thing := (self: s) {}
+  t := "only valid here"
+
+  mut total := 0
   for 0..10: |u| {
     total += u
   }
@@ -129,8 +123,10 @@ DivideError2 := enum {
 }
 divide := (x: f32, y: f32) f32!DivideError1,DivideError2 => if y == 0 DivideError2.DivideByZero else x / y
 
-List := (T: type) type => struct {
-  init := () type => $self()
+List := (T: comp type) type {
+  Thing := struct {}
+  Thing.init := () Thing => .{}
+  return Thing
 }
 List2 := (T: comp type) type => struct {}
 
@@ -148,4 +144,3 @@ get_type := () type {
     }
   }
 }
-

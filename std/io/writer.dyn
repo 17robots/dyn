@@ -8,35 +8,35 @@ pub Writer := struct {
 }
 
 pub write_uint := (w: Writer, n: u64) {
-    buf: [32]u8 = [0]
+    buf: [32]u8 = []
     text := str.uint_to_buf(n, buf[..])
     _ = w.write_all(text)
     return
 }
 
 pub write_int := (w: Writer, n: i64) {
-    buf: [32]u8 = [0]
+    buf: [32]u8 = []
     text := str.int_to_buf(n, buf[..])
     _ = w.write_all(text)
     return
 }
 
 pub write_float := (w: Writer, n: f64) {
-    buf: [64]u8 = [0]
+    buf: [64]u8 = []
     text := str.float_to_buf(n, buf[..])
     _ = w.write_all(text)
     return
 }
 
 pub write_hex := (w: Writer, n: u64) {
-    buf: [32]u8 = [0]
+    buf: [32]u8 = []
     text := str.uint_to_hex_buf(n, buf[..])
     _ = w.write_all(text)
     return
 }
 
 pub write_hex_upper := (w: Writer, n: u64) {
-    buf: [32]u8 = [0]
+    buf: [32]u8 = []
     text := str.uint_to_hex_buf(n, buf[..])
     mut i: usize = 0
     for i < text.len: {
@@ -56,13 +56,46 @@ pub Writer.write_byte := (self: Writer, byte: u8) usize {
 }
 
 pub Writer.write_all := (self: Writer, buf: []u8) usize {
-    return self.write_fn(self.ctx, buf)
+    mut wrote: usize = 0
+    for wrote < buf.len: {
+        chunk := self.write_fn(self.ctx, buf[wrote..])
+        if chunk == 0 break
+        wrote += chunk
+    }
+    return wrote
 }
 
 pub Writer.print := (self: Writer, v: any) {
-    _v := v
-    self.write_all("<value>")
-    return
+    return comp match $typeof(v) {
+        []u8: {
+            _ = self.write_all(v)
+            return
+        },
+        u1: {
+            if v != false {
+                _ = self.write_all("true")
+            } else {
+                _ = self.write_all("false")
+            }
+            return
+        },
+        u8: { write_uint(self, $as(u64, v)); return },
+        u16: { write_uint(self, $as(u64, v)); return },
+        u32: { write_uint(self, $as(u64, v)); return },
+        u64: { write_uint(self, $as(u64, v)); return },
+        usize: { write_uint(self, $as(u64, v)); return },
+        i8: { write_int(self, $as(i64, v)); return },
+        i16: { write_int(self, $as(i64, v)); return },
+        i32: { write_int(self, $as(i64, v)); return },
+        i64: { write_int(self, $as(i64, v)); return },
+        isize: { write_int(self, $as(i64, v)); return },
+        f32: { write_float(self, $as(f64, v)); return },
+        f64: { write_float(self, $as(f64, v)); return },
+        _: {
+            _ = self.write_all("<value>")
+            return
+        },
+    }
 }
 
 pub Writer.println := (self: Writer, v: any) {

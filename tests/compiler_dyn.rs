@@ -1,5 +1,5 @@
-use dyn_compiler::compiler::pipeline::analyze_project;
 use dyn_compiler::compiler::diagnostics::DiagnosticSeverity;
+use dyn_compiler::compiler::pipeline::analyze_project;
 
 #[test]
 fn compiler_dyn_analyzes_cleanly() {

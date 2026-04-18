@@ -505,6 +505,47 @@ fn runtime_intrinsics(pointer_ty: Type) -> Vec<RuntimeIntrinsic> {
     ]
 }
 
+fn compute_block_emission_order(function: &MirFunction) -> Vec<usize> {
+    fn visit(
+        block_id: usize,
+        function: &MirFunction,
+        visited: &mut BTreeSet<usize>,
+        order: &mut Vec<usize>,
+    ) {
+        if !visited.insert(block_id) {
+            return;
+        }
+        order.push(block_id);
+        let Some(block) = function.blocks.get(block_id) else {
+            return;
+        };
+        match &block.terminator {
+            Some(MirTerminator::Goto(target)) => {
+                visit(target.0, function, visited, order);
+            }
+            Some(MirTerminator::Branch {
+                then_block,
+                else_block,
+                ..
+            }) => {
+                visit(then_block.0, function, visited, order);
+                visit(else_block.0, function, visited, order);
+            }
+            _ => {}
+        }
+    }
+
+    let mut visited = BTreeSet::new();
+    let mut order = Vec::with_capacity(function.blocks.len());
+    visit(function.entry.0, function, &mut visited, &mut order);
+    for block in &function.blocks {
+        if visited.insert(block.id.0) {
+            order.push(block.id.0);
+        }
+    }
+    order
+}
+
 fn returns_bytes_slice_from_hint(return_type: Option<&str>) -> bool {
     normalized_return_type_hint(return_type) == "[]u8"
 }
@@ -605,6 +646,13 @@ fn compile_function(
         .get(&(current_module_id, function.name.clone()))
         .copied()
         .ok_or_else(|| format!("missing symbol for function '{}'", function.name))?;
+    if std::env::var("DYN_DEBUG_MIR_FUNCTION")
+        .ok()
+        .as_deref()
+        .is_some_and(|name| name == function.name)
+    {
+        eprintln!("{function:#?}");
+    }
 
     let scalar = parse_return_scalar(function.return_type.as_deref());
     let mut ctx = module.make_context();
@@ -746,6 +794,7 @@ fn compile_function(
     for _ in &function.blocks {
         clif_blocks.push(builder.create_block());
     }
+    let block_emission_order = compute_block_emission_order(function);
 
     let mut phi_layout = PhiLayout::new();
     for block in &function.blocks {
@@ -821,7 +870,8 @@ fn compile_function(
     let mut function_out_aggregate_ptr = None;
     let mut function_out_errorable_scalar_ptr = None;
 
-    for block in &function.blocks {
+    for &block_index in &block_emission_order {
+        let block = &function.blocks[block_index];
         let clif_block = clif_blocks[block.id.0];
         builder.switch_to_block(clif_block);
         if block.id.0 == function.entry.0 {
@@ -976,7 +1026,7 @@ fn compile_function(
                 block.id.0,
                 *target,
                 &phi_layout,
-                &lowered,
+                &global_lowered,
                 pointer_ty,
                 scalar,
                 &clif_blocks,
@@ -992,7 +1042,7 @@ fn compile_function(
                 *then_block,
                 *else_block,
                 &phi_layout,
-                &lowered,
+                &global_lowered,
                 pointer_ty,
                 scalar,
                 &clif_blocks,
@@ -1016,7 +1066,8 @@ fn compile_function(
 
     let mut sealed = std::collections::BTreeSet::new();
     sealed.insert(function.entry.0);
-    for block in &function.blocks {
+    for &block_index in &block_emission_order {
+        let block = &function.blocks[block_index];
         seal_terminator_successors(&block.terminator, &clif_blocks, &mut sealed, &mut builder);
     }
 
@@ -1466,27 +1517,33 @@ pub fn build_executable(
         .map_err(|err| format!("failed to write object file: {err}"))?;
 
     // Try direct linking first (no external toolchain needed).
-    let (_, arch, _) = host_object_format();
-    if let Some(syscall_code) = syscall_machine_code(arch) {
-        let mut runtime_blobs: Vec<(&str, &[u8])> = vec![("dyn_syscall", syscall_code)];
-        runtime_blobs.extend_from_slice(mem_blobs(arch));
-        if let Some(result) = try_link_direct(&obj_bytes, &runtime_blobs, "main") {
-            match result {
-                Ok(exe_bytes) => {
-                    fs::write(&executable_path, &exe_bytes)
-                        .map_err(|err| format!("failed to write executable: {err}"))?;
-                    set_executable(&executable_path)?;
-                    return Ok((
-                        BuildArtifact {
-                            executable_path,
-                            object_path,
-                        },
-                        diagnostics,
-                    ));
-                }
-                Err(_) => {
-                    // Unsupported relocation or other link error — fall through to
-                    // external linker. The external linker error (if any) will be reported.
+    let has_imports = mir
+        .modules
+        .iter()
+        .any(|module| !module.extern_functions.is_empty());
+    if !has_imports {
+        let (_, arch, _) = host_object_format();
+        if let Some(syscall_code) = syscall_machine_code(arch) {
+            let mut runtime_blobs: Vec<(&str, &[u8])> = vec![("dyn_syscall", syscall_code)];
+            runtime_blobs.extend_from_slice(mem_blobs(arch));
+            if let Some(result) = try_link_direct(&obj_bytes, &runtime_blobs, "main") {
+                match result {
+                    Ok(exe_bytes) => {
+                        fs::write(&executable_path, &exe_bytes)
+                            .map_err(|err| format!("failed to write executable: {err}"))?;
+                        set_executable(&executable_path)?;
+                        return Ok((
+                            BuildArtifact {
+                                executable_path,
+                                object_path,
+                            },
+                            diagnostics,
+                        ));
+                    }
+                    Err(_) => {
+                        // Unsupported relocation or other link error — fall through to
+                        // external linker. The external linker error (if any) will be reported.
+                    }
                 }
             }
         }
@@ -5571,6 +5628,7 @@ enum LoweredValue {
     },
     PointerSlice {
         base_addr: Value,
+        len: Value,
         elem_ty: Type,
         stride: i64,
     },
@@ -5862,10 +5920,9 @@ fn lower_value(
                 left_operand_ty,
             )
         }
-        MirValue::Assign { value, .. } => lowered
-            .get(value)
-            .cloned()
-            .unwrap_or_else(|| zero_lowered_for_type(builder, value_ty, scalar)),
+        MirValue::Assign { target, value, .. } => {
+            lower_assign_value(value_ty, target, value, builder, lowered, module, context)
+        }
         MirValue::LocalSet { value, .. } => lowered
             .get(value)
             .cloned()
@@ -5947,6 +6004,25 @@ fn lower_value(
         // emitting a zero is safe.  A future MIR cleanup pass should eliminate
         // these instructions before they reach codegen.
         MirValue::Use { .. } => zero_lowered_for_type(builder, value_ty, scalar),
+        MirValue::EmptySlice { element_type } => {
+            let pointer_ty = module.target_config().pointer_type();
+            let zero = builder.ins().iconst(pointer_ty, 0);
+            if element_type.trim() == "u8" || matches!(value_ty, MirValueType::BytesSlice) {
+                LoweredValue::BytesSlice {
+                    ptr: zero,
+                    len: zero,
+                }
+            } else {
+                let elem_ty = mir_type_to_clif(&backend_hint_mir_type(Some(element_type)), scalar);
+                let stride = (elem_ty.bits() / 8).max(1) as i64;
+                LoweredValue::PointerSlice {
+                    base_addr: zero,
+                    len: zero,
+                    elem_ty,
+                    stride,
+                }
+            }
+        }
         // Unknown is used as a placeholder for void-returning function calls:
         // the MIR Eval instruction still has a dest, but it is never read by
         // subsequent instructions.  Emitting zero is safe because the dest is
@@ -6166,7 +6242,7 @@ fn lower_unary_value(
         return zero_lowered_for_type(builder, value_ty, scalar);
     };
     match op {
-        UnaryOp::Ref => match operand_value {
+        UnaryOp::Ref | UnaryOp::RefMut => match operand_value {
             LoweredValue::StructMemory { slot, .. } => {
                 let addr = builder
                     .ins()
@@ -6227,8 +6303,10 @@ fn lower_unary_value(
                     let casted = cast_scalar(builder, operand, bool_storage_type(scalar), scalar);
                     LoweredValue::Int(builder.ins().bnot(casted))
                 }
-                (UnaryOp::Ref, MirValueType::Float { .. }) => LoweredValue::Float(operand),
-                (UnaryOp::Ref, _) => LoweredValue::Int(operand),
+                (UnaryOp::Ref | UnaryOp::RefMut, MirValueType::Float { .. }) => {
+                    LoweredValue::Float(operand)
+                }
+                (UnaryOp::Ref | UnaryOp::RefMut, _) => LoweredValue::Int(operand),
             }
         }
     }
@@ -6622,6 +6700,29 @@ fn lower_cast_value(
     if matches!(target, MirValueType::Unknown) {
         return source;
     }
+    if matches!(target, MirValueType::BytesSlice) {
+        return match source {
+            LoweredValue::BytesSlice { .. } => source,
+            LoweredValue::StructMemory { slot, ordered, .. } => {
+                let pointer_ty = _module.target_config().pointer_type();
+                if let Some((elem_ty, base_offset, _stride)) = homogeneous_sequence_layout(&ordered)
+                {
+                    if elem_ty.is_int() {
+                        let ptr = builder.ins().stack_addr(pointer_ty, slot, base_offset);
+                        let len = builder
+                            .ins()
+                            .iconst(pointer_ty, i64::try_from(ordered.len()).unwrap_or(i64::MAX));
+                        LoweredValue::BytesSlice { ptr, len }
+                    } else {
+                        zero_lowered_for_type(builder, target, scalar)
+                    }
+                } else {
+                    zero_lowered_for_type(builder, target, scalar)
+                }
+            }
+            _ => zero_lowered_for_type(builder, target, scalar),
+        };
+    }
     if let MirValueType::Int { bits, .. } = target {
         if int_carrier_type_for_bits(*bits) == I128 {
             if let Some(MirValue::Literal(HirLiteral::Integer(text))) = value_defs.get(value) {
@@ -6633,6 +6734,13 @@ fn lower_cast_value(
         }
     }
     let target_ty = mir_type_to_clif(target, scalar);
+    if let LoweredValue::FunctionSymbol(func_id) = source {
+        let func_ref = _module.declare_func_in_func(func_id, builder.func);
+        let pointer_ty = _module.target_config().pointer_type();
+        let addr = builder.ins().func_addr(pointer_ty, func_ref);
+        let casted = cast_scalar(builder, addr, target_ty, scalar);
+        return LoweredValue::from_typed_value(casted, target);
+    }
     if matches!(target, MirValueType::Float { .. }) {
         if let Some(float_value) = source.as_float() {
             return LoweredValue::Float(cast_scalar(builder, float_value, target_ty, scalar));
@@ -6647,6 +6755,124 @@ fn lower_cast_value(
     };
     let casted = cast_scalar(builder, raw, target_ty, scalar);
     LoweredValue::from_typed_value(casted, target)
+}
+
+fn lower_assign_value(
+    value_ty: &MirValueType,
+    target: &MirValueId,
+    value: &MirValueId,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    module: &mut ObjectModule,
+    context: &LowerValueContext<'_>,
+) -> LoweredValue {
+    let scalar = context.scalar;
+    let stored = lowered
+        .get(value)
+        .cloned()
+        .unwrap_or_else(|| zero_lowered_for_type(builder, value_ty, scalar));
+    let Some((addr, store_ty)) =
+        resolve_assignment_target_address(target, builder, lowered, module, context)
+    else {
+        return stored;
+    };
+    let raw = match &stored {
+        LoweredValue::FunctionSymbol(func_id) => {
+            let func_ref = module.declare_func_in_func(*func_id, builder.func);
+            builder
+                .ins()
+                .func_addr(module.target_config().pointer_type(), func_ref)
+        }
+        _ => match stored.as_value().or_else(|| stored.as_int()) {
+            Some(raw) => raw,
+            None => return stored,
+        },
+    };
+    let casted = cast_scalar(builder, raw, store_ty, scalar);
+    builder
+        .ins()
+        .store(cranelift_codegen::ir::MemFlags::new(), casted, addr, 0);
+    LoweredValue::from_typed_value(casted, value_ty)
+}
+
+fn resolve_assignment_target_address(
+    target: &MirValueId,
+    builder: &mut FunctionBuilder,
+    lowered: &BTreeMap<MirValueId, LoweredValue>,
+    module: &mut ObjectModule,
+    context: &LowerValueContext<'_>,
+) -> Option<(Value, Type)> {
+    let pointer_ty = module.target_config().pointer_type();
+    match context.value_defs.get(target)? {
+        MirValue::DerefAccess { base } => {
+            let addr = lowered
+                .get(base)?
+                .as_value()
+                .or_else(|| lowered.get(base)?.as_int())?;
+            let store_ty = mir_type_to_clif(context.value_types.get(target)?, context.scalar);
+            Some((
+                cast_scalar(builder, addr, pointer_ty, context.scalar),
+                store_ty,
+            ))
+        }
+        MirValue::FieldAccess { base, field } => match lowered.get(base)? {
+            LoweredValue::StructMemory {
+                slot,
+                fields,
+                aggregate_fields,
+                ..
+            } => {
+                if let Some((ty, offset)) = fields.get(field).copied() {
+                    let addr = builder.ins().stack_addr(pointer_ty, *slot, offset);
+                    Some((addr, ty))
+                } else if let Some((offset, layout)) = aggregate_fields.get(field) {
+                    let addr = builder.ins().stack_addr(pointer_ty, *slot, *offset);
+                    Some((
+                        addr,
+                        layout
+                            .ordered
+                            .first()
+                            .map(|(ty, _)| *ty)
+                            .unwrap_or(pointer_ty),
+                    ))
+                } else {
+                    None
+                }
+            }
+            LoweredValue::StructPointer {
+                addr,
+                stack_slot,
+                stack_offset,
+                fields,
+                aggregate_fields,
+                ..
+            } => {
+                let base_addr = rematerialize_struct_pointer_addr(
+                    builder,
+                    pointer_ty,
+                    *addr,
+                    *stack_slot,
+                    *stack_offset,
+                );
+                if let Some((ty, offset)) = fields.get(field).copied() {
+                    Some((builder.ins().iadd_imm(base_addr, i64::from(offset)), ty))
+                } else if let Some((offset, layout)) = aggregate_fields.get(field) {
+                    Some((
+                        builder.ins().iadd_imm(base_addr, i64::from(*offset)),
+                        layout
+                            .ordered
+                            .first()
+                            .map(|(ty, _)| *ty)
+                            .unwrap_or(pointer_ty),
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn lower_deref_access_value(
@@ -6847,6 +7073,15 @@ fn lower_field_access_value(
             }
             zero_lowered_for_type(builder, value_ty, scalar)
         }
+        Some(LoweredValue::PointerSlice { base_addr, len, .. }) => {
+            if field == "len" {
+                return LoweredValue::Int(*len);
+            }
+            if field == "ptr" {
+                return LoweredValue::Int(*base_addr);
+            }
+            zero_lowered_for_type(builder, value_ty, scalar)
+        }
         _ => zero_lowered_for_type(builder, value_ty, scalar),
     }
 }
@@ -6928,13 +7163,30 @@ fn lower_homogeneous_slice_from_stack_slot(
     let mut base_addr = builder
         .ins()
         .stack_addr(pointer_ty, sequence.slot, base_offset);
-    if let Some(start_value) = start.and_then(|id| lowered.get(&id).and_then(LoweredValue::as_int))
-    {
+    let start_index = start
+        .and_then(|id| lowered.get(&id).and_then(LoweredValue::as_int))
+        .unwrap_or_else(|| zero_for_type(builder, pointer_ty));
+    if !value_is_definitely_zero(builder, start_index, 0) {
         base_addr =
-            add_scaled_index_to_base(builder, scalar, pointer_ty, base_addr, start_value, stride);
+            add_scaled_index_to_base(builder, scalar, pointer_ty, base_addr, start_index, stride);
+    }
+    if matches!(value_ty, MirValueType::BytesSlice) || elem_ty.is_int() {
+        let total_len = builder.ins().iconst(
+            pointer_ty,
+            i64::try_from(sequence.ordered.len()).unwrap_or(i64::MAX),
+        );
+        let len = builder.ins().isub(total_len, start_index);
+        return LoweredValue::BytesSlice {
+            ptr: base_addr,
+            len,
+        };
     }
     LoweredValue::PointerSlice {
         base_addr,
+        len: builder.ins().iconst(
+            pointer_ty,
+            i64::try_from(sequence.ordered.len()).unwrap_or(i64::MAX),
+        ),
         elem_ty,
         stride,
     }
@@ -6990,6 +7242,7 @@ fn lower_index_value(
         }
         Some(LoweredValue::PointerSlice {
             base_addr,
+            len: _,
             elem_ty,
             stride,
         }) => {
@@ -7116,6 +7369,39 @@ fn lower_slice_value(
                 len: new_len,
             }
         }
+        Some(LoweredValue::PointerSlice {
+            base_addr,
+            len,
+            elem_ty,
+            stride,
+        }) => {
+            let start_idx = range
+                .start
+                .and_then(|start| lowered.get(&start).and_then(LoweredValue::as_int))
+                .map(|value| cast_scalar(builder, value, pointer_ty, scalar))
+                .unwrap_or_else(|| zero_for_type(builder, pointer_ty));
+            let mut end_idx = range
+                .end
+                .and_then(|end| lowered.get(&end).and_then(LoweredValue::as_int))
+                .map(|value| cast_scalar(builder, value, pointer_ty, scalar))
+                .unwrap_or(len);
+            if range.inclusive && range.end.is_some() {
+                end_idx = builder.ins().iadd_imm(end_idx, 1);
+            }
+            let scaled_start = if stride == 1 {
+                start_idx
+            } else {
+                builder.ins().imul_imm(start_idx, stride)
+            };
+            let new_ptr = builder.ins().iadd(base_addr, scaled_start);
+            let new_len = builder.ins().isub(end_idx, start_idx);
+            LoweredValue::PointerSlice {
+                base_addr: new_ptr,
+                len: new_len,
+                elem_ty,
+                stride,
+            }
+        }
         Some(LoweredValue::EnumVariant { variant, payload }) => {
             LoweredValue::EnumVariant { variant, payload }
         }
@@ -7134,6 +7420,10 @@ fn lower_call_value(
     symbol_tables: CallSymbolTables<'_>,
 ) -> LoweredValue {
     let pointer_ty = module.target_config().pointer_type();
+    let direct_callee = match lowered.get(call.callee) {
+        Some(LoweredValue::FunctionSymbol(func_id)) => Some(*func_id),
+        _ => None,
+    };
 
     // Handle fat pointer (closure) calls specially
     if let Some(lowered_value) = lower_fat_pointer_call(
@@ -7142,13 +7432,16 @@ fn lower_call_value(
         return lowered_value;
     }
 
-    let Some(mut arg_vals) = marshal_call_arg_values(call.args, builder, lowered, module) else {
+    let expected_param_types =
+        direct_callee.and_then(|func_id| symbol_tables.param_types_by_id.get(&func_id.as_u32()));
+    let Some(mut arg_vals) = marshal_call_arg_values(
+        call.args,
+        builder,
+        lowered,
+        module,
+        expected_param_types.map(Vec::as_slice),
+    ) else {
         return zero_lowered_for_type(builder, value_ty, scalar);
-    };
-
-    let direct_callee = match lowered.get(call.callee) {
-        Some(LoweredValue::FunctionSymbol(func_id)) => Some(*func_id),
-        _ => None,
     };
     let profile = infer_call_return_profile(
         value_ty,
@@ -7200,8 +7493,8 @@ fn lower_fat_pointer_call(
     let LoweredValue::FatPtr { fn_ptr, env_ptr } = lowered.get(call.callee).cloned()? else {
         return None;
     };
-    let arg_vals =
-        marshal_call_arg_values(call.args, builder, lowered, module).unwrap_or_else(|| Vec::new());
+    let arg_vals = marshal_call_arg_values(call.args, builder, lowered, module, None)
+        .unwrap_or_else(|| Vec::new());
     if arg_vals.is_empty() && !call.args.is_empty() {
         return Some(zero_lowered_for_type(builder, value_ty, scalar));
     }
@@ -7246,17 +7539,45 @@ fn marshal_call_arg_values(
     builder: &mut FunctionBuilder,
     lowered: &BTreeMap<MirValueId, LoweredValue>,
     module: &mut ObjectModule,
+    expected_param_types: Option<&[Type]>,
 ) -> Option<Vec<Value>> {
     let pointer_ty = module.target_config().pointer_type();
     let mut arg_vals = Vec::with_capacity(args.len().saturating_mul(2).saturating_add(1));
+    let mut expected_index = 0usize;
     for arg in args {
+        let expects_bytes_slice = expected_param_types.is_some_and(|types| {
+            matches!(
+                (types.get(expected_index), types.get(expected_index + 1)),
+                (Some(a), Some(b)) if *a == pointer_ty && *b == pointer_ty
+            )
+        });
         match lowered.get(arg).cloned() {
             Some(LoweredValue::FunctionSymbol(func_id)) => {
                 let func_ref = module.declare_func_in_func(func_id, builder.func);
                 arg_vals.push(builder.ins().func_addr(pointer_ty, func_ref));
+                expected_index += 1;
             }
             Some(LoweredValue::StructMemory { slot, .. }) => {
-                arg_vals.push(builder.ins().stack_addr(pointer_ty, slot, 0));
+                if expects_bytes_slice {
+                    let LoweredValue::StructMemory { ordered, .. } = lowered.get(arg).cloned()?
+                    else {
+                        return None;
+                    };
+                    let (elem_ty, base_offset, _stride) = homogeneous_sequence_layout(&ordered)?;
+                    if !elem_ty.is_int() {
+                        return None;
+                    }
+                    arg_vals.push(builder.ins().stack_addr(pointer_ty, slot, base_offset));
+                    arg_vals.push(
+                        builder
+                            .ins()
+                            .iconst(pointer_ty, i64::try_from(ordered.len()).unwrap_or(i64::MAX)),
+                    );
+                    expected_index += 2;
+                } else {
+                    arg_vals.push(builder.ins().stack_addr(pointer_ty, slot, 0));
+                    expected_index += 1;
+                }
             }
             Some(LoweredValue::StructPointer {
                 addr,
@@ -7272,6 +7593,7 @@ fn marshal_call_arg_values(
                     stack_offset,
                 );
                 arg_vals.push(current);
+                expected_index += 1;
             }
             Some(LoweredValue::Struct(fields)) => {
                 let lowered_pairs = fields.into_iter().collect::<Vec<_>>();
@@ -7279,6 +7601,7 @@ fn marshal_call_arg_values(
                 match materialized {
                     LoweredValue::StructMemory { slot, .. } => {
                         arg_vals.push(builder.ins().stack_addr(pointer_ty, slot, 0));
+                        expected_index += 1;
                     }
                     _ => return None,
                 }
@@ -7286,6 +7609,7 @@ fn marshal_call_arg_values(
             Some(LoweredValue::BytesSlice { ptr, len }) => {
                 arg_vals.push(ptr);
                 arg_vals.push(len);
+                expected_index += 2;
             }
             Some(LoweredValue::FatPtr { fn_ptr, env_ptr }) => {
                 // Stack-allocate the fat pointer and pass its address
@@ -7302,8 +7626,12 @@ fn marshal_call_arg_values(
                 builder.ins().stack_store(env_ptr, slot, ptr_bytes as i32);
                 let addr = builder.ins().stack_addr(pointer_ty, slot, 0);
                 arg_vals.push(addr);
+                expected_index += 1;
             }
-            Some(other) => arg_vals.push(other.as_value()?),
+            Some(other) => {
+                arg_vals.push(other.as_value()?);
+                expected_index += 1;
+            }
             None => return None,
         }
     }

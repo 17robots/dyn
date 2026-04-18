@@ -221,6 +221,11 @@ fn pass_function_surface_parity() {
 }
 
 #[test]
+fn pass_typed_empty_array_init() {
+    assert_compiles("typed_empty_array_init");
+}
+
+#[test]
 fn pass_std_str() {
     assert_compiles("std_str");
 }
@@ -243,6 +248,26 @@ fn pass_std_io() {
 #[test]
 fn pass_std_mem() {
     assert_compiles("std_mem");
+}
+
+#[test]
+fn pass_destructure_use_import() {
+    assert_compiles("destructure_use_import");
+}
+
+#[test]
+fn pass_mut_pointer_and_slice_forms() {
+    assert_compiles("mut_pointer_and_slice_forms");
+}
+
+#[test]
+fn pass_builtins_field_declare() {
+    assert_compiles("builtins_field_declare");
+}
+
+#[test]
+fn pass_declare_has() {
+    assert_compiles("declare_has");
 }
 
 // ── fail tests ────────────────────────────────────────────────────────────────
@@ -350,6 +375,26 @@ fn fail_positional_after_named() {
 #[test]
 fn fail_removed_fn_type_syntax() {
     assert_fails("removed_fn_type_syntax");
+}
+
+#[test]
+fn fail_immutable_to_mut_slice() {
+    assert_fails("immutable_to_mut_slice");
+}
+
+#[test]
+fn fail_ref_mut_immutable() {
+    assert_fails("ref_mut_immutable");
+}
+
+#[test]
+fn fail_array_param_boundary() {
+    assert_fails("array_param_boundary");
+}
+
+#[test]
+fn fail_array_return_boundary() {
+    assert_fails("array_return_boundary");
 }
 
 #[test]

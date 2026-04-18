@@ -1,0 +1,14 @@
+module main
+
+Token := enum {
+    ident: i32,
+    eof,
+}
+
+main := () i32 {
+    token := .ident(7)
+    if token == .ident: |v| {
+        return v
+    }
+    return 1
+}

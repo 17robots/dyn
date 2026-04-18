@@ -45,11 +45,6 @@ pub enum ExprKind {
         left: Box<Expr>,
         right: Box<Expr>,
     },
-    Assign {
-        op: AssignOp,
-        target: Box<Expr>,
-        value: Box<Expr>,
-    },
     Call(CallExpr),
     FieldAccess {
         base: Box<Expr>,
@@ -144,9 +139,17 @@ pub struct BlockExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Binding(Box<Binding>),
-    Destructure(Box<DestructureBinding>),
+    Declaration(Box<Declaration>),
+    Assignment(Box<AssignmentStmt>),
     Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignmentStmt {
+    pub op: AssignOp,
+    pub target: Expr,
+    pub value: Expr,
+    pub span: SourceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,24 +298,57 @@ pub struct ModuleDecl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
-    Binding(Box<Binding>),
-    Destructure(Box<DestructureBinding>),
-    Extern(Box<ExternDecl>),
+    Declaration(Box<Declaration>),
     ExprStmt(Box<Expr>),
-    TypeBinding(Box<TypeBinding>),
 }
 
-/// `TypeName.member := expr` or `TypeName.member: Type = expr` —
-/// a binding in the namespace of a named type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeBinding {
+pub struct Declaration {
     pub docs: Vec<DocComment>,
     pub visibility: Visibility,
-    pub type_name: Ident,
-    pub member_name: Ident,
+    pub modifiers: DeclModifiers,
+    pub target: DeclTarget,
     pub annotation: Option<TypeExpr>,
-    pub value: Expr,
+    pub value: DeclValue,
     pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclModifiers {
+    pub mutable: bool,
+    pub inline: bool,
+    pub linkage: Linkage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Linkage {
+    Normal,
+    Extern { link_name: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclTarget {
+    Name(Ident),
+    Associated { owner: Ident, member: Ident },
+    Destructure(Vec<DestructureName>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclValue {
+    Expr(Expr),
+    ExternSignature(ExternSignature),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternSignature {
+    pub ty: TypeExpr,
+    pub link_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestructureName {
+    pub mutable: bool,
+    pub name: Ident,
 }
 
 /// `{a, b} := expr` — destructure the RHS by field name into multiple bindings.
@@ -323,12 +359,6 @@ pub struct DestructureBinding {
     pub names: Vec<DestructureName>,
     pub value: Expr,
     pub span: SourceSpan,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DestructureName {
-    pub mutable: bool,
-    pub name: Ident,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -359,6 +389,22 @@ pub struct Binding {
     pub span: SourceSpan,
 }
 
+impl Declaration {
+    pub fn expr_value(&self) -> Option<&Expr> {
+        match &self.value {
+            DeclValue::Expr(expr) => Some(expr),
+            DeclValue::ExternSignature(_) => None,
+        }
+    }
+
+    pub fn expr_value_mut(&mut self) -> Option<&mut Expr> {
+        match &mut self.value {
+            DeclValue::Expr(expr) => Some(expr),
+            DeclValue::ExternSignature(_) => None,
+        }
+    }
+}
+
 // op
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum UnaryOp {
@@ -366,6 +412,7 @@ pub enum UnaryOp {
     Not,
     BitNot,
     Ref,
+    RefMut,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -462,6 +509,7 @@ pub enum TypeExprKind {
         args: Vec<TypeExpr>,
     },
     Pointer {
+        mutable: bool,
         inner: Box<TypeExpr>,
     },
     Array {
@@ -469,6 +517,7 @@ pub enum TypeExprKind {
         element: Box<TypeExpr>,
     },
     Slice {
+        mutable: bool,
         element: Box<TypeExpr>,
     },
     Optional {

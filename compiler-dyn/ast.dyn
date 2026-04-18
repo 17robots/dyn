@@ -6,16 +6,16 @@ Vec := (use "std/collections").Vec
 pub Ident := struct { text: []u8, span: SourceSpan }
 pub Label := struct { name: Ident, span: SourceSpan }
 pub Visibility := enum { Private, Public }
-pub DocComment := struct { name: []u8, span: SourceSpan }
+pub DocComment := struct { text: []u8, span: SourceSpan }
 pub Expr := struct { kind: ExprKind, span: SourceSpan }
 pub ExprKind := enum {
   Literal: Literal,
   Ident: Ident,
   BuiltinIdent: Ident,
-  Unary: struct { op: UnaryOp, expr: *Expr },
-  Binary: struct { op: BinaryOp, left: *Expr, right: *Expr },
-  Assign: struct { op: AssignOp, target: *Expr, value: *Expr },
-  Call: CallExpr,
+  unary: struct { op: UnaryOp, expr: *Expr },
+  binary: struct { op: BinaryOp, left: *Expr, right: *Expr },
+  assign: struct { op: AssignOp, left: *Expr, right: *Expr },
+  call: CallExpr,
   FieldAccess: struct { base: *Expr, field: Ident },
   DerefAccess: struct { base: *Expr },
   Index: struct { base: *Expr, index: *Expr },
@@ -25,7 +25,7 @@ pub ExprKind := enum {
   Match: MatchExpr,
   For: ForExpr,
   Break: BreakExpr,
-  Continue: struct { label: ?Label },
+  Continue: struct { label: ?*Expr },
   Return: struct { value: ?*Expr },
   Defer: DeferExpr,
   OptionalUnwrap: struct { expr: *Expr },
@@ -46,34 +46,30 @@ pub Literal := enum {
   Integer: []u8,
   Float: []u8,
   String: []u8,
-  Char: []u8,
-  U1: u1,
-  Null,
+  Char: u8,
+  Bool: u1,
+  Null
 }
 pub CallExpr := struct { callee: *Expr, args: Vec(CallArg) }
 pub CallArg := struct { name: ?Ident, value: Expr }
 pub SliceExpr := struct { base: *Expr, start: ?*Expr, end: ?*Expr, inclusive: u1 }
 pub BlockExpr := struct { label: ?Label, statements: Vec(Stmt), tail_expr: ?*Expr }
-pub Stmt := enum {
-  Binding: *Binding,
-  Destructure: *DestructureBinding,
-  Expr: *Expr
-}
+pub Stmt := enum { Binding: *Binding, Destructure: *DestructureBinding, Expr: *Expr }
 pub IfExpr := struct { condition: *Expr, capture: ?IfCapture, then_branch: *Expr, else_branch: ?*Expr }
-pub IfCapture := struct { bindings: Vec(?Ident) }
+pub IfCapture := struct { binding: Vec(?Ident) }
 pub MatchExpr := struct { scrutinee: *Expr, arms: Vec(MatchArm) }
 pub MatchArm := struct { pattern: Pattern, guard: ?Expr, value: Expr, span: SourceSpan }
 pub ForExpr := enum {
   Range: struct { start: *Expr, end: *Expr, inclusive: u1, binding: ?Ident, body: *Expr },
   Iterate: struct { iterable: *Expr, binding: ?Ident, body: *Expr },
-  WhileLike: struct { condition: *Expr, binding: ?Ident, body: *Expr },
+  WhileLike: struct { condition: *Expr, body: *Expr },
   Infinite: struct { body: *Expr }
 }
 pub BreakExpr := struct { label: ?Label, value: ?*Expr }
 pub DeferExpr := struct { error_binding: ?Ident, body: *Expr }
-pub OrElseExpr := struct { value: *Expr, error_binding: ?Ident, fallback: *Expr }
+pub OrElseExpr := struct { value: *Expr, error_value: ?Ident, fallback: *Expr }
 pub StructLiteralExpr := struct { root_type: ?Ident, fields: Vec(StructLiteralField) }
-pub StructLiteralField := struct { name: Ident, value: ?Expr }
+pub StructLiteralField := struct { name: Ident, value: Expr }
 pub EnumVariantExpr := struct { root: ?Ident, variant: Ident, payload: Vec(Expr) }
 pub FnExpr := struct { params: Vec(FnParam), return_type: ?TypeExpr, body: FnBody }
 pub FnParam := struct { name: Ident, ty: ?TypeExpr, default_value: ?Expr, is_comp: u1 }
@@ -82,7 +78,6 @@ pub FileId := usize
 pub ItemId := usize
 pub StmtId := usize
 pub ExprId := usize
-pub TypeId := usize
 pub PatternId := usize
 pub AstFile := struct { module_decl: ModuleDecl, items: Vec(Item), span: SourceSpan }
 pub ModuleDecl := struct { name: Ident, span: SourceSpan }
@@ -102,33 +97,11 @@ pub TypeBinding := struct {
   value: Expr,
   span: SourceSpan
 }
-pub DestructureBinding := struct {
-  docs: Vec(DocComment),
-  visibility: Visibility,
-  names: Vec(DestructureName),
-  value: Expr,
-  span: SourceSpan
-}
+pub DestructureBinding := struct { docs: Vec(DocComment), visibility: Visibility, names: Vec(DestructureName), value: Expr, span: SourceSpan }
 pub DestructureName := struct { mutable: u1, name: Ident }
-pub ExternDecl := struct {
-  docs: Vec(DocComment),
-  visibility: Visibility,
-  name: Ident,
-  ty: TypeExpr,
-  link_name: ?[]u8,
-  span: SourceSpan
-}
+pub ExternDecl := struct { docs: Vec(DocComment), visibility: Visibility, name: Ident, ty: TypeExpr, link_name: ?[]u8, span: SourceSpan }
 pub BindingKind := enum { Infer, Typed }
-pub Binding := struct {
-  docs: Vec(DocComment),
-  visibility: Visibility,
-  mutable: u1,
-  kind: BindingKind,
-  name: Ident,
-  annotation: ?TypeExpr,
-  value: Expr,
-  span: SourceSpan
-}
+pub Binding := struct { docs: Vec(DocComment), visibility: Visibility, mutable: u1, kind: BindingKind, name: Ident, annotation: ?TypeExpr, value: Expr, span: SourceSpan }
 pub UnaryOp := enum { Neg, Not, BitNot, Ref }
 pub BinaryOp := enum { Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Le, Gt, Ge, LogicalAnd, LogicalOr, BitAnd, BitOr, BitXor, Shl, Shr, Range, RangeInclusive }
 pub AssignOp := enum { Assign, AddAssign, SubAssign, MulAssign, DivAssign, ModAssign, BitAndAssign, BitOrAssign, BitXorAssign, ShlAssign, ShrAssign }
@@ -142,20 +115,13 @@ pub PatternKind := enum {
   Typed: struct { pattern: *Pattern, ty: TypeExpr },
   TypeLiteral: TypeExpr
 }
-pub PatternLiteral := enum {
-  Integer: []u8,
-  Float: []u8,
-  String: []u8,
-  Char: u8,
-  Bool: u1,
-  Null,
-}
+pub PatternLiteral := enum { Integer: []u8, Float: []u8, String: []u8, Char: u8, Bool: u1, Null }
 pub TypeExpr := struct { kind: TypeExprKind, span: SourceSpan }
 pub TypeExprKind := enum {
   Named: Ident,
   Applied: struct { callee: Ident, args: Vec(TypeExpr) },
   Pointer: struct { inner: *TypeExpr },
-  Array: struct { len: ?*Expr, inner: *TypeExpr },
+  Array: struct { len: ?*Expr, element: *TypeExpr },
   Slice: struct { element: *TypeExpr },
   Optional: struct { inner: *TypeExpr },
   Function: FnType,
@@ -164,7 +130,7 @@ pub TypeExprKind := enum {
   Enum: EnumType
 }
 pub FnType := struct { params: Vec(FnTypeParam), return_type: *TypeExpr }
-pub FnTypeParam := struct { name: ?Ident, ty: TypeExpr }
+pub FnTypeParam := struct { name: Ident, ty: TypeExpr }
 pub StructType := struct { packed: u1, fields: Vec(StructFieldType) }
 pub StructFieldType := struct { name: Ident, ty: TypeExpr, default_value: ?Expr }
 pub StructMemberType := struct { name: Ident, value: Expr }

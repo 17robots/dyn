@@ -1,0 +1,70 @@
+module dyn
+
+// Create a trait type from a struct of function pointer fields.
+// The resulting type has:
+//   - ptr: *any         (the erased instance pointer)
+//   - vtable: Methods   (the raw function pointers — always visible)
+//   - one wrapper method per field in Methods, forwarding ptr automatically
+//
+// Example:
+//   Animal := dyn.Trait(struct {
+//       speak: (*any),
+//       name:  (*any) []u8,
+//   })
+//   a.speak()       // calls a.vtable.speak(a.ptr)
+//   a.name()        // calls a.vtable.name(a.ptr)
+//
+// Methods with extra parameters beyond *any are forwarded too:
+//   move: (*any, i32, i32)  ->  a.move(x, y)
+pub Trait := (Methods: comp type) type {
+    Result := struct { ptr: *any, vtable: Methods }
+    inline for $fields(Methods): |f| {
+        ret := $fn_return(f.type)
+        $declare(Result, f.name,
+            (self: Result) ret {
+                $field(self.vtable, f.name)(self.ptr)
+            }
+        )
+    }
+    break Result
+}
+
+// Construct a trait value from a concrete type and instance.
+// All fields in T (except ptr) are matched by name to declarations on Impl.
+// Impl methods must take *any as their first parameter.
+//
+// Example:
+//   Lion.as_animal := (self: *Lion) Animal => dyn.impl(Animal, Lion, self)
+pub impl := inline (T: comp type, Impl: comp type, self: *Impl) T {
+    mut result: T = .{}
+    $field(result, "ptr") = $as(*any, self)
+    VT := $field_type(T, "vtable")
+    inline for $fields(VT): |f| {
+        // TODO: restore compile-time missing-method check once inline control-flow lowering is cleaner
+        FieldTy := $field_type(VT, f.name)
+        $field(result.vtable, f.name) = $as(FieldTy, $declaration(Impl, f.name))
+    }
+    result
+}
+
+// Like impl but with an explicit name mapping for mismatched method names.
+// Fields not in the map are matched by name as in impl.
+//
+// Example:
+//   NetWriter.as_animal := (self: *NetWriter) Animal =>
+//       dyn.impl_map(Animal, NetWriter, .{ speak: NetWriter.make_noise }, self)
+pub impl_map := inline (T: comp type, Impl: comp type, map: comp MapT, MapT: comp type, self: *Impl) T {
+    VT := $field_type(T, "vtable")
+    mut result: T = .{}
+    $field(result, "ptr") = $as(*any, self)
+    inline for $fields(VT): |f| {
+        FieldTy := $field_type(VT, f.name)
+        if $has_field(MapT, f.name) {
+            $field(result.vtable, f.name) = $as(FieldTy, $field(map, f.name))
+        } else {
+            // TODO: restore compile-time missing-method check once inline control-flow lowering is cleaner
+            $field(result.vtable, f.name) = $as(FieldTy, $declaration(Impl, f.name))
+        }
+    }
+    result
+}

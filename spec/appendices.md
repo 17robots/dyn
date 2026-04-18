@@ -68,28 +68,30 @@ SourceFile      := ModuleDecl TopLevelDecl*
 
 ModuleDecl      := 'module' Identifier
 
-TopLevelDecl    := Visibility? Decl
+TopLevelDecl    := Visibility? Declaration
 Visibility      := 'pub'
 
-Decl            := BindingDecl
-                 | ExternDecl
+Declaration     := NameDecl
                  | AssociatedDecl
 ```
 
 A3. Declarations
 
 ```text
-BindingDecl     := MutOpt Identifier ':=' Expr
-                 | MutOpt Identifier ':' Type '=' Expr
+NameDecl        := MutOpt Identifier ':=' DeclValue
+                 | MutOpt Identifier ':' Type '=' DeclValue
 
-ExternDecl      := Identifier ':=' 'extern' ExternSig
+DeclValue       := Expr
+                 | 'inline' FunctionExpr
+                 | 'extern' ExternSig
 
 ExternSig       := '(' FunctionTypeParamListOpt ')' ReturnTypeOpt LinkNameOpt
 LinkNameOpt     := '=' StringLiteral | ε
 
 MutOpt          := 'mut' | ε
 
-AssociatedDecl  := TypePath '.' Identifier ':=' Expr
+AssociatedDecl  := TypePath '.' Identifier ':=' DeclValue
+                 | TypePath '.' Identifier ':' Type '=' DeclValue
 
 TypePath        := Identifier ('.' Identifier)*
 ```
@@ -99,7 +101,7 @@ A4. Statements and blocks
 ```text
 Block           := '{' Statement* '}'
 
-Statement       := BindingDecl
+Statement       := Declaration
                  | AssignmentStmt
                  | ReturnStmt
                  | BreakStmt
@@ -110,7 +112,6 @@ Statement       := BindingDecl
                  | MatchStmt
                  | LabeledStmt
                  | ExprStmt
-                 | DestructureDecl
                  | DestructureAssign
 
 ExprStmt        := Expr
@@ -335,13 +336,10 @@ FieldInit       := Identifier ':' Expr
 A14. Destructuring
 
 ```text
-DestructureDecl := '{' DestructureItems '}' ':=' Expr
-                 | '{' DestructureItems '}' ':' TupleType '=' Expr
-
 DestructureAssign := '{' DestructureItems '}' '=' Expr
 
 DestructureItems := DestructureItem (',' DestructureItem)* CommaOpt
-DestructureItem  := Identifier | '_'
+DestructureItem  := MutOpt Identifier | '_'
 ```
 
 A15. Postfix chains
@@ -1257,6 +1255,12 @@ Normative:
 `inline` on a function requests/means semantic inlining.
 A compliant compiler should inline such functions or treat them as compile-time-expandable where required by semantics.
 
+Normative:
+For declarations, `inline` is a declaration-value modifier:
+- valid: `name := inline (args) Ret => expr`
+- invalid: `name := inline expr` when `expr` is not a function
+- invalid: arrow/body-local uses like `f := () i32 => inline 9`
+
 Example:
 ```dyn
 id := inline (x: i32) i32 => x
@@ -1684,29 +1688,22 @@ SourceFile {
 
 ```text
 TopLevelDecl =
-  | BindingDecl
-  | AssociatedDecl
+  | Declaration
 ```
 
 E3. Declaration AST
 
 ```text
-BindingDecl {
+Declaration {
   visibility: Visibility
-  mutable: bool
-  name: Ident
+  modifiers: {
+    mutable: bool,
+    inline: bool,
+    linkage: Linkage,
+  }
+  target: DeclTarget
   explicit_type: Option<TypeNode>
-  value: Expr
-  span: Span
-}
-```
-
-```text
-AssociatedDecl {
-  visibility: Visibility
-  owner: TypePath
-  name: Ident
-  value: Expr
+  value: DeclValue
   span: Span
 }
 ```
@@ -1719,7 +1716,7 @@ E4. Statement AST
 
 ```text
 Stmt =
-  | BindingStmt(BindingDecl)
+  | Declaration(Declaration)
   | Assign {
       target: LValue,
       op: AssignOp,
@@ -1769,12 +1766,6 @@ Stmt =
     }
   | ExprStmt {
       expr: Expr,
-      span: Span,
-    }
-  | DestructureDecl {
-      items: Vec<DestructureItem>,
-      explicit_type: Option<TypeNode>,
-      value: Expr,
       span: Span,
     }
   | DestructureAssign {

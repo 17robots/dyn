@@ -131,13 +131,15 @@ arena_realloc := (ctx: *any, ptr: *any, old_size: usize, new_size: usize, align:
 
     start := ptr_addr - base
     end := start + old_size
+    mut can_grow_in_place := false
     if end == arena.used {
         next_end := start + new_size
         if next_end <= arena.buf.len {
+            can_grow_in_place = true
             arena.used = next_end
-            return ptr
         }
     }
+    if can_grow_in_place return ptr
 
     fresh := arena_alloc(ctx, new_size, align) or return null
     copy_size := if old_size < new_size old_size else new_size

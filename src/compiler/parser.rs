@@ -109,6 +109,7 @@ impl<'a> Parser<'a> {
         } else {
             Visibility::Private
         };
+        let mut modifiers = self.parse_declaration_modifiers();
 
         if self.match_keyword(Keyword::Extern) {
             let span = self.prev_span();
@@ -130,17 +131,15 @@ impl<'a> Parser<'a> {
         }
 
         if self.looks_like_destructure_binding() {
-            return self.parse_destructure_binding(docs, visibility);
+            return self.parse_destructure_declaration(docs, visibility, modifiers);
         }
-
-        let mutable = self.match_keyword(Keyword::Mut);
 
         let start = self.current_span();
         let name = self.parse_ident()?;
 
         // `TypeName.member := expr` or `TypeName.member: Type = expr`
-        if !mutable && self.match_operator(Operator::Dot) {
-            let member_name = self.parse_ident()?;
+        if !modifiers.mutable && self.match_operator(Operator::Dot) {
+            let member = self.parse_ident()?;
             let annotation = if self.match_operator(Operator::Colon) {
                 if self.peek_operator(Operator::Equal) {
                     // `:=` infer form — consume the `=`
@@ -156,14 +155,21 @@ impl<'a> Parser<'a> {
                 self.expect_operator(Operator::Equal, "expected ':=' or '=' after member name");
                 None
             };
-            let value = self.parse_expr(0)?;
-            return Some(Item::TypeBinding(Box::new(TypeBinding {
+            let value = DeclValue::Expr(self.parse_expr(0)?);
+            let end = match &value {
+                DeclValue::Expr(expr) => expr.span,
+                DeclValue::ExternSignature(sig) => sig.ty.span,
+            };
+            return Some(Item::Declaration(Box::new(Declaration {
                 docs,
                 visibility,
-                type_name: name,
-                member_name,
+                modifiers,
+                target: DeclTarget::Associated {
+                    owner: name,
+                    member,
+                },
                 annotation,
-                span: merge_span(start, value.span),
+                span: merge_span(start, end),
                 value,
             })));
         }
@@ -171,55 +177,59 @@ impl<'a> Parser<'a> {
         if self.match_operator(Operator::Colon) {
             if self.match_operator(Operator::Equal) {
                 if allow_extern_bindings && self.match_keyword(Keyword::Extern) {
-                    if mutable {
+                    if modifiers.mutable {
                         self.report_parser_error(
                             DiagnosticCode::E3001,
                             "extern bindings cannot be mutable",
                             start,
-                            "remove `mut` from extern function declaration",
-                        );
+                        "remove `mut` from extern function declaration",
+                    );
                     }
                     let (ty, link_name, end) = self.parse_extern_binding_signature()?;
-                    return Some(Item::Extern(Box::new(ExternDecl {
+                    let mut modifiers = modifiers;
+                    modifiers.linkage = Linkage::Extern { link_name };
+                    return Some(Item::Declaration(Box::new(Declaration {
                         docs,
                         visibility,
-                        name,
-                        ty,
-                        link_name,
+                        modifiers,
+                        target: DeclTarget::Name(name),
+                        annotation: None,
+                        value: DeclValue::ExternSignature(ExternSignature {
+                            ty,
+                            link_name: None,
+                        }),
                         span: merge_span(start, end),
                     })));
                 }
-                let value = self.parse_expr(0)?;
-                return Some(Item::Binding(Box::new(Binding {
+                let value = self.parse_declaration_value_expr(&mut modifiers)?;
+                return Some(Item::Declaration(Box::new(Declaration {
                     docs,
                     visibility,
-                    mutable,
-                    kind: BindingKind::Infer,
-                    name,
+                    modifiers,
+                    target: DeclTarget::Name(name),
                     annotation: None,
                     span: merge_span(start, value.span),
-                    value,
+                    value: DeclValue::Expr(value),
                 })));
             }
 
             let annotation = self.parse_type_expr()?;
             self.expect_operator(Operator::Equal, "expected '=' after typed binding");
-            let value = self.parse_expr(0)?;
-            return Some(Item::Binding(Box::new(Binding {
+            let value = self.parse_declaration_value_expr(&mut modifiers)?;
+            return Some(Item::Declaration(Box::new(Declaration {
                 docs,
                 visibility,
-                mutable,
-                kind: BindingKind::Typed,
-                name,
+                modifiers,
+                target: DeclTarget::Name(name),
                 annotation: Some(annotation),
                 span: merge_span(start, value.span),
-                value,
+                value: DeclValue::Expr(value),
             })));
         }
 
         if self.match_operator(Operator::Equal) {
             if allow_extern_bindings && self.match_keyword(Keyword::Extern) {
-                if mutable {
+                if modifiers.mutable {
                     self.report_parser_error(
                         DiagnosticCode::E3001,
                         "extern bindings cannot be mutable",
@@ -228,29 +238,71 @@ impl<'a> Parser<'a> {
                     );
                 }
                 let (ty, link_name, end) = self.parse_extern_binding_signature()?;
-                return Some(Item::Extern(Box::new(ExternDecl {
+                let mut modifiers = modifiers;
+                modifiers.linkage = Linkage::Extern { link_name };
+                return Some(Item::Declaration(Box::new(Declaration {
                     docs,
                     visibility,
-                    name,
-                    ty,
-                    link_name,
+                    modifiers,
+                    target: DeclTarget::Name(name),
+                    annotation: None,
+                    value: DeclValue::ExternSignature(ExternSignature {
+                        ty,
+                        link_name: None,
+                    }),
                     span: merge_span(start, end),
-                })));
+                    })));
             }
-            let value = self.parse_expr(0)?;
-            return Some(Item::Binding(Box::new(Binding {
+            let value = self.parse_declaration_value_expr(&mut modifiers)?;
+            return Some(Item::Declaration(Box::new(Declaration {
                 docs,
                 visibility,
-                mutable,
-                kind: BindingKind::Infer,
-                name,
+                modifiers,
+                target: DeclTarget::Name(name),
                 annotation: None,
                 span: merge_span(start, value.span),
-                value,
+                value: DeclValue::Expr(value),
             })));
         }
 
         None
+    }
+
+    fn parse_declaration_modifiers(&mut self) -> DeclModifiers {
+        let mutable = self.match_keyword(Keyword::Mut);
+        DeclModifiers {
+            mutable,
+            inline: false,
+            linkage: Linkage::Normal,
+        }
+    }
+
+    fn parse_declaration_value_expr(&mut self, modifiers: &mut DeclModifiers) -> Option<Expr> {
+        if self.match_keyword(Keyword::Inline) {
+            let start = self.prev_span();
+            modifiers.inline = true;
+            let value = self.parse_expr(100)?;
+            if !matches!(value.kind, ExprKind::Fn(_)) {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "declaration modifier `inline` requires a function value",
+                    merge_span(start, value.span),
+                    "use `inline` only before a function declaration value",
+                );
+            }
+            return Some(value);
+        }
+
+        if modifiers.inline {
+            self.report_parser_error(
+                DiagnosticCode::E3001,
+                "inline declarations require an inline function value",
+                self.current_span(),
+                "write `:= inline (...) ...`",
+            );
+        }
+
+        self.parse_expr(0)
     }
 
     fn parse_doc_comments(&mut self) -> Vec<DocComment> {
@@ -455,6 +507,9 @@ impl<'a> Parser<'a> {
             return self.parse_unary(UnaryOp::BitNot);
         }
         if self.match_operator(Operator::Ampersand) {
+            if self.match_keyword(Keyword::Mut) {
+                return self.parse_unary(UnaryOp::RefMut);
+            }
             return self.parse_unary(UnaryOp::Ref);
         }
 
@@ -555,23 +610,6 @@ impl<'a> Parser<'a> {
                         fields,
                     },
                 };
-                continue;
-            }
-            if let Some(op) = self.current_assign_op() {
-                let op_span = self.current_span();
-                self.advance();
-                let value = self.parse_expr(1)?;
-                expr = Expr {
-                    span: merge_span(expr.span, value.span),
-                    kind: ExprKind::Assign {
-                        op,
-                        target: Box::new(expr),
-                        value: Box::new(value),
-                    },
-                };
-                if op_span.start_line != self.current_span().start_line {
-                    break;
-                }
                 continue;
             }
             break;
@@ -867,10 +905,20 @@ impl<'a> Parser<'a> {
             }
 
             if self.looks_like_destructure_binding() {
-                if let Some(Item::Destructure(d)) =
-                    self.parse_destructure_binding(vec![], Visibility::Private)
+                if let Some(Item::Declaration(decl)) =
+                    self.parse_destructure_declaration(
+                        vec![],
+                        Visibility::Private,
+                        DeclModifiers {
+                            mutable: false,
+                            inline: false,
+                            linkage: Linkage::Normal,
+                        },
+                    )
                 {
-                    statements.push(Stmt::Destructure(d));
+                    if let Some(stmt) = self.declaration_to_stmt(decl) {
+                        statements.push(stmt);
+                    }
                     tail_expr = None;
                     self.match_delimiter(Delimiter::Semicolon);
                     continue;
@@ -878,12 +926,25 @@ impl<'a> Parser<'a> {
             }
 
             if self.peek_kind(TokenKind::DocComment) || self.looks_like_local_binding() {
-                if let Some(Item::Binding(binding)) = self.parse_item(false) {
-                    statements.push(Stmt::Binding(binding));
+                if let Some(Item::Declaration(decl)) = self.parse_item(false) {
+                    if let Some(stmt) = self.declaration_to_stmt(decl) {
+                        statements.push(stmt);
+                    }
                     tail_expr = None;
                     self.match_delimiter(Delimiter::Semicolon);
                     continue;
                 }
+            }
+
+            if self.starts_assignment_stmt() {
+                let before = self.index;
+                if let Some(stmt) = self.parse_assignment_stmt() {
+                    statements.push(stmt);
+                    tail_expr = None;
+                    self.match_delimiter(Delimiter::Semicolon);
+                    continue;
+                }
+                self.index = before;
             }
 
             let before = self.index;
@@ -996,9 +1057,9 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let then_branch = self.parse_expr(0)?;
+        let then_branch = self.parse_stmt_expr_bridge()?;
         let else_branch = if self.match_keyword(Keyword::Else) {
-            let else_branch = self.parse_expr(0)?;
+            let else_branch = self.parse_stmt_expr_bridge()?;
             Some(Box::new(else_branch))
         } else {
             None
@@ -1137,7 +1198,7 @@ impl<'a> Parser<'a> {
     fn parse_for_expr(&mut self) -> Option<Expr> {
         let start = self.prev_span();
         if self.peek_delimiter(Delimiter::LBrace) {
-            let body = self.parse_expr(0)?;
+            let body = self.parse_stmt_expr_bridge()?;
             let span = merge_span(start, body.span);
             return Some(Expr {
                 span,
@@ -1162,7 +1223,7 @@ impl<'a> Parser<'a> {
             self.disallow_ident_struct_literal = prev_struct_literal;
             self.match_operator(Operator::Colon);
             let binding = self.parse_optional_pipe_binding();
-            let body = self.parse_expr(0)?;
+            let body = self.parse_stmt_expr_bridge()?;
             let span = merge_span(start, body.span);
             return Some(Expr {
                 span,
@@ -1178,7 +1239,7 @@ impl<'a> Parser<'a> {
 
         self.match_operator(Operator::Colon);
         let binding = self.parse_optional_pipe_binding();
-        let body = self.parse_expr(0)?;
+        let body = self.parse_stmt_expr_bridge()?;
         let span = merge_span(start, body.span);
 
         if binding.is_some() {
@@ -1585,11 +1646,12 @@ impl<'a> Parser<'a> {
     fn parse_param_type_expr(&mut self) -> Option<TypeExpr> {
         let start = self.current_span();
         if self.match_operator(Operator::Star) {
-            let _mutable = self.match_keyword(Keyword::Mut);
+            let mutable = self.match_keyword(Keyword::Mut);
             let inner = self.parse_type_expr()?;
             return Some(TypeExpr {
                 span: merge_span(start, inner.span),
                 kind: TypeExprKind::Pointer {
+                    mutable,
                     inner: Box::new(inner),
                 },
             });
@@ -1600,11 +1662,12 @@ impl<'a> Parser<'a> {
         {
             self.advance();
             self.advance();
-            let _mutable = self.match_keyword(Keyword::Mut);
+            let mutable = self.match_keyword(Keyword::Mut);
             let element = self.parse_type_expr()?;
             return Some(TypeExpr {
                 span: merge_span(start, element.span),
                 kind: TypeExprKind::Slice {
+                    mutable,
                     element: Box::new(element),
                 },
             });
@@ -1630,21 +1693,25 @@ impl<'a> Parser<'a> {
             });
         }
         if self.match_operator(Operator::Star) {
+            let mutable = self.match_keyword(Keyword::Mut);
             let inner = self.parse_type_expr()?;
             return Some(TypeExpr {
                 span: merge_span(start, inner.span),
                 kind: TypeExprKind::Pointer {
+                    mutable,
                     inner: Box::new(inner),
                 },
             });
         }
         if self.match_delimiter(Delimiter::LBracket) {
             if self.match_delimiter(Delimiter::RBracket) {
+                let mutable = self.match_keyword(Keyword::Mut);
                 let element = self.parse_type_expr()?;
                 let span = merge_span(start, element.span);
                 return Some(TypeExpr {
                     span,
                     kind: TypeExprKind::Slice {
+                        mutable,
                         element: Box::new(element),
                     },
                 });
@@ -2546,6 +2613,10 @@ impl<'a> Parser<'a> {
     }
 
     fn looks_like_top_level_item(&self) -> bool {
+        if self.looks_like_destructure_binding() {
+            return true;
+        }
+
         let mut idx = self.index;
         while matches!(
             self.tokens.get(idx).map(|t| &t.kind),
@@ -2660,10 +2731,11 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_destructure_binding(
+    fn parse_destructure_declaration(
         &mut self,
         docs: Vec<DocComment>,
         visibility: Visibility,
+        modifiers: DeclModifiers,
     ) -> Option<Item> {
         let start = self.current_span();
         self.expect_delimiter(Delimiter::LBrace, "expected '{' for destructure pattern");
@@ -2680,13 +2752,74 @@ impl<'a> Parser<'a> {
         self.expect_operator(Operator::Colon, "expected ':=' after destructure pattern");
         self.expect_operator(Operator::Equal, "expected '=' after ':' in destructure");
         let value = self.parse_expr(0)?;
-        Some(Item::Destructure(Box::new(DestructureBinding {
+        Some(Item::Declaration(Box::new(Declaration {
             docs,
             visibility,
-            names,
+            modifiers,
+            target: DeclTarget::Destructure(names),
+            annotation: None,
             span: merge_span(start, value.span),
+            value: DeclValue::Expr(value),
+        })))
+    }
+
+    fn declaration_to_stmt(&mut self, decl: Box<Declaration>) -> Option<Stmt> {
+        match &decl.value {
+            DeclValue::ExternSignature(_) => {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "extern declarations are not allowed in local scope",
+                    decl.span,
+                    "move this declaration to top level",
+                );
+                return None;
+            }
+            DeclValue::Expr(_) => {}
+        }
+        match &decl.target {
+            DeclTarget::Associated { .. } => {
+                self.report_parser_error(
+                    DiagnosticCode::E3001,
+                    "associated declarations are not allowed in local scope",
+                    decl.span,
+                    "move this declaration to top level",
+                );
+                None
+            }
+            DeclTarget::Name(_) | DeclTarget::Destructure(_) => Some(Stmt::Declaration(decl)),
+        }
+    }
+
+    fn parse_assignment_stmt(&mut self) -> Option<Stmt> {
+        let target = self.parse_postfix_expr()?;
+        let op = self.current_assign_op()?;
+        self.advance();
+        let value = self.parse_expr(1)?;
+        Some(Stmt::Assignment(Box::new(AssignmentStmt {
+            op,
+            span: merge_span(target.span, value.span),
+            target,
             value,
         })))
+    }
+
+    fn parse_stmt_expr_bridge(&mut self) -> Option<Expr> {
+        if self.starts_assignment_stmt() {
+            let before = self.index;
+            if let Some(stmt) = self.parse_assignment_stmt() {
+                let span = stmt_span(&stmt);
+                return Some(Expr {
+                    span,
+                    kind: ExprKind::Block(BlockExpr {
+                        label: None,
+                        statements: vec![stmt],
+                        tail_expr: None,
+                    }),
+                });
+            }
+            self.index = before;
+        }
+        self.parse_expr(0)
     }
 
     fn looks_like_local_binding(&self) -> bool {
@@ -2705,10 +2838,23 @@ impl<'a> Parser<'a> {
             return false;
         }
         match self.tokens.get(idx + 1).map(|t| &t.kind) {
-            Some(TokenKind::Operator(Operator::Colon)) => true,
+            Some(TokenKind::Operator(Operator::Colon)) => {
+                !matches!(
+                    self.tokens.get(idx + 2).map(|t| &t.kind),
+                    Some(TokenKind::Delimiter(Delimiter::LBrace))
+                        | Some(TokenKind::Keyword(Keyword::For))
+                )
+            }
             Some(TokenKind::Operator(Operator::Equal)) => saw_mut,
             _ => false,
         }
+    }
+
+    fn starts_assignment_stmt(&self) -> bool {
+        matches!(
+            self.current().map(|token| &token.kind),
+            Some(TokenKind::Identifier) | Some(TokenKind::BuiltinIdentifier)
+        )
     }
 
     fn expect_operator(&mut self, op: Operator, message: &str) {
@@ -2886,6 +3032,14 @@ fn expr_can_be_block_tail(expr: &Expr) -> bool {
         ExprKind::If(if_expr) => if_expr.else_branch.is_some(),
         ExprKind::Break(_) | ExprKind::Continue { .. } | ExprKind::Return { .. } => false,
         _ => true,
+    }
+}
+
+fn stmt_span(stmt: &Stmt) -> SourceSpan {
+    match stmt {
+        Stmt::Declaration(decl) => decl.span,
+        Stmt::Assignment(assign) => assign.span,
+        Stmt::Expr(expr) => expr.span,
     }
 }
 

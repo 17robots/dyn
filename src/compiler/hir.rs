@@ -1,6 +1,6 @@
 use crate::compiler::ast::{
-    AssignOp, BinaryOp, DestructureBinding, Expr, ExprKind, Literal, PatternKind, PatternLiteral,
-    TypeExprKind, UnaryOp, Visibility,
+    AssignOp, BinaryOp, DeclTarget, DeclValue, Declaration, DestructureName, Expr, ExprKind,
+    Literal, PatternKind, PatternLiteral, Stmt, TypeExprKind, UnaryOp, Visibility,
 };
 use crate::compiler::diagnostics::SourceSpan;
 use crate::compiler::module_resolver::{ModuleId, ModuleKey};
@@ -331,10 +331,7 @@ pub fn lower_module_units_with_metadata(
                     inferred_type: inferred_types
                         .get(&(unit.module_id, decl.name.clone()))
                         .cloned(),
-                    value: rewrite_method_calls(
-                        lower_expr(&decl.value, &enum_root_index),
-                        &method_index,
-                    ),
+                    value: rewrite_method_calls(lower_decl_value(decl, &enum_root_index), &method_index),
                     span: decl.span,
                     enclosing_struct: enclosing_by_name.get(&decl.name).cloned(),
                 })
@@ -707,7 +704,7 @@ fn instance_receiver_style(
     {
         return Some(ReceiverStyle::Value);
     }
-    if let TypeExprKind::Pointer { inner } = &first_ty.kind {
+    if let TypeExprKind::Pointer { inner, .. } = &first_ty.kind {
         if matches!(inner.kind, TypeExprKind::Named(ref ident) if ident.text == type_name)
             || matches!(inner.kind, TypeExprKind::Applied { ref callee, .. } if callee.text == type_name)
         {
@@ -1689,11 +1686,6 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
             left: Box::new(lower_expr(left, enum_root_index)),
             right: Box::new(lower_expr(right, enum_root_index)),
         },
-        ExprKind::Assign { target, value, op } => HirExprKind::Assign {
-            op: *op,
-            target: Box::new(lower_expr(target, enum_root_index)),
-            value: Box::new(lower_expr(value, enum_root_index)),
-        },
         ExprKind::Call(call) => HirExprKind::Call {
             callee: Box::new(lower_expr(&call.callee, enum_root_index)),
             args: call
@@ -1836,25 +1828,7 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
                 body: {
                     let mut body = Vec::new();
                     for stmt in &block.statements {
-                        match stmt {
-                            crate::compiler::ast::Stmt::Binding(binding) => {
-                                body.push(HirExpr {
-                                    kind: HirExprKind::Let {
-                                        name: binding.name.text.clone(),
-                                        mutable: binding.mutable,
-                                        type_hint: binding.annotation.as_ref().map(type_expr_to_string),
-                                        value: Box::new(lower_expr(&binding.value, enum_root_index)),
-                                    },
-                                    span: binding.span,
-                                });
-                            }
-                            crate::compiler::ast::Stmt::Destructure(d) => {
-                                lower_destructure_stmt(d, enum_root_index, &mut body);
-                            }
-                            crate::compiler::ast::Stmt::Expr(expr) => {
-                                body.push(lower_expr(expr, enum_root_index));
-                            }
-                        }
+                        lower_stmt(stmt, enum_root_index, &mut body);
                     }
                     if let Some(tail) = &block.tail_expr {
                         body.push(lower_expr(tail, enum_root_index));
@@ -1923,7 +1897,9 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
                 })
                 .collect(),
         },
-        ExprKind::For(for_expr) => HirExprKind::For(lower_for_expr(for_expr, None, enum_root_index)),
+        ExprKind::For(for_expr) => {
+            HirExprKind::For(lower_for_expr(for_expr, None, enum_root_index))
+        }
         ExprKind::Break(brk) => HirExprKind::Break {
             label: brk.label.as_ref().map(|label| label.name.text.clone()),
             value: brk
@@ -1976,31 +1952,7 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
                         body: {
                             let mut body = Vec::new();
                             for stmt in &block.statements {
-                                match stmt {
-                                    crate::compiler::ast::Stmt::Binding(binding) => {
-                                        body.push(HirExpr {
-                                            kind: HirExprKind::Let {
-                                                name: binding.name.text.clone(),
-                                                mutable: binding.mutable,
-                                                type_hint: binding
-                                                    .annotation
-                                                    .as_ref()
-                                                    .map(type_expr_to_string),
-                                                value: Box::new(lower_expr(
-                                                    &binding.value,
-                                                    enum_root_index,
-                                                )),
-                                            },
-                                            span: binding.span,
-                                        });
-                                    }
-                                    crate::compiler::ast::Stmt::Destructure(d) => {
-                                        lower_destructure_stmt(d, enum_root_index, &mut body);
-                                    }
-                                    crate::compiler::ast::Stmt::Expr(expr) => {
-                                        body.push(lower_expr(expr, enum_root_index));
-                                    }
-                                }
+                                lower_stmt(stmt, enum_root_index, &mut body);
                             }
                             if let Some(tail) = &block.tail_expr {
                                 body.push(lower_expr(tail, enum_root_index));
@@ -2072,10 +2024,12 @@ fn lower_for_expr(
     enum_root_index: &EnumRootIndex,
 ) -> crate::compiler::hir::HirForExpr {
     match for_expr {
-        crate::compiler::ast::ForExpr::Infinite { body } => crate::compiler::hir::HirForExpr::Infinite {
-            label,
-            body: Box::new(lower_expr(body, enum_root_index)),
-        },
+        crate::compiler::ast::ForExpr::Infinite { body } => {
+            crate::compiler::hir::HirForExpr::Infinite {
+                label,
+                body: Box::new(lower_expr(body, enum_root_index)),
+            }
+        }
         crate::compiler::ast::ForExpr::WhileLike { condition, body } => {
             crate::compiler::hir::HirForExpr::WhileLike {
                 label,
@@ -2174,10 +2128,36 @@ fn lower_pattern_literal(pattern: &PatternKind) -> Option<HirLiteral> {
 ///   `a := __destruct_N.a`
 ///   `b := __destruct_N.b`
 fn lower_destructure_stmt(
-    d: &DestructureBinding,
+    names: &[DestructureName],
+    value: &Expr,
+    span: SourceSpan,
     enum_root_index: &EnumRootIndex,
     body: &mut Vec<HirExpr>,
 ) {
+    if let ExprKind::Use { path } = &value.kind {
+        for dn in names {
+            body.push(HirExpr {
+                kind: HirExprKind::Let {
+                    name: dn.name.text.clone(),
+                    mutable: dn.mutable,
+                    type_hint: None,
+                    value: Box::new(HirExpr {
+                        kind: HirExprKind::FieldAccess {
+                            base: Box::new(HirExpr {
+                                kind: HirExprKind::Use { path: path.clone() },
+                                span,
+                            }),
+                            field: dn.name.text.clone(),
+                        },
+                        span: dn.name.span,
+                    }),
+                },
+                span: dn.name.span,
+            });
+        }
+        return;
+    }
+
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_name = format!("__destruct_{id}");
@@ -2188,13 +2168,13 @@ fn lower_destructure_stmt(
             name: tmp_name.clone(),
             mutable: false,
             type_hint: None,
-            value: Box::new(lower_expr(&d.value, enum_root_index)),
+            value: Box::new(lower_expr(value, enum_root_index)),
         },
-        span: d.span,
+        span,
     });
 
     // Bind each name via field access on the temp.
-    for dn in &d.names {
+    for dn in names {
         body.push(HirExpr {
             kind: HirExprKind::Let {
                 name: dn.name.text.clone(),
@@ -2204,7 +2184,7 @@ fn lower_destructure_stmt(
                     kind: HirExprKind::FieldAccess {
                         base: Box::new(HirExpr {
                             kind: HirExprKind::Ident(tmp_name.clone()),
-                            span: d.span,
+                            span,
                         }),
                         field: dn.name.text.clone(),
                     },
@@ -2213,6 +2193,72 @@ fn lower_destructure_stmt(
             },
             span: dn.name.span,
         });
+    }
+}
+
+fn lower_stmt(stmt: &Stmt, enum_root_index: &EnumRootIndex, body: &mut Vec<HirExpr>) {
+    match stmt {
+        Stmt::Declaration(decl) => lower_declaration_stmt(decl, enum_root_index, body),
+        Stmt::Assignment(assign) => body.push(HirExpr {
+            kind: HirExprKind::Assign {
+                op: assign.op,
+                target: Box::new(lower_expr(&assign.target, enum_root_index)),
+                value: Box::new(lower_expr(&assign.value, enum_root_index)),
+            },
+            span: assign.span,
+        }),
+        Stmt::Expr(expr) => body.push(lower_expr(expr, enum_root_index)),
+    }
+}
+
+fn lower_declaration_stmt(
+    decl: &Declaration,
+    enum_root_index: &EnumRootIndex,
+    body: &mut Vec<HirExpr>,
+) {
+    let value = match &decl.value {
+        DeclValue::Expr(expr) => expr,
+        DeclValue::ExternSignature(_) => return,
+    };
+
+    match &decl.target {
+        DeclTarget::Name(name) => {
+            body.push(HirExpr {
+                kind: HirExprKind::Let {
+                    name: name.text.clone(),
+                    mutable: decl.modifiers.mutable,
+                    type_hint: decl.annotation.as_ref().map(type_expr_to_string),
+                    value: Box::new(lower_decl_expr_value(
+                        value,
+                        decl.modifiers.inline,
+                        enum_root_index,
+                    )),
+                },
+                span: decl.span,
+            });
+        }
+        DeclTarget::Destructure(names) => {
+            lower_destructure_stmt(names, value, decl.span, enum_root_index, body);
+        }
+        DeclTarget::Associated { .. } => {}
+    }
+}
+
+fn lower_decl_value(decl: &crate::compiler::sema::DeclStub, enum_root_index: &EnumRootIndex) -> HirExpr {
+    lower_decl_expr_value(&decl.value, decl.inline, enum_root_index)
+}
+
+fn lower_decl_expr_value(expr: &Expr, inline: bool, enum_root_index: &EnumRootIndex) -> HirExpr {
+    let lowered = lower_expr(expr, enum_root_index);
+    if inline {
+        HirExpr {
+            span: lowered.span,
+            kind: HirExprKind::Inline {
+                expr: Box::new(lowered),
+            },
+        }
+    } else {
+        lowered
     }
 }
 
@@ -2228,9 +2274,30 @@ fn type_expr_to_string(type_expr: &crate::compiler::ast::TypeExpr) -> String {
             format!("{}({})", callee.text, rendered)
         }
         TypeExprKind::Optional { inner } => format!("?{}", type_expr_to_string(inner)),
-        TypeExprKind::Pointer { inner } => format!("*{}", type_expr_to_string(inner)),
-        TypeExprKind::Slice { element } => format!("[]{}", type_expr_to_string(element)),
-        TypeExprKind::Array { element, .. } => format!("[?]{}", type_expr_to_string(element)),
+        TypeExprKind::Pointer { inner, mutable } => {
+            if *mutable {
+                format!("*mut {}", type_expr_to_string(inner))
+            } else {
+                format!("*{}", type_expr_to_string(inner))
+            }
+        }
+        TypeExprKind::Slice { element, mutable } => {
+            if *mutable {
+                format!("[]mut {}", type_expr_to_string(element))
+            } else {
+                format!("[]{}", type_expr_to_string(element))
+            }
+        }
+        TypeExprKind::Array { len, element } => {
+            let len_text = len
+                .as_ref()
+                .and_then(|len| match &len.kind {
+                    ExprKind::Literal(Literal::Integer(text)) => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "?".to_string());
+            format!("[{len_text}]{}", type_expr_to_string(element))
+        }
         TypeExprKind::Errorable { ok, errors } => {
             let list = errors
                 .iter()

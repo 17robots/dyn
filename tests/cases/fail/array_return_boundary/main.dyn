@@ -1,0 +1,8 @@
+module main
+
+bad := () [8]u32 => [0, 0, 0, 0, 0, 0, 0, 0]
+
+main := () i32 {
+    _ = bad
+    return 0
+}

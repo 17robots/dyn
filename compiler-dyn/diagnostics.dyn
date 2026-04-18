@@ -1,7 +1,9 @@
 module diagnostics
 
 Vec := (use "std/collections").Vec
+io := (use "std/io")
 mem := (use "std/mem")
+os := (use "std/os")
 str := (use "std/str")
 
 pub DiagnosticPhase := enum { ModuleResolver, Lexer, Parser, Semantic, TypeChecker, Mir, Backend }
@@ -158,6 +160,24 @@ pub dedupe_diagnostics_by_primary_span := (diagnostics: *mut Vec(Diagnostic)) {
   return
 }
 
+pub emit_diagnostics := (diagnostics: *mut Vec(Diagnostic)) usize {
+  if diagnostics.len == 0 return 0
+  sort_diagnostics_by_primary_path(diagnostics.buf[0..diagnostics.len])
+  dedupe_diagnostics_by_primary_span(diagnostics)
+
+  mut errors: usize = 0
+  mut i: usize = 0
+  for i < diagnostics.len: {
+    diag := diagnostics.buf[i]
+    if diag.severity == .Error {
+      errors += 1
+    }
+    emit_diagnostic(diag)
+    i += 1
+  }
+  return errors
+}
+
 pub normalize_diagnostic_path := (path: []u8) []u8 {
   mut out := path
   for str.starts_with(out, "./"): {
@@ -261,4 +281,67 @@ swap_diagnostic := (diagnostics: []mut Diagnostic, left: usize, right: usize) {
 keep_diagnostic := (diagnostics: *mut Vec(Diagnostic), at: usize, item: Diagnostic) {
   diagnostics.buf[at] = item
   return
+}
+
+emit_diagnostic := (diag: Diagnostic) {
+  writer := os.stderr.writer()
+  primary := primary_path(&diag)
+  if primary.len != 0 {
+    _ = writer.write_all(primary)
+  } else {
+    _ = writer.write_all("<memory>")
+  }
+
+  span := primary_span(&diag)
+  if span: |s| {
+    _ = writer.write_byte(':')
+    io.write_uint(writer, $as(u64, s.start_line))
+    _ = writer.write_byte(':')
+    io.write_uint(writer, $as(u64, s.start_col))
+  }
+
+  _ = writer.write_all(": ")
+  _ = writer.write_all(severity_text(diag.severity))
+  _ = writer.write_all("[")
+  _ = writer.write_all(diag.code.as_str())
+  _ = writer.write_all("]: ")
+  _ = writer.write_all(diag.message)
+  _ = writer.write_byte('\n')
+
+  if diag.labels.len != 0 {
+    emit_label(diag.labels.buf[0])
+  }
+  if diag.notes.len != 0 {
+    _ = writer.write_all("  note: ")
+    _ = writer.write_all(diag.notes)
+    _ = writer.write_byte('\n')
+  }
+  return
+}
+
+emit_label := (label: DiagnosticLabel) {
+  writer := os.stderr.writer()
+  _ = writer.write_all("  --> ")
+  if label.file_path.len != 0 {
+    _ = writer.write_all(normalize_diagnostic_path(label.file_path))
+  } else {
+    _ = writer.write_all("<memory>")
+  }
+  if label.span: |span| {
+    _ = writer.write_byte(':')
+    io.write_uint(writer, $as(u64, span.start_line))
+    _ = writer.write_byte(':')
+    io.write_uint(writer, $as(u64, span.start_col))
+  }
+  if label.message.len != 0 {
+    _ = writer.write_all(": ")
+    _ = writer.write_all(label.message)
+  }
+  _ = writer.write_byte('\n')
+  return
+}
+
+severity_text := (severity: DiagnosticSeverity) []u8 => match severity {
+  .Error: "error",
+  .Warning: "warning",
 }

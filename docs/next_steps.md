@@ -1,33 +1,26 @@
 # Next Steps
 
-Checked on 2026-04-11.
+Checked on 2026-04-14.
 
 ## Now
 
-- `std/mem/allocator` typed helpers: done
-- `std/mem/arena`: in progress
-- compiler sema method-call path: fixed for associated methods + implicit receiver calls
+- `compiler-dyn` analyzes cleanly under Rust bootstrap
+- `compiler-dyn/main.dyn` has a minimal single-file `lex|parse|analyze` path
+- `std/io` now loops for `read_exact` and `write_all`
 
 ## Next
 
-1. finish `std/io/reader` real `read_all`
-2. audit `std/io/writer` and `std/os/file` for compiler-grade read/write paths
-3. add allocator tests:
-   - zero-sized types
-   - arena save/restore/reset
-   - allocators without native realloc
-4. audit nominal type vs type-param resolution in sema
-5. choose first Dyn self-hosting slice:
-   - token/span types
-   - lexer
-   - diagnostics formatting
+1. replace placeholder generic printing in `std/io/writer`
+2. add behavior tests for compiler-facing std runtime paths
+3. add multi-file/module loading to `compiler-dyn`
+4. extend `compiler-dyn` sema beyond declaration/name analysis
+5. define Rust-backend handoff shape for self-host frontend output
 
 ## Self-Hosting Order
 
 1. keep Rust compiler bootstrap source of truth
 2. finish compiler-facing std
-3. port `compiler-dyn/old` toward current language + std surface
-4. bring up Dyn compiler in stages:
+3. bring up Dyn compiler in stages:
    - lex one file
    - parse one file
    - sema one file
@@ -37,4 +30,5 @@ Checked on 2026-04-11.
 
 - associated method typing now works, but generic nominal-type resolution still weak spot
 - std mostly compile-tested; runtime behavior coverage still thin
-- `compiler-dyn/old` still best logic donor, but compatibility port not started yet
+- self-host frontend is alive, but still only single-file
+- std behavior still less tested than std surface

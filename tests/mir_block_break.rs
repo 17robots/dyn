@@ -1,6 +1,8 @@
 use dyn_compiler::compiler::ast::Visibility;
 use dyn_compiler::compiler::diagnostics::SourceSpan;
-use dyn_compiler::compiler::hir::{HirExpr, HirExprKind, HirItem, HirLiteral, HirModule, HirProgram};
+use dyn_compiler::compiler::hir::{
+    HirExpr, HirExprKind, HirItem, HirLiteral, HirModule, HirProgram,
+};
 use dyn_compiler::compiler::mir::lower::lower_hir_to_mir_with_diagnostics;
 use dyn_compiler::compiler::mir::MirInstr;
 use dyn_compiler::compiler::module_resolver::{ModuleId, ModuleKey};

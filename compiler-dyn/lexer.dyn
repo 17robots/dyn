@@ -3,106 +3,57 @@ module lexer
 Vec := (use "std/collections").Vec
 str := (use "std/str")
 Allocator := (use "std/mem").Allocator
-
 diagnostics := use "diagnostics"
 SourceSpan := diagnostics.SourceSpan
 Diagnostic := diagnostics.Diagnostic
-
-pub CursorPosition := struct { byte: usize, line: usize, col: usize }
-
-pub Cursor := struct { source: []u8, index: usize, line: usize, col: usize }
-pub Cursor.init := (source: []u8) Cursor => .{ source, index: 0, line: 1, col: 1 }
-pub Cursor.is_eof := (self: Cursor) u1 => self.index >= self.source.len
-pub Cursor.position := (self: Cursor) CursorPosition => .{ byte: self.index, line: self.line, col: self.col }
-pub Cursor.peek := (self: Cursor) ?u8 {
-  if self.index >= self.source.len return null
-  return self.source[self.index]
-}
-pub Cursor.peek_next := (self: Cursor) ?u8 {
-  mut next: usize = self.index
-  next += 1
-  if next >= self.source.len return null
-  return self.source[next]
-}
-
-pub Cursor.bump := (self: *mut Cursor) ?u8 {
-  ch := self.peek() or return null
-  self.index += 1
-  if ch == '\n' {
-    self.line += 1
-    self.col = 1
-  } else self.col += 1
-  return ch
-}
-pub Cursor.match_char := (self: *mut Cursor, expected: u8) u1 {
-  ch := self.peek() or return false
-  if ch != expected return false
-  _ = self.bump()
-  return true
-}
-pub Cursor.span_from := (self: Cursor, start: CursorPosition) SourceSpan => .{ start_byte: start.byte, start_line: start.line, start_col: start.col, end_byte: self.index, end_line: self.line, end_col: self.col }
+cursor := use "cursor"
 
 pub LexOutput := struct { tokens: Vec(Token), diagnostics: Vec(Diagnostic) }
 
-pub Lexer := struct { cursor: Cursor, source: []u8, file_path: []u8, diagnostics: Vec(Diagnostic), tokens: Vec(Token) }
-pub Lexer.init := (allocator: Allocator, source: []u8, file_path: []u8) Lexer => .{ cursor: Cursor.init(source), source, file_path, diagnostics: Vec(Diagnostic).init(allocator), tokens: Vec(Token).init(allocator) }
+pub Lexer := struct { cursor: cursor.Cursor, source: []u8, file_path: []u8, diagnostics: Vec(Diagnostic), tokens: Vec(Token) }
+pub Lexer.init := (allocator: Allocator, source: []u8, file_path: []u8) Lexer => .{ cursor: cursor.Cursor.init(source), source, file_path, diagnostics: Vec(Diagnostic).init(allocator), tokens: Vec(Token).init(allocator) }
 pub Lexer.lex := (self: *mut Lexer) LexOutput! {
-  for {
+  loop: for {
     self.skip_whitespace()
-    if self.cursor.is_eof() break
-    if self.lex_comment_or_doc_comment() continue
-
+    if self.cursor.is_eof() break :loop
+    if self.lex_comment_or_doc_comment() continue :loop
     start := self.cursor.position()
-    ch := self.cursor.peek() or break
-
-    if is_identifier_start(ch) {
+    ch := self.cursor.peek() or break :loop
+    if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' {
       self.lex_identifier(start).!
-      continue
+      continue :loop
     }
-
     if ch == '$' {
       self.lex_builtin_identifier(start).!
-      continue
+      continue :loop
     }
-
-    if is_ascii_digit(ch) {
+    if ch >= '0' && ch <= '9' {
       self.lex_number(start).!
-      continue
+      continue :loop
     }
-
     if ch == '"' {
       self.lex_string_literal(start).!
-      continue
+      continue :loop
     }
-
     if ch == '\'' {
       self.lex_char_literal(start).!
-      continue
+      continue :loop
     }
-
-    if self.lex_operator_or_delimiter(start).! continue
-
+    if self.lex_operator_or_delimiter(start).! continue :loop
     self.emit_unexpected_character(start).!
     _ = self.cursor.bump()
   }
-
   eof_pos := self.cursor.position()
   self.tokens.append(.{ kind: .Eof, lexeme: "", span: self.cursor.span_from(eof_pos), }).!
   return .{ tokens: self.tokens, diagnostics: self.diagnostics }
 }
-
 Lexer.skip_whitespace := (self: *mut Lexer) {
-  for {
-    ch := self.cursor.peek() or break
-    if str.is_whitespace(ch) {
-      _ = self.cursor.bump()
-      continue
-    }
-    break
+  for self.cursor.peek(): |ch| {
+    if !str.is_whitespace(ch) break
+    _ = self.cursor.bump()
   }
   return
 }
-
 Lexer.lex_comment_or_doc_comment := (self: *mut Lexer) u1 {
   first := self.cursor.peek() or return false
   if first != '/' return false
@@ -110,8 +61,7 @@ Lexer.lex_comment_or_doc_comment := (self: *mut Lexer) u1 {
   second := self.cursor.peek_next() or return false
   if second == '/' {
     start := self.cursor.position()
-    _ = self.cursor.bump()
-    _ = self.cursor.bump()
+    _ = self.cursor.bump_many(2)
 
     mut is_doc := false
     if self.cursor.peek(): |third| {
@@ -134,8 +84,7 @@ Lexer.lex_comment_or_doc_comment := (self: *mut Lexer) u1 {
 
   if second == '*' {
     start := self.cursor.position()
-    _ = self.cursor.bump()
-    _ = self.cursor.bump()
+    _ = self.cursor.bump_many(2)
 
     mut closed := false
     for self.cursor.bump(): |ch| {
@@ -159,7 +108,7 @@ Lexer.lex_comment_or_doc_comment := (self: *mut Lexer) u1 {
 
   return false
 }
-Lexer.lex_identifier := (self: *mut Lexer, start: CursorPosition) ! {
+Lexer.lex_identifier := (self: *mut Lexer, start: cursor.CursorPosition) ! {
   _ = self.cursor.bump()
   for {
     ch := self.cursor.peek() or break
@@ -172,7 +121,7 @@ Lexer.lex_identifier := (self: *mut Lexer, start: CursorPosition) ! {
   return
 }
 
-Lexer.lex_builtin_identifier := (self: *mut Lexer, start: CursorPosition) ! {
+Lexer.lex_builtin_identifier := (self: *mut Lexer, start: cursor.CursorPosition) ! {
   _ = self.cursor.bump()
   if self.cursor.peek(): |ch| {
     if is_identifier_start(ch) {
@@ -198,7 +147,7 @@ Lexer.lex_builtin_identifier := (self: *mut Lexer, start: CursorPosition) ! {
   return
 }
 
-Lexer.lex_string_literal := (self: *mut Lexer, start: CursorPosition) ! {
+Lexer.lex_string_literal := (self: *mut Lexer, start: cursor.CursorPosition) ! {
   _ = self.cursor.bump()
   mut terminated := false
 
@@ -232,7 +181,7 @@ Lexer.lex_string_literal := (self: *mut Lexer, start: CursorPosition) ! {
   return
 }
 
-Lexer.lex_char_literal := (self: *mut Lexer, start: CursorPosition) ! {
+Lexer.lex_char_literal := (self: *mut Lexer, start: cursor.CursorPosition) ! {
   _ = self.cursor.bump()
   mut valid := true
   mut terminated := false
@@ -278,7 +227,7 @@ Lexer.lex_char_literal := (self: *mut Lexer, start: CursorPosition) ! {
   return
 }
 
-Lexer.lex_number := (self: *mut Lexer, start: CursorPosition) ! {
+Lexer.lex_number := (self: *mut Lexer, start: cursor.CursorPosition) ! {
   mut is_float := false
   _ = self.cursor.bump()
 
@@ -405,7 +354,7 @@ Lexer.consume_hex_digits := (self: *mut Lexer, max: usize) {
   return
 }
 
-Lexer.lex_operator_or_delimiter := (self: *mut Lexer, start: CursorPosition) u1! {
+Lexer.lex_operator_or_delimiter := (self: *mut Lexer, start: cursor.CursorPosition) u1! {
   ch := self.cursor.bump() or return false
   mut kind: TokenKind = .Eof
   if ch == '(' kind = .LParen
@@ -479,7 +428,7 @@ Lexer.lex_operator_or_delimiter := (self: *mut Lexer, start: CursorPosition) u1!
   return true
 }
 
-Lexer.emit_unexpected_character := (self: *mut Lexer, start: CursorPosition) ! {
+Lexer.emit_unexpected_character := (self: *mut Lexer, start: cursor.CursorPosition) ! {
   span := self.cursor.span_from(start)
   diag := Diagnostic.error(.Lexer, .E2001, "unexpected character")
   self.diagnostics.append(diag.with_primary_file_label(self.file_path, span, "remove or replace this character")).!

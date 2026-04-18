@@ -128,8 +128,8 @@ fn normalize_target_arg(value: &str) -> Option<String> {
         "linux" => Some("x86_64-linux".to_string()),
         "macos" => Some("x86_64-macos".to_string()),
         "windows" => Some("x86_64-windows".to_string()),
-        "x86_64-linux" | "aarch64-linux" | "x86_64-macos" | "aarch64-macos"
-        | "x86_64-windows" | "aarch64-windows" => Some(value.to_string()),
+        "x86_64-linux" | "aarch64-linux" | "x86_64-macos" | "aarch64-macos" | "x86_64-windows"
+        | "aarch64-windows" => Some(value.to_string()),
         _ => None,
     }
 }

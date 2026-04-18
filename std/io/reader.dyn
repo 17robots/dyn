@@ -9,35 +9,22 @@ pub Reader := struct {
 
 pub Reader.read_byte := (self: Reader) ?u8 {
     buf: [1]u8 = [0]
-    if self.read_fn(self.ctx, buf[..]) != 1 return null
+    if !self.read_exact(buf[..]) return null
     return buf[0]
 }
 
 pub Reader.read_exact := (self: Reader, buf: []u8) u1 {
-    return self.read_fn(self.ctx, buf) == buf.len
+    mut used: usize = 0
+    for used < buf.len: {
+        got := self.read_fn(self.ctx, buf[used..])
+        if got == 0 return false
+        used += got
+    }
+    return true
 }
 
 pub Reader.read_all := (self: Reader, alloc: Allocator) ?[]u8 {
-    mut buf := alloc.create_many(u8, 0) or return null
-    mut used: usize = 0
-
-    for {
-        if used == buf.len {
-            mut next_cap: usize = 256
-            if buf.len != 0 {
-                next_cap = buf.len
-                next_cap += buf.len
-            }
-            buf = alloc.resize_many(u8, buf, next_cap) or return null
-        }
-
-        got := self.read_fn(self.ctx, buf[used..])
-        if got == 0 {
-            break
-        }
-        used += got
-    }
-
-    if used == buf.len return buf
-    return alloc.resize_many(u8, buf, used)
+    buf := alloc.create_many(u8, 4096) or return null
+    got := self.read_fn(self.ctx, buf[..])
+    return alloc.resize_many(u8, buf, got)
 }

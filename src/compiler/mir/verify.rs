@@ -31,16 +31,46 @@ pub fn verify_mir_program(program: &MirProgram) -> Vec<Diagnostic> {
             }
 
             let mut predecessors: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+            let mut reachable = BTreeSet::new();
+            let mut worklist = vec![function.entry.0];
+            while let Some(block_idx) = worklist.pop() {
+                if !reachable.insert(block_idx) {
+                    continue;
+                }
+                let Some(block) = function.blocks.get(block_idx) else {
+                    continue;
+                };
+                let Some(terminator) = &block.terminator else {
+                    continue;
+                };
+                match terminator {
+                    MirTerminator::Goto(target) => {
+                        worklist.push(target.0);
+                    }
+                    MirTerminator::Branch {
+                        then_block,
+                        else_block,
+                        ..
+                    } => {
+                        worklist.push(then_block.0);
+                        worklist.push(else_block.0);
+                    }
+                    MirTerminator::Return(_) | MirTerminator::Unreachable => {}
+                }
+            }
+
             for block in &function.blocks {
                 let Some(terminator) = &block.terminator else {
-                    diagnostics.push(Diagnostic::error(
-                        DiagnosticPhase::Mir,
-                        DiagnosticCode::E5001,
-                        format!(
-                            "MIR function '{}' has an unterminated block #{}",
-                            function.name, block.id.0
-                        ),
-                    ));
+                    if reachable.contains(&block.id.0) {
+                        diagnostics.push(Diagnostic::error(
+                            DiagnosticPhase::Mir,
+                            DiagnosticCode::E5001,
+                            format!(
+                                "MIR function '{}' has an unterminated block #{}",
+                                function.name, block.id.0
+                            ),
+                        ));
+                    }
                     continue;
                 };
 
@@ -345,7 +375,7 @@ fn verify_eval_operands(
                 check_value(*value, "enum payload value");
             }
         }
-        MirValue::Use { .. } | MirValue::TypeLiteral(_) => {}
+        MirValue::Use { .. } | MirValue::TypeLiteral(_) | MirValue::EmptySlice { .. } => {}
         MirValue::ClosureCreate { captures, .. } => {
             for &cap in captures {
                 check_value(cap, "closure capture");

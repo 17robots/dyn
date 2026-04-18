@@ -1,0 +1,9 @@
+module main
+
+take_ptr := (p: *mut i32) i32 => p.*
+
+main := () i32 {
+    x := 1
+    _ = take_ptr(&mut x)
+    return 0
+}

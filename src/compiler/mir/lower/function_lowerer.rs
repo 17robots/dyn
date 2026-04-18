@@ -162,7 +162,9 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
         }
         HirExprKind::For(for_expr) => match for_expr {
             HirForExpr::Infinite { body, .. } => collect_free_vars(body, bound),
-            HirForExpr::WhileLike { condition, body, .. } => {
+            HirForExpr::WhileLike {
+                condition, body, ..
+            } => {
                 let mut f = collect_free_vars(condition, bound);
                 f.extend(collect_free_vars(body, bound));
                 f
@@ -268,11 +270,56 @@ impl FunctionLowerer {
             named_type_literals: shared.named_type_literals,
             enum_repr_bits_by_name: shared.enum_repr_bits_by_name,
             enum_variant_tags_by_name: shared.enum_variant_tags_by_name,
-            function_param_names: shared.function_param_names,
-            function_param_defaults: shared.function_param_defaults,
-            function_param_type_hints: shared.function_param_type_hints,
-            function_exprs: shared.function_exprs,
-            inline_function_names: shared.inline_function_names,
+            function_param_names: {
+                let mut value = shared.function_param_names;
+                value.extend(
+                    shared
+                        .declared_functions
+                        .borrow()
+                        .function_param_names
+                        .clone(),
+                );
+                value
+            },
+            function_param_defaults: {
+                let mut value = shared.function_param_defaults;
+                value.extend(
+                    shared
+                        .declared_functions
+                        .borrow()
+                        .function_param_defaults
+                        .clone(),
+                );
+                value
+            },
+            function_param_type_hints: {
+                let mut value = shared.function_param_type_hints;
+                value.extend(
+                    shared
+                        .declared_functions
+                        .borrow()
+                        .function_param_type_hints
+                        .clone(),
+                );
+                value
+            },
+            function_exprs: {
+                let mut value = shared.function_exprs;
+                value.extend(shared.declared_functions.borrow().function_exprs.clone());
+                value
+            },
+            inline_function_names: {
+                let mut value = shared.inline_function_names;
+                value.extend(
+                    shared
+                        .declared_functions
+                        .borrow()
+                        .inline_function_names
+                        .clone(),
+                );
+                value
+            },
+            declared_functions: shared.declared_functions,
             module_ids_by_key: shared.module_ids_by_key,
             module_exports_by_id: shared.module_exports_by_id,
             current_param_type_hints: Vec::new(),
@@ -289,6 +336,110 @@ impl FunctionLowerer {
             global_names: shared.global_names,
             local_type_hints: BTreeMap::new(),
             build_config: shared.build_config,
+        }
+    }
+
+    fn emit_zero_init_for_type_hint(
+        &mut self,
+        block: MirBlockId,
+        type_hint: &str,
+    ) -> Option<MirValueId> {
+        let resolved = self
+            .comptime_known_locals
+            .get(type_hint.trim())
+            .and_then(|value| match value {
+                ComptimeValue::Type(ty) => Some(ty.clone()),
+                _ => None,
+            })
+            .or_else(|| {
+                self.current_comptime_locals()
+                    .get(type_hint.trim())
+                    .and_then(|value| match value {
+                        ComptimeValue::Type(ty) => Some(ty.clone()),
+                        _ => None,
+                    })
+            })
+            .unwrap_or_else(|| type_hint.trim().to_string());
+        let normalized = self
+            .named_type_literals
+            .get(&resolved)
+            .cloned()
+            .unwrap_or(resolved);
+        if let Some((len, element_ty)) = parse_fixed_array_descriptor(&normalized) {
+            let mut fields = Vec::with_capacity(len);
+            for idx in 0..len {
+                let value = self.emit_zero_init_for_type_hint(block, &element_ty)?;
+                fields.push((format!("__{idx}"), value));
+            }
+            return Some(self.push_eval(
+                block,
+                MirValue::StructLiteral { fields },
+                MirValueType::Unknown,
+            ));
+        }
+
+        if let Some(element_ty) = normalized.strip_prefix("[]") {
+            let element_ty = element_ty.trim();
+            if !element_ty.is_empty() {
+                return Some(self.push_eval(
+                    block,
+                    MirValue::EmptySlice {
+                        element_type: element_ty.to_string(),
+                    },
+                    if normalized == "[]u8" {
+                        MirValueType::BytesSlice
+                    } else {
+                        MirValueType::Unknown
+                    },
+                ));
+            }
+        }
+
+        let parsed = parse_type_hint(&normalized);
+        match parsed {
+            MirValueType::Bool => Some(self.push_eval(
+                block,
+                MirValue::Literal(HirLiteral::Bool(false)),
+                MirValueType::Bool,
+            )),
+            MirValueType::Float { .. } => Some(self.push_eval(
+                block,
+                MirValue::Literal(HirLiteral::Float("0.0".to_string())),
+                parsed,
+            )),
+            MirValueType::Int { .. } | MirValueType::FunctionPointer | MirValueType::Type => {
+                Some(self.push_eval(
+                    block,
+                    MirValue::Literal(HirLiteral::Integer("0".to_string())),
+                    parsed,
+                ))
+            }
+            MirValueType::BytesSlice => Some(self.push_eval(
+                block,
+                MirValue::EmptySlice {
+                    element_type: "u8".to_string(),
+                },
+                MirValueType::BytesSlice,
+            )),
+            MirValueType::Unknown => {
+                let fields = struct_field_names_with_types(&normalized);
+                if fields.is_empty() && !normalized.trim_start().starts_with("struct{") {
+                    return None;
+                }
+                let mut lowered_fields = Vec::with_capacity(fields.len());
+                for (name, field_ty) in fields {
+                    let value = self.emit_zero_init_for_type_hint(block, &field_ty)?;
+                    lowered_fields.push((name, value));
+                }
+                Some(self.push_eval(
+                    block,
+                    MirValue::StructLiteral {
+                        fields: lowered_fields,
+                    },
+                    MirValueType::Unknown,
+                ))
+            }
+            MirValueType::Function | MirValueType::Closure => None,
         }
     }
 
@@ -320,23 +471,32 @@ impl FunctionLowerer {
                     } else {
                         (block, Some(value))
                     }
-                } else if self.global_names.contains(name) {
-                    let ty = self
-                        .function_return_types
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(MirValueType::Unknown);
+                } else if let Some(import_path) = self
+                    .top_level_import_path(name)
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        self.current_inline_module.as_ref().and_then(|module_id| {
+                            let qualified = format!("{module_id}::{name}");
+                            self.top_level_import_path(&qualified)
+                                .map(|s| s.to_string())
+                        })
+                    })
+                {
                     (
                         block,
                         Some(self.push_eval(
                             block,
-                            MirValue::GlobalLoad { name: name.clone() },
-                            ty,
+                            MirValue::Use { path: import_path },
+                            MirValueType::Unknown,
                         )),
                     )
-                } else if let Some(type_name) =
-                    type_literal_name_for_ident(name, &self.named_type_literals)
-                {
+                } else if let Some(ComptimeValue::Type(type_name)) = self.try_eval_comptime_expr(
+                    &HirExpr {
+                        kind: HirExprKind::Ident(name.clone()),
+                        span: expr.span,
+                    },
+                    0,
+                ) {
                     (
                         block,
                         Some(self.push_eval(
@@ -345,37 +505,218 @@ impl FunctionLowerer {
                             MirValueType::Type,
                         )),
                     )
+                } else if let Some(target) = self.function_exprs.get(name).cloned() {
+                    if let Some(ComptimeValue::Type(type_name)) = self
+                        .try_eval_comptime_expr_with_locals(
+                            &target,
+                            0,
+                            &mut self.current_comptime_locals(),
+                        )
+                    {
+                        (
+                            block,
+                            Some(self.push_eval(
+                                block,
+                                MirValue::TypeLiteral(type_name),
+                                MirValueType::Type,
+                            )),
+                        )
+                    } else {
+                        if let Some(expr) = self.function_exprs.get(name).or_else(|| {
+                            self.current_inline_module.as_ref().and_then(|module_id| {
+                                let qualified = format!("{module_id}::{name}");
+                                self.function_exprs.get(&qualified)
+                            })
+                        }) {
+                            if let HirExprKind::FieldAccess { base, field } = &expr.kind {
+                                if let HirExprKind::Ident(base_name) = &base.kind {
+                                    if let Some(import_path) = self
+                                        .top_level_import_path(base_name)
+                                        .map(|s| s.to_string())
+                                        .or_else(|| {
+                                            self.current_inline_module.as_ref().and_then(
+                                                |module_id| {
+                                                    let qualified =
+                                                        format!("{module_id}::{base_name}");
+                                                    self.top_level_import_path(&qualified)
+                                                        .map(|s| s.to_string())
+                                                },
+                                            )
+                                        })
+                                    {
+                                        if let Some(qualified) =
+                                            self.resolve_import_member_ident(&import_path, field)
+                                        {
+                                            return (
+                                                block,
+                                                Some(self.push_eval(
+                                                    block,
+                                                    MirValue::Ident(qualified),
+                                                    MirValueType::FunctionPointer,
+                                                )),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let ty = if self.global_names.contains(name) {
+                            let hinted = self
+                                .function_return_hints
+                                .get(name)
+                                .and_then(|hint| hint.as_deref())
+                                .map(parse_type_hint)
+                                .unwrap_or(MirValueType::Unknown);
+                            if hinted == MirValueType::Unknown {
+                                MirValueType::Int {
+                                    signed: false,
+                                    bits: 64,
+                                }
+                            } else {
+                                hinted
+                            }
+                        } else {
+                            self.function_return_types
+                                .get(name)
+                                .cloned()
+                                .unwrap_or(MirValueType::FunctionPointer)
+                        };
+                        (
+                            block,
+                            Some(if self.global_names.contains(name) {
+                                self.push_eval(
+                                    block,
+                                    MirValue::GlobalLoad { name: name.clone() },
+                                    ty,
+                                )
+                            } else {
+                                self.push_eval(block, MirValue::Ident(name.clone()), ty)
+                            }),
+                        )
+                    }
                 } else {
-                    // When inlining a cross-module function, bare function calls in its body
-                    // (e.g. `render_value` inside `substitute_next` from the io module) must
-                    // be resolved to their qualified form (e.g. `#8::render_value`) so they
-                    // can be found in the caller module's inline_function_names.
-                    // Only qualify names that are actually inline functions — module import
-                    // variables (e.g. `bytes_mod`) are left unqualified and handled separately
-                    // in the FieldAccess path.
-                    let effective_name = if let Some(module_id) = &self.current_inline_module {
-                        let qualified = format!("{module_id}::{name}");
-                        if self.inline_function_names.contains(&qualified) {
-                            qualified
+                    if let Some(expr) = self.function_exprs.get(name).or_else(|| {
+                        self.current_inline_module.as_ref().and_then(|module_id| {
+                            let qualified = format!("{module_id}::{name}");
+                            self.function_exprs.get(&qualified)
+                        })
+                    }) {
+                        if let HirExprKind::FieldAccess { base, field } = &expr.kind {
+                            if let HirExprKind::Ident(base_name) = &base.kind {
+                                if let Some(import_path) = self
+                                    .top_level_import_path(base_name)
+                                    .map(|s| s.to_string())
+                                    .or_else(|| {
+                                        self.current_inline_module.as_ref().and_then(|module_id| {
+                                            let qualified = format!("{module_id}::{base_name}");
+                                            self.top_level_import_path(&qualified)
+                                                .map(|s| s.to_string())
+                                        })
+                                    })
+                                {
+                                    if let Some(qualified) =
+                                        self.resolve_import_member_ident(&import_path, field)
+                                    {
+                                        return (
+                                            block,
+                                            Some(self.push_eval(
+                                                block,
+                                                MirValue::Ident(qualified),
+                                                MirValueType::FunctionPointer,
+                                            )),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        if let HirExprKind::Ident(target_name) = &expr.kind {
+                            return (
+                                block,
+                                Some(self.push_eval(
+                                    block,
+                                    MirValue::Ident(target_name.clone()),
+                                    MirValueType::FunctionPointer,
+                                )),
+                            );
+                        }
+                        if matches!(
+                            &expr.kind,
+                            HirExprKind::Literal(_)
+                                | HirExprKind::StructLiteral { .. }
+                                | HirExprKind::EnumVariant { .. }
+                                | HirExprKind::TypeLiteral(_)
+                        ) {
+                            let expr = expr.clone();
+                            return self.lower_expr(block, &expr);
+                        }
+                        if let HirExprKind::Use { path } = &expr.kind {
+                            return (
+                                block,
+                                Some(self.push_eval(
+                                    block,
+                                    MirValue::Use { path: path.clone() },
+                                    MirValueType::Unknown,
+                                )),
+                            );
+                        }
+                    }
+                    if self.global_names.contains(name) {
+                        let ty = self
+                            .function_return_types
+                            .get(name)
+                            .cloned()
+                            .unwrap_or(MirValueType::Unknown);
+                        (
+                            block,
+                            Some(self.push_eval(
+                                block,
+                                MirValue::GlobalLoad { name: name.clone() },
+                                ty,
+                            )),
+                        )
+                    } else if let Some(type_name) =
+                        type_literal_name_for_ident(name, &self.named_type_literals)
+                    {
+                        (
+                            block,
+                            Some(self.push_eval(
+                                block,
+                                MirValue::TypeLiteral(type_name),
+                                MirValueType::Type,
+                            )),
+                        )
+                    } else {
+                        // When inlining a cross-module function, bare function calls in its body
+                        // (e.g. `render_value` inside `substitute_next` from the io module) must
+                        // be resolved to their qualified form (e.g. `#8::render_value`) so they
+                        // can be found in the caller module's inline_function_names.
+                        // Only qualify names that are actually inline functions — module import
+                        // variables (e.g. `bytes_mod`) are left unqualified and handled separately
+                        // in the FieldAccess path.
+                        let effective_name = if let Some(module_id) = &self.current_inline_module {
+                            let qualified = format!("{module_id}::{name}");
+                            if self.inline_function_names.contains(&qualified) {
+                                qualified
+                            } else {
+                                name.clone()
+                            }
                         } else {
                             name.clone()
-                        }
-                    } else {
-                        name.clone()
-                    };
-                    let ty = if self.function_return_types.contains_key(&effective_name) {
-                        MirValueType::FunctionPointer
-                    } else {
-                        MirValueType::Unknown
-                    };
-                    (
-                        block,
-                        Some(self.push_eval(block, MirValue::Ident(effective_name), ty)),
-                    )
+                        };
+                        let ty = if self.function_return_types.contains_key(&effective_name) {
+                            MirValueType::FunctionPointer
+                        } else {
+                            MirValueType::Unknown
+                        };
+                        (
+                            block,
+                            Some(self.push_eval(block, MirValue::Ident(effective_name), ty)),
+                        )
+                    }
                 }
             }
             HirExprKind::Unary { expr, op } => {
-                if matches!(op, UnaryOp::Ref) {
+                if matches!(op, UnaryOp::Ref | UnaryOp::RefMut) {
                     if let HirExprKind::Ident(name) = &expr.kind {
                         if let Some(local_value) = self.locals.get(name).copied() {
                             let ty = self
@@ -455,7 +796,7 @@ impl FunctionLowerer {
                 )
             }
             HirExprKind::Assign { target, value, op } => {
-                let (target_end, target_value) = self.lower_expr(block, target);
+                let (target_end, target_value) = self.lower_assignment_target_expr(block, target);
                 let (value_end, value_value) = self.lower_expr(target_end, value);
                 let (Some(target_value), Some(value_value)) = (target_value, value_value) else {
                     return (value_end, None);
@@ -563,7 +904,23 @@ impl FunctionLowerer {
                 value,
                 ..
             } => {
-                let (end, init_value) = self.lower_expr(block, value);
+                let zero_init_from_hint = matches!(
+                    &value.kind,
+                    HirExprKind::StructLiteral { root_type, fields }
+                        if root_type.is_none() && fields.is_empty()
+                );
+                let (end, init_value) = if zero_init_from_hint {
+                    let hinted = type_hint
+                        .as_deref()
+                        .and_then(|hint| self.emit_zero_init_for_type_hint(block, hint));
+                    if let Some(value_id) = hinted {
+                        (block, Some(value_id))
+                    } else {
+                        self.lower_expr(block, value)
+                    }
+                } else {
+                    self.lower_expr(block, value)
+                };
                 let Some(init_value) = init_value else {
                     return (end, None);
                 };
@@ -664,6 +1021,30 @@ impl FunctionLowerer {
                                 );
                             }
                         }
+                    }
+
+                    let type_name = self
+                        .local_type_hints
+                        .get(base_name)
+                        .cloned()
+                        .unwrap_or_else(|| base_name.clone());
+                    let resolved_owner = self
+                        .named_type_literals
+                        .get(&type_name)
+                        .cloned()
+                        .unwrap_or(type_name);
+                    let method_key = format!("{}__{}", resolved_owner, field);
+                    if self.function_exprs.contains_key(&method_key)
+                        || self.comptime_local_function_exprs.contains_key(&method_key)
+                    {
+                        return (
+                            block,
+                            Some(self.push_eval(
+                                block,
+                                MirValue::Ident(method_key),
+                                MirValueType::FunctionPointer,
+                            )),
+                        );
                     }
                 }
 
@@ -1245,6 +1626,7 @@ impl FunctionLowerer {
                     function_param_type_hints: self.function_param_type_hints.clone(),
                     function_exprs: self.function_exprs.clone(),
                     inline_function_names: self.inline_function_names.clone(),
+                    declared_functions: self.declared_functions.clone(),
                     module_ids_by_key: self.module_ids_by_key.clone(),
                     module_exports_by_id: self.module_exports_by_id.clone(),
                     global_names: self.global_names.clone(),
@@ -1275,6 +1657,7 @@ impl FunctionLowerer {
                     function_param_type_hints: shared.function_param_type_hints,
                     function_exprs: shared.function_exprs,
                     inline_function_names: shared.inline_function_names,
+                    declared_functions: shared.declared_functions,
                     module_ids_by_key: shared.module_ids_by_key,
                     module_exports_by_id: shared.module_exports_by_id,
                     current_param_type_hints: Vec::new(),
@@ -1293,6 +1676,9 @@ impl FunctionLowerer {
                     build_config: shared.build_config,
                 };
 
+                sub_lowerer.current_param_type_hints = std::iter::once(None)
+                    .chain(param_types.iter().cloned())
+                    .collect();
                 let lambda_entry = sub_lowerer.function.entry;
 
                 // Push env_ptr as param 0
@@ -1353,6 +1739,49 @@ impl FunctionLowerer {
                 );
                 (block, Some(closure_val))
             }
+        }
+    }
+
+    fn lower_assignment_target_expr(
+        &mut self,
+        block: MirBlockId,
+        expr: &HirExpr,
+    ) -> (MirBlockId, Option<MirValueId>) {
+        match &expr.kind {
+            HirExprKind::FieldAccess { base, field } => {
+                let (end, base_value) = self.lower_assignment_target_expr(block, base);
+                let Some(base_value) = base_value else {
+                    return (end, None);
+                };
+                let ty = self.infer_field_access_result_type(base_value, field, 0);
+                (
+                    end,
+                    Some(self.push_eval(
+                        end,
+                        MirValue::FieldAccess {
+                            base: base_value,
+                            field: field.clone(),
+                        },
+                        ty,
+                    )),
+                )
+            }
+            HirExprKind::DerefAccess { base } => {
+                let (end, base_value) = self.lower_expr(block, base);
+                let Some(base_value) = base_value else {
+                    return (end, None);
+                };
+                let ty = self
+                    .value_types
+                    .get(&base_value)
+                    .cloned()
+                    .unwrap_or(MirValueType::Unknown);
+                (
+                    end,
+                    Some(self.push_eval(end, MirValue::DerefAccess { base: base_value }, ty)),
+                )
+            }
+            _ => self.lower_expr(block, expr),
         }
     }
 
@@ -1516,33 +1945,51 @@ impl FunctionLowerer {
                     if let Some(pairs) = from_struct_fields {
                         pairs
                     } else {
-                        // Try to get type name from the HIR ident and local_type_hints.
-                        let type_name = arg_expr.as_ref().and_then(|e| {
-                            if let HirExprKind::Ident(n) = &e.kind {
-                                self.local_type_hints
-                                    .get(n)
-                                    .cloned()
-                                    .or_else(|| Some(n.clone()))
-                            } else {
-                                None
+                        // Try comptime evaluation first (handles $field_type and type params).
+                        let descriptor = arg_expr.as_ref().and_then(|e| {
+                            let ct_locals = self.current_comptime_locals();
+                            match self.try_eval_comptime_expr_with_locals(
+                                e,
+                                0,
+                                &mut ct_locals.clone(),
+                            ) {
+                                Some(ComptimeValue::Type(t)) => {
+                                    Some(self.named_type_literals.get(&t).cloned().unwrap_or(t))
+                                }
+                                _ => None,
                             }
                         });
-                        if let Some(raw_name) = type_name {
-                            // Resolve through named_type_literals to get the struct descriptor.
-                            let descriptor = self
-                                .named_type_literals
-                                .get(&raw_name)
-                                .cloned()
-                                .unwrap_or_else(|| raw_name.clone());
-                            struct_field_names_with_types(&descriptor)
+                        if let Some(desc) = descriptor {
+                            struct_field_names_with_types(&desc)
                         } else {
-                            Vec::new()
+                            // Fall back: try to get type name from the HIR ident and local_type_hints.
+                            let type_name = arg_expr.as_ref().and_then(|e| {
+                                if let HirExprKind::Ident(n) = &e.kind {
+                                    self.local_type_hints
+                                        .get(n)
+                                        .cloned()
+                                        .or_else(|| Some(n.clone()))
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(raw_name) = type_name {
+                                // Resolve through named_type_literals to get the struct descriptor.
+                                let descriptor = self
+                                    .named_type_literals
+                                    .get(&raw_name)
+                                    .cloned()
+                                    .unwrap_or_else(|| raw_name.clone());
+                                struct_field_names_with_types(&descriptor)
+                            } else {
+                                Vec::new()
+                            }
                         }
                     }
                 };
 
                 let mut at = v_end;
-                for (field_name, _field_type) in &field_pairs {
+                for (field_name, field_type) in &field_pairs {
                     if self.is_terminated(at) {
                         break;
                     }
@@ -1551,6 +1998,12 @@ impl FunctionLowerer {
                         at,
                         MirValue::Literal(HirLiteral::String(field_name.clone())),
                         MirValueType::BytesSlice,
+                    );
+                    // Emit f.type = type descriptor string for the field.
+                    let type_value = self.push_eval(
+                        at,
+                        MirValue::TypeLiteral(field_type.clone()),
+                        MirValueType::Type,
                     );
                     // Emit f.value = v.field_name (runtime field access).
                     let val_value = self.push_eval(
@@ -1561,12 +2014,13 @@ impl FunctionLowerer {
                         },
                         self.infer_field_access_result_type(v_value, field_name, 0),
                     );
-                    // Build a synthetic struct value for `f` with fields `name` and `value`.
+                    // Build a synthetic struct value for `f` with fields `name`, `type`, and `value`.
                     let f_value = self.push_eval(
                         at,
                         MirValue::StructLiteral {
                             fields: vec![
                                 ("name".to_string(), name_value),
+                                ("type".to_string(), type_value),
                                 ("value".to_string(), val_value),
                             ],
                         },
@@ -1574,18 +2028,52 @@ impl FunctionLowerer {
                     );
                     let mut field_map = BTreeMap::new();
                     field_map.insert("name".to_string(), name_value);
+                    field_map.insert("type".to_string(), type_value);
                     field_map.insert("value".to_string(), val_value);
                     self.struct_fields.insert(f_value, field_map);
 
                     let previous = binding
                         .as_deref()
                         .map(|bind_name| self.save_local_binding(bind_name, f_value));
+                    let previous_ct_binding = binding.as_deref().and_then(|bind_name| {
+                        let mut field_desc = BTreeMap::new();
+                        field_desc.insert(
+                            "name".to_string(),
+                            ComptimeValue::Literal(HirLiteral::String(field_name.clone())),
+                        );
+                        field_desc
+                            .insert("type".to_string(), ComptimeValue::Type(field_type.clone()));
+                        self.comptime_known_locals
+                            .insert(bind_name.to_string(), ComptimeValue::Struct(field_desc))
+                            .map(|prev| (bind_name.to_string(), prev))
+                    });
 
-                    let (body_end, _) = self.lower_expr(at, body);
+                    let body_end = if let HirExprKind::Block {
+                        body: inner_body, ..
+                    } = &body.kind
+                    {
+                        let mut inner_at = at;
+                        for stmt in inner_body {
+                            if self.is_terminated(inner_at) {
+                                break;
+                            }
+                            let (next, _) = self.lower_expr(inner_at, stmt);
+                            inner_at = next;
+                        }
+                        inner_at
+                    } else {
+                        let (body_end, _) = self.lower_expr(at, body);
+                        body_end
+                    };
                     at = body_end;
 
                     if let Some(saved) = previous {
                         self.restore_saved_local_binding(saved);
+                    }
+                    if let Some((name, prev)) = previous_ct_binding {
+                        self.comptime_known_locals.insert(name, prev);
+                    } else if let Some(bind_name) = binding.as_deref() {
+                        self.comptime_known_locals.remove(bind_name);
                     }
                 }
                 if !self.is_terminated(at) {
@@ -1636,7 +2124,23 @@ impl FunctionLowerer {
                         None
                     };
 
-                    let (body_end, _) = self.lower_expr(at, body);
+                    let body_end = if let HirExprKind::Block {
+                        body: inner_body, ..
+                    } = &body.kind
+                    {
+                        let mut inner_at = at;
+                        for stmt in inner_body {
+                            if self.is_terminated(inner_at) {
+                                break;
+                            }
+                            let (next, _) = self.lower_expr(inner_at, stmt);
+                            inner_at = next;
+                        }
+                        inner_at
+                    } else {
+                        let (body_end, _) = self.lower_expr(at, body);
+                        body_end
+                    };
                     at = body_end;
 
                     if let Some(saved) = previous {
@@ -1692,7 +2196,23 @@ impl FunctionLowerer {
                         let previous = binding
                             .as_deref()
                             .map(|name| self.save_local_binding(name, elem_value));
-                        let (body_end, _) = self.lower_expr(at, body);
+                        let body_end = if let HirExprKind::Block {
+                            body: inner_body, ..
+                        } = &body.kind
+                        {
+                            let mut inner_at = at;
+                            for stmt in inner_body {
+                                if self.is_terminated(inner_at) {
+                                    break;
+                                }
+                                let (next, _) = self.lower_expr(inner_at, stmt);
+                                inner_at = next;
+                            }
+                            inner_at
+                        } else {
+                            let (body_end, _) = self.lower_expr(at, body);
+                            body_end
+                        };
                         at = body_end;
                         if let Some(saved) = previous {
                             self.restore_saved_local_binding(saved);
@@ -1809,6 +2329,100 @@ impl FunctionLowerer {
             }
         }
 
+        if let HirExprKind::FieldAccess { base, field } = &callee.kind {
+            if let HirExprKind::Ident(base_name) = &base.kind {
+                let type_name = self
+                    .local_type_hints
+                    .get(base_name)
+                    .cloned()
+                    .unwrap_or_else(|| base_name.clone());
+                let resolved_owner = self
+                    .named_type_literals
+                    .get(&type_name)
+                    .cloned()
+                    .unwrap_or(type_name);
+                let method_key = format!("{}__{}", resolved_owner, field);
+                if self.function_exprs.contains_key(&method_key)
+                    || self.comptime_local_function_exprs.contains_key(&method_key)
+                {
+                    let callee_value = self.push_eval(
+                        block,
+                        MirValue::Ident(method_key.clone()),
+                        MirValueType::FunctionPointer,
+                    );
+                    let receiver_expr = if self
+                        .function_param_type_hints
+                        .get(&method_key)
+                        .and_then(|params| params.first())
+                        .and_then(|hint| hint.as_deref())
+                        .is_some_and(|hint| hint.trim_start().starts_with('*'))
+                    {
+                        HirExpr {
+                            kind: HirExprKind::Unary {
+                                op: crate::compiler::ast::UnaryOp::Ref,
+                                expr: Box::new((**base).clone()),
+                            },
+                            span: base.span,
+                        }
+                    } else {
+                        (**base).clone()
+                    };
+                    let (mut end, receiver_value) = self.lower_expr(block, &receiver_expr);
+                    let Some(receiver_value) = receiver_value else {
+                        return (end, None);
+                    };
+                    let mut lowered_args = vec![receiver_value];
+                    let mut lowered_named = vec![(None, receiver_value)];
+                    for arg in args {
+                        let (arg_end, arg_value) = self.lower_expr(end, &arg.value);
+                        end = arg_end;
+                        let Some(arg_value) = arg_value else {
+                            return (end, None);
+                        };
+                        lowered_args.push(arg_value);
+                        lowered_named.push((arg.name.clone(), arg_value));
+                    }
+                    if let Some(param_names) = self.function_param_names.get(&method_key) {
+                        let mut ordered = self.order_named_call_items(param_names, &lowered_named);
+                        if let Some(defaults) =
+                            self.function_param_defaults.get(&method_key).cloned()
+                        {
+                            for (idx, slot) in ordered.iter_mut().enumerate() {
+                                if slot.is_none() {
+                                    if let Some(Some(default_expr)) = defaults.get(idx) {
+                                        let (default_end, default_value) =
+                                            self.lower_expr(end, default_expr);
+                                        end = default_end;
+                                        if let Some(default_value) = default_value {
+                                            *slot = Some(default_value);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if ordered.iter().all(|slot| slot.is_some()) {
+                            lowered_args = ordered.into_iter().flatten().collect();
+                        }
+                    }
+                    if let Some((inline_end, inline_value)) =
+                        self.try_inline_named_call(end, &method_key, &lowered_args)
+                    {
+                        return (inline_end, inline_value);
+                    }
+                    let result_ty = self.infer_call_result_type(callee_value, 0);
+                    let call_id = self.push_eval(
+                        end,
+                        MirValue::Call {
+                            callee: callee_value,
+                            args: lowered_args,
+                        },
+                        result_ty,
+                    );
+                    return (end, Some(call_id));
+                }
+            }
+        }
+
         let (mut end, callee_value) = self.lower_expr(block, callee);
         let Some(callee_value) = callee_value else {
             return (end, None);
@@ -1833,6 +2447,31 @@ impl FunctionLowerer {
         };
 
         if let Some(name) = &callee_name {
+            if let Some(param_hints) = self.function_param_type_hints.get(name).cloned() {
+                for (idx, hint) in param_hints.iter().enumerate() {
+                    if hint.as_deref() == Some("type") {
+                        if let Some(arg) = args.get(idx) {
+                            if let Some(type_name) = self.comptime_type_name_from_expr_with_locals(
+                                &arg.value,
+                                0,
+                                &self.current_comptime_locals(),
+                            ) {
+                                let type_value = self.push_eval(
+                                    end,
+                                    MirValue::TypeLiteral(type_name),
+                                    MirValueType::Type,
+                                );
+                                if let Some(slot) = lowered_args.get_mut(idx) {
+                                    *slot = type_value;
+                                }
+                                if let Some(slot) = lowered_named.get_mut(idx) {
+                                    slot.1 = type_value;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if let Some(param_names) = self.function_param_names.get(name) {
                 let mut ordered = self.order_named_call_items(param_names, &lowered_named);
 
@@ -1860,14 +2499,27 @@ impl FunctionLowerer {
         let should_inline = force_inline
             || callee_name
                 .as_ref()
-                .map(|name| self.inline_function_names.contains(name))
+                .map(|name| {
+                    self.inline_function_names.contains(name)
+                        || name.ends_with("::impl")
+                        || name.ends_with("::impl_map")
+                })
                 .unwrap_or(false);
         if should_inline {
             if let Some(name) = &callee_name {
+                let debug_inline = std::env::var("DYN_DEBUG_INLINE")
+                    .ok()
+                    .as_deref()
+                    .is_some_and(|target| target == name);
                 if let Some((inline_end, inline_value)) =
                     self.try_inline_named_call(end, name, &lowered_args)
                 {
+                    if debug_inline {
+                        eprintln!("inlined: {name}");
+                    }
                     return (inline_end, inline_value);
+                } else if debug_inline {
+                    eprintln!("inline_failed: {name}");
                 }
             }
         }
@@ -1889,6 +2541,94 @@ impl FunctionLowerer {
             }
         }
         (end, Some(call_id))
+    }
+
+    fn hoist_declared_function(
+        &mut self,
+        fn_name: &str,
+        fn_expr: &HirExpr,
+        comptime_locals: Option<&BTreeMap<String, ComptimeValue>>,
+    ) {
+        let (params, param_types, body) = match &fn_expr.kind {
+            HirExprKind::Function {
+                params,
+                param_types,
+                body,
+                ..
+            } => (params.clone(), param_types.clone(), (**body).clone()),
+            HirExprKind::Inline { expr } => match &expr.kind {
+                HirExprKind::Function {
+                    params,
+                    param_types,
+                    body,
+                    ..
+                } => (params.clone(), param_types.clone(), (**body).clone()),
+                _ => return,
+            },
+            _ => return,
+        };
+
+        let shared = FunctionLowererShared {
+            function_return_types: self.function_return_types.clone(),
+            function_return_hints: self.function_return_hints.clone(),
+            named_type_literals: self.named_type_literals.clone(),
+            enum_repr_bits_by_name: self.enum_repr_bits_by_name.clone(),
+            enum_variant_tags_by_name: self.enum_variant_tags_by_name.clone(),
+            function_param_names: self.function_param_names.clone(),
+            function_param_defaults: self.function_param_defaults.clone(),
+            function_param_type_hints: self.function_param_type_hints.clone(),
+            function_exprs: self.function_exprs.clone(),
+            inline_function_names: self.inline_function_names.clone(),
+            declared_functions: self.declared_functions.clone(),
+            module_ids_by_key: self.module_ids_by_key.clone(),
+            module_exports_by_id: self.module_exports_by_id.clone(),
+            global_names: self.global_names.clone(),
+            build_config: self.build_config.clone(),
+        };
+        let mut sub_lowerer = FunctionLowerer::new(
+            self.module_key.clone(),
+            self.source_file_path.clone(),
+            fn_name.to_string(),
+            shared,
+        );
+        sub_lowerer.comptime_known_locals = comptime_locals
+            .cloned()
+            .unwrap_or_else(|| self.current_comptime_locals());
+        sub_lowerer.current_param_type_hints = param_types.clone();
+        sub_lowerer.function.param_type_hints = param_types.clone();
+        sub_lowerer.function.param_types = param_types
+            .iter()
+            .map(|ty| {
+                ty.as_deref()
+                    .map(parse_type_hint)
+                    .unwrap_or(MirValueType::Unknown)
+            })
+            .collect();
+        for (idx, param_name) in params.iter().enumerate() {
+            let ty = param_types
+                .get(idx)
+                .and_then(|s| s.as_deref())
+                .map(parse_type_hint)
+                .unwrap_or(MirValueType::Unknown);
+            let vid = sub_lowerer.push_eval(
+                sub_lowerer.function.entry,
+                MirValue::Param { index: idx },
+                ty,
+            );
+            sub_lowerer.locals.insert(param_name.clone(), vid);
+            if let Some(Some(hint)) = param_types.get(idx) {
+                sub_lowerer
+                    .local_type_hints
+                    .insert(param_name.clone(), hint.clone());
+            }
+        }
+        let (end_block, ret_val) = sub_lowerer.lower_expr(sub_lowerer.function.entry, &body);
+        if !sub_lowerer.is_terminated(end_block) {
+            let end_block = sub_lowerer.emit_deferred(end_block, None);
+            sub_lowerer.set_terminator(end_block, MirTerminator::Return(ret_val));
+        }
+        self.hoisted_lambdas.extend(sub_lowerer.hoisted_lambdas);
+        self.hoisted_lambdas.push(sub_lowerer.function);
     }
 
     pub(super) fn try_inline_named_call(
@@ -2353,7 +3093,9 @@ impl FunctionLowerer {
                 iterable,
                 binding,
                 body,
-            } => self.lower_iterate_loop(block, label.as_deref(), iterable, binding.as_deref(), body),
+            } => {
+                self.lower_iterate_loop(block, label.as_deref(), iterable, binding.as_deref(), body)
+            }
         }
     }
 
@@ -3167,6 +3909,99 @@ impl FunctionLowerer {
         }
     }
 
+    fn capture_branch_condition(
+        &mut self,
+        block: MirBlockId,
+        condition: &HirExpr,
+    ) -> Option<MirValueId> {
+        let HirExprKind::Binary { op, left, right } = &condition.kind else {
+            return None;
+        };
+        match op {
+            crate::compiler::ast::BinaryOp::LogicalOr => {
+                let left_cond = self.capture_branch_condition(block, left)?;
+                let right_cond = self.capture_branch_condition(block, right)?;
+                Some(self.push_eval(
+                    block,
+                    MirValue::Binary {
+                        op: crate::compiler::ast::BinaryOp::LogicalOr,
+                        left: left_cond,
+                        right: right_cond,
+                    },
+                    MirValueType::Bool,
+                ))
+            }
+            crate::compiler::ast::BinaryOp::Eq => {
+                let HirExprKind::EnumVariant { root, variant, .. } = &right.kind else {
+                    return None;
+                };
+                let (_, scrutinee_value) = self.lower_expr(block, left);
+                let scrutinee_value = scrutinee_value?;
+                let sequence = self.aggregate_sequences.get(&scrutinee_value).cloned();
+                let tag_value = self.value_from_sequence_or_index(
+                    block,
+                    scrutinee_value,
+                    sequence.as_ref().and_then(|values| values.first().copied()),
+                    0,
+                    MirValueType::Int {
+                        signed: false,
+                        bits: 32,
+                    },
+                );
+                let (tag, _) = self.enum_tag_and_bits_for_variant(root.as_deref(), variant)?;
+                Some(self.emit_int_equality_check(block, tag_value, tag))
+            }
+            _ => None,
+        }
+    }
+
+    fn capture_binding_value_from_if_condition(
+        &mut self,
+        block: MirBlockId,
+        condition: &HirExpr,
+        cond_value: MirValueId,
+    ) -> Option<MirValueId> {
+        if let Some(value) = self.capture_binding_value_from_variant_check(block, condition) {
+            return Some(value);
+        }
+        Some(cond_value)
+    }
+
+    fn capture_binding_value_from_variant_check(
+        &mut self,
+        block: MirBlockId,
+        condition: &HirExpr,
+    ) -> Option<MirValueId> {
+        let HirExprKind::Binary { op, left, right } = &condition.kind else {
+            return None;
+        };
+        if !matches!(
+            op,
+            crate::compiler::ast::BinaryOp::Eq | crate::compiler::ast::BinaryOp::LogicalOr
+        ) {
+            return None;
+        }
+        if matches!(op, crate::compiler::ast::BinaryOp::LogicalOr) {
+            return self
+                .capture_binding_value_from_variant_check(block, left)
+                .or_else(|| self.capture_binding_value_from_variant_check(block, right));
+        }
+        let HirExprKind::EnumVariant { .. } = &right.kind else {
+            return None;
+        };
+        let (end, scrutinee_value) = self.lower_expr(block, left);
+        let scrutinee_value = scrutinee_value?;
+        let sequence = self.aggregate_sequences.get(&scrutinee_value).cloned();
+        let payload_value = self.value_from_sequence_or_index(
+            end,
+            scrutinee_value,
+            sequence.as_ref().and_then(|values| values.get(1).copied()),
+            1,
+            MirValueType::Unknown,
+        );
+        Some(payload_value)
+    }
+
     pub(super) fn pattern_binding_values(
         &mut self,
         block: MirBlockId,
@@ -3216,12 +4051,15 @@ impl FunctionLowerer {
             return (cond_end, None);
         };
         let branch_condition = if capture.is_some() {
-            let cond_ty = self
-                .value_types
-                .get(&cond_value)
-                .cloned()
-                .unwrap_or(MirValueType::Unknown);
-            self.emit_nonzero_check(cond_end, cond_value, &cond_ty)
+            self.capture_branch_condition(cond_end, condition)
+                .unwrap_or_else(|| {
+                    let cond_ty = self
+                        .value_types
+                        .get(&cond_value)
+                        .cloned()
+                        .unwrap_or(MirValueType::Unknown);
+                    self.emit_nonzero_check(cond_end, cond_value, &cond_ty)
+                })
         } else {
             cond_value
         };
@@ -3245,8 +4083,13 @@ impl FunctionLowerer {
         let pre_locals = self.locals.clone();
 
         let capture_binding = capture.and_then(|capture| capture.binding.as_deref());
-        let prev_capture_binding =
-            capture_binding.map(|name| self.save_local_binding(name, cond_value));
+        let capture_value = capture_binding.and_then(|name| {
+            self.capture_binding_value_from_if_condition(cond_end, condition, cond_value)
+                .map(|value| (name, value))
+        });
+        let prev_capture_binding = capture_value
+            .as_ref()
+            .map(|(name, value)| self.save_local_binding(name, *value));
         let (then_end, then_value) = self.lower_expr(then_block, then_branch);
         if let Some(saved) = prev_capture_binding {
             self.restore_saved_local_binding(saved);
@@ -3457,6 +4300,7 @@ impl FunctionLowerer {
             }
             ComptimeValue::Type(name) => (MirValue::TypeLiteral(name), MirValueType::Type),
             ComptimeValue::Function(name) => (MirValue::Ident(name), MirValueType::FunctionPointer),
+            ComptimeValue::Struct(_) => (MirValue::Unknown, MirValueType::Unknown),
         };
         self.push_eval(block, value, ty)
     }
@@ -3505,6 +4349,303 @@ impl FunctionLowerer {
             }
         }
         locals
+    }
+
+    fn register_declared_function_expr(&mut self, name: String, expr: HirExpr) {
+        self.function_exprs.insert(name.clone(), expr.clone());
+        self.inline_function_names.insert(name.clone());
+
+        let mut registry = self.declared_functions.borrow_mut();
+        registry.function_exprs.insert(name.clone(), expr.clone());
+        registry.inline_function_names.insert(name.clone());
+
+        match &expr.kind {
+            HirExprKind::Function {
+                params,
+                param_types,
+                param_defaults,
+                ..
+            } => {
+                self.function_param_names
+                    .insert(name.clone(), params.clone());
+                self.function_param_defaults
+                    .insert(name.clone(), param_defaults.clone());
+                self.function_param_type_hints
+                    .insert(name.clone(), param_types.clone());
+                registry
+                    .function_param_names
+                    .insert(name.clone(), params.clone());
+                registry
+                    .function_param_defaults
+                    .insert(name.clone(), param_defaults.clone());
+                registry
+                    .function_param_type_hints
+                    .insert(name, param_types.clone());
+            }
+            HirExprKind::Inline { expr } => {
+                if let HirExprKind::Function {
+                    params,
+                    param_types,
+                    param_defaults,
+                    ..
+                } = &expr.kind
+                {
+                    self.function_param_names
+                        .insert(name.clone(), params.clone());
+                    self.function_param_defaults
+                        .insert(name.clone(), param_defaults.clone());
+                    self.function_param_type_hints
+                        .insert(name.clone(), param_types.clone());
+                    registry
+                        .function_param_names
+                        .insert(name.clone(), params.clone());
+                    registry
+                        .function_param_defaults
+                        .insert(name.clone(), param_defaults.clone());
+                    registry
+                        .function_param_type_hints
+                        .insert(name, param_types.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn specialize_expr_with_comptime_locals(
+        &self,
+        expr: &HirExpr,
+        locals: &BTreeMap<String, ComptimeValue>,
+    ) -> HirExpr {
+        fn specialize(
+            expr: &HirExpr,
+            locals: &BTreeMap<String, ComptimeValue>,
+            bound: &BTreeSet<String>,
+        ) -> HirExpr {
+            let kind = match &expr.kind {
+                HirExprKind::Ident(name) if !bound.contains(name) => match locals.get(name) {
+                    Some(ComptimeValue::Literal(lit)) => HirExprKind::Literal(lit.clone()),
+                    Some(ComptimeValue::Type(ty)) => HirExprKind::TypeLiteral(ty.clone()),
+                    _ => HirExprKind::Ident(name.clone()),
+                },
+                HirExprKind::TypeLiteral(name) => {
+                    HirExprKind::TypeLiteral(substitute_type_locals(name, locals))
+                }
+                HirExprKind::Unary { op, expr } => HirExprKind::Unary {
+                    op: *op,
+                    expr: Box::new(specialize(expr, locals, bound)),
+                },
+                HirExprKind::Binary { op, left, right } => HirExprKind::Binary {
+                    op: *op,
+                    left: Box::new(specialize(left, locals, bound)),
+                    right: Box::new(specialize(right, locals, bound)),
+                },
+                HirExprKind::Assign { op, target, value } => HirExprKind::Assign {
+                    op: *op,
+                    target: Box::new(specialize(target, locals, bound)),
+                    value: Box::new(specialize(value, locals, bound)),
+                },
+                HirExprKind::Call { callee, args } => HirExprKind::Call {
+                    callee: Box::new(specialize(callee, locals, bound)),
+                    args: args
+                        .iter()
+                        .map(|arg| crate::compiler::hir::HirCallArg {
+                            name: arg.name.clone(),
+                            value: specialize(&arg.value, locals, bound),
+                        })
+                        .collect(),
+                },
+                HirExprKind::FieldAccess { base, field } => {
+                    if let HirExprKind::Ident(name) = &base.kind {
+                        if !bound.contains(name) {
+                            if let Some(ComptimeValue::Struct(fields)) = locals.get(name) {
+                                if let Some(value) = fields.get(field) {
+                                    match value {
+                                        ComptimeValue::Literal(lit) => {
+                                            HirExprKind::Literal(lit.clone())
+                                        }
+                                        ComptimeValue::Type(ty) => {
+                                            HirExprKind::TypeLiteral(ty.clone())
+                                        }
+                                        _ => HirExprKind::FieldAccess {
+                                            base: Box::new(specialize(base, locals, bound)),
+                                            field: field.clone(),
+                                        },
+                                    }
+                                } else {
+                                    HirExprKind::FieldAccess {
+                                        base: Box::new(specialize(base, locals, bound)),
+                                        field: field.clone(),
+                                    }
+                                }
+                            } else {
+                                HirExprKind::FieldAccess {
+                                    base: Box::new(specialize(base, locals, bound)),
+                                    field: field.clone(),
+                                }
+                            }
+                        } else {
+                            HirExprKind::FieldAccess {
+                                base: Box::new(specialize(base, locals, bound)),
+                                field: field.clone(),
+                            }
+                        }
+                    } else {
+                        HirExprKind::FieldAccess {
+                            base: Box::new(specialize(base, locals, bound)),
+                            field: field.clone(),
+                        }
+                    }
+                }
+                HirExprKind::DerefAccess { base } => HirExprKind::DerefAccess {
+                    base: Box::new(specialize(base, locals, bound)),
+                },
+                HirExprKind::Index { base, index } => HirExprKind::Index {
+                    base: Box::new(specialize(base, locals, bound)),
+                    index: Box::new(specialize(index, locals, bound)),
+                },
+                HirExprKind::Slice {
+                    base,
+                    start,
+                    end,
+                    inclusive,
+                } => HirExprKind::Slice {
+                    base: Box::new(specialize(base, locals, bound)),
+                    start: start
+                        .as_ref()
+                        .map(|v| Box::new(specialize(v, locals, bound))),
+                    end: end.as_ref().map(|v| Box::new(specialize(v, locals, bound))),
+                    inclusive: *inclusive,
+                },
+                HirExprKind::StructLiteral { root_type, fields } => HirExprKind::StructLiteral {
+                    root_type: root_type
+                        .as_ref()
+                        .map(|ty| substitute_type_locals(ty, locals)),
+                    fields: fields
+                        .iter()
+                        .map(|(name, value)| (name.clone(), specialize(value, locals, bound)))
+                        .collect(),
+                },
+                HirExprKind::EnumVariant {
+                    root,
+                    variant,
+                    payload,
+                } => HirExprKind::EnumVariant {
+                    root: root.clone(),
+                    variant: variant.clone(),
+                    payload: payload
+                        .iter()
+                        .map(|value| specialize(value, locals, bound))
+                        .collect(),
+                },
+                HirExprKind::Block { label, body } => HirExprKind::Block {
+                    label: label.clone(),
+                    body: body
+                        .iter()
+                        .map(|value| specialize(value, locals, bound))
+                        .collect(),
+                },
+                HirExprKind::Let {
+                    name,
+                    mutable,
+                    type_hint,
+                    value,
+                } => {
+                    let mut inner = bound.clone();
+                    inner.insert(name.clone());
+                    HirExprKind::Let {
+                        name: name.clone(),
+                        mutable: *mutable,
+                        type_hint: type_hint
+                            .as_ref()
+                            .map(|ty| substitute_type_locals(ty, locals)),
+                        value: Box::new(specialize(value, locals, &inner)),
+                    }
+                }
+                HirExprKind::If {
+                    condition,
+                    capture,
+                    then_branch,
+                    else_branch,
+                } => {
+                    let mut then_bound = bound.clone();
+                    if let Some(capture) = capture {
+                        if let Some(binding) = &capture.binding {
+                            then_bound.insert(binding.clone());
+                        }
+                    }
+                    HirExprKind::If {
+                        condition: Box::new(specialize(condition, locals, bound)),
+                        capture: capture.clone(),
+                        then_branch: Box::new(specialize(then_branch, locals, &then_bound)),
+                        else_branch: else_branch
+                            .as_ref()
+                            .map(|value| Box::new(specialize(value, locals, bound))),
+                    }
+                }
+                HirExprKind::Return { value } => HirExprKind::Return {
+                    value: value
+                        .as_ref()
+                        .map(|value| Box::new(specialize(value, locals, bound))),
+                },
+                HirExprKind::OptionalUnwrap { value } => HirExprKind::OptionalUnwrap {
+                    value: Box::new(specialize(value, locals, bound)),
+                },
+                HirExprKind::ErrorUnwrap { value } => HirExprKind::ErrorUnwrap {
+                    value: Box::new(specialize(value, locals, bound)),
+                },
+                HirExprKind::OrElse {
+                    value,
+                    error_binding,
+                    fallback,
+                } => HirExprKind::OrElse {
+                    value: Box::new(specialize(value, locals, bound)),
+                    error_binding: error_binding.clone(),
+                    fallback: Box::new(specialize(fallback, locals, bound)),
+                },
+                HirExprKind::Comptime { expr } => HirExprKind::Comptime {
+                    expr: Box::new(specialize(expr, locals, bound)),
+                },
+                HirExprKind::Inline { expr } => HirExprKind::Inline {
+                    expr: Box::new(specialize(expr, locals, bound)),
+                },
+                HirExprKind::Function {
+                    params,
+                    param_types,
+                    param_defaults,
+                    has_explicit_return_type,
+                    body,
+                } => {
+                    let mut inner = bound.clone();
+                    for param in params {
+                        inner.insert(param.clone());
+                    }
+                    HirExprKind::Function {
+                        params: params.clone(),
+                        param_types: param_types
+                            .iter()
+                            .map(|ty| ty.as_ref().map(|ty| substitute_type_locals(ty, locals)))
+                            .collect(),
+                        param_defaults: param_defaults
+                            .iter()
+                            .map(|value| {
+                                value
+                                    .as_ref()
+                                    .map(|value| specialize(value, locals, &inner))
+                            })
+                            .collect(),
+                        has_explicit_return_type: *has_explicit_return_type,
+                        body: Box::new(specialize(body, locals, &inner)),
+                    }
+                }
+                _ => expr.kind.clone(),
+            };
+            HirExpr {
+                kind,
+                span: expr.span,
+            }
+        }
+
+        specialize(expr, locals, &BTreeSet::new())
     }
 
     pub(super) fn try_eval_comptime_value_id(
@@ -3664,7 +4805,7 @@ impl FunctionLowerer {
     }
 
     pub(super) fn eval_type_designator_name(
-        &self,
+        &mut self,
         expr: &HirExpr,
         locals: &BTreeMap<String, ComptimeValue>,
     ) -> Option<String> {
@@ -3829,6 +4970,22 @@ impl FunctionLowerer {
                 self.set_terminator(arg_end, MirTerminator::Unreachable);
                 Some((arg_end, None))
             }
+            "$compile_error" => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        DiagnosticPhase::Mir,
+                        DiagnosticCode::E4005,
+                        "$compile_error invoked",
+                    )
+                    .with_primary_file_label(
+                        self.source_file_path.clone(),
+                        args.first().map(|arg| arg.value.span),
+                        "remove compile error or gate it behind compile-time condition",
+                    ),
+                );
+                self.set_terminator(block, MirTerminator::Unreachable);
+                Some((block, None))
+            }
             "$self" => {
                 if !args.is_empty() {
                     return Some((block, None));
@@ -3921,25 +5078,18 @@ impl FunctionLowerer {
                 if args.len() != 2 {
                     return Some((block, None));
                 }
-                // Get the type name as the raw ident (don't resolve to struct descriptor,
-                // since method keys use the short name like "Channel__send").
                 let type_name = {
                     let locals = self.current_comptime_locals();
-                    match &args[0].value.kind {
-                        HirExprKind::Ident(n) => {
-                            if let Some(ComptimeValue::Type(t)) = locals.get(n.as_str()) {
-                                t.clone()
-                            } else {
-                                n.clone()
-                            }
-                        }
-                        _ => {
-                            // Try evaluating the first arg as a comptime expression (e.g. `$typeof(v)`).
-                            match self.try_eval_comptime_expr(&args[0].value, 0) {
-                                Some(ComptimeValue::Type(t)) => t,
-                                _ => return Some((block, None)),
-                            }
-                        }
+                    match self.try_eval_comptime_expr_with_locals(
+                        &args[0].value,
+                        0,
+                        &mut locals.clone(),
+                    ) {
+                        Some(ComptimeValue::Type(t)) => t,
+                        _ => match &args[0].value.kind {
+                            HirExprKind::Ident(n) => n.clone(),
+                            _ => return Some((block, None)),
+                        },
                     }
                 };
                 let member_name = match &args[1].value.kind {
@@ -4069,12 +5219,285 @@ impl FunctionLowerer {
                 self.struct_fields.insert(target_val, field_map);
                 Some((block, Some(target_val)))
             }
+
+            // $field(value, "name") — runtime field access by dynamic name.
+            "$field" => {
+                if args.len() != 2 {
+                    return Some((block, None));
+                }
+                let (b1, base_val) = self.lower_expr(block, &args[0].value);
+                let Some(base_val) = base_val else {
+                    return Some((b1, None));
+                };
+                let ct_locals = self.current_comptime_locals();
+                let field_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[1].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                    _ => return Some((b1, None)),
+                };
+                let ty = self.infer_field_access_result_type(base_val, &field_name, 0);
+                let val = self.push_eval(
+                    b1,
+                    MirValue::FieldAccess {
+                        base: base_val,
+                        field: field_name,
+                    },
+                    ty,
+                );
+                Some((b1, Some(val)))
+            }
+
+            // $has(T, "name") — true if T has a method or struct field named "name".
+            "$has" => {
+                if args.len() != 2 {
+                    return Some((block, None));
+                }
+                let ct_locals = self.current_comptime_locals();
+                let type_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[0].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Type(t)) => t,
+                    _ => match &args[0].value.kind {
+                        HirExprKind::Ident(n) => n.clone(),
+                        _ => return Some((block, None)),
+                    },
+                };
+                let member_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[1].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                    _ => return Some((block, None)),
+                };
+                let method_key = format!("{}__{}", type_name, member_name);
+                let has_method = self.function_exprs.contains_key(&method_key)
+                    || self.comptime_local_function_exprs.contains_key(&method_key);
+                let descriptor = self
+                    .named_type_literals
+                    .get(&type_name)
+                    .cloned()
+                    .unwrap_or_else(|| type_name.clone());
+                let has_field = has_struct_field(&descriptor, &member_name);
+                let val = self.push_eval(
+                    block,
+                    MirValue::Literal(HirLiteral::Bool(has_method || has_field)),
+                    MirValueType::Bool,
+                );
+                Some((block, Some(val)))
+            }
+
+            // $declaration(T, "name") — reference to the function T__name.
+            "$declaration" => {
+                if args.len() != 2 {
+                    return Some((block, None));
+                }
+                let ct_locals = self.current_comptime_locals();
+                let type_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[0].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Type(t)) => t,
+                    _ => match &args[0].value.kind {
+                        HirExprKind::Ident(n) => n.clone(),
+                        _ => return Some((block, None)),
+                    },
+                };
+                let member_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[1].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                    _ => return Some((block, None)),
+                };
+                let resolved_owner = self
+                    .named_type_literals
+                    .iter()
+                    .find_map(|(name, desc)| (desc == &type_name).then_some(name.clone()))
+                    .unwrap_or(type_name);
+                let fn_name = format!("{}__{}", resolved_owner, member_name);
+                let ret_ty = self
+                    .function_return_types
+                    .get(&fn_name)
+                    .cloned()
+                    .unwrap_or(MirValueType::FunctionPointer);
+                let val = self.push_eval(block, MirValue::Ident(fn_name), ret_ty);
+                Some((block, Some(val)))
+            }
+
+            // $field_type(T, "name") — comptime type descriptor for a struct field.
+            "$field_type" => {
+                if args.len() != 2 {
+                    return Some((block, None));
+                }
+                let ct_locals = self.current_comptime_locals();
+                let type_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[0].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Type(t)) => t,
+                    _ => match &args[0].value.kind {
+                        HirExprKind::Ident(n) => n.clone(),
+                        _ => return Some((block, None)),
+                    },
+                };
+                let field_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[1].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                    _ => return Some((block, None)),
+                };
+                let descriptor = self
+                    .named_type_literals
+                    .get(&type_name)
+                    .cloned()
+                    .unwrap_or_else(|| type_name.clone());
+                let field_ty = struct_field_names_with_types(&descriptor)
+                    .into_iter()
+                    .find(|(n, _)| n == &field_name)
+                    .map(|(_, t)| t)
+                    .unwrap_or_default();
+                let val =
+                    self.push_eval(block, MirValue::TypeLiteral(field_ty), MirValueType::Type);
+                Some((block, Some(val)))
+            }
+
+            // $fn_return(fn_type) — extract the return type from a function type descriptor.
+            "$fn_return" => {
+                if args.len() != 1 {
+                    return Some((block, None));
+                }
+                let ct_locals = self.current_comptime_locals();
+                let type_str = match self.try_eval_comptime_expr_with_locals(
+                    &args[0].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Type(t)) => t,
+                    _ => match &args[0].value.kind {
+                        HirExprKind::Ident(n) => n.clone(),
+                        _ => return Some((block, None)),
+                    },
+                };
+                // Function type format: "(param1,param2,...)->ReturnType"
+                let ret_type = if let Some(arrow) = type_str.rfind("->") {
+                    type_str[arrow + 2..].trim().to_string()
+                } else {
+                    "void".to_string()
+                };
+                let val =
+                    self.push_eval(block, MirValue::TypeLiteral(ret_type), MirValueType::Type);
+                Some((block, Some(val)))
+            }
+
+            // $fn_params(fn_type) — extract the parameter types from a function type descriptor.
+            // Returns a struct descriptor representing the param types list.
+            "$fn_params" => {
+                if args.len() != 1 {
+                    return Some((block, None));
+                }
+                let ct_locals = self.current_comptime_locals();
+                let type_str = match self.try_eval_comptime_expr_with_locals(
+                    &args[0].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Type(t)) => t,
+                    _ => match &args[0].value.kind {
+                        HirExprKind::Ident(n) => n.clone(),
+                        _ => return Some((block, None)),
+                    },
+                };
+                // Function type format: "(param1,param2,...)->ReturnType"
+                // Return a struct descriptor of param types: "struct{0:p0,1:p1,...}"
+                // or just the raw params string for use as a type hint.
+                let params_type =
+                    if let (Some(open), Some(close)) = (type_str.find('('), type_str.find(")->")) {
+                        let inner = &type_str[open + 1..close];
+                        // Build a params descriptor that can feed into $declare's param types
+                        inner.to_string()
+                    } else {
+                        String::new()
+                    };
+                let val = self.push_eval(
+                    block,
+                    MirValue::TypeLiteral(params_type),
+                    MirValueType::Type,
+                );
+                Some((block, Some(val)))
+            }
+
+            // $declare(T, "name", fn_expr) — register fn_expr as a new associated declaration T__name.
+            "$declare" => {
+                if args.len() != 3 {
+                    return Some((block, None));
+                }
+                let ct_locals = self.current_comptime_locals();
+                let type_name = match self.try_eval_comptime_expr_with_locals(
+                    &args[0].value,
+                    0,
+                    &mut ct_locals.clone(),
+                ) {
+                    Some(ComptimeValue::Type(t)) => t,
+                    _ => match &args[0].value.kind {
+                        HirExprKind::Ident(n) => n.clone(),
+                        _ => return Some((block, None)),
+                    },
+                };
+                let method_name = match &args[1].value.kind {
+                    HirExprKind::Literal(HirLiteral::String(s)) => s.clone(),
+                    HirExprKind::Ident(n) => match ct_locals.get(n.as_str()) {
+                        Some(ComptimeValue::Literal(HirLiteral::String(s))) => s.clone(),
+                        _ => return Some((block, None)),
+                    },
+                    _ => return Some((block, None)),
+                };
+                let fn_key = format!("{}__{}", type_name, method_name);
+                let fn_expr = self.specialize_expr_with_comptime_locals(&args[2].value, &ct_locals);
+                match &fn_expr.kind {
+                    HirExprKind::Function { .. } | HirExprKind::Inline { .. } => {
+                        let first_declare = !self.function_exprs.contains_key(&fn_key)
+                            && !self
+                                .declared_functions
+                                .borrow()
+                                .function_exprs
+                                .contains_key(&fn_key);
+                        self.comptime_local_function_exprs
+                            .insert(fn_key.clone(), fn_expr.clone());
+                        self.register_declared_function_expr(fn_key.clone(), fn_expr.clone());
+                        if first_declare {
+                            self.hoist_declared_function(&fn_key, &fn_expr, Some(&ct_locals));
+                        }
+                    }
+                    _ => {}
+                }
+                let unit = self.push_eval(
+                    block,
+                    MirValue::Literal(HirLiteral::Integer("0".to_string())),
+                    MirValueType::Int {
+                        signed: false,
+                        bits: 64,
+                    },
+                );
+                Some((block, Some(unit)))
+            }
+
             _ => None,
         }
     }
 
     pub(super) fn try_eval_comptime_expr(
-        &self,
+        &mut self,
         expr: &HirExpr,
         depth: usize,
     ) -> Option<ComptimeValue> {
@@ -4083,7 +5506,7 @@ impl FunctionLowerer {
     }
 
     pub(super) fn try_eval_comptime_expr_with_locals(
-        &self,
+        &mut self,
         expr: &HirExpr,
         depth: usize,
         locals: &mut BTreeMap<String, ComptimeValue>,
@@ -4105,12 +5528,12 @@ impl FunctionLowerer {
                 {
                     return Some(ComptimeValue::Type(type_name));
                 }
-                if let Some(target) = self.function_exprs.get(name) {
+                if let Some(target) = self.function_exprs.get(name).cloned() {
                     if matches!(&target.kind, HirExprKind::Function { .. }) {
                         return Some(ComptimeValue::Function(name.clone()));
                     }
                     return self.try_eval_comptime_expr_with_locals(
-                        target,
+                        &target,
                         depth + 1,
                         &mut locals.clone(),
                     );
@@ -4163,15 +5586,72 @@ impl FunctionLowerer {
                 let mut scope = locals.clone();
                 let mut last = None;
                 for value in body {
-                    if let HirExprKind::Return { value } = &value.kind {
-                        if let Some(value) = value {
-                            return self.try_eval_comptime_expr_with_locals(
-                                value,
-                                depth + 1,
-                                &mut scope,
-                            );
+                    match &value.kind {
+                        HirExprKind::Return { value } | HirExprKind::Break { value, .. } => {
+                            if let Some(value) = value {
+                                return self.try_eval_comptime_expr_with_locals(
+                                    value,
+                                    depth + 1,
+                                    &mut scope,
+                                );
+                            }
+                            return None;
                         }
-                        return None;
+                        HirExprKind::Inline { expr } => {
+                            if let HirExprKind::For(HirForExpr::Iterate {
+                                iterable,
+                                binding,
+                                body,
+                                ..
+                            }) = &expr.kind
+                            {
+                                if let HirExprKind::Call { callee, args } = &iterable.kind {
+                                    if matches!(&callee.kind, HirExprKind::Ident(n) if n == "$fields")
+                                        && args.len() == 1
+                                    {
+                                        let type_name = self
+                                            .comptime_type_name_from_expr_with_locals(
+                                                &args[0].value,
+                                                depth + 1,
+                                                &scope,
+                                            )?;
+                                        let descriptor = self
+                                            .named_type_literals
+                                            .get(&type_name)
+                                            .cloned()
+                                            .unwrap_or(type_name);
+                                        let fields = struct_field_names_with_types(&descriptor);
+                                        for (field_name, field_ty) in fields {
+                                            let mut iter_scope = scope.clone();
+                                            if let Some(binding) = binding {
+                                                let mut field_desc = BTreeMap::new();
+                                                field_desc.insert(
+                                                    "name".to_string(),
+                                                    ComptimeValue::Literal(HirLiteral::String(
+                                                        field_name,
+                                                    )),
+                                                );
+                                                field_desc.insert(
+                                                    "type".to_string(),
+                                                    ComptimeValue::Type(field_ty),
+                                                );
+                                                iter_scope.insert(
+                                                    binding.clone(),
+                                                    ComptimeValue::Struct(field_desc),
+                                                );
+                                            }
+                                            last = self.try_eval_comptime_expr_with_locals(
+                                                body,
+                                                depth + 1,
+                                                &mut iter_scope,
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                     last = self.try_eval_comptime_expr_with_locals(value, depth + 1, &mut scope);
                 }
@@ -4206,10 +5686,18 @@ impl FunctionLowerer {
                 self.try_eval_comptime_expr_with_locals(value, depth + 1, locals)
             }),
             HirExprKind::Call { callee, args } => {
-                let HirExprKind::Ident(name) = &callee.kind else {
-                    return None;
+                let resolved_name = match &callee.kind {
+                    HirExprKind::Ident(name) => name.clone(),
+                    HirExprKind::FieldAccess { base, field } => {
+                        let HirExprKind::Ident(base_name) = &base.kind else {
+                            return None;
+                        };
+                        let import_path = self.top_level_import_path(base_name)?;
+                        self.resolve_import_member_ident(import_path, field)?
+                    }
+                    _ => return None,
                 };
-                match name.as_str() {
+                match resolved_name.as_str() {
                     "$sizeof" | "$alignof" => {
                         if args.len() != 1 {
                             return None;
@@ -4220,7 +5708,11 @@ impl FunctionLowerer {
                             locals,
                         )?;
                         let (size, align) = layout_for_builtin_type_name(&type_name);
-                        let out = if name == "$sizeof" { size } else { align };
+                        let out = if resolved_name == "$sizeof" {
+                            size
+                        } else {
+                            align
+                        };
                         Some(ComptimeValue::Literal(HirLiteral::Integer(out.to_string())))
                     }
                     "$offsetof" => {
@@ -4286,6 +5778,7 @@ impl FunctionLowerer {
                             ComptimeValue::Literal(HirLiteral::Null) => "unknown".to_string(),
                             ComptimeValue::Type(_) => "type".to_string(),
                             ComptimeValue::Function(_) => "fn".to_string(),
+                            ComptimeValue::Struct(_) => "unknown".to_string(),
                         };
                         Some(ComptimeValue::Type(ty_name))
                     }
@@ -4325,7 +5818,7 @@ impl FunctionLowerer {
                         let type_name = self
                             .eval_type_designator_name(&args[0].value, locals)
                             .unwrap_or_default();
-                        let result = match name.as_str() {
+                        let result = match resolved_name.as_str() {
                             "$is_uint" => {
                                 matches!(type_name.as_str(), "u8" | "u16" | "u32" | "u64" | "usize")
                             }
@@ -4375,7 +5868,7 @@ impl FunctionLowerer {
                             HirExprKind::Literal(HirLiteral::String(s)) => s.clone(),
                             _ => return None,
                         };
-                        let exists = if name == "$has_method" {
+                        let exists = if resolved_name == "$has_method" {
                             let key = format!("{}__{}", type_name, member_name);
                             self.function_exprs.contains_key(&key)
                         } else {
@@ -4399,7 +5892,182 @@ impl FunctionLowerer {
                         )?;
                         Some(ComptimeValue::Literal(HirLiteral::String(type_name)))
                     }
-                    _ => self.try_eval_named_comptime_call(name, args, depth + 1, locals),
+                    "$field_type" => {
+                        if args.len() != 2 {
+                            return None;
+                        }
+                        let type_name = match self.try_eval_comptime_expr_with_locals(
+                            &args[0].value,
+                            depth + 1,
+                            locals,
+                        ) {
+                            Some(ComptimeValue::Type(t)) => t,
+                            _ => match &args[0].value.kind {
+                                HirExprKind::Ident(n) => n.clone(),
+                                _ => return None,
+                            },
+                        };
+                        let field_name = match self.try_eval_comptime_expr_with_locals(
+                            &args[1].value,
+                            depth + 1,
+                            &mut locals.clone(),
+                        ) {
+                            Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                            _ => return None,
+                        };
+                        let descriptor = self
+                            .named_type_literals
+                            .get(&type_name)
+                            .cloned()
+                            .unwrap_or_else(|| type_name.clone());
+                        let field_ty = struct_field_names_with_types(&descriptor)
+                            .into_iter()
+                            .find(|(n, _)| n == &field_name)
+                            .map(|(_, t)| t)?;
+                        Some(ComptimeValue::Type(field_ty))
+                    }
+                    "$fn_return" => {
+                        if args.len() != 1 {
+                            return None;
+                        }
+                        let type_str = match self.try_eval_comptime_expr_with_locals(
+                            &args[0].value,
+                            depth + 1,
+                            locals,
+                        ) {
+                            Some(ComptimeValue::Type(t)) => t,
+                            _ => return None,
+                        };
+                        let ret = if let Some(arrow) = type_str.rfind("->") {
+                            type_str[arrow + 2..].trim().to_string()
+                        } else {
+                            "void".to_string()
+                        };
+                        Some(ComptimeValue::Type(ret))
+                    }
+                    "$fn_params" => {
+                        if args.len() != 1 {
+                            return None;
+                        }
+                        let type_str = match self.try_eval_comptime_expr_with_locals(
+                            &args[0].value,
+                            depth + 1,
+                            locals,
+                        ) {
+                            Some(ComptimeValue::Type(t)) => t,
+                            _ => return None,
+                        };
+                        // Extract params string from "(p1,p2,...)->ret"
+                        let params = if let (Some(open), Some(close)) =
+                            (type_str.find('('), type_str.find(")->"))
+                        {
+                            type_str[open + 1..close].to_string()
+                        } else {
+                            String::new()
+                        };
+                        Some(ComptimeValue::Type(params))
+                    }
+                    "$has" => {
+                        if args.len() != 2 {
+                            return None;
+                        }
+                        let type_name = match &args[0].value.kind {
+                            HirExprKind::Ident(n) => {
+                                if let Some(ComptimeValue::Type(t)) = locals.get(n.as_str()) {
+                                    t.clone()
+                                } else {
+                                    n.clone()
+                                }
+                            }
+                            _ => match self.try_eval_comptime_expr_with_locals(
+                                &args[0].value,
+                                depth + 1,
+                                locals,
+                            ) {
+                                Some(ComptimeValue::Type(t)) => t,
+                                _ => return None,
+                            },
+                        };
+                        let member_name = match self.try_eval_comptime_expr_with_locals(
+                            &args[1].value,
+                            depth + 1,
+                            &mut locals.clone(),
+                        ) {
+                            Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                            _ => return None,
+                        };
+                        let resolved_owner = self
+                            .named_type_literals
+                            .iter()
+                            .find_map(|(name, desc)| (desc == &type_name).then_some(name.clone()))
+                            .unwrap_or(type_name.clone());
+                        let method_key = format!("{}__{}", resolved_owner, member_name);
+                        let has_method = self.function_exprs.contains_key(&method_key)
+                            || self.comptime_local_function_exprs.contains_key(&method_key);
+                        let descriptor = self
+                            .named_type_literals
+                            .get(&type_name)
+                            .cloned()
+                            .unwrap_or_else(|| type_name.clone());
+                        let has_field = has_struct_field(&descriptor, &member_name);
+                        Some(ComptimeValue::Literal(HirLiteral::Bool(
+                            has_method || has_field,
+                        )))
+                    }
+                    "$declare" => {
+                        if args.len() != 3 {
+                            return None;
+                        }
+                        let type_name = match self.try_eval_comptime_expr_with_locals(
+                            &args[0].value,
+                            depth + 1,
+                            &mut locals.clone(),
+                        ) {
+                            Some(ComptimeValue::Type(t)) => t,
+                            _ => match &args[0].value.kind {
+                                HirExprKind::Ident(n) => n.clone(),
+                                _ => return None,
+                            },
+                        };
+                        let method_name = match self.try_eval_comptime_expr_with_locals(
+                            &args[1].value,
+                            depth + 1,
+                            &mut locals.clone(),
+                        ) {
+                            Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                            _ => return None,
+                        };
+                        let resolved_owner = self
+                            .named_type_literals
+                            .iter()
+                            .find_map(|(name, desc)| (desc == &type_name).then_some(name.clone()))
+                            .unwrap_or(type_name.clone());
+                        let fn_key = format!("{}__{}", resolved_owner, method_name);
+                        let fn_expr =
+                            self.specialize_expr_with_comptime_locals(&args[2].value, locals);
+                        match &fn_expr.kind {
+                            HirExprKind::Function { .. } | HirExprKind::Inline { .. } => {
+                                let first_declare = !self.function_exprs.contains_key(&fn_key)
+                                    && !self
+                                        .declared_functions
+                                        .borrow()
+                                        .function_exprs
+                                        .contains_key(&fn_key);
+                                self.comptime_local_function_exprs
+                                    .insert(fn_key.clone(), fn_expr.clone());
+                                self.register_declared_function_expr(
+                                    fn_key.clone(),
+                                    fn_expr.clone(),
+                                );
+                                if first_declare {
+                                    self.hoist_declared_function(&fn_key, &fn_expr, Some(locals));
+                                }
+                            }
+                            _ => {}
+                        }
+                        Some(ComptimeValue::Literal(HirLiteral::Integer("0".to_string())))
+                    }
+                    _ => self.try_eval_named_comptime_call(&resolved_name, args, depth + 1, locals),
                 }
             }
             HirExprKind::FieldAccess { base, field } => {
@@ -4452,6 +6120,47 @@ impl FunctionLowerer {
                         };
                     }
                 }
+                // General case: if base is a local ident with struct_fields, look up the field.
+                if let HirExprKind::Ident(base_name) = &base.kind {
+                    if let Some(&base_mir_id) = self.locals.get(base_name.as_str()) {
+                        if let Some(fields) = self.struct_fields.get(&base_mir_id) {
+                            if let Some(&field_mir_id) = fields.get(field.as_str()) {
+                                let mut cache = BTreeMap::new();
+                                let mut visiting = BTreeSet::new();
+                                return self.try_eval_comptime_value_id(
+                                    field_mir_id,
+                                    depth + 1,
+                                    &mut cache,
+                                    &mut visiting,
+                                );
+                            }
+                        }
+                    }
+                }
+                if let Some(ComptimeValue::Struct(fields)) =
+                    self.try_eval_comptime_expr_with_locals(base, depth + 1, &mut locals.clone())
+                {
+                    if let Some(value) = fields.get(field).cloned() {
+                        return Some(value);
+                    }
+                }
+                // Also handle chained field access: base evaluates to a Type (struct descriptor).
+                if let Some(ComptimeValue::Type(type_str)) =
+                    self.try_eval_comptime_expr_with_locals(base, depth + 1, locals)
+                {
+                    let descriptor = self
+                        .named_type_literals
+                        .get(&type_str)
+                        .cloned()
+                        .unwrap_or(type_str);
+                    if let Some(field_ty) = struct_field_names_with_types(&descriptor)
+                        .into_iter()
+                        .find(|(n, _)| n == field)
+                        .map(|(_, t)| t)
+                    {
+                        return Some(ComptimeValue::Type(field_ty));
+                    }
+                }
                 None
             }
             _ => None,
@@ -4459,7 +6168,7 @@ impl FunctionLowerer {
     }
 
     pub(super) fn try_eval_named_comptime_call(
-        &self,
+        &mut self,
         name: &str,
         args: &[HirCallArg],
         depth: usize,
@@ -4472,13 +6181,17 @@ impl FunctionLowerer {
                 (name.to_string(), false)
             };
         let (target, captures_caller_locals) = if came_from_local_binding {
-            if let Some(local_target) = self.comptime_local_function_exprs.get(&resolved_name) {
+            if let Some(local_target) = self
+                .comptime_local_function_exprs
+                .get(&resolved_name)
+                .cloned()
+            {
                 (local_target, true)
             } else {
-                (self.function_exprs.get(&resolved_name)?, false)
+                (self.function_exprs.get(&resolved_name)?.clone(), false)
             }
         } else {
-            (self.function_exprs.get(&resolved_name)?, false)
+            (self.function_exprs.get(&resolved_name)?.clone(), false)
         };
         match &target.kind {
             HirExprKind::Function {
@@ -4519,18 +6232,65 @@ impl FunctionLowerer {
 
                 self.try_eval_comptime_expr_with_locals(body, depth + 1, &mut locals)
             }
+            HirExprKind::Inline { expr } => {
+                if let HirExprKind::Function {
+                    params,
+                    param_defaults,
+                    body,
+                    ..
+                } = &expr.kind
+                {
+                    if args.len() > params.len() {
+                        return None;
+                    }
+
+                    let lowered_args = args
+                        .iter()
+                        .map(|arg| (arg.name.clone(), &arg.value))
+                        .collect::<Vec<_>>();
+                    let ordered = self.order_named_call_items(params, &lowered_args);
+
+                    let mut locals = if captures_caller_locals {
+                        caller_locals.clone()
+                    } else {
+                        BTreeMap::new()
+                    };
+                    for (idx, param_name) in params.iter().enumerate() {
+                        let value = if let Some(expr) = ordered[idx] {
+                            self.try_eval_comptime_expr_with_locals(expr, depth + 1, caller_locals)?
+                        } else if let Some(Some(default_expr)) = param_defaults.get(idx) {
+                            self.try_eval_comptime_expr_with_locals(
+                                default_expr,
+                                depth + 1,
+                                &mut locals,
+                            )?
+                        } else {
+                            return None;
+                        };
+                        locals.insert(param_name.clone(), value);
+                    }
+
+                    self.try_eval_comptime_expr_with_locals(body, depth + 1, &mut locals)
+                } else {
+                    if !args.is_empty() {
+                        return None;
+                    }
+                    let mut locals = BTreeMap::new();
+                    self.try_eval_comptime_expr_with_locals(&target, depth + 1, &mut locals)
+                }
+            }
             _ => {
                 if !args.is_empty() {
                     return None;
                 }
                 let mut locals = BTreeMap::new();
-                self.try_eval_comptime_expr_with_locals(target, depth + 1, &mut locals)
+                self.try_eval_comptime_expr_with_locals(&target, depth + 1, &mut locals)
             }
         }
     }
 
     pub(super) fn comptime_type_name_from_expr_with_locals(
-        &self,
+        &mut self,
         expr: &HirExpr,
         depth: usize,
         locals: &BTreeMap<String, ComptimeValue>,
@@ -4545,9 +6305,9 @@ impl FunctionLowerer {
                 {
                     return Some(resolved);
                 }
-                if let Some(target) = self.function_exprs.get(name) {
+                if let Some(target) = self.function_exprs.get(name).cloned() {
                     if let Some(ComptimeValue::Type(type_name)) = self
-                        .try_eval_comptime_expr_with_locals(target, depth + 1, &mut locals.clone())
+                        .try_eval_comptime_expr_with_locals(&target, depth + 1, &mut locals.clone())
                     {
                         return Some(type_name);
                     }
@@ -4558,7 +6318,9 @@ impl FunctionLowerer {
                 .try_eval_comptime_expr_with_locals(expr, depth + 1, &mut locals.clone())
                 .and_then(|value| match value {
                     ComptimeValue::Type(name) => Some(name),
-                    ComptimeValue::Function(_) | ComptimeValue::Literal(_) => None,
+                    ComptimeValue::Function(_)
+                    | ComptimeValue::Literal(_)
+                    | ComptimeValue::Struct(_) => None,
                 }),
         }
     }

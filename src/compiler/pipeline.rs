@@ -206,6 +206,10 @@ fn shake_mir_program(mir: &MirProgram, bin: Option<&str>) -> MirProgram {
                 .entry(function.name.clone())
                 .or_default()
                 .push((mi, fi));
+            by_name
+                .entry(format!("#{}::{}", module.module_id.0, function.name))
+                .or_default()
+                .push((mi, fi));
             if function.name == "main" {
                 let in_bin = bin_dir
                     .as_ref()
@@ -224,8 +228,6 @@ fn shake_mir_program(mir: &MirProgram, bin: Option<&str>) -> MirProgram {
 
     let mut reachable = BTreeSet::<(usize, usize)>::new();
     let mut queue = VecDeque::from([entry]);
-    let mut conservative_all = false;
-
     while let Some((mi, fi)) = queue.pop_front() {
         if !reachable.insert((mi, fi)) {
             continue;
@@ -249,16 +251,10 @@ fn shake_mir_program(mir: &MirProgram, bin: Option<&str>) -> MirProgram {
                             }
                         }
                     }
-                    None => {
-                        conservative_all = true;
-                    }
+                    None => {}
                 }
             }
         }
-    }
-
-    if conservative_all {
-        return mir.clone();
     }
 
     let modules = mir
@@ -272,7 +268,7 @@ fn shake_mir_program(mir: &MirProgram, bin: Option<&str>) -> MirProgram {
                 .iter()
                 .enumerate()
                 .filter_map(|(fi, function)| {
-                    if reachable.contains(&(mi, fi)) {
+                    if reachable.contains(&(mi, fi)) || function.name.contains("__") {
                         Some(function.clone())
                     } else {
                         None

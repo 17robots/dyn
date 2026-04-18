@@ -89,15 +89,12 @@ impl Formatter {
 
     fn fmt_item(&mut self, item: &Item) {
         match item {
-            Item::Binding(b) => self.fmt_binding(b),
-            Item::Destructure(d) => self.fmt_destructure(d),
-            Item::Extern(e) => self.fmt_extern(e),
+            Item::Declaration(d) => self.fmt_declaration(d),
             Item::ExprStmt(e) => {
                 self.write_indent();
                 self.fmt_expr(e);
                 self.newline();
             }
-            Item::TypeBinding(tb) => self.fmt_type_binding(tb),
         }
     }
 
@@ -118,74 +115,61 @@ impl Formatter {
         }
     }
 
-    fn fmt_binding(&mut self, b: &Binding) {
-        self.fmt_docs(&b.docs);
-        self.write_indent();
-        self.fmt_visibility(b.visibility);
-        if b.mutable {
-            self.write("mut ");
-        }
-        self.write(&b.name.text);
-        if let Some(ann) = &b.annotation {
-            self.write(": ");
-            self.fmt_type_expr(ann);
-            self.write(" = ");
-        } else {
-            self.write(" := ");
-        }
-        self.fmt_expr(&b.value);
-        self.newline();
-    }
-
-    fn fmt_destructure(&mut self, d: &DestructureBinding) {
+    fn fmt_declaration(&mut self, d: &Declaration) {
         self.fmt_docs(&d.docs);
         self.write_indent();
         self.fmt_visibility(d.visibility);
-        self.write("{");
-        for (i, name) in d.names.iter().enumerate() {
-            if i > 0 {
-                self.write(", ");
+        match &d.target {
+            DeclTarget::Name(name) => {
+                if d.modifiers.mutable {
+                    self.write("mut ");
+                }
+                self.write(&name.text);
             }
-            if name.mutable {
-                self.write("mut ");
+            DeclTarget::Associated { owner, member } => {
+                self.write(&owner.text);
+                self.write(".");
+                self.write(&member.text);
             }
-            self.write(&name.name.text);
+            DeclTarget::Destructure(names) => {
+                self.write("{");
+                for (i, name) in names.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    if name.mutable {
+                        self.write("mut ");
+                    }
+                    self.write(&name.name.text);
+                }
+                self.write("}");
+            }
         }
-        self.write("} := ");
-        self.fmt_expr(&d.value);
-        self.newline();
-    }
 
-    fn fmt_extern(&mut self, e: &ExternDecl) {
-        self.fmt_docs(&e.docs);
-        self.write_indent();
-        self.fmt_visibility(e.visibility);
-        self.write(&e.name.text);
-        self.write(" := extern ");
-        self.fmt_type_expr(&e.ty);
-        if let Some(link) = &e.link_name {
-            self.write(" = \"");
-            self.write(link);
-            self.write("\"");
+        match &d.value {
+            DeclValue::Expr(expr) => {
+                if let Some(ann) = &d.annotation {
+                    self.write(": ");
+                    self.fmt_type_expr(ann);
+                    self.write(" = ");
+                } else {
+                    self.write(" := ");
+                }
+                self.fmt_expr(expr);
+            }
+            DeclValue::ExternSignature(sig) => {
+                self.write(" := extern ");
+                self.fmt_type_expr(&sig.ty);
+                if let Linkage::Extern {
+                    link_name: Some(link),
+                } = &d.modifiers.linkage
+                {
+                    self.write(" = \"");
+                    self.write(link);
+                    self.write("\"");
+                }
+            }
         }
-        self.newline();
-    }
-
-    fn fmt_type_binding(&mut self, tb: &TypeBinding) {
-        self.fmt_docs(&tb.docs);
-        self.write_indent();
-        self.fmt_visibility(tb.visibility);
-        self.write(&tb.type_name.text);
-        self.write(".");
-        self.write(&tb.member_name.text);
-        if let Some(ann) = &tb.annotation {
-            self.write(": ");
-            self.fmt_type_expr(ann);
-            self.write(" = ");
-        } else {
-            self.write(" := ");
-        }
-        self.fmt_expr(&tb.value);
         self.newline();
     }
 
@@ -205,8 +189,11 @@ impl Formatter {
                 }
                 self.write(")");
             }
-            TypeExprKind::Pointer { inner } => {
+            TypeExprKind::Pointer { inner, mutable } => {
                 self.write("*");
+                if *mutable {
+                    self.write("mut ");
+                }
                 self.fmt_type_expr(inner);
             }
             TypeExprKind::Array { len, element } => {
@@ -217,8 +204,11 @@ impl Formatter {
                 self.write("]");
                 self.fmt_type_expr(element);
             }
-            TypeExprKind::Slice { element } => {
+            TypeExprKind::Slice { element, mutable } => {
                 self.write("[]");
+                if *mutable {
+                    self.write("mut ");
+                }
                 self.fmt_type_expr(element);
             }
             TypeExprKind::Optional { inner } => {
@@ -361,14 +351,6 @@ impl Formatter {
                 if needs_parens {
                     self.write(")");
                 }
-            }
-
-            ExprKind::Assign { op, target, value } => {
-                self.fmt_expr(target);
-                self.write(" ");
-                self.write(assign_op_str(*op));
-                self.write(" ");
-                self.fmt_expr(value);
             }
 
             ExprKind::Call(call) => self.fmt_call(call),
@@ -667,8 +649,16 @@ impl Formatter {
 
     fn fmt_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Binding(b) => self.fmt_binding(b),
-            Stmt::Destructure(d) => self.fmt_destructure(d),
+            Stmt::Declaration(d) => self.fmt_declaration(d),
+            Stmt::Assignment(assign) => {
+                self.write_indent();
+                self.fmt_expr(&assign.target);
+                self.write(" ");
+                self.write(assign_op_str(assign.op));
+                self.write(" ");
+                self.fmt_expr(&assign.value);
+                self.newline();
+            }
             Stmt::Expr(e) => {
                 self.write_indent();
                 self.fmt_expr(e);
@@ -887,6 +877,7 @@ fn unary_op_str(op: UnaryOp) -> &'static str {
         UnaryOp::Not => "!",
         UnaryOp::BitNot => "~",
         UnaryOp::Ref => "&",
+        UnaryOp::RefMut => "&mut ",
     }
 }
 

@@ -176,6 +176,9 @@ pub enum MirValue {
         path: String,
     },
     TypeLiteral(String),
+    EmptySlice {
+        element_type: String,
+    },
     Unknown,
     /// Creates a fat pointer closure value: (fn_ptr, env_ptr)
     /// fn_symbol is the hoisted lambda's MIR function name

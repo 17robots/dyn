@@ -71,24 +71,35 @@ pub path_is_abs := (path: []u8) u1 {
 pub path_dirname := (path: []u8) []u8 {
     if path.len == 0 return "."
     mut i := path.len
-    for i > 0: {
+    mut out := "."
+    mut scanning := true
+    for i > 0 && scanning: {
         i -= 1
         if path[i] == '/' {
-            if i == 0 return "/"
-            return path[0..i]
+            if i == 0 {
+                out = "/"
+            } else {
+                out = path[0..i]
+            }
+            scanning = false
         }
     }
-    return "."
+    return out
 }
 
 pub path_basename := (path: []u8) []u8 {
     if path.len == 0 return path
     mut i := path.len
-    for i > 0: {
+    mut out := path
+    mut scanning := true
+    for i > 0 && scanning: {
         i -= 1
-        if path[i] == '/' return path[i + 1..]
+        if path[i] == '/' {
+            out = path[i + 1..]
+            scanning = false
+        }
     }
-    return path
+    return out
 }
 
 pub path_join := (base: []u8, part: []u8, alloc: Allocator) ?[]u8 {

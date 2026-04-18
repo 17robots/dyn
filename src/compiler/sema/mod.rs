@@ -3,9 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::compiler::ast::{
-    AssignOp, BinaryOp, Binding, BlockExpr, EnumVariantExpr, Expr, ExprKind, FnBody, ForExpr,
-    Ident, Item, Literal, MatchArm, Pattern, PatternKind, PatternLiteral, Stmt, TypeExpr,
-    TypeExprKind, UnaryOp, Visibility,
+    AssignOp, BinaryOp, BlockExpr, DeclTarget, DeclValue, EnumVariantExpr, Expr, ExprKind,
+    FnBody, ForExpr, Ident, Item, Linkage, Literal, MatchArm, Pattern, PatternKind, PatternLiteral,
+    Stmt, TypeExpr, TypeExprKind, UnaryOp, Visibility,
 };
 use crate::compiler::diagnostics::{
     sort_diagnostics_by_primary_path, Diagnostic, DiagnosticCode, DiagnosticLabel, DiagnosticPhase,
@@ -485,35 +485,55 @@ fn check_expr_resolution(
             scopes.push(BTreeMap::new());
             for stmt in &block.statements {
                 match stmt {
-                    Stmt::Binding(binding) => {
-                        check_expr_resolution(
-                            &binding.value,
-                            scopes,
-                            out_of_scope,
-                            module_defs,
-                            import_aliases,
-                            type_names,
-                            module_by_id,
-                            file_path,
-                            diagnostics,
-                        );
-                        bind_name_checked(scopes, &binding.name, file_path, diagnostics);
-                    }
-                    Stmt::Destructure(d) => {
-                        check_expr_resolution(
-                            &d.value,
-                            scopes,
-                            out_of_scope,
-                            module_defs,
-                            import_aliases,
-                            type_names,
-                            module_by_id,
-                            file_path,
-                            diagnostics,
-                        );
-                        for dn in &d.names {
-                            bind_name_checked(scopes, &dn.name, file_path, diagnostics);
+                    Stmt::Declaration(decl) => {
+                        if let Some(value) = decl.expr_value() {
+                            check_expr_resolution(
+                                value,
+                                scopes,
+                                out_of_scope,
+                                module_defs,
+                                import_aliases,
+                                type_names,
+                                module_by_id,
+                                file_path,
+                                diagnostics,
+                            );
                         }
+                        match &decl.target {
+                            DeclTarget::Name(name) => {
+                                bind_name_checked(scopes, name, file_path, diagnostics);
+                            }
+                            DeclTarget::Destructure(names) => {
+                                for dn in names {
+                                    bind_name_checked(scopes, &dn.name, file_path, diagnostics);
+                                }
+                            }
+                            DeclTarget::Associated { .. } => {}
+                        }
+                    }
+                    Stmt::Assignment(assign) => {
+                        check_expr_resolution(
+                            &assign.target,
+                            scopes,
+                            out_of_scope,
+                            module_defs,
+                            import_aliases,
+                            type_names,
+                            module_by_id,
+                            file_path,
+                            diagnostics,
+                        );
+                        check_expr_resolution(
+                            &assign.value,
+                            scopes,
+                            out_of_scope,
+                            module_defs,
+                            import_aliases,
+                            type_names,
+                            module_by_id,
+                            file_path,
+                            diagnostics,
+                        );
                     }
                     Stmt::Expr(stmt_expr) => check_expr_resolution(
                         stmt_expr,
@@ -755,11 +775,6 @@ fn check_expr_resolution(
             diagnostics,
         ),
         ExprKind::Binary { left, right, .. }
-        | ExprKind::Assign {
-            target: left,
-            value: right,
-            ..
-        }
         | ExprKind::Index {
             base: left,
             index: right,
@@ -1166,33 +1181,37 @@ fn is_compile_time_expr_with_locals(expr: &Expr, locals: &mut BTreeSet<String>) 
             is_compile_time_expr_with_locals(left, locals)
                 && is_compile_time_expr_with_locals(right, locals)
         }
-        ExprKind::Assign { target, value, .. } => {
-            let ExprKind::Ident(ident) = &target.kind else {
-                return false;
-            };
-            if !is_compile_time_expr_with_locals(value, locals) {
-                return false;
-            }
-            locals.insert(ident.text.clone());
-            true
-        }
         ExprKind::Block(block) => {
             let mut scope = locals.clone();
             for stmt in &block.statements {
                 match stmt {
-                    Stmt::Binding(binding) => {
-                        if !is_compile_time_expr_with_locals(&binding.value, &mut scope) {
+                    Stmt::Declaration(decl) => {
+                        let Some(value) = decl.expr_value() else {
+                            return false;
+                        };
+                        if !is_compile_time_expr_with_locals(value, &mut scope) {
                             return false;
                         }
-                        scope.insert(binding.name.text.clone());
+                        match &decl.target {
+                            DeclTarget::Name(name) => {
+                                scope.insert(name.text.clone());
+                            }
+                            DeclTarget::Destructure(names) => {
+                                for dn in names {
+                                    scope.insert(dn.name.text.clone());
+                                }
+                            }
+                            DeclTarget::Associated { .. } => return false,
+                        }
                     }
-                    Stmt::Destructure(d) => {
-                        if !is_compile_time_expr_with_locals(&d.value, &mut scope) {
+                    Stmt::Assignment(assign) => {
+                        let ExprKind::Ident(ident) = &assign.target.kind else {
+                            return false;
+                        };
+                        if !is_compile_time_expr_with_locals(&assign.value, &mut scope) {
                             return false;
                         }
-                        for dn in &d.names {
-                            scope.insert(dn.name.text.clone());
-                        }
+                        scope.insert(ident.text.clone());
                     }
                     Stmt::Expr(expr) => {
                         if !is_compile_time_expr_with_locals(expr, &mut scope) {
@@ -1474,10 +1493,6 @@ fn check_expr(
         ExprKind::Binary { left, right, .. } => {
             check_expr(left, ctx, file_path, diagnostics);
             check_expr(right, ctx, file_path, diagnostics);
-        }
-        ExprKind::Assign { target, value, .. } => {
-            check_expr(target, ctx, file_path, diagnostics);
-            check_expr(value, ctx, file_path, diagnostics);
         }
         ExprKind::Call(call) => {
             check_expr(&call.callee, ctx, file_path, diagnostics);
@@ -1798,7 +1813,10 @@ fn check_block(
     if let Some(label) = &block.label {
         ctx.labels.push(label.name.text.clone());
         if block.statements.is_empty()
-            && matches!(block.tail_expr.as_deref().map(|expr| &expr.kind), Some(ExprKind::For(_)))
+            && matches!(
+                block.tail_expr.as_deref().map(|expr| &expr.kind),
+                Some(ExprKind::For(_))
+            )
         {
             ctx.loop_labels.push(label.name.text.clone());
         }
@@ -1806,8 +1824,15 @@ fn check_block(
 
     for stmt in &block.statements {
         match stmt {
-            Stmt::Binding(binding) => check_expr(&binding.value, ctx, file_path, diagnostics),
-            Stmt::Destructure(d) => check_expr(&d.value, ctx, file_path, diagnostics),
+            Stmt::Declaration(decl) => {
+                if let Some(value) = decl.expr_value() {
+                    check_expr(value, ctx, file_path, diagnostics);
+                }
+            }
+            Stmt::Assignment(assign) => {
+                check_expr(&assign.target, ctx, file_path, diagnostics);
+                check_expr(&assign.value, ctx, file_path, diagnostics);
+            }
             Stmt::Expr(expr) => check_expr(expr, ctx, file_path, diagnostics),
         }
     }
@@ -1838,6 +1863,7 @@ pub struct DeclStub {
     pub name: String,
     pub visibility: Visibility,
     pub mutable: bool,
+    pub inline: bool,
     pub kind: DeclKind,
     pub initializer: DeclInitializer,
     pub annotation: Option<TypeExpr>,
@@ -1887,6 +1913,21 @@ pub struct TypeAssociation {
     pub member_name: String,
 }
 
+fn make_use_member_expr(path: &str, field: &crate::compiler::ast::Ident, span: SourceSpan) -> Expr {
+    Expr {
+        kind: ExprKind::FieldAccess {
+            base: Box::new(Expr {
+                kind: ExprKind::Use {
+                    path: path.to_string(),
+                },
+                span,
+            }),
+            field: field.clone(),
+        },
+        span,
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DeclKind {
     Binding,
@@ -1930,62 +1971,78 @@ pub fn build_module_units(graph: &ModuleGraph, parsed: &ParseSession) -> Vec<Mod
 
         for item in &ast.items {
             match item {
-                Item::Binding(binding) => {
-                    unit.declarations.push(DeclStub {
-                        name: binding.name.text.clone(),
-                        visibility: binding.visibility,
-                        mutable: binding.mutable,
-                        kind: DeclKind::Binding,
-                        initializer: DeclInitializer::Expr,
-                        annotation: binding.annotation.clone(),
-                        value: binding.value.clone(),
-                        file_path: parsed_file.file_path.clone(),
-                        span: binding.span,
-                    });
-                }
-                Item::Destructure(d) => {
-                    for dn in &d.names {
+                Item::Declaration(decl) => match (&decl.target, &decl.value) {
+                    (DeclTarget::Name(name), DeclValue::Expr(value)) => {
                         unit.declarations.push(DeclStub {
-                            name: dn.name.text.clone(),
-                            visibility: d.visibility,
-                            mutable: dn.mutable,
+                            name: name.text.clone(),
+                            visibility: decl.visibility,
+                            mutable: decl.modifiers.mutable,
+                            inline: decl.modifiers.inline,
                             kind: DeclKind::Binding,
                             initializer: DeclInitializer::Expr,
-                            annotation: None,
-                            value: d.value.clone(),
+                            annotation: decl.annotation.clone(),
+                            value: value.clone(),
                             file_path: parsed_file.file_path.clone(),
-                            span: d.span,
+                            span: decl.span,
                         });
                     }
-                }
-                Item::Extern(extern_decl) => {
-                    unit.extern_declarations.push(ExternDeclStub {
-                        name: extern_decl.name.text.clone(),
-                        visibility: extern_decl.visibility,
-                        ty: extern_decl.ty.clone(),
-                        link_name: extern_decl.link_name.clone(),
-                        file_path: parsed_file.file_path.clone(),
-                        span: extern_decl.span,
-                    });
-                }
-                Item::TypeBinding(tb) => {
-                    let synthetic = format!("{}__{}", tb.type_name.text, tb.member_name.text);
-                    unit.declarations.push(DeclStub {
-                        name: synthetic,
-                        visibility: tb.visibility,
-                        mutable: false,
-                        kind: DeclKind::Binding,
-                        initializer: DeclInitializer::Expr,
-                        annotation: tb.annotation.clone(),
-                        value: tb.value.clone(),
-                        file_path: parsed_file.file_path.clone(),
-                        span: tb.span,
-                    });
-                    unit.type_associations.push(TypeAssociation {
-                        type_name: tb.type_name.text.clone(),
-                        member_name: tb.member_name.text.clone(),
-                    });
-                }
+                    (DeclTarget::Destructure(names), DeclValue::Expr(value)) => {
+                        for dn in names {
+                            let binding_value = match &value.kind {
+                                ExprKind::Use { path } => {
+                                    make_use_member_expr(path, &dn.name, decl.span)
+                                }
+                                _ => value.clone(),
+                            };
+                            unit.declarations.push(DeclStub {
+                                name: dn.name.text.clone(),
+                                visibility: decl.visibility,
+                                mutable: dn.mutable,
+                                inline: false,
+                                kind: DeclKind::Binding,
+                                initializer: DeclInitializer::Expr,
+                                annotation: None,
+                                value: binding_value,
+                                file_path: parsed_file.file_path.clone(),
+                                span: decl.span,
+                            });
+                        }
+                    }
+                    (DeclTarget::Associated { owner, member }, DeclValue::Expr(value)) => {
+                        let synthetic = format!("{}__{}", owner.text, member.text);
+                        unit.declarations.push(DeclStub {
+                            name: synthetic,
+                            visibility: decl.visibility,
+                            mutable: false,
+                            inline: decl.modifiers.inline,
+                            kind: DeclKind::Binding,
+                            initializer: DeclInitializer::Expr,
+                            annotation: decl.annotation.clone(),
+                            value: value.clone(),
+                            file_path: parsed_file.file_path.clone(),
+                            span: decl.span,
+                        });
+                        unit.type_associations.push(TypeAssociation {
+                            type_name: owner.text.clone(),
+                            member_name: member.text.clone(),
+                        });
+                    }
+                    (DeclTarget::Name(name), DeclValue::ExternSignature(sig)) => {
+                        let link_name = match &decl.modifiers.linkage {
+                            Linkage::Extern { link_name } => link_name.clone(),
+                            Linkage::Normal => None,
+                        };
+                        unit.extern_declarations.push(ExternDeclStub {
+                            name: name.text.clone(),
+                            visibility: decl.visibility,
+                            ty: sig.ty.clone(),
+                            link_name,
+                            file_path: parsed_file.file_path.clone(),
+                            span: decl.span,
+                        });
+                    }
+                    _ => {}
+                },
                 Item::ExprStmt(_) => {}
             }
         }
@@ -2072,35 +2129,26 @@ fn collect_item_uses(
     members: &mut Vec<MemberUseStub>,
 ) {
     match item {
-        Item::Binding(binding) => collect_binding_uses(binding, file_path, imports, names, members),
-        Item::Destructure(d) => {
-            collect_expr_uses(&d.value, None, file_path, imports, names, members)
-        }
-        Item::Extern(_) => {}
-        Item::ExprStmt(expr) => collect_expr_uses(expr, None, file_path, imports, names, members),
-        Item::TypeBinding(tb) => {
-            let synthetic = format!("{}__{}", tb.type_name.text, tb.member_name.text);
-            collect_expr_uses(
-                &tb.value,
-                Some(synthetic),
+        Item::Declaration(decl) => match (&decl.target, &decl.value) {
+            (DeclTarget::Name(name), DeclValue::Expr(value)) => collect_expr_uses(
+                value,
+                Some(name.text.clone()),
                 file_path,
                 imports,
                 names,
                 members,
-            );
-        }
+            ),
+            (DeclTarget::Destructure(_), DeclValue::Expr(value)) => {
+                collect_expr_uses(value, None, file_path, imports, names, members)
+            }
+            (DeclTarget::Associated { owner, member }, DeclValue::Expr(value)) => {
+                let synthetic = format!("{}__{}", owner.text, member.text);
+                collect_expr_uses(value, Some(synthetic), file_path, imports, names, members);
+            }
+            (_, DeclValue::ExternSignature(_)) => {}
+        },
+        Item::ExprStmt(expr) => collect_expr_uses(expr, None, file_path, imports, names, members),
     }
-}
-
-fn collect_binding_uses(
-    binding: &Binding,
-    file_path: &PathBuf,
-    imports: &mut Vec<ImportStub>,
-    names: &mut Vec<NameUseStub>,
-    members: &mut Vec<MemberUseStub>,
-) {
-    let alias = Some(binding.name.text.clone());
-    collect_expr_uses(&binding.value, alias, file_path, imports, names, members);
 }
 
 fn collect_stmt_uses(
@@ -2111,9 +2159,28 @@ fn collect_stmt_uses(
     members: &mut Vec<MemberUseStub>,
 ) {
     match stmt {
-        Stmt::Binding(binding) => collect_binding_uses(binding, file_path, imports, names, members),
-        Stmt::Destructure(d) => {
-            collect_expr_uses(&d.value, None, file_path, imports, names, members)
+        Stmt::Declaration(decl) => match &decl.target {
+            DeclTarget::Name(name) => {
+                if let Some(value) = decl.expr_value() {
+                    collect_expr_uses(
+                        value,
+                        Some(name.text.clone()),
+                        file_path,
+                        imports,
+                        names,
+                        members,
+                    );
+                }
+            }
+            DeclTarget::Destructure(_) | DeclTarget::Associated { .. } => {
+                if let Some(value) = decl.expr_value() {
+                    collect_expr_uses(value, None, file_path, imports, names, members);
+                }
+            }
+        }
+        Stmt::Assignment(assign) => {
+            collect_expr_uses(&assign.target, None, file_path, imports, names, members);
+            collect_expr_uses(&assign.value, None, file_path, imports, names, members);
         }
         Stmt::Expr(expr) => collect_expr_uses(expr, None, file_path, imports, names, members),
     }
@@ -2145,10 +2212,6 @@ fn collect_expr_uses(
         ExprKind::Binary { left, right, .. } => {
             collect_expr_uses(left, None, file_path, imports, names, members);
             collect_expr_uses(right, None, file_path, imports, names, members);
-        }
-        ExprKind::Assign { target, value, .. } => {
-            collect_expr_uses(target, None, file_path, imports, names, members);
-            collect_expr_uses(value, None, file_path, imports, names, members);
         }
         ExprKind::Call(call) => {
             collect_expr_uses(&call.callee, None, file_path, imports, names, members);
@@ -2346,6 +2409,7 @@ pub enum Type {
     Unknown,
     TypeType,
     TypeParam(String),
+    Named(String),
     Bool,
     Int {
         signed: bool,
@@ -2364,10 +2428,12 @@ pub enum Type {
         errors: BTreeSet<String>,
     },
     Pointer {
+        mutable: bool,
         inner: TypeId,
     },
     Array(TypeId),
     Slice {
+        mutable: bool,
         element: TypeId,
     },
     Tuple(Vec<TypeId>),
@@ -2386,6 +2452,7 @@ pub enum Type {
 #[derive(Default)]
 struct TypeStore {
     types: Vec<Type>,
+    enum_payloads: BTreeMap<String, BTreeMap<String, Option<TypeId>>>,
 }
 
 impl TypeStore {
@@ -2399,6 +2466,17 @@ impl TypeStore {
 
     fn get(&self, id: TypeId) -> &Type {
         &self.types[id.0]
+    }
+
+    fn register_enum_payloads(&mut self, name: String, variants: BTreeMap<String, Option<TypeId>>) {
+        self.enum_payloads.insert(name, variants);
+    }
+
+    fn variant_payload_type(&self, enum_name: &str, variant_name: &str) -> Option<Option<TypeId>> {
+        self.enum_payloads
+            .get(enum_name)?
+            .get(variant_name)
+            .copied()
     }
 }
 
@@ -2418,6 +2496,9 @@ struct FnSignature {
 #[derive(Copy, Clone)]
 enum AnyUsageContext {
     FunctionParam,
+    FunctionReturn,
+    /// Nested somewhere under a function parameter type.
+    FunctionParamInner,
     /// Direct inner type of a `*` pointer — `*any` is the erased pointer type.
     PointerInner,
     Other,
@@ -2474,7 +2555,7 @@ fn register_extern_function_types(
             }
             validate_any_usage(
                 &fn_ty.return_type,
-                AnyUsageContext::Other,
+                AnyUsageContext::FunctionReturn,
                 diagnostics,
                 &extern_decl.file_path,
             );
@@ -2550,7 +2631,7 @@ fn register_decl_function_types(
             if let Some(return_ty) = &fn_expr.return_type {
                 validate_any_usage(
                     return_ty,
-                    AnyUsageContext::Other,
+                    AnyUsageContext::FunctionReturn,
                     diagnostics,
                     &decl.file_path,
                 );
@@ -2787,6 +2868,7 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
 
     for unit in units {
         let mut types = TypeStore::default();
+        collect_and_register_enum_variant_payloads(unit, &mut types);
         let unknown = types.intern(Type::Unknown);
         let mut env = BTreeMap::<String, TypeId>::new();
         let mut mutability = BTreeMap::<String, bool>::new();
@@ -2868,7 +2950,19 @@ pub fn type_check_modules(units: &[ModuleUnit]) -> Vec<Diagnostic> {
                 &decl.file_path,
                 None,
             );
-            if allow_main_implicit_tail {
+            if decl.inline {
+                let mut new_diagnostics = diagnostics.split_off(diagnostics_before_infer);
+                new_diagnostics.retain(|diagnostic| {
+                    !is_strict_return_mode_tail_diagnostic_for_span(diagnostic, decl.value.span)
+                });
+                diagnostics.extend(new_diagnostics);
+                validate_inline_expr(
+                    &decl.value,
+                    &signatures,
+                    &mut diagnostics,
+                    &decl.file_path,
+                );
+            } else if allow_main_implicit_tail {
                 let mut new_diagnostics = diagnostics.split_off(diagnostics_before_infer);
                 new_diagnostics.retain(|diagnostic| {
                     !is_strict_return_mode_tail_diagnostic_for_span(diagnostic, decl.value.span)
@@ -3006,6 +3100,7 @@ pub fn infer_binding_type_strings(
 
     for unit in units {
         let mut types = TypeStore::default();
+        collect_and_register_enum_variant_payloads(unit, &mut types);
         let unknown = types.intern(Type::Unknown);
         let mut env = BTreeMap::<String, TypeId>::new();
         let mut mutability = BTreeMap::<String, bool>::new();
