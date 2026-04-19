@@ -231,6 +231,38 @@ fn collect_free_vars(expr: &HirExpr, bound: &BTreeSet<String>) -> BTreeSet<Strin
     }
 }
 
+fn function_expr_return_hint(expr: &HirExpr) -> Option<String> {
+    match &expr.kind {
+        HirExprKind::Function { return_type, .. } => return_type.clone(),
+        HirExprKind::Inline { expr } => match &expr.kind {
+            HirExprKind::Function { return_type, .. } => return_type.clone(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn function_expr_is_non_capturing(expr: &HirExpr) -> bool {
+    let (params, body) = match &expr.kind {
+        HirExprKind::Function { params, body, .. } => (params, body),
+        HirExprKind::Inline { expr } => match &expr.kind {
+            HirExprKind::Function { params, body, .. } => (params, body),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let bound = params.iter().cloned().collect::<BTreeSet<_>>();
+    collect_free_vars(body, &bound).is_empty()
+}
+
+fn is_function_expr(expr: &HirExpr) -> bool {
+    match &expr.kind {
+        HirExprKind::Function { .. } => true,
+        HirExprKind::Inline { expr } => matches!(&expr.kind, HirExprKind::Function { .. }),
+        _ => false,
+    }
+}
+
 impl FunctionLowerer {
     pub(super) fn new(
         module_key: ModuleKey,
@@ -547,12 +579,30 @@ impl FunctionLowerer {
                                         if let Some(qualified) =
                                             self.resolve_import_member_ident(&import_path, field)
                                         {
+                                            let expr = self
+                                                .function_exprs
+                                                .get(&qualified)
+                                                .cloned()
+                                                .or_else(|| {
+                                                    self.declared_functions
+                                                        .borrow()
+                                                        .function_exprs
+                                                        .get(&qualified)
+                                                        .cloned()
+                                                });
+                                            if let Some(expr) = expr {
+                                                if !is_function_expr(&expr) {
+                                                    return self.lower_expr(block, &expr);
+                                                }
+                                            }
+                                            let (value, ty) =
+                                                self.qualified_member_value_and_type(&qualified);
                                             return (
                                                 block,
                                                 Some(self.push_eval(
                                                     block,
-                                                    MirValue::Ident(qualified),
-                                                    MirValueType::FunctionPointer,
+                                                    value,
+                                                    ty,
                                                 )),
                                             );
                                         }
@@ -575,6 +625,8 @@ impl FunctionLowerer {
                             } else {
                                 hinted
                             }
+                        } else if is_function_expr(&target) {
+                            MirValueType::FunctionPointer
                         } else {
                             self.function_return_types
                                 .get(name)
@@ -617,12 +669,30 @@ impl FunctionLowerer {
                                     if let Some(qualified) =
                                         self.resolve_import_member_ident(&import_path, field)
                                     {
+                                        let expr = self
+                                            .function_exprs
+                                            .get(&qualified)
+                                            .cloned()
+                                            .or_else(|| {
+                                                self.declared_functions
+                                                    .borrow()
+                                                    .function_exprs
+                                                    .get(&qualified)
+                                                    .cloned()
+                                            });
+                                        if let Some(expr) = expr {
+                                            if !is_function_expr(&expr) {
+                                                return self.lower_expr(block, &expr);
+                                            }
+                                        }
+                                        let (value, ty) =
+                                            self.qualified_member_value_and_type(&qualified);
                                         return (
                                             block,
                                             Some(self.push_eval(
                                                 block,
-                                                MirValue::Ident(qualified),
-                                                MirValueType::FunctionPointer,
+                                                value,
+                                                ty,
                                             )),
                                         );
                                     }
@@ -904,12 +974,34 @@ impl FunctionLowerer {
                 value,
                 ..
             } => {
+                let hoisted_direct_function = matches!(
+                    &value.kind,
+                    HirExprKind::Function { .. } | HirExprKind::Inline { .. }
+                ) && function_expr_is_non_capturing(value);
+
                 let zero_init_from_hint = matches!(
                     &value.kind,
                     HirExprKind::StructLiteral { root_type, fields }
                         if root_type.is_none() && fields.is_empty()
                 );
-                let (end, init_value) = if zero_init_from_hint {
+                let (end, init_value) = if hoisted_direct_function {
+                    let first_declare = !self.function_exprs.contains_key(name)
+                        && !self
+                            .declared_functions
+                            .borrow()
+                            .function_exprs
+                            .contains_key(name);
+                    self.register_declared_function_expr(name.clone(), (**value).clone());
+                    if first_declare {
+                        self.hoist_declared_function(name, value, None);
+                    }
+                    let fn_value = self.push_eval(
+                        block,
+                        MirValue::Ident(name.clone()),
+                        MirValueType::FunctionPointer,
+                    );
+                    (block, Some(fn_value))
+                } else if zero_init_from_hint {
                     let hinted = type_hint
                         .as_deref()
                         .and_then(|hint| self.emit_zero_init_for_type_hint(block, hint));
@@ -1011,12 +1103,25 @@ impl FunctionLowerer {
                             if let Some(qualified) =
                                 self.resolve_import_member_ident(&import_path, field)
                             {
+                                let expr = self.function_exprs.get(&qualified).cloned().or_else(|| {
+                                    self.declared_functions
+                                        .borrow()
+                                        .function_exprs
+                                        .get(&qualified)
+                                        .cloned()
+                                });
+                                if let Some(expr) = expr {
+                                    if !is_function_expr(&expr) {
+                                        return self.lower_expr(block, &expr);
+                                    }
+                                }
+                                let (value, ty) = self.qualified_member_value_and_type(&qualified);
                                 return (
                                     block,
                                     Some(self.push_eval(
                                         block,
-                                        MirValue::Ident(qualified),
-                                        MirValueType::FunctionPointer,
+                                        value,
+                                        ty,
                                     )),
                                 );
                             }
@@ -1028,14 +1133,8 @@ impl FunctionLowerer {
                         .get(base_name)
                         .cloned()
                         .unwrap_or_else(|| base_name.clone());
-                    let resolved_owner = self
-                        .named_type_literals
-                        .get(&type_name)
-                        .cloned()
-                        .unwrap_or(type_name);
-                    let method_key = format!("{}__{}", resolved_owner, field);
-                    if self.function_exprs.contains_key(&method_key)
-                        || self.comptime_local_function_exprs.contains_key(&method_key)
+                    if let Some(method_key) =
+                        self.resolve_associated_method_name(&type_name, field)
                     {
                         return (
                             block,
@@ -1308,6 +1407,7 @@ impl FunctionLowerer {
                 });
                 let mut end = block;
                 let mut last = None;
+                let mut fallthrough_to_join = false;
                 for value in body {
                     if self.is_terminated(end) {
                         break;
@@ -1324,13 +1424,14 @@ impl FunctionLowerer {
                 if !self.is_terminated(end) {
                     end = self.emit_deferred_since(end, defer_scope_start, None);
                     self.set_terminator(end, MirTerminator::Goto(join));
+                    fallthrough_to_join = true;
                     if let Some(value) = last {
                         incoming_values.push((end, value));
                     }
                 }
                 incoming_values.append(&mut break_ctx.values);
                 self.deferred.truncate(defer_scope_start);
-                if self.is_terminated(end) && incoming_values.is_empty() {
+                if !fallthrough_to_join && self.is_terminated(end) && incoming_values.is_empty() {
                     (end, None)
                 } else {
                     (join, self.build_phi_value(join, incoming_values))
@@ -1381,10 +1482,11 @@ impl FunctionLowerer {
                         let mut fields = BTreeMap::new();
                         for export_name in &exports {
                             let qualified = qualified_function_name(target_module_id, export_name);
+                            let (value, ty) = self.qualified_member_value_and_type(&qualified);
                             let export_value = self.push_eval(
                                 block,
-                                MirValue::Ident(qualified),
-                                MirValueType::FunctionPointer,
+                                value,
+                                ty,
                             );
                             fields.insert(export_name.clone(), export_value);
                         }
@@ -1568,6 +1670,7 @@ impl FunctionLowerer {
             HirExprKind::Function {
                 params,
                 param_types,
+                return_type,
                 body,
                 ..
             } => {
@@ -1592,7 +1695,7 @@ impl FunctionLowerer {
                 let lambda_fn = MirFunction {
                     name: lambda_name.clone(),
                     def_id: None,
-                    return_type: None,
+                    return_type: return_type.clone(),
                     // env_ptr as first param, then declared params
                     param_type_hints: std::iter::once(None)
                         .chain(param_types.iter().cloned())
@@ -2330,20 +2433,23 @@ impl FunctionLowerer {
         }
 
         if let HirExprKind::FieldAccess { base, field } = &callee.kind {
-            if let HirExprKind::Ident(base_name) = &base.kind {
-                let type_name = self
-                    .local_type_hints
-                    .get(base_name)
-                    .cloned()
-                    .unwrap_or_else(|| base_name.clone());
-                let resolved_owner = self
-                    .named_type_literals
-                    .get(&type_name)
-                    .cloned()
-                    .unwrap_or(type_name);
-                let method_key = format!("{}__{}", resolved_owner, field);
-                if self.function_exprs.contains_key(&method_key)
-                    || self.comptime_local_function_exprs.contains_key(&method_key)
+            let inferred_owner = self
+                .associated_owner_name(base)
+                .or_else(|| self.infer_hir_expr_type_hint(base))
+                .or_else(|| {
+                    if let HirExprKind::Ident(base_name) = &base.kind {
+                        Some(
+                            self.local_type_hints
+                                .get(base_name)
+                                .cloned()
+                                .unwrap_or_else(|| base_name.clone()),
+                        )
+                    } else {
+                        None
+                    }
+                });
+            if let Some(type_name) = inferred_owner {
+                if let Some(method_key) = self.resolve_associated_method_name(&type_name, field)
                 {
                     let callee_value = self.push_eval(
                         block,
@@ -2404,16 +2510,28 @@ impl FunctionLowerer {
                             lowered_args = ordered.into_iter().flatten().collect();
                         }
                     }
+                    let specialized_method_key = self
+                        .maybe_specialize_any_call(&method_key, args, Some(&lowered_args), 1)
+                        .unwrap_or_else(|| method_key.clone());
                     if let Some((inline_end, inline_value)) =
-                        self.try_inline_named_call(end, &method_key, &lowered_args)
+                        self.try_inline_named_call(end, &specialized_method_key, &lowered_args)
                     {
                         return (inline_end, inline_value);
                     }
-                    let result_ty = self.infer_call_result_type(callee_value, 0);
+                    let specialized_callee = if specialized_method_key != method_key {
+                        self.push_eval(
+                            end,
+                            MirValue::Ident(specialized_method_key.clone()),
+                            MirValueType::FunctionPointer,
+                        )
+                    } else {
+                        callee_value
+                    };
+                    let result_ty = self.infer_call_result_type(specialized_callee, 0);
                     let call_id = self.push_eval(
                         end,
                         MirValue::Call {
-                            callee: callee_value,
+                            callee: specialized_callee,
                             args: lowered_args,
                         },
                         result_ty,
@@ -2496,6 +2614,31 @@ impl FunctionLowerer {
             }
         }
 
+        if callee_name
+            .as_deref()
+            .is_some_and(|name| name == "fd_print" || name.ends_with("::fd_print"))
+            && lowered_args.len() == 2
+            && lowered_args
+                .get(1)
+                .and_then(|value| self.value_types.get(value))
+                .is_some_and(|ty| matches!(ty, MirValueType::BytesSlice))
+        {
+            let write_all = self.push_eval(
+                end,
+                MirValue::Ident("fd_write_all".to_string()),
+                MirValueType::FunctionPointer,
+            );
+            let call_id = self.push_eval(
+                end,
+                MirValue::Call {
+                    callee: write_all,
+                    args: lowered_args,
+                },
+                MirValueType::Unknown,
+            );
+            return (end, Some(call_id));
+        }
+
         let should_inline = force_inline
             || callee_name
                 .as_ref()
@@ -2505,8 +2648,25 @@ impl FunctionLowerer {
                         || name.ends_with("::impl_map")
                 })
                 .unwrap_or(false);
+        let specialized_callee_name = callee_name
+            .as_ref()
+            .and_then(|name| self.maybe_specialize_any_call(name, args, Some(&lowered_args), 0))
+            .or(callee_name.clone());
+        let call_target_name = specialized_callee_name.clone();
+        let call_callee_value = if call_target_name.as_ref() != callee_name.as_ref() {
+            call_target_name.as_ref().map(|name| {
+                self.push_eval(
+                    end,
+                    MirValue::Ident(name.clone()),
+                    MirValueType::FunctionPointer,
+                )
+            })
+        } else {
+            None
+        };
+
         if should_inline {
-            if let Some(name) = &callee_name {
+            if let Some(name) = &call_target_name {
                 let debug_inline = std::env::var("DYN_DEBUG_INLINE")
                     .ok()
                     .as_deref()
@@ -2524,16 +2684,17 @@ impl FunctionLowerer {
             }
         }
 
-        let result_ty = self.infer_call_result_type(callee_value, 0);
+        let effective_callee_value = call_callee_value.unwrap_or(callee_value);
+        let result_ty = self.infer_call_result_type(effective_callee_value, 0);
         let call_id = self.push_eval(
             end,
             MirValue::Call {
-                callee: callee_value,
+                callee: effective_callee_value,
                 args: lowered_args,
             },
             result_ty,
         );
-        if let Some(name) = callee_name {
+        if let Some(name) = call_target_name {
             if self.function_returns_errorable_aggregate(&name) {
                 self.errorable_aggregate_values.insert(call_id);
             } else if self.function_returns_errorable_scalar(&name) {
@@ -2591,6 +2752,7 @@ impl FunctionLowerer {
             fn_name.to_string(),
             shared,
         );
+        sub_lowerer.function.return_type = function_expr_return_hint(fn_expr);
         sub_lowerer.comptime_known_locals = comptime_locals
             .cloned()
             .unwrap_or_else(|| self.current_comptime_locals());
@@ -4354,6 +4516,15 @@ impl FunctionLowerer {
     fn register_declared_function_expr(&mut self, name: String, expr: HirExpr) {
         self.function_exprs.insert(name.clone(), expr.clone());
         self.inline_function_names.insert(name.clone());
+        self.function_return_hints
+            .insert(name.clone(), function_expr_return_hint(&expr));
+        self.function_return_types.insert(
+            name.clone(),
+            function_expr_return_hint(&expr)
+                .as_deref()
+                .map(parse_type_hint)
+                .unwrap_or(MirValueType::Unknown),
+        );
 
         let mut registry = self.declared_functions.borrow_mut();
         registry.function_exprs.insert(name.clone(), expr.clone());
@@ -4408,6 +4579,301 @@ impl FunctionLowerer {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn sanitize_specialization_part(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for ch in text.chars() {
+            if ch.is_ascii_alphanumeric() {
+                out.push(ch);
+            } else {
+                out.push('_');
+            }
+        }
+        out
+    }
+
+    fn clone_function_with_param_hints(
+        &self,
+        expr: &HirExpr,
+        param_hints: &[Option<String>],
+    ) -> Option<HirExpr> {
+        let kind = match &expr.kind {
+            HirExprKind::Function {
+                params,
+                param_types: _,
+                param_defaults,
+                return_type,
+                has_explicit_return_type,
+                body,
+            } => HirExprKind::Function {
+                params: params.clone(),
+                param_types: param_hints.to_vec(),
+                param_defaults: param_defaults.clone(),
+                return_type: return_type.clone(),
+                has_explicit_return_type: *has_explicit_return_type,
+                body: body.clone(),
+            },
+            HirExprKind::Inline { expr } => {
+                let inner = self.clone_function_with_param_hints(expr, param_hints)?;
+                HirExprKind::Inline {
+                    expr: Box::new(inner),
+                }
+            }
+            _ => return None,
+        };
+        Some(HirExpr {
+            kind,
+            span: expr.span,
+        })
+    }
+
+    fn infer_hir_expr_type_hint(&mut self, expr: &HirExpr) -> Option<String> {
+        match &expr.kind {
+            HirExprKind::Literal(HirLiteral::Bool(_)) => Some("u1".to_string()),
+            HirExprKind::Literal(HirLiteral::Integer(_)) => Some("i32".to_string()),
+            HirExprKind::Literal(HirLiteral::Float(_)) => Some("f64".to_string()),
+            HirExprKind::Literal(HirLiteral::String(_)) => Some("[]u8".to_string()),
+            HirExprKind::Literal(HirLiteral::Null) => Some("null".to_string()),
+            HirExprKind::Ident(name) => {
+                let specialized_param_hint = self
+                    .function_param_names
+                    .get(&self.function.name)
+                    .and_then(|params| params.iter().position(|param| param == name))
+                    .and_then(|idx| self.current_param_type_hints.get(idx))
+                    .and_then(|hint| hint.clone());
+                specialized_param_hint
+                    .or_else(|| self.local_type_hints.get(name).cloned())
+                    .or_else(|| {
+                        self.named_type_literals
+                            .contains_key(name)
+                            .then_some(name.clone())
+                    })
+                    .or_else(|| {
+                        let expr = self.function_exprs.get(name).cloned().or_else(|| {
+                            self.declared_functions
+                                .borrow()
+                                .function_exprs
+                                .get(name)
+                                .cloned()
+                        });
+                        expr.and_then(|expr| (!is_function_expr(&expr)).then_some(expr))
+                            .and_then(|expr| self.infer_hir_expr_type_hint(&expr))
+                    })
+            }
+            HirExprKind::TypeLiteral(_) => Some("type".to_string()),
+            HirExprKind::StructLiteral { root_type, .. } => root_type.clone(),
+            HirExprKind::FieldAccess { base, field } => {
+                if let HirExprKind::Ident(base_name) = &base.kind {
+                    if let Some(import_path) = self.top_level_import_path(base_name) {
+                        if let Some(qualified) =
+                            self.resolve_import_member_ident(import_path, field)
+                        {
+                            let expr = self.function_exprs.get(&qualified).cloned().or_else(|| {
+                                self.declared_functions
+                                    .borrow()
+                                    .function_exprs
+                                    .get(&qualified)
+                                    .cloned()
+                            });
+                            if let Some(expr) = expr {
+                                if !is_function_expr(&expr) {
+                                    return self.infer_hir_expr_type_hint(&expr);
+                                }
+                            }
+                            if let Some(Some(hint)) = self.function_return_hints.get(&qualified) {
+                                return Some(hint.clone());
+                            }
+                        }
+                    }
+                }
+                let base_ty = self.infer_hir_expr_type_hint(base)?;
+                let descriptor = self
+                    .named_type_literals
+                    .get(&base_ty)
+                    .cloned()
+                    .unwrap_or(base_ty);
+                struct_field_names_with_types(&descriptor)
+                    .into_iter()
+                    .find(|(name, _)| name == field)
+                    .map(|(_, ty)| ty)
+            }
+            HirExprKind::Call { callee, args } => {
+                if let HirExprKind::Ident(name) = &callee.kind {
+                    if name == "$field" && args.len() == 2 {
+                        let base_ty = self.infer_hir_expr_type_hint(&args[0].value)?;
+                        let field_name = match self.try_eval_comptime_expr_with_locals(
+                            &args[1].value,
+                            0,
+                            &mut self.current_comptime_locals(),
+                        ) {
+                            Some(ComptimeValue::Literal(HirLiteral::String(s))) => s,
+                            _ => return None,
+                        };
+                        let descriptor = self
+                            .named_type_literals
+                            .get(&base_ty)
+                            .cloned()
+                            .unwrap_or(base_ty);
+                        return struct_field_names_with_types(&descriptor)
+                            .into_iter()
+                            .find(|(name, _)| name == &field_name)
+                            .map(|(_, ty)| ty);
+                    }
+                }
+                let call_expr = self.specialize_expr_with_comptime_locals(
+                    expr,
+                    &self.current_comptime_locals(),
+                );
+                let HirExprKind::Call { callee, .. } = &call_expr.kind else {
+                    return None;
+                };
+                let callee_name = match &callee.kind {
+                    HirExprKind::Ident(name) => Some(name.clone()),
+                    HirExprKind::FieldAccess { base, field } => {
+                        let HirExprKind::Ident(base_name) = &base.kind else {
+                            None?
+                        };
+                        let type_name = self
+                            .local_type_hints
+                            .get(base_name)
+                            .cloned()
+                            .unwrap_or_else(|| base_name.clone());
+                        let resolved_owner = self
+                            .named_type_literals
+                            .get(&type_name)
+                            .cloned()
+                            .unwrap_or(type_name);
+                        Some(format!("{}__{}", resolved_owner, field))
+                    }
+                    _ => None,
+                }?;
+                self.function_return_hints.get(&callee_name).cloned().flatten()
+            }
+            HirExprKind::Slice { base, .. } => self.infer_hir_expr_type_hint(base),
+            HirExprKind::Comptime { expr } | HirExprKind::Inline { expr } => {
+                self.infer_hir_expr_type_hint(expr)
+            }
+            _ => None,
+        }
+    }
+
+    fn maybe_specialize_any_call(
+        &mut self,
+        callee_name: &str,
+        args: &[crate::compiler::hir::HirCallArg],
+        lowered_args: Option<&[MirValueId]>,
+        arg_offset: usize,
+    ) -> Option<String> {
+        let param_hints = self.function_param_type_hints.get(callee_name)?.clone();
+        if !param_hints
+            .iter()
+            .any(|hint| hint.as_deref() == Some("any"))
+        {
+            return None;
+        }
+        let function_expr = self.function_exprs.get(callee_name).cloned().or_else(|| {
+            self.declared_functions
+                .borrow()
+                .function_exprs
+                .get(callee_name)
+                .cloned()
+        })?;
+
+        let mut specialized_hints = param_hints.clone();
+        let mut changed = false;
+        for (idx, hint) in param_hints.iter().enumerate() {
+            if hint.as_deref() != Some("any") {
+                continue;
+            }
+            let arg_idx = idx.checked_sub(arg_offset)?;
+            let arg = &args.get(arg_idx)?.value;
+            let actual = self
+                .infer_hir_expr_type_hint(arg)
+                .or_else(|| self.infer_anonymous_struct_type_hint(arg))
+                .or_else(|| {
+                    lowered_args
+                        .and_then(|values| values.get(idx))
+                        .copied()
+                        .and_then(|value| self.infer_type_hint_from_value(value))
+                })?;
+            specialized_hints[idx] = Some(actual);
+            changed = true;
+        }
+        if !changed {
+            return None;
+        }
+
+        let suffix = specialized_hints
+            .iter()
+            .map(|hint| {
+                hint.as_deref()
+                    .map(Self::sanitize_specialization_part)
+                    .unwrap_or_else(|| "unknown".to_string())
+            })
+            .collect::<Vec<_>>()
+            .join("$");
+        let specialized_name = format!("{callee_name}$spec${suffix}");
+        if self.function_exprs.contains_key(&specialized_name)
+            || self
+                .declared_functions
+                .borrow()
+                .function_exprs
+                .contains_key(&specialized_name)
+        {
+            return Some(specialized_name);
+        }
+
+        let specialized_expr =
+            self.clone_function_with_param_hints(&function_expr, &specialized_hints)?;
+        self.register_declared_function_expr(specialized_name.clone(), specialized_expr.clone());
+        self.hoist_declared_function(&specialized_name, &specialized_expr, None);
+        Some(specialized_name)
+    }
+
+    fn infer_anonymous_struct_type_hint(&mut self, expr: &HirExpr) -> Option<String> {
+        let HirExprKind::StructLiteral {
+            root_type: None,
+            fields,
+        } = &expr.kind
+        else {
+            return None;
+        };
+        let mut parts = Vec::with_capacity(fields.len());
+        for (name, value) in fields {
+            let ty = self
+                .infer_hir_expr_type_hint(value)
+                .or_else(|| self.infer_anonymous_struct_type_hint(value))?;
+            parts.push(format!("{name}:{ty}"));
+        }
+        Some(format!("struct{{{}}}", parts.join(",")))
+    }
+
+    fn infer_type_hint_from_value(&self, value: MirValueId) -> Option<String> {
+        if let Some(fields) = self.struct_fields.get(&value) {
+            let mut parts = Vec::with_capacity(fields.len());
+            for (name, field_value) in fields {
+                let ty = self.infer_type_hint_from_value(*field_value)?;
+                parts.push(format!("{name}:{ty}"));
+            }
+            return Some(format!("struct{{{}}}", parts.join(",")));
+        }
+
+        match self.value_types.get(&value).cloned().unwrap_or(MirValueType::Unknown) {
+            MirValueType::Bool => Some("u1".to_string()),
+            MirValueType::BytesSlice => Some("[]u8".to_string()),
+            MirValueType::Int { signed: true, bits } => Some(format!("i{bits}")),
+            MirValueType::Int {
+                signed: false,
+                bits,
+            } => Some(format!("u{bits}")),
+            MirValueType::Float { bits } => Some(format!("f{bits}")),
+            MirValueType::Type => Some("type".to_string()),
+            MirValueType::Function | MirValueType::FunctionPointer | MirValueType::Closure => {
+                Some("fn".to_string())
+            }
+            MirValueType::Unknown => None,
         }
     }
 
@@ -4548,6 +5014,8 @@ impl FunctionLowerer {
                     name,
                     mutable,
                     type_hint,
+                    associated_owner,
+                    associated_member,
                     value,
                 } => {
                     let mut inner = bound.clone();
@@ -4558,6 +5026,8 @@ impl FunctionLowerer {
                         type_hint: type_hint
                             .as_ref()
                             .map(|ty| substitute_type_locals(ty, locals)),
+                        associated_owner: associated_owner.clone(),
+                        associated_member: associated_member.clone(),
                         value: Box::new(specialize(value, locals, &inner)),
                     }
                 }
@@ -4612,6 +5082,7 @@ impl FunctionLowerer {
                     params,
                     param_types,
                     param_defaults,
+                    return_type,
                     has_explicit_return_type,
                     body,
                 } => {
@@ -4633,6 +5104,9 @@ impl FunctionLowerer {
                                     .map(|value| specialize(value, locals, &inner))
                             })
                             .collect(),
+                        return_type: return_type
+                            .as_ref()
+                            .map(|ty| substitute_type_locals(ty, locals)),
                         has_explicit_return_type: *has_explicit_return_type,
                         body: Box::new(specialize(body, locals, &inner)),
                     }
@@ -6362,13 +6836,161 @@ impl FunctionLowerer {
             MirValueType::Function | MirValueType::FunctionPointer | MirValueType::Closure => {
                 "fn".to_string()
             }
-            MirValueType::Unknown => return None,
+            MirValueType::Unknown => {
+                let locals = self.current_comptime_locals();
+                self.comptime_type_name_from_expr_with_locals(&args[0].value, 0, &locals)?
+            }
         };
         Some(ComptimeValue::Type(ty_name))
     }
 }
 
 impl FunctionLowerer {
+    fn qualified_member_value_and_type(&self, qualified: &str) -> (MirValue, MirValueType) {
+        let is_global = self.global_names.contains(qualified)
+            || self
+                .function_exprs
+                .get(qualified)
+                .is_some_and(|expr| !is_function_expr(expr));
+        if is_global {
+            let hinted = self
+                .function_return_hints
+                .get(qualified)
+                .and_then(|hint| hint.as_deref())
+                .map(parse_type_hint)
+                .unwrap_or(MirValueType::Unknown);
+            let ty = if hinted == MirValueType::Unknown {
+                MirValueType::Int {
+                    signed: false,
+                    bits: 64,
+                }
+            } else {
+                hinted
+            };
+            (
+                MirValue::GlobalLoad {
+                    name: qualified.to_string(),
+                },
+                ty,
+            )
+        } else {
+            (
+                MirValue::Ident(qualified.to_string()),
+                self.function_return_types
+                    .get(qualified)
+                    .cloned()
+                    .unwrap_or(MirValueType::FunctionPointer),
+            )
+        }
+    }
+
+    fn associated_owner_name(&mut self, expr: &HirExpr) -> Option<String> {
+        match &expr.kind {
+            HirExprKind::TypeLiteral(name) => Some(name.clone()),
+            HirExprKind::StructLiteral {
+                root_type: Some(root_type),
+                ..
+            } => Some(root_type.clone()),
+            HirExprKind::Ident(name) => {
+                if let Some(type_hint) = self.local_type_hints.get(name) {
+                    if let Some((base_name, field)) = type_hint.split_once('.') {
+                        if let Some(import_path) = self.top_level_import_path(base_name) {
+                            if self
+                                .resolve_import_member_ident(import_path, field)
+                                .is_some()
+                            {
+                                return Some(field.to_string());
+                            }
+                        }
+                    }
+                    if self.named_type_literals.contains_key(type_hint)
+                        || parse_type_hint(type_hint) != MirValueType::Unknown
+                    {
+                        return Some(type_hint.clone());
+                    }
+                }
+                if self.named_type_literals.contains_key(name) || parse_type_hint(name) != MirValueType::Unknown
+                {
+                    return Some(name.clone());
+                }
+                let target = self.function_exprs.get(name).cloned().or_else(|| {
+                    self.declared_functions
+                        .borrow()
+                        .function_exprs
+                        .get(name)
+                        .cloned()
+                })?;
+                match &target.kind {
+                    HirExprKind::TypeLiteral(_) => Some(name.clone()),
+                    HirExprKind::StructLiteral {
+                        root_type: Some(root_type),
+                        ..
+                    } => Some(root_type.clone()),
+                    _ => self.infer_hir_expr_type_hint(&target),
+                }
+            }
+            HirExprKind::FieldAccess { base, field } => {
+                if let HirExprKind::Ident(base_name) = &base.kind {
+                    if let Some(import_path) = self.top_level_import_path(base_name) {
+                        if let Some(qualified) =
+                            self.resolve_import_member_ident(import_path, field)
+                        {
+                            let target = self.function_exprs.get(&qualified).cloned().or_else(|| {
+                                self.declared_functions
+                                    .borrow()
+                                    .function_exprs
+                                    .get(&qualified)
+                                    .cloned()
+                            });
+                            if let Some(target) = target {
+                                return match &target.kind {
+                                    HirExprKind::TypeLiteral(_) => Some(field.clone()),
+                                    HirExprKind::StructLiteral {
+                                        root_type: Some(root_type),
+                                        ..
+                                    } => Some(root_type.clone()),
+                                    _ => self.infer_hir_expr_type_hint(&target),
+                                };
+                            }
+                        }
+                    }
+                }
+                self.infer_hir_expr_type_hint(expr)
+            }
+            _ => self.infer_hir_expr_type_hint(expr),
+        }
+    }
+
+    fn resolve_associated_method_name(&self, owner_hint: &str, field: &str) -> Option<String> {
+        let mut owners = vec![owner_hint.to_string()];
+        if let Some(resolved) = self.named_type_literals.get(owner_hint) {
+            if resolved != owner_hint {
+                owners.push(resolved.clone());
+            }
+        }
+        for owner in owners {
+            let method_key = format!("{}__{}", owner, field);
+            let qualified_method_key = self
+                .function_exprs
+                .keys()
+                .find(|name| name.ends_with(&format!("::{method_key}")))
+                .cloned()
+                .or_else(|| {
+                    self.comptime_local_function_exprs
+                        .keys()
+                        .find(|name| name.ends_with(&format!("::{method_key}")))
+                        .cloned()
+                });
+            let method_key = qualified_method_key.unwrap_or(method_key);
+            if self.function_exprs.contains_key(&method_key)
+                || self.comptime_local_function_exprs.contains_key(&method_key)
+            {
+                return Some(method_key);
+            }
+        }
+        None
+    }
+
     pub(super) fn top_level_import_path(&self, name: &str) -> Option<&str> {
         self.function_exprs.get(name).and_then(|expr| {
             if let HirExprKind::Use { path } = &expr.kind {

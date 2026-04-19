@@ -1,7 +1,7 @@
 module mem
 
 pub ArenaPos := usize
-ARENA_CAPACITY := 64 * 1024 * 1024
+ARENA_CAPACITY: usize = $as(usize, 64) * $as(usize, 1024) * $as(usize, 1024)
 
 pub Arena := struct {
     page: PageAllocator,

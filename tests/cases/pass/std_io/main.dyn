@@ -15,7 +15,7 @@ main := () i32 {
     io.write_hex(writer, 255)
     io.write_hex_upper(writer, 255)
     io.write_float(writer, 1.5)
-    writer.println("x")
+    writer.println("{}", .{"x"})
     arena.deinit()
     return 0
 }

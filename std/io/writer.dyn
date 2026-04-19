@@ -1,6 +1,7 @@
 module io
 
 str := use "std/str"
+Allocator := (use "std/mem").Allocator
 
 pub Writer := struct {
     ctx: *any,
@@ -50,6 +51,20 @@ pub write_hex_upper := (w: Writer, n: u64) {
     return
 }
 
+pub write_binary := (w: Writer, n: u64) {
+    buf: [64]u8 = []
+    text := str.uint_to_binary_buf(n, buf[..])
+    _ = w.write_all(text)
+    return
+}
+
+pub write_octal := (w: Writer, n: u64) {
+    buf: [32]u8 = []
+    text := str.uint_to_octal_buf(n, buf[..])
+    _ = w.write_all(text)
+    return
+}
+
 pub Writer.write_byte := (self: Writer, byte: u8) usize {
     buf: [1]u8 = [byte]
     return self.write_fn(self.ctx, buf[..])
@@ -65,7 +80,8 @@ pub Writer.write_all := (self: Writer, buf: []u8) usize {
     return wrote
 }
 
-pub Writer.print := (self: Writer, v: any) {
+// Type-dispatched single-value writer. Structs are printed as {field: value, ...}.
+pub Writer.write_value := (self: Writer, v: any) {
     return comp match $typeof(v) {
         []u8: {
             _ = self.write_all(v)
@@ -79,27 +95,250 @@ pub Writer.print := (self: Writer, v: any) {
             }
             return
         },
-        u8: { write_uint(self, $as(u64, v)); return },
-        u16: { write_uint(self, $as(u64, v)); return },
-        u32: { write_uint(self, $as(u64, v)); return },
-        u64: { write_uint(self, $as(u64, v)); return },
+        u8:    { write_uint(self, $as(u64, v)); return },
+        u16:   { write_uint(self, $as(u64, v)); return },
+        u32:   { write_uint(self, $as(u64, v)); return },
+        u64:   { write_uint(self, v); return },
         usize: { write_uint(self, $as(u64, v)); return },
-        i8: { write_int(self, $as(i64, v)); return },
-        i16: { write_int(self, $as(i64, v)); return },
-        i32: { write_int(self, $as(i64, v)); return },
-        i64: { write_int(self, $as(i64, v)); return },
+        i8:    { write_int(self, $as(i64, v)); return },
+        i16:   { write_int(self, $as(i64, v)); return },
+        i32:   { write_int(self, $as(i64, v)); return },
+        i64:   { write_int(self, v); return },
         isize: { write_int(self, $as(i64, v)); return },
-        f32: { write_float(self, $as(f64, v)); return },
-        f64: { write_float(self, $as(f64, v)); return },
+        f32:   { write_float(self, $as(f64, v)); return },
+        f64:   { write_float(self, v); return },
         _: {
-            _ = self.write_all("<value>")
+            mut first: u1 = true
+            inline for $fields(v): |f| {
+                if first { _ = self.write_byte('{') }
+                if !first { _ = self.write_all(", ") }
+                first = false
+                _ = self.write_all(f.name)
+                _ = self.write_all(": ")
+                self.write_value($field(v, f.name))
+            }
+            if first {
+                _ = self.write_all("<")
+                _ = self.write_all($typename($typeof(v)))
+                _ = self.write_all(">")
+            } else {
+                _ = self.write_byte('}')
+            }
             return
         },
     }
 }
 
-pub Writer.println := (self: Writer, v: any) {
-    self.print(v)
-    self.write_byte('\n')
+pub Writer.println := (self: Writer, fmt: []u8, args: any) {
+    self.print(fmt, args)
+    _ = self.write_byte('\n')
     return
+}
+
+// Writes a struct's fields as `{field: value, ...}`. Only valid for struct types.
+pub Writer.write_struct := (self: Writer, v: any) {
+    _ = self.write_byte('{')
+    mut first: u1 = true
+    inline for $fields(v): |f| {
+        if !first { _ = self.write_all(", ") }
+        first = false
+        _ = self.write_all(f.name)
+        _ = self.write_all(": ")
+        self.write_value($field(v, f.name))
+    }
+    _ = self.write_byte('}')
+    return
+}
+
+// Internal: writes a single format arg with the given specifier.
+// Specifiers: "" or "any" = type dispatch, "s" = string, "d" = decimal,
+//             "x"/"X" = hex lower/upper, "b" = binary, "o" = octal, "c" = char byte.
+write_fmt_arg := (w: Writer, spec: []u8, v: any) {
+    return comp match $typeof(v) {
+        []u8: {
+            _ = w.write_all(v)
+            return
+        },
+        u1: {
+            if v != false { _ = w.write_all("true") } else { _ = w.write_all("false") }
+            return
+        },
+        u8: {
+            if spec.len == 1 && spec[0] == 'c' { _ = w.write_byte(v); return }
+            if spec.len == 1 && spec[0] == 'x' { write_hex(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'X' { write_hex_upper(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'b' { write_binary(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'o' { write_octal(w, $as(u64, v)); return }
+            write_uint(w, $as(u64, v))
+            return
+        },
+        u16: {
+            if spec.len == 1 && spec[0] == 'x' { write_hex(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'X' { write_hex_upper(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'b' { write_binary(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'o' { write_octal(w, $as(u64, v)); return }
+            write_uint(w, $as(u64, v))
+            return
+        },
+        u32: {
+            if spec.len == 1 && spec[0] == 'x' { write_hex(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'X' { write_hex_upper(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'b' { write_binary(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'o' { write_octal(w, $as(u64, v)); return }
+            write_uint(w, $as(u64, v))
+            return
+        },
+        u64: {
+            if spec.len == 1 && spec[0] == 'x' { write_hex(w, v); return }
+            if spec.len == 1 && spec[0] == 'X' { write_hex_upper(w, v); return }
+            if spec.len == 1 && spec[0] == 'b' { write_binary(w, v); return }
+            if spec.len == 1 && spec[0] == 'o' { write_octal(w, v); return }
+            write_uint(w, v)
+            return
+        },
+        usize: {
+            if spec.len == 1 && spec[0] == 'x' { write_hex(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'X' { write_hex_upper(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'b' { write_binary(w, $as(u64, v)); return }
+            if spec.len == 1 && spec[0] == 'o' { write_octal(w, $as(u64, v)); return }
+            write_uint(w, $as(u64, v))
+            return
+        },
+        i8:    { write_int(w, $as(i64, v)); return },
+        i16:   { write_int(w, $as(i64, v)); return },
+        i32:   { write_int(w, $as(i64, v)); return },
+        i64:   { write_int(w, v); return },
+        isize: { write_int(w, $as(i64, v)); return },
+        f32:   { write_float(w, $as(f64, v)); return },
+        f64:   { write_float(w, v); return },
+        _: {
+            w.write_value(v)
+            return
+        },
+    }
+}
+
+// Zig-style format print. Pass args as an anonymous struct: .{a, b, c}.
+// Specifiers: {} or {any} = type dispatch, {s} = string, {d} = decimal,
+//             {x}/{X} = hex lower/upper, {b} = binary, {o} = octal, {c} = char byte.
+// Escape braces with {{ and }}.
+pub Writer.print := (self: Writer, fmt: []u8, args: any) {
+    mut fmt_i: usize = 0
+    inline for $fields(args): |f| {
+        for fmt_i < fmt.len: {
+            ch := fmt[fmt_i]
+            if ch == '{' {
+                if fmt_i + 1 < fmt.len && fmt[fmt_i + 1] == '{' {
+                    _ = self.write_byte('{')
+                    fmt_i += 2
+                } else {
+                    break
+                }
+            } else if ch == '}' {
+                if fmt_i + 1 < fmt.len && fmt[fmt_i + 1] == '}' {
+                    _ = self.write_byte('}')
+                    fmt_i += 2
+                } else {
+                    _ = self.write_byte(ch)
+                    fmt_i += 1
+                }
+            } else {
+                _ = self.write_byte(ch)
+                fmt_i += 1
+            }
+        }
+        if fmt_i < fmt.len && fmt[fmt_i] == '{' {
+            mut j := fmt_i + 1
+            for j < fmt.len && fmt[j] != '}': { j += 1 }
+            spec := fmt[fmt_i + 1..j]
+            write_fmt_arg(self, spec, $field(args, f.name))
+            if j < fmt.len {
+                fmt_i = j + 1
+            } else {
+                fmt_i = j
+            }
+        }
+    }
+    for fmt_i < fmt.len: {
+        ch := fmt[fmt_i]
+        if ch == '{' {
+            if fmt_i + 1 < fmt.len && fmt[fmt_i + 1] == '{' {
+                _ = self.write_byte('{')
+                fmt_i += 2
+            } else {
+                _ = self.write_byte(ch)
+                fmt_i += 1
+            }
+        } else if ch == '}' {
+            if fmt_i + 1 < fmt.len && fmt[fmt_i + 1] == '}' {
+                _ = self.write_byte('}')
+                fmt_i += 2
+            } else {
+                _ = self.write_byte(ch)
+                fmt_i += 1
+            }
+        } else {
+            _ = self.write_byte(ch)
+            fmt_i += 1
+        }
+    }
+    return
+}
+
+// Fixed-size buffer writer. Create on the stack, get a Writer via .writer().
+pub FixedBuf := struct {
+    buf: []u8,
+    pos: usize,
+}
+
+fixed_buf_write_fn := (ctx: *any, data: []u8) usize {
+    fb := $as(*FixedBuf, ctx)
+    avail := fb.buf.len - fb.pos
+    mut n := data.len
+    if n > avail { n = avail }
+    if n > 0 {
+        dst := $as(usize, fb.buf.ptr) + fb.pos
+        src := $as(usize, data.ptr)
+        $memcpy($as(*any, dst), $as(*any, src), n)
+        fb.pos += n
+    }
+    return n
+}
+
+pub FixedBuf.writer := (self: *FixedBuf) Writer => .{
+    ctx: $as(*any, self),
+    write_fn: fixed_buf_write_fn,
+}
+
+pub FixedBuf.written := (self: FixedBuf) []u8 => self.buf[0..self.pos]
+
+// Counting writer: sinks all writes and tracks total bytes written.
+pub CountingBuf := struct { len: usize }
+
+counting_write_fn := (ctx: *any, data: []u8) usize {
+    cb := $as(*CountingBuf, ctx)
+    cb.len += data.len
+    return data.len
+}
+
+pub CountingBuf.writer := (self: *CountingBuf) Writer => .{
+    ctx: $as(*any, self),
+    write_fn: counting_write_fn,
+}
+
+// Format into a caller-provided stack buffer. Returns the written slice.
+pub buf_print := (buf: []u8, fmt: []u8, args: any) []u8 {
+    mut fb := FixedBuf.{ buf: buf, pos: 0 }
+    fb.writer().print(fmt, args)
+    return fb.written()
+}
+
+// Format into a heap-allocated string. Returns null on allocation failure.
+pub alloc_print := (alloc: Allocator, fmt: []u8, args: any) ?[]u8 {
+    mut cb := CountingBuf.{ len: 0 }
+    cb.writer().print(fmt, args)
+    out := alloc.create_many(u8, cb.len) or return null
+    mut fb := FixedBuf.{ buf: out, pos: 0 }
+    fb.writer().print(fmt, args)
+    return fb.written()
 }

@@ -43,6 +43,7 @@ fn block_break_value_lowers_to_join_phi() {
                     params: vec!["cond".to_string()],
                     param_types: vec![Some("u1".to_string())],
                     param_defaults: Vec::new(),
+                    return_type: Some("i32".to_string()),
                     has_explicit_return_type: true,
                     body: Box::new(expr(HirExprKind::Block {
                         label: None,

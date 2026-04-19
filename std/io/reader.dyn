@@ -1,7 +1,5 @@
 module io
 
-Allocator := (use "std/mem").Allocator
-
 pub Reader := struct {
     ctx: *any,
     read_fn: (ctx: *any, buf: []u8) usize,

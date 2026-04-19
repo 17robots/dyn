@@ -117,6 +117,8 @@ pub enum HirExprKind {
         name: String,
         mutable: bool,
         type_hint: Option<String>,
+        associated_owner: Option<String>,
+        associated_member: Option<String>,
         value: Box<HirExpr>,
     },
     If {
@@ -169,6 +171,7 @@ pub enum HirExprKind {
         params: Vec<String>,
         param_types: Vec<Option<String>>,
         param_defaults: Vec<Option<HirExpr>>,
+        return_type: Option<String>,
         has_explicit_return_type: bool,
         body: Box<HirExpr>,
     },
@@ -275,6 +278,15 @@ struct BindingInfo {
     /// True when the binding holds a pointer to the nominal type (`*T`), so
     /// that `ptr.field` can be auto-dereferenced to `ptr.*.field`.
     is_ptr: bool,
+}
+
+#[derive(Default)]
+struct RewriteScope {
+    bindings: BTreeMap<String, BindingInfo>,
+    type_bindings: BTreeSet<String>,
+    static_methods: BTreeMap<(String, String), String>,
+    instance_methods: BTreeMap<(String, String), MethodTarget>,
+    call_result_nominals: BTreeMap<String, String>,
 }
 
 pub fn lower_module_units(units: &[ModuleUnit]) -> HirProgram {
@@ -800,6 +812,7 @@ fn prepend_outer_type_params_to_member_fn(
             mut params,
             mut param_types,
             param_defaults,
+            return_type,
             has_explicit_return_type,
             body,
         } => {
@@ -823,6 +836,7 @@ fn prepend_outer_type_params_to_member_fn(
                     params: all_params,
                     param_types: all_param_types,
                     param_defaults: all_param_defaults,
+                    return_type,
                     has_explicit_return_type,
                     body,
                 },
@@ -898,14 +912,14 @@ fn member_fn_expr(expr: &Expr) -> Option<&crate::compiler::ast::FnExpr> {
 }
 
 fn rewrite_method_calls(expr: HirExpr, method_index: &MethodIndex) -> HirExpr {
-    let mut scopes = vec![BTreeMap::<String, BindingInfo>::new()];
+    let mut scopes = vec![RewriteScope::default()];
     rewrite_method_calls_with_scopes(expr, method_index, &mut scopes)
 }
 
 fn rewrite_method_calls_with_scopes(
     expr: HirExpr,
     method_index: &MethodIndex,
-    scopes: &mut Vec<BTreeMap<String, BindingInfo>>,
+    scopes: &mut Vec<RewriteScope>,
 ) -> HirExpr {
     let span = expr.span;
     let kind = match expr.kind {
@@ -921,9 +935,8 @@ fn rewrite_method_calls_with_scopes(
             if let HirExprKind::FieldAccess { base, field } = callee.kind {
                 if is_type_receiver_expr(&base, scopes, method_index) {
                     if let Some(base_nominal) = infer_nominal_type(&base, scopes, method_index) {
-                        if let Some(synth) = method_index
-                            .static_methods
-                            .get(&(base_nominal, field.clone()))
+                        if let Some(synth) =
+                            lookup_static_method(&base_nominal, &field, scopes, method_index)
                         {
                             let mut method_args = Vec::new();
                             if let HirExprKind::Call {
@@ -971,9 +984,8 @@ fn rewrite_method_calls_with_scopes(
                 }
 
                 if let Some(base_nominal) = infer_nominal_type(&base, scopes, method_index) {
-                    if let Some(target) = method_index
-                        .instance_methods
-                        .get(&(base_nominal, field.clone()))
+                    if let Some(target) =
+                        lookup_instance_method(&base_nominal, &field, scopes, method_index)
                     {
                         let mut method_args = Vec::with_capacity(args.len() + 1);
                         let base_value =
@@ -996,7 +1008,7 @@ fn rewrite_method_calls_with_scopes(
                         return HirExpr {
                             kind: HirExprKind::Call {
                                 callee: Box::new(HirExpr {
-                                    kind: HirExprKind::Ident(target.name.clone()),
+                                    kind: HirExprKind::Ident(target.name),
                                     span,
                                 }),
                                 args: method_args,
@@ -1065,17 +1077,13 @@ fn rewrite_method_calls_with_scopes(
             // Auto-deref: if the base is a pointer to a struct that has this field,
             // insert a DerefAccess automatically so `ptr.field` works like `ptr.*.field`.
             let auto_deref = if let HirExprKind::Ident(name) = &base.kind {
-                scopes
-                    .iter()
-                    .rev()
-                    .find_map(|s| s.get(name))
-                    .map_or(false, |info| {
-                        info.is_ptr
-                            && method_index
-                                .struct_field_names
-                                .get(&info.nominal_type)
-                                .map_or(false, |fields| fields.contains(&field))
-                    })
+                lookup_binding_info(name, scopes).map_or(false, |info| {
+                    info.is_ptr
+                        && method_index
+                            .struct_field_names
+                            .get(&info.nominal_type)
+                            .map_or(false, |fields| fields.contains(&field))
+                })
             } else {
                 false
             };
@@ -1166,7 +1174,7 @@ fn rewrite_method_calls_with_scopes(
                 .collect(),
         },
         HirExprKind::Block { label, body } => {
-            scopes.push(BTreeMap::new());
+            scopes.push(RewriteScope::default());
             let mut out = Vec::with_capacity(body.len());
             for expr in body {
                 let rewritten = rewrite_method_calls_with_scopes(expr, method_index, scopes);
@@ -1174,9 +1182,34 @@ fn rewrite_method_calls_with_scopes(
                     name,
                     value,
                     type_hint,
+                    associated_owner,
+                    associated_member,
                     ..
                 } = &rewritten.kind
                 {
+                    if binds_type_value(value) {
+                        if let Some(scope) = scopes.last_mut() {
+                            scope.type_bindings.insert(name.clone());
+                        }
+                    }
+                    if let (Some(owner), Some(member)) = (associated_owner, associated_member) {
+                        if let Some(scope) = scopes.last_mut() {
+                            scope.static_methods
+                                .insert((owner.clone(), member.clone()), name.clone());
+                            if let Some(receiver) = local_receiver_style(value, owner) {
+                                scope.instance_methods.insert(
+                                    (owner.clone(), member.clone()),
+                                    MethodTarget {
+                                        name: name.clone(),
+                                        receiver,
+                                    },
+                                );
+                            }
+                            if let Some(nominal) = local_function_return_nominal(value) {
+                                scope.call_result_nominals.insert(name.clone(), nominal);
+                            }
+                        }
+                    }
                     let value_nominal = infer_binding_nominal(value, scopes, method_index);
                     // Extract nominal type and pointer flag from type hint or inferred value type.
                     let (nominal_opt, is_ptr) = if let Some(hint) = type_hint {
@@ -1191,7 +1224,7 @@ fn rewrite_method_calls_with_scopes(
                     };
                     if let Some(nominal) = nominal_opt {
                         if let Some(scope) = scopes.last_mut() {
-                            scope.insert(
+                            scope.bindings.insert(
                                 name.clone(),
                                 BindingInfo {
                                     nominal_type: nominal,
@@ -1210,11 +1243,15 @@ fn rewrite_method_calls_with_scopes(
             name,
             mutable,
             type_hint,
+            associated_owner,
+            associated_member,
             value,
         } => HirExprKind::Let {
             name,
             mutable,
             type_hint,
+            associated_owner,
+            associated_member,
             value: Box::new(rewrite_method_calls_with_scopes(
                 *value,
                 method_index,
@@ -1343,10 +1380,11 @@ fn rewrite_method_calls_with_scopes(
             params,
             param_types,
             param_defaults,
+            return_type,
             has_explicit_return_type,
             body,
         } => {
-            scopes.push(BTreeMap::new());
+            scopes.push(RewriteScope::default());
             if let Some(scope) = scopes.last_mut() {
                 for (idx, param_name) in params.iter().enumerate() {
                     let Some(type_hint) = param_types.get(idx).and_then(|hint| hint.as_ref())
@@ -1356,7 +1394,7 @@ fn rewrite_method_calls_with_scopes(
                     let Some(nominal) = nominal_name_from_type_hint_text(type_hint) else {
                         continue;
                     };
-                    scope.insert(
+                    scope.bindings.insert(
                         param_name.clone(),
                         BindingInfo {
                             nominal_type: nominal,
@@ -1379,6 +1417,7 @@ fn rewrite_method_calls_with_scopes(
                 params,
                 param_types,
                 param_defaults: rewritten_defaults,
+                return_type,
                 body: Box::new(rewritten_body),
                 has_explicit_return_type,
             }
@@ -1407,9 +1446,127 @@ fn import_alias_for_type_receiver(expr: &HirExpr, method_index: &MethodIndex) ->
     }
 }
 
+fn binds_type_value(value: &HirExpr) -> bool {
+    matches!(&value.kind, HirExprKind::TypeLiteral(_))
+}
+
+fn local_receiver_style(value: &HirExpr, owner: &str) -> Option<ReceiverStyle> {
+    let HirExprKind::Function { param_types, .. } = &value.kind else {
+        let HirExprKind::Inline { expr } = &value.kind else {
+            return None;
+        };
+        let HirExprKind::Function { param_types, .. } = &expr.kind else {
+            return None;
+        };
+        return local_receiver_style_from_param_types(param_types, owner);
+    };
+    local_receiver_style_from_param_types(param_types, owner)
+}
+
+fn local_receiver_style_from_param_types(
+    param_types: &[Option<String>],
+    owner: &str,
+) -> Option<ReceiverStyle> {
+    let first = param_types.first()?.as_deref()?;
+    if first == owner {
+        Some(ReceiverStyle::Value)
+    } else {
+        first
+            .strip_prefix('*')
+            .map(str::trim)
+            .map(|rest| rest.trim_start_matches("mut").trim_start())
+            .filter(|ty| *ty == owner)
+            .map(|_| ReceiverStyle::Ptr)
+    }
+}
+
+fn local_function_return_nominal(value: &HirExpr) -> Option<String> {
+    let return_type = match &value.kind {
+        HirExprKind::Function { return_type, .. } => return_type.clone(),
+        HirExprKind::Inline { expr } => match &expr.kind {
+            HirExprKind::Function { return_type, .. } => return_type.clone(),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    (!is_predeclared_type_name(&return_type)).then_some(return_type)
+}
+
+fn lookup_binding_info<'a>(name: &str, scopes: &'a [RewriteScope]) -> Option<&'a BindingInfo> {
+    scopes
+        .iter()
+        .rev()
+        .find_map(|scope| scope.bindings.get(name))
+}
+
+fn scope_contains_type_binding(name: &str, scopes: &[RewriteScope]) -> bool {
+    scopes
+        .iter()
+        .rev()
+        .any(|scope| scope.type_bindings.contains(name))
+}
+
+fn lookup_static_method(
+    owner: &str,
+    member: &str,
+    scopes: &[RewriteScope],
+    method_index: &MethodIndex,
+) -> Option<String> {
+    scopes
+        .iter()
+        .rev()
+        .find_map(|scope| {
+            scope
+                .static_methods
+                .get(&(owner.to_string(), member.to_string()))
+                .cloned()
+        })
+        .or_else(|| {
+            method_index
+                .static_methods
+                .get(&(owner.to_string(), member.to_string()))
+                .cloned()
+        })
+}
+
+fn lookup_instance_method(
+    owner: &str,
+    member: &str,
+    scopes: &[RewriteScope],
+    method_index: &MethodIndex,
+) -> Option<MethodTarget> {
+    scopes
+        .iter()
+        .rev()
+        .find_map(|scope| {
+            scope
+                .instance_methods
+                .get(&(owner.to_string(), member.to_string()))
+                .cloned()
+        })
+        .or_else(|| {
+            method_index
+                .instance_methods
+                .get(&(owner.to_string(), member.to_string()))
+                .cloned()
+        })
+}
+
+fn lookup_call_result_nominal(
+    name: &str,
+    scopes: &[RewriteScope],
+    method_index: &MethodIndex,
+) -> Option<String> {
+    scopes
+        .iter()
+        .rev()
+        .find_map(|scope| scope.call_result_nominals.get(name).cloned())
+        .or_else(|| method_index.call_result_nominals.get(name).cloned())
+}
+
 fn infer_nominal_type(
     expr: &HirExpr,
-    scopes: &[BTreeMap<String, BindingInfo>],
+    scopes: &[RewriteScope],
     method_index: &MethodIndex,
 ) -> Option<String> {
     match &expr.kind {
@@ -1448,7 +1605,7 @@ fn infer_nominal_type(
             // Skip pointer bindings: `ptr: *T` is not a direct struct value for method dispatch.
             // Auto-deref handles field access separately; method calls need explicit `ptr.*`.
             .find_map(|scope| {
-                scope.get(name).and_then(|info| {
+                scope.bindings.get(name).and_then(|info| {
                     if info.is_ptr {
                         None
                     } else {
@@ -1456,6 +1613,7 @@ fn infer_nominal_type(
                     }
                 })
             })
+            .or_else(|| scope_contains_type_binding(name, scopes).then_some(name.clone()))
             .or_else(|| {
                 method_index
                     .type_names
@@ -1484,11 +1642,10 @@ fn infer_nominal_type(
                     }
                 }
                 let base_nominal = infer_nominal_type(base, scopes, method_index)?;
-                if let Some(synth) = method_index
-                    .static_methods
-                    .get(&(base_nominal.clone(), field.clone()))
+                if let Some(synth) = lookup_static_method(&base_nominal, field, scopes, method_index)
                 {
-                    if let Some(nominal) = method_index.call_result_nominals.get(synth) {
+                    if let Some(nominal) = lookup_call_result_nominal(&synth, scopes, method_index)
+                    {
                         return Some(nominal.clone());
                     }
                 }
@@ -1532,7 +1689,7 @@ fn infer_nominal_type(
 
 fn infer_binding_nominal(
     expr: &HirExpr,
-    scopes: &[BTreeMap<String, BindingInfo>],
+    scopes: &[RewriteScope],
     method_index: &MethodIndex,
 ) -> Option<String> {
     if let HirExprKind::Call { callee, .. } = &expr.kind {
@@ -1549,7 +1706,7 @@ fn infer_binding_nominal(
             _ => None,
         };
         if let Some(name) = synthetic_name {
-            if let Some(nominal) = method_index.call_result_nominals.get(&name).cloned() {
+            if let Some(nominal) = lookup_call_result_nominal(&name, scopes, method_index) {
                 return Some(nominal);
             }
         }
@@ -1560,13 +1717,14 @@ fn infer_binding_nominal(
 
 fn is_type_receiver_expr(
     expr: &HirExpr,
-    scopes: &[BTreeMap<String, BindingInfo>],
+    scopes: &[RewriteScope],
     method_index: &MethodIndex,
 ) -> bool {
     match &expr.kind {
         HirExprKind::Ident(name) => {
-            method_index.type_names.contains(name)
-                && !scopes.iter().rev().any(|scope| scope.contains_key(name))
+            scope_contains_type_binding(name, scopes)
+                || (method_index.type_names.contains(name)
+                    && !scopes.iter().rev().any(|scope| scope.bindings.contains_key(name)))
         }
         HirExprKind::Call { callee, .. } => match &callee.kind {
             HirExprKind::Ident(name) => method_index.type_names.contains(name),
@@ -1992,6 +2150,7 @@ fn lower_expr(expr: &Expr, enum_root_index: &EnumRootIndex) -> HirExpr {
                                 .map(|default| lower_expr(default, enum_root_index))
                         })
                         .collect(),
+                    return_type: fn_expr.return_type.as_ref().map(type_expr_to_string),
                     has_explicit_return_type: fn_expr.return_type.is_some(),
                     body: Box::new(body),
                 };
@@ -2141,6 +2300,8 @@ fn lower_destructure_stmt(
                     name: dn.name.text.clone(),
                     mutable: dn.mutable,
                     type_hint: None,
+                    associated_owner: None,
+                    associated_member: None,
                     value: Box::new(HirExpr {
                         kind: HirExprKind::FieldAccess {
                             base: Box::new(HirExpr {
@@ -2168,6 +2329,8 @@ fn lower_destructure_stmt(
             name: tmp_name.clone(),
             mutable: false,
             type_hint: None,
+            associated_owner: None,
+            associated_member: None,
             value: Box::new(lower_expr(value, enum_root_index)),
         },
         span,
@@ -2180,6 +2343,8 @@ fn lower_destructure_stmt(
                 name: dn.name.text.clone(),
                 mutable: dn.mutable,
                 type_hint: None,
+                associated_owner: None,
+                associated_member: None,
                 value: Box::new(HirExpr {
                     kind: HirExprKind::FieldAccess {
                         base: Box::new(HirExpr {
@@ -2228,6 +2393,8 @@ fn lower_declaration_stmt(
                     name: name.text.clone(),
                     mutable: decl.modifiers.mutable,
                     type_hint: decl.annotation.as_ref().map(type_expr_to_string),
+                    associated_owner: None,
+                    associated_member: None,
                     value: Box::new(lower_decl_expr_value(
                         value,
                         decl.modifiers.inline,
@@ -2240,7 +2407,23 @@ fn lower_declaration_stmt(
         DeclTarget::Destructure(names) => {
             lower_destructure_stmt(names, value, decl.span, enum_root_index, body);
         }
-        DeclTarget::Associated { .. } => {}
+        DeclTarget::Associated { owner, member } => {
+            body.push(HirExpr {
+                kind: HirExprKind::Let {
+                    name: format!("{}__{}", owner.text, member.text),
+                    mutable: false,
+                    type_hint: decl.annotation.as_ref().map(type_expr_to_string),
+                    associated_owner: Some(owner.text.clone()),
+                    associated_member: Some(member.text.clone()),
+                    value: Box::new(lower_decl_expr_value(
+                        value,
+                        decl.modifiers.inline,
+                        enum_root_index,
+                    )),
+                },
+                span: decl.span,
+            });
+        }
     }
 }
 

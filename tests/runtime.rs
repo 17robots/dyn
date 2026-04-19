@@ -57,6 +57,30 @@ fn runtime_hello_world_builds_and_runs() {
 }
 
 #[test]
+fn runtime_local_associated_decls_exit() {
+    let output = build_and_run("../pass/local_associated_decls");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "runtime/local_associated_decls: bad exit code\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn runtime_function_surface_parity_exit() {
+    let output = build_and_run("../pass/function_surface_parity");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "runtime/function_surface_parity: bad exit code\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
 #[ignore = "native runtime stdout path still silent even for direct std/os writes"]
 fn runtime_std_os_write() {
     let output = build_and_run("std_os_write");

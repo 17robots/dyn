@@ -1772,12 +1772,18 @@ fn try_link_with_cc_like_driver(
         .arg("-o")
         .arg(executable_path);
     if cfg!(target_os = "linux") {
-        command.arg("-no-pie");
+        command
+            .arg("-no-pie")
+            .arg("-Wl,--gc-sections")
+            .arg("-Wl,--build-id=none")
+            .arg("-Wl,--strip-all")
+            .arg("-Wl,--as-needed");
     }
     let status = command
         .status()
         .map_err(|err| format!("failed to invoke linker driver ({driver}): {err}"))?;
     if status.success() {
+        strip_executable(executable_path);
         Ok(())
     } else {
         Err(format!(
@@ -1896,6 +1902,9 @@ fn link_executable_with_linux_ld(
     let status = Command::new("ld")
         .arg("-o")
         .arg(executable_path)
+        .arg("--gc-sections")
+        .arg("--build-id=none")
+        .arg("-s")
         .arg(Path::new(crt_dir).join("crt1.o"))
         .arg(Path::new(crt_dir).join("crti.o"))
         .arg(object_path)
@@ -1911,7 +1920,17 @@ fn link_executable_with_linux_ld(
         return Err("linker failed to produce executable".to_string());
     }
 
+    strip_executable(executable_path);
     Ok(())
+}
+
+fn strip_executable(path: &Path) {
+    for tool in ["strip", "llvm-strip"] {
+        let status = Command::new(tool).arg("-s").arg(path).status();
+        if matches!(status, Ok(status) if status.success()) {
+            break;
+        }
+    }
 }
 
 fn find_main_functions<'a>(
@@ -6871,6 +6890,67 @@ fn resolve_assignment_target_address(
             }
             _ => None,
         },
+        MirValue::Index { base, index } => {
+            let store_ty = mir_type_to_clif(context.value_types.get(target)?, context.scalar);
+            let index_value = lowered.get(index)?.as_int()?;
+            match lowered.get(base)? {
+                LoweredValue::StructMemory { slot, ordered, .. } => {
+                    let (elem_ty, base_offset, stride) = homogeneous_sequence_layout(ordered)?;
+                    let base_addr = builder.ins().stack_addr(pointer_ty, *slot, base_offset);
+                    let addr = add_scaled_index_to_base(
+                        builder,
+                        context.scalar,
+                        pointer_ty,
+                        base_addr,
+                        index_value,
+                        stride,
+                    );
+                    Some((addr, elem_ty))
+                }
+                LoweredValue::PointerSlice {
+                    base_addr,
+                    elem_ty,
+                    stride,
+                    ..
+                } => {
+                    let addr = add_scaled_index_to_base(
+                        builder,
+                        context.scalar,
+                        pointer_ty,
+                        *base_addr,
+                        index_value,
+                        *stride,
+                    );
+                    Some((addr, *elem_ty))
+                }
+                LoweredValue::BytesSlice { ptr, .. } => {
+                    let addr = add_scaled_index_to_base(
+                        builder,
+                        context.scalar,
+                        pointer_ty,
+                        *ptr,
+                        index_value,
+                        1,
+                    );
+                    Some((addr, store_ty))
+                }
+                LoweredValue::Int(base_addr) => {
+                    let typed_base_addr =
+                        cast_scalar(builder, *base_addr, pointer_ty, context.scalar);
+                    let stride = (store_ty.bits() / 8).max(1) as i64;
+                    let addr = add_scaled_index_to_base(
+                        builder,
+                        context.scalar,
+                        pointer_ty,
+                        typed_base_addr,
+                        index_value,
+                        stride,
+                    );
+                    Some((addr, store_ty))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -6982,6 +7062,15 @@ fn lower_field_access_value(
             ..
         }) => {
             if let Some((ty, offset)) = fields.get(field).copied() {
+                if matches!(value_ty, MirValueType::BytesSlice) {
+                    if let Some((_, len_offset)) =
+                        fields.get(&hidden_slice_len_field_name(field)).copied()
+                    {
+                        let ptr = builder.ins().stack_load(ty, *slot, offset);
+                        let len = builder.ins().stack_load(ty, *slot, len_offset);
+                        return LoweredValue::BytesSlice { ptr, len };
+                    }
+                }
                 let loaded = builder.ins().stack_load(ty, *slot, offset);
                 if ty.is_float() {
                     LoweredValue::Float(loaded)
@@ -7026,6 +7115,25 @@ fn lower_field_access_value(
                 *stack_offset,
             );
             if let Some((ty, offset)) = fields.get(field).copied() {
+                if matches!(value_ty, MirValueType::BytesSlice) {
+                    if let Some((_, len_offset)) =
+                        fields.get(&hidden_slice_len_field_name(field)).copied()
+                    {
+                        let ptr = builder.ins().load(
+                            ty,
+                            cranelift_codegen::ir::MemFlags::new(),
+                            base_addr,
+                            offset,
+                        );
+                        let len = builder.ins().load(
+                            ty,
+                            cranelift_codegen::ir::MemFlags::new(),
+                            base_addr,
+                            len_offset,
+                        );
+                        return LoweredValue::BytesSlice { ptr, len };
+                    }
+                }
                 let loaded = builder.ins().load(
                     ty,
                     cranelift_codegen::ir::MemFlags::new(),
@@ -7165,6 +7273,17 @@ fn lower_homogeneous_slice_from_stack_slot(
         .stack_addr(pointer_ty, sequence.slot, base_offset);
     let start_index = start
         .and_then(|id| lowered.get(&id).and_then(LoweredValue::as_int))
+        .map(|value| {
+            cast_scalar(
+                builder,
+                value,
+                pointer_ty,
+                ScalarType::Int {
+                    ty: pointer_ty,
+                    signed: false,
+                },
+            )
+        })
         .unwrap_or_else(|| zero_for_type(builder, pointer_ty));
     if !value_is_definitely_zero(builder, start_index, 0) {
         base_addr =
@@ -7764,6 +7883,10 @@ fn indirect_call_return_type(
     }
 }
 
+fn hidden_slice_len_field_name(field: &str) -> String {
+    format!("__slice_len__{field}")
+}
+
 fn emit_lowered_call(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
@@ -8205,8 +8328,28 @@ fn materialize_struct_memory(
                     offset,
                 });
             }
-            LoweredValue::PointerSlice { base_addr, .. }
-            | LoweredValue::BytesSlice { ptr: base_addr, .. } => {
+            LoweredValue::BytesSlice { ptr, len } => {
+                let field_ty = builder.func.dfg.value_type(ptr);
+                let align = (field_ty.bits() / 8).max(1);
+                max_align = max_align.max(align);
+                size = align_to(size, align);
+                let offset = size as i32;
+                size = size.saturating_add(align);
+                let len_offset = size as i32;
+                size = size.saturating_add(align);
+                scalar_fields.insert(name.clone(), (field_ty, offset));
+                scalar_fields.insert(hidden_slice_len_field_name(name), (field_ty, len_offset));
+                ordered.push((field_ty, offset));
+                ordered.push((field_ty, len_offset));
+                scalar_leaves.push((field_ty, offset));
+                scalar_leaves.push((field_ty, len_offset));
+                plans.push(StorePlan::Scalar { value: ptr, offset });
+                plans.push(StorePlan::Scalar {
+                    value: len,
+                    offset: len_offset,
+                });
+            }
+            LoweredValue::PointerSlice { base_addr, .. } => {
                 let field_ty = builder.func.dfg.value_type(base_addr);
                 let align = (field_ty.bits() / 8).max(1);
                 max_align = max_align.max(align);

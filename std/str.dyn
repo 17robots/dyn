@@ -461,3 +461,49 @@ pub repeat := (s: []u8, n: usize, alloc: Allocator) ?[]u8 {
     }
     return out
 }
+
+pub uint_to_binary_buf := (n: u64, buf: []u8) []u8 {
+    if buf.len == 0 return buf[0..0]
+    if n == 0 {
+        buf[0] = '0'
+        return buf[0..1]
+    }
+    mut digits: usize = 0
+    mut count_value: u64 = n
+    for count_value > 0: {
+        digits += 1
+        count_value /= 2
+    }
+    if digits > buf.len return buf[0..0]
+    mut value: u64 = n
+    mut write := digits
+    for value > 0: {
+        write -= 1
+        buf[write] = '0' + $as(u8, value % 2)
+        value /= 2
+    }
+    return buf[0..digits]
+}
+
+pub uint_to_octal_buf := (n: u64, buf: []u8) []u8 {
+    if buf.len == 0 return buf[0..0]
+    if n == 0 {
+        buf[0] = '0'
+        return buf[0..1]
+    }
+    mut digits: usize = 0
+    mut count_value: u64 = n
+    for count_value > 0: {
+        digits += 1
+        count_value /= 8
+    }
+    if digits > buf.len return buf[0..0]
+    mut value: u64 = n
+    mut write := digits
+    for value > 0: {
+        write -= 1
+        buf[write] = '0' + $as(u8, value % 8)
+        value /= 8
+    }
+    return buf[0..digits]
+}

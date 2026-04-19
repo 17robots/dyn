@@ -1,4 +1,5 @@
 use super::*;
+use crate::compiler::sema::helpers::parse_integer_literal_value;
 
 thread_local! {
     static NAMED_STRUCT_FIELD_TYPES:
@@ -85,7 +86,7 @@ pub(super) fn infer_expr_type(
             }
         }
         ExprKind::Binary { op, left, right } => {
-            let left_ty = infer_expr_type(
+            let mut left_ty = infer_expr_type(
                 left,
                 env,
                 mutability,
@@ -95,7 +96,7 @@ pub(super) fn infer_expr_type(
                 file_path,
                 expected_return,
             );
-            let right_ty = infer_expr_type(
+            let mut right_ty = infer_expr_type(
                 right,
                 env,
                 mutability,
@@ -105,6 +106,9 @@ pub(super) fn infer_expr_type(
                 file_path,
                 expected_return,
             );
+
+            left_ty = coerce_nonnegative_integer_literal_to_peer(left, left_ty, right_ty, types);
+            right_ty = coerce_nonnegative_integer_literal_to_peer(right, right_ty, left_ty, types);
 
             match op {
                 BinaryOp::Add
@@ -524,6 +528,12 @@ pub(super) fn infer_expr_type(
                     types,
                     &mut arm_env,
                     &mut arm_mutability,
+                );
+                bind_typeof_match_narrowing(
+                    &match_expr.scrutinee,
+                    &pattern.kind,
+                    types,
+                    &mut arm_env,
                 );
 
                 if let Some(reason) =
@@ -1105,10 +1115,12 @@ pub(super) fn infer_expr_type(
                         }),
                         _ => types.intern(Type::Unknown),
                     },
-                    Type::Applied { callee, .. } | Type::TypeParam(callee) => {
+                    Type::Named(callee)
+                    | Type::Applied { callee, .. }
+                    | Type::TypeParam(callee) => {
                         let resolved = NAMED_STRUCT_FIELD_TYPES.with(|cell| {
                             cell.borrow()
-                                .get(callee)
+                                .get(nominal_lookup_name(callee))
                                 .and_then(|fields| fields.get(&field.text))
                                 .cloned()
                         });
@@ -1118,10 +1130,12 @@ pub(super) fn infer_expr_type(
                     }
                     _ => types.intern(Type::Unknown),
                 },
-                Type::Applied { callee, .. } | Type::TypeParam(callee) => {
+                Type::Named(callee)
+                | Type::Applied { callee, .. }
+                | Type::TypeParam(callee) => {
                     let resolved = NAMED_STRUCT_FIELD_TYPES.with(|cell| {
                         cell.borrow()
-                            .get(callee)
+                            .get(nominal_lookup_name(callee))
                             .and_then(|fields| fields.get(&field.text))
                             .cloned()
                     });
@@ -1578,6 +1592,25 @@ pub(super) fn infer_expr_type(
                 })
                 .collect::<Vec<_>>();
             types.intern(Type::Tuple(element_types))
+        }
+        ExprKind::StructLiteral(struct_lit) => {
+            for field in &struct_lit.fields {
+                let _ = infer_expr_type(
+                    &field.value,
+                    env,
+                    mutability,
+                    signatures,
+                    types,
+                    diagnostics,
+                    file_path,
+                    expected_return,
+                );
+            }
+            if let Some(root_type) = &struct_lit.root_type {
+                types.intern(Type::Named(root_type.text.clone()))
+            } else {
+                types.intern(Type::Unknown)
+            }
         }
         _ => types.intern(Type::Unknown),
     }
@@ -6904,6 +6937,64 @@ pub(super) fn bind_pattern_names(
     }
 }
 
+fn bind_typeof_match_narrowing(
+    scrutinee: &Expr,
+    pattern: &PatternKind,
+    types: &mut TypeStore,
+    env: &mut BTreeMap<String, TypeId>,
+) {
+    let ExprKind::Call(call) = &scrutinee.kind else {
+        return;
+    };
+    let ExprKind::BuiltinIdent(ident) = &call.callee.kind else {
+        return;
+    };
+    if ident.text != "$typeof" || call.args.len() != 1 {
+        return;
+    }
+    let ExprKind::Ident(binding) = &call.args[0].value.kind else {
+        return;
+    };
+
+    let narrowed = match pattern {
+        PatternKind::TypeLiteral(ty) => resolve_type_expr(ty, types),
+        PatternKind::Typed { ty, .. } => resolve_type_expr(ty, types),
+        PatternKind::IdentBind(ident) => {
+            resolve_builtin_type_name(&ident.text, types)
+                .or_else(|| Some(types.intern(Type::Named(ident.text.clone()))))
+        }
+        _ => None,
+    };
+
+    if let Some(narrowed) = narrowed {
+        env.insert(binding.text.clone(), narrowed);
+    }
+}
+
+fn coerce_nonnegative_integer_literal_to_peer(
+    expr: &Expr,
+    actual_ty: TypeId,
+    peer_ty: TypeId,
+    types: &mut TypeStore,
+) -> TypeId {
+    let ExprKind::Literal(Literal::Integer(text)) = &expr.kind else {
+        return actual_ty;
+    };
+    if !parse_integer_literal_value(text).is_some_and(|value| value >= 0) {
+        return actual_ty;
+    }
+    match types.get(peer_ty) {
+        Type::Int {
+            signed: false,
+            bits,
+        } => types.intern(Type::Int {
+            signed: false,
+            bits: *bits,
+        }),
+        _ => actual_ty,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn infer_builtin_call_type(
     name: &str,
@@ -8014,6 +8105,16 @@ fn resolve_callee_lookup(
 ) -> Option<CalleeLookup> {
     match &callee.kind {
         ExprKind::FieldAccess { base, field } => {
+            if let Some(type_name) = resolve_type_designator_expr_name(base) {
+                let static_key = format!("{}__{}", nominal_lookup_name(&type_name), field.text);
+                if signatures.contains_key(&static_key) {
+                    return Some(CalleeLookup {
+                        name: static_key,
+                        implicit_receiver: false,
+                    });
+                }
+            }
+
             let base_ty = infer_expr_type(
                 base,
                 env,
@@ -8043,6 +8144,21 @@ fn resolve_callee_lookup(
     }
 }
 
+fn nominal_lookup_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
+
+fn resolve_type_designator_expr_name(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Ident(ident) | ExprKind::BuiltinIdent(ident) => Some(ident.text.clone()),
+        ExprKind::FieldAccess { base, field } => {
+            let base = resolve_type_designator_expr_name(base)?;
+            Some(format!("{base}.{}", field.text))
+        }
+        _ => None,
+    }
+}
+
 fn method_lookup_key(
     receiver_ty: TypeId,
     field_name: &str,
@@ -8053,10 +8169,13 @@ fn method_lookup_key(
         Type::Pointer { inner, .. } | Type::Optional(inner) => {
             return method_lookup_key(*inner, field_name, signatures, types);
         }
-        Type::TypeParam(type_name)
+        Type::Named(type_name)
         | Type::Applied {
             callee: type_name, ..
         } => {
+            format!("{}__{field_name}", nominal_lookup_name(type_name))
+        }
+        Type::TypeParam(type_name) => {
             format!("{type_name}__{field_name}")
         }
         _ => return None,

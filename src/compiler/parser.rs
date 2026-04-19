@@ -2776,18 +2776,7 @@ impl<'a> Parser<'a> {
             }
             DeclValue::Expr(_) => {}
         }
-        match &decl.target {
-            DeclTarget::Associated { .. } => {
-                self.report_parser_error(
-                    DiagnosticCode::E3001,
-                    "associated declarations are not allowed in local scope",
-                    decl.span,
-                    "move this declaration to top level",
-                );
-                None
-            }
-            DeclTarget::Name(_) | DeclTarget::Destructure(_) => Some(Stmt::Declaration(decl)),
-        }
+        Some(Stmt::Declaration(decl))
     }
 
     fn parse_assignment_stmt(&mut self) -> Option<Stmt> {
@@ -2836,6 +2825,22 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Identifier)
         ) {
             return false;
+        }
+        if !saw_mut
+            && matches!(
+                self.tokens.get(idx + 1).map(|t| &t.kind),
+                Some(TokenKind::Operator(Operator::Dot))
+            )
+            && matches!(
+                self.tokens.get(idx + 2).map(|t| &t.kind),
+                Some(TokenKind::Identifier)
+            )
+            && matches!(
+                self.tokens.get(idx + 3).map(|t| &t.kind),
+                Some(TokenKind::Operator(Operator::Colon))
+            )
+        {
+            return true;
         }
         match self.tokens.get(idx + 1).map(|t| &t.kind) {
             Some(TokenKind::Operator(Operator::Colon)) => {

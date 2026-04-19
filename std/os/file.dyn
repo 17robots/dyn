@@ -107,7 +107,22 @@ fd_print := (fd: i32, v: any) {
             return
         },
         _: {
-            fd_write_all(fd, "<value>")
+            mut first: u1 = true
+            inline for $fields(v): |f| {
+                if first { fd_write_byte(fd, '{') }
+                if !first { fd_write_all(fd, ", ") }
+                first = false
+                fd_write_all(fd, f.name)
+                fd_write_all(fd, ": ")
+                fd_print(fd, $field(v, f.name))
+            }
+            if first {
+                fd_write_all(fd, "<")
+                fd_write_all(fd, $typename($typeof(v)))
+                fd_write_all(fd, ">")
+            } else {
+                fd_write_byte(fd, '}')
+            }
             return
         },
     }
@@ -118,7 +133,7 @@ pub File.writer := (self: File) io.Writer => .{ ctx: $as(*any, $as(usize, self.f
 pub File.reader := (self: File) io.Reader => .{ ctx: $as(*any, $as(usize, self.fd)), read_fn: file_read }
 pub stdout := File{ fd: 1 }
 pub stderr := File{ fd: 2 }
-pub stdin := File{ fd: 0 }
+pub stdin  := File{ fd: 0 }
 
 pub write := (buf: []u8) {
     fd_write_all(1, buf)
@@ -142,43 +157,55 @@ pub ewriteln := (buf: []u8) {
     return
 }
 
-pub print := (v: any) {
-    fd_print(1, v)
+// Format print to stdout. Pass args as an anonymous struct: .{a, b, c}.
+// Use {} for any type — it auto-detects. Escape braces with {{ and }}.
+pub print := (fmt: []u8, fmtargs: any) {
+    w: io.Writer = .{
+        ctx: $as(*any, $as(usize, 1)),
+        write_fn: file_write,
+    }
+    w.print(fmt, fmtargs)
     return
 }
 
-pub println := (v: any) {
-    fd_print(1, v)
-    fd_write_byte(1, '\n')
+// Format print + newline to stdout.
+pub println := (fmt: []u8, fmtargs: any) {
+    w: io.Writer = .{
+        ctx: $as(*any, $as(usize, 1)),
+        write_fn: file_write,
+    }
+    w.println(fmt, fmtargs)
     return
 }
 
-pub eprint := (v: any) {
-    fd_print(2, v)
+// Format print to stderr.
+pub eprint := (fmt: []u8, fmtargs: any) {
+    w: io.Writer = .{
+        ctx: $as(*any, $as(usize, 2)),
+        write_fn: file_write,
+    }
+    w.print(fmt, fmtargs)
     return
 }
 
-pub eprintln := (v: any) {
-    fd_print(2, v)
-    fd_write_byte(2, '\n')
+// Format print + newline to stderr.
+pub eprintln := (fmt: []u8, fmtargs: any) {
+    w: io.Writer = .{
+        ctx: $as(*any, $as(usize, 2)),
+        write_fn: file_write,
+    }
+    w.println(fmt, fmtargs)
     return
 }
 
-pub printf1 := (fmt: []u8, a0: any) {
-    stdout.writer().write_all(fmt)
-    stdout.writer().print(a0)
+// Alias for print(fmt, args).
+pub printf := (fmt: []u8, fmtargs: any) {
+    print(fmt, fmtargs)
     return
 }
 
-pub eprintf := (fmt: []u8, a0: any) {
-    stderr.writer().write_all(fmt)
-    stderr.writer().print(a0)
-    return
-}
-
-pub printf := (fmt: []u8, a0: any, a1: any) {
-    stdout.writer().write_all(fmt)
-    stdout.writer().print(a0)
-    stdout.writer().print(a1)
+// Alias for eprint(fmt, args).
+pub eprintf := (fmt: []u8, fmtargs: any) {
+    eprint(fmt, fmtargs)
     return
 }

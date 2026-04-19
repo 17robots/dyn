@@ -236,22 +236,30 @@ fn shake_mir_program(mir: &MirProgram, bin: Option<&str>) -> MirProgram {
         let value_defs = collect_value_defs(function);
         for block in &function.blocks {
             for instr in &block.instructions {
-                let MirInstr::Eval {
+                if let MirInstr::Eval {
                     value: MirValue::Call { callee, .. },
                     ..
                 } = instr
-                else {
-                    continue;
-                };
-                match resolve_possible_callees(*callee, &value_defs, &by_name, 0) {
-                    Some(callees) => {
+                {
+                    if let Some(callees) = resolve_possible_callees(*callee, &value_defs, &by_name, 0)
+                    {
                         for callee in callees {
                             if !reachable.contains(&callee) {
                                 queue.push_back(callee);
                             }
                         }
                     }
-                    None => {}
+                }
+                if let MirInstr::Eval { dest, .. } = instr {
+                    if let Some(references) =
+                        resolve_possible_callees(*dest, &value_defs, &by_name, 0)
+                    {
+                        for function_ref in references {
+                            if !reachable.contains(&function_ref) {
+                                queue.push_back(function_ref);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -268,7 +276,7 @@ fn shake_mir_program(mir: &MirProgram, bin: Option<&str>) -> MirProgram {
                 .iter()
                 .enumerate()
                 .filter_map(|(fi, function)| {
-                    if reachable.contains(&(mi, fi)) || function.name.contains("__") {
+                    if reachable.contains(&(mi, fi)) {
                         Some(function.clone())
                     } else {
                         None

@@ -354,7 +354,15 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                 })
                 .collect::<Vec<_>>();
 
-            let global_names: BTreeSet<String> = globals.iter().map(|g| g.name.clone()).collect();
+            let global_names: BTreeSet<String> = globals
+                .iter()
+                .flat_map(|g| {
+                    [
+                        g.name.clone(),
+                        qualified_function_name(module.module_id, &g.name),
+                    ]
+                })
+                .collect();
 
             let declared_functions = Rc::new(RefCell::new(DeclaredFunctionRegistry::default()));
             let type_eval_shared = FunctionLowererShared {
@@ -436,8 +444,9 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                 params,
                                 param_types,
                                 param_defaults: _,
-                                has_explicit_return_type,
                                 body,
+                                has_explicit_return_type,
+                                ..
                             } => {
                                 let allows_or_return_tail_implicit_success =
                                     has_or_return_tail(body) && !has_explicit_return_type;
@@ -500,8 +509,9 @@ pub fn lower_hir_to_mir_with_diagnostics_and_paths(
                                     params,
                                     param_types,
                                     param_defaults: _,
-                                    has_explicit_return_type,
                                     body,
+                                    has_explicit_return_type,
+                                    ..
                                 } = &expr.kind
                                 {
                                     let allows_or_return_tail_implicit_success =

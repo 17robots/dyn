@@ -221,6 +221,11 @@ fn pass_function_surface_parity() {
 }
 
 #[test]
+fn pass_local_associated_decls() {
+    assert_compiles("local_associated_decls");
+}
+
+#[test]
 fn pass_typed_empty_array_init() {
     assert_compiles("typed_empty_array_init");
 }

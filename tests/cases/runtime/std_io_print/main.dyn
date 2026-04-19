@@ -3,10 +3,10 @@ module main
 os := use "std/os"
 
 main := () i32 {
-    os.println("abc")
-    os.println(true)
-    os.println(123)
-    os.println(-45)
-    os.println(1.5)
+    os.println("{}", .{"abc"})
+    os.println("{}", .{true})
+    os.println("{}", .{123})
+    os.println("{}", .{-45})
+    os.println("{}", .{1.5})
     return 0
 }
