@@ -1,7 +1,6 @@
-// comment
 module main
 
-main := () ! { // errorable void function
+main := () ! {
   a := 1
   b: i32 = 2
   c: i31 = 3
@@ -33,19 +32,17 @@ main := () ! { // errorable void function
   s := struct { item1: u32 }
   s.new := () s => .{ }
   s.do_thing := (self: s) {}
-  t := "only valid here"
-
-  mut total := 0
-  for 0..10: |u| {
-    total += u
+  {
+    t := "only valid here"
   }
+  mut total := 0
+  for 0..10: |u| { total += u }
   for 0..10: |v| total += v
   for i: |v| total -= v // can loop through arrays
   for total < 10: total += 1 // can use it with boolean expressions
   for total > 0: { total -= 1 } // can use it with boolean expressions
-  for {
-    break // this is an infinite loop please break this
-  }
+  // this is an infinite loop please break this
+  for { break }
   if total == 10 {} else if total == 9 {} else {}
   if n: |v| {} // checking and grabbing value from a nullable type, if null, wont run this
   if n: |_| {} // checking and discarding value from a nullable type, if null, wont run this
@@ -75,72 +72,27 @@ main := () ! { // errorable void function
   internal_fn()
   y := s.new()
   y.do_thing()
-
   defer {} // last
   defer {} // second or first
   defer |e| {} // runs first but only if error
   A := divide(1,0) or 0
   B := divide(1,1).!
-  C := divide(1,0) or {
-    break 0
-  }
-  D := divide(1,0) or |err| {
-    // do something with err
-    break 0.0
-  }
-  E := n or {
-    break 1
-  }
+  C := divide(1,0) or { break 0 }
+  // do something with err
+  D := divide(1,0) or |err| { break 0.0 }
+  E := n or { break 1 }
   F := n.?
   G := n or 1
   H := IntList.init()
   use_f64 := true
   calc_pi := () comp if use_f64 f64 else f32 => 3.14
   pi := calc_pi()
+  // pi2 calculated at comptime
   pi2 := comp calc_pi()
-  inline for 0..10: |z| {
-    // do something and it will unroll wih z being passed in as the val to it
-  }
+  // do something and it will unroll wih z being passed in as the val to it
+  inline for 0..10: |z| {}
   inline_fn() // will have its contents pasted here in its own block
-
-  for 0..10: |z| blk: {
-    for 0..10: |z2| if z2 == 1 break :blk
-  }
-  I := usable_in_main
-  // J := use "other"
-  K := I.usable_outside
-}
-
-add := (x: i32, y: i32) i32 { return x + y }
-add2 := (x: i32, y: i32) i32 => x + y // only doable if the only line in the body would have been return [expression]
-add3 := (x: i32 = 0, y: i32 = 0) i32 => x + y // can have default values on all or only 1 of the parameters
-
-DivideError1 := enum { // errors can be either structs or enums
-  UhOh
-}
-DivideError2 := enum {
-  DivideByZero
-}
-divide := (x: f32, y: f32) f32!DivideError1,DivideError2 => if y == 0 DivideError2.DivideByZero else x / y
-
-List := (T: comp type) type {
-  Thing := struct {}
-  Thing.init := () Thing => .{}
-  return Thing
-}
-List2 := (T: comp type) type => struct {}
-
-IntList := List(i32)
-inline_fn := inline () i32 => 1
-
-hmm_type := get_type(){}
-hmm := hmm_type.vals.?.*.current_val or hmm_type.vals.?.*.other_vals[1]
-
-get_type := () type {
-  return struct {
-    vals: ?*struct {
-      current_val: ?*type,
-      other_vals: []*type
-    }
-  }
+  blk: for 0..10: |z| { for 0..10: |z2| { if z2 == 1 break :blk } }
+  I := use "other"
+  J := J.usable_outside
 }

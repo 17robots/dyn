@@ -1,5 +1,0 @@
-module other
-
-not_usable_outside := 0
-
-pub usable_outside := 0xFF

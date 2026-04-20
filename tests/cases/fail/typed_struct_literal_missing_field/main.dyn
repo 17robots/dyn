@@ -1,7 +1,0 @@
-module main
-
-Point := struct { x: i32, y: i32 }
-
-main := () {
-  _ = Point{ x: 1 }
-}

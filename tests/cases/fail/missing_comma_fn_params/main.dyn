@@ -1,5 +1,0 @@
-module main
-
-bad := (x: i32 y: i32) i32 => x + y
-
-main := () i32 => bad(1, 2)

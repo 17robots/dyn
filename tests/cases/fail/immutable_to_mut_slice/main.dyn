@@ -1,9 +1,0 @@
-module main
-
-need_mut := (buf: []mut i32) usize => buf.len
-
-main := () i32 {
-    arr := [0, 0, 0, 0, 0, 0, 0, 0]
-    _ = need_mut(arr[..])
-    return 0
-}

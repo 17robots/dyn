@@ -1,9 +1,0 @@
-module main
-
-os := use "std/os"
-
-main := () i32 {
-    os.write("x")
-    os.writeln("y")
-    return 0
-}

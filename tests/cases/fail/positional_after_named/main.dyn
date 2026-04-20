@@ -1,7 +1,0 @@
-module main
-
-pair := (x: i32, y: i32) i32 => x + y
-
-main := () i32 {
-    return pair(x: 1, 2)
-}

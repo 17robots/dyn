@@ -1,0 +1,11 @@
+module other
+
+pub add := (x: i32, y: i32) i32 { return x + y }
+pub add2 := (x: i32, y: i32) i32 => x + y // only doable if the only line in the body would have been return [expression]
+pub add3 := (x: i32 = 0, y: i32 = 0) i32 => x + y // can have default values on all or only 1 of the parameters
+// errors can be either structs or enums
+pub DivideError1 := enum { UhOh }
+pub DivideError2 := enum { DivideByZero }
+pub divide := (x: f32, y: f32) f32!DivideError1,DivideError2 => if y == 0 DivideError2.DivideByZero else x / y
+pub usable_outside: u2 = 2
+Point := struct { x: i32, y: i32 }

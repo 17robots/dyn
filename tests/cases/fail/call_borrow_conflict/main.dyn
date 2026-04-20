@@ -1,8 +1,0 @@
-module main
-
-consume := (left: *i32, right: *i32) {}
-
-main := () {
-    mut x: i32 = 1
-    consume(&x, &x)
-}

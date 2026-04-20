@@ -1,5 +1,0 @@
-module main
-
-value := if true 1
-
-main := () {}

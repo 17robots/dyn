@@ -1,5 +1,0 @@
-module main
-
-touch := (p: *mut i32, buf: []mut u8) {}
-
-main := () {}

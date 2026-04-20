@@ -1,8 +1,0 @@
-module main
-
-main := () i32 {
-    {
-        inner := 42
-    }
-    return inner
-}

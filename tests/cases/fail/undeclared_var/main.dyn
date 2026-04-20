@@ -1,6 +1,0 @@
-module main
-
-main := () i32 {
-    x := does_not_exist + 1
-    return x
-}

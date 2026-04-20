@@ -1,6 +1,0 @@
-module main
-
-Token := enum {
-  A,
-  VALUE := 1,
-}
