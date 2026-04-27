@@ -1,0 +1,6 @@
+module t
+main := () i32 {
+  mut x := 1
+  x = x + 41
+  return x
+}

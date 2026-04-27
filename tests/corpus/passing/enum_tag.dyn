@@ -1,0 +1,6 @@
+module t
+E := enum { A, B }
+main := () i32 {
+  e: E = .B
+  return if e == .B 42 else 0
+}

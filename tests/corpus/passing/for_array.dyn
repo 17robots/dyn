@@ -1,0 +1,9 @@
+module t
+main := () i32 {
+  a: [3]i32 = [20, 1, 22]
+  mut total: i32 = 0
+  for a: |v| {
+    total = total + v
+  }
+  return total - 1
+}

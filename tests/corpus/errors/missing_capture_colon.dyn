@@ -1,0 +1,2 @@
+module bad
+main := () { if opt |v| {} }

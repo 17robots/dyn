@@ -1,0 +1,5 @@
+module t
+main := () i32 {
+  x: ?i32 = null
+  return x or 42
+}

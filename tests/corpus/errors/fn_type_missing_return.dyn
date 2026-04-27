@@ -1,0 +1,2 @@
+module bad
+main := () { x: (a: i32) = y }

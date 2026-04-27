@@ -1,0 +1,5 @@
+module t
+main := () i32! {
+  x: i32! = 42
+  return x.!
+}

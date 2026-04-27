@@ -1,0 +1,7 @@
+module t
+Point := struct { x: i32, y: i32 }
+Point.sum := (self: *Point) i32 => self.x + self.y
+main := () i32 {
+  p: Point = Point{ x: 20, y: 22 }
+  return p.sum()
+}

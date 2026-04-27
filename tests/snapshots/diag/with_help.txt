@@ -1,0 +1,6 @@
+error[L0003]: unterminated string literal
+  ┌─ main.dyn:1:9
+  │
+1 │ let x = "oops
+  │           ^^^^^ string starts here
+  = help: close the string literal with `"`

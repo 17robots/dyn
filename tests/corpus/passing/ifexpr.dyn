@@ -1,0 +1,2 @@
+module t
+main := () i32 => if 1 < 2 42 else 0

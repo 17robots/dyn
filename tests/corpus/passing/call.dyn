@@ -1,0 +1,3 @@
+module t
+helper := () i32 => 5
+main := () i32 => helper() * 7 + 1

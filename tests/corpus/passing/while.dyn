@@ -1,0 +1,8 @@
+module t
+main := () i32 {
+  mut x := 0
+  for x < 5 {
+    x = x + 1
+  }
+  return x
+}

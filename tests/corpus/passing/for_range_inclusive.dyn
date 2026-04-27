@@ -1,0 +1,8 @@
+module t
+main := () i32 {
+  mut total := 0
+  for 0..=5: |i| {
+    total = total + i
+  }
+  return total
+}
