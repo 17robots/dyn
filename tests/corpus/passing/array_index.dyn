@@ -1,5 +1,0 @@
-module t
-main := () i32 {
-  a: [3]i32 = [20, 1, 22]
-  return a[0] + a[2]
-}

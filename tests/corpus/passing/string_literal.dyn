@@ -1,5 +1,0 @@
-module t
-main := () i32 {
-  s := "hello"
-  return 42
-}

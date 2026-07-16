@@ -1,2 +1,0 @@
-module t
-main := () i32 => 20 % 6
