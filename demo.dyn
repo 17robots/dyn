@@ -20,9 +20,9 @@ pub struct X {
 }
 
 pub struct Counter { n: i32 }
-pub fn Counter.new() Counter { return Counter{n: 0} }
-pub fn Counter.inc(s: *Counter) Counter { s.n += 1 }
-pub fn Counter.dec(s: *Counter) Counter { s.n -= 1 }
+pub fn counter_new() Counter { return Counter{n: 0} }
+pub fn counter_inc(s: *Counter) Counter { s.n += 1 }
+pub fn counter_dec(s: *Counter) Counter { s.n -= 1 }
 
 pub enum MyEnum {
   Some,
@@ -126,6 +126,108 @@ fn case_statements() {
   case x {
     1 => { io.println("not this") }
     2 => { io.println("not this") }
-    _ => { io.println("not this") }
+    _ => { io.println("the default runs") }
   }
 }
+
+fn defer_statements() {
+  defer io.println("second")
+  defer { io.println("first") }
+}
+
+fn loops() {
+  for {
+    io.println("infinite loop, please break")
+    break
+  }
+  a = 0
+  for a < 10 { a += 1 }
+
+  items = []i32{ 1, 2, 3, 4, 5 }
+  for item in items { io.println("item: {}", item) }
+}
+
+fn add(x: i32, y: i32) i32 { return x + y }
+
+fn walk(start: i32) i32 {
+  cur = start
+  for cur < 100 { cur += 2 }
+  return cur
+}
+
+fn functions() { val = walk(add(1,2)) }
+
+fn enums() {
+  x: MyEnum = MyEnum.Some
+  y: Partnered = Partnered.Thing{payload: ThingPayload{info: 42}}
+
+  case x {
+    MyEnum.Some => { io.println("some") },
+    MyEnum.Thing => { io.println("thing") },
+    MyEnum.Here => { io.println("here") }
+    // exhaustive, no _ required
+  }
+
+  case y {
+    Partnered.Some => { io.println("some internal state") },
+    Partnered.Thing t => { io.println("Thing has payload {}", t) }
+    _ => { } // not exhaustive so use _
+  }
+}
+
+fn parse_binary_chunk(arena: *Arena, bytes: []u8) ParseResult {
+  if bytes == nil { #panic("Received null payload") }
+  if #len(bytes) < 4 { return ParseResult{ error: ParseError.InvalidFormat, payload: 0 } }
+  return ParseResult{ error: ParseError.None, payload: 42 }
+}
+
+fn errors(arena: *Arena) {
+  mock_bytes = os.read_entire_file(arena, "config.bin")
+  res = parse_binary_chunk(arena, mock_bytes)
+  if res.error != ParseError.None {
+    global_log.println("Recoverable file error encountered")
+    return
+  }
+  global_log.println("Success! Payload: {}", res.payload)
+}
+
+fn structs() {
+  x = X{a: 1, b: 2, c: 3, x: 1.0, y: 2.0, z: 3.0 }
+  _ = x
+  empty_x = X{}
+  _ = empty_x
+
+  c = counter_new()
+  couner_inc(&c)
+  counter_inc(&c)
+  counter_dec(&c)
+  io.println("Count: {}", c.n)
+}
+
+fn memory(arena: *Arena) {
+  byte_count: u64 = #sizeof(Point)
+  alignment: u64 = #alignof(Point)
+  _ = alignment
+
+  p: *Point = #arena_push(arena, Point)
+  p.x = 10
+  p.y = 10
+  print_point_readonly(p)
+}
+
+fn print_point_readonly(p: *const Point) {
+  io.println("Point coords: {} {}", p.x, p.y)
+  // p.x = val - banned because p is *const
+}
+
+fn concurrency() {
+  job_queue = [16]Job{}
+  t1 = thread.create(&job_queue, worker_loop)
+  t2 = thread.create(&job_queue, worker_loop)
+
+  t1.join()
+  t2.join()
+}
+
+fn worker_loop(arg: *void) {}
+
