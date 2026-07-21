@@ -1,4 +1,4 @@
-use "std/io"
+use "std/io" thing
 use "std/os"
 use "std/thread"
 
@@ -14,11 +14,7 @@ pub struct Grid {
   h: i32
 }
 
-pub struct X {
-  a: i32, b: i32, c: i32,
-  x: f32, y: f32, z: f32,
-}
-
+pub struct X { a: i32, b: i32, c: i32, x: f32, y: f32, z: f32, }
 pub struct Counter { n: i32 }
 pub fn counter_new() Counter { return Counter{n: 0} }
 pub fn counter_inc(s: *Counter) Counter { s.n += 1 }
@@ -30,7 +26,7 @@ pub enum MyEnum {
   Here
 }
 
-pub struct ThingPayload { info: i32 }
+pub packed struct ThingPayload { info: i32 }
 pub enum Partnered {
   Some: i32,
   Thing: ThingPayload,
@@ -54,8 +50,6 @@ pub struct Job {
 
 const MAX_BUFFER_SIZE = 4096
 const ENGINE_VERSION = "1.0.0"
-
-#expr arena_push() = #cast(*Type, os.arena_alloc(arena_ptr, #sizeof(Type)))
 
 pub fn main() {
   global_log = io.Logger.init_stdout()
@@ -124,9 +118,15 @@ fn if_statements() {
 fn case_statements() {
   x = 100
   case x {
-    1 => { io.println("not this") }
-    2 => { io.println("not this") }
+    1 => { io.println("not this") },
+    2..=99 => { io.println("not this") },
+    101, 102 => { io.println("not this") },
     _ => { io.println("the default runs") }
+  }
+  y = Partnered.Thing(ThingPayload{ info: 0 })
+  case y {
+    Partnered.Thing t => { io.println("Val: {}", t)},
+    _ => {},
   }
 }
 
@@ -170,7 +170,7 @@ fn enums() {
 
   case y {
     Partnered.Some => { io.println("some internal state") },
-    Partnered.Thing t => { io.println("Thing has payload {}", t) }
+    Partnered.Thing t => { io.println("Thing has payload {}", t) },
     _ => { } // not exhaustive so use _
   }
 }
@@ -209,7 +209,7 @@ fn memory(arena: *Arena) {
   alignment: u64 = #alignof(Point)
   _ = alignment
 
-  p: *Point = #arena_push(arena, Point)
+  p: *Point = arena_push(arena, Point)
   p.x = 10
   p.y = 10
   print_point_readonly(p)
