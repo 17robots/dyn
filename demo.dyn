@@ -1,61 +1,27 @@
 use "std/io" thing
 use "std/os"
 use "std/thread"
-
-thread_local global_log: io.Logger
-
-pub struct Point {
-  x: f32,
-  y: f32
-}
-
-pub struct Grid {
-  w: i32,
-  h: i32
-}
-
+thread_local global_log: io.logger
+pub struct Point { x: f32, y: f32 }
+pub struct Grid { w: i32, h: i32 }
 pub struct X { a: i32, b: i32, c: i32, x: f32, y: f32, z: f32, }
 pub struct Counter { n: i32 }
 pub fn counter_new() Counter { return Counter{n: 0} }
-pub fn counter_inc(s: *Counter) Counter { s.n += 1 }
-pub fn counter_dec(s: *Counter) Counter { s.n -= 1 }
-
-pub enum MyEnum {
-  Some,
-  Thing,
-  Here
-}
-
+pub fn counter_inc(s: *Counter) { s.n += 1 }
+pub fn counter_dec(s: *Counter) { s.n -= 1 }
+pub enum MyEnum { Some, Thing, Here }
 pub packed struct ThingPayload { info: i32 }
-pub enum Partnered {
-  Some: i32,
-  Thing: ThingPayload,
-  Here: f32
-}
-
-pub enum ParseError {
-  None,
-  BadCheckSum,
-  InvalidFormat
-}
-
-pub struct ParseResult {
-  error: ParseError,
-  payload: i32
-}
-
-pub struct Job {
-  task_id: u32,
-}
-
-const MAX_BUFFER_SIZE = 4096
-const ENGINE_VERSION = "1.0.0"
-
+pub enum Partnered { Some: i32, Thing: ThingPayload, Here: f32 }
+pub enum ParseError { None, BadChecksum, InvalidFormat }
+pub struct ParseResult { error: ParseError, payload: i32 }
+pub struct Job { task_id: u32, }
+const max_buffer_size = 4096
+const engine_version = "1.0.0"
 pub fn main() {
-  global_log = io.Logger.init_stdout()
-  global_log.print("Initializing engine version: {}", ENGINE_VERSION)
-  main_arena = os.make_arena(1024 * 1024)
-  defer main_arena.release()
+  global_log = io.logger.init_stdout()
+  io.logger.logger_print(&global_log, "initializing engine version: {}", engine_version)
+  main_arena := os.make_arena(1024 * 1024)
+  defer os.arena_release(&main_arena)
   primitives()
   pointers()
   arrays_and_slices()
@@ -70,164 +36,130 @@ pub fn main() {
   memory(&main_arena)
   concurrency()
 }
-
 fn primitives() {
-  x = 0
+  x := 0
   y: u32 = 1
   single: f32 = 1.0
   double: f64 = 1.0
-  big = 1_000_000
-  b = 0b1010
-  o = 0o17
-  char = 'a'
-  boolean = false
-
+  big := 1_000_000
+  b := 0b1010
+  o := 0o17
+  char := 'a'
+  boolean := false
   later: i32
   later = 42
-  _ = later
 }
-
 fn pointers() {
   x: i32 = 1
-  p = &x
+  p := &x
   io.println("x == p.*", p.* == x)
 }
-
 fn arrays_and_slices() {
   fixed_nums: [5]i32 = [5]i32{1,2,3,4,5}
   slice_view: []i32 = fixed_nums
 }
-
 fn if_statements() {
-  yes = true
-  if yes {
-    io.println("This should print")
-  } else {
-    io.println("This should not print")
-  }
-  x = 1
+  yes := true
+  if yes { io.println("this should print") } else { io.println("this should not print") }
+  x := 1
   y: i32
-  if x == 1 {
-    y = 12
-  } else {
-    y = 13
-  }
-  _ = y
+  if x == 1 { y = 12 } else { y = 13 }
 }
-
 fn case_statements() {
-  x = 100
+  x := 100
   case x {
     1 => { io.println("not this") },
     2..=99 => { io.println("not this") },
     101, 102 => { io.println("not this") },
     _ => { io.println("the default runs") }
   }
-  y = Partnered.Thing(ThingPayload{ info: 0 })
+  y := Partnered.Thing(ThingPayload{ info: 0 })
   case y {
-    Partnered.Thing t => { io.println("Val: {}", t)},
+    Partnered.Thing t => { io.println("val: {}", t)},
     _ => {},
   }
 }
-
 fn defer_statements() {
-  defer io.println("second")
+  defer { io.println("second") }
   defer { io.println("first") }
 }
-
 fn loops() {
   for {
     io.println("infinite loop, please break")
     break
   }
-  a = 0
+  a := 0
   for a < 10 { a += 1 }
-
-  items = []i32{ 1, 2, 3, 4, 5 }
+  items := [_]i32{ 1, 2, 3, 4, 5 }
   for item in items { io.println("item: {}", item) }
 }
-
 fn add(x: i32, y: i32) i32 { return x + y }
-
 fn walk(start: i32) i32 {
-  cur = start
+  cur := start
   for cur < 100 { cur += 2 }
   return cur
 }
-
-fn functions() { val = walk(add(1,2)) }
-
+fn functions() { val := walk(add(1,2)) }
 fn enums() {
   x: MyEnum = MyEnum.Some
-  y: Partnered = Partnered.Thing{payload: ThingPayload{info: 42}}
-
+  y: Partnered = Partnered.Thing(ThingPayload{ info: 42 })
   case x {
     MyEnum.Some => { io.println("some") },
     MyEnum.Thing => { io.println("thing") },
     MyEnum.Here => { io.println("here") }
-    // exhaustive, no _ required
+    // already exhaustive, no _ required
   }
-
   case y {
     Partnered.Some => { io.println("some internal state") },
-    Partnered.Thing t => { io.println("Thing has payload {}", t) },
+    Partnered.Thing t => { io.println("thing has payload {}", t) },
     _ => { } // not exhaustive so use _
   }
 }
-
-fn parse_binary_chunk(arena: *Arena, bytes: []u8) ParseResult {
-  if bytes == nil { #panic("Received null payload") }
+fn parse_binary_chunk(arena: *arena, bytes: []u8) ParseResult {
+  if bytes == nil { #panic("received null payload") }
   if #len(bytes) < 4 { return ParseResult{ error: ParseError.InvalidFormat, payload: 0 } }
   return ParseResult{ error: ParseError.None, payload: 42 }
 }
-
-fn errors(arena: *Arena) {
-  mock_bytes = os.read_entire_file(arena, "config.bin")
-  res = parse_binary_chunk(arena, mock_bytes)
+fn errors(arena: *arena) {
+  mock_bytes := os.read_entire_file(arena, "config.bin")
+  res := parse_binary_chunk(arena, mock_bytes)
   if res.error != ParseError.None {
-    global_log.println("Recoverable file error encountered")
+    io.logger.println(&global_log, "recoverable file error encountered")
     return
   }
-  global_log.println("Success! Payload: {}", res.payload)
+  io.logger.println(&global_log, "success! payload: {}", res.payload)
 }
-
 fn structs() {
-  x = X{a: 1, b: 2, c: 3, x: 1.0, y: 2.0, z: 3.0 }
-  _ = x
-  empty_x = X{}
-  _ = empty_x
-
-  c = counter_new()
-  couner_inc(&c)
+  x := X{a: 1, b: 2, c: 3, x: 1.0, y: 2.0, z: 3.0 }
+  empty_x := X{}
+  c := counter_new()
+  counter_inc(&c)
   counter_inc(&c)
   counter_dec(&c)
-  io.println("Count: {}", c.n)
+  io.println("count: {}", c.n)
 }
-
-fn memory(arena: *Arena) {
+fn memory(arena: *arena) {
   byte_count: u64 = #sizeof(Point)
   alignment: u64 = #alignof(Point)
-  _ = alignment
-
-  p: *Point = arena_push(arena, Point)
+  p: *Point = arena_push(&arena, Point)
   p.x = 10
   p.y = 10
   print_point_readonly(p)
 }
-
 fn print_point_readonly(p: *const Point) {
   io.println("Point coords: {} {}", p.x, p.y)
   // p.x = val - banned because p is *const
 }
-
 fn concurrency() {
-  job_queue = [16]Job{}
-  t1 = thread.create(&job_queue, worker_loop)
-  t2 = thread.create(&job_queue, worker_loop)
-
-  t1.join()
-  t2.join()
+  job_queue := [16]Job{}
+  t1 := thread.create(&job_queue, worker_loop)
+  t2 := thread.create(&job_queue, worker_loop)
+  thread.join(&t1)
+  thread.join(&t2)
 }
-
 fn worker_loop(arg: *void) {}
-
+fn math(x,y: i32, func: *fn(i32,i32)i32) {}
+fn math_add(x,y: i32) i32 {}
+struct Interface { cool_fn: *fn(i32,i32)i32, }
+interface := Interface{ cool_fn: &math_add }
+fn stuff() { interface.cool_fn(1,2) }
