@@ -1,0 +1,16 @@
+pub fn copy(dst: []u8, src: []u8) {
+  if #len(dst) < #len(src) { #panic("copy destination too small") }
+  i := 0
+  for i < #len(src) {
+    dst[i] = src[i]
+    i += 1
+  }
+}
+
+pub fn zero(dst: []u8) {
+  i := 0
+  for i < #len(src) {
+    dst[i] = 0
+    i += 1
+  }
+}

@@ -1,4 +1,5 @@
 use "std/io" thing
+use "std/io"
 use "std/os"
 use "std/thread"
 thread_local global_log: io.logger
@@ -20,8 +21,8 @@ const engine_version = "1.0.0"
 pub fn main() {
   global_log = io.logger.init_stdout()
   io.logger.logger_print(&global_log, "initializing engine version: {}", engine_version)
-  main_arena := os.make_arena(1024 * 1024)
-  defer os.arena_release(&main_arena)
+  main_arena := mem.make_arena(1024 * 1024)
+  defer mem.arena_release(&main_arena)
   primitives()
   pointers()
   arrays_and_slices()
@@ -37,13 +38,13 @@ pub fn main() {
   concurrency()
 }
 fn primitives() {
-  x := 0
+  x := 0 // defaults to i32
   y: u32 = 1
   single: f32 = 1.0
   double: f64 = 1.0
   big := 1_000_000
-  b := 0b1010
-  o := 0o17
+  b := 0b1010 // defaults to i32
+  o := 0o17 // defaults to i32
   char := 'a'
   boolean := false
   later: i32
@@ -75,7 +76,7 @@ fn case_statements() {
   }
   y := Partnered.Thing(ThingPayload{ info: 0 })
   case y {
-    Partnered.Thing t => { io.println("val: {}", t)},
+    Partnered.Thing t => { io.println("val: {}", t)}, // assigns the payload value to t (or whatever it gets named here)
     _ => {},
   }
 }
@@ -115,12 +116,12 @@ fn enums() {
     _ => { } // not exhaustive so use _
   }
 }
-fn parse_binary_chunk(arena: *arena, bytes: []u8) ParseResult {
+fn parse_binary_chunk(arena: *mem.Arena, bytes: []u8) ParseResult {
   if bytes == nil { #panic("received null payload") }
   if #len(bytes) < 4 { return ParseResult{ error: ParseError.InvalidFormat, payload: 0 } }
   return ParseResult{ error: ParseError.None, payload: 42 }
 }
-fn errors(arena: *arena) {
+fn errors(arena: *mem.Arena) {
   mock_bytes := os.read_entire_file(arena, "config.bin")
   res := parse_binary_chunk(arena, mock_bytes)
   if res.error != ParseError.None {
@@ -138,10 +139,10 @@ fn structs() {
   counter_dec(&c)
   io.println("count: {}", c.n)
 }
-fn memory(arena: *arena) {
+fn memory(arena: *mem.Arena) {
   byte_count: u64 = #sizeof(Point)
   alignment: u64 = #alignof(Point)
-  p: *Point = arena_push(&arena, Point)
+  p: *Point = mem.arena_push(&arena, Point)
   p.x = 10
   p.y = 10
   print_point_readonly(p)
@@ -159,7 +160,7 @@ fn concurrency() {
 }
 fn worker_loop(arg: *void) {}
 fn math(x,y: i32, func: *fn(i32,i32)i32) {}
-fn math_add(x,y: i32) i32 {}
+fn math_add(x,y: i32) i32 { return x + y }
 struct Interface { cool_fn: *fn(i32,i32)i32, }
-interface := Interface{ cool_fn: &math_add }
+interface := Interface{ cool_fn: &math_add } // instantiating an interface struct
 fn stuff() { interface.cool_fn(1,2) }

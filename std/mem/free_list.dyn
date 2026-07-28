@@ -1,0 +1,38 @@
+struct FreeListNode {
+  next: *FreeListNode
+}
+
+pub struct FreeList {
+  backing: []u8,
+  slot_size: u64,
+  free_head: *FreeListNode
+}
+
+pub fn make_free_list(arena: *Arena, slot_size: u64, count: u64) FreeList {
+  real_slot_size := slot_size
+  if real_slot_size < #sizeof(FreeListNode) { real_slot_size = #sizeof(FreeListNode) }
+
+  backing := arena_push(arena, real_slot_size * count)
+  bytes := #cast(*u8)backing
+
+  i := 0
+  for i < count {
+    slot_ptr := #cast(*FreeListNode) (bytes + i * real_slot_size)
+    if i == count - 1 { slot_ptr.next = nil } else { slot_ptr.next = #cast(*FreeListNode) (bytes + (i + 1) * real_slot_size) }
+  }
+  i += 1
+  return FreeList{ backing: backing, slot_size: real_slot_size, free_head: #cast(*FreeListNode) bytes }
+}
+
+pub fn free_list_alloc(fl: *FreeList) *void {
+  if fl.free_head == nil { #panic("free list exhausted") }
+  node := fl.free_head
+  fl.free_head = node.next
+  return #cast(*void)node
+}
+
+pub fn free_list_free(fl: *FreeList, ptr: *void) {
+  node := #cast(*FreeListNode)ptr
+  node.next = fl.free_head
+  fl.free_head = node
+}

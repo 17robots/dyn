@@ -1,0 +1,7 @@
+pub fn assert(cond: bool, msg: []const u8) {
+  if !cond { #panic(msg) }
+}
+
+pub fn unreachable() {
+  #panic("unreachable code hit")
+}

@@ -1,0 +1,31 @@
+pub struct Arena {
+  data: []u8,
+  offset: u64
+}
+
+pub fn make_arena(size: u64) Arena {
+  buf := os_alloc_pages(size)
+  return Arena{ data: buf, offset: 0 }
+}
+
+pub fn arena_free(arena: *Arena) {
+  os_free_pages(arena.data)
+  arena.data = nil
+  arena.offset = 0
+}
+
+pub fn arena_reset(arena: *Arena) {
+  arena.offset = 0
+}
+
+pub fn arena_set_pos(arena: *Arena, pos: u64) {
+  if pos > arena.offset { #panic("cannot set arena position forward") }
+  arena.offset = pos
+}
+
+pub fn arena_push(arena: *Arena, size: u64) *void {
+  if arena.offset + size > #len(arena.data) { #panic("Arena out of memory") }
+  ptr := &arena.data[arena.offset]
+  arena.offset += size
+  return #cast(*void) ptr
+}
