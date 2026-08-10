@@ -1,4 +1,4 @@
-use "std/io" thing
+use "std/io" thin
 use "std/io"
 use "std/os"
 use "std/thread"
@@ -16,8 +16,9 @@ pub enum Partnered { Some: i32, Thing: ThingPayload, Here: f32 }
 pub enum ParseError { None, BadChecksum, InvalidFormat }
 pub struct ParseResult { error: ParseError, payload: i32 }
 pub struct Job { task_id: u32, }
-const max_buffer_size = 4096
-const engine_version = "1.0.0"
+const MAX_BUFFER_SIZE = 4096
+const ENGINE_VERSION = "1.0.0"
+type Thing = i32
 pub fn main() {
   global_log = io.logger.init_stdout()
   io.logger.logger_print(&global_log, "initializing engine version: {}", engine_version)
@@ -162,5 +163,15 @@ fn worker_loop(arg: *void) {}
 fn math(x,y: i32, func: *fn(i32,i32)i32) {}
 fn math_add(x,y: i32) i32 { return x + y }
 struct Interface { cool_fn: *fn(i32,i32)i32, }
-interface := Interface{ cool_fn: &math_add } // instantiating an interface struct
+const interface := Interface{ cool_fn: &math_add } // instantiating an interface struct
 fn stuff() { interface.cool_fn(1,2) }
+struct Thing($T) {
+  a: $T
+}
+const THING_THING: Thing(i32) = Thing(i32){ a: 1 }
+enum(i8) Result($T, $V) {
+  ok: $T,
+  err: $V
+}
+type CoolResult = Result(i32, []u8)
+const Cool := CoolResult.ok(5)
