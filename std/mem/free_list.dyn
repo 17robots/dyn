@@ -1,38 +1,36 @@
-struct FreeListNode {
-  next: *FreeListNode
-}
+struct FreeListNode { next: *FreeListNode }
 
 pub struct FreeList {
   backing: []u8,
-  slot_size: u64,
-  free_head: *FreeListNode
+  slot_size: usize,
+  free_head: *FreeListNode,
 }
 
-pub fn make_free_list(arena: *Arena, slot_size: u64, count: u64) FreeList {
-  real_slot_size := slot_size
-  if real_slot_size < #sizeof(FreeListNode) { real_slot_size = #sizeof(FreeListNode) }
-
-  backing := arena_push(arena, real_slot_size * count)
-  bytes := #cast(*u8)backing
-
-  i := 0
+pub fn free_list_init(backing: []u8, slot_size: usize) FreeList {
+  actual := slot_size
+  if actual < #sizeof(FreeListNode) { actual = #sizeof(FreeListNode) }
+  if actual == 0 || #len(backing) < actual { #panic("free list requires at least one slot") }
+  count := #len(backing) / actual
+  i: usize = 0
   for i < count {
-    slot_ptr := #cast(*FreeListNode) (bytes + i * real_slot_size)
-    if i == count - 1 { slot_ptr.next = nil } else { slot_ptr.next = #cast(*FreeListNode) (bytes + (i + 1) * real_slot_size) }
+    node := #cast(*FreeListNode) &backing[i * actual]
+    if i + 1 < count { node.next = #cast(*FreeListNode) &backing[(i + 1) * actual] }
+    else { node.next = nil }
+    i += 1
   }
-  i += 1
-  return FreeList{ backing: backing, slot_size: real_slot_size, free_head: #cast(*FreeListNode) bytes }
+  return FreeList{ backing: backing, slot_size: actual, free_head: #cast(*FreeListNode) &backing[0] }
 }
 
-pub fn free_list_alloc(fl: *FreeList) *void {
-  if fl.free_head == nil { #panic("free list exhausted") }
-  node := fl.free_head
-  fl.free_head = node.next
-  return #cast(*void)node
+pub fn free_list_alloc(list: *FreeList) *void {
+  if list.free_head == nil { #panic("free list exhausted") }
+  node := list.free_head
+  list.free_head = node.next
+  return #cast(*void) node
 }
 
-pub fn free_list_free(fl: *FreeList, ptr: *void) {
-  node := #cast(*FreeListNode)ptr
-  node.next = fl.free_head
-  fl.free_head = node
+pub fn free_list_free(list: *FreeList, memory: *void) {
+  if memory == nil { return }
+  node := #cast(*FreeListNode) memory
+  node.next = list.free_head
+  list.free_head = node
 }

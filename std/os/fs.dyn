@@ -1,0 +1,144 @@
+use "std/mem"
+
+pub struct DirectoryEntry {
+  name: []u8,
+  kind: u8,
+}
+
+pub fn list_directory(arena: *mem.Arena, path: []const u8, entry_capacity: usize, byte_capacity: usize) []DirectoryEntry {
+  if entry_capacity == 0 || byte_capacity < 24 { #panic("invalid directory capacity") }
+  mark := mem.arena_mark(arena)
+  path_memory := #cast(*u8) mem.arena_push(arena, #len(path) + 1, 1)
+  terminated := path_memory[..#len(path) + 1]
+  i: usize = 0
+  for i < #len(path) {
+    terminated[i] = path[i]
+    i += 1
+  }
+  descriptor := #syscall(257, -100, path_memory, 65536, 0)
+  mem.arena_rewind(arena, mark)
+  if descriptor < 0 { #panic("directory open failed") }
+
+  entries_raw := #cast(*DirectoryEntry) mem.arena_push(arena, entry_capacity * #sizeof(DirectoryEntry), #alignof(DirectoryEntry))
+  entries := entries_raw[..entry_capacity]
+  buffer_raw := #cast(*u8) mem.arena_push(arena, byte_capacity, 8)
+  buffer := buffer_raw[..byte_capacity]
+  count: usize = 0
+  for {
+    bytes_read := #syscall(217, descriptor, buffer_raw, byte_capacity)
+    if bytes_read < 0 {
+      _ = #syscall(3, descriptor)
+      #panic("directory read failed")
+    }
+    if bytes_read == 0 { break }
+    used := #cast(usize) bytes_read
+    offset: usize = 0
+    for offset < used {
+      if offset + 19 > used {
+        _ = #syscall(3, descriptor)
+        #panic("invalid directory record")
+      }
+      record_low := #cast(usize) buffer[offset + 16]
+      record_high := #cast(usize) buffer[offset + 17]
+      record_length := record_low + record_high * 256
+      if record_length < 20 || offset + record_length > used {
+        _ = #syscall(3, descriptor)
+        #panic("invalid directory record")
+      }
+      name_start := offset + 19
+      name_end := name_start
+      for name_end < offset + record_length && buffer[name_end] != 0 { name_end += 1 }
+      name_length := name_end - name_start
+      dot := name_length == 1 && buffer[name_start] == '.'
+      dot_dot := name_length == 2 && buffer[name_start] == '.' && buffer[name_start + 1] == '.'
+      if !dot && !dot_dot {
+        if count == entry_capacity {
+          _ = #syscall(3, descriptor)
+          #panic("directory entry capacity exceeded")
+        }
+        name_raw := #cast(*u8) mem.arena_push(arena, name_length, 1)
+        name := name_raw[..name_length]
+        j: usize = 0
+        for j < name_length {
+          name[j] = buffer[name_start + j]
+          j += 1
+        }
+        entries[count] = .{ name: name, kind: buffer[offset + 18] }
+        count += 1
+      }
+      offset += record_length
+    }
+  }
+  _ = #syscall(3, descriptor)
+  return entries[..count]
+}
+
+pub fn read_stream(arena: *mem.Arena, path: []const u8, capacity: usize) []u8 {
+  mark := mem.arena_mark(arena)
+  path_memory := #cast(*u8) mem.arena_push(arena, #len(path) + 1, 1)
+  terminated := path_memory[..#len(path) + 1]
+  i: usize = 0
+  for i < #len(path) {
+    terminated[i] = path[i]
+    i += 1
+  }
+  descriptor := #syscall(257, -100, path_memory, 0, 0)
+  mem.arena_rewind(arena, mark)
+  if descriptor < 0 { #panic("file open failed") }
+
+  raw := #cast(*u8) mem.arena_push(arena, capacity, 1)
+  destination := raw[..capacity]
+  offset: usize = 0
+  for offset < capacity {
+    count := #syscall(0, descriptor, &destination[offset], capacity - offset)
+    if count < 0 {
+      _ = #syscall(3, descriptor)
+      #panic("file read failed")
+    }
+    if count == 0 { break }
+    offset += #cast(usize) count
+  }
+  _ = #syscall(3, descriptor)
+  return destination[..offset]
+}
+
+pub fn read_file(arena: *mem.Arena, path: []const u8) []u8 {
+  mark := mem.arena_mark(arena)
+  path_memory := #cast(*u8) mem.arena_push(arena, #len(path) + 1, 1)
+  terminated := path_memory[..#len(path) + 1]
+  i: usize = 0
+  for i < #len(path) {
+    terminated[i] = path[i]
+    i += 1
+  }
+  descriptor := #syscall(257, -100, path_memory, 0, 0)
+  mem.arena_rewind(arena, mark)
+  if descriptor < 0 { #panic("file open failed") }
+
+  length_result := #syscall(8, descriptor, 0, 2)
+  if length_result < 0 {
+    _ = #syscall(3, descriptor)
+    #panic("file length query failed")
+  }
+  _ = #syscall(8, descriptor, 0, 0)
+  length := #cast(usize) length_result
+  if length == 0 {
+    _ = #syscall(3, descriptor)
+    return arena.data[0..0]
+  }
+
+  raw := #cast(*u8) mem.arena_push(arena, length, 1)
+  destination := raw[..length]
+  offset: usize = 0
+  for offset < length {
+    count := #syscall(0, descriptor, &destination[offset], length - offset)
+    if count < 0 {
+      _ = #syscall(3, descriptor)
+      #panic("file read failed")
+    }
+    if count == 0 { break }
+    offset += #cast(usize) count
+  }
+  _ = #syscall(3, descriptor)
+  return destination[..offset]
+}

@@ -1,16 +1,17 @@
-pub fn copy(dst: []u8, src: []u8) {
-  if #len(dst) < #len(src) { #panic("copy destination too small") }
-  i := 0
-  for i < #len(src) {
-    dst[i] = src[i]
+pub fn copy(destination: []u8, source: []const u8) usize {
+  if #len(destination) < #len(source) { #panic("copy destination too small") }
+  i: usize = 0
+  for i < #len(source) {
+    destination[i] = source[i]
     i += 1
   }
+  return #len(source)
 }
 
-pub fn zero(dst: []u8) {
-  i := 0
-  for i < #len(src) {
-    dst[i] = 0
+pub fn zero(bytes: []u8) {
+  i: usize = 0
+  for i < #len(bytes) {
+    bytes[i] = 0
     i += 1
   }
 }

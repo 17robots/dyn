@@ -1,177 +1,115 @@
-use "std/io" thin
 use "std/io"
+use "std/mem"
 use "std/os"
-use "std/thread"
-thread_local global_log: io.logger
-pub struct Point { x: f32, y: f32 }
-pub struct Grid { w: i32, h: i32 }
-pub struct X { a: i32, b: i32, c: i32, x: f32, y: f32, z: f32, }
-pub struct Counter { n: i32 }
-pub fn counter_new() Counter { return Counter{n: 0} }
-pub fn counter_inc(s: *Counter) { s.n += 1 }
-pub fn counter_dec(s: *Counter) { s.n -= 1 }
-pub enum MyEnum { Some, Thing, Here }
-pub packed struct ThingPayload { info: i32 }
-pub enum Partnered { Some: i32, Thing: ThingPayload, Here: f32 }
-pub enum ParseError { None, BadChecksum, InvalidFormat }
-pub struct ParseResult { error: ParseError, payload: i32 }
-pub struct Job { task_id: u32, }
-const MAX_BUFFER_SIZE = 4096
-const ENGINE_VERSION = "1.0.0"
-type Thing = i32
-pub fn main() {
-  global_log = io.logger.init_stdout()
-  io.logger.logger_print(&global_log, "initializing engine version: {}", engine_version)
-  main_arena := mem.make_arena(1024 * 1024)
-  defer mem.arena_release(&main_arena)
-  primitives()
-  pointers()
-  arrays_and_slices()
-  if_statements()
-  case_statements()
-  defer_statements()
-  loops()
-  functions()
-  enums()
-  errors(&main_arena)
-  structs()
-  memory(&main_arena)
-  concurrency()
+use "std/time"
+
+struct Point { x, y: i32 }
+enum PacketKind { Data, Stop }
+struct Packet { kind: PacketKind, value: i32 }
+enum Result { Value: i32, Error }
+
+fn require(condition: bool) {
+  if !condition { #panic("demo check failed") }
 }
-fn primitives() {
-  x := 0 // defaults to i32
-  y: u32 = 1
-  single: f32 = 1.0
-  double: f64 = 1.0
-  big := 1_000_000
-  b := 0b1010 // defaults to i32
-  o := 0o17 // defaults to i32
-  char := 'a'
-  boolean := false
-  later: i32
-  later = 42
+
+fn add(left, right: i32) i32 { return left + right }
+fn subtract(left, right: i32) i32 { return left - right }
+
+fn apply(operation: *fn(i32, i32) i32, left, right: i32) i32 {
+  return operation(left, right)
 }
-fn pointers() {
-  x: i32 = 1
-  p := &x
-  io.println("x == p.*", p.* == x)
-}
-fn arrays_and_slices() {
-  fixed_nums: [5]i32 = [5]i32{1,2,3,4,5}
-  slice_view: []i32 = fixed_nums
-}
-fn if_statements() {
-  yes := true
-  if yes { io.println("this should print") } else { io.println("this should not print") }
-  x := 1
-  y: i32
-  if x == 1 { y = 12 } else { y = 13 }
-}
-fn case_statements() {
-  x := 100
-  case x {
-    1 => { io.println("not this") },
-    2..=99 => { io.println("not this") },
-    101, 102 => { io.println("not this") },
-    _ => { io.println("the default runs") }
+
+fn language_demo() {
+  integer: i32 = 40
+  floating: f64 = 1.5
+  character: u32 = 'λ'
+  enabled := true
+  point := Point{ x: integer, y: 2 }
+  numbers: [5]i32 = [1, 2, 3, 4, 5]
+  middle := numbers[1..4]
+
+  require(enabled)
+  require(floating == 1.5)
+  require(character == 955)
+  require(point.x + point.y == 42)
+  require(#len(middle) == 3 && middle[0] == 2 && middle[2] == 4)
+
+  operation: *fn(i32, i32) i32 = &add
+  require(apply(operation, 20, 22) == 42)
+  operation = &subtract
+  require(apply(operation, 50, 8) == 42)
+
+  result := Result.Value(42)
+  extracted: i32 = 0
+  case result {
+    Result.Value value => { extracted = value },
+    _ => { extracted = -1 },
   }
-  y := Partnered.Thing(ThingPayload{ info: 0 })
-  case y {
-    Partnered.Thing t => { io.println("val: {}", t)}, // assigns the payload value to t (or whatever it gets named here)
-    _ => {},
+  require(extracted == 42)
+
+  packet := Packet{ kind: PacketKind.Data, value: extracted }
+  case packet.kind {
+    PacketKind.Data => { require(packet.value == 42) },
+    PacketKind.Stop => { #panic("unexpected packet") },
   }
+  io.println("language: ok")
 }
-fn defer_statements() {
-  defer { io.println("second") }
-  defer { io.println("first") }
+
+fn memory_demo() {
+  backing: [128]u8 = []
+  arena := mem.arena_init(backing[..])
+  mark := mem.arena_mark(&arena)
+  point := #cast(*Point) mem.arena_push(&arena, #sizeof(Point), #alignof(Point))
+  require(point.x == 0 && point.y == 0)
+  point.x = 21
+  point.y = 21
+  require(point.x + point.y == 42)
+  mem.arena_rewind(&arena, mark)
+
+  bytes: [8]u8 = []
+  require(mem.copy(bytes[..], "dyn") == 3)
+  require(bytes[0] == 'd' && bytes[2] == 'n')
+
+  slots: [32]u8 = []
+  list := mem.free_list_init(slots[..], 8)
+  first := mem.free_list_alloc(&list)
+  second := mem.free_list_alloc(&list)
+  require(first != second)
+  mem.free_list_free(&list, first)
+  require(mem.free_list_alloc(&list) == first)
+  io.println("memory: ok")
 }
-fn loops() {
-  for {
-    io.println("infinite loop, please break")
-    break
-  }
-  a := 0
-  for a < 10 { a += 1 }
-  items := [_]i32{ 1, 2, 3, 4, 5 }
-  for item in items { io.println("item: {}", item) }
+
+fn reflection_demo() {
+  point := #typeof(Point)
+  function := #typeof(add)
+  require(point.kind == TypeKind.Struct)
+  require(point.size == 8 && point.alignment == 4)
+  require(#len(point.name) == 5)
+  require(function.kind == TypeKind.Function)
+  require(point.id != function.id)
+  io.println("reflection: ok")
 }
-fn add(x: i32, y: i32) i32 { return x + y }
-fn walk(start: i32) i32 {
-  cur := start
-  for cur < 100 { cur += 2 }
-  return cur
+
+fn defer_demo() {
+  defer io.println("defer: first registered")
+  defer io.println("defer: second registered")
 }
-fn functions() { val := walk(add(1,2)) }
-fn enums() {
-  x: MyEnum = MyEnum.Some
-  y: Partnered = Partnered.Thing(ThingPayload{ info: 42 })
-  case x {
-    MyEnum.Some => { io.println("some") },
-    MyEnum.Thing => { io.println("thing") },
-    MyEnum.Here => { io.println("here") }
-    // already exhaustive, no _ required
-  }
-  case y {
-    Partnered.Some => { io.println("some internal state") },
-    Partnered.Thing t => { io.println("thing has payload {}", t) },
-    _ => { } // not exhaustive so use _
-  }
+
+fn runtime_demo() {
+  now := time.monotonic_now()
+  require(now.seconds > 0)
+  require(os.process_id() > 0)
+  require(os.thread_id() > 0)
+  io.println("runtime: ok")
 }
-fn parse_binary_chunk(arena: *mem.Arena, bytes: []u8) ParseResult {
-  if bytes == nil { #panic("received null payload") }
-  if #len(bytes) < 4 { return ParseResult{ error: ParseError.InvalidFormat, payload: 0 } }
-  return ParseResult{ error: ParseError.None, payload: 42 }
+
+pub fn run_demo() {
+  io.println("dyn demo")
+  language_demo()
+  memory_demo()
+  reflection_demo()
+  defer_demo()
+  runtime_demo()
+  io.println("demo complete")
 }
-fn errors(arena: *mem.Arena) {
-  mock_bytes := os.read_entire_file(arena, "config.bin")
-  res := parse_binary_chunk(arena, mock_bytes)
-  if res.error != ParseError.None {
-    io.logger.println(&global_log, "recoverable file error encountered")
-    return
-  }
-  io.logger.println(&global_log, "success! payload: {}", res.payload)
-}
-fn structs() {
-  x := X{a: 1, b: 2, c: 3, x: 1.0, y: 2.0, z: 3.0 }
-  empty_x := X{}
-  c := counter_new()
-  counter_inc(&c)
-  counter_inc(&c)
-  counter_dec(&c)
-  io.println("count: {}", c.n)
-}
-fn memory(arena: *mem.Arena) {
-  byte_count: u64 = #sizeof(Point)
-  alignment: u64 = #alignof(Point)
-  p: *Point = mem.arena_push(&arena, Point)
-  p.x = 10
-  p.y = 10
-  print_point_readonly(p)
-}
-fn print_point_readonly(p: *const Point) {
-  io.println("Point coords: {} {}", p.x, p.y)
-  // p.x = val - banned because p is *const
-}
-fn concurrency() {
-  job_queue := [16]Job{}
-  t1 := thread.create(&job_queue, worker_loop)
-  t2 := thread.create(&job_queue, worker_loop)
-  thread.join(&t1)
-  thread.join(&t2)
-}
-fn worker_loop(arg: *void) {}
-fn math(x,y: i32, func: *fn(i32,i32)i32) {}
-fn math_add(x,y: i32) i32 { return x + y }
-struct Interface { cool_fn: *fn(i32,i32)i32, }
-const interface := Interface{ cool_fn: &math_add } // instantiating an interface struct
-fn stuff() { interface.cool_fn(1,2) }
-struct Thing($T) {
-  a: $T
-}
-const THING_THING: Thing(i32) = Thing(i32){ a: 1 }
-enum(i8) Result($T, $V) {
-  ok: $T,
-  err: $V
-}
-type CoolResult = Result(i32, []u8)
-const Cool := CoolResult.ok(5)

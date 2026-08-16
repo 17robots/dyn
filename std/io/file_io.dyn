@@ -1,0 +1,11 @@
+pub fn read_descriptor(descriptor: isize, destination: []u8) isize {
+  if #len(destination) == 0 { return 0 }
+  return #syscall(0, descriptor, &destination[0], #len(destination))
+}
+
+pub fn write_descriptor(descriptor: isize, source: []const u8) isize {
+  if #len(source) == 0 { return 0 }
+  return #syscall(1, descriptor, &source[0], #len(source))
+}
+
+pub fn close_descriptor(descriptor: isize) isize { return #syscall(3, descriptor) }

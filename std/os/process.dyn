@@ -1,0 +1,31 @@
+pub fn arguments(arena: *mem.Arena, byte_capacity: usize, argument_capacity: usize) [][]const u8 {
+  bytes := read_stream(arena, "/proc/self/cmdline", byte_capacity)
+  raw := #cast(*[]const u8) mem.arena_push(arena, argument_capacity * #sizeof([]const u8), #alignof([]const u8))
+  result := raw[..argument_capacity]
+  count: usize = 0
+  start: usize = 0
+  i: usize = 0
+  for i < #len(bytes) {
+    if bytes[i] == 0 {
+      if count == argument_capacity { #panic("argument capacity exceeded") }
+      result[count] = bytes[start..i]
+      count += 1
+      start = i + 1
+    }
+    i += 1
+  }
+  if start < #len(bytes) {
+    if count == argument_capacity { #panic("argument capacity exceeded") }
+    result[count] = bytes[start..]
+    count += 1
+  }
+  return result[..count]
+}
+
+pub fn process_id() isize { return #syscall(39) }
+pub fn thread_id() isize { return #syscall(186) }
+
+pub fn exit_process(status: u8) {
+  _ = #syscall(60, status)
+  #panic("exit syscall returned")
+}

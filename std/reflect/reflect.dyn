@@ -1,0 +1,2 @@
+// Optional reflection utilities belong here.
+// #typeof, TypeInfo, and TypeKind are compiler-provided and require no import.

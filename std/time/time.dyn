@@ -1,0 +1,11 @@
+pub struct Timespec {
+  seconds: i64,
+  nanoseconds: i64,
+}
+
+pub fn monotonic_now() Timespec {
+  value := Timespec{ seconds: 0, nanoseconds: 0 }
+  result := #syscall(228, 1, &value)
+  if result != 0 { #panic("clock_gettime failed") }
+  return value
+}

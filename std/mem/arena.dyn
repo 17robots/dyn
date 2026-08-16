@@ -1,31 +1,133 @@
 pub struct Arena {
   data: []u8,
-  offset: u64
+  offset: usize,
+  owns_data: bool,
 }
 
-pub fn make_arena(size: u64) Arena {
-  buf := os_alloc_pages(size)
-  return Arena{ data: buf, offset: 0 }
+struct ArenaBlock {
+  arena: Arena,
+  next: *ArenaBlock,
 }
 
-pub fn arena_free(arena: *Arena) {
-  os_free_pages(arena.data)
-  arena.data = nil
+pub struct ChainedArena {
+  first: *ArenaBlock,
+  current: *ArenaBlock,
+  block_capacity: usize,
+}
+
+pub fn arena_init(backing: []u8) Arena { return Arena{ data: backing, offset: 0, owns_data: false } }
+
+pub fn arena_make(capacity: usize) Arena {
+  if capacity == 0 { #panic("owned arena capacity must be non-zero") }
+  address := #syscall(9, 0, capacity, 3, 34, -1, 0)
+  if address < 0 { #panic("page allocation failed") }
+  data := (#cast(*u8) address)[..capacity]
+  return Arena{ data: data, offset: 0, owns_data: true }
+}
+pub fn arena_capacity(arena: *const Arena) usize { return #len(arena.data) }
+pub fn arena_mark(arena: *const Arena) usize { return arena.offset }
+pub fn arena_reset(arena: *Arena) { arena.offset = 0 }
+
+pub fn arena_rewind(arena: *Arena, mark: usize) {
+  if mark > arena.offset { #panic("arena mark is ahead of current position") }
+  arena.offset = mark
+}
+
+pub fn arena_release(arena: *Arena) {
+  if arena.owns_data && #len(arena.data) > 0 {
+    result := #syscall(11, &arena.data[0], #len(arena.data))
+    if result != 0 { #panic("page release failed") }
+  }
   arena.offset = 0
+  arena.data = arena.data[0..0]
+  arena.owns_data = false
 }
 
-pub fn arena_reset(arena: *Arena) {
-  arena.offset = 0
+pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *void {
+  if alignment == 0 || (alignment & (alignment - 1)) != 0 { #panic("arena alignment must be a non-zero power of two") }
+  if size == 0 { return nil }
+  if #len(arena.data) == 0 { #panic("arena exhausted") }
+  base := #cast(usize) &arena.data[0]
+  address := base + arena.offset
+  aligned_address := (address + alignment - 1) & ~(alignment - 1)
+  aligned := aligned_address - base
+  if aligned > #len(arena.data) || size > #len(arena.data) - aligned { #panic("arena exhausted") }
+  end := aligned + size
+  i := aligned
+  for i < end {
+    arena.data[i] = 0
+    i += 1
+  }
+  arena.offset = end
+  return #cast(*void) &arena.data[aligned]
 }
 
-pub fn arena_set_pos(arena: *Arena, pos: u64) {
-  if pos > arena.offset { #panic("cannot set arena position forward") }
-  arena.offset = pos
+fn arena_fits(arena: *const Arena, size: usize, alignment: usize) bool {
+  if alignment == 0 || (alignment & (alignment - 1)) != 0 { return false }
+  if size == 0 { return true }
+  if #len(arena.data) == 0 { return false }
+  base := #cast(usize) &arena.data[0]
+  address := base + arena.offset
+  aligned_address := (address + alignment - 1) & ~(alignment - 1)
+  aligned := aligned_address - base
+  return aligned <= #len(arena.data) && size <= #len(arena.data) - aligned
 }
 
-pub fn arena_push(arena: *Arena, size: u64) *void {
-  if arena.offset + size > #len(arena.data) { #panic("Arena out of memory") }
-  ptr := &arena.data[arena.offset]
-  arena.offset += size
-  return #cast(*void) ptr
+fn arena_block_make(capacity: usize) *ArenaBlock {
+  mapping_size: usize = 4096
+  address := #syscall(9, 0, mapping_size, 3, 34, -1, 0)
+  if address < 0 { #panic("arena block allocation failed") }
+  block := #cast(*ArenaBlock) address
+  block.arena = arena_make(capacity)
+  block.next = nil
+  return block
+}
+
+pub fn chained_arena_init(block_capacity: usize) ChainedArena {
+  if block_capacity == 0 { #panic("chained arena block capacity must be non-zero") }
+  return ChainedArena{ first: nil, current: nil, block_capacity: block_capacity }
+}
+
+pub fn chained_arena_push(chain: *ChainedArena, size: usize, alignment: usize) *void {
+  if alignment == 0 || (alignment & (alignment - 1)) != 0 { #panic("arena alignment must be a non-zero power of two") }
+  if chain.current == nil {
+    capacity := chain.block_capacity
+    if capacity < size + alignment { capacity = size + alignment }
+    block := arena_block_make(capacity)
+    chain.first = block
+    chain.current = block
+  }
+  for !arena_fits(&chain.current.arena, size, alignment) {
+    if chain.current.next != nil { chain.current = chain.current.next }
+    else {
+      next_capacity := chain.block_capacity
+      if next_capacity < size + alignment { next_capacity = size + alignment }
+      next_block := arena_block_make(next_capacity)
+      chain.current.next = next_block
+      chain.current = next_block
+    }
+  }
+  return arena_push(&chain.current.arena, size, alignment)
+}
+
+pub fn chained_arena_reset(chain: *ChainedArena) {
+  block := chain.first
+  for block != nil {
+    arena_reset(&block.arena)
+    block = block.next
+  }
+  chain.current = chain.first
+}
+
+pub fn chained_arena_release(chain: *ChainedArena) {
+  block := chain.first
+  for block != nil {
+    next := block.next
+    arena_release(&block.arena)
+    result := #syscall(11, block, 4096)
+    if result != 0 { #panic("arena block release failed") }
+    block = next
+  }
+  chain.first = nil
+  chain.current = nil
 }
