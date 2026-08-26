@@ -37,7 +37,7 @@ static void inspect_declarations(TSNode root, const DynSource *s,
     if (!strcmp(k, "comment") || !strcmp(k, "use") || !strcmp(k, "struct") ||
         !strcmp(k, "enum") || !strcmp(k, "variable") ||
         !strcmp(k, "const_variable") || !strcmp(k, "type_alias") ||
-        !strcmp(k, "foreign_fn"))
+        !strcmp(k, "extern_fn"))
       continue;
     if (strcmp(k, "fn")) {
       TSPoint p = ts_node_start_point(d);

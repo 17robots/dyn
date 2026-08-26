@@ -1,7 +1,11 @@
-pub fn arguments(arena: *mem.Arena, byte_capacity: usize, argument_capacity: usize) [][]const u8 {
-  bytes := read_stream(arena, "/proc/self/cmdline", byte_capacity)
-  raw := #cast(*[]const u8) mem.arena_push(arena, argument_capacity * #sizeof([]const u8), #alignof([]const u8))
-  result := raw[..argument_capacity]
+pub fn arguments(arena: *mem.Arena) [][]const u8 {
+  byte_capacity: usize = #cast(usize) 16384
+  argument_capacity: usize = #cast(usize) 128
+  bytes := read_stream_with_capacity(arena, "/proc/self/cmdline", byte_capacity)
+  argument_bytes: usize = argument_capacity * #sizeof([]const u8)
+  argument_alignment: usize = #alignof([]const u8)
+  raw: *[]const u8 = #cast(*[]const u8) mem.arena_push(arena, argument_bytes, argument_alignment)
+  result: [][]const u8 = raw[..argument_capacity]
   count: usize = 0
   start: usize = 0
   i: usize = 0

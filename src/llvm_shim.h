@@ -42,6 +42,13 @@ extern LLVMTypeRef LLVMFunctionType(LLVMTypeRef, LLVMTypeRef *, unsigned, int);
 extern LLVMValueRef LLVMAddFunction(LLVMModuleRef, const char *, LLVMTypeRef);
 extern LLVMValueRef LLVMGetNamedFunction(LLVMModuleRef, const char *);
 extern LLVMTypeRef LLVMGlobalGetValueType(LLVMValueRef);
+extern LLVMTypeRef LLVMTypeOf(LLVMValueRef);
+extern LLVMTypeRef LLVMGetReturnType(LLVMTypeRef);
+extern unsigned LLVMCountParamTypes(LLVMTypeRef);
+extern void LLVMGetParamTypes(LLVMTypeRef, LLVMTypeRef *);
+extern int LLVMGetTypeKind(LLVMTypeRef);
+extern unsigned LLVMCountStructElementTypes(LLVMTypeRef);
+extern LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
 extern LLVMValueRef LLVMAddGlobal(LLVMModuleRef, LLVMTypeRef, const char *);
 extern void LLVMSetLinkage(LLVMValueRef, int);
 extern void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
@@ -85,6 +92,8 @@ extern LLVMValueRef LLVMConstFDiv(LLVMValueRef, LLVMValueRef);
 extern LLVMValueRef LLVMConstFRem(LLVMValueRef, LLVMValueRef);
 extern LLVMValueRef LLVMGetUndef(LLVMTypeRef);
 extern LLVMValueRef LLVMBuildRet(LLVMBuilderRef, LLVMValueRef);
+extern LLVMValueRef LLVMBuildGlobalStringPtr(LLVMBuilderRef, const char *,
+                                             const char *);
 extern LLVMValueRef LLVMBuildRetVoid(LLVMBuilderRef);
 extern LLVMValueRef LLVMGetParam(LLVMValueRef, unsigned);
 extern LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
@@ -186,6 +195,8 @@ extern void LLVMSetTarget(LLVMModuleRef, const char *);
 extern int LLVMVerifyModule(LLVMModuleRef, int, char **);
 extern LLVMPassBuilderOptionsRef LLVMCreatePassBuilderOptions(void);
 extern void LLVMDisposePassBuilderOptions(LLVMPassBuilderOptionsRef);
+extern void LLVMPassBuilderOptionsSetLoopVectorization(LLVMPassBuilderOptionsRef, int);
+extern void LLVMPassBuilderOptionsSetSLPVectorization(LLVMPassBuilderOptionsRef, int);
 extern LLVMErrorRef LLVMRunPasses(LLVMModuleRef, const char *,
                                   LLVMTargetMachineRef,
                                   LLVMPassBuilderOptionsRef);

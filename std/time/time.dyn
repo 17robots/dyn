@@ -3,6 +3,31 @@ pub struct Timespec {
   nanoseconds: i64,
 }
 
+pub const Nanosecond: i64 = 1
+pub const Microsecond: i64 = 1000
+pub const Millisecond: i64 = 1000000
+pub const Second: i64 = 1000000000
+pub const Minute: i64 = 60000000000
+pub const Hour: i64 = 3600000000000
+
+pub fn duration_nanoseconds(value: Timespec) i64 {
+  return value.seconds * Second + value.nanoseconds
+}
+
+pub fn elapsed_nanoseconds(start: Timespec, end: Timespec) i64 {
+  return duration_nanoseconds(end) - duration_nanoseconds(start)
+}
+
+pub fn sleep(duration: i64) {
+  if duration <= 0 { return }
+  request := Timespec{
+    seconds: duration / Second,
+    nanoseconds: duration % Second,
+  }
+  result := #syscall(35, &request, 0)
+  if result != 0 { #panic("sleep failed") }
+}
+
 pub fn monotonic_now() Timespec {
   value := Timespec{ seconds: 0, nanoseconds: 0 }
   result := #syscall(228, 1, &value)

@@ -799,17 +799,19 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
       error_span(e->span, s, errors,
                  "payload enum variant requires exactly one argument");
     else {
-      DynAstItem *arg = &a->items[e->item_start];
+      uint32_t item_start = e->item_start;
+      DynSpan enum_span = e->span;
+      DynAstItem *arg = &a->items[item_start];
       DynType value =
           check_expr(a, arg->expression, s, errors, v->payload_type);
       if (value != v->payload_type && value != DYN_TYPE_ERROR) {
         if (can_convert(a, value, v->payload_type))
           arg->expression = convert_expr(a, arg->expression, v->payload_type);
         else
-          error_span(e->span, s, errors, "enum payload type mismatch");
+          error_span(enum_span, s, errors, "enum payload type mismatch");
       }
     }
-    return e->type;
+    return a->expressions[id].type;
   }
   if (e->kind == DYN_EXPR_CALL) {
     uint32_t fn = sema_find_function(a, e->span, s);
@@ -843,8 +845,10 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
       uint32_t count = e->item_count < callee->param_count
                            ? e->item_count
                            : callee->param_count;
+      uint32_t item_start = e->item_start;
+      DynType return_type = callee->return_type;
       for (uint32_t i = 0; i < count; ++i) {
-        DynAstItem *arg = &a->items[e->item_start + i];
+        DynAstItem *arg = &a->items[item_start + i];
         DynType target = a->params[callee->param_start + i].type,
                 value = check_expr(a, arg->expression, s, errors, target);
         if (value != target && value != DYN_TYPE_ERROR) {
@@ -855,25 +859,28 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
                        "function argument type mismatch");
         }
       }
-      return e->type = callee->return_type;
+      return a->expressions[id].type = return_type;
     }
   }
   if (e->kind == DYN_EXPR_INDIRECT_CALL) {
-    DynType target = check_expr(a, e->left, s, errors, DYN_TYPE_INFER);
+    DynExprId target_expr = e->left;
+    uint32_t item_start = e->item_start, item_count = e->item_count;
+    DynSpan call_span = e->span;
+    DynType target = check_expr(a, target_expr, s, errors, DYN_TYPE_INFER);
     DynAstPointer *p = pointer_info(a, target);
     DynAstFnType *signature = p ? fn_type_info(a, p->pointee) : NULL;
     if (!signature) {
-      error_span(e->span, s, errors, "call target must be function pointer");
-      return e->type = DYN_TYPE_ERROR;
+      error_span(call_span, s, errors, "call target must be function pointer");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    if (e->item_count != signature->param_count)
-      error_span(e->span, s, errors,
+    if (item_count != signature->param_count)
+      error_span(call_span, s, errors,
                  "function pointer argument count mismatch");
-    uint32_t count = e->item_count < signature->param_count
-                         ? e->item_count
+    uint32_t count = item_count < signature->param_count
+                         ? item_count
                          : signature->param_count;
     for (uint32_t i = 0; i < count; ++i) {
-      DynAstItem *arg = &a->items[e->item_start + i];
+      DynAstItem *arg = &a->items[item_start + i];
       DynType want = a->fn_type_params[signature->param_start + i],
               value = check_expr(a, arg->expression, s, errors, want);
       if (value != want && value != DYN_TYPE_ERROR) {
@@ -884,8 +891,8 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
                      "function pointer argument type mismatch");
       }
     }
-    e->integer = p->pointee - DYN_TYPE_FN_BASE;
-    return e->type = signature->return_type;
+    a->expressions[id].integer = p->pointee - DYN_TYPE_FN_BASE;
+    return a->expressions[id].type = signature->return_type;
   }
   if (e->kind == DYN_EXPR_FUNCTION)
     return e->type;
@@ -1671,7 +1678,8 @@ static bool sema_case_v2(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
         else if (reserve_local(a)) {
           arm->local_id = (uint32_t)a->local_count;
           a->locals[a->local_count++] = (DynAstLocal){
-              arm->binding, v->payload_type, true, current_function};
+              .name = arm->binding, .type = v->payload_type, .active = true,
+              .owner_function = current_function};
         }
       }
     }
@@ -1698,6 +1706,8 @@ static bool sema_case_v2(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
 }
 static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
                       unsigned *errors) {
+  if (st->kind == DYN_STMT_INVALID)
+    return false;
   if (st->kind == DYN_STMT_DEFER) {
     bool valid = true;
     for (uint32_t i = 0; i < st->body_count; ++i)
@@ -1858,7 +1868,8 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
           else if (reserve_local(a)) {
             arm->local_id = (uint32_t)a->local_count;
             a->locals[a->local_count++] = (DynAstLocal){
-                arm->binding, v->payload_type, true, current_function};
+                .name = arm->binding, .type = v->payload_type, .active = true,
+                .owner_function = current_function};
           }
         }
       }
@@ -1929,8 +1940,9 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
         return false;
       }
       st->local_id = (uint32_t)a->local_count;
-      a->locals[a->local_count++] =
-          (DynAstLocal){st->name, binding, true, current_function};
+      a->locals[a->local_count++] = (DynAstLocal){
+          .name = st->name, .type = binding, .active = true,
+          .owner_function = current_function};
       bool pushed = push_loop(st, s, errors);
       (void)sema_block(a, st->body_start, st->body_count, s, errors, true);
       if (pushed)
@@ -1991,8 +2003,9 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
       return false;
     }
     st->local_id = (uint32_t)a->local_count;
-    a->locals[a->local_count++] =
-        (DynAstLocal){st->name, type, true, current_function};
+    a->locals[a->local_count++] = (DynAstLocal){
+        .name = st->name, .type = type, .active = true,
+        .is_const = st->is_const, .owner_function = current_function};
     return false;
   }
   if (st->target != DYN_NO_EXPR) {
@@ -2035,6 +2048,8 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
   if (local != UINT32_MAX) {
     st->local_id = local;
     target = a->locals[local].type;
+    if (a->locals[local].is_const)
+      error_span(st->name, s, errors, "cannot assign to constant");
   } else if (global != UINT32_MAX) {
     if (a->globals[global].is_const)
       error_span(st->name, s, errors, "cannot assign to constant");
@@ -2102,7 +2117,16 @@ static bool sema_block(DynAstFunction *a, uint32_t start, uint32_t count,
       a->locals[i].active = false;
   return terminated;
 }
-static bool foreign_symbol_valid(DynSpan name,const DynSource*s){if(name.end_byte<=name.start_byte)return false;for(uint32_t i=name.start_byte;i<name.end_byte;++i){unsigned char c=(unsigned char)s->text[i];if(!(isalnum(c)||c=='_'||c=='.'||c=='$'||c=='@'))return false;}return true;}
+static bool foreign_symbol_valid(DynSpan name, const DynSource *s) {
+  if (name.end_byte <= name.start_byte)
+    return false;
+  for (uint32_t i = name.start_byte; i < name.end_byte; ++i) {
+    unsigned char c = (unsigned char)s->text[i];
+    if (!(isalnum(c) || c == '_' || c == '.' || c == '$' || c == '@'))
+      return false;
+  }
+  return true;
+}
 bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
                        unsigned *errors) {
   for (uint32_t i = 0; i < a->field_count; ++i)
@@ -2146,7 +2170,32 @@ bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
   }
   for (uint32_t f = 0; f < a->function_count; ++f) {
     DynAstFn *fn = &a->functions[f];
-    if(fn->foreign){if(!foreign_symbol_valid(fn->link_name,s))error_span(fn->link_name,s,errors,"foreign link name must be a non-empty linker symbol");for(uint32_t prior=0;prior<f;++prior)if(a->functions[prior].foreign&&dyn_span_text_equal(fn->link_name,a->functions[prior].link_name,s))error_span(fn->link_name,s,errors,"duplicate foreign link symbol");if(fn->return_type==DYN_TYPE_ERROR||fn->return_type==DYN_TYPE_INFER)error_span(fn->name,s,errors,"foreign function has invalid return type");for(uint32_t i=0;i<fn->param_count;++i){DynAstParam*p=&a->params[fn->param_start+i];if(p->type==DYN_TYPE_ERROR||p->type==DYN_TYPE_INFER||p->type==DYN_TYPE_VOID)error_span(p->name,s,errors,"foreign parameter requires a concrete non-void type");for(uint32_t j=0;j<i;++j)if(dyn_span_text_equal(p->name,a->params[fn->param_start+j].name,s))error_span(p->name,s,errors,"duplicate parameter name");}continue;}
+    if (fn->foreign) {
+      if (!foreign_symbol_valid(fn->link_name, s))
+        error_span(fn->link_name, s, errors,
+                   "foreign link name must be a non-empty linker symbol");
+      for (uint32_t prior = 0; prior < f; ++prior)
+        if (a->functions[prior].foreign &&
+            dyn_span_text_equal(fn->link_name, a->functions[prior].link_name,
+                                s))
+          error_span(fn->link_name, s, errors, "duplicate foreign link symbol");
+      if (fn->return_type == DYN_TYPE_ERROR ||
+          fn->return_type == DYN_TYPE_INFER)
+        error_span(fn->name, s, errors,
+                   "foreign function has invalid return type");
+      for (uint32_t i = 0; i < fn->param_count; ++i) {
+        DynAstParam *p = &a->params[fn->param_start + i];
+        if (p->type == DYN_TYPE_ERROR || p->type == DYN_TYPE_INFER ||
+            p->type == DYN_TYPE_VOID)
+          error_span(p->name, s, errors,
+                     "foreign parameter requires a concrete non-void type");
+        for (uint32_t j = 0; j < i; ++j)
+          if (dyn_span_text_equal(p->name, a->params[fn->param_start + j].name,
+                                  s))
+            error_span(p->name, s, errors, "duplicate parameter name");
+      }
+      continue;
+    }
     current_function = f;
     current_return_type = fn->return_type;
     fn->local_start = (uint32_t)a->local_count;
@@ -2162,7 +2211,9 @@ bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
         continue;
       }
       p->local_id = (uint32_t)a->local_count;
-      a->locals[a->local_count++] = (DynAstLocal){p->name, p->type, true, f};
+      a->locals[a->local_count++] = (DynAstLocal){
+          .name = p->name, .type = p->type, .active = true,
+          .owner_function = f};
     }
     bool terminated =
         sema_block(a, fn->body_start, fn->body_count, s, errors, false);

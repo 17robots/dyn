@@ -180,6 +180,7 @@ typedef struct {
 } DynAstFn;
 
 typedef enum {
+  DYN_STMT_INVALID,
   DYN_STMT_LOCAL,
   DYN_STMT_ASSIGN,
   DYN_STMT_RETURN,
@@ -201,12 +202,12 @@ typedef struct {
   uint32_t local_id;
   uint32_t body_start, body_count, else_start, else_count, loop_depth, loop_id,
       target_loop_id, case_arm_start, case_arm_count;
-  bool defer_block, for_pointer, for_const;
+  bool defer_block, for_pointer, for_const, is_const;
 } DynAstStmt;
 typedef struct {
   DynSpan name;
   DynType type;
-  bool active;
+  bool active, is_const;
   uint32_t owner_function;
 } DynAstLocal;
 typedef struct {

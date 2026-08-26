@@ -379,11 +379,16 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
     memcpy(ir->functions[i].name,
            source->text + a->functions[i].name.start_byte, n);
     ir->functions[i].name[n] = 0;
-    size_t link_length=a->functions[i].link_name.end_byte-a->functions[i].link_name.start_byte;
-    ir->functions[i].link_name=malloc(link_length+1);
-    if(!ir->functions[i].link_name){dyn_ir_free(ir);return false;}
-    memcpy(ir->functions[i].link_name,source->text+a->functions[i].link_name.start_byte,link_length);
-    ir->functions[i].link_name[link_length]=0;
+    size_t link_length = a->functions[i].link_name.end_byte -
+                         a->functions[i].link_name.start_byte;
+    ir->functions[i].link_name = malloc(link_length + 1);
+    if (!ir->functions[i].link_name) {
+      dyn_ir_free(ir);
+      return false;
+    }
+    memcpy(ir->functions[i].link_name,
+           source->text + a->functions[i].link_name.start_byte, link_length);
+    ir->functions[i].link_name[link_length] = 0;
     ir->functions[i].return_type = a->functions[i].return_type;
     ir->functions[i].param_start = a->functions[i].param_start;
     ir->functions[i].param_count = a->functions[i].param_count;

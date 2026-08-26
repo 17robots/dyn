@@ -76,223 +76,263 @@ static TSNode unwrap(TSNode n) {
   return n;
 }
 static bool reserve_expr(DynAstFunction *a) {
-  if (a->expression_count < a->expression_capacity)
+  if (a->expression_count < a->expression_capacity) {
     return true;
+  }
   size_t c = a->expression_capacity ? a->expression_capacity * 2 : 32;
   void *p = realloc(a->expressions, c * sizeof(*a->expressions));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->expressions = p;
   a->expression_capacity = c;
   return true;
 }
 static bool reserve_stmt(DynAstFunction *a) {
-  if (a->statement_count < a->statement_capacity)
+  if (a->statement_count < a->statement_capacity) {
     return true;
+  }
   size_t c = a->statement_capacity ? a->statement_capacity * 2 : 16;
   void *p = realloc(a->statements, c * sizeof(*a->statements));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->statements = p;
   a->statement_capacity = c;
   return true;
 }
 static bool reserve_pattern(DynAstFunction *a) {
-  if (a->pattern_count < a->pattern_capacity)
+  if (a->pattern_count < a->pattern_capacity) {
     return true;
+  }
   size_t c = a->pattern_capacity ? a->pattern_capacity * 2 : 16;
   void *p = realloc(a->patterns, c * sizeof(*a->patterns));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->patterns = p;
   a->pattern_capacity = c;
   return true;
 }
 static bool reserve_case_arm(DynAstFunction *a) {
-  if (a->case_arm_count < a->case_arm_capacity)
+  if (a->case_arm_count < a->case_arm_capacity) {
     return true;
+  }
   size_t c = a->case_arm_capacity ? a->case_arm_capacity * 2 : 8;
   void *p = realloc(a->case_arms, c * sizeof(*a->case_arms));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->case_arms = p;
   a->case_arm_capacity = c;
   return true;
 }
 static bool reserve_child(DynAstFunction *a) {
-  if (a->child_count < a->child_capacity)
+  if (a->child_count < a->child_capacity) {
     return true;
+  }
   size_t c = a->child_capacity ? a->child_capacity * 2 : 32;
   void *p = realloc(a->children, c * sizeof(*a->children));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->children = p;
   a->child_capacity = c;
   return true;
 }
 static bool reserve_item(DynAstFunction *a) {
-  if (a->item_count < a->item_capacity)
+  if (a->item_count < a->item_capacity) {
     return true;
+  }
   size_t c = a->item_capacity ? a->item_capacity * 2 : 32;
   void *p = realloc(a->items, c * sizeof(*a->items));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->items = p;
   a->item_capacity = c;
   return true;
 }
 static bool reserve_field(DynAstFunction *a) {
-  if (a->field_count < a->field_capacity)
+  if (a->field_count < a->field_capacity) {
     return true;
+  }
   size_t c = a->field_capacity ? a->field_capacity * 2 : 32;
   void *p = realloc(a->fields, c * sizeof(*a->fields));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->fields = p;
   a->field_capacity = c;
   return true;
 }
 static bool reserve_struct(DynAstFunction *a) {
-  if (a->struct_count < a->struct_capacity)
+  if (a->struct_count < a->struct_capacity) {
     return true;
+  }
   size_t c = a->struct_capacity ? a->struct_capacity * 2 : 8;
   void *p = realloc(a->structs, c * sizeof(*a->structs));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->structs = p;
   a->struct_capacity = c;
   return true;
 }
 static bool reserve_enum(DynAstFunction *a) {
-  if (a->enum_count < a->enum_capacity)
+  if (a->enum_count < a->enum_capacity) {
     return true;
+  }
   size_t c = a->enum_capacity ? a->enum_capacity * 2 : 8;
   void *p = realloc(a->enums, c * sizeof(*a->enums));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->enums = p;
   a->enum_capacity = c;
   return true;
 }
 static bool reserve_variant(DynAstFunction *a) {
-  if (a->variant_count < a->variant_capacity)
+  if (a->variant_count < a->variant_capacity) {
     return true;
+  }
   size_t c = a->variant_capacity ? a->variant_capacity * 2 : 16;
   void *p = realloc(a->variants, c * sizeof(*a->variants));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->variants = p;
   a->variant_capacity = c;
   return true;
 }
 static bool reserve_param(DynAstFunction *a) {
-  if (a->param_count < a->param_capacity)
+  if (a->param_count < a->param_capacity) {
     return true;
+  }
   size_t c = a->param_capacity ? a->param_capacity * 2 : 16;
   void *p = realloc(a->params, c * sizeof(*a->params));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->params = p;
   a->param_capacity = c;
   return true;
 }
 static bool reserve_function(DynAstFunction *a) {
-  if (a->function_count < a->function_capacity)
+  if (a->function_count < a->function_capacity) {
     return true;
+  }
   size_t c = a->function_capacity ? a->function_capacity * 2 : 8;
   void *p = realloc(a->functions, c * sizeof(*a->functions));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->functions = p;
   a->function_capacity = c;
   return true;
 }
 static bool reserve_global(DynAstFunction *a) {
-  if (a->global_count < a->global_capacity)
+  if (a->global_count < a->global_capacity) {
     return true;
+  }
   size_t c = a->global_capacity ? a->global_capacity * 2 : 8;
   void *p = realloc(a->globals, c * sizeof(*a->globals));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->globals = p;
   a->global_capacity = c;
   return true;
 }
 static bool reserve_pointer(DynAstFunction *a) {
-  if (a->pointer_count < a->pointer_capacity)
+  if (a->pointer_count < a->pointer_capacity) {
     return true;
+  }
   size_t c = a->pointer_capacity ? a->pointer_capacity * 2 : 8;
   void *p = realloc(a->pointers, c * sizeof(*a->pointers));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->pointers = p;
   a->pointer_capacity = c;
   return true;
 }
 static bool reserve_array(DynAstFunction *a) {
-  if (a->array_count < a->array_capacity)
+  if (a->array_count < a->array_capacity) {
     return true;
+  }
   size_t c = a->array_capacity ? a->array_capacity * 2 : 8;
   void *p = realloc(a->arrays, c * sizeof(*a->arrays));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->arrays = p;
   a->array_capacity = c;
   return true;
 }
 static bool reserve_slice(DynAstFunction *a) {
-  if (a->slice_count < a->slice_capacity)
+  if (a->slice_count < a->slice_capacity) {
     return true;
+  }
   size_t c = a->slice_capacity ? a->slice_capacity * 2 : 8;
   void *p = realloc(a->slices, c * sizeof(*a->slices));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->slices = p;
   a->slice_capacity = c;
   return true;
 }
 static bool reserve_string(DynAstFunction *a) {
-  if (a->string_count < a->string_capacity)
+  if (a->string_count < a->string_capacity) {
     return true;
+  }
   size_t c = a->string_capacity ? a->string_capacity * 2 : 8;
   void *p = realloc(a->strings, c * sizeof(*a->strings));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->strings = p;
   a->string_capacity = c;
   return true;
 }
 static bool reserve_fn_type(DynAstFunction *a) {
-  if (a->fn_type_count < a->fn_type_capacity)
+  if (a->fn_type_count < a->fn_type_capacity) {
     return true;
+  }
   size_t c = a->fn_type_capacity ? a->fn_type_capacity * 2 : 8;
   void *p = realloc(a->fn_types, c * sizeof(*a->fn_types));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->fn_types = p;
   a->fn_type_capacity = c;
   return true;
 }
 static bool reserve_fn_type_params(DynAstFunction *a, size_t extra) {
-  if (a->fn_type_param_count + extra <= a->fn_type_param_capacity)
+  if (a->fn_type_param_count + extra <= a->fn_type_param_capacity) {
     return true;
+  }
   size_t c = a->fn_type_param_capacity ? a->fn_type_param_capacity * 2 : 16;
   while (c < a->fn_type_param_count + extra)
     c *= 2;
   void *p = realloc(a->fn_type_params, c * sizeof(*a->fn_type_params));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->fn_type_params = p;
   a->fn_type_param_capacity = c;
   return true;
 }
 static bool reserve_alias(DynAstFunction *a) {
-  if (a->alias_count < a->alias_capacity)
+  if (a->alias_count < a->alias_capacity) {
     return true;
+  }
   size_t c = a->alias_capacity ? a->alias_capacity * 2 : 8;
   void *p = realloc(a->aliases, c * sizeof(*a->aliases));
-  if (!p)
+  if (!p) {
     return false;
+  }
   a->aliases = p;
   a->alias_capacity = c;
   return true;
@@ -301,29 +341,35 @@ static DynType intern_pointer(DynAstFunction *a, DynType pointee,
                               bool is_const) {
   for (uint32_t i = 0; i < a->pointer_count; ++i)
     if (a->pointers[i].pointee == pointee &&
-        a->pointers[i].is_const == is_const)
+        a->pointers[i].is_const == is_const) {
       return DYN_TYPE_POINTER_BASE + i;
-  if (!reserve_pointer(a))
+    }
+  if (!reserve_pointer(a)) {
     return DYN_TYPE_ERROR;
+  }
   a->pointers[a->pointer_count] = (DynAstPointer){pointee, is_const};
   return DYN_TYPE_POINTER_BASE + a->pointer_count++;
 }
 static DynType intern_array(DynAstFunction *a, DynType element,
                             uint64_t length) {
   for (uint32_t i = 0; i < a->array_count; ++i)
-    if (a->arrays[i].element == element && a->arrays[i].length == length)
+    if (a->arrays[i].element == element && a->arrays[i].length == length) {
       return DYN_TYPE_ARRAY_BASE + i;
-  if (!reserve_array(a))
+    }
+  if (!reserve_array(a)) {
     return DYN_TYPE_ERROR;
+  }
   a->arrays[a->array_count] = (DynAstArray){element, length};
   return DYN_TYPE_ARRAY_BASE + a->array_count++;
 }
 static DynType intern_slice(DynAstFunction *a, DynType element, bool is_const) {
   for (uint32_t i = 0; i < a->slice_count; ++i)
-    if (a->slices[i].element == element && a->slices[i].is_const == is_const)
+    if (a->slices[i].element == element && a->slices[i].is_const == is_const) {
       return DYN_TYPE_SLICE_BASE + i;
-  if (!reserve_slice(a))
+    }
+  if (!reserve_slice(a)) {
     return DYN_TYPE_ERROR;
+  }
   a->slices[a->slice_count] = (DynAstSlice){element, is_const};
   return DYN_TYPE_SLICE_BASE + a->slice_count++;
 }
@@ -331,17 +377,21 @@ static DynType intern_fn_type(DynAstFunction *a, const DynType *params,
                               uint32_t count, DynType result) {
   for (uint32_t i = 0; i < a->fn_type_count; ++i) {
     DynAstFnType *f = &a->fn_types[i];
-    if (f->return_type != result || f->param_count != count)
+    if (f->return_type != result || f->param_count != count) {
       continue;
+    }
     bool same = true;
     for (uint32_t j = 0; j < count; ++j)
-      if (a->fn_type_params[f->param_start + j] != params[j])
+      if (a->fn_type_params[f->param_start + j] != params[j]) {
         same = false;
-    if (same)
+      }
+    if (same) {
       return DYN_TYPE_FN_BASE + i;
+    }
   }
-  if (!reserve_fn_type(a) || !reserve_fn_type_params(a, count))
+  if (!reserve_fn_type(a) || !reserve_fn_type_params(a, count)) {
     return DYN_TYPE_ERROR;
+  }
   uint32_t start = (uint32_t)a->fn_type_param_count;
   for (uint32_t i = 0; i < count; ++i)
     a->fn_type_params[a->fn_type_param_count++] = params[i];
@@ -350,34 +400,39 @@ static DynType intern_fn_type(DynAstFunction *a, const DynType *params,
 }
 static DynSpan unqualified_span(DynSpan name, const DynSource *s) {
   for (uint32_t i = name.start_byte; i < name.end_byte; ++i)
-    if (s->text[i] == '.')
+    if (s->text[i] == '.') {
       name.start_byte = i + 1;
+    }
   return name;
 }
 static uint32_t find_struct(DynAstFunction *a, DynSpan name,
                             const DynSource *s) {
   name = unqualified_span(name, s);
   for (uint32_t i = 0; i < a->struct_count; ++i)
-    if (dyn_span_text_equal(name, a->structs[i].name, s))
+    if (dyn_span_text_equal(name, a->structs[i].name, s)) {
       return i;
+    }
   for (uint32_t i = 0; i < a->enum_count; ++i)
-    if (dyn_span_text_equal(name, a->enums[i].name, s))
+    if (dyn_span_text_equal(name, a->enums[i].name, s)) {
       return DYN_TYPE_ENUM_BASE - DYN_TYPE_STRUCT_BASE + i;
+    }
   return UINT32_MAX;
 }
 static uint32_t find_enum(DynAstFunction *a, DynSpan name, const DynSource *s) {
   name = unqualified_span(name, s);
   for (uint32_t i = 0; i < a->enum_count; ++i)
-    if (dyn_span_text_equal(name, a->enums[i].name, s))
+    if (dyn_span_text_equal(name, a->enums[i].name, s)) {
       return i;
+    }
   return UINT32_MAX;
 }
 static uint32_t find_alias(DynAstFunction *a, DynSpan name,
                            const DynSource *s) {
   name = unqualified_span(name, s);
   for (uint32_t i = 0; i < a->alias_count; ++i)
-    if (dyn_span_text_equal(name, a->aliases[i].name, s))
+    if (dyn_span_text_equal(name, a->aliases[i].name, s)) {
       return i;
+    }
   return UINT32_MAX;
 }
 static DynOperator op_from(const char *s) {
@@ -400,15 +455,17 @@ static DynOperator op_from(const char *s) {
            {"<<", DYN_OP_SHL},         {"<<=", DYN_OP_SHL},
            {">>", DYN_OP_SHR},         {">>=", DYN_OP_SHR}};
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
-    if (!strcmp(s, m[i].s))
+    if (!strcmp(s, m[i].s)) {
       return m[i].op;
+    }
   return DYN_OP_NONE;
 }
 static const char *anonymous_operator(TSNode n) {
   for (uint32_t i = 0; i < ts_node_child_count(n); ++i) {
     TSNode c = ts_node_child(n, i);
-    if (!ts_node_is_named(c))
+    if (!ts_node_is_named(c)) {
       return ts_node_type(c);
+    }
   }
   return "";
 }
@@ -416,10 +473,12 @@ static DynType parse_type(TSNode, const DynSource *, DynAstFunction *);
 static DynType resolve_alias(DynAstFunction *a, uint32_t id,
                              const DynSource *s) {
   DynAstAlias *x = &a->aliases[id];
-  if (x->state == 2)
+  if (x->state == 2) {
     return x->distinct ? DYN_TYPE_DISTINCT_BASE + id : x->target;
-  if (x->state == 1)
+  }
+  if (x->state == 1) {
     return DYN_TYPE_ERROR;
+  }
   x->state = 1;
   x->target = parse_type(x->type_node, s, a);
   DynType representation = x->target;
@@ -463,8 +522,9 @@ static uint64_t parse_uint(TSNode n, const DynSource *s, bool *ok) {
   }
   for (; i < e; ++i) {
     char c = s->text[i];
-    if (c == '_')
+    if (c == '_') {
       continue;
+    }
     unsigned d = isdigit((unsigned char)c)
                      ? (unsigned)(c - '0')
                      : (unsigned)(tolower((unsigned char)c) - 'a' + 10);
@@ -478,24 +538,26 @@ static uint64_t parse_uint(TSNode n, const DynSource *s, bool *ok) {
 }
 static bool parse_char(TSNode n, const DynSource *s, uint64_t *value) {
   uint32_t i = ts_node_start_byte(n) + 1, e = ts_node_end_byte(n) - 1;
-  if (i >= e)
+  if (i >= e) {
     return false;
+  }
   const unsigned char *p = (const unsigned char *)s->text + i;
   if (*p == '\\') {
-    if (i + 1 >= e)
+    if (i + 1 >= e) {
       return false;
+    }
     char c = s->text[++i];
-    if (c == 'n')
+    if (c == 'n') {
       *value = '\n';
-    else if (c == 'r')
+    } else if (c == 'r') {
       *value = '\r';
-    else if (c == 't')
+    } else if (c == 't') {
       *value = '\t';
-    else if (c == '0')
+    } else if (c == '0') {
       *value = 0;
-    else if (c == '\\' || c == '\'' || c == '"')
+    } else if (c == '\\' || c == '\'' || c == '"') {
       *value = (unsigned char)c;
-    else if (c == 'x' && i + 2 < e) {
+    } else if (c == 'x' && i + 2 < e) {
       unsigned v = 0;
       for (unsigned j = 0; j < 2; ++j) {
         char h = s->text[++i];
@@ -513,11 +575,13 @@ static bool parse_char(TSNode n, const DynSource *s, uint64_t *value) {
                                     ? h - '0'
                                     : tolower((unsigned char)h) - 'a' + 10);
       }
-      if (i >= e || v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff))
+      if (i >= e || v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) {
         return false;
+      }
       *value = v;
-    } else
+    } else {
       return false;
+    }
     return true;
   }
   unsigned char c = p[0];
@@ -526,16 +590,19 @@ static bool parse_char(TSNode n, const DynSource *s, uint64_t *value) {
     return i + 1 == e;
   }
   unsigned count = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : c >= 0xc0 ? 2 : 0;
-  if (!count || i + count != e)
+  if (!count || i + count != e) {
     return false;
+  }
   uint64_t v = c & ((1u << (7 - count)) - 1u);
   for (unsigned j = 1; j < count; ++j) {
-    if ((p[j] & 0xc0) != 0x80)
+    if ((p[j] & 0xc0) != 0x80) {
       return false;
+    }
     v = (v << 6) | (p[j] & 0x3f);
   }
-  if (v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff))
+  if (v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) {
     return false;
+  }
   *value = v;
   return true;
 }
@@ -561,17 +628,17 @@ static uint32_t parse_string(TSNode n, const DynSource *s, DynAstFunction *a,
       return UINT32_MAX;
     }
     c = (unsigned char)s->text[i];
-    if (c == 'n')
+    if (c == 'n') {
       out[count++] = '\n';
-    else if (c == 'r')
+    } else if (c == 'r') {
       out[count++] = '\r';
-    else if (c == 't')
+    } else if (c == 't') {
       out[count++] = '\t';
-    else if (c == '0')
+    } else if (c == '0') {
       out[count++] = 0;
-    else if (c == '\\' || c == '\'' || c == '"')
+    } else if (c == '\\' || c == '\'' || c == '"') {
       out[count++] = c;
-    else if (c == 'x' && i + 2 < end) {
+    } else if (c == 'x' && i + 2 < end) {
       unsigned value = 0;
       for (uint32_t j = 0; j < 2; ++j) {
         char h = s->text[++i];
@@ -605,8 +672,9 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
   if (!strcmp(k, "number_")) {
     bool fl = false;
     for (uint32_t i = e.span.start_byte; i < e.span.end_byte; ++i)
-      if (s->text[i] == '.' || s->text[i] == 'e' || s->text[i] == 'E')
+      if (s->text[i] == '.' || s->text[i] == 'e' || s->text[i] == 'E') {
         fl = true;
+      }
     if (fl) {
       e.kind = DYN_EXPR_FLOAT;
       e.type = DYN_TYPE_F32;
@@ -614,8 +682,9 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
       size_t out = 0;
       for (uint32_t i = e.span.start_byte;
            i < e.span.end_byte && out + 1 < sizeof(buf); ++i)
-        if (s->text[i] != '_')
+        if (s->text[i] != '_') {
           buf[out++] = s->text[i];
+        }
       buf[out] = 0;
       e.floating = strtod(buf, NULL);
     } else {
@@ -623,8 +692,9 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
       e.kind = DYN_EXPR_INT;
       e.type = DYN_TYPE_I32;
       e.integer = parse_uint(node, s, &ok);
-      if (!ok)
+      if (!ok) {
         diagnostic(node, s, errors, "integer literal exceeds u64");
+      }
     }
   } else if (!strcmp(k, "bool_")) {
     e.kind = DYN_EXPR_BOOL;
@@ -666,10 +736,10 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
       e.type = DYN_TYPE_INFER;
       e.span = span(callee);
     } else {
-      diagnostic(
-          callee, s, errors,
-          "call target must be function, function pointer, or enum variant");
-      return DYN_NO_EXPR;
+      e.kind = DYN_EXPR_INDIRECT_CALL;
+      e.type = DYN_TYPE_INFER;
+      e.left = lower_expr(callee, s, a, errors);
+      e.span = span(callee);
     }
     e.item_start = (uint32_t)a->item_count;
     for (uint32_t i = 1; i < ts_node_named_child_count(node); ++i) {
@@ -691,6 +761,10 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
         first < count &&
         !strcmp(ts_node_type(ts_node_named_child(node, first)), "identifier"))
       ++first;
+    for (uint32_t i = first; i < count; ++i)
+      if (!strcmp(ts_node_type(ts_node_named_child(node, i)), "type"))
+        diagnostic(ts_node_named_child(node, i), s, errors,
+                   "generic struct literals are not implemented");
     if (first) {
       TSNode begin = ts_node_named_child(node, 0),
              end = ts_node_named_child(node, first - 1);
@@ -708,15 +782,15 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
         diagnostic(m, s, errors, "out of memory");
         return DYN_NO_EXPR;
       }
-      a->items[a->item_count++] =
-          (DynAstItem){.field_index = UINT32_MAX};
+      a->items[a->item_count++] = (DynAstItem){.field_index = UINT32_MAX};
       ++e.item_count;
     }
     uint32_t member_index = 0;
     for (uint32_t i = first; i < count; ++i) {
       TSNode m = ts_node_named_child(node, i);
-      if (strcmp(ts_node_type(m), "struct_literal_member"))
+      if (strcmp(ts_node_type(m), "struct_literal_member")) {
         continue;
+      }
       DynSpan name = span(ts_node_named_child(m, 0));
       DynExprId expression =
           lower_expr(ts_node_named_child(m, 1), s, a, errors);
@@ -761,13 +835,15 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
         ++dots;
       if (count > 1) {
         TSNode first = ts_node_named_child(node, 1);
-        if (ts_node_end_byte(first) <= dots)
+        if (ts_node_end_byte(first) <= dots) {
           e.right = lower_expr(first, s, a, errors);
-        else
+        } else {
           e.integer = lower_expr(first, s, a, errors);
+        }
       }
-      if (count > 2)
+      if (count > 2) {
         e.integer = lower_expr(ts_node_named_child(node, 2), s, a, errors);
+      }
     }
   } else if (!strcmp(k, "len")) {
     e.kind = DYN_EXPR_LEN;
@@ -813,10 +889,12 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
   } else if (!strcmp(k, "unary_prefix")) {
     e.kind = DYN_EXPR_UNARY;
     e.op = op_from(anonymous_operator(node));
-    if (!strcmp(anonymous_operator(node), "&"))
+    if (!strcmp(anonymous_operator(node), "&")) {
       e.op = DYN_OP_ADDRESS;
-    if (e.op == DYN_OP_SUB)
+    }
+    if (e.op == DYN_OP_SUB) {
       e.op = DYN_OP_NEG;
+    }
     e.left = lower_expr(ts_node_named_child(node, 0), s, a, errors);
   } else if (!strcmp(k, "unary_postfix")) {
     e.kind = DYN_EXPR_UNARY;
@@ -842,23 +920,26 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
 }
 static DynType parse_type(TSNode n, const DynSource *s, DynAstFunction *a) {
   n = unwrap(n);
-  if (!strcmp(ts_node_type(n), "type") && ts_node_named_child_count(n) == 1)
+  if (!strcmp(ts_node_type(n), "type") && ts_node_named_child_count(n) == 1) {
     n = ts_node_named_child(n, 0);
+  }
   if (!strcmp(ts_node_type(n), "fn_type")) {
     uint32_t close = ts_node_start_byte(n);
     for (uint32_t i = ts_node_start_byte(n); i < ts_node_end_byte(n); ++i)
-      if (s->text[i] == ')')
+      if (s->text[i] == ')') {
         close = i;
+      }
     uint32_t named = ts_node_named_child_count(n), count = 0;
     DynType *params = calloc(named, sizeof(*params));
     DynType result = DYN_TYPE_VOID;
     for (uint32_t i = 0; i < named; ++i) {
       TSNode c = ts_node_named_child(n, i);
       DynType t = parse_type(c, s, a);
-      if (ts_node_start_byte(c) > close)
+      if (ts_node_start_byte(c) > close) {
         result = t;
-      else
+      } else {
         params[count++] = t;
+      }
     }
     DynType type = intern_fn_type(a, params, count, result);
     free(params);
@@ -868,8 +949,9 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstFunction *a) {
     TSNode child = ts_node_named_child(n, 0);
     bool is_const = false;
     for (uint32_t i = ts_node_start_byte(n); i < ts_node_start_byte(child); ++i)
-      if (s->text[i] == 'c')
+      if (s->text[i] == 'c') {
         is_const = true;
+      }
     DynType pointee = parse_type(child, s, a);
     return pointee == DYN_TYPE_ERROR ? DYN_TYPE_ERROR
                                      : intern_pointer(a, pointee, is_const);
@@ -878,8 +960,9 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstFunction *a) {
     uint32_t count = ts_node_named_child_count(n);
     TSNode last = ts_node_named_child(n, count - 1);
     DynType element = parse_type(last, s, a);
-    if (element == DYN_TYPE_ERROR)
+    if (element == DYN_TYPE_ERROR) {
       return element;
+    }
     TSNode first = ts_node_named_child(n, 0);
     if (!strcmp(ts_node_type(first), "number_")) {
       bool ok;
@@ -888,8 +971,9 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstFunction *a) {
     }
     bool is_const = false;
     for (uint32_t i = ts_node_start_byte(n); i < ts_node_start_byte(last); ++i)
-      if (s->text[i] == 'c')
+      if (s->text[i] == 'c') {
         is_const = true;
+      }
     return intern_slice(a, element, is_const);
   }
   DynSpan p = span(n);
@@ -905,11 +989,13 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstFunction *a) {
            {"f32", DYN_TYPE_F32},     {"f64", DYN_TYPE_F64}};
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
     if (p.end_byte - p.start_byte == strlen(m[i].n) &&
-        !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n)))
+        !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n))) {
       return m[i].t;
+    }
   uint32_t alias = find_alias(a, p, s);
-  if (alias != UINT32_MAX)
+  if (alias != UINT32_MAX) {
     return resolve_alias(a, alias, s);
+  }
   uint32_t id = find_struct(a, p, s);
   return id == UINT32_MAX ? DYN_TYPE_ERROR : DYN_TYPE_STRUCT_BASE + id;
 }
@@ -924,14 +1010,16 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
   st->case_arm_start = (uint32_t)a->case_arm_count;
   uint32_t count = 0;
   for (uint32_t i = 1; i < ts_node_named_child_count(n); ++i)
-    if (!strcmp(ts_node_type(ts_node_named_child(n, i)), "case_arm"))
+    if (!strcmp(ts_node_type(ts_node_named_child(n, i)), "case_arm")) {
       ++count;
+    }
   TSNode *blocks = calloc(count, sizeof(*blocks));
   uint32_t arm_index = 0;
   for (uint32_t i = 1; i < ts_node_named_child_count(n); ++i) {
     TSNode an = ts_node_named_child(n, i);
-    if (strcmp(ts_node_type(an), "case_arm"))
+    if (strcmp(ts_node_type(an), "case_arm")) {
       continue;
+    }
     if (!reserve_case_arm(a)) {
       diagnostic(an, s, errors, "out of memory");
       break;
@@ -958,8 +1046,9 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
           pat.first = lower_expr(ts_node_named_child(p, 0), s, a, errors);
           pat.last = lower_expr(ts_node_named_child(p, 1), s, a, errors);
           for (uint32_t q = ts_node_start_byte(p); q < ts_node_end_byte(p); ++q)
-            if (s->text[q] == '=')
+            if (s->text[q] == '=') {
               pat.inclusive = true;
+            }
         } else
           pat.first = lower_expr(p, s, a, errors);
         a->patterns[a->pattern_count++] = pat;
@@ -968,31 +1057,36 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
         arm.binding = span(c);
         for (uint32_t q = ts_node_start_byte(an); q < ts_node_start_byte(c);
              ++q)
-          if (s->text[q] == '*')
+          if (s->text[q] == '*') {
             arm.pointer_binding = true;
-      } else if (!strcmp(ts_node_type(c), "block"))
+          }
+      } else if (!strcmp(ts_node_type(c), "block")) {
         blocks[arm_index] = c;
+      }
     }
     a->case_arms[a->case_arm_count++] = arm;
     ++arm_index;
   }
   st->case_arm_count = arm_index;
   for (uint32_t i = 0; i < arm_index; ++i)
-    if (!ts_node_is_null(blocks[i]))
+    if (!ts_node_is_null(blocks[i])) {
       lower_block(blocks[i], s, a, errors, loop_depth,
                   &a->case_arms[st->case_arm_start + i].body_start,
                   &a->case_arms[st->case_arm_start + i].body_count);
+    }
   free(blocks);
 }
 #undef lower_case_stmt
 static bool pointer_case_pattern(TSNode pattern, DynAstCaseArm *arm,
                                  TSNode *value) {
   TSNode p = unwrap(ts_node_named_child(pattern, 0));
-  if (strcmp(ts_node_type(p), "binary") || strcmp(anonymous_operator(p), "*"))
+  if (strcmp(ts_node_type(p), "binary") || strcmp(anonymous_operator(p), "*")) {
     return false;
+  }
   TSNode right = unwrap(ts_node_named_child(p, 1));
-  if (strcmp(ts_node_type(right), "identifier"))
+  if (strcmp(ts_node_type(right), "identifier")) {
     return false;
+  }
   arm->binding = span(right);
   arm->pointer_binding = true;
   *value = unwrap(ts_node_named_child(p, 0));
@@ -1006,14 +1100,16 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
   st->case_arm_start = (uint32_t)a->case_arm_count;
   uint32_t count = 0;
   for (uint32_t i = 1; i < ts_node_named_child_count(n); ++i)
-    if (!strcmp(ts_node_type(ts_node_named_child(n, i)), "case_arm"))
+    if (!strcmp(ts_node_type(ts_node_named_child(n, i)), "case_arm")) {
       ++count;
+    }
   TSNode *blocks = calloc(count, sizeof(*blocks));
   uint32_t arm_index = 0;
   for (uint32_t i = 1; i < ts_node_named_child_count(n); ++i) {
     TSNode an = ts_node_named_child(n, i);
-    if (strcmp(ts_node_type(an), "case_arm"))
+    if (strcmp(ts_node_type(an), "case_arm")) {
       continue;
+    }
     if (!reserve_case_arm(a)) {
       diagnostic(an, s, errors, "out of memory");
       break;
@@ -1030,8 +1126,9 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
       if (!strcmp(ts_node_type(c), "case_pattern")) {
         TSNode p = {0};
         bool pointer = pointer_case_pattern(c, &arm, &p);
-        if (!pointer)
+        if (!pointer) {
           p = unwrap(ts_node_named_child(c, 0));
+        }
         if (!reserve_pattern(a)) {
           diagnostic(p, s, errors, "out of memory");
           continue;
@@ -1043,26 +1140,29 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
           pat.first = lower_expr(ts_node_named_child(p, 0), s, a, errors);
           pat.last = lower_expr(ts_node_named_child(p, 1), s, a, errors);
           for (uint32_t q = ts_node_start_byte(p); q < ts_node_end_byte(p); ++q)
-            if (s->text[q] == '=')
+            if (s->text[q] == '=') {
               pat.inclusive = true;
+            }
         } else
           pat.first = lower_expr(p, s, a, errors);
         a->patterns[a->pattern_count++] = pat;
         ++arm.pattern_count;
-      } else if (!strcmp(ts_node_type(c), "identifier"))
+      } else if (!strcmp(ts_node_type(c), "identifier")) {
         arm.binding = span(c);
-      else if (!strcmp(ts_node_type(c), "block"))
+      } else if (!strcmp(ts_node_type(c), "block")) {
         blocks[arm_index] = c;
+      }
     }
     a->case_arms[a->case_arm_count++] = arm;
     ++arm_index;
   }
   st->case_arm_count = arm_index;
   for (uint32_t i = 0; i < arm_index; ++i)
-    if (!ts_node_is_null(blocks[i]))
+    if (!ts_node_is_null(blocks[i])) {
       lower_block(blocks[i], s, a, errors, loop_depth,
                   &a->case_arms[st->case_arm_start + i].body_start,
                   &a->case_arms[st->case_arm_start + i].body_count);
+    }
   free(blocks);
 }
 static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
@@ -1081,24 +1181,34 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
   st.local_id = UINT32_MAX;
   st.loop_depth = loop_depth;
   const char *k = ts_node_type(n);
+  if (!strcmp(k, "const_variable")) {
+    st.is_const = true;
+    n = ts_node_named_child(n, 0);
+    k = ts_node_type(n);
+    st.span = span(n);
+  }
   st.target_loop_id = UINT32_MAX;
   if (!strcmp(k, "return_")) {
     st.kind = DYN_STMT_RETURN;
-    if (ts_node_named_child_count(n))
+    if (ts_node_named_child_count(n)) {
       st.expression = lower_expr(ts_node_named_child(n, 0), s, a, errors);
+    }
   } else if (!strcmp(k, "variable")) {
     st.kind = DYN_STMT_LOCAL;
     st.name = span(ts_node_named_child(n, 0));
     st.declared_type = DYN_TYPE_INFER;
     for (uint32_t j = 1; j < ts_node_named_child_count(n); ++j) {
       TSNode c = ts_node_named_child(n, j);
-      if (!strcmp(ts_node_type(c), "type_qualifier"))
+      if (!strcmp(ts_node_type(c), "type_qualifier")) {
         st.declared_type = parse_type(ts_node_named_child(c, 0), s, a);
-      else if (!strcmp(ts_node_type(c), "type"))
+      } else if (!strcmp(ts_node_type(c), "type")) {
         st.declared_type = parse_type(c, s, a);
-      else
+      } else {
         st.expression = lower_expr(c, s, a, errors);
+      }
     }
+    if (st.is_const && st.expression == DYN_NO_EXPR)
+      diagnostic(n, s, errors, "local constant requires initializer");
   } else if (!strcmp(k, "assignment")) {
     st.kind = DYN_STMT_ASSIGN;
     TSNode target = unwrap(ts_node_named_child(n, 0));
@@ -1193,12 +1303,17 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
     }
   } else if (!strcmp(k, "panic")) {
     st.kind = DYN_STMT_PANIC;
+    if (ts_node_named_child_count(n))
+      st.expression = lower_expr(ts_node_named_child(n, 0), s, a, errors);
   } else if (!strcmp(k, "syscall")) {
     st.kind = DYN_STMT_EXPR;
     st.expression = lower_expr(n, s, a, errors);
   } else if (!strcmp(k, "call")) {
     st.kind = DYN_STMT_EXPR;
     st.expression = lower_expr(n, s, a, errors);
+  } else if (!strcmp(k, "type_alias")) {
+    diagnostic(n, s, errors,
+               "local type aliases are not implemented");
   } else {
     diagnostic(
         n, s, errors,
@@ -1664,7 +1779,7 @@ static bool add_function_signatures(TSNode root, const DynSource *s,
                                     DynAstFunction *a, unsigned *errors) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
     TSNode d = declaration_value(ts_node_named_child(root, i));
-    bool foreign = !strcmp(ts_node_type(d), "foreign_fn");
+    bool foreign = !strcmp(ts_node_type(d), "extern_fn");
     if (strcmp(ts_node_type(d), "fn") && !foreign)
       continue;
     TSNode name = ts_node_child_by_field_name(d, "name", 4);
@@ -1726,7 +1841,7 @@ static void lower_function_bodies(TSNode root, const DynSource *s,
                                   DynAstFunction *a, unsigned *errors) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
     TSNode d = declaration_value(ts_node_named_child(root, i));
-    if (strcmp(ts_node_type(d), "fn") && strcmp(ts_node_type(d), "foreign_fn"))
+    if (strcmp(ts_node_type(d), "fn") && strcmp(ts_node_type(d), "extern_fn"))
       continue;
     TSNode name = ts_node_child_by_field_name(d, "name", 4);
     uint32_t id = find_function(a, span(name), s);

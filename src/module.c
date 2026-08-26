@@ -125,13 +125,12 @@ static bool decl_named(const char *directory, const char *name,
           d = ts_node_named_child(d, 0);
           k = ts_node_type(d);
         }
-        if (strcmp(k, "fn") && strcmp(k, "foreign_fn") &&
-            strcmp(k, "struct") && strcmp(k, "enum") &&
-            strcmp(k, "variable"))
+        if (strcmp(k, "fn") && strcmp(k, "extern_fn") && strcmp(k, "struct") &&
+            strcmp(k, "enum") && strcmp(k, "variable"))
           continue;
-        TSNode n = (!strcmp(k, "fn") || !strcmp(k, "foreign_fn"))
+        TSNode n = (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
                        ? ts_node_child_by_field_name(d, "name", 4)
-                                    : ts_node_named_child(d, 0);
+                       : ts_node_named_child(d, 0);
         char *text = node_text(n, s, false);
         if (!strcmp(text, name)) {
           found = true;

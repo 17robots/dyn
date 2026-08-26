@@ -1,0 +1,123 @@
+use "std/mem"
+
+pub fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0
+  for i < #len(left) {
+    if left[i] != right[i] { return false }
+    i += 1
+  }
+  return true
+}
+
+pub fn starts_with(text: []const u8, prefix: []const u8) bool {
+  if #len(prefix) > #len(text) { return false }
+  return equal(text[..#len(prefix)], prefix)
+}
+
+pub fn ends_with(text: []const u8, suffix: []const u8) bool {
+  if #len(suffix) > #len(text) { return false }
+  return equal(text[#len(text) - #len(suffix)..], suffix)
+}
+
+pub fn find(text: []const u8, needle: []const u8) isize {
+  if #len(needle) == 0 { return 0 }
+  if #len(needle) > #len(text) { return -1 }
+  i: usize = 0
+  for i <= #len(text) - #len(needle) {
+    if equal(text[i..i + #len(needle)], needle) { return #cast(isize) i }
+    i += 1
+  }
+  return -1
+}
+
+fn whitespace(byte: u8) bool {
+  return byte == ' ' || byte == 9 || byte == 10 || byte == 13
+}
+
+pub fn trim(text: []const u8) []const u8 {
+  start: usize = 0
+  end: usize = #len(text)
+  for start < end && whitespace(text[start]) { start += 1 }
+  for end > start && whitespace(text[end - 1]) { end -= 1 }
+  return text[start..end]
+}
+
+pub fn clone(arena: *mem.Arena, text: []const u8) []u8 {
+  if #len(text) == 0 { return arena.data[0..0] }
+  raw := #cast(*u8) mem.arena_push(arena, #len(text), 1)
+  result := raw[..#len(text)]
+  _ = mem.copy(result, text)
+  return result
+}
+
+pub fn split(arena: *mem.Arena, text: []const u8, separator: []const u8) [][]const u8 {
+  if #len(separator) == 0 { #panic("split separator must not be empty") }
+  part_count: usize = 1
+  offset: usize = 0
+  for offset + #len(separator) <= #len(text) {
+    if equal(text[offset..offset + #len(separator)], separator) {
+      part_count += 1
+      offset += #len(separator)
+    }
+    else { offset += 1 }
+  }
+  raw := #cast(*[]const u8) mem.arena_push(arena, part_count * #sizeof([]const u8), #alignof([]const u8))
+  result := raw[..part_count]
+  part_index: usize = 0
+  part_start: usize = 0
+  offset = 0
+  for offset + #len(separator) <= #len(text) {
+    if equal(text[offset..offset + #len(separator)], separator) {
+      result[part_index] = text[part_start..offset]
+      part_index += 1
+      offset += #len(separator)
+      part_start = offset
+    }
+    else { offset += 1 }
+  }
+  result[part_index] = text[part_start..]
+  return result
+}
+
+pub fn join(arena: *mem.Arena, parts: [][]const u8, separator: []const u8) []u8 {
+  length: usize = 0
+  i: usize = 0
+  for i < #len(parts) {
+    length += #len(parts[i])
+    if i + 1 < #len(parts) { length += #len(separator) }
+    i += 1
+  }
+  if length == 0 { return arena.data[0..0] }
+  raw := #cast(*u8) mem.arena_push(arena, length, 1)
+  result := raw[..length]
+  write_offset: usize = 0
+  i = 0
+  for i < #len(parts) {
+    _ = mem.copy(result[write_offset..], parts[i])
+    write_offset += #len(parts[i])
+    if i + 1 < #len(parts) {
+      _ = mem.copy(result[write_offset..], separator)
+      write_offset += #len(separator)
+    }
+    i += 1
+  }
+  return result
+}
+
+pub fn parse_u64(text: []const u8, output: *u64) bool {
+  if #len(text) == 0 { return false }
+  value: u64 = 0
+  i: usize = 0
+  for i < #len(text) {
+    byte := text[i]
+    if byte < '0' || byte > '9' { return false }
+    digit: u64 = #cast(u64) (byte - '0')
+    maximum: u64 = 18446744073709551615
+    if value > (maximum - digit) / 10 { return false }
+    value = value * 10 + digit
+    i += 1
+  }
+  output.* = value
+  return true
+}

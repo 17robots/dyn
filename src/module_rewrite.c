@@ -182,9 +182,10 @@ static Module *target_module(Module *modules, size_t count,
 static bool rewrite_node(TSNode n, const DynSource *s, Module *current,
                          Module *modules, size_t module_count, Edits *edits) {
   const char *k = ts_node_type(n);
-  if (!strcmp(k, "fn") || !strcmp(k, "foreign_fn") || !strcmp(k, "struct") || !strcmp(k, "enum")) {
+  if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") || !strcmp(k, "struct") ||
+      !strcmp(k, "enum")) {
     TSNode name = {0};
-    if (!strcmp(k, "fn") || !strcmp(k, "foreign_fn"))
+    if (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
       name = ts_node_child_by_field_name(n, "name", 4);
     else
       for (uint32_t i = 0; i < ts_node_named_child_count(n); ++i) {
@@ -488,9 +489,10 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     for (uint32_t i = 0; i < ts_node_named_child_count(file) && !result; ++i) {
       TSNode d = rewrite_declaration_value(ts_node_named_child(file, i));
       const char *k = ts_node_type(d);
-      if (!strcmp(k, "fn") || !strcmp(k, "foreign_fn") || !strcmp(k, "struct") || !strcmp(k, "enum")) {
+      if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") ||
+          !strcmp(k, "struct") || !strcmp(k, "enum")) {
         TSNode name = {0};
-        if (!strcmp(k, "fn") || !strcmp(k, "foreign_fn"))
+        if (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
           name = ts_node_child_by_field_name(d, "name", 4);
         else
           for (uint32_t q = 0; q < ts_node_named_child_count(d); ++q)

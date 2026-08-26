@@ -15,16 +15,19 @@ pub struct ChainedArena {
   block_capacity: usize,
 }
 
-pub fn arena_init(backing: []u8) Arena { return Arena{ data: backing, offset: 0, owns_data: false } }
+pub fn arena_init(backing: []u8) Arena {
+  return Arena{ data: backing, offset: 0, owns_data: false }
+}
 
-pub fn arena_make(capacity: usize) Arena {
-  if capacity == 0 { #panic("owned arena capacity must be non-zero") }
-  address := #syscall(9, 0, capacity, 3, 34, -1, 0)
-  if address < 0 { #panic("page allocation failed") }
-  data := (#cast(*u8) address)[..capacity]
-  return Arena{ data: data, offset: 0, owns_data: true }
+pub fn arena_make(memory_capacity_bytes: usize) Arena {
+  address := #syscall(9, 0, memory_capacity_bytes, 3, 34, -1, 0)
+  if address >= 0 {
+    return Arena{ data: (#cast(*u8) address)[..memory_capacity_bytes], offset: 0, owns_data: true }
+  }
+  #panic("page allocation failed")
 }
 pub fn arena_capacity(arena: *const Arena) usize { return #len(arena.data) }
+pub fn arena_remaining(arena: *const Arena) usize { return #len(arena.data) - arena.offset }
 pub fn arena_mark(arena: *const Arena) usize { return arena.offset }
 pub fn arena_reset(arena: *Arena) { arena.offset = 0 }
 
@@ -43,41 +46,44 @@ pub fn arena_release(arena: *Arena) {
   arena.owns_data = false
 }
 
-pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *void {
-  if alignment == 0 || (alignment & (alignment - 1)) != 0 { #panic("arena alignment must be a non-zero power of two") }
-  if size == 0 { return nil }
-  if #len(arena.data) == 0 { #panic("arena exhausted") }
-  base := #cast(usize) &arena.data[0]
-  address := base + arena.offset
-  aligned_address := (address + alignment - 1) & ~(alignment - 1)
-  aligned := aligned_address - base
-  if aligned > #len(arena.data) || size > #len(arena.data) - aligned { #panic("arena exhausted") }
-  end := aligned + size
-  i := aligned
-  for i < end {
-    arena.data[i] = 0
-    i += 1
-  }
-  arena.offset = end
-  return #cast(*void) &arena.data[aligned]
-}
-
 fn arena_fits(arena: *const Arena, size: usize, alignment: usize) bool {
   if alignment == 0 || (alignment & (alignment - 1)) != 0 { return false }
   if size == 0 { return true }
   if #len(arena.data) == 0 { return false }
   base := #cast(usize) &arena.data[0]
   address := base + arena.offset
-  aligned_address := (address + alignment - 1) & ~(alignment - 1)
+  one: usize = 1
+  aligned_address := (address + alignment - one) & ~(alignment - one)
   aligned := aligned_address - base
-  return aligned <= #len(arena.data) && size <= #len(arena.data) - aligned
+  if aligned > #len(arena.data) { return false }
+  if size > #len(arena.data) - aligned { return false }
+  return true
+}
+
+pub fn arena_push(arena: *Arena, allocation_size_bytes: usize, alignment_bytes: usize) *u8 {
+  if !arena_fits(arena, allocation_size_bytes, alignment_bytes) { #panic("arena exhausted or invalid alignment") }
+  if allocation_size_bytes == 0 { return nil }
+  base := #cast(usize) &arena.data[0]
+  address := base + arena.offset
+  one: usize = 1
+  aligned_address := (address + alignment_bytes - one) & ~(alignment_bytes - one)
+  aligned := aligned_address - base
+  arena.offset = aligned + allocation_size_bytes
+  result := #cast(*u8) aligned_address
+  bytes := result[..allocation_size_bytes]
+  i: usize = 0
+  for i < allocation_size_bytes {
+    bytes[i] = 0
+    i += 1
+  }
+  return result
 }
 
 fn arena_block_make(capacity: usize) *ArenaBlock {
   mapping_size: usize = 4096
-  address := #syscall(9, 0, mapping_size, 3, 34, -1, 0)
+  address: isize = #syscall(9, 0, mapping_size, 3, 34, -1, 0)
   if address < 0 { #panic("arena block allocation failed") }
-  block := #cast(*ArenaBlock) address
+  block: *ArenaBlock = #cast(*ArenaBlock) address
   block.arena = arena_make(capacity)
   block.next = nil
   return block
@@ -88,21 +94,21 @@ pub fn chained_arena_init(block_capacity: usize) ChainedArena {
   return ChainedArena{ first: nil, current: nil, block_capacity: block_capacity }
 }
 
-pub fn chained_arena_push(chain: *ChainedArena, size: usize, alignment: usize) *void {
+pub fn chained_arena_push(chain: *ChainedArena, size: usize, alignment: usize) *u8 {
   if alignment == 0 || (alignment & (alignment - 1)) != 0 { #panic("arena alignment must be a non-zero power of two") }
   if chain.current == nil {
-    capacity := chain.block_capacity
+    capacity: usize = chain.block_capacity
     if capacity < size + alignment { capacity = size + alignment }
-    block := arena_block_make(capacity)
+    block: *ArenaBlock = arena_block_make(capacity)
     chain.first = block
     chain.current = block
   }
   for !arena_fits(&chain.current.arena, size, alignment) {
     if chain.current.next != nil { chain.current = chain.current.next }
     else {
-      next_capacity := chain.block_capacity
+      next_capacity: usize = chain.block_capacity
       if next_capacity < size + alignment { next_capacity = size + alignment }
-      next_block := arena_block_make(next_capacity)
+      next_block: *ArenaBlock = arena_block_make(next_capacity)
       chain.current.next = next_block
       chain.current = next_block
     }
@@ -111,7 +117,7 @@ pub fn chained_arena_push(chain: *ChainedArena, size: usize, alignment: usize) *
 }
 
 pub fn chained_arena_reset(chain: *ChainedArena) {
-  block := chain.first
+  block: *ArenaBlock = chain.first
   for block != nil {
     arena_reset(&block.arena)
     block = block.next
@@ -120,9 +126,9 @@ pub fn chained_arena_reset(chain: *ChainedArena) {
 }
 
 pub fn chained_arena_release(chain: *ChainedArena) {
-  block := chain.first
+  block: *ArenaBlock = chain.first
   for block != nil {
-    next := block.next
+    next: *ArenaBlock = block.next
     arena_release(&block.arena)
     result := #syscall(11, block, 4096)
     if result != 0 { #panic("arena block release failed") }

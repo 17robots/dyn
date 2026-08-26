@@ -7,13 +7,13 @@ pub struct FreeList {
 }
 
 pub fn free_list_init(backing: []u8, slot_size: usize) FreeList {
-  actual := slot_size
+  actual: usize = slot_size
   if actual < #sizeof(FreeListNode) { actual = #sizeof(FreeListNode) }
   if actual == 0 || #len(backing) < actual { #panic("free list requires at least one slot") }
-  count := #len(backing) / actual
+  count: usize = #len(backing) / actual
   i: usize = 0
   for i < count {
-    node := #cast(*FreeListNode) &backing[i * actual]
+    node: *FreeListNode = #cast(*FreeListNode) &backing[i * actual]
     if i + 1 < count { node.next = #cast(*FreeListNode) &backing[(i + 1) * actual] }
     else { node.next = nil }
     i += 1
@@ -23,14 +23,14 @@ pub fn free_list_init(backing: []u8, slot_size: usize) FreeList {
 
 pub fn free_list_alloc(list: *FreeList) *void {
   if list.free_head == nil { #panic("free list exhausted") }
-  node := list.free_head
+  node: *FreeListNode = list.free_head
   list.free_head = node.next
   return #cast(*void) node
 }
 
 pub fn free_list_free(list: *FreeList, memory: *void) {
   if memory == nil { return }
-  node := #cast(*FreeListNode) memory
+  node: *FreeListNode = #cast(*FreeListNode) memory
   node.next = list.free_head
   list.free_head = node
 }

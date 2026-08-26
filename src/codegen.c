@@ -20,8 +20,10 @@ typedef struct {
   LLVMContextRef context;
   LLVMModuleRef module;
   LLVMBuilderRef builder;
-  LLVMValueRef function, panic_fn, init_fn, syscall_fn;
-  LLVMTypeRef panic_type, init_type, syscall_type;
+  LLVMValueRef function, panic_fn, init_fn, syscall_fn, trace_push_fn,
+      trace_pop_fn;
+  LLVMTypeRef panic_type, init_type, syscall_type, trace_push_type,
+      trace_pop_type;
   LLVMValueRef *locals, *functions, *globals, *captured_values;
   bool *static_globals;
   LLVMTypeRef *struct_types, *enum_types, *function_types;
@@ -292,6 +294,13 @@ static uint64_t type_alignment(Gen *g, DynType t) {
   }
 }
 static void emit_defers(Gen *, size_t);
+static void emit_trace_pop(Gen *g) {
+  LLVMBuildCall2(g->builder, g->trace_pop_type, g->trace_pop_fn, NULL, 0, "");
+}
+static void emit_panic(Gen *g, LLVMValueRef message, LLVMValueRef length) {
+  LLVMValueRef arguments[2] = {message, length};
+  LLVMBuildCall2(g->builder, g->panic_type, g->panic_fn, arguments, 2, "");
+}
 static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
   LLVMBasicBlockRef ok = LLVMAppendBasicBlockInContext(g->context, g->function,
                                                        name),
@@ -301,7 +310,8 @@ static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
   LLVMPositionBuilderAtEnd(g->builder, bad);
   if (!g->unwinding)
     emit_defers(g, 0);
-  LLVMBuildCall2(g->builder, g->panic_type, g->panic_fn, NULL, 0, "");
+  emit_panic(g, LLVMConstNull(LLVMPointerTypeInContext(g->context, 0)),
+             LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0));
   LLVMBuildUnreachable(g->builder);
   LLVMPositionBuilderAtEnd(g->builder, ok);
   return condition;
@@ -1010,7 +1020,9 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
   }
   if (st->kind == DYN_STMT_PANIC) {
     emit_defers(g, 0);
-    LLVMBuildCall2(g->builder, g->panic_type, g->panic_fn, NULL, 0, "");
+    LLVMValueRef message = gen_expr(g, st->expression);
+    emit_panic(g, LLVMBuildExtractValue(g->builder, message, 0, "panic.data"),
+               LLVMBuildExtractValue(g->builder, message, 1, "panic.len"));
     LLVMBuildUnreachable(g->builder);
     return true;
   }
@@ -1019,6 +1031,7 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     if (!g->is_main && g->return_type != DYN_TYPE_VOID)
       result = gen_expr(g, st->expression);
     emit_defers(g, 0);
+    emit_trace_pop(g);
     if (g->is_main)
       LLVMBuildRet(g->builder,
                    LLVMConstInt(LLVMInt32TypeInContext(g->context), 0, 0));
@@ -1423,13 +1436,26 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
                              : llvm_type(&g, fn->return_type);
     g.function_types[i] = LLVMFunctionType(result, params, fn->param_count, 0);
     free(params);
-    g.functions[i] = LLVMAddFunction(g.module, fn->foreign ? fn->link_name : fn->is_main ? "main" : fn->name,
+    g.functions[i] = LLVMAddFunction(g.module,
+                                     fn->foreign   ? fn->link_name
+                                     : fn->is_main ? "main"
+                                                   : fn->name,
                                      g.function_types[i]);
     if (release && !fn->is_main && !fn->foreign)
       LLVMSetLinkage(g.functions[i], LLVMInternalLinkage);
   }
-  g.panic_type = LLVMFunctionType(LLVMVoidTypeInContext(g.context), NULL, 0, 0);
+  LLVMTypeRef panic_params[2] = {LLVMPointerTypeInContext(g.context, 0),
+                                 LLVMInt64TypeInContext(g.context)};
+  g.panic_type =
+      LLVMFunctionType(LLVMVoidTypeInContext(g.context), panic_params, 2, 0);
   g.panic_fn = LLVMAddFunction(g.module, "dyn_panic", g.panic_type);
+  g.trace_push_type = LLVMFunctionType(LLVMVoidTypeInContext(g.context),
+                                       panic_params, 2, 0);
+  g.trace_push_fn =
+      LLVMAddFunction(g.module, "dyn_trace_push", g.trace_push_type);
+  g.trace_pop_type =
+      LLVMFunctionType(LLVMVoidTypeInContext(g.context), NULL, 0, 0);
+  g.trace_pop_fn = LLVMAddFunction(g.module, "dyn_trace_pop", g.trace_pop_type);
   LLVMTypeRef syscall_params[7];
   for (uint32_t i = 0; i < 7; ++i)
     syscall_params[i] = LLVMInt64TypeInContext(g.context);
@@ -1501,7 +1527,8 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
   bool has_init = init_function_count != 0;
   for (uint32_t i = 0; i < ir.function_count; ++i) {
     DynIrFunction *fn = &ir.functions[i];
-    if(fn->foreign)continue;
+    if (fn->foreign)
+      continue;
     g.function = g.functions[i];
     g.return_type = fn->return_type;
     g.is_main = fn->is_main;
@@ -1509,6 +1536,13 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
     g.continue_target = NULL;
     LLVMPositionBuilderAtEnd(g.builder, LLVMAppendBasicBlockInContext(
                                             g.context, g.function, "entry"));
+    LLVMValueRef trace_name =
+        LLVMBuildGlobalStringPtr(g.builder, fn->name, ".dyn.trace.name");
+    LLVMValueRef trace_arguments[2] = {
+        trace_name,
+        LLVMConstInt(LLVMInt64TypeInContext(g.context), strlen(fn->name), 0)};
+    LLVMBuildCall2(g.builder, g.trace_push_type, g.trace_push_fn,
+                   trace_arguments, 2, "");
     if (fn->is_main && has_init)
       for (size_t q = 0; q < init_function_count; ++q)
         LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
@@ -1524,6 +1558,7 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
     }
     bool terminated = gen_block(&g, fn->body_start, fn->body_count);
     if (!terminated) {
+      emit_trace_pop(&g);
       if (fn->is_main)
         LLVMBuildRet(g.builder, LLVMConstInt(i32, 0, 0));
       else
