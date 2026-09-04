@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tree_sitter/api.h>
+#include <stdint.h>
 
 typedef struct {
   TSTreeCursor cursor;
@@ -122,4 +123,47 @@ uint32_t dyn_tree_cursor_kind(const DynTreeCursor *cursor) {
     }
   }
   return 0;
+}
+void dyn_ast_node_init(void *node, uint32_t kind) {
+  static const struct { uint32_t raw, ast; } kinds[] = {
+      {88,1},{89,2},{91,3},{93,4},{95,5},{97,6},{98,7},{92,8},{90,9},
+      {1,10},{134,11},{141,12},{120,13},{113,14},{127,15},{100,16},
+      {142,17},{104,18},{130,19},{107,20},{108,21},{109,22},{137,23},
+      {145,24},{103,25},{112,26},{106,27},{96,28},{124,29},{131,30},
+      {119,31},{99,32},{122,33},{110,34},{111,35},{126,36},{105,37},
+      {132,38},{136,39},{138,40},{143,41},{114,42},{121,43},{125,44},
+      {116,45},{102,46},{133,47},{87,48},{101,49},{144,50},{139,51},
+      {140,52},{94,53},{123,54},{115,55},{118,56},{117,57},{135,58},
+      {129,59},{128,60},{85,61},{84,62},{78,63},{49,64}};
+  uint32_t ast_kind = 0;
+  for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); ++i)
+    if (kinds[i].raw == kind) { ast_kind = kinds[i].ast; break; }
+  uint32_t *fields = node;
+  fields[0] = ast_kind;
+  fields[1] = 0;
+  fields[2] = 0;
+  fields[3] = 0;
+  fields[4] = UINT32_MAX;
+  fields[5] = UINT32_MAX;
+  fields[6] = UINT32_MAX;
+}
+
+void dyn_ast_node_set_location(void *node, uint32_t source_id, uint32_t start,
+                               uint32_t end) {
+  uint32_t *fields = node;
+  fields[1] = source_id;
+  fields[2] = start;
+  fields[3] = end;
+}
+
+void dyn_ast_node_set_parent(void *node, uint32_t parent) {
+  ((uint32_t *)node)[4] = parent;
+}
+
+void dyn_ast_node_set_first_child(void *node, uint32_t child) {
+  ((uint32_t *)node)[5] = child;
+}
+
+void dyn_ast_node_set_next_sibling(void *node, uint32_t sibling) {
+  ((uint32_t *)node)[6] = sibling;
 }

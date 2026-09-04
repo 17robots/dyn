@@ -21,7 +21,7 @@ typedef struct {
   LLVMModuleRef module;
   LLVMBuilderRef builder;
   LLVMValueRef function, panic_fn, init_fn, syscall_fn, trace_push_fn,
-      trace_pop_fn;
+      trace_pop_fn, variadic_data, variadic_count;
   LLVMTypeRef panic_type, init_type, syscall_type, trace_push_type,
       trace_pop_type;
   LLVMValueRef *locals, *functions, *globals, *captured_values;
@@ -34,6 +34,7 @@ typedef struct {
   GenControl *defer_stack;
   size_t defer_count, break_defer_count, continue_defer_count, string_serial;
 } Gen;
+
 static int dyn_verify_module(LLVMModuleRef module, int action, char **message) {
   int failed = LLVMVerifyModule(module, action, message);
   if (!failed && message && *message) {
@@ -208,8 +209,13 @@ static unsigned type_bits(DynType t) {
   }
 }
 static LLVMTypeRef llvm_type(Gen *g, DynType t) {
-  if (dyn_type_is_pointer(t))
+  if (dyn_type_is_pointer(t) || t == DYN_TYPE_RAWPTR)
     return LLVMPointerTypeInContext(g->context, 0);
+  if (t == DYN_TYPE_ANY) {
+    LLVMTypeRef fields[] = {LLVMInt64TypeInContext(g->context),
+                            LLVMPointerTypeInContext(g->context, 0)};
+    return LLVMStructTypeInContext(g->context, fields, 2, 0);
+  }
   if (dyn_type_is_struct(t))
     return g->struct_types[t - DYN_TYPE_STRUCT_BASE];
   if (dyn_type_is_enum(t)) {
@@ -221,7 +227,7 @@ static LLVMTypeRef llvm_type(Gen *g, DynType t) {
     DynIrArray *a = &g->ir->arrays[t - DYN_TYPE_ARRAY_BASE];
     return LLVMArrayType2(llvm_type(g, a->element), a->length);
   }
-  if (dyn_type_is_slice(t)) {
+  if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING) {
     LLVMTypeRef fields[] = {LLVMPointerTypeInContext(g->context, 0),
                             LLVMInt64TypeInContext(g->context)};
     return LLVMStructTypeInContext(g->context, fields, 2, 0);
@@ -734,6 +740,13 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     return LLVMBuildExtractValue(g->builder, gen_expr(g, e->left), 1,
                                  "slice.len");
   }
+  if (e->kind == DYN_EXPR_VARIADIC) {
+    LLVMValueRef value = LLVMConstNull(type);
+    value = LLVMBuildInsertValue(g->builder, value, g->variadic_data, 0,
+                                 "variadic.data");
+    return LLVMBuildInsertValue(g->builder, value, g->variadic_count, 1,
+                                "variadic.count");
+  }
   if (e->kind == DYN_EXPR_SLICE) {
     DynType base = g->ir->expressions[e->left].type;
     LLVMTypeRef usize = LLVMInt64TypeInContext(g->context);
@@ -777,12 +790,54 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
         1, "slice.len.value");
   }
   if (e->kind == DYN_EXPR_CALL) {
-    LLVMValueRef *args = calloc(e->item_count, sizeof(*args));
-    for (uint32_t i = 0; i < e->item_count; ++i)
+    DynIrFunction *callee = &g->ir->functions[e->integer];
+    bool packed = callee->variadic && !callee->foreign &&
+                  dyn_type_is_slice(callee->variadic_type);
+    uint32_t extra = packed ? 2 : 0;
+    LLVMValueRef *args = calloc(e->item_count + extra, sizeof(*args));
+    for (uint32_t i = 0; i < (packed ? callee->param_count : e->item_count); ++i)
       args[i] = gen_expr(g, g->ir->items[e->item_start + i].expression);
+    if (packed) {
+      uint32_t n = e->item_count - callee->param_count;
+      DynType arg_type = ir_slice(g, callee->variadic_type)->element;
+      LLVMTypeRef descriptor = llvm_type(g, arg_type);
+      LLVMValueRef data = LLVMConstNull(LLVMPointerTypeInContext(g->context, 0));
+      if (n) {
+        LLVMTypeRef array = LLVMArrayType2(descriptor, n);
+        LLVMValueRef storage = LLVMBuildAlloca(g->builder, array, "variadic.args");
+        LLVMValueRef zero = LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0);
+        for (uint32_t i = 0; i < n; ++i) {
+          DynExprId id = g->ir->items[e->item_start + callee->param_count + i].expression;
+          DynType value_type = g->ir->expressions[id].type;
+          LLVMValueRef item;
+          if (arg_type == DYN_TYPE_ANY) {
+            LLVMValueRef slot = LLVMBuildAlloca(g->builder, llvm_type(g, value_type),
+                                                "variadic.value");
+            LLVMBuildStore(g->builder, gen_expr(g, id), slot);
+            item = LLVMConstNull(descriptor);
+            item = LLVMBuildInsertValue(g->builder, item,
+                LLVMConstInt(LLVMInt64TypeInContext(g->context), value_type, 0),
+                0, "any.type");
+            item = LLVMBuildInsertValue(g->builder, item, slot, 1, "any.data");
+          } else item = gen_expr(g, id);
+          LLVMValueRef indexes[] = {zero,
+              LLVMConstInt(LLVMInt64TypeInContext(g->context), i, 0)};
+          LLVMValueRef destination = LLVMBuildGEP2(g->builder, array, storage,
+                                                   indexes, 2, "variadic.item");
+          LLVMBuildStore(g->builder, item, destination);
+        }
+        LLVMValueRef indexes[] = {zero, zero};
+        data = LLVMBuildGEP2(g->builder, array, storage, indexes, 2,
+                             "variadic.data.pointer");
+      }
+      args[callee->param_count] = data;
+      args[callee->param_count + 1] = LLVMConstInt(
+          LLVMInt64TypeInContext(g->context), n, 0);
+    }
     LLVMValueRef result = LLVMBuildCall2(
         g->builder, g->function_types[e->integer], g->functions[e->integer],
-        args, e->item_count, e->type == DYN_TYPE_VOID ? "" : "call");
+        args, packed ? callee->param_count + 2 : e->item_count,
+        e->type == DYN_TYPE_VOID ? "" : "call");
     free(args);
     return result;
   }
@@ -830,13 +885,15 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
   if (e->kind == DYN_EXPR_CAST) {
     DynIrExpr *source = &g->ir->expressions[e->left];
     LLVMValueRef value = gen_expr(g, e->left);
+    bool source_ptr = dyn_type_is_pointer(source->type) || source->type == DYN_TYPE_RAWPTR;
+    bool target_ptr = dyn_type_is_pointer(e->type) || e->type == DYN_TYPE_RAWPTR;
     if (source->type == e->type ||
-        (dyn_type_is_pointer(source->type) && dyn_type_is_pointer(e->type)))
+        (source_ptr && target_ptr))
       return value;
-    if (dyn_type_is_pointer(source->type) && int_type(e->type))
+    if (source_ptr && int_type(e->type))
       return LLVMBuildPtrToInt(g->builder, value, type,
                                "cast.pointer.to.integer");
-    if (int_type(source->type) && dyn_type_is_pointer(e->type))
+    if (int_type(source->type) && target_ptr)
       return LLVMBuildIntToPtr(g->builder, value, type,
                                "cast.integer.to.pointer");
     if (int_type(source->type) && int_type(e->type)) {
@@ -891,6 +948,14 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
   if (e->kind == DYN_EXPR_CONVERT) {
     DynIrExpr *source = &g->ir->expressions[e->left];
     LLVMValueRef value = gen_expr(g, e->left);
+    if (e->type == DYN_TYPE_ANY) {
+      LLVMValueRef slot = LLVMBuildAlloca(g->builder, llvm_type(g, source->type), "any.value");
+      LLVMBuildStore(g->builder, value, slot);
+      LLVMValueRef boxed = LLVMConstNull(type);
+      boxed = LLVMBuildInsertValue(g->builder, boxed,
+          LLVMConstInt(LLVMInt64TypeInContext(g->context), source->type, 0), 0, "any.type");
+      return LLVMBuildInsertValue(g->builder, boxed, slot, 1, "any.data");
+    }
     if ((dyn_type_is_pointer(source->type) && dyn_type_is_pointer(e->type)) ||
         (dyn_type_is_slice(source->type) && dyn_type_is_slice(e->type)))
       return value;
@@ -1083,7 +1148,8 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
   }
   if (st->kind == DYN_STMT_CASE) {
     DynType subject_type = g->ir->expressions[st->expression].type;
-    bool enum_case = dyn_type_is_enum(subject_type), reference_subject = false;
+    bool enum_case = dyn_type_is_enum(subject_type), any_case = subject_type == DYN_TYPE_ANY,
+         reference_subject = false;
     DynIrEnum *en =
         enum_case ? &g->ir->enums[subject_type - DYN_TYPE_ENUM_BASE] : NULL;
     for (uint32_t i = 0; i < st->case_arm_count; ++i)
@@ -1097,6 +1163,7 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     } else
       subject = gen_expr(g, st->expression);
     LLVMValueRef test_value = subject;
+    if (any_case) test_value = LLVMBuildExtractValue(g->builder, subject, 0, "any.type");
     if (enum_case && en->has_payload) {
       if (!subject_storage) {
         subject_storage = LLVMBuildAlloca(
@@ -1106,7 +1173,8 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
       test_value = LLVMBuildExtractValue(g->builder, subject, 0, "case.tag");
     }
     LLVMTypeRef test_type =
-        enum_case ? llvm_type(g, en->tag_type) : llvm_type(g, subject_type);
+        enum_case ? llvm_type(g, en->tag_type) : any_case ? LLVMInt64TypeInContext(g->context)
+                                                        : llvm_type(g, subject_type);
     LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(
                           g->context, g->function, "case.done"),
                       next = NULL;
@@ -1125,7 +1193,10 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
         for (uint32_t j = 0; j < arm->pattern_count; ++j) {
           DynIrPattern *p = &g->ir->patterns[arm->pattern_start + j];
           LLVMValueRef match;
-          if (p->is_enum) {
+          if (p->is_type) {
+            match = LLVMBuildICmp(g->builder, 32, test_value,
+                LLVMConstInt(test_type, p->type, 0), "case.type");
+          } else if (p->is_enum) {
             DynIrVariant *v = &g->ir->variants[p->variant];
             match = LLVMBuildICmp(g->builder, 32, test_value,
                                   LLVMConstInt(test_type, v->tag, 0),
@@ -1148,18 +1219,20 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
       LLVMPositionBuilderAtEnd(g->builder, body);
       if (arm->local_id != UINT32_MAX) {
         DynIrPattern *p = &g->ir->patterns[arm->pattern_start];
-        DynIrVariant *v = &g->ir->variants[p->variant];
-        LLVMValueRef payload =
-            LLVMBuildStructGEP2(g->builder, llvm_type(g, subject_type),
-                                subject_storage, 1, "case.payload");
-        if (arm->pointer_binding)
-          g->locals[arm->local_id] = payload;
-        else
-          LLVMBuildStore(g->builder,
-                         LLVMBuildLoad2(g->builder,
-                                        llvm_type(g, v->payload_type), payload,
-                                        "case.binding"),
+        if (p->is_type) {
+          LLVMValueRef data = LLVMBuildExtractValue(g->builder, subject, 1, "any.data");
+          LLVMBuildStore(g->builder, LLVMBuildLoad2(g->builder, llvm_type(g, p->type),
+                                                   data, "case.binding"),
                          g->locals[arm->local_id]);
+        } else {
+          DynIrVariant *v = &g->ir->variants[p->variant];
+          LLVMValueRef payload = LLVMBuildStructGEP2(g->builder, llvm_type(g, subject_type),
+                                                     subject_storage, 1, "case.payload");
+          if (arm->pointer_binding) g->locals[arm->local_id] = payload;
+          else LLVMBuildStore(g->builder, LLVMBuildLoad2(g->builder,
+                    llvm_type(g, v->payload_type), payload, "case.binding"),
+                    g->locals[arm->local_id]);
+        }
       }
       bool terminated = gen_block(g, arm->body_start, arm->body_count);
       all_terminate = all_terminate && terminated;
@@ -1396,6 +1469,13 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
     snprintf(name, sizeof(name), "dyn.struct.%u", i);
     g.struct_types[i] = LLVMStructCreateNamed(g.context, name);
   }
+  g.enum_types = calloc(ir.enum_count, sizeof(*g.enum_types));
+  for (uint32_t i = 0; i < ir.enum_count; ++i)
+    if (ir.enums[i].has_payload) {
+      char name[64];
+      snprintf(name, sizeof(name), "dyn.enum.%u", i);
+      g.enum_types[i] = LLVMStructCreateNamed(g.context, name);
+    }
   for (uint32_t i = 0; i < ir.struct_count; ++i) {
     DynIrStruct *st = &ir.structs[i];
     LLVMTypeRef *fields = calloc(st->field_count, sizeof(*fields));
@@ -1404,13 +1484,6 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
     LLVMStructSetBody(g.struct_types[i], fields, st->field_count, st->packed);
     free(fields);
   }
-  g.enum_types = calloc(ir.enum_count, sizeof(*g.enum_types));
-  for (uint32_t i = 0; i < ir.enum_count; ++i)
-    if (ir.enums[i].has_payload) {
-      char name[64];
-      snprintf(name, sizeof(name), "dyn.enum.%u", i);
-      g.enum_types[i] = LLVMStructCreateNamed(g.context, name);
-    }
   for (uint32_t i = 0; i < ir.enum_count; ++i)
     if (ir.enums[i].has_payload) {
       DynIrEnum *en = &ir.enums[i];
@@ -1427,14 +1500,22 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
   g.function_types = calloc(ir.function_count, sizeof(*g.function_types));
   for (uint32_t i = 0; i < ir.function_count; ++i) {
     DynIrFunction *fn = &ir.functions[i];
-    LLVMTypeRef *params = calloc(fn->param_count, sizeof(*params));
+    bool packed = fn->variadic && !fn->foreign && dyn_type_is_slice(fn->variadic_type);
+    uint32_t llvm_param_count = fn->param_count + (packed ? 2 : 0);
+    LLVMTypeRef *params = calloc(llvm_param_count, sizeof(*params));
     for (uint32_t j = 0; j < fn->param_count; ++j)
       params[j] = llvm_type(&g, ir.params[fn->param_start + j].type);
+    if (packed) {
+      params[fn->param_count] = LLVMPointerTypeInContext(g.context, 0);
+      params[fn->param_count + 1] = LLVMInt64TypeInContext(g.context);
+    }
     LLVMTypeRef result = fn->is_main ? i32
                          : fn->return_type == DYN_TYPE_VOID
                              ? LLVMVoidTypeInContext(g.context)
                              : llvm_type(&g, fn->return_type);
-    g.function_types[i] = LLVMFunctionType(result, params, fn->param_count, 0);
+    g.function_types[i] =
+        LLVMFunctionType(result, params, llvm_param_count,
+                         fn->foreign && fn->variadic);
     free(params);
     g.functions[i] = LLVMAddFunction(g.module,
                                      fn->foreign   ? fn->link_name
@@ -1532,6 +1613,7 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
     g.function = g.functions[i];
     g.return_type = fn->return_type;
     g.is_main = fn->is_main;
+    g.variadic_data = g.variadic_count = NULL;
     g.break_target = NULL;
     g.continue_target = NULL;
     LLVMPositionBuilderAtEnd(g.builder, LLVMAppendBasicBlockInContext(
@@ -1556,6 +1638,14 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
       LLVMBuildStore(g.builder, LLVMGetParam(g.function, j),
                      g.locals[p->local_id]);
     }
+    if (fn->variadic && !fn->foreign && dyn_type_is_slice(fn->variadic_type)) {
+      g.variadic_data = LLVMGetParam(g.function, fn->param_count);
+      g.variadic_count = LLVMGetParam(g.function, fn->param_count + 1);
+      LLVMValueRef pack = LLVMConstNull(llvm_type(&g, fn->variadic_type));
+      pack = LLVMBuildInsertValue(g.builder, pack, g.variadic_data, 0, "variadic.data");
+      pack = LLVMBuildInsertValue(g.builder, pack, g.variadic_count, 1, "variadic.count");
+      LLVMBuildStore(g.builder, pack, g.locals[fn->variadic_local_id]);
+    }
     bool terminated = gen_block(&g, fn->body_start, fn->body_count);
     if (!terminated) {
       emit_trace_pop(&g);
@@ -1565,7 +1655,7 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
         LLVMBuildRetVoid(g.builder);
     }
   }
-  char *triple = LLVMGetDefaultTargetTriple();
+  const char *triple = DYN_TARGET_TRIPLE;
   LLVMSetTarget(g.module, triple);
   int failed = 0;
   char *error = NULL;
@@ -1625,7 +1715,6 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
   }
   if (tm)
     LLVMDisposeTargetMachine(tm);
-  LLVMDisposeMessage(triple);
   free(init_functions);
   free(g.locals);
   free(g.captured_values);
@@ -1671,7 +1760,7 @@ int dyn_link_executable(const char *object_path, const char *output_path,
   if (verbose) {
     fprintf(stderr, "+ ld.lld -o %s %s %s", temporary, runtime, object_path);
     if (dynamic)
-      fprintf(stderr, " --dynamic-linker /lib64/ld-linux-x86-64.so.2");
+      fprintf(stderr, " --dynamic-linker " DYN_TARGET_DYNAMIC_LINKER);
     for (size_t i = 0; i < link_input_count; ++i)
       fprintf(stderr, " %s", link_inputs[i]);
     fputc('\n', stderr);
@@ -1693,7 +1782,7 @@ int dyn_link_executable(const char *object_path, const char *output_path,
     arguments[argument_count++] = (char *)object_path;
     if (dynamic) {
       arguments[argument_count++] = "--dynamic-linker";
-      arguments[argument_count++] = "/lib64/ld-linux-x86-64.so.2";
+      arguments[argument_count++] = DYN_TARGET_DYNAMIC_LINKER;
     }
     for (size_t i = 0; i < link_input_count; ++i)
       arguments[argument_count++] = (char *)link_inputs[i];

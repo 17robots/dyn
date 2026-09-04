@@ -40,8 +40,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, "error: input must be a module directory: '%s'\n", o.input);
     return 2;
   }
-  if (strcmp(o.target, "x86_64-linux") != 0) {
-    fprintf(stderr, "error: target '%s' is not implemented\n", o.target);
+  if (strcmp(o.target, DYN_TARGET_NAME) != 0) {
+    fprintf(stderr, "error: target '%s' is not implemented; supported target: "
+                    DYN_TARGET_NAME "\n",
+            o.target);
     return 2;
   }
   DynSources sources;

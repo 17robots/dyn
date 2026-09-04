@@ -1,4 +1,4 @@
-use "std/io"
+use "std/term"
 use "std/mem"
 use "std/os"
 use "std/time"
@@ -52,7 +52,7 @@ fn language_demo() {
     PacketKind.Data => { require(packet.value == 42) },
     PacketKind.Stop => { #panic("unexpected packet") },
   }
-  io.println("language: ok")
+  term.println("language: ok")
 }
 
 fn memory_demo() {
@@ -77,7 +77,7 @@ fn memory_demo() {
   require(first != second)
   mem.free_list_free(&list, first)
   require(mem.free_list_alloc(&list) == first)
-  io.println("memory: ok")
+  term.println("memory: ok")
 }
 
 fn reflection_demo() {
@@ -88,12 +88,12 @@ fn reflection_demo() {
   require(#len(point.name) == 5)
   require(function.kind == TypeKind.Function)
   require(point.id != function.id)
-  io.println("reflection: ok")
+  term.println("reflection: ok")
 }
 
 fn defer_demo() {
-  defer io.println("defer: first registered")
-  defer io.println("defer: second registered")
+  defer term.println("defer: first registered")
+  defer term.println("defer: second registered")
 }
 
 fn runtime_demo() {
@@ -101,15 +101,15 @@ fn runtime_demo() {
   require(now.seconds > 0)
   require(os.process_id() > 0)
   require(os.thread_id() > 0)
-  io.println("runtime: ok")
+  term.println("runtime: ok")
 }
 
 pub fn run_demo() {
-  io.println("dyn demo")
+  term.println("dyn demo")
   language_demo()
   memory_demo()
   reflection_demo()
   defer_demo()
   runtime_demo()
-  io.println("demo complete")
+  term.println("demo complete")
 }

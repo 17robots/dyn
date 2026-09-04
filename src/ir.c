@@ -396,8 +396,11 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
     ir->functions[i].body_count = a->functions[i].body_count;
     ir->functions[i].local_start = a->functions[i].local_start;
     ir->functions[i].local_count = a->functions[i].local_count;
+    ir->functions[i].variadic_local_id = a->functions[i].variadic_local_id;
     ir->functions[i].is_main = a->functions[i].is_main;
     ir->functions[i].foreign = a->functions[i].foreign;
+    ir->functions[i].variadic = a->functions[i].variadic;
+    ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
   }
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
@@ -456,8 +459,9 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] =
         (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value,
-                       a->patterns[i].variant, a->patterns[i].is_enum,
-                       a->patterns[i].is_signed};
+                       lower_type(a, a->patterns[i].type), a->patterns[i].variant,
+                       a->patterns[i].is_enum, a->patterns[i].is_signed,
+                       a->patterns[i].is_type};
   for (size_t i = 0; i < a->case_arm_count; ++i)
     ir->case_arms[i] = (DynIrCaseArm){
         a->case_arms[i].pattern_start,  a->case_arms[i].pattern_count,

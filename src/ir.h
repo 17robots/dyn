@@ -71,8 +71,9 @@ typedef struct {
   char *name, *link_name;
   DynType return_type;
   uint32_t param_start, param_count, body_start, body_count, local_start,
-      local_count;
-  bool is_main, foreign;
+      local_count, variadic_local_id;
+  bool is_main, foreign, variadic;
+  DynType variadic_type;
 } DynIrFunction;
 typedef struct {
   DynStmtKind kind;
@@ -87,8 +88,9 @@ typedef struct {
 } DynIrLocal;
 typedef struct {
   uint64_t first, last;
+  DynType type;
   uint32_t variant;
-  bool is_enum, is_signed;
+  bool is_enum, is_signed, is_type;
 } DynIrPattern;
 typedef struct {
   uint32_t pattern_start, pattern_count, body_start, body_count, local_id;

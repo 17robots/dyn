@@ -225,7 +225,8 @@ static uint64_t sema_type_layout(DynAstFunction *a, DynType t, bool alignment) {
   if (t == DYN_TYPE_I32 || t == DYN_TYPE_U32 || t == DYN_TYPE_F32)
     return 4;
   if (t == DYN_TYPE_I64 || t == DYN_TYPE_U64 || t == DYN_TYPE_ISIZE ||
-      t == DYN_TYPE_USIZE || t == DYN_TYPE_F64 || dyn_type_is_pointer(t))
+      t == DYN_TYPE_USIZE || t == DYN_TYPE_F64 || t == DYN_TYPE_RAWPTR ||
+      dyn_type_is_pointer(t))
     return 8;
   if (dyn_type_is_struct(t)) {
     DynAstStruct *st = &a->structs[t - DYN_TYPE_STRUCT_BASE];
@@ -408,6 +409,8 @@ static DynType function_signature_type(DynAstFunction *a, uint32_t id) {
   return result;
 }
 static bool can_convert(DynAstFunction *a, DynType from, DynType to) {
+  if (to == DYN_TYPE_ANY && from != DYN_TYPE_VOID && from != DYN_TYPE_ERROR)
+    return true;
   if (lossless(from, to))
     return true;
   DynAstPointer *f = pointer_info(a, from), *t = pointer_info(a, to);
@@ -840,7 +843,8 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
       e->left = DYN_NO_EXPR;
       e->integer = fn;
       DynAstFn *callee = &a->functions[fn];
-      if (e->item_count != callee->param_count)
+      if ((!callee->variadic && e->item_count != callee->param_count) ||
+          (callee->variadic && e->item_count < callee->param_count))
         error_span(e->span, s, errors, "function argument count mismatch");
       uint32_t count = e->item_count < callee->param_count
                            ? e->item_count
@@ -859,6 +863,39 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
                        "function argument type mismatch");
         }
       }
+      if (callee->variadic && callee->foreign)
+        for (uint32_t i = callee->param_count; i < e->item_count; ++i) {
+          DynAstItem *arg = &a->items[item_start + i];
+          DynType value =
+              check_expr(a, arg->expression, s, errors, DYN_TYPE_INFER);
+          DynType promoted = value;
+          if (value == DYN_TYPE_F32)
+            promoted = DYN_TYPE_F64;
+          else if (value == DYN_TYPE_I8 || value == DYN_TYPE_I16 ||
+                   value == DYN_TYPE_U8 || value == DYN_TYPE_U16)
+            promoted = DYN_TYPE_I32;
+          if (promoted != value && value != DYN_TYPE_ERROR)
+            arg->expression = convert_expr(a, arg->expression, promoted);
+          else if (value != DYN_TYPE_I32 && value != DYN_TYPE_U32 &&
+                   value != DYN_TYPE_I64 && value != DYN_TYPE_U64 &&
+                   value != DYN_TYPE_ISIZE && value != DYN_TYPE_USIZE &&
+                   value != DYN_TYPE_F64 && !dyn_type_is_pointer(value) &&
+                   value != DYN_TYPE_ERROR)
+            error_span(a->expressions[arg->expression].span, s, errors,
+                       "C variadic argument requires integer, float, or pointer");
+        }
+      else if (callee->variadic)
+        for (uint32_t i = callee->param_count; i < e->item_count; ++i) {
+          DynAstItem *arg = &a->items[item_start + i];
+          DynType element = slice_info(a, callee->variadic_type)->element;
+          DynType value = check_expr(a, arg->expression, s, errors,
+                                     element == DYN_TYPE_ANY ? DYN_TYPE_INFER : element);
+          if (element != DYN_TYPE_ANY && value != element && value != DYN_TYPE_ERROR) {
+            if (can_convert(a, value, element)) arg->expression = convert_expr(a, arg->expression, element);
+            else error_span(a->expressions[arg->expression].span, s, errors,
+                            "variadic argument type mismatch");
+          }
+        }
       return a->expressions[id].type = return_type;
     }
   }
@@ -994,6 +1031,32 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     }
     return e->type = DYN_TYPE_USIZE;
   }
+  if (e->kind == DYN_EXPR_VARIADIC) {
+    if (current_function == UINT32_MAX ||
+        !a->functions[current_function].variadic ||
+        a->functions[current_function].foreign) {
+      error_span(e->span, s, errors,
+                 "#variadic is only valid inside a native variadic function");
+      return e->type = DYN_TYPE_ERROR;
+    }
+    uint32_t arg = UINT32_MAX, kind = UINT32_MAX;
+    for (uint32_t i = 0; i < a->struct_count; ++i)
+      if (span_is(a->structs[i].name, s, "VariadicArg")) arg = i;
+    for (uint32_t i = 0; i < a->enum_count; ++i)
+      if (span_is(a->enums[i].name, s, "VariadicKind")) kind = i;
+    if (arg == UINT32_MAX || kind == UINT32_MAX ||
+        a->structs[arg].field_count != 2 ||
+        a->fields[a->structs[arg].field_start].type != DYN_TYPE_ENUM_BASE + kind ||
+        !dyn_type_is_pointer(a->fields[a->structs[arg].field_start + 1].type)) {
+      error_span(e->span, s, errors, "compiler variadic ABI mismatch");
+      return e->type = DYN_TYPE_ERROR;
+    }
+    e->type = sema_intern_slice(a, DYN_TYPE_STRUCT_BASE + arg, true);
+    for (uint32_t i = 0; i < a->function_count; ++i)
+      if (a->functions[i].variadic && !a->functions[i].foreign)
+        a->functions[i].variadic_type = e->type;
+    return e->type;
+  }
   if (e->kind == DYN_EXPR_TYPEOF) {
     DynType operand;
     if (e->boolean)
@@ -1096,10 +1159,11 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
   if (e->kind == DYN_EXPR_CAST) {
     DynType source = check_expr(a, e->left, s, errors, DYN_TYPE_INFER),
             target = (DynType)e->integer;
+    bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
+    bool target_ptr = dyn_type_is_pointer(target) || target == DYN_TYPE_RAWPTR;
     bool valid = (numeric(source) && numeric(target)) ||
-                 (dyn_type_is_pointer(source) && dyn_type_is_pointer(target)) ||
-                 (dyn_type_is_pointer(source) && integer(target)) ||
-                 (integer(source) && dyn_type_is_pointer(target)) ||
+                 (source_ptr && target_ptr) || (source_ptr && integer(target)) ||
+                 (integer(source) && target_ptr) ||
                  source == target;
     if (!valid) {
       error_span(e->span, s, errors, "invalid explicit cast");
@@ -1138,7 +1202,7 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
   if (e->kind == DYN_EXPR_CONVERT)
     return e->type;
   if (e->kind == DYN_EXPR_NIL) {
-    if (!dyn_type_is_pointer(expected)) {
+    if (!dyn_type_is_pointer(expected) && expected != DYN_TYPE_RAWPTR) {
       error_span(e->span, s, errors, "nil requires expected pointer type");
       return e->type = DYN_TYPE_ERROR;
     }
@@ -1269,6 +1333,11 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     if (operand->kind == DYN_EXPR_NAME) {
       uint32_t fn = sema_find_function(a, operand->span, s);
       if (fn != UINT32_MAX) {
+        if (a->functions[fn].variadic) {
+          error_span(e->span, s, errors,
+                     "variadic function pointers are not implemented");
+          return e->type = DYN_TYPE_ERROR;
+        }
         e->kind = DYN_EXPR_FUNCTION;
         e->op = DYN_OP_NONE;
         e->integer = fn;
@@ -1570,6 +1639,33 @@ static bool sema_case_v2(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
                          unsigned *errors) {
   DynType subject = check_expr(a, st->expression, s, errors, DYN_TYPE_INFER);
   bool enum_case = dyn_type_is_enum(subject), integer_case = integer(subject);
+  if (subject == DYN_TYPE_ANY) {
+    bool wildcard = false, all_terminate = true;
+    for (uint32_t i = 0; i < st->case_arm_count; ++i) {
+      DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + i];
+      if (arm->wildcard) { if (wildcard) error_span(arm->span, s, errors, "duplicate _ case arm"); wildcard = true; }
+      else if (arm->pattern_count != 1 || !a->patterns[arm->pattern_start].is_type)
+        error_span(arm->span, s, errors, "any case arm requires an is type pattern");
+      else {
+        DynAstPattern *p = &a->patterns[arm->pattern_start];
+        for (uint32_t q = 0; q < i; ++q) {
+          DynAstCaseArm *old = &a->case_arms[st->case_arm_start + q];
+          if (!old->wildcard && old->pattern_count && a->patterns[old->pattern_start].is_type &&
+              a->patterns[old->pattern_start].type == p->type)
+            error_span(p->span, s, errors, "duplicate any type pattern");
+        }
+        if (arm->binding.end_byte > arm->binding.start_byte && reserve_local(a)) {
+          arm->local_id = (uint32_t)a->local_count;
+          a->locals[a->local_count++] = (DynAstLocal){.name = arm->binding,
+            .type = p->type, .active = true, .owner_function = current_function};
+        }
+      }
+      all_terminate = sema_block(a, arm->body_start, arm->body_count, s, errors, true) && all_terminate;
+      if (arm->local_id != UINT32_MAX) a->locals[arm->local_id].active = false;
+    }
+    if (!wildcard) error_span(st->span, s, errors, "any case requires _ arm");
+    return all_terminate;
+  }
   if (!enum_case && !integer_case) {
     error_span(st->span, s, errors, "case requires integer or enum value");
     return false;
@@ -1717,8 +1813,19 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
       (void)sema_block(a, st->body_start, st->body_count, s, errors, true);
     return false;
   }
-  if (st->kind == DYN_STMT_PANIC)
+  if (st->kind == DYN_STMT_PANIC) {
+    DynType message_type = sema_intern_slice(a, DYN_TYPE_U8, true);
+    DynType value =
+        check_expr(a, st->expression, s, errors, message_type);
+    if (value != message_type && value != DYN_TYPE_ERROR) {
+      if (can_convert(a, value, message_type))
+        st->expression = convert_expr(a, st->expression, message_type);
+      else
+        error_span(st->span, s, errors,
+                   "#panic message requires []const u8");
+    }
     return true;
+  }
   if (st->kind == DYN_STMT_CASE) {
     validate_pointer_case_bindings(a, st, s, errors);
     return sema_case_v2(a, st, s, errors);
@@ -2129,6 +2236,21 @@ static bool foreign_symbol_valid(DynSpan name, const DynSource *s) {
 }
 bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
                        unsigned *errors) {
+  /* check_expr keeps short-lived pointers into this table while recursively
+     checking children. Reserve all conversion nodes up front so convert_expr
+     cannot invalidate those pointers. At most one implicit conversion is
+     introduced per parsed expression edge. */
+  size_t semantic_capacity = a->expression_count * 2 + 32;
+  if (semantic_capacity > a->expression_capacity) {
+    void *expressions = realloc(a->expressions,
+                                semantic_capacity * sizeof(*a->expressions));
+    if (!expressions) {
+      ++*errors;
+      return false;
+    }
+    a->expressions = expressions;
+    a->expression_capacity = semantic_capacity;
+  }
   for (uint32_t i = 0; i < a->field_count; ++i)
     if (a->fields[i].default_expression != DYN_NO_EXPR) {
       DynType value = check_expr(a, a->fields[i].default_expression, s, errors,
@@ -2148,6 +2270,8 @@ bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
   current_function = UINT32_MAX;
   for (uint32_t i = 0; i < a->global_count; ++i) {
     DynAstGlobal *g = &a->globals[i];
+    if (g->type == DYN_TYPE_ANY)
+      error_span(g->name, s, errors, "global any would escape borrowed storage");
     if (g->initializer == DYN_NO_EXPR) {
       if (g->is_const)
         error_span(g->name, s, errors, "constant requires initializer");
@@ -2170,7 +2294,12 @@ bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
   }
   for (uint32_t f = 0; f < a->function_count; ++f) {
     DynAstFn *fn = &a->functions[f];
+    if (fn->return_type == DYN_TYPE_ANY)
+      error_span(fn->name, s, errors, "returning any would escape borrowed storage");
     if (fn->foreign) {
+      if (fn->variadic && fn->param_count == 0)
+        error_span(fn->name, s, errors,
+                   "C variadic function requires a fixed parameter");
       if (!foreign_symbol_valid(fn->link_name, s))
         error_span(fn->link_name, s, errors,
                    "foreign link name must be a non-empty linker symbol");
@@ -2214,6 +2343,14 @@ bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
       a->locals[a->local_count++] = (DynAstLocal){
           .name = p->name, .type = p->type, .active = true,
           .owner_function = f};
+    }
+    if (fn->variadic && fn->variadic_name.end_byte > fn->variadic_name.start_byte) {
+      if (!reserve_local(a)) error_span(fn->variadic_name, s, errors, "out of memory");
+      else {
+        fn->variadic_local_id = (uint32_t)a->local_count;
+        a->locals[a->local_count++] = (DynAstLocal){.name = fn->variadic_name,
+          .type = fn->variadic_type, .active = true, .owner_function = f};
+      }
     }
     bool terminated =
         sema_block(a, fn->body_start, fn->body_count, s, errors, false);

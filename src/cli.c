@@ -12,7 +12,7 @@ void dyn_cli_help(const char *command) {
        "implemented\n\n"
        "Build options:\n  --output <path>  --debug  --release\n"
        "  --emit-ir  --emit-object  --emit-asm  --no-link\n  --target "
-       "x86_64-linux\n"
+       DYN_TARGET_NAME "\n"
        "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
        "Global options:\n  --quiet  --verbose  --warnings-as-errors  "
        "--no-warnings");
@@ -20,7 +20,7 @@ void dyn_cli_help(const char *command) {
 
 int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
   memset(o, 0, sizeof(*o));
-  o->target = "x86_64-linux";
+  o->target = DYN_TARGET_NAME;
   if (argc < 2)
     return 2;
   o->command = argv[1];

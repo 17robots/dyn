@@ -1,0 +1,230 @@
+use "std/mem"
+use "std/str"
+
+pub enum OptionKind { Bool, String }
+pub enum ErrorKind { None, UnknownOption, MissingValue, UnexpectedValue, MissingRequired }
+
+pub struct Option {
+  name: []const u8,
+  short: u8,
+  kind: OptionKind,
+  default_value: []const u8,
+  required: bool,
+}
+
+pub struct Value {
+  value: []const u8,
+  present: bool,
+  count: usize,
+}
+
+pub struct Error {
+  kind: ErrorKind,
+  argument: usize,
+  option: []const u8,
+}
+
+pub struct Result {
+  values: []Value,
+  positionals: [][]const u8,
+  error: Error,
+  ok: bool,
+}
+
+pub fn bool_option(name: []const u8, short: u8) Option {
+  return Option{ name: name, short: short, kind: OptionKind.Bool, default_value: "", required: false }
+}
+
+pub fn string_option(name: []const u8, short: u8) Option {
+  return Option{ name: name, short: short, kind: OptionKind.String, default_value: "", required: false }
+}
+
+pub fn required_string_option(name: []const u8, short: u8) Option {
+  return Option{ name: name, short: short, kind: OptionKind.String, default_value: "", required: true }
+}
+
+pub fn string_option_default(name: []const u8, short: u8, default_value: []const u8) Option {
+  return Option{ name: name, short: short, kind: OptionKind.String, default_value: default_value, required: false }
+}
+
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0
+  for i < #len(left) {
+    if left[i] != right[i] { return false }
+    i += 1
+  }
+  return true
+}
+
+fn find_long(options: []const Option, name: []const u8) usize {
+  i: usize = 0
+  for i < #len(options) {
+    if equal(options[i].name, name) { return i }
+    i += 1
+  }
+  return #len(options)
+}
+
+fn find_short(options: []const Option, name: u8) usize {
+  i: usize = 0
+  for i < #len(options) {
+    if options[i].short != 0 && options[i].short == name { return i }
+    i += 1
+  }
+  return #len(options)
+}
+
+fn failure(values: []Value, positionals: [][]const u8, kind: ErrorKind, argument: usize, option: []const u8) Result {
+  return Result{
+    values: values,
+    positionals: positionals,
+    error: Error{ kind: kind, argument: argument, option: option },
+    ok: false,
+  }
+}
+
+pub fn parse(arena: *mem.Arena, options: []const Option, arguments: [][]const u8) Result {
+  value_capacity := #len(options)
+  if value_capacity == 0 { value_capacity = 1 }
+  value_raw := #cast(*Value) mem.arena_push(arena, value_capacity * #sizeof(Value), #alignof(Value))
+  values := value_raw[..#len(options)]
+  initialize: usize = 0
+  for initialize < #len(options) {
+    if #len(options[initialize].default_value) > 0 { values[initialize].value = options[initialize].default_value }
+    initialize += 1
+  }
+  positional_capacity := #len(arguments)
+  if positional_capacity == 0 { positional_capacity = 1 }
+  positional_raw := #cast(*[]const u8) mem.arena_push(arena, positional_capacity * #sizeof([]const u8), #alignof([]const u8))
+  positionals := positional_raw[..#len(arguments)]
+  positional_count: usize = 0
+  options_done := false
+  argument: usize = 0
+  for argument < #len(arguments) {
+    text := arguments[argument]
+    if !options_done && equal(text, "--") {
+      options_done = true
+    } else if !options_done && #len(text) > 2 && text[0] == '-' && text[1] == '-' {
+      name_end := #len(text)
+      i: usize = 2
+      for i < #len(text) {
+        if text[i] == '=' && name_end == #len(text) { name_end = i }
+        i += 1
+      }
+      option_index := find_long(options, text[2..name_end])
+      if option_index == #len(options) { return failure(values, positionals[..positional_count], ErrorKind.UnknownOption, argument, text) }
+      has_inline := name_end < #len(text)
+      if options[option_index].kind == OptionKind.Bool {
+        if has_inline { return failure(values, positionals[..positional_count], ErrorKind.UnexpectedValue, argument, text) }
+        values[option_index].present = true
+        values[option_index].count += 1
+      } else {
+        if has_inline {
+          values[option_index].value = text[name_end + 1..]
+          values[option_index].present = true
+          values[option_index].count += 1
+        } else {
+          if argument + 1 >= #len(arguments) { return failure(values, positionals[..positional_count], ErrorKind.MissingValue, argument, text) }
+          argument += 1
+          values[option_index].value = arguments[argument]
+          values[option_index].present = true
+          values[option_index].count += 1
+        }
+      }
+    } else if !options_done && #len(text) >= 2 && text[0] == '-' {
+      short_at: usize = 1
+      for short_at < #len(text) {
+        short_index := find_short(options, text[short_at])
+        if short_index == #len(options) { return failure(values, positionals[..positional_count], ErrorKind.UnknownOption, argument, text) }
+        values[short_index].present = true
+        values[short_index].count += 1
+        if options[short_index].kind == OptionKind.String {
+          if short_at + 1 < #len(text) { values[short_index].value = text[short_at + 1..] }
+          else {
+            if argument + 1 >= #len(arguments) { return failure(values, positionals[..positional_count], ErrorKind.MissingValue, argument, text) }
+            argument += 1
+            values[short_index].value = arguments[argument]
+          }
+          short_at = #len(text)
+        } else { short_at += 1 }
+      }
+    } else {
+      positionals[positional_count] = text
+      positional_count += 1
+    }
+    argument += 1
+  }
+  required: usize = 0
+  for required < #len(options) {
+    if options[required].required && !values[required].present {
+      return failure(values, positionals[..positional_count], ErrorKind.MissingRequired, #len(arguments), options[required].name)
+    }
+    required += 1
+  }
+  empty: []const u8 = ""
+  return Result{
+    values: values,
+    positionals: positionals[..positional_count],
+    error: Error{ kind: ErrorKind.None, argument: 0, option: empty },
+    ok: true,
+  }
+}
+
+pub fn count(result: *const Result, option: usize) usize {
+  if option >= #len(result.values) { return 0 }
+  return result.values[option].count
+}
+
+pub fn present(result: *const Result, option: usize) bool {
+  return option < #len(result.values) && result.values[option].present
+}
+
+pub fn value(result: *const Result, option: usize) []const u8 {
+  empty: []const u8 = ""
+  if option >= #len(result.values) { return empty }
+  return result.values[option].value
+}
+
+pub fn integer(result: *const Result, option: usize, output: *i64) bool {
+  if option >= #len(result.values) { return false }
+  candidate := result.values[option]
+  if !candidate.present && #len(candidate.value) == 0 { return false }
+  return str.parse_i64(candidate.value, output)
+}
+
+pub fn unsigned_integer(result: *const Result, option: usize, output: *u64) bool {
+  if option >= #len(result.values) { return false }
+  candidate := result.values[option]
+  if !candidate.present && #len(candidate.value) == 0 { return false }
+  return str.parse_u64(candidate.value, output)
+}
+
+pub fn float(result: *const Result, option: usize, output: *f64) bool {
+  if option >= #len(result.values) { return false }
+  candidate := result.values[option]
+  if !candidate.present && #len(candidate.value) == 0 { return false }
+  return str.parse_f64(candidate.value, output)
+}
+
+// Enum-like parsing: returns matching choice index, or -1.
+pub fn choice(result: *const Result, option: usize, choices: [][]const u8) isize {
+  text := value(result, option)
+  i: usize = 0
+  for i < #len(choices) {
+    if equal(text, choices[i]) { return #cast(isize) i }
+    i += 1
+  }
+  return -1
+}
+
+pub fn subcommand(result: *const Result) []const u8 {
+  empty: []const u8 = ""
+  if #len(result.positionals) == 0 { return empty }
+  return result.positionals[0]
+}
+
+pub fn subcommand_arguments(result: *const Result) [][]const u8 {
+  if #len(result.positionals) == 0 { return result.positionals }
+  return result.positionals[1..]
+}

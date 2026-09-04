@@ -1,11 +1,23 @@
 pub fn read_descriptor(descriptor: isize, destination: []u8) isize {
   if #len(destination) == 0 { return 0 }
-  return #syscall(0, descriptor, &destination[0], #len(destination))
+  result := #syscall(0, descriptor, &destination[0], #len(destination))
+  for result == -4 {
+    result = #syscall(0, descriptor, &destination[0], #len(destination))
+  }
+  return result
 }
 
 pub fn write_descriptor(descriptor: isize, source: []const u8) isize {
   if #len(source) == 0 { return 0 }
-  return #syscall(1, descriptor, &source[0], #len(source))
+  written: usize = 0
+  for written < #len(source) {
+    result := #syscall(1, descriptor, &source[written], #len(source) - written)
+    if result != -4 {
+      if result <= 0 { return result }
+      written += #cast(usize) result
+    }
+  }
+  return #cast(isize) written
 }
 
 pub fn close_descriptor(descriptor: isize) isize { return #syscall(3, descriptor) }

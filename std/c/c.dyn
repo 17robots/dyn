@@ -1,0 +1,37 @@
+// C ABI names for current x86_64 SysV target. These are aliases: no wrappers,
+// conversions, allocation, or distinct-type friction at foreign call sites.
+pub type char = i8
+pub type signed_char = i8
+pub type unsigned_char = u8
+pub type short = i16
+pub type unsigned_short = u16
+pub type int = i32
+pub type unsigned_int = u32
+pub type long = isize
+pub type unsigned_long = usize
+pub type long_long = i64
+pub type unsigned_long_long = u64
+pub type float = f32
+pub type double = f64
+pub type size = usize
+pub type ptrdiff = isize
+pub type string = *const u8
+
+pub struct StringResult {
+  value: string,
+  ok: bool,
+}
+
+// Copies bytes and appends C's terminating zero into caller-owned storage.
+pub fn string_from_bytes(destination: []u8, source: []const u8) StringResult {
+  if #len(destination) <= #len(source) {
+    return StringResult{ value: nil, ok: false }
+  }
+  i: usize = 0
+  for i < #len(source) {
+    destination[i] = source[i]
+    i += 1
+  }
+  destination[i] = 0
+  return StringResult{ value: &destination[0], ok: true }
+}

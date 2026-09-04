@@ -16,7 +16,7 @@ const char *dyn_type_name(DynType t) {
   static const char *names[] = {"<infer>", "<error>",   "void",  "bool",  "i8",
                                 "i16",     "i32",       "i64",   "u8",    "u16",
                                 "u32",     "u64",       "isize", "usize", "f32",
-                                "f64",     "[]const u8"};
+                                "f64",     "[]const u8", "rawptr", "any"};
   return t < DYN_TYPE_STRUCT_BASE ? names[t]
          : dyn_type_is_enum(t)    ? "enum"
          : dyn_type_is_pointer(t) ? "pointer"
@@ -151,6 +151,17 @@ static bool reserve_item(DynAstFunction *a) {
   }
   a->items = p;
   a->item_capacity = c;
+  return true;
+}
+static bool reserve_items(DynAstFunction *a, size_t count) {
+  while (a->item_count + count > a->item_capacity) {
+    size_t c = a->item_capacity ? a->item_capacity * 2 : 32;
+    if (c < a->item_count + count) c = a->item_count + count;
+    void *p = realloc(a->items, c * sizeof(*a->items));
+    if (!p) return false;
+    a->items = p;
+    a->item_capacity = c;
+  }
   return true;
 }
 static bool reserve_field(DynAstFunction *a) {
@@ -742,16 +753,18 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
       e.span = span(callee);
     }
     e.item_start = (uint32_t)a->item_count;
+    uint32_t argument_count = ts_node_named_child_count(node) - 1;
+    if (!reserve_items(a, argument_count)) {
+      diagnostic(node, s, errors, "out of memory");
+      return DYN_NO_EXPR;
+    }
+    a->item_count += argument_count;
+    e.item_count = argument_count;
     for (uint32_t i = 1; i < ts_node_named_child_count(node); ++i) {
       TSNode arg = ts_node_named_child(node, i);
-      if (!reserve_item(a)) {
-        diagnostic(arg, s, errors, "out of memory");
-        return DYN_NO_EXPR;
-      }
-      a->items[a->item_count++] =
-          (DynAstItem){.expression = lower_expr(arg, s, a, errors),
-                       .field_index = UINT32_MAX};
-      ++e.item_count;
+      DynExprId expression = lower_expr(arg, s, a, errors);
+      a->items[e.item_start + i - 1] =
+          (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
     }
   } else if (!strcmp(k, "struct_literal")) {
     e.kind = DYN_EXPR_STRUCT;
@@ -802,15 +815,17 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
     e.kind = DYN_EXPR_ARRAY;
     e.type = DYN_TYPE_INFER;
     e.item_start = (uint32_t)a->item_count;
+    e.item_count = ts_node_named_child_count(node);
+    if (!reserve_items(a, e.item_count)) {
+      diagnostic(node, s, errors, "out of memory");
+      return DYN_NO_EXPR;
+    }
+    a->item_count += e.item_count;
     for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i) {
       TSNode v = ts_node_named_child(node, i);
-      if (!reserve_item(a)) {
-        diagnostic(v, s, errors, "out of memory");
-        return DYN_NO_EXPR;
-      }
-      a->items[a->item_count++] = (DynAstItem){
-          .expression = lower_expr(v, s, a, errors), .field_index = UINT32_MAX};
-      ++e.item_count;
+      DynExprId expression = lower_expr(v, s, a, errors);
+      a->items[e.item_start + i] = (DynAstItem){
+          .expression = expression, .field_index = UINT32_MAX};
     }
   } else if (!strcmp(k, "index")) {
     uint32_t count = ts_node_named_child_count(node);
@@ -848,6 +863,8 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
   } else if (!strcmp(k, "len")) {
     e.kind = DYN_EXPR_LEN;
     e.left = lower_expr(ts_node_named_child(node, 0), s, a, errors);
+  } else if (!strcmp(k, "variadic_args")) {
+    e.kind = DYN_EXPR_VARIADIC;
   } else if (!strcmp(k, "size") || !strcmp(k, "align") ||
              !strcmp(k, "typeof")) {
     e.kind = !strcmp(k, "size")    ? DYN_EXPR_SIZE
@@ -875,16 +892,17 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
     e.kind = DYN_EXPR_SYSCALL;
     e.type = DYN_TYPE_INFER;
     e.item_start = (uint32_t)a->item_count;
+    e.item_count = ts_node_named_child_count(node);
+    if (!reserve_items(a, e.item_count)) {
+      diagnostic(node, s, errors, "out of memory");
+      return DYN_NO_EXPR;
+    }
+    a->item_count += e.item_count;
     for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i) {
       TSNode arg = ts_node_named_child(node, i);
-      if (!reserve_item(a)) {
-        diagnostic(arg, s, errors, "out of memory");
-        return DYN_NO_EXPR;
-      }
-      a->items[a->item_count++] =
-          (DynAstItem){.expression = lower_expr(arg, s, a, errors),
-                       .field_index = UINT32_MAX};
-      ++e.item_count;
+      DynExprId expression = lower_expr(arg, s, a, errors);
+      a->items[e.item_start + i] =
+          (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
     }
   } else if (!strcmp(k, "unary_prefix")) {
     e.kind = DYN_EXPR_UNARY;
@@ -980,13 +998,14 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstFunction *a) {
   struct {
     const char *n;
     DynType t;
-  } m[] = {{"void", DYN_TYPE_VOID},   {"bool", DYN_TYPE_BOOL},
+    } m[] = {{"bool", DYN_TYPE_BOOL},
            {"i8", DYN_TYPE_I8},       {"i16", DYN_TYPE_I16},
            {"i32", DYN_TYPE_I32},     {"i64", DYN_TYPE_I64},
            {"u8", DYN_TYPE_U8},       {"u16", DYN_TYPE_U16},
            {"u32", DYN_TYPE_U32},     {"u64", DYN_TYPE_U64},
            {"isize", DYN_TYPE_ISIZE}, {"usize", DYN_TYPE_USIZE},
-           {"f32", DYN_TYPE_F32},     {"f64", DYN_TYPE_F64}};
+           {"f32", DYN_TYPE_F32},     {"f64", DYN_TYPE_F64},
+           {"rawptr", DYN_TYPE_RAWPTR}, {"any", DYN_TYPE_ANY}};
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
     if (p.end_byte - p.start_byte == strlen(m[i].n) &&
         !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n))) {
@@ -1053,6 +1072,17 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
           pat.first = lower_expr(p, s, a, errors);
         a->patterns[a->pattern_count++] = pat;
         ++arm.pattern_count;
+      } else if (!strcmp(ts_node_type(c), "type_pattern")) {
+        if (!reserve_pattern(a)) { diagnostic(c, s, errors, "out of memory"); continue; }
+        TSNode tn = {0};
+        for (uint32_t q = 0; q < ts_node_named_child_count(c); ++q) {
+          TSNode x = ts_node_named_child(c, q);
+          if (!strcmp(ts_node_type(x), "type")) tn = x;
+          else if (!strcmp(ts_node_type(x), "identifier")) arm.binding = span(x);
+        }
+        a->patterns[a->pattern_count++] = (DynAstPattern){.span = span(c),
+          .first = DYN_NO_EXPR, .last = DYN_NO_EXPR, .type = parse_type(tn, s, a), .is_type = true};
+        arm.pattern_count = 1;
       } else if (!strcmp(ts_node_type(c), "identifier")) {
         arm.binding = span(c);
         for (uint32_t q = ts_node_start_byte(an); q < ts_node_start_byte(c);
@@ -1147,6 +1177,17 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstFunction *a,
           pat.first = lower_expr(p, s, a, errors);
         a->patterns[a->pattern_count++] = pat;
         ++arm.pattern_count;
+      } else if (!strcmp(ts_node_type(c), "type_pattern")) {
+        if (!reserve_pattern(a)) { diagnostic(c, s, errors, "out of memory"); continue; }
+        TSNode tn = {0};
+        for (uint32_t q = 0; q < ts_node_named_child_count(c); ++q) {
+          TSNode x = ts_node_named_child(c, q);
+          if (!strcmp(ts_node_type(x), "type")) tn = x;
+          else if (!strcmp(ts_node_type(x), "identifier")) arm.binding = span(x);
+        }
+        a->patterns[a->pattern_count++] = (DynAstPattern){.span = span(c),
+          .first = DYN_NO_EXPR, .last = DYN_NO_EXPR, .type = parse_type(tn, s, a), .is_type = true};
+        arm.pattern_count = 1;
       } else if (!strcmp(ts_node_type(c), "identifier")) {
         arm.binding = span(c);
       } else if (!strcmp(ts_node_type(c), "block")) {
@@ -1830,7 +1871,14 @@ static bool add_function_signatures(TSNode root, const DynSource *s,
               .name = span(q), .type = type, .local_id = UINT32_MAX};
           ++fn.param_count;
         }
-      } else if (!strcmp(ts_node_type(c), "type"))
+      } else if (!strcmp(ts_node_type(c), "variadic_param")) {
+        fn.variadic = true;
+        fn.variadic_name = span(ts_node_child_by_field_name(c, "name", 4));
+        fn.variadic_type = intern_slice(a,
+            parse_type(ts_node_child_by_field_name(c, "type", 4), s, a), true);
+      } else if (!strcmp(ts_node_type(c), "variadic"))
+        fn.variadic = true;
+      else if (!strcmp(ts_node_type(c), "type"))
         fn.return_type = parse_type(c, s, a);
     }
     a->functions[a->function_count++] = fn;

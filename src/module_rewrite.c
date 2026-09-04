@@ -183,7 +183,7 @@ static bool rewrite_node(TSNode n, const DynSource *s, Module *current,
                          Module *modules, size_t module_count, Edits *edits) {
   const char *k = ts_node_type(n);
   if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") || !strcmp(k, "struct") ||
-      !strcmp(k, "enum")) {
+      !strcmp(k, "enum") || !strcmp(k, "type_alias")) {
     TSNode name = {0};
     if (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
       name = ts_node_child_by_field_name(n, "name", 4);
@@ -480,6 +480,7 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
   if (!p || !ts_parser_set_language(p, tree_sitter_dyn()))
     result = 2;
   for (size_t si = 0; si < sources->count && !result; ++si) {
+    if (dyn_source_target_enabled(&sources->items[si]) == 0) continue;
     DynSource *s = &sources->items[si];
     char *dir = source_dir(s->path);
     Module *m = find_module(modules, module_count, dir);
@@ -490,7 +491,7 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
       TSNode d = rewrite_declaration_value(ts_node_named_child(file, i));
       const char *k = ts_node_type(d);
       if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") ||
-          !strcmp(k, "struct") || !strcmp(k, "enum")) {
+          !strcmp(k, "struct") || !strcmp(k, "enum") || !strcmp(k, "type_alias")) {
         TSNode name = {0};
         if (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
           name = ts_node_child_by_field_name(d, "name", 4);
@@ -538,6 +539,7 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     ts_tree_delete(t);
   }
   for (size_t si = 0; si < sources->count && !result; ++si) {
+    if (dyn_source_target_enabled(&sources->items[si]) == 0) continue;
     DynSource *s = &sources->items[si];
     char *dir = source_dir(s->path);
     Module *m = find_module(modules, module_count, dir);
@@ -557,6 +559,7 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     ts_tree_delete(t);
   }
   for (size_t si = 0; si < sources->count && !result; ++si) {
+    if (dyn_source_target_enabled(&sources->items[si]) == 0) continue;
     DynSource *s = &sources->items[si];
     char *dir = source_dir(s->path);
     Module *m = find_module(modules, module_count, dir);

@@ -1,0 +1,51 @@
+use "std/fmt"
+use "std/os"
+
+pub fn expect(condition: bool, message: []const u8) {
+  if !condition { #panic(message) }
+}
+
+pub fn equal_bytes(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0
+  for i < #len(left) {
+    if left[i] != right[i] { return false }
+    i += 1
+  }
+  return true
+}
+
+pub fn expect_equal_bytes(left: []const u8, right: []const u8, message: []const u8) {
+  if !equal_bytes(left, right) { #panic(message) }
+}
+
+pub fn expect_equal_i64(left: i64, right: i64, message: []const u8) {
+  if left != right { #panic(message) }
+}
+
+pub fn expect_equal_u64(left: u64, right: u64, message: []const u8) {
+  if left != right { #panic(message) }
+}
+
+// Deterministic caller-buffer path. Caller supplies unique suffix when parallel tests need it.
+pub fn temporary_path(destination: []u8, prefix: []const u8, suffix: []const u8) []u8 {
+  pid_storage: [20]u8 = []
+  pid := fmt.u64_to_bytes(pid_storage[..], #cast(u64) os.process_id())
+  required := #len("/tmp/") + #len(prefix) + 1 + #len(pid) + #len(suffix)
+  if required > #len(destination) { return destination[..0] }
+  at: usize = 0
+  parts: [5][]const u8 = ["/tmp/", prefix, "-", pid, suffix]
+  for part in parts {
+    i: usize = 0
+    for i < #len(part) {
+      destination[at] = part[i]
+      at += 1
+      i += 1
+    }
+  }
+  return destination[..at]
+}
+
+pub fn assert(cond: bool, msg: []const u8) {
+  if !cond { #panic(msg) }
+}

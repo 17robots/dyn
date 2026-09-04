@@ -47,6 +47,7 @@ extern LLVMTypeRef LLVMGetReturnType(LLVMTypeRef);
 extern unsigned LLVMCountParamTypes(LLVMTypeRef);
 extern void LLVMGetParamTypes(LLVMTypeRef, LLVMTypeRef *);
 extern int LLVMGetTypeKind(LLVMTypeRef);
+extern unsigned LLVMGetIntTypeWidth(LLVMTypeRef);
 extern unsigned LLVMCountStructElementTypes(LLVMTypeRef);
 extern LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
 extern LLVMValueRef LLVMAddGlobal(LLVMModuleRef, LLVMTypeRef, const char *);

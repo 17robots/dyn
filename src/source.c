@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
+#include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,6 +108,32 @@ void dyn_sources_free(DynSources *sources) {
   free(sources->items);
   memset(sources, 0, sizeof(*sources));
 }
+int dyn_source_target_enabled(const DynSource *s) {
+  const char *p = strstr(s->text, "#target");
+  if (!p) return 1;
+  p = strchr(p, '(');
+  if (!p) return -1;
+  ++p;
+  while (*p && *p != ')') {
+    while (isspace((unsigned char)*p) || *p == ',') ++p;
+    char key[32] = {0}, value[32] = {0};
+    size_t k = 0, v = 0;
+    while ((*p == '_' || isalnum((unsigned char)*p)) && k + 1 < sizeof(key)) key[k++] = *p++;
+    while (isspace((unsigned char)*p)) ++p;
+    if (*p++ != ':') return -1;
+    while (isspace((unsigned char)*p)) ++p;
+    while ((*p == '_' || isalnum((unsigned char)*p)) && v + 1 < sizeof(value)) value[v++] = *p++;
+    const char *want = !strcmp(key, "arch") ? "x86_64"
+                       : !strcmp(key, "kernel") ? "linux"
+                       : !strcmp(key, "abi") ? "sysv"
+                       : !strcmp(key, "libc") ? "none"
+                       : !strcmp(key, "endian") ? "little"
+                       : !strcmp(key, "pointer_bits") ? "64" : NULL;
+    if (!want) return -1;
+    if (strcmp(value, want)) return 0;
+  }
+  return *p == ')' ? 1 : -1;
+}
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *out) {
   static const char reflection_prelude[] =
@@ -117,6 +144,13 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   size_t total = 0;
   bool reflection = false;
   for (size_t i = 0; i < sources->count; ++i) {
+    int enabled = dyn_source_target_enabled(&sources->items[i]);
+    if (enabled < 0) {
+      fprintf(stderr, "%s: error: invalid or unknown #target condition\n",
+              sources->items[i].path);
+      return 1;
+    }
+    if (!enabled) continue;
     if (strstr(sources->items[i].text, "#typeof"))
       reflection = true;
     if (SIZE_MAX - total < sources->items[i].length + 1)
@@ -135,10 +169,13 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   }
   size_t at = 0;
   if (prelude) {
-    memcpy(out->text, reflection_prelude, prelude);
-    at = prelude;
+    if (reflection) {
+      memcpy(out->text + at, reflection_prelude, sizeof(reflection_prelude)-1);
+      at += sizeof(reflection_prelude)-1;
+    }
   }
   for (size_t i = 0; i < sources->count; ++i) {
+    if (!dyn_source_target_enabled(&sources->items[i])) continue;
     memcpy(out->text + at, sources->items[i].text, sources->items[i].length);
     at += sources->items[i].length;
     out->text[at++] = '\n';

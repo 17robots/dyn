@@ -1,0 +1,27 @@
+pub fn min_i64(left, right: i64) i64 { if left < right { return left } return right }
+pub fn max_i64(left, right: i64) i64 { if left > right { return left } return right }
+pub fn clamp_i64(value, minimum, maximum: i64) i64 {
+  if minimum > maximum { #panic("clamp minimum exceeds maximum") }
+  if value < minimum { return minimum }
+  if value > maximum { return maximum }
+  return value
+}
+pub fn abs_i64(value: i64) i64 {
+  if value == -9223372036854775807 - 1 { #panic("absolute value overflow") }
+  if value < 0 { return -value }
+  return value
+}
+pub fn min_u64(left, right: u64) u64 { if left < right { return left } return right }
+pub fn max_u64(left, right: u64) u64 { if left > right { return left } return right }
+pub fn clamp_u64(value, minimum, maximum: u64) u64 {
+  if minimum > maximum { #panic("clamp minimum exceeds maximum") }
+  if value < minimum { return minimum }
+  if value > maximum { return maximum }
+  return value
+}
+pub fn gcd_u64(left, right: u64) u64 {
+  a := left
+  b := right
+  for b != 0 { remainder := a % b a = b b = remainder }
+  return a
+}

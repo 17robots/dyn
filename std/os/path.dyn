@@ -1,0 +1,52 @@
+pub fn basename(path: []const u8) []const u8 {
+  end := #len(path)
+  for end > 1 && path[end - 1] == '/' { end -= 1 }
+  start := end
+  for start > 0 && path[start - 1] != '/' { start -= 1 }
+  return path[start..end]
+}
+
+pub fn dirname(path: []const u8) []const u8 {
+  end := #len(path)
+  for end > 1 && path[end - 1] == '/' { end -= 1 }
+  for end > 0 && path[end - 1] != '/' { end -= 1 }
+  for end > 1 && path[end - 1] == '/' { end -= 1 }
+  if end == 0 { return "." }
+  return path[..end]
+}
+
+pub fn extension(path: []const u8) []const u8 {
+  name := basename(path)
+  i := #len(name)
+  for i > 0 {
+    i -= 1
+    if name[i] == '.' {
+      if i == 0 { return "" }
+      return name[i..]
+    }
+  }
+  return ""
+}
+
+pub fn is_absolute(path: []const u8) bool { return #len(path) > 0 && path[0] == '/' }
+
+pub fn join(destination: []u8, left: []const u8, right: []const u8) []u8 {
+  separator := #len(left) > 0 && left[#len(left) - 1] != '/' && #len(right) > 0 && right[0] != '/'
+  needed := #len(left) + #len(right)
+  if separator { needed += 1 }
+  if needed > #len(destination) { return destination[..0] }
+  at: usize = 0
+  for byte in left {
+    destination[at] = byte
+    at += 1
+  }
+  if separator {
+    destination[at] = '/'
+    at += 1
+  }
+  for right_byte in right {
+    destination[at] = right_byte
+    at += 1
+  }
+  return destination[..at]
+}

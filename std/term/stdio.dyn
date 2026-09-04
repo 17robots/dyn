@@ -1,0 +1,42 @@
+use "std/fmt"
+use "std/io" io
+
+pub fn write(bytes: []const u8) isize { return io.write_descriptor(1, bytes) }
+pub fn write_error(bytes: []const u8) isize { return io.write_descriptor(2, bytes) }
+
+fn print_arguments(descriptor: isize, arguments: []const any) isize {
+  total: isize = 0
+  for argument in arguments {
+    storage: [64]u8 = []
+    output: []const u8 = storage[..0]
+    case argument {
+      is bool value => { if value { output = "true" } else { output = "false" } },
+      is i8 value => { output = fmt.i64_to_bytes(storage[..], #cast(i64) value) },
+      is i16 value => { output = fmt.i64_to_bytes(storage[..], #cast(i64) value) },
+      is i32 value => { output = fmt.i64_to_bytes(storage[..], #cast(i64) value) },
+      is i64 value => { output = fmt.i64_to_bytes(storage[..], value) },
+      is isize value => { output = fmt.i64_to_bytes(storage[..], #cast(i64) value) },
+      is u8 value => { output = fmt.u64_to_bytes(storage[..], #cast(u64) value) },
+      is u16 value => { output = fmt.u64_to_bytes(storage[..], #cast(u64) value) },
+      is u32 value => { output = fmt.u64_to_bytes(storage[..], #cast(u64) value) },
+      is u64 value => { output = fmt.u64_to_bytes(storage[..], value) },
+      is usize value => { output = fmt.u64_to_bytes(storage[..], #cast(u64) value) },
+      is f32 value => { output = fmt.f32_to_bytes(storage[..], value, 6) },
+      is f64 value => { output = fmt.f64_to_bytes(storage[..], value, 6) },
+      is []const u8 value => { output = value },
+      _ => { output = "<value>" }
+    }
+    result := io.write_descriptor(descriptor, output)
+    if result < 0 { return result }
+    total += result
+  }
+  return total
+}
+
+pub fn print(arguments: ...any) { _ = print_arguments(1, arguments) }
+
+pub fn println(arguments: ...any) {
+  if print_arguments(1, arguments) >= 0 { _ = write("\n") }
+}
+
+pub fn eprint(arguments: ...any) { _ = print_arguments(2, arguments) }

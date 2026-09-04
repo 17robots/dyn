@@ -24,13 +24,25 @@ pub fn sleep(duration: i64) {
     seconds: duration / Second,
     nanoseconds: duration % Second,
   }
-  result := #syscall(35, &request, 0)
+  remaining := Timespec{ seconds: 0, nanoseconds: 0 }
+  result := #syscall(35, &request, &remaining)
+  for result == -4 {
+    request = remaining
+    result = #syscall(35, &request, &remaining)
+  }
   if result != 0 { #panic("sleep failed") }
 }
 
 pub fn monotonic_now() Timespec {
   value := Timespec{ seconds: 0, nanoseconds: 0 }
   result := #syscall(228, 1, &value)
+  if result != 0 { #panic("clock_gettime failed") }
+  return value
+}
+
+pub fn realtime_now() Timespec {
+  value := Timespec{ seconds: 0, nanoseconds: 0 }
+  result := #syscall(228, 0, &value)
   if result != 0 { #panic("clock_gettime failed") }
   return value
 }

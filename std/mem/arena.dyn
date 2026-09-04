@@ -4,6 +4,11 @@ pub struct Arena {
   owns_data: bool,
 }
 
+pub struct Allocation {
+  memory: *u8,
+  ok: bool,
+}
+
 struct ArenaBlock {
   arena: Arena,
   next: *ArenaBlock,
@@ -47,36 +52,55 @@ pub fn arena_release(arena: *Arena) {
 }
 
 fn arena_fits(arena: *const Arena, size: usize, alignment: usize) bool {
-  if alignment == 0 || (alignment & (alignment - 1)) != 0 { return false }
-  if size == 0 { return true }
-  if #len(arena.data) == 0 { return false }
-  base := #cast(usize) &arena.data[0]
-  address := base + arena.offset
-  one: usize = 1
-  aligned_address := (address + alignment - one) & ~(alignment - one)
-  aligned := aligned_address - base
-  if aligned > #len(arena.data) { return false }
-  if size > #len(arena.data) - aligned { return false }
-  return true
+  fits := true
+  if alignment == 0 || (alignment & (alignment - 1)) != 0 {
+    fits = false
+  } else if size == 0 {
+    fits = true
+  } else if #len(arena.data) == 0 {
+    fits = false
+  } else {
+    if arena.offset > #len(arena.data) { return false }
+    base := #cast(usize) &arena.data[0]
+    address := base + arena.offset
+    remainder := address & (alignment - 1)
+    padding: usize = 0
+    if remainder != 0 { padding = alignment - remainder }
+    if padding > #len(arena.data) - arena.offset {
+      fits = false
+    } else if size > #len(arena.data) - arena.offset - padding {
+      fits = false
+    }
+  }
+  return fits
 }
 
-pub fn arena_push(arena: *Arena, allocation_size_bytes: usize, alignment_bytes: usize) *u8 {
-  if !arena_fits(arena, allocation_size_bytes, alignment_bytes) { #panic("arena exhausted or invalid alignment") }
-  if allocation_size_bytes == 0 { return nil }
+pub fn arena_try_push(arena: *Arena, allocation_size_bytes: usize, alignment_bytes: usize) Allocation {
+  if !arena_fits(arena, allocation_size_bytes, alignment_bytes) {
+    return Allocation{ memory: nil, ok: false }
+  }
+  if allocation_size_bytes == 0 { return Allocation{ memory: nil, ok: true } }
   base := #cast(usize) &arena.data[0]
   address := base + arena.offset
-  one: usize = 1
-  aligned_address := (address + alignment_bytes - one) & ~(alignment_bytes - one)
-  aligned := aligned_address - base
-  arena.offset = aligned + allocation_size_bytes
-  result := #cast(*u8) aligned_address
+  remainder := address & (alignment_bytes - 1)
+  padding: usize = 0
+  if remainder != 0 { padding = alignment_bytes - remainder }
+  aligned_address := address + padding
+  arena.offset += padding + allocation_size_bytes
+  result: *u8 = #cast(*u8) aligned_address
   bytes := result[..allocation_size_bytes]
   i: usize = 0
   for i < allocation_size_bytes {
     bytes[i] = 0
     i += 1
   }
-  return result
+  return Allocation{ memory: result, ok: true }
+}
+
+pub fn arena_push(arena: *Arena, allocation_size_bytes: usize, alignment_bytes: usize) *u8 {
+  allocation := arena_try_push(arena, allocation_size_bytes, alignment_bytes)
+  if !allocation.ok { #panic("arena exhausted or invalid alignment") }
+  return allocation.memory
 }
 
 fn arena_block_make(capacity: usize) *ArenaBlock {
@@ -96,6 +120,8 @@ pub fn chained_arena_init(block_capacity: usize) ChainedArena {
 
 pub fn chained_arena_push(chain: *ChainedArena, size: usize, alignment: usize) *u8 {
   if alignment == 0 || (alignment & (alignment - 1)) != 0 { #panic("arena alignment must be a non-zero power of two") }
+  maximum: usize = 18446744073709551615
+  if size > maximum - (alignment - 1) { #panic("arena allocation size overflow") }
   if chain.current == nil {
     capacity: usize = chain.block_capacity
     if capacity < size + alignment { capacity = size + alignment }

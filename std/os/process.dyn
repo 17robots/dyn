@@ -1,7 +1,9 @@
 pub fn arguments(arena: *mem.Arena) [][]const u8 {
   byte_capacity: usize = #cast(usize) 16384
   argument_capacity: usize = #cast(usize) 128
-  bytes := read_stream_with_capacity(arena, "/proc/self/cmdline", byte_capacity)
+  read_bytes := read_stream_with_capacity(arena, "/proc/self/cmdline", byte_capacity + 1)
+  if #len(read_bytes) > byte_capacity { #panic("argument byte capacity exceeded") }
+  bytes := read_bytes[..]
   argument_bytes: usize = argument_capacity * #sizeof([]const u8)
   argument_alignment: usize = #alignof([]const u8)
   raw: *[]const u8 = #cast(*[]const u8) mem.arena_push(arena, argument_bytes, argument_alignment)
@@ -28,6 +30,87 @@ pub fn arguments(arena: *mem.Arena) [][]const u8 {
 
 pub fn process_id() isize { return #syscall(39) }
 pub fn thread_id() isize { return #syscall(186) }
+pub fn parent_process_id() isize { return #syscall(110) }
+pub fn fork_process() isize { return #syscall(57) }
+pub fn send_signal(process: isize, signal: usize) isize { return #syscall(62, process, signal) }
+
+pub struct PipeResult { read_descriptor: isize, write_descriptor: isize, error: isize, ok: bool }
+
+pub fn pipe() PipeResult {
+  descriptors: [2]i32 = []
+  value := #syscall(293, &descriptors[0], 0)
+  if value < 0 { return PipeResult{ read_descriptor: -1, write_descriptor: -1, error: value, ok: false } }
+  return PipeResult{ read_descriptor: #cast(isize) descriptors[0], write_descriptor: #cast(isize) descriptors[1], error: 0, ok: true }
+}
+
+pub fn duplicate_to(descriptor: isize, target: isize) IoResult {
+  value := #syscall(33, descriptor, target)
+  for value == -4 { value = #syscall(33, descriptor, target) }
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub struct SpawnOptions { input: isize, output: isize, error: isize }
+pub struct SpawnResult { process: isize, error: isize, ok: bool }
+struct CStringPointer { value: *u8 }
+
+fn terminate_argument(arena: *mem.Arena, text: []const u8) *u8 {
+  raw := mem.arena_push(arena, #len(text) + 1, 1)
+  bytes := raw[..#len(text) + 1]
+  i: usize = 0
+  for i < #len(text) {
+    bytes[i] = text[i]
+    i += 1
+  }
+  bytes[#len(text)] = 0
+  return raw
+}
+
+// Replaces current process. `arguments[0]` should conventionally name executable.
+pub fn execute(arena: *mem.Arena, path: []const u8, argv: [][]const u8) isize {
+  mark := mem.arena_mark(arena)
+  path_raw := terminate_argument(arena, path)
+  count := #len(argv)
+  pointer_raw := #cast(*CStringPointer) mem.arena_push(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
+  pointers := pointer_raw[..count + 1]
+  i: usize = 0
+  for i < count {
+    pointers[i] = CStringPointer{ value: terminate_argument(arena, argv[i]) }
+    i += 1
+  }
+  nil_pointer: *u8 = nil
+  pointers[count] = CStringPointer{ value: nil_pointer }
+  value := #syscall(59, path_raw, &pointers[0], &pointers[count])
+  mem.arena_rewind(arena, mark)
+  return value
+}
+
+// Forks then execs. Descriptor values below zero inherit parent streams.
+pub fn spawn(arena: *mem.Arena, path: []const u8, argv: [][]const u8, options: SpawnOptions) SpawnResult {
+  process := fork_process()
+  if process < 0 { return SpawnResult{ process: process, error: process, ok: false } }
+  if process == 0 {
+    if options.input >= 0 && !duplicate_to(options.input, 0).ok { exit_process(126) }
+    if options.output >= 0 && !duplicate_to(options.output, 1).ok { exit_process(126) }
+    if options.error >= 0 && !duplicate_to(options.error, 2).ok { exit_process(126) }
+    _ = execute(arena, path, argv)
+    exit_process(127)
+  }
+  return SpawnResult{ process: process, error: 0, ok: true }
+}
+
+pub struct WaitResult { process: isize, status: i32, error: isize, ok: bool }
+
+pub fn wait_process(process: isize) WaitResult {
+  status: i32 = 0
+  value := #syscall(61, process, &status, 0, 0)
+  for value == -4 { value = #syscall(61, process, &status, 0, 0) }
+  if value < 0 { return WaitResult{ process: value, status: status, error: value, ok: false } }
+  return WaitResult{ process: value, status: status, error: 0, ok: true }
+}
+
+pub fn exited(status: i32) bool { return (status & 127) == 0 }
+pub fn exit_status(status: i32) u8 { return #cast(u8) ((status >> 8) & 255) }
 
 pub fn exit_process(status: u8) {
   _ = #syscall(60, status)

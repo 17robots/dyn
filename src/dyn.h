@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Single honest target seam. Keep target-specific policy out of CLI/backend. */
+#define DYN_TARGET_NAME "x86_64-linux"
+#define DYN_TARGET_TRIPLE "x86_64-unknown-linux-gnu"
+#define DYN_TARGET_DYNAMIC_LINKER "/lib64/ld-linux-x86-64.so.2"
+
 typedef struct {
   const char *command;
   const char *input;
@@ -44,6 +49,7 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *options);
 void dyn_cli_help(const char *command);
 int dyn_sources_load(const char *directory, DynSources *sources);
 void dyn_sources_free(DynSources *sources);
+int dyn_source_target_enabled(const DynSource *source);
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *merged);
 void dyn_source_free(DynSource *source);

@@ -21,14 +21,14 @@ pub fn free_list_init(backing: []u8, slot_size: usize) FreeList {
   return FreeList{ backing: backing, slot_size: actual, free_head: #cast(*FreeListNode) &backing[0] }
 }
 
-pub fn free_list_alloc(list: *FreeList) *void {
+pub fn free_list_alloc(list: *FreeList) rawptr {
   if list.free_head == nil { #panic("free list exhausted") }
   node: *FreeListNode = list.free_head
   list.free_head = node.next
-  return #cast(*void) node
+  return #cast(rawptr) node
 }
 
-pub fn free_list_free(list: *FreeList, memory: *void) {
+pub fn free_list_free(list: *FreeList, memory: rawptr) {
   if memory == nil { return }
   node: *FreeListNode = #cast(*FreeListNode) memory
   node.next = list.free_head

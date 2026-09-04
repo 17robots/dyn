@@ -1,8 +1,10 @@
-pub fn u64_to_bytes(destination: []u8, value: u64) []u8 {
+pub fn u64_to_base_bytes(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
+  if base < 2 || base > 36 { #panic("format base must be between 2 and 36") }
   digits: usize = 1
   remaining := value
-  for remaining >= 10 {
-    remaining /= 10
+  radix: u64 = #cast(u64) base
+  for remaining >= radix {
+    remaining /= radix
     digits += 1
   }
   if #len(destination) < digits { #panic("format destination too small") }
@@ -10,11 +12,193 @@ pub fn u64_to_bytes(destination: []u8, value: u64) []u8 {
   remaining = value
   for index > 0 {
     index -= 1
-    digit: u8 = #cast(u8) (remaining % 10)
-    destination[index] = digit + 48
-    remaining /= 10
+    digit: u8 = #cast(u8) (remaining % radix)
+    if digit < 10 { destination[index] = digit + '0' }
+    else if uppercase { destination[index] = digit - 10 + 'A' }
+    else { destination[index] = digit - 10 + 'a' }
+    remaining /= radix
   }
   return destination[..digits]
+}
+
+pub fn u64_to_bytes(destination: []u8, value: u64) []u8 {
+  return u64_to_base_bytes(destination, value, 10, false)
+}
+
+pub fn write_u64(writer: *Buffer, value: u64) isize {
+  storage: [20]u8 = []
+  return append_count(writer, u64_to_bytes(storage[..], value))
+}
+
+pub fn write_i64(writer: *Buffer, value: i64) isize {
+  storage: [20]u8 = []
+  return append_count(writer, i64_to_bytes(storage[..], value))
+}
+
+pub fn write_bool(writer: *Buffer, value: bool) isize {
+  if value { return append_count(writer, "true") }
+  return append_count(writer, "false")
+}
+
+pub fn write_char(writer: *Buffer, value: u8) isize {
+  storage: [1]u8 = []
+  storage[0] = value
+  return append_count(writer, storage[..])
+}
+
+fn append_u64(destination: []u8, at: *usize, value: u64) {
+  digits := u64_to_bytes(destination[at.*..], value)
+  at.* += #len(digits)
+}
+
+fn append_fraction(destination: []u8, at: *usize, value: u64, precision: u8) {
+  if precision == 0 { return }
+  destination[at.*] = '.'
+  at.* += 1
+  divisor: u64 = 1
+  i: u8 = 1
+  for i < precision {
+    divisor *= 10
+    i += 1
+  }
+  i = 0
+  for i < precision {
+    digit: u8 = #cast(u8) (value / divisor)
+    destination[at.*] = digit + '0'
+    at.* += 1
+    value = value % divisor
+    if divisor > 1 { divisor /= 10 }
+    i += 1
+  }
+  for destination[at.* - 1] == '0' { at.* -= 1 }
+  if destination[at.* - 1] == '.' { at.* -= 1 }
+}
+
+pub fn f64_to_bytes(destination: []u8, value: f64, precision: u8) []u8 {
+  if precision > 15 { #panic("float precision must be at most 15") }
+  bits := #bitcast(u64) value
+  negative := (bits >> 63) != 0
+  exponent_bits := (bits >> 52) & 2047
+  fraction_bits := bits & 4503599627370495
+  at: usize = 0
+  if negative {
+    destination[at] = '-'
+    at += 1
+    value = -value
+  }
+  if exponent_bits == 2047 {
+    if fraction_bits != 0 {
+      destination[at] = 'n'
+      destination[at + 1] = 'a'
+      destination[at + 2] = 'n'
+    }
+    else {
+      destination[at] = 'i'
+      destination[at + 1] = 'n'
+      destination[at + 2] = 'f'
+    }
+    return destination[..at + 3]
+  }
+
+  scientific := value >= 1000000000000000000.0 || (value > 0.0 && value < 0.000001)
+  exponent: i64 = 0
+  if scientific {
+    for value >= 10.0 {
+      value /= 10.0
+      exponent += 1
+    }
+    for value < 1.0 {
+      value *= 10.0
+      exponent -= 1
+    }
+  }
+
+  factor: u64 = 1
+  i: u8 = 0
+  for i < precision {
+    factor *= 10
+    i += 1
+  }
+  whole := #cast(u64) value
+  whole_float := #cast(f64) whole
+  factor_float := #cast(f64) factor
+  rounded_fraction := (value - whole_float) * factor_float + 0.5
+  fraction := #cast(u64) rounded_fraction
+  if fraction >= factor {
+    whole += 1
+    fraction = 0
+  }
+  if scientific && whole == 10 {
+    whole = 1
+    exponent += 1
+  }
+  append_u64(destination, &at, whole)
+  append_fraction(destination, &at, fraction, precision)
+  if scientific {
+    destination[at] = 'e'
+    at += 1
+    if exponent < 0 {
+      destination[at] = '-'
+      at += 1
+      exponent = -exponent
+    }
+    else {
+      destination[at] = '+'
+      at += 1
+    }
+    append_u64(destination, &at, #cast(u64) exponent)
+  }
+  return destination[..at]
+}
+
+pub fn f32_to_bytes(destination: []u8, value: f32, precision: u8) []u8 {
+  return f64_to_bytes(destination, #cast(f64) value, precision)
+}
+
+pub fn write_f64(writer: *Buffer, value: f64) isize {
+  storage: [48]u8 = []
+  return append_count(writer, f64_to_bytes(storage[..], value, 6))
+}
+
+pub fn write_f32(writer: *Buffer, value: f32) isize {
+  storage: [48]u8 = []
+  return append_count(writer, f32_to_bytes(storage[..], value, 6))
+}
+
+fn add_written(total: *isize, result: isize) bool {
+  if result < 0 { return false }
+  total.* += result
+  return true
+}
+
+pub fn write_arguments(writer: *Buffer, arguments: []const any) isize {
+  total: isize = 0
+  for argument in arguments {
+    result: isize = 0
+    case argument {
+      is bool value => { result = write_bool(writer, value) },
+      is i8 value => { result = write_i64(writer, #cast(i64) value) },
+      is i16 value => { result = write_i64(writer, #cast(i64) value) },
+      is i32 value => { result = write_i64(writer, #cast(i64) value) },
+      is i64 value => { result = write_i64(writer, value) },
+      is isize value => { result = write_i64(writer, #cast(i64) value) },
+      is u8 value => { result = write_u64(writer, #cast(u64) value) },
+      is u16 value => { result = write_u64(writer, #cast(u64) value) },
+      is u32 value => { result = write_u64(writer, #cast(u64) value) },
+      is u64 value => { result = write_u64(writer, value) },
+      is usize value => { result = write_u64(writer, #cast(u64) value) },
+      is []const u8 value => { result = append_count(writer, value) },
+      is f32 value => { result = write_f32(writer, value) },
+      is f64 value => { result = write_f64(writer, value) },
+      _ => { result = append_count(writer, "<value>") }
+    }
+    if !add_written(&total, result) { return result }
+  }
+  return total
+}
+
+pub fn write_values(writer: *Buffer, values: ...any) isize {
+  return write_arguments(writer, values)
 }
 
 pub fn i64_to_bytes(destination: []u8, value: i64) []u8 {

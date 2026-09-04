@@ -114,6 +114,7 @@ static bool decl_named(const char *directory, const char *name,
   if (p && ts_parser_set_language(p, tree_sitter_dyn()))
     for (size_t si = 0; si < sources.count && !found; ++si) {
       DynSource *s = &sources.items[si];
+      if (dyn_source_target_enabled(s) == 0) continue;
       TSTree *t = ts_parser_parse_string(p, NULL, s->text, (uint32_t)s->length);
       TSNode root = ts_tree_root_node(t);
       for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
@@ -126,7 +127,7 @@ static bool decl_named(const char *directory, const char *name,
           k = ts_node_type(d);
         }
         if (strcmp(k, "fn") && strcmp(k, "extern_fn") && strcmp(k, "struct") &&
-            strcmp(k, "enum") && strcmp(k, "variable"))
+            strcmp(k, "enum") && strcmp(k, "variable") && strcmp(k, "type_alias"))
           continue;
         TSNode n = (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
                        ? ts_node_child_by_field_name(d, "name", 4)
@@ -312,6 +313,7 @@ static int visit(Resolver *r, const char *directory,
   char **aliases = NULL, **targets = NULL;
   size_t alias_count = 0, target_count = 0;
   for (size_t si = 0; si < sources->count && !result; ++si) {
+    if (dyn_source_target_enabled(&sources->items[si]) == 0) continue;
     const DynSource *s = &sources->items[si];
     TSTree *t = ts_parser_parse_string(p, NULL, s->text, (uint32_t)s->length);
     TSNode root = ts_tree_root_node(t);
@@ -363,6 +365,7 @@ static int visit(Resolver *r, const char *directory,
     ts_tree_delete(t);
   }
   for (size_t si = 0; si < sources->count && !result; ++si) {
+    if (dyn_source_target_enabled(&sources->items[si]) == 0) continue;
     const DynSource *s = &sources->items[si];
     TSTree *t = ts_parser_parse_string(p, NULL, s->text, (uint32_t)s->length);
     result += validate_refs(ts_tree_root_node(t), s, directory, aliases,

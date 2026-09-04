@@ -29,6 +29,8 @@ enum {
   DYN_TYPE_F32,
   DYN_TYPE_F64,
   DYN_TYPE_STRING,
+  DYN_TYPE_RAWPTR,
+  DYN_TYPE_ANY,
   DYN_TYPE_STRUCT_BASE = 256,
   DYN_TYPE_ENUM_BASE = 32768,
   DYN_TYPE_POINTER_BASE = 65536,
@@ -63,6 +65,7 @@ typedef enum {
   DYN_EXPR_SIZE,
   DYN_EXPR_ALIGN,
   DYN_EXPR_TYPEOF,
+  DYN_EXPR_VARIADIC,
   DYN_EXPR_CAST,
   DYN_EXPR_BITCAST,
   DYN_EXPR_SYSCALL
@@ -172,11 +175,13 @@ typedef struct {
   size_t length;
 } DynAstString;
 typedef struct {
-  DynSpan span, name, link_name;
+  DynSpan span, name, link_name, variadic_name;
   DynType return_type;
   uint32_t param_start, param_count, body_start, body_count, local_start,
       local_count;
-  bool is_main, foreign;
+  bool is_main, foreign, variadic;
+  DynType variadic_type;
+  uint32_t variadic_local_id;
 } DynAstFn;
 
 typedef enum {
@@ -213,9 +218,10 @@ typedef struct {
 typedef struct {
   DynSpan span;
   DynExprId first, last;
+  DynType type;
   uint64_t first_value, last_value;
   uint32_t variant;
-  bool range, inclusive, is_enum, is_signed;
+  bool range, inclusive, is_enum, is_signed, is_type;
 } DynAstPattern;
 typedef struct {
   DynSpan span, binding;

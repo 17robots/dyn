@@ -37,7 +37,7 @@ static void inspect_declarations(TSNode root, const DynSource *s,
     if (!strcmp(k, "comment") || !strcmp(k, "use") || !strcmp(k, "struct") ||
         !strcmp(k, "enum") || !strcmp(k, "variable") ||
         !strcmp(k, "const_variable") || !strcmp(k, "type_alias") ||
-        !strcmp(k, "extern_fn"))
+        !strcmp(k, "extern_fn") || !strcmp(k, "target_directive"))
       continue;
     if (strcmp(k, "fn")) {
       TSPoint p = ts_node_start_point(d);
@@ -90,6 +90,7 @@ DynCheckResult dyn_check_sources(const DynSources *sources,
   }
   for (size_t i = 0; i < sources->count; ++i) {
     const DynSource *s = &sources->items[i];
+    if (dyn_source_target_enabled(s) == 0) continue;
     TSTree *t = ts_parser_parse_string(p, NULL, s->text, (uint32_t)s->length);
     TSNode root = ts_tree_root_node(t);
     parse_errors(root, s, &r.errors);

@@ -1,8 +1,88 @@
 use "std/mem"
 
+
 pub struct DirectoryEntry {
   name: []u8,
   kind: u8,
+}
+
+pub struct IoResult {
+  value: isize,
+  error: isize,
+  ok: bool,
+}
+pub fn io_value(result: *const IoResult) isize { return result.value }
+
+pub fn open(path: []const u8, flags: usize, mode: usize) IoResult {
+  bytes: [4096]u8 = []
+  if #len(path) >= #len(bytes) { return IoResult{ value: -1, error: -36, ok: false } }
+  i: usize = 0
+  for i < #len(path) {
+    bytes[i] = path[i]
+    i += 1
+  }
+  value := #syscall(257, -100, &bytes[0], flags, mode)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn close(descriptor: isize) IoResult {
+  value := #syscall(3, descriptor)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn read(descriptor: isize, destination: []u8) IoResult {
+  if #len(destination) == 0 { return IoResult{ value: 0, error: 0, ok: true } }
+  value := #syscall(0, descriptor, &destination[0], #len(destination))
+  for value == -4 { value = #syscall(0, descriptor, &destination[0], #len(destination)) }
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn write(descriptor: isize, source: []const u8) IoResult {
+  written: usize = 0
+  for written < #len(source) {
+    value := #syscall(1, descriptor, &source[written], #len(source) - written)
+    if value == -4 { } else if value <= 0 { return IoResult{ value: #cast(isize) written, error: value, ok: false } }
+    else { written += #cast(usize) value }
+  }
+  return IoResult{ value: #cast(isize) written, error: 0, ok: true }
+}
+
+pub fn create(path: []const u8) IoResult { return open(path, 577, 420) }
+pub fn append(path: []const u8) IoResult { return open(path, 1089, 420) }
+
+pub fn remove(path: []const u8) IoResult {
+  bytes: [4096]u8 = []
+  if #len(path) >= #len(bytes) { return IoResult{ value: -1, error: -36, ok: false } }
+  i: usize = 0
+  for i < #len(path) {
+    bytes[i] = path[i]
+    i += 1
+  }
+  value := #syscall(263, -100, &bytes[0], 0)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn make_directory(path: []const u8, mode: usize) IoResult {
+  bytes: [4096]u8 = []
+  if #len(path) >= #len(bytes) { return IoResult{ value: -1, error: -36, ok: false } }
+  i: usize = 0
+  for i < #len(path) {
+    bytes[i] = path[i]
+    i += 1
+  }
+  value := #syscall(258, -100, &bytes[0], mode)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+extern fn sort_directory_entries_raw "dyn_sort_directory_entries"(entries: *DirectoryEntry, count: usize)
+
+pub fn sort_directory_entries(entries: []DirectoryEntry) {
+  if #len(entries) > 1 { sort_directory_entries_raw(&entries[0], #len(entries)) }
 }
 
 pub fn list_directory(arena: *mem.Arena, path: []const u8) []DirectoryEntry {
@@ -11,7 +91,7 @@ pub fn list_directory(arena: *mem.Arena, path: []const u8) []DirectoryEntry {
   if entry_capacity == 0 || byte_capacity < 24 { #panic("invalid directory capacity") }
   mark := mem.arena_mark(arena)
   path_capacity: usize = #len(path) + 1
-  path_memory: *u8 = #cast(*u8) mem.arena_push(arena, path_capacity, 1)
+  path_memory: *u8 = mem.arena_push(arena, path_capacity, 1)
   terminated := path_memory[..#len(path) + 1]
   i: usize = 0
   for i < #len(path) {
@@ -26,7 +106,7 @@ pub fn list_directory(arena: *mem.Arena, path: []const u8) []DirectoryEntry {
   entries_alignment: usize = #alignof(DirectoryEntry)
   entries_raw: *DirectoryEntry = #cast(*DirectoryEntry) mem.arena_push(arena, entries_bytes, entries_alignment)
   entries: []DirectoryEntry = entries_raw[..entry_capacity]
-  buffer_raw: *u8 = #cast(*u8) mem.arena_push(arena, byte_capacity, 8)
+  buffer_raw: *u8 = mem.arena_push(arena, byte_capacity, 8)
   buffer: []u8 = buffer_raw[..byte_capacity]
   count: usize = 0
   for {
@@ -61,15 +141,14 @@ pub fn list_directory(arena: *mem.Arena, path: []const u8) []DirectoryEntry {
           _ = #syscall(3, descriptor)
           #panic("directory entry capacity exceeded")
         }
-        name_raw := #cast(*u8) mem.arena_push(arena, name_length, 1)
+        name_raw := mem.arena_push(arena, name_length, 1)
         name := name_raw[..name_length]
         j: usize = 0
         for j < name_length {
           name[j] = buffer[name_start + j]
           j += 1
         }
-        entries[count].name = name
-        entries[count].kind = buffer[offset + 18]
+        entries[count] = DirectoryEntry{ name: name, kind: buffer[offset + 18] }
         count += 1
       }
       offset += record_length
@@ -87,7 +166,7 @@ pub fn read_stream(arena: *mem.Arena, path: []const u8) []u8 {
 
 fn read_stream_with_capacity(arena: *mem.Arena, path: []const u8, capacity: usize) []u8 {
   mark := mem.arena_mark(arena)
-  path_memory := #cast(*u8) mem.arena_push(arena, #len(path) + 1, 1)
+  path_memory := mem.arena_push(arena, #len(path) + 1, 1)
   terminated := path_memory[..#len(path) + 1]
   i: usize = 0
   for i < #len(path) {
@@ -98,7 +177,7 @@ fn read_stream_with_capacity(arena: *mem.Arena, path: []const u8, capacity: usiz
   mem.arena_rewind(arena, mark)
   if descriptor < 0 { #panic("file open failed") }
 
-  raw := #cast(*u8) mem.arena_push(arena, capacity, 1)
+  raw := mem.arena_push(arena, capacity, 1)
   destination := raw[..capacity]
   offset: usize = 0
   for offset < capacity {
@@ -116,7 +195,7 @@ fn read_stream_with_capacity(arena: *mem.Arena, path: []const u8, capacity: usiz
 
 pub fn read_file(arena: *mem.Arena, path: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  path_memory := #cast(*u8) mem.arena_push(arena, #len(path) + 1, 1)
+  path_memory := mem.arena_push(arena, #len(path) + 1, 1)
   terminated := path_memory[..#len(path) + 1]
   i: usize = 0
   for i < #len(path) {
@@ -139,7 +218,7 @@ pub fn read_file(arena: *mem.Arena, path: []const u8) []u8 {
     return arena.data[0..0]
   }
 
-  raw := #cast(*u8) mem.arena_push(arena, length, 1)
+  raw := mem.arena_push(arena, length, 1)
   destination := raw[..length]
   offset: usize = 0
   for offset < length {
