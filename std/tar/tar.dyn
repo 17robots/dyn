@@ -1,0 +1,44 @@
+pub struct Entry {
+  name: []const u8,
+  size: u64,
+  kind: u8,
+  data: []const u8,
+}
+
+fn string_end(bytes: []const u8) usize {
+  i: usize = 0
+  for i < #len(bytes) && bytes[i] != 0 { i += 1 }
+  return i
+}
+
+fn octal(bytes: []const u8, output: *u64) bool {
+  value: u64 = 0
+  found := false
+  for byte in bytes {
+    if byte == 0 || byte == ' ' { if found { break } else { continue } }
+    if byte < '0' || byte > '7' { return false }
+    if value > (18446744073709551615 - #cast(u64) (byte - '0')) / 8 { return false }
+    value = value * 8 + #cast(u64) (byte - '0')
+    found = true
+  }
+  output.* = value
+  return found
+}
+
+// Advances offset through a ustar stream. Entry slices borrow archive.
+pub fn next(archive: []const u8, offset: *usize, output: *Entry) bool {
+  if offset.* > #len(archive) || #len(archive) - offset.* < 512 { return false }
+  header := archive[offset.*..offset.* + 512]
+  all_zero := true
+  for byte in header { if byte != 0 { all_zero = false break } }
+  if all_zero { return false }
+  size: u64 = 0
+  if !octal(header[124..136], &size) || size > #cast(u64) (#len(archive) - offset.* - 512) { return false }
+  data_start := offset.* + 512
+  data_end := data_start + #cast(usize) size
+  output.* = Entry{ name: header[..string_end(header[..100])], size: size, kind: header[156], data: archive[data_start..data_end] }
+  padded := (#cast(usize) size + 511) / 512 * 512
+  if padded > #len(archive) - data_start { return false }
+  offset.* = data_start + padded
+  return true
+}

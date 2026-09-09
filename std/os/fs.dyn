@@ -53,6 +53,94 @@ pub fn write(descriptor: isize, source: []const u8) IoResult {
 pub fn create(path: []const u8) IoResult { return open(path, 577, 420) }
 pub fn append(path: []const u8) IoResult { return open(path, 1089, 420) }
 
+pub fn seek(descriptor: isize, offset: isize, origin: usize) IoResult {
+  value := #syscall(8, descriptor, offset, origin)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn truncate(path: []const u8, size: usize) IoResult {
+  storage: [4096]u8 = []
+  raw := terminated_path(path, storage[..])
+  if raw == nil { return IoResult{ value: -1, error: -36, ok: false } }
+  value := #syscall(76, raw, size)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn change_permissions(path: []const u8, mode: usize) IoResult {
+  storage: [4096]u8 = []
+  raw := terminated_path(path, storage[..])
+  if raw == nil { return IoResult{ value: -1, error: -36, ok: false } }
+  value := #syscall(90, raw, mode)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn hard_link(existing: []const u8, link: []const u8) IoResult {
+  first: [4096]u8 = []
+  second: [4096]u8 = []
+  a := terminated_path(existing, first[..])
+  b := terminated_path(link, second[..])
+  if a == nil || b == nil { return IoResult{ value: -1, error: -36, ok: false } }
+  value := #syscall(265, -100, a, -100, b, 0)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn symbolic_link(target: []const u8, link: []const u8) IoResult {
+  first: [4096]u8 = []
+  second: [4096]u8 = []
+  a := terminated_path(target, first[..])
+  b := terminated_path(link, second[..])
+  if a == nil || b == nil { return IoResult{ value: -1, error: -36, ok: false } }
+  value := #syscall(266, a, -100, b)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub struct PathResult { value: []u8, error: isize, ok: bool }
+pub fn read_link(path: []const u8, destination: []u8) PathResult {
+  storage: [4096]u8 = []
+  raw := terminated_path(path, storage[..])
+  if raw == nil { return PathResult{ value: destination[..0], error: -36, ok: false } }
+  if #len(destination) == 0 { return PathResult{ value: destination[..0], error: -22, ok: false } }
+  value := #syscall(267, -100, raw, &destination[0], #len(destination))
+  if value < 0 { return PathResult{ value: destination[..0], error: value, ok: false } }
+  return PathResult{ value: destination[..#cast(usize) value], error: 0, ok: true }
+}
+
+// Advisory whole-file lock: operation 1 shared, 2 exclusive, add 4 for nonblocking, 8 unlock.
+pub fn file_lock(descriptor: isize, operation: usize) IoResult {
+  value := #syscall(73, descriptor, operation)
+  for value == -4 { value = #syscall(73, descriptor, operation) }
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn watch_init(nonblocking: bool) IoResult {
+  flags: usize = 524288
+  if nonblocking { flags += 2048 }
+  value := #syscall(294, flags)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn watch_add(descriptor: isize, path: []const u8, events: usize) IoResult {
+  storage: [4096]u8 = []
+  raw := terminated_path(path, storage[..])
+  if raw == nil { return IoResult{ value: -1, error: -36, ok: false } }
+  value := #syscall(254, descriptor, raw, events)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn watch_remove(descriptor: isize, watch: isize) IoResult {
+  value := #syscall(255, descriptor, watch)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
 pub fn remove(path: []const u8) IoResult {
   bytes: [4096]u8 = []
   if #len(path) >= #len(bytes) { return IoResult{ value: -1, error: -36, ok: false } }
@@ -77,6 +165,53 @@ pub fn make_directory(path: []const u8, mode: usize) IoResult {
   value := #syscall(258, -100, &bytes[0], mode)
   if value < 0 { return IoResult{ value: value, error: value, ok: false } }
   return IoResult{ value: value, error: 0, ok: true }
+}
+
+fn terminated_path(path: []const u8, storage: []u8) *u8 {
+  if #len(path) >= #len(storage) { return nil }
+  i: usize = 0
+  for i < #len(path) {
+    storage[i] = path[i]
+    i += 1
+  }
+  storage[#len(path)] = 0
+  return &storage[0]
+}
+
+pub fn rename(old_path: []const u8, new_path: []const u8) IoResult {
+  old_storage: [4096]u8 = []
+  new_storage: [4096]u8 = []
+  old_raw := terminated_path(old_path, old_storage[..])
+  new_raw := terminated_path(new_path, new_storage[..])
+  if old_raw == nil || new_raw == nil { return IoResult{ value: -1, error: -36, ok: false } }
+  value := #syscall(264, -100, old_raw, -100, new_raw)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub fn remove_directory(path: []const u8) IoResult {
+  storage: [4096]u8 = []
+  raw := terminated_path(path, storage[..])
+  if raw == nil { return IoResult{ value: -1, error: -36, ok: false } }
+  value := #syscall(263, -100, raw, 512)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub struct FileInfo { size: u64, error: isize, ok: bool }
+pub fn metadata_size(info: *const FileInfo) u64 { return info.size }
+
+// Linux x86-64 stat layout; no allocation and symlinks are followed.
+pub fn metadata(path: []const u8) FileInfo {
+  path_storage: [4096]u8 = []
+  raw := terminated_path(path, path_storage[..])
+  if raw == nil { return FileInfo{ size: 0, error: -36, ok: false } }
+  descriptor := #syscall(257, -100, raw, 0, 0)
+  if descriptor < 0 { return FileInfo{ size: 0, error: descriptor, ok: false } }
+  length := #syscall(8, descriptor, 0, 2)
+  _ = #syscall(3, descriptor)
+  if length < 0 { return FileInfo{ size: 0, error: length, ok: false } }
+  return FileInfo{ size: #cast(u64) length, error: 0, ok: true }
 }
 
 extern fn sort_directory_entries_raw "dyn_sort_directory_entries"(entries: *DirectoryEntry, count: usize)
@@ -232,4 +367,49 @@ pub fn read_file(arena: *mem.Arena, path: []const u8) []u8 {
   }
   _ = #syscall(3, descriptor)
   return destination[..offset]
+}
+
+pub struct ReadFileResult { value: []u8, error: isize, ok: bool }
+
+// Fallible file read. Arena returns to original mark on every failure.
+pub fn try_read_file(arena: *mem.Arena, path: []const u8) ReadFileResult {
+  mark := mem.arena_mark(arena)
+  path_allocation := mem.arena_try_push(arena, #len(path) + 1, 1)
+  if !path_allocation.ok { return ReadFileResult{ value: arena.data[0..0], error: -12, ok: false } }
+  path_bytes := path_allocation.memory[..#len(path) + 1]
+  i: usize = 0
+  for i < #len(path) {
+    path_bytes[i] = path[i]
+    i += 1
+  }
+  descriptor := #syscall(257, -100, path_allocation.memory, 0, 0)
+  mem.arena_rewind(arena, mark)
+  if descriptor < 0 { return ReadFileResult{ value: arena.data[0..0], error: descriptor, ok: false } }
+  length_result := #syscall(8, descriptor, 0, 2)
+  _ = #syscall(8, descriptor, 0, 0)
+  if length_result < 0 {
+    _ = #syscall(3, descriptor)
+    return ReadFileResult{ value: arena.data[0..0], error: length_result, ok: false }
+  }
+  length := #cast(usize) length_result
+  allocation := mem.arena_try_push(arena, length, 1)
+  if !allocation.ok {
+    _ = #syscall(3, descriptor)
+    return ReadFileResult{ value: arena.data[0..0], error: -12, ok: false }
+  }
+  destination := allocation.memory[..length]
+  offset: usize = 0
+  for offset < length {
+    count := #syscall(0, descriptor, &destination[offset], length - offset)
+    if count == -4 { }
+    else if count < 0 {
+      _ = #syscall(3, descriptor)
+      mem.arena_rewind(arena, mark)
+      return ReadFileResult{ value: arena.data[0..0], error: count, ok: false }
+    }
+    else if count == 0 { break }
+    else { offset += #cast(usize) count }
+  }
+  _ = #syscall(3, descriptor)
+  return ReadFileResult{ value: destination[..offset], error: 0, ok: true }
 }

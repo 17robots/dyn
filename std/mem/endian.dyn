@@ -1,0 +1,85 @@
+pub fn load_u16_le(bytes: []const u8) u16 {
+  if #len(bytes) < 2 { #panic("load_u16_le source too small") }
+  low: u16 = #cast(u16) bytes[0]
+  high: u16 = #cast(u16) bytes[1]
+  return low | (high << 8)
+}
+
+pub fn load_u32_le(bytes: []const u8) u32 {
+  if #len(bytes) < 4 { #panic("load_u32_le source too small") }
+  a: u32 = #cast(u32) bytes[0]
+  b: u32 = #cast(u32) bytes[1]
+  c: u32 = #cast(u32) bytes[2]
+  d: u32 = #cast(u32) bytes[3]
+  return a | (b << 8) | (c << 16) | (d << 24)
+}
+
+pub fn load_u64_le(bytes: []const u8) u64 {
+  if #len(bytes) < 8 { #panic("load_u64_le source too small") }
+  low := #cast(u64) load_u32_le(bytes[..4])
+  high := #cast(u64) load_u32_le(bytes[4..8])
+  return low | (high << 32)
+}
+
+pub fn store_u16_le(bytes: []u8, value: u16) {
+  if #len(bytes) < 2 { #panic("store_u16_le destination too small") }
+  bytes[0] = #cast(u8) value
+  bytes[1] = #cast(u8) (value >> 8)
+}
+
+pub fn store_u32_le(bytes: []u8, value: u32) {
+  if #len(bytes) < 4 { #panic("store_u32_le destination too small") }
+  bytes[0] = #cast(u8) value
+  bytes[1] = #cast(u8) (value >> 8)
+  bytes[2] = #cast(u8) (value >> 16)
+  bytes[3] = #cast(u8) (value >> 24)
+}
+
+pub fn store_u64_le(bytes: []u8, value: u64) {
+  if #len(bytes) < 8 { #panic("store_u64_le destination too small") }
+  store_u32_le(bytes[..4], #cast(u32) value)
+  store_u32_le(bytes[4..8], #cast(u32) (value >> 32))
+}
+
+pub fn load_u32_be(bytes: []const u8) u32 {
+  if #len(bytes) < 4 { #panic("load_u32_be source too small") }
+  a: u32 = #cast(u32) bytes[0]
+  b: u32 = #cast(u32) bytes[1]
+  c: u32 = #cast(u32) bytes[2]
+  d: u32 = #cast(u32) bytes[3]
+  return (a << 24) | (b << 16) | (c << 8) | d
+}
+
+pub fn load_u16_be(bytes: []const u8) u16 {
+  if #len(bytes) < 2 { #panic("load_u16_be source too small") }
+  high: u16 = #cast(u16) bytes[0]
+  low: u16 = #cast(u16) bytes[1]
+  return (high << 8) | low
+}
+
+pub fn load_u64_be(bytes: []const u8) u64 {
+  if #len(bytes) < 8 { #panic("load_u64_be source too small") }
+  high: u64 = #cast(u64) load_u32_be(bytes[..4])
+  low: u64 = #cast(u64) load_u32_be(bytes[4..8])
+  return (high << 32) | low
+}
+
+pub fn store_u32_be(bytes: []u8, value: u32) {
+  if #len(bytes) < 4 { #panic("store_u32_be destination too small") }
+  bytes[0] = #cast(u8) (value >> 24)
+  bytes[1] = #cast(u8) (value >> 16)
+  bytes[2] = #cast(u8) (value >> 8)
+  bytes[3] = #cast(u8) value
+}
+
+pub fn store_u16_be(bytes: []u8, value: u16) {
+  if #len(bytes) < 2 { #panic("store_u16_be destination too small") }
+  bytes[0] = #cast(u8) (value >> 8)
+  bytes[1] = #cast(u8) value
+}
+
+pub fn store_u64_be(bytes: []u8, value: u64) {
+  if #len(bytes) < 8 { #panic("store_u64_be destination too small") }
+  store_u32_be(bytes[..4], #cast(u32) (value >> 32))
+  store_u32_be(bytes[4..8], #cast(u32) value)
+}

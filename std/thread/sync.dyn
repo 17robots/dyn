@@ -1,0 +1,52 @@
+pub struct Condition { sequence: AtomicU32 }
+pub struct Semaphore { count: AtomicU32 }
+pub struct Once { state: AtomicU32 }
+
+pub fn condition() Condition { return Condition{ sequence: atomic_u32(0) } }
+
+// Mutex must be held on entry. Spurious wakeups are allowed: always wait in a predicate loop.
+pub fn condition_wait(value: *Condition, lock_value: *Mutex) {
+  sequence := load_u32(&value.sequence)
+  unlock(lock_value)
+  result := #syscall(202, &value.sequence, 0, sequence, 0, 0, 0)
+  for result == -4 { result = #syscall(202, &value.sequence, 0, sequence, 0, 0, 0) }
+  lock(lock_value)
+}
+
+pub fn condition_signal(value: *Condition) {
+  _ = fetch_add_u32(&value.sequence, 1)
+  _ = #syscall(202, &value.sequence, 1, 1, 0, 0, 0)
+}
+pub fn condition_broadcast(value: *Condition) {
+  _ = fetch_add_u32(&value.sequence, 1)
+  _ = #syscall(202, &value.sequence, 1, 2147483647, 0, 0, 0)
+}
+
+pub fn semaphore(count: u32) Semaphore { return Semaphore{ count: atomic_u32(count) } }
+pub fn semaphore_try_wait(value: *Semaphore) bool {
+  current := load_u32(&value.count)
+  for current > 0 {
+    if compare_exchange_u32(&value.count, current, current - 1) { return true }
+    current = load_u32(&value.count)
+  }
+  return false
+}
+pub fn semaphore_wait(value: *Semaphore) {
+  for !semaphore_try_wait(value) { _ = #syscall(202, &value.count, 0, 0, 0, 0, 0) }
+}
+pub fn semaphore_post(value: *Semaphore) {
+  _ = fetch_add_u32(&value.count, 1)
+  _ = #syscall(202, &value.count, 1, 1, 0, 0, 0)
+}
+
+pub fn once() Once { return Once{ state: atomic_u32(0) } }
+// Returns true exactly once. Winner calls initializer then `once_complete`.
+pub fn once_begin(value: *Once) bool {
+  if compare_exchange_u32(&value.state, 0, 1) { return true }
+  for load_u32(&value.state) != 2 { _ = #syscall(202, &value.state, 0, 1, 0, 0, 0) }
+  return false
+}
+pub fn once_complete(value: *Once) {
+  if exchange_u32(&value.state, 2) != 1 { #panic("once_complete without once_begin") }
+  _ = #syscall(202, &value.state, 1, 2147483647, 0, 0, 0)
+}

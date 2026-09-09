@@ -12,6 +12,7 @@ typedef struct {
   double floating;
   bool boolean;
   uint32_t item_start, item_count;
+  DynSpan span;
 } DynIrExpr;
 
 typedef struct {
@@ -19,33 +20,46 @@ typedef struct {
   uint32_t field_index;
 } DynIrItem;
 typedef struct {
+  char *name;
   DynType type;
   DynExprId default_expression;
 } DynIrField;
 typedef struct {
+  char *name;
+  DynSpan span;
   bool packed;
+  bool is_public;
+  uint64_t module_owner;
   uint32_t field_start, field_count;
   uint64_t size, alignment;
 } DynIrStruct;
 typedef struct {
+  char *name;
   DynType payload_type;
   uint32_t tag;
 } DynIrVariant;
 typedef struct {
+  char *name;
+  DynSpan span;
   DynType tag_type;
   uint32_t variant_start, variant_count;
   uint64_t size, alignment, payload_size, payload_alignment;
   bool has_payload;
+  bool is_public;
+  uint64_t module_owner;
 } DynIrEnum;
 typedef struct {
+  char *name;
   DynType type;
   uint32_t local_id;
 } DynIrParam;
 typedef struct {
-  char *name;
+  char *name, *link_name;
+  DynSpan span;
   DynType type;
   DynExprId initializer;
-  bool is_const;
+  bool is_const, foreign, is_public;
+  uint64_t module_owner;
 } DynIrGlobal;
 typedef struct {
   DynType pointee;
@@ -71,8 +85,9 @@ typedef struct {
   char *name, *link_name;
   DynType return_type;
   uint32_t param_start, param_count, body_start, body_count, local_start,
-      local_count, variadic_local_id;
-  bool is_main, foreign, variadic;
+      local_count, variadic_local_id, source_line;
+  bool is_main, foreign, variadic, is_public;
+  uint64_t module_owner;
   DynType variadic_type;
 } DynIrFunction;
 typedef struct {
@@ -82,8 +97,10 @@ typedef struct {
   uint32_t local_id, body_start, body_count, else_start, else_count, loop_id,
       target_loop_id, case_arm_start, case_arm_count;
   bool defer_block, for_pointer, for_const;
+  DynSpan span;
 } DynIrStmt;
 typedef struct {
+  char *name;
   DynType type;
 } DynIrLocal;
 typedef struct {

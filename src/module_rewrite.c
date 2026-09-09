@@ -32,28 +32,6 @@ typedef struct {
   size_t count;
 } Edits;
 
-static char *rewrite_std_path(const char *path) {
-  char executable[4096], relative[4096];
-  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
-  if (n < 0)
-    return NULL;
-  executable[n] = 0;
-  char *slash = strrchr(executable, '/');
-  if (!slash)
-    return NULL;
-  *slash = 0;
-  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
-               path) < (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
-      (int)sizeof(relative))
-    return realpath(relative, NULL);
-  return NULL;
-}
-
 static char *text_of(TSNode n, const DynSource *s) {
   uint32_t a = ts_node_start_byte(n), b = ts_node_end_byte(n);
   char *r = malloc((size_t)(b - a) + 1);
@@ -74,6 +52,8 @@ static TSNode rewrite_declaration_value(TSNode n) {
              : n;
 }
 static TSNode global_name_node(TSNode n) {
+  if (!strcmp(ts_node_type(n), "extern_variable"))
+    return ts_node_child_by_field_name(n, "name", 4);
   if (!strcmp(ts_node_type(n), "const_variable"))
     n = ts_node_named_child(n, 0);
   return !strcmp(ts_node_type(n), "variable") ? ts_node_named_child(n, 0)
@@ -202,7 +182,8 @@ static bool rewrite_node(TSNode n, const DynSource *s, Module *current,
         return false;
     }
   }
-  if ((!strcmp(k, "variable") || !strcmp(k, "const_variable")) &&
+  if ((!strcmp(k, "variable") || !strcmp(k, "const_variable") ||
+       !strcmp(k, "extern_variable")) &&
       top_level_node(n)) {
     TSNode name = global_name_node(n);
     if (!current->root && !ts_node_is_null(name)) {
@@ -491,9 +472,11 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
       TSNode d = rewrite_declaration_value(ts_node_named_child(file, i));
       const char *k = ts_node_type(d);
       if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") ||
+          !strcmp(k, "extern_variable") ||
           !strcmp(k, "struct") || !strcmp(k, "enum") || !strcmp(k, "type_alias")) {
         TSNode name = {0};
-        if (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
+        if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") ||
+            !strcmp(k, "extern_variable"))
           name = ts_node_child_by_field_name(d, "name", 4);
         else
           for (uint32_t q = 0; q < ts_node_named_child_count(d); ++q)
@@ -515,15 +498,7 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
             path[n - 2] = 0;
           }
         }
-        char *candidate =
-            path && strncmp(path, "std/", 4)
-                ? ((!strncmp(path, "./", 2) || !strncmp(path, "../", 3))
-                       ? dyn_path_join(m->dir, path)
-                       : dyn_path_join(root, path))
-                : NULL;
-        char *target = path && !strncmp(path, "std/", 4)
-                           ? rewrite_std_path(path)
-                           : (candidate ? realpath(candidate, NULL) : NULL);
+        char *target = path ? dyn_module_resolve_import(root, m->dir, path) : NULL;
         TSNode an = ts_node_named_child_count(d) > 1 ? ts_node_named_child(d, 1)
                                                      : (TSNode){0};
         char *alias = ts_node_is_null(an) ? dyn_path_basename(path ? path : "")
@@ -531,7 +506,6 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
         if (!target || !alias || !add_alias(m, alias, target))
           result = 2;
         free(path);
-        free(candidate);
         free(target);
         free(alias);
       }

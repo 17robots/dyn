@@ -46,6 +46,71 @@ pub fn write_char(writer: *Buffer, value: u8) isize {
   return append_count(writer, storage[..])
 }
 
+pub fn write_padding(state: *Buffer, byte: u8, count: usize) isize {
+  if count > buffer_remaining(state) { return -1 }
+  i: usize = 0
+  for i < count {
+    state.data[state.length + i] = byte
+    i += 1
+  }
+  state.length += count
+  return #cast(isize) count
+}
+
+pub fn write_u64_width(state: *Buffer, value: u64, width: usize, fill: u8) isize {
+  storage: [20]u8 = []
+  digits := u64_to_bytes(storage[..], value)
+  start := state.length
+  if width > #len(digits) && write_padding(state, fill, width - #len(digits)) < 0 { return -1 }
+  if !buffer_append(state, digits) { state.length = start return -1 }
+  return #cast(isize) (state.length - start)
+}
+
+// JSON-style byte-string quoting. Caller owns buffer and sees capacity failure.
+pub fn write_quoted(state: *Buffer, value: []const u8) isize {
+  start := state.length
+  if write_char(state, '"') < 0 { return -1 }
+  i: usize = 0
+  for i < #len(value) {
+    byte := value[i]
+    escaped: u8 = 0
+    if byte == '"' { escaped = '"' }
+    else if byte == '\\' { escaped = '\\' }
+    else if byte == 10 { escaped = 'n' }
+    else if byte == 13 { escaped = 'r' }
+    else if byte == 9 { escaped = 't' }
+    if escaped != 0 {
+      if write_char(state, '\\') < 0 || write_char(state, escaped) < 0 {
+        state.length = start
+        return -1
+      }
+    } else if byte < 32 {
+      if !buffer_append(state, "\\u00") {
+        state.length = start
+        return -1
+      }
+      hex: [2]u8 = []
+      _ = u64_to_base_bytes(hex[..], #cast(u64) byte, 16, false)
+      high: u8 = '0'
+      low := hex[0]
+      if byte >= 16 { high = hex[0] low = hex[1] }
+      if write_char(state, high) < 0 || write_char(state, low) < 0 {
+        state.length = start
+        return -1
+      }
+    } else if write_char(state, byte) < 0 {
+      state.length = start
+      return -1
+    }
+    i += 1
+  }
+  if write_char(state, '"') < 0 {
+    state.length = start
+    return -1
+  }
+  return #cast(isize) (state.length - start)
+}
+
 fn append_u64(destination: []u8, at: *usize, value: u64) {
   digits := u64_to_bytes(destination[at.*..], value)
   at.* += #len(digits)

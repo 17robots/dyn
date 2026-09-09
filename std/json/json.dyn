@@ -10,6 +10,16 @@ pub const KindString: u8 = 3
 pub const KindArray: u8 = 4
 pub const KindObject: u8 = 5
 
+pub enum TokenKind {
+  End, Invalid, Null, Bool, Number, String,
+  ArrayBegin, ArrayEnd, ObjectBegin, ObjectEnd, Colon, Comma,
+}
+
+pub enum ErrorKind { None, Syntax, TrailingData, Capacity }
+
+pub struct Tokenizer { source: []const u8, offset: usize }
+pub struct Token { kind: TokenKind, text: []const u8, offset: usize }
+
 pub struct Value {
   kind: u8,
   boolean: bool,
@@ -20,7 +30,37 @@ pub struct Value {
   next: *Value,
 }
 
-pub struct ParseResult { root: *Value, error_offset: usize, ok: bool }
+pub struct ParseResult { root: *Value, error_offset: usize, error: ErrorKind, ok: bool }
+
+pub fn tokenizer(source: []const u8) Tokenizer {
+  return Tokenizer{ source: source, offset: 0 }
+}
+
+pub fn token_next(state: *Tokenizer) Token {
+  cursor := Cursor{ source: state.source, at: state.offset }
+  skip(&cursor)
+  start := cursor.at
+  if start == #len(state.source) {
+    state.offset = start
+    return Token{ kind: TokenKind.End, text: state.source[start..start], offset: start }
+  }
+  byte := state.source[start]
+  kind := TokenKind.Invalid
+  if byte == '{' { kind = TokenKind.ObjectBegin cursor.at += 1 }
+  else if byte == '}' { kind = TokenKind.ObjectEnd cursor.at += 1 }
+  else if byte == '[' { kind = TokenKind.ArrayBegin cursor.at += 1 }
+  else if byte == ']' { kind = TokenKind.ArrayEnd cursor.at += 1 }
+  else if byte == ':' { kind = TokenKind.Colon cursor.at += 1 }
+  else if byte == ',' { kind = TokenKind.Comma cursor.at += 1 }
+  else if byte == '"' && string(&cursor) { kind = TokenKind.String }
+  else if byte == 'n' && literal(&cursor, "null") { kind = TokenKind.Null }
+  else if byte == 't' && literal(&cursor, "true") { kind = TokenKind.Bool }
+  else if byte == 'f' && literal(&cursor, "false") { kind = TokenKind.Bool }
+  else if number(&cursor) { kind = TokenKind.Number }
+  if kind == TokenKind.Invalid { cursor.at = start + 1 }
+  state.offset = cursor.at
+  return Token{ kind: kind, text: state.source[start..cursor.at], offset: start }
+}
 
 fn node(arena: *mem.Arena, kind: u8) *Value {
   allocation := mem.arena_try_push(arena, #sizeof(Value), #alignof(Value))
@@ -116,7 +156,9 @@ fn number(cursor: *Cursor) bool {
   return true
 }
 
-fn validate_value(cursor: *Cursor) bool {
+const MaximumDepth: usize = 256
+
+fn validate_value(cursor: *Cursor, depth: usize) bool {
   skip(cursor)
   if cursor.at >= #len(cursor.source) { return false }
   byte := cursor.source[cursor.at]
@@ -125,6 +167,7 @@ fn validate_value(cursor: *Cursor) bool {
   if byte == 't' { return literal(cursor, "true") }
   if byte == 'f' { return literal(cursor, "false") }
   if byte == '[' {
+    if depth >= MaximumDepth { return false }
     cursor.at += 1
     skip(cursor)
     if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == ']' {
@@ -132,7 +175,7 @@ fn validate_value(cursor: *Cursor) bool {
       return true
     }
     for {
-      if !validate_value(cursor) { return false }
+      if !validate_value(cursor, depth + 1) { return false }
       skip(cursor)
       if cursor.at >= #len(cursor.source) { return false }
       if cursor.source[cursor.at] == ']' {
@@ -144,6 +187,7 @@ fn validate_value(cursor: *Cursor) bool {
     }
   }
   if byte == '{' {
+    if depth >= MaximumDepth { return false }
     cursor.at += 1
     skip(cursor)
     if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == '}' {
@@ -156,7 +200,7 @@ fn validate_value(cursor: *Cursor) bool {
       skip(cursor)
       if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' { return false }
       cursor.at += 1
-      if !validate_value(cursor) { return false }
+      if !validate_value(cursor, depth + 1) { return false }
       skip(cursor)
       if cursor.at >= #len(cursor.source) { return false }
       if cursor.source[cursor.at] == '}' {
@@ -172,7 +216,7 @@ fn validate_value(cursor: *Cursor) bool {
 
 pub fn valid(source: []const u8) bool {
   cursor := Cursor{ source: source, at: 0 }
-  if !validate_value(&cursor) { return false }
+  if !validate_value(&cursor, 0) { return false }
   skip(&cursor)
   return cursor.at == #len(source)
 }
@@ -290,7 +334,7 @@ fn decoded_string(arena: *mem.Arena, cursor: *Cursor) []const u8 {
   return output[..output_at]
 }
 
-fn parse_node(arena: *mem.Arena, cursor: *Cursor) *Value {
+fn parse_node(arena: *mem.Arena, cursor: *Cursor, depth: usize) *Value {
   skip(cursor)
   if cursor.at >= #len(cursor.source) { return nil }
   byte := cursor.source[cursor.at]
@@ -313,6 +357,7 @@ fn parse_node(arena: *mem.Arena, cursor: *Cursor) *Value {
     return string_node
   }
   if byte == '[' || byte == '{' {
+    if depth >= MaximumDepth { return nil }
     object := byte == '{'
     cursor.at += 1
     container := node(arena, KindArray)
@@ -333,7 +378,7 @@ fn parse_node(arena: *mem.Arena, cursor: *Cursor) *Value {
         if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != ':' { return nil }
         cursor.at += 1
       }
-      child := parse_node(arena, cursor)
+      child := parse_node(arena, cursor, depth + 1)
       if child == nil { return nil }
       child.key = key
       append(container, child)
@@ -358,13 +403,47 @@ fn parse_node(arena: *mem.Arena, cursor: *Cursor) *Value {
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   mark := mem.arena_mark(arena)
   cursor := Cursor{ source: source, at: 0 }
-  root := parse_node(arena, &cursor)
+  root := parse_node(arena, &cursor, 0)
   skip(&cursor)
   if root == nil || cursor.at != #len(source) {
     mem.arena_rewind(arena, mark)
-    return ParseResult{ root: nil, error_offset: cursor.at, ok: false }
+    error := ErrorKind.Syntax
+    if root != nil { error = ErrorKind.TrailingData }
+    return ParseResult{ root: nil, error_offset: cursor.at, error: error, ok: false }
   }
-  return ParseResult{ root: root, error_offset: 0, ok: true }
+  return ParseResult{ root: root, error_offset: 0, error: ErrorKind.None, ok: true }
+}
+
+pub fn make_null(arena: *mem.Arena) *Value { return node(arena, KindNull) }
+pub fn make_bool(arena: *mem.Arena, value: bool) *Value {
+  result := node(arena, KindBool)
+  if result != nil { result.boolean = value }
+  return result
+}
+pub fn make_number(arena: *mem.Arena, text: []const u8) *Value {
+  cursor := Cursor{ source: text, at: 0 }
+  if !number(&cursor) || cursor.at != #len(text) { return nil }
+  result := node(arena, KindNumber)
+  if result != nil { result.text = text }
+  return result
+}
+pub fn make_string(arena: *mem.Arena, text: []const u8) *Value {
+  result := node(arena, KindString)
+  if result != nil { result.text = text }
+  return result
+}
+pub fn make_array(arena: *mem.Arena) *Value { return node(arena, KindArray) }
+pub fn make_object(arena: *mem.Arena) *Value { return node(arena, KindObject) }
+pub fn add(parent: *Value, child: *Value) bool {
+  if parent == nil || child == nil || (parent.kind != KindArray && parent.kind != KindObject) { return false }
+  append(parent, child)
+  return true
+}
+pub fn add_member(parent: *Value, key: []const u8, child: *Value) bool {
+  if parent == nil || child == nil || parent.kind != KindObject { return false }
+  child.key = key
+  append(parent, child)
+  return true
 }
 
 pub fn object_get(object: *const Value, key: []const u8) *const Value {
@@ -408,7 +487,7 @@ pub fn is_array(value: *const Value) bool { return value != nil && value.kind ==
 pub fn is_object(value: *const Value) bool { return value != nil && value.kind == KindObject }
 
 fn copy(destination: []u8, at: *usize, bytes: []const u8) bool {
-  if #len(bytes) > #len(destination) - at.* { return false }
+  if at.* > #len(destination) || #len(bytes) > #len(destination) - at.* { return false }
   for byte in bytes {
     destination[at.*] = byte
     at.* += 1
@@ -462,5 +541,50 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value) bool {
 pub fn write(destination: []u8, value: *const Value) []u8 {
   at: usize = 0
   if !encode_value(destination, &at, value) { return destination[..0] }
+  return destination[..at]
+}
+
+fn pretty_indent(destination: []u8, at: *usize, depth: usize, width: usize) bool {
+  count := depth * width
+  for count > 0 {
+    if !copy(destination, at, " ") { return false }
+    count -= 1
+  }
+  return true
+}
+
+fn encode_pretty(destination: []u8, at: *usize, value: *const Value,
+                 depth: usize, width: usize) bool {
+  if value == nil || depth > MaximumDepth { return false }
+  if value.kind != KindArray && value.kind != KindObject { return encode_value(destination, at, value) }
+  opening: []const u8 = "["
+  closing: []const u8 = "]"
+  if value.kind == KindObject { opening = "{" closing = "}" }
+  if !copy(destination, at, opening) { return false }
+  child := value.first
+  if child == nil { return copy(destination, at, closing) }
+  if !copy(destination, at, "\n") { return false }
+  first := true
+  for child != nil {
+    if !first && !copy(destination, at, ",\n") { return false }
+    if !pretty_indent(destination, at, depth + 1, width) { return false }
+    if value.kind == KindObject {
+      encoded := write_string(destination[at.*..], child.key)
+      if #len(encoded) == 0 { return false }
+      at.* += #len(encoded)
+      if !copy(destination, at, ": ") { return false }
+    }
+    if !encode_pretty(destination, at, child, depth + 1, width) { return false }
+    first = false
+    child = child.next
+  }
+  if !copy(destination, at, "\n") || !pretty_indent(destination, at, depth, width) { return false }
+  return copy(destination, at, closing)
+}
+
+pub fn write_pretty(destination: []u8, value: *const Value, indent: usize) []u8 {
+  if indent == 0 { return write(destination, value) }
+  at: usize = 0
+  if !encode_pretty(destination, &at, value, 0, indent) { return destination[..0] }
   return destination[..at]
 }

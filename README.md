@@ -38,4 +38,5 @@ ranges, rejects overlap, proves integer/enum exhaustiveness, and copies payload 
 Later constructs receive explicit not-implemented diagnostics. Output is static Linux x86-64
 ELF from LLVM object generation and `ld.lld` (or development fallback `ld`).
 
-See `docs/compiler.md`, `docs/language.md`, `docs/decisions.md`, and `docs/todo.md`.
+See `docs/compiler.md`, `docs/debugging.md`, `docs/language.md`, `docs/decisions.md`, and
+`docs/todo.md`.

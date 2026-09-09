@@ -1,0 +1,65 @@
+// Linux epoll. Event keeps kernel's packed 12-byte ABI while helpers hide layout.
+pub const EventReadable: u32 = 1
+pub const EventWritable: u32 = 4
+pub const EventError: u32 = 8
+pub const EventHangup: u32 = 16
+pub const EventEdgeTriggered: u32 = 2147483648
+pub const EventAdd: usize = 1
+pub const EventRemove: usize = 2
+pub const EventModify: usize = 3
+
+pub struct Event { bytes: [12]u8 }
+
+fn event_put_u32(bytes: []u8, value: u32) {
+  bytes[0] = #cast(u8) value
+  bytes[1] = #cast(u8) (value >> 8)
+  bytes[2] = #cast(u8) (value >> 16)
+  bytes[3] = #cast(u8) (value >> 24)
+}
+
+fn event_put_u64(bytes: []u8, value: u64) {
+  event_put_u32(bytes[..4], #cast(u32) value)
+  event_put_u32(bytes[4..8], #cast(u32) (value >> 32))
+}
+
+pub fn event(events: u32, data: u64) Event {
+  value := Event{}
+  event_put_u32(value.bytes[..4], events)
+  event_put_u64(value.bytes[4..12], data)
+  return value
+}
+
+pub fn event_events(value: *const Event) u32 {
+  a: u32 = #cast(u32) value.bytes[0]
+  b: u32 = #cast(u32) value.bytes[1]
+  c: u32 = #cast(u32) value.bytes[2]
+  d: u32 = #cast(u32) value.bytes[3]
+  return a | (b << 8) | (c << 16) | (d << 24)
+}
+
+fn event_u32_at(value: *const Event, offset: usize) u32 {
+  a: u32 = #cast(u32) value.bytes[offset]
+  b: u32 = #cast(u32) value.bytes[offset + 1]
+  c: u32 = #cast(u32) value.bytes[offset + 2]
+  d: u32 = #cast(u32) value.bytes[offset + 3]
+  return a | (b << 8) | (c << 16) | (d << 24)
+}
+
+pub fn event_data(value: *const Event) u64 {
+  low: u64 = #cast(u64) event_u32_at(value, 4)
+  high: u64 = #cast(u64) event_u32_at(value, 8)
+  return low | (high << 32)
+}
+
+pub fn event_queue() Result { return result(#syscall(291, 0)) }
+
+pub fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) Result {
+  return result(#syscall(233, queue, operation, descriptor, value))
+}
+
+pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Result {
+  if #len(events) == 0 { return Result{ value: -1, error: -22, ok: false } }
+  value := #syscall(232, queue, &events[0], #len(events), timeout_milliseconds)
+  for value == -4 { value = #syscall(232, queue, &events[0], #len(events), timeout_milliseconds) }
+  return result(value)
+}

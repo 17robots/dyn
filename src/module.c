@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
+#include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,12 +11,26 @@ extern const TSLanguage *tree_sitter_dyn(void);
 extern char *realpath(const char *, char *);
 
 typedef struct {
+  char *name;
+  bool is_public;
+} InterfaceDecl;
+typedef struct {
+  char *directory;
+  InterfaceDecl *decls;
+  size_t decl_count;
+} ModuleInterface;
+typedef struct {
   char **visited;
   size_t visited_count;
   char **stack;
   size_t stack_count;
   char *root;
+  char **dependency_names;
+  char **dependency_roots;
+  size_t dependency_count;
   DynSources *out;
+  ModuleInterface *interfaces;
+  size_t interface_count;
 } Resolver;
 static bool has(char **v, size_t n, const char *s) {
   for (size_t i = 0; i < n; ++i)
@@ -85,12 +101,32 @@ static char *resolve_std(const char *path) {
   }
   if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
       (int)sizeof(relative))
+    {
+      char *found = realpath(relative, NULL);
+      if (found)
+        return found;
+    }
+  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
+               path + 4) < (int)sizeof(relative))
     return realpath(relative, NULL);
   return NULL;
 }
 static char *resolve(Resolver *r, const char *current, const char *path) {
   if (!strncmp(path, "std/", 4))
     return resolve_std(path);
+  const char *slash = strchr(path, '/');
+  size_t first = slash ? (size_t)(slash - path) : strlen(path);
+  for (size_t i = 0; i < r->dependency_count; ++i) {
+    if (strlen(r->dependency_names[i]) == first &&
+        !memcmp(path, r->dependency_names[i], first)) {
+      char *candidate = slash ? dyn_path_join(r->dependency_roots[i], slash + 1)
+                              : strdup(r->dependency_roots[i]);
+      char *result = candidate ? realpath(candidate, NULL) : NULL;
+      free(candidate);
+      if (!result || !within(r->dependency_roots[i], result)) { free(result); return NULL; }
+      return result;
+    }
+  }
   char *candidate = (!strncmp(path, "./", 2) || !strncmp(path, "../", 3))
                         ? dyn_path_join(current, path)
                         : dyn_path_join(r->root, path);
@@ -104,16 +140,84 @@ static char *resolve(Resolver *r, const char *current, const char *path) {
   }
   return result;
 }
-static bool decl_named(const char *directory, const char *name,
-                       bool *is_public) {
-  DynSources sources = {0};
-  if (dyn_sources_load(directory, &sources))
-    return false;
+static int load_manifest(Resolver *r) {
+  char *path = dyn_path_join(r->root, "dyn.project");
+  FILE *f = path ? fopen(path, "r") : NULL;
+  free(path);
+  if (!f) return errno == ENOENT ? 0 : 1;
+  char line[4096]; int result = 0;
+  while (fgets(line, sizeof(line), f)) {
+    char name[128], relative[3072], extra;
+    char *p = line; while (isspace((unsigned char)*p)) ++p;
+    if (!*p || *p == '#') continue;
+    if (sscanf(p, "dependency %127s %3071s %c", name, relative, &extra) != 2) {
+      fprintf(stderr, "error: dyn.project expects 'dependency NAME PATH'\n");
+      result = 1; break;
+    }
+    if (strchr(name, '/') || has(r->dependency_names, r->dependency_count, name)) {
+      fprintf(stderr, "error: invalid or duplicate dependency '%s'\n", name);
+      result = 1; break;
+    }
+    char *candidate = dyn_path_join(r->root, relative);
+    char *root = candidate ? realpath(candidate, NULL) : NULL;
+    free(candidate);
+    if (!root || !dyn_path_is_directory(root)) {
+      fprintf(stderr, "error: dependency '%s' path does not resolve\n", name);
+      free(root); result = 1; break;
+    }
+    char **names = malloc((r->dependency_count + 1) * sizeof(char *));
+    char **roots = malloc((r->dependency_count + 1) * sizeof(char *));
+    if (!names || !roots) { free(names); free(roots); free(root); result = 2; break; }
+    for (size_t i = 0; i < r->dependency_count; ++i) {
+      names[i] = r->dependency_names[i];
+      roots[i] = r->dependency_roots[i];
+    }
+    free(r->dependency_names); free(r->dependency_roots);
+    r->dependency_names = names; r->dependency_roots = roots;
+    r->dependency_names[r->dependency_count] = strdup(name);
+    r->dependency_roots[r->dependency_count] = root;
+    if (!r->dependency_names[r->dependency_count]) { result = 2; break; }
+    ++r->dependency_count;
+  }
+  fclose(f); return result;
+}
+char *dyn_module_resolve_import(const char *project_root, const char *current,
+                                const char *path) {
+  char *root = realpath(project_root, NULL);
+  if (!root) return NULL;
+  Resolver r = {.root = root};
+  char *result = load_manifest(&r) ? NULL : resolve(&r, current, path);
+  for (size_t i = 0; i < r.dependency_count; ++i) {
+    free(r.dependency_names[i]); free(r.dependency_roots[i]);
+  }
+  free(r.dependency_names); free(r.dependency_roots); free(root);
+  return result;
+}
+static ModuleInterface *find_interface(Resolver *r, const char *directory) {
+  for (size_t i = 0; i < r->interface_count; ++i)
+    if (!strcmp(r->interfaces[i].directory, directory))
+      return &r->interfaces[i];
+  return NULL;
+}
+static void free_interface(ModuleInterface *value) {
+  free(value->directory);
+  for (size_t i = 0; i < value->decl_count; ++i) free(value->decls[i].name);
+  free(value->decls);
+  memset(value, 0, sizeof(*value));
+}
+static int extract_interface(Resolver *r, const char *directory,
+                             const DynSources *sources) {
+  if (find_interface(r, directory)) return 0;
+  ModuleInterface value = {.directory = strdup(directory)};
+  if (!value.directory) return 2;
   TSParser *p = ts_parser_new();
-  bool found = false;
-  if (p && ts_parser_set_language(p, tree_sitter_dyn()))
-    for (size_t si = 0; si < sources.count && !found; ++si) {
-      DynSource *s = &sources.items[si];
+  if (!p || !ts_parser_set_language(p, tree_sitter_dyn())) {
+    if (p) ts_parser_delete(p);
+    free_interface(&value);
+    return 2;
+  }
+  for (size_t si = 0; si < sources->count; ++si) {
+      const DynSource *s = &sources->items[si];
       if (dyn_source_target_enabled(s) == 0) continue;
       TSTree *t = ts_parser_parse_string(p, NULL, s->text, (uint32_t)s->length);
       TSNode root = ts_tree_root_node(t);
@@ -126,26 +230,50 @@ static bool decl_named(const char *directory, const char *name,
           d = ts_node_named_child(d, 0);
           k = ts_node_type(d);
         }
-        if (strcmp(k, "fn") && strcmp(k, "extern_fn") && strcmp(k, "struct") &&
+        if (strcmp(k, "fn") && strcmp(k, "extern_fn") &&
+            strcmp(k, "extern_variable") && strcmp(k, "struct") &&
             strcmp(k, "enum") && strcmp(k, "variable") && strcmp(k, "type_alias"))
           continue;
-        TSNode n = (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
+        TSNode n = (!strcmp(k, "fn") || !strcmp(k, "extern_fn") ||
+                    !strcmp(k, "extern_variable"))
                        ? ts_node_child_by_field_name(d, "name", 4)
                        : ts_node_named_child(d, 0);
         char *text = node_text(n, s, false);
-        if (!strcmp(text, name)) {
-          found = true;
-          uint32_t at = ts_node_start_byte(wrapper);
-          *is_public = at + 3 <= s->length && !memcmp(s->text + at, "pub", 3);
+        InterfaceDecl *next = realloc(value.decls,
+            (value.decl_count + 1) * sizeof(*next));
+        if (!text || !next) {
+          free(text);
+          ts_tree_delete(t);
+          ts_parser_delete(p);
+          free_interface(&value);
+          return 2;
         }
-        free(text);
+        value.decls = next;
+        uint32_t at = ts_node_start_byte(wrapper);
+        value.decls[value.decl_count++] = (InterfaceDecl){
+            .name = text,
+            .is_public = at + 3 <= s->length && !memcmp(s->text + at, "pub", 3)};
       }
       ts_tree_delete(t);
     }
-  if (p)
-    ts_parser_delete(p);
-  dyn_sources_free(&sources);
-  return found;
+  ts_parser_delete(p);
+  ModuleInterface *next = realloc(r->interfaces,
+      (r->interface_count + 1) * sizeof(*next));
+  if (!next) { free_interface(&value); return 2; }
+  r->interfaces = next;
+  r->interfaces[r->interface_count++] = value;
+  return 0;
+}
+static bool decl_named(Resolver *r, const char *directory, const char *name,
+                       bool *is_public) {
+  ModuleInterface *interface = find_interface(r, directory);
+  if (!interface) return false;
+  for (size_t i = 0; i < interface->decl_count; ++i)
+    if (!strcmp(interface->decls[i].name, name)) {
+      *is_public = interface->decls[i].is_public;
+      return true;
+    }
+  return false;
 }
 static size_t alias_index(char **aliases, size_t count, const char *name) {
   for (size_t i = 0; i < count; ++i)
@@ -153,21 +281,22 @@ static size_t alias_index(char **aliases, size_t count, const char *name) {
       return i;
   return count;
 }
-static bool imported_decl(char **targets, size_t count, const char *name) {
+static bool imported_decl(Resolver *r, char **targets, size_t count,
+                          const char *name) {
   for (size_t i = 0; i < count; ++i) {
     bool pub = false;
-    if (decl_named(targets[i], name, &pub))
+    if (decl_named(r, targets[i], name, &pub))
       return true;
   }
   return false;
 }
-static int validate_member(TSNode n, const DynSource *s, char **aliases,
+static int validate_member(Resolver *r, TSNode n, const DynSource *s, char **aliases,
                            char **targets, size_t count, const char *qualifier,
                            const char *member) {
   size_t found = alias_index(aliases, count, qualifier);
   if (found < count) {
     bool pub = false;
-    if (decl_named(targets[found], member, &pub) && pub)
+    if (decl_named(r, targets[found], member, &pub) && pub)
       return 0;
     TSPoint p = ts_node_start_point(n);
     fprintf(stderr,
@@ -175,7 +304,7 @@ static int validate_member(TSNode n, const DynSource *s, char **aliases,
             s->path, p.row + 1, p.column + 1, qualifier, member);
     return 1;
   }
-  if (imported_decl(targets, count, member)) {
+  if (imported_decl(r, targets, count, member)) {
     TSPoint p = ts_node_start_point(n);
     fprintf(stderr,
             "%s:%u:%u: error: unknown import alias '%s' for member '%s'\n",
@@ -184,7 +313,7 @@ static int validate_member(TSNode n, const DynSource *s, char **aliases,
   }
   return 0;
 }
-static int validate_refs(TSNode n, const DynSource *s, const char *directory,
+static int validate_refs(Resolver *r, TSNode n, const DynSource *s, const char *directory,
                          char **aliases, char **targets, size_t count) {
   int errors = 0;
   const char *kind = ts_node_type(n);
@@ -197,7 +326,7 @@ static int validate_refs(TSNode n, const DynSource *s, const char *directory,
         char *qualifier = node_text(base, s, false),
              *member = node_text(ts_node_named_child(n, 1), s, false);
         errors +=
-            validate_member(n, s, aliases, targets, count, qualifier, member);
+            validate_member(r, n, s, aliases, targets, count, qualifier, member);
         free(qualifier);
         free(member);
       }
@@ -208,14 +337,14 @@ static int validate_refs(TSNode n, const DynSource *s, const char *directory,
       char *qualifier = node_text(ts_node_named_child(n, 0), s, false),
            *member = node_text(ts_node_named_child(n, 1), s, false);
       errors +=
-          validate_member(n, s, aliases, targets, count, qualifier, member);
+          validate_member(r, n, s, aliases, targets, count, qualifier, member);
       free(qualifier);
       free(member);
     } else if (names == 1) {
       char *name = node_text(ts_node_named_child(n, 0), s, false);
       bool pub = false;
-      if (!decl_named(directory, name, &pub) &&
-          imported_decl(targets, count, name)) {
+      if (!decl_named(r, directory, name, &pub) &&
+          imported_decl(r, targets, count, name)) {
         TSPoint p = ts_node_start_point(n);
         fprintf(
             stderr,
@@ -232,8 +361,8 @@ static int validate_refs(TSNode n, const DynSource *s, const char *directory,
     if (!strcmp(ts_node_type(callee), "identifier")) {
       char *name = node_text(callee, s, false);
       bool pub = false;
-      if (!decl_named(directory, name, &pub) &&
-          imported_decl(targets, count, name)) {
+      if (!decl_named(r, directory, name, &pub) &&
+          imported_decl(r, targets, count, name)) {
         TSPoint p = ts_node_start_point(callee);
         fprintf(stderr,
                 "%s:%u:%u: error: imported function '%s' must be "
@@ -252,14 +381,14 @@ static int validate_refs(TSNode n, const DynSource *s, const char *directory,
       char *qualifier = node_text(ts_node_named_child(n, 0), s, false),
            *member = node_text(ts_node_named_child(n, 1), s, false);
       errors +=
-          validate_member(n, s, aliases, targets, count, qualifier, member);
+          validate_member(r, n, s, aliases, targets, count, qualifier, member);
       free(qualifier);
       free(member);
     } else if (names == 1) {
       char *name = node_text(ts_node_named_child(n, 0), s, false);
       bool pub = false;
-      if (!decl_named(directory, name, &pub) &&
-          imported_decl(targets, count, name)) {
+      if (!decl_named(r, directory, name, &pub) &&
+          imported_decl(r, targets, count, name)) {
         TSPoint p = ts_node_start_point(n);
         fprintf(
             stderr,
@@ -271,7 +400,7 @@ static int validate_refs(TSNode n, const DynSource *s, const char *directory,
     }
   }
   for (uint32_t i = 0; i < ts_node_named_child_count(n); ++i)
-    errors += validate_refs(ts_node_named_child(n, i), s, directory, aliases,
+    errors += validate_refs(r, ts_node_named_child(n, i), s, directory, aliases,
                             targets, count);
   return errors;
 }
@@ -307,6 +436,7 @@ static int visit(Resolver *r, const char *directory,
     sources = &owned;
   }
   int result = 0;
+  result = extract_interface(r, directory, sources);
   TSParser *p = ts_parser_new();
   if (!p || !ts_parser_set_language(p, tree_sitter_dyn()))
     result = 2;
@@ -368,7 +498,7 @@ static int visit(Resolver *r, const char *directory,
     if (dyn_source_target_enabled(&sources->items[si]) == 0) continue;
     const DynSource *s = &sources->items[si];
     TSTree *t = ts_parser_parse_string(p, NULL, s->text, (uint32_t)s->length);
-    result += validate_refs(ts_tree_root_node(t), s, directory, aliases,
+    result += validate_refs(r, ts_tree_root_node(t), s, directory, aliases,
                             targets, alias_count);
     ts_tree_delete(t);
   }
@@ -397,13 +527,22 @@ static int load(const char *project_root, const DynSources *root_sources,
   if (!root)
     return 1;
   Resolver r = {.root = root, .out = out};
-  int result = visit(&r, root, root_sources);
+  int result = load_manifest(&r);
+  if (!result) result = visit(&r, root, root_sources);
   if (!result && out)
     result = dyn_module_rewrite_project(root, out);
   for (size_t i = 0; i < r.visited_count; ++i)
     free(r.visited[i]);
   free(r.visited);
   free(r.stack);
+  for (size_t i = 0; i < r.dependency_count; ++i) {
+    free(r.dependency_names[i]); free(r.dependency_roots[i]);
+  }
+  free(r.dependency_names); free(r.dependency_roots);
+  for (size_t i = 0; i < r.interface_count; ++i) {
+    free_interface(&r.interfaces[i]);
+  }
+  free(r.interfaces);
   free(root);
   if (result && out)
     dyn_sources_free(out);

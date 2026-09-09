@@ -29,3 +29,19 @@ pub fn kind(info: TypeInfo) Kind {
     _ => { return Kind.Invalid },
   }
 }
+
+pub fn same(left: TypeInfo, right: TypeInfo) bool { return left.id == right.id }
+pub fn is_number(info: TypeInfo) bool {
+  category := kind(info)
+  return category == Kind.Integer || category == Kind.Float
+}
+pub fn is_aggregate(info: TypeInfo) bool {
+  category := kind(info)
+  return category == Kind.Array || category == Kind.Slice || category == Kind.Struct
+}
+pub fn element_is(info: TypeInfo, element: TypeInfo) bool {
+  return info.element_id != 0 && info.element_id == element.id
+}
+pub fn result_is(info: TypeInfo, result: TypeInfo) bool {
+  return info.result_id != 0 && info.result_id == result.id
+}

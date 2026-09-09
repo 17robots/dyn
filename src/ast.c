@@ -46,8 +46,9 @@ bool dyn_type_is_distinct(DynType t) { return t >= DYN_TYPE_DISTINCT_BASE; }
 static void diagnostic_node(TSNode n, const DynSource *s, unsigned *errors,
                             const char *message) {
   TSPoint p = ts_node_start_point(n);
-  fprintf(stderr, "%s:%u:%u: error: %s\n", s->path, p.row + 1, p.column + 1,
-          message);
+  dyn_diagnostic("error", s->path, p.row + 1, p.column + 1,
+                 ts_node_end_point(n).row + 1, ts_node_end_point(n).column + 1,
+                 message);
   ++*errors;
 }
 static void diagnostic_span(DynSpan p, const DynSource *s, unsigned *errors,
@@ -60,7 +61,7 @@ static void diagnostic_span(DynSpan p, const DynSource *s, unsigned *errors,
     } else
       ++column;
   }
-  fprintf(stderr, "%s:%u:%u: error: %s\n", s->path, line, column, message);
+  dyn_diagnostic("error", s->path, line, column, 0, 0, message);
   ++*errors;
 }
 #define diagnostic(n, s, e, m)                                                 \
@@ -1444,10 +1445,33 @@ static TSNode declaration_value(TSNode n) {
              ? ts_node_named_child(n, ts_node_named_child_count(n) - 1)
              : n;
 }
+static bool declaration_public(TSNode n, const DynSource *s) {
+  return !strcmp(ts_node_type(n), "declaration") &&
+         ts_node_end_byte(n) >= ts_node_start_byte(n) + 3 &&
+         !memcmp(s->text + ts_node_start_byte(n), "pub", 3);
+}
+static uint64_t declaration_owner(DynSpan name, const DynSource *s) {
+  if (name.end_byte - name.start_byte < 22 ||
+      memcmp(s->text + name.start_byte, "dyn_m", 5) ||
+      s->text[name.start_byte + 21] != '_')
+    return 0;
+  uint64_t value = 0;
+  for (uint32_t i = 5; i < 21; ++i) {
+    unsigned char c = (unsigned char)s->text[name.start_byte + i];
+    uint64_t digit = c >= '0' && c <= '9' ? c - '0'
+                     : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                     : c >= 'A' && c <= 'F' ? c - 'A' + 10 : 16;
+    if (digit == 16) return 0;
+    value = value * 16 + digit;
+  }
+  return value;
+}
 static bool add_enum_names(TSNode root, const DynSource *s, DynAstFunction *a,
                            unsigned *errors) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-    TSNode d = declaration_value(ts_node_named_child(root, i));
+    TSNode wrapper = ts_node_named_child(root, i);
+    bool is_public = declaration_public(wrapper, s);
+    TSNode d = declaration_value(wrapper);
     if (strcmp(ts_node_type(d), "enum"))
       continue;
     TSNode name = {0};
@@ -1468,14 +1492,17 @@ static bool add_enum_names(TSNode root, const DynSource *s, DynAstFunction *a,
       return false;
     }
     a->enums[a->enum_count++] = (DynAstEnum){
-        .span = span(d), .name = ns, .tag_type = DYN_TYPE_U32, .alignment = 1};
+        .span = span(d), .name = ns, .tag_type = DYN_TYPE_U32, .alignment = 1,
+        .is_public = is_public, .module_owner = declaration_owner(ns, s)};
   }
   return true;
 }
 static bool add_struct_names(TSNode root, const DynSource *s, DynAstFunction *a,
                              unsigned *errors) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-    TSNode d = declaration_value(ts_node_named_child(root, i));
+    TSNode wrapper = ts_node_named_child(root, i);
+    bool is_public = declaration_public(wrapper, s);
+    TSNode d = declaration_value(wrapper);
     if (strcmp(ts_node_type(d), "struct"))
       continue;
     TSNode name = ts_node_named_child(d, 0);
@@ -1490,14 +1517,17 @@ static bool add_struct_names(TSNode root, const DynSource *s, DynAstFunction *a,
     }
     bool packed = ts_node_start_byte(name) > ts_node_start_byte(d) + 7;
     a->structs[a->struct_count++] = (DynAstStruct){
-        .span = span(d), .name = ns, .packed = packed, .alignment = 0};
+        .span = span(d), .name = ns, .packed = packed, .alignment = 0,
+        .is_public = is_public, .module_owner = declaration_owner(ns, s)};
   }
   return true;
 }
 static bool add_alias_names(TSNode root, const DynSource *s, DynAstFunction *a,
                             unsigned *errors) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-    TSNode d = declaration_value(ts_node_named_child(root, i));
+    TSNode wrapper = ts_node_named_child(root, i);
+    bool is_public = declaration_public(wrapper, s);
+    TSNode d = declaration_value(wrapper);
     if (strcmp(ts_node_type(d), "type_alias"))
       continue;
     TSNode name = ts_node_named_child(d, 0), type = ts_node_named_child(d, 1);
@@ -1516,7 +1546,9 @@ static bool add_alias_names(TSNode root, const DynSource *s, DynAstFunction *a,
     a->aliases[a->alias_count++] = (DynAstAlias){.name = ns,
                                                  .target = DYN_TYPE_ERROR,
                                                  .type_node = type,
-                                                 .distinct = distinct};
+                                                 .distinct = distinct,
+                                                 .is_public = is_public,
+                                                 .module_owner = declaration_owner(ns, s)};
   }
   for (uint32_t i = 0; i < a->alias_count; ++i)
     if (resolve_alias(a, i, s) == DYN_TYPE_ERROR)
@@ -1777,12 +1809,17 @@ static uint32_t find_global(DynAstFunction *a, DynSpan name,
 static bool add_globals(TSNode root, const DynSource *s, DynAstFunction *a,
                         unsigned *errors) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-    TSNode d = declaration_value(ts_node_named_child(root, i));
+    TSNode wrapper = ts_node_named_child(root, i);
+    bool is_public = declaration_public(wrapper, s);
+    TSNode d = declaration_value(wrapper);
+    bool foreign = !strcmp(ts_node_type(d), "extern_variable");
     bool is_const = !strcmp(ts_node_type(d), "const_variable");
     TSNode v = is_const ? ts_node_named_child(d, 0) : d;
-    if (strcmp(ts_node_type(v), "variable"))
+    if (strcmp(ts_node_type(v), "variable") && !foreign)
       continue;
-    TSNode name = ts_node_named_child(v, 0), tq = {0}, init = {0};
+    TSNode name = foreign ? ts_node_child_by_field_name(v, "name", 4)
+                          : ts_node_named_child(v, 0),
+           tq = {0}, init = {0};
     DynSpan ns = span(name);
     if (find_global(a, ns, s) != UINT32_MAX ||
         find_struct(a, ns, s) != UINT32_MAX) {
@@ -1807,19 +1844,31 @@ static bool add_globals(TSNode root, const DynSource *s, DynAstFunction *a,
       diagnostic(v, s, errors, "out of memory");
       return false;
     }
+    TSNode link_name = foreign ? ts_node_child_by_field_name(v, "link_name", 9)
+                               : (TSNode){0};
+    DynSpan link = ts_node_is_null(link_name)
+                       ? ns
+                       : (DynSpan){ts_node_start_byte(link_name) + 1,
+                                   ts_node_end_byte(link_name) - 1};
     a->globals[a->global_count++] = (DynAstGlobal){
         .name = ns,
+        .link_name = link,
         .type = type,
         .initializer = ts_node_is_null(init) ? DYN_NO_EXPR
                                              : lower_expr(init, s, a, errors),
-        .is_const = is_const};
+        .is_const = is_const,
+        .foreign = foreign,
+        .is_public = is_public,
+        .module_owner = declaration_owner(ns, s)};
   }
   return true;
 }
 static bool add_function_signatures(TSNode root, const DynSource *s,
                                     DynAstFunction *a, unsigned *errors) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-    TSNode d = declaration_value(ts_node_named_child(root, i));
+    TSNode wrapper = ts_node_named_child(root, i);
+    bool is_public = declaration_public(wrapper, s);
+    TSNode d = declaration_value(wrapper);
     bool foreign = !strcmp(ts_node_type(d), "extern_fn");
     if (strcmp(ts_node_type(d), "fn") && !foreign)
       continue;
@@ -1839,7 +1888,9 @@ static bool add_function_signatures(TSNode root, const DynSource *s,
                    .name = ns,
                    .return_type = DYN_TYPE_VOID,
                    .param_start = (uint32_t)a->param_count,
-                   .foreign = foreign};
+                   .foreign = foreign,
+                   .is_public = is_public,
+                   .module_owner = declaration_owner(ns, s)};
     TSNode link_name = ts_node_child_by_field_name(d, "link_name", 9);
     fn.link_name = ts_node_is_null(link_name)
                        ? ns
@@ -1885,8 +1936,24 @@ static bool add_function_signatures(TSNode root, const DynSource *s,
   }
   return true;
 }
+static uint64_t owner_key_value(const char *owner_key) {
+  if (!owner_key || !strcmp(owner_key, "root")) return 0;
+  if (strncmp(owner_key, "dyn_m", 5) || strlen(owner_key) != 21) return UINT64_MAX;
+  uint64_t value = 0;
+  for (unsigned i = 5; i < 21; ++i) {
+    unsigned char c = (unsigned char)owner_key[i];
+    unsigned digit = c >= '0' && c <= '9' ? c - '0'
+                     : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                     : c >= 'A' && c <= 'F' ? c - 'A' + 10 : 16;
+    if (digit == 16) return UINT64_MAX;
+    value = value * 16 + digit;
+  }
+  return value;
+}
 static void lower_function_bodies(TSNode root, const DynSource *s,
-                                  DynAstFunction *a, unsigned *errors) {
+                                  DynAstFunction *a, unsigned *errors,
+                                  const char *owner_key) {
+  uint64_t wanted = owner_key_value(owner_key);
   for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
     TSNode d = declaration_value(ts_node_named_child(root, i));
     if (strcmp(ts_node_type(d), "fn") && strcmp(ts_node_type(d), "extern_fn"))
@@ -1897,6 +1964,10 @@ static void lower_function_bodies(TSNode root, const DynSource *s,
       continue;
     if (a->functions[id].foreign)
       continue;
+    if (owner_key && a->functions[id].module_owner != wanted) {
+      a->functions[id].interface_only = true;
+      continue;
+    }
     TSNode block = {0};
     for (uint32_t j = 0; j < ts_node_named_child_count(d); ++j) {
       TSNode c = ts_node_named_child(d, j);
@@ -1917,8 +1988,8 @@ static void lower_function_bodies(TSNode root, const DynSource *s,
     }
   }
 }
-bool dyn_ast_parse_main_source(const DynSource *s, DynAstFunction *a,
-                               unsigned *errors) {
+bool dyn_ast_parse_source_owner(const DynSource *s, DynAstFunction *a,
+                                unsigned *errors, const char *owner_key) {
   memset(a, 0, sizeof(*a));
   TSParser *p = ts_parser_new();
   if (!p || !ts_parser_set_language(p, tree_sitter_dyn())) {
@@ -1936,12 +2007,16 @@ bool dyn_ast_parse_main_source(const DynSource *s, DynAstFunction *a,
   compute_layouts_v2(a, s, errors);
   add_globals(root, s, a, errors);
   add_function_signatures(root, s, a, errors);
-  lower_function_bodies(root, s, a, errors);
+  lower_function_bodies(root, s, a, errors, owner_key);
   bool found = false;
   for (uint32_t i = 0; i < a->function_count; ++i)
     if (a->functions[i].is_main)
       found = true;
   ts_tree_delete(t);
   ts_parser_delete(p);
-  return found;
+  return owner_key && strcmp(owner_key, "root") ? true : found;
+}
+bool dyn_ast_parse_main_source(const DynSource *s, DynAstFunction *a,
+                               unsigned *errors) {
+  return dyn_ast_parse_source_owner(s, a, errors, NULL);
 }

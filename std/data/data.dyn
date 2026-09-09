@@ -1,0 +1,204 @@
+const Base64Alphabet: []const u8 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+pub fn base64_encoded_size(size: usize) usize { return ((size + 2) / 3) * 4 }
+pub fn base64_decoded_capacity(size: usize) usize { return (size / 4) * 3 }
+
+pub fn base64_encode(destination: []u8, source: []const u8) []u8 {
+  required := base64_encoded_size(#len(source))
+  if required > #len(destination) { return destination[..0] }
+  input: usize = 0
+  output: usize = 0
+  for input < #len(source) {
+    remaining := #len(source) - input
+    a := #cast(usize) source[input]
+    b: usize = 0
+    c: usize = 0
+    if remaining > 1 { b = #cast(usize) source[input + 1] }
+    if remaining > 2 { c = #cast(usize) source[input + 2] }
+    destination[output] = Base64Alphabet[a / 4]
+    destination[output + 1] = Base64Alphabet[(a % 4) * 16 + b / 16]
+    if remaining > 1 { destination[output + 2] = Base64Alphabet[(b % 16) * 4 + c / 64] }
+    else { destination[output + 2] = '=' }
+    if remaining > 2 { destination[output + 3] = Base64Alphabet[c % 64] }
+    else { destination[output + 3] = '=' }
+    input += 3
+    output += 4
+  }
+  return destination[..output]
+}
+
+fn base64_value(byte: u8) isize {
+  if byte >= 'A' && byte <= 'Z' { return #cast(isize) (byte - 'A') }
+  if byte >= 'a' && byte <= 'z' { return #cast(isize) (byte - 'a') + 26 }
+  if byte >= '0' && byte <= '9' { return #cast(isize) (byte - '0') + 52 }
+  if byte == '+' { return 62 }
+  if byte == '/' { return 63 }
+  return -1
+}
+
+pub fn base64_decode(destination: []u8, source: []const u8) []u8 {
+  if #len(source) % 4 != 0 || base64_decoded_capacity(#len(source)) > #len(destination) { return destination[..0] }
+  input: usize = 0
+  output: usize = 0
+  for input < #len(source) {
+    last := input + 4 == #len(source)
+    if source[input] == '=' || source[input + 1] == '=' { return destination[..0] }
+    if source[input + 2] == '=' && source[input + 3] != '=' { return destination[..0] }
+    if !last && (source[input + 2] == '=' || source[input + 3] == '=') { return destination[..0] }
+    a := base64_value(source[input])
+    b := base64_value(source[input + 1])
+    c: isize = 0
+    d: isize = 0
+    if source[input + 2] != '=' { c = base64_value(source[input + 2]) }
+    if source[input + 3] != '=' { d = base64_value(source[input + 3]) }
+    if a < 0 || b < 0 || c < 0 || d < 0 { return destination[..0] }
+    destination[output] = #cast(u8) (a * 4 + b / 16)
+    output += 1
+    if source[input + 2] != '=' {
+      destination[output] = #cast(u8) ((b % 16) * 16 + c / 4)
+      output += 1
+    }
+    if source[input + 3] != '=' {
+      destination[output] = #cast(u8) ((c % 4) * 64 + d)
+      output += 1
+    }
+    input += 4
+  }
+  return destination[..output]
+}
+
+// Small deterministic non-cryptographic hash. The prime modulus keeps checked arithmetic valid.
+pub fn hash64(bytes: []const u8) u64 {
+  value: u64 = 2166136261
+  for byte in bytes {
+    value = ((value ^ #cast(u64) byte) * 16777619) % 4294967291
+  }
+  return value
+}
+
+pub fn checksum32(bytes: []const u8) u32 {
+  value: u32 = 0
+  for byte in bytes { value += #cast(u32) byte }
+  return value
+}
+
+pub fn crc32(bytes: []const u8) u32 {
+  crc: u32 = 4294967295
+  for byte in bytes {
+    crc = crc ^ #cast(u32) byte
+    bit: usize = 0
+    for bit < 8 {
+      if crc % 2 != 0 { crc = (crc / 2) ^ 3988292384 }
+      else { crc = crc / 2 }
+      bit += 1
+    }
+  }
+  return crc ^ 4294967295
+}
+
+const HexAlphabet: []const u8 = "0123456789abcdef"
+
+pub fn hex_encode(destination: []u8, source: []const u8) []u8 {
+  if #len(source) > #len(destination) / 2 { return destination[..0] }
+  i: usize = 0
+  for i < #len(source) {
+    destination[i * 2] = HexAlphabet[#cast(usize) (source[i] >> 4)]
+    destination[i * 2 + 1] = HexAlphabet[#cast(usize) (source[i] & 15)]
+    i += 1
+  }
+  return destination[..#len(source) * 2]
+}
+
+fn hex_value(byte: u8) isize {
+  if byte >= '0' && byte <= '9' { return #cast(isize) (byte - '0') }
+  if byte >= 'a' && byte <= 'f' { return #cast(isize) (byte - 'a') + 10 }
+  if byte >= 'A' && byte <= 'F' { return #cast(isize) (byte - 'A') + 10 }
+  return -1
+}
+
+pub fn hex_decode(destination: []u8, source: []const u8) []u8 {
+  if #len(source) % 2 != 0 || #len(source) / 2 > #len(destination) { return destination[..0] }
+  i: usize = 0
+  for i < #len(source) / 2 {
+    high := hex_value(source[i * 2])
+    low := hex_value(source[i * 2 + 1])
+    if high < 0 || low < 0 { return destination[..0] }
+    destination[i] = #cast(u8) (high * 16 + low)
+    i += 1
+  }
+  return destination[..#len(source) / 2]
+}
+
+pub fn varint_encode(destination: []u8, value: u64) []u8 {
+  at: usize = 0
+  for value >= 128 {
+    if at == #len(destination) { return destination[..0] }
+    destination[at] = #cast(u8) (value & 127) | 128
+    value >>= 7
+    at += 1
+  }
+  if at == #len(destination) { return destination[..0] }
+  destination[at] = #cast(u8) value
+  return destination[..at + 1]
+}
+
+pub fn varint_decode(source: []const u8, value: *u64, consumed: *usize) bool {
+  result: u64 = 0
+  factor: u64 = 1
+  i: usize = 0
+  for i < #len(source) && i < 10 {
+    byte := source[i]
+    if i == 9 {
+      if byte > 1 { return false }
+      if byte == 1 { result = result | 9223372036854775808 }
+    } else {
+      digit: u64 = #cast(u64) byte
+      digit %= 128
+      result += digit * factor
+    }
+    if byte < 128 { value.* = result consumed.* = i + 1 return true }
+    if i < 8 { factor *= 128 }
+    i += 1
+  }
+  return false
+}
+
+fn percent_unreserved(byte: u8) bool {
+  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+         (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' || byte == '~'
+}
+
+pub fn percent_encode(destination: []u8, source: []const u8) []u8 {
+  at: usize = 0
+  for byte in source {
+    needed: usize = 3
+    if percent_unreserved(byte) { needed = 1 }
+    if needed > #len(destination) - at { return destination[..0] }
+    if needed == 1 { destination[at] = byte at += 1 }
+    else {
+      destination[at] = '%'
+      destination[at + 1] = HexAlphabet[#cast(usize) (byte >> 4)]
+      destination[at + 2] = HexAlphabet[#cast(usize) (byte & 15)]
+      at += 3
+    }
+  }
+  return destination[..at]
+}
+
+pub fn percent_decode(destination: []u8, source: []const u8) []u8 {
+  at: usize = 0
+  i: usize = 0
+  for i < #len(source) {
+    if at == #len(destination) { return destination[..0] }
+    if source[i] == '%' {
+      if i + 2 >= #len(source) { return destination[..0] }
+      high := hex_value(source[i + 1])
+      low := hex_value(source[i + 2])
+      if high < 0 || low < 0 { return destination[..0] }
+      destination[at] = #cast(u8) (high * 16 + low)
+      i += 3
+    } else { destination[at] = source[i] i += 1 }
+    at += 1
+  }
+  return destination[..at]
+}

@@ -8,6 +8,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/* Bound compiler memory from accidental/generated hostile source inputs. */
+#define DYN_MAX_SOURCE_BYTES (64u * 1024u * 1024u)
+#define DYN_MAX_MODULE_BYTES (256u * 1024u * 1024u)
+#define DYN_MAX_MODULE_SOURCES 4096u
+
 char *dyn_path_join(const char *a, const char *b) {
   size_t an = strlen(a), bn = strlen(b);
   bool slash = an && a[an - 1] != '/';
@@ -63,6 +68,11 @@ int dyn_sources_load(const char *dir, DynSources *out) {
     size_t n = strlen(entry->d_name);
     if (n < 5 || strcmp(entry->d_name + n - 4, ".dyn") != 0)
       continue;
+    if (out->count == DYN_MAX_MODULE_SOURCES) {
+      fprintf(stderr, "error: module exceeds 4096 source-file limit\n");
+      closedir(d);
+      return 1;
+    }
     DynSource *items = realloc(out->items, (out->count + 1) * sizeof(*items));
     if (!items) {
       closedir(d);
@@ -82,6 +92,12 @@ int dyn_sources_load(const char *dir, DynSources *out) {
     long size = ftell(f);
     rewind(f);
     if (size < 0) {
+      fclose(f);
+      closedir(d);
+      return 1;
+    }
+    if ((unsigned long)size > DYN_MAX_SOURCE_BYTES) {
+      fprintf(stderr, "error: source '%s' exceeds 64 MiB limit\n", s->path);
       fclose(f);
       closedir(d);
       return 1;
@@ -123,12 +139,7 @@ int dyn_source_target_enabled(const DynSource *s) {
     if (*p++ != ':') return -1;
     while (isspace((unsigned char)*p)) ++p;
     while ((*p == '_' || isalnum((unsigned char)*p)) && v + 1 < sizeof(value)) value[v++] = *p++;
-    const char *want = !strcmp(key, "arch") ? "x86_64"
-                       : !strcmp(key, "kernel") ? "linux"
-                       : !strcmp(key, "abi") ? "sysv"
-                       : !strcmp(key, "libc") ? "none"
-                       : !strcmp(key, "endian") ? "little"
-                       : !strcmp(key, "pointer_bits") ? "64" : NULL;
+    const char *want = dyn_target_property(dyn_target, key);
     if (!want) return -1;
     if (strcmp(value, want)) return 0;
   }
@@ -138,8 +149,13 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *out) {
   static const char reflection_prelude[] =
       "enum TypeKind { Invalid, Void, Bool, Integer, Float, Pointer, Array, "
-      "Slice, Struct, Enum, Function }\nstruct TypeInfo { id: u64, kind: "
-      "TypeKind, name: []const u8, size: usize, alignment: usize }\n";
+      "Slice, Struct, Enum, Function }\n"
+      "struct TypeMember { name: []const u8, type_id: u64 }\n"
+      "struct TypeInfo { id: u64, kind: "
+      "TypeKind, name: []const u8, size: usize, alignment: usize, "
+      "element_id: u64, length: usize, member_count: usize, "
+      "parameter_count: usize, result_id: u64, fields: []const TypeMember, "
+      "variants: []const TypeMember, arguments: []const TypeMember }\n";
   memset(out, 0, sizeof(*out));
   size_t total = 0;
   bool reflection = false;
@@ -156,6 +172,10 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
     if (SIZE_MAX - total < sources->items[i].length + 1)
       return 2;
     total += sources->items[i].length + 1;
+    if (total > DYN_MAX_MODULE_BYTES) {
+      fprintf(stderr, "error: merged module exceeds 256 MiB limit\n");
+      return 1;
+    }
   }
   size_t prelude = reflection ? sizeof(reflection_prelude) - 1 : 0;
   if (SIZE_MAX - total < prelude)

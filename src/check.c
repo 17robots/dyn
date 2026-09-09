@@ -16,8 +16,11 @@ static void parse_errors(TSNode n, const DynSource *s, unsigned *errors) {
     return;
   if (ts_node_is_error(n) || ts_node_is_missing(n)) {
     TSPoint p = ts_node_start_point(n);
-    fprintf(stderr, "%s:%u:%u: error: invalid syntax near '%s'\n", s->path,
-            p.row + 1, p.column + 1, ts_node_type(n));
+    char message[160];
+    snprintf(message, sizeof(message), "invalid syntax near '%s'", ts_node_type(n));
+    TSPoint e = ts_node_end_point(n);
+    dyn_diagnostic("error", s->path, p.row + 1, p.column + 1,
+                   e.row + 1, e.column + 1, message);
     ++*errors;
     return;
   }
@@ -37,7 +40,8 @@ static void inspect_declarations(TSNode root, const DynSource *s,
     if (!strcmp(k, "comment") || !strcmp(k, "use") || !strcmp(k, "struct") ||
         !strcmp(k, "enum") || !strcmp(k, "variable") ||
         !strcmp(k, "const_variable") || !strcmp(k, "type_alias") ||
-        !strcmp(k, "extern_fn") || !strcmp(k, "target_directive"))
+        !strcmp(k, "extern_fn") || !strcmp(k, "extern_variable") ||
+        !strcmp(k, "target_directive"))
       continue;
     if (strcmp(k, "fn")) {
       TSPoint p = ts_node_start_point(d);

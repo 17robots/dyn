@@ -1,0 +1,11 @@
+pub const SignalDefault: usize = 0
+pub const SignalIgnore: usize = 1
+
+fn signal_disposition(signal: usize, disposition: usize) bool {
+  action: [32]u8 = []
+  action[0] = #cast(u8) disposition
+  return #syscall(13, signal, &action[0], 0, 8) >= 0
+}
+
+pub fn signal_ignore(signal: usize) bool { return signal_disposition(signal, SignalIgnore) }
+pub fn signal_default(signal: usize) bool { return signal_disposition(signal, SignalDefault) }

@@ -28,6 +28,13 @@ pub fn free_list_alloc(list: *FreeList) rawptr {
   return #cast(rawptr) node
 }
 
+pub fn free_list_try_alloc(list: *FreeList) rawptr {
+  if list.free_head == nil { return nil }
+  node: *FreeListNode = list.free_head
+  list.free_head = node.next
+  return #cast(rawptr) node
+}
+
 pub fn free_list_free(list: *FreeList, memory: rawptr) {
   if memory == nil { return }
   node: *FreeListNode = #cast(*FreeListNode) memory

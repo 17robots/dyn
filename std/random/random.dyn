@@ -1,0 +1,30 @@
+pub struct State { value: u64 }
+
+pub fn seeded(seed: u64) State {
+  seed %= 2147483647
+  if seed == 0 { seed = 1 }
+  return State{ value: seed }
+}
+
+// Park-Miller deterministic caller-owned state; not cryptographic.
+pub fn next_u64(state: *State) u64 {
+  state.value = (state.value * 48271) % 2147483647
+  return state.value
+}
+
+pub fn below(state: *State, limit: u64) u64 {
+  if limit == 0 { return 0 }
+  return next_u64(state) % limit
+}
+
+pub fn entropy(destination: []u8) isize {
+  if #len(destination) == 0 { return 0 }
+  total: usize = 0
+  for total < #len(destination) {
+    result := #syscall(318, &destination[total], #len(destination) - total, 0)
+    if result == -4 { }
+    else if result <= 0 { return result }
+    else { total += #cast(usize) result }
+  }
+  return #cast(isize) total
+}

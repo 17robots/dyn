@@ -7,8 +7,14 @@ pub fn buffer(destination: []u8) Buffer {
   return Buffer{ data: destination, length: 0 }
 }
 
+pub fn buffer_remaining(state: *const Buffer) usize {
+  if state.length > #len(state.data) { return 0 }
+  return #len(state.data) - state.length
+}
+pub fn buffer_clear(state: *Buffer) { state.length = 0 }
+
 pub fn buffer_append(state: *Buffer, value: []const u8) bool {
-  if #len(value) > #len(state.data) - state.length { return false }
+  if state.length > #len(state.data) || #len(value) > #len(state.data) - state.length { return false }
   i: usize = 0
   for i < #len(value) {
     state.data[state.length + i] = value[i]

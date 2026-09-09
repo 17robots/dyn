@@ -21,3 +21,20 @@ pub fn write_descriptor(descriptor: isize, source: []const u8) isize {
 }
 
 pub fn close_descriptor(descriptor: isize) isize { return #syscall(3, descriptor) }
+
+pub fn seek_descriptor(descriptor: isize, offset: isize, origin: isize) isize {
+  return #syscall(8, descriptor, offset, origin)
+}
+
+pub fn duplicate_descriptor(descriptor: isize) isize { return #syscall(32, descriptor) }
+
+pub fn read_exact(descriptor: isize, destination: []u8) isize {
+  read: usize = 0
+  for read < #len(destination) {
+    result := read_descriptor(descriptor, destination[read..])
+    if result < 0 { return result }
+    if result == 0 { return #cast(isize) read }
+    read += #cast(usize) result
+  }
+  return #cast(isize) read
+}

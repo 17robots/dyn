@@ -16,8 +16,11 @@ pub struct HttpHead {
   header_length: usize,
   content_length: usize,
   keep_alive: bool,
+  chunked: bool,
   ok: bool,
 }
+pub struct HttpHeader { name: []const u8, value: []const u8, ok: bool }
+pub struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool, ok: bool }
 
 pub struct HttpIoResult {
   count: usize,
@@ -230,18 +233,20 @@ fn starts_ascii_case(input: []const u8, at: usize, expected: []const u8) bool {
   return true
 }
 
-fn parse_decimal(input: []const u8, start: usize, end: usize) usize {
+struct Decimal { value: usize, ok: bool }
+
+fn parse_decimal(input: []const u8, start: usize, end: usize) Decimal {
   value: usize = 0
   i := start
-  if start == end { return 0 }
+  if start == end { return Decimal{} }
   for i < end {
-    if input[i] < '0' || input[i] > '9' { return 0 }
+    if input[i] < '0' || input[i] > '9' { return Decimal{} }
     digit := #cast(usize) (input[i] - '0')
-    if value > (18446744073709551615 - digit) / 10 { return 0 }
+    if value > (18446744073709551615 - digit) / 10 { return Decimal{} }
     value = value * 10 + digit
     i += 1
   }
-  return value
+  return Decimal{ value: value, ok: true }
 }
 
 fn http_parse_head(input: []const u8, response: bool) HttpHead {
@@ -254,17 +259,20 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
     space: usize = 0
     for space < line_end && input[space] != ' ' { space += 1 }
     if space + 4 > line_end { return HttpHead{} }
-    code = #cast(u16) parse_decimal(input, space + 1, space + 4)
-    if code == 0 { return HttpHead{} }
+    parsed_code := parse_decimal(input, space + 1, space + 4)
+    if !parsed_code.ok || parsed_code.value < 100 || parsed_code.value > 999 { return HttpHead{} }
+    code = #cast(u16) parsed_code.value
   } else {
     if line_end < 10 || !starts_ascii_case(input, line_end - 8, "HTTP/1.") { return HttpHead{} }
   }
   cursor := line_end + 2
   content_length: usize = 0
-  keep_alive := false
+  keep_alive := true
+  chunked := false
+  has_length := false
   for cursor + 1 < #len(input) {
     if input[cursor] == '\r' && input[cursor + 1] == '\n' {
-      return HttpHead{ code: code, header_length: cursor + 2, content_length: content_length, keep_alive: keep_alive, ok: true }
+      return HttpHead{ code: code, header_length: cursor + 2, content_length: content_length, keep_alive: keep_alive, chunked: chunked, ok: true }
     }
     end := cursor
     for end + 1 < #len(input) && !(input[end] == '\r' && input[end + 1] == '\n') { end += 1 }
@@ -272,12 +280,22 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
     if starts_ascii_case(input, cursor, "Content-Length:") {
       length_start := cursor + 15
       for length_start < end && (input[length_start] == ' ' || input[length_start] == '\t') { length_start += 1 }
-      content_length = parse_decimal(input, length_start, end)
+      parsed_length := parse_decimal(input, length_start, end)
+      if !parsed_length.ok { return HttpHead{} }
+      if has_length && content_length != parsed_length.value { return HttpHead{} }
+      content_length = parsed_length.value
+      has_length = true
     }
     if starts_ascii_case(input, cursor, "Connection:") {
       connection_start := cursor + 11
       for connection_start < end && (input[connection_start] == ' ' || input[connection_start] == '\t') { connection_start += 1 }
-      keep_alive = starts_ascii_case(input, connection_start, "keep-alive")
+      if starts_ascii_case(input, connection_start, "close") { keep_alive = false }
+      if starts_ascii_case(input, connection_start, "keep-alive") { keep_alive = true }
+    }
+    if starts_ascii_case(input, cursor, "Transfer-Encoding:") {
+      encoding_start := cursor + 18
+      for encoding_start < end && (input[encoding_start] == ' ' || input[encoding_start] == '\t') { encoding_start += 1 }
+      if starts_ascii_case(input, encoding_start, "chunked") { chunked = true }
     }
     cursor = end + 2
   }
@@ -286,6 +304,96 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
 
 pub fn http_parse_response(input: []const u8) HttpHead { return http_parse_head(input, true) }
 pub fn http_parse_request(input: []const u8) HttpHead { return http_parse_head(input, false) }
+
+pub fn http_header(input: []const u8, name: []const u8) HttpHeader {
+  head := http_parse_head(input, false)
+  if !head.ok { head = http_parse_head(input, true) }
+  if !head.ok { return HttpHeader{} }
+  cursor: usize = 0
+  for cursor + 1 < head.header_length && !(input[cursor] == '\r' && input[cursor + 1] == '\n') { cursor += 1 }
+  cursor += 2
+  for cursor + 1 < head.header_length {
+    end := cursor
+    for end + 1 < head.header_length && !(input[end] == '\r' && input[end + 1] == '\n') { end += 1 }
+    colon := cursor
+    for colon < end && input[colon] != ':' { colon += 1 }
+    if colon - cursor == #len(name) && starts_ascii_case(input, cursor, name) {
+      value := colon + 1
+      for value < end && (input[value] == ' ' || input[value] == '\t') { value += 1 }
+      return HttpHeader{ name: input[cursor..colon], value: input[value..end], ok: true }
+    }
+    cursor = end + 2
+  }
+  return HttpHeader{}
+}
+
+fn hex(value: u8) i16 {
+  if value >= '0' && value <= '9' { return #cast(i16) (value - '0') }
+  lower := ascii_lower(value)
+  if lower >= 'a' && lower <= 'f' { return #cast(i16) (lower - 'a' + 10) }
+  return -1
+}
+
+// Decodes a complete chunked body into caller storage. Extensions are skipped.
+pub fn http_decode_chunked(input: []const u8, destination: []u8) HttpIoResult {
+  cursor: usize = 0
+  output: usize = 0
+  for true {
+    size: usize = 0
+    digits: usize = 0
+    for cursor < #len(input) && input[cursor] != '\r' && input[cursor] != ';' {
+      value := hex(input[cursor])
+      if value < 0 || size > (18446744073709551615 - #cast(usize) value) / 16 { return HttpIoResult{ count: output, error: -22, ok: false } }
+      size = size * 16 + #cast(usize) value
+      cursor += 1
+      digits += 1
+    }
+    if digits == 0 { return HttpIoResult{ count: output, error: -22, ok: false } }
+    for cursor < #len(input) && input[cursor] != '\r' { cursor += 1 }
+    if cursor + 1 >= #len(input) || input[cursor + 1] != '\n' { return HttpIoResult{ count: output, error: -22, ok: false } }
+    cursor += 2
+    if size == 0 { return HttpIoResult{ count: output, error: 0, ok: true } }
+    if size > #len(input) - cursor || size > #len(destination) - output { return HttpIoResult{ count: output, error: -28, ok: false } }
+    i: usize = 0
+    for i < size { destination[output + i] = input[cursor + i]
+      i += 1
+    }
+    cursor += size
+    output += size
+    if cursor + 1 >= #len(input) || input[cursor] != '\r' || input[cursor + 1] != '\n' { return HttpIoResult{ count: output, error: -22, ok: false } }
+    cursor += 2
+  }
+  return HttpIoResult{}
+}
+
+pub fn url_parse(input: []const u8) Url {
+  secure := false
+  start: usize = 0
+  port: u16 = 80
+  scheme: []const u8 = "http"
+  if starts_ascii_case(input, 0, "http://") { start = 7 }
+  else if starts_ascii_case(input, 0, "https://") { start = 8
+    port = 443
+    secure = true
+    scheme = "https"
+  }
+  else { return Url{} }
+  end := start
+  for end < #len(input) && input[end] != '/' && input[end] != ':' { end += 1 }
+  if end == start { return Url{} }
+  host_end := end
+  if end < #len(input) && input[end] == ':' {
+    port_start := end + 1
+    end = port_start
+    for end < #len(input) && input[end] != '/' { end += 1 }
+    parsed := parse_decimal(input, port_start, end)
+    if !parsed.ok || parsed.value == 0 || parsed.value > 65535 { return Url{} }
+    port = #cast(u16) parsed.value
+  }
+  target: []const u8 = "/"
+  if end < #len(input) { target = input[end..] }
+  return Url{ scheme: scheme, host: input[start..host_end], port: port, target: target, secure: secure, ok: true }
+}
 
 pub fn http_send_all(descriptor: isize, bytes: []const u8) HttpIoResult {
   count: usize = 0

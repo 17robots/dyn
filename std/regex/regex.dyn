@@ -1,0 +1,81 @@
+pub struct Match { start: usize, end: usize, ok: bool }
+
+fn atom(pattern: []const u8, at: usize, byte: u8) bool {
+  if pattern[at] == '.' { return true }
+  if pattern[at] == '\\' && at + 1 < #len(pattern) { return pattern[at + 1] == byte }
+  if pattern[at] == '[' {
+    i := at + 1
+    inverted := false
+    if i < #len(pattern) && pattern[i] == '^' { inverted = true i += 1 }
+    found := false
+    for i < #len(pattern) && pattern[i] != ']' {
+      first := pattern[i]
+      if first == '\\' && i + 1 < #len(pattern) { i += 1 first = pattern[i] }
+      if i + 2 < #len(pattern) && pattern[i + 1] == '-' && pattern[i + 2] != ']' {
+        last := pattern[i + 2]
+        if byte >= first && byte <= last { found = true }
+        i += 3
+      } else { if byte == first { found = true } i += 1 }
+    }
+    if inverted { return !found }
+    return found
+  }
+  return pattern[at] == byte
+}
+
+fn width(pattern: []const u8, at: usize) usize {
+  if pattern[at] == '\\' && at + 1 < #len(pattern) { return 2 }
+  if pattern[at] == '[' {
+    i := at + 1
+    for i < #len(pattern) { if pattern[i] == '\\' && i + 1 < #len(pattern) { i += 2 } else if pattern[i] == ']' { return i - at + 1 } else { i += 1 } }
+  }
+  return 1
+}
+
+fn match_here(pattern: []const u8, p: usize, text: []const u8, t: usize, end: *usize) bool {
+  if p == #len(pattern) { end.* = t return true }
+  if pattern[p] == '$' && p + 1 == #len(pattern) { if t == #len(text) { end.* = t return true } return false }
+  w := width(pattern, p)
+  if p + w < #len(pattern) && pattern[p + w] == '*' {
+    cursor := t
+    for cursor < #len(text) && atom(pattern, p, text[cursor]) { cursor += 1 }
+    for true {
+      if match_here(pattern, p + w + 1, text, cursor, end) { return true }
+      if cursor == t { return false }
+      cursor -= 1
+    }
+  }
+  if p + w < #len(pattern) && pattern[p + w] == '+' {
+    if t == #len(text) || !atom(pattern, p, text[t]) { return false }
+    plus_cursor := t + 1
+    for plus_cursor < #len(text) && atom(pattern, p, text[plus_cursor]) { plus_cursor += 1 }
+    for true {
+      if match_here(pattern, p + w + 1, text, plus_cursor, end) { return true }
+      if plus_cursor == t + 1 { return false }
+      plus_cursor -= 1
+    }
+  }
+  if p + w < #len(pattern) && pattern[p + w] == '?' {
+    if t < #len(text) && atom(pattern, p, text[t]) && match_here(pattern, p + w + 1, text, t + 1, end) { return true }
+    return match_here(pattern, p + w + 1, text, t, end)
+  }
+  if t < #len(text) && atom(pattern, p, text[t]) { return match_here(pattern, p + w, text, t + 1, end) }
+  return false
+}
+
+// Byte-oriented regular expressions: ^ $ . * + ?, classes/ranges, and escaping.
+pub fn find(pattern: []const u8, text: []const u8) Match {
+  anchored := #len(pattern) > 0 && pattern[0] == '^'
+  start: usize = 0
+  p: usize = 0
+  if anchored { p = 1 }
+  for start <= #len(text) {
+    end: usize = start
+    if match_here(pattern, p, text, start, &end) { return Match{ start: start, end: end, ok: true } }
+    if anchored { return Match{} }
+    start += 1
+  }
+  return Match{}
+}
+
+pub fn matches(pattern: []const u8, text: []const u8) bool { return find(pattern, text).ok }

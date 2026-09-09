@@ -121,6 +121,8 @@ typedef struct {
 typedef struct {
   DynSpan span, name;
   bool packed;
+  bool is_public;
+  uint64_t module_owner;
   uint32_t field_start, field_count;
   uint64_t size, alignment;
 } DynAstStruct;
@@ -135,6 +137,8 @@ typedef struct {
   uint32_t variant_start, variant_count;
   uint64_t size, alignment, payload_size, payload_alignment;
   bool has_payload;
+  bool is_public;
+  uint64_t module_owner;
 } DynAstEnum;
 typedef struct {
   DynSpan name;
@@ -142,10 +146,11 @@ typedef struct {
   uint32_t local_id;
 } DynAstParam;
 typedef struct {
-  DynSpan name;
+  DynSpan name, link_name;
   DynType type;
   DynExprId initializer;
-  bool is_const;
+  bool is_const, foreign, is_public;
+  uint64_t module_owner;
 } DynAstGlobal;
 typedef struct {
   DynType pointee;
@@ -168,6 +173,8 @@ typedef struct {
   DynType target;
   TSNode type_node;
   bool distinct;
+  bool is_public;
+  uint64_t module_owner;
   unsigned char state;
 } DynAstAlias;
 typedef struct {
@@ -179,7 +186,8 @@ typedef struct {
   DynType return_type;
   uint32_t param_start, param_count, body_start, body_count, local_start,
       local_count;
-  bool is_main, foreign, variadic;
+  bool is_main, foreign, variadic, is_public, interface_only;
+  uint64_t module_owner;
   DynType variadic_type;
   uint32_t variadic_local_id;
 } DynAstFn;
@@ -285,6 +293,11 @@ bool dyn_ast_lower_main(TSNode function, const DynSource *source,
                         DynAstFunction *ast, unsigned *errors);
 bool dyn_ast_parse_main_source(const DynSource *source, DynAstFunction *ast,
                                unsigned *errors);
+/* Parse every declaration, but lower bodies only for owner_key. NULL lowers all.
+   This is the frontend seam used by per-module compilation and cached
+   interfaces: dependencies contribute types/signatures, never bodies. */
+bool dyn_ast_parse_source_owner(const DynSource *source, DynAstFunction *ast,
+                                unsigned *errors, const char *owner_key);
 void dyn_ast_function_free(DynAstFunction *ast);
 bool dyn_span_text_equal(DynSpan a, DynSpan b, const DynSource *source);
 const char *dyn_type_name(DynType type);

@@ -43,6 +43,149 @@ pub fn trim(text: []const u8) []const u8 {
   return text[start..end]
 }
 
+pub fn trim_left(text: []const u8) []const u8 {
+  start: usize = 0
+  for start < #len(text) && whitespace(text[start]) { start += 1 }
+  return text[start..]
+}
+
+pub fn trim_right(text: []const u8) []const u8 {
+  end := #len(text)
+  for end > 0 && whitespace(text[end - 1]) { end -= 1 }
+  return text[..end]
+}
+
+pub fn find_byte(text: []const u8, byte: u8) isize {
+  i: usize = 0
+  for i < #len(text) {
+    if text[i] == byte { return #cast(isize) i }
+    i += 1
+  }
+  return -1
+}
+
+pub fn find_last_byte(text: []const u8, byte: u8) isize {
+  i := #len(text)
+  for i > 0 {
+    i -= 1
+    if text[i] == byte { return #cast(isize) i }
+  }
+  return -1
+}
+
+pub fn find_last(text: []const u8, needle: []const u8) isize {
+  if #len(needle) == 0 { return #cast(isize) #len(text) }
+  if #len(needle) > #len(text) { return -1 }
+  i := #len(text) - #len(needle) + 1
+  for i > 0 {
+    i -= 1
+    if equal(text[i..i + #len(needle)], needle) { return #cast(isize) i }
+  }
+  return -1
+}
+
+// Advances offset and returns a borrowed line without its newline.
+pub fn next_line(text: []const u8, offset: *usize, output: *[]const u8) bool {
+  if offset.* >= #len(text) { return false }
+  start := offset.*
+  found := find_byte(text[start..], 10)
+  if found < 0 { offset.* = #len(text) output.* = text[start..] return true }
+  end := start + #cast(usize) found
+  offset.* = end + 1
+  if end > start && text[end - 1] == 13 { end -= 1 }
+  output.* = text[start..end]
+  return true
+}
+
+// Advances offset across ASCII whitespace and returns the next borrowed field.
+pub fn next_field(text: []const u8, offset: *usize, output: *[]const u8) bool {
+  for offset.* < #len(text) && whitespace(text[offset.*]) { offset.* += 1 }
+  if offset.* == #len(text) { return false }
+  start := offset.*
+  for offset.* < #len(text) && !whitespace(text[offset.*]) { offset.* += 1 }
+  output.* = text[start..offset.*]
+  return true
+}
+
+// Allocation-free cursor over borrowed text.
+pub struct Scanner { text: []const u8, offset: usize }
+
+pub fn scanner(text: []const u8) Scanner { return Scanner{ text: text, offset: 0 } }
+pub fn scanner_remaining(value: *Scanner) []const u8 { return value.text[value.offset..] }
+pub fn scanner_line(value: *Scanner, output: *[]const u8) bool {
+  return next_line(value.text, &value.offset, output)
+}
+pub fn scanner_field(value: *Scanner, output: *[]const u8) bool {
+  return next_field(value.text, &value.offset, output)
+}
+
+// Returns text before delimiter, consumes delimiter, and borrows input.
+// Final unterminated token is returned; exhausted scanner returns false.
+pub fn scanner_until(value: *Scanner, delimiter: u8, output: *[]const u8) bool {
+  if value.offset >= #len(value.text) { return false }
+  start := value.offset
+  found := find_byte(value.text[start..], delimiter)
+  if found < 0 {
+    value.offset = #len(value.text)
+    output.* = value.text[start..]
+  } else {
+    end := start + #cast(usize) found
+    output.* = value.text[start..end]
+    value.offset = end + 1
+  }
+  return true
+}
+
+fn glob_literal(pattern: []const u8, at: usize, text_byte: u8) bool {
+  if pattern[at] == '\\' && at + 1 < #len(pattern) { return pattern[at + 1] == text_byte }
+  return pattern[at] == '?' || pattern[at] == text_byte
+}
+
+fn glob_width(pattern: []const u8, at: usize) usize {
+  if pattern[at] == '\\' && at + 1 < #len(pattern) { return 2 }
+  return 1
+}
+
+// Allocation-free byte glob: '?' matches one byte, '*' any bytes, '\\' escapes next byte.
+pub fn glob_match(pattern: []const u8, text: []const u8) bool {
+  p: usize = 0
+  t: usize = 0
+  star_p: isize = -1
+  star_t: usize = 0
+  for t < #len(text) {
+    if p < #len(pattern) && pattern[p] != '*' && glob_literal(pattern, p, text[t]) {
+      p += glob_width(pattern, p)
+      t += 1
+    } else if p < #len(pattern) && pattern[p] == '*' {
+      for p < #len(pattern) && pattern[p] == '*' { p += 1 }
+      star_p = #cast(isize) p
+      star_t = t
+    } else if star_p >= 0 {
+      star_t += 1
+      t = star_t
+      p = #cast(usize) star_p
+    } else { return false }
+  }
+  for p < #len(pattern) && pattern[p] == '*' { p += 1 }
+  return p == #len(pattern)
+}
+
+pub fn replace(destination: []u8, text: []const u8, needle: []const u8, replacement: []const u8) []u8 {
+  if #len(needle) == 0 { return destination[..0] }
+  source: usize = 0
+  written: usize = 0
+  for source < #len(text) {
+    match := source + #len(needle) <= #len(text) && equal(text[source..source + #len(needle)], needle)
+    piece := text[source..source + 1]
+    if match { piece = replacement }
+    if #len(piece) > #len(destination) - written { return destination[..0] }
+    _ = mem.copy(destination[written..], piece)
+    written += #len(piece)
+    if match { source += #len(needle) } else { source += 1 }
+  }
+  return destination[..written]
+}
+
 pub fn clone(arena: *mem.Arena, text: []const u8) []u8 {
   if #len(text) == 0 { return arena.data[0..0] }
   raw := mem.arena_push(arena, #len(text), 1)
@@ -117,6 +260,29 @@ pub fn parse_u64(text: []const u8, output: *u64) bool {
     if value > (maximum - digit) / 10 { return false }
     value = value * 10 + digit
     i += 1
+  }
+  output.* = value
+  return true
+}
+
+fn digit_value(byte: u8) u8 {
+  if byte >= '0' && byte <= '9' { return byte - '0' }
+  if byte >= 'a' && byte <= 'z' { return byte - 'a' + 10 }
+  if byte >= 'A' && byte <= 'Z' { return byte - 'A' + 10 }
+  return 255
+}
+
+pub fn parse_u64_base(text: []const u8, base: u8, output: *u64) bool {
+  if #len(text) == 0 || base < 2 || base > 36 { return false }
+  value: u64 = 0
+  radix := #cast(u64) base
+  maximum: u64 = 18446744073709551615
+  for byte in text {
+    digit := digit_value(byte)
+    if digit >= base { return false }
+    wide := #cast(u64) digit
+    if value > (maximum - wide) / radix { return false }
+    value = value * radix + wide
   }
   output.* = value
   return true
@@ -225,9 +391,12 @@ pub fn parse_f64(text: []const u8, output: *f64) bool {
   }
   if at != #len(text) { return false }
   factor: f64 = 1.0
+  power: f64 = 10.0
+  // Exponentiation by squaring keeps hostile exponents logarithmic.
   for exponent > 0 {
-    factor *= 10.0
-    exponent -= 1
+    if (exponent & 1) != 0 { factor *= power }
+    power *= power
+    exponent /= 2
   }
   if exponent_negative { value /= factor } else { value *= factor }
   if negative { value = -value }
@@ -285,6 +454,19 @@ pub fn utf8_valid(text: []const u8) bool {
     if !decoded.ok { return false }
     offset += decoded.width
   }
+  return true
+}
+
+pub fn utf8_count(text: []const u8, count: *usize) bool {
+  offset: usize = 0
+  total: usize = 0
+  for offset < #len(text) {
+    decoded := utf8_decode(text, offset)
+    if !decoded.ok { return false }
+    offset += decoded.width
+    total += 1
+  }
+  count.* = total
   return true
 }
 

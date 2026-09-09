@@ -1,0 +1,3 @@
+#target(arch: x86_64, kernel: windows, abi: win64)
+pub type long = i32
+pub type unsigned_long = u32

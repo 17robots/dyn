@@ -109,6 +109,30 @@ pub fn wait_process(process: isize) WaitResult {
   return WaitResult{ process: value, status: status, error: 0, ok: true }
 }
 
+// `ok && process == 0` means child still runs.
+pub fn wait_process_nonblocking(process: isize) WaitResult {
+  status: i32 = 0
+  value := #syscall(61, process, &status, 1, 0)
+  for value == -4 { value = #syscall(61, process, &status, 1, 0) }
+  if value < 0 { return WaitResult{ process: value, status: status, error: value, ok: false } }
+  return WaitResult{ process: value, status: status, error: 0, ok: true }
+}
+
+pub fn signaled(status: i32) bool { return (status & 127) != 0 && (status & 127) != 127 }
+pub fn termination_signal(status: i32) u8 { return #cast(u8) (status & 127) }
+pub fn set_process_group(process: isize, group: isize) IoResult {
+  value := #syscall(109, process, group)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
+pub struct ResourceLimit { current: u64, maximum: u64 }
+pub fn set_resource_limit(resource: usize, limit: *const ResourceLimit) IoResult {
+  value := #syscall(160, resource, limit)
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+
 pub fn exited(status: i32) bool { return (status & 127) == 0 }
 pub fn exit_status(status: i32) u8 { return #cast(u8) ((status >> 8) & 255) }
 

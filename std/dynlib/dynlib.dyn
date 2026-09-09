@@ -1,0 +1,53 @@
+use "std/c"
+
+// POSIX dynamic-loader adapter. Handles and symbols are borrowed native pointers.
+// Linking a program using this module requires libc (or libdl on older systems).
+pub type Handle = rawptr
+
+pub const Lazy: i32 = 1
+pub const Now: i32 = 2
+pub const Local: i32 = 0
+pub const Global: i32 = 256
+
+pub struct OpenResult { value: Handle, error: *const u8, ok: bool }
+pub struct SymbolResult { value: rawptr, error: *const u8, ok: bool }
+
+extern fn native_open "dlopen"(path: *const u8, flags: i32) rawptr
+extern fn native_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
+extern fn native_close "dlclose"(handle: rawptr) i32
+extern fn native_error "dlerror"() *const u8
+
+pub fn open(path: []const u8, flags: i32) OpenResult {
+  storage: [4096]u8 = []
+  name := c.string_from_bytes(storage[..], path)
+  if !name.ok { return OpenResult{} }
+  _ = native_error()
+  value := native_open(name.value, flags)
+  if value == nil { return OpenResult{ value: nil, error: native_error(), ok: false } }
+  return OpenResult{ value: value, error: nil, ok: true }
+}
+
+pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
+  storage: [4096]u8 = []
+  native_name := c.string_from_bytes(storage[..], name)
+  if handle == nil || !native_name.ok { return SymbolResult{} }
+  // POSIX requires clearing prior error because a valid symbol may be null.
+  _ = native_error()
+  value := native_symbol(handle, native_name.value)
+  error := native_error()
+  return SymbolResult{ value: value, error: error, ok: error == nil }
+}
+
+pub fn close(handle: Handle) bool {
+  if handle == nil { return false }
+  return native_close(handle) == 0
+}
+
+// Returned bytes borrow loader-owned storage and die at next loader operation.
+pub fn last_error(maximum: usize) c.BytesResult {
+  return c.bytes_from_string(native_error(), maximum)
+}
+
+pub fn error_bytes(error: *const u8, maximum: usize) c.BytesResult {
+  return c.bytes_from_string(error, maximum)
+}

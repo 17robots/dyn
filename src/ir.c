@@ -11,6 +11,15 @@ static bool allocate(void **out, size_t count, size_t size) {
   return *out != NULL;
 }
 
+static char *copy_span(DynSpan span, const DynSource *source) {
+  size_t n = span.end_byte - span.start_byte;
+  char *text = malloc(n + 1);
+  if (!text) return NULL;
+  memcpy(text, source->text + span.start_byte, n);
+  text[n] = 0;
+  return text;
+}
+
 static bool valid_expr_id(const DynIrProgram *ir, DynExprId id) {
   return id == DYN_NO_EXPR || id < ir->expression_count;
 }
@@ -128,6 +137,26 @@ static bool simple_loop_body(const DynIrProgram *ir, const DynIrStmt *loop) {
   }
   return true;
 }
+static void prove_array_bounds(DynIrProgram *ir, DynExprId id,
+                               const UIntRange *locals, size_t depth) {
+  if (id == DYN_NO_EXPR || id >= ir->expression_count ||
+      depth > ir->expression_count)
+    return;
+  DynIrExpr *e = &ir->expressions[id];
+  prove_array_bounds(ir, e->left, locals, depth + 1);
+  prove_array_bounds(ir, e->right, locals, depth + 1);
+  for (uint32_t i = 0; i < e->item_count; ++i)
+    prove_array_bounds(ir, ir->items[e->item_start + i].expression, locals,
+                       depth + 1);
+  if (e->kind != DYN_EXPR_INDEX ||
+      !dyn_type_is_array(ir->expressions[e->left].type))
+    return;
+  UIntRange index = uint_range(ir, e->right, locals, 0);
+  DynIrArray *array =
+      &ir->arrays[ir->expressions[e->left].type - DYN_TYPE_ARRAY_BASE];
+  if (index.valid && index.max < array->length)
+    e->boolean = true;
+}
 static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
                                 UIntRange *outer) {
   if (loop->expression == DYN_NO_EXPR || !simple_loop_body(ir, loop))
@@ -154,7 +183,8 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
     UIntRange one = e->kind == DYN_EXPR_BINARY
                         ? uint_range(ir, e->right, outer, 0)
                         : (UIntRange){0};
-    if (e->kind == DYN_EXPR_BINARY && e->op == DYN_OP_ADD &&
+    if (!increment && i + 1 == loop->body_count &&
+        e->kind == DYN_EXPR_BINARY && e->op == DYN_OP_ADD &&
         ir->expressions[e->left].kind == DYN_EXPR_NAME &&
         ir->expressions[e->left].integer == induction_id && one.exact &&
         one.value == 1)
@@ -172,6 +202,7 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
       (UIntRange){true, false, bound.value ? bound.value - 1 : 0, 0};
   for (uint32_t i = 0; i < loop->body_count; ++i) {
     DynIrStmt *st = &ir->statements[ir->children[loop->body_start + i]];
+    prove_array_bounds(ir, st->expression, inside, 0);
     if (st->kind == DYN_STMT_LOCAL && st->local_id < ir->local_count) {
       inside[st->local_id] = uint_range(ir, st->expression, inside, 0);
       continue;
@@ -341,7 +372,8 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
         a->expressions[i].op,         a->expressions[i].left,
         a->expressions[i].right,      a->expressions[i].integer,
         a->expressions[i].floating,   a->expressions[i].boolean,
-        a->expressions[i].item_start, a->expressions[i].item_count};
+        a->expressions[i].item_start, a->expressions[i].item_count,
+        a->expressions[i].span};
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
       ir->expressions[i].kind = DYN_EXPR_NIL;
@@ -350,25 +382,50 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
     }
   for (size_t i = 0; i < a->item_count; ++i)
     ir->items[i] = (DynIrItem){a->items[i].expression, a->items[i].field_index};
-  for (size_t i = 0; i < a->field_count; ++i)
-    ir->fields[i] = (DynIrField){lower_type(a, a->fields[i].type),
-                                 a->fields[i].default_expression};
-  for (size_t i = 0; i < a->struct_count; ++i)
+  for (size_t i = 0; i < a->field_count; ++i) {
+    ir->fields[i] = (DynIrField){.name=copy_span(a->fields[i].name,source),
+      .type=lower_type(a,a->fields[i].type),
+      .default_expression=a->fields[i].default_expression};
+    if(!ir->fields[i].name){dyn_ir_free(ir);return false;}
+  }
+  for (size_t i = 0; i < a->struct_count; ++i) {
     ir->structs[i] = (DynIrStruct){
-        a->structs[i].packed, a->structs[i].field_start,
-        a->structs[i].field_count, a->structs[i].size, a->structs[i].alignment};
-  for (size_t i = 0; i < a->enum_count; ++i)
-    ir->enums[i] =
-        (DynIrEnum){a->enums[i].tag_type,          a->enums[i].variant_start,
-                    a->enums[i].variant_count,     a->enums[i].size,
-                    a->enums[i].alignment,         a->enums[i].payload_size,
-                    a->enums[i].payload_alignment, a->enums[i].has_payload};
-  for (size_t i = 0; i < a->variant_count; ++i)
-    ir->variants[i] = (DynIrVariant){lower_type(a, a->variants[i].payload_type),
-                                     a->variants[i].tag};
-  for (size_t i = 0; i < a->param_count; ++i)
-    ir->params[i] =
-        (DynIrParam){lower_type(a, a->params[i].type), a->params[i].local_id};
+        .name=copy_span(a->structs[i].name,source),.span=a->structs[i].span,
+        .packed = a->structs[i].packed, .is_public = a->structs[i].is_public,
+        .module_owner = a->structs[i].module_owner,
+        .field_start = a->structs[i].field_start,
+        .field_count = a->structs[i].field_count, .size = a->structs[i].size,
+        .alignment = a->structs[i].alignment};
+    if(!ir->structs[i].name){dyn_ir_free(ir);return false;}
+  }
+  for (size_t i = 0; i < a->enum_count; ++i) {
+    ir->enums[i] = (DynIrEnum){
+        .name=copy_span(a->enums[i].name,source),.span=a->enums[i].span,
+        .tag_type = a->enums[i].tag_type,
+        .variant_start = a->enums[i].variant_start,
+        .variant_count = a->enums[i].variant_count, .size = a->enums[i].size,
+        .alignment = a->enums[i].alignment,
+        .payload_size = a->enums[i].payload_size,
+        .payload_alignment = a->enums[i].payload_alignment,
+        .has_payload = a->enums[i].has_payload,
+        .is_public = a->enums[i].is_public,
+        .module_owner = a->enums[i].module_owner};
+    if(!ir->enums[i].name){dyn_ir_free(ir);return false;}
+  }
+  for (size_t i = 0; i < a->variant_count; ++i) {
+    ir->variants[i] = (DynIrVariant){.name=copy_span(a->variants[i].name,source),
+      .payload_type=lower_type(a,a->variants[i].payload_type),.tag=a->variants[i].tag};
+    if(!ir->variants[i].name){dyn_ir_free(ir);return false;}
+  }
+  for (size_t i = 0; i < a->param_count; ++i) {
+    ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source),
+                                 .type = lower_type(a, a->params[i].type),
+                                 .local_id = a->params[i].local_id};
+    if (!ir->params[i].name) {
+      dyn_ir_free(ir);
+      return false;
+    }
+  }
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     ir->functions[i].name = malloc(n + 1);
@@ -397,9 +454,15 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
     ir->functions[i].local_start = a->functions[i].local_start;
     ir->functions[i].local_count = a->functions[i].local_count;
     ir->functions[i].variadic_local_id = a->functions[i].variadic_local_id;
+    ir->functions[i].source_line = 1;
+    for (uint32_t q = 0; q < a->functions[i].span.start_byte; ++q)
+      if (source->text[q] == '\n')
+        ++ir->functions[i].source_line;
     ir->functions[i].is_main = a->functions[i].is_main;
     ir->functions[i].foreign = a->functions[i].foreign;
     ir->functions[i].variadic = a->functions[i].variadic;
+    ir->functions[i].is_public = a->functions[i].is_public;
+    ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
   }
   for (size_t i = 0; i < a->global_count; ++i) {
@@ -412,9 +475,22 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
     memcpy(ir->globals[i].name, source->text + a->globals[i].name.start_byte,
            n);
     ir->globals[i].name[n] = 0;
+    ir->globals[i].span = a->globals[i].name;
+    DynSpan link = a->globals[i].link_name;
+    size_t ln = link.end_byte - link.start_byte;
+    ir->globals[i].link_name = malloc(ln + 1);
+    if (!ir->globals[i].link_name) {
+      dyn_ir_free(ir);
+      return false;
+    }
+    memcpy(ir->globals[i].link_name, source->text + link.start_byte, ln);
+    ir->globals[i].link_name[ln] = 0;
     ir->globals[i].type = a->globals[i].type;
     ir->globals[i].initializer = a->globals[i].initializer;
     ir->globals[i].is_const = a->globals[i].is_const;
+    ir->globals[i].foreign = a->globals[i].foreign;
+    ir->globals[i].is_public = a->globals[i].is_public;
+    ir->globals[i].module_owner = a->globals[i].module_owner;
   }
   if (a->global_init_count)
     memcpy(ir->global_init_order, a->global_init_order,
@@ -444,8 +520,14 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
     if (a->strings[i].length)
       memcpy(ir->strings[i].data, a->strings[i].data, a->strings[i].length);
   }
-  for (size_t i = 0; i < a->local_count; ++i)
-    ir->locals[i] = (DynIrLocal){lower_type(a, a->locals[i].type)};
+  for (size_t i = 0; i < a->local_count; ++i) {
+    ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source),
+                                 .type = lower_type(a, a->locals[i].type)};
+    if (!ir->locals[i].name) {
+      dyn_ir_free(ir);
+      return false;
+    }
+  }
   for (size_t i = 0; i < a->statement_count; ++i)
     ir->statements[i] = (DynIrStmt){
         a->statements[i].kind,           a->statements[i].expression,
@@ -455,7 +537,8 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
         a->statements[i].else_count,     a->statements[i].loop_id,
         a->statements[i].target_loop_id, a->statements[i].case_arm_start,
         a->statements[i].case_arm_count, a->statements[i].defer_block,
-        a->statements[i].for_pointer,    a->statements[i].for_const};
+        a->statements[i].for_pointer,    a->statements[i].for_const,
+        a->statements[i].span};
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] =
         (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value,
@@ -496,7 +579,8 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
                       .type = ir->locals[st->local_id].type,
                       .left = DYN_NO_EXPR,
                       .right = DYN_NO_EXPR,
-                      .integer = st->local_id};
+                      .integer = st->local_id,
+                      .span = st->span};
     }
     DynType type = ir->expressions[left].type;
     DynExprId binary = (DynExprId)ir->expression_count;
@@ -505,7 +589,8 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
                     .type = type,
                     .op = st->assignment_op,
                     .left = left,
-                    .right = st->expression};
+                    .right = st->expression,
+                    .span = st->span};
     st->expression = binary;
     st->assignment_op = DYN_OP_NONE;
   }
@@ -541,6 +626,16 @@ void dyn_ir_free(DynIrProgram *ir) {
     free(ir->functions[i].link_name);
   for (size_t i = 0; i < ir->global_count; ++i)
     free(ir->globals[i].name);
+  for (size_t i = 0; i < ir->global_count; ++i)
+    free(ir->globals[i].link_name);
+  for (size_t i = 0; i < ir->param_count; ++i)
+    free(ir->params[i].name);
+  for (size_t i = 0; i < ir->local_count; ++i)
+    free(ir->locals[i].name);
+  for (size_t i = 0; i < ir->field_count; ++i) free(ir->fields[i].name);
+  for (size_t i = 0; i < ir->struct_count; ++i) free(ir->structs[i].name);
+  for (size_t i = 0; i < ir->enum_count; ++i) free(ir->enums[i].name);
+  for (size_t i = 0; i < ir->variant_count; ++i) free(ir->variants[i].name);
   free(ir->expressions);
   free(ir->items);
   free(ir->fields);

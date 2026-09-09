@@ -9,7 +9,7 @@
 
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
-  unsigned line = 1, col = 1;
+  unsigned line = 1, col = 1, end_line, end_col;
   for (uint32_t i = 0; i < span.start_byte && i < s->length; ++i) {
     if (s->text[i] == '\n') {
       ++line;
@@ -17,8 +17,32 @@ static void error_span(DynSpan span, const DynSource *s, unsigned *e,
     } else
       ++col;
   }
-  fprintf(stderr, "%s:%u:%u: error: %s\n", s->path, line, col, m);
+  end_line = line;
+  end_col = col;
+  for (uint32_t i = span.start_byte; i < span.end_byte && i < s->length; ++i) {
+    if (s->text[i] == '\n') { ++end_line; end_col = 1; } else ++end_col;
+  }
+  dyn_diagnostic("error", s->path, line, col, end_line, end_col, m);
   ++*e;
+}
+static void note_span(DynSpan span, const DynSource *s, const char *m) {
+  unsigned line = 1, col = 1, end_line, end_col;
+  for (uint32_t i = 0; i < span.start_byte && i < s->length; ++i) {
+    if (s->text[i] == '\n') { ++line; col = 1; } else ++col;
+  }
+  end_line = line;
+  end_col = col;
+  for (uint32_t i = span.start_byte; i < span.end_byte && i < s->length; ++i) {
+    if (s->text[i] == '\n') { ++end_line; end_col = 1; } else ++end_col;
+  }
+  dyn_diagnostic("note", s->path, line, col, end_line, end_col, m);
+}
+static void error_types(DynSpan span, const DynSource *s, unsigned *e,
+                        const char *m, DynType expected, DynType found) {
+  char detail[192];
+  snprintf(detail, sizeof(detail), "%s (expected %s, found %s)", m,
+           dyn_type_name(expected), dyn_type_name(found));
+  error_span(span, s, e, detail);
 }
 static DynAstFunction *type_context;
 static DynType underlying_type(DynType t) {
@@ -55,6 +79,7 @@ static bool push_loop(DynAstStmt *st, const DynSource *s, unsigned *errors) {
       if (span_present(active_loops[i]->label) &&
           dyn_span_text_equal(st->label, active_loops[i]->label, s)) {
         error_span(st->label, s, errors, "duplicate active loop label");
+        note_span(active_loops[i]->label, s, "previous label declared here");
         break;
       }
   if (active_loop_count == active_loop_capacity) {
@@ -765,6 +790,58 @@ static DynExprId reflection_expr(DynAstFunction *a, DynExprKind kind,
                                                        .integer = integer};
   return id;
 }
+static DynExprId reflection_string(DynAstFunction *a, DynType type,
+                                   const char *bytes, size_t length) {
+  if (!reserve_reflection_string(a)) return DYN_NO_EXPR;
+  unsigned char *copy = malloc(length);
+  if (length && !copy) return DYN_NO_EXPR;
+  if (length) memcpy(copy, bytes, length);
+  uint32_t string = (uint32_t)a->string_count;
+  a->strings[a->string_count++] = (DynAstString){copy, length};
+  return reflection_expr(a, DYN_EXPR_STRING, type, string);
+}
+static DynExprId reflection_members(DynAstFunction *a, const DynSource *s,
+                                    DynType member_type, DynType slice_type,
+                                    const DynSpan *names, const DynType *types,
+                                    uint32_t count) {
+  if (!count) return reflection_expr(a, DYN_EXPR_NIL, slice_type, 0);
+  if (!reserve_reflection_items(a, (size_t)count * 3)) return DYN_NO_EXPR;
+  uint32_t array_start = (uint32_t)a->item_count;
+  a->item_count += count;
+  DynType name_type = a->fields[a->structs[member_type - DYN_TYPE_STRUCT_BASE]
+                                    .field_start].type;
+  for (uint32_t i = 0; i < count; ++i) {
+    size_t n = names ? names[i].end_byte - names[i].start_byte : 0;
+    const char *sname = names ? s->text + names[i].start_byte : "";
+    DynExprId name = reflection_string(a, name_type, sname, n);
+    char type_name[512];
+    type_name_into(a, types[i], s, type_name, sizeof(type_name));
+    DynExprId type_id = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64,
+                                        types[i] == DYN_TYPE_VOID
+                                            ? 0 : reflection_id(type_name));
+    if (name == DYN_NO_EXPR || type_id == DYN_NO_EXPR) return DYN_NO_EXPR;
+    uint32_t fields = (uint32_t)a->item_count;
+    a->items[a->item_count++] = (DynAstItem){.expression = name,
+                                             .field_index = 0};
+    a->items[a->item_count++] = (DynAstItem){.expression = type_id,
+                                             .field_index = 1};
+    DynExprId member = reflection_expr(a, DYN_EXPR_STRUCT, member_type,
+                                       member_type - DYN_TYPE_STRUCT_BASE);
+    if (member == DYN_NO_EXPR) return DYN_NO_EXPR;
+    a->expressions[member].item_start = fields;
+    a->expressions[member].item_count = 2;
+    a->items[array_start + i] = (DynAstItem){.expression = member};
+  }
+  DynType array_type = sema_intern_array(a, member_type, count);
+  DynExprId array = reflection_expr(a, DYN_EXPR_ARRAY, array_type, 0);
+  DynExprId slice = reflection_expr(a, DYN_EXPR_SLICE, slice_type, DYN_NO_EXPR);
+  if (array == DYN_NO_EXPR || slice == DYN_NO_EXPR) return DYN_NO_EXPR;
+  a->expressions[array].item_start = array_start;
+  a->expressions[array].item_count = count;
+  a->expressions[slice].left = array;
+  a->expressions[slice].right = DYN_NO_EXPR;
+  return slice;
+}
 static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
                           unsigned *errors, DynType expected) {
   if (id == DYN_NO_EXPR)
@@ -859,8 +936,8 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
           if (can_convert(a, value, target))
             arg->expression = convert_expr(a, arg->expression, target);
           else
-            error_span(a->expressions[arg->expression].span, s, errors,
-                       "function argument type mismatch");
+            error_types(a->expressions[arg->expression].span, s, errors,
+                        "function argument type mismatch", target, value);
         }
       }
       if (callee->variadic && callee->foreign)
@@ -924,8 +1001,8 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
         if (can_convert(a, value, want))
           arg->expression = convert_expr(a, arg->expression, want);
         else
-          error_span(a->expressions[arg->expression].span, s, errors,
-                     "function pointer argument type mismatch");
+          error_types(a->expressions[arg->expression].span, s, errors,
+                      "function pointer argument type mismatch", want, value);
       }
     }
     a->expressions[id].integer = p->pointee - DYN_TYPE_FN_BASE;
@@ -1059,36 +1136,45 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
   }
   if (e->kind == DYN_EXPR_TYPEOF) {
     DynType operand;
+    uint32_t reflected_fn = UINT32_MAX;
     if (e->boolean)
       operand = (DynType)e->integer;
     else {
       DynAstExpr *source = &a->expressions[e->left];
-      uint32_t fn = source->kind == DYN_EXPR_NAME
-                        ? sema_find_function(a, source->span, s)
-                        : UINT32_MAX;
-      operand = fn == UINT32_MAX
+      reflected_fn = source->kind == DYN_EXPR_NAME
+                         ? sema_find_function(a, source->span, s)
+                         : UINT32_MAX;
+      operand = reflected_fn == UINT32_MAX
                     ? check_expr(a, e->left, s, errors, DYN_TYPE_INFER)
-                    : function_signature_type(a, fn);
+                    : function_signature_type(a, reflected_fn);
     }
-    uint32_t info = UINT32_MAX, kind_enum = UINT32_MAX;
+    uint32_t info = UINT32_MAX, member = UINT32_MAX, kind_enum = UINT32_MAX;
     for (uint32_t i = 0; i < a->struct_count; ++i)
       if (span_is(a->structs[i].name, s, "TypeInfo"))
         info = i;
+      else if (span_is(a->structs[i].name, s, "TypeMember"))
+        member = i;
     for (uint32_t i = 0; i < a->enum_count; ++i)
       if (span_is(a->enums[i].name, s, "TypeKind"))
         kind_enum = i;
-    if (info == UINT32_MAX || kind_enum == UINT32_MAX) {
+    if (info == UINT32_MAX || member == UINT32_MAX || kind_enum == UINT32_MAX) {
       error_span(e->span, s, errors, "compiler reflection ABI is unavailable");
       return e->type = DYN_TYPE_ERROR;
     }
     DynAstStruct *st = &a->structs[info];
     DynAstEnum *en = &a->enums[kind_enum];
     bool abi =
-        st->field_count == 5 && en->variant_count >= 11 &&
+        st->field_count == 13 && a->structs[member].field_count == 2 &&
+        en->variant_count >= 11 &&
         a->fields[st->field_start].type == DYN_TYPE_U64 &&
         a->fields[st->field_start + 1].type == DYN_TYPE_ENUM_BASE + kind_enum &&
         a->fields[st->field_start + 3].type == DYN_TYPE_USIZE &&
-        a->fields[st->field_start + 4].type == DYN_TYPE_USIZE;
+        a->fields[st->field_start + 4].type == DYN_TYPE_USIZE &&
+        a->fields[st->field_start + 5].type == DYN_TYPE_U64 &&
+        a->fields[st->field_start + 6].type == DYN_TYPE_USIZE &&
+        a->fields[st->field_start + 7].type == DYN_TYPE_USIZE &&
+        a->fields[st->field_start + 8].type == DYN_TYPE_USIZE &&
+        a->fields[st->field_start + 9].type == DYN_TYPE_U64;
     if (!abi) {
       error_span(e->span, s, errors, "compiler TypeInfo ABI mismatch");
       return e->type = DYN_TYPE_ERROR;
@@ -1096,7 +1182,7 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     char name[512];
     type_name_into(a, operand, s, name, sizeof(name));
     size_t length = strlen(name);
-    if (!reserve_reflection_string(a) || !reserve_reflection_items(a, 5)) {
+    if (!reserve_reflection_string(a) || !reserve_reflection_items(a, 13)) {
       error_span(e->span, s, errors, "out of memory");
       return e->type = DYN_TYPE_ERROR;
     }
@@ -1110,7 +1196,8 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     uint32_t string = (uint32_t)a->string_count;
     a->strings[a->string_count++] = (DynAstString){bytes, length};
     uint32_t start = (uint32_t)a->item_count;
-    DynExprId values[5];
+    a->item_count += 13;
+    DynExprId values[13];
     values[0] =
         reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, reflection_id(name));
     unsigned k = reflection_kind(operand);
@@ -1128,16 +1215,97 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
                      : sema_type_layout(a, operand, true);
     values[3] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, size);
     values[4] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, alignment);
-    for (uint32_t i = 0; i < 5; ++i)
-      a->items[a->item_count++] =
+    DynType element = DYN_TYPE_VOID, result = DYN_TYPE_VOID;
+    uint64_t array_length = 0, members = 0, parameters = 0;
+    if (dyn_type_is_pointer(operand))
+      element = pointer_info(a, operand)->pointee;
+    else if (dyn_type_is_array(operand)) {
+      element = array_info(a, operand)->element;
+      array_length = array_info(a, operand)->length;
+    } else if (dyn_type_is_slice(operand))
+      element = slice_info(a, operand)->element;
+    else if (dyn_type_is_struct(operand))
+      members = a->structs[operand - DYN_TYPE_STRUCT_BASE].field_count;
+    else if (dyn_type_is_enum(operand))
+      members = a->enums[operand - DYN_TYPE_ENUM_BASE].variant_count;
+    else if (dyn_type_is_function(operand)) {
+      DynAstFnType *fn = fn_type_info(a, operand);
+      parameters = fn->param_count;
+      result = fn->return_type;
+    }
+    char related_name[512];
+    uint64_t element_id = 0, result_id = 0;
+    if (element != DYN_TYPE_VOID) {
+      type_name_into(a, element, s, related_name, sizeof(related_name));
+      element_id = reflection_id(related_name);
+    }
+    if (result != DYN_TYPE_VOID) {
+      type_name_into(a, result, s, related_name, sizeof(related_name));
+      result_id = reflection_id(related_name);
+    }
+    values[5] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, element_id);
+    values[6] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, array_length);
+    values[7] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, members);
+    values[8] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, parameters);
+    values[9] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, result_id);
+    DynType member_type = DYN_TYPE_STRUCT_BASE + member;
+    DynType member_slice = sema_intern_slice(a, member_type, true);
+    values[10] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
+    values[11] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
+    values[12] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
+    if (dyn_type_is_struct(operand)) {
+      DynAstStruct *subject = &a->structs[operand - DYN_TYPE_STRUCT_BASE];
+      DynSpan *names = calloc(subject->field_count, sizeof(*names));
+      DynType *types = calloc(subject->field_count, sizeof(*types));
+      if (subject->field_count && (!names || !types)) values[10] = DYN_NO_EXPR;
+      for (uint32_t i = 0; i < subject->field_count && names && types; ++i) {
+        names[i] = a->fields[subject->field_start + i].name;
+        types[i] = a->fields[subject->field_start + i].type;
+      }
+      if (names && types) values[10] = reflection_members(
+          a, s, member_type, member_slice, names, types, subject->field_count);
+      free(names); free(types);
+    } else if (dyn_type_is_enum(operand)) {
+      DynAstEnum *subject = &a->enums[operand - DYN_TYPE_ENUM_BASE];
+      DynSpan *names = calloc(subject->variant_count, sizeof(*names));
+      DynType *types = calloc(subject->variant_count, sizeof(*types));
+      if (subject->variant_count && (!names || !types)) values[11] = DYN_NO_EXPR;
+      for (uint32_t i = 0; i < subject->variant_count && names && types; ++i) {
+        names[i] = a->variants[subject->variant_start + i].name;
+        types[i] = a->variants[subject->variant_start + i].payload_type;
+      }
+      if (names && types) values[11] = reflection_members(
+          a, s, member_type, member_slice, names, types, subject->variant_count);
+      free(names); free(types);
+    } else if (dyn_type_is_function(operand)) {
+      DynAstFnType *signature = fn_type_info(a, operand);
+      DynSpan *names = calloc(signature->param_count, sizeof(*names));
+      DynType *types = calloc(signature->param_count, sizeof(*types));
+      if (signature->param_count && (!names || !types)) values[12] = DYN_NO_EXPR;
+      for (uint32_t i = 0; i < signature->param_count && names && types; ++i) {
+        types[i] = a->fn_type_params[signature->param_start + i];
+        if (reflected_fn != UINT32_MAX)
+          names[i] = a->params[a->functions[reflected_fn].param_start + i].name;
+      }
+      if (names && types) values[12] = reflection_members(
+          a, s, member_type, member_slice, names, types, signature->param_count);
+      free(names); free(types);
+    }
+    for (uint32_t i = 0; i < 13; ++i) {
+      if (values[i] == DYN_NO_EXPR) {
+        error_span(e->span, s, errors, "out of memory");
+        return e->type = DYN_TYPE_ERROR;
+      }
+      a->items[start + i] =
           (DynAstItem){.expression = values[i], .field_index = i};
+    }
     e = &a->expressions[id];
     e->kind = DYN_EXPR_STRUCT;
     e->type = DYN_TYPE_STRUCT_BASE + info;
     e->integer = info;
     e->left = e->right = DYN_NO_EXPR;
     e->item_start = start;
-    e->item_count = 5;
+    e->item_count = 13;
     return e->type;
   }
   if (e->kind == DYN_EXPR_SIZE || e->kind == DYN_EXPR_ALIGN) {
@@ -1196,6 +1364,19 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
       if (!integer(t) && !dyn_type_is_pointer(t))
         error_span(a->expressions[a->items[e->item_start + i].expression].span,
                    s, errors, "#syscall arguments require integer or pointer");
+    }
+    if (e->item_count && !strcmp(dyn_target->kernel, "linux") &&
+        !strcmp(dyn_target->arch, "aarch64")) {
+      DynAstExpr *number = &a->expressions[a->items[e->item_start].expression];
+      uint64_t native = 0;
+      if (number->kind != DYN_EXPR_INT)
+        error_span(number->span, s, errors,
+                   "AArch64 #syscall number must be a constant portable Linux syscall ID");
+      else if (!dyn_target_syscall_number(number->integer, &native))
+        error_span(number->span, s, errors,
+                   "syscall has no AArch64 Linux mapping");
+      else
+        number->integer = native;
     }
     return e->type = DYN_TYPE_ISIZE;
   }
@@ -1843,7 +2024,8 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
         if (can_convert(a, value, current_return_type))
           st->expression = convert_expr(a, st->expression, current_return_type);
         else
-          error_span(st->span, s, errors, "return type mismatch");
+          error_types(st->span, s, errors, "return type mismatch",
+                      current_return_type, value);
       }
     }
     return true;
@@ -2093,7 +2275,8 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
         if (can_convert(a, value, type))
           st->expression = convert_expr(a, st->expression, type);
         else
-          error_span(st->span, s, errors, "initializer type mismatch");
+          error_types(st->span, s, errors, "initializer type mismatch", type,
+                      value);
       }
     }
     if (type == DYN_TYPE_ERROR || type == DYN_TYPE_STRING ||
@@ -2124,7 +2307,8 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
       if (can_convert(a, value, target) && st->assignment_op == DYN_OP_NONE)
         st->expression = convert_expr(a, st->expression, target);
       else
-        error_span(st->span, s, errors, "field assignment type mismatch");
+        error_types(st->span, s, errors, "field assignment type mismatch",
+                    target, value);
     }
     if (st->assignment_op != DYN_OP_NONE) {
       bool valid = numeric(target) && (st->assignment_op >= DYN_OP_ADD &&
@@ -2188,7 +2372,8 @@ static bool sema_stmt(DynAstFunction *a, DynAstStmt *st, const DynSource *s,
     if (can_convert(a, value, target) && st->assignment_op == DYN_OP_NONE)
       st->expression = convert_expr(a, st->expression, target);
     else
-      error_span(st->span, s, errors, "assignment type mismatch");
+      error_types(st->span, s, errors, "assignment type mismatch", target,
+                  value);
   }
   if (st->assignment_op != DYN_OP_NONE) {
     bool valid = numeric(target) && (st->assignment_op >= DYN_OP_ADD &&
@@ -2270,6 +2455,16 @@ bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
   current_function = UINT32_MAX;
   for (uint32_t i = 0; i < a->global_count; ++i) {
     DynAstGlobal *g = &a->globals[i];
+    if (g->foreign) {
+      if (!foreign_symbol_valid(g->link_name, s))
+        error_span(g->link_name, s, errors,
+                   "foreign link name must be a non-empty linker symbol");
+      if (g->type == DYN_TYPE_INFER || g->type == DYN_TYPE_ERROR ||
+          g->type == DYN_TYPE_VOID || g->type == DYN_TYPE_ANY)
+        error_span(g->name, s, errors,
+                   "foreign global requires a concrete non-void type");
+      continue;
+    }
     if (g->type == DYN_TYPE_ANY)
       error_span(g->name, s, errors, "global any would escape borrowed storage");
     if (g->initializer == DYN_NO_EXPR) {
@@ -2321,6 +2516,19 @@ bool dyn_sema_function(DynAstFunction *a, const DynSource *s,
         for (uint32_t j = 0; j < i; ++j)
           if (dyn_span_text_equal(p->name, a->params[fn->param_start + j].name,
                                   s))
+            error_span(p->name, s, errors, "duplicate parameter name");
+      }
+      continue;
+    }
+    /* A cached/imported interface deliberately has no implementation body.
+       Its signature was checked while loading declarations; its owner checks
+       the body in a separate frontend job. */
+    if (fn->interface_only) {
+      for (uint32_t i = 0; i < fn->param_count; ++i) {
+        DynAstParam *p = &a->params[fn->param_start + i];
+        for (uint32_t j = 0; j < i; ++j)
+          if (dyn_span_text_equal(p->name,
+                                  a->params[fn->param_start + j].name, s))
             error_span(p->name, s, errors, "duplicate parameter name");
       }
       continue;

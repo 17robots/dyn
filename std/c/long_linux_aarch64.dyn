@@ -1,0 +1,3 @@
+#target(arch: aarch64, kernel: linux, abi: sysv)
+pub type long = isize
+pub type unsigned_long = usize
