@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 pub struct Mutex { state: AtomicU32 }
 
 pub fn mutex() Mutex { return Mutex{ state: atomic_u32(0) } }
@@ -20,3 +22,5 @@ pub fn unlock(value: *Mutex) {
   if previous == 0 { #panic("unlock of unlocked mutex") }
   if previous == 2 { _ = #syscall(202, &value.state, 1, 1, 0, 0, 0) }
 }
+#target(kernel: linux)
+#target(kernel: linux)

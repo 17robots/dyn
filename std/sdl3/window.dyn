@@ -1,0 +1,51 @@
+use "std/c" c
+
+// Optional SDL3 adapter; applications explicitly link libSDL3. Handles are
+// SDL-owned allocations with matching destroy_owned operations.
+pub type Window = rawptr
+pub type Renderer = rawptr
+pub const InitAudio: u32 = 16
+pub const InitVideo: u32 = 32
+pub const WindowResizable: u64 = 32
+pub const WindowHidden: u64 = 8
+pub struct WindowResult { value: Window, ok: bool }
+pub struct RendererResult { value: Renderer, ok: bool }
+
+extern fn native_init "SDL_Init"(flags: u32) bool
+extern fn native_quit "SDL_Quit"()
+extern fn native_create_window "SDL_CreateWindow"(title: c.string, width: i32, height: i32, flags: u64) Window
+extern fn native_destroy_window "SDL_DestroyWindow"(window: Window)
+extern fn native_create_renderer "SDL_CreateRenderer"(window: Window, name: c.string) Renderer
+extern fn native_destroy_renderer "SDL_DestroyRenderer"(renderer: Renderer)
+extern fn native_set_draw_color "SDL_SetRenderDrawColor"(renderer: Renderer, red: u8, green: u8, blue: u8, alpha: u8) bool
+extern fn native_clear "SDL_RenderClear"(renderer: Renderer) bool
+extern fn native_present "SDL_RenderPresent"(renderer: Renderer) bool
+extern fn native_poll_event "SDL_PollEvent"(event: rawptr) bool
+extern fn native_error "SDL_GetError"() c.string
+
+pub fn init_video() bool { return native_init(InitVideo) }
+pub fn init_audio() bool { return native_init(InitAudio) }
+pub fn quit() { native_quit() }
+pub fn window_create_owned(title: []const u8, title_storage: []u8, width: i32, height: i32, flags: u64) WindowResult {
+  if width <= 0 || height <= 0 { return WindowResult{} }
+  native_title := c.string_from_bytes(title_storage, title)
+  if !native_title.ok { return WindowResult{} }
+  value := native_create_window(native_title.value, width, height, flags)
+  return WindowResult{ value: value, ok: value != nil }
+}
+pub fn window_destroy_owned(window: Window) { if window != nil { native_destroy_window(window) } }
+pub fn renderer_create_default_owned(window: Window) RendererResult {
+  if window == nil { return RendererResult{} }
+  value := native_create_renderer(window, nil)
+  return RendererResult{ value: value, ok: value != nil }
+}
+pub fn renderer_destroy_owned(renderer: Renderer) { if renderer != nil { native_destroy_renderer(renderer) } }
+pub fn clear(renderer: Renderer, red: u8, green: u8, blue: u8, alpha: u8) bool {
+  return renderer != nil && native_set_draw_color(renderer, red, green, blue, alpha) && native_clear(renderer)
+}
+pub fn present(renderer: Renderer) bool { return renderer != nil && native_present(renderer) }
+// event points to caller-owned SDL_Event-compatible storage. Size/alignment is
+// target-header-dependent: use dyn-bind or a C adapter rather than guessing it.
+pub fn poll_event(event: rawptr) bool { return event != nil && native_poll_event(event) }
+// Borrows SDL thread-local storage until the next SDL call.
+pub fn last_error(maximum: usize) c.BytesResult { return c.bytes_from_string(native_error(), maximum) }

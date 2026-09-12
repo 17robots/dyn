@@ -366,12 +366,16 @@ void dyn_object_cache_store(const DynSources *sources, const DynOptions *options
    may populate the same cache safely. */
 static uint64_t module_key(const DynSources *sources, size_t first, size_t count,
                            const DynOptions *options,
-                           const char *compiler_path) {
+                           const char *compiler_path, const char *object) {
   uint64_t hash = UINT64_C(1469598103934665603);
   hash = hash_file(hash, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
+  size_t object_length = strlen(object);
+  bool bitcode = object_length >= 3 &&
+                 !strcmp(object + object_length - 3, ".bc");
+  hash = hash_bytes(hash, &bitcode, sizeof(bitcode));
   /* Public declaration text is the module object ABI. Function bodies are not
      part of that ABI, so implementation-only edits retain dependent objects. */
   for (size_t source = 0; source < sources->count; ++source) {
@@ -416,7 +420,8 @@ bool dyn_module_cache_restore(const DynSources *sources, size_t first,
                               const char *object) {
   if (options->no_cache) return false;
   char artifact[4096];
-  uint64_t key = module_key(sources, first, count, options, compiler_path);
+  uint64_t key = module_key(sources, first, count, options, compiler_path,
+                            object);
   if (!key || !module_artifact(artifact, sizeof(artifact), cache_root, key))
     return false;
   char metadata[4096];
@@ -438,7 +443,8 @@ void dyn_module_cache_store(const DynSources *sources, size_t first,
                             const char *object) {
   if (options->no_cache) return;
   char artifact[4096], temporary[4096], metadata[4096], metadata_temporary[4096];
-  uint64_t key = module_key(sources, first, count, options, compiler_path);
+  uint64_t key = module_key(sources, first, count, options, compiler_path,
+                            object);
   if (!key || !module_artifact(artifact, sizeof(artifact), cache_root, key) ||
       snprintf(temporary, sizeof(temporary), "%s.%ld.tmp", artifact,
                (long)getpid()) >= (int)sizeof(temporary) ||

@@ -5,12 +5,15 @@ use "std/c"
 // Network descriptors and all byte/name buffers remain caller-owned.
 pub type Context = rawptr
 pub type Connection = rawptr
+pub type Certificate = rawptr
 
 pub enum ErrorKind {
   None,
   InvalidArgument,
   Provider,
   Verification,
+  WantRead,
+  WantWrite,
 }
 
 pub struct ContextResult { value: Context, error: ErrorKind, provider_code: c.unsigned_long, ok: bool }
@@ -20,8 +23,12 @@ pub struct Result { count: usize, error: ErrorKind, provider_code: c.unsigned_lo
 const VerifyPeer: i32 = 1
 const SetTlsExtensionHostname: i32 = 55
 const HostnameNameType: c.long = 0
+const FileTypePem: i32 = 1
+const ErrorWantRead: i32 = 2
+const ErrorWantWrite: i32 = 3
 
 extern fn tls_client_method "TLS_client_method"() rawptr
+extern fn tls_server_method "TLS_server_method"() rawptr
 extern fn ssl_context_new "SSL_CTX_new"(method: rawptr) rawptr
 extern fn ssl_context_free "SSL_CTX_free"(context: rawptr)
 extern fn ssl_context_default_roots "SSL_CTX_set_default_verify_paths"(context: rawptr) i32
@@ -33,9 +40,19 @@ extern fn ssl_get_parameters "SSL_get0_param"(connection: rawptr) rawptr
 extern fn parameters_set_host "X509_VERIFY_PARAM_set1_host"(parameters: rawptr, host: *const u8, length: usize) i32
 extern fn ssl_control "SSL_ctrl"(connection: rawptr, command: i32, value: c.long, argument: rawptr) c.long
 extern fn ssl_connect "SSL_connect"(connection: rawptr) i32
+extern fn ssl_accept "SSL_accept"(connection: rawptr) i32
+extern fn context_use_certificate "SSL_CTX_use_certificate_chain_file"(context: rawptr, path: *const u8) i32
+extern fn context_use_key "SSL_CTX_use_PrivateKey_file"(context: rawptr, path: *const u8, kind: i32) i32
+extern fn context_check_key "SSL_CTX_check_private_key"(context: rawptr) i32
 extern fn ssl_read "SSL_read_ex"(connection: rawptr, destination: rawptr, length: usize, read: *usize) i32
 extern fn ssl_write "SSL_write_ex"(connection: rawptr, source: rawptr, length: usize, written: *usize) i32
 extern fn ssl_shutdown "SSL_shutdown"(connection: rawptr) i32
+extern fn ssl_set_alpn "SSL_set_alpn_protos"(connection: rawptr, protocols: *const u8, length: u32) i32
+extern fn ssl_get_alpn "SSL_get0_alpn_selected"(connection: rawptr, selected: *rawptr, length: *u32)
+extern fn ssl_peer_certificate "SSL_get_peer_certificate"(connection: rawptr) rawptr
+extern fn certificate_free "X509_free"(certificate: rawptr)
+extern fn certificate_subject_name "X509_get_subject_name"(certificate: rawptr) rawptr
+extern fn name_text "X509_NAME_oneline"(name: rawptr, destination: *u8, length: i32) *u8
 extern fn ssl_verify_result "SSL_get_verify_result"(connection: rawptr) c.long
 extern fn ssl_error "SSL_get_error"(connection: rawptr, result: i32) i32
 extern fn provider_error "ERR_get_error"() c.unsigned_long
@@ -43,6 +60,14 @@ extern fn provider_error_string "ERR_error_string_n"(code: c.unsigned_long, dest
 
 fn failure(kind: ErrorKind, status: i32) Result {
   return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: status, ok: false }
+}
+
+fn operation_failure(connection: Connection, status: i32) Result {
+  kind := ErrorKind.Provider
+  code := ssl_error(connection, status)
+  if code == ErrorWantRead { kind = ErrorKind.WantRead }
+  else if code == ErrorWantWrite { kind = ErrorKind.WantWrite }
+  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: code, ok: false }
 }
 
 // Loads provider-default trust roots and enables peer-certificate verification.
@@ -62,6 +87,69 @@ pub fn context_create_owned() ContextResult {
 
 pub fn context_free_owned(context: Context) {
   if context != nil { ssl_context_free(context) }
+}
+
+// Creates a server context and loads PEM certificate chain/private key.
+pub fn server_context_create_owned(certificate: []const u8, key: []const u8,
+                                   certificate_storage: []u8, key_storage: []u8) ContextResult {
+  certificate_path := c.string_from_bytes(certificate_storage, certificate)
+  key_path := c.string_from_bytes(key_storage, key)
+  if !certificate_path.ok || !key_path.ok { return ContextResult{ error: ErrorKind.InvalidArgument } }
+  method := tls_server_method()
+  context := ssl_context_new(method)
+  if method == nil || context == nil { return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() } }
+  if context_use_certificate(context, certificate_path.value) != 1 ||
+     context_use_key(context, key_path.value, FileTypePem) != 1 ||
+     context_check_key(context) != 1 {
+    code := provider_error() ssl_context_free(context)
+    return ContextResult{ error: ErrorKind.Provider, provider_code: code }
+  }
+  return ContextResult{ value: context, error: ErrorKind.None, ok: true }
+}
+
+pub fn server_connection_create_owned(context: Context, descriptor: i32) ConnectionResult {
+  if context == nil || descriptor < 0 { return ConnectionResult{ error: ErrorKind.InvalidArgument } }
+  connection := ssl_new(context)
+  if connection == nil { return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error() } }
+  if ssl_set_fd(connection, descriptor) != 1 {
+    code := provider_error() ssl_free(connection)
+    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code }
+  }
+  return ConnectionResult{ value: connection, error: ErrorKind.None, ok: true }
+}
+
+// protocols is OpenSSL wire format: one length byte followed by each protocol.
+// OpenSSL copies the bytes; the caller retains ownership.
+pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) bool {
+  if connection == nil || #len(protocols) == 0 || #len(protocols) > 4294967295 { return false }
+  return ssl_set_alpn(connection, &protocols[0], #cast(u32) #len(protocols)) == 0
+}
+
+// Returned selection borrows the connection and dies when it is freed or renegotiated.
+pub fn selected_alpn(connection: Connection) []const u8 {
+  if connection == nil { return "" }
+  selected: rawptr = nil length: u32 = 0
+  ssl_get_alpn(connection, &selected, &length)
+  if selected == nil || length == 0 { return "" }
+  bytes := #cast(*const u8) selected
+  return bytes[..#cast(usize) length]
+}
+
+// Caller owns the returned reference and must call certificate_free_owned.
+pub fn peer_certificate_owned(connection: Connection) Certificate {
+  if connection == nil { return nil }
+  return ssl_peer_certificate(connection)
+}
+pub fn certificate_free_owned(certificate: Certificate) {
+  if certificate != nil { certificate_free(certificate) }
+}
+pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 {
+  if certificate == nil || #len(destination) == 0 || #len(destination) > 2147483647 { return destination[..0] }
+  name := certificate_subject_name(certificate)
+  if name == nil || name_text(name, &destination[0], #cast(i32) #len(destination)) == nil { return destination[..0] }
+  length: usize = 0
+  for length < #len(destination) && destination[length] != 0 { length += 1 }
+  return destination[..length]
 }
 
 // Configures both certificate hostname verification and SNI. name_storage must
@@ -95,8 +183,15 @@ pub fn handshake(connection: Connection) Result {
   connected := ssl_connect(connection)
   verified := ssl_verify_result(connection)
   if verified != 0 { return Result{ count: 0, error: ErrorKind.Verification, provider_code: #cast(c.unsigned_long) verified, provider_status: connected, ok: false } }
-  if connected != 1 { return failure(ErrorKind.Provider, connected) }
+  if connected != 1 { return operation_failure(connection, connected) }
   return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: connected, ok: true }
+}
+
+pub fn server_handshake(connection: Connection) Result {
+  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
+  status := ssl_accept(connection)
+  if status != 1 { return operation_failure(connection, status) }
+  return Result{ provider_status: 1, ok: true }
 }
 
 pub fn read(connection: Connection, destination: []u8) Result {
@@ -104,7 +199,7 @@ pub fn read(connection: Connection, destination: []u8) Result {
   if #len(destination) == 0 { return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: 1, ok: true } }
   count: usize = 0
   status := ssl_read(connection, #cast(rawptr) &destination[0], #len(destination), &count)
-  if status != 1 { return failure(ErrorKind.Provider, status) }
+  if status != 1 { return operation_failure(connection, status) }
   return Result{ count: count, error: ErrorKind.None, provider_code: 0, provider_status: status, ok: true }
 }
 
@@ -113,7 +208,7 @@ pub fn write(connection: Connection, source: []const u8) Result {
   if #len(source) == 0 { return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: 1, ok: true } }
   count: usize = 0
   status := ssl_write(connection, #cast(rawptr) &source[0], #len(source), &count)
-  if status != 1 { return failure(ErrorKind.Provider, status) }
+  if status != 1 { return operation_failure(connection, status) }
   return Result{ count: count, error: ErrorKind.None, provider_code: 0, provider_status: status, ok: true }
 }
 

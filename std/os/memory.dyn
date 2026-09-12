@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 pub fn page_allocate(size: usize) []u8 {
   if size == 0 { #panic("page allocation size must be non-zero") }
   address := #syscall(9, 0, size, 3, 34, -1, 0)
@@ -10,3 +12,5 @@ pub fn page_release(memory: []u8) {
   result := #syscall(11, &memory[0], #len(memory))
   if result != 0 { #panic("page release failed") }
 }
+#target(kernel: linux)
+#target(kernel: linux)

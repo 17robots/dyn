@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 pub const SignalDefault: usize = 0
 pub const SignalIgnore: usize = 1
 
@@ -9,3 +11,5 @@ fn signal_disposition(signal: usize, disposition: usize) bool {
 
 pub fn signal_ignore(signal: usize) bool { return signal_disposition(signal, SignalIgnore) }
 pub fn signal_default(signal: usize) bool { return signal_disposition(signal, SignalDefault) }
+#target(kernel: linux)
+#target(kernel: linux)

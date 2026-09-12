@@ -65,7 +65,6 @@ typedef enum {
   DYN_EXPR_SIZE,
   DYN_EXPR_ALIGN,
   DYN_EXPR_TYPEOF,
-  DYN_EXPR_VARIADIC,
   DYN_EXPR_CAST,
   DYN_EXPR_BITCAST,
   DYN_EXPR_SYSCALL
@@ -167,6 +166,7 @@ typedef struct {
 typedef struct {
   DynType return_type;
   uint32_t param_start, param_count;
+  bool variadic;
 } DynAstFnType;
 typedef struct {
   DynSpan name;
@@ -297,7 +297,8 @@ bool dyn_ast_parse_main_source(const DynSource *source, DynAstFunction *ast,
    This is the frontend seam used by per-module compilation and cached
    interfaces: dependencies contribute types/signatures, never bodies. */
 bool dyn_ast_parse_source_owner(const DynSource *source, DynAstFunction *ast,
-                                unsigned *errors, const char *owner_key);
+                                unsigned *errors, const char *owner_key,
+                                bool allow_no_main);
 void dyn_ast_function_free(DynAstFunction *ast);
 bool dyn_span_text_equal(DynSpan a, DynSpan b, const DynSource *source);
 const char *dyn_type_name(DynType type);
@@ -308,5 +309,6 @@ bool dyn_type_is_array(DynType type);
 bool dyn_type_is_slice(DynType type);
 bool dyn_type_is_function(DynType type);
 bool dyn_type_is_distinct(DynType type);
+void dyn_type_format(DynAstFunction *, DynType, const DynSource *, char *, size_t);
 
 #endif

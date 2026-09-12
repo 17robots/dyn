@@ -1,0 +1,44 @@
+pub type AudioStream = rawptr
+pub type AudioDevice = u32
+pub type AudioCallback = *fn(rawptr, AudioStream, i32, i32)
+pub const AudioDeviceDefaultPlayback: AudioDevice = 4294967295
+pub const AudioU8: u32 = 8
+pub const AudioS16: u32 = 32784
+pub const AudioF32: u32 = 33056
+pub struct AudioSpec { format: u32, channels: i32, frequency: i32 }
+pub struct AudioStreamResult { value: AudioStream, ok: bool }
+
+extern fn native_open_audio_stream "SDL_OpenAudioDeviceStream"(device: AudioDevice, spec: *const AudioSpec, callback: rawptr, userdata: rawptr) AudioStream
+extern fn native_put_audio "SDL_PutAudioStreamData"(stream: AudioStream, bytes: rawptr, length: i32) bool
+extern fn native_resume_audio "SDL_ResumeAudioStreamDevice"(stream: AudioStream) bool
+extern fn native_pause_audio "SDL_PauseAudioStreamDevice"(stream: AudioStream) bool
+extern fn native_audio_available "SDL_GetAudioStreamAvailable"(stream: AudioStream) i32
+extern fn native_flush_audio "SDL_FlushAudioStream"(stream: AudioStream) bool
+extern fn native_clear_audio "SDL_ClearAudioStream"(stream: AudioStream) bool
+extern fn native_destroy_audio "SDL_DestroyAudioStream"(stream: AudioStream)
+extern fn native_audio_format "SDL_GetAudioStreamFormat"(stream: AudioStream, source: *AudioSpec, destination: *AudioSpec) bool
+
+// SDL owns the stream allocation. nil callbacks select explicitly queued audio.
+pub fn stream_open_playback_owned(spec: *const AudioSpec) AudioStreamResult {
+  if spec == nil { return AudioStreamResult{} }
+  value := native_open_audio_stream(AudioDeviceDefaultPlayback, spec, nil, nil)
+  return AudioStreamResult{ value: value, ok: value != nil }
+}
+pub fn stream_open_playback_callback_owned(spec: *const AudioSpec, callback: AudioCallback, context: rawptr) AudioStreamResult {
+  if spec == nil || callback == nil { return AudioStreamResult{} }
+  value := native_open_audio_stream(AudioDeviceDefaultPlayback, spec, #cast(rawptr) callback, context)
+  return AudioStreamResult{ value: value, ok: value != nil }
+}
+// SDL copies source before return; source stays caller-owned.
+pub fn stream_put(stream: AudioStream, source: []const u8) bool {
+  if stream == nil || #len(source) > 2147483647 { return false }
+  if #len(source) == 0 { return true }
+  return native_put_audio(stream, #cast(rawptr) &source[0], #cast(i32) #len(source))
+}
+pub fn stream_resume(stream: AudioStream) bool { return stream != nil && native_resume_audio(stream) }
+pub fn stream_pause(stream: AudioStream) bool { return stream != nil && native_pause_audio(stream) }
+pub fn stream_available(stream: AudioStream) i32 { if stream == nil { return -1 } return native_audio_available(stream) }
+pub fn stream_flush(stream: AudioStream) bool { return stream != nil && native_flush_audio(stream) }
+pub fn stream_clear(stream: AudioStream) bool { return stream != nil && native_clear_audio(stream) }
+pub fn stream_format(stream: AudioStream, source: *AudioSpec, destination: *AudioSpec) bool { return stream != nil && source != nil && destination != nil && native_audio_format(stream, source, destination) }
+pub fn stream_destroy_owned(stream: AudioStream) { if stream != nil { native_destroy_audio(stream) } }

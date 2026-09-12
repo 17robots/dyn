@@ -1,0 +1,35 @@
+use "std/c"
+
+pub type Database = rawptr
+pub struct OpenResult { database: Database, code: i32, ok: bool }
+
+extern fn sqlite_open "sqlite3_open"(name: c.string, database: *rawptr) c.int
+extern fn sqlite_close "sqlite3_close"(database: rawptr) c.int
+extern fn sqlite_exec "sqlite3_exec"(database: rawptr, sql: c.string, callback: rawptr, context: rawptr, error: *rawptr) c.int
+extern fn sqlite_error_message "sqlite3_errmsg"(database: rawptr) c.string
+extern fn sqlite_free "sqlite3_free"(memory: rawptr)
+
+// Provider allocates database. Caller must close every successful result.
+pub fn open_owned(name: []const u8, storage: []u8) OpenResult {
+  encoded := c.string_from_bytes(storage, name)
+  if !encoded.ok { return OpenResult{ code: -1 } }
+  database: rawptr = nil code := sqlite_open(encoded.value, &database)
+  return OpenResult{ database: database, code: code, ok: code == 0 }
+}
+pub fn close(database: Database) i32 { if database == nil { return 0 } return sqlite_close(database) }
+
+// SQL is borrowed only for call. SQLite owns returned error; wrapper releases it.
+pub fn execute(database: Database, sql: []const u8, storage: []u8) i32 {
+  encoded := c.string_from_bytes(storage, sql)
+  if !encoded.ok { return -1 }
+  error: rawptr = nil code := sqlite_exec(database, encoded.value, nil, nil, &error)
+  if error != nil { sqlite_free(error) }
+  return code
+}
+
+// Returned bytes borrow database and expire at next SQLite call or close.
+pub fn error_message(database: Database, maximum: usize) []const u8 {
+  value := c.bytes_from_string(sqlite_error_message(database), maximum)
+  if !value.ok { return "" }
+  return value.value
+}

@@ -9,9 +9,9 @@ static const DynTarget targets[] = {{
      "/lib/ld-linux-aarch64.so.1", "aarch64", "linux", "sysv", "none",
      "little", "64", true},
     {"aarch64-macos", "arm64-apple-macosx", NULL,
-     "aarch64", "darwin", "aapcs", "system", "little", "64", false},
+     "aarch64", "darwin", "aapcs", "system", "little", "64", true},
     {"x86_64-windows", "x86_64-pc-windows-msvc", NULL,
-     "x86_64", "windows", "win64", "system", "little", "64", false}};
+     "x86_64", "windows", "win64", "system", "little", "64", true}};
 
 const DynTarget *dyn_target = &targets[0];
 
@@ -47,7 +47,7 @@ bool dyn_target_syscall_number(uint64_t source, uint64_t *native) {
     {61,260},{62,129},{72,25},{73,32},{76,45},{79,17},{80,49},{90,52},
     {109,154},{110,173},{160,261},{186,178},{202,98},{217,61},{228,113},
     {232,22},{233,21},{254,27},{255,28},
-    {257,56},{258,34},{263,35},{264,38},{265,37},{266,36},{267,78},
+    {257,56},{258,34},{263,35},{264,38},{265,37},{266,36},{267,78},{271,73},
     {291,20},{293,59},{294,26},{318,278}
   };
   for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); ++i)

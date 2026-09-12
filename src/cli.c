@@ -14,7 +14,7 @@ void dyn_cli_help(const char *command) {
        "  cache    inspect or clean shared compilation cache\n"
        "  help     show help\n  version  show version\n\n"
        "Build options:\n  --output <path>  --debug  --release  --debug-info\n"
-       "  --emit-ir  --emit-object  --emit-asm  --no-link\n"
+       "  --emit-ir  --emit-object  --emit-asm  --no-link  --shared\n"
        "  --target <x86_64-linux|aarch64-linux|aarch64-macos|x86_64-windows>\n"
        "  --jobs <1..256>\n"
        "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
@@ -90,6 +90,8 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       o->emit_asm = true;
     else if (strcmp(a, "--no-link") == 0)
       o->no_link = true;
+    else if (strcmp(a, "--shared") == 0)
+      o->shared = true;
     else if (strcmp(a, "--warnings-as-errors") == 0)
       o->warnings_as_errors = true;
     else if (strcmp(a, "--no-warnings") == 0)

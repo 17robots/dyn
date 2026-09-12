@@ -12,6 +12,7 @@ typedef struct LLVMOpaqueBasicBlock *LLVMBasicBlockRef;
 typedef struct LLVMOpaqueBuilder *LLVMBuilderRef;
 typedef struct LLVMTarget *LLVMTargetRef;
 typedef struct LLVMOpaqueTargetMachine *LLVMTargetMachineRef;
+typedef struct LLVMOpaqueTargetData *LLVMTargetDataRef;
 typedef struct LLVMOpaquePassBuilderOptions *LLVMPassBuilderOptionsRef;
 typedef struct LLVMOpaqueError *LLVMErrorRef;
 typedef struct LLVMOpaqueMetadata *LLVMMetadataRef;
@@ -214,8 +215,13 @@ extern LLVMTargetMachineRef LLVMCreateTargetMachine(LLVMTargetRef, const char *,
                                                     const char *, const char *,
                                                     int, int, int);
 extern void LLVMDisposeTargetMachine(LLVMTargetMachineRef);
+extern LLVMTargetDataRef LLVMCreateTargetDataLayout(LLVMTargetMachineRef);
+extern char *LLVMCopyStringRepOfTargetData(LLVMTargetDataRef);
+extern void LLVMDisposeTargetData(LLVMTargetDataRef);
+extern void LLVMSetDataLayout(LLVMModuleRef, const char *);
 extern int LLVMTargetMachineEmitToFile(LLVMTargetMachineRef, LLVMModuleRef,
                                        char *, int, char **);
+extern int LLVMWriteBitcodeToFile(LLVMModuleRef, const char *);
 extern void LLVMSetTarget(LLVMModuleRef, const char *);
 extern int LLVMVerifyModule(LLVMModuleRef, int, char **);
 extern LLVMPassBuilderOptionsRef LLVMCreatePassBuilderOptions(void);
@@ -263,6 +269,10 @@ extern LLVMMetadataRef LLVMDIBuilderCreateReplaceableCompositeType(
     LLVMDIBuilderRef, unsigned, const char *, size_t, LLVMMetadataRef,
     LLVMMetadataRef, unsigned, unsigned, uint64_t, uint32_t, unsigned,
     const char *, size_t);
+extern LLVMMetadataRef LLVMDIBuilderCreateUnionType(
+    LLVMDIBuilderRef, LLVMMetadataRef, const char *, size_t, LLVMMetadataRef,
+    unsigned, uint64_t, uint32_t, unsigned, LLVMMetadataRef *, unsigned,
+    unsigned, const char *, size_t);
 extern void LLVMMetadataReplaceAllUsesWith(LLVMMetadataRef, LLVMMetadataRef);
 extern LLVMMetadataRef LLVMDIBuilderGetOrCreateSubrange(LLVMDIBuilderRef,
                                                         int64_t, int64_t);
@@ -286,11 +296,21 @@ extern LLVMMetadataRef LLVMDIBuilderCreateExpression(LLVMDIBuilderRef,
 extern LLVMValueRef LLVMDIBuilderInsertDeclareRecordAtEnd(
     LLVMDIBuilderRef, LLVMValueRef, LLVMMetadataRef, LLVMMetadataRef,
     LLVMMetadataRef, LLVMBasicBlockRef);
+extern LLVMValueRef LLVMDIBuilderInsertDbgValueRecordAtEnd(
+    LLVMDIBuilderRef, LLVMValueRef, LLVMMetadataRef, LLVMMetadataRef,
+    LLVMMetadataRef, LLVMBasicBlockRef);
 extern LLVMMetadataRef LLVMDIBuilderCreateGlobalVariableExpression(
     LLVMDIBuilderRef, LLVMMetadataRef, const char *, size_t, const char *,
     size_t, LLVMMetadataRef, unsigned, LLVMMetadataRef, int, LLVMMetadataRef,
     LLVMMetadataRef, uint32_t);
 extern void LLVMSetSubprogram(LLVMValueRef, LLVMMetadataRef);
 extern void LLVMSetCurrentDebugLocation2(LLVMBuilderRef, LLVMMetadataRef);
+extern LLVMBasicBlockRef LLVMGetFirstBasicBlock(LLVMValueRef);
+extern LLVMBasicBlockRef LLVMGetNextBasicBlock(LLVMBasicBlockRef);
+extern LLVMValueRef LLVMGetBasicBlockTerminator(LLVMBasicBlockRef);
+extern unsigned LLVMGetNumSuccessors(LLVMValueRef);
+extern LLVMBasicBlockRef LLVMGetSuccessor(LLVMValueRef, unsigned);
+extern LLVMValueRef LLVMIsALoadInst(LLVMValueRef);
+extern LLVMValueRef LLVMGetOperand(LLVMValueRef, unsigned);
 
 #endif

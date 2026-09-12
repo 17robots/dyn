@@ -1,4 +1,5 @@
 .section .text._start,"ax",@progbits
+#ifndef DYN_SHARED
 .global _start
 .type _start,@function
 _start:
@@ -9,6 +10,7 @@ _start:
     mov %eax, %edi
     mov $60, %eax
     syscall
+#endif
 .section .text.dyn_panic,"ax",@progbits
 .global dyn_panic
 .type dyn_panic,@function

@@ -29,9 +29,22 @@ typedef struct {
   char **dependency_roots;
   size_t dependency_count;
   DynSources *out;
+  const DynSources *overrides;
   ModuleInterface *interfaces;
   size_t interface_count;
 } Resolver;
+static void apply_overrides(DynSources *sources, const DynSources *overrides) {
+  if (!overrides) return;
+  for (size_t i=0;i<sources->count;++i) for(size_t j=0;j<overrides->count;++j) {
+    const char *path=overrides->items[j].path;
+    if(!strncmp(path,"file://",7))path+=7;
+    if(strcmp(sources->items[i].path,path))continue;
+    char *text=malloc(overrides->items[j].length+1);if(!text)continue;
+    memcpy(text,overrides->items[j].text,overrides->items[j].length);
+    text[overrides->items[j].length]=0;free(sources->items[i].text);
+    sources->items[i].text=text;sources->items[i].length=overrides->items[j].length;
+  }
+}
 static bool has(char **v, size_t n, const char *s) {
   for (size_t i = 0; i < n; ++i)
     if (!strcmp(v[i], s))
@@ -56,6 +69,7 @@ static bool append_source(DynSources *out, const DynSource *s) {
     return false;
   out->items = p;
   DynSource *d = &p[out->count];
+  memset(d, 0, sizeof(*d));
   d->path = strdup(s->path);
   d->text = malloc(s->length + 1);
   d->length = s->length;
@@ -433,6 +447,7 @@ static int visit(Resolver *r, const char *directory,
       pop(r->stack, &r->stack_count);
       return e;
     }
+    apply_overrides(&owned,r->overrides);
     sources = &owned;
   }
   int result = 0;
@@ -520,13 +535,13 @@ static int visit(Resolver *r, const char *directory,
   return result;
 }
 static int load(const char *project_root, const DynSources *root_sources,
-                DynSources *out) {
+                const DynSources *overrides, DynSources *out) {
   if (out)
     memset(out, 0, sizeof(*out));
   char *root = realpath(project_root, NULL);
   if (!root)
     return 1;
-  Resolver r = {.root = root, .out = out};
+  Resolver r = {.root = root, .out = out, .overrides = overrides};
   int result = load_manifest(&r);
   if (!result) result = visit(&r, root, root_sources);
   if (!result && out)
@@ -549,9 +564,14 @@ static int load(const char *project_root, const DynSources *root_sources,
   return result;
 }
 int dyn_module_validate_imports(const char *root, const DynSources *sources) {
-  return load(root, sources, NULL);
+  return load(root, sources, NULL, NULL);
 }
 int dyn_module_load_project(const char *root, const DynSources *sources,
                             DynSources *out) {
-  return load(root, sources, out);
+  return load(root, sources, NULL, out);
+}
+int dyn_module_load_project_overlay(const char *root, const DynSources *sources,
+                                    const DynSources *overrides,
+                                    DynSources *out) {
+  return load(root, sources, overrides, out);
 }

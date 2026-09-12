@@ -31,6 +31,7 @@ typedef struct {
   bool emit_object;
   bool emit_asm;
   bool no_link;
+  bool shared;
   bool warnings_as_errors;
   bool no_warnings;
   bool timings;
@@ -43,9 +44,27 @@ typedef struct {
 } DynOptions;
 
 typedef struct {
+  size_t generated_start, generated_end;
+  size_t original_start, original_end;
+} DynSourceSpan;
+typedef struct {
+  char *path;
+  size_t start, end;
+  char *original_text;
+  size_t original_length;
+  DynSourceSpan *spans;
+  size_t span_count;
+} DynSourceMap;
+typedef struct {
   char *path;
   char *text;
   size_t length;
+  char *original_text;
+  size_t original_length;
+  DynSourceSpan *spans;
+  size_t span_count;
+  DynSourceMap *maps;
+  size_t map_count;
 } DynSource;
 
 typedef struct {
@@ -99,17 +118,19 @@ int dyn_source_target_enabled(const DynSource *source);
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *merged);
 void dyn_source_free(DynSource *source);
+void dyn_source_location(const DynSource *source, size_t byte,
+                         const char **path, unsigned *line, unsigned *column);
 DynCheckResult dyn_check_sources(const DynSources *sources,
                                  const char *main_path, bool require_main);
 int dyn_codegen_main(const DynSource *source, const char *object_path,
                      const char *ir_path, const char *asm_path, bool release,
-                     bool debug_info);
+                     bool debug_info, bool shared);
 /* owner_key is "root" or a rewritten dyn_m<hash> prefix. NULL emits one
    monolithic object. Every object sees the full typed program, but defines
    only symbols owned by owner_key. */
 int dyn_codegen_module(const DynSource *source, const char *object_path,
                        const char *ir_path, const char *asm_path, bool release,
-                       bool debug_info, const char *owner_key);
+                       bool debug_info, bool shared, const char *owner_key);
 int dyn_link_executable(const char *object_path, const char *output_path,
                         const char *const *link_inputs, size_t link_input_count,
                         bool release, bool verbose);
@@ -118,6 +139,9 @@ int dyn_link_executable_objects(const char *const *object_paths,
                                 const char *const *link_inputs,
                                 size_t link_input_count, bool release,
                                 bool verbose);
+int dyn_link_shared(const char *object_path, const char *output_path,
+                    const char *const *link_inputs, size_t link_input_count,
+                    bool verbose);
 char *dyn_path_join(const char *left, const char *right);
 char *dyn_path_basename(const char *path);
 bool dyn_path_is_directory(const char *path);
@@ -126,6 +150,10 @@ int dyn_module_validate_imports(const char *project_root,
 int dyn_module_load_project(const char *project_root,
                             const DynSources *root_sources,
                             DynSources *project_sources);
+int dyn_module_load_project_overlay(const char *project_root,
+                                    const DynSources *root_sources,
+                                    const DynSources *overrides,
+                                    DynSources *project_sources);
 int dyn_module_rewrite_project(const char *project_root, DynSources *sources);
 char *dyn_module_resolve_import(const char *project_root, const char *current,
                                 const char *path);
@@ -151,6 +179,9 @@ void dyn_module_cache_store(const DynSources *, size_t first, size_t count,
                             const DynOptions *, const char *compiler_path,
                             const char *cache_root, const char *object);
 void dyn_diagnostic_mode(bool json);
+typedef void (*DynDiagnosticSink)(const char *, const char *, unsigned, unsigned,
+                                  unsigned, unsigned, const char *, void *);
+void dyn_diagnostic_sink(DynDiagnosticSink, void *);
 void dyn_diagnostic(const char *, const char *, unsigned, unsigned, unsigned,
                     unsigned, const char *);
 int dyn_format_directory(const char *, bool);

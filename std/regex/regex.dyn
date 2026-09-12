@@ -1,5 +1,291 @@
 pub struct Match { start: usize, end: usize, ok: bool }
 
+// Caller-owned compiled form. `compile` writes only into storage/workspace.
+// Syntax identifies malformed patterns; Capacity asks caller for larger buffers.
+pub enum CompileError { None, Syntax, Capacity }
+pub struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, error: CompileError, ok: bool }
+
+const Char: u8 = 1
+const Any: u8 = 2
+const Split: u8 = 3
+const Jump: u8 = 4
+const Save: u8 = 5
+const Accept: u8 = 6
+const Class: u8 = 7
+const Begin: u8 = 8
+const End: u8 = 9
+const ConcatToken: u8 = 20
+const AlternateToken: u8 = 21
+const StarToken: u8 = 22
+const PlusToken: u8 = 23
+const OptionalToken: u8 = 24
+
+struct CompileState { pattern: []const u8, tokens: []Instruction, used: usize, groups: usize, capacity: bool, ok: bool }
+
+fn token(state: *CompileState, op: u8, byte: u8, x: usize, y: usize) bool {
+  if state.used >= #len(state.tokens) { state.capacity = true state.ok = false return false }
+  state.tokens[state.used] = Instruction{ op: op, byte: byte, x: x, y: y }
+  state.used += 1
+  return true
+}
+
+fn closing(pattern: []const u8, at: usize, close: u8) usize {
+  depth: usize = 0 i := at escaped := false in_class := false
+  for i < #len(pattern) {
+    b := pattern[i]
+    if escaped { escaped = false }
+    else if b == '\\' { escaped = true }
+    else if b == '[' { in_class = true }
+    else if b == ']' { in_class = false }
+    else if !in_class && b == '(' { depth += 1 }
+    else if !in_class && b == ')' {
+      if close == ')' && depth == 0 { return i }
+      if depth > 0 { depth -= 1 }
+    }
+    i += 1
+  }
+  return #len(pattern)
+}
+
+fn expression(state: *CompileState, lo: usize, hi: usize) bool {
+  // Split only on alternation at this nesting level.
+  depth: usize = 0 i := lo escaped := false in_class := false branch := lo branches: usize = 0
+  for i <= hi {
+    split := i == hi
+    if !split {
+      b := state.pattern[i]
+      if escaped { escaped = false }
+      else if b == '\\' { escaped = true }
+      else if b == '[' { in_class = true }
+      else if b == ']' { in_class = false }
+      else if !in_class && b == '(' { depth += 1 }
+      else if !in_class && b == ')' { if depth > 0 { depth -= 1 } }
+      else if !in_class && depth == 0 && b == '|' { split = true }
+    }
+    if split {
+      if !sequence(state, branch, i) { return false }
+      if branches > 0 { if !token(state, AlternateToken, 0, 0, 0) { return false } }
+      branches += 1 branch = i + 1
+    }
+    i += 1
+  }
+  return branches > 0
+}
+
+fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
+  i := lo pieces: usize = 0
+  for i < hi {
+    begin := state.used after := i + 1
+    if state.pattern[i] == '(' {
+      close := closing(state.pattern, i + 1, ')')
+      if close >= hi { state.ok = false return false }
+      group := state.groups state.groups += 1
+      if !token(state, Save, 0, group * 2, 0) || !expression(state, i + 1, close) || !token(state, ConcatToken, 0, 0, 0) || !token(state, Save, 0, group * 2 + 1, 0) || !token(state, ConcatToken, 0, 0, 0) { return false }
+      after = close + 1
+    } else if state.pattern[i] == '[' {
+      w := width(state.pattern, i)
+      if i + w > hi || state.pattern[i + w - 1] != ']' { state.ok = false return false }
+      if !token(state, Class, 0, i, w) { return false }
+      after = i + w
+    } else if state.pattern[i] == '\\' {
+      if i + 1 >= hi || !token(state, Char, state.pattern[i + 1], 0, 0) { state.ok = false return false }
+      after = i + 2
+    } else {
+      if state.pattern[i] == ')' || state.pattern[i] == '|' ||
+         state.pattern[i] == '*' || state.pattern[i] == '+' ||
+         state.pattern[i] == '?' || state.pattern[i] == '{' { state.ok = false return false }
+      op := Char
+      if state.pattern[i] == '.' { op = Any }
+      else if state.pattern[i] == '^' { op = Begin }
+      else if state.pattern[i] == '$' { op = End }
+      if !token(state, op, state.pattern[i], 0, 0) { return false }
+    }
+    minimum: usize = 1 maximum: usize = 1 qafter := after
+    quantified := false unbounded := false
+    if after < hi && state.pattern[after] == '*' { minimum = 0 unbounded = true qafter += 1 quantified = true }
+    else if after < hi && state.pattern[after] == '+' { unbounded = true qafter += 1 quantified = true }
+    else if after < hi && state.pattern[after] == '?' { minimum = 0 qafter += 1 quantified = true }
+    else if counted(state.pattern, after, &minimum, &maximum, &qafter) { quantified = true unbounded = maximum == #len(state.pattern) }
+    if quantified {
+      atom_end := state.used atom_count := atom_end - begin
+      if minimum == 0 { state.used = begin }
+      // A zero-count atom is an epsilon fragment. Keeping a Jump token makes
+      // concatenation well-formed without executing the discarded atom.
+      if minimum == 0 && maximum == 0 {
+        if !token(state, Jump, 0, 0, 0) { return false }
+        atom_count = 0
+      }
+      copies := minimum
+      if copies > 0 { copies -= 1 }
+      for copies > 0 {
+        k: usize = 0
+        for k < atom_count { saved := state.tokens[begin + k] if !token(state, saved.op, saved.byte, saved.x, saved.y) { return false } k += 1 }
+        if !token(state, ConcatToken, 0, 0, 0) { return false }
+        copies -= 1
+      }
+      if unbounded {
+        k2: usize = 0
+        for k2 < atom_count { saved2 := state.tokens[begin + k2] if !token(state, saved2.op, saved2.byte, saved2.x, saved2.y) { return false } k2 += 1 }
+        if !token(state, StarToken, 0, 0, 0) { return false }
+        if minimum > 0 && !token(state, ConcatToken, 0, 0, 0) { return false }
+      } else if maximum > 0 {
+        extras := maximum - minimum
+        for extras > 0 {
+          k3: usize = 0
+          for k3 < atom_count { saved3 := state.tokens[begin + k3] if !token(state, saved3.op, saved3.byte, saved3.x, saved3.y) { return false } k3 += 1 }
+          if !token(state, OptionalToken, 0, 0, 0) { return false }
+          if minimum > 0 || extras < maximum { if !token(state, ConcatToken, 0, 0, 0) { return false } }
+          extras -= 1
+        }
+      }
+      after = qafter
+    }
+    if pieces > 0 { if !token(state, ConcatToken, 0, 0, 0) { return false } }
+    pieces += 1 i = after
+  }
+  return pieces > 0
+}
+
+const NoPatch: usize = 18446744073709551615
+struct Fragment { start: usize, out: usize }
+
+fn field(code: []Instruction, slot: usize) usize {
+  instruction := slot / 3 part := slot % 3
+  if part == 0 { return code[instruction].x }
+  if part == 1 { return code[instruction].y }
+  return code[instruction].z
+}
+fn set_field(code: []Instruction, slot: usize, value: usize) {
+  instruction := slot / 3 part := slot % 3
+  if part == 0 { code[instruction].x = value }
+  else if part == 1 { code[instruction].y = value }
+  else { code[instruction].z = value }
+}
+fn list(code: []Instruction, instruction: usize, part: usize) usize {
+  slot := instruction * 3 + part set_field(code, slot, NoPatch) return slot
+}
+fn append_list(code: []Instruction, first: usize, second: usize) usize {
+  if first == NoPatch { return second }
+  at := first
+  for field(code, at) != NoPatch { at = field(code, at) }
+  set_field(code, at, second)
+  return first
+}
+fn patch_list(code: []Instruction, first: usize, target: usize) {
+  at := first
+  for at != NoPatch {
+    following := field(code, at)
+    set_field(code, at, target)
+    at = following
+  }
+}
+
+// Compiles into caller storage. workspace holds postfix tokens; scratch holds two
+// usizes per fragment. Required sizes are pattern-dependent and failure is clean.
+// Program borrows pattern and storage. Keep both alive and unchanged while using it.
+pub fn compile(pattern: []const u8, storage: []Instruction, workspace: []Instruction, scratch: []usize) Program {
+  state := CompileState{ pattern: pattern, tokens: workspace, ok: true }
+  if #len(pattern) == 0 || !expression(&state, 0, #len(pattern)) || !state.ok {
+    if state.capacity { return Program{ error: CompileError.Capacity } }
+    return Program{ error: CompileError.Syntax }
+  }
+  top: usize = 0 used: usize = 0 i: usize = 0
+  for i < state.used {
+    item := workspace[i]
+    if item.op < ConcatToken {
+      if used >= #len(storage) || top * 2 + 1 >= #len(scratch) { return Program{ error: CompileError.Capacity } }
+      storage[used] = item
+      part: usize = 0
+      if item.op == Save { part = 1 }
+      else if item.op == Class { part = 2 }
+      scratch[top * 2] = used scratch[top * 2 + 1] = list(storage, used, part)
+      used += 1 top += 1
+    } else if item.op == ConcatToken {
+      if top < 2 { return Program{ error: CompileError.Syntax } }
+      right := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
+      left := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
+      patch_list(storage, left.out, right.start)
+      top -= 1 scratch[(top - 1) * 2] = left.start scratch[(top - 1) * 2 + 1] = right.out
+    } else if item.op == AlternateToken {
+      if top < 2 { return Program{ error: CompileError.Syntax } }
+      if used >= #len(storage) { return Program{ error: CompileError.Capacity } }
+      right2 := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
+      left2 := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
+      storage[used] = Instruction{ op: Split, x: left2.start, y: right2.start }
+      joined := append_list(storage, left2.out, right2.out)
+      top -= 1 scratch[(top - 1) * 2] = used scratch[(top - 1) * 2 + 1] = joined used += 1
+    } else if item.op == StarToken || item.op == PlusToken || item.op == OptionalToken {
+      if top < 1 { return Program{ error: CompileError.Syntax } }
+      if used >= #len(storage) { return Program{ error: CompileError.Capacity } }
+      value := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
+      storage[used] = Instruction{ op: Split, x: value.start }
+      if item.op == StarToken { patch_list(storage, value.out, used) scratch[(top - 1) * 2] = used scratch[(top - 1) * 2 + 1] = list(storage, used, 1) }
+      else if item.op == PlusToken { patch_list(storage, value.out, used) scratch[(top - 1) * 2 + 1] = list(storage, used, 1) }
+      else { scratch[(top - 1) * 2 + 1] = append_list(storage, value.out, list(storage, used, 1)) }
+      used += 1
+    }
+    i += 1
+  }
+  if top != 1 { return Program{ error: CompileError.Syntax } }
+  if used >= #len(storage) { return Program{ error: CompileError.Capacity } }
+  start := scratch[0]
+  storage[used] = Instruction{ op: Accept }
+  patch_list(storage, scratch[1], used)
+  used += 1
+  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: CompileError.None, ok: true }
+}
+
+fn class_matches(program: Program, instruction: Instruction, byte: u8) bool {
+  return atom(program.pattern, instruction.x, byte)
+}
+
+fn run(program: Program, pc: usize, text: []const u8, at: usize, captures: []Match, end: *usize, fuel: *usize) bool {
+  if fuel.* == 0 || pc >= #len(program.code) { return false }
+  fuel.* -= 1
+  instruction := program.code[pc]
+  if instruction.op == Accept { end.* = at return true }
+  if instruction.op == Split {
+    if run(program, instruction.x, text, at, captures, end, fuel) { return true }
+    return run(program, instruction.y, text, at, captures, end, fuel)
+  }
+  if instruction.op == Jump { return run(program, instruction.x, text, at, captures, end, fuel) }
+  if instruction.op == Save {
+    group := instruction.x / 2
+    previous := Match{}
+    if group < #len(captures) {
+      previous = captures[group]
+      if instruction.x % 2 == 0 { captures[group].start = at captures[group].ok = false }
+      else { captures[group].end = at captures[group].ok = true }
+    }
+    if run(program, instruction.y, text, at, captures, end, fuel) { return true }
+    if group < #len(captures) { captures[group] = previous }
+    return false
+  }
+  if instruction.op == Begin { if at != 0 { return false } return run(program, instruction.x, text, at, captures, end, fuel) }
+  if instruction.op == End { if at != #len(text) { return false } return run(program, instruction.x, text, at, captures, end, fuel) }
+  if at >= #len(text) { return false }
+  if instruction.op == Char && instruction.byte == text[at] { return run(program, instruction.x, text, at + 1, captures, end, fuel) }
+  if instruction.op == Any { return run(program, instruction.x, text, at + 1, captures, end, fuel) }
+  if instruction.op == Class && class_matches(program, instruction, text[at]) { return run(program, instruction.z, text, at + 1, captures, end, fuel) }
+  return false
+}
+
+// Finds with a compiled program. Capture 0 corresponds to the first '(' group.
+pub fn find_compiled(program: Program, text: []const u8, captures: []Match) Match {
+  if !program.ok { return Match{} }
+  anchored := #len(program.pattern) > 0 && program.pattern[0] == '^'
+  start: usize = 0
+  for start <= #len(text) {
+    i: usize = 0 for i < #len(captures) { captures[i] = Match{} i += 1 }
+    end := start fuel := (#len(program.code) + 1) * (#len(text) + 1) * 16
+    if run(program, program.start, text, start, captures, &end, &fuel) { return Match{ start: start, end: end, ok: true } }
+    if anchored { return Match{} }
+    start += 1
+  }
+  return Match{}
+}
+
 fn atom(pattern: []const u8, at: usize, byte: u8) bool {
   if pattern[at] == '.' { return true }
   if pattern[at] == '\\' && at + 1 < #len(pattern) { return pattern[at + 1] == byte }
@@ -32,39 +318,57 @@ fn width(pattern: []const u8, at: usize) usize {
   return 1
 }
 
+fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, after: *usize) bool {
+  if at >= #len(pattern) || pattern[at] != '{' { return false }
+  i := at + 1 min: usize = 0 digits: usize = 0
+  for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
+    digit := #cast(usize) (pattern[i] - '0')
+    if min > 1844674407370955161 { return false }
+    min = min * 10 + digit i += 1 digits += 1
+  }
+  if digits == 0 { return false }
+  max := min
+  if i < #len(pattern) && pattern[i] == ',' {
+    i += 1 max = #len(pattern)
+    if i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
+      max = 0
+      for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
+        digit2 := #cast(usize) (pattern[i] - '0')
+        if max > 1844674407370955161 { return false }
+        max = max * 10 + digit2 i += 1
+      }
+    }
+  }
+  if i >= #len(pattern) || pattern[i] != '}' || max < min { return false }
+  minimum.* = min maximum.* = max after.* = i + 1
+  return true
+}
+
 fn match_here(pattern: []const u8, p: usize, text: []const u8, t: usize, end: *usize) bool {
   if p == #len(pattern) { end.* = t return true }
   if pattern[p] == '$' && p + 1 == #len(pattern) { if t == #len(text) { end.* = t return true } return false }
   w := width(pattern, p)
-  if p + w < #len(pattern) && pattern[p + w] == '*' {
-    cursor := t
-    for cursor < #len(text) && atom(pattern, p, text[cursor]) { cursor += 1 }
+  minimum: usize = 1 maximum: usize = 1 pattern_after := p + w quantified := false
+  if pattern_after < #len(pattern) && pattern[pattern_after] == '*' { minimum = 0 maximum = #len(text) - t pattern_after += 1 quantified = true }
+  else if pattern_after < #len(pattern) && pattern[pattern_after] == '+' { maximum = #len(text) - t pattern_after += 1 quantified = true }
+  else if pattern_after < #len(pattern) && pattern[pattern_after] == '?' { minimum = 0 pattern_after += 1 quantified = true }
+  else if counted(pattern, pattern_after, &minimum, &maximum, &pattern_after) { quantified = true }
+  if quantified {
+    cursor := t count: usize = 0
+    for cursor < #len(text) && count < maximum && atom(pattern, p, text[cursor]) { cursor += 1 count += 1 }
+    if count < minimum { return false }
     for true {
-      if match_here(pattern, p + w + 1, text, cursor, end) { return true }
-      if cursor == t { return false }
-      cursor -= 1
+      if match_here(pattern, pattern_after, text, cursor, end) { return true }
+      if count == minimum { return false }
+      cursor -= 1 count -= 1
     }
-  }
-  if p + w < #len(pattern) && pattern[p + w] == '+' {
-    if t == #len(text) || !atom(pattern, p, text[t]) { return false }
-    plus_cursor := t + 1
-    for plus_cursor < #len(text) && atom(pattern, p, text[plus_cursor]) { plus_cursor += 1 }
-    for true {
-      if match_here(pattern, p + w + 1, text, plus_cursor, end) { return true }
-      if plus_cursor == t + 1 { return false }
-      plus_cursor -= 1
-    }
-  }
-  if p + w < #len(pattern) && pattern[p + w] == '?' {
-    if t < #len(text) && atom(pattern, p, text[t]) && match_here(pattern, p + w + 1, text, t + 1, end) { return true }
-    return match_here(pattern, p + w + 1, text, t, end)
   }
   if t < #len(text) && atom(pattern, p, text[t]) { return match_here(pattern, p + w, text, t + 1, end) }
   return false
 }
 
 // Byte-oriented regular expressions: ^ $ . * + ?, classes/ranges, and escaping.
-pub fn find(pattern: []const u8, text: []const u8) Match {
+fn find_branch(pattern: []const u8, text: []const u8) Match {
   anchored := #len(pattern) > 0 && pattern[0] == '^'
   start: usize = 0
   p: usize = 0
@@ -76,6 +380,42 @@ pub fn find(pattern: []const u8, text: []const u8) Match {
     start += 1
   }
   return Match{}
+}
+
+// Top-level alternation; escaped bars and bars in byte classes are literals.
+pub fn find(pattern: []const u8, text: []const u8) Match {
+  branch: usize = 0 i: usize = 0
+  escaped := false in_class := false found := Match{}
+  for i <= #len(pattern) {
+    split := i == #len(pattern)
+    if !split {
+      byte := pattern[i]
+      if escaped { escaped = false }
+      else if byte == '\\' { escaped = true }
+      else if byte == '[' { in_class = true }
+      else if byte == ']' { in_class = false }
+      else if byte == '|' && !in_class { split = true }
+    }
+    if split {
+      candidate := find_branch(pattern[branch..i], text)
+      if candidate.ok && (!found.ok || candidate.start < found.start) { found = candidate }
+      branch = i + 1
+    }
+    i += 1
+  }
+  return found
+}
+
+pub struct Iterator { pattern: []const u8, text: []const u8, offset: usize, done: bool }
+pub fn iterator(pattern: []const u8, text: []const u8) Iterator { return Iterator{ pattern: pattern, text: text } }
+pub fn next(state: *Iterator) Match {
+  if state.done || state.offset > #len(state.text) { return Match{} }
+  result := find(state.pattern, state.text[state.offset..])
+  if !result.ok { state.done = true return Match{} }
+  result.start += state.offset result.end += state.offset
+  if result.end == result.start { state.offset = result.end + 1 } else { state.offset = result.end }
+  if result.end == #len(state.text) { state.done = true }
+  return result
 }
 
 pub fn matches(pattern: []const u8, text: []const u8) bool { return find(pattern, text).ok }

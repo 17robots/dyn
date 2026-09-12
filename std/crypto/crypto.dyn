@@ -63,33 +63,91 @@ fn block(state: []u32, input: []const u8) {
   state[6] = add32(state[6], g) state[7] = add32(state[7], h)
 }
 
-// Writes 32-byte SHA-256 digest. Empty slice means destination too small or oversized input.
-pub fn sha256(destination: []u8, input: []const u8) []u8 {
-  if #len(destination) < 32 || #len(input) > 2305843009213693951 { return destination[..0] }
-  state: [8]u32 = [1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225]
+pub struct Sha256 { state: [8]u32, tail: [64]u8, tail_length: usize, length: u64 }
+
+pub fn sha256_init(context: *Sha256) {
+  context.state = [1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225]
+  context.tail_length = 0 context.length = 0
+}
+
+// Adds one chunk. False means the SHA-256 maximum input length was exceeded.
+pub fn sha256_update(context: *Sha256, input: []const u8) bool {
+  input_length: u64 = #cast(u64) #len(input)
+  maximum: u64 = 2305843009213693951
+  if input_length > maximum - context.length { return false }
+  context.length += input_length
   at: usize = 0
-  for at + 64 <= #len(input) { block(state[..], input[at..at + 64]) at += 64 }
+  if context.tail_length != 0 {
+    block_size: usize = 64
+    needed := block_size - context.tail_length
+    take: usize = #len(input)
+    if take > needed { take = needed }
+    i: usize = 0
+    for i < take { context.tail[context.tail_length + i] = input[i] i += 1 }
+    context.tail_length += take at += take
+    if context.tail_length == 64 { block(context.state[..], context.tail[..]) context.tail_length = 0 }
+    else { return true }
+  }
+  for at + 64 <= #len(input) { block(context.state[..], input[at..at + 64]) at += 64 }
+  rest: usize = 0
+  for at + rest < #len(input) { context.tail[rest] = input[at + rest] rest += 1 }
+  context.tail_length = rest
+  return true
+}
+
+// Finishes into 32 caller-owned bytes. The context may be reinitialized and reused.
+pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
+  if #len(destination) < 32 { return destination[..0] }
   tail: [128]u8 = []
-  remaining := #len(input) - at
+  remaining := context.tail_length
   i: usize = 0
-  for i < remaining { tail[i] = input[at + i] i += 1 }
+  for i < remaining { tail[i] = context.tail[i] i += 1 }
   tail[remaining] = 128
   blocks: usize = 64
   if remaining >= 56 { blocks = 128 }
-  bits := #cast(u64) #len(input) * 8
+  bits := context.length * 8
   i = 0
   for i < 8 { tail[blocks - 1 - i] = #cast(u8) (bits >> (i * 8)) i += 1 }
-  block(state[..], tail[..64])
-  if blocks == 128 { block(state[..], tail[64..]) }
+  block(context.state[..], tail[..64])
+  if blocks == 128 { block(context.state[..], tail[64..]) }
   i = 0
   for i < 8 {
-    destination[i * 4] = #cast(u8) (state[i] >> 24)
-    destination[i * 4 + 1] = #cast(u8) (state[i] >> 16)
-    destination[i * 4 + 2] = #cast(u8) (state[i] >> 8)
-    destination[i * 4 + 3] = #cast(u8) state[i]
+    destination[i * 4] = #cast(u8) (context.state[i] >> 24)
+    destination[i * 4 + 1] = #cast(u8) (context.state[i] >> 16)
+    destination[i * 4 + 2] = #cast(u8) (context.state[i] >> 8)
+    destination[i * 4 + 3] = #cast(u8) context.state[i]
     i += 1
   }
   return destination[..32]
+}
+
+// Writes 32-byte SHA-256 digest. Empty slice means destination too small or oversized input.
+pub fn sha256(destination: []u8, input: []const u8) []u8 {
+  context := Sha256{} sha256_init(&context)
+  if !sha256_update(&context, input) { return destination[..0] }
+  return sha256_finish(&context, destination)
+}
+
+pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8 {
+  if #len(destination) < 32 { return destination[..0] }
+  key_block: [64]u8 = [] key_digest: [32]u8 = []
+  key_at: usize = 0
+  if #len(key) > 64 {
+    hashed := sha256(key_digest[..], key)
+    for key_at < #len(hashed) { key_block[key_at] = hashed[key_at] key_at += 1 }
+  } else {
+    for key_at < #len(key) { key_block[key_at] = key[key_at] key_at += 1 }
+  }
+  inner_block: [64]u8 = [] outer_block: [64]u8 = []
+  pad_at: usize = 0
+  for pad_at < 64 { inner_block[pad_at] = key_block[pad_at] ^ 54 outer_block[pad_at] = key_block[pad_at] ^ 92 pad_at += 1 }
+  inner := Sha256{} sha256_init(&inner)
+  if !sha256_update(&inner, inner_block[..]) || !sha256_update(&inner, message) { return destination[..0] }
+  inner_digest: [32]u8 = []
+  _ = sha256_finish(&inner, inner_digest[..])
+  outer := Sha256{} sha256_init(&outer)
+  if !sha256_update(&outer, outer_block[..]) || !sha256_update(&outer, inner_digest[..]) { return destination[..0] }
+  return sha256_finish(&outer, destination)
 }
 
 pub fn equal_constant_time(left: []const u8, right: []const u8) bool {

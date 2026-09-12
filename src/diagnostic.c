@@ -1,7 +1,12 @@
 #include "dyn.h"
 #include <stdio.h>
 static bool json_output;
+static DynDiagnosticSink diagnostic_sink;
+static void *diagnostic_sink_context;
 void dyn_diagnostic_mode(bool json) { json_output = json; }
+void dyn_diagnostic_sink(DynDiagnosticSink sink, void *context) {
+  diagnostic_sink = sink; diagnostic_sink_context = context;
+}
 static void quote(const char *s) {
   fputc('"', stderr);
   for (; s && *s; ++s) {
@@ -17,6 +22,11 @@ static void quote(const char *s) {
 void dyn_diagnostic(const char *severity, const char *path, unsigned line,
                     unsigned column, unsigned end_line, unsigned end_column,
                     const char *message) {
+  if (diagnostic_sink) {
+    diagnostic_sink(severity, path, line, column, end_line, end_column, message,
+                    diagnostic_sink_context);
+    return;
+  }
   if (!json_output) {
     fprintf(stderr, "%s:%u:%u: %s: %s", path ? path : "<compiler>", line,
             column, severity, message);

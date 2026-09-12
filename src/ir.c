@@ -507,7 +507,8 @@ bool dyn_ir_lower(const DynAstFunction *a, const DynSource *source,
   for (size_t i = 0; i < a->fn_type_count; ++i)
     ir->fn_types[i] =
         (DynIrFnType){lower_type(a, a->fn_types[i].return_type),
-                      a->fn_types[i].param_start, a->fn_types[i].param_count};
+                      a->fn_types[i].param_start, a->fn_types[i].param_count,
+                      a->fn_types[i].variadic};
   for (size_t i = 0; i < a->fn_type_param_count; ++i)
     ir->fn_type_params[i] = lower_type(a, a->fn_type_params[i]);
   for (size_t i = 0; i < a->string_count; ++i) {

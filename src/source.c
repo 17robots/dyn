@@ -117,10 +117,8 @@ int dyn_sources_load(const char *dir, DynSources *out) {
   return 0;
 }
 void dyn_sources_free(DynSources *sources) {
-  for (size_t i = 0; i < sources->count; ++i) {
-    free(sources->items[i].path);
-    free(sources->items[i].text);
-  }
+  for (size_t i = 0; i < sources->count; ++i)
+    dyn_source_free(&sources->items[i]);
   free(sources->items);
   memset(sources, 0, sizeof(*sources));
 }
@@ -183,7 +181,8 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   total += prelude;
   out->text = malloc(total + 1);
   out->path = strdup(module_name ? module_name : "<module>");
-  if (!out->text || !out->path) {
+  out->maps = calloc(sources->count, sizeof(*out->maps));
+  if (!out->text || !out->path || (sources->count && !out->maps)) {
     dyn_source_free(out);
     return 2;
   }
@@ -196,18 +195,57 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   }
   for (size_t i = 0; i < sources->count; ++i) {
     if (!dyn_source_target_enabled(&sources->items[i])) continue;
+    const DynSource *input = &sources->items[i];
+    DynSourceMap *map = &out->maps[out->map_count];
+    map->path = strdup(input->path);
+    map->original_text = strdup(input->original_text ? input->original_text : input->text);
+    map->original_length = input->original_text ? input->original_length : input->length;
+    if (!map->path || !map->original_text) { dyn_source_free(out); return 2; }
+    map->start = at;
+    if (input->span_count) {
+      map->spans = malloc(input->span_count * sizeof(*map->spans));
+      if (!map->spans) { dyn_source_free(out); return 2; }
+      memcpy(map->spans, input->spans, input->span_count * sizeof(*map->spans));
+      map->span_count = input->span_count;
+    }
     memcpy(out->text + at, sources->items[i].text, sources->items[i].length);
     at += sources->items[i].length;
+    map->end = at;
+    ++out->map_count;
     out->text[at++] = '\n';
   }
   out->text[at] = 0;
   out->length = at;
   return 0;
 }
+void dyn_source_location(const DynSource *s, size_t byte, const char **path,
+                         unsigned *line, unsigned *column) {
+  const char *text=s->original_text?s->original_text:s->text;
+  size_t length=s->original_text?s->original_length:s->length, offset=byte;
+  *path=s->path;
+  for(size_t i=0;i<s->map_count;++i)if(byte>=s->maps[i].start&&byte<=s->maps[i].end){
+    const DynSourceMap *m=&s->maps[i]; size_t local=byte-m->start; *path=m->path;
+    text=m->original_text; length=m->original_length; offset=local;
+    for(size_t j=0;j<m->span_count;++j)if(local>=m->spans[j].generated_start&&local<=m->spans[j].generated_end){
+      DynSourceSpan p=m->spans[j]; size_t gn=p.generated_end-p.generated_start, on=p.original_end-p.original_start;
+      offset=p.original_start+(gn?(local-p.generated_start)*on/gn:0); break;
+    } break;
+  }
+  if(!s->map_count&&s->span_count)for(size_t j=0;j<s->span_count;++j)if(byte>=s->spans[j].generated_start&&byte<=s->spans[j].generated_end){
+    DynSourceSpan p=s->spans[j]; size_t gn=p.generated_end-p.generated_start, on=p.original_end-p.original_start;
+    offset=p.original_start+(gn?(byte-p.generated_start)*on/gn:0); break;
+  }
+  if(offset>length)offset=length;
+  *line=1;*column=1;for(size_t i=0;i<offset;++i)if(text[i]=='\n'){++*line;*column=1;}else ++*column;
+}
 void dyn_source_free(DynSource *s) {
   if (!s)
     return;
   free(s->path);
   free(s->text);
+  free(s->original_text);
+  free(s->spans);
+  for(size_t i=0;i<s->map_count;++i){free(s->maps[i].path);free(s->maps[i].original_text);free(s->maps[i].spans);}
+  free(s->maps);
   memset(s, 0, sizeof(*s));
 }

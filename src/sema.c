@@ -9,33 +9,19 @@
 
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
-  unsigned line = 1, col = 1, end_line, end_col;
-  for (uint32_t i = 0; i < span.start_byte && i < s->length; ++i) {
-    if (s->text[i] == '\n') {
-      ++line;
-      col = 1;
-    } else
-      ++col;
-  }
-  end_line = line;
-  end_col = col;
-  for (uint32_t i = span.start_byte; i < span.end_byte && i < s->length; ++i) {
-    if (s->text[i] == '\n') { ++end_line; end_col = 1; } else ++end_col;
-  }
-  dyn_diagnostic("error", s->path, line, col, end_line, end_col, m);
+  unsigned line,col,end_line,end_col;const char *path,*end_path;
+  dyn_source_location(s,span.start_byte,&path,&line,&col);
+  dyn_source_location(s,span.end_byte,&end_path,&end_line,&end_col);
+  if(strcmp(path,end_path)){end_line=line;end_col=col+1;}
+  dyn_diagnostic("error", path, line, col, end_line, end_col, m);
   ++*e;
 }
 static void note_span(DynSpan span, const DynSource *s, const char *m) {
-  unsigned line = 1, col = 1, end_line, end_col;
-  for (uint32_t i = 0; i < span.start_byte && i < s->length; ++i) {
-    if (s->text[i] == '\n') { ++line; col = 1; } else ++col;
-  }
-  end_line = line;
-  end_col = col;
-  for (uint32_t i = span.start_byte; i < span.end_byte && i < s->length; ++i) {
-    if (s->text[i] == '\n') { ++end_line; end_col = 1; } else ++end_col;
-  }
-  dyn_diagnostic("note", s->path, line, col, end_line, end_col, m);
+  unsigned line,col,end_line,end_col;const char *path,*end_path;
+  dyn_source_location(s,span.start_byte,&path,&line,&col);
+  dyn_source_location(s,span.end_byte,&end_path,&end_line,&end_col);
+  if(strcmp(path,end_path)){end_line=line;end_col=col+1;}
+  dyn_diagnostic("note", path, line, col, end_line, end_col, m);
 }
 static void error_types(DynSpan span, const DynSource *s, unsigned *e,
                         const char *m, DynType expected, DynType found) {
@@ -73,6 +59,12 @@ static DynType current_return_type = DYN_TYPE_VOID;
 static DynAstStmt **active_loops;
 static size_t active_loop_count, active_loop_capacity;
 static bool span_present(DynSpan s) { return s.end_byte > s.start_byte; }
+static unsigned name_distance(DynSpan unknown,DynSpan candidate,const DynSource *s) {
+  size_t an=0,bn=candidate.end_byte-candidate.start_byte;while(unknown.start_byte+an<unknown.end_byte&&(isalnum((unsigned char)s->text[unknown.start_byte+an])||s->text[unknown.start_byte+an]=='_'))++an;if(an>96||bn>96)return UINT_MAX;unsigned previous[97],current[97];for(size_t j=0;j<=bn;++j)previous[j]=(unsigned)j;for(size_t i=1;i<=an;++i){current[0]=(unsigned)i;for(size_t j=1;j<=bn;++j){unsigned cost=s->text[unknown.start_byte+i-1]==s->text[candidate.start_byte+j-1]?0u:1u;unsigned insert=current[j-1]+1,remove=previous[j]+1,replace=previous[j-1]+cost;current[j]=insert<remove?insert:remove;if(replace<current[j])current[j]=replace;}memcpy(previous,current,(bn+1)*sizeof(*previous));}return previous[bn];
+}
+static bool suggest_name(DynAstFunction *a,DynSpan unknown,const DynSource *s,bool functions,char *message,size_t capacity) {
+  DynSpan best={0};unsigned distance=UINT_MAX;if(functions){for(size_t i=0;i<a->function_count;++i){unsigned d=name_distance(unknown,a->functions[i].name,s);if(d<distance){distance=d;best=a->functions[i].name;}}}else{for(size_t i=0;i<a->local_count;++i)if(a->locals[i].active){unsigned d=name_distance(unknown,a->locals[i].name,s);if(d<distance){distance=d;best=a->locals[i].name;}}for(size_t i=0;i<a->global_count;++i){unsigned d=name_distance(unknown,a->globals[i].name,s);if(d<distance){distance=d;best=a->globals[i].name;}}}size_t n=best.end_byte-best.start_byte;if(!n||distance>2)return false;snprintf(message,capacity,"unknown %s; did you mean '%.*s'?",functions?"function":"name",(int)n,s->text+best.start_byte);return true;
+}
 static bool push_loop(DynAstStmt *st, const DynSource *s, unsigned *errors) {
   if (span_present(st->label))
     for (size_t i = 0; i < active_loop_count; ++i)
@@ -371,11 +363,13 @@ static DynType sema_intern_slice(DynAstFunction *a, DynType element,
   a->slices[a->slice_count] = (DynAstSlice){element, is_const};
   return DYN_TYPE_SLICE_BASE + a->slice_count++;
 }
-static DynType sema_intern_fn_type(DynAstFunction *a, const DynType *params,
-                                   uint32_t count, DynType result) {
+static DynType sema_intern_fn_type_ex(DynAstFunction *a, const DynType *params,
+                                      uint32_t count, DynType result,
+                                      bool variadic) {
   for (uint32_t i = 0; i < a->fn_type_count; ++i) {
     DynAstFnType *f = &a->fn_types[i];
-    if (f->return_type != result || f->param_count != count)
+    if (f->return_type != result || f->param_count != count ||
+        f->variadic != variadic)
       continue;
     bool same = true;
     for (uint32_t j = 0; j < count; ++j)
@@ -405,8 +399,13 @@ static DynType sema_intern_fn_type(DynAstFunction *a, const DynType *params,
   uint32_t start = (uint32_t)a->fn_type_param_count;
   for (uint32_t i = 0; i < count; ++i)
     a->fn_type_params[a->fn_type_param_count++] = params[i];
-  a->fn_types[a->fn_type_count] = (DynAstFnType){result, start, count};
+  a->fn_types[a->fn_type_count] =
+      (DynAstFnType){result, start, count, variadic};
   return DYN_TYPE_FN_BASE + a->fn_type_count++;
+}
+static DynType sema_intern_fn_type(DynAstFunction *a, const DynType *params,
+                                   uint32_t count, DynType result) {
+  return sema_intern_fn_type_ex(a, params, count, result, false);
 }
 static DynType function_pointer_type(DynAstFunction *a, uint32_t id) {
   DynAstFn *f = &a->functions[id];
@@ -415,8 +414,8 @@ static DynType function_pointer_type(DynAstFunction *a, uint32_t id) {
     return DYN_TYPE_ERROR;
   for (uint32_t i = 0; i < f->param_count; ++i)
     params[i] = a->params[f->param_start + i].type;
-  DynType signature =
-      sema_intern_fn_type(a, params, f->param_count, f->return_type);
+  DynType signature = sema_intern_fn_type_ex(
+      a, params, f->param_count, f->return_type, f->foreign && f->variadic);
   free(params);
   return signature == DYN_TYPE_ERROR ? signature
                                      : sema_intern_pointer(a, signature, false);
@@ -777,6 +776,10 @@ static void display_type_name(DynAstFunction *a, DynType t, const DynSource *s,
   memcpy(out, s->text + p.start_byte, n);
   out[n] = 0;
 }
+void dyn_type_format(DynAstFunction *a, DynType t, const DynSource *s,
+                     char *out, size_t capacity) {
+  display_type_name(a, t, s, out, capacity);
+}
 #define type_name_into display_type_name
 static DynExprId reflection_expr(DynAstFunction *a, DynExprKind kind,
                                  DynType type, uint64_t integer) {
@@ -898,7 +901,10 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     if (fn == UINT32_MAX) {
       if (find_local(a, e->span, s) == UINT32_MAX &&
           find_global(a, e->span, s) == UINT32_MAX) {
-        error_span(e->span, s, errors, "unknown function");
+        char message[256];error_span(e->span, s, errors,suggest_name(a,e->span,s,true,message,sizeof(message))?message:"unknown function");
+        for (uint32_t i = 0; i < e->item_count; ++i)
+          (void)check_expr(a, a->items[e->item_start + i].expression, s,
+                           errors, DYN_TYPE_INFER);
         return e->type = DYN_TYPE_ERROR;
       }
       DynSpan call_span = e->span;
@@ -985,9 +991,13 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     DynAstFnType *signature = p ? fn_type_info(a, p->pointee) : NULL;
     if (!signature) {
       error_span(call_span, s, errors, "call target must be function pointer");
+      for (uint32_t i = 0; i < item_count; ++i)
+        (void)check_expr(a, a->items[item_start + i].expression, s, errors,
+                         DYN_TYPE_INFER);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    if (item_count != signature->param_count)
+    if ((!signature->variadic && item_count != signature->param_count) ||
+        (signature->variadic && item_count < signature->param_count))
       error_span(call_span, s, errors,
                  "function pointer argument count mismatch");
     uint32_t count = item_count < signature->param_count
@@ -1005,6 +1015,27 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
                       "function pointer argument type mismatch", want, value);
       }
     }
+    if (signature->variadic)
+      for (uint32_t i = signature->param_count; i < item_count; ++i) {
+        DynAstItem *arg = &a->items[item_start + i];
+        DynType value = check_expr(a, arg->expression, s, errors,
+                                   DYN_TYPE_INFER);
+        DynType promoted = value;
+        if (value == DYN_TYPE_F32)
+          promoted = DYN_TYPE_F64;
+        else if (value == DYN_TYPE_I8 || value == DYN_TYPE_I16 ||
+                 value == DYN_TYPE_U8 || value == DYN_TYPE_U16)
+          promoted = DYN_TYPE_I32;
+        if (promoted != value && value != DYN_TYPE_ERROR)
+          arg->expression = convert_expr(a, arg->expression, promoted);
+        else if (value != DYN_TYPE_I32 && value != DYN_TYPE_U32 &&
+                 value != DYN_TYPE_I64 && value != DYN_TYPE_U64 &&
+                 value != DYN_TYPE_ISIZE && value != DYN_TYPE_USIZE &&
+                 value != DYN_TYPE_F64 && !dyn_type_is_pointer(value) &&
+                 value != DYN_TYPE_ERROR)
+          error_span(a->expressions[arg->expression].span, s, errors,
+                     "C variadic argument requires integer, float, or pointer");
+      }
     a->expressions[id].integer = p->pointee - DYN_TYPE_FN_BASE;
     return a->expressions[id].type = signature->return_type;
   }
@@ -1022,7 +1053,7 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
       e->integer = global;
       return e->type = a->globals[global].type;
     }
-    error_span(e->span, s, errors, "unknown name");
+    char message[256];error_span(e->span, s, errors,suggest_name(a,e->span,s,false,message,sizeof(message))?message:"unknown name");
     return e->type = DYN_TYPE_ERROR;
   }
   if (e->kind == DYN_EXPR_ARRAY) {
@@ -1107,32 +1138,6 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
       return e->type = DYN_TYPE_ERROR;
     }
     return e->type = DYN_TYPE_USIZE;
-  }
-  if (e->kind == DYN_EXPR_VARIADIC) {
-    if (current_function == UINT32_MAX ||
-        !a->functions[current_function].variadic ||
-        a->functions[current_function].foreign) {
-      error_span(e->span, s, errors,
-                 "#variadic is only valid inside a native variadic function");
-      return e->type = DYN_TYPE_ERROR;
-    }
-    uint32_t arg = UINT32_MAX, kind = UINT32_MAX;
-    for (uint32_t i = 0; i < a->struct_count; ++i)
-      if (span_is(a->structs[i].name, s, "VariadicArg")) arg = i;
-    for (uint32_t i = 0; i < a->enum_count; ++i)
-      if (span_is(a->enums[i].name, s, "VariadicKind")) kind = i;
-    if (arg == UINT32_MAX || kind == UINT32_MAX ||
-        a->structs[arg].field_count != 2 ||
-        a->fields[a->structs[arg].field_start].type != DYN_TYPE_ENUM_BASE + kind ||
-        !dyn_type_is_pointer(a->fields[a->structs[arg].field_start + 1].type)) {
-      error_span(e->span, s, errors, "compiler variadic ABI mismatch");
-      return e->type = DYN_TYPE_ERROR;
-    }
-    e->type = sema_intern_slice(a, DYN_TYPE_STRUCT_BASE + arg, true);
-    for (uint32_t i = 0; i < a->function_count; ++i)
-      if (a->functions[i].variadic && !a->functions[i].foreign)
-        a->functions[i].variadic_type = e->type;
-    return e->type;
   }
   if (e->kind == DYN_EXPR_TYPEOF) {
     DynType operand;
@@ -1327,6 +1332,8 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
   if (e->kind == DYN_EXPR_CAST) {
     DynType source = check_expr(a, e->left, s, errors, DYN_TYPE_INFER),
             target = (DynType)e->integer;
+    if (source == DYN_TYPE_ERROR)
+      return e->type = DYN_TYPE_ERROR;
     bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
     bool target_ptr = dyn_type_is_pointer(target) || target == DYN_TYPE_RAWPTR;
     bool valid = (numeric(source) && numeric(target)) ||
@@ -1334,7 +1341,11 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
                  (integer(source) && target_ptr) ||
                  source == target;
     if (!valid) {
-      error_span(e->span, s, errors, "invalid explicit cast");
+      char from[128], to[128], message[320];
+      type_name_into(a, source, s, from, sizeof(from));
+      type_name_into(a, target, s, to, sizeof(to));
+      snprintf(message, sizeof(message), "cannot cast %s to %s", from, to);
+      error_span(e->span, s, errors, message);
       return e->type = DYN_TYPE_ERROR;
     }
     return e->type = target;
@@ -1514,9 +1525,9 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     if (operand->kind == DYN_EXPR_NAME) {
       uint32_t fn = sema_find_function(a, operand->span, s);
       if (fn != UINT32_MAX) {
-        if (a->functions[fn].variadic) {
+        if (a->functions[fn].variadic && !a->functions[fn].foreign) {
           error_span(e->span, s, errors,
-                     "variadic function pointers are not implemented");
+                     "native variadic function pointers are not supported");
           return e->type = DYN_TYPE_ERROR;
         }
         e->kind = DYN_EXPR_FUNCTION;
@@ -1593,7 +1604,13 @@ static DynType check_expr(DynAstFunction *a, DynExprId id, const DynSource *s,
     }
   }
   if (left != right) {
-    error_span(e->span, s, errors, "mixed operand types require explicit cast");
+    char lhs[128], rhs[128], message[384];
+    type_name_into(a, left, s, lhs, sizeof(lhs));
+    type_name_into(a, right, s, rhs, sizeof(rhs));
+    snprintf(message, sizeof(message),
+             "operator has mismatched types %s and %s; cast one operand",
+             lhs, rhs);
+    error_span(e->span, s, errors, message);
     return e->type = DYN_TYPE_ERROR;
   }
   if (e->op == DYN_OP_LOGICAL_AND || e->op == DYN_OP_LOGICAL_OR) {

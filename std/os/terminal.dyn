@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 pub struct TerminalState { bytes: [60]u8 }
 pub struct TerminalSize { columns: usize, rows: usize, ok: bool }
 
@@ -78,3 +80,5 @@ pub fn unlock_pty(descriptor: isize) bool {
   unlock: i32 = 0
   return #syscall(16, descriptor, 1074025521, &unlock) >= 0
 }
+#target(kernel: linux)
+#target(kernel: linux)

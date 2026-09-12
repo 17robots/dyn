@@ -15,16 +15,28 @@ typedef struct {
   const DynInterface *interfaces;
   size_t interface_count;
   bool incremental_frontend;
+  bool thin_lto;
   const DynOptions *options;
   const char *compiler, *output, *root, *cache_root;
 } ModuleBuild;
+static bool command_available(const char *name) {
+  const char *path=getenv("PATH");if(!path)return false;
+  size_t name_length=strlen(name);
+  for(const char *at=path;*at;){const char *end=strchr(at,':');if(!end)end=at+strlen(at);
+    size_t length=(size_t)(end-at);char candidate[4096];
+    if(length+name_length+2<sizeof(candidate)){memcpy(candidate,at,length);candidate[length]='/';memcpy(candidate+length+1,name,name_length+1);if(!access(candidate,X_OK))return true;}
+    at=*end?end+1:end;
+  }return false;
+}
 static uint64_t path_hash(const char *s) {
   uint64_t h=UINT64_C(1469598103934665603);for(;*s;++s){h^=(unsigned char)*s;h*=UINT64_C(1099511628211);}return h;
 }
 static int build_module(const DynSources *sources,size_t first,size_t count,
                         void *raw,uint64_t *value) {
   ModuleBuild *b=raw;char object[4096],owner[32];
-  if(snprintf(object,sizeof(object),"%s.dynmod.%zu.o",b->output,first)>=(int)sizeof(object))return 2;
+  bool thin=b->thin_lto;
+  if(snprintf(object,sizeof(object),"%s.dynmod.%zu.%s",b->output,first,
+              thin?"bc":"o")>=(int)sizeof(object))return 2;
   char *full=realpath(sources->items[first].path,NULL);if(!full)return 2;
   char *slash=strrchr(full,'/');if(slash)*slash=0;
   if(!strcmp(full,b->root))strcpy(owner,"root");else snprintf(owner,sizeof(owner),"dyn_m%016llx",(unsigned long long)path_hash(full));
@@ -42,7 +54,7 @@ static int build_module(const DynSources *sources,size_t first,size_t count,
     input=&composed;
   }
   if(!result)result=dyn_codegen_module(input,object,NULL,NULL,b->options->release,
-                                       b->options->debug_info,owner);
+                                       b->options->debug_info,false,owner);
   dyn_source_free(&composed);
   if(!result)dyn_module_cache_store(sources,first,count,b->options,b->compiler,b->cache_root,object);
   return result;
@@ -163,6 +175,14 @@ int main(int argc, char **argv) {
     fprintf(stderr, "error: run cannot be combined with --no-link\n");
     return 2;
   }
+  if (run && o.shared) {
+    fprintf(stderr, "error: run cannot be combined with --shared\n");
+    return 2;
+  }
+  if (o.shared && o.no_link) {
+    fprintf(stderr, "error: --shared cannot be combined with --no-link\n");
+    return 2;
+  }
   if (!dyn_path_is_directory(o.input)) {
     fprintf(stderr, "error: input must be a module directory: '%s'\n", o.input);
     return 2;
@@ -172,7 +192,7 @@ int main(int argc, char **argv) {
             o.target);
     return 2;
   }
-  bool early_build = is_command(&o, "build") && !o.no_link && !o.emit_ir &&
+  bool early_build = is_command(&o, "build") && !o.shared && !o.no_link && !o.emit_ir &&
                      !o.emit_object && !o.emit_asm;
   if (early_build) {
     char *early_base = dyn_path_basename(o.input);
@@ -196,9 +216,13 @@ int main(int argc, char **argv) {
   }
   dyn_sources_free(&sources);
   sources = project_sources;
-  if (strcmp(dyn_target->kernel, "linux")) {
+  /* Windows has no numeric syscall ABI. Darwin's target runtime deliberately
+     exposes its stable BSD syscall shim, so target-gated Darwin adapters may
+     use native Darwin numbers. */
+  if (!strcmp(dyn_target->kernel, "windows")) {
     for (size_t i = 0; i < sources.count; ++i)
-      if (strstr(sources.items[i].text, "#syscall(")) {
+      if (dyn_source_target_enabled(&sources.items[i]) != 0 &&
+          strstr(sources.items[i].text, "#syscall(")) {
         fprintf(stderr,
                 "error: target '%s' does not provide target-mapped "
                 "#syscall numbers: %s\n", dyn_target->name,
@@ -251,7 +275,7 @@ int main(int argc, char **argv) {
     remove(run_output);
   }
   const char *output = run ? run_output : o.output ? o.output : base;
-  bool cacheable = !run && !o.no_link && !o.emit_ir && !o.emit_object &&
+  bool cacheable = !run && !o.shared && !o.no_link && !o.emit_ir && !o.emit_object &&
                    !o.emit_asm;
   if (cacheable && dyn_cache_hit(&sources, &o, argv[0], output)) {
     if (!o.quiet)
@@ -277,18 +301,21 @@ int main(int argc, char **argv) {
     bool incremental_frontend=prepared==0;
     if(prepared&&prepared!=3)result=prepared;
     if(!result)result=dyn_sources_merge(&sources,main_path,&module_source);
+    bool thin_lto=o.release&&!strcmp(o.target,"x86_64-linux")&&
+                  command_available("ld.lld");
     ModuleBuild context={.merged=&module_source,.interfaces=interfaces,
       .interface_count=interface_count,.incremental_frontend=incremental_frontend,
-      .options=&o,.compiler=argv[0],.output=output,.root=root,.cache_root=cache_root};
+      .thin_lto=thin_lto,.options=&o,.compiler=argv[0],.output=output,.root=root,.cache_root=cache_root};
     if(!result)result=dyn_build_plan_run(&sources,o.jobs,build_module,&context,&module_ids,&module_count);
     free(root);
     if(!result){module_objects=calloc(module_count,sizeof(*module_objects));if(!module_objects)result=2;}
-    for(size_t i=0;!result&&i<module_count;++i){module_objects[i]=malloc(4096);if(!module_objects[i]||snprintf(module_objects[i],4096,"%s.dynmod.%llu.o",output,(unsigned long long)module_ids[i])>=4096)result=2;}
+    bool thin=thin_lto;
+    for(size_t i=0;!result&&i<module_count;++i){module_objects[i]=malloc(4096);if(!module_objects[i]||snprintf(module_objects[i],4096,"%s.dynmod.%llu.%s",output,(unsigned long long)module_ids[i],thin?"bc":"o")>=4096)result=2;}
   }else{
     result = dyn_sources_merge(&sources, main_path, &module_source);
     if (!result) result = dyn_codegen_main(&module_source, object, o.emit_ir ? ir : NULL,
                                            o.emit_asm ? assembly : NULL, o.release,
-                                           o.debug_info);
+                                           o.debug_info, o.shared);
   }
   if (o.timings)
     fprintf(stderr, "timing codegen %.3f ms\n", elapsed_ms(phase));
@@ -296,7 +323,9 @@ int main(int argc, char **argv) {
   if(interfaces){for(size_t i=0;i<interface_count;++i)dyn_interface_free(&interfaces[i]);free(interfaces);}
   phase = timer_start();
   if (!result && !o.no_link)
-    result = modular ? dyn_link_executable_objects((const char *const *)module_objects,module_count,output,o.link_inputs,o.link_input_count,o.release,o.verbose)
+    result = o.shared ? dyn_link_shared(object, output, o.link_inputs,
+                                        o.link_input_count, o.verbose)
+             : modular ? dyn_link_executable_objects((const char *const *)module_objects,module_count,output,o.link_inputs,o.link_input_count,o.release,o.verbose)
                      : dyn_link_executable(object, output, o.link_inputs,o.link_input_count,o.release,o.verbose);
   if (!result && cacheable)
     dyn_cache_store(&sources, &o, argv[0], output);

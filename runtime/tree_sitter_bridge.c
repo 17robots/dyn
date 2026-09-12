@@ -75,6 +75,31 @@ uint32_t dyn_tree_cursor_end(const DynTreeCursor *cursor) {
   return ts_node_end_byte(ts_tree_cursor_current_node(&cursor->cursor));
 }
 
+bool dyn_tree_cursor_is_error(const DynTreeCursor *cursor) {
+  TSNode node = ts_tree_cursor_current_node(&cursor->cursor);
+  return ts_node_is_error(node) || ts_node_is_missing(node);
+}
+
+uint32_t dyn_tree_cursor_operator(const DynTreeCursor *cursor) {
+  TSNode node = ts_tree_cursor_current_node(&cursor->cursor);
+  for (uint32_t i = 0, count = ts_node_child_count(node); i < count; ++i) {
+    TSNode child = ts_node_child(node, i);
+    if (ts_node_is_named(child)) continue;
+    const char *op = ts_node_type(child);
+    static const char *operators[] = {
+      "", "=", ":=", "+", "-", "*", "/", "%", "==", "!=", "<",
+      "<=", ">", ">=", "&&", "||", "&", "|", "^", "<<", ">>", "!",
+      "~", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=",
+      ">>=", ".*",
+      "..", "..=",
+      "#cast", "#bitcast",
+    };
+    for (uint32_t j = 1; j < sizeof(operators) / sizeof(operators[0]); ++j)
+      if (strcmp(op, operators[j]) == 0) return j;
+  }
+  return 0;
+}
+
 uint32_t dyn_tree_cursor_kind(const DynTreeCursor *cursor) {
   /* Stable Dyn-facing IDs. Tree-sitter symbol numbers are generated details
      and change whenever grammar rules are added or removed. */
@@ -113,6 +138,9 @@ uint32_t dyn_tree_cursor_kind(const DynTreeCursor *cursor) {
       {"array_literal", 141},  {"bool_", 142},
       {"number_", 143},        {"string_", 144},
       {"char_", 145},          {"null_", 78},
+      {"variadic_param", 146}, {"extern_variable", 147},
+      {"type_pattern", 148},
+      {"variadic", 149},
       {"primitive", 49},       {"identifier", 1},
   };
   const char *name =

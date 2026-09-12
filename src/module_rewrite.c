@@ -312,6 +312,29 @@ static int edit_compare(const void *a, const void *b) {
   const Edit *x = a, *y = b;
   return x->start < y->start ? -1 : x->start > y->start ? 1 : 0;
 }
+static size_t original_offset(const DynSource *s, size_t offset) {
+  for (size_t i=0;i<s->span_count;++i) {
+    DynSourceSpan p=s->spans[i];
+    if(offset>=p.generated_start&&offset<=p.generated_end) {
+      size_t gn=p.generated_end-p.generated_start,on=p.original_end-p.original_start;
+      return p.original_start+(gn?(offset-p.generated_start)*on/gn:0);
+    }
+  }
+  return offset;
+}
+static bool add_span(DynSourceSpan **items,size_t *count,size_t gs,size_t ge,size_t os,size_t oe){
+  if(ge==gs&&oe==os)return true;
+  DynSourceSpan *p=realloc(*items,(*count+1)*sizeof(**items));
+  if(!p)return false;
+  *items=p;p[(*count)++]=(DynSourceSpan){gs,ge,os,oe};return true;
+}
+static bool copy_spans(const DynSource *s,DynSourceSpan **out,size_t *count,size_t from,size_t to,size_t at){
+  for(size_t i=0;i<s->span_count;++i){DynSourceSpan p=s->spans[i];size_t a=from>p.generated_start?from:p.generated_start,b=to<p.generated_end?to:p.generated_end;
+    if(a>=b)continue;
+    size_t os=original_offset(s,a),oe=original_offset(s,b);
+    if(!add_span(out,count,at+(a-from),at+(b-from),os,oe))return false;
+  }return true;
+}
 static bool apply_edits(DynSource *s, Edits *e) {
   if (!e->count)
     return true;
@@ -327,22 +350,30 @@ static bool apply_edits(DynSource *s, Edits *e) {
   char *out = malloc(size + 1);
   if (!out)
     return false;
+  if(!s->original_text){s->original_text=strdup(s->text);if(!s->original_text){free(out);return false;}s->original_length=s->length;
+    s->spans=malloc(sizeof(*s->spans));if(!s->spans){free(out);return false;}s->spans[0]=(DynSourceSpan){0,s->length,0,s->length};s->span_count=1;}
+  DynSourceSpan *spans=NULL;size_t span_count=0;
   size_t in = 0, at = 0;
   for (size_t i = 0; i < e->count; ++i) {
     size_t chunk = e->items[i].start - in;
+    if(!copy_spans(s,&spans,&span_count,in,e->items[i].start,at)){free(out);free(spans);return false;}
     memcpy(out + at, s->text + in, chunk);
     at += chunk;
     size_t n = strlen(e->items[i].text);
+    if(!add_span(&spans,&span_count,at,at+n,original_offset(s,e->items[i].start),original_offset(s,e->items[i].end))){free(out);free(spans);return false;}
     memcpy(out + at, e->items[i].text, n);
     at += n;
     in = e->items[i].end;
   }
+  if(!copy_spans(s,&spans,&span_count,in,s->length,at)){free(out);free(spans);return false;}
   memcpy(out + at, s->text + in, s->length - in);
   at += s->length - in;
   out[at] = 0;
   free(s->text);
+  free(s->spans);
   s->text = out;
   s->length = at;
+  s->spans=spans;s->span_count=span_count;
   return true;
 }
 static bool normalize_default_imports(DynSource *s) {

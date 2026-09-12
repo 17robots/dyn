@@ -16,7 +16,9 @@ void dyn_unwind_jump(DynUnwind *);
 void dyn_panic(const unsigned char *, uint64_t);
 
 static DynUnwindSlot *unwind_slot(int claim) {
-#if defined(DYN_AARCH64)
+#if defined(DYN_SINGLE_THREAD)
+  uint64_t tid = 1;
+#elif defined(DYN_AARCH64)
   uint64_t tid = (uint64_t)dyn_syscall6(178, 0, 0, 0, 0, 0, 0);
 #else
   uint64_t tid = (uint64_t)dyn_syscall6(186, 0, 0, 0, 0, 0, 0);
@@ -67,6 +69,25 @@ void *memset(void *destination, int value, size_t count) {
   unsigned char *bytes = destination;
   for (size_t i = 0; i < count; ++i)
     bytes[i] = (unsigned char)value;
+  return destination;
+}
+
+void *memcpy(void *destination, const void *source, size_t count) {
+  unsigned char *to = destination;
+  const unsigned char *from = source;
+  for (size_t i = 0; i < count; ++i) to[i] = from[i];
+  return destination;
+}
+
+void *memmove(void *destination, const void *source, size_t count) {
+  unsigned char *to = destination;
+  const unsigned char *from = source;
+  uintptr_t to_address = (uintptr_t)to, from_address = (uintptr_t)from;
+  if (to_address > from_address && to_address - from_address < count) {
+    for (size_t i = count; i; --i) to[i - 1] = from[i - 1];
+  } else {
+    for (size_t i = 0; i < count; ++i) to[i] = from[i];
+  }
   return destination;
 }
 

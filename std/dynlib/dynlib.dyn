@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 use "std/c"
 
 // POSIX dynamic-loader adapter. Handles and symbols are borrowed native pointers.
@@ -51,3 +53,5 @@ pub fn last_error(maximum: usize) c.BytesResult {
 pub fn error_bytes(error: *const u8, maximum: usize) c.BytesResult {
   return c.bytes_from_string(error, maximum)
 }
+#target(kernel: linux)
+#target(kernel: linux)

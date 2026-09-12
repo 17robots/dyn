@@ -389,7 +389,7 @@ static DynType intern_fn_type(DynAstFunction *a, const DynType *params,
                               uint32_t count, DynType result) {
   for (uint32_t i = 0; i < a->fn_type_count; ++i) {
     DynAstFnType *f = &a->fn_types[i];
-    if (f->return_type != result || f->param_count != count) {
+    if (f->return_type != result || f->param_count != count || f->variadic) {
       continue;
     }
     bool same = true;
@@ -407,7 +407,8 @@ static DynType intern_fn_type(DynAstFunction *a, const DynType *params,
   uint32_t start = (uint32_t)a->fn_type_param_count;
   for (uint32_t i = 0; i < count; ++i)
     a->fn_type_params[a->fn_type_param_count++] = params[i];
-  a->fn_types[a->fn_type_count] = (DynAstFnType){result, start, count};
+  a->fn_types[a->fn_type_count] =
+      (DynAstFnType){result, start, count, false};
   return DYN_TYPE_FN_BASE + a->fn_type_count++;
 }
 static DynSpan unqualified_span(DynSpan name, const DynSource *s) {
@@ -864,8 +865,6 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstFunction *a,
   } else if (!strcmp(k, "len")) {
     e.kind = DYN_EXPR_LEN;
     e.left = lower_expr(ts_node_named_child(node, 0), s, a, errors);
-  } else if (!strcmp(k, "variadic_args")) {
-    e.kind = DYN_EXPR_VARIADIC;
   } else if (!strcmp(k, "size") || !strcmp(k, "align") ||
              !strcmp(k, "typeof")) {
     e.kind = !strcmp(k, "size")    ? DYN_EXPR_SIZE
@@ -1692,8 +1691,11 @@ static bool layout_struct(uint32_t id, DynAstFunction *a, unsigned char *state,
   state[id] = 1;
   DynAstStruct *st = &a->structs[id];
   if (!st->field_count) {
-    diagnostic_span(st->span, s, errors, "empty struct layout is deferred");
-    return false;
+    /* Empty values occupy one byte. This keeps array elements and distinct
+       addresses representable without special zero-sized pointer rules. */
+    st->size = st->alignment = 1;
+    state[id] = 2;
+    return true;
   }
   uint64_t size = 0, max_align = st->packed ? 1 : 1;
   for (uint32_t i = 0; i < st->field_count; ++i) {
@@ -1989,7 +1991,8 @@ static void lower_function_bodies(TSNode root, const DynSource *s,
   }
 }
 bool dyn_ast_parse_source_owner(const DynSource *s, DynAstFunction *a,
-                                unsigned *errors, const char *owner_key) {
+                                unsigned *errors, const char *owner_key,
+                                bool allow_no_main) {
   memset(a, 0, sizeof(*a));
   TSParser *p = ts_parser_new();
   if (!p || !ts_parser_set_language(p, tree_sitter_dyn())) {
@@ -2014,9 +2017,9 @@ bool dyn_ast_parse_source_owner(const DynSource *s, DynAstFunction *a,
       found = true;
   ts_tree_delete(t);
   ts_parser_delete(p);
-  return owner_key && strcmp(owner_key, "root") ? true : found;
+  return allow_no_main || (owner_key && strcmp(owner_key, "root")) || found;
 }
 bool dyn_ast_parse_main_source(const DynSource *s, DynAstFunction *a,
                                unsigned *errors) {
-  return dyn_ast_parse_source_owner(s, a, errors, NULL);
+  return dyn_ast_parse_source_owner(s, a, errors, NULL, false);
 }

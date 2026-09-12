@@ -1,10 +1,12 @@
 .section .text._start,"ax",%progbits
+#ifndef DYN_SHARED
 .global _start
 .type _start,%function
 _start:
     bl main
     mov x8, #93
     svc #0
+#endif
 
 .section .text.dyn_panic,"ax",%progbits
 .global dyn_panic
@@ -111,3 +113,28 @@ dyn_atomic_fetch_add_u64:
 dyn_atomic_compare_exchange_u64:
 1:  ldaxr x3, [x0]; cmp x3, x1; b.ne 2f; stlxr w4, x2, [x0]; cbnz w4, 1b; mov w0, #1; ret
 2:  clrex; mov w0, #0; ret
+
+// clone-based thread. Caller owns stack until join completes.
+// isize dyn_thread_spawn(void *base, usize size, fn, context, u32 *tid)
+.section .text.dyn_thread_spawn,"ax",%progbits
+.global dyn_thread_spawn
+.type dyn_thread_spawn,%function
+dyn_thread_spawn:
+    add x1, x0, x1
+    and x1, x1, #-16
+    sub x1, x1, #16
+    stp x2, x3, [x1]
+    mov x2, x4
+    mov x3, xzr
+    mov x0, #0x0f00
+    movk x0, #0x35, lsl #16
+    mov x8, #220
+    svc #0
+    cbz x0, .Ldyn_thread_child
+    ret
+.Ldyn_thread_child:
+    ldp x9, x0, [sp]
+    blr x9
+    mov x8, #93
+    svc #0
+    brk #0

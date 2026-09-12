@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 // Linux epoll. Event keeps kernel's packed 12-byte ABI while helpers hide layout.
 pub const EventReadable: u32 = 1
 pub const EventWritable: u32 = 4
@@ -57,9 +59,30 @@ pub fn event_control(queue: isize, operation: usize, descriptor: isize, value: *
   return result(#syscall(233, queue, operation, descriptor, value))
 }
 
+// Registration helpers keep epoll's operation numbers and remove-event pointer
+// convention out of application code. `data` is returned unchanged by event_wait.
+pub fn event_add(queue: isize, descriptor: isize, events: u32, data: u64) Result {
+  value := event(events, data)
+  return event_control(queue, EventAdd, descriptor, &value)
+}
+
+pub fn event_modify(queue: isize, descriptor: isize, events: u32, data: u64) Result {
+  value := event(events, data)
+  return event_control(queue, EventModify, descriptor, &value)
+}
+
+pub fn event_remove(queue: isize, descriptor: isize) Result {
+  // Linux ignores this argument for EPOLL_CTL_DEL, but using valid storage keeps
+  // the language-level pointer contract explicit.
+  value := Event{}
+  return event_control(queue, EventRemove, descriptor, &value)
+}
+
 pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Result {
   if #len(events) == 0 { return Result{ value: -1, error: -22, ok: false } }
   value := #syscall(232, queue, &events[0], #len(events), timeout_milliseconds)
   for value == -4 { value = #syscall(232, queue, &events[0], #len(events), timeout_milliseconds) }
   return result(value)
 }
+#target(kernel: linux)
+#target(kernel: linux)

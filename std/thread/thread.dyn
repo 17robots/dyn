@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 pub struct Thread { tid: AtomicU32 }
 
 extern fn spawn_raw "dyn_thread_spawn"(stack: *u8, size: usize, entry: *fn(rawptr) isize, context: rawptr, tid: *AtomicU32) isize
@@ -22,3 +24,5 @@ pub fn join(thread: *Thread) isize {
 
 pub fn id(thread: *const Thread) u32 { return load_u32(&thread.tid) }
 pub fn yield_now() isize { return #syscall(24) }
+#target(kernel: linux)
+#target(kernel: linux)

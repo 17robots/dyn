@@ -76,6 +76,7 @@ typedef struct {
 typedef struct {
   DynType return_type;
   uint32_t param_start, param_count;
+  bool variadic;
 } DynIrFnType;
 typedef struct {
   unsigned char *data;

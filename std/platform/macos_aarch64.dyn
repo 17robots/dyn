@@ -1,0 +1,49 @@
+#target(arch: aarch64, kernel: darwin, abi: aapcs)
+
+pub struct IoResult { value: isize, error: isize, ok: bool }
+pub struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }
+pub const has_native_threads: bool = false
+pub fn io_value(result: *const IoResult) isize { return result.value }
+fn io_result(value: isize) IoResult {
+  if value < 0 { return IoResult{ value: value, error: value, ok: false } }
+  return IoResult{ value: value, error: 0, ok: true }
+}
+fn terminated(path: []const u8, storage: []u8) *u8 {
+  if #len(path) >= #len(storage) { return nil }
+  i: usize = 0
+  for i < #len(path) { storage[i] = path[i]
+    i += 1
+  }
+  storage[#len(path)] = 0
+  return &storage[0]
+}
+pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
+  storage: [4096]u8 = []
+  name := terminated(path, storage[..])
+  if name == nil { return IoResult{ value: -1, error: -63, ok: false } }
+  flags: usize = 0
+  if write_access { flags = 2 }
+  if create { flags = flags | 512 }
+  return io_result(#syscall(5, name, flags, 420))
+}
+pub fn file_close(handle: isize) IoResult { return io_result(#syscall(6, handle)) }
+pub fn page_allocate(size: usize) []u8 {
+  if size == 0 { #panic("page allocation size must be non-zero") }
+  address := #syscall(197, 0, size, 3, 4098, -1, 0)
+  if address < 0 { #panic("page allocation failed") }
+  return (#cast(*u8) address)[..size]
+}
+pub fn page_release(memory: []u8) {
+  if #len(memory) > 0 && #syscall(73, &memory[0], #len(memory)) != 0 { #panic("page release failed") }
+}
+pub fn thread_yield() { _ = #syscall(331, 1) }
+pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult { return io_result(#syscall(97, family, kind, protocol)) }
+pub fn socket_close(socket: usize) bool { return #syscall(6, socket) == 0 }
+pub fn socket_connect(socket: usize, address: []const u8) bool {
+  if #len(address) == 0 { return false }
+  return #syscall(98, socket, &address[0], #len(address)) == 0
+}
+pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
+  if #len(items) == 0 { return 0 }
+  return #syscall(230, &items[0], #len(items), milliseconds)
+}

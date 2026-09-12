@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 pub fn arguments(arena: *mem.Arena) [][]const u8 {
   byte_capacity: usize = #cast(usize) 16384
   argument_capacity: usize = #cast(usize) 128
@@ -140,3 +142,5 @@ pub fn exit_process(status: u8) {
   _ = #syscall(60, status)
   #panic("exit syscall returned")
 }
+#target(kernel: linux)
+#target(kernel: linux)

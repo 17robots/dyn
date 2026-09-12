@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 use "std/mem"
 
 
@@ -413,3 +415,5 @@ pub fn try_read_file(arena: *mem.Arena, path: []const u8) ReadFileResult {
   _ = #syscall(3, descriptor)
   return ReadFileResult{ value: destination[..offset], error: 0, ok: true }
 }
+#target(kernel: linux)
+#target(kernel: linux)

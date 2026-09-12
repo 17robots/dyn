@@ -1,3 +1,5 @@
+#target(kernel: linux)
+
 pub struct Condition { sequence: AtomicU32 }
 pub struct Semaphore { count: AtomicU32 }
 pub struct Once { state: AtomicU32 }
@@ -50,3 +52,5 @@ pub fn once_complete(value: *Once) {
   if exchange_u32(&value.state, 2) != 1 { #panic("once_complete without once_begin") }
   _ = #syscall(202, &value.state, 1, 2147483647, 0, 0, 0)
 }
+#target(kernel: linux)
+#target(kernel: linux)
