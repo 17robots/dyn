@@ -1,0 +1,47 @@
+pub struct Scanner { source: []const u8, offset: usize, line: usize, column: usize }
+
+pub fn scanner(source: []const u8) Scanner {
+  return Scanner{ source: source, line: 1, column: 1 }
+}
+
+pub fn finished(state: *const Scanner) bool { return state.offset == #len(state.source) }
+pub fn rest(state: *const Scanner) []const u8 { return state.source[state.offset..] }
+
+pub fn advance(state: *Scanner, amount: usize) bool {
+  if amount > #len(state.source) - state.offset { return false }
+  end := state.offset + amount
+  for state.offset < end {
+    if state.source[state.offset] == '\n' { state.line += 1 state.column = 1 }
+    else { state.column += 1 }
+    state.offset += 1
+  }
+  return true
+}
+
+pub fn next_line(state: *Scanner, output: *[]const u8) bool {
+  if finished(state) { return false }
+  start := state.offset
+  for state.offset < #len(state.source) && state.source[state.offset] != '\n' { state.offset += 1 state.column += 1 }
+  end := state.offset
+  if end > start && state.source[end - 1] == '\r' { end -= 1 }
+  output.* = state.source[start..end]
+  if state.offset < #len(state.source) { state.offset += 1 state.line += 1 state.column = 1 }
+  return true
+}
+
+pub fn next_field(state: *Scanner, output: *[]const u8) bool {
+  for state.offset < #len(state.source) {
+    byte := state.source[state.offset]
+    if byte != ' ' && byte != '\t' && byte != '\n' && byte != '\r' { break }
+    _ = advance(state, 1)
+  }
+  if finished(state) { return false }
+  start := state.offset
+  for state.offset < #len(state.source) {
+    field_byte := state.source[state.offset]
+    if field_byte == ' ' || field_byte == '\t' || field_byte == '\n' || field_byte == '\r' { break }
+    _ = advance(state, 1)
+  }
+  output.* = state.source[start..state.offset]
+  return true
+}

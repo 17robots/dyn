@@ -1,0 +1,42 @@
+use "std/time" clock
+
+pub fn expect(condition: bool, message: []const u8) { if !condition { #panic(message) } }
+pub fn expect_false(condition: bool, message: []const u8) { if condition { #panic(message) } }
+pub fn equal_bytes(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0 for i < #len(left) { if left[i] != right[i] { return false } i += 1 }
+  return true
+}
+pub fn expect_equal_bytes(left: []const u8, right: []const u8, message: []const u8) { if !equal_bytes(left, right) { #panic(message) } }
+pub fn expect_equal_i64(left: i64, right: i64, message: []const u8) { if left != right { #panic(message) } }
+pub fn expect_equal_u64(left: u64, right: u64, message: []const u8) { if left != right { #panic(message) } }
+pub fn expect_equal_usize(left: usize, right: usize, message: []const u8) { if left != right { #panic(message) } }
+pub fn expect_equal_isize(left: isize, right: isize, message: []const u8) { if left != right { #panic(message) } }
+pub fn expect_equal_bool(left: bool, right: bool, message: []const u8) { if left != right { #panic(message) } }
+
+pub struct Random { state: u64 }
+pub fn random(seed_value: u64) Random {
+  actual := seed_value if actual == 0 { actual = 11400714819323198485 }
+  return Random{ state: actual }
+}
+pub fn random_next(generator: *Random) u64 {
+  random_value := generator.state
+  random_value = random_value ^ (random_value << 13) random_value = random_value ^ (random_value >> 7) random_value = random_value ^ (random_value << 17)
+  generator.state = random_value return random_value
+}
+pub fn random_below(generator: *Random, bound: usize) usize {
+  if bound == 0 { return 0 }
+  return #cast(usize) (random_next(generator) % #cast(u64) bound)
+}
+
+pub struct Benchmark { started: clock.Instant, iterations: usize }
+pub fn benchmark_start(iterations: usize) Benchmark { return Benchmark{ started: clock.monotonic_now(), iterations: iterations } }
+pub fn benchmark_elapsed(benchmark: *const Benchmark) i64 {
+  duration := clock.elapsed(benchmark.started, clock.monotonic_now())
+  if !duration.ok { return 0 }
+  return duration.value
+}
+pub fn benchmark_nanoseconds_each(benchmark: *const Benchmark) i64 {
+  if benchmark.iterations == 0 { return 0 }
+  return benchmark_elapsed(benchmark) / #cast(i64) benchmark.iterations
+}

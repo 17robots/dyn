@@ -1,0 +1,50 @@
+// Stable public categories. Compiler-private identity remains hidden.
+pub enum Kind {
+  Invalid,
+  None,
+  Bool,
+  Integer,
+  Float,
+  Pointer,
+  Array,
+  Slice,
+  Struct,
+  Enum,
+  Function,
+}
+
+// Ensures the compiler emits its stable TypeInfo ABI while this module is compiled independently.
+fn reflection_prelude_anchor() TypeInfo { return #typeof(u8) }
+
+// Bridge existing compiler metadata into public reflection vocabulary.
+pub fn category(info: TypeInfo) Kind {
+  case info.kind {
+    TypeKind.Void => { return Kind.None },
+    TypeKind.Bool => { return Kind.Bool },
+    TypeKind.Integer => { return Kind.Integer },
+    TypeKind.Float => { return Kind.Float },
+    TypeKind.Pointer => { return Kind.Pointer },
+    TypeKind.Array => { return Kind.Array },
+    TypeKind.Slice => { return Kind.Slice },
+    TypeKind.Struct => { return Kind.Struct },
+    TypeKind.Enum => { return Kind.Enum },
+    TypeKind.Function => { return Kind.Function },
+    _ => { return Kind.Invalid },
+  }
+}
+
+pub fn same(left: TypeInfo, right: TypeInfo) bool { return left.id == right.id }
+pub fn is_number(info: TypeInfo) bool {
+  value_category := category(info)
+  return value_category == Kind.Integer || value_category == Kind.Float
+}
+pub fn is_aggregate(info: TypeInfo) bool {
+  value_category := category(info)
+  return value_category == Kind.Array || value_category == Kind.Slice || value_category == Kind.Struct
+}
+pub fn element_is(info: TypeInfo, element: TypeInfo) bool {
+  return info.element_id != 0 && info.element_id == element.id
+}
+pub fn result_is(info: TypeInfo, result: TypeInfo) bool {
+  return info.result_id != 0 && info.result_id == result.id
+}

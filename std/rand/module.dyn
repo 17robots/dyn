@@ -1,0 +1,29 @@
+// Deterministic caller-owned PRNG. Not suitable for cryptography.
+
+pub struct State { value: u64 }
+
+pub fn seeded(seed: u64) State {
+  seed %= 2147483647
+  if seed == 0 { seed = 1 }
+  return State{ value: seed }
+}
+
+pub fn next_u64(state: *State) u64 {
+  state.value = (state.value * 48271) % 2147483647
+  return state.value
+}
+
+// Unbiased result in [0, limit). Limits above generator range are rejected.
+pub fn below(state: *State, limit: u64, output: *u64) bool {
+  range: u64 = 2147483646
+  if limit == 0 || limit > range { return false }
+  usable := range - range % limit
+  value := next_u64(state) - 1
+  for value >= usable { value = next_u64(state) - 1 }
+  output.* = value % limit
+  return true
+}
+
+pub fn fill(state: *State, destination: []u8) {
+  for *byte in destination { byte.* = #cast(u8) (next_u64(state) % 256) }
+}

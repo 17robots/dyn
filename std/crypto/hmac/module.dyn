@@ -1,0 +1,5 @@
+use "std/crypto/core" crypto_core
+
+pub fn sha256(destination: []u8, key: []const u8, message: []const u8) []u8 {
+  return crypto_core.hmac_sha256(destination, key, message)
+}

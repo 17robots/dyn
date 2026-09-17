@@ -1,0 +1,160 @@
+// Semantic Versioning 2.0 values. Prerelease/build slices borrow input.
+
+pub struct Version {
+  major: u32,
+  minor: u32,
+  patch: u32,
+  prerelease: []const u8,
+  build: []const u8,
+}
+
+pub struct ParseResult { version: Version, offset: usize, ok: bool }
+
+fn identifier_byte(byte: u8) bool {
+  return (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'z') ||
+    (byte >= 'A' && byte <= 'Z') || byte == '-'
+}
+
+fn parse_number(text: []const u8, offset: *usize, output: *u32) bool {
+  start := offset.*
+  for offset.* < #len(text) && text[offset.*] >= '0' && text[offset.*] <= '9' { offset.* += 1 }
+  if offset.* == start || (offset.* - start > 1 && text[start] == '0') { return false }
+  value: u64 = 0
+  i := start
+  for i < offset.* {
+    value = value * 10 + #cast(u64) (text[i] - '0')
+    if value > 4294967295 { return false }
+    i += 1
+  }
+  output.* = #cast(u32) value
+  return true
+}
+
+fn valid_identifiers(text: []const u8, prerelease: bool) bool {
+  if #len(text) == 0 { return false }
+  start: usize = 0
+  i: usize = 0
+  for i <= #len(text) {
+    if i == #len(text) || text[i] == '.' {
+      if i == start { return false }
+      numeric := true
+      j := start
+      for j < i {
+        if !identifier_byte(text[j]) { return false }
+        if text[j] < '0' || text[j] > '9' { numeric = false }
+        j += 1
+      }
+      if prerelease && numeric && i - start > 1 && text[start] == '0' { return false }
+      start = i + 1
+    }
+    i += 1
+  }
+  return true
+}
+
+pub fn parse(text: []const u8) ParseResult {
+  at: usize = 0
+  version: Version
+  if !parse_number(text, &at, &version.major) { return ParseResult{ offset: at, ok: false } }
+  if at == #len(text) || text[at] != '.' { return ParseResult{ offset: at, ok: false } }
+  at += 1
+  if !parse_number(text, &at, &version.minor) { return ParseResult{ offset: at, ok: false } }
+  if at == #len(text) || text[at] != '.' { return ParseResult{ offset: at, ok: false } }
+  at += 1
+  if !parse_number(text, &at, &version.patch) { return ParseResult{ offset: at, ok: false } }
+  if at < #len(text) && text[at] == '-' {
+    at += 1
+    prerelease_start := at
+    for at < #len(text) && text[at] != '+' { at += 1 }
+    version.prerelease = text[prerelease_start..at]
+    if !valid_identifiers(version.prerelease, true) { return ParseResult{ offset: prerelease_start, ok: false } }
+  }
+  if at < #len(text) && text[at] == '+' {
+    at += 1
+    build_start := at
+    at = #len(text)
+    version.build = text[build_start..at]
+    if !valid_identifiers(version.build, false) { return ParseResult{ offset: build_start, ok: false } }
+  }
+  if at != #len(text) { return ParseResult{ offset: at, ok: false } }
+  return ParseResult{ version: version, offset: at, ok: true }
+}
+
+fn bytes_compare(a: []const u8, b: []const u8) i32 {
+  shared := #len(a)
+  if #len(b) < shared { shared = #len(b) }
+  i: usize = 0
+  for i < shared {
+    if a[i] < b[i] { return -1 }
+    if a[i] > b[i] { return 1 }
+    i += 1
+  }
+  if #len(a) < #len(b) { return -1 }
+  if #len(a) > #len(b) { return 1 }
+  return 0
+}
+
+fn numeric_identifier(value: []const u8) bool {
+  for byte in value { if byte < '0' || byte > '9' { return false } }
+  return true
+}
+
+fn next_identifier(text: []const u8, offset: *usize) []const u8 {
+  start := offset.*
+  for offset.* < #len(text) && text[offset.*] != '.' { offset.* += 1 }
+  result := text[start..offset.*]
+  if offset.* < #len(text) { offset.* += 1 }
+  return result
+}
+
+fn compare_prerelease(a: []const u8, b: []const u8) i32 {
+  if #len(a) == 0 && #len(b) == 0 { return 0 }
+  if #len(a) == 0 { return 1 }
+  if #len(b) == 0 { return -1 }
+  a_at: usize = 0 b_at: usize = 0
+  for a_at < #len(a) && b_at < #len(b) {
+    left := next_identifier(a, &a_at) right := next_identifier(b, &b_at)
+    left_numeric := numeric_identifier(left) right_numeric := numeric_identifier(right)
+    if left_numeric && !right_numeric { return -1 }
+    if !left_numeric && right_numeric { return 1 }
+    comparison: i32 = 0
+    if left_numeric {
+      if #len(left) < #len(right) { comparison = -1 }
+      else if #len(left) > #len(right) { comparison = 1 }
+      else { comparison = bytes_compare(left, right) }
+    } else { comparison = bytes_compare(left, right) }
+    if comparison != 0 { return comparison }
+  }
+  if a_at < #len(a) { return 1 }
+  if b_at < #len(b) { return -1 }
+  return 0
+}
+
+// Build metadata does not affect precedence.
+pub fn compare(a, b: Version) i32 {
+  if a.major < b.major { return -1 } if a.major > b.major { return 1 }
+  if a.minor < b.minor { return -1 } if a.minor > b.minor { return 1 }
+  if a.patch < b.patch { return -1 } if a.patch > b.patch { return 1 }
+  return compare_prerelease(a.prerelease, b.prerelease)
+}
+
+pub struct Range {
+  minimum: Version,
+  maximum: Version,
+  has_minimum: bool,
+  has_maximum: bool,
+  include_minimum: bool,
+  include_maximum: bool,
+}
+
+pub fn contains(range: *const Range, version: Version) bool {
+  if range.has_minimum {
+    lower := compare(version, range.minimum)
+    if lower < 0 || (lower == 0 && !range.include_minimum) { return false }
+  }
+  if range.has_maximum {
+    upper := compare(version, range.maximum)
+    if upper > 0 || (upper == 0 && !range.include_maximum) { return false }
+  }
+  return true
+}

@@ -1,0 +1,167 @@
+pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, ok: bool }
+pub struct Result { info: Info, pixels: []u8, error: isize, ok: bool }
+pub struct EncodeResult { data: []u8, error: isize, ok: bool }
+
+fn u32be(source: []const u8, at: usize) u32 {
+  a: u32 = #cast(u32) source[at]
+  b: u32 = #cast(u32) source[at + 1]
+  c: u32 = #cast(u32) source[at + 2]
+  d: u32 = #cast(u32) source[at + 3]
+  return a * 16777216 + b * 65536 + c * 256 + d
+}
+
+pub fn inspect(source: []const u8) Info {
+  if #len(source) < 22 || source[0] != 'q' || source[1] != 'o' || source[2] != 'i' || source[3] != 'f' { return Info{} }
+  width := u32be(source, 4)
+  height := u32be(source, 8)
+  channels := source[12]
+  if width == 0 || height == 0 || (channels != 3 && channels != 4) || source[13] > 1 { return Info{} }
+  return Info{ width: width, height: height, channels: channels, srgb: source[13] == 0, ok: true }
+}
+
+fn packed(r: u8, g: u8, b: u8, a: u8) u32 {
+  return #cast(u32) r * 16777216 + #cast(u32) g * 65536 + #cast(u32) b * 256 + #cast(u32) a
+}
+
+fn hash(r: u8, g: u8, b: u8, a: u8) usize {
+  return (#cast(usize) r * 3 + #cast(usize) g * 5 + #cast(usize) b * 7 + #cast(usize) a * 11) % 64
+}
+
+fn add(byte_value: u8, amount: i16) u8 {
+  wide: i16 = #cast(i16) byte_value + amount
+  if wide < 0 { wide += 256 }
+  if wide > 255 { wide -= 256 }
+  return #cast(u8) wide
+}
+
+// Decodes QOI into caller-owned RGBA8 storage.
+pub fn decode(destination: []u8, source: []const u8) Result {
+  info := inspect(source)
+  if !info.ok { return Result{ error: -22 } }
+  count := #cast(usize) info.width * #cast(usize) info.height
+  if info.width != 0 && count / #cast(usize) info.width != #cast(usize) info.height { return Result{ error: -75 } }
+  if count > #len(destination) / 4 { return Result{ info: info, error: -28 } }
+  table: [64]u32 = []
+  red: u8 = 0
+  green: u8 = 0
+  blue: u8 = 0
+  alpha: u8 = 255
+  input: usize = 14
+  output: usize = 0
+  run: usize = 0
+  for output < count {
+    if run > 0 { run -= 1 }
+    else {
+      if input >= #len(source) - 8 { return Result{ info: info, error: -74 } }
+      tag := source[input]
+      input += 1
+      if tag == 254 {
+        if input + 3 > #len(source) - 8 { return Result{ info: info, error: -74 } }
+        red = source[input] green = source[input + 1] blue = source[input + 2] input += 3
+      } else if tag == 255 {
+        if input + 4 > #len(source) - 8 { return Result{ info: info, error: -74 } }
+        red = source[input] green = source[input + 1] blue = source[input + 2] alpha = source[input + 3] input += 4
+      } else if (tag & 192) == 0 {
+        indexed_pixel := table[#cast(usize) (tag & 63)]
+        red = #cast(u8) (indexed_pixel >> 24) green = #cast(u8) (indexed_pixel >> 16)
+        blue = #cast(u8) (indexed_pixel >> 8) alpha = #cast(u8) indexed_pixel
+      } else if (tag & 192) == 64 {
+        red = add(red, #cast(i16) ((tag >> 4) & 3) - 2)
+        green = add(green, #cast(i16) ((tag >> 2) & 3) - 2)
+        blue = add(blue, #cast(i16) (tag & 3) - 2)
+      } else if (tag & 192) == 128 {
+        if input == #len(source) - 8 { return Result{ info: info, error: -74 } }
+        second := source[input] input += 1
+        dg: i16 = #cast(i16) (tag & 63) - 32
+        red = add(red, dg - 8 + #cast(i16) (second >> 4))
+        green = add(green, dg)
+        blue = add(blue, dg - 8 + #cast(i16) (second & 15))
+      } else { run = #cast(usize) (tag & 63) }
+      table[hash(red, green, blue, alpha)] = packed(red, green, blue, alpha)
+    }
+    at := output * 4
+    destination[at] = red destination[at + 1] = green destination[at + 2] = blue destination[at + 3] = alpha
+    output += 1
+  }
+  return Result{ info: info, pixels: destination[..count * 4], ok: true }
+}
+
+fn put_u32be(destination: []u8, at: usize, number: u32) {
+  destination[at] = #cast(u8) (number >> 24)
+  destination[at + 1] = #cast(u8) (number >> 16)
+  destination[at + 2] = #cast(u8) (number >> 8)
+  destination[at + 3] = #cast(u8) number
+}
+
+fn delta(current: u8, previous: u8) i16 {
+  difference: i16 = #cast(i16) current - #cast(i16) previous
+  if difference > 127 { difference -= 256 }
+  if difference < -128 { difference += 256 }
+  return difference
+}
+
+// Encodes tightly packed RGB8 or RGBA8 pixels into caller-owned storage.
+pub fn encode(destination: []u8, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
+  if width == 0 || height == 0 || (channels != 3 && channels != 4) { return EncodeResult{ error: -22 } }
+  count := #cast(usize) width * #cast(usize) height
+  if count / #cast(usize) width != #cast(usize) height || count > #len(pixels) / #cast(usize) channels ||
+    #len(pixels) != count * #cast(usize) channels || #len(destination) < 22 { return EncodeResult{ error: -28 } }
+  destination[0] = 'q' destination[1] = 'o' destination[2] = 'i' destination[3] = 'f'
+  put_u32be(destination, 4, width) put_u32be(destination, 8, height)
+  destination[12] = channels destination[13] = 1 if srgb { destination[13] = 0 }
+  table: [64]u32 = []
+  previous_red: u8 = 0 previous_green: u8 = 0 previous_blue: u8 = 0 previous_alpha: u8 = 255
+  output: usize = 14
+  run: usize = 0
+  pixel: usize = 0
+  for pixel < count {
+    at := pixel * #cast(usize) channels
+    red := pixels[at] green := pixels[at + 1] blue := pixels[at + 2] alpha := previous_alpha
+    if channels == 4 { alpha = pixels[at + 3] }
+    if red == previous_red && green == previous_green && blue == previous_blue && alpha == previous_alpha {
+      run += 1
+      if run == 62 || pixel + 1 == count {
+        if output == #len(destination) { return EncodeResult{ error: -28 } }
+        destination[output] = 192 | #cast(u8) (run - 1) output += 1 run = 0
+      }
+    } else {
+      if run > 0 {
+        if output == #len(destination) { return EncodeResult{ error: -28 } }
+        destination[output] = 192 | #cast(u8) (run - 1) output += 1 run = 0
+      }
+      index := hash(red, green, blue, alpha)
+      packed_value := packed(red, green, blue, alpha)
+      if table[index] == packed_value {
+        if output == #len(destination) { return EncodeResult{ error: -28 } }
+        destination[output] = #cast(u8) index output += 1
+      } else {
+        table[index] = packed_value
+        red_delta := delta(red, previous_red) green_delta := delta(green, previous_green)
+        blue_delta := delta(blue, previous_blue)
+        red_green := red_delta - green_delta blue_green := blue_delta - green_delta
+        if alpha == previous_alpha && red_delta >= -2 && red_delta <= 1 && green_delta >= -2 && green_delta <= 1 && blue_delta >= -2 && blue_delta <= 1 {
+          if output == #len(destination) { return EncodeResult{ error: -28 } }
+          destination[output] = 64 | #cast(u8) ((red_delta + 2) << 4) | #cast(u8) ((green_delta + 2) << 2) | #cast(u8) (blue_delta + 2)
+          output += 1
+        } else if alpha == previous_alpha && green_delta >= -32 && green_delta <= 31 && red_green >= -8 && red_green <= 7 && blue_green >= -8 && blue_green <= 7 {
+          if output + 2 > #len(destination) { return EncodeResult{ error: -28 } }
+          destination[output] = 128 | #cast(u8) (green_delta + 32)
+          destination[output + 1] = #cast(u8) ((red_green + 8) << 4) | #cast(u8) (blue_green + 8)
+          output += 2
+        } else if alpha == previous_alpha {
+          if output + 4 > #len(destination) { return EncodeResult{ error: -28 } }
+          destination[output] = 254 destination[output + 1] = red destination[output + 2] = green destination[output + 3] = blue output += 4
+        } else {
+          if output + 5 > #len(destination) { return EncodeResult{ error: -28 } }
+          destination[output] = 255 destination[output + 1] = red destination[output + 2] = green destination[output + 3] = blue destination[output + 4] = alpha output += 5
+        }
+      }
+    }
+    previous_red = red previous_green = green previous_blue = blue previous_alpha = alpha
+    pixel += 1
+  }
+  if output + 8 > #len(destination) { return EncodeResult{ error: -28 } }
+  i: usize = 0 for i < 7 { destination[output + i] = 0 i += 1 }
+  destination[output + 7] = 1 output += 8
+  return EncodeResult{ data: destination[..output], ok: true }
+}

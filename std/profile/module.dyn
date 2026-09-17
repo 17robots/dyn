@@ -1,0 +1,46 @@
+use "std/time" clock
+
+// Caller-backed monotonic profiling. Event names are borrowed.
+pub struct Event {
+  name: []const u8,
+  started_nanoseconds: i64,
+  duration_nanoseconds: i64,
+}
+
+pub struct Span { name: []const u8, started: clock.Instant }
+
+pub struct Trace {
+  events: []Event,
+  count: usize,
+  dropped: usize,
+}
+
+pub fn trace(events: []Event) Trace {
+  return Trace{ events: events, count: 0, dropped: 0 }
+}
+
+pub fn begin(name: []const u8) Span {
+  return Span{ name: name, started: clock.monotonic_now() }
+}
+
+pub fn finish(destination: *Trace, span: Span) bool {
+  finished := clock.monotonic_now()
+  if destination.count == #len(destination.events) {
+    destination.dropped += 1
+    return false
+  }
+  duration := clock.elapsed(span.started, finished)
+  if !duration.ok { return false }
+  destination.events[destination.count] = Event{
+    name: span.name,
+    started_nanoseconds: span.started.seconds * clock.Second + span.started.nanoseconds,
+    duration_nanoseconds: duration.value,
+  }
+  destination.count += 1
+  return true
+}
+
+pub fn recorded(value: *Trace) []Event { return value.events[..value.count] }
+pub fn clear(value: *Trace) { value.count = 0
+  value.dropped = 0
+}

@@ -1,0 +1,33 @@
+pub struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }
+pub struct Cursor { source: []const u8, offset: usize }
+pub struct Result { element: Element, error_offset: usize, ok: bool }
+
+pub fn cursor(source: []const u8) Cursor { return Cursor{ source: source } }
+pub fn next(state: *Cursor) Result {
+  start := state.offset
+  if start + 2 > #len(state.source) { return Result{ error_offset: start } }
+  tag := state.source[start]
+  if (tag & 31) == 31 { return Result{ error_offset: start } }
+  at := start + 1
+  first_length := state.source[at] at += 1
+  length: usize = 0
+  if first_length < 128 { length = #cast(usize) first_length }
+  else {
+    count := #cast(usize) (first_length & 127)
+    if count == 0 || count > #sizeof(usize) || at + count > #len(state.source) { return Result{ error_offset: at - 1 } }
+    if state.source[at] == 0 { return Result{ error_offset: at } }
+    i: usize = 0
+    for i < count {
+      if length > (18446744073709551615 - #cast(usize) state.source[at + i]) / 256 { return Result{ error_offset: at + i } }
+      length = length * 256 + #cast(usize) state.source[at + i] i += 1
+    }
+    if length < 128 { return Result{ error_offset: at } }
+    at += count
+  }
+  if length > #len(state.source) - at { return Result{ error_offset: at } }
+  finish := at + length
+  state.offset = finish
+  return Result{ element: Element{ tag: tag, content: state.source[at..finish], encoded: state.source[start..finish], constructed: (tag & 32) != 0 }, ok: true }
+}
+pub fn enter(element: Element) Cursor { return cursor(element.content) }
+pub fn finished(state: *const Cursor) bool { return state.offset == #len(state.source) }

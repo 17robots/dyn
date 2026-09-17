@@ -423,8 +423,9 @@ LLVMValueRef dyn_llvm_coerce_integer(LLVMBuilderRef builder, LLVMValueRef value,
   return LLVMBuildZExt(builder, value, type, "int.cast");
 }
 
-int dyn_llvm_emit_object(LLVMModuleRef module, const unsigned char *path,
-                         size_t path_length, unsigned release) {
+static int dyn_llvm_emit_object_for_target(LLVMModuleRef module,
+    const unsigned char *path, size_t path_length, unsigned release,
+    const char *triple) {
   if (!path || path_length == 0 || path_length >= 4096) {
     return 1;
   }
@@ -435,10 +436,11 @@ int dyn_llvm_emit_object(LLVMModuleRef module, const unsigned char *path,
   LLVMInitializeX86Target();
   LLVMInitializeX86TargetMC();
   LLVMInitializeX86AsmPrinter();
-  char *triple = LLVMGetDefaultTargetTriple();
-  if (!triple) {
-    return 1;
-  }
+  LLVMInitializeAArch64TargetInfo();
+  LLVMInitializeAArch64Target();
+  LLVMInitializeAArch64TargetMC();
+  LLVMInitializeAArch64AsmPrinter();
+  if (!triple) return 1;
   LLVMSetTarget(module, triple);
   LLVMTargetRef target = NULL;
   char *error = NULL;
@@ -472,8 +474,17 @@ int dyn_llvm_emit_object(LLVMModuleRef module, const unsigned char *path,
   if (machine) {
     LLVMDisposeTargetMachine(machine);
   }
-  LLVMDisposeMessage(triple);
   return failed;
+}
+
+int dyn_llvm_emit_object(LLVMModuleRef module, const unsigned char *path,
+                         size_t path_length, unsigned release) {
+  char *triple = LLVMGetDefaultTargetTriple();
+  if (!triple) return 1;
+  int result = dyn_llvm_emit_object_for_target(module, path, path_length,
+                                               release, triple);
+  LLVMDisposeMessage(triple);
+  return result;
 }
 
 /* Self-host IR ABI. Keep this adapter mechanical: policy and IR construction
@@ -481,7 +492,10 @@ int dyn_llvm_emit_object(LLVMModuleRef module, const unsigned char *path,
 typedef struct { const unsigned char *data; size_t length; } DynIrSlice;
 typedef struct {
   DynIrSlice name;
+  DynIrSlice source_name;
   uint32_t type_id, first_block, block_count, first_value, value_count;
+  uint32_t declaration;
+  uint8_t foreign;
 } DynIrFunction;
 typedef struct { uint32_t first, count; } DynIrBlock;
 typedef struct {
@@ -533,11 +547,16 @@ static int dyn_selfhost_signed(const DynIrTypes *types, uint32_t id) {
 
 int dyn_llvm_emit_program(const void *raw_program, const void *raw_types,
                           const unsigned char *path, size_t path_length,
-                          unsigned release, void *raw_values,
+                          unsigned release, const unsigned char *raw_triple,
+                          size_t triple_length, void *raw_values,
                           void *raw_functions, void *raw_function_types) {
   const DynIrProgram *program = raw_program;
   const DynIrTypes *types = raw_types;
-  if (!program || !types || !program->function_count) return 1;
+  if (!program || !types || !program->function_count || !raw_triple ||
+      !triple_length || triple_length >= 256) return 1;
+  char triple[256];
+  memcpy(triple, raw_triple, triple_length);
+  triple[triple_length] = 0;
   int failed = 1;
   LLVMContextRef context = LLVMContextCreate();
   LLVMModuleRef module = dyn_llvm_module_create_probe(context);
@@ -569,6 +588,7 @@ int dyn_llvm_emit_program(const void *raw_program, const void *raw_types,
   }
   for (size_t f = 0; f < program->function_count; ++f) {
     const DynIrFunction *fn = &program->functions[f];
+    if (fn->foreign) continue;
     LLVMBasicBlockRef blocks[256];
     if (!fn->block_count || fn->block_count > 256 ||
         (size_t)fn->first_block + fn->block_count > program->block_count)
@@ -644,7 +664,8 @@ int dyn_llvm_emit_program(const void *raw_program, const void *raw_types,
     }
   }
   if (dyn_llvm_verify_module(module)) goto done;
-  failed = dyn_llvm_emit_object(module, path, path_length, release);
+  failed = dyn_llvm_emit_object_for_target(module, path, path_length, release,
+                                            triple);
 done:
   if (builder) LLVMDisposeBuilder(builder);
   if (module) LLVMDisposeModule(module);

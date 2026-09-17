@@ -1,0 +1,36 @@
+extern fn native_init "SDL_Init"(flags: u32) bool
+extern fn native_quit "SDL_Quit"()
+extern fn native_create_window "SDL_CreateWindow"(title: cabi.string, width: i32, height: i32, flags: u64) Window
+extern fn native_destroy_window "SDL_DestroyWindow"(window: Window)
+extern fn native_create_renderer "SDL_CreateRenderer"(window: Window, name: cabi.string) Renderer
+extern fn native_destroy_renderer "SDL_DestroyRenderer"(renderer: Renderer)
+extern fn native_set_draw_color "SDL_SetRenderDrawColor"(renderer: Renderer, red: u8, green: u8, blue: u8, alpha: u8) bool
+extern fn native_clear "SDL_RenderClear"(renderer: Renderer) bool
+extern fn native_present "SDL_RenderPresent"(renderer: Renderer) bool
+extern fn native_poll_event "SDL_PollEvent"(event: rawptr) bool
+extern fn native_wait_event "SDL_WaitEvent"(event: rawptr) bool
+extern fn native_error "SDL_GetError"() cabi.string
+extern fn native_open_audio_stream "SDL_OpenAudioDeviceStream"(device: AudioDevice, spec: *const AudioSpec, callback: rawptr, userdata: rawptr) AudioStream
+extern fn native_put_audio "SDL_PutAudioStreamData"(stream: AudioStream, bytes: rawptr, length: i32) bool
+extern fn native_resume_audio "SDL_ResumeAudioStreamDevice"(stream: AudioStream) bool
+extern fn native_pause_audio "SDL_PauseAudioStreamDevice"(stream: AudioStream) bool
+extern fn native_audio_available "SDL_GetAudioStreamAvailable"(stream: AudioStream) i32
+extern fn native_flush_audio "SDL_FlushAudioStream"(stream: AudioStream) bool
+extern fn native_clear_audio "SDL_ClearAudioStream"(stream: AudioStream) bool
+extern fn native_destroy_audio "SDL_DestroyAudioStream"(stream: AudioStream)
+extern fn native_audio_format "SDL_GetAudioStreamFormat"(stream: AudioStream, source: *AudioSpec, destination: *AudioSpec) bool
+extern fn native_gpu_create "SDL_CreateGPUDevice"(formats: u32, debug: bool, name: cabi.string) GpuDevice
+extern fn native_gpu_destroy "SDL_DestroyGPUDevice"(device: GpuDevice)
+extern fn native_gpu_claim_window "SDL_ClaimWindowForGPUDevice"(device: GpuDevice, window: Window) bool
+extern fn native_gpu_release_window "SDL_ReleaseWindowFromGPUDevice"(device: GpuDevice, window: Window)
+extern fn native_gpu_acquire "SDL_AcquireGPUCommandBuffer"(device: GpuDevice) GpuCommandBuffer
+extern fn native_gpu_swapchain "SDL_WaitAndAcquireGPUSwapchainTexture"(commands: GpuCommandBuffer, window: Window, texture: *GpuTexture, width: *u32, height: *u32) bool
+extern fn native_gpu_submit "SDL_SubmitGPUCommandBuffer"(commands: GpuCommandBuffer) bool
+extern fn native_gpu_begin_render "SDL_BeginGPURenderPass"(commands: GpuCommandBuffer, colors: *const GpuColorTargetInfo, count: u32, depth: rawptr) GpuRenderPass
+extern fn native_gpu_end_render "SDL_EndGPURenderPass"(render_pass: GpuRenderPass)
+extern fn native_gpu_shader_create "SDL_CreateGPUShader"(device: GpuDevice, info: *const GpuShaderInfo) GpuShader
+extern fn native_gpu_shader_release "SDL_ReleaseGPUShader"(device: GpuDevice, shader: GpuShader)
+extern fn native_gpu_texture_create "SDL_CreateGPUTexture"(device: GpuDevice, info: *const GpuTextureInfo) GpuTexture
+extern fn native_gpu_texture_release "SDL_ReleaseGPUTexture"(device: GpuDevice, texture: GpuTexture)
+extern fn native_gpu_buffer_create "SDL_CreateGPUBuffer"(device: GpuDevice, info: *const GpuBufferInfo) GpuBuffer
+extern fn native_gpu_buffer_release "SDL_ReleaseGPUBuffer"(device: GpuDevice, buffer: GpuBuffer)

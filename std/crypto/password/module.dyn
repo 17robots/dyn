@@ -1,0 +1,28 @@
+use "std/crypto/core" crypto_core
+
+// PBKDF2-HMAC-SHA256. scratch needs len(salt)+4 bytes.
+pub fn pbkdf2_sha256(destination: []u8, password: []const u8, salt: []const u8, iterations: u32, scratch: []u8) bool {
+  if iterations == 0 || #len(destination) > 137438953440 || #len(scratch) < #len(salt) + 4 { return false }
+  i: usize = 0 for i < #len(salt) { scratch[i] = salt[i] i += 1 }
+  output_at: usize = 0
+  block_index: u32 = 1
+  first: [32]u8 = [] accumulated: [32]u8 = [] next_value: [32]u8 = []
+  for output_at < #len(destination) {
+    salt_length := #len(salt)
+    scratch[salt_length] = #cast(u8) (block_index >> 24) scratch[salt_length + 1] = #cast(u8) (block_index >> 16)
+    scratch[salt_length + 2] = #cast(u8) (block_index >> 8) scratch[salt_length + 3] = #cast(u8) block_index
+    if #len(crypto_core.hmac_sha256(first[..], password, scratch[..salt_length + 4])) != 32 { return false }
+    i = 0 for i < 32 { accumulated[i] = first[i] next_value[i] = first[i] i += 1 }
+    round: u32 = 1
+    for round < iterations {
+      if #len(crypto_core.hmac_sha256(next_value[..], password, next_value[..])) != 32 { return false }
+      i = 0 for i < 32 { accumulated[i] = accumulated[i] ^ next_value[i] i += 1 }
+      round += 1
+    }
+    take := #len(destination) - output_at if take > 32 { take = 32 }
+    i = 0 for i < take { destination[output_at + i] = accumulated[i] i += 1 }
+    output_at += take
+    if output_at < #len(destination) { block_index += 1 }
+  }
+  return true
+}

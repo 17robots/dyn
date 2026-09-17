@@ -1,0 +1,29 @@
+pub struct HexdumpResult { data: []u8, consumed: usize, complete: bool }
+
+fn digit(value: u8) u8 { if value < 10 { return '0' + value } return 'a' + value - 10 }
+
+// Compact deterministic hex dump. Each row: 8-digit offset, two spaces, bytes, newline.
+pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpResult {
+  if columns == 0 { return HexdumpResult{} }
+  output_at: usize = 0
+  input_at: usize = 0
+  for input_at < #len(source) {
+    row := #len(source) - input_at if row > columns { row = columns }
+    required: usize = 11 + row * 3
+    if required > #len(destination) - output_at { return HexdumpResult{ data: destination[..output_at], consumed: input_at } }
+    shift: usize = 8
+    for shift > 0 { shift -= 1 destination[output_at] = digit(#cast(u8) ((input_at >> (shift * 4)) & 15)) output_at += 1 }
+    destination[output_at] = ' ' destination[output_at + 1] = ' ' output_at += 2
+    i: usize = 0
+    for i < row {
+      byte := source[input_at + i]
+      destination[output_at] = digit(byte >> 4) destination[output_at + 1] = digit(byte & 15)
+      destination[output_at + 2] = ' ' output_at += 3 i += 1
+    }
+    destination[output_at] = '\n' output_at += 1 input_at += row
+  }
+  return HexdumpResult{ data: destination[..output_at], consumed: input_at, complete: true }
+}
+
+pub fn poison(destination: []u8, pattern: u8) { index: usize = 0 for index < #len(destination) { destination[index] = pattern index += 1 } }
+pub fn all_equal(source: []const u8, pattern: u8) bool { for byte in source { if byte != pattern { return false } } return true }

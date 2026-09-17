@@ -1,0 +1,14 @@
+use "vendor/openssl/crypto" provider
+
+pub enum Cipher { Aes256Gcm, Chacha20Poly1305 }
+pub type Result = provider.AeadResult
+fn provider_kind(kind: Cipher) u8 {
+  if kind == Cipher.Aes256Gcm { return provider.CipherAes256Gcm }
+  return provider.CipherChacha20Poly1305
+}
+pub fn seal(kind: Cipher, ciphertext: []u8, tag: []u8, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
+  return provider.aead_seal(provider_kind(kind), ciphertext, tag, plaintext, additional, key, nonce)
+}
+pub fn open(kind: Cipher, plaintext: []u8, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
+  return provider.aead_open(provider_kind(kind), plaintext, ciphertext, tag, additional, key, nonce)
+}

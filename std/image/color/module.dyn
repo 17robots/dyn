@@ -1,0 +1,21 @@
+pub struct Rgba { r: u8, g: u8, b: u8, a: u8 }
+
+pub fn rgba(r: u8, g: u8, b: u8, a: u8) Rgba { return Rgba{ r: r, g: g, b: b, a: a } }
+
+pub fn premultiply(value: Rgba) Rgba {
+  alpha: u16 = #cast(u16) value.a
+  return Rgba{
+    r: #cast(u8) ((#cast(u16) value.r * alpha + 127) / 255),
+    g: #cast(u8) ((#cast(u16) value.g * alpha + 127) / 255),
+    b: #cast(u8) ((#cast(u16) value.b * alpha + 127) / 255),
+    a: value.a,
+  }
+}
+
+pub fn luminance(value: Rgba) u8 {
+  red: u32 = #cast(u32) value.r
+  green: u32 = #cast(u32) value.g
+  blue: u32 = #cast(u32) value.b
+  return #cast(u8) ((red * 54 + green * 183 + blue * 19 + 128) / 256)
+}
+

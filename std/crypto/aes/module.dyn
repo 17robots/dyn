@@ -1,0 +1,9 @@
+use "vendor/openssl/crypto" provider
+
+pub type Result = provider.AeadResult
+pub fn gcm_seal(ciphertext: []u8, tag: []u8, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
+  return provider.aead_seal(provider.CipherAes256Gcm, ciphertext, tag, plaintext, additional, key, nonce)
+}
+pub fn gcm_open(plaintext: []u8, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
+  return provider.aead_open(provider.CipherAes256Gcm, plaintext, ciphertext, tag, additional, key, nonce)
+}

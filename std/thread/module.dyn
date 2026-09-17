@@ -1,0 +1,32 @@
+#target(kernel: linux)
+
+use "std/sync" synchronization
+
+pub struct Thread { tid: synchronization.AtomicU32 }
+
+extern fn spawn_raw "dyn_thread_spawn"(
+  stack: *u8,
+  size: usize,
+  entry: *fn(rawptr) isize,
+  context: rawptr,
+  tid: *synchronization.AtomicU32,
+) isize
+
+pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: rawptr) isize {
+  if #len(stack) < 256 || entry == nil { return -22 }
+  if synchronization.load_u32(&thread.tid) != 0 { return -16 }
+  return spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
+}
+
+pub fn join(thread: *Thread) isize {
+  for true {
+    tid := synchronization.load_u32(&thread.tid)
+    if tid == 0 { return 0 }
+    result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)
+    if result < 0 && result != -4 && result != -11 { return result }
+  }
+  return 0
+}
+
+pub fn id(thread: *const Thread) u32 { return synchronization.load_u32(&thread.tid) }
+pub fn yield_now() isize { return #syscall(24) }

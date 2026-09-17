@@ -1,0 +1,92 @@
+use "std/net" network
+
+pub struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }
+pub struct Result { count: usize, error: isize, ok: bool }
+
+fn load_u16(bytes: []const u8, offset: usize) u16 {
+  return #cast(u16) bytes[offset] * 256 + #cast(u16) bytes[offset + 1]
+}
+fn store_u16(bytes: []u8, offset: usize, value: u16) {
+  bytes[offset] = #cast(u8) (value >> 8)
+  bytes[offset + 1] = #cast(u8) value
+}
+fn skip_name(packet: []const u8, start: usize) usize {
+  cursor := start labels: usize = 0
+  for cursor < #len(packet) && labels < 128 {
+    length := packet[cursor]
+    if length == 0 { return cursor + 1 }
+    if (length & 192) == 192 { if cursor + 1 >= #len(packet) { return 0 } return cursor + 2 }
+    amount := #cast(usize) length
+    if length > 63 || cursor + 1 + amount > #len(packet) { return 0 }
+    cursor += 1 + amount labels += 1
+  }
+  return 0
+}
+
+pub fn query_ipv4(destination: []u8, name: []const u8, identifier: u16) []u8 {
+  if #len(destination) < 17 || #len(name) == 0 || #len(name) > 253 { return destination[..0] }
+  i: usize = 0 for i < 12 { destination[i] = 0 i += 1 }
+  store_u16(destination, 0, identifier) store_u16(destination, 2, 256) store_u16(destination, 4, 1)
+  input: usize = 0 output: usize = 12
+  for input < #len(name) {
+    label_start := input for input < #len(name) && name[input] != '.' { input += 1 }
+    length := input - label_start
+    if length == 0 || length > 63 || output + 1 + length + 5 > #len(destination) { return destination[..0] }
+    destination[output] = #cast(u8) length output += 1
+    j: usize = 0 for j < length { destination[output + j] = name[label_start + j] j += 1 }
+    output += length if input < #len(name) { input += 1 }
+  }
+  destination[output] = 0 store_u16(destination, output + 1, 1) store_u16(destination, output + 3, 1)
+  return destination[..output + 5]
+}
+
+pub fn parse_ipv4(packet: []const u8, identifier: u16, addresses: []Ipv4) Result {
+  if #len(packet) < 12 || load_u16(packet, 0) != identifier || (load_u16(packet, 2) & 32768) == 0 {
+    return Result{ error: -22, ok: false }
+  }
+  flags := load_u16(packet, 2)
+  if (flags & 15) != 0 { return Result{ error: 0 - #cast(isize) (flags & 15), ok: false } }
+  questions := #cast(usize) load_u16(packet, 4) answers := #cast(usize) load_u16(packet, 6)
+  cursor: usize = 12 q: usize = 0
+  for q < questions {
+    cursor = skip_name(packet, cursor)
+    if cursor == 0 || cursor + 4 > #len(packet) { return Result{ error: -22, ok: false } }
+    cursor += 4 q += 1
+  }
+  count: usize = 0 answer: usize = 0
+  for answer < answers {
+    cursor = skip_name(packet, cursor)
+    if cursor == 0 || cursor + 10 > #len(packet) { return Result{ count: count, error: -22, ok: false } }
+    kind := load_u16(packet, cursor) class := load_u16(packet, cursor + 2)
+    length := #cast(usize) load_u16(packet, cursor + 8) cursor += 10
+    if cursor + length > #len(packet) { return Result{ count: count, error: -22, ok: false } }
+    if kind == 1 && class == 1 && length == 4 && count < #len(addresses) {
+      addresses[count] = Ipv4{ a: packet[cursor], b: packet[cursor + 1], c: packet[cursor + 2], d: packet[cursor + 3] }
+      count += 1
+    }
+    cursor += length answer += 1
+  }
+  return Result{ count: count, ok: true }
+}
+
+pub fn resolve_ipv4(name: []const u8, server: *const network.Ipv4Address, addresses: []Ipv4,
+                    packet: []u8, timeout_milliseconds: i32) Result {
+  query := query_ipv4(packet, name, 54849)
+  if #len(query) == 0 { return Result{ error: -22, ok: false } }
+  opened := network.socket(network.AddressFamilyIpv4, network.SocketDatagram, 0)
+  if !opened.ok { return Result{ error: opened.error, ok: false } }
+  descriptor := network.result_value(&opened)
+  connected := network.connect_ipv4(descriptor, server)
+  if !connected.ok { _ = network.close(descriptor) return Result{ error: connected.error, ok: false } }
+  sent := network.send(descriptor, query, 0)
+  if !sent.ok { _ = network.close(descriptor) return Result{ error: sent.error, ok: false } }
+  ready := network.wait(descriptor, network.PollReadable, timeout_milliseconds)
+  if !ready.ok || ready.value == 0 {
+    _ = network.close(descriptor)
+    ready_error := ready.error if ready.ok { ready_error = -110 }
+    return Result{ error: ready_error, ok: false }
+  }
+  received := network.receive(descriptor, packet, 0) _ = network.close(descriptor)
+  if !received.ok { return Result{ error: received.error, ok: false } }
+  return parse_ipv4(packet[..#cast(usize) received.value], 54849, addresses)
+}

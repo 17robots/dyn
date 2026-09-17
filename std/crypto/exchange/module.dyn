@@ -1,0 +1,4 @@
+use "vendor/openssl/crypto" provider
+pub type Result = provider.KeyResult
+pub fn x25519_public(destination: []u8, private_key: []const u8) Result { return provider.x25519_public(destination, private_key) }
+pub fn x25519(destination: []u8, private_key: []const u8, peer_public_key: []const u8) Result { return provider.x25519_shared(destination, private_key, peer_public_key) }

@@ -1,0 +1,1 @@
+extern fn vulkan_get_instance_proc_address "vkGetInstanceProcAddr"(instance: rawptr, name: *const u8) rawptr

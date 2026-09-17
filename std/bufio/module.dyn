@@ -1,0 +1,119 @@
+use "std/io" stream
+
+pub struct Writer {
+  destination: stream.Writer,
+  storage: []u8,
+  used: usize,
+  error: isize,
+}
+
+pub fn writer(destination: stream.Writer, storage: []u8) Writer {
+  return Writer{ destination: destination, storage: storage }
+}
+
+pub fn writer_buffered(state: *const Writer) usize { return state.used }
+
+pub fn writer_flush(state: *Writer) stream.Result {
+  if state.error != 0 {
+    return stream.Result{ transferred: 0, error: state.error, status: stream.Status.Error }
+  }
+  if state.used == 0 {
+    return stream.Result{ transferred: 0, error: 0, status: stream.Status.Complete }
+  }
+  result := stream.write_all(state.destination, state.storage[..state.used])
+  if result.status == stream.Status.Error {
+    state.error = result.error
+    return result
+  }
+  state.used = 0
+  return result
+}
+
+fn writer_write(data: rawptr, source: []const u8) stream.Result {
+  state := #cast(*Writer) data
+  if state.error != 0 {
+    return stream.Result{ transferred: 0, error: state.error, status: stream.Status.Error }
+  }
+  if #len(state.storage) == 0 { return stream.write_all(state.destination, source) }
+  total: usize = 0
+  for total < #len(source) {
+    if state.used == #len(state.storage) {
+      flushed := writer_flush(state)
+      if flushed.status == stream.Status.Error {
+        return stream.Result{ transferred: total, error: flushed.error, status: stream.Status.Error }
+      }
+    }
+    available := #len(state.storage) - state.used
+    amount := #len(source) - total
+    if amount > available { amount = available }
+    i: usize = 0
+    for i < amount {
+      state.storage[state.used + i] = source[total + i]
+      i += 1
+    }
+    state.used += amount
+    total += amount
+  }
+  return stream.Result{ transferred: total, error: 0, status: stream.Status.Complete }
+}
+
+pub fn writer_adapter(state: *Writer) stream.Writer {
+  return stream.Writer{ data: #cast(rawptr) state, write: &writer_write }
+}
+
+pub struct Reader {
+  source: stream.Reader,
+  storage: []u8,
+  start: usize,
+  end: usize,
+  ended: bool,
+  error: isize,
+}
+
+pub fn reader(source: stream.Reader, storage: []u8) Reader {
+  return Reader{ source: source, storage: storage }
+}
+
+fn reader_read(data: rawptr, destination: []u8) stream.Result {
+  state := #cast(*Reader) data
+  if state.error != 0 {
+    return stream.Result{ transferred: 0, error: state.error, status: stream.Status.Error }
+  }
+  total: usize = 0
+  for total < #len(destination) {
+    if state.start == state.end {
+      if state.ended { return stream.Result{ transferred: total, error: 0, status: stream.Status.End } }
+      if #len(state.storage) == 0 { return stream.reader_read(state.source, destination) }
+      input := stream.reader_read(state.source, state.storage)
+      if input.transferred > #len(state.storage) {
+        state.error = -5
+        return stream.Result{ transferred: total, error: state.error, status: stream.Status.Error }
+      }
+      state.start = 0
+      state.end = input.transferred
+      if input.status == stream.Status.Error {
+        state.error = input.error
+        return stream.Result{ transferred: total, error: input.error, status: stream.Status.Error }
+      }
+      if input.status == stream.Status.End { state.ended = true }
+      if input.transferred == 0 {
+        return stream.Result{ transferred: total, error: 0, status: stream.Status.End }
+      }
+    }
+    available := state.end - state.start
+    amount := #len(destination) - total
+    if amount > available { amount = available }
+    i: usize = 0
+    for i < amount {
+      destination[total + i] = state.storage[state.start + i]
+      i += 1
+    }
+    state.start += amount
+    total += amount
+  }
+  return stream.Result{ transferred: total, error: 0, status: stream.Status.Complete }
+}
+
+pub fn reader_adapter(state: *Reader) stream.Reader {
+  return stream.Reader{ data: #cast(rawptr) state, read: &reader_read }
+}

@@ -1,0 +1,7 @@
+#target(kernel: linux)
+
+// Stable system-facing values. Platform implementation remains isolated below os/linux.
+pub const Name: []const u8 = "linux"
+pub const PathSeparator: u8 = '/'
+pub const has_processes: bool = true
+pub const has_memory_mapping: bool = true

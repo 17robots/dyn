@@ -1,0 +1,7 @@
+extern fn zstd_compress_bound "ZSTD_compressBound"(source_size: usize) usize
+extern fn zstd_compress "ZSTD_compress"(destination: rawptr, capacity: usize, source: rawptr, source_size: usize, level: i32) usize
+extern fn zstd_decompress "ZSTD_decompress"(destination: rawptr, capacity: usize, source: rawptr, compressed_size: usize) usize
+extern fn zstd_frame_content_size "ZSTD_getFrameContentSize"(source: rawptr, source_size: usize) u64
+extern fn zstd_is_error "ZSTD_isError"(code: usize) usize
+extern fn zstd_error_name "ZSTD_getErrorName"(code: usize) *const u8
+extern fn zstd_version_number "ZSTD_versionNumber"() u32

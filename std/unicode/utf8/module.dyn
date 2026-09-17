@@ -1,0 +1,108 @@
+// Strict UTF-8 over byte slices. Invalid decoding consumes one byte for recovery.
+
+pub struct Decode {
+  codepoint: u32,
+  width: usize,
+  ok: bool,
+}
+
+pub fn decode(text: []const u8, offset: usize) Decode {
+  if offset >= #len(text) { return Decode{ codepoint: 0, width: 0, ok: false } }
+  first := text[offset]
+  if first < 128 { return Decode{ codepoint: #cast(u32) first, width: 1, ok: true } }
+  width: usize = 0
+  value: u32 = 0
+  minimum: u32 = 0
+  if first >= 194 && first <= 223 {
+    width = 2 value = #cast(u32) (first & 31) minimum = 128
+  } else if first >= 224 && first <= 239 {
+    width = 3 value = #cast(u32) (first & 15) minimum = 2048
+  } else if first >= 240 && first <= 244 {
+    width = 4 value = #cast(u32) (first & 7) minimum = 65536
+  } else { return Decode{ codepoint: 0, width: 1, ok: false } }
+  if width > #len(text) - offset { return Decode{ codepoint: 0, width: 1, ok: false } }
+  i: usize = 1
+  for i < width {
+    byte := text[offset + i]
+    if byte < 128 || byte > 191 { return Decode{ codepoint: 0, width: 1, ok: false } }
+    value = (value << 6) | #cast(u32) (byte & 63)
+    i += 1
+  }
+  if value < minimum || value > 1114111 || (value >= 55296 && value <= 57343) {
+    return Decode{ codepoint: 0, width: 1, ok: false }
+  }
+  return Decode{ codepoint: value, width: width, ok: true }
+}
+
+pub fn valid(text: []const u8) bool {
+  offset: usize = 0
+  for offset < #len(text) {
+    decoded := decode(text, offset)
+    if !decoded.ok { return false }
+    offset += decoded.width
+  }
+  return true
+}
+
+pub fn codepoint_count(text: []const u8, output: *usize) bool {
+  offset: usize = 0
+  total: usize = 0
+  for offset < #len(text) {
+    decoded := decode(text, offset)
+    if !decoded.ok { return false }
+    offset += decoded.width
+    total += 1
+  }
+  output.* = total
+  return true
+}
+
+pub fn encoded_width(codepoint: u32) usize {
+  if codepoint <= 127 { return 1 }
+  if codepoint <= 2047 { return 2 }
+  if codepoint >= 55296 && codepoint <= 57343 { return 0 }
+  if codepoint <= 65535 { return 3 }
+  if codepoint <= 1114111 { return 4 }
+  return 0
+}
+
+pub fn encode(destination: []u8, codepoint: u32) usize {
+  width := encoded_width(codepoint)
+  if width == 0 || #len(destination) < width { return 0 }
+  continuation: u32 = 128
+  mask: u32 = 63
+  lead2: u32 = 192
+  lead3: u32 = 224
+  lead4: u32 = 240
+  if width == 1 { destination[0] = #cast(u8) codepoint }
+  else if width == 2 {
+    destination[0] = #cast(u8) (lead2 | (codepoint >> 6))
+    destination[1] = #cast(u8) (continuation | (codepoint & mask))
+  } else if width == 3 {
+    destination[0] = #cast(u8) (lead3 | (codepoint >> 12))
+    destination[1] = #cast(u8) (continuation | ((codepoint >> 6) & mask))
+    destination[2] = #cast(u8) (continuation | (codepoint & mask))
+  } else {
+    destination[0] = #cast(u8) (lead4 | (codepoint >> 18))
+    destination[1] = #cast(u8) (continuation | ((codepoint >> 12) & mask))
+    destination[2] = #cast(u8) (continuation | ((codepoint >> 6) & mask))
+    destination[3] = #cast(u8) (continuation | (codepoint & mask))
+  }
+  return width
+}
+
+pub struct Iterator {
+  text: []const u8,
+  offset: usize,
+}
+
+pub fn iterator(text: []const u8) Iterator { return Iterator{ text: text, offset: 0 } }
+
+pub fn next(state: *Iterator, output: *u32) bool {
+  if state.offset >= #len(state.text) { return false }
+  decoded := decode(state.text, state.offset)
+  if !decoded.ok { return false }
+  state.offset += decoded.width
+  output.* = decoded.codepoint
+  return true
+}

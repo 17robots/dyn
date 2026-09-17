@@ -1,0 +1,118 @@
+#target(kernel: linux)
+
+pub const Nanosecond: i64 = 1
+pub const Microsecond: i64 = 1000
+pub const Millisecond: i64 = 1000000
+pub const Second: i64 = 1000000000
+pub const Minute: i64 = 60000000000
+pub const Hour: i64 = 3600000000000
+
+pub struct Instant { seconds: i64, nanoseconds: i64 }
+pub struct DurationResult { value: i64, ok: bool }
+pub struct Deadline { at: Instant }
+pub struct DateTime {
+  year: i32, month: u8, day: u8,
+  hour: u8, minute: u8, second: u8,
+  nanosecond: u32,
+}
+
+pub fn checked_add(a, b: i64) DurationResult {
+  if b > 0 && a > 9223372036854775807 - b { return DurationResult{} }
+  if b < 0 && a < -9223372036854775807 - 1 - b { return DurationResult{} }
+  return DurationResult{ value: a + b, ok: true }
+}
+pub fn checked_sub(a, b: i64) DurationResult {
+  if b == -9223372036854775807 - 1 {
+    if a >= 0 { return DurationResult{} }
+    return DurationResult{ value: a - b, ok: true }
+  }
+  return checked_add(a, 0 - b)
+}
+pub fn elapsed(start, end: Instant) DurationResult {
+  seconds := checked_sub(end.seconds, start.seconds)
+  if !seconds.ok { return DurationResult{} }
+  scaled: i64 = 0
+  if seconds.value > 9223372036 || seconds.value < -9223372036 { return DurationResult{} }
+  scaled = seconds.value * Second
+  return checked_add(scaled, end.nanoseconds - start.nanoseconds)
+}
+
+pub fn monotonic_now() Instant {
+  value: Instant
+  if #syscall(228, 1, &value) != 0 { #panic("monotonic clock failed") }
+  return value
+}
+pub fn realtime_now() Instant {
+  value: Instant
+  if #syscall(228, 0, &value) != 0 { #panic("realtime clock failed") }
+  return value
+}
+pub fn sleep(duration: i64) bool {
+  if duration <= 0 { return true }
+  request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
+  remaining: Instant
+  result := #syscall(35, &request, &remaining)
+  for result == -4 { request = remaining result = #syscall(35, &request, &remaining) }
+  return result == 0
+}
+pub fn deadline_after(duration: i64) Deadline {
+  now := monotonic_now()
+  at := Instant{ seconds: now.seconds + duration / Second, nanoseconds: now.nanoseconds + duration % Second }
+  if at.nanoseconds >= Second { at.seconds += 1 at.nanoseconds -= Second }
+  if at.nanoseconds < 0 { at.seconds -= 1 at.nanoseconds += Second }
+  return Deadline{ at: at }
+}
+pub fn deadline_expired(deadline: *const Deadline) bool {
+  now := monotonic_now()
+  return now.seconds > deadline.at.seconds ||
+    (now.seconds == deadline.at.seconds && now.nanoseconds >= deadline.at.nanoseconds)
+}
+pub fn deadline_remaining(deadline: *const Deadline) i64 {
+  now := monotonic_now()
+  result := elapsed(now, deadline.at)
+  if !result.ok || result.value < 0 { return 0 }
+  return result.value
+}
+
+fn leap_year(year: i32) bool { return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) }
+pub fn valid(value: *const DateTime) bool {
+  if value.month < 1 || value.month > 12 || value.day < 1 || value.hour > 23 ||
+    value.minute > 59 || value.second > 60 || value.nanosecond >= 1000000000 { return false }
+  days: [12]u8 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  maximum := days[#cast(usize) value.month - 1]
+  if value.month == 2 && leap_year(value.year) { maximum = 29 }
+  return value.day <= maximum
+}
+fn write_two(destination: []u8, at: usize, value: u8) {
+  destination[at] = '0' + value / 10 destination[at + 1] = '0' + value % 10
+}
+pub fn format_iso8601(destination: []u8, value: *const DateTime) []u8 {
+  if #len(destination) < 20 || !valid(value) || value.year < 0 || value.year > 9999 { return destination[..0] }
+  year := #cast(u32) value.year
+  destination[0] = '0' + #cast(u8) (year / 1000)
+  destination[1] = '0' + #cast(u8) ((year / 100) % 10)
+  destination[2] = '0' + #cast(u8) ((year / 10) % 10)
+  destination[3] = '0' + #cast(u8) (year % 10)
+  destination[4] = '-' write_two(destination, 5, value.month)
+  destination[7] = '-' write_two(destination, 8, value.day)
+  destination[10] = 'T' write_two(destination, 11, value.hour)
+  destination[13] = ':' write_two(destination, 14, value.minute)
+  destination[16] = ':' write_two(destination, 17, value.second)
+  destination[19] = 'Z'
+  return destination[..20]
+}
+fn decimal(byte: u8) bool { return byte >= '0' && byte <= '9' }
+fn read_two(input: []const u8, at: usize) u8 { return (input[at] - '0') * 10 + input[at + 1] - '0' }
+pub fn parse_iso8601(input: []const u8, output: *DateTime) bool {
+  if #len(input) != 20 || input[4] != '-' || input[7] != '-' || input[10] != 'T' ||
+    input[13] != ':' || input[16] != ':' || input[19] != 'Z' { return false }
+  positions: [14]u8 = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
+  i: usize = 0
+  for i < #len(positions) { if !decimal(input[#cast(usize) positions[i]]) { return false } i += 1 }
+  output.* = DateTime{
+    year: #cast(i32) ((#cast(u32) (input[0] - '0')) * 1000 + (#cast(u32) (input[1] - '0')) * 100 + (#cast(u32) (input[2] - '0')) * 10 + #cast(u32) (input[3] - '0')),
+    month: read_two(input, 5), day: read_two(input, 8), hour: read_two(input, 11),
+    minute: read_two(input, 14), second: read_two(input, 17), nanosecond: 0,
+  }
+  return valid(output)
+}

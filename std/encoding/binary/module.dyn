@@ -1,0 +1,96 @@
+// Fixed-width endian and unsigned LEB128 encoding.
+
+pub struct Decode { value: u64, consumed: usize, ok: bool }
+
+pub fn load_u16_le(source: []const u8) u16 {
+  if #len(source) < 2 { #panic("binary source too small") }
+  return #cast(u16) source[0] | (#cast(u16) source[1] << 8)
+}
+pub fn load_u32_le(source: []const u8) u32 {
+  if #len(source) < 4 { #panic("binary source too small") }
+  return #cast(u32) source[0] | (#cast(u32) source[1] << 8) |
+    (#cast(u32) source[2] << 16) | (#cast(u32) source[3] << 24)
+}
+pub fn load_u64_le(source: []const u8) u64 {
+  if #len(source) < 8 { #panic("binary source too small") }
+  return #cast(u64) load_u32_le(source[..4]) | (#cast(u64) load_u32_le(source[4..8]) << 32)
+}
+pub fn load_u16_be(source: []const u8) u16 {
+  if #len(source) < 2 { #panic("binary source too small") }
+  return (#cast(u16) source[0] << 8) | #cast(u16) source[1]
+}
+pub fn load_u32_be(source: []const u8) u32 {
+  if #len(source) < 4 { #panic("binary source too small") }
+  return (#cast(u32) source[0] << 24) | (#cast(u32) source[1] << 16) |
+    (#cast(u32) source[2] << 8) | #cast(u32) source[3]
+}
+pub fn load_u64_be(source: []const u8) u64 {
+  if #len(source) < 8 { #panic("binary source too small") }
+  return (#cast(u64) load_u32_be(source[..4]) << 32) | #cast(u64) load_u32_be(source[4..8])
+}
+
+pub fn store_u16_le(destination: []u8, value: u16) {
+  if #len(destination) < 2 { #panic("binary destination too small") }
+  destination[0] = #cast(u8) value destination[1] = #cast(u8) (value >> 8)
+}
+pub fn store_u32_le(destination: []u8, value: u32) {
+  if #len(destination) < 4 { #panic("binary destination too small") }
+  destination[0] = #cast(u8) value destination[1] = #cast(u8) (value >> 8)
+  destination[2] = #cast(u8) (value >> 16) destination[3] = #cast(u8) (value >> 24)
+}
+pub fn store_u64_le(destination: []u8, value: u64) {
+  if #len(destination) < 8 { #panic("binary destination too small") }
+  store_u32_le(destination[..4], #cast(u32) value)
+  store_u32_le(destination[4..8], #cast(u32) (value >> 32))
+}
+pub fn store_u16_be(destination: []u8, value: u16) {
+  if #len(destination) < 2 { #panic("binary destination too small") }
+  destination[0] = #cast(u8) (value >> 8) destination[1] = #cast(u8) value
+}
+pub fn store_u32_be(destination: []u8, value: u32) {
+  if #len(destination) < 4 { #panic("binary destination too small") }
+  destination[0] = #cast(u8) (value >> 24) destination[1] = #cast(u8) (value >> 16)
+  destination[2] = #cast(u8) (value >> 8) destination[3] = #cast(u8) value
+}
+pub fn store_u64_be(destination: []u8, value: u64) {
+  if #len(destination) < 8 { #panic("binary destination too small") }
+  store_u32_be(destination[..4], #cast(u32) (value >> 32))
+  store_u32_be(destination[4..8], #cast(u32) value)
+}
+
+pub fn uleb128_size(value: u64) usize {
+  size: usize = 1
+  for value >= 128 { value >>= 7 size += 1 }
+  return size
+}
+
+pub fn uleb128_encode(destination: []u8, value: u64) []u8 {
+  needed := uleb128_size(value)
+  if needed > #len(destination) { return destination[..0] }
+  at: usize = 0
+  for value >= 128 {
+    destination[at] = #cast(u8) (value & 127) | 128
+    value >>= 7 at += 1
+  }
+  destination[at] = #cast(u8) value
+  return destination[..at + 1]
+}
+
+pub fn uleb128_decode(source: []const u8) Decode {
+  value: u64 = 0
+  factor: u64 = 1
+  i: usize = 0
+  for i < #len(source) && i < 10 {
+    byte := source[i]
+    if i == 9 {
+      if byte > 1 { return Decode{} }
+      if byte == 1 { value |= 9223372036854775808 }
+    } else {
+      value += #cast(u64) (byte & 127) * factor
+    }
+    if byte < 128 { return Decode{ value: value, consumed: i + 1, ok: true } }
+    if i < 8 { factor *= 128 }
+    i += 1
+  }
+  return Decode{}
+}

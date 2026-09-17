@@ -1,0 +1,8 @@
+use "std/crypto/core" crypto_core
+
+pub type Sha256 = crypto_core.Sha256
+pub fn init(context: *Sha256) { crypto_core.sha256_init(context) }
+pub fn update(context: *Sha256, input: []const u8) bool { return crypto_core.sha256_update(context, input) }
+pub fn finish(context: *Sha256, destination: []u8) []u8 { return crypto_core.sha256_finish(context, destination) }
+pub fn sum256(destination: []u8, input: []const u8) []u8 { return crypto_core.sha256(destination, input) }
+pub fn equal_constant_time(left: []const u8, right: []const u8) bool { return crypto_core.equal_constant_time(left, right) }

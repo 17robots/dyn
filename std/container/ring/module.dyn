@@ -1,0 +1,23 @@
+pub struct Ring {
+  data: []u8,
+  read: usize,
+  length: usize,
+}
+
+pub fn init(backing: []u8) Ring { return Ring{ data: backing, read: 0, length: 0 } }
+pub fn length(state: *const Ring) usize { return state.length }
+
+pub fn push(state: *Ring, byte: u8) bool {
+  if state.length == #len(state.data) || #len(state.data) == 0 { return false }
+  state.data[(state.read + state.length) % #len(state.data)] = byte
+  state.length += 1
+  return true
+}
+
+pub fn pop(state: *Ring, output: *u8) bool {
+  if state.length == 0 { return false }
+  output.* = state.data[state.read]
+  state.read = (state.read + 1) % #len(state.data)
+  state.length -= 1
+  return true
+}

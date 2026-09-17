@@ -1,0 +1,3 @@
+use "std/crypto/core" crypto_core
+
+pub fn fill(destination: []u8) bool { return crypto_core.secure_random(destination) }

@@ -1,0 +1,89 @@
+pub struct Result { data: []u8, ok: bool }
+const Alphabet: []const u8 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+pub fn encoded_size(source_size: usize) usize {
+  maximum: usize = 18446744073709551615
+  if source_size > maximum - 2 { return 0 }
+  blocks := (source_size + 2) / 3
+  if blocks > maximum / 4 { return 0 }
+  return blocks * 4
+}
+
+pub fn encode(destination: []u8, source: []const u8) Result {
+  required := encoded_size(#len(source))
+  if (#len(source) != 0 && required == 0) || required > #len(destination) {
+    return Result{ data: destination[..0], ok: false }
+  }
+  input: usize = 0 output: usize = 0
+  for input < #len(source) {
+    left := #len(source) - input
+    a := #cast(usize) source[input]
+    b: usize = 0 c: usize = 0
+    if left > 1 { b = #cast(usize) source[input + 1] }
+    if left > 2 { c = #cast(usize) source[input + 2] }
+    destination[output] = Alphabet[a / 4]
+    destination[output + 1] = Alphabet[(a % 4) * 16 + b / 16]
+    if left > 1 { destination[output + 2] = Alphabet[(b % 16) * 4 + c / 64] }
+    else { destination[output + 2] = '=' }
+    if left > 2 { destination[output + 3] = Alphabet[c % 64] }
+    else { destination[output + 3] = '=' }
+    input += 3 output += 4
+  }
+  return Result{ data: destination[..output], ok: true }
+}
+
+fn digit_value(byte: u8) isize {
+  if byte >= 'A' && byte <= 'Z' { return #cast(isize) (byte - 'A') }
+  if byte >= 'a' && byte <= 'z' { return #cast(isize) (byte - 'a') + 26 }
+  if byte >= '0' && byte <= '9' { return #cast(isize) (byte - '0') + 52 }
+  if byte == '+' { return 62 }
+  if byte == '/' { return 63 }
+  return -1
+}
+
+pub fn decoded_size(source: []const u8, output: *usize) bool {
+  if #len(source) == 0 { output.* = 0 return true }
+  if #len(source) % 4 != 0 { return false }
+  padding: usize = 0
+  if source[#len(source) - 1] == '=' { padding += 1 }
+  if source[#len(source) - 2] == '=' { padding += 1 }
+  output.* = (#len(source) / 4) * 3 - padding
+  return true
+}
+
+pub fn decode(destination: []u8, source: []const u8) Result {
+  required: usize = 0
+  if !decoded_size(source, &required) || required > #len(destination) {
+    return Result{ data: destination[..0], ok: false }
+  }
+  input: usize = 0 output: usize = 0
+  for input < #len(source) {
+    last := input + 4 == #len(source)
+    if source[input] == '=' || source[input + 1] == '=' { return Result{ data: destination[..0], ok: false } }
+    if !last && (source[input + 2] == '=' || source[input + 3] == '=') {
+      return Result{ data: destination[..0], ok: false }
+    }
+    if source[input + 2] == '=' && source[input + 3] != '=' {
+      return Result{ data: destination[..0], ok: false }
+    }
+    a := digit_value(source[input]) b := digit_value(source[input + 1])
+    c: isize = 0 d: isize = 0
+    if source[input + 2] != '=' { c = digit_value(source[input + 2]) }
+    if source[input + 3] != '=' { d = digit_value(source[input + 3]) }
+    if a < 0 || b < 0 || c < 0 || d < 0 { return Result{ data: destination[..0], ok: false } }
+    // Reject non-canonical encodings with non-zero unused bits.
+    if source[input + 2] == '=' && b % 16 != 0 { return Result{ data: destination[..0], ok: false } }
+    if source[input + 3] == '=' && source[input + 2] != '=' && c % 4 != 0 {
+      return Result{ data: destination[..0], ok: false }
+    }
+    destination[output] = #cast(u8) (a * 4 + b / 16) output += 1
+    if source[input + 2] != '=' {
+      destination[output] = #cast(u8) ((b % 16) * 16 + c / 4) output += 1
+    }
+    if source[input + 3] != '=' {
+      destination[output] = #cast(u8) ((c % 4) * 64 + d) output += 1
+    }
+    input += 4
+  }
+  return Result{ data: destination[..output], ok: true }
+}

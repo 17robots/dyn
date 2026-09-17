@@ -1,0 +1,37 @@
+use "std/crypto/core" crypto_core
+
+pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []const u8) []u8 {
+  if #len(destination) < 32 { return destination[..0] }
+  zero_salt: [32]u8 = []
+  actual_salt := salt
+  if #len(actual_salt) == 0 { actual_salt = zero_salt[..] }
+  return crypto_core.hmac_sha256(destination, actual_salt, input_key_material)
+}
+
+// scratch needs 32 + len(info) + 1 bytes. Maximum output is 255 SHA-256 blocks.
+pub fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) bool {
+  if #len(pseudorandom_key) < 32 || #len(destination) > 8160 || #len(scratch) < 33 + #len(info) { return false }
+  previous: [32]u8 = []
+  previous_length: usize = 0
+  output_at: usize = 0
+  counter: u8 = 1
+  for output_at < #len(destination) {
+    message_length := previous_length + #len(info) + 1
+    i: usize = 0 for i < previous_length { scratch[i] = previous[i] i += 1 }
+    i = 0 for i < #len(info) { scratch[previous_length + i] = info[i] i += 1 }
+    scratch[message_length - 1] = counter
+    if #len(crypto_core.hmac_sha256(previous[..], pseudorandom_key[..32], scratch[..message_length])) != 32 { return false }
+    previous_length = 32
+    take := #len(destination) - output_at if take > 32 { take = 32 }
+    i = 0 for i < take { destination[output_at + i] = previous[i] i += 1 }
+    output_at += take
+    if output_at < #len(destination) { counter += 1 }
+  }
+  return true
+}
+
+pub fn hkdf(destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) bool {
+  extracted: [32]u8 = []
+  if #len(hkdf_extract(extracted[..], salt, input_key_material)) != 32 { return false }
+  return hkdf_expand(destination, extracted[..], info, scratch)
+}

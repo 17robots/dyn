@@ -1,0 +1,48 @@
+pub struct Result { data: []u8, ok: bool }
+
+const Lower: []const u8 = "0123456789abcdef"
+const Upper: []const u8 = "0123456789ABCDEF"
+
+pub fn encoded_size(source_size: usize) usize {
+  maximum: usize = 18446744073709551615
+  if source_size > maximum / 2 { return 0 }
+  return source_size * 2
+}
+
+pub fn encode(destination: []u8, source: []const u8, uppercase: bool) Result {
+  required := encoded_size(#len(source))
+  if (#len(source) != 0 && required == 0) || required > #len(destination) {
+    return Result{ data: destination[..0], ok: false }
+  }
+  alphabet := Lower
+  if uppercase { alphabet = Upper }
+  i: usize = 0
+  for i < #len(source) {
+    destination[i * 2] = alphabet[#cast(usize) (source[i] >> 4)]
+    destination[i * 2 + 1] = alphabet[#cast(usize) (source[i] & 15)]
+    i += 1
+  }
+  return Result{ data: destination[..required], ok: true }
+}
+
+fn digit_value(byte: u8) isize {
+  if byte >= '0' && byte <= '9' { return #cast(isize) (byte - '0') }
+  if byte >= 'a' && byte <= 'f' { return #cast(isize) (byte - 'a') + 10 }
+  if byte >= 'A' && byte <= 'F' { return #cast(isize) (byte - 'A') + 10 }
+  return -1
+}
+
+pub fn decode(destination: []u8, source: []const u8) Result {
+  if #len(source) % 2 != 0 || #len(source) / 2 > #len(destination) {
+    return Result{ data: destination[..0], ok: false }
+  }
+  i: usize = 0
+  for i < #len(source) / 2 {
+    high := digit_value(source[i * 2])
+    low := digit_value(source[i * 2 + 1])
+    if high < 0 || low < 0 { return Result{ data: destination[..0], ok: false } }
+    destination[i] = #cast(u8) (high * 16 + low)
+    i += 1
+  }
+  return Result{ data: destination[..#len(source) / 2], ok: true }
+}

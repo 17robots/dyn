@@ -1,0 +1,32 @@
+pub enum Format { Unknown, Gray8, GrayAlpha8, Rgb8, Rgba8 }
+
+pub struct View {
+  pixels: []u8,
+  width: u32,
+  height: u32,
+  stride: usize,
+  format: Format,
+}
+
+pub fn bytes_per_pixel(format: Format) usize {
+  if format == Format.Gray8 { return 1 }
+  if format == Format.GrayAlpha8 { return 2 }
+  if format == Format.Rgb8 { return 3 }
+  if format == Format.Rgba8 { return 4 }
+  return 0
+}
+
+pub fn view(pixels: []u8, width: u32, height: u32, stride: usize, format: Format) View {
+  pixel_size := bytes_per_pixel(format)
+  row_size := #cast(usize) width * pixel_size
+  if pixel_size == 0 || stride < row_size || #cast(usize) height > #len(pixels) / stride { return View{} }
+  return View{ pixels: pixels, width: width, height: height, stride: stride, format: format }
+}
+
+pub fn row(source: *View, y: u32) []u8 {
+  if y >= source.height { return source.pixels[..0] }
+  start := #cast(usize) y * source.stride
+  length := #cast(usize) source.width * bytes_per_pixel(source.format)
+  return source.pixels[start..start + length]
+}
+

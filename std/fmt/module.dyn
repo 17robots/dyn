@@ -1,0 +1,146 @@
+// Formatting into bounded caller-owned storage. Failed compound writes roll back.
+
+pub struct Buffer { data: []u8, length: usize }
+pub fn buffer(storage: []u8) Buffer { return Buffer{ data: storage, length: 0 } }
+pub fn bytes(state: *const Buffer) []const u8 { return state.data[..state.length] }
+pub fn remaining(state: *const Buffer) usize { return #len(state.data) - state.length }
+pub fn clear(state: *Buffer) { state.length = 0 }
+
+pub fn write(state: *Buffer, value: []const u8) bool {
+  if #len(value) > remaining(state) { return false }
+  i: usize = 0
+  for i < #len(value) { state.data[state.length + i] = value[i] i += 1 }
+  state.length += #len(value)
+  return true
+}
+
+pub fn write_byte(state: *Buffer, value: u8) bool {
+  if state.length == #len(state.data) { return false }
+  state.data[state.length] = value
+  state.length += 1
+  return true
+}
+
+pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
+  if base < 2 || base > 36 { #panic("format base must be between 2 and 36") }
+  radix := #cast(u64) base
+  digit_count: usize = 1
+  remaining_value := value
+  for remaining_value >= radix { remaining_value /= radix digit_count += 1 }
+  if #len(destination) < digit_count { return destination[..0] }
+  at := digit_count
+  remaining_value = value
+  for at > 0 {
+    at -= 1
+    digit := #cast(u8) (remaining_value % radix)
+    if digit < 10 { destination[at] = digit + '0' }
+    else if uppercase { destination[at] = digit - 10 + 'A' }
+    else { destination[at] = digit - 10 + 'a' }
+    remaining_value /= radix
+  }
+  return destination[..digit_count]
+}
+
+pub fn u64_decimal(destination: []u8, value: u64) []u8 {
+  return u64_base(destination, value, 10, false)
+}
+
+pub fn i64_decimal(destination: []u8, value: i64) []u8 {
+  negative := value < 0
+  magnitude: u64 = 0
+  if negative { magnitude = #cast(u64) (-(value + 1)) magnitude += 1 }
+  else { magnitude = #cast(u64) value }
+  if !negative { return u64_decimal(destination, magnitude) }
+  if #len(destination) == 0 { return destination[..0] }
+  destination[0] = '-'
+  digits := u64_decimal(destination[1..], magnitude)
+  if #len(digits) == 0 { return destination[..0] }
+  return destination[..#len(digits) + 1]
+}
+
+pub fn write_u64(state: *Buffer, value: u64) bool {
+  storage: [20]u8 = []
+  return write(state, u64_decimal(storage[..], value))
+}
+
+pub fn write_i64(state: *Buffer, value: i64) bool {
+  storage: [20]u8 = []
+  return write(state, i64_decimal(storage[..], value))
+}
+
+pub fn write_bool(state: *Buffer, value: bool) bool {
+  if value { return write(state, "true") }
+  return write(state, "false")
+}
+
+pub fn write_padding(state: *Buffer, byte: u8, amount: usize) bool {
+  if amount > remaining(state) { return false }
+  i: usize = 0
+  for i < amount { state.data[state.length + i] = byte i += 1 }
+  state.length += amount
+  return true
+}
+
+pub fn write_quoted(state: *Buffer, value: []const u8) bool {
+  start := state.length
+  if !write_byte(state, '"') { return false }
+  for byte in value {
+    escaped: u8 = 0
+    if byte == '"' { escaped = '"' }
+    else if byte == '\\' { escaped = '\\' }
+    else if byte == 10 { escaped = 'n' }
+    else if byte == 13 { escaped = 'r' }
+    else if byte == 9 { escaped = 't' }
+    if escaped != 0 {
+      if !write_byte(state, '\\') || !write_byte(state, escaped) {
+        state.length = start return false
+      }
+    } else if byte < 32 {
+      if !write(state, "\\u00") {
+        state.length = start return false
+      }
+      high := byte / 16
+      low := byte % 16
+      if !write_byte(state, if_hex(high)) || !write_byte(state, if_hex(low)) {
+        state.length = start return false
+      }
+    } else if !write_byte(state, byte) {
+      state.length = start return false
+    }
+  }
+  if !write_byte(state, '"') { state.length = start return false }
+  return true
+}
+
+fn if_hex(value: u8) u8 {
+  if value < 10 { return value + '0' }
+  return value - 10 + 'a'
+}
+
+pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
+  start := state.length
+  for argument in arguments {
+    ok := false
+    case argument {
+      is bool value => { ok = write_bool(state, value) },
+      is i8 value => { ok = write_i64(state, #cast(i64) value) },
+      is i16 value => { ok = write_i64(state, #cast(i64) value) },
+      is i32 value => { ok = write_i64(state, #cast(i64) value) },
+      is i64 value => { ok = write_i64(state, value) },
+      is isize value => { ok = write_i64(state, #cast(i64) value) },
+      is u8 value => { ok = write_u64(state, #cast(u64) value) },
+      is u16 value => { ok = write_u64(state, #cast(u64) value) },
+      is u32 value => { ok = write_u64(state, #cast(u64) value) },
+      is u64 value => { ok = write_u64(state, value) },
+      is usize value => { ok = write_u64(state, #cast(u64) value) },
+      is []const u8 value => { ok = write(state, value) },
+      _ => { ok = write(state, "<value>") }
+    }
+    if !ok { state.length = start return false }
+  }
+  return true
+}
+
+pub fn write_values(state: *Buffer, values: ...any) bool {
+  return write_arguments(state, values)
+}

@@ -1,0 +1,59 @@
+const Mod32: u64 = 4294967296
+fn add(a: u32, b: u32) u32 { return #cast(u32) ((#cast(u64) a + #cast(u64) b) % Mod32) }
+fn rotate(value: u32, amount: usize) u32 {
+  factor: u64 = 1
+  i: usize = 0 for i < amount { factor *= 2 i += 1 }
+  left := #cast(u32) ((#cast(u64) value * factor) % Mod32)
+  return left | (value >> (32 - amount))
+}
+fn load32(input: []const u8, at: usize) u32 {
+  return #cast(u32) input[at] | (#cast(u32) input[at + 1] << 8) |
+    (#cast(u32) input[at + 2] << 16) | (#cast(u32) input[at + 3] << 24)
+}
+fn store32(output: []u8, at: usize, value: u32) {
+  output[at] = #cast(u8) value output[at + 1] = #cast(u8) (value >> 8)
+  output[at + 2] = #cast(u8) (value >> 16) output[at + 3] = #cast(u8) (value >> 24)
+}
+fn quarter(state: []u32, a, b, c, d: usize) {
+  state[a] = add(state[a], state[b]) state[d] = rotate(state[d] ^ state[a], 16)
+  state[c] = add(state[c], state[d]) state[b] = rotate(state[b] ^ state[c], 12)
+  state[a] = add(state[a], state[b]) state[d] = rotate(state[d] ^ state[a], 8)
+  state[c] = add(state[c], state[d]) state[b] = rotate(state[b] ^ state[c], 7)
+}
+
+pub fn block(destination: []u8, key: []const u8, nonce: []const u8, counter: u32) bool {
+  if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 { return false }
+  initial: [16]u32 = []
+  initial[0] = 1634760805 initial[1] = 857760878 initial[2] = 2036477234 initial[3] = 1797285236
+  i: usize = 0 for i < 8 { initial[4 + i] = load32(key, i * 4) i += 1 }
+  initial[12] = counter initial[13] = load32(nonce, 0) initial[14] = load32(nonce, 4) initial[15] = load32(nonce, 8)
+  working := initial
+  round: usize = 0
+  for round < 10 {
+    quarter(working[..], 0, 4, 8, 12) quarter(working[..], 1, 5, 9, 13)
+    quarter(working[..], 2, 6, 10, 14) quarter(working[..], 3, 7, 11, 15)
+    quarter(working[..], 0, 5, 10, 15) quarter(working[..], 1, 6, 11, 12)
+    quarter(working[..], 2, 7, 8, 13) quarter(working[..], 3, 4, 9, 14)
+    round += 1
+  }
+  i = 0 for i < 16 { store32(destination, i * 4, add(working[i], initial[i])) i += 1 }
+  return true
+}
+
+// IETF ChaCha20. Input/output may be the same slice. Counter exhaustion fails.
+pub fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) bool {
+  if #len(destination) < #len(input) || #len(key) != 32 || #len(nonce) != 12 { return false }
+  blocks := (#len(input) + 63) / 64
+  if #cast(u64) blocks > 4294967296 - #cast(u64) counter { return false }
+  stream: [64]u8 = []
+  at: usize = 0
+  block_counter := counter
+  for at < #len(input) {
+    if !block(stream[..], key, nonce, block_counter) { return false }
+    take := #len(input) - at if take > 64 { take = 64 }
+    i: usize = 0 for i < take { destination[at + i] = input[at + i] ^ stream[i] i += 1 }
+    at += take
+    if at < #len(input) { block_counter += 1 }
+  }
+  return true
+}

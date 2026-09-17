@@ -1,0 +1,77 @@
+pub struct Handle { index: usize, generation: u32 }
+pub struct Value { data: []u8, ok: bool }
+
+pub struct SlotMap {
+  data: []u8,
+  generations: []u32,
+  occupied: []u64,
+  slot_size: usize,
+  length: usize,
+}
+
+fn occupied(state: *const SlotMap, index: usize) bool {
+  return (state.occupied[index / 64] & (#cast(u64) 1 << (index % 64))) != 0
+}
+
+fn set_occupied(state: *SlotMap, index: usize, value: bool) {
+  mask := #cast(u64) 1 << (index % 64)
+  if value { state.occupied[index / 64] = state.occupied[index / 64] | mask }
+  else { state.occupied[index / 64] = state.occupied[index / 64] & ~mask }
+}
+
+pub fn init(data: []u8, generations: []u32, occupied_words: []u64, slot_size: usize) SlotMap {
+  if slot_size == 0 { #panic("slot map requires non-zero slot size") }
+  slot_count := #len(data) / slot_size
+  if slot_count == 0 || #len(generations) < slot_count || #len(occupied_words) < (slot_count + 63) / 64 {
+    #panic("slot map backing is too small")
+  }
+  i: usize = 0
+  for i < slot_count {
+    if generations[i] == 0 { generations[i] = 1 }
+    i += 1
+  }
+  i = 0
+  for i < #len(occupied_words) { occupied_words[i] = 0 i += 1 }
+  return SlotMap{
+    data: data[..slot_count * slot_size],
+    generations: generations[..slot_count],
+    occupied: occupied_words,
+    slot_size: slot_size,
+  }
+}
+
+pub fn capacity(state: *const SlotMap) usize { return #len(state.generations) }
+pub fn length(state: *const SlotMap) usize { return state.length }
+
+pub fn insert(state: *SlotMap, source: []const u8) Handle {
+  if #len(source) != state.slot_size { return Handle{} }
+  index: usize = 0
+  for index < #len(state.generations) && occupied(state, index) { index += 1 }
+  if index == #len(state.generations) { return Handle{} }
+  i: usize = 0
+  for i < state.slot_size { state.data[index * state.slot_size + i] = source[i] i += 1 }
+  set_occupied(state, index, true)
+  state.length += 1
+  return Handle{ index: index, generation: state.generations[index] }
+}
+
+pub fn get(state: *SlotMap, handle: Handle) Value {
+  if handle.generation == 0 || handle.index >= #len(state.generations) ||
+    !occupied(state, handle.index) || state.generations[handle.index] != handle.generation {
+    return Value{}
+  }
+  start := handle.index * state.slot_size
+  return Value{ data: state.data[start..start + state.slot_size], ok: true }
+}
+
+pub fn remove(state: *SlotMap, handle: Handle) bool {
+  value := get(state, handle)
+  if !value.ok { return false }
+  i: usize = 0
+  for i < #len(value.data) { value.data[i] = 0 i += 1 }
+  set_occupied(state, handle.index, false)
+  state.generations[handle.index] += 1
+  if state.generations[handle.index] == 0 { state.generations[handle.index] = 1 }
+  state.length -= 1
+  return true
+}

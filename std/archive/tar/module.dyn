@@ -1,0 +1,118 @@
+use "std/io" stream
+
+pub struct Entry {
+  name: []const u8,
+  size: u64,
+  kind: u8,
+  data: []const u8,
+}
+
+pub struct StreamReader {
+  source_reader: stream.Reader,
+  header_storage: []u8,
+  remaining: usize,
+  padding: usize,
+  active: bool,
+  ended: bool,
+  error: isize,
+}
+
+pub struct StreamEntry {
+  name: []const u8,
+  size: u64,
+  kind: u8,
+  error: isize,
+  ok: bool,
+}
+
+pub fn stream_reader(input: stream.Reader, header_storage: []u8) StreamReader {
+  return StreamReader{ source_reader: input, header_storage: header_storage }
+}
+
+fn discard(state: *StreamReader, amount: usize) bool {
+  left := amount
+  for left > 0 {
+    take := left
+    if take > #len(state.header_storage) { take = #len(state.header_storage) }
+    result := stream.read_exact(state.source_reader, state.header_storage[..take])
+    if result.status != stream.Status.Complete { state.error = result.error if state.error == 0 { state.error = -74 } return false }
+    left -= take
+  }
+  return true
+}
+
+// Returned name borrows header_storage until the next call.
+pub fn next_stream(state: *StreamReader) StreamEntry {
+  if state.ended || state.error != 0 { return StreamEntry{ error: state.error } }
+  if #len(state.header_storage) < 512 { state.error = -28 return StreamEntry{ error: state.error } }
+  if state.active {
+    if !discard(state, state.remaining + state.padding) { return StreamEntry{ error: state.error } }
+    state.active = false
+  }
+  header_result := stream.read_exact(state.source_reader, state.header_storage[..512])
+  if header_result.status == stream.Status.End && header_result.transferred == 0 { state.ended = true return StreamEntry{} }
+  if header_result.status != stream.Status.Complete { state.error = -74 return StreamEntry{ error: state.error } }
+  header := state.header_storage[..512]
+  all_zero := true
+  for byte in header { if byte != 0 { all_zero = false break } }
+  if all_zero { state.ended = true return StreamEntry{} }
+  size: u64 = 0
+  if !octal(header[124..136], &size) { state.error = -74 return StreamEntry{ error: state.error } }
+  state.remaining = #cast(usize) size
+  state.padding = (512 - state.remaining % 512) % 512
+  state.active = true
+  return StreamEntry{ name: header[..string_end(header[..100])], size: size, kind: header[156], ok: true }
+}
+
+// Reads entry payload incrementally. End means this entry is complete, not archive EOF.
+pub fn read_stream(state: *StreamReader, destination: []u8) stream.Result {
+  if state.error != 0 { return stream.Result{ error: state.error, status: stream.Status.Error } }
+  if !state.active { return stream.Result{ error: -22, status: stream.Status.Error } }
+  take := state.remaining
+  if take > #len(destination) { take = #len(destination) }
+  if take == 0 { return stream.Result{ status: stream.Status.End } }
+  result := stream.read_exact(state.source_reader, destination[..take])
+  if result.status != stream.Status.Complete { state.error = result.error if state.error == 0 { state.error = -74 } return stream.Result{ transferred: result.transferred, error: state.error, status: stream.Status.Error } }
+  state.remaining -= take
+  status := stream.Status.Complete
+  if state.remaining == 0 { status = stream.Status.End }
+  return stream.Result{ transferred: take, status: status }
+}
+
+fn string_end(bytes: []const u8) usize {
+  i: usize = 0
+  for i < #len(bytes) && bytes[i] != 0 { i += 1 }
+  return i
+}
+
+fn octal(bytes: []const u8, output: *u64) bool {
+  value: u64 = 0
+  found := false
+  for byte in bytes {
+    if byte == 0 || byte == ' ' { if found { break } else { continue } }
+    if byte < '0' || byte > '7' { return false }
+    if value > (18446744073709551615 - #cast(u64) (byte - '0')) / 8 { return false }
+    value = value * 8 + #cast(u64) (byte - '0')
+    found = true
+  }
+  output.* = value
+  return found
+}
+
+// Advances offset through a ustar stream. Entry slices borrow archive.
+pub fn next(archive: []const u8, offset: *usize, output: *Entry) bool {
+  if offset.* > #len(archive) || #len(archive) - offset.* < 512 { return false }
+  header := archive[offset.*..offset.* + 512]
+  all_zero := true
+  for byte in header { if byte != 0 { all_zero = false break } }
+  if all_zero { return false }
+  size: u64 = 0
+  if !octal(header[124..136], &size) || size > #cast(u64) (#len(archive) - offset.* - 512) { return false }
+  data_start := offset.* + 512
+  data_end := data_start + #cast(usize) size
+  output.* = Entry{ name: header[..string_end(header[..100])], size: size, kind: header[156], data: archive[data_start..data_end] }
+  padded := (#cast(usize) size + 511) / 512 * 512
+  if padded > #len(archive) - data_start { return false }
+  offset.* = data_start + padded
+  return true
+}

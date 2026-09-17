@@ -92,11 +92,35 @@ static char *node_text(TSNode n, const DynSource *s, bool quoted) {
   r[b - a] = 0;
   return r;
 }
+static void module_diagnostic(TSNode node,const DynSource *source,const char *severity,const char *message) {
+  TSPoint start=ts_node_start_point(node),end=ts_node_end_point(node);
+  dyn_diagnostic(severity,source->path,start.row+1,start.column+1,end.row+1,end.column+1,message);
+}
 static bool within(const char *root, const char *path) {
   size_t n = strlen(root);
   return !strncmp(root, path, n) && (path[n] == 0 || path[n] == '/');
 }
+static char *resolve_configured_sdk(const char *path) {
+  const char *configured = getenv("DYN_SDK");
+  if (!configured || !*configured)
+    return NULL;
+  char *root = realpath(configured, NULL);
+  if (!root)
+    return NULL;
+  char *candidate = dyn_path_join(root, path);
+  char *result = candidate ? realpath(candidate, NULL) : NULL;
+  free(candidate);
+  if (!result || !within(root, result)) {
+    free(result);
+    result = NULL;
+  }
+  free(root);
+  return result;
+}
 static char *resolve_std(const char *path) {
+  char *configured = resolve_configured_sdk(path);
+  if (configured)
+    return configured;
   char executable[4096];
   ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
   if (n < 0)
@@ -125,9 +149,48 @@ static char *resolve_std(const char *path) {
     return realpath(relative, NULL);
   return NULL;
 }
+static char *resolve_vendor(const char *path) {
+  char *configured = resolve_configured_sdk(path);
+  if (configured)
+    return configured;
+  char executable[4096];
+  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  if (n < 0)
+    return NULL;
+  executable[n] = 0;
+  char *slash = strrchr(executable, '/');
+  if (!slash)
+    return NULL;
+  *slash = 0;
+  char relative[4096];
+  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
+               path) < (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../sdk/%s", executable, path) <
+      (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
+      (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
+               path) < (int)sizeof(relative))
+    return realpath(relative, NULL);
+  return NULL;
+}
 static char *resolve(Resolver *r, const char *current, const char *path) {
   if (!strncmp(path, "std/", 4))
     return resolve_std(path);
+  if (!strncmp(path, "vendor/", 7))
+    return resolve_vendor(path);
   const char *slash = strchr(path, '/');
   size_t first = slash ? (size_t)(slash - path) : strlen(path);
   for (size_t i = 0; i < r->dependency_count; ++i) {
@@ -312,17 +375,13 @@ static int validate_member(Resolver *r, TSNode n, const DynSource *s, char **ali
     bool pub = false;
     if (decl_named(r, targets[found], member, &pub) && pub)
       return 0;
-    TSPoint p = ts_node_start_point(n);
-    fprintf(stderr,
-            "%s:%u:%u: error: imported member '%s.%s' is missing or not pub\n",
-            s->path, p.row + 1, p.column + 1, qualifier, member);
+    char message[512];snprintf(message,sizeof(message),"imported member '%s.%s' is missing or not pub",qualifier,member);
+    module_diagnostic(n,s,"error",message);
     return 1;
   }
   if (imported_decl(r, targets, count, member)) {
-    TSPoint p = ts_node_start_point(n);
-    fprintf(stderr,
-            "%s:%u:%u: error: unknown import alias '%s' for member '%s'\n",
-            s->path, p.row + 1, p.column + 1, qualifier, member);
+    char message[512];snprintf(message,sizeof(message),"unknown import alias '%s' for member '%s'",qualifier,member);
+    module_diagnostic(n,s,"error",message);
     return 1;
   }
   return 0;
@@ -359,11 +418,8 @@ static int validate_refs(Resolver *r, TSNode n, const DynSource *s, const char *
       bool pub = false;
       if (!decl_named(r, directory, name, &pub) &&
           imported_decl(r, targets, count, name)) {
-        TSPoint p = ts_node_start_point(n);
-        fprintf(
-            stderr,
-            "%s:%u:%u: error: imported type '%s' must be module-qualified\n",
-            s->path, p.row + 1, p.column + 1, name);
+        char message[512];snprintf(message,sizeof(message),"imported type '%s' must be module-qualified",name);
+        module_diagnostic(n,s,"error",message);
         ++errors;
       }
       free(name);
@@ -377,11 +433,8 @@ static int validate_refs(Resolver *r, TSNode n, const DynSource *s, const char *
       bool pub = false;
       if (!decl_named(r, directory, name, &pub) &&
           imported_decl(r, targets, count, name)) {
-        TSPoint p = ts_node_start_point(callee);
-        fprintf(stderr,
-                "%s:%u:%u: error: imported function '%s' must be "
-                "module-qualified\n",
-                s->path, p.row + 1, p.column + 1, name);
+        char message[512];snprintf(message,sizeof(message),"imported function '%s' must be module-qualified",name);
+        module_diagnostic(callee,s,"error",message);
         ++errors;
       }
       free(name);
@@ -403,11 +456,8 @@ static int validate_refs(Resolver *r, TSNode n, const DynSource *s, const char *
       bool pub = false;
       if (!decl_named(r, directory, name, &pub) &&
           imported_decl(r, targets, count, name)) {
-        TSPoint p = ts_node_start_point(n);
-        fprintf(
-            stderr,
-            "%s:%u:%u: error: imported type '%s' must be module-qualified\n",
-            s->path, p.row + 1, p.column + 1, name);
+        char message[512];snprintf(message,sizeof(message),"imported type '%s' must be module-qualified",name);
+        module_diagnostic(n,s,"error",message);
         ++errors;
       }
       free(name);
@@ -478,24 +528,17 @@ static int visit(Resolver *r, const char *directory,
       char *alias = ts_node_is_null(an) ? dyn_path_basename(path)
                                         : node_text(an, s, false);
       if (has(aliases, alias_count, alias)) {
-        TSPoint q = ts_node_start_point(d);
-        fprintf(stderr, "%s:%u:%u: error: duplicate import alias '%s'\n",
-                s->path, q.row + 1, q.column + 1, alias);
+        char message[512];snprintf(message,sizeof(message),"duplicate import alias '%s'",alias);
+        module_diagnostic(d,s,"error",message);
         result = 1;
       } else if (!target || !dyn_path_is_directory(target)) {
-        TSPoint q = ts_node_start_point(d);
-        fprintf(stderr,
-                "%s:%u:%u: error: import '%s' does not resolve inside project "
-                "root\n",
-                s->path, q.row + 1, q.column + 1, path);
+        char message[512];snprintf(message,sizeof(message),"import '%s' does not resolve inside project root",path);
+        module_diagnostic(d,s,"error",message);
         result = 1;
       } else {
         if (has(targets, target_count, target)) {
-          TSPoint q = ts_node_start_point(d);
-          fprintf(stderr,
-                  "%s:%u:%u: warning: module '%s' is imported more than once "
-                  "under different aliases\n",
-                  s->path, q.row + 1, q.column + 1, path);
+          char message[512];snprintf(message,sizeof(message),"module '%s' is imported more than once under different aliases",path);
+          module_diagnostic(d,s,"warning",message);
         }
         if (!push(&aliases, &alias_count, alias) ||
             !push(&targets, &target_count, target))

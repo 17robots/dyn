@@ -1,0 +1,28 @@
+// Stable non-cryptographic hashes and checksums.
+
+// Bounded FNV-style hash. Prime modulus avoids checked-overflow dependence.
+pub fn hash64(source: []const u8) u64 {
+  value: u64 = 2166136261
+  for byte in source { value = ((value ^ #cast(u64) byte) * 16777619) % 4294967291 }
+  return value
+}
+
+pub fn crc32(source: []const u8) u32 {
+  value: u32 = 4294967295
+  for byte in source {
+    value ^= #cast(u32) byte
+    bit: usize = 0
+    for bit < 8 {
+      if value % 2 != 0 { value = (value / 2) ^ 3988292384 }
+      else { value /= 2 }
+      bit += 1
+    }
+  }
+  return value ^ 4294967295
+}
+
+pub fn checksum32(source: []const u8) u32 {
+  value: u32 = 0
+  for byte in source { value += #cast(u32) byte }
+  return value
+}

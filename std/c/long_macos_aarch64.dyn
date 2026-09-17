@@ -1,3 +1,0 @@
-#target(arch: aarch64, kernel: darwin, abi: aapcs)
-pub type long = isize
-pub type unsigned_long = usize

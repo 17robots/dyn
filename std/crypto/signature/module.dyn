@@ -1,0 +1,5 @@
+use "vendor/openssl/crypto" provider
+pub type Result = provider.KeyResult
+pub fn ed25519_public(destination: []u8, private_key: []const u8) Result { return provider.ed25519_public(destination, private_key) }
+pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) Result { return provider.ed25519_sign(destination, message, private_key) }
+pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool { return provider.ed25519_verify(signature, message, public_key) }

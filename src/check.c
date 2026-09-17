@@ -41,7 +41,7 @@ static void inspect_declarations(TSNode root, const DynSource *s,
         !strcmp(k, "enum") || !strcmp(k, "variable") ||
         !strcmp(k, "const_variable") || !strcmp(k, "type_alias") ||
         !strcmp(k, "extern_fn") || !strcmp(k, "extern_variable") ||
-        !strcmp(k, "target_directive"))
+        !strcmp(k, "target_directive") || !strcmp(k, "link_directive"))
       continue;
     if (strcmp(k, "fn")) {
       TSPoint p = ts_node_start_point(d);

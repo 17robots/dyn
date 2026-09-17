@@ -1,0 +1,95 @@
+use "std/io" stream
+use "std/mem" memory
+
+pub enum ErrorKind { None, Syntax, OutOfMemory, Io }
+
+pub struct Template { source: []const u8 }
+pub struct Field { name: []const u8, value: []const u8 }
+pub struct ParseResult { template: Template, error: ErrorKind, error_offset: usize, ok: bool }
+pub struct RenderResult { error: ErrorKind, system_error: isize, ok: bool }
+
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0
+  for i < #len(left) { if left[i] != right[i] { return false } i += 1 }
+  return true
+}
+
+fn trim(source: []const u8) []const u8 {
+  start: usize = 0
+  end := #len(source)
+  for start < end && (source[start] == ' ' || source[start] == '\t' || source[start] == '\n' || source[start] == '\r') { start += 1 }
+  for end > start && (source[end - 1] == ' ' || source[end - 1] == '\t' || source[end - 1] == '\n' || source[end - 1] == '\r') { end -= 1 }
+  return source[start..end]
+}
+
+fn valid_name(name: []const u8) bool {
+  if #len(name) == 0 { return false }
+  i: usize = 0
+  for i < #len(name) {
+    byte := name[i]
+    if !((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+      (byte >= '0' && byte <= '9') || byte == '_' || byte == '.') { return false }
+    i += 1
+  }
+  return true
+}
+
+pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
+  cursor: usize = 0
+  for cursor < #len(source) {
+    if cursor + 1 < #len(source) && source[cursor] == '{' && source[cursor + 1] == '{' {
+      end := cursor + 2
+      for end + 1 < #len(source) && !(source[end] == '}' && source[end + 1] == '}') { end += 1 }
+      if end + 1 >= #len(source) || !valid_name(trim(source[cursor + 2..end])) {
+        return ParseResult{ error: ErrorKind.Syntax, error_offset: cursor, ok: false }
+      }
+      cursor = end + 2
+    } else {
+      cursor += 1
+    }
+  }
+  allocation := memory.arena_try_push_uninit(arena, #len(source), 1)
+  if !allocation.ok { return ParseResult{ error: ErrorKind.OutOfMemory, ok: false } }
+  retained: []u8 = arena.data[memory.arena_used(arena)..memory.arena_used(arena)]
+  if #len(source) > 0 {
+    retained = allocation.memory[..#len(source)]
+    i: usize = 0
+    for i < #len(source) { retained[i] = source[i] i += 1 }
+  }
+  return ParseResult{ template: Template{ source: retained }, error: ErrorKind.None, ok: true }
+}
+
+fn value(fields: []const Field, name: []const u8) []const u8 {
+  for field in fields { if equal(field.name, name) { return field.value } }
+  return ""
+}
+
+fn write(destination: stream.Writer, source: []const u8) RenderResult {
+  result := stream.write_all(destination, source)
+  if result.status == stream.Status.Error {
+    return RenderResult{ error: ErrorKind.Io, system_error: result.error, ok: false }
+  }
+  return RenderResult{ error: ErrorKind.None, ok: true }
+}
+
+pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult {
+  cursor: usize = 0
+  literal: usize = 0
+  for cursor < #len(template.source) {
+    if cursor + 1 < #len(template.source) && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
+      if cursor > literal {
+        literal_result := write(destination, template.source[literal..cursor])
+        if !literal_result.ok { return literal_result }
+      }
+      end := cursor + 2
+      for end + 1 < #len(template.source) && !(template.source[end] == '}' && template.source[end + 1] == '}') { end += 1 }
+      field_result := write(destination, value(fields, trim(template.source[cursor + 2..end])))
+      if !field_result.ok { return field_result }
+      cursor = end + 2
+      literal = cursor
+    } else { cursor += 1 }
+  }
+  if literal < #len(template.source) { return write(destination, template.source[literal..]) }
+  return RenderResult{ error: ErrorKind.None, ok: true }
+}

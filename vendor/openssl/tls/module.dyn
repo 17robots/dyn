@@ -1,0 +1,231 @@
+#target(kernel: linux)
+use "std/c"
+use "std/mem"
+#link("ssl")
+#link("crypto")
+
+// OpenSSL TLS client adapter. OpenSSL owns Context/Connection allocations;
+// every successful create_owned call requires its matching free_owned call.
+// Network descriptors and all byte/name buffers remain caller-owned.
+pub type Context = rawptr
+pub type Connection = rawptr
+pub type Certificate = rawptr
+
+pub enum ErrorKind {
+  None,
+  InvalidArgument,
+  Provider,
+  Verification,
+  WantRead,
+  WantWrite,
+}
+
+pub struct ContextResult { value: Context, error: ErrorKind, provider_code: u64, ok: bool }
+pub struct ConnectionResult { value: Connection, error: ErrorKind, provider_code: u64, ok: bool }
+pub struct Result { count: usize, error: ErrorKind, provider_code: u64, provider_status: i32, ok: bool }
+
+const VerifyPeer: i32 = 1
+const SetTlsExtensionHostname: i32 = 55
+const HostnameNameType: i64 = 0
+const FileTypePem: i32 = 1
+const ErrorWantRead: i32 = 2
+const ErrorWantWrite: i32 = 3
+
+
+fn failure(kind: ErrorKind, status: i32) Result {
+  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: status, ok: false }
+}
+
+fn operation_failure(connection: Connection, status: i32) Result {
+  kind := ErrorKind.Provider
+  code := ssl_error(connection, status)
+  if code == ErrorWantRead { kind = ErrorKind.WantRead }
+  else if code == ErrorWantWrite { kind = ErrorKind.WantWrite }
+  return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: code, ok: false }
+}
+
+// Loads provider-default trust roots and enables peer-certificate verification.
+pub fn context_create_owned() ContextResult {
+  method := tls_client_method()
+  if method == nil { return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error(), ok: false } }
+  context := ssl_context_new(method)
+  if context == nil { return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error(), ok: false } }
+  if ssl_context_default_roots(context) != 1 {
+    code := provider_error()
+    ssl_context_free(context)
+    return ContextResult{ value: nil, error: ErrorKind.Provider, provider_code: code, ok: false }
+  }
+  ssl_context_set_verify(context, VerifyPeer, nil)
+  return ContextResult{ value: context, error: ErrorKind.None, provider_code: 0, ok: true }
+}
+
+pub fn context_free_owned(context: Context) {
+  if context != nil { ssl_context_free(context) }
+}
+
+// Creates a server context and loads PEM certificate chain/private key.
+pub fn server_context_create_owned(certificate: []const u8, key: []const u8,
+                                   certificate_storage: []u8, key_storage: []u8) ContextResult {
+  certificate_path := c.string_from_bytes(certificate_storage, certificate)
+  key_path := c.string_from_bytes(key_storage, key)
+  if !certificate_path.ok || !key_path.ok { return ContextResult{ error: ErrorKind.InvalidArgument } }
+  method := tls_server_method()
+  context := ssl_context_new(method)
+  if method == nil || context == nil { return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() } }
+  if context_use_certificate(context, certificate_path.value) != 1 ||
+     context_use_key(context, key_path.value, FileTypePem) != 1 ||
+     context_check_key(context) != 1 {
+    code := provider_error() ssl_context_free(context)
+    return ContextResult{ error: ErrorKind.Provider, provider_code: code }
+  }
+  return ContextResult{ value: context, error: ErrorKind.None, ok: true }
+}
+pub fn server_context_create(arena: *mem.Arena, certificate: []const u8, key: []const u8) ContextResult {
+  mark := mem.arena_mark(arena)
+  certificate_path := c.string_from_arena(arena, certificate)
+  key_path := c.string_from_arena(arena, key)
+  if !certificate_path.ok || !key_path.ok { mem.arena_reset_to(arena, mark) return ContextResult{ error: ErrorKind.InvalidArgument } }
+  method := tls_server_method() context := ssl_context_new(method)
+  if method == nil || context == nil { mem.arena_reset_to(arena, mark) return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error() } }
+  if context_use_certificate(context, certificate_path.value) != 1 || context_use_key(context, key_path.value, FileTypePem) != 1 || context_check_key(context) != 1 { code := provider_error() ssl_context_free(context) mem.arena_reset_to(arena, mark) return ContextResult{ error: ErrorKind.Provider, provider_code: code } }
+  mem.arena_reset_to(arena, mark)
+  return ContextResult{ value: context, error: ErrorKind.None, ok: true }
+}
+
+pub fn server_connection_create_owned(context: Context, descriptor: i32) ConnectionResult {
+  if context == nil || descriptor < 0 { return ConnectionResult{ error: ErrorKind.InvalidArgument } }
+  connection := ssl_new(context)
+  if connection == nil { return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error() } }
+  if ssl_set_fd(connection, descriptor) != 1 {
+    code := provider_error() ssl_free(connection)
+    return ConnectionResult{ error: ErrorKind.Provider, provider_code: code }
+  }
+  return ConnectionResult{ value: connection, error: ErrorKind.None, ok: true }
+}
+
+// protocols is OpenSSL wire format: one length byte followed by each protocol.
+// OpenSSL copies the bytes; the caller retains ownership.
+pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) bool {
+  if connection == nil || #len(protocols) == 0 || #len(protocols) > 4294967295 { return false }
+  return ssl_set_alpn(connection, &protocols[0], #cast(u32) #len(protocols)) == 0
+}
+
+// Returned selection borrows the connection and dies when it is freed or renegotiated.
+pub fn selected_alpn(connection: Connection) []const u8 {
+  if connection == nil { return "" }
+  selected: rawptr = nil length: u32 = 0
+  ssl_get_alpn(connection, &selected, &length)
+  if selected == nil || length == 0 { return "" }
+  bytes := #cast(*const u8) selected
+  return bytes[..#cast(usize) length]
+}
+
+// Caller owns the returned reference and must call certificate_free_owned.
+pub fn peer_certificate_owned(connection: Connection) Certificate {
+  if connection == nil { return nil }
+  return ssl_peer_certificate(connection)
+}
+pub fn certificate_free_owned(certificate: Certificate) {
+  if certificate != nil { certificate_free(certificate) }
+}
+pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 {
+  if certificate == nil || #len(destination) == 0 || #len(destination) > 2147483647 { return destination[..0] }
+  name := certificate_subject_name(certificate)
+  if name == nil || name_text(name, &destination[0], #cast(i32) #len(destination)) == nil { return destination[..0] }
+  length: usize = 0
+  for length < #len(destination) && destination[length] != 0 { length += 1 }
+  return destination[..length]
+}
+
+// Configures both certificate hostname verification and SNI. name_storage must
+// fit hostname plus NUL and is only borrowed during this call.
+pub fn connection_create_owned(context: Context, descriptor: i32, hostname: []const u8, name_storage: []u8) ConnectionResult {
+  if context == nil || descriptor < 0 || #len(hostname) == 0 {
+    return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, ok: false }
+  }
+  name := c.string_from_bytes(name_storage, hostname)
+  if !name.ok { return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, ok: false } }
+  connection := ssl_new(context)
+  if connection == nil { return ConnectionResult{ value: nil, error: ErrorKind.Provider, provider_code: provider_error(), ok: false } }
+  parameters := ssl_get_parameters(connection)
+  configured := ssl_set_fd(connection, descriptor) == 1 && parameters != nil
+  if configured { configured = parameters_set_host(parameters, name.value, #len(hostname)) == 1 }
+  if configured { configured = ssl_control(connection, SetTlsExtensionHostname, HostnameNameType, #cast(rawptr) name.value) == 1 }
+  if !configured {
+    code := provider_error()
+    ssl_free(connection)
+    return ConnectionResult{ value: nil, error: ErrorKind.Provider, provider_code: code, ok: false }
+  }
+  return ConnectionResult{ value: connection, error: ErrorKind.None, provider_code: 0, ok: true }
+}
+pub fn connection_create(arena: *mem.Arena, context: Context, descriptor: i32, hostname: []const u8) ConnectionResult {
+  if context == nil || descriptor < 0 || #len(hostname) == 0 { return ConnectionResult{ error: ErrorKind.InvalidArgument } }
+  mark := mem.arena_mark(arena) name := c.string_from_arena(arena, hostname)
+  if !name.ok { return ConnectionResult{ error: ErrorKind.InvalidArgument } }
+  connection := ssl_new(context)
+  if connection == nil { mem.arena_reset_to(arena, mark) return ConnectionResult{ error: ErrorKind.Provider, provider_code: provider_error() } }
+  parameters := ssl_get_parameters(connection) configured := ssl_set_fd(connection, descriptor) == 1 && parameters != nil
+  if configured { configured = parameters_set_host(parameters, name.value, #len(hostname)) == 1 }
+  if configured { configured = ssl_control(connection, SetTlsExtensionHostname, HostnameNameType, #cast(rawptr) name.value) == 1 }
+  mem.arena_reset_to(arena, mark)
+  if !configured { code := provider_error() ssl_free(connection) return ConnectionResult{ error: ErrorKind.Provider, provider_code: code } }
+  return ConnectionResult{ value: connection, error: ErrorKind.None, ok: true }
+}
+
+pub fn connection_free_owned(connection: Connection) {
+  if connection != nil { ssl_free(connection) }
+}
+
+pub fn handshake(connection: Connection) Result {
+  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
+  connected := ssl_connect(connection)
+  verified := ssl_verify_result(connection)
+  if verified != 0 { return Result{ count: 0, error: ErrorKind.Verification, provider_code: #cast(u64) verified, provider_status: connected, ok: false } }
+  if connected != 1 { return operation_failure(connection, connected) }
+  return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: connected, ok: true }
+}
+
+pub fn server_handshake(connection: Connection) Result {
+  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
+  status := ssl_accept(connection)
+  if status != 1 { return operation_failure(connection, status) }
+  return Result{ provider_status: 1, ok: true }
+}
+
+pub fn read(connection: Connection, destination: []u8) Result {
+  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
+  if #len(destination) == 0 { return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: 1, ok: true } }
+  count: usize = 0
+  status := ssl_read(connection, #cast(rawptr) &destination[0], #len(destination), &count)
+  if status != 1 { return operation_failure(connection, status) }
+  return Result{ count: count, error: ErrorKind.None, provider_code: 0, provider_status: status, ok: true }
+}
+
+pub fn write(connection: Connection, source: []const u8) Result {
+  if connection == nil { return failure(ErrorKind.InvalidArgument, 0) }
+  if #len(source) == 0 { return Result{ count: 0, error: ErrorKind.None, provider_code: 0, provider_status: 1, ok: true } }
+  count: usize = 0
+  status := ssl_write(connection, #cast(rawptr) &source[0], #len(source), &count)
+  if status != 1 { return operation_failure(connection, status) }
+  return Result{ count: count, error: ErrorKind.None, provider_code: 0, provider_status: status, ok: true }
+}
+
+// May return false when provider requires another bidirectional shutdown call.
+pub fn shutdown(connection: Connection) bool {
+  if connection == nil { return false }
+  return ssl_shutdown(connection) == 1
+}
+
+pub fn error_code(connection: Connection, provider_result: i32) i32 {
+  if connection == nil { return 0 }
+  return ssl_error(connection, provider_result)
+}
+
+// Writes provider message into caller storage. Returned slice excludes NUL.
+pub fn error_string(destination: []u8, code: u64) []u8 {
+  if #len(destination) == 0 { return destination[..0] }
+  provider_error_string(code, &destination[0], #len(destination))
+  length: usize = 0
+  for length < #len(destination) && destination[length] != 0 { length += 1 }
+  return destination[..length]
+}

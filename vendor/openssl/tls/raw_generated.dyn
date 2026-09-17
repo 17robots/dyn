@@ -1,0 +1,30 @@
+extern fn tls_client_method "TLS_client_method"() rawptr
+extern fn tls_server_method "TLS_server_method"() rawptr
+extern fn ssl_context_new "SSL_CTX_new"(method: rawptr) rawptr
+extern fn ssl_context_free "SSL_CTX_free"(context: rawptr)
+extern fn ssl_context_default_roots "SSL_CTX_set_default_verify_paths"(context: rawptr) i32
+extern fn ssl_context_set_verify "SSL_CTX_set_verify"(context: rawptr, mode: i32, callback: rawptr)
+extern fn ssl_new "SSL_new"(context: rawptr) rawptr
+extern fn ssl_free "SSL_free"(connection: rawptr)
+extern fn ssl_set_fd "SSL_set_fd"(connection: rawptr, descriptor: i32) i32
+extern fn ssl_get_parameters "SSL_get0_param"(connection: rawptr) rawptr
+extern fn parameters_set_host "X509_VERIFY_PARAM_set1_host"(parameters: rawptr, host: *const u8, length: usize) i32
+extern fn ssl_control "SSL_ctrl"(connection: rawptr, command: i32, value: i64, argument: rawptr) i64
+extern fn ssl_connect "SSL_connect"(connection: rawptr) i32
+extern fn ssl_accept "SSL_accept"(connection: rawptr) i32
+extern fn context_use_certificate "SSL_CTX_use_certificate_chain_file"(context: rawptr, path: *const u8) i32
+extern fn context_use_key "SSL_CTX_use_PrivateKey_file"(context: rawptr, path: *const u8, kind: i32) i32
+extern fn context_check_key "SSL_CTX_check_private_key"(context: rawptr) i32
+extern fn ssl_read "SSL_read_ex"(connection: rawptr, destination: rawptr, length: usize, read: *usize) i32
+extern fn ssl_write "SSL_write_ex"(connection: rawptr, source: rawptr, length: usize, written: *usize) i32
+extern fn ssl_shutdown "SSL_shutdown"(connection: rawptr) i32
+extern fn ssl_set_alpn "SSL_set_alpn_protos"(connection: rawptr, protocols: *const u8, length: u32) i32
+extern fn ssl_get_alpn "SSL_get0_alpn_selected"(connection: rawptr, selected: *rawptr, length: *u32)
+extern fn ssl_peer_certificate "SSL_get1_peer_certificate"(connection: rawptr) rawptr
+extern fn certificate_free "X509_free"(certificate: rawptr)
+extern fn certificate_subject_name "X509_get_subject_name"(certificate: rawptr) rawptr
+extern fn name_text "X509_NAME_oneline"(name: rawptr, destination: *u8, length: i32) *u8
+extern fn ssl_verify_result "SSL_get_verify_result"(connection: rawptr) i64
+extern fn ssl_error "SSL_get_error"(connection: rawptr, result: i32) i32
+extern fn provider_error "ERR_get_error"() u64
+extern fn provider_error_string "ERR_error_string_n"(code: u64, destination: *u8, length: usize)

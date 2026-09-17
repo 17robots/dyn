@@ -5,11 +5,135 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <tree_sitter/api.h>
 extern char *realpath(const char *, char *);
+extern const TSLanguage *tree_sitter_dyn(void);
+
+static bool native_link_matches(const char *path, const char *name) {
+  const char *base = strrchr(path, '/'); base = base ? base + 1 : path;
+  char linux_name[160], darwin_name[160], windows_name[160];
+  snprintf(linux_name, sizeof(linux_name), "lib%s.so", name);
+  snprintf(darwin_name, sizeof(darwin_name), "lib%s.dylib", name);
+  snprintf(windows_name, sizeof(windows_name), "lib%s.dll.a", name);
+  size_t linux_length = strlen(linux_name);
+  return (!strncmp(base, linux_name, linux_length) &&
+          (base[linux_length] == 0 || base[linux_length] == '.')) ||
+         !strcmp(base, darwin_name) || !strcmp(base, windows_name);
+}
+
+static char *native_link_in_directory(const char *directory, const char *name) {
+  const char *format = !strcmp(dyn_target->kernel, "darwin") ? "lib%s.dylib" :
+                       !strcmp(dyn_target->kernel, "windows") ? "lib%s.dll.a" : "lib%s.so";
+  char filename[160], candidate[4096];
+  if (snprintf(filename, sizeof(filename), format, name) >= (int)sizeof(filename) ||
+      snprintf(candidate, sizeof(candidate), "%s/%s", directory, filename) >= (int)sizeof(candidate))
+    return NULL;
+  char *resolved = realpath(candidate, NULL);
+  if (resolved) return resolved;
+  if (strcmp(dyn_target->kernel, "linux")) return NULL;
+  DIR *entries = opendir(directory);
+  if (!entries) return NULL;
+  size_t prefix = strlen(filename);
+  struct dirent *entry;
+  while ((entry = readdir(entries))) {
+    if (strncmp(entry->d_name, filename, prefix) || entry->d_name[prefix] != '.') continue;
+    if (snprintf(candidate, sizeof(candidate), "%s/%s", directory, entry->d_name) >= (int)sizeof(candidate)) continue;
+    resolved = realpath(candidate, NULL);
+    if (resolved) break;
+  }
+  closedir(entries);
+  return resolved;
+}
+
+static char *find_native_link(const char *name) {
+  const char *configured = getenv("DYN_LIBRARY_PATH");
+  if (configured && *configured) {
+    const char *at = configured;
+    while (*at) {
+      const char *end = strchr(at, ':'); if (!end) end = at + strlen(at);
+      if (end > at && (size_t)(end - at) < 4096) {
+        char directory[4096]; memcpy(directory, at, (size_t)(end - at)); directory[end - at] = 0;
+        char *found = native_link_in_directory(directory, name); if (found) return found;
+      }
+      at = *end ? end + 1 : end;
+    }
+  }
+  static const char *directories[] = {
+    "/usr/lib", "/usr/local/lib", "/lib",
+    "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
+    "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu",
+    "/opt/homebrew/lib", "/usr/local/opt/lib",
+  };
+  for (size_t i = 0; i < sizeof(directories) / sizeof(directories[0]); ++i) {
+    char *found = native_link_in_directory(directories[i], name);
+    if (found) return found;
+  }
+  return NULL;
+}
+
+static int add_source_native_links(const DynSources *sources, DynOptions *options) {
+  char names[32][128]; size_t name_count = 0;
+  TSParser *parser = ts_parser_new();
+  if (!parser || !ts_parser_set_language(parser, tree_sitter_dyn())) {
+    if (parser) ts_parser_delete(parser);
+    return 2;
+  }
+  for (size_t i = 0; i < sources->count; ++i) {
+    if (dyn_source_target_enabled(&sources->items[i]) == 0) continue;
+    TSTree *tree = ts_parser_parse_string(parser, NULL, sources->items[i].text,
+                                          (uint32_t)sources->items[i].length);
+    if (!tree) { ts_parser_delete(parser); return 2; }
+    TSNode root = ts_tree_root_node(tree);
+    for (uint32_t child = 0; child < ts_node_named_child_count(root); ++child) {
+      TSNode directive = ts_node_named_child(root, child);
+      if (strcmp(ts_node_type(directive), "link_directive")) continue;
+      TSNode value = ts_node_child_by_field_name(directive, "library", 7);
+      uint32_t start = ts_node_start_byte(value), end = ts_node_end_byte(value);
+      if (end <= start + 2 || end - start - 2 >= sizeof(names[0])) {
+        fprintf(stderr, "error: invalid #link library in %s\n", sources->items[i].path);
+        ts_tree_delete(tree); ts_parser_delete(parser); return 1;
+      }
+      char name[128]; size_t length = (size_t)(end - start - 2);
+      memcpy(name, sources->items[i].text + start + 1, length); name[length] = 0;
+      for (size_t byte = 0; byte < length; ++byte)
+        if (!(name[byte] == '_' || name[byte] == '-' || name[byte] == '.' ||
+              (name[byte] >= '0' && name[byte] <= '9') ||
+              (name[byte] >= 'A' && name[byte] <= 'Z') ||
+              (name[byte] >= 'a' && name[byte] <= 'z'))) {
+          fprintf(stderr, "error: invalid #link library '%s' in %s\n", name, sources->items[i].path);
+          ts_tree_delete(tree); ts_parser_delete(parser); return 1;
+        }
+      bool duplicate = false;
+      for (size_t j = 0; j < name_count; ++j) if (!strcmp(names[j], name)) { duplicate = true; break; }
+      if (!duplicate) {
+        if (name_count == 32) { ts_tree_delete(tree); ts_parser_delete(parser); fprintf(stderr, "error: too many native libraries\n"); return 2; }
+        strcpy(names[name_count++], name);
+      }
+    }
+    ts_tree_delete(tree);
+  }
+  ts_parser_delete(parser);
+  for (size_t i = 0; i < name_count; ++i) {
+    bool supplied = false;
+    for (size_t j = 0; j < options->link_input_count; ++j)
+      if (native_link_matches(options->link_inputs[j], names[i])) { supplied = true; break; }
+    if (supplied) continue;
+    char *library = find_native_link(names[i]);
+    if (!library) {
+      fprintf(stderr, "error: vendor package requires native library '%s' for %s; install its development package, set DYN_LIBRARY_PATH, or pass --link\n",
+              names[i], dyn_target->kernel);
+      return 1;
+    }
+    if (options->link_input_count == 64) { free(library); fprintf(stderr, "error: at most 64 native link inputs are supported\n"); return 2; }
+    options->link_inputs[options->link_input_count++] = library;
+  }
+  return 0;
+}
 typedef struct {
   const DynSource *merged;
   const DynInterface *interfaces;
@@ -192,17 +316,6 @@ int main(int argc, char **argv) {
             o.target);
     return 2;
   }
-  bool early_build = is_command(&o, "build") && !o.shared && !o.no_link && !o.emit_ir &&
-                     !o.emit_object && !o.emit_asm;
-  if (early_build) {
-    char *early_base = dyn_path_basename(o.input);
-    const char *early_output = o.output ? o.output : early_base;
-    if (dyn_cache_fast_hit(&o, argv[0], early_output)) {
-      if (!o.quiet) printf("cached %s\n", early_output);
-      free(early_base); return 0;
-    }
-    free(early_base);
-  }
   struct timespec phase = timer_start();
   DynSources sources;
   int result = dyn_sources_load(o.input, &sources);
@@ -235,6 +348,14 @@ int main(int argc, char **argv) {
     fprintf(stderr, "timing load %.3f ms\n", elapsed_ms(phase));
   char *main_path = dyn_path_join(o.input, "main.dyn");
   bool build = is_command(&o, "build") || run;
+  if (build && !o.no_link) {
+    result = add_source_native_links(&sources, &o);
+    if (result) {
+      dyn_sources_free(&sources);
+      free(main_path);
+      return result;
+    }
+  }
   if (build && !o.no_link && !dyn_target->executable_link) {
     fprintf(stderr,
             "error: target '%s' supports object/assembly generation only; use --no-link\n",

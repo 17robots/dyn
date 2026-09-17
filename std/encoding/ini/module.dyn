@@ -1,0 +1,62 @@
+// Allocation-free INI scanner. Names and values borrow the input.
+pub enum Kind { Section, Pair }
+pub enum ErrorKind { None, Syntax }
+pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
+pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind }
+pub struct Result { entry: Entry, error: ErrorKind, ok: bool }
+
+pub fn scanner(source: []const u8) Scanner { return Scanner{ source: source, line: 1, section: source[..0] } }
+fn space(byte: u8) bool { return byte == ' ' || byte == '\t' }
+fn trim(source: []const u8) []const u8 {
+  first: usize = 0 last := #len(source)
+  for first < last && space(source[first]) { first += 1 }
+  for last > first && space(source[last - 1]) { last -= 1 }
+  return source[first..last]
+}
+
+pub fn next(state: *Scanner) Result {
+  if state.error != ErrorKind.None { return Result{ error: state.error } }
+  for state.offset < #len(state.source) {
+    start := state.offset
+    finish := start
+    for finish < #len(state.source) && state.source[finish] != '\n' && state.source[finish] != '\r' { finish += 1 }
+    state.offset = finish
+    if state.offset < #len(state.source) && state.source[state.offset] == '\r' { state.offset += 1 }
+    if state.offset < #len(state.source) && state.source[state.offset] == '\n' { state.offset += 1 }
+    line_number := state.line state.line += 1
+    line := trim(state.source[start..finish])
+    if #len(line) == 0 || line[0] == ';' || line[0] == '#' { } else {
+      if line[0] == '[' {
+        if #len(line) < 3 || line[#len(line) - 1] != ']' { state.error = ErrorKind.Syntax return Result{ error: state.error } }
+        section_name := trim(line[1..#len(line) - 1])
+        if #len(section_name) == 0 { state.error = ErrorKind.Syntax return Result{ error: state.error } }
+        state.section = section_name
+        return Result{ entry: Entry{ section: section_name, kind: Kind.Section, line: line_number }, ok: true }
+      }
+      separator := #len(line)
+      scan: usize = 0
+      for scan < #len(line) { if line[scan] == '=' { separator = scan scan = #len(line) } else { scan += 1 } }
+      if separator == #len(line) { state.error = ErrorKind.Syntax return Result{ error: state.error } }
+      key_name := trim(line[..separator])
+      if #len(key_name) == 0 { state.error = ErrorKind.Syntax return Result{ error: state.error } }
+      pair_value := trim(line[separator + 1..])
+      return Result{ entry: Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }, ok: true }
+    }
+  }
+  return Result{ error: ErrorKind.None, ok: false }
+}
+
+pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8 {
+  state := scanner(source)
+  for {
+    item := next(&state)
+    if !item.ok { return source[..0] }
+    if item.entry.kind == Kind.Pair && equal(item.entry.section, section) && equal(item.entry.key, key) { return item.entry.value }
+  }
+  return source[..0]
+}
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0 for i < #len(left) { if left[i] != right[i] { return false } i += 1 }
+  return true
+}

@@ -1,0 +1,21 @@
+pub struct Node { name: []const u8, completed: u64, total: u64, active: bool }
+pub struct Progress { nodes: []Node, length: usize, dropped: usize }
+pub fn progress(storage: []Node) Progress { return Progress{ nodes: storage, length: 0, dropped: 0 } }
+pub fn begin(state: *Progress, name: []const u8, total: u64) usize {
+  if state.length == #len(state.nodes) { state.dropped += 1 return #len(state.nodes) }
+  index := state.length state.length += 1
+  state.nodes[index] = Node{ name: name, completed: 0, total: total, active: true }
+  return index
+}
+pub fn advance(state: *Progress, index: usize, amount: u64) bool {
+  if index >= state.length || !state.nodes[index].active { return false }
+  node := &state.nodes[index]
+  if node.total != 0 && amount > node.total - node.completed { node.completed = node.total }
+  else { node.completed += amount }
+  return true
+}
+pub fn end(state: *Progress, index: usize) bool {
+  if index >= state.length || !state.nodes[index].active { return false }
+  state.nodes[index].active = false return true
+}
+pub fn reset(state: *Progress) { state.length = 0 state.dropped = 0 }

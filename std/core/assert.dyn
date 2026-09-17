@@ -1,3 +1,0 @@
-pub fn unreachable() {
-  #panic("unreachable code hit")
-}
