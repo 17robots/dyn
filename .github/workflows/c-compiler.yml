@@ -26,71 +26,6 @@ jobs:
             build/dist/
             build/projects/dist/
       - run: CC=clang ./benchmarks/run.sh 5
-      - name: Build native target probes
-        run: |
-          cp tests/run-native-artifacts.py build/
-          python3 tests/readiness-native.py --cross
-          python3 tests/aggregate-abi.py --cross
-          ./build/dyn build tests/owned-arenas --target x86_64-windows --output build/windows-arenas.exe --no-cache
-          ./build/dyn build tests/owned-arenas --target aarch64-macos --output build/macos-arenas --no-cache
-          ./build/dyn build tests/target-windows-platform --target x86_64-windows --output build/windows-platform.exe --no-cache
-          ./build/dyn build tests/target-macos-platform --target aarch64-macos --output build/macos-platform --no-cache
-          zig cc -target x86_64-windows-gnu -c tests/process-platform/windows-abi.c -o build/windows-process-abi.o
-          ./build/dyn build tests/process-platform --target x86_64-windows --output build/windows-process.exe --no-cache
-          ./build/dyn build tests/process-platform --target aarch64-macos --output build/macos-process --no-cache
-      - uses: actions/upload-artifact@v4
-        with:
-          name: native-target-probes
-          path: |
-            build/run-native-artifacts.py
-            build/readiness/native/
-            build/aggregate-abi/
-            build/windows-platform.exe
-            build/macos-platform
-            build/windows-arenas.exe
-            build/macos-arenas
-            build/windows-process.exe
-            build/macos-process
-
-  windows-native:
-    needs: quality
-    runs-on: windows-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: native-target-probes }
-      - run: python run-native-artifacts.py --target windows
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: native-windows-evidence
-          path: native-windows.json
-
-  macos-native:
-    needs: quality
-    runs-on: macos-14
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: native-target-probes }
-      - run: python3 run-native-artifacts.py --target macos
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: native-macos-evidence
-          path: native-macos.json
-
-  aarch64-native:
-    needs: quality
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: native-target-probes }
-      - run: python3 run-native-artifacts.py --target aarch64
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: native-aarch64-evidence
-          path: native-aarch64.json
-
   providers-native:
     strategy:
       fail-fast: false
@@ -123,7 +58,7 @@ jobs:
           sudo make -C /tmp/dyn-provider-tree-sitter install PREFIX=/usr/local
           sudo ldconfig
       - run: cargo install just --version 1.58.0 --locked
-      - run: just artifact dyn-release dynrt_start.o dynrt_release.o dynrt_support.o
+      - run: python3 compiler/tools/build.py dyn-release dynrt_start.o dynrt_release.o dynrt_support.o
       - run: python3 tests/provider-matrix.py
       - uses: actions/upload-artifact@v4
         if: always()

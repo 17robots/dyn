@@ -126,3 +126,25 @@ The FFmpeg core is downloaded on first use with a fixed SHA-512 check and cached
 under `build/browser-ffmpeg`. No runtime CDN is required by the browser example.
 Actual browser UI qualification is a separate Playwright run; its report lives in
 `build/wasm-next/browser-ui.json` when performed locally.
+
+## Independent native target CI
+
+`.github/workflows/native-targets.yml` runs on pushes, pull requests and manual
+requests independently of the large Linux release gate. A small Ubuntu/LLVM 19
+job builds the compiler and cross-compiles probes with pinned Zig and Tree-sitter.
+Windows 2022 (x86-64), macOS 15 (Apple Silicon), and Ubuntu 24.04 ARM then execute
+their own artifacts. Matrix failures do not cancel the other platforms.
+
+Each platform runs debug and release ABI/callback, aggregate, arena, memory and
+bounded-observation probes. Windows/macOS additionally test platform APIs and child
+process capture; Linux ARM tests concurrency. The downloaded manifest supplies
+expected SHA-256 hashes. Every probe records its result even when an earlier probe
+fails; native host/architecture mismatches and altered artifacts fail closed.
+JSON evidence is uploaded on success and failure. Reproduce cross-building with
+`python3 tools/build-native-probes.py`; execute the downloaded bundle on its matching
+host with `python run-native-artifacts.py --target windows` (or `macos`/`aarch64`).
+
+This qualifies emitted programs on native operating systems. It does not build or
+run the Dyn compiler itself on Windows/macOS, and it does not qualify every SDK
+package there. For example, Linux-only profiling APIs are outside these probes.
+The compiler host remains Linux; source-porting that executable is separate work.

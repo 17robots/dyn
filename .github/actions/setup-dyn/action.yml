@@ -7,7 +7,7 @@ runs:
       run: |
         set -euo pipefail
         sudo apt-get update
-        sudo apt-get install -y clang-19 lld-19 llvm-19-dev build-essential bubblewrap libseccomp2 python3 nodejs pkg-config sqlite3 libsqlite3-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libssl-dev libzstd-dev libvulkan-dev gdb cmake ninja-build gettext unzip libtool-bin libpcre2-dev liblua5.4-dev libarchive-dev libcurl4-openssl-dev libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-dev libwebp-dev libtiff-dev libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgl-dev libgl1-mesa-dri fonts-dejavu-core
+        sudo apt-get install -y clang-19 lld-19 llvm-19-dev build-essential bubblewrap libseccomp2 python3 nodejs pkg-config sqlite3 libsqlite3-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libssl-dev libzstd-dev libvulkan-dev gdb cmake ninja-build gettext unzip libtool-bin libpcre2-dev liblua5.4-dev libarchive-dev libcurl4-openssl-dev libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-dev libwebp-dev libtiff-dev libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxtst-dev libxss-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgl-dev libgl1-mesa-dri fonts-dejavu-core
         echo /usr/lib/llvm-19/bin >> "$GITHUB_PATH"
         echo LLVM_CONFIG=llvm-config-19 >> "$GITHUB_ENV"
         task_tools=$(mktemp -d)
