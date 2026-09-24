@@ -35,7 +35,12 @@ try:
             if platform.system()!='Windows': artifact.chmod(artifact.stat().st_mode|0o111)
             result=subprocess.run([str(artifact)],cwd=artifact.parent,capture_output=True,text=True,errors="replace",timeout=60)
             row.update(returncode=result.returncode,stdout=result.stdout,stderr=result.stderr)
-            if result.returncode: raise RuntimeError(f'exited {result.returncode}')
+            if result.returncode:
+                if platform.system()=='Darwin':
+                    trace=subprocess.run(['lldb','--batch','-o','run','-o','bt all','-o','register read',str(artifact)],
+                                         cwd=artifact.parent,capture_output=True,text=True,errors='replace',timeout=60)
+                    row['debugger']=dict(returncode=trace.returncode,stdout=trace.stdout,stderr=trace.stderr)
+                raise RuntimeError(f'exited {result.returncode}')
             row['status']='passed'
         except (OSError,RuntimeError,subprocess.SubprocessError) as error:
             row['error']=str(error);failures.append(name)
