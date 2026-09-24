@@ -11,6 +11,10 @@
 #include <time.h>
 #include <tree_sitter/api.h>
 #include <unistd.h>
+#ifndef DYN_VERSION
+#define DYN_VERSION "0.1.0-dev"
+#endif
+
 extern char *realpath(const char *, char *);
 extern const TSLanguage *tree_sitter_dyn(void);
 
@@ -361,7 +365,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     return 0;
   }
   if (is_command(options, "version")) {
-    puts("dyn 0.1.0-dev");
+    puts("dyn " DYN_VERSION);
     return 0;
   }
   if (is_command(options, "lsp")) {
@@ -675,7 +679,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-    puts("dyn 0.1.0-dev");
+    puts("dyn " DYN_VERSION);
     return 0;
   }
   DynOptions o;

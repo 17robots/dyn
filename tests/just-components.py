@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-components-') as directory, LOG.ope
     run(compiler, 'package', TS_DIR=grammar_unpacked)
     sdk_unpacked = work/'sdk unpacked'
     sdk_unpacked.mkdir()
-    with tarfile.open(compiler/'build/dist/dyn-0.1.0-dev-linux-x86_64.tar.gz') as archive:
+    with tarfile.open(compiler/('build/dist/dyn-'+os.environ.get('DYN_VERSION','0.1.0-dev')+'-linux-x86_64.tar.gz')) as archive:
         archive.extractall(sdk_unpacked, filter='data')
     dyn = sdk_unpacked/'dyn-sdk/bin/dyn'
     run(projects, 'test', DYN=dyn)

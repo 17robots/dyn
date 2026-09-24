@@ -25,6 +25,8 @@ bitcasts, panic, and target-translated low-level syscalls without depending on t
 Ordinary Dyn standard-library modules provide fixed-buffer memory allocation, descriptor I/O,
 process/time queries, logging, and opt-in reflection metadata.
 
+For packaged previews, [install with mise or generate a release](docs/release/distribution.md).
+
 Build commands require `just`, Python 3, and Bash. Set configuration through
 environment variables before the command.
 

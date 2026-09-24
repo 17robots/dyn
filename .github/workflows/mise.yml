@@ -1,0 +1,28 @@
+name: Mise installation
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  install-preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sdk-runtime
+      - uses: jdx/mise-action@v4
+        with:
+          version: '2026.9.9'
+          working_directory: examples/mise
+          cache: false
+      - name: Compile using mise-installed preview
+        working-directory: examples/mise
+        run: |
+          mise exec -- dyn version
+          mise exec -- dyn build ../../compiler/tests/smoke --release --no-cache --quiet --output /tmp/dyn-mise-smoke
+          /tmp/dyn-mise-smoke
+      - name: Test release assembly rejection paths
+        run: python3 tests/release-bundle.py

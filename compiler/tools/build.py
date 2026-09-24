@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -20,6 +21,10 @@ def flags(name, default=''):
 cc = flags('CC', 'cc')
 clang = flags('CLANG', 'clang')
 cflags = flags('CFLAGS', '-std=c11 -Wall -Wextra -Wpedantic -Werror -g')
+version = os.environ.get('DYN_VERSION', '0.1.0-dev')
+if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', version):
+    sys.exit('DYN_VERSION must be a semantic version without build metadata')
+cflags += ['-DDYN_VERSION="' + version + '"']
 llvm_config = flags('LLVM_CONFIG', 'llvm-config')
 def llvm(*args, fallback=''):
     if shutil.which(llvm_config[0]):

@@ -3,8 +3,8 @@ set -eu
 
 DYN=${DYN:-./build/dyn}
 
-test "$($DYN version)" = "dyn 0.1.0-dev"
-test "$($DYN --version)" = "dyn 0.1.0-dev"
+test "$($DYN version)" = "dyn ${DYN_VERSION:-0.1.0-dev}"
+test "$($DYN --version)" = "dyn ${DYN_VERSION:-0.1.0-dev}"
 $DYN cache stats | grep -q '^cache '
 if $DYN cache nope >build/cache-command.out 2>&1; then
   echo "expected invalid cache action" >&2; exit 1
@@ -37,7 +37,7 @@ grep -q "syscall has no AArch64 Linux mapping" build/aarch64-syscall.out
 $DYN build tests/target-macos --target aarch64-macos --output build/macos-target-test --no-link --emit-asm --no-cache
 file build/macos-target-test.o | grep -q 'Mach-O 64-bit arm64'
 $DYN build tests/target-windows --target x86_64-windows --output build/windows-target-test --no-link --emit-asm --no-cache
-file build/windows-target-test.o | grep -q 'x86-64 COFF'
+python3 -c 'from pathlib import Path; assert Path("build/windows-target-test.o").read_bytes()[:2] == bytes.fromhex("6486")' # AMD64 COFF machine ID
 $DYN build tests/target-macos --target aarch64-macos --output build/macos-link-test --no-cache
 file build/macos-link-test | grep -q 'Mach-O 64-bit arm64 executable'
 $DYN build tests/target-windows --target x86_64-windows --output build/windows-link-test --no-cache
