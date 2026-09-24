@@ -4,7 +4,8 @@
 use "std/c" c
 extern fn native_fork "fork"() i32
 extern fn native_pipe "pipe"(descriptors: *i32) i32
-extern fn native_fcntl "fcntl"(descriptor: i32, command: i32, value: i32) i32
+// Darwin arm64 passes variadic arguments on the stack, not as fixed parameters.
+extern fn native_fcntl "fcntl"(descriptor: i32, command: i32, ...) i32
 extern fn native_dup "dup2"(source: i32, destination: i32) i32
 extern fn native_exec "execve"(path: *const u8, arguments: rawptr, environment: rawptr) i32
 extern fn native_exit "_exit"(code: i32)

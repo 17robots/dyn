@@ -37,7 +37,7 @@ try:
             row.update(returncode=result.returncode,stdout=result.stdout,stderr=result.stderr)
             if result.returncode:
                 if platform.system()=='Darwin':
-                    trace=subprocess.run(['lldb','--batch','-o','run','-o','bt all','-o','register read',str(artifact)],
+                    trace=subprocess.run(['lldb','--batch','-o','run','-k','bt all','-k','register read',str(artifact)],
                                          cwd=artifact.parent,capture_output=True,text=True,errors='replace',timeout=60)
                     row['debugger']=dict(returncode=trace.returncode,stdout=trace.stdout,stderr=trace.stderr)
                 raise RuntimeError(f'exited {result.returncode}')
