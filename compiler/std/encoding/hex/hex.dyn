@@ -1,0 +1,73 @@
+use "std/encoding" codec
+use "std/bytes" bytes
+pub type Result = codec.Result
+pub type ErrorKind = codec.ErrorKind
+
+// Source and destination must not overlap. All failures leave destination unchanged.
+
+const Lower: []const u8 = "0123456789abcdef"
+const Upper: []const u8 = "0123456789ABCDEF"
+
+pub fn encoded_size(source_size: usize) usize {
+  maximum: usize = 18446744073709551615
+  if source_size > maximum / 2 { return 0 }
+  return source_size * 2
+}
+
+pub fn encode(destination: []u8, source: []const u8, uppercase: bool) Result {
+  required := encoded_size(#len(source))
+  if #len(source) != 0 && required == 0 { return Result{ error: ErrorKind.Overflow } }
+  if required > #len(destination) { return Result{ error: ErrorKind.Capacity, required: required } }
+  if bytes.overlaps(destination[..required], source) { return Result{ error: ErrorKind.Overlap, required: required } }
+  alphabet := Lower
+  if uppercase { alphabet = Upper }
+  i: usize = 0
+  for i < #len(source) {
+    destination[i * 2] = alphabet[#cast(usize) (source[i] >> 4)]
+    destination[i * 2 + 1] = alphabet[#cast(usize) (source[i] & 15)]
+    i += 1
+  }
+  return Result{ data: destination[..required], required: required, ok: true }
+}
+
+fn digit_value(byte: u8) isize {
+  if byte >= '0' && byte <= '9' { return #cast(isize) (byte - '0') }
+  if byte >= 'a' && byte <= 'f' { return #cast(isize) (byte - 'a') + 10 }
+  if byte >= 'A' && byte <= 'F' { return #cast(isize) (byte - 'A') + 10 }
+  return -1
+}
+
+fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
+  if #len(source) % 2 != 0 || (write && #len(source) / 2 > #len(destination)) {
+    return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
+  }
+  i: usize = 0
+  for i < #len(source) / 2 {
+    high := digit_value(source[i * 2])
+    low := digit_value(source[i * 2 + 1])
+    if high < 0 || low < 0 { return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false } }
+    if write { destination[i] = #cast(u8) (high * 16 + low) }
+    i += 1
+  }
+  return Result{ data: destination[..0], required: #len(source) / 2, ok: true }
+}
+
+
+pub fn decode(destination: []u8, source: []const u8) Result {
+  measured := decode_pass(destination[..0], source, false)
+  if !measured.ok { return measured }
+  if measured.required > #len(destination) { return Result{ error: ErrorKind.Capacity, required: measured.required } }
+  if bytes.overlaps(destination[..measured.required], source) { return Result{ error: ErrorKind.Overlap, required: measured.required } }
+  _ = decode_pass(destination, source, true)
+  return Result{ data: destination[..measured.required], required: measured.required, ok: true }
+}
+
+// Validates the complete input and reports exact decoded bytes. Failure leaves
+// output unchanged; true with zero bytes is a valid empty encoding.
+pub fn decoded_size(source: []const u8, output: *usize) bool {
+  empty: [0]u8 = []
+  measured := decode_pass(empty[..], source, false)
+  if !measured.ok { return false }
+  output.* = measured.required
+  return true
+}

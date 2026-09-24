@@ -1,0 +1,129 @@
+// Namespace context works with buffered or streaming events. Caller storage owns
+// copied scope names and normalized namespace URIs; capacity failure is explicit.
+pub struct NamespaceBinding { prefix: []const u8, uri: []const u8 }
+pub struct NamespaceFrame { name: []const u8, bindings: usize, used: usize }
+pub struct Namespaces {
+  bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8,
+  count: usize, depth: usize, used: usize,
+}
+pub struct ExpandedName { prefix: []const u8, local: []const u8, uri: []const u8, error: ErrorKind, ok: bool }
+const XmlNamespace: []const u8 = "http://www.w3.org/XML/1998/namespace"
+const XmlnsNamespace: []const u8 = "http://www.w3.org/2000/xmlns/"
+pub fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces {
+  return Namespaces{ bindings: bindings, frames: frames, storage: storage }
+}
+fn qualified(name: []const u8) ExpandedName {
+  colon := #len(name) i: usize = 0
+  if #len(name) == 0 || name_end(name, 0) != #len(name) { return ExpandedName{ error: ErrorKind.Syntax } }
+  for i < #len(name) {
+    if name[i] == ':' { if colon != #len(name) { return ExpandedName{ error: ErrorKind.Syntax } } colon = i }
+    i += 1
+  }
+  if colon == #len(name) { return ExpandedName{ local: name, ok: true } }
+  if colon == 0 || colon + 1 == #len(name) || name_end(name, colon + 1) != #len(name) { return ExpandedName{ error: ErrorKind.Syntax } }
+  return ExpandedName{ prefix: name[..colon], local: name[colon + 1..], ok: true }
+}
+pub fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName {
+  result := qualified(name) if !result.ok { return result }
+  if bytes.equal(result.prefix, "xmlns") || (attribute && bytes.equal(name, "xmlns")) { result.uri = XmlnsNamespace return result }
+  if bytes.equal(result.prefix, "xml") { result.uri = XmlNamespace return result }
+  if attribute && #len(result.prefix) == 0 { return result }
+  i := state.count
+  for i > 0 {
+    i -= 1
+    if bytes.equal(state.bindings[i].prefix, result.prefix) { result.uri = state.bindings[i].uri return result }
+  }
+  if #len(result.prefix) != 0 { return ExpandedName{ error: ErrorKind.Syntax } }
+  return result
+}
+fn namespace_copy(state: *Namespaces, source: []const u8) []const u8 {
+  start := state.used
+  for byte in source { state.storage[state.used] = byte state.used += 1 }
+  return state.storage[start..state.used]
+}
+// Attribute normalization: literal whitespace becomes spaces, references retain
+// the referenced scalar. Scanner already checked XML entities and characters.
+fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
+  start := state.used at: usize = 0
+  for at < #len(source) {
+    byte := source[at]
+    if byte != '&' {
+      if byte == '\r' { if at + 1 < #len(source) && source[at + 1] == '\n' { at += 1 } byte = ' ' }
+      else if byte == '\n' || byte == '\t' { byte = ' ' }
+      state.storage[state.used] = byte state.used += 1 at += 1
+    } else {
+      end := at + 1 for source[end] != ';' { end += 1 }
+      entity := source[at + 1..end] value: u32 = 0
+      if bytes.equal(entity, "amp") { value = 38 }
+      else if bytes.equal(entity, "lt") { value = 60 }
+      else if bytes.equal(entity, "gt") { value = 62 }
+      else if bytes.equal(entity, "apos") { value = 39 }
+      else if bytes.equal(entity, "quot") { value = 34 }
+      else {
+        index: usize = 1 base: u32 = 10
+        if entity[index] == 'x' { base = 16 index += 1 }
+        for index < #len(entity) {
+          digit := #cast(u32) entity[index]
+          if digit >= 48 && digit <= 57 { digit -= 48 }
+          else if digit >= 97 { digit = digit - 97 + 10 }
+          else { digit = digit - 65 + 10 }
+          value = value * base + digit index += 1
+        }
+      }
+      state.used += utf8.encode(state.storage[state.used..], value) at = end + 1
+    }
+  }
+  return state.storage[start..state.used]
+}
+fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
+  if event.kind != Kind.Start || !valid_attributes(event) { return ExpandedName{ error: ErrorKind.Syntax } }
+  if state.depth == #len(state.frames) || #len(event.name) > #len(state.storage) - state.used { return ExpandedName{ error: ErrorKind.Capacity } }
+  previous_count := state.count previous_used := state.used
+  copied := namespace_copy(state, event.name)
+  attributes_state := attributes(event)
+  for {
+    item := next_attribute(&attributes_state) if !item.ok { break }
+    split := qualified(item.name) if !split.ok { return split }
+    declaration := bytes.equal(item.name, "xmlns") || bytes.equal(split.prefix, "xmlns")
+    if declaration {
+      prefix := split.local if #len(split.prefix) == 0 { prefix = "" }
+      if state.count == #len(state.bindings) || #len(prefix) + #len(item.value) > #len(state.storage) - state.used { return ExpandedName{ error: ErrorKind.Capacity } }
+      owned_prefix := namespace_copy(state, prefix) uri := namespace_uri(state, item.value)
+      if bytes.equal(prefix, "xmlns") || bytes.equal(uri, XmlnsNamespace) || (bytes.equal(prefix, "xml") != bytes.equal(uri, XmlNamespace)) || (#len(prefix) > 0 && #len(uri) == 0) { return ExpandedName{ error: ErrorKind.Syntax } }
+      state.bindings[state.count] = NamespaceBinding{ prefix: owned_prefix, uri: uri } state.count += 1
+    }
+  }
+  resolved := namespace_resolve(state, copied, false)
+  if !resolved.ok || bytes.equal(resolved.prefix, "xmlns") { return ExpandedName{ error: ErrorKind.Syntax } }
+  scan := attributes(event)
+  for {
+    before := scan.offset attribute_item := next_attribute(&scan) if !attribute_item.ok { break }
+    current := namespace_resolve(state, attribute_item.name, true) if !current.ok { return current }
+    prior := attributes(event)
+    for prior.offset < before {
+      other := next_attribute(&prior) if !other.ok { break }
+      expanded := namespace_resolve(state, other.name, true)
+      if bytes.equal(current.uri, expanded.uri) && bytes.equal(current.local, expanded.local) { return ExpandedName{ error: ErrorKind.Syntax } }
+    }
+  }
+  state.frames[state.depth] = NamespaceFrame{ name: copied, bindings: previous_count, used: previous_used }
+  state.depth += 1
+  return resolved
+}
+// Enter every Start, including self-closing tags; leave it after consuming its
+// attributes. Failed enter restores scope counters; unused storage may change.
+// Expanded element slices last until scope exit.
+pub fn namespace_enter(state: *Namespaces, event: Event) ExpandedName {
+  if bytes.overlaps(state.storage, event.name) || bytes.overlaps(state.storage, event.attributes) { return ExpandedName{ error: ErrorKind.Overlap } }
+  count := state.count used := state.used depth := state.depth
+  result := namespace_enter_impl(state, event)
+  if !result.ok { state.count = count state.used = used state.depth = depth }
+  return result
+}
+pub fn namespace_leave(state: *Namespaces, name: []const u8) bool {
+  if state.depth == 0 { return false }
+  frame := state.frames[state.depth - 1]
+  if !bytes.equal(frame.name, name) { return false }
+  state.depth -= 1 state.count = frame.bindings state.used = frame.used
+  return true
+}

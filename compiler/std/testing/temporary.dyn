@@ -1,0 +1,23 @@
+use "std/fs" fs
+pub struct TemporaryDirectory { path: []const u8, active: bool }
+pub struct TemporaryResult { directory: TemporaryDirectory, error: isize, ok: bool }
+// Reserves a private 0700 directory. The returned path borrows destination.
+pub fn temporary_directory(destination: []u8, prefix: []const u8) TemporaryResult {
+  for byte in prefix { if byte == 0 || byte == '/' { return TemporaryResult{ error: -22 } } }
+  attempt: usize = 0
+  for attempt < 128 {
+    path := temporary_path(destination, prefix, "")
+    if #len(path) == 0 { return TemporaryResult{ error: -28 } }
+    created := fs.make_directory(path, 448)
+    if created.ok { return TemporaryResult{ directory: TemporaryDirectory{ path: path, active: true }, ok: true } }
+    if created.error != -17 { return TemporaryResult{ error: created.error } }
+    attempt += 1
+  }
+  return TemporaryResult{ error: -17 }
+}
+pub fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) fs.Result {
+  if !directory.active { return fs.Result{ ok: true } }
+  result := fs.remove_tree(directory.path, frames, scratch)
+  if result.ok { directory.active = false }
+  return result
+}

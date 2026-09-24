@@ -1,0 +1,41 @@
+use "std/encoding/base64"
+use "std/encoding/hex" hex_codec
+use "std/encoding/binary"
+use "std/hash"
+use "std/net/url"
+
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0
+  for i < #len(left) {
+    if left[i] != right[i] { return false }
+    i += 1
+  }
+  return true
+}
+
+fn main() {
+  encoded_storage: [32]u8 = []
+  encoded := base64.encode(encoded_storage[..], "hello").data
+  if !equal(encoded, "aGVsbG8=") { #panic("base64 encode") }
+  decoded_storage: [32]u8 = []
+  decoded := base64.decode(decoded_storage[..], encoded).data
+  if !equal(decoded, "hello") { #panic("base64 decode") }
+  if base64.decode(decoded_storage[..], "aG=Z").ok { #panic("base64 malformed") }
+  if hash.checksum32("abc") != 294 { #panic("checksum") }
+  if hash.crc32("123456789") != 3421780262 { #panic("crc32") }
+  if hash.hash64("hello") != 1236494795 { #panic("hash") }
+  hex_storage: [16]u8 = []
+  hex := hex_codec.encode(hex_storage[..], "dyn", false).data
+  if !equal(hex, "64796e") { #panic("hex encode") }
+  if !equal(hex_codec.decode(decoded_storage[..], hex).data, "dyn") { #panic("hex decode") }
+  varint_storage: [10]u8 = []
+  varint := binary.uleb128_encode(varint_storage[..], 300)
+  integer := binary.uleb128_decode(varint)
+  if !integer.ok || integer.value != 300 || integer.consumed != 2 { #panic("varint") }
+  percent_storage: [32]u8 = []
+  percent := url.percent_encode(percent_storage[..], "a b/").data
+  if !equal(percent, "a%20b%2f") || !equal(url.percent_decode(decoded_storage[..], percent).data, "a b/") {
+    #panic("percent encoding")
+  }
+}

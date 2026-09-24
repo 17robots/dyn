@@ -1,0 +1,46 @@
+use "vendor/cgltf"
+use "std/strings"
+use "std/io"
+use "std/terminal"
+use "std/mem"
+use "std/fs"
+use "std/os/linux"
+fn main() {
+  bytes := "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{}],\"buffers\":[{\"byteLength\":12,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAgD8AAABA\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":12}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":1,\"type\":\"VEC3\"}]}"
+  model := cgltf.parse_owned(bytes)
+  if !model.ok { #panic("glTF parse") }
+  defer cgltf.destroy_owned(model.value)
+  if !cgltf.validate(model.value) || cgltf.load_embedded(model.value) != 0 || cgltf.node_count(model.value) != 1 { #panic("glTF validate/load") }
+  values: [3]f32 = []
+  if !cgltf.read_float(model.value, 0, 0, values[..]) || values[0] != 0.0 || values[1] != 1.0 || values[2] != 2.0 { #panic("glTF accessor") }
+  if cgltf.read_float(model.value, 1, 0, values[..]) || cgltf.read_float(model.value, 0, 0, values[..1]) { #panic("glTF invalid accessor accepted") }
+  if cgltf.parse_owned("broken").ok { #panic("invalid glTF accepted") }
+  external := cgltf.parse_owned("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":12,\"uri\":\"external.bin\"}]}")
+  if !external.ok { #panic("external glTF parse") }
+  defer cgltf.destroy_owned(external.value)
+  if cgltf.load_embedded(external.value) != -2 { #panic("external resource not rejected") }
+  // Application chooses how external URIs are resolved. This example supplies
+  // caller-owned arrays; real tools can read files into a retained model arena.
+  mesh := cgltf.parse_owned("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":36,\"uri\":\"vertices.bin\"},{\"byteLength\":6,\"uri\":\"indices.bin\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":36},{\"buffer\":1,\"byteLength\":6}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}],\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0.5,0.25,1]}}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],\"nodes\":[{\"mesh\":0,\"translation\":[1,2,3]}]}")
+  if !mesh.ok { #panic("mesh parse") } defer cgltf.destroy_owned(mesh.value)
+  vertices: [9]f32 = [] triangles: [3]u16 = [] triangles[1] = 1 triangles[2] = 2
+  vertex_bytes := (#cast(*const u8) &vertices[0])[..36]
+  index_bytes := (#cast(*const u8) &triangles[0])[..6]
+  if cgltf.buffer_count(mesh.value) != 2 || !strings.equal(cgltf.buffer_uri(mesh.value, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh.value, 0) != 36 || cgltf.attach_buffer(mesh.value, 0, vertex_bytes[..1]) { #panic("mesh resource metadata") }
+  if !cgltf.attach_buffer(mesh.value, 0, vertex_bytes) || !cgltf.attach_buffer(mesh.value, 1, index_bytes) || cgltf.attach_buffer(mesh.value, 0, vertex_bytes) || cgltf.load_embedded(mesh.value) != 0 || !cgltf.validate(mesh.value) { #panic("mesh buffer attachment") }
+  if cgltf.mesh_count(mesh.value) != 1 || cgltf.primitive_count(mesh.value, 0) != 1 || cgltf.material_count(mesh.value) != 1 || cgltf.attribute(mesh.value, 0, 0, cgltf.Position, 0) != 0 || cgltf.indices(mesh.value, 0, 0) != 1 || cgltf.material(mesh.value, 0, 0) != 0 || cgltf.topology(mesh.value, 0, 0) != cgltf.Triangles || cgltf.node_mesh(mesh.value, 0) != 0 || cgltf.element_count(mesh.value, 0) != 3 { #panic("mesh traversal") }
+  index := cgltf.read_index(mesh.value, 1, 2)
+  if !index.ok || index.value != 2 || cgltf.read_index(mesh.value, 1, 3).ok || cgltf.attribute(mesh.value, 0, 0, cgltf.Normal, 0) != -1 { #panic("mesh indices") }
+  transform: [16]f32 = [] color: [4]f32 = []
+  if !cgltf.world_transform(mesh.value, 0, transform[..]) || transform[12] != 1.0 || transform[13] != 2.0 || transform[14] != 3.0 || !cgltf.base_color(mesh.value, 0, color[..]) || color[1] != 0.5 || cgltf.base_color(mesh.value, 1, color[..]) { #panic("mesh transform/material") }
+  backing := mem.arena_create(2 * 1024 * 1024) if !backing.ok { #panic("glTF file arena") }
+  defer { _ = mem.arena_release(&backing.arena) }
+  args := linux.process_arguments(&backing.arena)
+  if #len(args) == 2 {
+    file := fs.read_all(&backing.arena, args[1], 1024 * 1024) if !file.ok { #panic("GLB read") }
+    binary := cgltf.parse_owned(file.data) if !binary.ok { #panic("GLB parse") }
+    defer cgltf.destroy_owned(binary.value)
+    if cgltf.load_embedded(binary.value) != 0 || !cgltf.read_float(binary.value, 0, 0, values[..]) || values[2] != 2.0 { #panic("GLB accessor") }
+  }
+  _ = io.println(terminal.stdout(), "cgltf embedded accessor passed")
+}

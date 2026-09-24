@@ -1,0 +1,394 @@
+{
+  "sdl3": {
+    "module": "sdl3/raw",
+    "headers": [
+      "SDL3/SDL.h",
+      "SDL3/SDL_vulkan.h",
+      "SDL3/SDL_main.h"
+    ],
+    "selector": "^(SDL_|Uint|Sint)",
+    "cflags": [
+      "-DSDL_MAIN_HANDLED=1"
+    ],
+    "links": [
+      "SDL3"
+    ],
+    "pkg_config": "sdl3",
+    "procedures": [
+      "SDL_AppInit",
+      "SDL_AppIterate",
+      "SDL_AppEvent",
+      "SDL_AppQuit",
+      "SDL_main"
+    ],
+    "helper_header": "raw-helpers/sdl3.h"
+  },
+  "image": {
+    "module": "sdl3/image/raw",
+    "headers": [
+      "SDL3_image/SDL_image.h"
+    ],
+    "selector": "^(IMG_|SDL_IMAGE_)",
+    "cflags": [],
+    "links": [
+      "SDL3_image",
+      "SDL3"
+    ],
+    "pkg_config": "sdl3-image"
+  },
+  "ttf": {
+    "module": "sdl3/ttf/raw",
+    "headers": [
+      "SDL3_ttf/SDL_ttf.h"
+    ],
+    "selector": "^(TTF_|SDL_TTF_)",
+    "cflags": [],
+    "links": [
+      "SDL3_ttf",
+      "SDL3"
+    ],
+    "pkg_config": "sdl3-ttf"
+  },
+  "mixer": {
+    "module": "sdl3/mixer/raw",
+    "headers": [
+      "SDL3_mixer/SDL_mixer.h"
+    ],
+    "selector": "^(MIX_|SDL_MIXER_)",
+    "cflags": [],
+    "links": [
+      "SDL3_mixer",
+      "SDL3"
+    ],
+    "pkg_config": "sdl3-mixer"
+  },
+  "sqlite": {
+    "module": "sqlite/raw",
+    "headers": [
+      "sqlite3.h"
+    ],
+    "selector": "^(sqlite3|SQLITE_)",
+    "cflags": [],
+    "links": [
+      "sqlite3"
+    ],
+    "pkg_config": "sqlite3",
+    "procedures": [
+      "sqlite3_carray_bind",
+      "sqlite3_carray_bind_v2",
+      "sqlite3_mutex_held",
+      "sqlite3_mutex_notheld",
+      "sqlite3_snapshot_cmp",
+      "sqlite3_snapshot_free",
+      "sqlite3_snapshot_get",
+      "sqlite3_snapshot_open",
+      "sqlite3_snapshot_recover",
+      "sqlite3_stmt_scanstatus",
+      "sqlite3_stmt_scanstatus_reset",
+      "sqlite3_stmt_scanstatus_v2",
+      "sqlite3_win32_set_directory",
+      "sqlite3_win32_set_directory16",
+      "sqlite3_win32_set_directory8"
+    ]
+  },
+  "zstd": {
+    "module": "zstd/raw",
+    "headers": [
+      "zstd.h",
+      "zdict.h",
+      "zstd_errors.h"
+    ],
+    "selector": "^(ZSTD_|ZDICT_)",
+    "cflags": [],
+    "links": [
+      "zstd"
+    ],
+    "pkg_config": "libzstd"
+  },
+  "pcre2": {
+    "module": "pcre2/raw",
+    "headers": [
+      "pcre2.h"
+    ],
+    "selector": "^(pcre2_|PCRE2_)",
+    "cflags": [
+      "-DPCRE2_CODE_UNIT_WIDTH=0"
+    ],
+    "links": [
+      "pcre2-8",
+      "pcre2-16",
+      "pcre2-32"
+    ],
+    "pkg_config": "libpcre2-8"
+  },
+  "archive": {
+    "module": "archive/raw",
+    "headers": [
+      "archive.h",
+      "archive_entry.h"
+    ],
+    "selector": "^(archive|ARCHIVE_)",
+    "cflags": [],
+    "links": [
+      "archive"
+    ],
+    "pkg_config": "libarchive"
+  },
+  "curl": {
+    "module": "curl/raw",
+    "headers": [
+      "curl/curl.h",
+      "curl/easy.h",
+      "curl/multi.h",
+      "curl/urlapi.h",
+      "curl/websockets.h",
+      "curl/header.h",
+      "curl/options.h",
+      "curl/mprintf.h"
+    ],
+    "selector": "^(curl_|CURL)",
+    "cflags": [],
+    "links": [
+      "curl"
+    ],
+    "pkg_config": "libcurl"
+  },
+  "lua": {
+    "module": "lua/raw",
+    "headers": [
+      "lua.h",
+      "lauxlib.h",
+      "lualib.h"
+    ],
+    "selector": "^(lua|LUA)",
+    "cflags": [],
+    "links": [
+      "lua5.4"
+    ],
+    "pkg_config": "lua5.4",
+    "helper_header": "raw-helpers/lua.h",
+    "example": "raw-examples/lua.dyn.in"
+  },
+  "tree_sitter": {
+    "module": "tree_sitter/raw",
+    "headers": [
+      "tree_sitter/api.h"
+    ],
+    "selector": "^(ts_|TS)",
+    "cflags": [],
+    "links": [
+      "tree-sitter"
+    ],
+    "pkg_config": "tree-sitter",
+    "procedures": [
+      "ts_wasm_store_language_count",
+      "ts_wasm_store_load_language",
+      "ts_wasm_store_new"
+    ]
+  },
+  "box2d": {
+    "module": "box2d/raw",
+    "headers": [
+      "box2d/box2d.h"
+    ],
+    "selector": "^b2",
+    "cflags": [
+      "-DNDEBUG",
+      "-I{sources}/box2d/include"
+    ],
+    "links": [
+      "box2d"
+    ]
+  },
+  "cgltf": {
+    "module": "cgltf/raw",
+    "headers": [
+      "cgltf.h",
+      "cgltf_write.h"
+    ],
+    "selector": "^cgltf",
+    "cflags": [
+      "-I{sources}/cgltf"
+    ],
+    "links": [
+      "dyn_cgltf"
+    ]
+  },
+  "enet": {
+    "module": "enet/raw",
+    "headers": [
+      "enet/enet.h"
+    ],
+    "selector": "^(enet_|ENet|ENET_)",
+    "cflags": [
+      "-I{sources}/enet/include"
+    ],
+    "links": [
+      "dyn_enet"
+    ]
+  },
+  "microui": {
+    "module": "microui/raw",
+    "headers": [
+      "microui.h"
+    ],
+    "selector": "^(mu_|MU_)",
+    "cflags": [
+      "-I{sources}/microui-build"
+    ],
+    "links": [
+      "dyn_microui"
+    ]
+  },
+  "miniaudio": {
+    "module": "miniaudio/raw",
+    "headers": [
+      "miniaudio.h"
+    ],
+    "selector": "^(ma_|MA_)",
+    "cflags": [
+      "-I{sources}/miniaudio"
+    ],
+    "links": [
+      "dyn_miniaudio"
+    ]
+  },
+  "lz4": {
+    "module": "lz4/raw",
+    "headers": [
+      "lz4.h",
+      "lz4hc.h",
+      "lz4frame.h"
+    ],
+    "selector": "^(LZ4_|LZ4F_|LZ4HC_)",
+    "cflags": [
+      "-I{sources}/lz4/lib"
+    ],
+    "links": [
+      "lz4"
+    ]
+  },
+  "stb_rect_pack": {
+    "module": "stb/rect_pack/raw",
+    "headers": [
+      "stb_rect_pack.h"
+    ],
+    "selector": "^(stbrp_|STBRP_)",
+    "cflags": [
+      "-I{sources}/stb"
+    ],
+    "links": [
+      "dyn_stb"
+    ]
+  },
+  "stb_image_resize": {
+    "module": "stb/image_resize/raw",
+    "headers": [
+      "stb_image_resize2.h"
+    ],
+    "selector": "^(stbir_|STBIR_)",
+    "cflags": [
+      "-I{sources}/stb-build"
+    ],
+    "links": [
+      "dyn_stb_resize"
+    ]
+  },
+  "vulkan": {
+    "module": "vulkan/raw",
+    "headers": [
+      "vulkan/vulkan.h"
+    ],
+    "selector": "^(vk|Vk|VK_|PFN_vk)",
+    "cflags": [],
+    "links": [
+      "vulkan"
+    ],
+    "pkg_config": "vulkan",
+    "dispatch": true
+  },
+  "opengl": {
+    "module": "opengl/raw",
+    "headers": [
+      "GL/gl.h",
+      "GL/glcorearb.h",
+      "GL/glext.h"
+    ],
+    "selector": "^(gl|GL|PFNGL)",
+    "cflags": [
+      "-DGL_GLEXT_PROTOTYPES=1"
+    ],
+    "links": [
+      "GL"
+    ],
+    "dispatch": true
+  },
+  "openssl": {
+    "module": "openssl/raw",
+    "headers": [
+      "openssl/*.h"
+    ],
+    "selector": "^(?!_)",
+    "cflags": [],
+    "links": [
+      "ssl",
+      "crypto"
+    ],
+    "pkg_config": "openssl",
+    "owner": "/openssl/",
+    "procedures": [
+      "OSSL_provider_init"
+    ],
+    "helper_header": "raw-helpers/openssl.h"
+  },
+  "ffmpeg": {
+    "module": "ffmpeg/raw",
+    "headers": [
+      "libavformat/avformat.h",
+      "libavcodec/avcodec.h",
+      "libavcodec/bsf.h",
+      "libavcodec/codec_par.h",
+      "libavcodec/packet.h",
+      "libavutil/avutil.h",
+      "libavutil/audio_fifo.h",
+      "libavutil/buffer.h",
+      "libavutil/channel_layout.h",
+      "libavutil/dict.h",
+      "libavutil/imgutils.h",
+      "libavutil/mathematics.h",
+      "libavutil/opt.h",
+      "libavutil/pixdesc.h",
+      "libavutil/samplefmt.h",
+      "libavutil/time.h",
+      "libswscale/swscale.h",
+      "libswresample/swresample.h",
+      "libavfilter/avfilter.h",
+      "libavfilter/buffersink.h",
+      "libavfilter/buffersrc.h",
+      "libavdevice/avdevice.h"
+    ],
+    "selector": "^(av|sws|swr|AV|SWS_|SWR_|LIBAV|LIBSW)",
+    "cflags": [],
+    "links": [
+      "avformat",
+      "avcodec",
+      "avutil",
+      "swscale",
+      "swresample",
+      "avfilter",
+      "avdevice"
+    ],
+    "pkg_config": "libavformat",
+    "example": "raw-examples/ffmpeg.dyn.in",
+    "example_output": "decoded 4 samples",
+    "pkg_config_dependencies": [
+      "libavcodec",
+      "libavutil",
+      "libswscale",
+      "libswresample",
+      "libavfilter",
+      "libavdevice"
+    ],
+    "helper_header": "raw-helpers/ffmpeg.h"
+  }
+}

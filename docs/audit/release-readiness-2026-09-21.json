@@ -1,0 +1,2089 @@
+{
+  "date": "2026-09-21",
+  "release_status": "0.1-development-candidate",
+  "host": "Linux-7.2.6-arch2-1-x86_64-with-glibc2.44",
+  "compiler_sha256": "b3c8969f9d2ca82afecc9f1ff3469b9c03730f111ea59bea1de3811985fba8ea",
+  "gates": {
+    "quality-c": {
+      "status": "passed",
+      "log": "build/readiness/logs/quality-c.log",
+      "sha256": "81489bc5ef726c4da52802c2ce7f7993e862db49e2d0022d5c6c71c3126687f0"
+    },
+    "libraries": {
+      "status": "passed",
+      "log": "build/readiness/logs/libraries.log",
+      "sha256": "855de19aebb0fb669e6611aa16ee063ac73f1cc8248666d5eba57cccd70a2c58"
+    },
+    "projects": {
+      "status": "passed",
+      "log": "build/readiness/logs/projects.log",
+      "sha256": "25bbc1e103da85da13fb7dfb011f17dce36a268b6caea0f987f4c7095d2a0aa0"
+    },
+    "install": {
+      "status": "passed",
+      "log": "build/readiness/logs/install.log",
+      "sha256": "363de7085bb93f153b998e737dd344746c3ca2c1ac0f8f65dc3356573a3c3829"
+    },
+    "readiness": {
+      "status": "passed",
+      "log": "build/readiness/logs/readiness.log",
+      "sha256": "9eae781e6db0b477756f2e36bb9113405b65d98341d51f27cdfeb0afd62f035c"
+    },
+    "sanitizer-robustness": {
+      "status": "passed",
+      "log": "build/readiness/logs/sanitizer-robustness.log",
+      "sha256": "a748f1850cbacbc2ac7200bd29bfb7441c7f10e553439a2d7d1b0ffb0dce9ed5"
+    },
+    "sanitizer-ffi": {
+      "status": "passed",
+      "log": "build/readiness/logs/sanitizer-ffi.log",
+      "sha256": "765de425fe17f33f306afd97fac06f9d36b065da04a1ff5c16a17fc3a81769ee"
+    },
+    "sanitizer-fuzz": {
+      "status": "passed",
+      "log": "build/readiness/logs/sanitizer-fuzz.log",
+      "sha256": "9bad8eab6163f287812d5a078895f6d0c2e534d308ba656f34f0704269a2fd80"
+    },
+    "sanitizer-frontend-fuzz": {
+      "status": "passed",
+      "log": "build/readiness/logs/sanitizer-frontend-fuzz.log",
+      "sha256": "50c6f3b6f1ee7008fde0b2c4fa42d890e1b6a2ca12f0d32264a0026e27955612"
+    },
+    "runtime-compile-benchmarks": {
+      "status": "passed",
+      "log": "build/readiness/logs/runtime-compile-benchmarks.log",
+      "sha256": "4eb053673a40a5878264487256a796c06f2df49281b497a3a2cd4ebb854d60c4"
+    },
+    "clang-build": {
+      "status": "passed",
+      "log": "build/readiness/logs/clang-build.log",
+      "sha256": "e15406a0f3c0f6cb5a94cef8915de6b2b609326e09ca99921285715a817dd502"
+    },
+    "clang-conformance": {
+      "status": "passed",
+      "log": "build/readiness/logs/clang-conformance.log",
+      "sha256": "ad38ed6ad455eda440f1bbc8c933b31f382dbbfe4ad5112ad3c88edea2f25b54"
+    },
+    "bindings": {
+      "status": "passed",
+      "log": "build/readiness/logs/bindings.log",
+      "sha256": "31e52ceff507967f9cffd3641d8f88d0bac67e098f89b93669b0722de38984dc"
+    },
+    "grammar-package": {
+      "status": "passed",
+      "log": "build/readiness/logs/grammar-package.log",
+      "sha256": "3f35d4a984a306d2557627f624b9aa2d62cd3c52bfe7e11234b72841e1be0159"
+    }
+  },
+  "evidence": {
+    "conformance": [
+      {
+        "rule": "modules",
+        "fixture": "tests/import-valid",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "modules",
+        "fixture": "tests/multi-file",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "modules",
+        "fixture": "tests/import-cycle",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "modules",
+        "fixture": "tests/import-private",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "modules",
+        "fixture": "tests/import-unqualified",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "modules",
+        "fixture": "tests/import-alias",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "initialization",
+        "fixture": "tests/globals",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "initialization",
+        "fixture": "tests/global-modules",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "initialization",
+        "fixture": "tests/global-cycle",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "initialization",
+        "fixture": "tests/global-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "numeric-conversions",
+        "fixture": "tests/conversions",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "numeric-conversions",
+        "fixture": "tests/implicit-widening",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "numeric-conversions",
+        "fixture": "tests/distinct-types",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "numeric-conversions",
+        "fixture": "tests/lossy-conversion",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "numeric-conversions",
+        "fixture": "tests/distinct-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "constant-arithmetic",
+        "fixture": "tests/expressions",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "constant-arithmetic",
+        "fixture": "tests/boundaries",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "constant-arithmetic",
+        "fixture": "tests/constant-overflow",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "constant-arithmetic",
+        "fixture": "tests/constant-divzero",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "constant-arithmetic",
+        "fixture": "tests/constant-shift",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "control-flow",
+        "fixture": "tests/control-flow",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "control-flow",
+        "fixture": "tests/labeled-loops",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "control-flow",
+        "fixture": "tests/control-flow-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "control-flow",
+        "fixture": "tests/labeled-loop-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "scope",
+        "fixture": "tests/locals",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "scope",
+        "fixture": "tests/local-const",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "scope",
+        "fixture": "tests/local-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "scope",
+        "fixture": "tests/local-const-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "functions",
+        "fixture": "tests/functions",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "functions",
+        "fixture": "tests/function-pointers",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "functions",
+        "fixture": "tests/native-variadic",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "functions",
+        "fixture": "tests/function-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "functions",
+        "fixture": "tests/function-pointer-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "struct-layout",
+        "fixture": "tests/structs",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "struct-layout",
+        "fixture": "tests/empty-struct",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "struct-layout",
+        "fixture": "tests/struct-recursive",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "struct-layout",
+        "fixture": "tests/struct-duplicate-literal",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "enums-case",
+        "fixture": "tests/enums",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "enums-case",
+        "fixture": "tests/enum-pointer",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "enums-case",
+        "fixture": "tests/enum-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "enums-case",
+        "fixture": "tests/case-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "pointers",
+        "fixture": "tests/pointers",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "pointers",
+        "fixture": "tests/pointer-iteration",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "pointers",
+        "fixture": "tests/pointer-const-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "pointers",
+        "fixture": "tests/pointer-iteration-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "pointers",
+        "fixture": "tests/pointer-type-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "arrays-slices",
+        "fixture": "tests/arrays",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "arrays-slices",
+        "fixture": "tests/large-array",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "arrays-slices",
+        "fixture": "tests/array-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "arrays-slices",
+        "fixture": "tests/pointer-slice-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "defer-panic",
+        "fixture": "tests/defer",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "defer-panic",
+        "fixture": "tests/runtime-defer-loop",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "defer-panic",
+        "fixture": "tests/defer-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "builtins-reflection",
+        "fixture": "tests/builtins",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "builtins-reflection",
+        "fixture": "tests/reflection",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "builtins-reflection",
+        "fixture": "tests/reflection-errors",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "builtins-reflection",
+        "fixture": "tests/builtin-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "unsupported-syntax",
+        "fixture": "tests/generic-literal-syntax-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "unsupported-syntax",
+        "fixture": "tests/generic-type-syntax-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "foreign-boundaries",
+        "fixture": "tests/ffi-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "foreign-boundaries",
+        "fixture": "tests/ffi-variadic-errors",
+        "expected": "negative",
+        "status": "passed"
+      },
+      {
+        "rule": "arena-buffer-lifetimes",
+        "fixture": "tests/sdk-mem",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "arena-buffer-lifetimes",
+        "fixture": "tests/sdk-lifetimes",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "arena-buffer-lifetimes",
+        "fixture": "tests/sdk-buffer-contracts",
+        "expected": "positive",
+        "status": "passed"
+      },
+      {
+        "rule": "arena-buffer-lifetimes",
+        "fixture": "tests/sdk-storage-contracts",
+        "expected": "positive",
+        "status": "passed"
+      }
+    ],
+    "reproducibility": {
+      "compiler_sha256": "b3c8969f9d2ca82afecc9f1ff3469b9c03730f111ea59bea1de3811985fba8ea",
+      "contract": "same absolute source/SDK paths and toolchain; clean caches, output names, cwd and worker counts vary",
+      "builds": [
+        {
+          "fixture": "tests/multi-file",
+          "sha256": "914aeb37938bf1390fa1c85ee0c6906fd30990c48e2eecded9fe0b2e7023112b",
+          "jobs": [
+            1,
+            2,
+            0
+          ]
+        },
+        {
+          "fixture": "projects/multi-module",
+          "sha256": "a0357d72f47cdc534b23b7a8b3811d960b5f960f0c7938acac5a969353a0ef54",
+          "jobs": [
+            1,
+            2,
+            0
+          ]
+        },
+        {
+          "fixture": "tests/owned-arenas",
+          "sha256": "7356cea3bcb3613d51848b1d7f6f24732e21f50e638ab47baa261e86ea9fa79b",
+          "jobs": [
+            1,
+            2,
+            0
+          ]
+        },
+        {
+          "fixture": "tests/sdk-unicode-text",
+          "sha256": "9420caf3b2e7e5948e9fee97ebce05de2c08936e2169f73d09a6435095077c15",
+          "jobs": [
+            1,
+            2,
+            0
+          ]
+        }
+      ]
+    },
+    "workspace": {
+      "documents": 64,
+      "roots": 2,
+      "cycles": 250,
+      "roundtrip_pairs_ms": [
+        44.38236099667847,
+        43.42248500324786,
+        43.33554400363937,
+        42.93558100471273,
+        43.002252001315355,
+        43.4919850085862,
+        42.85395998158492,
+        42.54387901164591,
+        42.35052698641084,
+        43.129261990543455,
+        44.088128983275965,
+        43.61943498952314,
+        43.885706982109696,
+        43.47356499056332,
+        43.6056449834723,
+        43.340823991457,
+        43.01870099152438,
+        42.82112998771481,
+        43.10138197615743,
+        43.11668299487792,
+        43.69016599957831,
+        42.64216899173334,
+        42.447258019819856,
+        42.160115990554914,
+        42.1528659935575,
+        42.03654499724507,
+        41.9716450269334,
+        42.089285008842126,
+        42.422786995302886,
+        41.43466000095941,
+        41.35072999633849,
+        42.671178991440684,
+        40.83679598988965,
+        40.98246802459471,
+        42.41128801368177,
+        41.407840995816514,
+        41.70760198030621,
+        41.42855099053122,
+        41.67121299542487,
+        41.410980018554255,
+        41.27267000149004,
+        41.599102987674996,
+        40.858156979084015,
+        41.20966899790801,
+        41.25699898577295,
+        41.233700001612306,
+        41.05855798115954,
+        41.595531976781785,
+        40.56728500290774,
+        40.06238101283088,
+        40.444664016831666,
+        40.34874297212809,
+        40.474334004102275,
+        39.630297978874296,
+        40.34208398661576,
+        40.19754199543968,
+        39.791039016563445,
+        39.642508985707536,
+        38.996903982479125,
+        39.71500901388936,
+        40.35048300283961,
+        39.726299000903964,
+        41.62312200060114,
+        39.13442499469966,
+        39.98673098976724,
+        39.88495998783037,
+        41.13021900411695,
+        40.01632099971175,
+        39.309575979132205,
+        39.55869798664935,
+        39.16518497862853,
+        40.030781005043536,
+        39.67487800400704,
+        39.68214898486622,
+        40.228642988950014,
+        39.903920027427375,
+        40.408914006548,
+        39.39872601768002,
+        39.925260993186384,
+        40.202823001891375,
+        40.12510200846009,
+        42.929422023007646,
+        40.21732299588621,
+        39.90122998948209,
+        40.11932198773138,
+        40.81878700526431,
+        39.78771000402048,
+        41.220679006073624,
+        40.80215698922984,
+        40.17305199522525,
+        40.2923529909458,
+        40.64847598783672,
+        40.83705699304119,
+        40.53049499634653,
+        40.79428699333221,
+        40.00270098913461,
+        41.204309003660455,
+        39.066035009454936,
+        39.28244599956088,
+        40.16608197707683,
+        39.087254990590736,
+        40.649986010976136,
+        41.39795200899243,
+        40.28123299940489,
+        39.31829601060599,
+        39.94894097559154,
+        40.11791298398748,
+        40.41413401137106,
+        41.659553011413664,
+        39.917661022627726,
+        40.5633750197012,
+        40.221662988187745,
+        39.98923100880347,
+        39.72378998878412,
+        40.12724300264381,
+        40.619606006657705,
+        40.63256600056775,
+        40.67791599663906,
+        40.22633298882283,
+        40.30609398614615,
+        39.438417996279895,
+        38.87562398449518,
+        40.000170993153006,
+        38.82664299453609,
+        39.7013199981302,
+        40.309893985977396,
+        40.67193600349128,
+        40.231313003459945,
+        40.264813986141235,
+        40.99139801110141,
+        39.49114799615927,
+        40.11109299608506,
+        39.998432010179386,
+        40.54161498788744,
+        40.1237019977998,
+        40.039282001089305,
+        39.48074800428003,
+        39.60102901328355,
+        40.14436301076785,
+        39.809410023735836,
+        39.731469994876534,
+        39.28317598183639,
+        40.52197601413354,
+        39.91389198927209,
+        40.529566002078354,
+        40.29997400357388,
+        40.62604601494968,
+        39.78361000190489,
+        40.16362299444154,
+        39.29866699036211,
+        40.37831400637515,
+        40.48066501854919,
+        40.961569000501186,
+        40.744216996245086,
+        39.76772999158129,
+        40.29466400970705,
+        40.34637400764041,
+        40.32995499437675,
+        40.183942997828126,
+        40.67343601491302,
+        40.038692008238286,
+        40.520766022382304,
+        39.53827900113538,
+        41.24618100468069,
+        40.66665700520389,
+        41.39435198158026,
+        41.99608598719351,
+        40.82667801412754,
+        41.00966901751235,
+        39.680718997260556,
+        39.97876201174222,
+        39.687589975073934,
+        40.21143401041627,
+        39.28486700169742,
+        40.40676500881091,
+        40.145832987036556,
+        39.835741015849635,
+        41.009220003616065,
+        40.06977201788686,
+        40.55660602170974,
+        40.36526498384774,
+        40.70772699196823,
+        40.016562998062,
+        40.03076200024225,
+        40.565556002547964,
+        39.89721101243049,
+        39.713859994662926,
+        39.57784999511205,
+        39.383648021612316,
+        39.98419200070202,
+        40.165073005482554,
+        40.17641401151195,
+        39.73155000130646,
+        39.77099101757631,
+        39.313767018029466,
+        39.64790000463836,
+        39.65839999727905,
+        41.24760100967251,
+        40.11413300759159,
+        40.081842977087945,
+        40.736857015872374,
+        40.76960799284279,
+        40.2105440152809,
+        40.01389199402183,
+        39.945981989149004,
+        40.613627003040165,
+        41.222181025659665,
+        41.807135014096275,
+        41.45506297936663,
+        40.21808400284499,
+        40.62123701442033,
+        40.48779600998387,
+        40.580507018603384,
+        40.553326020017266,
+        40.552336984546855,
+        39.62974000023678,
+        40.17713398206979,
+        40.279904002090916,
+        40.88732899981551,
+        40.390404989011586,
+        40.297405008459464,
+        40.20133402082138,
+        40.0384429958649,
+        39.71477001323365,
+        41.72002398991026,
+        40.77190801035613,
+        40.61573700164445,
+        40.08162298123352,
+        40.13063298771158,
+        40.66009700181894,
+        40.43201499735005,
+        40.426755003863946,
+        40.67257701535709,
+        40.630417002830654,
+        41.12032998818904,
+        40.498877002391964,
+        39.93713200907223,
+        39.328228012891486,
+        40.39655497763306,
+        40.617436985485256,
+        40.31393499462865,
+        40.1294139737729,
+        39.953642000909895,
+        39.61547001381405,
+        39.470259012887254,
+        39.57796999020502,
+        39.841852005338296,
+        40.52456698263995,
+        41.32483300054446,
+        40.02986301202327
+      ],
+      "rss_kib": [
+        27416,
+        27472,
+        27520,
+        27536,
+        27564,
+        27576,
+        27592,
+        27612,
+        27636,
+        27648,
+        27668,
+        27676,
+        27684,
+        27696,
+        27704,
+        27716,
+        27724,
+        27736,
+        27748,
+        27760,
+        27764,
+        27764,
+        27780,
+        27800,
+        27812,
+        27824,
+        27828,
+        27836,
+        27856,
+        27868,
+        27876,
+        27884,
+        27892,
+        27900,
+        27912,
+        27912,
+        27920,
+        27932,
+        27932,
+        27932,
+        27940,
+        27940,
+        27940,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27944,
+        27948,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27952,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27960,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27964,
+        27968,
+        27968
+      ],
+      "median_ms": 40.34755848988425,
+      "p95_ms": 43.11668299487792,
+      "max_ms": 44.38236099667847,
+      "status": "passed",
+      "scope": "Edit pairs include two diagnostic/navigation barriers; RSS is process RSS, not retained heap size"
+    },
+    "soak": {
+      "cycles_requested": 250,
+      "cycles_completed": 250,
+      "runs": 2500,
+      "status": "passed",
+      "fixtures": [
+        "release-concurrency",
+        "sdk-storage-contracts",
+        "sdk-archive",
+        "sdk-sqlite",
+        "sdk-process"
+      ],
+      "seconds": 41.12841014802689
+    },
+    "providers": {
+      "host": "Linux-7.2.6-arch2-1-x86_64-with-glibc2.44",
+      "compiler": "dyn 0.1.0-dev",
+      "providers": {
+        "openssl": "3.6.4",
+        "sqlite3": "3.53.4",
+        "libzstd": "1.5.7"
+      },
+      "tests": [
+        {
+          "fixture": "sdk-aead",
+          "release": false,
+          "seconds": 0.0668048330117017,
+          "status": "passed"
+        },
+        {
+          "fixture": "sdk-aead",
+          "release": true,
+          "seconds": 0.11686897699837573,
+          "status": "passed"
+        },
+        {
+          "fixture": "sdk-zstd",
+          "release": false,
+          "seconds": 0.06468444701749831,
+          "status": "passed"
+        },
+        {
+          "fixture": "sdk-zstd",
+          "release": true,
+          "seconds": 0.1147643520089332,
+          "status": "passed"
+        },
+        {
+          "fixture": "sdk-sqlite",
+          "release": false,
+          "seconds": 0.06472379801562056,
+          "status": "passed"
+        },
+        {
+          "fixture": "sdk-sqlite",
+          "release": true,
+          "seconds": 0.1147047120030038,
+          "status": "passed"
+        },
+        {
+          "fixture": "sdk-tls-native",
+          "release": false,
+          "seconds": 0.07078755099792033,
+          "status": "passed"
+        },
+        {
+          "fixture": "sdk-tls-native",
+          "release": true,
+          "seconds": 0.12089456600369886,
+          "status": "passed"
+        }
+      ]
+    },
+    "scaling": {
+      "compiler_sha256": "b3c8969f9d2ca82afecc9f1ff3469b9c03730f111ea59bea1de3811985fba8ea",
+      "host": "Linux-7.2.6-arch2-1-x86_64-with-glibc2.44",
+      "repeats": 5,
+      "workloads": [
+        {
+          "kind": "imports",
+          "size": 8,
+          "samples": [
+            {
+              "wall_ms": 5.743260000599548,
+              "peak_rss_kib": 30968
+            },
+            {
+              "wall_ms": 5.663590010954067,
+              "peak_rss_kib": 30880
+            },
+            {
+              "wall_ms": 4.705883009592071,
+              "peak_rss_kib": 31000
+            },
+            {
+              "wall_ms": 4.45727098849602,
+              "peak_rss_kib": 30968
+            },
+            {
+              "wall_ms": 4.241320013534278,
+              "peak_rss_kib": 31112
+            }
+          ],
+          "median_ms": 4.705883009592071,
+          "max_ms": 5.743260000599548,
+          "median_rss_kib": 30968,
+          "allocation_calls": 444,
+          "allocation_requested_bytes": 53756
+        },
+        {
+          "kind": "imports",
+          "size": 32,
+          "samples": [
+            {
+              "wall_ms": 7.113380008377135,
+              "peak_rss_kib": 30584
+            },
+            {
+              "wall_ms": 5.27339699328877,
+              "peak_rss_kib": 31184
+            },
+            {
+              "wall_ms": 5.31175802461803,
+              "peak_rss_kib": 31144
+            },
+            {
+              "wall_ms": 5.374147993279621,
+              "peak_rss_kib": 31200
+            },
+            {
+              "wall_ms": 5.6949300051201135,
+              "peak_rss_kib": 30904
+            }
+          ],
+          "median_ms": 5.374147993279621,
+          "max_ms": 7.113380008377135,
+          "median_rss_kib": 31144,
+          "allocation_calls": 1652,
+          "allocation_requested_bytes": 315825
+        },
+        {
+          "kind": "imports",
+          "size": 128,
+          "samples": [
+            {
+              "wall_ms": 10.753937007393688,
+              "peak_rss_kib": 31304
+            },
+            {
+              "wall_ms": 9.523007000098005,
+              "peak_rss_kib": 31476
+            },
+            {
+              "wall_ms": 9.377256006700918,
+              "peak_rss_kib": 31548
+            },
+            {
+              "wall_ms": 9.002353996038437,
+              "peak_rss_kib": 31756
+            },
+            {
+              "wall_ms": 9.838180005317554,
+              "peak_rss_kib": 31776
+            }
+          ],
+          "median_ms": 9.523007000098005,
+          "max_ms": 10.753937007393688,
+          "median_rss_kib": 31548,
+          "allocation_calls": 6464,
+          "allocation_requested_bytes": 2947922
+        },
+        {
+          "kind": "struct_fields",
+          "size": 32,
+          "samples": [
+            {
+              "wall_ms": 5.252128001302481,
+              "peak_rss_kib": 30876
+            },
+            {
+              "wall_ms": 3.998917993158102,
+              "peak_rss_kib": 30924
+            },
+            {
+              "wall_ms": 4.611461976310238,
+              "peak_rss_kib": 30388
+            },
+            {
+              "wall_ms": 4.512491985224187,
+              "peak_rss_kib": 30724
+            },
+            {
+              "wall_ms": 4.829333978705108,
+              "peak_rss_kib": 30920
+            }
+          ],
+          "median_ms": 4.611461976310238,
+          "max_ms": 5.252128001302481,
+          "median_rss_kib": 30876,
+          "allocation_calls": 69,
+          "allocation_requested_bytes": 16651
+        },
+        {
+          "kind": "struct_fields",
+          "size": 128,
+          "samples": [
+            {
+              "wall_ms": 5.712940008379519,
+              "peak_rss_kib": 29820
+            },
+            {
+              "wall_ms": 4.348750982899219,
+              "peak_rss_kib": 31304
+            },
+            {
+              "wall_ms": 4.3782110151369125,
+              "peak_rss_kib": 31144
+            },
+            {
+              "wall_ms": 4.164368991041556,
+              "peak_rss_kib": 31244
+            },
+            {
+              "wall_ms": 5.54577901493758,
+              "peak_rss_kib": 31140
+            }
+          ],
+          "median_ms": 4.3782110151369125,
+          "max_ms": 5.712940008379519,
+          "median_rss_kib": 31144,
+          "allocation_calls": 71,
+          "allocation_requested_bytes": 26819
+        },
+        {
+          "kind": "struct_fields",
+          "size": 512,
+          "samples": [
+            {
+              "wall_ms": 5.30922701000236,
+              "peak_rss_kib": 31132
+            },
+            {
+              "wall_ms": 5.490659008501098,
+              "peak_rss_kib": 30944
+            },
+            {
+              "wall_ms": 7.110861013643444,
+              "peak_rss_kib": 30984
+            },
+            {
+              "wall_ms": 6.138674012618139,
+              "peak_rss_kib": 31108
+            },
+            {
+              "wall_ms": 6.147342995973304,
+              "peak_rss_kib": 31028
+            }
+          ],
+          "median_ms": 6.138674012618139,
+          "max_ms": 7.110861013643444,
+          "median_rss_kib": 31028,
+          "allocation_calls": 73,
+          "allocation_requested_bytes": 69059
+        },
+        {
+          "kind": "rewrites",
+          "size": 128,
+          "samples": [
+            {
+              "wall_ms": 4.621722997399047,
+              "peak_rss_kib": 31380
+            },
+            {
+              "wall_ms": 6.030571996234357,
+              "peak_rss_kib": 31176
+            },
+            {
+              "wall_ms": 5.133385973749682,
+              "peak_rss_kib": 31204
+            },
+            {
+              "wall_ms": 4.826994001632556,
+              "peak_rss_kib": 31240
+            },
+            {
+              "wall_ms": 5.236116994637996,
+              "peak_rss_kib": 31164
+            }
+          ],
+          "median_ms": 5.133385973749682,
+          "max_ms": 6.030571996234357,
+          "median_rss_kib": 31204,
+          "allocation_calls": 871,
+          "allocation_requested_bytes": 173924
+        },
+        {
+          "kind": "rewrites",
+          "size": 1024,
+          "samples": [
+            {
+              "wall_ms": 11.351149994879961,
+              "peak_rss_kib": 33956
+            },
+            {
+              "wall_ms": 11.938775016460568,
+              "peak_rss_kib": 33940
+            },
+            {
+              "wall_ms": 12.180956022348255,
+              "peak_rss_kib": 34072
+            },
+            {
+              "wall_ms": 11.482121015433222,
+              "peak_rss_kib": 33976
+            },
+            {
+              "wall_ms": 12.551058985991403,
+              "peak_rss_kib": 33976
+            }
+          ],
+          "median_ms": 11.938775016460568,
+          "max_ms": 12.551058985991403,
+          "median_rss_kib": 33976,
+          "allocation_calls": 6262,
+          "allocation_requested_bytes": 1376376
+        },
+        {
+          "kind": "rewrites",
+          "size": 4096,
+          "samples": [
+            {
+              "wall_ms": 36.66268999222666,
+              "peak_rss_kib": 41980
+            },
+            {
+              "wall_ms": 36.155226000119,
+              "peak_rss_kib": 41636
+            },
+            {
+              "wall_ms": 35.352470993530005,
+              "peak_rss_kib": 42372
+            },
+            {
+              "wall_ms": 34.87228698213585,
+              "peak_rss_kib": 42432
+            },
+            {
+              "wall_ms": 35.24807997746393,
+              "peak_rss_kib": 42356
+            }
+          ],
+          "median_ms": 35.352470993530005,
+          "max_ms": 36.66268999222666,
+          "median_rss_kib": 42356,
+          "allocation_calls": 24704,
+          "allocation_requested_bytes": 5499000
+        }
+      ],
+      "allocation_scope": "compiler and generated parser only; requested bytes include realloc requests",
+      "rss_scope": "fresh helper maximum RSS; includes shared libraries",
+      "editor": {
+        "samples_ms": [
+          4.374390991870314,
+          4.379280988359824,
+          4.381790990009904,
+          4.384350992040709,
+          4.385810985695571,
+          4.39556100172922,
+          4.395670985104516,
+          4.398591001518071,
+          4.400050995172933,
+          4.40210200031288,
+          4.4058609928470105,
+          4.406251013278961,
+          4.409930988913402,
+          4.411920992424712,
+          4.42089099669829,
+          4.426831990713254,
+          4.431881010532379,
+          4.435662005562335,
+          4.504982003709301,
+          4.776614019647241
+        ],
+        "median_ms": 4.403981496579945,
+        "p95_ms": 4.504982003709301,
+        "max_ms": 4.776614019647241
+      },
+      "editor_bursts": {
+        "samples_ms": [
+          4.418861004523933,
+          4.422370984684676,
+          4.431221983395517,
+          4.4358619779814035,
+          4.435871989699081,
+          4.447321000043303,
+          4.447971994522959,
+          4.452641005627811,
+          4.454401001567021,
+          4.455981019418687,
+          4.456432012375444,
+          4.460550990188494,
+          4.463260993361473,
+          4.4664320012088865,
+          4.471261985599995,
+          4.479681985685602,
+          4.482321994146332,
+          4.4844410149380565,
+          4.799674003152177,
+          4.998195014195517
+        ],
+        "median_ms": 4.456206515897065,
+        "p95_ms": 4.799674003152177,
+        "max_ms": 4.998195014195517
+      }
+    },
+    "member-work": {
+      "compiler_sha256": "b3c8969f9d2ca82afecc9f1ff3469b9c03730f111ea59bea1de3811985fba8ea",
+      "workloads": [
+        {
+          "kind": "types",
+          "size": 256,
+          "samples": [
+            {
+              "wall_ms": 11.209599004359916,
+              "phases_ms": {
+                "load": 5.319,
+                "detail_parse": 0.085,
+                "detail_ast": 1.047,
+                "detail_sema": 0.014,
+                "check": 1.453
+              }
+            },
+            {
+              "wall_ms": 10.285233001923189,
+              "phases_ms": {
+                "load": 4.774,
+                "detail_parse": 0.087,
+                "detail_ast": 1.069,
+                "detail_sema": 0.022,
+                "check": 1.485
+              }
+            },
+            {
+              "wall_ms": 10.526984988246113,
+              "phases_ms": {
+                "load": 4.854,
+                "detail_parse": 0.086,
+                "detail_ast": 1.062,
+                "detail_sema": 0.014,
+                "check": 1.474
+              }
+            }
+          ],
+          "median_ms": 10.526984988246113,
+          "median_phases_ms": {
+            "load": 4.854,
+            "detail_parse": 0.086,
+            "detail_ast": 1.062,
+            "detail_sema": 0.014,
+            "check": 1.474
+          }
+        },
+        {
+          "kind": "types",
+          "size": 2048,
+          "samples": [
+            {
+              "wall_ms": 98.85206999024376,
+              "phases_ms": {
+                "load": 75.798,
+                "detail_parse": 0.789,
+                "detail_ast": 14.166,
+                "detail_sema": 0.105,
+                "check": 17.573
+              }
+            },
+            {
+              "wall_ms": 94.74441001657397,
+              "phases_ms": {
+                "load": 71.641,
+                "detail_parse": 0.793,
+                "detail_ast": 14.057,
+                "detail_sema": 0.079,
+                "check": 17.387
+              }
+            },
+            {
+              "wall_ms": 95.13594300369732,
+              "phases_ms": {
+                "load": 72.736,
+                "detail_parse": 0.782,
+                "detail_ast": 14.044,
+                "detail_sema": 0.083,
+                "check": 17.346
+              }
+            }
+          ],
+          "median_ms": 95.13594300369732,
+          "median_phases_ms": {
+            "load": 72.736,
+            "detail_parse": 0.789,
+            "detail_ast": 14.057,
+            "detail_sema": 0.083,
+            "check": 17.387
+          }
+        },
+        {
+          "kind": "fields",
+          "size": 256,
+          "samples": [
+            {
+              "wall_ms": 10.082520981086418,
+              "phases_ms": {
+                "load": 4.538,
+                "detail_parse": 0.005,
+                "detail_ast": 0.621,
+                "detail_sema": 0.039,
+                "check": 1.014
+              }
+            },
+            {
+              "wall_ms": 10.952848009765148,
+              "phases_ms": {
+                "load": 5.159,
+                "detail_parse": 0.004,
+                "detail_ast": 0.595,
+                "detail_sema": 0.037,
+                "check": 1.005
+              }
+            },
+            {
+              "wall_ms": 10.724616004154086,
+              "phases_ms": {
+                "load": 4.843,
+                "detail_parse": 0.004,
+                "detail_ast": 0.606,
+                "detail_sema": 0.037,
+                "check": 0.988
+              }
+            }
+          ],
+          "median_ms": 10.724616004154086,
+          "median_phases_ms": {
+            "load": 4.843,
+            "detail_parse": 0.004,
+            "detail_ast": 0.606,
+            "detail_sema": 0.037,
+            "check": 1.005
+          }
+        },
+        {
+          "kind": "fields",
+          "size": 2048,
+          "samples": [
+            {
+              "wall_ms": 50.81657998380251,
+              "phases_ms": {
+                "load": 34.893,
+                "detail_parse": 0.024,
+                "detail_ast": 6.491,
+                "detail_sema": 0.141,
+                "check": 9.357
+              }
+            },
+            {
+              "wall_ms": 51.69676599325612,
+              "phases_ms": {
+                "load": 36.503,
+                "detail_parse": 0.025,
+                "detail_ast": 6.67,
+                "detail_sema": 0.148,
+                "check": 9.543
+              }
+            },
+            {
+              "wall_ms": 51.5303349820897,
+              "phases_ms": {
+                "load": 35.18,
+                "detail_parse": 0.024,
+                "detail_ast": 6.658,
+                "detail_sema": 0.144,
+                "check": 9.545
+              }
+            }
+          ],
+          "median_ms": 51.5303349820897,
+          "median_phases_ms": {
+            "load": 35.18,
+            "detail_parse": 0.024,
+            "detail_ast": 6.658,
+            "detail_sema": 0.144,
+            "check": 9.543
+          }
+        },
+        {
+          "kind": "debug_locals",
+          "size": 256,
+          "samples": [
+            {
+              "wall_ms": 9.86053902306594,
+              "phases_ms": {
+                "load": 1.402,
+                "detail_parse": 0.007,
+                "detail_ast": 0.308,
+                "detail_sema": 0.022,
+                "detail_ir": 0.029,
+                "detail_llvm": 1.034,
+                "detail_optimize": 0.001,
+                "detail_emit": 1.638,
+                "codegen": 3.428
+              }
+            },
+            {
+              "wall_ms": 7.8701859747525305,
+              "phases_ms": {
+                "load": 1.36,
+                "detail_parse": 0.002,
+                "detail_ast": 0.151,
+                "detail_sema": 0.012,
+                "detail_ir": 0.015,
+                "detail_llvm": 0.725,
+                "detail_optimize": 0.002,
+                "detail_emit": 1.398,
+                "codegen": 2.535
+              }
+            },
+            {
+              "wall_ms": 7.693735009524971,
+              "phases_ms": {
+                "load": 1.354,
+                "detail_parse": 0.002,
+                "detail_ast": 0.154,
+                "detail_sema": 0.013,
+                "detail_ir": 0.016,
+                "detail_llvm": 0.755,
+                "detail_optimize": 0.002,
+                "detail_emit": 1.286,
+                "codegen": 2.469
+              }
+            }
+          ],
+          "median_ms": 7.8701859747525305,
+          "median_phases_ms": {
+            "load": 1.36,
+            "detail_parse": 0.002,
+            "detail_ast": 0.154,
+            "detail_sema": 0.013,
+            "detail_ir": 0.016,
+            "detail_llvm": 0.755,
+            "detail_optimize": 0.002,
+            "detail_emit": 1.398,
+            "codegen": 2.535
+          }
+        },
+        {
+          "kind": "debug_locals",
+          "size": 2048,
+          "samples": [
+            {
+              "wall_ms": 26.351376000093296,
+              "phases_ms": {
+                "load": 10.628,
+                "detail_parse": 0.011,
+                "detail_ast": 1.148,
+                "detail_sema": 0.06,
+                "detail_ir": 0.147,
+                "detail_llvm": 3.558,
+                "detail_optimize": 0.002,
+                "detail_emit": 4.045,
+                "codegen": 10.422
+              }
+            },
+            {
+              "wall_ms": 29.05498500331305,
+              "phases_ms": {
+                "load": 11.195,
+                "detail_parse": 0.014,
+                "detail_ast": 1.186,
+                "detail_sema": 0.055,
+                "detail_ir": 0.142,
+                "detail_llvm": 3.539,
+                "detail_optimize": 0.002,
+                "detail_emit": 4.109,
+                "codegen": 11.453
+              }
+            },
+            {
+              "wall_ms": 26.711799000622705,
+              "phases_ms": {
+                "load": 10.384,
+                "detail_parse": 0.011,
+                "detail_ast": 1.128,
+                "detail_sema": 0.054,
+                "detail_ir": 0.143,
+                "detail_llvm": 4.074,
+                "detail_optimize": 0.003,
+                "detail_emit": 4.016,
+                "codegen": 10.852
+              }
+            }
+          ],
+          "median_ms": 26.711799000622705,
+          "median_phases_ms": {
+            "load": 10.628,
+            "detail_parse": 0.011,
+            "detail_ast": 1.148,
+            "detail_sema": 0.055,
+            "detail_ir": 0.143,
+            "detail_llvm": 3.558,
+            "detail_optimize": 0.002,
+            "detail_emit": 4.045,
+            "codegen": 10.852
+          }
+        }
+      ]
+    },
+    "large-functions": {
+      "compiler": "/home/mdray/17robots/dyn/build/dyn-release",
+      "compiler_sha256": "b3c8969f9d2ca82afecc9f1ff3469b9c03730f111ea59bea1de3811985fba8ea",
+      "host": "Linux-7.2.6-arch2-1-x86_64-with-glibc2.44",
+      "repeats": 3,
+      "rows": [
+        {
+          "kind": "qualified",
+          "count": 1024,
+          "samples": [
+            {
+              "wall_ms": 13.00834200810641,
+              "phases_ms": {
+                "load": 7.38,
+                "detail parse": 0.002,
+                "detail ast": 0.421,
+                "detail sema": 0.025,
+                "check": 0.721
+              }
+            },
+            {
+              "wall_ms": 12.846591009292752,
+              "phases_ms": {
+                "load": 6.825,
+                "detail parse": 0.002,
+                "detail ast": 0.421,
+                "detail sema": 0.025,
+                "check": 0.715
+              }
+            },
+            {
+              "wall_ms": 11.580571997910738,
+              "phases_ms": {
+                "load": 6.722,
+                "detail parse": 0.002,
+                "detail ast": 0.421,
+                "detail sema": 0.024,
+                "check": 0.717
+              }
+            }
+          ],
+          "median_ms": 12.846591009292752,
+          "median_sema_ms": 0.025
+        },
+        {
+          "kind": "qualified",
+          "count": 4096,
+          "samples": [
+            {
+              "wall_ms": 34.40543400938623,
+              "phases_ms": {
+                "load": 26.997,
+                "detail parse": 0.002,
+                "detail ast": 1.584,
+                "detail sema": 0.088,
+                "check": 2.689
+              }
+            },
+            {
+              "wall_ms": 44.178023003041744,
+              "phases_ms": {
+                "load": 36.761,
+                "detail parse": 0.006,
+                "detail ast": 1.576,
+                "detail sema": 0.087,
+                "check": 2.709
+              }
+            },
+            {
+              "wall_ms": 34.43308299756609,
+              "phases_ms": {
+                "load": 26.809,
+                "detail parse": 0.002,
+                "detail ast": 1.609,
+                "detail sema": 0.087,
+                "check": 2.726
+              }
+            }
+          ],
+          "median_ms": 34.43308299756609,
+          "median_sema_ms": 0.087
+        },
+        {
+          "kind": "direct",
+          "count": 1024,
+          "samples": [
+            {
+              "wall_ms": 11.461660993518308,
+              "phases_ms": {
+                "load": 5.326,
+                "detail parse": 0.002,
+                "detail ast": 0.409,
+                "detail sema": 0.014,
+                "check": 0.683
+              }
+            },
+            {
+              "wall_ms": 9.980700997402892,
+              "phases_ms": {
+                "load": 5.28,
+                "detail parse": 0.002,
+                "detail ast": 0.41,
+                "detail sema": 0.014,
+                "check": 0.683
+              }
+            },
+            {
+              "wall_ms": 10.36873398697935,
+              "phases_ms": {
+                "load": 5.662,
+                "detail parse": 0.002,
+                "detail ast": 0.424,
+                "detail sema": 0.015,
+                "check": 0.702
+              }
+            }
+          ],
+          "median_ms": 10.36873398697935,
+          "median_sema_ms": 0.014
+        },
+        {
+          "kind": "direct",
+          "count": 4096,
+          "samples": [
+            {
+              "wall_ms": 28.472321981098503,
+              "phases_ms": {
+                "load": 21.354,
+                "detail parse": 0.002,
+                "detail ast": 1.602,
+                "detail sema": 0.047,
+                "check": 2.632
+              }
+            },
+            {
+              "wall_ms": 29.396488011116162,
+              "phases_ms": {
+                "load": 22.246,
+                "detail parse": 0.002,
+                "detail ast": 1.598,
+                "detail sema": 0.047,
+                "check": 2.626
+              }
+            },
+            {
+              "wall_ms": 34.13885098416358,
+              "phases_ms": {
+                "load": 27.04,
+                "detail parse": 0.002,
+                "detail ast": 1.599,
+                "detail sema": 0.047,
+                "check": 2.642
+              }
+            }
+          ],
+          "median_ms": 29.396488011116162,
+          "median_sema_ms": 0.047
+        },
+        {
+          "kind": "locals",
+          "count": 1024,
+          "samples": [
+            {
+              "wall_ms": 11.473410995677114,
+              "phases_ms": {
+                "load": 5.231,
+                "detail parse": 0.002,
+                "detail ast": 0.599,
+                "detail sema": 0.033,
+                "check": 0.993
+              }
+            },
+            {
+              "wall_ms": 10.539434995735064,
+              "phases_ms": {
+                "load": 5.813,
+                "detail parse": 0.002,
+                "detail ast": 0.59,
+                "detail sema": 0.032,
+                "check": 0.979
+              }
+            },
+            {
+              "wall_ms": 10.668845992768183,
+              "phases_ms": {
+                "load": 5.389,
+                "detail parse": 0.005,
+                "detail ast": 1.066,
+                "detail sema": 0.034,
+                "check": 1.612
+              }
+            }
+          ],
+          "median_ms": 10.668845992768183,
+          "median_sema_ms": 0.033
+        },
+        {
+          "kind": "locals",
+          "count": 4096,
+          "samples": [
+            {
+              "wall_ms": 30.196164007065818,
+              "phases_ms": {
+                "load": 21.644,
+                "detail parse": 0.002,
+                "detail ast": 2.218,
+                "detail sema": 0.123,
+                "check": 3.735
+              }
+            },
+            {
+              "wall_ms": 30.016731994692236,
+              "phases_ms": {
+                "load": 22.001,
+                "detail parse": 0.002,
+                "detail ast": 2.271,
+                "detail sema": 0.128,
+                "check": 3.8
+              }
+            },
+            {
+              "wall_ms": 29.858410998713225,
+              "phases_ms": {
+                "load": 21.254,
+                "detail parse": 0.002,
+                "detail ast": 2.218,
+                "detail sema": 0.124,
+                "check": 3.692
+              }
+            }
+          ],
+          "median_ms": 30.016731994692236,
+          "median_sema_ms": 0.124
+        }
+      ]
+    },
+    "published-grammar": {
+      "repository": "https://github.com/17robots/tree-sitter-dyn",
+      "revision": "1a7fa15fef1d32ad741e34ba7af374f39ddc180b",
+      "files": {
+        "grammar.js": {
+          "match": false,
+          "remote_sha256": "0dd69eca9a5350fe8820b143bb53c2a0442ef8b29b2b9a80d2e933744244bd46",
+          "local_sha256": "31f3085c383fc3e6a3b274d52cb3c69dbf486202180666b5524e7b6adc9c43bd"
+        },
+        "src/parser.c": {
+          "match": false,
+          "remote_sha256": "a2a1686a838ccb2130ce61a04b78f048b6fb282b82407074c31aa4a172ce32f4",
+          "local_sha256": "2d1dc6716cb203caee4475dd49f3f274f58a8687056f5c0341a1261234e9d46d"
+        },
+        "src/scanner.c": {
+          "match": true,
+          "remote_sha256": "73e621e7656892f1af18dba5b98e24a9d68de84b133f64f32bb05cb6250a589e",
+          "local_sha256": "73e621e7656892f1af18dba5b98e24a9d68de84b133f64f32bb05cb6250a589e"
+        },
+        "src/grammar.json": {
+          "match": false,
+          "remote_sha256": "a458def177aa6fed82f1d1582066b17ae17b251ce031a2ead4c263026ed0ea79",
+          "local_sha256": "6f77d4fc4452bbf70b736e92b2a8049c5ba6c4d9223c5d8048c07fb6ecfa65f6"
+        },
+        "src/node-types.json": {
+          "match": false,
+          "remote_sha256": "ca1654aaf59e8c62640e4ebc318be9e93b9250e27091a01baec0ea1df17c2be1",
+          "local_sha256": "2abc157aec62d787393873489b79bfd98e76bfdad71bdf19394fce6768fb6b80"
+        }
+      }
+    },
+    "native": [
+      {
+        "target": "x86_64-linux",
+        "release": false,
+        "artifact": "build/readiness/native/linux-debug",
+        "status": "executed"
+      },
+      {
+        "target": "x86_64-linux",
+        "release": true,
+        "artifact": "build/readiness/native/linux-release",
+        "status": "executed"
+      },
+      {
+        "target": "aarch64-linux",
+        "release": false,
+        "artifact": "build/readiness/native/aarch64-debug",
+        "status": "cross-linked-only"
+      },
+      {
+        "target": "aarch64-linux",
+        "release": true,
+        "artifact": "build/readiness/native/aarch64-release",
+        "status": "cross-linked-only"
+      },
+      {
+        "target": "x86_64-windows",
+        "release": false,
+        "artifact": "build/readiness/native/windows-debug.exe",
+        "status": "cross-linked-only"
+      },
+      {
+        "target": "x86_64-windows",
+        "release": true,
+        "artifact": "build/readiness/native/windows-release.exe",
+        "status": "cross-linked-only"
+      },
+      {
+        "target": "aarch64-macos",
+        "release": false,
+        "artifact": "build/readiness/native/macos-debug",
+        "status": "cross-linked-only"
+      },
+      {
+        "target": "aarch64-macos",
+        "release": true,
+        "artifact": "build/readiness/native/macos-release",
+        "status": "cross-linked-only"
+      },
+      {
+        "target": "aarch64-linux",
+        "release": false,
+        "artifact": "build/readiness/native/aarch64-concurrency-debug",
+        "probe": "concurrency",
+        "status": "cross-linked-only"
+      },
+      {
+        "target": "aarch64-linux",
+        "release": true,
+        "artifact": "build/readiness/native/aarch64-concurrency-release",
+        "probe": "concurrency",
+        "status": "cross-linked-only"
+      }
+    ]
+  },
+  "limits": [
+    "All conformance fixtures cover rule families, not all language rules.",
+    "SDK reference inventory is textual, not behavioral coverage.",
+    "Performance thresholds and bounded soak are local evidence only.",
+    "Native cross-links do not demonstrate execution.",
+    "CI YAML parsed locally; no remote run was performed."
+  ],
+  "pending": [
+    "Native Windows/macOS/Linux AArch64 CI execution",
+    "LLVM 18 release baseline and both provider CI environments",
+    "Grammar publication, immutable extension pin refresh and installed-extension verification",
+    "GPU/device coverage, sustained user experience and independent security review for stronger assurances"
+  ]
+}

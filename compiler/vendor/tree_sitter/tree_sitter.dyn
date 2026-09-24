@@ -1,0 +1,48 @@
+use "std/c"
+#link("tree-sitter")
+
+// Tree-sitter C ABI. Parser/Tree are provider-owned; Node borrows its Tree.
+pub type Parser = rawptr
+pub type Tree = rawptr
+pub type Language = rawptr
+pub struct Point { row: u32, column: u32 }
+pub struct Edit { start_byte: u32, old_end_byte: u32, new_end_byte: u32, start_point: Point, old_end_point: Point, new_end_point: Point }
+pub struct Node { context: [4]u32, id: rawptr, tree: Tree }
+pub struct ParseResult { tree: Tree, ok: bool }
+
+pub fn parser_create_owned() Parser { return native_parser_new() }
+pub fn parser_destroy_owned(parser: Parser) { if parser != nil { native_parser_delete(parser) } }
+pub fn parser_language(parser: Parser, language: Language) bool { return parser != nil && language != nil && native_set_language(parser, language) }
+// Source borrowed only during call. Old tree remains caller-owned. Edit it first
+// when reparsing changed source. Syntax errors are represented in a successful tree.
+pub fn parse(parser: Parser, old_tree: Tree, source: []const u8) ParseResult {
+  if parser == nil || #len(source) > 4294967295 { return ParseResult{} }
+  empty: [1]u8 = []
+  pointer: *const u8 = &empty[0]
+  if #len(source) > 0 { pointer = &source[0] }
+  tree := native_parse(parser, old_tree, pointer, #cast(u32) #len(source))
+  return ParseResult{ tree: tree, ok: tree != nil }
+}
+pub fn tree_destroy_owned(tree: Tree) { if tree != nil { native_tree_delete(tree) } }
+pub fn tree_copy_owned(tree: Tree) Tree { if tree == nil { return nil } return native_tree_copy(tree) }
+// Coordinates are UTF-8 byte columns, not code points. Nodes obtained before an
+// edit must be reacquired (this wrapper does not expose ts_node_edit).
+pub fn tree_edit(tree: Tree, edit: *const Edit) bool {
+  if tree == nil || edit == nil { return false }
+  if edit.start_byte > edit.old_end_byte || edit.start_byte > edit.new_end_byte { return false }
+  if !point_before(edit.start_point, edit.old_end_point) || !point_before(edit.start_point, edit.new_end_point) { return false }
+  native_tree_edit(tree, edit) return true
+}
+fn point_before(a: Point, b: Point) bool { return a.row < b.row || (a.row == b.row && a.column <= b.column) }
+pub fn root(tree: Tree) Node { if tree == nil { return Node{} } return native_root(tree) }
+pub fn node_valid(node: Node) bool { return node.id != nil && node.tree != nil }
+pub fn node_start(node: Node) u32 { if !node_valid(node) { return 0 } return native_start(node) }
+pub fn node_end(node: Node) u32 { if !node_valid(node) { return 0 } return native_end(node) }
+pub fn node_has_error(node: Node) bool { return node_valid(node) && native_has_error(node) }
+pub fn child_count(node: Node) u32 { if !node_valid(node) { return 0 } return native_child_count(node) }
+pub fn child(node: Node, index: u32) Node { if !node_valid(node) { return Node{} } return native_child(node, index) }
+// Type name borrows grammar storage; grammar must remain loaded.
+pub fn node_type(node: Node, maximum: usize) c.BytesResult {
+  if !node_valid(node) { return c.BytesResult{} }
+  return c.bytes_from_string(native_type(node), maximum)
+}

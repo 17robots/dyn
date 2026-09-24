@@ -1,0 +1,15 @@
+id = "dyn"
+name = "Dyn Language"
+version = "0.0.1"
+schema_version = 1
+authors = ["17robots <mdray@duck.com>"]
+description = "Language Support For Dyn Highlighting"
+
+[grammars.dyn]
+repository = "https://github.com/17robots/tree-sitter-dyn"
+rev = "1a7fa15fef1d32ad741e34ba7af374f39ddc180b"
+
+
+[language-servers.dyn-language-server]
+name = "Dyn Language Server"
+languages = ["dyn"]

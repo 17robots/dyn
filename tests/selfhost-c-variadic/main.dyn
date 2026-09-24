@@ -1,0 +1,2 @@
+extern fn c_abs "abs"(... ) i32
+fn main() i32 { return c_abs(42) }

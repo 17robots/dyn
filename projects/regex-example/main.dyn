@@ -1,0 +1,33 @@
+use "vendor/pcre2" regex
+use "std/strings"
+use "std/io"
+use "std/terminal"
+fn main() {
+  compiled := regex.compile_owned("name=([a-z]+)", 0)
+  if !compiled.ok { #panic("regex compile") }
+  defer regex.pattern_destroy_owned(compiled.pattern)
+  data := regex.match_data_create_owned(compiled.pattern)
+  if data == nil { #panic("match allocation") }
+  defer regex.match_data_destroy_owned(data)
+  subject := "name=ada"
+  matched := regex.match(compiled.pattern, data, subject, 0)
+  if !matched.ok || !matched.matched { #panic("match") }
+  span := regex.capture(data, 1)
+  if !span.set || !strings.equal(subject[span.start..span.end], "ada") { #panic("capture") }
+  absent := regex.match(compiled.pattern, data, "123", 0)
+  if !absent.ok || absent.matched { #panic("no-match status") }
+  if regex.match(compiled.pattern, data, subject, 999).ok { #panic("start validation") }
+  invalid := regex.compile_owned("(", 0)
+  if invalid.ok { regex.pattern_destroy_owned(invalid.pattern) #panic("invalid pattern accepted") }
+  unicode := regex.compile_owned("(.)?", regex.Utf | regex.Ucp)
+  if !unicode.ok { #panic("Unicode compile") }
+  defer regex.pattern_destroy_owned(unicode.pattern)
+  unicode_data := regex.match_data_create_owned(unicode.pattern)
+  if unicode_data == nil { #panic("Unicode match data") }
+  defer regex.match_data_destroy_owned(unicode_data)
+  bad_utf: [1]u8 = [255]
+  if regex.match(unicode.pattern, unicode_data, bad_utf[..], 0).ok { #panic("invalid UTF accepted") }
+  empty_match := regex.match(unicode.pattern, unicode_data, "", 0)
+  if !empty_match.ok || !empty_match.matched || regex.capture(unicode_data, 1).set { #panic("unset capture") }
+  _ = io.println(terminal.stdout(), "PCRE2: captured ada; no-match and invalid pattern handled")
+}

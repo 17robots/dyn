@@ -1,0 +1,78 @@
+use "std/mem"
+use "std/strings"
+use "std/fmt"
+use "std/io"
+use "std/bufio"
+use "std/net/url"
+use "std/path"
+use "std/flags"
+use "std/testing" test
+
+fn main() {
+  backing: [256]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  input: [4]u8 = ['a', ',', ',', 'b']
+  split := strings.split(&arena, input[..], ",")
+  test.expect(split.ok && #len(split.values) == 3 && #len(split.values[1]) == 0, "split preserves empty fields")
+  input[0] = 'z'
+  test.expect(split.values[0][0] == 'z', "split elements borrow input")
+  joined := strings.join(&arena, split.values, "-")
+  test.expect(joined.ok && strings.equal(joined.value, "z--b"), "join copies parts")
+  mark := mem.arena_mark(&arena)
+  test.expect(!strings.split(&arena, "x", "").ok && mem.arena_mark(&arena) == mark, "invalid split preserves arena")
+  tiny_backing: [1]u8 = []
+  tiny := mem.arena_from_buffer(tiny_backing[..])
+  test.expect(!strings.clone(&tiny, "abc").ok && mem.arena_used(&tiny) == 0, "clone capacity rollback")
+  test.expect(!strings.split(&tiny, "a,b", ",").ok && mem.arena_used(&tiny) == 0, "split capacity rollback")
+  output: [64]u8 = []
+  test.expect(strings.equal(strings.replace(output[..], "aaa", "aa", "b").value, "ba"), "replacement is non-overlapping")
+  output[0] = 42
+  test.expect(!strings.replace(output[..1], "a", "a", "bb").ok && output[0] == 42, "replace capacity preflight")
+
+  invalid := fmt.Buffer{ data: output[..1], length: 2 }
+  test.expect(fmt.remaining(&invalid) == 0 && !fmt.write(&invalid, "x") && !fmt.write_byte(&invalid, 'x'), "invalid format state")
+  invalid_writer := io.BufferWriter{ data: output[..1], length: 2 }
+  test.expect(io.write(io.buffer_writer_adapter(&invalid_writer), "x").status == io.Status.Error, "invalid writer state")
+  invalid_buffered := bufio.Writer{ storage: output[..1], used: 2 }
+  test.expect(bufio.writer_flush(&invalid_buffered).status == io.Status.Error, "invalid buffered writer state")
+  formatted := fmt.buffer(output[..2])
+  test.expect(!fmt.write_values(&formatted, "a", "bc") && formatted.length == 0, "compound format rollback")
+  test.expect(!fmt.write_u64_width(&formatted, 42, 3, '0') && formatted.length == 0, "width capacity rollback")
+  infinity_bits: u64 = 9218868437227405312
+  nan_bits: u64 = 9221120237041090560
+  zero_bits: u64 = 9223372036854775808
+  tiny_bits: u64 = 1
+  maximum_bits: u64 = 9218868437227405311
+  test.expect(strings.equal(fmt.f64_decimal(output[..], #bitcast(f64) infinity_bits, 6), "inf"), "infinity format")
+  test.expect(strings.equal(fmt.f64_decimal(output[..], #bitcast(f64) nan_bits, 6), "nan"), "nan format")
+  test.expect(strings.equal(fmt.f64_decimal(output[..], #bitcast(f64) zero_bits, 6), "-0"), "negative zero format")
+  test.expect(strings.equal(fmt.f64_decimal(output[..], #bitcast(f64) tiny_bits, 6), "4.940656e-324"), "subnormal format")
+  test.expect(strings.equal(fmt.f64_decimal(output[..], #bitcast(f64) maximum_bits, 6), "1.797693e308"), "maximum finite format")
+  test.expect(#len(fmt.f64_decimal(output[..], 1.0, 16)) == 0, "unsupported precision")
+  parsed: f64 = 42.0
+  test.expect(!strings.parse_f64("1e+", &parsed) && parsed == 42.0, "invalid float preserves output")
+  test.expect(!strings.parse_f64("1.2.3", &parsed), "multiple decimal points")
+  test.expect(strings.parse_f64("-0e99999", &parsed) && (#bitcast(u64) parsed) == zero_bits, "zero with large exponent")
+  test.expect(strings.parse_f64("1e99999", &parsed) && (#bitcast(u64) parsed) == infinity_bits, "overflow bounded scaling")
+
+  output[0] = 42
+  test.expect(!url.percent_decode(output[..], "a%zz").ok && output[0] == 42, "percent invalid preflight")
+  test.expect(!url.percent_encode(output[..2], "/").ok && output[0] == 42, "percent capacity preflight")
+  test.expect(strings.equal(url.percent_decode(output[..], "a+b%2F").data, "a+b/"), "percent does not decode plus")
+  test.expect(strings.equal(path.relative(output[..], "/a/b", "/a/b").value, "."), "same relative path")
+  test.expect(strings.equal(path.relative(output[..], "/a/b/c", "/a").value, "../.."), "relative parent path")
+  test.expect(!path.relative(output[..], "../a", "b").ok, "unresolved parent path")
+  test.expect(!path.safe_join(output[..], "/srv/root", "../rooted/x").ok, "safe join component boundary")
+
+  options: [1]flags.Option = [flags.required_string_option("output", 'o')]
+  arguments: [0][]const u8 = []
+  values: [1]flags.Value = []
+  positionals: [0][]const u8 = []
+  missing := flags.parse(options[..], arguments[..], values[..], positionals[..])
+  test.expect(!missing.ok && missing.error.kind == flags.ErrorKind.Required, "required option")
+  choices: [2][]const u8 = ["yes", "no"]
+  options[0] = flags.choice_option("mode", 'm', choices[..])
+  options[0].default_value = "invalid"
+  invalid_default := flags.parse(options[..], arguments[..], values[..], positionals[..])
+  test.expect(!invalid_default.ok && invalid_default.error.kind == flags.ErrorKind.InvalidValue, "validate defaults")
+}

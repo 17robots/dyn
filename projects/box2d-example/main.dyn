@@ -1,0 +1,42 @@
+use "vendor/box2d" physics
+use "std/io"
+use "std/terminal"
+fn main() {
+  world := physics.create_owned(0.0, -10.0)
+  if world == 0 { #panic("physics world") }
+  defer { _ = physics.destroy_owned(world) }
+  ground := physics.body_create(world, 0.0, -1.0, false)
+  falling := physics.body_create(world, 0.0, 4.0, true)
+  if ground == 0 || falling == 0 || physics.box_create(ground, 10.0, 1.0, 0.0) == 0 || physics.box_create(falling, 0.5, 0.5, 1.0) == 0 { #panic("physics bodies") }
+  if physics.step(world, -1.0, 4) || physics.box_create(falling, -1.0, 1.0, 1.0) != 0 { #panic("invalid physics input") }
+  circle_body := physics.body_create(world, 3.0, 4.0, true)
+  circle := physics.circle_create(circle_body, 0.5, 1.0)
+  if circle == 0 || !physics.contact_events(circle, true) || physics.circle_create(circle_body, -1.0, 1.0) != 0 { #panic("circle shape") }
+  anchor := physics.body_create(world, 20.0, 4.0, false)
+  pendulum := physics.body_create(world, 20.0, 2.0, true)
+  if physics.circle_create(pendulum, 0.5, 1.0) == 0 { #panic("joint shape") }
+  joint := physics.distance_joint(anchor, pendulum, 2.0)
+  if joint == 0 || physics.distance_joint(anchor, anchor, 2.0) != 0 { #panic("distance joint") }
+  contacts := false
+  i: usize = 0
+  for i < 240 {
+    if !physics.step(world, 1.0 / 60.0, 4) { #panic("physics step") }
+    count := physics.contact_count(world, true) event_index: i32 = 0
+    for event_index < count {
+      event := physics.contact(world, true, event_index)
+      if !event.ok { #panic("contact event") }
+      if event.first == circle || event.second == circle { contacts = true }
+      event_index += 1
+    }
+    i += 1
+  }
+  circle_position := physics.position(circle_body) joint_position := physics.position(pendulum)
+  if !contacts || !circle_position.ok || circle_position.y < 0.4 || circle_position.y > 0.7 || !joint_position.ok || joint_position.y < 1.9 || joint_position.y > 2.1 { #panic("circle contact/joint motion") }
+  hits: [1]physics.Shape = [] candidates := physics.query(world, -2.0, -2.0, 5.0, 5.0, hits[..])
+  if !candidates.ok || candidates.total < 3 || candidates.written != 1 || physics.query(world, 2.0, 2.0, -2.0, -2.0, hits[..]).ok || physics.contact(world, true, 999).ok { #panic("physics query") }
+  if !physics.joint_destroy(joint) || physics.joint_destroy(joint) { #panic("joint destruction") }
+  final := physics.position(falling)
+  if !final.ok || final.y < 0.4 || final.y > 0.7 { #panic("body failed to rest on ground") }
+  if !physics.body_destroy(falling) || physics.position(falling).ok || physics.body_destroy(falling) { #panic("stale body ID") }
+  _ = io.println(terminal.stdout(), "Box2D falling box passed")
+}

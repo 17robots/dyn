@@ -1,0 +1,17 @@
+use "std/strings" str
+use "std/testing"
+
+fn main() {
+  testing.expect_equal_i64(-4, -4, "signed equality")
+  testing.expect_equal_u64(4, 4, "unsigned equality")
+  testing.expect_equal_usize(5, 5, "usize equality")
+  testing.expect_equal_isize(-5, -5, "isize equality")
+  testing.expect_equal_bool(true, true, "bool equality")
+  testing.expect_false(false, "false expectation")
+  storage: [128]u8 = []
+  path := testing.temporary_path(storage[..], "dyn-test", ".tmp")
+  testing.expect(str.starts_with(path, "/tmp/dyn-test-"), "temporary prefix")
+  testing.expect(str.ends_with(path, ".tmp"), "temporary suffix")
+  benchmark := testing.benchmark_start(0)
+  testing.expect_equal_i64(testing.benchmark_nanoseconds_each(&benchmark), 0, "empty benchmark")
+}

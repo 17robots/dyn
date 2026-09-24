@@ -1,0 +1,32 @@
+use "std/mem"
+use "std/c"
+use "std/strings"
+use "std/io"
+use "std/terminal"
+use "vendor/lua/raw" lua
+
+fn main() {
+  // Application-owned storage is an arena. Lua owns its own native state.
+  backing: [1024]u8 = []
+  persistent := mem.arena_from_buffer(backing[..])
+  state := lua.luaL_newstate()
+  if state == nil { #panic("Lua state allocation") }
+  defer lua.lua_close(state)
+
+  source: []const u8 = "return 'retained result'"
+  name: [5]u8 = ['t', 'o', 'u', 'r', 0]
+  if lua.luaL_loadbuffer(state, #cast(*const c.char) &source[0], #len(source), #cast(*const c.char) &name[0]) != 0 || lua.lua_pcall(state, 0, 1, 0) != 0 {
+    #panic("Lua execution failed")
+  }
+  count: usize = 0
+  pointer := lua.lua_tolstring(state, -1, &count)
+  if pointer == nil { #panic("expected Lua string") }
+  // Lua's pointer borrows the live stack value. Copy before popping it.
+  borrowed := (#cast(*const u8) pointer)[..count]
+  retained := strings.clone(&persistent, borrowed)
+  if !retained.ok { #panic("persistent arena exhausted") }
+  lua.lua_pop(state, 1)
+  // No use of borrowed/pointer beyond this point.
+  if lua.lua_gettop(state) != 0 || !strings.equal(retained.value, "retained result") { #panic("lifetime contract") }
+  _ = io.println(terminal.stdout(), retained.value)
+}

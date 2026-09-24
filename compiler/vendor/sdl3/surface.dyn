@@ -1,0 +1,20 @@
+// Shared SDL-owned surface/texture lifecycle for image and font providers.
+pub type Surface = rawptr
+pub type Texture = rawptr
+pub struct SurfaceResult { value: Surface, ok: bool }
+pub struct TextureResult { value: Texture, ok: bool }
+pub struct Color { red: u8, green: u8, blue: u8, alpha: u8 }
+pub fn surface_destroy_owned(surface: Surface) { if surface != nil { native_surface_destroy(surface) } }
+// Upload copies surface data; surface may be destroyed after this call.
+pub fn texture_from_surface_owned(renderer: Renderer, surface: Surface) TextureResult {
+  if renderer == nil || surface == nil { return TextureResult{} }
+  value := native_texture_create(renderer, surface)
+  return TextureResult{ value: value, ok: value != nil }
+}
+pub fn texture_destroy_owned(texture: Texture) { if texture != nil { native_texture_destroy(texture) } }
+// Draw entire texture to entire rendering target. Present separately.
+pub fn texture_draw(renderer: Renderer, texture: Texture) bool { return renderer != nil && texture != nil && native_texture_draw(renderer, texture, nil, nil) }
+extern fn native_surface_destroy "SDL_DestroySurface"(surface: Surface)
+extern fn native_texture_create "SDL_CreateTextureFromSurface"(renderer: Renderer, surface: Surface) Texture
+extern fn native_texture_destroy "SDL_DestroyTexture"(texture: Texture)
+extern fn native_texture_draw "SDL_RenderTexture"(renderer: Renderer, texture: Texture, source: rawptr, destination: rawptr) bool

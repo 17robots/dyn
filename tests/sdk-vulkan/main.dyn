@@ -1,0 +1,7 @@
+use "vendor/vulkan"
+fn main() {
+  version := vulkan.make_version(0, 1, 3, 275)
+  if vulkan.version_major(version) != 1 || vulkan.version_minor(version) != 3 || vulkan.version_patch(version) != 275 { #panic("Vulkan version") }
+  storage: [64]u8 = []
+  if !vulkan.global_procedure("vkCreateInstance", storage[..]).ok { #panic("Vulkan loader") }
+}

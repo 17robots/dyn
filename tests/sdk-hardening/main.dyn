@@ -1,0 +1,79 @@
+use "std/encoding/json" json
+use "std/encoding/xml" xml
+use "std/text/regex" regex
+use "std/net/dns" dns
+use "std/net/http" http
+use "std/bytes" bytes
+use "std/io" io
+
+struct Split { text: []const u8, at: usize, chunk: usize }
+fn read_split(data: rawptr, output: []u8) io.Result {
+  state := #cast(*Split) data
+  amount := #len(state.text) - state.at
+  if amount > state.chunk { amount = state.chunk }
+  if amount > #len(output) { amount = #len(output) }
+  i: usize = 0 for i < amount { output[i] = state.text[state.at + i] i += 1 }
+  state.at += amount
+  status := io.Status.Complete
+  if state.at == #len(state.text) { status = io.Status.End }
+  return io.Result{ transferred: amount, status: status }
+}
+fn main() {
+  values: [260]json.Value = []
+  i: usize = 0
+  for i + 1 < #len(values) {
+    values[i].kind = json.KindArray values[i].first = &values[i + 1] i += 1
+  }
+  encoded: [2048]u8 = []
+  if #len(json.encode(encoded[..], &values[0])) != 0 { #panic("JSON depth") }
+  values[63].first = nil
+  if #len(json.encode(encoded[..], &values[0])) == 0 { #panic("JSON shallow") }
+  pattern: [260]u8 = []
+  i = 0 for i < 130 { pattern[i] = '(' pattern[i + 130] = ')' i += 1 }
+  code: [4]regex.Instruction = [] work: [4]regex.Instruction = [] scratch: [8]usize = []
+  if regex.compile(pattern[..], code[..], work[..], scratch[..]).error != regex.CompileError.Depth { #panic("regex depth") }
+
+  response: [45]u8 = [214,65,129,128,0,1,0,1,0,0,0,0,7,'e','x','a','m','p','l','e',3,'c','o','m',0,0,1,0,1,
+    192,12,0,1,0,1,0,0,0,60,0,4,127,0,0,1]
+  addresses: [1]dns.Ipv4 = []
+  i = 0 for i < #len(response) {
+    if dns.parse_ipv4(response[..i], 54849, "example.com", addresses[..]).ok { #panic("DNS truncation") } i += 1
+  }
+  if !dns.parse_ipv4(response[..], 54849, "EXAMPLE.COM.", addresses[..]).ok { #panic("DNS question case") }
+  if dns.parse_ipv4(response[..], 54849, "other.com", addresses[..]).ok { #panic("DNS mismatched question") }
+  if dns.parse_ipv4(response[..], 54849, "example.com", addresses[..0]).error != -28 { #panic("DNS address capacity") }
+  response[2] |= 2
+  if dns.parse_ipv4(response[..], 54849, "example.com", addresses[..]).ok { #panic("DNS TC") }
+  response[2] &= 253 response[30] = 29
+  if dns.parse_ipv4(response[..], 54849, "example.com", addresses[..]).ok { #panic("DNS pointer cycle") }
+
+  chunked: []const u8 = "4\r\nbody\r\n0\r\nX-Trailer: yes\r\n\r\n"
+  output: [128]u8 = []
+  i = 0 for i < #len(chunked) {
+    for *byte in output { byte.* = 99 }
+    if http.decode_chunked(chunked[..i], output[..]).ok { #panic("HTTP incomplete chunk") }
+    for value in output { if value != 99 { #panic("HTTP incomplete changed output") } }
+    i += 1
+  }
+  decoded := http.decode_chunked(chunked, output[..])
+  if !decoded.ok || !bytes.equal(output[..decoded.count], "body") { #panic("HTTP chunked body") }
+  if http.parse_response("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n").ok { #panic("HTTP ambiguous framing") }
+  if http.parse_response("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n").ok { #panic("HTTP unsupported coding") }
+  url := http.parse_url("http://example.com?q=yes#fragment")
+  request := http.write_request(output[..], "GET", url.target, url.host, "")
+  if !url.ok || !bytes.equal(request[..#len("GET /?q=yes HTTP/1.1")], "GET /?q=yes HTTP/1.1") { #panic("HTTP query-only target") }
+
+  chunk: usize = 1
+  for chunk < 64 {
+    input := Split{ text: "<root a='a > b'><!-- c > d --></root>", chunk: chunk }
+    storage: [128]u8 = []
+    scanner := xml.stream_scanner(io.Reader{ data: #cast(rawptr) &input, read: &read_split }, storage[..])
+    start := xml.next_stream(&scanner)
+    if !start.ok || start.event.kind != xml.Kind.Start { #panic("XML split start") }
+    comment := xml.next_stream(&scanner)
+    if !comment.ok || comment.event.kind != xml.Kind.Comment { #panic("XML split comment") }
+    end := xml.next_stream(&scanner)
+    if !end.ok || end.event.kind != xml.Kind.End || xml.next_stream(&scanner).ok { #panic("XML split end") }
+    chunk += 1
+  }
+}

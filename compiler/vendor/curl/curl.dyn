@@ -1,0 +1,52 @@
+use "std/c"
+use "std/mem"
+#link("curl")
+
+pub struct Result { written: usize, code: i32, http_status: c.long, capacity_exceeded: bool, ok: bool }
+struct Sink { destination: []u8, used: usize, full: bool }
+// Call once before starting worker threads; cleanup only after all transfers end.
+pub fn init() i32 { return native_init(#cast(c.long) 3) }
+pub fn cleanup() { native_cleanup() }
+fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
+  if context == nil { return 0 }
+  sink := #cast(*Sink) context
+  if size != 0 && count > (#cast(usize) -1) / size { sink.full = true return 0 }
+  length := size * count
+  if length > #len(sink.destination) - sink.used { sink.full = true return 0 }
+  if length > 0 {
+    if data == nil { return 0 }
+    _ = mem.copy(sink.destination[sink.used..], data[..length])
+    sink.used += length
+  }
+  return length
+}
+// Synchronous HTTP(S) GET. URL copied through caller scratch; response goes into
+// caller storage. TLS verification remains enabled. Redirects are not followed.
+// HTTP error responses still have ok=true if transport succeeds; inspect status.
+// On failure written bytes are partial, not a complete response. No borrows escape.
+pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Result {
+  if timeout_ms <= 0 { return Result{ code: -1 } }
+  encoded := c.string_from_bytes(url_buffer, url)
+  if !encoded.ok { return Result{ code: -1 } }
+  easy := native_easy_init() if easy == nil { return Result{ code: -2 } }
+  defer native_easy_cleanup(easy)
+  sink := Sink{ destination: destination }
+  protocols: [11]u8 = ['h','t','t','p',',','h','t','t','p','s',0]
+  code := native_setopt(easy, 10002, encoded.value)
+  if code == 0 { code = native_setopt(easy, 10318, &protocols[0]) }
+  if code == 0 { code = native_setopt(easy, 99, #cast(c.long) 1) }
+  if code == 0 { code = native_setopt(easy, 155, #cast(c.long) timeout_ms) }
+  if code == 0 { code = native_setopt(easy, 20011, &receive) }
+  if code == 0 { code = native_setopt(easy, 10001, &sink) }
+  if code == 0 { code = native_perform(easy) }
+  status: c.long = 0
+  if code == 0 { code = native_getinfo(easy, 2097154, &status) }
+  return Result{ written: sink.used, code: code, http_status: status, capacity_exceeded: sink.full, ok: code == 0 }
+}
+extern fn native_init "curl_global_init"(flags: c.long) i32
+extern fn native_cleanup "curl_global_cleanup"()
+extern fn native_easy_init "curl_easy_init"() rawptr
+extern fn native_easy_cleanup "curl_easy_cleanup"(easy: rawptr)
+extern fn native_setopt "curl_easy_setopt"(easy: rawptr, option: i32, ...) i32
+extern fn native_perform "curl_easy_perform"(easy: rawptr) i32
+extern fn native_getinfo "curl_easy_getinfo"(easy: rawptr, info: i32, ...) i32

@@ -1,0 +1,31 @@
+use "std/fs"
+
+fn name_is(name: []const u8, expected: []const u8) bool {
+  if #len(name) != #len(expected) { return false }
+  i: usize = 0
+  for i < #len(name) {
+    if name[i] != expected[i] { return false }
+    i += 1
+  }
+  return true
+}
+
+fn main() {
+  storage: [4096]u8 = []
+  opened := fs.open_directory("tests/directory-listing", storage[..])
+  if !opened.ok { #panic("directory open failed") }
+  directory := opened.directory
+  defer _ = fs.close_directory(&directory)
+  main_found := false
+  extra_found := false
+  for {
+    entry := fs.directory_next(&directory)
+    if !entry.ok {
+      if entry.error != 0 { #panic("directory read failed") }
+      break
+    }
+    if name_is(entry.name, "main.dyn") { main_found = true }
+    if name_is(entry.name, "extra.dyn") { extra_found = true }
+  }
+  if !main_found || !extra_found { #panic("directory listing missed source") }
+}

@@ -1,42 +1,70 @@
-# Dyn bootstrap compiler
+# Dyn
 
-Build from repository root:
+Dyn is an explicit native systems-programming language under construction. The C bootstrap
+compiler emits Linux x86-64/AArch64, Windows x86-64, and macOS AArch64 native code. It supports
+typed values, checked arithmetic, scoped `if`/`else`, condition and infinite `for`
+loops, `break`, `continue`, and branch-local `return`. Bare expressions are not statements.
+Nominal and packed structs support field defaults, literals, nested field access/update, and
+value-copy assignment.
+General functions support typed parameters/results, forward calls, recursion, void call
+statements, and struct values passed or returned by value.
+Function pointers support `*fn(...) Result`, explicit `&function` addresses, indirect calls,
+storage in locals/globals/structs, signature checking, and runtime nil guards.
+Semantic AST lowers through validated, source-independent typed Dyn IR before LLVM.
+Thin mutable/const pointers support `nil`, address, checked dereference, automatic struct-field
+dereference, nested mutation, and equality.
+Fixed arrays and `{data,len}` slices support literals, zero-fill, value copying, checked indexing,
+exclusive ranges, `#len`, and value-binding `for-in` traversal.
+Explicit pointer ranges such as `pointer[..length]` construct slices for OS-owned memory; thin
+pointers still cannot be indexed as single values.
+Nominal enums support tagged payloads and exhaustive `case` matching.
+Lexical `defer` runs LIFO on block fallthrough, return, loop exit, and current-frame panic paths.
+Deferred calls capture operands immediately; deferred blocks observe storage when cleanup runs.
+Core builtins provide layout/reflection queries, length, explicit numeric/pointer casts, scalar
+bitcasts, panic, and target-translated low-level syscalls without depending on the standard library.
+Ordinary Dyn standard-library modules provide fixed-buffer memory allocation, descriptor I/O,
+process/time queries, logging, and opt-in reflection metadata.
+
+Build commands require `just`, Python 3, and Bash. Set configuration through
+environment variables before the command.
 
 ```sh
-make
-./build/dyn check tests/empty
-./build/dyn build tests/empty
-./empty
-make test
+just test
+just sanitize-test
+./build/dyn help
+./build/dyn check compiler
+./build/dyn build compiler --output build/dyn-demo
+./build/dyn run compiler --quiet
+./build/dyn-demo
 ```
 
-Current compiler lowers `fn main()`, void `return`, typed and inferred primitive locals,
-primitive expressions, assignments, and checked arithmetic. Bare expressions are not valid statements.
-Scoped `if`/`else`, condition and infinite `for` loops, `break`, `continue`, and branch-local
-`return` lower to LLVM control-flow blocks. `for item in collection` traverses arrays and slices;
-`continue` advances before retesting.
-Nominal structs lower to LLVM named structs; packed declarations lower to packed LLVM bodies.
-Construction starts from zero, applies declaration-order defaults, then explicit literal fields.
-Function signatures are collected before body checking, enabling forward calls and recursion.
-LLVM emission declares every function before generating bodies and preserves typed parameters,
-results, and aggregate value semantics.
+- `compiler/`: C11 bootstrap compiler and minimal runtime
+- `tree-sitter-dyn/`: canonical grammar and editor queries
+- `zed-dyn/`: generated Zed grammar artifact and highlights
+- `docs/`: architecture, semantics, decisions, unresolved design
+- `compiler/std/`: ordinary Dyn standard-library source shipped with SDK
+- `tests/`: parser/CLI/code-generation/runtime tests
 
-`ir.h` exposes typed IR through two operations: `dyn_ir_lower` and `dyn_ir_free`. Lowering
-removes source spans/names except emitted symbols, normalizes compound assignments, and validates
-all value, statement, local, function, aggregate, and child-list references. LLVM lowering never
-reads semantic AST data.
+Start with the practical [idiomatic Dyn guide](docs/idiomatic-dyn.md).
+For agents and explicit memory-lifetime patterns, see [application-writing workflow](docs/agent-guide.md).
+Design references: [language](docs/language.md), [memory](docs/memory.md),
+[error values](docs/errors.md), [operation costs](docs/costs.md),
+[standard-library ABI](docs/standard-library-abi.md), and
+[compatibility/support](docs/stability.md). See the concise [package reference](docs/packages.md).
+Projects may declare explicit local or vendored dependency roots. Dyn intentionally has no package
+manager or registry.
+# Build and SDK
 
-Pointer types are interned as `(pointee, const)` pairs and copied into typed IR. LLVM uses opaque
-thin pointers. Every generated dereference and pointer-based field access checks nil and target
-alignment in debug and release; failure enters `dyn_panic` and exits 101.
-Fixed array types and slice descriptors are interned beside pointers and preserved in typed IR.
-LLVM uses native arrays and `{ptr, i64}` slice values. Array literals zero-fill omitted elements;
-index and range guards remain enabled in release builds. Arrays copy by value and slices copy their
-descriptor. Pointer-binding `for *item` / `for *const item` remains deferred.
-Enums use calculated tag/payload layouts and LLVM tagged aggregates. `case` normalizes integer
-ranges, rejects overlap, proves integer/enum exhaustiveness, and copies payload bindings.
-Later constructs receive explicit not-implemented diagnostics. Output is static Linux x86-64
-ELF from LLVM object generation and `ld.lld` (or development fallback `ld`).
+Build C bootstrap compiler with `just`; use `just release` for the optimized
+`build/dyn-release` compiler. Validate with `just quality-c`.
+Self-hosting is deferred until the C toolchain and SDK release gates are reliable.
+`PREFIX=/usr/local just install` installs the optimized `dyn`, target runtime objects, and standard
+library. `just install-check` tests a relocated temporary SDK. Run benchmarks with
+`CC=clang ./benchmarks/run.sh 15`.
 
-See `docs/compiler.md`, `docs/debugging.md`, `docs/language.md`, `docs/decisions.md`, and
-`docs/todo.md`.
+Current release scope and acceptance criteria: [0.1 readiness](docs/release/readiness.md).
+Experimental output targets are not a claim that the compiler runs natively on those hosts.
+
+Build rules live in `compiler/justfile`, `projects/justfile`, and
+`tree-sitter-dyn/justfile`; root `just` delegates to them. Each component has its own
+release/package entry points. See [component builds and releases](docs/build-layout.md).

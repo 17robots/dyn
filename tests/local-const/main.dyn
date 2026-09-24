@@ -1,0 +1,8 @@
+fn value() i32 {
+  const answer: i32 = 42
+  return answer
+}
+
+fn main() {
+  if value() != 42 { #panic("local constant failed") }
+}

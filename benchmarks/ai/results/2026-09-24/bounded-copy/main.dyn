@@ -1,0 +1,9 @@
+use "std/mem"
+
+pub fn copy(destination: []u8, source: []const u8) bool {
+  if #len(source) > #len(destination) { return false }
+  _ = mem.move(destination, source)
+  return true
+}
+
+fn main() {}

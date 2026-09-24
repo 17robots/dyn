@@ -1,0 +1,22 @@
+use "std/mem"
+use "std/os/linux" os
+use "std/fs"
+
+fn main() {
+  backing: [4096]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  channel := os.pipe()
+  if !channel.ok { #panic("pipe failed") }
+  argv: [2][]const u8 = ["echo", "dyn-process"]
+  options := os.SpawnOptions{ input: -1, output: channel.output, error: -1 }
+  child := os.spawn(&arena, "/bin/echo", argv[..], options)
+  if !child.ok { #panic("spawn failed") }
+  _ = os.close_descriptor(channel.output)
+  bytes: [64]u8 = []
+  file := fs.File{ descriptor: channel.input }
+  read := fs.read(&file, bytes[..])
+  _ = os.close_descriptor(channel.input)
+  waited := os.wait(child.process, false)
+  if !read.ok || read.transferred != 12 { #panic("redirected output failed") }
+  if !waited.ok || !os.exited(waited.status) || os.exit_status(waited.status) != 0 { #panic("wait failed") }
+}

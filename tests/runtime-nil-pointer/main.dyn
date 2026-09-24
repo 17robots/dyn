@@ -1,0 +1,5 @@
+fn main() {
+  pointer: *i32 = nil
+  value := pointer.*
+  _ = value
+}

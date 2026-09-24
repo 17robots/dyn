@@ -1,0 +1,18 @@
+use "std/mem"
+struct Probe { tag: u8, value: f64, samples: [3]u32 }
+extern fn mix "dyn_probe_mix"(a: i8, b: i16, c: i32, d: i64, e: f32, f: f64) f64
+extern fn storage "dyn_probe_storage"(value: *const Probe, size: usize, alignment: usize) i32
+extern fn invoke "dyn_probe_callback"(callback: *fn(f64,rawptr) f64, context: rawptr) f64
+fn callback(value: f64, raw: rawptr) f64 { return value + #cast(f64) (#cast(*i64) raw).* }
+fn main() {
+  if mix(-2,3,5,7,1.5,2.5) != 17.0 { #panic("scalar ABI") }
+  value := Probe{tag: 9,value: 2.5,samples: [11,22,33]}
+  if storage(&value,#sizeof(Probe),#alignof(Probe)) != 1 { #panic("storage ABI") }
+  context: i64 = 3
+  if invoke(&callback,#cast(rawptr) &context) != 7.5 { #panic("callback ABI") }
+  arena := mem.arena_create(4096)
+  if !arena.ok { #panic("native arena") }
+  bytes := mem.arena_push(&arena.arena,64,8)[..64]
+  bytes[63] = 42
+  if !mem.arena_release(&arena.arena).ok { #panic("native release") }
+}

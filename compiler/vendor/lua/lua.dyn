@@ -1,0 +1,57 @@
+#link("lua5.4")
+// Lua 5.4 default ABI (64-bit integers, double numbers). State is provider-owned.
+// No standard libraries are opened automatically. This is not a sandbox.
+pub type State = rawptr
+pub struct Result { code: i32, ok: bool }
+pub struct IntegerResult { value: i64, ok: bool }
+pub struct BytesResult { value: []const u8, ok: bool }
+pub fn create_owned() State { return native_new() }
+pub fn destroy_owned(state: State) { if state != nil { native_close(state) } }
+pub fn stack_size(state: State) i32 { if state == nil { return 0 } return native_top(state) }
+// Only remove values; never grow the stack through this API.
+pub fn pop(state: State, count: i32) bool {
+  if state == nil || count < 0 || count > native_top(state) { return false }
+  native_settop(state, native_top(state) - count) return true
+}
+// Text-only protected execution. On success leaves exactly one result (nil if
+// chunk returns none); on failure leaves one error. Earlier stack values survive.
+// Chunk source borrowed only during call. Caller must pop result/error.
+// Wrapper errors -1/-2 leave the stack unchanged.
+pub fn execute(state: State, source: []const u8) Result {
+  if state == nil { return Result{ code: -1 } }
+  if native_checkstack(state, 2) == 0 { return Result{ code: -2 } }
+  name: [4]u8 = ['d', 'y', 'n', 0] mode: [2]u8 = ['t', 0]
+  empty: [1]u8 = [] pointer: *const u8 = &empty[0]
+  if #len(source) > 0 { pointer = &source[0] }
+  code := native_load(state, pointer, #len(source), &name[0], &mode[0])
+  if code == 0 { code = native_pcall(state, 0, 1, 0, 0, nil) }
+  return Result{ code: code, ok: code == 0 }
+}
+fn valid_index(state: State, index: i32) bool {
+  if state == nil || index == 0 { return false }
+  top := native_top(state)
+  return (index > 0 && index <= top) || (index < 0 && index >= 0 - top)
+}
+pub fn integer(state: State, index: i32) IntegerResult {
+  if !valid_index(state, index) { return IntegerResult{} }
+  ok: i32 = 0 value := native_integer(state, index, &ok)
+  return IntegerResult{ value: value, ok: ok != 0 }
+}
+// Borrows an existing string while it remains on the stack and state stays alive.
+// No numeric conversion: that could allocate outside a protected Lua call.
+pub fn bytes(state: State, index: i32) BytesResult {
+  if !valid_index(state, index) || native_type(state, index) != 4 { return BytesResult{} }
+  length: usize = 0 pointer := native_string(state, index, &length)
+  if pointer == nil { return BytesResult{} }
+  return BytesResult{ value: pointer[..length], ok: true }
+}
+extern fn native_new "luaL_newstate"() State
+extern fn native_close "lua_close"(state: State)
+extern fn native_top "lua_gettop"(state: State) i32
+extern fn native_settop "lua_settop"(state: State, index: i32)
+extern fn native_checkstack "lua_checkstack"(state: State, extra: i32) i32
+extern fn native_load "luaL_loadbufferx"(state: State, source: *const u8, size: usize, name: *const u8, mode: *const u8) i32
+extern fn native_pcall "lua_pcallk"(state: State, nargs: i32, nresults: i32, error_function: i32, context: isize, continuation: rawptr) i32
+extern fn native_integer "lua_tointegerx"(state: State, index: i32, ok: *i32) i64
+extern fn native_type "lua_type"(state: State, index: i32) i32
+extern fn native_string "lua_tolstring"(state: State, index: i32, length: *usize) *const u8

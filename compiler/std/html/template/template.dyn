@@ -1,0 +1,46 @@
+use "std/io" stream
+use "std/mem" memory
+use "std/text/template" core
+
+pub type ErrorKind = core.ErrorKind
+pub type Template = core.Template
+pub type Field = core.Field
+pub type ParseResult = core.ParseResult
+pub type RenderResult = core.RenderResult
+
+pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult { return core.parse(arena, source) }
+
+fn write(destination: stream.Writer, source: []const u8) RenderResult {
+  result := stream.write_all(destination, source)
+  if result.status == stream.Status.Error {
+    return RenderResult{ error: ErrorKind.Io, system_error: result.error, ok: false }
+  }
+  return RenderResult{ error: ErrorKind.None, ok: true }
+}
+
+fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
+  start: usize = 0
+  i: usize = 0
+  for i < #len(source) {
+    replacement: []const u8 = ""
+    if source[i] == '&' { replacement = "&amp;" }
+    else if source[i] == '<' { replacement = "&lt;" }
+    else if source[i] == '>' { replacement = "&gt;" }
+    else if source[i] == '"' { replacement = "&quot;" }
+    else if source[i] == 39 { replacement = "&#39;" }
+    if #len(replacement) > 0 {
+      if i > start { literal_result := write(destination, source[start..i]) if !literal_result.ok { return literal_result } }
+      replacement_result := write(destination, replacement)
+      if !replacement_result.ok { return replacement_result }
+      start = i + 1
+    }
+    i += 1
+  }
+  if start < #len(source) { return write(destination, source[start..]) }
+  return RenderResult{ error: ErrorKind.None, ok: true }
+}
+
+// Escapes text and quoted attribute values. Not a JS/CSS/URL-context sanitizer.
+pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult {
+  return core.render_with(destination, template, fields, &write_escaped)
+}

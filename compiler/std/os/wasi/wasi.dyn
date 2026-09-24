@@ -1,0 +1,72 @@
+#target(kernel: wasi)
+use "std/io" io
+use "std/mem" mem
+extern fn native_write "dyn_wasi_write"(fd: u32, data: rawptr, length: usize, written: *usize) u32
+extern fn native_read "dyn_wasi_read"(fd: u32, data: rawptr, length: usize, received: *usize) u32
+pub extern fn close "dyn_wasi_close"(fd: u32) u32
+extern fn native_sizes "dyn_wasi_args_sizes"(count: *usize, bytes: *usize) u32
+extern fn native_args "dyn_wasi_args"(pointers: rawptr, bytes: rawptr) u32
+extern fn native_open "dyn_wasi_open_read"(directory: u32, path: *const u8, length: usize, fd: *u32) u32
+extern fn native_random "dyn_wasi_random"(data: rawptr, length: usize) u32
+pub extern fn clock_time "dyn_wasi_clock"(clock: u32, precision: u64, time: *u64) u32
+
+// Errors are WASI errno values; stream adapters expose their negative value.
+pub fn write(fd: u32, bytes: []const u8) io.Result {
+  if #len(bytes) == 0 { return io.Result{ status: io.Status.Complete } }
+  count: usize = 0
+  error := native_write(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
+  if error != 0 { return io.Result{ transferred: count, error: 0 - #cast(isize) error, status: io.Status.Error } }
+  return io.Result{ transferred: count, status: io.Status.Complete }
+}
+pub fn read(fd: u32, bytes: []u8) io.Result {
+  if #len(bytes) == 0 { return io.Result{ status: io.Status.Complete } }
+  count: usize = 0
+  error := native_read(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
+  if error != 0 { return io.Result{ transferred: count, error: 0 - #cast(isize) error, status: io.Status.Error } }
+  if count == 0 { return io.Result{ status: io.Status.End } }
+  return io.Result{ transferred: count, status: io.Status.Complete }
+}
+pub struct OpenResult { fd: u32, error: u32, ok: bool }
+// Relative to a directory descriptor granted by the host. No implicit preopens.
+pub fn open_read(directory: u32, path: []const u8) OpenResult {
+  if #len(path) == 0 { return OpenResult{ error: 28 } }
+  result := OpenResult{}
+  result.error = native_open(directory, &path[0], #len(path), &result.fd)
+  result.ok = result.error == 0
+  return result
+}
+pub fn random(bytes: []u8) u32 {
+  if #len(bytes) == 0 { return 0 }
+  return native_random(#cast(rawptr) &bytes[0], #len(bytes))
+}
+pub struct Arguments { values: [][]const u8, error: u32, ok: bool }
+// Both strings and slice descriptors belong to the supplied arena. Failure rewinds.
+pub fn arguments(arena: *mem.Arena) Arguments {
+  count: usize = 0 size: usize = 0
+  error := native_sizes(&count, &size)
+  if error != 0 { return Arguments{ error: error } }
+  if count == 0 { return Arguments{ ok: true } }
+  maximum := ~#cast(usize) 0
+  if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) { return Arguments{ error: 48 } }
+  mark := mem.arena_mark(arena)
+  pointers := mem.arena_try_push(arena, count * #sizeof(*u8), #alignof(*u8))
+  bytes := mem.arena_try_push(arena, size, 1)
+  slices := mem.arena_try_push(arena, count * #sizeof([]const u8), #alignof([]const u8))
+  if !pointers.ok || !bytes.ok || !slices.ok { mem.arena_rewind(arena, mark) return Arguments{ error: 48 } }
+  error = native_args(#cast(rawptr) pointers.memory, #cast(rawptr) bytes.memory)
+  if error != 0 { mem.arena_rewind(arena, mark) return Arguments{ error: error } }
+  raw := (#cast(**u8) pointers.memory)[..count]
+  values := (#cast(*[]const u8) slices.memory)[..count]
+  i: usize = 0
+  for i < count {
+    offset := #cast(usize) raw[i] - #cast(usize) bytes.memory
+    if offset >= size { mem.arena_rewind(arena, mark) return Arguments{ error: 28 } }
+    tail := raw[i][..size - offset]
+    length: usize = 0
+    for length < #len(tail) && tail[length] != 0 { length += 1 }
+    if length == #len(tail) { mem.arena_rewind(arena, mark) return Arguments{ error: 28 } }
+    values[i] = tail[..length]
+    i += 1
+  }
+  return Arguments{ values: values, ok: true }
+}

@@ -1,0 +1,12 @@
+fn main() {
+  byte: u8 = 42
+  wider: i16 = byte
+  real: f32 = byte
+  precise: f64 = real
+  emoji := '\u{1F600}'
+  emoji_again: u32 = '😀'
+  _ = wider
+  _ = precise
+  _ = emoji
+  _ = emoji_again
+}

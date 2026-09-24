@@ -1,0 +1,2 @@
+pub const Base := 40
+pub count: i32 = Base

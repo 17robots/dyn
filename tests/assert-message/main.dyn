@@ -1,0 +1,5 @@
+use "std/testing"
+
+fn main() {
+  testing.expect(false, "custom assertion")
+}

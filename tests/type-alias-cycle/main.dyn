@@ -1,0 +1,4 @@
+type First = Second
+type Second = First
+
+fn main() {}

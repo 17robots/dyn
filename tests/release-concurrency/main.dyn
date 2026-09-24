@@ -1,0 +1,47 @@
+use "std/thread"
+use "std/sync"
+struct State { lock: sync.Mutex, ready: sync.Condition, gate: sync.Semaphore, once: sync.Once, atomic: sync.AtomicU64, total: u64, initializers: u32, started: u32, proceed: bool }
+fn worker(raw: rawptr) isize {
+  state := #cast(*State) raw
+  if sync.once_begin(&state.once) {
+    state.initializers = 1
+    sync.once_complete(&state.once)
+  }
+  sync.lock(&state.lock)
+  state.started += 1
+  sync.condition_broadcast(&state.ready)
+  for !state.proceed { sync.condition_wait(&state.ready,&state.lock) }
+  sync.unlock(&state.lock)
+  i: u32 = 0
+  for i < 10000 {
+    sync.lock(&state.lock)
+    state.total += 1
+    sync.unlock(&state.lock)
+    _ = sync.fetch_add_u64(&state.atomic,1)
+    i += 1
+  }
+  sync.semaphore_post(&state.gate)
+  return 0
+}
+fn main() {
+  state := State{lock: sync.mutex(), ready: sync.condition(), gate: sync.semaphore(0), once: sync.once(), atomic: sync.atomic_u64(0)}
+  stacks: [4][65536]u8 = []
+  workers: [4]thread.Thread = []
+  i: usize = 0
+  for i < 4 {
+    if thread.spawn(&workers[i],stacks[i][..],&worker,#cast(rawptr) &state) < 0 { #panic("spawn") }
+    i += 1
+  }
+  sync.lock(&state.lock)
+  for state.started != 4 { sync.condition_wait(&state.ready,&state.lock) }
+  state.proceed = true
+  sync.condition_broadcast(&state.ready)
+  sync.unlock(&state.lock)
+  i = 0
+  for i < 4 {
+    sync.semaphore_wait(&state.gate)
+    if thread.join(&workers[i]) != 0 { #panic("join") }
+    i += 1
+  }
+  if state.total != 40000 || sync.load_u64(&state.atomic) != 40000 || state.initializers != 1 { #panic("concurrency result") }
+}

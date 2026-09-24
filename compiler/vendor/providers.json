@@ -1,0 +1,55 @@
+{
+  "cgltf": {
+    "repository": "https://github.com/jkuhlmann/cgltf.git",
+    "tag": "v1.15",
+    "revision": "360db1a95480fe102ae9c69b27c5d101167ff5ba",
+    "version": "1.15"
+  },
+  "microui": {
+    "repository": "https://github.com/rxi/microui.git",
+    "tag": "master",
+    "revision": "0850aba860959c3e75fb3e97120ca92957f9d057",
+    "version": "2.02"
+  },
+  "miniaudio": {
+    "repository": "https://github.com/mackron/miniaudio.git",
+    "tag": "0.11.23",
+    "revision": "f40cf03f80cdb7e741d43e53b7e706e8c1394bcf",
+    "version": "0.11.23"
+  },
+  "lz4": {
+    "repository": "https://github.com/lz4/lz4.git",
+    "tag": "v1.10.0",
+    "revision": "ebb370ca83af193212df4dcbadcc5d87bc0de2f0",
+    "version": "1.10.0"
+  },
+  "enet": {
+    "repository": "https://github.com/lsalzman/enet.git",
+    "tag": "v1.3.18",
+    "revision": "2662c0de09e36f2a2030ccc2c528a3e4c9e8138a",
+    "version": "1.3.18"
+  },
+  "box2d": {
+    "repository": "https://github.com/erincatto/box2d.git",
+    "tag": "v3.1.1",
+    "revision": "8c661469c9507d3ad6fbd2fea3f1aa71669c2fe3",
+    "version": "3.1.1"
+  },
+  "sdl3-mixer": {
+    "repository": "https://github.com/libsdl-org/SDL_mixer.git",
+    "tag": "release-3.2.4",
+    "revision": "72a81869b45e249e8e67102db4e98dd2441f05a1",
+    "version": "3.2.4"
+  },
+  "stb": {
+    "repository": "https://github.com/nothings/stb.git",
+    "revision": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+    "version": "1.01-2.18"
+  },
+  "microui-sdl3": {
+    "repository": "https://github.com/rxi/microui.git",
+    "tag": "master",
+    "revision": "0850aba860959c3e75fb3e97120ca92957f9d057",
+    "version": "2.02"
+  }
+}

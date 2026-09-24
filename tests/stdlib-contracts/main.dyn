@@ -1,0 +1,115 @@
+use "std/io"
+use "std/bufio"
+use "std/log"
+use "std/fmt"
+use "std/mem"
+use "std/encoding/json"
+
+struct ShortWriter { data: [8]u8, used: usize, limit: usize }
+fn short_write(context: rawptr, source: []const u8) io.Result {
+  state := #cast(*ShortWriter) context
+  if state.used == state.limit { return io.Result{ error: -5, status: io.Status.Error } }
+  if #len(source) == 0 { return io.Result{} }
+  state.data[state.used] = source[0]
+  state.used += 1
+  return io.Result{ transferred: 1, status: io.Status.Complete }
+}
+fn no_progress(context: rawptr, destination: []u8) io.Result {
+  _ = context _ = destination
+  return io.Result{ status: io.Status.Complete }
+}
+fn bytes_then_error(context: rawptr, destination: []u8) io.Result {
+  _ = context
+  destination[0] = 'a' destination[1] = 'b'
+  return io.Result{ transferred: 2, error: -5, status: io.Status.Error }
+}
+fn unnumbered_error(context: rawptr, source: []const u8) io.Result {
+  _ = context _ = source
+  return io.Result{ transferred: 1, status: io.Status.Error }
+}
+fn excessive_read(context: rawptr, destination: []u8) io.Result {
+  _ = context
+  return io.Result{ transferred: #len(destination) + 1 }
+}
+struct Unsupported { value: i32 }
+
+fn main() {
+  writer_state := ShortWriter{ limit: 3 }
+  writer := io.Writer{ data: #cast(rawptr) &writer_state, write: &short_write }
+  written := io.write_all(writer, "abcd")
+  if written.status != io.Status.Error || written.transferred != 3 || writer_state.data[2] != 'c' {
+    #panic("partial writes must preserve progress and failure")
+  }
+  writer_state = ShortWriter{ limit: 8 }
+  logger := log.logger(writer, log.Level.Info)
+  fields: [0]log.Field = []
+  logged := log.write(&logger, log.Level.Info, "abcd", fields[..])
+  if logged.status != io.Status.Error || logged.transferred != 8 { #panic("log must preserve total partial progress") }
+  pending: [4]u8 = []
+  buffered_writer := bufio.writer(io.Writer{ write: &unnumbered_error }, pending[..])
+  accepted := io.write_all(bufio.writer_adapter(&buffered_writer), "abc")
+  if accepted.transferred != 3 { #panic("buffer accepts input") }
+  flushed := bufio.writer_flush(&buffered_writer)
+  if flushed.status != io.Status.Error || flushed.error == 0 || flushed.transferred != 1 || bufio.writer_buffered(&buffered_writer) != 2 || pending[0] != 'b' { #panic("failed flush preserves only pending bytes") }
+  again := bufio.writer_flush(&buffered_writer)
+  if again.transferred != 0 || again.error == 0 { #panic("failed flush stays sticky") }
+  input: [4]u8 = []
+  excessive := io.read(io.Reader{ read: &excessive_read }, input[..])
+  if excessive.status != io.Status.Error || excessive.transferred != 0 { #panic("invalid callback count") }
+  stalled := io.Reader{ read: &no_progress }
+  read := io.read_exact(stalled, input[..])
+  if read.status != io.Status.Error { #panic("zero progress is not EOF") }
+
+  read_buffer: [3]u8 = []
+  buffered_stall := bufio.reader(stalled, read_buffer[..])
+  stalled_result := io.read(bufio.reader_adapter(&buffered_stall), input[..])
+  if stalled_result.status != io.Status.Error { #panic("buffered zero progress is not EOF") }
+  unbuffered_stall := bufio.reader(stalled, read_buffer[..0])
+  unbuffered_result := io.read(bufio.reader_adapter(&unbuffered_stall), input[..])
+  if unbuffered_result.status != io.Status.Error { #panic("empty buffer must preserve zero-progress contract") }
+  partial_reader := io.Reader{ read: &bytes_then_error }
+  buffered_partial := bufio.reader(partial_reader, read_buffer[..])
+  first_read := io.read(bufio.reader_adapter(&buffered_partial), input[..1])
+  if first_read.transferred != 1 || input[0] != 'a' || first_read.status != io.Status.Complete {
+    #panic("buffered partial error must retain unread bytes")
+  }
+  last_read := io.read(bufio.reader_adapter(&buffered_partial), input[..])
+  if last_read.transferred != 1 || input[0] != 'b' || last_read.status != io.Status.Error || last_read.error != -5 {
+    #panic("buffered error must follow retained bytes")
+  }
+
+  backing: [128]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  held := mem.arena_push(&arena, 1, 1)
+  held.* = 42
+  before := mem.arena_mark(&arena)
+  failed := json.parse(&arena, "[1, 2, 3, 4, 5]")
+  if failed.ok || mem.arena_used(&arena) != before || held.* != 42 {
+    #panic("failed JSON construction must roll back only its own allocations")
+  }
+  if failed.error != json.ErrorKind.Capacity { #panic("JSON capacity must not report syntax error") }
+  malformed := json.parse(&arena, "\"\\q\"")
+  if malformed.ok || malformed.error != json.ErrorKind.Syntax || mem.arena_used(&arena) != before {
+    #panic("malformed string must report syntax and rewind")
+  }
+  allocation := mem.arena_try_push(&arena, 1000, 1)
+  if allocation.ok || mem.arena_used(&arena) != before { #panic("arena exhaustion changes state") }
+
+  exact: [3]u8 = []
+  output := io.buffer_writer(exact[..])
+  bounded := io.buffer_writer_adapter(&output)
+  written = io.write_all(bounded, "abc")
+  if written.status != io.Status.Complete || written.transferred != 3 { #panic("exact capacity") }
+  written = io.write_all(bounded, "x")
+  if written.status != io.Status.Error || written.transferred != 0 { #panic("capacity failure") }
+
+  io.buffer_writer_reset(&output)
+  written = io.print(bounded, "{}", Unsupported{})
+  if written.status != io.Status.Error { #panic("unsupported formatting must fail explicitly") }
+  formatted := fmt.buffer(exact[..])
+  if fmt.write_values(&formatted, Unsupported{}) { #panic("unsupported buffer formatting must fail") }
+  mutable: [2]u8 = ['o', 'k']
+  if !fmt.write_values(&formatted, mutable[..]) || #len(fmt.bytes(&formatted)) != 2 {
+    #panic("mutable byte slices must format as bytes")
+  }
+}

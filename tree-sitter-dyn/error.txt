@@ -1,0 +1,31 @@
+.\example-file.dyn	Parse:  422.41 ms	     4 bytes/ms	(ERROR [96, 1] - [96, 3])
+{
+  "parse_summaries": [
+    {
+      "file": ".\\example-file.dyn",
+      "successful": false,
+      "start": {
+        "row": 0,
+        "column": 0
+      },
+      "end": {
+        "row": 100,
+        "column": 0
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 422408600
+      },
+      "bytes": 1980
+    }
+  ],
+  "cumulative_stats": {
+    "successful_parses": 0,
+    "total_parses": 0,
+    "total_bytes": 0,
+    "total_duration": {
+      "secs": 0,
+      "nanos": 0
+    }
+  }
+}

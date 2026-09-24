@@ -1,0 +1,37 @@
+use "std/io" stream
+
+pub enum Level { Debug, Info, Warning, Error }
+pub struct Field { name: []const u8, value: []const u8 }
+pub struct Logger { output: stream.Writer, minimum: Level }
+pub fn logger(output: stream.Writer, minimum: Level) Logger { return Logger{ output: output, minimum: minimum } }
+fn enabled(level, minimum: Level) bool {
+  if minimum == Level.Debug { return true }
+  if minimum == Level.Info { return level != Level.Debug }
+  if minimum == Level.Warning { return level == Level.Warning || level == Level.Error }
+  return level == Level.Error
+}
+fn name(level: Level) []const u8 {
+  if level == Level.Debug { return "debug" }
+  if level == Level.Info { return "info" }
+  if level == Level.Warning { return "warning" }
+  return "error"
+}
+pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) stream.Result {
+  if !enabled(level, target.minimum) { return stream.Result{ status: stream.Status.Complete } }
+  total: usize = 0
+  first := stream.write_all(target.output, name(level))
+  if first.status == stream.Status.Error { return first } total += first.transferred
+  separator := stream.write_all(target.output, ": ")
+  if separator.status == stream.Status.Error { separator.transferred += total return separator } total += separator.transferred
+  body := stream.write_all(target.output, message)
+  if body.status == stream.Status.Error { body.transferred += total return body } total += body.transferred
+  for field in fields {
+    parts: [3][]const u8 = [" ", field.name, "="]
+    for part in parts { field_part := stream.write_all(target.output, part) if field_part.status == stream.Status.Error { field_part.transferred += total return field_part } total += field_part.transferred }
+    field_value := stream.write_all(target.output, field.value)
+    if field_value.status == stream.Status.Error { field_value.transferred += total return field_value } total += field_value.transferred
+  }
+  ending := stream.write_all(target.output, "\n")
+  if ending.status == stream.Status.Error { ending.transferred += total return ending }
+  return stream.Result{ transferred: total + ending.transferred, status: stream.Status.Complete }
+}

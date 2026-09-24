@@ -1,0 +1,6 @@
+use "./lib"
+struct Item { value: i32 }
+fn main() {
+  item := Item{ value: 42 }
+  if item.value != 42 || lib.value() != 1 { #panic("field/import collision") }
+}

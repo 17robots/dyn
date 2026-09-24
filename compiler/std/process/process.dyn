@@ -1,0 +1,107 @@
+use "std/mem" mem
+use "std/bytes" bytes
+
+// Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
+// Arguments include argv[0]. Environment is explicit NAME=value entries; empty
+// means an empty child environment. No shell parsing or PATH search is performed.
+pub struct Options { input: isize, output: isize, error: isize, environment: [][]const u8 }
+pub fn options() Options { return Options{ input: -1, output: -1, error: -1 } }
+pub struct Child { handle: isize, active: bool }
+pub struct SpawnResult { child: Child, error: isize, ok: bool }
+pub struct ExitResult { code: u32, signal: u32, finished: bool, error: isize, ok: bool }
+pub struct Status { error: isize, ok: bool }
+pub struct Pipe { input: isize, output: isize, error: isize, ok: bool }
+pub struct EnvironmentResult { value: []u8, found: bool, error: isize, ok: bool }
+pub struct CaptureResult { output: []u8, errors: []u8, exit: ExitResult, timed_out: bool, limit_reached: bool, error: isize, ok: bool }
+struct HandleResult { value: isize, error: isize, ok: bool }
+struct ReadResult { count: usize, ended: bool, error: isize, ok: bool }
+
+pub fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
+  if #len(path) == 0 || #len(arguments) == 0 { return SpawnResult{ error: -22 } }
+  for byte in path { if byte == 0 { return SpawnResult{ error: -22 } } }
+  for argument in arguments { for argument_byte in argument { if argument_byte == 0 { return SpawnResult{ error: -22 } } } }
+  for entry in configuration.environment {
+    equal: bool = false at: usize = 0
+    for environment_byte in entry {
+      if environment_byte == 0 || (environment_byte == '=' && at == 0) { return SpawnResult{ error: -22 } }
+      if environment_byte == '=' { equal = true }
+      at += 1
+    }
+    if !equal { return SpawnResult{ error: -22 } }
+  }
+  return spawn_native(arena,path,arguments,configuration)
+}
+pub fn wait(child: *Child, nonblocking: bool) ExitResult {
+  if !child.active { return ExitResult{ error: -22 } }
+  return wait_native(child,nonblocking)
+}
+pub fn terminate(child: *Child) Status {
+  if !child.active { return Status{ error: -22 } }
+  return terminate_native(child)
+}
+pub fn pipe() Pipe { return pipe_native() }
+pub fn close_pipe(handle: isize) Status { return close_native(handle) }
+pub fn environment(name: []const u8, destination: []u8) EnvironmentResult {
+  if #len(name) == 0 { return EnvironmentResult{ error: -22 } }
+  for byte in name { if byte == 0 || byte == '=' { return EnvironmentResult{ error: -22 } } }
+  return environment_native(name,destination)
+}
+// Drains both streams fairly. Overflow/timeout terminates and reaps the direct
+// child. Descendants are not killed. Negative timeout is infinite; all output
+// buffers are caller-owned. A nonzero child exit code is a successful capture.
+pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
+  configuration: Options, output: []u8, errors: []u8, timeout_milliseconds: i64) CaptureResult {
+  if bytes.overlaps(output, errors) { return CaptureResult{ error: -22 } }
+  config := configuration
+  borrowed_input: isize = -1
+  if config.input >= 0 {
+    copied := duplicate_native(config.input)
+    if !copied.ok { return CaptureResult{ error: copied.error } }
+    borrowed_input = copied.value config.input = copied.value
+  }
+  defer { if borrowed_input >= 0 { _ = close_native(borrowed_input) } }
+  stdout := pipe_native() if !stdout.ok { return CaptureResult{ error: stdout.error } }
+  defer _ = close_native(stdout.input)
+  stderr := pipe_native()
+  if !stderr.ok { _ = close_native(stdout.output) return CaptureResult{ error: stderr.error } }
+  defer _ = close_native(stderr.input)
+  config.output = stdout.output config.error = stderr.output
+  child := spawn(arena,path,arguments,config)
+  _ = close_native(stdout.output) _ = close_native(stderr.output)
+  if !child.ok { return CaptureResult{ error: child.error } }
+  defer { if child.child.active { _ = terminate(&child.child) _ = wait(&child.child,false) } }
+  started := milliseconds_native() used: usize = 0 error_used: usize = 0 out_end: bool = false err_end: bool = false
+  result := CaptureResult{} probe: [1]u8 = []
+  for {
+    progress: bool = false stream_index: usize = 0
+    for stream_index < 2 {
+      ended := out_end handle := stdout.input destination := output[used..]
+      if stream_index == 1 { ended = err_end handle = stderr.input destination = errors[error_used..] }
+      if !ended {
+        probing := #len(destination) == 0
+        if probing { destination = probe[..] }
+        if #len(destination) > 65536 { destination = destination[..65536] }
+        read := read_native(handle,destination)
+        if !read.ok { result.error = read.error break }
+        if probing && read.count > 0 { result.limit_reached = true result.error = -28 break }
+        if read.count > 0 { progress = true }
+        if stream_index == 0 { used += read.count out_end = read.ended }
+        else { error_used += read.count err_end = read.ended }
+      }
+      stream_index += 1
+    }
+    if result.error != 0 { break }
+    if child.child.active {
+      exited := wait(&child.child,true)
+      if !exited.ok { result.error = exited.error break }
+      if exited.finished { result.exit = exited }
+    }
+    if out_end && err_end && !child.child.active { result.ok = true break }
+    if timeout_milliseconds >= 0 && milliseconds_native() - started >= #cast(u64) timeout_milliseconds {
+      result.timed_out = true result.error = -110 break
+    }
+    if !progress { sleep_native() }
+  }
+  result.output = output[..used] result.errors = errors[..error_used]
+  return result
+}

@@ -1,0 +1,33 @@
+use "std/encoding/json"
+use "std/mem"
+
+fn main() {
+  storage: [16384]u8 = []
+  arena := mem.arena_from_buffer(storage[..])
+  parsed := json.parse(&arena, "null")
+  if !parsed.ok { #panic("parse") }
+
+  mark := mem.arena_mark(&arena)
+  malformed := json.parse(&arena, "{\"x\":[1,]}")
+  if malformed.ok || mem.arena_mark(&arena) != mark { #panic("failed parse must rewind") }
+
+  nested: [515]u8 = []
+  i: usize = 0
+  for i < 257 { nested[i] = '[' i += 1 }
+  nested[257] = '0'
+  i = 0
+  for i < 257 { nested[258 + i] = ']' i += 1 }
+  if json.valid(nested[..]) { #panic("nesting limit") }
+
+  tokens := json.tokenizer("{\"ok\":true}")
+  if json.token_next(&tokens).kind != json.TokenKind.ObjectBegin { #panic("token object") }
+  if json.token_next(&tokens).kind != json.TokenKind.String { #panic("token string") }
+  if json.token_next(&tokens).kind != json.TokenKind.Colon { #panic("token colon") }
+  if json.token_next(&tokens).kind != json.TokenKind.Bool { #panic("token bool") }
+
+  object := json.make_object(&arena)
+  if !json.add_member(object, "ok", json.make_bool(&arena, true)) { #panic("construct") }
+  output: [64]u8 = []
+  pretty := json.encode_pretty(output[..], object, 2)
+  if #len(pretty) == 0 || !json.valid(pretty) { #panic("pretty") }
+}

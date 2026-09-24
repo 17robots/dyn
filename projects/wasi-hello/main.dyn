@@ -1,0 +1,13 @@
+use "std/mem" mem
+use "std/os/wasi" wasi
+use "std/io" io
+use "std/terminal" terminal
+fn main() {
+  storage := mem.arena_create(65536)
+  if !storage.ok { #panic("arena allocation failed") }
+  defer { _ = mem.arena_release(&storage.arena) }
+  args := wasi.arguments(&storage.arena)
+  if !args.ok { #panic("arguments unavailable") }
+  _ = io.println(terminal.stdout(), "Hello from Dyn WASI; arguments: {}", #len(args.values))
+  for arg in args.values { _ = io.println(terminal.stdout(), "{}", arg) }
+}

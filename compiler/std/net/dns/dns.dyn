@@ -1,0 +1,282 @@
+use "std/net" network
+use "std/crypto/random" random
+use "std/time" time
+
+pub struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }
+pub struct Ipv6 { bytes: [16]u8 }
+pub struct Result { count: usize, error: isize, ok: bool }
+
+fn load_u16(bytes: []const u8, offset: usize) u16 {
+  return #cast(u16) bytes[offset] * 256 + #cast(u16) bytes[offset + 1]
+}
+fn store_u16(bytes: []u8, offset: usize, value: u16) {
+  bytes[offset] = #cast(u8) (value >> 8)
+  bytes[offset + 1] = #cast(u8) value
+}
+struct Name { end: usize, length: usize, ok: bool }
+fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
+  cursor := start end: usize = 0 used: usize = 0 hops: usize = 0
+  for cursor < #len(packet) && hops < 128 {
+    length := packet[cursor]
+    if length == 0 { if end == 0 { end = cursor + 1 } return Name{ end: end, length: used, ok: true } }
+    if (length & 192) == 192 {
+      if cursor + 1 >= #len(packet) { return Name{} }
+      target := #cast(usize) (length & 63) * 256 + #cast(usize) packet[cursor + 1]
+      // RFC compression points to a prior occurrence. This also excludes cycles.
+      if target < 12 || target >= cursor { return Name{} }
+      if end == 0 { end = cursor + 2 }
+      cursor = target hops += 1
+    } else {
+      amount := #cast(usize) length
+      if length > 63 || amount > #len(packet) - cursor - 1 { return Name{} }
+      if used == #len(destination) { return Name{} }
+      destination[used] = length used += 1
+      if amount > #len(destination) - used { return Name{} }
+      i: usize = 0
+      for i < amount {
+        byte := packet[cursor + 1 + i]
+        if byte >= 'A' && byte <= 'Z' { byte += 32 }
+        destination[used + i] = byte i += 1
+      }
+      used += amount cursor += amount + 1 hops += 1
+    }
+  }
+  return Name{}
+}
+fn skip_name(packet: []const u8, start: usize) usize {
+  storage: [254]u8 = [] parsed := read_name(packet, start, storage[..])
+  if !parsed.ok { return 0 }
+  return parsed.end
+}
+fn question_matches(packet: []const u8, name: []const u8) bool {
+  storage: [254]u8 = [] parsed := read_name(packet, 12, storage[..])
+  encoded: [512]u8 = [] canonical: [254]u8 = []
+  request := query(encoded[..], name, 0, 1)
+  if #len(request) == 0 { return false }
+  expected := read_name(request, 12, canonical[..])
+  return parsed.ok && expected.ok && same_name(storage[..parsed.length], canonical[..expected.length])
+}
+
+pub fn query_ipv4(destination: []u8, name: []const u8, identifier: u16) []u8 {
+  return query(destination, name, identifier, 1)
+}
+pub fn query_ipv6(destination: []u8, name: []const u8, identifier: u16) []u8 {
+  return query(destination, name, identifier, 28)
+}
+fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
+  if #len(destination) < 17 || #len(name) == 0 || #len(name) > 253 { return destination[..0] }
+  i: usize = 0 for i < 12 { destination[i] = 0 i += 1 }
+  store_u16(destination, 0, identifier) store_u16(destination, 2, 256) store_u16(destination, 4, 1)
+  input: usize = 0 output: usize = 12
+  for input < #len(name) {
+    label_start := input for input < #len(name) && name[input] != '.' { input += 1 }
+    length := input - label_start
+    if length == 0 || length > 63 || output + 1 + length + 5 > #len(destination) { return destination[..0] }
+    destination[output] = #cast(u8) length output += 1
+    j: usize = 0 for j < length { destination[output + j] = name[label_start + j] j += 1 }
+    output += length if input < #len(name) { input += 1 }
+  }
+  destination[output] = 0 store_u16(destination, output + 1, kind) store_u16(destination, output + 3, 1)
+  return destination[..output + 5]
+}
+
+pub fn parse_ipv4(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv4) Result {
+  empty: [0]Ipv6 = []
+  return parse(packet, identifier, name, addresses, empty[..], 1)
+}
+pub fn parse_ipv6(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv6) Result {
+  empty: [0]Ipv4 = []
+  return parse(packet, identifier, name, empty[..], addresses, 28)
+}
+fn same_name(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0 for i < #len(left) { if left[i] != right[i] { return false } i += 1 }
+  return true
+}
+// Resolve the answer's canonical owner before collecting addresses. Re-scan the
+// bounded packet so records may arrive in any order without heap allocation.
+fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8) Name {
+  current := read_name(packet, 12, owner)
+  if !current.ok { return Name{} }
+  hop: usize = 0
+  for hop <= answers && hop < 128 {
+    cursor := start index: usize = 0 found: bool = false target_length: usize = 0
+    target: [254]u8 = []
+    for index < answers {
+      record_name: [254]u8 = [] parsed := read_name(packet, cursor, record_name[..])
+      if !parsed.ok || parsed.end + 10 > #len(packet) { return Name{} }
+      cursor = parsed.end
+      kind := load_u16(packet, cursor) class := load_u16(packet, cursor + 2)
+      length := #cast(usize) load_u16(packet, cursor + 8) cursor += 10
+      if length > #len(packet) - cursor { return Name{} }
+      if kind == 5 && class == 1 && same_name(record_name[..parsed.length], owner[..current.length]) {
+        candidate: [254]u8 = [] alias := read_name(packet, cursor, candidate[..])
+        if !alias.ok || alias.end != cursor + length { return Name{} }
+        if found && !same_name(target[..target_length], candidate[..alias.length]) { return Name{} }
+        target_length = alias.length
+        j: usize = 0 for j < target_length { target[j] = candidate[j] j += 1 }
+        found = true
+      }
+      cursor += length index += 1
+    }
+    if !found { return current }
+    k: usize = 0 for k < target_length { owner[k] = target[k] k += 1 }
+    current.length = target_length hop += 1
+  }
+  return Name{}
+}
+fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv4, ipv6: []Ipv6, query_kind: u16) Result {
+  if #len(packet) < 12 || load_u16(packet, 0) != identifier || (load_u16(packet, 2) & 32768) == 0 {
+    return Result{ error: -22, ok: false }
+  }
+  flags := load_u16(packet, 2)
+  if (flags & 31232) != 0 { return Result{ error: -74 } }
+  if (flags & 15) != 0 { return Result{ error: 0 - #cast(isize) (flags & 15), ok: false } }
+  questions := #cast(usize) load_u16(packet, 4) answers := #cast(usize) load_u16(packet, 6)
+  if questions != 1 || !question_matches(packet, name) { return Result{ error: -22 } }
+  cursor: usize = 12 q: usize = 0
+  for q < questions {
+    cursor = skip_name(packet, cursor)
+    if cursor == 0 || cursor + 4 > #len(packet) { return Result{ error: -22, ok: false } }
+    if load_u16(packet, cursor) != query_kind || load_u16(packet, cursor + 2) != 1 { return Result{ error: -22 } }
+    cursor += 4 q += 1
+  }
+  owner: [254]u8 = [] canonical := canonical_owner(packet, cursor, answers, owner[..])
+  if !canonical.ok { return Result{ error: -22 } }
+  count: usize = 0 answer: usize = 0
+  for answer < answers {
+    record_owner: [254]u8 = [] parsed_owner := read_name(packet, cursor, record_owner[..])
+    if !parsed_owner.ok { return Result{ error: -22 } }
+    matches := same_name(record_owner[..parsed_owner.length], owner[..canonical.length])
+    cursor = parsed_owner.end
+    if cursor == 0 || cursor + 10 > #len(packet) { return Result{ count: count, error: -22, ok: false } }
+    kind := load_u16(packet, cursor) class := load_u16(packet, cursor + 2)
+    length := #cast(usize) load_u16(packet, cursor + 8) cursor += 10
+    if cursor + length > #len(packet) { return Result{ count: count, error: -22, ok: false } }
+    if matches && kind == 1 && query_kind == 1 && class == 1 && length == 4 {
+      if count == #len(addresses) { return Result{ count: count, error: -28 } }
+      addresses[count] = Ipv4{ a: packet[cursor], b: packet[cursor + 1], c: packet[cursor + 2], d: packet[cursor + 3] }
+      count += 1
+    }
+    if matches && kind == 28 && query_kind == 28 && class == 1 && length == 16 {
+      if count == #len(ipv6) { return Result{ count: count, error: -28 } }
+      i: usize = 0 for i < 16 { ipv6[count].bytes[i] = packet[cursor + i] i += 1 }
+      count += 1
+    }
+    cursor += length answer += 1
+  }
+  return Result{ count: count, ok: true }
+}
+
+// The server transport address is IPv4; IPv6 refers to AAAA result records.
+// One deadline covers UDP, TCP connect, framing, and every partial transfer.
+pub fn resolve_ipv4(name: []const u8, server: *const network.Ipv4Address, addresses: []Ipv4,
+                    packet: []u8, timeout_milliseconds: i32) Result {
+  received := exchange(name, server, packet, timeout_milliseconds, 1)
+  if !received.ok { return Result{ error: received.error } }
+  return parse_ipv4(packet[..received.length], received.identifier, name, addresses)
+}
+pub fn resolve_ipv6(name: []const u8, server: *const network.Ipv4Address, addresses: []Ipv6,
+                    packet: []u8, timeout_milliseconds: i32) Result {
+  received := exchange(name, server, packet, timeout_milliseconds, 28)
+  if !received.ok { return Result{ error: received.error } }
+  return parse_ipv6(packet[..received.length], received.identifier, name, addresses)
+}
+struct Packet { length: usize, identifier: u16, error: isize, ok: bool }
+fn ready(descriptor: isize, events: i16, deadline: *const time.Deadline, finite: bool) isize {
+  timeout: i32 = -1
+  if finite {
+    remaining := time.deadline_remaining(deadline)
+    if remaining == 0 { return -110 }
+    timeout = #cast(i32) ((remaining + time.Millisecond - 1) / time.Millisecond)
+  }
+  result := network.wait(descriptor, events, timeout)
+  if !result.ok { return result.error }
+  if result.value == 0 { return -110 }
+  return 0
+}
+fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const time.Deadline, finite: bool) isize {
+  at: usize = 0
+  for at < #len(buffer) {
+    events := network.PollReadable if sending { events = network.PollWritable }
+    error := ready(descriptor, events, deadline, finite) if error != 0 { return error }
+    result := network.Result{}
+    if sending { result = network.send(descriptor, buffer[at..], 16384) }
+    else { result = network.receive(descriptor, buffer[at..], 0) }
+    if !result.ok {
+      if result.error == -4 || network.would_block(&result) { continue }
+      return result.error
+    }
+    if result.value == 0 { return -74 }
+    at += #cast(usize) result.value
+  }
+  return 0
+}
+fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
+       identifier: u16, kind: u16, deadline: *const time.Deadline, finite: bool) Packet {
+  request := query(packet, name, identifier, kind)
+  if #len(request) == 0 { return Packet{ error: -22 } }
+  opened := network.socket(network.AddressFamilyIpv4, network.SocketStream, 0)
+  if !opened.ok { return Packet{ error: opened.error } }
+  descriptor := opened.value defer { _ = network.close(descriptor) }
+  mode := network.nonblocking(descriptor, true) if !mode.ok { return Packet{ error: mode.error } }
+  connected := network.connect_ipv4(descriptor, server)
+  if !connected.ok {
+    if !network.would_block(&connected) { return Packet{ error: connected.error } }
+    error := ready(descriptor, network.PollWritable, deadline, finite)
+    if error != 0 { return Packet{ error: error } }
+    checked := network.socket_error(descriptor)
+    if !checked.ok { return Packet{ error: checked.error } }
+  }
+  prefix: [2]u8 = [] store_u16(prefix[..], 0, #cast(u16) #len(request))
+  sent := transfer(descriptor, prefix[..], true, deadline, finite)
+  if sent == 0 { sent = transfer(descriptor, request, true, deadline, finite) }
+  if sent != 0 { return Packet{ error: sent } }
+  received := transfer(descriptor, prefix[..], false, deadline, finite)
+  if received != 0 { return Packet{ error: received } }
+  length := #cast(usize) load_u16(prefix[..], 0)
+  if length > #len(packet) { return Packet{ error: -28 } }
+  if length < 12 { return Packet{ error: -74 } }
+  received = transfer(descriptor, packet[..length], false, deadline, finite)
+  if received != 0 { return Packet{ error: received } }
+  return Packet{ length: length, identifier: identifier, ok: true }
+}
+fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
+            timeout_milliseconds: i32, kind: u16) Packet {
+  finite := timeout_milliseconds >= 0
+  deadline := time.deadline_after(#cast(i64) timeout_milliseconds * time.Millisecond)
+  entropy: [2]u8 = [] if !random.fill(entropy[..]) { return Packet{ error: -5 } }
+  identifier := load_u16(entropy[..], 0)
+  request := query(packet, name, identifier, kind)
+  if #len(request) == 0 { return Packet{ error: -22 } }
+  opened := network.socket(network.AddressFamilyIpv4, network.SocketDatagram, 0)
+  if !opened.ok { return Packet{ error: opened.error } }
+  descriptor := opened.value defer { _ = network.close(descriptor) }
+  mode := network.nonblocking(descriptor, true) if !mode.ok { return Packet{ error: mode.error } }
+  connected := network.connect_ipv4(descriptor, server)
+  if !connected.ok { return Packet{ error: connected.error } }
+  sent := network.send(descriptor, request, 0)
+  if !sent.ok { return Packet{ error: sent.error } }
+  if #cast(usize) sent.value != #len(request) { return Packet{ error: -5 } }
+  for {
+    error := ready(descriptor, network.PollReadable, &deadline, finite)
+    if error != 0 { return Packet{ error: error } }
+    received := network.receive(descriptor, packet, 32)
+    if !received.ok {
+      if received.error == -4 || network.would_block(&received) { continue }
+      return Packet{ error: received.error }
+    }
+    length := #cast(usize) received.value
+    stored := length if stored > #len(packet) { stored = #len(packet) }
+    response := packet[..stored]
+    if stored < 12 || load_u16(response, 0) != identifier || (load_u16(response, 2) & 32768) == 0 { continue }
+    if (load_u16(response, 2) & 30720) != 0 || load_u16(response, 4) != 1 || !question_matches(response, name) { return Packet{ error: -74 } }
+    question_end := skip_name(response, 12)
+    if question_end == 0 || question_end + 4 > stored || load_u16(response, question_end) != kind || load_u16(response, question_end + 2) != 1 { return Packet{ error: -74 } }
+    if length > #len(packet) || (load_u16(response, 2) & 512) != 0 {
+      return tcp(name, server, packet, identifier, kind, &deadline, finite)
+    }
+    return Packet{ length: length, identifier: identifier, ok: true }
+  }
+  return Packet{ error: -5 }
+}

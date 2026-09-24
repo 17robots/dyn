@@ -1,0 +1,54 @@
+use "std/mem"
+use "std/os/linux" os
+use "std/path" paths
+use "std/fs"
+use "std/terminal"
+
+fn equal(a: []const u8, b: []const u8) bool {
+  if #len(a) != #len(b) { return false }
+  i: usize = 0
+  for i < #len(a) {
+    if a[i] != b[i] { return false }
+    i += 1
+  }
+  return true
+}
+
+fn main() {
+  storage: [512]u8 = []
+  if !equal(paths.clean(storage[..], "/a//b/../c/.").value, "/a/c") { #panic("clean") }
+  if !equal(paths.relative(storage[..], "/a/b", "/a/c/d").value, "../c/d") { #panic("relative") }
+  if !equal(paths.safe_join(storage[..], "/srv/root", "a/../b").value, "/srv/root/b") { #panic("safe join") }
+  if !equal(paths.safe_join(storage[..], "/", "usr/bin").value, "/usr/bin") { #panic("root join") }
+  if #len(paths.safe_join(storage[..], "/srv/root", "../../escape").value) != 0 { #panic("escape") }
+  iterator := paths.components("/one/two")
+  first := paths.component_next(&iterator)
+  second := paths.component_next(&iterator)
+  if !first.found || !second.found || !equal(first.value, "one") || !equal(second.value, "two") { #panic("components") }
+
+  path: []const u8 = "/tmp/dyn-os-expanded"
+  link: []const u8 = "/tmp/dyn-os-expanded-link"
+  _ = fs.remove(path)
+  _ = fs.remove(link)
+  file := fs.create(path)
+  if !file.ok { #panic("create") }
+  if !fs.write(&file.file, "abcdef").ok { #panic("write") }
+  if !fs.lock(&file.file, 2).ok || !fs.lock(&file.file, 8).ok { #panic("lock") }
+  _ = fs.close(&file.file)
+  if !fs.truncate(path, 3).ok { #panic("truncate") }
+  arena_storage: [64]u8 = []
+  arena := mem.arena_from_buffer(arena_storage[..])
+  contents := fs.read_all(&arena, path, 32)
+  if !contents.ok || !equal(contents.data, "abc") { #panic("read") }
+  if !fs.symbolic_link(path, link).ok { #panic("symlink") }
+  target: [128]u8 = []
+  read := fs.read_link(link, target[..])
+  if !read.ok || !equal(read.path, path) { #panic("readlink") }
+  _ = fs.remove(link)
+  _ = fs.remove(path)
+
+  up := terminal.key_decode("\x1b[A")
+  if up.kind != terminal.KeyKind.Up || up.consumed != 3 { #panic("key") }
+  wait := os.wait(-1, true)
+  if wait.ok { #panic("wait") }
+}

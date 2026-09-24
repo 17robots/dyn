@@ -1,0 +1,5 @@
+use "std/io" use "std/terminal"
+fn main() {
+  #panic("stop")
+  _ = io.println(terminal.stdout(), "unreachable")
+}

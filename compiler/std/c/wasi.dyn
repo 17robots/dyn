@@ -1,0 +1,4 @@
+#target(kernel: wasi)
+pub type long = i32
+pub type unsigned_long = u32
+pub type char = i8

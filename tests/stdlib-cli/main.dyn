@@ -1,0 +1,49 @@
+use "std/flags" cli
+use "std/strings" str
+
+fn main() {
+  value_storage: [3]cli.Value = []
+  positional_storage: [5][]const u8 = []
+  verbose_name: []const u8 = "verbose"
+  output_name: []const u8 = "output"
+  options: [2]cli.Option = []
+  options[0] = cli.Option{ name: verbose_name, short: 'v', kind: cli.Kind.Bool }
+  options[1] = cli.Option{ name: output_name, short: 'o', kind: cli.Kind.String }
+  arg0: []const u8 = "--verbose"
+  arg1: []const u8 = "--output=result.txt"
+  arg2: []const u8 = "input.dyn"
+  arg3: []const u8 = "--"
+  arguments: [4][]const u8 = [arg0, arg1, arg2, arg3]
+  result := cli.parse(options[..], arguments[..], value_storage[..], positional_storage[..])
+  if !result.ok || !result.values[0].present || !result.values[1].present { #panic("CLI option parse failed") }
+  output := result.values[1].text
+  if #len(output) != 10 || output[0] != 'r' { #panic("CLI option value failed") }
+  if #len(result.positionals) != 1 { #panic("CLI positional parse failed") }
+
+  missing: []const u8 = "--missing"
+  bad_arguments: [1][]const u8 = [missing]
+  bad := cli.parse(options[..], bad_arguments[..], value_storage[..], positional_storage[..])
+  if bad.ok || bad.error.kind != cli.ErrorKind.Unknown { #panic("CLI error failed") }
+
+  modes: [2][]const u8 = ["slow", "fast"]
+  typed_options: [3]cli.Option = []
+  typed_options[0] = cli.integer_option("count", 'n')
+  typed_options[1] = cli.float_option("ratio", 'r')
+  typed_options[2] = cli.choice_option("mode", 'm', modes[..])
+  typed_options[2].default_value = "fast"
+  command_args: [5][]const u8 = ["--count", "-42", "--ratio=1.25e2", "build", "app.dyn"]
+  typed := cli.parse(typed_options[..], command_args[..], value_storage[..], positional_storage[..])
+  count_value: i64 = 0
+  ratio_value: f64 = 0.0
+  if !typed.ok || !str.parse_i64(typed.values[0].text, &count_value) || count_value != -42 { #panic("CLI integer failed") }
+  if !str.parse_f64(typed.values[1].text, &ratio_value) || ratio_value != 125.0 { #panic("CLI float failed") }
+  if !str.equal(typed.values[2].text, modes[1]) { #panic("CLI choice/default failed") }
+  if !str.equal(typed.positionals[0], "build") || #len(typed.positionals[1..]) != 1 { #panic("CLI subcommand failed") }
+  if #len(typed.positionals) != 2 { #panic("CLI positional schema failed") }
+  completion_storage: [64]u8 = []
+  if !cli.completion(completion_storage[..], typed_options[..]).ok { #panic("CLI completion failed") }
+
+  invalid_args: [2][]const u8 = ["--count", "wrong"]
+  invalid := cli.parse(typed_options[..], invalid_args[..], value_storage[..], positional_storage[..])
+  if invalid.ok || invalid.error.kind != cli.ErrorKind.InvalidValue { #panic("CLI typed validation failed") }
+}

@@ -1,0 +1,5 @@
+fn main() {
+  const missing: i32
+  const answer := 42
+  answer = 7
+}

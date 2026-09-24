@@ -1,0 +1,4 @@
+// Shared byte-codec result. Failure returns an empty data slice; required is
+// exact when input is valid and representable. No output is modified on failure.
+pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Overlap }
+pub struct Result { data: []u8, error: ErrorKind, required: usize, ok: bool }

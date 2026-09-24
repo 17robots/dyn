@@ -1,0 +1,19 @@
+fn outside() {
+  break: missing
+}
+
+fn duplicate() {
+  same: for {
+    same: for {
+      break
+    }
+  }
+}
+
+fn unknown() {
+  active: for {
+    continue: unknown
+  }
+}
+
+fn main() {}

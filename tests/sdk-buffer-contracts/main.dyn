@@ -1,0 +1,56 @@
+use "std/c"
+use "std/mem"
+use "std/strings"
+use "std/encoding/hex"
+use "std/encoding/base32"
+use "std/encoding/base64"
+use "std/flags"
+
+fn main() {
+  output: [16]u8 = [] for *byte in output { byte.* = 99 }
+  invalid_hex := hex.decode(output[..], "6162xx")
+  if invalid_hex.ok || invalid_hex.error != hex.ErrorKind.InvalidInput || output[0] != 99 { #panic("hex malformed input atomicity") }
+  small_hex := hex.decode(output[..1], "6162")
+  if small_hex.error != hex.ErrorKind.Capacity || small_hex.required != 2 || output[0] != 99 { #panic("hex capacity detail") }
+  invalid64 := base64.decode(output[..], "YWJj!!!!")
+  if invalid64.error != base64.ErrorKind.InvalidInput || output[0] != 99 { #panic("base64 malformed input atomicity") }
+  invalid32 := base32.decode(output[..], "MY======MY======")
+  if invalid32.error != base32.ErrorKind.InvalidInput || output[0] != 99 { #panic("base32 interior padding") }
+  decoded32 := base32.decode(output[..1], "MY======")
+  if !decoded32.ok || decoded32.required != 1 || output[0] != 'f' { #panic("base32 exact capacity") }
+  if !base32.decode(output[..0], "").ok || !hex.decode(output[..0], "").ok || !base64.decode(output[..0], "").ok { #panic("valid empty codecs") }
+  if base32.encoded_size(#cast(usize) -1) != 0 { #panic("base32 length overflow") }
+  size: usize = 77
+  if base64.decoded_size("!!!!", &size) || size != 77 || !base32.decoded_size("MY======", &size) || size != 1 { #panic("codec size validation") }
+  overlap: [8]u8 = ['6', '1', '6', '2']
+  if hex.decode(overlap[..2], overlap[..4]).error != hex.ErrorKind.Overlap || overlap[0] != '6' { #panic("codec overlap") }
+  parts: [3][]const u8 = ["a", "", "b"]
+  measured := strings.join_size(parts[..], ":")
+  if !measured.ok || measured.value != 4 { #panic("join measurement") }
+  joined := strings.join_into(output[..4], parts[..], ":")
+  if !joined.ok || !strings.equal(joined.value, "a::b") { #panic("join into") }
+  if strings.join_into(output[..3], parts[..], ":").error != strings.ErrorKind.Capacity || output[0] != 'a' { #panic("join capacity") }
+  fields: [3][]const u8 = []
+  split := strings.split_into(fields[..], "a::b", ":")
+  if !split.ok || #len(split.values[1]) != 0 || !strings.equal(split.values[2], "b") { #panic("split into borrowed fields") }
+  if strings.split_into(fields[..], "a", "").error != strings.ErrorKind.InvalidInput { #panic("split invalid separator") }
+  if strings.split_into(fields[..1], "a:b", ":").required != 2 { #panic("split capacity detail") }
+  if strings.replace(output[..], output[..4], "a", "x").error != strings.ErrorKind.Overlap || output[0] != 'a' { #panic("replace overlap rejected atomically") }
+  if !strings.clone_into(output[1..], output[..4]).ok || output[1] != 'a' { #panic("clone supports overlap") }
+  nul: [3]u8 = ['a', 0, 'b']
+  backing: [32]u8 = [] arena := mem.arena_from_buffer(backing[..])
+  held := mem.arena_push(&arena, 1, 1) held.* = 77 mark := mem.arena_mark(&arena)
+  if !strings.clone(&arena, "").ok || mem.arena_mark(&arena) != mark { #panic("empty clone") }
+  no_parts: [0][]const u8 = []
+  if !strings.join(&arena, no_parts[..], ",").ok || mem.arena_mark(&arena) != mark { #panic("empty join") }
+  failed_c := c.string_from_arena(&arena, nul[..])
+  if failed_c.error != c.ErrorKind.InvalidInput || mem.arena_mark(&arena) != mark || held.* != 77 { #panic("C string validation and rollback") }
+  if c.string_from_bytes(output[..1], "ab").error != c.ErrorKind.Capacity { #panic("C string capacity") }
+  if c.bytes_from_string(nil, 0).error != c.ErrorKind.InvalidInput { #panic("C nil string") }
+  if c.bytes_from_string(&nul[0], 1).error != c.ErrorKind.Unterminated { #panic("C unterminated string") }
+  if !c.string_from_bytes(output[1..], "abc").ok || !c.string_from_bytes(output[..], output[1..4]).ok || output[0] != 'a' || output[3] != 0 { #panic("C overlapping copy") }
+  no_options: [0]flags.Option = []
+  if !flags.completion(output[..0], no_options[..]).ok { #panic("empty completion succeeds") }
+  usage := flags.usage(output[..0], "tool", no_options[..])
+  if usage.error != flags.ErrorKind.Capacity || usage.required != 22 { #panic("usage capacity detail") }
+}

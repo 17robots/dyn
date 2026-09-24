@@ -1,0 +1,62 @@
+use "vendor/sdl3"
+use "std/io"
+use "std/terminal"
+
+fn main() {
+  output := terminal.stdout()
+  if !sdl3.init_video() { #panic("SDL3 video initialization failed") }
+  defer sdl3.quit()
+  backing: [64]u8 = []
+  window := sdl3.window_create("Dyn SDL3", backing[..], 640, 360, sdl3.WindowResizable)
+  if !window.ok { #panic("SDL3 Window creation failed") }
+  defer sdl3.window_destroy_owned(window.value)
+
+  formats := sdl3.ShaderSpirv | sdl3.ShaderDxil | sdl3.ShaderMsl | sdl3.ShaderMetallib
+  device := sdl3.gpu_create_default_owned(formats, false)
+  if !device.ok { #panic("SDL3 device creation failed") }
+  defer sdl3.gpu_destroy_owned(device.value)
+  if !sdl3.gpu_claim_window(device.value, window.value) { #panic("SDL3 failed to claim window") }
+  defer sdl3.gpu_release_window(device.value, window.value)
+
+  i: usize = 0
+  r := 0.0
+  g := 0.0
+  b := 0.0
+  alpha := 0.0
+  color := sdl3.FColor{ red: r, green: g, blue: b, alpha: alpha }
+
+  running := true
+  event := sdl3.Event{}
+  for running {
+    for sdl3.poll_event(&event) {
+      if sdl3.event_requests_close(&event) { running = false }
+    }
+    if !running { break }
+    // Submission consumes the command buffer; acquire a new one each frame.
+    commands := sdl3.gpu_commands(device.value)
+    if !sdl3.gpu_clear_swapchain(commands, window.value, color) {
+      error := sdl3.last_error(4096)
+      if error.ok { _ = io.println(output, error.value) }
+      #panic("SDL3 GPU frame failed")
+    }
+    if i % 10 == 0 {
+      r += 0.01
+      if r > 1.0 {
+        r = 1.0
+        g += 0.01
+        if g > 1.0 {
+          g = 1.0
+          b += 0.01
+          if b > 1.0 {
+            r = 0.0
+            b = 0.0
+            g = 0.0
+          }
+        }
+      }
+      color = sdl3.FColor{ red: r, green: g, blue: b, alpha: alpha }
+    }
+    i += 1
+    if i > 100000 { i = 0 }
+  }
+}

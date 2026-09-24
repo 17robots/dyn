@@ -1,10 +1,9 @@
-/zig-out/
-/.zig-cache/
-target/
-.dyn_build/
-.codex
-/target
-
-
-# Added by cargo
-
+build/
+**/build/
+**/.jj/
+**/.codex/
+**/__pycache__/
+**/node_modules/
+**/target/
+**/.dyn_build/
+*.pyc

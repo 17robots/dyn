@@ -1,0 +1,1 @@
+fn directory_fixture_marker() u8 { return 1 }

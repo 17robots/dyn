@@ -1,0 +1,28 @@
+#link("lz4")
+// Raw LZ4 blocks, not the framed format. Caller supplies the decompressed bound.
+// Buffers must not overlap. Failure may modify destination; discard its contents.
+pub struct Result { written: usize, code: i32, ok: bool }
+pub const MaxInput: usize = 2113929216
+pub fn compress_bound(size: usize) usize {
+  if size > MaxInput { return 0 }
+  return #cast(usize) native_bound(#cast(i32) size)
+}
+pub fn compress(destination: []u8, source: []const u8) Result {
+  if #len(source) > MaxInput || #len(destination) == 0 || #len(destination) > 2147483647 { return Result{} }
+  empty: [1]u8 = [] input: *const u8 = &empty[0]
+  if #len(source) != 0 { input = &source[0] }
+  code := native_compress(input, &destination[0], #cast(i32) #len(source), #cast(i32) #len(destination))
+  if code <= 0 { return Result{ code: code } }
+  return Result{ written: #cast(usize) code, code: code, ok: true }
+}
+pub fn decompress(destination: []u8, source: []const u8) Result {
+  if #len(source) == 0 || #len(source) > 2147483647 || #len(destination) > 2147483647 { return Result{ code: -1 } }
+  empty: [1]u8 = [] output := &empty[0]
+  if #len(destination) != 0 { output = &destination[0] }
+  code := native_decompress(&source[0], output, #cast(i32) #len(source), #cast(i32) #len(destination))
+  if code < 0 { return Result{ code: code } }
+  return Result{ written: #cast(usize) code, code: code, ok: true }
+}
+extern fn native_bound "LZ4_compressBound"(size: i32) i32
+extern fn native_compress "LZ4_compress_default"(source: *const u8, destination: *u8, size: i32, capacity: i32) i32
+extern fn native_decompress "LZ4_decompress_safe"(source: *const u8, destination: *u8, size: i32, capacity: i32) i32

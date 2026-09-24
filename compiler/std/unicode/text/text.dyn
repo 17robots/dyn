@@ -1,0 +1,154 @@
+use "std/unicode/utf8" utf8
+use "std/bytes" bytes
+pub const UnicodeVersion: []const u8 = "17.0.0"
+pub enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
+pub struct Result { written: usize, error: ErrorKind, ok: bool }
+pub enum Form { NFD, NFC, NFKD, NFKC }
+pub enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }
+fn properties(codepoint: u32) u32 {
+  low: usize = 0 high: usize = #len(Properties) / 3
+  for low < high {
+    mid := low + (high - low) / 2 at := mid * 3
+    if codepoint < Properties[at] { high = mid }
+    else if codepoint > Properties[at + 1] { low = mid + 1 }
+    else { return Properties[at + 2] }
+  }
+  return 0
+}
+pub fn category(codepoint: u32) Category {
+  value := properties(codepoint) & 31
+  if value == 1 { return Category.Lu }
+  if value == 2 { return Category.Ll }
+  if value == 3 { return Category.Lt }
+  if value == 4 { return Category.Lm }
+  if value == 5 { return Category.Lo }
+  if value == 6 { return Category.Mn }
+  if value == 7 { return Category.Mc }
+  if value == 8 { return Category.Me }
+  if value == 9 { return Category.Nd }
+  if value == 10 { return Category.Nl }
+  if value == 11 { return Category.No }
+  if value == 12 { return Category.Pc }
+  if value == 13 { return Category.Pd }
+  if value == 14 { return Category.Ps }
+  if value == 15 { return Category.Pe }
+  if value == 16 { return Category.Pi }
+  if value == 17 { return Category.Pf }
+  if value == 18 { return Category.Po }
+  if value == 19 { return Category.Sm }
+  if value == 20 { return Category.Sc }
+  if value == 21 { return Category.Sk }
+  if value == 22 { return Category.So }
+  if value == 23 { return Category.Zs }
+  if value == 24 { return Category.Zl }
+  if value == 25 { return Category.Zp }
+  if value == 26 { return Category.Cc }
+  if value == 27 { return Category.Cf }
+  if value == 28 { return Category.Cs }
+  if value == 29 { return Category.Co }
+  return Category.Cn
+}
+pub fn combining_class(codepoint: u32) u32 { return (properties(codepoint) >> 5) & 255 }
+pub fn identifier_start(codepoint: u32) bool { return (properties(codepoint) & 1048576) != 0 }
+pub fn identifier_continue(codepoint: u32) bool { return (properties(codepoint) & 2097152) != 0 }
+pub fn whitespace(codepoint: u32) bool { return (properties(codepoint) & 4194304) != 0 }
+fn mapping(table: []const u32, codepoint: u32) []const u32 {
+  low: usize = 0 high := #len(table) / 3
+  for low < high {
+    mid := low + (high - low) / 2 at := mid * 3
+    if codepoint < table[at] { high = mid }
+    else if codepoint > table[at] { low = mid + 1 }
+    else { start := #cast(usize) table[at + 1] return MappingValues[start..start + #cast(usize) table[at + 2]] }
+  }
+  return MappingValues[..0]
+}
+// Locale-independent full default case folding, without normalization.
+// Overlap is rejected before writing. Other failures report a complete UTF-8 prefix.
+pub fn case_fold(destination: []u8, source: []const u8) Result {
+  if bytes.overlaps(destination, source) { return Result{ error: ErrorKind.Overlap } }
+  at: usize = 0 written: usize = 0
+  for at < #len(source) {
+    decoded := utf8.decode(source, at) if !decoded.ok { return Result{ written: written, error: ErrorKind.InvalidUtf8 } }
+    values := mapping(Folding[..], decoded.codepoint)
+    scalar: [1]u32 = [decoded.codepoint] if #len(values) == 0 { values = scalar[..] }
+    for value in values {
+      width := utf8.encode(destination[written..], value)
+      if width == 0 { return Result{ written: written, error: ErrorKind.Capacity } }
+      written += width
+    }
+    at += decoded.width
+  }
+  return Result{ written: written, ok: true }
+}
+fn compose(left: u32, right: u32) u32 {
+  if left >= 4352 && left < 4371 && right >= 4449 && right < 4470 { return 44032 + ((left - 4352) * 21 + right - 4449) * 28 }
+  if left >= 44032 && left < 55204 && (left - 44032) % 28 == 0 && right > 4519 && right < 4547 { return left + right - 4519 }
+  low: usize = 0 high: usize = #len(Composition) / 3
+  for low < high {
+    mid := low + (high - low) / 2 at := mid * 3
+    if left < Composition[at] || (left == Composition[at] && right < Composition[at + 1]) { high = mid }
+    else if left > Composition[at] || (left == Composition[at] && right > Composition[at + 1]) { low = mid + 1 }
+    else { return Composition[at + 2] }
+  }
+  return 0
+}
+// Work is split into equal decomposition/reordering buffers. Each half needs
+// one slot per fully decomposed scalar. Input/output/work must not overlap.
+// Errors may modify storage; written reports only the complete output prefix.
+pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32) Result {
+  if bytes.overlaps(destination, source) { return Result{ error: ErrorKind.Overlap } }
+  if #len(work) > 0 {
+    workspace := (#cast(*u8) &work[0])[..#len(work) * 4]
+    if bytes.overlaps(workspace, source) || bytes.overlaps(workspace, destination) { return Result{ error: ErrorKind.Overlap } }
+  }
+  capacity := #len(work) / 2 values := work[..capacity] temporary := work[capacity..]
+  table := Canonical[..] if form == Form.NFKD || form == Form.NFKC { table = Compatibility[..] }
+  at: usize = 0 count: usize = 0
+  for at < #len(source) {
+    decoded := utf8.decode(source, at) if !decoded.ok { return Result{ error: ErrorKind.InvalidUtf8 } }
+    scalar: [3]u32 = [decoded.codepoint, 0, 0] mapped := mapping(table, decoded.codepoint)
+    if decoded.codepoint >= 44032 && decoded.codepoint < 55204 {
+      syllable := decoded.codepoint - 44032
+      scalar[0] = 4352 + syllable / 588 scalar[1] = 4449 + (syllable % 588) / 28
+      scalar[2] = 4519 + syllable % 28 mapped = scalar[..2]
+      if syllable % 28 != 0 { mapped = scalar[..3] }
+    } else if #len(mapped) == 0 { mapped = scalar[..1] }
+    if #len(mapped) > capacity - count { return Result{ error: ErrorKind.Capacity } }
+    for value in mapped { values[count] = value count += 1 }
+    at += decoded.width
+  }
+  // Stable counting sort per non-starter run; linear in input plus 256 per run.
+  start: usize = 0
+  for start < count {
+    if combining_class(values[start]) == 0 { start += 1 continue }
+    end := start for end < count && combining_class(values[end]) != 0 { end += 1 }
+    buckets: [256]usize = []
+    i := start for i < end { buckets[#cast(usize) combining_class(values[i])] += 1 i += 1 }
+    sum: usize = 0 bucket: usize = 0
+    for bucket < 256 { amount := buckets[bucket] buckets[bucket] = sum sum += amount bucket += 1 }
+    i = start for i < end { cls := #cast(usize) combining_class(values[i]) temporary[buckets[cls]] = values[i] buckets[cls] += 1 i += 1 }
+    i = start for i < end { values[i] = temporary[i - start] i += 1 }
+    start = end
+  }
+  if form == Form.NFC || form == Form.NFKC {
+    read: usize = 0 used: usize = 0 starter: usize = 0 have_starter: bool = false last_class: u32 = 0
+    for read < count {
+      current := values[read] current_class := combining_class(current) combined: u32 = 0
+      if have_starter && (last_class == 0 || last_class < current_class) { combined = compose(values[starter], current) }
+      if combined != 0 { values[starter] = combined }
+      else {
+        if current_class == 0 { starter = used have_starter = true }
+        values[used] = current used += 1 last_class = current_class
+      }
+      read += 1
+    }
+    count = used
+  }
+  written: usize = 0
+  for scalar_value in values[..count] {
+    width := utf8.encode(destination[written..], scalar_value)
+    if width == 0 { return Result{ written: written, error: ErrorKind.Capacity } }
+    written += width
+  }
+  return Result{ written: written, ok: true }
+}

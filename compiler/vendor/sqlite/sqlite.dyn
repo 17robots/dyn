@@ -1,0 +1,40 @@
+use "std/c"
+#link("sqlite3")
+
+pub type Database = rawptr
+pub struct OpenResult { database: Database, code: i32, ok: bool }
+
+
+// Provider allocates database. Successful results require close; failures own nothing.
+pub fn open(name: []const u8, buffer: []u8) OpenResult {
+  encoded := c.string_from_bytes(buffer, name)
+  if !encoded.ok { return OpenResult{ code: string_error(encoded.error) } }
+  database: rawptr = nil code := sqlite_open(encoded.value, &database)
+  if code != 0 { if database != nil { _ = sqlite_close(database) } return OpenResult{ code: code } }
+  return OpenResult{ database: database, code: code, ok: true }
+}
+pub fn close(database: Database) i32 { if database == nil { return 0 } return sqlite_close(database) }
+
+// SQL is borrowed only for call. SQLite owns returned error; wrapper releases it.
+pub fn execute(database: Database, sql: []const u8, buffer: []u8) i32 {
+  if database == nil { return -1 }
+  encoded := c.string_from_bytes(buffer, sql)
+  if !encoded.ok { return string_error(encoded.error) }
+  error: rawptr = nil code := sqlite_exec(database, encoded.value, nil, nil, &error)
+  if error != nil { sqlite_free(error) }
+  return code
+}
+
+// Returned bytes borrow database and expire at next SQLite call or close.
+pub fn error_message(database: Database, maximum: usize) []const u8 {
+  if database == nil { return "" }
+  value := c.bytes_from_string(sqlite_error_message(database), maximum)
+  if !value.ok { return "" }
+  return value.value
+}
+
+fn string_error(error: c.ErrorKind) i32 {
+  if error == c.ErrorKind.Capacity { return Capacity }
+  if error == c.ErrorKind.Overflow { return Overflow }
+  return InvalidArgument
+}

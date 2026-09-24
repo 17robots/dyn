@@ -1,0 +1,6 @@
+use "vendor/zstd" zstd
+
+fn main() {
+  value := zstd.ContentSizeUnknown
+  _ = value
+}

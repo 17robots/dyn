@@ -1,0 +1,9 @@
+use "std/os/linux" os
+
+fn main() {
+  storage: [32]u8 = []
+  result := os.environment_get("DYN_STDLIB_ENV_TEST", storage[..])
+  if !result.ok || !result.found || #len(result.value) != 5 || result.value[0] != 'v' {
+    #panic("environment lookup failed")
+  }
+}

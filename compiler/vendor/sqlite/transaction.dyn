@@ -1,0 +1,30 @@
+pub enum TransactionMode { Deferred, Immediate, Exclusive }
+pub struct IntegerResult { value: i64, code: i32, ok: bool }
+// Applies to subsequent busy waits on this connection. Zero disables waiting.
+pub fn busy_timeout(database: Database, milliseconds: i32) i32 {
+  if database == nil || milliseconds < 0 { return InvalidArgument }
+  return sqlite_busy_timeout(database,milliseconds)
+}
+pub fn changes(database: Database) IntegerResult {
+  if database == nil { return IntegerResult{ code: InvalidArgument } }
+  return IntegerResult{ value: sqlite_changes(database), ok: true }
+}
+pub fn last_insert_rowid(database: Database) IntegerResult {
+  if database == nil { return IntegerResult{ code: InvalidArgument } }
+  return IntegerResult{ value: sqlite_last_rowid(database), ok: true }
+}
+// Transactions belong to the connection. A failed commit may leave one active;
+// query in_transaction, retry or roll back before reusing the connection.
+pub fn in_transaction(database: Database) bool { return database != nil && sqlite_autocommit(database) == 0 }
+fn transaction_command(database: Database, command: *const u8) i32 {
+  if database == nil { return InvalidArgument }
+  return sqlite_exec(database,command,nil,nil,nil)
+}
+pub fn begin(database: Database, mode: TransactionMode) i32 {
+  command := "BEGIN DEFERRED\0"
+  if mode == TransactionMode.Immediate { command = "BEGIN IMMEDIATE\0" }
+  else if mode == TransactionMode.Exclusive { command = "BEGIN EXCLUSIVE\0" }
+  return transaction_command(database,&command[0])
+}
+pub fn commit(database: Database) i32 { command := "COMMIT\0" return transaction_command(database,&command[0]) }
+pub fn rollback(database: Database) i32 { command := "ROLLBACK\0" return transaction_command(database,&command[0]) }

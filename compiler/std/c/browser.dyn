@@ -1,0 +1,5 @@
+#target(kernel: browser)
+// wasm32 Basic C ABI.
+pub type long = i32
+pub type unsigned_long = u32
+pub type char = i8

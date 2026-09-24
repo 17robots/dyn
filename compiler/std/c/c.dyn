@@ -1,0 +1,79 @@
+use "std/mem" memory
+
+// C ABI names. Target files select long width and plain-char signedness. No wrappers,
+// conversions, allocation, or distinct-type friction at foreign call sites.
+pub type signed_char = i8
+pub type unsigned_char = u8
+pub type short = i16
+pub type unsigned_short = u16
+pub type int = i32
+pub type unsigned_int = u32
+pub type long_long = i64
+pub type unsigned_long_long = u64
+pub type float = f32
+pub type double = f64
+pub type size = usize
+pub type ptrdiff = isize
+pub type intptr = isize
+pub type uintptr = usize
+pub type intmax = i64
+pub type uintmax = u64
+pub type string = *const u8
+pub type mutable_string = *u8
+pub type pointer = rawptr
+
+pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Unterminated }
+
+pub struct StringResult {
+  error: ErrorKind,
+  required: usize,
+  value: string,
+  ok: bool,
+}
+
+pub struct BytesResult { value: []const u8, error: ErrorKind, ok: bool }
+
+// Bounded scan: never reads beyond `maximum`; callers retain source ownership.
+pub fn string_length(value: string, maximum: usize) usize {
+  if value == nil { return 0 }
+  bytes := value[..maximum]
+  count: usize = 0
+  for count < maximum && bytes[count] != 0 { count += 1 }
+  return count
+}
+
+pub fn bytes_from_string(value: string, maximum: usize) BytesResult {
+  if value == nil { return BytesResult{ error: ErrorKind.InvalidInput } }
+  count := string_length(value, maximum)
+  if count == maximum { return BytesResult{ error: ErrorKind.Unterminated } }
+  return BytesResult{ value: value[..count], ok: true }
+}
+
+pub fn errno_from_result(value: isize) isize {
+  if value < 0 { return 0 - value }
+  return 0
+}
+pub fn succeeded(value: isize) bool { return value >= 0 }
+
+// Copies bytes and appends NUL. Embedded NUL is invalid; arbitrary overlap is
+// supported. Failure leaves destination untouched. Required includes the NUL.
+pub fn string_from_bytes(destination: []u8, source: []const u8) StringResult {
+  if #len(source) == #cast(usize) -1 { return StringResult{ error: ErrorKind.Overflow } }
+  for byte in source { if byte == 0 { return StringResult{ error: ErrorKind.InvalidInput } } }
+  required := #len(source) + 1
+  if #len(destination) < required { return StringResult{ error: ErrorKind.Capacity, required: required } }
+  _ = memory.move(destination, source)
+  destination[#len(source)] = 0
+  return StringResult{ value: &destination[0], required: required, ok: true }
+}
+
+// Arena-owned C string; failure rewinds only this operation's allocation.
+pub fn string_from_arena(arena: *memory.Arena, source: []const u8) StringResult {
+  if #len(source) == #cast(usize) -1 { return StringResult{ error: ErrorKind.Overflow } }
+  mark := memory.arena_mark(arena)
+  allocation := memory.arena_try_push_uninit(arena, #len(source) + 1, 1)
+  if !allocation.ok { return StringResult{ error: ErrorKind.Capacity, required: #len(source) + 1 } }
+  result := string_from_bytes(allocation.memory[..#len(source) + 1], source)
+  if !result.ok { memory.arena_rewind(arena, mark) }
+  return result
+}

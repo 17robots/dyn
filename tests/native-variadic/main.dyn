@@ -1,0 +1,36 @@
+fn accept(arguments: ...any) {
+  if #len(arguments) != 3 { #panic("native variadic pack length failed") }
+  case arguments[0] {
+    is i32 value => { if value != 1 { #panic("native variadic integer failed") } },
+    _ => { #panic("native variadic integer type failed") }
+  }
+  case arguments[1] {
+    is bool value => { if !value { #panic("native variadic bool failed") } },
+    _ => { #panic("native variadic bool type failed") }
+  }
+  case arguments[2] {
+    is []const u8 value => { if #len(value) != 3 { #panic("native variadic string failed") } },
+    _ => { #panic("native variadic string type failed") }
+  }
+}
+
+fn sum(values: ...i64) i64 {
+  total: i64 = 0
+  for value in values { total += value }
+  return total
+}
+
+fn accept_after(prefix: []const u8, values: ...i64) usize {
+  return #len(prefix) + #len(values)
+}
+
+fn main() {
+  accept_zero()
+  accept(1, true, "dyn")
+  if sum(1, 2, 3) != 6 { #panic("typed native variadic failed") }
+  if accept_after("ok", 7, 8) != 4 { #panic("native variadic call failed") }
+}
+
+fn accept_zero(values: ...any) {
+  if #len(values) != 0 { #panic("zero variadic pack failed") }
+}

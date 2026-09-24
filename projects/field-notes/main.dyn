@@ -1,0 +1,152 @@
+use "std/io"
+use "std/mem"
+use "std/strings"
+use "std/terminal"
+
+const RootCapacity: usize = 64 * 1024
+const TaskCapacity: usize = 64
+distinct type TaskId = u32
+
+enum State { Pending, Done: usize }
+struct Task { id: TaskId, title: []const u8, state: State }
+struct App { tasks: []Task, count: usize, next_id: u32, command_count: usize }
+
+struct Memory {
+  root: mem.Arena,
+  permanent: mem.Arena,
+  frame: mem.Arena,
+  scratch_a: mem.Arena,
+  scratch_b: mem.Arena,
+}
+
+fn sub_arena(parent: *mem.Arena, capacity: usize) mem.Arena {
+  data := mem.arena_push(parent, capacity, 8)
+  return mem.arena_from_buffer(data[..capacity])
+}
+
+fn memory_make(backing: []u8) Memory {
+  root := mem.arena_from_buffer(backing)
+  permanent := sub_arena(&root, 24 * 1024)
+  frame := sub_arena(&root, 8 * 1024)
+  scratch_a := sub_arena(&root, 12 * 1024)
+  scratch_b := sub_arena(&root, 12 * 1024)
+  return Memory{ root: root, permanent: permanent, frame: frame,
+    scratch_a: scratch_a, scratch_b: scratch_b }
+}
+
+fn app_make(permanent: *mem.Arena) App {
+  allocation := mem.arena_try_push(permanent,
+    TaskCapacity * #sizeof(Task), #alignof(Task))
+  if !allocation.ok { #panic("permanent arena exhausted") }
+  tasks := (#cast(*Task) allocation.memory)[..TaskCapacity]
+  return App{ tasks: tasks, count: 0, next_id: 1, command_count: 0 }
+}
+
+fn add(app: *App, permanent: *mem.Arena, title: []const u8) bool {
+  if #len(title) == 0 || app.count == #len(app.tasks) { return false }
+  allocation := mem.arena_try_push_uninit(permanent, #len(title), 1)
+  if !allocation.ok { return false }
+  owned_title := allocation.memory[..#len(title)]
+  _ = mem.copy(owned_title, title)
+  app.tasks[app.count] = Task{ id: #cast(TaskId) app.next_id, title: owned_title, state: State.Pending }
+  app.count += 1
+  app.next_id += 1
+  return true
+}
+
+fn find(app: *App, id: TaskId) *Task {
+  i: usize = 0
+  for i < app.count {
+    if app.tasks[i].id == id { return &app.tasks[i] }
+    i += 1
+  }
+  return nil
+}
+
+fn state_text(state: State) []const u8 {
+  case state {
+    State.Pending => { return " " },
+    State.Done _ => { return "x" },
+  }
+}
+
+fn sum_counts(values: ...usize) usize {
+  result: usize = 0
+  for value in values { result += value }
+  return result
+}
+
+fn list(app: *const App, output: io.Writer) {
+  pending: usize = 0
+  complete: usize = 0
+
+  if app.count == 0 { _ = io.println(output, "No tasks. Try: add write dyn") }
+  i: usize = 0
+  for i < app.count {
+    task := &app.tasks[i]
+    case task.state {
+      State.Pending => { pending += 1 },
+      State.Done _ => { complete += 1 },
+    }
+    result := io.println(output, "[{}] {}: {}", state_text(task.state), #cast(u32) task.id, task.title)
+    if result.status == io.Status.Error { #panic("task output failed") }
+    i += 1
+  }
+  _ = io.println(output, "{}/{} complete", complete, sum_counts(pending, complete))
+}
+
+fn help(output: io.Writer) {
+  _ = io.print(output,
+    "commands:\n  add <title>  create a task\n  done <id>    complete a task\n  list         show tasks\n  help         show commands\n  quit         exit\n")
+}
+
+fn execute(app: *App, memory: *Memory, output: io.Writer, line: []const u8) bool {
+  app.command_count += 1
+  if strings.equal(line, "quit") || strings.equal(line, "exit") { return false }
+  if strings.equal(line, "help") { help(output) return true }
+  if strings.equal(line, "list") { list(app, output) return true }
+  if strings.starts_with(line, "add ") {
+    title := strings.trim(line[4..])
+    if add(app, &memory.permanent, title) { _ = io.println(output, "added task {}", app.next_id - 1) }
+    else { _ = io.println(output, "could not add task") }
+    return true
+  }
+  if strings.starts_with(line, "done ") {
+    raw_id: u64 = 0
+    if !strings.parse_u64(strings.trim(line[5..]), &raw_id) || raw_id > 4294967295 {
+      _ = io.println(output, "invalid task id")
+      return true
+    }
+    task := find(app, #cast(TaskId) #cast(u32) raw_id)
+    if task == nil { _ = io.println(output, "task not found") }
+    else { task.state = State.Done(app.command_count) _ = io.println(output, "completed task {}", raw_id) }
+    return true
+  }
+  if #len(line) != 0 { _ = io.println(output, "unknown command: {}", line) }
+  return true
+}
+
+fn main() {
+  backing: [65536]u8 = []
+  memory := memory_make(backing[..])
+  app := app_make(&memory.permanent)
+  _ = add(&app, &memory.permanent, "learn slices")
+  _ = add(&app, &memory.permanent, "partition arenas")
+
+  output := terminal.stdout()
+  input_stream := terminal.stdin()
+  _ = io.println(output, "field-notes: an arena-backed Dyn task list")
+  help(output)
+  running := true
+  for running {
+    // Every command gets fresh temporary storage. Previous input dies here.
+    mem.arena_reset(&memory.frame)
+    input := mem.arena_push(&memory.frame, 512, 1)[..512]
+    _ = io.print(output, "> ")
+    read := io.read(input_stream, input)
+    if read.status == io.Status.Error || read.transferred == 0 { break }
+    line := strings.trim(input[..read.transferred])
+    running = execute(&app, &memory, output, line)
+  }
+  _ = io.println(output, "goodbye; permanent bytes used: {}", mem.arena_mark(&memory.permanent))
+}

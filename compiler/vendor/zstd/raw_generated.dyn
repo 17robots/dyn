@@ -1,0 +1,11 @@
+extern fn zstd_compress_bound "ZSTD_compressBound"(source_size: usize) usize
+extern fn zstd_compress "ZSTD_compress"(destination: rawptr, capacity: usize, source: rawptr, source_size: usize, level: i32) usize
+extern fn zstd_decompress "ZSTD_decompress"(destination: rawptr, capacity: usize, source: rawptr, compressed_size: usize) usize
+extern fn zstd_frame_content_size "ZSTD_getFrameContentSize"(source: rawptr, source_size: usize) u64
+extern fn zstd_is_error "ZSTD_isError"(code: usize) usize
+extern fn zstd_error_name "ZSTD_getErrorName"(code: usize) *const u8
+extern fn zstd_version_number "ZSTD_versionNumber"() u32
+extern fn zstd_estimate_dstream_size "ZSTD_estimateDStreamSize"(window_size: usize) usize
+extern fn zstd_init_static_dstream "ZSTD_initStaticDStream"(workspace: rawptr, size: usize) rawptr
+extern fn zstd_dctx_set_parameter "ZSTD_DCtx_setParameter"(context: rawptr, parameter: i32, value: i32) usize
+extern fn zstd_decompress_stream "ZSTD_decompressStream_simpleArgs"(context: rawptr, destination: rawptr, capacity: usize, written: *usize, source: rawptr, size: usize, consumed: *usize) usize

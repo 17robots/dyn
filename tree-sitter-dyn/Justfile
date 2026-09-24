@@ -1,0 +1,7 @@
+all: generate test
+
+generate:
+  npx tree-sitter generate
+
+test:
+  npx tree-sitter test

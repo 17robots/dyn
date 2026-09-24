@@ -1,0 +1,20 @@
+fn missing(value: i32) i32 {
+  if value == 1 {
+    return value
+  }
+}
+
+fn wrong() i32 {
+  return true
+}
+
+fn duplicate(value, value: i32) {}
+
+fn main() {
+  unknown()
+  result := wrong(1)
+  consume := missing(true)
+  wrong()
+  _ = result
+  _ = consume
+}

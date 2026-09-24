@@ -1,0 +1,74 @@
+use "std/testing"
+use "std/net/tls"
+
+extern fn test_mode "dyn_tls_test_mode"(mode: i32)
+extern fn test_live "dyn_tls_test_live"() i32
+extern fn test_connection_live "dyn_tls_test_connection_live"() i32
+
+fn main() {
+  storage: [32]u8 = [] key_storage: [32]u8 = []
+  mode: i32 = 1
+  for mode <= 3 {
+    test_mode(mode)
+    failed_context := tls.client_config_create()
+    if failed_context.ok { tls.config_destroy(failed_context.value) }
+    failed_server := tls.server_config_create_into("certificate.pem", "key.pem", storage[..], key_storage[..])
+    if failed_server.ok { tls.config_destroy(failed_server.value) }
+    testing.expect(test_live() == 0, "constructor failure releases provider state")
+    mode += 1
+  }
+  test_mode(0)
+  bad_server := tls.server_config_create_into("missing.pem", "key.pem", storage[..], key_storage[..])
+  testing.expect(!bad_server.ok && bad_server.value == nil && test_live() == 0, "partial server setup cleanup")
+  context := tls.client_config_create()
+  testing.expect(context.ok, "create verified TLS context")
+  name: [64]u8 = []
+  invalid_connection := tls.client_connection_create_into(context.value, 8, "example.test", name[..])
+  testing.expect(!invalid_connection.ok && invalid_connection.value == nil && test_connection_live() == 0, "failed descriptor setup frees connection")
+  invalid_host := tls.client_connection_create_into(context.value, 7, "wrong.test", name[..])
+  testing.expect(!invalid_host.ok && invalid_host.value == nil && test_connection_live() == 0, "failed hostname setup frees connection")
+  connection := tls.client_connection_create_into(context.value, 7, "example.test", name[..])
+  testing.expect(connection.ok, "create hostname-verified TLS connection")
+  testing.expect(tls.handshake(connection.value).ok, "TLS handshake")
+  test_mode(4)
+  retry := tls.handshake(connection.value)
+  testing.expect(!retry.ok && retry.error == tls.ErrorKind.WantRead, "classify SSL error before verification")
+  test_mode(5)
+  eof_storage: [4]u8 = []
+  ended := tls.read(connection.value, eof_storage[..])
+  testing.expect(ended.ok && ended.count == 0 && ended.provider_status == 6, "close_notify is EOF")
+  test_mode(0)
+  invalid: [2]u8 = [3, 'h']
+  testing.expect(!tls.set_alpn_protocols(connection.value, invalid[..]), "reject truncated ALPN")
+  protocols: [3]u8 = [2,'h','2']
+  testing.expect(tls.set_alpn_protocols(connection.value, protocols[..]), "TLS ALPN configuration")
+  selected := tls.selected_alpn(connection.value)
+  testing.expect(#len(selected) == 2 && selected[0] == 'h' && selected[1] == '2', "TLS ALPN selection")
+  peer := tls.peer_certificate_owned(connection.value)
+  subject_storage: [64]u8 = []
+  subject := tls.certificate_subject(subject_storage[..], peer)
+  testing.expect(#len(subject) == 16 && subject[0] == '/', "TLS peer certificate subject")
+  tls.certificate_free_owned(peer)
+
+  output: [8]u8 = []
+  read := tls.read(connection.value, output[..])
+  testing.expect(read.ok && read.count == 3 && output[0] == 111 && output[1] == 107, "TLS read into caller buffer")
+  written := tls.write(connection.value, "hello")
+  testing.expect(written.ok && written.count == 5, "TLS write borrows caller bytes")
+  testing.expect(tls.shutdown(connection.value), "TLS shutdown")
+
+  message: [32]u8 = []
+  text := tls.error_string(message[..], 42)
+  testing.expect(#len(text) == 10 && text[0] == 115, "provider error into caller buffer")
+
+  tls.connection_destroy(connection.value)
+  tls.config_destroy(context.value)
+
+  certificate: [32]u8 = [] key: [32]u8 = []
+  server_context := tls.server_config_create_into("certificate.pem", "key.pem", certificate[..], key[..])
+  testing.expect(server_context.ok, "create TLS server context")
+  server := tls.server_connection_create(server_context.value, 7)
+  testing.expect(server.ok && tls.server_handshake(server.value).ok, "TLS server handshake")
+  tls.connection_destroy(server.value)
+  tls.config_destroy(server_context.value)
+}

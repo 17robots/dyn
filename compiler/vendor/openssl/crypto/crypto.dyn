@@ -1,0 +1,136 @@
+#target(kernel: linux)
+#link("crypto")
+
+pub const CipherAes256Gcm: u8 = 1
+pub const CipherChacha20Poly1305: u8 = 2
+pub struct AeadResult { written: usize, provider_code: u64, ok: bool }
+const AeadSetIvLength: i32 = 9
+const AeadGetTag: i32 = 16
+const AeadSetTag: i32 = 17
+
+fn cipher(kind: u8) rawptr {
+  if kind == CipherAes256Gcm { return evp_aes_256_gcm() }
+  if kind == CipherChacha20Poly1305 { return evp_chacha20_poly1305() }
+  return nil
+}
+fn pointer(bytes: []const u8) rawptr { if #len(bytes) == 0 { return nil } return #cast(rawptr) &bytes[0] }
+fn mutable_pointer(bytes: []u8) rawptr { if #len(bytes) == 0 { return nil } return #cast(rawptr) &bytes[0] }
+
+// Seals into ciphertext and separate 16-byte tag. All buffers caller-owned.
+pub fn aead_seal(kind: u8, ciphertext: []u8, tag: []u8, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) AeadResult {
+  provider_clear_error()
+  selected := cipher(kind)
+  if selected == nil || #len(key) != 32 || #len(nonce) == 0 || #len(tag) < 16 || #len(ciphertext) < #len(plaintext) ||
+    #len(plaintext) > 2147483647 || #len(additional) > 2147483647 || #len(nonce) > 2147483647 { return AeadResult{} }
+  context := evp_context_new()
+  if context == nil { return AeadResult{ provider_code: provider_error() } }
+  success := evp_encrypt_init(context, selected, nil, nil, nil) == 1
+  if success { success = evp_control(context, AeadSetIvLength, #cast(i32) #len(nonce), nil) == 1 }
+  if success { success = evp_encrypt_init(context, nil, nil, pointer(key), pointer(nonce)) == 1 }
+  ignored: i32 = 0
+  if success && #len(additional) > 0 { success = evp_encrypt_update(context, nil, &ignored, pointer(additional), #cast(i32) #len(additional)) == 1 }
+  produced: i32 = 0
+  if success && #len(plaintext) > 0 { success = evp_encrypt_update(context, mutable_pointer(ciphertext), &produced, pointer(plaintext), #cast(i32) #len(plaintext)) == 1 }
+  final_count: i32 = 0
+  if success { success = evp_encrypt_final(context, mutable_pointer(ciphertext[#cast(usize) produced..]), &final_count) == 1 }
+  if success { success = evp_control(context, AeadGetTag, 16, mutable_pointer(tag[..16])) == 1 }
+  code: u64 = 0 if !success { code = provider_error() }
+  evp_context_free(context)
+  if !success { return AeadResult{ provider_code: code } }
+  return AeadResult{ written: #cast(usize) (produced + final_count), provider_code: code, ok: success }
+}
+
+// Authentication failure returns ok=false and callers must discard destination.
+pub fn aead_open(kind: u8, plaintext: []u8, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) AeadResult {
+  provider_clear_error()
+  selected := cipher(kind)
+  if selected == nil || #len(key) != 32 || #len(nonce) == 0 || #len(tag) != 16 || #len(plaintext) < #len(ciphertext) ||
+    #len(ciphertext) > 2147483647 || #len(additional) > 2147483647 || #len(nonce) > 2147483647 { return AeadResult{} }
+  context := evp_context_new()
+  if context == nil { return AeadResult{ provider_code: provider_error() } }
+  success := evp_decrypt_init(context, selected, nil, nil, nil) == 1
+  if success { success = evp_control(context, AeadSetIvLength, #cast(i32) #len(nonce), nil) == 1 }
+  if success { success = evp_decrypt_init(context, nil, nil, pointer(key), pointer(nonce)) == 1 }
+  ignored: i32 = 0
+  if success && #len(additional) > 0 { success = evp_decrypt_update(context, nil, &ignored, pointer(additional), #cast(i32) #len(additional)) == 1 }
+  produced: i32 = 0
+  if success && #len(ciphertext) > 0 { success = evp_decrypt_update(context, mutable_pointer(plaintext), &produced, pointer(ciphertext), #cast(i32) #len(ciphertext)) == 1 }
+  if success { success = evp_control(context, AeadSetTag, 16, pointer(tag)) == 1 }
+  final_count: i32 = 0
+  if success { success = evp_decrypt_final(context, mutable_pointer(plaintext[#cast(usize) produced..]), &final_count) == 1 }
+  code: u64 = 0 if !success { code = provider_error() }
+  evp_context_free(context)
+  if !success { return AeadResult{ provider_code: code } }
+  return AeadResult{ written: #cast(usize) (produced + final_count), provider_code: code, ok: success }
+}
+
+const KeyX25519: i32 = 1034
+const KeyEd25519: i32 = 1087
+pub struct KeyResult { written: usize, provider_code: u64, ok: bool }
+
+pub fn x25519_public(destination: []u8, private_key: []const u8) KeyResult {
+  provider_clear_error()
+  if #len(destination) < 32 || #len(private_key) != 32 { return KeyResult{} }
+  key := evp_pkey_raw_private(KeyX25519, nil, pointer(private_key), 32)
+  if key == nil { return KeyResult{ provider_code: provider_error() } }
+  length: usize = 32
+  success := evp_pkey_public_bytes(key, mutable_pointer(destination[..32]), &length) == 1 && length == 32
+  code: u64 = 0 if !success { code = provider_error() }
+  evp_pkey_free(key)
+  if !success { return KeyResult{ provider_code: code } }
+  return KeyResult{ written: length, provider_code: code, ok: success }
+}
+pub fn x25519_shared(destination: []u8, private_key: []const u8, peer_public_key: []const u8) KeyResult {
+  provider_clear_error()
+  if #len(destination) < 32 || #len(private_key) != 32 || #len(peer_public_key) != 32 { return KeyResult{} }
+  private := evp_pkey_raw_private(KeyX25519, nil, pointer(private_key), 32)
+  peer := evp_pkey_raw_public(KeyX25519, nil, pointer(peer_public_key), 32)
+  if private == nil || peer == nil { failure_code := provider_error() if private != nil { evp_pkey_free(private) } if peer != nil { evp_pkey_free(peer) } return KeyResult{ provider_code: failure_code } }
+  context := evp_pkey_context_new(private, nil)
+  success := context != nil
+  if success { success = evp_pkey_derive_init(context) == 1 && evp_pkey_derive_peer(context, peer) == 1 }
+  length: usize = 32
+  if success { success = evp_pkey_derive(context, mutable_pointer(destination[..32]), &length) == 1 && length == 32 }
+  code: u64 = 0 if !success { code = provider_error() }
+  if context != nil { evp_pkey_context_free(context) }
+  evp_pkey_free(peer) evp_pkey_free(private)
+  if !success { return KeyResult{ provider_code: code } }
+  return KeyResult{ written: length, provider_code: code, ok: success }
+}
+pub fn ed25519_public(destination: []u8, private_key: []const u8) KeyResult {
+  provider_clear_error()
+  if #len(destination) < 32 || #len(private_key) != 32 { return KeyResult{} }
+  key := evp_pkey_raw_private(KeyEd25519, nil, pointer(private_key), 32)
+  if key == nil { return KeyResult{ provider_code: provider_error() } }
+  length: usize = 32
+  success := evp_pkey_public_bytes(key, mutable_pointer(destination[..32]), &length) == 1 && length == 32
+  code: u64 = 0 if !success { code = provider_error() }
+  evp_pkey_free(key)
+  if !success { return KeyResult{ provider_code: code } }
+  return KeyResult{ written: length, provider_code: code, ok: success }
+}
+pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) KeyResult {
+  provider_clear_error()
+  if #len(destination) < 64 || #len(private_key) != 32 { return KeyResult{} }
+  key := evp_pkey_raw_private(KeyEd25519, nil, pointer(private_key), 32)
+  context := evp_digest_context_new()
+  if key == nil || context == nil { failure_code := provider_error() if key != nil { evp_pkey_free(key) } if context != nil { evp_digest_context_free(context) } return KeyResult{ provider_code: failure_code } }
+  length: usize = 64
+  success := evp_digest_sign_init(context, nil, nil, nil, key) == 1
+  if success { success = evp_digest_sign(context, mutable_pointer(destination[..64]), &length, pointer(message), #len(message)) == 1 && length == 64 }
+  code: u64 = 0 if !success { code = provider_error() }
+  evp_digest_context_free(context) evp_pkey_free(key)
+  if !success { return KeyResult{ provider_code: code } }
+  return KeyResult{ written: length, provider_code: code, ok: success }
+}
+pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
+  provider_clear_error()
+  if #len(signature) != 64 || #len(public_key) != 32 { return false }
+  key := evp_pkey_raw_public(KeyEd25519, nil, pointer(public_key), 32)
+  context := evp_digest_context_new()
+  if key == nil || context == nil { if key != nil { evp_pkey_free(key) } if context != nil { evp_digest_context_free(context) } return false }
+  success := evp_digest_verify_init(context, nil, nil, nil, key) == 1
+  if success { success = evp_digest_verify(context, pointer(signature), 64, pointer(message), #len(message)) == 1 }
+  evp_digest_context_free(context) evp_pkey_free(key)
+  return success
+}

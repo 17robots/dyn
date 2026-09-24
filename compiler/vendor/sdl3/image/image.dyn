@@ -1,0 +1,21 @@
+use "std/c"
+use "vendor/sdl3"
+#link("SDL3_image")
+// SDL_image 3.x. Result surface is provider-owned; use sdl3.surface_destroy_owned.
+pub fn load_owned(path: []const u8, path_buffer: []u8) sdl3.SurfaceResult {
+  encoded := c.string_from_bytes(path_buffer, path)
+  if !encoded.ok { return sdl3.SurfaceResult{} }
+  value := native_load(encoded.value)
+  return sdl3.SurfaceResult{ value: value, ok: value != nil }
+}
+// Bytes borrowed only during synchronous decode. Decoder closes its temporary IO.
+pub fn decode_owned(bytes: []const u8) sdl3.SurfaceResult {
+  if #len(bytes) == 0 { return sdl3.SurfaceResult{} }
+  stream := native_io(#cast(rawptr) &bytes[0], #len(bytes))
+  if stream == nil { return sdl3.SurfaceResult{} }
+  value := native_load_io(stream, true)
+  return sdl3.SurfaceResult{ value: value, ok: value != nil }
+}
+extern fn native_load "IMG_Load"(path: c.string) sdl3.Surface
+extern fn native_io "SDL_IOFromConstMem"(bytes: rawptr, length: usize) rawptr
+extern fn native_load_io "IMG_Load_IO"(stream: rawptr, close: bool) sdl3.Surface

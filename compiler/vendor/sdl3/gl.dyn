@@ -1,0 +1,25 @@
+// OpenGL context lifecycle. Create a WindowOpenGL window after setting attributes.
+// Context and loaded procedure addresses are thread/context-affine.
+pub const WindowOpenGL: u64 = 2
+pub type GlContext = rawptr
+pub fn gl_request_core(major: i32, minor: i32) bool {
+  if major < 3 || minor < 0 { return false }
+  return native_gl_attribute(17, major) && native_gl_attribute(18, minor) && native_gl_attribute(20, 1)
+}
+pub fn gl_create_owned(window: Window) GlContext { if window == nil { return nil } return native_gl_create(window) }
+pub fn gl_destroy_owned(context: GlContext) bool { if context == nil { return true } return native_gl_destroy(context) }
+pub fn gl_make_current(window: Window, context: GlContext) bool { return window != nil && context != nil && native_gl_current(window, context) }
+// Name must be NUL-terminated; call with current context. Can supply directly to
+// vendor/opengl.load. This function does not allocate or cache addresses.
+pub fn gl_proc(name: *const u8) rawptr { if name == nil { return nil } return native_gl_proc(name) }
+pub fn gl_swap(window: Window) bool { return window != nil && native_gl_swap(window) }
+pub fn gl_swap_interval(interval: i32) bool { return native_gl_interval(interval) }
+pub fn window_pixel_size(window: Window, width: *i32, height: *i32) bool { return window != nil && width != nil && height != nil && native_pixel_size(window, width, height) }
+extern fn native_gl_attribute "SDL_GL_SetAttribute"(attribute: i32, value: i32) bool
+extern fn native_gl_create "SDL_GL_CreateContext"(window: Window) GlContext
+extern fn native_gl_destroy "SDL_GL_DestroyContext"(context: GlContext) bool
+extern fn native_gl_current "SDL_GL_MakeCurrent"(window: Window, context: GlContext) bool
+extern fn native_gl_proc "SDL_GL_GetProcAddress"(name: *const u8) rawptr
+extern fn native_gl_swap "SDL_GL_SwapWindow"(window: Window) bool
+extern fn native_gl_interval "SDL_GL_SetSwapInterval"(interval: i32) bool
+extern fn native_pixel_size "SDL_GetWindowSizeInPixels"(window: Window, width: *i32, height: *i32) bool

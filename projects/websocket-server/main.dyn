@@ -1,0 +1,31 @@
+use "std/net" net
+use "std/net/websocket" websocket
+
+fn main() {
+  address := net.ipv4(127, 0, 0, 1, 18081)
+  opened := net.tcp_listen_ipv4(&address, 4)
+  if !opened.ok { #panic("listen") }
+  listener := net.listener_result_value(&opened)
+  defer { _ = net.listener_close(&listener) }
+  accepted := net.listener_accept(&listener)
+  if !accepted.ok { #panic("accept") }
+  connection := net.connection_result_value(&accepted)
+  defer { _ = net.connection_close(&connection) }
+  input: [4096]u8 = []
+  received := net.connection_read(&connection, input[..])
+  if !received.ok { #panic("upgrade read") }
+  request := input[..#cast(usize) received.value]
+  upgrade := websocket.validate_upgrade_request(request)
+  output: [4096]u8 = []
+  response := websocket.write_upgrade_response(output[..], upgrade.key)
+  if !upgrade.ok || !net.connection_write(&connection, response).ok { #panic("upgrade") }
+  received = net.connection_read(&connection, input[..])
+  if !received.ok { #panic("frame read") }
+  message: [2048]u8 = []
+  control: [125]u8 = []
+  state := websocket.message_state(true)
+  event := websocket.receive(&state, message[..], control[..], websocket.parse_frame(input[..#cast(usize) received.value]))
+  if event.kind != websocket.WebSocketEventKind.Ready { #panic("message") }
+  frame := websocket.write_frame(output[..], event.opcode, event.payload, true, false, 0)
+  if !net.connection_write(&connection, frame).ok { #panic("echo") }
+}

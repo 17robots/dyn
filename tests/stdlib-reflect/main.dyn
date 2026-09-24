@@ -1,0 +1,18 @@
+use "std/reflect" reflect
+fn reflected(value: u8) i64 { return value }
+fn main() {
+  integer := #typeof(i64)
+  unsigned := #typeof(u64)
+  if reflect.category(integer) != reflect.Kind.Integer { #panic("integer kind") }
+  if reflect.category(#typeof(*u8)) != reflect.Kind.Pointer { #panic("pointer kind") }
+  if integer.id == unsigned.id { #panic("distinct identity") }
+  if !reflect.same(integer, #typeof(i64)) || !reflect.is_number(integer) || !reflect.is_aggregate(#typeof([2]u8)) { #panic("reflection helpers") }
+  array := #typeof([2]u8)
+  byte := #typeof(u8)
+  result := #typeof(i64)
+  function := #typeof(reflected)
+  if !reflect.element_is(array, byte) || array.length != 2 ||
+      function.parameter_count != 1 || !reflect.result_is(function, result) {
+    #panic("reflection shape")
+  }
+}

@@ -1,0 +1,124 @@
+#target(kernel: linux)
+
+use "std/io" stream
+use "std/unicode/utf8"
+
+fn stdin_read(data: rawptr, destination: []u8) stream.Result {
+  _ = data
+  if #len(destination) == 0 {
+    return stream.Result{ transferred: 0, error: 0, status: stream.Status.Complete }
+  }
+  value := #syscall(0, 0, &destination[0], #len(destination))
+  for value == -4 { value = #syscall(0, 0, &destination[0], #len(destination)) }
+  if value < 0 { return stream.Result{ transferred: 0, error: value, status: stream.Status.Error } }
+  status := stream.Status.Complete
+  if value == 0 { status = stream.Status.End }
+  return stream.Result{ transferred: #cast(usize) value, error: 0, status: status }
+}
+
+fn write_descriptor(descriptor: isize, source: []const u8) stream.Result {
+  written: usize = 0
+  for written < #len(source) {
+    value := #syscall(1, descriptor, &source[written], #len(source) - written)
+    if value == -4 { }
+    else if value <= 0 {
+      if value == 0 { value = -5 }
+      return stream.Result{ transferred: written, error: value, status: stream.Status.Error }
+    }
+    else { written += #cast(usize) value }
+  }
+  return stream.Result{ transferred: written, error: 0, status: stream.Status.Complete }
+}
+fn stdout_write(data: rawptr, source: []const u8) stream.Result {
+  _ = data
+  return write_descriptor(1, source)
+}
+
+fn stderr_write(data: rawptr, source: []const u8) stream.Result {
+  _ = data
+  return write_descriptor(2, source)
+}
+
+pub fn stdin() stream.Reader { return stream.Reader{ data: nil, read: &stdin_read } }
+pub fn stdout() stream.Writer { return stream.Writer{ data: nil, write: &stdout_write } }
+pub fn stderr() stream.Writer { return stream.Writer{ data: nil, write: &stderr_write } }
+
+pub struct State { bytes: [60]u8 }
+pub struct Size { columns: usize, rows: usize, ok: bool }
+
+pub fn read_state(descriptor: isize, output: *State) bool {
+  return #syscall(16, descriptor, 21505, &output.bytes[0]) >= 0
+}
+
+pub fn restore(descriptor: isize, saved: *const State) bool {
+  return #syscall(16, descriptor, 21506, &saved.bytes[0]) >= 0
+}
+
+pub fn is_attached(descriptor: isize) bool {
+  saved := State{ bytes: [] }
+  return read_state(descriptor, &saved)
+}
+
+// Applies a small cfmakeraw-equivalent while retaining a restorable copy.
+pub fn raw(descriptor: isize, previous: *State) bool {
+  if !read_state(descriptor, previous) { return false }
+  changed := State{ bytes: [] }
+  i: usize = 0
+  for i < #len(changed.bytes) { changed.bytes[i] = previous.bytes[i] i += 1 }
+  changed.bytes[0] = changed.bytes[0] & 252
+  changed.bytes[1] = changed.bytes[1] & 250
+  changed.bytes[3] = changed.bytes[3] & 245
+  changed.bytes[12] = changed.bytes[12] & 160
+  changed.bytes[22] = 0
+  changed.bytes[23] = 1
+  return restore(descriptor, &changed)
+}
+
+pub fn size(descriptor: isize) Size {
+  bytes: [8]u8 = []
+  if #syscall(16, descriptor, 21523, &bytes[0]) < 0 { return Size{} }
+  rows := #cast(usize) bytes[0] + #cast(usize) bytes[1] * 256
+  columns := #cast(usize) bytes[2] + #cast(usize) bytes[3] * 256
+  return Size{ columns: columns, rows: rows, ok: true }
+}
+
+pub enum KeyKind { Text, Escape, Up, Down, Left, Right, Home, End, Delete, Unknown, Incomplete }
+pub struct Key { kind: KeyKind, codepoint: u32, consumed: usize }
+// Recognizes UTF-8 text and common CSI cursor keys. Incomplete sequences consume
+// nothing. A standalone ESC is returned immediately; callers choose any timeout.
+pub fn key_decode(bytes: []const u8) Key {
+  if #len(bytes) == 0 { return Key{ kind: KeyKind.Incomplete } }
+  if bytes[0] != 27 {
+    decoded := utf8.decode(bytes, 0)
+    if decoded.ok { return Key{ kind: KeyKind.Text, codepoint: decoded.codepoint, consumed: decoded.width } }
+    width: usize = 1
+    if bytes[0] >= 194 && bytes[0] <= 223 { width = 2 }
+    else if bytes[0] >= 224 && bytes[0] <= 239 { width = 3 }
+    else if bytes[0] >= 240 && bytes[0] <= 244 { width = 4 }
+    if #len(bytes) < width { return Key{ kind: KeyKind.Incomplete } }
+    return Key{ kind: KeyKind.Unknown, consumed: 1 }
+  }
+  if #len(bytes) == 1 || bytes[1] != '[' { return Key{ kind: KeyKind.Escape, consumed: 1 } }
+  if #len(bytes) < 3 { return Key{ kind: KeyKind.Incomplete } }
+  kind := KeyKind.Unknown
+  if bytes[2] == 'A' { kind = KeyKind.Up }
+  else if bytes[2] == 'B' { kind = KeyKind.Down }
+  else if bytes[2] == 'C' { kind = KeyKind.Right }
+  else if bytes[2] == 'D' { kind = KeyKind.Left }
+  else if bytes[2] == 'H' { kind = KeyKind.Home }
+  else if bytes[2] == 'F' { kind = KeyKind.End }
+  if kind != KeyKind.Unknown { return Key{ kind: kind, consumed: 3 } }
+  end: usize = 2
+  for end < #len(bytes) {
+    if bytes[end] >= 64 && bytes[end] <= 126 {
+      if end == 3 && bytes[end] == '~' {
+        if bytes[2] == '1' { kind = KeyKind.Home }
+        else if bytes[2] == '3' { kind = KeyKind.Delete }
+        else if bytes[2] == '4' { kind = KeyKind.End }
+      }
+      return Key{ kind: kind, consumed: end + 1 }
+    }
+    end += 1
+  }
+  return Key{ kind: KeyKind.Incomplete }
+}

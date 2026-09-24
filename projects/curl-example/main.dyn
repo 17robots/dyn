@@ -1,0 +1,17 @@
+use "vendor/curl"
+use "std/mem"
+use "std/os/linux"
+use "std/io"
+use "std/terminal"
+fn main() {
+  storage: [65536]u8 = [] arena := mem.arena_from_buffer(storage[..])
+  args := linux.process_arguments(&arena)
+  if #len(args) != 2 { _ = io.println(terminal.stdout(), "usage: curl-example URL") return }
+  if curl.init() != 0 { #panic("curl initialization") }
+  defer curl.cleanup()
+  url: [4096]u8 = [] response: [16384]u8 = []
+  result := curl.get_into(args[1], url[..], response[..], 5000)
+  if !result.ok { #panic("HTTP transfer failed or buffer full") }
+  _ = io.println(terminal.stdout(), "HTTP {}", result.http_status)
+  _ = io.write(terminal.stdout(), response[..result.written])
+}

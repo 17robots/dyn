@@ -1,0 +1,25 @@
+fn sum(values: [4]u32) u32 {
+  return values[0] + values[1] + values[2] + values[3]
+}
+
+fn main() {
+  values: [4]u32 = [10, 20]
+  copy := values
+  copy[2] = 7
+  values[3] = 5
+  total := sum(copy)
+  part := values[1..]
+  head := part[..2]
+  if total != 37 { for {} }
+  if #len(values) != 4 { for {} }
+  if #len(part) != 3 { for {} }
+  if head[0] != 20 { for {} }
+  iterated: u32 = 0
+  for value in values {
+    if value == 20 { continue }
+    iterated += value
+  }
+  if iterated != 15 { for {} }
+  empty: [3]u8 = []
+  if empty[2] != 0 { for {} }
+}

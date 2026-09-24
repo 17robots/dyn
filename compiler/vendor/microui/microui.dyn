@@ -1,0 +1,61 @@
+use "std/mem"
+use "std/c"
+#link("dyn_microui")
+// Fixed-capacity UI state lives entirely in caller arena. No provider heap.
+// Keep arena alive; reset only when finished. Single-threaded. Initial text
+// metrics are 8x16 monospace bytes; renderer must match (not Unicode shaping).
+pub type Context = rawptr
+pub type Command = rawptr
+pub const Clip: i32 = 2
+pub const Rect: i32 = 3
+pub const Text: i32 = 4
+pub const Icon: i32 = 5
+pub struct Rectangle { x: i32, y: i32, width: i32, height: i32 }
+pub fn create(arena: *mem.Arena) Context {
+  if arena == nil { return nil }
+  allocation := mem.arena_try_push(arena, native_size(), native_align())
+  if !allocation.ok { return nil }
+  state := #cast(rawptr) allocation.memory native_init(state) return state
+}
+pub extern fn begin "dyn_mu_begin"(context: Context) bool
+pub extern fn end "dyn_mu_end"(context: Context) bool
+pub fn window(context: Context, title: []const u8, buffer: []u8, bounds: Rectangle) bool {
+  if #len(title) > 4096 { return false }
+  encoded := c.string_from_bytes(buffer, title)
+  return encoded.ok && native_window(context, encoded.value, bounds.x, bounds.y, bounds.width, bounds.height)
+}
+pub extern fn window_end "dyn_mu_window_end"(context: Context) bool
+pub fn label(context: Context, text: []const u8, buffer: []u8) bool {
+  if #len(text) > 4096 { return false }
+  encoded := c.string_from_bytes(buffer, text) return encoded.ok && native_label(context, encoded.value)
+}
+// -1 invalid/full, 0 idle, 1 clicked. Inputs must arrive before begin().
+pub fn button(context: Context, text: []const u8, buffer: []u8) i32 {
+  if #len(text) > 4096 { return -1 }
+  encoded := c.string_from_bytes(buffer, text)
+  if !encoded.ok { return -1 } return native_button(context, encoded.value)
+}
+// action 0 move, 1 left press, 2 left release.
+pub extern fn mouse "dyn_mu_mouse"(context: Context, x: i32, y: i32, action: i32)
+// Iterate after end(). Commands/text borrow context storage until next begin().
+// Renderer handles clipping, rectangles, text and icons using the accessors.
+pub extern fn next "dyn_mu_next"(context: Context) Command
+pub extern fn kind "dyn_mu_kind"(command: Command) i32
+pub fn text(command: Command) []const u8 {
+  value := c.bytes_from_string(native_text(command), 4097)
+  if !value.ok { return "" } return value.value
+}
+pub fn rectangle(command: Command) Rectangle {
+  result := Rectangle{} native_rect(command, &result.x, &result.y, &result.width, &result.height) return result
+}
+// RGBA packed with red in bits 31..24; independent of host byte order.
+pub extern fn color "dyn_mu_color"(command: Command) u32
+pub extern fn icon "dyn_mu_icon"(command: Command) i32
+extern fn native_size "dyn_mu_size"() usize
+extern fn native_align "dyn_mu_align"() usize
+extern fn native_init "dyn_mu_init"(context: Context)
+extern fn native_window "dyn_mu_window"(context: Context, title: c.string, x: i32, y: i32, w: i32, h: i32) bool
+extern fn native_label "dyn_mu_label"(context: Context, text: c.string) bool
+extern fn native_button "dyn_mu_button"(context: Context, text: c.string) i32
+extern fn native_text "dyn_mu_text"(command: Command) c.string
+extern fn native_rect "dyn_mu_rect"(command: Command, x: *i32, y: *i32, w: *i32, h: *i32)

@@ -1,0 +1,277 @@
+#target(kernel: linux)
+
+use "std/mem" memory
+
+pub struct Result { value: isize, error: isize, ok: bool }
+
+fn result(value: isize) Result {
+  if value < 0 { return Result{ value: value, error: value, ok: false } }
+  return Result{ value: value, error: 0, ok: true }
+}
+
+fn no_arguments() [][]const u8 {
+  pointer: *[]const u8 = nil
+  return pointer[..0]
+}
+
+// Linux exposes argv as NUL-separated bytes through procfs. Returned slices live
+// in the caller arena. Limits are explicit and intentionally modest for tools.
+pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
+  temporary: [16385]u8 = []
+  path: [19]u8 = []
+  source: []const u8 = "/proc/self/cmdline"
+  i: usize = 0
+  for i < #len(source) { path[i] = source[i] i += 1 }
+  descriptor := #syscall(257, -100, &path[0], 0, 0)
+  if descriptor < 0 { return no_arguments() }
+  value := #syscall(0, descriptor, &temporary[0], #len(temporary))
+  _ = #syscall(3, descriptor)
+  if value < 0 || #cast(usize) value == #len(temporary) { return no_arguments() }
+  used := #cast(usize) value
+  count: usize = 0
+  i = 0
+  for i < used { if temporary[i] == 0 { count += 1 } i += 1 }
+  if used > 0 && temporary[used - 1] != 0 { count += 1 }
+
+  bytes_allocation := memory.arena_try_push_uninit(arena, used, 1)
+  slots_allocation := memory.arena_try_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
+  if !bytes_allocation.ok || !slots_allocation.ok { #panic("argument arena exhausted") }
+  bytes := bytes_allocation.memory[..used]
+  _ = memory.copy(bytes, temporary[..used])
+  arguments := (#cast(*[]const u8) slots_allocation.memory)[..count]
+  start: usize = 0
+  at: usize = 0
+  i = 0
+  for i < used {
+    if bytes[i] == 0 { arguments[at] = bytes[start..i] at += 1 start = i + 1 }
+    i += 1
+  }
+  if start < used { arguments[at] = bytes[start..] }
+  return arguments
+}
+
+pub fn process_id() isize { return #syscall(39) }
+pub fn parent_process_id() isize { return #syscall(110) }
+pub fn thread_id() isize { return #syscall(186) }
+pub fn yield_thread() { _ = #syscall(24) }
+
+pub struct PipeResult { input: isize, output: isize, error: isize, ok: bool }
+pub struct WaitResult { process: isize, status: i32, error: isize, ok: bool }
+pub struct SpawnResult { process: isize, error: isize, ok: bool }
+pub struct SpawnOptions { input: isize, output: isize, error: isize }
+struct CStringPointer { value: *u8 }
+
+pub fn pipe() PipeResult {
+  descriptors: [2]i32 = []
+  value := #syscall(293, &descriptors[0], 0)
+  if value < 0 { return PipeResult{ input: -1, output: -1, error: value, ok: false } }
+  return PipeResult{ input: #cast(isize) descriptors[0], output: #cast(isize) descriptors[1], ok: true }
+}
+pub fn close_descriptor(descriptor: isize) Result { return result(#syscall(3, descriptor)) }
+pub fn duplicate_to(descriptor: isize, target: isize) Result {
+  if descriptor == target { return result(#syscall(72, descriptor, 1, 0)) }
+  value := #syscall(33, descriptor, target, 0)
+  for value == -4 { value = #syscall(33, descriptor, target, 0) }
+  return result(value)
+}
+pub fn send_signal(process: isize, signal: usize) Result { return result(#syscall(62, process, signal)) }
+pub fn fork_process() Result { return result(fork_native()) }
+
+fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
+  allocation := memory.arena_try_push_uninit(arena, #len(text) + 1, 1)
+  if !allocation.ok { return nil }
+  raw := allocation.memory
+  bytes := raw[..#len(text) + 1]
+  i: usize = 0
+  for i < #len(text) { bytes[i] = text[i] i += 1 }
+  bytes[#len(text)] = 0
+  return raw
+}
+
+pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) isize {
+  mark := memory.arena_mark(arena)
+  defer memory.arena_rewind(arena, mark)
+  if #len(path) == 0 { return -22 }
+  for byte in path { if byte == 0 { return -22 } }
+  for argument in arguments { for argument_byte in argument { if argument_byte == 0 { return -22 } } }
+  path_raw := terminate(arena, path)
+  if path_raw == nil { return -28 }
+  length := #len(arguments)
+  slots := memory.arena_try_push_uninit(arena, (length + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
+  if !slots.ok { return -28 }
+  raw := #cast(*CStringPointer) slots.memory
+  pointers := raw[..length + 1]
+  i: usize = 0
+  for i < length { pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) } if pointers[i].value == nil { return -28 } i += 1 }
+  pointers[length] = CStringPointer{ value: nil }
+  value := #syscall(59, path_raw, &pointers[0], &pointers[length])
+  return value
+}
+
+pub fn spawn_environment(
+  arena: *memory.Arena,
+  path: []const u8,
+  arguments: [][]const u8,
+  environment: [][]const u8,
+  options: SpawnOptions,
+) SpawnResult {
+  mark := memory.arena_mark(arena) defer memory.arena_rewind(arena, mark)
+  if #len(path) == 0 { return SpawnResult{ error: -22 } }
+  for byte in path { if byte == 0 { return SpawnResult{ error: -22 } } }
+  for argument in arguments { for argument_byte in argument { if argument_byte == 0 { return SpawnResult{ error: -22 } } } }
+  path_raw := terminate(arena, path)
+  if path_raw == nil { return SpawnResult{ error: -28 } }
+  count := #len(arguments)
+  allocation := memory.arena_try_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
+  if !allocation.ok { return SpawnResult{ error: -28 } }
+  raw := #cast(*CStringPointer) allocation.memory
+  pointers := raw[..count + 1]
+  index: usize = 0 for index < count { pointers[index].value = terminate(arena, arguments[index]) if pointers[index].value == nil { return SpawnResult{ error: -28 } } index += 1 }
+  pointers[count].value = nil
+  env_allocation := memory.arena_try_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
+  if !env_allocation.ok { return SpawnResult{ error: -28 } }
+  environment_raw := #cast(*CStringPointer) env_allocation.memory
+  environment_pointers := environment_raw[..#len(environment) + 1]
+  env_index: usize = 0
+  for env_index < #len(environment) {
+    for env_byte in environment[env_index] { if env_byte == 0 { return SpawnResult{ error: -22 } } }
+    environment_pointers[env_index].value = terminate(arena, environment[env_index])
+    if environment_pointers[env_index].value == nil { return SpawnResult{ error: -28 } }
+    env_index += 1
+  }
+  environment_pointers[env_index].value = nil
+  sources: [3]isize = [options.input, options.output, options.error]
+  redirected_sources: [3]isize = [-1, -1, -1]
+  defer { for duplicate in redirected_sources { if duplicate >= 0 { _ = close_descriptor(duplicate) } } }
+  source_index: usize = 0
+  for source_index < 3 {
+    if sources[source_index] >= 0 {
+      copied := #syscall(72, sources[source_index], 1030, 3)
+      if copied < 0 { return SpawnResult{ error: copied } }
+      redirected_sources[source_index] = copied
+    }
+    source_index += 1
+  }
+  descriptors: [2]i32 = []
+  channel := #syscall(293, &descriptors[0], 524288)
+  if channel < 0 { return SpawnResult{ error: channel } }
+  // Keep the error pipe out of the standard-descriptor range even if stdin/out/err
+  // were closed by the parent; redirection must not overwrite the reporting pipe.
+  input := #syscall(72, descriptors[0], 1030, 3)
+  output := #syscall(72, descriptors[1], 1030, 3)
+  _ = close_descriptor(#cast(isize) descriptors[0]) _ = close_descriptor(#cast(isize) descriptors[1])
+  if input < 0 || output < 0 {
+    if input >= 0 { _ = close_descriptor(input) }
+    if output >= 0 { _ = close_descriptor(output) }
+    return SpawnResult{ error: -24 }
+  }
+  child := fork_process()
+  if !child.ok { _ = close_descriptor(input) _ = close_descriptor(output) return SpawnResult{ error: child.error } }
+  if child.value == 0 {
+    _ = close_descriptor(input)
+    failure: isize = 0
+    if redirected_sources[0] >= 0 { redirected := duplicate_to(redirected_sources[0], 0) if !redirected.ok { failure = redirected.error } }
+    if failure == 0 && redirected_sources[1] >= 0 { redirected_out := duplicate_to(redirected_sources[1], 1) if !redirected_out.ok { failure = redirected_out.error } }
+    if failure == 0 && redirected_sources[2] >= 0 { redirected_error := duplicate_to(redirected_sources[2], 2) if !redirected_error.ok { failure = redirected_error.error } }
+    if failure == 0 { failure = #syscall(59, path_raw, &pointers[0], &environment_pointers[0]) }
+    _ = #syscall(1, output, &failure, #sizeof(isize))
+    exit_process(127)
+  }
+  _ = close_descriptor(output)
+  reported: isize = 0
+  received := #syscall(0, input, &reported, #sizeof(isize))
+  for received == -4 { received = #syscall(0, input, &reported, #sizeof(isize)) }
+  _ = close_descriptor(input)
+  if received != 0 {
+    _ = send_signal(child.value, 9) _ = wait(child.value, false)
+    if received < 0 { reported = received } else if received != #cast(isize) #sizeof(isize) { reported = -5 }
+    return SpawnResult{ error: reported }
+  }
+  return SpawnResult{ process: child.value, ok: true }
+}
+
+pub fn wait(process: isize, nonblocking: bool) WaitResult {
+  status: i32 = 0
+  options: usize = 0
+  if nonblocking { options = 1 }
+  value := #syscall(61, process, &status, options, 0)
+  for value == -4 { value = #syscall(61, process, &status, options, 0) }
+  if value < 0 { return WaitResult{ process: value, status: status, error: value, ok: false } }
+  return WaitResult{ process: value, status: status, error: 0, ok: true }
+}
+pub fn exited(status: i32) bool { return (status & 127) == 0 }
+pub fn exit_status(status: i32) u8 { return #cast(u8) ((status >> 8) & 255) }
+pub fn signaled(status: i32) bool { return (status & 127) != 0 && (status & 127) != 127 }
+pub fn termination_signal(status: i32) u8 { return #cast(u8) (status & 127) }
+
+pub fn exit_process(status: u8) {
+  _ = #syscall(60, status)
+  #panic("exit syscall returned")
+}
+
+pub struct EnvironmentResult { value: []u8, found: bool, error: isize, ok: bool }
+// Reads the process's initial environment. Values are copied into caller storage.
+// Not found is successful with found=false; failure may modify unused destination bytes.
+pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
+  if #len(name) == 0 { return EnvironmentResult{ value: destination[..0], error: -22 } }
+  for name_byte in name {
+    if name_byte == 0 || name_byte == '=' { return EnvironmentResult{ value: destination[..0], error: -22 } }
+  }
+  path := "/proc/self/environ\0"
+  descriptor := #syscall(257, -100, &path[0], 0, 0)
+  if descriptor < 0 { return EnvironmentResult{ value: destination[..0], error: descriptor } }
+  defer _ = #syscall(3, descriptor)
+  scratch: [4096]u8 = []
+  position: usize = 0
+  used: usize = 0
+  matching := true
+  in_value := false
+  selected := false
+  for {
+    count := #syscall(0, descriptor, &scratch[0], #len(scratch))
+    if count == -4 { continue }
+    if count < 0 { return EnvironmentResult{ value: destination[..0], error: count } }
+    if count == 0 {
+      if selected { return EnvironmentResult{ value: destination[..0], error: -5 } }
+      return EnvironmentResult{ value: destination[..0], ok: true }
+    }
+    for byte in scratch[..#cast(usize) count] {
+      if byte == 0 {
+        if selected { return EnvironmentResult{ value: destination[..used], found: true, ok: true } }
+        position = 0 used = 0 matching = true in_value = false selected = false
+      } else if !in_value {
+        if byte == '=' { in_value = true selected = matching && position == #len(name) }
+        else {
+          if position >= #len(name) || byte != name[position] { matching = false }
+          position += 1
+        }
+      } else if selected {
+        if used == #len(destination) { return EnvironmentResult{ value: destination[..0], error: -28 } }
+        destination[used] = byte used += 1
+      }
+    }
+  }
+  return EnvironmentResult{ value: destination[..0], error: -5 }
+}
+
+pub struct PathResult { value: []u8, error: isize, ok: bool }
+pub fn current_directory(destination: []u8) PathResult {
+  if #len(destination) == 0 { return PathResult{ value: destination[..0], error: -28 } }
+  count := #syscall(79, &destination[0], #len(destination))
+  if count < 0 { return PathResult{ value: destination[..0], error: count } }
+  if count == 0 { return PathResult{ value: destination[..0], error: -5 } }
+  return PathResult{ value: destination[..#cast(usize) count - 1], ok: true }
+}
+
+struct SignalDisposition { handler: usize, flags: usize, restorer: usize, mask: u64 }
+fn signal_disposition(signal: usize, handler: usize) Result {
+  action := SignalDisposition{ handler: handler }
+  return result(#syscall(13, signal, &action, 0, 8))
+}
+pub fn signal_ignore(signal: usize) Result { return signal_disposition(signal, 1) }
+pub fn signal_default(signal: usize) Result { return signal_disposition(signal, 0) }
+
+pub fn spawn(arena: *memory.Arena, path: []const u8, arguments: [][]const u8, options: SpawnOptions) SpawnResult {
+  empty: [0][]const u8 = []
+  return spawn_environment(arena,path,arguments,empty[..],options)
+}

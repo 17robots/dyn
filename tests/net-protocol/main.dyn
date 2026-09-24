@@ -1,0 +1,67 @@
+use "std/net"
+use "std/net/dns"
+use "std/net/http"
+
+fn expect(value: bool, message: []const u8) {
+  if !value { #panic(message) }
+}
+
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0
+  for i < #len(left) {
+    if left[i] != right[i] { return false }
+    i += 1
+  }
+  return true
+}
+
+fn main() {
+  query_storage: [64]u8 = []
+  query := dns.query_ipv4(query_storage[..], "example.com", 54849)
+  expect(#len(query) == 29, "dns query length")
+  expect(query[0] == 214 && query[1] == 65 && query[12] == 7 && query[20] == 3, "dns query encoding")
+
+  response: [45]u8 = [214, 65, 129, 128, 0, 1, 0, 1, 0, 0, 0, 0,
+    7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1,
+    192, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 1]
+  addresses: [2]dns.Ipv4 = []
+  resolved := dns.parse_ipv4(response[..], 54849, "example.com", addresses[..])
+  expect(resolved.ok && resolved.count == 1, "dns response parse")
+  expect(addresses[0].a == 127 && addresses[0].d == 1, "dns A address")
+  bad := dns.parse_ipv4(response[..12], 54849, "example.com", addresses[..])
+  expect(!bad.ok, "dns truncated response")
+
+  request_storage: [256]u8 = []
+  request := http.write_request(request_storage[..], "POST", "/items", "localhost", "hi")
+  expect(equal(request, "POST /items HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 2\r\n\r\nhi"), "http request")
+  request_head := http.parse_request(request)
+  expect(request_head.ok && request_head.content_length == 2, "http request parse")
+
+  response_storage: [256]u8 = []
+  rendered := http.write_response(response_storage[..], 200, "OK", "text/plain", "hello")
+  head := http.parse_response(rendered)
+  expect(head.ok && head.code == 200 && head.content_length == 5 && !head.keep_alive, "http response")
+  expect(!http.parse_response("HTTP/1.1 200 OK\r\nContent-Length: nope\r\n\r\n").ok, "invalid content length")
+  expect(!http.parse_response("HTTP/1.1 20 OK\r\n\r\n").ok, "invalid status")
+  expect(!http.parse_response("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n").ok, "conflicting lengths")
+  chunk_head := http.parse_response("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+  expect(chunk_head.ok && chunk_head.chunked && chunk_head.keep_alive, "chunked head")
+  header := http.header("HTTP/1.1 200 OK\r\nX-Test: yes\r\n\r\n", "x-test")
+  expect(header.ok && equal(header.value, "yes"), "header lookup")
+  decoded_storage: [16]u8 = []
+  decoded := http.decode_chunked("4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n", decoded_storage[..])
+  expect(decoded.ok && equal(decoded_storage[..decoded.count], "Wikipedia"), "chunk decode")
+  url := http.parse_url("https://example.com:8443/a")
+  expect(url.ok && url.secure && url.port == 8443 && equal(url.host, "example.com") && equal(url.target, "/a"), "url parse")
+  ipv6_bytes: [16]u8 = []
+  ipv6_bytes[15] = 1
+  address6 := net.ipv6(ipv6_bytes, 443, 0)
+  expect(address6.bytes[0] == 10 && address6.bytes[3] == 187 && address6.bytes[23] == 1, "ipv6 address")
+  local := net.unix("/tmp/dyn.sock")
+  expect(local.length > 2 && local.bytes[0] == 1, "unix address")
+  compressed_cycle: [14]u8 = [214, 65, 129, 128, 0, 1, 0, 0, 0, 0, 0, 0, 192, 12]
+  expect(!dns.parse_ipv4(compressed_cycle[..], 54849, "example.com", addresses[..]).ok, "dns compressed question truncation")
+  tiny: [8]u8 = []
+  expect(#len(http.write_request(tiny[..], "GET", "/", "x", "")) == 0, "http capacity")
+}

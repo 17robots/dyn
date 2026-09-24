@@ -1,0 +1,4 @@
+#target(kernel: darwin)
+pub type long = i64
+pub type unsigned_long = u64
+pub type char = i8

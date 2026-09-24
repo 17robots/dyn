@@ -1,0 +1,10 @@
+use "./io" stream
+
+struct Writer {
+  destination: stream.Writer,
+}
+
+fn main() {
+  value := Writer{ destination: stream.Writer{ descriptor: 1 } }
+  _ = value.destination.descriptor
+}

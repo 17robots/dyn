@@ -1,0 +1,27 @@
+# Native builds of the editor's grammar mirror use its existing CMake project.
+set shell := ["bash", "-euo", "pipefail", "-c"]
+export BUILD := absolute_path(env('BUILD', 'build'))
+export PREFIX := env('PREFIX', '/usr/local')
+export TS := env('TS', 'tree-sitter')
+
+all:
+    cmake -S . -B "$BUILD/shared" -G Ninja -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX="$PREFIX" -DTREE_SITTER_ABI_VERSION="$(sed -n 's/^#define LANGUAGE_VERSION //p' src/parser.c)"
+    cmake --build "$BUILD/shared"
+    cmake -S . -B "$BUILD/static" -G Ninja -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX="$PREFIX" -DTREE_SITTER_ABI_VERSION="$(sed -n 's/^#define LANGUAGE_VERSION //p' src/parser.c)"
+    cmake --build "$BUILD/static"
+
+generate:
+    "$TS" generate
+
+test:
+    "$TS" test
+
+install: all
+    cmake --install "$BUILD/static"
+    cmake --install "$BUILD/shared"
+
+uninstall:
+    python3 -c 'import os,pathlib; b=pathlib.Path(os.environ["BUILD"]); paths={p for m in b.glob("*/install_manifest.txt") for p in m.read_text().splitlines()}; [pathlib.Path(os.environ.get("DESTDIR", "") + p).unlink(missing_ok=True) for p in paths]'
+
+clean:
+    python3 -c 'import os,pathlib,shutil,sys; p=pathlib.Path(os.environ["BUILD"]).resolve(); root=pathlib.Path.cwd(); (p != pathlib.Path("/") and not root.is_relative_to(p)) or sys.exit("Refusing unsafe BUILD for clean"); shutil.rmtree(p) if p.exists() else None'

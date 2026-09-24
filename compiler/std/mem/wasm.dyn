@@ -1,0 +1,52 @@
+#target(arch: wasm32)
+// Thread-confined arena backing. Only raw page growth lives in the runtime.
+// Released mappings stay in linear memory and are reused/coalesced here.
+extern fn grow_pages "dyn_wasm_grow_pages"(pages: usize) usize
+struct WasmRegion { pages: usize, next: *WasmRegion, requested: usize, live: bool }
+wasm_free: *WasmRegion
+const WasmPage: usize = 65536
+
+fn mapping_allocate(size: usize) Mapping {
+  header := #sizeof(WasmRegion)
+  maximum := ~#cast(usize) 0
+  if size == 0 || size > maximum - header - (WasmPage - 1) { return Mapping{ error: -1 } }
+  pages := (size + header + WasmPage - 1) / WasmPage
+  previous: *WasmRegion = nil
+  region := wasm_free
+  for region != nil && region.pages < pages { previous = region region = region.next }
+  if region != nil {
+    next := region.next
+    if region.pages > pages {
+      next = #cast(*WasmRegion) (#cast(usize) region + pages * WasmPage)
+      next.* = WasmRegion{ pages: region.pages - pages, next: region.next }
+    }
+    if previous == nil { wasm_free = next } else { previous.next = next }
+  } else {
+    start := grow_pages(pages)
+    if start == maximum { return Mapping{ error: -1 } }
+    region = #cast(*WasmRegion) (start * WasmPage)
+  }
+  region.* = WasmRegion{ pages: pages, requested: size, live: true }
+  data := #cast(*u8) (#cast(usize) region + header)
+  return Mapping{ bytes: data[..size], ok: true }
+}
+
+fn mapping_release(bytes: []u8) isize {
+  if #len(bytes) == 0 { return -1 }
+  region := #cast(*WasmRegion) (#cast(usize) &bytes[0] - #sizeof(WasmRegion))
+  if !region.live || region.requested != #len(bytes) { return -1 }
+  region.live = false
+  region.requested = 0
+  previous: *WasmRegion = nil
+  next := wasm_free
+  for next != nil && #cast(usize) next < #cast(usize) region { previous = next next = next.next }
+  region.next = next
+  if next != nil && #cast(usize) region + region.pages * WasmPage == #cast(usize) next {
+    region.pages += next.pages region.next = next.next
+  }
+  if previous == nil { wasm_free = region }
+  else if #cast(usize) previous + previous.pages * WasmPage == #cast(usize) region {
+    previous.pages += region.pages previous.next = region.next
+  } else { previous.next = region }
+  return 0
+}

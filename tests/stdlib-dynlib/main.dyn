@@ -1,0 +1,17 @@
+use "std/dynlib"
+use "std/testing"
+
+fn main() {
+  missing := dynlib.open("/definitely/not/a/dyn/library.so", dynlib.Now)
+  testing.expect_false(missing.ok, "missing library")
+  error := dynlib.error_bytes(missing.error, 4096)
+  testing.expect(error.ok && #len(error.value) > 0, "loader error")
+
+  library := dynlib.open("libc.so.6", dynlib.Now + dynlib.Local)
+  testing.expect(library.ok, "open libc")
+  strlen := dynlib.symbol(library.value, "strlen")
+  testing.expect(strlen.ok && strlen.value != nil, "find symbol")
+  absent := dynlib.symbol(library.value, "dyn_symbol_that_does_not_exist")
+  testing.expect_false(absent.ok, "missing symbol")
+  testing.expect(dynlib.close(library.value), "close libc")
+}

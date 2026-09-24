@@ -1,0 +1,7 @@
+use "std/container/slot_map" slots
+
+pub fn retain(map: *slots.SlotMap, handle: slots.Handle, destination: []u8) bool {
+  return slots.copy_into(map, handle, destination) == slots.CopyStatus.Complete
+}
+
+fn main() {}

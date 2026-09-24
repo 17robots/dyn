@@ -1,0 +1,12 @@
+use "std/io" io
+use "std/terminal" terminal
+
+fn main() {
+  value: u64 = 1
+  i: usize = 0
+  for i < 50000000 {
+    value = (value * 1664525 + 1013904223) & 4294967295
+    i += 1
+  }
+  _ = io.println(terminal.stdout(), "{}", value)
+}

@@ -1,0 +1,13 @@
+use "std/unicode/text" text
+use "std/bytes" bytes
+fn main() {
+  output: [256]u8 = [] work: [256]u32 = []
+  result := text.normalize(output[..], "é", text.Form.NFC, work[..])
+  if !result.ok || !bytes.equal(output[..result.written], "é") { #panic("NFC") }
+  folded := text.case_fold(output[..], "Straße Σς")
+  if !folded.ok || !bytes.equal(output[..folded.written], "strasse σσ") { #panic("fold") }
+  iterator := text.graphemes("á👩‍👩‍👧‍👦🇺🇸") count: usize = 0
+  for text.next_grapheme(&iterator).ok { count += 1 }
+  if count != 3 || iterator.error != text.ErrorKind.None { #panic("graphemes") }
+  if text.category(233) != text.Category.Ll || !text.identifier_start(233) || !text.whitespace(8195) { #panic("properties") }
+}

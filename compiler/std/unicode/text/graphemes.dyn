@@ -1,0 +1,43 @@
+pub struct Graphemes { source: []const u8, offset: usize, error: ErrorKind }
+pub struct GraphemeResult { text: []const u8, error: ErrorKind, ok: bool }
+pub fn graphemes(source: []const u8) Graphemes { return Graphemes{ source: source } }
+fn control(property: u32) bool { return property == 1 || property == 2 || property == 3 }
+// Extended grapheme clusters, UAX #29 Unicode 17 default rules. Invalid UTF-8 is
+// a sticky error; End has ok=false/error=None. Returned slices borrow source.
+pub fn next_grapheme(state: *Graphemes) GraphemeResult {
+  if state.error != ErrorKind.None { return GraphemeResult{ error: state.error } }
+  if state.offset == #len(state.source) { return GraphemeResult{} }
+  start := state.offset first := utf8.decode(state.source, start)
+  if !first.ok { state.error = ErrorKind.InvalidUtf8 return GraphemeResult{ error: state.error } }
+  bits := properties(first.codepoint) previous := (bits >> 13) & 15
+  regional: usize = 0 if previous == 6 { regional = 1 }
+  pictograph := (bits & 131072) != 0 zwj_pictograph: bool = false
+  indic := (bits >> 18) & 3 consonant := indic == 2 linker: bool = false
+  at := start + first.width
+  for at < #len(state.source) {
+    decoded := utf8.decode(state.source, at)
+    if !decoded.ok { state.error = ErrorKind.InvalidUtf8 return GraphemeResult{ error: state.error } }
+    next_bits := properties(decoded.codepoint) current := (next_bits >> 13) & 15
+    next_indic := (next_bits >> 18) & 3 extended := (next_bits & 131072) != 0
+    join: bool = false
+    if previous == 1 && current == 2 { join = true }
+    else if control(previous) || control(current) { join = false }
+    else if previous == 9 && (current == 9 || current == 10 || current == 12 || current == 13) { join = true }
+    else if (previous == 12 || previous == 10) && (current == 10 || current == 11) { join = true }
+    else if (previous == 13 || previous == 11) && current == 11 { join = true }
+    else if current == 4 || current == 5 || current == 8 || previous == 7 { join = true }
+    else if next_indic == 2 && consonant && linker { join = true }
+    else if extended && previous == 5 && zwj_pictograph { join = true }
+    else if previous == 6 && current == 6 && regional % 2 == 1 { join = true }
+    if !join { break }
+    if current == 5 { zwj_pictograph = pictograph }
+    if current != 4 { pictograph = extended }
+    if current == 6 { regional += 1 } else { regional = 0 }
+    if next_indic == 2 { consonant = true linker = false }
+    else if next_indic == 1 { linker = consonant }
+    else if next_indic != 3 { consonant = false linker = false }
+    previous = current at += decoded.width
+  }
+  state.offset = at
+  return GraphemeResult{ text: state.source[start..at], ok: true }
+}

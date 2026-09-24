@@ -1,0 +1,2 @@
+#target(kernel: linux)
+fn executable() []const u8 { return "./build/process-platform" }

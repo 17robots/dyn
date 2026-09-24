@@ -1,0 +1,34 @@
+use "std/terminal"
+use "std/io"
+use "std/fs"
+use "std/mem"
+
+struct Item { value: u64 }
+
+fn main() {
+  created := mem.arena_create(16384)
+  if !created.ok { #panic("owned allocation failed") }
+  arena := &created.arena
+  first := #cast(*Item) mem.arena_push(arena, #sizeof(Item), #alignof(Item))
+  if first.value != 0 { #panic("owned arena was not zeroed") }
+  first.value = 42
+  read := fs.read_all(arena, "tests/memory-runtime/input.txt", 1024)
+  if !read.ok { #panic("file load failed") }
+  file := read.data
+  if #len(file) != 11 || file[0] != 'd' || file[9] != 'k' { #panic("file load failed") }
+  if !mem.arena_release(arena).ok { #panic("arena release failed") }
+
+  chain := mem.growing_create(32)
+  a := #cast(*Item) mem.growing_push(&chain, 24, #alignof(Item))
+  b := #cast(*Item) mem.growing_push(&chain, 24, #alignof(Item))
+  a.value = 20
+  b.value = 22
+  if a.value + b.value != 42 || a == b { #panic("chained arena failed") }
+  mem.growing_reset(&chain)
+  reused := mem.growing_push(&chain, 24, #alignof(Item))
+  if reused != #cast(*u8) a { #panic("chained arena reset did not reuse first block") }
+  reused_second := mem.growing_push(&chain, 24, #alignof(Item))
+  if reused_second != #cast(*u8) b { #panic("chained arena reset did not reuse later block") }
+  if !mem.growing_release(&chain).ok { #panic("chain release failed") }
+  _ = io.println(terminal.stdout(), "memory foundation ok")
+}

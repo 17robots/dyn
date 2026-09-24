@@ -1,0 +1,17 @@
+pub extern fn add "dyn_test_add"(left: u64, right: u64) u64
+pub extern fn variadic_sum "dyn_test_variadic_sum"(count: u32, ...) i32
+pub extern fn variadic_double "dyn_test_variadic_double"(count: u32, ...) f64
+
+pub struct Pair { integer: i64, real: f64 }
+pub struct Nested { pair: Pair, values: [3]u32 }
+pub extern fn pair "dyn_test_pair"(value: *Pair)
+pub extern fn nested "dyn_test_nested"(value: *const Nested) i64
+pub extern fn pair_size "dyn_test_pair_size"() u64
+pub extern fn pair_align "dyn_test_pair_align"() u64
+pub extern fn nested_size "dyn_test_nested_size"() u64
+pub extern fn nested_align "dyn_test_nested_align"() u64
+pub extern fn nested_values_offset "dyn_test_nested_values_offset"() u64
+pub extern fn callback "dyn_test_callback"(function: *fn(i64, rawptr) i64, context: rawptr) i64
+pub extern fn nullable "dyn_test_nullable"(pointer: rawptr) i32
+pub extern fn global_address "dyn_test_global_address"() *i64
+pub extern foreign_global "dyn_test_foreign_global": i64

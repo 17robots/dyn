@@ -1,0 +1,25 @@
+use "std/c"
+#link("vulkan")
+
+// Vulkan deliberately exposes one stable loader seam. Applications generate typed
+// commands/structures for the header version they target instead of coupling SDK releases.
+pub type Instance = rawptr
+pub type Procedure = rawptr
+pub struct ProcedureResult { value: Procedure, ok: bool }
+
+pub fn make_version(variant, major, minor, patch: u32) u32 {
+  return (variant << 29) | (major << 22) | (minor << 12) | patch
+}
+pub fn version_variant(version: u32) u32 { return version >> 29 }
+pub fn version_major(version: u32) u32 { return (version >> 22) & 127 }
+pub fn version_minor(version: u32) u32 { return (version >> 12) & 1023 }
+pub fn version_patch(version: u32) u32 { return version & 4095 }
+
+// name_buffer receives a temporary NUL-terminated copy. Returned function is loader-owned.
+pub fn procedure(instance: Instance, name: []const u8, name_buffer: []u8) ProcedureResult {
+  encoded := c.string_from_bytes(name_buffer, name)
+  if !encoded.ok { return ProcedureResult{} }
+  value := vulkan_get_instance_proc_address(instance, encoded.value)
+  return ProcedureResult{ value: value, ok: value != nil }
+}
+pub fn global_procedure(name: []const u8, buffer: []u8) ProcedureResult { return procedure(nil, name, buffer) }

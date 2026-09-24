@@ -1,0 +1,13 @@
+#target(arch: aarch64, kernel: linux, abi: sysv)
+use "std/thread"
+use "std/sync"
+
+fn worker(context: rawptr) isize { return 0 }
+fn main() {
+  value := sync.atomic_u64(1)
+  _ = sync.fetch_add_u64(&value, 2)
+  handle := thread.Thread{}
+  stack: [4096]u8 = []
+  if thread.spawn(&handle, stack[..], &worker, nil) < 0 { #panic("spawn") }
+  if thread.join(&handle) < 0 { #panic("join") }
+}

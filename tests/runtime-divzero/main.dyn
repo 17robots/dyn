@@ -1,0 +1,5 @@
+fn main() {
+  zero := 0
+  value := 10 / zero
+  _ = value
+}

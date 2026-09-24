@@ -1,0 +1,188 @@
+#target(kernel: windows)
+use "std/unicode/utf8" utf8
+use "std/unicode/utf16" utf16
+extern fn win_create "dyn_process_create"(application: *const u16, command: *u16, process_security: rawptr, thread_security: rawptr, inherit: i32, flags: u32, environment: *u16, directory: rawptr, startup: *Startup, result: *ProcessInformation) i32
+extern fn win_close "dyn_process_close"(handle: rawptr) i32
+extern fn win_wait "dyn_process_wait"(handle: rawptr, milliseconds: u32) u32
+extern fn win_error "dyn_process_error"() u32
+extern fn win_exit_code "dyn_process_exit_code"(handle: rawptr, code: *u32) i32
+extern fn win_terminate "dyn_process_terminate"(handle: rawptr, code: u32) i32
+extern fn win_pipe "dyn_process_pipe"(input: *rawptr, output: *rawptr, security: rawptr, size: u32) i32
+extern fn win_peek "dyn_process_peek"(handle: rawptr, buffer: rawptr, size: u32, read: rawptr, available: *u32, left: rawptr) i32
+extern fn win_read "dyn_process_read"(handle: rawptr, buffer: *u8, size: u32, read: *u32, overlapped: rawptr) i32
+extern fn win_ticks "dyn_process_ticks"() u64
+extern fn win_sleep "dyn_process_sleep"(milliseconds: u32)
+extern fn win_std "dyn_process_std"(kind: u32) rawptr
+extern fn win_current "dyn_process_current"() rawptr
+extern fn win_duplicate "dyn_process_duplicate"(source_process: rawptr, source: rawptr, target_process: rawptr, target: *rawptr, access: u32, inherit: i32, options: u32) i32
+extern fn win_init_attributes "dyn_process_init_attributes"(list: rawptr, count: u32, flags: u32, size: *usize) i32
+extern fn win_update_attributes "dyn_process_update_attributes"(list: rawptr, flags: u32, attribute: usize, value: rawptr, size: usize, previous: rawptr, returned: rawptr) i32
+extern fn win_delete_attributes "dyn_process_delete_attributes"(list: rawptr)
+extern fn win_environment "dyn_process_environment"(name: *const u16, value: *u16, size: u32) u32
+extern fn win_set_error "dyn_process_set_error"(code: u32)
+extern fn win_compare "dyn_process_compare"(left: *const u16, left_count: i32, right: *const u16, right_count: i32, ignore_case: i32) i32
+struct Startup {
+  size: u32, reserved: rawptr, desktop: rawptr, title: rawptr,
+  x: u32, y: u32, width: u32, height: u32, columns: u32, rows: u32,
+  fill: u32, flags: u32, show: u16, reserved_size: u16, reserved_bytes: rawptr,
+  input: rawptr, output: rawptr, error: rawptr, attributes: rawptr,
+}
+struct ProcessInformation { process: rawptr, thread: rawptr, process_id: u32, thread_id: u32 }
+struct Wide { data: []u16, ok: bool }
+fn win_failure() isize { return 0 - #cast(isize) win_error() }
+fn handle(value: isize) rawptr { return #cast(rawptr) #cast(usize) value }
+fn encode_wide(destination: []u16, source: []const u8) usize {
+  used: usize = 0 at: usize = 0
+  for at < #len(source) {
+    decoded := utf8.decode(source,at) if !decoded.ok { return 0 }
+    width := utf16.encode(destination[used..],decoded.codepoint) if width == 0 { return 0 }
+    used += width at += decoded.width
+  }
+  if used == #len(destination) { return 0 }
+  destination[used] = 0 return used + 1
+}
+fn wide(arena: *mem.Arena, source: []const u8) Wide {
+  if #len(source) > 32766 { return Wide{} }
+  allocation := mem.arena_try_push_uninit(arena,(#len(source)+1)*2,2)
+  if !allocation.ok { return Wide{} }
+  destination := (#cast(*u16) allocation.memory)[..#len(source)+1]
+  length := encode_wide(destination,source) if length == 0 { return Wide{} }
+  return Wide{ data: destination[..length], ok: true }
+}
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
+  mark := mem.arena_mark(arena) defer mem.arena_rewind(arena,mark)
+  application := wide(arena,path) if !application.ok { return SpawnResult{ error: -28 } }
+  capacity: usize = 1
+  for argument in arguments {
+    if #len(argument) > 16380 || capacity > 32767 - (#len(argument)*2+3) { return SpawnResult{ error: -28 } }
+    capacity += #len(argument)*2+3
+  }
+  allocation := mem.arena_try_push_uninit(arena,capacity*2,2) if !allocation.ok { return SpawnResult{ error: -28 } }
+  command := (#cast(*u16) allocation.memory)[..capacity] used: usize = 0 argument_index: usize = 0
+  for argument_text in arguments {
+    if argument_index > 0 { command[used] = 32 used += 1 }
+    // Microsoft CRT argv convention; argv[0] has special quote processing.
+    if argument_index == 0 {
+      for first_byte in argument_text { if first_byte == 34 { return SpawnResult{ error: -22 } } }
+    }
+    command[used] = 34 used += 1 at: usize = 0 slashes: usize = 0
+    for at < #len(argument_text) {
+      byte := argument_text[at]
+      if byte == 92 && argument_index > 0 { slashes += 1 at += 1 continue }
+      if byte == 34 { slashes = slashes*2+1 }
+      for slashes > 0 { command[used] = 92 used += 1 slashes -= 1 }
+      decoded := utf8.decode(argument_text,at) if !decoded.ok { return SpawnResult{ error: -22 } }
+      width := utf16.encode(command[used..],decoded.codepoint) used += width at += decoded.width
+    }
+    slashes *= 2 for slashes > 0 { command[used] = 92 used += 1 slashes -= 1 }
+    command[used] = 34 used += 1 argument_index += 1
+  }
+  command[used] = 0
+  environment_capacity: usize = 2
+  for item in configuration.environment {
+    if #len(item) > 32766 || environment_capacity > 32767 - #len(item) - 1 { return SpawnResult{ error: -28 } }
+    environment_capacity += #len(item)+1
+  }
+  environment_allocation := mem.arena_try_push(arena,environment_capacity*2,2)
+  if !environment_allocation.ok { return SpawnResult{ error: -28 } }
+  environment := (#cast(*u16) environment_allocation.memory)[..environment_capacity] environment_used: usize = 0
+  entries_allocation := mem.arena_try_push(arena,#len(configuration.environment)*#sizeof(Wide),#alignof(Wide))
+  if !entries_allocation.ok { return SpawnResult{ error: -28 } }
+  entries := (#cast(*Wide) entries_allocation.memory)[..#len(configuration.environment)]
+  entry_index: usize = 0
+  for entry in configuration.environment {
+    converted := wide(arena,entry) if !converted.ok { return SpawnResult{ error: -28 } }
+    position := entry_index
+    for position > 0 && win_compare(&entries[position-1].data[0],#cast(i32) #len(entries[position-1].data)-1,&converted.data[0],#cast(i32) #len(converted.data)-1,1) == 3 {
+      entries[position] = entries[position-1] position -= 1
+    }
+    entries[position] = converted entry_index += 1
+  }
+  for sorted_entry in entries {
+    for unit in sorted_entry.data { environment[environment_used] = unit environment_used += 1 }
+  }
+  handles: [3]rawptr = [] sources: [3]isize = [configuration.input,configuration.output,configuration.error]
+  inherited_count: usize = 0
+  defer { for owned in handles { if owned != nil { _ = win_close(owned) } } }
+  startup := Startup{ size: #cast(u32) #sizeof(Startup), flags: 256 }
+  index: usize = 0
+  for index < 3 {
+    source: rawptr = nil
+    if sources[index] == -1 { source = win_std(4294967286 - #cast(u32) index) }
+    else { source = handle(sources[index]) }
+    duplicate: rawptr = nil
+    if source != nil && #cast(usize) source != 18446744073709551615 {
+      if win_duplicate(win_current(),source,win_current(),&duplicate,0,1,2) == 0 { return SpawnResult{ error: win_failure() } }
+      handles[inherited_count] = duplicate inherited_count += 1
+    }
+    if index == 0 { startup.input = duplicate } else if index == 1 { startup.output = duplicate } else { startup.error = duplicate }
+    index += 1
+  }
+  size: usize = 0 _ = win_init_attributes(nil,1,0,&size)
+  attributes := mem.arena_try_push_uninit(arena,size,8)
+  if !attributes.ok { return SpawnResult{ error: -28 } }
+  startup.attributes = #cast(rawptr) attributes.memory
+  if win_init_attributes(startup.attributes,1,0,&size) == 0 { return SpawnResult{ error: win_failure() } }
+  defer win_delete_attributes(startup.attributes)
+  if inherited_count > 0 && win_update_attributes(startup.attributes,0,131074,#cast(rawptr) &handles[0],inherited_count*#sizeof(rawptr),nil,nil) == 0 { return SpawnResult{ error: win_failure() } }
+  information := ProcessInformation{} inherit: i32 = 0 if inherited_count > 0 { inherit = 1 }
+  if win_create(&application.data[0],&command[0],nil,nil,inherit,525312,&environment[0],nil,&startup,&information) == 0 { return SpawnResult{ error: win_failure() } }
+  _ = win_close(information.thread)
+  return SpawnResult{ child: Child{ handle: #cast(isize) #cast(usize) information.process, active: true }, ok: true }
+}
+fn wait_native(child: *Child, nonblocking: bool) ExitResult {
+  timeout: u32 = 4294967295 if nonblocking { timeout = 0 }
+  value := win_wait(handle(child.handle),timeout)
+  if value == 258 { return ExitResult{ ok: true } }
+  if value != 0 { return ExitResult{ error: win_failure() } }
+  code: u32 = 0 if win_exit_code(handle(child.handle),&code) == 0 { return ExitResult{ error: win_failure() } }
+  _ = win_close(handle(child.handle)) child.active = false
+  return ExitResult{ code: code, finished: true, ok: true }
+}
+fn terminate_native(child: *Child) Status { if win_terminate(handle(child.handle),1) == 0 { return Status{ error: win_failure() } } return Status{ ok: true } }
+fn close_native(value: isize) Status { if win_close(handle(value)) == 0 { return Status{ error: win_failure() } } return Status{ ok: true } }
+fn pipe_native() Pipe {
+  input: rawptr = nil output: rawptr = nil
+  if win_pipe(&input,&output,nil,0) == 0 { return Pipe{ error: win_failure() } }
+  return Pipe{ input: #cast(isize) #cast(usize) input, output: #cast(isize) #cast(usize) output, ok: true }
+}
+fn read_native(value: isize, destination: []u8) ReadResult {
+  available: u32 = 0
+  if win_peek(handle(value),nil,0,nil,&available,nil) == 0 {
+    error := win_error() if error == 109 { return ReadResult{ ended: true, ok: true } }
+    return ReadResult{ error: 0 - #cast(isize) error }
+  }
+  if available == 0 { return ReadResult{ ok: true } }
+  amount := #cast(usize) available if amount > #len(destination) { amount = #len(destination) }
+  read: u32 = 0
+  if win_read(handle(value),&destination[0],#cast(u32) amount,&read,nil) == 0 { return ReadResult{ error: win_failure() } }
+  return ReadResult{ count: #cast(usize) read, ok: true }
+}
+fn milliseconds_native() u64 { return win_ticks() }
+fn sleep_native() { win_sleep(1) }
+fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
+  key: [32768]u16 = [] value: [32768]u16 = []
+  if encode_wide(key[..],name) == 0 { return EnvironmentResult{ error: -28 } }
+  win_set_error(0) length := win_environment(&key[0],&value[0],32768)
+  if length == 0 {
+    error := win_error()
+    if error == 203 { return EnvironmentResult{ value: destination[..0], ok: true } }
+    if error != 0 { return EnvironmentResult{ error: 0 - #cast(isize) error } }
+  }
+  if length >= 32768 { return EnvironmentResult{ error: -28 } }
+  at: usize = 0 used: usize = 0
+  for at < #cast(usize) length {
+    decoded := utf16.decode(value[..#cast(usize) length],at)
+    if !decoded.ok { return EnvironmentResult{ error: -22 } }
+    width := utf8.encode(destination[used..],decoded.codepoint)
+    if width == 0 { return EnvironmentResult{ error: -28 } }
+    used += width at += decoded.width
+  }
+  return EnvironmentResult{ value: destination[..used], found: true, ok: true }
+}
+
+fn duplicate_native(value: isize) HandleResult {
+  copied: rawptr = nil
+  if win_duplicate(win_current(),handle(value),win_current(),&copied,0,0,2) == 0 { return HandleResult{ error: win_failure() } }
+  return HandleResult{ value: #cast(isize) #cast(usize) copied, ok: true }
+}

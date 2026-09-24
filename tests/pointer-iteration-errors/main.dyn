@@ -1,0 +1,19 @@
+fn array_value() [2]u8 {
+  return [1, 2]
+}
+
+fn main() {
+  for *value in array_value() {
+    value.* = 0
+  }
+
+  text := "hello"
+  for *byte in text {
+    byte.* = 0
+  }
+
+  values: [1]u8 = [1]
+  for *const value in values {
+    value.* = 2
+  }
+}

@@ -1,0 +1,4 @@
+use "./first" same
+use "./second" same
+
+fn main() {}

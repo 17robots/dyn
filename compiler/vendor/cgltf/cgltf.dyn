@@ -1,0 +1,76 @@
+use "std/c"
+#link("dyn_cgltf")
+// cgltf 1.15. Provider owns parsed model; keep input bytes alive until destroy.
+// In particular GLB binary buffers borrow input. Handles must not be copied for ownership.
+pub type Model = rawptr
+pub struct Result { value: Model, code: i32, ok: bool }
+pub fn parse_owned(bytes: []const u8) Result {
+  if #len(bytes) == 0 { return Result{ code: -1 } }
+  model: Model = nil code := native_parse(#cast(rawptr) &bytes[0], #len(bytes), &model)
+  return Result{ value: model, code: code, ok: code == 0 }
+}
+pub fn destroy_owned(model: Model) { if model != nil { native_free(model) } }
+pub fn validate(model: Model) bool { return model != nil && native_validate(model) == 0 }
+// Loads only embedded data URIs/GLB buffers, never external files. -2 rejects an
+// unresolved external resource before loading any buffers. Other codes are cgltf_result.
+pub fn load_embedded(model: Model) i32 { return native_embedded(model) }
+pub extern fn node_count "dyn_cgltf_nodes"(model: Model) usize
+pub extern fn accessor_count "dyn_cgltf_accessors"(model: Model) usize
+// Non-sparse accessors only. Output borrows caller storage; model remains owned.
+pub fn read_float(model: Model, accessor: usize, element: usize, output: []f32) bool {
+  if #len(output) == 0 { return false }
+  return native_read(model, accessor, element, &output[0], #len(output))
+}
+extern fn native_parse "dyn_cgltf_parse"(bytes: rawptr, length: usize, output: *Model) i32
+extern fn native_free "cgltf_free"(model: Model)
+extern fn native_validate "cgltf_validate"(model: Model) i32
+extern fn native_embedded "dyn_cgltf_embedded"(model: Model) i32
+extern fn native_read "dyn_cgltf_read"(model: Model, accessor: usize, element: usize, output: *f32, count: usize) bool
+
+// External resource loading is explicit: inspect URI, load with application
+// policy, then attach. Attached bytes are borrowed through model destruction.
+// Attach only once per buffer; never frees or replaces already loaded storage.
+pub extern fn buffer_count "dyn_cgltf_buffers"(model: Model) usize
+pub extern fn buffer_size "dyn_cgltf_buffer_size"(model: Model, index: usize) usize
+pub fn attach_buffer(model: Model, index: usize, bytes: []const u8) bool {
+  if #len(bytes) == 0 { return false }
+  return native_attach(model, index, #cast(rawptr) &bytes[0], #len(bytes))
+}
+pub fn buffer_uri(model: Model, index: usize, maximum: usize) []const u8 {
+  value := c.bytes_from_string(native_uri(model, index), maximum)
+  if !value.ok { return "" } return value.value
+}
+pub const Position: i32 = 1
+pub const Normal: i32 = 2
+pub const Tangent: i32 = 3
+pub const Texcoord: i32 = 4
+pub const Color: i32 = 5
+pub const Joints: i32 = 6
+pub const Weights: i32 = 7
+pub const Triangles: i32 = 5
+pub extern fn mesh_count "dyn_cgltf_meshes"(model: Model) usize
+pub extern fn material_count "dyn_cgltf_materials"(model: Model) usize
+pub extern fn primitive_count "dyn_cgltf_primitives"(model: Model, mesh: usize) usize
+// Optional index results use -1 for absent/invalid. Attribute set is usually 0.
+pub extern fn attribute "dyn_cgltf_attribute"(model: Model, mesh: usize, primitive: usize, kind: i32, set: i32) i64
+pub extern fn indices "dyn_cgltf_indices"(model: Model, mesh: usize, primitive: usize) i64
+pub extern fn material "dyn_cgltf_material"(model: Model, mesh: usize, primitive: usize) i64
+pub extern fn topology "dyn_cgltf_topology"(model: Model, mesh: usize, primitive: usize) i32
+pub extern fn element_count "dyn_cgltf_elements"(model: Model, accessor: usize) usize
+pub extern fn node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
+pub struct Index { value: u32, ok: bool }
+pub fn read_index(model: Model, accessor: usize, element: usize) Index {
+  result := Index{} result.ok = native_index(model, accessor, element, &result.value) return result
+}
+// Column-major world matrix and RGBA base factor, copied into caller storage.
+pub fn world_transform(model: Model, node: usize, output: []f32) bool {
+  return #len(output) >= 16 && native_transform(model, node, &output[0])
+}
+pub fn base_color(model: Model, material: usize, output: []f32) bool {
+  return #len(output) >= 4 && native_color(model, material, &output[0])
+}
+extern fn native_uri "dyn_cgltf_uri"(model: Model, index: usize) c.string
+extern fn native_attach "dyn_cgltf_attach"(model: Model, index: usize, bytes: rawptr, size: usize) bool
+extern fn native_index "dyn_cgltf_index"(model: Model, accessor: usize, element: usize, output: *u32) bool
+extern fn native_transform "dyn_cgltf_transform"(model: Model, node: usize, output: *f32) bool
+extern fn native_color "dyn_cgltf_base_color"(model: Model, material: usize, output: *f32) bool

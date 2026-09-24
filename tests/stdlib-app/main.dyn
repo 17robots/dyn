@@ -1,0 +1,96 @@
+use "std/flags" cli
+use "std/encoding/json"
+use "std/mem"
+use "std/net"
+use "std/os/linux" os
+use "std/path" paths
+use "std/fs"
+use "std/testing"
+
+fn main() {
+  path_buffer: [64]u8 = []
+  joined_result := paths.join(path_buffer[..], "build", "stdlib-app.tmp")
+  testing.expect(joined_result.ok, "path join capacity")
+  joined := joined_result.value
+  testing.expect_equal_bytes(joined, "build/stdlib-app.tmp", "path join")
+  base := paths.basename(joined)
+  directory := paths.dirname(joined)
+  suffix := paths.extension(joined)
+  testing.expect_equal_bytes(base, "stdlib-app.tmp", "basename")
+  testing.expect_equal_bytes(directory, "build", "dirname")
+  testing.expect_equal_bytes(suffix, ".tmp", "extension")
+  testing.expect_equal_bytes(paths.basename("/"), "/", "root basename")
+  testing.expect_equal_bytes(paths.dirname("/"), "/", "root dirname")
+  testing.expect_equal_bytes(paths.dirname("name"), ".", "relative dirname")
+  testing.expect_equal_bytes(paths.extension(".profile"), "", "dotfile extension")
+  testing.expect(!paths.join(path_buffer[..2], "ab", "cd").ok, "path capacity")
+
+  created := fs.create(joined)
+  testing.expect(created.ok, "create")
+  created_descriptor := created.file
+  wrote := fs.write(&created_descriptor, "hello")
+  wrote_count := wrote.transferred
+  testing.expect(wrote.ok && wrote_count == 5, "write")
+  closed := fs.close(&created_descriptor)
+  testing.expect(closed.ok, "close")
+  opened := fs.open(joined)
+  testing.expect(opened.ok, "open")
+  bytes: [8]u8 = []
+  opened_descriptor := opened.file
+  read_result := fs.read(&opened_descriptor, bytes[..])
+  read_count := read_result.transferred
+  testing.expect(read_result.ok && read_count == 5, "read")
+  _ = fs.close(&opened_descriptor)
+  testing.expect_equal_bytes(bytes[..5], "hello", "file contents")
+  testing.expect(fs.remove(joined).ok, "remove")
+
+  cwd_bytes: [4096]u8 = []
+  testing.expect(os.current_directory(cwd_bytes[..]).ok, "cwd")
+  testing.expect(json.valid("{\"ok\":[true,null,-1.5e2]}"), "valid json")
+  testing.expect(!json.valid("[1,]"), "invalid json")
+  encoded_bytes: [32]u8 = []
+  encoded := json.write_string(encoded_bytes[..], "a\nb")
+  testing.expect_equal_bytes(encoded, "\"a\\nb\"", "json string")
+  json_storage: [4096]u8 = []
+  json_arena := mem.arena_from_buffer(json_storage[..])
+  document := json.parse(&json_arena, "{\"ok\":[true,\"yes\\n\\u263a\"],\"n\":-12}")
+  testing.expect(document.ok, "json parse")
+  ok_value := json.object_get(document.root, "ok")
+  testing.expect(ok_value != nil && json.array_length(ok_value) == 2, "json object and array")
+  second := json.array_get(ok_value, 1)
+  testing.expect(json.is_string(second), "json array get")
+  testing.expect_equal_bytes(second.text, "yes\n\xe2\x98\xba", "json decoded string")
+  rendered_bytes: [128]u8 = []
+  rendered := json.encode(rendered_bytes[..], document.root)
+  testing.expect(json.valid(rendered), "json DOM writer")
+  failed_mark := mem.arena_mark(&json_arena)
+  failed_document := json.parse(&json_arena, "{\"x\":}")
+  testing.expect(!failed_document.ok && mem.arena_mark(&json_arena) == failed_mark, "json parse rewind")
+  tiny_json: [1]u8 = []
+  testing.expect(#len(json.encode(tiny_json[..], document.root)) == 0, "json writer capacity")
+
+  options: [2]cli.Option = []
+  options[0] = cli.bool_option("alpha", 'a')
+  options[1] = cli.bool_option("beta", 'b')
+  packed: []const u8 = "-aba"
+  arguments: [1][]const u8 = [packed]
+  values: [2]cli.Value = []
+  positionals: [1][]const u8 = []
+  parsed := cli.parse(options[..], arguments[..], values[..], positionals[..])
+  alpha_count := parsed.values[0].occurrences
+  beta_count := parsed.values[1].occurrences
+  testing.expect(parsed.ok && alpha_count == 2 && beta_count == 1, "grouped flags")
+
+  descriptor := net.socket(net.AddressFamilyIpv4, net.SocketStream, 0)
+  testing.expect(descriptor.ok, "socket")
+  socket_descriptor := net.result_value(&descriptor)
+  testing.expect(net.reuse_address(socket_descriptor, true).ok, "socket reuse")
+  testing.expect(net.nonblocking(socket_descriptor, true).ok, "socket nonblocking")
+  testing.expect(net.wait(socket_descriptor, net.PollReadable, 0).ok, "socket wait")
+  socket_closed := net.close(socket_descriptor)
+  testing.expect(socket_closed.ok, "socket close")
+  address := net.ipv4(127, 0, 0, 1, 80)
+  testing.expect(address.bytes[0] == 2 && address.bytes[2] == 0 && address.bytes[3] == 80, "ipv4 address")
+  poll_item: [1]net.PollDescriptor = []
+  testing.expect(net.poll(poll_item[..0], 0).ok, "empty poll")
+}

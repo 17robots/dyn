@@ -1,0 +1,152 @@
+use "std/fs" filesystem
+use "std/os/linux" linux_system
+use "std/fmt" format
+use "std/strings" text
+use "std/path" paths
+use "std/time" clocks
+use "std/io" stream
+use "std/mem" memory
+
+fn main() {
+  mapping := memory.arena_create(4096)
+  if !mapping.ok || #len(mapping.arena.data) != 4096 { #panic("page allocate") }
+  allocated := memory.arena_push(&mapping.arena, 4096, 1)
+  allocated.* = 42
+  if !memory.arena_release(&mapping.arena).ok { #panic("page release") }
+
+  first_storage: [128]u8 = []
+  first_name := format.buffer(first_storage[..])
+  if !format.write_values(&first_name, "/tmp/dyn-sdk-system-", linux_system.process_id()) {
+    #panic("temporary path")
+  }
+  second_storage: [132]u8 = []
+  second_name := format.buffer(second_storage[..])
+  if !format.write_values(&second_name, format.bytes(&first_name), ".moved") { #panic("moved path") }
+
+  created := filesystem.create(format.bytes(&first_name))
+  if !created.ok { #panic("file create") }
+  payload: []const u8 = "explicit storage, explicit lifetime"
+  written := filesystem.write(&created.file, payload)
+  if !written.ok || written.transferred != #len(payload) { #panic("file write") }
+  if !filesystem.close(&created.file).ok { #panic("file close") }
+  info := filesystem.metadata(format.bytes(&first_name))
+  if !info.ok || info.size != #cast(u64) #len(payload) { #panic("file metadata") }
+
+  opened := filesystem.open(format.bytes(&first_name))
+  if !opened.ok { #panic("file open") }
+  read_storage: [64]u8 = []
+  read := filesystem.read(&opened.file, read_storage[..])
+  if !read.ok || !text.equal(read_storage[..read.transferred], payload) { #panic("file read") }
+  if !filesystem.close(&opened.file).ok { #panic("file close read") }
+
+  adapted := filesystem.open(format.bytes(&first_name))
+  if !adapted.ok { #panic("adapter open") }
+  adapter_output_storage: [64]u8 = []
+  adapter_output := stream.buffer_writer(adapter_output_storage[..])
+  adapter_scratch: [7]u8 = []
+  adapter_copy := stream.copy(
+    stream.buffer_writer_adapter(&adapter_output),
+    filesystem.reader(&adapted.file),
+    adapter_scratch[..],
+  )
+  if adapter_copy.status != stream.Status.Complete ||
+    !text.equal(stream.buffer_writer_bytes(&adapter_output), payload) { #panic("file reader adapter") }
+  _ = filesystem.close(&adapted.file)
+
+  if !filesystem.rename(format.bytes(&first_name), format.bytes(&second_name)).ok { #panic("rename") }
+  if !filesystem.remove(format.bytes(&second_name)).ok { #panic("remove") }
+
+  if !filesystem.write_all(format.bytes(&first_name), payload).ok { #panic("write all") }
+  read_all_storage: [128]u8 = []
+  read_all_arena := memory.arena_from_buffer(read_all_storage[..])
+  complete_file := filesystem.read_all(&read_all_arena, format.bytes(&first_name), 64)
+  if !complete_file.ok || !text.equal(complete_file.data, payload) { #panic("read all") }
+  copy_scratch: [8]u8 = []
+  copied_file := filesystem.copy_file(format.bytes(&first_name), format.bytes(&second_name), copy_scratch[..])
+  if !copied_file.ok || copied_file.transferred != #len(payload) { #panic("copy file") }
+  if !filesystem.remove(format.bytes(&first_name)).ok || !filesystem.remove(format.bytes(&second_name)).ok {
+    #panic("remove convenience files")
+  }
+
+  atomic := filesystem.atomic_begin(format.bytes(&first_name), format.bytes(&second_name))
+  if !atomic.ok { #panic("atomic begin") }
+  atomic_write := filesystem.write(&atomic.transaction.file, "committed")
+  if !atomic_write.ok { #panic("atomic write") }
+  if !filesystem.atomic_commit_durable(&atomic.transaction, "/tmp").ok || atomic.transaction.active {
+    #panic("atomic commit")
+  }
+  committed := filesystem.open(format.bytes(&first_name))
+  if !committed.ok { #panic("atomic open") }
+  committed_storage: [16]u8 = []
+  committed_read := filesystem.read(&committed.file, committed_storage[..])
+  _ = filesystem.close(&committed.file)
+  if !committed_read.ok || !text.equal(committed_storage[..committed_read.transferred], "committed") {
+    #panic("atomic contents")
+  }
+  if !filesystem.remove(format.bytes(&first_name)).ok { #panic("atomic remove") }
+
+  aborted := filesystem.atomic_begin(format.bytes(&first_name), format.bytes(&second_name))
+  if !aborted.ok || !filesystem.atomic_abort(&aborted.transaction).ok { #panic("atomic abort") }
+  if filesystem.open(format.bytes(&second_name)).ok { #panic("atomic temporary survived") }
+
+  home_storage: [4096]u8 = []
+  home := filesystem.app_directory(filesystem.AppDirectory.Home, home_storage[..])
+  if !home.ok || #len(home.path) == 0 { #panic("home directory") }
+
+  path_storage: [128]u8 = []
+  cleaned := paths.clean(path_storage[..], "/one//two/../three/.")
+  if !cleaned.ok || !text.equal(cleaned.value, "/one/three") { #panic("path clean") }
+  joined := paths.safe_join(path_storage[..], "/srv/app", "assets/../index.html")
+  if !joined.ok || !text.equal(joined.value, "/srv/app/index.html") { #panic("safe join") }
+  escaped := paths.safe_join(path_storage[..], "/srv/app", "../../etc/passwd")
+  if escaped.ok { #panic("safe join escape") }
+
+  directory_storage: [4096]u8 = []
+  directory := filesystem.open_directory("/tmp", directory_storage[..])
+  if !directory.ok { #panic("directory open") }
+  entry := filesystem.directory_next(&directory.directory)
+  if !entry.ok || #len(entry.name) == 0 { #panic("directory next") }
+  if !filesystem.close_directory(&directory.directory).ok { #panic("directory close") }
+
+  if !filesystem.symbolic_link("/tmp", format.bytes(&first_name)).ok { #panic("symlink") }
+  link_storage: [128]u8 = []
+  link := filesystem.read_link(format.bytes(&first_name), link_storage[..])
+  if !link.ok || !text.equal(link.path, "/tmp") { #panic("read link") }
+  if !filesystem.remove(format.bytes(&first_name)).ok { #panic("remove symlink") }
+
+  date := clocks.DateTime{
+    year: 2024, month: 2, day: 29,
+    hour: 12, minute: 34, second: 56, nanosecond: 0,
+  }
+  date_storage: [20]u8 = []
+  rendered_date := clocks.format_iso8601(date_storage[..], &date)
+  if !text.equal(rendered_date, "2024-02-29T12:34:56Z") { #panic("time format") }
+  parsed_date: clocks.DateTime
+  if !clocks.parse_iso8601(rendered_date, &parsed_date) || parsed_date.day != 29 { #panic("time parse") }
+  if clocks.parse_iso8601("2023-02-29T00:00:00Z", &parsed_date) { #panic("invalid date") }
+  started := clocks.monotonic_now()
+  if !clocks.sleep(clocks.Millisecond) { #panic("sleep") }
+  finished := clocks.monotonic_now()
+  elapsed := clocks.elapsed(started, finished)
+  if !elapsed.ok || elapsed.value < clocks.Millisecond { #panic("elapsed") }
+
+  pipe := linux_system.pipe()
+  if !pipe.ok { #panic("pipe") }
+  if !linux_system.close_descriptor(pipe.input).ok || !linux_system.close_descriptor(pipe.output).ok {
+    #panic("pipe close")
+  }
+  process_storage: [4096]u8 = []
+  process_arena := memory.arena_from_buffer(process_storage[..])
+  arguments: [3][]const u8 = ["sh", "-c", "exit 7"]
+  spawned := linux_system.spawn(
+    &process_arena,
+    "/bin/sh",
+    arguments[..],
+    linux_system.SpawnOptions{ input: -1, output: -1, error: -1 },
+  )
+  if !spawned.ok { #panic("spawn") }
+  waited := linux_system.wait(spawned.process, false)
+  if !waited.ok || !linux_system.exited(waited.status) || linux_system.exit_status(waited.status) != 7 {
+    #panic("wait status")
+  }
+}

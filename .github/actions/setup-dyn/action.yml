@@ -1,0 +1,29 @@
+name: Setup Dyn Linux toolchain
+description: Install the shared pinned compiler, parser and cross-link toolchain
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y clang-19 lld-19 llvm-19-dev build-essential bubblewrap libseccomp2 python3 nodejs pkg-config sqlite3 libsqlite3-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libssl-dev libzstd-dev libvulkan-dev gdb cmake ninja-build gettext unzip libtool-bin libpcre2-dev liblua5.4-dev libarchive-dev libcurl4-openssl-dev libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-dev libwebp-dev libtiff-dev libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgl-dev libgl1-mesa-dri fonts-dejavu-core
+        echo /usr/lib/llvm-19/bin >> "$GITHUB_PATH"
+        echo LLVM_CONFIG=llvm-config-19 >> "$GITHUB_ENV"
+        task_tools=$(mktemp -d)
+        git clone --depth 1 --branch v0.25.8 https://github.com/tree-sitter/tree-sitter "$task_tools/tree-sitter"
+        make -C "$task_tools/tree-sitter" -j2
+        sudo make -C "$task_tools/tree-sitter" install PREFIX=/usr/local
+        sudo ldconfig
+        cargo install just --version 1.58.0 --locked
+        cargo install tree-sitter-cli --version 0.25.8 --locked
+        curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o "$task_tools/zig.tar.xz"
+        echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $task_tools/zig.tar.xz" | sha256sum -c -
+        tar -xf "$task_tools/zig.tar.xz" -C "$task_tools"
+        echo "$task_tools/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+        python3 tools/setup-release-providers.py sdl3 sdl3-image sdl3-ttf tree-sitter-c neovim
+        python3 compiler/tools/build-vendors.py
+        echo "$PWD/build/vendor-deps/install/bin" >> "$GITHUB_PATH"
+        echo "PKG_CONFIG_PATH=$PWD/build/vendor-deps/install/lib/pkgconfig:/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
+        echo "LD_LIBRARY_PATH=$PWD/build/vendor-deps/install/lib:/usr/local/lib" >> "$GITHUB_ENV"
+        echo "DYN_LIBRARY_PATH=$PWD/build/vendor-deps/install/lib:/usr/local/lib" >> "$GITHUB_ENV"

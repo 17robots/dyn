@@ -1,0 +1,31 @@
+use "vendor/ffmpeg/raw" av
+use "std/io" io
+use "std/terminal" terminal
+
+// Minimal real decoder lifecycle. Native buffers are released with FFmpeg calls.
+fn main() {
+  decoder := av.avcodec_find_decoder(av.AV_CODEC_ID_PCM_S16LE)
+  if decoder == nil { #panic("PCM decoder unavailable") }
+  context := av.avcodec_alloc_context3(decoder)
+  if context == nil { #panic("decoder allocation failed") }
+  defer av.avcodec_free_context(&context)
+  context.sample_rate = 8000
+  av.av_channel_layout_default(&context.ch_layout, 1)
+  if av.avcodec_open2(context, decoder, nil) < 0 { #panic("decoder open failed") }
+  packet := av.av_packet_alloc()
+  if packet == nil { #panic("packet allocation failed") }
+  defer av.av_packet_free(&packet)
+  frame := av.av_frame_alloc()
+  if frame == nil { #panic("frame allocation failed") }
+  defer av.av_frame_free(&frame)
+  if av.av_new_packet(packet, 8) < 0 { #panic("packet data allocation failed") }
+  bytes := packet.data[..8]
+  bytes[0] = 1 bytes[2] = 2 bytes[4] = 3 bytes[6] = 4
+  bytes[1] = 0 bytes[3] = 0 bytes[5] = 0 bytes[7] = 0
+  if av.avcodec_send_packet(context, packet) < 0 { #panic("send packet failed") }
+  if av.avcodec_receive_frame(context, frame) < 0 || frame.nb_samples != 4 { #panic("decode failed") }
+  samples := (#cast(*const i16) frame.data[0])[..4]
+  if samples[0] != 1 || samples[3] != 4 { #panic("sample mismatch") }
+  _ = io.println(terminal.stdout(), "decoded {} samples", frame.nb_samples)
+  // samples is borrowed from frame; never retain it after frame unref/free.
+}

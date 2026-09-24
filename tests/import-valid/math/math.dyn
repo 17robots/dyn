@@ -1,0 +1,15 @@
+use "../common"
+
+pub struct Pair {
+  left: i32,
+  right: i32,
+}
+
+pub enum Result {
+  Ok: i32,
+  Error,
+}
+
+pub fn add(a: i32, b: i32) i32 { return a + b }
+
+pub fn identity(value: common.Number) common.Number { return value }

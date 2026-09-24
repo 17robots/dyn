@@ -1,5 +1,0 @@
-extern fn sqlite_open "sqlite3_open"(name: cabi.string, database: *rawptr) cabi.int
-extern fn sqlite_close "sqlite3_close"(database: rawptr) cabi.int
-extern fn sqlite_exec "sqlite3_exec"(database: rawptr, sql: cabi.string, callback: rawptr, context: rawptr, error: *rawptr) cabi.int
-extern fn sqlite_error_message "sqlite3_errmsg"(database: rawptr) cabi.string
-extern fn sqlite_free "sqlite3_free"(memory: rawptr)

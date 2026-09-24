@@ -1,0 +1,13 @@
+list
+add write parser tests
+add profile release build
+add document arena ownership
+list
+done 1
+done 3
+list
+add test terminal input
+add remove hidden allocation
+done 4
+list
+quit

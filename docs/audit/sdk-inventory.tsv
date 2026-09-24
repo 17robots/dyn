@@ -1,0 +1,142 @@
+source	lines	public_declarations	direct_test_importers
+compiler/std/archive/tar/pax.dyn	94	3	tests/sdk-archive,tests/sdk-depth,tests/sdk-lifetimes,tests/sdk-storage-contracts,tests/stdlib-foundation
+compiler/std/archive/tar/tar.dyn	187	9	tests/sdk-archive,tests/sdk-depth,tests/sdk-lifetimes,tests/sdk-storage-contracts,tests/stdlib-foundation
+compiler/std/archive/zip/index.dyn	75	2	tests/sdk-archive,tests/sdk-storage-contracts
+compiler/std/archive/zip/zip.dyn	166	11	tests/sdk-archive,tests/sdk-storage-contracts
+compiler/std/bufio/bufio.dyn	172	10	tests/sdk-boundaries,tests/sdk-bufio,tests/stdlib-contracts,tests/stdlib-io
+compiler/std/bytes/builder/builder.dyn	53	8	tests/sdk-collections
+compiler/std/bytes/bytes.dyn	187	27	tests/sdk-api-contracts,tests/sdk-collections,tests/sdk-foundation,tests/sdk-hardening,tests/sdk-http-workers,tests/sdk-lifetimes,tests/sdk-namespaces,tests/sdk-process,tests/sdk-sqlite,tests/sdk-storage-contracts,tests/sdk-unicode-text,tests/sdk-watch,tests/stdlib-mem-extra
+compiler/std/c/c.dyn	79	28	tests/sdk-buffer-contracts,tests/stdlib-c
+compiler/std/c/char_linux_aarch64.dyn	3	1	tests/sdk-buffer-contracts,tests/stdlib-c
+compiler/std/c/char_linux_x86_64.dyn	3	1	tests/sdk-buffer-contracts,tests/stdlib-c
+compiler/std/c/darwin.dyn	4	3	tests/sdk-buffer-contracts,tests/stdlib-c
+compiler/std/c/linux.dyn	3	2	tests/sdk-buffer-contracts,tests/stdlib-c
+compiler/std/c/windows.dyn	4	3	tests/sdk-buffer-contracts,tests/stdlib-c
+compiler/std/compress/deflate/deflate.dyn	666	13	tests/deflate-encode,tests/sdk-depth,tests/stdlib-depth
+compiler/std/compress/gzip/gzip.dyn	21	5	tests/sdk-depth,tests/stdlib-depth
+compiler/std/compress/zstd/zstd.dyn	85	15	tests/sdk-zstd
+compiler/std/container/bit_set/bit_set.dyn	17	3	tests/sdk-tools,tests/stdlib-mem-extra
+compiler/std/container/ring/ring.dyn	23	5	tests/sdk-tools,tests/stdlib-mem-extra
+compiler/std/container/slot_map/slot_map.dyn	79	9	tests/sdk-layout
+compiler/std/container/string_map/string_map.dyn	93	9	tests/sdk-collections
+compiler/std/crypto/aead/aead.dyn	14	4	tests/sdk-aead
+compiler/std/crypto/aes/aes.dyn	9	3	tests/sdk-aead
+compiler/std/crypto/certificate/certificate.dyn	27	4	tests/sdk-crypto
+compiler/std/crypto/chacha20/chacha20.dyn	59	2	tests/sdk-crypto
+compiler/std/crypto/core/core.dyn	170	8	
+compiler/std/crypto/der/der.dyn	33	7	tests/sdk-crypto
+compiler/std/crypto/exchange/exchange.dyn	4	3	tests/sdk-aead
+compiler/std/crypto/hmac/hmac.dyn	5	1	tests/sdk-depth,tests/stdlib-depth
+compiler/std/crypto/kdf/kdf.dyn	37	3	tests/sdk-crypto
+compiler/std/crypto/password/password.dyn	28	1	tests/sdk-crypto
+compiler/std/crypto/pem/pem.dyn	49	2	tests/sdk-crypto
+compiler/std/crypto/random/random.dyn	3	1	tests/stdlib-depth
+compiler/std/crypto/sha2/sha2.dyn	8	6	tests/sdk-depth,tests/stdlib-depth
+compiler/std/crypto/signature/signature.dyn	5	4	tests/sdk-aead
+compiler/std/debug/debug.dyn	29	4	tests/sdk-tools
+compiler/std/dynlib/dynlib.dyn	57	12	tests/stdlib-dynlib
+compiler/std/encoding/base32/base32.dyn	117	6	tests/sdk-buffer-contracts,tests/sdk-data
+compiler/std/encoding/base64/base64.dyn	114	6	tests/sdk-buffer-contracts,tests/sdk-foundation,tests/stdlib-data
+compiler/std/encoding/binary/binary.dyn	96	16	tests/sdk-foundation,tests/stdlib-data,tests/stdlib-mem-extra
+compiler/std/encoding/csv/csv.dyn	147	11	tests/sdk-data
+compiler/std/encoding/encoding.dyn	4	2	
+compiler/std/encoding/hex/hex.dyn	73	6	tests/sdk-aead,tests/sdk-buffer-contracts,tests/sdk-crypto,tests/sdk-depth,tests/sdk-foundation,tests/stdlib-data,tests/stdlib-depth
+compiler/std/encoding/ini/ini.dyn	59	8	tests/sdk-data
+compiler/std/encoding/json/json.dyn	733	37	tests/json-dom,tests/sdk-api-contracts,tests/sdk-data,tests/sdk-hardening,tests/stdlib-app,tests/stdlib-contracts
+compiler/std/encoding/xml/namespaces.dyn	129	8	tests/sdk-data,tests/sdk-hardening,tests/sdk-lifetimes,tests/sdk-namespaces,tests/sdk-storage-contracts
+compiler/std/encoding/xml/xml.dyn	312	22	tests/sdk-data,tests/sdk-hardening,tests/sdk-lifetimes,tests/sdk-namespaces,tests/sdk-storage-contracts
+compiler/std/flags/flags.dyn	165	16	tests/sdk-boundaries,tests/sdk-buffer-contracts,tests/sdk-cli,tests/stdlib-app,tests/stdlib-cli,tests/stdlib-system
+compiler/std/fmt/fmt.dyn	216	20	tests/sdk-boundaries,tests/sdk-collections,tests/sdk-foundation,tests/sdk-system,tests/sdk-temporary,tests/sdk-watch,tests/stdlib-contracts,tests/stdlib-io,tests/stdlib-str
+compiler/std/fs/fs.dyn	441	47	tests/directory-listing,tests/memory-runtime,tests/sdk-system,tests/sdk-temporary,tests/sdk-watch,tests/stdlib-app,tests/stdlib-io,tests/stdlib-net-event,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-system
+compiler/std/fs/remove_tree.dyn	53	2	tests/directory-listing,tests/memory-runtime,tests/sdk-system,tests/sdk-temporary,tests/sdk-watch,tests/stdlib-app,tests/stdlib-io,tests/stdlib-net-event,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-system
+compiler/std/fs/watch/watch.dyn	79	24	tests/sdk-watch
+compiler/std/hash/hash.dyn	28	3	tests/sdk-foundation,tests/sdk-storage-contracts,tests/stdlib-data
+compiler/std/html/template/template.dyn	46	7	tests/sdk-template
+compiler/std/image/color/color.dyn	21	4	tests/sdk-image
+compiler/std/image/image.dyn	32	5	tests/lsp-public-struct,tests/sdk-image
+compiler/std/image/png/png.dyn	182	6	tests/sdk-image
+compiler/std/image/qoi/qoi.dyn	167	6	tests/sdk-image
+compiler/std/io/io.dyn	304	22	tests/io-print,tests/memory-runtime,tests/parser,tests/sdk-api-contracts,tests/sdk-archive,tests/sdk-boundaries,tests/sdk-bufio,tests/sdk-cli,tests/sdk-data,tests/sdk-depth,tests/sdk-foundation,tests/sdk-hardening,tests/sdk-lifetimes,tests/sdk-storage-contracts,tests/sdk-system,tests/sdk-template,tests/sdk-web,tests/sdk-zstd,tests/source-map,tests/stdlib-contracts,tests/stdlib-io,tests/stdlib-runtime,tests/terminal-print,tests/terminal-progress
+compiler/std/log/log.dyn	37	5	tests/sdk-cli,tests/stdlib-contracts,tests/stdlib-io
+compiler/std/math/math.dyn	68	14	tests/sdk-foundation,tests/stdlib-core-extra
+compiler/std/mem/linux.dyn	7	0	tests/json-dom,tests/memory-runtime,tests/owned-arenas,tests/process-arguments,tests/process-platform,tests/release-native,tests/sdk-api-contracts,tests/sdk-boundaries,tests/sdk-buffer-contracts,tests/sdk-collections,tests/sdk-data,tests/sdk-lifetimes,tests/sdk-mem,tests/sdk-pool-alignment,tests/sdk-process,tests/sdk-storage-contracts,tests/sdk-system,tests/sdk-template,tests/sdk-tls,tests/sdk-tls-native,tests/sdk-zstd,tests/selfhost-runtime,tests/stdlib-app,tests/stdlib-contracts,tests/stdlib-mem-extra,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-runtime,tests/stdlib-str,tests/target-macos-platform,tests/target-windows-platform,tests/vendor-packages/abi,tests/vendor-packages/curl
+compiler/std/mem/macos.dyn	7	0	tests/json-dom,tests/memory-runtime,tests/owned-arenas,tests/process-arguments,tests/process-platform,tests/release-native,tests/sdk-api-contracts,tests/sdk-boundaries,tests/sdk-buffer-contracts,tests/sdk-collections,tests/sdk-data,tests/sdk-lifetimes,tests/sdk-mem,tests/sdk-pool-alignment,tests/sdk-process,tests/sdk-storage-contracts,tests/sdk-system,tests/sdk-template,tests/sdk-tls,tests/sdk-tls-native,tests/sdk-zstd,tests/selfhost-runtime,tests/stdlib-app,tests/stdlib-contracts,tests/stdlib-mem-extra,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-runtime,tests/stdlib-str,tests/target-macos-platform,tests/target-windows-platform,tests/vendor-packages/abi,tests/vendor-packages/curl
+compiler/std/mem/mem.dyn	413	46	tests/json-dom,tests/memory-runtime,tests/owned-arenas,tests/process-arguments,tests/process-platform,tests/release-native,tests/sdk-api-contracts,tests/sdk-boundaries,tests/sdk-buffer-contracts,tests/sdk-collections,tests/sdk-data,tests/sdk-lifetimes,tests/sdk-mem,tests/sdk-pool-alignment,tests/sdk-process,tests/sdk-storage-contracts,tests/sdk-system,tests/sdk-template,tests/sdk-tls,tests/sdk-tls-native,tests/sdk-zstd,tests/selfhost-runtime,tests/stdlib-app,tests/stdlib-contracts,tests/stdlib-mem-extra,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-runtime,tests/stdlib-str,tests/target-macos-platform,tests/target-windows-platform,tests/vendor-packages/abi,tests/vendor-packages/curl
+compiler/std/mem/windows.dyn	15	0	tests/json-dom,tests/memory-runtime,tests/owned-arenas,tests/process-arguments,tests/process-platform,tests/release-native,tests/sdk-api-contracts,tests/sdk-boundaries,tests/sdk-buffer-contracts,tests/sdk-collections,tests/sdk-data,tests/sdk-lifetimes,tests/sdk-mem,tests/sdk-pool-alignment,tests/sdk-process,tests/sdk-storage-contracts,tests/sdk-system,tests/sdk-template,tests/sdk-tls,tests/sdk-tls-native,tests/sdk-zstd,tests/selfhost-runtime,tests/stdlib-app,tests/stdlib-contracts,tests/stdlib-mem-extra,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-runtime,tests/stdlib-str,tests/target-macos-platform,tests/target-windows-platform,tests/vendor-packages/abi,tests/vendor-packages/curl
+compiler/std/net/dns/dns.dyn	282	9	tests/net-protocol,tests/sdk-hardening
+compiler/std/net/http/concurrent/concurrent.dyn	99	5	tests/sdk-http-workers
+compiler/std/net/http/http.dyn	727	54	tests/net-protocol,tests/sdk-hardening,tests/sdk-http-workers,tests/sdk-web
+compiler/std/net/linux_aarch64.dyn	17	1	tests/net-event-aarch64,tests/net-protocol,tests/sdk-http-workers,tests/stdlib-app,tests/stdlib-net-event,tests/stdlib-system
+compiler/std/net/linux_x86_64.dyn	8	1	tests/net-event-aarch64,tests/net-protocol,tests/sdk-http-workers,tests/stdlib-app,tests/stdlib-net-event,tests/stdlib-system
+compiler/std/net/net.dyn	408	84	tests/net-event-aarch64,tests/net-protocol,tests/sdk-http-workers,tests/stdlib-app,tests/stdlib-net-event,tests/stdlib-system
+compiler/std/net/tls/tls.dyn	76	29	tests/sdk-tls,tests/sdk-tls-native,tests/stdlib-tls
+compiler/std/net/url/url.dyn	115	6	tests/sdk-boundaries,tests/sdk-data,tests/stdlib-data,tests/stdlib-foundation
+compiler/std/net/websocket/websocket.dyn	430	22	tests/sdk-web,tests/websocket
+compiler/std/os/linux/aarch64.dyn	2	0	tests/environment,tests/environment-contracts,tests/process-arguments,tests/sdk-system,tests/stdlib-app,tests/stdlib-net-event,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-runtime,tests/stdlib-system,tests/vendor-packages/abi,tests/vendor-packages/curl
+compiler/std/os/linux/linux.dyn	277	30	tests/environment,tests/environment-contracts,tests/process-arguments,tests/sdk-system,tests/stdlib-app,tests/stdlib-net-event,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-runtime,tests/stdlib-system,tests/vendor-packages/abi,tests/vendor-packages/curl
+compiler/std/os/linux/x86_64.dyn	2	0	tests/environment,tests/environment-contracts,tests/process-arguments,tests/sdk-system,tests/stdlib-app,tests/stdlib-net-event,tests/stdlib-os-expanded,tests/stdlib-process,tests/stdlib-runtime,tests/stdlib-system,tests/vendor-packages/abi,tests/vendor-packages/curl
+compiler/std/os/macos/macos.dyn	39	11	tests/target-macos-platform
+compiler/std/os/os.dyn	7	4	tests/selfhost-runtime
+compiler/std/os/windows/windows.dyn	79	14	tests/target-windows-platform
+compiler/std/path/path.dyn	164	13	tests/path-contracts,tests/sdk-boundaries,tests/sdk-system,tests/stdlib-app,tests/stdlib-os-expanded
+compiler/std/process/linux.dyn	44	0	tests/process-platform,tests/sdk-process,tests/sdk-storage-contracts
+compiler/std/process/macos.dyn	125	0	tests/process-platform,tests/sdk-process,tests/sdk-storage-contracts
+compiler/std/process/process.dyn	107	16	tests/process-platform,tests/sdk-process,tests/sdk-storage-contracts
+compiler/std/process/windows.dyn	188	0	tests/process-platform,tests/sdk-process,tests/sdk-storage-contracts
+compiler/std/profile/profile.dyn	46	8	tests/sdk-depth,tests/stdlib-profile
+compiler/std/progress/progress.dyn	21	7	tests/sdk-cli
+compiler/std/rand/rand.dyn	29	5	tests/sdk-foundation,tests/stdlib-foundation
+compiler/std/reflect/reflect.dyn	50	7	tests/sdk-tools,tests/stdlib-reflect
+compiler/std/semver/semver.dyn	160	6	tests/sdk-foundation
+compiler/std/sort/sort.dyn	64	5	tests/sdk-foundation,tests/stdlib-core-extra
+compiler/std/strings/strings.dyn	456	42	tests/path-contracts,tests/sdk-api-contracts,tests/sdk-boundaries,tests/sdk-buffer-contracts,tests/sdk-data,tests/sdk-depth,tests/sdk-foundation,tests/sdk-system,tests/stdlib-cli,tests/stdlib-foundation,tests/stdlib-str,tests/stdlib-testing,tests/stdlib-text-extra,tests/vendor-packages/curl
+compiler/std/sync/sync.dyn	106	33	tests/release-concurrency,tests/sdk-http-workers,tests/sdk-tools,tests/stdlib-thread,tests/thread-aarch64
+compiler/std/terminal/terminal.dyn	124	13	tests/memory-runtime,tests/source-map,tests/stdlib-io,tests/stdlib-os-expanded,tests/stdlib-runtime,tests/stdlib-system,tests/terminal-print,tests/terminal-progress
+compiler/std/testing/property.dyn	49	3	tests/assert-message,tests/environment-contracts,tests/sdk-boundaries,tests/sdk-property,tests/sdk-temporary,tests/sdk-tools,tests/sdk-watch,tests/stdlib-app,tests/stdlib-dynlib,tests/stdlib-net-event,tests/stdlib-profile,tests/stdlib-testing,tests/stdlib-tls
+compiler/std/testing/temporary.dyn	23	4	tests/assert-message,tests/environment-contracts,tests/sdk-boundaries,tests/sdk-property,tests/sdk-temporary,tests/sdk-tools,tests/sdk-watch,tests/stdlib-app,tests/stdlib-dynlib,tests/stdlib-net-event,tests/stdlib-profile,tests/stdlib-testing,tests/stdlib-tls
+compiler/std/testing/testing.dyn	56	18	tests/assert-message,tests/environment-contracts,tests/sdk-boundaries,tests/sdk-property,tests/sdk-temporary,tests/sdk-tools,tests/sdk-watch,tests/stdlib-app,tests/stdlib-dynlib,tests/stdlib-net-event,tests/stdlib-profile,tests/stdlib-testing,tests/stdlib-tls
+compiler/std/text/regex/regex.dyn	431	11	tests/sdk-depth,tests/sdk-hardening,tests/stdlib-depth
+compiler/std/text/scanner/scanner.dyn	47	7	tests/sdk-layout
+compiler/std/text/template/template.dyn	98	8	tests/sdk-template
+compiler/std/thread/thread.dyn	33	5	tests/release-concurrency,tests/sdk-http-workers,tests/stdlib-thread,tests/thread-aarch64
+compiler/std/time/time.dyn	118	22	tests/sdk-system,tests/stdlib-runtime,tests/stdlib-str
+compiler/std/unicode/text/graphemes.dyn	43	4	tests/sdk-storage-contracts,tests/sdk-unicode-text
+compiler/std/unicode/text/tables_generated.dyn	2538	0	tests/sdk-storage-contracts,tests/sdk-unicode-text
+compiler/std/unicode/text/text.dyn	154	12	tests/sdk-storage-contracts,tests/sdk-unicode-text
+compiler/std/unicode/utf16/utf16.dyn	54	6	tests/sdk-layout
+compiler/std/unicode/utf8/utf8.dyn	108	9	tests/sdk-foundation,tests/stdlib-str,tests/stdlib-text-extra
+compiler/vendor/archive/archive.dyn	56	15	
+compiler/vendor/box2d/box2d.dyn	47	21	
+compiler/vendor/cgltf/cgltf.dyn	76	34	
+compiler/vendor/curl/curl.dyn	52	4	tests/vendor-packages/curl
+compiler/vendor/enet/enet.dyn	68	24	
+compiler/vendor/lua/lua.dyn	57	11	
+compiler/vendor/lz4/lz4.dyn	28	5	
+compiler/vendor/microui/microui.dyn	61	21	
+compiler/vendor/miniaudio/miniaudio.dyn	80	17	
+compiler/vendor/opengl/opengl.dyn	118	15	
+compiler/vendor/openssl/crypto/crypto.dyn	136	11	
+compiler/vendor/openssl/crypto/raw_generated.dyn	28	0	
+compiler/vendor/openssl/tls/raw_generated.dyn	31	0	
+compiler/vendor/openssl/tls/tls.dyn	255	27	
+compiler/vendor/pcre2/pcre2.dyn	44	15	
+compiler/vendor/sdl3/gl.dyn	25	10	tests/sdk-sdl3,tests/vendor-packages/abi
+compiler/vendor/sdl3/image/image.dyn	21	2	tests/vendor-packages/abi
+compiler/vendor/sdl3/microui/microui.dyn	12	2	
+compiler/vendor/sdl3/mixer/mixer.dyn	56	17	
+compiler/vendor/sdl3/raw_generated.dyn	36	0	tests/sdk-sdl3,tests/vendor-packages/abi
+compiler/vendor/sdl3/sdl3.dyn	164	83	tests/sdk-sdl3,tests/vendor-packages/abi
+compiler/vendor/sdl3/surface.dyn	20	9	tests/sdk-sdl3,tests/vendor-packages/abi
+compiler/vendor/sdl3/ttf/ttf.dyn	39	9	tests/vendor-packages/abi
+compiler/vendor/sqlite/raw_generated.dyn	26	0	tests/lsp-completion,tests/sdk-sqlite
+compiler/vendor/sqlite/sqlite.dyn	40	6	tests/lsp-completion,tests/sdk-sqlite
+compiler/vendor/sqlite/statement.dyn	127	21	tests/lsp-completion,tests/sdk-sqlite
+compiler/vendor/sqlite/transaction.dyn	30	9	tests/lsp-completion,tests/sdk-sqlite
+compiler/vendor/stb/image_resize/image_resize.dyn	21	1	
+compiler/vendor/stb/rect_pack/rect_pack.dyn	19	3	
+compiler/vendor/tree_sitter/raw.dyn	14	0	tests/vendor-packages/abi
+compiler/vendor/tree_sitter/tree_sitter.dyn	48	22	tests/vendor-packages/abi
+compiler/vendor/vulkan/raw_generated.dyn	1	0	tests/sdk-vulkan
+compiler/vendor/vulkan/vulkan.dyn	25	10	tests/sdk-vulkan
+compiler/vendor/zstd/raw_generated.dyn	11	0	tests/vendor-import
+compiler/vendor/zstd/zstd.dyn	77	15	tests/vendor-import

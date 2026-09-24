@@ -1,0 +1,35 @@
+use "std/mem"
+use "std/observe"
+use "std/container/slot_map" slots
+fn expect(ok: bool) { if !ok { #panic("observe contract") } }
+fn main() {
+  events:[4]observe.Event=[] log:=observe.log(events[..])
+  storage:[64]u8=[] arena:=mem.arena_from_buffer(storage[..])
+  arena.events=&log arena.event_resource=42
+  _=mem.arena_push(&arena,16,1)
+  failed:=mem.arena_try_push(&arena,100,1)
+  expect(!failed.ok)
+  mem.arena_reset(&arena)
+  snapshot:=mem.arena_snapshot(&arena)
+  expect(snapshot.used==0 && snapshot.peak_used==16 && snapshot.allocation_failures==1)
+  expect(mem.arena_release(&arena).ok)
+  observed:=observe.recorded(&log)
+  expect(#len(observed)==4 && observed[0].kind==observe.Kind.Allocated)
+  expect(observed[0].resource==42 && observed[0].value==16)
+  expect(observed[1].kind==observe.Kind.AllocationFailed && observed[2].kind==observe.Kind.Reclaimed)
+  expect(observed[3].kind==observe.Kind.Released)
+  expect(!observe.record(&log,observe.Event{kind:observe.Kind.Checkpoint}) && log.dropped==1)
+  observe.clear(&log) expect(log.count==0 && log.dropped==0)
+  data:[4]u8=[] generations:[1]u32=[] words:[1]u64=[]
+  map:=slots.init(data[..],generations[..],words[..],4)
+  handle:=slots.insert(&map,"live")
+  case slots.lookup(&map,handle) {
+    slots.Lookup.Missing => { #panic("live handle missing") },
+    slots.Lookup.Present bytes => { expect(bytes[0]=='l') },
+  }
+  expect(slots.remove(&map,handle))
+  case slots.lookup(&map,handle) {
+    slots.Lookup.Missing => {},
+    slots.Lookup.Present _ => { #panic("stale handle present") },
+  }
+}

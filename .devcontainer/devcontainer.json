@@ -1,0 +1,9 @@
+{
+  "name": "Dyn developer preview",
+  "build": {"dockerfile": "Dockerfile", "context": ".."},
+  "remoteUser": "ubuntu",
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "forwardPorts": [8765],
+  "portsAttributes": {"8765": {"label": "Dyn playground", "onAutoForward": "notify"}},
+  "customizations": {"vscode": {"settings": {"files.associations": {"*.dyn": "plaintext"}}}}
+}

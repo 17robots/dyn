@@ -1,0 +1,7 @@
+use "./lib" first
+use "./lib" second
+
+fn main() {
+  value := first.answer()
+  if value != second.answer() { for {} }
+}

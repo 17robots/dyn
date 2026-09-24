@@ -1,0 +1,43 @@
+#target(kernel: linux)
+
+use "std/observe" observe
+
+// A borrowed directory descriptor limits file lookup through this interface.
+// Descriptor owner keeps it open; do not close/reuse it while a capability exists.
+// This is not a sandbox for native code with unrestricted syscall access.
+pub struct Directory { descriptor: isize = -1, events: *observe.Log, resource: u64 }
+pub enum ReadResult { Read: usize, Failed: isize }
+struct OpenHow { flags: u64, mode: u64, resolve: u64 }
+
+// Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or
+// magic links. Opens read-only, never follows final/intermediate symlinks, and closes
+// its temporary file descriptor before returning. No heap allocation.
+// Destination receives at most one read; partial reads are ordinary progress.
+// ENOSYS is reported on kernels lacking openat2; no insecure fallback.
+pub fn read(directory: *const Directory, path: []const u8, destination: []u8) ReadResult {
+  if #len(path) == 0 || #len(path) > 4095 || path[0] == '/' { return ReadResult.Failed(-22) }
+  name: [4096]u8 = []
+  i: usize = 0
+  for i < #len(path) {
+    if path[i] == 0 { return ReadResult.Failed(-22) }
+    name[i] = path[i] i += 1
+  }
+  // O_CLOEXEC | O_NONBLOCK, RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | NO_MAGICLINKS.
+  how := OpenHow{flags: 526336, resolve: 14}
+  descriptor := #syscall(437, directory.descriptor, &name[0], &how, #sizeof(OpenHow))
+  if descriptor < 0 {
+    if directory.events != nil { _ = observe.record(directory.events,
+      observe.Event{kind: observe.Kind.Denied, resource: directory.resource, source: "std/fs/capability"}) }
+    return ReadResult.Failed(descriptor)
+  }
+  if directory.events != nil { _ = observe.record(directory.events,
+    observe.Event{kind: observe.Kind.ResourceOpened, resource: directory.resource, source: "std/fs/capability"}) }
+  value: isize = 0
+  if #len(destination) != 0 { value = #syscall(0, descriptor, &destination[0], #len(destination)) }
+  closed := #syscall(3, descriptor)
+  if directory.events != nil { _ = observe.record(directory.events,
+    observe.Event{kind: observe.Kind.ResourceClosed, resource: directory.resource, source: "std/fs/capability"}) }
+  if value < 0 { return ReadResult.Failed(value) }
+  if closed < 0 { return ReadResult.Failed(closed) }
+  return ReadResult.Read(#cast(usize) value)
+}

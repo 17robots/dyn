@@ -1,0 +1,18 @@
+use "std/profile"
+use "std/testing"
+
+fn main() {
+  storage: [1]profile.Event = []
+  trace := profile.trace(storage[..])
+  first := profile.begin("work")
+  testing.expect(profile.finish(&trace, first), "record event")
+  events := profile.recorded(&trace)
+  testing.expect_equal_usize(#len(events), 1, "event count")
+  testing.expect_equal_bytes(events[0].name, "work", "event name")
+  testing.expect(events[0].duration_nanoseconds >= 0, "event duration")
+  overflow := profile.begin("overflow")
+  testing.expect_false(profile.finish(&trace, overflow), "bounded trace")
+  testing.expect_equal_usize(trace.dropped, 1, "dropped count")
+  profile.clear(&trace)
+  testing.expect_equal_usize(trace.count, 0, "clear count")
+}
