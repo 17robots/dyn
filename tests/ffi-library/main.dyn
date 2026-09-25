@@ -1,0 +1,5 @@
+use "./native"
+
+fn main() {
+  if native.add(20, 22) != 42 { #panic("linked library call failed") }
+}

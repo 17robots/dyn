@@ -1,0 +1,13 @@
+pub fn port(text: []const u8) u32 {
+  value: u32 = 0
+  for byte in text {
+    if byte < 48 || byte > 57 { return 0 }
+    digit: u32 = byte - 48
+    if value > 6553 { return 0 }
+    if value == 6553 && digit > 5 { return 0 }
+    value = value * 10 + digit
+  }
+  return value
+}
+
+fn main() {}

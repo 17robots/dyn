@@ -1,0 +1,17 @@
+const large_global: [1048576]u8 = [5]
+
+struct LargeRecord { data: [65536]u16, tag: i32 = 19 }
+
+fn main() {
+  record := LargeRecord{}
+  if record.data[0] != 0 || record.data[65535] != 0 || record.tag != 19 { #panic("large record initialization") }
+  record.data[65535] = 23
+  if record.data[65535] != 23 { #panic("large record field write") }
+  uninitialized: LargeRecord
+  if uninitialized.data[65535] != 0 { #panic("implicit aggregate zeroing") }
+  storage: [1048576]u8 = [3]
+  if storage[0] != 3 || storage[1048575] != 0 { #panic("partial array initialization failed") }
+  storage[1048575] = 7
+  if storage[1048575] != 7 { #panic("large array initialization failed") }
+  if large_global[0] != 5 || large_global[1048575] != 0 { #panic("large global initialization failed") }
+}

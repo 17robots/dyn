@@ -1,0 +1,7 @@
+fn main() {
+  answer := 42
+  answer = 7
+  ready := true
+  ready = false
+  return
+}

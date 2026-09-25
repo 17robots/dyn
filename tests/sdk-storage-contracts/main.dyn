@@ -1,0 +1,77 @@
+use "std/unicode/text" text
+use "std/archive/zip" zip
+use "std/archive/tar" tar
+use "std/encoding/xml" xml
+use "std/process" process
+use "std/mem" mem
+use "std/io" io
+use "std/bytes" bytes
+use "std/hash" hashing
+
+fn fail_read(context: rawptr, destination: []u8) io.Result {
+  _ = context _ = destination
+  return io.Result{ status: io.Status.Error, error: -5 }
+}
+
+fn main() {
+  buffer: [128]u8 = [] buffer[0] = 'A'
+  // Rejected overlap must not corrupt input, even before capacity checks.
+  folded := text.case_fold(buffer[..], buffer[..1])
+  if folded.ok || folded.error != text.ErrorKind.Overlap || folded.written != 0 || buffer[0] != 'A' { #panic("fold overlap") }
+  work: [16]u32 = []
+  normalized := text.normalize(buffer[..], buffer[..1], text.Form.NFC, work[..])
+  if normalized.ok || normalized.error != text.ErrorKind.Overlap || normalized.written != 0 || buffer[0] != 'A' { #panic("normalize overlap") }
+  raw := (#cast(*u8) &work[0])[..64] raw[0] = 'a'
+  aliased := text.normalize(buffer[..], raw[..1], text.Form.NFC, work[..])
+  if aliased.ok || raw[0] != 'a' { #panic("normalize work/input overlap") }
+  if text.normalize(raw[..], "a", text.Form.NFC, work[..]).ok { #panic("normalize work/output overlap") }
+  exact := text.case_fold(buffer[..2], "ß")
+  if !exact.ok || exact.written != 2 || !bytes.equal(buffer[..2], "ss") { #panic("fold exact capacity") }
+  short := text.case_fold(buffer[..1], "aé")
+  if short.ok || short.error != text.ErrorKind.Capacity || short.written != 1 || buffer[0] != 'a' { #panic("fold partial prefix") }
+  malformed: [2]u8 = ['a', 255]
+  invalid := text.case_fold(buffer[..], malformed[..])
+  if invalid.ok || invalid.error != text.ErrorKind.InvalidUtf8 || invalid.written != 1 { #panic("fold invalid prefix") }
+  buffer[0] = 91
+  if text.normalize(buffer[..], "a", text.Form.NFC, work[..0]).error != text.ErrorKind.Capacity || buffer[0] != 91 { #panic("normalize work exhaustion") }
+  if !text.normalize(buffer[..0], "", text.Form.NFC, work[..0]).ok { #panic("normalize empty") }
+
+  buffer[0] = 'a' buffer[1] = 'b' buffer[2] = 'c'
+  entry := zip.Entry{ payload: buffer[..3], compressed_size: 3, uncompressed_size: 3, checksum: hashing.crc32(buffer[..3]) }
+  if zip.extract(buffer[1..4], entry).ok || !bytes.equal(buffer[..3], "abc") { #panic("ZIP overlap preflight") }
+  if zip.extract(buffer[8..10], entry).error != zip.ErrorKind.Capacity { #panic("ZIP capacity") }
+  extracted := zip.extract(buffer[8..11], entry)
+  if !extracted.ok || !bytes.equal(extracted.data, "abc") { #panic("ZIP exact capacity") }
+  entry.checksum = 0
+  if zip.extract(buffer[8..11], entry).error != zip.ErrorKind.Checksum { #panic("ZIP checksum") }
+  cursor := io.cursor("payload")
+  zip_stream := zip.stream_reader(io.cursor_reader(&cursor), buffer[..30], buffer[20..40], buffer[40..])
+  if zip.next_stream(&zip_stream).ok || cursor.offset != 0 { #panic("ZIP stream overlap") }
+  tar_stream := tar.stream_reader(io.cursor_reader(&cursor), buffer[..], buffer[..])
+  if tar.next_stream(&tar_stream).error != -22 || cursor.offset != 0 { #panic("TAR stream overlap") }
+
+  header: [512]u8 = []
+  failed_tar := tar.stream_reader(io.Reader{ read: &fail_read }, header[..], buffer[..])
+  if tar.next_stream(&failed_tar).error != -5 || tar.next_stream(&failed_tar).error != -5 { #panic("TAR source error") }
+
+  bindings: [2]xml.NamespaceBinding = [] frames: [2]xml.NamespaceFrame = []
+  context := xml.namespaces(bindings[..], frames[..], buffer[..2])
+  scan := xml.scanner("<root/>") event := xml.next(&scan).event
+  failure := xml.namespace_enter(&context, event)
+  if failure.ok || failure.error != xml.ErrorKind.Capacity || context.depth != 0 || context.used != 0 || context.count != 0 { #panic("namespace capacity rollback") }
+  context = xml.namespaces(bindings[..], frames[..], buffer[..])
+  buffer[0] = 'x'
+  overlap := xml.namespace_enter(&context, xml.Event{ kind: xml.Kind.Start, name: buffer[..1] })
+  if overlap.ok || overlap.error != xml.ErrorKind.Overlap || context.used != 0 || buffer[0] != 'x' { #panic("namespace overlap") }
+  scan = xml.scanner("<root xmlns:p='u'/>") event = xml.next(&scan).event
+  entered := xml.namespace_enter(&context, event)
+  if !entered.ok { #panic("namespace enter") }
+  saved := context.used
+  if xml.namespace_leave(&context, "wrong") || context.used != saved || context.depth != 1 { #panic("namespace wrong leave rollback") }
+  if !xml.namespace_leave(&context, "root") || context.used != 0 { #panic("namespace leave") }
+
+  arena := mem.arena_from_buffer(buffer[..0])
+  args: [1][]const u8 = ["absent"]
+  captured := process.capture(&arena, "/missing", args[..], process.options(), buffer[..8], buffer[4..12], 0)
+  if captured.ok || captured.error != -22 || arena.offset != 0 { #panic("capture overlap preflight") }
+}

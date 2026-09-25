@@ -1,0 +1,312 @@
+use "std/io" stream
+use "std/unicode/utf8" utf8
+use "std/bytes" bytes
+
+pub enum Kind { Start, End, Text, Comment, Processing, Cdata }
+pub enum ErrorKind { None, Syntax, Capacity, Mismatched, Overlap }
+pub struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }
+pub struct Scanner { source: []const u8, offset: usize, error_offset: usize, error: ErrorKind }
+pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, system_error: isize }
+pub struct Result { event: Event, error: ErrorKind, ok: bool }
+pub struct AttributeScanner { source: []const u8, offset: usize, error: ErrorKind }
+pub struct Attribute { name: []const u8, value: []const u8, error: ErrorKind, ok: bool }
+pub struct Writer { sink: stream.Writer, error: isize, failed: bool }
+
+pub fn scanner(source: []const u8) Scanner { return Scanner{ source: source } }
+pub fn stream_scanner(input: stream.Reader, storage: []u8) StreamScanner {
+  return StreamScanner{ input: input, storage: storage }
+}
+
+fn shift_stream(state: *StreamScanner) {
+  if state.consumed == 0 { return }
+  remaining := state.used - state.consumed
+  i: usize = 0 for i < remaining { state.storage[i] = state.storage[state.consumed + i] i += 1 }
+  state.used = remaining state.consumed = 0 state.scanned = 0 state.quote = 0
+}
+
+// Events borrow storage until the next call. Text may be returned in multiple events.
+pub fn next_stream(state: *StreamScanner) Result {
+  shift_stream(state)
+  for true {
+    if state.used > 0 {
+      complete := state.storage[0] != '<'
+      // Delay classification until the comment prefix can be distinguished.
+      if state.used >= 9 || state.ended || (state.used >= 4 && state.storage[2] != '[') {
+        comment := starts(state.storage[..state.used], 0, "<!--")
+        cdata := starts(state.storage[..state.used], 0, "<![CDATA[")
+        for !complete && state.scanned < state.used {
+          at := state.scanned byte := state.storage[at] state.scanned += 1
+          if cdata { complete = at >= 2 && byte == '>' && state.storage[at - 1] == ']' && state.storage[at - 2] == ']' }
+          else if comment { complete = at >= 2 && byte == '>' && state.storage[at - 1] == '-' && state.storage[at - 2] == '-' }
+          else if state.quote != 0 { if byte == state.quote { state.quote = 0 } }
+          else if byte == 39 || byte == '"' { state.quote = byte }
+          else if byte == '>' { complete = true }
+        }
+      }
+      if complete || state.ended {
+        candidate := scanner(state.storage[..state.used])
+        parsed := next(&candidate)
+        if parsed.ok { state.consumed = candidate.offset }
+        return parsed
+      }
+    } else if state.ended { return Result{} }
+    if state.used == #len(state.storage) { return Result{ error: ErrorKind.Capacity } }
+    input_result := stream.read(state.input, state.storage[state.used..])
+    if input_result.status == stream.Status.Error { state.system_error = input_result.error return Result{ error: ErrorKind.Syntax } }
+    if input_result.transferred > #len(state.storage) - state.used { state.system_error = -5 return Result{ error: ErrorKind.Syntax } }
+    state.used += input_result.transferred
+    if input_result.status == stream.Status.End || input_result.transferred == 0 { state.ended = true }
+  }
+  return Result{}
+}
+pub fn writer(destination_writer: stream.Writer) Writer { return Writer{ sink: destination_writer } }
+
+fn emit(state: *Writer, bytes: []const u8) bool {
+  if state.failed { return false }
+  result := stream.write_all(state.sink, bytes)
+  if result.status == stream.Status.Error { state.failed = true state.error = result.error return false }
+  return true
+}
+
+fn escaped(state: *Writer, value: []const u8, attribute: bool) bool {
+  start: usize = 0
+  i: usize = 0
+  for i < #len(value) {
+    replacement: []const u8 = ""
+    if value[i] == '&' { replacement = "&amp;" }
+    else if value[i] == '<' { replacement = "&lt;" }
+    else if value[i] == '>' { replacement = "&gt;" }
+    else if attribute && value[i] == '"' { replacement = "&quot;" }
+    if #len(replacement) > 0 {
+      if i > start && !emit(state, value[start..i]) { return false }
+      if !emit(state, replacement) { return false }
+      start = i + 1
+    }
+    i += 1
+  }
+  return start == #len(value) || emit(state, value[start..])
+}
+
+pub fn write_text(state: *Writer, value: []const u8) bool { return valid_characters(value) && escaped(state, value, false) }
+pub fn write_start(state: *Writer, name: []const u8) bool {
+  return #len(name) > 0 && name_end(name, 0) == #len(name) && emit(state, "<") && emit(state, name)
+}
+pub fn write_attribute(state: *Writer, name: []const u8, value: []const u8) bool {
+  return #len(name) > 0 && name_end(name, 0) == #len(name) && valid_characters(value) && emit(state, " ") && emit(state, name) && emit(state, "=\"") &&
+    escaped(state, value, true) && emit(state, "\"")
+}
+pub fn write_start_end(state: *Writer, self_closing: bool) bool {
+  if self_closing { return emit(state, "/>" ) }
+  return emit(state, ">")
+}
+pub fn write_end(state: *Writer, name: []const u8) bool {
+  return #len(name) > 0 && name_end(name, 0) == #len(name) && emit(state, "</") && emit(state, name) && emit(state, ">")
+}
+fn whitespace(byte: u8) bool { return byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n' }
+fn starts(source: []const u8, at: usize, expected: []const u8) bool {
+  if at > #len(source) || #len(expected) > #len(source) - at { return false }
+  return bytes.equal(source[at..at + #len(expected)], expected)
+}
+fn fail(state: *Scanner, at: usize, kind: ErrorKind) Result { state.error = kind state.error_offset = at return Result{ error: kind } }
+
+// XML 1.0 Fifth Edition NameStartChar/NameChar, decoded as Unicode scalars.
+fn name_start(value: u32) bool {
+  return value == 58 || value == 95 || (value >= 65 && value <= 90) || (value >= 97 && value <= 122) ||
+    (value >= 192 && value <= 214) || (value >= 216 && value <= 246) || (value >= 248 && value <= 767) ||
+    (value >= 880 && value <= 893) || (value >= 895 && value <= 8191) || (value >= 8204 && value <= 8205) ||
+    (value >= 8304 && value <= 8591) || (value >= 11264 && value <= 12271) || (value >= 12289 && value <= 55295) ||
+    (value >= 63744 && value <= 64975) || (value >= 65008 && value <= 65533) || (value >= 65536 && value <= 983039)
+}
+fn name_end(source: []const u8, start: usize) usize {
+  at := start first := utf8.decode(source, at)
+  if !first.ok || !name_start(first.codepoint) { return start }
+  at += first.width
+  for at < #len(source) {
+    part := utf8.decode(source, at)
+    if !part.ok { break }
+    value := part.codepoint
+    if !name_start(value) && value != 45 && value != 46 && !(value >= 48 && value <= 57) && value != 183 && !(value >= 768 && value <= 879) && !(value >= 8255 && value <= 8256) { break }
+    at += part.width
+  }
+  return at
+}
+fn xml_character(value: u32) bool {
+  return value == 9 || value == 10 || value == 13 || (value >= 32 && value <= 55295) ||
+    (value >= 57344 && value <= 65533) || (value >= 65536 && value <= 1114111)
+}
+fn valid_characters(text: []const u8) bool {
+  at: usize = 0
+  for at < #len(text) {
+    decoded := utf8.decode(text, at)
+    if !decoded.ok || !xml_character(decoded.codepoint) { return false }
+    at += decoded.width
+  }
+  return true
+}
+// Unicode names, UTF-8 values, predefined/numeric entities; no DTD expansion.
+fn valid_text(text: []const u8, attribute: bool) bool {
+  at: usize = 0
+  for at < #len(text) {
+    decoded := utf8.decode(text, at)
+    if !decoded.ok || !xml_character(decoded.codepoint) { return false }
+    if attribute && text[at] == '<' { return false }
+    if !attribute && starts(text, at, "]]>") { return false }
+    if text[at] == '&' {
+      end := at + 1
+      for end < #len(text) && text[end] != ';' { end += 1 }
+      if end == #len(text) { return false }
+      entity := text[at + 1..end]
+      if #len(entity) > 0 && entity[0] == '#' {
+        index: usize = 1 base: u32 = 10 value: u32 = 0
+        if index < #len(entity) && entity[index] == 'x' { base = 16 index += 1 }
+        if index == #len(entity) { return false }
+        for index < #len(entity) {
+          byte := entity[index] digit: u32 = 16
+          if byte >= '0' && byte <= '9' { digit = #cast(u32) (byte - '0') }
+          else if byte >= 'a' && byte <= 'f' { digit = #cast(u32) (byte - 'a') + 10 }
+          else if byte >= 'A' && byte <= 'F' { digit = #cast(u32) (byte - 'A') + 10 }
+          if digit >= base || value > (1114111 - digit) / base { return false }
+          value = value * base + digit index += 1
+        }
+        if !xml_character(value) { return false }
+      } else if !bytes.equal(entity, "amp") && !bytes.equal(entity, "lt") && !bytes.equal(entity, "gt") &&
+        !bytes.equal(entity, "apos") && !bytes.equal(entity, "quot") { return false }
+      at = end + 1
+    } else { at += decoded.width }
+  }
+  return true
+}
+
+pub fn next(state: *Scanner) Result {
+  if state.error != ErrorKind.None || state.offset == #len(state.source) { return Result{ error: state.error } }
+  start := state.offset
+  if state.source[start] != '<' {
+    text_end := start for text_end < #len(state.source) && state.source[text_end] != '<' { text_end += 1 }
+    state.offset = text_end
+    return Result{ event: Event{ kind: Kind.Text, text: state.source[start..text_end] }, ok: true }
+  }
+  if starts(state.source, start, "<![CDATA[") {
+    cdata_end := start + 9
+    for cdata_end + 3 <= #len(state.source) && !starts(state.source, cdata_end, "]]>") { cdata_end += 1 }
+    if cdata_end + 3 > #len(state.source) { return fail(state, start, ErrorKind.Syntax) }
+    state.offset = cdata_end + 3
+    return Result{ event: Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }, ok: true }
+  }
+  if starts(state.source, start, "<!--") {
+    comment_end := start + 4 for comment_end + 3 <= #len(state.source) && !starts(state.source, comment_end, "-->") { comment_end += 1 }
+    if comment_end + 3 > #len(state.source) { return fail(state, start, ErrorKind.Syntax) }
+    state.offset = comment_end + 3
+    return Result{ event: Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }, ok: true }
+  }
+  processing := starts(state.source, start, "<?")
+  closing := starts(state.source, start, "</")
+  at := start + 1 if processing || closing { at += 1 }
+  name_start := at at = name_end(state.source, at)
+  if at == name_start { return fail(state, at, ErrorKind.Syntax) }
+  name := state.source[name_start..at]
+  if closing {
+    for at < #len(state.source) && whitespace(state.source[at]) { at += 1 }
+    if at >= #len(state.source) || state.source[at] != '>' { return fail(state, at, ErrorKind.Syntax) }
+    state.offset = at + 1 return Result{ event: Event{ kind: Kind.End, name: name }, ok: true }
+  }
+  attributes_start := at
+  quote: u8 = 0
+  tag_end := at
+  for tag_end < #len(state.source) {
+    byte := state.source[tag_end]
+    if quote != 0 { if byte == quote { quote = 0 } }
+    else if byte == '"' || byte == 39 { quote = byte }
+    else if processing && byte == '?' && tag_end + 1 < #len(state.source) && state.source[tag_end + 1] == '>' { break }
+    else if !processing && byte == '>' { break }
+    tag_end += 1
+  }
+  if tag_end >= #len(state.source) || quote != 0 { return fail(state, tag_end, ErrorKind.Syntax) }
+  terminator := tag_end
+  if processing { state.offset = tag_end + 2 }
+  else { state.offset = tag_end + 1 }
+  attributes_end := terminator
+  for attributes_end > attributes_start && whitespace(state.source[attributes_end - 1]) { attributes_end -= 1 }
+  self_closing := false
+  if !processing && attributes_end > attributes_start && state.source[attributes_end - 1] == '/' { self_closing = true attributes_end -= 1 }
+  for attributes_end > attributes_start && whitespace(state.source[attributes_end - 1]) { attributes_end -= 1 }
+  event_kind := Kind.Start if processing { event_kind = Kind.Processing }
+  return Result{ event: Event{ kind: event_kind, name: name, attributes: state.source[attributes_start..attributes_end], self_closing: self_closing }, ok: true }
+}
+
+pub fn attributes(event: Event) AttributeScanner { return AttributeScanner{ source: event.attributes } }
+fn attribute_error(state: *AttributeScanner) Attribute {
+  state.error = ErrorKind.Syntax
+  return Attribute{ error: state.error }
+}
+pub fn next_attribute(state: *AttributeScanner) Attribute {
+  if state.error != ErrorKind.None { return Attribute{ error: state.error } }
+  at := state.offset for at < #len(state.source) && whitespace(state.source[at]) { at += 1 }
+  if at == #len(state.source) { state.offset = at return Attribute{} }
+  if at == state.offset { return attribute_error(state) }
+  start := at at = name_end(state.source, at)
+  if at == start { return attribute_error(state) }
+  name := state.source[start..at]
+  for at < #len(state.source) && whitespace(state.source[at]) { at += 1 }
+  if at >= #len(state.source) || state.source[at] != '=' { return attribute_error(state) }
+  at += 1 for at < #len(state.source) && whitespace(state.source[at]) { at += 1 }
+  if at >= #len(state.source) || (state.source[at] != '"' && state.source[at] != 39) { return attribute_error(state) }
+  quote := state.source[at] at += 1 value_start := at
+  for at < #len(state.source) && state.source[at] != quote { at += 1 }
+  if at == #len(state.source) { return attribute_error(state) }
+  value := state.source[value_start..at]
+  if !valid_text(value, true) { return attribute_error(state) }
+  state.offset = at + 1
+  return Attribute{ name: name, value: value, ok: true }
+}
+fn valid_attributes(event: Event) bool {
+  scan := attributes(event)
+  for {
+    before := scan.offset
+    item := next_attribute(&scan)
+    if !item.ok { return item.error == ErrorKind.None }
+    previous := attributes(event)
+    for previous.offset < before {
+      other := next_attribute(&previous)
+      if !other.ok { break }
+      if bytes.equal(other.name, item.name) { return false }
+    }
+  }
+  return false
+}
+
+pub fn valid(source: []const u8, stack: [][]const u8) bool {
+  state := scanner(source) depth: usize = 0 roots: usize = 0
+  for {
+    item := next(&state)
+    if !item.ok {
+      return item.error == ErrorKind.None && depth == 0 && roots == 1
+    }
+    if item.event.kind == Kind.Text && !valid_text(item.event.text, false) { return false }
+    if item.event.kind == Kind.Cdata || item.event.kind == Kind.Comment {
+      if !valid_characters(item.event.text) { return false }
+      if item.event.kind == Kind.Cdata && depth == 0 { return false }
+    }
+    if item.event.kind == Kind.Comment {
+      i: usize = 0
+      for i < #len(item.event.text) {
+        if i + 1 < #len(item.event.text) && item.event.text[i] == '-' && item.event.text[i + 1] == '-' { return false }
+        i += 1
+      }
+      if #len(item.event.text) > 0 && item.event.text[#len(item.event.text) - 1] == '-' { return false }
+    }
+    if item.event.kind == Kind.Start {
+      if !valid_attributes(item.event) { return false }
+      if depth == 0 { roots += 1 }
+      if !item.event.self_closing {
+        if depth == #len(stack) { return false }
+        stack[depth] = item.event.name depth += 1
+      }
+    } else if item.event.kind == Kind.End {
+      if depth == 0 || !bytes.equal(stack[depth - 1], item.event.name) { return false }
+      depth -= 1
+    } else if item.event.kind == Kind.Text && depth == 0 {
+      for byte in item.event.text { if !whitespace(byte) { return false } }
+    }
+  }
+  return false
+}

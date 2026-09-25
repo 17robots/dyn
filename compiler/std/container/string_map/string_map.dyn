@@ -1,0 +1,93 @@
+use "std/mem" memory
+use "std/bytes" bytes
+use "std/hash" hashing
+
+// Keys are copied; values are caller-defined integer IDs/indices. Arena must
+// outlive the map. Removal/growth do not reclaim storage. Do not mutate entries
+// directly or copy a live map and then mutate both copies. No internal locking.
+pub enum ErrorKind { None, Capacity, Overflow }
+pub struct Entry { key: []const u8, value: usize, hash: u64, state: u8 }
+pub struct Map { entries: []Entry, length: usize }
+pub struct Lookup { value: usize, found: bool }
+pub struct Item { key: []const u8, value: usize, found: bool }
+
+fn locate(entries: []Entry, key: []const u8, hash: u64) usize {
+  if #len(entries) == 0 { return 0 }
+  index := #cast(usize) (hash % #cast(u64) #len(entries))
+  first_deleted := #len(entries)
+  scanned: usize = 0
+  for scanned < #len(entries) {
+    entry := entries[index]
+    if entry.state == 0 {
+      if first_deleted != #len(entries) { return first_deleted }
+      return index
+    }
+    if entry.state == 2 && first_deleted == #len(entries) { first_deleted = index }
+    if entry.state == 1 && entry.hash == hash && bytes.equal(entry.key, key) { return index }
+    index += 1 if index == #len(entries) { index = 0 }
+    scanned += 1
+  }
+  return first_deleted
+}
+
+pub fn get(state: *const Map, key: []const u8) Lookup {
+  index := locate(state.entries, key, hashing.hash64(key))
+  if index == #len(state.entries) || state.entries[index].state != 1 { return Lookup{} }
+  return Lookup{ value: state.entries[index].value, found: true }
+}
+
+// Transactional insertion: allocation failure preserves map, keys and arena mark.
+// Updates of existing keys allocate nothing. Growth keeps existing key bytes stable.
+pub fn put(state: *Map, arena: *memory.Arena, key: []const u8, value: usize) ErrorKind {
+  hash := hashing.hash64(key)
+  index := locate(state.entries, key, hash)
+  if index < #len(state.entries) && state.entries[index].state == 1 {
+    state.entries[index].value = value return ErrorKind.None
+  }
+  mark := memory.arena_mark(arena)
+  entries := state.entries
+  if state.length >= #len(entries) - #len(entries) / 4 {
+    capacity: usize = 8
+    maximum := #cast(usize) -1
+    if #len(entries) > 0 {
+      if #len(entries) > maximum / 2 { return ErrorKind.Overflow }
+      capacity = #len(entries) * 2
+    }
+    if capacity > maximum / #sizeof(Entry) { return ErrorKind.Overflow }
+    allocated := memory.arena_try_push(arena, capacity * #sizeof(Entry), #alignof(Entry))
+    if !allocated.ok { return ErrorKind.Capacity }
+    entries = (#cast(*Entry) allocated.memory)[..capacity]
+    for old in state.entries {
+      if old.state == 1 { entries[locate(entries, old.key, old.hash)] = old }
+    }
+    index = locate(entries, key, hash)
+  }
+  copied := memory.arena_try_push_uninit(arena, #len(key), 1)
+  if !copied.ok { memory.arena_rewind(arena, mark) return ErrorKind.Capacity }
+  stored := arena.data[..0]
+  if #len(key) > 0 { stored = copied.memory[..#len(key)] }
+  _ = memory.copy(stored, key)
+  entries[index] = Entry{ key: stored, value: value, hash: hash, state: 1 }
+  state.entries = entries state.length += 1
+  return ErrorKind.None
+}
+
+pub fn remove(state: *Map, key: []const u8) bool {
+  index := locate(state.entries, key, hashing.hash64(key))
+  if index == #len(state.entries) || state.entries[index].state != 1 { return false }
+  state.entries[index] = Entry{ state: 2 }
+  state.length -= 1
+  return true
+}
+
+// Begin with cursor=0. Mutation invalidates iteration; returned key bytes remain
+// borrowed from the arena. Iteration order is unspecified.
+pub fn next(state: *const Map, cursor: *usize) Item {
+  for cursor.* < #len(state.entries) {
+    index := cursor.* cursor.* += 1
+    if state.entries[index].state == 1 {
+      return Item{ key: state.entries[index].key, value: state.entries[index].value, found: true }
+    }
+  }
+  return Item{}
+}

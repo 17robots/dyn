@@ -1,0 +1,17 @@
+fn main() {
+  inferred := nil
+  value := 1
+  bad_address := &1
+  bad_deref := value.*
+  pointer := &value
+  sum := pointer + pointer
+  ordered := pointer < pointer
+  raw: rawptr = nil
+  bad_raw := raw.*
+  _ = inferred
+  _ = bad_address
+  _ = bad_deref
+  _ = sum
+  _ = ordered
+  _ = bad_raw
+}

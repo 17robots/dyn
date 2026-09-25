@@ -1,0 +1,16 @@
+struct Item { value: u32 }
+
+fn replace(slot: **Item, value: *Item) u32 {
+  slot.* = value
+  return 0
+}
+
+fn read_then_replace(pointer: *Item, other: *Item) u32 {
+  return pointer.value + replace(&pointer, other) + pointer.value
+}
+
+fn main() {
+  first := Item{ value: 3 }
+  second := Item{ value: 7 }
+  if read_then_replace(&first, &second) != 10 { #panic("call invalidation failed") }
+}

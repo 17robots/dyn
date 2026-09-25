@@ -1,0 +1,94 @@
+use "std/bytes" bytes
+
+struct Overrides { path: []const u8, link: []const u8, size: u64, has_path: bool, has_link: bool, has_size: bool, delete_size: bool }
+pub struct ArchiveReader { source: []const u8, offset: usize, defaults: Overrides }
+pub fn reader(source: []const u8) ArchiveReader { return ArchiveReader{ source: source } }
+fn decimal(source: []const u8, output: *u64) bool {
+  if #len(source) == 0 { return false }
+  value: u64 = 0
+  for byte in source {
+    if byte < '0' || byte > '9' || value > (18446744073709551615 - #cast(u64) (byte - '0')) / 10 { return false }
+    value = value * 10 + #cast(u64) (byte - '0')
+  }
+  output.* = value return true
+}
+fn pax(source: []const u8, values: *Overrides, global: bool) bool {
+  at: usize = 0
+  for at < #len(source) {
+    space := at for space < #len(source) && source[space] != ' ' { space += 1 }
+    if space == #len(source) { return false }
+    length: u64 = 0
+    if !decimal(source[at..space], &length) || length > #cast(u64) (#len(source) - at) || length <= #cast(u64) (space - at + 2) { return false }
+    end := at + #cast(usize) length
+    if source[end - 1] != '\n' { return false }
+    equal := space + 1 for equal < end - 1 && source[equal] != '=' { equal += 1 }
+    if equal == end - 1 || equal == space + 1 { return false }
+    key := source[space + 1..equal] value := source[equal + 1..end - 1]
+    for byte in value { if byte == 0 { return false } }
+    if bytes.equal(key, "path") { values.path = value values.has_path = !global || #len(value) > 0 }
+    else if bytes.equal(key, "linkpath") { values.link = value values.has_link = !global || #len(value) > 0 }
+    else if bytes.equal(key, "size") {
+      values.has_size = !global || #len(value) > 0 values.delete_size = #len(value) == 0
+      if #len(value) > 0 && !decimal(value, &values.size) { return false }
+    }
+    // Sparse payloads need a different extraction model; never expose them as ordinary files.
+    else if #len(key) >= 10 && bytes.equal(key[..10], "GNU.sparse") { return false }
+    at = end
+  }
+  return true
+}
+fn combined_overrides(global: Overrides, local: Overrides) Overrides {
+  result := global
+  if local.has_path { result.path = local.path result.has_path = #len(local.path) > 0 }
+  if local.has_link { result.link = local.link result.has_link = #len(local.link) > 0 }
+  if local.has_size { result.size = local.size result.has_size = !local.delete_size }
+  return result
+}
+fn apply_overrides(entry: *Entry, values: Overrides) {
+  if values.has_path { entry.name = values.path entry.prefix = values.path[..0] }
+  if values.has_link { entry.link_name = values.link }
+  if values.has_size { entry.size = values.size }
+}
+
+// Names and payload borrow source. Metadata records are consumed internally.
+// A failed call leaves both offset and persistent PAX defaults unchanged.
+pub fn next(state: *ArchiveReader) Result {
+  cursor := state.offset global := state.defaults local := Overrides{} pending: bool = false
+  for {
+    if cursor > #len(state.source) { return Result{ status: Status.Error, error: ErrorKind.InvalidOffset } }
+    if cursor == #len(state.source) {
+      if pending { return Result{ status: Status.Error, error: ErrorKind.Truncated } }
+      return Result{ status: Status.End }
+    }
+    if #len(state.source) - cursor < 512 { return Result{ status: Status.Error, error: ErrorKind.Truncated } }
+    header := parse_header(state.source[cursor..cursor + 512])
+    if !header.ok { return Result{ status: Status.Error, error: ErrorKind.Header } }
+    if header.ended {
+      if pending { return Result{ status: Status.Error, error: ErrorKind.Header } }
+      return Result{ status: Status.End }
+    }
+    entry := header.entry
+    extension := entry.kind == 'x' || entry.kind == 'g' || entry.kind == 'L' || entry.kind == 'K'
+    if !extension { apply_overrides(&entry, combined_overrides(global, local)) }
+    start := cursor + 512
+    if entry.size > #cast(u64) (#len(state.source) - start) { return Result{ status: Status.Error, error: ErrorKind.Truncated } }
+    size := #cast(usize) entry.size padding: usize = (512 - size % 512) % 512
+    if padding > #len(state.source) - start - size { return Result{ status: Status.Error, error: ErrorKind.Truncated } }
+    entry.data = state.source[start..start + size] cursor = start + size + padding
+    if !extension {
+      state.offset = cursor state.defaults = global
+      return Result{ entry: entry, status: Status.Entry }
+    }
+    pending = true
+    if entry.kind == 'x' { if !pax(entry.data, &local, false) { return Result{ status: Status.Error, error: ErrorKind.Header } } }
+    else if entry.kind == 'g' { if !pax(entry.data, &global, true) { return Result{ status: Status.Error, error: ErrorKind.Header } } }
+    else {
+      if size == 0 || entry.data[size - 1] != 0 { return Result{ status: Status.Error, error: ErrorKind.Header } }
+      value := entry.data[..size - 1]
+      for byte in value { if byte == 0 { return Result{ status: Status.Error, error: ErrorKind.Header } } }
+      if entry.kind == 'L' { local.path = value local.has_path = true }
+      else { local.link = value local.has_link = true }
+    }
+  }
+  return Result{ status: Status.Error, error: ErrorKind.Header }
+}

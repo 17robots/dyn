@@ -1,0 +1,45 @@
+use "vendor/enet"
+use "std/time"
+use "std/strings"
+use "std/io"
+use "std/terminal"
+fn main() {
+  if !enet.init() { #panic("ENet init") } defer enet.quit()
+  path: [64]u8 = []
+  server := enet.listen_at_owned("0.0.0.0", 0, 2, 2, path[..]) if server == nil { #panic("ENet server") } defer enet.destroy_owned(server)
+  client := enet.client_channels_owned(1, 2) if client == nil { #panic("ENet client") } defer enet.destroy_owned(client)
+  peer := enet.connect_channels(client, "127.0.0.1", enet.port(server), 2, path[..]) if peer == nil { #panic("ENet connect") }
+  if enet.send(nil, "bad") || enet.client_owned(0) != nil { #panic("invalid ENet state accepted") }
+  deadline := time.deadline_after(5 * time.Second) done := false
+  for !done && !time.deadline_expired(&deadline) {
+    remote := enet.service(server, 0) if !remote.ok { #panic("server service") }
+    if remote.kind == enet.Received {
+      if remote.channel != 1 || !strings.equal(enet.packet_bytes(remote.packet), "ping") { #panic("server payload") }
+      if !enet.send_channel(remote.peer, 1, "pong") { #panic("server echo") }
+      enet.packet_destroy(remote.packet)
+    }
+    local := enet.service(client, 0) if !local.ok { #panic("client service") }
+    if local.kind == enet.Connected { if !enet.send_channel(peer, 1, "ping") { #panic("client send") } }
+    if local.kind == enet.Received {
+      if local.channel != 1 || !strings.equal(enet.packet_bytes(local.packet), "pong") { #panic("client payload") }
+      enet.packet_destroy(local.packet) done = true
+    }
+    _ = time.sleep(time.Millisecond)
+  }
+  if !done { #panic("ENet loopback timed out") }
+  if enet.send_channel(peer, 2, "invalid") || enet.client_channels_owned(1, 256) != nil || enet.listen_at_owned("bad address", 0, 1, 1, path[..]) != nil { #panic("invalid ENet configuration") }
+  enet.disconnect_with_reason(peer, 42)
+  server_closed := false client_closed := false
+  deadline = time.deadline_after(5 * time.Second)
+  for (!server_closed || !client_closed) && !time.deadline_expired(&deadline) {
+    server_event := enet.service(server, 0) client_event := enet.service(client, 0)
+    if !server_event.ok || !client_event.ok { #panic("disconnect service") }
+    if server_event.kind == enet.Disconnected { if server_event.data != 42 { #panic("disconnect reason") } server_closed = true }
+    if client_event.kind == enet.Disconnected { client_closed = true }
+    if server_event.kind == enet.Received { enet.packet_destroy(server_event.packet) }
+    if client_event.kind == enet.Received { enet.packet_destroy(client_event.packet) }
+    _ = time.sleep(time.Millisecond)
+  }
+  if !server_closed || !client_closed { #panic("disconnect deadline") }
+  _ = io.println(terminal.stdout(), "ENet reliable loopback passed")
+}

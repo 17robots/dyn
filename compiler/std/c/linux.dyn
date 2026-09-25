@@ -1,0 +1,3 @@
+#target(kernel: linux)
+pub type long = i64
+pub type unsigned_long = u64

@@ -1,0 +1,15 @@
+use "std/os/linux" os
+use "std/testing" test
+fn main() {
+  storage: [9000]u8 = []
+  long := os.environment_get("DYN_ENV_LONG", storage[..])
+  test.expect(long.ok && long.found && #len(long.value) == 9000, "environment spans refills")
+  for byte in long.value { test.expect(byte == 'x', "environment data") }
+  empty := os.environment_get("DYN_ENV_EMPTY", storage[..0])
+  test.expect(empty.ok && empty.found && #len(empty.value) == 0, "empty environment value")
+  missing := os.environment_get("DYN_ENV_NOT_PRESENT", storage[..])
+  test.expect(missing.ok && !missing.found, "missing environment value")
+  small := os.environment_get("DYN_ENV_LONG", storage[..2])
+  test.expect(!small.ok && small.error == -28 && #len(small.value) == 0, "environment capacity")
+  test.expect(!os.environment_get("BAD=NAME", storage[..]).ok, "invalid environment name")
+}

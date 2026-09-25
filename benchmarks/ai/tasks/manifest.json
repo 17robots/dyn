@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "policy": "Fresh agent context per task. Compiler/docs allowed. No hidden evaluator access. Record every validation attempt. Success means behavioral checks, not merely compilation.",
+  "tasks": [
+    {"id":"bounded-copy","prompt":"Write a Dyn module exposing pub fn copy(destination: []u8, source: []const u8) bool. If source fits, copy all bytes, return true, preserve destination tail; otherwise return false and leave all destination bytes unchanged. Support overlapping slices. Include fn main() {}."},
+    {"id":"retained-name","prompt":"Write a Dyn module importing std/mem and exposing pub fn save(output: *mem.Arena, scratch: *mem.Arena, input: []const u8) []const u8. Trim ASCII surrounding whitespace using scratch, return a COPY in output, restore scratch to its entry mark. Assume output and scratch have disjoint live backing and sufficient capacity; panic on allocation failure. Include fn main() {}."},
+    {"id":"checked-sum","prompt":"Write a Dyn module exposing pub fn sum(values: []const u32) u64. Return exact sum, including empty input. Include fn main() {}."},
+    {"id":"parse-port","prompt":"Write a Dyn module exposing pub fn port(text: []const u8) u32. Accept decimal ASCII digits representing ports 1 through 65535; return 0 for empty, nondigits, overflow, and zero. Leading zeros are allowed. Must handle arbitrarily long input without arithmetic panic. Include fn main() {}."},
+    {"id":"handle-copy","prompt":"Write a Dyn module importing std/container/slot_map as slots and exposing pub fn retain(map: *slots.SlotMap, handle: slots.Handle, destination: []u8) bool. Copy a live record into destination, returning false without writes for missing handle or insufficient capacity. Destination is disjoint from map storage; preserve extra destination bytes. Include fn main() {}."},
+    {"id":"state-model","prompt":"Write a Dyn module defining pub enum Status { Pending, Complete: usize, Failed: isize } and pub fn amount(status: Status) usize. Return payload for Complete, zero for Pending and Failed. Use exhaustive case. Include fn main() {}."}
+  ]
+}

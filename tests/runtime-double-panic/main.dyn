@@ -1,0 +1,8 @@
+fn cleanup() { #panic("cleanup panic") }
+
+fn fail() { #panic("first panic") }
+
+fn main() {
+  defer cleanup()
+  fail()
+}

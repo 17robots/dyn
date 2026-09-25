@@ -1,0 +1,43 @@
+enum(u16) Word { First, Second }
+enum(u8) Mixed { None, Byte: u8, Wide: u64 }
+type MeterAlias = u32
+distinct type Meter = u32
+
+order: u32 = 0
+fn next(expected: u32) u32 {
+  order += 1
+  if order != expected { #panic("evaluation order") }
+  return order
+}
+
+fn typed(values: ...u64) u64 {
+  total: u64 = 0
+  for value in values { total += value }
+  return total
+}
+
+fn inspect(values: ...any) {
+  case values[0] {
+    is MeterAlias value => { if value != 7 { #panic("alias identity") } },
+    _ => { #panic("alias type") }
+  }
+  case values[1] {
+    is Meter value => { if value != #cast(Meter) 8 { #panic("distinct value") } },
+    _ => { #panic("distinct identity") }
+  }
+}
+
+fn main() {
+  // Calls and binary operands evaluate left-to-right.
+  if next(1) + next(2) != 3 { #panic("operand order") }
+  if typed(#cast(u8) 1, #cast(u16) 2, #cast(u32) 3) != 6 {
+    #panic("typed variadic conversion")
+  }
+  inspect(#cast(u32) 7, #cast(Meter) 8)
+  if #sizeof(Word) != 2 || #alignof(Word) != 2 { #panic("plain enum layout") }
+  if #sizeof(Mixed) != 16 || #alignof(Mixed) != 8 { #panic("payload enum layout") }
+  narrowed: i8 = #cast(i8) #cast(u8) 255
+  if narrowed != -1 { #panic("integer cast representation") }
+  bits: u32 = #bitcast(u32) #cast(i32) -1
+  if bits != 4294967295 { #panic("bitcast representation") }
+}

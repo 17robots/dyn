@@ -1,0 +1,12 @@
+struct Item { value: u32 }
+
+fn merged(pointer: *Item, enabled: bool) u32 {
+  total: u32 = 0
+  if enabled { total = pointer.value }
+  return total + pointer.value
+}
+
+fn main() {
+  item := Item{ value: 5 }
+  if merged(&item, true) != 10 { #panic("merge guard changed result") }
+}

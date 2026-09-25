@@ -1,0 +1,4 @@
+fn main() {
+  value := 1
+  value = false
+}

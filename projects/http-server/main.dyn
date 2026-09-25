@@ -1,0 +1,31 @@
+use "std/io" io
+use "std/net" net
+use "std/net/http" http
+use "std/terminal" terminal
+
+fn main() {
+  address := net.ipv4(127, 0, 0, 1, 18080)
+  opened := net.tcp_listen_ipv4(&address, 8)
+  if !opened.ok { #panic("listen failed") }
+  listener := opened.listener
+  defer { _ = net.listener_close(&listener) }
+  _ = io.println(terminal.stdout(), "http://127.0.0.1:18080")
+  accepted := net.listener_accept(&listener)
+  if !accepted.ok { #panic("accept failed") }
+  connection := accepted.connection
+  defer { _ = net.connection_close(&connection) }
+  request_storage: [4096]u8 = []
+  server := http.connection_server(
+    net.connection_reader(&connection), net.connection_writer(&connection), request_storage[..],
+  )
+  received := http.receive(&server)
+  if received.ok {
+    sent := http.respond(&received.response, "hello from dyn\n", http.ResponseOptions{
+      status: http.StatusOk,
+      reason: "OK",
+      content_type: "text/plain; charset=utf-8",
+      close_connection: true,
+    })
+    if !sent.ok { #panic("response failed") }
+  }
+}

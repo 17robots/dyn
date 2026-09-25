@@ -1,0 +1,11 @@
+fn main() {
+  minimum: i64 = -9223372036854775808
+  maximum: u64 = 18446744073709551615
+  one: u64 = 1
+  maximum = maximum - one
+  ratio: f64 = 8.0
+  ratio /= 2.0
+  _ = minimum
+  _ = maximum
+  _ = ratio
+}

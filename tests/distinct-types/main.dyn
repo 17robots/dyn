@@ -1,0 +1,21 @@
+type Count = u32
+type Forward = Later
+type Later = u16
+
+distinct type UserId = u32
+distinct type GroupId = u32
+
+fn add(left: UserId, right: UserId) UserId {
+  return left + right
+}
+
+fn main() {
+  count: Count = 7
+  later: Forward = 9
+  user: UserId = #cast(UserId) 40
+  increment: UserId = #cast(UserId) 2
+  result := add(user, increment)
+  raw := #cast(u32) result
+  if raw != 42 || count != 7 || later != 9 { #panic("distinct type failure") }
+  if #sizeof(UserId) != #sizeof(u32) { #panic("distinct layout failure") }
+}

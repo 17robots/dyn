@@ -1,0 +1,6 @@
+fn main() {
+  integer := 2
+  decimal := 2.2
+  value := #cast(f32) integer + decimal
+  _ = value
+}

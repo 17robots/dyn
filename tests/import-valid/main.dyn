@@ -1,0 +1,14 @@
+use "./math" calc
+
+fn main() {
+  pair := calc.Pair{ left: 20, right: 22 }
+  result := calc.add(pair.left, pair.right)
+  if result != 42 { for {} }
+  choice := calc.Result.Ok(result)
+  value: i32 = 0
+  case choice {
+    calc.Result.Ok payload => { value = payload },
+    _ => {},
+  }
+  if value != 42 { for {} }
+}

@@ -1,0 +1,27 @@
+enum Kind { A, B, C }
+enum Payload { Some: i32, None }
+
+fn main() {
+  kind := Kind.A
+  case kind {
+    Kind.A => {},
+    Kind.A => {},
+  }
+  case kind {
+    Kind.A => {},
+    Kind.B => {},
+    Kind.C => {},
+    _ => {},
+  }
+  number: i32 = 4
+  case number {
+    1..5 => {},
+    4..8 => {},
+    _ => {},
+  }
+  payload := Payload.Some(1)
+  case payload {
+    Payload.None value => {},
+    _ => {},
+  }
+}

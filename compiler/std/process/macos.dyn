@@ -1,0 +1,126 @@
+#target(kernel: darwin)
+#link("System")
+// Native Darwin adapter. libSystem handles OS calls; buffers use the caller arena.
+use "std/c" c
+extern fn native_fork "fork"() i32
+extern fn native_pipe "pipe"(descriptors: *i32) i32
+// Darwin arm64 passes variadic arguments on the stack, not as fixed parameters.
+extern fn native_fcntl "fcntl"(descriptor: i32, command: i32, ...) i32
+extern fn native_dup "dup2"(source: i32, destination: i32) i32
+extern fn native_exec "execve"(path: *const u8, arguments: rawptr, environment: rawptr) i32
+extern fn native_exit "_exit"(code: i32)
+extern fn native_wait "waitpid"(child: i32, status: *i32, flags: i32) i32
+extern fn native_kill "kill"(child: i32, signal: i32) i32
+extern fn native_read "read"(descriptor: i32, destination: *u8, count: usize) isize
+extern fn native_write "write"(descriptor: i32, source: rawptr, count: usize) isize
+extern fn native_close "close"(descriptor: i32) i32
+extern fn native_errno "__error"() *i32
+extern fn native_clock "clock_gettime"(clock: i32, output: *Timespec) i32
+extern fn native_sleep "nanosleep"(requested: *const Timespec, remaining: *Timespec) i32
+extern fn native_environment "getenv"(name: *const u8) *const u8
+struct Timespec { seconds: i64, nanoseconds: i64 }
+struct CString { value: *const u8 }
+fn mac_error() isize { return 0 - #cast(isize) native_errno().* }
+fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
+  allocation := mem.arena_try_push_uninit(arena,#len(value)+1,1)
+  if !allocation.ok { return nil }
+  storage := allocation.memory[..#len(value)+1]
+  return c.string_from_bytes(storage,value).value
+}
+fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
+  if #len(values) > 2305843009213693950 { return nil }
+  allocation := mem.arena_try_push(arena,(#len(values)+1)*#sizeof(CString),#alignof(CString))
+  if !allocation.ok { return nil }
+  pointer := #cast(*CString) allocation.memory slots := pointer[..#len(values)+1]
+  at: usize = 0 for at < #len(values) {
+    slots[at].value = c_string(arena,values[at]) if slots[at].value == nil { return nil } at += 1
+  }
+  return pointer
+}
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
+  mark := mem.arena_mark(arena) defer mem.arena_rewind(arena,mark)
+  executable := c_string(arena,path) argv := c_vector(arena,arguments) env := c_vector(arena,configuration.environment)
+  if executable == nil || argv == nil || env == nil { return SpawnResult{ error: -28 } }
+  sources: [3]isize = [configuration.input,configuration.output,configuration.error]
+  copies: [3]i32 = [-1,-1,-1]
+  defer { for descriptor in copies { if descriptor >= 0 { _ = native_close(descriptor) } } }
+  source_index: usize = 0
+  for source_index < 3 {
+    if sources[source_index] >= 0 {
+      copies[source_index] = native_fcntl(#cast(i32) sources[source_index],67,3)
+      if copies[source_index] < 0 { return SpawnResult{ error: mac_error() } }
+    }
+    source_index += 1
+  }
+  channel: [2]i32 = [] if native_pipe(&channel[0]) != 0 { return SpawnResult{ error: mac_error() } }
+  reader := native_fcntl(channel[0],67,3) writer := native_fcntl(channel[1],67,3)
+  _ = native_close(channel[0]) _ = native_close(channel[1])
+  if reader < 0 || writer < 0 { if reader >= 0 { _ = native_close(reader) } if writer >= 0 { _ = native_close(writer) } return SpawnResult{ error: -24 } }
+  child := native_fork()
+  if child < 0 { failure := mac_error() _ = native_close(reader) _ = native_close(writer) return SpawnResult{ error: failure } }
+  if child == 0 {
+    _ = native_close(reader) failed: bool = false
+    if copies[0] >= 0 && native_dup(copies[0],0) < 0 { failed = true }
+    if !failed && copies[1] >= 0 && native_dup(copies[1],1) < 0 { failed = true }
+    if !failed && copies[2] >= 0 && native_dup(copies[2],2) < 0 { failed = true }
+    if !failed { _ = native_exec(executable,#cast(rawptr) argv,#cast(rawptr) env) }
+    error := mac_error() _ = native_write(writer,#cast(rawptr) &error,#sizeof(isize)) native_exit(127)
+    #panic("exit returned")
+  }
+  _ = native_close(writer) reported: isize = 0
+  amount := native_read(reader,#cast(*u8) &reported,#sizeof(isize))
+  for amount < 0 && native_errno().* == 4 { amount = native_read(reader,#cast(*u8) &reported,#sizeof(isize)) }
+  _ = native_close(reader)
+  if amount != 0 {
+    _ = native_kill(child,9) status: i32 = 0 _ = native_wait(child,&status,0)
+    if amount != #cast(isize) #sizeof(isize) { reported = -5 }
+    return SpawnResult{ error: reported }
+  }
+  return SpawnResult{ child: Child{ handle: #cast(isize) child, active: true }, ok: true }
+}
+fn wait_native(child: *Child, nonblocking: bool) ExitResult {
+  status: i32 = 0 flags: i32 = 0 if nonblocking { flags = 1 }
+  value := native_wait(#cast(i32) child.handle,&status,flags)
+  for value < 0 && native_errno().* == 4 { value = native_wait(#cast(i32) child.handle,&status,flags) }
+  if value < 0 { return ExitResult{ error: mac_error() } }
+  if value == 0 { return ExitResult{ ok: true } }
+  child.active = false
+  if (status & 127) == 0 { return ExitResult{ code: #cast(u32) ((status >> 8) & 255), finished: true, ok: true } }
+  return ExitResult{ signal: #cast(u32) (status & 127), finished: true, ok: true }
+}
+fn terminate_native(child: *Child) Status { if native_kill(#cast(i32) child.handle,9) < 0 { return Status{ error: mac_error() } } return Status{ ok: true } }
+fn close_native(handle: isize) Status { if native_close(#cast(i32) handle) < 0 { return Status{ error: mac_error() } } return Status{ ok: true } }
+fn pipe_native() Pipe {
+  descriptors: [2]i32 = [] if native_pipe(&descriptors[0]) != 0 { return Pipe{ error: mac_error() } }
+  if native_fcntl(descriptors[0],2,1) < 0 || native_fcntl(descriptors[1],2,1) < 0 || native_fcntl(descriptors[0],4,4) < 0 {
+    failure := mac_error() _ = native_close(descriptors[0]) _ = native_close(descriptors[1]) return Pipe{ error: failure }
+  }
+  return Pipe{ input: #cast(isize) descriptors[0], output: #cast(isize) descriptors[1], ok: true }
+}
+fn read_native(handle: isize, destination: []u8) ReadResult {
+  amount := native_read(#cast(i32) handle,&destination[0],#len(destination))
+  for amount < 0 && native_errno().* == 4 { amount = native_read(#cast(i32) handle,&destination[0],#len(destination)) }
+  if amount < 0 {
+    if native_errno().* == 35 { return ReadResult{ ok: true } }
+    return ReadResult{ error: mac_error() }
+  }
+  return ReadResult{ count: #cast(usize) amount, ended: amount == 0, ok: true }
+}
+fn milliseconds_native() u64 { time := Timespec{} if native_clock(6,&time) < 0 { #panic("monotonic clock") } return #cast(u64) time.seconds*1000 + #cast(u64) (time.nanoseconds/1000000) }
+fn sleep_native() { delay := Timespec{ nanoseconds: 1000000 } _ = native_sleep(&delay,nil) }
+fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
+  buffer: [4096]u8 = [] key := c.string_from_bytes(buffer[..],name)
+  if !key.ok { return EnvironmentResult{ error: -28 } }
+  value := native_environment(key.value)
+  if value == nil { return EnvironmentResult{ value: destination[..0], ok: true } }
+  parsed := c.bytes_from_string(value,#len(destination)+1)
+  if !parsed.ok || #len(parsed.value) > #len(destination) { return EnvironmentResult{ error: -28 } }
+  i: usize = 0 for i < #len(parsed.value) { destination[i] = parsed.value[i] i += 1 }
+  return EnvironmentResult{ value: destination[..i], found: true, ok: true }
+}
+
+fn duplicate_native(value: isize) HandleResult {
+  copied := native_fcntl(#cast(i32) value,67,3)
+  if copied < 0 { return HandleResult{ error: mac_error() } }
+  return HandleResult{ value: #cast(isize) copied, ok: true }
+}

@@ -1,0 +1,39 @@
+fn add(a, b: i32) i32 {
+  return a + b
+}
+
+fn factorial(n: i32) i32 {
+  if n <= 1 {
+    return 1
+  }
+  return n * factorial(n - 1)
+}
+
+fn consume(value: i32) {
+  _ = value
+}
+
+struct Pair {
+  left, right: i32,
+}
+
+fn make_pair(left: i32, right: i32) Pair {
+  return Pair{ left: left, right: right }
+}
+
+fn sum_pair(pair: Pair) i32 {
+  return pair.left + pair.right
+}
+
+fn main() {
+  sum := add(2, 3)
+  product := factorial(5)
+  pair_sum := sum_pair(make_pair(8, 13))
+  consume(sum)
+  ok := sum == 5 && product == 120 && pair_sum == 21
+  if !ok {
+    zero := 0
+    one := 1
+    one /= zero
+  }
+}

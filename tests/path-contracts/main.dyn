@@ -1,0 +1,9 @@
+use "std/path"
+use "std/strings"
+fn main() {
+  storage: [128]u8 = []
+  parent := path.clean(storage[..], "../../a/../b")
+  if !parent.ok || !strings.equal(parent.value, "../../b") { #panic("leading parents must survive normalization") }
+  collapsed := path.clean(storage[..], "/a/b/..")
+  if !collapsed.ok || !strings.equal(collapsed.value, "/a") { #panic("normalized path must not retain trailing separator") }
+}

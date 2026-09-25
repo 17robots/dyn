@@ -1,0 +1,44 @@
+use "std/mem"
+
+fn check(alignment: usize) {
+  storage: [512]u8 = []
+  arena := mem.arena_from_buffer(storage[..])
+  // The arena cursor deliberately starts at an unaligned byte boundary.
+  _ = mem.arena_push(&arena, 1, 1)
+  pool := mem.pool_init(&arena, 3, 9, alignment)
+  first := mem.pool_acquire(&pool)
+  second := mem.pool_acquire(&pool)
+  third := mem.pool_acquire(&pool)
+  if first == second || second == third || first == third || mem.pool_try_acquire(&pool) != nil {
+    #panic("pool slot identity/exhaustion")
+  }
+  if #cast(usize) first % #alignof(rawptr) != 0 || #cast(usize) second % #alignof(rawptr) != 0 || #cast(usize) third % alignment != 0 {
+    #panic("internal free-list link alignment")
+  }
+  bytes := (#cast(*u8) first)[..9]
+  bytes[8] = 42
+  other := (#cast(*u8) second)[..9]
+  other[0] = 99
+  if bytes[8] != 42 { #panic("slots overlap") }
+  mem.pool_release(&pool, second)
+  if mem.pool_acquire(&pool) != second || mem.pool_available(&pool) != 0 { #panic("pool reuse") }
+  mem.pool_release(&pool, first)
+  mem.pool_release(&pool, third)
+  if mem.pool_available(&pool) != 2 || mem.pool_capacity(&pool) != 3 { #panic("pool accounting") }
+
+  backing := mem.arena_push_uninit(&arena, 64, 16)[..64]
+  list := mem.free_list_init(backing, 9, 1)
+  if list.slot_size != 16 || list.slot_count != 4 { #panic("free-list link stride") }
+  index: usize = 0
+  for index < 4 {
+    slot := mem.free_list_try_alloc(&list)
+    if slot == nil || #cast(usize) slot % #alignof(rawptr) != 0 { #panic("direct free-list slot") }
+    index += 1
+  }
+  if mem.free_list_try_alloc(&list) != nil { #panic("direct free-list exhaustion") }
+}
+
+fn main() {
+  alignments: [6]usize = [1, 2, 4, 8, 16, 32]
+  for alignment in alignments { check(alignment) }
+}

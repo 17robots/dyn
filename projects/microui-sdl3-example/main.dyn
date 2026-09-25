@@ -1,0 +1,46 @@
+use "vendor/microui" ui
+use "vendor/sdl3" sdl
+use "vendor/sdl3/microui" backend
+use "std/mem"
+use "std/os/linux"
+use "std/strings"
+use "std/time"
+use "std/io"
+use "std/terminal"
+fn main() {
+  arena := mem.arena_create(1024 * 1024) if !arena.ok { #panic("UI arena") }
+  defer { _ = mem.arena_release(&arena.arena) }
+  args := linux.process_arguments(&arena.arena)
+  smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
+  if !sdl.init_video() { #panic("SDL video") } defer sdl.quit()
+  text: [256]u8 = []
+  window := sdl.window_create("Dyn interactive UI", text[..], 640, 360, sdl.WindowResizable)
+  if !window.ok { #panic("SDL window") } defer sdl.window_destroy_owned(window.value)
+  renderer := sdl.renderer_create_default_owned(window.value)
+  if !renderer.ok { #panic("SDL renderer") } defer sdl.renderer_destroy_owned(renderer.value)
+  context := ui.create(&arena.arena) if context == nil { #panic("UI context") }
+  running := true clicked := false frame: usize = 0 event := sdl.Event{}
+  for running {
+    for sdl.poll_event(&event) {
+      if sdl.event_requests_close(&event) { running = false }
+      _ = backend.event(context, renderer.value, &event)
+    }
+    if !running { break }
+    if smoke {
+      action: i32 = 0 if frame == 2 { action = 1 } if frame == 3 { action = 2 }
+      ui.mouse(context, 70, 90, action)
+    }
+    if !ui.begin(context) { #panic("UI begin") }
+    if ui.window(context, "Debug panel", text[..], ui.Rectangle{ x: 20, y: 20, width: 300, height: 220 }) {
+      if clicked { _ = ui.label(context, "Button clicked!", text[..]) }
+      else { _ = ui.label(context, "Click the button below", text[..]) }
+      if ui.button(context, "Click me", text[..]) == 1 { clicked = true }
+      _ = ui.window_end(context)
+    }
+    if !ui.end(context) || !sdl.clear(renderer.value, 20, 28, 48, 255) || !backend.render(context, renderer.value) || !sdl.present(renderer.value) { #panic("UI render") }
+    frame += 1 if smoke && frame >= 5 { break }
+    _ = time.sleep(16 * time.Millisecond)
+  }
+  if smoke && !clicked { #panic("UI mouse click not delivered") }
+  _ = io.println(terminal.stdout(), "microui SDL rendering passed")
+}

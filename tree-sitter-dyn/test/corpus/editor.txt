@@ -1,0 +1,140 @@
+==================
+Import followed by inferred global
+==================
+use "std/io"
+value := 42
+---
+
+(source_file
+  (declaration
+    (use
+      (string_)))
+  (declaration
+    (variable
+      (identifier)
+      (expression
+        (literal
+          (number_))))))
+
+==================
+Import alias followed by const
+==================
+use "std/io" stream
+const value: i32 = 42
+---
+
+(source_file
+  (declaration
+    (use
+      (string_)
+      (identifier)))
+  (declaration
+    (const_variable
+      (variable
+        (identifier)
+        (type
+          (primitive))
+        (expression
+          (literal
+            (number_)))))))
+
+==================
+Comment before next global
+==================
+use "std/io" /* comment */
+value: i32 = 42
+---
+
+(source_file
+  (declaration
+    (use
+      (string_)))
+  (comment)
+  (declaration
+    (variable
+      (identifier)
+      (type
+        (primitive))
+      (expression
+        (literal
+          (number_))))))
+
+==================
+Comments between qualified operands
+==================
+use "std/bytes" bytes
+fn main() { _ = bytes./* member */equal("a", "a") }
+---
+
+(source_file
+  (declaration
+    (use
+      (string_)
+      (identifier)))
+  (declaration
+    (fn
+      (identifier)
+      (block
+        (statement
+          (assignment
+            (primary
+              (identifier))
+            (expression
+              (primary
+                (call
+                  (primary
+                    (field_access
+                      (primary
+                        (identifier))
+                      (comment)
+                      (identifier)))
+                  (expression
+                    (literal
+                      (string_)))
+                  (expression
+                    (literal
+                      (string_))))))))))))
+
+==================
+Trailing-dot float and field
+==================
+fn main() { value: f64 = 1. _ = value }
+---
+
+(source_file
+  (declaration
+    (fn
+      (identifier)
+      (block
+        (statement
+          (variable
+            (identifier)
+            (type
+              (primitive))
+            (expression
+              (literal
+                (number_)))))
+        (statement
+          (assignment
+            (primary
+              (identifier))
+            (expression
+              (primary
+                (identifier)))))))))
+
+==================
+Incomplete import recovery
+==================
+use "std/
+---
+
+(source_file (declaration (use (string_ (MISSING """)))))
+
+==================
+Missing const value recovery
+==================
+const value: i32 =
+fn main() {}
+---
+
+(source_file (declaration (const_variable (variable (identifier) (type (primitive)) (expression (primary (identifier)))))) (ERROR (identifier)))

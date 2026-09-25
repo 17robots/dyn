@@ -1,0 +1,20 @@
+use "./left"
+use "./right"
+
+fn main() {
+  a: left.Value = left.make()
+  b: right.Value = right.make()
+  if a.number + b.number != 42 { for {} }
+  l := left.Result.Ok(a.number)
+  r := right.Result.Ok(b.number)
+  total: i32 = 0
+  case l {
+    left.Result.Ok value => { total = total + value },
+    _ => {},
+  }
+  case r {
+    right.Result.Ok right_value => { total = total + right_value },
+    _ => {},
+  }
+  if total != 42 { for {} }
+}

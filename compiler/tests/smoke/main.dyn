@@ -1,0 +1,13 @@
+use "std/mem"
+use "std/strings"
+fn main() {
+  created := mem.arena_create(4096)
+  if !created.ok { #panic("arena") }
+  defer { _ = mem.arena_release(&created.arena) }
+  copied := strings.clone(&created.arena, "compiler SDK smoke")
+  if !copied.ok || !strings.equal(copied.value, "compiler SDK smoke") { #panic("SDK copy") }
+  values: [3]i16 = [10, 20, 12]
+  total: i32 = 0
+  for value in values { total += #cast(i32) value }
+  if total != 42 { #panic("code generation") }
+}

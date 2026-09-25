@@ -1,0 +1,56 @@
+use "std/crypto/aead" aead
+use "std/crypto/aes" aes
+use "std/encoding/hex" hexadecimal
+use "std/crypto/exchange" exchange
+use "std/crypto/signature" signature
+
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0 for i < #len(left) { if left[i] != right[i] { return false } i += 1 }
+  return true
+}
+fn main() {
+  key: [32]u8 = [] nonce: [12]u8 = [] plaintext: [16]u8 = [] ciphertext: [16]u8 = [] tag: [16]u8 = []
+  expected_ciphertext: [16]u8 = [] expected_tag: [16]u8 = []
+  _ = hexadecimal.decode(expected_ciphertext[..], "cea7403d4d606b6e074ec5d3baf39d18")
+  _ = hexadecimal.decode(expected_tag[..], "d0d1c8a799996bf0265b98b5d48ab919")
+  sealed := aes.gcm_seal(ciphertext[..], tag[..], plaintext[..], "", key[..], nonce[..])
+  if !sealed.ok || !equal(ciphertext[..], expected_ciphertext[..]) || !equal(tag[..], expected_tag[..]) { #panic("AES-256-GCM vector") }
+  recovered: [16]u8 = []
+  opened := aes.gcm_open(recovered[..], ciphertext[..], tag[..], "", key[..], nonce[..])
+  if !opened.ok || !equal(recovered[..], plaintext[..]) { #panic("AES-256-GCM open") }
+  tag[0] = tag[0] ^ 1
+  rejected := aes.gcm_open(recovered[..], ciphertext[..], tag[..], "", key[..], nonce[..])
+  if rejected.ok || rejected.written != 0 { #panic("AEAD authentication") }
+
+  chacha_ciphertext: [16]u8 = [] chacha_tag: [16]u8 = [] chacha_plain: [16]u8 = []
+  if !aead.seal(aead.Cipher.Chacha20Poly1305, chacha_ciphertext[..], chacha_tag[..], "authenticated", "header", key[..], nonce[..]).ok ||
+    !aead.open(aead.Cipher.Chacha20Poly1305, chacha_plain[..], chacha_ciphertext[..13], chacha_tag[..], "header", key[..], nonce[..]).ok ||
+    !equal(chacha_plain[..13], "authenticated") { #panic("ChaCha20-Poly1305") }
+
+  alice_private: [32]u8 = [] alice_public: [32]u8 = [] expected_alice_public: [32]u8 = []
+  bob_private: [32]u8 = [] bob_public: [32]u8 = [] expected_shared: [32]u8 = [] alice_shared: [32]u8 = [] bob_shared: [32]u8 = []
+  _ = hexadecimal.decode(alice_private[..], "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+  _ = hexadecimal.decode(expected_alice_public[..], "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+  _ = hexadecimal.decode(bob_private[..], "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
+  _ = hexadecimal.decode(expected_shared[..], "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742")
+  if !exchange.x25519_public(alice_public[..], alice_private[..]).ok || !equal(alice_public[..], expected_alice_public[..]) ||
+    !exchange.x25519_public(bob_public[..], bob_private[..]).ok ||
+    !exchange.x25519(alice_shared[..], alice_private[..], bob_public[..]).ok ||
+    !exchange.x25519(bob_shared[..], bob_private[..], alice_public[..]).ok ||
+    !equal(alice_shared[..], expected_shared[..]) || !equal(alice_shared[..], bob_shared[..]) { #panic("X25519 RFC vector") }
+
+  zero_peer: [32]u8 = []
+  rejected_key := exchange.x25519(alice_shared[..], alice_private[..], zero_peer[..])
+  if rejected_key.ok || rejected_key.written != 0 { #panic("X25519 rejected key count") }
+
+  signing_private: [32]u8 = [] signing_public: [32]u8 = [] expected_public: [32]u8 = [] signed: [64]u8 = [] expected_signature: [64]u8 = []
+  _ = hexadecimal.decode(signing_private[..], "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+  _ = hexadecimal.decode(expected_public[..], "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+  _ = hexadecimal.decode(expected_signature[..], "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+  if !signature.ed25519_public(signing_public[..], signing_private[..]).ok || !equal(signing_public[..], expected_public[..]) ||
+    !signature.ed25519_sign(signed[..], "", signing_private[..]).ok || !equal(signed[..], expected_signature[..]) ||
+    !signature.ed25519_verify(signed[..], "", signing_public[..]) { #panic("Ed25519 RFC vector") }
+  signed[0] = signed[0] ^ 1
+  if signature.ed25519_verify(signed[..], "", signing_public[..]) { #panic("Ed25519 tamper") }
+}

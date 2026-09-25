@@ -1,0 +1,8 @@
+#target(arch: x86_64, kernel: linux)
+// Linux UAPI packs epoll_event only on x86_64.
+pub struct Event { bytes: [12]u8 }
+const EventDataOffset: usize = 4
+fn poll_native(descriptors: []PollDescriptor, timeout_milliseconds: i32) isize {
+  if #len(descriptors) == 0 { return #syscall(7, 0, 0, timeout_milliseconds) }
+  return #syscall(7, &descriptors[0], #len(descriptors), timeout_milliseconds)
+}

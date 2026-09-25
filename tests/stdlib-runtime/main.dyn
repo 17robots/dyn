@@ -1,0 +1,47 @@
+use "std/io" io
+use "std/mem" mem
+use "std/os/linux" os
+use "std/terminal"
+use "std/time" time
+
+fn main() {
+  storage: [64]u8 = []
+  allocator := mem.arena_from_buffer(storage[..])
+  mark := mem.arena_mark(&allocator)
+  raw := mem.arena_push(&allocator, #sizeof(u32), #alignof(u32))
+  value := #cast(*u32) raw
+  if value.* != 0 { #panic("arena allocation must be zeroed") }
+  value.* = 42
+  mem.arena_rewind(&allocator, mark)
+  again := #cast(*u32) mem.arena_push(&allocator, #sizeof(u32), #alignof(u32))
+  if again.* != 0 { #panic("rewound allocation must be zeroed") }
+  if mem.arena_capacity(&allocator) != 64 { #panic("arena capacity mismatch") }
+
+  bytes: [4]u8 = []
+  copied := mem.copy(bytes[..], "dyn")
+  if copied != 3 || bytes[0] != 'd' || bytes[2] != 'n' { #panic("copy failed") }
+  mem.zero(bytes[..])
+  if bytes[0] != 0 || bytes[2] != 0 { #panic("zero failed") }
+
+  slots: [32]u8 = []
+  list := mem.free_list_init(slots[..], 8, 8)
+  first := mem.free_list_alloc(&list)
+  second := mem.free_list_alloc(&list)
+  if first == second { #panic("free list returned duplicate live slot") }
+  mem.free_list_free(&list, first)
+  if mem.free_list_alloc(&list) != first { #panic("free list did not reuse slot") }
+
+  now := time.monotonic_now()
+  if now.seconds <= 0 { #panic("monotonic clock failed") }
+  added := time.checked_add(40, 2)
+  if !added.ok || added.value != 42 || time.checked_add(9223372036854775807, 1).ok { #panic("checked duration") }
+  date := time.DateTime{ year: 2024, month: 2, day: 29, hour: 12, minute: 34, second: 56, nanosecond: 0 }
+  timestamp: [20]u8 = []
+  if #len(time.format_iso8601(timestamp[..], &date)) != 20 { #panic("format date") }
+  parsed := time.DateTime{}
+  if !time.parse_iso8601(timestamp[..], &parsed) || parsed.day != 29 || parsed.second != 56 { #panic("parse date") }
+  deadline := time.deadline_after(0)
+  if !time.deadline_expired(&deadline) { #panic("deadline") }
+  if os.process_id() <= 0 || os.thread_id() <= 0 { #panic("process query failed") }
+  _ = io.write_all(terminal.stdout(), "std/runtime ok\n")
+}

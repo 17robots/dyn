@@ -1,0 +1,17 @@
+fn main() {
+  values: [4]u32 = [1, 2, 3, 4]
+  for *value in values {
+    value.* += 10
+  }
+
+  slice := values[1..3]
+  for *entry in slice {
+    entry.* += 1
+  }
+
+  total: u32 = 0
+  for *const item in values {
+    total += item.*
+  }
+  if total != 52 { for {} }
+}

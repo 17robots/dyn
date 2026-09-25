@@ -1,0 +1,19 @@
+# Add to ~/.config/helix/languages.toml
+# Queries go in ~/.config/helix/runtime/queries/dyn/
+# Grammar: `hx --grammar fetch && hx --grammar build` after registering, or
+# point `source.path` at a local checkout of tree-sitter-dyn.
+
+[[language]]
+name = "dyn"
+scope = "source.dyn"
+file-types = ["dyn"]
+comment-tokens = "//"
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit = "    " }
+roots = ["build.dyn"]
+
+[[grammar]]
+name = "dyn"
+source = { path = "/path/to/tree-sitter-dyn" }
+# or, once hosted:
+# source = { git = "https://github.com/you/tree-sitter-dyn", rev = "main" }

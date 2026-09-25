@@ -1,0 +1,7 @@
+#target(kernel: linux)
+fn mapping_allocate(size: usize) Mapping {
+  address := #syscall(9, 0, size, 3, 34, -1, 0)
+  if address < 0 { return Mapping{ error: address } }
+  return Mapping{ bytes: (#cast(*u8) address)[..size], ok: true }
+}
+fn mapping_release(bytes: []u8) isize { return #syscall(11, &bytes[0], #len(bytes)) }

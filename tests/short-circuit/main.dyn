@@ -1,0 +1,5 @@
+fn main() {
+  zero := 0
+  safe := false && (10 / zero == 1)
+  _ = safe
+}

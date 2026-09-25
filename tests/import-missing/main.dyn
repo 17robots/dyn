@@ -1,0 +1,3 @@
+use "./does-not-exist"
+
+fn main() {}

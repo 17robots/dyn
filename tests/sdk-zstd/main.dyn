@@ -1,0 +1,36 @@
+use "std/compress/zstd"
+use "std/io" stream
+use "std/mem" memory
+
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) { return false }
+  i: usize = 0 for i < #len(left) { if left[i] != right[i] { return false } i += 1 }
+  return true
+}
+
+fn main() {
+  source := "Dyn zstd uses caller-owned buffers and a private provider ABI."
+  backing: [512]u8 = [] arena := memory.arena_from_buffer(backing[..])
+  packed := zstd.compress(&arena, source, 3)
+  if !packed.ok || #len(packed.value) == 0 || zstd.version() == 0 { #panic("zstd compress") }
+  size := zstd.frame_size(packed.value)
+  if !size.ok || !size.known || size.size != #cast(u64) #len(source) { #panic("zstd frame size") }
+  unpacked := zstd.decompress(&arena, packed.value)
+  if !unpacked.ok || !equal(unpacked.value, source) { #panic("zstd decompress") }
+  tiny: [1]u8 = []
+  failed := zstd.decompress_into(tiny[..], packed.value)
+  if failed.ok || failed.written != 0 || #len(zstd.error_name(failed.provider_code, 128)) == 0 { #panic("zstd error") }
+  mark := memory.arena_mark(&arena)
+  corrupt: [128]u8 = []
+  i: usize = 0 for i < #len(packed.value) { corrupt[i] = packed.value[i] i += 1 }
+  truncated := zstd.decompress(&arena, corrupt[..#len(packed.value) - 1])
+  if truncated.ok || memory.arena_mark(&arena) != mark { #panic("zstd failure arena rollback") }
+  cursor := stream.cursor(packed.value)
+  compressed_storage: [256]u8 = [] workspace := memory.arena_create(zstd.decoder_workspace_size(16))
+  if !workspace.ok { #panic("zstd workspace") }
+  defer { _ = memory.arena_release(&workspace.arena) }
+  streamed: [128]u8 = []
+  decoder := zstd.decoder(stream.cursor_reader(&cursor), compressed_storage[..#len(packed.value)], memory.arena_push(&workspace.arena, zstd.decoder_workspace_size(16), 8)[..zstd.decoder_workspace_size(16)], 16)
+  read := stream.read_exact(zstd.decoder_reader(&decoder), streamed[..#len(source)])
+  if read.status != stream.Status.Complete || !equal(streamed[..#len(source)], source) { #panic("zstd reader") }
+}

@@ -1,0 +1,53 @@
+use "std/mem" memory
+
+// Byte and UTF-8 string construction share this byte-oriented builder. No UTF-8
+// validation is implied. A builder borrows storage; arena growth is explicit.
+pub enum ErrorKind { None, Capacity, Overflow, InvalidState }
+pub struct Builder { storage: []u8, length: usize }
+
+pub fn from_buffer(storage: []u8) Builder { return Builder{ storage: storage } }
+pub fn bytes(state: *const Builder) []const u8 { return state.storage[..state.length] }
+pub fn clear(state: *Builder) { state.length = 0 }
+
+// Exact capacity reservation. Failure changes neither builder nor arena.
+// Old arena buffers remain allocated until the caller rewinds or resets.
+pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) ErrorKind {
+  if state.length > #len(state.storage) { return ErrorKind.InvalidState }
+  if capacity <= #len(state.storage) { return ErrorKind.None }
+  allocated := memory.arena_try_push_uninit(arena, capacity, 1)
+  if !allocated.ok { return ErrorKind.Capacity }
+  storage := allocated.memory[..capacity]
+  _ = memory.move(storage, state.storage[..state.length])
+  state.storage = storage
+  return ErrorKind.None
+}
+
+// Bounded append supports overlap/self-append. Failure writes nothing.
+pub fn append(state: *Builder, source: []const u8) ErrorKind {
+  if state.length > #len(state.storage) { return ErrorKind.InvalidState }
+  if #len(source) > #len(state.storage) - state.length { return ErrorKind.Capacity }
+  _ = memory.move(state.storage[state.length..], source)
+  state.length += #len(source)
+  return ErrorKind.None
+}
+
+// Geometric growth with exact-size fallback for a nearly exhausted arena.
+// Existing views must be reacquired after mutation. Source may borrow this builder.
+pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) ErrorKind {
+  if state.length > #len(state.storage) { return ErrorKind.InvalidState }
+  maximum := #cast(usize) -1
+  if #len(source) > maximum - state.length { return ErrorKind.Overflow }
+  required := state.length + #len(source)
+  if required > #len(state.storage) {
+    capacity := #len(state.storage)
+    if capacity < 64 { capacity = 64 }
+    for capacity < required {
+      if capacity > maximum / 2 { capacity = required break }
+      capacity *= 2
+    }
+    error := reserve(state, arena, capacity)
+    if error == ErrorKind.Capacity && capacity != required { error = reserve(state, arena, required) }
+    if error != ErrorKind.None { return error }
+  }
+  return append(state, source)
+}

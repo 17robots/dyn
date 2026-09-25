@@ -1,0 +1,115 @@
+pub struct URL {
+  scheme: []const u8,
+  authority: []const u8,
+  path: []const u8,
+  query: []const u8,
+  fragment: []const u8,
+}
+
+pub struct ParseResult { value: URL, ok: bool, error_offset: usize }
+
+pub fn parse(text: []const u8) ParseResult {
+  empty := text[0..0]
+  result := URL{ scheme: empty, authority: empty, path: empty, query: empty, fragment: empty }
+  at: usize = 0
+  colon: isize = -1
+  scan: usize = 0
+  for scan < #len(text) && text[scan] != '/' && text[scan] != '?' && text[scan] != '#' {
+    if text[scan] == ':' { colon = #cast(isize) scan break }
+    scan += 1
+  }
+  if colon >= 0 {
+    if colon == 0 { return ParseResult{ value: result, ok: false, error_offset: 0 } }
+    i: usize = 0
+    for i < #cast(usize) colon {
+      byte := text[i]
+      alpha := (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z')
+      if !alpha && (i == 0 || !((byte >= '0' && byte <= '9') || byte == '+' || byte == '-' || byte == '.')) {
+        return ParseResult{ error_offset: i }
+      }
+      i += 1
+    }
+    result.scheme = text[..#cast(usize) colon]
+    at = #cast(usize) colon + 1
+  }
+  if at + 2 <= #len(text) && text[at] == '/' && text[at + 1] == '/' {
+    at += 2
+    end := at
+    for end < #len(text) && text[end] != '/' && text[end] != '?' && text[end] != '#' { end += 1 }
+    result.authority = text[at..end]
+    at = end
+  }
+  path_end := at
+  for path_end < #len(text) && text[path_end] != '?' && text[path_end] != '#' { path_end += 1 }
+  result.path = text[at..path_end]
+  at = path_end
+  if at < #len(text) && text[at] == '?' {
+    at += 1
+    query_end := at
+    for query_end < #len(text) && text[query_end] != '#' { query_end += 1 }
+    result.query = text[at..query_end]
+    at = query_end
+  }
+  if at < #len(text) && text[at] == '#' { result.fragment = text[at + 1..] }
+  return ParseResult{ value: result, ok: true, error_offset: 0 }
+}
+
+pub struct EncodingResult { data: []u8, ok: bool }
+fn unreserved(byte: u8) bool {
+  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+    (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' || byte == '~'
+}
+fn hex_value(byte: u8) isize {
+  if byte >= '0' && byte <= '9' { return #cast(isize) (byte - '0') }
+  if byte >= 'a' && byte <= 'f' { return #cast(isize) (byte - 'a') + 10 }
+  if byte >= 'A' && byte <= 'F' { return #cast(isize) (byte - 'A') + 10 }
+  return -1
+}
+// Encode one component, including slashes. Source and destination must not overlap.
+// Capacity/validation failures leave destination unchanged.
+pub fn percent_encode(destination: []u8, source: []const u8) EncodingResult {
+  required: usize = 0
+  for byte in source {
+    amount: usize = 3
+    if unreserved(byte) { amount = 1 }
+    if amount > #len(destination) - required { return EncodingResult{ data: destination[..0] } }
+    required += amount
+  }
+  alphabet := "0123456789abcdef"
+  at: usize = 0
+  for input_byte in source {
+    if unreserved(input_byte) { destination[at] = input_byte at += 1 }
+    else {
+      destination[at] = '%'
+      destination[at + 1] = alphabet[#cast(usize) (input_byte >> 4)]
+      destination[at + 2] = alphabet[#cast(usize) (input_byte & 15)]
+      at += 3
+    }
+  }
+  return EncodingResult{ data: destination[..at], ok: true }
+}
+// Percent decoding treats '+' literally; it is not form-urlencoded decoding.
+pub fn percent_decode(destination: []u8, source: []const u8) EncodingResult {
+  required: usize = 0
+  i: usize = 0
+  for i < #len(source) {
+    if source[i] == '%' {
+      if #len(source) - i < 3 || hex_value(source[i + 1]) < 0 || hex_value(source[i + 2]) < 0 {
+        return EncodingResult{ data: destination[..0] }
+      }
+      i += 2
+    }
+    if required == #len(destination) { return EncodingResult{ data: destination[..0] } }
+    required += 1 i += 1
+  }
+  i = 0
+  at: usize = 0
+  for i < #len(source) {
+    if source[i] == '%' {
+      destination[at] = #cast(u8) (hex_value(source[i + 1]) * 16 + hex_value(source[i + 2]))
+      i += 3
+    } else { destination[at] = source[i] i += 1 }
+    at += 1
+  }
+  return EncodingResult{ data: destination[..at], ok: true }
+}

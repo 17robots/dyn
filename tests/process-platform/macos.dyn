@@ -1,0 +1,2 @@
+#target(kernel: darwin)
+fn executable() []const u8 { return "./macos-process" }

@@ -1,0 +1,118 @@
+use "std/c"
+// OpenGL 3.3 core subset. No link dependency: caller supplies context loader.
+// Table belongs to that context and thread; reload for a different context.
+// Calls use native GL contracts and errors (get_error); no hidden allocations.
+pub type Loader = *fn(*const u8) rawptr
+pub const ColorBufferBit: u32 = 16384
+pub const VertexShader: u32 = 35633
+pub const FragmentShader: u32 = 35632
+pub const CompileStatus: u32 = 35713
+pub const LinkStatus: u32 = 35714
+pub const ArrayBuffer: u32 = 34962
+pub const StaticDraw: u32 = 35044
+pub const Float: u32 = 5126
+pub const Triangles: u32 = 4
+pub const Rgba: u32 = 6408
+pub const UnsignedByte: u32 = 5121
+pub struct Api {
+  clear_color: *fn(f32, f32, f32, f32),
+  clear: *fn(u32),
+  viewport: *fn(i32, i32, i32, i32),
+  get_error: *fn() u32,
+  get_integer: *fn(u32, *i32),
+  create_shader: *fn(u32) u32,
+  shader_source: *fn(u32, i32, **const u8, *const i32),
+  compile_shader: *fn(u32),
+  get_shader_iv: *fn(u32, u32, *i32),
+  get_shader_log: *fn(u32, i32, *i32, *u8),
+  delete_shader: *fn(u32),
+  create_program: *fn() u32,
+  attach_shader: *fn(u32, u32),
+  link_program: *fn(u32),
+  get_program_iv: *fn(u32, u32, *i32),
+  get_program_log: *fn(u32, i32, *i32, *u8),
+  use_program: *fn(u32),
+  delete_program: *fn(u32),
+  gen_vertex_arrays: *fn(i32, *u32),
+  bind_vertex_array: *fn(u32),
+  delete_vertex_arrays: *fn(i32, *const u32),
+  gen_buffers: *fn(i32, *u32),
+  bind_buffer: *fn(u32, u32),
+  buffer_data: *fn(u32, isize, rawptr, u32),
+  delete_buffers: *fn(i32, *const u32),
+  enable_vertex_attribute: *fn(u32),
+  vertex_attribute: *fn(u32, i32, u32, u8, i32, rawptr),
+  draw_arrays: *fn(u32, i32, i32),
+  read_pixels: *fn(i32, i32, i32, i32, u32, u32, rawptr),
+}
+pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
+fn symbol(loader: Loader, name: []const u8) rawptr {
+  buffer: [64]u8 = [] encoded := c.string_from_bytes(buffer[..], name)
+  if !encoded.ok { return nil }
+  return loader(encoded.value)
+}
+// Loader must be usable synchronously with a current GL 3.3+ core context.
+// Failure returns no callable table and identifies the first missing function.
+pub fn load(loader: Loader) LoadResult {
+  if loader == nil { return LoadResult{ missing: "loader" } }
+  api := Api{}
+  api.clear_color = #cast(*fn(f32, f32, f32, f32)) symbol(loader, "glClearColor")
+  if api.clear_color == nil { return LoadResult{ missing: "glClearColor" } }
+  api.clear = #cast(*fn(u32)) symbol(loader, "glClear")
+  if api.clear == nil { return LoadResult{ missing: "glClear" } }
+  api.viewport = #cast(*fn(i32, i32, i32, i32)) symbol(loader, "glViewport")
+  if api.viewport == nil { return LoadResult{ missing: "glViewport" } }
+  api.get_error = #cast(*fn() u32) symbol(loader, "glGetError")
+  if api.get_error == nil { return LoadResult{ missing: "glGetError" } }
+  api.create_shader = #cast(*fn(u32) u32) symbol(loader, "glCreateShader")
+  if api.create_shader == nil { return LoadResult{ missing: "glCreateShader" } }
+  api.shader_source = #cast(*fn(u32, i32, **const u8, *const i32)) symbol(loader, "glShaderSource")
+  if api.shader_source == nil { return LoadResult{ missing: "glShaderSource" } }
+  api.compile_shader = #cast(*fn(u32)) symbol(loader, "glCompileShader")
+  if api.compile_shader == nil { return LoadResult{ missing: "glCompileShader" } }
+  api.get_shader_iv = #cast(*fn(u32, u32, *i32)) symbol(loader, "glGetShaderiv")
+  if api.get_shader_iv == nil { return LoadResult{ missing: "glGetShaderiv" } }
+  api.get_shader_log = #cast(*fn(u32, i32, *i32, *u8)) symbol(loader, "glGetShaderInfoLog")
+  if api.get_shader_log == nil { return LoadResult{ missing: "glGetShaderInfoLog" } }
+  api.delete_shader = #cast(*fn(u32)) symbol(loader, "glDeleteShader")
+  if api.delete_shader == nil { return LoadResult{ missing: "glDeleteShader" } }
+  api.create_program = #cast(*fn() u32) symbol(loader, "glCreateProgram")
+  if api.create_program == nil { return LoadResult{ missing: "glCreateProgram" } }
+  api.attach_shader = #cast(*fn(u32, u32)) symbol(loader, "glAttachShader")
+  if api.attach_shader == nil { return LoadResult{ missing: "glAttachShader" } }
+  api.link_program = #cast(*fn(u32)) symbol(loader, "glLinkProgram")
+  if api.link_program == nil { return LoadResult{ missing: "glLinkProgram" } }
+  api.get_program_iv = #cast(*fn(u32, u32, *i32)) symbol(loader, "glGetProgramiv")
+  if api.get_program_iv == nil { return LoadResult{ missing: "glGetProgramiv" } }
+  api.get_program_log = #cast(*fn(u32, i32, *i32, *u8)) symbol(loader, "glGetProgramInfoLog")
+  if api.get_program_log == nil { return LoadResult{ missing: "glGetProgramInfoLog" } }
+  api.use_program = #cast(*fn(u32)) symbol(loader, "glUseProgram")
+  if api.use_program == nil { return LoadResult{ missing: "glUseProgram" } }
+  api.delete_program = #cast(*fn(u32)) symbol(loader, "glDeleteProgram")
+  if api.delete_program == nil { return LoadResult{ missing: "glDeleteProgram" } }
+  api.gen_vertex_arrays = #cast(*fn(i32, *u32)) symbol(loader, "glGenVertexArrays")
+  if api.gen_vertex_arrays == nil { return LoadResult{ missing: "glGenVertexArrays" } }
+  api.bind_vertex_array = #cast(*fn(u32)) symbol(loader, "glBindVertexArray")
+  if api.bind_vertex_array == nil { return LoadResult{ missing: "glBindVertexArray" } }
+  api.delete_vertex_arrays = #cast(*fn(i32, *const u32)) symbol(loader, "glDeleteVertexArrays")
+  if api.delete_vertex_arrays == nil { return LoadResult{ missing: "glDeleteVertexArrays" } }
+  api.gen_buffers = #cast(*fn(i32, *u32)) symbol(loader, "glGenBuffers")
+  if api.gen_buffers == nil { return LoadResult{ missing: "glGenBuffers" } }
+  api.bind_buffer = #cast(*fn(u32, u32)) symbol(loader, "glBindBuffer")
+  if api.bind_buffer == nil { return LoadResult{ missing: "glBindBuffer" } }
+  api.buffer_data = #cast(*fn(u32, isize, rawptr, u32)) symbol(loader, "glBufferData")
+  if api.buffer_data == nil { return LoadResult{ missing: "glBufferData" } }
+  api.delete_buffers = #cast(*fn(i32, *const u32)) symbol(loader, "glDeleteBuffers")
+  if api.delete_buffers == nil { return LoadResult{ missing: "glDeleteBuffers" } }
+  api.enable_vertex_attribute = #cast(*fn(u32)) symbol(loader, "glEnableVertexAttribArray")
+  if api.enable_vertex_attribute == nil { return LoadResult{ missing: "glEnableVertexAttribArray" } }
+  api.vertex_attribute = #cast(*fn(u32, i32, u32, u8, i32, rawptr)) symbol(loader, "glVertexAttribPointer")
+  if api.vertex_attribute == nil { return LoadResult{ missing: "glVertexAttribPointer" } }
+  api.draw_arrays = #cast(*fn(u32, i32, i32)) symbol(loader, "glDrawArrays")
+  if api.draw_arrays == nil { return LoadResult{ missing: "glDrawArrays" } }
+  api.read_pixels = #cast(*fn(i32, i32, i32, i32, u32, u32, rawptr)) symbol(loader, "glReadPixels")
+  if api.read_pixels == nil { return LoadResult{ missing: "glReadPixels" } }
+  api.get_integer = #cast(*fn(u32, *i32)) symbol(loader, "glGetIntegerv")
+  if api.get_integer == nil { return LoadResult{ missing: "glGetIntegerv" } }
+  return LoadResult{ api: api, ok: true }
+}

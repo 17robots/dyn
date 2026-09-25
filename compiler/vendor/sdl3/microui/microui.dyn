@@ -1,0 +1,12 @@
+use "vendor/sdl3"
+use "vendor/microui" ui
+#link("dyn_microui_sdl3")
+// Optional SDL renderer for microui's 8x16 byte-cell metrics. Built-in SDL debug
+// glyphs cover ASCII; this is a basic debug UI, not shaped Unicode text.
+// Feed events before ui.begin. Render after ui.end, then present. Uses current
+// renderer viewport/scale; restores clip rectangle, blend mode and draw color.
+pub fn event(context: ui.Context, renderer: sdl3.Renderer, value: *const sdl3.Event) bool {
+  return native_event(context, renderer, #cast(rawptr) value)
+}
+pub extern fn render "dyn_mu_sdl_render"(context: ui.Context, renderer: sdl3.Renderer) bool
+extern fn native_event "dyn_mu_sdl_event"(context: ui.Context, renderer: sdl3.Renderer, value: rawptr) bool

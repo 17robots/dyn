@@ -1,0 +1,13 @@
+/zig-out/
+/.zig-cache/
+target/
+.dyn_build/
+.codex
+/target
+
+
+# Added by cargo
+
+
+/build/
+/tools/__pycache__/

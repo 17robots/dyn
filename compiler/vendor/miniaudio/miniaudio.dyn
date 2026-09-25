@@ -1,0 +1,80 @@
+use "std/mem"
+use "std/c"
+#link("dyn_miniaudio")
+// miniaudio 0.11.23. Context bytes belong to caller arena. Provider owns its
+// internal allocations/workers. Close before resetting arena; never move state.
+// Input bytes must remain alive and unchanged until decoder_close.
+pub struct Context { value: rawptr, code: i32, ok: bool }
+pub struct Read { samples: usize, code: i32, ended: bool, ok: bool }
+pub fn decoder_create(arena: *mem.Arena, bytes: []const u8) Context {
+  if arena == nil || #len(bytes) == 0 { return Context{ code: -2 } }
+  mark := mem.arena_mark(arena)
+  allocation := mem.arena_try_push(arena, decoder_size(), decoder_align())
+  if !allocation.ok { return Context{ code: -4 } }
+  state := #cast(rawptr) allocation.memory
+  code := decoder_init(state, #cast(rawptr) &bytes[0], #len(bytes))
+  if code != 0 { mem.arena_rewind(arena, mark) return Context{ code: code } }
+  return Context{ value: state, ok: true }
+}
+pub fn decoder_read(decoder: rawptr, output: []f32) Read {
+  if decoder == nil || #len(output) == 0 || #len(output) % 2 != 0 { return Read{ code: -2 } }
+  frames: u64 = 0 code := native_read(decoder, &output[0], #cast(u64) (#len(output) / 2), &frames)
+  return Read{ samples: #cast(usize) frames * 2, code: code, ended: code == -17, ok: code == 0 || code == -17 }
+}
+pub extern fn decoder_close "dyn_ma_decoder_close"(decoder: rawptr)
+// device=false gives deterministic offline mixing. device=true opens the default
+// playback device; its availability/latency require hardware qualification.
+pub fn engine_create(arena: *mem.Arena, device: bool) Context {
+  if arena == nil { return Context{ code: -2 } }
+  mark := mem.arena_mark(arena)
+  allocation := mem.arena_try_push(arena, engine_size(), engine_align())
+  if !allocation.ok { return Context{ code: -4 } }
+  state := #cast(rawptr) allocation.memory code := engine_init(state, device)
+  if code != 0 { mem.arena_rewind(arena, mark) return Context{ code: code } }
+  return Context{ value: state, ok: true }
+}
+pub fn play_file(engine: rawptr, path: []const u8, buffer: []u8) bool {
+  if engine == nil { return false }
+  encoded := c.string_from_bytes(buffer, path)
+  return encoded.ok && native_play(engine, encoded.value) == 0
+}
+// Offline engine only. Outputs interleaved stereo f32 at 48 kHz.
+pub fn mix(engine: rawptr, output: []f32) Read {
+  if engine == nil || #len(output) == 0 || #len(output) % 2 != 0 { return Read{ code: -2 } }
+  frames: u64 = 0 code := native_mix(engine, &output[0], #cast(u64) (#len(output) / 2), &frames)
+  return Read{ samples: #cast(usize) frames * 2, code: code, ok: code == 0 }
+}
+pub extern fn engine_close "dyn_ma_engine_close"(engine: rawptr)
+extern fn decoder_size "dyn_ma_decoder_size"() usize
+extern fn decoder_align "dyn_ma_decoder_align"() usize
+extern fn decoder_init "dyn_ma_decoder_init"(state: rawptr, data: rawptr, size: usize) i32
+extern fn native_read "dyn_ma_decoder_read"(state: rawptr, output: *f32, frames: u64, read: *u64) i32
+extern fn engine_size "dyn_ma_engine_size"() usize
+extern fn engine_align "dyn_ma_engine_align"() usize
+extern fn engine_init "dyn_ma_engine_init"(state: rawptr, device: bool) i32
+extern fn native_play "dyn_ma_play"(state: rawptr, path: c.string) i32
+extern fn native_mix "dyn_ma_mix"(state: rawptr, output: *f32, frames: u64, read: *u64) i32
+
+// Sound state lives in arena; provider synchronously decodes the file. Close
+// sounds BEFORE their engine, then rewind/release storage. Starts paused.
+pub fn sound_create(arena: *mem.Arena, engine: rawptr, path: []const u8, buffer: []u8) Context {
+  if arena == nil || engine == nil { return Context{ code: -2 } }
+  encoded := c.string_from_bytes(buffer, path) if !encoded.ok { return Context{ code: -2 } }
+  mark := mem.arena_mark(arena)
+  work := mem.arena_try_push(arena, sound_size(), sound_align()) if !work.ok { return Context{ code: -4 } }
+  state := #cast(rawptr) work.memory code := sound_init(state, engine, encoded.value)
+  if code != 0 { mem.arena_rewind(arena, mark) return Context{ code: code } }
+  return Context{ value: state, ok: true }
+}
+// Native result: 0 success, negative error. stop preserves position; rewind
+// explicitly seeks to the start. Query ended to distinguish EOF from a stop.
+pub extern fn sound_start "dyn_ma_sound_start"(sound: rawptr) i32
+pub extern fn sound_stop "dyn_ma_sound_stop"(sound: rawptr) i32
+pub extern fn sound_rewind "dyn_ma_sound_rewind"(sound: rawptr) i32
+pub extern fn sound_playing "dyn_ma_sound_playing"(sound: rawptr) bool
+pub extern fn sound_ended "dyn_ma_sound_ended"(sound: rawptr) bool
+pub extern fn sound_volume "dyn_ma_sound_volume"(sound: rawptr, volume: f32) bool
+pub extern fn sound_close "dyn_ma_sound_close"(sound: rawptr)
+extern fn sound_size "dyn_ma_sound_size"() usize
+extern fn sound_align "dyn_ma_sound_align"() usize
+extern fn sound_init "dyn_ma_sound_init"(state: rawptr, engine: rawptr, path: c.string) i32

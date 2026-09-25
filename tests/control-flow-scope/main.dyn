@@ -1,0 +1,7 @@
+fn main() {
+  if true {
+    hidden := 1
+    _ = hidden
+  }
+  hidden = 2
+}

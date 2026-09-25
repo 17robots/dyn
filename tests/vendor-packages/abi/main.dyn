@@ -1,0 +1,40 @@
+use "vendor/tree_sitter" ts
+use "vendor/sdl3"
+use "vendor/sdl3/image" image
+use "vendor/sdl3/ttf" ttf
+use "std/mem"
+use "std/os/linux"
+extern fn node_size "oracle_node_size"() usize
+extern fn node_align "oracle_node_align"() usize
+extern fn edit_size "oracle_edit_size"() usize
+extern fn color_size "oracle_color_size"() usize
+extern fn surface_valid "oracle_surface"(surface: sdl3.Surface) i32
+fn main() {
+  if #sizeof(ts.Node) != node_size() || #alignof(ts.Node) != node_align() || #sizeof(ts.Edit) != edit_size() || #sizeof(sdl3.Color) != color_size() { #panic("provider ABI mismatch") }
+  backing: [65536]u8 = [] arena := mem.arena_from_buffer(backing[..])
+  args := linux.process_arguments(&arena) if #len(args) != 3 { #panic("image and font paths required") }
+  buffer: [4096]u8 = [] surface := image.load_owned(args[1], buffer[..])
+  if !surface.ok { #panic("image") }
+  defer sdl3.surface_destroy_owned(surface.value)
+  if surface_valid(surface.value) == 0 { #panic("image dimensions") }
+  if !ttf.init() { #panic("TTF init") }
+  defer ttf.quit()
+  font := ttf.open_owned(args[2], buffer[..], 18.0) if !font.ok { #panic("font") }
+  defer ttf.destroy_owned(font.value)
+  rendered := ttf.render_owned(font.value, "Dyn", sdl3.Color{ red: 255, green: 127, blue: 64, alpha: 255 })
+  if !rendered.ok { #panic("rendered text") }
+  defer sdl3.surface_destroy_owned(rendered.value)
+  if surface_valid(rendered.value) == 0 { #panic("text dimensions") }
+  if !sdl3.init_video() { #panic("video") }
+  defer sdl3.quit()
+  window := sdl3.window_create("provider test", buffer[..], 64, 64, sdl3.WindowHidden)
+  if !window.ok { #panic("window") }
+  defer sdl3.window_destroy_owned(window.value)
+  renderer := sdl3.renderer_create_default_owned(window.value)
+  if !renderer.ok { #panic("renderer") }
+  defer sdl3.renderer_destroy_owned(renderer.value)
+  texture := sdl3.texture_from_surface_owned(renderer.value, surface.value)
+  if !texture.ok { #panic("texture") }
+  defer sdl3.texture_destroy_owned(texture.value)
+  if !sdl3.texture_draw(renderer.value, texture.value) || !sdl3.present(renderer.value) { #panic("draw") }
+}

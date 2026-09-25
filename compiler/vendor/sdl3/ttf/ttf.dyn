@@ -1,0 +1,39 @@
+use "std/c"
+use "vendor/sdl3"
+#link("SDL3_ttf")
+pub type Font = rawptr
+pub struct FontResult { value: Font, ok: bool }
+pub struct SizeResult { width: i32, height: i32, ok: bool }
+// Init/quit must be balanced; destroy fonts before quit. Use each font on its
+// creating thread. SDL owns rendered surfaces; destroy them separately.
+pub fn init() bool { return native_init() }
+pub fn quit() { native_quit() }
+pub fn open_owned(path: []const u8, buffer: []u8, points: f32) FontResult {
+  if !(points > 0.0) { return FontResult{} }
+  encoded := c.string_from_bytes(buffer, path)
+  if !encoded.ok { return FontResult{} }
+  value := native_open(encoded.value, points)
+  return FontResult{ value: value, ok: value != nil }
+}
+pub fn destroy_owned(font: Font) { if font != nil { native_close(font) } }
+// Empty text passed as an actual NUL string because SDL interprets length 0 as
+// NUL-terminated. Nonempty text uses byte length, never scans past the slice.
+pub fn measure(font: Font, text: []const u8) SizeResult {
+  if font == nil { return SizeResult{} }
+  empty: [1]u8 = [] pointer: *const u8 = &empty[0]
+  if #len(text) > 0 { pointer = &text[0] }
+  width: i32 = 0 height: i32 = 0
+  ok := native_measure(font, pointer, #len(text), &width, &height)
+  return SizeResult{ width: width, height: height, ok: ok }
+}
+pub fn render_owned(font: Font, text: []const u8, color: sdl3.Color) sdl3.SurfaceResult {
+  if font == nil || #len(text) == 0 { return sdl3.SurfaceResult{} }
+  value := native_render(font, &text[0], #len(text), color)
+  return sdl3.SurfaceResult{ value: value, ok: value != nil }
+}
+extern fn native_init "TTF_Init"() bool
+extern fn native_quit "TTF_Quit"()
+extern fn native_open "TTF_OpenFont"(path: c.string, points: f32) Font
+extern fn native_close "TTF_CloseFont"(font: Font)
+extern fn native_measure "TTF_GetStringSize"(font: Font, text: *const u8, length: usize, width: *i32, height: *i32) bool
+extern fn native_render "TTF_RenderText_Blended"(font: Font, text: *const u8, length: usize, color: sdl3.Color) sdl3.Surface

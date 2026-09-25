@@ -1,0 +1,51 @@
+# std/debug
+
+[Reference index](README.md)
+
+## Storage and lifetime
+
+Storage and retention details are declaration-specific; read the adjacent source contracts. Arena parameters allocate from the supplied arena; slices/pointers do not transfer ownership by themselves.
+
+## Failure behavior
+
+Failure and rollback details require declaration-level review. Do not infer atomicity, partial-progress behavior, or panic behavior from the function name.
+
+## Platforms
+
+Target gates are shown with each source below. Ungated code may still call a target-gated dependency. See [support policy](../stability.md) and native-provider requirements in source `#link` directives.
+
+## Examples and tests
+
+- [tests/sdk-tools/main.dyn](../../tests/sdk-tools/main.dyn)
+
+Reviewed behavioral fixtures: no package-wide behavioral claim; inspect linked assertions.
+
+## Declarations and source contracts
+
+## Source: compiler/std/debug/debug.dyn
+
+[Source](../../compiler/std/debug/debug.dyn#L1)
+
+```dyn
+pub struct HexdumpResult { data: []u8, consumed: usize, complete: bool }
+```
+
+[Source](../../compiler/std/debug/debug.dyn#L6)
+
+Compact deterministic hex dump. Each row: 8-digit offset, two spaces, bytes, newline.
+
+```dyn
+pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpResult
+```
+
+[Source](../../compiler/std/debug/debug.dyn#L28)
+
+```dyn
+pub fn poison(destination: []u8, pattern: u8)
+```
+
+[Source](../../compiler/std/debug/debug.dyn#L29)
+
+```dyn
+pub fn all_equal(source: []const u8, pattern: u8) bool
+```

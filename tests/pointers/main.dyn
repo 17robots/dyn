@@ -1,0 +1,30 @@
+struct Node {
+  value: i32,
+  next: *Node,
+}
+
+fn read(node: *const Node) i32 {
+  return node.value
+}
+
+fn main() {
+  first := Node{ value: 7 }
+  second := Node{ value: 9, next: &first }
+  pointer := &second
+  pointer.value = 11
+  pointer.*.value += 1
+  const_pointer: *const Node = pointer
+  empty: *Node = nil
+  zeroed: *Node
+  same := pointer == const_pointer
+  nil_first := nil == empty
+  value_pointer := &pointer.value
+  value_pointer.* += 1
+  const_pointer.next.value = 8
+  ok := read(const_pointer) == 13 && pointer.next.value == 8 && empty == nil && zeroed == nil && same && nil_first
+  if !ok {
+    zero := 0
+    one := 1
+    one /= zero
+  }
+}

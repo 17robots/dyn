@@ -1,0 +1,85 @@
+use "vendor/zstd" provider
+use "std/io" stream
+use "std/mem" memory
+pub type Result = provider.Result
+pub type SizeResult = provider.SizeResult
+pub struct BufferResult { value: []u8, provider_code: usize, ok: bool }
+pub struct Decoder {
+  source_reader: stream.Reader,
+  compressed_storage: []u8,
+  context: provider.StreamContext,
+  used: usize,
+  offset: usize,
+  source_ended: bool,
+  frame_ended: bool,
+  saw_frame: bool,
+  finished: bool,
+  error: isize,
+}
+pub fn version() u32 { return provider.version() }
+pub fn compress_bound(source_size: usize) usize { return provider.compress_bound(source_size) }
+pub fn compress_into(destination: []u8, source: []const u8, level: i32) Result { return provider.compress(destination, source, level) }
+pub fn decompress_into(destination: []u8, source: []const u8) Result { return provider.decompress(destination, source) }
+pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResult {
+  mark := memory.arena_mark(arena)
+  capacity := compress_bound(#len(source)) allocation := memory.arena_try_push_uninit(arena, capacity, 1)
+  if !allocation.ok { return BufferResult{} }
+  result := provider.compress(allocation.memory[..capacity], source, level)
+  if !result.ok { memory.arena_rewind(arena, mark) return BufferResult{ provider_code: result.provider_code } }
+  return BufferResult{ value: allocation.memory[..result.written], provider_code: result.provider_code, ok: true }
+}
+pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
+  mark := memory.arena_mark(arena)
+  size := frame_size(source)
+  if !size.ok || !size.known { return BufferResult{} }
+  capacity := #cast(usize) size.size allocation := memory.arena_try_push_uninit(arena, capacity, 1)
+  if !allocation.ok { return BufferResult{} }
+  result := provider.decompress(allocation.memory[..capacity], source)
+  if !result.ok { memory.arena_rewind(arena, mark) return BufferResult{ provider_code: result.provider_code } }
+  return BufferResult{ value: allocation.memory[..result.written], provider_code: result.provider_code, ok: true }
+}
+pub fn frame_size(source: []const u8) SizeResult { return provider.frame_size(source) }
+pub fn error_name(code: usize, maximum: usize) []const u8 { return provider.error_name(code, maximum) }
+
+// Workspace and input storage must remain alive and disjoint from output.
+// window_log bounds native history to 2^window_log bytes; no hidden heap allocation.
+pub fn decoder_workspace_size(window_log: u32) usize { return provider.stream_workspace_size(window_log) }
+pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, window_log: u32) Decoder {
+  context := provider.stream_context(workspace, window_log)
+  state := Decoder{ source_reader: input, compressed_storage: compressed_bytes, context: context }
+  if !context.ok || #len(compressed_bytes) == 0 { state.error = -28 }
+  return state
+}
+fn decoder_read(data: rawptr, destination: []u8) stream.Result {
+  state := #cast(*Decoder) data
+  if #len(destination) == 0 { return stream.Result{} }
+  if state.error != 0 { return stream.Result{ error: state.error, status: stream.Status.Error } }
+  if state.finished { return stream.Result{ status: stream.Status.End } }
+  for {
+    // First flush provider output, even with no new input. Reading the next chunk
+    // before doing so would stall a caller while output is already available.
+    decoded := provider.stream_decode(&state.context, destination, state.compressed_storage[state.offset..state.used])
+    if !decoded.ok { state.error = -74 break }
+    state.offset += decoded.consumed
+    if decoded.ended { state.frame_ended = true state.saw_frame = true }
+    else if decoded.consumed != 0 || decoded.written != 0 { state.frame_ended = false }
+    if decoded.written != 0 { return stream.Result{ transferred: decoded.written } }
+    if state.offset < state.used {
+      if decoded.consumed == 0 { state.error = -5 break }
+      continue
+    }
+    if state.source_ended {
+      if state.saw_frame && state.frame_ended { state.finished = true return stream.Result{ status: stream.Status.End } }
+      state.error = -74 break
+    }
+    input_result := stream.read(state.source_reader, state.compressed_storage)
+    state.offset = 0 state.used = input_result.transferred
+    if input_result.status == stream.Status.Error { state.error = input_result.error break }
+    if input_result.status == stream.Status.End { state.source_ended = true }
+    else if state.used == 0 { state.error = -5 break }
+  }
+  return stream.Result{ error: state.error, status: stream.Status.Error }
+}
+pub fn decoder_reader(state: *Decoder) stream.Reader {
+  return stream.Reader{ data: #cast(rawptr) state, read: &decoder_read }
+}

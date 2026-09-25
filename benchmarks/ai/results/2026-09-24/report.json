@@ -1,0 +1,177 @@
+{
+  "schema": 1,
+  "scope": "Six fresh-context tasks; instruction-separated evaluator, not adversarially isolated. No comparison model or statistical generalization.",
+  "compiler_sha256": "69e6b48e9e4b47b2281b8660e34f9189d39d7794908db1b112a5fb3499422d20",
+  "task_manifest_sha256": "11670db74359f6db5ab418ec802f2ad3a7c85cced9b46e6b5ca9d191723a6f0d",
+  "first_check_passes": 5,
+  "behavior_passes": 6,
+  "tasks": [
+    {
+      "task": "bounded-copy",
+      "solution_sha256": "3133136ba1b418e0ae6569c4f52580b18b81c553279a5590df047dab6834e2a1",
+      "attempts": [
+        {
+          "command": "./build/dyn check build/ai-benchmark/bounded-copy --no-cache",
+          "exit_code": 0,
+          "changed_after_failure": false
+        }
+      ],
+      "first_check_passed": true,
+      "behavior": [
+        {
+          "mode": "debug",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        },
+        {
+          "mode": "release",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        }
+      ],
+      "passed": true
+    },
+    {
+      "task": "retained-name",
+      "solution_sha256": "ae6fe0dce4ff8f8119fda814c220e83475c1308e932a7d87ca5544ad30f1f39c",
+      "attempts": [
+        {
+          "command": "./build/dyn check build/ai-benchmark/retained-name --diagnostics json --no-cache",
+          "exit_code": 0,
+          "changed_after_failure": false
+        }
+      ],
+      "first_check_passed": true,
+      "behavior": [
+        {
+          "mode": "debug",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        },
+        {
+          "mode": "release",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        }
+      ],
+      "passed": true
+    },
+    {
+      "task": "checked-sum",
+      "solution_sha256": "4d5f8ba5f08b5feb802bcc048d4c4c9de4c6f6392c375680939185207707e282",
+      "attempts": [
+        {
+          "command": "./build/dyn check build/ai-benchmark/checked-sum --diagnostics json --no-cache",
+          "exit_code": 1,
+          "changed_after_failure": true
+        },
+        {
+          "command": "./build/dyn check build/ai-benchmark/checked-sum --diagnostics json --no-cache",
+          "exit_code": 0,
+          "changed_after_failure": false
+        }
+      ],
+      "first_check_passed": false,
+      "behavior": [
+        {
+          "mode": "debug",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        },
+        {
+          "mode": "release",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        }
+      ],
+      "passed": true
+    },
+    {
+      "task": "parse-port",
+      "solution_sha256": "9788d7467f02a25ce15617b5462a61aecc6d3163f59921dcfd2af1f964be6af4",
+      "attempts": [
+        {
+          "command": "./build/dyn check build/ai-benchmark/parse-port --diagnostics json --no-cache",
+          "exit_code": 0,
+          "changed_after_failure": false
+        }
+      ],
+      "first_check_passed": true,
+      "behavior": [
+        {
+          "mode": "debug",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        },
+        {
+          "mode": "release",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        }
+      ],
+      "passed": true
+    },
+    {
+      "task": "handle-copy",
+      "solution_sha256": "bb8680c651fe22f0f3ea97835139b6fcf21b5dae86c21e8788b2aeb0e9f65b47",
+      "attempts": [
+        {
+          "command": "./build/dyn check build/ai-benchmark/handle-copy --diagnostics json --no-cache",
+          "exit_code": 0,
+          "changed_after_failure": false
+        }
+      ],
+      "first_check_passed": true,
+      "behavior": [
+        {
+          "mode": "debug",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        },
+        {
+          "mode": "release",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        }
+      ],
+      "passed": true
+    },
+    {
+      "task": "state-model",
+      "solution_sha256": "0b76a05066c2e357d4e0d7aa6ae3155cfe7d69bbba2bd0d7b097ba12cf29a689",
+      "attempts": [
+        {
+          "command": "./build/dyn check build/ai-benchmark/state-model --diagnostics json --no-cache",
+          "exit_code": 0,
+          "changed_after_failure": false
+        }
+      ],
+      "first_check_passed": true,
+      "behavior": [
+        {
+          "mode": "debug",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        },
+        {
+          "mode": "release",
+          "compile_exit": 0,
+          "run_exit": 0,
+          "stderr": ""
+        }
+      ],
+      "passed": true
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+extern fn sqlite_open "sqlite3_open"(name: c.string, database: *rawptr) c.int
+extern fn sqlite_close "sqlite3_close"(database: rawptr) c.int
+extern fn sqlite_exec "sqlite3_exec"(database: rawptr, sql: c.string, callback: rawptr, context: rawptr, error: *rawptr) c.int
+extern fn sqlite_error_message "sqlite3_errmsg"(database: rawptr) c.string
+extern fn sqlite_free "sqlite3_free"(memory: rawptr)
+extern fn sqlite_prepare "sqlite3_prepare_v2"(database: rawptr, sql: c.string, length: i32, statement: *rawptr, tail: *c.string) i32
+extern fn sqlite_step "sqlite3_step"(statement: rawptr) i32
+extern fn sqlite_reset "sqlite3_reset"(statement: rawptr) i32
+extern fn sqlite_finalize "sqlite3_finalize"(statement: rawptr) i32
+extern fn sqlite_clear_bindings "sqlite3_clear_bindings"(statement: rawptr) i32
+extern fn sqlite_bind_null "sqlite3_bind_null"(statement: rawptr, index: i32) i32
+extern fn sqlite_bind_integer "sqlite3_bind_int64"(statement: rawptr, index: i32, value: i64) i32
+extern fn sqlite_bind_float "sqlite3_bind_double"(statement: rawptr, index: i32, value: f64) i32
+extern fn sqlite_bind_text "sqlite3_bind_text"(statement: rawptr, index: i32, value: rawptr, length: i32, destructor: rawptr) i32
+extern fn sqlite_bind_blob "sqlite3_bind_blob"(statement: rawptr, index: i32, value: rawptr, length: i32, destructor: rawptr) i32
+extern fn sqlite_column_count "sqlite3_column_count"(statement: rawptr) i32
+extern fn sqlite_column_type "sqlite3_column_type"(statement: rawptr, index: i32) i32
+extern fn sqlite_column_integer "sqlite3_column_int64"(statement: rawptr, index: i32) i64
+extern fn sqlite_column_float "sqlite3_column_double"(statement: rawptr, index: i32) f64
+extern fn sqlite_column_text "sqlite3_column_text"(statement: rawptr, index: i32) *const u8
+extern fn sqlite_column_blob "sqlite3_column_blob"(statement: rawptr, index: i32) *const u8
+extern fn sqlite_column_bytes "sqlite3_column_bytes"(statement: rawptr, index: i32) i32
+extern fn sqlite_busy_timeout "sqlite3_busy_timeout"(database: rawptr, milliseconds: i32) i32
+extern fn sqlite_changes "sqlite3_changes64"(database: rawptr) i64
+extern fn sqlite_last_rowid "sqlite3_last_insert_rowid"(database: rawptr) i64
+extern fn sqlite_autocommit "sqlite3_get_autocommit"(database: rawptr) i32

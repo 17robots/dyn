@@ -1,0 +1,21 @@
+use "std/io" io
+use "std/terminal" terminal
+
+fn main() {
+  if !terminal.is_attached(0) {
+    _ = io.print(terminal.stderr(), "stdin is not a terminal\n")
+    return
+  }
+  previous := terminal.State{ bytes: [] }
+  if !terminal.raw(0, &previous) { #panic("raw mode failed") }
+  defer { _ = terminal.restore(0, &previous) }
+  input := terminal.stdin()
+  output := terminal.stdout()
+  _ = io.print(output, "raw mode: press q to quit\r\n")
+  byte: [1]u8 = []
+  for {
+    read := io.read(input, byte[..])
+    if read.status != io.Status.Complete || read.transferred == 0 || byte[0] == 'q' { break }
+    _ = io.print(output, "key: {}\r\n", byte[..])
+  }
+}

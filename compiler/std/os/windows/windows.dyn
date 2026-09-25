@@ -1,0 +1,79 @@
+#target(arch: x86_64, kernel: windows, abi: win64)
+
+use "std/c" cstrings
+
+pub struct IoResult { value: isize, error: isize, ok: bool }
+pub fn io_value(result: *const IoResult) isize { return result.value }
+extern fn create_file_raw "dyn_win_create_file"(name: *const u8, access: u32, share: u32, security: rawptr, creation: u32, attributes: u32, template: rawptr) rawptr
+extern fn close_handle_raw "dyn_win_close_handle"(handle: rawptr) i32
+extern fn read_file_raw "dyn_win_read_file"(handle: rawptr, bytes: *u8, count: u32, done: *u32, overlapped: rawptr) i32
+extern fn write_file_raw "dyn_win_write_file"(handle: rawptr, bytes: *const u8, count: u32, done: *u32, overlapped: rawptr) i32
+extern fn last_error_raw "dyn_win_last_error"() u32
+extern fn thread_spawn_raw "dyn_win_thread_spawn"(size: usize, entry: *fn(rawptr) isize, context: rawptr, tid: *u32) rawptr
+extern fn wait_raw "dyn_win_wait"(handle: rawptr, milliseconds: u32) u32
+extern fn yield_raw "dyn_win_yield"() i32
+extern fn socket_raw "dyn_win_socket"(family: i32, kind: i32, protocol: i32) usize
+extern fn socket_close_raw "dyn_win_close_socket"(socket: usize) i32
+extern fn socket_connect_raw "dyn_win_connect"(socket: usize, address: *const u8, length: i32) i32
+extern fn socket_poll_raw "dyn_win_socket_poll"(items: *PollDescriptor, count: u32, milliseconds: i32) i32
+extern fn socket_error_raw "dyn_win_socket_error"() i32
+
+pub struct Thread { handle: rawptr, id: u32 }
+pub struct PollDescriptor { descriptor: usize, events: i16, returned: i16 }
+pub const has_native_threads: bool = true
+
+fn terminated(path: []const u8, storage: []u8) *const u8 {
+  if #len(path) == 0 { return nil }
+  result := cstrings.string_from_bytes(storage, path)
+  if !result.ok { return nil }
+  return result.value
+}
+pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
+  // Keep this below MSVC's stack-probe threshold; this bootstrap runtime does
+  // not depend on compiler-rt. Win32 legacy paths are bounded at 260 bytes.
+  storage: [260]u8 = []
+  name := terminated(path, storage[..])
+  if name == nil { return IoResult{ value: -1, error: 206, ok: false } }
+  access: u32 = 2147483648
+  creation: u32 = 3
+  if write_access { access = access | 1073741824 }
+  if create { creation = 4 }
+  handle := create_file_raw(name, access, 7, nil, creation, 128, nil)
+  raw := #cast(usize) handle
+  if raw == 18446744073709551615 { return IoResult{ value: -1, error: #cast(isize) last_error_raw(), ok: false } }
+  return IoResult{ value: #cast(isize) raw, error: 0, ok: true }
+}
+pub fn file_close(handle: isize) IoResult {
+  if close_handle_raw(#cast(rawptr) #cast(usize) handle) == 0 { return IoResult{ value: -1, error: #cast(isize) last_error_raw(), ok: false } }
+  return IoResult{ value: 0, error: 0, ok: true }
+}
+pub fn thread_spawn(thread: *Thread, stack_size: usize, entry: *fn(rawptr) isize, context: rawptr) bool {
+  if thread.handle != nil { return false }
+  if entry == nil { return false }
+  thread.handle = thread_spawn_raw(stack_size, entry, context, &thread.id)
+  return thread.handle != nil
+}
+pub fn thread_join(thread: *Thread) bool {
+  if thread.handle == nil { return false }
+  if wait_raw(thread.handle, 4294967295) != 0 { return false }
+  result := close_handle_raw(thread.handle) != 0
+  thread.handle = nil
+  return result
+}
+pub fn thread_yield() { _ = yield_raw() }
+pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
+  value := socket_raw(family, kind, protocol)
+  if value == 18446744073709551615 { return IoResult{ value: -1, error: #cast(isize) socket_error_raw(), ok: false } }
+  return IoResult{ value: #cast(isize) value, error: 0, ok: true }
+}
+pub fn socket_close(socket: usize) bool { return socket_close_raw(socket) == 0 }
+pub fn socket_connect(socket: usize, address: []const u8) bool {
+  if #len(address) == 0 { return false }
+  return socket_connect_raw(socket, &address[0], #cast(i32) #len(address)) == 0
+}
+pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
+  if #len(items) == 0 { return 0 }
+  value := socket_poll_raw(&items[0], #cast(u32) #len(items), milliseconds)
+  if value < 0 { return 0 - #cast(isize) socket_error_raw() }
+  return #cast(isize) value
+}

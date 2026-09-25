@@ -1,0 +1,249 @@
+{
+  "scope": "Rule-family acceptance index, not exhaustive branch or semantic-rule coverage. Positive/negative fixture classifications are executable; dedicated tests supply runtime, boundary and editor evidence.",
+  "rules": [
+    {
+      "id": "modules",
+      "positive": [
+        "tests/import-valid",
+        "tests/multi-file"
+      ],
+      "negative": [
+        "tests/import-cycle",
+        "tests/import-private",
+        "tests/import-unqualified",
+        "tests/import-alias"
+      ],
+      "checks": [
+        "tests/incremental-cache.py",
+        "tests/lsp-contracts.py"
+      ]
+    },
+    {
+      "id": "initialization",
+      "positive": [
+        "tests/globals",
+        "tests/global-modules"
+      ],
+      "negative": [
+        "tests/global-cycle",
+        "tests/global-errors"
+      ],
+      "checks": [
+        "tests/typed-metamorphic.py"
+      ]
+    },
+    {
+      "id": "numeric-conversions",
+      "positive": [
+        "tests/conversions",
+        "tests/implicit-widening",
+        "tests/distinct-types"
+      ],
+      "negative": [
+        "tests/lossy-conversion",
+        "tests/distinct-errors"
+      ],
+      "checks": [
+        "tests/compiler-contracts.py"
+      ]
+    },
+    {
+      "id": "constant-arithmetic",
+      "positive": [
+        "tests/expressions",
+        "tests/boundaries"
+      ],
+      "negative": [
+        "tests/constant-overflow",
+        "tests/constant-divzero",
+        "tests/constant-shift"
+      ],
+      "checks": [
+        "tests/typed-metamorphic.py"
+      ]
+    },
+    {
+      "id": "control-flow",
+      "positive": [
+        "tests/control-flow",
+        "tests/labeled-loops"
+      ],
+      "negative": [
+        "tests/control-flow-errors",
+        "tests/labeled-loop-errors"
+      ],
+      "checks": [
+        "tests/compiler-stress.py"
+      ]
+    },
+    {
+      "id": "scope",
+      "positive": [
+        "tests/locals",
+        "tests/local-const"
+      ],
+      "negative": [
+        "tests/local-errors",
+        "tests/local-const-errors"
+      ],
+      "checks": [
+        "tests/large-function-contracts.py"
+      ]
+    },
+    {
+      "id": "functions",
+      "positive": [
+        "tests/functions",
+        "tests/function-pointers",
+        "tests/native-variadic"
+      ],
+      "negative": [
+        "tests/function-errors",
+        "tests/function-pointer-errors"
+      ],
+      "checks": [
+        "tests/compiler-contracts.py"
+      ]
+    },
+    {
+      "id": "struct-layout",
+      "positive": [
+        "tests/structs",
+        "tests/empty-struct"
+      ],
+      "negative": [
+        "tests/struct-recursive",
+        "tests/struct-duplicate-literal"
+      ],
+      "checks": [
+        "tests/member-contracts.py",
+        "tests/readiness-native.py"
+      ]
+    },
+    {
+      "id": "enums-case",
+      "positive": [
+        "tests/enums",
+        "tests/enum-pointer"
+      ],
+      "negative": [
+        "tests/enum-errors",
+        "tests/case-errors"
+      ],
+      "checks": [
+        "tests/member-contracts.py"
+      ]
+    },
+    {
+      "id": "pointers",
+      "positive": [
+        "tests/pointers",
+        "tests/pointer-iteration"
+      ],
+      "negative": [
+        "tests/pointer-const-errors",
+        "tests/pointer-iteration-errors",
+        "tests/pointer-type-errors"
+      ],
+      "checks": [
+        "tests/compiler-stress.py"
+      ]
+    },
+    {
+      "id": "arrays-slices",
+      "positive": [
+        "tests/arrays",
+        "tests/large-array"
+      ],
+      "negative": [
+        "tests/array-errors",
+        "tests/pointer-slice-errors"
+      ],
+      "checks": [
+        "tests/constant-array-codegen.py"
+      ]
+    },
+    {
+      "id": "defer-panic",
+      "positive": [
+        "tests/defer",
+        "tests/runtime-defer-loop"
+      ],
+      "negative": [
+        "tests/defer-errors"
+      ],
+      "checks": [
+        "tests/compiler-stress.py"
+      ]
+    },
+    {
+      "id": "builtins-reflection",
+      "positive": [
+        "tests/builtins",
+        "tests/reflection",
+        "tests/reflection-errors"
+      ],
+      "negative": [
+        "tests/builtin-errors"
+      ],
+      "checks": [
+        "tests/incremental-cache.py"
+      ]
+    },
+    {
+      "id": "unsupported-syntax",
+      "positive": [],
+      "negative": [
+        "tests/generic-literal-syntax-errors",
+        "tests/generic-type-syntax-errors"
+      ],
+      "checks": [
+        "tests/language-rejections.py"
+      ]
+    },
+    {
+      "id": "foreign-boundaries",
+      "positive": [],
+      "negative": [
+        "tests/ffi-errors",
+        "tests/ffi-variadic-errors"
+      ],
+      "checks": [
+        "tests/readiness-ffi.py",
+        "tests/readiness-native.py"
+      ]
+    },
+    {
+      "id": "resource-limits",
+      "positive": [],
+      "negative": [],
+      "checks": [
+        "tests/readiness-robustness.py",
+        "tests/source-limits.sh"
+      ]
+    },
+    {
+      "id": "editor-equivalence",
+      "positive": [],
+      "negative": [],
+      "checks": [
+        "tests/lsp-edit-stress.py",
+        "tests/frontend-fuzz.py",
+        "tests/readiness-workspace.py"
+      ]
+    },
+    {
+      "id": "arena-buffer-lifetimes",
+      "positive": [
+        "tests/sdk-mem",
+        "tests/sdk-lifetimes",
+        "tests/sdk-buffer-contracts",
+        "tests/sdk-storage-contracts"
+      ],
+      "negative": [],
+      "checks": [
+        "tests/library-contracts.py"
+      ]
+    }
+  ]
+}

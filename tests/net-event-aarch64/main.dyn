@@ -1,0 +1,10 @@
+#target(arch: aarch64, kernel: linux, abi: sysv)
+use "std/net"
+
+// Compile-only ABI coverage for the Linux AArch64 event adapter. Runtime
+// behavior is exercised by stdlib-net-event on the native Linux host.
+fn main() {
+  value := net.event(net.EventReadable | net.EventWritable, 0x1234)
+  if net.event_events(&value) == 0 { #panic("event flags") }
+  if net.event_data(&value) != 0x1234 { #panic("event data") }
+}

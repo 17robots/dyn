@@ -1,0 +1,21 @@
+use "std/compress/deflate" deflate
+use "std/io" stream
+
+pub type Result = deflate.Result
+pub type Decoder = deflate.Decoder
+
+// One member; consumed identifies the next member or trailing data.
+pub fn decompress(destination: []u8, source: []const u8) Result {
+  return deflate.gunzip_internal(destination, source)
+}
+// Reads concatenated members through EOF, verifying every header/trailer.
+// Buffers borrow caller storage. 1024 input + 33026 history bytes suffice.
+// Returned output remains provisional until the reader reaches End.
+pub fn decoder(input: stream.Reader, compressed_bytes: []u8, history: []u8) Decoder {
+  state := deflate.decoder(input, compressed_bytes, history)
+  state.gzip = true
+  return state
+}
+pub fn decoder_reader(state: *Decoder) stream.Reader {
+  return deflate.decoder_reader(state)
+}

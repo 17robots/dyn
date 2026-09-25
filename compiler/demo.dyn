@@ -1,0 +1,116 @@
+use "std/io"
+use "std/terminal"
+use "std/mem"
+use "std/os/linux" os
+use "std/time"
+
+struct Point { x, y: i32 }
+enum PacketKind { Data, Stop }
+struct Packet { kind: PacketKind, value: i32 }
+enum Result { Value: i32, Error }
+
+fn require(condition: bool) {
+  if !condition { #panic("demo check failed") }
+}
+
+fn add(left, right: i32) i32 { return left + right }
+fn subtract(left, right: i32) i32 { return left - right }
+
+fn apply(operation: *fn(i32, i32) i32, left, right: i32) i32 {
+  return operation(left, right)
+}
+
+fn language_demo() {
+  integer: i32 = 40
+  floating: f64 = 1.5
+  character: u32 = 'λ'
+  enabled := true
+  point := Point{ x: integer, y: 2 }
+  numbers: [5]i32 = [1, 2, 3, 4, 5]
+  middle := numbers[1..4]
+
+  require(enabled)
+  require(floating == 1.5)
+  require(character == 955)
+  require(point.x + point.y == 42)
+  require(#len(middle) == 3 && middle[0] == 2 && middle[2] == 4)
+
+  operation: *fn(i32, i32) i32 = &add
+  require(apply(operation, 20, 22) == 42)
+  operation = &subtract
+  require(apply(operation, 50, 8) == 42)
+
+  result := Result.Value(42)
+  extracted: i32 = 0
+  case result {
+    Result.Value value => { extracted = value },
+    _ => { extracted = -1 },
+  }
+  require(extracted == 42)
+
+  packet := Packet{ kind: PacketKind.Data, value: extracted }
+  case packet.kind {
+    PacketKind.Data => { require(packet.value == 42) },
+    PacketKind.Stop => { #panic("unexpected packet") },
+  }
+  _ = io.println(terminal.stdout(),"language: ok")
+}
+
+fn memory_demo() {
+  backing: [128]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  mark := mem.arena_mark(&arena)
+  point := #cast(*Point) mem.arena_push(&arena, #sizeof(Point), #alignof(Point))
+  require(point.x == 0 && point.y == 0)
+  point.x = 21
+  point.y = 21
+  require(point.x + point.y == 42)
+  mem.arena_rewind(&arena, mark)
+
+  bytes: [8]u8 = []
+  require(mem.copy(bytes[..], "dyn") == 3)
+  require(bytes[0] == 'd' && bytes[2] == 'n')
+
+  slots: [32]u8 = []
+  list := mem.free_list_init(slots[..], 8, 8)
+  first := mem.free_list_alloc(&list)
+  second := mem.free_list_alloc(&list)
+  require(first != second)
+  mem.free_list_free(&list, first)
+  require(mem.free_list_alloc(&list) == first)
+  _ = io.println(terminal.stdout(),"memory: ok")
+}
+
+fn reflection_demo() {
+  point := #typeof(Point)
+  function := #typeof(add)
+  require(point.kind == TypeKind.Struct)
+  require(point.size == 8 && point.alignment == 4)
+  require(#len(point.name) == 5)
+  require(function.kind == TypeKind.Function)
+  require(point.id != function.id)
+  _ = io.println(terminal.stdout(),"reflection: ok")
+}
+
+fn defer_demo() {
+  defer _ = io.println(terminal.stdout(),"defer: first registered")
+  defer _ = io.println(terminal.stdout(),"defer: second registered")
+}
+
+fn runtime_demo() {
+  now := time.monotonic_now()
+  require(now.seconds > 0)
+  require(os.process_id() > 0)
+  require(os.thread_id() > 0)
+  _ = io.println(terminal.stdout(),"runtime: ok")
+}
+
+pub fn run_demo() {
+  _ = io.println(terminal.stdout(),"dyn demo")
+  language_demo()
+  memory_demo()
+  reflection_demo()
+  defer_demo()
+  runtime_demo()
+  _ = io.println(terminal.stdout(),"demo complete")
+}

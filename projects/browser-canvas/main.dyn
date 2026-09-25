@@ -1,0 +1,28 @@
+use "std/mem" mem
+
+// Storage belongs to this Wasm instance, not a temporary function stack.
+backing: [65536]u8
+arena: mem.Arena = mem.arena_from_buffer(backing[..])
+extern fn changed "pixels_changed"(count: usize)
+
+pub fn reset() { mem.arena_reset(&arena) }
+pub fn allocate(size: usize) rawptr {
+  result := mem.arena_try_push(&arena, size, 4)
+  if !result.ok { return nil }
+  return #cast(rawptr) result.memory
+}
+
+// Caller supplies a live allocation of count RGBA pixels.
+pub fn grayscale(data: *u8, count: usize) {
+  if count > 16384 { #panic("image exceeds demo capacity") }
+  pixels := data[..count * 4]
+  i: usize = 0
+  for i < #len(pixels) {
+    light := (#cast(u32) pixels[i] * 77 + #cast(u32) pixels[i + 1] * 150 + #cast(u32) pixels[i + 2] * 29) >> 8
+    pixels[i] = #cast(u8) light
+    pixels[i + 1] = #cast(u8) light
+    pixels[i + 2] = #cast(u8) light
+    i += 4
+  }
+  changed(count)
+}

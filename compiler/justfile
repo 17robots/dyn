@@ -1,0 +1,67 @@
+# Compiler build and SDK release. Configuration uses environment variables.
+set positional-arguments
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+export COMPILER_DIR := justfile_directory()
+export WORKSPACE := env('WORKSPACE', parent_directory(COMPILER_DIR))
+export BUILD := absolute_path(env('BUILD', if path_exists(WORKSPACE / 'tests/run.sh') == 'true' { WORKSPACE / 'build' } else { COMPILER_DIR / 'build' }))
+export TS_DIR := absolute_path(env('TS_DIR', WORKSPACE / 'tree-sitter-dyn'))
+export DYN := env('DYN', BUILD / 'dyn')
+export DYN_SDK := env('DYN_SDK', COMPILER_DIR)
+export CC := env('CC', 'cc')
+export CLANG := env('CLANG', 'clang')
+export CFLAGS := env('CFLAGS', '-std=c11 -Wall -Wextra -Wpedantic -Werror -g')
+export CPPFLAGS := env('CPPFLAGS', '')
+export STAGE2 := env('STAGE2', '')
+export STAGE3 := env('STAGE3', '')
+export RELEASE_FLAGS := env('RELEASE_FLAGS', '')
+
+# Build the compiler, runtime objects, and native bridges incrementally.
+all:
+    python3 tools/build.py all
+
+release: all
+    python3 tools/build.py dyn-release
+
+# Build named native artifacts, e.g. `just artifact dyn-sanitize dyn-perf`.
+artifact +names:
+    python3 tools/build.py "$@"
+
+per-file:
+    python3 tools/build.py dyn-per-file
+
+install: release
+    python3 tools/install.py
+
+clean:
+    python3 tools/install.py --clean
+
+grammar:
+    just --justfile "$TS_DIR/justfile" generate
+
+smoke: release
+    "$BUILD/dyn" build "$COMPILER_DIR/tests/smoke" --no-cache --quiet --output "$BUILD/compiler-smoke"
+    "$BUILD/compiler-smoke"
+    "$BUILD/dyn-release" build "$COMPILER_DIR/tests/smoke" --release --no-cache --quiet --output "$BUILD/compiler-smoke-release"
+    "$BUILD/compiler-smoke-release"
+
+package: release
+    python3 tools/package-sdk.py --build "$BUILD" --workspace "$WORKSPACE" --grammar "$TS_DIR"
+
+alias package-sdk := package
+alias install-check := package
+
+# Use the shared suite in a workspace, or smoke-test a standalone checkout.
+test: all
+    if test -f "$WORKSPACE/tests/run.sh"; then cd "$WORKSPACE" && sh tests/run.sh; else just --justfile "$COMPILER_DIR/justfile" smoke; fi
+
+vendor-libs:
+    python3 tools/build-vendors.py --prefix "$BUILD/vendor-deps/install" ${VENDOR_PACKAGES:-}
+
+vendor-bindings: release
+    python3 tools/bind-vendors.py --prefix "$BUILD/vendor-deps/install" --sources "$BUILD/extra-vendor-sources" --output "$BUILD/raw-sdk" --dyn "$BUILD/dyn-release" --clang "${BIND_CLANG:-${DYN_BIND_CLANG:-$CLANG}}" ${VENDOR_PACKAGES:-}
+
+help:
+    @just --list
+
+import 'workspace.just'

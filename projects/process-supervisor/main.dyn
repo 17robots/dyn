@@ -1,0 +1,28 @@
+use "std/io" io
+use "std/mem" mem
+use "std/os/linux" linux
+use "std/terminal" terminal
+
+fn main() {
+  backing: [1048576]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  arguments := linux.process_arguments(&arena)
+  if #len(arguments) < 2 {
+    _ = io.print(terminal.stderr(), "usage: process-supervisor PROGRAM [ARG...]\n")
+    return
+  }
+  options := linux.SpawnOptions{ input: -1, output: -1, error: -1 }
+  child := linux.spawn(&arena, arguments[1], arguments[1..], options)
+  if !child.ok {
+    _ = io.print(terminal.stderr(), "spawn failed\n")
+    return
+  }
+  _ = io.println(terminal.stdout(), "started pid {}", child.process)
+  waited := linux.wait(child.process, false)
+  if !waited.ok {
+    _ = io.print(terminal.stderr(), "wait failed\n")
+    return
+  }
+  if linux.exited(waited.status) { _ = io.println(terminal.stdout(), "exit {}", linux.exit_status(waited.status)) }
+  else { _ = io.println(terminal.stdout(), "terminated by signal") }
+}

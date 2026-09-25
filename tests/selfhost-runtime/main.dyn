@@ -1,0 +1,17 @@
+use "std/mem"
+use "std/os"
+
+fn logical_lowering_works() bool { return 1 < 2 && 3 != 4 }
+
+fn main() {
+  if !logical_lowering_works() { #panic("generated logical lowering failed") }
+  arena: mem.Arena = mem.arena_make(1048576)
+  first := mem.arena_push(&arena, 32, 8)
+  second := mem.arena_push(&arena, 16384, 8)
+  if first == nil { #panic("generated first arena pointer result failed") }
+  if second == nil { #panic("generated second arena pointer result failed") }
+  _ = first
+  _ = second
+  arguments := os.arguments(&arena)
+  if #len(arguments) == 0 { #panic("selfhost argument parsing failed") }
+}

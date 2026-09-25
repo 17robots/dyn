@@ -1,0 +1,44 @@
+distinct type PermissionMask = u32
+fn read_permission() PermissionMask { return #cast(PermissionMask) 1 }
+fn write_permission() PermissionMask { return #cast(PermissionMask) 2 }
+
+enum(u8) Small { Zero, One }
+enum(u8) Message { Empty, Number: u64, Byte: u8 }
+
+fn inspect(value: any) i64 {
+  copy := value
+  case copy {
+    is i64 number => { return number },
+    is bool yes => { if yes { return 1 } else { return 0 } },
+    _ => { return -1 }
+  }
+}
+
+fn count(values: ...i64) i64 {
+  total: i64 = 0
+  for value in values { total += value }
+  return total
+}
+
+fn main() {
+  if inspect(#cast(u8) 42) != -1 { #panic("any exact type identity") }
+  raw := #cast(rawptr) #cast(usize) 4096
+  raw_value: usize = #cast(usize) raw
+  if raw_value != 4096 || #sizeof(rawptr) != #sizeof(usize) ||
+      #alignof(rawptr) != #alignof(usize) { #panic("rawptr contract") }
+  if inspect(#cast(i64) 42) != 42 || inspect(true) != 1 { #panic("any contract") }
+  nil_raw: rawptr = nil
+  if nil_raw != nil { #panic("rawptr nil contract") }
+  if count() != 0 || count(1, 2, 3) != 6 { #panic("variadic contract") }
+  permissions := read_permission() | write_permission()
+  permission_bits: u32 = #cast(u32) permissions
+  if permission_bits != 3 { #panic("mask contract") }
+  if #sizeof(Small) != 1 || #alignof(Small) != 1 { #panic("plain enum ABI") }
+  if #sizeof(Message) != 16 || #alignof(Message) != 8 { #panic("payload enum ABI") }
+  message := Message.Number(9)
+  case message {
+    Message.Empty => { #panic("enum tag") },
+    Message.Number number => { if number != 9 { #panic("enum payload") } },
+    Message.Byte _ => { #panic("enum tag") }
+  }
+}

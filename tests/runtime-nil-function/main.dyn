@@ -1,0 +1,4 @@
+fn main() {
+  operation: *fn() = nil
+  operation()
+}

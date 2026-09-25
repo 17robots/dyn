@@ -1,0 +1,32 @@
+use "vendor/sdl3/mixer"
+use "std/mem"
+use "std/os/linux"
+use "std/fs"
+use "std/io"
+use "std/terminal"
+fn main() {
+  storage := mem.arena_create(4 * 1024 * 1024) if !storage.ok { #panic("audio arena") }
+  defer { _ = mem.arena_release(&storage.arena) }
+  args := linux.process_arguments(&storage.arena) if #len(args) != 2 { #panic("WAV path required") }
+  bytes := fs.read_all(&storage.arena, args[1], 1024 * 1024) if !bytes.ok { #panic("WAV read") }
+  if !mixer.init() { #panic("mixer init") } defer mixer.quit()
+  engine := mixer.create_owned() if engine == nil { #panic("mixer create") } defer mixer.destroy_owned(engine)
+  audio := mixer.decode_owned(engine, bytes.data) if audio == nil { #panic("mixer decode") } defer mixer.audio_destroy_owned(audio)
+  if mixer.decode_owned(engine, "invalid") != nil { #panic("invalid audio accepted") }
+  track := mixer.track_create(engine) if track == nil { #panic("mixer track") } defer mixer.track_destroy(track)
+  if !mixer.play(track, audio) { #panic("mixer play") }
+  samples: [2048]f32 = [] heard := false iterations: usize = 0
+  for iterations < 200 && mixer.playing(track) {
+    result := mixer.generate(engine, samples[..]) if !result.ok { #panic("mixer generate") }
+    for sample in samples[..result.written] { if sample != 0.0 { heard = true } }
+    iterations += 1
+  }
+  if !heard || mixer.playing(track) { #panic("mixer did not finish audio") }
+  if !mixer.play(track, audio) || !mixer.stop(track) || mixer.playing(track) { #panic("mixer stop") }
+  silent := mixer.generate(engine, samples[..]) if !silent.ok || silent.written != 0 { #panic("mixer silence status") }
+  for silent_sample in samples { if silent_sample != 0.0 { #panic("mixer silence output") } }
+  if mixer.generate(engine, samples[..1]).ok { #panic("odd sample count accepted") }
+  device := mixer.create_device_owned() if device == nil { #panic("mixer playback device") }
+  defer mixer.destroy_owned(device)
+  _ = io.println(terminal.stdout(), "SDL_mixer offline playback passed")
+}

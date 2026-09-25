@@ -1,0 +1,11 @@
+struct Item { value: u32 }
+
+fn reuse(pointer: *Item, values: [2]u32, index: usize) u32 {
+  return pointer.value + values[index] + pointer.value + values[index]
+}
+
+fn main() {
+  item := Item{ value: 5 }
+  values: [2]u32 = [3, 7]
+  if reuse(&item, values, 1) != 24 { #panic("dominance reuse changed result") }
+}

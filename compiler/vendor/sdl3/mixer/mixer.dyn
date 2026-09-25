@@ -1,0 +1,56 @@
+use "vendor/sdl3"
+#link("SDL3_mixer")
+// SDL_mixer 3.2.4. Balance init/quit after destroying mixers and audio.
+// SDL owns these allocations. Destroy tracks before mixers; destroying a mixer
+// also destroys its remaining tracks. Track pointers then become invalid.
+pub type Mixer = rawptr
+pub type Audio = rawptr
+pub type Track = rawptr
+pub struct Result { written: usize, code: i32, ok: bool }
+pub extern fn init "MIX_Init"() bool
+pub extern fn quit "MIX_Quit"()
+// Offline stereo f32 at 48 kHz, no device. Pull audio into caller storage.
+pub fn create_owned() Mixer {
+  spec := sdl3.AudioSpec{ format: sdl3.AudioF32, channels: 2, frequency: 48000 }
+  return native_create(&spec)
+}
+// Default playback device; availability and output latency are device-dependent.
+// Use playing/stop with this mixer; generate is only for offline mixers.
+pub fn create_device_owned() Mixer { return native_device(sdl3.AudioDeviceDefaultPlayback, nil) }
+pub fn destroy_owned(mixer: Mixer) { if mixer != nil { native_destroy(mixer) } }
+// Source borrowed only during synchronous predecode; provider owns the audio.
+// Audio can outlive the originating mixer and must be destroyed separately.
+pub fn decode_owned(mixer: Mixer, bytes: []const u8) Audio {
+  if mixer == nil || #len(bytes) == 0 { return nil }
+  input := native_io(#cast(rawptr) &bytes[0], #len(bytes))
+  if input == nil { return nil }
+  return native_load(mixer, input, true, true)
+}
+pub fn audio_destroy_owned(audio: Audio) { if audio != nil { native_audio_destroy(audio) } }
+pub fn track_create(mixer: Mixer) Track { if mixer == nil { return nil } return native_track(mixer) }
+pub fn track_destroy(track: Track) { if track != nil { native_track_destroy(track) } }
+pub fn play(track: Track, audio: Audio) bool { return track != nil && audio != nil && native_set(track, audio) && native_play(track, 0) }
+pub fn stop(track: Track) bool { return track != nil && native_stop(track, 0) }
+pub fn playing(track: Track) bool { return track != nil && native_playing(track) }
+// Samples are interleaved stereo f32. Length must be even. written is the
+// number of meaningful samples; provider fills the remaining output with silence.
+pub fn generate(mixer: Mixer, samples: []f32) Result {
+  if mixer == nil || #len(samples) == 0 || #len(samples) % 2 != 0 || #len(samples) > 536870911 { return Result{ code: -1 } }
+  code := native_generate(mixer, #cast(rawptr) &samples[0], #cast(i32) (#len(samples) * 4))
+  if code < 0 { return Result{ code: code } }
+  return Result{ written: #cast(usize) code / 4, code: code, ok: true }
+}
+extern fn native_create "MIX_CreateMixer"(spec: *const sdl3.AudioSpec) Mixer
+extern fn native_destroy "MIX_DestroyMixer"(mixer: Mixer)
+extern fn native_io "SDL_IOFromConstMem"(bytes: rawptr, length: usize) rawptr
+extern fn native_load "MIX_LoadAudio_IO"(mixer: Mixer, stream: rawptr, predecode: bool, close: bool) Audio
+extern fn native_audio_destroy "MIX_DestroyAudio"(audio: Audio)
+extern fn native_track "MIX_CreateTrack"(mixer: Mixer) Track
+extern fn native_track_destroy "MIX_DestroyTrack"(track: Track)
+extern fn native_set "MIX_SetTrackAudio"(track: Track, audio: Audio) bool
+extern fn native_play "MIX_PlayTrack"(track: Track, properties: u32) bool
+extern fn native_stop "MIX_StopTrack"(track: Track, frames: i64) bool
+extern fn native_playing "MIX_TrackPlaying"(track: Track) bool
+extern fn native_generate "MIX_Generate"(mixer: Mixer, bytes: rawptr, length: i32) i32
+
+extern fn native_device "MIX_CreateMixerDevice"(device: sdl3.AudioDevice, spec: *const sdl3.AudioSpec) Mixer

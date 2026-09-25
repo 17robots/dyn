@@ -1,0 +1,6 @@
+use "mod1"
+use "mod2"
+fn main() {
+  mod2.do_thing()
+  _ := mod1.X
+}

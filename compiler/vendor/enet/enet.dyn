@@ -1,0 +1,68 @@
+use "std/c"
+#link("dyn_enet")
+// ENet 1.3.18, configurable reliable channels. Provider owns hosts/packets. Initialize once
+// before creating hosts and deinitialize after destroying all hosts. Hosts and
+// their borrowed peer handles are single-threaded. This is not encrypted transport.
+pub type Host = rawptr
+pub type Peer = rawptr
+pub type Packet = rawptr
+pub const Connected: i32 = 1
+pub const Disconnected: i32 = 2
+pub const Received: i32 = 3
+pub struct Event { kind: i32, peer: Peer, packet: Packet, code: i32, ok: bool, channel: u8, data: u32 }
+pub fn init() bool { return native_init() == 0 }
+pub extern fn quit "enet_deinitialize"()
+// Convenience listener uses loopback and one channel; port=0 is ephemeral.
+pub fn listen_owned(port: u16, peers: usize) Host { buffer: [16]u8 = [] return listen_at_owned("127.0.0.1", port, peers, 1, buffer[..]) }
+pub fn client_owned(peers: usize) Host { return client_channels_owned(peers, 1) }
+pub fn destroy_owned(host: Host) { if host != nil { native_destroy(host) } }
+pub extern fn port "dyn_enet_port"(host: Host) u16
+pub fn connect(host: Host, ip: []const u8, port: u16, buffer: []u8) Peer {
+  return connect_channels(host, ip, port, 1, buffer)
+}
+// Service both endpoints. code=0 means no event; positive means an event.
+// Every received packet must be destroyed, including packets the app ignores.
+pub fn service(host: Host, timeout_ms: u32) Event {
+  event := Event{} event.code = native_service(host, timeout_ms, &event.kind, &event.peer, &event.packet, &event.channel, &event.data)
+  event.ok = event.code >= 0 return event
+}
+// Copies bytes; successful send transfers the private packet to ENet. Maximum 1 MiB.
+pub fn send(peer: Peer, bytes: []const u8) bool { return send_channel(peer, 0, bytes) }
+pub fn send_channel(peer: Peer, channel: u8, bytes: []const u8) bool {
+  data: rawptr = nil if #len(bytes) != 0 { data = #cast(rawptr) &bytes[0] }
+  return native_send(peer, data, #len(bytes), channel)
+}
+// Borrow expires at packet_destroy. Received packet can be copied into an arena
+// if it needs to survive event handling.
+pub fn packet_bytes(packet: Packet) []const u8 {
+  data := native_data(packet) size := native_size(packet)
+  if data == nil { return "" }
+  return data[..size]
+}
+pub fn packet_destroy(packet: Packet) { if packet != nil { native_packet_destroy(packet) } }
+pub fn disconnect(peer: Peer) { if peer != nil { native_disconnect(peer, 0) } }
+extern fn native_init "enet_initialize"() i32
+extern fn native_host "dyn_enet_host"(ip: c.string, port: u16, peers: usize, channels: usize) Host
+extern fn native_destroy "enet_host_destroy"(host: Host)
+extern fn native_connect "dyn_enet_connect"(host: Host, ip: c.string, port: u16, channels: usize) Peer
+extern fn native_service "dyn_enet_service"(host: Host, timeout: u32, kind: *i32, peer: *Peer, packet: *Packet, channel: *u8, data: *u32) i32
+extern fn native_send "dyn_enet_send"(peer: Peer, data: rawptr, size: usize, channel: u8) bool
+extern fn native_data "dyn_enet_data"(packet: Packet) *const u8
+extern fn native_size "dyn_enet_size"(packet: Packet) usize
+extern fn native_packet_destroy "enet_packet_destroy"(packet: Packet)
+extern fn native_disconnect "enet_peer_disconnect"(peer: Peer, data: u32)
+
+// Numeric IPv4 only. Use "0.0.0.0" to accept connections on all interfaces.
+// channels must be 1..255. No DNS lookup or hidden filesystem/network work.
+pub fn listen_at_owned(ip: []const u8, port: u16, peers: usize, channels: usize, buffer: []u8) Host {
+  encoded := c.string_from_bytes(buffer, ip)
+  if !encoded.ok { return nil } return native_host(encoded.value, port, peers, channels)
+}
+pub fn client_channels_owned(peers: usize, channels: usize) Host { return native_host(nil, 0, peers, channels) }
+pub fn connect_channels(host: Host, ip: []const u8, port: u16, channels: usize, buffer: []u8) Peer {
+  encoded := c.string_from_bytes(buffer, ip)
+  if !encoded.ok { return nil } return native_connect(host, encoded.value, port, channels)
+}
+// Graceful disconnect is asynchronous. Continue service until Disconnected or
+// an application deadline, then destroy the host. Event.data carries the reason.
+pub fn disconnect_with_reason(peer: Peer, reason: u32) { if peer != nil { native_disconnect(peer, reason) } }

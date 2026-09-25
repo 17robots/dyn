@@ -1,0 +1,6 @@
+fn main() {
+  for true {
+    break
+    _ = 1
+  }
+}

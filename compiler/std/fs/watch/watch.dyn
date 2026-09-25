@@ -1,0 +1,79 @@
+#target(kernel: linux)
+use "std/fs" fs
+use "std/c" c
+
+pub const Modify: u32 = 2
+pub const Attributes: u32 = 4
+pub const CloseWrite: u32 = 8
+pub const MoveFrom: u32 = 64
+pub const MoveTo: u32 = 128
+pub const Create: u32 = 256
+pub const Delete: u32 = 512
+pub const DeleteSelf: u32 = 1024
+pub const MoveSelf: u32 = 2048
+pub const Ignored: u32 = 32768
+pub const IsDirectory: u32 = 1073741824
+pub const Changes: u32 = 4046
+pub enum Status { Event, Empty, Error }
+pub struct Watcher { descriptor: isize, storage: []u8, used: usize, offset: usize, rescan_required: bool }
+pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
+pub struct Result { value: i32, error: isize, ok: bool }
+pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
+pub struct EventResult { event: Event, status: Status, error: isize }
+
+// Watches are non-recursive. Register each directory explicitly. Names borrow
+// storage until next refill. An overflow invalidates all cached workspace state.
+pub fn open(storage: []u8) OpenResult {
+  if #len(storage) < 272 { return OpenResult{ error: -28 } }
+  descriptor := #syscall(294, 526336)
+  if descriptor < 0 { return OpenResult{ error: descriptor } }
+  return OpenResult{ watcher: Watcher{ descriptor: descriptor, storage: storage }, ok: true }
+}
+pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
+  storage: [4096]u8 = [] name := c.string_from_bytes(storage[..],path)
+  if !name.ok || #len(path) == 0 || state.descriptor < 0 { return Result{ error: -22 } }
+  value := #syscall(254,state.descriptor,name.value,mask)
+  if value < 0 { return Result{ error: value } }
+  return Result{ value: #cast(i32) value, ok: true }
+}
+pub fn remove(state: *Watcher, watch: i32) Result {
+  value := #syscall(255,state.descriptor,watch)
+  return Result{ error: value, ok: value == 0 }
+}
+pub fn close(state: *Watcher) Result {
+  if state.descriptor < 0 { return Result{ ok: true } }
+  value := #syscall(3,state.descriptor) state.descriptor = -1 state.used = 0 state.offset = 0
+  return Result{ error: value, ok: value == 0 }
+}
+fn load(bytes: []const u8, at: usize) u32 {
+  return #cast(u32) bytes[at] | (#cast(u32) bytes[at+1] << 8) | (#cast(u32) bytes[at+2] << 16) | (#cast(u32) bytes[at+3] << 24)
+}
+pub fn next(state: *Watcher) EventResult {
+  if state.descriptor < 0 { return EventResult{ status: Status.Error, error: -9 } }
+  if state.offset == state.used {
+    file := fs.File{ descriptor: state.descriptor } result := fs.read(&file,state.storage)
+    if !result.ok {
+      if result.error == -11 { return EventResult{ status: Status.Empty } }
+      return EventResult{ status: Status.Error, error: result.error }
+    }
+    if result.transferred == 0 { return EventResult{ status: Status.Error, error: -5 } }
+    state.offset = 0 state.used = result.transferred
+  }
+  at := state.offset
+  if at > state.used || state.used - at < 16 { return EventResult{ status: Status.Error, error: -74 } }
+  length := #cast(usize) load(state.storage,at+12)
+  if length > state.used - at - 16 { return EventResult{ status: Status.Error, error: -74 } }
+  name := state.storage[at+16..at+16+length] end: usize = 0
+  for end < length && name[end] != 0 { end += 1 }
+  if length > 0 && end == length { return EventResult{ status: Status.Error, error: -74 } }
+  mask := load(state.storage,at+4) rescan := (mask & 16384) != 0
+  watch: i32 = -1 raw_watch := load(state.storage,at)
+  if raw_watch != 4294967295 { watch = #cast(i32) raw_watch }
+  state.offset += 16 + length
+  if rescan { state.rescan_required = true }
+  return EventResult{ status: Status.Event, event: Event{ watch: watch, mask: mask,
+    cookie: load(state.storage,at+8), name: name[..end], rescan: rescan } }
+}
+// Call only after rebuilding the snapshot; events may continue arriving during
+// that scan, so drain/reconcile them before treating the workspace as current.
+pub fn acknowledge_rescan(state: *Watcher) { state.rescan_required = false }

@@ -1,0 +1,20 @@
+use "std/io"
+use "std/terminal"
+use "vendor/sqlite"
+
+fn main() {
+  backing: [512]u8 = []
+  opened := sqlite.open(":memory:", backing[..])
+  if !opened.ok {
+    _ = io.println(terminal.stderr(), "Could not open sqlite: {}", opened.code)
+    return
+  }
+  defer _ = sqlite.close(opened.database)
+  code := sqlite.execute(opened.database, "create table users(id integer primary key, name text);", backing[..])
+  if code != 0 {
+    message := sqlite.error_message(opened.database, 1024)
+    _ = io.println(terminal.stderr(), "Sqlite error: {}", message)
+    return
+  }
+  _ = io.println(terminal.stdout(), "Database created successfully")
+}

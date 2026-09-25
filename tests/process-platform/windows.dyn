@@ -1,0 +1,2 @@
+#target(kernel: windows)
+fn executable() []const u8 { return ".\\windows-process.exe" }

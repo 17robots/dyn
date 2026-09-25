@@ -1,0 +1,25 @@
+use "std/io"
+use "std/terminal"
+use "vendor/sqlite"
+
+fn sum(values: ...i64) i64 {
+  total: i64 = 0
+  for value in values { total += value }
+  return total
+}
+
+fn describe(output: io.Writer, values: ...any) {
+  for value in values {
+    case value {
+      is bool val => { _ = io.println(output, "bool: {}", val) },
+      is i64 val => { _ = io.println(output, "i64: {}", val) },
+      is []const u8 val => { _ = io.println(output, "[]const u8: {}", val) },
+      _ => { _ = io.println(output, "<unsupported value>") }
+    }
+  }
+}
+
+fn main() {
+  total := sum(10, 20, 30)
+  describe(terminal.stdout(), "hello from dyn", total, true)
+}

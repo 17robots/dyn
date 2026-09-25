@@ -1,0 +1,3 @@
+#target(kernel: linux, arch: x86_64)
+// Default C ABI; -funsigned-char requires an explicit binding override.
+pub type char = i8

@@ -1,0 +1,33 @@
+use "std/mem" mem
+use "std/fs" fs
+use "std/archive/tar" tar
+use "std/io" io
+use "std/os/linux" linux
+use "std/terminal" terminal
+
+fn main() {
+  mapping := mem.arena_create(64 * 1024 * 1024)
+  if !mapping.ok { #panic("arena mapping failed") }
+  defer { _ = mem.arena_release(&mapping.arena) }
+  arena := &mapping.arena
+  arguments := linux.process_arguments(arena)
+  if #len(arguments) != 2 {
+    _ = io.print(terminal.stderr(), "usage: tar-inspect ARCHIVE.tar\n")
+    return
+  }
+  loaded := fs.read_all(arena, arguments[1], 64 * 1024 * 1024)
+  if !loaded.ok { _ = io.println(terminal.stderr(), "could not read {}", arguments[1]) return }
+  cursor := io.cursor(loaded.data)
+  header: [512]u8 = []
+  metadata: [65536]u8 = []
+  archive := tar.stream_reader(io.cursor_reader(&cursor), header[..], metadata[..])
+  for true {
+    entry := tar.next_stream(&archive)
+    if !entry.ok {
+      if entry.error != 0 { #panic("invalid or unsupported TAR archive") }
+      break
+    }
+    if #len(entry.prefix) > 0 { _ = io.print(terminal.stdout(), "{}/", entry.prefix) }
+    _ = io.println(terminal.stdout(), "{}", entry.name)
+  }
+}

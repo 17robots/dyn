@@ -1,0 +1,21 @@
+use "std/mem"
+#link("dyn_stb")
+// Tightly packed u8 pixels, 1..4 channels, dimensions 1..32768. RGBA uses
+// straight alpha. RGB/RGBA may use sRGB; alpha remains linear. No in-place resize.
+// All temporary storage comes from scratch, which is rewound before returning.
+// Source/destination storage must remain outside the scratch allocation range.
+pub fn resize(scratch: *mem.Arena, source: []const u8, width: i32, height: i32, destination: []u8, out_width: i32, out_height: i32, channels: i32, srgb: bool) bool {
+  if scratch == nil || #len(source) == 0 || #len(destination) == 0 { return false }
+  if width < 1 || height < 1 || out_width < 1 || out_height < 1 || width > 32768 || height > 32768 || out_width > 32768 || out_height > 32768 || channels < 1 || channels > 4 { return false }
+  input_size := #cast(u64) width * #cast(u64) height * #cast(u64) channels
+  output_size := #cast(u64) out_width * #cast(u64) out_height * #cast(u64) channels
+  if input_size > 2147483647 || output_size > 2147483647 || #cast(u64) #len(source) < input_size || #cast(u64) #len(destination) < output_size { return false }
+  mark := mem.arena_mark(scratch) defer mem.arena_rewind(scratch, mark)
+  return native_resize(#cast(rawptr) &source[0], #len(source), width, height, #cast(rawptr) &destination[0], #len(destination), out_width, out_height, channels, srgb, #cast(rawptr) scratch, &scratch_allocate)
+}
+// Private synchronous callback; provider scratch cannot outlive resize.
+fn scratch_allocate(context: rawptr, size: usize) rawptr {
+  work := mem.arena_try_push(#cast(*mem.Arena) context, size, 64)
+  if !work.ok { return nil } return #cast(rawptr) work.memory
+}
+extern fn native_resize "dyn_stb_resize"(source: rawptr, length: usize, width: i32, height: i32, output: rawptr, capacity: usize, out_width: i32, out_height: i32, channels: i32, srgb: bool, context: rawptr, allocate: *fn(rawptr, usize) rawptr) bool

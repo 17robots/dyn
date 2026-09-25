@@ -1,0 +1,49 @@
+use "std/encoding/base64" base64
+
+pub struct Result { data: []u8, label: []const u8, consumed: usize, ok: bool }
+fn equal_at(source: []const u8, at: usize, expected: []const u8) bool {
+  if at > #len(source) || #len(expected) > #len(source) - at { return false }
+  i: usize = 0 for i < #len(expected) { if source[at + i] != expected[i] { return false } i += 1 }
+  return true
+}
+fn append(destination: []u8, at: *usize, source: []const u8) bool {
+  if #len(source) > #len(destination) - at.* { return false }
+  for byte in source { destination[at.*] = byte at.* += 1 }
+  return true
+}
+
+// Decodes first PEM block. base64_storage is temporary caller memory.
+pub fn decode(destination: []u8, source: []const u8, base64_storage: []u8) Result {
+  begin: []const u8 = "-----BEGIN " end_prefix: []const u8 = "-----END "
+  start: usize = 0
+  for start + #len(begin) <= #len(source) && !equal_at(source, start, begin) { start += 1 }
+  if start + #len(begin) > #len(source) { return Result{} }
+  label_start := start + #len(begin) label_end := label_start
+  for label_end + 5 <= #len(source) && !equal_at(source, label_end, "-----") { label_end += 1 }
+  if label_end == label_start || label_end + 5 > #len(source) { return Result{} }
+  label := source[label_start..label_end]
+  at := label_end + 5
+  if at < #len(source) && source[at] == '\r' { at += 1 }
+  if at >= #len(source) || source[at] != '\n' { return Result{} }
+  at += 1
+  encoded_length: usize = 0
+  found_end := false
+  for at < #len(source) {
+    line_start := at
+    for at < #len(source) && source[at] != '\r' && source[at] != '\n' { at += 1 }
+    line := source[line_start..at]
+    if #len(line) >= #len(end_prefix) && equal_at(line, 0, end_prefix) {
+      if #len(line) != #len(end_prefix) + #len(label) + 5 || !equal_at(line, #len(end_prefix), label) || !equal_at(line, #len(end_prefix) + #len(label), "-----") { return Result{} }
+      found_end = true
+      if at < #len(source) && source[at] == '\r' { at += 1 }
+      if at < #len(source) && source[at] == '\n' { at += 1 }
+      break
+    }
+    if !append(base64_storage, &encoded_length, line) { return Result{} }
+    if at < #len(source) && source[at] == '\r' { at += 1 }
+    if at < #len(source) && source[at] == '\n' { at += 1 }
+  }
+  if !found_end { return Result{} }
+  decoded := base64.decode(destination, base64_storage[..encoded_length])
+  return Result{ data: decoded.data, label: label, consumed: at, ok: decoded.ok }
+}

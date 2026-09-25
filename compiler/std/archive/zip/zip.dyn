@@ -1,0 +1,166 @@
+use "std/compress/deflate" deflate
+use "std/hash" hashing
+use "std/io" stream
+
+pub enum ErrorKind { None, End, Syntax, Unsupported, Capacity, Checksum, Overlap }
+pub struct Entry {
+  name: []const u8,
+  payload: []const u8,
+  method: u16,
+  flags: u16,
+  checksum: u32,
+  compressed_size: usize,
+  uncompressed_size: usize,
+  directory: bool,
+}
+pub struct ArchiveReader { source: []const u8, offset: usize, indexed: bool, directory_start: usize, directory_end: usize, remaining: usize }
+pub struct EntryResult { entry: Entry, error: ErrorKind, ok: bool }
+pub struct ExtractResult { data: []u8, error: ErrorKind, ok: bool }
+pub struct StreamReader {
+  source_reader: stream.Reader,
+  header_storage: []u8,
+  name_storage: []u8,
+  payload_storage: []u8,
+  ended: bool,
+  error: ErrorKind,
+  system_error: isize,
+}
+
+pub fn stream_reader(input: stream.Reader, header_storage: []u8, name_storage: []u8,
+  payload_storage: []u8) StreamReader {
+  if bytes.overlaps(header_storage, name_storage) || bytes.overlaps(header_storage, payload_storage) || bytes.overlaps(name_storage, payload_storage) { return StreamReader{ error: ErrorKind.Overlap } }
+  return StreamReader{ source_reader: input, header_storage: header_storage,
+    name_storage: name_storage, payload_storage: payload_storage }
+}
+
+fn stream_exact(state: *StreamReader, destination: []u8) bool {
+  result := stream.read_exact(state.source_reader, destination)
+  if result.status != stream.Status.Complete {
+    state.error = ErrorKind.Syntax
+    state.system_error = result.error
+    return false
+  }
+  return true
+}
+
+fn stream_discard(state: *StreamReader, amount: usize) bool {
+  left := amount
+  for left > 0 {
+    take := left
+    if take > #len(state.header_storage) { take = #len(state.header_storage) }
+    if take == 0 || !stream_exact(state, state.header_storage[..take]) { return false }
+    left -= take
+  }
+  return true
+}
+
+// Reads one local-file entry from a stream. Name and payload borrow caller storage.
+pub fn next_stream(state: *StreamReader) EntryResult {
+  if state.error != ErrorKind.None { return EntryResult{ error: state.error } }
+  if state.ended { return EntryResult{ error: ErrorKind.End } }
+  if #len(state.header_storage) < 30 { state.error = ErrorKind.Capacity return EntryResult{ error: state.error } }
+  first := stream.read_exact(state.source_reader, state.header_storage[..4])
+  if first.status == stream.Status.End && first.transferred == 0 { state.ended = true return EntryResult{ error: ErrorKind.End } }
+  if first.status != stream.Status.Complete { state.error = ErrorKind.Syntax return EntryResult{ error: state.error } }
+  signature := u32le(state.header_storage, 0)
+  if signature == 33639248 { state.ended = true return EntryResult{ error: ErrorKind.End } }
+  if signature == 101010256 {
+    if !stream_exact(state, state.header_storage[4..22]) { return EntryResult{ error: state.error } }
+    error := end_record(state.header_storage[..22])
+    if error != ErrorKind.None { state.error = error return EntryResult{ error: error } }
+    if !stream_discard(state, #cast(usize) u16le(state.header_storage, 20)) { return EntryResult{ error: state.error } }
+    state.ended = true return EntryResult{ error: ErrorKind.End }
+  }
+  if signature != 67324752 || !stream_exact(state, state.header_storage[4..30]) { state.error = ErrorKind.Syntax return EntryResult{ error: state.error } }
+  header := state.header_storage[..30]
+  flags := u16le(header, 6)
+  method := u16le(header, 8)
+  checksum := u32le(header, 14)
+  if (flags & 1) != 0 || (flags & 8) != 0 { state.error = ErrorKind.Unsupported return EntryResult{ error: state.error } }
+  compressed_size := #cast(usize) u32le(header, 18)
+  uncompressed_size := #cast(usize) u32le(header, 22)
+  name_length := #cast(usize) u16le(header, 26)
+  extra_length := #cast(usize) u16le(header, 28)
+  if name_length > #len(state.name_storage) || compressed_size > #len(state.payload_storage) {
+    state.error = ErrorKind.Capacity return EntryResult{ error: state.error }
+  }
+  if !stream_exact(state, state.name_storage[..name_length]) || !stream_discard(state, extra_length) ||
+    !stream_exact(state, state.payload_storage[..compressed_size]) { return EntryResult{ error: state.error } }
+  name := state.name_storage[..name_length]
+  return EntryResult{ entry: Entry{ name: name, payload: state.payload_storage[..compressed_size], method: method,
+    flags: flags, checksum: checksum, compressed_size: compressed_size,
+    uncompressed_size: uncompressed_size, directory: name_length > 0 && name[name_length - 1] == '/' }, ok: true }
+}
+
+fn u16le(source: []const u8, at: usize) u16 { return #cast(u16) source[at] | (#cast(u16) source[at + 1] << 8) }
+fn u32le(source: []const u8, at: usize) u32 {
+  return #cast(u32) source[at] | (#cast(u32) source[at + 1] << 8) |
+    (#cast(u32) source[at + 2] << 16) | (#cast(u32) source[at + 3] << 24)
+}
+fn end_record(source: []const u8) ErrorKind {
+  if #len(source) < 22 { return ErrorKind.Syntax }
+  if u16le(source, 4) != 0 || u16le(source, 6) != 0 || u16le(source, 8) != u16le(source, 10) || u16le(source, 10) == 65535 {
+    return ErrorKind.Unsupported
+  }
+  return ErrorKind.None
+}
+pub fn open(source: []const u8) ArchiveReader { return ArchiveReader{ source: source } }
+
+pub fn next(state: *ArchiveReader) EntryResult {
+  if state.indexed { return next_indexed(state) }
+  if state.offset == #len(state.source) { return EntryResult{ error: ErrorKind.End } }
+  if state.offset + 4 <= #len(state.source) && u32le(state.source, state.offset) == 33639248 { return EntryResult{ error: ErrorKind.End } }
+  start := state.offset
+  if start <= #len(state.source) && #len(state.source) - start >= 4 && u32le(state.source, start) == 101010256 {
+    remaining := state.source[start..]
+    error := end_record(remaining)
+    if error != ErrorKind.None { return EntryResult{ error: error } }
+    if #cast(usize) u16le(remaining, 20) > #len(remaining) - 22 { return EntryResult{ error: ErrorKind.Syntax } }
+    state.offset = start + 22 + #cast(usize) u16le(remaining, 20)
+    return EntryResult{ error: ErrorKind.End }
+  }
+  if start + 30 > #len(state.source) || u32le(state.source, start) != 67324752 { return EntryResult{ error: ErrorKind.Syntax } }
+  flags := u16le(state.source, start + 6)
+  method := u16le(state.source, start + 8)
+  if (flags & 1) != 0 || (flags & 8) != 0 { return EntryResult{ error: ErrorKind.Unsupported } }
+  compressed_size := #cast(usize) u32le(state.source, start + 18)
+  uncompressed_size := #cast(usize) u32le(state.source, start + 22)
+  name_length := #cast(usize) u16le(state.source, start + 26)
+  extra_length := #cast(usize) u16le(state.source, start + 28)
+  data_start := start + 30
+  if name_length > #len(state.source) - data_start { return EntryResult{ error: ErrorKind.Syntax } }
+  payload_start := data_start + name_length
+  if extra_length > #len(state.source) - payload_start { return EntryResult{ error: ErrorKind.Syntax } }
+  payload_start += extra_length
+  if compressed_size > #len(state.source) - payload_start { return EntryResult{ error: ErrorKind.Syntax } }
+  payload_end := payload_start + compressed_size
+  name := state.source[data_start..data_start + name_length]
+  directory := #len(name) > 0 && name[#len(name) - 1] == '/'
+  state.offset = payload_end
+  return EntryResult{ entry: Entry{
+    name: name, payload: state.source[payload_start..payload_end], method: method, flags: flags,
+    checksum: u32le(state.source, start + 14), compressed_size: compressed_size,
+    uncompressed_size: uncompressed_size, directory: directory,
+  }, ok: true }
+}
+
+// Overlap/capacity/shape checks write nothing. Decode/checksum failures may write
+// destination, but expose no successful data. Source must remain immutable.
+pub fn extract(destination: []u8, archive_entry: Entry) ExtractResult {
+  if bytes.overlaps(destination, archive_entry.payload) { return ExtractResult{ error: ErrorKind.Overlap } }
+  if #len(archive_entry.payload) != archive_entry.compressed_size { return ExtractResult{ error: ErrorKind.Syntax } }
+  if #len(destination) < archive_entry.uncompressed_size { return ExtractResult{ error: ErrorKind.Capacity } }
+  written: usize = 0
+  if archive_entry.method == 0 {
+    if archive_entry.compressed_size != archive_entry.uncompressed_size { return ExtractResult{ error: ErrorKind.Syntax } }
+    i: usize = 0 for i < archive_entry.uncompressed_size { destination[i] = archive_entry.payload[i] i += 1 }
+    written = archive_entry.uncompressed_size
+  } else if archive_entry.method == 8 {
+    result := deflate.inflate(destination[..archive_entry.uncompressed_size], archive_entry.payload)
+    if !result.ok || result.written != archive_entry.uncompressed_size || result.consumed != archive_entry.compressed_size { return ExtractResult{ error: ErrorKind.Syntax } }
+    written = result.written
+  } else { return ExtractResult{ error: ErrorKind.Unsupported } }
+  output := destination[..written]
+  if hashing.crc32(output) != archive_entry.checksum { return ExtractResult{ error: ErrorKind.Checksum } }
+  return ExtractResult{ data: output, ok: true }
+}

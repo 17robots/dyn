@@ -1,0 +1,90 @@
+Dyn Preview License, version 1.0
+
+Copyright (c) 2026 Matthew Dray
+Contact: mdray@duck.com
+Official project: https://github.com/17robots/dyn
+
+This is a custom source-available license, not an open-source license.
+
+1. Scope
+
+"Software" means the original Dyn compiler, tools, runtime, standard library and
+associated documentation that Matthew Dray ("Licensor") distributes under this
+license. Separately identified third-party material remains governed by its own
+terms. This license does not restrict rights independently granted by those terms
+or rights that applicable law does not allow the Licensor to restrict.
+
+2. Use and applications
+
+Subject to these terms, you may download authorized copies, inspect source, make
+private copies necessary for use, build unmodified Software, and use it for personal,
+educational, research or commercial application development without paying fees
+to the Licensor. You may compile, run, sell and distribute your own applications.
+
+You may copy, compile, optimize, link and distribute the Software's unmodified
+runtime and standard-library code as incorporated into your applications, including
+commercial applications. Ordinary transformations performed by compilation and
+linking are permitted. You may adapt and distribute application examples provided
+for that purpose. Your application code and lawful outputs may use your chosen
+license; preserve third-party notices where their licenses require them.
+
+The application exception does not authorize distributing the Dyn compiler or
+toolchain, either independently or embedded as a compiler service/product.
+
+3. Contributions
+
+You may modify the Software solely to prepare, test and submit contributions to
+the official project. You may share contribution patches and clearly identified
+contribution forks through its designated review process. This does not authorize
+independent releases or distribution of modified compiler/toolchain binaries.
+
+For code you intentionally submit as a contribution, you retain copyright and
+represent that you have authority to submit it. You grant the Licensor a worldwide,
+perpetual, irrevocable, nonexclusive, royalty-free right to use, reproduce, modify,
+distribute and sublicense that contribution as part of Dyn, including in official
+releases. Do not submit third-party work under incompatible terms. A separate
+written contribution agreement, if any, controls over this paragraph.
+
+4. Restrictions
+
+Except as expressly permitted above, by applicable law, or by a separate written
+grant from the Licensor, you may not modify the Software, distribute copies of the
+Software, or distribute modified versions under the Dyn name or any other name.
+Do not remove copyright or license notices from permitted copies.
+
+No trademark rights are granted. Factual statements that an application uses Dyn
+are permitted; do not imply official authorship, sponsorship or endorsement.
+Independent implementations that do not copy protected Dyn code are outside this
+license's scope.
+
+5. Hosting-platform permissions
+
+When the Licensor posts source publicly on GitHub, the permissions required by
+GitHub's terms, including viewing and making forks within GitHub, remain in effect.
+This license does not purport to withdraw those permissions. Hosting-platform
+permissions do not expand this license's grant to distribute independent Dyn
+releases or modified binaries outside the rights that the platform terms provide.
+
+6. Termination
+
+Rights under this license terminate if you materially violate its conditions. They
+are reinstated if you cure the violation within 30 days after first receiving
+written notice from the Licensor, unless you previously used this cure provision.
+Termination does not change ownership of your application code or revoke permissions
+for application outputs lawfully produced and distributed before termination.
+
+7. Warranty and liability
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED "AS IS",
+WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. TO THAT EXTENT, THE LICENSOR
+AND CONTRIBUTORS ARE NOT LIABLE FOR CLAIMS OR DAMAGES ARISING FROM THE SOFTWARE
+OR ITS USE, WHETHER IN CONTRACT, TORT OR OTHERWISE. NON-WAIVABLE STATUTORY RIGHTS
+REMAIN UNAFFECTED.
+
+8. Other rights
+
+All rights not expressly granted are reserved. This license grants no rights to
+third-party trademarks or patents. A separate written permission from the Licensor
+may grant additional rights. If one provision is unenforceable, the remaining
+provisions continue to apply to the extent permitted by law.

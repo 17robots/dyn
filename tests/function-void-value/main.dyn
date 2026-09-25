@@ -1,0 +1,6 @@
+fn consume() {}
+
+fn main() {
+  value := consume()
+  _ = value
+}

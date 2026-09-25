@@ -1,0 +1,25 @@
+use "std/strings" str
+use "std/unicode/utf8"
+fn main() {
+  signed: i64 = 0
+  if !str.parse_i64("-42", &signed) || signed != -42 { #panic("parse") }
+  bytes: [4]u8 = []
+  codepoint: u32 = 128512
+  width := utf8.encode(bytes[..], codepoint)
+  if !utf8.valid(bytes[..width]) { #panic("valid") }
+  decoded := utf8.decode(bytes[..width], 0)
+  if !decoded.ok || decoded.codepoint != codepoint { #panic("decode") }
+
+  scanner := str.scanner("one,two,,four")
+  token: []const u8 = ""
+  if !str.scan_until(&scanner, ',', &token) || !str.equal(token, "one") { #panic("scan one") }
+  if !str.scan_until(&scanner, ',', &token) || !str.equal(token, "two") { #panic("scan two") }
+  if !str.scan_until(&scanner, ',', &token) || #len(token) != 0 { #panic("scan empty") }
+  if !str.scan_until(&scanner, ',', &token) || !str.equal(token, "four") { #panic("scan final") }
+  if str.scan_until(&scanner, ',', &token) || #len(str.scanner_rest(&scanner)) != 0 { #panic("scan end") }
+
+  if !str.glob_match("src/*.dyn", "src/main.dyn") { #panic("glob star") }
+  if !str.glob_match("file?.\\*", "file1.*") { #panic("glob escape") }
+  if !str.glob_match("a**c", "abc") { #panic("glob repeated star") }
+  if str.glob_match("*.dyn", "main.c") || str.glob_match("a?c", "ac") { #panic("glob reject") }
+}

@@ -1,0 +1,187 @@
+use "std/io" stream
+
+pub struct Entry {
+  name: []const u8,
+  prefix: []const u8,
+  link_name: []const u8,
+  size: u64,
+  kind: u8,
+  data: []const u8,
+}
+
+pub struct StreamReader {
+  source_reader: stream.Reader,
+  metadata: []u8,
+  spare: []u8,
+  metadata_used: usize,
+  defaults: Overrides,
+  header_storage: []u8,
+  remaining: usize,
+  padding: usize,
+  active: bool,
+  ended: bool,
+  error: isize,
+}
+
+pub struct StreamEntry {
+  name: []const u8,
+  prefix: []const u8,
+  link_name: []const u8,
+  size: u64,
+  kind: u8,
+  error: isize,
+  ok: bool,
+}
+
+pub fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8) StreamReader {
+  if bytes.overlaps(header_storage, metadata) { return StreamReader{ error: -22 } }
+  half := #len(metadata) / 2
+  return StreamReader{ source_reader: input, header_storage: header_storage, metadata: metadata[..half], spare: metadata[half..half * 2] }
+}
+
+struct Header { entry: Entry, ended: bool, ok: bool }
+fn parse_header(header: []const u8) Header {
+  if #len(header) < 512 { return Header{} }
+  all_zero := true
+  for byte in header[..512] { if byte != 0 { all_zero = false break } }
+  if all_zero { return Header{ ended: true, ok: true } }
+  expected: u64 = 0 size: u64 = 0 checksum: u64 = 0
+  if !octal(header[148..156], &expected) || !octal(header[124..136], &size) { return Header{} }
+  i: usize = 0
+  for i < 512 {
+    if i >= 148 && i < 156 { checksum += 32 } else { checksum += #cast(u64) header[i] }
+    i += 1
+  }
+  if checksum != expected || size > 18446744073709551104 { return Header{} }
+  prefix := header[..0]
+  if header[257] == 'u' && header[258] == 's' && header[259] == 't' && header[260] == 'a' && header[261] == 'r' && header[262] == 0 {
+    prefix = header[345..345 + string_end(header[345..500])]
+  }
+  return Header{ entry: Entry{ name: header[..string_end(header[..100])], prefix: prefix,
+    link_name: header[157..157 + string_end(header[157..257])], size: size, kind: header[156] }, ok: true }
+}
+
+fn discard(state: *StreamReader, amount: usize) bool {
+  left := amount
+  for left > 0 {
+    take := left
+    if take > #len(state.header_storage) { take = #len(state.header_storage) }
+    result := stream.read_exact(state.source_reader, state.header_storage[..take])
+    if result.status != stream.Status.Complete { state.error = result.error if state.error == 0 { state.error = -74 } return false }
+    left -= take
+  }
+  return true
+}
+
+// Metadata is split into two equal banks. Compact only live global/local names
+// after each extension, so usage depends on live metadata, not archive length.
+fn retain_name(destination: []u8, used: *usize, source: []const u8) []const u8 {
+  start := used.*
+  for byte in source { destination[used.*] = byte used.* += 1 }
+  return destination[start..used.*]
+}
+fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
+  required := #len(state.defaults.path) + #len(state.defaults.link) + #len(local.path) + #len(local.link)
+  if required > #len(state.spare) { state.error = -28 return false }
+  used: usize = 0
+  state.defaults.path = retain_name(state.spare, &used, state.defaults.path)
+  state.defaults.link = retain_name(state.spare, &used, state.defaults.link)
+  local.path = retain_name(state.spare, &used, local.path)
+  local.link = retain_name(state.spare, &used, local.link)
+  previous := state.metadata state.metadata = state.spare state.spare = previous
+  state.metadata_used = used
+  return true
+}
+// Input, header, and metadata storage must be disjoint. All returned names borrow
+// header/metadata storage until next_stream. Each metadata half must fit live
+// names plus the next extension payload. Empty metadata accepts plain TAR only.
+pub fn next_stream(state: *StreamReader) StreamEntry {
+  if state.ended || state.error != 0 { return StreamEntry{ error: state.error } }
+  if #len(state.header_storage) < 512 { state.error = -28 return StreamEntry{ error: state.error } }
+  if state.active {
+    if !discard(state, state.remaining + state.padding) { return StreamEntry{ error: state.error } }
+    state.active = false
+  }
+  local := Overrides{} pending: bool = false
+  if !compact_metadata(state, &local) { return StreamEntry{ error: state.error } }
+  for {
+    header_result := stream.read_exact(state.source_reader, state.header_storage[..512])
+    if header_result.status == stream.Status.End && header_result.transferred == 0 && !pending { state.ended = true return StreamEntry{} }
+    if header_result.status != stream.Status.Complete { state.error = header_result.error if state.error == 0 { state.error = -74 } return StreamEntry{ error: state.error } }
+    parsed := parse_header(state.header_storage[..512])
+    if !parsed.ok { state.error = -74 return StreamEntry{ error: state.error } }
+    if parsed.ended {
+      if pending { state.error = -74 return StreamEntry{ error: state.error } }
+      state.ended = true return StreamEntry{}
+    }
+    entry := parsed.entry
+    extension := entry.kind == 'x' || entry.kind == 'g' || entry.kind == 'L' || entry.kind == 'K'
+    if !extension { apply_overrides(&entry, combined_overrides(state.defaults, local)) }
+    if entry.size > 18446744073709551104 { state.error = -74 return StreamEntry{ error: state.error } }
+    state.remaining = #cast(usize) entry.size
+    state.padding = (512 - state.remaining % 512) % 512
+    if !extension {
+      state.active = true
+      return StreamEntry{ name: entry.name, prefix: entry.prefix, link_name: entry.link_name,
+        size: entry.size, kind: entry.kind, ok: true }
+    }
+    pending = true
+    if state.remaining > #len(state.metadata) - state.metadata_used { state.error = -28 return StreamEntry{ error: state.error } }
+    payload := state.metadata[state.metadata_used..state.metadata_used + state.remaining]
+    loaded := stream.read_exact(state.source_reader, payload)
+    if loaded.status != stream.Status.Complete { state.error = loaded.error if state.error == 0 { state.error = -74 } return StreamEntry{ error: state.error } }
+    if !discard(state, state.padding) { return StreamEntry{ error: state.error } }
+    if entry.kind == 'x' { if !pax(payload, &local, false) { state.error = -74 return StreamEntry{ error: state.error } } }
+    else if entry.kind == 'g' { if !pax(payload, &state.defaults, true) { state.error = -74 return StreamEntry{ error: state.error } } }
+    else {
+      if #len(payload) == 0 || payload[#len(payload) - 1] != 0 { state.error = -74 return StreamEntry{ error: state.error } }
+      value := payload[..#len(payload) - 1]
+      for byte in value { if byte == 0 { state.error = -74 return StreamEntry{ error: state.error } } }
+      if entry.kind == 'L' { local.path = value local.has_path = true }
+      else { local.link = value local.has_link = true }
+    }
+    if !compact_metadata(state, &local) { return StreamEntry{ error: state.error } }
+  }
+  return StreamEntry{ error: -74 }
+}
+
+// Reads entry payload incrementally. End means this entry is complete, not archive EOF.
+pub fn read_stream(state: *StreamReader, destination: []u8) stream.Result {
+  if state.error != 0 { return stream.Result{ error: state.error, status: stream.Status.Error } }
+  if !state.active { return stream.Result{ error: -22, status: stream.Status.Error } }
+  if #len(destination) == 0 { return stream.Result{} }
+  take := state.remaining
+  if take > #len(destination) { take = #len(destination) }
+  if take == 0 { return stream.Result{ status: stream.Status.End } }
+  result := stream.read_exact(state.source_reader, destination[..take])
+  if result.status != stream.Status.Complete { state.error = result.error if state.error == 0 { state.error = -74 } return stream.Result{ transferred: result.transferred, error: state.error, status: stream.Status.Error } }
+  state.remaining -= take
+  status := stream.Status.Complete
+  if state.remaining == 0 { status = stream.Status.End }
+  return stream.Result{ transferred: take, status: status }
+}
+
+fn string_end(bytes: []const u8) usize {
+  i: usize = 0
+  for i < #len(bytes) && bytes[i] != 0 { i += 1 }
+  return i
+}
+
+fn octal(bytes: []const u8, output: *u64) bool {
+  value: u64 = 0
+  found := false
+  for byte in bytes {
+    if byte == 0 || byte == ' ' { if found { break } else { continue } }
+    if byte < '0' || byte > '7' { return false }
+    if value > (18446744073709551615 - #cast(u64) (byte - '0')) / 8 { return false }
+    value = value * 8 + #cast(u64) (byte - '0')
+    found = true
+  }
+  output.* = value
+  return found
+}
+
+// Slices borrow archive. End and Error leave offset unchanged, so both repeat.
+pub enum Status { Entry, End, Error }
+pub enum ErrorKind { None, InvalidOffset, Truncated, Header }
+pub struct Result { entry: Entry, status: Status, error: ErrorKind }

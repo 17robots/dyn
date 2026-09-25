@@ -1,0 +1,31 @@
+use "std/net/tls"
+use "std/mem" memory
+
+fn main() {
+  context := tls.client_config_create()
+  if !context.ok { #panic("TLS context") }
+  backing: [128]u8 = [] arena := memory.arena_from_buffer(backing[..])
+  connection := tls.client_connection_create(&arena, context.value, 7, "example.test")
+  if !connection.ok || !tls.handshake(connection.value).ok { #panic("TLS client") }
+  protocols: [3]u8 = [2, 'h', '2']
+  if !tls.set_alpn_protocols(connection.value, protocols[..]) || #len(tls.selected_alpn(connection.value)) != 2 { #panic("TLS ALPN") }
+  peer := tls.peer_certificate_owned(connection.value)
+  subject_storage: [64]u8 = []
+  if #len(tls.certificate_subject(subject_storage[..], peer)) != 16 { #panic("TLS certificate") }
+  tls.certificate_free_owned(peer)
+  output: [8]u8 = []
+  received := tls.read(connection.value, output[..])
+  sent := tls.write(connection.value, "hello")
+  if !received.ok || received.count != 3 || !sent.ok || sent.count != 5 || !tls.shutdown(connection.value) { #panic("TLS I/O") }
+  error_storage: [32]u8 = []
+  if #len(tls.error_string(error_storage[..], 42)) != 10 { #panic("TLS error") }
+  tls.connection_destroy(connection.value)
+  tls.config_destroy(context.value)
+
+  server_context := tls.server_config_create(&arena, "certificate.pem", "key.pem")
+  if !server_context.ok { #panic("TLS server context") }
+  server := tls.server_connection_create(server_context.value, 7)
+  if !server.ok || !tls.server_handshake(server.value).ok { #panic("TLS server") }
+  tls.connection_destroy(server.value)
+  tls.config_destroy(server_context.value)
+}

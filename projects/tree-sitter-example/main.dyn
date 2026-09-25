@@ -1,0 +1,31 @@
+use "vendor/tree_sitter" ts
+use "std/strings"
+use "std/io"
+use "std/terminal"
+// Grammar is separate from runtime. This example uses the packaged C grammar.
+#link("tree-sitter-c")
+extern fn language "tree_sitter_c"() ts.Language
+fn main() {
+  parser := ts.parser_create_owned() if parser == nil { #panic("parser allocation") }
+  defer ts.parser_destroy_owned(parser)
+  if !ts.parser_language(parser, language()) { #panic("grammar ABI mismatch") }
+  parsed := ts.parse(parser, nil, "int x;") if !parsed.ok { #panic("parse") }
+  defer ts.tree_destroy_owned(parsed.tree)
+  node := ts.root(parsed.tree)
+  kind := ts.node_type(node, 128)
+  if !kind.ok || !strings.equal(kind.value, "translation_unit") || ts.node_has_error(node) { #panic("root") }
+  if ts.node_end(node) != 6 || ts.child_count(node) != 1 { #panic("range") }
+  if ts.node_valid(ts.child(node, 99)) { #panic("missing child") }
+  copied := ts.tree_copy_owned(parsed.tree) if copied == nil { #panic("copy") }
+  defer ts.tree_destroy_owned(copied)
+  edit := ts.Edit{ start_byte: 4, old_end_byte: 5, new_end_byte: 7, start_point: ts.Point{ column: 4 }, old_end_point: ts.Point{ column: 5 }, new_end_point: ts.Point{ column: 7 } }
+  if !ts.tree_edit(parsed.tree, &edit) { #panic("edit") }
+  reparsed := ts.parse(parser, parsed.tree, "int xyz;") if !reparsed.ok { #panic("reparse") }
+  defer ts.tree_destroy_owned(reparsed.tree)
+  if ts.node_end(ts.root(reparsed.tree)) != 8 || ts.node_has_error(ts.root(reparsed.tree)) { #panic("incremental parse") }
+  if ts.node_end(ts.root(copied)) != 6 { #panic("copy changed") }
+  malformed := ts.parse(parser, nil, "int = ;") if !malformed.ok { #panic("error tree") }
+  defer ts.tree_destroy_owned(malformed.tree)
+  if !ts.node_has_error(ts.root(malformed.tree)) { #panic("syntax error missing") }
+  _ = io.println(terminal.stdout(), "Tree-sitter: parsed, traversed, copied and incrementally reparsed C")
+}

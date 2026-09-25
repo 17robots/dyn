@@ -1,0 +1,47 @@
+#link("dyn_box2d")
+// Box2D 3.1.1 C ABI adapter. Provider owns worlds, bodies and shapes.
+// Destroy a world to destroy all its children; IDs are generation-checked.
+// Do not use one world concurrently. IDs are not stable serialized objects.
+pub type World = u32
+pub type Body = u64
+pub type Shape = u64
+pub struct Position { x: f32, y: f32, ok: bool }
+pub extern fn create_owned "dyn_b2_world_create"(gravity_x: f32, gravity_y: f32) World
+pub extern fn destroy_owned "dyn_b2_world_destroy"(world: World) bool
+// dt must be finite, >0 and <=1 second; substeps 1..64.
+pub extern fn step "dyn_b2_step"(world: World, dt: f32, substeps: i32) bool
+pub extern fn body_create "dyn_b2_body"(world: World, x: f32, y: f32, dynamic: bool) Body
+pub extern fn body_destroy "dyn_b2_body_destroy"(body: Body) bool
+// Positive finite half-extents and nonnegative finite density. Body owns shape.
+pub extern fn box_create "dyn_b2_box"(body: Body, half_width: f32, half_height: f32, density: f32) Shape
+pub fn position(body: Body) Position {
+  result := Position{}
+  result.ok = native_position(body, &result.x, &result.y)
+  return result
+}
+extern fn native_position "dyn_b2_position"(body: Body, x: *f32, y: *f32) bool
+
+pub type Joint = u64
+pub extern fn circle_create "dyn_b2_circle"(body: Body, radius: f32, density: f32) Shape
+// Rigid distance joint anchored at body origins; bodies must share a world.
+pub extern fn distance_joint "dyn_b2_distance"(first: Body, second: Body, length: f32) Joint
+pub extern fn joint_destroy "dyn_b2_joint_destroy"(joint: Joint) bool
+pub extern fn contact_events "dyn_b2_events"(shape: Shape, enabled: bool) bool
+// Read after step and before modifying the world. -1 means invalid world.
+pub extern fn contact_count "dyn_b2_contact_count"(world: World, begin: bool) i32
+pub struct Contact { first: Shape, second: Shape, ok: bool }
+pub fn contact(world: World, begin: bool, index: i32) Contact {
+  result := Contact{} result.ok = native_contact(world, begin, index, &result.first, &result.second) return result
+}
+pub struct Query { total: usize, written: usize, ok: bool }
+// Broad-phase AABB candidates, not exact geometry overlap. Output order is
+// unspecified. total may exceed capacity; written reports the copied prefix.
+pub fn query(world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: []Shape) Query {
+  data: *Shape = nil if #len(output) != 0 { data = &output[0] }
+  count := native_query(world, x0, y0, x1, y1, data, #len(output))
+  if count < 0 { return Query{} }
+  total := #cast(usize) count written := total if written > #len(output) { written = #len(output) }
+  return Query{ total: total, written: written, ok: true }
+}
+extern fn native_contact "dyn_b2_contact"(world: World, begin: bool, index: i32, first: *Shape, second: *Shape) bool
+extern fn native_query "dyn_b2_query"(world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: *Shape, capacity: usize) i64

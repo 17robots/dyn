@@ -1,0 +1,4 @@
+fn main() {
+  value := 2147483647 + 1
+  _ = value
+}

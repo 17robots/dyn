@@ -1,0 +1,25 @@
+use "std/mem"
+
+fn whitespace(byte: u8) bool {
+  return byte == 32 || (byte >= 9 && byte <= 13)
+}
+
+pub fn save(output: *mem.Arena, scratch: *mem.Arena, input: []const u8) []const u8 {
+  mark := mem.arena_mark(scratch)
+  defer { mem.arena_rewind(scratch, mark) }
+  if #len(input) == 0 { return output.data[..0] }
+
+  temporary := mem.arena_push_uninit(scratch, #len(input), 1)[..#len(input)]
+  _ = mem.move(temporary, input)
+  start: usize = 0
+  end := #len(temporary)
+  for start < end && whitespace(temporary[start]) { start += 1 }
+  for end > start && whitespace(temporary[end - 1]) { end -= 1 }
+  size := end - start
+  if size == 0 { return output.data[..0] }
+  retained := mem.arena_push_uninit(output, size, 1)[..size]
+  _ = mem.copy(retained, temporary[start..end])
+  return retained
+}
+
+fn main() {}

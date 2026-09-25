@@ -1,0 +1,20 @@
+fn add(a, b: i32) i32 { return a + b }
+fn subtract(a, b: i32) i32 { return a - b }
+fn apply(operation: *fn(i32, i32) i32, a: i32, b: i32) i32 {
+  return operation(a, b)
+}
+struct Operations { calculate: *fn(i32, i32) i32, }
+const DefaultOperations := Operations{ calculate: &add }
+fn main() {
+  operation: *fn(i32, i32) i32 = &add
+  if operation(20, 22) != 42 { for {} }
+  operations := Operations{ calculate: &add }
+  if operations.calculate(19, 23) != 42 { for {} }
+  operation_table: [2]*fn(i32, i32) i32 = [&add, &subtract]
+  if operation_table[0](20, 22) != 42 { for {} }
+  if operation_table[1](50, 8) != 42 { for {} }
+  if apply(&add, 40, 2) != 42 { for {} }
+  if DefaultOperations.calculate(40, 2) != 42 { for {} }
+  operation = &subtract
+  if operation(50, 8) != 42 { for {} }
+}

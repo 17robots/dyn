@@ -1,0 +1,12 @@
+[
+  {
+    "command": "./build/dyn check build/ai-benchmark/checked-sum --diagnostics json --no-cache",
+    "exit_code": 1,
+    "changed_after_failure": true
+  },
+  {
+    "command": "./build/dyn check build/ai-benchmark/checked-sum --diagnostics json --no-cache",
+    "exit_code": 0,
+    "changed_after_failure": false
+  }
+]

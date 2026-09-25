@@ -1,0 +1,9 @@
+use "./state"
+
+combined: i32 = state.count + 2
+
+fn main() {
+  if combined != 42 { for {} }
+  state.count += 2
+  if state.count != 42 { for {} }
+}

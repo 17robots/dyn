@@ -1,0 +1,7 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Try Dyn</title><link rel="stylesheet" href="/style.css"></head><body><main><h1>Try Dyn</h1><p>Developer preview. Edit a program, then run it in an isolated Linux environment.</p><label for="source">Program</label><textarea id="source" spellcheck="false">use "std/io"
+use "std/terminal"
+
+fn main() {
+  _ = io.println(terminal.stdout(), "Hello from Dyn!")
+}
+</textarea><button id="run">Run program</button><p id="status" role="status">Ready</p><pre id="output" aria-label="Program output"></pre><details><summary>Preview limits</summary><p>No network or personal files. Execution is limited to 3 seconds, 256 MiB address space and 64 KiB output. Compilation has separate limits. This preview supports one source file.</p></details></main><script src="/main.js"></script></body></html>

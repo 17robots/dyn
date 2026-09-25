@@ -1,0 +1,18 @@
+// Optional, allocation-free runtime events. All text fields borrow caller storage.
+// Keep event backing and labels alive until consumers finish. Thread-confined.
+pub enum Kind { Allocated, AllocationFailed, Reclaimed, Released, ResourceOpened, ResourceClosed, Denied, Checkpoint }
+pub struct Event { kind: Kind, resource: u64, value: u64, source: []const u8, line: usize }
+pub struct Log { events: []Event, count: usize, dropped: usize }
+pub fn log(events: []Event) Log { return Log{events: events} }
+// Full logs drop new events; they never overwrite earlier events or allocate.
+pub fn record(destination: *Log, event: Event) bool {
+  if destination.count >= #len(destination.events) {
+    if destination.dropped < #cast(usize) -1 { destination.dropped += 1 }
+    return false
+  }
+  destination.events[destination.count] = event
+  destination.count += 1
+  return true
+}
+pub fn recorded(value: *const Log) []const Event { return value.events[..value.count] }
+pub fn clear(value: *Log) { value.count = 0 value.dropped = 0 }

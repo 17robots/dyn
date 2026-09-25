@@ -1,0 +1,49 @@
+pub struct PropertyOptions { seed: u64, cases: usize, shrink_checks: usize }
+pub struct PropertyResult {
+  passed: bool, seed: u64, iteration: usize, example: []const u8,
+  checks: usize, shrink_exhausted: bool,
+}
+// Property must be deterministic and must not retain its input. Work is split
+// into sample/trial halves; its half-length is the maximum generated input size.
+// A failure's minimized example borrows work. Reproduction requires the same
+// seed, iteration, work capacity, and deterministic predicate.
+pub fn check_property(options: PropertyOptions, work: []u8,
+  predicate: *fn(rawptr, []const u8) bool, context: rawptr) PropertyResult {
+  capacity := #len(work) / 2 sample := work[..capacity] trial := work[capacity..]
+  generator := random(options.seed) iteration: usize = 0
+  for iteration < options.cases {
+    length := random_below(&generator, capacity + 1) i: usize = 0
+    for i < length { sample[i] = #cast(u8) (random_next(&generator) & 255) i += 1 }
+    if !predicate(context, sample[..length]) {
+      checks: usize = 0 chunk := length
+      // Delta debugging: remove contiguous chunks, then reduce byte values.
+      for chunk > 0 && checks < options.shrink_checks {
+        at: usize = 0 reduced: bool = false
+        for at + chunk <= length && checks < options.shrink_checks {
+          j: usize = 0 for j < at { trial[j] = sample[j] j += 1 }
+          tail := at + chunk for tail < length { trial[j] = sample[tail] j += 1 tail += 1 }
+          checks += 1
+          if !predicate(context, trial[..length - chunk]) {
+            length -= chunk k: usize = 0 for k < length { sample[k] = trial[k] k += 1 }
+            reduced = true
+          } else { at += chunk }
+        }
+        if !reduced { chunk /= 2 }
+      }
+      position: usize = 0
+      for position < length && checks < options.shrink_checks {
+        original := sample[position] candidate: u16 = 0
+        for candidate < #cast(u16) original && checks < options.shrink_checks {
+          sample[position] = #cast(u8) candidate checks += 1
+          if !predicate(context, sample[..length]) { break }
+          sample[position] = original candidate += 1
+        }
+        position += 1
+      }
+      return PropertyResult{ seed: options.seed, iteration: iteration, example: sample[..length],
+        checks: checks, shrink_exhausted: checks == options.shrink_checks }
+    }
+    iteration += 1
+  }
+  return PropertyResult{ passed: true, seed: options.seed, iteration: iteration }
+}

@@ -1,0 +1,48 @@
+use "std/net" net
+use "std/net/http" http
+use "std/net/http/concurrent" pool
+use "std/thread" thread
+use "std/sync" sync
+use "std/bytes" bytes
+
+fn handler(response: *http.Response, request: *const http.Request) http.Result {
+  _ = request
+  return http.respond(response, "alive", http.ResponseOptions{ close_connection: true })
+}
+fn main() {
+  address := net.ipv4(127, 0, 0, 1, 0)
+  opened := net.tcp_listen_ipv4(&address, 8)
+  if !opened.ok { #panic("listener") }
+  length: u32 = 16
+  if #syscall(51, opened.listener.descriptor, &address.bytes[0], &length) != 0 { #panic("getsockname") }
+  workers: [1]pool.Worker = [] receive_storage: [4096]u8 = [] stacks: [65536]u8 = []
+  started := pool.start(workers[..], &opened.listener, receive_storage[..], 4096, stacks[..], 65536, &handler)
+  if !started.ok { #panic("start") }
+  broken := net.tcp_connect_ipv4(&address)
+  if !broken.ok { #panic("bad client connect") }
+  _ = net.connection_write(&broken.connection, "malformed\r\n\r\n")
+  _ = net.shutdown(broken.connection.descriptor, net.ShutdownBoth)
+  _ = net.connection_close(&broken.connection)
+  healthy := net.tcp_connect_ipv4(&address)
+  if !healthy.ok { #panic("good client connect") }
+  request: [256]u8 = [] response: [256]u8 = []
+  result := http.client_do_connection(&healthy.connection, request[..], response[..], "GET", "/", "localhost", "")
+  if !result.ok || !bytes.equal(result.body, "alive") { #panic("bad request killed worker") }
+  _ = net.connection_close(&healthy.connection)
+  blocked := net.tcp_connect_ipv4(&address)
+  if !blocked.ok { #panic("blocked connect") }
+  waiting := false spins: usize = 0
+  for !waiting && spins < 1000000 {
+    sync.lock(&workers[0].control)
+    waiting = workers[0].active_descriptor >= 0
+    sync.unlock(&workers[0].control)
+    if !waiting { _ = thread.yield_now() }
+    spins += 1
+  }
+  if !waiting { #panic("worker never accepted") }
+  pool.stop(workers[..])
+  drained := pool.join(workers[..])
+  if !drained.ok || drained.started != 1 || workers[0].request_errors == 0 { #panic("stop/drain") }
+  _ = net.connection_close(&blocked.connection)
+  _ = net.listener_close(&opened.listener)
+}

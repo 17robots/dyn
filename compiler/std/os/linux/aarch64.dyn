@@ -1,0 +1,2 @@
+#target(arch: aarch64, kernel: linux)
+fn fork_native() isize { return #syscall(56, 17, 0, 0, 0, 0) }

@@ -1,0 +1,11 @@
+struct Pair { left, right: i32 }
+
+extern fn variadic "dyn_test_variadic_sum"(count: u32, ...) i32
+extern fn no_fixed "dyn_test_no_fixed"(...) i32
+
+fn main() {
+  _ = variadic()
+  _ = variadic(1, true)
+  pair := Pair{ left: 1, right: 2 }
+  _ = variadic(1, pair)
+}

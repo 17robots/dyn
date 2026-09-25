@@ -1,0 +1,52 @@
+use "vendor/sqlite"
+use "std/bytes"
+fn main() {
+  backing: [256]u8 = []
+  opened := sqlite.open(":memory:", backing[..])
+  if !opened.ok { #panic("SQLite open") }
+  if sqlite.execute(opened.database, "create table item(id integer primary key, name text); insert into item(name) values('Dyn');", backing[..]) != 0 { #panic("SQLite execute") }
+  if sqlite.busy_timeout(opened.database,50) != 0 || sqlite.busy_timeout(opened.database,-1) != sqlite.InvalidArgument { #panic("SQLite busy timeout") }
+  if sqlite.changes(opened.database).value != 1 || sqlite.last_insert_rowid(opened.database).value != 1 { #panic("SQLite insert metadata") }
+  if sqlite.begin(opened.database,sqlite.TransactionMode.Immediate) != 0 || !sqlite.in_transaction(opened.database) { #panic("SQLite begin") }
+  if sqlite.execute(opened.database,"insert into item(id) values(9223372036854775806)",backing[..]) != 0 || sqlite.last_insert_rowid(opened.database).value != 9223372036854775806 { #panic("SQLite 64-bit rowid") }
+  if sqlite.rollback(opened.database) != 0 || sqlite.in_transaction(opened.database) { #panic("SQLite rollback") }
+  if sqlite.begin(opened.database,sqlite.TransactionMode.Deferred) != 0 || sqlite.commit(opened.database) != 0 || sqlite.in_transaction(opened.database) { #panic("SQLite commit") }
+  failed := sqlite.open("/dyn/nonexistent/parent/database.sqlite", backing[..])
+  if failed.ok || failed.database != nil || failed.code == 0 { #panic("SQLite failed open ownership") }
+  if sqlite.execute(nil, "select 1", backing[..]) == 0 { #panic("SQLite nil database") }
+  invalid := sqlite.prepare(opened.database, "select from")
+  if invalid.ok || invalid.statement.handle != nil || invalid.code <= 0 { #panic("SQLite invalid prepare") }
+  blank := sqlite.prepare(opened.database, " -- no statement")
+  if !blank.ok || !blank.empty || blank.consumed != 16 { #panic("SQLite empty prepare") }
+  prepared := sqlite.prepare(opened.database, "select ?1, ?2, ?3, ?4, ?5, ?6; select 9")
+  if !prepared.ok || prepared.empty || prepared.consumed != 30 { #panic("SQLite prepare first statement") }
+  statement := prepared.statement
+  if sqlite.column(&statement, 0).ok || sqlite.column_count(&statement) != 6 { #panic("SQLite column availability") }
+  text: [3]u8 = ['D', 'y', 'n'] blob: [3]u8 = [1, 0, 2]
+  if sqlite.bind_i64(&statement, 1, -42) != 0 || sqlite.bind_f64(&statement, 2, 1.5) != 0 ||
+     sqlite.bind_text(&statement, 3, text[..]) != 0 || sqlite.bind_blob(&statement, 4, blob[..]) != 0 ||
+     sqlite.bind_text(&statement, 5, "") != 0 || sqlite.bind_null(&statement, 6) != 0 { #panic("SQLite binding") }
+  text[0] = 'X' blob[0] = 9
+  if sqlite.bind_i64(&statement, 7, 0) != 25 { #panic("SQLite parameter range") }
+  stepped := sqlite.step(&statement)
+  if !stepped.ok || stepped.state != sqlite.State.Row { #panic("SQLite step row") }
+  integer := sqlite.column(&statement, 0) real := sqlite.column(&statement, 1)
+  string := sqlite.column(&statement, 2) binary := sqlite.column(&statement, 3)
+  empty := sqlite.column(&statement, 4) null := sqlite.column(&statement, 5)
+  if !integer.ok || integer.kind != sqlite.ColumnKind.Integer || integer.integer != -42 || !real.ok || real.real != 1.5 { #panic("SQLite numeric columns") }
+  if !string.ok || !bytes.equal(string.bytes, "Dyn") || !binary.ok || binary.kind != sqlite.ColumnKind.Blob || #len(binary.bytes) != 3 || binary.bytes[0] != 1 || binary.bytes[1] != 0 { #panic("SQLite copied bindings") }
+  if empty.kind != sqlite.ColumnKind.Text || #len(empty.bytes) != 0 || null.kind != sqlite.ColumnKind.Null { #panic("SQLite empty versus null") }
+  if sqlite.column(&statement, 6).ok || sqlite.column(&statement, -1).ok || sqlite.bind_null(&statement, 1) != sqlite.InvalidArgument { #panic("SQLite state and column range") }
+  if sqlite.step(&statement).state != sqlite.State.Done || sqlite.step(&statement).state != sqlite.State.Done || sqlite.column(&statement, 0).ok { #panic("SQLite done does not re-execute") }
+  if sqlite.reset(&statement) != 0 || sqlite.step(&statement).state != sqlite.State.Row || sqlite.column(&statement, 0).integer != -42 { #panic("SQLite reset retains bindings") }
+  if sqlite.reset(&statement) != 0 || sqlite.clear_bindings(&statement) != 0 || sqlite.bind_blob(&statement, 4, "") != 0 || sqlite.step(&statement).state != sqlite.State.Row { #panic("SQLite clear bindings") }
+  if sqlite.column(&statement, 0).kind != sqlite.ColumnKind.Null || sqlite.column(&statement, 3).kind != sqlite.ColumnKind.Blob || #len(sqlite.column(&statement, 3).bytes) != 0 { #panic("SQLite empty blob") }
+  if sqlite.close(opened.database) != 5 { #panic("SQLite busy close retains ownership") }
+  if sqlite.finalize(&statement) != 0 || statement.handle != nil || sqlite.finalize(&statement) != 0 || sqlite.step(&statement).ok { #panic("SQLite finalization") }
+  duplicate := sqlite.prepare(opened.database, "insert into item(id) values(1)")
+  if !duplicate.ok { #panic("SQLite constraint prepare") }
+  bad := duplicate.statement
+  if sqlite.step(&bad).code != 19 || sqlite.step(&bad).code != 19 { #panic("SQLite execution failure") }
+  if sqlite.finalize(&bad) != 19 || bad.handle != nil || sqlite.finalize(&bad) != 0 { #panic("SQLite failing finalize still destroys") }
+  if sqlite.close(opened.database) != 0 { #panic("SQLite close") }
+}

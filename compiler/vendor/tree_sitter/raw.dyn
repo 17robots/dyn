@@ -1,0 +1,14 @@
+extern fn native_parser_new "ts_parser_new"() Parser
+extern fn native_parser_delete "ts_parser_delete"(parser: Parser)
+extern fn native_set_language "ts_parser_set_language"(parser: Parser, language: Language) bool
+extern fn native_parse "ts_parser_parse_string"(parser: Parser, old_tree: Tree, source: *const u8, length: u32) Tree
+extern fn native_tree_delete "ts_tree_delete"(tree: Tree)
+extern fn native_tree_copy "ts_tree_copy"(tree: Tree) Tree
+extern fn native_tree_edit "ts_tree_edit"(tree: Tree, edit: *const Edit)
+extern fn native_root "ts_tree_root_node"(tree: Tree) Node
+extern fn native_start "ts_node_start_byte"(node: Node) u32
+extern fn native_end "ts_node_end_byte"(node: Node) u32
+extern fn native_has_error "ts_node_has_error"(node: Node) bool
+extern fn native_child_count "ts_node_named_child_count"(node: Node) u32
+extern fn native_child "ts_node_named_child"(node: Node, index: u32) Node
+extern fn native_type "ts_node_type"(node: Node) c.string

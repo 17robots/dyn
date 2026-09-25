@@ -1,0 +1,5 @@
+struct Box { value: i32 }
+
+fn consume(value: Box(i32)) {}
+
+fn main() {}

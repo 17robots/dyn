@@ -1,0 +1,11 @@
+fn compute(seed: i64) i64 {
+  base := seed + 2
+  doubled := base * 2
+  result := doubled + 1
+  return result
+}
+
+fn main() {
+  answer := compute(19)
+  _ = answer
+}

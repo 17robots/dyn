@@ -1,0 +1,8 @@
+# Ubuntu 24.04 x86-64; install LLVM 19 and Tree-sitter 0.25.8 separately.
+[tools."github:17robots/dyn"]
+version = "0.1.0-preview.1"
+prerelease = true
+asset_pattern = 'dyn-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}-ubuntu24.04.tar.gz'
+strip_components = 1
+bin_path = "bin"
+checksum = "sha256:3818e4cdca78fe18ea9316d5072a96182b0136ad23bc2e11b73e1fbf67a7c54f"
