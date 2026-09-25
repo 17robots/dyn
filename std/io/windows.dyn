@@ -1,0 +1,54 @@
+#target(arch: x86_64, kernel: windows)
+
+extern fn standard_handle "dyn_process_std"(kind: u32) rawptr
+extern fn standard_read "dyn_win_read_file"(handle: rawptr, bytes: *u8, count: u32, received: *u32, overlapped: rawptr) i32
+extern fn standard_write "dyn_win_write_file"(handle: rawptr, bytes: *const u8, count: u32, written: *u32, overlapped: rawptr) i32
+extern fn standard_error "dyn_win_last_error"() u32
+
+fn valid_handle(handle: rawptr) bool {
+  return handle != nil && #cast(usize) handle != 18446744073709551615
+}
+fn transfer_limit(size: usize) u32 {
+  if size > 4294967295 { return 4294967295 }
+  return #cast(u32) size
+}
+fn stream_error(count: u32, code: u32) Result {
+  error: isize = 0 - #cast(isize) code
+  if error == 0 { error = -5 }
+  return Result{ transferred: #cast(usize) count, error: error, status: Status.Error }
+}
+fn stdin_read(data: rawptr, destination: []u8) Result {
+  _ = data
+  if #len(destination) == 0 { return Result{} }
+  handle := standard_handle(4294967286) // STD_INPUT_HANDLE (-10)
+  if !valid_handle(handle) { return stream_error(0, 6) }
+  count: u32 = 0
+  if standard_read(handle, &destination[0], transfer_limit(#len(destination)), &count, nil) == 0 {
+    error := standard_error()
+    // A closed pipe and a file at EOF both end the byte stream.
+    if error == 109 || error == 38 { return Result{ transferred: #cast(usize) count, status: Status.End } }
+    // A message-mode pipe may return a partial message with ERROR_MORE_DATA.
+    if error == 234 && count > 0 { return Result{ transferred: #cast(usize) count } }
+    return stream_error(count, error)
+  }
+  if count == 0 { return Result{ status: Status.End } }
+  return Result{ transferred: #cast(usize) count }
+}
+fn write_standard(kind: u32, source: []const u8) Result {
+  if #len(source) == 0 { return Result{} }
+  handle := standard_handle(kind)
+  if !valid_handle(handle) { return stream_error(0, 6) }
+  count: u32 = 0
+  if standard_write(handle, &source[0], transfer_limit(#len(source)), &count, nil) == 0 {
+    return stream_error(count, standard_error())
+  }
+  if count == 0 { return stream_error(0, 5) }
+  return Result{ transferred: #cast(usize) count }
+}
+fn stdout_write(data: rawptr, source: []const u8) Result { _ = data return write_standard(4294967285, source) }
+fn stderr_write(data: rawptr, source: []const u8) Result { _ = data return write_standard(4294967284, source) }
+
+// Borrow current standard handles. Bytes are not transcoded or newline-translated.
+pub fn stdin() Reader { return Reader{ read: &stdin_read } }
+pub fn stdout() Writer { return Writer{ write: &stdout_write } }
+pub fn stderr() Writer { return Writer{ write: &stderr_write } }

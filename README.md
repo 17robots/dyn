@@ -71,11 +71,14 @@ current commands. Arenas and borrowed values still require explicit lifetime car
 limited lifetime diagnostics are not general memory safety.
 
 Standard streams are `io.stdin()`, `io.stdout()` and `io.stderr()` from `std/io`
-(on Linux and WASI). Use them with `io.read`, `io.write_all`, or `std/bufio` for
+(on Linux, macOS Apple Silicon, Windows x64 and WASI). Use them with `io.read`, `io.write_all`, or `std/bufio` for
 line-oriented input. They borrow the process descriptors; do not close them.
 `std/terminal` contains Linux terminal controls: raw mode, restoration, terminal
 size, attachment detection and key decoding. Existing callers should replace
-`terminal.stdin/stdout/stderr` with their `io` equivalents.
+`terminal.stdin/stdout/stderr` with their `io` equivalents. Standard streams are
+byte-oriented: adapters do not translate newlines or encodings. Windows consoles
+use their configured code page; `bufio.read_line` removes LF but preserves a
+preceding CR.
 
 ## Releases and mise
 
