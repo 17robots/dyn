@@ -60,7 +60,7 @@ fn main() {{
     # defer must run even though the intervening C function has no cleanup hook.
     (root/'provider.c').write_text('void invoke(void (*callback)(void)) { callback(); }\n')
     subprocess.run(['cc','-fno-stack-protector','-c',str(root/'provider.c'),'-o',str(root/'provider.o')],check=True)
-    (root/'main.dyn').write_text('use "std/io"\nuse "std/terminal"\nextern fn invoke "invoke"(callback: *fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { _ = io.println(terminal.stdout(),"caller cleanup") } invoke(&fails) }\n')
+    (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: *fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { _ = io.println(io.stdout(),"caller cleanup") } invoke(&fails) }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--link',str(root/'provider.o'),'--output',str(root/'run')]+(['--release'] if release else []),check=True)
         r=subprocess.run([str(root/'run')],capture_output=True,text=True,timeout=5)

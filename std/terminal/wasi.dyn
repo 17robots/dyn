@@ -1,9 +1,0 @@
-#target(kernel: wasi)
-use "std/io" io
-use "std/os/wasi" wasi
-fn read_input(data: rawptr, bytes: []u8) io.Result { _ = data return wasi.read(0, bytes) }
-fn write_output(data: rawptr, bytes: []const u8) io.Result { _ = data return wasi.write(1, bytes) }
-fn write_error(data: rawptr, bytes: []const u8) io.Result { _ = data return wasi.write(2, bytes) }
-pub fn stdin() io.Reader { return io.Reader{ read: &read_input } }
-pub fn stdout() io.Writer { return io.Writer{ write: &write_output } }
-pub fn stderr() io.Writer { return io.Writer{ write: &write_error } }

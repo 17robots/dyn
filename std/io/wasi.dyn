@@ -1,0 +1,29 @@
+#target(kernel: wasi)
+
+extern fn standard_read "dyn_wasi_read"(fd: u32, data: rawptr, length: usize, received: *usize) u32
+extern fn standard_write "dyn_wasi_write"(fd: u32, data: rawptr, length: usize, written: *usize) u32
+
+fn stdin_read(data: rawptr, destination: []u8) Result {
+  _ = data
+  if #len(destination) == 0 { return Result{ status: Status.Complete } }
+  count: usize = 0
+  error := standard_read(0, #cast(rawptr) &destination[0], #len(destination), &count)
+  if error != 0 { return Result{ transferred: count, error: 0 - #cast(isize) error, status: Status.Error } }
+  if count == 0 { return Result{ status: Status.End } }
+  return Result{ transferred: count, status: Status.Complete }
+}
+
+fn write_descriptor(descriptor: u32, source: []const u8) Result {
+  if #len(source) == 0 { return Result{ status: Status.Complete } }
+  count: usize = 0
+  error := standard_write(descriptor, #cast(rawptr) &source[0], #len(source), &count)
+  if error != 0 { return Result{ transferred: count, error: 0 - #cast(isize) error, status: Status.Error } }
+  return Result{ transferred: count, status: Status.Complete }
+}
+fn stdout_write(data: rawptr, source: []const u8) Result { _ = data return write_descriptor(1, source) }
+fn stderr_write(data: rawptr, source: []const u8) Result { _ = data return write_descriptor(2, source) }
+
+// Borrow the process standard descriptors; callers do not own or close them.
+pub fn stdin() Reader { return Reader{ read: &stdin_read } }
+pub fn stdout() Writer { return Writer{ write: &stdout_write } }
+pub fn stderr() Writer { return Writer{ write: &stderr_write } }
