@@ -1,129 +1,227 @@
 # Dyn compiler
 
-This repository contains the C bootstrap compiler, target runtime, shipped SDK
-(`std/` and optional native bindings in `vendor/`), compiler tools and regression
-tests. The grammar lives in [17robots/tree-sitter-dyn](https://github.com/17robots/tree-sitter-dyn).
-Editor extensions, applications, benchmarks and the development workspace are
-separate projects and are not included here.
+Dyn is ready for public preview testing. Start with
+[preview 4](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.4), then
+[report bugs](https://github.com/17robots/dyn/issues). APIs may change between previews.
 
-## Build
+This repository contains the C bootstrap compiler, target runtime, SDK (`std/`
+and optional native bindings in `vendor/`), compiler tools and regression tests.
+The grammar lives in [17robots/tree-sitter-dyn](https://github.com/17robots/tree-sitter-dyn).
+Editor extensions and applications are separate projects.
 
-Linux source builds use Ubuntu 24.04 with LLVM/Clang/LLD 19 and the
-Tree-sitter 0.25.8 runtime is the CI baseline. You also need a C11 compiler,
-Python 3.12+, Bash, Git and `just`. Zig 0.16.0 is needed for cross-target tests.
+## Install a preview
 
-```sh
-export LLVM_CONFIG=llvm-config-19
-export CLANG=clang-19
-export PATH=/usr/lib/llvm-19/bin:$PATH
-just release
-./build/dyn version
-just test
-```
+| System | Download from the release |
+| --- | --- |
+| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.4-linux-x86_64-glibc2.39.tar.gz` |
+| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.4-windows-x86_64.zip` |
+| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.4-macos-aarch64.tar.gz` |
 
-`just release` fetches the exact grammar revision in `grammar.lock.json` into
-ignored `build/deps/tree-sitter-dyn`. Generated parser sources stay in that
-external checkout. Dyn does not regenerate or vendor them. For grammar development,
-set `TS_DIR=/absolute/path/to/tree-sitter-dyn` to use your own generated checkout.
-The Tree-sitter runtime library is a separate build dependency, not that grammar.
-`.github/actions/setup-compiler/action.yml` records the pinned CI dependency setup.
+The SDKs include the compiler, standard library, runtime, host linker and library
+dependencies. LLVM, Tree-sitter, MSYS2 and Homebrew are not required to use the
+prebuilt SDKs. Choose either mise or a manual download below.
 
-Override `BUILD`, `CC`, `CLANG`, `CFLAGS`, `CPPFLAGS` and `LLVM_CONFIG` as needed.
-A custom compiler output path may require `DYN_SDK` pointing to this repository;
-installed SDKs locate their own runtime and standard library.
+### With mise
 
-Native compiler host CI also builds and runs Dyn on macOS Apple Silicon and
-Windows x64, packages their dependencies, and tests installation through mise
-with build-tool paths removed. The default output target matches the host.
-
-For a host-only source build, install LLVM, Clang and the Tree-sitter C runtime,
-then run `python3 tools/fetch-grammar.py`, `python3 tools/build.py host`, and
-`python3 tests/compiler-host.py`. The compiler is `build/dyn-release` (Windows:
-`build/dyn-release.exe`). macOS uses Homebrew LLVM 19 and LLD 19 for linking;
-Windows uses MSYS2 CLANG64's native Clang/LLVM, LLD, Python and **libtree-sitter**
-packages. Use the environment setup in `.github/workflows/compiler-hosts.yml`.
-Windows module compilation currently runs serially; POSIX hosts retain isolated
-parallel workers. The host tests cover build/run, cached output replacement,
-source changes, paths with spaces, diagnostics and LSP pipes. They gate releases
-alongside the existing cross-target executable tests.
-
-## Test and install
-
-```sh
-just smoke          # debug/release compiler and SDK smoke test
-just test           # compiler, LSP, lifetime, semantic, ABI and C failure regressions
-just native-probes  # cross-build; native execution requires matching CI hosts
-PREFIX=/usr/local DESTDIR=/path/to/staging just install
-just package        # archive, manifest, checksum and relocated debug/release smoke
-```
-
-Native CI executes 14 Windows x64, 14 macOS Apple Silicon and 12 Linux ARM probes.
-These qualify generated programs in addition to native compiler host tests.
-`just test` covers this standalone compiler. It does not run the former workspace's
-application, editor-extension, graphics/audio or optional-provider qualification.
-The SDK has additional platform/provider requirements beyond these core tests.
-
-The standalone regression suite is in `tests/`. `src/` is the compiler implementation;
-`runtime/` contains target support. SDK modules retain their source-level API and
-ownership comments. Use `dyn docs MODULE --json` for declarations and
-`dyn query PROJECT --json` for semantic project inspection. Run `dyn help` for
-current commands. Arenas and borrowed values still require explicit lifetime care;
-limited lifetime diagnostics are not general memory safety.
-
-Standard streams are `io.stdin()`, `io.stdout()` and `io.stderr()` from `std/io`
-(on Linux, macOS Apple Silicon, Windows x64 and WASI). Use them with `io.read`, `io.write_all`, or `std/bufio` for
-line-oriented input. They borrow the process descriptors; do not close them.
-`std/terminal` contains Linux terminal controls: raw mode, restoration, terminal
-size, attachment detection and key decoding. Existing callers should replace
-`terminal.stdin/stdout/stderr` with their `io` equivalents. Standard streams are
-byte-oriented: adapters do not translate newlines or encodings. Windows consoles
-use their configured code page; `bufio.read_line` removes LF but preserves a
-preceding CR.
-
-## Releases and mise
-
-Pushing an unused `vVERSION` tag runs compiler/package validation and native target
-tests, verifies mise installations, then publishes Linux x86-64, Windows x64 and
-macOS Apple Silicon SDKs. Licenses stay inside archives; checksums and pinned mise
-configuration appear in release notes. Test reports stay in Actions artifacts.
-One additional Linux runtime-source archive accompanies the three SDK downloads. Suffix versions such as
-`v0.1.0-preview.2` publish as prereleases. Manual release runs do not publish.
-`DYN_VERSION` embeds the release version; normal builds default to `0.1.0-dev`.
-Do not move published tags or replace released assets.
-
-Copy `mise.example.toml` into your project's `mise.toml` (or merge its tool entry
-into an existing config), then run:
+1. [Install mise](https://mise.jdx.dev/getting-started.html) (tested with 2026.9.9).
+2. Create a directory for your program. Copy [mise.example.toml](mise.example.toml)
+   into it as `mise.toml`, or copy the mise configuration from the release notes.
+   Merge both Dyn tables if you already have a config; keep the platform checksums.
+3. Run these commands in that directory (PowerShell, Bash or Zsh):
 
 ```sh
 mise trust
-mise install
+mise install github:17robots/dyn
 mise exec -- dyn version
 ```
 
-The example pins `0.1.0-preview.4` with a checksum for each supported platform. For installation
-across projects, add the same tool entry to `~/.config/mise/config.toml` and run
-`mise install github:17robots/dyn`. Each new release includes its pinned
-mise configuration in the release description. This uses mise's GitHub backend, not a custom plugin.
-Starting with preview 2, Linux x86-64 SDKs bundle LLVM 19, Tree-sitter 0.25.8,
-LLD and their non-glibc dependencies. They require glibc 2.39 or newer (Ubuntu
-24.04 and current Arch Linux); Alpine/musl and older glibc are not supported.
-No system LLVM or Tree-sitter installation is needed. Use the release's
-mise configuration for its exact version and platform checksums. Linux/Wasm linking uses
-bundled LLD; other cross-target tools and optional native providers remain external.
-The release gate tests the archive in clean Ubuntu and Arch containers and through
-mise before publication. Preview 1 still needs its original system dependencies.
+Expected version: `dyn 0.1.0-preview.4`. No compiler checkout is needed.
+`mise exec -- dyn ...` works without shell activation. To use plain `dyn`, follow
+[mise's shell setup](https://mise.jdx.dev/getting-started.html).
 
-Starting with preview 3, Windows x64 and macOS 15+ Apple Silicon archives bundle
-their host libraries and LLD linker. No MSYS2 or Homebrew installation is needed
-to run those SDKs. macOS binaries are ad-hoc signed, not notarized; Intel Macs are
-not included. Optional providers and cross-target toolchains remain external.
+For use across projects, merge the same two tables into your global mise config
+(normally `~/.config/mise/config.toml`), then install as above.
+[Configuration locations and overrides](https://mise.jdx.dev/configuration.html).
 
-The earlier combined-workspace preview remains in Git history and its original
-release assets. New archives contain only this compiler and its runtime/SDK.
+**Updating:** replace both Dyn tables with the next release's configuration and
+run `mise install github:17robots/dyn` again. The current setup pins filenames and
+checksums as well as the version; changing only the version or running
+`mise upgrade --bump` is insufficient.
+
+### Manual download
+
+Download your SDK from the release table above and extract the whole archive.
+Keep `bin`, `lib` and `share` together; copying only the executable is insufficient.
+The release notes contain SHA-256 checksums. `runtime-sources` and GitHub's
+"Source code" downloads are not needed to run Dyn.
+
+On Linux/macOS, from the directory containing the downloaded archive:
+
+```sh
+# Linux; substitute the macos-aarch64 archive name on macOS.
+tar -xzf dyn-0.1.0-preview.4-linux-x86_64-glibc2.39.tar.gz
+./dyn-sdk/bin/dyn version
+export PATH="$PWD/dyn-sdk/bin:$PATH"
+```
+
+On Windows, in PowerShell:
+
+```powershell
+Expand-Archive .\dyn-0.1.0-preview.4-windows-x86_64.zip -DestinationPath .\dyn-preview4
+.\dyn-preview4\dyn-sdk\bin\dyn.exe version
+$env:Path = "$PWD\dyn-preview4\dyn-sdk\bin;$env:Path"
+```
+
+These PATH changes last for the current shell. For future shells, add the SDK's
+absolute `bin` path to your shell profile or Windows user Path setting.
+macOS binaries are ad-hoc signed, not notarized; macOS may require you to approve
+the downloaded application before running it.
+
+## Run your first program
+
+Create `hello/main.dyn` in your project directory:
+
+```dyn
+use "std/io"
+
+fn main() {
+  result := io.println(io.stdout(), "Hello, Dyn!")
+  if result.status == io.Status.Error { #panic("could not write output") }
+}
+```
+
+With mise:
+
+```sh
+mise exec -- dyn check hello
+mise exec -- dyn run hello
+```
+
+With a manual installation on PATH, use `dyn check hello` and `dyn run hello`.
+Expected output: `Hello, Dyn!`. No package manifest is needed for this example.
+To build an executable, use `dyn build hello --release --output hello-app`
+(`--output hello-app.exe` on Windows). Prefix with `mise exec --` when using mise.
+
+Standard streams are `io.stdin()`, `io.stdout()` and `io.stderr()` on all three
+native hosts and WASI. They borrow process handles and use caller-owned buffers.
+Use `std/bufio` for line input. Streams preserve bytes: Windows console encoding
+follows its code page; `bufio.read_line` removes LF but preserves a preceding CR.
+Preview 3 callers must rename `terminal.stdin/stdout/stderr` to their `io`
+equivalents. `std/terminal` retains Linux terminal controls and key decoding.
+
+## Build from source
+
+Install Git and clone the public compiler repository, then choose your host below:
+
+```sh
+git clone https://github.com/17robots/dyn.git
+cd dyn
+```
+
+These commands build current `main`. To build the published preview instead,
+run `git checkout v0.1.0-preview.4` before continuing. Source builds normally report
+`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.4` if you need that embedded version.
+Source builds require their build-time libraries and linker to remain installed.
+
+### Linux x64 (Ubuntu 24.04)
+
+Run in Bash. Install LLVM/Clang/LLD 19 and the pinned Tree-sitter runtime:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential python3 clang-19 llvm-19-dev lld-19
+mkdir -p build/deps
+git clone --depth 1 --branch v0.25.8 https://github.com/tree-sitter/tree-sitter build/deps/tree-sitter-runtime
+sudo make -C build/deps/tree-sitter-runtime install PREFIX=/usr/local
+sudo ldconfig
+export LLVM_CONFIG=llvm-config-19
+export CLANG=clang-19
+export PATH=/usr/lib/llvm-19/bin:$PATH
+python3 tools/fetch-grammar.py
+python3 tools/build.py host
+python3 tests/compiler-host.py
+./build/dyn-release version
+```
+
+### macOS Apple Silicon
+
+Install Xcode Command Line Tools (`xcode-select --install`) and
+[Homebrew](https://brew.sh/), then run in Bash or Zsh:
+
+```sh
+brew install llvm@19 lld@19 tree-sitter python
+export PATH="$(brew --prefix llvm@19)/bin:$(brew --prefix lld@19)/bin:$PATH"
+export CPPFLAGS="-I$(brew --prefix tree-sitter)/include -L$(brew --prefix tree-sitter)/lib"
+export CC=clang CLANG=clang LLVM_CONFIG=llvm-config
+python3 tools/fetch-grammar.py
+python3 tools/build.py host
+python3 tests/compiler-host.py
+./build/dyn-release version
+```
+
+### Windows x64
+
+Install [MSYS2](https://www.msys2.org/) and open its **CLANG64** shell. Run
+`pacman -Syu` first, reopening the shell and repeating if MSYS2 requests it.
+Clone the repository above if you have not already, then run from its directory:
+
+```sh
+pacman -S --needed git mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-libtree-sitter
+export CC=clang CLANG=clang LLVM_CONFIG=llvm-config
+python tools/fetch-grammar.py
+python tools/build.py host
+python tests/compiler-host.py
+./build/dyn-release.exe version
+```
+
+Use `./build/dyn-release run path/to/project` (`.exe` on Windows) to try your
+source build. Keep the compiler in its build directory so it can locate the SDK.
+The grammar fetch uses `grammar.lock.json`; generated sources stay under ignored
+`build/deps/tree-sitter-dyn`. Set `TS_DIR` for a separate generated grammar checkout.
+
+## Development and preview limits
+
+The Linux full suite additionally needs `just`, Zig 0.16.0 and Python 3.12+;
+[the CI setup](.github/actions/setup-compiler/action.yml) records the dependencies.
+`just test` covers compiler, LSP, lifetime, semantic and ABI regressions.
+[Native host CI](.github/workflows/compiler-hosts.yml) tests Windows/macOS compiler
+and standard streams; native output jobs execute 14 Windows, 14 macOS and 12 ARM
+Linux probes. `python3 tests/standard-streams.py --host-only` tests host streams.
+
+For a local source installation on Linux/macOS:
+
+```sh
+PREFIX="$HOME/.local/opt/dyn" python3 tools/install.py --host
+export PATH="$HOME/.local/opt/dyn/bin:$PATH"
+dyn version
+```
+
+In CLANG64, use `python tools/install.py --host` with `PREFIX` set to your chosen
+installation directory. This copies the SDK but does not bundle third-party host libraries. The release packaging jobs do.
+`just package` creates the relocatable Linux SDK using the release build environment.
+
+This is a preview, not a stable language/API promise. Intel Mac downloads,
+Windows ARM downloads, Alpine/musl and older glibc are not supported by these SDKs.
+Optional native providers and cross-target toolchains have additional requirements.
+Native terminal controls remain Linux-only. Arenas and borrowed values require
+explicit lifetime care; lifetime diagnostics are not general memory safety.
+Use `dyn help`, `dyn docs MODULE --json` and `dyn query PROJECT --json` to explore.
+
+## Report a bug
+
+[Open an issue](https://github.com/17robots/dyn/issues/new) with your `dyn version`,
+OS/architecture, installation method, exact command, full error and a small Dyn
+program that reproduces it. For a crash or wrong output, include expected versus
+actual behavior. Try debug and `--release` builds when the difference matters.
+
+Releases are gated on compiler, native output, SDK and mise checks. Published tags
+and assets are not replaced. Licenses stay in the archives; checksums and mise
+configuration are in release notes; validation reports stay in Actions. The extra
+Linux runtime-source archive supplies corresponding sources for bundled GNU libraries.
 
 ## License
 
 Copyright (c) 2026 Matthew Dray <mdray@duck.com>. See [LICENSE](LICENSE) and
-[third-party notices](THIRD_PARTY_NOTICES.md). Commercial application development is
-allowed. Dyn modifications and independent distributions are restricted by the
+[third-party notices](THIRD_PARTY_NOTICES.md). Commercial application development
+is allowed. Dyn modifications and independent distributions are restricted by the
 license. This is source-available software, not open source.
