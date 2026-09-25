@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
+#include "host.h"
 
 /* Single honest target seam. Keep target-specific policy out of CLI/backend. */
 typedef struct {
@@ -70,7 +71,7 @@ static inline bool dyn_work_step(const DynContext *context, uint64_t units) {
 }
 static inline const DynTarget *dyn_context_target(const DynContext *context) {
   return context && context->target ? context->target
-                                    : dyn_target_find("x86_64-linux");
+                                    : dyn_target_find(DYN_HOST_TARGET);
 }
 
 typedef struct {

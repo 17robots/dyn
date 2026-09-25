@@ -1,0 +1,82 @@
+name: Native compiler hosts
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_version:
+        type: string
+        default: 0.1.0-dev
+env:
+  DYN_VERSION: ${{ inputs.release_version || '0.1.0-dev' }}
+permissions:
+  contents: read
+concurrency:
+  group: compiler-hosts-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos:
+    name: Compiler on macOS ARM64
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v4
+        with:
+          version: '2026.9.9'
+          tool_versions: |
+            zig 0.16.0
+          cache: false
+      - name: Install host dependencies
+        run: |
+          brew install llvm@19 tree-sitter
+          echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
+          echo "CPPFLAGS=-I$(brew --prefix tree-sitter)/include -L$(brew --prefix tree-sitter)/lib" >> "$GITHUB_ENV"
+      - name: Build and exercise native compiler
+        env:
+          CC: clang
+          CLANG: clang
+          LLVM_CONFIG: llvm-config
+        run: |
+          python3 tools/fetch-grammar.py
+          python3 tools/build.py host
+          python3 tests/compiler-host.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compiler-host-macos
+          path: build/compiler-host.json
+  windows:
+    name: Compiler on Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-llvm
+            mingw-w64-ucrt-x86_64-binutils
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-libtree-sitter
+      - name: Build and exercise native compiler
+        shell: msys2 {0}
+        env:
+          CC: clang
+          CLANG: clang
+          LLVM_CONFIG: llvm-config
+        run: |
+          python tools/fetch-grammar.py
+          python tools/build.py host
+          python tests/compiler-host.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compiler-host-windows
+          path: build/compiler-host.json

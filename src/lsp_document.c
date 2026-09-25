@@ -55,6 +55,9 @@ const char *lsp_file_path(const char *uri) {
     input += 9;
   if (*input != '/')
     return ""; /* Remote authorities are not local paths. */
+#ifdef _WIN32
+  if (input[0] == '/' && isalpha((unsigned char)input[1]) && input[2] == ':') ++input;
+#endif
   LspUriPath *entry = calloc(1, sizeof(*entry));
   if (!entry)
     return "";
@@ -216,16 +219,19 @@ char *lsp_path_uri(const char *path) {
   size_t n = strlen(path);
   if (n > (SIZE_MAX - 8) / 3)
     return NULL;
-  char *uri = malloc(n * 3 + 8);
+  char *uri = malloc(n * 3 + 9);
   if (!uri)
     return NULL;
   memcpy(uri, "file://", 7);
   size_t at = 7;
+#ifdef _WIN32
+  if (n > 1 && path[1] == ':') uri[at++] = '/';
+#endif
   const char *hex = "0123456789ABCDEF";
   for (size_t i = 0; i < n; ++i) {
     unsigned char c = (unsigned char)path[i];
     if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-        (c >= '0' && c <= '9') || strchr("/-._~", c))
+        (c >= '0' && c <= '9') || strchr("/:-._~", c))
       uri[at++] = (char)c;
     else {
       uri[at++] = '%';

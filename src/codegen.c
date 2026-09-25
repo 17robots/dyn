@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 typedef struct GenAbi GenAbi;
@@ -2588,7 +2587,7 @@ int dyn_link_executable_objects(const DynContext *context,
   if (snprintf(temporary, sizeof(temporary), "%s.tmp", output_path) >=
       (int)sizeof(temporary))
     return 2;
-  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
   if (n < 0) {
     perror("error: locate compiler");
     return 2;
@@ -2649,72 +2648,64 @@ int dyn_link_executable_objects(const DynContext *context,
       fprintf(stderr, " %s", link_inputs[i]);
     fputc('\n', stderr);
   }
-  pid_t child = fork();
-  if (child < 0) {
-    perror("error: fork linker");
+  char **arguments =
+      calloc(object_count + link_input_count + 18, sizeof(*arguments));
+  if (!arguments)
     return 2;
+  size_t argument_count = 0;
+  arguments[argument_count++] = (char *)linker;
+  if (darwin) {
+    arguments[argument_count++] = "cc";
+    arguments[argument_count++] = "--target=aarch64-macos-none";
+    arguments[argument_count++] = "-nostdlib";
+    arguments[argument_count++] = "-Wl,-e,_dyn_start";
+  } else if (windows) {
+    arguments[argument_count++] = "-mi386pep";
+    arguments[argument_count++] = "--gc-sections";
+    arguments[argument_count++] = "--entry=dyn_start";
+    arguments[argument_count++] = "--subsystem";
+    arguments[argument_count++] = "console";
+  } else {
+    arguments[argument_count++] = "--gc-sections";
+    if (thin)
+      arguments[argument_count++] = "--lto-O2";
   }
-  if (child == 0) {
-    char **arguments =
-        calloc(object_count + link_input_count + 18, sizeof(*arguments));
-    if (!arguments)
-      _exit(127);
-    size_t argument_count = 0;
-    arguments[argument_count++] = (char *)linker;
-    if (darwin) {
-      arguments[argument_count++] = "cc";
-      arguments[argument_count++] = "--target=aarch64-macos-none";
-      arguments[argument_count++] = "-nostdlib";
-      arguments[argument_count++] = "-Wl,-e,_dyn_start";
-    } else if (windows) {
-      arguments[argument_count++] = "-mi386pep";
-      arguments[argument_count++] = "--gc-sections";
-      arguments[argument_count++] = "--entry=dyn_start";
-      arguments[argument_count++] = "--subsystem";
-      arguments[argument_count++] = "console";
-    } else {
-      arguments[argument_count++] = "--gc-sections";
-      if (thin)
-        arguments[argument_count++] = "--lto-O2";
-    }
-    arguments[argument_count++] = "-o";
-    arguments[argument_count++] = temporary;
-    arguments[argument_count++] = runtime;
-    arguments[argument_count++] = support;
-    for (size_t i = 0; i < object_count; ++i)
-      arguments[argument_count++] = (char *)object_paths[i];
-    if (dynamic && !darwin && !windows) {
-      arguments[argument_count++] = "--dynamic-linker";
-      arguments[argument_count++] =
-          (char *)dyn_context_target(context)->dynamic_linker;
-    }
-    for (size_t i = 0; i < link_input_count; ++i)
-      arguments[argument_count++] = (char *)link_inputs[i];
-    execvp(arguments[0], arguments);
-    if (thin) {
-      for (size_t i = argument_count; i > 0; --i)
-        arguments[i + 1] = arguments[i];
-      arguments[0] = "zig";
-      arguments[1] = "ld.lld";
-      execvp(arguments[0], arguments);
-    }
-    if (!strcmp(dyn_context_target(context)->name, "aarch64-linux")) {
-      for (size_t i = argument_count; i > 0; --i)
-        arguments[i + 1] = arguments[i];
-      arguments[0] = "zig";
-      arguments[1] = "ld.lld";
-      execvp(arguments[0], arguments);
-    }
-    if (!strcmp(dyn_context_target(context)->name, "x86_64-linux")) {
-      arguments[0] = "ld";
-      execvp(arguments[0], arguments);
-    }
-    _exit(127);
+  arguments[argument_count++] = "-o";
+  arguments[argument_count++] = temporary;
+  arguments[argument_count++] = runtime;
+  arguments[argument_count++] = support;
+  for (size_t i = 0; i < object_count; ++i)
+    arguments[argument_count++] = (char *)object_paths[i];
+  if (dynamic && !darwin && !windows) {
+    arguments[argument_count++] = "--dynamic-linker";
+    arguments[argument_count++] =
+        (char *)dyn_context_target(context)->dynamic_linker;
   }
-  int status = 0;
-  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) ||
-      WEXITSTATUS(status) != 0) {
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+  for (size_t i = 0; i < link_input_count; ++i)
+    arguments[argument_count++] = (char *)link_inputs[i];
+  int status;
+  status = dyn_host_spawn(arguments);
+  if (status == 127 && thin) {
+    for (size_t i = argument_count; i > 0; --i)
+      arguments[i + 1] = arguments[i];
+    arguments[0] = "zig";
+    arguments[1] = "ld.lld";
+    status = dyn_host_spawn(arguments);
+  }
+  if (status == 127 && !strcmp(dyn_context_target(context)->name, "aarch64-linux")) {
+    for (size_t i = argument_count; i > 0; --i)
+      arguments[i + 1] = arguments[i];
+    arguments[0] = "zig";
+    arguments[1] = "ld.lld";
+    status = dyn_host_spawn(arguments);
+  }
+  if (status == 127 && !strcmp(dyn_context_target(context)->name, "x86_64-linux")) {
+    arguments[0] = "ld";
+    status = dyn_host_spawn(arguments);
+  }
+  free(arguments);
+  if (status != 0) {
+    if (status == 127)
       fprintf(stderr, "error: target '%s' requires %s in PATH\n",
               dyn_context_target(context)->name, linker);
     else
@@ -2744,7 +2735,7 @@ static int link_wasm(const DynContext *context, const char *object_path, const c
   char wasi_support[4096], wasi_start[4096];
   bool wasi = !strcmp(dyn_context_target(context)->kernel, "wasi");
   if (snprintf(imports, sizeof(imports), "--allow-undefined-file=%s.imports", object_path) >= (int)sizeof(imports)) return 2;
-  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
   if (n < 0 || (size_t)n >= sizeof(executable) - 1) return 2;
   executable[n] = 0;
   char *slash = strrchr(executable, '/');
@@ -2761,26 +2752,22 @@ static int link_wasm(const DynContext *context, const char *object_path, const c
   }
   if (snprintf(temporary, sizeof(temporary), "%s.tmp", output_path) >= (int)sizeof(temporary)) return 2;
   if (verbose) fprintf(stderr, "+ wasm-ld --no-entry --export-memory -o %s %s %s\n", temporary, support, object_path);
-  pid_t child = fork();
-  if (child < 0) return 2;
-  if (!child) {
-    char **args = calloc(count + 16, sizeof(*args));
-    if (!args) _exit(127);
-    size_t at = 0;
-    args[at++] = "wasm-ld";
-    args[at++] = "--no-entry";
-    args[at++] = imports;
-    args[at++] = "--export-memory";
-    args[at++] = "-z"; args[at++] = "stack-size=1048576";
-    args[at++] = "-o"; args[at++] = temporary;
-    args[at++] = support; args[at++] = (char *)object_path;
-    if (wasi) { args[at++] = wasi_support; args[at++] = wasi_start; }
-    for (size_t i = 0; i < count; ++i) args[at++] = (char *)inputs[i];
-    execvp(args[0], args);
-    _exit(127);
-  }
-  int status = 0;
-  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status)) {
+  char **args = calloc(count + 16, sizeof(*args));
+  if (!args) return 2;
+  size_t at = 0;
+  args[at++] = "wasm-ld";
+  args[at++] = "--no-entry";
+  args[at++] = imports;
+  args[at++] = "--export-memory";
+  args[at++] = "-z"; args[at++] = "stack-size=1048576";
+  args[at++] = "-o"; args[at++] = temporary;
+  args[at++] = support; args[at++] = (char *)object_path;
+  if (wasi) { args[at++] = wasi_support; args[at++] = wasi_start; }
+  for (size_t i = 0; i < count; ++i) args[at++] = (char *)inputs[i];
+  int status;
+  status = dyn_host_spawn(args);
+  free(args);
+  if (status != 0) {
     fprintf(stderr, "error: Wasm link failed (wasm-ld required in PATH)\n");
     remove(temporary); return 2;
   }
@@ -2797,7 +2784,7 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
   if (snprintf(temporary, sizeof(temporary), "%s.tmp", output_path) >=
       (int)sizeof(temporary))
     return 2;
-  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
   if (n < 0) {
     perror("error: locate compiler");
     return 2;
@@ -2850,60 +2837,52 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
       fprintf(stderr, " %s", link_inputs[i]);
     fputc('\n', stderr);
   }
-  pid_t child = fork();
-  if (child < 0) {
-    perror("error: fork linker");
+  char **arguments = calloc(link_input_count + 18, sizeof(*arguments));
+  if (!arguments)
     return 2;
+  size_t count = 0;
+  arguments[count++] = darwin ? "zig" : windows ? "ld" : "ld.lld";
+  if (darwin) {
+    arguments[count++] = "cc";
+    arguments[count++] = "--target=aarch64-macos-none";
+    arguments[count++] = "-dynamiclib";
+    arguments[count++] = "-nostdlib";
+  } else {
+    if (windows)
+      arguments[count++] = "-mi386pep";
+    arguments[count++] = "-shared";
+    arguments[count++] = "--gc-sections";
+    if (windows) {
+      arguments[count++] = "--export-all-symbols";
+      arguments[count++] = "--out-implib";
+      arguments[count++] = import_temporary;
+    }
   }
-  if (child == 0) {
-    char **arguments = calloc(link_input_count + 18, sizeof(*arguments));
-    if (!arguments)
-      _exit(127);
-    size_t count = 0;
-    arguments[count++] = darwin ? "zig" : windows ? "ld" : "ld.lld";
-    if (darwin) {
-      arguments[count++] = "cc";
-      arguments[count++] = "--target=aarch64-macos-none";
-      arguments[count++] = "-dynamiclib";
-      arguments[count++] = "-nostdlib";
-    } else {
-      if (windows)
-        arguments[count++] = "-mi386pep";
-      arguments[count++] = "-shared";
-      arguments[count++] = "--gc-sections";
-      if (windows) {
-        arguments[count++] = "--export-all-symbols";
-        arguments[count++] = "--out-implib";
-        arguments[count++] = import_temporary;
-      }
-    }
-    arguments[count++] = "-o";
-    arguments[count++] = (char *)link_output;
-    arguments[count++] = assembly;
-    arguments[count++] = support;
-    arguments[count++] = (char *)object_path;
-    for (size_t i = 0; i < link_input_count; ++i)
-      arguments[count++] = (char *)link_inputs[i];
-    execvp(arguments[0], arguments);
-    if (!windows && !darwin &&
-        !strcmp(dyn_context_target(context)->name, "aarch64-linux")) {
-      for (size_t i = count; i > 0; --i)
-        arguments[i + 1] = arguments[i];
-      arguments[0] = "zig";
-      arguments[1] = "ld.lld";
-      execvp(arguments[0], arguments);
-    }
-    if (!windows && !darwin &&
-        !strcmp(dyn_context_target(context)->name, "x86_64-linux")) {
-      arguments[0] = "ld";
-      execvp(arguments[0], arguments);
-    }
-    _exit(127);
+  arguments[count++] = "-o";
+  arguments[count++] = (char *)link_output;
+  arguments[count++] = assembly;
+  arguments[count++] = support;
+  arguments[count++] = (char *)object_path;
+  for (size_t i = 0; i < link_input_count; ++i)
+    arguments[count++] = (char *)link_inputs[i];
+  int status;
+  status = dyn_host_spawn(arguments);
+  if (status == 127 && !windows && !darwin &&
+      !strcmp(dyn_context_target(context)->name, "aarch64-linux")) {
+    for (size_t i = count; i > 0; --i)
+      arguments[i + 1] = arguments[i];
+    arguments[0] = "zig";
+    arguments[1] = "ld.lld";
+    status = dyn_host_spawn(arguments);
   }
-  int status = 0;
-  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) ||
-      WEXITSTATUS(status) != 0) {
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+  if (status == 127 && !windows && !darwin &&
+      !strcmp(dyn_context_target(context)->name, "x86_64-linux")) {
+    arguments[0] = "ld";
+    status = dyn_host_spawn(arguments);
+  }
+  free(arguments);
+  if (status != 0) {
+    if (status == 127)
       fprintf(stderr, "error: target '%s' requires %s in PATH\n",
               dyn_context_target(context)->name,
               darwin    ? "zig"

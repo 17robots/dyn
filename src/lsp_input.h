@@ -1,6 +1,8 @@
 #ifndef DYN_LSP_INPUT_H
 #define DYN_LSP_INPUT_H
+#ifndef _WIN32
 #include <poll.h>
+#endif
 
 /* One bounded framing buffer. Nonblocking lookahead never waits for the rest of
    a partial header/body; ordinary reads block only when no work is pending. */
@@ -59,11 +61,24 @@ static char *lsp_input_next(LspInput *input, bool wait) {
       if (input->length) input->failed = true;
       return NULL;
     }
+#ifdef _WIN32
+    if (!wait) {
+      DWORD available = 0;
+      HANDLE handle = (HANDLE)_get_osfhandle(STDIN_FILENO);
+      if (GetFileType(handle) == FILE_TYPE_PIPE) {
+        if (!PeekNamedPipe(handle, NULL, 0, NULL, &available, NULL)) {
+          input->eof = true; continue;
+        }
+        if (!available) return NULL;
+      }
+    }
+#else
     struct pollfd fd = {.fd = STDIN_FILENO, .events = POLLIN};
     int ready;
     do ready = poll(&fd, 1, wait ? -1 : 0); while (ready < 0 && errno == EINTR);
     if (!ready) return NULL;
     if (ready < 0 || (fd.revents & (POLLERR | POLLNVAL))) { input->failed = true; return NULL; }
+#endif
     if (input->capacity - input->length < 4097) {
       size_t capacity = input->capacity ? input->capacity * 2 : 8192;
       if (capacity > limit + header_limit + 4096) capacity = limit + header_limit + 4096;

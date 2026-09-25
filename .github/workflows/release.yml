@@ -48,8 +48,13 @@ jobs:
     uses: ./.github/workflows/native-targets.yml
     with:
       release_version: ${{ needs.version.outputs.value }}
+  compiler-hosts:
+    needs: version
+    uses: ./.github/workflows/compiler-hosts.yml
+    with:
+      release_version: ${{ needs.version.outputs.value }}
   bundle:
-    needs: [version, linux, native]
+    needs: [version, linux, native, compiler-hosts]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
