@@ -1,7 +1,0 @@
-a: i32 = read_b()
-b: i32 = read_a()
-
-fn read_a() i32 { return a }
-fn read_b() i32 { return b }
-
-fn main() {}

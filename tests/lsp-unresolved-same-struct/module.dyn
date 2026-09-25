@@ -1,5 +1,0 @@
-use "./missing" imported
-
-struct Value {
-  nested: imported.Value,
-}

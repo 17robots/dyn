@@ -1,6 +1,0 @@
-use "std/image" image
-
-fn main() {
-  view := image.View{}
-  _ = view
-}

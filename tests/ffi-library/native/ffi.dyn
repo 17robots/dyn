@@ -1,1 +1,0 @@
-pub extern fn add "dyn_library_add"(left: i64, right: i64) i64

@@ -1,8 +1,7 @@
 name: C compiler
-
 on:
   push:
-    branches: ["**"]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -10,22 +9,30 @@ on:
       release_version:
         type: string
         default: 0.1.0-dev
-
-  schedule:
-    - cron: '23 4 * * *'
-
+permissions:
+  contents: read
 env:
   DYN_VERSION: ${{ inputs.release_version || '0.1.0-dev' }}
-
 jobs:
   quality:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       LLVM_CONFIG: llvm-config-19
+      CLANG: clang-19
+      DYN: ./build/dyn-release
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-dyn
-      - run: RELEASE_FLAGS=--baseline just release-check
+      - uses: ./.github/actions/setup-compiler
+      - run: just release-check
+      - name: Compiler contracts under sanitizers
+        env:
+          DYN: ./build/dyn-sanitize
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          just artifact dyn-sanitize
+          python3 tests/compiler-contracts.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -34,71 +41,3 @@ jobs:
             build/release-check/
             build/readiness/
             build/dist/
-            build/projects/dist/
-      - run: CC=clang ./benchmarks/run.sh 5
-  providers-native:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            llvm: 19
-          - os: ubuntu-22.04
-            llvm: 22
-    runs-on: ${{ matrix.os }}
-    env:
-      LLVM_CONFIG: llvm-config-${{ matrix.llvm }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build on the actual provider baseline
-        run: |
-          sudo apt-get update
-          if [ "${{ matrix.os }}" = ubuntu-22.04 ]; then
-            sudo apt-get install -y curl gnupg ca-certificates
-            curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/dyn-llvm.asc
-            gpg --show-keys --with-colons /tmp/dyn-llvm.asc | grep -q '6084F3CF814B57C1CF12EFD515CF4D18AF4F7421'
-            sudo cp /tmp/dyn-llvm.asc /usr/share/keyrings/dyn-llvm.asc
-            echo 'deb [signed-by=/usr/share/keyrings/dyn-llvm.asc] https://apt.llvm.org/jammy/ llvm-toolchain-jammy-22 main' | sudo tee /etc/apt/sources.list.d/dyn-llvm.list
-            sudo apt-get update
-          fi
-          sudo apt-get install -y clang-${{ matrix.llvm }} lld-${{ matrix.llvm }} llvm-${{ matrix.llvm }}-dev build-essential pkg-config libssl-dev libzstd-dev libsqlite3-dev
-          echo /usr/lib/llvm-${{ matrix.llvm }}/bin >> "$GITHUB_PATH"
-          git clone --depth 1 --branch v0.25.8 https://github.com/tree-sitter/tree-sitter /tmp/dyn-provider-tree-sitter
-          make -C /tmp/dyn-provider-tree-sitter -j2
-          sudo make -C /tmp/dyn-provider-tree-sitter install PREFIX=/usr/local
-          sudo ldconfig
-      - run: |
-          cargo install just --version 1.58.0 --locked
-          cargo install tree-sitter-cli --version 0.25.8 --locked
-      - run: python3 compiler/tools/build.py dyn-release dynrt_start.o dynrt_release.o dynrt_support.o
-      - run: python3 tests/provider-matrix.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: provider-results-${{ matrix.os }}
-          path: build/readiness/providers.json
-
-  long-fuzz:
-    env:
-      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix: { seed: [731, 2909, 7919, 15401] }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-dyn
-      - run: just all artifact dyn-sanitize
-      - run: DYN=./build/dyn-sanitize DYN_FUZZ_SEED=${{ matrix.seed }} DYN_FUZZ_CASES=5000 ./tests/fuzz-smoke.sh
-      - run: DYN=./build/dyn-sanitize DYN_FUZZ_SEED=${{ matrix.seed }} DYN_FUZZ_CASES=1000 python3 tests/frontend-fuzz.py
-      - run: DYN=./build/dyn-sanitize DYN_SOAK_CYCLES=250 python3 tests/readiness-soak.py
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: scheduled-validation-${{ matrix.seed }}
-          path: |
-            build/fuzz-smoke/
-            build/frontend-fuzz/
-            build/readiness/

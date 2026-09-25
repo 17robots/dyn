@@ -17,7 +17,7 @@ static void rewrite_test_free(void *pointer) {
 }
 #define strdup rewrite_test_copy
 #define free rewrite_test_free
-#include "../compiler/src/module_rewrite.c"
+#include "../src/module_rewrite.c"
 #undef strdup
 #undef free
 int main(void) {

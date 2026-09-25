@@ -1,152 +1,58 @@
-# Workspace dispatcher. Component justfiles own their recipes.
+# Standalone Dyn compiler. Configuration uses environment variables.
 set positional-arguments
 set shell := ["bash", "-euo", "pipefail", "-c"]
-export BUILD := absolute_path(env('BUILD', 'build'))
+export COMPILER_DIR := justfile_directory()
+export BUILD := absolute_path(env('BUILD', COMPILER_DIR / 'build'))
+export DYN := env('DYN', BUILD / 'dyn-release')
+export DYN_SDK := env('DYN_SDK', COMPILER_DIR)
 
-all:
-    just --justfile compiler/justfile all
+deps:
+    python3 tools/fetch-grammar.py
 
-release:
-    just --justfile compiler/justfile release
+all: deps
+    python3 tools/build.py all
 
-smoke:
-    just --justfile compiler/justfile smoke
+release: all
+    python3 tools/build.py dyn-release
 
-test:
-    just --justfile compiler/justfile test
+artifact +names: deps
+    python3 tools/build.py "$@"
 
-test-c:
-    just --justfile compiler/justfile test-c
+per-file: deps
+    python3 tools/build.py dyn-per-file
 
-per-file:
-    just --justfile compiler/justfile per-file
+smoke: release
+    "$BUILD/dyn" build tests/smoke --no-cache --quiet --output "$BUILD/compiler-smoke"
+    "$BUILD/compiler-smoke"
+    "$BUILD/dyn-release" build tests/smoke --release --no-cache --quiet --output "$BUILD/compiler-smoke-release"
+    "$BUILD/compiler-smoke-release"
 
-perf-compiler:
-    just --justfile compiler/justfile perf-compiler
+test: smoke
+    python3 tests/run.py
 
-sanitize-test:
-    just --justfile compiler/justfile sanitize-test
+install: release
+    python3 tools/install.py
 
-sanitize-test-c:
-    just --justfile compiler/justfile sanitize-test-c
+package: release
+    python3 tools/package-sdk.py
 
-fuzz-c:
-    just --justfile compiler/justfile fuzz-c
-
-quality-c:
-    just --justfile compiler/justfile quality-c
-
-install:
-    just --justfile compiler/justfile install
-
-install-check:
-    just --justfile compiler/justfile install-check
-
-package-sdk:
-    just --justfile compiler/justfile package-sdk
-
-test-build-plan:
-    just --justfile compiler/justfile test-build-plan
-
-test-interface:
-    just --justfile compiler/justfile test-interface
-
-test-bind:
-    just --justfile compiler/justfile test-bind
-
-test-contracts:
-    just --justfile compiler/justfile test-contracts
-
-test-editor:
-    just --justfile compiler/justfile test-editor
-
-test-modules:
-    just --justfile compiler/justfile test-modules
-
-test-frontend:
-    just --justfile compiler/justfile test-frontend
-
-test-static-analysis:
-    just --justfile compiler/justfile test-static-analysis
-
-test-libraries:
-    just --justfile compiler/justfile test-libraries
-
-test-vendors:
-    just --justfile compiler/justfile test-vendors
-
-test-readiness:
-    just --justfile compiler/justfile test-readiness
-
-test-followups:
-    just --justfile compiler/justfile test-followups
-
-sdk-reference:
-    just --justfile compiler/justfile sdk-reference
-
-selfhost-ready:
-    just --justfile compiler/justfile selfhost-ready
-
-selfhost-compare:
-    just --justfile compiler/justfile selfhost-compare
+alias package-sdk := package
+alias install-check := package
 
 release-check:
-    just --justfile compiler/justfile release-check
+    python3 tools/release-check.py
+
+native-probes: release
+    python3 tools/build-native-probes.py
 
 vendor-libs:
-    just --justfile compiler/justfile vendor-libs
+    python3 tools/build-vendors.py --prefix "$BUILD/vendor-deps/install" ${VENDOR_PACKAGES:-}
 
-vendor-bindings:
-    just --justfile compiler/justfile vendor-bindings
+vendor-bindings: release
+    python3 tools/bind-vendors.py --prefix "$BUILD/vendor-deps/install" --sources "$BUILD/extra-vendor-sources" --output "$BUILD/raw-sdk" --dyn "$BUILD/dyn-release" --clang "${BIND_CLANG:-clang}" ${VENDOR_PACKAGES:-}
 
-alias compiler := all
-
-artifact +names:
-    just --justfile compiler/justfile artifact "$@"
-
-projects: all
-    DYN="$BUILD/dyn" BUILD="$BUILD/projects" just --justfile projects/justfile all
-
-test-projects: all
-    DYN="$BUILD/dyn" BUILD="$BUILD/projects" just --justfile projects/justfile test
-
-package-projects:
-    BUILD="$BUILD/projects" just --justfile projects/justfile package
-
-grammar:
-    just --justfile tree-sitter-dyn/justfile generate
-
-test-grammar:
-    BUILD="$BUILD/grammar" just --justfile tree-sitter-dyn/justfile check-workspace
-
-grammar-release:
-    BUILD="$BUILD/grammar" just --justfile tree-sitter-dyn/justfile release
-
-package-grammar:
-    DIST="$BUILD/dist" BUILD="$BUILD/grammar" just --justfile tree-sitter-dyn/justfile package
-
-editor-grammar:
-    just --justfile tree-sitter-dyn/justfile editor-grammar
-
-verify-published-grammar:
-    just --justfile tree-sitter-dyn/justfile verify-published-grammar
-
-clean: clean-projects clean-grammar clean-compiler
-
-clean-compiler:
-    just --justfile compiler/justfile clean
-
-clean-projects:
-    BUILD="$BUILD/projects" just --justfile projects/justfile clean
-
-clean-grammar:
-    BUILD="$BUILD/grammar" just --justfile tree-sitter-dyn/justfile clean
+clean:
+    python3 tools/install.py --clean
 
 help:
     @just --list
-
-test-agent-readiness:
-    just --justfile compiler/justfile test-agent-readiness
-
-test-preview:
-    just --justfile compiler/justfile test-preview

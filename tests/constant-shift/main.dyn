@@ -1,4 +1,0 @@
-fn main() {
-  value := 1 << 32
-  _ = value
-}

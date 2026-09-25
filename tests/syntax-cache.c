@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "fault-alloc.h"
-#include "../compiler/src/source_tree.c"
+#include "../src/source_tree.c"
 
 static void same_tree(TSNode a, TSNode b) {
   assert(!strcmp(ts_node_type(a), ts_node_type(b)));

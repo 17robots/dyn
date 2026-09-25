@@ -1,9 +1,0 @@
-fn cleanup() {}
-
-fn main() {
-  defer {
-    value := 1
-    _ = value
-  }
-  defer { return }
-}

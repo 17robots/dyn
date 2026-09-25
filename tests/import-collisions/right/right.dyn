@@ -1,4 +1,0 @@
-pub struct Value { number: i32 }
-pub enum Result { Ok: i32, Error }
-pub fn answer() i32 { return 22 }
-pub fn make() Value { return Value{ number: answer() } }

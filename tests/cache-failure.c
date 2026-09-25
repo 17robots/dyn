@@ -12,7 +12,7 @@ static size_t failure_read(void *data, size_t size, size_t count, FILE *file) {
 static int failure_error(FILE *file) { return inject_read_error ? 1 : ferror(file); }
 #define fread failure_read
 #define ferror failure_error
-#include "../compiler/src/cache.c"
+#include "../src/cache.c"
 #undef fread
 #undef ferror
 

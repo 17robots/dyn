@@ -1,3 +1,0 @@
-pub fn exported() i32 { return 7 }
-
-fn unrelated() { exported := 1; _ = exported }

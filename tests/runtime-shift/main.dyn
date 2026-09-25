@@ -1,5 +1,0 @@
-fn main() {
-  count: usize = 32
-  value := 1 << count
-  _ = value
-}

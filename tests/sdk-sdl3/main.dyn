@@ -1,6 +1,0 @@
-use "vendor/sdl3"
-fn main() {
-  storage: [0]u8 = []
-  if sdl3.window_create("bad", storage[..], 1, 1, 0).ok { #panic("SDL caller storage") }
-  sdl3.quit()
-}

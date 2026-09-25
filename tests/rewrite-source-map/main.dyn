@@ -1,5 +1,0 @@
-use "./lib"
-
-fn main() {
-  lib.take(missing)
-}

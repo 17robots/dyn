@@ -1,7 +1,0 @@
-fn compute(seed: i64) i64 {
-  value := seed + 1
-  _ = #syscall(39)
-  return value
-}
-
-fn main() { _ = compute(19) }

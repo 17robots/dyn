@@ -1,9 +1,5 @@
-build/
-**/build/
-**/.jj/
-**/.codex/
-**/__pycache__/
-**/node_modules/
-**/target/
-**/.dyn_build/
+/build/
+__pycache__/
 *.pyc
+.jj/
+.codex/

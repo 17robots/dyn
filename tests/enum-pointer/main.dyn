@@ -1,9 +1,0 @@
-enum State { Ready, Done }
-
-fn set(output: *State) { output.* = State.Done }
-
-fn main() {
-  state := State.Ready
-  set(&state)
-  if state != State.Done { #panic("enum pointer assignment failed") }
-}

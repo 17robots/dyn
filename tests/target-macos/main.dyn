@@ -1,3 +1,0 @@
-#target(arch: aarch64, kernel: darwin, abi: aapcs, pointer_bits: 64)
-
-fn main() {}

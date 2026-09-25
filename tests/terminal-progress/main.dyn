@@ -1,7 +1,0 @@
-use "std/terminal"
-use "std/io"
-fn main() {
-  bytes: [65536]u8 = []
-  result := io.write_all(terminal.stdout(), bytes[..])
-  if result.status != io.Status.Error || result.error != -11 || result.transferred == 0 || result.transferred >= #len(bytes) { #panic("lost partial write progress") }
-}

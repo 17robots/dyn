@@ -1,4 +1,0 @@
-fn main() {
-  info := #typeof(i32)
-  _ = info
-}

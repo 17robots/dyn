@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tree_sitter/api.h>
-#include "../compiler/src/dyn_ast.h"
+#include "../src/dyn_ast.h"
 
 static bool fail_blocks;
 static unsigned failures;
@@ -11,7 +11,7 @@ static void *ast_test_calloc(size_t count, size_t size) {
   return calloc(count, size);
 }
 #define calloc ast_test_calloc
-#include "../compiler/src/ast.c"
+#include "../src/ast.c"
 #undef calloc
 
 int main(void) {
