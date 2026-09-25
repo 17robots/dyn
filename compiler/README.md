@@ -69,7 +69,7 @@ Later constructs receive explicit not-implemented diagnostics. Output is static 
 ELF from LLVM object generation and `ld.lld` (or development fallback `ld`).
 
 See `docs/compiler.md`, `docs/debugging.md`, `docs/language.md`, `docs/decisions.md`, and
-`docs/todo.md`.
+`docs/release/readiness.md`.
 
 With the full workspace, `just release-check` runs the Linux preview release
 gates and saves logs, dependency versions and archive hashes. See

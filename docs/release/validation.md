@@ -97,9 +97,11 @@ a locally matching grammar is insufficient.
 On success the release gate records source and archive hashes, generates release
 notes, and prepares versioned copies in `build/release-check/artifacts`. Upload
 those exact files with the report/checksums; do not rebuild after approval. The
-CI workflow uploads evidence and candidate archives as workflow artifacts, and
-can be started manually. It does not create public tags or releases. Before
-publication, review [notes](notes-0.1.md), [compatibility](../stability.md), and the
+Linux validation workflow uploads evidence and candidate archives as workflow
+artifacts. The separate [release workflow](distribution.md) runs Linux and native
+gates, verifies mise installation and publishes when a version tag is pushed.
+Manual release runs validate without publishing. Before publication, review
+[migrations](../library-migrations.md), [compatibility](../stability.md), and the
 explicit pending external evidence in the report.
 
 Optional asset/UI providers are also built from their staged sources under

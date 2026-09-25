@@ -234,3 +234,26 @@ serialized descriptors. The event sink must live outside the observed arena.
 Frontend epoch 7 invalidates old semantic caches. New straight-line lifetime errors
 can reject previously accepted local escapes and use after arena reset.
 See [preview tools](preview-tools.md) for limits and commands.
+
+## Earlier preview compatibility changes
+
+When upgrading from older development snapshots:
+
+- Rebuild Dyn objects, native libraries and FFI layout mirrors together. Aggregate
+  arguments/results share target C ABI lowering across direct calls, indirect calls
+  and callbacks. Do not reuse serialized arena or slot-map descriptors.
+- Pool/free-list stride and backing alignment must be at least pointer-aligned,
+  even when the requested payload alignment is smaller.
+- Regenerate C bindings for target-sized aliases. Plain `std/c.char` follows target
+  signedness; C `long` follows the target ABI, including Windows LLP64. Use explicit
+  `(void)` for C functions with no parameters; non-prototype `()` declarations are
+  omitted by binding generation.
+- JSON nodes track their parent and reject duplicate attachment, cycles and
+  reparenting. Use `#sizeof` rather than hard-coded `Value` layout sizes.
+- Slot-map handles include backing identity. Handles from another store are
+  rejected. Borrowed views still expire when their backing storage is invalidated;
+  use `copy_into` with disjoint caller storage for retained bytes.
+
+For current release artifacts, installation and publication, see
+[distribution](release/distribution.md). For target and provider limits, see
+[release readiness](release/readiness.md).
