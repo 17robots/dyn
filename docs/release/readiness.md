@@ -52,13 +52,13 @@ outside the 0.1 release work.
 | R12 | Provider compatibility | Build/test within each baseline; versions and ABI logs retained |
 | R13 | Concurrency | Multi-worker contention, condition predicate, semaphore and once tests |
 | R14 | Performance | Existing scaling gates plus long-session/soak metrics; no check weakening |
-| R15 | Documentation | Remove contradictory current claims; retain historical audit dates |
+| R15 | Documentation | Keep current claims consistent; preserve reproducible validation evidence |
 | R16 | Packaging/versioning | Manifest, hashes, dependency policy, unpacked SDK smoke and release notes |
 | R17 | Application/security evidence | Bounded soak report; longer/external evidence remains honestly pending |
 | R18 | Feature freeze | No new syntax or self-hosting as a substitute for validation |
 
-Local results are recorded under `build/readiness` and summarized in the audit
-[readiness audit](../audit/release-readiness-2026-09-21.md). CI configuration is not evidence that CI ran. Native
+Local results are recorded under `build/readiness`; release workflows retain
+JSON reports and artifact checksums. CI configuration is not evidence that CI ran. Native
 runner execution, actual GPU coverage, publication, independent security review,
 and sustained user experience must be recorded separately before stronger claims.
 
@@ -82,6 +82,6 @@ rejected, including generic struct literals and local aliases.
 budgets/cancellation/recovery, binding reports/layouts, SDK behavior and generated
 reference freshness. Sanitizer runs include the compiler-facing probes. CI builds
 aggregate probes for native target runners; local cross-link status remains
-separate from native execution. See [follow-up audit](../audit/readiness-followups-2026-09-21.md),
+separate from native execution. See [validation](validation.md),
 [SDK reference](../reference/README.md), [behavior inventory](sdk-behavior.json),
 and [compatibility/migrations](../stability.md).

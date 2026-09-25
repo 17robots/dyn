@@ -2,8 +2,7 @@
 
 - Read the current idiomatic Dyn guide and memory contracts in `../docs` when
   working in the combined workspace. `../docs/agent-guide.md` describes declaration
-  queries, memory guarantees and validation. `../PROMPT.md` is a historical compiler
-  brief, not application instructions.
+  queries, memory guarantees and validation.
 - Look up actual SDK declarations with `dyn docs MODULE_DIRECTORY --json` (or
   Markdown output). The export is syntax-only; check the consuming application to
   resolve imports and target availability. Never invent APIs from another language.

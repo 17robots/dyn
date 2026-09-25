@@ -8,7 +8,8 @@ close/destroy operation. Arena reset does not close files, sockets, or foreign h
 
 The arena-only allocation rule applies to Dyn standard-library APIs. The C compiler
 and LSP keep their C allocation strategy; their allocation failures, ownership,
-and performance are audited separately. See `correctness-audit.md`.
+and performance are validated separately. See [compiler architecture](compiler.md)
+and [release validation](release/validation.md).
 
 ## Shipped arena interface
 

@@ -13,5 +13,7 @@ for source in sorted((ROOT/'compiler').glob('*/**/*.dyn')):
     if relative.parts[0] not in ('std','vendor'): continue
     text=source.read_text();name=str(relative.parent)
     rows.append('\t'.join([str(source.relative_to(ROOT)),str(len(text.splitlines())),str(len(re.findall(r'^pub\s+',text,re.M))),','.join(sorted(importers.get(name,set())))]))
-(ROOT/'docs/audit/sdk-inventory.tsv').write_text('\n'.join(rows)+'\n')
+output = ROOT/'build/readiness/sdk-inventory.tsv'
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text('\n'.join(rows)+'\n')
 print(f'Inventoried {len(rows)-1} SDK source files')

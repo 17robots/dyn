@@ -1,6 +1,6 @@
 # Dyn language semantics
 
-This document records normative decisions supplementing `PROMPT.md`.
+This document defines the implemented language semantics.
 
 ## Modules and entry points
 

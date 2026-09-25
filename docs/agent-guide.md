@@ -2,7 +2,6 @@
 
 Read [idiomatic Dyn](idiomatic-dyn.md) first. Exact rules live in
 [language](language.md), [memory](memory.md), and [buffer contracts](buffer-contracts.md).
-`PROMPT.md` is a historical compiler-development brief, not application instructions.
 Use real declarations and executable examples rather than borrowing syntax or APIs
 from C, Go, Rust or Zig.
 
