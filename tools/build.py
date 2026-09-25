@@ -233,6 +233,7 @@ def main():
         if not all(path.is_file() for path in ts_sources):
             sys.exit('Missing generated grammar; run just deps or set TS_DIR to a grammar checkout')
         write_changed(unity, '#define _POSIX_C_SOURCE 200809L\n' + ''.join(f'#include "{p.as_posix()}"\n' for p in sources))
+        write_changed(BUILD/'libSystem.tbd', (COMPILER/'runtime/libSystem.tbd').read_text())
         targets = dict.fromkeys(n for t in args.targets for n in (ALL if t == 'all' else HOST if t == 'host' else [t]))
         for name in targets:
             build(name)

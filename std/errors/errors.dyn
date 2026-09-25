@@ -1,0 +1,68 @@
+// Portable categories accompany (and never replace) the original native code.
+// A library validation failure may have no native code. Test kind/ok/status first.
+pub enum Kind { None, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
+
+pub fn linux(code: isize) Kind {
+  if code == 0 { return Kind.None }
+  value := code
+  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 { return Kind.System }
+  if value < 0 { value = 0 - value }
+  if value == 2 || value == 20 { return Kind.NotFound }
+  if value == 1 || value == 13 { return Kind.PermissionDenied }
+  if value == 17 { return Kind.AlreadyExists }
+  if value == 9 { return Kind.InvalidState }
+  if value == 22 || value == 36 { return Kind.InvalidInput }
+  if value == 12 || value == 28 { return Kind.Capacity }
+  if value == 27 || value == 75 { return Kind.Overflow }
+  if value == 4 { return Kind.Interrupted }
+  if value == 11 { return Kind.WouldBlock }
+  if value == 38 || value == 95 { return Kind.Unsupported }
+  return Kind.System
+}
+pub fn windows(code: isize) Kind {
+  if code == 0 { return Kind.None }
+  value := code
+  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 { return Kind.System }
+  if value < 0 { value = 0 - value }
+  if value == 2 || value == 3 { return Kind.NotFound }
+  if value == 5 || value == 32 || value == 33 { return Kind.PermissionDenied }
+  if value == 80 || value == 183 { return Kind.AlreadyExists }
+  if value == 6 { return Kind.InvalidState }
+  if value == 87 || value == 123 || value == 206 || value == 1113 { return Kind.InvalidInput }
+  if value == 8 || value == 14 || value == 112 || value == 122 { return Kind.Capacity }
+  if value == 534 { return Kind.Overflow }
+  if value == 995 { return Kind.Interrupted }
+  if value == 232 || value == 997 { return Kind.WouldBlock }
+  if value == 1 || value == 50 || value == 120 { return Kind.Unsupported }
+  return Kind.System
+}
+pub fn wasi(code: isize) Kind {
+  if code == 0 { return Kind.None }
+  value := code
+  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 { return Kind.System }
+  if value < 0 { value = 0 - value }
+  if value == 44 || value == 54 { return Kind.NotFound }
+  if value == 2 || value == 63 || value == 76 { return Kind.PermissionDenied }
+  if value == 20 { return Kind.AlreadyExists }
+  if value == 8 { return Kind.InvalidState }
+  if value == 28 || value == 37 { return Kind.InvalidInput }
+  if value == 48 || value == 51 { return Kind.Capacity }
+  if value == 22 || value == 61 { return Kind.Overflow }
+  if value == 27 { return Kind.Interrupted }
+  if value == 6 { return Kind.WouldBlock }
+  if value == 52 || value == 58 { return Kind.Unsupported }
+  return Kind.System
+}
+
+pub fn darwin(code: isize) Kind {
+  value := code
+  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 { return Kind.System }
+  if value < 0 { value = 0 - value }
+  if value == 35 || value == 36 { return Kind.WouldBlock }
+  if value == 45 || value == 78 { return Kind.Unsupported }
+  if value == 63 { return Kind.InvalidInput }
+  if value == 84 { return Kind.Overflow }
+  // Other common categories have the same values as Linux's base errno set.
+  if value == 11 || value == 38 || value == 75 || value == 95 { return Kind.System }
+  return linux(code)
+}

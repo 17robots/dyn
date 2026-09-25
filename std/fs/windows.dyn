@@ -1,0 +1,59 @@
+#target(arch: x86_64, kernel: windows)
+use "std/unicode/utf8" utf8
+use "std/unicode/utf16" utf16
+extern fn win_open "dyn_fs_open"(path: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr
+extern fn win_close "dyn_fs_close"(handle: rawptr) i32
+extern fn win_read "dyn_fs_read"(handle: rawptr, data: *u8, count: u32, done: *u32, overlapped: rawptr) i32
+extern fn win_write "dyn_fs_write"(handle: rawptr, data: *const u8, count: u32, done: *u32, overlapped: rawptr) i32
+extern fn win_seek "dyn_fs_seek"(handle: rawptr, offset: i64, position: *i64, origin: u32) i32
+extern fn win_sync "dyn_fs_sync"(handle: rawptr) i32
+extern fn win_error "dyn_fs_error"() u32
+fn native_kind(code: isize) errors.Kind { return errors.windows(code) }
+fn native_valid(handle: isize) bool { return handle != 0 && handle != -1 }
+fn native_interrupted(code: isize) bool { _ = code return false }
+fn pointer(handle: isize) rawptr { return #cast(rawptr) #cast(usize) handle }
+fn last_error() isize { return 0 - #cast(isize) win_error() }
+fn limit(length: usize) u32 { if length > 4294967295 { return 4294967295 } return #cast(u32) length }
+// Paths are borrowed UTF-8, converted into bounded stack storage; no hidden allocation.
+fn native_open(path: []const u8, mode: u8) FileResult {
+  storage: [32768]u16 = []
+  at: usize = 0 used: usize = 0
+  if #len(path) == 0 { return FileResult{ kind: errors.Kind.InvalidInput } }
+  for at < #len(path) {
+    codepoint := utf8.decode(path, at)
+    if !codepoint.ok || codepoint.codepoint == 0 { return FileResult{ kind: errors.Kind.InvalidInput } }
+    width := utf16.encode(storage[used..32767], codepoint.codepoint)
+    if width == 0 { return FileResult{ kind: errors.Kind.Capacity } }
+    used += width at += codepoint.width
+  }
+  storage[used] = 0
+  access: u32 = 2147483648 creation: u32 = 3
+  if mode == 1 { access = 1073741824 creation = 2 }
+  else if mode == 2 { access = 4 creation = 4 }
+  else if mode == 3 { access = 1073741824 creation = 1 }
+  handle := #cast(isize) #cast(usize) win_open(&storage[0], access, 7, nil, creation, 128, nil)
+  if !native_valid(handle) { code := last_error() return FileResult{ error: code, kind: native_kind(code) } }
+  return FileResult{ file: owned_file(handle), ok: true }
+}
+fn native_close(handle: isize) isize { if win_close(pointer(handle)) == 0 { return last_error() } return 0 }
+fn native_read(handle: isize, destination: []u8) isize {
+  done: u32 = 0
+  if win_read(pointer(handle), &destination[0], limit(#len(destination)), &done, nil) == 0 {
+    error := win_error()
+    if error == 38 || error == 109 { return #cast(isize) done }
+    if error == 234 && done > 0 { return #cast(isize) done }
+    return 0 - #cast(isize) error
+  }
+  return #cast(isize) done
+}
+fn native_write(handle: isize, source: []const u8) isize {
+  done: u32 = 0
+  if win_write(pointer(handle), &source[0], limit(#len(source)), &done, nil) == 0 { return last_error() }
+  return #cast(isize) done
+}
+fn native_seek(handle: isize, offset: isize, origin: usize) isize {
+  position: i64 = 0
+  if win_seek(pointer(handle), #cast(i64) offset, &position, #cast(u32) origin) == 0 { return last_error() }
+  return #cast(isize) position
+}
+fn native_sync(handle: isize) isize { if win_sync(pointer(handle)) == 0 { return last_error() } return 0 }

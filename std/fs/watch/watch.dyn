@@ -51,7 +51,7 @@ fn load(bytes: []const u8, at: usize) u32 {
 pub fn next(state: *Watcher) EventResult {
   if state.descriptor < 0 { return EventResult{ status: Status.Error, error: -9 } }
   if state.offset == state.used {
-    file := fs.File{ descriptor: state.descriptor } result := fs.read(&file,state.storage)
+    file := fs.borrow_handle(state.descriptor) result := fs.read(&file,state.storage)
     if !result.ok {
       if result.error == -11 { return EventResult{ status: Status.Empty } }
       return EventResult{ status: Status.Error, error: result.error }

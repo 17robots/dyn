@@ -1,4 +1,4 @@
-#target(kernel: linux)
+use "std/errors" errors
 
 pub const Nanosecond: i64 = 1
 pub const Microsecond: i64 = 1000
@@ -34,27 +34,31 @@ pub fn elapsed(start, end: Instant) DurationResult {
   scaled: i64 = 0
   if seconds.value > 9223372036 || seconds.value < -9223372036 { return DurationResult{} }
   scaled = seconds.value * Second
-  return checked_add(scaled, end.nanoseconds - start.nanoseconds)
+  nanos := checked_sub(end.nanoseconds, start.nanoseconds)
+  if !nanos.ok { return DurationResult{} }
+  return checked_add(scaled, nanos.value)
 }
 
+pub struct ClockResult { value: Instant, error: isize, kind: errors.Kind, ok: bool }
+pub struct SleepResult { error: isize, kind: errors.Kind, ok: bool }
+// Monotonic instants are for elapsed time/deadlines; realtime instants use Unix epoch.
+pub fn try_monotonic_now() ClockResult { return native_clock(true) }
+pub fn try_realtime_now() ClockResult { return native_clock(false) }
 pub fn monotonic_now() Instant {
-  value: Instant
-  if #syscall(228, 1, &value) != 0 { #panic("monotonic clock failed") }
-  return value
+  result := try_monotonic_now()
+  if !result.ok { #panic("monotonic clock failed") }
+  return result.value
 }
 pub fn realtime_now() Instant {
-  value: Instant
-  if #syscall(228, 0, &value) != 0 { #panic("realtime clock failed") }
-  return value
+  result := try_realtime_now()
+  if !result.ok { #panic("realtime clock failed") }
+  return result.value
 }
-pub fn sleep(duration: i64) bool {
-  if duration <= 0 { return true }
-  request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
-  remaining: Instant
-  result := #syscall(35, &request, &remaining)
-  for result == -4 { request = remaining result = #syscall(35, &request, &remaining) }
-  return result == 0
+pub fn sleep_result(duration: i64) SleepResult {
+  if duration <= 0 { return SleepResult{ ok: true } }
+  return native_sleep(duration)
 }
+pub fn sleep(duration: i64) bool { return sleep_result(duration).ok }
 pub fn deadline_after(duration: i64) Deadline {
   now := monotonic_now()
   at := Instant{ seconds: now.seconds + duration / Second, nanoseconds: now.nanoseconds + duration % Second }

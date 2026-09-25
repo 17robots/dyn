@@ -8,7 +8,7 @@ fn stdin_read(data: rawptr, destination: []u8) Result {
   if #len(destination) == 0 { return Result{ status: Status.Complete } }
   count: usize = 0
   error := standard_read(0, #cast(rawptr) &destination[0], #len(destination), &count)
-  if error != 0 { return Result{ transferred: count, error: 0 - #cast(isize) error, status: Status.Error } }
+  if error != 0 { return Result{ transferred: count, error: 0 - #cast(isize) error, kind: errors.wasi(0 - #cast(isize) error), status: Status.Error } }
   if count == 0 { return Result{ status: Status.End } }
   return Result{ transferred: count, status: Status.Complete }
 }
@@ -17,7 +17,7 @@ fn write_descriptor(descriptor: u32, source: []const u8) Result {
   if #len(source) == 0 { return Result{ status: Status.Complete } }
   count: usize = 0
   error := standard_write(descriptor, #cast(rawptr) &source[0], #len(source), &count)
-  if error != 0 { return Result{ transferred: count, error: 0 - #cast(isize) error, status: Status.Error } }
+  if error != 0 { return Result{ transferred: count, error: 0 - #cast(isize) error, kind: errors.wasi(0 - #cast(isize) error), status: Status.Error } }
   return Result{ transferred: count, status: Status.Complete }
 }
 fn stdout_write(data: rawptr, source: []const u8) Result { _ = data return write_descriptor(1, source) }

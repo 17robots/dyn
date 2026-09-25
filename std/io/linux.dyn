@@ -8,7 +8,7 @@ fn stdin_read(data: rawptr, destination: []u8) Result {
   }
   value := #syscall(0, 0, &destination[0], #len(destination))
   for value == -4 { value = #syscall(0, 0, &destination[0], #len(destination)) }
-  if value < 0 { return Result{ transferred: 0, error: value, status: Status.Error } }
+  if value < 0 { return Result{ transferred: 0, error: value, kind: errors.linux(value), status: Status.Error } }
   status := Status.Complete
   if value == 0 { status = Status.End }
   return Result{ transferred: #cast(usize) value, error: 0, status: status }
@@ -21,7 +21,7 @@ fn write_descriptor(descriptor: isize, source: []const u8) Result {
     if value == -4 { }
     else if value <= 0 {
       if value == 0 { value = -5 }
-      return Result{ transferred: written, error: value, status: Status.Error }
+      return Result{ transferred: written, error: value, kind: errors.linux(value), status: Status.Error }
     }
     else { written += #cast(usize) value }
   }

@@ -1,0 +1,75 @@
+#target(arch: x86_64, kernel: windows)
+extern fn argument_command "dyn_arguments_command"() *const u16
+struct ArgumentToken { next: usize, length: usize, ok: bool }
+fn argument_emit(destination: []u8, at: usize, value: u32, writing: bool) usize {
+  if writing { return utf8.encode(destination[at..], value) }
+  return utf8.encoded_width(value)
+}
+// Microsoft CRT quoting: argv[0] treats backslashes literally; later arguments
+// interpret backslash runs before quotes. Two passes avoid temporary allocations.
+fn argument_token(command: []const u16, start: usize, first: bool, destination: []u8, writing: bool) ArgumentToken {
+  at := start used: usize = 0 quoted: bool = false
+  for at < #len(command) {
+    byte := command[at]
+    if !quoted && (byte == 32 || byte == 9) { break }
+    if !first && byte == 92 {
+      slashes: usize = 0
+      for at < #len(command) && command[at] == 92 { slashes += 1 at += 1 }
+      if at < #len(command) && command[at] == 34 {
+        pairs := slashes / 2
+        for pairs > 0 { used += argument_emit(destination, used, 92, writing) pairs -= 1 }
+        if slashes % 2 != 0 { used += argument_emit(destination, used, 34, writing) at += 1 continue }
+      } else {
+        for slashes > 0 { used += argument_emit(destination, used, 92, writing) slashes -= 1 }
+        continue
+      }
+    }
+    if command[at] == 34 {
+      if !first && quoted && at + 1 < #len(command) && command[at + 1] == 34 {
+        used += argument_emit(destination, used, 34, writing) at += 2
+      } else { quoted = !quoted at += 1 }
+      continue
+    }
+    decoded := utf16.decode(command, at)
+    if !decoded.ok { return ArgumentToken{} }
+    width := argument_emit(destination, used, decoded.codepoint, writing)
+    if width == 0 { return ArgumentToken{} }
+    used += width at += decoded.width
+  }
+  return ArgumentToken{ next: at, length: used, ok: true }
+}
+fn argument_skip(command: []const u16, at: usize) usize {
+  value := at
+  for value < #len(command) && (command[value] == 32 || command[value] == 9) { value += 1 }
+  return value
+}
+fn arguments_native(arena: *mem.Arena) ArgumentsResult {
+  raw := argument_command()
+  if raw == nil { return ArgumentsResult{ kind: error_kinds.Kind.InvalidState } }
+  native := raw[..32767]
+  length: usize = 0
+  for length < 32767 && native[length] != 0 { length += 1 }
+  if length == 32767 { return ArgumentsResult{ kind: error_kinds.Kind.Overflow } }
+  command := raw[..length] empty: []u8
+  count: usize = 0 size: usize = 0 at := argument_skip(command, 0)
+  for at < length {
+    token := argument_token(command, at, count == 0, empty, false)
+    if !token.ok { return ArgumentsResult{ kind: error_kinds.Kind.InvalidInput } }
+    size += token.length count += 1 at = argument_skip(command, token.next)
+  }
+  result := argument_slots(arena, count)
+  if !result.ok { return result }
+  allocation := mem.arena_try_push_uninit(arena, size, 1)
+  if !allocation.ok { return ArgumentsResult{ kind: error_kinds.Kind.Capacity } }
+  bytes := arena.data[..0]
+  if size > 0 { bytes = allocation.memory[..size] }
+  used: usize = 0 index: usize = 0
+  at = argument_skip(command, 0)
+  for at < length {
+    copied := argument_token(command, at, index == 0, bytes[used..], true)
+    if !copied.ok { return ArgumentsResult{ kind: error_kinds.Kind.InvalidInput } }
+    result.values[index] = bytes[used..used + copied.length]
+    used += copied.length index += 1 at = argument_skip(command, copied.next)
+  }
+  return result
+}

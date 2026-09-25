@@ -1,3 +1,4 @@
+#target(kernel: linux)
 // Scratch frame storage for iterative, descriptor-relative tree removal.
 // Names borrow the parent frame's directory buffer, so no paths are rebuilt.
 pub struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }
@@ -9,32 +10,32 @@ fn unlink_at(parent: isize, name: []const u8, directory: bool) isize {
 }
 fn open_removal(parent: isize, name: []const u8, storage: []u8) DirectoryResult {
   path: [4096]u8 = [] raw := terminated(name, path[..])
-  if raw == nil { return DirectoryResult{ error: -36 } }
+  if raw == nil { return DirectoryResult{ error: -36, kind: errors.linux(-36) } }
   // O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC. Never descend through symlinks.
   descriptor := #syscall(257, parent, raw, 720896, 0)
-  if descriptor < 0 { return DirectoryResult{ error: descriptor } }
-  return DirectoryResult{ directory: Directory{ file: File{ descriptor: descriptor }, storage: storage }, ok: true }
+  if descriptor < 0 { return DirectoryResult{ error: descriptor, kind: errors.linux(descriptor) } }
+  return DirectoryResult{ directory: Directory{ file: adopt_handle(descriptor), storage: storage }, ok: true }
 }
 // Requires at least 280 scratch bytes per frame. Depth/capacity errors may leave
 // a partially removed tree. Concurrent mutation may fail; it never follows links.
 pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Result {
-  if #len(frames) == 0 || #len(scratch) / #len(frames) < 280 { return Result{ error: -28 } }
+  if #len(frames) == 0 || #len(scratch) / #len(frames) < 280 { return Result{ error: -28, kind: errors.linux(-28) } }
   stride := #len(scratch) / #len(frames)
   root := open_removal(-100, path, scratch[..stride])
   if !root.ok {
-    if root.error != -20 && root.error != -40 { return Result{ error: root.error } }
-    removed := unlink_at(-100, path, false) return Result{ error: removed, ok: removed == 0 }
+    if root.error != -20 && root.error != -40 { return Result{ error: root.error, kind: errors.linux(root.error) } }
+    removed := unlink_at(-100, path, false) return Result{ error: removed, kind: errors.linux(removed), ok: removed == 0 }
   }
   frames[0] = RemovalFrame{ directory: root.directory, name: path, parent: -100 }
   depth: usize = 1
   defer { for depth > 0 { depth -= 1 _ = close_directory(&frames[depth].directory) } }
   for depth > 0 {
     item := directory_next(&frames[depth - 1].directory)
-    if item.error != 0 { return Result{ error: item.error } }
+    if item.error != 0 { return Result{ error: item.error, kind: errors.linux(item.error) } }
     if !item.ok {
       frame := &frames[depth - 1]
       removed_directory := unlink_at(frame.parent, frame.name, true)
-      if removed_directory != 0 { return Result{ error: removed_directory } }
+      if removed_directory != 0 { return Result{ error: removed_directory, kind: errors.linux(removed_directory) } }
       _ = close_directory(&frame.directory) depth -= 1
       continue
     }
@@ -42,10 +43,10 @@ pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Resu
     // Try unlink first; type bytes may be DT_UNKNOWN. EISDIR means descend.
     removed_file := unlink_at(parent, item.name, false)
     if removed_file == 0 || removed_file == -2 { continue }
-    if removed_file != -21 { return Result{ error: removed_file } }
-    if depth == #len(frames) { return Result{ error: -28 } }
+    if removed_file != -21 { return Result{ error: removed_file, kind: errors.linux(removed_file) } }
+    if depth == #len(frames) { return Result{ error: -28, kind: errors.linux(-28) } }
     child := open_removal(parent, item.name, scratch[depth * stride..(depth + 1) * stride])
-    if !child.ok { return Result{ error: child.error } }
+    if !child.ok { return Result{ error: child.error, kind: errors.linux(child.error) } }
     frames[depth] = RemovalFrame{ directory: child.directory, name: item.name, parent: parent }
     depth += 1
   }

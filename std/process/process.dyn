@@ -1,4 +1,5 @@
 use "std/mem" mem
+use "std/errors" error_kinds
 use "std/bytes" bytes
 
 // Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
@@ -7,43 +8,43 @@ use "std/bytes" bytes
 pub struct Options { input: isize, output: isize, error: isize, environment: [][]const u8 }
 pub fn options() Options { return Options{ input: -1, output: -1, error: -1 } }
 pub struct Child { handle: isize, active: bool }
-pub struct SpawnResult { child: Child, error: isize, ok: bool }
-pub struct ExitResult { code: u32, signal: u32, finished: bool, error: isize, ok: bool }
-pub struct Status { error: isize, ok: bool }
-pub struct Pipe { input: isize, output: isize, error: isize, ok: bool }
-pub struct EnvironmentResult { value: []u8, found: bool, error: isize, ok: bool }
-pub struct CaptureResult { output: []u8, errors: []u8, exit: ExitResult, timed_out: bool, limit_reached: bool, error: isize, ok: bool }
-struct HandleResult { value: isize, error: isize, ok: bool }
-struct ReadResult { count: usize, ended: bool, error: isize, ok: bool }
+pub struct SpawnResult { child: Child, error: isize, kind: error_kinds.Kind, ok: bool }
+pub struct ExitResult { code: u32, signal: u32, finished: bool, error: isize, kind: error_kinds.Kind, ok: bool }
+pub struct Status { error: isize, kind: error_kinds.Kind, ok: bool }
+pub struct Pipe { input: isize, output: isize, error: isize, kind: error_kinds.Kind, ok: bool }
+pub struct EnvironmentResult { value: []u8, found: bool, error: isize, kind: error_kinds.Kind, ok: bool }
+pub struct CaptureResult { output: []u8, errors: []u8, exit: ExitResult, timed_out: bool, limit_reached: bool, error: isize, kind: error_kinds.Kind, ok: bool }
+struct HandleResult { value: isize, error: isize, kind: error_kinds.Kind, ok: bool }
+struct ReadResult { count: usize, ended: bool, error: isize, kind: error_kinds.Kind, ok: bool }
 
 pub fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
-  if #len(path) == 0 || #len(arguments) == 0 { return SpawnResult{ error: -22 } }
-  for byte in path { if byte == 0 { return SpawnResult{ error: -22 } } }
-  for argument in arguments { for argument_byte in argument { if argument_byte == 0 { return SpawnResult{ error: -22 } } } }
+  if #len(path) == 0 || #len(arguments) == 0 { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } }
+  for byte in path { if byte == 0 { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } } }
+  for argument in arguments { for argument_byte in argument { if argument_byte == 0 { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } } } }
   for entry in configuration.environment {
     equal: bool = false at: usize = 0
     for environment_byte in entry {
-      if environment_byte == 0 || (environment_byte == '=' && at == 0) { return SpawnResult{ error: -22 } }
+      if environment_byte == 0 || (environment_byte == '=' && at == 0) { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } }
       if environment_byte == '=' { equal = true }
       at += 1
     }
-    if !equal { return SpawnResult{ error: -22 } }
+    if !equal { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } }
   }
   return spawn_native(arena,path,arguments,configuration)
 }
 pub fn wait(child: *Child, nonblocking: bool) ExitResult {
-  if !child.active { return ExitResult{ error: -22 } }
+  if !child.active { return ExitResult{ error: -22, kind: error_kinds.Kind.InvalidState } }
   return wait_native(child,nonblocking)
 }
 pub fn terminate(child: *Child) Status {
-  if !child.active { return Status{ error: -22 } }
+  if !child.active { return Status{ error: -22, kind: error_kinds.Kind.InvalidState } }
   return terminate_native(child)
 }
 pub fn pipe() Pipe { return pipe_native() }
 pub fn close_pipe(handle: isize) Status { return close_native(handle) }
 pub fn environment(name: []const u8, destination: []u8) EnvironmentResult {
-  if #len(name) == 0 { return EnvironmentResult{ error: -22 } }
-  for byte in name { if byte == 0 || byte == '=' { return EnvironmentResult{ error: -22 } } }
+  if #len(name) == 0 { return EnvironmentResult{ error: -22, kind: error_kinds.Kind.InvalidInput } }
+  for byte in name { if byte == 0 || byte == '=' { return EnvironmentResult{ error: -22, kind: error_kinds.Kind.InvalidInput } } }
   return environment_native(name,destination)
 }
 // Drains both streams fairly. Overflow/timeout terminates and reaps the direct
@@ -51,24 +52,24 @@ pub fn environment(name: []const u8, destination: []u8) EnvironmentResult {
 // buffers are caller-owned. A nonzero child exit code is a successful capture.
 pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   configuration: Options, output: []u8, errors: []u8, timeout_milliseconds: i64) CaptureResult {
-  if bytes.overlaps(output, errors) { return CaptureResult{ error: -22 } }
+  if bytes.overlaps(output, errors) { return CaptureResult{ error: -22, kind: error_kinds.Kind.InvalidInput } }
   config := configuration
   borrowed_input: isize = -1
   if config.input >= 0 {
     copied := duplicate_native(config.input)
-    if !copied.ok { return CaptureResult{ error: copied.error } }
+    if !copied.ok { return CaptureResult{ error: copied.error, kind: copied.kind } }
     borrowed_input = copied.value config.input = copied.value
   }
   defer { if borrowed_input >= 0 { _ = close_native(borrowed_input) } }
-  stdout := pipe_native() if !stdout.ok { return CaptureResult{ error: stdout.error } }
+  stdout := pipe_native() if !stdout.ok { return CaptureResult{ error: stdout.error, kind: stdout.kind } }
   defer _ = close_native(stdout.input)
   stderr := pipe_native()
-  if !stderr.ok { _ = close_native(stdout.output) return CaptureResult{ error: stderr.error } }
+  if !stderr.ok { _ = close_native(stdout.output) return CaptureResult{ error: stderr.error, kind: stderr.kind } }
   defer _ = close_native(stderr.input)
   config.output = stdout.output config.error = stderr.output
   child := spawn(arena,path,arguments,config)
   _ = close_native(stdout.output) _ = close_native(stderr.output)
-  if !child.ok { return CaptureResult{ error: child.error } }
+  if !child.ok { return CaptureResult{ error: child.error, kind: child.kind } }
   defer { if child.child.active { _ = terminate(&child.child) _ = wait(&child.child,false) } }
   started := milliseconds_native() used: usize = 0 error_used: usize = 0 out_end: bool = false err_end: bool = false
   result := CaptureResult{} probe: [1]u8 = []
@@ -82,26 +83,44 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
         if probing { destination = probe[..] }
         if #len(destination) > 65536 { destination = destination[..65536] }
         read := read_native(handle,destination)
-        if !read.ok { result.error = read.error break }
-        if probing && read.count > 0 { result.limit_reached = true result.error = -28 break }
+        if !read.ok { result.error = read.error result.kind = read.kind break }
+        if probing && read.count > 0 { result.limit_reached = true result.error = -28 result.kind = error_kinds.Kind.Capacity break }
         if read.count > 0 { progress = true }
         if stream_index == 0 { used += read.count out_end = read.ended }
         else { error_used += read.count err_end = read.ended }
       }
       stream_index += 1
     }
-    if result.error != 0 { break }
+    if result.kind != error_kinds.Kind.None { break }
     if child.child.active {
       exited := wait(&child.child,true)
-      if !exited.ok { result.error = exited.error break }
+      if !exited.ok { result.error = exited.error result.kind = exited.kind break }
       if exited.finished { result.exit = exited }
     }
     if out_end && err_end && !child.child.active { result.ok = true break }
     if timeout_milliseconds >= 0 && milliseconds_native() - started >= #cast(u64) timeout_milliseconds {
-      result.timed_out = true result.error = -110 break
+      result.timed_out = true result.error = -110 result.kind = error_kinds.Kind.System break
     }
     if !progress { sleep_native() }
   }
   result.output = output[..used] result.errors = errors[..error_used]
   return result
+}
+
+// Includes argv[0]. Descriptors and argument bytes belong to arena.
+// Unix preserves native bytes; Windows converts UTF-16 to UTF-8.
+// Failure rewinds arena; success lives until its next reset/rewind/destroy.
+pub struct ArgumentsResult { values: [][]const u8, error: isize, kind: error_kinds.Kind, ok: bool }
+pub fn arguments(arena: *mem.Arena) ArgumentsResult {
+  mark := mem.arena_mark(arena)
+  result := arguments_native(arena)
+  if !result.ok { mem.arena_rewind(arena, mark) }
+  return result
+}
+fn argument_slots(arena: *mem.Arena, count: usize) ArgumentsResult {
+  if count == 0 { return ArgumentsResult{ ok: true } }
+  if count > (~#cast(usize) 0) / #sizeof([]const u8) { return ArgumentsResult{ kind: error_kinds.Kind.Overflow } }
+  allocation := mem.arena_try_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
+  if !allocation.ok { return ArgumentsResult{ kind: error_kinds.Kind.Capacity } }
+  return ArgumentsResult{ values: (#cast(*[]const u8) allocation.memory)[..count], ok: true }
 }

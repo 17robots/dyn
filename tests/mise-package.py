@@ -69,6 +69,8 @@ try:
         for options in ([], ['--release']):
             run(mise,'exec','--','dyn','build',str(project), '--no-cache','--quiet','--output',str(output), *options)
             run(str(output))
+        env['DYN'] = str(installed/'bin'/('dyn.exe' if os.name == 'nt' else 'dyn'))
+        run(sys.executable, str(ROOT/'tests/stdlib-host.py'))
         if args.report:
             report.update(status='passed',mise=True,isolated_path=True)
             args.report.write_text(json.dumps(report,indent=2)+'\n')

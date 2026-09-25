@@ -1,0 +1,13 @@
+--- !tapi-tbd
+# Dyn runtime libSystem ABI surface; declarative link metadata, not an Apple SDK.
+tbd-version: 4
+targets: [ arm64-macos ]
+install-name: '/usr/lib/libSystem.B.dylib'
+current-version: 1.0.0
+compatibility-version: 1.0.0
+exports:
+  - targets: [ arm64-macos ]
+    symbols: [ ___error, _clock_gettime, _nanosleep, __NSGetArgc, __NSGetArgv,
+               _fork, _pipe, _fcntl, _dup2, _execve, __exit, _waitpid, _kill,
+               _read, _write, _close, _getenv, _strlen ]
+...

@@ -44,6 +44,7 @@ jobs:
           python3 tools/build.py host
           python3 tests/compiler-host.py
           python3 tests/standard-streams.py --host-only
+          python3 tests/stdlib-host.py
           python3 tools/package-host-sdk.py
           python3 tests/mise-package.py "build/dist/dyn-$DYN_VERSION-macos-aarch64.tar.gz" --version "$DYN_VERSION" --report build/dist/package-macos-aarch64.json
       - uses: actions/upload-artifact@v4
@@ -90,6 +91,7 @@ jobs:
           python tools/build.py host
           python tests/compiler-host.py
           python tests/standard-streams.py --host-only
+          python tests/stdlib-host.py
           python tools/package-host-sdk.py
           python tests/mise-package.py "build/dist/dyn-$DYN_VERSION-windows-x86_64.zip" --version "$DYN_VERSION" --report build/dist/package-windows-x86_64.json
       - uses: actions/upload-artifact@v4

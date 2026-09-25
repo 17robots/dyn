@@ -105,9 +105,33 @@ To build an executable, use `dyn build hello --release --output hello-app`
 Standard streams are `io.stdin()`, `io.stdout()` and `io.stderr()` on all three
 native hosts and WASI. They borrow process handles and use caller-owned buffers.
 Use `std/bufio` for line input. Streams preserve bytes: Windows console encoding
-follows its code page; `bufio.read_line` removes LF but preserves a preceding CR.
+follows its code page. In preview 4, `bufio.read_line` removes LF and preserves CR.
 Preview 3 callers must rename `terminal.stdin/stdout/stderr` to their `io`
 equivalents. `std/terminal` retains Linux terminal controls and key decoding.
+
+## Standard library on current main
+
+These changes require a source build until the next preview release.
+
+| API | Contract |
+| --- | --- |
+| `std/fs` | Basic open/create/append/exclusive-create, read/write, seek/sync, close and stream adapters work on Linux, macOS and Windows. Directory traversal, metadata, watching and atomic replacement remain Linux-specific. |
+| `fs.File{}` | Unopened. Use `fs.take(&file)` to transfer ownership, `fs.borrow(&file)` for a view, and `adopt_handle`/`borrow_handle` for native handles. Closing a borrowed or already-closed file returns `InvalidState`. |
+| `bufio.read_line` | Strips LF or CRLF, preserves lone CR. Returns `bufio.ReadStatus.More` when the destination fills: process those bytes and continue the same line. `Complete` ends a line; `End` may include a final fragment; `Error` reports failure. |
+| `process.arguments(&arena)` | Includes argv[0]; descriptors and bytes belong to the arena. Unix preserves native bytes; Windows converts UTF-16 to UTF-8. Linux reads `/proc/self/cmdline`; macOS and Windows use native process data. |
+| `time.try_monotonic_now()` / `try_realtime_now()` | Fallible native clocks; monotonic measures durations, realtime uses Unix epoch. `sleep_result` reports failure. Date and duration helpers are portable; WASI supports clocks but not sleep. |
+| `std/errors` | Portable `kind` accompanies the original native `error` code. Check `ok` or `status` first: library failures may have code zero. |
+
+File owners must not be copied; this remains a programmer obligation. A borrowed
+file must not outlive its owner, and stream adapters borrow the File's address.
+Use `defer` to close owners. Caller buffers back reads, buffered I/O and environment
+values. `fs.read_all` and `process.arguments` allocate in your arena, rewind on
+failure, and return memory valid until that arena is reset, rewound or destroyed.
+No hidden heap ownership is transferred to the caller.
+
+Migration: replace raw `File{ descriptor: ... }` construction with an explicit
+adopt or borrow operation. Line results now use `bufio.ReadStatus`, and a full
+buffer is `More`, not an I/O error. Use `read_until` for byte-exact delimiters.
 
 ## Build from source
 
@@ -187,6 +211,8 @@ The Linux full suite additionally needs `just`, Zig 0.16.0 and Python 3.12+;
 [Native host CI](.github/workflows/compiler-hosts.yml) tests Windows/macOS compiler
 and standard streams; native output jobs execute 14 Windows, 14 macOS and 12 ARM
 Linux probes. `python3 tests/standard-streams.py --host-only` tests host streams.
+`python3 tests/stdlib-host.py` exercises portable files, ownership, arguments,
+clocks and line boundaries in debug and release builds, also against installed SDKs.
 
 For a local source installation on Linux/macOS:
 

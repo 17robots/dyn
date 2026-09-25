@@ -209,4 +209,19 @@ static inline int dyn_host_spawn(char *const *args) {
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 #endif
 }
+/* SDK-owned link metadata, beside build artifacts or under an installed prefix. */
+static inline bool dyn_host_runtime_file(const char *name, char *path, size_t capacity) {
+  char executable[4096];
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
+  if (n < 0) return false;
+  executable[n] = 0;
+  char *slash = strrchr(executable, '/');
+  if (!slash) return false;
+  *slash = 0;
+  if (snprintf(path, capacity, "%s/%s", executable, name) < (int)capacity &&
+      !access(path, R_OK)) return true;
+  return snprintf(path, capacity, "%s/../lib/dyn/%s", executable, name) < (int)capacity &&
+         !access(path, R_OK);
+}
+
 #endif

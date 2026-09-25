@@ -1,0 +1,9 @@
+#target(kernel: wasi)
+extern fn clock_read "dyn_time_wasi_clock"(clock: u32, precision: u64, value: *u64) u32
+fn native_clock(monotonic: bool) ClockResult {
+  value: u64 = 0 clock: u32 = 0 if monotonic { clock = 1 }
+  code := clock_read(clock, 1, &value)
+  if code != 0 { return ClockResult{ error: 0 - #cast(isize) code, kind: errors.wasi(#cast(isize) code) } }
+  return ClockResult{ value: Instant{ seconds: #cast(i64) (value / 1000000000), nanoseconds: #cast(i64) (value % 1000000000) }, ok: true }
+}
+fn native_sleep(duration: i64) SleepResult { _ = duration return SleepResult{ kind: errors.Kind.Unsupported } }

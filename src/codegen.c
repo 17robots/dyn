@@ -2696,6 +2696,9 @@ int dyn_link_executable_objects(const DynContext *context,
   }
   for (size_t i = 0; i < link_input_count; ++i)
     arguments[argument_count++] = (char *)link_inputs[i];
+  char system_stub[4096];
+  if (darwin && dyn_host_runtime_file("libSystem.tbd", system_stub, sizeof(system_stub)))
+    arguments[argument_count++] = system_stub;
   int status;
   status = dyn_host_spawn(arguments);
   if (status == 127 && thin) {
@@ -2890,6 +2893,9 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
   arguments[count++] = (char *)object_path;
   for (size_t i = 0; i < link_input_count; ++i)
     arguments[count++] = (char *)link_inputs[i];
+  char system_stub[4096];
+  if (darwin && dyn_host_runtime_file("libSystem.tbd", system_stub, sizeof(system_stub)))
+    arguments[count++] = system_stub;
   int status;
   status = dyn_host_spawn(arguments);
   if (status == 127 && !windows && !darwin &&

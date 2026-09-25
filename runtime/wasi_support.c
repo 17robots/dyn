@@ -26,3 +26,5 @@ unsigned dyn_wasi_open_read(u32 directory, const char *path, u32 length, u32 *fd
 }
 unsigned dyn_wasi_random(void *data, u32 length) { return wasi_random_get(data, length); }
 unsigned dyn_wasi_clock(u32 clock, u64 precision, u64 *time) { return wasi_clock_time_get(clock, precision, time); }
+
+unsigned dyn_time_wasi_clock(u32 clock, u64 precision, u64 *time) { return wasi_clock_time_get(clock, precision, time); }

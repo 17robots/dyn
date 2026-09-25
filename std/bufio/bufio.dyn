@@ -1,10 +1,12 @@
 use "std/io"
+use "std/errors"
 
 pub struct Writer {
   destination: io.Writer,
   storage: []u8,
   used: usize,
   error: isize,
+  kind: errors.Kind,
 }
 
 pub fn writer(destination: io.Writer, storage: []u8) Writer {
@@ -14,9 +16,9 @@ pub fn writer(destination: io.Writer, storage: []u8) Writer {
 pub fn writer_buffered(state: *const Writer) usize { return state.used }
 
 pub fn writer_flush(state: *Writer) io.Result {
-  if state.used > #len(state.storage) { state.error = -22 }
-  if state.error != 0 {
-    return io.Result{ transferred: 0, error: state.error, status: io.Status.Error }
+  if state.used > #len(state.storage) { state.error = -22 state.kind = errors.Kind.InvalidInput }
+  if state.kind != errors.Kind.None {
+    return io.Result{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
   }
   if state.used == 0 {
     return io.Result{ transferred: 0, error: 0, status: io.Status.Complete }
@@ -24,6 +26,7 @@ pub fn writer_flush(state: *Writer) io.Result {
   result := io.write_all(state.destination, state.storage[..state.used])
   if result.status == io.Status.Error {
     state.error = result.error
+    state.kind = result.kind
     pending := state.used - result.transferred
     i: usize = 0
     for i < pending { state.storage[i] = state.storage[result.transferred + i] i += 1 }
@@ -36,9 +39,9 @@ pub fn writer_flush(state: *Writer) io.Result {
 
 fn writer_write(data: rawptr, source: []const u8) io.Result {
   state := #cast(*Writer) data
-  if state.used > #len(state.storage) { state.error = -22 }
-  if state.error != 0 {
-    return io.Result{ transferred: 0, error: state.error, status: io.Status.Error }
+  if state.used > #len(state.storage) { state.error = -22 state.kind = errors.Kind.InvalidInput }
+  if state.kind != errors.Kind.None {
+    return io.Result{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
   }
   if #len(state.storage) == 0 { return io.write_all(state.destination, source) }
   total: usize = 0
@@ -46,7 +49,7 @@ fn writer_write(data: rawptr, source: []const u8) io.Result {
     if state.used == #len(state.storage) {
       flushed := writer_flush(state)
       if flushed.status == io.Status.Error {
-        return io.Result{ transferred: total, error: flushed.error, status: io.Status.Error }
+        return io.Result{ transferred: total, error: flushed.error, kind: flushed.kind, status: io.Status.Error }
       }
     }
     available := #len(state.storage) - state.used
@@ -67,6 +70,7 @@ pub fn writer_adapter(state: *Writer) io.Writer {
   return io.Writer{ data: #cast(rawptr) state, write: &writer_write }
 }
 
+// Storage and the underlying source are borrowed; both must outlive Reader.
 pub struct Reader {
   source: io.Reader,
   storage: []u8,
@@ -74,6 +78,9 @@ pub struct Reader {
   end: usize,
   ended: bool,
   error: isize,
+  kind: errors.Kind,
+  pending: [2]u8,
+  pending_count: usize,
 }
 
 pub fn reader(source: io.Reader, storage: []u8) Reader {
@@ -82,49 +89,41 @@ pub fn reader(source: io.Reader, storage: []u8) Reader {
 
 fn reader_read(data: rawptr, destination: []u8) io.Result {
   state := #cast(*Reader) data
-  if state.start > state.end || state.end > #len(state.storage) {
-    return io.Result{ error: -22, status: io.Status.Error }
+  if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {
+    return io.Result{ kind: errors.Kind.InvalidState, status: io.Status.Error }
   }
   total: usize = 0
   for total < #len(destination) {
+    if state.pending_count > 0 {
+      destination[total] = state.pending[0]
+      state.pending[0] = state.pending[1]
+      state.pending_count -= 1
+      total += 1
+      continue
+    }
     if state.start == state.end {
-      if state.error != 0 { return io.Result{ transferred: total, error: state.error, status: io.Status.Error } }
-      if state.ended { return io.Result{ transferred: total, error: 0, status: io.Status.End } }
+      if state.kind != errors.Kind.None {
+        return io.Result{ transferred: total, error: state.error, kind: state.kind, status: io.Status.Error }
+      }
+      if state.ended { return io.Result{ transferred: total, status: io.Status.End } }
       if #len(state.storage) == 0 {
-        direct := io.read(state.source, destination)
-        if direct.transferred > #len(destination) {
-          state.error = -5
-          return io.Result{ error: state.error, status: io.Status.Error }
-        }
+        direct := io.read(state.source, destination[total..])
         if direct.status == io.Status.Complete && direct.transferred == 0 {
           direct.status = io.Status.Error
-          direct.error = -5
+          direct.kind = errors.Kind.System
         }
-        if direct.status == io.Status.Error {
-          if direct.error == 0 { direct.error = -5 }
-          state.error = direct.error
-        }
+        if direct.status == io.Status.Error { state.error = direct.error state.kind = direct.kind }
         if direct.status == io.Status.End { state.ended = true }
+        direct.transferred += total
         return direct
       }
       input := io.read(state.source, state.storage)
-      if input.transferred > #len(state.storage) {
-        state.error = -5
-        return io.Result{ transferred: total, error: state.error, status: io.Status.Error }
-      }
       state.start = 0
       state.end = input.transferred
-      if input.status == io.Status.Error {
-        state.error = input.error
-        if state.error == 0 { state.error = -5 }
-      }
+      if input.status == io.Status.Error { state.error = input.error state.kind = input.kind }
       if input.status == io.Status.End { state.ended = true }
-      if input.transferred == 0 {
-        if state.error != 0 { return io.Result{ transferred: total, error: state.error, status: io.Status.Error } }
-        if state.ended { return io.Result{ transferred: total, status: io.Status.End } }
-        state.error = -5
-        return io.Result{ transferred: total, error: state.error, status: io.Status.Error }
-      }
+      if input.transferred == 0 && input.status == io.Status.Complete { state.kind = errors.Kind.System }
+      continue
     }
     available := state.end - state.start
     amount := #len(destination) - total
@@ -137,36 +136,68 @@ fn reader_read(data: rawptr, destination: []u8) io.Result {
     state.start += amount
     total += amount
   }
-  if total > 0 && state.start == state.end && state.error != 0 {
-    return io.Result{ transferred: total, error: state.error, status: io.Status.Error }
-  }
-  return io.Result{ transferred: total, error: 0, status: io.Status.Complete }
+  return io.Result{ transferred: total, status: io.Status.Complete }
 }
 
 pub fn reader_adapter(state: *Reader) io.Reader {
   return io.Reader{ data: #cast(rawptr) state, read: &reader_read }
 }
 
-// Delimiter is consumed but excluded from output. End may accompany a final
-// unterminated fragment. Capacity failure preserves unread input for the next call.
-pub fn read_until(state: *Reader, destination: []u8, delimiter: u8) io.Result {
-  total: usize = 0
-  byte: [1]u8 = []
-  for total < #len(destination) {
-    input := io.read(reader_adapter(state), byte[..])
-    if input.transferred != 0 {
-      if byte[0] == delimiter { return io.Result{ transferred: total, error: input.error, status: input.status } }
-      destination[total] = byte[0]
-      total += 1
-    }
-    if input.status != io.Status.Complete {
-      return io.Result{ transferred: total, error: input.error, status: input.status }
-    }
-    if input.transferred == 0 { return io.Result{ transferred: total, error: -5, status: io.Status.Error } }
-  }
-  return io.Result{ transferred: total, error: -28, status: io.Status.Error }
+pub enum ReadStatus { Complete, End, More, Error }
+pub struct ReadResult {
+  transferred: usize,
+  error: isize,
+  kind: errors.Kind,
+  status: ReadStatus,
 }
 
-pub fn read_line(state: *Reader, destination: []u8) io.Result {
-  return read_until(state, destination, 10)
+fn unread(state: *Reader, byte: u8) {
+  state.pending[1] = state.pending[0]
+  state.pending[0] = byte
+  state.pending_count += 1
+}
+
+fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) ReadResult {
+  if #len(destination) == 0 { return ReadResult{ status: ReadStatus.More } }
+  total: usize = 0
+  byte: [1]u8 = []
+  for {
+    input := io.read(reader_adapter(state), byte[..])
+    if input.transferred == 0 {
+      if input.status == io.Status.Error {
+        return ReadResult{ transferred: total, error: input.error, kind: input.kind, status: ReadStatus.Error }
+      }
+      return ReadResult{ transferred: total, status: ReadStatus.End }
+    }
+    // A source may return bytes alongside an error or EOF. Retain that status
+    // for the next read, after these bytes and any lookahead are consumed.
+    if byte[0] == delimiter { return ReadResult{ transferred: total, status: ReadStatus.Complete } }
+    if line && byte[0] == 13 {
+      next: [1]u8 = []
+      peek := io.read(reader_adapter(state), next[..])
+      if peek.transferred > 0 {
+        if next[0] == 10 { return ReadResult{ transferred: total, status: ReadStatus.Complete } }
+        unread(state, next[0])
+      }
+    }
+    if total == #len(destination) {
+      unread(state, byte[0])
+      return ReadResult{ transferred: total, status: ReadStatus.More }
+    }
+    destination[total] = byte[0]
+    total += 1
+  }
+  return ReadResult{ transferred: total, kind: errors.Kind.System, status: ReadStatus.Error }
+}
+
+// Consume and exclude delimiter. More means continue this same record with
+// another buffer; End may include a final unterminated fragment. No allocation.
+pub fn read_until(state: *Reader, destination: []u8, delimiter: u8) ReadResult {
+  return read_record(state, destination, delimiter, false)
+}
+
+// Accept LF and CRLF; preserve lone CR. A zero-length destination returns More
+// without consuming input. Returned bytes live in the caller's destination.
+pub fn read_line(state: *Reader, destination: []u8) ReadResult {
+  return read_record(state, destination, 10, true)
 }

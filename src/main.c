@@ -85,11 +85,13 @@ static char *find_native_link(const DynContext *context, const char *name) {
       at = *end ? end + 1 : end;
     }
   }
-  /* libSystem is supplied by the Darwin SDK (often as a .tbd stub), not
-     necessarily a real dylib on the build host. Let the target linker find it. */
+  /* Prefer our supported libSystem ABI metadata; fall back to the target SDK. */
   if (!strcmp(dyn_context_target(context)->kernel, "darwin") &&
-      !strcmp(name, "System"))
+      !strcmp(name, "System")) {
+    char stub[4096];
+    if (dyn_host_runtime_file("libSystem.tbd", stub, sizeof(stub))) return strdup(stub);
     return strdup("-lSystem");
+  }
   static const char *directories[] = {
       "/usr/lib",
       "/usr/local/lib",
