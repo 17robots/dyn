@@ -88,6 +88,12 @@ parser. They check acceptance without an inserted slash, nested import
 completion, const/import diagnostic recovery, semantic ranges and Tree-sitter
 captures after edits and line insertion.
 
+The grammar candidate at `build/dist/dyn-grammar-candidate.tar.gz` includes
+source, generated parser, corpus and editor queries. `grammar-publication.json`
+records the file hashes. Review and publish those exact files upstream before
+updating `zed-dyn/extension.toml` and `zed-dyn/grammars/provenance.json` to the
+published immutable revision. Preparing the bundle does not publish the extension.
+
 For Zed, publish the grammar repository first, update the extension pin and
 provenance together, then run `just verify-published-grammar`. That read-only check
 records `build/readiness/published-grammar.json`. The installed extension must

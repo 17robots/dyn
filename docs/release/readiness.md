@@ -85,3 +85,15 @@ aggregate probes for native target runners; local cross-link status remains
 separate from native execution. See [validation](validation.md),
 [SDK reference](../reference/README.md), [behavior inventory](sdk-behavior.json),
 and [compatibility/migrations](../stability.md).
+
+## Remaining platform and maturity limits
+
+macOS native threading remains unsupported; target code generation and basic
+platform probes do not imply pthread compatibility. Shared-library consumers,
+optional native providers and hardware-dependent features need their own native
+execution evidence. Production soak evidence must come from recorded scheduled
+runs and real applications, not completed implementation checklists.
+
+A developer preview may ship with explicit experimental labels. A stable release
+must satisfy the evidence promised by its declared support matrix; passing
+cross-link or semantic checks alone does not justify removing those labels.

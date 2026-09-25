@@ -35,7 +35,8 @@ specified input/buffer/arena lifetime. Foreign providers own their own handles.
 | `std/net/tls` | verified client and certificate-backed server TLS through OpenSSL | explicit provider ownership; caller byte/name buffers; explicit provider linking |
 
 Current platform and protocol limits are documented in [release formats](release/formats.md). Package source is
-the API source of truth until generated reference documentation exists.
+the API source of truth; the [generated SDK reference](reference/README.md) indexes
+public declarations, contracts and example fixtures.
 
 `std/fs` owns file/directory operations, `std/path` lexical path operations,
 `std/terminal` terminal control, and `std/os/linux` Linux process/environment
