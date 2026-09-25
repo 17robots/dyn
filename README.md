@@ -100,7 +100,7 @@ mise install
 mise exec -- dyn version
 ```
 
-The example pins `0.1.0-preview.3` with a checksum for each supported platform. For installation
+The example pins `0.1.0-preview.4` with a checksum for each supported platform. For installation
 across projects, add the same tool entry to `~/.config/mise/config.toml` and run
 `mise install github:17robots/dyn`. Each new release includes its pinned
 mise configuration in the release description. This uses mise's GitHub backend, not a custom plugin.
