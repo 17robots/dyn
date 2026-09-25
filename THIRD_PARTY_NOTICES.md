@@ -5,7 +5,7 @@ Dyn's license does not replace third-party terms.
 ## Tree-sitter
 
 The generated parser/support headers use Tree-sitter material. The compiler also
-links to a separately installed Tree-sitter runtime. Upstream revision:
+bundles the Tree-sitter runtime in Linux SDK archives. Upstream revision:
 `f2f197b6b27ce75c280c20f131d4f71e906b86f7` (v0.25.8).
 
 The MIT License (MIT)
@@ -35,9 +35,17 @@ SOFTWARE.
 The SDK includes its Unicode notice at `std/unicode/text/LICENSE-UNICODE.txt` in
 source, or `share/dyn/unicode/text/LICENSE-UNICODE.txt` in the SDK archive.
 
-## Separately installed dependencies
+## Bundled host dependencies
 
-LLVM and native providers are not bundled in the SDK archive. Their independently
-installed libraries and any binaries you redistribute remain subject to their own
-licenses. The archive manifest records linked library dependencies; provider source
-revisions are recorded in the repository manifests.
+Linux SDK archives include LLVM, LLD, Tree-sitter and their non-glibc shared
+library dependencies. Their own licenses apply independently of Dyn's license.
+The archive's `share/dyn/licenses/` directory contains dependency copyright and
+license notices, full common license texts, and exact Ubuntu package versions.
+`manifest.json` records bundled libraries and file hashes. The release's
+`dyn-VERSION-runtime-sources.tar.gz` asset provides matching Ubuntu GCC source
+packages and build rules for the bundled GNU runtimes, plus the script used to
+adjust their ELF library search paths. The host supplies glibc
+and its matching dynamic loader; these are not bundled.
+
+Native providers remain separately installed and subject to their own licenses.
+Provider source revisions are recorded in the repository manifests.

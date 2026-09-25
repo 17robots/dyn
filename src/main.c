@@ -672,7 +672,37 @@ static int execute_command(DynOptions *options, const char *compiler) {
   return result;
 }
 
+/* Installed SDK linkers are private: do not require a global LLVM installation. */
+static bool configure_sdk_linkers(void) {
+  char executable[4096], directory[4096];
+  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  if (n < 0 || n == (ssize_t)sizeof(executable) - 1)
+    return true;
+  executable[n] = 0;
+  char *slash = strrchr(executable, '/');
+  if (!slash)
+    return true;
+  *slash = 0;
+  if (snprintf(directory, sizeof(directory), "%s/../lib/dyn/tools", executable) >=
+      (int)sizeof(directory) || access(directory, X_OK))
+    return true;
+  const char *previous = getenv("PATH");
+  size_t size = strlen(directory) + (previous ? strlen(previous) : 0) + 2;
+  char *path = malloc(size);
+  if (!path)
+    return false;
+  snprintf(path, size, "%s%s%s", directory, previous ? ":" : "",
+           previous ? previous : "");
+  int result = setenv("PATH", path, 1);
+  free(path);
+  return result == 0;
+}
+
 int main(int argc, char **argv) {
+  if (!configure_sdk_linkers()) {
+    perror("error: configure SDK linkers");
+    return 2;
+  }
   if (argc == 2 &&
       (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
     dyn_cli_help(NULL);

@@ -22,6 +22,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-release-bundle-') as directory:
     archive.write_bytes(b'test archive')
     report = dict(status='passed',stages=[dict(status='passed')],artifacts={'build/release-check/artifacts/'+archive.name:module.sha(archive)})
     package = dict(status='passed',manifest=dict(version='dyn '+version),archive=archive.name,sha256=module.sha(archive))
+    source_archive=artifacts/f'dyn-{version}-runtime-sources.tar.gz'
+    source_archive.write_bytes(b'test runtime sources')
+    package['runtime_sources']=dict(archive=source_archive.name,sha256=module.sha(source_archive))
+    report['artifacts']['build/release-check/artifacts/'+source_archive.name]=module.sha(source_archive)
     def write_evidence():
         (evidence/'release-check/report.json').write_text(json.dumps(report))
         (evidence/'dist/package-validation.json').write_text(json.dumps(package))
@@ -47,5 +51,6 @@ with tempfile.TemporaryDirectory(prefix='dyn-release-bundle-') as directory:
     report['status']='passed';package['manifest']['version']='dyn 9.9.9';write_evidence();rejected()
     package['manifest']['version']='dyn '+version;write_evidence()
     archive.write_bytes(b'altered');rejected();archive.write_bytes(b'test archive')
+    source_archive.write_bytes(b'altered sources');rejected();source_archive.write_bytes(b'test runtime sources')
     (native/'native-macos.json').unlink();rejected()
 print('PASS release checksums/config and rejection of partial gates, version mismatch, tampering, missing native evidence')

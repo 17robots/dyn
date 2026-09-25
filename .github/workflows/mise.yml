@@ -12,7 +12,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-sdk-runtime
       - run: mkdir -p build/mise-check && cp mise.example.toml build/mise-check/mise.toml
       - uses: jdx/mise-action@v4
         with:

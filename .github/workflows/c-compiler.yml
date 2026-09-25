@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-compiler
       - run: just release-check
+      - name: SDK without system LLVM or Tree-sitter
+        run: bash tests/package-container.sh "build/dist/dyn-$DYN_VERSION-linux-x86_64.tar.gz" "$DYN_VERSION"
       - name: Compiler contracts under sanitizers
         env:
           DYN: ./build/dyn-sanitize

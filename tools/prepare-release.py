@@ -30,6 +30,9 @@ def prepare(version, evidence, native, output):
         if package['archive'] != sdk_name:
             raise ValueError('Unexpected SDK archive/platform')
         artifacts = report['artifacts']
+        source = package['runtime_sources']
+        if source['archive'] != f'dyn-{version}-runtime-sources.tar.gz' or artifacts.get('build/release-check/artifacts/'+source['archive']) != source['sha256']:
+            raise ValueError('Missing matching runtime sources')
         sdk_key = 'build/release-check/artifacts/'+sdk_name
         if artifacts.get(sdk_key) != package['sha256']:
             raise ValueError('SDK evidence hash mismatch')
@@ -40,7 +43,7 @@ def prepare(version, evidence, native, output):
             source = evidence/'release-check/artifacts'/name
             if sha(source) != expected:
                 raise ValueError('Artifact hash mismatch: '+name)
-            target = name.replace('-linux-x86_64.tar.gz', '-linux-x86_64-ubuntu24.04.tar.gz') if name == sdk_name else name
+            target = name.replace('-linux-x86_64.tar.gz', '-linux-x86_64-glibc2.39.tar.gz') if name == sdk_name else name
             shutil.copy2(source, output/target)
         counts = {}
         for target, expected_count in [('windows',14), ('macos',14), ('aarch64',12)]:
@@ -56,12 +59,12 @@ def prepare(version, evidence, native, output):
                              (ROOT/'LICENSE','LICENSE.txt'),
                              (ROOT/'THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md')]:
             shutil.copy2(source,output/name)
-        sdk = output/f'dyn-{version}-linux-x86_64-ubuntu24.04.tar.gz'
-        config = f'''# Ubuntu 24.04 x86-64; LLVM 19 and Tree-sitter 0.25.8 required.
+        sdk = output/f'dyn-{version}-linux-x86_64-glibc2.39.tar.gz'
+        config = f'''# Linux x86-64, glibc 2.39+; LLVM, Tree-sitter and LLD included.
 [tools."github:17robots/dyn"]
 version = "{version}"
 prerelease = true
-asset_pattern = 'dyn-{{{{ version }}}}-{{{{ os() }}}}-{{{{ arch(x64="x86_64", arm64="aarch64") }}}}-ubuntu24.04.tar.gz'
+asset_pattern = 'dyn-{{{{ version }}}}-{{{{ os() }}}}-{{{{ arch(x64="x86_64", arm64="aarch64") }}}}-glibc2.39.tar.gz'
 strip_components = 1
 bin_path = "bin"
 checksum = "sha256:{sha(sdk)}"
@@ -74,7 +77,8 @@ Standalone compiler regression and package validation passed. Native debug/relea
 Windows {counts['windows']}, macOS Apple Silicon {counts['macos']}, Linux ARM {counts['aarch64']}.
 These target tests do not provide Windows/macOS compiler executables.
 
-Install LLVM 19, LLD 19 and Tree-sitter 0.25.8, then use the attached `mise.toml`
+LLVM 19, LLD 19 and Tree-sitter 0.25.8 are bundled. Requires glibc 2.39+
+(e.g. Ubuntu 24.04 or current Arch Linux). Use the attached `mise.toml`
 with `mise install` and `mise exec -- dyn version`.
 See [installation instructions](https://github.com/17robots/dyn/blob/v{version}/README.md).
 

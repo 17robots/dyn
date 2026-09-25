@@ -64,13 +64,27 @@ checksums, reports, license and a pinned `mise.toml`. Suffix versions such as
 `DYN_VERSION` embeds the release version; normal builds default to `0.1.0-dev`.
 Do not move published tags or replace released assets.
 
-Copy `mise.example.toml` into your project's `mise.toml`, then run `mise trust`,
-`mise install`, and `mise exec -- dyn version`. The example pins the existing
-`0.1.0-preview.1` release, whose binary reports `0.1.0-dev`. Future releases attach
-their own config/checksum. This uses mise's GitHub backend, not a custom plugin.
-Linux SDKs require LLVM 19 and Tree-sitter 0.25.8 shared libraries; mise does not
-install system libraries. See `.github/actions/setup-sdk-runtime/action.yml` for
-the Ubuntu dependency setup. Cross-linking needs the relevant external tools.
+Copy `mise.example.toml` into your project's `mise.toml` (or merge its tool entry
+into an existing config), then run:
+
+```sh
+mise trust
+mise install
+mise exec -- dyn version
+```
+
+The example pins `0.1.0-preview.2` with its archive checksum. For installation
+across projects, add the same tool entry to `~/.config/mise/config.toml` and run
+`mise install github:17robots/dyn`. Each release also attaches its own pinned
+`mise.toml`. This uses mise's GitHub backend, not a custom plugin.
+Starting with preview 2, Linux x86-64 SDKs bundle LLVM 19, Tree-sitter 0.25.8,
+LLD and their non-glibc dependencies. They require glibc 2.39 or newer (Ubuntu
+24.04 and current Arch Linux); Alpine/musl and older glibc are not supported.
+No system LLVM or Tree-sitter installation is needed. Download the release's
+attached `mise.toml` for its exact version and checksum. Linux/Wasm linking uses
+bundled LLD; other cross-target tools and optional native providers remain external.
+The release gate tests the archive in clean Ubuntu and Arch containers and through
+mise before publication. Preview 1 still needs its original system dependencies.
 
 The earlier combined-workspace preview remains in Git history and its original
 release assets. New archives contain only this compiler and its runtime/SDK.
