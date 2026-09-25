@@ -1,9 +1,0 @@
-fn add(a, b: i32) i32 { return a + b }
-fn wrong(value: i32) i32 { return value }
-fn main() {
-  operation: *fn(i32, i32) i32 = &wrong
-  _ = operation(1)
-  value := 3
-  bad := &value
-  _ = bad()
-}

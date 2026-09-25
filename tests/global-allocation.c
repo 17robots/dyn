@@ -1,6 +1,6 @@
 #include <assert.h>
 #include <stdlib.h>
-#include "../compiler/src/sema.h"
+#include "../src/sema.h"
 
 static size_t calls, fail_at, live;
 static void *checked_calloc(size_t count, size_t size) {
@@ -13,7 +13,7 @@ static void *checked_calloc(size_t count, size_t size) {
 static void checked_free(void *p) { if (p) { assert(live); --live; free(p); } }
 #define calloc checked_calloc
 #define free checked_free
-#include "../compiler/src/sema_globals.c"
+#include "../src/sema_globals.c"
 #undef calloc
 #undef free
 

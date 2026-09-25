@@ -1,5 +1,0 @@
-fn main() {
-  wider: i16 = 300
-  narrow: u8 = wider
-  _ = narrow
-}

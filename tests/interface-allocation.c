@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "../compiler/src/dyn.h"
+#include "../src/dyn.h"
 
 /* Only the included compiler unit is intercepted; parser allocations are independent. */
 static struct { void *pointer; size_t size; } allocations[64];
@@ -50,9 +50,9 @@ static char *checked_strdup(const char *s) {
 #define realloc checked_realloc
 #define free checked_free
 #ifdef TEST_MODULE
-#include "../compiler/src/module.c"
+#include "../src/module.c"
 #else
-#include "../compiler/src/interface.c"
+#include "../src/interface.c"
 #endif
 #undef malloc
 #undef realloc

@@ -1,9 +1,0 @@
-use "std/compress/deflate"
-
-fn main() {
-  output: [512]u8 = [] scratch: [4096]usize = []
-  result := deflate.deflate_dynamic_chunk(output[..], "hello hello hello\n", true, scratch[..])
-  if !result.ok { #panic("encode") }
-  written := #syscall(1, 1, &output[0], result.written)
-  if written != #cast(isize) result.written { #panic("write") }
-}

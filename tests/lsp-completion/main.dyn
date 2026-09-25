@@ -1,7 +1,0 @@
-use "vendor/sqlite"
-
-fn main() {
-  storage: [64]u8 = []
-  opened := sqlite.open(":memory:", storage[..])
-  _ = opened.ok
-}

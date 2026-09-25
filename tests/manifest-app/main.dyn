@@ -1,5 +1,0 @@
-use "utility"
-
-fn main() {
-  if utility.answer() != 42 { #panic("dependency root") }
-}

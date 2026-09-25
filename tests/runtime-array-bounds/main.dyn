@@ -1,5 +1,0 @@
-fn main() {
-  values := [1, 2, 3]
-  index: usize = 3
-  _ = values[index]
-}

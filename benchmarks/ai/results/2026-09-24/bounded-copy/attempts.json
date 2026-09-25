@@ -1,7 +1,0 @@
-[
-  {
-    "command": "./build/dyn check build/ai-benchmark/bounded-copy --no-cache",
-    "exit_code": 0,
-    "changed_after_failure": false
-  }
-]

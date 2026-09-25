@@ -1,6 +1,0 @@
-fn main() {
-  point := make_point(20, 22)
-  if point.x + point.y != 42 { for {} }
-  mode := Mode.Ready
-  if mode != Mode.Ready { for {} }
-}

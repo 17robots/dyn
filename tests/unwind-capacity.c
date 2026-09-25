@@ -2,7 +2,7 @@
 #include <setjmp.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../compiler/runtime/reference_support.c"
+#include "../runtime/reference_support.c"
 static long current_tid = 1;
 static jmp_buf panic_jump;
 static int panicked;

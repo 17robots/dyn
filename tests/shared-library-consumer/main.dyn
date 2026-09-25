@@ -1,4 +1,0 @@
-extern fn add "dyn_test_add"(left: i64, right: i64) i64
-fn main() {
-  if add(20, 22) != 42 { #panic("shared-library import failed") }
-}

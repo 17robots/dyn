@@ -1,3 +1,0 @@
-use "./lib"
-
-fn main() { lib.secret() }

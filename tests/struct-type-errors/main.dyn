@@ -1,9 +1,0 @@
-struct Pair {
-  value: i32,
-}
-
-fn main() {
-  pair := Pair{ value: true }
-  number := 1
-  _ = number.field
-}

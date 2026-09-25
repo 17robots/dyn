@@ -1,5 +1,0 @@
-use "./lib"
-
-fn shared() i32 { return 42 }
-
-fn main() { _ = shared(); _ = lib.exported() }

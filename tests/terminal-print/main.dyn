@@ -1,7 +1,0 @@
-use "std/io" io
-use "std/terminal" terminal
-
-fn main() {
-  result := io.println(terminal.stdout(), "terminal {} {}", 42, true)
-  if result.status != io.Status.Complete { #panic("terminal stdout") }
-}

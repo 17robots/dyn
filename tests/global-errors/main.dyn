@@ -1,9 +1,0 @@
-const Missing: i32
-const Dynamic := make()
-const Fixed := 1
-
-fn make() i32 { return 2 }
-
-fn main() {
-  Fixed = 3
-}

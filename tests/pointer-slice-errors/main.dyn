@@ -1,6 +1,0 @@
-fn main() {
-  value: u8 = 0
-  pointer := &value
-  invalid := pointer[0..]
-  _ = invalid
-}

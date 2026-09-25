@@ -1,3 +1,0 @@
-fn from_unopened_file() i32 { return shared() }
-
-fn unrelated_binding() { shared := 1; _ = shared }

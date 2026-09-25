@@ -1,7 +1,0 @@
-fn divide(left, right: i64) i64 { return left / right }
-
-fn main() {
-  minimum: i64 = -9223372036854775808
-  negative_one: i64 = -1
-  _ = divide(minimum, negative_one)
-}

@@ -19,7 +19,7 @@ static int source_test_fseek(FILE *stream, long offset, int origin) {
 #define malloc source_test_malloc
 #define fread source_test_fread
 #define fseek source_test_fseek
-#include "../compiler/src/source.c"
+#include "../src/source.c"
 #undef malloc
 #undef fread
 #undef fseek

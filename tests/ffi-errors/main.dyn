@@ -1,8 +1,0 @@
-extern fn empty ""(value: u64) u64
-extern fn bad_symbol "not a symbol"(value: u64) u64
-extern fn bad_type(value: Missing) u64
-extern fn duplicate_one "same_symbol"() void
-extern fn duplicate_two "same_symbol"() void
-extern bad_global "": any
-
-fn main() {}

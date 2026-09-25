@@ -23,7 +23,7 @@ def prepare(version, evidence, native, output):
         report = json.loads((evidence/'release-check/report.json').read_text())
         package = json.loads((evidence/'dist/package-validation.json').read_text())
         if report['status'] != 'passed' or not report['stages'] or any(s['status'] != 'passed' for s in report['stages']):
-            raise ValueError('Full Linux release validation must pass')
+            raise ValueError('Standalone compiler release validation must pass')
         if package['status'] != 'passed' or package['manifest']['version'] != 'dyn '+version:
             raise ValueError('SDK validation/version does not match release')
         sdk_name = f'dyn-{version}-linux-x86_64.tar.gz'
@@ -54,7 +54,7 @@ def prepare(version, evidence, native, output):
         for source, name in [(evidence/'release-check/report.json','linux-release-qualification.json'),
                              (evidence/'dist/package-validation.json','sdk-qualification.json'),
                              (ROOT/'LICENSE','LICENSE.txt'),
-                             (ROOT/'compiler/THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md')]:
+                             (ROOT/'THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md')]:
             shutil.copy2(source,output/name)
         sdk = output/f'dyn-{version}-linux-x86_64-ubuntu24.04.tar.gz'
         config = f'''# Ubuntu 24.04 x86-64; LLVM 19 and Tree-sitter 0.25.8 required.
@@ -70,13 +70,13 @@ checksum = "sha256:{sha(sdk)}"
         notes = f'''# Dyn {version}
 
 Linux x86-64 SDK, built on Ubuntu 24.04 with LLVM 19.
-Full Linux release validation passed. Native debug/release probes passed:
+Standalone compiler regression and package validation passed. Native debug/release probes passed:
 Windows {counts['windows']}, macOS Apple Silicon {counts['macos']}, Linux ARM {counts['aarch64']}.
 These target tests do not provide Windows/macOS compiler executables.
 
 Install LLVM 19, LLD 19 and Tree-sitter 0.25.8, then use the attached `mise.toml`
 with `mise install` and `mise exec -- dyn version`.
-See [installation instructions](https://github.com/17robots/dyn/blob/v{version}/docs/release/distribution.md).
+See [installation instructions](https://github.com/17robots/dyn/blob/v{version}/README.md).
 
 Source-available under the attached Dyn license; commercial application development allowed.
 Compiler redistribution/modification restrictions apply. See LICENSE.txt for full terms.

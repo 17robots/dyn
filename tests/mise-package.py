@@ -42,7 +42,7 @@ try:
         actual = run('mise','exec','--','dyn','version').stdout.strip()
         if actual != 'dyn '+args.version:
             raise RuntimeError('Installed version mismatch: '+actual)
-        run('mise','exec','--','dyn','build',str(ROOT/'compiler/tests/smoke'),
+        run('mise','exec','--','dyn','build',str(ROOT/'tests/smoke'),
             '--release','--no-cache','--quiet','--output',str(work/'smoke'))
         run(str(work/'smoke'))
         print('PASS mise candidate installation, version, compilation and execution')

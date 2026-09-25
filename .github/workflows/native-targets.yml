@@ -32,29 +32,10 @@ jobs:
       DYN: ./build/dyn-release
     steps:
       - uses: actions/checkout@v4
-      - name: Install cross-build toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y build-essential python3 clang-19 llvm-19-dev lld-19
-          echo /usr/lib/llvm-19/bin >> "$GITHUB_PATH"
-          tool_root=$(mktemp -d)
-          git clone --depth 1 --branch v0.25.8 https://github.com/tree-sitter/tree-sitter "$tool_root/tree-sitter"
-          test "$(git -C "$tool_root/tree-sitter" rev-parse HEAD)" = f2f197b6b27ce75c280c20f131d4f71e906b86f7
-          sudo make -C "$tool_root/tree-sitter" install PREFIX=/usr/local
-          sudo ldconfig
-          curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o "$tool_root/zig.tar.xz"
-          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $tool_root/zig.tar.xz" | sha256sum -c -
-          tar -xf "$tool_root/zig.tar.xz" -C "$tool_root"
-          echo "$tool_root/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
-      - name: Install parser build tools
-        run: |
-          cargo install just --version 1.58.0 --locked
-          cargo install tree-sitter-cli --version 0.25.8 --locked
+      - uses: ./.github/actions/setup-compiler
       - name: Build compiler and target probes
         run: |
-          python3 compiler/tools/build.py all dyn-release
+          just release
           python3 tools/build-native-probes.py
       - uses: actions/upload-artifact@v4
         with:
