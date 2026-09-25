@@ -20,7 +20,11 @@ static uint64_t hash_bytes(uint64_t hash, const void *data, size_t length) {
 }
 
 static bool make_directories(char *path) {
-  for (char *p = path + 1; *p; ++p)
+  char *start = path + 1;
+#ifdef _WIN32
+  if (strlen(path) > 2 && path[1] == ':') start = path + 3;
+#endif
+  for (char *p = start; *p; ++p)
     if (*p == '/') {
       *p = 0;
       if (mkdir(path, 0777) && errno != EEXIST) {
@@ -35,6 +39,13 @@ static bool make_directories(char *path) {
 bool dyn_cache_directory(char *path, size_t capacity) {
   const char *configured = getenv("DYN_CACHE_DIR");
   const char *xdg = getenv("XDG_CACHE_HOME"), *home = getenv("HOME");
+#ifdef _WIN32
+  if (!home) home = getenv("USERPROFILE");
+  if (!xdg) xdg = getenv("LOCALAPPDATA");
+  long cache_identity = (long)GetCurrentProcessId();
+#else
+  long cache_identity = (long)getuid();
+#endif
   int n;
   if (configured && *configured)
     n = snprintf(path, capacity, "%s", configured);
@@ -44,7 +55,7 @@ bool dyn_cache_directory(char *path, size_t capacity) {
     n = snprintf(path, capacity, "%s/.cache/dyn/c-frontend-" DYN_FRONTEND_VERSION, home);
   else
     n = snprintf(path, capacity, "/tmp/dyn-cache-%ld/c-frontend-" DYN_FRONTEND_VERSION,
-                 (long)getuid());
+                 cache_identity);
   return n > 0 && (size_t)n < capacity && make_directories(path);
 }
 

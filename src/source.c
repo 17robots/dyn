@@ -30,6 +30,9 @@ char *dyn_path_basename(const char *path) {
   char resolved[4096];
   if ((strcmp(path, ".") == 0 || strcmp(path, "..") == 0) &&
       getcwd(resolved, sizeof(resolved))) {
+#ifdef _WIN32
+    dyn_host_slashes(resolved);
+#endif
     if (strcmp(path, "..") == 0) {
       char *slash = strrchr(resolved, '/');
       if (slash && slash != resolved)
@@ -38,10 +41,18 @@ char *dyn_path_basename(const char *path) {
     path = resolved;
   }
   size_t n = strlen(path);
-  while (n > 1 && path[n - 1] == '/')
+  while (n > 1 && (path[n - 1] == '/'
+#ifdef _WIN32
+                   || path[n - 1] == '\\'
+#endif
+                   ))
     --n;
   size_t start = n;
-  while (start && path[start - 1] != '/')
+  while (start && path[start - 1] != '/'
+#ifdef _WIN32
+         && path[start - 1] != '\\'
+#endif
+         )
     --start;
   char *r = malloc(n - start + 1);
   if (!r)

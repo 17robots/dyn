@@ -8,7 +8,7 @@ separate projects and are not included here.
 
 ## Build
 
-The compiler host is Linux x86-64. Ubuntu 24.04 with LLVM/Clang/LLD 19 and the
+The published preview SDK runs on Linux x86-64. Ubuntu 24.04 with LLVM/Clang/LLD 19 and the
 Tree-sitter 0.25.8 runtime is the CI baseline. You also need a C11 compiler,
 Python 3.12+, Bash, Git and `just`. Zig 0.16.0 is needed for cross-target tests.
 
@@ -31,6 +31,21 @@ The Tree-sitter runtime library is a separate build dependency, not that grammar
 Override `BUILD`, `CC`, `CLANG`, `CFLAGS`, `CPPFLAGS` and `LLVM_CONFIG` as needed.
 A custom compiler output path may require `DYN_SDK` pointing to this repository;
 installed SDKs locate their own runtime and standard library.
+
+Native compiler host CI also builds and runs Dyn on macOS Apple Silicon and
+Windows x64. These are source builds with installed dependencies; preview 2's
+published archive remains Linux-only. The default output target matches the host.
+
+For a host-only source build, install LLVM, Clang and the Tree-sitter C runtime,
+then run `python3 tools/fetch-grammar.py`, `python3 tools/build.py host`, and
+`python3 tests/compiler-host.py`. The compiler is `build/dyn-release` (Windows:
+`build/dyn-release.exe`). macOS uses Homebrew LLVM 19 and Zig 0.16.0 for linking;
+Windows uses MSYS2 UCRT64's native Clang/LLVM, binutils, Python and **libtree-sitter**
+packages. Use the environment setup in `.github/workflows/compiler-hosts.yml`.
+Windows module compilation currently runs serially; POSIX hosts retain isolated
+parallel workers. The host tests cover build/run, cached output replacement,
+source changes, paths with spaces, diagnostics and LSP pipes. They gate releases
+alongside the existing cross-target executable tests.
 
 ## Test and install
 

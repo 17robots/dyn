@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <tree_sitter/api.h>
 #include <unistd.h>
@@ -72,7 +71,7 @@ static char *find_native_link(const DynContext *context, const char *name) {
   if (configured && *configured) {
     const char *at = configured;
     while (*at) {
-      const char *end = strchr(at, ':');
+      const char *end = strchr(at, DYN_PATH_SEPARATOR);
       if (!end)
         end = at + strlen(at);
       if (end > at && (size_t)(end - at) < 4096) {
@@ -208,7 +207,7 @@ static bool command_available(const char *name) {
     return false;
   size_t name_length = strlen(name);
   for (const char *at = path; *at;) {
-    const char *end = strchr(at, ':');
+    const char *end = strchr(at, DYN_PATH_SEPARATOR);
     if (!end)
       end = at + strlen(at);
     size_t length = (size_t)(end - at);
@@ -498,7 +497,15 @@ static int execute_command(DynOptions *options, const char *compiler) {
     return 0;
   }
   char *base = dyn_path_basename(options->input);
-  char run_output[] = "/tmp/dyn-run-XXXXXX";
+  char run_output[4096];
+  const char *temporary_root = getenv("TMPDIR");
+#ifdef _WIN32
+  if (!temporary_root) temporary_root = getenv("TEMP");
+#endif
+  if (!temporary_root) temporary_root = "/tmp";
+  if (snprintf(run_output, sizeof(run_output), "%s/dyn-run-XXXXXX", temporary_root) >= (int)sizeof(run_output)) {
+    dyn_sources_free(&sources); free(main_path); free(base); return 2;
+  }
   if (run) {
     int temporary = mkstemp(run_output);
     if (temporary < 0) {
@@ -528,9 +535,12 @@ static int execute_command(DynOptions *options, const char *compiler) {
     return 0;
   }
   char object[4096], ir[4096], assembly[4096];
-  snprintf(object, sizeof(object), "%s.o", output);
-  snprintf(ir, sizeof(ir), "%s.ll", output);
-  snprintf(assembly, sizeof(assembly), "%s.s", output);
+  if (snprintf(object, sizeof(object), "%s.o", output) >= (int)sizeof(object) ||
+      snprintf(ir, sizeof(ir), "%s.ll", output) >= (int)sizeof(ir) ||
+      snprintf(assembly, sizeof(assembly), "%s.s", output) >= (int)sizeof(assembly)) {
+    fprintf(stderr, "error: output path too long\n");
+    dyn_sources_free(&sources); free(main_path); free(base); return 2;
+  }
   DynSource module_source = {0};
   phase = timer_start();
   uint64_t *module_ids = NULL;
@@ -647,23 +657,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (!result && !options->quiet)
     printf("built %s\n", options->no_link ? object : output);
   if (!result && run) {
-    pid_t child = fork();
-    if (child < 0) {
-      perror("error: run");
-      result = 2;
-    } else if (child == 0) {
-      execl(output, output, (char *)NULL);
-      _exit(127);
-    } else {
-      int status = 0;
-      if (waitpid(child, &status, 0) < 0) {
-        perror("error: run");
-        result = 2;
-      } else if (WIFEXITED(status))
-        result = WEXITSTATUS(status);
-      else
-        result = 128 + WTERMSIG(status);
-    }
+    char *arguments[] = {(char *)output, NULL};
+    result = dyn_host_spawn(arguments);
     remove(output);
   }
   dyn_sources_free(&sources);
@@ -675,7 +670,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
 /* Installed SDK linkers are private: do not require a global LLVM installation. */
 static bool configure_sdk_linkers(void) {
   char executable[4096], directory[4096];
-  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
   if (n < 0 || n == (ssize_t)sizeof(executable) - 1)
     return true;
   executable[n] = 0;
@@ -691,7 +686,7 @@ static bool configure_sdk_linkers(void) {
   char *path = malloc(size);
   if (!path)
     return false;
-  snprintf(path, size, "%s%s%s", directory, previous ? ":" : "",
+  snprintf(path, size, "%s%s%s", directory, previous ? (DYN_PATH_SEPARATOR == ';' ? ";" : ":") : "",
            previous ? previous : "");
   int result = setenv("PATH", path, 1);
   free(path);
@@ -699,6 +694,10 @@ static bool configure_sdk_linkers(void) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+  _setmode(STDIN_FILENO, _O_BINARY);
+  _setmode(STDOUT_FILENO, _O_BINARY);
+#endif
   if (!configure_sdk_linkers()) {
     perror("error: configure SDK linkers");
     return 2;

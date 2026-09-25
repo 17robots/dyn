@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import platform
 
 COMPILER = Path(__file__).resolve().parents[1]
 BUILD = Path(os.environ.get('BUILD', COMPILER/'build')).resolve()
@@ -23,6 +24,8 @@ cflags = flags('CFLAGS', '-std=c11 -Wall -Wextra -Wpedantic -Werror -g')
 version = os.environ.get('DYN_VERSION', '0.1.0-dev')
 if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', version):
     sys.exit('DYN_VERSION must be a semantic version without build metadata')
+if sys.platform == 'darwin':
+    cflags += ['-D_DARWIN_C_SOURCE']
 cflags += ['-DDYN_VERSION="' + version + '"']
 llvm_config = flags('LLVM_CONFIG', 'llvm-config')
 def llvm(*args, fallback=''):
@@ -177,13 +180,24 @@ add('interface-test', [COMPILER/'tests/interface-cache.c', *[COMPILER/'src'/n fo
 
 ALL = ['dynrt_wasi_start.o', 'dynrt_wasi_support.o', 'dynrt_wasm.o', 'dyn', 'dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o', 'dynrt_support_pic.o', 'dynrt_aarch64_support_pic.o', 'dynrt_shared.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_windows_shared.o', 'dynrt_macos_shared.o', 'tree-sitter-dyn-parser.o', 'tree-sitter-dyn-scanner.o', 'tree-sitter-dyn-bridge.o', 'llvm-bridge.o']
 
+HOST = ['dyn-release'] + (
+    ['dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_windows_shared.o'] if sys.platform == 'win32' else
+    ['dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_macos_shared.o'] if sys.platform == 'darwin' else
+    ['dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o'] if platform.machine() == 'aarch64' else
+    ['dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o'])
+if sys.platform == 'win32':
+    for name, (inputs, command) in artifacts.items():
+        if name.startswith('dyn') and not name.endswith('.o'):
+            command[-1] += '.exe'
+
+
 def write_changed(path, text):
     if not path.exists() or path.read_text() != text:
         path.write_text(text)
 
 def build(name):
     inputs, command = artifacts[name]
-    output = BUILD/name
+    output = BUILD/(name + ('.exe' if sys.platform == 'win32' and name.startswith('dyn') and not name.endswith('.o') else ''))
     stamp = BUILD/(name + '.build.json')
     # Header changes, flags, compiler selection and removed source files invalidate
     # artifacts too. Signatures are written only after a successful command.
@@ -204,17 +218,22 @@ def build(name):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('targets', nargs='+', choices=[*artifacts, 'all'])
+    parser.add_argument('targets', nargs='+', choices=[*artifacts, 'all', 'host'])
     args = parser.parse_args()
     BUILD.mkdir(parents=True, exist_ok=True)
     # Serialize writers to the same build directory, including recursive recipes.
-    import fcntl
     with (BUILD/'.build.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if sys.platform == 'win32':
+            import msvcrt
+            lock.write('0'); lock.flush(); lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
         if not all(path.is_file() for path in ts_sources):
             sys.exit('Missing generated grammar; run just deps or set TS_DIR to a grammar checkout')
-        write_changed(unity, '#define _POSIX_C_SOURCE 200809L\n' + ''.join(f'#include "{p}"\n' for p in sources))
-        targets = dict.fromkeys(n for t in args.targets for n in (ALL if t == 'all' else [t]))
+        write_changed(unity, '#define _POSIX_C_SOURCE 200809L\n' + ''.join(f'#include "{p.as_posix()}"\n' for p in sources))
+        targets = dict.fromkeys(n for t in args.targets for n in (ALL if t == 'all' else HOST if t == 'host' else [t]))
         for name in targets:
             build(name)
 

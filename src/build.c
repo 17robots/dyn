@@ -4,8 +4,10 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
 typedef struct {
@@ -45,7 +47,14 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
     jobs[count++] = (Job){i, end - i};
     i = end;
   }
+#ifdef _WIN32
+  /* Frontend worker contexts are process-isolated; use serial execution until
+     Windows has equivalent isolated workers. Never share them across threads. */
+  workers = 1;
+  long online = 1;
+#else
   long online = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
   if (!workers)
     workers = online > 0 ? (unsigned)online : 1;
   if (workers > count)
@@ -63,6 +72,7 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
     *values = out; *value_count = count;
     return 0;
   }
+#ifndef _WIN32
   /* The shared cursor assigns a new module as soon as any worker finishes.
      Output slots remain indexed by source order, independent of scheduling. */
   typedef struct { atomic_size_t next; uint64_t alignment; } Queue;
@@ -134,4 +144,8 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
   *values = copy;
   *value_count = count;
   return 0;
+#else
+  free(jobs);
+  return 2;
+#endif
 }

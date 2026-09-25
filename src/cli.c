@@ -29,7 +29,7 @@ void dyn_cli_help(const char *command) {
 int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
   memset(o, 0, sizeof(*o));
   o->debug_info = true;
-  o->target = "x86_64-linux";
+  o->target = DYN_HOST_TARGET;
   if (argc < 2)
     return 2;
   o->command = argv[1];

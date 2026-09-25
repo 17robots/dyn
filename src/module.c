@@ -156,7 +156,7 @@ static char *resolve_std(const char *path) {
   if (configured)
     return configured;
   char executable[4096];
-  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
   if (n < 0)
     return NULL;
   executable[n] = 0;
@@ -187,7 +187,7 @@ static char *resolve_vendor(const char *path) {
   if (configured)
     return configured;
   char executable[4096];
-  ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
   if (n < 0)
     return NULL;
   executable[n] = 0;
