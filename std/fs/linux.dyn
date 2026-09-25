@@ -1,0 +1,30 @@
+#target(kernel: linux)
+
+fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
+  storage: [4096]u8 = []
+  raw := terminated(path, storage[..])
+  if raw == nil { return FileResult{ error: -36, kind: errors.Kind.InvalidInput } }
+  descriptor := #syscall(257, -100, raw, flags | 524288, mode)
+  if descriptor < 0 { return FileResult{ error: descriptor, kind: errors.linux(descriptor) } }
+  return FileResult{ file: owned_file(descriptor), error: 0, ok: true }
+}
+
+fn native_open_read(path: []const u8) FileResult { return open_flags(path, 0, 0) }
+fn native_create(path: []const u8) FileResult { return open_flags(path, 577, 420) }
+fn native_append(path: []const u8) FileResult { return open_flags(path, 1089, 420) }
+fn native_create_exclusive(path: []const u8) FileResult { return open_flags(path, 193, 420) }
+
+fn native_open(path: []const u8, mode: u8) FileResult {
+  if mode == 1 { return native_create(path) }
+  if mode == 2 { return native_append(path) }
+  if mode == 3 { return native_create_exclusive(path) }
+  return native_open_read(path)
+}
+fn native_close(handle: isize) isize { return #syscall(3, handle) }
+fn native_read(handle: isize, destination: []u8) isize { return #syscall(0, handle, &destination[0], #len(destination)) }
+fn native_write(handle: isize, source: []const u8) isize { return #syscall(1, handle, &source[0], #len(source)) }
+fn native_seek(handle: isize, offset: isize, origin: usize) isize { return #syscall(8, handle, offset, origin) }
+fn native_sync(handle: isize) isize { return #syscall(74, handle) }
+fn native_kind(code: isize) errors.Kind { return errors.linux(code) }
+fn native_valid(handle: isize) bool { return handle >= 0 }
+fn native_interrupted(code: isize) bool { return code == -4 }

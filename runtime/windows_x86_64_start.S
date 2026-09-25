@@ -153,6 +153,24 @@ import_jump dyn_process_wait, WaitForSingleObject
 import_jump dyn_process_error, GetLastError
 import_jump dyn_process_read, ReadFile
 
+import_jump dyn_fs_open, CreateFileW
+import_jump dyn_fs_seek, SetFilePointerEx
+import_jump dyn_fs_sync, FlushFileBuffers
+import_jump dyn_time_sleep, Sleep
+import_jump dyn_time_counter, QueryPerformanceCounter
+import_jump dyn_time_frequency, QueryPerformanceFrequency
+import_jump dyn_time_realtime, GetSystemTimePreciseAsFileTime
+import_jump dyn_arguments_command, GetCommandLineW
+
+import_jump dyn_fs_close, CloseHandle
+import_jump dyn_fs_read, ReadFile
+import_jump dyn_fs_write, WriteFile
+import_jump dyn_fs_error, GetLastError
+import_jump dyn_stdio_handle, GetStdHandle
+import_jump dyn_stdio_read, ReadFile
+import_jump dyn_stdio_write, WriteFile
+import_jump dyn_stdio_error, GetLastError
+
 // Minimal PE import directory, avoiding SDK/import-library dependency while
 // retaining stable documented Win32 and Winsock entry points.
 .section .idata$2,"dw"
@@ -177,6 +195,13 @@ kernel_lookup:
     .rva hn_\name
     .long 0
 .endm
+    thunk CreateFileW
+    thunk SetFilePointerEx
+    thunk FlushFileBuffers
+    thunk QueryPerformanceCounter
+    thunk QueryPerformanceFrequency
+    thunk GetSystemTimePreciseAsFileTime
+    thunk GetCommandLineW
     thunk ExitProcess
     thunk CloseHandle
     thunk WaitForSingleObject
@@ -230,6 +255,13 @@ kernel_iat:
 .macro iat name
 __imp_\name: .rva hn_\name; .long 0
 .endm
+iat CreateFileW
+iat SetFilePointerEx
+iat FlushFileBuffers
+iat QueryPerformanceCounter
+iat QueryPerformanceFrequency
+iat GetSystemTimePreciseAsFileTime
+iat GetCommandLineW
 iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
@@ -281,6 +313,13 @@ iat WSAPoll
 .macro hint name
 hn_\name: .short 0; .asciz "\name"; .p2align 1
 .endm
+hint CreateFileW
+hint SetFilePointerEx
+hint FlushFileBuffers
+hint QueryPerformanceCounter
+hint QueryPerformanceFrequency
+hint GetSystemTimePreciseAsFileTime
+hint GetCommandLineW
 hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject

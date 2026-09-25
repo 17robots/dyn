@@ -29,18 +29,21 @@ with tempfile.TemporaryDirectory(prefix='dyn-standard-streams-') as temporary:
     project = root/'streams'; project.mkdir()
     (project/'main.dyn').write_text('''use "std/io"
 use "std/bufio"
+use "std/time"
 fn main() {
+  clock := time.try_monotonic_now()
+  if !clock.ok { #panic("clock failed") }
   scratch: [8]u8 = []
   input := bufio.reader(io.stdin(), scratch[..])
   line: [64]u8 = []
   for {
     result := bufio.read_line(&input, line[..])
-    if result.status == io.Status.Error { #panic("input failed") }
-    if result.transferred > 0 || result.status != io.Status.End {
+    if result.status == bufio.ReadStatus.Error { #panic("input failed") }
+    if result.transferred > 0 || result.status != bufio.ReadStatus.End {
       written := io.println(io.stdout(), "[{}]", line[..result.transferred])
       if written.status == io.Status.Error { #panic("output failed") }
     }
-    if result.status == io.Status.End { break }
+    if result.status == bufio.ReadStatus.End { break }
   }
   finished := io.write_all(io.stderr(), "done\\n")
   if finished.status == io.Status.Error { #panic("stderr failed") }
@@ -51,7 +54,7 @@ fn main() {
         run(DYN, 'build', project, '--quiet', '--no-cache', '--output', executable, *options)
         for data, expected in [(b'hello\n\nworld', b'[hello]\n[]\n[world]\n'), (b'', b''),
                                ('café\n'.encode(), '[café]\n'.encode()),
-                               (b'windows\r\n', b'[windows\r]\n'),
+                               (b'windows\r\n', b'[windows]\n'),
                                (b'line\n' * 4096, b'[line]\n' * 4096)]:
             result = run(executable, input=data)
             assert (result.stdout, result.stderr) == (expected, b'done\n')
@@ -98,7 +101,10 @@ fn main() {
             print('PASS WASI standard-stream execution')
     project = root/'portable'; project.mkdir()
     (project/'main.dyn').write_text('''use "std/io"
+use "std/time"
 fn main() {
+  date := time.DateTime{}
+  if !time.parse_iso8601("2024-02-29T12:34:56Z", &date) || !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
   bytes: [2]u8 = []
   result := io.read_exact(io.cursor_reader(&cursor), bytes[..])

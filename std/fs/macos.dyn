@@ -1,0 +1,29 @@
+#target(arch: aarch64, kernel: darwin)
+use "std/c" cstrings
+
+fn terminated(path: []const u8, storage: []u8) *const u8 {
+  if #len(path) == 0 { return nil }
+  value := cstrings.string_from_bytes(storage, path)
+  if !value.ok { return nil }
+  return value.value
+}
+fn native_open(path: []const u8, mode: u8) FileResult {
+  storage: [4096]u8 = []
+  name := terminated(path, storage[..])
+  if name == nil { return FileResult{ kind: errors.Kind.InvalidInput } }
+  flags: usize = 16777216 // O_CLOEXEC
+  if mode == 1 { flags = flags | 1537 } // O_WRONLY | O_CREAT | O_TRUNC
+  else if mode == 2 { flags = flags | 521 } // O_WRONLY | O_CREAT | O_APPEND
+  else if mode == 3 { flags = flags | 2561 } // O_WRONLY | O_CREAT | O_EXCL
+  value := #syscall(5, name, flags, 420)
+  if value < 0 { return FileResult{ error: value, kind: native_kind(value) } }
+  return FileResult{ file: owned_file(value), ok: true }
+}
+fn native_close(handle: isize) isize { return #syscall(6, handle) }
+fn native_read(handle: isize, destination: []u8) isize { return #syscall(3, handle, &destination[0], #len(destination)) }
+fn native_write(handle: isize, source: []const u8) isize { return #syscall(4, handle, &source[0], #len(source)) }
+fn native_seek(handle: isize, offset: isize, origin: usize) isize { return #syscall(199, handle, offset, origin) }
+fn native_sync(handle: isize) isize { return #syscall(95, handle) }
+fn native_kind(code: isize) errors.Kind { return errors.darwin(code) }
+fn native_valid(handle: isize) bool { return handle >= 0 }
+fn native_interrupted(code: isize) bool { return code == -4 }

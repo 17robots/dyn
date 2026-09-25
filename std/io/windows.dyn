@@ -1,9 +1,9 @@
 #target(arch: x86_64, kernel: windows)
 
-extern fn standard_handle "dyn_process_std"(kind: u32) rawptr
-extern fn standard_read "dyn_win_read_file"(handle: rawptr, bytes: *u8, count: u32, received: *u32, overlapped: rawptr) i32
-extern fn standard_write "dyn_win_write_file"(handle: rawptr, bytes: *const u8, count: u32, written: *u32, overlapped: rawptr) i32
-extern fn standard_error "dyn_win_last_error"() u32
+extern fn standard_handle "dyn_stdio_handle"(kind: u32) rawptr
+extern fn standard_read "dyn_stdio_read"(handle: rawptr, bytes: *u8, count: u32, received: *u32, overlapped: rawptr) i32
+extern fn standard_write "dyn_stdio_write"(handle: rawptr, bytes: *const u8, count: u32, written: *u32, overlapped: rawptr) i32
+extern fn standard_error "dyn_stdio_error"() u32
 
 fn valid_handle(handle: rawptr) bool {
   return handle != nil && #cast(usize) handle != 18446744073709551615
@@ -15,7 +15,7 @@ fn transfer_limit(size: usize) u32 {
 fn stream_error(count: u32, code: u32) Result {
   error: isize = 0 - #cast(isize) code
   if error == 0 { error = -5 }
-  return Result{ transferred: #cast(usize) count, error: error, status: Status.Error }
+  return Result{ transferred: #cast(usize) count, error: error, kind: errors.windows(error), status: Status.Error }
 }
 fn stdin_read(data: rawptr, destination: []u8) Result {
   _ = data

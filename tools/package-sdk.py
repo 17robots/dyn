@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Package and smoke-test only this compiler and its runtime/SDK."""
 import importlib.util
-import gzip,hashlib,json,os,platform,re,shutil,subprocess,tarfile,tempfile
+import gzip,hashlib,json,os,platform,re,shutil,subprocess,sys,tarfile,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
@@ -37,5 +37,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-sdk-') as temporary:
     for mode in ([],['--release']):
         subprocess.run([str(installed/'bin/dyn'),'build',str(ROOT/'tests/smoke'),'--no-cache','--quiet','--output',str(work/'smoke'),*mode],cwd=work,env=env,check=True,timeout=60)
         subprocess.run([str(work/'smoke')],check=True,timeout=30)
+    env['DYN'] = str(installed/'bin/dyn')
+    subprocess.run([sys.executable,str(ROOT/'tests/stdlib-host.py')],env=env,check=True,timeout=180)
     (DIST/'package-validation.json').write_text(json.dumps(dict(status='passed',runtime_sources=runtime_sources,archive=archive.name,sha256=sha(archive),manifest=manifest),indent=2)+'\n')
     print('PASS packaged and relocated standalone SDK:',archive)

@@ -1,0 +1,15 @@
+#target(kernel: linux)
+fn native_clock(monotonic: bool) ClockResult {
+  value := Instant{} clock: isize = 0 if monotonic { clock = 1 }
+  code := #syscall(228, clock, &value)
+  if code < 0 { return ClockResult{ error: code, kind: errors.linux(code) } }
+  return ClockResult{ value: value, ok: true }
+}
+fn native_sleep(duration: i64) SleepResult {
+  request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
+  remaining := Instant{}
+  code := #syscall(35, &request, &remaining)
+  for code == -4 { request = remaining code = #syscall(35, &request, &remaining) }
+  if code < 0 { return SleepResult{ error: code, kind: errors.linux(code) } }
+  return SleepResult{ ok: true }
+}

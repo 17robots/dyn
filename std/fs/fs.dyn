@@ -1,155 +1,102 @@
-#target(kernel: linux)
-
-use "std/c" cstrings
-
 use "std/io" stream
 use "std/mem" memory
-use "std/os/linux" platform
+use "std/errors" errors
 
-// Linux file adapter behind portable-shaped results. Paths are borrowed UTF-8 bytes.
-// Construct through open/create, or borrow an existing descriptor explicitly.
-// File{} represents stdin, not an unopened handle. Copies do not duplicate ownership.
-pub struct File { descriptor: isize }
-pub struct FileResult { file: File, error: isize, ok: bool }
-pub struct Result { transferred: usize, error: isize, ok: bool }
-pub struct OffsetResult { offset: usize, error: isize, ok: bool }
-pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, error: isize, ok: bool }
-pub struct PathResult { path: []u8, error: isize, ok: bool }
-pub struct ReadAllResult { data: []u8, error: isize, ok: bool }
-pub enum AppDirectory { Home, Config, Cache, Data, Runtime }
-pub struct Directory {
-  file: File,
-  storage: []u8,
-  offset: usize,
-  used: usize,
+// File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
+// Borrowed files never close the underlying handle. Their owner must outlive them.
+pub struct File { descriptor: isize = -1, active: bool, owned: bool }
+pub struct FileResult { file: File, error: isize, kind: errors.Kind, ok: bool }
+pub struct Result { transferred: usize, error: isize, kind: errors.Kind, ok: bool }
+pub struct OffsetResult { offset: usize, error: isize, kind: errors.Kind, ok: bool }
+pub struct ReadAllResult { data: []u8, error: isize, kind: errors.Kind, ok: bool }
+fn owned_file(handle: isize) File { return File{ descriptor: handle, active: true, owned: true } }
+pub fn is_open(file: *const File) bool { return file.active && native_valid(file.descriptor) }
+// Adopt transfers responsibility for a native handle to the returned owner.
+pub fn adopt_handle(handle: isize) File {
+  if !native_valid(handle) { return File{} }
+  return owned_file(handle)
 }
-pub struct DirectoryResult { directory: Directory, error: isize, ok: bool }
-pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize }
-
-fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 { return nil }
-  result := cstrings.string_from_bytes(storage, path)
-  if !result.ok { return nil }
-  return result.value
+pub fn borrow_handle(handle: isize) File {
+  if !native_valid(handle) { return File{} }
+  return File{ descriptor: handle, active: true }
 }
-
-fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
-  storage: [4096]u8 = []
-  raw := terminated(path, storage[..])
-  if raw == nil { return FileResult{ file: File{ descriptor: -1 }, error: -36, ok: false } }
-  descriptor := #syscall(257, -100, raw, flags, mode)
-  if descriptor < 0 { return FileResult{ file: File{ descriptor: -1 }, error: descriptor, ok: false } }
-  return FileResult{ file: File{ descriptor: descriptor }, error: 0, ok: true }
+pub fn borrow(file: *const File) File {
+  if !is_open(file) { return File{} }
+  return borrow_handle(file.descriptor)
 }
+pub fn take(file: *File) File { result := file.* file.* = File{} return result }
 
-pub fn open(path: []const u8) FileResult { return open_flags(path, 0, 0) }
-pub fn create(path: []const u8) FileResult { return open_flags(path, 577, 420) }
-pub fn append(path: []const u8) FileResult { return open_flags(path, 1089, 420) }
-pub fn create_exclusive(path: []const u8) FileResult { return open_flags(path, 193, 420) }
-
-pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
-  if #len(storage) < 24 { return DirectoryResult{ error: -22, ok: false } }
-  opened := open_flags(path, 65536, 0)
-  if !opened.ok { return DirectoryResult{ error: opened.error, ok: false } }
-  return DirectoryResult{
-    directory: Directory{ file: opened.file, storage: storage, offset: 0, used: 0 },
-    error: 0,
-    ok: true,
-  }
-}
-
-// Entry name borrows directory storage and may be invalidated by next refill.
-pub fn directory_next(directory: *Directory) DirectoryEntry {
-  for {
-    if directory.offset >= directory.used {
-      value := #syscall(217, directory.file.descriptor, &directory.storage[0], #len(directory.storage))
-      for value == -4 { value = #syscall(217, directory.file.descriptor, &directory.storage[0], #len(directory.storage)) }
-      if value < 0 { return DirectoryEntry{ error: value, ok: false } }
-      if value == 0 { return DirectoryEntry{ error: 0, ok: false } }
-      directory.offset = 0 directory.used = #cast(usize) value
-    }
-    if directory.offset + 19 > directory.used { return DirectoryEntry{ error: -5, ok: false } }
-    low := #cast(usize) directory.storage[directory.offset + 16]
-    high := #cast(usize) directory.storage[directory.offset + 17]
-    record_length := low + high * 256
-    if record_length < 20 || directory.offset + record_length > directory.used {
-      return DirectoryEntry{ error: -5, ok: false }
-    }
-    name_start := directory.offset + 19
-    name_end := name_start
-    for name_end < directory.offset + record_length && directory.storage[name_end] != 0 { name_end += 1 }
-    kind := directory.storage[directory.offset + 18]
-    directory.offset += record_length
-    name := directory.storage[name_start..name_end]
-    dot := #len(name) == 1 && name[0] == '.'
-    dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
-    if !dot && !dot_dot { return DirectoryEntry{ name: name, kind: kind, error: 0, ok: true } }
-  }
-  return DirectoryEntry{}
-}
-
-pub fn close_directory(directory: *Directory) Result {
-  directory.offset = 0 directory.used = 0
-  return close(&directory.file)
-}
-
+pub fn open(path: []const u8) FileResult { return native_open(path, 0) }
+pub fn create(path: []const u8) FileResult { return native_open(path, 1) }
+pub fn append(path: []const u8) FileResult { return native_open(path, 2) }
+pub fn create_exclusive(path: []const u8) FileResult { return native_open(path, 3) }
+fn failure(code: isize) Result { return Result{ error: code, kind: native_kind(code) } }
 pub fn close(file: *File) Result {
-  if file.descriptor < 0 { return Result{ transferred: 0, error: -9, ok: false } }
-  value := #syscall(3, file.descriptor)
-  if value < 0 { return Result{ transferred: 0, error: value, ok: false } }
-  file.descriptor = -1
-  return Result{ transferred: 0, error: 0, ok: true }
+  if !is_open(file) || !file.owned { return Result{ kind: errors.Kind.InvalidState } }
+  handle := file.descriptor
+  // Never retry close on a possibly reused native handle, including after EINTR.
+  file.* = File{}
+  code := native_close(handle)
+  if code < 0 { return failure(code) }
+  return Result{ ok: true }
 }
-
+// Destination borrows caller storage. Zero bytes on a successful nonempty read means EOF.
 pub fn read(file: *File, destination: []u8) Result {
-  if file.descriptor < 0 { return Result{ transferred: 0, error: -9, ok: false } }
-  if #len(destination) == 0 { return Result{ transferred: 0, error: 0, ok: true } }
-  value := #syscall(0, file.descriptor, &destination[0], #len(destination))
-  for value == -4 { value = #syscall(0, file.descriptor, &destination[0], #len(destination)) }
-  if value < 0 { return Result{ transferred: 0, error: value, ok: false } }
-  return Result{ transferred: #cast(usize) value, error: 0, ok: true }
+  if !is_open(file) { return Result{ kind: errors.Kind.InvalidState } }
+  if #len(destination) == 0 { return Result{ ok: true } }
+  value := native_read(file.descriptor, destination)
+  for native_interrupted(value) { value = native_read(file.descriptor, destination) }
+  if value < 0 { return failure(value) }
+  return Result{ transferred: #cast(usize) value, ok: true }
 }
-
 pub fn write(file: *File, source: []const u8) Result {
-  if file.descriptor < 0 { return Result{ transferred: 0, error: -9, ok: false } }
+  if !is_open(file) { return Result{ kind: errors.Kind.InvalidState } }
   written: usize = 0
   for written < #len(source) {
-    value := #syscall(1, file.descriptor, &source[written], #len(source) - written)
-    if value == -4 { }
-    else if value <= 0 { return Result{ transferred: written, error: value, ok: false } }
-    else { written += #cast(usize) value }
+    value := native_write(file.descriptor, source[written..])
+    if native_interrupted(value) { continue }
+    if value < 0 { return Result{ transferred: written, error: value, kind: native_kind(value) } }
+    if value == 0 { return Result{ transferred: written, kind: errors.Kind.System } }
+    written += #cast(usize) value
   }
-  return Result{ transferred: written, error: 0, ok: true }
+  return Result{ transferred: written, ok: true }
 }
-
 fn adapter_read(data: rawptr, destination: []u8) stream.Result {
   result := read(#cast(*File) data, destination)
-  if !result.ok { return stream.Result{ transferred: result.transferred, error: result.error, status: stream.Status.Error } }
+  if !result.ok { return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error } }
   status := stream.Status.Complete
-  if result.transferred == 0 { status = stream.Status.End }
-  return stream.Result{ transferred: result.transferred, error: 0, status: status }
+  if result.transferred == 0 && #len(destination) != 0 { status = stream.Status.End }
+  return stream.Result{ transferred: result.transferred, status: status }
 }
-
 fn adapter_write(data: rawptr, source: []const u8) stream.Result {
   result := write(#cast(*File) data, source)
-  if !result.ok { return stream.Result{ transferred: result.transferred, error: result.error, status: stream.Status.Error } }
-  return stream.Result{ transferred: result.transferred, error: 0, status: stream.Status.Complete }
+  if !result.ok { return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error } }
+  return stream.Result{ transferred: result.transferred }
 }
-
-pub fn reader(file: *File) stream.Reader {
-  return stream.Reader{ data: #cast(rawptr) file, read: &adapter_read }
+// Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
+pub fn reader(file: *File) stream.Reader { return stream.Reader{ data: #cast(rawptr) file, read: &adapter_read } }
+pub fn writer(file: *File) stream.Writer { return stream.Writer{ data: #cast(rawptr) file, write: &adapter_write } }
+// origin: 0 start, 1 current, 2 end.
+pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
+  if !is_open(file) { return OffsetResult{ kind: errors.Kind.InvalidState } }
+  if origin > 2 { return OffsetResult{ kind: errors.Kind.InvalidInput } }
+  value := native_seek(file.descriptor, offset, origin)
+  if value < 0 { return OffsetResult{ error: value, kind: native_kind(value) } }
+  return OffsetResult{ offset: #cast(usize) value, ok: true }
 }
-
-pub fn writer(file: *File) stream.Writer {
-  return stream.Writer{ data: #cast(rawptr) file, write: &adapter_write }
+pub fn sync(file: *File) Result {
+  if !is_open(file) { return Result{ kind: errors.Kind.InvalidState } }
+  value := native_sync(file.descriptor)
+  if value < 0 { return failure(value) }
+  return Result{ ok: true }
 }
 
 // Reads one complete file into arena storage, bounded by maximum.
 pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllResult {
   opened := open(path)
-  if !opened.ok { return ReadAllResult{ error: opened.error } }
+  if !opened.ok { return ReadAllResult{ error: opened.error, kind: opened.kind } }
   mark := memory.arena_mark(arena)
-  total: usize = 0 error: isize = 0
+  total: usize = 0 error: isize = 0 kind := errors.Kind.None
   for {
     capacity := maximum - total
     if capacity > memory.arena_remaining(arena) { capacity = memory.arena_remaining(arena) }
@@ -157,27 +104,27 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     if capacity == 0 {
       probe: [1]u8 = []
       extra := read(&opened.file, probe[..])
-      if !extra.ok { error = extra.error }
-      else if extra.transferred != 0 { error = -12 if total == maximum { error = -27 } }
+      if !extra.ok { error = extra.error kind = extra.kind }
+      else if extra.transferred != 0 { kind = errors.Kind.Capacity if total == maximum { kind = errors.Kind.Overflow } }
       break
     }
     allocation := memory.arena_try_push_uninit(arena, capacity, 1)
-    if !allocation.ok { error = -12 break }
+    if !allocation.ok { kind = errors.Kind.Capacity break }
     part := read(&opened.file, allocation.memory[..capacity])
     total += part.transferred
     memory.arena_rewind(arena, mark + total)
-    if !part.ok { error = part.error break }
+    if !part.ok { error = part.error kind = part.kind break }
     if part.transferred == 0 { break }
   }
   closed := close(&opened.file)
-  if error == 0 && !closed.ok { error = closed.error }
-  if error != 0 { memory.arena_rewind(arena, mark) return ReadAllResult{ error: error } }
+  if kind == errors.Kind.None && !closed.ok { error = closed.error kind = closed.kind }
+  if kind != errors.Kind.None { memory.arena_rewind(arena, mark) return ReadAllResult{ error: error, kind: kind } }
   return ReadAllResult{ data: arena.data[mark..mark + total], ok: true }
 }
 
 pub fn write_all(path: []const u8, source: []const u8) Result {
   created := create(path)
-  if !created.ok { return Result{ error: created.error, ok: false } }
+  if !created.ok { return Result{ error: created.error, kind: created.kind, ok: false } }
   result := write(&created.file, source)
   closed := close(&created.file)
   if !result.ok { return result }
@@ -185,257 +132,3 @@ pub fn write_all(path: []const u8, source: []const u8) Result {
   return result
 }
 
-pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Result {
-  if #len(scratch) == 0 { return Result{ error: -22 } }
-  input := open(source)
-  if !input.ok { return Result{ error: input.error, ok: false } }
-  output_file := open_flags(destination, 65, 420)
-  if !output_file.ok {
-    _ = close(&input.file)
-    return Result{ error: output_file.error, ok: false }
-  }
-  source_info := file_metadata(&input.file)
-  destination_info := file_metadata(&output_file.file)
-  validation_error: isize = 0
-  if !source_info.ok { validation_error = source_info.error }
-  else if !destination_info.ok { validation_error = destination_info.error }
-  else if source_info.device == destination_info.device && source_info.inode == destination_info.inode { validation_error = -22 }
-  else if (source_info.mode & 61440) != 32768 || (destination_info.mode & 61440) != 32768 { validation_error = -22 }
-  if validation_error == 0 { validation_error = #syscall(77, output_file.file.descriptor, 0) }
-  if validation_error != 0 {
-    _ = close(&input.file) _ = close(&output_file.file)
-    return Result{ error: validation_error }
-  }
-  copied := stream.copy(writer(&output_file.file), reader(&input.file), scratch)
-  input_closed := close(&input.file)
-  output_closed := close(&output_file.file)
-  if copied.status == stream.Status.Error {
-    return Result{ transferred: copied.transferred, error: copied.error, ok: false }
-  }
-  if !input_closed.ok { return input_closed }
-  if !output_closed.ok { return output_closed }
-  return Result{ transferred: copied.transferred, ok: true }
-}
-
-// origin: 0 start, 1 current, 2 end.
-pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
-  if file.descriptor < 0 { return OffsetResult{ offset: 0, error: -9, ok: false } }
-  value := #syscall(8, file.descriptor, offset, origin)
-  if value < 0 { return OffsetResult{ offset: 0, error: value, ok: false } }
-  return OffsetResult{ offset: #cast(usize) value, error: 0, ok: true }
-}
-
-pub fn sync(file: *File) Result {
-  if file.descriptor < 0 { return Result{ transferred: 0, error: -9, ok: false } }
-  value := #syscall(74, file.descriptor)
-  if value < 0 { return Result{ transferred: 0, error: value, ok: false } }
-  return Result{ transferred: 0, error: 0, ok: true }
-}
-
-// statx has one fixed layout on supported Linux architectures (Linux 4.11+).
-// Descriptor lookup avoids path replacement races and does not change file position.
-pub fn file_metadata(file: *const File) Metadata {
-  raw: [32]u64 = [] empty: [1]u8 = []
-  result := #syscall(332, file.descriptor, &empty[0], 4096, 2047, &raw[0])
-  if result < 0 { return Metadata{ error: result } }
-  if (raw[0] & 769) != 769 { return Metadata{ error: -95 } }
-  return Metadata{ size: raw[5], inode: raw[4], device: raw[17], mode: #cast(u16) (raw[3] >> 32), ok: true }
-}
-pub fn metadata(path: []const u8) Metadata {
-  opened := open(path)
-  if !opened.ok { return Metadata{ error: opened.error } }
-  info := file_metadata(&opened.file)
-  closed := close(&opened.file)
-  if !info.ok { return info }
-  if !closed.ok { return Metadata{ error: closed.error } }
-  return info
-}
-
-pub fn remove(path: []const u8) Result {
-  storage: [4096]u8 = [] raw := terminated(path, storage[..])
-  if raw == nil { return Result{ transferred: 0, error: -36, ok: false } }
-  value := #syscall(263, -100, raw, 0)
-  if value < 0 { return Result{ transferred: 0, error: value, ok: false } }
-  return Result{ transferred: 0, error: 0, ok: true }
-}
-
-pub fn rename(old_path: []const u8, new_path: []const u8) Result {
-  old_storage: [4096]u8 = [] new_storage: [4096]u8 = []
-  old_raw := terminated(old_path, old_storage[..]) new_raw := terminated(new_path, new_storage[..])
-  if old_raw == nil || new_raw == nil { return Result{ transferred: 0, error: -36, ok: false } }
-  value := #syscall(264, -100, old_raw, -100, new_raw)
-  if value < 0 { return Result{ transferred: 0, error: value, ok: false } }
-  return Result{ transferred: 0, error: 0, ok: true }
-}
-
-pub fn make_directory(path: []const u8, mode: usize) Result {
-  storage: [4096]u8 = [] raw := terminated(path, storage[..])
-  if raw == nil { return Result{ transferred: 0, error: -36, ok: false } }
-  value := #syscall(258, -100, raw, mode)
-  if value < 0 { return Result{ transferred: 0, error: value, ok: false } }
-  return Result{ transferred: 0, error: 0, ok: true }
-}
-
-pub fn remove_directory(path: []const u8) Result {
-  storage: [4096]u8 = [] raw := terminated(path, storage[..])
-  if raw == nil { return Result{ transferred: 0, error: -36, ok: false } }
-  value := #syscall(263, -100, raw, 512)
-  if value < 0 { return Result{ transferred: 0, error: value, ok: false } }
-  return Result{ transferred: 0, error: 0, ok: true }
-}
-
-pub fn symbolic_link(target: []const u8, link: []const u8) Result {
-  target_storage: [4096]u8 = [] link_storage: [4096]u8 = []
-  target_raw := terminated(target, target_storage[..]) link_raw := terminated(link, link_storage[..])
-  if target_raw == nil || link_raw == nil { return Result{ error: -36, ok: false } }
-  value := #syscall(266, target_raw, -100, link_raw)
-  if value < 0 { return Result{ error: value, ok: false } }
-  return Result{ ok: true }
-}
-
-pub fn read_link(path: []const u8, destination: []u8) PathResult {
-  storage: [4096]u8 = [] raw := terminated(path, storage[..])
-  if raw == nil { return PathResult{ path: destination[..0], error: -36, ok: false } }
-  if #len(destination) == 0 { return PathResult{ path: destination[..0], error: -22, ok: false } }
-  value := #syscall(267, -100, raw, &destination[0], #len(destination))
-  if value < 0 { return PathResult{ path: destination[..0], error: value, ok: false } }
-  return PathResult{ path: destination[..#cast(usize) value], error: 0, ok: true }
-}
-
-pub fn sync_directory(path: []const u8) Result {
-  opened := open_flags(path, 65536, 0)
-  if !opened.ok { return Result{ error: opened.error, ok: false } }
-  synced := sync(&opened.file)
-  closed := close(&opened.file)
-  if !synced.ok { return synced }
-  return closed
-}
-
-pub struct AtomicFile {
-  file: File,
-  destination: []const u8,
-  temporary: []const u8,
-  active: bool,
-}
-pub struct AtomicResult { transaction: AtomicFile, error: isize, ok: bool }
-
-// Both paths are borrowed until commit/abort. Temporary must be a sibling chosen by caller.
-pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult {
-  if #len(destination) == 0 || #len(temporary) == 0 {
-    return AtomicResult{ error: -22, ok: false }
-  }
-  created := create_exclusive(temporary)
-  if !created.ok { return AtomicResult{ error: created.error, ok: false } }
-  return AtomicResult{
-    transaction: AtomicFile{
-      file: created.file,
-      destination: destination,
-      temporary: temporary,
-      active: true,
-    },
-    error: 0,
-    ok: true,
-  }
-}
-
-pub fn atomic_commit(transaction: *AtomicFile) Result {
-  if !transaction.active { return Result{ transferred: 0, error: -22, ok: false } }
-  synced := sync(&transaction.file)
-  if !synced.ok { return synced }
-  closed := close(&transaction.file)
-  if !closed.ok { return closed }
-  renamed := rename(transaction.temporary, transaction.destination)
-  if renamed.ok { transaction.active = false }
-  return renamed
-}
-
-// Also syncs parent directory, making committed rename durable across power loss on Linux filesystems
-// which honor fsync for files and directories.
-pub fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) Result {
-  committed := atomic_commit(transaction)
-  if !committed.ok { return committed }
-  return sync_directory(parent_directory)
-}
-
-pub fn atomic_abort(transaction: *AtomicFile) Result {
-  if !transaction.active { return Result{ transferred: 0, error: -22, ok: false } }
-  if transaction.file.descriptor >= 0 { _ = close(&transaction.file) }
-  removed := remove(transaction.temporary)
-  if removed.ok { transaction.active = false }
-  return removed
-}
-
-// Writes through an explicitly named sibling temporary file and atomically renames it.
-pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) Result {
-  transaction_result := atomic_begin(destination, temporary)
-  if !transaction_result.ok { return Result{ error: transaction_result.error, ok: false } }
-  transaction := transaction_result.transaction
-  written := write(&transaction.file, source)
-  if !written.ok {
-    _ = atomic_abort(&transaction)
-    return written
-  }
-  committed := atomic_commit(&transaction)
-  if !committed.ok {
-    if transaction.active { _ = atomic_abort(&transaction) }
-    return committed
-  }
-  return Result{ transferred: written.transferred, ok: true }
-}
-
-fn environment_get(name: []const u8, destination: []u8) PathResult {
-  result := platform.environment_get(name, destination)
-  if !result.ok { return PathResult{ path: destination[..0], error: result.error } }
-  if !result.found { return PathResult{ path: destination[..0], error: -2 } }
-  return PathResult{ path: result.value, ok: true }
-}
-
-fn append_suffix(destination: []u8, base: []const u8, suffix: []const u8) PathResult {
-  if #len(base) + #len(suffix) > #len(destination) {
-    return PathResult{ path: destination[..0], error: -28, ok: false }
-  }
-  i: usize = 0
-  for i < #len(base) { destination[i] = base[i] i += 1 }
-  j: usize = 0
-  for j < #len(suffix) { destination[i + j] = suffix[j] j += 1 }
-  return PathResult{ path: destination[..#len(base) + #len(suffix)], error: 0, ok: true }
-}
-
-pub fn app_directory(kind: AppDirectory, destination: []u8) PathResult {
-  if kind == AppDirectory.Home {
-    direct_home := environment_get("HOME", destination)
-    if direct_home.ok && #len(direct_home.path) == 0 { return PathResult{ path: destination[..0], error: -2, ok: false } }
-    return direct_home
-  }
-  if kind == AppDirectory.Runtime {
-    runtime := environment_get("XDG_RUNTIME_DIR", destination)
-    if runtime.ok && #len(runtime.path) == 0 { return PathResult{ path: destination[..0], error: -2, ok: false } }
-    return runtime
-  }
-  variable: []const u8 = "XDG_CONFIG_HOME"
-  suffix: []const u8 = "/.config"
-  if kind == AppDirectory.Cache { variable = "XDG_CACHE_HOME" suffix = "/.cache" }
-  else if kind == AppDirectory.Data { variable = "XDG_DATA_HOME" suffix = "/.local/share" }
-  configured := environment_get(variable, destination)
-  if configured.ok && #len(configured.path) > 0 { return configured }
-  home_storage: [4096]u8 = []
-  fallback_home := environment_get("HOME", home_storage[..])
-  if !fallback_home.ok { return PathResult{ path: destination[..0], error: fallback_home.error, ok: false } }
-  return append_suffix(destination, fallback_home.path, suffix)
-}
-
-pub fn lock(file: *File, operation: usize) Result {
-  value := #syscall(73, file.descriptor, operation)
-  for value == -4 { value = #syscall(73, file.descriptor, operation) }
-  if value < 0 { return Result{ error: value } }
-  return Result{ ok: true }
-}
-pub fn truncate(path: []const u8, length: usize) Result {
-  if length > 9223372036854775807 { return Result{ error: -22 } }
-  storage: [4096]u8 = []
-  name := terminated(path, storage[..])
-  if name == nil { return Result{ error: -36 } }
-  value := #syscall(76, name, length)
-  if value < 0 { return Result{ error: value } }
-  return Result{ ok: true }
-}

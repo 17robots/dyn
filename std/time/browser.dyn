@@ -1,0 +1,3 @@
+#target(kernel: browser)
+fn native_clock(monotonic: bool) ClockResult { _ = monotonic return ClockResult{ kind: errors.Kind.Unsupported } }
+fn native_sleep(duration: i64) SleepResult { _ = duration return SleepResult{ kind: errors.Kind.Unsupported } }

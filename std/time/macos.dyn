@@ -1,0 +1,24 @@
+#target(arch: aarch64, kernel: darwin)
+#link("System")
+extern fn clock_read "dyn_time_clock"(clock: i32, value: *Instant) i32
+extern fn clock_sleep "dyn_time_sleep"(request: *const Instant, remaining: *Instant) i32
+extern fn clock_error "dyn_time_error"() *i32
+fn native_clock(monotonic: bool) ClockResult {
+  value := Instant{} clock: i32 = 0 if monotonic { clock = 6 }
+  if clock_read(clock, &value) != 0 {
+    code: isize = 0 - #cast(isize) clock_error().*
+    return ClockResult{ error: code, kind: errors.darwin(code) }
+  }
+  return ClockResult{ value: value, ok: true }
+}
+fn native_sleep(duration: i64) SleepResult {
+  request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
+  remaining := Instant{}
+  for {
+    if clock_sleep(&request, &remaining) == 0 { return SleepResult{ ok: true } }
+    code: isize = 0 - #cast(isize) clock_error().*
+    if code != -4 { return SleepResult{ error: code, kind: errors.darwin(code) } }
+    request = remaining
+  }
+  return SleepResult{ ok: true }
+}

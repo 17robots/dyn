@@ -34,6 +34,8 @@ else:
             destination = prefix/'lib/dyn'/name
             shutil.copyfile(BUILD/name, destination)
             destination.chmod(0o644)
+    if not host_only or sys.platform == 'darwin':
+        shutil.copy2(COMPILER/'runtime/libSystem.tbd', prefix/'lib/dyn/libSystem.tbd')
     shutil.copy2(COMPILER/'LICENSE', prefix/'share/dyn/LICENSE')
     shutil.copy2(COMPILER/'THIRD_PARTY_NOTICES.md', prefix/'share/dyn/THIRD_PARTY_NOTICES.md')
     shutil.copytree(COMPILER/'std', prefix/'share/dyn', dirs_exist_ok=True)

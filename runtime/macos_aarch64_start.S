@@ -93,3 +93,18 @@ _dyn_atomic_fetch_add_u64:
 _dyn_atomic_compare_exchange_u64:
 1:  ldaxr x3, [x0]; cmp x3, x1; b.ne 2f; stlxr w4, x2, [x0]; cbnz w4, 1b; mov w0, #1; ret
 2:  clrex; mov w0, #0; ret
+
+// Stable libSystem entry points used by portable std/time and std/process.
+.global _dyn_time_clock
+_dyn_time_clock: b _clock_gettime
+.global _dyn_time_sleep
+_dyn_time_sleep: b _nanosleep
+.global _dyn_time_error
+_dyn_time_error: b ___error
+.global _dyn_arguments_count
+_dyn_arguments_count: b __NSGetArgc
+.global _dyn_arguments_vector
+_dyn_arguments_vector: b __NSGetArgv
+
+.global _dyn_arguments_length
+_dyn_arguments_length: b _strlen
