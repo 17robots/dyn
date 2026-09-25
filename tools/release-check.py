@@ -20,6 +20,11 @@ try:
     destination=OUT/'artifacts';destination.mkdir()
     archive=destination/package['archive'];shutil.copy2(BUILD/'dist'/archive.name,archive)
     report['artifacts']={'build/release-check/artifacts/'+archive.name:hashlib.sha256(archive.read_bytes()).hexdigest()}
+    source=package['runtime_sources']
+    source_archive=destination/source['archive'];shutil.copy2(BUILD/'dist'/source_archive.name,source_archive)
+    digest=hashlib.sha256(source_archive.read_bytes()).hexdigest()
+    if digest!=source['sha256']:raise RuntimeError('Runtime source hash mismatch')
+    report['artifacts']['build/release-check/artifacts/'+source_archive.name]=digest
     report['compiler_sha256']=hashlib.sha256((BUILD/'dyn-release').read_bytes()).hexdigest()
     report['grammar']=json.loads((ROOT/'grammar.lock.json').read_text())
     report['status']='passed'
