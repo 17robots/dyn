@@ -70,6 +70,13 @@ ownership comments. Use `dyn docs MODULE --json` for declarations and
 current commands. Arenas and borrowed values still require explicit lifetime care;
 limited lifetime diagnostics are not general memory safety.
 
+Standard streams are `io.stdin()`, `io.stdout()` and `io.stderr()` from `std/io`
+(on Linux and WASI). Use them with `io.read`, `io.write_all`, or `std/bufio` for
+line-oriented input. They borrow the process descriptors; do not close them.
+`std/terminal` contains Linux terminal controls: raw mode, restoration, terminal
+size, attachment detection and key decoding. Existing callers should replace
+`terminal.stdin/stdout/stderr` with their `io` equivalents.
+
 ## Releases and mise
 
 Pushing an unused `vVERSION` tag runs compiler/package validation and native target
