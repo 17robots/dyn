@@ -1,8 +1,11 @@
-# Linux x86-64, glibc 2.39+; LLVM, Tree-sitter and LLD included.
+# Linux x64 (glibc 2.39+), Windows x64, macOS 15+ Apple Silicon.
 [tools."github:17robots/dyn"]
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 prerelease = true
-asset_pattern = 'dyn-{{ version }}-{{ os() }}-{{ arch(x64="x86_64", arm64="aarch64") }}-glibc2.39.tar.gz'
 strip_components = 1
 bin_path = "bin"
-checksum = "sha256:2a75fa3224ea6554fcc9216ee8de1c7e2bbc9591813ed953f9e179f0c073a6c8"
+
+[tools."github:17robots/dyn".platforms]
+linux-x64 = { asset_pattern = "dyn-0.1.0-preview.3-linux-x86_64-glibc2.39.tar.gz", checksum = "sha256:75d54c3b415a8cc4783f04b2100da6d33bca33110ed19f5ab0216f5da819896a" }
+macos-arm64 = { asset_pattern = "dyn-0.1.0-preview.3-macos-aarch64.tar.gz", checksum = "sha256:d8895c8797224970d3e8cce5c86622a3f8b7d7787927c95edfe8ddf69ef96cdb" }
+windows-x64 = { asset_pattern = "dyn-0.1.0-preview.3-windows-x86_64.zip", checksum = "sha256:9c6d98652f03ab36c0562cdd033bb8d4d98d984d9b27fce3e9c38c4065fad4d5" }
