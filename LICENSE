@@ -31,6 +31,11 @@ license; preserve third-party notices where their licenses require them.
 The application exception does not authorize distributing the Dyn compiler or
 toolchain, either independently or embedded as a compiler service/product.
 
+For bundled LGPL libraries, you may modify the combined work for your own use
+and reverse engineer it to debug those modifications, as required by the LGPL.
+You may replace those libraries with compatible modified versions. This limited
+permission does not authorize independent distribution of Dyn itself.
+
 3. Contributions
 
 You may modify the Software solely to prepare, test and submit contributions to

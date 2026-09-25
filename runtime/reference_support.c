@@ -1,6 +1,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef _WIN32
+/* MSVC-target floating-point code references this CRT marker. */
+int _fltused = 0;
+#endif
+
 typedef struct DynUnwind DynUnwind;
 struct DynUnwind { DynUnwind *previous; uintptr_t saved[15]; };
 typedef struct {
@@ -75,6 +80,13 @@ void *memset(void *destination, int value, size_t count) {
     bytes[i] = (unsigned char)value;
   return destination;
 }
+
+#ifdef __APPLE__
+/* LLVM lowers zero fills to bzero on Darwin even in freestanding programs. */
+void bzero(void *destination, size_t count) {
+  (void)memset(destination, 0, count);
+}
+#endif
 
 void *memcpy(void *destination, const void *source, size_t count) {
   unsigned char *to = destination;

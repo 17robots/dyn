@@ -5,7 +5,7 @@ Dyn's license does not replace third-party terms.
 ## Tree-sitter
 
 The generated parser/support headers use Tree-sitter material. The compiler also
-bundles the Tree-sitter runtime in Linux SDK archives. Upstream revision:
+bundles the Tree-sitter runtime in SDK archives. Linux upstream revision:
 `f2f197b6b27ce75c280c20f131d4f71e906b86f7` (v0.25.8).
 
 The MIT License (MIT)
@@ -46,6 +46,15 @@ license notices, full common license texts, and exact Ubuntu package versions.
 packages and build rules for the bundled GNU runtimes, plus the script used to
 adjust their ELF library search paths. The host supplies glibc
 and its matching dynamic loader; these are not bundled.
+
+Windows SDKs bundle MSYS2 CLANG64 LLVM/LLD, Tree-sitter and their non-system
+DLL dependencies. macOS SDKs bundle Homebrew LLVM/LLD, Tree-sitter and their
+non-system dylib dependencies. Their license files and package provenance are
+inside `share/dyn/licenses/`; `manifest.json` records bundled files and hashes.
+Windows system DLLs and macOS system libraries are supplied by the operating system.
+Windows libiconv corresponding source (upstream source, patches and MSYS2 build
+recipe) is included in `share/dyn/sources/`. Compatible rebuilt DLLs can replace
+the bundled copy.
 
 Native providers remain separately installed and subject to their own licenses.
 Provider source revisions are recorded in the repository manifests.

@@ -19,6 +19,7 @@
 #include <io.h>
 #define DYN_PATH_SEPARATOR ';'
 #define DYN_HOST_TARGET "x86_64-windows"
+#define DYN_WINDOWS_LINKER "ld.lld.exe"
 static inline void dyn_host_slashes(char *path) {
   for (; *path; ++path) if (*path == '\\') *path = '/';
 }
@@ -124,6 +125,7 @@ static inline int dyn_host_setenv(const char *key, const char *value, int overwr
 #else
 #include <sys/wait.h>
 #define DYN_PATH_SEPARATOR ':'
+#define DYN_WINDOWS_LINKER "ld"
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
@@ -131,11 +133,16 @@ static inline int dyn_host_setenv(const char *key, const char *value, int overwr
 #define st_ctim st_ctimespec
 #endif
 #define DYN_HOST_TARGET "aarch64-macos"
+#define DYN_DARWIN_LINKER "ld64.lld"
 #elif defined(__aarch64__)
 #define DYN_HOST_TARGET "aarch64-linux"
 #else
 #define DYN_HOST_TARGET "x86_64-linux"
 #endif
+#endif
+
+#ifndef DYN_DARWIN_LINKER
+#define DYN_DARWIN_LINKER "zig"
 #endif
 
 static inline ssize_t dyn_host_executable(char *out, size_t size) {

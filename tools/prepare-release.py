@@ -14,12 +14,13 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def prepare(version, evidence, native, output):
+def prepare(version, evidence, native, output, hosts):
     if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', version):
         raise ValueError('Invalid release version')
     # Refuse reuse: a failed invocation cannot leave an older publishable bundle.
     output.mkdir(parents=True, exist_ok=False)
     try:
+        public = output/'public'; public.mkdir()
         report = json.loads((evidence/'release-check/report.json').read_text())
         package = json.loads((evidence/'dist/package-validation.json').read_text())
         if report['status'] != 'passed' or not report['stages'] or any(s['status'] != 'passed' for s in report['stages']):
@@ -44,7 +45,7 @@ def prepare(version, evidence, native, output):
             if sha(source) != expected:
                 raise ValueError('Artifact hash mismatch: '+name)
             target = name.replace('-linux-x86_64.tar.gz', '-linux-x86_64-glibc2.39.tar.gz') if name == sdk_name else name
-            shutil.copy2(source, output/target)
+            shutil.copy2(source, public/target)
         counts = {}
         for target, expected_count in [('windows',14), ('macos',14), ('aarch64',12)]:
             path = native/f'native-{target}.json'
@@ -53,40 +54,65 @@ def prepare(version, evidence, native, output):
             if result['target'] != target or result['status'] != 'passed' or len(probes) != expected_count or any(p['status'] != 'passed' for p in probes):
                 raise ValueError('Native evidence incomplete: '+target)
             counts[target] = len(probes)
-            shutil.copy2(path, output/path.name)
-        for source, name in [(evidence/'release-check/report.json','linux-release-qualification.json'),
-                             (evidence/'dist/package-validation.json','sdk-qualification.json'),
-                             (ROOT/'LICENSE','LICENSE.txt'),
-                             (ROOT/'THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md')]:
-            shutil.copy2(source,output/name)
-        sdk = output/f'dyn-{version}-linux-x86_64-glibc2.39.tar.gz'
-        config = f'''# Linux x86-64, glibc 2.39+; LLVM, Tree-sitter and LLD included.
-[tools."github:17robots/dyn"]
+
+        sdk = public/f'dyn-{version}-linux-x86_64-glibc2.39.tar.gz'
+        platforms = {'linux-x64': sdk}
+        for host, key, extension in [('macos-aarch64','macos-arm64','tar.gz'), ('windows-x86_64','windows-x64','zip')]:
+            qualification = json.loads((hosts/f'package-{host}.json').read_text())
+            name = f'dyn-{version}-{host}.{extension}'
+            if (qualification['status'] != 'passed' or qualification['version'] != version or
+                qualification['platform'] != host or qualification['archive'] != name or
+                qualification.get('mise') is not True or qualification.get('isolated_path') is not True):
+                raise ValueError('Host package qualification incomplete: '+host)
+            source = hosts/name
+            if sha(source) != qualification['sha256']:
+                raise ValueError('Host archive hash mismatch: '+host)
+            shutil.copy2(source,public/name)
+            platforms[key] = public/name
+        config = f'''[tools."github:17robots/dyn"]
 version = "{version}"
 prerelease = true
-asset_pattern = 'dyn-{{{{ version }}}}-{{{{ os() }}}}-{{{{ arch(x64="x86_64", arm64="aarch64") }}}}-glibc2.39.tar.gz'
 strip_components = 1
 bin_path = "bin"
-checksum = "sha256:{sha(sdk)}"
-'''
+
+[tools."github:17robots/dyn".platforms]
+'''+''.join(f'{key} = {{ asset_pattern = "{path.name}", checksum = "sha256:{sha(path)}" }}\n' for key,path in platforms.items())
         (output/'mise.toml').write_text(config)
+        checksums = ''.join(f'{sha(p)}  public/{p.name}\n' for p in sorted(public.iterdir()))
+        (output/'SHA256SUMS').write_text(checksums)
         notes = f'''# Dyn {version}
 
-Linux x86-64 SDK, built on Ubuntu 24.04 with LLVM 19.
-Standalone compiler regression and package validation passed. Native debug/release probes passed:
-Windows {counts['windows']}, macOS Apple Silicon {counts['macos']}, Linux ARM {counts['aarch64']}.
-These target tests do not provide Windows/macOS compiler executables.
+Download the archive for your system, extract it, and add its `bin` directory to PATH.
+The compiler, standard library, runtime and host linker are included.
 
-LLVM 19, LLD 19 and Tree-sitter 0.25.8 are bundled. Requires glibc 2.39+
-(e.g. Ubuntu 24.04 or current Arch Linux). Use the attached `mise.toml`
-with `mise install` and `mise exec -- dyn version`.
-See [installation instructions](https://github.com/17robots/dyn/blob/v{version}/README.md).
+| Download | Requirements |
+| --- | --- |
+| Linux x64 | glibc 2.39+ (Ubuntu 24.04 or current Arch) |
+| Windows x64 | Windows 10/11 or Server 2022; no MSYS2 installation needed |
+| macOS Apple Silicon | macOS 15+; no Homebrew or developer tools needed |
 
-Source-available under the attached Dyn license; commercial application development allowed.
-Compiler redistribution/modification restrictions apply. See LICENSE.txt for full terms.
+The runtime-sources archive is corresponding source for Linux's bundled GNU libraries;
+it is not needed to run Dyn. Licenses and dependency notices are inside each SDK.
+macOS binaries are ad-hoc signed, not notarized. Optional native providers remain external.
+
+To install with mise, copy the configuration below into `mise.toml` (project) or
+`~/.config/mise/config.toml` (global), merging it with any existing configuration.
+Then run `mise install github:17robots/dyn` and `mise exec -- dyn version`.
+
+<details>
+<summary>Mise configuration and SHA-256 checksums</summary>
+
+```toml
+{config}```
+
+```text
+{checksums.replace('public/', '')}```
+</details>
+
+Compiler, native output, isolated SDK and mise checks passed before publication.
+CI reports are retained in Actions rather than added to release downloads.
 '''
         (output/'RELEASE-NOTES.md').write_text(notes)
-        (output/'SHA256SUMS').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in sorted(output.iterdir())))
     except BaseException:
         shutil.rmtree(output)
         raise
@@ -98,5 +124,6 @@ if __name__ == '__main__':
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--native', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--hosts', type=Path, required=True)
     args = parser.parse_args()
-    prepare(args.version, args.evidence, args.native, args.output)
+    prepare(args.version, args.evidence, args.native, args.output, args.hosts)

@@ -67,14 +67,19 @@ jobs:
           pattern: native-*-evidence
           path: native-evidence
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sdk-*
+          path: host-evidence
+          merge-multiple: true
       - name: Verify evidence and assemble release
         env:
           VERSION: ${{ needs.version.outputs.value }}
-        run: python3 tools/prepare-release.py --version "$VERSION" --evidence evidence --native native-evidence --output release
+        run: python3 tools/prepare-release.py --version "$VERSION" --evidence evidence --native native-evidence --hosts host-evidence --output release
       - name: Verify SDK on clean Ubuntu and Arch Linux
         env:
           VERSION: ${{ needs.version.outputs.value }}
-        run: bash tests/package-container.sh "release/dyn-$VERSION-linux-x86_64-glibc2.39.tar.gz" "$VERSION"
+        run: bash tests/package-container.sh "release/public/dyn-$VERSION-linux-x86_64-glibc2.39.tar.gz" "$VERSION"
       - uses: jdx/mise-action@v4
         with:
           version: '2026.9.9'
@@ -83,7 +88,7 @@ jobs:
       - name: Verify mise installation before publication
         env:
           VERSION: ${{ needs.version.outputs.value }}
-        run: python3 tests/mise-package.py "release/dyn-$VERSION-linux-x86_64-glibc2.39.tar.gz" --version "$VERSION"
+        run: python3 tests/mise-package.py "release/public/dyn-$VERSION-linux-x86_64-glibc2.39.tar.gz" --version "$VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets
@@ -112,4 +117,4 @@ jobs:
           sha256sum --check SHA256SUMS
           flags=()
           if [[ "$TAG" == *-* ]]; then flags+=(--prerelease --latest=false); fi
-          gh release create "$TAG" --verify-tag --title "Dyn $TAG" --notes-file RELEASE-NOTES.md "${flags[@]}" ./*
+          gh release create "$TAG" --verify-tag --title "Dyn $TAG" --notes-file RELEASE-NOTES.md "${flags[@]}" public/*

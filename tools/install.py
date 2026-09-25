@@ -20,13 +20,16 @@ else:
                 'dyn-sandbox': COMPILER/'tools/dyn-sandbox.py', 'dyn-browser-ffmpeg': COMPILER/'tools/setup-browser-ffmpeg.py',
                 'dyn-bind': COMPILER/'tools/dyn-bind.py', 'dyn-build-vendors': COMPILER/'tools/build-vendors.py',
                 'dyn-bind-vendors': COMPILER/'tools/bind-vendors.py', 'dyn-raw-bind': COMPILER/'tools/vendor-bindings.py'}
+    host_only = '--host' in sys.argv
+    if host_only:
+        programs = {'dyn.exe' if os.name == 'nt' else 'dyn': BUILD/('dyn-release.exe' if os.name == 'nt' else 'dyn-release')}
     for name, source in programs.items():
         destination = prefix/'bin'/name
         shutil.copyfile(source, destination)
         destination.chmod(0o755)
     # Use the build manifest's runtime list rather than a glob that could package stale objects.
-    from build import ALL
-    for name in ALL:
+    from build import ALL, HOST
+    for name in (HOST if host_only else ALL):
         if name.startswith('dynrt_'):
             destination = prefix/'lib/dyn'/name
             shutil.copyfile(BUILD/name, destination)
