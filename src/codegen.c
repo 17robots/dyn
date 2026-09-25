@@ -2630,11 +2630,16 @@ int dyn_link_executable_objects(const DynContext *context,
   bool windows = !strcmp(dyn_context_target(context)->kernel, "windows");
   bool darwin = !strcmp(dyn_context_target(context)->kernel, "darwin");
   bool thin = release && object_count && strstr(object_paths[0], ".bc");
-  const char *linker = darwin ? "zig" : windows ? "ld" : "ld.lld";
+  const char *linker = darwin ? DYN_DARWIN_LINKER : windows ? DYN_WINDOWS_LINKER : "ld.lld";
   if (verbose) {
     fprintf(
         stderr, "+ %s %s -o %s %s %s", linker,
-        darwin ? "cc --target=aarch64-macos-none -nostdlib -Wl,-e,_dyn_start"
+        darwin ?
+#ifdef __APPLE__
+          "-arch arm64 -platform_version macos 15.0 15.0 -e _dyn_start"
+#else
+          "cc --target=aarch64-macos-none -nostdlib -Wl,-e,_dyn_start"
+#endif
         : windows
             ? "-mi386pep --gc-sections --entry=dyn_start --subsystem console"
             : "--gc-sections",
@@ -2655,10 +2660,18 @@ int dyn_link_executable_objects(const DynContext *context,
   size_t argument_count = 0;
   arguments[argument_count++] = (char *)linker;
   if (darwin) {
+#ifdef __APPLE__
+    arguments[argument_count++] = "-arch"; arguments[argument_count++] = "arm64";
+    arguments[argument_count++] = "-platform_version";
+    arguments[argument_count++] = "macos";
+    arguments[argument_count++] = "15.0"; arguments[argument_count++] = "15.0";
+    arguments[argument_count++] = "-e"; arguments[argument_count++] = "_dyn_start";
+#else
     arguments[argument_count++] = "cc";
     arguments[argument_count++] = "--target=aarch64-macos-none";
     arguments[argument_count++] = "-nostdlib";
     arguments[argument_count++] = "-Wl,-e,_dyn_start";
+#endif
   } else if (windows) {
     arguments[argument_count++] = "-mi386pep";
     arguments[argument_count++] = "--gc-sections";
@@ -2828,10 +2841,15 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
   if (verbose) {
-    fprintf(stderr, "+ %s -shared -o %s %s %s %s",
-            darwin    ? "zig cc --target=aarch64-macos-none"
-            : windows ? "ld -mi386pep"
-                      : "ld.lld",
+    fprintf(stderr, "+ %s -o %s %s %s %s",
+            darwin ?
+#ifdef __APPLE__
+                "ld64.lld -arch arm64 -platform_version macos 15.0 15.0 -dylib"
+#else
+                "zig cc --target=aarch64-macos-none -dynamiclib -nostdlib"
+#endif
+            : windows ? DYN_WINDOWS_LINKER " -mi386pep -shared"
+                      : "ld.lld -shared",
             temporary, assembly, support, object_path);
     for (size_t i = 0; i < link_input_count; ++i)
       fprintf(stderr, " %s", link_inputs[i]);
@@ -2841,12 +2859,19 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
   if (!arguments)
     return 2;
   size_t count = 0;
-  arguments[count++] = darwin ? "zig" : windows ? "ld" : "ld.lld";
+  arguments[count++] = darwin ? DYN_DARWIN_LINKER : windows ? DYN_WINDOWS_LINKER : "ld.lld";
   if (darwin) {
+#ifdef __APPLE__
+    arguments[count++] = "-arch"; arguments[count++] = "arm64";
+    arguments[count++] = "-platform_version"; arguments[count++] = "macos";
+    arguments[count++] = "15.0"; arguments[count++] = "15.0";
+    arguments[count++] = "-dylib";
+#else
     arguments[count++] = "cc";
     arguments[count++] = "--target=aarch64-macos-none";
     arguments[count++] = "-dynamiclib";
     arguments[count++] = "-nostdlib";
+#endif
   } else {
     if (windows)
       arguments[count++] = "-mi386pep";
@@ -2885,8 +2910,8 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
     if (status == 127)
       fprintf(stderr, "error: target '%s' requires %s in PATH\n",
               dyn_context_target(context)->name,
-              darwin    ? "zig"
-              : windows ? "ld"
+              darwin    ? DYN_DARWIN_LINKER
+              : windows ? DYN_WINDOWS_LINKER
                         : "ld.lld");
     else
       fprintf(stderr, "error: linker failed\n");

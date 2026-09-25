@@ -682,12 +682,17 @@ static bool configure_sdk_linkers(void) {
       (int)sizeof(directory) || access(directory, X_OK))
     return true;
   const char *previous = getenv("PATH");
-  size_t size = strlen(directory) + (previous ? strlen(previous) : 0) + 2;
+  size_t size = strlen(directory) + strlen(executable) + (previous ? strlen(previous) : 0) + 3;
   char *path = malloc(size);
   if (!path)
     return false;
+#ifdef _WIN32
+  /* DLLs live beside dyn.exe; private linker processes must find them too. */
+  snprintf(path, size, "%s;%s;%s", directory, executable, previous ? previous : "");
+#else
   snprintf(path, size, "%s%s%s", directory, previous ? (DYN_PATH_SEPARATOR == ';' ? ";" : ":") : "",
            previous ? previous : "");
+#endif
   int result = setenv("PATH", path, 1);
   free(path);
   return result == 0;
