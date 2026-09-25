@@ -64,10 +64,19 @@ checksums, reports, license and a pinned `mise.toml`. Suffix versions such as
 `DYN_VERSION` embeds the release version; normal builds default to `0.1.0-dev`.
 Do not move published tags or replace released assets.
 
-Copy `mise.example.toml` into your project's `mise.toml`, then run `mise trust`,
-`mise install`, and `mise exec -- dyn version`. The example pins the existing
-`0.1.0-preview.1` release, whose binary reports `0.1.0-dev`. Future releases attach
-their own config/checksum. This uses mise's GitHub backend, not a custom plugin.
+Copy `mise.example.toml` into your project's `mise.toml` (or merge its tool entry
+into an existing config), then run:
+
+```sh
+mise trust
+mise install
+mise exec -- dyn version
+```
+
+The example pins `0.1.0-preview.2` with its archive checksum. For installation
+across projects, add the same tool entry to `~/.config/mise/config.toml` and run
+`mise install github:17robots/dyn`. Each release also attaches its own pinned
+`mise.toml`. This uses mise's GitHub backend, not a custom plugin.
 Starting with preview 2, Linux x86-64 SDKs bundle LLVM 19, Tree-sitter 0.25.8,
 LLD and their non-glibc dependencies. They require glibc 2.39 or newer (Ubuntu
 24.04 and current Arch Linux); Alpine/musl and older glibc are not supported.
