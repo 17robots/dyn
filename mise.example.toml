@@ -1,11 +1,11 @@
 # Linux x64 (glibc 2.39+), Windows x64, macOS 15+ Apple Silicon.
 [tools."github:17robots/dyn"]
-version = "0.1.0-preview.4"
+version = "0.1.0-preview.5"
 prerelease = true
 strip_components = 1
 bin_path = "bin"
 
 [tools."github:17robots/dyn".platforms]
-linux-x64 = { asset_pattern = "dyn-0.1.0-preview.4-linux-x86_64-glibc2.39.tar.gz", checksum = "sha256:934c2f14ffd8c54fd4cc453c055d7eec1c4d747806020f037fd061ebca3c487a" }
-macos-arm64 = { asset_pattern = "dyn-0.1.0-preview.4-macos-aarch64.tar.gz", checksum = "sha256:d095e0e560c6c913e60e636ba7c6e13729f6aa9f1d32d4e61f4fefd2c6cf5d66" }
-windows-x64 = { asset_pattern = "dyn-0.1.0-preview.4-windows-x86_64.zip", checksum = "sha256:1dca04ce9d29eaef5080752d73120392599001fd002dd2c53f855463507025de" }
+linux-x64 = { asset_pattern = "dyn-0.1.0-preview.5-linux-x86_64-glibc2.39.tar.gz", checksum = "sha256:29047e473b53239a90e8ebd75bd716bf2e305d98982bbd8f3c662d1ae6d76090" }
+macos-arm64 = { asset_pattern = "dyn-0.1.0-preview.5-macos-aarch64.tar.gz", checksum = "sha256:e45bb3bdd640cebbf1d2a1ac753be24b17d73c5d6ce6fc2071a8bede8efb81a6" }
+windows-x64 = { asset_pattern = "dyn-0.1.0-preview.5-windows-x86_64.zip", checksum = "sha256:7e322c5b55f37d021bd9504a0e50d8036b0b2557e5d5894cb4f2e63b731b5923" }
