@@ -978,6 +978,14 @@ static size_t lsp_semantic_origins(LspSemantic *semantic, DynSpan target,
   return count;
 }
 
+static void lsp_navigation_allocation_error(long id) {
+  char response[160];
+  lsp_bounded_printf(response, sizeof(response),
+      "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"error\":{\"code\":-32603,"
+      "\"message\":\"navigation allocation failed\"}}", id);
+  lsp_send(response);
+}
+
 void lsp_document_highlight(long id, LspDocument *documents, size_t count,
                             LspDocument *document, size_t line,
                             size_t character) {
@@ -998,7 +1006,12 @@ void lsp_document_highlight(long id, LspDocument *documents, size_t count,
       lsp_semantic_offset(&semantic, document, line, character, &offset) &&
       lsp_typed_symbol(&semantic, offset, hover, sizeof(hover), &target) &&
       target.end_byte > target.start_byte) {
-    LspOrigin origins[4096];
+    LspOrigin *origins = malloc(4096 * sizeof(*origins));
+    if (!origins) {
+      lsp_navigation_allocation_error(id);
+      lsp_semantic_free(&semantic);
+      return;
+    }
     size_t found = lsp_semantic_origins(&semantic, target, origins, 4096);
     for (size_t i = 0; i < found; ++i) {
       LspOrigin *origin = &origins[i];
@@ -1012,6 +1025,7 @@ void lsp_document_highlight(long id, LspDocument *documents, size_t count,
           origin->column + origin->length);
       comma = true;
     }
+    free(origins);
   }
   lsp_bounded_printf(body + at, sizeof(body) - at, "]}");
   lsp_send(body);
@@ -1030,7 +1044,12 @@ void lsp_semantic_references(long id, LspSemantic *semantic,
   at = (size_t)lsp_bounded_printf(
       body, capacity, "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[", id);
   bool comma = false;
-  LspOrigin origins[4096];
+  LspOrigin *origins = malloc(4096 * sizeof(*origins));
+  if (!origins) {
+    lsp_navigation_allocation_error(id);
+    free(body);
+    return;
+  }
   size_t origin_count = lsp_semantic_origins(semantic, target, origins, 4096);
   for (size_t i = 0; i < origin_count; ++i) {
     char *uri = json_escape(origins[i].uri, strlen(origins[i].uri));
@@ -1047,6 +1066,7 @@ void lsp_semantic_references(long id, LspSemantic *semantic,
   }
   lsp_bounded_printf(body + at, capacity - at, "]}");
   lsp_send(body);
+  free(origins);
   free(body);
 }
 
@@ -1062,7 +1082,12 @@ void lsp_semantic_rename(long id, LspSemantic *semantic, LspDocument *documents,
   at = (size_t)lsp_bounded_printf(
       body, capacity,
       "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":{\"changes\":{", id);
-  LspOrigin origins[4096];
+  LspOrigin *origins = malloc(4096 * sizeof(*origins));
+  if (!origins) {
+    lsp_navigation_allocation_error(id);
+    free(body);
+    return;
+  }
   size_t origin_count = lsp_semantic_origins(semantic, target, origins, 4096);
   bool document_comma = false;
   for (size_t d = 0; d < origin_count; ++d) {
@@ -1097,6 +1122,7 @@ void lsp_semantic_rename(long id, LspSemantic *semantic, LspDocument *documents,
   }
   lsp_bounded_printf(body + at, capacity - at, "}}}");
   lsp_send(body);
+  free(origins);
   free(body);
 }
 
