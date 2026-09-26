@@ -43,6 +43,7 @@ jobs:
           python3 tools/fetch-grammar.py
           python3 tools/build.py host
           python3 tests/compiler-host.py
+          python3 tests/lsp-navigation.py
           python3 tests/standard-streams.py --host-only
           python3 tests/stdlib-host.py
           python3 tools/package-host-sdk.py
@@ -90,6 +91,7 @@ jobs:
           python tools/fetch-grammar.py
           python tools/build.py host
           python tests/compiler-host.py
+          python tests/lsp-navigation.py
           python tests/standard-streams.py --host-only
           python tests/stdlib-host.py
           python tools/package-host-sdk.py

@@ -26,6 +26,10 @@ jobs:
       - uses: ./.github/actions/setup-compiler
       - run: just release-check
       - run: python3 tests/compiler-host.py
+      - name: Exercise editor navigation with a small stack
+        run: |
+          ulimit -s 1024
+          python3 tests/lsp-navigation.py
       - name: SDK without system LLVM or Tree-sitter
         run: bash tests/package-container.sh "build/dist/dyn-$DYN_VERSION-linux-x86_64.tar.gz" "$DYN_VERSION"
       - name: Compiler contracts under sanitizers
