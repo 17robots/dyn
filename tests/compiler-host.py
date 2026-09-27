@@ -58,6 +58,10 @@ try:
         report['checks'].append('invalid source rejected')
         run(sys.executable, ROOT/'tests/panic-lifetime.py', env=dict(env, DYN=str(DYN)))
         report['checks'].append('owned and bounded panic messages through local/caller cleanup')
+        run(sys.executable, ROOT/'tests/shared-host.py', env=dict(env, DYN=str(DYN)))
+        report['checks'].append('debug/release shared library loading and C callbacks')
+        run(sys.executable, ROOT/'tests/process-directory.py', env=dict(env, DYN=str(DYN)))
+        report['checks'].append('child working directories and process ownership transfer')
         messages = [dict(jsonrpc='2.0',id=1,method='initialize',params={}),
                     dict(jsonrpc='2.0',id=2,method='shutdown',params=None),
                     dict(jsonrpc='2.0',method='exit',params=None)]

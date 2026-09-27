@@ -4,8 +4,8 @@ use "std/bytes" bytes
 
 // Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
 // Arguments include argv[0]. Environment is explicit NAME=value entries; empty
-// means an empty child environment. No shell parsing or PATH search is performed.
-pub struct Options { input: isize, output: isize, error: isize, environment: [][]const u8 }
+// means an empty child environment. Empty directory inherits the parent directory. No shell parsing or PATH search is performed.
+pub struct Options { input: isize, output: isize, error: isize, environment: [][]const u8, directory: []const u8 }
 pub fn options() Options { return Options{ input: -1, output: -1, error: -1 } }
 pub struct Child { handle: isize, active: bool }
 pub struct SpawnResult { child: Child, error: isize, kind: error_kinds.Kind, ok: bool }
@@ -20,6 +20,7 @@ struct ReadResult { count: usize, ended: bool, error: isize, kind: error_kinds.K
 pub fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
   if #len(path) == 0 || #len(arguments) == 0 { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } }
   for byte in path { if byte == 0 { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } } }
+  for directory_byte in configuration.directory { if directory_byte == 0 { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } } }
   for argument in arguments { for argument_byte in argument { if argument_byte == 0 { return SpawnResult{ error: -22, kind: error_kinds.Kind.InvalidInput } } } }
   for entry in configuration.environment {
     equal: bool = false at: usize = 0
@@ -32,6 +33,8 @@ pub fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, confi
   }
   return spawn_native(arena,path,arguments,configuration)
 }
+// Transfer the owned child handle. Copies are aliases, not independent owners.
+pub fn take(child: *Child) Child { result := child.* child.* = Child{} return result }
 pub fn wait(child: *Child, nonblocking: bool) ExitResult {
   if !child.active { return ExitResult{ error: -22, kind: error_kinds.Kind.InvalidState } }
   return wait_native(child,nonblocking)

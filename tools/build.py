@@ -69,7 +69,7 @@ add('dynrt_aarch64_support_pic.o', [f'{COMPILER}/runtime/reference_support.c'],
     [*clang, '--target=aarch64-linux-gnu', '-DDYN_AARCH64', '-O2', '-fPIC', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_aarch64_support_pic.o'])
 
 add('dynrt_shared.o', [f'{COMPILER}/runtime/linux_x86_64_start.S'],
-    [*cc, '-DDYN_SHARED', '-DDYN_RELEASE', '-fPIC', '-c', f'{COMPILER}/runtime/linux_x86_64_start.S', '-o', f'{BUILD}/dynrt_shared.o'])
+    [*cc, '-DDYN_SHARED', '-fPIC', '-c', f'{COMPILER}/runtime/linux_x86_64_start.S', '-o', f'{BUILD}/dynrt_shared.o'])
 
 add('dynrt_aarch64_shared.o', [f'{COMPILER}/runtime/linux_aarch64_start.S'],
     [*clang, '--target=aarch64-linux-gnu', '-DDYN_SHARED', '-DDYN_RELEASE', '-fPIC', '-c', f'{COMPILER}/runtime/linux_aarch64_start.S', '-o', f'{BUILD}/dynrt_aarch64_shared.o'])
@@ -186,8 +186,8 @@ ALL = ['dynrt_wasi_start.o', 'dynrt_wasi_support.o', 'dynrt_wasm.o', 'dyn', 'dyn
 HOST = ['dyn-release'] + (
     ['dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_windows_shared.o'] if sys.platform == 'win32' else
     ['dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_macos_shared.o'] if sys.platform == 'darwin' else
-    ['dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o'] if platform.machine() == 'aarch64' else
-    ['dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o'])
+    ['dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_support_pic.o'] if platform.machine() == 'aarch64' else
+    ['dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o', 'dynrt_shared.o', 'dynrt_support_pic.o'])
 if sys.platform == 'win32':
     for name, (inputs, command) in artifacts.items():
         if name.startswith('dyn') and not name.endswith('.o'):

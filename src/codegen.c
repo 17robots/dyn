@@ -633,8 +633,13 @@ static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
   LLVMPositionBuilderAtEnd(g->builder, bad);
   if (!g->unwinding)
     emit_defers(g, 0);
-  emit_panic(g, LLVMConstNull(LLVMPointerTypeInContext(g->context, 0)),
-             LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0));
+  size_t function_length = 0;
+  const char *function_name = LLVMGetValueName2(g->function, &function_length);
+  char message[1024];
+  snprintf(message, sizeof(message), "runtime check failed (%s) in %.*s", name,
+           (int)(function_length > 800 ? 800 : function_length), function_name);
+  emit_panic(g, LLVMBuildGlobalStringPtr(g->builder, message, ".dyn.guard.message"),
+             LLVMConstInt(LLVMInt64TypeInContext(g->context), strlen(message), 0));
   LLVMBuildUnreachable(g->builder);
   LLVMPositionBuilderAtEnd(g->builder, ok);
   return condition;
@@ -2376,6 +2381,69 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     LLVMPositionBuilderAtEnd(g.builder, done_init);
     LLVMBuildRetVoid(g.builder);
   }
+  if (shared && !g.wasm) {
+    bool windows_dll = !strcmp(dyn_context_target(&source->context)->kernel, "windows");
+    LLVMValueRef initialize;
+    if (windows_dll) {
+      if (LLVMGetNamedFunction(g.module, "DllMainCRTStartup")) {
+        fprintf(stderr, "error: shared Windows modules reserve DllMainCRTStartup\n");
+        failed = 1;
+        goto cleanup;
+      }
+      LLVMTypeRef parameters[] = {LLVMPointerTypeInContext(g.context, 0),
+                                 LLVMInt32TypeInContext(g.context),
+                                 LLVMPointerTypeInContext(g.context, 0)};
+      LLVMTypeRef entry_type = LLVMFunctionType(LLVMInt32TypeInContext(g.context),
+                                                parameters, 3, false);
+      initialize = LLVMAddFunction(g.module, "DllMainCRTStartup", entry_type);
+      LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(g.context, initialize, "entry"),
+                       attach = LLVMAppendBasicBlockInContext(g.context, initialize, "attach"),
+                       done_attach = LLVMAppendBasicBlockInContext(g.context, initialize, "done");
+      LLVMPositionBuilderAtEnd(g.builder, entry);
+      LLVMValueRef process_attach = LLVMBuildICmp(g.builder, 32,
+          LLVMGetParam(initialize, 1), LLVMConstInt(LLVMInt32TypeInContext(g.context), 1, false), "process.attach");
+      LLVMBuildCondBr(g.builder, process_attach, attach, done_attach);
+      LLVMPositionBuilderAtEnd(g.builder, attach);
+      for (size_t q = 0; q < init_function_count; ++q)
+        LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
+      LLVMBuildBr(g.builder, done_attach);
+      LLVMPositionBuilderAtEnd(g.builder, done_attach);
+      LLVMBuildRet(g.builder, LLVMConstInt(LLVMInt32TypeInContext(g.context), 1, false));
+    } else if (init_function_count) {
+      initialize = LLVMAddFunction(g.module, "__dyn_shared_initialize", g.init_type);
+      LLVMSetLinkage(initialize, LLVMInternalLinkage);
+      LLVMPositionBuilderAtEnd(g.builder,
+          LLVMAppendBasicBlockInContext(g.context, initialize, "entry"));
+      for (size_t q = 0; q < init_function_count; ++q)
+        LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
+      LLVMBuildRetVoid(g.builder);
+      if (!strcmp(dyn_context_target(&source->context)->kernel, "linux")) {
+        /* The freestanding LLVM target defaults to legacy .ctors, which has
+           no CRT walker here. Register directly with the ELF loader instead. */
+        LLVMValueRef constructor = LLVMAddGlobal(g.module, LLVMTypeOf(initialize),
+                                                 "__dyn_shared_constructor");
+        LLVMSetLinkage(constructor, LLVMInternalLinkage);
+        LLVMSetInitializer(constructor, initialize);
+        LLVMSetSection(constructor, ".init_array");
+        LLVMSetAlignment(constructor, 8);
+        LLVMValueRef retained = LLVMAddGlobal(g.module,
+            LLVMArrayType2(LLVMTypeOf(constructor), 1), "llvm.used");
+        LLVMSetLinkage(retained, 7); /* LLVMAppendingLinkage */
+        LLVMSetSection(retained, "llvm.metadata");
+        LLVMSetInitializer(retained, LLVMConstArray2(LLVMTypeOf(constructor), &constructor, 1));
+      } else {
+        LLVMValueRef fields[] = {LLVMConstInt(LLVMInt32TypeInContext(g.context), 65535, false),
+                                initialize, LLVMConstNull(LLVMPointerTypeInContext(g.context, 0))};
+        LLVMTypeRef field_types[] = {LLVMTypeOf(fields[0]), LLVMTypeOf(fields[1]), LLVMTypeOf(fields[2])};
+        LLVMValueRef constructor = LLVMConstNamedStruct(
+            LLVMStructTypeInContext(g.context, field_types, 3, false), fields, 3);
+        LLVMValueRef constructors = LLVMAddGlobal(g.module,
+            LLVMArrayType2(LLVMTypeOf(constructor), 1), "llvm.global_ctors");
+        LLVMSetLinkage(constructors, 7); /* LLVMAppendingLinkage */
+        LLVMSetInitializer(constructors, LLVMConstArray2(LLVMTypeOf(constructor), &constructor, 1));
+      }
+    }
+  }
   bool has_init = init_function_count != 0;
   for (uint32_t i = 0; i < ir.function_count; ++i) {
     DynIrFunction *fn = &ir.functions[i];
@@ -2431,7 +2499,7 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     }
     if (fn->is_main && g.wasm)
       LLVMBuildCall2(g.builder, g.init_type, g.init_fn, NULL, 0, "");
-    else if (fn->is_main && has_init)
+    else if (fn->is_main && has_init && !shared)
       for (size_t q = 0; q < init_function_count; ++q)
         LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
     for (uint32_t j = 0; j < fn->local_count; ++j) {
