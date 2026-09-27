@@ -7,6 +7,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release')
@@ -55,6 +56,8 @@ try:
         result = run(DYN, 'check', project, success=False, env=env)
         assert result.returncode == 1 and result.stderr.strip(), result.stderr
         report['checks'].append('invalid source rejected')
+        run(sys.executable, ROOT/'tests/panic-lifetime.py', env=dict(env, DYN=str(DYN)))
+        report['checks'].append('owned and bounded panic messages through local/caller cleanup')
         messages = [dict(jsonrpc='2.0',id=1,method='initialize',params={}),
                     dict(jsonrpc='2.0',id=2,method='shutdown',params=None),
                     dict(jsonrpc='2.0',method='exit',params=None)]

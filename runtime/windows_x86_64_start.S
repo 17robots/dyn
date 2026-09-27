@@ -11,8 +11,46 @@ dyn_start:
 
 .global dyn_panic
 dyn_panic:
-    subq $40, %rsp
+    subq $88, %rsp
+    movq %rcx, 48(%rsp)
+    movq %rdx, 56(%rsp)
     callq dyn_unwind_begin
+    movl $-12, %ecx
+    callq *__imp_GetStdHandle(%rip)
+    movq %rax, 64(%rsp)
+    cmpq $0, 48(%rsp)
+    je .Lpanic_exit
+.Lpanic_write:
+    cmpq $0, 56(%rsp)
+    je .Lpanic_newline
+    movq 64(%rsp), %rcx
+    movq 48(%rsp), %rdx
+    movq 56(%rsp), %r8
+    movl $0x7fffffff, %eax
+    cmpq %rax, %r8
+    cmovaq %rax, %r8
+    leaq 72(%rsp), %r9
+    movq $0, 32(%rsp)
+    callq *__imp_WriteFile(%rip)
+    testl %eax, %eax
+    jz .Lpanic_exit
+    movl 72(%rsp), %eax
+    testl %eax, %eax
+    jz .Lpanic_exit
+    addq %rax, 48(%rsp)
+    subq %rax, 56(%rsp)
+    jmp .Lpanic_write
+.Lpanic_newline:
+    movb $10, 80(%rsp)
+    movq 64(%rsp), %rcx
+    leaq 80(%rsp), %rdx
+    movl $1, %r8d
+    leaq 72(%rsp), %r9
+    movq $0, 32(%rsp)
+    callq *__imp_WriteFile(%rip)
+.Lpanic_exit:
+    movl $101, %ecx
+    callq *__imp_ExitProcess(%rip)
     ud2
 
 .global dyn_unwind_set
