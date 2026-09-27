@@ -205,6 +205,7 @@ dyn_trace_pop:
 .Ldyn_trace_slot_claimed:
     mov %rdx, %rax
     ret
+.hidden dyn_trace_slots
 .comm dyn_trace_slots,66560,16
 #endif
 .section .text.dyn_syscall6,"ax",@progbits

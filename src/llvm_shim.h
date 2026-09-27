@@ -55,6 +55,7 @@ extern LLVMTypeRef LLVMPointerTypeInContext(LLVMContextRef, unsigned);
 extern LLVMTypeRef LLVMVectorType(LLVMTypeRef, unsigned);
 extern LLVMAttributeRef LLVMCreateTypeAttribute(LLVMContextRef, unsigned, LLVMTypeRef);
 extern void LLVMAddCallSiteAttribute(LLVMValueRef, unsigned, LLVMAttributeRef);
+extern void LLVMSetSection(LLVMValueRef, const char *);
 extern void LLVMSetAlignment(LLVMValueRef, unsigned);
 extern LLVMValueRef LLVMGetUndef(LLVMTypeRef);
 extern LLVMTypeRef LLVMArrayType2(LLVMTypeRef, unsigned long long);
