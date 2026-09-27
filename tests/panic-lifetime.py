@@ -7,6 +7,9 @@ import tempfile
 
 DYN = str(Path(os.environ.get('DYN', './build/dyn-release')).resolve())
 cases = {
+    'bounds': '''use "std/io"
+fn checked(index: usize) u8 { values: [1]u8 = [7] return values[index] }
+fn main() { defer { _ = io.println(io.stdout(), "cleanup") } _ = checked(2) }''',
     'direct': 'fn main() { #panic("owned panic message") }',
     'local': '''use "std/io"\nuse "std/mem"
 fn main() {
@@ -51,6 +54,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-panic-lifetime-') as temporary:
     for name, source in cases.items():
         (root / 'main.dyn').write_text(source, encoding='utf-8')
         for mode in ('debug', 'release'):
+            if name == 'bounds' and mode == 'release':
+                continue
             output = root / ('program.exe' if os.name == 'nt' else 'program')
             built = subprocess.run([DYN, 'build', str(root), '--'+mode, '--no-cache',
                                     '--jobs', '1', '--output', str(output)], capture_output=True, text=True, encoding='utf-8', timeout=30)
@@ -59,7 +64,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-panic-lifetime-') as temporary:
             assert result.returncode == 101, (name, mode, result.returncode, result.stderr)
             if name != 'direct':
                 assert 'cleanup' in result.stdout, (name, mode, result.stdout)
-            if name == 'bounded':
+            if name == 'bounds':
+                assert 'runtime check failed (index.ok) in checked' in result.stderr, result.stderr
+            elif name == 'bounded':
                 first = result.stderr.splitlines()[0]
                 assert len(first) == 4096 and first.endswith(' [truncated]'), (name, mode, len(first))
             elif name == 'unicode-bound':

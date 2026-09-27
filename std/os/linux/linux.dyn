@@ -58,7 +58,7 @@ pub fn yield_thread() { _ = #syscall(24) }
 pub struct PipeResult { input: isize, output: isize, error: isize, ok: bool }
 pub struct WaitResult { process: isize, status: i32, error: isize, ok: bool }
 pub struct SpawnResult { process: isize, error: isize, ok: bool }
-pub struct SpawnOptions { input: isize, output: isize, error: isize }
+pub struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }
 struct CStringPointer { value: *u8 }
 
 pub fn pipe() PipeResult {
@@ -121,6 +121,12 @@ pub fn spawn_environment(
   for argument in arguments { for argument_byte in argument { if argument_byte == 0 { return SpawnResult{ error: -22 } } } }
   path_raw := terminate(arena, path)
   if path_raw == nil { return SpawnResult{ error: -28 } }
+  directory_raw: *const u8 = nil
+  if #len(options.directory) > 0 {
+    for directory_byte in options.directory { if directory_byte == 0 { return SpawnResult{ error: -22 } } }
+    directory_raw = terminate(arena, options.directory)
+    if directory_raw == nil { return SpawnResult{ error: -28 } }
+  }
   count := #len(arguments)
   allocation := memory.arena_try_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
   if !allocation.ok { return SpawnResult{ error: -28 } }
@@ -173,6 +179,7 @@ pub fn spawn_environment(
     if redirected_sources[0] >= 0 { redirected := duplicate_to(redirected_sources[0], 0) if !redirected.ok { failure = redirected.error } }
     if failure == 0 && redirected_sources[1] >= 0 { redirected_out := duplicate_to(redirected_sources[1], 1) if !redirected_out.ok { failure = redirected_out.error } }
     if failure == 0 && redirected_sources[2] >= 0 { redirected_error := duplicate_to(redirected_sources[2], 2) if !redirected_error.ok { failure = redirected_error.error } }
+    if failure == 0 && directory_raw != nil { failure = #syscall(80, directory_raw) }
     if failure == 0 { failure = #syscall(59, path_raw, &pointers[0], &environment_pointers[0]) }
     _ = #syscall(1, output, &failure, #sizeof(isize))
     exit_process(127)

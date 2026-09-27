@@ -2,6 +2,7 @@
 #link("System")
 // Native Darwin adapter. libSystem handles OS calls; buffers use the caller arena.
 use "std/c" c
+extern fn native_chdir "chdir"(path: *const u8) i32
 extern fn native_fork "fork"() i32
 extern fn native_pipe "pipe"(descriptors: *i32) i32
 // Darwin arm64 passes variadic arguments on the stack, not as fixed parameters.
@@ -41,6 +42,11 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   mark := mem.arena_mark(arena) defer mem.arena_rewind(arena,mark)
   executable := c_string(arena,path) argv := c_vector(arena,arguments) env := c_vector(arena,configuration.environment)
   if executable == nil || argv == nil || env == nil { return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity } }
+  directory: *const u8 = nil
+  if #len(configuration.directory) > 0 {
+    directory = c_string(arena, configuration.directory)
+    if directory == nil { return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity } }
+  }
   sources: [3]isize = [configuration.input,configuration.output,configuration.error]
   copies: [3]i32 = [-1,-1,-1]
   defer { for descriptor in copies { if descriptor >= 0 { _ = native_close(descriptor) } } }
@@ -63,6 +69,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     if copies[0] >= 0 && native_dup(copies[0],0) < 0 { failed = true }
     if !failed && copies[1] >= 0 && native_dup(copies[1],1) < 0 { failed = true }
     if !failed && copies[2] >= 0 && native_dup(copies[2],2) < 0 { failed = true }
+    if !failed && directory != nil && native_chdir(directory) < 0 { failed = true }
     if !failed { _ = native_exec(executable,#cast(rawptr) argv,#cast(rawptr) env) }
     error := mac_error() _ = native_write(writer,#cast(rawptr) &error,#sizeof(isize)) native_exit(127)
     #panic("exit returned")

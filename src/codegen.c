@@ -633,8 +633,13 @@ static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
   LLVMPositionBuilderAtEnd(g->builder, bad);
   if (!g->unwinding)
     emit_defers(g, 0);
-  emit_panic(g, LLVMConstNull(LLVMPointerTypeInContext(g->context, 0)),
-             LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0));
+  size_t function_length = 0;
+  const char *function_name = LLVMGetValueName2(g->function, &function_length);
+  char message[1024];
+  snprintf(message, sizeof(message), "runtime check failed (%s) in %.*s", name,
+           (int)(function_length > 800 ? 800 : function_length), function_name);
+  emit_panic(g, LLVMBuildGlobalStringPtr(g->builder, message, ".dyn.guard.message"),
+             LLVMConstInt(LLVMInt64TypeInContext(g->context), strlen(message), 0));
   LLVMBuildUnreachable(g->builder);
   LLVMPositionBuilderAtEnd(g->builder, ok);
   return condition;

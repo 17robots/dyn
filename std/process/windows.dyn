@@ -52,6 +52,12 @@ fn wide(arena: *mem.Arena, source: []const u8) Wide {
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
   mark := mem.arena_mark(arena) defer mem.arena_rewind(arena,mark)
   application := wide(arena,path) if !application.ok { return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity } }
+  directory: rawptr = nil
+  if #len(configuration.directory) > 0 {
+    converted_directory := wide(arena, configuration.directory)
+    if !converted_directory.ok { return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity } }
+    directory = #cast(rawptr) &converted_directory.data[0]
+  }
   capacity: usize = 1
   for argument in arguments {
     if #len(argument) > 16380 || capacity > 32767 - (#len(argument)*2+3) { return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity } }
@@ -86,7 +92,8 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   environment_allocation := mem.arena_try_push(arena,environment_capacity*2,2)
   if !environment_allocation.ok { return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity } }
   environment := (#cast(*u16) environment_allocation.memory)[..environment_capacity] environment_used: usize = 0
-  entries_allocation := mem.arena_try_push(arena,#len(configuration.environment)*#sizeof(Wide),#alignof(Wide))
+  // Keep a valid backing pointer even for the supported empty environment.
+  entries_allocation := mem.arena_try_push(arena,(#len(configuration.environment)+1)*#sizeof(Wide),#alignof(Wide))
   if !entries_allocation.ok { return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity } }
   entries := (#cast(*Wide) entries_allocation.memory)[..#len(configuration.environment)]
   entry_index: usize = 0
@@ -126,7 +133,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   defer win_delete_attributes(startup.attributes)
   if inherited_count > 0 && win_update_attributes(startup.attributes,0,131074,#cast(rawptr) &handles[0],inherited_count*#sizeof(rawptr),nil,nil) == 0 { attribute_error := win_failure() return SpawnResult{ error: attribute_error, kind: error_kinds.windows(attribute_error) } }
   information := ProcessInformation{} inherit: i32 = 0 if inherited_count > 0 { inherit = 1 }
-  if win_create(&application.data[0],&command[0],nil,nil,inherit,525312,&environment[0],nil,&startup,&information) == 0 { create_error := win_failure() return SpawnResult{ error: create_error, kind: error_kinds.windows(create_error) } }
+  if win_create(&application.data[0],&command[0],nil,nil,inherit,525312,&environment[0],directory,&startup,&information) == 0 { create_error := win_failure() return SpawnResult{ error: create_error, kind: error_kinds.windows(create_error) } }
   _ = win_close(information.thread)
   return SpawnResult{ child: Child{ handle: #cast(isize) #cast(usize) information.process, active: true }, ok: true }
 }
