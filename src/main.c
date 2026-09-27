@@ -523,12 +523,13 @@ static int execute_command(DynOptions *options, const char *compiler) {
   const char *output = run               ? run_output
                        : options->output ? options->output
                                          : base;
-  bool cacheable = strcmp(context.target->arch, "wasm32") && !run && !options->shared && !options->no_link &&
+  // Run uses shared module artifacts, but never persists its temporary executable.
+  bool cacheable = strcmp(context.target->arch, "wasm32") && !options->shared && !options->no_link &&
                    !options->emit_ir && !options->emit_object &&
                    !options->emit_asm;
   if (cacheable && !options->no_cache)
     options->compiler_hash = dyn_cache_compiler_hash(compiler);
-  if (cacheable && dyn_cache_hit(&sources, options, compiler, output)) {
+  if (!run && cacheable && dyn_cache_hit(&sources, options, compiler, output)) {
     if (!options->quiet)
       printf("cached %s\n", output);
     dyn_sources_free(&sources);
@@ -637,7 +638,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
                                   options->link_inputs,
                                   options->link_input_count, options->release,
                                   options->verbose);
-  if (!result && cacheable)
+  if (!result && !run && cacheable)
     dyn_cache_store(&sources, options, compiler, output);
   if (options->timings && !options->no_link)
     fprintf(stderr, "timing link %.3f ms\n", elapsed_ms(phase));
@@ -727,7 +728,16 @@ int main(int argc, char **argv) {
   /* CLI link inputs borrow argv; discovered libraries are owned suffix entries.
      Keep cleanup outside execution so every early return follows this path. */
   size_t borrowed_links = o.link_input_count;
-  int result = execute_command(&o, argv[0]);
+  /* argv[0] is commonly just "dyn" when launched through PATH. Hash the
+     running executable, not a nonexistent file in the project directory. */
+  char executable[4096];
+  ssize_t executable_length = dyn_host_executable(executable, sizeof(executable) - 1);
+  const char *compiler = argv[0];
+  if (executable_length > 0 && executable_length < (ssize_t)sizeof(executable) - 1) {
+    executable[executable_length] = 0;
+    compiler = executable;
+  }
+  int result = execute_command(&o, compiler);
   for (size_t i = borrowed_links; i < o.link_input_count; ++i)
     free((void *)o.link_inputs[i]);
   return result;

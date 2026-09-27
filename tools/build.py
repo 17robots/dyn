@@ -21,6 +21,9 @@ def flags(name, default=''):
 cc = flags('CC', 'cc')
 clang = flags('CLANG', 'clang')
 cflags = flags('CFLAGS', '-std=c11 -Wall -Wextra -Wpedantic -Werror -g')
+if os.name != 'nt':
+    # host.h exposes POSIX helpers even in independently compiled test units.
+    cflags += ['-D_POSIX_C_SOURCE=200809L']
 version = os.environ.get('DYN_VERSION', '0.1.0-dev')
 if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?', version):
     sys.exit('DYN_VERSION must be a semantic version without build metadata')
