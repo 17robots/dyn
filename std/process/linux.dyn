@@ -4,7 +4,7 @@ use "std/fs" fs
 use "std/time" time
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
   native := os.spawn_environment(arena,path,arguments,configuration.environment,
-    os.SpawnOptions{ input: configuration.input, output: configuration.output, error: configuration.error })
+    os.SpawnOptions{ input: configuration.input, output: configuration.output, error: configuration.error, directory: configuration.directory })
   return SpawnResult{ child: Child{ handle: native.process, active: native.ok }, error: native.error, kind: error_kinds.linux(native.error), ok: native.ok }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
