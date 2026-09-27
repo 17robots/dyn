@@ -1510,6 +1510,13 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
   return LLVMBuildFRem(g->builder, l, r, "frem");
 }
 static bool gen_block(Gen *, uint32_t, uint32_t);
+static bool aggregate_initializer(Gen *g, DynExprId expression) {
+  DynIrExpr *value = &g->ir->expressions[expression];
+  return (dyn_type_is_struct(value->type) || dyn_type_is_array(value->type)) &&
+         (addressable(g, expression) || value->kind == DYN_EXPR_STRUCT ||
+          value->kind == DYN_EXPR_ARRAY) &&
+         (!g->captured_values || !g->captured_values[expression]);
+}
 static void capture_defer_expr(Gen *g, DynExprId id) {
   if (id == DYN_NO_EXPR || g->captured_values[id])
     return;
@@ -1539,6 +1546,13 @@ static void gen_initialize(Gen *g, DynType type, DynExprId expression,
                            LLVMValueRef destination) {
   DynIrExpr *value = expression == DYN_NO_EXPR ? NULL : &g->ir->expressions[expression];
   LLVMTypeRef llvm = llvm_type(g, type);
+  if (value && (dyn_type_is_struct(type) || dyn_type_is_array(type)) &&
+      addressable(g, expression) &&
+      (!g->captured_values || !g->captured_values[expression])) {
+    LLVMBuildMemMove(g->builder, destination, 1,
+                     lvalue_pointer(g, expression), 1, LLVMSizeOf(llvm));
+    return;
+  }
   if ((!value && (dyn_type_is_struct(type) || dyn_type_is_array(type))) ||
       (value && (value->kind == DYN_EXPR_ARRAY || value->kind == DYN_EXPR_STRUCT))) {
     LLVMValueRef arguments[] = {
@@ -1894,6 +1908,17 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     return false;
   }
   if (st->target != DYN_NO_EXPR) {
+    DynType type = g->ir->expressions[st->expression].type;
+    if (aggregate_initializer(g, st->expression)) {
+      /* Snapshot the RHS before evaluating a potentially mutating target.
+         memmove also preserves self-assignment and overlapping storage. */
+      LLVMTypeRef llvm = llvm_type(g, type);
+      LLVMValueRef snapshot = gen_stack_slot(g, llvm, "assignment.snapshot");
+      gen_initialize(g, type, st->expression, snapshot);
+      LLVMBuildMemMove(g->builder, lvalue_pointer(g, st->target), 1,
+                       snapshot, 1, LLVMSizeOf(llvm));
+      return false;
+    }
     LLVMBuildStore(g->builder, gen_expr(g, st->expression),
                    lvalue_pointer(g, st->target));
     return false;
@@ -1902,8 +1927,16 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     (void)gen_expr(g, st->expression);
     return false;
   }
-  LLVMBuildStore(g->builder, gen_expr(g, st->expression),
-                 g->locals[st->local_id]);
+  DynType assigned_type = g->ir->locals[st->local_id].type;
+  if (aggregate_initializer(g, st->expression)) {
+    LLVMTypeRef llvm = llvm_type(g, assigned_type);
+    LLVMValueRef snapshot = gen_stack_slot(g, llvm, "assignment.snapshot");
+    gen_initialize(g, assigned_type, st->expression, snapshot);
+    LLVMBuildMemMove(g->builder, g->locals[st->local_id], 1,
+                     snapshot, 1, LLVMSizeOf(llvm));
+  } else
+    LLVMBuildStore(g->builder, gen_expr(g, st->expression),
+                   g->locals[st->local_id]);
   return false;
 }
 static void emit_defers(Gen *g, size_t base) {

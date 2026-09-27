@@ -131,6 +131,8 @@ extern LLVMValueRef LLVMBuildRetVoid(LLVMBuilderRef);
 extern LLVMValueRef LLVMGetParam(LLVMValueRef, unsigned);
 extern LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
 extern LLVMValueRef LLVMBuildStore(LLVMBuilderRef, LLVMValueRef, LLVMValueRef);
+extern LLVMValueRef LLVMBuildMemMove(LLVMBuilderRef, LLVMValueRef, unsigned,
+                                     LLVMValueRef, unsigned, LLVMValueRef);
 extern LLVMValueRef LLVMBuildLoad2(LLVMBuilderRef, LLVMTypeRef, LLVMValueRef,
                                    const char *);
 extern LLVMValueRef LLVMBuildInsertValue(LLVMBuilderRef, LLVMValueRef,
