@@ -579,7 +579,7 @@ static LLVMValueRef emit_call(Gen *g, LLVMTypeRef type, LLVMValueRef callee,
                          */
   if (g->wasm || !may_panic || !g->defer_count || g->unwinding) {
     LLVMValueRef call = LLVMBuildCall2(g->builder, type, callee, args, count, name);
-    abi_attributes(g, call, abi, true);
+    if (abi) abi_attributes(g, call, abi, true);
     return call;
   }
   if (!g->unwind_frame)
@@ -605,7 +605,7 @@ static LLVMValueRef emit_call(Gen *g, LLVMTypeRef type, LLVMValueRef callee,
                  "");
   LLVMValueRef result =
       LLVMBuildCall2(g->builder, type, callee, args, count, name);
-  abi_attributes(g, result, abi, true);
+  if (abi) abi_attributes(g, result, abi, true);
   LLVMBuildCall2(g->builder, g->unwind_void_type, g->unwind_unlink_fn, &frame,
                  1, "");
   LLVMBuildBr(g->builder, done);
@@ -1603,10 +1603,17 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     return false;
   }
   if (st->kind == DYN_STMT_PANIC) {
-    emit_defers(g, 0);
     LLVMValueRef message = gen_expr(g, st->expression);
-    emit_panic(g, LLVMBuildExtractValue(g->builder, message, 0, "panic.data"),
-               LLVMBuildExtractValue(g->builder, message, 1, "panic.len"));
+    LLVMValueRef arguments[] = {
+        LLVMBuildExtractValue(g->builder, message, 0, "panic.data"),
+        LLVMBuildExtractValue(g->builder, message, 1, "panic.len")};
+    if (LLVMTypeOf(arguments[1]) != llvm_type(g, DYN_TYPE_USIZE))
+      arguments[1] = LLVMBuildTrunc(g->builder, arguments[1],
+                                  llvm_type(g, DYN_TYPE_USIZE), "panic.length");
+    /* Native panic owns the message before the call's unwind path runs
+       local defers. Wasm traps do not report messages or unwind callers. */
+    if (g->wasm) emit_defers(g, 0);
+    (void)emit_call(g, g->panic_type, g->panic_fn, arguments, 2, "", true, NULL);
     LLVMBuildUnreachable(g->builder);
     return true;
   }

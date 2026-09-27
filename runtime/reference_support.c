@@ -14,6 +14,7 @@ typedef struct {
   const unsigned char *message;
   uint64_t length;
   uint64_t unwinding;
+  unsigned char message_storage[4096];
 } DynUnwindSlot;
 static DynUnwindSlot unwind_slots[64];
 long dyn_syscall6(long, long, long, long, long, long, long);
@@ -50,14 +51,32 @@ void dyn_unwind_unlink(DynUnwind *frame) {
   DynUnwindSlot *slot = unwind_slot(0);
   if (slot && slot->top == frame) {
     slot->top = frame->previous;
-    if (!slot->top) __atomic_store_n(&slot->tid, 0, __ATOMIC_RELEASE);
+    if (!slot->top && !slot->unwinding)
+      __atomic_store_n(&slot->tid, 0, __ATOMIC_RELEASE);
   }
 }
 void dyn_unwind_begin(const unsigned char *message, uint64_t length) {
   DynUnwindSlot *slot = unwind_slot(1);
   if (!slot || slot->unwinding || !slot->top) return;
   slot->unwinding = 1;
-  slot->message = message;
+  /* Cleanup can release the message's arena or overwrite its stack frame.
+     Own a bounded copy before jumping; panic handling must not allocate. */
+  static const unsigned char truncated[] = " [truncated]";
+  uint64_t copied = length;
+  if (!message) copied = length = 0;
+  if (copied > sizeof(slot->message_storage)) {
+    copied = sizeof(slot->message_storage) - (sizeof(truncated) - 1);
+    /* A valid UTF-8 diagnostic must not end with half a codepoint. */
+    while (copied && (message[copied] & 0xc0) == 0x80) --copied;
+  }
+  for (uint64_t i = 0; i < copied; ++i)
+    slot->message_storage[i] = message[i];
+  if (copied < length) {
+    for (size_t i = 0; i < sizeof(truncated) - 1; ++i)
+      slot->message_storage[copied + i] = truncated[i];
+    length = copied + sizeof(truncated) - 1;
+  }
+  slot->message = slot->message_storage;
   slot->length = length;
   DynUnwind *frame = slot->top;
   slot->top = frame->previous;

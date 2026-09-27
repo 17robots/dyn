@@ -12,6 +12,35 @@ _dyn_start:
 _dyn_panic:
     stp x0, x1, [sp, #-16]!
     bl _dyn_unwind_begin
+    ldp x19, x20, [sp]
+    cbz x19, .Lpanic_exit
+.Lpanic_write:
+    cbz x20, .Lpanic_newline
+    mov x0, #2
+    mov x1, x19
+    mov x2, x20
+    mov x16, #4
+    movk x16, #0x200, lsl #16
+    svc #0x80
+    b.cs .Lpanic_exit
+    cbz x0, .Lpanic_exit
+    add x19, x19, x0
+    sub x20, x20, x0
+    b .Lpanic_write
+.Lpanic_newline:
+    mov w0, #10
+    strb w0, [sp]
+    mov x0, #2
+    mov x1, sp
+    mov x2, #1
+    mov x16, #4
+    movk x16, #0x200, lsl #16
+    svc #0x80
+.Lpanic_exit:
+    mov x0, #101
+    mov x16, #1
+    movk x16, #0x200, lsl #16
+    svc #0x80
     brk #0
 
 .global _dyn_unwind_set
