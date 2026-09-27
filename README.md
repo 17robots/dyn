@@ -1,7 +1,7 @@
 # Dyn compiler
 
 Dyn is ready for public preview testing. Start with
-[preview 5](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.5), then
+[preview 7](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.7), then
 [report bugs](https://github.com/17robots/dyn/issues). APIs may change between previews.
 
 This repository contains the C bootstrap compiler, target runtime, SDK (`std/`
@@ -9,13 +9,18 @@ and optional native bindings in `vendor/`), compiler tools and regression tests.
 The grammar lives in [17robots/tree-sitter-dyn](https://github.com/17robots/tree-sitter-dyn).
 Editor extensions and applications are separate projects.
 
+Preview 7 fixes repeated compilation in `dyn run`, including invocation through
+PATH, and avoids oversized LLVM values for large struct/array copies and literal
+assignments. Unchanged modules reuse the cache; source edits still rebuild their
+module. Use `--timings` to inspect compilation and `--no-cache` to force a rebuild.
+
 ## Install a preview
 
 | System | Download from the release |
 | --- | --- |
-| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.5-linux-x86_64-glibc2.39.tar.gz` |
-| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.5-windows-x86_64.zip` |
-| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.5-macos-aarch64.tar.gz` |
+| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.7-linux-x86_64-glibc2.39.tar.gz` |
+| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.7-windows-x86_64.zip` |
+| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.7-macos-aarch64.tar.gz` |
 
 The SDKs include the compiler, standard library, runtime, host linker and library
 dependencies. LLVM, Tree-sitter, MSYS2 and Homebrew are not required to use the
@@ -35,7 +40,7 @@ mise install github:17robots/dyn
 mise exec -- dyn version
 ```
 
-Expected version: `dyn 0.1.0-preview.5`. No compiler checkout is needed.
+Expected version: `dyn 0.1.0-preview.7`. No compiler checkout is needed.
 `mise exec -- dyn ...` works without shell activation. To use plain `dyn`, follow
 [mise's shell setup](https://mise.jdx.dev/getting-started.html).
 
@@ -59,7 +64,7 @@ On Linux/macOS, from the directory containing the downloaded archive:
 
 ```sh
 # Linux; substitute the macos-aarch64 archive name on macOS.
-tar -xzf dyn-0.1.0-preview.5-linux-x86_64-glibc2.39.tar.gz
+tar -xzf dyn-0.1.0-preview.7-linux-x86_64-glibc2.39.tar.gz
 ./dyn-sdk/bin/dyn version
 export PATH="$PWD/dyn-sdk/bin:$PATH"
 ```
@@ -67,9 +72,9 @@ export PATH="$PWD/dyn-sdk/bin:$PATH"
 On Windows, in PowerShell:
 
 ```powershell
-Expand-Archive .\dyn-0.1.0-preview.5-windows-x86_64.zip -DestinationPath .\dyn-preview5
-.\dyn-preview5\dyn-sdk\bin\dyn.exe version
-$env:Path = "$PWD\dyn-preview5\dyn-sdk\bin;$env:Path"
+Expand-Archive .\dyn-0.1.0-preview.7-windows-x86_64.zip -DestinationPath .\dyn-preview7
+.\dyn-preview7\dyn-sdk\bin\dyn.exe version
+$env:Path = "$PWD\dyn-preview7\dyn-sdk\bin;$env:Path"
 ```
 
 These PATH changes last for the current shell. For future shells, add the SDK's
@@ -109,7 +114,7 @@ follows its code page. `bufio.read_line` strips LF or CRLF and preserves lone CR
 Preview 3 callers must rename `terminal.stdin/stdout/stderr` to their `io`
 equivalents. `std/terminal` retains Linux terminal controls and key decoding.
 
-## Standard library in preview 5
+## Standard library in preview 7
 
 Preview 5 includes the following APIs and ownership contracts.
 
@@ -143,8 +148,8 @@ cd dyn
 ```
 
 These commands build current `main`. To build the published preview instead,
-run `git checkout v0.1.0-preview.5` before continuing. Source builds normally report
-`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.5` if you need that embedded version.
+run `git checkout v0.1.0-preview.7` before continuing. Source builds normally report
+`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.7` if you need that embedded version.
 Source builds require their build-time libraries and linker to remain installed.
 
 ### Linux x64 (Ubuntu 24.04)
