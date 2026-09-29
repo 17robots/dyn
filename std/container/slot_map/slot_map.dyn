@@ -23,26 +23,37 @@ fn occupied(state: *const SlotMap, index: usize) bool {
 
 fn set_occupied(state: *SlotMap, index: usize, value: bool) {
   mask := #cast(u64) 1 << (index % 64)
-  if value { state.occupied[index / 64] = state.occupied[index / 64] | mask }
-  else { state.occupied[index / 64] = state.occupied[index / 64] & ~mask }
+  if value {
+    state.occupied[index / 64] = state.occupied[index / 64] | mask
+  }
+  else {
+    state.occupied[index / 64] = state.occupied[index / 64] & ~mask
+  }
 }
 
 // Borrows three disjoint backing regions. Initialize generations to zero only on first use.
 // Reinitialization expires all values/handles; existing generations must be preserved.
 // Do not mutate bookkeeping or independently mutate copies. Thread-confined.
 pub fn init(data: []u8, generations: []u32, occupied_words: []u64, slot_size: usize) SlotMap {
-  if slot_size == 0 { #panic("slot map requires non-zero slot size") }
+  if slot_size == 0 {
+    #panic("slot map requires non-zero slot size")
+  }
   slot_count := #len(data) / slot_size
   if slot_count == 0 || #len(generations) < slot_count || #len(occupied_words) < (slot_count - 1) / 64 + 1 {
     #panic("slot map backing is too small")
   }
   i: usize = 0
   for i < slot_count {
-    if generations[i] < 4294967295 { generations[i] += 1 }
+    if generations[i] < 4294967295 {
+      generations[i] += 1
+    }
     i += 1
   }
   i = 0
-  for i < #len(occupied_words) { occupied_words[i] = 0 i += 1 }
+  for i < #len(occupied_words) {
+    occupied_words[i] = 0
+    i += 1
+  }
   return SlotMap{
     data: data[..slot_count * slot_size],
     generations: generations[..slot_count],
@@ -51,16 +62,26 @@ pub fn init(data: []u8, generations: []u32, occupied_words: []u64, slot_size: us
   }
 }
 
-pub fn capacity(state: *const SlotMap) usize { return #len(state.generations) }
-pub fn length(state: *const SlotMap) usize { return state.length }
+pub fn capacity(state: *const SlotMap) usize {
+  return #len(state.generations)
+}
+pub fn length(state: *const SlotMap) usize {
+  return state.length
+}
 
 // Copies source bytes; overlap with data is supported. Wrong size/full returns Handle{}.
 // No allocation. Insertion scans slots; lookup and removal are constant-time apart from copying.
 pub fn insert(state: *SlotMap, source: []const u8) Handle {
-  if #len(source) != state.slot_size { return Handle{} }
+  if #len(source) != state.slot_size {
+    return Handle{}
+  }
   index: usize = 0
-  for index < #len(state.generations) && (occupied(state, index) || state.generations[index] == 4294967295) { index += 1 }
-  if index == #len(state.generations) { return Handle{} }
+  for index < #len(state.generations) && (occupied(state, index) || state.generations[index] == 4294967295) {
+    index += 1
+  }
+  if index == #len(state.generations) {
+    return Handle{}
+  }
   _ = mem.move(state.data[index * state.slot_size..(index + 1) * state.slot_size], source)
   set_occupied(state, index, true)
   state.length += 1
@@ -70,7 +91,9 @@ pub fn insert(state: *SlotMap, source: []const u8) Handle {
 // Rejects stale, empty, out-of-range and foreign-backing handles. Does not dereference handle.identity.
 // Returned bytes borrow this slot; successful lookup does not extend their lifetime.
 pub fn get(state: *SlotMap, handle: Handle) Value {
-  if #len(state.generations) == 0 { return Value{} }
+  if #len(state.generations) == 0 {
+    return Value{}
+  }
   if handle.identity != &state.generations[0] || handle.generation == 0 || handle.index >= #len(state.generations) ||
     !occupied(state, handle.index) || state.generations[handle.index] != handle.generation {
     return Value{}
@@ -83,9 +106,14 @@ pub fn get(state: *SlotMap, handle: Handle) Value {
 // Generation saturation permanently retires the slot; generations never wrap.
 pub fn remove(state: *SlotMap, handle: Handle) bool {
   value := get(state, handle)
-  if !value.ok { return false }
+  if !value.ok {
+    return false
+  }
   i: usize = 0
-  for i < #len(value.data) { value.data[i] = 0 i += 1 }
+  for i < #len(value.data) {
+    value.data[i] = 0
+    i += 1
+  }
   set_occupied(state, handle.index, false)
   state.generations[handle.index] += 1
   state.length -= 1
@@ -101,8 +129,12 @@ pub enum CopyStatus { Complete, Missing, Capacity }
 // Destination must not overlap generation/occupancy metadata. No allocation.
 pub fn copy_into(state: *SlotMap, handle: Handle, destination: []u8) CopyStatus {
   value := get(state, handle)
-  if !value.ok { return CopyStatus.Missing }
-  if #len(destination) < #len(value.data) { return CopyStatus.Capacity }
+  if !value.ok {
+    return CopyStatus.Missing
+  }
+  if #len(destination) < #len(value.data) {
+    return CopyStatus.Capacity
+  }
   _ = mem.move(destination, value.data)
   return CopyStatus.Complete
 }
@@ -113,7 +145,11 @@ pub struct Snapshot { capacity: usize, live: usize, available: usize, retired: u
 // No synchronization: call only while this thread exclusively accesses the map.
 pub fn snapshot(state: *const SlotMap) Snapshot {
   retired: usize = 0
-  for generation in state.generations { if generation == 4294967295 { retired += 1 } }
+  for generation in state.generations {
+    if generation == 4294967295 {
+      retired += 1
+    }
+  }
   total := capacity(state)
   return Snapshot{ capacity: total, live: state.length,
     available: total - state.length - retired, retired: retired }
@@ -125,6 +161,8 @@ pub fn snapshot(state: *const SlotMap) Snapshot {
 pub enum Lookup { Missing, Present: []u8 }
 pub fn lookup(state: *SlotMap, handle: Handle) Lookup {
   value := get(state, handle)
-  if !value.ok { return Lookup.Missing }
+  if !value.ok {
+    return Lookup.Missing
+  }
   return Lookup.Present(value.data)
 }

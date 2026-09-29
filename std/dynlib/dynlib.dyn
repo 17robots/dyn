@@ -22,17 +22,23 @@ extern fn native_error "dlerror"() *const u8
 pub fn open(path: []const u8, flags: i32) OpenResult {
   storage: [4096]u8 = []
   name := cabi.string_from_bytes(storage[..], path)
-  if !name.ok { return OpenResult{} }
+  if !name.ok {
+    return OpenResult{}
+  }
   _ = native_error()
   value := native_open(name.value, flags)
-  if value == nil { return OpenResult{ value: nil, error: native_error(), ok: false } }
+  if value == nil {
+    return OpenResult{ value: nil, error: native_error(), ok: false }
+  }
   return OpenResult{ value: value, error: nil, ok: true }
 }
 
 pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   storage: [4096]u8 = []
   native_name := cabi.string_from_bytes(storage[..], name)
-  if handle == nil || !native_name.ok { return SymbolResult{} }
+  if handle == nil || !native_name.ok {
+    return SymbolResult{}
+  }
   // POSIX requires clearing prior error because a valid symbol may be null.
   _ = native_error()
   value := native_symbol(handle, native_name.value)
@@ -41,7 +47,9 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
 }
 
 pub fn close(handle: Handle) bool {
-  if handle == nil { return false }
+  if handle == nil {
+    return false
+  }
   return native_close(handle) == 0
 }
 

@@ -9,126 +9,227 @@ pub struct FileResult { file: File, error: isize, kind: errors.Kind, ok: bool }
 pub struct Result { transferred: usize, error: isize, kind: errors.Kind, ok: bool }
 pub struct OffsetResult { offset: usize, error: isize, kind: errors.Kind, ok: bool }
 pub struct ReadAllResult { data: []u8, error: isize, kind: errors.Kind, ok: bool }
-fn owned_file(handle: isize) File { return File{ descriptor: handle, active: true, owned: true } }
-pub fn is_open(file: *const File) bool { return file.active && native_valid(file.descriptor) }
+fn owned_file(handle: isize) File {
+  return File{ descriptor: handle, active: true, owned: true }
+}
+pub fn is_open(file: *const File) bool {
+  return file.active && native_valid(file.descriptor)
+}
 // Adopt transfers responsibility for a native handle to the returned owner.
 pub fn adopt_handle(handle: isize) File {
-  if !native_valid(handle) { return File{} }
+  if !native_valid(handle) {
+    return File{}
+  }
   return owned_file(handle)
 }
 pub fn borrow_handle(handle: isize) File {
-  if !native_valid(handle) { return File{} }
+  if !native_valid(handle) {
+    return File{}
+  }
   return File{ descriptor: handle, active: true }
 }
 pub fn borrow(file: *const File) File {
-  if !is_open(file) { return File{} }
+  if !is_open(file) {
+    return File{}
+  }
   return borrow_handle(file.descriptor)
 }
-pub fn take(file: *File) File { result := file.* file.* = File{} return result }
+pub fn take(file: *File) File {
+  result := file.*
+  file.* = File{}
+  return result
+}
 
-pub fn open(path: []const u8) FileResult { return native_open(path, 0) }
-pub fn create(path: []const u8) FileResult { return native_open(path, 1) }
-pub fn append(path: []const u8) FileResult { return native_open(path, 2) }
-pub fn create_exclusive(path: []const u8) FileResult { return native_open(path, 3) }
-fn failure(code: isize) Result { return Result{ error: code, kind: native_kind(code) } }
+pub fn open(path: []const u8) FileResult {
+  return native_open(path, 0)
+}
+pub fn create(path: []const u8) FileResult {
+  return native_open(path, 1)
+}
+pub fn append(path: []const u8) FileResult {
+  return native_open(path, 2)
+}
+pub fn create_exclusive(path: []const u8) FileResult {
+  return native_open(path, 3)
+}
+fn failure(code: isize) Result {
+  return Result{ error: code, kind: native_kind(code) }
+}
 pub fn close(file: *File) Result {
-  if !is_open(file) || !file.owned { return Result{ kind: errors.Kind.InvalidState } }
+  if !is_open(file) || !file.owned {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
   handle := file.descriptor
   // Never retry close on a possibly reused native handle, including after EINTR.
   file.* = File{}
   code := native_close(handle)
-  if code < 0 { return failure(code) }
+  if code < 0 {
+    return failure(code)
+  }
   return Result{ ok: true }
 }
 // Destination borrows caller storage. Zero bytes on a successful nonempty read means EOF.
 pub fn read(file: *File, destination: []u8) Result {
-  if !is_open(file) { return Result{ kind: errors.Kind.InvalidState } }
-  if #len(destination) == 0 { return Result{ ok: true } }
+  if !is_open(file) {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  if #len(destination) == 0 {
+    return Result{ ok: true }
+  }
   value := native_read(file.descriptor, destination)
-  for native_interrupted(value) { value = native_read(file.descriptor, destination) }
-  if value < 0 { return failure(value) }
+  for native_interrupted(value) {
+    value = native_read(file.descriptor, destination)
+  }
+  if value < 0 {
+    return failure(value)
+  }
   return Result{ transferred: #cast(usize) value, ok: true }
 }
 pub fn write(file: *File, source: []const u8) Result {
-  if !is_open(file) { return Result{ kind: errors.Kind.InvalidState } }
+  if !is_open(file) {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
   written: usize = 0
   for written < #len(source) {
     value := native_write(file.descriptor, source[written..])
-    if native_interrupted(value) { continue }
-    if value < 0 { return Result{ transferred: written, error: value, kind: native_kind(value) } }
-    if value == 0 { return Result{ transferred: written, kind: errors.Kind.System } }
+    if native_interrupted(value) {
+      continue
+    }
+    if value < 0 {
+      return Result{ transferred: written, error: value, kind: native_kind(value) }
+    }
+    if value == 0 {
+      return Result{ transferred: written, kind: errors.Kind.System }
+    }
     written += #cast(usize) value
   }
   return Result{ transferred: written, ok: true }
 }
 fn adapter_read(data: rawptr, destination: []u8) stream.Result {
   result := read(#cast(*File) data, destination)
-  if !result.ok { return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error } }
+  if !result.ok {
+    return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error }
+  }
   status := stream.Status.Complete
-  if result.transferred == 0 && #len(destination) != 0 { status = stream.Status.End }
+  if result.transferred == 0 && #len(destination) != 0 {
+    status = stream.Status.End
+  }
   return stream.Result{ transferred: result.transferred, status: status }
 }
 fn adapter_write(data: rawptr, source: []const u8) stream.Result {
   result := write(#cast(*File) data, source)
-  if !result.ok { return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error } }
+  if !result.ok {
+    return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error }
+  }
   return stream.Result{ transferred: result.transferred }
 }
 // Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
-pub fn reader(file: *File) stream.Reader { return stream.Reader{ data: #cast(rawptr) file, read: &adapter_read } }
-pub fn writer(file: *File) stream.Writer { return stream.Writer{ data: #cast(rawptr) file, write: &adapter_write } }
+pub fn reader(file: *File) stream.Reader {
+  return stream.Reader{ data: #cast(rawptr) file, read: &adapter_read }
+}
+pub fn writer(file: *File) stream.Writer {
+  return stream.Writer{ data: #cast(rawptr) file, write: &adapter_write }
+}
 // origin: 0 start, 1 current, 2 end.
 pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
-  if !is_open(file) { return OffsetResult{ kind: errors.Kind.InvalidState } }
-  if origin > 2 { return OffsetResult{ kind: errors.Kind.InvalidInput } }
+  if !is_open(file) {
+    return OffsetResult{ kind: errors.Kind.InvalidState }
+  }
+  if origin > 2 {
+    return OffsetResult{ kind: errors.Kind.InvalidInput }
+  }
   value := native_seek(file.descriptor, offset, origin)
-  if value < 0 { return OffsetResult{ error: value, kind: native_kind(value) } }
+  if value < 0 {
+    return OffsetResult{ error: value, kind: native_kind(value) }
+  }
   return OffsetResult{ offset: #cast(usize) value, ok: true }
 }
 pub fn sync(file: *File) Result {
-  if !is_open(file) { return Result{ kind: errors.Kind.InvalidState } }
+  if !is_open(file) {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
   value := native_sync(file.descriptor)
-  if value < 0 { return failure(value) }
+  if value < 0 {
+    return failure(value)
+  }
   return Result{ ok: true }
 }
 
 // Reads one complete file into arena storage, bounded by maximum.
 pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllResult {
   opened := open(path)
-  if !opened.ok { return ReadAllResult{ error: opened.error, kind: opened.kind } }
+  if !opened.ok {
+    return ReadAllResult{ error: opened.error, kind: opened.kind }
+  }
   mark := memory.arena_mark(arena)
-  total: usize = 0 error: isize = 0 kind := errors.Kind.None
+  total: usize = 0
+  error: isize = 0
+  kind := errors.Kind.None
   for {
     capacity := maximum - total
-    if capacity > memory.arena_remaining(arena) { capacity = memory.arena_remaining(arena) }
-    if capacity > 4096 { capacity = 4096 }
+    if capacity > memory.arena_remaining(arena) {
+      capacity = memory.arena_remaining(arena)
+    }
+    if capacity > 4096 {
+      capacity = 4096
+    }
     if capacity == 0 {
       probe: [1]u8 = []
       extra := read(&opened.file, probe[..])
-      if !extra.ok { error = extra.error kind = extra.kind }
-      else if extra.transferred != 0 { kind = errors.Kind.Capacity if total == maximum { kind = errors.Kind.Overflow } }
+      if !extra.ok {
+        error = extra.error
+        kind = extra.kind
+      }
+      else if extra.transferred != 0 {
+        kind = errors.Kind.Capacity
+        if total == maximum {
+          kind = errors.Kind.Overflow
+        }
+      }
       break
     }
     allocation := memory.arena_try_push_uninit(arena, capacity, 1)
-    if !allocation.ok { kind = errors.Kind.Capacity break }
+    if !allocation.ok {
+      kind = errors.Kind.Capacity
+      break
+    }
     part := read(&opened.file, allocation.memory[..capacity])
     total += part.transferred
     memory.arena_rewind(arena, mark + total)
-    if !part.ok { error = part.error kind = part.kind break }
-    if part.transferred == 0 { break }
+    if !part.ok {
+      error = part.error
+      kind = part.kind
+      break
+    }
+    if part.transferred == 0 {
+      break
+    }
   }
   closed := close(&opened.file)
-  if kind == errors.Kind.None && !closed.ok { error = closed.error kind = closed.kind }
-  if kind != errors.Kind.None { memory.arena_rewind(arena, mark) return ReadAllResult{ error: error, kind: kind } }
+  if kind == errors.Kind.None && !closed.ok {
+    error = closed.error
+    kind = closed.kind
+  }
+  if kind != errors.Kind.None {
+    memory.arena_rewind(arena, mark)
+    return ReadAllResult{ error: error, kind: kind }
+  }
   return ReadAllResult{ data: arena.data[mark..mark + total], ok: true }
 }
 
 pub fn write_all(path: []const u8, source: []const u8) Result {
   created := create(path)
-  if !created.ok { return Result{ error: created.error, kind: created.kind, ok: false } }
+  if !created.ok {
+    return Result{ error: created.error, kind: created.kind, ok: false }
+  }
   result := write(&created.file, source)
   closed := close(&created.file)
-  if !result.ok { return result }
-  if !closed.ok { return closed }
+  if !result.ok {
+    return result
+  }
+  if !closed.ok {
+    return closed
+  }
   return result
 }
 

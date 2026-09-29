@@ -5,7 +5,9 @@ const EventDataOffset: usize = 8
 struct PollTimeout { seconds: isize, nanoseconds: isize }
 fn poll_native(descriptors: []PollDescriptor, timeout_milliseconds: i32) isize {
   descriptor_pointer: *PollDescriptor = nil
-  if #len(descriptors) > 0 { descriptor_pointer = &descriptors[0] }
+  if #len(descriptors) > 0 {
+    descriptor_pointer = &descriptors[0]
+  }
   timeout := PollTimeout{}
   timeout_pointer: *PollTimeout = nil
   if timeout_milliseconds >= 0 {

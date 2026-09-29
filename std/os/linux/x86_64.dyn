@@ -1,2 +1,4 @@
 #target(arch: x86_64, kernel: linux)
-fn fork_native() isize { return #syscall(57) }
+fn fork_native() isize {
+  return #syscall(57)
+}

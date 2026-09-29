@@ -10,20 +10,46 @@ pub type ContextResult = provider.ContextResult
 pub type ConnectionResult = provider.ConnectionResult
 pub type Result = provider.Result
 
-pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) bool { return provider.set_alpn_protocols(connection, protocols) }
-pub fn selected_alpn(connection: Connection) []const u8 { return provider.selected_alpn(connection) }
-pub fn peer_certificate_owned(connection: Connection) Certificate { return provider.peer_certificate_owned(connection) }
-pub fn certificate_free_owned(certificate: Certificate) { provider.certificate_free_owned(certificate) }
-pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 { return provider.certificate_subject(destination, certificate) }
-pub fn handshake(connection: Connection) Result { return provider.handshake(connection) }
-pub fn server_handshake(connection: Connection) Result { return provider.server_handshake(connection) }
-pub fn read(connection: Connection, destination: []u8) Result { return provider.read(connection, destination) }
-pub fn write(connection: Connection, source: []const u8) Result { return provider.write(connection, source) }
-pub fn shutdown(connection: Connection) bool { return provider.shutdown(connection) }
-pub fn error_code(connection: Connection, provider_result: i32) i32 { return provider.error_code(connection, provider_result) }
-pub fn error_string(destination: []u8, code: u64) []u8 { return provider.error_string(destination, code) }
+pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) bool {
+  return provider.set_alpn_protocols(connection, protocols)
+}
+pub fn selected_alpn(connection: Connection) []const u8 {
+  return provider.selected_alpn(connection)
+}
+pub fn peer_certificate_owned(connection: Connection) Certificate {
+  return provider.peer_certificate_owned(connection)
+}
+pub fn certificate_free_owned(certificate: Certificate) {
+  provider.certificate_free_owned(certificate)
+}
+pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 {
+  return provider.certificate_subject(destination, certificate)
+}
+pub fn handshake(connection: Connection) Result {
+  return provider.handshake(connection)
+}
+pub fn server_handshake(connection: Connection) Result {
+  return provider.server_handshake(connection)
+}
+pub fn read(connection: Connection, destination: []u8) Result {
+  return provider.read(connection, destination)
+}
+pub fn write(connection: Connection, source: []const u8) Result {
+  return provider.write(connection, source)
+}
+pub fn shutdown(connection: Connection) bool {
+  return provider.shutdown(connection)
+}
+pub fn error_code(connection: Connection, provider_result: i32) i32 {
+  return provider.error_code(connection, provider_result)
+}
+pub fn error_string(destination: []u8, code: u64) []u8 {
+  return provider.error_string(destination, code)
+}
 
-pub fn client_config_create() ContextResult { return provider.context_create_owned() }
+pub fn client_config_create() ContextResult {
+  return provider.context_create_owned()
+}
 pub fn server_config_create(
   arena: *memory.Arena,
   certificate: []const u8,
@@ -31,8 +57,12 @@ pub fn server_config_create(
 ) ContextResult {
   return provider.server_context_create(arena, certificate, key)
 }
-pub fn server_config_create_into(certificate: []const u8, key: []const u8, certificate_storage: []u8, key_storage: []u8) ContextResult { return provider.server_context_create_owned(certificate, key, certificate_storage, key_storage) }
-pub fn config_destroy(context: Context) { provider.context_free_owned(context) }
+pub fn server_config_create_into(certificate: []const u8, key: []const u8, certificate_storage: []u8, key_storage: []u8) ContextResult {
+  return provider.server_context_create_owned(certificate, key, certificate_storage, key_storage)
+}
+pub fn config_destroy(context: Context) {
+  provider.context_free_owned(context)
+}
 pub fn client_connection_create(
   arena: *memory.Arena,
   context: Context,
@@ -41,18 +71,26 @@ pub fn client_connection_create(
 ) ConnectionResult {
   return provider.connection_create(arena, context, descriptor, hostname)
 }
-pub fn client_connection_create_into(context: Context, descriptor: i32, hostname: []const u8, storage: []u8) ConnectionResult { return provider.connection_create_owned(context, descriptor, hostname, storage) }
+pub fn client_connection_create_into(context: Context, descriptor: i32, hostname: []const u8, storage: []u8) ConnectionResult {
+  return provider.connection_create_owned(context, descriptor, hostname, storage)
+}
 pub fn server_connection_create(context: Context, descriptor: i32) ConnectionResult {
   return provider.server_connection_create_owned(context, descriptor)
 }
-pub fn connection_destroy(connection: Connection) { provider.connection_free_owned(connection) }
+pub fn connection_destroy(connection: Connection) {
+  provider.connection_free_owned(connection)
+}
 
 fn reader_read(data: rawptr, destination: []u8) stream.Result {
   connection := #cast(*Connection) data
   result := read(connection.*, destination)
-  if !result.ok { return stream.Result{ error: #cast(isize) result.provider_status, status: stream.Status.Error } }
+  if !result.ok {
+    return stream.Result{ error: #cast(isize) result.provider_status, status: stream.Status.Error }
+  }
   status := stream.Status.Complete
-  if result.count == 0 { status = stream.Status.End }
+  if result.count == 0 {
+    status = stream.Status.End
+  }
   return stream.Result{ transferred: result.count, status: status }
 }
 

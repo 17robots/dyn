@@ -37,9 +37,13 @@ pub fn arena_from_buffer(backing: []u8) Arena {
 // Heap-backed fixed arena. Keep this result in place and pass &result.arena.
 // Buffer-backed arenas never fall back to heap allocation on exhaustion.
 pub fn arena_create(capacity: usize) ArenaResult {
-  if capacity == 0 { return ArenaResult{ error: ErrorKind.Capacity } }
+  if capacity == 0 {
+    return ArenaResult{ error: ErrorKind.Capacity }
+  }
   mapping := mapping_allocate(capacity)
-  if !mapping.ok { return ArenaResult{ error: ErrorKind.System, code: mapping.error } }
+  if !mapping.ok {
+    return ArenaResult{ error: ErrorKind.System, code: mapping.error }
+  }
   return ArenaResult{ arena: Arena{ data: mapping.bytes, owns_memory: true }, ok: true }
 }
 pub struct Status { error: isize, ok: bool }
@@ -49,17 +53,27 @@ struct Mapping { bytes: []u8, error: isize, ok: bool }
 pub fn arena_release(arena: *Arena) Status {
   if arena.owns_memory && #len(arena.data) != 0 {
     error := mapping_release(arena.data)
-    if error != 0 { return Status{ error: error } }
+    if error != 0 {
+      return Status{ error: error }
+    }
   }
   arena_event(arena, observe.Kind.Released, arena.offset)
   arena.* = Arena{}
   return Status{ ok: true }
 }
 
-pub fn arena_capacity(arena: *const Arena) usize { return #len(arena.data) }
-pub fn arena_used(arena: *const Arena) usize { return arena.offset }
-pub fn arena_remaining(arena: *const Arena) usize { return #len(arena.data) - arena.offset }
-pub fn arena_mark(arena: *const Arena) usize { return arena.offset }
+pub fn arena_capacity(arena: *const Arena) usize {
+  return #len(arena.data)
+}
+pub fn arena_used(arena: *const Arena) usize {
+  return arena.offset
+}
+pub fn arena_remaining(arena: *const Arena) usize {
+  return #len(arena.data) - arena.offset
+}
+pub fn arena_mark(arena: *const Arena) usize {
+  return arena.offset
+}
 
 pub struct ArenaSnapshot {
   capacity: usize, used: usize, remaining: usize, owns_memory: bool, poison_on_rewind: bool,
@@ -69,7 +83,9 @@ pub struct ArenaSnapshot {
 // Allocation-free value snapshot. Contains no borrowed pointers and survives reset/release.
 // Includes peak usage and allocation failures since initialization. No synchronization.
 pub fn arena_snapshot(arena: *const Arena) ArenaSnapshot {
-  if arena.offset > #len(arena.data) { #panic("invalid arena offset") }
+  if arena.offset > #len(arena.data) {
+    #panic("invalid arena offset")
+  }
   return ArenaSnapshot{ capacity: #len(arena.data), used: arena.offset,
     remaining: #len(arena.data) - arena.offset, owns_memory: arena.owns_memory,
     poison_on_rewind: arena.poison_on_rewind, peak_used: arena.peak_used,
@@ -82,10 +98,18 @@ pub fn arena_reset(arena: *Arena) {
 }
 
 pub fn arena_rewind(arena: *Arena, mark: usize) {
-  if arena.offset > #len(arena.data) { #panic("invalid arena offset") }
-  if mark > arena.offset { #panic("arena mark is ahead of current position") }
+  if arena.offset > #len(arena.data) {
+    #panic("invalid arena offset")
+  }
+  if mark > arena.offset {
+    #panic("arena mark is ahead of current position")
+  }
   if arena.poison_on_rewind {
-    i := mark for i < arena.offset { arena.data[i] = 221 i += 1 }
+    i := mark
+    for i < arena.offset {
+      arena.data[i] = 221
+      i += 1
+    }
   }
   arena_event(arena, observe.Kind.Reclaimed, arena.offset - mark)
   arena.offset = mark
@@ -102,31 +126,51 @@ fn arena_event(arena: *Arena, kind: observe.Kind, value: usize) {
   }
 }
 fn arena_failure(arena: *Arena, error: ErrorKind) Allocation {
-  if arena.allocation_failures < #cast(usize) -1 { arena.allocation_failures += 1 }
+  if arena.allocation_failures < #cast(usize) -1 {
+    arena.allocation_failures += 1
+  }
   arena_event(arena, observe.Kind.AllocationFailed, arena.offset)
   return Allocation{error: error}
 }
 
 fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory: bool) Allocation {
-  if !valid_alignment(alignment) { return arena_failure(arena, ErrorKind.InvalidAlignment) }
-  if arena.offset > #len(arena.data) { return arena_failure(arena, ErrorKind.InvalidState) }
-  if size == 0 { return Allocation{ memory: nil, size: 0, ok: true } }
+  if !valid_alignment(alignment) {
+    return arena_failure(arena, ErrorKind.InvalidAlignment)
+  }
+  if arena.offset > #len(arena.data) {
+    return arena_failure(arena, ErrorKind.InvalidState)
+  }
+  if size == 0 {
+    return Allocation{ memory: nil, size: 0, ok: true }
+  }
 
   available := arena.data[arena.offset..]
-  if #len(available) == 0 { return arena_failure(arena, ErrorKind.Capacity) }
+  if #len(available) == 0 {
+    return arena_failure(arena, ErrorKind.Capacity)
+  }
 
   address := #cast(usize) &available[0]
   remainder := address & (alignment - 1)
   padding: usize = 0
-  if remainder != 0 { padding = alignment - remainder }
-  if padding > #len(available) { return arena_failure(arena, ErrorKind.Capacity) }
-  if size > #len(available) - padding { return arena_failure(arena, ErrorKind.Capacity) }
+  if remainder != 0 {
+    padding = alignment - remainder
+  }
+  if padding > #len(available) {
+    return arena_failure(arena, ErrorKind.Capacity)
+  }
+  if size > #len(available) - padding {
+    return arena_failure(arena, ErrorKind.Capacity)
+  }
 
   memory := &available[padding]
   arena.offset += padding + size
-  if arena.offset > arena.peak_used { arena.peak_used = arena.offset }
+  if arena.offset > arena.peak_used {
+    arena.peak_used = arena.offset
+  }
   arena_event(arena, observe.Kind.Allocated, size)
-  if zero_memory { zero(memory[..size]) }
+  if zero_memory {
+    zero(memory[..size])
+  }
   return Allocation{ memory: memory, size: size, ok: true }
 }
 
@@ -140,13 +184,17 @@ pub fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Alloc
 
 pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8 {
   allocation := arena_try_push(arena, size, alignment)
-  if !allocation.ok { #panic("arena exhausted or alignment invalid") }
+  if !allocation.ok {
+    #panic("arena exhausted or alignment invalid")
+  }
   return allocation.memory
 }
 
 pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
   allocation := arena_try_push_uninit(arena, size, alignment)
-  if !allocation.ok { #panic("arena exhausted or alignment invalid") }
+  if !allocation.ok {
+    #panic("arena exhausted or alignment invalid")
+  }
   return allocation.memory
 }
 
@@ -155,14 +203,20 @@ pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
 pub struct ArenaResult { arena: Arena, error: ErrorKind, code: isize, ok: bool }
 pub fn arena_try_sub(parent: *Arena, capacity: usize) ArenaResult {
   allocation := arena_try_push_uninit(parent, capacity, 1)
-  if !allocation.ok { return ArenaResult{ error: allocation.error } }
-  if capacity == 0 { return ArenaResult{ arena: arena_from_buffer(parent.data[..0]), ok: true } }
+  if !allocation.ok {
+    return ArenaResult{ error: allocation.error }
+  }
+  if capacity == 0 {
+    return ArenaResult{ arena: arena_from_buffer(parent.data[..0]), ok: true }
+  }
   return ArenaResult{ arena: arena_from_buffer(allocation.memory[..capacity]), ok: true }
 }
 
 pub fn arena_sub(parent: *Arena, capacity: usize) Arena {
   child := arena_try_sub(parent, capacity)
-  if !child.ok { #panic("parent arena exhausted or invalid") }
+  if !child.ok {
+    #panic("parent arena exhausted or invalid")
+  }
   return child.arena
 }
 
@@ -175,23 +229,40 @@ pub struct Scratch {
 // Chooses first unless its backing overlaps a live caller arena. Scratch does not
 // own either arena and must end before either arena is reset or released.
 fn arena_conflicts(candidate: *const Arena, conflict: *const Arena) bool {
-  if candidate == nil { return true }
-  if conflict == nil { return false }
-  if candidate == conflict { return true }
-  if #len(candidate.data) == 0 || #len(conflict.data) == 0 { return false }
-  left := #cast(usize) &candidate.data[0] right := #cast(usize) &conflict.data[0]
-  if left <= right { return right - left < #len(candidate.data) }
+  if candidate == nil {
+    return true
+  }
+  if conflict == nil {
+    return false
+  }
+  if candidate == conflict {
+    return true
+  }
+  if #len(candidate.data) == 0 || #len(conflict.data) == 0 {
+    return false
+  }
+  left := #cast(usize) &candidate.data[0]
+  right := #cast(usize) &conflict.data[0]
+  if left <= right {
+    return right - left < #len(candidate.data)
+  }
   return left - right < #len(conflict.data)
 }
 pub fn scratch_begin(first: *Arena, second: *Arena, conflict: *const Arena) Scratch {
   selected := first
-  if arena_conflicts(selected, conflict) { selected = second }
-  if arena_conflicts(selected, conflict) { #panic("scratch requires a non-conflicting arena") }
+  if arena_conflicts(selected, conflict) {
+    selected = second
+  }
+  if arena_conflicts(selected, conflict) {
+    #panic("scratch requires a non-conflicting arena")
+  }
   return Scratch{ arena: selected, mark: arena_mark(selected), active: true }
 }
 
 pub fn scratch_end(scratch: *Scratch) {
-  if !scratch.active { #panic("scratch scope already ended") }
+  if !scratch.active {
+    #panic("scratch scope already ended")
+  }
   arena_rewind(scratch.arena, scratch.mark)
   scratch.active = false
 }
@@ -208,16 +279,24 @@ pub struct FreeList {
 
 fn align_size(size: usize, alignment: usize) usize {
   remainder := size & (alignment - 1)
-  if remainder == 0 { return size }
+  if remainder == 0 {
+    return size
+  }
   padding := alignment - remainder
   maximum := ~#cast(usize) 0
-  if size > maximum - padding { return 0 }
+  if size > maximum - padding {
+    return 0
+  }
   return size + padding
 }
 
 fn free_list_alignment(requested: usize) usize {
-  if !valid_alignment(requested) { #panic("free-list alignment must be non-zero power of two") }
-  if requested < #alignof(FreeListNode) { return #alignof(FreeListNode) }
+  if !valid_alignment(requested) {
+    #panic("free-list alignment must be non-zero power of two")
+  }
+  if requested < #alignof(FreeListNode) {
+    return #alignof(FreeListNode)
+  }
   return requested
 }
 
@@ -227,9 +306,13 @@ fn free_list_alignment(requested: usize) usize {
 pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usize) FreeList {
   effective_alignment := free_list_alignment(alignment)
   slot_size := requested_slot_size
-  if slot_size < #sizeof(FreeListNode) { slot_size = #sizeof(FreeListNode) }
+  if slot_size < #sizeof(FreeListNode) {
+    slot_size = #sizeof(FreeListNode)
+  }
   slot_size = align_size(slot_size, effective_alignment)
-  if slot_size == 0 || #len(backing) < slot_size { #panic("free list requires at least one slot") }
+  if slot_size == 0 || #len(backing) < slot_size {
+    #panic("free list requires at least one slot")
+  }
   if #len(backing) > 0 && (#cast(usize) &backing[0] & (effective_alignment - 1)) != 0 {
     #panic("free-list backing has wrong alignment")
   }
@@ -238,8 +321,12 @@ pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usiz
   i: usize = 0
   for i < count {
     node := #cast(*FreeListNode) &backing[i * slot_size]
-    if i + 1 < count { node.next = #cast(*FreeListNode) &backing[(i + 1) * slot_size] }
-    else { node.next = nil }
+    if i + 1 < count {
+      node.next = #cast(*FreeListNode) &backing[(i + 1) * slot_size]
+    }
+    else {
+      node.next = nil
+    }
     i += 1
   }
   return FreeList{
@@ -258,19 +345,27 @@ pub fn free_list_from_arena(
   alignment: usize,
 ) FreeList {
   effective_alignment := free_list_alignment(alignment)
-  if slot_count == 0 { #panic("free list requires at least one slot") }
+  if slot_count == 0 {
+    #panic("free list requires at least one slot")
+  }
   actual := slot_size
-  if actual < #sizeof(FreeListNode) { actual = #sizeof(FreeListNode) }
+  if actual < #sizeof(FreeListNode) {
+    actual = #sizeof(FreeListNode)
+  }
   actual = align_size(actual, effective_alignment)
   maximum := ~#cast(usize) 0
-  if actual == 0 || slot_count > maximum / actual { #panic("free-list capacity overflow") }
+  if actual == 0 || slot_count > maximum / actual {
+    #panic("free-list capacity overflow")
+  }
   size := slot_count * actual
   memory := arena_push_uninit(arena, size, effective_alignment)
   return free_list_init(memory[..size], actual, effective_alignment)
 }
 
 pub fn free_list_try_alloc(list: *FreeList) rawptr {
-  if list.free_head == nil { return nil }
+  if list.free_head == nil {
+    return nil
+  }
   node := list.free_head
   list.free_head = node.next
   list.free_count -= 1
@@ -279,12 +374,16 @@ pub fn free_list_try_alloc(list: *FreeList) rawptr {
 
 pub fn free_list_alloc(list: *FreeList) rawptr {
   memory := free_list_try_alloc(list)
-  if memory == nil { #panic("free list exhausted") }
+  if memory == nil {
+    #panic("free list exhausted")
+  }
   return memory
 }
 
 pub fn free_list_free(list: *FreeList, memory: rawptr) {
-  if memory == nil { return }
+  if memory == nil {
+    return
+  }
   address := #cast(usize) memory
   start := #cast(usize) &list.backing[0]
   end := start + list.slot_count * list.slot_size
@@ -294,13 +393,17 @@ pub fn free_list_free(list: *FreeList, memory: rawptr) {
   node := #cast(*FreeListNode) memory
   existing := list.free_head
   for existing != nil {
-    if existing == node { #panic("free-list double free") }
+    if existing == node {
+      #panic("free-list double free")
+    }
     existing = existing.next
   }
   node.next = list.free_head
   list.free_head = node
   list.free_count += 1
-  if list.free_count > list.slot_count { #panic("free-list double free") }
+  if list.free_count > list.slot_count {
+    #panic("free-list double free")
+  }
 }
 
 // Arena-backed fixed-size object storage. Pool is the ordinary reuse interface;
@@ -316,14 +419,26 @@ pub fn pool_init(
   return Pool{ list: free_list_from_arena(arena, slot_count, slot_size, alignment) }
 }
 
-pub fn pool_capacity(pool: *const Pool) usize { return pool.list.slot_count }
-pub fn pool_available(pool: *const Pool) usize { return pool.list.free_count }
-pub fn pool_try_acquire(pool: *Pool) rawptr { return free_list_try_alloc(&pool.list) }
-pub fn pool_acquire(pool: *Pool) rawptr { return free_list_alloc(&pool.list) }
-pub fn pool_release(pool: *Pool, memory: rawptr) { free_list_free(&pool.list, memory) }
+pub fn pool_capacity(pool: *const Pool) usize {
+  return pool.list.slot_count
+}
+pub fn pool_available(pool: *const Pool) usize {
+  return pool.list.free_count
+}
+pub fn pool_try_acquire(pool: *Pool) rawptr {
+  return free_list_try_alloc(&pool.list)
+}
+pub fn pool_acquire(pool: *Pool) rawptr {
+  return free_list_alloc(&pool.list)
+}
+pub fn pool_release(pool: *Pool, memory: rawptr) {
+  free_list_free(&pool.list, memory)
+}
 
 pub fn copy(destination: []u8, source: []const u8) usize {
-  if #len(destination) < #len(source) { #panic("copy destination too small") }
+  if #len(destination) < #len(source) {
+    #panic("copy destination too small")
+  }
   i: usize = 0
   for i < #len(source) {
     destination[i] = source[i]
@@ -333,8 +448,12 @@ pub fn copy(destination: []u8, source: []const u8) usize {
 }
 
 pub fn move(destination: []u8, source: []const u8) usize {
-  if #len(destination) < #len(source) { #panic("move destination too small") }
-  if #len(source) == 0 { return 0 }
+  if #len(destination) < #len(source) {
+    #panic("move destination too small")
+  }
+  if #len(source) == 0 {
+    return 0
+  }
   destination_address := #cast(usize) &destination[0]
   source_address := #cast(usize) &source[0]
   i: usize = 0
@@ -363,15 +482,25 @@ pub fn zero(bytes: []u8) {
 
 pub fn compare(left: []const u8, right: []const u8) i32 {
   count := #len(left)
-  if #len(right) < count { count = #len(right) }
+  if #len(right) < count {
+    count = #len(right)
+  }
   i: usize = 0
   for i < count {
-    if left[i] < right[i] { return -1 }
-    if left[i] > right[i] { return 1 }
+    if left[i] < right[i] {
+      return -1
+    }
+    if left[i] > right[i] {
+      return 1
+    }
     i += 1
   }
-  if #len(left) < #len(right) { return -1 }
-  if #len(left) > #len(right) { return 1 }
+  if #len(left) < #len(right) {
+    return -1
+  }
+  if #len(left) > #len(right) {
+    return 1
+  }
   return 0
 }
 
@@ -379,29 +508,46 @@ struct Block { next: *Block, arena: Arena, start: usize }
 // Blocks never move. Reset retains them for reuse; release invalidates all borrows.
 // Thread confined and not independently copyable by convention, like Arena.
 pub struct GrowingArena { first: *Block, current: *Block, block_size: usize }
-pub fn growing_create(block_size: usize) GrowingArena { return GrowingArena{ block_size: block_size } }
+pub fn growing_create(block_size: usize) GrowingArena {
+  return GrowingArena{ block_size: block_size }
+}
 
 pub fn growing_try_push(arena: *GrowingArena, size: usize, alignment: usize) Allocation {
-  if !valid_alignment(alignment) { return Allocation{ error: ErrorKind.InvalidAlignment } }
-  if size == 0 { return Allocation{ ok: true } }
+  if !valid_alignment(alignment) {
+    return Allocation{ error: ErrorKind.InvalidAlignment }
+  }
+  if size == 0 {
+    return Allocation{ ok: true }
+  }
   block := arena.current
   last: *Block = nil
   for block != nil {
     reused := arena_try_push(&block.arena, size, alignment)
-    if reused.ok { arena.current = block return reused }
+    if reused.ok {
+      arena.current = block
+      return reused
+    }
     last = block
     block = block.next
   }
   capacity := arena.block_size
-  if capacity < size { capacity = size }
+  if capacity < size {
+    capacity = size
+  }
   maximum := #cast(usize) -1
   overhead := #sizeof(Block) + #alignof(Block) - 1
-  if capacity > maximum - overhead { return Allocation{ error: ErrorKind.Overflow } }
+  if capacity > maximum - overhead {
+    return Allocation{ error: ErrorKind.Overflow }
+  }
   capacity += overhead
-  if alignment - 1 > maximum - capacity { return Allocation{ error: ErrorKind.Overflow } }
+  if alignment - 1 > maximum - capacity {
+    return Allocation{ error: ErrorKind.Overflow }
+  }
   capacity += alignment - 1
   created := arena_create(capacity)
-  if !created.ok { return Allocation{ error: ErrorKind.System, code: created.code } }
+  if !created.ok {
+    return Allocation{ error: ErrorKind.System, code: created.code }
+  }
   header := arena_push(&created.arena, #sizeof(Block), #alignof(Block))
   block = #cast(*Block) header
   block.arena = created.arena
@@ -413,15 +559,21 @@ pub fn growing_try_push(arena: *GrowingArena, size: usize, alignment: usize) All
     _ = arena_release(&owner)
     return result
   }
-  if last != nil { last.next = block }
-  else { arena.first = block }
+  if last != nil {
+    last.next = block
+  }
+  else {
+    arena.first = block
+  }
   arena.current = block
   return result
 }
 
 pub fn growing_push(arena: *GrowingArena, size: usize, alignment: usize) *u8 {
   result := growing_try_push(arena, size, alignment)
-  if !result.ok { #panic("growing arena allocation failed") }
+  if !result.ok {
+    #panic("growing arena allocation failed")
+  }
   return result.memory
 }
 
@@ -443,7 +595,9 @@ pub fn growing_release(arena: *GrowingArena) Status {
     // block.arena intact for retry; success removes the block from the chain.
     owner := block.arena
     result := arena_release(&owner)
-    if !result.ok { return result }
+    if !result.ok {
+      return result
+    }
     arena.first = next
     arena.current = next
   }
