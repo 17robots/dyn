@@ -10,7 +10,7 @@ void dyn_cli_help(const char *command) {
       "Dyn compiler\n\nUsage: dyn <command> [options] <directory>\n\n"
       "Commands:\n  check    parse and validate module\n  build    build "
       "executable module\n  run      build and run executable module\n"
-      "  fmt      canonicalize source whitespace\n"
+      "  fmt      canonicalize source layout\n"
       "  docs     print public declarations (Markdown or --json)\n"
       "  query    export semantic program index as JSON\n"
       "  lsp      run stdio language server\n"

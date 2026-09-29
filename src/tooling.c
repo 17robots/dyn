@@ -2,6 +2,8 @@
 #include "dyn.h"
 #include "dyn_syntax.h"
 #include <ctype.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,12 +14,127 @@ static int replace_file(const DynSource *s, const char *text, size_t length);
 int dyn_format_directory(const char *directory, bool check);
 int dyn_docs_directory(const char *directory, bool json);
 
+/* Layout edits are insertions only, so they cannot change tokens. */
+typedef struct {
+  size_t offset;
+  unsigned indent; /* UINT_MAX inserts one space; otherwise newline + indent */
+} FormatInsert;
+
+typedef struct {
+  const char *text;
+  FormatInsert *items;
+  size_t count, capacity;
+  bool failed;
+} FormatEdits;
+
+static void format_insert(FormatEdits *edits, size_t offset, unsigned indent) {
+  if (edits->count == edits->capacity) {
+    size_t capacity = edits->capacity ? edits->capacity * 2 : 32;
+    FormatInsert *items = realloc(edits->items, capacity * sizeof(*items));
+    if (!items) {
+      edits->failed = true;
+      return;
+    }
+    edits->items = items;
+    edits->capacity = capacity;
+  }
+  edits->items[edits->count++] = (FormatInsert){offset, indent};
+}
+
+static unsigned format_line_indent(const char *text, uint32_t offset) {
+  size_t line = offset;
+  while (line && text[line - 1] != '\n')
+    --line;
+  unsigned indent = 0;
+  while (text[line + indent] == ' ' || text[line + indent] == '\t')
+    ++indent;
+  return indent;
+}
+
+/* anchor_row/anchor_indent give the post-format indent of a line whose
+   statement moved; other lines keep their existing indentation. */
+static void format_layout(FormatEdits *edits, TSNode node, uint32_t anchor_row,
+                          unsigned anchor_indent) {
+  const char *text = edits->text;
+  if (!ts_node_is_named(node) && !strcmp(ts_node_type(node), ",")) {
+    char next = text[ts_node_end_byte(node)];
+    if (next && !strchr(" \t\r\n)]}", next))
+      format_insert(edits, ts_node_end_byte(node), UINT_MAX);
+    return;
+  }
+  uint32_t count = ts_node_child_count(node);
+  if (strcmp(ts_node_type(node), "block")) {
+    for (uint32_t i = 0; i < count; ++i)
+      format_layout(edits, ts_node_child(node, i), anchor_row, anchor_indent);
+    return;
+  }
+  uint32_t row = ts_node_start_point(node).row;
+  unsigned base = row == anchor_row
+                      ? anchor_indent
+                      : format_line_indent(text, ts_node_start_byte(node));
+  uint32_t previous = row;
+  bool statements = false;
+  for (uint32_t i = 0; i < count; ++i) {
+    TSNode child = ts_node_child(node, i);
+    uint32_t start = ts_node_start_point(child).row;
+    if (!strcmp(ts_node_type(child), "statement")) {
+      unsigned indent = format_line_indent(text, ts_node_start_byte(child));
+      if (start == previous) {
+        indent = base + 2;
+        format_insert(edits, ts_node_start_byte(child), indent);
+      }
+      format_layout(edits, child, start, indent);
+      previous = ts_node_end_point(child).row;
+      statements = true;
+    } else if (statements && !ts_node_is_named(child) &&
+               !strcmp(ts_node_type(child), "}") && start == previous)
+      format_insert(edits, ts_node_start_byte(child), base);
+    else
+      format_layout(edits, child, anchor_row, anchor_indent);
+  }
+}
+
+static int format_insert_order(const void *a, const void *b) {
+  size_t x = ((const FormatInsert *)a)->offset,
+         y = ((const FormatInsert *)b)->offset;
+  return x < y ? -1 : x > y;
+}
+
+/* Canonical layout: one statement per line, a space after each comma, LF line
+   endings, no trailing horizontal whitespace, and a final newline. Malformed
+   sources receive only the whitespace rules. */
 bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
-  char *out = malloc(s->length + 2);
-  if (!out)
+  FormatEdits edits = {.text = s->text};
+  TSTree *tree = dyn_syntax_parse(s->text, s->length);
+  if (tree && !ts_node_has_error(ts_tree_root_node(tree)))
+    format_layout(&edits, ts_tree_root_node(tree), UINT32_MAX, 0);
+  if (tree)
+    ts_tree_delete(tree);
+  size_t extra = 0;
+  for (size_t i = 0; i < edits.count; ++i)
+    extra += edits.items[i].indent == UINT_MAX ? 1 : 1 + edits.items[i].indent;
+  char *out = edits.failed ? NULL : malloc(s->length + extra + 2);
+  if (!out) {
+    free(edits.items);
     return false;
-  size_t at = 0, line = 0;
-  for (size_t i = 0; i < s->length; ++i) {
+  }
+  qsort(edits.items, edits.count, sizeof(*edits.items), format_insert_order);
+  size_t at = 0, line = 0, next = 0;
+  for (size_t i = 0; i <= s->length; ++i) {
+    for (; next < edits.count && edits.items[next].offset == i; ++next) {
+      if (edits.items[next].indent == UINT_MAX) {
+        out[at++] = ' ';
+        continue;
+      }
+      while (at > line && (out[at - 1] == ' ' || out[at - 1] == '\t'))
+        --at;
+      out[at++] = '\n';
+      line = at;
+      memset(out + at, ' ', edits.items[next].indent);
+      at += edits.items[next].indent;
+    }
+    if (i == s->length)
+      break;
     unsigned char c = (unsigned char)s->text[i];
     if (c == '\r' && i + 1 < s->length && s->text[i + 1] == '\n')
       continue;
@@ -29,6 +146,7 @@ bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
     } else
       out[at++] = (char)c;
   }
+  free(edits.items);
   while (at > line && (out[at - 1] == ' ' || out[at - 1] == '\t'))
     --at;
   if (at && out[at - 1] != '\n')
@@ -72,18 +190,48 @@ static int replace_file(const DynSource *s, const char *text, size_t length) {
   return failed ? 2 : 0;
 }
 
+/* Formatting only rewrites whitespace, so a clean parse is its whole
+   precondition. Semantic checking would need the project's imports. */
+bool dyn_format_syntax_ok(const DynSource *s, bool report) {
+  TSTree *tree = dyn_syntax_parse(s->text, s->length);
+  if (!tree) {
+    if (report)
+      fprintf(stderr, "%s: cannot parse source\n", s->path);
+    return false;
+  }
+  TSNode node = ts_tree_root_node(tree);
+  bool ok = !ts_node_has_error(node);
+  while (!ok && report) {
+    if (ts_node_is_error(node) || ts_node_is_missing(node)) {
+      dyn_syntax_diagnostic(node, s, "error", ts_node_is_missing(node)
+                                                  ? "missing syntax"
+                                                  : "syntax error");
+      break;
+    }
+    uint32_t count = ts_node_child_count(node), i = 0;
+    while (i < count && !ts_node_has_error(ts_node_child(node, i)))
+      ++i;
+    if (i == count) {
+      dyn_syntax_diagnostic(node, s, "error", "syntax error");
+      break;
+    }
+    node = ts_node_child(node, i);
+  }
+  ts_tree_delete(tree);
+  return ok;
+}
+
 int dyn_format_directory(const char *directory, bool check) {
   DynSources sources = {0};
   if (dyn_sources_load(NULL, directory, &sources))
     return 2;
-  char *main_path = dyn_path_join(directory, "main.dyn");
-  if (!main_path) {
-    dyn_sources_free(&sources);
-    return 2;
-  }
-  DynCheckResult parsed = dyn_check_sources(&sources, main_path, false);
-  free(main_path);
-  if (parsed.errors) {
+  /* Validate every file first so a malformed file never leaves the module
+     partially rewritten. */
+  bool malformed = false;
+  for (size_t i = 0; i < sources.count; ++i)
+    if (!dyn_format_syntax_ok(&sources.items[i], true))
+      malformed = true;
+  if (malformed) {
     dyn_sources_free(&sources);
     return 1;
   }

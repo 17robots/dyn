@@ -401,7 +401,16 @@ void lsp_code_actions(long id, LspDocument *documents, size_t count,
   free(uri);
 }
 
+/* Replace only the changed lines so editors keep cursor, folds and undo
+   history outside the edit; an already formatted document yields no edits. */
 void lsp_format(long id, const LspDocument *document) {
+  char empty[96];
+  if (!document) {
+    lsp_bounded_printf(empty, sizeof(empty),
+                       "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":null}", id);
+    lsp_send(empty);
+    return;
+  }
   DynSource source = {.path = document->uri,
                       .context = {.target = lsp_target_current(),
                                   .work = lsp_work_current()},
@@ -409,24 +418,50 @@ void lsp_format(long id, const LspDocument *document) {
                       .length = strlen(document->text)};
   char *formatted = NULL;
   size_t length = 0;
-  if (!dyn_format_source(&source, &formatted, &length)) {
-    char response[96];
-    lsp_bounded_printf(response, sizeof(response),
+  /* Match `dyn fmt`, which refuses malformed sources. */
+  if (!dyn_format_syntax_ok(&source, false) ||
+      !dyn_format_source(&source, &formatted, &length)) {
+    lsp_bounded_printf(empty, sizeof(empty),
                        "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":null}", id);
-    lsp_send(response);
+    lsp_send(empty);
     return;
   }
-  char *escaped = json_escape(formatted, length);
+  const char *text = source.text;
+  size_t prefix = 0, suffix = 0;
+  while (prefix < source.length && prefix < length && text[prefix] == formatted[prefix])
+    ++prefix;
+  if (prefix == source.length && prefix == length) {
+    lsp_bounded_printf(empty, sizeof(empty),
+                       "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[]}", id);
+    lsp_send(empty);
+    free(formatted);
+    return;
+  }
+  while (prefix && text[prefix - 1] != '\n')
+    --prefix;
+  while (suffix < source.length - prefix && suffix < length - prefix &&
+         text[source.length - suffix - 1] == formatted[length - suffix - 1])
+    ++suffix;
+  while (suffix && !(text[source.length - suffix - 1] == '\n' &&
+                     formatted[length - suffix - 1] == '\n'))
+    --suffix;
+  TSPoint start = dyn_syntax_advance((TSPoint){0, 0}, text, prefix);
+  TSPoint end = dyn_syntax_advance(start, text + prefix,
+                                   source.length - suffix - prefix);
+  char *escaped = json_escape(formatted + prefix, length - suffix - prefix);
   size_t capacity = (escaped ? strlen(escaped) : 0) + 256;
   char *body = malloc(capacity);
-  TSPoint end = lsp_text_end(document->text);
   if (body && escaped) {
     lsp_bounded_printf(body, capacity,
                        "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[{\"range\":"
-                       "{\"start\":{\"line\":0,\"character\":0},\"end\":{"
+                       "{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
                        "\"line\":%u,\"character\":%u}},\"newText\":\"%s\"}]}",
-                       id, end.row, end.column, escaped);
+                       id, start.row, start.column, end.row, end.column, escaped);
     lsp_send(body);
+  } else {
+    lsp_bounded_printf(empty, sizeof(empty),
+                       "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":null}", id);
+    lsp_send(empty);
   }
   free(body);
   free(escaped);
