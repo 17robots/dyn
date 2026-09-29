@@ -902,6 +902,24 @@ static void lsp_completion_locals(LspDocument *documents, size_t count,
   if (scope_parser && ts_parser_set_language(scope_parser, tree_sitter_dyn()))
     scope_tree = ts_parser_parse_string(scope_parser, NULL, patched,
                                         (uint32_t)strlen(patched));
+  /* Top-level completion has no local scope. Avoid rebuilding the entire
+     project with a synthetic local identifier just to discover that fact. */
+  const char *scope_marker = strstr(patched, marker);
+  if (scope_tree && scope_marker) {
+    uint32_t offset = (uint32_t)(scope_marker - patched);
+    TSNode scope = ts_node_named_descendant_for_byte_range(
+        ts_tree_root_node(scope_tree), offset, offset);
+    bool in_function = false;
+    for (; !ts_node_is_null(scope); scope = ts_node_parent(scope)) {
+      if (!strcmp(ts_node_type(scope), "fn")) { in_function = true; break; }
+    }
+    if (!in_function) {
+      ts_tree_delete(scope_tree);
+      ts_parser_delete(scope_parser);
+      free(patched);
+      return;
+    }
+  }
   LspSemantic semantic =
       lsp_semantic_project(documents, count, requested, patched);
   if (!semantic.ok) {
