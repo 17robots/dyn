@@ -266,6 +266,7 @@ void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned,
 void dyn_diagnostic_source(const char *severity, const DynSource *source,
                            size_t start, size_t end, const char *message);
 bool dyn_format_source(const DynSource *, char **, size_t *);
+bool dyn_format_syntax_ok(const DynSource *, bool);
 int dyn_format_directory(const char *, bool);
 int dyn_docs_directory(const char *, bool);
 int dyn_query_sources(const DynSources *, const char *);

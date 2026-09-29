@@ -500,8 +500,7 @@ int dyn_lsp(const DynTarget *target) {
       char *uri = json_string_after(body, "\"uri\"", 64u * 1024u);
       LspDocument *document =
           uri ? lsp_document(documents, document_count, uri) : NULL;
-      if (document)
-        lsp_format(id, document);
+      lsp_format(id, document);
       free(uri);
     } else if ((!strcmp(method, "textDocument/inlayHint"))) {
       char *uri = json_string_after(body, "\"uri\"", 64u * 1024u);
@@ -862,8 +861,23 @@ int dyn_lsp(const DynTarget *target) {
       bool more_changes = next_method && !strcmp(next_method, "textDocument/didChange") &&
           next_version && !strncmp(next_version, "\"2.0\"", 5) &&
           !lsp_json_member(pending, "\"id\"");
+      /* Answer one already queued completion before background diagnostics.
+         Document changes are already applied; analysis must not hold up typing.
+         Flush after that reply even if another completion is queued. */
+      bool completion_waiting = next_method &&
+          !strcmp(next_method, "textDocument/completion") &&
+          strcmp(method, "textDocument/completion") && next_version &&
+          !strncmp(next_version, "\"2.0\"", 5) &&
+          lsp_json_member(pending, "\"id\"");
       free(next_method);
       if (more_changes) ++coalesced;
+      else if (completion_waiting) {
+        /* Refresh syntax for context-sensitive completion, but defer the
+           expensive project-wide semantic diagnostics until after its reply. */
+        for (size_t i = 0; i < document_count; ++i) if (documents[i].dirty) {
+          (void)lsp_publish_syntax(&documents[i]); documents[i].dirty = false;
+        }
+      }
       else {
         for (size_t i = 0; i < document_count; ++i) if (documents[i].dirty) {
           (void)lsp_publish_syntax(&documents[i]); documents[i].dirty = false;

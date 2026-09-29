@@ -30,7 +30,9 @@ pub fn finish(destination: *Trace, span: Span) bool {
     return false
   }
   duration := clock.elapsed(span.started, finished)
-  if !duration.ok { return false }
+  if !duration.ok {
+    return false
+  }
   destination.events[destination.count] = Event{
     name: span.name,
     started_nanoseconds: span.started.seconds * clock.Second + span.started.nanoseconds,
@@ -40,7 +42,10 @@ pub fn finish(destination: *Trace, span: Span) bool {
   return true
 }
 
-pub fn recorded(value: *Trace) []Event { return value.events[..value.count] }
-pub fn clear(value: *Trace) { value.count = 0
+pub fn recorded(value: *Trace) []Event {
+  return value.events[..value.count]
+}
+pub fn clear(value: *Trace) {
+  value.count = 0
   value.dropped = 0
 }

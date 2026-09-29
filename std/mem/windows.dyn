@@ -6,10 +6,14 @@ extern fn arena_virtual_free "dyn_win_virtual_free"(address: rawptr, size: usize
 extern fn arena_last_error "dyn_win_arena_last_error"() u32
 fn mapping_allocate(size: usize) Mapping {
   address := arena_virtual_alloc(nil, size, 12288, 4)
-  if address == nil { return Mapping{ error: #cast(isize) arena_last_error() } }
+  if address == nil {
+    return Mapping{ error: #cast(isize) arena_last_error() }
+  }
   return Mapping{ bytes: (#cast(*u8) address)[..size], ok: true }
 }
 fn mapping_release(bytes: []u8) isize {
-  if arena_virtual_free(#cast(rawptr) &bytes[0], 0, 32768) == 0 { return #cast(isize) arena_last_error() }
+  if arena_virtual_free(#cast(rawptr) &bytes[0], 0, 32768) == 0 {
+    return #cast(isize) arena_last_error()
+  }
   return 0
 }

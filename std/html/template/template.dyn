@@ -8,7 +8,9 @@ pub type Field = core.Field
 pub type ParseResult = core.ParseResult
 pub type RenderResult = core.RenderResult
 
-pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult { return core.parse(arena, source) }
+pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
+  return core.parse(arena, source)
+}
 
 fn write(destination: stream.Writer, source: []const u8) RenderResult {
   result := stream.write_all(destination, source)
@@ -23,20 +25,39 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
   i: usize = 0
   for i < #len(source) {
     replacement: []const u8 = ""
-    if source[i] == '&' { replacement = "&amp;" }
-    else if source[i] == '<' { replacement = "&lt;" }
-    else if source[i] == '>' { replacement = "&gt;" }
-    else if source[i] == '"' { replacement = "&quot;" }
-    else if source[i] == 39 { replacement = "&#39;" }
+    if source[i] == '&' {
+      replacement = "&amp;"
+    }
+    else if source[i] == '<' {
+      replacement = "&lt;"
+    }
+    else if source[i] == '>' {
+      replacement = "&gt;"
+    }
+    else if source[i] == '"' {
+      replacement = "&quot;"
+    }
+    else if source[i] == 39 {
+      replacement = "&#39;"
+    }
     if #len(replacement) > 0 {
-      if i > start { literal_result := write(destination, source[start..i]) if !literal_result.ok { return literal_result } }
+      if i > start {
+        literal_result := write(destination, source[start..i])
+        if !literal_result.ok {
+          return literal_result
+        }
+      }
       replacement_result := write(destination, replacement)
-      if !replacement_result.ok { return replacement_result }
+      if !replacement_result.ok {
+        return replacement_result
+      }
       start = i + 1
     }
     i += 1
   }
-  if start < #len(source) { return write(destination, source[start..]) }
+  if start < #len(source) {
+    return write(destination, source[start..])
+  }
   return RenderResult{ error: ErrorKind.None, ok: true }
 }
 

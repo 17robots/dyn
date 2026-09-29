@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Incremental native artifacts for the compiler justfile (no Make dependency)."""
 import argparse
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import os
 import re
@@ -42,16 +43,37 @@ sources = sorted(COMPILER.glob('src/*.c'))
 headers = sorted(COMPILER.glob('src/*.h'))
 ts_sources = [TS_DIR/'src/parser.c', TS_DIR/'src/scanner.c']
 frontend = [COMPILER/'src'/name for name in ('frontend.c', 'ast.c', 'sema.c', 'sema_globals.c', 'source.c', 'source_tree.c', 'diagnostic.c', 'target.c')]
-unity = BUILD/'dyn_unity.c'
 artifacts = {}
-def add(name, inputs, command):
+requires = {}
+def add(name, inputs, command, needs=()):
     artifacts[name] = (list(map(Path, inputs)), list(map(str, command)))
+    requires[name] = list(needs)
 
-add('dyn-release', [unity, *headers, *ts_sources],
-    [*cc, *cppflags, *cflags, '-O2', '-I.', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', unity, *ts_sources, '-ltree-sitter', *llvm_ldflags, *llvm_libs, '-pthread', '-o', f'{BUILD}/dyn-release'])
+# One object per source file lets independent units compile in parallel and
+# recompiles only edited files; the grammar objects are shared by both links.
+# CPPFLAGS may carry linker search paths (Homebrew does); clang rejects those
+# as unused under -Werror in compile-only commands, so pass them to the link.
+def is_link_flag(flag):
+    return flag.startswith(('-L', '-l', '-Wl,'))
+object_cppflags = [f for f in cppflags if not is_link_flag(f)]
+link_cppflags = [f for f in cppflags if is_link_flag(f)]
 
-add('dyn', [unity, *headers, *ts_sources],
-    [*cc, *cppflags, *cflags, '-I.', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', unity, *ts_sources, '-ltree-sitter', *llvm_ldflags, *llvm_libs, '-pthread', '-o', f'{BUILD}/dyn'])
+def compiler_objects(kind, optimize):
+    names = []
+    for source in sources:
+        name = f'obj/{kind}/{source.stem}.o'
+        add(name, [source, *headers],
+            [*cc, *object_cppflags, *cflags, *optimize, f'-I{COMPILER}/src', f'-I{TS_DIR}/src', '-c', source, '-o', BUILD/name])
+        names.append(name)
+    return names + ['tree-sitter-dyn-parser.o', 'tree-sitter-dyn-scanner.o']
+
+def compiler_link(name, objects):
+    add(name, [BUILD/o for o in objects],
+        [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, '-ltree-sitter', *llvm_ldflags, *llvm_libs, '-pthread', '-o', BUILD/name],
+        objects)
+
+compiler_link('dyn-release', compiler_objects('release', ['-O2']))
+compiler_link('dyn', compiler_objects('debug', []))
 
 add('dynrt_start.o', [f'{COMPILER}/runtime/linux_x86_64_start.S'],
     [*cc, '-c', f'{COMPILER}/runtime/linux_x86_64_start.S', '-o', f'{BUILD}/dynrt_start.o'])
@@ -120,10 +142,10 @@ add('dynrt_wasm.o', [f'{COMPILER}/runtime/wasm_support.c'],
     [*clang, '--target=wasm32-unknown-unknown', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasm_support.c', '-o', f'{BUILD}/dynrt_wasm.o'])
 
 add('dynrt_wasi_start.o', [f'{COMPILER}/runtime/wasi_start.c'],
-    [*clang, '--target=wasm32-unknown-wasi', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasi_start.c', '-o', f'{BUILD}/dynrt_wasi_start.o'])
+    [*clang, '--target=wasm32-wasip1', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasi_start.c', '-o', f'{BUILD}/dynrt_wasi_start.o'])
 
 add('dynrt_wasi_support.o', [f'{COMPILER}/runtime/wasi_support.c'],
-    [*clang, '--target=wasm32-unknown-wasi', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasi_support.c', '-o', f'{BUILD}/dynrt_wasi_support.o'])
+    [*clang, '--target=wasm32-wasip1', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasi_support.c', '-o', f'{BUILD}/dynrt_wasi_support.o'])
 
 add('cache-failure-test', [f'{COMPILER}/tests/cache-failure.c', f'{COMPILER}/src/cache.c', f'{COMPILER}/src/build.c', *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', 'tests/cache-failure.c', f'{COMPILER}/src/build.c', '-pthread', '-o', f'{BUILD}/cache-failure-test'])
@@ -200,12 +222,11 @@ def write_changed(path, text):
 
 def build(name):
     inputs, command = artifacts[name]
+    inputs = list(inputs)
     output = BUILD/(name + ('.exe' if sys.platform == 'win32' and name.startswith('dyn') and not name.endswith('.o') else ''))
     stamp = BUILD/(name + '.build.json')
     # Header changes, flags, compiler selection and removed source files invalidate
     # artifacts too. Signatures are written only after a successful command.
-    if unity in inputs:
-        inputs += sources
     executable = shutil.which(command[0])
     if executable:
         inputs.append(Path(executable).resolve())
@@ -216,12 +237,44 @@ def build(name):
         return
     print(shlex.join(command), flush=True)
     stamp.unlink(missing_ok=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(command, cwd=COMPILER, check=True)
     stamp.write_text(encoded)
+
+def build_all(names, jobs):
+    # Artifacts write distinct outputs, so anything whose requirements are
+    # built can run concurrently. After a failure, finish running work only.
+    order = {}
+    def visit(name):
+        for need in requires[name]:
+            visit(need)
+        order.setdefault(name)
+    for name in names:
+        visit(name)
+    done, running, failure = set(), {}, None
+    with ThreadPoolExecutor(jobs) as pool:
+        while order or running:
+            if failure is None:
+                for name in [n for n in order if all(r in done for r in requires[n])]:
+                    del order[name]
+                    running[pool.submit(build, name)] = name
+            elif not running:
+                break
+            finished, _ = wait(running, return_when=FIRST_COMPLETED)
+            for future in finished:
+                name = running.pop(future)
+                try:
+                    future.result()
+                    done.add(name)
+                except Exception as error:
+                    failure = failure or error
+    if failure is not None:
+        raise failure
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('targets', nargs='+', choices=[*artifacts, 'all', 'host'])
+    parser.add_argument('--jobs', type=int, default=int(os.environ.get('JOBS', os.cpu_count() or 1)))
     args = parser.parse_args()
     BUILD.mkdir(parents=True, exist_ok=True)
     # Serialize writers to the same build directory, including recursive recipes.
@@ -235,11 +288,9 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX)
         if not all(path.is_file() for path in ts_sources):
             sys.exit('Missing generated grammar; run just deps or set TS_DIR to a grammar checkout')
-        write_changed(unity, '#define _POSIX_C_SOURCE 200809L\n' + ''.join(f'#include "{p.as_posix()}"\n' for p in sources))
         write_changed(BUILD/'libSystem.tbd', (COMPILER/'runtime/libSystem.tbd').read_text())
         targets = dict.fromkeys(n for t in args.targets for n in (ALL if t == 'all' else HOST if t == 'host' else [t]))
-        for name in targets:
-            build(name)
+        build_all(targets, max(1, args.jobs))
 
 if __name__ == '__main__':
     try:

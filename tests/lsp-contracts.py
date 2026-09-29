@@ -60,6 +60,51 @@ class Contracts(unittest.TestCase):
         path.write_text(text)
         return path
 
+    def test_completion_precedes_queued_change_diagnostics(self):
+        path = self.file('main.dyn', 'fn main() {}\n')
+        text = 'fn main() { _ = unknown }\n'
+        responses, _ = run_lsp([opened(path, 'fn main() {}\n'),
+            request('textDocument/didChange', {'textDocument': {
+                'uri': path.as_uri(), 'version': 2}, 'contentChanges': [{'text': text}]}),
+            request('textDocument/completion', {'textDocument': {'uri': path.as_uri()},
+                'position': {'line': 0, 'character': 22}}, 2),
+            request('textDocument/completion', {'textDocument': {'uri': path.as_uri()},
+                'position': {'line': 0, 'character': 22}}, 3)])
+        completion = next(i for i, item in enumerate(responses) if item.get('id') == 2)
+        updated = [i for i, item in enumerate(responses)
+                   if item.get('method') == 'textDocument/publishDiagnostics'
+                   and item['params']['diagnostics']]
+        self.assertTrue(updated, responses)
+        self.assertLess(completion, min(updated), responses)
+        following = next(i for i, item in enumerate(responses) if item.get("id") == 3)
+        self.assertLess(max(updated), following, responses)
+
+    def test_queued_completion_uses_updated_syntax_context(self):
+        path = self.file('main.dyn', 'fn main() {}\n')
+        text = 'enum Choice { One, Two }\nfn pick() Choice {\n return O\n}\n'
+        responses, _ = run_lsp([opened(path, 'fn main() {}\n'),
+            request('textDocument/didChange', {'textDocument': {
+                'uri': path.as_uri(), 'version': 2}, 'contentChanges': [{'text': text}]}),
+            request('textDocument/completion', {'textDocument': {'uri': path.as_uri()},
+                'position': {'line': 2, 'character': 9}}, 2)])
+        items = next(r['result'] for r in responses if r.get('id') == 2)
+        self.assertIn('One', {item['label'] for item in items})
+
+    def test_top_level_completion_skips_local_semantic_rebuild(self):
+        from unittest.mock import patch
+        import re
+        text = 'fn main() {}\n\n'
+        path = self.file('main.dyn', text)
+        with patch.dict(os.environ, {'DYN_LSP_ANALYSIS_STATS': '1'}):
+            _, baseline = run_lsp([opened(path, text)])
+            responses, completed = run_lsp([opened(path, text),
+                request('textDocument/completion', {'textDocument': {'uri': path.as_uri()},
+                    'position': {'line': 1, 'character': 0}}, 2)])
+        misses = lambda report: int(re.search(r'syntax-misses=(\d+)', report)[1])
+        self.assertEqual(misses(completed), misses(baseline), completed)
+        items = next(r['result'] for r in responses if r.get('id') == 2)
+        self.assertIn('fn', [item['label'] for item in items])
+
     def test_diagnostics_and_hover_reuse_one_analysis(self):
         from unittest.mock import patch
         import re

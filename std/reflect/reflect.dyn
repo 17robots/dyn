@@ -14,26 +14,52 @@ pub enum Kind {
 }
 
 // Ensures the compiler emits its stable TypeInfo ABI while this module is compiled independently.
-fn reflection_prelude_anchor() TypeInfo { return #typeof(u8) }
+fn reflection_prelude_anchor() TypeInfo {
+  return #typeof(u8)
+}
 
 // Bridge existing compiler metadata into public reflection vocabulary.
 pub fn category(info: TypeInfo) Kind {
   case info.kind {
-    TypeKind.Void => { return Kind.None },
-    TypeKind.Bool => { return Kind.Bool },
-    TypeKind.Integer => { return Kind.Integer },
-    TypeKind.Float => { return Kind.Float },
-    TypeKind.Pointer => { return Kind.Pointer },
-    TypeKind.Array => { return Kind.Array },
-    TypeKind.Slice => { return Kind.Slice },
-    TypeKind.Struct => { return Kind.Struct },
-    TypeKind.Enum => { return Kind.Enum },
-    TypeKind.Function => { return Kind.Function },
-    _ => { return Kind.Invalid },
+    TypeKind.Void => {
+      return Kind.None
+    },
+    TypeKind.Bool => {
+      return Kind.Bool
+    },
+    TypeKind.Integer => {
+      return Kind.Integer
+    },
+    TypeKind.Float => {
+      return Kind.Float
+    },
+    TypeKind.Pointer => {
+      return Kind.Pointer
+    },
+    TypeKind.Array => {
+      return Kind.Array
+    },
+    TypeKind.Slice => {
+      return Kind.Slice
+    },
+    TypeKind.Struct => {
+      return Kind.Struct
+    },
+    TypeKind.Enum => {
+      return Kind.Enum
+    },
+    TypeKind.Function => {
+      return Kind.Function
+    },
+    _ => {
+      return Kind.Invalid
+    },
   }
 }
 
-pub fn same(left: TypeInfo, right: TypeInfo) bool { return left.id == right.id }
+pub fn same(left: TypeInfo, right: TypeInfo) bool {
+  return left.id == right.id
+}
 pub fn is_number(info: TypeInfo) bool {
   value_category := category(info)
   return value_category == Kind.Integer || value_category == Kind.Float

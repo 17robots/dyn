@@ -3,6 +3,8 @@
 pub struct Event { bytes: [12]u8 }
 const EventDataOffset: usize = 4
 fn poll_native(descriptors: []PollDescriptor, timeout_milliseconds: i32) isize {
-  if #len(descriptors) == 0 { return #syscall(7, 0, 0, timeout_milliseconds) }
+  if #len(descriptors) == 0 {
+    return #syscall(7, 0, 0, timeout_milliseconds)
+  }
   return #syscall(7, &descriptors[0], #len(descriptors), timeout_milliseconds)
 }
