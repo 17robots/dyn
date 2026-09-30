@@ -171,8 +171,7 @@ pub fn encode(destination: []u8, pixels: []const u8, width: u32, height: u32, ch
   previous_alpha: u8 = 255
   output: usize = 14
   run: usize = 0
-  pixel: usize = 0
-  for pixel < count {
+  for pixel in 0..count {
     at := pixel * #cast(usize) channels
     red := pixels[at]
     green := pixels[at + 1]
@@ -254,15 +253,12 @@ pub fn encode(destination: []u8, pixels: []const u8, width: u32, height: u32, ch
     previous_green = green
     previous_blue = blue
     previous_alpha = alpha
-    pixel += 1
   }
   if output + 8 > #len(destination) {
     return EncodeResult{ error: -28 }
   }
-  i: usize = 0
-  for i < 7 {
+  for i in 0..7 {
     destination[output + i] = 0
-    i += 1
   }
   destination[output + 7] = 1
   output += 8

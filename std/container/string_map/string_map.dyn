@@ -17,8 +17,7 @@ fn locate(entries: []Entry, key: []const u8, hash: u64) usize {
   }
   index := #cast(usize) (hash % #cast(u64) #len(entries))
   first_deleted := #len(entries)
-  scanned: usize = 0
-  for scanned < #len(entries) {
+  for scanned in 0..#len(entries) {
     entry := entries[index]
     if entry.state == 0 {
       if first_deleted != #len(entries) {
@@ -36,7 +35,6 @@ fn locate(entries: []Entry, key: []const u8, hash: u64) usize {
     if index == #len(entries) {
       index = 0
     }
-    scanned += 1
   }
   return first_deleted
 }

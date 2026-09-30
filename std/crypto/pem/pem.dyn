@@ -5,12 +5,10 @@ fn equal_at(source: []const u8, at: usize, expected: []const u8) bool {
   if at > #len(source) || #len(expected) > #len(source) - at {
     return false
   }
-  i: usize = 0
-  for i < #len(expected) {
+  for i in 0..#len(expected) {
     if source[at + i] != expected[i] {
       return false
     }
-    i += 1
   }
   return true
 }

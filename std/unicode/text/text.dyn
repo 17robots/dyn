@@ -266,12 +266,10 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
       i += 1
     }
     sum: usize = 0
-    bucket: usize = 0
-    for bucket < 256 {
+    for bucket in 0..256 {
       amount := buckets[bucket]
       buckets[bucket] = sum
       sum += amount
-      bucket += 1
     }
     i = start
     for i < end {

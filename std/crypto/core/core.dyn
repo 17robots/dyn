@@ -7,10 +7,8 @@ fn add32(a: u32, b: u32) u32 {
 }
 fn shl32(x: u32, n: usize) u32 {
   factor: u64 = 1
-  i: usize = 0
-  for i < n {
+  for i in 0..n {
     factor *= 2
-    i += 1
   }
   wide: u64 = #cast(u64) x
   return #cast(u32) ((wide * factor) % Mod32)
@@ -111,10 +109,8 @@ pub fn sha256_update(context: *Sha256, input: []const u8) bool {
     if take > needed {
       take = needed
     }
-    i: usize = 0
-    for i < take {
+    for i in 0..take {
       context.tail[context.tail_length + i] = input[i]
-      i += 1
     }
     context.tail_length += take
     at += take
@@ -208,11 +204,9 @@ pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8
   }
   inner_block: [64]u8 = []
   outer_block: [64]u8 = []
-  pad_at: usize = 0
-  for pad_at < 64 {
+  for pad_at in 0..64 {
     inner_block[pad_at] = key_block[pad_at] ^ 54
     outer_block[pad_at] = key_block[pad_at] ^ 92
-    pad_at += 1
   }
   inner := Sha256{}
   sha256_init(&inner)
@@ -234,10 +228,8 @@ pub fn equal_constant_time(left: []const u8, right: []const u8) bool {
     return false
   }
   difference: u8 = 0
-  i: usize = 0
-  for i < #len(left) {
+  for i in 0..#len(left) {
     difference = difference | (left[i] ^ right[i])
-    i += 1
   }
   return difference == 0
 }

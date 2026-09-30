@@ -35,14 +35,12 @@ pub fn decode(text: []const u8, offset: usize) Decode {
   if width > #len(text) - offset {
     return Decode{ codepoint: 0, width: 1, ok: false }
   }
-  i: usize = 1
-  for i < width {
+  for i in 1..width {
     byte := text[offset + i]
     if byte < 128 || byte > 191 {
       return Decode{ codepoint: 0, width: 1, ok: false }
     }
     value = (value << 6) | #cast(u32) (byte & 63)
-    i += 1
   }
   if value < minimum || value > 1114111 || (value >= 55296 && value <= 57343) {
     return Decode{ codepoint: 0, width: 1, ok: false }

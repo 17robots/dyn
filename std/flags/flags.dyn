@@ -18,22 +18,18 @@ pub fn string_option(name: []const u8, short: u8) Option {
 }
 
 fn long_index(options: []const Option, name: []const u8) usize {
-  i: usize = 0
-  for i < #len(options) {
+  for i in 0..#len(options) {
     if bytes.equal(options[i].name, name) {
       return i
     }
-    i += 1
   }
   return #len(options)
 }
 fn short_index(options: []const Option, name: u8) usize {
-  i: usize = 0
-  for i < #len(options) {
+  for i in 0..#len(options) {
     if options[i].short != 0 && options[i].short == name {
       return i
     }
-    i += 1
   }
   return #len(options)
 }
@@ -51,10 +47,8 @@ pub fn parse(
     return failure(value_storage[..0], positional_storage[..0], ErrorKind.Capacity, 0, "")
   }
   values := value_storage[..#len(options)]
-  i: usize = 0
-  for i < #len(values) {
+  for i in 0..#len(values) {
     values[i] = Value{}
-    i += 1
   }
   positional_length: usize = 0
   options_done := false

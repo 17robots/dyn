@@ -201,8 +201,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     }
   }
   startup := Startup{ size: #cast(u32) #sizeof(Startup), flags: 256 }
-  index: usize = 0
-  for index < 3 {
+  for index in 0..3 {
     source: rawptr = nil
     if sources[index] == -1 {
       source = win_std(4294967286 - #cast(u32) index)
@@ -226,7 +225,6 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     } else {
       startup.error = duplicate
     }
-    index += 1
   }
   size: usize = 0
   _ = win_init_attributes(nil, 1, 0, &size)

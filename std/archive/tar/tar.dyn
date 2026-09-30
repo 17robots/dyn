@@ -62,14 +62,12 @@ fn parse_header(header: []const u8) Header {
   if !octal(header[148..156], &expected) || !octal(header[124..136], &size) {
     return Header{}
   }
-  i: usize = 0
-  for i < 512 {
+  for i in 0..512 {
     if i >= 148 && i < 156 {
       checksum += 32
     } else {
       checksum += #cast(u64) header[i]
     }
-    i += 1
   }
   if checksum != expected || size > 18446744073709551104 {
     return Header{}

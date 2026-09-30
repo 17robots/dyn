@@ -128,10 +128,8 @@ fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
   }
   raw := allocation.memory
   bytes := raw[..#len(text) + 1]
-  i: usize = 0
-  for i < #len(text) {
+  for i in 0..#len(text) {
     bytes[i] = text[i]
-    i += 1
   }
   bytes[#len(text)] = 0
   return raw
@@ -166,13 +164,11 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
   }
   raw := #cast(*CStringPointer) slots.memory
   pointers := raw[..length + 1]
-  i: usize = 0
-  for i < length {
+  for i in 0..length {
     pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) }
     if pointers[i].value == nil {
       return -28
     }
-    i += 1
   }
   pointers[length] = CStringPointer{ value: nil }
   value := #syscall(59, path_raw, &pointers[0], &pointers[length])
@@ -226,13 +222,11 @@ pub fn spawn_environment(
   }
   raw := #cast(*CStringPointer) allocation.memory
   pointers := raw[..count + 1]
-  index: usize = 0
-  for index < count {
+  for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
     if pointers[index].value == nil {
       return SpawnResult{ error: -28 }
     }
-    index += 1
   }
   pointers[count].value = nil
   env_allocation := memory.arena_try_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
@@ -264,8 +258,7 @@ pub fn spawn_environment(
       }
     }
   }
-  source_index: usize = 0
-  for source_index < 3 {
+  for source_index in 0..3 {
     if sources[source_index] >= 0 {
       copied := #syscall(72, sources[source_index], 1030, 3)
       if copied < 0 {
@@ -273,7 +266,6 @@ pub fn spawn_environment(
       }
       redirected_sources[source_index] = copied
     }
-    source_index += 1
   }
   descriptors: [2]i32 = []
   channel := #syscall(293, &descriptors[0], 524288)

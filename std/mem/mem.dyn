@@ -318,8 +318,7 @@ pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usiz
   }
 
   count := #len(backing) / slot_size
-  i: usize = 0
-  for i < count {
+  for i in 0..count {
     node := #cast(*FreeListNode) &backing[i * slot_size]
     if i + 1 < count {
       node.next = #cast(*FreeListNode) &backing[(i + 1) * slot_size]
@@ -327,7 +326,6 @@ pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usiz
     else {
       node.next = nil
     }
-    i += 1
   }
   return FreeList{
     backing: backing,
@@ -439,10 +437,8 @@ pub fn copy(destination: []u8, source: []const u8) usize {
   if #len(destination) < #len(source) {
     #panic("copy destination too small")
   }
-  i: usize = 0
-  for i < #len(source) {
+  for i in 0..#len(source) {
     destination[i] = source[i]
-    i += 1
   }
   return #len(source)
 }
@@ -473,10 +469,8 @@ pub fn move(destination: []u8, source: []const u8) usize {
 }
 
 pub fn zero(bytes: []u8) {
-  i: usize = 0
-  for i < #len(bytes) {
+  for i in 0..#len(bytes) {
     bytes[i] = 0
-    i += 1
   }
 }
 
@@ -485,15 +479,13 @@ pub fn compare(left: []const u8, right: []const u8) i32 {
   if #len(right) < count {
     count = #len(right)
   }
-  i: usize = 0
-  for i < count {
+  for i in 0..count {
     if left[i] < right[i] {
       return -1
     }
     if left[i] > right[i] {
       return 1
     }
-    i += 1
   }
   if #len(left) < #len(right) {
     return -1

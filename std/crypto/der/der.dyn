@@ -29,13 +29,11 @@ pub fn next(state: *Cursor) Result {
     if state.source[at] == 0 {
       return Result{ error_offset: at }
     }
-    i: usize = 0
-    for i < count {
+    for i in 0..count {
       if length > (18446744073709551615 - #cast(usize) state.source[at + i]) / 256 {
         return Result{ error_offset: at + i }
       }
       length = length * 256 + #cast(usize) state.source[at + i]
-      i += 1
     }
     if length < 128 {
       return Result{ error_offset: at }

@@ -150,8 +150,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
     probe: [1]u8 = []
   for {
     progress: bool = false
-    stream_index: usize = 0
-    for stream_index < 2 {
+    for stream_index in 0..2 {
       ended := out_end
       handle := stdout.input
       destination := output[used..]
@@ -192,7 +191,6 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
           err_end = read.ended
         }
       }
-      stream_index += 1
     }
     if result.kind != error_kinds.Kind.None {
       break

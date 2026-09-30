@@ -19,13 +19,11 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
     return ReadResult.Failed(-22)
   }
   name: [4096]u8 = []
-  i: usize = 0
-  for i < #len(path) {
+  for i in 0..#len(path) {
     if path[i] == 0 {
       return ReadResult.Failed(-22)
     }
     name[i] = path[i]
-    i += 1
   }
   // O_CLOEXEC | O_NONBLOCK, RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | NO_MAGICLINKS.
   how := OpenHow{flags: 526336, resolve: 14}

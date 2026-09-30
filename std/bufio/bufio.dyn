@@ -33,10 +33,8 @@ pub fn writer_flush(state: *Writer) io.Result {
     state.error = result.error
     state.kind = result.kind
     pending := state.used - result.transferred
-    i: usize = 0
-    for i < pending {
+    for i in 0..pending {
       state.storage[i] = state.storage[result.transferred + i]
-      i += 1
     }
     state.used = pending
     return result
@@ -70,10 +68,8 @@ fn writer_write(data: rawptr, source: []const u8) io.Result {
     if amount > available {
       amount = available
     }
-    i: usize = 0
-    for i < amount {
+    for i in 0..amount {
       state.storage[state.used + i] = source[total + i]
-      i += 1
     }
     state.used += amount
     total += amount
@@ -159,10 +155,8 @@ fn reader_read(data: rawptr, destination: []u8) io.Result {
     if amount > available {
       amount = available
     }
-    i: usize = 0
-    for i < amount {
+    for i in 0..amount {
       destination[total + i] = state.storage[state.start + i]
-      i += 1
     }
     state.start += amount
     total += amount

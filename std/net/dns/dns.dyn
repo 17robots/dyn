@@ -54,14 +54,12 @@ fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
       if amount > #len(destination) - used {
         return Name{}
       }
-      i: usize = 0
-      for i < amount {
+      for i in 0..amount {
         byte := packet[cursor + 1 + i]
         if byte >= 'A' && byte <= 'Z' {
           byte += 32
         }
         destination[used + i] = byte
-        i += 1
       }
       used += amount
       cursor += amount + 1
@@ -101,10 +99,8 @@ fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
   if #len(destination) < 17 || #len(name) == 0 || #len(name) > 253 {
     return destination[..0]
   }
-  i: usize = 0
-  for i < 12 {
+  for i in 0..12 {
     destination[i] = 0
-    i += 1
   }
   store_u16(destination, 0, identifier)
   store_u16(destination, 2, 256)
@@ -122,10 +118,8 @@ fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
     }
     destination[output] = #cast(u8) length
     output += 1
-    j: usize = 0
-    for j < length {
+    for j in 0..length {
       destination[output + j] = name[label_start + j]
-      j += 1
     }
     output += length
     if input < #len(name) {
@@ -150,12 +144,10 @@ fn same_name(left: []const u8, right: []const u8) bool {
   if #len(left) != #len(right) {
     return false
   }
-  i: usize = 0
-  for i < #len(left) {
+  for i in 0..#len(left) {
     if left[i] != right[i] {
       return false
     }
-    i += 1
   }
   return true
 }
@@ -197,10 +189,8 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
           return Name{}
         }
         target_length = alias.length
-        j: usize = 0
-        for j < target_length {
+        for j in 0..target_length {
           target[j] = candidate[j]
-          j += 1
         }
         found = true
       }
@@ -210,10 +200,8 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
     if !found {
       return current
     }
-    k: usize = 0
-    for k < target_length {
+    for k in 0..target_length {
       owner[k] = target[k]
-      k += 1
     }
     current.length = target_length
     hop += 1
@@ -237,8 +225,7 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
     return Result{ error: -22 }
   }
   cursor: usize = 12
-  q: usize = 0
-  for q < questions {
+  for q in 0..questions {
     cursor = skip_name(packet, cursor)
     if cursor == 0 || cursor + 4 > #len(packet) {
       return Result{ error: -22, ok: false }
@@ -247,7 +234,6 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
       return Result{ error: -22 }
     }
     cursor += 4
-    q += 1
   }
   owner: [254]u8 = []
   canonical := canonical_owner(packet, cursor, answers, owner[..])
@@ -255,8 +241,7 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
     return Result{ error: -22 }
   }
   count: usize = 0
-  answer: usize = 0
-  for answer < answers {
+  for answer in 0..answers {
     record_owner: [254]u8 = []
     parsed_owner := read_name(packet, cursor, record_owner[..])
     if !parsed_owner.ok {
@@ -285,15 +270,12 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
       if count == #len(ipv6) {
         return Result{ count: count, error: -28 }
       }
-      i: usize = 0
-      for i < 16 {
+      for i in 0..16 {
         ipv6[count].bytes[i] = packet[cursor + i]
-        i += 1
       }
       count += 1
     }
     cursor += length
-    answer += 1
   }
   return Result{ count: count, ok: true }
 }

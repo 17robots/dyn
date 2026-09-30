@@ -100,14 +100,12 @@ pub fn open_checked(source: []const u8) OpenResult {
   }
   count := #cast(usize) u16le(source, end + 10)
   cursor := start
-  i: usize = 0
-  for i < count {
+  for i in 0..count {
     entry := central_entry(source, cursor, end, start)
     if !entry.ok {
       return OpenResult{ error: entry.error }
     }
     cursor = entry.next
-    i += 1
   }
   if cursor != end {
     return OpenResult{ error: ErrorKind.Syntax }

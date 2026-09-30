@@ -8,8 +8,7 @@ pub fn temporary_directory(destination: []u8, prefix: []const u8) TemporaryResul
       return TemporaryResult{ error: -22 }
     }
   }
-  attempt: usize = 0
-  for attempt < 128 {
+  for attempt in 0..128 {
     path := temporary_path(destination, prefix, "")
     if #len(path) == 0 {
       return TemporaryResult{ error: -28 }
@@ -21,7 +20,6 @@ pub fn temporary_directory(destination: []u8, prefix: []const u8) TemporaryResul
     if created.error != -17 {
       return TemporaryResult{ error: created.error }
     }
-    attempt += 1
   }
   return TemporaryResult{ error: -17 }
 }

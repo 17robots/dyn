@@ -27,14 +27,12 @@ fn valid_name(name: []const u8) bool {
   if #len(name) == 0 {
     return false
   }
-  i: usize = 0
-  for i < #len(name) {
+  for i in 0..#len(name) {
     byte := name[i]
     if !((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
       (byte >= '0' && byte <= '9') || byte == '_' || byte == '.') {
         return false
       }
-    i += 1
   }
   return true
 }
@@ -62,10 +60,8 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   retained: []u8 = arena.data[memory.arena_used(arena)..memory.arena_used(arena)]
   if #len(source) > 0 {
     retained = allocation.memory[..#len(source)]
-    i: usize = 0
-    for i < #len(source) {
+    for i in 0..#len(source) {
       retained[i] = source[i]
-      i += 1
     }
   }
   return ParseResult{ template: Template{ source: retained }, error: ErrorKind.None, ok: true }

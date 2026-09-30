@@ -104,8 +104,7 @@ pub fn key_decode(bytes: []const u8) Key {
   if kind != KeyKind.Unknown {
     return Key{ kind: kind, consumed: 3 }
   }
-  end: usize = 2
-  for end < #len(bytes) {
+  for end in 2..#len(bytes) {
     if bytes[end] >= 64 && bytes[end] <= 126 {
       if end == 3 && bytes[end] == '~' {
         if bytes[2] == '1' {
@@ -120,7 +119,6 @@ pub fn key_decode(bytes: []const u8) Key {
       }
       return Key{ kind: kind, consumed: end + 1 }
     }
-    end += 1
   }
   return Key{ kind: KeyKind.Incomplete }
 }
