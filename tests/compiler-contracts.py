@@ -46,6 +46,77 @@ class Contracts(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(subprocess.run([str(root / 'program')]).returncode, 0)
 
+    def test_range_loops_and_sibling_scope_names(self):
+        program = """fn main() {
+  n: usize = 3
+  total: usize = 0
+  for i in 0..n {
+    total += i
+  }
+  for i in 1..=n {
+    if i == 2 {
+      continue
+    }
+    total += i
+  }
+  negative: isize = 0
+  for i in -2..0 {
+    negative += i
+  }
+  top: u8 = 255
+  count: u32 = 0
+  for value in 250..=top {
+    _ = value
+    count += 1
+  }
+  for value in 5..2 {
+    _ = value
+    #panic("empty range ran")
+  }
+  for i in 0..10 {
+    i = 100
+    total += 1
+    if i == 100 {
+      break
+    }
+  }
+  if true {
+    hidden := 1
+    _ = hidden
+  }
+  values: [3]i32 = [4, 5, 6]
+  sum: i32 = 0
+  for i in 0..3 {
+    sum += values[i]
+  }
+  hidden := 2
+  if total != 8 || negative != -3 || count != 6 || sum != 15 || hidden != 2 {
+    #panic("range loop")
+  }
+}
+"""
+        invalid = [
+            ('fn main() { i := 0 _ = i for i in 0..3 { _ = i } }', 'shadowing or duplicate local is forbidden'),
+            ('fn main() { for i in 0..3 { for i in 0..2 { _ = i } } }', 'shadowing or duplicate local is forbidden'),
+            ('fn main() { for i in 0..3 { _ = i } _ = i }', 'unknown name'),
+            ('fn main() { a: u8 = 1 b: u32 = 5 for i in a..b { _ = i } }', 'range bounds require the same integer type'),
+            ('fn main() { for *i in 0..3 { _ = i } }', 'range for-in binds values; remove the pointer binding'),
+        ]
+        with tempfile.TemporaryDirectory(prefix='dyn-range-loop-') as directory:
+            root = Path(directory)
+            (root / 'main.dyn').write_text(program)
+            for options in ([], ['--release']):
+                result = subprocess.run([DYN, 'build', directory, '--quiet', '--no-cache',
+                                         '--output', str(root / 'program'), *options],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(subprocess.run([str(root / 'program')]).returncode, 0)
+            for source, message in invalid:
+                (root / 'main.dyn').write_text(source + '\n')
+                result = subprocess.run([DYN, 'check', directory], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, source)
+                self.assertIn(message, result.stderr, source)
+
     def test_direct_local_borrows_cannot_escape_returns(self):
         invalid = [
             'fn bad() *i32 { x: i32 = 1 return &x }',
