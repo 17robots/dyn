@@ -305,8 +305,7 @@ void lsp_completion_signature(const char *start, char *out, size_t capacity) {
     if (space && at + 1 < capacity)
       out[at++] = ' ';
     space = false;
-    if ((*p == '"' || *p == '\\') && at + 1 < capacity)
-      out[at++] = '\\';
+    // Callers JSON-escape the result; escaping here too doubled quotes.
     if (at + 1 < capacity)
       out[at++] = *p;
   }
@@ -628,6 +627,8 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
         {"#bitcast", "#bitcast(type) value -> type",
          "#bitcast(${1:type}) ${2:value}"},
         {"#len", "#len(array_or_slice) -> usize", "#len(${1:array_or_slice})"},
+        {"#reverse", "for item in #reverse(range_or_collection)",
+         "#reverse(${1:range_or_collection})"},
         {"#sizeof", "#sizeof(type_or_value) -> usize",
          "#sizeof(${1:type_or_value})"},
         {"#alignof", "#alignof(type_or_value) -> usize",

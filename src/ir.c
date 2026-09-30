@@ -570,6 +570,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
                                     a->statements[i].for_const,
                                     a->statements[i].for_range,
                                     a->statements[i].for_inclusive,
+                                    a->statements[i].for_reverse,
                                     a->statements[i].span};
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value,

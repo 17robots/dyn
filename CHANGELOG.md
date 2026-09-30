@@ -12,6 +12,56 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+### `#reverse` for-in loops
+
+`#reverse` walks a range, array, or slice from its last value to its first:
+
+```dyn
+for i in #reverse(0..count) {   // count - 1, ..., 1, 0
+  _ = values[i]
+}
+for i in #reverse(1..=count) {  // count, ..., 2, 1
+  _ = i
+}
+for value in #reverse(values) { // last element first
+  _ = value
+}
+for *item in #reverse(values) { // mutate from the end
+  item.* += 1
+}
+```
+
+- `#reverse` visits exactly the values of the forward loop, in the opposite
+  order. `#reverse(0..0)` and `#reverse(5..2)` run no iterations.
+- Unsigned bounds never wrap: `#reverse(0..=n)` stops after `0`.
+- `#reverse` is valid only as a `for` iterable. `reverse` remains an ordinary
+  name.
+- A descending range such as `5..2` still runs no iterations. Use `#reverse`
+  to count down.
+
+**Migration.** Replace manual down-counters:
+
+```dyn
+i := count
+for i > 0 {
+  i -= 1
+  work(i)
+}
+```
+
+with `for i in #reverse(0..count) { work(i) }`. Convert only when `i -= 1` is
+the first statement of the body, the body never assigns `i` or takes `&i`, and
+`i` is not used after the loop. `continue` is safe here, because the manual loop
+already decremented before it.
+
+### Editor completion
+
+Completion details for declarations with quoted text, such as
+`extern fn poll "SDL_PollEvent"(...)`, no longer show doubled escapes.
+`#reverse` appears in completion and has hover documentation.
+
 ## 0.1.0-preview.10
 
 ### Range for-in loops

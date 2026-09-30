@@ -1384,6 +1384,10 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
           st.for_const = dyn_syntax_has_token(c, "const");
           st.name = span(binder);
           TSNode iterable = dyn_syntax_last_child(c);
+          if (!strcmp(ts_node_type(iterable), "reverse")) {
+            st.for_reverse = true;
+            iterable = dyn_syntax_child(iterable, 0);
+          }
           if (!strcmp(ts_node_type(iterable), "range")) {
             st.for_range = true;
             st.for_inclusive = dyn_syntax_has_token(iterable, "..=");

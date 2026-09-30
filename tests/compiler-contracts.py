@@ -117,6 +117,71 @@ class Contracts(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, source)
                 self.assertIn(message, result.stderr, source)
 
+    def test_reverse_range_and_collection_loops(self):
+        program = """fn main() {
+  n: usize = 3
+  order: usize = 0
+  for i in #reverse(0..n) {
+    order = order * 10 + i
+  }
+  for i in #reverse(1..=n) {
+    order = order * 10 + i
+  }
+  zero: usize = 0
+  for i in #reverse(0..zero) {
+    _ = i
+    #panic("empty reverse range ran")
+  }
+  for i in #reverse(5..2) {
+    _ = i
+    #panic("descending reverse range ran")
+  }
+  low: u8 = 0
+  high: u8 = 255
+  count: u32 = 0
+  for b in #reverse(low..=5) {
+    _ = b
+    count += 1
+  }
+  for b in #reverse(250..=high) {
+    _ = b
+    count += 1
+  }
+  signed: isize = 0
+  for i in #reverse(-2..1) {
+    signed = signed * 10 + i
+  }
+  values: [4]i32 = [1, 2, 3, 4]
+  digits: i32 = 0
+  for v in #reverse(values) {
+    if v == 2 {
+      continue
+    }
+    digits = digits * 10 + v
+  }
+  for *v in #reverse(values) {
+    v.* += 1
+  }
+  for v in #reverse(values[..0]) {
+    _ = v
+    #panic("empty reverse slice ran")
+  }
+  reverse := 1
+  if order != 210321 || count != 12 || signed != -12 || digits != 431 || values[0] != 2 || reverse != 1 {
+    #panic("reverse loop")
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(prefix='dyn-reverse-loop-') as directory:
+            root = Path(directory)
+            (root / 'main.dyn').write_text(program)
+            for options in ([], ['--release']):
+                result = subprocess.run([DYN, 'build', directory, '--quiet', '--no-cache',
+                                         '--output', str(root / 'program'), *options],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(subprocess.run([str(root / 'program')]).returncode, 0)
+
     def test_direct_local_borrows_cannot_escape_returns(self):
         invalid = [
             'fn bad() *i32 { x: i32 = 1 return &x }',

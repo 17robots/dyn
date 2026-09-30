@@ -1795,10 +1795,15 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     LLVMValueRef counter = gen_stack_slot(g, t, "for.range.index");
     LLVMValueRef first = gen_expr(g, st->target),
                  last = gen_expr(g, st->expression);
-    LLVMBuildStore(g->builder, first, counter);
-    bool sign = signed_type(type);
-    /* LLVM predicates: ULT 36, ULE 37, SLT 40, SLE 41. */
-    int more = st->for_inclusive ? (sign ? 41 : 37) : (sign ? 40 : 36);
+    /* #reverse walks the same values from the far end. Exclusive reverse
+       ranges keep the counter one above the value, so no bound wraps. */
+    bool reverse = st->for_reverse, sign = signed_type(type);
+    LLVMValueRef stop = reverse ? first : last;
+    LLVMBuildStore(g->builder, reverse ? last : first, counter);
+    /* LLVM predicates: UGT 34, UGE 35, ULT 36, ULE 37, SGT 38, SGE 39,
+       SLT 40, SLE 41. */
+    int more = reverse ? (st->for_inclusive ? (sign ? 39 : 35) : (sign ? 38 : 34))
+                       : (st->for_inclusive ? (sign ? 41 : 37) : (sign ? 40 : 36));
     LLVMBasicBlockRef condition = LLVMAppendBasicBlockInContext(
                           g->context, g->function, "for.condition"),
                       body = LLVMAppendBasicBlockInContext(
@@ -1814,11 +1819,16 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     LLVMValueRef index =
         LLVMBuildLoad2(g->builder, t, counter, "for.index.value");
     LLVMBuildCondBr(g->builder,
-                    LLVMBuildICmp(g->builder, more, index, last, "for.more"),
+                    LLVMBuildICmp(g->builder, more, index, stop, "for.more"),
                     body, done);
     LLVMPositionBuilderAtEnd(g->builder, body);
     /* The binding is a copy; assigning it does not change iteration. */
-    LLVMBuildStore(g->builder, index, g->locals[st->local_id]);
+    LLVMBuildStore(g->builder,
+                   reverse && !st->for_inclusive
+                       ? LLVMBuildSub(g->builder, index, LLVMConstInt(t, 1, 0),
+                                      "for.reverse.value")
+                       : index,
+                   g->locals[st->local_id]);
     LLVMBasicBlockRef old_break = g->break_target,
                       old_continue = g->continue_target;
     size_t old_break_defer = g->break_defer_count,
@@ -1843,15 +1853,19 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     index = LLVMBuildLoad2(g->builder, t, counter, "for.index.next");
     if (st->for_inclusive)
       LLVMBuildCondBr(g->builder,
-                      LLVMBuildICmp(g->builder, 32, index, last,
+                      LLVMBuildICmp(g->builder, 32, index, stop,
                                     "for.last"),
                       done, step);
     else
       LLVMBuildBr(g->builder, step);
     LLVMPositionBuilderAtEnd(g->builder, step);
     LLVMBuildStore(g->builder,
-                   LLVMBuildAdd(g->builder, index, LLVMConstInt(t, 1, 0),
-                                "for.index.increment"),
+                   reverse ? LLVMBuildSub(g->builder, index,
+                                          LLVMConstInt(t, 1, 0),
+                                          "for.index.decrement")
+                           : LLVMBuildAdd(g->builder, index,
+                                          LLVMConstInt(t, 1, 0),
+                                          "for.index.increment"),
                    counter);
     LLVMBuildBr(g->builder, condition);
     LLVMPositionBuilderAtEnd(g->builder, done);
@@ -1874,10 +1888,12 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
       }
     } else
       source = gen_expr(g, st->target);
-    LLVMBuildStore(g->builder, LLVMConstInt(usize, 0, 0), counter);
     LLVMValueRef length =
         array ? LLVMConstInt(usize, ir_array(g, collection)->length, 0)
               : LLVMBuildExtractValue(g->builder, source, 1, "for.len");
+    /* #reverse counts remaining elements down; the element is counter - 1. */
+    LLVMValueRef zero = LLVMConstInt(usize, 0, 0), one = LLVMConstInt(usize, 1, 0);
+    LLVMBuildStore(g->builder, st->for_reverse ? length : zero, counter);
     LLVMBasicBlockRef condition = LLVMAppendBasicBlockInContext(
                           g->context, g->function, "for.condition"),
                       body = LLVMAppendBasicBlockInContext(
@@ -1891,14 +1907,19 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     LLVMValueRef index =
         LLVMBuildLoad2(g->builder, usize, counter, "for.index.value");
     LLVMBuildCondBr(g->builder,
-                    LLVMBuildICmp(g->builder, 36, index, length, "for.more"),
+                    st->for_reverse
+                        ? LLVMBuildICmp(g->builder, 34, index, zero, "for.more")
+                        : LLVMBuildICmp(g->builder, 36, index, length,
+                                        "for.more"),
                     body, done);
     LLVMPositionBuilderAtEnd(g->builder, body);
+    if (st->for_reverse)
+      index = LLVMBuildSub(g->builder, index, one, "for.reverse.index");
     DynType element = array ? ir_array(g, collection)->element
                             : ir_slice(g, collection)->element;
     LLVMValueRef pointer;
     if (array) {
-      LLVMValueRef zero = LLVMConstInt(usize, 0, 0), indices[] = {zero, index};
+      LLVMValueRef indices[] = {zero, index};
       pointer =
           LLVMBuildGEP2(g->builder, ct, storage, indices, 2, "for.element");
     } else {
@@ -1935,8 +1956,9 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     LLVMPositionBuilderAtEnd(g->builder, increment);
     index = LLVMBuildLoad2(g->builder, usize, counter, "for.index.next");
     LLVMBuildStore(g->builder,
-                   LLVMBuildAdd(g->builder, index, LLVMConstInt(usize, 1, 0),
-                                "for.index.increment"),
+                   st->for_reverse
+                       ? LLVMBuildSub(g->builder, index, one, "for.index.decrement")
+                       : LLVMBuildAdd(g->builder, index, one, "for.index.increment"),
                    counter);
     LLVMBuildBr(g->builder, condition);
     LLVMPositionBuilderAtEnd(g->builder, done);
