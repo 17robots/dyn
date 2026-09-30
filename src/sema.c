@@ -300,10 +300,6 @@ static uint32_t find_local(Sema *sema, DynAstProgram *a, DynSpan name,
                            const DynSource *s) {
   return sema_local_lookup(sema, a, name, s, true);
 }
-static uint32_t find_any_local(Sema *sema, DynAstProgram *a, DynSpan name,
-                               const DynSource *s) {
-  return sema_local_lookup(sema, a, name, s, false);
-}
 static uint32_t sema_find_global_name(Sema *sema, DynAstProgram *a,
                                       DynSpan name, const DynSource *s) {
   return sema_name_lookup(&sema->globals, a, name, s, false);
@@ -314,6 +310,12 @@ static uint32_t sema_find_function(Sema *sema, DynAstProgram *a, DynSpan name,
       sema_find_global_name(sema, a, name, s) != UINT32_MAX)
     return UINT32_MAX;
   return sema_name_lookup(&sema->functions, a, name, s, true);
+}
+static bool range_bound_literal(const DynAstProgram *a, DynExprId id) {
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG)
+    e = &a->expressions[e->left];
+  return e->kind == DYN_EXPR_INT;
 }
 static DynSpan sema_unqualified_span(DynSpan name, const DynSource *s) {
   for (uint32_t i = name.start_byte; i < name.end_byte; ++i)
@@ -2289,7 +2291,7 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         if (v->payload_type == DYN_TYPE_VOID)
           error_span(arm->binding, s, errors,
                      "payloadless variant cannot bind payload");
-        else if (find_any_local(sema, a, arm->binding, s) != UINT32_MAX)
+        else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
           error_span(arm->binding, s, errors,
                      "shadowing or duplicate local is forbidden");
         else if (reserve_local(a)) {
@@ -2553,7 +2555,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           if (v->payload_type == DYN_TYPE_VOID)
             error_span(arm->binding, s, errors,
                        "payloadless variant cannot bind payload");
-          else if (find_any_local(sema, a, arm->binding, s) != UINT32_MAX)
+          else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
             error_span(arm->binding, s, errors,
                        "shadowing or duplicate local is forbidden");
           else if (reserve_local(a)) {
@@ -2590,6 +2592,63 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     return all_terminate;
   }
   if (st->kind == DYN_STMT_IF || st->kind == DYN_STMT_FOR) {
+    if (st->kind == DYN_STMT_FOR && st->for_range) {
+      /* A literal bound adapts to the other bound, so `0..count` takes
+         count's type. All-literal ranges count in usize for indexing, or
+         isize when a bound is negative. Bounds evaluate once, in order. */
+      DynType type;
+      bool first_literal = range_bound_literal(a, st->target),
+           last_literal = range_bound_literal(a, st->expression);
+      if (first_literal && last_literal) {
+        type = a->expressions[st->target].kind == DYN_EXPR_UNARY ||
+                       a->expressions[st->expression].kind == DYN_EXPR_UNARY
+                   ? DYN_TYPE_ISIZE
+                   : DYN_TYPE_USIZE;
+        if (check_expr(sema, a, st->target, s, errors, type) != type ||
+            check_expr(sema, a, st->expression, s, errors, type) != type)
+          type = DYN_TYPE_ERROR;
+      } else if (first_literal) {
+        type = check_expr(sema, a, st->expression, s, errors, DYN_TYPE_INFER);
+        if (check_expr(sema, a, st->target, s, errors, type) != type)
+          type = DYN_TYPE_ERROR;
+      } else {
+        type = check_expr(sema, a, st->target, s, errors, DYN_TYPE_INFER);
+        if (check_expr(sema, a, st->expression, s, errors, type) != type)
+          type = DYN_TYPE_ERROR;
+      }
+      if (type == DYN_TYPE_ERROR || !integer(sema, type)) {
+        error_span(st->span, s, errors,
+                   "range bounds require the same integer type");
+        return false;
+      }
+      if (st->for_pointer) {
+        error_span(st->span, s, errors,
+                   "range for-in binds values; remove the pointer binding");
+        return false;
+      }
+      if (find_local(sema, a, st->name, s) != UINT32_MAX) {
+        error_span(st->name, s, errors,
+                   "shadowing or duplicate local is forbidden");
+        return false;
+      }
+      if (!reserve_local(a)) {
+        error_span(st->span, s, errors, "out of memory");
+        return false;
+      }
+      st->local_id = (uint32_t)a->local_count;
+      a->locals[a->local_count++] =
+          (DynAstLocal){.name = st->name,
+                        .type = type,
+                        .active = true,
+                        .owner_function = sema->current_function};
+      bool pushed = push_loop(sema, st, s, errors);
+      (void)sema_block(sema, a, st->body_start, st->body_count, s, errors,
+                       true);
+      if (pushed)
+        pop_loop(sema);
+      a->locals[st->local_id].active = false;
+      return false;
+    }
     if (st->kind == DYN_STMT_FOR && st->target != DYN_NO_EXPR) {
       DynType collection =
           check_expr(sema, a, st->target, s, errors, DYN_TYPE_INFER);
@@ -2614,7 +2673,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                    "mutable pointer for-in requires mutable collection");
         return false;
       }
-      if (find_any_local(sema, a, st->name, s) != UINT32_MAX) {
+      if (find_local(sema, a, st->name, s) != UINT32_MAX) {
         error_span(st->name, s, errors,
                    "shadowing or duplicate local is forbidden");
         return false;
@@ -2665,7 +2724,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     return st->else_count && body && other;
   }
   if (st->kind == DYN_STMT_LOCAL) {
-    if (find_any_local(sema, a, st->name, s) != UINT32_MAX ||
+    if (find_local(sema, a, st->name, s) != UINT32_MAX ||
         sema_find_global_name(sema, a, st->name, s) != UINT32_MAX) {
       error_span(st->name, s, errors,
                  "shadowing or duplicate local is forbidden");
@@ -2962,7 +3021,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     fn->local_start = (uint32_t)a->local_count;
     for (uint32_t i = 0; i < fn->param_count; ++i) {
       DynAstParam *p = &a->params[fn->param_start + i];
-      if (find_any_local(sema, a, p->name, s) != UINT32_MAX ||
+      if (find_local(sema, a, p->name, s) != UINT32_MAX ||
           sema_find_global_name(sema, a, p->name, s) != UINT32_MAX) {
         error_span(p->name, s, errors, "duplicate parameter name");
         continue;

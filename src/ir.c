@@ -160,7 +160,8 @@ static void prove_array_bounds(DynIrProgram *ir, DynExprId id,
 }
 static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
                                 UIntRange *outer) {
-  if (loop->expression == DYN_NO_EXPR || !simple_loop_body(ir, loop))
+  if (loop->for_range || loop->expression == DYN_NO_EXPR ||
+      !simple_loop_body(ir, loop))
     return;
   DynIrExpr *condition = &ir->expressions[loop->expression];
   if (condition->kind != DYN_EXPR_BINARY || condition->op != DYN_OP_LT)
@@ -567,6 +568,8 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
                                     a->statements[i].defer_block,
                                     a->statements[i].for_pointer,
                                     a->statements[i].for_const,
+                                    a->statements[i].for_range,
+                                    a->statements[i].for_inclusive,
                                     a->statements[i].span};
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value,

@@ -1789,6 +1789,74 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     }
     return false;
   }
+  if (st->kind == DYN_STMT_FOR && st->for_range) {
+    DynType type = g->ir->expressions[st->target].type;
+    LLVMTypeRef t = llvm_type(g, type);
+    LLVMValueRef counter = gen_stack_slot(g, t, "for.range.index");
+    LLVMValueRef first = gen_expr(g, st->target),
+                 last = gen_expr(g, st->expression);
+    LLVMBuildStore(g->builder, first, counter);
+    bool sign = signed_type(type);
+    /* LLVM predicates: ULT 36, ULE 37, SLT 40, SLE 41. */
+    int more = st->for_inclusive ? (sign ? 41 : 37) : (sign ? 40 : 36);
+    LLVMBasicBlockRef condition = LLVMAppendBasicBlockInContext(
+                          g->context, g->function, "for.condition"),
+                      body = LLVMAppendBasicBlockInContext(
+                          g->context, g->function, "for.body"),
+                      increment = LLVMAppendBasicBlockInContext(
+                          g->context, g->function, "for.increment"),
+                      step = LLVMAppendBasicBlockInContext(
+                          g->context, g->function, "for.step"),
+                      done = LLVMAppendBasicBlockInContext(
+                          g->context, g->function, "for.done");
+    LLVMBuildBr(g->builder, condition);
+    LLVMPositionBuilderAtEnd(g->builder, condition);
+    LLVMValueRef index =
+        LLVMBuildLoad2(g->builder, t, counter, "for.index.value");
+    LLVMBuildCondBr(g->builder,
+                    LLVMBuildICmp(g->builder, more, index, last, "for.more"),
+                    body, done);
+    LLVMPositionBuilderAtEnd(g->builder, body);
+    /* The binding is a copy; assigning it does not change iteration. */
+    LLVMBuildStore(g->builder, index, g->locals[st->local_id]);
+    LLVMBasicBlockRef old_break = g->break_target,
+                      old_continue = g->continue_target;
+    size_t old_break_defer = g->break_defer_count,
+           old_continue_defer = g->continue_defer_count;
+    g->break_target = done;
+    g->continue_target = increment;
+    g->break_defer_count = g->continue_defer_count = g->defer_count;
+    g->defer_stack[st->loop_id].break_target = done;
+    g->defer_stack[st->loop_id].continue_target = increment;
+    g->defer_stack[st->loop_id].break_defer = g->defer_count;
+    g->defer_stack[st->loop_id].continue_defer = g->defer_count;
+    bool terminated = gen_block(g, st->body_start, st->body_count);
+    g->break_target = old_break;
+    g->continue_target = old_continue;
+    g->break_defer_count = old_break_defer;
+    g->continue_defer_count = old_continue_defer;
+    if (!terminated)
+      LLVMBuildBr(g->builder, increment);
+    /* An inclusive range may end at the type's maximum, so stop before the
+       increment instead of relying on a wrapped comparison. */
+    LLVMPositionBuilderAtEnd(g->builder, increment);
+    index = LLVMBuildLoad2(g->builder, t, counter, "for.index.next");
+    if (st->for_inclusive)
+      LLVMBuildCondBr(g->builder,
+                      LLVMBuildICmp(g->builder, 32, index, last,
+                                    "for.last"),
+                      done, step);
+    else
+      LLVMBuildBr(g->builder, step);
+    LLVMPositionBuilderAtEnd(g->builder, step);
+    LLVMBuildStore(g->builder,
+                   LLVMBuildAdd(g->builder, index, LLVMConstInt(t, 1, 0),
+                                "for.index.increment"),
+                   counter);
+    LLVMBuildBr(g->builder, condition);
+    LLVMPositionBuilderAtEnd(g->builder, done);
+    return false;
+  }
   if (st->kind == DYN_STMT_FOR && st->target != DYN_NO_EXPR) {
     DynType collection = g->ir->expressions[st->target].type;
     bool array = dyn_type_is_array(collection);
