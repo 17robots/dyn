@@ -1,7 +1,7 @@
 # Changelog
 
 Upgrade notes for Dyn code and the agents that write it. Newest release first.
-Preview 9 and 10 are backward compatible: code that built on preview 8 still
+Previews 9 to 11 are backward compatible: code that built on preview 8 still
 builds. The one tooling exception is `dyn fmt --check`, which applies stricter
 layout rules from preview 9 on. The other migrations below are cleanups, not
 required fixes.
@@ -12,7 +12,7 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.11
 
 ### `#reverse` for-in loops
 
