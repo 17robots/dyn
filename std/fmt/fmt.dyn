@@ -21,10 +21,8 @@ pub fn write(state: *Buffer, value: []const u8) bool {
   if state.length > #len(state.data) || #len(value) > remaining(state) {
     return false
   }
-  i: usize = 0
-  for i < #len(value) {
+  for i in 0..#len(value) {
     state.data[state.length + i] = value[i]
-    i += 1
   }
   state.length += #len(value)
   return true
@@ -121,10 +119,8 @@ pub fn write_padding(state: *Buffer, byte: u8, amount: usize) bool {
   if state.length > #len(state.data) || amount > remaining(state) {
     return false
   }
-  i: usize = 0
-  for i < amount {
+  for i in 0..amount {
     state.data[state.length + i] = byte
-    i += 1
   }
   state.length += amount
   return true
@@ -282,10 +278,8 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
         magnitude = -magnitude
       }
       scale: u64 = 1
-      i: usize = 0
-      for i < precision {
+      for i in 0..precision {
         scale *= 10
-        i += 1
       }
       scientific := magnitude != 0.0 && (magnitude < 0.000001 || magnitude * #cast(f64) scale >= 1000000000000000000.0)
       exponent: i64 = 0

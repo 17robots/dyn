@@ -24,10 +24,8 @@ fn shift_stream(state: *StreamScanner) {
     return
   }
   remaining := state.used - state.consumed
-  i: usize = 0
-  for i < remaining {
+  for i in 0..remaining {
     state.storage[i] = state.storage[state.consumed + i]
-    i += 1
   }
   state.used = remaining
   state.consumed = 0
@@ -117,8 +115,7 @@ fn emit(state: *Writer, bytes: []const u8) bool {
 
 fn escaped(state: *Writer, value: []const u8, attribute: bool) bool {
   start: usize = 0
-  i: usize = 0
-  for i < #len(value) {
+  for i in 0..#len(value) {
     replacement: []const u8 = ""
     if value[i] == '&' {
       replacement = "&amp;"
@@ -141,7 +138,6 @@ fn escaped(state: *Writer, value: []const u8, attribute: bool) bool {
       }
       start = i + 1
     }
-    i += 1
   }
   return start == #len(value) || emit(state, value[start..])
 }

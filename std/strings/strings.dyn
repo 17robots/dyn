@@ -493,8 +493,7 @@ pub fn clone(arena: *memory.Arena, source: []const u8) Result {
 pub fn join_size(parts: [][]const u8, separator: []const u8) SizeResult {
   total: usize = 0
   maximum := #cast(usize) -1
-  i: usize = 0
-  for i < #len(parts) {
+  for i in 0..#len(parts) {
     if #len(parts[i]) > maximum - total {
       return SizeResult{ error: ErrorKind.Overflow }
     }
@@ -505,7 +504,6 @@ pub fn join_size(parts: [][]const u8, separator: []const u8) SizeResult {
       }
       total += #len(separator)
     }
-    i += 1
   }
   return SizeResult{ value: total, ok: true }
 }
@@ -528,13 +526,11 @@ pub fn join_into(destination: []u8, parts: [][]const u8, separator: []const u8) 
     }
   }
   at: usize = 0
-  i: usize = 0
-  for i < #len(parts) {
+  for i in 0..#len(parts) {
     if i > 0 {
       at += memory.copy(output[at..], separator)
     }
     at += memory.copy(output[at..], parts[i])
-    i += 1
   }
   return Result{ value: output, required: size.value, ok: true }
 }

@@ -388,10 +388,8 @@ fn append_suffix(destination: []u8, base: []const u8, suffix: []const u8) PathRe
     destination[i] = base[i]
     i += 1
   }
-  j: usize = 0
-  for j < #len(suffix) {
+  for j in 0..#len(suffix) {
     destination[i + j] = suffix[j]
-    j += 1
   }
   return PathResult{ path: destination[..#len(base) + #len(suffix)], error: 0, kind: errors.linux(0), ok: true }
 }

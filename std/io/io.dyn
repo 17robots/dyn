@@ -324,10 +324,8 @@ fn cursor_read(data: rawptr, destination: []u8) Result {
   if #len(destination) < take {
     take = #len(destination)
   }
-  i: usize = 0
-  for i < take {
+  for i in 0..take {
     destination[i] = state.data[state.offset + i]
-    i += 1
   }
   state.offset += take
   status := Status.Complete
@@ -368,10 +366,8 @@ fn buffer_write(data: rawptr, source: []const u8) Result {
   if remaining < take {
     take = remaining
   }
-  i: usize = 0
-  for i < take {
+  for i in 0..take {
     state.data[state.length + i] = source[i]
-    i += 1
   }
   state.length += take
   if take != #len(source) {

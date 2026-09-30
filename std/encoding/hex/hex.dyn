@@ -31,11 +31,9 @@ pub fn encode(destination: []u8, source: []const u8, uppercase: bool) Result {
   if uppercase {
     alphabet = Upper
   }
-  i: usize = 0
-  for i < #len(source) {
+  for i in 0..#len(source) {
     destination[i * 2] = alphabet[#cast(usize) (source[i] >> 4)]
     destination[i * 2 + 1] = alphabet[#cast(usize) (source[i] & 15)]
-    i += 1
   }
   return Result{ data: destination[..required], required: required, ok: true }
 }

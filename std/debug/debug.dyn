@@ -32,14 +32,12 @@ pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpRes
     destination[output_at] = ' '
     destination[output_at + 1] = ' '
     output_at += 2
-    i: usize = 0
-    for i < row {
+    for i in 0..row {
       byte := source[input_at + i]
       destination[output_at] = digit(byte >> 4)
       destination[output_at + 1] = digit(byte & 15)
       destination[output_at + 2] = ' '
       output_at += 3
-      i += 1
     }
     destination[output_at] = '\n'
     output_at += 1
@@ -49,10 +47,8 @@ pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpRes
 }
 
 pub fn poison(destination: []u8, pattern: u8) {
-  index: usize = 0
-  for index < #len(destination) {
+  for index in 0..#len(destination) {
     destination[index] = pattern
-    index += 1
   }
 }
 pub fn all_equal(source: []const u8, pattern: u8) bool {

@@ -45,10 +45,8 @@ fn append_bytes(destination: []u8, offset: usize, source: []const u8) usize {
   if offset > #len(destination) || #len(source) > #len(destination) - offset {
     return #len(destination) + 1
   }
-  i: usize = 0
-  for i < #len(source) {
+  for i in 0..#len(source) {
     destination[offset + i] = source[i]
-    i += 1
   }
   return offset + #len(source)
 }
@@ -105,12 +103,10 @@ fn starts_ascii_case(input: []const u8, at: usize, expected: []const u8) bool {
   if at > #len(input) || #len(expected) > #len(input) - at {
     return false
   }
-  i: usize = 0
-  for i < #len(expected) {
+  for i in 0..#len(expected) {
     if ascii_lower(input[at + i]) != ascii_lower(expected[i]) {
       return false
     }
-    i += 1
   }
   return true
 }
@@ -415,10 +411,8 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
       if size > #len(destination) - output {
         return HttpIoResult{ error: -28 }
       }
-      i: usize = 0
-      for i < size {
+      for i in 0..size {
         destination[output + i] = input[cursor + i]
-        i += 1
       }
     }
     cursor += size
@@ -642,10 +636,8 @@ fn shift_consumed(state: *Server) {
     return
   }
   remaining := state.used - state.consumed
-  i: usize = 0
-  for i < remaining {
+  for i in 0..remaining {
     state.storage[i] = state.storage[state.consumed + i]
-    i += 1
   }
   state.used = remaining
   state.consumed = 0
@@ -946,10 +938,8 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
     if head.ok {
       if head.code >= 100 && head.code < 200 && head.code != 101 {
         remaining := used - head.header_length
-        i: usize = 0
-        for i < remaining {
+        for i in 0..remaining {
           response_storage[i] = response_storage[head.header_length + i]
-          i += 1
         }
         used = remaining
         continue

@@ -53,15 +53,12 @@ pub fn encode(destination: []u8, source: []const u8) Result {
       take = 5
     }
     block: u64 = 0
-    block_at: usize = 0
-    for block_at < take {
+    for block_at in 0..take {
       block = (block << 8) | #cast(u64) source[input_at + block_at]
-      block_at += 1
     }
     block = block << ((5 - take) * 8)
     symbols := (take * 8 + 4) / 5
-    digit: usize = 0
-    for digit < 8 {
+    for digit in 0..8 {
       if digit < symbols {
         destination[output_at] = symbol(#cast(u8) ((block >> (35 - digit * 5)) & 31))
       }
@@ -69,7 +66,6 @@ pub fn encode(destination: []u8, source: []const u8) Result {
         destination[output_at] = '='
       }
       output_at += 1
-      digit += 1
     }
     input_at += take
   }
@@ -137,13 +133,11 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
     if unused > 0 && ((block >> ((8 - symbols) * 5)) & ((#cast(u64) 1 << unused) - 1)) != 0 {
       return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
     }
-    byte_at: usize = 0
-    for byte_at < bytes {
+    for byte_at in 0..bytes {
       if write {
         destination[output_at] = #cast(u8) ((block >> (32 - byte_at * 8)) & 255)
       }
       output_at += 1
-      byte_at += 1
     }
     input_at += 8
   }

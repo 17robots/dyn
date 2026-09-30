@@ -48,15 +48,13 @@ fn valid_identifiers(text: []const u8, prerelease: bool) bool {
         return false
       }
       numeric := true
-      j := start
-      for j < i {
+      for j in start..i {
         if !identifier_byte(text[j]) {
           return false
         }
         if text[j] < '0' || text[j] > '9' {
           numeric = false
         }
-        j += 1
       }
       if prerelease && numeric && i - start > 1 && text[start] == '0' {
         return false
@@ -119,15 +117,13 @@ fn bytes_compare(a: []const u8, b: []const u8) i32 {
   if #len(b) < shared {
     shared = #len(b)
   }
-  i: usize = 0
-  for i < shared {
+  for i in 0..shared {
     if a[i] < b[i] {
       return -1
     }
     if a[i] > b[i] {
       return 1
     }
-    i += 1
   }
   if #len(a) < #len(b) {
     return -1

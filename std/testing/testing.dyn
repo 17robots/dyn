@@ -17,12 +17,10 @@ pub fn equal_bytes(left: []const u8, right: []const u8) bool {
   if #len(left) != #len(right) {
     return false
   }
-  i: usize = 0
-  for i < #len(left) {
+  for i in 0..#len(left) {
     if left[i] != right[i] {
       return false
     }
-    i += 1
   }
   return true
 }

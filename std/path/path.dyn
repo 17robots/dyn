@@ -145,11 +145,9 @@ pub fn clean(destination: []u8, path: []const u8) Result {
       if length > #len(destination) - at {
         return Result{ value: destination[..0], ok: false }
       }
-      j: usize = 0
-      for j < length {
+      for j in 0..length {
         destination[at] = path[start + j]
         at += 1
-        j += 1
       }
     }
   }
@@ -265,8 +263,7 @@ pub fn relative(destination: []u8, base: []const u8, target: []const u8) Result 
     return Result{ value: destination[..0] }
   }
   at: usize = 0
-  i: usize = 0
-  for i < parents {
+  for i in 0..parents {
     destination[at] = '.'
     destination[at + 1] = '.'
     at += 2
@@ -274,7 +271,6 @@ pub fn relative(destination: []u8, base: []const u8, target: []const u8) Result 
       destination[at] = '/'
       at += 1
     }
-    i += 1
   }
   for byte in remainder {
     destination[at] = byte

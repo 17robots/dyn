@@ -12,15 +12,13 @@ pub fn compare(left: []const u8, right: []const u8) i32 {
   if #len(right) < shared {
     shared = #len(right)
   }
-  i: usize = 0
-  for i < shared {
+  for i in 0..shared {
     if left[i] < right[i] {
       return -1
     }
     if left[i] > right[i] {
       return 1
     }
-    i += 1
   }
   if #len(left) < #len(right) {
     return -1
@@ -40,12 +38,10 @@ pub fn ends_with(value: []const u8, suffix: []const u8) bool {
 }
 
 pub fn find_byte(value: []const u8, byte: u8) isize {
-  i: usize = 0
-  for i < #len(value) {
+  for i in 0..#len(value) {
     if value[i] == byte {
       return #cast(isize) i
     }
-    i += 1
   }
   return -1
 }
@@ -167,10 +163,8 @@ pub fn cursor_read(state: *Cursor, destination: []u8) usize {
   if #len(destination) < take {
     take = #len(destination)
   }
-  i: usize = 0
-  for i < take {
+  for i in 0..take {
     destination[i] = state.data[state.offset + i]
-    i += 1
   }
   state.offset += take
   return take
@@ -206,10 +200,8 @@ pub fn builder_write(state: *Builder, value: []const u8) bool {
     state.failed = true
     return false
   }
-  i: usize = 0
-  for i < #len(value) {
+  for i in 0..#len(value) {
     state.data[state.length + i] = value[i]
-    i += 1
   }
   state.length += #len(value)
   return true

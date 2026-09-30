@@ -221,13 +221,11 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
         copies -= 1
       }
       for copies > 0 {
-        k: usize = 0
-        for k < atom_count {
+        for k in 0..atom_count {
           saved := state.tokens[begin + k]
           if !token(state, saved.op, saved.byte, saved.x, saved.y) {
             return false
           }
-          k += 1
         }
         if !token(state, ConcatToken, 0, 0, 0) {
           return false
@@ -235,13 +233,11 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
         copies -= 1
       }
       if unbounded {
-        k2: usize = 0
-        for k2 < atom_count {
+        for k2 in 0..atom_count {
           saved2 := state.tokens[begin + k2]
           if !token(state, saved2.op, saved2.byte, saved2.x, saved2.y) {
             return false
           }
-          k2 += 1
         }
         if !token(state, StarToken, 0, 0, 0) {
           return false
@@ -252,13 +248,11 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       } else if maximum > 0 {
         extras := maximum - minimum
         for extras > 0 {
-          k3: usize = 0
-          for k3 < atom_count {
+          for k3 in 0..atom_count {
             saved3 := state.tokens[begin + k3]
             if !token(state, saved3.op, saved3.byte, saved3.x, saved3.y) {
               return false
             }
-            k3 += 1
           }
           if !token(state, OptionalToken, 0, 0, 0) {
             return false
@@ -538,10 +532,8 @@ pub fn find_compiled(program: Program, text: []const u8, captures: []Match) Matc
   anchored := #len(program.pattern) > 0 && program.pattern[0] == '^'
   start: usize = 0
   for start <= #len(text) {
-    i: usize = 0
-    for i < #len(captures) {
+    for i in 0..#len(captures) {
       captures[i] = Match{}
-      i += 1
     }
     end := start
     fuel := (#len(program.code) + 1) * (#len(text) + 1) * 16

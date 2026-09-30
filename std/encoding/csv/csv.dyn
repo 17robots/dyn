@@ -160,8 +160,7 @@ pub fn write_field(state: *Writer, value: []const u8, end_record: bool) bool {
     return false
   }
   start: usize = 0
-  i: usize = 0
-  for i < #len(value) {
+  for i in 0..#len(value) {
     if value[i] == '"' {
       if i > start && !write_all(state, value[start..i]) {
         return false
@@ -171,7 +170,6 @@ pub fn write_field(state: *Writer, value: []const u8, end_record: bool) bool {
       }
       start = i + 1
     }
-    i += 1
   }
   if start < #len(value) && !write_all(state, value[start..]) {
     return false

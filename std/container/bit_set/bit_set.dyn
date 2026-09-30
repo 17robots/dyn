@@ -1,8 +1,6 @@
 pub fn clear(words: []u64) {
-  i: usize = 0
-  for i < #len(words) {
+  for i in 0..#len(words) {
     words[i] = 0
-    i += 1
   }
 }
 

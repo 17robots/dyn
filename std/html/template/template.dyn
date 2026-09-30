@@ -22,8 +22,7 @@ fn write(destination: stream.Writer, source: []const u8) RenderResult {
 
 fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
   start: usize = 0
-  i: usize = 0
-  for i < #len(source) {
+  for i in 0..#len(source) {
     replacement: []const u8 = ""
     if source[i] == '&' {
       replacement = "&amp;"
@@ -53,7 +52,6 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
       }
       start = i + 1
     }
-    i += 1
   }
   if start < #len(source) {
     return write(destination, source[start..])
