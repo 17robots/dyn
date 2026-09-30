@@ -3,6 +3,7 @@
 Dyn is ready for public preview testing. Start with
 [preview 10](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.10), then
 [report bugs](https://github.com/17robots/dyn/issues). APIs may change between previews.
+See the [changelog](CHANGELOG.md) for upgrade notes and code migrations.
 
 This repository contains the C bootstrap compiler, target runtime, SDK (`std/`
 and optional native bindings in `vendor/`), compiler tools and regression tests.
