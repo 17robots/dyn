@@ -94,6 +94,8 @@ const char *lsp_builtin_hover(const char *text, size_t line, size_t character) {
                    "compatible scalar bits without numeric conversion."},
       {"#len", "#len(array_or_slice) -> usize\nReturns an array or slice "
                "element count."},
+      {"#reverse", "for item in #reverse(range_or_collection)\nVisits a range, "
+                   "array, or slice from its last value to its first."},
       {"#sizeof", "#sizeof(type_or_value) -> usize\nReturns the compile-time "
                   "size in bytes."},
       {"#alignof", "#alignof(type_or_value) -> usize\nReturns the compile-time "

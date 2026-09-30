@@ -97,7 +97,7 @@ typedef struct {
   DynOperator assignment_op;
   uint32_t local_id, body_start, body_count, else_start, else_count, loop_id,
       target_loop_id, case_arm_start, case_arm_count;
-  bool defer_block, for_pointer, for_const, for_range, for_inclusive;
+  bool defer_block, for_pointer, for_const, for_range, for_inclusive, for_reverse;
   DynSpan span;
 } DynIrStmt;
 typedef struct {

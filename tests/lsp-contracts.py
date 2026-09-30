@@ -280,6 +280,11 @@ class Contracts(unittest.TestCase):
         self.assertTrue({'stream', 'value', 'one', 'two', 'commented'} <= labels, labels)
         self.assertNotIn('fake', labels)
 
+    def test_completion_detail_quotes_are_escaped_once(self):
+        text = 'extern fn poll "SDL_PollEvent"(event: rawptr) bool\nfn main() { po| }'
+        local = next(i for i in self.complete(text) if i['label'] == 'poll' and i.get('kind') == 3)
+        self.assertEqual(local['detail'], 'extern fn poll "SDL_PollEvent"(event: rawptr) bool')
+
     def test_completion_import_uses_unsaved_module(self):
         helper = self.file('helper/helper.dyn', 'pub fn disk() {}\n')
         items = self.complete('use "./helper"\nfn main() { helper.| }',
