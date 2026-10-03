@@ -8,8 +8,19 @@ _start:
 #endif
     call main
     mov %eax, %edi
-    mov $60, %eax
+    # Returning from main ends the process. With a C library linked, its
+    # exit() runs atexit handlers and flushes stdio first; exit is weak, so a
+    # freestanding program leaves the GOT slot at zero and exits directly.
+    # exit_group (231), not exit (60): other threads must end with the process.
+    movq exit@GOTPCREL(%rip), %rax
+    test %rax, %rax
+    jz 1f
+    call *%rax
+1:
+    mov $231, %eax
     syscall
+    ud2
+.weak exit
 #endif
 .section .text.dyn_panic,"ax",@progbits
 .global dyn_panic
@@ -87,8 +98,9 @@ dyn_panic:
     jmp .Ldyn_panic_frame
 #endif
 .Ldyn_panic_exit:
+    # A panic ends every thread, without atexit handlers (state may be broken).
     mov $101, %edi
-    mov $60, %eax
+    mov $231, %eax
     syscall
     ud2
 .section .text.dyn_unwind_set,"ax",@progbits

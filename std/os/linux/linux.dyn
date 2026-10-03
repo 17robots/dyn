@@ -371,8 +371,9 @@ pub fn termination_signal(status: i32) u8 {
   return #cast(u8) (status & 127)
 }
 
+// Ends the whole process: exit_group, so other threads end with it.
 pub fn exit_process(status: u8) {
-  _ = #syscall(60, status)
+  _ = #syscall(231, status)
   #panic("exit syscall returned")
 }
 

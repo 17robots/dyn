@@ -12,6 +12,107 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.12
+
+### Compiler correctness and scaling
+
+Bounds and overflow proofs now discard facts invalidated by branches, calls,
+indirect writes, or loop-carried assignments, and respect the target pointer
+width. Compound assignment evaluates its destination once. Floating-point
+inequality handles NaN correctly. Forward global initializers and dependent
+struct/enum layouts resolve in dependency order, and type-capacity overflow
+reports an error instead of corrupting interned types.
+
+Function/global lookup, module declaration lookup, source locations, and guard
+propagation avoid repeated whole-program scans. Range-analysis scratch is scoped
+to each function. String constants use bulk LLVM construction. Cache accounting
+includes retained frontend storage and estimated syntax-tree storage; executable
+cache keys include the selected runtime objects. LSP semantic tokens avoid
+repeated expression scans and repeated UTF-16 prefix conversion.
+
+### Reliable native deferred cleanup
+
+Windows and macOS unwind state is isolated by thread. Panic unwinding restores
+Windows XMM6–XMM15 and floating-point controls, and AArch64 d8–d15, so deferred
+cleanup retains its floating-point values. Context sizes follow the target ABI;
+Linux x64 keeps its existing 128-byte context.
+
+### Standard library performance and fixes
+
+Compiled regex matching uses an iterative machine with workspace independent of
+input length. Streaming deflate uses circular history. String-map deletion closes
+probe gaps, slot-map insertion skips the occupied prefix, and arena-backed pools
+use optional occupancy bits for constant-time release. HTTP readers scan fragmented
+headers and chunk framing incrementally. JSON output escapes control bytes, JSON
+string decoding releases unused arena space, and decimal formatting avoids
+rounding large integral doubles incorrectly.
+
+**Regex migration.** `regex.Match` now includes `error: MatchError`, with `None`
+and `Capacity` variants. Check `error` before treating `ok == false` as no match.
+`find_compiled` uses 4096 `usize` workspace slots; larger programs should allocate
+`match_workspace_size(program, capture_count)` slots and call
+`find_compiled_workspace(program, text, captures, workspace)`. This API performs
+no hidden allocation and clears captures on failure.
+
+**Allocator and container layout.** `mem.FreeList` gains `occupied: []u8`, and
+`slot_map.SlotMap` gains `next_free: usize`. Use their initializer functions rather
+than depending on struct layout. Pool occupancy storage is optional: caller-buffer
+and exact-capacity arena initialization retain their existing usable capacity and
+linear validation fallback. Rebuild consumers that depend on these layouts.
+
+The regression suite now covers allocation failures, compiler miscompilations,
+cache retention, fragmented HTTP, regex capacity, pool ownership, deflate history,
+and native unwind register preservation. Local Linux checks and cross-target ABI
+harnesses pass; the release workflow separately requires native platform checks
+and validated SDK packages before publication.
+
+### Faster, private `memcpy`, `memmove` and `memset`
+
+The runtime's `memcpy`, `memmove` and `memset` copied one byte at a time and
+were exported from every executable. A program that also linked a C library and
+shared libraries (SDL, FreeType, GPU drivers) replaced the C library's versions
+for all of them. They now move eight bytes at a time, use `rep movsb`/`rep
+stosb` for blocks of 512 bytes or more on x86-64, and have hidden visibility,
+so each shared library keeps its C library's versions. No code changes are
+needed. Projects that hid these symbols with a linker version script can keep
+it; it is no longer required.
+
+### Process exit runs C exit handlers
+
+A program that links the C library now ends through its `exit`, so `atexit`
+handlers run and buffered `printf`/`puts` output is flushed. Before, the
+runtime exited with a raw syscall and output written to a pipe or file was
+lost. Programs without the C library exit with `exit_group`, which also ends
+other threads. `os.exit_process` in `std/os/linux` uses `exit_group` too; it
+used to end only the calling thread.
+
+### Dyn functions may share a name with an extern's C symbol
+
+A Dyn function named like the C symbol of an extern in another file of the
+same module, such as `pub fn free` next to `extern fn libc_free "free"`, failed
+to link with an undefined `free.1`. The Dyn function now gets a private symbol
+and both resolve.
+
+### Global shadowing is checked in imported modules
+
+A parameter named like a global was rejected in the root module but accepted
+in imported modules. Both now report one error, "parameter has the name of a
+global; shadowing is forbidden", without a follow-on "unknown name" for each
+use. Rename the parameter if an imported module stops building.
+
+### Numeric literals adopt the other operand's type on either side
+
+A literal on the left of an operator defaulted to `i32`, so `8 + step` with
+`step: u32` failed with mismatched types while `step + 8` built. The literal
+now takes the other operand's type on either side, for arithmetic, bitwise and
+comparison operators. Casts written to work around this can be removed.
+
+### Hex literals containing `e` or `E` are integers
+
+`0x1E1E2E`, `0xE` and any other hex literal with an `e` or `E` digit were read as
+floating-point numbers, so `x: u32 = 0x1E` failed with "expected u32, found
+f32". They are now integers like every other hex literal.
+
 ## 0.1.0-preview.11
 
 ### `#reverse` for-in loops

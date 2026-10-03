@@ -20,7 +20,9 @@ typedef struct {
 typedef struct {
   char *dir;
   Decl *decls;
-  size_t decl_count;
+  size_t decl_count, decl_capacity;
+  size_t *decl_buckets;
+  size_t decl_bucket_capacity;
   Alias *aliases;
   size_t alias_count;
   bool root;
@@ -89,18 +91,63 @@ static Module *find_module(Module *modules, size_t count, const char *dir) {
       return &modules[i];
   return NULL;
 }
-static bool add_decl(Module *m, const char *name) {
-  for (size_t i = 0; i < m->decl_count; ++i)
-    if (!strcmp(m->decls[i].name, name))
+static uint64_t declaration_hash(const char *name) {
+  uint64_t hash = UINT64_C(14695981039346656037);
+  for (; *name; ++name)
+    hash = (hash ^ (unsigned char)*name) * UINT64_C(1099511628211);
+  return hash;
+}
+static bool has_decl(const Module *m, const char *name) {
+  if (!m->decl_bucket_capacity)
+    return false;
+  size_t mask = m->decl_bucket_capacity - 1;
+  size_t slot = declaration_hash(name) & mask;
+  while (m->decl_buckets[slot]) {
+    if (!strcmp(m->decls[m->decl_buckets[slot] - 1].name, name))
       return true;
-  Decl *p = realloc(m->decls, (m->decl_count + 1) * sizeof(*p));
-  if (!p)
+    slot = (slot + 1) & mask;
+  }
+  return false;
+}
+static bool add_decl(Module *m, const char *name) {
+  if (has_decl(m, name))
+    return true;
+  if (m->decl_count == m->decl_capacity) {
+    size_t capacity = m->decl_capacity ? m->decl_capacity * 2 : 16;
+    if (capacity < m->decl_capacity || capacity > SIZE_MAX / sizeof(*m->decls))
+      return false;
+    Decl *decls = realloc(m->decls, capacity * sizeof(*decls));
+    if (!decls)
+      return false;
+    m->decls = decls;
+    m->decl_capacity = capacity;
+  }
+  if (m->decl_count >= m->decl_bucket_capacity / 2) {
+    size_t capacity = m->decl_bucket_capacity ? m->decl_bucket_capacity * 2 : 32;
+    if (capacity < m->decl_bucket_capacity ||
+        capacity > SIZE_MAX / sizeof(*m->decl_buckets))
+      return false;
+    size_t *buckets = calloc(capacity, sizeof(*buckets));
+    if (!buckets)
+      return false;
+    for (size_t i = 0; i < m->decl_count; ++i) {
+      size_t slot = declaration_hash(m->decls[i].name) & (capacity - 1);
+      while (buckets[slot])
+        slot = (slot + 1) & (capacity - 1);
+      buckets[slot] = i + 1;
+    }
+    free(m->decl_buckets);
+    m->decl_buckets = buckets;
+    m->decl_bucket_capacity = capacity;
+  }
+  char *copy = strdup(name);
+  if (!copy)
     return false;
-  m->decls = p;
-  p[m->decl_count].name = strdup(name);
-  if (!p[m->decl_count].name)
-    return false;
-  ++m->decl_count;
+  size_t slot = declaration_hash(name) & (m->decl_bucket_capacity - 1);
+  while (m->decl_buckets[slot])
+    slot = (slot + 1) & (m->decl_bucket_capacity - 1);
+  m->decls[m->decl_count++].name = copy;
+  m->decl_buckets[slot] = m->decl_count;
   return true;
 }
 static bool add_alias(Module *m, const char *name, const char *target) {
@@ -117,12 +164,6 @@ static bool add_alias(Module *m, const char *name, const char *target) {
   }
   ++m->alias_count;
   return true;
-}
-static bool has_decl(const Module *m, const char *name) {
-  for (size_t i = 0; i < m->decl_count; ++i)
-    if (!strcmp(m->decls[i].name, name))
-      return true;
-  return false;
 }
 static const char *alias_target(const Module *m, const char *name) {
   for (size_t i = 0; i < m->alias_count; ++i)
@@ -515,6 +556,7 @@ static void free_modules(Module *m, size_t count) {
     for (size_t j = 0; j < m[i].decl_count; ++j)
       free(m[i].decls[j].name);
     free(m[i].decls);
+    free(m[i].decl_buckets);
     for (size_t j = 0; j < m[i].alias_count; ++j) {
       free(m[i].aliases[j].name);
       free(m[i].aliases[j].target);

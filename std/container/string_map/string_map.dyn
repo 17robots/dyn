@@ -16,17 +16,10 @@ fn locate(entries: []Entry, key: []const u8, hash: u64) usize {
     return 0
   }
   index := #cast(usize) (hash % #cast(u64) #len(entries))
-  first_deleted := #len(entries)
   for scanned in 0..#len(entries) {
     entry := entries[index]
     if entry.state == 0 {
-      if first_deleted != #len(entries) {
-        return first_deleted
-      }
       return index
-    }
-    if entry.state == 2 && first_deleted == #len(entries) {
-      first_deleted = index
     }
     if entry.state == 1 && entry.hash == hash && bytes.equal(entry.key, key) {
       return index
@@ -36,7 +29,7 @@ fn locate(entries: []Entry, key: []const u8, hash: u64) usize {
       index = 0
     }
   }
-  return first_deleted
+  return #len(entries)
 }
 
 pub fn get(state: *const Map, key: []const u8) Lookup {
@@ -103,7 +96,41 @@ pub fn remove(state: *Map, key: []const u8) bool {
   if index == #len(state.entries) || state.entries[index].state != 1 {
     return false
   }
-  state.entries[index] = Entry{ state: 2 }
+  // Move entries whose probe path crosses the hole. Stop at the first empty
+  // bucket, preserving lookup chains without leaving permanent tombstones.
+  hole := index
+  scan := index
+  capacity := #len(state.entries)
+  for scanned in 0..capacity - 1 {
+    scan += 1
+    if scan == capacity {
+      scan = 0
+    }
+    entry := state.entries[scan]
+    if entry.state == 0 {
+      break
+    }
+    home := #cast(usize) (entry.hash % #cast(u64) capacity)
+    scan_distance: usize = 0
+    if scan >= home {
+      scan_distance = scan - home
+    }
+    else {
+      scan_distance = capacity - home + scan
+    }
+    hole_distance: usize = 0
+    if hole >= home {
+      hole_distance = hole - home
+    }
+    else {
+      hole_distance = capacity - home + hole
+    }
+    if hole_distance < scan_distance {
+      state.entries[hole] = entry
+      hole = scan
+    }
+  }
+  state.entries[hole] = Entry{}
   state.length -= 1
   return true
 }

@@ -377,7 +377,21 @@ pub fn write_string(destination: []u8, source: []const u8) []u8 {
       destination[at + 1] = escaped
       at += 2
     } else {
-      if byte < 32 || at + 1 >= #len(destination) {
+      if byte < 32 {
+        if #len(destination) - at <= 6 {
+          return destination[..0]
+        }
+        digits := "0123456789abcdef"
+        destination[at] = '\\'
+        destination[at + 1] = 'u'
+        destination[at + 2] = '0'
+        destination[at + 3] = '0'
+        destination[at + 4] = digits[#cast(usize) (byte >> 4)]
+        destination[at + 5] = digits[#cast(usize) (byte & 15)]
+        at += 6
+        continue
+      }
+      if at + 1 >= #len(destination) {
         return destination[..0]
       }
       destination[at] = byte
@@ -414,7 +428,8 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   if end >= #len(cursor.source) {
     return failed_string(cursor)
   }
-  allocation := memory.arena_try_push(arena, end - start, 1)
+  mark := memory.arena_mark(arena)
+  allocation := memory.arena_try_push_uninit(arena, end - start, 1)
   if !allocation.ok {
     cursor.error = ErrorKind.Capacity
     return failed_string(cursor)
@@ -511,6 +526,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
     output_at += 1
   }
   cursor.at = end + 1
+  memory.arena_rewind(arena, mark + output_at)
   return output[..output_at]
 }
 

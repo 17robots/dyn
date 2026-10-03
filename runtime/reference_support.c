@@ -7,7 +7,16 @@ int _fltused = 0;
 #endif
 
 typedef struct DynUnwind DynUnwind;
+/* Keep these context sizes in sync with codegen.c and the native assembly. */
+#if defined(_WIN32)
+/* XMM6-XMM15 occupy bytes 96 through 255. */
+struct DynUnwind { DynUnwind *previous; uintptr_t saved[31]; };
+#elif defined(__aarch64__) || defined(DYN_AARCH64)
+/* d8-d15 occupy bytes 112 through 175. */
+struct DynUnwind { DynUnwind *previous; uintptr_t saved[21]; };
+#else
 struct DynUnwind { DynUnwind *previous; uintptr_t saved[15]; };
+#endif
 typedef struct {
   uint64_t tid;
   DynUnwind *top;
@@ -20,10 +29,17 @@ static DynUnwindSlot unwind_slots[64];
 long dyn_syscall6(long, long, long, long, long, long, long);
 void dyn_unwind_jump(DynUnwind *);
 void dyn_panic(const unsigned char *, uint64_t);
+#ifdef _WIN32
+__declspec(dllimport) unsigned long __stdcall GetCurrentThreadId(void);
+#elif defined(__APPLE__)
+extern void *pthread_self(void);
+#endif
 
 static DynUnwindSlot *unwind_slot(int claim) {
-#if defined(DYN_SINGLE_THREAD)
-  uint64_t tid = 1;
+#if defined(_WIN32)
+  uint64_t tid = (uint64_t)GetCurrentThreadId();
+#elif defined(__APPLE__)
+  uint64_t tid = (uint64_t)(uintptr_t)pthread_self();
 #elif defined(DYN_AARCH64)
   uint64_t tid = (uint64_t)dyn_syscall6(178, 0, 0, 0, 0, 0, 0);
 #else
@@ -93,36 +109,116 @@ void dyn_unwind_continue(void) {
   dyn_panic(0, 0);
 }
 
+/* Freestanding programs get memset, memcpy and memmove from here.
+ *
+ * They are hidden: a Dyn executable that also links a C library and shared
+ * libraries (SDL, FreeType, GPU drivers) must not export its own copies over
+ * the C library's to every one of them. Inside the program they move eight
+ * bytes at a time, and on x86-64 large blocks use the string instructions,
+ * which current processors run at memory speed.
+ *
+ * The loops must never be compiled back into calls to these functions:
+ * -fno-builtin covers Clang; GCC also needs loop-pattern distribution off. */
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+#define DYN_RUNTIME_HIDDEN __attribute__((visibility("hidden")))
+#else
+#define DYN_RUNTIME_HIDDEN
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#define DYN_NO_LOOP_CALLS __attribute__((optimize("no-tree-loop-distribute-patterns")))
+#else
+#define DYN_NO_LOOP_CALLS
+#endif
+/* An unaligned, freely aliasing 64-bit word. */
+typedef uint64_t __attribute__((may_alias, aligned(1))) DynWord;
+enum { DYN_STRING_THRESHOLD = 512 };
+
+static inline __attribute__((always_inline)) void copy_forward(unsigned char *to, const unsigned char *from, size_t count) {
+#if defined(__x86_64__)
+  if (count >= DYN_STRING_THRESHOLD) {
+    /* Copies upward one byte at a time in effect, so it is also correct
+       for an overlapping move to a lower address. */
+    __asm__ volatile("rep movsb" : "+D"(to), "+S"(from), "+c"(count) : : "memory");
+    return;
+  }
+#endif
+  /* Load a block before storing it: correct when the destination overlaps
+     the source from below, as memmove needs. */
+  for (; count >= 32; count -= 32, to += 32, from += 32) {
+    uint64_t a = *(const DynWord *)from, b = *(const DynWord *)(from + 8);
+    uint64_t c = *(const DynWord *)(from + 16), d = *(const DynWord *)(from + 24);
+    *(DynWord *)to = a;
+    *(DynWord *)(to + 8) = b;
+    *(DynWord *)(to + 16) = c;
+    *(DynWord *)(to + 24) = d;
+  }
+  for (; count >= 8; count -= 8, to += 8, from += 8)
+    *(DynWord *)to = *(const DynWord *)from;
+  for (; count; --count) *to++ = *from++;
+}
+
+static inline __attribute__((always_inline)) void copy_backward(unsigned char *to, const unsigned char *from, size_t count) {
+  to += count;
+  from += count;
+  for (; count >= 32; count -= 32) {
+    to -= 32;
+    from -= 32;
+    uint64_t a = *(const DynWord *)from, b = *(const DynWord *)(from + 8);
+    uint64_t c = *(const DynWord *)(from + 16), d = *(const DynWord *)(from + 24);
+    *(DynWord *)(to + 24) = d;
+    *(DynWord *)(to + 16) = c;
+    *(DynWord *)(to + 8) = b;
+    *(DynWord *)to = a;
+  }
+  for (; count >= 8; count -= 8) {
+    to -= 8;
+    from -= 8;
+    *(DynWord *)to = *(const DynWord *)from;
+  }
+  for (; count; --count) *--to = *--from;
+}
+
+DYN_RUNTIME_HIDDEN DYN_NO_LOOP_CALLS
 void *memset(void *destination, int value, size_t count) {
   unsigned char *bytes = destination;
-  for (size_t i = 0; i < count; ++i)
-    bytes[i] = (unsigned char)value;
+#if defined(__x86_64__)
+  if (count >= DYN_STRING_THRESHOLD) {
+    __asm__ volatile("rep stosb" : "+D"(bytes), "+c"(count) : "a"(value) : "memory");
+    return destination;
+  }
+#endif
+  uint64_t pattern = (uint64_t)(unsigned char)value * 0x0101010101010101ull;
+  for (; count >= 32; count -= 32, bytes += 32) {
+    *(DynWord *)bytes = pattern;
+    *(DynWord *)(bytes + 8) = pattern;
+    *(DynWord *)(bytes + 16) = pattern;
+    *(DynWord *)(bytes + 24) = pattern;
+  }
+  for (; count >= 8; count -= 8, bytes += 8) *(DynWord *)bytes = pattern;
+  for (; count; --count) *bytes++ = (unsigned char)value;
   return destination;
 }
 
 #ifdef __APPLE__
 /* LLVM lowers zero fills to bzero on Darwin even in freestanding programs. */
-void bzero(void *destination, size_t count) {
+DYN_RUNTIME_HIDDEN void bzero(void *destination, size_t count) {
   (void)memset(destination, 0, count);
 }
 #endif
 
+DYN_RUNTIME_HIDDEN DYN_NO_LOOP_CALLS
 void *memcpy(void *destination, const void *source, size_t count) {
-  unsigned char *to = destination;
-  const unsigned char *from = source;
-  for (size_t i = 0; i < count; ++i) to[i] = from[i];
+  copy_forward(destination, source, count);
   return destination;
 }
 
+DYN_RUNTIME_HIDDEN DYN_NO_LOOP_CALLS
 void *memmove(void *destination, const void *source, size_t count) {
-  unsigned char *to = destination;
-  const unsigned char *from = source;
-  uintptr_t to_address = (uintptr_t)to, from_address = (uintptr_t)from;
-  if (to_address > from_address && to_address - from_address < count) {
-    for (size_t i = count; i; --i) to[i - 1] = from[i - 1];
-  } else {
-    for (size_t i = 0; i < count; ++i) to[i] = from[i];
-  }
+  uintptr_t to = (uintptr_t)destination, from = (uintptr_t)source;
+  if (to > from && to - from < count)
+    copy_backward(destination, source, count);
+  else
+    copy_forward(destination, source, count);
   return destination;
 }
 

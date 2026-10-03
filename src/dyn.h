@@ -26,7 +26,7 @@ bool dyn_target_syscall_number(const DynTarget *target, uint64_t source,
 typedef struct DynSyntaxCacheEntry DynSyntaxCacheEntry;
 typedef struct {
   DynSyntaxCacheEntry *entries;
-  size_t count, bytes;
+  size_t count, bytes; /* bytes includes an estimated syntax-tree charge. */
   uint64_t hits, misses;
 } DynSyntaxCache;
 void dyn_syntax_cache_clear(DynSyntaxCache *);

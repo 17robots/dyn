@@ -660,6 +660,34 @@ class Contracts(unittest.TestCase):
         self.assertEqual(stderr, '')
         self.assertTrue(diagnostics(responses, path))
 
+    def test_const_tokens_preserve_bindings_and_unicode_columns(self):
+        self.file('values/module.dyn', 'pub const Value: i32 = 7\n')
+        text = ('use "./values" values\nconst Global: i32 = 42\n'
+                'fn main() { /* 😀 */ const Local: i32 = Global\n'
+                ' mutable: i32 = Local\n _ = values.Value\n _ = mutable\n}\n')
+        path = self.file('main.dyn', text)
+        for encoding in ('utf-8', 'utf-16'):
+            responses, stderr = run_lsp([opened(path, text), request('textDocument/semanticTokens/full', {
+                'textDocument': {'uri': path.as_uri()}}, 2)],
+                initialize={'capabilities': {'general': {'positionEncodings': [encoding]}}})
+            self.assertEqual(stderr, '')
+            data = next(r['result']['data'] for r in responses if r.get('id') == 2)
+            line = column = 0
+            readonly = []
+            for index in range(0, len(data), 5):
+                dl, dc, length, kind, modifiers = data[index:index + 5]
+                line += dl
+                column = dc if dl else column + dc
+                codec, width = ('utf-8', 1) if encoding == 'utf-8' else ('utf-16-le', 2)
+                row = text.splitlines()[line].encode(codec)
+                name = row[column * width:(column + length) * width].decode(codec)
+                if name in ('Global', 'Local', 'Value'):
+                    self.assertTrue(modifiers & 1, (encoding, name, modifiers))
+                    readonly.append(name)
+                elif name in ('values', 'mutable'):
+                    self.assertFalse(modifiers & 1, (encoding, name, modifiers))
+            self.assertCountEqual(readonly, ['Global', 'Global', 'Local', 'Local', 'Value'])
+
     def test_const_declaration_tokens(self):
         text = 'const Answer: i32 = 42\nfn main() { _ = Answer }\n'
         path = self.file('main.dyn', text)

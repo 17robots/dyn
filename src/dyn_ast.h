@@ -254,6 +254,7 @@ typedef struct {
   uint32_t parameter_count;
   bool has_return_type;
   bool allocation_failed;
+  bool type_capacity_exceeded;
   uint32_t body_start, body_count;
   DynAstExpr *expressions;
   size_t expression_count, expression_capacity;

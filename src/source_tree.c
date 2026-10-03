@@ -5,14 +5,14 @@
    freshly-read bytes so missed watcher events cannot preserve stale syntax. */
 struct DynSyntaxCacheEntry {
   char *path, *text;
-  size_t length;
+  size_t length, charge;
   TSTree *tree;
   struct DynSyntaxCacheEntry *next;
 };
 static void syntax_cache_drop(DynSyntaxCache *cache, DynSyntaxCacheEntry **at) {
   DynSyntaxCacheEntry *entry = *at;
   *at = entry->next;
-  cache->bytes -= entry->length;
+  cache->bytes -= entry->charge;
   --cache->count;
   free(entry->path); free(entry->text);
   ts_tree_delete(entry->tree); free(entry);
@@ -38,6 +38,17 @@ static TSTree *source_cached_tree(DynSource *source) {
   TSTree *tree = dyn_syntax_reparse_context(source->text, source->length, NULL, &source->syntax_too_deep, &source->context);
   const size_t limit = 8u * 1024u * 1024u;
   if (!tree || source->length > limit) return tree;
+  /* Tree-sitter has no retained-size API. Budget a conservative estimate per
+     visible node as well as the copied source and cache metadata. Source bytes
+     alone severely undercount dense syntax trees. This is an eviction estimate,
+     not an exact bound on the parser's allocations. */
+  size_t nodes = ts_node_descendant_count(ts_tree_root_node(tree));
+  size_t path_bytes = strlen(source->path) + 1;
+  size_t charge = source->length + 1 + sizeof(DynSyntaxCacheEntry);
+  if (charge > limit || path_bytes > limit - charge) return tree;
+  charge += path_bytes;
+  if (nodes > (limit - charge) / 128u) return tree;
+  charge += nodes * 128u;
   DynSyntaxCacheEntry *entry = calloc(1, sizeof(*entry));
   if (!entry) return tree;
   entry->path = malloc(strlen(source->path) + 1);
@@ -47,15 +58,16 @@ static TSTree *source_cached_tree(DynSource *source) {
   }
   strcpy(entry->path, source->path);
   memcpy(entry->text, source->text, source->length + 1);
-  entry->length = source->length; entry->tree = ts_tree_copy(tree);
+  entry->length = source->length; entry->charge = charge;
+  entry->tree = ts_tree_copy(tree);
   while (cache->entries &&
-         (cache->count >= 64 || source->length > limit - cache->bytes)) {
+         (cache->count >= 64 || charge > limit - cache->bytes)) {
     DynSyntaxCacheEntry **last = &cache->entries;
     while ((*last)->next) last = &(*last)->next;
     syntax_cache_drop(cache, last);
   }
   entry->next = cache->entries; cache->entries = entry;
-  ++cache->count; cache->bytes += source->length;
+  ++cache->count; cache->bytes += charge;
   return tree;
 }
 bool dyn_source_prepare(DynSource *source) {

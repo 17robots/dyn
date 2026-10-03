@@ -9,6 +9,7 @@
 #include "llvm_shim.h"
 #include "sema.h"
 #include <assert.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -625,6 +626,8 @@ static LLVMValueRef emit_call(Gen *g, LLVMTypeRef type, LLVMValueRef callee,
 #include "codegen_abi.h"
 
 static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
+  LLVMBasicBlockRef before = LLVMGetInsertBlock(g->builder);
+  uint64_t epoch = g->statement_epoch;
   LLVMBasicBlockRef ok = LLVMAppendBasicBlockInContext(g->context, g->function,
                                                        name),
                     bad = LLVMAppendBasicBlockInContext(g->context, g->function,
@@ -642,61 +645,15 @@ static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
              LLVMConstInt(LLVMInt64TypeInContext(g->context), strlen(message), 0));
   LLVMBuildUnreachable(g->builder);
   LLVMPositionBuilderAtEnd(g->builder, ok);
+  /* The success edge has a single predecessor. Carry only facts from that
+     predecessor, without searching the growing CFG for every check. */
+  if (g->statement_epoch == epoch) {
+    if (g->pointer_fact_block == before)
+      g->pointer_fact_block = ok;
+    if (g->bounds_fact_block == before)
+      g->bounds_fact_block = ok;
+  }
   return condition;
-}
-/* A fact is reusable iff every path from entry to here crosses its success
-   block. Test that directly by searching the CFG with that block removed. */
-static bool block_dominates(Gen *g, LLVMBasicBlockRef fact,
-                            LLVMBasicBlockRef here) {
-  if (!fact || !here)
-    return false;
-  if (fact == here)
-    return true;
-  size_t count = 0;
-  for (LLVMBasicBlockRef b = LLVMGetFirstBasicBlock(g->function); b;
-       b = LLVMGetNextBasicBlock(b))
-    ++count;
-  if (!count)
-    return false;
-  LLVMBasicBlockRef *todo = malloc(count * sizeof(*todo));
-  LLVMBasicBlockRef *seen = calloc(count, sizeof(*seen));
-  if (!todo || !seen) {
-    free(todo);
-    free(seen);
-    return false;
-  }
-  size_t n = 0;
-  LLVMBasicBlockRef entry = LLVMGetFirstBasicBlock(g->function);
-  if (entry != fact) {
-    todo[n++] = entry;
-    seen[0] = entry;
-  }
-  bool reached = false;
-  while (n && !reached) {
-    LLVMBasicBlockRef b = todo[--n];
-    if (b == here) {
-      reached = true;
-      break;
-    }
-    LLVMValueRef term = LLVMGetBasicBlockTerminator(b);
-    if (!term)
-      continue;
-    unsigned successors = LLVMGetNumSuccessors(term);
-    for (unsigned i = 0; i < successors; ++i) {
-      LLVMBasicBlockRef next = LLVMGetSuccessor(term, i);
-      size_t slot = 0;
-      for (LLVMBasicBlockRef x = LLVMGetFirstBasicBlock(g->function); x != next;
-           x = LLVMGetNextBasicBlock(x))
-        ++slot;
-      if (next != fact && !seen[slot]) {
-        seen[slot] = next;
-        todo[n++] = next;
-      }
-    }
-  }
-  free(todo);
-  free(seen);
-  return !reached;
 }
 static bool same_guard_value(LLVMValueRef a, LLVMValueRef b,
                              bool same_statement) {
@@ -707,8 +664,7 @@ static bool same_guard_value(LLVMValueRef a, LLVMValueRef b,
 }
 static LLVMValueRef checked_pointer(Gen *g, LLVMValueRef pointer,
                                     DynType pointee) {
-  if (block_dominates(g, g->pointer_fact_block,
-                      LLVMGetInsertBlock(g->builder)) &&
+  if (g->pointer_fact_block == LLVMGetInsertBlock(g->builder) &&
       same_guard_value(g->pointer_fact, pointer,
                        g->pointer_fact_epoch == g->statement_epoch) &&
       g->pointer_fact_pointee == pointee)
@@ -738,8 +694,7 @@ static LLVMValueRef checked_pointer(Gen *g, LLVMValueRef pointer,
 }
 
 static void checked_index(Gen *g, LLVMValueRef index, LLVMValueRef length) {
-  if (block_dominates(g, g->bounds_fact_block,
-                      LLVMGetInsertBlock(g->builder)) &&
+  if (g->bounds_fact_block == LLVMGetInsertBlock(g->builder) &&
       same_guard_value(g->bounds_index, index,
                        g->bounds_fact_epoch == g->statement_epoch) &&
       same_guard_value(g->bounds_length, length,
@@ -914,13 +869,13 @@ static LLVMValueRef static_value(Gen *g, DynExprId id, size_t depth) {
     DynIrString *string = &g->ir->strings[e->integer];
     LLVMTypeRef byte = LLVMInt8TypeInContext(g->context),
                 array = LLVMArrayType2(byte, string->length);
-    LLVMValueRef *bytes = calloc(string->length, sizeof(*bytes));
-    if (string->length && !bytes)
+    if (string->length > UINT_MAX) {
+      g->allocation_failed = true;
       return NULL;
-    for (size_t i = 0; i < string->length; ++i)
-      bytes[i] = LLVMConstInt(byte, string->data[i], 0);
-    LLVMValueRef initializer = LLVMConstArray2(byte, bytes, string->length);
-    free(bytes);
+    }
+    LLVMValueRef initializer = LLVMConstStringInContext(
+        g->context, string->length ? (const char *)string->data : "",
+        (unsigned)string->length, 1);
     char name[64];
     snprintf(name, sizeof(name), ".dyn.reflect.string.%zu", g->string_serial++);
     LLVMValueRef global = LLVMAddGlobal(g->module, array, name);
@@ -1079,6 +1034,55 @@ static LLVMValueRef lvalue_pointer(Gen *g, DynExprId id) {
   }
   return NULL;
 }
+static LLVMValueRef gen_binary(Gen *g, const DynIrExpr *e,
+                               LLVMValueRef l, LLVMValueRef r) {
+  LLVMTypeRef type = llvm_type(g, e->type);
+  if (e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE) {
+    int predicates_signed[] = {32, 33, 40, 41, 38, 39},
+        predicates_unsigned[] = {32, 33, 36, 37, 34, 35},
+        predicates_float[] = {1, 14, 4, 5, 2, 3};
+    unsigned index = (unsigned)e->op - (unsigned)DYN_OP_EQ;
+    if (float_type(g->ir->expressions[e->left].type))
+      return LLVMBuildFCmp(g->builder, predicates_float[index], l, r, "fcmp");
+    return LLVMBuildICmp(g->builder,
+                         signed_type(g->ir->expressions[e->left].type)
+                             ? predicates_signed[index]
+                             : predicates_unsigned[index],
+                         l, r, "icmp");
+  }
+  if (e->op == DYN_OP_BIT_AND)
+    return LLVMBuildAnd(g->builder, l, r, "and");
+  if (e->op == DYN_OP_BIT_OR)
+    return LLVMBuildOr(g->builder, l, r, "or");
+  if (e->op == DYN_OP_BIT_XOR)
+    return LLVMBuildXor(g->builder, l, r, "xor");
+  if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) {
+    DynType right_type = g->ir->expressions[e->right].type;
+    LLVMTypeRef right_llvm = llvm_type(g, right_type);
+    LLVMValueRef valid = LLVMBuildICmp(
+        g->builder, 36, r, LLVMConstInt(right_llvm, type_bits(g, e->type), 0),
+        "shift.count.valid");
+    guard(g, valid, "shift.count.ok");
+    unsigned rb = type_bits(g, right_type), lb = type_bits(g, e->type);
+    if (rb > lb)
+      r = LLVMBuildTrunc(g->builder, r, type, "shift.count");
+    else if (rb < lb)
+      r = LLVMBuildZExt(g->builder, r, type, "shift.count");
+    return checked_integer(g, e->op, e->type, l, r);
+  }
+  if (int_type(e->type))
+    return e->boolean ? proven_integer(g, e->op, l, r)
+                      : checked_integer(g, e->op, e->type, l, r);
+  if (e->op == DYN_OP_ADD)
+    return LLVMBuildFAdd(g->builder, l, r, "fadd");
+  if (e->op == DYN_OP_SUB)
+    return LLVMBuildFSub(g->builder, l, r, "fsub");
+  if (e->op == DYN_OP_MUL)
+    return LLVMBuildFMul(g->builder, l, r, "fmul");
+  if (e->op == DYN_OP_DIV)
+    return LLVMBuildFDiv(g->builder, l, r, "fdiv");
+  return LLVMBuildFRem(g->builder, l, r, "frem");
+}
 static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
   DynIrExpr *e = &g->ir->expressions[id];
   debug_location(g, e->span);
@@ -1090,15 +1094,13 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     DynIrString *string = &g->ir->strings[e->integer];
     LLVMTypeRef byte = LLVMInt8TypeInContext(g->context),
                 array = LLVMArrayType2(byte, string->length);
-    LLVMValueRef *bytes = calloc(string->length, sizeof(*bytes));
-    if (string->length && !bytes) {
+    if (string->length > UINT_MAX) {
       g->allocation_failed = true;
-      return e->type == DYN_TYPE_VOID ? NULL : LLVMConstNull(type);
+      return LLVMConstNull(type);
     }
-    for (size_t i = 0; i < string->length; ++i)
-      bytes[i] = LLVMConstInt(byte, string->data[i], 0);
-    LLVMValueRef initializer = LLVMConstArray2(byte, bytes, string->length);
-    free(bytes);
+    LLVMValueRef initializer = LLVMConstStringInContext(
+        g->context, string->length ? (const char *)string->data : "",
+        (unsigned)string->length, 1);
     char name[64];
     snprintf(name, sizeof(name), ".dyn.string.%zu", g->string_serial++);
     LLVMValueRef global = LLVMAddGlobal(g->module, array, name);
@@ -1468,52 +1470,9 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     return value;
   }
   LLVMValueRef r = gen_expr(g, e->right);
-  if (e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE) {
-    int predicates_signed[] = {32, 33, 40, 41, 38, 39},
-        predicates_unsigned[] = {32, 33, 36, 37, 34, 35},
-        predicates_float[] = {1, 6, 4, 5, 2, 3};
-    unsigned index = (unsigned)e->op - (unsigned)DYN_OP_EQ;
-    if (float_type(g->ir->expressions[e->left].type))
-      return LLVMBuildFCmp(g->builder, predicates_float[index], l, r, "fcmp");
-    return LLVMBuildICmp(g->builder,
-                         signed_type(g->ir->expressions[e->left].type)
-                             ? predicates_signed[index]
-                             : predicates_unsigned[index],
-                         l, r, "icmp");
-  }
-  if (e->op == DYN_OP_BIT_AND)
-    return LLVMBuildAnd(g->builder, l, r, "and");
-  if (e->op == DYN_OP_BIT_OR)
-    return LLVMBuildOr(g->builder, l, r, "or");
-  if (e->op == DYN_OP_BIT_XOR)
-    return LLVMBuildXor(g->builder, l, r, "xor");
-  if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) {
-    DynType right_type = g->ir->expressions[e->right].type;
-    LLVMTypeRef right_llvm = llvm_type(g, right_type);
-    LLVMValueRef valid = LLVMBuildICmp(
-        g->builder, 36, r, LLVMConstInt(right_llvm, type_bits(g, e->type), 0),
-        "shift.count.valid");
-    guard(g, valid, "shift.count.ok");
-    unsigned rb = type_bits(g, right_type), lb = type_bits(g, e->type);
-    if (rb > lb)
-      r = LLVMBuildTrunc(g->builder, r, type, "shift.count");
-    else if (rb < lb)
-      r = LLVMBuildZExt(g->builder, r, type, "shift.count");
-    return checked_integer(g, e->op, e->type, l, r);
-  }
-  if (int_type(e->type))
-    return e->boolean ? proven_integer(g, e->op, l, r)
-                      : checked_integer(g, e->op, e->type, l, r);
-  if (e->op == DYN_OP_ADD)
-    return LLVMBuildFAdd(g->builder, l, r, "fadd");
-  if (e->op == DYN_OP_SUB)
-    return LLVMBuildFSub(g->builder, l, r, "fsub");
-  if (e->op == DYN_OP_MUL)
-    return LLVMBuildFMul(g->builder, l, r, "fmul");
-  if (e->op == DYN_OP_DIV)
-    return LLVMBuildFDiv(g->builder, l, r, "fdiv");
-  return LLVMBuildFRem(g->builder, l, r, "frem");
+  return gen_binary(g, e, l, r);
 }
+
 static bool gen_block(Gen *, uint32_t, uint32_t);
 static bool aggregate_initializer(Gen *g, DynExprId expression) {
   DynIrExpr *value = &g->ir->expressions[expression];
@@ -2009,6 +1968,19 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     gen_initialize(g, local_type, st->expression, g->locals[st->local_id]);
     return false;
   }
+  if (st->target != DYN_NO_EXPR && st->assignment_op != DYN_OP_NONE) {
+    DynType type = g->ir->expressions[st->target].type;
+    LLVMValueRef destination = lvalue_pointer(g, st->target);
+    LLVMValueRef left = LLVMBuildLoad2(g->builder, llvm_type(g, type),
+                                      destination, "assignment.value");
+    LLVMValueRef right = gen_expr(g, st->expression);
+    DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type,
+                           .op = st->assignment_op, .left = st->target,
+                           .right = st->expression};
+    LLVMBuildStore(g->builder, gen_binary(g, &operation, left, right),
+                   destination);
+    return false;
+  }
   if (st->target != DYN_NO_EXPR) {
     DynType type = g->ir->expressions[st->expression].type;
     if (aggregate_initializer(g, st->expression)) {
@@ -2085,6 +2057,26 @@ static bool module_owns(const char *owner_key, const char *name) {
   char key[32];
   global_module_key(name, key, sizeof(key));
   return !strcmp(owner_key, key);
+}
+/* The object-file symbol of a Dyn function. Root-module functions keep their
+   plain names, except where that would take a name the program also uses for
+   a C function (an extern's link name, or exit/_exit, which the runtime calls
+   when a C library is linked). Those get a ".dyn" suffix, the same in every
+   object file, so the extern and the Dyn function never merge or get renamed
+   differently per object. */
+static const char *function_symbol(const DynIrProgram *ir, const DynIrFunction *fn,
+                                   char *buffer, size_t capacity) {
+  if (fn->foreign)
+    return fn->link_name;
+  if (fn->is_main)
+    return "main";
+  bool taken = !strcmp(fn->name, "exit") || !strcmp(fn->name, "_exit");
+  for (size_t i = 0; !taken && i < ir->function_count; ++i)
+    taken = ir->functions[i].foreign && !strcmp(ir->functions[i].link_name, fn->name);
+  if (!taken)
+    return fn->name;
+  snprintf(buffer, capacity, "%s.dyn", fn->name);
+  return buffer;
 }
 static pthread_once_t llvm_targets_once = PTHREAD_ONCE_INIT;
 static void initialize_llvm_targets(void) {
@@ -2246,10 +2238,9 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     free(params);
     if (!g.abis[i]) goto allocation_failure;
     g.function_types[i] = g.abis[i]->type;
+    char symbol[512];
     g.functions[i] = LLVMAddFunction(g.module,
-                                     fn->foreign   ? fn->link_name
-                                     : fn->is_main ? "main"
-                                                   : fn->name,
+                                     function_symbol(&ir, fn, symbol, sizeof(symbol)),
                                      g.function_types[i]);
     abi_attributes(&g, g.functions[i], g.abis[i], false);
     if (g.wasm && fn->is_public && !fn->foreign && module_owns("root", fn->name))
@@ -2266,6 +2257,10 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     if (!owner_key && !fn->is_main && !fn->foreign &&
         ((release && !shared) || (shared && !fn->is_public)))
       LLVMSetLinkage(g.functions[i], LLVMInternalLinkage);
+    /* An executable never exports its functions: a debug build's free or
+       write must not replace the C library's for its shared libraries. */
+    else if (!shared && !g.wasm && !fn->is_main && !fn->foreign)
+      LLVMSetVisibility(g.functions[i], LLVMHiddenVisibility);
   }
   LLVMTypeRef panic_params[2] = {LLVMPointerTypeInContext(g.context, 0),
                                  llvm_type(&g, DYN_TYPE_USIZE)};
@@ -2283,7 +2278,12 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   g.trace_pop_type =
       LLVMFunctionType(LLVMVoidTypeInContext(g.context), NULL, 0, 0);
   g.trace_pop_fn = LLVMAddFunction(g.module, "dyn_trace_pop", g.trace_pop_type);
-  g.unwind_frame_type = LLVMArrayType2(LLVMInt64TypeInContext(g.context), 16);
+  /* Match DynUnwind without growing x86-64 Linux frames for other ABIs. */
+  const DynTarget *unwind_target = dyn_context_target(&source->context);
+  unsigned unwind_words = !strcmp(unwind_target->kernel, "windows") ? 32
+      : !strcmp(unwind_target->arch, "aarch64") ? 22 : 16;
+  g.unwind_frame_type =
+      LLVMArrayType2(LLVMInt64TypeInContext(g.context), unwind_words);
   LLVMTypeRef unwind_pointer[] = {LLVMPointerTypeInContext(g.context, 0)};
   g.unwind_set_type = LLVMFunctionType(i32, unwind_pointer, 1, 0);
   g.unwind_set_fn =

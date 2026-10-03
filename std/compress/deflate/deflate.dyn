@@ -185,15 +185,8 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
       state.member_size = 0
       continue
     }
-    // All produced bytes were delivered. Keep only DEFLATE's 32 KiB history.
-    if state.engine.output_full && state.engine.written > 32768 {
-      removed := state.engine.written - 32768
-      for i in 0..32768 {
-        state.output_storage[i] = state.output_storage[removed + i]
-      }
-      state.engine.written = 32768
-      state.offset = 32768
-    }
+    // Delivered bytes remain in a circular history; no window-sized copy is
+    // needed when the caller supplies only the minimum history buffer.
     before := state.engine.written
     result := resume_impl(&state.engine, state.output_storage, state.compressed_storage[..state.compressed_used], true)
     if state.engine.error != 0 {
@@ -203,7 +196,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     if state.gzip {
       crc_at := before
       for crc_at < result.written {
-        state.checksum = crc_byte(state.checksum, state.output_storage[crc_at])
+        state.checksum = crc_byte(state.checksum, state.output_storage[crc_at % #len(state.output_storage)])
         crc_at += 1
       }
       // ISIZE is defined modulo 2^32. Use a wider intermediate for debug builds.
@@ -216,9 +209,6 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
       continue
     }
     if state.engine.output_full {
-      if state.engine.written > 32768 {
-        continue
-      }
       state.error = -28
       break
     }
@@ -238,7 +228,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     amount = #len(destination)
   }
   for copy_at in 0..amount {
-    destination[copy_at] = state.output_storage[state.offset + copy_at]
+    destination[copy_at] = state.output_storage[(state.offset + copy_at) % #len(state.output_storage)]
   }
   state.offset += amount
   status := stream.Status.Complete
@@ -831,12 +821,20 @@ fn need_input(state: *InflateState, before: Bits) {
 pub fn resume(state: *InflateState, destination: []u8, input: []const u8) Result {
   return resume_impl(state, destination, input, false)
 }
+// Streaming output uses logical offsets into a circular history. Prefix-based
+// resume/inflate keep their original linear indexing and capacity semantics.
+fn output_index(at: usize, capacity: usize, circular: bool) usize {
+  if circular { return at % capacity }
+  return at
+}
 fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, partial: bool) Result {
   state.output_full = false
-  if state.reader.at > #len(input) || state.written > #len(destination) {
+  if state.reader.at > #len(input) || (!partial && state.written > #len(destination)) {
     state.error = -22
   }
   state.reader.input = input
+  output_begin: usize = 0
+  if partial { output_begin = state.written }
   for state.stage != 3 && state.error == 0 {
     before := state.reader
     state.reader.short_input = false
@@ -885,7 +883,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
       if state.reader.at == #len(input) {
         break
       }
-      if state.written == #len(destination) {
+      if state.written - output_begin == #len(destination) {
         state.reader = before
         state.output_full = true
         if !partial {
@@ -893,7 +891,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
         }
         break
       }
-      destination[state.written] = input[state.reader.at]
+      destination[output_index(state.written, #len(destination), partial)] = input[state.reader.at]
       state.written += 1
       state.reader.at += 1
       state.stored -= 1
@@ -904,7 +902,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
         break
       }
       if symbol < 256 {
-        if state.written == #len(destination) {
+        if state.written - output_begin == #len(destination) {
         state.reader = before
           state.output_full = true
         if !partial {
@@ -912,7 +910,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
         }
           break
       }
-        destination[state.written] = #cast(u8) symbol
+        destination[output_index(state.written, #len(destination), partial)] = #cast(u8) symbol
         state.written += 1
       } else if symbol == 256 {
         state.stage = 0
@@ -950,7 +948,11 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
           state.error = -74
           break
         }
-        if length > #len(destination) - state.written {
+        if partial && back > #len(destination) {
+          state.error = -28
+          break
+        }
+        if length > #len(destination) - (state.written - output_begin) {
           state.reader = before
           state.output_full = true
           if !partial {
@@ -959,7 +961,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
           break
         }
         for i in 0..length {
-          destination[state.written] = destination[state.written - back]
+          destination[output_index(state.written, #len(destination), partial)] = destination[output_index(state.written - back, #len(destination), partial)]
           state.written += 1
         }
       }
