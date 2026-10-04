@@ -2143,8 +2143,11 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   g.pointer_bytes = dyn_target_pointer_bytes(dyn_context_target(&source->context));
   g.tracing = !release && !g.wasm;
   g.context = LLVMContextCreate();
+  const DynOptimization *optimization = source->context.optimization;
+  if (optimization && optimization->remarks)
+    dyn_enable_optimization_remarks(g.context);
   g.module = LLVMModuleCreateWithNameInContext("dyn_module", g.context);
-  if (debug_info) {
+  if (debug_info || (optimization && optimization->sample_profile)) {
     char directory[4096];
     if (!getcwd(directory, sizeof(directory)))
       strcpy(directory, ".");
@@ -2243,17 +2246,24 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
                                      function_symbol(&ir, fn, symbol, sizeof(symbol)),
                                      g.function_types[i]);
     abi_attributes(&g, g.functions[i], g.abis[i], false);
+    if (optimization && optimization->cpu) {
+      LLVMAddAttributeAtIndex(g.functions[i], ~0u,
+        LLVMCreateStringAttribute(g.context, "target-cpu", 10,
+          optimization->cpu, (unsigned)strlen(optimization->cpu)));
+      LLVMAddAttributeAtIndex(g.functions[i], ~0u,
+        LLVMCreateStringAttribute(g.context, "target-features", 15,
+          optimization->features, (unsigned)strlen(optimization->features)));
+    }
     if (g.wasm && fn->is_public && !fn->foreign && module_owns("root", fn->name))
       LLVMAddAttributeAtIndex(g.functions[i], ~0u,
         LLVMCreateStringAttribute(g.context, "wasm-export-name", 16, fn->name, (unsigned)strlen(fn->name)));
     if (g.wasm && fn->foreign)
       LLVMAddAttributeAtIndex(g.functions[i], ~0u,
         LLVMCreateStringAttribute(g.context, "wasm-import-module", 18, "env", 3));
-    if (release && debug_info && !fn->foreign)
+    if (optimization && optimization->sample_profile && !fn->foreign)
       LLVMAddAttributeAtIndex(
           g.functions[i], ~0u,
-          LLVMCreateEnumAttribute(
-              g.context, LLVMGetEnumAttributeKindForName("noinline", 8), 0));
+          LLVMCreateStringAttribute(g.context, "use-sample-profile", 18, "", 0));
     if (!owner_key && !fn->is_main && !fn->foreign &&
         ((release && !shared) || (shared && !fn->is_public)))
       LLVMSetLinkage(g.functions[i], LLVMInternalLinkage);
@@ -2656,7 +2666,10 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   if (!failed && LLVMGetTargetFromTriple(triple, &target, &error))
     failed = 1;
   if (!failed)
-    tm = LLVMCreateTargetMachine(target, triple, "generic", "", release ? 2 : 0,
+    tm = LLVMCreateTargetMachine(target, triple,
+                                 optimization && optimization->cpu ? optimization->cpu : "generic",
+                                 optimization && optimization->features ? optimization->features : "",
+                                 release ? (optimization && optimization->level == 3 ? 3 : 2) : 0,
                                  shared && !g.wasm ? 2 : 0, 0);
   if (!failed && !tm)
     failed = 1;
@@ -2671,7 +2684,9 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   if (!failed && release) {
     LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
     LLVMErrorRef pass_error = LLVMRunPasses(
-        g.module, thin_bitcode ? "thinlto-pre-link<O2>" : "default<O2>", tm,
+        g.module, thin_bitcode
+          ? (optimization && optimization->level == 3 ? "thinlto-pre-link<O3>" : "thinlto-pre-link<O2>")
+          : (optimization && optimization->level == 3 ? "default<O3>" : "default<O2>"), tm,
         options);
     LLVMDisposePassBuilderOptions(options);
     if (pass_error) {
@@ -2853,10 +2868,11 @@ int dyn_link_executable_objects(const DynContext *context,
     fputc('\n', stderr);
   }
   char **arguments =
-      calloc(object_count + link_input_count + 21, sizeof(*arguments));
+      calloc(object_count + link_input_count + 28, sizeof(*arguments));
   if (!arguments)
     return 2;
   char cache_argument[8192], jobs_argument[64];
+  char profile_argument[8192];
   size_t argument_count = 0;
   arguments[argument_count++] = (char *)linker;
   if (darwin) {
@@ -2881,7 +2897,22 @@ int dyn_link_executable_objects(const DynContext *context,
   } else {
     arguments[argument_count++] = "--gc-sections";
     if (thin) {
-      arguments[argument_count++] = "--lto-O2";
+      const DynOptimization *optimization = context ? context->optimization : NULL;
+      arguments[argument_count++] = optimization && optimization->level == 3 ? "--lto-O3" : "--lto-O2";
+      if (optimization && optimization->level == 3)
+        arguments[argument_count++] = "--lto-CGO3";
+      if (optimization && optimization->remarks) {
+        arguments[argument_count++] = "--mllvm=-pass-remarks=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
+        arguments[argument_count++] = "--mllvm=-pass-remarks-missed=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
+        arguments[argument_count++] = "--mllvm=-pass-remarks-analysis=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
+      }
+      if (optimization && optimization->sample_profile) {
+        if (snprintf(profile_argument, sizeof(profile_argument), "--lto-sample-profile=%s",
+                     optimization->sample_profile) >= (int)sizeof(profile_argument)) {
+          free(arguments); remove(temporary); return 2;
+        }
+        arguments[argument_count++] = profile_argument;
+      }
       if (lto_jobs) {
         snprintf(jobs_argument, sizeof(jobs_argument), "--thinlto-jobs=%u", lto_jobs);
         arguments[argument_count++] = jobs_argument;

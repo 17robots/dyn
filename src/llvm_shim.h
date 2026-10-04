@@ -36,6 +36,9 @@ extern void LLVMInitializeAArch64Target(void);
 extern void LLVMInitializeAArch64TargetMC(void);
 extern void LLVMInitializeAArch64AsmPrinter(void);
 extern LLVMContextRef LLVMContextCreate(void);
+extern char *LLVMGetHostCPUName(void);
+extern char *LLVMGetHostCPUFeatures(void);
+extern void dyn_enable_optimization_remarks(LLVMContextRef);
 extern unsigned LLVMGetEnumAttributeKindForName(const char *, size_t);
 extern LLVMAttributeRef LLVMCreateEnumAttribute(LLVMContextRef, unsigned,
                                                 unsigned long long);

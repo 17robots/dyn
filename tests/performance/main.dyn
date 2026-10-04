@@ -1,0 +1,49 @@
+use "std/bytes" bytes
+use "std/bytes/search" search
+use "std/container/string_map" maps
+use "std/bytes/builder" builder
+use "std/mem" memory
+use "std/testing" testing
+use "std/io" io
+use "std/unicode/utf8" utf8
+
+fn main() {
+  haystack: [32768]u8 = []
+  needle: [128]u8 = []
+  table: [128]usize = []
+  for i in 0..#len(haystack) { haystack[i] = 'a' }
+  for i in 0..#len(needle) { needle[i] = 'a' }
+  needle[127] = 'b'
+  pattern := search.prepare(needle[..], table[..])
+  copied: [128]u8 = []
+  encoded: [4]u8 = [240,159,152,128]
+  checksum: i64 = 0
+  for iteration in 0..2000 {
+    haystack[32767] = #cast(u8) (97 + iteration % 2)
+    checksum += #cast(i64) search.find(pattern.pattern, haystack[..])
+    checksum += #cast(i64) bytes.find(haystack[..], needle[..])
+    _ = memory.copy(copied[..], haystack[..128])
+    copied[iteration % 128] = #cast(u8) (96 + iteration % 3)
+    checksum += #cast(i64) bytes.compare(copied[..], haystack[..128])
+    encoded[3] = #cast(u8) (128 + iteration % 64)
+    checksum += #cast(i64) utf8.decode(encoded[..], 0).codepoint
+  }
+  backing: [65536]u8 = []
+  arena := memory.arena_from_buffer(backing[..])
+  map := maps.Map{}
+  testing.expect(maps.reserve(&map, &arena, 128) == maps.ErrorKind.None, "reserve")
+  key: [8]u8 = []
+  for i in 0..128 {
+    key[0] = #cast(u8) i
+    testing.expect(maps.put(&map, &arena, key[..], i) == maps.ErrorKind.None, "put")
+  }
+  for i in 0..128 {
+    key[0] = #cast(u8) i
+    checksum += #cast(i64) maps.get(&map, key[..]).value
+    testing.expect(maps.remove(&map, key[..]), "remove")
+  }
+  built := builder.from_buffer(backing[..0])
+  for i in 0..1024 { _ = builder.append_grow(&built, &arena, "x") }
+  snapshot := memory.arena_snapshot(&arena)
+  _ = io.println(io.stdout(), "checksum={} arena_used={} arena_peak={} allocation_failures={}", checksum, snapshot.used, snapshot.peak_used, snapshot.allocation_failures)
+}

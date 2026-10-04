@@ -152,12 +152,12 @@ static int hash_module(const DynSources *sources, size_t first, size_t count,
   return 0;
 }
 
-uint64_t dyn_cache_compiler_hash(const char *compiler_path) {
+uint64_t dyn_cache_file_hash(const char *compiler_path) {
   return hash_file(UINT64_C(1469598103934665603), compiler_path);
 }
 static uint64_t compiler_key(const DynOptions *options, const char *path) {
   return options->compiler_hash ? options->compiler_hash
-                                : dyn_cache_compiler_hash(path);
+                                : dyn_cache_file_hash(path);
 }
 static uint64_t hash_project_sources(uint64_t hash, const DynSources *sources) {
   /* Fingerprinting is short CPU work. Forking a build worker for each module
@@ -209,12 +209,29 @@ static uint64_t hash_runtime(uint64_t hash, const DynOptions *options,
   return hash;
 }
 
+/* Include resolved host features, not just the word "native": caches can be
+   shared by machines. Profile content changes must invalidate final outputs. */
+static uint64_t optimization_key(uint64_t hash, const DynOptions *options) {
+  const DynOptimization *o = &options->optimization;
+  unsigned level = o->level ? o->level : 2;
+  hash = hash_bytes(hash, &level, sizeof(level));
+  const char *cpu = o->cpu ? o->cpu : "generic";
+  const char *features = o->features ? o->features : "";
+  hash = hash_bytes(hash, cpu, strlen(cpu) + 1);
+  hash = hash_bytes(hash, features, strlen(features) + 1);
+  bool has_profile = o->sample_profile != NULL;
+  hash = hash_bytes(hash, &has_profile, sizeof(has_profile));
+  if (has_profile) hash = hash_bytes(hash, &o->profile_hash, sizeof(o->profile_hash));
+  return hash;
+}
+
 static uint64_t build_key(const DynSources *sources, const DynOptions *options,
                           const char *compiler_path) {
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
+  hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_project_sources(hash, sources);
   for (size_t i = 0; i < options->link_input_count; ++i)
@@ -229,6 +246,7 @@ static uint64_t codegen_key(const DynSources *sources,
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
+  hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_project_sources(hash, sources);
   return hash;
@@ -296,6 +314,7 @@ static uint64_t fast_options(const DynOptions *options, const char *compiler_pat
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
+  hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   return hash_runtime(hash, options, compiler_path);
 }
@@ -562,6 +581,7 @@ static uint64_t module_key(const DynSources *sources, size_t first,
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
+  hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   size_t object_length = strlen(object);
   bool bitcode =

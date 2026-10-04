@@ -64,9 +64,11 @@ pub fn find(value: []const u8, needle: []const u8) isize {
   if #len(needle) > #len(value) {
     return -1
   }
+  if #len(needle) == 1 { return find_byte(value, needle[0]) }
+  last := #len(needle) - 1
   i: usize = 0
   for i <= #len(value) - #len(needle) {
-    if equal(value[i..i + #len(needle)], needle) {
+    if value[i + last] == needle[last] && equal(value[i..i + #len(needle)], needle) {
       return #cast(isize) i
     }
     i += 1
@@ -81,6 +83,7 @@ pub fn find_last(value: []const u8, needle: []const u8) isize {
   if #len(needle) > #len(value) {
     return -1
   }
+  if #len(needle) == 1 { return find_last_byte(value, needle[0]) }
   i := #len(value) - #len(needle) + 1
   for i > 0 {
     i -= 1

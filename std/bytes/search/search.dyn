@@ -1,0 +1,40 @@
+// Prepared, allocation-free KMP search. Preparation O(needle length); each
+// search O(text length). Both slices remain borrowed and immutable until reuse.
+// The table must not overlap needle storage. Re-prepare after changing either.
+pub struct Pattern { needle: []const u8, table: []const usize }
+pub struct Prepared { pattern: Pattern, ok: bool }
+
+// Capacity failure leaves table untouched. Empty needles need no storage.
+pub fn prepare(needle: []const u8, table: []usize) Prepared {
+  if #len(table) < #len(needle) { return Prepared{} }
+  matched: usize = 0
+  for index in 0..#len(needle) {
+    if index == 0 {
+      table[index] = 0
+    } else {
+      for matched > 0 && needle[index] != needle[matched] {
+        matched = table[matched - 1]
+      }
+      if needle[index] == needle[matched] { matched += 1 }
+      table[index] = matched
+    }
+  }
+  return Prepared{ pattern: Pattern{needle: needle, table: table[..#len(needle)]}, ok: true }
+}
+
+// First byte offset, or -1. Empty needle matches at zero. No allocations.
+pub fn find(pattern: Pattern, text: []const u8) isize {
+  if #len(pattern.needle) == 0 { return 0 }
+  if #len(pattern.needle) > #len(text) { return -1 }
+  matched: usize = 0
+  for index in 0..#len(text) {
+    for matched > 0 && text[index] != pattern.needle[matched] {
+      matched = pattern.table[matched - 1]
+    }
+    if text[index] == pattern.needle[matched] { matched += 1 }
+    if matched == #len(pattern.needle) {
+      return #cast(isize) (index + 1 - matched)
+    }
+  }
+  return -1
+}

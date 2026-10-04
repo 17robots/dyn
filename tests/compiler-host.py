@@ -60,6 +60,8 @@ try:
         report['checks'].append('owned and bounded panic messages through local/caller cleanup')
         run(sys.executable, ROOT/'tests/shared-host.py', env=dict(env, DYN=str(DYN)))
         report['checks'].append('debug/release shared library loading and C callbacks')
+        run(sys.executable, ROOT/'tests/performance-contracts.py', env=dict(env, DYN=str(DYN)))
+        report['checks'].append('optimization controls, caches and allocation/search contracts')
         run(sys.executable, ROOT/'tests/process-directory.py', env=dict(env, DYN=str(DYN)))
         report['checks'].append('child working directories and process ownership transfer')
         messages = [dict(jsonrpc='2.0',id=1,method='initialize',params={}),

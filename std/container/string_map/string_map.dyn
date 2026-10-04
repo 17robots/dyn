@@ -147,3 +147,34 @@ pub fn next(state: *const Map, cursor: *usize) Item {
   }
   return Item{}
 }
+
+// Reserve room for at least count live keys at the normal load factor.
+// Avoids intermediate arena tables when a workload's size is known. Existing
+// keys remain stable; failure preserves map and arena mark. Old tables remain
+// allocated until arena reset/rewind. Mutation invalidates iteration.
+pub fn reserve(state: *Map, arena: *memory.Arena, count: usize) ErrorKind {
+  capacity := #len(state.entries)
+  if count <= capacity - capacity / 4 { return ErrorKind.None }
+  if capacity == 0 { capacity = 8 }
+  maximum := #cast(usize) -1
+  for count > capacity - capacity / 4 {
+    if capacity > maximum / 2 { return ErrorKind.Overflow }
+    capacity *= 2
+  }
+  if capacity > maximum / #sizeof(Entry) { return ErrorKind.Overflow }
+  allocated := memory.arena_try_push(arena, capacity * #sizeof(Entry), #alignof(Entry))
+  if !allocated.ok { return ErrorKind.Capacity }
+  entries := (#cast(*Entry) allocated.memory)[..capacity]
+  for old in state.entries {
+    if old.state == 1 { entries[locate(entries, old.key, old.hash)] = old }
+  }
+  state.entries = entries
+  return ErrorKind.None
+}
+
+// Reuse the table without allocating. Key bytes stay in the arena; repeated
+// clear/refill cycles still consume key storage. Never rewind a live map's arena.
+pub fn clear(state: *Map) {
+  for index in 0..#len(state.entries) { state.entries[index] = Entry{} }
+  state.length = 0
+}

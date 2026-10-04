@@ -322,3 +322,81 @@ Copyright (c) 2026 Matthew Dray <mdray@duck.com>. See [LICENSE](LICENSE) and
 [third-party notices](THIRD_PARTY_NOTICES.md). Commercial application development
 is allowed. Dyn modifications and independent distributions are restricted by the
 license. This is source-available software, not open source.
+
+### Performance controls and measurement
+
+The default release policy remains portable O2. Optional controls:
+
+- `--cpu native` targets this host's CPU/features. Do not distribute that binary
+  to machines lacking those features. Cross-target use is rejected; cache keys
+  include the resolved CPU and features.
+- `--release --opt-level 3` requests LLVM O3, including the ThinLTO backend.
+  Measure runtime, size and build time; O3 is not universally faster.
+- `--release --debug-info` retains optimization, including inlining. Debug info
+  no longer implicitly adds `noinline` to every function.
+- `--opt-remarks` reports inlining, vectorization, unrolling and sample-profile
+  decisions (compiler stderr and linker stdout; capture both). It disables caches
+  and uses one worker for readable
+  output; do not use this diagnostic mode for build-time comparisons.
+- `--release --sample-profile profile.prof` consumes an LLVM sample profile on
+  x86_64 Linux with ThinLTO/LLD. It emits the source information needed by the
+  profile loader. Missing/invalid profiles fail the build; profile content is
+  part of the cache identity. It cannot combine with `--no-lto`, `--no-link`,
+  shared builds or standalone IR/object/assembly output.
+
+For sample PGO, build with `--release --debug-info`, record a representative
+workload with an external sampling profiler, convert it to LLVM's sample format,
+then rebuild with `--sample-profile`. Keep source paths and source revision stable:
+module symbols currently include a path-derived identity. Dyn does not bundle a
+profiler or automatically train profiles. Verify applied samples with
+`--opt-remarks`; synthetic test profiles prove plumbing, not performance gains.
+See [LLVM's sampling workflow](https://clang.llvm.org/docs/UsersManual.html#using-sampling-profilers).
+
+Run the isolated cold/warm/edited/runtime matrix with:
+
+```sh
+python3 tools/performance-suite.py --dyn build/dyn-release --samples 7
+python3 tools/benchmark.py --samples 7 --require-stable-output \
+  --artifact build/program --output build/runtime.json -- build/program
+```
+
+The matrix writes raw JSON samples, executable sizes, stdout/checksums, compiler
+version, timing and per-child resource usage into a new build directory. It edits
+only its own fixture copy. Cold means an empty compiler cache with OS page caches
+retained; edited samples use novel executed code, not alternating cached versions.
+`max_rss_bytes` is the OS child maximum, **not** aggregate concurrent process-tree
+memory. Compare on the same machine and LLVM/toolchain, without competing builds.
+The general benchmark runner also supports `--reset-dir` for cold builds; both
+compiler cache and output artifact must be inside that dedicated directory.
+See [performance qualification](PERFORMANCE.md) for measured results and limits.
+
+### Allocation and copying contracts
+
+Dyn arrays and structs have value semantics; slices borrow their backing storage.
+Copying a slice or an arena/container handle does not clone its backing allocation.
+Use pointers for intentional mutation; do not copy a live owning arena and release
+both copies. Arena rewind/reset invalidates affected views. The compiler already
+uses bounded memory copies for large values; pointer arguments are not assumed
+non-aliasing merely because they are `const`.
+
+- `std/bytes/search`: reusable KMP pattern with caller-owned prefix storage.
+  Preparation is O(needle length), each search is O(text length), with no hidden
+  allocation. Both needle and table must remain alive and unchanged. Prefer it
+  for repeated searches or adversarial repeated-prefix input; simple one-off
+  searches remain available in `std/bytes`.
+- `std/container/string_map.reserve`: reserve capacity before bulk insertion to
+  avoid intermediate arena tables. Keys are copied; growth preserves key bytes.
+  `clear` reuses the table but retains key allocations. Deletion does not reclaim
+  arena memory. Never rewind storage belonging to a live map.
+- `std/bytes/builder.reserve`: extends the last arena allocation in place when
+  possible; otherwise copies live bytes to new storage. Interleaved allocations
+  can therefore increase retained storage. Reacquire views after mutation.
+- `std/bufio`: large writes bypass staging copies while retaining a buffered tail.
+  Short writes, ordering, partial errors and sticky errors retain their contracts.
+- `std/testing.summarize`: caller-owned sample statistics without allocation;
+  sorts samples in place. `std/mem.arena_snapshot` supplies used/peak/failure
+  counters, and `std/observe` supplies optional allocation event records.
+
+Performance changes must preserve empty inputs, overlap rules, arithmetic bounds,
+allocation-failure behavior and ABI contracts. `tests/performance-contracts.py`
+checks these alongside independent search oracles and compiler option/cache tests.

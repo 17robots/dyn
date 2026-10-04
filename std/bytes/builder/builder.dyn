@@ -15,14 +15,25 @@ pub fn clear(state: *Builder) {
   state.length = 0
 }
 
-// Exact capacity reservation. Failure changes neither builder nor arena.
-// Old arena buffers remain allocated until the caller rewinds or resets.
+// Exact capacity reservation. Failure preserves builder and arena mark;
+// arena diagnostic counters/events may record the failed allocation.
+// Extends the arena's most recent buffer in place when possible. Otherwise old
+// arena buffers remain allocated until the caller rewinds or resets.
 pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) ErrorKind {
   if state.length > #len(state.storage) {
     return ErrorKind.InvalidState
   }
   if capacity <= #len(state.storage) {
     return ErrorKind.None
+  }
+  if #len(state.storage) > 0 && arena.offset <= #len(arena.data) && arena.offset >= #len(state.storage) {
+    start := arena.offset - #len(state.storage)
+    if &state.storage[0] == &arena.data[start] {
+      extra := memory.arena_try_push_uninit(arena, capacity - #len(state.storage), 1)
+      if !extra.ok { return ErrorKind.Capacity }
+      state.storage = (&state.storage[0])[..capacity]
+      return ErrorKind.None
+    }
   }
   allocated := memory.arena_try_push_uninit(arena, capacity, 1)
   if !allocated.ok {
