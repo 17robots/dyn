@@ -1,0 +1,12 @@
+#target(kernel: windows)
+extern fn entropy "dyn_crypto_random"(algorithm: rawptr, destination: *u8, size: u32, flags: u32) i32
+pub fn secure_random(destination: []u8) bool {
+  at: usize = 0
+  for at < #len(destination) {
+    count := #len(destination) - at
+    if count > 4294967295 { count = 4294967295 }
+    if entropy(nil, &destination[at], #cast(u32) count, 2) < 0 { return false }
+    at += count
+  }
+  return true
+}

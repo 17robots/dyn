@@ -93,6 +93,7 @@ typedef struct {
   bool no_warnings;
   bool timings;
   bool no_cache;
+  bool no_lto;
   bool format_check;
   bool docs_json;
   bool json_diagnostics;

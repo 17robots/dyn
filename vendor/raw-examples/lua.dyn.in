@@ -2,7 +2,6 @@ use "std/mem"
 use "std/c"
 use "std/strings"
 use "std/io"
-use "std/terminal"
 use "vendor/lua/raw" lua
 
 fn main() {
@@ -28,5 +27,5 @@ fn main() {
   lua.lua_pop(state, 1)
   // No use of borrowed/pointer beyond this point.
   if lua.lua_gettop(state) != 0 || !strings.equal(retained.value, "retained result") { #panic("lifetime contract") }
-  _ = io.println(terminal.stdout(), retained.value)
+  _ = io.println(io.stdout(), retained.value)
 }

@@ -1,0 +1,29 @@
+#target(arch: aarch64, kernel: darwin)
+#link("System")
+
+// macOS 14.4 public futex APIs; Dyn's macOS deployment floor is 15.0.
+// NONE (0) selects process-local waits and must match the wake flags.
+extern fn wait_address "os_sync_wait_on_address"(address: *u32, expected: u64, size: usize, flags: u32) i32
+extern fn wake_single "os_sync_wake_by_address_any"(address: *u32, size: usize, flags: u32) i32
+extern fn wake_all "os_sync_wake_by_address_all"(address: *u32, size: usize, flags: u32) i32
+extern fn wait_error "dyn_sync_error"() *i32
+// os_unfair_lock is an opaque, four-byte, zero-initialized native lock. Use its
+// ownership-aware API for mutexes, not the ownership-free futex operations.
+extern fn unfair_lock "os_unfair_lock_lock"(value: *u32)
+extern fn unfair_try_lock "os_unfair_lock_trylock"(value: *u32) bool
+extern fn unfair_unlock "os_unfair_lock_unlock"(value: *u32)
+
+fn native_wait(address: *AtomicU32, expected: u32) isize {
+  if wait_address(&address.value, #cast(u64) expected, 4, 0) < 0 {
+    return 0 - #cast(isize) wait_error().*
+  }
+  return 0
+}
+fn native_wake(address: *AtomicU32, all: bool) {
+  // ENOENT (no waiter) is normal; callers always recheck their predicate.
+  if all { _ = wake_all(&address.value, 4, 0) }
+  else { _ = wake_single(&address.value, 4, 0) }
+}
+fn native_mutex_lock(value: *Mutex) { unfair_lock(&value.state.value) }
+fn native_mutex_try_lock(value: *Mutex) bool { return unfair_try_lock(&value.state.value) }
+fn native_mutex_unlock(value: *Mutex) { unfair_unlock(&value.state.value) }

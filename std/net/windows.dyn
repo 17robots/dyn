@@ -1,0 +1,126 @@
+#target(arch: x86_64, kernel: windows)
+use "std/os/windows" win
+pub const AddressFamilyIpv6: usize = 23
+pub type Descriptor = isize
+pub struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16, saved_events: i16 }
+const UnixPathLimit: usize = 107
+const SocketLevel: usize = 65535
+const ReuseOption: usize = 4
+const ErrorOption: usize = 4103
+const NoSignalFlag: usize = 0
+extern fn raw_bind "dyn_win_bind"(descriptor: usize, address: *const u8, length: i32) i32
+extern fn raw_listen "dyn_win_listen"(descriptor: usize, backlog: i32) i32
+extern fn raw_accept "dyn_win_accept"(descriptor: usize, address: *u8, length: *u32) usize
+extern fn raw_shutdown "dyn_win_shutdown"(descriptor: usize, how: i32) i32
+extern fn raw_ioctl "dyn_win_ioctlsocket"(descriptor: usize, command: i32, value: *u32) i32
+extern fn raw_send "dyn_net_send_to"(descriptor: usize, data: *const u8, length: i32, flags: i32, address: *const u8, address_length: i32) i32
+extern fn raw_receive "dyn_net_receive_from"(descriptor: usize, data: *u8, length: i32, flags: i32, address: *u8, address_length: *u32) i32
+extern fn raw_local "dyn_net_local"(descriptor: usize, address: *u8, length: *u32) i32
+extern fn raw_peer "dyn_net_peer"(descriptor: usize, address: *u8, length: *u32) i32
+extern fn raw_set_option "dyn_net_set_option"(descriptor: usize, level: i32, option: i32, data: rawptr, length: i32) i32
+extern fn raw_get_option "dyn_net_get_option"(descriptor: usize, level: i32, option: i32, data: rawptr, length: *u32) i32
+extern fn raw_idle "dyn_net_idle"(milliseconds: u32)
+fn native_interrupted(code: isize) bool { return code == -10004 }
+fn native_would_block(code: isize) bool { return code == -10035 || code == -10036 || code == -10037 }
+fn address_family(bytes: []u8, length: usize, family: usize) { _ = length bytes[0] = #cast(u8) family }
+fn native_status(value: i32) isize { if value == -1 { return win.socket_error() } return #cast(isize) value }
+fn native_socket(family: usize, kind: usize, protocol: usize) isize {
+  if family > 2147483647 || kind > 2147483647 || protocol > 2147483647 { return -22 }
+  opened := win.socket_open(#cast(i32) family, #cast(i32) kind, #cast(i32) protocol)
+  if !opened.ok { return 0 - opened.error } return opened.value
+}
+fn native_close(descriptor: isize) isize { if win.socket_close(#cast(usize) descriptor) { return 0 } return win.socket_error() }
+fn native_listen(descriptor: isize, backlog: usize) isize {
+  if backlog > 2147483647 { return -22 }
+  return native_status(raw_listen(#cast(usize) descriptor, #cast(i32) backlog))
+}
+fn native_shutdown(descriptor: isize, how: usize) isize {
+  if how > 2 { return -22 }
+  return native_status(raw_shutdown(#cast(usize) descriptor, #cast(i32) how))
+}
+fn native_connect(descriptor: isize, address: *const u8, length: usize) isize {
+  if length > 2147483647 { return -22 }
+  if win.socket_connect(#cast(usize) descriptor, address[..length]) { return 0 }
+  return win.socket_error()
+}
+fn native_bind(descriptor: isize, address: *const u8, length: usize) isize {
+  if length > 2147483647 { return -22 }
+  return native_status(raw_bind(#cast(usize) descriptor, address, #cast(i32) length))
+}
+fn native_accept(descriptor: isize, address: *u8, length: *u32) isize {
+  value := raw_accept(#cast(usize) descriptor, address, length)
+  if value == ~#cast(usize) 0 { return win.socket_error() }
+  return #cast(isize) value
+}
+fn native_local(descriptor: isize, address: *u8, length: *u32) isize { return native_status(raw_local(#cast(usize) descriptor, address, length)) }
+fn native_peer(descriptor: isize, address: *u8, length: *u32) isize { return native_status(raw_peer(#cast(usize) descriptor, address, length)) }
+fn native_send(descriptor: isize, data: *const u8, length: usize, flags: usize, address: *const u8, address_length: usize) isize {
+  if length > 2147483647 || flags > 2147483647 || address_length > 2147483647 { return -22 }
+  return native_status(raw_send(#cast(usize) descriptor, data, #cast(i32) length, #cast(i32) flags, address, #cast(i32) address_length))
+}
+fn native_receive(descriptor: isize, data: *u8, length: usize, flags: usize, address: *u8, address_length: *u32) isize {
+  if length > 2147483647 || flags > 2147483647 { return -22 }
+  return native_status(raw_receive(#cast(usize) descriptor, data, #cast(i32) length, #cast(i32) flags, address, address_length))
+}
+fn native_set_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: usize) isize {
+  if length > 2147483647 { return -22 }
+  return native_status(raw_set_option(#cast(usize) descriptor, #cast(i32) level, #cast(i32) option, data, #cast(i32) length))
+}
+fn native_get_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: *u32) isize {
+  return native_status(raw_get_option(#cast(usize) descriptor, #cast(i32) level, #cast(i32) option, data, length))
+}
+fn native_nonblocking(descriptor: isize, enabled: bool) isize {
+  value: u32 = 0 if enabled { value = 1 }
+  return native_status(raw_ioctl(#cast(usize) descriptor, -2147195266, &value))
+}
+fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
+  if milliseconds > 4294967295 { return -22 }
+  value := #cast(u32) milliseconds
+  option: usize = 4102 if sending { option = 4101 }
+  return native_set_option(descriptor, SocketLevel, option, #cast(rawptr) &value, 4)
+}
+fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
+  if #len(items) == 0 {
+    duration: u32 = 4294967295
+    if milliseconds >= 0 { duration = #cast(u32) milliseconds }
+    raw_idle(duration) return 0
+  }
+  if #len(items) > 4294967295 { return -22 }
+  for i in 0..#len(items) {
+    if (items[i].events & ~#cast(i16) 29) != 0 { return -22 }
+  }
+  for i in 0..#len(items) {
+    requested: i16 = 0
+    if (items[i].events & PollReadable) != 0 { requested |= 256 }
+    if (items[i].events & PollWritable) != 0 { requested |= 16 }
+    // Error/hangup are returned unconditionally, but retain requested flags.
+    items[i].saved_events = items[i].events
+    items[i].events = requested
+  }
+  // The private saved field uses WSAPOLLFD padding; native stride remains 16.
+  native := (#cast(*win.PollDescriptor) &items[0])[..#len(items)]
+  value := win.event_poll(native, milliseconds)
+  for i in 0..#len(items) {
+    items[i].events = items[i].saved_events
+    flags := items[i].returned
+    returned: i16 = 0
+    if value >= 0 {
+      if (flags & 768) != 0 { returned |= PollReadable }
+      if (flags & 16) != 0 { returned |= PollWritable }
+      if (flags & 5) != 0 { returned |= PollError }
+      if (flags & 2) != 0 { returned |= PollHangup }
+    }
+    items[i].returned = returned
+  }
+  return value
+}
+
+// Winsock fills the buffer before WSAEMSGSIZE on a truncated datagram.
+// Return a capacity+1 sentinel; consumers must not treat it as stored bytes.
+pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
+  data: *u8 = nil if #len(bytes) > 0 { data = &bytes[0] }
+  value := native_receive(descriptor, data, #len(bytes), 0, nil, nil)
+  for native_interrupted(value) { value = native_receive(descriptor, data, #len(bytes), 0, nil, nil) }
+  if value == -10040 { return result(#cast(isize) #len(bytes) + 1) }
+  return result(value)
+}

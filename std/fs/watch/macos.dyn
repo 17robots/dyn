@@ -1,0 +1,285 @@
+#target(arch: aarch64, kernel: darwin)
+use "std/mem" mem
+use "std/c" c
+use "std/sync" sync
+use "std/bytes" bytes
+use "std/unicode/utf8" utf8
+
+pub const Modify: u32 = 2
+pub const Attributes: u32 = 4
+pub const CloseWrite: u32 = 8
+pub const MoveFrom: u32 = 64
+pub const MoveTo: u32 = 128
+pub const Create: u32 = 256
+pub const Delete: u32 = 512
+pub const DeleteSelf: u32 = 1024
+pub const MoveSelf: u32 = 2048
+pub const Ignored: u32 = 32768
+pub const IsDirectory: u32 = 1073741824
+pub const Changes: u32 = 4046
+pub const SupportedEvents: u32 = Changes & ~CloseWrite
+pub const HasCloseWrite: bool = false
+pub const HasMoveCookies: bool = false
+pub const HasDirectoryFlag: bool = true
+pub const FixedWatchCapacity: usize = 16
+pub enum Status { Event, Empty, Error }
+pub struct Result { value: i32, error: isize, ok: bool }
+pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
+pub struct EventResult { event: Event, status: Status, error: isize }
+// Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
+// Do not copy a live owner. Public operations are confined to one caller thread.
+// The caller output buffer must outlive the watcher; names expire on next Event.
+// FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
+// CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
+pub struct Watcher { state: *State, storage: []u8, arena: mem.Arena, rescan_required: bool }
+pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
+struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
+type Callback = *fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
+struct API {
+  services: rawptr, foundation: rawptr, system: rawptr,
+  string: *fn(rawptr, *const u8, isize, u32, u8) rawptr,
+  array: *fn(rawptr, *const rawptr, isize, rawptr) rawptr,
+  release: *fn(rawptr),
+  create: *fn(rawptr, Callback, *Context, rawptr, u64, f64, u32) rawptr,
+  schedule: *fn(rawptr, rawptr), start: *fn(rawptr) u8,
+  stop: *fn(rawptr), invalidate: *fn(rawptr), stream_release: *fn(rawptr),
+  canonical: *fn(*const u8, *u8) *u8,
+}
+struct Slot { owner: *State, stream: rawptr, started: bool, path: rawptr, paths: rawptr, id: i32, mask: u32, length: usize, root: [1024]u8 }
+struct Record { watch: i32, mask: u32, length: usize, rescan: bool, name: [1024]u8 }
+struct State {
+  api: API, queue: rawptr, serial: i32,
+  read: sync.AtomicU32, write: sync.AtomicU32, lost: sync.AtomicU32,
+  slots: [16]Slot, records: [64]Record,
+}
+extern fn library_open "dlopen"(path: *const u8, flags: i32) rawptr
+extern fn library_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
+extern fn library_close "dlclose"(handle: rawptr) i32
+extern fn queue_create "dispatch_queue_create"(label: *const u8, attributes: rawptr) rawptr
+extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback: *fn(rawptr))
+extern fn queue_release "dispatch_release"(queue: rawptr)
+fn symbol(handle: rawptr, name: []const u8) rawptr {
+  backing: [128]u8 = []
+  value := c.string_from_bytes(backing[..], name)
+  if handle == nil || !value.ok { return nil }
+  return library_symbol(handle, value.value)
+}
+fn library(path: []const u8) rawptr {
+  backing: [256]u8 = []
+  value := c.string_from_bytes(backing[..], path)
+  if !value.ok { return nil }
+  return library_open(value.value, 2)
+}
+fn unload(api: *API) {
+  if api.services != nil { _ = library_close(api.services) }
+  if api.foundation != nil { _ = library_close(api.foundation) }
+  if api.system != nil { _ = library_close(api.system) }
+  api.* = API{}
+}
+fn load(api: *API) bool {
+  api.services = library("/System/Library/Frameworks/CoreServices.framework/CoreServices")
+  api.foundation = library("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+  api.system = library("/usr/lib/libSystem.B.dylib")
+  api.string = #cast(*fn(rawptr, *const u8, isize, u32, u8) rawptr) symbol(api.foundation,"CFStringCreateWithBytes")
+  api.array = #cast(*fn(rawptr, *const rawptr, isize, rawptr) rawptr) symbol(api.foundation,"CFArrayCreate")
+  api.release = #cast(*fn(rawptr)) symbol(api.foundation,"CFRelease")
+  api.create = #cast(*fn(rawptr, Callback, *Context, rawptr, u64, f64, u32) rawptr) symbol(api.services,"FSEventStreamCreate")
+  api.schedule = #cast(*fn(rawptr, rawptr)) symbol(api.services,"FSEventStreamSetDispatchQueue")
+  api.start = #cast(*fn(rawptr) u8) symbol(api.services,"FSEventStreamStart")
+  api.stop = #cast(*fn(rawptr)) symbol(api.services,"FSEventStreamStop")
+  api.invalidate = #cast(*fn(rawptr)) symbol(api.services,"FSEventStreamInvalidate")
+  api.stream_release = #cast(*fn(rawptr)) symbol(api.services,"FSEventStreamRelease")
+  api.canonical = #cast(*fn(*const u8, *u8) *u8) symbol(api.system,"realpath")
+  return api.string != nil && api.array != nil && api.release != nil && api.create != nil && api.schedule != nil && api.start != nil && api.stop != nil && api.invalidate != nil && api.stream_release != nil && api.canonical != nil
+}
+fn barrier(context: rawptr) { _ = context }
+struct MaskUpdate { slot: *Slot, mask: u32 }
+fn update_mask(context: rawptr) {
+  update := #cast(*MaskUpdate) context
+  update.slot.mask = update.mask
+}
+fn discard_slot(state: *State, slot: *Slot) {
+  if slot.stream != nil {
+    if slot.started { state.api.stop(slot.stream) }
+    state.api.invalidate(slot.stream)
+    // Invalidation prevents new deliveries; drain already queued callbacks
+    // before releasing the context, root path, or reusing this stable slot.
+    queue_sync(state.queue, nil, &barrier)
+    state.api.stream_release(slot.stream)
+  }
+  if slot.paths != nil { state.api.release(slot.paths) }
+  if slot.path != nil { state.api.release(slot.path) }
+  slot.* = Slot{}
+}
+pub fn open(storage: []u8) OpenResult {
+  if #len(storage) < 272 { return OpenResult{ error: -28 } }
+  allocation := mem.arena_create(#sizeof(State))
+  if !allocation.ok { return OpenResult{ error: -12 } }
+  pushed := mem.arena_try_push(&allocation.arena, #sizeof(State), #alignof(State))
+  if !pushed.ok { _ = mem.arena_release(&allocation.arena) return OpenResult{ error: -12 } }
+  state := #cast(*State) pushed.memory
+  if !load(&state.api) {
+    unload(&state.api)
+    _ = mem.arena_release(&allocation.arena)
+    return OpenResult{ error: -95 }
+  }
+  state.queue = queue_create(nil, nil)
+  if state.queue == nil {
+    unload(&state.api)
+    _ = mem.arena_release(&allocation.arena)
+    return OpenResult{ error: -12 }
+  }
+  return OpenResult{ watcher: Watcher{ state: state, storage: storage, arena: allocation.arena }, ok: true }
+}
+fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
+  state := slot.owner
+  write := sync.load_u32(&state.write)
+  following := (write + 1) % 64
+  if following == sync.load_u32(&state.read) || #len(name) > 1023 {
+    sync.store_u32(&state.lost, 1)
+    return
+  }
+  record := &state.records[#cast(usize) write]
+  record.watch = slot.id
+  record.mask = mask
+  record.rescan = rescan
+  record.length = #len(name)
+  for i in 0..#len(name) { record.name[i] = name[i] }
+  sync.store_u32(&state.write, following)
+}
+fn callback(stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *const u32, ids: *const u64) {
+  _ = stream _ = ids
+  if count == 0 { return }
+  slot := #cast(*Slot) info
+  if count > 1024 { sync.store_u32(&slot.owner.lost, 1) count = 1024 }
+  names := (#cast(**const u8) paths)[..count]
+  kinds := flags[..count]
+  for i in 0..count {
+    kind := kinds[i]
+    // Dropped/coalesced history, root changes, mount changes, or wrapped IDs
+    // cannot be represented as a complete sequence of child-name events.
+    rescan := (kind & 239) != 0
+    if rescan { sync.store_u32(&slot.owner.lost, 1) }
+    native := c.bytes_from_string(names[i],1024)
+    if !native.ok || !utf8.valid(native.value) { sync.store_u32(&slot.owner.lost,1) continue }
+    path := native.value
+    if #len(path) < slot.length || !bytes.equal(path[..slot.length],slot.root[..slot.length]) { continue }
+    start := slot.length
+    if #len(path) > start {
+      if slot.length != 1 {
+        if path[start] != '/' { continue }
+        start += 1
+      }
+    }
+    name := path[start..]
+    nested := false
+    for byte in name { if byte == '/' { nested = true } }
+    if nested { continue }
+    mask: u32 = 0
+    if (kind & 256) != 0 { mask = mask | Create }
+    if (kind & 512) != 0 { mask = mask | Delete }
+    if (kind & 4096) != 0 { mask = mask | Modify }
+    if (kind & 58368) != 0 { mask = mask | Attributes }
+    if (kind & 2048) != 0 { mask = mask | MoveFrom | MoveTo rescan = true }
+    if #len(name) == 0 { rescan = true }
+    if (kind & 32) != 0 { mask = mask | MoveSelf | DeleteSelf }
+    mask = mask & slot.mask
+    if mask == 0 && !rescan { continue }
+    if (kind & 131072) != 0 { mask = mask | IsDirectory }
+    publish(slot,name,mask,rescan)
+  }
+}
+pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
+  state := watcher.state
+  if state == nil || #len(path) == 0 || !utf8.valid(path) { return Result{ error: -22 } }
+  if (mask & SupportedEvents) == 0 { return Result{ error: -95 } }
+  input: [1024]u8 = []
+  terminated := c.string_from_bytes(input[..],path)
+  if !terminated.ok { return Result{ error: -22 } }
+  canonical: [1024]u8 = []
+  if state.api.canonical(terminated.value,&canonical[0]) == nil { return Result{ error: -2 } }
+  rooted := c.bytes_from_string(&canonical[0],1024)
+  if !rooted.ok || !utf8.valid(rooted.value) { return Result{ error: -22 } }
+  // FSEvents watches trees; this adapter promises only direct directory children.
+  directory := #syscall(5,&canonical[0],17858560,0) // O_CLOEXEC|O_DIRECTORY|O_EVTONLY
+  if directory < 0 { return Result{ error: directory } }
+  _ = #syscall(6,directory)
+  index: usize = 16
+  for i in 0..16 {
+    if state.slots[i].stream == nil && index == 16 { index = i }
+    if state.slots[i].stream != nil && bytes.equal(state.slots[i].root[..state.slots[i].length],rooted.value) {
+      // Change the filter on the producer queue without stopping observation
+      // or racing a callback. Preserve the existing watch identifier.
+      update := MaskUpdate{ slot: &state.slots[i], mask: mask }
+      queue_sync(state.queue,#cast(rawptr) &update,&update_mask)
+      return Result{ value: state.slots[i].id, ok: true }
+    }
+  }
+  if index == 16 || state.serial == 2147483647 { return Result{ error: -28 } }
+  state.serial += 1
+  slot := &state.slots[index]
+  slot.owner = state slot.id = state.serial slot.mask = mask
+  slot.length = #len(rooted.value)
+  for i in 0..slot.length { slot.root[i] = rooted.value[i] }
+  slot.path = state.api.string(nil,&slot.root[0],#cast(isize) slot.length,134217984,0)
+  if slot.path == nil { discard_slot(state,slot) return Result{ error: -12 } }
+  slot.paths = state.api.array(nil,&slot.path,1,nil)
+  if slot.paths == nil { discard_slot(state,slot) return Result{ error: -12 } }
+  context := Context{ info: #cast(rawptr) slot }
+  slot.stream = state.api.create(nil,&callback,&context,slot.paths,18446744073709551615,0.01,22)
+  if slot.stream == nil { discard_slot(state,slot) return Result{ error: -5 } }
+  state.api.schedule(slot.stream,state.queue)
+  if state.api.start(slot.stream) == 0 { discard_slot(state,slot) return Result{ error: -5 } }
+  slot.started = true
+  return Result{ value: slot.id, ok: true }
+}
+pub fn remove(watcher: *Watcher, id: i32) Result {
+  state := watcher.state
+  if state == nil { return Result{ error: -9 } }
+  for i in 0..16 {
+    if state.slots[i].stream != nil && state.slots[i].id == id {
+      discard_slot(state,&state.slots[i])
+      return Result{ ok: true }
+    }
+  }
+  return Result{ error: -22 }
+}
+pub fn close(watcher: *Watcher) Result {
+  state := watcher.state
+  if state == nil {
+    released := mem.arena_release(&watcher.arena)
+    return Result{ error: released.error, ok: released.ok }
+  }
+  for i in 0..16 { discard_slot(state,&state.slots[i]) }
+  queue_release(state.queue)
+  unload(&state.api)
+  released := mem.arena_release(&watcher.arena)
+  watcher.state = nil watcher.rescan_required = false
+  return Result{ error: released.error, ok: released.ok }
+}
+pub fn next(watcher: *Watcher) EventResult {
+  state := watcher.state
+  if state == nil { return EventResult{ status: Status.Error, error: -9 } }
+  if sync.exchange_u32(&state.lost,0) != 0 {
+    watcher.rescan_required = true
+    return EventResult{ status: Status.Event, event: Event{ watch: -1, name: watcher.storage[..0], rescan: true } }
+  }
+  for attempts in 0..64 {
+    read := sync.load_u32(&state.read)
+    if read == sync.load_u32(&state.write) { return EventResult{ status: Status.Empty } }
+    record := state.records[#cast(usize) read]
+    sync.store_u32(&state.read,(read+1)%64)
+    live := false
+    for i in 0..16 { if state.slots[i].stream != nil && state.slots[i].id == record.watch { live = true } }
+    if !live { continue }
+    if record.length > #len(watcher.storage) {
+      watcher.rescan_required = true
+      return EventResult{ status: Status.Event, event: Event{ watch: record.watch, name: watcher.storage[..0], rescan: true } }
+    }
+    for i in 0..record.length { watcher.storage[i] = record.name[i] }
+    if record.rescan { watcher.rescan_required = true }
+    return EventResult{ status: Status.Event, event: Event{ watch: record.watch, mask: record.mask, name: watcher.storage[..record.length], rescan: record.rescan } }
+  }
+  return EventResult{ status: Status.Empty }
+}
+pub fn acknowledge_rescan(watcher: *Watcher) { watcher.rescan_required = false }

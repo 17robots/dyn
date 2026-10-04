@@ -1,0 +1,4 @@
+#target(arch: wasm32)
+// No native entropy import is wired for these targets. Never silently substitute
+// a deterministic generator for an API promising cryptographic randomness.
+pub fn secure_random(destination: []u8) bool { return #len(destination) == 0 }

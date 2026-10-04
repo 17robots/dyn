@@ -1,0 +1,14 @@
+#target(kernel: linux)
+// Linux getrandom. Success only when whole destination filled.
+pub fn secure_random(destination: []u8) bool {
+  total: usize = 0
+  for total < #len(destination) {
+    got := #syscall(318, &destination[total], #len(destination) - total, 0)
+    if got == -4 { } else if got <= 0 {
+      return false
+    } else {
+      total += #cast(usize) got
+    }
+  }
+  return true
+}

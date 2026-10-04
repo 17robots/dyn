@@ -14,8 +14,14 @@ pub const MoveSelf: u32 = 2048
 pub const Ignored: u32 = 32768
 pub const IsDirectory: u32 = 1073741824
 pub const Changes: u32 = 4046
+pub const SupportedEvents: u32 = 4046
+pub const HasCloseWrite: bool = true
+pub const HasMoveCookies: bool = true
+pub const HasDirectoryFlag: bool = true
+// Zero means no fixed userspace slot limit; native inotify quotas still apply.
+pub const FixedWatchCapacity: usize = 0
 pub enum Status { Event, Empty, Error }
-pub struct Watcher { descriptor: isize, storage: []u8, used: usize, offset: usize, rescan_required: bool }
+pub struct Watcher { descriptor: isize = -1, storage: []u8, used: usize, offset: usize, rescan_required: bool }
 pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
 pub struct Result { value: i32, error: isize, ok: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
@@ -25,11 +31,11 @@ pub struct EventResult { event: Event, status: Status, error: isize }
 // storage until next refill. An overflow invalidates all cached workspace state.
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ error: -28 }
+    return OpenResult{ watcher: Watcher{}, error: -28 }
   }
   descriptor := #syscall(294, 526336)
   if descriptor < 0 {
-    return OpenResult{ error: descriptor }
+    return OpenResult{ watcher: Watcher{}, error: descriptor }
   }
   return OpenResult{ watcher: Watcher{ descriptor: descriptor, storage: storage }, ok: true }
 }

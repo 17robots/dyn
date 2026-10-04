@@ -577,7 +577,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     if (!result)
       result = dyn_sources_merge(&sources, main_path, &module_source);
     module_source.context = context;
-    bool thin_lto = options->release &&
+    bool thin_lto = options->release && !options->no_lto &&
                     !strcmp(options->target, "x86_64-linux") &&
                     command_available("ld.lld");
     ModuleBuild module_build = {.merged = &module_source,

@@ -1,6 +1,7 @@
 use "std/mem" memory
 use "std/strings" text
 use "std/io" stream
+use "std/unicode/utf8" utf8
 
 struct Cursor { source: []const u8, at: usize, error: ErrorKind }
 
@@ -177,6 +178,13 @@ fn string(cursor: *Cursor) bool {
     if byte < 32 {
       return false
     }
+    if byte >= 128 {
+      decoded := utf8.decode(cursor.source, cursor.at - 1)
+      if !decoded.ok {
+        return false
+      }
+      cursor.at += decoded.width - 1
+    }
     if byte == '\\' {
       if cursor.at >= #len(cursor.source) {
         return false
@@ -340,7 +348,7 @@ pub fn valid(source: []const u8) bool {
 }
 
 pub fn write_string(destination: []u8, source: []const u8) []u8 {
-  if #len(destination) < 2 {
+  if #len(destination) < 2 || !utf8.valid(source) {
     return destination[..0]
   }
   at: usize = 0
@@ -427,6 +435,13 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   }
   if end >= #len(cursor.source) {
     return failed_string(cursor)
+  }
+  if !utf8.valid(cursor.source[start..end]) {
+    return failed_string(cursor)
+  }
+  if end == start {
+    cursor.at = end + 1
+    return cursor.source[start..end]
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_try_push_uninit(arena, end - start, 1)
@@ -982,6 +997,9 @@ fn hex_digit(value: u8) u8 {
 }
 
 fn stream_string(destination: stream.Writer, source: []const u8) stream.Result {
+  if !utf8.valid(source) {
+    return stream.Result{ error: -22, status: stream.Status.Error }
+  }
   total: usize = 0
   opening := stream_bytes(destination, "\"")
   if opening.status == stream.Status.Error {

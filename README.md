@@ -22,6 +22,12 @@ prunes the backend cache to 10% of available disk space or 1 GiB, whichever is
 smaller, and removes entries unused for seven days. `--jobs` also limits ThinLTO
 backend workers. Cold release builds still perform LLVM optimization.
 
+Use `dyn build --release --no-lto src` when cold-build latency matters more than
+cross-module optimization. This keeps per-module O2 optimization and emits native
+objects directly, avoiding link-time optimization. Executable performance and size
+can differ; benchmark your workload before choosing this for distribution. The
+cache distinguishes this mode from normal release builds.
+
 ## Install a preview
 
 | System | Download from the release |
@@ -122,18 +128,24 @@ follows its code page. `bufio.read_line` strips LF or CRLF and preserves lone CR
 Preview 3 callers must rename `terminal.stdin/stdout/stderr` to their `io`
 equivalents. `std/terminal` retains Linux terminal controls and key decoding.
 
-## Standard library in preview 13
+## Standard library contracts
 
-Preview 5 includes the following APIs and ownership contracts.
+The current source tree provides these APIs and ownership contracts. Source changes
+may be newer than the latest published preview.
 
 | API | Contract |
 | --- | --- |
-| `std/fs` | Basic open/create/append/exclusive-create, read/write, seek/sync, close and stream adapters work on Linux, macOS and Windows. Directory traversal, metadata, watching and atomic replacement remain Linux-specific. |
+| `std/fs` | Basic open/create/append/exclusive-create, read/write, seek/sync, close and stream adapters work on Linux, macOS and Windows. Directory traversal, metadata and atomic replacement remain Linux-specific; watching is available through the separate portable watch module. |
 | `fs.File{}` | Unopened. Use `fs.take(&file)` to transfer ownership, `fs.borrow(&file)` for a view, and `adopt_handle`/`borrow_handle` for native handles. Closing a borrowed or already-closed file returns `InvalidState`. |
 | `bufio.read_line` | Strips LF or CRLF, preserves lone CR. Returns `bufio.ReadStatus.More` when the destination fills: process those bytes and continue the same line. `Complete` ends a line; `End` may include a final fragment; `Error` reports failure. |
 | `process.arguments(&arena)` | Includes argv[0]; descriptors and bytes belong to the arena. Unix preserves native bytes; Windows converts UTF-16 to UTF-8. Linux reads `/proc/self/cmdline`; macOS and Windows use native process data. |
 | `time.try_monotonic_now()` / `try_realtime_now()` | Fallible native clocks; monotonic measures durations, realtime uses Unix epoch. `sleep_result` reports failure. Date and duration helpers are portable; WASI supports clocks but not sleep. |
 | `std/errors` | Portable `kind` accompanies the original native `error` code. Check `ok` or `status` first: library failures may have code zero. |
+| `std/sync` | Atomics, mutexes, conditions, semaphores and once initialization work on Linux x64/ARM64, macOS ARM64 and Windows x64. Darwin mutexes use ownership-aware unfair locks; other waiters use native address waits. |
+| `std/thread` / `std/net` | Thread lifecycle and TCP/UDP, IPv4/IPv6, DNS, socket options and poll work on all four native targets. Epoll remains Linux-only. Winsock initializes once per process. Darwin binaries require macOS 15 or newer. DNS uses native cryptographic entropy and portable UDP truncation detection for TCP fallback. |
+| `net.Connection{}` / `net.Listener{}` | Inactive, including results from failed constructors. Successful values own their descriptors; do not copy owners. Stream adapters borrow the connection's address. Close each successful owner; writes to disconnected sockets return errors without SIGPIPE. |
+| `std/fs/watch` | Non-recursive watches use Linux inotify, Windows asynchronous directory changes or macOS FSEvents. Inactive/failed opens are safe to close. Overflow requires rebuilding and reconciling the directory snapshot; consult the platform capabilities below. |
+| `std/encoding/json` | Parsing and both string-writing APIs reject invalid UTF-8. Arena parse failures rewind allocations. Streaming writer errors can leave earlier output written; check status and transferred bytes. |
 
 File owners must not be copied; this remains a programmer obligation. A borrowed
 file must not outlive its owner, and stream adapters borrow the File's address.
@@ -145,6 +157,50 @@ No hidden heap ownership is transferred to the caller.
 Migration: replace raw `File{ descriptor: ... }` construction with an explicit
 adopt or borrow operation. Line results now use `bufio.ReadStatus`, and a full
 buffer is `More`, not an I/O error. Use `read_until` for byte-exact delimiters.
+
+## Library qualification
+
+`just test` includes fragmented CSV/XML inputs, malformed JSON and allocation
+limits, socket/watch cleanup, generated binding ABI checks, and a small expression
+compiler written in Dyn. The expression compiler tests scanning, precedence,
+symbol lookup, bounded output and diagnostics; it is not a self-hosted Dyn compiler
+or a bootstrap-equivalence test.
+
+Native host CI executes stdlib contracts and the Tree-sitter provider lifecycle
+against each host's installed library. Linux also qualifies the selected providers
+in `just test-vendors-native`. These gates qualify their named providers and host
+versions, not every optional provider or every ABI/version combination.
+
+`thread.spawn_with_size(&thread, bytes, entry, context)` owns the native stack
+until successful join. Linux maps and releases it explicitly; Windows/macOS use
+OS-managed stacks. The existing `spawn` borrows a caller stack on Linux and uses
+its length as an OS stack-size request on Windows/macOS. The thread and context
+must remain valid and unmoved until join; live owners must not be copied.
+
+Watcher owners and their caller output buffers must remain alive until successful
+close. Windows/macOS allocate one bounded native state block and support 16
+watches per owner. Windows waits for cancelled I/O completion before releasing
+that block; macOS stops delivery and drains callbacks before release. Native
+allocation/handle failures remain errors rather than successful silent skips.
+Names are borrowed: copy them before the next `next()` call for portable code.
+
+`HasCloseWrite`, `HasMoveCookies`, `HasDirectoryFlag`, `SupportedEvents` and
+`FixedWatchCapacity` expose watcher capabilities. Linux provides close-write and
+paired rename cookies. Windows provides rename actions without cookies or
+close-write/directory flags. macOS events may coalesce; rename reports both move
+bits and requests a rescan. Unsupported-only masks fail. Default `Changes` works
+on every native platform; it does not promise unsupported details. Zero fixed
+capacity on Linux means there is no userspace slot bound, while kernel quotas
+still apply.
+
+`tools/setup-vendor-tests.py` builds pinned optional test dependencies into the
+build directory. `just test-vendors-all` requires all 23 raw-binding manifest
+providers, native media/adapter workflows, and asset/UI sanitizer checks. Missing
+providers fail the gate. The Linux gate also runs before release publication.
+Reports record generated ABI fingerprints, provider metadata and source pins;
+this is representative native qualification, not proof of every provider API or
+Windows/macOS vendor support. Native host CI executes thread, synchronization,
+network and watcher contracts on Windows/macOS; cross-linking is a separate check.
 
 ## Build from source
 

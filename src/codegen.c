@@ -2837,7 +2837,7 @@ int dyn_link_executable_objects(const DynContext *context,
 #ifdef __APPLE__
           "-arch arm64 -platform_version macos 15.0 15.0 -e _dyn_start"
 #else
-          "cc --target=aarch64-macos-none -nostdlib -Wl,-e,_dyn_start"
+          "cc --target=aarch64-macos.15.0-none -nostdlib -Wl,-e,_dyn_start"
 #endif
         : windows
             ? "-mi386pep --gc-sections --entry=dyn_start --subsystem console"
@@ -2868,7 +2868,7 @@ int dyn_link_executable_objects(const DynContext *context,
     arguments[argument_count++] = "-e"; arguments[argument_count++] = "_dyn_start";
 #else
     arguments[argument_count++] = "cc";
-    arguments[argument_count++] = "--target=aarch64-macos-none";
+    arguments[argument_count++] = "--target=aarch64-macos.15.0-none";
     arguments[argument_count++] = "-nostdlib";
     arguments[argument_count++] = "-Wl,-e,_dyn_start";
 #endif
@@ -3061,7 +3061,7 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
 #ifdef __APPLE__
                 "ld64.lld -arch arm64 -platform_version macos 15.0 15.0 -dylib"
 #else
-                "zig cc --target=aarch64-macos-none -dynamiclib -nostdlib"
+                "zig cc --target=aarch64-macos.15.0-none -dynamiclib -nostdlib"
 #endif
             : windows ? DYN_WINDOWS_LINKER " -mi386pep -shared"
                       : "ld.lld -shared",
@@ -3083,7 +3083,7 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
     arguments[count++] = "-dylib";
 #else
     arguments[count++] = "cc";
-    arguments[count++] = "--target=aarch64-macos-none";
+    arguments[count++] = "--target=aarch64-macos.15.0-none";
     arguments[count++] = "-dynamiclib";
     arguments[count++] = "-nostdlib";
 #endif

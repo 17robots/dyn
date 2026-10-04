@@ -1,11 +1,11 @@
-#target(kernel: linux)
+#target(pointer_bits: 64)
 
 
 use "std/io" stream
+use "std/time" clock
 
 pub const AddressFamilyIpv4: usize = 2
 pub const AddressFamilyUnix: usize = 1
-pub const AddressFamilyIpv6: usize = 10
 pub const SocketStream: usize = 1
 pub const SocketDatagram: usize = 2
 pub const PollReadable: i16 = 1
@@ -21,11 +21,10 @@ pub struct Ipv6Address { bytes: [28]u8 }
 pub struct UnixAddress { bytes: [110]u8, length: usize }
 // Large enough for every supported sockaddr. `length` makes ownership and ABI size explicit.
 pub struct Address { bytes: [128]u8, length: usize }
-pub struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }
 
 pub struct Result { value: isize, error: isize, ok: bool }
-pub struct Connection { descriptor: isize }
-pub struct Listener { descriptor: isize }
+pub struct Connection { descriptor: isize = -1 }
+pub struct Listener { descriptor: isize = -1 }
 pub struct ConnectionResult { connection: Connection, error: isize, ok: bool }
 pub struct ListenerResult { listener: Listener, error: isize, ok: bool }
 pub fn result_value(outcome: *const Result) isize {
@@ -46,17 +45,17 @@ fn result(value: isize) Result {
 }
 
 pub fn socket(family: usize, kind: usize, protocol: usize) Result {
-  return result(#syscall(41, family, kind, protocol))
+  return result(native_socket(family, kind, protocol))
 }
 
 pub fn close(descriptor: isize) Result {
-  return result(#syscall(3, descriptor))
+  return result(native_close(descriptor))
 }
 pub fn listen(descriptor: isize, backlog: usize) Result {
-  return result(#syscall(50, descriptor, backlog))
+  return result(native_listen(descriptor, backlog))
 }
 pub fn shutdown(descriptor: isize, how: usize) Result {
-  return result(#syscall(48, descriptor, how))
+  return result(native_shutdown(descriptor, how))
 }
 
 pub fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []u8 {
@@ -66,7 +65,7 @@ pub fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []
   for i in 0..16 {
     destination[i] = 0
   }
-  destination[0] = 2
+  address_family(destination, 16, 2)
   destination[2] = #cast(u8) (port >> 8)
   destination[3] = #cast(u8) port
   destination[4] = a
@@ -84,7 +83,7 @@ pub fn ipv4(a: u8, b: u8, c: u8, d: u8, port: u16) Ipv4Address {
 
 pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
   value: Ipv6Address = Ipv6Address{}
-  value.bytes[0] = 10
+  address_family(value.bytes[..], 28, AddressFamilyIpv6)
   value.bytes[2] = #cast(u8) (port >> 8)
   value.bytes[3] = #cast(u8) port
   for i in 0..16 {
@@ -97,13 +96,13 @@ pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
   return value
 }
 
-// Linux sockaddr_un. Empty result means an empty/oversized path.
+// Native sockaddr_un. Empty result means an empty/oversized path.
 pub fn unix(path: []const u8) UnixAddress {
   value: UnixAddress = UnixAddress{}
-  if #len(path) == 0 || #len(path) > 107 {
+  if #len(path) == 0 || #len(path) > UnixPathLimit {
     return value
   }
-  value.bytes[0] = 1
+  address_family(value.bytes[..], 3 + #len(path), 1)
   for i in 0..#len(path) {
     value.bytes[2 + i] = path[i]
   }
@@ -112,70 +111,70 @@ pub fn unix(path: []const u8) UnixAddress {
 }
 
 pub fn connect_ipv4(descriptor: isize, address: *const Ipv4Address) Result {
-  return result(#syscall(42, descriptor, &address.bytes[0], 16))
+  return result(native_connect(descriptor, &address.bytes[0], 16))
 }
 
 pub fn bind_ipv4(descriptor: isize, address: *const Ipv4Address) Result {
-  return result(#syscall(49, descriptor, &address.bytes[0], 16))
+  return result(native_bind(descriptor, &address.bytes[0], 16))
 }
 
 pub fn connect_ipv6(descriptor: isize, address: *const Ipv6Address) Result {
-  return result(#syscall(42, descriptor, &address.bytes[0], 28))
+  return result(native_connect(descriptor, &address.bytes[0], 28))
 }
 pub fn bind_ipv6(descriptor: isize, address: *const Ipv6Address) Result {
-  return result(#syscall(49, descriptor, &address.bytes[0], 28))
+  return result(native_bind(descriptor, &address.bytes[0], 28))
 }
 pub fn connect_unix(descriptor: isize, address: *const UnixAddress) Result {
   if address.length == 0 {
     return Result{ value: -1, error: -22, ok: false }
   }
-  return result(#syscall(42, descriptor, &address.bytes[0], address.length))
+  return result(native_connect(descriptor, &address.bytes[0], address.length))
 }
 pub fn bind_unix(descriptor: isize, address: *const UnixAddress) Result {
   if address.length == 0 {
     return Result{ value: -1, error: -22, ok: false }
   }
-  return result(#syscall(49, descriptor, &address.bytes[0], address.length))
+  return result(native_bind(descriptor, &address.bytes[0], address.length))
 }
 
 pub fn connect(descriptor: isize, address: []const u8) Result {
   if #len(address) == 0 {
     return Result{ value: -1, error: -22, ok: false }
   }
-  return result(#syscall(42, descriptor, &address[0], #len(address)))
+  return result(native_connect(descriptor, &address[0], #len(address)))
 }
 
 pub fn bind(descriptor: isize, address: []const u8) Result {
   if #len(address) == 0 {
     return Result{ value: -1, error: -22, ok: false }
   }
-  return result(#syscall(49, descriptor, &address[0], #len(address)))
+  return result(native_bind(descriptor, &address[0], #len(address)))
 }
 
 pub fn accept(descriptor: isize) Result {
-  return result(#syscall(43, descriptor, 0, 0))
+  return result(native_accept(descriptor, nil, nil))
 }
 
 pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResult {
   opened := socket(AddressFamilyIpv4, SocketStream, 0)
   if !opened.ok {
-    return ListenerResult{ error: opened.error, ok: false }
+    return ListenerResult{ listener: Listener{}, error: opened.error, ok: false }
   }
   descriptor := result_value(&opened)
   reused := reuse_address(descriptor, true)
   if !reused.ok {
     _ = close(descriptor)
-    return ListenerResult{ error: reused.error, ok: false }
+    return ListenerResult{ listener: Listener{}, error: reused.error, ok: false }
   }
   bound := bind_ipv4(descriptor, address)
   if !bound.ok {
     _ = close(descriptor)
-    return ListenerResult{ error: bound.error, ok: false }
+    return ListenerResult{ listener: Listener{}, error: bound.error, ok: false }
   }
   listening := listen(descriptor, backlog)
   if !listening.ok {
     _ = close(descriptor)
-    return ListenerResult{ error: listening.error, ok: false }
+    return ListenerResult{ listener: Listener{}, error: listening.error, ok: false }
   }
   return ListenerResult{ listener: Listener{ descriptor: descriptor }, ok: true }
 }
@@ -183,24 +182,24 @@ pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResu
 pub fn tcp_connect_ipv4(address: *const Ipv4Address) ConnectionResult {
   opened := socket(AddressFamilyIpv4, SocketStream, 0)
   if !opened.ok {
-    return ConnectionResult{ error: opened.error, ok: false }
+    return ConnectionResult{ connection: Connection{}, error: opened.error, ok: false }
   }
   descriptor := result_value(&opened)
   connected := connect_ipv4(descriptor, address)
   if !connected.ok {
     _ = close(descriptor)
-    return ConnectionResult{ error: connected.error, ok: false }
+    return ConnectionResult{ connection: Connection{}, error: connected.error, ok: false }
   }
   return ConnectionResult{ connection: Connection{ descriptor: descriptor }, ok: true }
 }
 
 pub fn listener_accept(listener: *Listener) ConnectionResult {
   if listener.descriptor < 0 {
-    return ConnectionResult{ error: -9, ok: false }
+    return ConnectionResult{ connection: Connection{}, error: -9, ok: false }
   }
   accepted := accept(listener.descriptor)
   if !accepted.ok {
-    return ConnectionResult{ error: accepted.error, ok: false }
+    return ConnectionResult{ connection: Connection{}, error: accepted.error, ok: false }
   }
   return ConnectionResult{ connection: Connection{ descriptor: result_value(&accepted) }, ok: true }
 }
@@ -286,7 +285,7 @@ pub fn connection_writer(connection: *Connection) stream.Writer {
 
 pub fn accept_address(descriptor: isize, address: *Address) Result {
   length: u32 = 128
-  outcome := result(#syscall(43, descriptor, &address.bytes[0], &length))
+  outcome := result(native_accept(descriptor, &address.bytes[0], &length))
   if outcome.ok {
     address.length = #cast(usize) length
   }
@@ -295,7 +294,7 @@ pub fn accept_address(descriptor: isize, address: *Address) Result {
 
 pub fn local_address(descriptor: isize, address: *Address) Result {
   length: u32 = 128
-  outcome := result(#syscall(51, descriptor, &address.bytes[0], &length))
+  outcome := result(native_local(descriptor, &address.bytes[0], &length))
   if outcome.ok {
     address.length = #cast(usize) length
   }
@@ -304,7 +303,7 @@ pub fn local_address(descriptor: isize, address: *Address) Result {
 
 pub fn peer_address(descriptor: isize, address: *Address) Result {
   length: u32 = 128
-  outcome := result(#syscall(52, descriptor, &address.bytes[0], &length))
+  outcome := result(native_peer(descriptor, &address.bytes[0], &length))
   if outcome.ok {
     address.length = #cast(usize) length
   }
@@ -315,9 +314,11 @@ pub fn send(descriptor: isize, bytes: []const u8, flags: usize) Result {
   if #len(bytes) == 0 {
     return Result{ value: 0, error: 0, ok: true }
   }
-  value := #syscall(44, descriptor, &bytes[0], #len(bytes), flags, 0, 0)
-  for value == -4 {
-    value = #syscall(44, descriptor, &bytes[0], #len(bytes), flags, 0, 0)
+  // MSG_NOSIGNAL keeps a disconnected peer in the Result error channel.
+  flags = flags | NoSignalFlag
+  value := native_send(descriptor, &bytes[0], #len(bytes), flags, nil, 0)
+  for native_interrupted(value) {
+    value = native_send(descriptor, &bytes[0], #len(bytes), flags, nil, 0)
   }
   return result(value)
 }
@@ -326,23 +327,27 @@ pub fn receive(descriptor: isize, bytes: []u8, flags: usize) Result {
   if #len(bytes) == 0 {
     return Result{ value: 0, error: 0, ok: true }
   }
-  value := #syscall(45, descriptor, &bytes[0], #len(bytes), flags, 0, 0)
-  for value == -4 {
-    value = #syscall(45, descriptor, &bytes[0], #len(bytes), flags, 0, 0)
+  value := native_receive(descriptor, &bytes[0], #len(bytes), flags, nil, nil)
+  for native_interrupted(value) {
+    value = native_receive(descriptor, &bytes[0], #len(bytes), flags, nil, nil)
   }
   return result(value)
 }
 
 pub fn send_to(descriptor: isize, bytes: []const u8, flags: usize, address: []const u8) Result {
-  if #len(bytes) == 0 {
-    return Result{ value: 0, error: 0, ok: true }
-  }
   if #len(address) == 0 {
     return Result{ value: -1, error: -22, ok: false }
   }
-  value := #syscall(44, descriptor, &bytes[0], #len(bytes), flags, &address[0], #len(address))
-  for value == -4 {
-    value = #syscall(44, descriptor, &bytes[0], #len(bytes), flags, &address[0], #len(address))
+  // Empty UDP payloads are packets too; the kernel accepts a null buffer.
+  data: *const u8 = nil
+  if #len(bytes) > 0 {
+    data = &bytes[0]
+  }
+  // This entry point can also send through a connected stream socket.
+  flags = flags | NoSignalFlag
+  value := native_send(descriptor, data, #len(bytes), flags, &address[0], #len(address))
+  for native_interrupted(value) {
+    value = native_send(descriptor, data, #len(bytes), flags, &address[0], #len(address))
   }
   return result(value)
 }
@@ -356,9 +361,9 @@ pub fn receive_from(descriptor: isize, bytes: []u8, flags: usize, address: []u8,
     address_raw = &address[0]
     address_length.* = #cast(u32) #len(address)
   }
-  value := #syscall(45, descriptor, &bytes[0], #len(bytes), flags, address_raw, address_length)
-  for value == -4 {
-    value = #syscall(45, descriptor, &bytes[0], #len(bytes), flags, address_raw, address_length)
+  value := native_receive(descriptor, &bytes[0], #len(bytes), flags, address_raw, address_length)
+  for native_interrupted(value) {
+    value = native_receive(descriptor, &bytes[0], #len(bytes), flags, address_raw, address_length)
   }
   return result(value)
 }
@@ -368,14 +373,14 @@ pub fn reuse_address(descriptor: isize, enabled: bool) Result {
   if enabled {
     value = 1
   }
-  return result(#syscall(54, descriptor, 1, 2, &value, #sizeof(i32)))
+  return result(native_set_option(descriptor, SocketLevel, ReuseOption, #cast(rawptr) &value, #sizeof(i32)))
 }
 
 // Completes a nonblocking connect by reading SO_ERROR. Zero means connected.
 pub fn socket_error(descriptor: isize) Result {
   error: i32 = 0
   length: u32 = #cast(u32) #sizeof(i32)
-  queried := #syscall(55, descriptor, 1, 4, &error, &length)
+  queried := native_get_option(descriptor, SocketLevel, ErrorOption, #cast(rawptr) &error, &length)
   if queried < 0 {
     return result(queried)
   }
@@ -386,46 +391,63 @@ pub fn socket_error(descriptor: isize) Result {
 }
 
 pub fn nonblocking(descriptor: isize, enabled: bool) Result {
-  flags := #syscall(72, descriptor, 3, 0)
-  if flags < 0 {
-    return result(flags)
-  }
-  if enabled {
-    flags = flags | 2048
-  }
-  else {
-    flags = flags & ~2048
-  }
-  return result(#syscall(72, descriptor, 4, flags))
+  return result(native_nonblocking(descriptor, enabled))
 }
-
-struct TimeValue { seconds: isize, microseconds: isize }
-
 pub fn receive_timeout(descriptor: isize, milliseconds: usize) Result {
-  timeout := TimeValue{ seconds: #cast(isize) (milliseconds / 1000), microseconds: #cast(isize) ((milliseconds % 1000) * 1000) }
-  return result(#syscall(54, descriptor, 1, 20, &timeout, #sizeof(TimeValue)))
+  return result(native_timeout(descriptor, milliseconds, false))
 }
-
 pub fn send_timeout(descriptor: isize, milliseconds: usize) Result {
-  timeout := TimeValue{ seconds: #cast(isize) (milliseconds / 1000), microseconds: #cast(isize) ((milliseconds % 1000) * 1000) }
-  return result(#syscall(54, descriptor, 1, 21, &timeout, #sizeof(TimeValue)))
+  return result(native_timeout(descriptor, milliseconds, true))
 }
 
 pub fn would_block(outcome: *const Result) bool {
-  return !outcome.ok && (outcome.error == -11 || outcome.error == -115)
+  return !outcome.ok && native_would_block(outcome.error)
 }
 
 
+// Called only after EINTR for finite waits. Round remaining nanoseconds up so
+// converting back to a millisecond timeout cannot expire the deadline early.
+fn interrupted_timeout(start: clock.Instant, milliseconds: i32) Result {
+  now := clock.try_monotonic_now()
+  if !now.ok {
+    return Result{ value: now.error, error: now.error }
+  }
+  elapsed := clock.elapsed(start, now.value)
+  if !elapsed.ok || elapsed.value < 0 {
+    return result(-75)
+  }
+  duration := #cast(i64) milliseconds * clock.Millisecond
+  if elapsed.value >= duration {
+    return result(0)
+  }
+  return result(#cast(isize) ((duration - elapsed.value + clock.Millisecond - 1) / clock.Millisecond))
+}
+
 pub fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) Result {
-  value := poll_native(descriptors, timeout_milliseconds)
-  for value == -4 {
-    value = poll_native(descriptors, timeout_milliseconds)
+  start := clock.ClockResult{}
+  if timeout_milliseconds > 0 {
+    start = clock.try_monotonic_now()
+    if !start.ok { return Result{ value: start.error, error: start.error } }
+  }
+  remaining := timeout_milliseconds
+  value := poll_native(descriptors, remaining)
+  for native_interrupted(value) {
+    if timeout_milliseconds > 0 {
+      retry := interrupted_timeout(start.value, timeout_milliseconds)
+      if !retry.ok { return retry }
+      if retry.value == 0 {
+        for i in 0..#len(descriptors) { descriptors[i].returned = 0 }
+        return result(0)
+      }
+      remaining = #cast(i32) retry.value
+    }
+    value = poll_native(descriptors, remaining)
   }
   return result(value)
 }
 
 pub fn wait(descriptor: isize, events: i16, timeout_milliseconds: i32) Result {
-  item := PollDescriptor{ descriptor: #cast(i32) descriptor, events: events, returned: 0 }
+  item := PollDescriptor{ descriptor: #cast(Descriptor) descriptor, events: events, returned: 0 }
   outcome := poll((&item)[..1], timeout_milliseconds)
   if !outcome.ok || outcome.value == 0 {
     return outcome
@@ -438,92 +460,3 @@ pub fn poll_has(item: *const PollDescriptor, events: i16) bool {
 }
 
 
-// Linux epoll. Target-specific Event storage follows the kernel UAPI layout.
-pub const EventReadable: u32 = 1
-pub const EventWritable: u32 = 4
-pub const EventError: u32 = 8
-pub const EventHangup: u32 = 16
-pub const EventEdgeTriggered: u32 = 2147483648
-pub const EventAdd: usize = 1
-pub const EventRemove: usize = 2
-pub const EventModify: usize = 3
-
-
-fn event_put_u32(bytes: []u8, value: u32) {
-  bytes[0] = #cast(u8) value
-  bytes[1] = #cast(u8) (value >> 8)
-  bytes[2] = #cast(u8) (value >> 16)
-  bytes[3] = #cast(u8) (value >> 24)
-}
-
-fn event_put_u64(bytes: []u8, value: u64) {
-  event_put_u32(bytes[..4], #cast(u32) value)
-  event_put_u32(bytes[4..8], #cast(u32) (value >> 32))
-}
-
-pub fn event(events: u32, data: u64) Event {
-  value := Event{}
-  event_put_u32(value.bytes[..4], events)
-  event_put_u64(value.bytes[EventDataOffset..EventDataOffset + 8], data)
-  return value
-}
-
-pub fn event_events(value: *const Event) u32 {
-  a: u32 = #cast(u32) value.bytes[0]
-  b: u32 = #cast(u32) value.bytes[1]
-  c: u32 = #cast(u32) value.bytes[2]
-  d: u32 = #cast(u32) value.bytes[3]
-  return a | (b << 8) | (c << 16) | (d << 24)
-}
-
-fn event_u32_at(value: *const Event, offset: usize) u32 {
-  a: u32 = #cast(u32) value.bytes[offset]
-  b: u32 = #cast(u32) value.bytes[offset + 1]
-  c: u32 = #cast(u32) value.bytes[offset + 2]
-  d: u32 = #cast(u32) value.bytes[offset + 3]
-  return a | (b << 8) | (c << 16) | (d << 24)
-}
-
-pub fn event_data(value: *const Event) u64 {
-  low: u64 = #cast(u64) event_u32_at(value, EventDataOffset)
-  high: u64 = #cast(u64) event_u32_at(value, EventDataOffset + 4)
-  return low | (high << 32)
-}
-
-pub fn event_queue() Result {
-  return result(#syscall(291, 0))
-}
-
-pub fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) Result {
-  return result(#syscall(233, queue, operation, descriptor, value))
-}
-
-// Registration helpers keep epoll's operation numbers and remove-event pointer
-// convention out of application code. `data` is returned unchanged by event_wait.
-pub fn event_add(queue: isize, descriptor: isize, events: u32, data: u64) Result {
-  value := event(events, data)
-  return event_control(queue, EventAdd, descriptor, &value)
-}
-
-pub fn event_modify(queue: isize, descriptor: isize, events: u32, data: u64) Result {
-  value := event(events, data)
-  return event_control(queue, EventModify, descriptor, &value)
-}
-
-pub fn event_remove(queue: isize, descriptor: isize) Result {
-  // Linux ignores this argument for EPOLL_CTL_DEL, but using valid storage keeps
-  // the language-level pointer contract explicit.
-  value := Event{}
-  return event_control(queue, EventRemove, descriptor, &value)
-}
-
-pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Result {
-  if #len(events) == 0 {
-    return Result{ value: -1, error: -22, ok: false }
-  }
-  value := #syscall(232, queue, &events[0], #len(events), timeout_milliseconds)
-  for value == -4 {
-    value = #syscall(232, queue, &events[0], #len(events), timeout_milliseconds)
-  }
-  return result(value)
-}
