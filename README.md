@@ -1,7 +1,7 @@
 # Dyn compiler
 
 Dyn is ready for public preview testing. Start with
-[preview 12](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.12), then
+[preview 13](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.13), then
 [report bugs](https://github.com/17robots/dyn/issues). APIs may change between previews.
 See the [changelog](CHANGELOG.md) for upgrade notes and code migrations.
 
@@ -26,9 +26,9 @@ backend workers. Cold release builds still perform LLVM optimization.
 
 | System | Download from the release |
 | --- | --- |
-| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.12-linux-x86_64-glibc2.39.tar.gz` |
-| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.12-windows-x86_64.zip` |
-| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.12-macos-aarch64.tar.gz` |
+| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.13-linux-x86_64-glibc2.39.tar.gz` |
+| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.13-windows-x86_64.zip` |
+| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.13-macos-aarch64.tar.gz` |
 
 The SDKs include the compiler, standard library, runtime, host linker and library
 dependencies. LLVM, Tree-sitter, MSYS2 and Homebrew are not required to use the
@@ -48,7 +48,7 @@ mise install github:17robots/dyn
 mise exec -- dyn version
 ```
 
-Expected version: `dyn 0.1.0-preview.12`. No compiler checkout is needed.
+Expected version: `dyn 0.1.0-preview.13`. No compiler checkout is needed.
 `mise exec -- dyn ...` works without shell activation. To use plain `dyn`, follow
 [mise's shell setup](https://mise.jdx.dev/getting-started.html).
 
@@ -72,7 +72,7 @@ On Linux/macOS, from the directory containing the downloaded archive:
 
 ```sh
 # Linux; substitute the macos-aarch64 archive name on macOS.
-tar -xzf dyn-0.1.0-preview.12-linux-x86_64-glibc2.39.tar.gz
+tar -xzf dyn-0.1.0-preview.13-linux-x86_64-glibc2.39.tar.gz
 ./dyn-sdk/bin/dyn version
 export PATH="$PWD/dyn-sdk/bin:$PATH"
 ```
@@ -80,9 +80,9 @@ export PATH="$PWD/dyn-sdk/bin:$PATH"
 On Windows, in PowerShell:
 
 ```powershell
-Expand-Archive .\dyn-0.1.0-preview.12-windows-x86_64.zip -DestinationPath .\dyn-preview12
-.\dyn-preview12\dyn-sdk\bin\dyn.exe version
-$env:Path = "$PWD\dyn-preview12\dyn-sdk\bin;$env:Path"
+Expand-Archive .\dyn-0.1.0-preview.13-windows-x86_64.zip -DestinationPath .\dyn-preview13
+.\dyn-preview13\dyn-sdk\bin\dyn.exe version
+$env:Path = "$PWD\dyn-preview13\dyn-sdk\bin;$env:Path"
 ```
 
 These PATH changes last for the current shell. For future shells, add the SDK's
@@ -122,7 +122,7 @@ follows its code page. `bufio.read_line` strips LF or CRLF and preserves lone CR
 Preview 3 callers must rename `terminal.stdin/stdout/stderr` to their `io`
 equivalents. `std/terminal` retains Linux terminal controls and key decoding.
 
-## Standard library in preview 12
+## Standard library in preview 13
 
 Preview 5 includes the following APIs and ownership contracts.
 
@@ -156,8 +156,8 @@ cd dyn
 ```
 
 These commands build current `main`. To build the published preview instead,
-run `git checkout v0.1.0-preview.12` before continuing. Source builds normally report
-`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.12` if you need that embedded version.
+run `git checkout v0.1.0-preview.13` before continuing. Source builds normally report
+`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.13` if you need that embedded version.
 Source builds require their build-time libraries and linker to remain installed.
 
 ### Linux x64 (Ubuntu 24.04)
