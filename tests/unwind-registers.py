@@ -152,6 +152,28 @@ with tempfile.TemporaryDirectory(prefix='dyn-unwind-registers-') as temporary:
         assert re.search(r'alloca \[' + str(words) + r' x i64\]', ir), (
             target, 'incorrect unwind context size')
     print('PASS native ABI runtime objects and target-sized compiler contexts (cross)')
+    # Object assembly alone misses unresolved runtime imports. Link an actual
+    # deferred cleanup program with freshly built support and the shipped ABI
+    # metadata, without relying on the host SDK or import libraries.
+    smoke = root / 'link-smoke'
+    smoke.mkdir()
+    (smoke / 'main.dyn').write_text('fn cleanup() {}\nfn main() { defer cleanup() }\n')
+    for target, linker, flags in (
+        ('x86_64-windows', 'lld-link', ['/entry:dyn_start', '/subsystem:console', '/nodefaultlib']),
+        ('aarch64-macos', 'ld64.lld', ['-arch', 'arm64', '-platform_version', 'macos', '15.0', '15.0', '-e', '_dyn_start']),
+    ):
+        executable = run([*CLANG, '-print-prog-name=' + linker]).stdout.strip()
+        for mode in ('--debug', '--release'):
+            output = root / (target + mode + '-link')
+            run([DYN, 'build', smoke, '--target', target, mode, '--no-cache',
+                 '--emit-object', '--no-link', '--output', output])
+            inputs = [root / (target + '-runtime.o'), root / (target + '-support.o'),
+                      Path(str(output) + '.o')]
+            if target == 'aarch64-macos':
+                inputs.append(ROOT / 'runtime/libSystem.tbd')
+            destination = ['/out:' + str(output)] if target == 'x86_64-windows' else ['-o', output]
+            run([executable, *flags, *destination, *inputs])
+    print('PASS Windows/macOS runtime imports resolve in debug/release links')
 
     if platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64'):
         source = (ROOT / 'runtime/windows_x86_64_start.S').read_text()

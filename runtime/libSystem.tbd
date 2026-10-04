@@ -9,5 +9,5 @@ exports:
   - targets: [ arm64-macos ]
     symbols: [ ___error, _clock_gettime, _nanosleep, __NSGetArgc, __NSGetArgv,
                _fork, _chdir, _pipe, _fcntl, _dup2, _execve, __exit, _waitpid, _kill,
-               _read, _write, _close, _getenv, _strlen ]
+               _read, _write, _close, _getenv, _strlen, _pthread_self ]
 ...

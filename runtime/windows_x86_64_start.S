@@ -290,6 +290,7 @@ kernel_lookup:
     thunk Sleep
     thunk GetStdHandle
     thunk GetCurrentProcess
+    thunk GetCurrentThreadId
     thunk DuplicateHandle
     thunk InitializeProcThreadAttributeList
     thunk UpdateProcThreadAttribute
@@ -350,6 +351,8 @@ iat GetTickCount64
 iat Sleep
 iat GetStdHandle
 iat GetCurrentProcess
+.global __imp_GetCurrentThreadId
+iat GetCurrentThreadId
 iat DuplicateHandle
 iat InitializeProcThreadAttributeList
 iat UpdateProcThreadAttribute
@@ -408,6 +411,7 @@ hint GetTickCount64
 hint Sleep
 hint GetStdHandle
 hint GetCurrentProcess
+hint GetCurrentThreadId
 hint DuplicateHandle
 hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute

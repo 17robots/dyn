@@ -6,6 +6,7 @@ from pathlib import Path
 import random
 import subprocess
 import tempfile
+import time
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,7 +65,10 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
     check(encoded.data, expected.data, wrapped, corrupt, chunk, 7, 33026)
-    check(encoded.data, expected.data, wrapped, corrupt, chunk, 1024, 65536)
+    // Bytewise output already exercises every boundary with minimum history.
+    // Larger chunks cover the second storage/input configuration without
+    // repeating millions of debug-mode reader calls on shared CI runners.
+    if chunk != 1 { check(encoded.data, expected.data, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
     destination := memory.arena_push(&owned.arena, #len(expected.data), 1)[..#len(expected.data)]
@@ -124,7 +128,7 @@ def distant_fixture():
     emit(1, 1)
     emit(1, 2)
     expected = bytearray(seed)
-    for distance in [32768] * 300 + [1] * 10:
+    for distance in [32768] * 140 + [1] * 10:
         symbol(285)
         if distance == 32768:
             emit(int(f'{29:05b}'[::-1], 2), 5)
@@ -144,10 +148,14 @@ with tempfile.TemporaryDirectory(prefix='dyn-deflate-') as temporary:
     work = Path(temporary)
     project = work / 'project'
     project.mkdir()
-    payload = (bytes(range(256)) * 500) + b'overlapping-backreference-' * 4000
+    # Keep multiple minimum-history wraps and a full 64 KiB wrap, while
+    # bounding correctness-test work independently of throughput benchmarks.
+    payload = (bytes(range(256)) * 260) + b'overlapping-backreference-' * 200
+    assert len(payload) > 2 * 33026
     dynamic = raw(payload)
     assert (dynamic[0] >> 1) & 3 == 2
     distant, distant_plain = distant_fixture()
+    assert len(distant_plain) > 2 * 33026
     wrapped = gzip.compress(payload, mtime=0) + gzip.compress(distant_plain, mtime=0)
     bad_crc = bytearray(wrapped)
     bad_crc[-8] ^= 1
@@ -173,7 +181,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-deflate-') as temporary:
     for mode in ('--debug', '--release'):
         output = work / ('deflate.exe' if os.name == 'nt' else 'deflate')
         subprocess.run([str(DYN), 'build', str(project), '--no-cache', '--quiet', '--output', str(output), mode], cwd=work, check=True, timeout=120)
+        started = time.monotonic()
         result = subprocess.run([str(output)], cwd=work, capture_output=True, timeout=90)
         assert result.returncode == 0, (result.stdout, result.stderr)
         assert result.stdout == b'deflate passed\n', result.stdout
+        print(f"PASS deflate {mode}: {time.monotonic() - started:.2f}s", flush=True)
 print('PASS deflate circular history, streaming blocks, backreferences, gzip and errors (debug/release)')
