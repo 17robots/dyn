@@ -1,0 +1,177 @@
+use "std/encoding/csv" csv
+use "std/encoding/xml" xml
+use "std/io" io
+use "std/bytes" bytes
+use "std/encoding/json" json
+use "std/mem" mem
+use "std/unicode/utf8" utf8
+struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
+fn read_chunk(data: rawptr, destination: []u8) io.Result {
+  state := #cast(*Chunk) data
+  if state.at == #len(state.source) { return io.Result{ status: io.Status.End } }
+  take := #len(state.source) - state.at
+  if state.at < state.split && take > state.split - state.at { take = state.split - state.at }
+  if state.limit > 0 && take > state.limit { take = state.limit }
+  if take > #len(destination) { take = #len(destination) }
+  for i in 0..take { destination[i] = state.source[state.at + i] }
+  state.at += take
+  return io.Result{ transferred: take }
+}
+fn input(state: *Chunk) io.Reader {
+  return io.Reader{ data: #cast(rawptr) state, read: &read_chunk }
+}
+fn csv_check(source: []const u8, expected: bool) {
+  for limit in 1..4 {
+    for capacity in 0..5 {
+      chunk := Chunk{source: source, limit: limit}
+      streamed := csv.stream_scanner(input(&chunk))
+      direct := csv.scanner(source)
+      a: [32]u8 = []
+      b: [32]u8 = []
+      first := csv.next(&direct, a[..capacity])
+      second := csv.next_stream(&streamed, b[..capacity])
+      if first.ok != second.ok || (capacity == 4 && first.ok != expected) || first.error != second.error {
+        #panic("CSV scanner acceptance mismatch")
+      }
+      if first.ok && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
+        #panic("CSV field mismatch")
+      }
+    }
+  }
+}
+fn xml_check(source: []const u8, expected: bool) {
+  direct := xml.scanner(source)
+  original := xml.next(&direct)
+  if original.ok != expected { #panic("XML fixture invalid") }
+  if expected {
+    for capacity in 0..#len(source) {
+      chunk := Chunk{source: source, limit: 1}
+      storage: [128]u8 = []
+      streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
+      event := xml.next_stream(&streamed)
+      if event.ok || event.error != xml.ErrorKind.Capacity { #panic("XML short storage") }
+    }
+  }
+  for limit in 0..4 {
+    for split in 1..#len(source) + 1 {
+      chunk := Chunk{source: source, split: split, limit: limit}
+      storage: [128]u8 = []
+      capacity := #len(source)
+      if !expected { capacity += 1 }
+      streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
+      event := xml.next_stream(&streamed)
+      if event.ok != original.ok || event.error != original.error { #panic("XML chunk acceptance mismatch") }
+      if event.ok && (event.event.kind != original.event.kind || !bytes.equal(event.event.name,original.event.name) || !bytes.equal(event.event.text,original.event.text) || !bytes.equal(event.event.attributes,original.event.attributes)) { #panic("XML chunk contents mismatch") }
+    }
+  }
+}
+fn json_document(source: []const u8, expected: bool) {
+  if json.valid(source) != expected { #panic("JSON UTF8 validity") }
+  backing: [512]u8 = []
+  for capacity in 0..513 {
+    arena := mem.arena_from_buffer(backing[..capacity])
+    prefix := mem.arena_try_push(&arena, 7, 1)
+    if prefix.ok { for i in 0..7 { prefix.memory[..7][i] = 91 } }
+    mark := mem.arena_mark(&arena)
+    parsed := json.parse(&arena,source)
+    if parsed.ok && !expected { #panic("JSON accepted invalid UTF8") }
+    if !parsed.ok && mem.arena_mark(&arena) != mark { #panic("JSON allocation rollback") }
+    if capacity == 512 && parsed.ok != expected { #panic("JSON parse UTF8 result") }
+    if prefix.ok {
+      for byte in prefix.memory[..7] { if byte != 91 { #panic("JSON clobbered prior allocation") } }
+    }
+  }
+}
+fn json_stream_check(value: *const json.Value, document: []const u8, expected: bool, prefix: []const u8) {
+  storage: [128]u8 = []
+  output := io.buffer_writer(storage[..])
+  result := json.write(io.buffer_writer_adapter(&output), value)
+  written := io.buffer_writer_bytes(&output)
+  if expected {
+    if result.status != io.Status.Complete || result.transferred != #len(document) || !bytes.equal(written, document) {
+      #panic("JSON streaming UTF8 roundtrip")
+    }
+  } else {
+    if result.status != io.Status.Error || result.error != -22 || result.transferred != #len(prefix) || !bytes.equal(written, prefix) {
+      #panic("JSON streaming invalid UTF8")
+    }
+  }
+}
+fn json_bytes(value: []const u8, expected: bool) {
+  quoted: [64]u8 = []
+  quoted[0] = '"'
+  for i in 0..#len(value) { quoted[i+1] = value[i] }
+  quoted[#len(value)+1] = '"'
+  length := #len(value)+2
+  json_document(quoted[..length],expected)
+  arena_storage: [512]u8 = []
+  arena := mem.arena_from_buffer(arena_storage[..])
+  string_value := json.make_string(&arena, value)
+  if string_value == nil { #panic("JSON test string allocation") }
+  json_stream_check(string_value, quoted[..length], expected, "")
+  object: [80]u8 = []
+  object[0] = '{'
+  for i in 0..length { object[i+1] = quoted[i] }
+  tail := ":null}"
+  for i in 0..#len(tail) { object[length+1+i] = tail[i] }
+  json_document(object[..length+1+#len(tail)],expected)
+  object_value := json.make_object(&arena)
+  child := json.make_null(&arena)
+  if object_value == nil || child == nil || !json.add_member(object_value, value, child) {
+    #panic("JSON test member allocation")
+  }
+  json_stream_check(object_value, object[..length+1+#len(tail)], expected, "{")
+  head := "{\"k\":"
+  for i in 0..#len(head) { object[i] = head[i] }
+  for i in 0..length { object[#len(head)+i] = quoted[i] }
+  object[#len(head)+length] = '}'
+  json_document(object[..#len(head)+length+1],expected)
+  destination: [64]u8 = []
+  for capacity in 0..length+2 {
+    for i in 0..64 { destination[i] = 123 }
+    written := json.write_string(destination[..capacity],value)
+    if !expected {
+      if #len(written) != 0 { #panic("JSON writes invalid UTF8") }
+      for byte in destination { if byte != 123 { #panic("JSON invalid write changes destination") } }
+    } else if capacity >= length {
+      if !bytes.equal(written,quoted[..length]) { #panic("JSON UTF8 roundtrip") }
+    } else if #len(written) != 0 { #panic("JSON insufficient output accepted") }
+    for i in capacity..64 { if destination[i] != 123 { #panic("JSON exceeds output capacity") } }
+  }
+}
+fn json_contracts() {
+  invalid: [13][4]u8 = [
+    [255,0,0,0], [128,0,0,0], [192,128,0,0], [193,191,0,0],
+    [224,128,128,0], [237,160,128,0], [240,128,128,128],
+    [244,144,128,128], [245,128,128,128], [226,130,0,0],
+    [194,0,0,0], [226,40,161,0], [240,159,152,0],
+  ]
+  lengths: [13]usize = [1,1,2,2,3,3,4,4,4,2,1,3,3]
+  for i in 0..#len(invalid) { json_bytes(invalid[i][..lengths[i]],false) }
+  codepoints: [12]u32 = [32,127,128,2047,2048,55295,57344,65535,65536,128512,1114110,1114111]
+  for codepoint in codepoints {
+    encoded: [4]u8 = []
+    count := utf8.encode(encoded[..],codepoint)
+    json_bytes(encoded[..count],true)
+  }
+  json_bytes("café 😀",true)
+  json_bytes("",true)
+}
+fn main() {
+  json_contracts()
+  for value in 0..256 {
+    source: [4]u8 = ['"','a','"',0]
+    source[3] = #cast(u8) value
+    expected := value == 44 || value == 10 || value == 13
+    csv_check(source[..], expected)
+  }
+  csv_check("\"a\"",true)
+  csv_check("\"a\"\"b\"",true)
+  xml_check("<?pi x > y?>",true)
+  xml_check("<?pi x > y > z?>",true)
+  xml_check("<?pi x > y?",false)
+  xml_check("<?pi x='>'?>",true)
+  xml_check("<a x='>'/>",true)
+  xml_check("<!-- > -->",true)
+  xml_check("<![CDATA[ > ]]>",true)
+}

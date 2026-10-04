@@ -214,6 +214,7 @@ static uint64_t build_key(const DynSources *sources, const DynOptions *options,
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
+  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_project_sources(hash, sources);
   for (size_t i = 0; i < options->link_input_count; ++i)
@@ -227,6 +228,7 @@ static uint64_t codegen_key(const DynSources *sources,
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
+  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_project_sources(hash, sources);
   return hash;
@@ -293,6 +295,7 @@ static uint64_t fast_options(const DynOptions *options, const char *compiler_pat
   uint64_t hash = UINT64_C(1469598103934665603);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
+  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   return hash_runtime(hash, options, compiler_path);
 }
@@ -558,6 +561,7 @@ static uint64_t module_key(const DynSources *sources, size_t first,
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
+  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   size_t object_length = strlen(object);
   bool bitcode =

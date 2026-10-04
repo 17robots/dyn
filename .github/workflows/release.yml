@@ -53,8 +53,10 @@ jobs:
     uses: ./.github/workflows/compiler-hosts.yml
     with:
       release_version: ${{ needs.version.outputs.value }}
+  vendors:
+    uses: ./.github/workflows/vendor-native.yml
   bundle:
-    needs: [version, linux, native, compiler-hosts]
+    needs: [version, linux, native, compiler-hosts, vendors]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

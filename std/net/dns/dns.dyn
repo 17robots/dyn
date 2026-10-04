@@ -330,7 +330,7 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
     }
     result := network.Result{}
     if sending {
-      result = network.send(descriptor, buffer[at..], 16384)
+      result = network.send(descriptor, buffer[at..], 0)
     }
     else {
       result = network.receive(descriptor, buffer[at..], 0)
@@ -447,7 +447,7 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     if error != 0 {
       return Packet{ error: error }
     }
-    received := network.receive(descriptor, packet, 32)
+    received := network.receive_packet(descriptor, packet)
     if !received.ok {
       if received.error == -4 || network.would_block(&received) {
         continue

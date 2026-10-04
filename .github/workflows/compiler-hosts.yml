@@ -46,6 +46,11 @@ jobs:
           python3 tests/lsp-navigation.py
           python3 tests/standard-streams.py --host-only
           python3 tests/stdlib-host.py
+          python3 tests/sync-host.py
+          python3 tests/concurrency-net-host.py
+          python3 tests/dns-host.py
+          python3 tests/watch-macos.py
+          python3 tests/vendor-provider-host.py
           python3 tools/package-host-sdk.py
           python3 tests/mise-package.py "build/dist/dyn-$DYN_VERSION-macos-aarch64.tar.gz" --version "$DYN_VERSION" --report build/dist/package-macos-aarch64.json
       - uses: actions/upload-artifact@v4
@@ -80,6 +85,7 @@ jobs:
             mingw-w64-clang-x86_64-llvm
             mingw-w64-clang-x86_64-lld
             mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-pkgconf
             mingw-w64-clang-x86_64-libtree-sitter
       - name: Build and exercise native compiler
         shell: msys2 {0}
@@ -94,6 +100,12 @@ jobs:
           python tests/lsp-navigation.py
           python tests/standard-streams.py --host-only
           python tests/stdlib-host.py
+          python tests/sync-host.py
+          python tests/concurrency-net-host.py
+          python tests/dns-host.py
+          python tests/watch-windows.py
+          python tests/vendor-provider-host.py
+          python tests/windows-sockets.py
           python tools/package-host-sdk.py
           python tests/mise-package.py "build/dist/dyn-$DYN_VERSION-windows-x86_64.zip" --version "$DYN_VERSION" --report build/dist/package-windows-x86_64.json
       - uses: actions/upload-artifact@v4

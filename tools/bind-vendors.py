@@ -21,7 +21,7 @@ import tempfile
 LOCATION = Path(__file__).resolve().parents[1]
 VENDOR = LOCATION / 'vendor' if (LOCATION / 'vendor').is_dir() else LOCATION / 'share/dyn/vendor'
 SOURCE_SDK = VENDOR.parent
-DEFAULT_BUILD = LOCATION.parent / 'build' if VENDOR == LOCATION / 'vendor' else Path.cwd() / 'build'
+DEFAULT_BUILD = LOCATION / 'build' if VENDOR == LOCATION / 'vendor' else Path.cwd() / 'build'
 GENERATOR = Path(__file__).with_name('vendor-bindings.py')
 if not GENERATOR.is_file():
     GENERATOR = Path(__file__).with_name('dyn-raw-bind')
@@ -65,7 +65,8 @@ def main():
     if unknown:
         parser.error('Unknown providers: ' + ', '.join(sorted(unknown)))
     prefix, sources, output = args.prefix.resolve(), args.sources.resolve(), args.output.resolve()
-    if output == SOURCE_SDK.resolve() or output in SOURCE_SDK.resolve().parents or SOURCE_SDK.resolve() in output.parents:
+    source_build_output = VENDOR == LOCATION / 'vendor' and (LOCATION / 'build').resolve() in output.parents
+    if output == SOURCE_SDK.resolve() or output in SOURCE_SDK.resolve().parents or (SOURCE_SDK.resolve() in output.parents and not source_build_output):
         parser.error('Use a separate output SDK directory')
     output.mkdir(parents=True, exist_ok=True)
     (output / 'lib').mkdir(exist_ok=True)
@@ -93,7 +94,8 @@ def main():
     try:
         for name in names:
             config = manifest[name]
-            flags = [value.format(sources=sources) for value in config['cflags']]
+            flags = (['-I' + str(prefix / 'include')] if (prefix / 'include').is_dir() else [])
+            flags += [value.format(sources=sources) for value in config['cflags']]
             package = config.get('pkg_config')
             version = None
             versions = {}
@@ -118,6 +120,10 @@ def main():
                     headers += list(found)
                 else:
                     headers.append(header)
+            # Some distributions retain obsolete headers containing only #error.
+            # Exclude only explicitly named manifest entries, never compiler errors.
+            excluded = set(config.get('exclude_headers', []))
+            headers = [header for header in headers if header not in excluded]
             print('GENERATE ' + name, flush=True)
             with tempfile.TemporaryDirectory(prefix='dyn-vendor-bindings-') as temporary:
                 work = Path(temporary)

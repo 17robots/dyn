@@ -25,9 +25,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-thinlto-') as directory:
     env = dict(os.environ, DYN_CACHE_DIR=str(cache))
     output = root/'program'
 
-    def build(expected, *options):
+    def build(expected, *options, preserve_output=False):
         # Force linking even when the executable cache would otherwise hit.
-        output.unlink(missing_ok=True)
+        if not preserve_output:
+            output.unlink(missing_ok=True)
         result = subprocess.run([DYN, 'build', str(source), '--release', '--jobs', '1',
                                  '--timings', '--output', str(output), *options],
                                 env=env, capture_output=True, text=True, timeout=60)
@@ -51,6 +52,15 @@ with tempfile.TemporaryDirectory(prefix='dyn-thinlto-') as directory:
     build('second')
     changed = backends()
     assert changed.keys() > cold.keys(), 'Changed dependency did not invalidate ThinLTO'
+    # Keep the old executable to exercise both the fast options key and the
+    # object cache: native O2 and ThinLTO must not reuse each other's outputs.
+    native = build('second', '--no-lto', preserve_output=True)
+    assert 'timing detail emit' in native, 'no-lto reused the ThinLTO executable'
+    assert backends() == changed, 'no-lto used the ThinLTO backend cache'
+    native_warm = build('second', '--no-lto')
+    assert 'timing detail emit' not in native_warm, native_warm
+    thin_again = build('second', preserve_output=True)
+    assert 'timing link' in thin_again, 'ThinLTO reused a native-only executable'
     fresh = build('second', '--no-cache')
     assert 'timing detail emit' in fresh, fresh
     assert backends() == changed, '--no-cache touched the ThinLTO cache'
@@ -59,4 +69,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-thinlto-') as directory:
     build('second', '--no-cache')
     assert not isolated.exists(), '--no-cache created a cache directory'
 
-print('PASS ThinLTO backend reuse, imported-body invalidation, and no-cache')
+print('PASS ThinLTO backend reuse, imported-body invalidation, no-lto, and no-cache')

@@ -1,0 +1,216 @@
+#target(arch: x86_64, kernel: windows)
+use "std/mem" mem
+use "std/unicode/utf8" utf8
+use "std/unicode/utf16" utf16
+
+pub const Modify: u32 = 2
+pub const Attributes: u32 = 4
+pub const CloseWrite: u32 = 8
+pub const MoveFrom: u32 = 64
+pub const MoveTo: u32 = 128
+pub const Create: u32 = 256
+pub const Delete: u32 = 512
+pub const DeleteSelf: u32 = 1024
+pub const MoveSelf: u32 = 2048
+pub const Ignored: u32 = 32768
+pub const IsDirectory: u32 = 1073741824
+pub const Changes: u32 = 4046
+pub const SupportedEvents: u32 = 966
+pub const FixedWatchCapacity: usize = 16
+pub const HasCloseWrite: bool = false
+pub const HasMoveCookies: bool = false
+pub const HasDirectoryFlag: bool = false
+pub enum Status { Event, Empty, Error }
+struct Overlapped { internal: usize, transferred: usize, offset: u32, offset_high: u32, event: rawptr }
+struct Slot { handle: rawptr, event: rawptr, overlap: Overlapped, buffer: [1024]u32, used: usize, offset: usize, pending: bool, id: i32, mask: u32 }
+struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
+// Noncopyable owner. Native requests borrow stable arena slots until completion.
+// Names borrow caller storage until the next next() call. Watches are nonrecursive.
+// Windows reports paired rename actions without cookies, and cannot distinguish
+// close-write, directory flags, or deletion/movement of the watched directory.
+pub struct Watcher { native: *Native, owner: mem.Arena, storage: []u8, rescan_required: bool }
+pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
+pub struct Result { value: i32, error: isize, ok: bool }
+pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
+pub struct EventResult { event: Event, status: Status, error: isize }
+extern fn native_open "dyn_watch_open"(name: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr
+extern fn native_close "dyn_watch_close"(handle: rawptr) i32
+extern fn native_error "dyn_watch_error"() u32
+extern fn create_event "dyn_watch_create_event"(security: rawptr, manual: i32, initial: i32, name: rawptr) rawptr
+extern fn reset_event "dyn_watch_reset_event"(event: rawptr) i32
+extern fn read_changes "dyn_watch_read"(handle: rawptr, buffer: rawptr, size: u32, recursive: i32, filter: u32, transferred: *u32, overlap: *Overlapped, callback: rawptr) i32
+extern fn completion "dyn_watch_result"(handle: rawptr, overlap: *Overlapped, transferred: *u32, wait: i32) i32
+extern fn cancel "dyn_watch_cancel"(handle: rawptr, overlap: *Overlapped) i32
+fn error() isize { return 0 - #cast(isize) native_error() }
+fn arm(slot: *Slot) isize {
+  if reset_event(slot.event) == 0 { return error() }
+  slot.overlap = Overlapped{ event: slot.event }
+  slot.used = 0
+  slot.offset = 0
+  if read_changes(slot.handle, #cast(rawptr) &slot.buffer[0], 4096, 0, 31, nil, &slot.overlap, nil) == 0 {
+    code := native_error()
+    if code != 997 { return 0 - #cast(isize) code }
+  }
+  slot.pending = true
+  return 0
+}
+pub fn open(storage: []u8) OpenResult {
+  if #len(storage) < 272 { return OpenResult{ watcher: Watcher{}, error: -28 } }
+  created := mem.arena_create(#sizeof(Native))
+  if !created.ok { return OpenResult{ watcher: Watcher{}, error: 0 - created.code } }
+  mem.zero(created.arena.data)
+  native := #cast(*Native) &created.arena.data[0]
+  native.next_id = 1
+  return OpenResult{ watcher: Watcher{ native: native, owner: created.arena, storage: storage }, ok: true }
+}
+fn retire(slot: *Slot) isize {
+  if slot.pending {
+    if cancel(slot.handle, &slot.overlap) == 0 {
+      code := native_error()
+      if code != 1168 { return 0 - #cast(isize) code }
+    }
+    transferred: u32 = 0
+    if completion(slot.handle, &slot.overlap, &transferred, 1) == 0 {
+      code := native_error()
+      if code != 995 && code != 1022 { return 0 - #cast(isize) code }
+      // Aborted or overflowed completion no longer borrows the slot. Unknown
+      // errors retain it conservatively, so close never frees an active request.
+    }
+    slot.pending = false
+  }
+  if slot.handle != nil {
+    if native_close(slot.handle) == 0 { return error() }
+    slot.handle = nil
+  }
+  if slot.event != nil {
+    if native_close(slot.event) == 0 { return error() }
+    slot.event = nil
+  }
+  slot.id = 0
+  slot.used = 0
+  slot.offset = 0
+  return 0
+}
+pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
+  if state.native == nil || #len(path) == 0 { return Result{ error: -22 } }
+  if (mask & SupportedEvents) == 0 { return Result{ error: -95 } }
+  index: usize = 16
+  for i in 0..16 {
+    if state.native.slots[i].handle == nil && state.native.slots[i].event == nil { index = i break }
+  }
+  if index == 16 || state.native.next_id == 2147483647 { return Result{ error: -28 } }
+  wide: [4096]u16 = []
+  at: usize = 0
+  used: usize = 0
+  for at < #len(path) {
+    decoded := utf8.decode(path, at)
+    if !decoded.ok || decoded.codepoint == 0 { return Result{ error: -22 } }
+    width := utf16.encode(wide[used..4095], decoded.codepoint)
+    if width == 0 { return Result{ error: -36 } }
+    used += width
+    at += decoded.width
+  }
+  slot := &state.native.slots[index]
+  slot.handle = native_open(&wide[0], 1, 7, nil, 3, 1107296256, nil)
+  if #cast(usize) slot.handle == ~#cast(usize) 0 { slot.handle = nil return Result{ error: error() } }
+  slot.event = create_event(nil, 1, 0, nil)
+  if slot.event == nil {
+    code := error()
+    _ = retire(slot)
+    return Result{ error: code }
+  }
+  code := arm(slot)
+  if code != 0 { _ = retire(slot) return Result{ error: code } }
+  slot.id = state.native.next_id
+  state.native.next_id += 1
+  slot.mask = mask
+  return Result{ value: slot.id, ok: true }
+}
+pub fn remove(state: *Watcher, watch: i32) Result {
+  if state.native == nil || watch <= 0 { return Result{ error: -22 } }
+  for i in 0..16 {
+    if state.native.slots[i].id == watch {
+      code := retire(&state.native.slots[i])
+      return Result{ error: code, ok: code == 0 }
+    }
+  }
+  return Result{ error: -22 }
+}
+pub fn close(state: *Watcher) Result {
+  if state.native == nil { return Result{ ok: true } }
+  for i in 0..16 {
+    code := retire(&state.native.slots[i])
+    if code != 0 { return Result{ error: code } }
+  }
+  released := mem.arena_release(&state.owner)
+  if !released.ok { return Result{ error: 0 - released.error } }
+  state.native = nil
+  state.storage = state.storage[..0]
+  return Result{ ok: true }
+}
+fn rescan(state: *Watcher, id: i32) EventResult {
+  state.rescan_required = true
+  return EventResult{ status: Status.Event, event: Event{ watch: id, rescan: true } }
+}
+pub fn next(state: *Watcher) EventResult {
+  if state.native == nil { return EventResult{ status: Status.Error, error: -9 } }
+  for checked in 0..16 {
+    index := state.native.cursor
+    state.native.cursor = (index + 1) % 16
+    slot := &state.native.slots[index]
+    if slot.id == 0 { continue }
+    if !slot.pending && slot.offset == slot.used {
+      code := arm(slot)
+      if code != 0 { return EventResult{ status: Status.Error, error: code } }
+    }
+    if slot.pending {
+      transferred: u32 = 0
+      if completion(slot.handle, &slot.overlap, &transferred, 0) == 0 {
+        code := native_error()
+        if code == 996 { continue }
+        if code == 1022 { slot.pending = false return rescan(state, slot.id) }
+        return EventResult{ status: Status.Error, error: 0 - #cast(isize) code }
+      }
+      slot.pending = false
+      slot.used = #cast(usize) transferred
+      slot.offset = 0
+      if slot.used == 0 || slot.used > 4096 { slot.used = 0 return rescan(state, slot.id) }
+    }
+    for slot.offset < slot.used {
+      at := slot.offset
+      if slot.used - at < 12 { slot.used = 0 slot.offset = 0 return rescan(state, slot.id) }
+      words := slot.buffer[..]
+      next_offset := #cast(usize) words[at / 4]
+      action := words[at / 4 + 1]
+      length := #cast(usize) words[at / 4 + 2]
+      if length == 0 || length % 2 != 0 || length > slot.used - at - 12 || (next_offset != 0 && (next_offset % 4 != 0 || next_offset < 12 + length || next_offset > slot.used - at)) {
+        slot.used = 0 slot.offset = 0 return rescan(state, slot.id)
+      }
+      if next_offset == 0 { slot.offset = slot.used } else { slot.offset += next_offset }
+      mask: u32 = 0
+      if action == 1 { mask = Create }
+      else if action == 2 { mask = Delete }
+      else if action == 3 { mask = Modify | Attributes }
+      else if action == 4 { mask = MoveFrom }
+      else if action == 5 { mask = MoveTo }
+      else { return rescan(state, slot.id) }
+      mask = mask & slot.mask
+      if mask == 0 { continue }
+      bytes := (#cast(*u8) &slot.buffer[0])[..4096]
+      names := (#cast(*u16) &bytes[at + 12])[..length / 2]
+      position: usize = 0
+      used: usize = 0
+      for position < #len(names) {
+        decoded := utf16.decode(names, position)
+        if !decoded.ok { return rescan(state, slot.id) }
+        width := utf8.encode(state.storage[used..], decoded.codepoint)
+        if width == 0 { return rescan(state, slot.id) }
+        used += width
+        position += decoded.width
+      }
+      return EventResult{ status: Status.Event, event: Event{ watch: slot.id, mask: mask, name: state.storage[..used] } }
+    }
+  }
+  return EventResult{ status: Status.Empty }
+}
+pub fn acknowledge_rescan(state: *Watcher) { state.rescan_required = false }

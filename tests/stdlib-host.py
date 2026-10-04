@@ -15,6 +15,7 @@ use "std/time"
 use "std/mem"
 use "std/bytes"
 use "std/errors"
+use "std/sync"
 fn require(value: bool, message: []const u8) { if !value { _ = io.println(io.stderr(), "{}", message) #panic(message) } }
 fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usize) {
   cursor := io.cursor(text)
@@ -43,6 +44,22 @@ fn error_write(data: rawptr, source: []const u8) io.Result {
   return io.Result{ kind: errors.Kind.PermissionDenied, status: io.Status.Error }
 }
 fn main() {
+  counter32 := sync.atomic_u32(7)
+  require(sync.load_u32(&counter32) == 7, "atomic32 initial")
+  sync.store_u32(&counter32, 9)
+  require(sync.exchange_u32(&counter32, 11) == 9, "atomic32 exchange")
+  require(sync.fetch_add_u32(&counter32, 2) == 11, "atomic32 add")
+  require(!sync.compare_exchange_u32(&counter32, 11, 0), "atomic32 failed CAS")
+  require(sync.compare_exchange_u32(&counter32, 13, 17), "atomic32 CAS")
+  require(sync.load_u32(&counter32) == 17, "atomic32 final")
+  counter64 := sync.atomic_u64(4294967296)
+  require(sync.load_u64(&counter64) == 4294967296, "atomic64 initial")
+  sync.store_u64(&counter64, 4294967297)
+  require(sync.exchange_u64(&counter64, 4294967298) == 4294967297, "atomic64 exchange")
+  require(sync.fetch_add_u64(&counter64, 2) == 4294967298, "atomic64 add")
+  require(!sync.compare_exchange_u64(&counter64, 4294967298, 0), "atomic64 failed CAS")
+  require(sync.compare_exchange_u64(&counter64, 4294967300, 17), "atomic64 CAS")
+  require(sync.load_u64(&counter64) == 17, "atomic64 final")
   backing: [131072]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   arguments := process.arguments(&arena)
@@ -158,4 +175,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-stdlib-') as temporary:
         (work/'café-😀.txt').unlink(missing_ok=True)
         result = run(output, 'space argument', '', 'quote"inside', 'trailing\\', 'café 😀', 'slashes\\\\"quote', cwd=work)
         assert result.stdout == b'stdlib passed\n', result.stdout
-print('PASS portable stdlib: files, ownership, arguments, clocks and buffered lines')
+print('PASS portable stdlib: atomics, files, ownership, arguments, clocks and buffered lines')

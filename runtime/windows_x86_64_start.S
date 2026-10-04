@@ -170,7 +170,13 @@ dyn_win_thread_spawn:
 .endm
 import_jump dyn_win_close_handle, CloseHandle
 import_jump dyn_win_wait, WaitForSingleObject
+import_jump dyn_crypto_random, BCryptGenRandom
+import_jump dyn_sync_wait, WaitOnAddress
+import_jump dyn_sync_single, WakeByAddressSingle
+import_jump dyn_sync_all, WakeByAddressAll
+import_jump dyn_sync_error, GetLastError
 import_jump dyn_win_yield, SwitchToThread
+import_jump dyn_net_idle, Sleep
 import_jump dyn_win_virtual_alloc, VirtualAlloc
 import_jump dyn_win_virtual_free, VirtualFree
 import_jump dyn_win_create_file, CreateFileA
@@ -194,6 +200,12 @@ import_jump dyn_win_receive, recv
 import_jump dyn_win_shutdown, shutdown
 import_jump dyn_win_ioctlsocket, ioctlsocket
 import_jump dyn_win_socket_error, WSAGetLastError
+import_jump dyn_net_send_to, sendto
+import_jump dyn_net_receive_from, recvfrom
+import_jump dyn_net_local, getsockname
+import_jump dyn_net_peer, getpeername
+import_jump dyn_net_set_option, setsockopt
+import_jump dyn_net_get_option, getsockopt
 import_jump dyn_win_socket_poll, WSAPoll
 
 import_jump dyn_process_compare, CompareStringOrdinal
@@ -217,6 +229,14 @@ import_jump dyn_process_wait, WaitForSingleObject
 import_jump dyn_process_error, GetLastError
 import_jump dyn_process_read, ReadFile
 
+import_jump dyn_watch_open, CreateFileW
+import_jump dyn_watch_close, CloseHandle
+import_jump dyn_watch_error, GetLastError
+import_jump dyn_watch_create_event, CreateEventW
+import_jump dyn_watch_reset_event, ResetEvent
+import_jump dyn_watch_read, ReadDirectoryChangesW
+import_jump dyn_watch_result, GetOverlappedResult
+import_jump dyn_watch_cancel, CancelIoEx
 import_jump dyn_fs_open, CreateFileW
 import_jump dyn_fs_seek, SetFilePointerEx
 import_jump dyn_fs_sync, FlushFileBuffers
@@ -249,6 +269,16 @@ import_jump dyn_stdio_error, GetLastError
     .long 0
     .rva winsock_name
     .rva winsock_iat
+    .rva sync_lookup
+    .long 0
+    .long 0
+    .rva sync_name
+    .rva sync_iat
+    .rva crypto_lookup
+    .long 0
+    .long 0
+    .rva crypto_name
+    .rva crypto_iat
     // GNU PE linkers append the terminating descriptor. Supplying it here
     // would hide descriptors contributed by user import libraries.
 
@@ -296,6 +326,11 @@ kernel_lookup:
     thunk UpdateProcThreadAttribute
     thunk DeleteProcThreadAttributeList
     thunk GetEnvironmentVariableW
+    thunk CreateEventW
+    thunk ResetEvent
+    thunk ReadDirectoryChangesW
+    thunk GetOverlappedResult
+    thunk CancelIoEx
     thunk SetLastError
     .quad 0
 winsock_lookup:
@@ -311,7 +346,23 @@ winsock_lookup:
     thunk shutdown
     thunk ioctlsocket
     thunk WSAGetLastError
+    thunk sendto
+    thunk recvfrom
+    thunk getsockname
+    thunk getpeername
+    thunk setsockopt
+    thunk getsockopt
     thunk WSAPoll
+    .quad 0
+
+sync_lookup:
+    thunk WaitOnAddress
+    thunk WakeByAddressSingle
+    thunk WakeByAddressAll
+    .quad 0
+
+crypto_lookup:
+    thunk BCryptGenRandom
     .quad 0
 
 .section .idata$5,"dw"
@@ -358,6 +409,11 @@ iat InitializeProcThreadAttributeList
 iat UpdateProcThreadAttribute
 iat DeleteProcThreadAttributeList
 iat GetEnvironmentVariableW
+iat CreateEventW
+iat ResetEvent
+iat ReadDirectoryChangesW
+iat GetOverlappedResult
+iat CancelIoEx
 iat SetLastError
     .quad 0
 winsock_iat:
@@ -373,7 +429,23 @@ iat recv
 iat shutdown
 iat ioctlsocket
 iat WSAGetLastError
+iat sendto
+iat recvfrom
+iat getsockname
+iat getpeername
+iat setsockopt
+iat getsockopt
 iat WSAPoll
+    .quad 0
+
+sync_iat:
+iat WaitOnAddress
+iat WakeByAddressSingle
+iat WakeByAddressAll
+    .quad 0
+
+crypto_iat:
+iat BCryptGenRandom
     .quad 0
 
 .section .idata$6,"dw"
@@ -417,6 +489,11 @@ hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute
 hint DeleteProcThreadAttributeList
 hint GetEnvironmentVariableW
+hint CreateEventW
+hint ResetEvent
+hint ReadDirectoryChangesW
+hint GetOverlappedResult
+hint CancelIoEx
 hint SetLastError
 hint WSAStartup
 hint socket
@@ -430,7 +507,19 @@ hint recv
 hint shutdown
 hint ioctlsocket
 hint WSAGetLastError
+hint sendto
+hint recvfrom
+hint getsockname
+hint getpeername
+hint setsockopt
+hint getsockopt
 hint WSAPoll
+hint WaitOnAddress
+hint WakeByAddressSingle
+hint WakeByAddressAll
+sync_name: .asciz "api-ms-win-core-synch-l1-2-0.dll"
+hint BCryptGenRandom
+crypto_name: .asciz "bcrypt.dll"
 kernel_name: .asciz "KERNEL32.dll"
 winsock_name: .asciz "WS2_32.dll"
 

@@ -1,6 +1,7 @@
 #target(arch: x86_64, kernel: windows, abi: win64)
 
 use "std/c" cstrings
+use "std/sync" sync
 
 pub struct IoResult { value: isize, error: isize, ok: bool }
 pub fn io_value(result: *const IoResult) isize {
@@ -19,6 +20,29 @@ extern fn socket_close_raw "dyn_win_close_socket"(socket: usize) i32
 extern fn socket_connect_raw "dyn_win_connect"(socket: usize, address: *const u8, length: i32) i32
 extern fn socket_poll_raw "dyn_win_socket_poll"(items: *PollDescriptor, count: u32, milliseconds: i32) i32
 extern fn socket_error_raw "dyn_win_socket_error"() i32
+extern fn socket_startup_raw "dyn_win_socket_startup"(version: u16, data: rawptr) i32
+
+socket_startup_state: sync.AtomicU32 = sync.AtomicU32{}
+socket_startup_error: i32 = 0
+
+fn socket_initialize() i32 {
+  if sync.load_u32(&socket_startup_state) != 2 {
+    if sync.compare_exchange_u32(&socket_startup_state, 0, 1) {
+      // WSADATA needs pointer alignment; Win64's 408 bytes fit in this storage.
+      // Keep one Winsock reference for process lifetime, independent of sockets.
+      data: [64]u64 = []
+      socket_startup_error = socket_startup_raw(514, #cast(rawptr) &data[0])
+      sync.store_u32(&socket_startup_state, 2)
+    }
+    else {
+      for sync.load_u32(&socket_startup_state) != 2 {
+        _ = yield_raw()
+      }
+    }
+  }
+  // WSAStartup returns its error directly, rather than through WSAGetLastError.
+  return socket_startup_error
+}
 
 pub struct Thread { handle: rawptr, id: u32 }
 pub struct PollDescriptor { descriptor: usize, events: i16, returned: i16 }
@@ -81,19 +105,25 @@ pub fn thread_join(thread: *Thread) bool {
     return false
   }
   result := close_handle_raw(thread.handle) != 0
-  thread.handle = nil
+  if result { thread.handle = nil thread.id = 0 }
   return result
 }
+pub fn thread_error() isize { return 0 - #cast(isize) last_error_raw() }
 pub fn thread_yield() {
   _ = yield_raw()
 }
 pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
+  startup := socket_initialize()
+  if startup != 0 {
+    return IoResult{ value: -1, error: #cast(isize) startup, ok: false }
+  }
   value := socket_raw(family, kind, protocol)
   if value == 18446744073709551615 {
     return IoResult{ value: -1, error: #cast(isize) socket_error_raw(), ok: false }
   }
   return IoResult{ value: #cast(isize) value, error: 0, ok: true }
 }
+pub fn socket_error() isize { return 0 - #cast(isize) socket_error_raw() }
 pub fn socket_close(socket: usize) bool {
   return socket_close_raw(socket) == 0
 }

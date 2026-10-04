@@ -328,6 +328,9 @@
     "headers": [
       "openssl/*.h"
     ],
+    "exclude_headers": [
+      "openssl/asn1_mac.h"
+    ],
     "selector": "^(?!_)",
     "cflags": [],
     "links": [

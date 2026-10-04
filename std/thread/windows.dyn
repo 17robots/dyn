@@ -1,0 +1,37 @@
+#target(arch: x86_64, kernel: windows)
+
+use "std/os/windows" win
+
+pub struct Thread { native: win.Thread }
+
+// Windows owns the actual stack; the slice length requests its initial size.
+// Keep Thread, context, and caller storage alive/unmoved through join for the
+// portable contract. A completed native handle still requires joining.
+pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: rawptr) isize {
+  return spawn_with_size(thread, #len(stack), entry, context)
+}
+pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
+  if stack_size < 256 || entry == nil { return -22 }
+  if thread.native.handle != nil { return -16 }
+  if !win.thread_spawn(&thread.native, stack_size, entry, context) {
+    return win.thread_error()
+  }
+  return #cast(isize) thread.native.id
+}
+
+pub fn join(thread: *Thread) isize {
+  if thread.native.handle == nil { return 0 }
+  if !win.thread_join(&thread.native) { return win.thread_error() }
+  return 0
+}
+
+// Identifies an unjoined thread; this is not a portable liveness check.
+pub fn id(thread: *const Thread) u32 {
+  if thread.native.handle == nil { return 0 }
+  return thread.native.id
+}
+
+pub fn yield_now() isize {
+  win.thread_yield()
+  return 0
+}

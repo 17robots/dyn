@@ -43,6 +43,7 @@ pub fn next_stream(state: *StreamScanner) Result {
       if state.used >= 9 || state.ended || (state.used >= 4 && state.storage[2] != '[') {
         comment := starts(state.storage[..state.used], 0, "<!--")
         cdata := starts(state.storage[..state.used], 0, "<![CDATA[")
+        processing := starts(state.storage[..state.used], 0, "<?")
         for !complete && state.scanned < state.used {
           at := state.scanned
           byte := state.storage[at]
@@ -62,7 +63,7 @@ pub fn next_stream(state: *StreamScanner) Result {
             state.quote = byte
           }
           else if byte == '>' {
-            complete = true
+            complete = !processing || (at > 0 && state.storage[at - 1] == '?')
           }
         }
       }

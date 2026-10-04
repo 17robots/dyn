@@ -4,7 +4,7 @@ import argparse,json,os,platform,shlex,shutil,subprocess
 from pathlib import Path
 LOCATION=Path(__file__).resolve().parents[1]
 VENDOR=LOCATION/'vendor' if (LOCATION/'vendor/providers.json').is_file() else LOCATION/'share/dyn/vendor'
-DEFAULT_BUILD=LOCATION.parent/'build' if VENDOR==LOCATION/'vendor' else Path.cwd()/'build'
+DEFAULT_BUILD=LOCATION/'build' if VENDOR==LOCATION/'vendor' else Path.cwd()/'build'
 pins=json.loads((VENDOR/'providers.json').read_text())
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('packages',nargs='*')
@@ -35,6 +35,7 @@ for name in packages:
  current=subprocess.run(['git','-C',str(source),'rev-parse','HEAD'],capture_output=True,text=True).stdout.strip()
  if current!=pin['revision']:
   run(['git','-C',str(source),'fetch','--depth','1','origin',pin['revision']]);run(['git','-C',str(source),'checkout','--detach',pin['revision']])
+ if subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=no'],text=True):raise RuntimeError('Modified provider source cannot be qualified as a pristine pin: '+str(source))
  if name in ('box2d','enet','sdl3-mixer'):
   options={'box2d':['-DBOX2D_SAMPLES=OFF','-DBOX2D_UNIT_TESTS=OFF','-DBOX2D_BENCHMARKS=OFF'],
    'enet':['-DCMAKE_POLICY_VERSION_MINIMUM=3.5'],
@@ -71,8 +72,15 @@ for name in packages:
   fixes=[('*(int*)(output-4) = stbir__simdi_to_int( i0 );','{ int value=stbir__simdi_to_int(i0); memcpy(output-4,&value,sizeof(value)); }',2),
          ('*(int*)( sd + ofs_to_dest ) = *(int*) sd;','memmove(sd + ofs_to_dest,sd,sizeof(int));',2),
          ('*(stbir_uint64*)( sd + ofs_to_dest ) = *(stbir_uint64*) sd;','memmove(sd + ofs_to_dest,sd,sizeof(stbir_uint64));',1)]
+  # GCC 13's object-size sanitizer misinstruments indexing a conditional
+  # expression between these arrays. Index each real array before selecting
+  # the function, retaining bounds instrumentation and the same dispatch.
+  fixes.append(('((STBIR__FLOAT_BUFFER_IS_EMPTY( outputs[0] ))?stbir__vertical_scatter_sets:stbir__vertical_scatter_blends)[n-1]',
+                '((STBIR__FLOAT_BUFFER_IS_EMPTY( outputs[0] ))?stbir__vertical_scatter_sets[n-1]:stbir__vertical_scatter_blends[n-1])',1))
+  fixes.append(('((k==0)?stbir__vertical_gathers:stbir__vertical_gathers_continues)[cnt-1]',
+                '((k==0)?stbir__vertical_gathers[cnt-1]:stbir__vertical_gathers_continues[cnt-1])',1))
   for before,after,count in fixes:
-   if header.count(before)!=count:raise RuntimeError('stb alignment patch no longer applies')
+   if header.count(before)!=count:raise RuntimeError('stb compatibility patch no longer applies')
    header=header.replace(before,after)
   (build/'stb_image_resize2.h').write_text(header)
   shared('dyn_stb',[VENDOR/'stb/bridge.c'],[build,source],['-lm']);pc('dyn-stb','dyn_stb',pin['version'])
@@ -84,7 +92,7 @@ for name in packages:
  for candidate in source.rglob('*'):
   if candidate.is_file() and not any(part in ('.git','build') for part in candidate.relative_to(source).parts) and ('LICENSE' in candidate.name.upper() or candidate.name.upper().startswith('COPYING')):
    target=notice/candidate.relative_to(source);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(candidate,target)
- if name in ('microui','stb'):(notice/'DYN-CHANGES.txt').write_text('Dyn builds apply C alignment fixes in staged sources; see dyn-build-vendors. Upstream checkout remains unchanged.\n')
+ if name in ('microui','stb'):(notice/'DYN-CHANGES.txt').write_text('Dyn builds apply C alignment and sanitizer compatibility fixes in staged sources; see dyn-build-vendors. Upstream checkout remains unchanged.\n')
  (notice/'source.json').write_text(json.dumps(pin,indent=2)+'\n')
  print('BUILT '+name,flush=True)
 print('Native providers installed: '+str(prefix))

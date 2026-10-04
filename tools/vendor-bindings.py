@@ -128,30 +128,35 @@ class Generator:
      self.records[name]=record;self.cnames[name]=name;self.record_ids[record['id']]=name;break
     if record.get('kind')=='EnumDecl' and not record.get('name'):
      self.enums[name]=record;break
+  self.spellings={}
+  pending=list(self.records)
+  while pending:
+   parent=pending.pop(0);anonymous=None
+   for child in self.records[parent].get('inner',[]):
+    if child.get('kind') in ('RecordDecl','EnumDecl') and not child.get('name'):anonymous=child
+    elif child.get('kind')=='FieldDecl' and anonymous and child.get('name'):
+     spelling=child['type']['qualType']
+     if '(unnamed' in spelling or '(anonymous' in spelling:
+      name=parent+'_'+child['name']+'_C'
+      if anonymous['kind']=='EnumDecl':
+       self.enums[name]=anonymous
+       self.spellings[re.sub(r'(?:\s*\[\d*\]|\s*\*\s*(?:const\s*)?)+$','',spelling)]=name
+       if 'desugaredQualType' in child['type']:self.spellings[re.sub(r'(?:\s*\[\d*\]|\s*\*\s*(?:const\s*)?)+$','',child['type']['desugaredQualType'])]=name
+       anonymous=None;continue
+      self.records[name]=anonymous;self.cnames[name]='__typeof__((('+self.cnames[parent]+'*)0)->'+child['name']+'[0]'*(len(re.findall(r'\[\d*\]',spelling))+spelling.count('*'))+')'
+      self.spellings[re.sub(r'(?:\s*\[\d*\]|\s*\*\s*(?:const\s*)?)+$','',spelling)]=name
+      if 'desugaredQualType' in child['type']:self.spellings[re.sub(r'(?:\s*\[\d*\]|\s*\*\s*(?:const\s*)?)+$','',child['type']['desugaredQualType'])]=name
+      pending.append(name);anonymous=None
   for name,n in self.enums.items():
    current=-1;values=[]
    for child in children(n,'EnumConstantDecl'):
     explicit=[item['value'] for item in descend(child) if item.get('kind')=='ConstantExpr' and 'value' in item]
     current=int(explicit[0]) if explicit else current+1;values.append((child['name'],current))
    self.enum_values[name]=values
-  self.spellings={}
-  pending=list(self.records)
-  while pending:
-   parent=pending.pop(0);anonymous=None
-   for child in self.records[parent].get('inner',[]):
-    if child.get('kind')=='RecordDecl' and not child.get('name'):anonymous=child
-    elif child.get('kind')=='FieldDecl' and anonymous and child.get('name'):
-     spelling=child['type']['qualType']
-     if '(unnamed' in spelling or '(anonymous' in spelling:
-      name=parent+'_'+child['name']+'_C'
-      self.records[name]=anonymous;self.cnames[name]='__typeof__((('+self.cnames[parent]+'*)0)->'+child['name']+'[0]'*(len(re.findall(r'\[\d*\]',spelling))+spelling.count('*'))+')'
-      self.spellings[re.sub(r'(?:\s*\[\d*\]|\s*\*\s*(?:const\s*)?)+$','',spelling)]=name
-      if 'desugaredQualType' in child['type']:self.spellings[re.sub(r'(?:\s*\[\d*\]|\s*\*\s*(?:const\s*)?)+$','',child['type']['desugaredQualType'])]=name
-      pending.append(name);anonymous=None
   self.root_names=sorted({name for name in self.typedefs|self.records|self.enums if self.prefix.match(name) and (not self.owner or self.owner.search((self.typedefs|self.records|self.enums)[name].get('_source_file','')))})
 
  def canonical(self,value,seen=None):
-  if value in self.spellings:return 'struct '+self.spellings[value]
+  if value in self.spellings:return ('enum ' if self.spellings[value] in self.enums else 'struct ')+self.spellings[value]
   value=re.sub(r'\b(const|volatile|restrict|__restrict|__restrict__)\b','',value).strip();value=re.sub(r'\s+',' ',value)
   seen=seen or set()
   if value in self.typedefs and value not in seen:
@@ -438,6 +443,6 @@ def main():
   work=Path(directory);header=work/'input.c';header.write_text(includes)
   command=[*shlex.split(a.clang),*flags,'-x','c','-fsyntax-only','-Xclang','-ast-dump=json',str(header)]
   ast=json.loads(run(command).stdout);report=Generator(ast,a.prefix,a.library,includes,[*shlex.split(a.cc),*flags],work,a.dispatch,a.link,a.owner,a.procedure).emit(a.output)
- print(json.dumps({k:v for k,v in report.items() if k not in ('symbols','omissions','function_macros','non_value_macros')},indent=2));print('Omissions:',len(report['omissions']))
+ print(json.dumps({k:v for k,v in report.items() if k not in ('symbols','function_macros','non_value_macros')},indent=2));print('Omissions:',len(report['omissions']))
  return 1 if report['omissions'] and not a.allow_omissions else 0
 if __name__=='__main__':raise SystemExit(main())

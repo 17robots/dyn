@@ -25,6 +25,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-compiler
       - run: just release-check
+      - name: Qualify native vendor wrappers and generated bindings
+        env:
+          BIND_CLANG: clang-19
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y liblua5.4-dev libpcre2-dev libsqlite3-dev liblz4-dev libzstd-dev
+          just test-vendors-native
       - run: python3 tests/compiler-host.py
       - name: Exercise editor navigation with a small stack
         run: |

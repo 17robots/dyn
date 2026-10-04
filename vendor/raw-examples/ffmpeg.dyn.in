@@ -1,6 +1,5 @@
 use "vendor/ffmpeg/raw" av
 use "std/io" io
-use "std/terminal" terminal
 
 // Minimal real decoder lifecycle. Native buffers are released with FFmpeg calls.
 fn main() {
@@ -26,6 +25,6 @@ fn main() {
   if av.avcodec_receive_frame(context, frame) < 0 || frame.nb_samples != 4 { #panic("decode failed") }
   samples := (#cast(*const i16) frame.data[0])[..4]
   if samples[0] != 1 || samples[3] != 4 { #panic("sample mismatch") }
-  _ = io.println(terminal.stdout(), "decoded {} samples", frame.nb_samples)
+  _ = io.println(io.stdout(), "decoded {} samples", frame.nb_samples)
   // samples is borrowed from frame; never retain it after frame unref/free.
 }

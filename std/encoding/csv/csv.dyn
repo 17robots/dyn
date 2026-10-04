@@ -104,7 +104,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
   if !closed {
     return Field{ error: ErrorKind.Syntax }
   }
-  if quoted && delimiter != 0 && delimiter != ',' && delimiter != '\r' && delimiter != '\n' {
+  if quoted && !input_ended && delimiter != ',' && delimiter != '\r' && delimiter != '\n' {
     return Field{ error: ErrorKind.Syntax }
   }
   end_record := input_ended || delimiter == '\r' || delimiter == '\n'

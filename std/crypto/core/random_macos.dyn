@@ -1,0 +1,14 @@
+#target(kernel: darwin)
+#link("System")
+extern fn entropy "getentropy"(destination: *u8, size: usize) i32
+// getentropy accepts at most 256 bytes per call. Never use a weak fallback.
+pub fn secure_random(destination: []u8) bool {
+  at: usize = 0
+  for at < #len(destination) {
+    count := #len(destination) - at
+    if count > 256 { count = 256 }
+    if entropy(&destination[at], count) != 0 { return false }
+    at += count
+  }
+  return true
+}

@@ -1,8 +1,9 @@
 #target(kernel: linux)
 
 use "std/sync"
+use "std/mem" mem
 
-pub struct Thread { tid: sync.AtomicU32 }
+pub struct Thread { tid: sync.AtomicU32, stack_owner: mem.Arena }
 
 extern fn spawn_raw "dyn_thread_spawn"(
   stack: *u8,
@@ -16,17 +17,31 @@ pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: ra
   if #len(stack) < 256 || entry == nil {
     return -22
   }
-  if sync.load_u32(&thread.tid) != 0 {
+  if sync.load_u32(&thread.tid) != 0 || #len(thread.stack_owner.data) != 0 {
     return -16
   }
   return spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
+}
+
+// Own a mapped stack until join. This avoids allocating an unused caller stack
+// for portable code; Windows/macOS use OS-managed stacks for the same API.
+pub fn spawn_with_size(thread: *Thread, size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
+  if size < 256 || entry == nil { return -22 }
+  if sync.load_u32(&thread.tid) != 0 || #len(thread.stack_owner.data) != 0 { return -16 }
+  allocated := mem.arena_create(size)
+  if !allocated.ok { return allocated.code }
+  thread.stack_owner = allocated.arena
+  value := spawn_raw(&thread.stack_owner.data[0], size, entry, context, &thread.tid)
+  if value < 0 { _ = mem.arena_release(&thread.stack_owner) }
+  return value
 }
 
 pub fn join(thread: *Thread) isize {
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
-      return 0
+      released := mem.arena_release(&thread.stack_owner)
+      return released.error
     }
     result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)
     if result < 0 && result != -4 && result != -11 {

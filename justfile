@@ -30,6 +30,28 @@ smoke: release
 test: smoke
     python3 tests/run.py
 
+# Qualification of generated ABI bindings and the compiler's required provider.
+test-vendors: release
+    python3 tests/vendor-bindings.py
+    python3 tests/vendor-provider-host.py
+
+# Requires native Lua 5.4, PCRE2, SQLite, LZ4 and zstd development packages.
+test-vendors-native: release
+    python3 tests/vendor-packages.py
+    python3 tests/vendor-raw.py
+
+# Requires setup-vendor-tests.py and the native development packages in vendor-native.yml.
+test-vendors-all: release
+    python3 tools/bind-vendors.py --prefix "$BUILD/vendor-deps/install" --sources "$BUILD/extra-vendor-sources" --output "$BUILD/raw-sdk" --dyn "$DYN" --clang "${BIND_CLANG:-clang}"
+    python3 tests/vendor-all-raw.py
+    python3 tests/vendor-extra.py
+    python3 tests/vendor-media.py
+    python3 tests/vendor-sanitize.py
+
+# Real compiler-building primitives; does not claim bootstrap equivalence.
+selfhost-ready: release
+    python3 tests/selfhost-readiness.py
+
 install: release
     python3 tools/install.py
 

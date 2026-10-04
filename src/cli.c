@@ -17,7 +17,7 @@ void dyn_cli_help(const char *command) {
       "  cache    inspect or clean shared compilation cache\n"
       "  help     show help\n  version  show version\n\n"
       "Build options:\n  --output <path>  --debug  --release  --debug-info\n"
-      "  --emit-ir  --emit-object  --emit-asm  --no-link  --shared\n"
+      "  --emit-ir  --emit-object  --emit-asm  --no-link  --shared  --no-lto\n"
       "  --target <x86_64-linux|aarch64-linux|aarch64-macos|x86_64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
@@ -77,6 +77,8 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       o->release = false;
       if (!o->debug_info_set)
         o->debug_info = true;
+    } else if (strcmp(a, "--no-lto") == 0) {
+      o->no_lto = true;
     } else if (strcmp(a, "--release") == 0) {
       o->release = true;
       if (!o->debug_info_set)

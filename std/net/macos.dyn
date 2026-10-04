@@ -1,0 +1,59 @@
+#target(kernel: darwin)
+pub const AddressFamilyIpv6: usize = 30
+pub type Descriptor = i32
+pub struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16 }
+const UnixPathLimit: usize = 103
+const SocketLevel: usize = 65535
+const ReuseOption: usize = 4
+const ErrorOption: usize = 4103
+const NoSignalFlag: usize = 524288
+fn native_interrupted(code: isize) bool { return code == -4 }
+fn native_would_block(code: isize) bool { return code == -35 || code == -36 }
+fn address_family(bytes: []u8, length: usize, family: usize) {
+  bytes[0] = #cast(u8) length bytes[1] = #cast(u8) family
+}
+fn native_socket(family: usize, kind: usize, protocol: usize) isize { return #syscall(97, family, kind, protocol) }
+fn native_close(descriptor: isize) isize { return #syscall(6, descriptor) }
+fn native_listen(descriptor: isize, backlog: usize) isize { return #syscall(106, descriptor, backlog) }
+fn native_shutdown(descriptor: isize, how: usize) isize { return #syscall(134, descriptor, how) }
+fn native_connect(descriptor: isize, address: *const u8, length: usize) isize { return #syscall(98, descriptor, address, length) }
+fn native_bind(descriptor: isize, address: *const u8, length: usize) isize { return #syscall(104, descriptor, address, length) }
+fn native_accept(descriptor: isize, address: *u8, length: *u32) isize { return #syscall(30, descriptor, address, length) }
+fn native_local(descriptor: isize, address: *u8, length: *u32) isize { return #syscall(32, descriptor, address, length) }
+fn native_peer(descriptor: isize, address: *u8, length: *u32) isize { return #syscall(31, descriptor, address, length) }
+fn native_send(descriptor: isize, data: *const u8, length: usize, flags: usize, address: *const u8, address_length: usize) isize { return #syscall(133, descriptor, data, length, flags, address, address_length) }
+fn native_receive(descriptor: isize, data: *u8, length: usize, flags: usize, address: *u8, address_length: *u32) isize { return #syscall(29, descriptor, data, length, flags, address, address_length) }
+fn native_set_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: usize) isize { return #syscall(105, descriptor, level, option, #cast(usize) data, length) }
+fn native_get_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: *u32) isize { return #syscall(118, descriptor, level, option, #cast(usize) data, length) }
+fn native_nonblocking(descriptor: isize, enabled: bool) isize {
+  flags := #syscall(92, descriptor, 3, 0)
+  if flags < 0 { return flags }
+  if enabled { flags = flags | 4 } else { flags = flags & ~4 }
+  return #syscall(92, descriptor, 4, flags)
+}
+struct TimeValue { seconds: isize, microseconds: isize }
+fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
+  if milliseconds / 1000 > 9223372036854775807 { return -22 }
+  timeout := TimeValue{ seconds: #cast(isize) (milliseconds / 1000), microseconds: #cast(isize) ((milliseconds % 1000) * 1000) }
+  option: usize = 4102
+  if sending { option = 4101 }
+  return native_set_option(descriptor, SocketLevel, option, #cast(rawptr) &timeout, #sizeof(TimeValue))
+}
+fn poll_native(descriptors: []PollDescriptor, milliseconds: i32) isize {
+  data: *PollDescriptor = nil
+  if #len(descriptors) > 0 { data = &descriptors[0] }
+  return #syscall(230, data, #len(descriptors), milliseconds)
+}
+
+struct MessageVector { data: *u8, length: usize }
+struct MessageHeader { name: rawptr, name_length: u32, vectors: *MessageVector, count: i32, control: rawptr, control_length: u32, flags: i32 }
+// Only the fact of truncation is portable, not the full original wire length.
+pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
+  data: *u8 = nil if #len(bytes) > 0 { data = &bytes[0] }
+  vector := MessageVector{ data: data, length: #len(bytes) }
+  header := MessageHeader{ vectors: &vector, count: 1 }
+  value := #syscall(27, descriptor, &header, 0)
+  for value == -4 { value = #syscall(27, descriptor, &header, 0) }
+  if value >= 0 && (header.flags & 16) != 0 { return result(#cast(isize) #len(bytes) + 1) }
+  return result(value)
+}

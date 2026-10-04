@@ -11,6 +11,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import struct
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +124,77 @@ def register_probe():
     return '\n'.join(lines) + '\n'
 
 
+
+def atomic_bodies(path, macho):
+    """Read emitted atomics without requiring a host-specific disassembler."""
+    data = path.read_bytes()
+    sections, symbols = {}, {}
+    if macho:
+        assert data[:4] == b'\xcf\xfa\xed\xfe'
+        at, section_id = 32, 1
+        for _ in range(struct.unpack_from('<I', data, 16)[0]):
+            command, size = struct.unpack_from('<II', data, at)
+            if command == 0x19:  # LC_SEGMENT_64
+                for index in range(struct.unpack_from('<I', data, at + 64)[0]):
+                    entry = at + 72 + index * 80
+                    address, length, offset = struct.unpack_from('<QQI', data, entry + 32)
+                    sections[section_id] = (address, length, offset)
+                    section_id += 1
+            elif command == 2:  # LC_SYMTAB
+                symoff, count, stroff, _ = struct.unpack_from('<IIII', data, at + 8)
+            at += size
+        for index in range(count):
+            name, kind, section, _, address = struct.unpack_from('<IBBHQ', data, symoff + index * 16)
+            if section and (kind & 0x0e) == 0x0e:
+                name = data[stroff + name:].split(b'\0', 1)[0].decode()
+                symbols[name.removeprefix('_')] = (section, address)
+    else:
+        assert data[:6] == b'\x7fELF\x02\x01'
+        table = struct.unpack_from('<Q', data, 40)[0]
+        stride, count = struct.unpack_from('<HH', data, 58)
+        headers = [struct.unpack_from('<IIQQQQIIQQ', data, table + index * stride)
+                   for index in range(count)]
+        for index, header in enumerate(headers):
+            sections[index] = (header[3], header[5], header[4])
+        for header in headers:
+            if header[1] != 2:  # SHT_SYMTAB
+                continue
+            strings = headers[header[6]][4]
+            for at in range(header[4], header[4] + header[5], header[9]):
+                name, _, _, section, address, _ = struct.unpack_from('<IBBHQQ', data, at)
+                if section in sections and name:
+                    name = data[strings + name:].split(b'\0', 1)[0].decode()
+                    symbols[name] = (section, address)
+    bodies = {}
+    for name, (section, address) in symbols.items():
+        if not name.startswith('dyn_atomic_'):
+            continue
+        base, length, offset = sections[section]
+        end = min([value for candidate_section, value in symbols.values()
+                   if candidate_section == section and value > address] + [base + length])
+        bodies[name] = data[offset + address - base:offset + end - base]
+    return bodies
+
+
+def check_macos_atomics(root):
+    # Equivalent handwritten ARM64 routines must survive both ELF and Mach-O
+    # assembly. Darwin treats ';' as comments; accepting the source is not proof
+    # that retry/return instructions made it into the object.
+    linux = atomic_bodies(root / 'aarch64-linux-runtime.o', False)
+    macos = atomic_bodies(root / 'aarch64-macos-runtime.o', True)
+    expected = {f'dyn_atomic_{operation}_u{width}' for width in (32, 64)
+                for operation in ('load', 'store', 'exchange', 'fetch_add', 'compare_exchange')}
+    assert linux.keys() == macos.keys() == expected
+    ret = bytes.fromhex('c0035fd6')
+    for name in sorted(expected):
+        body = macos[name]
+        assert body == linux[name], (name, 'Darwin atomics lost or changed emitted instructions',
+                                     body.hex(), linux[name].hex())
+        instructions = [body[at:at + 4] for at in range(0, len(body), 4)]
+        assert instructions[-1] == ret, (name, 'missing final return')
+        assert instructions.count(ret) == (2 if 'compare_exchange' in name else 1), name
+    print('PASS ARM64 atomic emitted instructions and return paths (ELF/Mach-O)')
+
 with tempfile.TemporaryDirectory(prefix='dyn-unwind-registers-') as temporary:
     root = Path(temporary)
     (root / 'main.dyn').write_text(SOURCE)
@@ -151,6 +223,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-unwind-registers-') as temporary:
         ir = (root / (target + '.ll')).read_text()
         assert re.search(r'alloca \[' + str(words) + r' x i64\]', ir), (
             target, 'incorrect unwind context size')
+    check_macos_atomics(root)
     print('PASS native ABI runtime objects and target-sized compiler contexts (cross)')
     # Object assembly alone misses unresolved runtime imports. Link an actual
     # deferred cleanup program with freshly built support and the shipped ABI

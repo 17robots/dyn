@@ -1,0 +1,27 @@
+{
+  "sdl3": {
+    "repository": "https://github.com/libsdl-org/SDL.git",
+    "tag": "release-3.4.16",
+    "revision": "fa2c02bb6e21974a89ea9824bc53c9932abe5f9c"
+  },
+  "sdl3-image": {
+    "repository": "https://github.com/libsdl-org/SDL_image.git",
+    "tag": "release-3.4.6",
+    "revision": "f661fa1ad24ab1b81e43662532f9a6a9fcf67ea6"
+  },
+  "sdl3-ttf": {
+    "repository": "https://github.com/libsdl-org/SDL_ttf.git",
+    "tag": "release-3.2.2",
+    "revision": "a1ce3670aec736ecbf0936c43f2f0cc53aa61e5b"
+  },
+  "tree-sitter-c": {
+    "repository": "https://github.com/tree-sitter/tree-sitter-c.git",
+    "tag": "v0.24.1",
+    "revision": "7fa1be1b694b6e763686793d97da01f36a0e5c12"
+  },
+  "vulkan-headers": {
+    "repository": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+    "tag": "v1.4.309",
+    "revision": "952f776f6573aafbb62ea717d871cd1d6816c387"
+  }
+}

@@ -1,0 +1,46 @@
+name: Native vendor qualification
+on:
+  pull_request:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: vendor-native-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  providers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      LLVM_CONFIG: llvm-config-19
+      CLANG: clang-19
+      BIND_CLANG: clang-19
+      DYN: ./build/dyn-release
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-compiler
+      - name: Install native provider development packages
+        run: |
+          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libsqlite3-dev libzstd-dev libpcre2-dev liblua5.4-dev libarchive-dev libcurl4-openssl-dev liblz4-dev libavcodec-dev libavfilter-dev libavdevice-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libvulkan-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-dev fonts-dejavu-core mesa-vulkan-drivers
+          # SDL requires a desktop backend even when tests use its dummy driver.
+          sudo apt-get install -y libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev
+      - name: Build compiler and pinned optional providers
+        run: |
+          just release
+          python3 tools/setup-vendor-tests.py
+      - name: Qualify every manifest provider and native adapter
+        run: just test-vendors-all
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vendor-native-evidence
+          path: |
+            build/vendor-*.json
+            build/raw-sdk/raw-bindings-report.json
+            build/raw-sdk/vendor/**/coverage.json
+            build/vendor-deps/install/qualification-sources.json
+            build/vendor-deps/install/share/dyn-vendor-licenses/**/source.json

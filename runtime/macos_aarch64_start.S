@@ -104,39 +104,83 @@ _dyn_syscall6:
 // Sequentially consistent public atomics. Acquire/release exclusives are the
 // strongest portable arm64 implementation needed by std/thread.
 .global _dyn_atomic_load_u32
-_dyn_atomic_load_u32: ldar w0, [x0]; ret
+_dyn_atomic_load_u32:
+    ldar w0, [x0]
+    ret
 .global _dyn_atomic_store_u32
-_dyn_atomic_store_u32: stlr w1, [x0]; ret
+_dyn_atomic_store_u32:
+    stlr w1, [x0]
+    ret
 .global _dyn_atomic_exchange_u32
 _dyn_atomic_exchange_u32:
-1:  ldaxr w2, [x0]; stlxr w3, w1, [x0]; cbnz w3, 1b; mov w0, w2; ret
+1:  ldaxr w2, [x0]
+    stlxr w3, w1, [x0]
+    cbnz w3, 1b
+    mov w0, w2
+    ret
 .global _dyn_atomic_fetch_add_u32
 _dyn_atomic_fetch_add_u32:
-1:  ldaxr w2, [x0]; add w4, w2, w1; stlxr w3, w4, [x0]; cbnz w3, 1b; mov w0, w2; ret
+1:  ldaxr w2, [x0]
+    add w4, w2, w1
+    stlxr w3, w4, [x0]
+    cbnz w3, 1b
+    mov w0, w2
+    ret
 .global _dyn_atomic_compare_exchange_u32
 _dyn_atomic_compare_exchange_u32:
-1:  ldaxr w3, [x0]; cmp w3, w1; b.ne 2f; stlxr w4, w2, [x0]; cbnz w4, 1b; mov w0, #1; ret
-2:  clrex; mov w0, #0; ret
+1:  ldaxr w3, [x0]
+    cmp w3, w1
+    b.ne 2f
+    stlxr w4, w2, [x0]
+    cbnz w4, 1b
+    mov w0, #1
+    ret
+2:  clrex
+    mov w0, #0
+    ret
 .global _dyn_atomic_load_u64
-_dyn_atomic_load_u64: ldar x0, [x0]; ret
+_dyn_atomic_load_u64:
+    ldar x0, [x0]
+    ret
 .global _dyn_atomic_store_u64
-_dyn_atomic_store_u64: stlr x1, [x0]; ret
+_dyn_atomic_store_u64:
+    stlr x1, [x0]
+    ret
 .global _dyn_atomic_exchange_u64
 _dyn_atomic_exchange_u64:
-1:  ldaxr x2, [x0]; stlxr w3, x1, [x0]; cbnz w3, 1b; mov x0, x2; ret
+1:  ldaxr x2, [x0]
+    stlxr w3, x1, [x0]
+    cbnz w3, 1b
+    mov x0, x2
+    ret
 .global _dyn_atomic_fetch_add_u64
 _dyn_atomic_fetch_add_u64:
-1:  ldaxr x2, [x0]; add x4, x2, x1; stlxr w3, x4, [x0]; cbnz w3, 1b; mov x0, x2; ret
+1:  ldaxr x2, [x0]
+    add x4, x2, x1
+    stlxr w3, x4, [x0]
+    cbnz w3, 1b
+    mov x0, x2
+    ret
 .global _dyn_atomic_compare_exchange_u64
 _dyn_atomic_compare_exchange_u64:
-1:  ldaxr x3, [x0]; cmp x3, x1; b.ne 2f; stlxr w4, x2, [x0]; cbnz w4, 1b; mov w0, #1; ret
-2:  clrex; mov w0, #0; ret
+1:  ldaxr x3, [x0]
+    cmp x3, x1
+    b.ne 2f
+    stlxr w4, x2, [x0]
+    cbnz w4, 1b
+    mov w0, #1
+    ret
+2:  clrex
+    mov w0, #0
+    ret
 
 // Stable libSystem entry points used by portable std/time and std/process.
 .global _dyn_time_clock
 _dyn_time_clock: b _clock_gettime
 .global _dyn_time_sleep
 _dyn_time_sleep: b _nanosleep
+.global _dyn_sync_error
+_dyn_sync_error: b ___error
 .global _dyn_time_error
 _dyn_time_error: b ___error
 .global _dyn_arguments_count
