@@ -12,6 +12,26 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+`std/testing` imports work on macOS and Windows again: Linux-only temporary
+directory and path helpers are isolated behind their target guard.
+
+Release debug information now permits inlining. New opt-in `--cpu native`,
+`--opt-level 3`, `--opt-remarks` and x86_64 Linux ThinLTO `--sample-profile`
+controls support measured tuning; portable O2 remains the default. CPU features
+and profile contents participate in cache identity.
+
+The standard library adds prepared allocation-free linear-time byte search,
+string-map reservation/clear and caller-owned sample statistics. Byte search
+filters mismatching tails, large buffered writes avoid staging copies, and byte
+builders extend the last arena buffer in place when possible. Existing storage,
+overlap and failure contracts remain covered by regression tests.
+
+`tools/performance-suite.py` records isolated cold, unchanged, novel-edit and
+runtime samples with executable size and per-child memory measurements. See the
+README for tuning, profiling and ownership contracts.
+
 ## 0.1.0-preview.13
 
 ### Reuse release-link optimization

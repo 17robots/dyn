@@ -20,6 +20,8 @@ void dyn_cli_help(const char *command) {
       "  --emit-ir  --emit-object  --emit-asm  --no-link  --shared  --no-lto\n"
       "  --target <x86_64-linux|aarch64-linux|aarch64-macos|x86_64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
+      "  --cpu <generic|native>  --opt-level <2|3>  --opt-remarks\n"
+      "  --sample-profile <LLVM sample profile>  (x86_64 Linux ThinLTO only)\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
       "Global options:\n  --quiet  --verbose  --timings  --no-cache  "
       "--warnings-as-errors  --no-warnings\n"
@@ -37,7 +39,9 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     const char *a = argv[i];
     if (strcmp(a, "--output") == 0 || strcmp(a, "--target") == 0 ||
         strcmp(a, "--link") == 0 || strcmp(a, "--diagnostics") == 0 ||
-        strcmp(a, "--jobs") == 0 || strcmp(a, "--max-work") == 0) {
+        strcmp(a, "--jobs") == 0 || strcmp(a, "--max-work") == 0 ||
+        strcmp(a, "--cpu") == 0 || strcmp(a, "--opt-level") == 0 ||
+        strcmp(a, "--sample-profile") == 0) {
       if (++i >= argc) {
         fprintf(stderr, "error: %s requires a value\n", a);
         return 2;
@@ -46,6 +50,19 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
         o->output = argv[i];
       else if (strcmp(a, "--target") == 0)
         o->target = argv[i];
+      else if (strcmp(a, "--cpu") == 0) {
+        if (strcmp(argv[i], "generic") && strcmp(argv[i], "native")) {
+          fprintf(stderr, "error: --cpu accepts generic or native\n"); return 2;
+        }
+        o->optimization.native_cpu = !strcmp(argv[i], "native");
+      } else if (strcmp(a, "--opt-level") == 0) {
+        if (strcmp(argv[i], "2") && strcmp(argv[i], "3")) {
+          fprintf(stderr, "error: --opt-level accepts 2 or 3\n"); return 2;
+        }
+        o->optimization.level = (unsigned)(argv[i][0] - '0');
+      } else if (strcmp(a, "--sample-profile") == 0) {
+        o->optimization.sample_profile = argv[i];
+      }
       else if (strcmp(a, "--diagnostics") == 0) {
         if (strcmp(argv[i], "json")) {
           fprintf(stderr, "error: --diagnostics accepts only 'json'\n");
@@ -73,6 +90,8 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
         return 2;
       } else
         o->link_inputs[o->link_input_count++] = argv[i];
+    } else if (strcmp(a, "--opt-remarks") == 0) {
+      o->optimization.remarks = true;
     } else if (strcmp(a, "--debug") == 0) {
       o->release = false;
       if (!o->debug_info_set)

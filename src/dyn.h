@@ -46,10 +46,18 @@ typedef struct {
   DynWorkStatus status;
   bool reported;
 } DynWork;
+typedef struct {
+  bool native_cpu, remarks;
+  unsigned level; /* Zero preserves the default O2 release policy. */
+  const char *sample_profile;
+  uint64_t profile_hash; /* Computed once per command, shared by module workers. */
+  char *cpu, *features; /* Command-owned LLVM strings; contexts borrow these. */
+} DynOptimization;
 /* Copyable compilation policy. Target is immutable; diagnostic storage is
    borrowed for the duration of analysis. No process-global compiler state. */
 typedef struct {
   const DynTarget *target;
+  const DynOptimization *optimization;
   DynDiagnosticSink diagnostic;
   void *diagnostic_data;
   bool json_diagnostics;
@@ -79,6 +87,7 @@ typedef struct {
   const char *input;
   const char *output;
   const char *target;
+  DynOptimization optimization;
   bool release;
   bool debug_info;
   bool debug_info_set;
@@ -244,7 +253,7 @@ bool dyn_cache_hit(const DynSources *sources, const DynOptions *options,
                    const char *compiler_path, const char *output);
 bool dyn_cache_fast_hit(const DynOptions *options, const char *compiler_path,
                         const char *output);
-uint64_t dyn_cache_compiler_hash(const char *compiler_path);
+uint64_t dyn_cache_file_hash(const char *compiler_path);
 bool dyn_cache_directory(char *path, size_t capacity);
 int dyn_cache_command(const char *action);
 void dyn_cache_store(const DynSources *sources, const DynOptions *options,

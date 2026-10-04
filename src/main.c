@@ -1,6 +1,7 @@
 #define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
+#include "llvm_shim.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -359,6 +360,7 @@ static bool is_command(const DynOptions *o, const char *s) {
 static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target),
+                        .optimization = &options->optimization,
                         .json_diagnostics = options->json_diagnostics,
                         .timings = options->timings};
   if (is_command(options, "help")) {
@@ -428,6 +430,36 @@ static int execute_command(DynOptions *options, const char *compiler) {
     return 2;
   }
   struct timespec phase = timer_start();
+  if (options->optimization.native_cpu) {
+    if (strcmp(options->target, DYN_HOST_TARGET)) {
+      fprintf(stderr, "error: --cpu native requires the host target\n"); return 2;
+    }
+    options->optimization.cpu = LLVMGetHostCPUName();
+    options->optimization.features = LLVMGetHostCPUFeatures();
+    if (!options->optimization.cpu || !options->optimization.features) return 2;
+  }
+  if (options->optimization.level && !options->release) {
+    fprintf(stderr, "error: --opt-level requires --release\n"); return 2;
+  }
+  if (options->optimization.sample_profile &&
+      (!options->release || options->no_lto || options->no_link || options->shared ||
+       options->emit_ir || options->emit_asm || options->emit_object ||
+       strcmp(options->target, "x86_64-linux") || !command_available("ld.lld") ||
+       access(options->optimization.sample_profile, R_OK))) {
+    fprintf(stderr, "error: --sample-profile requires a readable profile and a release x86_64-linux ThinLTO executable\n");
+    return 2;
+  }
+  if (options->optimization.sample_profile) {
+    options->optimization.profile_hash = dyn_cache_file_hash(options->optimization.sample_profile);
+    if (!options->optimization.profile_hash) {
+      fprintf(stderr, "error: failed to read sample profile\n"); return 2;
+    }
+  }
+  /* Diagnostics must be regenerated even when all artifacts were cached. */
+  if (options->optimization.remarks) {
+    options->no_cache = true;
+    options->jobs = 1; /* Keep diagnostics from independent LLVM contexts legible. */
+  }
   DynSources sources;
   int result = dyn_sources_load(&context, options->input, &sources);
   if (result)
@@ -528,7 +560,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
                    !options->emit_ir && !options->emit_object &&
                    !options->emit_asm;
   if (cacheable && !options->no_cache)
-    options->compiler_hash = dyn_cache_compiler_hash(compiler);
+    options->compiler_hash = dyn_cache_file_hash(compiler);
   if (!run && cacheable && dyn_cache_hit(&sources, options, compiler, output)) {
     if (!options->quiet)
       printf("cached %s\n", output);
@@ -740,6 +772,8 @@ int main(int argc, char **argv) {
     compiler = executable;
   }
   int result = execute_command(&o, compiler);
+  if (o.optimization.cpu) LLVMDisposeMessage(o.optimization.cpu);
+  if (o.optimization.features) LLVMDisposeMessage(o.optimization.features);
   for (size_t i = borrowed_links; i < o.link_input_count; ++i)
     free((void *)o.link_inputs[i]);
   return result;

@@ -63,6 +63,18 @@ fn writer_write(data: rawptr, source: []const u8) io.Result {
         return io.Result{ transferred: total, error: flushed.error, kind: flushed.kind, status: io.Status.Error }
       }
     }
+    // Large writes need no staging copy when the buffer is empty. Preserve the
+    // final partial/full tail so the buffered byte count stays unchanged.
+    if state.used == 0 && #len(source) - total > #len(state.storage) {
+      amount := ((#len(source) - total - 1) / #len(state.storage)) * #len(state.storage)
+      direct := io.write_all(state.destination, source[total..total + amount])
+      total += direct.transferred
+      if direct.status == io.Status.Error {
+        state.error = direct.error
+        state.kind = direct.kind
+        return io.Result{transferred: total, error: direct.error, kind: direct.kind, status: io.Status.Error}
+      }
+    }
     available := #len(state.storage) - state.used
     amount := #len(source) - total
     if amount > available {

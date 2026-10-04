@@ -38,7 +38,11 @@ def llvm(*args, fallback=''):
     if shutil.which(llvm_config[0]):
         return shlex.split(subprocess.check_output(llvm_config + list(args), text=True))
     return shlex.split(fallback)
-cppflags = flags('CPPFLAGS') + llvm('--cflags')
+# LLVM's own GNU feature policy is unnecessary for its C headers. Importing it
+# makes newer glibc redefine _POSIX_C_SOURCE after test harness headers, then
+# conflict with the included compiler source under -Werror. Dyn sets its own
+# POSIX/XSI requirements; keep LLVM include/ABI flags, not this feature policy.
+cppflags = flags('CPPFLAGS') + [f for f in llvm('--cflags') if f != '-D_GNU_SOURCE']
 llvm_ldflags = llvm('--ldflags')
 llvm_libs = llvm('--link-shared', '--libs', fallback='-lLLVM')
 sources = sorted(COMPILER.glob('src/*.c'))
