@@ -112,7 +112,7 @@ add('dynrt_windows_shared.o', [f'{COMPILER}/runtime/windows_x86_64_start.S', f'{
     [*clang, '--target=x86_64-pc-windows-msvc', '-DDYN_SHARED', '-DDYN_RELEASE', '-c', f'{COMPILER}/runtime/windows_x86_64_start.S', '-o', f'{BUILD}/dynrt_windows_shared.o'])
 
 add('dynrt_windows_support.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*clang, '--target=x86_64-pc-windows-msvc', '-DDYN_SINGLE_THREAD', '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_windows_support.o'])
+    [*clang, '--target=x86_64-pc-windows-msvc', '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_windows_support.o'])
 
 add('dynrt_macos_start.o', [f'{COMPILER}/runtime/macos_aarch64_start.S'],
     [*clang, '--target=arm64-apple-macosx', '-c', f'{COMPILER}/runtime/macos_aarch64_start.S', '-o', f'{BUILD}/dynrt_macos_start.o'])
@@ -121,7 +121,7 @@ add('dynrt_macos_shared.o', [f'{COMPILER}/runtime/macos_aarch64_start.S'],
     [*clang, '--target=arm64-apple-macosx', '-DDYN_SHARED', '-DDYN_RELEASE', '-c', f'{COMPILER}/runtime/macos_aarch64_start.S', '-o', f'{BUILD}/dynrt_macos_shared.o'])
 
 add('dynrt_macos_support.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*clang, '--target=arm64-apple-macosx', '-DDYN_SINGLE_THREAD', '-DDYN_AARCH64', '-DDYN_RELEASE', '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_macos_support.o'])
+    [*clang, '--target=arm64-apple-macosx', '-DDYN_AARCH64', '-DDYN_RELEASE', '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_macos_support.o'])
 
 add('tree-sitter-dyn-parser.o', [f'{TS_DIR}/src/parser.c'],
     [*cc, '-O2', f'-I{TS_DIR}/src', '-c', f'{TS_DIR}/src/parser.c', '-o', f'{BUILD}/tree-sitter-dyn-parser.o'])

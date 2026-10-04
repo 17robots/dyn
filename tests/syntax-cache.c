@@ -83,8 +83,26 @@ int main(void) {
   assert(dyn_source_prepare(&source)); dyn_source_discard_syntax(&source);
   source.path = "large-two.dyn";
   assert(dyn_source_prepare(&source)); dyn_source_discard_syntax(&source);
-  assert(cache.count == 1 && cache.bytes == large_length);
+  assert(cache.count == 1 && cache.bytes > large_length);
   free(large);
+  dyn_syntax_cache_clear(&cache);
+  /* Dense trees must consume the budget even when their source is tiny. */
+  size_t statements = 1000, dense_length = 14 + statements * 6;
+  char *dense = malloc(dense_length + 1); assert(dense);
+  memcpy(dense, "fn main() {\n", 12);
+  for (size_t i = 0; i < statements; ++i)
+    memcpy(dense + 12 + i * 6, "_ = 0\n", 6);
+  memcpy(dense + 12 + statements * 6, "}\n", 3);
+  source.text = dense; source.length = dense_length;
+  for (unsigned i = 0; i < 64; ++i) {
+    char path[64]; snprintf(path, sizeof(path), "dense%u.dyn", i);
+    source.path = path;
+    assert(dyn_source_prepare(&source)); dyn_source_discard_syntax(&source);
+    assert(cache.bytes <= 8u * 1024u * 1024u);
+  }
+  assert(cache.count > 0 && cache.count < 16);
+  assert(cache.bytes > cache.count * dense_length * 10);
+  free(dense);
   dyn_syntax_cache_clear(&cache);
   assert(cache.count == 0 && cache.bytes == 0);
   assert(!ts_node_has_error(ts_tree_root_node(held))); ts_tree_delete(held);

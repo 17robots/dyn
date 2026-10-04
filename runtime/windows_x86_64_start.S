@@ -67,6 +67,20 @@ dyn_unwind_set:
     movq %rax, 72(%rcx)
     movq (%rsp), %rax
     movq %rax, 80(%rcx)
+    // A nonlocal jump skips callees' epilogues, including SIMD/FP restores.
+    // The context is only eight-byte aligned, so use unaligned SIMD moves.
+    stmxcsr 88(%rcx)
+    fnstcw 92(%rcx)
+    movdqu %xmm6, 96(%rcx)
+    movdqu %xmm7, 112(%rcx)
+    movdqu %xmm8, 128(%rcx)
+    movdqu %xmm9, 144(%rcx)
+    movdqu %xmm10, 160(%rcx)
+    movdqu %xmm11, 176(%rcx)
+    movdqu %xmm12, 192(%rcx)
+    movdqu %xmm13, 208(%rcx)
+    movdqu %xmm14, 224(%rcx)
+    movdqu %xmm15, 240(%rcx)
     xorl %eax, %eax
     retq
 
@@ -82,6 +96,18 @@ dyn_unwind_jump:
     movq 64(%rcx), %r15
     movq 72(%rcx), %rsp
     movq 80(%rcx), %rdx
+    ldmxcsr 88(%rcx)
+    fldcw 92(%rcx)
+    movdqu 96(%rcx), %xmm6
+    movdqu 112(%rcx), %xmm7
+    movdqu 128(%rcx), %xmm8
+    movdqu 144(%rcx), %xmm9
+    movdqu 160(%rcx), %xmm10
+    movdqu 176(%rcx), %xmm11
+    movdqu 192(%rcx), %xmm12
+    movdqu 208(%rcx), %xmm13
+    movdqu 224(%rcx), %xmm14
+    movdqu 240(%rcx), %xmm15
     movl $1, %eax
     jmpq *%rdx
 
@@ -264,6 +290,7 @@ kernel_lookup:
     thunk Sleep
     thunk GetStdHandle
     thunk GetCurrentProcess
+    thunk GetCurrentThreadId
     thunk DuplicateHandle
     thunk InitializeProcThreadAttributeList
     thunk UpdateProcThreadAttribute
@@ -324,6 +351,8 @@ iat GetTickCount64
 iat Sleep
 iat GetStdHandle
 iat GetCurrentProcess
+.global __imp_GetCurrentThreadId
+iat GetCurrentThreadId
 iat DuplicateHandle
 iat InitializeProcThreadAttributeList
 iat UpdateProcThreadAttribute
@@ -382,6 +411,7 @@ hint GetTickCount64
 hint Sleep
 hint GetStdHandle
 hint GetCurrentProcess
+hint GetCurrentThreadId
 hint DuplicateHandle
 hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute

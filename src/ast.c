@@ -491,6 +491,10 @@ static DynType intern_pointer(DynAstProgram *a, DynType pointee,
         a->pointers[i].is_const == is_const) {
       return DYN_TYPE_POINTER_BASE + i;
     }
+  if (a->pointer_count >= DYN_TYPE_ARRAY_BASE - DYN_TYPE_POINTER_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
+  }
   if (!reserve_pointer(a)) {
     return DYN_TYPE_ERROR;
   }
@@ -503,6 +507,10 @@ static DynType intern_array(DynAstProgram *a, DynType element,
     if (a->arrays[i].element == element && a->arrays[i].length == length) {
       return DYN_TYPE_ARRAY_BASE + i;
     }
+  if (a->array_count >= DYN_TYPE_SLICE_BASE - DYN_TYPE_ARRAY_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
+  }
   if (!reserve_array(a)) {
     return DYN_TYPE_ERROR;
   }
@@ -514,6 +522,10 @@ static DynType intern_slice(DynAstProgram *a, DynType element, bool is_const) {
     if (a->slices[i].element == element && a->slices[i].is_const == is_const) {
       return DYN_TYPE_SLICE_BASE + i;
     }
+  if (a->slice_count >= DYN_TYPE_FN_BASE - DYN_TYPE_SLICE_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
+  }
   if (!reserve_slice(a)) {
     return DYN_TYPE_ERROR;
   }
@@ -535,6 +547,10 @@ static DynType intern_fn_type(DynAstProgram *a, const DynType *params,
     if (same) {
       return DYN_TYPE_FN_BASE + i;
     }
+  }
+  if (a->fn_type_count >= DYN_TYPE_DISTINCT_BASE - DYN_TYPE_FN_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
   }
   if (!reserve_fn_type(a) || !reserve_fn_type_params(a, count)) {
     return DYN_TYPE_ERROR;
@@ -811,8 +827,14 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
   const char *k = ts_node_type(node);
   if (!strcmp(k, "number_")) {
     bool fl = false;
+    /* e and E are hex digits in 0x literals, not exponents. */
+    bool hex = e.span.end_byte - e.span.start_byte > 1 &&
+               s->text[e.span.start_byte] == '0' &&
+               (s->text[e.span.start_byte + 1] == 'x' ||
+                s->text[e.span.start_byte + 1] == 'X');
     for (uint32_t i = e.span.start_byte; i < e.span.end_byte; ++i)
-      if (s->text[i] == '.' || s->text[i] == 'e' || s->text[i] == 'E') {
+      if (s->text[i] == '.' ||
+          (!hex && (s->text[i] == 'e' || s->text[i] == 'E'))) {
         fl = true;
       }
     if (fl) {
@@ -1578,6 +1600,10 @@ static bool add_enum_names(TSNode root, const DynSource *s, DynAstProgram *a,
       diagnostic(name, s, errors, "duplicate enum declaration");
       continue;
     }
+    if (a->enum_count >= DYN_TYPE_POINTER_BASE - DYN_TYPE_ENUM_BASE) {
+      diagnostic(d, s, errors, "enum type capacity exceeded");
+      return false;
+    }
     if (!reserve_enum(a)) {
       diagnostic(d, s, errors, "out of memory");
       return false;
@@ -1605,6 +1631,10 @@ static bool add_struct_names(TSNode root, const DynSource *s, DynAstProgram *a,
     if (find_struct(a, ns, s) != UINT32_MAX) {
       diagnostic(name, s, errors, "duplicate struct declaration");
       continue;
+    }
+    if (a->struct_count >= DYN_TYPE_ENUM_BASE - DYN_TYPE_STRUCT_BASE) {
+      diagnostic(d, s, errors, "struct type capacity exceeded");
+      return false;
     }
     if (!reserve_struct(a)) {
       diagnostic(d, s, errors, "out of memory");
@@ -1635,6 +1665,10 @@ static bool add_alias_names(TSNode root, const DynSource *s, DynAstProgram *a,
         find_struct(a, ns, s) != UINT32_MAX) {
       diagnostic(name, s, errors, "duplicate type declaration");
       continue;
+    }
+    if (a->alias_count >= (uint64_t)UINT32_MAX - DYN_TYPE_DISTINCT_BASE + 1) {
+      diagnostic(d, s, errors, "alias type capacity exceeded");
+      return false;
     }
     if (!reserve_alias(a)) {
       diagnostic(d, s, errors, "out of memory");
@@ -1779,6 +1813,8 @@ static bool add_enum_variants(TSNode root, const DynSource *s, DynAstProgram *a,
 static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
                             unsigned char *state, const DynSource *s,
                             unsigned *errors);
+static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
+                        const DynSource *s, unsigned *errors);
 static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
                           const DynSource *s, unsigned *errors) {
   if (state[id] == 2)
@@ -1840,7 +1876,9 @@ static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
     return alignment ? a->structs[id].alignment : a->structs[id].size;
   }
   if (dyn_type_is_enum(t)) {
-    DynAstEnum *en = &a->enums[t - DYN_TYPE_ENUM_BASE];
+    uint32_t id = t - DYN_TYPE_ENUM_BASE;
+    if (id >= a->enum_count || !layout_enum(id, a, state, s, errors)) return 0;
+    DynAstEnum *en = &a->enums[id];
     return alignment ? en->alignment : en->size;
   }
   if (dyn_type_is_array(t)) {
@@ -1866,74 +1904,86 @@ static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
                       : 8;
   return size;
 }
+static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
+                        const DynSource *s, unsigned *errors) {
+  size_t slot = a->struct_count + id;
+  if (state[slot] == 2) return true;
+  if (state[slot] == 1) {
+    diagnostic_span(a->enums[id].name, s, errors,
+                    "enum contains itself by value");
+    return false;
+  }
+  state[slot] = 1;
+  DynAstEnum *en = &a->enums[id];
+  uint64_t tag_size = type_layout(en->tag_type, false, a, state, s, errors),
+           tag_align = type_layout(en->tag_type, true, a, state, s, errors);
+  en->payload_alignment = 1;
+  en->payload_size = 0;
+  for (uint32_t j = 0; j < en->variant_count; ++j) {
+    DynType p = a->variants[en->variant_start + j].payload_type;
+    if (p == DYN_TYPE_VOID)
+      continue;
+    if (dyn_type_is_enum(p)) {
+      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
+                      "enum payload cannot contain enum directly");
+      continue;
+    }
+    uint64_t pa = type_layout(p, true, a, state, s, errors),
+             ps = type_layout(p, false, a, state, s, errors);
+    if (!pa || !ps) {
+      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
+                      "recursive or incomplete enum payload layout");
+      continue;
+    }
+    if (pa > en->payload_alignment)
+      en->payload_alignment = pa;
+    if (ps > en->payload_size)
+      en->payload_size = ps;
+  }
+  en->alignment =
+      tag_align > en->payload_alignment ? tag_align : en->payload_alignment;
+  uint64_t offset = (tag_size + en->payload_alignment - 1) /
+                    en->payload_alignment * en->payload_alignment;
+  uint64_t limit = dyn_target_pointer_bytes(dyn_context_target(&s->context)) == 4 ? UINT32_MAX : UINT64_MAX;
+  if (en->payload_size > limit - offset ||
+      offset + en->payload_size > limit - (en->alignment - 1)) {
+    diagnostic_span(en->name, s, errors, "enum layout exceeds target address space");
+    return false;
+  }
+  en->size = (offset + en->payload_size + en->alignment - 1) / en->alignment *
+             en->alignment;
+  state[slot] = 2;
+  return true;
+}
 static bool compute_layouts_v2(DynAstProgram *a, const DynSource *s,
                                unsigned *errors) {
-  unsigned char *state = calloc(a->struct_count, 1);
-  if (a->struct_count && !state) {
+  size_t count = a->struct_count + a->enum_count;
+  unsigned char *state = calloc(count, 1);
+  if (count && !state) {
     a->allocation_failed = true;
     return false;
   }
-  for (uint32_t i = 0; i < a->enum_count; ++i) {
-    DynAstEnum *en = &a->enums[i];
-    uint64_t tag_size = type_layout(en->tag_type, false, a, state, s, errors),
-             tag_align = type_layout(en->tag_type, true, a, state, s, errors);
-    en->payload_alignment = 1;
-    en->payload_size = 0;
-    for (uint32_t j = 0; j < en->variant_count; ++j) {
-      DynType p = a->variants[en->variant_start + j].payload_type;
-      if (p == DYN_TYPE_VOID)
-        continue;
-      if (dyn_type_is_enum(p)) {
-        diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
-                        "enum payload cannot contain enum directly");
-        continue;
-      }
-      uint64_t pa = type_layout(p, true, a, state, s, errors),
-               ps = type_layout(p, false, a, state, s, errors);
-      if (!pa || !ps) {
-        diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
-                        "recursive or incomplete enum payload layout");
-        continue;
-      }
-      if (pa > en->payload_alignment)
-        en->payload_alignment = pa;
-      if (ps > en->payload_size)
-        en->payload_size = ps;
-    }
-    en->alignment =
-        tag_align > en->payload_alignment ? tag_align : en->payload_alignment;
-    uint64_t offset = (tag_size + en->payload_alignment - 1) /
-                      en->payload_alignment * en->payload_alignment;
-    uint64_t limit = dyn_target_pointer_bytes(dyn_context_target(&s->context)) == 4 ? UINT32_MAX : UINT64_MAX;
-    if (en->payload_size > limit - offset ||
-        offset + en->payload_size > limit - (en->alignment - 1)) {
-      diagnostic_span(en->name, s, errors, "enum layout exceeds target address space");
-      continue;
-    }
-    en->size = (offset + en->payload_size + en->alignment - 1) / en->alignment *
-               en->alignment;
-  }
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    layout_enum(i, a, state, s, errors);
   for (uint32_t i = 0; i < a->struct_count; ++i)
     layout_struct(i, a, state, s, errors);
   free(state);
   return true;
 }
-static uint32_t find_function(DynAstProgram *a, DynSpan name,
+static uint32_t find_function(DynNameIndex *index, DynAstProgram *a, DynSpan name,
                               const DynSource *s) {
-  for (uint32_t i = 0; i < a->function_count; ++i)
-    if (dyn_module_name_equal(name, a->functions[i].name, s))
-      return i;
-  return UINT32_MAX;
+  return dyn_name_index_find(index, a->function_count ? &a->functions[0].name : NULL,
+                             sizeof(*a->functions), a->function_count, name, s,
+                             true, &a->allocation_failed);
 }
-static uint32_t find_global(DynAstProgram *a, DynSpan name,
+static uint32_t find_global(DynNameIndex *index, DynAstProgram *a, DynSpan name,
                             const DynSource *s) {
-  for (uint32_t i = 0; i < a->global_count; ++i)
-    if (dyn_module_name_equal(name, a->globals[i].name, s))
-      return i;
-  return UINT32_MAX;
+  return dyn_name_index_find(index, a->global_count ? &a->globals[0].name : NULL,
+                             sizeof(*a->globals), a->global_count, name, s,
+                             true, &a->allocation_failed);
 }
 static bool add_globals(TSNode root, const DynSource *s, DynAstProgram *a,
-                        unsigned *errors) {
+                        unsigned *errors, DynNameIndex *globals) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
     TSNode wrapper = ts_node_named_child(root, i);
     bool is_public = dyn_syntax_public(wrapper);
@@ -1947,7 +1997,7 @@ static bool add_globals(TSNode root, const DynSource *s, DynAstProgram *a,
                           : dyn_syntax_child(v, 0),
            tq = {0}, init = {0};
     DynSpan ns = span(name);
-    if (find_global(a, ns, s) != UINT32_MAX ||
+    if (find_global(globals, a, ns, s) != UINT32_MAX ||
         find_struct(a, ns, s) != UINT32_MAX) {
       diagnostic(name, s, errors, "duplicate declaration name");
       continue;
@@ -1992,7 +2042,8 @@ static bool add_globals(TSNode root, const DynSource *s, DynAstProgram *a,
   return true;
 }
 static bool add_function_signatures(TSNode root, const DynSource *s,
-                                    DynAstProgram *a, unsigned *errors) {
+                                    DynAstProgram *a, unsigned *errors, DynNameIndex *index,
+                                    DynNameIndex *globals) {
   for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
     TSNode wrapper = ts_node_named_child(root, i);
     bool is_public = dyn_syntax_public(wrapper);
@@ -2002,9 +2053,9 @@ static bool add_function_signatures(TSNode root, const DynSource *s,
       continue;
     TSNode name = ts_node_child_by_field_name(d, "name", 4);
     DynSpan ns = span(name);
-    if (find_function(a, ns, s) != UINT32_MAX ||
+    if (find_function(index, a, ns, s) != UINT32_MAX ||
         find_struct(a, ns, s) != UINT32_MAX ||
-        find_global(a, ns, s) != UINT32_MAX) {
+        find_global(globals, a, ns, s) != UINT32_MAX) {
       diagnostic(name, s, errors, "duplicate declaration name");
       continue;
     }
@@ -2093,14 +2144,14 @@ static uint64_t owner_key_value(const char *owner_key) {
 }
 static void lower_function_bodies(TSNode root, const DynSource *s,
                                   DynAstProgram *a, unsigned *errors,
-                                  const char *owner_key) {
+                                  const char *owner_key, DynNameIndex *index) {
   uint64_t wanted = owner_key_value(owner_key);
   for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
     TSNode d = dyn_syntax_declaration_node(ts_node_named_child(root, i));
     if (strcmp(ts_node_type(d), "fn") && strcmp(ts_node_type(d), "extern_fn"))
       continue;
     TSNode name = ts_node_child_by_field_name(d, "name", 4);
-    uint32_t id = find_function(a, span(name), s);
+    uint32_t id = find_function(index, a, span(name), s);
     if (id == UINT32_MAX)
       continue;
     if (a->functions[id].foreign)
@@ -2133,18 +2184,26 @@ bool dyn_ast_lower_source(TSNode root, const DynSource *s, DynAstProgram *a,
                           unsigned *errors, const char *owner_key) {
   memset(a, 0, sizeof(*a));
   unsigned before = *errors;
+  DynNameIndex functions = {0}, globals = {0};
   if (!add_enum_names(root, s, a, errors) ||
       !add_struct_names(root, s, a, errors) ||
       !add_alias_names(root, s, a, errors) ||
       !add_struct_fields(root, s, a, errors) ||
       !add_enum_variants(root, s, a, errors) ||
-      !compute_layouts_v2(a, s, errors) || !add_globals(root, s, a, errors) ||
-      !add_function_signatures(root, s, a, errors)) {
+      !compute_layouts_v2(a, s, errors) ||
+      !add_globals(root, s, a, errors, &globals) ||
+      !add_function_signatures(root, s, a, errors, &functions, &globals)) {
+    ast_name_index_free(&functions);
+    ast_name_index_free(&globals);
     if (*errors == before)
       diagnostic_node(root, s, errors, "out of memory");
     return false;
   }
-  lower_function_bodies(root, s, a, errors, owner_key);
+  lower_function_bodies(root, s, a, errors, owner_key, &functions);
+  ast_name_index_free(&functions);
+  ast_name_index_free(&globals);
+  if (a->type_capacity_exceeded)
+    diagnostic_node(root, s, errors, "interned type capacity exceeded");
   bool found = false;
   for (uint32_t i = 0; i < a->function_count; ++i)
     if (a->functions[i].is_main)

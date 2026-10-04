@@ -275,6 +275,8 @@ pub struct FreeList {
   slot_count: usize,
   free_count: usize,
   free_head: *FreeListNode,
+  // One bit per slot, set while allocated; empty when metadata is unavailable.
+  occupied: []u8,
 }
 
 fn align_size(size: usize, alignment: usize) usize {
@@ -303,6 +305,8 @@ fn free_list_alignment(requested: usize) usize {
 // Slots include an internal pointer link. Effective alignment is at least pointer
 // alignment, even for byte-sized objects. Backing must satisfy that alignment;
 // slot stride is rounded up. Storage is borrowed and must outlive the free list.
+// All complete slots remain usable; without separate metadata, release scans
+// the free chain to detect double frees.
 pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usize) FreeList {
   effective_alignment := free_list_alignment(alignment)
   slot_size := requested_slot_size
@@ -336,6 +340,10 @@ pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usiz
   }
 }
 
+// Reserves slot storage, plus ceil(slot_count / 8) zeroed metadata bytes when
+// the arena has room. The optional bitmap makes allocation and release constant
+// time; otherwise release scans the free chain. Exact slot capacity still works.
+// Metadata and slots share the arena lifetime; no separate heap storage is used.
 pub fn free_list_from_arena(
   arena: *Arena,
   slot_count: usize,
@@ -357,7 +365,16 @@ pub fn free_list_from_arena(
   }
   size := slot_count * actual
   memory := arena_push_uninit(arena, size, effective_alignment)
-  return free_list_init(memory[..size], actual, effective_alignment)
+  list := free_list_init(memory[..size], actual, effective_alignment)
+  bitmap_size := slot_count / 8
+  if slot_count % 8 != 0 {
+    bitmap_size += 1
+  }
+  if arena_remaining(arena) >= bitmap_size {
+    bitmap := arena_push(arena, bitmap_size, 1)
+    list.occupied = bitmap[..bitmap_size]
+  }
+  return list
 }
 
 pub fn free_list_try_alloc(list: *FreeList) rawptr {
@@ -367,6 +384,12 @@ pub fn free_list_try_alloc(list: *FreeList) rawptr {
   node := list.free_head
   list.free_head = node.next
   list.free_count -= 1
+  if #len(list.occupied) != 0 {
+    slot := (#cast(usize) node - #cast(usize) &list.backing[0]) / list.slot_size
+    mask: u8 = 1
+    mask = mask << (slot % 8)
+    list.occupied[slot / 8] |= mask
+  }
   return #cast(rawptr) node
 }
 
@@ -389,12 +412,23 @@ pub fn free_list_free(list: *FreeList, memory: rawptr) {
     #panic("pointer does not belong to free list")
   }
   node := #cast(*FreeListNode) memory
-  existing := list.free_head
-  for existing != nil {
-    if existing == node {
+  if #len(list.occupied) != 0 {
+    slot := (address - start) / list.slot_size
+    mask: u8 = 1
+    mask = mask << (slot % 8)
+    if (list.occupied[slot / 8] & mask) == 0 {
       #panic("free-list double free")
     }
-    existing = existing.next
+    list.occupied[slot / 8] &= ~mask
+  }
+  else {
+    existing := list.free_head
+    for existing != nil {
+      if existing == node {
+        #panic("free-list double free")
+      }
+      existing = existing.next
+    }
   }
   node.next = list.free_head
   list.free_head = node

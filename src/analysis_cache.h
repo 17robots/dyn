@@ -35,7 +35,7 @@ typedef struct {
   DynInterfaceCacheEntry *interfaces;
   size_t interface_count, interface_bytes;
   uint64_t interface_hits, interface_misses;
-  size_t count;
+  size_t count, retained_bytes;
   uint64_t clock, hits, misses;
   size_t module_count, module_bytes;
   uint64_t module_hits, module_misses;

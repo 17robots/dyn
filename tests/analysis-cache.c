@@ -82,7 +82,30 @@ static void interface_payloads(void) {
     assert(!cache.interface_count && !cache.interface_bytes);
   }
 }
+static void retained_ast_budget(void) {
+  DynAnalysisCache cache = {0};
+  DynAnalysisResult result = {.parsed = true, .checked = true};
+  DynSource source = source_copy();
+  DynAstProgram ast = {0};
+  ast.expression_capacity = 1024;
+  ast.expressions = calloc(ast.expression_capacity, sizeof(*ast.expressions));
+  assert(ast.expressions);
+  size_t bytes = ast.expression_capacity * sizeof(*ast.expressions);
+  DynAnalysisSnapshot *snapshot = dyn_analysis_module_put(&cache, &source, &ast, result);
+  assert(snapshot && cache.module_bytes >= bytes);
+  dyn_analysis_snapshot_release(snapshot);
+  dyn_analysis_cache_clear(&cache);
+  source = source_copy();
+  ast.expression_capacity = 17u * 1024u * 1024u / sizeof(*ast.expressions) + 1;
+  ast.expressions = calloc(ast.expression_capacity, sizeof(*ast.expressions));
+  assert(ast.expressions);
+  assert(!dyn_analysis_module_put(&cache, &source, &ast, result));
+  assert(source.text && ast.expressions && !cache.module_count);
+  dyn_ast_program_free(&ast);
+  dyn_source_free(&source);
+}
 int main(void) {
+  retained_ast_budget();
   module_snapshots();
   interface_payloads();
   char root[] = "/tmp/dyn-analysis-cache-XXXXXX"; assert(mkdtemp(root));

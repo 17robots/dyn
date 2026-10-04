@@ -4,8 +4,17 @@
 .type _start,%function
 _start:
     bl main
-    mov x8, #93
+    // Returning from main ends the process: through the C library's exit()
+    // when one is linked (atexit handlers, stdio), else exit_group (94), so
+    // other threads end too. exit is weak: zero when nothing defines it.
+    adrp x1, :got:exit
+    ldr x1, [x1, :got_lo12:exit]
+    cbz x1, 1f
+    blr x1
+1:  mov x8, #94
     svc #0
+    brk #0
+.weak exit
 #endif
 
 .section .text.dyn_panic,"ax",%progbits
@@ -32,7 +41,8 @@ dyn_panic:
     bl dyn_trace_dump
     mov x0, #101
 #endif
-    mov x8, #93
+    // A panic ends every thread, without atexit handlers.
+    mov x8, #94
     svc #0
     brk #0
 
@@ -48,6 +58,11 @@ dyn_unwind_set:
     stp x29, x30, [x0, #88]
     mov x1, sp
     str x1, [x0, #104]
+    // AAPCS64 requires the low 64 bits of v8-v15 across a call.
+    stp d8, d9, [x0, #112]
+    stp d10, d11, [x0, #128]
+    stp d12, d13, [x0, #144]
+    stp d14, d15, [x0, #160]
     mov x0, #0
     ret
 .global dyn_unwind_jump
@@ -61,6 +76,10 @@ dyn_unwind_jump:
     ldp x27, x28, [x9, #72]
     ldp x29, x30, [x9, #88]
     ldr x10, [x9, #104]
+    ldp d8, d9, [x9, #112]
+    ldp d10, d11, [x9, #128]
+    ldp d12, d13, [x9, #144]
+    ldp d14, d15, [x9, #160]
     mov sp, x10
     mov x0, #1
     ret

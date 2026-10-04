@@ -20,6 +20,7 @@ typedef struct LLVMOpaqueDIBuilder *LLVMDIBuilderRef;
 typedef struct LLVMOpaqueAttributeRef *LLVMAttributeRef;
 
 enum { LLVMInternalLinkage = 8, LLVMPrivateLinkage = 9 };
+enum { LLVMDefaultVisibility = 0, LLVMHiddenVisibility = 1 };
 
 extern void LLVMInitializeWebAssemblyTargetInfo(void);
 extern void LLVMInitializeWebAssemblyTarget(void);
@@ -85,6 +86,7 @@ extern unsigned LLVMGetMDKindIDInContext(LLVMContextRef, const char *,
                                          unsigned);
 extern void LLVMGlobalSetMetadata(LLVMValueRef, unsigned, LLVMMetadataRef);
 extern void LLVMSetLinkage(LLVMValueRef, int);
+extern void LLVMSetVisibility(LLVMValueRef, int);
 extern void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
 extern void LLVMSetGlobalConstant(LLVMValueRef, int);
 extern LLVMBasicBlockRef
@@ -93,6 +95,7 @@ extern LLVMBuilderRef LLVMCreateBuilderInContext(LLVMContextRef);
 extern void LLVMDisposeBuilder(LLVMBuilderRef);
 extern void LLVMPositionBuilderAtEnd(LLVMBuilderRef, LLVMBasicBlockRef);
 extern LLVMValueRef LLVMConstInt(LLVMTypeRef, unsigned long long, int);
+extern LLVMValueRef LLVMConstStringInContext(LLVMContextRef, const char *, unsigned, int);
 extern LLVMValueRef LLVMConstReal(LLVMTypeRef, double);
 extern LLVMValueRef LLVMConstNull(LLVMTypeRef);
 extern LLVMValueRef LLVMSizeOf(LLVMTypeRef);

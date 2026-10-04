@@ -1,4 +1,5 @@
 #include "ir.h"
+#include "dyn_location.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -40,34 +41,43 @@ typedef struct {
   bool valid, exact;
   uint64_t max, value;
 } UIntRange;
-static bool unsigned_type(DynType t) {
-  return t >= DYN_TYPE_U8 && t <= DYN_TYPE_USIZE;
+typedef struct {
+  UIntRange *values;
+  size_t start, count;
+} RangeLocals;
+static bool range_has_local(RangeLocals locals, uint64_t id) {
+  return id >= locals.start && id - locals.start < locals.count;
 }
-static uint64_t unsigned_max(DynType t) {
+static bool unsigned_type(DynType t) {
+  return (t >= DYN_TYPE_U8 && t <= DYN_TYPE_U64) || t == DYN_TYPE_USIZE;
+}
+static uint64_t unsigned_max(DynType t, unsigned pointer_bytes) {
   if (t == DYN_TYPE_U8)
     return UINT8_MAX;
   if (t == DYN_TYPE_U16)
     return UINT16_MAX;
-  if (t == DYN_TYPE_U32)
+  if (t == DYN_TYPE_U32 || (t == DYN_TYPE_USIZE && pointer_bytes == 4))
     return UINT32_MAX;
   return UINT64_MAX;
 }
 static UIntRange uint_range(const DynIrProgram *ir, DynExprId id,
-                            const UIntRange *locals, size_t depth) {
+                            RangeLocals locals, unsigned pointer_bytes,
+                            size_t depth) {
   if (id == DYN_NO_EXPR || id >= ir->expression_count ||
       depth > ir->expression_count)
     return (UIntRange){0};
   const DynIrExpr *e = &ir->expressions[id];
-  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR ||
-      e->kind == DYN_EXPR_BOOL)
+  if (e->kind == DYN_EXPR_BOOL)
+    return (UIntRange){true, true, e->boolean, e->boolean};
+  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR)
     return (UIntRange){true, true, e->integer, e->integer};
-  if (e->kind == DYN_EXPR_NAME && e->integer < ir->local_count)
-    return locals[e->integer];
+  if (e->kind == DYN_EXPR_NAME && range_has_local(locals, e->integer))
+    return locals.values[e->integer - locals.start];
   if (e->kind == DYN_EXPR_CONVERT || e->kind == DYN_EXPR_CAST) {
     if (!unsigned_type(e->type))
       return (UIntRange){0};
-    UIntRange source = uint_range(ir, e->left, locals, depth + 1);
-    uint64_t limit = unsigned_max(e->type);
+    UIntRange source = uint_range(ir, e->left, locals, pointer_bytes, depth + 1);
+    uint64_t limit = unsigned_max(e->type, pointer_bytes);
     if (!source.valid || source.max > limit)
       return (UIntRange){true, false, limit, 0};
     source.max = source.max < limit ? source.max : limit;
@@ -76,11 +86,11 @@ static UIntRange uint_range(const DynIrProgram *ir, DynExprId id,
     return source;
   }
   if (e->kind == DYN_EXPR_INDEX && unsigned_type(e->type))
-    return (UIntRange){true, false, unsigned_max(e->type), 0};
+    return (UIntRange){true, false, unsigned_max(e->type, pointer_bytes), 0};
   if (e->kind != DYN_EXPR_BINARY)
     return (UIntRange){0};
-  UIntRange left = uint_range(ir, e->left, locals, depth + 1),
-            right = uint_range(ir, e->right, locals, depth + 1);
+  UIntRange left = uint_range(ir, e->left, locals, pointer_bytes, depth + 1),
+            right = uint_range(ir, e->right, locals, pointer_bytes, depth + 1);
   if (!left.valid || !right.valid)
     return (UIntRange){0};
   if (e->op == DYN_OP_BIT_AND) {
@@ -139,27 +149,28 @@ static bool simple_loop_body(const DynIrProgram *ir, const DynIrStmt *loop) {
   return true;
 }
 static void prove_array_bounds(DynIrProgram *ir, DynExprId id,
-                               const UIntRange *locals, size_t depth) {
+                               RangeLocals locals, unsigned pointer_bytes,
+                               size_t depth) {
   if (id == DYN_NO_EXPR || id >= ir->expression_count ||
       depth > ir->expression_count)
     return;
   DynIrExpr *e = &ir->expressions[id];
-  prove_array_bounds(ir, e->left, locals, depth + 1);
-  prove_array_bounds(ir, e->right, locals, depth + 1);
+  prove_array_bounds(ir, e->left, locals, pointer_bytes, depth + 1);
+  prove_array_bounds(ir, e->right, locals, pointer_bytes, depth + 1);
   for (uint32_t i = 0; i < e->item_count; ++i)
     prove_array_bounds(ir, ir->items[e->item_start + i].expression, locals,
-                       depth + 1);
+                       pointer_bytes, depth + 1);
   if (e->kind != DYN_EXPR_INDEX ||
       !dyn_type_is_array(ir->expressions[e->left].type))
     return;
-  UIntRange index = uint_range(ir, e->right, locals, 0);
+  UIntRange index = uint_range(ir, e->right, locals, pointer_bytes, 0);
   DynIrArray *array =
       &ir->arrays[ir->expressions[e->left].type - DYN_TYPE_ARRAY_BASE];
   if (index.valid && index.max < array->length)
     e->boolean = true;
 }
 static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
-                                UIntRange *outer) {
+                                RangeLocals outer, unsigned pointer_bytes) {
   if (loop->for_range || loop->expression == DYN_NO_EXPR ||
       !simple_loop_body(ir, loop))
     return;
@@ -168,56 +179,69 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
     return;
   DynIrExpr *induction = &ir->expressions[condition->left];
   if (induction->kind != DYN_EXPR_NAME ||
-      induction->integer >= ir->local_count || !unsigned_type(induction->type))
+      !range_has_local(outer, induction->integer) || !unsigned_type(induction->type))
     return;
   uint32_t induction_id = (uint32_t)induction->integer;
-  UIntRange bound = uint_range(ir, condition->right, outer, 0),
-            start = outer[induction_id];
-  if (!bound.exact || !start.exact || bound.value < start.value)
+  /* A loop-carried assignment invalidates the incoming value on subsequent
+     iterations. Only the induction range and freshly initialized locals may
+     be used to bound expressions within the body. */
+  RangeLocals inside = {calloc(outer.count, sizeof(*inside.values)),
+                         outer.start, outer.count};
+  unsigned *writes = calloc(outer.count, sizeof(*writes));
+  if (!inside.values || !writes) {
+    free(inside.values);
+    free(writes);
     return;
-  uint64_t iterations = bound.value - start.value;
-  bool increment = false;
+  }
+  memcpy(inside.values, outer.values, outer.count * sizeof(*inside.values));
   for (uint32_t i = 0; i < loop->body_count; ++i) {
     DynIrStmt *st = &ir->statements[ir->children[loop->body_start + i]];
-    if (st->kind != DYN_STMT_ASSIGN || st->local_id != induction_id)
-      continue;
-    DynIrExpr *e = &ir->expressions[st->expression];
-    UIntRange one = e->kind == DYN_EXPR_BINARY
-                        ? uint_range(ir, e->right, outer, 0)
-                        : (UIntRange){0};
-    if (!increment && i + 1 == loop->body_count && e->kind == DYN_EXPR_BINARY &&
-        e->op == DYN_OP_ADD && ir->expressions[e->left].kind == DYN_EXPR_NAME &&
-        ir->expressions[e->left].integer == induction_id && one.exact &&
-        one.value == 1)
-      increment = true;
-    else
-      return;
+    if (range_has_local(inside, st->local_id)) {
+      inside.values[st->local_id - inside.start] = (UIntRange){0};
+      if (st->kind == DYN_STMT_ASSIGN)
+        ++writes[st->local_id - inside.start];
+    }
   }
-  if (!increment)
-    return;
-  UIntRange *inside = calloc(ir->local_count, sizeof(*inside));
-  if (!inside)
-    return;
-  memcpy(inside, outer, ir->local_count * sizeof(*inside));
-  inside[induction_id] =
+  UIntRange bound = uint_range(ir, condition->right, inside, pointer_bytes, 0),
+            start = outer.values[induction_id - outer.start];
+  if (!bound.exact || !start.exact || bound.value < start.value)
+    goto done;
+  uint64_t iterations = bound.value - start.value;
+  if (writes[induction_id - inside.start] != 1 || !loop->body_count)
+    goto done;
+  DynIrStmt *last = &ir->statements[
+      ir->children[loop->body_start + loop->body_count - 1]];
+  if (last->kind != DYN_STMT_ASSIGN || last->local_id != induction_id)
+    goto done;
+  DynIrExpr *increment = &ir->expressions[last->expression];
+  if (increment->kind != DYN_EXPR_BINARY || increment->op != DYN_OP_ADD ||
+      ir->expressions[increment->left].kind != DYN_EXPR_NAME ||
+      ir->expressions[increment->left].integer != induction_id)
+    goto done;
+  UIntRange one = uint_range(ir, increment->right, inside, pointer_bytes, 0);
+  if (!one.exact || one.value != 1)
+    goto done;
+  inside.values[induction_id - inside.start] =
       (UIntRange){true, false, bound.value ? bound.value - 1 : 0, 0};
   for (uint32_t i = 0; i < loop->body_count; ++i) {
     DynIrStmt *st = &ir->statements[ir->children[loop->body_start + i]];
-    prove_array_bounds(ir, st->expression, inside, 0);
-    if (st->kind == DYN_STMT_LOCAL && st->local_id < ir->local_count) {
-      inside[st->local_id] = uint_range(ir, st->expression, inside, 0);
+    prove_array_bounds(ir, st->expression, inside, pointer_bytes, 0);
+    if (st->kind == DYN_STMT_LOCAL && range_has_local(inside, st->local_id)) {
+      inside.values[st->local_id - inside.start] = uint_range(ir, st->expression, inside, pointer_bytes, 0);
       continue;
     }
-    if (st->kind != DYN_STMT_ASSIGN || st->local_id >= ir->local_count)
+    if (st->kind != DYN_STMT_ASSIGN || !range_has_local(inside, st->local_id))
       continue;
     DynIrExpr *e = &ir->expressions[st->expression];
-    if (e->kind != DYN_EXPR_BINARY || e->op != DYN_OP_ADD ||
+    inside.values[st->local_id - inside.start] = (UIntRange){0};
+    if (writes[st->local_id - inside.start] != 1 || e->kind != DYN_EXPR_BINARY ||
+        e->op != DYN_OP_ADD ||
         ir->expressions[e->left].kind != DYN_EXPR_NAME ||
         ir->expressions[e->left].integer != st->local_id)
       continue;
-    UIntRange initial = outer[st->local_id],
-              step = uint_range(ir, e->right, inside, 0);
-    uint64_t limit = unsigned_max(e->type), growth;
+    UIntRange initial = outer.values[st->local_id - outer.start],
+              step = uint_range(ir, e->right, inside, pointer_bytes, 0);
+    uint64_t limit = unsigned_max(e->type, pointer_bytes), growth;
     if (!unsigned_type(e->type) || !initial.valid || !step.valid ||
         (iterations != 0 && step.max > UINT64_MAX / iterations))
       continue;
@@ -225,31 +249,36 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
     if (initial.max <= limit && growth <= limit - initial.max)
       e->boolean = true;
   }
-  free(inside);
+done:
+  free(writes);
+  free(inside.values);
 }
-static void prove_unsigned_ranges(DynIrProgram *ir) {
-  UIntRange *locals = calloc(ir->local_count, sizeof(*locals));
-  if (!locals)
-    return;
+static void prove_unsigned_ranges(DynIrProgram *ir, unsigned pointer_bytes) {
   for (size_t f = 0; f < ir->function_count; ++f) {
-    memset(locals, 0, ir->local_count * sizeof(*locals));
     DynIrFunction *fn = &ir->functions[f];
+    if (!fn->local_count)
+      continue;
+    RangeLocals locals = {calloc(fn->local_count, sizeof(*locals.values)),
+                         fn->local_start, fn->local_count};
+    if (!locals.values)
+      continue;
     for (uint32_t i = 0; i < fn->body_count; ++i) {
       DynIrStmt *st = &ir->statements[ir->children[fn->body_start + i]];
-      if (st->kind == DYN_STMT_LOCAL && st->local_id < ir->local_count)
-        locals[st->local_id] = uint_range(ir, st->expression, locals, 0);
-      else if (st->kind == DYN_STMT_FOR) {
-        prove_unsigned_loop(ir, st, locals);
-        for (uint32_t j = 0; j < st->body_count; ++j) {
-          DynIrStmt *body = &ir->statements[ir->children[st->body_start + j]];
-          if (body->kind == DYN_STMT_ASSIGN && body->local_id < ir->local_count)
-            locals[body->local_id] = (UIntRange){0};
-        }
-      } else if (st->kind == DYN_STMT_ASSIGN && st->local_id < ir->local_count)
-        locals[st->local_id] = uint_range(ir, st->expression, locals, 0);
+      if ((st->kind == DYN_STMT_LOCAL || st->kind == DYN_STMT_ASSIGN) &&
+          st->target == DYN_NO_EXPR && range_has_local(locals, st->local_id) &&
+          range_pure(ir, st->expression, 0))
+        locals.values[st->local_id - locals.start] =
+            uint_range(ir, st->expression, locals, pointer_bytes, 0);
+      else {
+        if (st->kind == DYN_STMT_FOR)
+          prove_unsigned_loop(ir, st, locals, pointer_bytes);
+        /* Branches, loops, calls, and indirect writes may change any local
+           through control flow or aliases. Do not carry their incoming facts. */
+        memset(locals.values, 0, locals.count * sizeof(*locals.values));
+      }
     }
+    free(locals.values);
   }
-  free(locals);
 }
 
 static bool validate_ir(const DynIrProgram *ir) {
@@ -281,7 +310,7 @@ static bool validate_ir(const DynIrProgram *ir) {
   for (size_t i = 0; i < ir->statement_count; ++i) {
     const DynIrStmt *st = &ir->statements[i];
     if (!valid_expr_id(ir, st->expression) || !valid_expr_id(ir, st->target) ||
-        st->assignment_op != DYN_OP_NONE ||
+        (st->assignment_op != DYN_OP_NONE && st->target == DYN_NO_EXPR) ||
         (size_t)st->case_arm_start + st->case_arm_count > ir->case_arm_count)
       return false;
     if ((st->kind == DYN_STMT_BREAK || st->kind == DYN_STMT_CONTINUE) &&
@@ -447,10 +476,15 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
       return false;
     }
   }
+  /* Function locations share line tables instead of rescanning every prefix.
+     If indexing runs out of memory, lookup retains its unindexed fallback. */
+  DynLocationIndex locations = {0};
+  (void)dyn_location_build(&locations, source);
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     ir->functions[i].name = malloc(n + 1);
     if (!ir->functions[i].name) {
+      dyn_location_free(&locations);
       dyn_ir_free(ir);
       return false;
     }
@@ -461,6 +495,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
                          a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
+      dyn_location_free(&locations);
       dyn_ir_free(ir);
       return false;
     }
@@ -478,8 +513,8 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     ir->functions[i].source_offset = a->functions[i].name.start_byte;
     const char *source_path;
     unsigned source_column;
-    dyn_source_location(source, ir->functions[i].source_offset, &source_path,
-                        &ir->functions[i].source_line, &source_column);
+    dyn_location_get(&locations, source, ir->functions[i].source_offset,
+                     &source_path, &ir->functions[i].source_line, &source_column);
     ir->functions[i].is_main = a->functions[i].is_main;
     ir->functions[i].foreign = a->functions[i].foreign;
     ir->functions[i].variadic = a->functions[i].variadic;
@@ -488,6 +523,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     ir->functions[i].variadic_type =
         lower_type(a, a->functions[i].variadic_type);
   }
+  dyn_location_free(&locations);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
     ir->globals[i].name = malloc(n + 1);
@@ -602,7 +638,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     }
   for (size_t i = 0; i < ir->statement_count; ++i) {
     DynIrStmt *st = &ir->statements[i];
-    if (st->assignment_op == DYN_OP_NONE)
+    if (st->assignment_op == DYN_OP_NONE || st->target != DYN_NO_EXPR)
       continue;
     DynExprId left;
     if (st->target != DYN_NO_EXPR)
@@ -637,7 +673,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     ir->enums[i].tag_type = lower_type(a, ir->enums[i].tag_type);
   if (a->child_count)
     memcpy(ir->children, a->children, a->child_count * sizeof(*ir->children));
-  prove_unsigned_ranges(ir);
+  prove_unsigned_ranges(ir, dyn_target_pointer_bytes(dyn_context_target(&source->context)));
   for (size_t i = 0; i < ir->function_count; ++i) {
     if ((size_t)ir->functions[i].body_start + ir->functions[i].body_count >
         ir->child_count) {

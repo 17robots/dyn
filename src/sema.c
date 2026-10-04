@@ -304,6 +304,44 @@ static uint32_t sema_find_global_name(Sema *sema, DynAstProgram *a,
                                       DynSpan name, const DynSource *s) {
   return sema_name_lookup(&sema->globals, a, name, s, false);
 }
+/* Module rewriting renames a module's globals to dyn_m<key>_NAME but leaves
+   locals and parameters as written, so a plain lookup misses that a local or
+   parameter NAME shadows the module's own global. Look it up under the
+   current function's module prefix as well, so every module follows the same
+   no-shadowing rule as the root module. */
+static bool shadows_module_global(Sema *sema, DynAstProgram *a, DynSpan name,
+                                  const DynSource *s) {
+  if (sema->current_function == UINT32_MAX || !sema->globals.buckets)
+    return false;
+  DynSpan owner = a->functions[sema->current_function].name;
+  const char *prefix = s->text + owner.start_byte;
+  const size_t prefix_length = 22;
+  if (owner.end_byte - owner.start_byte <= prefix_length ||
+      memcmp(prefix, "dyn_m", 5) || prefix[21] != '_')
+    return false;
+  const char *text = s->text + name.start_byte;
+  size_t length = name.end_byte - name.start_byte;
+  uint64_t hash = UINT64_C(14695981039346656037);
+  for (size_t i = 0; i < prefix_length; ++i)
+    hash = (hash ^ (unsigned char)prefix[i]) * UINT64_C(1099511628211);
+  for (size_t i = 0; i < length; ++i)
+    hash = (hash ^ (unsigned char)text[i]) * UINT64_C(1099511628211);
+  for (uint32_t entry = sema->globals.buckets[hash & sema->globals.mask]; entry;
+       entry = sema->globals.next[entry - 1]) {
+    DynSpan declaration = a->globals[entry - 1].name;
+    const char *declared = s->text + declaration.start_byte;
+    if (declaration.end_byte - declaration.start_byte == prefix_length + length &&
+        !memcmp(declared, prefix, prefix_length) &&
+        !memcmp(declared + prefix_length, text, length))
+      return true;
+  }
+  return false;
+}
+static bool shadows_global(Sema *sema, DynAstProgram *a, DynSpan name,
+                           const DynSource *s) {
+  return sema_find_global_name(sema, a, name, s) != UINT32_MAX ||
+         shadows_module_global(sema, a, name, s);
+}
 static uint32_t sema_find_function(Sema *sema, DynAstProgram *a, DynSpan name,
                                    const DynSource *s) {
   if (find_local(sema, a, name, s) != UINT32_MAX ||
@@ -316,6 +354,13 @@ static bool range_bound_literal(const DynAstProgram *a, DynExprId id) {
   if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG)
     e = &a->expressions[e->left];
   return e->kind == DYN_EXPR_INT;
+}
+static bool untyped_numeric_literal(const DynAstProgram *a, DynExprId id) {
+  const DynAstExpr *e = &a->expressions[id];
+  while (e->kind == DYN_EXPR_UNARY &&
+         (e->op == DYN_OP_NEG || e->op == DYN_OP_BIT_NOT))
+    e = &a->expressions[e->left];
+  return e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_FLOAT;
 }
 static DynSpan sema_unqualified_span(DynSpan name, const DynSource *s) {
   for (uint32_t i = name.start_byte; i < name.end_byte; ++i)
@@ -521,6 +566,10 @@ static DynType sema_intern_pointer(DynAstProgram *a, DynType pointee,
     if (a->pointers[i].pointee == pointee &&
         a->pointers[i].is_const == is_const)
       return DYN_TYPE_POINTER_BASE + i;
+  if (a->pointer_count >= DYN_TYPE_ARRAY_BASE - DYN_TYPE_POINTER_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
+  }
   if (a->pointer_count == a->pointer_capacity) {
     size_t c = a->pointer_capacity ? a->pointer_capacity * 2 : 8;
     void *p = realloc(a->pointers, c * sizeof(*a->pointers));
@@ -539,6 +588,10 @@ static DynType sema_intern_array(DynAstProgram *a, DynType element,
   for (uint32_t i = 0; i < a->array_count; ++i)
     if (a->arrays[i].element == element && a->arrays[i].length == length)
       return DYN_TYPE_ARRAY_BASE + i;
+  if (a->array_count >= DYN_TYPE_SLICE_BASE - DYN_TYPE_ARRAY_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
+  }
   if (a->array_count == a->array_capacity) {
     size_t c = a->array_capacity ? a->array_capacity * 2 : 8;
     void *p = realloc(a->arrays, c * sizeof(*a->arrays));
@@ -557,6 +610,10 @@ static DynType sema_intern_slice(DynAstProgram *a, DynType element,
   for (uint32_t i = 0; i < a->slice_count; ++i)
     if (a->slices[i].element == element && a->slices[i].is_const == is_const)
       return DYN_TYPE_SLICE_BASE + i;
+  if (a->slice_count >= DYN_TYPE_FN_BASE - DYN_TYPE_SLICE_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
+  }
   if (a->slice_count == a->slice_capacity) {
     size_t c = a->slice_capacity ? a->slice_capacity * 2 : 8;
     void *p = realloc(a->slices, c * sizeof(*a->slices));
@@ -584,6 +641,10 @@ static DynType sema_intern_fn_type_ex(DynAstProgram *a, const DynType *params,
         same = false;
     if (same)
       return DYN_TYPE_FN_BASE + i;
+  }
+  if (a->fn_type_count >= DYN_TYPE_DISTINCT_BASE - DYN_TYPE_FN_BASE) {
+    a->type_capacity_exceeded = true;
+    return DYN_TYPE_ERROR;
   }
   if (a->fn_type_count == a->fn_type_capacity) {
     size_t c = a->fn_type_capacity ? a->fn_type_capacity * 2 : 8;
@@ -1819,11 +1880,26 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     return a->expressions[id].type = sema_intern_pointer(a, value, lvalue_const(a, a->expressions[id].left));
   }
-  DynType left =
-      a->expressions[a->expressions[id].left].kind == DYN_EXPR_NIL && a->expressions[id].kind == DYN_EXPR_BINARY
-          ? check_expr(sema, a, a->expressions[id].left, s, errors,
-                       check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_INFER))
-          : check_expr(sema, a, a->expressions[id].left, s, errors, expected);
+  DynType left, literal_right = DYN_TYPE_INFER;
+  DynOperator op = a->expressions[id].op;
+  bool literal_left = a->expressions[id].kind == DYN_EXPR_BINARY &&
+                      op != DYN_OP_SHL && op != DYN_OP_SHR &&
+                      op != DYN_OP_LOGICAL_AND && op != DYN_OP_LOGICAL_OR &&
+                      untyped_numeric_literal(a, a->expressions[id].left) &&
+                      !untyped_numeric_literal(a, a->expressions[id].right);
+  if (a->expressions[a->expressions[id].left].kind == DYN_EXPR_NIL &&
+      a->expressions[id].kind == DYN_EXPR_BINARY)
+    left = check_expr(sema, a, a->expressions[id].left, s, errors,
+                      check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_INFER));
+  else if (literal_left) {
+    /* A literal adopts the other operand's type, whichever side it is on. */
+    bool comparison = op >= DYN_OP_EQ && op <= DYN_OP_GE;
+    literal_right = check_expr(sema, a, a->expressions[id].right, s, errors,
+                               comparison ? DYN_TYPE_INFER : expected);
+    left = check_expr(sema, a, a->expressions[id].left, s, errors,
+                      literal_right == DYN_TYPE_ERROR ? expected : literal_right);
+  } else
+    left = check_expr(sema, a, a->expressions[id].left, s, errors, expected);
   if (a->expressions[id].kind == DYN_EXPR_UNARY) {
     if (a->expressions[id].op == DYN_OP_DEREF) {
       DynAstPointer *p = pointer_info(a, left);
@@ -1860,7 +1936,9 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     return a->expressions[id].type = left;
   }
-  DynType right = check_expr(sema, a, a->expressions[id].right, s, errors, left);
+  DynType right = literal_left
+                      ? literal_right
+                      : check_expr(sema, a, a->expressions[id].right, s, errors, left);
   if (left == DYN_TYPE_ERROR || right == DYN_TYPE_ERROR)
     return a->expressions[id].type = DYN_TYPE_ERROR;
   if (left != right && dyn_type_is_pointer(left) &&
@@ -2030,11 +2108,11 @@ static bool valid_defer_stmt(DynAstProgram *a, uint32_t id, const DynSource *s,
 typedef struct { DynExprId id; bool leave_global; } ConstantFrame;
 /* Iterate dependency graphs: expression depth is unrelated to global count,
    and constant cycles must not consume the C stack. Common literals need no
-   heap scratch. Each referenced global is visited once within this query. */
-static bool compile_time_expr(DynAstProgram *a, DynExprId id, const DynSource *s) {
+   heap scratch. Completed global dependencies are shared across queries. */
+static bool compile_time_expr(DynAstProgram *a, DynExprId id, const DynSource *s,
+                              unsigned char *globals) {
   ConstantFrame local[64], *stack = local;
   size_t count = 1, capacity = 64;
-  unsigned char *globals = NULL;
   bool ok = false;
   local[0] = (ConstantFrame){id, false};
   while (count) {
@@ -2059,10 +2137,6 @@ static bool compile_time_expr(DynAstProgram *a, DynExprId id, const DynSource *s
     if (e->kind == DYN_EXPR_GLOBAL) {
       uint32_t g = (uint32_t)e->integer;
       if (g >= a->global_count || !a->globals[g].is_const) goto done;
-      if (!globals) {
-        globals = calloc(a->global_count, 1);
-        if (!globals) goto allocation_failed;
-      }
       if (globals[g] == 1) goto done;
       if (globals[g] == 2) continue;
       globals[g] = 1;
@@ -2096,7 +2170,9 @@ allocation_failed:
   a->allocation_failed = true;
 done:
   if (stack != local) free(stack);
-  free(globals);
+  if (!ok)
+    for (size_t i = 0; i < a->global_count; ++i)
+      if (globals[i] == 1) globals[i] = 0;
   return ok;
 }
 static bool interval_overlap(const DynAstPattern *a, const DynAstPattern *b) {
@@ -2725,7 +2801,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
   }
   if (st->kind == DYN_STMT_LOCAL) {
     if (find_local(sema, a, st->name, s) != UINT32_MAX ||
-        sema_find_global_name(sema, a, st->name, s) != UINT32_MAX) {
+        shadows_global(sema, a, st->name, s)) {
       error_span(st->name, s, errors,
                  "shadowing or duplicate local is forbidden");
       return false;
@@ -2894,6 +2970,79 @@ static bool foreign_symbol_valid(DynSpan name, const DynSource *s) {
   }
   return true;
 }
+/* Resolve inferred global types in dependency order before checking their
+   users. An explicit stack keeps long forward chains off the C call stack. */
+typedef struct { uint32_t id; unsigned char kind; } GlobalTypeFrame;
+static uint32_t *global_type_order(Sema *sema, DynAstProgram *a,
+                                  const DynSource *s, unsigned *errors) {
+  uint32_t *order = malloc((a->global_count ? a->global_count : 1) * sizeof(*order));
+  unsigned char *state = calloc(a->global_count ? a->global_count : 1, 1);
+  GlobalTypeFrame *stack = NULL;
+  size_t count = 0, capacity = 0, ordered = 0;
+  if (!order || !state) goto allocation_failed;
+  for (uint32_t root = 0; root < a->global_count; ++root) {
+    if (state[root] == 2) continue;
+    if (!capacity) {
+      capacity = 64;
+      stack = malloc(capacity * sizeof(*stack));
+      if (!stack) goto allocation_failed;
+    }
+    stack[count++] = (GlobalTypeFrame){root, 1};
+    while (count) {
+      if (!dyn_work_step(&s->context, 1)) goto failed;
+      GlobalTypeFrame f = stack[--count];
+      if (f.kind == 2) {
+        state[f.id] = 2;
+        order[ordered++] = f.id;
+        continue;
+      }
+      if (f.kind == 1 && state[f.id] == 2) continue;
+      if (f.kind == 1 && state[f.id] == 1) {
+        error_span(a->globals[f.id].name, s, errors,
+                   "cyclic inferred global type dependency");
+        goto failed;
+      }
+      DynAstExpr *e = NULL;
+      if (!f.kind) {
+        if (f.id == DYN_NO_EXPR || f.id >= a->expression_count) continue;
+        e = &a->expressions[f.id];
+      }
+      size_t required = count + (e ? (size_t)e->item_count + 3 : 2);
+      if (required > capacity) {
+        size_t next = capacity * 2;
+        if (next < required) next = required;
+        if (next > SIZE_MAX / sizeof(*stack)) goto allocation_failed;
+        void *p = realloc(stack, next * sizeof(*stack));
+        if (!p) goto allocation_failed;
+        stack = p; capacity = next;
+      }
+      if (f.kind == 1) {
+        state[f.id] = 1;
+        stack[count++] = (GlobalTypeFrame){f.id, 2};
+        stack[count++] = (GlobalTypeFrame){a->globals[f.id].initializer, 0};
+      } else {
+        if (e->kind == DYN_EXPR_NAME ||
+            (e->kind == DYN_EXPR_CALL &&
+             sema_find_function(sema, a, e->span, s) == UINT32_MAX)) {
+          uint32_t g = sema_find_global_name(sema, a, e->span, s);
+          if (g != UINT32_MAX && a->globals[g].type == DYN_TYPE_INFER)
+            stack[count++] = (GlobalTypeFrame){g, 1};
+        }
+        stack[count++] = (GlobalTypeFrame){e->left, 0};
+        stack[count++] = (GlobalTypeFrame){e->right, 0};
+        for (uint32_t i = 0; i < e->item_count; ++i)
+          stack[count++] = (GlobalTypeFrame){a->items[e->item_start + i].expression, 0};
+      }
+    }
+  }
+  free(stack); free(state);
+  return order;
+allocation_failed:
+  a->allocation_failed = true;
+failed:
+  free(stack); free(state); free(order);
+  return NULL;
+}
 static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                          unsigned *errors) {
   /* Reserve common conversion growth up front as an optimization. Reflection
@@ -2909,21 +3058,11 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     a->expressions = expressions;
     a->expression_capacity = semantic_capacity;
   }
-  for (uint32_t i = 0; i < a->field_count; ++i)
-    if (a->fields[i].default_expression != DYN_NO_EXPR) {
-      DynType value = check_expr(sema, a, a->fields[i].default_expression, s,
-                                 errors, a->fields[i].type);
-      if (value != a->fields[i].type && value != DYN_TYPE_ERROR) {
-        if (can_convert(sema, a, value, a->fields[i].type))
-          a->fields[i].default_expression = convert_expr(
-              a, a->fields[i].default_expression, a->fields[i].type);
-        else
-          error_span(a->fields[i].name, s, errors,
-                     "struct field default type mismatch");
-      }
-    }
   sema->current_function = UINT32_MAX;
-  for (uint32_t i = 0; i < a->global_count; ++i) {
+  uint32_t *type_order = global_type_order(sema, a, s, errors);
+  if (!type_order) return false;
+  for (uint32_t at = 0; at < a->global_count; ++at) {
+    uint32_t i = type_order[at];
     DynAstGlobal *g = &a->globals[i];
     if (g->foreign) {
       if (!foreign_symbol_valid(g->link_name, s))
@@ -2955,20 +3094,37 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
         error_span(g->name, s, errors, "global initializer type mismatch");
     }
   }
+  free(type_order);
+  for (uint32_t i = 0; i < a->field_count; ++i)
+    if (a->fields[i].default_expression != DYN_NO_EXPR) {
+      DynType value = check_expr(sema, a, a->fields[i].default_expression, s,
+                                 errors, a->fields[i].type);
+      if (value != a->fields[i].type && value != DYN_TYPE_ERROR) {
+        if (can_convert(sema, a, value, a->fields[i].type))
+          a->fields[i].default_expression = convert_expr(
+              a, a->fields[i].default_expression, a->fields[i].type);
+        else
+          error_span(a->fields[i].name, s, errors,
+                     "struct field default type mismatch");
+      }
+    }
+  unsigned char *constant_globals = calloc(a->global_count ? a->global_count : 1, 1);
+  if (!constant_globals) { a->allocation_failed = true; return false; }
   /* Resolve all global expressions before following constant dependencies;
      forward references otherwise still contain unresolved name expressions. */
   for (uint32_t i = 0; i < a->global_count && dyn_work_step(&s->context, 1); ++i) {
     DynAstGlobal *g = &a->globals[i];
     if (g->is_const && g->initializer != DYN_NO_EXPR &&
-        !compile_time_expr(a, g->initializer, s))
+        !compile_time_expr(a, g->initializer, s, constant_globals))
       error_span(g->name, s, errors,
                  "constant initializer must be compile-time expression");
   }
   for (uint32_t i = 0; i < a->field_count && dyn_work_step(&s->context, 1); ++i)
     if (a->fields[i].default_expression != DYN_NO_EXPR &&
-        !compile_time_expr(a, a->fields[i].default_expression, s))
+        !compile_time_expr(a, a->fields[i].default_expression, s, constant_globals))
       error_span(a->fields[i].name, s, errors,
                  "struct field default must be compile-time expression");
+  free(constant_globals);
   for (uint32_t f = 0; f < a->function_count && dyn_work_step(&s->context, 1); ++f) {
     DynAstFn *fn = &a->functions[f];
     if (fn->return_type == DYN_TYPE_ANY)
@@ -3021,11 +3177,14 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     fn->local_start = (uint32_t)a->local_count;
     for (uint32_t i = 0; i < fn->param_count; ++i) {
       DynAstParam *p = &a->params[fn->param_start + i];
-      if (find_local(sema, a, p->name, s) != UINT32_MAX ||
-          sema_find_global_name(sema, a, p->name, s) != UINT32_MAX) {
+      if (find_local(sema, a, p->name, s) != UINT32_MAX) {
         error_span(p->name, s, errors, "duplicate parameter name");
         continue;
       }
+      /* Still declare it, so uses in the body do not report again. */
+      if (shadows_global(sema, a, p->name, s))
+        error_span(p->name, s, errors,
+                   "parameter has the name of a global; shadowing is forbidden");
       if (!reserve_local(a)) {
         error_span(p->name, s, errors, "out of memory");
         continue;
@@ -3079,6 +3238,10 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
     error_span((DynSpan){0}, s, errors, "out of memory indexing symbols");
   }
   bool ok = ready && sema_program(&sema, a, s, errors);
+  if (a->type_capacity_exceeded) {
+    error_span((DynSpan){0}, s, errors, "interned type capacity exceeded");
+    ok = false;
+  }
   free(sema.functions.buckets);
   free(sema.functions.next);
   free(sema.globals.buckets);

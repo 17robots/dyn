@@ -342,6 +342,77 @@ fn hex(value: u8) i16 {
 }
 
 // Decodes a complete chunked body into caller storage. Extensions are skipped.
+// Cursors advance only over validated framing; buffered payload stays encoded
+// until the whole message has been validated and can be decoded in place.
+struct ChunkProgress { cursor: usize, line_scan: usize, count: usize, size: usize, phase: u8, digits: bool, extension: bool }
+fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
+  for {
+    if state.phase == 1 {
+      if state.size > #len(input) - state.cursor { return HttpIoResult{ error: -11 } }
+      end := state.cursor + state.size
+      if #len(input) - end < 2 { return HttpIoResult{ error: -11 } }
+      if input[end] != '\r' || input[end + 1] != '\n' { return HttpIoResult{ error: -22 } }
+      if state.size > 18446744073709551615 - state.count { return HttpIoResult{ error: -28 } }
+      state.count += state.size
+      state.cursor = end + 2
+      state.line_scan = state.cursor
+      state.size = 0
+      state.digits = false
+      state.extension = false
+      state.phase = 0
+    }
+    if state.phase == 0 {
+      for state.line_scan < #len(input) && input[state.line_scan] != '\r' {
+        byte := input[state.line_scan]
+        if !state.extension && byte != ';' {
+          value := hex(byte)
+          if value < 0 || state.size > (18446744073709551615 - #cast(usize) value) / 16 { return HttpIoResult{ error: -22 } }
+          state.size = state.size * 16 + #cast(usize) value
+          state.digits = true
+        } else {
+          if !state.digits || byte < 32 || byte == 127 { return HttpIoResult{ error: -22 } }
+          state.extension = true
+        }
+        state.line_scan += 1
+      }
+      if state.line_scan == #len(input) { return HttpIoResult{ error: -11 } }
+      if !state.digits { return HttpIoResult{ error: -22 } }
+      if state.line_scan + 1 >= #len(input) { return HttpIoResult{ error: -11 } }
+      if input[state.line_scan + 1] != '\n' { return HttpIoResult{ error: -22 } }
+      state.cursor = state.line_scan + 2
+      state.line_scan = state.cursor
+      state.phase = 1
+      if state.size == 0 { state.phase = 2 }
+    } else {
+      for state.line_scan + 1 < #len(input) && !(input[state.line_scan] == '\r' && input[state.line_scan + 1] == '\n') {
+        state.line_scan += 1
+      }
+      if state.line_scan + 1 >= #len(input) { return HttpIoResult{ error: -11 } }
+      end := state.line_scan
+      if end == state.cursor { return HttpIoResult{ count: state.count, consumed: end + 2, ok: true } }
+      colon := state.cursor
+      for colon < end && token_byte(input[colon]) { colon += 1 }
+      if colon == state.cursor || colon == end || input[colon] != ':' { return HttpIoResult{ error: -22 } }
+      if ascii_equal(input[state.cursor..colon], "Content-Length") || ascii_equal(input[state.cursor..colon], "Transfer-Encoding") {
+        return HttpIoResult{ error: -22 }
+      }
+      state.cursor = end + 2
+      state.line_scan = state.cursor
+    }
+  }
+  return HttpIoResult{}
+}
+
+// Retain the last three bytes so a header terminator may cross reads.
+fn head_complete(input: []const u8, cursor: *usize) bool {
+  for cursor.* + 3 < #len(input) {
+    at := cursor.*
+    if input[at] == '\r' && input[at + 1] == '\n' && input[at + 2] == '\r' && input[at + 3] == '\n' { return true }
+    cursor.* += 1
+  }
+  return false
+}
+
 fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult {
   cursor: usize = 0
   output: usize = 0
@@ -673,8 +744,14 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
 // Returned request slices borrow state.storage and remain valid only until the next receive call.
 pub fn receive(state: *Server) ReceiveResult {
   shift_consumed(state)
+  head := HttpHead{}
+  head_scan: usize = 0
+  head_checked := false
   for true {
-    head := parse_request(state.storage[..state.used])
+    if !head_checked && head_complete(state.storage[..state.used], &head_scan) {
+      head = parse_request(state.storage[..state.used])
+      head_checked = true
+    }
     if head.ok {
       if head.chunked {
         return ReceiveResult{ error: ErrorKind.Invalid, ok: false }
@@ -932,9 +1009,16 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
     return ClientResponse{ error: ErrorKind.Io, system_error: sent.error }
   }
   used: usize = 0
-    ended := false
+  ended := false
+  head := HttpHead{}
+  head_scan: usize = 0
+  head_checked := false
+  chunks := ChunkProgress{}
   for {
-    head := parse_response(response_storage[..used])
+    if !head_checked && head_complete(response_storage[..used], &head_scan) {
+      head = parse_response(response_storage[..used])
+      head_checked = true
+    }
     if head.ok {
       if head.code >= 100 && head.code < 200 && head.code != 101 {
         remaining := used - head.header_length
@@ -942,6 +1026,9 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
           response_storage[i] = response_storage[head.header_length + i]
         }
         used = remaining
+        head = HttpHead{}
+        head_scan = 0
+        head_checked = false
         continue
       }
       framing := head.framing
@@ -961,7 +1048,11 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
         complete = ended
       }
       else if framing == Framing.Chunked {
-        decoded := decode_chunked(response_storage[head.header_length..used], response_storage[head.header_length..])
+        scanned := chunk_progress(&chunks, response_storage[head.header_length..used])
+        decoded := scanned
+        if scanned.ok {
+          decoded = scan_chunked(response_storage[head.header_length..used], response_storage[head.header_length..], true)
+        }
         if decoded.ok {
           body_length = decoded.count
           complete = true

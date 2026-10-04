@@ -179,6 +179,36 @@ static uint64_t hash_project_sources(uint64_t hash, const DynSources *sources) {
   return hash;
 }
 
+static uint64_t hash_runtime(uint64_t hash, const DynOptions *options,
+                             const char *compiler_path) {
+  const char *start = options->release ? "dynrt_release.o" : "dynrt_start.o";
+  const char *support = "dynrt_support.o";
+  if (!strcmp(options->target, "aarch64-linux")) {
+    start = options->release ? "dynrt_aarch64_release.o" : "dynrt_aarch64_start.o";
+    support = "dynrt_aarch64_support.o";
+  } else if (!strcmp(options->target, "aarch64-macos")) {
+    start = "dynrt_macos_start.o"; support = "dynrt_macos_support.o";
+  } else if (!strcmp(options->target, "x86_64-windows")) {
+    start = "dynrt_windows_start.o"; support = "dynrt_windows_support.o";
+  }
+  const char *slash = strrchr(compiler_path, '/');
+  if (!slash) return 0;
+  size_t directory = (size_t)(slash - compiler_path);
+  if (directory > 4000) return 0;
+  const char *names[] = {start, support};
+  for (size_t i = 0; hash && i < 2; ++i) {
+    char path[4096];
+    int n = snprintf(path, sizeof(path), "%.*s/%s", (int)directory, compiler_path, names[i]);
+    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+    if (access(path, R_OK)) {
+      n = snprintf(path, sizeof(path), "%.*s/../lib/dyn/%s", (int)directory, compiler_path, names[i]);
+      if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+    }
+    hash = hash_file(hash, path);
+  }
+  return hash;
+}
+
 static uint64_t build_key(const DynSources *sources, const DynOptions *options,
                           const char *compiler_path) {
   uint64_t hash = compiler_key(options, compiler_path);
@@ -188,7 +218,7 @@ static uint64_t build_key(const DynSources *sources, const DynOptions *options,
   hash = hash_project_sources(hash, sources);
   for (size_t i = 0; i < options->link_input_count; ++i)
     hash = hash_file(hash, options->link_inputs[i]);
-  return hash;
+  return hash_runtime(hash, options, compiler_path);
 }
 
 static uint64_t codegen_key(const DynSources *sources,
@@ -259,11 +289,12 @@ typedef struct {
   uint32_t path_length;
 } FastEntry;
 
-static uint64_t fast_options(const DynOptions *options) {
+static uint64_t fast_options(const DynOptions *options, const char *compiler_path) {
   uint64_t hash = UINT64_C(1469598103934665603);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  return hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
+  hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
+  return hash_runtime(hash, options, compiler_path);
 }
 static bool fast_stat(FILE *file, const char *path, bool write) {
   struct stat st;
@@ -313,7 +344,7 @@ bool dyn_cache_fast_hit(const DynOptions *options, const char *compiler_path,
   FastHeader header;
   bool ok = file && fread(&header, sizeof(header), 1, file) == 1 &&
             header.magic == UINT64_C(0x44594e4641535431) &&
-            header.options == fast_options(options) &&
+            header.options && header.options == fast_options(options, compiler_path) &&
             header.count == options->link_input_count + 2 &&
             fast_stat(file, output, false) &&
             fast_stat(file, compiler_path, false);
@@ -366,7 +397,7 @@ static void fast_store(const DynSources *sources, const DynOptions *options,
   }
   snprintf(temporary, n, "%s.%ld.tmp", path, (long)getpid());
   FILE *file = fopen(temporary, "wb");
-  FastHeader header = {UINT64_C(0x44594e4641535431), fast_options(options),
+  FastHeader header = {UINT64_C(0x44594e4641535431), fast_options(options, compiler_path),
                        (uint32_t)(options->link_input_count + 2)};
   bool ok = file && fwrite(&header, sizeof(header), 1, file) == 1 &&
             fast_stat(file, output, true) &&

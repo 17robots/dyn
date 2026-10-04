@@ -293,7 +293,11 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
           exponent -= 1
         }
       }
-      rounded := #cast(u64) (magnitude * #cast(f64) scale + 0.5)
+      scaled := magnitude * #cast(f64) scale
+      rounded := #cast(u64) scaled
+      if scaled - #cast(f64) rounded >= 0.5 {
+        rounded += 1
+      }
       if scientific && rounded >= 10 * scale {
         rounded /= 10
         exponent += 1

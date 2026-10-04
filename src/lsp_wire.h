@@ -9,18 +9,29 @@ static const char *lsp_wire_text;
 static char *lsp_wire_id;
 static bool lsp_response_overflow;
 static long lsp_wire_number;
-size_t lsp_wire_column(const char *text, size_t line, size_t column,
-                       bool to_bytes) {
-  if (!text || lsp_wire_utf8)
-    return column;
-  const unsigned char *p = (const unsigned char *)text;
-  for (size_t i = 0; i < line; ++i) {
-    const char *end = strchr((const char *)p, '\n');
-    if (!end)
-      return column;
-    p = (const unsigned char *)end + 1;
+typedef struct {
+  const char *text, *row;
+  size_t line, bytes, units;
+} LspWireCursor;
+/* A transform owns its cursor; a nested source gets a separate cursor whose
+   lifetime ends before that source is freed. No cached document pointers escape. */
+static size_t lsp_wire_column_at(LspWireCursor *cursor, const char *text,
+                                  size_t line, size_t column, bool to_bytes) {
+  if (!text || lsp_wire_utf8) return column;
+  if (cursor->text != text || line < cursor->line) {
+    *cursor = (LspWireCursor){.text = text, .row = text};
   }
-  size_t bytes = 0, units = 0;
+  while (cursor->line < line) {
+    const char *end = strchr(cursor->row, '\n');
+    if (!end) return column;
+    cursor->row = end + 1;
+    ++cursor->line;
+    cursor->bytes = cursor->units = 0;
+  }
+  if ((to_bytes ? cursor->units : cursor->bytes) > column)
+    cursor->bytes = cursor->units = 0;
+  const unsigned char *p = (const unsigned char *)cursor->row;
+  size_t bytes = cursor->bytes, units = cursor->units;
   while (p[bytes] && p[bytes] != '\n' && (to_bytes ? units : bytes) < column) {
     unsigned width = p[bytes] < 0x80   ? 1
                      : p[bytes] < 0xe0 ? 2
@@ -30,17 +41,20 @@ size_t lsp_wire_column(const char *text, size_t line, size_t column,
     while (valid < width && p[bytes + valid] &&
            (p[bytes + valid] & 0xc0) == 0x80)
       ++valid;
-    if (valid != width)
-      width = 1;
+    if (valid != width) width = 1;
     unsigned step = width == 4 ? 2 : 1;
-    if (to_bytes && units + step > column)
-      break;
-    if (!to_bytes && bytes + width > column)
-      break;
+    if (to_bytes && units + step > column) break;
+    if (!to_bytes && bytes + width > column) break;
     bytes += width;
     units += step;
   }
+  cursor->bytes = bytes; cursor->units = units;
   return to_bytes ? bytes : units;
+}
+size_t lsp_wire_column(const char *text, size_t line, size_t column,
+                       bool to_bytes) {
+  LspWireCursor cursor = {0};
+  return lsp_wire_column_at(&cursor, text, line, column, to_bytes);
 }
 int lsp_bounded_printf(char *out, size_t capacity, const char *format, ...) {
   va_list arguments;
@@ -121,7 +135,7 @@ static char *lsp_wire_source(const char *object) {
   return text;
 }
 static const char *lsp_wire_transform(LspWireBuffer *out, const char *input,
-                                      const char *text) {
+                                      const char *text, LspWireCursor *cursor) {
   input = lsp_json_space(input);
   const char *end = lsp_json_end(input, 0);
   if (!end) {
@@ -134,16 +148,19 @@ static const char *lsp_wire_transform(LspWireBuffer *out, const char *input,
     return end;
   }
   char *owned = NULL;
+  LspWireCursor owned_cursor = {0};
   if (object && lsp_json_member(input, "\"uri\"")) {
     owned = lsp_wire_source(input);
-    if (owned)
+    if (owned) {
       text = owned;
+      cursor = &owned_cursor;
+    }
   }
   size_t line, column;
   if (object && text && json_point(input, &line, &column)) {
     char point[128];
     int n = snprintf(point, sizeof(point), "{\"line\":%zu,\"character\":%zu}",
-                     line, lsp_wire_column(text, line, column, false));
+                     line, lsp_wire_column_at(cursor, text, line, column, false));
     lsp_wire_append(out, point, (size_t)n);
     free(owned);
     return end;
@@ -172,11 +189,11 @@ static const char *lsp_wire_transform(LspWireBuffer *out, const char *input,
           lsp_json_size(p, &fold_column)) {
         char number[32];
         int n = snprintf(number, sizeof(number), "%zu",
-                         lsp_wire_column(text, fold_line, fold_column, false));
+                         lsp_wire_column_at(cursor, text, fold_line, fold_column, false));
         lsp_wire_append(out, number, (size_t)n);
         p = lsp_json_end(p, 0);
       } else
-        p = lsp_wire_transform(out, p, text);
+        p = lsp_wire_transform(out, p, text, cursor);
     } else if (key && key_end - key == 4 && !memcmp(key, "\"id\"", 4) &&
                lsp_wire_id) {
       lsp_wire_append(out, lsp_wire_id, strlen(lsp_wire_id));
@@ -209,8 +226,8 @@ static const char *lsp_wire_transform(LspWireBuffer *out, const char *input,
           break;
         row += values[0];
         byte = values[0] ? values[1] : byte + values[1];
-        size_t col = lsp_wire_column(text, row, byte, false),
-               limit = lsp_wire_column(text, row, byte + values[2], false);
+        size_t col = lsp_wire_column_at(cursor, text, row, byte, false),
+               limit = lsp_wire_column_at(cursor, text, row, byte + values[2], false);
         char token[160];
         int n = snprintf(token, sizeof(token), "%s%zu,%zu,%zu,%zu,%zu",
                          first ? "" : ",", row - previous_row,
@@ -237,11 +254,13 @@ static const char *lsp_wire_transform(LspWireBuffer *out, const char *input,
       lsp_wire_append(&location, "}", 1);
       char *document_text =
           location.failed ? NULL : lsp_wire_source(location.text);
-      p = lsp_wire_transform(out, p, document_text ? document_text : text);
+      LspWireCursor document_cursor = {0};
+      p = lsp_wire_transform(out, p, document_text ? document_text : text,
+                             document_text ? &document_cursor : cursor);
       free(document_text);
       free(location.text);
     } else
-      p = lsp_wire_transform(out, p, text);
+      p = lsp_wire_transform(out, p, text, cursor);
     p = lsp_json_space(p);
     comma = true;
     if (*p == ',')
@@ -268,10 +287,11 @@ void lsp_send(const char *body) {
     }
   }
   LspWireBuffer out = {0};
+  LspWireCursor cursor = {0};
   const char *failure = lsp_response_overflow ? "response exceeds server capacity" :
       !lsp_json_valid(body) ? "invalid server response JSON" : "invalid response transformation";
   if (!lsp_response_overflow && lsp_json_valid(body))
-    lsp_wire_transform(&out, body, lsp_wire_text);
+    lsp_wire_transform(&out, body, lsp_wire_text, &cursor);
   else
     out.failed = true;
   if (out.failed) {
@@ -288,7 +308,7 @@ void lsp_send(const char *body) {
              "\"message\":\"%s\"}}",
              lsp_wire_number, failure);
     lsp_response_overflow = false;
-    lsp_wire_transform(&out, error, NULL);
+    lsp_wire_transform(&out, error, NULL, &cursor);
   }
   if (out.text && !out.failed) {
     printf("Content-Length: %zu\r\n\r\n%s", out.length, out.text);

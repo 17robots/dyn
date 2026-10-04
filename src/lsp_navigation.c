@@ -21,8 +21,8 @@ static void lsp_selection_node(TSNode node, char *body, size_t capacity,
 static void lsp_semantic_token_node(TSNode node, unsigned *previous_line,
                                     unsigned *previous_column, bool *first,
                                     char *body, size_t capacity, size_t *at,
-                                    bool *comma, LspSemantic *semantic,
-                                    LspDocument *document);
+                                    bool *comma, const uint32_t *constants,
+                                    size_t constant_count);
 static bool lsp_symbol_matches(const char *name, size_t length,
                                const char *query);
 static void lsp_workspace_symbol_text(const char *text, const char *uri,
@@ -557,8 +557,8 @@ void lsp_selection_range(long id, const LspDocument *document,
 static void lsp_semantic_token_node(TSNode node, unsigned *previous_line,
                                     unsigned *previous_column, bool *first,
                                     char *body, size_t capacity, size_t *at,
-                                    bool *comma, LspSemantic *semantic,
-                                    LspDocument *document) {
+                                    bool *comma, const uint32_t *constants,
+                                    size_t constant_count) {
   if (*at + 128 >= capacity)
     return;
   if (!strcmp(ts_node_type(node), "identifier")) {
@@ -586,29 +586,14 @@ static void lsp_semantic_token_node(TSNode node, unsigned *previous_line,
       type = 0;
     else if (!strcmp(kind, "field_type") || !strcmp(kind, "type"))
       type = 1;
-    TSPoint position = ts_node_start_point(node);
-    uint32_t offset;
-    DynSpan definition = {0};
-    char hover[16];
-    if (semantic->ok &&
-        lsp_semantic_offset(semantic, document, position.row, position.column,
-                            &offset) &&
-        lsp_typed_symbol(semantic, offset, hover, sizeof(hover), &definition)) {
-      for (size_t i = 0; i < semantic->ast.global_count; ++i) {
-        DynAstGlobal *global = &semantic->ast.globals[i];
-        if (global->is_const &&
-            global->name.start_byte == definition.start_byte &&
-            global->name.end_byte == definition.end_byte)
-          modifiers = 1;
-      }
-      for (size_t i = 0; i < semantic->ast.local_count; ++i) {
-        DynAstLocal *local = &semantic->ast.locals[i];
-        if (local->is_const &&
-            local->name.start_byte == definition.start_byte &&
-            local->name.end_byte == definition.end_byte)
-          modifiers = 1;
-      }
+    uint32_t byte = ts_node_start_byte(node);
+    size_t low = 0, high = constant_count;
+    while (low < high) {
+      size_t mid = low + (high - low) / 2;
+      if (constants[mid] < byte) low = mid + 1;
+      else high = mid;
     }
+    if (low < constant_count && constants[low] == byte) modifiers = 1;
     TSPoint p = ts_node_start_point(node);
     unsigned delta_line = *first ? p.row : p.row - *previous_line;
     unsigned delta_column =
@@ -625,7 +610,78 @@ static void lsp_semantic_token_node(TSNode node, unsigned *previous_line,
   for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
     lsp_semantic_token_node(ts_node_named_child(node, i), previous_line,
                             previous_column, first, body, capacity, at, comma,
-                            semantic, document);
+                            constants, constant_count);
+}
+
+static int lsp_offset_compare(const void *left, const void *right) {
+  uint32_t a = *(const uint32_t *)left, b = *(const uint32_t *)right;
+  return (a > b) - (a < b);
+}
+/* Source maps and rewrite spans are ordered by generated position. Mapping an
+   identifier's end also handles qualified names rewritten into module symbols. */
+static size_t lsp_original_offset(const DynSourceSpan *spans, size_t count,
+                                  size_t byte) {
+  size_t low = 0, high = count;
+  while (low < high) {
+    size_t mid = low + (high - low) / 2;
+    if (spans[mid].generated_end < byte) low = mid + 1;
+    else high = mid;
+  }
+  if (low == count || spans[low].generated_start > byte) return byte;
+  DynSourceSpan span = spans[low];
+  size_t generated = span.generated_end - span.generated_start;
+  return span.original_start + (generated ?
+      (byte - span.generated_start) * (span.original_end - span.original_start) / generated : 0);
+}
+static uint32_t *lsp_const_offsets(LspSemantic *semantic, LspDocument *document,
+                                   size_t *count) {
+  *count = 0;
+  if (!semantic->ok) return NULL;
+  DynAstProgram *a = &semantic->ast;
+  size_t capacity = a->global_count + a->local_count + a->expression_count;
+  if (!capacity || capacity > SIZE_MAX / sizeof(uint32_t)) return NULL;
+  uint32_t *offsets = malloc(capacity * sizeof(*offsets));
+  if (!offsets) return NULL;
+  size_t ends = 0;
+  for (size_t i = 0; i < a->global_count; ++i)
+    if (a->globals[i].is_const) offsets[ends++] = a->globals[i].name.end_byte;
+  for (size_t i = 0; i < a->local_count; ++i)
+    if (a->locals[i].is_const) offsets[ends++] = a->locals[i].name.end_byte;
+  for (size_t i = 0; i < a->expression_count; ++i) {
+    DynAstExpr *e = &a->expressions[i];
+    if (e->type == DYN_TYPE_ERROR || e->type == DYN_TYPE_INFER) continue;
+    if ((e->kind == DYN_EXPR_NAME && e->integer < a->local_count &&
+         a->locals[e->integer].is_const) ||
+        (e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count &&
+         a->globals[e->integer].is_const)) offsets[ends++] = e->span.end_byte;
+  }
+  DynSource *source = &semantic->source;
+  for (size_t i = 0; i < ends; ++i) {
+    size_t byte = offsets[i], length = source->original_text ? source->original_length : source->length;
+    const char *path = source->path;
+    const char *text = source->original_text ? source->original_text : source->text;
+    if (source->map_count) {
+      size_t low = 0, high = source->map_count;
+      while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        if (source->maps[mid].end < byte) low = mid + 1;
+        else high = mid;
+      }
+      if (low == source->map_count || source->maps[low].start > byte) continue;
+      DynSourceMap *map = &source->maps[low];
+      path = map->path; text = map->original_text; length = map->original_length;
+      byte = lsp_original_offset(map->spans, map->span_count, byte - map->start);
+    } else {
+      byte = lsp_original_offset(source->spans, source->span_count, byte);
+    }
+    if (!path || strcmp(lsp_file_path(path), lsp_file_path(document->uri)) ||
+        !text || byte > length) continue;
+    size_t end = byte;
+    while (byte && (isalnum((unsigned char)text[byte - 1]) || text[byte - 1] == '_')) --byte;
+    if (byte != end && byte <= UINT32_MAX) offsets[(*count)++] = (uint32_t)byte;
+  }
+  qsort(offsets, *count, sizeof(*offsets), lsp_offset_compare);
+  return offsets;
 }
 
 void lsp_semantic_tokens(long id, LspDocument *documents, size_t count,
@@ -643,15 +699,18 @@ void lsp_semantic_tokens(long id, LspDocument *documents, size_t count,
     lsp_semantic_free(&semantic);
     semantic = lsp_semantic_build_related(documents, count, document);
   }
+  size_t constant_count = 0;
+  uint32_t *constants = lsp_const_offsets(&semantic, document, &constant_count);
   unsigned line = 0, column = 0;
   bool first = true, comma = false;
   if (document->tree)
     lsp_semantic_token_node(ts_tree_root_node(document->tree), &line, &column,
-                            &first, body, capacity, &at, &comma, &semantic,
-                            document);
+                            &first, body, capacity, &at, &comma, constants,
+                            constant_count);
   lsp_bounded_printf(body + at, capacity - at, "]}}");
   lsp_send(body);
   free(body);
+  free(constants);
   lsp_semantic_free(&semantic);
 }
 

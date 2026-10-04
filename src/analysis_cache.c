@@ -8,7 +8,8 @@
 /* Bound retained projects. Oversized sources still analyze without caching. */
 enum {
   ANALYSIS_CACHE_LIMIT = 4,
-  ANALYSIS_CACHE_SOURCE_LIMIT = 8 * 1024 * 1024
+  ANALYSIS_CACHE_SOURCE_LIMIT = 8 * 1024 * 1024,
+  ANALYSIS_CACHE_BYTE_LIMIT = 32 * 1024 * 1024
 };
 struct DynAnalysisCacheEntry {
   char *root;
@@ -18,6 +19,7 @@ struct DynAnalysisCacheEntry {
   char **files;
   size_t file_count;
   uint64_t fingerprint, used;
+  size_t bytes;
   DynAnalysisSnapshot *snapshot;
   struct DynAnalysisCacheEntry *next;
 };
@@ -34,6 +36,61 @@ struct DynInterfaceCacheEntry {
   uint64_t source_hash, interface_hash;
   struct DynInterfaceCacheEntry *next;
 };
+/* Account owned capacities, not just source bytes. Cached AST snapshots do not
+   need to retain a second syntax tree. Saturation rejects oversized entries. */
+static size_t retained_add(size_t total, size_t count, size_t width) {
+  return width && count > (SIZE_MAX - total) / width ? SIZE_MAX : total + count * width;
+}
+static size_t retained_index(size_t total, const DynNameIndex *index) {
+  total = retained_add(total, index->capacity, sizeof(uint32_t));
+  return retained_add(total, index->capacity / 2, sizeof(uint32_t));
+}
+static size_t snapshot_bytes(const DynSource *s, const DynAstProgram *a) {
+  size_t total = sizeof(DynAnalysisSnapshot) + 2; /* Text terminators. */
+  total = retained_add(total, s->length, 1);
+  total = retained_add(total, s->original_length, 1);
+  total = retained_add(total, s->path ? strlen(s->path) + 1 : 0, 1);
+  total = retained_add(total, s->span_count, sizeof(*s->spans));
+  total = retained_add(total, s->dependency_count, sizeof(*s->dependency_sources));
+  total = retained_add(total, s->map_count, sizeof(*s->maps));
+  for (size_t i = 0; i < s->map_count; ++i) {
+    total = retained_add(total, s->maps[i].original_length + 1, 1);
+    total = retained_add(total, strlen(s->maps[i].path) + 1, 1);
+    total = retained_add(total, s->maps[i].span_count, sizeof(*s->maps[i].spans));
+  }
+#define OWNED(array, capacity) total = retained_add(total, a->capacity, sizeof(*a->array))
+  OWNED(expressions, expression_capacity);
+  OWNED(items, item_capacity);
+  OWNED(fields, field_capacity);
+  OWNED(structs, struct_capacity);
+  OWNED(enums, enum_capacity);
+  OWNED(variants, variant_capacity);
+  OWNED(params, param_capacity);
+  OWNED(functions, function_capacity);
+  OWNED(globals, global_capacity);
+  OWNED(pointers, pointer_capacity);
+  OWNED(arrays, array_capacity);
+  OWNED(slices, slice_capacity);
+  OWNED(fn_types, fn_type_capacity);
+  OWNED(fn_type_params, fn_type_param_capacity);
+  OWNED(aliases, alias_capacity);
+  OWNED(strings, string_capacity);
+  OWNED(statements, statement_capacity);
+  OWNED(patterns, pattern_capacity);
+  OWNED(case_arms, case_arm_capacity);
+  OWNED(children, child_capacity);
+  OWNED(locals, local_capacity);
+#undef OWNED
+  if (a->global_init_order) total = retained_add(total, a->global_count, sizeof(*a->global_init_order));
+  for (size_t i = 0; i < a->string_count; ++i)
+    total = retained_add(total, a->strings[i].length + 1, 1);
+  total = retained_index(total, &a->struct_names);
+  total = retained_index(total, &a->enum_names);
+  total = retained_index(total, &a->alias_names);
+  for (size_t i = 0; i < a->struct_count; ++i) total = retained_index(total, &a->structs[i].field_names);
+  for (size_t i = 0; i < a->enum_count; ++i) total = retained_index(total, &a->enums[i].variant_names);
+  return total;
+}
 static void analysis_interface_drop(DynAnalysisCache *cache, DynInterfaceCacheEntry **at) {
   DynInterfaceCacheEntry *entry = *at;
   *at = entry->next;
@@ -148,11 +205,8 @@ DynAnalysisSnapshot *dyn_analysis_module_put(DynAnalysisCache *cache, DynSource 
   const size_t limit = 16u * 1024u * 1024u;
   if (!dyn_work_step(&source->context, 0)) return NULL;
   if (!result.checked || ast->allocation_failed || source->length > limit) return NULL;
-  size_t bytes = source->length;
-  for (size_t i = 0; i < source->map_count; ++i) {
-    if (source->maps[i].original_length > limit - bytes) return NULL;
-    bytes += source->maps[i].original_length;
-  }
+  size_t bytes = retained_add(snapshot_bytes(source, ast), 1, sizeof(DynModuleSnapshotEntry));
+  if (bytes > limit) return NULL;
   DynModuleSnapshotEntry *entry = calloc(1, sizeof(*entry));
   DynAnalysisSnapshot *snapshot = calloc(1, sizeof(*snapshot));
   if (!entry || !snapshot) { free(entry); free(snapshot); return NULL; }
@@ -165,6 +219,7 @@ DynAnalysisSnapshot *dyn_analysis_module_put(DynAnalysisCache *cache, DynSource 
     while ((*last)->next) last = &(*last)->next;
     analysis_module_drop(cache, last);
   }
+  dyn_source_discard_syntax(source);
   snapshot->source = *source; snapshot->ast = *ast; snapshot->result = result;
   snapshot->references = 2;
   snapshot->source.context.diagnostic = NULL;
@@ -327,7 +382,7 @@ void dyn_analysis_cache_clear(DynAnalysisCache *cache) {
     cache->entries = entry->next;
     analysis_entry_free(entry);
   }
-  cache->count = 0;
+  cache->count = 0; cache->retained_bytes = 0;
   dyn_syntax_cache_clear(&cache->syntax);
 }
 DynAnalysisSnapshot *dyn_analysis_cache_get(DynAnalysisCache *cache,
@@ -347,6 +402,7 @@ DynAnalysisSnapshot *dyn_analysis_cache_get(DynAnalysisCache *cache,
       return entry->snapshot;
     }
     *at = entry->next;
+    cache->retained_bytes -= entry->bytes;
     analysis_entry_free(entry);
     --cache->count;
     break;
@@ -363,9 +419,13 @@ DynAnalysisSnapshot *dyn_analysis_cache_put(
   if (!result.parsed || ast->allocation_failed ||
       source->length > ANALYSIS_CACHE_SOURCE_LIMIT)
     return NULL;
+  size_t bytes = snapshot_bytes(source, ast);
+  if (diagnostics) bytes = retained_add(bytes, diagnostics->count, sizeof(*diagnostics->items));
+  if (bytes > ANALYSIS_CACHE_BYTE_LIMIT) return NULL;
   DynAnalysisCacheEntry *entry = calloc(1, sizeof(*entry));
   if (!entry)
     return NULL;
+  entry->bytes = bytes;
   entry->root = strdup(root);
   entry->snapshot = calloc(1, sizeof(*entry->snapshot));
   if (entry->snapshot)
@@ -394,20 +454,33 @@ DynAnalysisSnapshot *dyn_analysis_cache_put(
       copy->count = copy->capacity = diagnostics->count;
     }
   }
+  bytes = retained_add(bytes, 1, sizeof(*entry));
+  bytes = retained_add(bytes, strlen(entry->root) + 1, 1);
+  bytes = retained_add(bytes, entry->directory_count,
+                        sizeof(*entry->directories) + sizeof(*entry->directory_stamps));
+  bytes = retained_add(bytes, entry->file_count, sizeof(*entry->files));
+  for (size_t i = 0; i < entry->directory_count; ++i)
+    bytes = retained_add(bytes, strlen(entry->directories[i]) + 1, 1);
+  for (size_t i = 0; i < entry->file_count; ++i)
+    bytes = retained_add(bytes, strlen(entry->files[i]) + 1, 1);
+  if (bytes > ANALYSIS_CACHE_BYTE_LIMIT) goto fail;
+  entry->bytes = bytes;
   /* Build the entire replacement before modifying the cache or taking
    * ownership. */
   for (DynAnalysisCacheEntry **at = &cache->entries; *at; at = &(*at)->next)
     if (!strcmp(root, (*at)->root)) {
       DynAnalysisCacheEntry *old = *at;
       *at = old->next;
+      cache->retained_bytes -= old->bytes;
       analysis_entry_free(old);
       --cache->count;
       break;
     }
-  if (cache->count >= ANALYSIS_CACHE_LIMIT) {
+  while (cache->entries && (cache->count >= ANALYSIS_CACHE_LIMIT ||
+         bytes > ANALYSIS_CACHE_BYTE_LIMIT - cache->retained_bytes)) {
     /* Count and list are one invariant; corruption must not masquerade as a
      * cache miss or silently discard the new snapshot. */
-    if (cache->count != ANALYSIS_CACHE_LIMIT || !cache->entries)
+    if (cache->count > ANALYSIS_CACHE_LIMIT || !cache->entries)
       abort();
     DynAnalysisCacheEntry **oldest = &cache->entries;
     for (DynAnalysisCacheEntry **at = &cache->entries; *at; at = &(*at)->next)
@@ -415,9 +488,11 @@ DynAnalysisSnapshot *dyn_analysis_cache_put(
         oldest = at;
     DynAnalysisCacheEntry *old = *oldest;
     *oldest = old->next;
+    cache->retained_bytes -= old->bytes;
     analysis_entry_free(old);
     --cache->count;
   }
+  dyn_source_discard_syntax(source);
   entry->snapshot->source = *source;
   entry->snapshot->ast = *ast;
   entry->snapshot->result = result;
@@ -430,7 +505,7 @@ DynAnalysisSnapshot *dyn_analysis_cache_put(
   entry->used = ++cache->clock;
   entry->next = cache->entries;
   cache->entries = entry;
-  ++cache->count;
+  ++cache->count; cache->retained_bytes += bytes;
   return entry->snapshot;
 fail:
   analysis_entry_free(entry);

@@ -53,6 +53,11 @@ _dyn_unwind_set:
     stp x29, x30, [x0, #88]
     mov x1, sp
     str x1, [x0, #104]
+    // The Apple arm64 ABI preserves the low 64 bits of v8-v15.
+    stp d8, d9, [x0, #112]
+    stp d10, d11, [x0, #128]
+    stp d12, d13, [x0, #144]
+    stp d14, d15, [x0, #160]
     mov x0, #0
     ret
 
@@ -66,6 +71,10 @@ _dyn_unwind_jump:
     ldp x27, x28, [x9, #72]
     ldp x29, x30, [x9, #88]
     ldr x10, [x9, #104]
+    ldp d8, d9, [x9, #112]
+    ldp d10, d11, [x9, #128]
+    ldp d12, d13, [x9, #144]
+    ldp d14, d15, [x9, #160]
     mov sp, x10
     mov x0, #1
     ret
