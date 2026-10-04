@@ -12,7 +12,7 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.15
 
 `std/testing` imports work on macOS and Windows again: Linux-only temporary
 directory and path helpers are isolated behind their target guard.
