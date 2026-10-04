@@ -2695,7 +2695,7 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     failed =
         LLVMTargetMachineEmitToFile(tm, g.module, (char *)asm_path, 0, &error);
   if (!failed)
-    failed = thin_bitcode ? LLVMWriteBitcodeToFile(g.module, object_path)
+    failed = thin_bitcode ? dyn_write_thin_bitcode(g.module, object_path)
                           : LLVMTargetMachineEmitToFile(
                                 tm, g.module, (char *)object_path, 1, &error);
   if (!failed && g.wasm) {
@@ -2774,7 +2774,8 @@ int dyn_link_executable_objects(const DynContext *context,
                                 size_t object_count, const char *output_path,
                                 const char *const *link_inputs,
                                 size_t link_input_count, bool release,
-                                bool verbose) {
+                                bool verbose, const char *lto_cache,
+                                unsigned lto_jobs) {
   char temporary[4096], runtime[4096], support[4096], executable[4096];
   bool dynamic = false;
   for (size_t i = 0; i < link_input_count; ++i) {
@@ -2852,9 +2853,10 @@ int dyn_link_executable_objects(const DynContext *context,
     fputc('\n', stderr);
   }
   char **arguments =
-      calloc(object_count + link_input_count + 18, sizeof(*arguments));
+      calloc(object_count + link_input_count + 21, sizeof(*arguments));
   if (!arguments)
     return 2;
+  char cache_argument[8192], jobs_argument[64];
   size_t argument_count = 0;
   arguments[argument_count++] = (char *)linker;
   if (darwin) {
@@ -2878,8 +2880,20 @@ int dyn_link_executable_objects(const DynContext *context,
     arguments[argument_count++] = "console";
   } else {
     arguments[argument_count++] = "--gc-sections";
-    if (thin)
+    if (thin) {
       arguments[argument_count++] = "--lto-O2";
+      if (lto_jobs) {
+        snprintf(jobs_argument, sizeof(jobs_argument), "--thinlto-jobs=%u", lto_jobs);
+        arguments[argument_count++] = jobs_argument;
+      }
+      if (lto_cache && snprintf(cache_argument, sizeof(cache_argument),
+                               "--thinlto-cache-dir=%s/thinlto", lto_cache) <
+                           (int)sizeof(cache_argument)) {
+        arguments[argument_count++] = cache_argument;
+        arguments[argument_count++] =
+            "--thinlto-cache-policy=cache_size=10%:cache_size_bytes=1g:prune_after=168h";
+      }
+    }
   }
   arguments[argument_count++] = "-o";
   arguments[argument_count++] = temporary;
@@ -2940,7 +2954,7 @@ int dyn_link_executable(const DynContext *context, const char *object_path,
 
   return dyn_link_executable_objects(context, &object_path, 1, output_path,
                                      link_inputs, link_input_count, release,
-                                     verbose);
+                                     verbose, NULL, 0);
 }
 /* Browser modules use a static Wasm link, not a native dynamic library. */
 static int link_wasm(const DynContext *context, const char *object_path, const char *output_path,

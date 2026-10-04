@@ -21,6 +21,8 @@ def flags(name, default=''):
 
 cc = flags('CC', 'cc')
 clang = flags('CLANG', 'clang')
+cxx = flags('CXX', 'clang++' if sys.platform == 'win32' else 'c++')
+cxxlibs = flags('CXXLIBS', '-lc++' if sys.platform in ('darwin', 'win32') else '-lstdc++')
 cflags = flags('CFLAGS', '-std=c11 -Wall -Wextra -Wpedantic -Werror -g')
 if os.name != 'nt':
     # host.h exposes POSIX helpers even in independently compiled test units.
@@ -58,6 +60,11 @@ def is_link_flag(flag):
 object_cppflags = [f for f in cppflags if not is_link_flag(f)]
 link_cppflags = [f for f in cppflags if is_link_flag(f)]
 
+# LLVM's C API cannot emit the summary needed by ThinLTO.
+add('thinlto.o', [COMPILER/'src/thinlto.cpp'],
+    [*cxx, *object_cppflags, *llvm('--cxxflags'), *flags('CXXFLAGS'), '-O2', '-c',
+     COMPILER/'src/thinlto.cpp', '-o', BUILD/'thinlto.o'])
+
 def compiler_objects(kind, optimize):
     names = []
     for source in sources:
@@ -65,11 +72,11 @@ def compiler_objects(kind, optimize):
         add(name, [source, *headers],
             [*cc, *object_cppflags, *cflags, *optimize, f'-I{COMPILER}/src', f'-I{TS_DIR}/src', '-c', source, '-o', BUILD/name])
         names.append(name)
-    return names + ['tree-sitter-dyn-parser.o', 'tree-sitter-dyn-scanner.o']
+    return names + ['thinlto.o', 'tree-sitter-dyn-parser.o', 'tree-sitter-dyn-scanner.o']
 
 def compiler_link(name, objects):
     add(name, [BUILD/o for o in objects],
-        [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, '-ltree-sitter', *llvm_ldflags, *llvm_libs, '-pthread', '-o', BUILD/name],
+        [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, '-ltree-sitter', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', BUILD/name],
         objects)
 
 compiler_link('dyn-release', compiler_objects('release', ['-O2']))
@@ -135,8 +142,8 @@ add('tree-sitter-dyn-bridge.o', [f'{COMPILER}/runtime/tree_sitter_bridge.c'],
 add('llvm-bridge.o', [f'{COMPILER}/runtime/llvm_bridge.c'],
     [*cc, '-O2', '-fno-stack-protector', '-c', f'{COMPILER}/runtime/llvm_bridge.c', '-o', f'{BUILD}/llvm-bridge.o'])
 
-add('dyn-sanitize', [*sources, *headers, *ts_sources],
-    [*cc, *cppflags, *cflags, '-O1', '-fno-omit-frame-pointer', '-fsanitize=address,undefined', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', *sources, *ts_sources, '-ltree-sitter', *llvm_ldflags, *llvm_libs, '-pthread', '-o', f'{BUILD}/dyn-sanitize'])
+add('dyn-sanitize', [BUILD/'thinlto.o', *sources, *headers, *ts_sources],
+    [*cc, *cppflags, *cflags, '-O1', '-fno-omit-frame-pointer', '-fsanitize=address,undefined', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', *sources, *ts_sources, BUILD/'thinlto.o', '-ltree-sitter', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', f'{BUILD}/dyn-sanitize'], needs=['thinlto.o'])
 
 add('dynrt_wasm.o', [f'{COMPILER}/runtime/wasm_support.c'],
     [*clang, '--target=wasm32-unknown-unknown', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasm_support.c', '-o', f'{BUILD}/dynrt_wasm.o'])
@@ -180,8 +187,8 @@ add('frontend-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILE
 add('analysis-cache-test', [f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/tests/fault-alloc.h', f'{COMPILER}/src/analysis_cache.c', *frontend, *headers, *ts_sources],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/src/analysis_cache.c', *frontend, *ts_sources, '-ltree-sitter', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/analysis-cache-test'])
 
-add('codegen-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', *headers, *ts_sources],
-    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', *ts_sources, '-ltree-sitter', *llvm_ldflags, *llvm_libs, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'])
+add('codegen-failure-test', [BUILD/'thinlto.o', f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', *headers, *ts_sources],
+    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', *ts_sources, BUILD/'thinlto.o', '-ltree-sitter', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'], needs=['thinlto.o'])
 
 add('project-failure-test', [f'{COMPILER}/tests/project-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', *headers, *ts_sources],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', f'{COMPILER}/tests/project-failure.c', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', *ts_sources, '-ltree-sitter', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/project-failure-test'])
@@ -195,8 +202,8 @@ add('scope-index-test', [f'{COMPILER}/tests/scope-index.c', f'{COMPILER}/tests/f
 add('unwind-capacity-test', [f'{COMPILER}/tests/unwind-capacity.c', f'{COMPILER}/runtime/reference_support.c'],
     [*cc, *cppflags, *cflags, '-ffreestanding', '-fno-builtin', 'tests/unwind-capacity.c', '-o', f'{BUILD}/unwind-capacity-test'])
 
-add('dyn-per-file', [*sources, *headers, *ts_sources],
-    [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', f'-I{TS_DIR}/src', *sources, *ts_sources, '-ltree-sitter', *llvm_ldflags, *llvm_libs, '-pthread', '-o', BUILD/'dyn-per-file'])
+add('dyn-per-file', [BUILD/'thinlto.o', *sources, *headers, *ts_sources],
+    [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', f'-I{TS_DIR}/src', *sources, *ts_sources, BUILD/'thinlto.o', '-ltree-sitter', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', BUILD/'dyn-per-file'], needs=['thinlto.o'])
 
 add('build-plan-test', [COMPILER/'tests/build-plan.c', COMPILER/'src/build.c', *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', COMPILER/'tests/build-plan.c', COMPILER/'src/build.c', '-pthread', '-Wl,--wrap=waitpid', '-o', BUILD/'build-plan-test'])

@@ -12,6 +12,24 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.13
+
+### Reuse release-link optimization
+
+On x86_64 Linux with LLD, release builds now emit real ThinLTO summaries and
+module hashes. Previously, plain bitcode silently selected full LTO and repeated
+whole-program optimization whenever linking ran. Native backend results now use
+a periodically pruned cache; `--no-cache` bypasses it and `--jobs` limits backend
+workers as well as frontend workers.
+
+In a local LLVM 23 comparison on DNA, a cached relink fell from 4.50 seconds to
+0.52 seconds. Cold builds and root-module edits still took about 6.4 seconds;
+this change does not claim the same speedup for those workloads. Cache reuse and
+dependency invalidation were also checked with LLVM/LLD 19.
+
+Building the compiler from source now needs a C++ compiler and LLVM development
+headers for the small ThinLTO writer. Packaged SDK users need no additional tools.
+
 ## 0.1.0-preview.12
 
 ### Compiler correctness and scaling

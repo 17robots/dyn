@@ -552,11 +552,13 @@ static int execute_command(DynOptions *options, const char *compiler) {
   DynInterface *interfaces = NULL;
   size_t interface_count = 0;
   bool modular = cacheable;
+  char cache_root[4096];
+  const char *cache = NULL;
   if (modular) {
     char *root = realpath(options->input, NULL);
-    char cache_root[4096];
-    const char *cache = !options->no_cache && dyn_cache_directory(cache_root, sizeof(cache_root))
-                            ? cache_root : NULL;
+    cache = !options->no_cache &&
+                    dyn_cache_directory(cache_root, sizeof(cache_root))
+                ? cache_root : NULL;
     if (!root) result = 2;
     int prepared = !result ? prepare_interfaces(&sources, options, cache,
                                                 &interfaces, &interface_count)
@@ -633,7 +635,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
             ? dyn_link_executable_objects(
                   &context, (const char *const *)module_objects, module_count,
                   output, options->link_inputs, options->link_input_count,
-                  options->release, options->verbose)
+                  options->release, options->verbose, cache, options->jobs)
             : dyn_link_executable(&context, object, output,
                                   options->link_inputs,
                                   options->link_input_count, options->release,
