@@ -219,7 +219,8 @@ int dyn_link_executable_objects(const DynContext *context,
                                 size_t object_count, const char *output_path,
                                 const char *const *link_inputs,
                                 size_t link_input_count, bool release,
-                                bool verbose);
+                                bool verbose, const char *lto_cache,
+                                unsigned lto_jobs);
 int dyn_link_shared(const DynContext *context, const char *object_path,
                     const char *output_path, const char *const *link_inputs,
                     size_t link_input_count, bool verbose);

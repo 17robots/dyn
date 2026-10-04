@@ -242,6 +242,8 @@ extern void LLVMDisposeTargetData(LLVMTargetDataRef);
 extern void LLVMSetDataLayout(LLVMModuleRef, const char *);
 extern int LLVMTargetMachineEmitToFile(LLVMTargetMachineRef, LLVMModuleRef,
                                        char *, int, char **);
+/* ThinLTO summary/hash writer implemented through the LLVM C++ API. */
+extern int dyn_write_thin_bitcode(LLVMModuleRef module, const char *path);
 extern int LLVMWriteBitcodeToFile(LLVMModuleRef, const char *);
 extern void LLVMSetTarget(LLVMModuleRef, const char *);
 extern int LLVMVerifyModule(LLVMModuleRef, int, char **);

@@ -15,6 +15,13 @@ PATH, and avoids oversized LLVM values for large struct/array copies and literal
 assignments. Unchanged modules reuse the cache; source edits still rebuild their
 module. Use `--timings` to inspect compilation and `--no-cache` to force a rebuild.
 
+On x86_64 Linux with LLD, release builds emit ThinLTO summaries and cache native
+backend results under `DYN_CACHE_DIR` (or the normal Dyn cache). Relinking reuses
+unchanged backend work; `--no-cache` bypasses this cache too. LLD periodically
+prunes the backend cache to 10% of available disk space or 1 GiB, whichever is
+smaller, and removes entries unused for seven days. `--jobs` also limits ThinLTO
+backend workers. Cold release builds still perform LLVM optimization.
+
 ## Install a preview
 
 | System | Download from the release |
@@ -155,7 +162,9 @@ Source builds require their build-time libraries and linker to remain installed.
 
 ### Linux x64 (Ubuntu 24.04)
 
-Run in Bash. Install LLVM/Clang/LLD 19 and the pinned Tree-sitter runtime:
+Run in Bash. Building requires a C++ compiler and LLVM development headers for
+the ThinLTO writer, plus the C compiler. Install LLVM/Clang/LLD 19 and the pinned
+Tree-sitter runtime:
 
 ```sh
 sudo apt-get update
