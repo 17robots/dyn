@@ -84,21 +84,35 @@ fn main() {
     if not args.host_only:
         # Link the WASI variant: accidental std/io -> std/os/wasi -> std/io cycles
         # and missing runtime imports must fail this check.
-        run(DYN, 'build', project, '--target', 'wasm32-wasi', '--quiet', '--no-cache',
-            '--output', root/'streams.wasm')
-        node = shutil.which('node')
-        if node:
-            runner = root/'wasi.cjs'
-            runner.write_text("""const { WASI } = require('node:wasi');
-    const fs = require('node:fs');
-    const wasi = new WASI({version: 'preview1', returnOnExit: true});
-    const moduleBytes = fs.readFileSync(process.argv[2]);
-    const instance = new WebAssembly.Instance(new WebAssembly.Module(moduleBytes), wasi.getImportObject());
-    process.exitCode = wasi.start(instance);
-    """)
-            result = run(node, '--no-warnings', runner, root/'streams.wasm', input=b'wasi\nlast')
-            assert (result.stdout, result.stderr) == (b'[wasi]\n[last]\n', b'done\n')
-            print('PASS WASI standard-stream execution')
+        # Both public APIs must share one declaration for each runtime symbol.
+        (project/'wasi.dyn').write_text('''#target(kernel: wasi)
+use "std/os/wasi"
+fn check_descriptors() {
+  bytes: [1]u8 = []
+  empty := wasi.read(0, bytes[..0])
+  if empty.status != io.Status.Complete { #panic("empty descriptor read") }
+  invalid := wasi.write(4294967295, "x")
+  if invalid.status != io.Status.Error || invalid.error == 0 { #panic("descriptor error") }
+}
+''')
+        source = project/'main.dyn'
+        source.write_text(source.read_text().replace('  clock :=', '  check_descriptors()\n  clock :='))
+        for options in ([], ['--release']):
+            run(DYN, 'build', project, '--target', 'wasm32-wasi', '--quiet', '--no-cache',
+                '--output', root/'streams.wasm', *options)
+            node = shutil.which('node')
+            if node:
+                runner = root/'wasi.cjs'
+                runner.write_text("""const { WASI } = require('node:wasi');
+        const fs = require('node:fs');
+        const wasi = new WASI({version: 'preview1', returnOnExit: true});
+        const moduleBytes = fs.readFileSync(process.argv[2]);
+        const instance = new WebAssembly.Instance(new WebAssembly.Module(moduleBytes), wasi.getImportObject());
+        process.exitCode = wasi.start(instance);
+        """)
+                result = run(node, '--no-warnings', runner, root/'streams.wasm', input=b'wasi\nlast')
+                assert (result.stdout, result.stderr) == (b'[wasi]\n[last]\n', b'done\n')
+                print('PASS WASI standard-stream execution')
     project = root/'portable'; project.mkdir()
     (project/'main.dyn').write_text('''use "std/io"
 use "std/time"

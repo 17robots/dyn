@@ -1,7 +1,5 @@
 #target(kernel: wasi)
-
-extern fn standard_read "dyn_wasi_read"(fd: u32, data: rawptr, length: usize, received: *usize) u32
-extern fn standard_write "dyn_wasi_write"(fd: u32, data: rawptr, length: usize, written: *usize) u32
+use "std/os/wasi/raw" wasi_raw
 
 fn stdin_read(data: rawptr, destination: []u8) Result {
   _ = data
@@ -9,7 +7,7 @@ fn stdin_read(data: rawptr, destination: []u8) Result {
     return Result{ status: Status.Complete }
   }
   count: usize = 0
-  error := standard_read(0, #cast(rawptr) &destination[0], #len(destination), &count)
+  error := wasi_raw.read(0, #cast(rawptr) &destination[0], #len(destination), &count)
   if error != 0 {
     return Result{ transferred: count, error: 0 - #cast(isize) error, kind: errors.wasi(0 - #cast(isize) error), status: Status.Error }
   }
@@ -24,7 +22,7 @@ fn write_descriptor(descriptor: u32, source: []const u8) Result {
     return Result{ status: Status.Complete }
   }
   count: usize = 0
-  error := standard_write(descriptor, #cast(rawptr) &source[0], #len(source), &count)
+  error := wasi_raw.write(descriptor, #cast(rawptr) &source[0], #len(source), &count)
   if error != 0 {
     return Result{ transferred: count, error: 0 - #cast(isize) error, kind: errors.wasi(0 - #cast(isize) error), status: Status.Error }
   }

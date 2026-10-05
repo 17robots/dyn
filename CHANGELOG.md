@@ -12,6 +12,15 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.17
+
+- Fix using `std/io` standard streams and `std/os/wasi` together: shared raw
+  declarations prevent duplicate foreign symbols without changing public APIs.
+- Fix debug builds where a hoisted stack slot retained another function's debug
+  location and LLVM rejected the module.
+- See the [migration guide](docs/migrations/0.1.0-preview.17.md) for standard
+  stream replacements in older examples and explicit arena ownership transfer.
+
 ## 0.1.0-preview.16
 
 This release changes allocation names and adds typed allocation. Follow the

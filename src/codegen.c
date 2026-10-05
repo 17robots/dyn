@@ -69,6 +69,9 @@ static LLVMValueRef gen_stack_slot(Gen *g, LLVMTypeRef type, const char *name) {
     LLVMPositionBuilderBefore(g->stack_builder, first);
   else
     LLVMPositionBuilderAtEnd(g->stack_builder, entry);
+  /* Repositioning can retain another function's debug location. These
+   * hoisted storage slots have no source statement of their own. */
+  LLVMSetCurrentDebugLocation2(g->stack_builder, NULL);
   return LLVMBuildAlloca(g->stack_builder, type, name);
 }
 
