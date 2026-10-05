@@ -1,8 +1,9 @@
 # Primitive allocator design and implementation
 
 Dyn now has an experimental `Allocator` primitive and typed allocation builtins
-in the local source checkout. This document records the agreed design, the first
-implementation, and its limits. It is not a published-release announcement.
+available in SDK preview 16. This document records the agreed design, initial
+implementation evidence, and limits. See the [migration guide](migrations/0.1.0-preview.16.md)
+for upgrading from earlier SDKs.
 
 ## Agreed direction
 

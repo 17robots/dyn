@@ -1,7 +1,7 @@
 # Arena-first memory APIs
 
-This is the current local-source policy, not a published SDK release. It supersedes
-the initial allocator builtin names. The language supplies typed allocation;
+This policy ships in SDK preview 16. It supersedes the initial unreleased allocator
+builtin names. See the [versioned migration guide](migrations/0.1.0-preview.16.md). The language supplies typed allocation;
 concrete owners and application code decide lifetimes and failure policy.
 
 ## Compiler, std, and application responsibilities
