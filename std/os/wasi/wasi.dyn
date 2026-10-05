@@ -1,8 +1,7 @@
 #target(kernel: wasi)
+use "std/os/wasi/raw" wasi_raw
 use "std/io" io
 use "std/mem" mem
-extern fn native_write "dyn_wasi_write"(fd: u32, data: rawptr, length: usize, written: *usize) u32
-extern fn native_read "dyn_wasi_read"(fd: u32, data: rawptr, length: usize, received: *usize) u32
 pub extern fn close "dyn_wasi_close"(fd: u32) u32
 extern fn native_sizes "dyn_wasi_args_sizes"(count: *usize, bytes: *usize) u32
 extern fn native_args "dyn_wasi_args"(pointers: rawptr, bytes: rawptr) u32
@@ -16,7 +15,7 @@ pub fn write(fd: u32, bytes: []const u8) io.Result {
     return io.Result{ status: io.Status.Complete }
   }
   count: usize = 0
-  error := native_write(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
+  error := wasi_raw.write(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
   if error != 0 {
     return io.Result{ transferred: count, error: 0 - #cast(isize) error, status: io.Status.Error }
   }
@@ -27,7 +26,7 @@ pub fn read(fd: u32, bytes: []u8) io.Result {
     return io.Result{ status: io.Status.Complete }
   }
   count: usize = 0
-  error := native_read(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
+  error := wasi_raw.read(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
   if error != 0 {
     return io.Result{ transferred: count, error: 0 - #cast(isize) error, status: io.Status.Error }
   }

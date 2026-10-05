@@ -1,0 +1,5 @@
+#target(kernel: wasi)
+
+// Shared runtime bindings. Prefer std/io or std/os/wasi for checked slice APIs.
+pub extern fn read "dyn_wasi_read"(fd: u32, data: rawptr, length: usize, received: *usize) u32
+pub extern fn write "dyn_wasi_write"(fd: u32, data: rawptr, length: usize, written: *usize) u32
