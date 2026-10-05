@@ -78,10 +78,17 @@ bin_path = "bin"
 [tools."github:17robots/dyn".platforms]
 '''+''.join(f'{key} = {{ asset_pattern = "{path.name}", checksum = "sha256:{sha(path)}" }}\n' for key,path in platforms.items())
         (output/'mise.toml').write_text(config)
+        migration = ROOT/'docs/migrations'/f'{version}.md'
+        migration_notes = ''
+        if migration.is_file():
+            migration_asset = f'dyn-{version}-migration.md'
+            shutil.copy2(migration, public/migration_asset)
+            migration_notes = (f'\n## Migration\n\nRead the [migration guide](https://github.com/17robots/dyn/releases/download/v{version}/{migration_asset}) '
+                               'before upgrading existing code. The guide is also included under `docs/migrations` in each SDK.\n')
         checksums = ''.join(f'{sha(p)}  public/{p.name}\n' for p in sorted(public.iterdir()))
         (output/'SHA256SUMS').write_text(checksums)
         notes = f'''# Dyn {version}
-
+{migration_notes}
 Download the archive for your system, extract it, and add its `bin` directory to PATH.
 The compiler, standard library, runtime and host linker are included.
 

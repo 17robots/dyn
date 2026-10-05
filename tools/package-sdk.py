@@ -10,8 +10,9 @@ def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 with tempfile.TemporaryDirectory(prefix='dyn-sdk-') as temporary:
     work=Path(temporary);sdk=work/'stage/dyn-sdk'
     subprocess.run(['python3',str(ROOT/'tools/install.py')],env=dict(os.environ,BUILD=str(BUILD),DESTDIR=str(work/'stage'),PREFIX='/dyn-sdk'),check=True)
-    for name in ('README.md','LICENSE','THIRD_PARTY_NOTICES.md','grammar.lock.json'):
+    for name in ('README.md','CHANGELOG.md','LICENSE','THIRD_PARTY_NOTICES.md','grammar.lock.json'):
         shutil.copy2(ROOT/name,sdk/name)
+    shutil.copytree(ROOT/'docs/migrations', sdk/'docs/migrations')
     spec=importlib.util.spec_from_file_location('bundle_linux',ROOT/'tools/bundle-linux.py')
     bundler=importlib.util.module_from_spec(spec);spec.loader.exec_module(bundler)
     distribution=bundler.bundle(sdk)

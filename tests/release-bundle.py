@@ -45,6 +45,19 @@ with tempfile.TemporaryDirectory(prefix='dyn-release-bundle-') as directory:
     for line in (output/'SHA256SUMS').read_text().splitlines():
         digest,name=line.split('  ')
         assert module.sha(output/name)==digest
+    # A version-specific guide is linked, attached, and covered by checksums.
+    saved_root = module.ROOT
+    module.ROOT = work/'source'
+    guide = module.ROOT/'docs/migrations'/f'{version}.md'
+    guide.parent.mkdir(parents=True)
+    guide.write_text('# Migration fixture\nPreserve failure policy.\n')
+    documented = work/'documented-release'
+    module.prepare(version,evidence,native,documented,hosts)
+    guide_asset = f'dyn-{version}-migration.md'
+    assert (documented/'public'/guide_asset).read_text() == guide.read_text()
+    assert guide_asset in (documented/'RELEASE-NOTES.md').read_text()
+    assert module.sha(guide)+'  public/'+guide_asset in (documented/'SHA256SUMS').read_text()
+    module.ROOT = saved_root
     def rejected():
         destination=work/'rejected'
         try:
