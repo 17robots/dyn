@@ -405,6 +405,9 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
         a->expressions[i].item_start, a->expressions[i].item_count,
         a->expressions[i].span};
   for (size_t i = 0; i < ir->expression_count; ++i)
+    if (ir->expressions[i].kind == DYN_EXPR_ALLOC)
+      ir->expressions[i].integer = lower_type(a, (DynType)ir->expressions[i].integer);
+  for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
       ir->expressions[i].kind = DYN_EXPR_NIL;
       ir->expressions[i].type = DYN_TYPE_VOID;

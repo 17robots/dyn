@@ -175,7 +175,7 @@ static GenAbi *abi_plan(Gen *g, DynType result, const DynType *types, uint32_t c
         for (unsigned k = 0; k < v.count; ++k) {
           int kind = LLVMGetTypeKind(v.parts[k]);
           if (kind == 2 || kind == 3 || kind == 13) ++sse; /* float, double, vector */
-          else integers += v.mode == ABI_DIRECT && (dyn_type_is_slice(v.source) || v.source == DYN_TYPE_STRING || v.source == DYN_TYPE_ANY) ? 2 : 1;
+          else integers += v.mode == ABI_DIRECT && (dyn_type_is_slice(v.source) || v.source == DYN_TYPE_STRING || v.source == DYN_TYPE_ANY || v.source == DYN_TYPE_ALLOCATOR) ? 2 : dyn_type_is_alloc_result(v.source) ? (dyn_type_is_slice(g->ir->pointers[v.source - DYN_TYPE_ALLOC_RESULT_BASE].pointee) ? 4 : 3) : 1;
         }
         if (v.mode == ABI_COERCE && (gp + integers > 6 || fp + sse > 8)) {
           v.mode = ABI_INDIRECT; v.byval = true; v.count = 1;

@@ -71,7 +71,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     if chunk != 1 { check(encoded.data, expected.data, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
-    destination := memory.arena_push(&owned.arena, #len(expected.data), 1)[..#len(expected.data)]
+    destination := memory.arena_push_or_panic(&owned.arena, #len(expected.data), 1)[..#len(expected.data)]
     result := deflate.inflate(destination, encoded.data)
     require(result.ok && result.written == #len(expected.data), "one-shot inflate")
     for i in 0..#len(destination) { require(destination[i] == expected.data[i], "one-shot output") }

@@ -31,7 +31,7 @@ pub fn decompress_into(destination: []u8, source: []const u8) Result {
 pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResult {
   mark := memory.arena_mark(arena)
   capacity := compress_bound(#len(source))
-  allocation := memory.arena_try_push_uninit(arena, capacity, 1)
+  allocation := memory.arena_push_uninit(arena, capacity, 1)
   if !allocation.ok {
     return BufferResult{}
   }
@@ -49,7 +49,7 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
     return BufferResult{}
   }
   capacity := #cast(usize) size.size
-  allocation := memory.arena_try_push_uninit(arena, capacity, 1)
+  allocation := memory.arena_push_uninit(arena, capacity, 1)
   if !allocation.ok {
     return BufferResult{}
   }

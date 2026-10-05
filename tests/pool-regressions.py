@@ -13,22 +13,22 @@ CASES = {
   storage: [40]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..320])
-  pool := memory.pool_init(&arena, 17, 16, 8)
+  pool := memory.pool_init_or_panic(&arena, 17, 16, 8)
   if memory.arena_used(&arena) != 275 || arena.owns_memory { #panic("POOL STORAGE ACCOUNTING") }
   if #len(pool.list.occupied) != 3 { #panic("BITMAP CAPACITY") }
   slots: [17]rawptr = []
   for i in 0..17 {
-    slots[i] = memory.pool_acquire(&pool)
+    slots[i] = memory.pool_acquire_or_panic(&pool)
     address := #cast(*u8) slots[i]
     payload := address[..16]
     for j in 0..16 { payload[j] = 255 }
   }
-  if memory.pool_try_acquire(&pool) != nil || memory.pool_available(&pool) != 0 { #panic("EXHAUSTION") }
+  if memory.pool_acquire(&pool) != nil || memory.pool_available(&pool) != 0 { #panic("EXHAUSTION") }
   memory.pool_release(&pool, nil)
   for i in 0..17 { memory.pool_release(&pool, slots[i]) }
   if memory.pool_available(&pool) != 17 { #panic("RELEASE COUNT") }
   for i in 0..17 {
-    slot := memory.pool_acquire(&pool)
+    slot := memory.pool_acquire_or_panic(&pool)
     if slot != slots[16 - i] { #panic("REUSE ORDER") }
   }
   for i in 0..17 { memory.pool_release(&pool, slots[i]) }
@@ -41,35 +41,35 @@ CASES = {
   list := memory.free_list_init(buffer[..64], 8, 8)
   if list.slot_count != 8 || #len(list.occupied) != 0 { #panic("BUFFER CAPACITY CHANGED") }
   borrowed: [8]rawptr = []
-  for i in 0..8 { borrowed[i] = memory.free_list_alloc(&list) }
-  if memory.free_list_try_alloc(&list) != nil { #panic("BUFFER EXHAUSTION") }
+  for i in 0..8 { borrowed[i] = memory.free_list_alloc_or_panic(&list) }
+  if memory.free_list_alloc(&list) != nil { #panic("BUFFER EXHAUSTION") }
   for i in 0..8 { memory.free_list_free(&list, borrowed[i]) }
   if list.free_count != 8 { #panic("BUFFER RELEASE COUNT") }
-  if memory.free_list_alloc(&list) != borrowed[7] { #panic("BUFFER REUSE") }
+  if memory.free_list_alloc_or_panic(&list) != borrowed[7] { #panic("BUFFER REUSE") }
 }
 ''', None),
     'exact-arena': ('''fn main() {
   storage: [8]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..64])
-  pool := memory.pool_init(&arena, 8, 8, 8)
+  pool := memory.pool_init_or_panic(&arena, 8, 8, 8)
   if memory.arena_used(&arena) != 64 || arena.allocation_failures != 0 { #panic("EXACT ARENA ACCOUNTING") }
   if #len(pool.list.occupied) != 0 { #panic("EXACT ARENA METADATA") }
   slots: [8]rawptr = []
-  for i in 0..8 { slots[i] = memory.pool_acquire(&pool) }
-  if memory.pool_try_acquire(&pool) != nil { #panic("EXACT ARENA EXHAUSTION") }
+  for i in 0..8 { slots[i] = memory.pool_acquire_or_panic(&pool) }
+  if memory.pool_acquire(&pool) != nil { #panic("EXACT ARENA EXHAUSTION") }
   for i in 0..8 { memory.pool_release(&pool, slots[i]) }
   if memory.pool_available(&pool) != 8 { #panic("EXACT ARENA RELEASE") }
-  if memory.pool_acquire(&pool) != slots[7] { #panic("EXACT ARENA REUSE") }
+  if memory.pool_acquire_or_panic(&pool) != slots[7] { #panic("EXACT ARENA REUSE") }
 }
 ''', None),
     'exact-arena-double-free': ('''fn main() {
   storage: [8]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..64])
-  list := memory.free_list_from_arena(&arena, 8, 8, 8)
-  first := memory.free_list_alloc(&list)
-  second := memory.free_list_alloc(&list)
+  list := memory.free_list_from_arena_or_panic(&arena, 8, 8, 8)
+  first := memory.free_list_alloc_or_panic(&list)
+  second := memory.free_list_alloc_or_panic(&list)
   memory.free_list_free(&list, first)
   memory.free_list_free(&list, second)
   memory.free_list_free(&list, first)
@@ -79,9 +79,9 @@ CASES = {
   storage: [16]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..128])
-  pool := memory.pool_init(&arena, 3, 16, 8)
-  first := memory.pool_acquire(&pool)
-  second := memory.pool_acquire(&pool)
+  pool := memory.pool_init_or_panic(&arena, 3, 16, 8)
+  first := memory.pool_acquire_or_panic(&pool)
+  second := memory.pool_acquire_or_panic(&pool)
   memory.pool_release(&pool, first)
   memory.pool_release(&pool, second)
   memory.pool_release(&pool, first)
@@ -91,7 +91,7 @@ CASES = {
   storage: [16]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..128])
-  list := memory.free_list_from_arena(&arena, 3, 16, 8)
+  list := memory.free_list_from_arena_or_panic(&arena, 3, 16, 8)
   memory.free_list_free(&list, #cast(rawptr) &list.backing[0])
 }
 ''', 'free-list double free'),
@@ -99,9 +99,9 @@ CASES = {
   storage: [32]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..256])
-  first := memory.pool_init(&arena, 3, 16, 8)
-  second := memory.pool_init(&arena, 3, 16, 8)
-  slot := memory.pool_acquire(&second)
+  first := memory.pool_init_or_panic(&arena, 3, 16, 8)
+  second := memory.pool_init_or_panic(&arena, 3, 16, 8)
+  slot := memory.pool_acquire_or_panic(&second)
   memory.pool_release(&first, slot)
 }
 ''', 'pointer does not belong to free list'),
@@ -109,8 +109,8 @@ CASES = {
   storage: [16]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..128])
-  pool := memory.pool_init(&arena, 3, 16, 8)
-  address := #cast(*u8) memory.pool_acquire(&pool)
+  pool := memory.pool_init_or_panic(&arena, 3, 16, 8)
+  address := #cast(*u8) memory.pool_acquire_or_panic(&pool)
   slot := address[..16]
   memory.pool_release(&pool, #cast(rawptr) &slot[1])
 }
@@ -119,7 +119,7 @@ CASES = {
   storage: [8]u64 = []
   bytes := #cast(*u8) &storage[0]
   list := memory.free_list_init(bytes[..64], 8, 8)
-  slot := memory.free_list_alloc(&list)
+  slot := memory.free_list_alloc_or_panic(&list)
   memory.free_list_free(&list, slot)
   memory.free_list_free(&list, slot)
 }
@@ -128,9 +128,9 @@ CASES = {
   storage: [4]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..32])
-  pool := memory.pool_init(&arena, 1, 16, 8)
-  _ = memory.pool_acquire(&pool)
-  _ = memory.pool_acquire(&pool)
+  pool := memory.pool_init_or_panic(&arena, 1, 16, 8)
+  _ = memory.pool_acquire_or_panic(&pool)
+  _ = memory.pool_acquire_or_panic(&pool)
 }
 ''', 'free list exhausted'),
 }

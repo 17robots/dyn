@@ -11,6 +11,8 @@ pub enum Kind {
   Struct,
   Enum,
   Function,
+  AllocationHandle,
+  AllocationResult,
 }
 
 // Ensures the compiler emits its stable TypeInfo ABI while this module is compiled independently.
@@ -51,6 +53,8 @@ pub fn category(info: TypeInfo) Kind {
     TypeKind.Function => {
       return Kind.Function
     },
+    TypeKind.AllocationHandle => { return Kind.AllocationHandle },
+    TypeKind.AllocationResult => { return Kind.AllocationResult },
     _ => {
       return Kind.Invalid
     },
@@ -66,7 +70,7 @@ pub fn is_number(info: TypeInfo) bool {
 }
 pub fn is_aggregate(info: TypeInfo) bool {
   value_category := category(info)
-  return value_category == Kind.Array || value_category == Kind.Slice || value_category == Kind.Struct
+  return value_category == Kind.Array || value_category == Kind.Slice || value_category == Kind.Struct || value_category == Kind.AllocationResult
 }
 pub fn element_is(info: TypeInfo, element: TypeInfo) bool {
   return info.element_id != 0 && info.element_id == element.id

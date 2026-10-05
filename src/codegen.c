@@ -262,11 +262,24 @@ static uint64_t debug_type_size(Gen *g, DynType t) {
   }
   if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING) return 2 * g->pointer_bytes;
   if (t == DYN_TYPE_ANY) return 16;
+  if (t == DYN_TYPE_ALLOCATOR) return 2 * g->pointer_bytes;
+  if (dyn_type_is_alloc_result(t)) {
+    uint64_t bytes = debug_type_size(g, g->ir->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee);
+    return (bytes + 5 + g->pointer_bytes - 1) / g->pointer_bytes * g->pointer_bytes;
+  }
   return type_bits(g, t) / 8;
 }
 static LLVMTypeRef llvm_type(Gen *g, DynType t) {
   if (dyn_type_is_pointer(t) || t == DYN_TYPE_RAWPTR)
     return LLVMPointerTypeInContext(g->context, 0);
+  if (t == DYN_TYPE_ALLOCATOR) {
+    LLVMTypeRef fields[] = {LLVMPointerTypeInContext(g->context, 0), LLVMPointerTypeInContext(g->context, 0)};
+    return LLVMStructTypeInContext(g->context, fields, 2, 0);
+  }
+  if (dyn_type_is_alloc_result(t)) {
+    LLVMTypeRef fields[] = {llvm_type(g, g->ir->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee), LLVMInt32TypeInContext(g->context), LLVMInt1TypeInContext(g->context)};
+    return LLVMStructTypeInContext(g->context, fields, 3, 0);
+  }
   if (t == DYN_TYPE_ANY) {
     LLVMTypeRef fields[] = {LLVMInt64TypeInContext(g->context),
                             LLVMPointerTypeInContext(g->context, 0)};
@@ -332,6 +345,10 @@ static LLVMMetadataRef debug_type(Gen *g, DynType t) {
           debug_type(g, g->ir->pointers[t - DYN_TYPE_POINTER_BASE].pointee);
     return LLVMDIBuilderCreatePointerType(g->di_builder, pointee, pointer_bits, pointer_bits, 0,
                                           name, strlen(name));
+  }
+  if (t == DYN_TYPE_ALLOCATOR || dyn_type_is_alloc_result(t)) {
+    return LLVMDIBuilderCreateStructType(g->di_builder, g->di_file, name, strlen(name),
+        g->di_file, 0, debug_type_size(g, t) * 8, pointer_bits, 0, NULL, NULL, 0, 0, NULL, "", 0);
   }
   if (t == DYN_TYPE_ANY) {
     LLVMMetadataRef members[] = {
@@ -538,6 +555,7 @@ static uint64_t type_alignment(Gen *g, DynType t) {
   if (dyn_type_is_pointer(t) || dyn_type_is_slice(t) || dyn_type_is_function(t) ||
       t == DYN_TYPE_RAWPTR || t == DYN_TYPE_USIZE || t == DYN_TYPE_ISIZE ||
       t == DYN_TYPE_STRING) return g->pointer_bytes;
+  if (t == DYN_TYPE_ALLOCATOR || dyn_type_is_alloc_result(t)) return g->pointer_bytes;
   if (dyn_type_is_array(t))
     return type_alignment(g, ir_array(g, t)->element);
   if (dyn_type_is_struct(t))
@@ -1375,6 +1393,80 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
   }
   if (e->kind == DYN_EXPR_BITCAST)
     return LLVMBuildBitCast(g->builder, gen_expr(g, e->left), type, "bitcast");
+  if (e->kind == DYN_EXPR_ALLOCATOR) {
+    LLVMValueRef value = LLVMConstNull(type);
+    value = LLVMBuildInsertValue(g->builder, value, gen_expr(g, e->left), 0, "allocator.context");
+    return LLVMBuildInsertValue(g->builder, value, gen_expr(g, e->right), 1, "allocator.callback");
+  }
+  if (e->kind == DYN_EXPR_ALLOC) {
+    unsigned flags = e->op;
+    bool slice = (flags & DYN_ALLOC_SLICE) != 0, fallible = (flags & DYN_ALLOC_TRY) != 0;
+    LLVMTypeRef word = llvm_type(g, DYN_TYPE_USIZE), pointer = llvm_type(g, DYN_TYPE_RAWPTR),
+                error_type = llvm_type(g, DYN_TYPE_U32);
+    LLVMValueRef allocator = gen_expr(g, e->left);
+    LLVMValueRef count = slice ? gen_expr(g, e->right) : LLVMConstInt(word, 1, 0);
+    LLVMValueRef context = LLVMBuildExtractValue(g->builder, allocator, 0, "allocator.context"),
+                 callback = LLVMBuildExtractValue(g->builder, allocator, 1, "allocator.callback");
+    LLVMValueRef error_slot = gen_stack_slot(g, error_type, "allocation.error"),
+                 memory_slot = gen_stack_slot(g, pointer, "allocation.memory");
+    LLVMBuildStore(g->builder, LLVMConstInt(error_type, 0, 0), error_slot);
+    LLVMBuildStore(g->builder, LLVMConstNull(pointer), memory_slot);
+    LLVMBasicBlockRef valid = LLVMAppendBasicBlockInContext(g->context, g->function, "allocation.valid"),
+      invalid = LLVMAppendBasicBlockInContext(g->context, g->function, "allocation.invalid"),
+      sized = LLVMAppendBasicBlockInContext(g->context, g->function, "allocation.sized"),
+      overflow = LLVMAppendBasicBlockInContext(g->context, g->function, "allocation.overflow"),
+      invoke = LLVMAppendBasicBlockInContext(g->context, g->function, "allocation.invoke"),
+      initialized = LLVMAppendBasicBlockInContext(g->context, g->function, "allocation.initialize"),
+      done = LLVMAppendBasicBlockInContext(g->context, g->function, "allocation.done");
+    LLVMBuildCondBr(g->builder, LLVMBuildICmp(g->builder, 33, callback, LLVMConstNull(pointer), "allocator.valid"), valid, invalid);
+    LLVMPositionBuilderAtEnd(g->builder, invalid);
+    LLVMBuildStore(g->builder, LLVMConstInt(error_type, 3, 0), error_slot);
+    LLVMBuildBr(g->builder, done);
+    LLVMPositionBuilderAtEnd(g->builder, valid);
+    uint64_t element_size = debug_type_size(g, (DynType)e->integer);
+    uint64_t maximum = g->pointer_bytes == 4 ? UINT32_MAX : UINT64_MAX;
+    LLVMValueRef fits = LLVMBuildICmp(g->builder, 37, count, LLVMConstInt(word, maximum / element_size, 0), "allocation.fits");
+    LLVMBuildCondBr(g->builder, fits, sized, overflow);
+    LLVMPositionBuilderAtEnd(g->builder, overflow);
+    LLVMBuildStore(g->builder, LLVMConstInt(error_type, 4, 0), error_slot);
+    LLVMBuildBr(g->builder, done);
+    LLVMPositionBuilderAtEnd(g->builder, sized);
+    LLVMValueRef bytes = LLVMBuildMul(g->builder, count, LLVMConstInt(word, element_size, 0), "allocation.bytes");
+    LLVMBuildCondBr(g->builder, LLVMBuildICmp(g->builder, 32, count, LLVMConstInt(word, 0, 0), "allocation.empty"), done, invoke);
+    LLVMPositionBuilderAtEnd(g->builder, invoke);
+    LLVMTypeRef params[] = {pointer, word, word, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(pointer, params, 4, 0);
+    LLVMValueRef args[] = {context, bytes, LLVMConstInt(word, type_alignment(g, (DynType)e->integer), 0), error_slot};
+    LLVMValueRef memory = emit_call(g, signature, callback, args, 4, "allocation.call", true, NULL);
+    LLVMValueRef error = LLVMBuildLoad2(g->builder, error_type, error_slot, "allocation.error");
+    LLVMValueRef nonnull = LLVMBuildICmp(g->builder, 33, memory, LLVMConstNull(pointer), "allocation.nonnull");
+    LLVMValueRef failed = LLVMBuildICmp(g->builder, 33, error, LLVMConstInt(error_type, 0, 0), "allocation.failed");
+    error = LLVMBuildSelect(g->builder, LLVMBuildOr(g->builder, failed, nonnull, "allocation.reported"), error, LLVMConstInt(error_type, 3, 0), "allocation.error.checked");
+    LLVMBuildStore(g->builder, error, error_slot);
+    LLVMValueRef ok = LLVMBuildICmp(g->builder, 32, error, LLVMConstInt(error_type, 0, 0), "allocation.ok");
+    LLVMBuildStore(g->builder, LLVMBuildSelect(g->builder, ok, memory, LLVMConstNull(pointer), "allocation.value"), memory_slot);
+    LLVMBuildCondBr(g->builder, ok, initialized, done);
+    LLVMPositionBuilderAtEnd(g->builder, initialized);
+    if (!(flags & DYN_ALLOC_UNINIT)) {
+      LLVMValueRef length = g->pointer_bytes == 4 ? LLVMBuildZExt(g->builder, bytes, LLVMInt64TypeInContext(g->context), "allocation.length") : bytes;
+      LLVMValueRef zero_args[] = {memory, LLVMConstInt(LLVMInt8TypeInContext(g->context), 0, 0), length, LLVMConstInt(LLVMInt1TypeInContext(g->context), 0, 0)};
+      LLVMBuildCall2(g->builder, g->memset_type, g->memset_fn, zero_args, 4, "");
+    }
+    LLVMBuildBr(g->builder, done);
+    LLVMPositionBuilderAtEnd(g->builder, done);
+    error = LLVMBuildLoad2(g->builder, error_type, error_slot, "allocation.error");
+    ok = LLVMBuildICmp(g->builder, 32, error, LLVMConstInt(error_type, 0, 0), "allocation.ok");
+    LLVMValueRef value = LLVMBuildLoad2(g->builder, pointer, memory_slot, "allocation.pointer");
+    DynType value_type = fallible ? g->ir->pointers[e->type - DYN_TYPE_ALLOC_RESULT_BASE].pointee : e->type;
+    if (slice) {
+      LLVMValueRef descriptor = LLVMBuildInsertValue(g->builder, LLVMConstNull(llvm_type(g, value_type)), value, 0, "allocation.slice");
+      value = LLVMBuildInsertValue(g->builder, descriptor, LLVMBuildSelect(g->builder, ok, count, LLVMConstInt(word, 0, 0), "allocation.count"), 1, "allocation.slice");
+    }
+    if (!fallible) { guard(g, ok, "allocation.ok"); return value; }
+    LLVMValueRef result = LLVMBuildInsertValue(g->builder, LLVMConstNull(type), value, 0, "allocation.result");
+    result = LLVMBuildInsertValue(g->builder, result, error, 1, "allocation.result");
+    return LLVMBuildInsertValue(g->builder, result, ok, 2, "allocation.result");
+  }
   if (e->kind == DYN_EXPR_SYSCALL) {
     LLVMTypeRef i64 = LLVMInt64TypeInContext(g->context);
     LLVMValueRef args[7];

@@ -13,7 +13,7 @@ pub const Icon: i32 = 5
 pub struct Rectangle { x: i32, y: i32, width: i32, height: i32 }
 pub fn create(arena: *mem.Arena) Context {
   if arena == nil { return nil }
-  allocation := mem.arena_try_push(arena, native_size(), native_align())
+  allocation := mem.arena_push(arena, native_size(), native_align())
   if !allocation.ok { return nil }
   state := #cast(rawptr) allocation.memory native_init(state) return state
 }

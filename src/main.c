@@ -362,6 +362,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target),
                         .optimization = &options->optimization,
                         .json_diagnostics = options->json_diagnostics,
+                        .no_warnings = options->no_warnings,
+                        .warnings_as_errors = options->warnings_as_errors,
                         .timings = options->timings};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);

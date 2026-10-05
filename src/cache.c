@@ -212,6 +212,10 @@ static uint64_t hash_runtime(uint64_t hash, const DynOptions *options,
 /* Include resolved host features, not just the word "native": caches can be
    shared by machines. Profile content changes must invalidate final outputs. */
 static uint64_t optimization_key(uint64_t hash, const DynOptions *options) {
+  // Cached artifacts skip semantic diagnostics. Warning policy must therefore
+  // participate in every executable/module key, not only emitted-code options.
+  hash = hash_bytes(hash, &options->warnings_as_errors, sizeof(options->warnings_as_errors));
+  hash = hash_bytes(hash, &options->no_warnings, sizeof(options->no_warnings));
   const DynOptimization *o = &options->optimization;
   unsigned level = o->level ? o->level : 2;
   hash = hash_bytes(hash, &level, sizeof(level));

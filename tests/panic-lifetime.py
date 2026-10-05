@@ -16,7 +16,7 @@ fn main() {
   owned := mem.arena_create(64)
   if !owned.ok { #panic("allocation") }
   defer { _ = mem.arena_release(&owned.arena) _ = io.println(io.stdout(), "cleanup") }
-  text := mem.arena_push(&owned.arena, 32, 1)[..32]
+  text := mem.arena_push_or_panic(&owned.arena, 32, 1)[..32]
   _ = mem.copy(text, "owned panic message")
   #panic(text[..19])
 }''',
@@ -26,7 +26,7 @@ fn main() {
   owned := mem.arena_create(64)
   if !owned.ok { #panic("allocation") }
   defer { _ = mem.arena_release(&owned.arena) _ = io.println(io.stdout(), "cleanup") }
-  text := mem.arena_push(&owned.arena, 32, 1)[..32]
+  text := mem.arena_push_or_panic(&owned.arena, 32, 1)[..32]
   _ = mem.copy(text, "owned panic message")
   fail(text[..19])
 }''',

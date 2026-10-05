@@ -25,7 +25,7 @@ fn mac_error() isize {
   return 0 - #cast(isize) native_errno().*
 }
 fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
-  allocation := mem.arena_try_push_uninit(arena, #len(value)+1, 1)
+  allocation := mem.arena_push_uninit(arena, #len(value)+1, 1)
   if !allocation.ok {
     return nil
   }
@@ -36,7 +36,7 @@ fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
   if #len(values) > 2305843009213693950 {
     return nil
   }
-  allocation := mem.arena_try_push(arena, (#len(values)+1)*#sizeof(CString), #alignof(CString))
+  allocation := mem.arena_push(arena, (#len(values)+1)*#sizeof(CString), #alignof(CString))
   if !allocation.ok {
     return nil
   }
@@ -274,7 +274,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   for at < #cast(usize) count {
     source := vector[at]
     size := argument_length(source)
-    allocation := mem.arena_try_push_uninit(arena, size, 1)
+    allocation := mem.arena_push_uninit(arena, size, 1)
     if !allocation.ok {
       return ArgumentsResult{ kind: error_kinds.Kind.Capacity }
     }

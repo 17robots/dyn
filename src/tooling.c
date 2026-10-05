@@ -275,6 +275,39 @@ static void docs_quote(FILE *out, const char *text, size_t length) {
   fputc('"', out);
 }
 
+/* Optional summaries come from adjacent comments, just like source_comments.
+ * Each label occupies one line; full prose remains available in source_comments. */
+static void docs_contracts(FILE *out, const char *text, size_t start, size_t end) {
+  const char *labels[] = {"Ownership:", "Invalidation:", "Allocation:", "Failure:", "Thread safety:"};
+  const char *keys[] = {"ownership", "invalidation", "allocation", "failure", "thread_safety"};
+  fputs(",\"contracts\":{", out);
+  bool comma = false;
+  for (size_t key = 0; key < sizeof(keys) / sizeof(*keys); ++key) {
+    for (size_t line = start; line < end;) {
+      size_t next = line;
+      while (next < end && text[next] != '\n') ++next;
+      size_t at = line;
+      while (at < next && isspace((unsigned char)text[at])) ++at;
+      if (at + 2 <= next && !memcmp(text + at, "//", 2)) at += 2;
+      while (at < next && isspace((unsigned char)text[at])) ++at;
+      size_t length = strlen(labels[key]);
+      if (at + length <= next && !memcmp(text + at, labels[key], length)) {
+        at += length;
+        while (at < next && isspace((unsigned char)text[at])) ++at;
+        size_t stop = next;
+        while (stop > at && isspace((unsigned char)text[stop - 1])) --stop;
+        if (comma) fputc(',', out);
+        comma = true;
+        docs_quote(out, keys[key], strlen(keys[key])); fputc(':', out);
+        docs_quote(out, text + at, stop - at);
+        break;
+      }
+      line = next + (next < end);
+    }
+  }
+  fputc('}', out);
+}
+
 int dyn_docs_directory(const char *directory, bool json) {
   DynSources sources = {0};
   if (dyn_sources_load(NULL, directory, &sources))
@@ -361,6 +394,7 @@ int dyn_docs_directory(const char *directory, bool json) {
         docs_quote(out, source->text + start, end - start);
         fputs(",\"source_comments\":", out);
         docs_quote(out, source->text + comment, comments_end - comment);
+        docs_contracts(out, source->text, comment, comments_end);
         fputc('}', out);
       } else {
         fprintf(out, "[Source](%s#L%u)\n\n", source->path, point.row + 1);

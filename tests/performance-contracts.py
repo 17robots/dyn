@@ -82,7 +82,7 @@ fn main() {''']
   view := builder.bytes(&built)
   t.expect(builder.append_grow(&built, &arena, view) == builder.ErrorKind.None, "overlapping growth")
   t.expect(built.length == 2000 && mem.arena_used(&arena) == 2048, "self append in place")
-  _ = mem.arena_push(&arena, 1, 1)
+  _ = mem.arena_push_or_panic(&arena, 1, 1)
   previous := &built.storage[0]
   t.expect(builder.reserve(&built, &arena, 4096) == builder.ErrorKind.None, "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")

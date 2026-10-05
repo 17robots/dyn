@@ -126,21 +126,32 @@ int dyn_query_sources(const DynSources *sources, const char *main_path) {
   printf("],\"calls\":["); comma = false;
   for (size_t i = 0; i < a.expression_count; ++i) {
     DynAstExpr *e = &a.expressions[i];
-    if (e->kind != DYN_EXPR_CALL && e->kind != DYN_EXPR_INDIRECT_CALL && e->kind != DYN_EXPR_SYSCALL) continue;
+    if (e->kind != DYN_EXPR_CALL && e->kind != DYN_EXPR_INDIRECT_CALL && e->kind != DYN_EXPR_SYSCALL && e->kind != DYN_EXPR_ALLOC) continue;
     if (comma) { putchar(','); } comma = true;
     int owner = query_owner(&a,e->span);
     printf("{\"caller_id\":"); if (owner < 0) printf("null"); else printf("\"function:%d\"",owner);
     printf(",\"callee_id\":");
     if (e->kind == DYN_EXPR_CALL) printf("\"function:%llu\"",(unsigned long long)e->integer); else printf("null");
     printf(",\"kind\":\"%s\",\"effects\":\"%s\",",
-      e->kind == DYN_EXPR_CALL ? "direct" : e->kind == DYN_EXPR_SYSCALL ? "syscall" : "indirect",
+      e->kind == DYN_EXPR_CALL ? "direct" : e->kind == DYN_EXPR_SYSCALL ? "syscall" : e->kind == DYN_EXPR_ALLOC ? "allocation" : "indirect",
       e->kind == DYN_EXPR_CALL && !a.functions[e->integer].foreign ? "inspect-callee" : "unknown");
     query_location(&merged,e->span); putchar('}');
   }
   printf("],\"types\":["); comma = false;
-  const size_t counts[] = {DYN_TYPE_ANY+1,a.struct_count,a.enum_count,a.pointer_count,a.array_count,a.slice_count,a.fn_type_count,a.alias_count};
-  const DynType bases[] = {0,DYN_TYPE_STRUCT_BASE,DYN_TYPE_ENUM_BASE,DYN_TYPE_POINTER_BASE,DYN_TYPE_ARRAY_BASE,DYN_TYPE_SLICE_BASE,DYN_TYPE_FN_BASE,DYN_TYPE_DISTINCT_BASE};
-  for (size_t group = 0; group < 8; ++group) for (size_t i = 0; i < counts[group]; ++i) {
+  bool *allocation_results = calloc(a.pointer_count ? a.pointer_count : 1, sizeof(bool));
+  if (!allocation_results) { dyn_ast_program_free(&a); dyn_source_free(&merged); return 2; }
+#define RECORD_ALLOC_RESULT(t) do { DynType rt = (t); if (dyn_type_is_alloc_result(rt)) allocation_results[rt-DYN_TYPE_ALLOC_RESULT_BASE] = true; } while (0)
+  for (size_t i=0;i<a.expression_count;++i) RECORD_ALLOC_RESULT(a.expressions[i].type);
+  for (size_t i=0;i<a.field_count;++i) RECORD_ALLOC_RESULT(a.fields[i].type);
+  for (size_t i=0;i<a.pointer_count;++i) RECORD_ALLOC_RESULT(a.pointers[i].pointee);
+  for (size_t i=0;i<a.function_count;++i) RECORD_ALLOC_RESULT(a.functions[i].return_type);
+  for (size_t i=0;i<a.param_count;++i) RECORD_ALLOC_RESULT(a.params[i].type);
+  for (size_t i=0;i<a.global_count;++i) RECORD_ALLOC_RESULT(a.globals[i].type);
+#undef RECORD_ALLOC_RESULT
+  const size_t counts[] = {DYN_TYPE_ALLOCATOR+1,a.struct_count,a.enum_count,a.pointer_count,a.array_count,a.slice_count,a.fn_type_count,a.alias_count,a.pointer_count};
+  const DynType bases[] = {0,DYN_TYPE_STRUCT_BASE,DYN_TYPE_ENUM_BASE,DYN_TYPE_POINTER_BASE,DYN_TYPE_ARRAY_BASE,DYN_TYPE_SLICE_BASE,DYN_TYPE_FN_BASE,DYN_TYPE_DISTINCT_BASE,DYN_TYPE_ALLOC_RESULT_BASE};
+  for (size_t group = 0; group < 9; ++group) for (size_t i = 0; i < counts[group]; ++i) {
+    if (group == 8 && !allocation_results[i]) continue;
     if (group == 7 && !a.aliases[i].distinct) continue;
     DynType type = bases[group]+(DynType)i; char name[1024];
     dyn_type_format(&a,type,&merged,name,sizeof(name));
@@ -148,6 +159,7 @@ int dyn_query_sources(const DynSources *sources, const char *main_path) {
     printf("{\"id\":%u,\"name\":",type); query_text(name); putchar('}');
   }
   puts("]}");
+  free(allocation_results);
   dyn_ast_program_free(&a); dyn_source_free(&merged);
   return fflush(stdout) || ferror(stdout) ? 2 : 0;
 }

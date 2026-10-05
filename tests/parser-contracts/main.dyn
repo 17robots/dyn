@@ -70,7 +70,7 @@ fn json_document(source: []const u8, expected: bool) {
   backing: [512]u8 = []
   for capacity in 0..513 {
     arena := mem.arena_from_buffer(backing[..capacity])
-    prefix := mem.arena_try_push(&arena, 7, 1)
+    prefix := mem.arena_push(&arena, 7, 1)
     if prefix.ok { for i in 0..7 { prefix.memory[..7][i] = 91 } }
     mark := mem.arena_mark(&arena)
     parsed := json.parse(&arena,source)

@@ -61,6 +61,7 @@ typedef struct {
   DynDiagnosticSink diagnostic;
   void *diagnostic_data;
   bool json_diagnostics;
+  bool no_warnings, warnings_as_errors;
   bool timings;
   DynWork *work; /* Borrowed, never owned by a source or cached snapshot. */
   DynSyntaxCache *syntax_cache; /* Optional owner-scoped immutable source trees. */

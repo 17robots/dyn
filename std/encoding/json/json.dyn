@@ -97,7 +97,7 @@ pub fn token_next(state: *Tokenizer) Token {
 }
 
 fn node(arena: *memory.Arena, kind: u8) *Value {
-  allocation := memory.arena_try_push(arena, #sizeof(Value), #alignof(Value))
+  allocation := memory.arena_push(arena, #sizeof(Value), #alignof(Value))
   if !allocation.ok {
     return nil
   }
@@ -444,7 +444,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
     return cursor.source[start..end]
   }
   mark := memory.arena_mark(arena)
-  allocation := memory.arena_try_push_uninit(arena, end - start, 1)
+  allocation := memory.arena_push_uninit(arena, end - start, 1)
   if !allocation.ok {
     cursor.error = ErrorKind.Capacity
     return failed_string(cursor)

@@ -50,7 +50,7 @@ fn main() {
   require(!invalid.ok && invalid.error == regex.CompileError.Syntax, "maximum overflow")
   program := regex.compile("(a)*", code[..], tokens[..], scratch[..])
   owned := memory.arena_create(100000)
-  input := memory.arena_push(&owned.arena, 100000, 1)[..100000]
+  input := memory.arena_push_or_panic(&owned.arena, 100000, 1)[..100000]
   for i in 0..#len(input) { input[i] = 'a' }
   result := regex.find_compiled(program, input, captures[..])
   require(result.ok && result.end == 100000, "long repetition")

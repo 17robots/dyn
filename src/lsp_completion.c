@@ -623,6 +623,17 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
     struct {
       const char *label, *signature, *snippet;
     } builtins[] = {
+        {"Allocator", "Allocator: borrowed allocation handle", "Allocator"},
+        {"#allocator", "#allocator(context, known_callback) -> Allocator", "#allocator(${1:context}, &${2:callback})"},
+        {"#AllocResult", "#AllocResult(pointer_or_slice_type)", "#AllocResult(${1:*T})"},
+        {"#alloc_or_panic", "#alloc_or_panic(T, allocator)", "#alloc_or_panic(${1:T}, ${2:allocator})"},
+        {"#alloc", "#alloc(T, allocator)", "#alloc(${1:T}, ${2:allocator})"},
+        {"#alloc_slice_or_panic", "#alloc_slice_or_panic(T, allocator, count)", "#alloc_slice_or_panic(${1:T}, ${2:allocator}, ${3:count})"},
+        {"#alloc_slice", "#alloc_slice(T, allocator, count)", "#alloc_slice(${1:T}, ${2:allocator}, ${3:count})"},
+        {"#alloc_uninit_or_panic", "#alloc_uninit_or_panic(T, allocator)", "#alloc_uninit_or_panic(${1:T}, ${2:allocator})"},
+        {"#alloc_uninit", "#alloc_uninit(T, allocator)", "#alloc_uninit(${1:T}, ${2:allocator})"},
+        {"#alloc_slice_uninit_or_panic", "#alloc_slice_uninit_or_panic(T, allocator, count)", "#alloc_slice_uninit_or_panic(${1:T}, ${2:allocator}, ${3:count})"},
+        {"#alloc_slice_uninit", "#alloc_slice_uninit(T, allocator, count)", "#alloc_slice_uninit(${1:T}, ${2:allocator}, ${3:count})"},
         {"#cast", "#cast(type) value -> type", "#cast(${1:type}) ${2:value}"},
         {"#bitcast", "#bitcast(type) value -> type",
          "#bitcast(${1:type}) ${2:value}"},
@@ -685,6 +696,19 @@ static void lsp_completion_type_fields(LspSemantic *semantic, DynType type,
     uint32_t p = type - DYN_TYPE_POINTER_BASE;
     if (p < semantic->ast.pointer_count)
       type = semantic->ast.pointers[p].pointee;
+  }
+  if (dyn_type_is_alloc_result(type)) {
+    const char *names[] = {"value", "error", "ok"};
+    char value_type[256];
+    dyn_type_format(&semantic->ast, semantic->ast.pointers[type - DYN_TYPE_ALLOC_RESULT_BASE].pointee,
+                    &semantic->source, value_type, sizeof(value_type));
+    const char *types[] = {value_type, "AllocError", "bool"};
+    for (unsigned i = 0; i < 3; ++i) {
+      *at += (size_t)lsp_bounded_printf(body + *at, capacity - *at,
+        "%s{\"label\":\"%s\",\"kind\":5,\"detail\":\"%s\"}", *comma ? "," : "", names[i], types[i]);
+      *comma = true;
+    }
+    return;
   }
   if (!dyn_type_is_struct(type))
     return;

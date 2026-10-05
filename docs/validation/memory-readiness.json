@@ -1,0 +1,253 @@
+{
+  "scope": "Local Linux focused validation, including combined-workspace fixtures; not a complete release gate.",
+  "compiler_sha256": "c80782d8016d75089c1dfe1c5ce199f3e736a4c8e83ddc1574af5c597c6bd280",
+  "checks": [
+    {
+      "check": "allocator-builtins.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.488,
+      "failure_tail": ""
+    },
+    {
+      "check": "memory-ergonomics.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.202,
+      "failure_tail": ""
+    },
+    {
+      "check": "array-extents.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.35,
+      "failure_tail": ""
+    },
+    {
+      "check": "owner-warnings.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.316,
+      "failure_tail": ""
+    },
+    {
+      "check": "lifetime-flow.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.094,
+      "failure_tail": ""
+    },
+    {
+      "check": "semantic-combinations.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 1.002,
+      "failure_tail": ""
+    },
+    {
+      "check": "backend-regressions.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.424,
+      "failure_tail": ""
+    },
+    {
+      "check": "compiler-contracts.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.688,
+      "failure_tail": ""
+    },
+    {
+      "check": "compiler-regressions.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.22,
+      "failure_tail": ""
+    },
+    {
+      "check": "frontend-audit.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.435,
+      "failure_tail": ""
+    },
+    {
+      "check": "lsp-contracts.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 1.869,
+      "failure_tail": ""
+    },
+    {
+      "check": "library-audit.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.558,
+      "failure_tail": ""
+    },
+    {
+      "check": "stdlib-host.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.305,
+      "failure_tail": ""
+    },
+    {
+      "check": "run-cache.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.176,
+      "failure_tail": ""
+    },
+    {
+      "check": "aggregate-abi.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.501,
+      "failure_tail": ""
+    },
+    {
+      "check": "interface-allocation-test",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.002,
+      "failure_tail": ""
+    },
+    {
+      "check": "module-allocation-test",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.001,
+      "failure_tail": ""
+    },
+    {
+      "check": "ast-allocation-test",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.0,
+      "failure_tail": ""
+    },
+    {
+      "check": "codegen-failure-test",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 1.387,
+      "failure_tail": ""
+    },
+    {
+      "check": "grammar",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.38,
+      "failure_tail": ""
+    },
+    {
+      "check": "agent-readiness",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.618,
+      "failure_tail": ""
+    },
+    {
+      "check": "viability-lab",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 2.118,
+      "failure_tail": ""
+    },
+    {
+      "check": "std-memory-contracts.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.482,
+      "failure_tail": ""
+    },
+    {
+      "check": "documentation-examples.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 2.056,
+      "failure_tail": ""
+    },
+    {
+      "check": "pool-regressions.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 1.234,
+      "failure_tail": ""
+    },
+    {
+      "check": "parser-contracts.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.461,
+      "failure_tail": ""
+    },
+    {
+      "check": "vendor-bindings.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 1.292,
+      "failure_tail": ""
+    },
+    {
+      "check": "vendor-provider-host.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.286,
+      "failure_tail": ""
+    },
+    {
+      "check": "concurrency-net-host.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.303,
+      "failure_tail": ""
+    },
+    {
+      "check": "sync-host.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.214,
+      "failure_tail": ""
+    },
+    {
+      "check": "panic-lifetime.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 1.437,
+      "failure_tail": ""
+    },
+    {
+      "check": "performance-contracts.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 7.087,
+      "failure_tail": ""
+    },
+    {
+      "check": "regex-regressions.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 0.388,
+      "failure_tail": ""
+    },
+    {
+      "check": "deflate-regressions.py",
+      "passed": true,
+      "exit_code": 0,
+      "seconds": 3.515,
+      "failure_tail": ""
+    }
+  ],
+  "additional_checks": {
+    "field-notes": "build/run debug and release passed",
+    "browser-video": "wasm32-browser semantic check passed; existing owner-copy warning remains",
+    "debug-compiler": "rebuilt"
+  },
+  "limitations": [
+    "Repository-wide projects/tools/check.py stops at pre-existing projects/archive-example uses of removed terminal.stdout; focused changed examples and the six viability applications pass.",
+    "Native non-Linux execution and grammar publication are outside this validation."
+  ]
+}

@@ -12,6 +12,50 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- Breaking local API cleanup: ordinary allocation builtins and arena operations
+  return failure; `_or_panic` explicitly selects panic on failure. Existing callers,
+  editor help, and examples are migrated. See [replacement table](docs/memory-api-direction.md).
+- Add fallible pool/free-list construction, allocator-output strings and INI
+  parsing. Growing allocator callbacks no longer zero payloads redundantly.
+- Keep lifetime diagnostics narrow. No borrow checker, ownership annotations,
+  automatic reclamation, or implicit allocator is introduced.
+
+- Add experimental primitive `Allocator`, fixed-callback construction, typed
+  allocation builtins and `#AllocResult` with named `AllocError` categories.
+  Fixed/growing arena adapters, reflection, editor support, failure tests, and
+  [design documentation](docs/allocator-design.md) accompany the feature.
+
+`std/mem` adds binary byte units `KiB`, `MiB`, and `GiB`, plus
+`size_for(count, element_size)`. Check the returned `ok` before using `bytes`:
+overflow returns failure instead of trapping, and zero count or element size
+succeeds with zero bytes. The result describes payload only, excluding alignment
+padding and container metadata. Allocation naming changes are listed below.
+
+Fixed-array types now accept integer constants and simple nonnegative constant
+arithmetic, such as `[4 * mem.KiB]u8`, including imported constants. Runtime-sized
+stack arrays remain unsupported. Constants needed by exported layouts and public constants are preserved
+transitively in module interfaces, including dependencies from other files.
+Unrelated private constants remain excluded.
+
+`arena_push_array` checks count multiplication and performs zeroed aligned
+allocation while retaining explicit element size, alignment, and pointer casts.
+`arena_take` transfers a fixed-arena descriptor and clears the old slot. Direct
+copies of known arena descriptors warn; use `--warnings-as-errors` for a hard gate
+or `--no-warnings` to suppress these warnings. Existing reset diagnostics now also
+recognize literal `arena_rewind(..., 0)`. These are narrow checks, not borrow checking.
+
+Growth remains explicit. `growing_create_bounded` limits total requested backing
+bytes, `growing_snapshot` reports retained storage, and `growing_trim` releases
+empty blocks without invalidating live allocations. Reset still retains blocks.
+Trim and release preserve remaining ownership after partial failure.
+
+`dyn docs --json` adds `contracts` summaries sourced from labelled adjacent comments.
+The schema remains version 1 with additive fields; full comments remain available.
+The new [memory guide](docs/memory-patterns.md) is exercised in debug and release
+by `tests/documentation-examples.py`.
+
 ## 0.1.0-preview.15
 
 `std/testing` imports work on macOS and Windows again: Linux-only temporary

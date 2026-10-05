@@ -465,13 +465,17 @@ pub fn scan_line(state: *Scanner, output: *[]const u8) bool {
   return true
 }
 
-pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Overlap }
-pub struct Result { value: []u8, error: ErrorKind, required: usize, ok: bool }
+pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Overlap, Allocation }
+pub struct Result { value: []u8, error: ErrorKind, required: usize, ok: bool, allocation_error: AllocError }
 pub struct SplitResult { values: [][]const u8, error: ErrorKind, required: usize, ok: bool }
 pub struct SizeResult { value: usize, error: ErrorKind, ok: bool }
 
 // Exact-capacity copies support overlap; failure leaves destination unchanged.
 // Copies into caller destination. Successful value borrows destination, not source. Inspect Result.ok.
+// Ownership: copies bytes; returned view borrows destination.
+// Invalidation: destination mutation or destruction.
+// Allocation: none.
+// Failure: destination is unchanged; required reports the source length.
 pub fn clone_into(destination: []u8, source: []const u8) Result {
   if #len(destination) < #len(source) {
     return Result{ error: ErrorKind.Capacity, required: #len(source) }
@@ -480,16 +484,37 @@ pub fn clone_into(destination: []u8, source: []const u8) Result {
   return Result{ value: destination[..#len(source)], required: #len(source), ok: true }
 }
 // Copies bytes into arena. Result expires at applicable rewind/reset/release; input need not outlive it.
+// Ownership: copies input bytes into caller's arena.
+// Invalidation: applicable arena rewind, reset, or release.
+// Allocation: source length bytes from the fixed arena.
+// Failure: arena offset and existing data are unchanged.
 pub fn clone(arena: *memory.Arena, source: []const u8) Result {
   if #len(source) == 0 {
     return Result{ value: arena.data[..0], ok: true }
   }
-  allocated := memory.arena_try_push_uninit(arena, #len(source), 1)
-  if !allocated.ok {
-    return Result{ error: ErrorKind.Capacity, required: #len(source) }
-  }
-  return clone_into(allocated.memory[..#len(source)], source)
+  return clone_alloc(memory.arena_allocator(arena), source)
 }
+
+// Ownership: copies source bytes into output; no scratch or retained source borrow.
+// Invalidation: controlled by the concrete output owner.
+// Allocation: one uninitialized byte allocation (none for empty source).
+// Failure: reports the allocator category; the allocator defines failure side effects.
+// Thread safety: caller synchronizes the output owner.
+pub fn clone_alloc(output: Allocator, source: []const u8) Result {
+  allocated := #alloc_slice_uninit(u8, output, #len(source))
+  if !allocated.ok {
+    return allocation_failure(allocated.error, #len(source))
+  }
+  return clone_into(allocated.value, source)
+}
+
+fn allocation_failure(error: AllocError, required: usize) Result {
+  kind := ErrorKind.Allocation
+  if error == AllocError.Capacity { kind = ErrorKind.Capacity }
+  if error == AllocError.Overflow { kind = ErrorKind.Overflow }
+  return Result{ error: kind, allocation_error: error, required: required }
+}
+
 pub fn join_size(parts: [][]const u8, separator: []const u8) SizeResult {
   total: usize = 0
   maximum := #cast(usize) -1
@@ -540,7 +565,7 @@ pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) Re
     return Result{ error: size.error }
   }
   mark := memory.arena_mark(arena)
-  allocated := memory.arena_try_push_uninit(arena, size.value, 1)
+  allocated := memory.arena_push_uninit(arena, size.value, 1)
   if !allocated.ok {
     return Result{ error: ErrorKind.Capacity, required: size.value }
   }
@@ -554,6 +579,20 @@ pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) Re
   }
   return result
 }
+// Ownership: copies parts and separator into output; returned bytes borrow its owner.
+// Invalidation: controlled by the concrete output owner.
+// Allocation: one allocation after size validation, with no hidden scratch.
+// Failure: size/allocation errors write nothing. Overlap errors consume the allocation
+// but write nothing; Allocator cannot rewind. Use join(arena, ...) for rollback.
+// Thread safety: caller synchronized. Input bytes and descriptors must remain stable.
+pub fn join_alloc(output: Allocator, parts: [][]const u8, separator: []const u8) Result {
+  size := join_size(parts, separator)
+  if !size.ok { return Result{ error: size.error } }
+  allocated := #alloc_slice_uninit(u8, output, size.value)
+  if !allocated.ok { return allocation_failure(allocated.error, size.value) }
+  return join_into(allocated.value, parts, separator)
+}
+
 pub fn split_count(source: []const u8, separator: []const u8) SizeResult {
   if #len(separator) == 0 {
     return SizeResult{ error: ErrorKind.InvalidInput }
@@ -598,6 +637,10 @@ pub fn split_into(storage: [][]const u8, source: []const u8, separator: []const 
 }
 // Allocates only the slice table in arena. Elements borrow source bytes; keep BOTH alive.
 // Arena rewind/reset/release expires the table. This is not a deep copy of source.
+// Ownership: table borrows arena storage; each element separately borrows input bytes.
+// Invalidation: table expires with arena storage; elements expire with source storage.
+// Allocation: slice descriptors only, not input bytes.
+// Failure: arena offset is restored; existing data is preserved.
 pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) SplitResult {
   count := split_count(source, separator)
   if !count.ok {
@@ -608,7 +651,7 @@ pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) Sp
     return SplitResult{ error: ErrorKind.Overflow }
   }
   mark := memory.arena_mark(arena)
-  allocated := memory.arena_try_push_uninit(arena, count.value * #sizeof([]const u8), #alignof([]const u8))
+  allocated := memory.arena_push_uninit(arena, count.value * #sizeof([]const u8), #alignof([]const u8))
   if !allocated.ok {
     return SplitResult{ error: ErrorKind.Capacity, required: count.value }
   }

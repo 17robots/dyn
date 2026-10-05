@@ -1,7 +1,7 @@
 use "std/bytes" byte_ops
 // Allocation-free INI scanner. Names and values borrow the input.
 pub enum Kind { Section, Pair }
-pub enum ErrorKind { None, Syntax }
+pub enum ErrorKind { None, Syntax, Allocation, Overflow }
 pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
 pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind }
 pub struct Result { entry: Entry, error: ErrorKind, ok: bool }
@@ -98,3 +98,41 @@ pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8
   return source[..0]
 }
 
+
+// A materialized entry table. Entries still borrow source bytes, including section names.
+// Syntax errors and allocation failures remain distinct; next() keeps its streaming shape.
+pub struct ParseResult {
+  entries: []Entry,
+  error: ErrorKind,
+  error_line: usize,
+  allocation_error: AllocError,
+  ok: bool,
+}
+
+// Ownership: table borrows output; entry text separately borrows source.
+// Invalidation: keep both the output owner and source alive and unchanged.
+// Allocation: two scans, one exact-size table allocation; no hidden scratch.
+// Failure: validates all syntax before allocating. Allocation failure reports its category.
+// Thread safety: source must remain stable throughout both passes; synchronize output.
+pub fn parse(output: Allocator, source: []const u8) ParseResult {
+  state := scanner(source)
+  count: usize = 0
+  for {
+    item := next(&state)
+    if !item.ok {
+      if item.error != ErrorKind.None {
+        return ParseResult{ error: item.error, error_line: state.line - 1 }
+      }
+      break
+    }
+    if count == #cast(usize) -1 { return ParseResult{ error: ErrorKind.Overflow } }
+    count += 1
+  }
+  allocated := #alloc_slice_uninit(Entry, output, count)
+  if !allocated.ok {
+    return ParseResult{ error: ErrorKind.Allocation, allocation_error: allocated.error }
+  }
+  state = scanner(source)
+  for i in 0..count { allocated.value[i] = next(&state).entry }
+  return ParseResult{ entries: allocated.value, ok: true }
+}

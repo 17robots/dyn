@@ -9,7 +9,7 @@ pub fn pack(scratch: *mem.Arena, width: i32, height: i32, rectangles: []Rectangl
   if scratch == nil { return Result{ code: -1 } }
   size := native_size(width, #len(rectangles)) if size == 0 { return Result{ code: -1 } }
   mark := mem.arena_mark(scratch) defer mem.arena_rewind(scratch, mark)
-  work := mem.arena_try_push(scratch, size, 64) if !work.ok { return Result{ code: -1 } }
+  work := mem.arena_push(scratch, size, 64) if !work.ok { return Result{ code: -1 } }
   data: *Rectangle = nil if #len(rectangles) != 0 { data = &rectangles[0] }
   code := native_pack(width, height, data, #len(rectangles), #cast(rawptr) work.memory, size)
   count: usize = 0 if code >= 0 { for rectangle in rectangles { if rectangle.packed != 0 { count += 1 } } }

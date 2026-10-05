@@ -111,8 +111,9 @@ const char *dyn_type_name(DynType t) {
   static const char *names[] = {
       "<infer>", "<error>", "void",       "bool",   "i8",  "i16",   "i32",
       "i64",     "u8",      "u16",        "u32",    "u64", "isize", "usize",
-      "f32",     "f64",     "[]const u8", "rawptr", "any"};
+      "f32",     "f64",     "[]const u8", "rawptr", "any", "Allocator"};
   return t < DYN_TYPE_STRUCT_BASE ? names[t]
+         : dyn_type_is_alloc_result(t) ? "#AllocResult"
          : dyn_type_is_enum(t)    ? "enum"
          : dyn_type_is_pointer(t) ? "pointer"
          : dyn_type_is_array(t)   ? "array"
@@ -137,7 +138,7 @@ bool dyn_type_is_slice(DynType t) {
 bool dyn_type_is_function(DynType t) {
   return t >= DYN_TYPE_FN_BASE && t < DYN_TYPE_DISTINCT_BASE;
 }
-bool dyn_type_is_distinct(DynType t) { return t >= DYN_TYPE_DISTINCT_BASE; }
+bool dyn_type_is_distinct(DynType t) { return t >= DYN_TYPE_DISTINCT_BASE && t < DYN_TYPE_ALLOC_RESULT_BASE; }
 static void diagnostic_node(TSNode n, const DynSource *s, unsigned *errors,
                             const char *message) {
   dyn_syntax_diagnostic(n, s, "error", message);
@@ -1051,6 +1052,18 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
                                                    : DYN_EXPR_CAST;
     e.integer = parse_type(dyn_syntax_child(node, 0), s, a);
     e.left = lower_expr(dyn_syntax_child(node, 1), s, a, errors);
+  } else if (!strcmp(k, "allocator")) {
+    e.kind = DYN_EXPR_ALLOCATOR;
+    e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
+    e.right = lower_expr(dyn_syntax_child(node, 1), s, a, errors);
+  } else if (!strcmp(k, "allocation")) {
+    e.kind = DYN_EXPR_ALLOC;
+    e.integer = parse_type(dyn_syntax_child(node, 0), s, a);
+    e.left = lower_expr(dyn_syntax_child(node, 1), s, a, errors);
+    e.right = dyn_syntax_child_count(node) > 2 ? lower_expr(dyn_syntax_child(node, 2), s, a, errors) : DYN_NO_EXPR;
+    const char *builtin = ts_node_type(ts_node_child(node, 0));
+    e.item_count = 0;
+    e.op = (DynOperator)((strstr(builtin, "_or_panic") ? 0 : DYN_ALLOC_TRY) | (strstr(builtin, "slice") ? DYN_ALLOC_SLICE : 0) | (strstr(builtin, "uninit") ? DYN_ALLOC_UNINIT : 0));
   } else if (!strcmp(k, "syscall")) {
     e.kind = DYN_EXPR_SYSCALL;
     e.type = DYN_TYPE_INFER;
@@ -1102,10 +1115,100 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
   a->expressions[a->expression_count++] = e;
   return id;
 }
+static bool array_integer_constant(TSNode declaration, const DynSource *s, DynAstProgram *a) {
+  TSNode variable = dyn_syntax_child(declaration, 0);
+  for (uint32_t i = 1; i < dyn_syntax_child_count(variable); ++i) {
+    TSNode child = dyn_syntax_child(variable, i);
+    const char *kind = ts_node_type(child);
+    if (strcmp(kind, "type_qualifier") && strcmp(kind, "type")) continue;
+    if (!strcmp(kind, "type_qualifier")) child = dyn_syntax_child(child, 0);
+    DynType type = parse_type(child, s, a);
+    return type >= DYN_TYPE_I8 && type <= DYN_TYPE_USIZE;
+  }
+  return true;
+}
+
+/* Type layout precedes expression sema. Keep array extents deliberately small:
+ * unsigned integer arithmetic and named constants, never runtime evaluation.
+ * Resolve each initializer in its declaration scope, not the caller's scope. */
+static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint64_t *value,
+                         unsigned depth, unsigned *remaining) {
+  if (ts_node_is_null(node) || depth > 64 || !*remaining || !dyn_work_step(&s->context, 1)) return false;
+  --*remaining;
+  node = unwrap(node);
+  const char *kind = ts_node_type(node);
+  if (!strcmp(kind, "number_")) {
+    const char *text = s->text + ts_node_start_byte(node);
+    size_t length = ts_node_end_byte(node) - ts_node_start_byte(node);
+    /* parse_uint handles prefixes/separators; exclude floating point tokens. */
+    bool hex = length > 2 && text[0] == '0' && text[1] == 'x';
+    for (size_t i = 0; i < length; ++i)
+      if (text[i] == '.' || (!hex && (text[i] == 'e' || text[i] == 'E'))) return false;
+    bool ok;
+    *value = parse_uint(node, s, &ok);
+    return ok;
+  }
+  if (!strcmp(kind, "identifier")) {
+    TSNode root = node;
+    for (TSNode scope = ts_node_parent(node); !ts_node_is_null(scope);
+         scope = ts_node_parent(scope)) {
+      root = scope;
+      if (strcmp(ts_node_type(scope), "block")) continue;
+      for (uint32_t i = 0; i < ts_node_named_child_count(scope); ++i) {
+        TSNode declaration = ts_node_named_child(scope, i);
+        if (ts_node_end_byte(declaration) > ts_node_start_byte(node)) break;
+        if (!strcmp(ts_node_type(declaration), "statement")) declaration = dyn_syntax_child(declaration, 0);
+        DynDeclaration parsed;
+        if (!dyn_syntax_declaration(declaration, &parsed) ||
+            !dyn_span_text_equal(span(node), span(parsed.name), s)) continue;
+        if (parsed.kind != DYN_DECL_CONSTANT || !array_integer_constant(parsed.node, s, a)) return false;
+        return array_extent(dyn_syntax_last_child(dyn_syntax_child(parsed.node, 0)), s, a, value, depth + 1, remaining);
+      }
+    }
+    char *name = dyn_syntax_copy_text(node, s, false);
+    if (!name) return false;
+    bool local = dyn_syntax_local(node, s, name);
+    free(name);
+    if (local) return false; /* Parameters, loop bindings and mutable locals. */
+    for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
+      if (!dyn_work_step(&s->context, 1)) return false;
+      DynDeclaration parsed;
+      if (!dyn_syntax_declaration(ts_node_named_child(root, i), &parsed) ||
+          !dyn_module_name_equal(span(node), span(parsed.name), s)) continue;
+      if (parsed.kind != DYN_DECL_CONSTANT || !array_integer_constant(parsed.node, s, a)) return false;
+      return array_extent(dyn_syntax_last_child(dyn_syntax_child(parsed.node, 0)), s, a, value, depth + 1, remaining);
+    }
+    return false;
+  }
+  if (strcmp(kind, "binary")) return false;
+  uint64_t left, right;
+  if (!array_extent(dyn_syntax_child(node, 0), s, a, &left, depth + 1, remaining) ||
+      !array_extent(dyn_syntax_child(node, 1), s, a, &right, depth + 1, remaining)) return false;
+  switch (op_from(anonymous_operator(node))) {
+  case DYN_OP_ADD: if (left > UINT64_MAX - right) return false; *value = left + right; return true;
+  case DYN_OP_SUB: if (left < right) return false; *value = left - right; return true;
+  case DYN_OP_MUL: if (right && left > UINT64_MAX / right) return false; *value = left * right; return true;
+  case DYN_OP_DIV: if (!right) return false; *value = left / right; return true;
+  case DYN_OP_REM: if (!right) return false; *value = left % right; return true;
+  case DYN_OP_SHL: if (right >= 64 || left > (UINT64_MAX >> right)) return false; *value = left << right; return true;
+  case DYN_OP_SHR: if (right >= 64) return false; *value = left >> right; return true;
+  case DYN_OP_BIT_AND: *value = left & right; return true;
+  case DYN_OP_BIT_OR: *value = left | right; return true;
+  case DYN_OP_BIT_XOR: *value = left ^ right; return true;
+  default: return false;
+  }
+}
+
 static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
   n = unwrap(n);
   if (!strcmp(ts_node_type(n), "type") && dyn_syntax_child_count(n) == 1) {
     n = dyn_syntax_child(n, 0);
+  }
+  if (!strcmp(ts_node_type(n), "allocation_result_type")) {
+    DynType value = parse_type(dyn_syntax_child(n, 0), s, a);
+    if (!dyn_type_is_pointer(value) && !dyn_type_is_slice(value)) return DYN_TYPE_ERROR;
+    DynType key = intern_pointer(a, value, false);
+    return key == DYN_TYPE_ERROR ? key : DYN_TYPE_ALLOC_RESULT_BASE + key - DYN_TYPE_POINTER_BASE;
   }
   if (!strcmp(ts_node_type(n), "fn_type")) {
     uint32_t close = ts_node_start_byte(n);
@@ -1150,11 +1253,16 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
     DynType element = parse_type(last, s, a);
     if (element == DYN_TYPE_ERROR)
       return DYN_TYPE_ERROR;
-    TSNode first = dyn_syntax_child(n, 0);
-    if (!strcmp(ts_node_type(first), "number_")) {
-      bool ok;
-      uint64_t length = parse_uint(first, s, &ok);
-      return ok ? intern_array(a, element, length) : DYN_TYPE_ERROR;
+    TSNode extent = ts_node_child_by_field_name(n, "length", 6);
+    // Numeric-only grammars remain usable for programs without new syntax.
+    if (ts_node_is_null(extent) && dyn_syntax_child_count(n) > 1)
+      extent = dyn_syntax_child(n, 0);
+    if (!ts_node_is_null(extent)) {
+      uint64_t length;
+      unsigned remaining = 4096;
+      if (array_extent(extent, s, a, &length, 0, &remaining)) return intern_array(a, element, length);
+      if (!a->invalid_array_extent.end_byte) a->invalid_array_extent = span(extent);
+      return DYN_TYPE_ERROR;
     }
     bool is_const = dyn_syntax_has_token(n, "const");
     return intern_slice(a, element, is_const);
@@ -1170,7 +1278,7 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
            {"u64", DYN_TYPE_U64},     {"isize", DYN_TYPE_ISIZE},
            {"usize", DYN_TYPE_USIZE}, {"f32", DYN_TYPE_F32},
            {"f64", DYN_TYPE_F64},     {"rawptr", DYN_TYPE_RAWPTR},
-           {"any", DYN_TYPE_ANY}};
+           {"any", DYN_TYPE_ANY}, {"Allocator", DYN_TYPE_ALLOCATOR}};
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
     if (p.end_byte - p.start_byte == strlen(m[i].n) &&
         !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n))) {
@@ -1666,7 +1774,7 @@ static bool add_alias_names(TSNode root, const DynSource *s, DynAstProgram *a,
       diagnostic(name, s, errors, "duplicate type declaration");
       continue;
     }
-    if (a->alias_count >= (uint64_t)UINT32_MAX - DYN_TYPE_DISTINCT_BASE + 1) {
+    if (a->alias_count >= DYN_TYPE_ALLOC_RESULT_BASE - DYN_TYPE_DISTINCT_BASE) {
       diagnostic(d, s, errors, "alias type capacity exceeded");
       return false;
     }
@@ -1895,6 +2003,12 @@ static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
   if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING)
     return alignment ? pointer : 2 * pointer;
   if (t == DYN_TYPE_ANY) return alignment ? 8 : 16;
+  if (t == DYN_TYPE_ALLOCATOR) return alignment ? pointer : 2 * pointer;
+  if (dyn_type_is_alloc_result(t)) {
+    DynType value = a->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee;
+    uint64_t bytes = dyn_type_is_slice(value) ? 2 * pointer : pointer;
+    return alignment ? pointer : (bytes + 5 + pointer - 1) / pointer * pointer;
+  }
   if (dyn_type_is_pointer(t) || dyn_type_is_function(t) || t == DYN_TYPE_RAWPTR ||
       t == DYN_TYPE_USIZE || t == DYN_TYPE_ISIZE) return pointer;
   uint64_t size = t == DYN_TYPE_BOOL || t == DYN_TYPE_I8 || t == DYN_TYPE_U8 ? 1
@@ -2195,11 +2309,17 @@ bool dyn_ast_lower_source(TSNode root, const DynSource *s, DynAstProgram *a,
       !add_function_signatures(root, s, a, errors, &functions, &globals)) {
     ast_name_index_free(&functions);
     ast_name_index_free(&globals);
+    if (a->invalid_array_extent.end_byte)
+      diagnostic(a->invalid_array_extent, s, errors,
+          "array length requires nonnegative integer constant arithmetic (no runtime values, cycles, overflow, or division by zero)");
     if (*errors == before)
       diagnostic_node(root, s, errors, "out of memory");
     return false;
   }
   lower_function_bodies(root, s, a, errors, owner_key, &functions);
+  if (a->invalid_array_extent.end_byte)
+    diagnostic(a->invalid_array_extent, s, errors,
+        "array length requires nonnegative integer constant arithmetic (no runtime values, cycles, overflow, or division by zero)");
   ast_name_index_free(&functions);
   ast_name_index_free(&globals);
   if (a->type_capacity_exceeded)
