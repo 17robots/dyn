@@ -167,7 +167,8 @@ if __name__ == '__main__':
         work = Path(temporary); sdk = work/'stage/dyn-sdk'
         subprocess.run([sys.executable, str(ROOT/'tools/install.py'), '--host'], check=True,
                        env=dict(os.environ, DESTDIR=(work/'stage').as_posix(), PREFIX='/dyn-sdk'))
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md','README.md','grammar.lock.json'): shutil.copy2(ROOT/name,sdk/name)
+        for name in ('LICENSE','THIRD_PARTY_NOTICES.md','README.md','CHANGELOG.md','grammar.lock.json'): shutil.copy2(ROOT/name,sdk/name)
+        shutil.copytree(ROOT/'docs/migrations', sdk/'docs/migrations')
         distribution = windows_bundle(sdk) if WINDOWS else macos_bundle(sdk)
         compiler = sdk/'bin'/('dyn.exe' if WINDOWS else 'dyn')
         version = run(compiler, 'version').removeprefix('dyn ')

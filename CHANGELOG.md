@@ -12,7 +12,10 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.16
+
+This release changes allocation names and adds typed allocation. Follow the
+[migration guide](docs/migrations/0.1.0-preview.16.md) before updating callers.
 
 - Breaking local API cleanup: ordinary allocation builtins and arena operations
   return failure; `_or_panic` explicitly selects panic on failure. Existing callers,
