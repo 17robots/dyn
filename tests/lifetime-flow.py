@@ -19,8 +19,8 @@ class LifetimeFlow(unittest.TestCase):
             ('struct B { bad: []u8, good: []u8 } fn good(input: []u8) []u8 { x:[8]u8=[] b:=B{bad:x[..],good:input} return b.good }',True),
             ('fn good(input: []u8) []u8 { p:=input return p }',True),
             ('fn good(input: *i32) *i32 { x:i32=1 p:=&x p=input return p }',True),
-            ('use "std/mem"\nfn bad() { storage:[64]u8=[] a:=mem.arena_from_buffer(storage[..]) p:=mem.arena_push(&a,8,1) mem.arena_reset(&a) p.*=7 }',False),
-            ('use "std/mem"\nfn good() { storage:[64]u8=[] a:=mem.arena_from_buffer(storage[..]) _=mem.arena_push(&a,8,1) mem.arena_reset(&a) p:=mem.arena_push(&a,8,1) p.*=7 }',True),
+            ('use "std/mem"\nfn bad() { storage:[64]u8=[] a:=mem.arena_from_buffer(storage[..]) p:=mem.arena_push_or_panic(&a,8,1) mem.arena_reset(&a) p.*=7 }',False),
+            ('use "std/mem"\nfn good() { storage:[64]u8=[] a:=mem.arena_from_buffer(storage[..]) _=mem.arena_push_or_panic(&a,8,1) mem.arena_reset(&a) p:=mem.arena_push_or_panic(&a,8,1) p.*=7 }',True),
         ]
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'main.dyn'

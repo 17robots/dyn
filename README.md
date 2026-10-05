@@ -130,6 +130,13 @@ equivalents. `std/terminal` retains Linux terminal controls and key decoding.
 
 ## Standard library contracts
 
+The executable [memory patterns](docs/memory-patterns.md) cover fixed budgets,
+constant array sizes, explicit growth, scratch, retained output, and failure behavior.
+For local compiler/grammar development in the combined workspace, set
+`TS_DIR` to the sibling `tree-sitter-dyn` checkout containing the matching generated
+parser. The workspace justfile does this automatically. The standalone grammar pin
+must be advanced to the matching published grammar before releasing these syntax changes.
+
 The current source tree provides these APIs and ownership contracts. Source changes
 may be newer than the latest published preview.
 
@@ -400,3 +407,7 @@ non-aliasing merely because they are `const`.
 Performance changes must preserve empty inputs, overlap rules, arithmetic bounds,
 allocation-failure behavior and ABI contracts. `tests/performance-contracts.py`
 checks these alongside independent search oracles and compiler option/cache tests.
+
+The source checkout includes experimental [primitive allocators and typed
+allocation builtins](docs/allocator-design.md). These require the matching local
+grammar checkout until its dependency revision is published and pinned.

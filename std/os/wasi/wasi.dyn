@@ -70,9 +70,9 @@ pub fn arguments(arena: *mem.Arena) Arguments {
     return Arguments{ error: 48 }
   }
   mark := mem.arena_mark(arena)
-  pointers := mem.arena_try_push(arena, count * #sizeof(*u8), #alignof(*u8))
-  bytes := mem.arena_try_push(arena, size, 1)
-  slices := mem.arena_try_push(arena, count * #sizeof([]const u8), #alignof([]const u8))
+  pointers := mem.arena_push(arena, count * #sizeof(*u8), #alignof(*u8))
+  bytes := mem.arena_push(arena, size, 1)
+  slices := mem.arena_push(arena, count * #sizeof([]const u8), #alignof([]const u8))
   if !pointers.ok || !bytes.ok || !slices.ok {
     mem.arena_rewind(arena, mark)
     return Arguments{ error: 48 }

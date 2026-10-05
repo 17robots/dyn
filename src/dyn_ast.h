@@ -39,6 +39,7 @@ enum {
   DYN_TYPE_STRING,
   DYN_TYPE_RAWPTR,
   DYN_TYPE_ANY,
+  DYN_TYPE_ALLOCATOR,
   DYN_TYPE_STRUCT_BASE = 256,
   DYN_TYPE_ENUM_BASE = 32768,
   DYN_TYPE_POINTER_BASE = 65536,
@@ -46,6 +47,8 @@ enum {
   DYN_TYPE_SLICE_BASE = 196608,
   DYN_TYPE_FN_BASE = 262144,
   DYN_TYPE_DISTINCT_BASE = 327680,
+  /* Allocation results reuse pointer interning to identify their value type. */
+  DYN_TYPE_ALLOC_RESULT_BASE = 393216,
 };
 
 typedef enum {
@@ -75,8 +78,16 @@ typedef enum {
   DYN_EXPR_TYPEOF,
   DYN_EXPR_CAST,
   DYN_EXPR_BITCAST,
-  DYN_EXPR_SYSCALL
+  DYN_EXPR_SYSCALL,
+  DYN_EXPR_ALLOCATOR,
+  DYN_EXPR_ALLOC
 } DynExprKind;
+static inline bool dyn_type_is_alloc_result(DynType t) {
+  return t >= DYN_TYPE_ALLOC_RESULT_BASE && t < DYN_TYPE_ALLOC_RESULT_BASE + 65536;
+}
+
+enum { DYN_ALLOC_TRY = 1, DYN_ALLOC_SLICE = 2, DYN_ALLOC_UNINIT = 4 };
+
 typedef enum {
   DYN_OP_NONE,
   DYN_OP_NEG,
@@ -255,6 +266,7 @@ typedef struct {
   bool has_return_type;
   bool allocation_failed;
   bool type_capacity_exceeded;
+  DynSpan invalid_array_extent;
   uint32_t body_start, body_count;
   DynAstExpr *expressions;
   size_t expression_count, expression_capacity;

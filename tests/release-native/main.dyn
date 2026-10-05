@@ -12,7 +12,7 @@ fn main() {
   if invoke(&callback,#cast(rawptr) &context) != 7.5 { #panic("callback ABI") }
   arena := mem.arena_create(4096)
   if !arena.ok { #panic("native arena") }
-  bytes := mem.arena_push(&arena.arena,64,8)[..64]
+  bytes := mem.arena_push_or_panic(&arena.arena,64,8)[..64]
   bytes[63] = 42
   if !mem.arena_release(&arena.arena).ok { #panic("native release") }
 }

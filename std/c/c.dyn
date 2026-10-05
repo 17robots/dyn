@@ -93,7 +93,7 @@ pub fn string_from_arena(arena: *memory.Arena, source: []const u8) StringResult 
     return StringResult{ error: ErrorKind.Overflow }
   }
   mark := memory.arena_mark(arena)
-  allocation := memory.arena_try_push_uninit(arena, #len(source) + 1, 1)
+  allocation := memory.arena_push_uninit(arena, #len(source) + 1, 1)
   if !allocation.ok {
     return StringResult{ error: ErrorKind.Capacity, required: #len(source) + 1 }
   }

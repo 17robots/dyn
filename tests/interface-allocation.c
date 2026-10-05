@@ -37,6 +37,15 @@ static void *checked_realloc(void *p, size_t size) {
   checked_free(p);
   return next;
 }
+#ifndef TEST_MODULE
+static void *checked_calloc(size_t count, size_t size) {
+  if (count && size > SIZE_MAX / count) return NULL;
+  void *p = checked_malloc(count * size);
+  if (p) memset(p, 0, count * size);
+  return p;
+}
+#define calloc checked_calloc
+#endif
 #ifdef TEST_MODULE
 static char *checked_strdup(const char *s) {
   size_t n = strlen(s) + 1;
@@ -57,13 +66,17 @@ static char *checked_strdup(const char *s) {
 #undef malloc
 #undef realloc
 #undef free
+#ifndef TEST_MODULE
+#undef calloc
+#endif
 
 int dyn_source_target_enabled(const DynSource *source) { (void)source; return 1; }
 int dyn_sources_merge(const DynSources *sources, const char *name, DynSource *out) {
   (void)sources; (void)name; (void)out; return 1;
 }
 int main(void) {
-  char text[] = "pub fn first() {}\npub fn second() {}\npub value: i32 = 1\npub type Count = i32\n";
+  char text[] = "pub fn first() {}\npub fn second() {}\npub value: i32 = 1\npub type Count = i32\n"
+                "const Private: usize = 2\npub const Public: usize = Private * 2\npub struct Data { bytes: [Public]u8 }\n";
   DynSource source = {.path = "test.dyn", .text = text, .length = strlen(text)};
   DynSources sources = {.items = &source, .count = 1};
   size_t total = 0;

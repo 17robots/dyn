@@ -15,7 +15,7 @@ pub fn resize(scratch: *mem.Arena, source: []const u8, width: i32, height: i32, 
 }
 // Private synchronous callback; provider scratch cannot outlive resize.
 fn scratch_allocate(context: rawptr, size: usize) rawptr {
-  work := mem.arena_try_push(#cast(*mem.Arena) context, size, 64)
+  work := mem.arena_push(#cast(*mem.Arena) context, size, 64)
   if !work.ok { return nil } return #cast(rawptr) work.memory
 }
 extern fn native_resize "dyn_stb_resize"(source: rawptr, length: usize, width: i32, height: i32, output: rawptr, capacity: usize, out_width: i32, out_height: i32, channels: i32, srgb: bool, context: rawptr, allocate: *fn(rawptr, usize) rawptr) bool

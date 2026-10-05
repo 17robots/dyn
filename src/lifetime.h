@@ -2,7 +2,7 @@
 #define DYN_LIFETIME_H
 /* Conservative straight-line provenance. Branch/loop joins discard facts rather
  * than diagnosing a possible path as a proven error. This is not a borrow checker. */
-typedef struct { bool stack, expired; uint32_t arena, address; } LifeValue;
+typedef struct { bool stack, expired; uint32_t arena, address, allocator_arena; } LifeValue;
 typedef struct { uint32_t local, field; LifeValue value; } LifeField;
 typedef struct {
   Sema *sema; DynAstProgram *a; const DynSource *source; unsigned *errors;
@@ -15,6 +15,8 @@ static LifeValue life_join(LifeValue a, LifeValue b) {
   else if (b.arena && a.arena != b.arena) a.arena = 0;
   if (!a.address) a.address = b.address;
   else if (b.address && a.address != b.address) a.address = 0;
+  if (!a.allocator_arena) a.allocator_arena = b.allocator_arena;
+  else if (b.allocator_arena && a.allocator_arena != b.allocator_arena) a.allocator_arena = 0;
   return a;
 }
 static LifeValue *life_local(Life *l, uint32_t id) {
@@ -22,7 +24,7 @@ static LifeValue *life_local(Life *l, uint32_t id) {
 }
 static bool life_borrow_type(DynAstProgram *a, DynType t, unsigned depth) {
   if (depth > 64) return false;
-  if (dyn_type_is_pointer(t) || dyn_type_is_slice(t) || t == DYN_TYPE_RAWPTR || t == DYN_TYPE_ANY) return true;
+  if (dyn_type_is_pointer(t) || dyn_type_is_slice(t) || t == DYN_TYPE_RAWPTR || t == DYN_TYPE_ANY || t == DYN_TYPE_ALLOCATOR || dyn_type_is_alloc_result(t)) return true;
   if (dyn_type_is_array(t)) return life_borrow_type(a,a->arrays[t-DYN_TYPE_ARRAY_BASE].element,depth+1);
   if (dyn_type_is_struct(t)) {
     DynAstStruct *st=&a->structs[t-DYN_TYPE_STRUCT_BASE];
@@ -39,6 +41,13 @@ static bool life_mem_call(Life *l, DynAstExpr *e, const char *name) {
   return path && (strstr(path,"/std/mem/") || strstr(path,"/share/dyn/mem/")) &&
     at+z<=n && !memcmp(text+at,name,z) && (at+z==n || !(isalnum((unsigned char)text[at+z]) || text[at+z]=='_'));
 }
+static bool life_zero_rewind(Life *l, DynAstExpr *e) {
+  if (!life_mem_call(l, e, "arena_rewind") || e->item_count != 2) return false;
+  DynExprId id = l->a->items[e->item_start + 1].expression;
+  if (id == DYN_NO_EXPR || id >= l->a->expression_count) return false;
+  DynAstExpr *mark = &l->a->expressions[id];
+  return mark->kind == DYN_EXPR_INT && mark->integer == 0;
+}
 static void life_invalidate(Life *l,uint32_t arena) {
   if (!arena) return;
   for (uint32_t i=0;i<l->count;++i) if (l->locals[i].arena==arena) l->locals[i].expired=true;
@@ -46,6 +55,39 @@ static void life_invalidate(Life *l,uint32_t arena) {
 }
 static LifeValue life_expr(Life *,DynExprId,unsigned);
 static void life_forget(Life *l);
+static bool life_arena_owner(Life *l, DynType type) {
+  if (!dyn_type_is_struct(type)) return false;
+  DynSpan name = l->a->structs[type - DYN_TYPE_STRUCT_BASE].name;
+  const char *path, *text; size_t length, at;
+  dyn_source_position(l->source, name.start_byte, &path, &text, &length, &at);
+  if (!path || (!strstr(path, "/std/mem/") && !strstr(path, "/share/dyn/mem/"))) return false;
+  const char *names[] = {"Arena", "GrowingArena"};
+  for (size_t i = 0; i < 2; ++i) {
+    size_t n = strlen(names[i]);
+    if (at + n <= length && !memcmp(text + at, names[i], n) &&
+        (at + n == length || !(isalnum((unsigned char)text[at+n]) || text[at+n] == '_'))) return true;
+  }
+  return false;
+}
+static void life_warn_copy(Life *l, DynAstStmt *statement) {
+  if (l->source->context.no_warnings || statement->expression == DYN_NO_EXPR) return;
+  if (statement->kind != DYN_STMT_LOCAL && statement->kind != DYN_STMT_ASSIGN) return;
+  DynAstExpr *value = &l->a->expressions[statement->expression];
+  if ((value->kind != DYN_EXPR_NAME && value->kind != DYN_EXPR_FIELD) ||
+      !life_arena_owner(l, value->type)) return;
+  // Only assignment destinations copy a value; `_ = arena` does not create an owner.
+  if (statement->kind == DYN_STMT_ASSIGN && statement->target == DYN_NO_EXPR &&
+      discard_name(statement->name, l->source)) return;
+  const char *path, *text; size_t length, at;
+  dyn_source_position(l->source, statement->span.start_byte, &path, &text, &length, &at);
+  // The allocator implementation intentionally transfers descriptors when unmapping.
+  if (path && (strstr(path, "/std/mem/") || strstr(path, "/share/dyn/mem/"))) return;
+  bool error = l->source->context.warnings_as_errors;
+  dyn_diagnostic_source(error ? "error" : "warning", l->source,
+      statement->span.start_byte, statement->span.end_byte,
+      "copying an arena descriptor duplicates mutable allocation state; borrow its address or transfer ownership explicitly");
+  if (error) ++*l->errors;
+}
 static LifeValue life_field(Life *l,uint32_t local,uint32_t field) {
   for (size_t i=l->field_count;i;--i) if(l->fields[i-1].local==local && l->fields[i-1].field==field) return l->fields[i-1].value;
   LifeValue *v=life_local(l,local); return v ? *v : (LifeValue){0};
@@ -76,6 +118,14 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
     LifeValue left=life_expr(l,e->left,depth+1), right=life_expr(l,e->right,depth+1);
     bool view=e->kind==DYN_EXPR_SLICE || e->kind==DYN_EXPR_CAST || e->kind==DYN_EXPR_CONVERT || e->kind==DYN_EXPR_BITCAST || e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX || e->kind==DYN_EXPR_UNARY;
     if(view && life_borrow_type(a,e->type,0)) v=left;
+    if(e->kind==DYN_EXPR_ALLOCATOR) v=left;
+    if(e->kind==DYN_EXPR_ALLOC) {
+      v.arena=left.allocator_arena; v.expired=left.expired;
+      LifeValue *backing=left.allocator_arena ? life_local(l,left.allocator_arena-1) : NULL;
+      if(backing) v.stack=backing->stack;
+      /* An arbitrary callback can mutate address-exposed locals. */
+      if (!left.allocator_arena) life_forget(l);
+    }
     if(returns_local_borrow(l->sema,a,id)) v.stack=true;
     if(left.expired || right.expired) v.expired=true;
     for(uint32_t i=0;i<e->item_count;++i) {
@@ -85,24 +135,29 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
     }
     if(e->kind==DYN_EXPR_CALL && e->item_count) {
       LifeValue first=life_expr(l,a->items[e->item_start].expression,depth+1);
-      if(life_mem_call(l,e,"arena_push") || life_mem_call(l,e,"arena_push_uninit") ||
-         life_mem_call(l,e,"arena_try_push") || life_mem_call(l,e,"arena_try_push_uninit")) {
+      if(life_mem_call(l,e,"arena_push_or_panic") || life_mem_call(l,e,"arena_push_uninit_or_panic") ||
+         life_mem_call(l,e,"arena_push") || life_mem_call(l,e,"arena_push_uninit") ||
+         life_mem_call(l,e,"arena_push_array")) {
         v.arena=first.address;v.stack=false;
         LifeValue *backing=first.address ? life_local(l,first.address-1) : NULL;
         if(backing) v.stack=backing->stack;
       }
       if(life_mem_call(l,e,"arena_from_buffer")) v.stack=first.stack;
-      if(life_mem_call(l,e,"arena_reset")) life_invalidate(l,first.address);
+      if(life_mem_call(l,e,"arena_allocator")) { v.stack=first.stack; v.allocator_arena=first.address; }
+      if(life_mem_call(l,e,"growing_allocator")) v.stack=first.stack;
+      if(life_mem_call(l,e,"arena_reset") || life_zero_rewind(l,e)) life_invalidate(l,first.address);
       /* Unknown callees may mutate any address-exposed local or alias. */
-      if (!life_mem_call(l,e,"arena_push") && !life_mem_call(l,e,"arena_push_uninit") &&
-          !life_mem_call(l,e,"arena_try_push") && !life_mem_call(l,e,"arena_try_push_uninit") &&
-          !life_mem_call(l,e,"arena_from_buffer") && !life_mem_call(l,e,"arena_reset")) life_forget(l);
+      if (!life_mem_call(l,e,"arena_push_or_panic") && !life_mem_call(l,e,"arena_push_uninit_or_panic") &&
+          !life_mem_call(l,e,"arena_push") && !life_mem_call(l,e,"arena_push_uninit") &&
+          !life_mem_call(l,e,"arena_push_array") &&
+          !life_mem_call(l,e,"arena_allocator") && !life_mem_call(l,e,"growing_allocator") &&
+          !life_mem_call(l,e,"arena_from_buffer") && !life_mem_call(l,e,"arena_reset") && !life_zero_rewind(l,e)) life_forget(l);
       /* Rewind invalidates only a suffix; without allocation offsets it is
        * unsound to mark every arena pointer expired. Release may fail. */
     }
   }
   if (e->kind==DYN_EXPR_LEN) v.expired=false; /* Descriptor length does not read backing storage. */
-  if (!life_borrow_type(a,e->type,0)) { v.stack=false; v.arena=0; v.address=0; }
+  if (!life_borrow_type(a,e->type,0)) { v.stack=false; v.arena=0; v.address=0; v.allocator_arena=0; }
   if (e->kind==DYN_EXPR_CALL && !e->item_count) life_forget(l);
   return v;
 }
@@ -111,9 +166,10 @@ static void life_block(Life *l,uint32_t start,uint32_t count,unsigned depth) {
   if(depth>128) { life_forget(l); return; }
   for(uint32_t i=0;i<count && dyn_work_step(&l->source->context,1);++i) {
     DynAstStmt *st=&l->a->statements[l->a->children[start+i]];
+    life_warn_copy(l, st);
     if(st->kind==DYN_STMT_DEFER) { life_forget(l); continue; }
     LifeValue value=life_expr(l,st->expression,0);
-    if(value.expired) error_span(st->span,l->source,l->errors,"use of storage after arena_reset");
+    if(value.expired) error_span(st->span,l->source,l->errors,"use of storage after arena_reset or arena_rewind to zero");
     if(st->kind==DYN_STMT_RETURN) {
       if(value.stack && !returns_local_borrow(l->sema,l->a,st->expression))
         error_span(st->span,l->source,l->errors,"returned value borrows function-local storage through an alias");
@@ -165,7 +221,7 @@ static void life_block(Life *l,uint32_t start,uint32_t count,unsigned depth) {
       DynAstExpr *target=&l->a->expressions[st->target];
       LifeValue dest=life_expr(l,st->target,0);
       bool direct_field=target->kind==DYN_EXPR_FIELD && !target->boolean && l->a->expressions[target->left].kind==DYN_EXPR_NAME;
-      if(dest.expired && !direct_field) error_span(st->span,l->source,l->errors,"write to storage after arena_reset");
+      if(dest.expired && !direct_field) error_span(st->span,l->source,l->errors,"write to storage after arena_reset or arena_rewind to zero");
       if(direct_field)
         life_set_field(l,(uint32_t)l->a->expressions[target->left].integer,(uint32_t)target->integer,value);
       else life_forget(l); /* An indirect write may replace tracked provenance. */

@@ -244,7 +244,7 @@ fn argument_slots(arena: *mem.Arena, count: usize) ArgumentsResult {
   if count > (~#cast(usize) 0) / #sizeof([]const u8) {
     return ArgumentsResult{ kind: error_kinds.Kind.Overflow }
   }
-  allocation := mem.arena_try_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
+  allocation := mem.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
   if !allocation.ok {
     return ArgumentsResult{ kind: error_kinds.Kind.Capacity }
   }

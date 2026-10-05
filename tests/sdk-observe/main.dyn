@@ -6,8 +6,8 @@ fn main() {
   events:[4]observe.Event=[] log:=observe.log(events[..])
   storage:[64]u8=[] arena:=mem.arena_from_buffer(storage[..])
   arena.events=&log arena.event_resource=42
-  _=mem.arena_push(&arena,16,1)
-  failed:=mem.arena_try_push(&arena,100,1)
+  _=mem.arena_push_or_panic(&arena,16,1)
+  failed:=mem.arena_push(&arena,100,1)
   expect(!failed.ok)
   mem.arena_reset(&arena)
   snapshot:=mem.arena_snapshot(&arena)

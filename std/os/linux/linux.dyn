@@ -49,8 +49,8 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
     count += 1
   }
 
-  bytes_allocation := memory.arena_try_push_uninit(arena, used, 1)
-  slots_allocation := memory.arena_try_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
+  bytes_allocation := memory.arena_push_uninit(arena, used, 1)
+  slots_allocation := memory.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
   if !bytes_allocation.ok || !slots_allocation.ok {
     #panic("argument arena exhausted")
   }
@@ -122,7 +122,7 @@ pub fn fork_process() Result {
 }
 
 fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
-  allocation := memory.arena_try_push_uninit(arena, #len(text) + 1, 1)
+  allocation := memory.arena_push_uninit(arena, #len(text) + 1, 1)
   if !allocation.ok {
     return nil
   }
@@ -158,7 +158,7 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
     return -28
   }
   length := #len(arguments)
-  slots := memory.arena_try_push_uninit(arena, (length + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
+  slots := memory.arena_push_uninit(arena, (length + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
   if !slots.ok {
     return -28
   }
@@ -216,7 +216,7 @@ pub fn spawn_environment(
     }
   }
   count := #len(arguments)
-  allocation := memory.arena_try_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
+  allocation := memory.arena_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
   if !allocation.ok {
     return SpawnResult{ error: -28 }
   }
@@ -229,7 +229,7 @@ pub fn spawn_environment(
     }
   }
   pointers[count].value = nil
-  env_allocation := memory.arena_try_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
+  env_allocation := memory.arena_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
   if !env_allocation.ok {
     return SpawnResult{ error: -28 }
   }

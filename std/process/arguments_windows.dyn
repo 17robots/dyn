@@ -104,7 +104,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   if !result.ok {
     return result
   }
-  allocation := mem.arena_try_push_uninit(arena, size, 1)
+  allocation := mem.arena_push_uninit(arena, size, 1)
   if !allocation.ok {
     return ArgumentsResult{ kind: error_kinds.Kind.Capacity }
   }

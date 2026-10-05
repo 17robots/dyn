@@ -115,7 +115,7 @@ pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 { return OpenResult{ error: -28 } }
   allocation := mem.arena_create(#sizeof(State))
   if !allocation.ok { return OpenResult{ error: -12 } }
-  pushed := mem.arena_try_push(&allocation.arena, #sizeof(State), #alignof(State))
+  pushed := mem.arena_push(&allocation.arena, #sizeof(State), #alignof(State))
   if !pushed.ok { _ = mem.arena_release(&allocation.arena) return OpenResult{ error: -12 } }
   state := #cast(*State) pushed.memory
   if !load(&state.api) {

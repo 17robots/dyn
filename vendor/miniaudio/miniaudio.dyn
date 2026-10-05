@@ -9,7 +9,7 @@ pub struct Read { samples: usize, code: i32, ended: bool, ok: bool }
 pub fn decoder_create(arena: *mem.Arena, bytes: []const u8) Context {
   if arena == nil || #len(bytes) == 0 { return Context{ code: -2 } }
   mark := mem.arena_mark(arena)
-  allocation := mem.arena_try_push(arena, decoder_size(), decoder_align())
+  allocation := mem.arena_push(arena, decoder_size(), decoder_align())
   if !allocation.ok { return Context{ code: -4 } }
   state := #cast(rawptr) allocation.memory
   code := decoder_init(state, #cast(rawptr) &bytes[0], #len(bytes))
@@ -27,7 +27,7 @@ pub extern fn decoder_close "dyn_ma_decoder_close"(decoder: rawptr)
 pub fn engine_create(arena: *mem.Arena, device: bool) Context {
   if arena == nil { return Context{ code: -2 } }
   mark := mem.arena_mark(arena)
-  allocation := mem.arena_try_push(arena, engine_size(), engine_align())
+  allocation := mem.arena_push(arena, engine_size(), engine_align())
   if !allocation.ok { return Context{ code: -4 } }
   state := #cast(rawptr) allocation.memory code := engine_init(state, device)
   if code != 0 { mem.arena_rewind(arena, mark) return Context{ code: code } }
@@ -61,7 +61,7 @@ pub fn sound_create(arena: *mem.Arena, engine: rawptr, path: []const u8, buffer:
   if arena == nil || engine == nil { return Context{ code: -2 } }
   encoded := c.string_from_bytes(buffer, path) if !encoded.ok { return Context{ code: -2 } }
   mark := mem.arena_mark(arena)
-  work := mem.arena_try_push(arena, sound_size(), sound_align()) if !work.ok { return Context{ code: -4 } }
+  work := mem.arena_push(arena, sound_size(), sound_align()) if !work.ok { return Context{ code: -4 } }
   state := #cast(rawptr) work.memory code := sound_init(state, engine, encoded.value)
   if code != 0 { mem.arena_rewind(arena, mark) return Context{ code: code } }
   return Context{ value: state, ok: true }

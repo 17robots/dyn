@@ -166,6 +166,10 @@ pub fn snapshot(state: *const SlotMap) Snapshot {
 // Validated lookup represents absence and a live view as distinct alternatives.
 // Present still borrows slot storage until removal/reinitialization.
 pub enum Lookup { Missing, Present: []u8 }
+// Ownership: Present borrows slot storage; it does not copy the value.
+// Invalidation: removal, reinitialization, or destruction of backing storage.
+// Allocation: none; stale handles return Missing.
+// Thread safety: synchronize map access and consume views before mutation.
 pub fn lookup(state: *SlotMap, handle: Handle) Lookup {
   value := get(state, handle)
   if !value.ok {

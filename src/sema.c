@@ -472,6 +472,12 @@ static uint64_t sema_type_layout(Sema *sema, DynAstProgram *a, DynType t, bool a
   if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING)
     return alignment ? sema->pointer_bytes : 2 * sema->pointer_bytes;
   if (t == DYN_TYPE_ANY) return alignment ? 8 : 16;
+  if (t == DYN_TYPE_ALLOCATOR) return alignment ? sema->pointer_bytes : 2 * sema->pointer_bytes;
+  if (dyn_type_is_alloc_result(t)) {
+    DynType value = a->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee;
+    uint64_t pointer = sema->pointer_bytes, bytes = dyn_type_is_slice(value) ? 2 * pointer : pointer;
+    return alignment ? pointer : (bytes + 5 + pointer - 1) / pointer * pointer;
+  }
   return 0;
 }
 static bool literal_fits(Sema *sema, uint64_t v, DynType t) {
@@ -527,7 +533,7 @@ static DynAstFnType *fn_type_info(DynAstProgram *a, DynType t) {
 static bool sema_c_abi_type(DynAstProgram *a, DynType type, unsigned depth) {
   type = underlying_type(a, type);
   if (depth > 128) return false;
-  if (type == DYN_TYPE_STRING || type == DYN_TYPE_ANY || dyn_type_is_slice(type)) return false;
+  if (type == DYN_TYPE_STRING || type == DYN_TYPE_ANY || type == DYN_TYPE_ALLOCATOR || dyn_type_is_alloc_result(type) || dyn_type_is_slice(type)) return false;
   if (dyn_type_is_struct(type)) {
     DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
     if (!st->field_count) return false;
@@ -971,6 +977,11 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
     return;
   }
   char inner[384];
+  if (dyn_type_is_alloc_result(t)) {
+    type_name_into(a, a->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee, s, inner, sizeof(inner));
+    snprintf(out, cap, "#AllocResult(%s)", inner);
+    return;
+  }
   if (dyn_type_is_pointer(t)) {
     DynAstPointer *p = pointer_info(a, t);
     type_name_into(a, p->pointee, s, inner, sizeof(inner));
@@ -1034,6 +1045,8 @@ static unsigned reflection_kind(Sema *sema, DynType t) {
     return 9;
   if (dyn_type_is_function(t))
     return 10;
+  if (t == DYN_TYPE_ALLOCATOR) return 11;
+  if (dyn_type_is_alloc_result(t)) return 12;
   return 0;
 }
 static void display_type_name(DynAstProgram *a, DynType t, const DynSource *s,
@@ -1088,7 +1101,7 @@ static DynExprId reflection_string(DynAstProgram *a, DynType type,
 static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
                                     DynType member_type, DynType slice_type,
                                     const DynSpan *names, const DynType *types,
-                                    uint32_t count) {
+                                    uint32_t count, const char *const *builtin_names) {
   if (!count)
     return reflection_expr(a, DYN_EXPR_NIL, slice_type, 0);
   if (!reserve_reflection_items(a, (size_t)count * 3))
@@ -1101,6 +1114,7 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
   for (uint32_t i = 0; i < count; ++i) {
     size_t n = names ? names[i].end_byte - names[i].start_byte : 0;
     const char *sname = names ? s->text + names[i].start_byte : "";
+    if (builtin_names) { sname = builtin_names[i]; n = strlen(sname); }
     DynExprId name = reflection_string(a, name_type, sname, n);
     char type_name[512];
     type_name_into(a, types[i], s, type_name, sizeof(type_name));
@@ -1133,6 +1147,12 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
   a->expressions[slice].right = DYN_NO_EXPR;
   return slice;
 }
+static DynType allocator_error_type(DynAstProgram *a, const DynSource *s) {
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (span_is(a->enums[i].name, s, "AllocError")) return DYN_TYPE_ENUM_BASE + i;
+  return DYN_TYPE_ERROR;
+}
+
 static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                           const DynSource *s, unsigned *errors,
                           DynType expected) {
@@ -1542,6 +1562,10 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       array_length = array_info(a, operand)->length;
     } else if (dyn_type_is_slice(operand))
       element = slice_info(a, operand)->element;
+    else if (dyn_type_is_alloc_result(operand)) {
+      element = a->pointers[operand - DYN_TYPE_ALLOC_RESULT_BASE].pointee;
+      members = 3;
+    }
     else if (dyn_type_is_struct(operand))
       members = a->structs[operand - DYN_TYPE_STRUCT_BASE].field_count;
     else if (dyn_type_is_enum(operand))
@@ -1571,7 +1595,11 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     values[10] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
     values[11] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
     values[12] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
-    if (dyn_type_is_struct(operand)) {
+    if (dyn_type_is_alloc_result(operand)) {
+      const char *names[] = {"value", "error", "ok"};
+      DynType types[] = {a->pointers[operand - DYN_TYPE_ALLOC_RESULT_BASE].pointee, allocator_error_type(a, s), DYN_TYPE_BOOL};
+      values[10] = reflection_members(a, s, member_type, member_slice, NULL, types, 3, names);
+    } else if (dyn_type_is_struct(operand)) {
       DynAstStruct *subject = &a->structs[operand - DYN_TYPE_STRUCT_BASE];
       DynSpan *names = calloc(subject->field_count, sizeof(*names));
       DynType *types = calloc(subject->field_count, sizeof(*types));
@@ -1583,7 +1611,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[10] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, subject->field_count);
+                                        types, subject->field_count, NULL);
       free(names);
       free(types);
     } else if (dyn_type_is_enum(operand)) {
@@ -1598,7 +1626,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[11] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, subject->variant_count);
+                                        types, subject->variant_count, NULL);
       free(names);
       free(types);
     } else if (dyn_type_is_function(operand)) {
@@ -1614,7 +1642,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[12] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, signature->param_count);
+                                        types, signature->param_count, NULL);
       free(names);
       free(types);
     }
@@ -1633,6 +1661,56 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].item_start = start;
     a->expressions[id].item_count = 13;
     return a->expressions[id].type;
+  }
+  if (a->expressions[id].kind == DYN_EXPR_ALLOCATOR) {
+    DynType context = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_RAWPTR);
+    DynType callback = check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_INFER);
+    DynAstPointer *pointer = pointer_info(a, callback);
+    DynAstFnType *signature = pointer ? fn_type_info(a, pointer->pointee) : NULL;
+    bool valid = signature && signature->return_type == DYN_TYPE_RAWPTR &&
+                 signature->param_count == 4 && !signature->variadic;
+    if (valid) {
+      DynType *p = a->fn_type_params + signature->param_start;
+      DynAstPointer *error = pointer_info(a, p[3]);
+      valid = p[0] == DYN_TYPE_RAWPTR && p[1] == DYN_TYPE_USIZE &&
+              p[2] == DYN_TYPE_USIZE && error && !error->is_const && dyn_type_is_enum(error->pointee) && span_is(a->enums[error->pointee - DYN_TYPE_ENUM_BASE].name, s, "AllocError");
+    }
+    if ((!dyn_type_is_pointer(context) && context != DYN_TYPE_RAWPTR) || !valid ||
+        a->expressions[a->expressions[id].right].kind != DYN_EXPR_FUNCTION) {
+      error_span(a->expressions[id].span, s, errors,
+        "#allocator requires a context pointer and known &function: fn(rawptr, usize, usize, *AllocError) rawptr");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    return a->expressions[id].type = DYN_TYPE_ALLOCATOR;
+  }
+  if (a->expressions[id].kind == DYN_EXPR_ALLOC) {
+    DynType element = (DynType)a->expressions[id].integer;
+    unsigned flags = a->expressions[id].op;
+    DynType allocator = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_ALLOCATOR);
+    bool slice = (flags & DYN_ALLOC_SLICE) != 0;
+    bool valid = allocator == DYN_TYPE_ALLOCATOR && element != DYN_TYPE_ERROR &&
+                 element != DYN_TYPE_VOID && !dyn_type_is_function(element) &&
+                 sema_type_layout(sema, a, element, false) != 0;
+    if (slice) {
+      if (a->expressions[id].right == DYN_NO_EXPR) valid = false;
+      else {
+        DynExprId count = a->expressions[id].right;
+        DynType found = check_expr(sema, a, count, s, errors, DYN_TYPE_USIZE);
+        if (found != DYN_TYPE_USIZE || (a->expressions[count].kind == DYN_EXPR_UNARY && a->expressions[count].op == DYN_OP_NEG)) valid = false;
+      }
+    } else if (a->expressions[id].right != DYN_NO_EXPR) valid = false;
+    if (!valid) {
+      error_span(a->expressions[id].span, s, errors,
+        "allocation requires a sized element type, Allocator, and (for slices only) usize count");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    DynType value = slice ? sema_intern_slice(a, element, false) : sema_intern_pointer(a, element, false);
+    if (value == DYN_TYPE_ERROR) return a->expressions[id].type = value;
+    if (flags & DYN_ALLOC_TRY) {
+      DynType key = sema_intern_pointer(a, value, false);
+      value = key == DYN_TYPE_ERROR ? key : DYN_TYPE_ALLOC_RESULT_BASE + key - DYN_TYPE_POINTER_BASE;
+    }
+    return a->expressions[id].type = value;
   }
   if (a->expressions[id].kind == DYN_EXPR_SIZE || a->expressions[id].kind == DYN_EXPR_ALIGN) {
     DynType operand =
@@ -1769,6 +1847,19 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       DynAstPointer *p = pointer_info(a, base);
       base = p ? p->pointee : DYN_TYPE_ERROR;
       a->expressions[id].boolean = true;
+    }
+    if (dyn_type_is_alloc_result(base)) {
+      DynSpan name = a->expressions[id].span;
+      const char *names[] = {"value", "error", "ok"};
+      for (uint32_t field = 0; field < 3; ++field) {
+        size_t n = strlen(names[field]);
+        if (name.end_byte - name.start_byte == n && !memcmp(s->text + name.start_byte, names[field], n)) {
+          a->expressions[id].integer = field;
+          return a->expressions[id].type = field == 0 ? a->pointers[base - DYN_TYPE_ALLOC_RESULT_BASE].pointee : field == 1 ? allocator_error_type(a, s) : DYN_TYPE_BOOL;
+        }
+      }
+      error_span(name, s, errors, "allocation result has value, error, and ok fields");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     if (!dyn_type_is_struct(base)) {
       if (base != DYN_TYPE_ERROR)
@@ -2432,6 +2523,7 @@ static bool returns_local_borrow(Sema *sema, DynAstProgram *a, DynExprId id) {
     return false;
   if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS)
     return function_storage(sema, a, e->left);
+  if (e->kind == DYN_EXPR_ALLOCATOR) return returns_local_borrow(sema, a, e->left);
   if (e->kind == DYN_EXPR_SLICE) {
     DynType base = underlying_type(a, a->expressions[e->left].type);
     return (dyn_type_is_array(base) && function_storage(sema, a, e->left)) ||

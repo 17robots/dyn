@@ -1,6 +1,6 @@
 use "std/observe" observe
 
-// Arenas and fixed-slot reuse primitives; the only Dyn-owned heap allocation interface.
+// Arenas and fixed-slot reuse primitives, with adapters for builtin Allocator handles.
 //
 // Arena owns heap backing or borrows a caller slice. Reset or rewind invalidates affected allocations.
 // FreeList borrows one fixed region, commonly carved from an arena. Returning a slot
@@ -36,6 +36,9 @@ pub fn arena_from_buffer(backing: []u8) Arena {
 
 // Heap-backed fixed arena. Keep this result in place and pass &result.arena.
 // Buffer-backed arenas never fall back to heap allocation on exhaustion.
+// Ownership: success returns one owning arena; borrow its address or transfer explicitly.
+// Allocation: requests capacity bytes of backing storage from the OS.
+// Failure: returns an inactive arena with an error; zero capacity is rejected.
 pub fn arena_create(capacity: usize) ArenaResult {
   if capacity == 0 {
     return ArenaResult{ error: ErrorKind.Capacity }
@@ -50,6 +53,8 @@ pub struct Status { error: isize, ok: bool }
 struct Mapping { bytes: []u8, error: isize, ok: bool }
 // Releases owned backing, or clears a borrowed arena without freeing its storage.
 // Failure leaves the arena intact; repeating release on the same slot is safe.
+// Invalidation: success invalidates all payload views; failure preserves the arena.
+// Failure: retain the owner and inspect Status.ok before discarding it.
 pub fn arena_release(arena: *Arena) Status {
   if arena.owns_memory && #len(arena.data) != 0 {
     error := mapping_release(arena.data)
@@ -64,6 +69,15 @@ pub fn arena_release(arena: *Arena) Status {
 
 pub fn arena_capacity(arena: *const Arena) usize {
   return #len(arena.data)
+}
+
+// Ownership: transfers the descriptor and clears its old slot. No allocation.
+// Existing payload pointers remain valid; pointers to the old Arena do not retarget.
+// Do not transfer an arena whose descriptor address is retained by another object.
+pub fn arena_take(arena: *Arena) Arena {
+  result := arena.*
+  arena.* = Arena{}
+  return result
 }
 pub fn arena_used(arena: *const Arena) usize {
   return arena.offset
@@ -174,24 +188,40 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
   return Allocation{ memory: memory, size: size, ok: true }
 }
 
-pub fn arena_try_push(arena: *Arena, size: usize, alignment: usize) Allocation {
+// Ownership: result borrows arena backing; zero-size success has nil memory.
+// Invalidation: applicable rewind, reset, or release.
+// Allocation: consumes fixed arena capacity and zeroes successful payload bytes.
+// Failure: offset and payload bytes are unchanged; diagnostic counters may change.
+// Thread safety: caller synchronizes access to the arena.
+pub fn arena_push(arena: *Arena, size: usize, alignment: usize) Allocation {
   return arena_try_push_impl(arena, size, alignment, true)
 }
 
-pub fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation {
+// Ownership: result borrows arena backing; cast memory to the requested element type.
+// Invalidation: applicable rewind, reset, or release.
+// Allocation: checked count * element_size, aligned and zeroed; no heap fallback.
+// Failure: overflow/capacity/alignment failure preserves offset and existing bytes.
+// Thread safety: caller synchronizes access to the arena.
+pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignment: usize) Allocation {
+  size := size_for(count, element_size)
+  if !size.ok { return arena_failure(arena, ErrorKind.Overflow) }
+  return arena_push(arena, size.bytes, alignment)
+}
+
+pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation {
   return arena_try_push_impl(arena, size, alignment, false)
 }
 
-pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8 {
-  allocation := arena_try_push(arena, size, alignment)
+pub fn arena_push_or_panic(arena: *Arena, size: usize, alignment: usize) *u8 {
+  allocation := arena_push(arena, size, alignment)
   if !allocation.ok {
     #panic("arena exhausted or alignment invalid")
   }
   return allocation.memory
 }
 
-pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
-  allocation := arena_try_push_uninit(arena, size, alignment)
+pub fn arena_push_uninit_or_panic(arena: *Arena, size: usize, alignment: usize) *u8 {
+  allocation := arena_push_uninit(arena, size, alignment)
   if !allocation.ok {
     #panic("arena exhausted or alignment invalid")
   }
@@ -201,8 +231,8 @@ pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
 // Returned arena borrows storage consumed from parent. Rewind/reset of parent
 // invalidates child and all allocations made through it.
 pub struct ArenaResult { arena: Arena, error: ErrorKind, code: isize, ok: bool }
-pub fn arena_try_sub(parent: *Arena, capacity: usize) ArenaResult {
-  allocation := arena_try_push_uninit(parent, capacity, 1)
+pub fn arena_sub(parent: *Arena, capacity: usize) ArenaResult {
+  allocation := arena_push_uninit(parent, capacity, 1)
   if !allocation.ok {
     return ArenaResult{ error: allocation.error }
   }
@@ -212,8 +242,8 @@ pub fn arena_try_sub(parent: *Arena, capacity: usize) ArenaResult {
   return ArenaResult{ arena: arena_from_buffer(allocation.memory[..capacity]), ok: true }
 }
 
-pub fn arena_sub(parent: *Arena, capacity: usize) Arena {
-  child := arena_try_sub(parent, capacity)
+pub fn arena_sub_or_panic(parent: *Arena, capacity: usize) Arena {
+  child := arena_sub(parent, capacity)
   if !child.ok {
     #panic("parent arena exhausted or invalid")
   }
@@ -248,6 +278,11 @@ fn arena_conflicts(candidate: *const Arena, conflict: *const Arena) bool {
   }
   return left - right < #len(conflict.data)
 }
+// Ownership: borrows a non-conflicting arena and records its current mark.
+// Invalidation: scratch_end expires allocations made after that mark.
+// Allocation: none; no implicit thread-local arena or heap fallback.
+// Failure: panics if neither candidate has non-conflicting backing.
+// Thread safety: candidates must be exclusively accessible for the scratch scope.
 pub fn scratch_begin(first: *Arena, second: *Arena, conflict: *const Arena) Scratch {
   selected := first
   if arena_conflicts(selected, conflict) {
@@ -344,40 +379,49 @@ pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usiz
 // the arena has room. The optional bitmap makes allocation and release constant
 // time; otherwise release scans the free chain. Exact slot capacity still works.
 // Metadata and slots share the arena lifetime; no separate heap storage is used.
-pub fn free_list_from_arena(
+pub fn free_list_from_arena_or_panic(
   arena: *Arena,
   slot_count: usize,
   slot_size: usize,
   alignment: usize,
 ) FreeList {
+  result := free_list_from_arena(arena, slot_count, slot_size, alignment)
+  if !result.ok { #panic("free-list creation failed") }
+  return result.value
+}
+
+pub struct FreeListResult { value: FreeList, error: ErrorKind, ok: bool }
+
+// Ownership: slots and optional bitmap borrow the arena; descriptor is a single owner.
+// Invalidation: backing rewind/reset/release; individual free permits slot reuse.
+// Allocation: fixed arena only; bitmap is optional when exact slot capacity fits.
+// Failure: validates layout before allocation; arena offset is unchanged on failure.
+// Thread safety: caller synchronized.
+pub fn free_list_from_arena(arena: *Arena, slot_count: usize, slot_size: usize, alignment: usize) FreeListResult {
+  if !valid_alignment(alignment) { return FreeListResult{ error: ErrorKind.InvalidAlignment } }
+  if slot_count == 0 { return FreeListResult{ error: ErrorKind.InvalidState } }
   effective_alignment := free_list_alignment(alignment)
-  if slot_count == 0 {
-    #panic("free list requires at least one slot")
-  }
   actual := slot_size
-  if actual < #sizeof(FreeListNode) {
-    actual = #sizeof(FreeListNode)
-  }
+  if actual < #sizeof(FreeListNode) { actual = #sizeof(FreeListNode) }
   actual = align_size(actual, effective_alignment)
   maximum := ~#cast(usize) 0
   if actual == 0 || slot_count > maximum / actual {
-    #panic("free-list capacity overflow")
+    return FreeListResult{ error: ErrorKind.Overflow }
   }
   size := slot_count * actual
-  memory := arena_push_uninit(arena, size, effective_alignment)
-  list := free_list_init(memory[..size], actual, effective_alignment)
+  allocated := arena_push_uninit(arena, size, effective_alignment)
+  if !allocated.ok { return FreeListResult{ error: allocated.error } }
+  list := free_list_init(allocated.memory[..size], actual, effective_alignment)
   bitmap_size := slot_count / 8
-  if slot_count % 8 != 0 {
-    bitmap_size += 1
-  }
+  if slot_count % 8 != 0 { bitmap_size += 1 }
   if arena_remaining(arena) >= bitmap_size {
-    bitmap := arena_push(arena, bitmap_size, 1)
+    bitmap := arena_push_or_panic(arena, bitmap_size, 1)
     list.occupied = bitmap[..bitmap_size]
   }
-  return list
+  return FreeListResult{ value: list, ok: true }
 }
 
-pub fn free_list_try_alloc(list: *FreeList) rawptr {
+pub fn free_list_alloc(list: *FreeList) rawptr {
   if list.free_head == nil {
     return nil
   }
@@ -393,8 +437,8 @@ pub fn free_list_try_alloc(list: *FreeList) rawptr {
   return #cast(rawptr) node
 }
 
-pub fn free_list_alloc(list: *FreeList) rawptr {
-  memory := free_list_try_alloc(list)
+pub fn free_list_alloc_or_panic(list: *FreeList) rawptr {
+  memory := free_list_alloc(list)
   if memory == nil {
     #panic("free list exhausted")
   }
@@ -442,13 +486,26 @@ pub fn free_list_free(list: *FreeList, memory: rawptr) {
 // FreeList remains available when callers need its lower-level accounting.
 pub struct Pool { list: FreeList }
 
-pub fn pool_init(
+pub fn pool_init_or_panic(
   arena: *Arena,
   slot_count: usize,
   slot_size: usize,
   alignment: usize,
 ) Pool {
-  return Pool{ list: free_list_from_arena(arena, slot_count, slot_size, alignment) }
+  return Pool{ list: free_list_from_arena_or_panic(arena, slot_count, slot_size, alignment) }
+}
+
+pub struct PoolResult { value: Pool, error: ErrorKind, ok: bool }
+
+// Ownership: pool borrows arena backing; do not independently mutate descriptor copies.
+// Invalidation: release reuses a slot; arena rewind/reset/release invalidates the pool.
+// Allocation: fixed arena slots with optional occupancy bitmap.
+// Failure: leaves arena offset unchanged; reports layout or capacity error.
+// Thread safety: caller synchronized.
+pub fn pool_init(arena: *Arena, slot_count: usize, slot_size: usize, alignment: usize) PoolResult {
+  result := free_list_from_arena(arena, slot_count, slot_size, alignment)
+  if !result.ok { return PoolResult{ error: result.error } }
+  return PoolResult{ value: Pool{ list: result.value }, ok: true }
 }
 
 pub fn pool_capacity(pool: *const Pool) usize {
@@ -457,11 +514,14 @@ pub fn pool_capacity(pool: *const Pool) usize {
 pub fn pool_available(pool: *const Pool) usize {
   return pool.list.free_count
 }
-pub fn pool_try_acquire(pool: *Pool) rawptr {
-  return free_list_try_alloc(&pool.list)
-}
+// Returns nil when exhausted. Reused slot bytes are uninitialized.
+// Retained pointers must not be used after pool_release; use generation handles
+// (std/container/slot_map) when references can outlive individual deletion.
 pub fn pool_acquire(pool: *Pool) rawptr {
   return free_list_alloc(&pool.list)
+}
+pub fn pool_acquire_or_panic(pool: *Pool) rawptr {
+  return free_list_alloc_or_panic(&pool.list)
 }
 pub fn pool_release(pool: *Pool, memory: rawptr) {
   free_list_free(&pool.list, memory)
@@ -533,12 +593,47 @@ pub fn compare(left: []const u8, right: []const u8) i32 {
 struct Block { next: *Block, arena: Arena, start: usize }
 // Blocks never move. Reset retains them for reuse; release invalidates all borrows.
 // Thread confined and not independently copyable by convention, like Arena.
-pub struct GrowingArena { first: *Block, current: *Block, block_size: usize }
+pub struct GrowingArena {
+  first: *Block, current: *Block, block_size: usize,
+  capacity_limit: usize = #cast(usize) -1,
+  // Maintained by growth/trim/release so enforcing the cap does not scan all blocks.
+  backing_bytes: usize,
+}
+// Explicitly opts into growth. block_size is a preferred payload size, not a cap.
+// Allocation: none until the first push. Ownership: caller owns the returned arena.
 pub fn growing_create(block_size: usize) GrowingArena {
   return GrowingArena{ block_size: block_size }
 }
 
-pub fn growing_try_push(arena: *GrowingArena, size: usize, alignment: usize) Allocation {
+// Explicit growth with a cap on total requested backing bytes, including block
+// headers and alignment allowance. This is not an RSS or OS page commitment cap.
+// A block must fit in full; zero limit permits only zero-size allocations.
+pub fn growing_create_bounded(block_size: usize, capacity_limit: usize) GrowingArena {
+  return GrowingArena{ block_size: block_size, capacity_limit: capacity_limit }
+}
+
+pub struct GrowingSnapshot { backing_bytes: usize, used: usize, blocks: usize }
+
+// Ownership: pointer-free value, safe to retain after backing expires.
+// Allocation: none; scans the retained block chain.
+// Thread safety: caller synchronized.
+// used includes payload alignment padding, but excludes each block's header.
+pub fn growing_snapshot(arena: *const GrowingArena) GrowingSnapshot {
+  snapshot := GrowingSnapshot{}
+  block := arena.first
+  for block != nil {
+    snapshot.backing_bytes += arena_capacity(&block.arena)
+    snapshot.used += arena_used(&block.arena) - block.start
+    snapshot.blocks += 1
+    block = block.next
+  }
+  return snapshot
+}
+
+// Ownership: result borrows arena storage.
+// Invalidation: reset/release, not growth.
+// Failure: existing allocations and chain remain intact. Zero size returns nil.
+fn growing_push_impl(arena: *GrowingArena, size: usize, alignment: usize, zero_memory: bool) Allocation {
   if !valid_alignment(alignment) {
     return Allocation{ error: ErrorKind.InvalidAlignment }
   }
@@ -548,7 +643,7 @@ pub fn growing_try_push(arena: *GrowingArena, size: usize, alignment: usize) All
   block := arena.current
   last: *Block = nil
   for block != nil {
-    reused := arena_try_push(&block.arena, size, alignment)
+    reused := arena_try_push_impl(&block.arena, size, alignment, zero_memory)
     if reused.ok {
       arena.current = block
       return reused
@@ -570,21 +665,21 @@ pub fn growing_try_push(arena: *GrowingArena, size: usize, alignment: usize) All
     return Allocation{ error: ErrorKind.Overflow }
   }
   capacity += alignment - 1
+  retained := arena.backing_bytes
+  if retained > arena.capacity_limit || capacity > arena.capacity_limit - retained {
+    return Allocation{ error: ErrorKind.Capacity }
+  }
   created := arena_create(capacity)
   if !created.ok {
     return Allocation{ error: ErrorKind.System, code: created.code }
   }
-  header := arena_push(&created.arena, #sizeof(Block), #alignof(Block))
+  header := arena_push_or_panic(&created.arena, #sizeof(Block), #alignof(Block))
   block = #cast(*Block) header
   block.arena = created.arena
   created.arena = Arena{}
   block.start = arena_mark(&block.arena)
-  result := arena_try_push(&block.arena, size, alignment)
-  if !result.ok {
-    owner := block.arena
-    _ = arena_release(&owner)
-    return result
-  }
+  // Capacity above includes worst-case header and payload alignment padding.
+  // Publish ownership before the push so even a broken invariant cannot orphan it.
   if last != nil {
     last.next = block
   }
@@ -592,17 +687,33 @@ pub fn growing_try_push(arena: *GrowingArena, size: usize, alignment: usize) All
     arena.first = block
   }
   arena.current = block
-  return result
+  arena.backing_bytes += capacity
+  return arena_try_push_impl(&block.arena, size, alignment, zero_memory)
 }
 
-pub fn growing_push(arena: *GrowingArena, size: usize, alignment: usize) *u8 {
-  result := growing_try_push(arena, size, alignment)
+// Ownership: result borrows growing arena storage; growth preserves earlier pointers.
+// Invalidation: reset or release, or trim after the allocation has been reset.
+// Allocation: reuses retained blocks before acquiring another bounded block.
+// Failure: existing allocations and chain remain intact; zero size succeeds with nil.
+// Thread safety: caller synchronized.
+pub fn growing_push(arena: *GrowingArena, size: usize, alignment: usize) Allocation {
+  return growing_push_impl(arena, size, alignment, true)
+}
+
+// Same lifetime and failure contract as growing_push; bytes are not initialized.
+pub fn growing_push_uninit(arena: *GrowingArena, size: usize, alignment: usize) Allocation {
+  return growing_push_impl(arena, size, alignment, false)
+}
+
+pub fn growing_push_or_panic(arena: *GrowingArena, size: usize, alignment: usize) *u8 {
+  result := growing_push(arena, size, alignment)
   if !result.ok {
     #panic("growing arena allocation failed")
   }
   return result.memory
 }
 
+// Invalidates all allocations. Retains every block for reuse; does not free backing.
 pub fn growing_reset(arena: *GrowingArena) {
   block := arena.first
   for block != nil {
@@ -612,10 +723,43 @@ pub fn growing_reset(arena: *GrowingArena) {
   arena.current = arena.first
 }
 
+// Releases only empty blocks until backing_bytes <= keep_bytes, where possible.
+// Does not reset live allocations. Call after growing_reset to trim an idle arena.
+// Failure: earlier releases remain effective; the failed block and later blocks
+// remain owned. Retrying is safe. Snapshot reports the actual retained total.
+pub fn growing_trim(arena: *GrowingArena, keep_bytes: usize) Status {
+  retained := arena.backing_bytes
+  previous: *Block = nil
+  block := arena.first
+  for block != nil && retained > keep_bytes {
+    next := block.next
+    if arena_used(&block.arena) == block.start {
+      capacity := arena_capacity(&block.arena)
+      owner := block.arena
+      released := arena_release(&owner)
+      if !released.ok { return released }
+      if previous == nil { arena.first = next }
+      else { previous.next = next }
+      if arena.current == block {
+        arena.current = next
+        if next == nil { arena.current = previous }
+      }
+      retained -= capacity
+      arena.backing_bytes = retained
+    }
+    else { previous = block }
+    block = next
+  }
+  return Status{ ok: true }
+}
+
+// Invalidates released blocks. Failure preserves ownership of remaining blocks;
+// release is incremental, so pointers into earlier released blocks are invalid.
 pub fn growing_release(arena: *GrowingArena) Status {
   for arena.first != nil {
     block := arena.first
     next := block.next
+    capacity := arena_capacity(&block.arena)
     // The owner lives in this mapping. Release through a local copy so clearing
     // the handle after unmapping never writes into freed storage. Failure keeps
     // block.arena intact for retry; success removes the block from the chain.
@@ -626,7 +770,7 @@ pub fn growing_release(arena: *GrowingArena) Status {
     }
     arena.first = next
     arena.current = next
+    arena.backing_bytes -= capacity
   }
   return Status{ ok: true }
 }
-

@@ -19,6 +19,9 @@ pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) is
   return #cast(isize) thread.native.id
 }
 
+// Ownership: success ends worker access and clears the native owner.
+// Failure: retains the handle for retry; keep thread/context alive until success.
+// Allocation: none. Thread safety: one caller controls this descriptor.
 pub fn join(thread: *Thread) isize {
   if thread.native.handle == nil { return 0 }
   if !win.thread_join(&thread.native) { return win.thread_error() }

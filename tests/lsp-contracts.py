@@ -60,6 +60,18 @@ class Contracts(unittest.TestCase):
         path.write_text(text)
         return path
 
+    def test_allocator_result_completion(self):
+        text = 'fn main() {\n a: Allocator\n result := #alloc(u64, a)\n _ = result.\n}\n'
+        path = self.file('main.dyn', text)
+        responses, _ = run_lsp([opened(path, text),
+            request('textDocument/completion', {'textDocument': {'uri': path.as_uri()},
+                'position': {'line': 3, 'character': 12}}, 2)])
+        items = next(r['result'] for r in responses if r.get('id') == 2)
+        labels = {item['label']: item.get('detail', '') for item in items}
+        self.assertEqual(labels.get('value'), '*u64', responses)
+        self.assertEqual(labels.get('error'), 'AllocError', responses)
+        self.assertEqual(labels.get('ok'), 'bool', responses)
+
     def test_completion_precedes_queued_change_diagnostics(self):
         path = self.file('main.dyn', 'fn main() {}\n')
         text = 'fn main() { _ = unknown }\n'

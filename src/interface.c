@@ -101,10 +101,15 @@ static char *canonical(const char *p, size_t n, size_t *out_n) {
 static int string_compare(const void *a, const void *b) {
   return strcmp(*(char *const *)a, *(char *const *)b);
 }
+#include "interface_constants.h"
+
 int dyn_interface_build(const DynSources *sources, DynInterface *result) {
   memset(result, 0, sizeof(*result));
   char **decls = NULL;
   size_t count = 0;
+  InterfaceConstant *constants = NULL;
+  size_t constant_count = 0;
+  if (!interface_constants(sources, &constants, &constant_count)) goto fail;
   for (size_t si = 0; si < sources->count; ++si) {
     const DynSource *s = &sources->items[si];
     if (dyn_source_target_enabled(s) == 0)
@@ -123,7 +128,9 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
       TSNode d = dyn_syntax_declaration_node(wrapper);
       const char *kind = ts_node_type(d);
       bool representation = !strcmp(kind, "struct") || !strcmp(kind, "enum") ||
-                            !strcmp(kind, "type_alias");
+                            !strcmp(kind, "type_alias") ||
+                            (!strcmp(kind, "const_variable") &&
+                             interface_constant_needed(constants, constant_count, d, s));
       if (!dyn_syntax_public(wrapper) && !representation)
         continue;
       uint32_t a = ts_node_start_byte(wrapper), b = ts_node_end_byte(wrapper);
@@ -176,6 +183,7 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
           for (size_t k = 0; k < count; ++k)
             free(decls[k]);
           free(decls);
+          free(constants);
           return 3;
         }
         TSNode actual = !strcmp(ts_node_type(type), "type_qualifier")
@@ -250,11 +258,13 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
   for (size_t i = 0; i < count; ++i)
     free(decls[i]);
   free(decls);
+  free(constants);
   return 0;
 fail:
   for (size_t i = 0; i < count; ++i)
     free(decls[i]);
   free(decls);
+  free(constants);
   dyn_interface_free(result);
   return 1;
 }

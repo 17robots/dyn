@@ -60,7 +60,7 @@ fn wide(arena: *mem.Arena, source: []const u8) Wide {
   if #len(source) > 32766 {
     return Wide{}
   }
-  allocation := mem.arena_try_push_uninit(arena, (#len(source)+1)*2, 2)
+  allocation := mem.arena_push_uninit(arena, (#len(source)+1)*2, 2)
   if !allocation.ok {
     return Wide{}
   }
@@ -93,7 +93,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     }
     capacity += #len(argument)*2+3
   }
-  allocation := mem.arena_try_push_uninit(arena, capacity*2, 2)
+  allocation := mem.arena_push_uninit(arena, capacity*2, 2)
   if !allocation.ok {
     return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
   }
@@ -158,14 +158,14 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     }
     environment_capacity += #len(item)+1
   }
-  environment_allocation := mem.arena_try_push(arena, environment_capacity*2, 2)
+  environment_allocation := mem.arena_push(arena, environment_capacity*2, 2)
   if !environment_allocation.ok {
     return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
   }
   environment := (#cast(*u16) environment_allocation.memory)[..environment_capacity]
   environment_used: usize = 0
   // Keep a valid backing pointer even for the supported empty environment.
-  entries_allocation := mem.arena_try_push(arena, (#len(configuration.environment)+1)*#sizeof(Wide), #alignof(Wide))
+  entries_allocation := mem.arena_push(arena, (#len(configuration.environment)+1)*#sizeof(Wide), #alignof(Wide))
   if !entries_allocation.ok {
     return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
   }
@@ -228,7 +228,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   }
   size: usize = 0
   _ = win_init_attributes(nil, 1, 0, &size)
-  attributes := mem.arena_try_push_uninit(arena, size, 8)
+  attributes := mem.arena_push_uninit(arena, size, 8)
   if !attributes.ok {
     return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
   }
