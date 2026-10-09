@@ -67,6 +67,14 @@ typedef struct {
   /* Panic blocks reusable by later failed checks of the same kind. */
   GenPanicBlock panic_blocks[32];
   unsigned panic_block_count;
+  /* Locals whose value never changes after definition (never assigned and
+     never address-taken). A pointer check of such a local holds for the rest
+     of the scope that made it; facts are popped when the scope ends. */
+  bool *unstable_locals;
+  struct { uint32_t local; DynType pointee; } *local_facts;
+  size_t local_fact_count, local_fact_capacity;
+  LLVMValueRef last_local_load;
+  uint32_t last_local;
   bool release, shared;
   const DynOptimization *optimization;
 } Gen;
@@ -720,6 +728,23 @@ static bool same_guard_value(LLVMValueRef a, LLVMValueRef b,
 }
 static LLVMValueRef checked_pointer(Gen *g, LLVMValueRef pointer,
                                     DynType pointee) {
+  bool stable = g->unstable_locals && pointer == g->last_local_load &&
+                !g->unstable_locals[g->last_local];
+  if (stable)
+    for (size_t i = 0; i < g->local_fact_count; ++i)
+      if (g->local_facts[i].local == g->last_local &&
+          g->local_facts[i].pointee == pointee)
+        return pointer;
+  if (stable && g->local_fact_count == g->local_fact_capacity) {
+    size_t capacity = g->local_fact_capacity ? g->local_fact_capacity * 2 : 32;
+    void *grown = realloc(g->local_facts, capacity * sizeof(*g->local_facts));
+    if (grown) {
+      g->local_facts = grown;
+      g->local_fact_capacity = capacity;
+    } else
+      stable = false;
+  }
+  uint32_t local = g->last_local;
   if (g->pointer_fact_block == LLVMGetInsertBlock(g->builder) &&
       same_guard_value(g->pointer_fact, pointer,
                        g->pointer_fact_epoch == g->statement_epoch) &&
@@ -746,6 +771,10 @@ static LLVMValueRef checked_pointer(Gen *g, LLVMValueRef pointer,
   g->pointer_fact = pointer;
   g->pointer_fact_pointee = pointee;
   g->pointer_fact_epoch = g->statement_epoch;
+  if (stable) {
+    g->local_facts[g->local_fact_count].local = local;
+    g->local_facts[g->local_fact_count++].pointee = pointee;
+  }
   return pointer;
 }
 
@@ -1177,8 +1206,11 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     return LLVMConstReal(type, e->floating);
   if (e->kind == DYN_EXPR_NIL)
     return LLVMConstNull(type);
-  if (e->kind == DYN_EXPR_NAME)
-    return LLVMBuildLoad2(g->builder, type, g->locals[e->integer], "load");
+  if (e->kind == DYN_EXPR_NAME) {
+    g->last_local_load = LLVMBuildLoad2(g->builder, type, g->locals[e->integer], "load");
+    g->last_local = (uint32_t)e->integer;
+    return g->last_local_load;
+  }
   if (e->kind == DYN_EXPR_GLOBAL)
     return LLVMBuildLoad2(g->builder, type, g->globals[e->integer],
                           "global.load");
@@ -1589,7 +1621,9 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     else
       LLVMBuildCondBr(g->builder, l, done, rhs);
     LLVMPositionBuilderAtEnd(g->builder, rhs);
+    size_t facts = g->local_fact_count;
     LLVMValueRef right_value = gen_expr(g, e->right);
+    g->local_fact_count = facts; /* The right side may not run. */
     LLVMBasicBlockRef right_block = LLVMGetInsertBlock(g->builder);
     LLVMBuildBr(g->builder, done);
     LLVMPositionBuilderAtEnd(g->builder, done);
@@ -2156,7 +2190,7 @@ static void emit_defers(Gen *g, size_t base) {
   g->defer_count = saved;
 }
 static bool gen_block(Gen *g, uint32_t start, uint32_t count) {
-  size_t base = g->defer_count;
+  size_t base = g->defer_count, facts = g->local_fact_count;
   bool terminated = false;
   for (uint32_t i = 0; i < count; ++i)
     if (gen_stmt(g, &g->ir->statements[g->ir->children[start + i]])) {
@@ -2166,6 +2200,7 @@ static bool gen_block(Gen *g, uint32_t start, uint32_t count) {
   if (!terminated)
     emit_defers(g, base);
   g->defer_count = base;
+  g->local_fact_count = facts;
   return terminated;
 }
 static int write_text(const char *p, const char *t) {
@@ -2575,6 +2610,35 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   g.stack_builder = LLVMCreateBuilderInContext(g.context);
   g.locations = &prepared->locations;
   g.locals = calloc(ir.local_count, sizeof(*g.locals));
+  g.unstable_locals = calloc(ir.local_count ? ir.local_count : 1, sizeof(*g.unstable_locals));
+  if (!g.unstable_locals)
+    goto allocation_failure;
+  /* Assigned or address-taken locals may change; checks of them never carry
+     over to later uses. Addresses taken of a field or element count too. */
+  for (size_t i = 0; i < ir.statement_count; ++i) {
+    const DynIrStmt *st = &ir.statements[i];
+    if (st->kind != DYN_STMT_ASSIGN)
+      continue;
+    /* A plain local assignment has no target expression. */
+    if (st->target == DYN_NO_EXPR) {
+      if (st->local_id < ir.local_count)
+        g.unstable_locals[st->local_id] = true;
+    } else if (ir.expressions[st->target].kind == DYN_EXPR_NAME)
+      g.unstable_locals[ir.expressions[st->target].integer] = true;
+  }
+  for (size_t i = 0; i < ir.expression_count; ++i) {
+    if (ir.expressions[i].kind != DYN_EXPR_UNARY ||
+        ir.expressions[i].op != DYN_OP_ADDRESS)
+      continue;
+    DynExprId root = ir.expressions[i].left;
+    while (root != DYN_NO_EXPR &&
+           (ir.expressions[root].kind == DYN_EXPR_FIELD ||
+            ir.expressions[root].kind == DYN_EXPR_INDEX ||
+            ir.expressions[root].kind == DYN_EXPR_SLICE))
+      root = ir.expressions[root].left;
+    if (root != DYN_NO_EXPR && ir.expressions[root].kind == DYN_EXPR_NAME)
+      g.unstable_locals[ir.expressions[root].integer] = true;
+  }
   if (g.di_builder && ir.local_count) {
     g.local_statements = calloc(ir.local_count, sizeof(*g.local_statements));
     if (!g.local_statements) goto allocation_failure;
@@ -2792,6 +2856,8 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
     if (fn->foreign || !g.defines[i])
       continue;
     g.function = g.functions[i];
+    g.local_fact_count = 0;
+    g.last_local_load = NULL;
     g.return_type = fn->return_type;
     g.current_abi = g.abis[i];
     g.is_main = fn->is_main;
@@ -2896,7 +2962,8 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   LLVMSetTarget(g.module, triple);
   if (g.allocation_failed)
     goto allocation_failure;
-  if (dyn_verify_module(g.module, 2, &error)) {
+  /* Debug builds verify once, after scalarizing, below. */
+  if (release && dyn_verify_module(g.module, 2, &error)) {
     fprintf(stderr, "error: invalid LLVM module: %s\n", error ? error : "");
     failed = 1;
     if (error) {
@@ -2999,6 +3066,8 @@ cleanup:
   free(g.static_globals);
   free(g.functions);
   free(g.defines);
+  free(g.unstable_locals);
+  free(g.local_facts);
   free(g.function_types);
   if (g.abis) for (size_t i = 0; i < ir.function_count; ++i) abi_free(g.abis[i]);
   if (g.pointer_abis) for (size_t i = 0; i < ir.fn_type_count; ++i) abi_free(g.pointer_abis[i]);
