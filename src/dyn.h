@@ -137,6 +137,10 @@ typedef struct {
   size_t span_count;
   DynContext context;
   TSTree *syntax; /* Owned, immutable tree for this exact text revision. */
+  /* Merged sources may instead own one tree per input, shifted to its offset
+     in text. Together they cover the text without a second parse. */
+  TSTree **syntax_parts;
+  size_t syntax_part_count;
   bool syntax_too_deep;
   bool needs_reflection; /* Synthetic interface dependency on the compiler ABI.
                           */

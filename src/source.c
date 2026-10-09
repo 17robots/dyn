@@ -250,6 +250,12 @@ int dyn_source_target_enabled(const DynSource *s) {
   }
   return *p == ')' ? 1 : -1;
 }
+static bool sources_have_syntax(const DynSources *sources) {
+  for (size_t i = 0; i < sources->count; ++i)
+    if (dyn_source_target_enabled(&sources->items[i]) && !sources->items[i].syntax)
+      return false;
+  return true;
+}
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *out) {
   static const char allocator_prelude[] =
@@ -353,6 +359,29 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   }
   out->text[at] = 0;
   out->length = at;
+  if (sources_have_syntax(sources)) {
+    size_t count = (prelude ? 1 : 0) + out->map_count;
+    out->syntax_parts = calloc(count ? count : 1, sizeof(*out->syntax_parts));
+    if (!out->syntax_parts) { dyn_source_free(out); return 2; }
+    if (prelude) {
+      TSTree *tree = dyn_syntax_reparse(out->text, prelude, NULL);
+      if (!tree) { dyn_source_free(out); return 2; }
+      out->syntax_parts[out->syntax_part_count++] = tree;
+    }
+    TSPoint point = dyn_syntax_advance((TSPoint){0}, out->text, prelude);
+    for (size_t i = 0, map = 0; i < sources->count; ++i) {
+      const DynSource *input = &sources->items[i];
+      if (!dyn_source_target_enabled(input)) continue;
+      /* Inserting the preceding text shifts every node without reparsing. */
+      size_t start = out->maps[map++].start;
+      TSTree *tree = ts_tree_copy(input->syntax);
+      TSInputEdit shift = {0, 0, (uint32_t)start, {0}, {0}, point};
+      ts_tree_edit(tree, &shift);
+      out->syntax_parts[out->syntax_part_count++] = tree;
+      point = dyn_syntax_advance(point, out->text + start, input->length + 1);
+    }
+    return 0;
+  }
   /* Seed a merge from its largest unchanged file. Tree-sitter can reuse large
      literal tables and bodies after inserting the surrounding project text. */
   const DynSource *seed = NULL;
@@ -442,6 +471,9 @@ void dyn_source_free(DynSource *s) {
   dyn_source_discard_syntax(s);
   if (!s)
     return;
+  for (size_t i = 0; i < s->syntax_part_count; ++i)
+    ts_tree_delete(s->syntax_parts[i]);
+  free(s->syntax_parts);
   free(s->path);
   free(s->text);
   free(s->original_text);
