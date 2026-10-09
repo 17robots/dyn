@@ -11,8 +11,12 @@
 #include <unistd.h>
 
 typedef struct {
-  size_t first, count;
+  size_t first, count, bytes;
+  unsigned chunk, chunks;
 } Job;
+/* Code generation for one module is serial; split big modules so workers
+   share them. Depends only on source size, so cached chunks stay valid. */
+enum { CHUNK_BYTES = 64 * 1024, MAX_CHUNKS = 64 };
 
 static size_t directory_length(const char *path) {
   const char *slash = strrchr(path, '/');
@@ -35,18 +39,49 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
   if (sources->count > SIZE_MAX / sizeof(Job) ||
       sources->count > SIZE_MAX / (sizeof(uint64_t) + sizeof(int)))
     return 2;
-  Job *jobs = calloc(sources->count, sizeof(*jobs));
-  if (!jobs)
-    return 2;
-  size_t count = 0;
+  size_t capacity = 0;
   for (size_t i = 0; i < sources->count;) {
-    size_t end = i + 1;
+    size_t end = i + 1, bytes = sources->items[i].length;
     while (end < sources->count &&
            same_directory(sources->items[i].path, sources->items[end].path))
-      ++end;
-    jobs[count++] = (Job){i, end - i};
+      bytes += sources->items[end++].length;
+    size_t chunks = bytes / CHUNK_BYTES + 1;
+    capacity += chunks < MAX_CHUNKS ? chunks : MAX_CHUNKS;
     i = end;
   }
+  if (capacity > SIZE_MAX / sizeof(Job) ||
+      capacity > SIZE_MAX / (sizeof(uint64_t) + sizeof(int)))
+    return 2;
+  Job *jobs = calloc(capacity, sizeof(*jobs));
+  size_t *order = calloc(capacity, sizeof(*order));
+  if (!jobs || !order) {
+    free(jobs);
+    free(order);
+    return 2;
+  }
+  size_t count = 0;
+  for (size_t i = 0; i < sources->count;) {
+    size_t end = i + 1, bytes = sources->items[i].length;
+    while (end < sources->count &&
+           same_directory(sources->items[i].path, sources->items[end].path))
+      bytes += sources->items[end++].length;
+    size_t chunks = bytes / CHUNK_BYTES + 1;
+    if (chunks > MAX_CHUNKS)
+      chunks = MAX_CHUNKS;
+    for (size_t chunk = 0; chunk < chunks; ++chunk)
+      jobs[count++] = (Job){i, end - i, bytes / chunks, (unsigned)chunk,
+                            (unsigned)chunks};
+    i = end;
+  }
+  /* Start the largest jobs first; values stay indexed by job. */
+  for (size_t i = 0; i < count; ++i)
+    order[i] = i;
+  for (size_t i = 1; i < count; ++i)
+    for (size_t j = i; j > 0 && jobs[order[j - 1]].bytes < jobs[order[j]].bytes; --j) {
+      size_t swap = order[j];
+      order[j] = order[j - 1];
+      order[j - 1] = swap;
+    }
 #ifdef _WIN32
   /* Frontend worker contexts are process-isolated; use serial execution until
      Windows has equivalent isolated workers. Never share them across threads. */
@@ -61,13 +96,14 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
     workers = (unsigned)count;
   if (workers == 1) {
     uint64_t *out = calloc(count, sizeof(*out));
-    if (!out) { free(jobs); return 2; }
+    if (!out) { free(jobs); free(order); return 2; }
     int result = 0;
     for (size_t id = 0; id < count; ++id) {
-      int error = build(sources, jobs[id].first, jobs[id].count, context, &out[id]);
+      int error = build(sources, jobs[id].first, jobs[id].count, jobs[id].chunk,
+                        jobs[id].chunks, context, &out[id]);
       if (!result) result = error;
     }
-    free(jobs);
+    free(jobs); free(order);
     if (result) { free(out); return result; }
     *values = out; *value_count = count;
     return 0;
@@ -77,13 +113,13 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
      Output slots remain indexed by source order, independent of scheduling. */
   typedef struct { atomic_size_t next; uint64_t alignment; } Queue;
   if (count > (SIZE_MAX - sizeof(Queue)) / (sizeof(uint64_t) + sizeof(int))) {
-    free(jobs); return 2;
+    free(jobs); free(order); return 2;
   }
   size_t shared_size = sizeof(Queue) + count * (sizeof(uint64_t) + sizeof(int));
   unsigned char *shared = mmap(NULL, shared_size, PROT_READ | PROT_WRITE,
                                MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (shared == MAP_FAILED) {
-    free(jobs);
+    free(jobs); free(order);
     return 2;
   }
   Queue *queue = (Queue *)shared;
@@ -94,7 +130,7 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
   pid_t *pids = calloc(workers, sizeof(*pids));
   if (!pids) {
     munmap(shared, shared_size);
-    free(jobs);
+    free(jobs); free(order);
     return 2;
   }
   int result = 0;
@@ -106,9 +142,11 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
     }
     if (!pids[worker]) {
       for (size_t fixed = worker;; fixed += workers) {
-        size_t id = dynamic ? atomic_fetch_add_explicit(&queue->next, 1, memory_order_relaxed) : fixed;
-        if (id >= count) break;
-        errors[id] = build(sources, jobs[id].first, jobs[id].count, context, &out[id]);
+        size_t next = dynamic ? atomic_fetch_add_explicit(&queue->next, 1, memory_order_relaxed) : fixed;
+        if (next >= count) break;
+        size_t id = order[next];
+        errors[id] = build(sources, jobs[id].first, jobs[id].count, jobs[id].chunk,
+                           jobs[id].chunks, context, &out[id]);
       }
       _exit(0);
     }
@@ -136,7 +174,7 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
   }
   free(pids);
   munmap(shared, shared_size);
-  free(jobs);
+  free(jobs); free(order);
   if (result) {
     free(copy);
     return result;
@@ -145,7 +183,7 @@ int dyn_build_plan_run(const DynSources *sources, unsigned workers,
   *value_count = count;
   return 0;
 #else
-  free(jobs);
+  free(jobs); free(order);
   return 2;
 #endif
 }

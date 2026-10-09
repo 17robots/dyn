@@ -2,7 +2,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
 #include "ir.h"
-#include <pthread.h>
 #include "llvm_shim.h"
 #include <dirent.h>
 #include <errno.h>
@@ -202,23 +201,9 @@ typedef struct {
   bool thin_lto;
   const DynOptions *options;
   const char *compiler, *output, *root, *cache_root;
-  /* Analyzed and lowered once, by the first module that misses the cache. */
-  pthread_mutex_t lock;
-  bool prepared;
-  int prepare_result;
-  DynIrProgram ir;
+  /* Analyzed and lowered once by the parent; forked workers share it. */
+  const DynIrProgram *ir;
 } ModuleBuild;
-static int module_build_ir(ModuleBuild *b, const DynIrProgram **ir) {
-  pthread_mutex_lock(&b->lock);
-  if (!b->prepared) {
-    b->prepare_result = dyn_codegen_prepare(b->merged, false, NULL, &b->ir);
-    b->prepared = true;
-  }
-  int result = b->prepare_result;
-  pthread_mutex_unlock(&b->lock);
-  *ir = &b->ir;
-  return result;
-}
 static bool command_available(const char *name) {
   const char *path = getenv("PATH");
   if (!path)
@@ -250,12 +235,15 @@ static uint64_t path_hash(const char *s) {
   return h;
 }
 static int build_module(const DynSources *sources, size_t first, size_t count,
-                        void *raw, uint64_t *value) {
+                        unsigned chunk, unsigned chunks, void *raw,
+                        uint64_t *value) {
   ModuleBuild *b = raw;
   char object[4096], owner[32];
   bool thin = b->thin_lto;
-  if (snprintf(object, sizeof(object), "%s.dynmod.%zu.%s", b->output, first,
-               thin ? "bc" : "o") >= (int)sizeof(object))
+  /* Chunk counts never exceed 64, so ids stay unique per job. */
+  *value = (uint64_t)first * 64 + chunk;
+  if (snprintf(object, sizeof(object), "%s.dynmod.%llu.%s", b->output,
+               (unsigned long long)*value, thin ? "bc" : "o") >= (int)sizeof(object))
     return 2;
   char *full = realpath(sources->items[first].path, NULL);
   if (!full)
@@ -269,22 +257,20 @@ static int build_module(const DynSources *sources, size_t first, size_t count,
     snprintf(owner, sizeof(owner), "dyn_m%016llx",
              (unsigned long long)path_hash(full));
   free(full);
-  *value = first;
-  if (dyn_module_cache_restore(sources, first, count, b->options, b->compiler,
-                               b->cache_root, object)) {
+  if (dyn_module_cache_restore(sources, first, count, chunk, chunks, b->options,
+                               b->compiler, b->cache_root, object)) {
     if (b->options->verbose)
       fprintf(stderr, "cached module %s\n", sources->items[first].path);
     return 0;
   }
-  const DynIrProgram *ir = NULL;
-  int result = module_build_ir(b, &ir);
+  if (!b->ir)
+    return 1;
+  int result = dyn_codegen_emit(b->merged, b->ir, object, NULL, NULL,
+                                b->options->release, b->options->debug_info,
+                                false, owner, chunk, chunks);
   if (!result)
-    result = dyn_codegen_emit(b->merged, ir, object, NULL, NULL,
-                              b->options->release, b->options->debug_info,
-                              false, owner);
-  if (!result)
-    dyn_module_cache_store(sources, first, count, b->options, b->compiler,
-                           b->cache_root, object);
+    dyn_module_cache_store(sources, first, count, chunk, chunks, b->options,
+                           b->compiler, b->cache_root, object);
   return result;
 }
 
@@ -550,13 +536,18 @@ static int execute_command(DynOptions *options, const char *compiler) {
                                 .output = output,
                                 .root = root,
                                 .cache_root = cache};
-    pthread_mutex_init(&module_build.lock, NULL);
+    DynIrProgram shared_ir;
+    bool prepared = false;
+    if (!result) {
+      result = dyn_codegen_prepare(&module_source, false, NULL, &shared_ir);
+      prepared = !result;
+      module_build.ir = prepared ? &shared_ir : NULL;
+    }
     if (!result)
       result = dyn_build_plan_run(&sources, options->jobs, build_module,
                                   &module_build, &module_ids, &module_count);
-    if (module_build.prepared && !module_build.prepare_result)
-      dyn_codegen_release(&module_build.ir);
-    pthread_mutex_destroy(&module_build.lock);
+    if (prepared)
+      dyn_codegen_release(&shared_ir);
     free(root);
     if (!result) {
       module_objects = calloc(module_count, sizeof(*module_objects));

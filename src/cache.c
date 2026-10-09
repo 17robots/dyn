@@ -579,9 +579,12 @@ void dyn_object_cache_store(const DynSources *sources,
    link-only change never triggers LLVM. Stores are atomic, so process workers
    may populate the same cache safely. */
 static uint64_t module_key(const DynSources *sources, size_t first,
-                           size_t count, const DynOptions *options,
+                           size_t count, unsigned chunk, unsigned chunks,
+                           const DynOptions *options,
                            const char *compiler_path, const char *object) {
   uint64_t hash = compiler_key(options, compiler_path);
+  hash = hash_bytes(hash, &chunk, sizeof(chunk));
+  hash = hash_bytes(hash, &chunks, sizeof(chunks));
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
@@ -612,14 +615,14 @@ static bool module_artifact(char *path, size_t capacity, const char *root,
 }
 
 bool dyn_module_cache_restore(const DynSources *sources, size_t first,
-                              size_t count, const DynOptions *options,
+                              size_t count, unsigned chunk, unsigned chunks, const DynOptions *options,
                               const char *compiler_path, const char *cache_root,
                               const char *object) {
   if (options->no_cache || !cache_root)
     return false;
   char artifact[4096];
   uint64_t key =
-      module_key(sources, first, count, options, compiler_path, object);
+      module_key(sources, first, count, chunk, chunks, options, compiler_path, object);
   if (!key || !module_artifact(artifact, sizeof(artifact), cache_root, key))
     return false;
   char metadata[4096];
@@ -637,7 +640,7 @@ bool dyn_module_cache_restore(const DynSources *sources, size_t first,
 }
 
 void dyn_module_cache_store(const DynSources *sources, size_t first,
-                            size_t count, const DynOptions *options,
+                            size_t count, unsigned chunk, unsigned chunks, const DynOptions *options,
                             const char *compiler_path, const char *cache_root,
                             const char *object) {
   if (options->no_cache || !cache_root)
@@ -645,7 +648,7 @@ void dyn_module_cache_store(const DynSources *sources, size_t first,
   char artifact[4096], temporary[4096], metadata[4096],
       metadata_temporary[4096];
   uint64_t key =
-      module_key(sources, first, count, options, compiler_path, object);
+      module_key(sources, first, count, chunk, chunks, options, compiler_path, object);
   if (!key || !module_artifact(artifact, sizeof(artifact), cache_root, key) ||
       snprintf(temporary, sizeof(temporary), "%s.%ld.tmp", artifact,
                (long)getpid()) >= (int)sizeof(temporary) ||

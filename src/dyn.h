@@ -183,10 +183,12 @@ int dyn_interface_compose(const DynSources *, size_t owner_first,
                           size_t interface_count, const char *path,
                           DynSource *);
 
-/* Jobs receive one canonical, contiguous module slice. Context must be safe for
-   concurrent calls. Values are returned in source order, never completion
-   order. */
-typedef int (*DynModuleBuildFn)(const DynSources *, size_t, size_t, void *,
+/* Jobs receive one canonical, contiguous module slice. Large modules are split
+   into chunks (chunk of chunks); the count depends only on the module's source
+   size. Context must be safe for concurrent calls. Values are returned in
+   source order, never completion order. */
+typedef int (*DynModuleBuildFn)(const DynSources *, size_t first, size_t count,
+                                unsigned chunk, unsigned chunks, void *,
                                 uint64_t *);
 int dyn_build_plan_run(const DynSources *, unsigned, DynModuleBuildFn, void *,
                        uint64_t **, size_t *);
@@ -237,7 +239,8 @@ int dyn_codegen_prepare(const DynSource *source, bool shared,
 int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
                      const char *object_path, const char *ir_path,
                      const char *asm_path, bool release, bool debug_info,
-                     bool shared, const char *owner_key);
+                     bool shared, const char *owner_key, unsigned chunk,
+                     unsigned chunks);
 void dyn_codegen_release(struct DynIrProgram *ir);
 int dyn_link_executable(const DynContext *context, const char *object_path,
                         const char *output_path, const char *const *link_inputs,
@@ -285,9 +288,11 @@ void dyn_object_cache_store(const DynSources *sources,
                             const char *compiler_path, const char *output,
                             const char *object);
 bool dyn_module_cache_restore(const DynSources *, size_t first, size_t count,
+                              unsigned chunk, unsigned chunks,
                               const DynOptions *, const char *compiler_path,
                               const char *cache_root, const char *object);
 void dyn_module_cache_store(const DynSources *, size_t first, size_t count,
+                            unsigned chunk, unsigned chunks,
                             const DynOptions *, const char *compiler_path,
                             const char *cache_root, const char *object);
 void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned,

@@ -19,7 +19,9 @@ servers so they pick up the new `dyn`.
   compile; delete them at your convenience. `rawptr` to `*T` and `*const T` to
   `rawptr` still require `#cast`.
 - Faster `dyn check` and builds: modules are parsed in parallel and only once,
-  and builds analyze the program once instead of once per module.
+  builds analyze the program once instead of once per module, and large
+  modules are compiled in parallel chunks. Debug builds emit less code for
+  runtime checks.
 
 ## 0.1.0-preview.17
 

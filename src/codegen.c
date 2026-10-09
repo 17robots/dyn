@@ -23,6 +23,11 @@ typedef struct {
   size_t break_defer, continue_defer;
 } GenControl;
 typedef struct {
+  LLVMValueRef function;
+  const char *name;
+  LLVMBasicBlockRef block;
+} GenPanicBlock;
+typedef struct {
   LLVMContextRef context;
   LLVMModuleRef module;
   LLVMBuilderRef builder, stack_builder;
@@ -58,6 +63,10 @@ typedef struct {
   uint64_t statement_epoch, pointer_fact_epoch, bounds_fact_epoch;
   const DynSource *source;
   const char *owner_key;
+  bool *defines; /* Functions with a body in this object. */
+  /* Panic blocks reusable by later failed checks of the same kind. */
+  GenPanicBlock panic_blocks[32];
+  unsigned panic_block_count;
   bool release, shared;
   const DynOptimization *optimization;
 } Gen;
@@ -654,9 +663,31 @@ static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
   LLVMBasicBlockRef before = LLVMGetInsertBlock(g->builder);
   uint64_t epoch = g->statement_epoch;
   LLVMBasicBlockRef ok = LLVMAppendBasicBlockInContext(g->context, g->function,
-                                                       name),
-                    bad = LLVMAppendBasicBlockInContext(g->context, g->function,
+                                                       name);
+  /* Without pending defers a failed check only panics with a message naming
+     the check and function, so checks of one kind share a single block. */
+  bool shareable = !g->defer_count && !g->unwinding;
+  for (unsigned i = 0; shareable && i < g->panic_block_count; ++i)
+    if (g->panic_blocks[i].function == g->function &&
+        !strcmp(g->panic_blocks[i].name, name)) {
+      LLVMBuildCondBr(g->builder, condition, ok, g->panic_blocks[i].block);
+      LLVMPositionBuilderAtEnd(g->builder, ok);
+      if (g->statement_epoch == epoch) {
+        if (g->pointer_fact_block == before)
+          g->pointer_fact_block = ok;
+        if (g->bounds_fact_block == before)
+          g->bounds_fact_block = ok;
+      }
+      return condition;
+    }
+  LLVMBasicBlockRef bad = LLVMAppendBasicBlockInContext(g->context, g->function,
                                                         "panic");
+  if (shareable) {
+    if (g->panic_block_count == sizeof(g->panic_blocks) / sizeof(g->panic_blocks[0]))
+      g->panic_block_count = 0;
+    g->panic_blocks[g->panic_block_count++] =
+        (GenPanicBlock){g->function, name, bad};
+  }
   LLVMBuildCondBr(g->builder, condition, ok, bad);
   LLVMPositionBuilderAtEnd(g->builder, bad);
   if (!g->unwinding)
@@ -795,12 +826,6 @@ static LLVMValueRef checked_integer(Gen *g, DynOperator op, DynType type,
                             : LLVMBuildURem(g->builder, l, r, "rem");
   }
   LLVMTypeRef wide = LLVMIntTypeInContext(g->context, width * 2);
-  LLVMValueRef wl = signed_type(type)
-                        ? LLVMBuildSExt(g->builder, l, wide, "lhs.wide")
-                        : LLVMBuildZExt(g->builder, l, wide, "lhs.wide");
-  LLVMValueRef wr = signed_type(type)
-                        ? LLVMBuildSExt(g->builder, r, wide, "rhs.wide")
-                        : LLVMBuildZExt(g->builder, r, wide, "rhs.wide");
   LLVMValueRef result = NULL;
   if (op == DYN_OP_SHL || op == DYN_OP_SHR) {
     LLVMValueRef valid = LLVMBuildICmp(
@@ -810,6 +835,10 @@ static LLVMValueRef checked_integer(Gen *g, DynOperator op, DynType type,
     if (op == DYN_OP_SHR)
       return signed_type(type) ? LLVMBuildAShr(g->builder, l, r, "shr")
                                : LLVMBuildLShr(g->builder, l, r, "shr");
+    LLVMValueRef wl = signed_type(type)
+                          ? LLVMBuildSExt(g->builder, l, wide, "lhs.wide")
+                          : LLVMBuildZExt(g->builder, l, wide, "lhs.wide");
+    LLVMValueRef wr = LLVMBuildZExt(g->builder, r, wide, "rhs.wide");
     result = LLVMBuildShl(g->builder, wl, wr, "shl.wide");
   } else
     return checked_overflow(g, op, type, l, r);
@@ -2290,7 +2319,7 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   if (result)
     return result;
   result = dyn_codegen_emit(source, &ir, object_path, ir_path, asm_path,
-                            release, debug_info, shared, owner_key);
+                            release, debug_info, shared, owner_key, 0, 1);
   dyn_ir_free(&ir);
   return result;
 }
@@ -2298,7 +2327,8 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
 int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
                      const char *object_path, const char *ir_path,
                      const char *asm_path, bool release, bool debug_info,
-                     bool shared, const char *owner_key) {
+                     bool shared, const char *owner_key, unsigned chunk,
+                     unsigned chunks) {
   DynIrProgram ir = *prepared;
   struct timespec phase = dyn_timing_start(&source->context);
   pthread_once(&llvm_targets_once, initialize_llvm_targets);
@@ -2404,12 +2434,22 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   g.release = release;
   g.shared = shared;
   g.optimization = optimization;
-  /* Declare owned functions in order; others only when a body uses them. */
-  for (uint32_t i = 0; i < ir.function_count; ++i)
-    if (!owner_key ||
-        (!ir.functions[i].foreign && module_owns(owner_key, ir.functions[i].name)))
-      if (!function_value(&g, i))
-        goto allocation_failure;
+  /* Declare defined functions in order; others only when a body uses them.
+     A module split into chunks deals its functions out round robin; module
+     data and initializers belong to chunk 0. */
+  g.defines = calloc(ir.function_count ? ir.function_count : 1, sizeof(*g.defines));
+  if (!g.defines)
+    goto allocation_failure;
+  bool owns_data = chunk == 0;
+  for (uint32_t i = 0, owned = 0; i < ir.function_count; ++i) {
+    if (owner_key &&
+        (ir.functions[i].foreign || !module_owns(owner_key, ir.functions[i].name)))
+      continue;
+    g.defines[i] = !owner_key || ir.functions[i].foreign ||
+                   owned++ % (chunks ? chunks : 1) == chunk;
+    if (g.defines[i] && !function_value(&g, i))
+      goto allocation_failure;
+  }
   LLVMTypeRef panic_params[2] = {LLVMPointerTypeInContext(g.context, 0),
                                  llvm_type(&g, DYN_TYPE_USIZE)};
   g.panic_type =
@@ -2492,7 +2532,7 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
     g.globals[i] = LLVMAddGlobal(g.module, llvm_type(&g, ir.globals[i].type),
                                  ir.globals[i].foreign ? ir.globals[i].link_name
                                                        : ir.globals[i].name);
-    bool owned =
+    bool owned = owns_data &&
         !ir.globals[i].foreign && module_owns(owner_key, ir.globals[i].name);
     if (owned)
       LLVMSetInitializer(g.globals[i],
@@ -2525,7 +2565,7 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
                                ? function_value(&g, (uint32_t)initializer->integer)
                                : static_value(&g, ir.globals[i].initializer, 0);
       if (value) {
-        if (module_owns(owner_key, ir.globals[i].name)) {
+        if (owns_data && module_owns(owner_key, ir.globals[i].name)) {
           LLVMSetInitializer(g.globals[i], value);
           LLVMSetGlobalConstant(g.globals[i], 1);
         }
@@ -2547,7 +2587,7 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
     char key[32], function_name[64];
     global_module_key(ir.globals[first].name, key, sizeof(key));
     snprintf(function_name, sizeof(function_name), "__dyn_init_%s", key);
-    bool owns_init = !owner_key || !strcmp(owner_key, key);
+    bool owns_init = !owner_key || (owns_data && !strcmp(owner_key, key));
     LLVMValueRef init = LLVMAddFunction(g.module, function_name, g.init_type);
     if (release && !owner_key)
       LLVMSetLinkage(init, LLVMInternalLinkage);
@@ -2684,7 +2724,7 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   bool has_init = init_function_count != 0;
   for (uint32_t i = 0; i < ir.function_count; ++i) {
     DynIrFunction *fn = &ir.functions[i];
-    if (fn->foreign || !module_owns(owner_key, fn->name))
+    if (fn->foreign || !g.defines[i])
       continue;
     g.function = g.functions[i];
     g.return_type = fn->return_type;
@@ -2891,6 +2931,7 @@ cleanup:
   free(g.globals);
   free(g.static_globals);
   free(g.functions);
+  free(g.defines);
   free(g.function_types);
   if (g.abis) for (size_t i = 0; i < ir.function_count; ++i) abi_free(g.abis[i]);
   if (g.pointer_abis) for (size_t i = 0; i < ir.fn_type_count; ++i) abi_free(g.pointer_abis[i]);
