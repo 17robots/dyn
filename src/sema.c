@@ -717,6 +717,9 @@ static bool can_convert(Sema *sema, DynAstProgram *a, DynType from,
   if (lossless(sema, from, to))
     return true;
   DynAstPointer *f = pointer_info(a, from), *t = pointer_info(a, to);
+  /* Like C's void *: typed to raw is implicit, raw to typed needs #cast. */
+  if (f && to == DYN_TYPE_RAWPTR)
+    return !f->is_const;
   if (f && t)
     return f->pointee == t->pointee && !f->is_const && t->is_const;
   DynAstSlice *fs = slice_info(a, from), *ts = slice_info(a, to);

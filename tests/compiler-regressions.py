@@ -130,4 +130,36 @@ fn main() { os.exit_process(check()) }
 }
 '''}), 'not representable')
 
-print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands')
+    # A typed pointer converts to rawptr implicitly; the reverse needs #cast.
+    raw = project(root, 'rawptr-implicit', {'main.dyn': '''#link("c")
+extern fn libc_free "free"(pointer: rawptr)
+extern fn libc_malloc "malloc"(size: usize) rawptr
+struct Task { id: u32 }
+fn identity(pointer: rawptr) rawptr { return pointer }
+fn main() {
+  task := Task{id: 7}
+  stored: rawptr = &task
+  back := #cast(*Task) identity(&task)
+  if back.id != 7 || stored != identity(&task) { #panic("rawptr round trip") }
+  heap := #cast(*Task) libc_malloc(#sizeof(Task))
+  libc_free(heap)
+}
+'''})
+    for _ in build_and_run(raw):
+        pass
+    check_fails(project(root, 'rawptr-to-typed', {'main.dyn': '''fn main() {
+  value: u32 = 1
+  raw: rawptr = &value
+  typed: *u32 = raw
+  _ = typed
+}
+'''}), 'mismatch')
+    check_fails(project(root, 'rawptr-const', {'main.dyn': '''fn take(pointer: rawptr) {}
+fn main() {
+  value: u32 = 1
+  constant: *const u32 = &value
+  take(constant)
+}
+'''}), 'mismatch')
+
+print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands, implicit rawptr')

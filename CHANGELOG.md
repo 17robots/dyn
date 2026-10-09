@@ -12,6 +12,15 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- A mutable `*T` now converts to `rawptr` implicitly, like C's `void *`:
+  `free(task)` replaces `free(#cast(rawptr) task)`. Existing casts still
+  compile; delete them at your convenience. `rawptr` to `*T` and `*const T` to
+  `rawptr` still require `#cast`.
+- Faster `dyn check` and builds: modules are parsed in parallel and only once,
+  and builds analyze the program once instead of once per module.
+
 ## 0.1.0-preview.17
 
 - Fix using `std/io` standard streams and `std/os/wasi` together: shared raw
