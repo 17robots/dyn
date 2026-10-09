@@ -7,6 +7,10 @@
 #include <string.h>
 #include <tree_sitter/api.h>
 #include <unistd.h>
+#include <stdatomic.h>
+#ifndef _WIN32
+#include <pthread.h>
+#endif
 extern const TSLanguage *tree_sitter_dyn(void);
 extern char *realpath(const char *, char *);
 
@@ -648,6 +652,71 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
   free(owners); free(selected);
   return true;
 }
+typedef struct {
+  DynSources *sources;
+  Module *modules;
+  size_t module_count;
+  atomic_size_t next;
+  atomic_bool failed;
+} RewriteJobs;
+/* Each source rewrites independently against the read-only module tables. */
+static bool rewrite_source(DynSource *s, Module *modules, size_t module_count) {
+  char *dir = source_dir(s->path);
+  Module *m = dir ? find_module(modules, module_count, dir) : NULL;
+  free(dir);
+  TSTree *t = m ? dyn_source_tree(s) : NULL;
+  if (!t)
+    return false;
+  Edits edits = {0};
+  DynScopeIndex locals = {0};
+  bool ok = dyn_scope_build(&locals, ts_tree_root_node(t), s) &&
+            rewrite_node(ts_tree_root_node(t), s, m, modules, module_count,
+                         &edits, &locals) &&
+            apply_edits(s, &edits);
+  for (size_t i = 0; i < edits.count; ++i)
+    free(edits.items[i].text);
+  free(edits.items);
+  dyn_scope_free(&locals);
+  ts_tree_delete(t);
+  return ok;
+}
+static void *rewrite_worker(void *raw) {
+  RewriteJobs *jobs = raw;
+  for (;;) {
+    size_t i = atomic_fetch_add(&jobs->next, 1);
+    if (i >= jobs->sources->count || atomic_load(&jobs->failed))
+      return NULL;
+    DynSource *s = &jobs->sources->items[i];
+    if (dyn_source_target_enabled(s) != 0 &&
+        !rewrite_source(s, jobs->modules, jobs->module_count))
+      atomic_store(&jobs->failed, true);
+  }
+}
+static void rewrite_parallel(RewriteJobs *jobs, const DynSources *sources) {
+  size_t workers = 1;
+#ifndef _WIN32
+  /* Budgeted and cached editor analysis share mutable context state. */
+  const DynContext *context = sources->count ? &sources->items[0].context : NULL;
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  if (context && !context->work && !context->syntax_cache && online > 1)
+    workers = (size_t)online;
+  if (workers > sources->count)
+    workers = sources->count;
+  if (workers > 256)
+    workers = 256;
+  pthread_t threads[256];
+  size_t started = 0;
+  for (; started + 1 < workers; ++started)
+    if (pthread_create(&threads[started], NULL, rewrite_worker, jobs))
+      break;
+  rewrite_worker(jobs);
+  for (size_t i = 0; i < started; ++i)
+    pthread_join(threads[i], NULL);
+#else
+  (void)sources;
+  rewrite_worker(jobs);
+#endif
+}
 int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
   char *root = realpath(project_root, NULL);
   if (!root)
@@ -751,30 +820,14 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     }
     ts_tree_delete(t);
   }
-  for (size_t si = 0; si < sources->count && !result; ++si) {
-    if (dyn_source_target_enabled(&sources->items[si]) == 0)
-      continue;
-    DynSource *s = &sources->items[si];
-    char *dir = source_dir(s->path);
-    Module *m = find_module(modules, module_count, dir);
-    free(dir);
-    TSTree *t = dyn_source_tree(s);
-    if (!t) {
+  if (!result) {
+    RewriteJobs jobs = {.sources = sources, .modules = modules,
+                        .module_count = module_count};
+    atomic_init(&jobs.next, 0);
+    atomic_init(&jobs.failed, false);
+    rewrite_parallel(&jobs, sources);
+    if (atomic_load(&jobs.failed))
       result = 2;
-      break;
-    }
-    Edits edits = {0};
-    DynScopeIndex locals = {0};
-    if (!dyn_scope_build(&locals, ts_tree_root_node(t), s) ||
-        !rewrite_node(ts_tree_root_node(t), s, m, modules, module_count,
-                      &edits, &locals) ||
-        !apply_edits(s, &edits))
-      result = 2;
-    for (size_t i = 0; i < edits.count; ++i)
-      free(edits.items[i].text);
-    free(edits.items);
-    dyn_scope_free(&locals);
-    ts_tree_delete(t);
   }
   if (!result && !capture_dependencies(sources, modules, module_count)) result = 2;
   free_modules(modules, module_count);

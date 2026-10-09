@@ -1,6 +1,8 @@
 #define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
+#include "ir.h"
+#include <pthread.h>
 #include "llvm_shim.h"
 #include <dirent.h>
 #include <errno.h>
@@ -197,13 +199,26 @@ static int add_source_native_links(const DynContext *context,
 }
 typedef struct {
   const DynSource *merged;
-  const DynInterface *interfaces;
-  size_t interface_count;
-  bool incremental_frontend;
   bool thin_lto;
   const DynOptions *options;
   const char *compiler, *output, *root, *cache_root;
+  /* Analyzed and lowered once, by the first module that misses the cache. */
+  pthread_mutex_t lock;
+  bool prepared;
+  int prepare_result;
+  DynIrProgram ir;
 } ModuleBuild;
+static int module_build_ir(ModuleBuild *b, const DynIrProgram **ir) {
+  pthread_mutex_lock(&b->lock);
+  if (!b->prepared) {
+    b->prepare_result = dyn_codegen_prepare(b->merged, false, NULL, &b->ir);
+    b->prepared = true;
+  }
+  int result = b->prepare_result;
+  pthread_mutex_unlock(&b->lock);
+  *ir = &b->ir;
+  return result;
+}
 static bool command_available(const char *name) {
   const char *path = getenv("PATH");
   if (!path)
@@ -261,88 +276,18 @@ static int build_module(const DynSources *sources, size_t first, size_t count,
       fprintf(stderr, "cached module %s\n", sources->items[first].path);
     return 0;
   }
-  DynSource composed = {0};
-  const DynSource *input = b->merged;
-  int result = 0;
-  if (b->incremental_frontend && strcmp(owner, "root")) {
-    result = dyn_interface_compose(sources, first, count, b->interfaces,
-                                   b->interface_count,
-                                   sources->items[first].path, &composed);
-    input = &composed;
-  }
+  const DynIrProgram *ir = NULL;
+  int result = module_build_ir(b, &ir);
   if (!result)
-    result = dyn_codegen_module(input, object, NULL, NULL, b->options->release,
-                                b->options->debug_info, false, owner);
-  dyn_source_free(&composed);
+    result = dyn_codegen_emit(b->merged, ir, object, NULL, NULL,
+                              b->options->release, b->options->debug_info,
+                              false, owner);
   if (!result)
     dyn_module_cache_store(sources, first, count, b->options, b->compiler,
                            b->cache_root, object);
   return result;
 }
 
-static size_t module_end(const DynSources *sources, size_t first) {
-  const char *slash = strrchr(sources->items[first].path, '/');
-  size_t n = slash ? (size_t)(slash - sources->items[first].path) : 0,
-         end = first + 1;
-  while (end < sources->count) {
-    const char *s = strrchr(sources->items[end].path, '/');
-    size_t m = s ? (size_t)(s - sources->items[end].path) : 0;
-    if (m != n ||
-        memcmp(sources->items[first].path, sources->items[end].path, n))
-      break;
-    ++end;
-  }
-  return end;
-}
-static bool interface_path(const DynSources *sources, size_t first,
-                           const char *root, char *path, size_t capacity) {
-  char *full = realpath(sources->items[first].path, NULL);
-  if (!full)
-    return false;
-  char *slash = strrchr(full, '/');
-  if (slash)
-    *slash = 0;
-  uint64_t key = path_hash(full);
-  free(full);
-  int n = snprintf(path, capacity, "%s/%016llx.dynmi", root,
-                   (unsigned long long)key);
-  return n > 0 && (size_t)n < capacity;
-}
-static int prepare_interfaces(const DynSources *sources, const DynOptions *o,
-                              const char *cache_root, DynInterface **out,
-                              size_t *out_count) {
-  *out = NULL; *out_count = 0;
-  size_t count = 0;
-  for (size_t first = 0; first < sources->count; first = module_end(sources, first)) ++count;
-  DynInterface *values = calloc(count ? count : 1, sizeof(*values));
-  if (!values) return 2;
-  size_t module = 0;
-  int result = 0;
-  for (size_t first = 0; first < sources->count; ++module) {
-    size_t end = module_end(sources, first);
-    DynSources slice = {sources->items + first, end - first};
-    char path[4096];
-    bool cached = !o->no_cache && cache_root &&
-        interface_path(sources, first, cache_root, path, sizeof(path));
-    if (cached && dyn_interface_load(path, o->target, DYN_FRONTEND_STAMP,
-          dyn_interface_source_hash(&slice), &values[module]) == DYN_INTERFACE_HIT) {
-      if (o->verbose) fprintf(stderr, "cached interface %s\n", sources->items[first].path);
-    } else {
-      result = dyn_interface_build(&slice, &values[module]);
-      if (result) break;
-      /* Caches are optional. Keep the owned in-memory payload even if the
-         artifact cannot be persisted; never serialize just to read it back. */
-      if (cached) (void)dyn_interface_store(path, o->target, DYN_FRONTEND_STAMP, &values[module]);
-    }
-    first = end;
-  }
-  if (result) {
-    for (size_t i = 0; i < count; ++i) dyn_interface_free(&values[i]);
-    free(values); return result;
-  }
-  *out = values; *out_count = count;
-  return 0;
-}
 static double elapsed_ms(struct timespec start) {
   struct timespec end;
   clock_gettime(CLOCK_MONOTONIC, &end);
@@ -583,8 +528,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
   uint64_t *module_ids = NULL;
   size_t module_count = 0;
   char **module_objects = NULL;
-  DynInterface *interfaces = NULL;
-  size_t interface_count = 0;
   bool modular = cacheable;
   char cache_root[4096];
   const char *cache = NULL;
@@ -594,20 +537,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
                     dyn_cache_directory(cache_root, sizeof(cache_root))
                 ? cache_root : NULL;
     if (!root) result = 2;
-    int prepared = !result ? prepare_interfaces(&sources, options, cache,
-                                                &interfaces, &interface_count)
-                           : 2;
-    bool incremental_frontend = prepared == 0;
-    if (prepared && prepared != 3) {
-      /* Interface extraction intentionally has no diagnostic sink. Route a
-         failed preparation through the canonical frontend before reporting it. */
-      DynCheckResult failure = dyn_check_sources(&sources, main_path, false);
-      if (failure.errors) result = 1;
-      else {
-        fprintf(stderr, "error: failed to prepare module interfaces (status %d)\n", prepared);
-        result = prepared;
-      }
-    }
     if (!result)
       result = dyn_sources_merge(&sources, main_path, &module_source);
     module_source.context = context;
@@ -615,18 +544,19 @@ static int execute_command(DynOptions *options, const char *compiler) {
                     !strcmp(options->target, "x86_64-linux") &&
                     command_available("ld.lld");
     ModuleBuild module_build = {.merged = &module_source,
-                                .interfaces = interfaces,
-                                .interface_count = interface_count,
-                                .incremental_frontend = incremental_frontend,
                                 .thin_lto = thin_lto,
                                 .options = options,
                                 .compiler = compiler,
                                 .output = output,
                                 .root = root,
                                 .cache_root = cache};
+    pthread_mutex_init(&module_build.lock, NULL);
     if (!result)
       result = dyn_build_plan_run(&sources, options->jobs, build_module,
                                   &module_build, &module_ids, &module_count);
+    if (module_build.prepared && !module_build.prepare_result)
+      dyn_codegen_release(&module_build.ir);
+    pthread_mutex_destroy(&module_build.lock);
     free(root);
     if (!result) {
       module_objects = calloc(module_count, sizeof(*module_objects));
@@ -654,11 +584,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (options->timings)
     fprintf(stderr, "timing codegen %.3f ms\n", elapsed_ms(phase));
   dyn_source_free(&module_source);
-  if (interfaces) {
-    for (size_t i = 0; i < interface_count; ++i)
-      dyn_interface_free(&interfaces[i]);
-    free(interfaces);
-  }
   phase = timer_start();
   if (!result && !options->no_link)
     result =

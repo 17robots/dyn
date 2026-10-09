@@ -201,6 +201,9 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *options);
 void dyn_cli_help(const char *command);
 int dyn_sources_load(const DynContext *context, const char *directory,
                      DynSources *sources);
+/* Same, without reporting errors: callers retry with dyn_sources_load. */
+int dyn_sources_load_quiet(const DynContext *context, const char *dir,
+                           DynSources *out);
 void dyn_sources_free(DynSources *sources);
 int dyn_source_target_enabled(const DynSource *source);
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
@@ -226,6 +229,16 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
 int dyn_codegen_module(const DynSource *source, const char *object_path,
                        const char *ir_path, const char *asm_path, bool release,
                        bool debug_info, bool shared, const char *owner_key);
+/* dyn_codegen_module in two steps: analyze and lower once (owner_key NULL
+   keeps every body), then emit any number of owners from the shared result. */
+struct DynIrProgram;
+int dyn_codegen_prepare(const DynSource *source, bool shared,
+                        const char *owner_key, struct DynIrProgram *ir);
+int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
+                     const char *object_path, const char *ir_path,
+                     const char *asm_path, bool release, bool debug_info,
+                     bool shared, const char *owner_key);
+void dyn_codegen_release(struct DynIrProgram *ir);
 int dyn_link_executable(const DynContext *context, const char *object_path,
                         const char *output_path, const char *const *link_inputs,
                         size_t link_input_count, bool release, bool verbose);
