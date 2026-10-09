@@ -2872,6 +2872,8 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
       failed = 1;
     }
   }
+  if (!failed && !release)
+    dyn_scalarize_aggregates(g.module);
   dyn_timing_phase(&source->context, &phase, "optimize");
   if (!failed && dyn_verify_module(g.module, 2, &error)) {
     fprintf(stderr, "error: optimized LLVM module is invalid: %s\n",
