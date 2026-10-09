@@ -12,7 +12,7 @@ fn mapping_allocate(size: usize) Mapping {
   return Mapping{ bytes: (#cast(*u8) address)[..size], ok: true }
 }
 fn mapping_release(bytes: []u8) isize {
-  if arena_virtual_free(#cast(rawptr) &bytes[0], 0, 32768) == 0 {
+  if arena_virtual_free(&bytes[0], 0, 32768) == 0 {
     return #cast(isize) arena_last_error()
   }
   return 0

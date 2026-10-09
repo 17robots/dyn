@@ -47,7 +47,7 @@ fn arm(slot: *Slot) isize {
   slot.overlap = Overlapped{ event: slot.event }
   slot.used = 0
   slot.offset = 0
-  if read_changes(slot.handle, #cast(rawptr) &slot.buffer[0], 4096, 0, 31, nil, &slot.overlap, nil) == 0 {
+  if read_changes(slot.handle, &slot.buffer[0], 4096, 0, 31, nil, &slot.overlap, nil) == 0 {
     code := native_error()
     if code != 997 { return 0 - #cast(isize) code }
   }

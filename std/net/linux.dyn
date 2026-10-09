@@ -37,7 +37,7 @@ fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
   timeout := TimeValue{ seconds: #cast(isize) (milliseconds / 1000), microseconds: #cast(isize) ((milliseconds % 1000) * 1000) }
   option: usize = 20
   if sending { option = 21 }
-  return native_set_option(descriptor, SocketLevel, option, #cast(rawptr) &timeout, #sizeof(TimeValue))
+  return native_set_option(descriptor, SocketLevel, option, &timeout, #sizeof(TimeValue))
 }
 
 // A value greater than capacity means the datagram was truncated.

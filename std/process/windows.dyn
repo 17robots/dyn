@@ -84,7 +84,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     if !converted_directory.ok {
       return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
     }
-    directory = #cast(rawptr) &converted_directory.data[0]
+    directory = &converted_directory.data[0]
   }
   capacity: usize = 1
   for argument in arguments {
@@ -232,13 +232,13 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   if !attributes.ok {
     return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
   }
-  startup.attributes = #cast(rawptr) attributes.memory
+  startup.attributes = attributes.memory
   if win_init_attributes(startup.attributes, 1, 0, &size) == 0 {
     initialize_error := win_failure()
     return SpawnResult{ error: initialize_error, kind: error_kinds.windows(initialize_error) }
   }
   defer win_delete_attributes(startup.attributes)
-  if inherited_count > 0 && win_update_attributes(startup.attributes, 0, 131074, #cast(rawptr) &handles[0], inherited_count*#sizeof(rawptr), nil, nil) == 0 {
+  if inherited_count > 0 && win_update_attributes(startup.attributes, 0, 131074, &handles[0], inherited_count*#sizeof(rawptr), nil, nil) == 0 {
     attribute_error := win_failure()
     return SpawnResult{ error: attribute_error, kind: error_kinds.windows(attribute_error) }
   }

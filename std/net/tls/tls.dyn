@@ -106,9 +106,9 @@ fn writer_write(data: rawptr, source: []const u8) stream.Result {
 // Blocking I/O adapters borrow the Connection slot and its live handle.
 // Use read/write directly for nonblocking WantRead/WantWrite handling.
 pub fn reader(connection: *Connection) stream.Reader {
-  return stream.Reader{ data: #cast(rawptr) connection, read: &reader_read }
+  return stream.Reader{ data: connection, read: &reader_read }
 }
 
 pub fn writer(connection: *Connection) stream.Writer {
-  return stream.Writer{ data: #cast(rawptr) connection, write: &writer_write }
+  return stream.Writer{ data: connection, write: &writer_write }
 }

@@ -143,5 +143,5 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
   return stream.Result{ error: state.error, status: stream.Status.Error }
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
-  return stream.Reader{ data: #cast(rawptr) state, read: &decoder_read }
+  return stream.Reader{ data: state, read: &decoder_read }
 }

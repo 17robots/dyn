@@ -948,7 +948,7 @@ fn body_write(data: rawptr, source: []const u8) stream.Result {
 }
 
 pub fn body_writer(body: *Body) stream.Writer {
-  return stream.Writer{ data: #cast(rawptr) body, write: &body_write }
+  return stream.Writer{ data: body, write: &body_write }
 }
 
 pub fn body_finish(body: *Body) Result {

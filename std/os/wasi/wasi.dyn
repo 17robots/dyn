@@ -26,7 +26,7 @@ pub fn read(fd: u32, bytes: []u8) io.Result {
     return io.Result{ status: io.Status.Complete }
   }
   count: usize = 0
-  error := wasi_raw.read(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
+  error := wasi_raw.read(fd, &bytes[0], #len(bytes), &count)
   if error != 0 {
     return io.Result{ transferred: count, error: 0 - #cast(isize) error, status: io.Status.Error }
   }
@@ -50,7 +50,7 @@ pub fn random(bytes: []u8) u32 {
   if #len(bytes) == 0 {
     return 0
   }
-  return native_random(#cast(rawptr) &bytes[0], #len(bytes))
+  return native_random(&bytes[0], #len(bytes))
 }
 pub struct Arguments { values: [][]const u8, error: u32, ok: bool }
 // Both strings and slice descriptors belong to the supplied arena. Failure rewinds.
@@ -76,7 +76,7 @@ pub fn arguments(arena: *mem.Arena) Arguments {
     mem.arena_rewind(arena, mark)
     return Arguments{ error: 48 }
   }
-  error = native_args(#cast(rawptr) pointers.memory, #cast(rawptr) bytes.memory)
+  error = native_args(pointers.memory, bytes.memory)
   if error != 0 {
     mem.arena_rewind(arena, mark)
     return Arguments{ error: error }

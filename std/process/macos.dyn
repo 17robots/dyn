@@ -125,10 +125,10 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
       failed = true
     }
     if !failed {
-      _ = native_exec(executable, #cast(rawptr) argv, #cast(rawptr) env)
+      _ = native_exec(executable, argv, env)
     }
     error := mac_error()
-    _ = native_write(writer, #cast(rawptr) &error, #sizeof(isize))
+    _ = native_write(writer, &error, #sizeof(isize))
     native_exit(127)
     #panic("exit returned")
   }

@@ -90,7 +90,7 @@ pub fn start(workers: []Worker, listener: *http.Listener, receive_storage: []u8,
     workers[i] = Worker{ listener: listener, handler: handler,
       storage: receive_storage[i * worker_storage_size..(i + 1) * worker_storage_size], active_descriptor: -1 }
     spawned := threading.spawn(&workers[i].thread, stacks[i * stack_size..(i + 1) * stack_size],
-      &worker_main, #cast(rawptr) &workers[i])
+      &worker_main, &workers[i])
     if spawned < 0 {
       stop(workers[..i])
       _ = join(workers[..i])

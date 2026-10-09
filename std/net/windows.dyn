@@ -77,7 +77,7 @@ fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
   if milliseconds > 4294967295 { return -22 }
   value := #cast(u32) milliseconds
   option: usize = 4102 if sending { option = 4101 }
-  return native_set_option(descriptor, SocketLevel, option, #cast(rawptr) &value, 4)
+  return native_set_option(descriptor, SocketLevel, option, &value, 4)
 }
 fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
   if #len(items) == 0 {
