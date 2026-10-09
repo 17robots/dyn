@@ -2271,6 +2271,64 @@ static LLVMValueRef function_value(Gen *g, uint32_t i) {
     LLVMSetVisibility(g->functions[i], LLVMHiddenVisibility);
   return g->functions[i];
 }
+static uint64_t interface_bytes(uint64_t hash, const void *data, size_t length) {
+  const unsigned char *bytes = data;
+  for (size_t i = 0; i < length; ++i)
+    hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
+  return hash;
+}
+static uint64_t interface_span(uint64_t hash, DynSpan span, const DynSource *s) {
+  if (span.end_byte > span.start_byte && span.end_byte <= s->length)
+    hash = interface_bytes(hash, s->text + span.start_byte,
+                           span.end_byte - span.start_byte);
+  return interface_bytes(hash, "\n", 1);
+}
+static uint64_t interface_type(uint64_t hash, DynAstProgram *a, DynType type,
+                               const DynSource *s) {
+  char name[512];
+  dyn_type_format(a, type, s, name, sizeof(name));
+  return interface_bytes(hash, name, strlen(name) + 1);
+}
+/* Everything one object may depend on from the rest of the program, without
+   function bodies. Reflection exposes types introduced in bodies, so a
+   reflecting program hashes its whole text. */
+static uint64_t interface_hash(DynAstProgram *a, const DynSource *s) {
+  uint64_t hash = UINT64_C(1469598103934665603);
+  for (size_t i = 0; i < a->expression_count; ++i)
+    if (a->expressions[i].kind == DYN_EXPR_TYPEOF)
+      return interface_bytes(hash, s->text, s->length);
+  for (size_t i = 0; i < a->struct_count; ++i)
+    hash = interface_span(hash, a->structs[i].span, s);
+  for (size_t i = 0; i < a->enum_count; ++i)
+    hash = interface_span(hash, a->enums[i].span, s);
+  for (size_t i = 0; i < a->alias_count; ++i) {
+    hash = interface_span(hash, a->aliases[i].name, s);
+    hash = interface_type(hash, a, a->aliases[i].target, s);
+  }
+  for (size_t i = 0; i < a->global_count; ++i) {
+    const DynAstGlobal *global = &a->globals[i];
+    hash = interface_span(hash, global->name, s);
+    hash = interface_span(hash, global->link_name, s);
+    hash = interface_type(hash, a, global->type, s);
+    bool flags[] = {global->is_const, global->foreign, global->is_public};
+    hash = interface_bytes(hash, flags, sizeof(flags));
+    if (global->initializer != DYN_NO_EXPR)
+      hash = interface_span(hash, a->expressions[global->initializer].span, s);
+  }
+  for (size_t i = 0; i < a->function_count; ++i) {
+    const DynAstFn *fn = &a->functions[i];
+    hash = interface_span(hash, fn->name, s);
+    hash = interface_span(hash, fn->link_name, s);
+    hash = interface_type(hash, a, fn->return_type, s);
+    for (uint32_t p = 0; p < fn->param_count; ++p)
+      hash = interface_type(hash, a, a->params[fn->param_start + p].type, s);
+    bool flags[] = {fn->is_main, fn->foreign, fn->variadic, fn->is_public};
+    hash = interface_bytes(hash, flags, sizeof(flags));
+    if (fn->variadic)
+      hash = interface_type(hash, a, fn->variadic_type, s);
+  }
+  return hash;
+}
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, DynIrProgram *ir) {
   memset(ir, 0, sizeof(*ir));
@@ -2294,6 +2352,7 @@ int dyn_codegen_prepare(const DynSource *source, bool shared,
     dyn_ast_program_free(&ast);
     return 2;
   }
+  ir->interface_hash = interface_hash(&ast, source);
   dyn_ast_program_free(&ast);
   if (!dyn_location_build(&ir->locations, source)) {
     dyn_ir_free(ir);
@@ -2435,18 +2494,24 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   g.shared = shared;
   g.optimization = optimization;
   /* Declare defined functions in order; others only when a body uses them.
-     A module split into chunks deals its functions out round robin; module
-     data and initializers belong to chunk 0. */
+     A module split into chunks assigns each source file to one chunk, so an
+     edit recompiles only that file's chunk. Module data and initializers
+     belong to chunk 0. */
   g.defines = calloc(ir.function_count ? ir.function_count : 1, sizeof(*g.defines));
   if (!g.defines)
     goto allocation_failure;
   bool owns_data = chunk == 0;
-  for (uint32_t i = 0, owned = 0; i < ir.function_count; ++i) {
+  for (uint32_t i = 0; i < ir.function_count; ++i) {
     if (owner_key &&
         (ir.functions[i].foreign || !module_owns(owner_key, ir.functions[i].name)))
       continue;
+    const char *path = source->path;
+    unsigned line, column;
+    if (chunks > 1)
+      dyn_location_get(&prepared->locations, source, ir.functions[i].source_offset,
+                       &path, &line, &column);
     g.defines[i] = !owner_key || ir.functions[i].foreign ||
-                   owned++ % (chunks ? chunks : 1) == chunk;
+                   dyn_chunk_of_path(path, chunks) == chunk;
     if (g.defines[i] && !function_value(&g, i))
       goto allocation_failure;
   }

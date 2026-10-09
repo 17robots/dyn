@@ -257,19 +257,21 @@ static int build_module(const DynSources *sources, size_t first, size_t count,
     snprintf(owner, sizeof(owner), "dyn_m%016llx",
              (unsigned long long)path_hash(full));
   free(full);
-  if (dyn_module_cache_restore(sources, first, count, chunk, chunks, b->options,
+  if (!b->ir)
+    return 1;
+  if (dyn_module_cache_restore(sources, first, count, chunk, chunks,
+                               b->ir->interface_hash, b->options,
                                b->compiler, b->cache_root, object)) {
     if (b->options->verbose)
       fprintf(stderr, "cached module %s\n", sources->items[first].path);
     return 0;
   }
-  if (!b->ir)
-    return 1;
   int result = dyn_codegen_emit(b->merged, b->ir, object, NULL, NULL,
                                 b->options->release, b->options->debug_info,
                                 false, owner, chunk, chunks);
   if (!result)
-    dyn_module_cache_store(sources, first, count, chunk, chunks, b->options,
+    dyn_module_cache_store(sources, first, count, chunk, chunks,
+                           b->ir->interface_hash, b->options,
                            b->compiler, b->cache_root, object);
   return result;
 }

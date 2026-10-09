@@ -234,6 +234,13 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
 /* dyn_codegen_module in two steps: analyze and lower once (owner_key NULL
    keeps every body), then emit any number of owners from the shared result. */
 struct DynIrProgram;
+/* Which chunk of a split module compiles the functions of one source file. */
+static inline unsigned dyn_chunk_of_path(const char *path, unsigned chunks) {
+  uint64_t h = UINT64_C(1469598103934665603);
+  for (; *path; ++path)
+    h = (h ^ (unsigned char)*path) * UINT64_C(1099511628211);
+  return chunks > 1 ? (unsigned)(h % chunks) : 0;
+}
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, struct DynIrProgram *ir);
 int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
@@ -289,10 +296,12 @@ void dyn_object_cache_store(const DynSources *sources,
                             const char *object);
 bool dyn_module_cache_restore(const DynSources *, size_t first, size_t count,
                               unsigned chunk, unsigned chunks,
+                              uint64_t interface_hash,
                               const DynOptions *, const char *compiler_path,
                               const char *cache_root, const char *object);
 void dyn_module_cache_store(const DynSources *, size_t first, size_t count,
                             unsigned chunk, unsigned chunks,
+                            uint64_t interface_hash,
                             const DynOptions *, const char *compiler_path,
                             const char *cache_root, const char *object);
 void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned,
