@@ -39,7 +39,6 @@ enum {
   DYN_TYPE_STRING,
   DYN_TYPE_RAWPTR,
   DYN_TYPE_ANY,
-  DYN_TYPE_ALLOCATOR,
   DYN_TYPE_STRUCT_BASE = 256,
   DYN_TYPE_ENUM_BASE = 32768,
   DYN_TYPE_POINTER_BASE = 65536,
@@ -47,9 +46,11 @@ enum {
   DYN_TYPE_SLICE_BASE = 196608,
   DYN_TYPE_FN_BASE = 262144,
   DYN_TYPE_DISTINCT_BASE = 327680,
-  /* Allocation results reuse pointer interning to identify their value type. */
-  DYN_TYPE_ALLOC_RESULT_BASE = 393216,
+  /* Type parameter k of the generic being declared; only in signatures. */
+  DYN_TYPE_PARAM_BASE = 393216,
 };
+#define DYN_MAX_TYPE_PARAMS 8
+#define DYN_MAX_INSTANCE_DEPTH 32
 
 typedef enum {
   DYN_EXPR_INT,
@@ -79,14 +80,12 @@ typedef enum {
   DYN_EXPR_CAST,
   DYN_EXPR_BITCAST,
   DYN_EXPR_SYSCALL,
-  DYN_EXPR_ALLOCATOR,
-  DYN_EXPR_ALLOC
+  /* A type passed as a call argument; type holds the type. */
+  DYN_EXPR_TYPE
 } DynExprKind;
-static inline bool dyn_type_is_alloc_result(DynType t) {
-  return t >= DYN_TYPE_ALLOC_RESULT_BASE && t < DYN_TYPE_ALLOC_RESULT_BASE + 65536;
+static inline bool dyn_type_is_param(DynType t) {
+  return t >= DYN_TYPE_PARAM_BASE && t < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS;
 }
-
-enum { DYN_ALLOC_TRY = 1, DYN_ALLOC_SLICE = 2, DYN_ALLOC_UNINIT = 4 };
 
 typedef enum {
   DYN_OP_NONE,
@@ -208,10 +207,32 @@ typedef struct {
   uint32_t param_start, param_count, body_start, body_count, local_start,
       local_count;
   bool is_main, foreign, variadic, is_public, interface_only;
+  /* A generic is a template: never checked or emitted. An instance is an
+     ordinary function whose body is lowered on first use. */
+  bool is_generic, is_instance, body_pending;
+  uint32_t generic, instance;
   uint64_t module_owner;
   DynType variadic_type;
   uint32_t variadic_local_id;
 } DynAstFn;
+
+typedef struct {
+  DynSpan name;
+  DynType pattern;
+  bool is_type;
+} DynAstGenericParam;
+typedef struct {
+  TSNode node;
+  uint32_t function, param_start, param_count, type_param_count;
+  DynType return_pattern;
+  DynSpan type_names[DYN_MAX_TYPE_PARAMS];
+} DynAstGeneric;
+typedef struct {
+  uint32_t generic, function, depth;
+  DynType args[DYN_MAX_TYPE_PARAMS];
+  DynSpan call;
+  uint64_t hash;
+} DynAstInstance;
 
 typedef enum {
   DYN_STMT_INVALID,
@@ -314,6 +335,19 @@ typedef struct {
   size_t local_count, local_capacity;
   uint32_t loop_count;
   DynNameIndex struct_names, enum_names, alias_names;
+  /* Generic nodes borrow the syntax trees, which outlive semantic analysis. */
+  DynAstGeneric *generics;
+  size_t generic_count, generic_capacity;
+  DynAstGenericParam *generic_params;
+  size_t generic_param_count, generic_param_capacity;
+  DynAstInstance *instances;
+  size_t instance_count, instance_capacity;
+  /* Lowering scope: names introduced while declaring a generic signature, or
+     bound to concrete types while lowering an instance. */
+  DynSpan scope_names[DYN_MAX_TYPE_PARAMS];
+  DynType scope_types[DYN_MAX_TYPE_PARAMS];
+  uint32_t scope_count;
+  bool declaring_generic;
   /* Top-level declarations of every root, valid only while lowering. */
   TSNode *decls;
   uint32_t decl_count;
@@ -336,6 +370,16 @@ bool dyn_ast_lower_roots(const TSNode *roots, size_t root_count,
                          const DynSource *, DynAstProgram *, unsigned *,
                          const char *owner_key);
 void dyn_ast_program_free(DynAstProgram *ast);
+/* Add an instance of a generic with concrete type arguments. The body is
+   lowered later by dyn_ast_lower_instance. Returns the function id. */
+uint32_t dyn_ast_instantiate(DynAstProgram *, const DynSource *, uint32_t generic,
+                             const DynType *args, uint32_t depth, DynSpan call,
+                             uint64_t hash);
+bool dyn_ast_lower_instance(DynAstProgram *, const DynSource *, uint32_t function,
+                            unsigned *errors);
+DynType dyn_ast_substitute(DynAstProgram *, DynType pattern, const DynType *args);
+/* The struct, enum or alias with this name, or DYN_TYPE_ERROR. */
+DynType dyn_ast_named_type(DynAstProgram *, DynSpan name, const DynSource *);
 bool dyn_module_name_equal(DynSpan, DynSpan, const DynSource *);
 bool dyn_span_text_equal(DynSpan a, DynSpan b, const DynSource *source);
 const char *dyn_type_name(DynType type);

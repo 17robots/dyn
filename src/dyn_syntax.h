@@ -8,22 +8,6 @@
 
 extern const TSLanguage *tree_sitter_dyn(void);
 
-/* Detect allocator syntax without reserving names mentioned only in comments or strings. */
-static inline bool dyn_syntax_has_allocator(TSNode node, const char *text) {
-  const char *kind = ts_node_type(node);
-  if (!strcmp(kind, "allocator") || !strcmp(kind, "allocation") ||
-      !strcmp(kind, "allocation_result_type")) return true;
-  if (!strcmp(kind, "comment") || !strcmp(kind, "string_")) return false;
-  if (!strcmp(kind, "primitive") || !strcmp(kind, "identifier")) {
-    uint32_t start = ts_node_start_byte(node), n = ts_node_end_byte(node) - start;
-    if ((n == 9 && !memcmp(text + start, "Allocator", n)) ||
-        (n == 10 && !memcmp(text + start, "AllocError", n))) return true;
-  }
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
-    if (dyn_syntax_has_allocator(ts_node_named_child(node, i), text)) return true;
-  return false;
-}
-
 static inline bool dyn_syntax_has_reflection(TSNode node) {
   if (!strcmp(ts_node_type(node), "typeof"))
     return true;

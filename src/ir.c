@@ -1,5 +1,6 @@
 #include "ir.h"
 #include "dyn_location.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -405,9 +406,6 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
         a->expressions[i].item_start, a->expressions[i].item_count,
         a->expressions[i].span};
   for (size_t i = 0; i < ir->expression_count; ++i)
-    if (ir->expressions[i].kind == DYN_EXPR_ALLOC)
-      ir->expressions[i].integer = lower_type(a, (DynType)ir->expressions[i].integer);
-  for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
       ir->expressions[i].kind = DYN_EXPR_NIL;
       ir->expressions[i].type = DYN_TYPE_VOID;
@@ -485,7 +483,9 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
   (void)dyn_location_build(&locations, source);
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
-    ir->functions[i].name = malloc(n + 1);
+    /* Instances share the generic's name; the suffix hashes the type
+       arguments, so it stays stable when other code changes. */
+    ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
       dyn_location_free(&locations);
       dyn_ir_free(ir);
@@ -494,6 +494,32 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     memcpy(ir->functions[i].name,
            source->text + a->functions[i].name.start_byte, n);
     ir->functions[i].name[n] = 0;
+    if (a->functions[i].is_instance) {
+      const DynAstInstance *instance = &a->instances[a->functions[i].instance];
+      uint32_t count = a->generics[instance->generic].type_param_count;
+      snprintf(ir->functions[i].name + n, 20, "__g%016llx",
+               (unsigned long long)instance->hash);
+      /* Drop the module prefix (dyn_m<16 hex>_) for readability. */
+      const char *base = ir->functions[i].name;
+      size_t base_length = n;
+      if (n > 22 && !memcmp(base, "dyn_m", 5) && base[21] == '_') {
+        base += 22;
+        base_length -= 22;
+      }
+      char debug[512];
+      size_t used = (size_t)snprintf(debug, sizeof(debug), "%.*s(", (int)base_length, base);
+      for (uint32_t k = 0; k < count && used < sizeof(debug); ++k) {
+        char type[256];
+        dyn_type_format((DynAstProgram *)a, instance->args[k], source, type, sizeof(type));
+        used += (size_t)snprintf(debug + used, sizeof(debug) - used, "%s%s",
+                                 k ? ", " : "", type);
+      }
+      if (used < sizeof(debug))
+        snprintf(debug + used, sizeof(debug) - used, ")");
+      ir->functions[i].debug_name = strdup(debug);
+    }
+    ir->functions[i].generic = a->functions[i].is_generic;
+    ir->functions[i].instance = a->functions[i].is_instance;
     size_t link_length = a->functions[i].link_name.end_byte -
                          a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
@@ -697,6 +723,8 @@ void dyn_ir_free(DynIrProgram *ir) {
     free(ir->strings[i].data);
   for (size_t i = 0; ir->functions && i < ir->function_count; ++i)
     free(ir->functions[i].name);
+  for (size_t i = 0; ir->functions && i < ir->function_count; ++i)
+    free(ir->functions[i].debug_name);
   for (size_t i = 0; ir->functions && i < ir->function_count; ++i)
     free(ir->functions[i].link_name);
   for (size_t i = 0; ir->globals && i < ir->global_count; ++i)
