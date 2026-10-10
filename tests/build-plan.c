@@ -21,7 +21,8 @@ pid_t __wrap_waitpid(pid_t pid, int *status, int options) {
 }
 
 static int run(const DynSources *sources, size_t first, size_t count,
-               void *context, uint64_t *value) {
+               unsigned chunk, unsigned chunks, void *context, uint64_t *value) {
+  (void)chunk; (void)chunks;
   (void)context;
   struct timespec delay = {0, (long)(sources->count - first) * 100000};
   nanosleep(&delay, NULL); /* Deliberately finish out of order. */
@@ -30,13 +31,15 @@ static int run(const DynSources *sources, size_t first, size_t count,
 }
 
 static int errors(const DynSources *sources, size_t first, size_t count,
-                  void *context, uint64_t *value) {
+                  unsigned chunk, unsigned chunks, void *context, uint64_t *value) {
+  (void)chunk; (void)chunks;
   (void)sources; (void)count; (void)value;
   if (context) assert(*(pid_t *)context == getpid());
   return first == 2 ? 7 : first == 3 ? 9 : 0;
 }
 static int crash(const DynSources *sources, size_t first, size_t count,
-                 void *context, uint64_t *value) {
+                 unsigned chunk, unsigned chunks, void *context, uint64_t *value) {
+  (void)chunk; (void)chunks;
   (void)sources; (void)first; (void)count; (void)context; (void)value;
   _exit(3);
 }

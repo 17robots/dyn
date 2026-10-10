@@ -9,12 +9,17 @@
 #include <string.h>
 #include <tree_sitter/api.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <pthread.h>
+#include <stdatomic.h>
+#endif
 extern const TSLanguage *tree_sitter_dyn(void);
 extern char *realpath(const char *, char *);
 
 typedef struct {
   char *name;
   bool is_public;
+  size_t order;
 } InterfaceDecl;
 typedef struct {
   char *directory;
@@ -35,7 +40,19 @@ typedef struct {
   const DynSources *overrides;
   ModuleInterface *interfaces;
   size_t interface_count;
+  size_t *interface_buckets; /* Open addressing; SIZE_MAX marks empty. */
+  size_t interface_bucket_count;
+  struct Prefetched *prefetched;
+  size_t prefetched_count;
 } Resolver;
+/* Module directories parsed ahead of the serial visit. A failed load stays
+   empty so visit repeats it and reports the error in the usual order. */
+typedef struct Prefetched {
+  char *directory;
+  DynSources sources;
+  int status;
+  bool taken;
+} Prefetched;
 static bool append_source(DynSources *, const DynSource *);
 static int overlay_source_order(const void *left, const void *right) {
   return strcmp(((const DynSource *)left)->path,
@@ -134,7 +151,7 @@ static bool within(const char *root, const char *path) {
   size_t n = strlen(root);
   return !strncmp(root, path, n) && (path[n] == 0 || path[n] == '/');
 }
-static char *resolve_configured_sdk(const char *path) {
+static char *resolve_configured_sdk(const char *path, bool *oom) {
   const char *configured = getenv("DYN_SDK");
   if (!configured || !*configured)
     return NULL;
@@ -142,6 +159,8 @@ static char *resolve_configured_sdk(const char *path) {
   if (!root)
     return NULL;
   char *candidate = dyn_path_join(root, path);
+  if (!candidate)
+    *oom = true;
   char *result = candidate ? realpath(candidate, NULL) : NULL;
   free(candidate);
   if (!result || !within(root, result)) {
@@ -151,8 +170,8 @@ static char *resolve_configured_sdk(const char *path) {
   free(root);
   return result;
 }
-static char *resolve_std(const char *path) {
-  char *configured = resolve_configured_sdk(path);
+static char *resolve_std(const char *path, bool *oom) {
+  char *configured = resolve_configured_sdk(path, oom);
   if (configured)
     return configured;
   char executable[4096];
@@ -182,8 +201,8 @@ static char *resolve_std(const char *path) {
     return realpath(relative, NULL);
   return NULL;
 }
-static char *resolve_vendor(const char *path) {
-  char *configured = resolve_configured_sdk(path);
+static char *resolve_vendor(const char *path, bool *oom) {
+  char *configured = resolve_configured_sdk(path, oom);
   if (configured)
     return configured;
   char executable[4096];
@@ -219,13 +238,15 @@ static char *resolve_vendor(const char *path) {
     return realpath(relative, NULL);
   return NULL;
 }
-static char *resolve(Resolver *r, const char *current, const char *path) {
+/* Sets *oom when an allocation fails, as opposed to an unresolved path. */
+static char *resolve_checked(Resolver *r, const char *current, const char *path,
+                             bool *oom) {
   if (!path || !*path)
     return NULL;
   if (!strncmp(path, "std/", 4))
-    return resolve_std(path);
+    return resolve_std(path, oom);
   if (!strncmp(path, "vendor/", 7))
-    return resolve_vendor(path);
+    return resolve_vendor(path, oom);
   const char *slash = strchr(path, '/');
   size_t first = slash ? (size_t)(slash - path) : strlen(path);
   for (size_t i = 0; i < r->dependency_count; ++i) {
@@ -233,6 +254,8 @@ static char *resolve(Resolver *r, const char *current, const char *path) {
         !memcmp(path, r->dependency_names[i], first)) {
       char *candidate = slash ? dyn_path_join(r->dependency_roots[i], slash + 1)
                               : strdup(r->dependency_roots[i]);
+      if (!candidate)
+        *oom = true;
       char *result = candidate ? realpath(candidate, NULL) : NULL;
       free(candidate);
       if (!result || !within(r->dependency_roots[i], result)) {
@@ -245,8 +268,10 @@ static char *resolve(Resolver *r, const char *current, const char *path) {
   char *candidate = (!strncmp(path, "./", 2) || !strncmp(path, "../", 3))
                         ? dyn_path_join(current, path)
                         : dyn_path_join(r->root, path);
-  if (!candidate)
+  if (!candidate) {
+    *oom = true;
     return NULL;
+  }
   char *result = realpath(candidate, NULL);
   free(candidate);
   if (!result || !within(r->root, result)) {
@@ -254,6 +279,10 @@ static char *resolve(Resolver *r, const char *current, const char *path) {
     return NULL;
   }
   return result;
+}
+static char *resolve(Resolver *r, const char *current, const char *path) {
+  bool oom = false;
+  return resolve_checked(r, current, path, &oom);
 }
 static int load_manifest(Resolver *r) {
   char *path = dyn_path_join(r->root, "dyn.project");
@@ -356,11 +385,54 @@ char *dyn_module_resolve_import(const DynContext *context,
   free(root);
   return result;
 }
+static uint64_t interface_hash(const char *s) {
+  uint64_t h = UINT64_C(1469598103934665603);
+  for (; *s; ++s)
+    h = (h ^ (unsigned char)*s) * UINT64_C(1099511628211);
+  return h;
+}
 static ModuleInterface *find_interface(Resolver *r, const char *directory) {
-  for (size_t i = 0; i < r->interface_count; ++i)
+  if (!r->interface_bucket_count)
+    return NULL;
+  size_t mask = r->interface_bucket_count - 1;
+  for (size_t at = (size_t)interface_hash(directory) & mask;;
+       at = (at + 1) & mask) {
+    size_t i = r->interface_buckets[at];
+    if (i == SIZE_MAX)
+      return NULL;
     if (!strcmp(r->interfaces[i].directory, directory))
       return &r->interfaces[i];
-  return NULL;
+  }
+}
+static bool index_interfaces(Resolver *r) {
+  size_t count = 16;
+  while (count < r->interface_count * 2)
+    count *= 2;
+  /* Insert the newest interface; rehash everything only when growing. */
+  size_t first = r->interface_count - 1;
+  if (count != r->interface_bucket_count) {
+    size_t *buckets = malloc(count * sizeof(*buckets));
+    if (!buckets)
+      return false;
+    free(r->interface_buckets);
+    r->interface_buckets = buckets;
+    r->interface_bucket_count = count;
+    memset(buckets, 0xff, count * sizeof(*buckets));
+    first = 0;
+  }
+  for (size_t i = first; i < r->interface_count; ++i)
+    for (size_t at = (size_t)interface_hash(r->interfaces[i].directory) & (count - 1);;
+         at = (at + 1) & (count - 1))
+      if (r->interface_buckets[at] == SIZE_MAX) {
+        r->interface_buckets[at] = i;
+        break;
+      }
+  return true;
+}
+static int interface_decl_order(const void *left, const void *right) {
+  const InterfaceDecl *a = left, *b = right;
+  int name = strcmp(a->name, b->name);
+  return name ? name : (a->order > b->order) - (a->order < b->order);
 }
 static void free_interface(ModuleInterface *value) {
   free(value->directory);
@@ -403,8 +475,10 @@ static int extract_interface(Resolver *r, const char *directory,
         return 2;
       }
       value.decls = next;
-      value.decls[value.decl_count++] =
-          (InterfaceDecl){.name = text, .is_public = declaration.is_public};
+      value.decls[value.decl_count] =
+          (InterfaceDecl){.name = text, .is_public = declaration.is_public,
+                          .order = value.decl_count};
+      ++value.decl_count;
     }
     ts_tree_delete(t);
   }
@@ -415,7 +489,14 @@ static int extract_interface(Resolver *r, const char *directory,
     return 2;
   }
   r->interfaces = next;
+  if (value.decl_count > 1)
+    qsort(value.decls, value.decl_count, sizeof(*value.decls),
+          interface_decl_order);
   r->interfaces[r->interface_count++] = value;
+  if (!index_interfaces(r)) {
+    free_interface(&r->interfaces[--r->interface_count]);
+    return 2;
+  }
   return 0;
 }
 static bool decl_named(Resolver *r, const char *directory, const char *name,
@@ -423,12 +504,19 @@ static bool decl_named(Resolver *r, const char *directory, const char *name,
   ModuleInterface *interface = find_interface(r, directory);
   if (!interface)
     return false;
-  for (size_t i = 0; i < interface->decl_count; ++i)
-    if (!strcmp(interface->decls[i].name, name)) {
-      *is_public = interface->decls[i].is_public;
-      return true;
-    }
-  return false;
+  /* Sorted by name, then declaration order: find the first match. */
+  size_t low = 0, high = interface->decl_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    if (strcmp(interface->decls[middle].name, name) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  if (low == interface->decl_count || strcmp(interface->decls[low].name, name))
+    return false;
+  *is_public = interface->decls[low].is_public;
+  return true;
 }
 static size_t alias_index(char **aliases, size_t count, const char *name) {
   for (size_t i = 0; i < count; ++i)
@@ -606,6 +694,17 @@ static int visit(Resolver *r, const char *directory,
     return 2;
   DynSources owned = {0};
   const DynSources *sources = provided;
+  Prefetched *ready = NULL;
+  for (size_t i = 0; !sources && i < r->prefetched_count; ++i)
+    if (!r->prefetched[i].taken && !r->prefetched[i].status &&
+        !strcmp(r->prefetched[i].directory, directory))
+      ready = &r->prefetched[i];
+  if (ready) {
+    owned = ready->sources;
+    memset(&ready->sources, 0, sizeof(ready->sources));
+    ready->taken = true;
+    sources = &owned;
+  }
   if (!sources) {
     int e = dyn_sources_load(&r->context, directory, &owned);
     if (e) {
@@ -743,6 +842,111 @@ static int visit(Resolver *r, const char *directory,
   pop(r->stack, &r->stack_count);
   return result;
 }
+#ifndef _WIN32
+typedef struct {
+  Resolver *resolver;
+  size_t first, count;
+  atomic_size_t next;
+} PrefetchWave;
+static void *prefetch_worker(void *raw) {
+  PrefetchWave *wave = raw;
+  for (;;) {
+    size_t i = atomic_fetch_add(&wave->next, 1);
+    if (i >= wave->count)
+      return NULL;
+    Prefetched *p = &wave->resolver->prefetched[wave->first + i];
+    p->status = dyn_sources_load_quiet(&wave->resolver->context, p->directory,
+                                       &p->sources);
+  }
+}
+static bool prefetch_seen(const Resolver *r, const char *directory) {
+  for (size_t i = 0; i < r->prefetched_count; ++i)
+    if (!strcmp(r->prefetched[i].directory, directory))
+      return true;
+  return false;
+}
+/* Queue every import target of sources not seen yet. Invalid imports are
+   skipped here; visit reports them. */
+static bool prefetch_imports(Resolver *r, const char *directory,
+                             const DynSources *sources) {
+  for (size_t si = 0; si < sources->count; ++si) {
+    const DynSource *s = &sources->items[si];
+    if (dyn_source_target_enabled(s) != 1 || !s->syntax)
+      continue;
+    TSNode root = ts_tree_root_node(s->syntax);
+    TSTreeCursor cursor = ts_tree_cursor_new(root);
+    bool ok = true;
+    if (ts_tree_cursor_goto_first_child(&cursor)) do {
+      TSNode d = dyn_syntax_declaration_node(ts_tree_cursor_current_node(&cursor));
+      if (strcmp(ts_node_type(d), "use"))
+        continue;
+      TSNode path_node = ts_node_child_by_field_name(d, "path", 4);
+      char *path = dyn_syntax_copy_text(path_node, s, true);
+      bool oom = !path && !ts_node_is_null(path_node);
+      char *target = path ? resolve_checked(r, directory, path, &oom) : NULL;
+      free(path);
+      if (oom) { free(target); ok = false; break; }
+      if (target && dyn_path_is_directory(target) && !prefetch_seen(r, target)) {
+        Prefetched *grown = realloc(r->prefetched,
+            (r->prefetched_count + 1) * sizeof(*grown));
+        if (!grown) { free(target); ok = false; break; }
+        r->prefetched = grown;
+        r->prefetched[r->prefetched_count++] = (Prefetched){.directory = target};
+      } else
+        free(target);
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+    if (!ok)
+      return false;
+  }
+  return true;
+}
+/* Parse the import graph breadth first; each wave loads in parallel.
+   Only allocation failure is an error: anything else is left for visit. */
+static int prefetch(Resolver *r, const DynSources *root_sources) {
+  if (r->overrides || r->context.work || r->context.syntax_cache)
+    return 0;
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  if (online < 2)
+    return 0;
+  if (!prefetch_imports(r, r->root, root_sources))
+    return 2;
+  for (size_t first = 0; first < r->prefetched_count;) {
+    PrefetchWave wave = {.resolver = r, .first = first,
+                         .count = r->prefetched_count - first};
+    atomic_init(&wave.next, 0);
+    size_t workers = wave.count < (size_t)online ? wave.count : (size_t)online;
+    pthread_t threads[256];
+    if (workers > 256)
+      workers = 256;
+    size_t started = 0;
+    for (; started + 1 < workers; ++started)
+      if (pthread_create(&threads[started], NULL, prefetch_worker, &wave))
+        break;
+    prefetch_worker(&wave);
+    for (size_t i = 0; i < started; ++i)
+      pthread_join(threads[i], NULL);
+    size_t end = r->prefetched_count;
+    for (size_t i = first; i < end; ++i) {
+      /* Copies: prefetch_imports may move r->prefetched. */
+      DynSources sources = r->prefetched[i].sources;
+      const char *directory = r->prefetched[i].directory;
+      if (r->prefetched[i].status == 2 ||
+          (!r->prefetched[i].status && !prefetch_imports(r, directory, &sources)))
+        return 2;
+    }
+    first = end;
+  }
+  return 0;
+}
+#endif
+static void prefetch_free(Resolver *r) {
+  for (size_t i = 0; i < r->prefetched_count; ++i) {
+    free(r->prefetched[i].directory);
+    dyn_sources_free(&r->prefetched[i].sources);
+  }
+  free(r->prefetched);
+}
 static int load(const char *project_root, const DynSources *root_sources,
                 const DynSources *overrides, DynSources *out) {
   if (out)
@@ -756,8 +960,13 @@ static int load(const char *project_root, const DynSources *root_sources,
   else if (overrides && overrides->count)
     r.context = overrides->items[0].context;
   int result = load_manifest(&r);
+#ifndef _WIN32
+  if (!result && out)
+    result = prefetch(&r, root_sources);
+#endif
   if (!result)
     result = visit(&r, root, root_sources);
+  prefetch_free(&r);
   if (!result && out)
     result = dyn_module_rewrite_project(root, out);
   for (size_t i = 0; i < r.visited_count; ++i)
@@ -774,6 +983,7 @@ static int load(const char *project_root, const DynSources *root_sources,
     free_interface(&r.interfaces[i]);
   }
   free(r.interfaces);
+  free(r.interface_buckets);
   free(root);
   if (result && out)
     dyn_sources_free(out);

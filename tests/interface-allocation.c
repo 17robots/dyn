@@ -90,6 +90,7 @@ int main(void) {
     for (size_t i = 0; i < resolver.interface_count; ++i)
       free_interface(&resolver.interfaces[i]);
     checked_free(resolver.interfaces);
+    checked_free(resolver.interface_buckets);
 #else
     DynInterface value;
     int status = dyn_interface_build(&sources, &value);

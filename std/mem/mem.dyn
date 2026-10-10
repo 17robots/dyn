@@ -434,7 +434,7 @@ pub fn free_list_alloc(list: *FreeList) rawptr {
     mask = mask << (slot % 8)
     list.occupied[slot / 8] |= mask
   }
-  return #cast(rawptr) node
+  return node
 }
 
 pub fn free_list_alloc_or_panic(list: *FreeList) rawptr {

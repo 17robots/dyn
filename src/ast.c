@@ -1149,10 +1149,8 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
     return ok;
   }
   if (!strcmp(kind, "identifier")) {
-    TSNode root = node;
     for (TSNode scope = ts_node_parent(node); !ts_node_is_null(scope);
          scope = ts_node_parent(scope)) {
-      root = scope;
       if (strcmp(ts_node_type(scope), "block")) continue;
       for (uint32_t i = 0; i < ts_node_named_child_count(scope); ++i) {
         TSNode declaration = ts_node_named_child(scope, i);
@@ -1170,10 +1168,10 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
     bool local = dyn_syntax_local(node, s, name);
     free(name);
     if (local) return false; /* Parameters, loop bindings and mutable locals. */
-    for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
+    for (uint32_t i = 0; i < a->decl_count; ++i) {
       if (!dyn_work_step(&s->context, 1)) return false;
       DynDeclaration parsed;
-      if (!dyn_syntax_declaration(ts_node_named_child(root, i), &parsed) ||
+      if (!dyn_syntax_declaration(a->decls[i], &parsed) ||
           !dyn_module_name_equal(span(node), span(parsed.name), s)) continue;
       if (parsed.kind != DYN_DECL_CONSTANT || !array_integer_constant(parsed.node, s, a)) return false;
       return array_extent(dyn_syntax_last_child(dyn_syntax_child(parsed.node, 0)), s, a, value, depth + 1, remaining);
@@ -1687,10 +1685,10 @@ static uint64_t declaration_owner(DynSpan name, const DynSource *s) {
   }
   return value;
 }
-static bool add_enum_names(TSNode root, const DynSource *s, DynAstProgram *a,
+static bool add_enum_names(const DynSource *s, DynAstProgram *a,
                            unsigned *errors) {
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode wrapper = ts_node_named_child(root, i);
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
     if (strcmp(ts_node_type(d), "enum"))
@@ -1726,10 +1724,10 @@ static bool add_enum_names(TSNode root, const DynSource *s, DynAstProgram *a,
   }
   return true;
 }
-static bool add_struct_names(TSNode root, const DynSource *s, DynAstProgram *a,
+static bool add_struct_names(const DynSource *s, DynAstProgram *a,
                              unsigned *errors) {
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode wrapper = ts_node_named_child(root, i);
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
     if (strcmp(ts_node_type(d), "struct"))
@@ -1759,10 +1757,10 @@ static bool add_struct_names(TSNode root, const DynSource *s, DynAstProgram *a,
   }
   return true;
 }
-static bool add_alias_names(TSNode root, const DynSource *s, DynAstProgram *a,
+static bool add_alias_names(const DynSource *s, DynAstProgram *a,
                             unsigned *errors) {
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode wrapper = ts_node_named_child(root, i);
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
     if (strcmp(ts_node_type(d), "type_alias"))
@@ -1796,11 +1794,11 @@ static bool add_alias_names(TSNode root, const DynSource *s, DynAstProgram *a,
       diagnostic(a->aliases[i].name, s, errors, "invalid or cyclic type alias");
   return true;
 }
-static bool add_struct_fields(TSNode root, const DynSource *s, DynAstProgram *a,
+static bool add_struct_fields(const DynSource *s, DynAstProgram *a,
                               unsigned *errors) {
   uint32_t si = 0;
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode d = dyn_syntax_declaration_node(ts_node_named_child(root, i));
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode d = dyn_syntax_declaration_node(a->decls[i]);
     if (strcmp(ts_node_type(d), "struct"))
       continue;
     if (si >= a->struct_count)
@@ -1850,11 +1848,11 @@ static bool add_struct_fields(TSNode root, const DynSource *s, DynAstProgram *a,
   }
   return true;
 }
-static bool add_enum_variants(TSNode root, const DynSource *s, DynAstProgram *a,
+static bool add_enum_variants(const DynSource *s, DynAstProgram *a,
                               unsigned *errors) {
   uint32_t ei = 0;
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode d = dyn_syntax_declaration_node(ts_node_named_child(root, i));
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode d = dyn_syntax_declaration_node(a->decls[i]);
     if (strcmp(ts_node_type(d), "enum"))
       continue;
     DynAstEnum *en = &a->enums[ei++];
@@ -2096,10 +2094,10 @@ static uint32_t find_global(DynNameIndex *index, DynAstProgram *a, DynSpan name,
                              sizeof(*a->globals), a->global_count, name, s,
                              true, &a->allocation_failed);
 }
-static bool add_globals(TSNode root, const DynSource *s, DynAstProgram *a,
+static bool add_globals(const DynSource *s, DynAstProgram *a,
                         unsigned *errors, DynNameIndex *globals) {
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode wrapper = ts_node_named_child(root, i);
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
     bool foreign = !strcmp(ts_node_type(d), "extern_variable");
@@ -2155,11 +2153,11 @@ static bool add_globals(TSNode root, const DynSource *s, DynAstProgram *a,
   }
   return true;
 }
-static bool add_function_signatures(TSNode root, const DynSource *s,
+static bool add_function_signatures(const DynSource *s,
                                     DynAstProgram *a, unsigned *errors, DynNameIndex *index,
                                     DynNameIndex *globals) {
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode wrapper = ts_node_named_child(root, i);
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
     bool foreign = !strcmp(ts_node_type(d), "extern_fn");
@@ -2256,12 +2254,12 @@ static uint64_t owner_key_value(const char *owner_key) {
   }
   return value;
 }
-static void lower_function_bodies(TSNode root, const DynSource *s,
+static void lower_function_bodies(const DynSource *s,
                                   DynAstProgram *a, unsigned *errors,
                                   const char *owner_key, DynNameIndex *index) {
   uint64_t wanted = owner_key_value(owner_key);
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && dyn_work_step(&s->context, 1); ++i) {
-    TSNode d = dyn_syntax_declaration_node(ts_node_named_child(root, i));
+  for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
+    TSNode d = dyn_syntax_declaration_node(a->decls[i]);
     if (strcmp(ts_node_type(d), "fn") && strcmp(ts_node_type(d), "extern_fn"))
       continue;
     TSNode name = ts_node_child_by_field_name(d, "name", 4);
@@ -2294,19 +2292,18 @@ static void lower_function_bodies(TSNode root, const DynSource *s,
     }
   }
 }
-bool dyn_ast_lower_source(TSNode root, const DynSource *s, DynAstProgram *a,
-                          unsigned *errors, const char *owner_key) {
-  memset(a, 0, sizeof(*a));
+static bool lower_declarations(TSNode root, const DynSource *s, DynAstProgram *a,
+                               unsigned *errors, const char *owner_key) {
   unsigned before = *errors;
   DynNameIndex functions = {0}, globals = {0};
-  if (!add_enum_names(root, s, a, errors) ||
-      !add_struct_names(root, s, a, errors) ||
-      !add_alias_names(root, s, a, errors) ||
-      !add_struct_fields(root, s, a, errors) ||
-      !add_enum_variants(root, s, a, errors) ||
+  if (!add_enum_names(s, a, errors) ||
+      !add_struct_names(s, a, errors) ||
+      !add_alias_names(s, a, errors) ||
+      !add_struct_fields(s, a, errors) ||
+      !add_enum_variants(s, a, errors) ||
       !compute_layouts_v2(a, s, errors) ||
-      !add_globals(root, s, a, errors, &globals) ||
-      !add_function_signatures(root, s, a, errors, &functions, &globals)) {
+      !add_globals(s, a, errors, &globals) ||
+      !add_function_signatures(s, a, errors, &functions, &globals)) {
     ast_name_index_free(&functions);
     ast_name_index_free(&globals);
     if (a->invalid_array_extent.end_byte)
@@ -2316,7 +2313,7 @@ bool dyn_ast_lower_source(TSNode root, const DynSource *s, DynAstProgram *a,
       diagnostic_node(root, s, errors, "out of memory");
     return false;
   }
-  lower_function_bodies(root, s, a, errors, owner_key, &functions);
+  lower_function_bodies(s, a, errors, owner_key, &functions);
   if (a->invalid_array_extent.end_byte)
     diagnostic(a->invalid_array_extent, s, errors,
         "array length requires nonnegative integer constant arithmetic (no runtime values, cycles, overflow, or division by zero)");
@@ -2329,6 +2326,45 @@ bool dyn_ast_lower_source(TSNode root, const DynSource *s, DynAstProgram *a,
     if (a->functions[i].is_main)
       found = true;
   return found;
+}
+bool dyn_ast_lower_roots(const TSNode *roots, size_t root_count,
+                         const DynSource *s, DynAstProgram *a,
+                         unsigned *errors, const char *owner_key) {
+  memset(a, 0, sizeof(*a));
+  TSNode root = roots[0];
+  /* Flatten top-level declarations once: each pass indexes them directly,
+     and ts_node_named_child is linear in the child index. */
+  size_t total = 0;
+  for (size_t r = 0; r < root_count; ++r)
+    total += ts_node_named_child_count(roots[r]);
+  if (total > UINT32_MAX) {
+    diagnostic_node(root, s, errors, "too many declarations");
+    return false;
+  }
+  a->decls = malloc((total ? total : 1) * sizeof(*a->decls));
+  if (!a->decls) {
+    a->allocation_failed = true;
+    diagnostic_node(root, s, errors, "out of memory");
+    return false;
+  }
+  for (size_t r = 0; r < root_count; ++r) {
+    TSTreeCursor cursor = ts_tree_cursor_new(roots[r]);
+    if (ts_tree_cursor_goto_first_child(&cursor)) do {
+      TSNode child = ts_tree_cursor_current_node(&cursor);
+      if (ts_node_is_named(child))
+        a->decls[a->decl_count++] = child;
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+  }
+  bool found = lower_declarations(root, s, a, errors, owner_key);
+  free(a->decls);
+  a->decls = NULL;
+  a->decl_count = 0;
+  return found;
+}
+bool dyn_ast_lower_source(TSNode root, const DynSource *s, DynAstProgram *a,
+                          unsigned *errors, const char *owner_key) {
+  return dyn_ast_lower_roots(&root, 1, s, a, errors, owner_key);
 }
 bool dyn_ast_parse_source_owner(const DynSource *s, DynAstProgram *a,
                                 unsigned *errors, const char *owner_key,

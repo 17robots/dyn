@@ -137,6 +137,10 @@ typedef struct {
   size_t span_count;
   DynContext context;
   TSTree *syntax; /* Owned, immutable tree for this exact text revision. */
+  /* Merged sources may instead own one tree per input, shifted to its offset
+     in text. Together they cover the text without a second parse. */
+  TSTree **syntax_parts;
+  size_t syntax_part_count;
   bool syntax_too_deep;
   bool needs_reflection; /* Synthetic interface dependency on the compiler ABI.
                           */
@@ -179,10 +183,12 @@ int dyn_interface_compose(const DynSources *, size_t owner_first,
                           size_t interface_count, const char *path,
                           DynSource *);
 
-/* Jobs receive one canonical, contiguous module slice. Context must be safe for
-   concurrent calls. Values are returned in source order, never completion
-   order. */
-typedef int (*DynModuleBuildFn)(const DynSources *, size_t, size_t, void *,
+/* Jobs receive one canonical, contiguous module slice. Large modules are split
+   into chunks (chunk of chunks); the count depends only on the module's source
+   size. Context must be safe for concurrent calls. Values are returned in
+   source order, never completion order. */
+typedef int (*DynModuleBuildFn)(const DynSources *, size_t first, size_t count,
+                                unsigned chunk, unsigned chunks, void *,
                                 uint64_t *);
 int dyn_build_plan_run(const DynSources *, unsigned, DynModuleBuildFn, void *,
                        uint64_t **, size_t *);
@@ -197,6 +203,9 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *options);
 void dyn_cli_help(const char *command);
 int dyn_sources_load(const DynContext *context, const char *directory,
                      DynSources *sources);
+/* Same, without reporting errors: callers retry with dyn_sources_load. */
+int dyn_sources_load_quiet(const DynContext *context, const char *dir,
+                           DynSources *out);
 void dyn_sources_free(DynSources *sources);
 int dyn_source_target_enabled(const DynSource *source);
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
@@ -222,6 +231,24 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
 int dyn_codegen_module(const DynSource *source, const char *object_path,
                        const char *ir_path, const char *asm_path, bool release,
                        bool debug_info, bool shared, const char *owner_key);
+/* dyn_codegen_module in two steps: analyze and lower once (owner_key NULL
+   keeps every body), then emit any number of owners from the shared result. */
+struct DynIrProgram;
+/* Which chunk of a split module compiles the functions of one source file. */
+static inline unsigned dyn_chunk_of_path(const char *path, unsigned chunks) {
+  uint64_t h = UINT64_C(1469598103934665603);
+  for (; *path; ++path)
+    h = (h ^ (unsigned char)*path) * UINT64_C(1099511628211);
+  return chunks > 1 ? (unsigned)(h % chunks) : 0;
+}
+int dyn_codegen_prepare(const DynSource *source, bool shared,
+                        const char *owner_key, struct DynIrProgram *ir);
+int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
+                     const char *object_path, const char *ir_path,
+                     const char *asm_path, bool release, bool debug_info,
+                     bool shared, const char *owner_key, unsigned chunk,
+                     unsigned chunks);
+void dyn_codegen_release(struct DynIrProgram *ir);
 int dyn_link_executable(const DynContext *context, const char *object_path,
                         const char *output_path, const char *const *link_inputs,
                         size_t link_input_count, bool release, bool verbose);
@@ -268,9 +295,13 @@ void dyn_object_cache_store(const DynSources *sources,
                             const char *compiler_path, const char *output,
                             const char *object);
 bool dyn_module_cache_restore(const DynSources *, size_t first, size_t count,
+                              unsigned chunk, unsigned chunks,
+                              uint64_t interface_hash,
                               const DynOptions *, const char *compiler_path,
                               const char *cache_root, const char *object);
 void dyn_module_cache_store(const DynSources *, size_t first, size_t count,
+                            unsigned chunk, unsigned chunks,
+                            uint64_t interface_hash,
                             const DynOptions *, const char *compiler_path,
                             const char *cache_root, const char *object);
 void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned,

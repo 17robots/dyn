@@ -578,10 +578,16 @@ void dyn_object_cache_store(const DynSources *sources,
    link inputs: identical module code is reusable across executables and a
    link-only change never triggers LLVM. Stores are atomic, so process workers
    may populate the same cache safely. */
+/* A chunk depends on its own source files and on the program interface
+   (types, globals, signatures). Edits to other files' function bodies leave
+   its key unchanged. */
 static uint64_t module_key(const DynSources *sources, size_t first,
-                           size_t count, const DynOptions *options,
+                           size_t count, unsigned chunk, unsigned chunks,
+                           uint64_t interface_hash, const DynOptions *options,
                            const char *compiler_path, const char *object) {
   uint64_t hash = compiler_key(options, compiler_path);
+  hash = hash_bytes(hash, &chunk, sizeof(chunk));
+  hash = hash_bytes(hash, &chunks, sizeof(chunks));
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
@@ -591,15 +597,19 @@ static uint64_t module_key(const DynSources *sources, size_t first,
   bool bitcode =
       object_length >= 3 && !strcmp(object + object_length - 3, ".bc");
   hash = hash_bytes(hash, &bitcode, sizeof(bitcode));
-  /* Dependency graph and syntax-based declaration hashes are captured during
-     rewriting. Sources without that metadata use a conservative content key. */
-  uint64_t dependencies = sources->items[first].dependency_hash;
-  if (!dependencies) dependencies = hash_project_sources(0, sources);
-  hash = hash_bytes(hash, &dependencies, sizeof(dependencies));
-  uint64_t value = 0;
-  if (hash_module(sources, first, count, NULL, &value))
-    return 0;
-  return hash_bytes(hash, &value, sizeof(value));
+  hash = hash_bytes(hash, &interface_hash, sizeof(interface_hash));
+  /* The module's directory decides symbol names, even for an empty chunk. */
+  hash = hash_bytes(hash, sources->items[first].path,
+                    strlen(sources->items[first].path));
+  for (size_t i = first; i < first + count; ++i) {
+    const DynSource *source = &sources->items[i];
+    if (dyn_chunk_of_path(source->path, chunks) != chunk)
+      continue;
+    hash = hash_bytes(hash, source->path, strlen(source->path));
+    hash = hash_bytes(hash, &source->length, sizeof(source->length));
+    hash = hash_bytes(hash, source->text, source->length);
+  }
+  return hash ? hash : 1;
 }
 
 static bool module_artifact(char *path, size_t capacity, const char *root,
@@ -612,14 +622,14 @@ static bool module_artifact(char *path, size_t capacity, const char *root,
 }
 
 bool dyn_module_cache_restore(const DynSources *sources, size_t first,
-                              size_t count, const DynOptions *options,
+                              size_t count, unsigned chunk, unsigned chunks, uint64_t interface_hash, const DynOptions *options,
                               const char *compiler_path, const char *cache_root,
                               const char *object) {
   if (options->no_cache || !cache_root)
     return false;
   char artifact[4096];
   uint64_t key =
-      module_key(sources, first, count, options, compiler_path, object);
+      module_key(sources, first, count, chunk, chunks, interface_hash, options, compiler_path, object);
   if (!key || !module_artifact(artifact, sizeof(artifact), cache_root, key))
     return false;
   char metadata[4096];
@@ -637,7 +647,7 @@ bool dyn_module_cache_restore(const DynSources *sources, size_t first,
 }
 
 void dyn_module_cache_store(const DynSources *sources, size_t first,
-                            size_t count, const DynOptions *options,
+                            size_t count, unsigned chunk, unsigned chunks, uint64_t interface_hash, const DynOptions *options,
                             const char *compiler_path, const char *cache_root,
                             const char *object) {
   if (options->no_cache || !cache_root)
@@ -645,7 +655,7 @@ void dyn_module_cache_store(const DynSources *sources, size_t first,
   char artifact[4096], temporary[4096], metadata[4096],
       metadata_temporary[4096];
   uint64_t key =
-      module_key(sources, first, count, options, compiler_path, object);
+      module_key(sources, first, count, chunk, chunks, interface_hash, options, compiler_path, object);
   if (!key || !module_artifact(artifact, sizeof(artifact), cache_root, key) ||
       snprintf(temporary, sizeof(temporary), "%s.%ld.tmp", artifact,
                (long)getpid()) >= (int)sizeof(temporary) ||

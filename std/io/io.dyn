@@ -336,7 +336,7 @@ fn cursor_read(data: rawptr, destination: []u8) Result {
 }
 
 pub fn cursor_reader(state: *Cursor) Reader {
-  return Reader{ data: #cast(rawptr) state, read: &cursor_read }
+  return Reader{ data: state, read: &cursor_read }
 }
 
 pub struct BufferWriter {
@@ -377,5 +377,5 @@ fn buffer_write(data: rawptr, source: []const u8) Result {
 }
 
 pub fn buffer_writer_adapter(state: *BufferWriter) Writer {
-  return Writer{ data: #cast(rawptr) state, write: &buffer_write }
+  return Writer{ data: state, write: &buffer_write }
 }

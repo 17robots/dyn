@@ -4,6 +4,7 @@
 #include "dyn_syntax.h"
 #include "sema.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void analysis_parse_errors(TSNode n, const DynSource *s,
@@ -74,17 +75,32 @@ DynAnalysisResult dyn_analyze(const DynSource *source, DynAstProgram *ast,
   DynAnalysisResult result = {0};
   memset(ast, 0, sizeof(*ast));
   struct timespec phase = dyn_timing_start(&source->context);
-  TSTree *tree = dyn_source_tree(source);
-  if (!tree) {
+  /* Copies: trees may be shared by concurrent module builds. */
+  size_t count = source->syntax_part_count ? source->syntax_part_count : 1;
+  TSTree **trees = calloc(count, sizeof(*trees));
+  TSNode *roots = calloc(count, sizeof(*roots));
+  bool parsed = trees && roots;
+  for (size_t i = 0; parsed && i < count; ++i) {
+    trees[i] = source->syntax_part_count ? ts_tree_copy(source->syntax_parts[i])
+                                         : dyn_source_tree(source);
+    parsed = trees[i] != NULL;
+    if (parsed)
+      roots[i] = ts_tree_root_node(trees[i]);
+  }
+  if (!parsed) {
     dyn_diagnostic_source("error", source, 0, 0, "failed to parse Dyn source");
     result.errors = 1;
-    return result;
+    goto done;
   }
   result.parsed = true;
-  TSNode root = ts_tree_root_node(tree);
-  analysis_parse_errors(root, source, &result.errors);
-  if (!ts_node_has_error(root))
-    analysis_declarations(root, source, options.main_path, &result);
+  bool syntax_error = false;
+  for (size_t i = 0; i < count; ++i) {
+    analysis_parse_errors(roots[i], source, &result.errors);
+    syntax_error |= ts_node_has_error(roots[i]);
+  }
+  if (!syntax_error)
+    for (size_t i = 0; i < count; ++i)
+      analysis_declarations(roots[i], source, options.main_path, &result);
   if (options.require_main && !result.has_main &&
       (!options.owner_key || !strcmp(options.owner_key, "root"))) {
     dyn_diagnostic_source("error", source, 0, 0,
@@ -93,7 +109,7 @@ DynAnalysisResult dyn_analyze(const DynSource *source, DynAstProgram *ast,
   }
   dyn_timing_phase(&source->context, &phase, "parse");
   if (dyn_work_step(&source->context, 1) && (!result.errors || options.recover)) {
-    dyn_ast_lower_source(root, source, ast, &result.errors, options.owner_key);
+    dyn_ast_lower_roots(roots, count, source, ast, &result.errors, options.owner_key);
     dyn_timing_phase(&source->context, &phase, "ast");
     if (!ast->allocation_failed && (ast->struct_count || ast->enum_count ||
                                     ast->function_count || ast->global_count))
@@ -109,7 +125,12 @@ DynAnalysisResult dyn_analyze(const DynSource *source, DynAstProgram *ast,
     dyn_diagnostic_source("error", source, 0, 0, "out of memory");
     ++result.errors;
   }
-  ts_tree_delete(tree);
   result.checked = !result.errors;
+done:
+  for (size_t i = 0; trees && i < count; ++i)
+    if (trees[i])
+      ts_tree_delete(trees[i]);
+  free(trees);
+  free(roots);
   return result;
 }

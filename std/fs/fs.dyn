@@ -125,10 +125,10 @@ fn adapter_write(data: rawptr, source: []const u8) stream.Result {
 }
 // Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
 pub fn reader(file: *File) stream.Reader {
-  return stream.Reader{ data: #cast(rawptr) file, read: &adapter_read }
+  return stream.Reader{ data: file, read: &adapter_read }
 }
 pub fn writer(file: *File) stream.Writer {
-  return stream.Writer{ data: #cast(rawptr) file, write: &adapter_write }
+  return stream.Writer{ data: file, write: &adapter_write }
 }
 // origin: 0 start, 1 current, 2 end.
 pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {

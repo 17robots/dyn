@@ -314,6 +314,9 @@ typedef struct {
   size_t local_count, local_capacity;
   uint32_t loop_count;
   DynNameIndex struct_names, enum_names, alias_names;
+  /* Top-level declarations of every root, valid only while lowering. */
+  TSNode *decls;
+  uint32_t decl_count;
 } DynAstProgram;
 
 bool dyn_ast_lower_main(TSNode function, const DynSource *source,
@@ -328,6 +331,10 @@ bool dyn_ast_parse_source_owner(const DynSource *source, DynAstProgram *ast,
                                 bool allow_no_main);
 bool dyn_ast_lower_source(TSNode root, const DynSource *, DynAstProgram *,
                           unsigned *, const char *owner_key);
+/* Roots are top-level trees whose byte offsets already address source text. */
+bool dyn_ast_lower_roots(const TSNode *roots, size_t root_count,
+                         const DynSource *, DynAstProgram *, unsigned *,
+                         const char *owner_key);
 void dyn_ast_program_free(DynAstProgram *ast);
 bool dyn_module_name_equal(DynSpan, DynSpan, const DynSource *);
 bool dyn_span_text_equal(DynSpan a, DynSpan b, const DynSource *source);

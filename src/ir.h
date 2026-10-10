@@ -2,6 +2,7 @@
 #define DYN_IR_H
 
 #include "dyn_ast.h"
+#include "dyn_location.h"
 
 typedef struct {
   DynExprKind kind;
@@ -115,7 +116,7 @@ typedef struct {
   bool wildcard, pointer_binding;
 } DynIrCaseArm;
 
-typedef struct {
+typedef struct DynIrProgram {
   DynIrExpr *expressions;
   size_t expression_count, expression_capacity;
   DynIrItem *items;
@@ -158,6 +159,11 @@ typedef struct {
   size_t child_count;
   DynIrLocal *locals;
   size_t local_count;
+  /* Line tables of the lowered source, shared by every code generator. */
+  DynLocationIndex locations;
+  /* Declarations every object may depend on: types, globals and function
+     signatures, but no function bodies. Keys cached chunk objects. */
+  uint64_t interface_hash;
 } DynIrProgram;
 
 bool dyn_ir_lower(const DynAstProgram *ast, const DynSource *source,

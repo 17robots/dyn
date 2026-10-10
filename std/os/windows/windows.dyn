@@ -31,7 +31,7 @@ fn socket_initialize() i32 {
       // WSADATA needs pointer alignment; Win64's 408 bytes fit in this storage.
       // Keep one Winsock reference for process lifetime, independent of sockets.
       data: [64]u64 = []
-      socket_startup_error = socket_startup_raw(514, #cast(rawptr) &data[0])
+      socket_startup_error = socket_startup_raw(514, &data[0])
       sync.store_u32(&socket_startup_state, 2)
     }
     else {

@@ -248,6 +248,9 @@ extern int LLVMTargetMachineEmitToFile(LLVMTargetMachineRef, LLVMModuleRef,
                                        char *, int, char **);
 /* ThinLTO summary/hash writer implemented through the LLVM C++ API. */
 extern int dyn_write_thin_bitcode(LLVMModuleRef module, const char *path);
+/* Debug builds only: split first-class aggregate values into scalars so
+   FastISel can select them. */
+extern void dyn_scalarize_aggregates(LLVMModuleRef module);
 extern int LLVMWriteBitcodeToFile(LLVMModuleRef, const char *);
 extern void LLVMSetTarget(LLVMModuleRef, const char *);
 extern int LLVMVerifyModule(LLVMModuleRef, int, char **);

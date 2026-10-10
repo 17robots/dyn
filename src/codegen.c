@@ -23,6 +23,11 @@ typedef struct {
   size_t break_defer, continue_defer;
 } GenControl;
 typedef struct {
+  LLVMValueRef function;
+  const char *name;
+  LLVMBasicBlockRef block;
+} GenPanicBlock;
+typedef struct {
   LLVMContextRef context;
   LLVMModuleRef module;
   LLVMBuilderRef builder, stack_builder;
@@ -39,7 +44,7 @@ typedef struct {
   LLVMValueRef *locals, *functions, *globals, *captured_values;
   bool *static_globals;
   uint32_t *local_statements;
-  DynLocationIndex locations;
+  const DynLocationIndex *locations;
   LLVMTypeRef *struct_types, *enum_types, *function_types;
   DynIrProgram *ir;
   GenAbi **abis, **pointer_abis, *current_abi;
@@ -57,7 +62,23 @@ typedef struct {
   DynType pointer_fact_pointee;
   uint64_t statement_epoch, pointer_fact_epoch, bounds_fact_epoch;
   const DynSource *source;
+  const char *owner_key;
+  bool *defines; /* Functions with a body in this object. */
+  /* Panic blocks reusable by later failed checks of the same kind. */
+  GenPanicBlock panic_blocks[32];
+  unsigned panic_block_count;
+  /* Locals whose value never changes after definition (never assigned and
+     never address-taken). A pointer check of such a local holds for the rest
+     of the scope that made it; facts are popped when the scope ends. */
+  bool *unstable_locals;
+  struct { uint32_t local; DynType pointee; } *local_facts;
+  size_t local_fact_count, local_fact_capacity;
+  LLVMValueRef last_local_load;
+  uint32_t last_local;
+  bool release, shared;
+  const DynOptimization *optimization;
 } Gen;
+static LLVMValueRef function_value(Gen *g, uint32_t i);
 
 /* Every slot has a compile-time size. Emit it once in the entry block, even
  * when the expression using it appears in a loop. Allocation in the current
@@ -81,7 +102,7 @@ static void debug_location(Gen *g, DynSpan span) {
     return;
   const char *path;
   unsigned line, column;
-  dyn_location_get(&g->locations, g->source, span.start_byte, &path, &line, &column);
+  dyn_location_get(g->locations, g->source, span.start_byte, &path, &line, &column);
   LLVMSetCurrentDebugLocation2(
       g->builder, LLVMDIBuilderCreateDebugLocation(g->context, line, column,
                                                    g->di_scope, NULL));
@@ -91,14 +112,14 @@ static unsigned span_line(Gen *g, DynSpan span) {
     return 0;
   const char *path;
   unsigned line, column;
-  dyn_location_get(&g->locations, g->source, span.start_byte, &path, &line, &column);
+  dyn_location_get(g->locations, g->source, span.start_byte, &path, &line, &column);
   return line;
 }
 
 static LLVMMetadataRef debug_source_file(Gen *g, DynSpan span) {
   const char *path;
   unsigned line, column;
-  dyn_location_get(&g->locations, g->source, span.start_byte, &path, &line, &column);
+  dyn_location_get(g->locations, g->source, span.start_byte, &path, &line, &column);
   return path
              ? LLVMDIBuilderCreateFile(g->di_builder, path, strlen(path), "", 0)
              : g->di_file;
@@ -498,7 +519,7 @@ static unsigned local_line(Gen *g, uint32_t local, unsigned fallback) {
   if (entry) {
     const char *path;
     unsigned line, column;
-    dyn_location_get(&g->locations, g->source, g->ir->statements[entry - 1].span.start_byte,
+    dyn_location_get(g->locations, g->source, g->ir->statements[entry - 1].span.start_byte,
                         &path, &line, &column);
     return line;
   }
@@ -650,9 +671,31 @@ static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
   LLVMBasicBlockRef before = LLVMGetInsertBlock(g->builder);
   uint64_t epoch = g->statement_epoch;
   LLVMBasicBlockRef ok = LLVMAppendBasicBlockInContext(g->context, g->function,
-                                                       name),
-                    bad = LLVMAppendBasicBlockInContext(g->context, g->function,
+                                                       name);
+  /* Without pending defers a failed check only panics with a message naming
+     the check and function, so checks of one kind share a single block. */
+  bool shareable = !g->defer_count && !g->unwinding;
+  for (unsigned i = 0; shareable && i < g->panic_block_count; ++i)
+    if (g->panic_blocks[i].function == g->function &&
+        !strcmp(g->panic_blocks[i].name, name)) {
+      LLVMBuildCondBr(g->builder, condition, ok, g->panic_blocks[i].block);
+      LLVMPositionBuilderAtEnd(g->builder, ok);
+      if (g->statement_epoch == epoch) {
+        if (g->pointer_fact_block == before)
+          g->pointer_fact_block = ok;
+        if (g->bounds_fact_block == before)
+          g->bounds_fact_block = ok;
+      }
+      return condition;
+    }
+  LLVMBasicBlockRef bad = LLVMAppendBasicBlockInContext(g->context, g->function,
                                                         "panic");
+  if (shareable) {
+    if (g->panic_block_count == sizeof(g->panic_blocks) / sizeof(g->panic_blocks[0]))
+      g->panic_block_count = 0;
+    g->panic_blocks[g->panic_block_count++] =
+        (GenPanicBlock){g->function, name, bad};
+  }
   LLVMBuildCondBr(g->builder, condition, ok, bad);
   LLVMPositionBuilderAtEnd(g->builder, bad);
   if (!g->unwinding)
@@ -685,6 +728,23 @@ static bool same_guard_value(LLVMValueRef a, LLVMValueRef b,
 }
 static LLVMValueRef checked_pointer(Gen *g, LLVMValueRef pointer,
                                     DynType pointee) {
+  bool stable = g->unstable_locals && pointer == g->last_local_load &&
+                !g->unstable_locals[g->last_local];
+  if (stable)
+    for (size_t i = 0; i < g->local_fact_count; ++i)
+      if (g->local_facts[i].local == g->last_local &&
+          g->local_facts[i].pointee == pointee)
+        return pointer;
+  if (stable && g->local_fact_count == g->local_fact_capacity) {
+    size_t capacity = g->local_fact_capacity ? g->local_fact_capacity * 2 : 32;
+    void *grown = realloc(g->local_facts, capacity * sizeof(*g->local_facts));
+    if (grown) {
+      g->local_facts = grown;
+      g->local_fact_capacity = capacity;
+    } else
+      stable = false;
+  }
+  uint32_t local = g->last_local;
   if (g->pointer_fact_block == LLVMGetInsertBlock(g->builder) &&
       same_guard_value(g->pointer_fact, pointer,
                        g->pointer_fact_epoch == g->statement_epoch) &&
@@ -711,6 +771,10 @@ static LLVMValueRef checked_pointer(Gen *g, LLVMValueRef pointer,
   g->pointer_fact = pointer;
   g->pointer_fact_pointee = pointee;
   g->pointer_fact_epoch = g->statement_epoch;
+  if (stable) {
+    g->local_facts[g->local_fact_count].local = local;
+    g->local_facts[g->local_fact_count++].pointee = pointee;
+  }
   return pointer;
 }
 
@@ -791,12 +855,6 @@ static LLVMValueRef checked_integer(Gen *g, DynOperator op, DynType type,
                             : LLVMBuildURem(g->builder, l, r, "rem");
   }
   LLVMTypeRef wide = LLVMIntTypeInContext(g->context, width * 2);
-  LLVMValueRef wl = signed_type(type)
-                        ? LLVMBuildSExt(g->builder, l, wide, "lhs.wide")
-                        : LLVMBuildZExt(g->builder, l, wide, "lhs.wide");
-  LLVMValueRef wr = signed_type(type)
-                        ? LLVMBuildSExt(g->builder, r, wide, "rhs.wide")
-                        : LLVMBuildZExt(g->builder, r, wide, "rhs.wide");
   LLVMValueRef result = NULL;
   if (op == DYN_OP_SHL || op == DYN_OP_SHR) {
     LLVMValueRef valid = LLVMBuildICmp(
@@ -806,6 +864,10 @@ static LLVMValueRef checked_integer(Gen *g, DynOperator op, DynType type,
     if (op == DYN_OP_SHR)
       return signed_type(type) ? LLVMBuildAShr(g->builder, l, r, "shr")
                                : LLVMBuildLShr(g->builder, l, r, "shr");
+    LLVMValueRef wl = signed_type(type)
+                          ? LLVMBuildSExt(g->builder, l, wide, "lhs.wide")
+                          : LLVMBuildZExt(g->builder, l, wide, "lhs.wide");
+    LLVMValueRef wr = LLVMBuildZExt(g->builder, r, wide, "rhs.wide");
     result = LLVMBuildShl(g->builder, wl, wr, "shl.wide");
   } else
     return checked_overflow(g, op, type, l, r);
@@ -824,7 +886,7 @@ static LLVMValueRef static_expr(Gen *g, DynExprId id, size_t depth) {
   DynIrExpr *e = &g->ir->expressions[id];
   LLVMTypeRef type = llvm_type(g, e->type);
   if (e->kind == DYN_EXPR_FUNCTION) {
-    return g->functions[e->integer];
+    return function_value(g, (uint32_t)e->integer);
   }
   if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR)
     return LLVMConstInt(type, e->integer, 0);
@@ -1144,13 +1206,16 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     return LLVMConstReal(type, e->floating);
   if (e->kind == DYN_EXPR_NIL)
     return LLVMConstNull(type);
-  if (e->kind == DYN_EXPR_NAME)
-    return LLVMBuildLoad2(g->builder, type, g->locals[e->integer], "load");
+  if (e->kind == DYN_EXPR_NAME) {
+    g->last_local_load = LLVMBuildLoad2(g->builder, type, g->locals[e->integer], "load");
+    g->last_local = (uint32_t)e->integer;
+    return g->last_local_load;
+  }
   if (e->kind == DYN_EXPR_GLOBAL)
     return LLVMBuildLoad2(g->builder, type, g->globals[e->integer],
                           "global.load");
   if (e->kind == DYN_EXPR_FUNCTION)
-    return g->functions[e->integer];
+    return function_value(g, (uint32_t)e->integer);
   if (e->kind == DYN_EXPR_ENUM) {
     DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
     DynIrVariant *v = &g->ir->variants[e->integer];
@@ -1302,8 +1367,10 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
       args[callee->param_count + 1] =
           LLVMConstInt(llvm_type(g, DYN_TYPE_USIZE), n, 0);
     }
+    LLVMValueRef function = function_value(g, (uint32_t)e->integer);
+    if (!function) { free(args); return NULL; }
     LLVMValueRef result =
-        abi_call(g, g->abis[e->integer], g->functions[e->integer],
+        abi_call(g, g->abis[e->integer], function,
                   args, packed ? callee->param_count + 2 : e->item_count, "call", true);
     free(args);
     return result;
@@ -1554,7 +1621,9 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     else
       LLVMBuildCondBr(g->builder, l, done, rhs);
     LLVMPositionBuilderAtEnd(g->builder, rhs);
+    size_t facts = g->local_fact_count;
     LLVMValueRef right_value = gen_expr(g, e->right);
+    g->local_fact_count = facts; /* The right side may not run. */
     LLVMBasicBlockRef right_block = LLVMGetInsertBlock(g->builder);
     LLVMBuildBr(g->builder, done);
     LLVMPositionBuilderAtEnd(g->builder, done);
@@ -2121,7 +2190,7 @@ static void emit_defers(Gen *g, size_t base) {
   g->defer_count = saved;
 }
 static bool gen_block(Gen *g, uint32_t start, uint32_t count) {
-  size_t base = g->defer_count;
+  size_t base = g->defer_count, facts = g->local_fact_count;
   bool terminated = false;
   for (uint32_t i = 0; i < count; ++i)
     if (gen_stmt(g, &g->ir->statements[g->ir->children[start + i]])) {
@@ -2131,6 +2200,7 @@ static bool gen_block(Gen *g, uint32_t start, uint32_t count) {
   if (!terminated)
     emit_defers(g, base);
   g->defer_count = base;
+  g->local_fact_count = facts;
   return terminated;
 }
 static int write_text(const char *p, const char *t) {
@@ -2188,9 +2258,115 @@ static void initialize_llvm_targets(void) {
   LLVMInitializeAArch64TargetMC();
   LLVMInitializeAArch64AsmPrinter();
 }
-int dyn_codegen_module(const DynSource *source, const char *object_path,
-                       const char *ir_path, const char *asm_path, bool release,
-                       bool debug_info, bool shared, const char *owner_key) {
+static LLVMValueRef function_value(Gen *g, uint32_t i) {
+  if (g->functions[i])
+    return g->functions[i];
+  DynIrFunction *fn = &g->ir->functions[i];
+  bool packed =
+      fn->variadic && !fn->foreign && dyn_type_is_slice(fn->variadic_type);
+  uint32_t llvm_param_count = fn->param_count + (packed ? 2 : 0);
+  DynType *params = calloc(llvm_param_count ? llvm_param_count : 1, sizeof(*params));
+  if (!params) { g->allocation_failed = true; return NULL; }
+  for (uint32_t j = 0; j < fn->param_count; ++j)
+    params[j] = g->ir->params[fn->param_start + j].type;
+  if (packed) { params[fn->param_count] = DYN_TYPE_RAWPTR; params[fn->param_count + 1] = DYN_TYPE_USIZE; }
+  g->abis[i] = abi_plan(g, fn->is_main ? DYN_TYPE_I32 : fn->return_type, params, llvm_param_count, fn->foreign && fn->variadic);
+  free(params);
+  if (!g->abis[i]) { g->allocation_failed = true; return NULL; }
+  g->function_types[i] = g->abis[i]->type;
+  char symbol[512];
+  g->functions[i] = LLVMAddFunction(g->module,
+                                   function_symbol(g->ir, fn, symbol, sizeof(symbol)),
+                                   g->function_types[i]);
+  abi_attributes(g, g->functions[i], g->abis[i], false);
+  if (g->optimization && g->optimization->cpu) {
+    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
+      LLVMCreateStringAttribute(g->context, "target-cpu", 10,
+        g->optimization->cpu, (unsigned)strlen(g->optimization->cpu)));
+    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
+      LLVMCreateStringAttribute(g->context, "target-features", 15,
+        g->optimization->features, (unsigned)strlen(g->optimization->features)));
+  }
+  if (g->wasm && fn->is_public && !fn->foreign && module_owns("root", fn->name))
+    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
+      LLVMCreateStringAttribute(g->context, "wasm-export-name", 16, fn->name, (unsigned)strlen(fn->name)));
+  if (g->wasm && fn->foreign)
+    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
+      LLVMCreateStringAttribute(g->context, "wasm-import-module", 18, "env", 3));
+  if (g->optimization && g->optimization->sample_profile && !fn->foreign)
+    LLVMAddAttributeAtIndex(
+        g->functions[i], ~0u,
+        LLVMCreateStringAttribute(g->context, "use-sample-profile", 18, "", 0));
+  if (!g->owner_key && !fn->is_main && !fn->foreign &&
+      ((g->release && !g->shared) || (g->shared && !fn->is_public)))
+    LLVMSetLinkage(g->functions[i], LLVMInternalLinkage);
+  /* An executable never exports its functions: a debug build's free or
+     write must not replace the C library's for its shared libraries. */
+  else if (!g->shared && !g->wasm && !fn->is_main && !fn->foreign)
+    LLVMSetVisibility(g->functions[i], LLVMHiddenVisibility);
+  return g->functions[i];
+}
+static uint64_t interface_bytes(uint64_t hash, const void *data, size_t length) {
+  const unsigned char *bytes = data;
+  for (size_t i = 0; i < length; ++i)
+    hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
+  return hash;
+}
+static uint64_t interface_span(uint64_t hash, DynSpan span, const DynSource *s) {
+  if (span.end_byte > span.start_byte && span.end_byte <= s->length)
+    hash = interface_bytes(hash, s->text + span.start_byte,
+                           span.end_byte - span.start_byte);
+  return interface_bytes(hash, "\n", 1);
+}
+static uint64_t interface_type(uint64_t hash, DynAstProgram *a, DynType type,
+                               const DynSource *s) {
+  char name[512];
+  dyn_type_format(a, type, s, name, sizeof(name));
+  return interface_bytes(hash, name, strlen(name) + 1);
+}
+/* Everything one object may depend on from the rest of the program, without
+   function bodies. Reflection exposes types introduced in bodies, so a
+   reflecting program hashes its whole text. */
+static uint64_t interface_hash(DynAstProgram *a, const DynSource *s) {
+  uint64_t hash = UINT64_C(1469598103934665603);
+  for (size_t i = 0; i < a->expression_count; ++i)
+    if (a->expressions[i].kind == DYN_EXPR_TYPEOF)
+      return interface_bytes(hash, s->text, s->length);
+  for (size_t i = 0; i < a->struct_count; ++i)
+    hash = interface_span(hash, a->structs[i].span, s);
+  for (size_t i = 0; i < a->enum_count; ++i)
+    hash = interface_span(hash, a->enums[i].span, s);
+  for (size_t i = 0; i < a->alias_count; ++i) {
+    hash = interface_span(hash, a->aliases[i].name, s);
+    hash = interface_type(hash, a, a->aliases[i].target, s);
+  }
+  for (size_t i = 0; i < a->global_count; ++i) {
+    const DynAstGlobal *global = &a->globals[i];
+    hash = interface_span(hash, global->name, s);
+    hash = interface_span(hash, global->link_name, s);
+    hash = interface_type(hash, a, global->type, s);
+    bool flags[] = {global->is_const, global->foreign, global->is_public};
+    hash = interface_bytes(hash, flags, sizeof(flags));
+    if (global->initializer != DYN_NO_EXPR)
+      hash = interface_span(hash, a->expressions[global->initializer].span, s);
+  }
+  for (size_t i = 0; i < a->function_count; ++i) {
+    const DynAstFn *fn = &a->functions[i];
+    hash = interface_span(hash, fn->name, s);
+    hash = interface_span(hash, fn->link_name, s);
+    hash = interface_type(hash, a, fn->return_type, s);
+    for (uint32_t p = 0; p < fn->param_count; ++p)
+      hash = interface_type(hash, a, a->params[fn->param_start + p].type, s);
+    bool flags[] = {fn->is_main, fn->foreign, fn->variadic, fn->is_public};
+    hash = interface_bytes(hash, flags, sizeof(flags));
+    if (fn->variadic)
+      hash = interface_type(hash, a, fn->variadic_type, s);
+  }
+  return hash;
+}
+int dyn_codegen_prepare(const DynSource *source, bool shared,
+                        const char *owner_key, DynIrProgram *ir) {
+  memset(ir, 0, sizeof(*ir));
   DynAstProgram ast = {0};
   if (!source)
     return 1;
@@ -2206,23 +2382,49 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     return 1;
   }
   struct timespec phase = dyn_timing_start(&source->context);
-  DynIrProgram ir;
-  if (!dyn_ir_lower(&ast, source, &ir)) {
+  if (!dyn_ir_lower(&ast, source, ir)) {
     fprintf(stderr, "error: failed to lower typed Dyn IR\n");
     dyn_ast_program_free(&ast);
     return 2;
   }
+  ir->interface_hash = interface_hash(&ast, source);
   dyn_ast_program_free(&ast);
+  if (!dyn_location_build(&ir->locations, source)) {
+    dyn_ir_free(ir);
+    return 2;
+  }
   if (!strcmp(dyn_context_target(&source->context)->arch, "wasm32")) {
-    for (size_t i = 0; i < ir.function_count; ++i) {
-      DynIrFunction *fn = &ir.functions[i];
+    for (size_t i = 0; i < ir->function_count; ++i) {
+      DynIrFunction *fn = &ir->functions[i];
       if ((fn->foreign && fn->variadic) || !strcmp(fn->name, "dyn_initialize")) {
         fprintf(stderr, "error: browser modules reserve dyn_initialize and do not support C variadic functions\n");
-        dyn_ir_free(&ir); return 1;
+        dyn_ir_free(ir); return 1;
       }
     }
   }
   dyn_timing_phase(&source->context, &phase, "ir");
+  return 0;
+}
+int dyn_codegen_module(const DynSource *source, const char *object_path,
+                       const char *ir_path, const char *asm_path, bool release,
+                       bool debug_info, bool shared, const char *owner_key) {
+  DynIrProgram ir;
+  int result = dyn_codegen_prepare(source, shared, owner_key, &ir);
+  if (result)
+    return result;
+  result = dyn_codegen_emit(source, &ir, object_path, ir_path, asm_path,
+                            release, debug_info, shared, owner_key, 0, 1);
+  dyn_ir_free(&ir);
+  return result;
+}
+/* The prepared program is shared by concurrent emitters and never modified. */
+int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
+                     const char *object_path, const char *ir_path,
+                     const char *asm_path, bool release, bool debug_info,
+                     bool shared, const char *owner_key, unsigned chunk,
+                     unsigned chunks) {
+  DynIrProgram ir = *prepared;
+  struct timespec phase = dyn_timing_start(&source->context);
   pthread_once(&llvm_targets_once, initialize_llvm_targets);
   Gen g = {0};
   int failed = 0;
@@ -2322,50 +2524,31 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   if (!g.abis || !g.pointer_abis) goto allocation_failure;
   if (ir.function_count && (!g.functions || !g.function_types))
     goto allocation_failure;
+  g.owner_key = owner_key;
+  g.release = release;
+  g.shared = shared;
+  g.optimization = optimization;
+  /* Declare defined functions in order; others only when a body uses them.
+     A module split into chunks assigns each source file to one chunk, so an
+     edit recompiles only that file's chunk. Module data and initializers
+     belong to chunk 0. */
+  g.defines = calloc(ir.function_count ? ir.function_count : 1, sizeof(*g.defines));
+  if (!g.defines)
+    goto allocation_failure;
+  bool owns_data = chunk == 0;
   for (uint32_t i = 0; i < ir.function_count; ++i) {
-    DynIrFunction *fn = &ir.functions[i];
-    bool packed =
-        fn->variadic && !fn->foreign && dyn_type_is_slice(fn->variadic_type);
-    uint32_t llvm_param_count = fn->param_count + (packed ? 2 : 0);
-    DynType *params = calloc(llvm_param_count ? llvm_param_count : 1, sizeof(*params));
-    if (!params) goto allocation_failure;
-    for (uint32_t j = 0; j < fn->param_count; ++j)
-      params[j] = ir.params[fn->param_start + j].type;
-    if (packed) { params[fn->param_count] = DYN_TYPE_RAWPTR; params[fn->param_count + 1] = DYN_TYPE_USIZE; }
-    g.abis[i] = abi_plan(&g, fn->is_main ? DYN_TYPE_I32 : fn->return_type, params, llvm_param_count, fn->foreign && fn->variadic);
-    free(params);
-    if (!g.abis[i]) goto allocation_failure;
-    g.function_types[i] = g.abis[i]->type;
-    char symbol[512];
-    g.functions[i] = LLVMAddFunction(g.module,
-                                     function_symbol(&ir, fn, symbol, sizeof(symbol)),
-                                     g.function_types[i]);
-    abi_attributes(&g, g.functions[i], g.abis[i], false);
-    if (optimization && optimization->cpu) {
-      LLVMAddAttributeAtIndex(g.functions[i], ~0u,
-        LLVMCreateStringAttribute(g.context, "target-cpu", 10,
-          optimization->cpu, (unsigned)strlen(optimization->cpu)));
-      LLVMAddAttributeAtIndex(g.functions[i], ~0u,
-        LLVMCreateStringAttribute(g.context, "target-features", 15,
-          optimization->features, (unsigned)strlen(optimization->features)));
-    }
-    if (g.wasm && fn->is_public && !fn->foreign && module_owns("root", fn->name))
-      LLVMAddAttributeAtIndex(g.functions[i], ~0u,
-        LLVMCreateStringAttribute(g.context, "wasm-export-name", 16, fn->name, (unsigned)strlen(fn->name)));
-    if (g.wasm && fn->foreign)
-      LLVMAddAttributeAtIndex(g.functions[i], ~0u,
-        LLVMCreateStringAttribute(g.context, "wasm-import-module", 18, "env", 3));
-    if (optimization && optimization->sample_profile && !fn->foreign)
-      LLVMAddAttributeAtIndex(
-          g.functions[i], ~0u,
-          LLVMCreateStringAttribute(g.context, "use-sample-profile", 18, "", 0));
-    if (!owner_key && !fn->is_main && !fn->foreign &&
-        ((release && !shared) || (shared && !fn->is_public)))
-      LLVMSetLinkage(g.functions[i], LLVMInternalLinkage);
-    /* An executable never exports its functions: a debug build's free or
-       write must not replace the C library's for its shared libraries. */
-    else if (!shared && !g.wasm && !fn->is_main && !fn->foreign)
-      LLVMSetVisibility(g.functions[i], LLVMHiddenVisibility);
+    if (owner_key &&
+        (ir.functions[i].foreign || !module_owns(owner_key, ir.functions[i].name)))
+      continue;
+    const char *path = source->path;
+    unsigned line, column;
+    if (chunks > 1)
+      dyn_location_get(&prepared->locations, source, ir.functions[i].source_offset,
+                       &path, &line, &column);
+    g.defines[i] = !owner_key || ir.functions[i].foreign ||
+                   dyn_chunk_of_path(path, chunks) == chunk;
+    if (g.defines[i] && !function_value(&g, i))
+      goto allocation_failure;
   }
   LLVMTypeRef panic_params[2] = {LLVMPointerTypeInContext(g.context, 0),
                                  llvm_type(&g, DYN_TYPE_USIZE)};
@@ -2425,9 +2608,37 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   g.memset_fn = LLVMAddFunction(g.module, "llvm.memset.p0.i64", g.memset_type);
   g.builder = LLVMCreateBuilderInContext(g.context);
   g.stack_builder = LLVMCreateBuilderInContext(g.context);
-  if ((g.di_builder || g.tracing) && !dyn_location_build(&g.locations, source))
-    goto allocation_failure;
+  g.locations = &prepared->locations;
   g.locals = calloc(ir.local_count, sizeof(*g.locals));
+  g.unstable_locals = calloc(ir.local_count ? ir.local_count : 1, sizeof(*g.unstable_locals));
+  if (!g.unstable_locals)
+    goto allocation_failure;
+  /* Assigned or address-taken locals may change; checks of them never carry
+     over to later uses. Addresses taken of a field or element count too. */
+  for (size_t i = 0; i < ir.statement_count; ++i) {
+    const DynIrStmt *st = &ir.statements[i];
+    if (st->kind != DYN_STMT_ASSIGN)
+      continue;
+    /* A plain local assignment has no target expression. */
+    if (st->target == DYN_NO_EXPR) {
+      if (st->local_id < ir.local_count)
+        g.unstable_locals[st->local_id] = true;
+    } else if (ir.expressions[st->target].kind == DYN_EXPR_NAME)
+      g.unstable_locals[ir.expressions[st->target].integer] = true;
+  }
+  for (size_t i = 0; i < ir.expression_count; ++i) {
+    if (ir.expressions[i].kind != DYN_EXPR_UNARY ||
+        ir.expressions[i].op != DYN_OP_ADDRESS)
+      continue;
+    DynExprId root = ir.expressions[i].left;
+    while (root != DYN_NO_EXPR &&
+           (ir.expressions[root].kind == DYN_EXPR_FIELD ||
+            ir.expressions[root].kind == DYN_EXPR_INDEX ||
+            ir.expressions[root].kind == DYN_EXPR_SLICE))
+      root = ir.expressions[root].left;
+    if (root != DYN_NO_EXPR && ir.expressions[root].kind == DYN_EXPR_NAME)
+      g.unstable_locals[ir.expressions[root].integer] = true;
+  }
   if (g.di_builder && ir.local_count) {
     g.local_statements = calloc(ir.local_count, sizeof(*g.local_statements));
     if (!g.local_statements) goto allocation_failure;
@@ -2450,7 +2661,7 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     g.globals[i] = LLVMAddGlobal(g.module, llvm_type(&g, ir.globals[i].type),
                                  ir.globals[i].foreign ? ir.globals[i].link_name
                                                        : ir.globals[i].name);
-    bool owned =
+    bool owned = owns_data &&
         !ir.globals[i].foreign && module_owns(owner_key, ir.globals[i].name);
     if (owned)
       LLVMSetInitializer(g.globals[i],
@@ -2480,10 +2691,10 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     if (ir.globals[i].is_const) {
       DynIrExpr *initializer = &ir.expressions[ir.globals[i].initializer];
       LLVMValueRef value = initializer->kind == DYN_EXPR_FUNCTION
-                               ? g.functions[initializer->integer]
+                               ? function_value(&g, (uint32_t)initializer->integer)
                                : static_value(&g, ir.globals[i].initializer, 0);
       if (value) {
-        if (module_owns(owner_key, ir.globals[i].name)) {
+        if (owns_data && module_owns(owner_key, ir.globals[i].name)) {
           LLVMSetInitializer(g.globals[i], value);
           LLVMSetGlobalConstant(g.globals[i], 1);
         }
@@ -2505,7 +2716,7 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     char key[32], function_name[64];
     global_module_key(ir.globals[first].name, key, sizeof(key));
     snprintf(function_name, sizeof(function_name), "__dyn_init_%s", key);
-    bool owns_init = !owner_key || !strcmp(owner_key, key);
+    bool owns_init = !owner_key || (owns_data && !strcmp(owner_key, key));
     LLVMValueRef init = LLVMAddFunction(g.module, function_name, g.init_type);
     if (release && !owner_key)
       LLVMSetLinkage(init, LLVMInternalLinkage);
@@ -2642,9 +2853,11 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   bool has_init = init_function_count != 0;
   for (uint32_t i = 0; i < ir.function_count; ++i) {
     DynIrFunction *fn = &ir.functions[i];
-    if (fn->foreign || !module_owns(owner_key, fn->name))
+    if (fn->foreign || !g.defines[i])
       continue;
     g.function = g.functions[i];
+    g.local_fact_count = 0;
+    g.last_local_load = NULL;
     g.return_type = fn->return_type;
     g.current_abi = g.abis[i];
     g.is_main = fn->is_main;
@@ -2662,7 +2875,7 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
     if (g.di_builder) {
       const char *debug_path;
       unsigned debug_line, debug_column;
-      dyn_location_get(&g.locations, source, fn->source_offset, &debug_path, &debug_line,
+      dyn_location_get(g.locations, source, fn->source_offset, &debug_path, &debug_line,
                           &debug_column);
       g.di_file = LLVMDIBuilderCreateFile(g.di_builder, debug_path,
                                           strlen(debug_path), "", 0);
@@ -2680,7 +2893,7 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
       char label[4096];
       const char *trace_path;
       unsigned trace_line, trace_column;
-      dyn_location_get(&g.locations, source, fn->source_offset, &trace_path, &trace_line,
+      dyn_location_get(g.locations, source, fn->source_offset, &trace_path, &trace_line,
                           &trace_column);
       snprintf(label, sizeof(label), "%s (%s:%u)", fn->name, trace_path,
                trace_line);
@@ -2749,7 +2962,8 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
   LLVMSetTarget(g.module, triple);
   if (g.allocation_failed)
     goto allocation_failure;
-  if (dyn_verify_module(g.module, 2, &error)) {
+  /* Debug builds verify once, after scalarizing, below. */
+  if (release && dyn_verify_module(g.module, 2, &error)) {
     fprintf(stderr, "error: invalid LLVM module: %s\n", error ? error : "");
     failed = 1;
     if (error) {
@@ -2790,6 +3004,8 @@ int dyn_codegen_module(const DynSource *source, const char *object_path,
       failed = 1;
     }
   }
+  if (!failed && !release)
+    dyn_scalarize_aggregates(g.module);
   dyn_timing_phase(&source->context, &phase, "optimize");
   if (!failed && dyn_verify_module(g.module, 2, &error)) {
     fprintf(stderr, "error: optimized LLVM module is invalid: %s\n",
@@ -2844,12 +3060,14 @@ cleanup:
   free(init_functions);
   free(g.locals);
   free(g.local_statements);
-  dyn_location_free(&g.locations);
   free(g.captured_values);
   free(g.defer_stack);
   free(g.globals);
   free(g.static_globals);
   free(g.functions);
+  free(g.defines);
+  free(g.unstable_locals);
+  free(g.local_facts);
   free(g.function_types);
   if (g.abis) for (size_t i = 0; i < ir.function_count; ++i) abi_free(g.abis[i]);
   if (g.pointer_abis) for (size_t i = 0; i < ir.fn_type_count; ++i) abi_free(g.pointer_abis[i]);
@@ -2868,9 +3086,9 @@ cleanup:
     LLVMDisposeBuilder(g.stack_builder);
   LLVMDisposeModule(g.module);
   LLVMContextDispose(g.context);
-  dyn_ir_free(&ir);
   return failed;
 }
+void dyn_codegen_release(DynIrProgram *ir) { dyn_ir_free(ir); }
 int dyn_codegen_main(const DynSource *source, const char *object_path,
                      const char *ir_path, const char *asm_path, bool release,
                      bool debug_info, bool shared) {

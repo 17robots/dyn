@@ -90,7 +90,7 @@ fn writer_write(data: rawptr, source: []const u8) io.Result {
 }
 
 pub fn writer_adapter(state: *Writer) io.Writer {
-  return io.Writer{ data: #cast(rawptr) state, write: &writer_write }
+  return io.Writer{ data: state, write: &writer_write }
 }
 
 // Storage and the underlying source are borrowed; both must outlive Reader.
@@ -177,7 +177,7 @@ fn reader_read(data: rawptr, destination: []u8) io.Result {
 }
 
 pub fn reader_adapter(state: *Reader) io.Reader {
-  return io.Reader{ data: #cast(rawptr) state, read: &reader_read }
+  return io.Reader{ data: state, read: &reader_read }
 }
 
 pub enum ReadStatus { Complete, End, More, Error }

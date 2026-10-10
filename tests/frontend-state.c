@@ -41,29 +41,11 @@ static void *analyze(void *argument) {
   }
   return NULL;
 }
-static void merged_syntax(void) {
-  char table[32768] = "const values: [2048]i32 = [";
-  size_t at = strlen(table);
-  for (unsigned i = 0; i < 2048; ++i)
-    at += (size_t)snprintf(table + at, sizeof(table) - at, "%s%u", i ? "," : "", i);
-  strcpy(table + at, "]\n");
-  DynSource inputs[] = {
-    {.path = "before.dyn", .text = "// π\nfn before() {}\n", .needs_reflection = true},
-    {.path = "table.dyn", .text = table},
-    {.path = "after.dyn", .text = "fn main() {}\n"}};
-  for (size_t i = 0; i < 3; ++i) {
-    inputs[i].length = strlen(inputs[i].text);
-    assert(dyn_source_prepare(&inputs[i]));
-  }
-  DynSource merged = {0}; DynSources sources = {inputs, 3};
-  assert(!dyn_sources_merge(&sources, "merged", &merged) && merged.syntax);
-  TSTree *fresh = dyn_syntax_parse(merged.text, merged.length);
-  assert(fresh && !ts_node_has_error(ts_tree_root_node(fresh)));
-  TSTreeCursor a = ts_tree_cursor_new(ts_tree_root_node(merged.syntax));
-  TSTreeCursor b = ts_tree_cursor_new(ts_tree_root_node(fresh));
+static void same_subtree(TSNode x, TSNode y) {
+  TSTreeCursor a = ts_tree_cursor_new(x), b = ts_tree_cursor_new(y);
   bool done = false;
   while (!done) {
-    TSNode x = ts_tree_cursor_current_node(&a), y = ts_tree_cursor_current_node(&b);
+    x = ts_tree_cursor_current_node(&a); y = ts_tree_cursor_current_node(&b);
     assert(!strcmp(ts_node_type(x), ts_node_type(y)));
     assert(ts_node_start_byte(x) == ts_node_start_byte(y) && ts_node_end_byte(x) == ts_node_end_byte(y));
     TSPoint xp = ts_node_start_point(x), yp = ts_node_start_point(y);
@@ -80,7 +62,36 @@ static void merged_syntax(void) {
       if (!parent) { done = true; break; }
     }
   }
-  ts_tree_cursor_delete(&a); ts_tree_cursor_delete(&b); ts_tree_delete(fresh);
+  ts_tree_cursor_delete(&a); ts_tree_cursor_delete(&b);
+}
+static void merged_syntax(void) {
+  char table[32768] = "const values: [2048]i32 = [";
+  size_t at = strlen(table);
+  for (unsigned i = 0; i < 2048; ++i)
+    at += (size_t)snprintf(table + at, sizeof(table) - at, "%s%u", i ? "," : "", i);
+  strcpy(table + at, "]\n");
+  DynSource inputs[] = {
+    {.path = "before.dyn", .text = "// π\nfn before() {}\n", .needs_reflection = true},
+    {.path = "table.dyn", .text = table},
+    {.path = "after.dyn", .text = "fn main() {}\n"}};
+  for (size_t i = 0; i < 3; ++i) {
+    inputs[i].length = strlen(inputs[i].text);
+    assert(dyn_source_prepare(&inputs[i]));
+  }
+  DynSource merged = {0}; DynSources sources = {inputs, 3};
+  assert(!dyn_sources_merge(&sources, "merged", &merged) && merged.syntax_part_count == 4);
+  /* Shifted per-file trees must match a fresh parse of the merged text. */
+  TSTree *fresh = dyn_syntax_parse(merged.text, merged.length);
+  assert(fresh && !ts_node_has_error(ts_tree_root_node(fresh)));
+  TSNode root = ts_tree_root_node(fresh);
+  uint32_t top = 0;
+  for (size_t part = 0; part < merged.syntax_part_count; ++part) {
+    TSNode shifted = ts_tree_root_node(merged.syntax_parts[part]);
+    for (uint32_t i = 0; i < ts_node_named_child_count(shifted); ++i)
+      same_subtree(ts_node_named_child(shifted, i), ts_node_named_child(root, top++));
+  }
+  assert(top == ts_node_named_child_count(root));
+  ts_tree_delete(fresh);
   DynLocationIndex index = {0}; assert(dyn_location_build(&index, &merged));
   for (size_t i = 0; i <= merged.length + 1; ++i) {
     const char *a_path, *b_path; unsigned al, ac, bl, bc;

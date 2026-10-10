@@ -211,7 +211,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
       // Change the filter on the producer queue without stopping observation
       // or racing a callback. Preserve the existing watch identifier.
       update := MaskUpdate{ slot: &state.slots[i], mask: mask }
-      queue_sync(state.queue,#cast(rawptr) &update,&update_mask)
+      queue_sync(state.queue,&update,&update_mask)
       return Result{ value: state.slots[i].id, ok: true }
     }
   }
@@ -225,7 +225,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
   if slot.path == nil { discard_slot(state,slot) return Result{ error: -12 } }
   slot.paths = state.api.array(nil,&slot.path,1,nil)
   if slot.paths == nil { discard_slot(state,slot) return Result{ error: -12 } }
-  context := Context{ info: #cast(rawptr) slot }
+  context := Context{ info: slot }
   slot.stream = state.api.create(nil,&callback,&context,slot.paths,18446744073709551615,0.01,22)
   if slot.stream == nil { discard_slot(state,slot) return Result{ error: -5 } }
   state.api.schedule(slot.stream,state.queue)

@@ -3,13 +3,13 @@
 fn fixed_allocate(context: rawptr, size: usize, alignment: usize, error: *AllocError) rawptr {
   allocation := arena_push_uninit(#cast(*Arena) context, size, alignment)
   error.* = allocator_error(allocation.error)
-  return #cast(rawptr) allocation.memory
+  return allocation.memory
 }
 
 fn growing_allocate(context: rawptr, size: usize, alignment: usize, error: *AllocError) rawptr {
   allocation := growing_push_uninit(#cast(*GrowingArena) context, size, alignment)
   error.* = allocator_error(allocation.error)
-  return #cast(rawptr) allocation.memory
+  return allocation.memory
 }
 
 // Ownership: handle borrows the arena descriptor; copying shares its state.

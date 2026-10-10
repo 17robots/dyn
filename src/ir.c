@@ -692,6 +692,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
 }
 
 void dyn_ir_free(DynIrProgram *ir) {
+  dyn_location_free(&ir->locations);
   for (size_t i = 0; ir->strings && i < ir->string_count; ++i)
     free(ir->strings[i].data);
   for (size_t i = 0; ir->functions && i < ir->function_count; ++i)

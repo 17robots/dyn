@@ -42,7 +42,7 @@ pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) is
   thread.context = context
   sync.store_u32(&thread.ready, 0)
   handle: rawptr = nil
-  error = create(&handle, &attributes, &trampoline, #cast(rawptr) thread)
+  error = create(&handle, &attributes, &trampoline, thread)
   if error != 0 {
     thread.entry = nil
     thread.context = nil

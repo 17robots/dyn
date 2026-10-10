@@ -37,7 +37,7 @@ fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
   timeout := TimeValue{ seconds: #cast(isize) (milliseconds / 1000), microseconds: #cast(isize) ((milliseconds % 1000) * 1000) }
   option: usize = 4102
   if sending { option = 4101 }
-  return native_set_option(descriptor, SocketLevel, option, #cast(rawptr) &timeout, #sizeof(TimeValue))
+  return native_set_option(descriptor, SocketLevel, option, &timeout, #sizeof(TimeValue))
 }
 fn poll_native(descriptors: []PollDescriptor, milliseconds: i32) isize {
   data: *PollDescriptor = nil

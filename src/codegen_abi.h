@@ -93,6 +93,21 @@ static bool abi_hfa(Gen *g, DynType t, DynType *element, unsigned *count, unsign
 static AbiValue abi_value(Gen *g, DynType t, bool result) {
   AbiValue v = {.source = t, .count = 1};
   v.parts[0] = t == DYN_TYPE_VOID ? LLVMVoidTypeInContext(g->context) : llvm_type(g, t);
+  /* Two-word descriptors never cross the C ABI (sema rejects them), so debug
+     builds pass them as two scalars: FastISel cannot select aggregate
+     arguments. Release keeps the aggregate, which optimizes better. */
+  if (!result && !g->wasm && !g->release &&
+      (dyn_type_is_slice(t) || t == DYN_TYPE_STRING ||
+       t == DYN_TYPE_ANY || t == DYN_TYPE_ALLOCATOR)) {
+    LLVMTypeRef descriptor = v.parts[0];
+    v.mode = ABI_COERCE;
+    v.count = 2;
+    for (unsigned i = 0; i < 2; ++i) {
+      v.parts[i] = LLVMStructGetTypeAtIndex(descriptor, i);
+      v.offset[i] = i * g->pointer_bytes;
+    }
+    return v;
+  }
   if (!dyn_type_is_struct(t)) return v;
   uint64_t size = abi_size(g, t);
   v.mode = ABI_COERCE;
@@ -177,7 +192,8 @@ static GenAbi *abi_plan(Gen *g, DynType result, const DynType *types, uint32_t c
           if (kind == 2 || kind == 3 || kind == 13) ++sse; /* float, double, vector */
           else integers += v.mode == ABI_DIRECT && (dyn_type_is_slice(v.source) || v.source == DYN_TYPE_STRING || v.source == DYN_TYPE_ANY || v.source == DYN_TYPE_ALLOCATOR) ? 2 : dyn_type_is_alloc_result(v.source) ? (dyn_type_is_slice(g->ir->pointers[v.source - DYN_TYPE_ALLOC_RESULT_BASE].pointee) ? 4 : 3) : 1;
         }
-        if (v.mode == ABI_COERCE && (gp + integers > 6 || fp + sse > 8)) {
+        if (v.mode == ABI_COERCE && dyn_type_is_struct(v.source) &&
+            (gp + integers > 6 || fp + sse > 8)) {
           v.mode = ABI_INDIRECT; v.byval = true; v.count = 1;
           v.parts[0] = LLVMPointerTypeInContext(g->context, 0);
         } else { gp = gp + integers > 6 ? 6 : gp + integers; fp = fp + sse > 8 ? 8 : fp + sse; }

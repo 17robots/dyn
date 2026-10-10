@@ -276,11 +276,11 @@ fn connection_writer_write(data: rawptr, source: []const u8) stream.Result {
 }
 
 pub fn connection_reader(connection: *Connection) stream.Reader {
-  return stream.Reader{ data: #cast(rawptr) connection, read: &connection_reader_read }
+  return stream.Reader{ data: connection, read: &connection_reader_read }
 }
 
 pub fn connection_writer(connection: *Connection) stream.Writer {
-  return stream.Writer{ data: #cast(rawptr) connection, write: &connection_writer_write }
+  return stream.Writer{ data: connection, write: &connection_writer_write }
 }
 
 pub fn accept_address(descriptor: isize, address: *Address) Result {
@@ -373,14 +373,14 @@ pub fn reuse_address(descriptor: isize, enabled: bool) Result {
   if enabled {
     value = 1
   }
-  return result(native_set_option(descriptor, SocketLevel, ReuseOption, #cast(rawptr) &value, #sizeof(i32)))
+  return result(native_set_option(descriptor, SocketLevel, ReuseOption, &value, #sizeof(i32)))
 }
 
 // Completes a nonblocking connect by reading SO_ERROR. Zero means connected.
 pub fn socket_error(descriptor: isize) Result {
   error: i32 = 0
   length: u32 = #cast(u32) #sizeof(i32)
-  queried := native_get_option(descriptor, SocketLevel, ErrorOption, #cast(rawptr) &error, &length)
+  queried := native_get_option(descriptor, SocketLevel, ErrorOption, &error, &length)
   if queried < 0 {
     return result(queried)
   }

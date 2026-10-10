@@ -238,7 +238,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
   return stream.Result{ transferred: amount, status: status }
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
-  return stream.Reader{ data: #cast(rawptr) state, read: &decoder_read }
+  return stream.Reader{ data: state, read: &decoder_read }
 }
 
 // Emits byte-aligned stored DEFLATE blocks. Call with final=false for each
