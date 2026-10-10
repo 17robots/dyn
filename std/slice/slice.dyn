@@ -1,0 +1,28 @@
+pub fn reverse(items: []$T) {
+  if #len(items) < 2 {
+    return
+  }
+  low: usize = 0
+  high := #len(items) - 1
+  for low < high {
+    temporary := items[low]
+    items[low] = items[high]
+    items[high] = temporary
+    low += 1
+    high -= 1
+  }
+}
+
+// Index of the first element equal to value, or #len(items) when there is none.
+pub fn index_of(items: []const $T, value: T) usize {
+  for i in 0..#len(items) {
+    if items[i] == value {
+      return i
+    }
+  }
+  return #len(items)
+}
+
+pub fn contains(items: []const $T, value: T) bool {
+  return index_of(items, value) < #len(items)
+}

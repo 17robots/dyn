@@ -259,8 +259,12 @@ static int build_module(const DynSources *sources, size_t first, size_t count,
   free(full);
   if (!b->ir)
     return 1;
+  /* Callers depend on signatures; a chunk also depends on which generic
+     instances it emits. */
+  uint64_t key = b->ir->interface_hash ^
+                 dyn_codegen_chunk_instances(b->merged, b->ir, owner, chunk, chunks);
   if (dyn_module_cache_restore(sources, first, count, chunk, chunks,
-                               b->ir->interface_hash, b->options,
+                               key, b->options,
                                b->compiler, b->cache_root, object)) {
     if (b->options->verbose)
       fprintf(stderr, "cached module %s\n", sources->items[first].path);
@@ -271,7 +275,7 @@ static int build_module(const DynSources *sources, size_t first, size_t count,
                                 false, owner, chunk, chunks);
   if (!result)
     dyn_module_cache_store(sources, first, count, chunk, chunks,
-                           b->ir->interface_hash, b->options,
+                           key, b->options,
                            b->compiler, b->cache_root, object);
   return result;
 }

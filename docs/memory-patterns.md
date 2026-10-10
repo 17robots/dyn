@@ -166,9 +166,10 @@ comments labelled `Ownership:`, `Invalidation:`, `Allocation:`, `Failure:`, and
 `source_comments`. These are author contracts, not compiler proofs; missing fields
 mean unspecified, not safe or allocation-free.
 
-## Typed allocation handles
+## Typed arena pushes
 
-The local source compiler also supports the experimental `Allocator` primitive.
-See [Primitive allocator design and implementation](allocator-design.md) for typed
-builtins, callbacks, lifetime rules, and validation limits. Explicit arena
-operations remain available.
+`mem.push(T, &arena)` and `mem.push_array(T, &arena, count)` return zeroed `*T`
+and `[]T` with the type's size and alignment, so call sites need no casts.
+`mem.push_bytes_uninit(&arena, count)` returns uninitialized `[]u8` for buffers
+that are overwritten right away. All three panic when the arena is full; use
+`mem.arena_push` when exhaustion must be recoverable.

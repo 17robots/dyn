@@ -88,18 +88,6 @@ const char *lsp_builtin_hover(const char *text, size_t line, size_t character) {
   struct {
     const char *name, *hover;
   } builtins[] = {
-      {"AllocError", "Allocation failure category: None, InvalidAlignment, Capacity, InvalidState, Overflow, System."},
-      {"Allocator", "Allocator: borrowed context and fixed allocation callback"},
-      {"#allocator", "#allocator(context, known_callback) -> Allocator. Construction allocates no memory."},
-      {"#AllocResult", "#AllocResult(pointer_or_slice_type): value, error, ok."},
-      {"#alloc_or_panic", "#alloc_or_panic(T, allocator). Panics on allocation failure. Storage is zeroed."},
-      {"#alloc", "#alloc(T, allocator). Returns typed allocation result. Storage is zeroed."},
-      {"#alloc_slice_or_panic", "#alloc_slice_or_panic(T, allocator, count). Panics on allocation failure. Storage is zeroed."},
-      {"#alloc_slice", "#alloc_slice(T, allocator, count). Returns typed allocation result. Storage is zeroed."},
-      {"#alloc_uninit_or_panic", "#alloc_uninit_or_panic(T, allocator). Panics on allocation failure. Storage is uninitialized."},
-      {"#alloc_uninit", "#alloc_uninit(T, allocator). Returns typed allocation result. Storage is uninitialized."},
-      {"#alloc_slice_uninit_or_panic", "#alloc_slice_uninit_or_panic(T, allocator, count). Panics on allocation failure. Storage is uninitialized."},
-      {"#alloc_slice_uninit", "#alloc_slice_uninit(T, allocator, count). Returns typed allocation result. Storage is uninitialized."},
       {"#cast", "#cast(type) value -> type\nExplicitly converts compatible "
                 "numeric, integer, or pointer values."},
       {"#bitcast", "#bitcast(type) value -> type\nReinterprets equal-sized "
@@ -1384,6 +1372,18 @@ static void lsp_function_hover(LspSemantic *semantic, uint32_t index, char *out,
         at += (size_t)n < capacity - at ? (size_t)n : capacity - at - 1;       \
     }                                                                          \
   } while (0)
+  if (fn->is_generic) {
+    /* A generic's parameters are patterns; show them as declared. */
+    const char *text = semantic->source.text;
+    uint32_t end = fn->span.start_byte;
+    while (end < fn->span.end_byte && text[end] != '{')
+      ++end;
+    while (end > fn->span.start_byte && text[end - 1] == ' ')
+      --end;
+    APPEND("%s%.*s", fn->is_public && strncmp(text + fn->span.start_byte, "pub", 3) ? "pub " : "",
+           (int)(end - fn->span.start_byte), text + fn->span.start_byte);
+    return;
+  }
   APPEND("%s%sfn %.*s(", fn->is_public ? "pub " : "",
          fn->foreign ? "extern " : "",
          (int)(fn->name.end_byte - fn->name.start_byte),

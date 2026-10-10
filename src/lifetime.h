@@ -2,7 +2,7 @@
 #define DYN_LIFETIME_H
 /* Conservative straight-line provenance. Branch/loop joins discard facts rather
  * than diagnosing a possible path as a proven error. This is not a borrow checker. */
-typedef struct { bool stack, expired; uint32_t arena, address, allocator_arena; } LifeValue;
+typedef struct { bool stack, expired; uint32_t arena, address; } LifeValue;
 typedef struct { uint32_t local, field; LifeValue value; } LifeField;
 typedef struct {
   Sema *sema; DynAstProgram *a; const DynSource *source; unsigned *errors;
@@ -15,8 +15,6 @@ static LifeValue life_join(LifeValue a, LifeValue b) {
   else if (b.arena && a.arena != b.arena) a.arena = 0;
   if (!a.address) a.address = b.address;
   else if (b.address && a.address != b.address) a.address = 0;
-  if (!a.allocator_arena) a.allocator_arena = b.allocator_arena;
-  else if (b.allocator_arena && a.allocator_arena != b.allocator_arena) a.allocator_arena = 0;
   return a;
 }
 static LifeValue *life_local(Life *l, uint32_t id) {
@@ -24,7 +22,7 @@ static LifeValue *life_local(Life *l, uint32_t id) {
 }
 static bool life_borrow_type(DynAstProgram *a, DynType t, unsigned depth) {
   if (depth > 64) return false;
-  if (dyn_type_is_pointer(t) || dyn_type_is_slice(t) || t == DYN_TYPE_RAWPTR || t == DYN_TYPE_ANY || t == DYN_TYPE_ALLOCATOR || dyn_type_is_alloc_result(t)) return true;
+  if (dyn_type_is_pointer(t) || dyn_type_is_slice(t) || t == DYN_TYPE_RAWPTR || t == DYN_TYPE_ANY) return true;
   if (dyn_type_is_array(t)) return life_borrow_type(a,a->arrays[t-DYN_TYPE_ARRAY_BASE].element,depth+1);
   if (dyn_type_is_struct(t)) {
     DynAstStruct *st=&a->structs[t-DYN_TYPE_STRUCT_BASE];
@@ -40,6 +38,13 @@ static bool life_mem_call(Life *l, DynAstExpr *e, const char *name) {
   size_t z=strlen(name);
   return path && (strstr(path,"/std/mem/") || strstr(path,"/share/dyn/mem/")) &&
     at+z<=n && !memcmp(text+at,name,z) && (at+z==n || !(isalnum((unsigned char)text[at+z]) || text[at+z]=='_'));
+}
+/* Arena pushes; the first argument is the arena. */
+static bool life_push_call(Life *l, DynAstExpr *e) {
+  static const char *names[]={"arena_push_or_panic","arena_push_uninit_or_panic","arena_push",
+    "arena_push_uninit","arena_push_array","push","push_array","push_bytes_uninit"};
+  for (size_t i=0;i<sizeof(names)/sizeof(*names);++i) if (life_mem_call(l,e,names[i])) return true;
+  return false;
 }
 static bool life_zero_rewind(Life *l, DynAstExpr *e) {
   if (!life_mem_call(l, e, "arena_rewind") || e->item_count != 2) return false;
@@ -118,14 +123,6 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
     LifeValue left=life_expr(l,e->left,depth+1), right=life_expr(l,e->right,depth+1);
     bool view=e->kind==DYN_EXPR_SLICE || e->kind==DYN_EXPR_CAST || e->kind==DYN_EXPR_CONVERT || e->kind==DYN_EXPR_BITCAST || e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX || e->kind==DYN_EXPR_UNARY;
     if(view && life_borrow_type(a,e->type,0)) v=left;
-    if(e->kind==DYN_EXPR_ALLOCATOR) v=left;
-    if(e->kind==DYN_EXPR_ALLOC) {
-      v.arena=left.allocator_arena; v.expired=left.expired;
-      LifeValue *backing=left.allocator_arena ? life_local(l,left.allocator_arena-1) : NULL;
-      if(backing) v.stack=backing->stack;
-      /* An arbitrary callback can mutate address-exposed locals. */
-      if (!left.allocator_arena) life_forget(l);
-    }
     if(returns_local_borrow(l->sema,a,id)) v.stack=true;
     if(left.expired || right.expired) v.expired=true;
     for(uint32_t i=0;i<e->item_count;++i) {
@@ -135,29 +132,23 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
     }
     if(e->kind==DYN_EXPR_CALL && e->item_count) {
       LifeValue first=life_expr(l,a->items[e->item_start].expression,depth+1);
-      if(life_mem_call(l,e,"arena_push_or_panic") || life_mem_call(l,e,"arena_push_uninit_or_panic") ||
-         life_mem_call(l,e,"arena_push") || life_mem_call(l,e,"arena_push_uninit") ||
-         life_mem_call(l,e,"arena_push_array")) {
+      bool push=life_push_call(l,e);
+      if(push) {
         v.arena=first.address;v.stack=false;
         LifeValue *backing=first.address ? life_local(l,first.address-1) : NULL;
         if(backing) v.stack=backing->stack;
       }
       if(life_mem_call(l,e,"arena_from_buffer")) v.stack=first.stack;
-      if(life_mem_call(l,e,"arena_allocator")) { v.stack=first.stack; v.allocator_arena=first.address; }
-      if(life_mem_call(l,e,"growing_allocator")) v.stack=first.stack;
       if(life_mem_call(l,e,"arena_reset") || life_zero_rewind(l,e)) life_invalidate(l,first.address);
       /* Unknown callees may mutate any address-exposed local or alias. */
-      if (!life_mem_call(l,e,"arena_push_or_panic") && !life_mem_call(l,e,"arena_push_uninit_or_panic") &&
-          !life_mem_call(l,e,"arena_push") && !life_mem_call(l,e,"arena_push_uninit") &&
-          !life_mem_call(l,e,"arena_push_array") &&
-          !life_mem_call(l,e,"arena_allocator") && !life_mem_call(l,e,"growing_allocator") &&
+      if (!push &&
           !life_mem_call(l,e,"arena_from_buffer") && !life_mem_call(l,e,"arena_reset") && !life_zero_rewind(l,e)) life_forget(l);
       /* Rewind invalidates only a suffix; without allocation offsets it is
        * unsound to mark every arena pointer expired. Release may fail. */
     }
   }
   if (e->kind==DYN_EXPR_LEN) v.expired=false; /* Descriptor length does not read backing storage. */
-  if (!life_borrow_type(a,e->type,0)) { v.stack=false; v.arena=0; v.address=0; v.allocator_arena=0; }
+  if (!life_borrow_type(a,e->type,0)) { v.stack=false; v.arena=0; v.address=0; }
   if (e->kind==DYN_EXPR_CALL && !e->item_count) life_forget(l);
   return v;
 }

@@ -8,7 +8,7 @@ pub struct Samples { count: usize, minimum, median, p90, maximum: i64, ok: bool 
 pub fn summarize(samples: []i64) Samples {
   if #len(samples) == 0 { return Samples{} }
   for value in samples { if value < 0 { return Samples{} } }
-  sorting.i64s(samples)
+  sorting.sort(samples)
   count := #len(samples)
   return Samples{count: count, minimum: samples[0], median: samples[(count - 1) / 2],
     p90: samples[count - count / 10 - 1], maximum: samples[count - 1], ok: true}

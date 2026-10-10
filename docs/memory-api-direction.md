@@ -1,22 +1,23 @@
 # Arena-first memory APIs
 
-This policy ships in SDK preview 16. It supersedes the initial unreleased allocator
-builtin names. See the [versioned migration guide](migrations/0.1.0-preview.16.md). The language supplies typed allocation;
-concrete owners and application code decide lifetimes and failure policy.
+This policy ships in SDK preview 19. Allocation goes through arenas only: there is
+no allocator interface and no allocation builtin. See the
+[migration guide](migrations/0.1.0-preview.19.md). Concrete owners and application
+code decide lifetimes and failure policy.
 
 ## Compiler, std, and application responsibilities
 
 | Layer | Responsibility |
 | --- | --- |
-| Compiler | `Allocator`, known callback construction, typed pointer/slice results, checked sizing, default zeroing, explicit panic forms, tooling |
-| Std | Fixed and explicitly growing arenas, mark/rewind/reset/release, scratch scopes, pools/free lists, adapters, domain-specific errors |
+| Compiler | Type parameters for typed std helpers, `#sizeof`/`#alignof`, narrow reset checks, tooling |
+| Std | Fixed and explicitly growing arenas, typed pushes, mark/rewind/reset/release, scratch scopes, pools/free lists, domain-specific errors |
 | Application | Lifetime grouping, capacity budgets, synchronization, cleanup order, recovery policy |
 | Documentation and tests | Borrow/invalidation contracts, failure side effects, examples and fault-injected cleanup checks |
 
 Existing direct local escape, owner-copy, and reset checks remain narrow. There is
 no new wrapper tracing, ownership annotation language, borrow checker, GC, ARC,
 automatic cleanup, or async framework. A successful compiler check does not prove
-memory safety. `Allocator` is a borrowed allocation interface, not an owner.
+memory safety.
 
 Organize data by lifetime first: application state, document/session state,
 request/frame state, and temporary scratch. Fixed arenas are the recommended
@@ -30,7 +31,7 @@ This is our application of the lifetime-grouping ideas in Ryan Fleury's
 [arena article](https://www.dgtlgrove.com/p/untangling-lifetimes-the-arena-allocator)
 and the shallow, explicit failure handling in his
 [error article](https://www.dgtlgrove.com/p/the-easiest-way-to-handle-errors).
-The primitive handle, fixed-by-default guidance, and exact names are Dyn design
+The fixed-by-default guidance and exact names are Dyn design
 choices, not claims that he endorses this API.
 
 ## Failure policy and replacements
@@ -39,6 +40,10 @@ Recoverable allocation uses ordinary names. `_or_panic` means allocation failure
 is fatal through Dyn's existing panic/defer machinery. `_uninit` is before that
 suffix. Select panic when the caller has established a sufficient budget or has
 chosen termination as its policy; it is not a proof that allocation cannot fail.
+
+Since preview 19 the allocation builtins in this table no longer exist; use
+`mem.push`, `mem.push_array` and `mem.push_bytes_uninit` on an arena. See
+`docs/migrations/0.1.0-preview.19.md`.
 
 | Previous local spelling | Replacement preserving behavior |
 | --- | --- |
@@ -77,23 +82,18 @@ remain normal outcomes. Wrappers are added where useful, not in pairs everywhere
 
 ## Output allocation without hidden scratch
 
-- `strings.clone` and `strings.join` retain their concrete arena interfaces.
-  `join` restores its mark on failure.
-- `strings.clone_alloc` and `strings.join_alloc` accept caller-selected output.
-  Their result retains string errors plus an allocation category when relevant.
-  `join_alloc` validates size before allocation. Detected overlap writes nothing
-  but consumes the allocated capacity: a generic handle cannot rewind.
-- `ini.parse(output, source)` validates the whole document, then allocates one
-  exact-size entry table and scans again. Syntax failure consumes no output;
-  allocation failure is reported separately. Entry text still borrows source.
+- `strings.clone` and `strings.join` write into a caller's arena. `join`
+  restores its mark on failure; a full arena reports `Capacity`.
+- `ini.parse(arena, source)` validates the whole document, then pushes one
+  exact-size entry table and scans again. Syntax failure consumes no capacity;
+  a full arena reports `Capacity`. Entry text still borrows source.
   The scanner remains allocation-free, and no parser panic wrapper is needed.
 - JSON parsing stays arena-based because its partial tree and decoded strings use
-  rewind. Converting it mechanically to a generic handle would weaken rollback.
+  rewind.
 
-Empty generic allocations still require an initialized handle, but never call its
-callback. An empty string clone or empty INI table therefore needs no capacity.
-Concrete fixed/growing callbacks return uninitialized bytes; default builtins
-zero payloads once. Uninitialized allocation does not promise nonzero bytes.
+An empty string clone or empty INI table needs no capacity. `mem.push` and
+`mem.push_array` zero their payload; `mem.push_bytes_uninit` does not, and
+uninitialized bytes do not promise nonzero contents.
 
 ```dyn
 use "std/mem"
@@ -103,15 +103,14 @@ use "std/encoding/ini"
 fn main() {
   backing: [4 * mem.KiB]u8
   arena := mem.arena_from_buffer(backing[..])
-  output := mem.arena_allocator(&arena)
-  parsed := ini.parse(output, "[ui]\nname=Workbench\n")
+  parsed := ini.parse(&arena, "[ui]\nname=Workbench\n")
   if !parsed.ok { #panic("invalid configuration or insufficient output capacity") }
   // Table borrows arena; text borrows the literal. Copy text when its input
   // lifetime is shorter than the desired output lifetime.
-  copied := strings.clone_alloc(output, parsed.entries[1].value)
+  copied := strings.clone(&arena, parsed.entries[1].value)
   if !copied.ok { #panic("name allocation failed") }
-  // Panic form is a deliberate application policy, visible at the call site.
-  counter := #alloc_or_panic(usize, output)
+  // mem.push panics when the arena is full: a deliberate application policy.
+  counter := mem.push(usize, &arena)
   counter.* = #len(copied.value)
 }
 ```
