@@ -12,7 +12,7 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.18
 
 - A mutable `*T` now converts to `rawptr` implicitly, like C's `void *`:
   `free(task)` replaces `free(#cast(rawptr) task)`. Existing casts still
