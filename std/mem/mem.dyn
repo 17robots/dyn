@@ -1,6 +1,6 @@
 use "std/observe" observe
 
-// Arenas and fixed-slot reuse primitives, with adapters for builtin Allocator handles.
+// Arenas and fixed-slot reuse primitives.
 //
 // Arena owns heap backing or borrows a caller slice. Reset or rewind invalidates affected allocations.
 // FreeList borrows one fixed region, commonly carved from an arena. Returning a slot
@@ -206,6 +206,33 @@ pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignm
   size := size_for(count, element_size)
   if !size.ok { return arena_failure(arena, ErrorKind.Overflow) }
   return arena_push(arena, size.bytes, alignment)
+}
+
+// Pushes one zeroed T. Panics when the arena is exhausted.
+pub fn push($T: type, arena: *Arena) *T {
+  return #cast(*T) arena_push_or_panic(arena, #sizeof(T), #alignof(T))
+}
+
+// Pushes count zeroed elements. Panics when the arena is exhausted or the size overflows.
+pub fn push_array($T: type, arena: *Arena, count: usize) []T {
+  if count == 0 {
+    empty: []T
+    return empty
+  }
+  allocation := arena_push_array(arena, count, #sizeof(T), #alignof(T))
+  if !allocation.ok {
+    #panic("arena exhausted or size overflow")
+  }
+  return (#cast(*T) allocation.memory)[..count]
+}
+
+// Pushes count uninitialized bytes, for buffers that are overwritten right away.
+// Panics when the arena is exhausted.
+pub fn push_bytes_uninit(arena: *Arena, count: usize) []u8 {
+  if count == 0 {
+    return arena.data[..0]
+  }
+  return arena_push_uninit_or_panic(arena, count, 1)[..count]
 }
 
 pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation {
@@ -527,7 +554,9 @@ pub fn pool_release(pool: *Pool, memory: rawptr) {
   free_list_free(&pool.list, memory)
 }
 
-pub fn copy(destination: []u8, source: []const u8) usize {
+// Copies source into the start of destination and returns the element count.
+// Panics if destination is shorter than source. Use move for overlapping ranges.
+pub fn copy(destination: []$T, source: []const T) usize {
   if #len(destination) < #len(source) {
     #panic("copy destination too small")
   }
@@ -537,7 +566,8 @@ pub fn copy(destination: []u8, source: []const u8) usize {
   return #len(source)
 }
 
-pub fn move(destination: []u8, source: []const u8) usize {
+// Like copy, but source and destination may overlap.
+pub fn move(destination: []$T, source: []const T) usize {
   if #len(destination) < #len(source) {
     #panic("move destination too small")
   }
@@ -547,7 +577,7 @@ pub fn move(destination: []u8, source: []const u8) usize {
   destination_address := #cast(usize) &destination[0]
   source_address := #cast(usize) &source[0]
   i: usize = 0
-  if destination_address > source_address && destination_address < source_address + #len(source) {
+  if destination_address > source_address && destination_address < source_address + #len(source) * #sizeof(T) {
     i = #len(source)
     for i > 0 {
       i -= 1
@@ -562,10 +592,37 @@ pub fn move(destination: []u8, source: []const u8) usize {
   return #len(source)
 }
 
-pub fn zero(bytes: []u8) {
-  for i in 0..#len(bytes) {
-    bytes[i] = 0
+// Sets every element to its zero value.
+pub fn zero(items: []$T) {
+  empty: T
+  for *item in items {
+    item.* = empty
   }
+}
+
+pub fn fill(items: []$T, value: T) {
+  for *item in items {
+    item.* = value
+  }
+}
+
+pub fn swap(a, b: *$T) {
+  t := a.*
+  a.* = b.*
+  b.* = t
+}
+
+// Elementwise ==. Elements must support ==.
+pub fn equal(left, right: []const $T) bool {
+  if #len(left) != #len(right) {
+    return false
+  }
+  for i in 0..#len(left) {
+    if left[i] != right[i] {
+      return false
+    }
+  }
+  return true
 }
 
 pub fn compare(left: []const u8, right: []const u8) i32 {

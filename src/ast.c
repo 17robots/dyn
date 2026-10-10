@@ -111,9 +111,8 @@ const char *dyn_type_name(DynType t) {
   static const char *names[] = {
       "<infer>", "<error>", "void",       "bool",   "i8",  "i16",   "i32",
       "i64",     "u8",      "u16",        "u32",    "u64", "isize", "usize",
-      "f32",     "f64",     "[]const u8", "rawptr", "any", "Allocator"};
+      "f32",     "f64",     "[]const u8", "rawptr", "any"};
   return t < DYN_TYPE_STRUCT_BASE ? names[t]
-         : dyn_type_is_alloc_result(t) ? "#AllocResult"
          : dyn_type_is_enum(t)    ? "enum"
          : dyn_type_is_pointer(t) ? "pointer"
          : dyn_type_is_array(t)   ? "array"
@@ -138,7 +137,7 @@ bool dyn_type_is_slice(DynType t) {
 bool dyn_type_is_function(DynType t) {
   return t >= DYN_TYPE_FN_BASE && t < DYN_TYPE_DISTINCT_BASE;
 }
-bool dyn_type_is_distinct(DynType t) { return t >= DYN_TYPE_DISTINCT_BASE && t < DYN_TYPE_ALLOC_RESULT_BASE; }
+bool dyn_type_is_distinct(DynType t) { return t >= DYN_TYPE_DISTINCT_BASE && t < DYN_TYPE_PARAM_BASE; }
 static void diagnostic_node(TSNode n, const DynSource *s, unsigned *errors,
                             const char *message) {
   dyn_syntax_diagnostic(n, s, "error", message);
@@ -814,6 +813,37 @@ static uint32_t parse_string(TSNode n, const DynSource *s, DynAstProgram *a,
   a->strings[a->string_count++] = (DynAstString){out, count};
   return id;
 }
+static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a);
+static DynType scope_type(DynAstProgram *, DynSpan, const DynSource *, bool);
+static DynExprId lower_expr(TSNode, const DynSource *, DynAstProgram *, unsigned *);
+/* A call argument may be a type; only generic calls accept one. A plain name
+   stays a name expression, which a generic call resolves as a type, except
+   for type parameters in scope while lowering an instance. */
+static DynExprId lower_argument(TSNode node, const DynSource *s, DynAstProgram *a,
+                                unsigned *errors) {
+  bool is_type = !strcmp(ts_node_type(node), "type_argument");
+  TSNode n = node;
+  if (!is_type && a->scope_count) {
+    n = unwrap(node);
+    is_type = !strcmp(ts_node_type(n), "identifier") &&
+              scope_type(a, span(n), s, false) != DYN_TYPE_ERROR;
+  }
+  if (!is_type)
+    return lower_expr(node, s, a, errors);
+  DynType type = parse_type(!strcmp(ts_node_type(n), "type_argument") ? dyn_syntax_child(n, 0) : n, s, a);
+  if (type == DYN_TYPE_ERROR) {
+    diagnostic(n, s, errors, "unknown type");
+    return DYN_NO_EXPR;
+  }
+  if (!reserve_expr(a)) {
+    diagnostic(n, s, errors, "out of memory");
+    return DYN_NO_EXPR;
+  }
+  a->expressions[a->expression_count] = (DynAstExpr){
+      .kind = DYN_EXPR_TYPE, .type = type, .span = span(n),
+      .left = DYN_NO_EXPR, .right = DYN_NO_EXPR};
+  return (DynExprId)a->expression_count++;
+}
 static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
                             unsigned *errors) {
   if (!dyn_work_step(&s->context, 1)) return DYN_NO_EXPR;
@@ -923,7 +953,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
         seen_callee = true;
         continue;
       }
-      DynExprId expression = lower_expr(arg, s, a, errors);
+      DynExprId expression = lower_argument(arg, s, a, errors);
       a->items[e.item_start + argument_index++] =
           (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
     }
@@ -1052,18 +1082,6 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
                                                    : DYN_EXPR_CAST;
     e.integer = parse_type(dyn_syntax_child(node, 0), s, a);
     e.left = lower_expr(dyn_syntax_child(node, 1), s, a, errors);
-  } else if (!strcmp(k, "allocator")) {
-    e.kind = DYN_EXPR_ALLOCATOR;
-    e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
-    e.right = lower_expr(dyn_syntax_child(node, 1), s, a, errors);
-  } else if (!strcmp(k, "allocation")) {
-    e.kind = DYN_EXPR_ALLOC;
-    e.integer = parse_type(dyn_syntax_child(node, 0), s, a);
-    e.left = lower_expr(dyn_syntax_child(node, 1), s, a, errors);
-    e.right = dyn_syntax_child_count(node) > 2 ? lower_expr(dyn_syntax_child(node, 2), s, a, errors) : DYN_NO_EXPR;
-    const char *builtin = ts_node_type(ts_node_child(node, 0));
-    e.item_count = 0;
-    e.op = (DynOperator)((strstr(builtin, "_or_panic") ? 0 : DYN_ALLOC_TRY) | (strstr(builtin, "slice") ? DYN_ALLOC_SLICE : 0) | (strstr(builtin, "uninit") ? DYN_ALLOC_UNINIT : 0));
   } else if (!strcmp(k, "syscall")) {
     e.kind = DYN_EXPR_SYSCALL;
     e.type = DYN_TYPE_INFER;
@@ -1202,11 +1220,10 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
   if (!strcmp(ts_node_type(n), "type") && dyn_syntax_child_count(n) == 1) {
     n = dyn_syntax_child(n, 0);
   }
-  if (!strcmp(ts_node_type(n), "allocation_result_type")) {
-    DynType value = parse_type(dyn_syntax_child(n, 0), s, a);
-    if (!dyn_type_is_pointer(value) && !dyn_type_is_slice(value)) return DYN_TYPE_ERROR;
-    DynType key = intern_pointer(a, value, false);
-    return key == DYN_TYPE_ERROR ? key : DYN_TYPE_ALLOC_RESULT_BASE + key - DYN_TYPE_POINTER_BASE;
+  if (!strcmp(ts_node_type(n), "type_parameter")) {
+    DynSpan name = span(n);
+    ++name.start_byte;
+    return scope_type(a, name, s, a->declaring_generic);
   }
   if (!strcmp(ts_node_type(n), "fn_type")) {
     uint32_t close = ts_node_start_byte(n);
@@ -1276,18 +1293,34 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
            {"u64", DYN_TYPE_U64},     {"isize", DYN_TYPE_ISIZE},
            {"usize", DYN_TYPE_USIZE}, {"f32", DYN_TYPE_F32},
            {"f64", DYN_TYPE_F64},     {"rawptr", DYN_TYPE_RAWPTR},
-           {"any", DYN_TYPE_ANY}, {"Allocator", DYN_TYPE_ALLOCATOR}};
+           {"any", DYN_TYPE_ANY}};
   for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
     if (p.end_byte - p.start_byte == strlen(m[i].n) &&
         !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n))) {
       return m[i].t;
     }
+  DynType bound = scope_type(a, p, s, false);
+  if (bound != DYN_TYPE_ERROR)
+    return bound;
   uint32_t alias = find_alias(a, p, s);
   if (alias != UINT32_MAX) {
     return resolve_alias(a, alias, s);
   }
   uint32_t id = find_struct(a, p, s);
   return id == UINT32_MAX ? DYN_TYPE_ERROR : DYN_TYPE_STRUCT_BASE + id;
+}
+/* A name in the generic scope. While declaring a signature, `$T` introduces
+   T as type parameter k; while lowering an instance, T is a concrete type. */
+static DynType scope_type(DynAstProgram *a, DynSpan name, const DynSource *s,
+                          bool introduce) {
+  for (uint32_t i = 0; i < a->scope_count; ++i)
+    if (dyn_span_text_equal(a->scope_names[i], name, s))
+      return introduce ? DYN_TYPE_ERROR : a->scope_types[i];
+  if (!introduce || a->scope_count == DYN_MAX_TYPE_PARAMS)
+    return DYN_TYPE_ERROR;
+  a->scope_names[a->scope_count] = name;
+  a->scope_types[a->scope_count] = DYN_TYPE_PARAM_BASE + a->scope_count;
+  return a->scope_types[a->scope_count++];
 }
 static bool lower_block(TSNode, const DynSource *, DynAstProgram *, unsigned *,
                         uint32_t, uint32_t *, uint32_t *);
@@ -1664,7 +1697,116 @@ void dyn_ast_program_free(DynAstProgram *a) {
   free(a->case_arms);
   free(a->children);
   free(a->locals);
+  free(a->generics);
+  free(a->generic_params);
+  free(a->instances);
   memset(a, 0, sizeof(*a));
+}
+DynType dyn_ast_named_type(DynAstProgram *a, DynSpan name, const DynSource *s) {
+  uint32_t alias = find_alias(a, name, s);
+  if (alias != UINT32_MAX)
+    return resolve_alias(a, alias, s);
+  uint32_t id = find_struct(a, name, s);
+  return id == UINT32_MAX ? DYN_TYPE_ERROR : DYN_TYPE_STRUCT_BASE + id;
+}
+DynType dyn_ast_substitute(DynAstProgram *a, DynType t, const DynType *args) {
+  if (dyn_type_is_param(t))
+    return args[t - DYN_TYPE_PARAM_BASE];
+  if (dyn_type_is_pointer(t)) {
+    DynAstPointer p = a->pointers[t - DYN_TYPE_POINTER_BASE];
+    DynType pointee = dyn_ast_substitute(a, p.pointee, args);
+    return pointee == p.pointee ? t : intern_pointer(a, pointee, p.is_const);
+  }
+  if (dyn_type_is_slice(t)) {
+    DynAstSlice p = a->slices[t - DYN_TYPE_SLICE_BASE];
+    DynType element = dyn_ast_substitute(a, p.element, args);
+    return element == p.element ? t : intern_slice(a, element, p.is_const);
+  }
+  if (dyn_type_is_array(t)) {
+    DynAstArray p = a->arrays[t - DYN_TYPE_ARRAY_BASE];
+    DynType element = dyn_ast_substitute(a, p.element, args);
+    return element == p.element ? t : intern_array(a, element, p.length);
+  }
+  if (dyn_type_is_function(t)) {
+    DynAstFnType f = a->fn_types[t - DYN_TYPE_FN_BASE];
+    DynType params[64];
+    if (f.param_count > 64 || f.variadic)
+      return t;
+    bool changed = false;
+    for (uint32_t i = 0; i < f.param_count; ++i) {
+      params[i] = dyn_ast_substitute(a, a->fn_type_params[f.param_start + i], args);
+      changed |= params[i] != a->fn_type_params[f.param_start + i];
+    }
+    DynType result = dyn_ast_substitute(a, f.return_type, args);
+    if (!changed && result == f.return_type)
+      return t;
+    return intern_fn_type(a, params, f.param_count, result);
+  }
+  return t;
+}
+uint32_t dyn_ast_instantiate(DynAstProgram *a, const DynSource *s, uint32_t generic,
+                             const DynType *args, uint32_t depth, DynSpan call,
+                             uint64_t hash) {
+  (void)s;
+  DynAstGeneric g = a->generics[generic];
+  if (a->instance_count == a->instance_capacity) {
+    size_t c = a->instance_capacity ? a->instance_capacity * 2 : 16;
+    void *p = realloc(a->instances, c * sizeof(*a->instances));
+    if (!p) { a->allocation_failed = true; return UINT32_MAX; }
+    a->instances = p;
+    a->instance_capacity = c;
+  }
+  if (!reserve_function(a))
+    return UINT32_MAX;
+  DynAstFn fn = a->functions[g.function];
+  fn.is_generic = false;
+  fn.interface_only = false;
+  fn.is_instance = true;
+  fn.body_pending = true;
+  fn.instance = (uint32_t)a->instance_count;
+  fn.param_start = (uint32_t)a->param_count;
+  fn.param_count = 0;
+  fn.return_type = dyn_ast_substitute(a, g.return_pattern, args);
+  for (uint32_t i = 0; i < g.param_count; ++i) {
+    DynAstGenericParam p = a->generic_params[g.param_start + i];
+    if (p.is_type)
+      continue;
+    if (!reserve_param(a))
+      return UINT32_MAX;
+    a->params[a->param_count++] = (DynAstParam){
+        .name = p.name, .type = dyn_ast_substitute(a, p.pattern, args),
+        .local_id = UINT32_MAX};
+    ++fn.param_count;
+  }
+  DynAstInstance instance = {.generic = generic, .function = (uint32_t)a->function_count,
+                             .depth = depth, .call = call, .hash = hash};
+  memcpy(instance.args, args, g.type_param_count * sizeof(*args));
+  a->instances[a->instance_count++] = instance;
+  a->functions[a->function_count] = fn;
+  return (uint32_t)a->function_count++;
+}
+bool dyn_ast_lower_instance(DynAstProgram *a, const DynSource *s, uint32_t function,
+                            unsigned *errors) {
+  DynAstFn *fn = &a->functions[function];
+  fn->body_pending = false;
+  DynAstInstance instance = a->instances[fn->instance];
+  DynAstGeneric g = a->generics[instance.generic];
+  TSNode block = {0};
+  for (uint32_t j = 0; j < ts_node_named_child_count(g.node); ++j) {
+    TSNode c = ts_node_named_child(g.node, j);
+    if (!strcmp(ts_node_type(c), "block"))
+      block = c;
+  }
+  memcpy(a->scope_names, g.type_names, sizeof(a->scope_names));
+  memcpy(a->scope_types, instance.args, sizeof(a->scope_types));
+  a->scope_count = g.type_param_count;
+  uint32_t start = 0, count = 0;
+  bool ok = lower_block(block, s, a, errors, 0, &start, &count);
+  a->scope_count = 0;
+  fn = &a->functions[function];
+  fn->body_start = start;
+  fn->body_count = count;
+  return ok;
 }
 extern const TSLanguage *tree_sitter_dyn(void);
 static uint64_t declaration_owner(DynSpan name, const DynSource *s) {
@@ -1772,7 +1914,7 @@ static bool add_alias_names(const DynSource *s, DynAstProgram *a,
       diagnostic(name, s, errors, "duplicate type declaration");
       continue;
     }
-    if (a->alias_count >= DYN_TYPE_ALLOC_RESULT_BASE - DYN_TYPE_DISTINCT_BASE) {
+    if (a->alias_count >= DYN_TYPE_PARAM_BASE - DYN_TYPE_DISTINCT_BASE) {
       diagnostic(d, s, errors, "alias type capacity exceeded");
       return false;
     }
@@ -2001,12 +2143,6 @@ static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
   if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING)
     return alignment ? pointer : 2 * pointer;
   if (t == DYN_TYPE_ANY) return alignment ? 8 : 16;
-  if (t == DYN_TYPE_ALLOCATOR) return alignment ? pointer : 2 * pointer;
-  if (dyn_type_is_alloc_result(t)) {
-    DynType value = a->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee;
-    uint64_t bytes = dyn_type_is_slice(value) ? 2 * pointer : pointer;
-    return alignment ? pointer : (bytes + 5 + pointer - 1) / pointer * pointer;
-  }
   if (dyn_type_is_pointer(t) || dyn_type_is_function(t) || t == DYN_TYPE_RAWPTR ||
       t == DYN_TYPE_USIZE || t == DYN_TYPE_ISIZE) return pointer;
   uint64_t size = t == DYN_TYPE_BOOL || t == DYN_TYPE_I8 || t == DYN_TYPE_U8 ? 1
@@ -2153,6 +2289,114 @@ static bool add_globals(const DynSource *s, DynAstProgram *a,
   }
   return true;
 }
+/* Only type parameters use `$`, and a signature ends at its body's `{`. */
+static bool has_type_parameter(TSNode n, const DynSource *s) {
+  for (uint32_t i = ts_node_start_byte(n); i < ts_node_end_byte(n); ++i) {
+    if (s->text[i] == '{')
+      return false;
+    if (s->text[i] == '$')
+      return true;
+  }
+  return false;
+}
+static bool reserve_generic(DynAstProgram *a, size_t params) {
+  if (a->generic_count == a->generic_capacity) {
+    size_t c = a->generic_capacity ? a->generic_capacity * 2 : 8;
+    void *p = realloc(a->generics, c * sizeof(*a->generics));
+    if (!p) { a->allocation_failed = true; return false; }
+    a->generics = p;
+    a->generic_capacity = c;
+  }
+  if (a->generic_param_count + params > a->generic_param_capacity) {
+    size_t c = a->generic_param_capacity ? a->generic_param_capacity * 2 : 16;
+    while (c < a->generic_param_count + params) c *= 2;
+    void *p = realloc(a->generic_params, c * sizeof(*a->generic_params));
+    if (!p) { a->allocation_failed = true; return false; }
+    a->generic_params = p;
+    a->generic_param_capacity = c;
+  }
+  return true;
+}
+/* A generic's signature becomes patterns over its type parameters. The
+   function entry keeps the name visible but has no parameters or body; each
+   call instantiates a separate function. */
+static bool add_generic(const DynSource *s, DynAstProgram *a, unsigned *errors,
+                        TSNode d, DynSpan ns, bool is_public) {
+  uint32_t named = ts_node_named_child_count(d);
+  if (!reserve_generic(a, named * 4)) {
+    diagnostic(d, s, errors, "out of memory");
+    return false;
+  }
+  DynAstGeneric g = {.node = d, .function = (uint32_t)a->function_count,
+                     .param_start = (uint32_t)a->generic_param_count,
+                     .return_pattern = DYN_TYPE_VOID};
+  a->scope_count = 0;
+  a->declaring_generic = true;
+  bool ok = true;
+  for (uint32_t j = 0; j < named; ++j) {
+    TSNode c = ts_node_named_child(d, j);
+    const char *kind = ts_node_type(c);
+    if (!strcmp(kind, "variadic_param")) {
+      diagnostic(c, s, errors, "generic functions cannot be variadic");
+      ok = false;
+    } else if (!strcmp(kind, "fn_param")) {
+      TSNode first = ts_node_named_child(c, 0);
+      TSNode qualifier = dyn_syntax_last_child(c);
+      if (!strcmp(ts_node_type(first), "type_parameter")) {
+        TSNode type = dyn_syntax_child(qualifier, 0);
+        DynSpan text = span(type);
+        DynSpan name = span(first);
+        ++name.start_byte;
+        DynType param = scope_type(a, name, s, true);
+        if (text.end_byte - text.start_byte != 4 ||
+            memcmp(s->text + text.start_byte, "type", 4)) {
+          diagnostic(type, s, errors, "a `$T` parameter must have type `type`");
+          ok = false;
+        } else if (param == DYN_TYPE_ERROR) {
+          diagnostic(first, s, errors, "duplicate or too many type parameters");
+          ok = false;
+        }
+        a->generic_params[a->generic_param_count++] =
+            (DynAstGenericParam){.name = name, .pattern = param, .is_type = true};
+        ++g.param_count;
+        continue;
+      }
+      DynType type = parse_type(dyn_syntax_child(qualifier, 0), s, a);
+      if (type == DYN_TYPE_ERROR) {
+        diagnostic(qualifier, s, errors, "unknown type in parameter");
+        ok = false;
+      }
+      for (uint32_t k = 0; k < ts_node_named_child_count(c); ++k) {
+        TSNode q = ts_node_named_child(c, k);
+        if (strcmp(ts_node_type(q), "identifier"))
+          continue;
+        a->generic_params[a->generic_param_count++] =
+            (DynAstGenericParam){.name = span(q), .pattern = type};
+        ++g.param_count;
+      }
+    } else if (!strcmp(kind, "type")) {
+      g.return_pattern = parse_type(c, s, a);
+      if (g.return_pattern == DYN_TYPE_ERROR) {
+        diagnostic(c, s, errors, "unknown type in return signature");
+        ok = false;
+      }
+    }
+  }
+  g.type_param_count = a->scope_count;
+  memcpy(g.type_names, a->scope_names, sizeof(g.type_names));
+  a->scope_count = 0;
+  a->declaring_generic = false;
+  if (!ok)
+    g.param_count = 0;
+  a->generics[a->generic_count] = g;
+  a->functions[a->function_count++] = (DynAstFn){
+      .span = span(d), .name = ns, .link_name = ns,
+      .return_type = DYN_TYPE_VOID, .param_start = (uint32_t)a->param_count,
+      .is_public = is_public, .interface_only = true, .is_generic = true,
+      .generic = (uint32_t)a->generic_count++,
+      .module_owner = declaration_owner(ns, s)};
+  return ok;
+}
 static bool add_function_signatures(const DynSource *s,
                                     DynAstProgram *a, unsigned *errors, DynNameIndex *index,
                                     DynNameIndex *globals) {
@@ -2174,6 +2418,11 @@ static bool add_function_signatures(const DynSource *s,
     if (!reserve_function(a)) {
       diagnostic(d, s, errors, "out of memory");
       return false;
+    }
+    if (!foreign && has_type_parameter(d, s)) {
+      if (!add_generic(s, a, errors, d, ns, is_public))
+        return false;
+      continue;
     }
     DynAstFn fn = {.span = span(d),
                    .name = ns,
@@ -2266,7 +2515,7 @@ static void lower_function_bodies(const DynSource *s,
     uint32_t id = find_function(index, a, span(name), s);
     if (id == UINT32_MAX)
       continue;
-    if (a->functions[id].foreign)
+    if (a->functions[id].foreign || a->functions[id].is_generic)
       continue;
     if (owner_key && a->functions[id].module_owner != wanted) {
       a->functions[id].interface_only = true;

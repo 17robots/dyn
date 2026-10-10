@@ -1,7 +1,8 @@
 use "std/bytes" byte_ops
+use "std/mem"
 // Allocation-free INI scanner. Names and values borrow the input.
 pub enum Kind { Section, Pair }
-pub enum ErrorKind { None, Syntax, Allocation, Overflow }
+pub enum ErrorKind { None, Syntax, Capacity, Overflow }
 pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
 pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind }
 pub struct Result { entry: Entry, error: ErrorKind, ok: bool }
@@ -105,16 +106,15 @@ pub struct ParseResult {
   entries: []Entry,
   error: ErrorKind,
   error_line: usize,
-  allocation_error: AllocError,
   ok: bool,
 }
 
-// Ownership: table borrows output; entry text separately borrows source.
-// Invalidation: keep both the output owner and source alive and unchanged.
+// Ownership: table borrows the arena; entry text separately borrows source.
+// Invalidation: arena rewind, reset or release; keep source alive and unchanged.
 // Allocation: two scans, one exact-size table allocation; no hidden scratch.
-// Failure: validates all syntax before allocating. Allocation failure reports its category.
+// Failure: validates all syntax before allocating; a full arena reports Capacity.
 // Thread safety: source must remain stable throughout both passes; synchronize output.
-pub fn parse(output: Allocator, source: []const u8) ParseResult {
+pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   state := scanner(source)
   count: usize = 0
   for {
@@ -128,11 +128,15 @@ pub fn parse(output: Allocator, source: []const u8) ParseResult {
     if count == #cast(usize) -1 { return ParseResult{ error: ErrorKind.Overflow } }
     count += 1
   }
-  allocated := #alloc_slice_uninit(Entry, output, count)
-  if !allocated.ok {
-    return ParseResult{ error: ErrorKind.Allocation, allocation_error: allocated.error }
+  if count == 0 {
+    return ParseResult{ ok: true }
   }
+  allocation := mem.arena_push_array(arena, count, #sizeof(Entry), #alignof(Entry))
+  if !allocation.ok {
+    return ParseResult{ error: ErrorKind.Capacity }
+  }
+  entries := (#cast(*Entry) allocation.memory)[..count]
   state = scanner(source)
-  for i in 0..count { allocated.value[i] = next(&state).entry }
-  return ParseResult{ entries: allocated.value, ok: true }
+  for i in 0..count { entries[i] = next(&state).entry }
+  return ParseResult{ entries: entries, ok: true }
 }

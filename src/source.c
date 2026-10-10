@@ -265,11 +265,9 @@ static bool sources_have_syntax(const DynSources *sources) {
 }
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *out) {
-  static const char allocator_prelude[] =
-      "enum(u32) AllocError { None, InvalidAlignment, Capacity, InvalidState, Overflow, System }\n";
   static const char reflection_prelude[] =
       "enum TypeKind { Invalid, Void, Bool, Integer, Float, Pointer, Array, "
-      "Slice, Struct, Enum, Function, AllocationHandle, AllocationResult }\n"
+      "Slice, Struct, Enum, Function }\n"
       "struct TypeMember { name: []const u8, type_id: u64 }\n"
       "struct TypeInfo { id: u64, kind: "
       "TypeKind, name: []const u8, size: usize, alignment: usize, "
@@ -280,7 +278,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   if (sources->count)
     out->context = sources->items[0].context;
   size_t total = 0;
-  bool reflection = false, allocator = false;
+  bool reflection = false;
   for (size_t i = 0; i < sources->count; ++i) {
     int enabled = dyn_source_target_enabled(&sources->items[i]);
     if (enabled < 0) {
@@ -290,12 +288,6 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
     }
     if (!enabled)
       continue;
-    if (!allocator && (strstr(sources->items[i].text, "alloc") || strstr(sources->items[i].text, "Alloc"))) {
-      TSTree *tree = dyn_source_tree(&sources->items[i]);
-      if (!tree) return 2;
-      allocator = dyn_syntax_has_allocator(ts_tree_root_node(tree), sources->items[i].text);
-      ts_tree_delete(tree);
-    }
     reflection |= sources->items[i].needs_reflection;
     if (!reflection && strstr(sources->items[i].text, "#typeof")) {
       TSTree *tree = dyn_source_tree(&sources->items[i]);
@@ -312,7 +304,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
       return 1;
     }
   }
-  size_t prelude = (reflection ? sizeof(reflection_prelude) - 1 : 0) + (allocator ? sizeof(allocator_prelude) - 1 : 0);
+  size_t prelude = reflection ? sizeof(reflection_prelude) - 1 : 0;
   if (SIZE_MAX - total < prelude)
     return 2;
   total += prelude;
@@ -325,10 +317,6 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   }
   size_t at = 0;
   if (prelude) {
-    if (allocator) {
-      memcpy(out->text + at, allocator_prelude, sizeof(allocator_prelude) - 1);
-      at += sizeof(allocator_prelude) - 1;
-    }
     if (reflection) {
       memcpy(out->text + at, reflection_prelude,
              sizeof(reflection_prelude) - 1);

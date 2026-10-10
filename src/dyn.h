@@ -249,6 +249,12 @@ int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
                      bool shared, const char *owner_key, unsigned chunk,
                      unsigned chunks);
 void dyn_codegen_release(struct DynIrProgram *ir);
+/* Hash of the generic instances a chunk defines. Instances are emitted with
+   their generic, so a new instance rebuilds only that chunk. */
+uint64_t dyn_codegen_chunk_instances(const DynSource *source,
+                                     const struct DynIrProgram *ir,
+                                     const char *owner_key, unsigned chunk,
+                                     unsigned chunks);
 int dyn_link_executable(const DynContext *context, const char *object_path,
                         const char *output_path, const char *const *link_inputs,
                         size_t link_input_count, bool release, bool verbose);

@@ -472,12 +472,6 @@ static uint64_t sema_type_layout(Sema *sema, DynAstProgram *a, DynType t, bool a
   if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING)
     return alignment ? sema->pointer_bytes : 2 * sema->pointer_bytes;
   if (t == DYN_TYPE_ANY) return alignment ? 8 : 16;
-  if (t == DYN_TYPE_ALLOCATOR) return alignment ? sema->pointer_bytes : 2 * sema->pointer_bytes;
-  if (dyn_type_is_alloc_result(t)) {
-    DynType value = a->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee;
-    uint64_t pointer = sema->pointer_bytes, bytes = dyn_type_is_slice(value) ? 2 * pointer : pointer;
-    return alignment ? pointer : (bytes + 5 + pointer - 1) / pointer * pointer;
-  }
   return 0;
 }
 static bool literal_fits(Sema *sema, uint64_t v, DynType t) {
@@ -533,7 +527,7 @@ static DynAstFnType *fn_type_info(DynAstProgram *a, DynType t) {
 static bool sema_c_abi_type(DynAstProgram *a, DynType type, unsigned depth) {
   type = underlying_type(a, type);
   if (depth > 128) return false;
-  if (type == DYN_TYPE_STRING || type == DYN_TYPE_ANY || type == DYN_TYPE_ALLOCATOR || dyn_type_is_alloc_result(type) || dyn_type_is_slice(type)) return false;
+  if (type == DYN_TYPE_STRING || type == DYN_TYPE_ANY || dyn_type_is_slice(type)) return false;
   if (dyn_type_is_struct(type)) {
     DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
     if (!st->field_count) return false;
@@ -980,11 +974,6 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
     return;
   }
   char inner[384];
-  if (dyn_type_is_alloc_result(t)) {
-    type_name_into(a, a->pointers[t - DYN_TYPE_ALLOC_RESULT_BASE].pointee, s, inner, sizeof(inner));
-    snprintf(out, cap, "#AllocResult(%s)", inner);
-    return;
-  }
   if (dyn_type_is_pointer(t)) {
     DynAstPointer *p = pointer_info(a, t);
     type_name_into(a, p->pointee, s, inner, sizeof(inner));
@@ -1048,8 +1037,6 @@ static unsigned reflection_kind(Sema *sema, DynType t) {
     return 9;
   if (dyn_type_is_function(t))
     return 10;
-  if (t == DYN_TYPE_ALLOCATOR) return 11;
-  if (dyn_type_is_alloc_result(t)) return 12;
   return 0;
 }
 static void display_type_name(DynAstProgram *a, DynType t, const DynSource *s,
@@ -1150,12 +1137,197 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
   a->expressions[slice].right = DYN_NO_EXPR;
   return slice;
 }
-static DynType allocator_error_type(DynAstProgram *a, const DynSource *s) {
-  for (uint32_t i = 0; i < a->enum_count; ++i)
-    if (span_is(a->enums[i].name, s, "AllocError")) return DYN_TYPE_ENUM_BASE + i;
-  return DYN_TYPE_ERROR;
-}
 
+static DynType check_expr(Sema *, DynAstProgram *, DynExprId, const DynSource *,
+                          unsigned *, DynType);
+/* An untyped literal takes its type from the parameter once T is known. */
+static bool untyped_literal(DynAstProgram *a, DynExprId id) {
+  if (id == DYN_NO_EXPR)
+    return false;
+  DynAstExpr e = a->expressions[id];
+  if (e.kind == DYN_EXPR_UNARY && e.op == DYN_OP_NEG)
+    return untyped_literal(a, e.left);
+  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT;
+}
+/* Match a parameter pattern against an argument type, binding type
+   parameters. Returns false only on a conflicting binding. A shape that does
+   not match binds nothing; the ordinary argument check reports it. */
+static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
+                         DynType *args, uint32_t *conflict) {
+  if (actual == DYN_TYPE_ERROR)
+    return true;
+  if (dyn_type_is_param(pattern)) {
+    uint32_t k = pattern - DYN_TYPE_PARAM_BASE;
+    if (args[k] == DYN_TYPE_INFER)
+      args[k] = actual;
+    else if (args[k] != actual) {
+      *conflict = k;
+      return false;
+    }
+    return true;
+  }
+  if (dyn_type_is_pointer(pattern) && dyn_type_is_pointer(actual)) {
+    DynAstPointer p = a->pointers[pattern - DYN_TYPE_POINTER_BASE],
+                  v = a->pointers[actual - DYN_TYPE_POINTER_BASE];
+    return p.is_const || !v.is_const ? bind_pattern(a, p.pointee, v.pointee, args, conflict) : true;
+  }
+  if (dyn_type_is_slice(pattern) && dyn_type_is_slice(actual)) {
+    DynAstSlice p = a->slices[pattern - DYN_TYPE_SLICE_BASE],
+                v = a->slices[actual - DYN_TYPE_SLICE_BASE];
+    return p.is_const || !v.is_const ? bind_pattern(a, p.element, v.element, args, conflict) : true;
+  }
+  if (dyn_type_is_array(pattern) && dyn_type_is_array(actual)) {
+    DynAstArray p = a->arrays[pattern - DYN_TYPE_ARRAY_BASE],
+                v = a->arrays[actual - DYN_TYPE_ARRAY_BASE];
+    return p.length == v.length ? bind_pattern(a, p.element, v.element, args, conflict) : true;
+  }
+  return true;
+}
+static uint64_t instance_hash(DynAstProgram *a, const DynSource *s,
+                              const DynType *args, uint32_t count) {
+  uint64_t hash = UINT64_C(1469598103934665603);
+  for (uint32_t i = 0; i < count; ++i) {
+    char name[256];
+    dyn_type_format(a, args[i], s, name, sizeof(name));
+    for (const char *c = name; ; ++c) {
+      hash = (hash ^ (unsigned char)*c) * UINT64_C(1099511628211);
+      if (!*c) break;
+    }
+  }
+  return hash;
+}
+/* Infer type arguments, find or create the instance, and check the call
+   against the instance's concrete signature. Type arguments are removed from
+   the call, so later passes see an ordinary direct call. */
+static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
+                                  uint32_t generic, const DynSource *s,
+                                  unsigned *errors) {
+  DynAstGeneric g = a->generics[generic];
+  DynSpan call = a->expressions[id].span;
+  uint32_t item_start = a->expressions[id].item_start,
+           item_count = a->expressions[id].item_count;
+  if (item_count != g.param_count) {
+    error_span(call, s, errors, "function argument count mismatch");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  DynType args[DYN_MAX_TYPE_PARAMS] = {0}, values[64];
+  if (item_count > 64) {
+    error_span(call, s, errors, "too many arguments for a generic function");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  bool failed = false;
+  /* Typed arguments bind first; untyped literals then take the bound type. */
+  for (int pass = 0; pass < 2; ++pass)
+    for (uint32_t i = 0; i < item_count; ++i) {
+      DynAstGenericParam p = a->generic_params[g.param_start + i];
+      DynExprId arg = a->items[item_start + i].expression;
+      if (arg == DYN_NO_EXPR) {
+        failed = true;
+        continue;
+      }
+      if (pass == 0 && a->expressions[arg].kind == DYN_EXPR_NAME &&
+          (p.is_type || find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX)) {
+        DynType named = dyn_ast_named_type(a, a->expressions[arg].span, s);
+        if (named != DYN_TYPE_ERROR) {
+          a->expressions[arg].kind = DYN_EXPR_TYPE;
+          a->expressions[arg].type = named;
+        }
+      }
+      bool is_type = a->expressions[arg].kind == DYN_EXPR_TYPE;
+      if (pass == 0 && p.is_type != is_type) {
+        error_span(a->expressions[arg].span, s, errors,
+                   p.is_type ? "expected a type argument" : "a type is not a value");
+        failed = true;
+        continue;
+      }
+      if (is_type) {
+        if (pass == 0)
+          args[p.pattern - DYN_TYPE_PARAM_BASE] = a->expressions[arg].type;
+        continue;
+      }
+      if ((pass == 0) == untyped_literal(a, arg))
+        continue;
+      DynType expected = DYN_TYPE_INFER;
+      if (pass == 1) {
+        DynType known = dyn_ast_substitute(a, p.pattern, args);
+        bool bound = true;
+        for (uint32_t k = 0; k < g.type_param_count; ++k)
+          bound &= args[k] != DYN_TYPE_INFER;
+        if (bound) expected = known;
+      }
+      values[i] = check_expr(sema, a, arg, s, errors, expected);
+      uint32_t conflict = 0;
+      if (!bind_pattern(a, p.pattern, values[i], args, &conflict)) {
+        char first[128], second[128], message[384];
+        dyn_type_format(a, args[conflict], s, first, sizeof(first));
+        dyn_type_format(a, values[i], s, second, sizeof(second));
+        DynSpan name = g.type_names[conflict];
+        snprintf(message, sizeof(message), "%.*s is both %s and %s in this call",
+                 (int)(name.end_byte - name.start_byte), s->text + name.start_byte,
+                 first, second);
+        error_span(a->expressions[arg].span, s, errors, message);
+        failed = true;
+      }
+    }
+  for (uint32_t k = 0; !failed && k < g.type_param_count; ++k)
+    if (args[k] == DYN_TYPE_INFER || args[k] == DYN_TYPE_ERROR) {
+      if (args[k] == DYN_TYPE_INFER) {
+        char message[160];
+        DynSpan name = g.type_names[k];
+        snprintf(message, sizeof(message), "cannot infer %.*s from the arguments",
+                 (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+        error_span(call, s, errors, message);
+      }
+      failed = true;
+    }
+  if (failed)
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  uint32_t depth = 0;
+  if (sema->current_function != UINT32_MAX &&
+      a->functions[sema->current_function].is_instance)
+    depth = a->instances[a->functions[sema->current_function].instance].depth + 1;
+  uint32_t function = UINT32_MAX;
+  for (size_t i = 0; i < a->instance_count && function == UINT32_MAX; ++i)
+    if (a->instances[i].generic == generic &&
+        !memcmp(a->instances[i].args, args, g.type_param_count * sizeof(*args)))
+      function = a->instances[i].function;
+  if (function == UINT32_MAX) {
+    if (depth >= DYN_MAX_INSTANCE_DEPTH) {
+      error_span(call, s, errors, "generic instances nest too deeply (limit 32)");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    function = dyn_ast_instantiate(a, s, generic, args, depth, call,
+                                   instance_hash(a, s, args, g.type_param_count));
+    if (function == UINT32_MAX) {
+      error_span(call, s, errors, "out of memory");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+  }
+  /* Check value arguments against the concrete parameters, dropping type
+     arguments from the call. */
+  uint32_t param = a->functions[function].param_start, kept = 0;
+  for (uint32_t i = 0; i < item_count; ++i) {
+    if (a->generic_params[g.param_start + i].is_type)
+      continue;
+    DynExprId arg = a->items[item_start + i].expression;
+    DynType target = a->params[param++].type;
+    if (values[i] != target && values[i] != DYN_TYPE_ERROR && target != DYN_TYPE_ERROR) {
+      if (can_convert(sema, a, values[i], target))
+        arg = convert_expr(a, arg, target);
+      else
+        error_types(a->expressions[arg].span, s, errors,
+                    "function argument type mismatch", target, values[i]);
+    }
+    a->items[item_start + kept++] = (DynAstItem){.expression = arg, .field_index = UINT32_MAX};
+  }
+  if (!sema_c_abi_function(a, &a->functions[function]))
+    error_span(call, s, errors,
+               "type has no supported C ABI; use C-compatible storage or a pointer adapter");
+  a->expressions[id].item_count = kept;
+  a->expressions[id].left = DYN_NO_EXPR;
+  a->expressions[id].integer = function;
+  return a->expressions[id].type = a->functions[function].return_type;
+}
 static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                           const DynSource *s, unsigned *errors,
                           DynType expected) {
@@ -1239,6 +1411,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                        .right = DYN_NO_EXPR};
       a->expressions[id].left = target;
       a->expressions[id].kind = DYN_EXPR_INDIRECT_CALL;
+    } else if (a->functions[fn].is_generic) {
+      return check_generic_call(sema, a, id, a->functions[fn].generic, s, errors);
     } else {
       a->expressions[id].left = DYN_NO_EXPR;
       a->expressions[id].integer = fn;
@@ -1373,6 +1547,11 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (a->expressions[id].kind == DYN_EXPR_FUNCTION)
     return a->expressions[id].type;
+  if (a->expressions[id].kind == DYN_EXPR_TYPE) {
+    error_span(a->expressions[id].span, s, errors,
+               "a type is not a value; only generic functions take type arguments");
+    return DYN_TYPE_ERROR;
+  }
   if (a->expressions[id].kind == DYN_EXPR_NAME) {
     uint32_t l = find_local(sema, a, a->expressions[id].span, s);
     if (l != UINT32_MAX) {
@@ -1565,10 +1744,6 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       array_length = array_info(a, operand)->length;
     } else if (dyn_type_is_slice(operand))
       element = slice_info(a, operand)->element;
-    else if (dyn_type_is_alloc_result(operand)) {
-      element = a->pointers[operand - DYN_TYPE_ALLOC_RESULT_BASE].pointee;
-      members = 3;
-    }
     else if (dyn_type_is_struct(operand))
       members = a->structs[operand - DYN_TYPE_STRUCT_BASE].field_count;
     else if (dyn_type_is_enum(operand))
@@ -1598,11 +1773,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     values[10] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
     values[11] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
     values[12] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
-    if (dyn_type_is_alloc_result(operand)) {
-      const char *names[] = {"value", "error", "ok"};
-      DynType types[] = {a->pointers[operand - DYN_TYPE_ALLOC_RESULT_BASE].pointee, allocator_error_type(a, s), DYN_TYPE_BOOL};
-      values[10] = reflection_members(a, s, member_type, member_slice, NULL, types, 3, names);
-    } else if (dyn_type_is_struct(operand)) {
+    if (dyn_type_is_struct(operand)) {
       DynAstStruct *subject = &a->structs[operand - DYN_TYPE_STRUCT_BASE];
       DynSpan *names = calloc(subject->field_count, sizeof(*names));
       DynType *types = calloc(subject->field_count, sizeof(*types));
@@ -1664,56 +1835,6 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].item_start = start;
     a->expressions[id].item_count = 13;
     return a->expressions[id].type;
-  }
-  if (a->expressions[id].kind == DYN_EXPR_ALLOCATOR) {
-    DynType context = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_RAWPTR);
-    DynType callback = check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_INFER);
-    DynAstPointer *pointer = pointer_info(a, callback);
-    DynAstFnType *signature = pointer ? fn_type_info(a, pointer->pointee) : NULL;
-    bool valid = signature && signature->return_type == DYN_TYPE_RAWPTR &&
-                 signature->param_count == 4 && !signature->variadic;
-    if (valid) {
-      DynType *p = a->fn_type_params + signature->param_start;
-      DynAstPointer *error = pointer_info(a, p[3]);
-      valid = p[0] == DYN_TYPE_RAWPTR && p[1] == DYN_TYPE_USIZE &&
-              p[2] == DYN_TYPE_USIZE && error && !error->is_const && dyn_type_is_enum(error->pointee) && span_is(a->enums[error->pointee - DYN_TYPE_ENUM_BASE].name, s, "AllocError");
-    }
-    if ((!dyn_type_is_pointer(context) && context != DYN_TYPE_RAWPTR) || !valid ||
-        a->expressions[a->expressions[id].right].kind != DYN_EXPR_FUNCTION) {
-      error_span(a->expressions[id].span, s, errors,
-        "#allocator requires a context pointer and known &function: fn(rawptr, usize, usize, *AllocError) rawptr");
-      return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
-    return a->expressions[id].type = DYN_TYPE_ALLOCATOR;
-  }
-  if (a->expressions[id].kind == DYN_EXPR_ALLOC) {
-    DynType element = (DynType)a->expressions[id].integer;
-    unsigned flags = a->expressions[id].op;
-    DynType allocator = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_ALLOCATOR);
-    bool slice = (flags & DYN_ALLOC_SLICE) != 0;
-    bool valid = allocator == DYN_TYPE_ALLOCATOR && element != DYN_TYPE_ERROR &&
-                 element != DYN_TYPE_VOID && !dyn_type_is_function(element) &&
-                 sema_type_layout(sema, a, element, false) != 0;
-    if (slice) {
-      if (a->expressions[id].right == DYN_NO_EXPR) valid = false;
-      else {
-        DynExprId count = a->expressions[id].right;
-        DynType found = check_expr(sema, a, count, s, errors, DYN_TYPE_USIZE);
-        if (found != DYN_TYPE_USIZE || (a->expressions[count].kind == DYN_EXPR_UNARY && a->expressions[count].op == DYN_OP_NEG)) valid = false;
-      }
-    } else if (a->expressions[id].right != DYN_NO_EXPR) valid = false;
-    if (!valid) {
-      error_span(a->expressions[id].span, s, errors,
-        "allocation requires a sized element type, Allocator, and (for slices only) usize count");
-      return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
-    DynType value = slice ? sema_intern_slice(a, element, false) : sema_intern_pointer(a, element, false);
-    if (value == DYN_TYPE_ERROR) return a->expressions[id].type = value;
-    if (flags & DYN_ALLOC_TRY) {
-      DynType key = sema_intern_pointer(a, value, false);
-      value = key == DYN_TYPE_ERROR ? key : DYN_TYPE_ALLOC_RESULT_BASE + key - DYN_TYPE_POINTER_BASE;
-    }
-    return a->expressions[id].type = value;
   }
   if (a->expressions[id].kind == DYN_EXPR_SIZE || a->expressions[id].kind == DYN_EXPR_ALIGN) {
     DynType operand =
@@ -1851,19 +1972,6 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       base = p ? p->pointee : DYN_TYPE_ERROR;
       a->expressions[id].boolean = true;
     }
-    if (dyn_type_is_alloc_result(base)) {
-      DynSpan name = a->expressions[id].span;
-      const char *names[] = {"value", "error", "ok"};
-      for (uint32_t field = 0; field < 3; ++field) {
-        size_t n = strlen(names[field]);
-        if (name.end_byte - name.start_byte == n && !memcmp(s->text + name.start_byte, names[field], n)) {
-          a->expressions[id].integer = field;
-          return a->expressions[id].type = field == 0 ? a->pointers[base - DYN_TYPE_ALLOC_RESULT_BASE].pointee : field == 1 ? allocator_error_type(a, s) : DYN_TYPE_BOOL;
-        }
-      }
-      error_span(name, s, errors, "allocation result has value, error, and ok fields");
-      return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
     if (!dyn_type_is_struct(base)) {
       if (base != DYN_TYPE_ERROR)
         error_span(a->expressions[id].span, s, errors,
@@ -1945,6 +2053,11 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     if (operand->kind == DYN_EXPR_NAME) {
       uint32_t fn = sema_find_function(sema, a, operand->span, s);
       if (fn != UINT32_MAX) {
+        if (a->functions[fn].is_generic) {
+          error_span(a->expressions[id].span, s, errors,
+                     "a generic function can only be called, not used as a value");
+          return a->expressions[id].type = DYN_TYPE_ERROR;
+        }
         if (a->functions[fn].variadic && !a->functions[fn].foreign) {
           error_span(a->expressions[id].span, s, errors,
                      "native variadic function pointers are not supported");
@@ -2526,7 +2639,6 @@ static bool returns_local_borrow(Sema *sema, DynAstProgram *a, DynExprId id) {
     return false;
   if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS)
     return function_storage(sema, a, e->left);
-  if (e->kind == DYN_EXPR_ALLOCATOR) return returns_local_borrow(sema, a, e->left);
   if (e->kind == DYN_EXPR_SLICE) {
     DynType base = underlying_type(a, a->expressions[e->left].type);
     return (dyn_type_is_array(base) && function_storage(sema, a, e->left)) ||
@@ -3138,6 +3250,43 @@ failed:
   free(stack); free(state); free(order);
   return NULL;
 }
+/* Name the instance and the calls that required it, innermost first. */
+static void instance_trace(DynAstProgram *a, const DynSource *s, uint32_t instance) {
+  for (unsigned line = 0; instance != UINT32_MAX; ++line) {
+    DynAstInstance in = a->instances[instance];
+    DynAstGeneric g = a->generics[in.generic];
+    if (line == 4) {
+      note_span(in.call, s, "(further instantiations omitted)");
+      return;
+    }
+    char message[512];
+    size_t at = 0;
+    DynSpan name = a->functions[g.function].name;
+    if (name.end_byte - name.start_byte > 22 && !memcmp(s->text + name.start_byte, "dyn_m", 5) &&
+        s->text[name.start_byte + 21] == '_')
+      name.start_byte += 22;
+    at += (size_t)snprintf(message, sizeof(message), "in instance %.*s(",
+                           (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+    for (uint32_t k = 0; k < g.type_param_count && at < sizeof(message); ++k) {
+      char type[128];
+      dyn_type_format(a, in.args[k], s, type, sizeof(type));
+      at += (size_t)snprintf(message + at, sizeof(message) - at, "%s%s", k ? ", " : "", type);
+    }
+    if (at < sizeof(message))
+      snprintf(message + at, sizeof(message) - at, ") required here");
+    note_span(in.call, s, message);
+    /* The caller is the function whose body contains the call. */
+    instance = UINT32_MAX;
+    for (size_t f = 0; f < a->function_count; ++f) {
+      DynAstFn *fn = &a->functions[f];
+      if (fn->is_instance && fn->span.start_byte <= in.call.start_byte &&
+          in.call.end_byte <= fn->span.end_byte && a->instances[fn->instance].depth + 1 == in.depth) {
+        instance = fn->instance;
+        break;
+      }
+    }
+  }
+}
 static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                          unsigned *errors) {
   /* Reserve common conversion growth up front as an optimization. Reflection
@@ -3267,6 +3416,11 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       }
       continue;
     }
+    unsigned errors_before = *errors;
+    if (fn->body_pending) {
+      dyn_ast_lower_instance(a, s, f, errors);
+      fn = &a->functions[f];
+    }
     sema->current_function = f;
     sema->current_return_type = fn->return_type;
     fn->local_start = (uint32_t)a->local_count;
@@ -3304,6 +3458,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     }
     bool terminated =
         sema_block(sema, a, fn->body_start, fn->body_count, s, errors, false);
+    fn = &a->functions[f];
     fn->local_count = (uint32_t)a->local_count - fn->local_start;
     life_check_function(sema,a,s,errors,fn);
     if (fn->return_type != DYN_TYPE_VOID && !terminated)
@@ -3313,6 +3468,8 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       a->locals[i].active = false;
     free(sema->locals.buckets); free(sema->locals.next);
     sema->locals = (SemaNames){0}; sema->indexed_locals = 0;
+    if (fn->is_instance && *errors != errors_before)
+      instance_trace(a, s, fn->instance);
   }
   sema->current_function = UINT32_MAX;
   return *errors == 0;

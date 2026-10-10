@@ -84,11 +84,12 @@ typedef struct {
   size_t length;
 } DynIrString;
 typedef struct {
-  char *name, *link_name;
+  /* debug_name is set for instances only: "min(u32)" for debuggers. */
+  char *name, *link_name, *debug_name;
   DynType return_type;
   uint32_t param_start, param_count, body_start, body_count, local_start,
       local_count, variadic_local_id, source_line, source_offset;
-  bool is_main, foreign, variadic, is_public;
+  bool is_main, foreign, variadic, is_public, generic, instance;
   uint64_t module_owner;
   DynType variadic_type;
 } DynIrFunction;
