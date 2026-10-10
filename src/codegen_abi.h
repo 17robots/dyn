@@ -93,11 +93,12 @@ static bool abi_hfa(Gen *g, DynType t, DynType *element, unsigned *count, unsign
 static AbiValue abi_value(Gen *g, DynType t, bool result) {
   AbiValue v = {.source = t, .count = 1};
   v.parts[0] = t == DYN_TYPE_VOID ? LLVMVoidTypeInContext(g->context) : llvm_type(g, t);
-  /* Two-word descriptors never cross the C ABI (sema rejects them), so Dyn
-     passes them as two scalars. Debug FastISel cannot select aggregate
-     arguments; machine code is unchanged on 64-bit targets. */
-  if (!result && !g->wasm && (dyn_type_is_slice(t) || t == DYN_TYPE_STRING ||
-                              t == DYN_TYPE_ANY || t == DYN_TYPE_ALLOCATOR)) {
+  /* Two-word descriptors never cross the C ABI (sema rejects them), so debug
+     builds pass them as two scalars: FastISel cannot select aggregate
+     arguments. Release keeps the aggregate, which optimizes better. */
+  if (!result && !g->wasm && !g->release &&
+      (dyn_type_is_slice(t) || t == DYN_TYPE_STRING ||
+       t == DYN_TYPE_ANY || t == DYN_TYPE_ALLOCATOR)) {
     LLVMTypeRef descriptor = v.parts[0];
     v.mode = ABI_COERCE;
     v.count = 2;

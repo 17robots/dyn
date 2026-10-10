@@ -693,8 +693,8 @@ static void *rewrite_worker(void *raw) {
   }
 }
 static void rewrite_parallel(RewriteJobs *jobs, const DynSources *sources) {
-  size_t workers = 1;
 #ifndef _WIN32
+  size_t workers = 1;
   /* Budgeted and cached editor analysis share mutable context state. */
   const DynContext *context = sources->count ? &sources->items[0].context : NULL;
   long online = sysconf(_SC_NPROCESSORS_ONLN);
