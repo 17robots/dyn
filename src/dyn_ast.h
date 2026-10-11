@@ -81,7 +81,10 @@ typedef enum {
   DYN_EXPR_BITCAST,
   DYN_EXPR_SYSCALL,
   /* A type passed as a call argument; type holds the type. */
-  DYN_EXPR_TYPE
+  DYN_EXPR_TYPE,
+  /* #offsetof: integer holds the struct type, item_start/item_count the
+     field name's byte span. Sema folds it to an integer. */
+  DYN_EXPR_OFFSET
 } DynExprKind;
 static inline bool dyn_type_is_param(DynType t) {
   return t >= DYN_TYPE_PARAM_BASE && t < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS;
@@ -134,6 +137,7 @@ typedef struct {
   DynSpan name;
   DynType type;
   DynExprId default_expression;
+  uint64_t offset;
 } DynAstField;
 typedef struct {
   DynSpan span, name;
