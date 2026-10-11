@@ -747,10 +747,17 @@ typedef struct {
   bool valid, overflow;
   uint64_t value;
 } ConstantUInt;
-static ConstantInt constant_int(DynAstProgram *a, DynExprId id) {
+/* follow > 0 also folds through conversions and constant names, up to that
+   many steps; only #assert uses it. */
+static ConstantInt constant_int_at(DynAstProgram *a, DynExprId id, unsigned follow) {
   if (id == DYN_NO_EXPR)
     return (ConstantInt){0};
   DynAstExpr *e = &a->expressions[id];
+  if (follow && e->kind == DYN_EXPR_CONVERT)
+    return constant_int_at(a, e->left, follow - 1);
+  if (follow && e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count &&
+      a->globals[e->integer].is_const)
+    return constant_int_at(a, a->globals[e->integer].initializer, follow - 1);
   if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR) {
     if (e->integer > INT64_MAX)
       return (ConstantInt){.overflow = true};
@@ -765,7 +772,7 @@ static ConstantInt constant_int(DynAstProgram *a, DynExprId id) {
                                         ? INT64_MIN
                                         : -(int64_t)magnitude};
     }
-    ConstantInt x = constant_int(a, e->left);
+    ConstantInt x = constant_int_at(a, e->left, follow);
     if (!x.valid)
       return x;
     if (e->op == DYN_OP_NEG) {
@@ -780,7 +787,7 @@ static ConstantInt constant_int(DynAstProgram *a, DynExprId id) {
   }
   if (e->kind != DYN_EXPR_BINARY)
     return (ConstantInt){0};
-  ConstantInt l = constant_int(a, e->left), r = constant_int(a, e->right);
+  ConstantInt l = constant_int_at(a, e->left, follow), r = constant_int_at(a, e->right, follow);
   if (!l.valid || !r.valid)
     return (ConstantInt){.overflow = l.overflow || r.overflow};
   int64_t v = 0;
@@ -837,14 +844,24 @@ static ConstantInt constant_int(DynAstProgram *a, DynExprId id) {
   }
   return (ConstantInt){.valid = !overflow, .overflow = overflow, .value = v};
 }
-static ConstantUInt constant_uint(DynAstProgram *a, DynExprId id) {
+static ConstantInt constant_int(DynAstProgram *a, DynExprId id) {
+  return constant_int_at(a, id, 0);
+}
+/* follow > 0 also folds through conversions and constant names, up to that
+   many steps; only #assert uses it. */
+static ConstantUInt constant_uint_at(DynAstProgram *a, DynExprId id, unsigned follow) {
   if (id == DYN_NO_EXPR)
     return (ConstantUInt){0};
   DynAstExpr *e = &a->expressions[id];
+  if (follow && e->kind == DYN_EXPR_CONVERT)
+    return constant_uint_at(a, e->left, follow - 1);
+  if (follow && e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count &&
+      a->globals[e->integer].is_const)
+    return constant_uint_at(a, a->globals[e->integer].initializer, follow - 1);
   if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR)
     return (ConstantUInt){.valid = true, .value = e->integer};
   if (e->kind == DYN_EXPR_UNARY) {
-    ConstantUInt x = constant_uint(a, e->left);
+    ConstantUInt x = constant_uint_at(a, e->left, follow);
     if (!x.valid)
       return x;
     if (e->op == DYN_OP_BIT_NOT)
@@ -860,7 +877,7 @@ static ConstantUInt constant_uint(DynAstProgram *a, DynExprId id) {
   }
   if (e->kind != DYN_EXPR_BINARY)
     return (ConstantUInt){0};
-  ConstantUInt l = constant_uint(a, e->left), r = constant_uint(a, e->right);
+  ConstantUInt l = constant_uint_at(a, e->left, follow), r = constant_uint_at(a, e->right, follow);
   if (!l.valid || !r.valid)
     return (ConstantUInt){.overflow = l.overflow || r.overflow};
   uint64_t v = 0;
@@ -901,6 +918,9 @@ static ConstantUInt constant_uint(DynAstProgram *a, DynExprId id) {
     return (ConstantUInt){0};
   }
   return (ConstantUInt){.valid = !overflow, .overflow = overflow, .value = v};
+}
+static ConstantUInt constant_uint(DynAstProgram *a, DynExprId id) {
+  return constant_uint_at(a, id, 0);
 }
 static bool constant_fits_type(Sema *sema, int64_t v, DynType t) {
   unsigned b = bits(sema, t);
@@ -3287,6 +3307,70 @@ static void instance_trace(DynAstProgram *a, const DynSource *s, uint32_t instan
     }
   }
 }
+/* Folds an #assert operand. Sides of a comparison may be integer literals,
+   #sizeof/#alignof, constant names and arithmetic over them. */
+static bool assert_signed(DynType t) {
+  return (t >= DYN_TYPE_I8 && t <= DYN_TYPE_I64) || t == DYN_TYPE_ISIZE;
+}
+static DynExprId assert_operand(DynAstProgram *a, DynExprId id) {
+  for (unsigned depth = 0; depth < 64 && id != DYN_NO_EXPR; ++depth) {
+    DynAstExpr *e = &a->expressions[id];
+    if (e->kind == DYN_EXPR_CONVERT)
+      id = e->left;
+    else if (e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count &&
+             a->globals[e->integer].is_const)
+      id = a->globals[e->integer].initializer;
+    else
+      return id;
+  }
+  return DYN_NO_EXPR;
+}
+static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth) {
+  id = assert_operand(a, id);
+  if (id == DYN_NO_EXPR || depth > 64)
+    return -1;
+  DynAstExpr *e = &a->expressions[id];
+  if (e->kind == DYN_EXPR_BOOL)
+    return e->boolean;
+  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NOT) {
+    int x = assert_value(a, e->left, depth + 1);
+    return x < 0 ? -1 : !x;
+  }
+  if (e->kind != DYN_EXPR_BINARY)
+    return -1;
+  if (e->op == DYN_OP_LOGICAL_AND || e->op == DYN_OP_LOGICAL_OR) {
+    int l = assert_value(a, e->left, depth + 1), r = assert_value(a, e->right, depth + 1);
+    if (l < 0 || r < 0)
+      return -1;
+    return e->op == DYN_OP_LOGICAL_AND ? l && r : l || r;
+  }
+  if (e->op < DYN_OP_EQ || e->op > DYN_OP_GE)
+    return -1;
+  DynExprId left = assert_operand(a, e->left), right = assert_operand(a, e->right);
+  if (left == DYN_NO_EXPR || right == DYN_NO_EXPR)
+    return -1;
+  int order;
+  if (assert_signed(a->expressions[e->left].type) ||
+      assert_signed(a->expressions[e->right].type)) {
+    ConstantInt l = constant_int_at(a, left, 64), r = constant_int_at(a, right, 64);
+    if (!l.valid || !r.valid)
+      return -1;
+    order = (l.value > r.value) - (l.value < r.value);
+  } else {
+    ConstantUInt l = constant_uint_at(a, left, 64), r = constant_uint_at(a, right, 64);
+    if (!l.valid || !r.valid)
+      return -1;
+    order = (l.value > r.value) - (l.value < r.value);
+  }
+  switch (e->op) {
+  case DYN_OP_EQ: return order == 0;
+  case DYN_OP_NE: return order != 0;
+  case DYN_OP_LT: return order < 0;
+  case DYN_OP_LE: return order <= 0;
+  case DYN_OP_GT: return order > 0;
+  default: return order >= 0;
+  }
+}
 static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                          unsigned *errors) {
   /* Reserve common conversion growth up front as an optimization. Reflection
@@ -3369,6 +3453,26 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       error_span(a->fields[i].name, s, errors,
                  "struct field default must be compile-time expression");
   free(constant_globals);
+  for (size_t i = 0; i < a->assert_count; ++i) {
+    DynAstAssert *as = &a->asserts[i];
+    DynType type = check_expr(sema, a, as->condition, s, errors, DYN_TYPE_BOOL);
+    if (type == DYN_TYPE_ERROR)
+      continue;
+    if (type != DYN_TYPE_BOOL) {
+      error_span(as->span, s, errors, "#assert condition must be bool");
+      continue;
+    }
+    int value = assert_value(a, as->condition, 0);
+    if (value < 0) {
+      error_span(as->span, s, errors, "#assert condition must be a compile-time constant");
+    } else if (!value) {
+      char message[512];
+      snprintf(message, sizeof(message), "#assert failed%s%.*s",
+               as->message.end_byte ? ": " : "",
+               (int)(as->message.end_byte - as->message.start_byte), s->text + as->message.start_byte);
+      error_span(as->span, s, errors, message);
+    }
+  }
   for (uint32_t f = 0; f < a->function_count && dyn_work_step(&s->context, 1); ++f) {
     DynAstFn *fn = &a->functions[f];
     if (fn->return_type == DYN_TYPE_ANY)
