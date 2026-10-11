@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "dyn_load.h"
 #include "dyn.h"
 #include <dirent.h>
 #include <errno.h>
@@ -147,6 +148,8 @@ static int hash_module(const DynSources *sources, size_t first, size_t count,
     hash = hash_bytes(hash, sources->items[i].path,
                       strlen(sources->items[i].path));
     hash = hash_bytes(hash, sources->items[i].text, sources->items[i].length);
+    hash = dyn_load_hash(hash, sources->items[i].path, sources->items[i].text,
+                         sources->items[i].length);
   }
   *value = hash;
   return 0;
@@ -608,6 +611,7 @@ static uint64_t module_key(const DynSources *sources, size_t first,
     hash = hash_bytes(hash, source->path, strlen(source->path));
     hash = hash_bytes(hash, &source->length, sizeof(source->length));
     hash = hash_bytes(hash, source->text, source->length);
+    hash = dyn_load_hash(hash, source->path, source->text, source->length);
   }
   return hash ? hash : 1;
 }
