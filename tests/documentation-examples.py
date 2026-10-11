@@ -17,7 +17,7 @@ documents += [path for path in (ROOT.parent / 'docs/idiomatic-dyn.md',
 programs = [(path, source) for path in documents
             for source in re.findall(r'^```dyn\n(.*?)^```', path.read_text(), re.M | re.S)
             if re.search(r'\bfn main\s*\(', source)]
-assert sum(path == ROOT / 'docs/memory-patterns.md' for path, _ in programs) == 4
+assert sum(path == ROOT / 'docs/memory-patterns.md' for path, _ in programs) == 5
 with tempfile.TemporaryDirectory(prefix='dyn-doc-examples-') as temporary:
     for index, (document, source) in enumerate(programs):
         project = Path(temporary) / str(index)

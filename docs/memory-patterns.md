@@ -102,6 +102,36 @@ fn main() {
 }
 ```
 
+## Formatting into arenas and frames
+
+`strings.format(arena, template, ...)` writes exactly the formatted bytes into
+an arena, using the `io.print` template language. `strings.List` collects views
+in arena-allocated nodes; `list_join` produces one allocation at the end. For
+per-frame work, `mem.frames_create` makes two arenas: `frame_advance` swaps them
+and resets the new current one, so last frame's data stays readable through
+`frame_previous` for one more frame.
+
+```dyn
+use "std/mem"
+use "std/strings"
+
+fn main() {
+  created := mem.frames_create(mem.KiB)
+  if !created.ok { #panic("frames") }
+  frames := &created.frames
+  defer { _ = mem.frames_release(frames) }
+  for frame in 0..3 {
+    mem.frame_advance(frames)
+    arena := mem.frame_current(frames)
+    parts: strings.List
+    if !strings.list_push_format(arena, &parts, "frame {}", frame) { #panic("push") }
+    if !strings.list_push(arena, &parts, "ok") { #panic("push") }
+    line := strings.list_join(arena, &parts, ": ")
+    if !line.ok || #len(line.value) == 0 { #panic("join") }
+  }
+}
+```
+
 ## Explicit growth and retention
 
 `growing_create_bounded` limits requested backing bytes, including headers and

@@ -1,5 +1,6 @@
 use "std/mem" memory
 use "std/bytes" byte_ops
+use "std/io" io
 
 // UTF-8 strings are immutable byte slices. Operations work on bytes unless named otherwise.
 
@@ -721,4 +722,102 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
     p += 1
   }
   return p == #len(pattern)
+}
+
+fn count_write(data: rawptr, source: []const u8) io.Result {
+  total := #cast(*usize) data
+  total.* += #len(source)
+  return io.Result{ transferred: #len(source), status: io.Status.Complete }
+}
+
+// Formats into arena using the io.print template language: {} inserts a value,
+// {{ and }} write literal braces.
+// Allocation: exactly the formatted length from the fixed arena.
+// Failure: InvalidInput for a bad template or argument count, Capacity when the
+// arena is full; the arena is unchanged.
+pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: []const any) Result {
+  size: usize = 0
+  counted := io.print_arguments(io.Writer{ data: &size, write: &count_write }, template, arguments)
+  if counted.status == io.Status.Error {
+    return Result{ error: ErrorKind.InvalidInput }
+  }
+  if size == 0 {
+    return Result{ value: arena.data[..0], ok: true }
+  }
+  allocation := memory.arena_push_uninit(arena, size, 1)
+  if !allocation.ok {
+    return Result{ error: ErrorKind.Capacity, required: size }
+  }
+  buffer := io.buffer_writer(allocation.memory[..size])
+  _ = io.print_arguments(io.buffer_writer_adapter(&buffer), template, arguments)
+  return Result{ value: allocation.memory[..size], required: size, ok: true }
+}
+
+pub fn format(arena: *memory.Arena, template: []const u8, arguments: ...any) Result {
+  return format_arguments(arena, template, arguments)
+}
+
+// Singly linked list of string views whose nodes live in an arena. Pushing
+// never copies the bytes; use list_push_format or clone for owned text.
+pub struct ListNode {
+  next: *ListNode,
+  value: []const u8,
+}
+pub struct List {
+  first: *ListNode,
+  last: *ListNode,
+  count: usize,
+  total: usize,
+}
+
+// Allocation: one node from the fixed arena.
+// Failure: returns false and leaves the list unchanged when the arena is full.
+pub fn list_push(arena: *memory.Arena, list: *List, value: []const u8) bool {
+  allocation := memory.arena_push(arena, #sizeof(ListNode), #alignof(ListNode))
+  if !allocation.ok {
+    return false
+  }
+  node := #cast(*ListNode) allocation.memory
+  node.value = value
+  if list.last == nil {
+    list.first = node
+  } else {
+    list.last.next = node
+  }
+  list.last = node
+  list.count += 1
+  list.total += #len(value)
+  return true
+}
+
+// Formats into arena, then pushes the result.
+pub fn list_push_format(arena: *memory.Arena, list: *List, template: []const u8, arguments: ...any) bool {
+  formatted := format_arguments(arena, template, arguments)
+  return formatted.ok && list_push(arena, list, formatted.value)
+}
+
+// Joins every node into one arena allocation.
+pub fn list_join(arena: *memory.Arena, list: *const List, separator: []const u8) Result {
+  size := list.total
+  if list.count > 1 {
+    size += (list.count - 1) * #len(separator)
+  }
+  if size == 0 {
+    return Result{ value: arena.data[..0], ok: true }
+  }
+  allocation := memory.arena_push_uninit(arena, size, 1)
+  if !allocation.ok {
+    return Result{ error: ErrorKind.Capacity, required: size }
+  }
+  output := allocation.memory[..size]
+  at: usize = 0
+  node := list.first
+  for node != nil {
+    if node != list.first {
+      at += memory.copy(output[at..], separator)
+    }
+    at += memory.copy(output[at..], node.value)
+    node = node.next
+  }
+  return Result{ value: output, required: size, ok: true }
 }
