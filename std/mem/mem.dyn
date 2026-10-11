@@ -329,6 +329,54 @@ pub fn scratch_end(scratch: *Scratch) {
   scratch.active = false
 }
 
+// Two arenas swapped by frame_advance. Data pushed during frame N stays
+// readable during frame N + 1 through frame_previous, then is reset.
+pub struct Frames {
+  arenas: [2]Arena,
+  index: usize,
+}
+pub struct FramesResult { frames: Frames, error: ErrorKind, code: isize, ok: bool }
+
+// Ownership: success returns two owning arenas of capacity bytes each; keep the
+// result in place and pass &result.frames.
+// Failure: releases any arena already created and returns an error.
+pub fn frames_create(capacity: usize) FramesResult {
+  first := arena_create(capacity)
+  if !first.ok {
+    return FramesResult{ error: first.error, code: first.code }
+  }
+  second := arena_create(capacity)
+  if !second.ok {
+    _ = arena_release(&first.arena)
+    return FramesResult{ error: second.error, code: second.code }
+  }
+  return FramesResult{ frames: Frames{ arenas: [first.arena, second.arena] }, ok: true }
+}
+
+pub fn frame_current(frames: *Frames) *Arena {
+  return &frames.arenas[frames.index]
+}
+
+pub fn frame_previous(frames: *Frames) *Arena {
+  return &frames.arenas[frames.index ^ 1]
+}
+
+// Invalidation: resets the arena that held the frame before the previous one.
+pub fn frame_advance(frames: *Frames) {
+  frames.index ^= 1
+  arena_reset(&frames.arenas[frames.index])
+}
+
+pub fn frames_release(frames: *Frames) Status {
+  for i in 0..2 {
+    status := arena_release(&frames.arenas[i])
+    if !status.ok {
+      return status
+    }
+  }
+  return Status{ ok: true }
+}
+
 struct FreeListNode { next: *FreeListNode }
 
 pub struct FreeList {
