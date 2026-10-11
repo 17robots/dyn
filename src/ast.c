@@ -1077,6 +1077,12 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       }
     } else
       e.left = lower_expr(operand, s, a, errors);
+  } else if (!strcmp(k, "offset")) {
+    TSNode field = dyn_syntax_child(node, 1);
+    e.kind = DYN_EXPR_OFFSET;
+    e.integer = parse_type(dyn_syntax_child(node, 0), s, a);
+    e.item_start = ts_node_start_byte(field);
+    e.item_count = ts_node_end_byte(field);
   } else if (!strcmp(k, "cast")) {
     e.kind = s->text[e.span.start_byte + 1] == 'b' ? DYN_EXPR_BITCAST
                                                    : DYN_EXPR_CAST;
@@ -1984,7 +1990,7 @@ static bool add_struct_fields(const DynSource *s, DynAstProgram *a,
         }
         DynExprId def = ts_node_is_null(init) ? DYN_NO_EXPR
                                               : lower_expr(init, s, a, errors);
-        a->fields[a->field_count++] = (DynAstField){name, type, def};
+        a->fields[a->field_count++] = (DynAstField){name, type, def, 0};
         ++st->field_count;
       }
     }
@@ -2096,6 +2102,7 @@ static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
       max_align = align;
     if (size > limit - (align - 1)) goto oversized_struct;
     size = (size + align - 1) / align * align;
+    f->offset = size;
     if (field_size > limit - size) goto oversized_struct;
     size += field_size;
   }

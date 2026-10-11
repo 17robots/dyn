@@ -1872,6 +1872,24 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].integer = value;
     return a->expressions[id].type = DYN_TYPE_USIZE;
   }
+  if (a->expressions[id].kind == DYN_EXPR_OFFSET) {
+    DynAstExpr *e = &a->expressions[id];
+    DynType target = (DynType)e->integer;
+    if (!dyn_type_is_struct(target) || target - DYN_TYPE_STRUCT_BASE >= a->struct_count) {
+      error_span(e->span, s, errors, "#offsetof requires a struct type");
+      return e->type = DYN_TYPE_ERROR;
+    }
+    uint32_t sid = target - DYN_TYPE_STRUCT_BASE;
+    uint32_t field = sema_find_field(a, sid, (DynSpan){e->item_start, e->item_count}, s);
+    if (field == UINT32_MAX) {
+      error_span(e->span, s, errors, "#offsetof names an unknown field");
+      return e->type = DYN_TYPE_ERROR;
+    }
+    e->kind = DYN_EXPR_INT;
+    e->integer = a->fields[a->structs[sid].field_start + field].offset;
+    e->item_start = e->item_count = 0;
+    return e->type = DYN_TYPE_USIZE;
+  }
   if (a->expressions[id].kind == DYN_EXPR_CAST) {
     DynType source = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER),
             target = (DynType)a->expressions[id].integer;
