@@ -33,7 +33,7 @@ static void analysis_declarations(TSNode root, const DynSource *s,
         !strcmp(k, "enum") || !strcmp(k, "variable") ||
         !strcmp(k, "const_variable") || !strcmp(k, "type_alias") ||
         !strcmp(k, "extern_fn") || !strcmp(k, "extern_variable") ||
-        !strcmp(k, "target_directive") || !strcmp(k, "link_directive"))
+        !strcmp(k, "static_assert") || !strcmp(k, "target_directive") || !strcmp(k, "link_directive"))
       continue;
     if (strcmp(k, "fn")) {
       char message[160];

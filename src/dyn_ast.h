@@ -171,6 +171,11 @@ typedef struct {
   bool is_const, foreign, is_public;
   uint64_t module_owner;
 } DynAstGlobal;
+/* Top-level #assert: condition must be a compile-time bool. */
+typedef struct {
+  DynSpan span, message;
+  DynExprId condition;
+} DynAstAssert;
 typedef struct {
   DynType pointee;
   bool is_const;
@@ -307,6 +312,8 @@ typedef struct {
   size_t function_count, function_capacity;
   DynAstGlobal *globals;
   size_t global_count, global_capacity;
+  DynAstAssert *asserts;
+  size_t assert_count, assert_capacity;
   uint32_t *global_init_order;
   size_t global_init_count;
   DynAstPointer *pointers;
