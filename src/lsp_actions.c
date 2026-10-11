@@ -357,6 +357,15 @@ void lsp_code_actions(long id, LspDocument *documents, size_t count,
                              fields, sizeof(fields), &insert);
   if (unused && !ts_node_is_null(use) && uri) {
     TSPoint start = ts_node_start_point(use), end = ts_node_end_point(use);
+    /* One import of several: also remove the comma joining it to a neighbor. */
+    if (!strcmp(ts_node_type(use), "import")) {
+      TSNode previous = ts_node_prev_named_sibling(use),
+             next = ts_node_next_named_sibling(use);
+      if (!ts_node_is_null(previous))
+        start = ts_node_end_point(previous);
+      else if (!ts_node_is_null(next))
+        end = ts_node_start_point(next);
+    }
     lsp_bounded_printf(
         response, sizeof(response),
         "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[{\"title\":\"Remove "

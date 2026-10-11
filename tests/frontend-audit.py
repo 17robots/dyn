@@ -82,6 +82,15 @@ fn main() {}
     check(project(root, 'struct-capacity-boundary', declarations + 'fn main() {}\n'))
     check(project(root, 'struct-capacity-overflow', declarations +
                   'struct Overflow {}\nfn main() {}\n'), 'struct type capacity exceeded')
+    run(project(root, 'use-list', '''use "std/mem" memory, "std/strings",
+  "std/math" m
+fn main() {
+  if memory.KiB != 1024 || !strings.equal("a", "a") || m.min(2, 3) != 2 { #panic("imports") }
+}
+'''))
+    check(project(root, 'use-list-duplicate', '''use "std/mem" a, "std/strings" a
+fn main() {}
+'''), "duplicate import alias 'a'")
     run(project(root, 'assert-pass', '''#assert(#sizeof(Header) == 12 && #alignof(Header) == 1, "packed header")
 packed struct Header { tag: u32, size: u64 }
 const COUNT: usize = 4
@@ -120,4 +129,4 @@ fn main() {}
 fn main() {}
 '''), '#assert condition must be bool')
 
-print('PASS frontend audit: declaration order, cycles, type capacity, #assert, #offsetof')
+print('PASS frontend audit: declaration order, cycles, type capacity, #assert, #offsetof, use lists')
