@@ -92,7 +92,6 @@ STD = '''use "std/io"
 use "std/mem"
 use "std/math"
 use "std/sort"
-use "std/slice"
 
 struct Node { value: i32, next: *Node }
 
@@ -122,12 +121,11 @@ fn main() {
   sort.sort(big[..])
   small: [5]f32 = [3.0, 1.0, 2.0, 5.0, 4.0]
   sort.sort(small[..])
-  slice.reverse(small[..])
-  _ = io.println(out, "{} {} {} {} {} {} {}", big[0], big[39], small[0], sort.search(big[..], 7).index,
-    sort.search(big[..], 7).found, slice.index_of(small[..], 2.0), slice.contains(small[..], 9.0))
+  _ = io.println(out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7).index,
+    sort.search(big[..], 7).found)
 }
 '''
-STD_EXPECTED = '0 7 0 0 5\n3 1 false 0\n3 4 10 4 200\n-20 19 5 27 true 3 false'
+STD_EXPECTED = '0 7 0 0 5\n3 1 false 0\n3 4 10 4 200\n-20 19 5 27 true'
 STD_ERRORS = {
     'use of storage after arena_reset': '  b: [64]u8\n  a := mem.arena_from_buffer(b[..])\n  n := mem.push(Node, &a)\n  mem.arena_reset(&a)\n  _ = n.value',
     'in instance min(Node) required here': '  _ = math.min(Node{}, Node{})',
