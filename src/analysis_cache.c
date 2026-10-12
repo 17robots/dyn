@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "dyn_load.h"
 #include "analysis_cache.h"
 #include <dirent.h>
 #include <stdlib.h>
@@ -349,6 +350,7 @@ static bool analysis_fingerprint(DynAnalysisCacheEntry *entry,
           inputs[j].content_hash
               ? inputs[j].content_hash
               : dyn_analysis_text_hash(inputs[j].text, inputs[j].length);
+      content = dyn_load_hash(content, inputs[j].path, inputs[j].text, inputs[j].length);
       hash ^= analysis_hash(h, &content, sizeof(content));
     }
   *out = hash;

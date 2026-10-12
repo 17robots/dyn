@@ -82,6 +82,33 @@ fn main() {}
     check(project(root, 'struct-capacity-boundary', declarations + 'fn main() {}\n'))
     check(project(root, 'struct-capacity-overflow', declarations +
                   'struct Overflow {}\nfn main() {}\n'), 'struct type capacity exceeded')
+    embedded = project(root, 'load', '''use "./lib" lib
+const LOCAL: []const u8 = #load("assets/data.bin")
+fn main() {
+  if #len(LOCAL) != 4 || LOCAL[1] != 0 || lib.size() != 3 { #panic("load") }
+}
+''')
+    (embedded / 'assets').mkdir()
+    (embedded / 'assets/data.bin').write_bytes(b'a\x00b\n')
+    (embedded / 'lib').mkdir()
+    (embedded / 'lib/lib.dyn').write_text('pub const DATA: []const u8 = #load("d.txt")\n'
+                                          'pub fn size() usize { return #len(DATA) }\n')
+    (embedded / 'lib/d.txt').write_text('xyz')
+    run(embedded)
+    # Cached builds must notice edits to loaded files, including in imports.
+    cached = embedded / 'cached'
+    for data, code in ((b'xyz', 0), (b'xyzw', 101)):
+        (embedded / 'lib/d.txt').write_bytes(data)
+        subprocess.run([DYN, 'build', str(embedded), '--quiet', '--output', str(cached)],
+                       check=True, timeout=60)
+        assert subprocess.run([str(cached)], capture_output=True, timeout=10).returncode == code, data
+    (embedded / 'lib/d.txt').write_text('xyz')
+    check(project(root, 'load-parent', '''const A: []const u8 = #load("../secret")
+fn main() {}
+'''), "#load path must be relative without '..'")
+    check(project(root, 'load-missing', '''const A: []const u8 = #load("missing.bin")
+fn main() {}
+'''), '#load cannot read file')
     run(project(root, 'use-list', '''use "std/mem" memory, "std/strings",
   "std/math" m
 fn main() {
@@ -129,4 +156,4 @@ fn main() {}
 fn main() {}
 '''), '#assert condition must be bool')
 
-print('PASS frontend audit: declaration order, cycles, type capacity, #assert, #offsetof, use lists')
+print('PASS frontend audit: declaration order, cycles, type capacity, #assert, #offsetof, use lists, #load')

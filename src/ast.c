@@ -1,3 +1,4 @@
+#include "dyn_load.h"
 #include "dyn_ast.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -1077,6 +1078,34 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       }
     } else
       e.left = lower_expr(operand, s, a, errors);
+  } else if (!strcmp(k, "load")) {
+    /* Failures still yield an empty string so one bad path reports once. */
+    TSNode literal = dyn_syntax_child(node, 0);
+    uint32_t begin = ts_node_start_byte(literal) + 1, end = ts_node_end_byte(literal) - 1;
+    const char *source_path = NULL;
+    unsigned line = 0, column = 0;
+    dyn_source_location(s, e.span.start_byte, &source_path, &line, &column);
+    char *path = end > begin && source_path
+                     ? dyn_load_path(source_path, s->text + begin, end - begin)
+                     : NULL;
+    size_t length = 0;
+    unsigned char *data = path ? dyn_load_read(path, &length) : NULL;
+    if (!path)
+      diagnostic(node, s, errors, "#load path must be relative without '..' or '\\'");
+    else if (!data)
+      diagnostic(node, s, errors, "#load cannot read file");
+    free(path);
+    if (!data)
+      length = 0;
+    if (!reserve_string(a) || (!data && !(data = malloc(1)))) {
+      free(data);
+      diagnostic(node, s, errors, "out of memory");
+      return DYN_NO_EXPR;
+    }
+    e.kind = DYN_EXPR_STRING;
+    e.type = DYN_TYPE_STRING;
+    e.integer = (uint32_t)a->string_count;
+    a->strings[a->string_count++] = (DynAstString){data, length};
   } else if (!strcmp(k, "offset")) {
     TSNode field = dyn_syntax_child(node, 1);
     e.kind = DYN_EXPR_OFFSET;
