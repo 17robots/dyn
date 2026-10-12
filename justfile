@@ -64,6 +64,10 @@ alias install-check := package
 release-check:
     python3 tools/release-check.py
 
+# Cold check/debug/release lines per second; fails below the regression floors.
+bench-scale: release
+    python3 tools/scale-benchmark.py --budget
+
 native-probes: release
     python3 tools/build-native-probes.py
 
