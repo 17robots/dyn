@@ -465,8 +465,8 @@ pub fn scan_line(state: *Scanner, output: *[]const u8) bool {
   return true
 }
 
-pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Overlap, Allocation }
-pub struct Result { value: []u8, error: ErrorKind, required: usize, ok: bool, allocation_error: AllocError }
+pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Overlap }
+pub struct Result { value: []u8, error: ErrorKind, required: usize, ok: bool }
 pub struct SplitResult { values: [][]const u8, error: ErrorKind, required: usize, ok: bool }
 pub struct SizeResult { value: usize, error: ErrorKind, ok: bool }
 
@@ -492,28 +492,13 @@ pub fn clone(arena: *memory.Arena, source: []const u8) Result {
   if #len(source) == 0 {
     return Result{ value: arena.data[..0], ok: true }
   }
-  return clone_alloc(memory.arena_allocator(arena), source)
-}
-
-// Ownership: copies source bytes into output; no scratch or retained source borrow.
-// Invalidation: controlled by the concrete output owner.
-// Allocation: one uninitialized byte allocation (none for empty source).
-// Failure: reports the allocator category; the allocator defines failure side effects.
-// Thread safety: caller synchronizes the output owner.
-pub fn clone_alloc(output: Allocator, source: []const u8) Result {
-  allocated := #alloc_slice_uninit(u8, output, #len(source))
-  if !allocated.ok {
-    return allocation_failure(allocated.error, #len(source))
+  allocation := memory.arena_push_uninit(arena, #len(source), 1)
+  if !allocation.ok {
+    return Result{ error: ErrorKind.Capacity, required: #len(source) }
   }
-  return clone_into(allocated.value, source)
+  return clone_into(allocation.memory[..#len(source)], source)
 }
 
-fn allocation_failure(error: AllocError, required: usize) Result {
-  kind := ErrorKind.Allocation
-  if error == AllocError.Capacity { kind = ErrorKind.Capacity }
-  if error == AllocError.Overflow { kind = ErrorKind.Overflow }
-  return Result{ error: kind, allocation_error: error, required: required }
-}
 
 pub fn join_size(parts: [][]const u8, separator: []const u8) SizeResult {
   total: usize = 0
@@ -578,19 +563,6 @@ pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) Re
     memory.arena_rewind(arena, mark)
   }
   return result
-}
-// Ownership: copies parts and separator into output; returned bytes borrow its owner.
-// Invalidation: controlled by the concrete output owner.
-// Allocation: one allocation after size validation, with no hidden scratch.
-// Failure: size/allocation errors write nothing. Overlap errors consume the allocation
-// but write nothing; Allocator cannot rewind. Use join(arena, ...) for rollback.
-// Thread safety: caller synchronized. Input bytes and descriptors must remain stable.
-pub fn join_alloc(output: Allocator, parts: [][]const u8, separator: []const u8) Result {
-  size := join_size(parts, separator)
-  if !size.ok { return Result{ error: size.error } }
-  allocated := #alloc_slice_uninit(u8, output, size.value)
-  if !allocated.ok { return allocation_failure(allocated.error, size.value) }
-  return join_into(allocated.value, parts, separator)
 }
 
 pub fn split_count(source: []const u8, separator: []const u8) SizeResult {

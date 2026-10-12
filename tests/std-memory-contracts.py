@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Allocator consumers, reuse, and retryable cleanup using real std implementations."""
+"""Arena consumers, reuse, and retryable cleanup using real std implementations."""
 import os
 from pathlib import Path
 import subprocess
@@ -11,42 +11,32 @@ SOURCE = r'''use "std/mem"
 use "std/strings"
 use "std/encoding/ini"
 fn expect(ok: bool) { if !ok { #panic("std memory contract") } }
-fn reject(context: rawptr, size: usize, alignment: usize, error: *AllocError) rawptr {
-  _ = context _ = size _ = alignment
-  error.* = AllocError.System
-  return nil
-}
 fn main() {
   storage: [8 * mem.KiB]u8
   arena := mem.arena_from_buffer(storage[..])
-  output := mem.arena_allocator(&arena)
-  clone := strings.clone_alloc(output, "retained")
+  clone := strings.clone(&arena, "retained")
   expect(clone.ok && strings.equal(clone.value, "retained"))
   parts: [2][]const u8 = ["one", "two"]
-  joined := strings.join_alloc(output, parts[..], "/")
+  joined := strings.join(&arena, parts[..], "/")
   expect(joined.ok && strings.equal(joined.value, "one/two"))
-  bad := #allocator(nil, &reject)
-  failed := strings.clone_alloc(bad, "x")
-  expect(!failed.ok && failed.error == strings.ErrorKind.Allocation && failed.allocation_error == AllocError.System)
-  expect(strings.clone_alloc(bad, "").ok)
-  failed_join := strings.join_alloc(bad, parts[..], "/")
-  expect(!failed_join.ok && failed_join.allocation_error == AllocError.System)
-  parsed := ini.parse(output, "[window]\nwidth=80\nheight=25\n")
+  parsed := ini.parse(&arena, "[window]\nwidth=80\nheight=25\n")
   expect(parsed.ok && #len(parsed.entries) == 3)
   expect(strings.equal(parsed.entries[2].section, "window") && strings.equal(parsed.entries[2].value, "25"))
   before := mem.arena_used(&arena)
-  syntax := ini.parse(output, "x=1\ninvalid\n")
+  syntax := ini.parse(&arena, "x=1\ninvalid\n")
   expect(!syntax.ok && syntax.error == ini.ErrorKind.Syntax && syntax.error_line == 2)
   expect(mem.arena_used(&arena) == before)
-  oom := ini.parse(bad, "x=1")
-  expect(!oom.ok && oom.error == ini.ErrorKind.Allocation && oom.allocation_error == AllocError.System)
-  expect(ini.parse(bad, "# empty").ok)
   tiny_storage: [1]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])
-  expect(!ini.parse(mem.arena_allocator(&tiny), "x=1").ok)
+  full := ini.parse(&tiny, "x=1")
+  expect(!full.ok && full.error == ini.ErrorKind.Capacity)
+  expect(ini.parse(&tiny, "# empty").ok)
+  failed := strings.clone(&tiny, "xy")
+  expect(!failed.ok && failed.error == strings.ErrorKind.Capacity && failed.required == 2)
+  expect(strings.clone(&tiny, "").ok)
   expect(mem.arena_used(&tiny) == 0)
 
-  // Arena join retains rollback; generic join explicitly cannot rewind.
+  // Join rolls the arena back when it fails.
   overlap_bytes: [16]u8
   overlap_arena := mem.arena_from_buffer(overlap_bytes[..])
   overlap_bytes[0] = 'a'
@@ -54,9 +44,6 @@ fn main() {
   overlap := strings.join(&overlap_arena, overlap_parts[..], "")
   expect(!overlap.ok && overlap.error == strings.ErrorKind.Overlap)
   expect(mem.arena_used(&overlap_arena) == 0 && overlap_bytes[0] == 'a')
-  consumed := strings.join_alloc(mem.arena_allocator(&overlap_arena), overlap_parts[..], "")
-  expect(!consumed.ok && consumed.error == strings.ErrorKind.Overlap)
-  expect(mem.arena_used(&overlap_arena) == 1 && overlap_bytes[0] == 'a')
 
   mark := mem.arena_used(&arena)
   invalid := mem.pool_init(&arena, 4, 8, 3)
@@ -77,14 +64,14 @@ fn main() {
   expect(mem.pool_available(&pool.value) == 2)
 
   growing := mem.growing_create_bounded(128, mem.KiB)
-  handle := mem.growing_allocator(&growing)
-  initial := #alloc_slice_or_panic(u8, handle, 32)
+  initial := mem.growing_push_or_panic(&growing, 32, 1)[..32]
+  expect(initial[0] == 0 && initial[31] == 0)
   for i in 0..#len(initial) { initial[i] = 165 }
   mem.growing_reset(&growing)
-  reused := #alloc_slice_uninit_or_panic(u8, handle, 32)
-  expect(reused[0] == 165 && reused[31] == 165)
+  reused := mem.growing_push_uninit(&growing, 32, 1)
+  expect(reused.ok && reused.memory[..32][0] == 165 && reused.memory[..32][31] == 165)
   mem.growing_reset(&growing)
-  cleared := #alloc_slice_or_panic(u8, handle, 32)
+  cleared := mem.growing_push_or_panic(&growing, 32, 1)[..32]
   expect(cleared[0] == 0 && cleared[31] == 0)
   expect(mem.growing_snapshot(&growing).blocks == 1)
   expect(mem.growing_release(&growing).ok)
@@ -148,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-std-memory-') as temporary:
         if name == 'cleanup':
             memory = project / 'memory'
             memory.mkdir()
-            for filename in ['mem.dyn', 'sizes.dyn', 'allocator.dyn']:
+            for filename in ['mem.dyn', 'sizes.dyn']:
                 (memory / filename).write_text((ROOT / 'std/mem' / filename).read_text())
             platform = (ROOT / 'std/mem/linux.dyn').read_text().replace(
                 'fn mapping_release(bytes: []u8) isize {',
@@ -177,4 +164,4 @@ fn mapping_release(bytes: []u8) isize {
             subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output),
                             *(['--release'] if release else [])], cwd=ROOT, check=True, timeout=120)
             subprocess.run([str(output)], check=True, timeout=10)
-print('PASS std allocator consumers, pool reuse, growing zeroing, release/trim/spawn/join failure retries (debug/release)')
+print('PASS std arena consumers, pool reuse, growing zeroing, release/trim/spawn/join failure retries (debug/release)')

@@ -9,7 +9,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-documents = [ROOT / 'docs/memory-patterns.md', ROOT / 'docs/allocator-design.md', ROOT / 'docs/memory-api-direction.md', ROOT / 'README.md']
+documents = [ROOT / 'docs/memory-patterns.md', ROOT / 'docs/memory-api-direction.md', ROOT / 'README.md']
 # Workspace guides are checked when present; standalone compiler checkouts keep
 # their own executable guide and README coverage.
 documents += [path for path in (ROOT.parent / 'docs/idiomatic-dyn.md',

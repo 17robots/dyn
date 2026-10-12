@@ -408,6 +408,5 @@ Performance changes must preserve empty inputs, overlap rules, arithmetic bounds
 allocation-failure behavior and ABI contracts. `tests/performance-contracts.py`
 checks these alongside independent search oracles and compiler option/cache tests.
 
-The source checkout includes experimental [primitive allocators and typed
-allocation builtins](docs/allocator-design.md). These require the matching local
-grammar checkout until its dependency revision is published and pinned.
+Allocation goes through arenas: `mem.push(T, &arena)`, `mem.push_array(T, &arena, n)`
+and `mem.push_bytes_uninit(&arena, n)`. See [memory patterns](docs/memory-patterns.md).

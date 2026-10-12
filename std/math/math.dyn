@@ -1,49 +1,48 @@
 pub struct U64Result { value: u64, ok: bool }
 
-pub fn min_i64(a, b: i64) i64 {
+// Operands must support <. The body is checked for each type it is called with.
+pub fn min(a, b: $T) T {
+  if b < a {
+    return b
+  }
+  return a
+}
+pub fn max(a, b: $T) T {
   if a < b {
-    return a
+    return b
   }
-  return b
+  return a
 }
-pub fn max_i64(a, b: i64) i64 {
-  if a > b {
-    return a
-  }
-  return b
-}
-pub fn min_u64(a, b: u64) u64 {
-  if a < b {
-    return a
-  }
-  return b
-}
-pub fn max_u64(a, b: u64) u64 {
-  if a > b {
-    return a
-  }
-  return b
-}
-pub fn clamp_i64(value, minimum, maximum: i64) i64 {
-  if minimum > maximum {
+pub fn clamp(value, minimum, maximum: $T) T {
+  if maximum < minimum {
     #panic("clamp minimum exceeds maximum")
   }
   if value < minimum {
     return minimum
   }
-  if value > maximum {
+  if maximum < value {
     return maximum
   }
   return value
 }
-pub fn abs_i64(value: i64) i64 {
-  if value == -9223372036854775807 - 1 {
-    #panic("absolute value overflow")
-  }
+// Signed integers and floats. Panics on the most negative integer.
+pub fn abs(value: $T) T {
   if value < 0 {
-    return -value
+    negated := -value
+    if negated < 0 {
+      #panic("absolute value overflow")
+    }
+    return negated
   }
   return value
+}
+// Converts value to T and panics if it does not fit; the checked form of #cast.
+pub fn narrow($T: type, value: $U) T {
+  result := #cast(T) value
+  if #cast(U) result != value || (result < 0) != (value < 0) {
+    #panic("narrow: value does not fit")
+  }
+  return result
 }
 pub fn gcd_u64(a_value, b_value: u64) u64 {
   a := a_value
