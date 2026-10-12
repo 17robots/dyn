@@ -56,6 +56,7 @@ extern "C" int dyn_write_thin_bitcode(LLVMModuleRef module, const char *path) {
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -107,9 +108,11 @@ public:
 private:
   llvm::Function &function;
   const llvm::DataLayout &layout;
-  llvm::DenseMap<llvm::Type *, std::vector<Leaf>> shapes;
+  // Node-based maps: shape() and leaves() hand out pointers into these that
+  // must survive later insertions. DenseMap moves entries when it grows.
+  std::unordered_map<llvm::Type *, std::vector<Leaf>> shapes;
   llvm::DenseMap<llvm::Type *, bool> scalable;
-  llvm::DenseMap<llvm::Value *, std::vector<llvm::Value *>> values;
+  std::unordered_map<llvm::Value *, std::vector<llvm::Value *>> values;
   std::vector<llvm::Instruction *> dead;
 
   const std::vector<Leaf> *shape(llvm::Type *type) {
