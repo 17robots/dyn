@@ -252,11 +252,10 @@ overwritten right away. Std functions that produced output through an
 - `math`: `min`, `max`, `clamp`, `abs`, `narrow(T, x)` (panics if the value
   does not fit; the checked counterpart of `#cast`). These replace the
   `_i64`/`_u64` versions.
-- `mem`: `push`, `push_array`, `push_bytes_uninit`, `zero`, `swap`, `copy`,
+- `mem`: `push`, `push_array`, `push_bytes_uninit`, `zero`, `clear`, `swap`, `copy`,
   `move`, `fill`, `equal`.
 - `sort`: `sort` (insertion sort below 16 elements, otherwise a heap sort;
   elements must support `<`) and `search`, replacing the `i64`/`u64` versions.
-- `slice`: `reverse`, `index_of`, `contains`.
 
 The `[]u8`-only versions of `copy`, `fill`, `zero` and `equal` are replaced,
 not kept alongside. `[]u8` calls keep working because `T` is inferred as `u8`.
@@ -330,7 +329,7 @@ Phase 1 std and builtins (done):
 - `Allocator`, `#allocator`, `#AllocResult`, `AllocError` and the eight
   `#alloc*` builtins are removed; allocation is arena-only. Migration:
   `docs/migrations/0.1.0-preview.19.md`.
-- `std/mem`, `std/math`, `std/sort` and the new `std/slice` use type
+- `std/mem`, `std/math`, and `std/sort` use type
   parameters as listed above.
 - The lifetime checker treats `mem.push*` like the arena pushes, so use
   after `arena_reset` is still an error.
