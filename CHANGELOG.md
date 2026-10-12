@@ -12,6 +12,14 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.20
+
+Compatible with preview 19.
+
+- Fixes an intermittent crash in release builds: the optimizer pass that
+  splits structs into separate values read freed memory, which LLVM builds
+  with assertions reported as a `cast<PHINode>` failure.
+
 ## 0.1.0-preview.19
 
 Breaking. See [`docs/migrations/0.1.0-preview.19.md`](docs/migrations/0.1.0-preview.19.md).
