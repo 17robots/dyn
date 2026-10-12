@@ -14,6 +14,7 @@ typedef struct {
   bool boolean;
   uint32_t item_start, item_count;
   DynSpan span;
+  bool wrap;
 } DynIrExpr;
 
 typedef struct {
@@ -37,7 +38,8 @@ typedef struct {
 typedef struct {
   char *name;
   DynType payload_type;
-  uint32_t tag;
+  /* Two's complement for signed tag types. */
+  uint64_t tag;
 } DynIrVariant;
 typedef struct {
   char *name;
