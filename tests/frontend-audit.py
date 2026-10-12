@@ -98,8 +98,26 @@ fn main() {}
 fn answer() i32 { return 1 }
 fn main() {}
 '''), '#assert condition must be a compile-time constant')
+    run(project(root, 'offsetof', '''struct Header { tag: u8, size: u64, flags: u16 }
+packed struct Packed { tag: u8, size: u64 }
+#assert(#offsetof(Header, size) == 8 && #offsetof(Header, flags) == 16)
+#assert(#offsetof(Packed, size) == 1)
+fn main() {
+  h: Header
+  if #cast(usize) &h.flags - #cast(usize) &h != #offsetof(Header, flags) { #panic("offset") }
+  p: Packed
+  if #cast(usize) &p.size - #cast(usize) &p != #offsetof(Packed, size) { #panic("packed") }
+}
+'''))
+    check(project(root, 'offsetof-field', '''struct A { x: u8 }
+#assert(#offsetof(A, y) == 0)
+fn main() {}
+'''), '#offsetof names an unknown field')
+    check(project(root, 'offsetof-type', '''#assert(#offsetof(u8, x) == 0)
+fn main() {}
+'''), '#offsetof requires a struct type')
     check(project(root, 'assert-type', '''#assert(#sizeof(u8))
 fn main() {}
 '''), '#assert condition must be bool')
 
-print('PASS frontend audit: declaration order, cycles, type capacity, #assert')
+print('PASS frontend audit: declaration order, cycles, type capacity, #assert, #offsetof')
