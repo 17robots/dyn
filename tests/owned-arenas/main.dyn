@@ -2,10 +2,8 @@ use "std/mem"
 fn expect(condition: bool, message: []const u8) { if !condition { #panic(message) } }
 
 fn main() {
-  expect(!mem.arena_create(0).ok, "zero owned capacity")
   created := mem.arena_create(128)
-  expect(created.ok, "owned allocation")
-  arena := &created.arena
+  arena := &created
   allocation := mem.arena_push(arena, 128, 1)
   expect(allocation.ok, "owned capacity")
   allocated_bytes := allocation.memory[..128]
@@ -16,7 +14,7 @@ fn main() {
   mem.arena_reset(arena)
   repeated := mem.arena_push(arena, 128, 1)
   expect(repeated.memory == allocation.memory && repeated.memory.* == 0, "owned reset reuse and zero")
-  expect(mem.arena_release(arena).ok && mem.arena_release(arena).ok, "owned release is repeatable")
+  mem.arena_release(arena) mem.arena_release(arena)
   expect(mem.arena_capacity(arena) == 0, "release clears borrowed buffer")
 
   chain := mem.growing_create(32)
@@ -33,9 +31,9 @@ fn main() {
   reused_a := mem.growing_push_or_panic(&chain, 24, 8)
   reused_b := mem.growing_push_or_panic(&chain, 24, 8)
   expect(reused_a == a && reused_b == b && reused_a.* == 0 && reused_b.* == 0, "reuse all retained blocks")
-  expect(mem.growing_release(&chain).ok && mem.growing_release(&chain).ok, "release all blocks")
+  mem.growing_release(&chain) mem.growing_release(&chain)
   expect(chain.first == nil && chain.current == nil, "release clears chain")
   expect(mem.growing_push(&chain, 0, 1).ok, "empty allocation")
   expect(mem.growing_push(&chain, 1, 1).ok, "reuse released handle")
-  expect(mem.growing_release(&chain).ok, "release reused handle")
+  mem.growing_release(&chain)
 }

@@ -29,17 +29,13 @@ pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: ra
 
 // Own a mapped stack until join. This avoids allocating an unused caller stack
 // for portable code; Windows/macOS use OS-managed stacks for the same API.
-// Failure: spawn failure may retain stack backing when release also fails.
-// Call join to retry cleanup before discarding Thread; another spawn is rejected.
 // Ownership: keep Thread and context unmoved until successful join.
 pub fn spawn_with_size(thread: *Thread, size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
   if size < 256 || entry == nil { return -22 }
   if sync.load_u32(&thread.tid) != 0 || #len(thread.stack_owner.data) != 0 { return -16 }
-  allocated := mem.arena_create(size)
-  if !allocated.ok { return allocated.code }
-  thread.stack_owner = mem.arena_take(&allocated.arena)
+  thread.stack_owner = mem.arena_create(size)
   value := spawn_raw(&thread.stack_owner.data[0], size, entry, context, &thread.tid)
-  if value < 0 { _ = mem.arena_release(&thread.stack_owner) }
+  if value < 0 { mem.arena_release(&thread.stack_owner) }
   return value
 }
 
@@ -50,8 +46,8 @@ pub fn join(thread: *Thread) isize {
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
-      released := mem.arena_release(&thread.stack_owner)
-      return released.error
+      mem.arena_release(&thread.stack_owner)
+      return 0
     }
     result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)
     if result < 0 && result != -4 && result != -11 {

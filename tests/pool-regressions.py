@@ -13,7 +13,7 @@ CASES = {
   storage: [40]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..320])
-  pool := memory.pool_init_or_panic(&arena, 17, 16, 8)
+  pool := memory.pool_init(&arena, 17, 16, 8)
   if memory.arena_used(&arena) != 275 || arena.owns_memory { #panic("POOL STORAGE ACCOUNTING") }
   if #len(pool.list.occupied) != 3 { #panic("BITMAP CAPACITY") }
   slots: [17]rawptr = []
@@ -32,7 +32,7 @@ CASES = {
     if slot != slots[16 - i] { #panic("REUSE ORDER") }
   }
   for i in 0..17 { memory.pool_release(&pool, slots[i]) }
-  _ = memory.arena_release(&arena)
+  memory.arena_release(&arena)
   storage[0] = 42
   if storage[0] != 42 { #panic("BORROWED STORAGE OWNERSHIP") }
 
@@ -52,7 +52,7 @@ CASES = {
   storage: [8]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..64])
-  pool := memory.pool_init_or_panic(&arena, 8, 8, 8)
+  pool := memory.pool_init(&arena, 8, 8, 8)
   if memory.arena_used(&arena) != 64 || arena.allocation_failures != 0 { #panic("EXACT ARENA ACCOUNTING") }
   if #len(pool.list.occupied) != 0 { #panic("EXACT ARENA METADATA") }
   slots: [8]rawptr = []
@@ -67,7 +67,7 @@ CASES = {
   storage: [8]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..64])
-  list := memory.free_list_from_arena_or_panic(&arena, 8, 8, 8)
+  list := memory.free_list_from_arena(&arena, 8, 8, 8)
   first := memory.free_list_alloc_or_panic(&list)
   second := memory.free_list_alloc_or_panic(&list)
   memory.free_list_free(&list, first)
@@ -79,7 +79,7 @@ CASES = {
   storage: [16]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..128])
-  pool := memory.pool_init_or_panic(&arena, 3, 16, 8)
+  pool := memory.pool_init(&arena, 3, 16, 8)
   first := memory.pool_acquire_or_panic(&pool)
   second := memory.pool_acquire_or_panic(&pool)
   memory.pool_release(&pool, first)
@@ -91,7 +91,7 @@ CASES = {
   storage: [16]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..128])
-  list := memory.free_list_from_arena_or_panic(&arena, 3, 16, 8)
+  list := memory.free_list_from_arena(&arena, 3, 16, 8)
   memory.free_list_free(&list, #cast(rawptr) &list.backing[0])
 }
 ''', 'free-list double free'),
@@ -99,8 +99,8 @@ CASES = {
   storage: [32]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..256])
-  first := memory.pool_init_or_panic(&arena, 3, 16, 8)
-  second := memory.pool_init_or_panic(&arena, 3, 16, 8)
+  first := memory.pool_init(&arena, 3, 16, 8)
+  second := memory.pool_init(&arena, 3, 16, 8)
   slot := memory.pool_acquire_or_panic(&second)
   memory.pool_release(&first, slot)
 }
@@ -109,7 +109,7 @@ CASES = {
   storage: [16]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..128])
-  pool := memory.pool_init_or_panic(&arena, 3, 16, 8)
+  pool := memory.pool_init(&arena, 3, 16, 8)
   address := #cast(*u8) memory.pool_acquire_or_panic(&pool)
   slot := address[..16]
   memory.pool_release(&pool, #cast(rawptr) &slot[1])
@@ -128,7 +128,7 @@ CASES = {
   storage: [4]u64 = []
   bytes := #cast(*u8) &storage[0]
   arena := memory.arena_from_buffer(bytes[..32])
-  pool := memory.pool_init_or_panic(&arena, 1, 16, 8)
+  pool := memory.pool_init(&arena, 1, 16, 8)
   _ = memory.pool_acquire_or_panic(&pool)
   _ = memory.pool_acquire_or_panic(&pool)
 }

@@ -87,9 +87,8 @@ fn main() {
 AUDIT = r'''
 pub fn audit_callbacks() {
   allocation := mem.arena_create(#sizeof(State))
-  if !allocation.ok { #panic("audit allocation") }
-  defer { _ = mem.arena_release(&allocation.arena) }
-  pushed := mem.arena_push(&allocation.arena,#sizeof(State),#alignof(State))
+  defer { mem.arena_release(&allocation) }
+  pushed := mem.arena_push(&allocation,#sizeof(State),#alignof(State))
   if !pushed.ok { #panic("audit backing") }
   state := #cast(*State) pushed.memory
   slot := &state.slots[0]

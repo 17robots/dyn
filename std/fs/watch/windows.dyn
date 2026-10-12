@@ -56,12 +56,10 @@ fn arm(slot: *Slot) isize {
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 { return OpenResult{ watcher: Watcher{}, error: -28 } }
-  created := mem.arena_create(#sizeof(Native))
-  if !created.ok { return OpenResult{ watcher: Watcher{}, error: 0 - created.code } }
-  mem.zero(created.arena.data)
-  native := #cast(*Native) &created.arena.data[0]
+  owner := mem.arena_create(#sizeof(Native))
+  native := mem.push(Native, &owner)
   native.next_id = 1
-  return OpenResult{ watcher: Watcher{ native: native, owner: created.arena, storage: storage }, ok: true }
+  return OpenResult{ watcher: Watcher{ native: native, owner: owner, storage: storage }, ok: true }
 }
 fn retire(slot: *Slot) isize {
   if slot.pending {
@@ -142,8 +140,7 @@ pub fn close(state: *Watcher) Result {
     code := retire(&state.native.slots[i])
     if code != 0 { return Result{ error: code } }
   }
-  released := mem.arena_release(&state.owner)
-  if !released.ok { return Result{ error: 0 - released.error } }
+  mem.arena_release(&state.owner)
   state.native = nil
   state.storage = state.storage[..0]
   return Result{ ok: true }

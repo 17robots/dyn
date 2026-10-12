@@ -12,9 +12,8 @@ use "std/strings" strings
 
 fn main() {
   created := mem.frames_create(4096)
-  if !created.ok { #panic("create") }
-  frames := &created.frames
-  defer { _ = mem.frames_release(frames) }
+  frames := &created
+  defer { mem.frames_release(frames) }
 
   arena := mem.frame_current(frames)
   greeting := strings.format(arena, "{} + {} = {}", 2, 3, 5)

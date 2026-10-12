@@ -64,7 +64,7 @@ fn main() {
     index := #cast(usize) (seed % 128)
     text := fmt.u64_decimal(key[..], #cast(u64) index)
     if (seed / 128) % 2 == 0 {
-      if maps.put(&map, &owned.arena, text, index) != maps.ErrorKind.None { #panic("put") }
+      if maps.put(&map, &owned, text, index) != maps.ErrorKind.None { #panic("put") }
       live[index] = true
     } else {
       if maps.remove(&map, text) != live[index] { #panic("remove") }
@@ -98,7 +98,7 @@ fn main() {
   if slots.insert(&state, byte[..]).index != 3 { #panic("second reuse") }
   state = slots.init(data[..], generations[..], occupied[..], 1)
   if slots.get(&state, fresh).ok || slots.insert(&state, byte[..]).index != 0 { #panic("reinit") }
-  _ = mem.arena_release(&owned.arena)
+  mem.arena_release(&owned)
 }
 ''',
 }

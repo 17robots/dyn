@@ -59,8 +59,8 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
 }
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
   owned := memory.arena_create(4000000)
-  encoded := fs.read_all(&owned.arena, encoded_path, 1000000)
-  expected := fs.read_all(&owned.arena, expected_path, 1000000)
+  encoded := fs.read_all(&owned, encoded_path, 1000000)
+  expected := fs.read_all(&owned, expected_path, 1000000)
   require(encoded.ok && expected.ok, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
@@ -71,7 +71,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     if chunk != 1 { check(encoded.data, expected.data, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
-    destination := memory.arena_push_or_panic(&owned.arena, #len(expected.data), 1)[..#len(expected.data)]
+    destination := memory.arena_push_or_panic(&owned, #len(expected.data), 1)[..#len(expected.data)]
     result := deflate.inflate(destination, encoded.data)
     require(result.ok && result.written == #len(expected.data), "one-shot inflate")
     for i in 0..#len(destination) { require(destination[i] == expected.data[i], "one-shot output") }
@@ -90,7 +90,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     result = deflate.resume(&capacity, tiny[..], encoded.data)
     require(!result.ok && capacity.error == -28, "linear output capacity")
   }
-  _ = memory.arena_release(&owned.arena)
+  memory.arena_release(&owned)
 }
 fn main() {
 CALLS

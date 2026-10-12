@@ -1,11 +1,15 @@
 #target(kernel: linux)
 fn mapping_allocate(size: usize) Mapping {
-  address := #syscall(9, 0, size, 3, 34, -1, 0)
+  address := #syscall(9, 0, size, 3, 16418, -1, 0)
   if address < 0 {
     return Mapping{ error: address }
   }
-  return Mapping{ bytes: (#cast(*u8) address)[..size], ok: true }
+  return Mapping{ bytes: (#cast(*u8) address)[..size], committed: size, ok: true }
 }
 fn mapping_release(bytes: []u8) isize {
   return #syscall(11, &bytes[0], #len(bytes))
+}
+// The whole mapping is committed at creation.
+fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
+  return true
 }

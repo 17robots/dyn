@@ -50,12 +50,12 @@ fn main() {
   require(!invalid.ok && invalid.error == regex.CompileError.Syntax, "maximum overflow")
   program := regex.compile("(a)*", code[..], tokens[..], scratch[..])
   owned := memory.arena_create(100000)
-  input := memory.arena_push_or_panic(&owned.arena, 100000, 1)[..100000]
+  input := memory.arena_push_or_panic(&owned, 100000, 1)[..100000]
   for i in 0..#len(input) { input[i] = 'a' }
   result := regex.find_compiled(program, input, captures[..])
   require(result.ok && result.end == 100000, "long repetition")
   require(captures[0].ok && captures[0].start == 99999 && captures[0].end == 100000, "last capture")
-  _ = memory.arena_release(&owned.arena)
+  memory.arena_release(&owned)
   program = regex.compile("(a*)a", code[..], tokens[..], scratch[..])
   result = regex.find_compiled(program, "aaaa", captures[..])
   require(result.ok && result.end == 4 && captures[0].end == 3, "greedy backtracking capture")

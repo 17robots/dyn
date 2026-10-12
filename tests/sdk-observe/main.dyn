@@ -12,7 +12,7 @@ fn main() {
   mem.arena_reset(&arena)
   snapshot:=mem.arena_snapshot(&arena)
   expect(snapshot.used==0 && snapshot.peak_used==16 && snapshot.allocation_failures==1)
-  expect(mem.arena_release(&arena).ok)
+  mem.arena_release(&arena)
   observed:=observe.recorded(&log)
   expect(#len(observed)==4 && observed[0].kind==observe.Kind.Allocated)
   expect(observed[0].resource==42 && observed[0].value==16)

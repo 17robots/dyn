@@ -116,10 +116,9 @@ use "std/mem"
 use "std/strings"
 
 fn main() {
-  created := mem.frames_create(mem.KiB)
-  if !created.ok { #panic("frames") }
-  frames := &created.frames
-  defer { _ = mem.frames_release(frames) }
+  storage := mem.frames_create(mem.MiB)
+  frames := &storage
+  defer mem.frames_release(frames)
   for frame in 0..3 {
     mem.frame_advance(frames)
     arena := mem.frame_current(frames)
@@ -148,9 +147,9 @@ fn main() {
   _ = mem.growing_push_or_panic(&workspace, 8 * mem.KiB, 8)
   mem.growing_reset(&workspace)
   if mem.growing_snapshot(&workspace).backing_bytes == 0 { #panic("reset should retain") }
-  if !mem.growing_trim(&workspace, 0).ok { #panic("trim failed") }
+  mem.growing_trim(&workspace, 0)
   if mem.growing_snapshot(&workspace).backing_bytes != 0 { #panic("trim did not release") }
-  if !mem.growing_release(&workspace).ok { #panic("release failed") }
+  mem.growing_release(&workspace)
 }
 ```
 
