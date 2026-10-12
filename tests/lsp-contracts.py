@@ -339,6 +339,29 @@ class Contracts(unittest.TestCase):
                 updated = text[:offset(edit['range']['start'])] + edit['newText'] + text[offset(edit['range']['end']):]
                 self.assertEqual(updated.strip(), 'fn main() {}')
 
+    def test_remove_unused_import_from_list(self):
+        self.file('helper/helper.dyn', 'pub fn answer() i32 { return 42 }\n')
+        self.file('other/other.dyn', 'pub fn value() i32 { return 1 }\n')
+        body = '\nfn main() { _ = o.value() }\n'
+        cases = [('use "./helper" h, "./other" o', 'h', 'use "./other" o'),
+                 ('use "./other" o, "./helper" h', 'h', 'use "./other" o')]
+        for use, alias, expected in cases:
+            with self.subTest(use=use):
+                text = use + body
+                path = self.file('main.dyn', text)
+                column = use.index('"./helper"') + 1
+                params = {'textDocument': {'uri': path.as_uri()},
+                          'range': {'start': {'line': 0, 'character': column}, 'end': {'line': 0, 'character': column}},
+                          'context': {'diagnostics': [{'code': 'unused-use', 'message': 'unused import'}]}}
+                responses, stderr = run_lsp([opened(path, text), request('textDocument/codeAction', params, 2)])
+                self.assertEqual(stderr, '')
+                actions = next(r['result'] for r in responses if r.get('id') == 2)
+                action = next((a for a in actions if a['title'] == 'Remove unused use'), None)
+                self.assertIsNotNone(action, actions)
+                edit = action['edit']['changes'][path.as_uri()][0]
+                start, end = edit['range']['start']['character'], edit['range']['end']['character']
+                self.assertEqual(use[:start] + edit['newText'] + use[end:], expected)
+
     def test_import_comments_keep_path_and_alias(self):
         self.file('helper/helper.dyn', 'pub fn answer() i32 { return 42 }\n')
         for use in ['use /* path */ "./helper" h', 'use "./helper" /* alias */ h', 'use "./helper"\nh']:

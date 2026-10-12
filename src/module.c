@@ -743,74 +743,79 @@ static int visit(Resolver *r, const char *directory,
     }
     TSNode root = ts_tree_root_node(t);
     for (uint32_t i = 0; i < ts_node_named_child_count(root) && !result; ++i) {
-      TSNode d = dyn_syntax_declaration_node(ts_node_named_child(root, i));
-      if (strcmp(ts_node_type(d), "use"))
+      TSNode u = dyn_syntax_declaration_node(ts_node_named_child(root, i));
+      if (strcmp(ts_node_type(u), "use"))
         continue;
-      char *path = dyn_syntax_copy_text(
-          ts_node_child_by_field_name(d, "path", 4), s, true);
-      if (!path) {
-        dyn_syntax_diagnostic(d, s, "error", "incomplete import path");
-        result = 1;
-        break;
-      }
-      char *target = resolve(r, directory, path);
-      TSNode an = ts_node_child_by_field_name(d, "alias", 5);
-      char *alias = ts_node_is_null(an) ? dyn_path_basename(path)
-                                        : dyn_syntax_copy_text(an, s, false);
-      if (!alias) {
+      for (uint32_t k = 0; k < ts_node_named_child_count(u) && !result; ++k) {
+        TSNode d = ts_node_named_child(u, k);
+        if (strcmp(ts_node_type(d), "import"))
+          continue;
+        char *path = dyn_syntax_copy_text(
+            ts_node_child_by_field_name(d, "path", 4), s, true);
+        if (!path) {
+          dyn_syntax_diagnostic(d, s, "error", "incomplete import path");
+          result = 1;
+          break;
+        }
+        char *target = resolve(r, directory, path);
+        TSNode an = ts_node_child_by_field_name(d, "alias", 5);
+        char *alias = ts_node_is_null(an) ? dyn_path_basename(path)
+                                          : dyn_syntax_copy_text(an, s, false);
+        if (!alias) {
+          free(path);
+          free(target);
+          result = 2;
+          break;
+        }
+        if (has(aliases, alias_count, alias)) {
+          char message[512];
+          snprintf(message, sizeof(message), "duplicate import alias '%s'",
+                   alias);
+          dyn_syntax_diagnostic(d, s, "error", message);
+          result = 1;
+        } else if (!target || !dyn_path_is_directory(target)) {
+          char message[512];
+          snprintf(message, sizeof(message),
+                   "import '%s' does not resolve inside project root", path);
+          dyn_syntax_diagnostic(d, s, "error", message);
+          result = 1;
+        } else if (has(r->stack, r->stack_count, target)) {
+          char message[2048] = "cyclic import: ";
+          size_t at = strlen(message), first = 0;
+          while (first < r->stack_count && strcmp(r->stack[first], target))
+            ++first;
+          for (size_t j = first; j <= r->stack_count && at < sizeof(message) - 1;
+               ++j) {
+            const char *item = j == r->stack_count ? target : r->stack[j];
+            const char *base = strrchr(item, '/');
+            int written = snprintf(message + at, sizeof(message) - at, "%s%s",
+                                   base ? base + 1 : item,
+                                   j == r->stack_count ? "" : " -> ");
+            if (written < 0 || (size_t)written >= sizeof(message) - at)
+              break;
+            at += (size_t)written;
+          }
+          dyn_syntax_diagnostic(d, s, "error", message);
+          result = 1;
+        } else {
+          if (has(targets, target_count, target)) {
+            char message[512];
+            snprintf(
+                message, sizeof(message),
+                "module '%s' is imported more than once under different aliases",
+                path);
+            dyn_syntax_diagnostic(d, s, "warning", message);
+          }
+          if (!push(&aliases, &alias_count, alias) ||
+              !push(&targets, &target_count, target))
+            result = 2;
+          else
+            result = visit(r, target, NULL);
+        }
         free(path);
         free(target);
-        result = 2;
-        break;
+        free(alias);
       }
-      if (has(aliases, alias_count, alias)) {
-        char message[512];
-        snprintf(message, sizeof(message), "duplicate import alias '%s'",
-                 alias);
-        dyn_syntax_diagnostic(d, s, "error", message);
-        result = 1;
-      } else if (!target || !dyn_path_is_directory(target)) {
-        char message[512];
-        snprintf(message, sizeof(message),
-                 "import '%s' does not resolve inside project root", path);
-        dyn_syntax_diagnostic(d, s, "error", message);
-        result = 1;
-      } else if (has(r->stack, r->stack_count, target)) {
-        char message[2048] = "cyclic import: ";
-        size_t at = strlen(message), first = 0;
-        while (first < r->stack_count && strcmp(r->stack[first], target))
-          ++first;
-        for (size_t j = first; j <= r->stack_count && at < sizeof(message) - 1;
-             ++j) {
-          const char *item = j == r->stack_count ? target : r->stack[j];
-          const char *base = strrchr(item, '/');
-          int written = snprintf(message + at, sizeof(message) - at, "%s%s",
-                                 base ? base + 1 : item,
-                                 j == r->stack_count ? "" : " -> ");
-          if (written < 0 || (size_t)written >= sizeof(message) - at)
-            break;
-          at += (size_t)written;
-        }
-        dyn_syntax_diagnostic(d, s, "error", message);
-        result = 1;
-      } else {
-        if (has(targets, target_count, target)) {
-          char message[512];
-          snprintf(
-              message, sizeof(message),
-              "module '%s' is imported more than once under different aliases",
-              path);
-          dyn_syntax_diagnostic(d, s, "warning", message);
-        }
-        if (!push(&aliases, &alias_count, alias) ||
-            !push(&targets, &target_count, target))
-          result = 2;
-        else
-          result = visit(r, target, NULL);
-      }
-      free(path);
-      free(target);
-      free(alias);
     }
     ts_tree_delete(t);
   }
@@ -877,23 +882,30 @@ static bool prefetch_imports(Resolver *r, const char *directory,
     TSTreeCursor cursor = ts_tree_cursor_new(root);
     bool ok = true;
     if (ts_tree_cursor_goto_first_child(&cursor)) do {
-      TSNode d = dyn_syntax_declaration_node(ts_tree_cursor_current_node(&cursor));
-      if (strcmp(ts_node_type(d), "use"))
+      TSNode u = dyn_syntax_declaration_node(ts_tree_cursor_current_node(&cursor));
+      if (strcmp(ts_node_type(u), "use"))
         continue;
-      TSNode path_node = ts_node_child_by_field_name(d, "path", 4);
-      char *path = dyn_syntax_copy_text(path_node, s, true);
-      bool oom = !path && !ts_node_is_null(path_node);
-      char *target = path ? resolve_checked(r, directory, path, &oom) : NULL;
-      free(path);
-      if (oom) { free(target); ok = false; break; }
-      if (target && dyn_path_is_directory(target) && !prefetch_seen(r, target)) {
-        Prefetched *grown = realloc(r->prefetched,
-            (r->prefetched_count + 1) * sizeof(*grown));
-        if (!grown) { free(target); ok = false; break; }
-        r->prefetched = grown;
-        r->prefetched[r->prefetched_count++] = (Prefetched){.directory = target};
-      } else
-        free(target);
+      for (uint32_t k = 0; k < ts_node_named_child_count(u) && ok; ++k) {
+        TSNode d = ts_node_named_child(u, k);
+        if (strcmp(ts_node_type(d), "import"))
+          continue;
+        TSNode path_node = ts_node_child_by_field_name(d, "path", 4);
+        char *path = dyn_syntax_copy_text(path_node, s, true);
+        bool oom = !path && !ts_node_is_null(path_node);
+        char *target = path ? resolve_checked(r, directory, path, &oom) : NULL;
+        free(path);
+        if (oom) { free(target); ok = false; break; }
+        if (target && dyn_path_is_directory(target) && !prefetch_seen(r, target)) {
+          Prefetched *grown = realloc(r->prefetched,
+              (r->prefetched_count + 1) * sizeof(*grown));
+          if (!grown) { free(target); ok = false; break; }
+          r->prefetched = grown;
+          r->prefetched[r->prefetched_count++] = (Prefetched){.directory = target};
+        } else
+          free(target);
+      }
+      if (!ok)
+        break;
     } while (ts_tree_cursor_goto_next_sibling(&cursor));
     ts_tree_cursor_delete(&cursor);
     if (!ok)

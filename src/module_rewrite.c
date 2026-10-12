@@ -778,19 +778,24 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
           result = 2;
         free(n);
       } else if (!strcmp(k, "use")) {
-        char *path = dyn_syntax_copy_text(
-            ts_node_child_by_field_name(d, "path", 4), s, true);
-        char *target =
-            path ? dyn_module_resolve_import(&s->context, root, m->dir, path)
-                 : NULL;
-        TSNode an = ts_node_child_by_field_name(d, "alias", 5);
-        char *alias = ts_node_is_null(an) ? dyn_path_basename(path ? path : "")
-                                          : dyn_syntax_copy_text(an, s, false);
-        if (!target || !alias || !add_alias(m, alias, target))
-          result = 2;
-        free(path);
-        free(target);
-        free(alias);
+        for (uint32_t q = 0; q < ts_node_named_child_count(d) && !result; ++q) {
+          TSNode im = ts_node_named_child(d, q);
+          if (strcmp(ts_node_type(im), "import"))
+            continue;
+          char *path = dyn_syntax_copy_text(
+              ts_node_child_by_field_name(im, "path", 4), s, true);
+          char *target =
+              path ? dyn_module_resolve_import(&s->context, root, m->dir, path)
+                   : NULL;
+          TSNode an = ts_node_child_by_field_name(im, "alias", 5);
+          char *alias = ts_node_is_null(an) ? dyn_path_basename(path ? path : "")
+                                            : dyn_syntax_copy_text(an, s, false);
+          if (!target || !alias || !add_alias(m, alias, target))
+            result = 2;
+          free(path);
+          free(target);
+          free(alias);
+        }
       }
     }
     ts_tree_delete(t);

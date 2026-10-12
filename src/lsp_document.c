@@ -139,39 +139,45 @@ size_t lsp_imports(const LspDocument *document, LspImport *imports,
   size_t count = 0;
   for (uint32_t i = 0; i < ts_node_named_child_count(root) && count < capacity;
        ++i) {
-    TSNode n = ts_node_named_child(root, i);
-    if (!strcmp(ts_node_type(n), "declaration"))
-      n = ts_node_named_child(n, ts_node_named_child_count(n) - 1);
-    if (strcmp(ts_node_type(n), "use"))
+    TSNode u = ts_node_named_child(root, i);
+    if (!strcmp(ts_node_type(u), "declaration"))
+      u = ts_node_named_child(u, ts_node_named_child_count(u) - 1);
+    if (strcmp(ts_node_type(u), "use"))
       continue;
-    TSNode string = ts_node_child_by_field_name(n, "path", 4),
-           alias = ts_node_child_by_field_name(n, "alias", 5);
-    uint32_t a = ts_node_start_byte(string) + 1,
-             b = ts_node_end_byte(string) - 1;
-    if (b <= a || b - a >= sizeof(imports[count].path))
-      continue;
-    memcpy(imports[count].path, document->text + a, b - a);
-    imports[count].path[b - a] = 0;
-    imports[count].node = n;
-    imports[count].alias_node = alias;
-    if (!ts_node_is_null(alias)) {
-      a = ts_node_start_byte(alias);
-      b = ts_node_end_byte(alias);
-    } else {
-      const char *base = strrchr(imports[count].path, '/');
-      const char *name = base ? base + 1 : imports[count].path;
-      b = (uint32_t)strlen(name);
-      if (b >= sizeof(imports[count].alias))
+    for (uint32_t k = 0; k < ts_node_named_child_count(u) && count < capacity; ++k) {
+      TSNode im = ts_node_named_child(u, k);
+      if (strcmp(ts_node_type(im), "import"))
         continue;
-      memcpy(imports[count].alias, name, b);
-      imports[count].alias[b] = 0;
-      ++count;
-      continue;
-    }
-    if (b - a < sizeof(imports[count].alias)) {
-      memcpy(imports[count].alias, document->text + a, b - a);
-      imports[count].alias[b - a] = 0;
-      ++count;
+      TSNode string = ts_node_child_by_field_name(im, "path", 4),
+             alias = ts_node_child_by_field_name(im, "alias", 5);
+      uint32_t a = ts_node_start_byte(string) + 1,
+               b = ts_node_end_byte(string) - 1;
+      if (b <= a || b - a >= sizeof(imports[count].path))
+        continue;
+      memcpy(imports[count].path, document->text + a, b - a);
+      imports[count].path[b - a] = 0;
+      /* A lone import owns its whole use, so removing it removes the line. */
+      imports[count].node = ts_node_named_child_count(u) == 1 ? u : im;
+      imports[count].alias_node = alias;
+      if (!ts_node_is_null(alias)) {
+        a = ts_node_start_byte(alias);
+        b = ts_node_end_byte(alias);
+      } else {
+        const char *base = strrchr(imports[count].path, '/');
+        const char *name = base ? base + 1 : imports[count].path;
+        b = (uint32_t)strlen(name);
+        if (b >= sizeof(imports[count].alias))
+          continue;
+        memcpy(imports[count].alias, name, b);
+        imports[count].alias[b] = 0;
+        ++count;
+        continue;
+      }
+      if (b - a < sizeof(imports[count].alias)) {
+        memcpy(imports[count].alias, document->text + a, b - a);
+        imports[count].alias[b - a] = 0;
+        ++count;
+      }
     }
   }
   return count;
