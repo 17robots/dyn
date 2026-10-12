@@ -10,10 +10,8 @@ compiler and SDK, not necessarily the latest published preview.
 
 ## Fixed budgets and array allocation
 
-`arena_push_array` checks multiplication, alignment, and capacity. The caller
-still specifies layout and casts the result. There are no typed allocation
-builtins or general generics. A zero-size success returns nil, so only construct a
-nonempty slice after checking both success and a nonzero element count.
+`mem.push_array(T, &arena, count)` checks the multiplication and returns zeroed
+`[]T`. Exhausting the arena panics, so the budget is the only thing to choose.
 
 ```dyn
 use "std/mem"
@@ -24,10 +22,7 @@ struct Item { value: u64 }
 fn main() {
   storage: [WorkspaceBytes]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  count: usize = 10
-  allocated := mem.arena_push_array(&arena, count, #sizeof(Item), #alignof(Item))
-  if !allocated.ok { #panic("workspace exhausted") }
-  items := (#cast(*Item) allocated.memory)[..count]
+  items := mem.push_array(Item, &arena, 10)
   items[9].value = 42
   if items[0].value != 0 || items[9].value != 42 { #panic("array contents") }
   snapshot := mem.arena_snapshot(&arena)
@@ -53,15 +48,14 @@ The copied result survives scratch reset; copying a slice descriptor would not.
 use "std/mem"
 use "std/strings"
 
-fn make_label(output: *mem.Arena, first: *mem.Arena, second: *mem.Arena) strings.Result {
+fn make_label(output: *mem.Arena, first: *mem.Arena, second: *mem.Arena) []u8 {
   temporary := mem.scratch_begin(first, second, output)
   defer mem.scratch_end(&temporary)
   text := strings.clone(temporary.arena, "retained")
-  if !text.ok { return text }
   nested := mem.scratch_begin(first, second, output)
-  _ = mem.arena_push_or_panic(nested.arena, 16, 1)
+  _ = mem.arena_push(nested.arena, 16, 1)
   mem.scratch_end(&nested)
-  return strings.clone(output, text.value)
+  return strings.clone(output, text)
 }
 
 fn main() {
@@ -70,15 +64,15 @@ fn main() {
   output := mem.arena_from_buffer(output_storage[..])
   scratch := mem.arena_from_buffer(scratch_storage[..])
   label := make_label(&output, &output, &scratch)
-  if !label.ok || mem.arena_used(&scratch) != 0 { #panic("scratch contract") }
+  if mem.arena_used(&scratch) != 0 { #panic("scratch contract") }
   mem.zero(scratch_storage[..])
-  if !strings.equal(label.value, "retained") { #panic("retained output") }
+  if !strings.equal(label, "retained") { #panic("retained output") }
 }
 ```
 
-Scratch conflicts are programming errors, not capacity errors. Both conflicting
-candidates cause `scratch_begin` to panic. Ordinary allocation exhaustion uses
-fallible allocation results. No implicit thread-local scratch storage is installed.
+Scratch conflicts are programming errors. Both conflicting candidates cause
+`scratch_begin` to panic, as does exhausting an arena. No implicit thread-local
+scratch storage is installed.
 
 ## Bounded text construction
 
@@ -123,10 +117,10 @@ fn main() {
     mem.frame_advance(frames)
     arena := mem.frame_current(frames)
     parts: strings.List
-    if !strings.list_push_format(arena, &parts, "frame {}", frame) { #panic("push") }
-    if !strings.list_push(arena, &parts, "ok") { #panic("push") }
+    strings.list_push_format(arena, &parts, "frame {}", frame)
+    strings.list_push(arena, &parts, "ok")
     line := strings.list_join(arena, &parts, ": ")
-    if !line.ok || #len(line.value) == 0 { #panic("join") }
+    if #len(line) == 0 { #panic("join") }
   }
 }
 ```
@@ -200,5 +194,6 @@ mean unspecified, not safe or allocation-free.
 `mem.push(T, &arena)` and `mem.push_array(T, &arena, count)` return zeroed `*T`
 and `[]T` with the type's size and alignment, so call sites need no casts.
 `mem.push_bytes_uninit(&arena, count)` returns uninitialized `[]u8` for buffers
-that are overwritten right away. All three panic when the arena is full; use
-`mem.arena_push` when exhaustion must be recoverable.
+that are overwritten right away. All three panic when the arena is full, like
+`mem.arena_push`. Code with a strict budget on a fixed arena can use
+`mem.arena_try_push`, the one push that reports exhaustion instead.

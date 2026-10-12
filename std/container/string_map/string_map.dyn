@@ -5,7 +5,7 @@ use "std/hash" hashing
 // Keys are copied; values are caller-defined integer IDs/indices. Arena must
 // outlive the map. Removal/growth do not reclaim storage. Do not mutate entries
 // directly or copy a live map and then mutate both copies. No internal locking.
-pub enum ErrorKind { None, Capacity, Overflow }
+pub enum ErrorKind { None, Overflow }
 pub struct Entry { key: []const u8, value: usize, hash: u64, state: u8 }
 pub struct Map { entries: []Entry, length: usize }
 pub struct Lookup { value: usize, found: bool }
@@ -64,10 +64,7 @@ pub fn put(state: *Map, arena: *memory.Arena, key: []const u8, value: usize) Err
       return ErrorKind.Overflow
     }
     allocated := memory.arena_push(arena, capacity * #sizeof(Entry), #alignof(Entry))
-    if !allocated.ok {
-      return ErrorKind.Capacity
-    }
-    entries = (#cast(*Entry) allocated.memory)[..capacity]
+    entries = (#cast(*Entry) allocated)[..capacity]
     for old in state.entries {
       if old.state == 1 {
         entries[locate(entries, old.key, old.hash)] = old
@@ -76,13 +73,9 @@ pub fn put(state: *Map, arena: *memory.Arena, key: []const u8, value: usize) Err
     index = locate(entries, key, hash)
   }
   copied := memory.arena_push_uninit(arena, #len(key), 1)
-  if !copied.ok {
-    memory.arena_rewind(arena, mark)
-    return ErrorKind.Capacity
-  }
   stored := arena.data[..0]
   if #len(key) > 0 {
-    stored = copied.memory[..#len(key)]
+    stored = copied[..#len(key)]
   }
   _ = memory.copy(stored, key)
   entries[index] = Entry{ key: stored, value: value, hash: hash, state: 1 }
@@ -166,8 +159,7 @@ pub fn reserve(state: *Map, arena: *memory.Arena, count: usize) ErrorKind {
   }
   if capacity > maximum / #sizeof(Entry) { return ErrorKind.Overflow }
   allocated := memory.arena_push(arena, capacity * #sizeof(Entry), #alignof(Entry))
-  if !allocated.ok { return ErrorKind.Capacity }
-  entries := (#cast(*Entry) allocated.memory)[..capacity]
+  entries := (#cast(*Entry) allocated)[..capacity]
   for old in state.entries {
     if old.state == 1 { entries[locate(entries, old.key, old.hash)] = old }
   }

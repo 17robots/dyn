@@ -5,15 +5,14 @@ fn main() {
   created := mem.arena_create(128)
   arena := &created
   allocation := mem.arena_push(arena, 128, 1)
-  expect(allocation.ok, "owned capacity")
-  allocated_bytes := allocation.memory[..128]
+  allocated_bytes := allocation[..128]
   expect(allocated_bytes[0] == 0 && allocated_bytes[127] == 0, "owned zeroed storage")
-  allocation.memory.* = 42
-  expect(!mem.arena_push(arena, 1, 1).ok, "fixed owned arena must not grow")
+  allocation.* = 42
+  expect(!mem.arena_try_push(arena, 1, 1).ok, "fixed owned arena must not grow")
   expect(mem.arena_used(arena) == 128, "failed fixed push preserves offset")
   mem.arena_reset(arena)
   repeated := mem.arena_push(arena, 128, 1)
-  expect(repeated.memory == allocation.memory && repeated.memory.* == 0, "owned reset reuse and zero")
+  expect(repeated == allocation && repeated.* == 0, "owned reset reuse and zero")
   mem.arena_release(arena) mem.arena_release(arena)
   expect(mem.arena_capacity(arena) == 0, "release clears borrowed buffer")
 

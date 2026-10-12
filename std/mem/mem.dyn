@@ -204,29 +204,43 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
   return Allocation{ memory: memory, size: size, ok: true }
 }
 
-// Ownership: result borrows arena backing; zero-size success has nil memory.
+// Ownership: result borrows arena backing; zero size returns nil.
 // Invalidation: applicable rewind, reset, or release.
-// Allocation: consumes fixed arena capacity and zeroes successful payload bytes.
-// Failure: offset and payload bytes are unchanged; diagnostic counters may change.
+// Allocation: consumes arena capacity and zeroes the payload bytes.
+// Failure: panics when a fixed arena is exhausted or the alignment is invalid;
+// OS-backed arenas only run out when the OS does.
 // Thread safety: caller synchronizes access to the arena.
-pub fn arena_push(arena: *Arena, size: usize, alignment: usize) Allocation {
-  return arena_try_push_impl(arena, size, alignment, true)
+pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8 {
+  return arena_must(arena_try_push_impl(arena, size, alignment, true))
 }
 
 // Ownership: result borrows arena backing; cast memory to the requested element type.
 // Invalidation: applicable rewind, reset, or release.
 // Allocation: checked count * element_size, aligned and zeroed; no heap fallback.
-// Failure: overflow/capacity/alignment failure preserves offset and existing bytes.
+// Failure: panics like arena_push, and when the size overflows.
 // Thread safety: caller synchronizes access to the arena.
-pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignment: usize) Allocation {
+pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignment: usize) *u8 {
   size := size_for(count, element_size)
-  if !size.ok { return arena_failure(arena, ErrorKind.Overflow) }
+  if !size.ok {
+    #panic("arena size overflow")
+  }
   return arena_push(arena, size.bytes, alignment)
+}
+
+// Like arena_push, without zeroing, for bytes that are overwritten right away.
+pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
+  return arena_must(arena_try_push_impl(arena, size, alignment, false))
+}
+
+// The one fallible push, for code with a strict budget on a fixed arena.
+// Failure leaves the offset and existing bytes unchanged.
+pub fn arena_try_push(arena: *Arena, size: usize, alignment: usize) Allocation {
+  return arena_try_push_impl(arena, size, alignment, true)
 }
 
 // Pushes one zeroed T. Panics when the arena is exhausted.
 pub fn push($T: type, arena: *Arena) *T {
-  return #cast(*T) arena_push_or_panic(arena, #sizeof(T), #alignof(T))
+  return #cast(*T) arena_push(arena, #sizeof(T), #alignof(T))
 }
 
 // Pushes count zeroed elements. Panics when the arena is exhausted or the size overflows.
@@ -235,11 +249,7 @@ pub fn push_array($T: type, arena: *Arena, count: usize) []T {
     empty: []T
     return empty
   }
-  allocation := arena_push_array(arena, count, #sizeof(T), #alignof(T))
-  if !allocation.ok {
-    #panic("arena exhausted or size overflow")
-  }
-  return (#cast(*T) allocation.memory)[..count]
+  return (#cast(*T) arena_push_array(arena, count, #sizeof(T), #alignof(T)))[..count]
 }
 
 // Pushes count uninitialized bytes, for buffers that are overwritten right away.
@@ -248,23 +258,10 @@ pub fn push_bytes_uninit(arena: *Arena, count: usize) []u8 {
   if count == 0 {
     return arena.data[..0]
   }
-  return arena_push_uninit_or_panic(arena, count, 1)[..count]
+  return arena_push_uninit(arena, count, 1)[..count]
 }
 
-pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation {
-  return arena_try_push_impl(arena, size, alignment, false)
-}
-
-pub fn arena_push_or_panic(arena: *Arena, size: usize, alignment: usize) *u8 {
-  allocation := arena_push(arena, size, alignment)
-  if !allocation.ok {
-    #panic("arena exhausted or alignment invalid")
-  }
-  return allocation.memory
-}
-
-pub fn arena_push_uninit_or_panic(arena: *Arena, size: usize, alignment: usize) *u8 {
-  allocation := arena_push_uninit(arena, size, alignment)
+fn arena_must(allocation: Allocation) *u8 {
   if !allocation.ok {
     #panic("arena exhausted or alignment invalid")
   }
@@ -458,12 +455,12 @@ pub fn free_list_from_arena(arena: *Arena, slot_count: usize, slot_size: usize, 
     #panic("free-list size overflow")
   }
   size := slot_count * actual
-  memory := arena_push_uninit_or_panic(arena, size, effective_alignment)
+  memory := arena_push_uninit(arena, size, effective_alignment)
   list := free_list_init(memory[..size], actual, effective_alignment)
   bitmap_size := slot_count / 8
   if slot_count % 8 != 0 { bitmap_size += 1 }
   if arena_remaining(arena) >= bitmap_size {
-    bitmap := arena_push_or_panic(arena, bitmap_size, 1)
+    bitmap := arena_push(arena, bitmap_size, 1)
     list.occupied = bitmap[..bitmap_size]
   }
   return list
@@ -741,7 +738,7 @@ fn growing_push_impl(arena: *GrowingArena, size: usize, alignment: usize, zero_m
     return Allocation{ error: ErrorKind.Capacity }
   }
   created := arena_create(capacity)
-  header := arena_push_or_panic(&created, #sizeof(Block), #alignof(Block))
+  header := arena_push(&created, #sizeof(Block), #alignof(Block))
   block = #cast(*Block) header
   block.arena = created
   block.start = arena_mark(&block.arena)

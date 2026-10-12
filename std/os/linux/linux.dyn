@@ -51,12 +51,9 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
 
   bytes_allocation := memory.arena_push_uninit(arena, used, 1)
   slots_allocation := memory.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  if !bytes_allocation.ok || !slots_allocation.ok {
-    #panic("argument arena exhausted")
-  }
-  bytes := bytes_allocation.memory[..used]
+  bytes := bytes_allocation[..used]
   _ = memory.copy(bytes, temporary[..used])
-  arguments := (#cast(*[]const u8) slots_allocation.memory)[..count]
+  arguments := (#cast(*[]const u8) slots_allocation)[..count]
   start: usize = 0
   at: usize = 0
   i = 0
@@ -123,10 +120,7 @@ pub fn fork_process() Result {
 
 fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
   allocation := memory.arena_push_uninit(arena, #len(text) + 1, 1)
-  if !allocation.ok {
-    return nil
-  }
-  raw := allocation.memory
+  raw := allocation
   bytes := raw[..#len(text) + 1]
   for i in 0..#len(text) {
     bytes[i] = text[i]
@@ -159,10 +153,7 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
   }
   length := #len(arguments)
   slots := memory.arena_push_uninit(arena, (length + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  if !slots.ok {
-    return -28
-  }
-  raw := #cast(*CStringPointer) slots.memory
+  raw := #cast(*CStringPointer) slots
   pointers := raw[..length + 1]
   for i in 0..length {
     pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) }
@@ -217,10 +208,7 @@ pub fn spawn_environment(
   }
   count := #len(arguments)
   allocation := memory.arena_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  if !allocation.ok {
-    return SpawnResult{ error: -28 }
-  }
-  raw := #cast(*CStringPointer) allocation.memory
+  raw := #cast(*CStringPointer) allocation
   pointers := raw[..count + 1]
   for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
@@ -230,10 +218,7 @@ pub fn spawn_environment(
   }
   pointers[count].value = nil
   env_allocation := memory.arena_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  if !env_allocation.ok {
-    return SpawnResult{ error: -28 }
-  }
-  environment_raw := #cast(*CStringPointer) env_allocation.memory
+  environment_raw := #cast(*CStringPointer) env_allocation
   environment_pointers := environment_raw[..#len(environment) + 1]
   env_index: usize = 0
   for env_index < #len(environment) {

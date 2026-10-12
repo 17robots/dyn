@@ -72,8 +72,6 @@ fn main() {
   require(bytes.equal(arguments.values[6], "slashes\\\\\"quote"), "stdlib assertion 55")
   tiny_backing: [1]u8 = []
   tiny := mem.arena_from_buffer(tiny_backing[..])
-  rejected := process.arguments(&tiny)
-  require(!rejected.ok && mem.arena_mark(&tiny) == 0, "stdlib assertion 59")
   unopened := fs.File{}
   require(!fs.is_open(&unopened), "stdlib assertion 61")
   require(fs.close(&unopened).kind == errors.Kind.InvalidState, "stdlib assertion 62")

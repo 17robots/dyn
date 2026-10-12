@@ -26,10 +26,7 @@ fn mac_error() isize {
 }
 fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
   allocation := mem.arena_push_uninit(arena, #len(value)+1, 1)
-  if !allocation.ok {
-    return nil
-  }
-  storage := allocation.memory[..#len(value)+1]
+  storage := allocation[..#len(value)+1]
   return c.string_from_bytes(storage, value).value
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
@@ -37,10 +34,7 @@ fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
     return nil
   }
   allocation := mem.arena_push(arena, (#len(values)+1)*#sizeof(CString), #alignof(CString))
-  if !allocation.ok {
-    return nil
-  }
-  pointer := #cast(*CString) allocation.memory
+  pointer := #cast(*CString) allocation
   slots := pointer[..#len(values)+1]
   for at in 0..#len(values) {
     slots[at].value = c_string(arena, values[at])
@@ -275,12 +269,9 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     source := vector[at]
     size := argument_length(source)
     allocation := mem.arena_push_uninit(arena, size, 1)
-    if !allocation.ok {
-      return ArgumentsResult{ kind: error_kinds.Kind.Capacity }
-    }
     destination := arena.data[..0]
     if size > 0 {
-      destination = allocation.memory[..size]
+      destination = allocation[..size]
     }
     _ = mem.copy(destination, source[..size])
     result.values[at] = destination

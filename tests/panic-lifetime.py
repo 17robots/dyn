@@ -15,7 +15,7 @@ fn main() { defer { _ = io.println(io.stdout(), "cleanup") } _ = checked(2) }'''
 fn main() {
   owned := mem.arena_create(64)
   defer { mem.arena_release(&owned) _ = io.println(io.stdout(), "cleanup") }
-  text := mem.arena_push_or_panic(&owned, 32, 1)[..32]
+  text := mem.arena_push(&owned, 32, 1)[..32]
   _ = mem.copy(text, "owned panic message")
   #panic(text[..19])
 }''',
@@ -24,7 +24,7 @@ fn fail(text: []const u8) { #panic(text) }
 fn main() {
   owned := mem.arena_create(64)
   defer { mem.arena_release(&owned) _ = io.println(io.stdout(), "cleanup") }
-  text := mem.arena_push_or_panic(&owned, 32, 1)[..32]
+  text := mem.arena_push(&owned, 32, 1)[..32]
   _ = mem.copy(text, "owned panic message")
   fail(text[..19])
 }''',

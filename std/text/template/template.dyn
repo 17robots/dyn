@@ -54,12 +54,9 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     }
   }
   allocation := memory.arena_push_uninit(arena, #len(source), 1)
-  if !allocation.ok {
-    return ParseResult{ error: ErrorKind.OutOfMemory, ok: false }
-  }
   retained: []u8 = arena.data[memory.arena_used(arena)..memory.arena_used(arena)]
   if #len(source) > 0 {
-    retained = allocation.memory[..#len(source)]
+    retained = allocation[..#len(source)]
     for i in 0..#len(source) {
       retained[i] = source[i]
     }

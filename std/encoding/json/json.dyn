@@ -17,7 +17,7 @@ pub enum TokenKind {
   ArrayBegin, ArrayEnd, ObjectBegin, ObjectEnd, Colon, Comma,
 }
 
-pub enum ErrorKind { None, Syntax, TrailingData, Capacity }
+pub enum ErrorKind { None, Syntax, TrailingData }
 
 pub struct Tokenizer { source: []const u8, offset: usize }
 pub struct Token { kind: TokenKind, text: []const u8, offset: usize }
@@ -97,11 +97,7 @@ pub fn token_next(state: *Tokenizer) Token {
 }
 
 fn node(arena: *memory.Arena, kind: u8) *Value {
-  allocation := memory.arena_push(arena, #sizeof(Value), #alignof(Value))
-  if !allocation.ok {
-    return nil
-  }
-  result := #cast(*Value) allocation.memory
+  result := memory.push(Value, arena)
   result.kind = kind
   return result
 }
@@ -445,11 +441,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, end - start, 1)
-  if !allocation.ok {
-    cursor.error = ErrorKind.Capacity
-    return failed_string(cursor)
-  }
-  output := allocation.memory[..end - start]
+  output := allocation[..end - start]
   source_at := start
   output_at: usize = 0
   for source_at < end {
@@ -555,11 +547,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
     if !literal(cursor, "null") {
       return nil
     }
-    result := node(arena, KindNull)
-    if result == nil {
-      cursor.error = ErrorKind.Capacity
-    }
-    return result
+    return node(arena, KindNull)
   }
   if byte == 't' || byte == 'f' {
     truth := byte == 't'
@@ -574,12 +562,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       }
     }
     bool_node := node(arena, KindBool)
-    if bool_node != nil {
-      bool_node.boolean = truth
-    }
-    if bool_node == nil {
-      cursor.error = ErrorKind.Capacity
-    }
+    bool_node.boolean = truth
     return bool_node
   }
   if byte == '"' {
@@ -588,12 +571,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       return nil
     }
     string_node := node(arena, KindString)
-    if string_node != nil {
-      string_node.text = text
-    }
-    if string_node == nil {
-      cursor.error = ErrorKind.Capacity
-    }
+    string_node.text = text
     return string_node
   }
   if byte == '[' || byte == '{' {
@@ -603,12 +581,8 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
     object := byte == '{'
     cursor.at += 1
     container := node(arena, KindArray)
-    if object && container != nil {
+    if object {
       container.kind = KindObject
-    }
-    if container == nil {
-      cursor.error = ErrorKind.Capacity
-      return nil
     }
     skip(cursor)
     closing: u8 = ']'
@@ -658,18 +632,13 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
     return nil
   }
   number_node := node(arena, KindNumber)
-  if number_node != nil {
-    number_node.text = cursor.source[start..cursor.at]
-  }
-  if number_node == nil {
-    cursor.error = ErrorKind.Capacity
-  }
+  number_node.text = cursor.source[start..cursor.at]
   return number_node
 }
 
 // Nodes, decoded strings, and object keys live in arena. Number text borrows source.
 // Source must outlive uses of number text; all nodes expire when arena storage resets.
-// Failure rewinds only this call's allocations and distinguishes capacity from syntax.
+// Failure rewinds only this call's allocations. A full fixed arena panics.
 pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   mark := memory.arena_mark(arena)
   cursor := Cursor{ source: source, at: 0 }
@@ -694,9 +663,7 @@ pub fn make_null(arena: *memory.Arena) *Value {
 }
 pub fn make_bool(arena: *memory.Arena, value: bool) *Value {
   result := node(arena, KindBool)
-  if result != nil {
-    result.boolean = value
-  }
+  result.boolean = value
   return result
 }
 // Retains text as a borrowed view; caller keeps it alive.
@@ -706,17 +673,13 @@ pub fn make_number(arena: *memory.Arena, text: []const u8) *Value {
     return nil
   }
   result := node(arena, KindNumber)
-  if result != nil {
-    result.text = text
-  }
+  result.text = text
   return result
 }
 // Retains text as a borrowed view; caller keeps it alive.
 pub fn make_string(arena: *memory.Arena, text: []const u8) *Value {
   result := node(arena, KindString)
-  if result != nil {
-    result.text = text
-  }
+  result.text = text
   return result
 }
 pub fn make_array(arena: *memory.Arena) *Value {

@@ -17,38 +17,49 @@ fn main() {
 
   arena := mem.frame_current(frames)
   greeting := strings.format(arena, "{} + {} = {}", 2, 3, 5)
-  if !greeting.ok || !strings.equal(greeting.value, "2 + 3 = 5") { #panic("format") }
+  if !strings.equal(greeting, "2 + 3 = 5") { #panic("format") }
   braces := strings.format(arena, "{{{}}}", "x")
-  if !strings.equal(braces.value, "{x}") { #panic("braces") }
-  bad := strings.format(arena, "{} {}", 1)
-  if bad.ok || bad.error != strings.ErrorKind.InvalidInput { #panic("bad template") }
+  if !strings.equal(braces, "{x}") { #panic("braces") }
 
   list: strings.List
-  if !strings.list_push(arena, &list, "a") { #panic("push") }
-  if !strings.list_push_format(arena, &list, "b{}", 2) { #panic("pushf") }
-  if !strings.list_push(arena, &list, "") { #panic("empty") }
-  joined := strings.list_join(arena, &list, ", ")
-  if !joined.ok || !strings.equal(joined.value, "a, b2, ") { #panic("join") }
+  strings.list_push(arena, &list, "a")
+  strings.list_push_format(arena, &list, "b{}", 2)
+  strings.list_push(arena, &list, "")
+  if !strings.equal(strings.list_join(arena, &list, ", "), "a, b2, ") { #panic("join") }
   empty: strings.List
-  if !strings.equal(strings.list_join(arena, &empty, ",").value, "") { #panic("empty join") }
+  if !strings.equal(strings.list_join(arena, &empty, ","), "") { #panic("empty join") }
 
-  kept := greeting.value
+  parts := strings.split(arena, "x,,y,", ",")
+  if #len(parts) != 4 || !strings.equal(parts[2], "y") || #len(parts[3]) != 0 { #panic("split") }
+  if !strings.equal(strings.join(arena, parts, "-"), "x--y-") { #panic("join parts") }
+  copied := strings.clone(arena, "copy")
+  if !strings.equal(copied, "copy") { #panic("clone") }
+
+  kept := greeting
   mem.frame_advance(frames)
   if mem.frame_previous(frames) != arena { #panic("previous") }
   if !strings.equal(kept, "2 + 3 = 5") { #panic("survives one frame") }
   mem.frame_advance(frames)
   if mem.frame_current(frames) != arena || mem.arena_used(arena) != 0 { #panic("reset") }
-
-  tiny_storage: [8]u8
-  tiny := mem.arena_from_buffer(tiny_storage[..])
-  full := strings.format(&tiny, "{}", "too long for eight")
-  if full.ok || full.error != strings.ErrorKind.Capacity || mem.arena_used(&tiny) != 0 { #panic("capacity") }
 }
 '''
 
 with tempfile.TemporaryDirectory(prefix='dyn-arena-strings-') as temporary:
     project = Path(temporary)
     (project / 'main.dyn').write_text(SOURCE)
+    # Misuse and exhaustion panic instead of returning a result.
+    for name, body in (('template', 'strings.format(&arena, "{} {}", 1)'),
+                       ('separator', 'strings.split(&arena, "a,b", "")'),
+                       ('exhausted', 'strings.format(&arena, "{}", "too long for eight")')):
+        panic = project / name
+        panic.mkdir()
+        (panic / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\n\nfn main() {\n'
+                                        '  storage: [8]u8\n  arena := mem.arena_from_buffer(storage[..])\n'
+                                        f'  _ = {body}\n}}\n')
+        subprocess.run([DYN, 'build', str(panic), '--no-cache', '--quiet', '--output', str(panic / 'out')],
+                       cwd=ROOT, check=True, timeout=120)
+        result = subprocess.run([str(panic / 'out')], capture_output=True, timeout=10)
+        assert result.returncode != 0, name
     for release in (False, True):
         output = project / ('release' if release else 'debug')
         subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet',

@@ -14,6 +14,21 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Breaking.
+
+- Arena pushes cannot fail. `mem.arena_push`, `arena_push_uninit` and
+  `arena_push_array` return `*u8` and panic when a fixed arena is exhausted,
+  like `mem.push`. `arena_push_or_panic` and `arena_push_uninit_or_panic` are
+  removed; drop the suffix. `mem.arena_try_push` is the one push that reports
+  exhaustion, for code with a strict budget.
+- `strings.clone`, `join`, `split`, `format`, `format_arguments` and
+  `list_join` return the bytes directly; `list_push` and `list_push_format`
+  return nothing. A bad format template and an empty split separator panic.
+  The caller-buffer forms (`clone_into`, `join_into`, `split_into`) keep their
+  results.
+- Arena-backed `builder.reserve`, string maps and `ini.parse` panic instead of
+  reporting `Capacity` when their arena is exhausted, and `json`, `ini` and
+  `string_map` drop their now-unused `ErrorKind.Capacity`.
 - `#wrap(expression)`: integer `+`, `-`, `*`, unary `-` and `<<` written
   inside wrap around instead of panicking on overflow. Division and shift
   counts are still checked. Use it for hashes and random number generators.
