@@ -12,6 +12,25 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.19
+
+Breaking. See [`docs/migrations/0.1.0-preview.19.md`](docs/migrations/0.1.0-preview.19.md).
+
+- Generic functions with `$T` type parameters. `std/mem`, `std/math` and
+  `std/sort` use them: `mem.push(T, &arena)`, `mem.push_array`,
+  `mem.clear`, `math.min`/`max`/`clamp`/`abs`/`narrow`, `sort.sort`.
+- Allocation is arena-only. The allocator interface and the `#alloc*`
+  builtins are removed.
+- `mem.arena_create` reserves address space and panics instead of returning
+  a result. Release, frames, sub-arenas, pools and free lists follow; Windows
+  commits on demand.
+- `#assert(condition, "message")` checks constants at compile time, and
+  `#offsetof(Type, field)` gives a field's byte offset.
+- `#load("file")` embeds a file's bytes as a string.
+- `use "a" x, "b" y` imports several modules in one `use`.
+- New std: `strings.format`, `strings.List`, `mem.Frames` and the
+  Metadesk parser `std/encoding/mdesk`. `std/slice` is removed.
+
 ## 0.1.0-preview.18
 
 - A mutable `*T` now converts to `rawptr` implicitly, like C's `void *`:
