@@ -7,14 +7,14 @@ fn main() {
     if #len(child_mode.value) != 3 || child_mode.value[0] != 'y' { #panic("child environment") }
     return
   }
-  allocation := mem.arena_create(1024*1024) if !allocation.ok { #panic("arena") }
-  defer _ = mem.arena_release(&allocation.arena)
+  allocation := mem.arena_create(1024*1024)
+  defer mem.arena_release(&allocation)
   argv: [4][]const u8 = [executable(),"argument with spaces","quote\"and\\slashes\\",""]
   environment: [1][]const u8 = ["DYN_PROCESS_CHILD=yes"]
   options := process.options() options.environment = environment[..]
   output: [8]u8 = [] errors: [8]u8 = []
-  result := process.capture(&allocation.arena,executable(),argv[..],options,output[..],errors[..],5000)
+  result := process.capture(&allocation,executable(),argv[..],options,output[..],errors[..],5000)
   if !result.ok || result.exit.code != 0 || #len(result.output) != 0 || #len(result.errors) != 0 { #panic("native process capture") }
-  missing := process.spawn(&allocation.arena,"no-such-dyn-process-executable",argv[..],options)
+  missing := process.spawn(&allocation,"no-such-dyn-process-executable",argv[..],options)
   if missing.ok { #panic("missing executable") }
 }

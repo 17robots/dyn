@@ -113,23 +113,20 @@ fn discard_slot(state: *State, slot: *Slot) {
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 { return OpenResult{ error: -28 } }
-  allocation := mem.arena_create(#sizeof(State))
-  if !allocation.ok { return OpenResult{ error: -12 } }
-  pushed := mem.arena_push(&allocation.arena, #sizeof(State), #alignof(State))
-  if !pushed.ok { _ = mem.arena_release(&allocation.arena) return OpenResult{ error: -12 } }
-  state := #cast(*State) pushed.memory
+  arena := mem.arena_create(#sizeof(State))
+  state := mem.push(State, &arena)
   if !load(&state.api) {
     unload(&state.api)
-    _ = mem.arena_release(&allocation.arena)
+    mem.arena_release(&arena)
     return OpenResult{ error: -95 }
   }
   state.queue = queue_create(nil, nil)
   if state.queue == nil {
     unload(&state.api)
-    _ = mem.arena_release(&allocation.arena)
+    mem.arena_release(&arena)
     return OpenResult{ error: -12 }
   }
-  return OpenResult{ watcher: Watcher{ state: state, storage: storage, arena: allocation.arena }, ok: true }
+  return OpenResult{ watcher: Watcher{ state: state, storage: storage, arena: arena }, ok: true }
 }
 fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
   state := slot.owner
@@ -247,15 +244,15 @@ pub fn remove(watcher: *Watcher, id: i32) Result {
 pub fn close(watcher: *Watcher) Result {
   state := watcher.state
   if state == nil {
-    released := mem.arena_release(&watcher.arena)
-    return Result{ error: released.error, ok: released.ok }
+    mem.arena_release(&watcher.arena)
+    return Result{ ok: true }
   }
   for i in 0..16 { discard_slot(state,&state.slots[i]) }
   queue_release(state.queue)
   unload(&state.api)
-  released := mem.arena_release(&watcher.arena)
+  mem.arena_release(&watcher.arena)
   watcher.state = nil watcher.rescan_required = false
-  return Result{ error: released.error, ok: released.ok }
+  return Result{ ok: true }
 }
 pub fn next(watcher: *Watcher) EventResult {
   state := watcher.state

@@ -34,51 +34,31 @@ and the shallow, explicit failure handling in his
 The fixed-by-default guidance and exact names are Dyn design
 choices, not claims that he endorses this API.
 
-## Failure policy and replacements
+## Failure policy
 
-Recoverable allocation uses ordinary names. `_or_panic` means allocation failure
-is fatal through Dyn's existing panic/defer machinery. `_uninit` is before that
-suffix. Select panic when the caller has established a sufficient budget or has
-chosen termination as its policy; it is not a proof that allocation cannot fail.
+Getting memory from the OS does not fail in a way a program can handle.
+`arena_create` reserves address space, and pages cost memory only once pushes
+reach them, so reserve generously. When the OS refuses a reservation or a
+commit, the process is out of address space or memory and `arena_create` or
+the push panics. `arena_create`, `arena_release`, `frames_create`,
+`frames_release`, `arena_sub`, `free_list_from_arena`, `pool_init`,
+`growing_release` and `growing_trim` therefore return their value directly,
+without `ok`.
 
-Since preview 19 the allocation builtins in this table no longer exist; use
-`mem.push`, `mem.push_array` and `mem.push_bytes_uninit` on an arena. See
-`docs/migrations/0.1.0-preview.19.md`.
+Running out of a fixed arena is different: a buffer arena or a sub-arena has a
+real size. Ordinary names report it, and `_or_panic` makes it fatal:
 
-| Previous local spelling | Replacement preserving behavior |
+| Recoverable | Fatal |
 | --- | --- |
-| `#try_alloc(T, a)` | `#alloc(T, a)` |
-| `#alloc(T, a)` | `#alloc_or_panic(T, a)` |
-| `#try_alloc_slice(T, a, n)` | `#alloc_slice(T, a, n)` |
-| `#alloc_slice(T, a, n)` | `#alloc_slice_or_panic(T, a, n)` |
-| `#try_alloc_uninit` / `#try_alloc_slice_uninit` | `#alloc_uninit` / `#alloc_slice_uninit` |
-| `#alloc_uninit` / `#alloc_slice_uninit` | `#alloc_uninit_or_panic` / `#alloc_slice_uninit_or_panic` |
-| `arena_try_push` / `arena_try_push_uninit` | `arena_push` / `arena_push_uninit` |
-| `arena_push` / `arena_push_uninit` | `arena_push_or_panic` / `arena_push_uninit_or_panic` |
-| `arena_try_push_array` | `arena_push_array` |
-| `arena_try_sub` / `arena_sub` | `arena_sub` / `arena_sub_or_panic` |
-| `growing_try_push` / `growing_push` | `growing_push` / `growing_push_or_panic` |
-| `free_list_try_alloc` / `free_list_alloc` | `free_list_alloc` / `free_list_alloc_or_panic` |
-| `pool_try_acquire` / `pool_acquire` | `pool_acquire` / `pool_acquire_or_panic` |
-| `free_list_from_arena` / `pool_init` | `free_list_from_arena_or_panic` / `pool_init_or_panic` |
+| `arena_push` / `arena_push_uninit` / `arena_push_array` | `mem.push` / `mem.push_array` / `mem.push_bytes_uninit`, `arena_push_or_panic` / `arena_push_uninit_or_panic` |
+| `growing_push` / `growing_push_uninit` | `growing_push_or_panic` |
+| `free_list_alloc` / `pool_acquire` (nil when empty) | `free_list_alloc_or_panic` / `pool_acquire_or_panic` |
 
-The new ordinary `free_list_from_arena` and `pool_init` return their own result
-structures. Layout/capacity failure leaves the fixed arena offset unchanged.
-Pool/free-list acquisition returns nil on exhaustion, avoiding a needless error
-category for a single expected outcome. Typed builtins retain `#AllocResult`
-with `value`, `error`, and `ok`; this is not a universal std result protocol.
-
-These are simultaneous replacements: do not apply the table sequentially and
-rename a newly migrated fallible call into a panic call. Old `try_` names are not
-compatibility aliases. Update the compiler, grammar, std, and consumers together.
-
-The suffix convention covers selected recoverable operations, not every possible
-panic in a function body. Bounds checks, invalid free/double-free, invalid rewind,
-and violated layout preconditions can still panic. `free_list_init` constructs a
-view over caller-supplied, correctly aligned backing and retains those validation
-panics. No panic-effect type system is introduced. Filesystem/network operations
-retain their own status/native errors. Missing lookup values and iterator end
-remain normal outcomes. Wrappers are added where useful, not in pairs everywhere.
+Select panic when the caller has established a sufficient budget or has chosen
+termination as its policy. Bounds checks, invalid free/double-free, invalid
+rewind and violated layout preconditions still panic everywhere. Filesystem and
+network operations keep their own status and native errors. Missing lookup
+values and iterator end remain normal outcomes.
 
 ## Output allocation without hidden scratch
 

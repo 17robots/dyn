@@ -12,12 +12,11 @@ struct Item { tag: u8, value: u64 }
 fn expect(ok: bool) { if !ok { #panic("memory ergonomics contract") } }
 fn main() {
   created := mem.arena_create(mem.KiB)
-  expect(created.ok)
-  defer { expect(mem.arena_release(&created.arena).ok) }
+  defer { mem.arena_release(&created) }
   count: usize = 7
   size := mem.size_for(count, #sizeof(Item))
   expect(size.ok)
-  allocation := mem.arena_push_array(&created.arena, count, #sizeof(Item), #alignof(Item))
+  allocation := mem.arena_push_array(&created, count, #sizeof(Item), #alignof(Item))
   expect(allocation.ok)
   items := (#cast(*Item) allocation.memory)[..count]
   for *item in items {
@@ -28,13 +27,13 @@ fn main() {
   maximum := #cast(usize) -1
   edge := mem.size_for(maximum / 8, 8)
   expect(edge.ok && edge.bytes == maximum - maximum % 8)
-  before := mem.arena_used(&created.arena)
+  before := mem.arena_used(&created)
   overflow := mem.size_for(maximum / 8 + 1, 8)
   expect(!overflow.ok && overflow.bytes == 0)
-  expect(mem.arena_used(&created.arena) == before && items[6].value == 42)
-  failed_array := mem.arena_push_array(&created.arena, maximum, #sizeof(Item), #alignof(Item))
+  expect(mem.arena_used(&created) == before && items[6].value == 42)
+  failed_array := mem.arena_push_array(&created, maximum, #sizeof(Item), #alignof(Item))
   expect(!failed_array.ok && failed_array.error == mem.ErrorKind.Overflow)
-  expect(mem.arena_used(&created.arena) == before && items[6].value == 42)
+  expect(mem.arena_used(&created) == before && items[6].value == 42)
   exact := mem.size_for(maximum, 1)
   expect(exact.ok && exact.bytes == maximum)
   zero_count := mem.size_for(0, maximum)
@@ -44,7 +43,7 @@ fn main() {
   expect(mem.MiB == 1024 * mem.KiB && mem.GiB == 1024 * mem.MiB)
 
   chain := mem.growing_create_bounded(128, mem.KiB)
-  defer { expect(mem.growing_release(&chain).ok) }
+  defer { mem.growing_release(&chain) }
   first := mem.growing_push_or_panic(&chain, 128, 8)
   first.* = 42
   second := mem.growing_push_or_panic(&chain, 128, 8)
@@ -53,7 +52,7 @@ fn main() {
   expect(snapshot.blocks == 2 && snapshot.used >= 256)
   expect(snapshot.backing_bytes <= mem.KiB)
   // Live blocks cannot be trimmed, even when the target is zero.
-  expect(mem.growing_trim(&chain, 0).ok)
+  mem.growing_trim(&chain, 0)
   expect(mem.growing_snapshot(&chain).backing_bytes == snapshot.backing_bytes)
   expect(first.* == 42 && second.* == 17)
   too_large := mem.growing_push(&chain, mem.KiB, 1)
@@ -65,13 +64,13 @@ fn main() {
   // Keep one live block and trim an empty tail; append must still work afterwards.
   live := mem.growing_push_or_panic(&chain, 128, 8)
   live.* = 91
-  expect(mem.growing_trim(&chain, 0).ok)
+  mem.growing_trim(&chain, 0)
   expect(mem.growing_snapshot(&chain).blocks == 1 && live.* == 91)
   _ = mem.growing_push_or_panic(&chain, 128, 8)
   expect(mem.growing_snapshot(&chain).blocks == 2 && live.* == 91)
   for cycle in 0..100 {
     mem.growing_reset(&chain)
-    expect(mem.growing_trim(&chain, 0).ok)
+    mem.growing_trim(&chain, 0)
     expect(mem.growing_snapshot(&chain).backing_bytes == 0)
     expect(chain.first == nil && chain.current == nil)
     _ = mem.growing_push_or_panic(&chain, 64, 8)

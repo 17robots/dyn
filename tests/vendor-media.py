@@ -205,18 +205,15 @@ use "std/os/linux"
 use "std/io"
 fn main() {
   storage := mem.arena_create(16 * 1024 * 1024)
-  if !storage.ok {
-    #panic("arena")
-  }
   defer {
-    _ = mem.arena_release(&storage.arena)
+    mem.arena_release(&storage)
   }
-  args := linux.process_arguments(&storage.arena)
+  args := linux.process_arguments(&storage)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: archive-example ARCHIVE")
     return
   }
-  loaded := fs.read_all(&storage.arena, args[1], 8 * 1024 * 1024)
+  loaded := fs.read_all(&storage, args[1], 8 * 1024 * 1024)
   if !loaded.ok {
     #panic("read archive")
   }
@@ -288,13 +285,10 @@ use "std/os/linux"
 use "std/io"
 fn main() {
   storage := mem.arena_create(16 * 1024 * 1024)
-  if !storage.ok {
-    #panic("arena")
-  }
   defer {
-    _ = mem.arena_release(&storage.arena)
+    mem.arena_release(&storage)
   }
-  args := linux.process_arguments(&storage.arena)
+  args := linux.process_arguments(&storage)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: sdl3-image-example IMAGE")
     return
@@ -305,7 +299,7 @@ fn main() {
     #panic("image load")
   }
   defer sdl3.surface_destroy_owned(surface.value)
-  bytes := fs.read_all(&storage.arena, args[1], 8 * 1024 * 1024)
+  bytes := fs.read_all(&storage, args[1], 8 * 1024 * 1024)
   if !bytes.ok {
     #panic("image read")
   }

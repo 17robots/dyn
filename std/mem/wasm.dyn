@@ -39,7 +39,7 @@ fn mapping_allocate(size: usize) Mapping {
   }
   region.* = WasmRegion{ pages: pages, requested: size, live: true }
   data := #cast(*u8) (#cast(usize) region + header)
-  return Mapping{ bytes: data[..size], ok: true }
+  return Mapping{ bytes: data[..size], committed: size, ok: true }
 }
 
 fn mapping_release(bytes: []u8) isize {
@@ -73,4 +73,8 @@ fn mapping_release(bytes: []u8) isize {
     previous.next = region
   }
   return 0
+}
+// The whole mapping is committed at creation.
+fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
+  return true
 }

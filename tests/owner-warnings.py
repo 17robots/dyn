@@ -61,13 +61,13 @@ fn main() {
     source.write_text('''use "std/mem"
 fn main() {
   created := mem.arena_create(mem.KiB)
-  if !created.ok { #panic("create") }
-  pointer := mem.arena_push_or_panic(&created.arena, 1, 1)
+  pointer := mem.arena_push_or_panic(&created, 1, 1)
   pointer.* = 42
-  moved := mem.arena_take(&created.arena)
-  if #len(created.arena.data) != 0 || created.arena.owns_memory || pointer.* != 42 { #panic("transfer") }
-  if !mem.arena_release(&created.arena).ok || pointer.* != 42 { #panic("old owner") }
-  if !mem.arena_release(&moved).ok { #panic("new owner") }
+  moved := mem.arena_take(&created)
+  if #len(created.data) != 0 || created.owns_memory || pointer.* != 42 { #panic("transfer") }
+  mem.arena_release(&created)
+  if pointer.* != 42 { #panic("old owner") }
+  mem.arena_release(&moved)
 }
 ''')
     for release in (False, True):

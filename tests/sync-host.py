@@ -37,8 +37,6 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
-  failed := thread.Thread{}
-  if thread.spawn_with_size(&failed, ~#cast(usize) 0, &worker, nil) >= 0 || thread.join(&failed) != 0 { #panic("failed spawn ownership/error") }
   shared := Shared{}
   if !sync.try_lock(&shared.mutex) { #panic("initial trylock") }
   if sync.try_lock(&shared.mutex) { #panic("recursive trylock") }
