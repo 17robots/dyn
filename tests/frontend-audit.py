@@ -82,5 +82,24 @@ fn main() {}
     check(project(root, 'struct-capacity-boundary', declarations + 'fn main() {}\n'))
     check(project(root, 'struct-capacity-overflow', declarations +
                   'struct Overflow {}\nfn main() {}\n'), 'struct type capacity exceeded')
+    run(project(root, 'assert-pass', '''#assert(#sizeof(Header) == 12 && #alignof(Header) == 1, "packed header")
+packed struct Header { tag: u32, size: u64 }
+const COUNT: usize = 4
+const OFFSET: i32 = -3
+#assert(COUNT * #sizeof(u32) <= 16)
+#assert(OFFSET < 0 && !(OFFSET * 2 > -6))
+fn main() {}
+'''))
+    check(project(root, 'assert-fail', '''struct Header { tag: u32, size: u64 }
+#assert(#sizeof(Header) == 12, "header layout changed")
+fn main() {}
+'''), '#assert failed: header layout changed')
+    check(project(root, 'assert-runtime', '''#assert(answer() == 1)
+fn answer() i32 { return 1 }
+fn main() {}
+'''), '#assert condition must be a compile-time constant')
+    check(project(root, 'assert-type', '''#assert(#sizeof(u8))
+fn main() {}
+'''), '#assert condition must be bool')
 
-print('PASS frontend audit: declaration order, cycles, type capacity')
+print('PASS frontend audit: declaration order, cycles, type capacity, #assert')

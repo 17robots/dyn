@@ -1685,6 +1685,7 @@ void dyn_ast_program_free(DynAstProgram *a) {
   free(a->params);
   free(a->functions);
   free(a->globals);
+  free(a->asserts);
   free(a->global_init_order);
   free(a->pointers);
   free(a->arrays);
@@ -2289,6 +2290,33 @@ static bool add_globals(const DynSource *s, DynAstProgram *a,
   }
   return true;
 }
+static bool add_asserts(const DynSource *s, DynAstProgram *a, unsigned *errors) {
+  for (uint32_t i = 0; i < a->decl_count; ++i) {
+    TSNode d = dyn_syntax_declaration_node(a->decls[i]);
+    if (strcmp(ts_node_type(d), "static_assert"))
+      continue;
+    if (a->assert_count == a->assert_capacity) {
+      size_t c = a->assert_capacity ? a->assert_capacity * 2 : 8;
+      void *p = realloc(a->asserts, c * sizeof(*a->asserts));
+      if (!p) {
+        a->allocation_failed = true;
+        diagnostic(d, s, errors, "out of memory");
+        return false;
+      }
+      a->asserts = p;
+      a->assert_capacity = c;
+    }
+    TSNode message = ts_node_named_child(d, 1);
+    a->asserts[a->assert_count++] = (DynAstAssert){
+        .span = span(d),
+        .message = ts_node_is_null(message)
+                       ? (DynSpan){0}
+                       : (DynSpan){ts_node_start_byte(message) + 1,
+                                   ts_node_end_byte(message) - 1},
+        .condition = lower_expr(ts_node_named_child(d, 0), s, a, errors)};
+  }
+  return true;
+}
 /* Only type parameters use `$`, and a signature ends at its body's `{`. */
 static bool has_type_parameter(TSNode n, const DynSource *s) {
   for (uint32_t i = ts_node_start_byte(n); i < ts_node_end_byte(n); ++i) {
@@ -2552,6 +2580,7 @@ static bool lower_declarations(TSNode root, const DynSource *s, DynAstProgram *a
       !add_enum_variants(s, a, errors) ||
       !compute_layouts_v2(a, s, errors) ||
       !add_globals(s, a, errors, &globals) ||
+      !add_asserts(s, a, errors) ||
       !add_function_signatures(s, a, errors, &functions, &globals)) {
     ast_name_index_free(&functions);
     ast_name_index_free(&globals);
