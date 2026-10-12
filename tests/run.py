@@ -9,6 +9,7 @@ BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
 def run(*command):
     subprocess.run(list(map(str,command)),cwd=ROOT,check=True,timeout=300)
 run(sys.executable, ROOT/'tests/memory-ergonomics.py')
+run(sys.executable, ROOT/'tests/arena-strings.py')
 run(sys.executable, ROOT/'tests/std-memory-contracts.py')
 run(sys.executable, ROOT/'tests/array-extents.py')
 run(sys.executable, ROOT/'tests/owner-warnings.py')
