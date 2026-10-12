@@ -8,7 +8,14 @@ void *__real_realloc(void *, size_t);
 char *__real_strdup(const char *);
 char *__real_strndup(const char *, size_t);
 static size_t calls, fail_at, failed;
-static bool fail(void) { if (++calls == fail_at) { ++failed; return true; } return false; }
+// Atomic: module prefetch allocates on several threads.
+static bool fail(void) {
+  if (__atomic_add_fetch(&calls, 1, __ATOMIC_SEQ_CST) == __atomic_load_n(&fail_at, __ATOMIC_SEQ_CST)) {
+    __atomic_add_fetch(&failed, 1, __ATOMIC_SEQ_CST);
+    return true;
+  }
+  return false;
+}
 void *__wrap_malloc(size_t n) { return fail() ? NULL : __real_malloc(n); }
 void *__wrap_calloc(size_t n, size_t size) { return n && size && fail() ? NULL : __real_calloc(n, size); }
 void *__wrap_realloc(void *p, size_t n) { return fail() ? NULL : __real_realloc(p, n); }
