@@ -1,0 +1,381 @@
+use "std/bytes"
+use "std/mem"
+
+// Metadesk-style data: a tree of labeled nodes with tags and children.
+//
+//   @table(name, size)
+//   Types: {
+//     {Float, 4}
+//     {Double, 8}
+//   }
+//
+// A node is optional tags, a label, and optionally ':' followed by its
+// children: one node, or a group in {}, () or []. A bare group is a node
+// without a label. Siblings are separated by whitespace, ',' or ';'. Comments
+// are // and /* */. Labels are identifiers, numbers, strings ("", '', `` and
+// their tripled forms) or single symbol characters. Labels borrow the source.
+//
+// Lookups never return nil: a missing node is the shared, all-zero nil node, so
+// lookups chain and read as empty. Check with is_nil. Never write through a
+// node returned by a lookup without checking it first.
+
+pub enum Kind { Nil, Root, Main, Tag }
+pub enum Label { None, Identifier, Number, String, Symbol }
+pub enum ErrorKind { None, Unclosed, Unexpected, UnterminatedString, UnterminatedComment, MissingTagName }
+
+pub struct Node {
+  kind: Kind,
+  label: Label,
+  // Label text. Strings exclude their quotes and keep escapes as written.
+  string: []const u8,
+  // Byte offset of the node in the source.
+  offset: usize,
+  // '{', '(' or '[' when the children came from a group, otherwise 0.
+  group: u8,
+  parent: *Node,
+  first: *Node,
+  last: *Node,
+  next: *Node,
+  first_tag: *Node,
+  last_tag: *Node,
+}
+
+// root is never nil, also on failure, where it holds what parsed before the error.
+pub struct ParseResult { root: *Node, error: ErrorKind, error_offset: usize, ok: bool }
+
+struct Parser {
+  arena: *mem.Arena,
+  source: []const u8,
+  at: usize,
+  error: ErrorKind,
+  error_offset: usize,
+}
+
+nil_node: Node
+
+// Nodes are pushed with mem.push, so a full fixed arena panics.
+pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
+  parser := Parser{ arena: arena, source: source }
+  root := mem.push(Node, arena)
+  root.kind = Kind.Root
+  parse_children(&parser, root, 0)
+  return ParseResult{
+    root: root,
+    error: parser.error,
+    error_offset: parser.error_offset,
+    ok: parser.error == ErrorKind.None,
+  }
+}
+
+// The shared nil node. Its fields are all zero.
+pub fn empty() *Node {
+  return &nil_node
+}
+
+pub fn is_nil(node: *const Node) bool {
+  return node == nil || node.kind == Kind.Nil
+}
+
+// First child labeled name, or the nil node.
+pub fn child(node: *const Node, name: []const u8) *Node {
+  if !is_nil(node) {
+    current := node.first
+    for current != nil {
+      if bytes.equal(current.string, name) {
+        return current
+      }
+      current = current.next
+    }
+  }
+  return &nil_node
+}
+
+// Child number index, or the nil node.
+pub fn child_at(node: *const Node, index: usize) *Node {
+  if !is_nil(node) {
+    current := node.first
+    at: usize = 0
+    for current != nil {
+      if at == index {
+        return current
+      }
+      at += 1
+      current = current.next
+    }
+  }
+  return &nil_node
+}
+
+pub fn child_count(node: *const Node) usize {
+  count: usize = 0
+  if !is_nil(node) {
+    current := node.first
+    for current != nil {
+      count += 1
+      current = current.next
+    }
+  }
+  return count
+}
+
+// Tag named name, or the nil node. A tag's arguments are its children.
+pub fn tag(node: *const Node, name: []const u8) *Node {
+  if !is_nil(node) {
+    current := node.first_tag
+    for current != nil {
+      if bytes.equal(current.string, name) {
+        return current
+      }
+      current = current.next
+    }
+  }
+  return &nil_node
+}
+
+pub fn has_tag(node: *const Node, name: []const u8) bool {
+  return !is_nil(tag(node, name))
+}
+
+// 1-based line of a byte offset, for error messages.
+pub fn line_of(source: []const u8, offset: usize) usize {
+  line: usize = 1
+  for i in 0..#len(source) {
+    if i >= offset {
+      return line
+    }
+    if source[i] == '\n' {
+      line += 1
+    }
+  }
+  return line
+}
+
+fn fail(parser: *Parser, error: ErrorKind, offset: usize) {
+  if parser.error == ErrorKind.None {
+    parser.error = error
+    parser.error_offset = offset
+  }
+}
+
+fn letter(byte: u8) bool {
+  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || byte == '_'
+}
+
+fn digit(byte: u8) bool {
+  return byte >= '0' && byte <= '9'
+}
+
+fn opener(byte: u8) bool {
+  return byte == '{' || byte == '(' || byte == '['
+}
+
+fn closer(byte: u8) bool {
+  return byte == '}' || byte == ')' || byte == ']'
+}
+
+fn at_pair(parser: *Parser, first: u8, second: u8) bool {
+  source := parser.source
+  at := parser.at
+  return at + 1 < #len(source) && source[at] == first && source[at + 1] == second
+}
+
+// Skips whitespace and comments, and ',' and ';' when separators is set.
+fn skip(parser: *Parser, separators: bool) {
+  source := parser.source
+  for parser.at < #len(source) {
+    byte := source[parser.at]
+    if byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r' {
+      parser.at += 1
+    } else if separators && (byte == ',' || byte == ';') {
+      parser.at += 1
+    } else if at_pair(parser, '/', '/') {
+      for parser.at < #len(source) && source[parser.at] != '\n' {
+        parser.at += 1
+      }
+    } else if at_pair(parser, '/', '*') {
+      start := parser.at
+      parser.at += 2
+      for parser.at < #len(source) && !at_pair(parser, '*', '/') {
+        parser.at += 1
+      }
+      if parser.at >= #len(source) {
+        fail(parser, ErrorKind.UnterminatedComment, start)
+        return
+      }
+      parser.at += 2
+    } else {
+      return
+    }
+  }
+}
+
+fn read_string(parser: *Parser, node: *Node, quote: u8) {
+  source := parser.source
+  start := parser.at
+  width: usize = 1
+  if start + 2 < #len(source) && source[start + 1] == quote && source[start + 2] == quote {
+    width = 3
+  }
+  parser.at += width
+  body := parser.at
+  for parser.at < #len(source) {
+    byte := source[parser.at]
+    if width == 1 && byte == '\\' && parser.at + 1 < #len(source) {
+      parser.at += 2
+      continue
+    }
+    if width == 1 && byte == '\n' {
+      break
+    }
+    closed := byte == quote
+    if width == 3 {
+      closed = parser.at + 2 < #len(source) && byte == quote && source[parser.at + 1] == quote && source[parser.at + 2] == quote
+    }
+    if closed {
+      node.label = Label.String
+      node.string = source[body..parser.at]
+      parser.at += width
+      return
+    }
+    parser.at += 1
+  }
+  fail(parser, ErrorKind.UnterminatedString, start)
+}
+
+fn read_label(parser: *Parser, node: *Node) {
+  source := parser.source
+  start := parser.at
+  byte := source[start]
+  if letter(byte) {
+    for parser.at < #len(source) && (letter(source[parser.at]) || digit(source[parser.at])) {
+      parser.at += 1
+    }
+    node.label = Label.Identifier
+    node.string = source[start..parser.at]
+  } else if digit(byte) {
+    for parser.at < #len(source) && (letter(source[parser.at]) || digit(source[parser.at]) || source[parser.at] == '.') {
+      parser.at += 1
+    }
+    node.label = Label.Number
+    node.string = source[start..parser.at]
+  } else if byte == '"' || byte == '\'' || byte == '`' {
+    read_string(parser, node, byte)
+  } else {
+    parser.at += 1
+    node.label = Label.Symbol
+    node.string = source[start..parser.at]
+  }
+}
+
+fn append(parent: *Node, node: *Node) {
+  node.parent = parent
+  if parent.last == nil {
+    parent.first = node
+  } else {
+    parent.last.next = node
+  }
+  parent.last = node
+}
+
+fn append_tag(node: *Node, tag_node: *Node) {
+  tag_node.parent = node
+  if node.last_tag == nil {
+    node.first_tag = tag_node
+  } else {
+    node.last_tag.next = tag_node
+  }
+  node.last_tag = tag_node
+}
+
+// Parses children until close, or the end of the source when close is 0.
+fn parse_children(parser: *Parser, parent: *Node, close: u8) {
+  start := parser.at
+  if start > 0 {
+    start -= 1
+  }
+  for true {
+    skip(parser, true)
+    if parser.error != ErrorKind.None {
+      return
+    }
+    if parser.at >= #len(parser.source) {
+      if close != 0 {
+        fail(parser, ErrorKind.Unclosed, start)
+      }
+      return
+    }
+    byte := parser.source[parser.at]
+    if byte == close {
+      parser.at += 1
+      return
+    }
+    if closer(byte) {
+      fail(parser, ErrorKind.Unexpected, parser.at)
+      return
+    }
+    append(parent, parse_node(parser))
+  }
+}
+
+fn parse_group(parser: *Parser, node: *Node) {
+  open := parser.source[parser.at]
+  close: u8 = '}'
+  if open == '(' {
+    close = ')'
+  } else if open == '[' {
+    close = ']'
+  }
+  node.group = open
+  parser.at += 1
+  parse_children(parser, node, close)
+}
+
+fn parse_node(parser: *Parser) *Node {
+  source := parser.source
+  node := mem.push(Node, parser.arena)
+  node.kind = Kind.Main
+  node.offset = parser.at
+  for parser.at < #len(source) && source[parser.at] == '@' {
+    tag_offset := parser.at
+    parser.at += 1
+    if parser.at >= #len(source) || !letter(source[parser.at]) {
+      fail(parser, ErrorKind.MissingTagName, tag_offset)
+      return node
+    }
+    tag_node := mem.push(Node, parser.arena)
+    tag_node.kind = Kind.Tag
+    tag_node.offset = tag_offset
+    read_label(parser, tag_node)
+    if parser.at < #len(source) && source[parser.at] == '(' {
+      parse_group(parser, tag_node)
+    }
+    append_tag(node, tag_node)
+    skip(parser, false)
+  }
+  if parser.error != ErrorKind.None {
+    return node
+  }
+  if parser.at >= #len(source) || closer(source[parser.at]) || source[parser.at] == ':' {
+    fail(parser, ErrorKind.Unexpected, parser.at)
+    return node
+  }
+  node.offset = parser.at
+  if opener(source[parser.at]) {
+    parse_group(parser, node)
+    return node
+  }
+  read_label(parser, node)
+  skip(parser, false)
+  if parser.at < #len(source) && source[parser.at] == ':' {
+    parser.at += 1
+    skip(parser, false)
+    if parser.at >= #len(source) || closer(source[parser.at]) {
+      fail(parser, ErrorKind.Unexpected, parser.at)
+    } else if opener(source[parser.at]) {
+      parse_group(parser, node)
+    } else {
+      append(node, parse_node(parser))
+    }
+  }
+  return node
+}
