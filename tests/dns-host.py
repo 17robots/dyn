@@ -82,6 +82,24 @@ def receive_exact(connection, size):
     return bytes(data)
 
 
+
+def paired_sockets():
+    """TCP and UDP sockets on one free port. The TCP port's number can be taken
+    or reserved for UDP (Windows reports WinError 10013), so retry."""
+    for _ in range(50):
+        tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcp.bind(('127.0.0.1', 0))
+        port = tcp.getsockname()[1]
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            udp.bind(('127.0.0.1', port))
+        except OSError:
+            udp.close()
+            tcp.close()
+            continue
+        return tcp, udp, port
+    raise RuntimeError('no port free for both TCP and UDP')
+
 def serve(udp, tcp, failures, observed):
     try:
         for name, kind, payload in (
@@ -143,13 +161,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-dns-host-') as temporary:
     else:
         for mode in ('--debug', '--release'):
             with ExitStack() as resources:
-                tcp = resources.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
-                tcp.bind(('127.0.0.1', 0))
-                port = tcp.getsockname()[1]
+                tcp, udp, port = paired_sockets()
+                resources.enter_context(tcp)
+                resources.enter_context(udp)
                 tcp.listen(1)
                 tcp.settimeout(5)
-                udp = resources.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-                udp.bind(('127.0.0.1', port))
                 udp.settimeout(5)
                 (project/'main.dyn').write_text(SOURCE.replace('PORT', str(port)))
                 output = root/('program.exe' if os.name == 'nt' else 'program')
