@@ -47,6 +47,7 @@ jobs:
         run: |
           just artifact dyn-sanitize
           python3 tests/compiler-contracts.py
+          python3 tests/generics.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
