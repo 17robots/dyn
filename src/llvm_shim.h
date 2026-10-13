@@ -356,6 +356,8 @@ extern LLVMValueRef LLVMGetBasicBlockTerminator(LLVMBasicBlockRef);
 extern unsigned LLVMGetNumSuccessors(LLVMValueRef);
 extern LLVMBasicBlockRef LLVMGetSuccessor(LLVMValueRef, unsigned);
 extern LLVMValueRef LLVMIsALoadInst(LLVMValueRef);
+extern LLVMValueRef LLVMIsAConstantInt(LLVMValueRef);
+extern unsigned long long LLVMConstIntGetZExtValue(LLVMValueRef);
 extern LLVMValueRef LLVMGetOperand(LLVMValueRef, unsigned);
 
 #endif

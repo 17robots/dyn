@@ -77,7 +77,8 @@ static void format_layout(FormatEdits *edits, TSNode node, uint32_t anchor_row,
   for (uint32_t i = 0; i < count; ++i) {
     TSNode child = ts_node_child(node, i);
     uint32_t start = ts_node_start_point(child).row;
-    if (!strcmp(ts_node_type(child), "statement")) {
+    /* Every named child of a block except a comment is a statement. */
+    if (ts_node_is_named(child) && !ts_node_is_extra(child)) {
       unsigned indent = format_line_indent(text, ts_node_start_byte(child));
       if (start == previous) {
         indent = base + 2;

@@ -43,7 +43,7 @@ typedef struct {
   LLVMTypeRef unwind_continue_type;
   LLVMValueRef *locals, *functions, *globals, *captured_values;
   bool *static_globals;
-  uint32_t *local_statements;
+  const uint32_t *local_statements;
   const DynLocationIndex *locations;
   LLVMTypeRef *struct_types, *enum_types, *function_types;
   DynIrProgram *ir;
@@ -70,7 +70,7 @@ typedef struct {
   /* Locals whose value never changes after definition (never assigned and
      never address-taken). A pointer check of such a local holds for the rest
      of the scope that made it; facts are popped when the scope ends. */
-  bool *unstable_locals;
+  const bool *unstable_locals;
   struct { uint32_t local; DynType pointee; } *local_facts;
   size_t local_fact_count, local_fact_capacity;
   LLVMValueRef last_local_load;
@@ -651,6 +651,10 @@ static LLVMValueRef emit_call(Gen *g, LLVMTypeRef type, LLVMValueRef callee,
 #include "codegen_abi.h"
 
 static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
+  /* The builder folds checks on constants, such as a nonzero constant divisor,
+     to true. Those cannot fail, so they need no branch or panic block. */
+  if (LLVMIsAConstantInt(condition) && LLVMConstIntGetZExtValue(condition))
+    return condition;
   LLVMBasicBlockRef before = LLVMGetInsertBlock(g->builder);
   uint64_t epoch = g->statement_epoch;
   LLVMBasicBlockRef ok = LLVMAppendBasicBlockInContext(g->context, g->function,
@@ -2350,6 +2354,42 @@ uint64_t dyn_codegen_chunk_instances(const DynSource *source,
   }
   return hash;
 }
+/* Assigned or address-taken locals may change; checks of them never carry
+   over to later uses. Addresses taken of a field or element count too. */
+static bool local_facts_build(DynIrProgram *ir) {
+  ir->unstable_locals = calloc(ir->local_count ? ir->local_count : 1, sizeof(*ir->unstable_locals));
+  ir->local_statements = calloc(ir->local_count ? ir->local_count : 1, sizeof(*ir->local_statements));
+  if (!ir->unstable_locals || !ir->local_statements)
+    return false;
+  for (size_t i = 0; i < ir->statement_count; ++i) {
+    const DynIrStmt *st = &ir->statements[i];
+    if (st->kind == DYN_STMT_LOCAL && st->local_id < ir->local_count &&
+        !ir->local_statements[st->local_id])
+      ir->local_statements[st->local_id] = (uint32_t)i + 1;
+    if (st->kind != DYN_STMT_ASSIGN)
+      continue;
+    /* A plain local assignment has no target expression. */
+    if (st->target == DYN_NO_EXPR) {
+      if (st->local_id < ir->local_count)
+        ir->unstable_locals[st->local_id] = true;
+    } else if (ir->expressions[st->target].kind == DYN_EXPR_NAME)
+      ir->unstable_locals[ir->expressions[st->target].integer] = true;
+  }
+  for (size_t i = 0; i < ir->expression_count; ++i) {
+    if (ir->expressions[i].kind != DYN_EXPR_UNARY ||
+        ir->expressions[i].op != DYN_OP_ADDRESS)
+      continue;
+    DynExprId root = ir->expressions[i].left;
+    while (root != DYN_NO_EXPR &&
+           (ir->expressions[root].kind == DYN_EXPR_FIELD ||
+            ir->expressions[root].kind == DYN_EXPR_INDEX ||
+            ir->expressions[root].kind == DYN_EXPR_SLICE))
+      root = ir->expressions[root].left;
+    if (root != DYN_NO_EXPR && ir->expressions[root].kind == DYN_EXPR_NAME)
+      ir->unstable_locals[ir->expressions[root].integer] = true;
+  }
+  return true;
+}
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, DynIrProgram *ir) {
   memset(ir, 0, sizeof(*ir));
@@ -2375,6 +2415,10 @@ int dyn_codegen_prepare(const DynSource *source, bool shared,
   }
   ir->interface_hash = interface_hash(&ast, source);
   dyn_ast_program_free(&ast);
+  if (!local_facts_build(ir)) {
+    dyn_ir_free(ir);
+    return 2;
+  }
   if (!dyn_location_build(&ir->locations, source)) {
     dyn_ir_free(ir);
     return 2;
@@ -2597,44 +2641,9 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   g.stack_builder = LLVMCreateBuilderInContext(g.context);
   g.locations = &prepared->locations;
   g.locals = calloc(ir.local_count, sizeof(*g.locals));
-  g.unstable_locals = calloc(ir.local_count ? ir.local_count : 1, sizeof(*g.unstable_locals));
-  if (!g.unstable_locals)
-    goto allocation_failure;
-  /* Assigned or address-taken locals may change; checks of them never carry
-     over to later uses. Addresses taken of a field or element count too. */
-  for (size_t i = 0; i < ir.statement_count; ++i) {
-    const DynIrStmt *st = &ir.statements[i];
-    if (st->kind != DYN_STMT_ASSIGN)
-      continue;
-    /* A plain local assignment has no target expression. */
-    if (st->target == DYN_NO_EXPR) {
-      if (st->local_id < ir.local_count)
-        g.unstable_locals[st->local_id] = true;
-    } else if (ir.expressions[st->target].kind == DYN_EXPR_NAME)
-      g.unstable_locals[ir.expressions[st->target].integer] = true;
-  }
-  for (size_t i = 0; i < ir.expression_count; ++i) {
-    if (ir.expressions[i].kind != DYN_EXPR_UNARY ||
-        ir.expressions[i].op != DYN_OP_ADDRESS)
-      continue;
-    DynExprId root = ir.expressions[i].left;
-    while (root != DYN_NO_EXPR &&
-           (ir.expressions[root].kind == DYN_EXPR_FIELD ||
-            ir.expressions[root].kind == DYN_EXPR_INDEX ||
-            ir.expressions[root].kind == DYN_EXPR_SLICE))
-      root = ir.expressions[root].left;
-    if (root != DYN_NO_EXPR && ir.expressions[root].kind == DYN_EXPR_NAME)
-      g.unstable_locals[ir.expressions[root].integer] = true;
-  }
-  if (g.di_builder && ir.local_count) {
-    g.local_statements = calloc(ir.local_count, sizeof(*g.local_statements));
-    if (!g.local_statements) goto allocation_failure;
-    for (size_t i = 0; i < ir.statement_count; ++i) {
-      const DynIrStmt *st = &ir.statements[i];
-      if (st->kind == DYN_STMT_LOCAL && !g.local_statements[st->local_id])
-        g.local_statements[st->local_id] = (uint32_t)i + 1;
-    }
-  }
+  g.unstable_locals = ir.unstable_locals;
+  if (g.di_builder)
+    g.local_statements = ir.local_statements;
   g.captured_values = calloc(ir.expression_count, sizeof(*g.captured_values));
   g.defer_stack = calloc(ir.statement_count, sizeof(*g.defer_stack));
   g.globals = calloc(ir.global_count, sizeof(*g.globals));
@@ -3051,14 +3060,12 @@ allocation_failure:
 cleanup:
   free(init_functions);
   free(g.locals);
-  free(g.local_statements);
   free(g.captured_values);
   free(g.defer_stack);
   free(g.globals);
   free(g.static_globals);
   free(g.functions);
   free(g.defines);
-  free(g.unstable_locals);
   free(g.local_facts);
   free(g.function_types);
   if (g.abis) for (size_t i = 0; i < ir.function_count; ++i) abi_free(g.abis[i]);
