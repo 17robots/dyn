@@ -1,7 +1,9 @@
+// line and column are zero-based, so a zero Scanner{ source: text } is ready to use.
+// Add one to each for display.
 pub struct Scanner { source: []const u8, offset: usize, line: usize, column: usize }
 
 pub fn scanner(source: []const u8) Scanner {
-  return Scanner{ source: source, line: 1, column: 1 }
+  return Scanner{ source: source }
 }
 
 pub fn finished(state: *const Scanner) bool {
@@ -19,7 +21,7 @@ pub fn advance(state: *Scanner, amount: usize) bool {
   for state.offset < end {
     if state.source[state.offset] == '\n' {
       state.line += 1
-      state.column = 1
+      state.column = 0
     }
     else {
       state.column += 1
@@ -46,7 +48,7 @@ pub fn next_line(state: *Scanner, output: *[]const u8) bool {
   if state.offset < #len(state.source) {
     state.offset += 1
     state.line += 1
-    state.column = 1
+    state.column = 0
   }
   return true
 }

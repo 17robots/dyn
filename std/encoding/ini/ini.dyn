@@ -6,11 +6,12 @@ use "std/mem"
 pub enum Kind { Section, Pair }
 pub enum ErrorKind { None, Syntax, Overflow }
 pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
+// line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
 pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind, error_line: usize, errors: usize }
 pub struct Result { entry: Entry, ok: bool }
 
 pub fn scanner(source: []const u8) Scanner {
-  return Scanner{ source: source, line: 1, section: source[..0] }
+  return Scanner{ source: source }
 }
 fn space(byte: u8) bool {
   return byte == ' ' || byte == '\t'
@@ -49,8 +50,8 @@ pub fn next(state: *Scanner) Result {
     if state.offset < #len(state.source) && state.source[state.offset] == '\n' {
       state.offset += 1
     }
-    line_number := state.line
     state.line += 1
+    line_number := state.line
     line := trim(state.source[start..finish])
     if #len(line) == 0 || line[0] == ';' || line[0] == '#' { } else if line[0] == '[' {
       section_name := line[..0]

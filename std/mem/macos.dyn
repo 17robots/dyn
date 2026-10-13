@@ -1,4 +1,6 @@
 #target(kernel: darwin)
+// Address space a zero Arena reserves on its first push. Only touched pages cost memory.
+const ZeroArenaReserve: usize = 64 * GiB
 fn mapping_allocate(size: usize) Mapping {
   address := #syscall(197, 0, size, 3, 4098, -1, 0)
   if address < 0 {

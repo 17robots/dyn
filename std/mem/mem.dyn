@@ -41,7 +41,9 @@ pub fn arena_from_buffer(backing: []u8) Arena {
 // memory only once pushes reach them, so reserve generously: a GiB or more is
 // normal on 64-bit targets. wasm32 has no reservation and backs it right away.
 // Panics when the OS refuses the reservation or capacity is zero; there is
-// nothing useful to do when address space is gone.
+// nothing useful to do when address space is gone. A zero Arena{} works too: its
+// first push reserves 64 GiB of address space (4 MiB on wasm32). Release it
+// with arena_release either way.
 pub fn arena_create(capacity: usize) Arena {
   if capacity == 0 {
     #panic("arena capacity must be nonzero")
@@ -168,6 +170,16 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
   }
   if size == 0 {
     return Allocation{ memory: nil, size: 0, ok: true }
+  }
+  if #len(arena.data) == 0 && arena.offset == 0 {
+    // Zero is initialization: an empty Arena{} reserves on its first push.
+    mapping := mapping_allocate(ZeroArenaReserve)
+    if !mapping.ok {
+      return arena_failure(arena, ErrorKind.Capacity)
+    }
+    arena.data = mapping.bytes
+    arena.owns_memory = true
+    arena.committed = mapping.committed
   }
 
   available := arena.data[arena.offset..]
@@ -444,11 +456,17 @@ pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usiz
 // Panics on invalid alignment, zero slots, size overflow or an exhausted arena.
 // Thread safety: caller synchronized.
 pub fn free_list_from_arena(arena: *Arena, slot_count: usize, slot_size: usize, alignment: usize) FreeList {
-  if !valid_alignment(alignment) { #panic("free-list alignment must be a power of two") }
-  if slot_count == 0 { #panic("free list needs at least one slot") }
+  if !valid_alignment(alignment) {
+    #panic("free-list alignment must be a power of two")
+  }
+  if slot_count == 0 {
+    #panic("free list needs at least one slot")
+  }
   effective_alignment := free_list_alignment(alignment)
   actual := slot_size
-  if actual < #sizeof(FreeListNode) { actual = #sizeof(FreeListNode) }
+  if actual < #sizeof(FreeListNode) {
+    actual = #sizeof(FreeListNode)
+  }
   actual = align_size(actual, effective_alignment)
   maximum := ~#cast(usize) 0
   if actual == 0 || slot_count > maximum / actual {
@@ -458,7 +476,9 @@ pub fn free_list_from_arena(arena: *Arena, slot_count: usize, slot_size: usize, 
   memory := arena_push_uninit(arena, size, effective_alignment)
   list := free_list_init(memory[..size], actual, effective_alignment)
   bitmap_size := slot_count / 8
-  if slot_count % 8 != 0 { bitmap_size += 1 }
+  if slot_count % 8 != 0 {
+    bitmap_size += 1
+  }
   if arena_remaining(arena) >= bitmap_size {
     bitmap := arena_push(arena, bitmap_size, 1)
     list.occupied = bitmap[..bitmap_size]
@@ -663,7 +683,8 @@ struct Block { next: *Block, arena: Arena, start: usize }
 // Thread confined and not independently copyable by convention, like Arena.
 pub struct GrowingArena {
   first: *Block, current: *Block, block_size: usize,
-  capacity_limit: usize = #cast(usize) -1,
+  // Zero means no limit, so a zero GrowingArena{} grows without bound.
+  capacity_limit: usize,
   // Maintained by growth/trim/release so enforcing the cap does not scan all blocks.
   backing_bytes: usize,
 }
@@ -675,7 +696,7 @@ pub fn growing_create(block_size: usize) GrowingArena {
 
 // Explicit growth with a cap on total requested backing bytes, including block
 // headers and alignment allowance. This is not an RSS or OS page commitment cap.
-// A block must fit in full; zero limit permits only zero-size allocations.
+// A block must fit in full. A zero limit means no limit, like a zero GrowingArena{}.
 pub fn growing_create_bounded(block_size: usize, capacity_limit: usize) GrowingArena {
   return GrowingArena{ block_size: block_size, capacity_limit: capacity_limit }
 }
@@ -734,7 +755,7 @@ fn growing_push_impl(arena: *GrowingArena, size: usize, alignment: usize, zero_m
   }
   capacity += alignment - 1
   retained := arena.backing_bytes
-  if retained > arena.capacity_limit || capacity > arena.capacity_limit - retained {
+  if arena.capacity_limit != 0 && (retained > arena.capacity_limit || capacity > arena.capacity_limit - retained) {
     return Allocation{ error: ErrorKind.Capacity }
   }
   created := arena_create(capacity)
@@ -799,16 +820,24 @@ pub fn growing_trim(arena: *GrowingArena, keep_bytes: usize) {
       capacity := arena_capacity(&block.arena)
       owner := block.arena
       arena_release(&owner)
-      if previous == nil { arena.first = next }
-      else { previous.next = next }
+      if previous == nil {
+        arena.first = next
+      }
+      else {
+        previous.next = next
+      }
       if arena.current == block {
         arena.current = next
-        if next == nil { arena.current = previous }
+        if next == nil {
+          arena.current = previous
+        }
       }
       retained -= capacity
       arena.backing_bytes = retained
     }
-    else { previous = block }
+    else {
+      previous = block
+    }
     block = next
   }
 }
