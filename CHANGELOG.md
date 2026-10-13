@@ -12,6 +12,18 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- `#wrap(expression)`: integer `+`, `-`, `*`, unary `-` and `<<` written
+  inside wrap around instead of panicking on overflow. Division and shift
+  counts are still checked. Use it for hashes and random number generators.
+- Enums take explicit values: `enum(u8) Op { Add = 1, Sub, Halt = 0xFF }`.
+  Values are integer literals and must fit the tag type; a variant without a
+  value is the previous one plus one. Enums with payloads keep implicit values.
+- `#cast` converts a plain enum to an integer, and an integer to an enum. The
+  integer-to-enum cast panics when the value is not one of the variants.
+- `hash.hash64` is now 64-bit FNV-1a, so its values change.
+
 ## 0.1.0-preview.20
 
 Compatible with preview 19.

@@ -1,10 +1,10 @@
 // Stable non-cryptographic hashes and checksums.
 
-// Bounded FNV-style hash. Prime modulus avoids checked-overflow dependence.
+// 64-bit FNV-1a.
 pub fn hash64(source: []const u8) u64 {
-  value: u64 = 2166136261
+  value: u64 = 14695981039346656037
   for byte in source {
-    value = ((value ^ #cast(u64) byte) * 16777619) % 4294967291
+    value = #wrap((value ^ #cast(u64) byte) * 1099511628211)
   }
   return value
 }

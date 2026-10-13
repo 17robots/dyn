@@ -127,6 +127,9 @@ typedef struct {
   double floating;
   bool boolean;
   uint32_t item_start, item_count;
+  /* Set inside #wrap(...): integer +, -, *, unary - and << wrap instead of
+     trapping on overflow. */
+  bool wrap;
 } DynAstExpr;
 typedef struct {
   DynSpan name;
@@ -151,7 +154,8 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType payload_type;
-  uint32_t tag;
+  /* Two's complement for signed tag types. */
+  uint64_t tag;
 } DynAstVariant;
 typedef struct {
   DynSpan span, name;

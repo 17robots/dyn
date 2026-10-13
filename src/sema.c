@@ -753,6 +753,9 @@ static ConstantInt constant_int_at(DynAstProgram *a, DynExprId id, unsigned foll
   if (id == DYN_NO_EXPR)
     return (ConstantInt){0};
   DynAstExpr *e = &a->expressions[id];
+  /* #wrap results depend on the type's width; they are folded by codegen. */
+  if (e->wrap)
+    return (ConstantInt){0};
   if (follow && e->kind == DYN_EXPR_CONVERT)
     return constant_int_at(a, e->left, follow - 1);
   if (follow && e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count &&
@@ -853,6 +856,9 @@ static ConstantUInt constant_uint_at(DynAstProgram *a, DynExprId id, unsigned fo
   if (id == DYN_NO_EXPR)
     return (ConstantUInt){0};
   DynAstExpr *e = &a->expressions[id];
+  /* #wrap results depend on the type's width; they are folded by codegen. */
+  if (e->wrap)
+    return (ConstantUInt){0};
   if (follow && e->kind == DYN_EXPR_CONVERT)
     return constant_uint_at(a, e->left, follow - 1);
   if (follow && e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count &&
@@ -1897,10 +1903,17 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       return a->expressions[id].type = DYN_TYPE_ERROR;
     bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
     bool target_ptr = dyn_type_is_pointer(target) || target == DYN_TYPE_RAWPTR;
+    /* Plain enums cast to and from integers; codegen checks integer values. */
+    bool source_tag = dyn_type_is_enum(source) &&
+                      !a->enums[source - DYN_TYPE_ENUM_BASE].has_payload;
+    bool target_tag = dyn_type_is_enum(target) &&
+                      !a->enums[target - DYN_TYPE_ENUM_BASE].has_payload;
     bool valid = (numeric(sema, source) && numeric(sema, target)) ||
                  (source_ptr && target_ptr) ||
                  (source_ptr && integer(sema, target)) ||
-                 (integer(sema, source) && target_ptr) || source == target;
+                 (integer(sema, source) && target_ptr) || source == target ||
+                 (source_tag && integer(sema, target)) ||
+                 (integer(sema, source) && target_tag);
     if (!valid) {
       char from[128], to[128], message[320];
       type_name_into(a, source, s, from, sizeof(from));
@@ -2240,6 +2253,10 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (!numeric(sema, left))
     error_span(a->expressions[id].span, s, errors, "arithmetic requires numeric operands");
+  if (a->expressions[id].wrap && !integer(sema, left) && numeric(sema, left)) {
+    error_span(a->expressions[id].span, s, errors, "#wrap requires integer arithmetic");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
   if (integer(sema, left)) {
     ConstantUInt rhs = constant_uint(a, a->expressions[id].right);
     if ((a->expressions[id].op == DYN_OP_DIV || a->expressions[id].op == DYN_OP_REM) && rhs.valid &&
@@ -2247,7 +2264,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(a->expressions[id].span, s, errors, "invalid constant division by zero");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    if (signed_int(sema, left)) {
+    bool wrap = a->expressions[id].wrap;
+    if (!wrap && signed_int(sema, left)) {
       ConstantInt all = constant_int(a, id);
       if (all.overflow ||
           (all.valid && !constant_fits_type(sema, all.value, left))) {
@@ -2255,7 +2273,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                    "constant arithmetic overflows result type");
         return a->expressions[id].type = DYN_TYPE_ERROR;
       }
-    } else {
+    } else if (!wrap) {
       ConstantUInt all = constant_uint(a, id);
       unsigned width = bits(sema, left);
       if (all.overflow || (all.valid && width < 64 &&

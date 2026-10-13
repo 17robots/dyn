@@ -449,7 +449,8 @@ static LLVMMetadataRef debug_type(Gen *g, DynType t) {
     for (uint32_t i = 0; i < en->variant_count; ++i) {
       DynIrVariant *v = &g->ir->variants[en->variant_start + i];
       values[i] = LLVMDIBuilderCreateEnumerator(g->di_builder, v->name,
-                                                strlen(v->name), v->tag, 1);
+                                                strlen(v->name), v->tag,
+                                                !signed_type(en->tag_type));
     }
     LLVMMetadataRef tag = LLVMDIBuilderCreateEnumerationType(
         g->di_builder, file, en->name, strlen(en->name), file, line,
@@ -1133,11 +1134,15 @@ static LLVMValueRef gen_binary(Gen *g, const DynIrExpr *e,
       r = LLVMBuildTrunc(g->builder, r, type, "shift.count");
     else if (rb < lb)
       r = LLVMBuildZExt(g->builder, r, type, "shift.count");
+    if (e->wrap && e->op == DYN_OP_SHL)
+      return LLVMBuildShl(g->builder, l, r, "wrap.shl");
     return checked_integer(g, e->op, e->type, l, r);
   }
+  bool wraps = e->wrap && (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB ||
+                           e->op == DYN_OP_MUL);
   if (int_type(e->type))
-    return e->boolean ? proven_integer(g, e->op, l, r)
-                      : checked_integer(g, e->op, e->type, l, r);
+    return e->boolean || wraps ? proven_integer(g, e->op, l, r)
+                               : checked_integer(g, e->op, e->type, l, r);
   if (e->op == DYN_OP_ADD)
     return LLVMBuildFAdd(g->builder, l, r, "fadd");
   if (e->op == DYN_OP_SUB)
@@ -1147,6 +1152,42 @@ static LLVMValueRef gen_binary(Gen *g, const DynIrExpr *e,
   if (e->op == DYN_OP_DIV)
     return LLVMBuildFDiv(g->builder, l, r, "fdiv");
   return LLVMBuildFRem(g->builder, l, r, "frem");
+}
+static LLVMValueRef integer_convert(Gen *g, LLVMValueRef value, DynType from,
+                                    DynType to, LLVMTypeRef type) {
+  unsigned from_bits = type_bits(g, from), to_bits = type_bits(g, to);
+  if (from_bits == to_bits)
+    return value;
+  if (from_bits > to_bits)
+    return LLVMBuildTrunc(g->builder, value, type, "cast.trunc");
+  return signed_type(from) ? LLVMBuildSExt(g->builder, value, type, "cast.sext")
+                           : LLVMBuildZExt(g->builder, value, type, "cast.zext");
+}
+static LLVMValueRef gen_expr(Gen *g, DynExprId id);
+/* An integer becomes an enum only when it equals one of the variant values. */
+static LLVMValueRef integer_to_enum(Gen *g, const DynIrExpr *e) {
+  DynType source = g->ir->expressions[e->left].type;
+  DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
+  LLVMTypeRef wide = LLVMInt64TypeInContext(g->context);
+  LLVMValueRef value = gen_expr(g, e->left),
+               widened = integer_convert(g, value, source, DYN_TYPE_I64, wide),
+               valid = LLVMConstInt(LLVMInt1TypeInContext(g->context), 0, 0);
+  bool tag_signed = signed_type(en->tag_type);
+  unsigned tag_bits = type_bits(g, en->tag_type);
+  for (uint32_t i = 0; i < en->variant_count; ++i) {
+    uint64_t tag = g->ir->variants[en->variant_start + i].tag;
+    if (tag_signed && tag_bits < 64 && (tag >> (tag_bits - 1)) & 1)
+      tag |= ~UINT64_C(0) << tag_bits;
+    LLVMValueRef same = LLVMBuildICmp(g->builder, 32, widened,
+                                      LLVMConstInt(wide, tag, 0), "enum.value");
+    /* A negative source never equals an unsigned tag above INT64_MAX. */
+    if (signed_type(source) != tag_signed && (int64_t)tag < 0)
+      same = LLVMConstInt(LLVMInt1TypeInContext(g->context), 0, 0);
+    valid = LLVMBuildOr(g->builder, valid, same, "enum.valid");
+  }
+  guard(g, valid, "enum.cast.ok");
+  return LLVMBuildTrunc(g->builder, widened, llvm_type(g, en->tag_type),
+                        "enum.tag");
 }
 static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
   DynIrExpr *e = &g->ir->expressions[id];
@@ -1202,12 +1243,15 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
     DynIrVariant *v = &g->ir->variants[e->integer];
     if (!en->has_payload)
-      return LLVMConstInt(llvm_type(g, en->tag_type), v->tag, 0);
+      return LLVMConstInt(llvm_type(g, en->tag_type), v->tag,
+                          signed_type(en->tag_type));
     LLVMValueRef storage = gen_stack_slot(g, type, "enum.temporary"),
                  tagp = LLVMBuildStructGEP2(g->builder, type, storage, 0,
                                             "enum.tag.pointer");
     LLVMBuildStore(g->builder,
-                   LLVMConstInt(llvm_type(g, en->tag_type), v->tag, 0), tagp);
+                   LLVMConstInt(llvm_type(g, en->tag_type), v->tag,
+                                signed_type(en->tag_type)),
+                   tagp);
     if (v->payload_type != DYN_TYPE_VOID) {
       LLVMValueRef payloadp = LLVMBuildStructGEP2(g->builder, type, storage, 1,
                                                   "enum.payload.pointer");
@@ -1406,9 +1450,16 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     }
     return value;
   }
+  if (e->kind == DYN_EXPR_CAST && dyn_type_is_enum(e->type) &&
+      !dyn_type_is_enum(g->ir->expressions[e->left].type))
+    return integer_to_enum(g, e);
   if (e->kind == DYN_EXPR_CAST) {
     DynIrExpr *source = &g->ir->expressions[e->left];
     LLVMValueRef value = gen_expr(g, e->left);
+    if (dyn_type_is_enum(source->type) && source->type != e->type) {
+      DynType tag = g->ir->enums[source->type - DYN_TYPE_ENUM_BASE].tag_type;
+      return integer_convert(g, value, tag, e->type, type);
+    }
     bool source_ptr =
         dyn_type_is_pointer(source->type) || source->type == DYN_TYPE_RAWPTR;
     bool target_ptr =
@@ -1514,6 +1565,8 @@ static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
     if (float_type(e->type))
       return LLVMBuildFNeg(g->builder, l, "neg");
     LLVMValueRef zero = LLVMConstInt(type, 0, 0);
+    if (e->wrap)
+      return LLVMBuildSub(g->builder, zero, l, "wrap.neg");
     return checked_integer(g, DYN_OP_SUB, e->type, zero, l);
   }
   if (e->op == DYN_OP_LOGICAL_AND || e->op == DYN_OP_LOGICAL_OR) {
@@ -1763,7 +1816,8 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
           } else if (p->is_enum) {
             DynIrVariant *v = &g->ir->variants[p->variant];
             match = LLVMBuildICmp(g->builder, 32, test_value,
-                                  LLVMConstInt(test_type, v->tag, 0),
+                                  LLVMConstInt(test_type, v->tag,
+                                               signed_type(en->tag_type)),
                                   "case.variant");
           } else {
             LLVMValueRef lo = LLVMConstInt(test_type, (uint64_t)p->first, 1),

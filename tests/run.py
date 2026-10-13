@@ -11,6 +11,7 @@ def run(*command):
 run(sys.executable, ROOT/'tests/memory-ergonomics.py')
 run(sys.executable, ROOT/'tests/arena-strings.py')
 run(sys.executable, ROOT/'tests/mdesk.py')
+run(sys.executable, ROOT/'tests/wrap-enum-values.py')
 run(sys.executable, ROOT/'tests/std-memory-contracts.py')
 run(sys.executable, ROOT/'tests/array-extents.py')
 run(sys.executable, ROOT/'tests/owner-warnings.py')

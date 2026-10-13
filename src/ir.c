@@ -88,7 +88,7 @@ static UIntRange uint_range(const DynIrProgram *ir, DynExprId id,
   }
   if (e->kind == DYN_EXPR_INDEX && unsigned_type(e->type))
     return (UIntRange){true, false, unsigned_max(e->type, pointer_bytes), 0};
-  if (e->kind != DYN_EXPR_BINARY)
+  if (e->kind != DYN_EXPR_BINARY || e->wrap)
     return (UIntRange){0};
   UIntRange left = uint_range(ir, e->left, locals, pointer_bytes, depth + 1),
             right = uint_range(ir, e->right, locals, pointer_bytes, depth + 1);
@@ -404,7 +404,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
         a->expressions[i].right,      a->expressions[i].integer,
         a->expressions[i].floating,   a->expressions[i].boolean,
         a->expressions[i].item_start, a->expressions[i].item_count,
-        a->expressions[i].span};
+        a->expressions[i].span,       a->expressions[i].wrap};
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
       ir->expressions[i].kind = DYN_EXPR_NIL;
