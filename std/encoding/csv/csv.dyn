@@ -5,7 +5,7 @@ use "std/io" stream
 
 pub enum ErrorKind { None, Syntax, Capacity, Io }
 pub struct Scanner { source: []const u8, offset: usize, finished: bool, error: ErrorKind, error_offset: usize }
-pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, pending: bool, finished: bool, error: ErrorKind, system_error: isize }
+pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, finished: bool, error: ErrorKind, system_error: isize }
 pub struct Field { text: []u8, end_record: bool, end_input: bool, ok: bool }
 struct ByteResult { value: u8, end: bool, ok: bool }
 pub struct Writer { sink: stream.Writer, fields: usize, failed: bool, error: isize }
@@ -14,7 +14,7 @@ pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source }
 }
 pub fn stream_scanner(input: stream.Reader) StreamScanner {
-  return StreamScanner{ input: input, pending: true }
+  return StreamScanner{ input: input }
 }
 
 fn stream_byte(state: *StreamScanner) ByteResult {
@@ -58,7 +58,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
   }
   if first.end {
     state.finished = true
-    return Field{ text: destination[..0], end_record: true, end_input: true, ok: state.pending }
+    return Field{ text: destination[..0], end_record: true, end_input: true, ok: !state.record_ended }
   }
   quoted := first.value == '"'
   if !quoted {
@@ -130,7 +130,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
       stream_unread(state, after_cr.value)
     }
   }
-  state.pending = delimiter == ','
+  state.record_ended = delimiter != ','
   if input_ended {
     state.finished = true
   }

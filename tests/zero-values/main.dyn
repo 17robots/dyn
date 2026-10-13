@@ -1,0 +1,68 @@
+use "std/mem"
+use "std/io" io
+use "std/encoding/csv" csv
+use "std/encoding/ini" ini
+use "std/text/scanner" text
+
+
+fn read_nothing(data: rawptr, destination: []u8) io.Result {
+  return io.Result{ status: io.Status.End }
+}
+
+// A zero Arena reserves on its first push and is reusable after release.
+fn zero_arena() {
+  arena := mem.Arena{}
+  first := mem.push(u64, &arena)
+  first.* = 7
+  many := mem.push_array(u64, &arena, 100000)
+  many[99999] = first.*
+  if many[99999] != 7 || !arena.owns_memory {
+    #panic("zero arena push")
+  }
+  mem.arena_release(&arena)
+  again := mem.push(u32, &arena)
+  if again.* != 0 {
+    #panic("zero arena after release")
+  }
+  mem.arena_release(&arena)
+}
+
+fn zero_scanners() {
+  lines := text.Scanner{ source: "a\nbc" }
+  line: []const u8 = ""
+  _ = text.next_line(&lines, &line)
+  _ = text.advance(&lines, 1)
+  if lines.line != 1 || lines.column != 1 {
+    #panic("text scanner positions are zero-based")
+  }
+  entries := ini.Scanner{ source: "\n[s]\nk=v\n" }
+  section := ini.next(&entries)
+  pair := ini.next(&entries)
+  if section.entry.line != 2 || pair.entry.line != 3 || !bytes_equal(pair.entry.section, "s") {
+    #panic("zero INI scanner lines")
+  }
+  // An empty stream holds one empty field, from the constructor or from zero.
+  empty := csv.StreamScanner{ input: io.Reader{ read: &read_nothing } }
+  storage: [4]u8 = []
+  field := csv.next_stream(&empty, storage[..])
+  if !field.ok || #len(field.text) != 0 || !field.end_input {
+    #panic("zero CSV stream scanner")
+  }
+}
+
+fn bytes_equal(a: []const u8, b: []const u8) bool {
+  if #len(a) != #len(b) {
+    return false
+  }
+  for i in 0..#len(a) {
+    if a[i] != b[i] {
+      return false
+    }
+  }
+  return true
+}
+
+fn main() {
+  zero_arena()
+  zero_scanners()
+}

@@ -29,6 +29,18 @@ Breaking.
   - `xml.StreamScanner` gains `error`; read failures are `ErrorKind.Io`
     instead of `Syntax`.
 
+- Zero is initialization across std:
+  - A zero `mem.Arena{}` reserves address space on its first push (64 GiB,
+    4 MiB on wasm32), so it works without `arena_create`. Release it with
+    `arena_release`.
+  - A zero `GrowingArena` has no capacity limit. `growing_create_bounded(n, 0)`
+    now means unbounded rather than "only zero-size pushes".
+  - `text.Scanner` line and column are zero-based; add one for display.
+  - `ini.Scanner.line` counts lines read (entry and error lines stay 1-based).
+  - `csv.StreamScanner.pending` became `record_ended`.
+  - `process.Options` still uses -1 for "inherit": 0 is a real descriptor.
+    Build it with `process.options()`.
+
 ## 0.1.0-preview.21
 
 Breaking.

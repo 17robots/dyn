@@ -71,10 +71,14 @@ fn main() {
     expect(chain.first == nil && chain.current == nil)
     _ = mem.growing_push_or_panic(&chain, 64, 8)
   }
-  empty := mem.growing_create_bounded(128, 0)
-  expect(mem.growing_push(&empty, 0, 1).ok)
-  expect(!mem.growing_push(&empty, 1, 1).ok)
-  expect(mem.growing_snapshot(&empty).blocks == 0)
+  tight := mem.growing_create_bounded(128, 1)
+  expect(mem.growing_push(&tight, 0, 1).ok)
+  expect(!mem.growing_push(&tight, 1, 1).ok)
+  expect(mem.growing_snapshot(&tight).blocks == 0)
+  unbounded := mem.GrowingArena{}
+  _ = mem.growing_push_or_panic(&unbounded, 4096, 8)
+  expect(mem.growing_snapshot(&unbounded).blocks == 1)
+  mem.growing_release(&unbounded)
 }
 '''
 
