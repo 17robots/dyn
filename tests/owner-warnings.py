@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Narrow arena descriptor warnings; no lifetime type system."""
+"""dyn vet findings (arena copies, duplicate imports) and narrow lifetime errors."""
 import json
 import os
 from pathlib import Path
@@ -20,21 +20,26 @@ fn main() {
 }
 ''')
     command = [DYN, 'check', str(project), '--no-cache', '--diagnostics', 'json']
+    # The compiler reports errors only; suspicious-but-valid code is dyn vet's job.
     normal = subprocess.run(command, capture_output=True, text=True, timeout=30)
-    assert normal.returncode == 0, normal.stderr
-    reports = [json.loads(line) for line in normal.stderr.splitlines() if line.startswith('{')]
-    assert any(r['severity'] == 'warning' and 'copying an arena' in r['message'] for r in reports), normal.stderr
-    strict = subprocess.run([*command, '--warnings-as-errors'], capture_output=True, text=True, timeout=30)
-    assert strict.returncode == 1 and 'copying an arena' in strict.stderr, strict.stderr
+    assert normal.returncode == 0 and 'copying an arena' not in normal.stderr, normal.stderr
+    vet = subprocess.run([DYN, 'vet', str(project), '--no-cache', '--diagnostics', 'json'],
+                         capture_output=True, text=True, timeout=30)
+    reports = [json.loads(line) for line in vet.stderr.splitlines() if line.startswith('{')]
+    assert vet.returncode == 1, vet.stderr
+    assert any(r['severity'] == 'warning' and 'copying an arena' in r['message'] for r in reports), vet.stderr
     output = project / 'copy-program'
     built = subprocess.run([DYN, 'build', str(project), '--output', str(output)],
                            capture_output=True, text=True, timeout=120)
-    assert built.returncode == 0, built.stderr
-    strict_build = subprocess.run([DYN, 'build', str(project), '--warnings-as-errors',
-                                   '--output', str(output)], capture_output=True, text=True, timeout=120)
-    assert strict_build.returncode == 1, strict_build.stderr
-    quiet = subprocess.run([*command, '--no-warnings'], capture_output=True, text=True, timeout=30)
-    assert quiet.returncode == 0 and 'copying an arena' not in quiet.stderr, quiet.stderr
+    assert built.returncode == 0 and 'copying an arena' not in built.stderr, built.stderr
+    for removed in ('--warnings-as-errors', '--no-warnings'):
+        rejected = subprocess.run([*command, removed], capture_output=True, text=True, timeout=30)
+        assert rejected.returncode == 2, (removed, rejected.stderr)
+    (project / 'other.dyn').write_text('use "std/mem" memory\n')
+    aliases = subprocess.run([DYN, 'vet', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
+    assert aliases.returncode == 1 and 'imported more than once' in aliases.stderr, aliases.stderr
+    assert 'imported more than once' not in subprocess.run(command, capture_output=True, text=True, timeout=30).stderr
+    (project / 'other.dyn').unlink()
     source.write_text('''use "std/mem"
 fn main() {
   storage: [64]u8 = []
@@ -70,9 +75,10 @@ fn main() {
   mem.arena_release(&moved)
 }
 ''')
+    subprocess.run([DYN, 'vet', str(project), '--no-cache', '--quiet'], check=True, timeout=30)
     for release in (False, True):
         output = project / 'program'
-        subprocess.run([DYN, 'build', str(project), '--no-cache', '--warnings-as-errors',
+        subprocess.run([DYN, 'build', str(project), '--no-cache',
                         '--output', str(output), *(['--release'] if release else [])], check=True, timeout=120)
         subprocess.run([str(output)], check=True, timeout=10)
-print('PASS arena copy warning, strict/suppressed modes, and explicit ownership transfer')
+print('PASS dyn vet findings, silent check/build, lifetime errors and explicit ownership transfer')

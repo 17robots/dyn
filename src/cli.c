@@ -8,7 +8,7 @@ void dyn_cli_help(const char *command) {
   (void)command;
   printf(
       "Dyn compiler\n\nUsage: dyn <command> [options] <directory>\n\n"
-      "Commands:\n  check    parse and validate module\n  build    build "
+      "Commands:\n  check    parse and validate module\n  vet      check module and report suspicious code\n  build    build "
       "executable module\n  run      build and run executable module\n"
       "  fmt      canonicalize source layout\n"
       "  docs     print public declarations (Markdown or --json)\n"
@@ -24,7 +24,7 @@ void dyn_cli_help(const char *command) {
       "  --sample-profile <LLVM sample profile>  (x86_64 Linux ThinLTO only)\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
       "Global options:\n  --quiet  --verbose  --timings  --no-cache  "
-      "--warnings-as-errors  --no-warnings\n"
+      "\n"
       "  --diagnostics json  --check (fmt only)  --json (docs only)");
 }
 
@@ -127,10 +127,6 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       o->no_link = true;
     else if (strcmp(a, "--shared") == 0)
       o->shared = true;
-    else if (strcmp(a, "--warnings-as-errors") == 0)
-      o->warnings_as_errors = true;
-    else if (strcmp(a, "--no-warnings") == 0)
-      o->no_warnings = true;
     else if (a[0] == '-') {
       fprintf(stderr, "error: unknown option '%s'\n", a);
       return 2;

@@ -75,7 +75,7 @@ static bool life_arena_owner(Life *l, DynType type) {
   return false;
 }
 static void life_warn_copy(Life *l, DynAstStmt *statement) {
-  if (l->source->context.no_warnings || statement->expression == DYN_NO_EXPR) return;
+  if (!l->source->context.vet || statement->expression == DYN_NO_EXPR) return;
   if (statement->kind != DYN_STMT_LOCAL && statement->kind != DYN_STMT_ASSIGN) return;
   DynAstExpr *value = &l->a->expressions[statement->expression];
   if ((value->kind != DYN_EXPR_NAME && value->kind != DYN_EXPR_FIELD) ||
@@ -87,11 +87,10 @@ static void life_warn_copy(Life *l, DynAstStmt *statement) {
   dyn_source_position(l->source, statement->span.start_byte, &path, &text, &length, &at);
   // The allocator implementation intentionally transfers descriptors when unmapping.
   if (path && (strstr(path, "/std/mem/") || strstr(path, "/share/dyn/mem/"))) return;
-  bool error = l->source->context.warnings_as_errors;
-  dyn_diagnostic_source(error ? "error" : "warning", l->source,
+  dyn_diagnostic_source("warning", l->source,
       statement->span.start_byte, statement->span.end_byte,
       "copying an arena descriptor duplicates mutable allocation state; borrow its address or transfer ownership explicitly");
-  if (error) ++*l->errors;
+  if (l->source->context.vet_findings) ++*l->source->context.vet_findings;
 }
 static LifeValue life_field(Life *l,uint32_t local,uint32_t field) {
   for (size_t i=l->field_count;i;--i) if(l->fields[i-1].local==local && l->fields[i-1].field==field) return l->fields[i-1].value;

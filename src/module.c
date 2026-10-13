@@ -798,13 +798,14 @@ static int visit(Resolver *r, const char *directory,
           dyn_syntax_diagnostic(d, s, "error", message);
           result = 1;
         } else {
-          if (has(targets, target_count, target)) {
+          if (s->context.vet && has(targets, target_count, target)) {
             char message[512];
             snprintf(
                 message, sizeof(message),
                 "module '%s' is imported more than once under different aliases",
                 path);
             dyn_syntax_diagnostic(d, s, "warning", message);
+            if (s->context.vet_findings) ++*s->context.vet_findings;
           }
           if (!push(&aliases, &alias_count, alias) ||
               !push(&targets, &target_count, target))

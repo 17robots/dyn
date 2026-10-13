@@ -296,11 +296,12 @@ static bool is_command(const DynOptions *o, const char *s) {
 }
 static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
+  unsigned vet_findings = 0;
+  bool vet = is_command(options, "vet");
   DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target),
                         .optimization = &options->optimization,
                         .json_diagnostics = options->json_diagnostics,
-                        .no_warnings = options->no_warnings,
-                        .warnings_as_errors = options->warnings_as_errors,
+                        .vet = vet, .vet_findings = &vet_findings,
                         .timings = options->timings};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);
@@ -327,7 +328,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
                : dyn_docs_directory(options->input, options->docs_json);
   }
   bool run = is_command(options, "run");
-  if (!is_command(options, "check") && !is_command(options, "build") && !is_command(options, "query") && !run) {
+  if (!is_command(options, "check") && !vet && !is_command(options, "build") && !is_command(options, "query") && !run) {
     fprintf(stderr, "error: command '%s' is not implemented\n",
             options->command);
     return 2;
@@ -455,7 +456,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   DynCheckResult checked = {0};
   if (!build)
     checked = dyn_check_sources(&sources, main_path, false);
-  if (checked.errors) {
+  if (checked.errors || vet_findings) {
     dyn_sources_free(&sources);
     free(main_path);
     return 1;

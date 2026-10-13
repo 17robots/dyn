@@ -12,10 +12,15 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.22
 
 Breaking.
 
+- `dyn vet DIR` checks a module and reports suspicious but valid code: copying
+  an arena, and importing one module under two names. It exits 1 when it finds
+  something. `check`, `build` and `run` now report errors only, and
+  `--warnings-as-errors` and `--no-warnings` are removed; run `dyn vet` in CI
+  instead. Language servers still show vet findings as warnings.
 - The CSV, INI and XML scanners keep their first error in the scanner. After
   an error `next` returns `ok: false`, so loop until `ok` is false and then
   check `state.error` once. The per-item `error` fields are gone from
