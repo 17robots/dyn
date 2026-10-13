@@ -122,7 +122,7 @@ This release changes allocation names and adds typed allocation. Follow the
 
 - Breaking local API cleanup: ordinary allocation builtins and arena operations
   return failure; `_or_panic` explicitly selects panic on failure. Existing callers,
-  editor help, and examples are migrated. See [replacement table](docs/memory-api-direction.md).
+  editor help, and examples are migrated. See the [memory guide](docs/guide/memory.md).
 - Add fallible pool/free-list construction, allocator-output strings and INI
   parsing. Growing allocator callbacks no longer zero payloads redundantly.
 - Keep lifetime diagnostics narrow. No borrow checker, ownership annotations,
@@ -131,7 +131,7 @@ This release changes allocation names and adds typed allocation. Follow the
 - Add experimental primitive `Allocator`, fixed-callback construction, typed
   allocation builtins and `#AllocResult` with named `AllocError` categories.
   Fixed/growing arena adapters, reflection, editor support, failure tests, and
-  [design documentation](docs/allocator-design.md) accompany the feature.
+  design documentation accompany the feature.
 
 `std/mem` adds binary byte units `KiB`, `MiB`, and `GiB`, plus
 `size_for(count, element_size)`. Check the returned `ok` before using `bytes`:
@@ -159,7 +159,7 @@ Trim and release preserve remaining ownership after partial failure.
 
 `dyn docs --json` adds `contracts` summaries sourced from labelled adjacent comments.
 The schema remains version 1 with additive fields; full comments remain available.
-The new [memory guide](docs/memory-patterns.md) is exercised in debug and release
+The new [memory guide](docs/guide/memory-patterns.md) is exercised in debug and release
 by `tests/documentation-examples.py`.
 
 ## 0.1.0-preview.15

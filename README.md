@@ -4,6 +4,8 @@ Dyn is ready for public preview testing. Start with
 [preview 21](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.21), then
 [report bugs](https://github.com/17robots/dyn/issues). APIs may change between previews.
 See the [changelog](CHANGELOG.md) for upgrade notes and code migrations.
+The [documentation](docs/README.md) covers the language, the standard library
+and the compiler; start with [idiomatic Dyn](docs/guide/idiomatic-dyn.md).
 
 This repository contains the C bootstrap compiler, target runtime, SDK (`std/`
 and optional native bindings in `vendor/`), compiler tools and regression tests.
@@ -130,7 +132,7 @@ equivalents. `std/terminal` retains Linux terminal controls and key decoding.
 
 ## Standard library contracts
 
-The executable [memory patterns](docs/memory-patterns.md) cover fixed budgets,
+The executable [memory patterns](docs/guide/memory-patterns.md) cover fixed budgets,
 constant array sizes, explicit growth, scratch, retained output, and failure behavior.
 For local compiler/grammar development in the combined workspace, set
 `TS_DIR` to the sibling `tree-sitter-dyn` checkout containing the matching generated
@@ -409,4 +411,4 @@ allocation-failure behavior and ABI contracts. `tests/performance-contracts.py`
 checks these alongside independent search oracles and compiler option/cache tests.
 
 Allocation goes through arenas: `mem.push(T, &arena)`, `mem.push_array(T, &arena, n)`
-and `mem.push_bytes_uninit(&arena, n)`. See [memory patterns](docs/memory-patterns.md).
+and `mem.push_bytes_uninit(&arena, n)`. See [memory patterns](docs/guide/memory-patterns.md).
