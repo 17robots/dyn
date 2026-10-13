@@ -1,0 +1,45 @@
+use "std/io"
+use "std/mem"
+
+const Count: usize = 10000000
+
+// Hoare quicksort with a middle pivot; the same algorithm in every language.
+fn quicksort(values: []u64) {
+  if #len(values) < 2 {
+    return
+  }
+  pivot := values[(#len(values) - 1) / 2]
+  i: usize = 0
+  j := #len(values) - 1
+  for {
+    for values[i] < pivot {
+      i += 1
+    }
+    for values[j] > pivot {
+      j -= 1
+    }
+    if i >= j {
+      break
+    }
+    swap := values[i]
+    values[i] = values[j]
+    values[j] = swap
+    i += 1
+    j -= 1
+  }
+  quicksort(values[..j + 1])
+  quicksort(values[j + 1..])
+}
+
+fn main() {
+  arena := mem.Arena{}
+  values := mem.push_array(u64, &arena, Count)
+  state: u64 = 42
+  for *value in values {
+    state = #wrap(state * 6364136223846793005 + 1442695040888963407)
+    value.* = state >> 1
+  }
+  quicksort(values)
+  _ = io.println(io.stdout(), "{} {} {}", values[0], values[Count / 2], values[Count - 1])
+  mem.arena_release(&arena)
+}
