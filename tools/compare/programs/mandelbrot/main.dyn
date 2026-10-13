@@ -1,0 +1,27 @@
+use "std/io"
+
+const Size: i64 = 3000
+const Iterations: i64 = 50
+
+fn main() {
+  inside: i64 = 0
+  for py in 0..Size {
+    y0 := #cast(f64) py / #cast(f64) Size * 2.0 - 1.0
+    for px in 0..Size {
+      x0 := #cast(f64) px / #cast(f64) Size * 3.0 - 2.0
+      x: f64 = 0.0
+      y: f64 = 0.0
+      n: i64 = 0
+      for n < Iterations && x * x + y * y <= 4.0 {
+        next := x * x - y * y + x0
+        y = 2.0 * x * y + y0
+        x = next
+        n += 1
+      }
+      if n == Iterations {
+        inside += 1
+      }
+    }
+  }
+  _ = io.println(io.stdout(), "{}", inside)
+}

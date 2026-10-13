@@ -1,0 +1,22 @@
+use "std/io"
+use "std/mem"
+
+const Limit: usize = 100000000
+
+fn main() {
+  arena := mem.Arena{}
+  composite := mem.push_array(bool, &arena, Limit + 1)
+  count: usize = 0
+  for i in 2..=Limit {
+    if !composite[i] {
+      count += 1
+      j := i * i
+      for j <= Limit {
+        composite[j] = true
+        j += i
+      }
+    }
+  }
+  _ = io.println(io.stdout(), "{}", count)
+  mem.arena_release(&arena)
+}

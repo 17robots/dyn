@@ -1,0 +1,43 @@
+use "std/io"
+use "std/mem"
+
+const MaxDepth: i64 = 18
+
+struct Node {
+  left: *Node,
+  right: *Node,
+}
+
+fn build_tree(arena: *mem.Arena, depth: i64) *Node {
+  node := mem.push(Node, arena)
+  if depth > 0 {
+    node.left = build_tree(arena, depth - 1)
+    node.right = build_tree(arena, depth - 1)
+  }
+  return node
+}
+
+fn count(node: *Node) i64 {
+  if node.left == nil {
+    return 1
+  }
+  return 1 + count(node.left) + count(node.right)
+}
+
+// Each tree lives in one arena region that is rewound after counting.
+fn main() {
+  arena := mem.Arena{}
+  total: i64 = 0
+  depth: i64 = 4
+  for depth <= MaxDepth {
+    iterations := #cast(i64) 1 << #cast(u32) (MaxDepth - depth + 4)
+    for _ in 0..iterations {
+      mark := mem.arena_mark(&arena)
+      total += count(build_tree(&arena, depth))
+      mem.arena_rewind(&arena, mark)
+    }
+    depth += 2
+  }
+  _ = io.println(io.stdout(), "{}", total)
+  mem.arena_release(&arena)
+}

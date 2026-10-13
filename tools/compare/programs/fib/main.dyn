@@ -1,0 +1,12 @@
+use "std/io"
+
+fn fib(n: i64) i64 {
+  if n < 2 {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+  _ = io.println(io.stdout(), "{}", fib(38))
+}

@@ -1,0 +1,43 @@
+use "std/io"
+use "std/mem"
+
+const Bits: u64 = 23
+const Capacity: usize = 1 << 23
+const Inserts: usize = 4000000
+
+// Open addressing with linear probing; key 0 marks an empty slot.
+fn slot(key: u64) usize {
+  return #cast(usize) (#wrap(key * 11400714819323198485) >> (64 - Bits))
+}
+
+fn main() {
+  arena := mem.Arena{}
+  keys := mem.push_array(u64, &arena, Capacity)
+  counts := mem.push_array(u64, &arena, Capacity)
+  state: u64 = 7
+  for _ in 0..Inserts {
+    state = #wrap(state * 6364136223846793005 + 1442695040888963407)
+    key := (state >> 40) | 1
+    at := slot(key)
+    for keys[at] != 0 && keys[at] != key {
+      at = (at + 1) & (Capacity - 1)
+    }
+    keys[at] = key
+    counts[at] += 1
+  }
+  found: u64 = 0
+  state = 7
+  for _ in 0..2 * Inserts {
+    state = #wrap(state * 6364136223846793005 + 1442695040888963407)
+    key := (state >> 40) | 1
+    at := slot(key)
+    for keys[at] != 0 && keys[at] != key {
+      at = (at + 1) & (Capacity - 1)
+    }
+    if keys[at] == key {
+      found += counts[at]
+    }
+  }
+  _ = io.println(io.stdout(), "{}", found)
+  mem.arena_release(&arena)
+}
