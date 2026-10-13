@@ -5,6 +5,7 @@
 | Command | Does |
 | --- | --- |
 | `dyn check DIR` | Parse and type-check a module; libraries need no `main` |
+| `dyn vet DIR` | Check, then report suspicious but valid code; exits 1 on findings |
 | `dyn build DIR` | Build an executable (`--debug` default, or `--release`) |
 | `dyn run DIR` | Build and run |
 | `dyn fmt DIR` | Format every file in the module; `--check` only reports |
@@ -14,8 +15,13 @@
 | `dyn cache` | Inspect or clean the shared compilation cache |
 
 `dyn help` lists every option. Useful ones: `--target` to cross-compile,
-`--diagnostics json` for machine-readable errors, `--timings`, `--no-cache`,
-`--warnings-as-errors`, and `--link PATH` to add a native object or library.
+`--diagnostics json` for machine-readable errors, `--timings`, `--no-cache`
+and `--link PATH` to add a native object or library.
+
+The compiler reports errors only. `dyn vet` runs extra checks on valid code: it
+flags copying an arena (the copies would hand out overlapping memory) and
+importing one module under two names. Language servers show the same findings
+as warnings. Run `dyn vet` in CI next to `dyn fmt --check`.
 Editor packages for VS Code, Zed, Neovim, Helix and Sublime live in the
 `dyn-editors` repository and all use `dyn lsp`.
 

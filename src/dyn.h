@@ -61,7 +61,9 @@ typedef struct {
   DynDiagnosticSink diagnostic;
   void *diagnostic_data;
   bool json_diagnostics;
-  bool no_warnings, warnings_as_errors;
+  /* `dyn vet`: run the vet checks, counting findings when vet_findings is set. */
+  bool vet;
+  unsigned *vet_findings;
   bool timings;
   DynWork *work; /* Borrowed, never owned by a source or cached snapshot. */
   DynSyntaxCache *syntax_cache; /* Optional owner-scoped immutable source trees. */
@@ -99,8 +101,6 @@ typedef struct {
   bool emit_asm;
   bool no_link;
   bool shared;
-  bool warnings_as_errors;
-  bool no_warnings;
   bool timings;
   bool no_cache;
   bool no_lto;

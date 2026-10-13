@@ -712,8 +712,9 @@ LspSemantic lsp_semantic_project(LspDocument *documents, size_t count,
   }
   DynSources project = {0};
   LspDiagnostics diagnostics = {0};
+  // Editors show vet findings as warnings, as gopls does.
   DynContext context = {.target = lsp_target_current(), .work = lsp_work_current(), .diagnostic = lsp_collect_diagnostic,
-                        .diagnostic_data = &diagnostics,
+                        .diagnostic_data = &diagnostics, .vet = true,
                         .syntax_cache = requested->analysis_cache
                             ? &requested->analysis_cache->syntax : NULL};
   int loaded = lsp_load_semantic_project(documents, count, requested, replacement,
