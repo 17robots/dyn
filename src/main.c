@@ -291,6 +291,16 @@ static struct timespec timer_start(void) {
   clock_gettime(CLOCK_MONOTONIC, &value);
   return value;
 }
+#if defined(__SANITIZE_ADDRESS__)
+#define DYN_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define DYN_SANITIZED 1
+#endif
+#endif
+#ifndef DYN_SANITIZED
+#define DYN_SANITIZED 0
+#endif
 static bool is_command(const DynOptions *o, const char *s) {
   return strcmp(o->command, s) == 0;
 }
@@ -466,8 +476,12 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (!build) {
     if (!options->quiet)
       puts("ok");
+    /* The process exits next; freeing every syntax tree first costs about a
+       tenth of a large check. Sanitizer builds still free for leak checks. */
+#if DYN_SANITIZED
     dyn_sources_free(&sources);
     free(main_path);
+#endif
     return 0;
   }
   char *base = dyn_path_basename(options->input);

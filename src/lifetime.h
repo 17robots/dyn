@@ -30,14 +30,38 @@ static bool life_borrow_type(DynAstProgram *a, DynType t, unsigned depth) {
   }
   return false;
 }
-static bool life_mem_call(Life *l, DynAstExpr *e, const char *name) {
-  if (e->kind != DYN_EXPR_CALL || e->integer >= l->a->function_count) return false;
-  DynSpan span=l->a->functions[e->integer].name;
+static const char *const life_mem_names[] = {
+  "arena_push_or_panic", "arena_push_uninit_or_panic", "arena_push", "arena_push_uninit",
+  "arena_push_array", "push", "push_array", "push_bytes_uninit", "arena_rewind",
+  "arena_from_buffer", "arena_reset"};
+/* Which std/mem function a callee is. Mapping a span back to its file is a
+   linear search, so each function is classified once and cached. */
+static uint8_t life_mem_kind(Life *l, uint64_t function) {
+  Sema *sema = l->sema;
+  if (function >= sema->mem_kind_count) {
+    size_t count = l->a->function_count;
+    uint8_t *grown = realloc(sema->mem_kinds, count);
+    if (!grown) { l->a->allocation_failed = true; return 1; }
+    memset(grown + sema->mem_kind_count, 0, count - sema->mem_kind_count);
+    sema->mem_kinds = grown; sema->mem_kind_count = count;
+  }
+  if (sema->mem_kinds[function]) return sema->mem_kinds[function];
+  uint8_t kind = 1;
+  DynSpan span=l->a->functions[function].name;
   const char *path,*text; size_t n,at;
   dyn_source_position(l->source,span.start_byte,&path,&text,&n,&at);
-  size_t z=strlen(name);
-  return path && (strstr(path,"/std/mem/") || strstr(path,"/share/dyn/mem/")) &&
-    at+z<=n && !memcmp(text+at,name,z) && (at+z==n || !(isalnum((unsigned char)text[at+z]) || text[at+z]=='_'));
+  if (path && (strstr(path,"/std/mem/") || strstr(path,"/share/dyn/mem/")))
+    for (size_t i=0;i<sizeof(life_mem_names)/sizeof(*life_mem_names);++i) {
+      size_t z=strlen(life_mem_names[i]);
+      if (at+z<=n && !memcmp(text+at,life_mem_names[i],z) &&
+          (at+z==n || !(isalnum((unsigned char)text[at+z]) || text[at+z]=='_'))) { kind = (uint8_t)(2+i); break; }
+    }
+  return sema->mem_kinds[function] = kind;
+}
+static bool life_mem_call(Life *l, DynAstExpr *e, const char *name) {
+  if (e->kind != DYN_EXPR_CALL || e->integer >= l->a->function_count) return false;
+  uint8_t kind = life_mem_kind(l, e->integer);
+  return kind >= 2 && !strcmp(life_mem_names[kind-2], name);
 }
 /* Arena pushes; the first argument is the arena. */
 static bool life_push_call(Life *l, DynAstExpr *e) {
