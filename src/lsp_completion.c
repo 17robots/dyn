@@ -1229,10 +1229,16 @@ static bool lsp_expected_enum_name(LspDocument *documents, size_t count,
     size_t start = ts_node_start_byte(callee),
            length = ts_node_end_byte(callee) - start;
     size_t active = 0;
+    /* Arguments are the call's operands after the callee. */
+    bool seen_callee = false;
     for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i) {
       TSNode arg = ts_node_named_child(node, i);
-      if (strcmp(ts_node_type(arg), "expression"))
+      if (ts_node_is_extra(arg))
         continue;
+      if (!seen_callee) {
+        seen_callee = true;
+        continue;
+      }
       TSPoint end = ts_node_end_point(arg);
       if (end.row < point.row ||
           (end.row == point.row && end.column <= point.column))

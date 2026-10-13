@@ -2199,9 +2199,12 @@ static bool add_struct_fields(const DynSource *s, DynAstProgram *a,
       TSNode tq = {0}, init = {0};
       for (uint32_t k = 0; k < ts_node_named_child_count(m); ++k) {
         TSNode c = ts_node_named_child(m, k);
-        if (!(dyn_kind(c) != K_type_qualifier))
+        DynKind ck = dyn_kind(c);
+        /* The initializer is the one operand that is not the name or type;
+           a value identifier stays wrapped in primary. */
+        if (ck == K_type_qualifier)
           tq = c;
-        else if (!(dyn_kind(c) != K_expression))
+        else if (ck != K_identifier && ck != K_comment && !ts_node_is_extra(c))
           init = c;
       }
       DynType type = ts_node_is_null(tq)
@@ -2555,10 +2558,10 @@ static bool add_globals(const DynSource *s, DynAstProgram *a,
     }
     for (uint32_t j = 1; j < ts_node_named_child_count(v); ++j) {
       TSNode c = ts_node_named_child(v, j);
-      if (!(dyn_kind(c) != K_type_qualifier) ||
-          !(dyn_kind(c) != K_type))
+      DynKind ck = dyn_kind(c);
+      if (ck == K_type_qualifier || ck == K_type)
         tq = c;
-      else if (!(dyn_kind(c) != K_expression))
+      else if (ck != K_identifier && ck != K_comment && !ts_node_is_extra(c))
         init = c;
     }
     DynType type = ts_node_is_null(tq)
