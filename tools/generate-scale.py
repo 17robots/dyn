@@ -8,6 +8,9 @@ pathological function.
 
 Example: python3 tools/generate-scale.py --lines 100000 build/scale-100k
 
+--flat N writes one module with N small functions and a main that calls all
+of them: the shape that once made release ThinLTO take minutes.
+
 --helpers generic|concrete adds min/max helpers called about once per 400
 lines (raddbg's density for Min/Max), written as generics or as i64
 functions, to measure the cost of instantiation.
@@ -85,6 +88,19 @@ def module(rng, number, previous, helpers):
     return lines
 
 
+def flat(output, count):
+    lines = []
+    for i in range(count):
+        lines += [f'fn f{i}(x: i64) i64 {{', f'  y := x * {i % 7 + 1} + {i}', f'  if y > {i * 3} {{',
+                  f'    return y - {i}', '  }', f'  return y + {i % 5}', '}', '']
+    lines += ['fn main() {', '  total: i64 = 0']
+    lines += [f'  total = (total + f{i}({i % 97})) % 1000000' for i in range(count)]
+    lines += ['  if total < 0 {', '    #panic("negative")', '  }', '}', '']
+    output.mkdir(parents=True)
+    (output / 'main.dyn').write_text('\n'.join(lines))
+    print(f'{len(lines)} lines in 1 module')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
@@ -92,9 +108,13 @@ def main():
     parser.add_argument('--chain', type=int, default=8, help='modules per dependency chain')
     parser.add_argument('--seed', type=int, default=17)
     parser.add_argument('--helpers', choices=sorted(HELPERS))
+    parser.add_argument('--flat', type=int, metavar='N', help='one module of N functions called from main')
     args = parser.parse_args()
     if args.output.exists():
         parser.error('output exists; choose a new directory')
+    if args.flat:
+        flat(args.output, args.flat)
+        return
     rng = random.Random(args.seed)
     args.output.mkdir(parents=True)
     total, number, roots = 0, 0, []
