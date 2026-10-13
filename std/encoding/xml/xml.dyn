@@ -3,13 +3,15 @@ use "std/unicode/utf8" utf8
 use "std/bytes" bytes
 
 pub enum Kind { Start, End, Text, Comment, Processing, Cdata }
-pub enum ErrorKind { None, Syntax, Capacity, Mismatched, Overlap }
+// Scanners keep their first error: next returns ok false from then on, and the
+// caller checks state.error once after the loop.
+pub enum ErrorKind { None, Syntax, Capacity, Mismatched, Overlap, Io }
 pub struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }
 pub struct Scanner { source: []const u8, offset: usize, error_offset: usize, error: ErrorKind }
-pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, system_error: isize }
-pub struct Result { event: Event, error: ErrorKind, ok: bool }
+pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, error: ErrorKind, system_error: isize }
+pub struct Result { event: Event, ok: bool }
 pub struct AttributeScanner { source: []const u8, offset: usize, error: ErrorKind }
-pub struct Attribute { name: []const u8, value: []const u8, error: ErrorKind, ok: bool }
+pub struct Attribute { name: []const u8, value: []const u8, ok: bool }
 pub struct Writer { sink: stream.Writer, error: isize, failed: bool }
 
 pub fn scanner(source: []const u8) Scanner {
@@ -33,8 +35,16 @@ fn shift_stream(state: *StreamScanner) {
   state.quote = 0
 }
 
+fn stream_fail(state: *StreamScanner, kind: ErrorKind) Result {
+  state.error = kind
+  return Result{}
+}
+
 // Events borrow storage until the next call. Text may be returned in multiple events.
 pub fn next_stream(state: *StreamScanner) Result {
+  if state.error != ErrorKind.None {
+    return Result{}
+  }
   shift_stream(state)
   for true {
     if state.used > 0 {
@@ -73,22 +83,25 @@ pub fn next_stream(state: *StreamScanner) Result {
         if parsed.ok {
           state.consumed = candidate.offset
         }
+        else if candidate.error != ErrorKind.None {
+          state.error = candidate.error
+        }
         return parsed
       }
     } else if state.ended {
       return Result{}
     }
     if state.used == #len(state.storage) {
-      return Result{ error: ErrorKind.Capacity }
+      return stream_fail(state, ErrorKind.Capacity)
     }
     input_result := stream.read(state.input, state.storage[state.used..])
     if input_result.status == stream.Status.Error {
       state.system_error = input_result.error
-      return Result{ error: ErrorKind.Syntax }
+      return stream_fail(state, ErrorKind.Io)
     }
     if input_result.transferred > #len(state.storage) - state.used {
       state.system_error = -5
-      return Result{ error: ErrorKind.Syntax }
+      return stream_fail(state, ErrorKind.Io)
     }
     state.used += input_result.transferred
     if input_result.status == stream.Status.End || input_result.transferred == 0 {
@@ -174,7 +187,7 @@ fn starts(source: []const u8, at: usize, expected: []const u8) bool {
 fn fail(state: *Scanner, at: usize, kind: ErrorKind) Result {
   state.error = kind
   state.error_offset = at
-  return Result{ error: kind }
+  return Result{}
 }
 
 // XML 1.0 Fifth Edition NameStartChar/NameChar, decoded as Unicode scalars.
@@ -289,7 +302,7 @@ fn valid_text(text: []const u8, attribute: bool) bool {
 
 pub fn next(state: *Scanner) Result {
   if state.error != ErrorKind.None || state.offset == #len(state.source) {
-    return Result{ error: state.error }
+    return Result{}
   }
   start := state.offset
   if state.source[start] != '<' {
@@ -399,11 +412,11 @@ pub fn attributes(event: Event) AttributeScanner {
 }
 fn attribute_error(state: *AttributeScanner) Attribute {
   state.error = ErrorKind.Syntax
-  return Attribute{ error: state.error }
+  return Attribute{}
 }
 pub fn next_attribute(state: *AttributeScanner) Attribute {
   if state.error != ErrorKind.None {
-    return Attribute{ error: state.error }
+    return Attribute{}
   }
   at := state.offset
   for at < #len(state.source) && whitespace(state.source[at]) {
@@ -457,7 +470,7 @@ fn valid_attributes(event: Event) bool {
     before := scan.offset
     item := next_attribute(&scan)
     if !item.ok {
-      return item.error == ErrorKind.None
+      return scan.error == ErrorKind.None
     }
     previous := attributes(event)
     for previous.offset < before {
@@ -480,7 +493,7 @@ pub fn valid(source: []const u8, stack: [][]const u8) bool {
   for {
     item := next(&state)
     if !item.ok {
-      return item.error == ErrorKind.None && depth == 0 && roots == 1
+      return state.error == ErrorKind.None && depth == 0 && roots == 1
     }
     if item.event.kind == Kind.Text && !valid_text(item.event.text, false) {
       return false
