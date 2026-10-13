@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run complete memory documentation programs and check exported contract summaries."""
+"""Run every complete documentation program and check exported contract summaries."""
 import json
 import os
 from pathlib import Path
@@ -9,15 +9,16 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-documents = [ROOT / 'docs/memory-patterns.md', ROOT / 'docs/memory-api-direction.md', ROOT / 'README.md']
-# Workspace guides are checked when present; standalone compiler checkouts keep
-# their own executable guide and README coverage.
-documents += [path for path in (ROOT.parent / 'docs/idiomatic-dyn.md',
-                               ROOT.parent / 'docs/collections.md') if path.is_file()]
+# Every complete program in the docs and README must build and run. Migration
+# guides show old code on purpose.
+documents = sorted(path for path in (ROOT / 'docs').rglob('*.md') if 'migrations' not in path.parts)
+documents.append(ROOT / 'README.md')
 programs = [(path, source) for path in documents
             for source in re.findall(r'^```dyn\n(.*?)^```', path.read_text(), re.M | re.S)
-            if re.search(r'\bfn main\s*\(', source)]
-assert sum(path == ROOT / 'docs/memory-patterns.md' for path, _ in programs) == 5
+            if re.search(r'\bfn main\s*\(', source)
+            # Raw vendor bindings are generated per machine by `just vendor-bindings`.
+            and not re.search(r'^use "vendor/[^"]*/raw"', source, re.M)]
+assert sum(path == ROOT / 'docs/guide/memory-patterns.md' for path, _ in programs) == 5
 with tempfile.TemporaryDirectory(prefix='dyn-doc-examples-') as temporary:
     for index, (document, source) in enumerate(programs):
         project = Path(temporary) / str(index)
@@ -33,4 +34,4 @@ declarations = {d['name']: d for f in report['files'] for d in f['declarations']
 assert set(declarations['arena_push']['contracts']) == {
     'ownership', 'invalidation', 'allocation', 'failure', 'thread_safety'}
 assert 'no heap fallback' in declarations['arena_push_array']['contracts']['allocation']
-print(f'PASS {len(programs)} complete core documentation programs (debug/release) and JSON contract summaries')
+print(f'PASS {len(programs)} complete documentation programs (debug/release) and JSON contract summaries')
