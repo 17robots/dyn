@@ -42,7 +42,8 @@ fn main() {{
   _ = io.println(io.stdout(), "{{}}", total)
 }}
 ''')
-    for extra in ([], ['--release']):
+    # Chunked module caching is an LLVM contract; native debug re-emits the program.
+    for extra in (['--backend', 'llvm'], ['--release']):
         expected = sum(range(files))
         output, _ = build(project, cache, *extra)
         assert output == str(expected), output

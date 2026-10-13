@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run reuses module artifacts, executes each time, and invalidates changed code."""
+"""Run reuses LLVM module artifacts, executes each time, and invalidates changed code.
+Native debug emission regenerates the whole program instead; it is covered below."""
 import os
 from pathlib import Path
 import subprocess
@@ -14,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-run-cache-') as directory:
     # the compiler fingerprint failure that disabled every cache hit.
     command=Path(DYN).name
     def run(*options):
-        p=subprocess.run([command,'run',str(source),'--jobs','1','--timings',*options],env=env,capture_output=True,text=True,timeout=30)
+        p=subprocess.run([command,'run',str(source),'--jobs','1','--timings','--backend','llvm',*options],env=env,capture_output=True,text=True,timeout=30)
         assert p.returncode==0,p.stderr
         assert not list(temporary.iterdir()),list(temporary.iterdir())
         return p
@@ -30,4 +31,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-run-cache-') as directory:
     assert invalid.returncode != 0, 'invalid source executed a cached program'
     assert 'second' not in invalid.stdout
     assert not list(temporary.iterdir()),list(temporary.iterdir())
+    (source/'main.dyn').write_text('use "std/io" io\nfn main() { _ = io.println(io.stdout(), "native") }\n')
+    for _ in range(2):
+        native=subprocess.run([command,'run',str(source)],env=env,capture_output=True,text=True,timeout=30)
+        assert native.returncode==0 and 'native' in native.stdout,native.stderr
+        assert not list(temporary.iterdir()),list(temporary.iterdir())
 print('PASS run module caching, execution, invalidation, no-cache, temporary cleanup')

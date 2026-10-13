@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
 #include "dyn_syntax.h"
+#include "dyn_compact.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -102,6 +103,7 @@ static int string_compare(const void *a, const void *b) {
   return strcmp(*(char *const *)a, *(char *const *)b);
 }
 #include "interface_constants.h"
+#include "interface_compact.h"
 
 int dyn_interface_build(const DynSources *sources, DynInterface *result) {
   memset(result, 0, sizeof(*result));
@@ -114,6 +116,20 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
     const DynSource *s = &sources->items[si];
     if (dyn_source_target_enabled(s) == 0)
       continue;
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+    const ExpSnapshotTree *compact=dyn_compact_tree(s);
+    int compatible=compact ? interface_compact_compatible(s,compact) : 0;
+    if(compatible<0) goto fail;
+    if(compatible) {
+      int status=interface_compact_declarations(s,compact,constants,constant_count,&decls,&count);
+      if(status==3) {
+        for(size_t i=0;i<count;++i) free(decls[i]);
+        free(decls); free(constants); return 3;
+      }
+      if(status) goto fail;
+      continue;
+    }
+#endif
     TSTree *tree = dyn_source_tree(s);
     if (!tree || ts_node_has_error(ts_tree_root_node(tree))) {
       if (tree)
@@ -403,14 +419,7 @@ int dyn_interface_compose(const DynSources *sources, size_t owner_first,
   DynSources selected = {0};
   bool reflection = false;
   for (size_t i = 0; i < sources->count && !reflection; ++i) {
-    if (sources->items[i].needs_reflection) { reflection = true; break; }
-    if (!strstr(sources->items[i].text, "#typeof")) continue;
-    TSTree *tree = dyn_source_tree(&sources->items[i]);
-    if (!tree)
-      return 2;
-    reflection = sources->items[i].needs_reflection ||
-                 dyn_syntax_has_reflection(ts_tree_root_node(tree));
-    ts_tree_delete(tree);
+    if (!dyn_source_reflection(&sources->items[i], &reflection)) return 2;
   }
   selected.items =
       calloc(owner_count + interface_count, sizeof(*selected.items));

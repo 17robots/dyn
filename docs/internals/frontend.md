@@ -17,6 +17,38 @@ function, return-type, and loop state belong to one analysis invocation. Compile
 C allocations retain explicit C ownership. Dyn arenas remain a standard-library
 facility.
 
+## Default parser policy
+
+The default `dyn` and `dyn-release` artifacts parse batch CLI sources with the
+handwritten compact parser (`tools/parser-experiment/parser.c`) first. A source
+uses the compact tree only when it parses without error, its normalized depth is
+certified below the production 1024-level syntax depth limit for the pinned
+grammar, and its string literals pass the legacy-lexer safety check. Otherwise
+the compiler parses that source with Tree-sitter, which owns syntax diagnostics,
+error recovery and raw-tree depth reporting. Syntax-cache, work-budget and editor
+paths always use Tree-sitter. The build verifies the grammar pin before linking.
+
+`dyn-legacy` is the Tree-sitter-only rollback artifact and the differential
+reference for `just test-compact-first`. The staged `dyn-compact-*` artifacts
+below remain for bisecting consumer migrations.
+
+## Compact declaration qualification
+
+`just test-compact-declarations` builds an explicit `dyn-compact-declarations`
+artifact. Default artifacts keep the existing parser and declaration reader. The qualification build
+uses compact nodes for strict entry-declaration checks after Tree-sitter has
+validated syntax and depth. Both declaration readers share the same original-span
+entry policy. File partitions and any reflection prelude remain separate; source
+maps preserve original locations. Recovery requests keep the existing reader.
+
+Compact syntax or internal capacity failures use the existing declaration reader
+for that partition. Allocation failure and external cancellation/work exhaustion
+terminate analysis without retrying or reporting a false missing entry. The
+external budget is shared and never reset. Compact trees are transient and freed
+before AST lowering; all existing retained-tree contracts below still apply.
+This transition adds parsing work and does not establish an end-to-end speedup.
+Select the ordinary `dyn` or `dyn-release` artifact to leave the qualification path.
+
 ## Parsed source and symbol ownership
 
 Loaded sources own immutable Tree-sitter trees for their exact text revision.

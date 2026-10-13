@@ -2,6 +2,7 @@
 #include "dyn.h"
 #include "dyn_syntax.h"
 #include "dyn_scope.h"
+#include "dyn_imports.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -405,6 +406,16 @@ children:;
   ts_tree_cursor_delete(&cursor);
   return ok;
 }
+#include "module_compact_rewrite.h"
+static bool rewrite_source_nodes(TSNode root,const DynSource *source,Module *current,
+                                  Module *modules,size_t module_count,Edits *edits,
+                                  const DynScopeIndex *locals) {
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+  const ExpSnapshotTree *tree=dyn_compact_tree(source);
+  if(tree) return compact_rewrite_nodes(source,tree,current,modules,module_count,edits,locals);
+#endif
+  return rewrite_node(root,source,current,modules,module_count,edits,locals);
+}
 static int edit_compare(const void *a, const void *b) {
   const Edit *x = a, *y = b;
   if (x->start != y->start) return x->start < y->start ? -1 : 1;
@@ -486,11 +497,13 @@ static bool apply_edits(DynSource *s, Edits *e) {
   if (!out)
     return false;
   if (!s->original_text) {
-    s->original_text = strdup(s->text);
+    s->original_text = malloc(s->length + 1);
     if (!s->original_text) {
       free(out);
       return false;
     }
+    memcpy(s->original_text, s->text, s->length);
+    s->original_text[s->length] = 0;
     s->original_length = s->length;
     s->spans = malloc(sizeof(*s->spans));
     if (!s->spans) {
@@ -543,7 +556,11 @@ static bool apply_edits(DynSource *s, Edits *e) {
           dyn_syntax_advance(item->start_point, item->text, length)};
       ts_tree_edit(s->syntax, &edit);
     }
-  TSTree *tree = dyn_syntax_reparse(out, at, s->syntax);
+  TSTree *tree = NULL;
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  if (!s->compact_validated)
+#endif
+    tree = dyn_syntax_reparse(out, at, s->syntax);
   dyn_source_discard_syntax(s);
   s->syntax = tree;
   free(s->text);
@@ -552,7 +569,15 @@ static bool apply_edits(DynSource *s, Edits *e) {
   s->length = at;
   s->spans = spans;
   s->span_count = span_count;
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  return dyn_source_prepare(s);
+#else
+  return s->syntax && dyn_source_prepare(s);
+#endif
+#else
   return s->syntax != NULL;
+#endif
 }
 static void free_modules(Module *m, size_t count) {
   for (size_t i = 0; i < count; ++i) {
@@ -578,6 +603,84 @@ static uint64_t rewrite_hash(uint64_t hash, const void *data, size_t length) {
     hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
   return hash;
 }
+static void rewrite_abi_tree(const DynSource *source, TSNode root, Module *module) {
+  for (uint32_t j = 0; j < ts_node_named_child_count(root); ++j) {
+    TSNode wrapper = ts_node_named_child(root, j);
+    TSNode node = dyn_syntax_declaration_node(wrapper);
+    const char *kind = ts_node_type(node);
+    if (!strcmp(kind, "comment") || !strcmp(kind, "use")) continue;
+    uint32_t start = ts_node_start_byte(wrapper), end = ts_node_end_byte(wrapper);
+    if (!strcmp(kind, "fn")) {
+      if (!dyn_syntax_public(wrapper)) continue;
+      for (uint32_t k = 0; k < ts_node_named_child_count(node); ++k) {
+        TSNode child = ts_node_named_child(node, k);
+        if (!strcmp(ts_node_type(child), "block")) { end = ts_node_start_byte(child); break; }
+      }
+    }
+    size_t length = end - start;
+    module->abi = rewrite_hash(module->abi, &length, sizeof(length));
+    module->abi = rewrite_hash(module->abi, source->text + start, length);
+  }
+}
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+static bool compact_rewrite_abi(const DynSource *source, const ExpSnapshotTree *tree, Module *module) {
+  const ExpNode *nodes = tree->nodes;
+  for (uint32_t wrapper = nodes[tree->root].first; wrapper != UINT32_MAX; wrapper = nodes[wrapper].next) {
+    if (!dyn_work_step(&source->context, 1)) return false;
+    uint32_t node = nodes[wrapper].kind == SRC_DECLARATION ? nodes[wrapper].first : wrapper;
+    if (node == UINT32_MAX || nodes[node].kind == SRC_USE) continue;
+    uint32_t start = nodes[wrapper].start, end = nodes[wrapper].end;
+    if (nodes[node].kind == SRC_FN) {
+      if (!(nodes[wrapper].flags & EXP_PUBLIC)) continue;
+      for (uint32_t child = nodes[node].first; child != UINT32_MAX; child = nodes[child].next) {
+        if (!dyn_work_step(&source->context, 1)) return false;
+        if (nodes[child].kind == SRC_BLOCK) { end = nodes[child].start; break; }
+      }
+    }
+    size_t length = end - start;
+    if (!dyn_work_step(&source->context, length)) return false;
+    module->abi = rewrite_hash(module->abi, &length, sizeof(length));
+    module->abi = rewrite_hash(module->abi, source->text + start, length);
+  }
+  return true;
+}
+static bool compact_rewrite_declarations(const DynSource *source, const ExpSnapshotTree *tree,
+                                          Module *module, bool globals) {
+  const ExpNode *nodes = tree->nodes;
+  for (uint32_t wrapper = nodes[tree->root].first; wrapper != UINT32_MAX; wrapper = nodes[wrapper].next) {
+    if (!dyn_work_step(&source->context, 1)) return false;
+    if (nodes[wrapper].kind != SRC_DECLARATION) continue;
+    uint32_t node = nodes[wrapper].first;
+    if (node == UINT32_MAX) continue;
+    bool global = nodes[node].kind == SRC_VARIABLE || nodes[node].kind == SRC_CONST;
+    if (global != globals) continue;
+    uint32_t name = dyn_compact_name(tree, wrapper);
+    if (name == UINT32_MAX) continue;
+    char *text = compact_rewrite_text(source, tree, name);
+    bool ok = text && add_decl(module, text);
+    free(text);
+    if (!ok) return false;
+  }
+  return true;
+}
+static bool compact_rewrite_imports(const DynSource *source, Module *module, const char *root) {
+  DynImports reader;
+  if (!dyn_imports_open(&reader, source)) return false;
+  DynImportView view;
+  bool ok = true;
+  while (ok && dyn_imports_next(&reader, &view)) {
+    char *path = dyn_import_copy(view.path, view.path_length);
+    char *target = path ? dyn_module_resolve_import(&source->context, root, module->dir, path) : NULL;
+    char *alias = view.alias_node ? dyn_import_copy(view.alias, view.alias_length)
+                                 : dyn_path_basename(path ? path : "");
+    ok = target && alias && add_alias(module, alias, target);
+    free(path); free(target); free(alias);
+  }
+  ok = ok && !reader.failed;
+  dyn_imports_close(&reader);
+  return ok;
+}
+#endif
 static bool capture_dependencies(DynSources *sources, Module *modules, size_t count) {
   bool reflection = false;
   size_t *owners = calloc(sources->count, sizeof(*owners));
@@ -592,28 +695,20 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
     if (!module) { free(owners); free(selected); return false; }
     owners[i] = (size_t)(module - modules);
     if (!dyn_source_target_enabled(source)) continue;
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+    const ExpSnapshotTree *compact = dyn_compact_tree(source);
+    if (compact) {
+      reflection |= source->needs_reflection || source->compact_reflection;
+      if (!compact_rewrite_abi(source, compact, module)) { free(owners); free(selected); return false; }
+      continue;
+    }
+#endif
     TSTree *tree = dyn_source_tree(source);
     if (!tree) { free(owners); free(selected); return false; }
     TSNode root = ts_tree_root_node(tree);
     reflection |= source->needs_reflection ||
         (strstr(source->text, "#typeof") && dyn_syntax_has_reflection(root));
-    for (uint32_t j = 0; j < ts_node_named_child_count(root); ++j) {
-      TSNode wrapper = ts_node_named_child(root, j);
-      TSNode node = dyn_syntax_declaration_node(wrapper);
-      const char *kind = ts_node_type(node);
-      if (!strcmp(kind, "comment") || !strcmp(kind, "use")) continue;
-      uint32_t start = ts_node_start_byte(wrapper), end = ts_node_end_byte(wrapper);
-      if (!strcmp(kind, "fn")) {
-        if (!dyn_syntax_public(wrapper)) continue;
-        for (uint32_t k = 0; k < ts_node_named_child_count(node); ++k) {
-          TSNode child = ts_node_named_child(node, k);
-          if (!strcmp(ts_node_type(child), "block")) { end = ts_node_start_byte(child); break; }
-        }
-      }
-      size_t length = end - start;
-      module->abi = rewrite_hash(module->abi, &length, sizeof(length));
-      module->abi = rewrite_hash(module->abi, source->text + start, length);
-    }
+    rewrite_abi_tree(source, root, module);
     ts_tree_delete(tree);
   }
   for (size_t i = 0; i < sources->count; ++i) {
@@ -664,20 +759,24 @@ static bool rewrite_source(DynSource *s, Module *modules, size_t module_count) {
   char *dir = source_dir(s->path);
   Module *m = dir ? find_module(modules, module_count, dir) : NULL;
   free(dir);
-  TSTree *t = m ? dyn_source_tree(s) : NULL;
-  if (!t)
-    return false;
+  bool compact=false;
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  compact=s->compact_validated;
+#endif
+  TSTree *t = m && !compact ? dyn_source_tree(s) : NULL;
+  if (!m || (!compact && !t)) return false;
+  TSNode root=t ? ts_tree_root_node(t) : (TSNode){0};
   Edits edits = {0};
   DynScopeIndex locals = {0};
-  bool ok = dyn_scope_build(&locals, ts_tree_root_node(t), s) &&
-            rewrite_node(ts_tree_root_node(t), s, m, modules, module_count,
+  bool ok = dyn_scope_build(&locals, root, s) &&
+            rewrite_source_nodes(root, s, m, modules, module_count,
                          &edits, &locals) &&
             apply_edits(s, &edits);
   for (size_t i = 0; i < edits.count; ++i)
     free(edits.items[i].text);
   free(edits.items);
   dyn_scope_free(&locals);
-  ts_tree_delete(t);
+  if (t) ts_tree_delete(t);
   return ok;
 }
 static void *rewrite_worker(void *raw) {
@@ -750,6 +849,14 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     char *dir = source_dir(s->path);
     Module *m = find_module(modules, module_count, dir);
     free(dir);
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+    const ExpSnapshotTree *compact = dyn_compact_tree(s);
+    if (compact) {
+      if (!compact_rewrite_declarations(s, compact, m, false) ||
+          !compact_rewrite_imports(s, m, root)) result = 2;
+      continue;
+    }
+#endif
     TSTree *t = dyn_source_tree(s);
     if (!t) {
       result = 2;
@@ -807,6 +914,13 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     char *dir = source_dir(s->path);
     Module *m = find_module(modules, module_count, dir);
     free(dir);
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+    const ExpSnapshotTree *compact = dyn_compact_tree(s);
+    if (compact) {
+      if (!compact_rewrite_declarations(s, compact, m, true)) result = 2;
+      continue;
+    }
+#endif
     TSTree *t = dyn_source_tree(s);
     if (!t) {
       result = 2;

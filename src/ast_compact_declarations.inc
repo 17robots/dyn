@@ -1,0 +1,570 @@
+/* Ordered declaration phases for complete compact source partitions. Semantic
+   interning, name resolution, layout and diagnostics remain shared with ast.c. */
+#define compact_report(n,s,e,m) _Generic((n), CompactNode: compact_diagnostic, DynSpan: diagnostic_span)((n),(s),(e),(m))
+static bool compact_add_enum_names(const DynSource *s, DynAstProgram *a,
+                           unsigned *errors) {
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode wrapper = compact_declaration(a, i);
+    bool is_public = compact_flag(wrapper, EXP_PUBLIC);
+    CompactNode d = compact_first(wrapper);
+    if ((compact_kind(d) != SRC_ENUM))
+      continue;
+    CompactNode name = {0};
+    for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
+      if (!(compact_kind(c) != EXP_NAME)) {
+        name = c;
+        break;
+      }
+    }
+    DynSpan ns = compact_span(name);
+    if (find_enum(a, ns, s) != UINT32_MAX) {
+      compact_report(name, s, errors, "duplicate enum declaration");
+      continue;
+    }
+    if (a->enum_count >= DYN_TYPE_POINTER_BASE - DYN_TYPE_ENUM_BASE) {
+      compact_report(d, s, errors, "enum type capacity exceeded");
+      return false;
+    }
+    if (!reserve_enum(a)) {
+      compact_report(d, s, errors, "out of memory");
+      return false;
+    }
+    a->enums[a->enum_count++] =
+        (DynAstEnum){.span = compact_span(d),
+                     .name = ns,
+                     .tag_type = DYN_TYPE_U32,
+                     .alignment = 1,
+                     .is_public = is_public,
+                     .module_owner = declaration_owner(ns, s)};
+  }
+  return true;
+}
+static bool compact_add_struct_names(const DynSource *s, DynAstProgram *a,
+                             unsigned *errors) {
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode wrapper = compact_declaration(a, i);
+    bool is_public = compact_flag(wrapper, EXP_PUBLIC);
+    CompactNode d = compact_first(wrapper);
+    if ((compact_kind(d) != SRC_STRUCT))
+      continue;
+    CompactNode name = compact_child(d, 0);
+    DynSpan ns = compact_span(name);
+    if (find_struct(a, ns, s) != UINT32_MAX) {
+      compact_report(name, s, errors, "duplicate struct declaration");
+      continue;
+    }
+    if (a->struct_count >= DYN_TYPE_ENUM_BASE - DYN_TYPE_STRUCT_BASE) {
+      compact_report(d, s, errors, "struct type capacity exceeded");
+      return false;
+    }
+    if (!reserve_struct(a)) {
+      compact_report(d, s, errors, "out of memory");
+      return false;
+    }
+    bool packed = compact_flag(d, EXP_PACKED);
+    a->structs[a->struct_count++] =
+        (DynAstStruct){.span = compact_span(d),
+                       .name = ns,
+                       .packed = packed,
+                       .alignment = 0,
+                       .is_public = is_public,
+                       .module_owner = declaration_owner(ns, s)};
+  }
+  return true;
+}
+static bool compact_add_alias_names(const DynSource *s, DynAstProgram *a,
+                            unsigned *errors) {
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode wrapper = compact_declaration(a, i);
+    bool is_public = compact_flag(wrapper, EXP_PUBLIC);
+    CompactNode d = compact_first(wrapper);
+    if ((compact_kind(d) != SRC_ALIAS))
+      continue;
+    CompactNode name = compact_child(d, 0), type = compact_child(d, 1);
+    DynSpan ns = compact_span(name);
+    if (find_alias(a, ns, s) != UINT32_MAX ||
+        find_struct(a, ns, s) != UINT32_MAX) {
+      compact_report(name, s, errors, "duplicate type declaration");
+      continue;
+    }
+    if (a->alias_count >= DYN_TYPE_PARAM_BASE - DYN_TYPE_DISTINCT_BASE) {
+      compact_report(d, s, errors, "alias type capacity exceeded");
+      return false;
+    }
+    if (!reserve_alias(a)) {
+      compact_report(d, s, errors, "out of memory");
+      return false;
+    }
+    bool distinct = compact_flag(d, EXP_DISTINCT);
+    a->aliases[a->alias_count++] =
+        (DynAstAlias){.name = ns,
+                      .target = DYN_TYPE_ERROR,
+                      .compact_type = compact_reference(type),
+                      .distinct = distinct,
+                      .is_public = is_public,
+                      .module_owner = declaration_owner(ns, s)};
+  }
+  for (uint32_t i = 0; i < a->alias_count; ++i)
+    if (resolve_alias(a, i, s) == DYN_TYPE_ERROR)
+      compact_report(a->aliases[i].name, s, errors, "invalid or cyclic type alias");
+  return true;
+}
+static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
+                              unsigned *errors) {
+  uint32_t si = 0;
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode d = compact_first(compact_declaration(a, i));
+    if ((compact_kind(d) != SRC_STRUCT))
+      continue;
+    if (si >= a->struct_count)
+      break;
+    DynAstStruct *st = &a->structs[si++];
+    st->field_start = (uint32_t)a->field_count;
+    for (CompactNode m = compact_child(d, 1); !compact_null(m); m = compact_next(m)) {
+      if ((compact_kind(m) != SRC_STRUCT_MEMBER))
+        continue;
+      CompactNode tq = {0}, init = {0};
+      for (CompactNode c = compact_first(m); !compact_null(c); c = compact_next(c)) {
+        uint16_t ck = compact_kind(c);
+        /* The initializer is the one operand that is not the name or type;
+           a value identifier stays wrapped in primary. */
+        if (ck == SRC_QUALIFIER)
+          tq = c;
+        else if ((ck != EXP_NAME || compact_flag(c, EXP_PRIMARY)))
+          init = c;
+      }
+      DynType type = compact_null(tq)
+                         ? DYN_TYPE_ERROR
+                         : compact_type(compact_child(tq, 0), s, a);
+      if (type == DYN_TYPE_ERROR)
+        compact_report(tq, s, errors, "unknown or unsupported struct field type");
+      for (CompactNode c = compact_first(m); !compact_null(c); c = compact_next(c)) {
+        if (compact_kind(c) != EXP_NAME || compact_flag(c, EXP_PRIMARY))
+          continue;
+        DynSpan name = compact_span(c);
+        bool duplicate = false;
+        for (uint32_t q = 0; q < st->field_count; ++q)
+          if (dyn_span_text_equal(name, a->fields[st->field_start + q].name, s))
+            duplicate = true;
+        if (duplicate) {
+          compact_report(c, s, errors, "duplicate struct field");
+          continue;
+        }
+        if (!reserve_field(a)) {
+          compact_report(c, s, errors, "out of memory");
+          return false;
+        }
+        DynExprId def = compact_null(init) ? DYN_NO_EXPR
+                                              : compact_expr(init, s, a, errors);
+        a->fields[a->field_count++] = (DynAstField){name, type, def, 0};
+        ++st->field_count;
+      }
+    }
+  }
+  return true;
+}
+/* Integer, character or negated integer literal, as two's complement bits. */
+static bool compact_enum_literal(CompactNode node, const DynSource *s, DynAstProgram *a,
+                         unsigned *errors, uint64_t *bits, bool *negative) {
+  DynExprId id = compact_expr(node, s, a, errors);
+  if (id == DYN_NO_EXPR)
+    return false;
+  const DynAstExpr *e = &a->expressions[id];
+  *negative = negative_literal(a, e);
+  if (*negative)
+    e = &a->expressions[e->left];
+  if (e->kind != DYN_EXPR_INT && e->kind != DYN_EXPR_CHAR)
+    return false;
+  if (*negative && e->integer > UINT64_C(1) << 63)
+    return false;
+  *negative = *negative && e->integer != 0;
+  *bits = *negative ? UINT64_C(0) - e->integer : e->integer;
+  return true;
+}
+static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
+                              unsigned *errors) {
+  uint32_t ei = 0;
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode d = compact_first(compact_declaration(a, i));
+    if ((compact_kind(d) != SRC_ENUM))
+      continue;
+    DynAstEnum *en = &a->enums[ei++];
+    en->variant_start = (uint32_t)a->variant_count;
+    bool saw_name = false, any_explicit = false;
+    /* The next implicit value; exhausted once the previous was the maximum. */
+    uint64_t next = 0;
+    bool next_negative = false, exhausted = false;
+    for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
+      uint16_t k = compact_kind(c);
+      if (!saw_name && !(k != EXP_PRIMITIVE)) {
+        en->tag_type = compact_type(c, s, a);
+        continue;
+      }
+      if (!saw_name && !(k != EXP_NAME)) {
+        saw_name = true;
+        continue;
+      }
+      if ((k != SRC_ENUM_MEMBER))
+        continue;
+      CompactNode name = compact_child(c, 0);
+      bool duplicate = false;
+      for (uint32_t q = 0; q < en->variant_count; ++q)
+        if (dyn_span_text_equal(compact_span(name),
+                                a->variants[en->variant_start + q].name, s))
+          duplicate = true;
+      if (duplicate) {
+        compact_report(name, s, errors, "duplicate enum variant");
+        continue;
+      }
+      DynType payload = DYN_TYPE_VOID;
+      bool explicit_value = false, negative = next_negative;
+      uint64_t value = next;
+      for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part)) {
+        if (!(compact_kind(part) != SRC_QUALIFIER)) {
+          payload = compact_type(compact_child(part, 0), s, a);
+          continue;
+        }
+        explicit_value = true;
+        if (!compact_enum_literal(part, s, a, errors, &value, &negative))
+          compact_report(part, s, errors, "enum value must be an integer literal");
+      }
+      if (explicit_value)
+        any_explicit = true;
+      if ((!explicit_value && exhausted) ||
+          (en->tag_type >= DYN_TYPE_I8 && en->tag_type <= DYN_TYPE_USIZE &&
+           !tag_fits(en->tag_type, value, negative))) {
+        compact_report(c, s, errors, "enum value does not fit the tag type");
+        continue;
+      }
+      if (!reserve_variant(a)) {
+        compact_report(c, s, errors, "out of memory");
+        return false;
+      }
+      for (uint32_t q = 0; q < en->variant_count; ++q)
+        if (a->variants[en->variant_start + q].tag == value) {
+          compact_report(c, s, errors, "duplicate enum value");
+          break;
+        }
+      exhausted = !negative && value == UINT64_MAX;
+      next = value + 1;
+      next_negative = negative && next != 0;
+      a->variants[a->variant_count++] = (DynAstVariant){compact_span(name), payload, value};
+      ++en->variant_count;
+      if (payload != DYN_TYPE_VOID)
+        en->has_payload = true;
+    }
+    if (!en->variant_count)
+      compact_report(d, s, errors, "enum requires at least one variant");
+    unsigned width =
+        en->tag_type == DYN_TYPE_I8 || en->tag_type == DYN_TYPE_U8     ? 8
+        : en->tag_type == DYN_TYPE_I16 || en->tag_type == DYN_TYPE_U16 ? 16
+        : en->tag_type == DYN_TYPE_I32 || en->tag_type == DYN_TYPE_U32 ? 32
+                                                                       : 64;
+    if (en->tag_type < DYN_TYPE_I8 || en->tag_type > DYN_TYPE_USIZE)
+      compact_report(en->name, s, errors, "enum tag type must be integer");
+    else if (width < 64 && en->variant_count > (UINT64_C(1) << width))
+      compact_report(en->name, s, errors,
+                 "enum has too many variants for tag type");
+    else if (any_explicit && en->has_payload)
+      compact_report(en->name, s, errors,
+                 "enums with payloads cannot have explicit values");
+  }
+  return true;
+}
+static bool compact_add_globals(const DynSource *s, DynAstProgram *a,
+                        unsigned *errors, DynNameIndex *globals) {
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode wrapper = compact_declaration(a, i);
+    bool is_public = compact_flag(wrapper, EXP_PUBLIC);
+    CompactNode d = compact_first(wrapper);
+    bool foreign = !(compact_kind(d) != SRC_EXTERN_VARIABLE);
+    bool is_const = !(compact_kind(d) != SRC_CONST);
+    CompactNode v = is_const ? compact_child(d, 0) : d;
+    if ((compact_kind(v) != SRC_VARIABLE) && !foreign)
+      continue;
+    CompactNode name = foreign ? compact_field(v, EXP_ROLE_NAME)
+                          : compact_child(v, 0),
+           tq = {0}, init = {0};
+    DynSpan ns = compact_span(name);
+    if (find_global(globals, a, ns, s) != UINT32_MAX ||
+        find_struct(a, ns, s) != UINT32_MAX) {
+      compact_report(name, s, errors, "duplicate declaration name");
+      continue;
+    }
+    for (CompactNode c = compact_child(v, 1); !compact_null(c); c = compact_next(c)) {
+      uint16_t ck = compact_kind(c);
+      if (ck == SRC_QUALIFIER || ck == EXP_TYPE)
+        tq = c;
+      else if ((ck != EXP_NAME || compact_flag(c, EXP_PRIMARY)))
+        init = c;
+    }
+    DynType type = compact_null(tq)
+                       ? DYN_TYPE_INFER
+                       : compact_type(!(compact_kind(tq) != SRC_QUALIFIER)
+                                        ? compact_child(tq, 0)
+                                        : tq,
+                                    s, a);
+    if (type == DYN_TYPE_ERROR)
+      compact_report(tq, s, errors, "unknown type in global declaration");
+    if (!reserve_global(a)) {
+      compact_report(v, s, errors, "out of memory");
+      return false;
+    }
+    CompactNode link_name =
+        foreign ? compact_field(v, EXP_ROLE_LINK_NAME) : (CompactNode){0};
+    DynSpan link = compact_null(link_name)
+                       ? ns
+                       : (DynSpan){compact_span(link_name).start_byte + 1,
+                                   compact_span(link_name).end_byte - 1};
+    a->globals[a->global_count++] = (DynAstGlobal){
+        .name = ns,
+        .link_name = link,
+        .type = type,
+        .initializer = foreign || compact_null(init) ? DYN_NO_EXPR
+                                             : compact_expr(init, s, a, errors),
+        .is_const = is_const,
+        .foreign = foreign,
+        .is_public = is_public,
+        .module_owner = declaration_owner(ns, s)};
+  }
+  return true;
+}
+static bool compact_add_asserts(const DynSource *s, DynAstProgram *a, unsigned *errors) {
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode d = compact_first(compact_declaration(a, i));
+    if ((compact_kind(d) != SRC_ASSERT))
+      continue;
+    if (a->assert_count == a->assert_capacity) {
+      size_t c = a->assert_capacity ? a->assert_capacity * 2 : 8;
+      void *p = realloc(a->asserts, c * sizeof(*a->asserts));
+      if (!p) {
+        a->allocation_failed = true;
+        compact_report(d, s, errors, "out of memory");
+        return false;
+      }
+      a->asserts = p;
+      a->assert_capacity = c;
+    }
+    CompactNode message = compact_child(d, 1);
+    a->asserts[a->assert_count++] = (DynAstAssert){
+        .span = compact_span(d),
+        .message = compact_null(message)
+                       ? (DynSpan){0}
+                       : (DynSpan){compact_span(message).start_byte + 1,
+                                   compact_span(message).end_byte - 1},
+        .condition = compact_expr(compact_child(d, 0), s, a, errors)};
+  }
+  return true;
+}
+/* Only type parameters use `$`, and a signature ends at its body's `{`. */
+static bool compact_has_type_parameter(CompactNode n, const DynSource *s) {
+  for (uint32_t i = compact_span(n).start_byte; i < compact_span(n).end_byte; ++i) {
+    if (!(i % 1024) && !dyn_work_step(&s->context, 1)) return false;
+    if (s->text[i] == '{')
+      return false;
+    if (s->text[i] == '$')
+      return true;
+  }
+  return false;
+}
+static bool compact_add_generic(const DynSource *s, DynAstProgram *a, unsigned *errors,
+                        CompactNode d, DynSpan ns, bool is_public) {
+  size_t parameter_capacity = 0;
+  for (CompactNode c = compact_first(d); !compact_null(c); c = compact_next(c))
+    if (compact_kind(c) == SRC_FN_PARAM) parameter_capacity += compact_count(c);
+  if (!reserve_generic(a, parameter_capacity)) {
+    compact_report(d, s, errors, "out of memory");
+    return false;
+  }
+  DynAstGeneric g = {.compact_node = compact_reference(d), .function = (uint32_t)a->function_count,
+                     .param_start = (uint32_t)a->generic_param_count,
+                     .return_pattern = DYN_TYPE_VOID};
+  a->scope_count = 0;
+  a->declaring_generic = true;
+  bool ok = true;
+  for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
+    uint16_t kind = compact_kind(c);
+    if (!(kind != SRC_VARIADIC_PARAM)) {
+      compact_report(c, s, errors, "generic functions cannot be variadic");
+      ok = false;
+    } else if (!(kind != SRC_FN_PARAM)) {
+      CompactNode first = compact_child(c, 0);
+      CompactNode qualifier = compact_last(c);
+      if (!(compact_kind(first) != EXP_TYPE_PARAMETER)) {
+        CompactNode type = compact_child(qualifier, 0);
+        DynSpan text = compact_span(type);
+        DynSpan name = compact_span(first);
+        ++name.start_byte;
+        DynType param = scope_type(a, name, s, true);
+        if (text.end_byte - text.start_byte != 4 ||
+            memcmp(s->text + text.start_byte, "type", 4)) {
+          compact_report(type, s, errors, "a `$T` parameter must have type `type`");
+          ok = false;
+        } else if (param == DYN_TYPE_ERROR) {
+          compact_report(first, s, errors, "duplicate or too many type parameters");
+          ok = false;
+        }
+        a->generic_params[a->generic_param_count++] =
+            (DynAstGenericParam){.name = name, .pattern = param, .is_type = true};
+        ++g.param_count;
+        continue;
+      }
+      DynType type = compact_type(compact_child(qualifier, 0), s, a);
+      if (type == DYN_TYPE_ERROR) {
+        compact_report(qualifier, s, errors, "unknown type in parameter");
+        ok = false;
+      }
+      for (CompactNode q = compact_child(c, 0); !compact_null(q); q = compact_next(q)) {
+        if ((compact_kind(q) != EXP_NAME))
+          continue;
+        a->generic_params[a->generic_param_count++] =
+            (DynAstGenericParam){.name = compact_span(q), .pattern = type};
+        ++g.param_count;
+      }
+    } else if (!(kind != EXP_TYPE)) {
+      g.return_pattern = compact_type(c, s, a);
+      if (g.return_pattern == DYN_TYPE_ERROR) {
+        compact_report(c, s, errors, "unknown type in return signature");
+        ok = false;
+      }
+    }
+  }
+  g.type_param_count = a->scope_count;
+  memcpy(g.type_names, a->scope_names, sizeof(g.type_names));
+  a->scope_count = 0;
+  a->declaring_generic = false;
+  if (!ok)
+    g.param_count = 0;
+  a->generics[a->generic_count] = g;
+  a->functions[a->function_count++] = (DynAstFn){
+      .span = compact_span(d), .name = ns, .link_name = ns,
+      .return_type = DYN_TYPE_VOID, .param_start = (uint32_t)a->param_count,
+      .is_public = is_public, .interface_only = true, .is_generic = true,
+      .generic = (uint32_t)a->generic_count++,
+      .module_owner = declaration_owner(ns, s)};
+  return ok;
+}
+static bool compact_add_function_signatures(const DynSource *s,
+                                    DynAstProgram *a, unsigned *errors, DynNameIndex *index,
+                                    DynNameIndex *globals) {
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode wrapper = compact_declaration(a, i);
+    bool is_public = compact_flag(wrapper, EXP_PUBLIC);
+    CompactNode d = compact_first(wrapper);
+    bool foreign = !(compact_kind(d) != SRC_EXTERN_FN);
+    if ((compact_kind(d) != SRC_FN) && !foreign)
+      continue;
+    CompactNode name = compact_field(d, EXP_ROLE_NAME);
+    DynSpan ns = compact_span(name);
+    if (find_function(index, a, ns, s) != UINT32_MAX ||
+        find_struct(a, ns, s) != UINT32_MAX ||
+        find_global(globals, a, ns, s) != UINT32_MAX) {
+      compact_report(name, s, errors, "duplicate declaration name");
+      continue;
+    }
+    if (!reserve_function(a)) {
+      compact_report(d, s, errors, "out of memory");
+      return false;
+    }
+    if (!foreign && compact_has_type_parameter(d, s)) {
+      if (!compact_add_generic(s, a, errors, d, ns, is_public))
+        return false;
+      continue;
+    }
+    DynAstFn fn = {.span = compact_span(d),
+                   .name = ns,
+                   .return_type = DYN_TYPE_VOID,
+                   .param_start = (uint32_t)a->param_count,
+                   .foreign = foreign,
+                   .is_public = is_public,
+                   .module_owner = declaration_owner(ns, s)};
+    CompactNode link_name = compact_field(d, EXP_ROLE_LINK_NAME);
+    fn.link_name = compact_null(link_name)
+                       ? ns
+                       : (DynSpan){compact_span(link_name).start_byte + 1,
+                                   compact_span(link_name).end_byte - 1};
+    fn.is_main = !foreign && ns.end_byte - ns.start_byte == 4 &&
+                 !memcmp(s->text + ns.start_byte, "main", 4);
+    for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
+      if (!(compact_kind(c) != SRC_FN_PARAM)) {
+        CompactNode tq = {0};
+        for (CompactNode q = compact_child(c, 0); !compact_null(q); q = compact_next(q)) {
+          if (!(compact_kind(q) != SRC_QUALIFIER))
+            tq = q;
+        }
+        DynType type = compact_null(tq)
+                           ? DYN_TYPE_ERROR
+                           : compact_type(compact_child(tq, 0), s, a);
+        if (type == DYN_TYPE_ERROR)
+          compact_report(compact_null(tq) ? c : tq, s, errors,
+                     "unknown type in parameter");
+        else if (type == DYN_TYPE_VOID)
+          compact_report(tq, s, errors, "parameter requires a non-void type");
+        for (CompactNode q = compact_child(c, 0); !compact_null(q); q = compact_next(q)) {
+          if ((compact_kind(q) != EXP_NAME))
+            continue;
+          if (!reserve_param(a)) {
+            compact_report(q, s, errors, "out of memory");
+            return false;
+          }
+          a->params[a->param_count++] = (DynAstParam){
+              .name = compact_span(q), .type = type, .local_id = UINT32_MAX};
+          ++fn.param_count;
+        }
+      } else if (!(compact_kind(c) != SRC_VARIADIC_PARAM)) {
+        fn.variadic = true;
+        fn.variadic_name = compact_span(compact_field(c, EXP_ROLE_NAME));
+        fn.variadic_type = intern_slice(
+            a, compact_type(compact_field(c, EXP_ROLE_TYPE), s, a),
+            true);
+      } else if (!(compact_kind(c) != SRC_VARIADIC))
+        fn.variadic = true;
+      else if (!(compact_kind(c) != EXP_TYPE)) {
+        fn.return_type = compact_type(c, s, a);
+        if (fn.return_type == DYN_TYPE_ERROR)
+          compact_report(c, s, errors, "unknown type in return signature");
+      }
+    }
+    a->functions[a->function_count++] = fn;
+  }
+  return true;
+}
+static void compact_lower_function_bodies(const DynSource *s,
+                                  DynAstProgram *a, unsigned *errors,
+                                  const char *owner_key, DynNameIndex *index) {
+  uint64_t wanted = owner_key_value(owner_key);
+  for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
+    CompactNode d = compact_first(compact_declaration(a, i));
+    if ((compact_kind(d) != SRC_FN) && (compact_kind(d) != SRC_EXTERN_FN))
+      continue;
+    CompactNode name = compact_field(d, EXP_ROLE_NAME);
+    uint32_t id = find_function(index, a, compact_span(name), s);
+    if (id == UINT32_MAX)
+      continue;
+    if (a->functions[id].foreign || a->functions[id].is_generic)
+      continue;
+    if (owner_key && a->functions[id].module_owner != wanted) {
+      a->functions[id].interface_only = true;
+      continue;
+    }
+    CompactNode block = {0};
+    for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
+      if (!(compact_kind(c) != SRC_BLOCK)) {
+        block = c;
+        break;
+      }
+    }
+    compact_block(block, s, a, errors, 0, &a->functions[id].body_start,
+                  &a->functions[id].body_count);
+    if (a->functions[id].is_main) {
+      a->span = a->functions[id].span;
+      a->name = a->functions[id].name;
+      a->parameter_count = a->functions[id].param_count;
+      a->has_return_type = a->functions[id].return_type != DYN_TYPE_VOID;
+      a->body_start = a->functions[id].body_start;
+      a->body_count = a->functions[id].body_count;
+    }
+  }
+}
+
+#undef compact_report

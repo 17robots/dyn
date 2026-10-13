@@ -14,7 +14,7 @@ Go has no type-check-only command, so its "check" column is `go vet`, which also
 runs vet's analyzers. Peak memory is the largest resident set of any process in
 the compiler's process tree.
 """
-import argparse, json, os, random, shutil, subprocess, sys, tempfile, time
+import argparse, hashlib, json, os, platform, random, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,6 +25,45 @@ CHAIN = 8
 
 
 PEAK = None
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def source_manifest(root):
+    sources = {path.relative_to(root).as_posix(): sha256(path)
+               for path in sorted(root.rglob('*'))
+               if path.is_file() and (path.suffix in ('.dyn', '.go', '.c', '.h', '.odin')
+                                      or path.name in ('go.mod', 'go.sum'))}
+    return {'source_sha256': sources,
+            'corpus_sha256': hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest()}
+
+
+def command_metadata(command, cwd=None, env=None):
+    return {'command': ['bash', '-c', command] if isinstance(command, str) else command,
+            'cwd': str(Path(cwd or Path.cwd()).resolve()),
+            'environment_overrides': {key: env[key] for key in ('GOCACHE', 'GOFLAGS', 'GOTOOLCHAIN')
+                                      if env is not None and key in env}}
+
+
+def compiler_metadata():
+    commands = {'dyn': os.environ.get('DYN', str(ROOT / 'build/dyn-release')),
+                'go': 'go', 'c': os.environ.get('CC', 'clang'), 'odin': 'odin'}
+    result = {}
+    for language, command in commands.items():
+        path = shutil.which(command)
+        record = {'command': command, 'path': str(Path(path).resolve()) if path else None}
+        try:
+            record['sha256'] = sha256(path) if path else None
+        except OSError as error:
+            record.update(sha256=None, hash_error=str(error))
+        result[language] = record
+    return result
 
 
 def measured(command, cwd=None, env=None):
@@ -221,16 +260,34 @@ def scale(tools, sizes, work, languages):
     results = []
     for lines in sizes:
         modules, roots = program_model(lines)
+        expected = None
         for language in languages:
             root = work / f'scale-{lines}-{language}'
             root.mkdir()
             WRITERS[language](root, modules, roots)
-            row = {'lines': count_lines(root), 'target_lines': lines, 'language': language}
+            row = {'lines': count_lines(root), 'target_lines': lines, 'language': language,
+                   **source_manifest(root), 'commands': {}, 'generator_seed': 17}
             for mode in ('check', 'debug', 'release'):
                 output = work / f'scale-{lines}-{language}-{mode}'
                 command, env = tools.commands(language, root, output, mode, work)
+                row['commands'][mode] = command_metadata(command, root, env)
                 seconds, rss, _ = measured(command, cwd=root, env=env)
                 row[mode] = {'seconds': round(seconds, 3), 'rss_mib': round(rss, 1)}
+                if mode != 'check':
+                    # Correctness gate stays outside compilation measurements.
+                    run_command = [str(output)]
+                    row['commands'][mode + '_run'] = command_metadata(run_command, root)
+                    try:
+                        execution = subprocess.run(run_command, cwd=root, capture_output=True,
+                                                   text=True, check=True, timeout=120)
+                    except (OSError, subprocess.SubprocessError) as error:
+                        raise SystemExit(f'scale {lines}: {language} {mode} execution failed: {error}') from error
+                    actual = execution.stdout.strip()
+                    row[mode]['output'] = actual
+                    if expected is None:
+                        expected = actual
+                    elif actual != expected:
+                        raise SystemExit(f'scale {lines}: {language} {mode} printed {actual!r}, expected {expected!r}')
                 print(f'scale {lines:>8} {language:<4} {mode:<7} {seconds:8.2f}s {rss:8.1f} MiB', flush=True)
             results.append(row)
     return results
@@ -248,6 +305,7 @@ def benchmarks(tools, work, languages, runs):
             shutil.copy(source / f'main.{suffix}', root / f'main.{suffix}')
             if language == 'go':
                 (root / 'go.mod').write_text('module bench\n\ngo 1.24\n')
+            manifest = source_manifest(root)
             output = work / f'bench-{program}-{language}-bin'
             command, env = tools.commands(language, root, output, 'release', work)
             if language == 'c':
@@ -258,13 +316,17 @@ def benchmarks(tools, work, languages, runs):
                 seconds, rss, out = measured([str(output)])
                 best = seconds if best is None else min(best, seconds)
                 peak = max(peak, rss)
-            out = out.strip()
-            if expected is None:
-                expected = out
-            elif out != expected:
-                raise SystemExit(f'{program}: {language} printed {out!r}, expected {expected!r}')
+                out = out.strip()
+                if expected is None:
+                    expected = out
+                elif out != expected:
+                    raise SystemExit(f'{program}: {language} printed {out!r}, expected {expected!r}')
             results.append({'program': program, 'language': language, 'run_seconds': round(best, 3),
                             'run_rss_mib': round(peak, 1), 'build_seconds': round(build_seconds, 3),
+                            'build_rss_mib': round(build_rss, 1), **manifest,
+                            'commands': {'build': command_metadata(command, root, env),
+                                         'run': command_metadata([str(output)])},
+                            'runs': runs,
                             'binary_kib': round(output.stat().st_size / 1024, 1), 'output': out})
             print(f'bench {program:<10} {language:<4} {best:7.3f}s {peak:8.1f} MiB  binary {output.stat().st_size // 1024} KiB', flush=True)
     return results
@@ -294,9 +356,18 @@ def main():
         work = Path(temporary)
         global PEAK
         PEAK = str(work / 'peak')
-        subprocess.run(['cc', '-O2', str(HERE / 'peak.c'), '-o', PEAK], check=True)
+        peak_command = ['cc', '-O2', str(HERE / 'peak.c'), '-o', PEAK]
+        subprocess.run(peak_command, check=True)
         tools = Tools(work, args.jobs)
-        report = {'versions': versions(), 'cpus': os.cpu_count(), 'scale': scale(tools, args.sizes, work, args.languages)}
+        report = {'versions': versions(), 'cpus': os.cpu_count(),
+                  'host': {'platform': platform.platform(), 'machine': platform.machine(),
+                           'processor': platform.processor(), 'python': platform.python_version()},
+                  'compilers': compiler_metadata(), 'compare_sha256': sha256(Path(__file__)),
+                  'peak': {'source_sha256': sha256(HERE / 'peak.c'), 'binary_sha256': sha256(PEAK),
+                           'build': command_metadata(peak_command), 'precision_mib': 0.1,
+                           'scope': 'Linux RUSAGE_CHILDREN maximum individual-process RSS, including reaped descendants; not simultaneous process-tree memory'},
+                  'jobs': args.jobs, 'runs': args.runs, 'invocation': [sys.executable, *sys.argv],
+                  'scale': scale(tools, args.sizes, work, args.languages)}
         if not args.skip_benchmarks:
             report['benchmarks'] = benchmarks(tools, work, args.languages, args.runs)
     args.output.parent.mkdir(parents=True, exist_ok=True)

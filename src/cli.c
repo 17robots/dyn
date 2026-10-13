@@ -22,6 +22,7 @@ void dyn_cli_help(const char *command) {
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <2|3>  --opt-remarks\n"
       "  --sample-profile <LLVM sample profile>  (x86_64 Linux ThinLTO only)\n"
+      "  --backend <auto|native|llvm>  debug code generator (auto: native on x86_64 Linux)\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
       "Global options:\n  --quiet  --verbose  --timings  --no-cache  "
       "\n"
@@ -41,7 +42,7 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
         strcmp(a, "--link") == 0 || strcmp(a, "--diagnostics") == 0 ||
         strcmp(a, "--jobs") == 0 || strcmp(a, "--max-work") == 0 ||
         strcmp(a, "--cpu") == 0 || strcmp(a, "--opt-level") == 0 ||
-        strcmp(a, "--sample-profile") == 0) {
+        strcmp(a, "--sample-profile") == 0 || strcmp(a, "--backend") == 0) {
       if (++i >= argc) {
         fprintf(stderr, "error: %s requires a value\n", a);
         return 2;
@@ -60,6 +61,16 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
           fprintf(stderr, "error: --opt-level accepts 2 or 3\n"); return 2;
         }
         o->optimization.level = (unsigned)(argv[i][0] - '0');
+      } else if (strcmp(a, "--backend") == 0) {
+        if (!strcmp(argv[i], "auto"))
+          o->backend = DYN_BACKEND_AUTO;
+        else if (!strcmp(argv[i], "native"))
+          o->backend = DYN_BACKEND_NATIVE;
+        else if (!strcmp(argv[i], "llvm"))
+          o->backend = DYN_BACKEND_LLVM;
+        else {
+          fprintf(stderr, "error: --backend accepts auto, native or llvm\n"); return 2;
+        }
       } else if (strcmp(a, "--sample-profile") == 0) {
         o->optimization.sample_profile = argv[i];
       }

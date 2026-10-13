@@ -18,6 +18,11 @@
 `--diagnostics json` for machine-readable errors, `--timings`, `--no-cache`
 and `--link PATH` to add a native object or library.
 
+On x86-64 Linux, debug builds generate machine code directly instead of
+through LLVM, which is much faster. Programs the native code generator cannot
+handle fall back to LLVM automatically. `--backend llvm` forces LLVM;
+`--backend native` makes a fallback an error. Release builds always use LLVM.
+
 The compiler reports errors only. `dyn vet` runs extra checks on valid code: it
 flags copying an arena (the copies would hand out overlapping memory) and
 importing one module under two names. Language servers show the same findings
@@ -116,3 +121,114 @@ traffic remain outside this implementation's guarantee.
 programs and fails below the lines-per-second floors in
 `tools/scale-benchmark.py`. `python3 tools/performance-suite.py` runs the wider
 performance suite.
+
+For a paired end-to-end comparison of a qualified compiler candidate with the
+production artifact, build both first, then run on an idle machine:
+
+```sh
+python3 tools/compare-compilers.py --reference build/dyn-release \
+  --candidate build/dyn-compact-first --runs 5 \
+  --output build/compiler-comparison
+```
+
+The output directory must be new. Both compilers receive the same generated
+multi-module and flat sources, standard library, build flags, and job count.
+Compiler order alternates; caches are disabled. The report retains each sample,
+phase timings, binary/source/runtime hashes, build records, executable output
+checks, artifact sizes, and peak RSS. RSS is a per-process maximum, not aggregate
+simultaneous process-tree memory. No compiler default or performance threshold
+changes. Override `--lines`, `--flat`, and `--jobs` to choose workload sizes and
+parallelism. A short correctness smoke uses `--lines 1000 --flat 10 --runs 1`;
+its timings are not evidence of a general speedup.
+
+A local paired run on 2026-10-13 compared the production compiler with the
+compact-source consumer candidate, before direct AST lowering and compact module
+rewrite integration. Three alternating samples used `--jobs 1`, `--no-cache`, and
+identical generated sources. The result is a transition baseline, not evidence
+for changing the default parser.
+
+| Workload | Check, production / candidate | Debug build, production / candidate | Release build, production / candidate | Check peak RSS, production / candidate |
+| --- | --- | --- | --- | --- |
+| 100k lines | 0.138 / 0.135 s | 2.043 / 2.021 s | 13.614 / 13.588 s | 128.5 / 152.2 MiB |
+| 500k lines | 0.689 / 0.664 s | 11.607 / 11.389 s | 70.060 / 69.358 s | 511.0 / 620.9 MiB |
+| 4,000 files | 0.148 / 0.124 s | 0.710 / 0.692 s | 1.157 / 1.129 s | 103.6 / 103.6 MiB |
+
+The candidate retained both parser representations. The large-source memory
+increase remains a migration cost to address. The measured changes are small for
+builds dominated by LLVM. The serial build policy differs from earlier parallel
+scale measurements, so their absolute build times are not directly comparable.
+All diagnostics and executed outputs matched. Local raw samples, commands, binary
+hashes, runtime inputs, and source manifests are in
+`build/compiler-paired-sources/results.json`. For focused frontend measurements,
+`--modes check` skips debug and release builds; the default still measures all
+three modes.
+
+Direct AST lowering was then measured separately, first releasing Tree-sitter
+trees after analysis and then releasing them before source merge/analysis. Each
+run used three alternating samples and the same serial job policy:
+
+| Candidate stage | 500k check, production / candidate | 500k check peak RSS, production / candidate | 500k debug build, production / candidate |
+| --- | --- | --- | --- |
+| Direct AST, post-analysis release | 0.699 / 0.457 s | 510.8 / 624.6 MiB | 12.089 / 11.751 s |
+| Direct AST, pre-analysis release | 0.703 / 0.592 s | 510.4 / 611.6 MiB | 11.976 / 11.719 s |
+
+The earlier release moved tree destruction onto the check command's timed path;
+it did not remove the simultaneous representations during loading and rewriting.
+Its modest peak-memory reduction therefore accompanied slower checks than the
+prior candidate, although both candidates beat their paired production baseline.
+This is not sufficient evidence to promote either parser artifact. Diagnostics
+and executed outputs matched in both runs. Evidence is in
+`build/compiler-paired-ast/results.json` and
+`build/compiler-paired-early-release/results.json`.
+
+The separately qualified compact-first candidate avoids initial Tree-sitter trees
+for its certified input domain. A subsequent quiet run used three alternating
+samples with **eight jobs**, cold compiler caches and matching executed outputs:
+
+| Workload | Check, production / candidate | Debug build, production / candidate | Release build, production / candidate | Check peak RSS, production / candidate |
+| --- | --- | --- | --- | --- |
+| 100k lines | 0.143 / 0.072 s | 0.482 / 0.383 s | 2.045 / 1.929 s | 129.3 / 83.9 MiB |
+| 500k lines | 0.695 / 0.362 s | 2.571 / 2.111 s | 10.211 / 9.733 s | 510.9 / 304.6 MiB |
+| 4,000 files | 0.141 / 0.038 s | 0.707 / 0.590 s | 1.137 / 1.009 s | 104.6 / 104.6 MiB |
+
+The 500k-line check is 1.92 times faster and uses about 40% less peak memory;
+debug builds improve 1.22 times and release builds 1.05 times on that workload.
+Absolute build times are not directly comparable to the earlier single-job runs.
+LLVM still dominates release compilation. The candidate remains opt-in and
+retains explicit syntax/depth/legacy-lexer fallbacks; the gains do not imply that
+Tree-sitter has been removed from editor or recovery paths. Raw samples and
+provenance are in `build/compiler-paired-compact-first/results.json`. This snapshot
+includes the source-map NUL fix and string-lexer fallbacks but precedes the later
+foreign-global initializer correction; the benchmark has no aliased foreign globals.
+
+Release-policy profiling uses an isolated standard-library workload and alternates
+policy order. Run it separately from builds and other benchmarks:
+
+```sh
+python3 tools/performance-suite.py --samples 3 --profile-ir \
+  --output build/release-profile
+```
+
+The report records cold-cache, warm-cache, novel-edit and executed-runtime samples,
+artifact sizes, compiler/SDK hashes and command environments. Cold caches mean
+empty compiler caches, not empty OS page caches. The optional IR profile emits a
+separate monolithic optimized module; its size does not describe the modular
+objects used in the timed builds. Per-module phase sums overlap under parallel
+compilation and must not be treated as disjoint wall-clock costs.
+
+A local three-sample run on 2026-10-13 produced these medians:
+
+| Release policy | Cold build | Warm build | Edited build | Runtime | Executable bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Portable default | 0.135 s | 0.019 s | 0.071 s | 0.165 s | 29,576 |
+| Native CPU | 0.147 s | 0.020 s | 0.072 s | 0.165 s | 35,000 |
+| Optimization level 3 | 0.144 s | 0.019 s | 0.070 s | 0.166 s | 29,768 |
+| No LTO | 0.154 s | 0.019 s | 0.046 s | 0.161 s | 150,264 |
+
+All variants produced matching runtime output. Disabling LTO improved this edited
+build but increased executable size about 5.1 times and slowed the cold build.
+This single workload does not justify changing defaults. The separate optimized
+IR outputs were 330,644 bytes for portable, 389,612 for native and 351,041 for O3,
+each with 11 function definitions. The no-LTO monolithic IR matched portable;
+that does not establish equivalence of their modular build paths. Raw evidence
+is in `build/release-profile-final/{results,summary,ir-profiles}.json`.

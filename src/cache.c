@@ -238,6 +238,7 @@ static uint64_t build_key(const DynSources *sources, const DynOptions *options,
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
+  hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
   hash = hash_project_sources(hash, sources);
   for (size_t i = 0; i < options->link_input_count; ++i)
     hash = hash_file(hash, options->link_inputs[i]);
@@ -253,6 +254,7 @@ static uint64_t codegen_key(const DynSources *sources,
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
+  hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
   hash = hash_project_sources(hash, sources);
   return hash;
 }
@@ -321,6 +323,7 @@ static uint64_t fast_options(const DynOptions *options, const char *compiler_pat
   hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
+  hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
   return hash_runtime(hash, options, compiler_path);
 }
 static bool fast_stat(FILE *file, const char *path, bool write) {

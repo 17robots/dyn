@@ -176,7 +176,8 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
       !simple_loop_body(ir, loop))
     return;
   DynIrExpr *condition = &ir->expressions[loop->expression];
-  if (condition->kind != DYN_EXPR_BINARY || condition->op != DYN_OP_LT)
+  if (condition->kind != DYN_EXPR_BINARY ||
+      (condition->op != DYN_OP_LT && condition->op != DYN_OP_LE))
     return;
   DynIrExpr *induction = &ir->expressions[condition->left];
   if (induction->kind != DYN_EXPR_NAME ||
@@ -207,7 +208,13 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
             start = outer.values[induction_id - outer.start];
   if (!bound.exact || !start.exact || bound.value < start.value)
     goto done;
-  uint64_t iterations = bound.value - start.value;
+  bool inclusive = condition->op == DYN_OP_LE;
+  /* A closed loop still executes its final increment. At the maximum bound
+     that increment must panic, so neither iteration counts nor guards may be
+     inferred using an unrepresentable one-past-the-end value. */
+  if (inclusive && bound.value >= unsigned_max(induction->type, pointer_bytes))
+    goto done;
+  uint64_t iterations = bound.value - start.value + inclusive;
   if (writes[induction_id - inside.start] != 1 || !loop->body_count)
     goto done;
   DynIrStmt *last = &ir->statements[
@@ -223,7 +230,7 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
   if (!one.exact || one.value != 1)
     goto done;
   inside.values[induction_id - inside.start] =
-      (UIntRange){true, false, bound.value ? bound.value - 1 : 0, 0};
+      (UIntRange){true, false, inclusive ? bound.value : bound.value ? bound.value - 1 : 0, 0};
   for (uint32_t i = 0; i < loop->body_count; ++i) {
     DynIrStmt *st = &ir->statements[ir->children[loop->body_start + i]];
     prove_array_bounds(ir, st->expression, inside, pointer_bytes, 0);

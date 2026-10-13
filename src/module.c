@@ -2,6 +2,8 @@
 #include "dyn.h"
 #include "dyn_syntax.h"
 #include "dyn_scope.h"
+#include "dyn_compact.h"
+#include "dyn_imports.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -150,11 +152,28 @@ static bool append_source(DynSources *out, const DynSource *s) {
     return false;
   }
   memcpy(d->text, s->text, s->length + 1);
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  if (s->compact_validated) {
+    d->compact_validated=true;
+    d->compact_root_start=s->compact_root_start; d->compact_root_end=s->compact_root_end;
+  } else
+#endif
   d->syntax = dyn_source_tree(s);
-  if (!d->syntax) {
+  if (!d->syntax
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+      && !d->compact_validated
+#endif
+     ) {
     dyn_source_free(d);
     return false;
   }
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+  if (s->compact) {
+    if (!exp_snapshot_retain(s->compact)) { dyn_source_free(d); return false; }
+    d->compact = s->compact;
+    d->compact_reflection = s->compact_reflection;
+  }
+#endif
   ++out->count;
   return true;
 }
@@ -464,6 +483,28 @@ static int extract_interface(Resolver *r, const char *directory,
     if (!dyn_work_step(&s->context, 1)) { free_interface(&value); return 2; }
     if (dyn_source_target_enabled(s) == 0)
       continue;
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+    const ExpSnapshotTree *compact = dyn_compact_tree(s);
+    if (compact) {
+      for (uint32_t wrapper = compact->nodes[compact->root].first;
+           wrapper != UINT32_MAX; wrapper = compact->nodes[wrapper].next) {
+        if (!dyn_work_step(&s->context, 1)) { free_interface(&value); return 2; }
+        uint32_t name = dyn_compact_name(compact, wrapper);
+        if (name == UINT32_MAX) continue;
+        const ExpNode *n = &compact->nodes[name];
+        char *text = dyn_import_copy(s->text + n->start, n->end - n->start);
+        InterfaceDecl *next = text ? realloc(value.decls,
+            (value.decl_count + 1) * sizeof(*next)) : NULL;
+        if (!text || !next) { free(text); free_interface(&value); return 2; }
+        value.decls = next;
+        value.decls[value.decl_count] = (InterfaceDecl){.name = text,
+          .is_public = (compact->nodes[wrapper].flags & EXP_PUBLIC) != 0,
+          .order = value.decl_count};
+        ++value.decl_count;
+      }
+      continue;
+    }
+#endif
     TSTree *t = dyn_source_tree(s);
     if (!t) {
       free_interface(&value);
@@ -544,7 +585,7 @@ static bool imported_decl(Resolver *r, char **targets, size_t count,
   }
   return false;
 }
-static int validate_member(Resolver *r, TSNode n, const DynSource *s,
+static int validate_member_at(Resolver *r, uint32_t start, uint32_t end, const DynSource *s,
                            char **aliases, char **targets, size_t count,
                            const char *qualifier, const char *member) {
   size_t found = alias_index(aliases, count, qualifier);
@@ -556,17 +597,23 @@ static int validate_member(Resolver *r, TSNode n, const DynSource *s,
     snprintf(message, sizeof(message),
              "imported member '%s.%s' is missing or not pub", qualifier,
              member);
-    dyn_syntax_diagnostic(n, s, "error", message);
+    dyn_diagnostic_source("error", s, start, end, message);
     return 1;
   }
   if (imported_decl(r, targets, count, member)) {
     char message[512];
     snprintf(message, sizeof(message),
              "unknown import alias '%s' for member '%s'", qualifier, member);
-    dyn_syntax_diagnostic(n, s, "error", message);
+    dyn_diagnostic_source("error", s, start, end, message);
     return 1;
   }
   return 0;
+}
+static int validate_member(Resolver *r, TSNode n, const DynSource *s,
+                           char **aliases, char **targets, size_t count,
+                           const char *qualifier, const char *member) {
+  return validate_member_at(r, ts_node_start_byte(n), ts_node_end_byte(n), s,
+                            aliases, targets, count, qualifier, member);
 }
 static int validate_refs(Resolver *r, TSNode n, const DynSource *s,
                          const char *directory, char **aliases, char **targets,
@@ -691,6 +738,16 @@ static int validate_refs(Resolver *r, TSNode n, const DynSource *s,
   ts_tree_cursor_delete(&children);
   return errors;
 }
+#include "module_compact_refs.h"
+static int validate_source_refs(Resolver *r, TSNode root, const DynSource *s,
+                                const char *directory, char **aliases, char **targets,
+                                size_t count, const DynScopeIndex *locals) {
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+  const ExpSnapshotTree *tree = dyn_compact_tree(s);
+  if (tree) return validate_compact_refs(r, s, tree, directory, aliases, targets, count, locals);
+#endif
+  return validate_refs(r, root, s, directory, aliases, targets, count, locals);
+}
 static int visit(Resolver *r, const char *directory,
                  const DynSources *provided) {
   if (has(r->visited, r->visited_count, directory))
@@ -747,31 +804,19 @@ static int visit(Resolver *r, const char *directory,
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     const DynSource *s = &sources->items[si];
-    TSTree *t = dyn_source_tree(s);
-    if (!t) {
-      result = 2;
-      break;
-    }
-    TSNode root = ts_tree_root_node(t);
-    for (uint32_t i = 0; i < ts_node_named_child_count(root) && !result; ++i) {
-      TSNode u = dyn_syntax_declaration_node(ts_node_named_child(root, i));
-      if (strcmp(ts_node_type(u), "use"))
-        continue;
-      for (uint32_t k = 0; k < ts_node_named_child_count(u) && !result; ++k) {
-        TSNode d = ts_node_named_child(u, k);
-        if (strcmp(ts_node_type(d), "import"))
-          continue;
-        char *path = dyn_syntax_copy_text(
-            ts_node_child_by_field_name(d, "path", 4), s, true);
+    DynImports imports;
+    if (!dyn_imports_open(&imports, s)) { result = 2; break; }
+    DynImportView item;
+    while (!result && dyn_imports_next(&imports, &item)) {
+        char *path = dyn_import_copy(item.path, item.path_length);
         if (!path) {
-          dyn_syntax_diagnostic(d, s, "error", "incomplete import path");
+          dyn_diagnostic_source("error", s, item.start, item.end, "incomplete import path");
           result = 1;
           break;
         }
         char *target = resolve(r, directory, path);
-        TSNode an = ts_node_child_by_field_name(d, "alias", 5);
-        char *alias = ts_node_is_null(an) ? dyn_path_basename(path)
-                                          : dyn_syntax_copy_text(an, s, false);
+        char *alias = item.alias_node ? dyn_import_copy(item.alias, item.alias_length)
+                                      : dyn_path_basename(path);
         if (!alias) {
           free(path);
           free(target);
@@ -782,13 +827,13 @@ static int visit(Resolver *r, const char *directory,
           char message[512];
           snprintf(message, sizeof(message), "duplicate import alias '%s'",
                    alias);
-          dyn_syntax_diagnostic(d, s, "error", message);
+          dyn_diagnostic_source("error", s, item.start, item.end, message);
           result = 1;
         } else if (!target || !dyn_path_is_directory(target)) {
           char message[512];
           snprintf(message, sizeof(message),
                    "import '%s' does not resolve inside project root", path);
-          dyn_syntax_diagnostic(d, s, "error", message);
+          dyn_diagnostic_source("error", s, item.start, item.end, message);
           result = 1;
         } else if (has(r->stack, r->stack_count, target)) {
           char message[2048] = "cyclic import: ";
@@ -806,7 +851,7 @@ static int visit(Resolver *r, const char *directory,
               break;
             at += (size_t)written;
           }
-          dyn_syntax_diagnostic(d, s, "error", message);
+          dyn_diagnostic_source("error", s, item.start, item.end, message);
           result = 1;
         } else {
           if (s->context.vet && has(targets, target_count, target)) {
@@ -815,7 +860,7 @@ static int visit(Resolver *r, const char *directory,
                 message, sizeof(message),
                 "module '%s' is imported more than once under different aliases",
                 path);
-            dyn_syntax_diagnostic(d, s, "warning", message);
+            dyn_diagnostic_source("warning", s, item.start, item.end, message);
             if (s->context.vet_findings) ++*s->context.vet_findings;
           }
           if (!push(&aliases, &alias_count, alias) ||
@@ -827,9 +872,9 @@ static int visit(Resolver *r, const char *directory,
         free(path);
         free(target);
         free(alias);
-      }
     }
-    ts_tree_delete(t);
+    if (imports.failed) result = 2;
+    dyn_imports_close(&imports);
   }
   size_t first_out = r->out ? r->out->count : 0;
   for (size_t si = 0; si < sources->count && !result && !r->defer_refs; ++si) {
@@ -837,10 +882,16 @@ static int visit(Resolver *r, const char *directory,
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     const DynSource *s = &sources->items[si];
-    TSTree *t = dyn_source_tree(s);
+    TSTree *t = NULL;
+    bool compact=false;
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+    compact=s->compact_validated;
+#endif
+    if (!compact) t=dyn_source_tree(s);
+    TSNode root=t ? ts_tree_root_node(t) : (TSNode){0};
     DynScopeIndex locals = {0};
-    if (!t || !dyn_scope_build(&locals, ts_tree_root_node(t), s)) result = 2;
-    else result += validate_refs(r, ts_tree_root_node(t), s, directory, aliases,
+    if ((!compact && !t) || !dyn_scope_build(&locals, root, s)) result = 2;
+    else result += validate_source_refs(r, root, s, directory, aliases,
                                 targets, alias_count, &locals);
     dyn_scope_free(&locals);
     if (t) ts_tree_delete(t);
@@ -917,22 +968,18 @@ static bool prefetch_imports(Resolver *r, const char *directory,
                              const DynSources *sources) {
   for (size_t si = 0; si < sources->count; ++si) {
     const DynSource *s = &sources->items[si];
-    if (dyn_source_target_enabled(s) != 1 || !s->syntax)
-      continue;
-    TSNode root = ts_tree_root_node(s->syntax);
-    TSTreeCursor cursor = ts_tree_cursor_new(root);
+    if (dyn_source_target_enabled(s) != 1 || (!s->syntax
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+        && !s->compact_validated
+#endif
+        )) continue;
+    DynImports imports;
+    if (!dyn_imports_open(&imports, s)) return false;
+    DynImportView item;
     bool ok = true;
-    if (ts_tree_cursor_goto_first_child(&cursor)) do {
-      TSNode u = dyn_syntax_declaration_node(ts_tree_cursor_current_node(&cursor));
-      if (strcmp(ts_node_type(u), "use"))
-        continue;
-      for (uint32_t k = 0; k < ts_node_named_child_count(u) && ok; ++k) {
-        TSNode d = ts_node_named_child(u, k);
-        if (strcmp(ts_node_type(d), "import"))
-          continue;
-        TSNode path_node = ts_node_child_by_field_name(d, "path", 4);
-        char *path = dyn_syntax_copy_text(path_node, s, true);
-        bool oom = !path && !ts_node_is_null(path_node);
+    while (dyn_imports_next(&imports, &item)) {
+        char *path = dyn_import_copy(item.path, item.path_length);
+        bool oom = !path && item.path_node;
         char *target = path ? resolve_checked(r, directory, path, &oom) : NULL;
         free(path);
         if (oom) { free(target); ok = false; break; }
@@ -944,11 +991,9 @@ static bool prefetch_imports(Resolver *r, const char *directory,
           r->prefetched[r->prefetched_count++] = (Prefetched){.directory = target};
         } else
           free(target);
-      }
-      if (!ok)
-        break;
-    } while (ts_tree_cursor_goto_next_sibling(&cursor));
-    ts_tree_cursor_delete(&cursor);
+    }
+    if (imports.failed) ok = false;
+    dyn_imports_close(&imports);
     if (!ok)
       return false;
   }
@@ -1004,11 +1049,17 @@ static void prefetch_free(Resolver *r) {
 static int check_refs(Resolver *r, const DeferredRefs *d, const DynSource *s) {
   if (dyn_source_target_enabled(s) == 0)
     return 0;
-  TSTree *t = dyn_source_tree(s);
+  TSTree *t = NULL;
+  bool compact=false;
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  compact=s->compact_validated;
+#endif
+  if (!compact) t=dyn_source_tree(s);
+  TSNode root=t ? ts_tree_root_node(t) : (TSNode){0};
   DynScopeIndex locals = {0};
   int result;
-  if (!t || !dyn_scope_build(&locals, ts_tree_root_node(t), s)) result = -1;
-  else result = validate_refs(r, ts_tree_root_node(t), s, d->directory, d->aliases,
+  if ((!compact && !t) || !dyn_scope_build(&locals, root, s)) result = -1;
+  else result = validate_source_refs(r, root, s, d->directory, d->aliases,
                               d->targets, d->alias_count, &locals) ? 1 : 0;
   dyn_scope_free(&locals);
   if (t) ts_tree_delete(t);
