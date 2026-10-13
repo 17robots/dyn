@@ -12,6 +12,25 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.23
+
+Compatible with preview 22. Checked arithmetic and runtime safety guarantees are
+unchanged.
+
+- `dyn check` validates module references in parallel and avoids repeated
+  lifetime-analysis work. When multiple modules contain invalid references,
+  diagnostics now report all affected modules.
+- Builds compute shared code-generation metadata once instead of repeating
+  whole-program scans for each module. Constant-success safety guards no longer
+  emit unnecessary branches.
+- The pinned Tree-sitter grammar removes redundant expression, literal and
+  statement wrapper nodes, reducing syntax-tree memory and conversion work.
+  Tools that consume these nodes must update their queries; Dyn source syntax
+  is unchanged.
+- `--timings` includes peak memory after each phase.
+- `tools/compare` provides repeatable compile-time, runtime and memory comparisons
+  with Go, C and Odin, plus an HTML report generator.
+
 ## 0.1.0-preview.22
 
 Breaking.
