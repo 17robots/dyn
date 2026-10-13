@@ -1,11 +1,13 @@
 use "std/bytes" byte_ops
 use "std/mem"
 // Allocation-free INI scanner. Names and values borrow the input.
+// A malformed line is skipped: the scanner keeps the first error and its line,
+// counts the rest, and goes on to the next line. Check state.error after the loop.
 pub enum Kind { Section, Pair }
 pub enum ErrorKind { None, Syntax, Overflow }
 pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
-pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind }
-pub struct Result { entry: Entry, error: ErrorKind, ok: bool }
+pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind, error_line: usize, errors: usize }
+pub struct Result { entry: Entry, ok: bool }
 
 pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source, line: 1, section: source[..0] }
@@ -25,10 +27,15 @@ fn trim(source: []const u8) []const u8 {
   return source[first..last]
 }
 
-pub fn next(state: *Scanner) Result {
-  if state.error != ErrorKind.None {
-    return Result{ error: state.error }
+fn record(state: *Scanner, line: usize) {
+  if state.error == ErrorKind.None {
+    state.error = ErrorKind.Syntax
+    state.error_line = line
   }
+  state.errors += 1
+}
+
+pub fn next(state: *Scanner) Result {
   for state.offset < #len(state.source) {
     start := state.offset
     finish := start
@@ -45,20 +52,20 @@ pub fn next(state: *Scanner) Result {
     line_number := state.line
     state.line += 1
     line := trim(state.source[start..finish])
-    if #len(line) == 0 || line[0] == ';' || line[0] == '#' { } else {
-      if line[0] == '[' {
-        if #len(line) < 3 || line[#len(line) - 1] != ']' {
-          state.error = ErrorKind.Syntax
-          return Result{ error: state.error }
-        }
-        section_name := trim(line[1..#len(line) - 1])
-        if #len(section_name) == 0 {
-          state.error = ErrorKind.Syntax
-          return Result{ error: state.error }
-        }
+    if #len(line) == 0 || line[0] == ';' || line[0] == '#' { } else if line[0] == '[' {
+      section_name := line[..0]
+      if #len(line) >= 3 && line[#len(line) - 1] == ']' {
+        section_name = trim(line[1..#len(line) - 1])
+      }
+      if #len(section_name) == 0 {
+        // Pairs after a bad header must not land in the previous section.
+        state.section = line[..0]
+        record(state, line_number)
+      } else {
         state.section = section_name
         return Result{ entry: Entry{ section: section_name, kind: Kind.Section, line: line_number }, ok: true }
       }
+    } else {
       separator := #len(line)
       scan: usize = 0
       for scan < #len(line) {
@@ -69,20 +76,19 @@ pub fn next(state: *Scanner) Result {
           scan += 1
         }
       }
-      if separator == #len(line) {
-        state.error = ErrorKind.Syntax
-        return Result{ error: state.error }
+      key_name := line[..0]
+      if separator < #len(line) {
+        key_name = trim(line[..separator])
       }
-      key_name := trim(line[..separator])
       if #len(key_name) == 0 {
-        state.error = ErrorKind.Syntax
-        return Result{ error: state.error }
+        record(state, line_number)
+      } else {
+        pair_value := trim(line[separator + 1..])
+        return Result{ entry: Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }, ok: true }
       }
-      pair_value := trim(line[separator + 1..])
-      return Result{ entry: Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }, ok: true }
     }
   }
-  return Result{ error: ErrorKind.None, ok: false }
+  return Result{}
 }
 
 pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8 {
@@ -101,7 +107,7 @@ pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8
 
 
 // A materialized entry table. Entries still borrow source bytes, including section names.
-// Syntax errors and allocation failures remain distinct; next() keeps its streaming shape.
+// Any malformed line fails the whole parse; error_line is the first one.
 pub struct ParseResult {
   entries: []Entry,
   error: ErrorKind,
@@ -117,22 +123,22 @@ pub struct ParseResult {
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   state := scanner(source)
   count: usize = 0
-  for {
-    item := next(&state)
-    if !item.ok {
-      if item.error != ErrorKind.None {
-        return ParseResult{ error: item.error, error_line: state.line - 1 }
-      }
-      break
+  for next(&state).ok {
+    if count == #cast(usize) -1 {
+      return ParseResult{ error: ErrorKind.Overflow }
     }
-    if count == #cast(usize) -1 { return ParseResult{ error: ErrorKind.Overflow } }
     count += 1
+  }
+  if state.error != ErrorKind.None {
+    return ParseResult{ error: state.error, error_line: state.error_line }
   }
   if count == 0 {
     return ParseResult{ ok: true }
   }
   entries := mem.push_array(Entry, arena, count)
   state = scanner(source)
-  for i in 0..count { entries[i] = next(&state).entry }
+  for i in 0..count {
+    entries[i] = next(&state).entry
+  }
   return ParseResult{ entries: entries, ok: true }
 }

@@ -12,6 +12,23 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+Breaking.
+
+- The CSV, INI and XML scanners keep their first error in the scanner. After
+  an error `next` returns `ok: false`, so loop until `ok` is false and then
+  check `state.error` once. The per-item `error` fields are gone from
+  `csv.Field`, `ini.Result`, `xml.Result` and `xml.Attribute`.
+  - `csv.Scanner` and `csv.StreamScanner` gain `error`; `Scanner` also records
+    `error_offset`. A stream read failure is `ErrorKind.Io`, with the system
+    code in `system_error` (previously `error`).
+  - `ini.next` skips a malformed line and keeps going. The scanner records the
+    first error and its `error_line`, and counts all of them in `errors`.
+    `ini.parse` still fails when any line is malformed.
+  - `xml.StreamScanner` gains `error`; read failures are `ErrorKind.Io`
+    instead of `Syntax`.
+
 ## 0.1.0-preview.21
 
 Breaking.
