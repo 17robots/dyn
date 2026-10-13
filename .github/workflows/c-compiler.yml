@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-compiler
       - run: just release-check
+      - name: Differential expression parser experiment
+        run: just test-parser-experiment
       - name: Qualify native vendor wrappers and generated bindings
         env:
           BIND_CLANG: clang-19
@@ -48,6 +50,7 @@ jobs:
           just artifact dyn-sanitize
           python3 tests/compiler-contracts.py
           python3 tests/generics.py
+          python3 tools/parser-experiment/check.py --sanitize --samples 100
       - uses: actions/upload-artifact@v4
         if: always()
         with:

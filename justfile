@@ -68,6 +68,10 @@ release-check:
 bench-scale: release
     python3 tools/scale-benchmark.py --budget
 
+# Isolated parser experiment; does not select a different production parser.
+test-parser-experiment: deps
+    python3 tools/parser-experiment/check.py
+
 native-probes: release
     python3 tools/build-native-probes.py
 
