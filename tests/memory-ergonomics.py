@@ -17,8 +17,7 @@ fn main() {
   size := mem.size_for(count, #sizeof(Item))
   expect(size.ok)
   allocation := mem.arena_push_array(&created, count, #sizeof(Item), #alignof(Item))
-  expect(allocation.ok)
-  items := (#cast(*Item) allocation.memory)[..count]
+  items := (#cast(*Item) allocation)[..count]
   for *item in items {
     expect(item.tag == 0 && item.value == 0)
     item.value = 42
@@ -30,9 +29,6 @@ fn main() {
   before := mem.arena_used(&created)
   overflow := mem.size_for(maximum / 8 + 1, 8)
   expect(!overflow.ok && overflow.bytes == 0)
-  expect(mem.arena_used(&created) == before && items[6].value == 42)
-  failed_array := mem.arena_push_array(&created, maximum, #sizeof(Item), #alignof(Item))
-  expect(!failed_array.ok && failed_array.error == mem.ErrorKind.Overflow)
   expect(mem.arena_used(&created) == before && items[6].value == 42)
   exact := mem.size_for(maximum, 1)
   expect(exact.ok && exact.bytes == maximum)

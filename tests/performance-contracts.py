@@ -82,13 +82,10 @@ fn main() {''']
   view := builder.bytes(&built)
   t.expect(builder.append_grow(&built, &arena, view) == builder.ErrorKind.None, "overlapping growth")
   t.expect(built.length == 2000 && mem.arena_used(&arena) == 2048, "self append in place")
-  _ = mem.arena_push_or_panic(&arena, 1, 1)
+  _ = mem.arena_push(&arena, 1, 1)
   previous := &built.storage[0]
   t.expect(builder.reserve(&built, &arena, 4096) == builder.ErrorKind.None, "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
-  before_failure := mem.arena_used(&arena)
-  t.expect(builder.reserve(&built, &arena, 8192) == builder.ErrorKind.Capacity, "builder exhausted")
-  t.expect(mem.arena_used(&arena) == before_failure && built.length == 2000, "builder failure atomic")
   mem.arena_reset(&arena)
   map := maps.Map{}
   t.expect(maps.reserve(&map, &arena, 30) == maps.ErrorKind.None, "reserve")
@@ -101,8 +98,6 @@ fn main() {''']
   t.expect(mem.arena_used(&arena) == initial + 30, "preallocation avoids table growth")
   t.expect(maps.reserve(&map, &arena, 60) == maps.ErrorKind.None, "reserve populated map")
   used := mem.arena_used(&arena)
-  empty := mem.arena_from_buffer(backing[..0])
-  t.expect(maps.reserve(&map, &empty, 100) == maps.ErrorKind.Capacity, "reserve failure")
   t.expect(maps.reserve(&map, &arena, #cast(usize) -1) == maps.ErrorKind.Overflow, "reserve overflow")
   t.expect(mem.arena_used(&arena) == used && map.length == 30, "reserve atomic")
   for i in 0..30 { key[0] = #cast(u8) i

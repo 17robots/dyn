@@ -105,12 +105,9 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     return result
   }
   allocation := mem.arena_push_uninit(arena, size, 1)
-  if !allocation.ok {
-    return ArgumentsResult{ kind: error_kinds.Kind.Capacity }
-  }
   bytes := arena.data[..0]
   if size > 0 {
-    bytes = allocation.memory[..size]
+    bytes = allocation[..size]
   }
   used: usize = 0
   index: usize = 0

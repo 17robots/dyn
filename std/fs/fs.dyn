@@ -189,11 +189,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       break
     }
     allocation := memory.arena_push_uninit(arena, capacity, 1)
-    if !allocation.ok {
-      kind = errors.Kind.Capacity
-      break
-    }
-    part := read(&opened.file, allocation.memory[..capacity])
+    part := read(&opened.file, allocation[..capacity])
     total += part.transferred
     memory.arena_rewind(arena, mark + total)
     if !part.ok {

@@ -45,28 +45,32 @@ the push panics. `arena_create`, `arena_release`, `frames_create`,
 `growing_release` and `growing_trim` therefore return their value directly,
 without `ok`.
 
-Running out of a fixed arena is different: a buffer arena or a sub-arena has a
-real size. Ordinary names report it, and `_or_panic` makes it fatal:
+A buffer arena or a sub-arena has a real size, and running out of it panics
+too: every arena push (`arena_push`, `arena_push_uninit`, `arena_push_array`,
+`mem.push`, `mem.push_array`, `mem.push_bytes_uninit`) either succeeds or stops
+the program. Choosing the budget is the caller's job. Code with a strict budget
+can use `arena_try_push`, the one push that reports exhaustion. Bounded growing
+arenas, free lists and pools keep their fallible forms, since running out of
+them is an expected outcome:
 
 | Recoverable | Fatal |
 | --- | --- |
-| `arena_push` / `arena_push_uninit` / `arena_push_array` | `mem.push` / `mem.push_array` / `mem.push_bytes_uninit`, `arena_push_or_panic` / `arena_push_uninit_or_panic` |
+| `arena_try_push` | `arena_push` and every other arena push |
 | `growing_push` / `growing_push_uninit` | `growing_push_or_panic` |
 | `free_list_alloc` / `pool_acquire` (nil when empty) | `free_list_alloc_or_panic` / `pool_acquire_or_panic` |
-
-Select panic when the caller has established a sufficient budget or has chosen
-termination as its policy. Bounds checks, invalid free/double-free, invalid
+ Bounds checks, invalid free/double-free, invalid
 rewind and violated layout preconditions still panic everywhere. Filesystem and
 network operations keep their own status and native errors. Missing lookup
 values and iterator end remain normal outcomes.
 
 ## Output allocation without hidden scratch
 
-- `strings.clone` and `strings.join` write into a caller's arena. `join`
-  restores its mark on failure; a full arena reports `Capacity`.
+- `strings.clone`, `join`, `split`, `format` and `list_join` write into a
+  caller's arena and return the bytes directly. Caller-buffer forms such as
+  `clone_into` and `join_into` still report `Capacity`.
 - `ini.parse(arena, source)` validates the whole document, then pushes one
-  exact-size entry table and scans again. Syntax failure consumes no capacity;
-  a full arena reports `Capacity`. Entry text still borrows source.
+  exact-size entry table and scans again. Syntax failure consumes no capacity.
+  Entry text still borrows source.
   The scanner remains allocation-free, and no parser panic wrapper is needed.
 - JSON parsing stays arena-based because its partial tree and decoded strings use
   rewind.
@@ -84,14 +88,12 @@ fn main() {
   backing: [4 * mem.KiB]u8
   arena := mem.arena_from_buffer(backing[..])
   parsed := ini.parse(&arena, "[ui]\nname=Workbench\n")
-  if !parsed.ok { #panic("invalid configuration or insufficient output capacity") }
+  if !parsed.ok { #panic("invalid configuration") }
   // Table borrows arena; text borrows the literal. Copy text when its input
   // lifetime is shorter than the desired output lifetime.
   copied := strings.clone(&arena, parsed.entries[1].value)
-  if !copied.ok { #panic("name allocation failed") }
-  // mem.push panics when the arena is full: a deliberate application policy.
   counter := mem.push(usize, &arena)
-  counter.* = #len(copied.value)
+  counter.* = #len(copied)
 }
 ```
 

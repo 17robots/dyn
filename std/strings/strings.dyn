@@ -484,22 +484,12 @@ pub fn clone_into(destination: []u8, source: []const u8) Result {
   _ = memory.move(destination, source)
   return Result{ value: destination[..#len(source)], required: #len(source), ok: true }
 }
-// Copies bytes into arena. Result expires at applicable rewind/reset/release; input need not outlive it.
-// Ownership: copies input bytes into caller's arena.
-// Invalidation: applicable arena rewind, reset, or release.
-// Allocation: source length bytes from the fixed arena.
-// Failure: arena offset and existing data are unchanged.
-pub fn clone(arena: *memory.Arena, source: []const u8) Result {
-  if #len(source) == 0 {
-    return Result{ value: arena.data[..0], ok: true }
-  }
-  allocation := memory.arena_push_uninit(arena, #len(source), 1)
-  if !allocation.ok {
-    return Result{ error: ErrorKind.Capacity, required: #len(source) }
-  }
-  return clone_into(allocation.memory[..#len(source)], source)
+// Copies source into arena. The copy expires at the applicable rewind, reset or release.
+pub fn clone(arena: *memory.Arena, source: []const u8) []u8 {
+  output := memory.push_bytes_uninit(arena, #len(source))
+  _ = memory.copy(output, source)
+  return output
 }
-
 
 pub fn join_size(parts: [][]const u8, separator: []const u8) SizeResult {
   total: usize = 0
@@ -545,25 +535,21 @@ pub fn join_into(destination: []u8, parts: [][]const u8, separator: []const u8) 
   }
   return Result{ value: output, required: size.value, ok: true }
 }
-pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) Result {
+// Joins parts into arena. Panics when the total size overflows.
+pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []u8 {
   size := join_size(parts, separator)
   if !size.ok {
-    return Result{ error: size.error }
+    #panic("join size overflows")
   }
-  mark := memory.arena_mark(arena)
-  allocated := memory.arena_push_uninit(arena, size.value, 1)
-  if !allocated.ok {
-    return Result{ error: ErrorKind.Capacity, required: size.value }
+  output := memory.push_bytes_uninit(arena, size.value)
+  at: usize = 0
+  for i in 0..#len(parts) {
+    if i > 0 {
+      at += memory.copy(output[at..], separator)
+    }
+    at += memory.copy(output[at..], parts[i])
   }
-  storage := arena.data[..0]
-  if size.value > 0 {
-    storage = allocated.memory[..size.value]
-  }
-  result := join_into(storage, parts, separator)
-  if !result.ok {
-    memory.arena_rewind(arena, mark)
-  }
-  return result
+  return output
 }
 
 pub fn split_count(source: []const u8, separator: []const u8) SizeResult {
@@ -608,32 +594,17 @@ pub fn split_into(storage: [][]const u8, source: []const u8, separator: []const 
   storage[i] = source[at..]
   return SplitResult{ values: storage[..count.value], required: count.value, ok: true }
 }
-// Allocates only the slice table in arena. Elements borrow source bytes; keep BOTH alive.
-// Arena rewind/reset/release expires the table. This is not a deep copy of source.
-// Ownership: table borrows arena storage; each element separately borrows input bytes.
-// Invalidation: table expires with arena storage; elements expire with source storage.
-// Allocation: slice descriptors only, not input bytes.
-// Failure: arena offset is restored; existing data is preserved.
-pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) SplitResult {
+// Splits source on separator. Only the slice table lives in arena; elements
+// borrow source, so keep both alive. Empty fields, including the last, are kept.
+// Panics when separator is empty.
+pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) [][]const u8 {
   count := split_count(source, separator)
   if !count.ok {
-    return SplitResult{ error: count.error }
+    #panic("split separator is empty")
   }
-  maximum := #cast(usize) -1
-  if count.value > maximum / #sizeof([]const u8) {
-    return SplitResult{ error: ErrorKind.Overflow }
-  }
-  mark := memory.arena_mark(arena)
-  allocated := memory.arena_push_uninit(arena, count.value * #sizeof([]const u8), #alignof([]const u8))
-  if !allocated.ok {
-    return SplitResult{ error: ErrorKind.Capacity, required: count.value }
-  }
-  values := (#cast(*[]const u8) allocated.memory)[..count.value]
-  result := split_into(values, source, separator)
-  if !result.ok {
-    memory.arena_rewind(arena, mark)
-  }
-  return result
+  values := memory.push_array([]const u8, arena, count.value)
+  _ = split_into(values, source, separator)
+  return values
 }
 // Caller storage must not overlap source. Capacity failure leaves it unchanged.
 pub fn replace(destination: []u8, source: []const u8, needle: []const u8, replacement: []const u8) Result {
@@ -731,29 +702,21 @@ fn count_write(data: rawptr, source: []const u8) io.Result {
 }
 
 // Formats into arena using the io.print template language: {} inserts a value,
-// {{ and }} write literal braces.
-// Allocation: exactly the formatted length from the fixed arena.
-// Failure: InvalidInput for a bad template or argument count, Capacity when the
-// arena is full; the arena is unchanged.
-pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: []const any) Result {
+// {{ and }} write literal braces. Allocates exactly the formatted length.
+// Panics on a bad template or argument count.
+pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: []const any) []u8 {
   size: usize = 0
   counted := io.print_arguments(io.Writer{ data: &size, write: &count_write }, template, arguments)
   if counted.status == io.Status.Error {
-    return Result{ error: ErrorKind.InvalidInput }
+    #panic("format template does not match its arguments")
   }
-  if size == 0 {
-    return Result{ value: arena.data[..0], ok: true }
-  }
-  allocation := memory.arena_push_uninit(arena, size, 1)
-  if !allocation.ok {
-    return Result{ error: ErrorKind.Capacity, required: size }
-  }
-  buffer := io.buffer_writer(allocation.memory[..size])
+  output := memory.push_bytes_uninit(arena, size)
+  buffer := io.buffer_writer(output)
   _ = io.print_arguments(io.buffer_writer_adapter(&buffer), template, arguments)
-  return Result{ value: allocation.memory[..size], required: size, ok: true }
+  return output
 }
 
-pub fn format(arena: *memory.Arena, template: []const u8, arguments: ...any) Result {
+pub fn format(arena: *memory.Arena, template: []const u8, arguments: ...any) []u8 {
   return format_arguments(arena, template, arguments)
 }
 
@@ -770,14 +733,9 @@ pub struct List {
   total: usize,
 }
 
-// Allocation: one node from the fixed arena.
-// Failure: returns false and leaves the list unchanged when the arena is full.
-pub fn list_push(arena: *memory.Arena, list: *List, value: []const u8) bool {
-  allocation := memory.arena_push(arena, #sizeof(ListNode), #alignof(ListNode))
-  if !allocation.ok {
-    return false
-  }
-  node := #cast(*ListNode) allocation.memory
+// Pushes one node; value is not copied.
+pub fn list_push(arena: *memory.Arena, list: *List, value: []const u8) {
+  node := memory.push(ListNode, arena)
   node.value = value
   if list.last == nil {
     list.first = node
@@ -787,29 +745,20 @@ pub fn list_push(arena: *memory.Arena, list: *List, value: []const u8) bool {
   list.last = node
   list.count += 1
   list.total += #len(value)
-  return true
 }
 
 // Formats into arena, then pushes the result.
-pub fn list_push_format(arena: *memory.Arena, list: *List, template: []const u8, arguments: ...any) bool {
-  formatted := format_arguments(arena, template, arguments)
-  return formatted.ok && list_push(arena, list, formatted.value)
+pub fn list_push_format(arena: *memory.Arena, list: *List, template: []const u8, arguments: ...any) {
+  list_push(arena, list, format_arguments(arena, template, arguments))
 }
 
 // Joins every node into one arena allocation.
-pub fn list_join(arena: *memory.Arena, list: *const List, separator: []const u8) Result {
+pub fn list_join(arena: *memory.Arena, list: *const List, separator: []const u8) []u8 {
   size := list.total
   if list.count > 1 {
     size += (list.count - 1) * #len(separator)
   }
-  if size == 0 {
-    return Result{ value: arena.data[..0], ok: true }
-  }
-  allocation := memory.arena_push_uninit(arena, size, 1)
-  if !allocation.ok {
-    return Result{ error: ErrorKind.Capacity, required: size }
-  }
-  output := allocation.memory[..size]
+  output := memory.push_bytes_uninit(arena, size)
   at: usize = 0
   node := list.first
   for node != nil {
@@ -819,5 +768,5 @@ pub fn list_join(arena: *memory.Arena, list: *const List, separator: []const u8)
     at += memory.copy(output[at..], node.value)
     node = node.next
   }
-  return Result{ value: output, required: size, ok: true }
+  return output
 }

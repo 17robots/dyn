@@ -32,15 +32,12 @@ pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResu
   mark := memory.arena_mark(arena)
   capacity := compress_bound(#len(source))
   allocation := memory.arena_push_uninit(arena, capacity, 1)
-  if !allocation.ok {
-    return BufferResult{}
-  }
-  result := provider.compress(allocation.memory[..capacity], source, level)
+  result := provider.compress(allocation[..capacity], source, level)
   if !result.ok {
     memory.arena_rewind(arena, mark)
     return BufferResult{ provider_code: result.provider_code }
   }
-  return BufferResult{ value: allocation.memory[..result.written], provider_code: result.provider_code, ok: true }
+  return BufferResult{ value: allocation[..result.written], provider_code: result.provider_code, ok: true }
 }
 pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   mark := memory.arena_mark(arena)
@@ -50,15 +47,12 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   }
   capacity := #cast(usize) size.size
   allocation := memory.arena_push_uninit(arena, capacity, 1)
-  if !allocation.ok {
-    return BufferResult{}
-  }
-  result := provider.decompress(allocation.memory[..capacity], source)
+  result := provider.decompress(allocation[..capacity], source)
   if !result.ok {
     memory.arena_rewind(arena, mark)
     return BufferResult{ provider_code: result.provider_code }
   }
-  return BufferResult{ value: allocation.memory[..result.written], provider_code: result.provider_code, ok: true }
+  return BufferResult{ value: allocation[..result.written], provider_code: result.provider_code, ok: true }
 }
 pub fn frame_size(source: []const u8) SizeResult {
   return provider.frame_size(source)

@@ -67,20 +67,16 @@ fn xml_check(source: []const u8, expected: bool) {
 }
 fn json_document(source: []const u8, expected: bool) {
   if json.valid(source) != expected { #panic("JSON UTF8 validity") }
-  backing: [512]u8 = []
-  for capacity in 0..513 {
-    arena := mem.arena_from_buffer(backing[..capacity])
-    prefix := mem.arena_push(&arena, 7, 1)
-    if prefix.ok { for i in 0..7 { prefix.memory[..7][i] = 91 } }
-    mark := mem.arena_mark(&arena)
-    parsed := json.parse(&arena,source)
-    if parsed.ok && !expected { #panic("JSON accepted invalid UTF8") }
-    if !parsed.ok && mem.arena_mark(&arena) != mark { #panic("JSON allocation rollback") }
-    if capacity == 512 && parsed.ok != expected { #panic("JSON parse UTF8 result") }
-    if prefix.ok {
-      for byte in prefix.memory[..7] { if byte != 91 { #panic("JSON clobbered prior allocation") } }
-    }
-  }
+  // Arena exhaustion panics, so one roomy arena covers acceptance and rollback.
+  backing: [4096]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  prefix := mem.arena_push(&arena, 7, 1)
+  for i in 0..7 { prefix[..7][i] = 91 }
+  mark := mem.arena_mark(&arena)
+  parsed := json.parse(&arena,source)
+  if parsed.ok != expected { #panic("JSON parse UTF8 result") }
+  if !parsed.ok && mem.arena_mark(&arena) != mark { #panic("JSON allocation rollback") }
+  for byte in prefix[..7] { if byte != 91 { #panic("JSON clobbered prior allocation") } }
 }
 fn json_stream_check(value: *const json.Value, document: []const u8, expected: bool, prefix: []const u8) {
   storage: [128]u8 = []

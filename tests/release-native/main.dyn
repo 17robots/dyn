@@ -11,7 +11,7 @@ fn main() {
   context: i64 = 3
   if invoke(&callback,#cast(rawptr) &context) != 7.5 { #panic("callback ABI") }
   arena := mem.arena_create(4096)
-  bytes := mem.arena_push_or_panic(&arena,64,8)[..64]
+  bytes := mem.arena_push(&arena,64,8)[..64]
   bytes[63] = 42
   mem.arena_release(&arena)
 }

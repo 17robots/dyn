@@ -72,20 +72,16 @@ pub fn arguments(arena: *mem.Arena) Arguments {
   pointers := mem.arena_push(arena, count * #sizeof(*u8), #alignof(*u8))
   bytes := mem.arena_push(arena, size, 1)
   slices := mem.arena_push(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  if !pointers.ok || !bytes.ok || !slices.ok {
-    mem.arena_rewind(arena, mark)
-    return Arguments{ error: 48 }
-  }
-  error = native_args(pointers.memory, bytes.memory)
+  error = native_args(pointers, bytes)
   if error != 0 {
     mem.arena_rewind(arena, mark)
     return Arguments{ error: error }
   }
-  raw := (#cast(**u8) pointers.memory)[..count]
-  values := (#cast(*[]const u8) slices.memory)[..count]
+  raw := (#cast(**u8) pointers)[..count]
+  values := (#cast(*[]const u8) slices)[..count]
   i: usize = 0
   for i < count {
-    offset := #cast(usize) raw[i] - #cast(usize) bytes.memory
+    offset := #cast(usize) raw[i] - #cast(usize) bytes
     if offset >= size {
       mem.arena_rewind(arena, mark)
       return Arguments{ error: 28 }

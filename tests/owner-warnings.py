@@ -39,7 +39,7 @@ fn main() {
 fn main() {
   storage: [64]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  pointer := mem.arena_push_or_panic(&arena, 1, 1)
+  pointer := mem.arena_push(&arena, 1, 1)
   mem.arena_rewind(&arena, 0)
   pointer.* = 42
 }
@@ -51,7 +51,7 @@ fn main() {
   storage: [64]u8 = []
   arena := mem.arena_from_buffer(storage[..])
   allocation := mem.arena_push_array(&arena, 1, 1, 1)
-  pointer := allocation.memory
+  pointer := allocation
   mem.arena_reset(&arena)
   pointer.* = 42
 }
@@ -61,7 +61,7 @@ fn main() {
     source.write_text('''use "std/mem"
 fn main() {
   created := mem.arena_create(mem.KiB)
-  pointer := mem.arena_push_or_panic(&created, 1, 1)
+  pointer := mem.arena_push(&created, 1, 1)
   pointer.* = 42
   moved := mem.arena_take(&created)
   if #len(created.data) != 0 || created.owns_memory || pointer.* != 42 { #panic("transfer") }
