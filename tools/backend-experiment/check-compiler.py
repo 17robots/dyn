@@ -123,8 +123,8 @@ fn main() {
         checks += 1
         # Programs beyond native capacity fail under --backend native without
         # replacing a published object; auto falls back to LLVM and still runs.
-        source.write_text('fn wide('+', '.join(f'a{i}: u64' for i in range(300))+') u64 { return a299 }\n'
-                          'fn main() { if wide('+', '.join(map(str,range(300)))+') != 299 { #panic("wide") } }\n')
+        source.write_text('fn wide('+', '.join(f'a{i}: u64' for i in range(600))+') u64 { return a599 }\n'
+                          'fn main() { if wide('+', '.join(map(str,range(600)))+') != 599 { #panic("wide") } }\n')
         obj=Path(str(output)+'.o');obj.write_bytes(b'previous object')
         result=run([candidate,'build',root,'--backend','native','--no-link','--output',output])
         assert result.returncode != 0 and b'use --backend llvm' in result.stderr,result.stderr

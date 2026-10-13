@@ -41,14 +41,19 @@ unsigned backend_dwarf_struct_type(BackendDwarf *, const char *name,
                                    uint64_t size, unsigned members);
 bool backend_dwarf_member(BackendDwarf *, unsigned type, unsigned index,
                           const char *name, unsigned member_type, uint64_t offset);
+unsigned backend_dwarf_union_type(BackendDwarf *, const char *name,
+                                  uint64_t size, unsigned members);
 unsigned backend_dwarf_array_type(BackendDwarf *, unsigned element, uint64_t count);
 unsigned backend_dwarf_enum_type(BackendDwarf *, const char *name, unsigned base,
                                  uint64_t size, unsigned enumerators);
 bool backend_dwarf_enumerator(BackendDwarf *, unsigned type, unsigned index,
                               const char *name, int64_t value);
-/* A variable of the active function at a fixed RBP-relative frame offset. */
+/* A variable of the active function at a fixed RBP-relative frame offset.
+   A nonempty [scope_begin, scope_end) text range nests it in a lexical block;
+   otherwise it is visible in the whole function. */
 bool backend_dwarf_variable(BackendDwarf *, const char *name, unsigned type,
-                            int64_t frame_offset, bool parameter);
+                            int64_t frame_offset, bool parameter,
+                            size_t scope_begin, size_t scope_end);
 /* Output must initially be zeroed. Failure frees and zeros every output field.
    Relocation target indexes identify sections above, not ELF symbol indexes;
    callers map these to their final local section symbols. */

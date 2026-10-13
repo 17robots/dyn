@@ -20,7 +20,7 @@ typedef struct {
   char *name;
   unsigned file, line, column;
 } Function;
-enum { TYPE_BASE, TYPE_POINTER, TYPE_STRUCT, TYPE_ARRAY, TYPE_ENUM };
+enum { TYPE_BASE, TYPE_POINTER, TYPE_STRUCT, TYPE_ARRAY, TYPE_ENUM, TYPE_UNION };
 typedef struct {
   unsigned kind, encoding, target;
   char *name;
@@ -29,7 +29,7 @@ typedef struct {
 } Type;
 /* Struct members carry offsets; enumerators carry values. */
 typedef struct { char *name; unsigned type; uint64_t value; } Member;
-typedef struct { char *name; unsigned type; int64_t offset; bool parameter; } Variable;
+typedef struct { char *name; unsigned type; int64_t offset; bool parameter; size_t begin, end; } Variable;
 struct BackendDwarf {
   Function *functions;
   size_t function_count, function_capacity;
@@ -162,6 +162,10 @@ unsigned backend_dwarf_struct_type(BackendDwarf *d, const char *name,
                                    uint64_t size, unsigned members) {
   return add_type(d, (Type){.kind=TYPE_STRUCT, .size=size}, name, members);
 }
+unsigned backend_dwarf_union_type(BackendDwarf *d, const char *name,
+                                  uint64_t size, unsigned members) {
+  return add_type(d, (Type){.kind=TYPE_UNION, .size=size}, name, members);
+}
 unsigned backend_dwarf_array_type(BackendDwarf *d, unsigned element, uint64_t count) {
   if (!element) return 0;
   return add_type(d, (Type){.kind=TYPE_ARRAY, .target=element, .count=count}, NULL, 0);
@@ -191,14 +195,16 @@ bool backend_dwarf_enumerator(BackendDwarf *d, unsigned type, unsigned index,
   return set_member(d, type, index, name, 0, (uint64_t)value);
 }
 bool backend_dwarf_variable(BackendDwarf *d, const char *name, unsigned type,
-                            int64_t offset, bool parameter) {
+                            int64_t offset, bool parameter, size_t begin, size_t end) {
   if (!d || d->failed) return false;
   if (!d->active || !type || type > d->type_count || !name || !*name) return true;
   if (!grow((void **)&d->variables, &d->variable_capacity, d->variable_count + 1,
             sizeof(*d->variables), RECORD_LIMIT)) return !(d->failed = true);
   char *copy = copy_string(d, name);
   if (!copy) return !(d->failed = true);
-  d->variables[d->variable_count++] = (Variable){copy, type, offset, parameter};
+  Function *f = &d->functions[d->function_count - 1];
+  if (end <= begin || begin < f->begin) begin = end = 0;
+  d->variables[d->variable_count++] = (Variable){copy, type, offset, parameter, begin, end};
   return true;
 }
 static bool bytes(BackendDwarfBytes *b, const void *data, size_t n) {
@@ -256,8 +262,26 @@ static bool abbreviations(BackendDwarfBytes *b) {
     11,0x21,0, 0x37,0x0f, 0,0,
     12,0x04,1, 0x03,0x08, 0x0b,0x0f, 0x49,0x13, 0,0,
     13,0x28,0, 0x03,0x08, 0x1c,0x0d, 0,0,
+    14,0x0b,1, 0x11,0x01, 0x12,0x07, 0,0,
+    15,0x17,1, 0x03,0x08, 0x0b,0x0f, 0,0,
     0};
   return bytes(b,data,sizeof(data));
+}
+typedef struct { size_t at; unsigned type; } TypeRef;
+static bool scope_before(const Variable *a, const Variable *b) {
+  return a->begin < b->begin || (a->begin == b->begin && a->end > b->end);
+}
+static bool emit_variable(BackendDwarfOutput *out, BackendDwarfBytes *b, const Variable *variable,
+                          TypeRef **refs, size_t *count, size_t *capacity) {
+  (void)out;
+  if (!uleb(b,variable->parameter?4:3) || !string(b,variable->name)) return false;
+  if (!grow((void **)refs,capacity,*count+1,sizeof(**refs),SIZE_MAX/sizeof(**refs)) || !number(b,0,4)) return false;
+  (*refs)[*count].at=b->size-4; (*refs)[(*count)++].type=variable->type;
+  BackendDwarfBytes location={0};
+  bool ok=number(&location,0x91,1) && sleb(&location,variable->offset) && /* DW_OP_fbreg */
+          uleb(b,location.size) && bytes(b,location.data,location.size);
+  free(location.data);
+  return ok;
 }
 static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
   BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_INFO];
@@ -270,7 +294,7 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
   PUT(number(b,d->functions[d->function_count-1].end-d->functions[0].begin,8));
   /* Type DIEs precede functions; ref4 forms are patched once offsets exist. */
   size_t *offsets=calloc(d->type_count?d->type_count:1,sizeof(*offsets));
-  size_t ref_count=0,ref_capacity=0; struct { size_t at; unsigned type; } *refs=NULL;
+  size_t ref_count=0,ref_capacity=0; TypeRef *refs=NULL;
   bool ok=offsets!=NULL;
 #define REF(id) do { if (!grow((void **)&refs,&ref_capacity,ref_count+1,sizeof(*refs),SIZE_MAX/sizeof(*refs)) || !number(b,0,4)) { ok=false; break; } \
     refs[ref_count].at=b->size-4; refs[ref_count++].type=(id); } while(0)
@@ -286,13 +310,13 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
     case TYPE_ARRAY:
       ok=uleb(b,10); if (ok) REF(type->target);
       ok=ok && uleb(b,11) && uleb(b,type->count) && uleb(b,0); break;
-    case TYPE_STRUCT: case TYPE_ENUM:
-      if (type->kind==TYPE_STRUCT) ok=uleb(b,8) && string(b,type->name) && uleb(b,type->size);
+    case TYPE_STRUCT: case TYPE_ENUM: case TYPE_UNION:
+      if (type->kind!=TYPE_ENUM) ok=uleb(b,type->kind==TYPE_UNION?15:8) && string(b,type->name) && uleb(b,type->size);
       else { ok=uleb(b,12) && string(b,type->name) && uleb(b,type->size); if (ok) REF(type->target); }
       for (size_t m=0;ok && m<type->members;++m) {
         Member *member=&d->members[type->first+m];
         if (!member->name) continue;
-        if (type->kind==TYPE_STRUCT) {
+        if (type->kind!=TYPE_ENUM) {
           ok=uleb(b,9) && string(b,member->name); if (ok) REF(member->type);
           ok=ok && uleb(b,member->value);
         } else ok=uleb(b,13) && string(b,member->name) && sleb(b,(int64_t)member->value);
@@ -307,15 +331,36 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
        uleb(b,f->line) && uleb(b,f->column) &&
        relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,R_X86_64_64,f->begin) &&
        number(b,f->end-f->begin,8) && bytes(b,frame_base,sizeof(frame_base));
-    for (size_t v=f->first_variable;ok && v<f->last_variable;++v) {
-      Variable *variable=&d->variables[v];
-      BackendDwarfBytes location={0};
-      ok=uleb(b,variable->parameter?4:3) && string(b,variable->name);
-      if (ok) REF(variable->type);
-      ok=ok && number(&location,0x91,1) && sleb(&location,variable->offset) && /* DW_OP_fbreg */
-         uleb(b,location.size) && bytes(b,location.data,location.size);
-      free(location.data);
+    /* Function-wide variables first; scoped ones nest as lexical blocks ordered
+       by start, outer ranges before the ranges they contain. */
+    size_t first=f->first_variable,count=f->last_variable-first,scoped=0;
+    size_t *order=count?malloc(count*sizeof(*order)):NULL;
+    size_t stack_begin[64],stack_end[64]; unsigned open=0;
+    if (count && !order) ok=false;
+    for (size_t v=0;ok && v<count;++v) {
+      Variable *variable=&d->variables[first+v];
+      if (variable->end>variable->begin) { order[scoped++]=first+v; continue; }
+      ok=emit_variable(out,b,variable,&refs,&ref_count,&ref_capacity);
     }
+    for (size_t x=1;ok && x<scoped;++x) {
+      size_t value=order[x],y=x;
+      for (;y && scope_before(&d->variables[value],&d->variables[order[y-1]]);--y) order[y]=order[y-1];
+      order[y]=value;
+    }
+    for (size_t x=0;ok && x<scoped;++x) {
+      Variable *variable=&d->variables[order[x]];
+      while (ok && open && !(stack_begin[open-1]<=variable->begin && variable->end<=stack_end[open-1])) { ok=uleb(b,0); --open; }
+      if (ok && !(open && stack_begin[open-1]==variable->begin && stack_end[open-1]==variable->end)) {
+        if (open==64) { ok=uleb(b,0); --open; }
+        ok=ok && uleb(b,14) &&
+           relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,R_X86_64_64,(int64_t)variable->begin) &&
+           number(b,variable->end-variable->begin,8);
+        stack_begin[open]=variable->begin; stack_end[open++]=variable->end;
+      }
+      ok=ok && emit_variable(out,b,variable,&refs,&ref_count,&ref_capacity);
+    }
+    while (ok && open) { ok=uleb(b,0); --open; }
+    free(order);
     ok=ok && uleb(b,0);
   }
 #undef REF

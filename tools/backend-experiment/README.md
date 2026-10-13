@@ -18,8 +18,9 @@ x86-64 Linux hosts (`-DDYN_NATIVE_BACKEND`); other hosts build without it.
 
 `--release`, `--shared`, `--emit-ir`, `--emit-asm`, CPU/feature selection,
 optimization remarks and non-x86_64-linux targets always use LLVM; combining them
-with `--backend native` is an error. Debug builds emit DWARF by default (lines,
-frames, parameters and typed locals); `--debug-info` is accepted.
+with `--backend native` is an error. Debug builds emit DWARF by default: lines,
+frames, parameters, and typed locals nested in lexical blocks, with payload enums
+as `tag` plus a `payload` union; `--debug-info` is accepted.
 
 Native emission handles the complete merged program in one object. Executables use
 the whole-executable build cache, keyed separately from LLVM builds; LLVM module and
@@ -207,9 +208,9 @@ visibility, not durability across a system crash.
 Bounds: 16 MiB each for machine code, read-only data, symbol names, and
 relocation storage; 32,768 functions and 32,768 globals; 4096 locals per function
 (including parameters) and 16 MiB of frame storage, including hidden eightbyte slots for
-temporaries/ranges/cases/captures/unwind state; 16 MiB per aggregate type; 256 parameters;
-512 argument eightbytes per call; 4,194,304 IR expressions/statements; 128 recursive
-expression edges and 128 nested statement blocks. Exceeding a
+temporaries/ranges/cases/captures/unwind state; 16 MiB per aggregate type;
+512 parameters and 512 argument eightbytes per call; 4,194,304 IR expressions/statements;
+1024 recursive expression edges and 1024 nested statement blocks; 4096 defers per function. Exceeding a
 limit fails. The frontend's own limits also apply. The emitter accepts checked
 compiler-owned IR, not arbitrary serialized IR. Each object invocation owns a zeroed,
 heap-allocated emission context; repeated and concurrent emission tests verify isolated
