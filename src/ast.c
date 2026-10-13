@@ -6,6 +6,176 @@
 #include <string.h>
 
 #include "dyn_syntax.h"
+#include <stdatomic.h>
+/* Node kinds as integers: dispatching on ts_node_type() strings costs a
+   strcmp per candidate for every node. Grammar symbols map to these once. */
+typedef enum {
+  K_OTHER,
+  K_align,
+  K_array_literal,
+  K_array_type,
+  K_assignment,
+  K_binary,
+  K_block,
+  K_bool_,
+  K_break_,
+  K_call,
+  K_case_,
+  K_case_arm,
+  K_case_pattern,
+  K_cast,
+  K_char_,
+  K_comment,
+  K_const_variable,
+  K_continue_,
+  K_defer,
+  K_enum,
+  K_enum_member,
+  K_expression,
+  K_extern_fn,
+  K_extern_variable,
+  K_field_access,
+  K_fn,
+  K_fn_param,
+  K_fn_type,
+  K_for_,
+  K_for_condition,
+  K_group,
+  K_identifier,
+  K_if_,
+  K_index,
+  K_len,
+  K_literal,
+  K_load,
+  K_null_,
+  K_number_,
+  K_offset,
+  K_panic,
+  K_pointer_type,
+  K_primary,
+  K_primitive,
+  K_range,
+  K_return_,
+  K_reverse,
+  K_size,
+  K_statement,
+  K_static_assert,
+  K_string_,
+  K_struct,
+  K_struct_literal,
+  K_struct_literal_member,
+  K_struct_member,
+  K_syscall,
+  K_type,
+  K_type_alias,
+  K_type_argument,
+  K_type_parameter,
+  K_type_pattern,
+  K_type_qualifier,
+  K_typeof,
+  K_unary_postfix,
+  K_unary_prefix,
+  K_variable,
+  K_variadic,
+  K_variadic_param,
+  K_wrap,
+  K_COUNT
+} DynKind;
+static const char *const dyn_kind_names[K_COUNT] = {
+  NULL,
+  "align",
+  "array_literal",
+  "array_type",
+  "assignment",
+  "binary",
+  "block",
+  "bool_",
+  "break_",
+  "call",
+  "case_",
+  "case_arm",
+  "case_pattern",
+  "cast",
+  "char_",
+  "comment",
+  "const_variable",
+  "continue_",
+  "defer",
+  "enum",
+  "enum_member",
+  "expression",
+  "extern_fn",
+  "extern_variable",
+  "field_access",
+  "fn",
+  "fn_param",
+  "fn_type",
+  "for_",
+  "for_condition",
+  "group",
+  "identifier",
+  "if_",
+  "index",
+  "len",
+  "literal",
+  "load",
+  "null_",
+  "number_",
+  "offset",
+  "panic",
+  "pointer_type",
+  "primary",
+  "primitive",
+  "range",
+  "return_",
+  "reverse",
+  "size",
+  "statement",
+  "static_assert",
+  "string_",
+  "struct",
+  "struct_literal",
+  "struct_literal_member",
+  "struct_member",
+  "syscall",
+  "type",
+  "type_alias",
+  "type_argument",
+  "type_parameter",
+  "type_pattern",
+  "type_qualifier",
+  "typeof",
+  "unary_postfix",
+  "unary_prefix",
+  "variable",
+  "variadic",
+  "variadic_param",
+  "wrap",
+};
+/* Static, so building it never allocates; grammars stay far below the bound. */
+static uint8_t dyn_kind_table[4096];
+static atomic_int dyn_kind_state;
+static void dyn_kind_build(void) {
+  int expected = 0;
+  if (atomic_compare_exchange_strong(&dyn_kind_state, &expected, 1)) {
+    const TSLanguage *language = tree_sitter_dyn();
+    uint32_t count = ts_language_symbol_count(language);
+    if (count > sizeof(dyn_kind_table)) count = sizeof(dyn_kind_table);
+    for (uint32_t symbol = 0; symbol < count; ++symbol) {
+      const char *name = ts_language_symbol_name(language, (TSSymbol)symbol);
+      for (int kind = 1; name && kind < K_COUNT; ++kind)
+        if (!strcmp(name, dyn_kind_names[kind])) { dyn_kind_table[symbol] = (uint8_t)kind; break; }
+    }
+    atomic_store(&dyn_kind_state, 2);
+  }
+  while (atomic_load(&dyn_kind_state) != 2) {}
+}
+static inline DynKind dyn_kind(TSNode node) {
+  if (atomic_load_explicit(&dyn_kind_state, memory_order_acquire) != 2) dyn_kind_build();
+  if (ts_node_is_null(node)) return K_OTHER;
+  TSSymbol symbol = ts_node_symbol(node);
+  return symbol < sizeof(dyn_kind_table) ? (DynKind)dyn_kind_table[symbol] : K_OTHER;
+}
 
 static DynSpan span(TSNode n) {
   return (DynSpan){ts_node_start_byte(n), ts_node_end_byte(n)};
@@ -154,9 +324,9 @@ static void diagnostic_span(DynSpan p, const DynSource *s, unsigned *errors,
                                                                    (e), (m))
 static TSNode unwrap(TSNode n) {
   for (;;) {
-    const char *kind = ts_node_type(n);
-    if (strcmp(kind, "expression") && strcmp(kind, "primary") &&
-        strcmp(kind, "literal") && strcmp(kind, "group"))
+    DynKind kind = dyn_kind(n);
+    if ((kind != K_expression) && (kind != K_primary) &&
+        (kind != K_literal) && (kind != K_group))
       return n;
     if (ts_node_named_child_count(n) == 1) {
       TSNode child = ts_node_named_child(n, 0);
@@ -822,16 +992,16 @@ static DynExprId lower_expr(TSNode, const DynSource *, DynAstProgram *, unsigned
    for type parameters in scope while lowering an instance. */
 static DynExprId lower_argument(TSNode node, const DynSource *s, DynAstProgram *a,
                                 unsigned *errors) {
-  bool is_type = !strcmp(ts_node_type(node), "type_argument");
+  bool is_type = !(dyn_kind(node) != K_type_argument);
   TSNode n = node;
   if (!is_type && a->scope_count) {
     n = unwrap(node);
-    is_type = !strcmp(ts_node_type(n), "identifier") &&
+    is_type = !(dyn_kind(n) != K_identifier) &&
               scope_type(a, span(n), s, false) != DYN_TYPE_ERROR;
   }
   if (!is_type)
     return lower_expr(node, s, a, errors);
-  DynType type = parse_type(!strcmp(ts_node_type(n), "type_argument") ? dyn_syntax_child(n, 0) : n, s, a);
+  DynType type = parse_type(!(dyn_kind(n) != K_type_argument) ? dyn_syntax_child(n, 0) : n, s, a);
   if (type == DYN_TYPE_ERROR) {
     diagnostic(n, s, errors, "unknown type");
     return DYN_NO_EXPR;
@@ -890,8 +1060,8 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
   DynAstExpr e = {0};
   e.span = span(node);
   e.left = e.right = DYN_NO_EXPR;
-  const char *k = ts_node_type(node);
-  if (!strcmp(k, "number_")) {
+  DynKind k = dyn_kind(node);
+  if (!(k != K_number_)) {
     bool fl = false;
     /* e and E are hex digits in 0x literals, not exponents. */
     bool hex = e.span.end_byte - e.span.start_byte > 1 &&
@@ -924,42 +1094,42 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
         diagnostic(node, s, errors, "integer literal exceeds u64");
       }
     }
-  } else if (!strcmp(k, "bool_")) {
+  } else if (!(k != K_bool_)) {
     e.kind = DYN_EXPR_BOOL;
     e.type = DYN_TYPE_BOOL;
     e.boolean = s->text[e.span.start_byte] == 't';
-  } else if (!strcmp(k, "char_")) {
+  } else if (!(k != K_char_)) {
     e.kind = DYN_EXPR_CHAR;
     if (!parse_char(node, s, &e.integer)) {
       diagnostic(node, s, errors, "invalid Unicode scalar literal");
       return DYN_NO_EXPR;
     }
     e.type = e.integer <= 255 ? DYN_TYPE_U8 : DYN_TYPE_U32;
-  } else if (!strcmp(k, "string_")) {
+  } else if (!(k != K_string_)) {
     e.kind = DYN_EXPR_STRING;
     e.type = DYN_TYPE_STRING;
     e.integer = parse_string(node, s, a, errors);
-  } else if (!strcmp(k, "null_")) {
+  } else if (!(k != K_null_)) {
     e.kind = DYN_EXPR_NIL;
     e.type = DYN_TYPE_INFER;
-  } else if (!strcmp(k, "identifier")) {
+  } else if (!(k != K_identifier)) {
     e.kind = DYN_EXPR_NAME;
     e.type = DYN_TYPE_INFER;
-  } else if (!strcmp(k, "field_access")) {
+  } else if (!(k != K_field_access)) {
     e.kind = DYN_EXPR_FIELD;
     e.type = DYN_TYPE_INFER;
     e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
     e.span = span(dyn_syntax_child(node, 1));
-  } else if (!strcmp(k, "call")) {
+  } else if (!(k != K_call)) {
     TSNode callee = unwrap(dyn_syntax_child(node, 0));
-    if (!strcmp(ts_node_type(callee), "field_access")) {
+    if (!(dyn_kind(callee) != K_field_access)) {
       e.kind = DYN_EXPR_ENUM;
       e.type = DYN_TYPE_INFER;
       e.boolean = true;
       e.left = lower_expr(dyn_syntax_child(callee, 0), s, a, errors);
       e.right = lower_expr(callee, s, a, errors);
       e.span = span(dyn_syntax_child(callee, 1));
-    } else if (!strcmp(ts_node_type(callee), "identifier")) {
+    } else if (!(dyn_kind(callee) != K_identifier)) {
       e.kind = DYN_EXPR_CALL;
       e.type = DYN_TYPE_INFER;
       e.span = span(callee);
@@ -992,13 +1162,13 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       a->items[e.item_start + argument_index++] =
           (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
     }
-  } else if (!strcmp(k, "struct_literal")) {
+  } else if (!(k != K_struct_literal)) {
     e.kind = DYN_EXPR_STRUCT;
     e.type = DYN_TYPE_INFER;
     uint32_t first = 0, count = ts_node_named_child_count(node);
     while (
         first < count &&
-        !strcmp(ts_node_type(ts_node_named_child(node, first)), "identifier"))
+        !(dyn_kind(ts_node_named_child(node, first)) != K_identifier))
       ++first;
     if (first) {
       TSNode begin = dyn_syntax_child(node, 0),
@@ -1011,7 +1181,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
     e.item_start = (uint32_t)a->item_count;
     for (uint32_t i = first; i < count; ++i) {
       TSNode m = ts_node_named_child(node, i);
-      if (strcmp(ts_node_type(m), "struct_literal_member"))
+      if ((dyn_kind(m) != K_struct_literal_member))
         continue;
       if (!reserve_item(a)) {
         diagnostic(m, s, errors, "out of memory");
@@ -1023,7 +1193,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
     uint32_t member_index = 0;
     for (uint32_t i = first; i < count; ++i) {
       TSNode m = ts_node_named_child(node, i);
-      if (strcmp(ts_node_type(m), "struct_literal_member")) {
+      if ((dyn_kind(m) != K_struct_literal_member)) {
         continue;
       }
       DynSpan name = span(dyn_syntax_child(m, 0));
@@ -1032,7 +1202,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       item->name = name;
       item->expression = expression;
     }
-  } else if (!strcmp(k, "array_literal")) {
+  } else if (!(k != K_array_literal)) {
     e.kind = DYN_EXPR_ARRAY;
     e.type = DYN_TYPE_INFER;
     e.item_start = (uint32_t)a->item_count;
@@ -1059,7 +1229,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
           (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
     } while (ts_tree_cursor_goto_next_sibling(&cursor));
     ts_tree_cursor_delete(&cursor);
-  } else if (!strcmp(k, "index")) {
+  } else if (!(k != K_index)) {
     uint32_t count = dyn_syntax_child_count(node);
     e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
     bool range = false;
@@ -1091,16 +1261,16 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
         e.integer = lower_expr(dyn_syntax_child(node, 2), s, a, errors);
       }
     }
-  } else if (!strcmp(k, "len")) {
+  } else if (!(k != K_len)) {
     e.kind = DYN_EXPR_LEN;
     e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
-  } else if (!strcmp(k, "size") || !strcmp(k, "align") ||
-             !strcmp(k, "typeof")) {
-    e.kind = !strcmp(k, "size")    ? DYN_EXPR_SIZE
-             : !strcmp(k, "align") ? DYN_EXPR_ALIGN
+  } else if (!(k != K_size) || !(k != K_align) ||
+             !(k != K_typeof)) {
+    e.kind = !(k != K_size)    ? DYN_EXPR_SIZE
+             : !(k != K_align) ? DYN_EXPR_ALIGN
                                    : DYN_EXPR_TYPEOF;
     TSNode operand = dyn_syntax_child(node, 0);
-    if (!strcmp(ts_node_type(operand), "type")) {
+    if (!(dyn_kind(operand) != K_type)) {
       DynType parsed = parse_type(operand, s, a);
       if (parsed != DYN_TYPE_ERROR) {
         e.boolean = true;
@@ -1112,7 +1282,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       }
     } else
       e.left = lower_expr(operand, s, a, errors);
-  } else if (!strcmp(k, "load")) {
+  } else if (!(k != K_load)) {
     /* Failures still yield an empty string so one bad path reports once. */
     TSNode literal = dyn_syntax_child(node, 0);
     uint32_t begin = ts_node_start_byte(literal) + 1, end = ts_node_end_byte(literal) - 1;
@@ -1140,23 +1310,23 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
     e.type = DYN_TYPE_STRING;
     e.integer = (uint32_t)a->string_count;
     a->strings[a->string_count++] = (DynAstString){data, length};
-  } else if (!strcmp(k, "wrap")) {
+  } else if (!(k != K_wrap)) {
     DynExprId inner = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
     if (inner != DYN_NO_EXPR && !mark_wrap(a, inner, 0))
       diagnostic(node, s, errors, "#wrap needs +, -, * or << inside");
     return inner;
-  } else if (!strcmp(k, "offset")) {
+  } else if (!(k != K_offset)) {
     TSNode field = dyn_syntax_child(node, 1);
     e.kind = DYN_EXPR_OFFSET;
     e.integer = parse_type(dyn_syntax_child(node, 0), s, a);
     e.item_start = ts_node_start_byte(field);
     e.item_count = ts_node_end_byte(field);
-  } else if (!strcmp(k, "cast")) {
+  } else if (!(k != K_cast)) {
     e.kind = s->text[e.span.start_byte + 1] == 'b' ? DYN_EXPR_BITCAST
                                                    : DYN_EXPR_CAST;
     e.integer = parse_type(dyn_syntax_child(node, 0), s, a);
     e.left = lower_expr(dyn_syntax_child(node, 1), s, a, errors);
-  } else if (!strcmp(k, "syscall")) {
+  } else if (!(k != K_syscall)) {
     e.kind = DYN_EXPR_SYSCALL;
     e.type = DYN_TYPE_INFER;
     e.item_start = (uint32_t)a->item_count;
@@ -1175,7 +1345,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       a->items[e.item_start + item_index++] =
           (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
     }
-  } else if (!strcmp(k, "unary_prefix")) {
+  } else if (!(k != K_unary_prefix)) {
     e.kind = DYN_EXPR_UNARY;
     e.op = op_from(anonymous_operator(node));
     if (!strcmp(anonymous_operator(node), "&")) {
@@ -1185,11 +1355,11 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       e.op = DYN_OP_NEG;
     }
     e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
-  } else if (!strcmp(k, "unary_postfix")) {
+  } else if (!(k != K_unary_postfix)) {
     e.kind = DYN_EXPR_UNARY;
     e.op = DYN_OP_DEREF;
     e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
-  } else if (!strcmp(k, "binary")) {
+  } else if (!(k != K_binary)) {
     e.kind = DYN_EXPR_BINARY;
     e.op = op_from(anonymous_operator(node));
     e.left = lower_expr(dyn_syntax_child(node, 0), s, a, errors);
@@ -1211,9 +1381,9 @@ static bool array_integer_constant(TSNode declaration, const DynSource *s, DynAs
   TSNode variable = dyn_syntax_child(declaration, 0);
   for (uint32_t i = 1; i < dyn_syntax_child_count(variable); ++i) {
     TSNode child = dyn_syntax_child(variable, i);
-    const char *kind = ts_node_type(child);
-    if (strcmp(kind, "type_qualifier") && strcmp(kind, "type")) continue;
-    if (!strcmp(kind, "type_qualifier")) child = dyn_syntax_child(child, 0);
+    DynKind kind = dyn_kind(child);
+    if ((kind != K_type_qualifier) && (kind != K_type)) continue;
+    if (!(kind != K_type_qualifier)) child = dyn_syntax_child(child, 0);
     DynType type = parse_type(child, s, a);
     return type >= DYN_TYPE_I8 && type <= DYN_TYPE_USIZE;
   }
@@ -1228,8 +1398,8 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
   if (ts_node_is_null(node) || depth > 64 || !*remaining || !dyn_work_step(&s->context, 1)) return false;
   --*remaining;
   node = unwrap(node);
-  const char *kind = ts_node_type(node);
-  if (!strcmp(kind, "number_")) {
+  DynKind kind = dyn_kind(node);
+  if (!(kind != K_number_)) {
     const char *text = s->text + ts_node_start_byte(node);
     size_t length = ts_node_end_byte(node) - ts_node_start_byte(node);
     /* parse_uint handles prefixes/separators; exclude floating point tokens. */
@@ -1240,14 +1410,14 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
     *value = parse_uint(node, s, &ok);
     return ok;
   }
-  if (!strcmp(kind, "identifier")) {
+  if (!(kind != K_identifier)) {
     for (TSNode scope = ts_node_parent(node); !ts_node_is_null(scope);
          scope = ts_node_parent(scope)) {
-      if (strcmp(ts_node_type(scope), "block")) continue;
+      if ((dyn_kind(scope) != K_block)) continue;
       for (uint32_t i = 0; i < ts_node_named_child_count(scope); ++i) {
         TSNode declaration = ts_node_named_child(scope, i);
         if (ts_node_end_byte(declaration) > ts_node_start_byte(node)) break;
-        if (!strcmp(ts_node_type(declaration), "statement")) declaration = dyn_syntax_child(declaration, 0);
+        if (!(dyn_kind(declaration) != K_statement)) declaration = dyn_syntax_child(declaration, 0);
         DynDeclaration parsed;
         if (!dyn_syntax_declaration(declaration, &parsed) ||
             !dyn_span_text_equal(span(node), span(parsed.name), s)) continue;
@@ -1270,7 +1440,7 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
     }
     return false;
   }
-  if (strcmp(kind, "binary")) return false;
+  if ((kind != K_binary)) return false;
   uint64_t left, right;
   if (!array_extent(dyn_syntax_child(node, 0), s, a, &left, depth + 1, remaining) ||
       !array_extent(dyn_syntax_child(node, 1), s, a, &right, depth + 1, remaining)) return false;
@@ -1291,15 +1461,15 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
 
 static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
   n = unwrap(n);
-  if (!strcmp(ts_node_type(n), "type") && dyn_syntax_child_count(n) == 1) {
+  if (!(dyn_kind(n) != K_type) && dyn_syntax_child_count(n) == 1) {
     n = dyn_syntax_child(n, 0);
   }
-  if (!strcmp(ts_node_type(n), "type_parameter")) {
+  if (!(dyn_kind(n) != K_type_parameter)) {
     DynSpan name = span(n);
     ++name.start_byte;
     return scope_type(a, name, s, a->declaring_generic);
   }
-  if (!strcmp(ts_node_type(n), "fn_type")) {
+  if (!(dyn_kind(n) != K_fn_type)) {
     uint32_t close = ts_node_start_byte(n);
     for (uint32_t i = 0; i < ts_node_child_count(n); ++i) {
       TSNode child = ts_node_child(n, i);
@@ -1330,14 +1500,14 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
     free(params);
     return type;
   }
-  if (!strcmp(ts_node_type(n), "pointer_type")) {
+  if (!(dyn_kind(n) != K_pointer_type)) {
     TSNode child = dyn_syntax_child(n, 0);
     bool is_const = dyn_syntax_has_token(n, "const");
     DynType pointee = parse_type(child, s, a);
     return pointee == DYN_TYPE_ERROR ? DYN_TYPE_ERROR
                                      : intern_pointer(a, pointee, is_const);
   }
-  if (!strcmp(ts_node_type(n), "array_type")) {
+  if (!(dyn_kind(n) != K_array_type)) {
     TSNode last = dyn_syntax_last_child(n);
     DynType element = parse_type(last, s, a);
     if (element == DYN_TYPE_ERROR)
@@ -1402,11 +1572,11 @@ static bool lower_block(TSNode, const DynSource *, DynAstProgram *, unsigned *,
 static bool pointer_case_pattern(TSNode pattern, DynAstCaseArm *arm,
                                  TSNode *value) {
   TSNode p = unwrap(dyn_syntax_child(pattern, 0));
-  if (strcmp(ts_node_type(p), "binary") || strcmp(anonymous_operator(p), "*")) {
+  if ((dyn_kind(p) != K_binary) || strcmp(anonymous_operator(p), "*")) {
     return false;
   }
   TSNode right = unwrap(dyn_syntax_child(p, 1));
-  if (strcmp(ts_node_type(right), "identifier")) {
+  if ((dyn_kind(right) != K_identifier)) {
     return false;
   }
   arm->binding = span(right);
@@ -1422,7 +1592,7 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
   st->case_arm_start = (uint32_t)a->case_arm_count;
   uint32_t count = 0;
   for (uint32_t i = 1; i < ts_node_named_child_count(n); ++i)
-    if (!strcmp(ts_node_type(ts_node_named_child(n, i)), "case_arm")) {
+    if (!(dyn_kind(ts_node_named_child(n, i)) != K_case_arm)) {
       ++count;
     }
   if (!count)
@@ -1435,7 +1605,7 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
   uint32_t arm_index = 0;
   for (uint32_t i = 1; i < ts_node_named_child_count(n); ++i) {
     TSNode an = ts_node_named_child(n, i);
-    if (strcmp(ts_node_type(an), "case_arm")) {
+    if ((dyn_kind(an) != K_case_arm)) {
       continue;
     }
     if (!reserve_case_arm(a)) {
@@ -1451,7 +1621,7 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
     arm.wildcard = s->text[pos] == '_';
     for (uint32_t j = 0; j < ts_node_named_child_count(an); ++j) {
       TSNode c = ts_node_named_child(an, j);
-      if (!strcmp(ts_node_type(c), "case_pattern")) {
+      if (!(dyn_kind(c) != K_case_pattern)) {
         TSNode p = {0};
         bool pointer = pointer_case_pattern(c, &arm, &p);
         if (!pointer) {
@@ -1463,7 +1633,7 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
         }
         DynAstPattern pat = {
             .span = span(p), .first = DYN_NO_EXPR, .last = DYN_NO_EXPR};
-        if (!strcmp(ts_node_type(p), "range")) {
+        if (!(dyn_kind(p) != K_range)) {
           pat.range = true;
           pat.first = lower_expr(dyn_syntax_child(p, 0), s, a, errors);
           pat.last = lower_expr(dyn_syntax_child(p, 1), s, a, errors);
@@ -1475,7 +1645,7 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
           pat.first = lower_expr(p, s, a, errors);
         a->patterns[a->pattern_count++] = pat;
         ++arm.pattern_count;
-      } else if (!strcmp(ts_node_type(c), "type_pattern")) {
+      } else if (!(dyn_kind(c) != K_type_pattern)) {
         if (!reserve_pattern(a)) {
           diagnostic(c, s, errors, "out of memory");
           continue;
@@ -1483,9 +1653,9 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
         TSNode tn = {0};
         for (uint32_t q = 0; q < ts_node_named_child_count(c); ++q) {
           TSNode x = ts_node_named_child(c, q);
-          if (!strcmp(ts_node_type(x), "type"))
+          if (!(dyn_kind(x) != K_type))
             tn = x;
-          else if (!strcmp(ts_node_type(x), "identifier"))
+          else if (!(dyn_kind(x) != K_identifier))
             arm.binding = span(x);
         }
         a->patterns[a->pattern_count++] =
@@ -1495,9 +1665,9 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
                             .type = parse_type(tn, s, a),
                             .is_type = true};
         arm.pattern_count = 1;
-      } else if (!strcmp(ts_node_type(c), "identifier")) {
+      } else if (!(dyn_kind(c) != K_identifier)) {
         arm.binding = span(c);
-      } else if (!strcmp(ts_node_type(c), "block")) {
+      } else if (!(dyn_kind(c) != K_block)) {
         blocks[arm_index] = c;
       }
     }
@@ -1515,7 +1685,7 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
 }
 static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
                            unsigned *errors, uint32_t loop_depth) {
-  if (!strcmp(ts_node_type(n), "statement")) {
+  if (!(dyn_kind(n) != K_statement)) {
     n = dyn_syntax_child(n, 0);
   }
   if (!reserve_stmt(a)) {
@@ -1528,20 +1698,20 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
   st.expression = st.target = DYN_NO_EXPR;
   st.local_id = UINT32_MAX;
   st.loop_depth = loop_depth;
-  const char *k = ts_node_type(n);
-  if (!strcmp(k, "const_variable")) {
+  DynKind k = dyn_kind(n);
+  if (!(k != K_const_variable)) {
     st.is_const = true;
     n = dyn_syntax_child(n, 0);
-    k = ts_node_type(n);
+    k = dyn_kind(n);
     st.span = span(n);
   }
   st.target_loop_id = UINT32_MAX;
-  if (!strcmp(k, "return_")) {
+  if (!(k != K_return_)) {
     st.kind = DYN_STMT_RETURN;
     if (dyn_syntax_child_count(n)) {
       st.expression = lower_expr(dyn_syntax_child(n, 0), s, a, errors);
     }
-  } else if (!strcmp(k, "variable")) {
+  } else if (!(k != K_variable)) {
     st.kind = DYN_STMT_LOCAL;
     st.name = span(dyn_syntax_child(n, 0));
     st.declared_type = DYN_TYPE_INFER;
@@ -1549,9 +1719,9 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
       TSNode c = ts_node_named_child(n, j);
       if (ts_node_is_extra(c))
         continue;
-      if (!strcmp(ts_node_type(c), "type_qualifier")) {
+      if (!(dyn_kind(c) != K_type_qualifier)) {
         st.declared_type = parse_type(dyn_syntax_child(c, 0), s, a);
-      } else if (!strcmp(ts_node_type(c), "type")) {
+      } else if (!(dyn_kind(c) != K_type)) {
         st.declared_type = parse_type(c, s, a);
       } else {
         st.expression = lower_expr(c, s, a, errors);
@@ -1561,14 +1731,14 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
       diagnostic(n, s, errors, "unknown or invalid local type");
     if (st.is_const && st.expression == DYN_NO_EXPR)
       diagnostic(n, s, errors, "local constant requires initializer");
-  } else if (!strcmp(k, "assignment")) {
+  } else if (!(k != K_assignment)) {
     st.kind = DYN_STMT_ASSIGN;
     TSNode target = unwrap(dyn_syntax_child(n, 0));
-    if (!strcmp(ts_node_type(target), "identifier"))
+    if (!(dyn_kind(target) != K_identifier))
       st.name = span(target);
-    else if (!strcmp(ts_node_type(target), "field_access") ||
-             !strcmp(ts_node_type(target), "unary_postfix") ||
-             !strcmp(ts_node_type(target), "index"))
+    else if (!(dyn_kind(target) != K_field_access) ||
+             !(dyn_kind(target) != K_unary_postfix) ||
+             !(dyn_kind(target) != K_index))
       st.target = lower_expr(target, s, a, errors);
     else {
       diagnostic(
@@ -1578,14 +1748,14 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
     }
     st.expression = lower_expr(dyn_syntax_last_child(n), s, a, errors);
     st.assignment_op = op_from(anonymous_operator(n));
-  } else if (!strcmp(k, "if_")) {
+  } else if (!(k != K_if_)) {
     st.kind = DYN_STMT_IF;
     st.expression = lower_expr(dyn_syntax_child(n, 0), s, a, errors);
     TSNode b = dyn_syntax_child(n, 1);
     lower_block(b, s, a, errors, loop_depth, &st.body_start, &st.body_count);
     if (dyn_syntax_child_count(n) > 2) {
       TSNode e = dyn_syntax_child(n, 2), branch = dyn_syntax_child(e, 0);
-      if (!strcmp(ts_node_type(branch), "block"))
+      if (!(dyn_kind(branch) != K_block))
         lower_block(branch, s, a, errors, loop_depth, &st.else_start,
                     &st.else_count);
       else {
@@ -1596,20 +1766,20 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
         st.else_count = 1;
       }
     }
-  } else if (!strcmp(k, "case_")) {
+  } else if (!(k != K_case_)) {
     lower_case_stmt(n, s, a, errors, loop_depth, &st);
-  } else if (!strcmp(k, "for_")) {
+  } else if (!(k != K_for_)) {
     st.kind = DYN_STMT_FOR;
     st.loop_id = a->loop_count++;
     uint32_t count = ts_node_named_child_count(n);
     TSNode last = dyn_syntax_last_child(n);
     for (uint32_t z = 0; z + 1 < count; ++z) {
       TSNode c = ts_node_named_child(n, z);
-      if (!strcmp(ts_node_type(c), "identifier")) {
+      if (!(dyn_kind(c) != K_identifier)) {
         st.label = span(c);
         continue;
       }
-      if (!strcmp(ts_node_type(c), "for_condition")) {
+      if (!(dyn_kind(c) != K_for_condition)) {
         uint32_t cc = dyn_syntax_child_count(c);
         if (cc == 1)
           st.expression = lower_expr(dyn_syntax_child(c, 0), s, a, errors);
@@ -1619,11 +1789,11 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
           st.for_const = dyn_syntax_has_token(c, "const");
           st.name = span(binder);
           TSNode iterable = dyn_syntax_last_child(c);
-          if (!strcmp(ts_node_type(iterable), "reverse")) {
+          if (!(dyn_kind(iterable) != K_reverse)) {
             st.for_reverse = true;
             iterable = dyn_syntax_child(iterable, 0);
           }
-          if (!strcmp(ts_node_type(iterable), "range")) {
+          if (!(dyn_kind(iterable) != K_range)) {
             st.for_range = true;
             st.for_inclusive = dyn_syntax_has_token(iterable, "..=");
             st.target = lower_expr(dyn_syntax_child(iterable, 0), s, a, errors);
@@ -1636,18 +1806,18 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
     }
     lower_block(last, s, a, errors, loop_depth + 1, &st.body_start,
                 &st.body_count);
-  } else if (!strcmp(k, "break_")) {
+  } else if (!(k != K_break_)) {
     st.kind = DYN_STMT_BREAK;
     if (dyn_syntax_child_count(n))
       st.control_label = span(dyn_syntax_child(n, 0));
-  } else if (!strcmp(k, "continue_")) {
+  } else if (!(k != K_continue_)) {
     st.kind = DYN_STMT_CONTINUE;
     if (dyn_syntax_child_count(n))
       st.control_label = span(dyn_syntax_child(n, 0));
-  } else if (!strcmp(k, "defer")) {
+  } else if (!(k != K_defer)) {
     st.kind = DYN_STMT_DEFER;
     TSNode action = dyn_syntax_child(n, 0);
-    if (!strcmp(ts_node_type(action), "block")) {
+    if (!(dyn_kind(action) != K_block)) {
       st.defer_block = true;
       lower_block(action, s, a, errors, loop_depth, &st.body_start,
                   &st.body_count);
@@ -1658,17 +1828,17 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
         a->children[a->child_count++] = deferred;
       st.body_count = 1;
     }
-  } else if (!strcmp(k, "panic")) {
+  } else if (!(k != K_panic)) {
     st.kind = DYN_STMT_PANIC;
     if (dyn_syntax_child_count(n))
       st.expression = lower_expr(dyn_syntax_child(n, 0), s, a, errors);
-  } else if (!strcmp(k, "syscall")) {
+  } else if (!(k != K_syscall)) {
     st.kind = DYN_STMT_EXPR;
     st.expression = lower_expr(n, s, a, errors);
-  } else if (!strcmp(k, "call")) {
+  } else if (!(k != K_call)) {
     st.kind = DYN_STMT_EXPR;
     st.expression = lower_expr(n, s, a, errors);
-  } else if (!strcmp(k, "type_alias")) {
+  } else if (!(k != K_type_alias)) {
     diagnostic(n, s, errors, "local type aliases are not supported; declare the alias at module scope");
   } else {
     diagnostic(
@@ -1696,7 +1866,7 @@ static bool lower_block(TSNode block, const DynSource *s, DynAstProgram *a,
   TSTreeCursor cursor = ts_tree_cursor_new(block);
   if (ts_tree_cursor_goto_first_child(&cursor)) do {
     TSNode c = ts_tree_cursor_current_node(&cursor);
-    if (!ts_node_is_named(c) || !strcmp(ts_node_type(c), "comment"))
+    if (!ts_node_is_named(c) || !(dyn_kind(c) != K_comment))
       continue;
     uint32_t id = lower_stmt(c, s, a, errors, loop_depth);
     if (id == UINT32_MAX) {
@@ -1729,12 +1899,12 @@ bool dyn_ast_lower_main(TSNode fn, const DynSource *s, DynAstProgram *a,
   TSNode block = {0};
   for (uint32_t i = 0; i < ts_node_named_child_count(fn); ++i) {
     TSNode c = ts_node_named_child(fn, i);
-    if (!strcmp(ts_node_type(c), "fn_param"))
+    if (!(dyn_kind(c) != K_fn_param))
       ++a->parameter_count;
-    else if (!strcmp(ts_node_type(c), "block"))
+    else if (!(dyn_kind(c) != K_block))
       block = c;
-    else if (strcmp(ts_node_type(c), "identifier") &&
-             strcmp(ts_node_type(c), "comment"))
+    else if ((dyn_kind(c) != K_identifier) &&
+             (dyn_kind(c) != K_comment))
       a->has_return_type = true;
   }
   if (!ts_node_is_null(block))
@@ -1869,7 +2039,7 @@ bool dyn_ast_lower_instance(DynAstProgram *a, const DynSource *s, uint32_t funct
   TSNode block = {0};
   for (uint32_t j = 0; j < ts_node_named_child_count(g.node); ++j) {
     TSNode c = ts_node_named_child(g.node, j);
-    if (!strcmp(ts_node_type(c), "block"))
+    if (!(dyn_kind(c) != K_block))
       block = c;
   }
   memcpy(a->scope_names, g.type_names, sizeof(a->scope_names));
@@ -1908,12 +2078,12 @@ static bool add_enum_names(const DynSource *s, DynAstProgram *a,
     TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
-    if (strcmp(ts_node_type(d), "enum"))
+    if ((dyn_kind(d) != K_enum))
       continue;
     TSNode name = {0};
     for (uint32_t j = 0; j < ts_node_named_child_count(d); ++j) {
       TSNode c = ts_node_named_child(d, j);
-      if (!strcmp(ts_node_type(c), "identifier")) {
+      if (!(dyn_kind(c) != K_identifier)) {
         name = c;
         break;
       }
@@ -1947,7 +2117,7 @@ static bool add_struct_names(const DynSource *s, DynAstProgram *a,
     TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
-    if (strcmp(ts_node_type(d), "struct"))
+    if ((dyn_kind(d) != K_struct))
       continue;
     TSNode name = dyn_syntax_child(d, 0);
     DynSpan ns = span(name);
@@ -1980,7 +2150,7 @@ static bool add_alias_names(const DynSource *s, DynAstProgram *a,
     TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
-    if (strcmp(ts_node_type(d), "type_alias"))
+    if ((dyn_kind(d) != K_type_alias))
       continue;
     TSNode name = dyn_syntax_child(d, 0), type = dyn_syntax_child(d, 1);
     DynSpan ns = span(name);
@@ -2016,7 +2186,7 @@ static bool add_struct_fields(const DynSource *s, DynAstProgram *a,
   uint32_t si = 0;
   for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
     TSNode d = dyn_syntax_declaration_node(a->decls[i]);
-    if (strcmp(ts_node_type(d), "struct"))
+    if ((dyn_kind(d) != K_struct))
       continue;
     if (si >= a->struct_count)
       break;
@@ -2024,14 +2194,14 @@ static bool add_struct_fields(const DynSource *s, DynAstProgram *a,
     st->field_start = (uint32_t)a->field_count;
     for (uint32_t j = 1; j < ts_node_named_child_count(d); ++j) {
       TSNode m = ts_node_named_child(d, j);
-      if (strcmp(ts_node_type(m), "struct_member"))
+      if ((dyn_kind(m) != K_struct_member))
         continue;
       TSNode tq = {0}, init = {0};
       for (uint32_t k = 0; k < ts_node_named_child_count(m); ++k) {
         TSNode c = ts_node_named_child(m, k);
-        if (!strcmp(ts_node_type(c), "type_qualifier"))
+        if (!(dyn_kind(c) != K_type_qualifier))
           tq = c;
-        else if (!strcmp(ts_node_type(c), "expression"))
+        else if (!(dyn_kind(c) != K_expression))
           init = c;
       }
       DynType type = ts_node_is_null(tq)
@@ -2041,7 +2211,7 @@ static bool add_struct_fields(const DynSource *s, DynAstProgram *a,
         diagnostic(tq, s, errors, "unknown or unsupported struct field type");
       for (uint32_t k = 0; k < ts_node_named_child_count(m); ++k) {
         TSNode c = ts_node_named_child(m, k);
-        if (strcmp(ts_node_type(c), "identifier"))
+        if ((dyn_kind(c) != K_identifier))
           continue;
         DynSpan name = span(c);
         bool duplicate = false;
@@ -2103,7 +2273,7 @@ static bool add_enum_variants(const DynSource *s, DynAstProgram *a,
   uint32_t ei = 0;
   for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
     TSNode d = dyn_syntax_declaration_node(a->decls[i]);
-    if (strcmp(ts_node_type(d), "enum"))
+    if ((dyn_kind(d) != K_enum))
       continue;
     DynAstEnum *en = &a->enums[ei++];
     en->variant_start = (uint32_t)a->variant_count;
@@ -2113,16 +2283,16 @@ static bool add_enum_variants(const DynSource *s, DynAstProgram *a,
     bool next_negative = false, exhausted = false;
     for (uint32_t j = 0; j < ts_node_named_child_count(d); ++j) {
       TSNode c = ts_node_named_child(d, j);
-      const char *k = ts_node_type(c);
-      if (!saw_name && !strcmp(k, "primitive")) {
+      DynKind k = dyn_kind(c);
+      if (!saw_name && !(k != K_primitive)) {
         en->tag_type = parse_type(c, s, a);
         continue;
       }
-      if (!saw_name && !strcmp(k, "identifier")) {
+      if (!saw_name && !(k != K_identifier)) {
         saw_name = true;
         continue;
       }
-      if (strcmp(k, "enum_member"))
+      if ((k != K_enum_member))
         continue;
       TSNode name = dyn_syntax_child(c, 0);
       bool duplicate = false;
@@ -2139,7 +2309,7 @@ static bool add_enum_variants(const DynSource *s, DynAstProgram *a,
       uint64_t value = next;
       for (uint32_t q = 1; q < ts_node_named_child_count(c); ++q) {
         TSNode part = ts_node_named_child(c, q);
-        if (!strcmp(ts_node_type(part), "type_qualifier")) {
+        if (!(dyn_kind(part) != K_type_qualifier)) {
           payload = parse_type(dyn_syntax_child(part, 0), s, a);
           continue;
         }
@@ -2369,10 +2539,10 @@ static bool add_globals(const DynSource *s, DynAstProgram *a,
     TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
-    bool foreign = !strcmp(ts_node_type(d), "extern_variable");
-    bool is_const = !strcmp(ts_node_type(d), "const_variable");
+    bool foreign = !(dyn_kind(d) != K_extern_variable);
+    bool is_const = !(dyn_kind(d) != K_const_variable);
     TSNode v = is_const ? dyn_syntax_child(d, 0) : d;
-    if (strcmp(ts_node_type(v), "variable") && !foreign)
+    if ((dyn_kind(v) != K_variable) && !foreign)
       continue;
     TSNode name = foreign ? ts_node_child_by_field_name(v, "name", 4)
                           : dyn_syntax_child(v, 0),
@@ -2385,15 +2555,15 @@ static bool add_globals(const DynSource *s, DynAstProgram *a,
     }
     for (uint32_t j = 1; j < ts_node_named_child_count(v); ++j) {
       TSNode c = ts_node_named_child(v, j);
-      if (!strcmp(ts_node_type(c), "type_qualifier") ||
-          !strcmp(ts_node_type(c), "type"))
+      if (!(dyn_kind(c) != K_type_qualifier) ||
+          !(dyn_kind(c) != K_type))
         tq = c;
-      else if (!strcmp(ts_node_type(c), "expression"))
+      else if (!(dyn_kind(c) != K_expression))
         init = c;
     }
     DynType type = ts_node_is_null(tq)
                        ? DYN_TYPE_INFER
-                       : parse_type(!strcmp(ts_node_type(tq), "type_qualifier")
+                       : parse_type(!(dyn_kind(tq) != K_type_qualifier)
                                         ? dyn_syntax_child(tq, 0)
                                         : tq,
                                     s, a);
@@ -2425,7 +2595,7 @@ static bool add_globals(const DynSource *s, DynAstProgram *a,
 static bool add_asserts(const DynSource *s, DynAstProgram *a, unsigned *errors) {
   for (uint32_t i = 0; i < a->decl_count; ++i) {
     TSNode d = dyn_syntax_declaration_node(a->decls[i]);
-    if (strcmp(ts_node_type(d), "static_assert"))
+    if ((dyn_kind(d) != K_static_assert))
       continue;
     if (a->assert_count == a->assert_capacity) {
       size_t c = a->assert_capacity ? a->assert_capacity * 2 : 8;
@@ -2495,14 +2665,14 @@ static bool add_generic(const DynSource *s, DynAstProgram *a, unsigned *errors,
   bool ok = true;
   for (uint32_t j = 0; j < named; ++j) {
     TSNode c = ts_node_named_child(d, j);
-    const char *kind = ts_node_type(c);
-    if (!strcmp(kind, "variadic_param")) {
+    DynKind kind = dyn_kind(c);
+    if (!(kind != K_variadic_param)) {
       diagnostic(c, s, errors, "generic functions cannot be variadic");
       ok = false;
-    } else if (!strcmp(kind, "fn_param")) {
+    } else if (!(kind != K_fn_param)) {
       TSNode first = ts_node_named_child(c, 0);
       TSNode qualifier = dyn_syntax_last_child(c);
-      if (!strcmp(ts_node_type(first), "type_parameter")) {
+      if (!(dyn_kind(first) != K_type_parameter)) {
         TSNode type = dyn_syntax_child(qualifier, 0);
         DynSpan text = span(type);
         DynSpan name = span(first);
@@ -2528,13 +2698,13 @@ static bool add_generic(const DynSource *s, DynAstProgram *a, unsigned *errors,
       }
       for (uint32_t k = 0; k < ts_node_named_child_count(c); ++k) {
         TSNode q = ts_node_named_child(c, k);
-        if (strcmp(ts_node_type(q), "identifier"))
+        if ((dyn_kind(q) != K_identifier))
           continue;
         a->generic_params[a->generic_param_count++] =
             (DynAstGenericParam){.name = span(q), .pattern = type};
         ++g.param_count;
       }
-    } else if (!strcmp(kind, "type")) {
+    } else if (!(kind != K_type)) {
       g.return_pattern = parse_type(c, s, a);
       if (g.return_pattern == DYN_TYPE_ERROR) {
         diagnostic(c, s, errors, "unknown type in return signature");
@@ -2564,8 +2734,8 @@ static bool add_function_signatures(const DynSource *s,
     TSNode wrapper = a->decls[i];
     bool is_public = dyn_syntax_public(wrapper);
     TSNode d = dyn_syntax_declaration_node(wrapper);
-    bool foreign = !strcmp(ts_node_type(d), "extern_fn");
-    if (strcmp(ts_node_type(d), "fn") && !foreign)
+    bool foreign = !(dyn_kind(d) != K_extern_fn);
+    if ((dyn_kind(d) != K_fn) && !foreign)
       continue;
     TSNode name = ts_node_child_by_field_name(d, "name", 4);
     DynSpan ns = span(name);
@@ -2600,11 +2770,11 @@ static bool add_function_signatures(const DynSource *s,
                  !memcmp(s->text + ns.start_byte, "main", 4);
     for (uint32_t j = 0; j < ts_node_named_child_count(d); ++j) {
       TSNode c = ts_node_named_child(d, j);
-      if (!strcmp(ts_node_type(c), "fn_param")) {
+      if (!(dyn_kind(c) != K_fn_param)) {
         TSNode tq = {0};
         for (uint32_t k = 0; k < ts_node_named_child_count(c); ++k) {
           TSNode q = ts_node_named_child(c, k);
-          if (!strcmp(ts_node_type(q), "type_qualifier"))
+          if (!(dyn_kind(q) != K_type_qualifier))
             tq = q;
         }
         DynType type = ts_node_is_null(tq)
@@ -2617,7 +2787,7 @@ static bool add_function_signatures(const DynSource *s,
           diagnostic(tq, s, errors, "parameter requires a non-void type");
         for (uint32_t k = 0; k < ts_node_named_child_count(c); ++k) {
           TSNode q = ts_node_named_child(c, k);
-          if (strcmp(ts_node_type(q), "identifier"))
+          if ((dyn_kind(q) != K_identifier))
             continue;
           if (!reserve_param(a)) {
             diagnostic(q, s, errors, "out of memory");
@@ -2627,15 +2797,15 @@ static bool add_function_signatures(const DynSource *s,
               .name = span(q), .type = type, .local_id = UINT32_MAX};
           ++fn.param_count;
         }
-      } else if (!strcmp(ts_node_type(c), "variadic_param")) {
+      } else if (!(dyn_kind(c) != K_variadic_param)) {
         fn.variadic = true;
         fn.variadic_name = span(ts_node_child_by_field_name(c, "name", 4));
         fn.variadic_type = intern_slice(
             a, parse_type(ts_node_child_by_field_name(c, "type", 4), s, a),
             true);
-      } else if (!strcmp(ts_node_type(c), "variadic"))
+      } else if (!(dyn_kind(c) != K_variadic))
         fn.variadic = true;
-      else if (!strcmp(ts_node_type(c), "type")) {
+      else if (!(dyn_kind(c) != K_type)) {
         fn.return_type = parse_type(c, s, a);
         if (fn.return_type == DYN_TYPE_ERROR)
           diagnostic(c, s, errors, "unknown type in return signature");
@@ -2669,7 +2839,7 @@ static void lower_function_bodies(const DynSource *s,
   uint64_t wanted = owner_key_value(owner_key);
   for (uint32_t i = 0; i < a->decl_count && dyn_work_step(&s->context, 1); ++i) {
     TSNode d = dyn_syntax_declaration_node(a->decls[i]);
-    if (strcmp(ts_node_type(d), "fn") && strcmp(ts_node_type(d), "extern_fn"))
+    if ((dyn_kind(d) != K_fn) && (dyn_kind(d) != K_extern_fn))
       continue;
     TSNode name = ts_node_child_by_field_name(d, "name", 4);
     uint32_t id = find_function(index, a, span(name), s);
@@ -2684,7 +2854,7 @@ static void lower_function_bodies(const DynSource *s,
     TSNode block = {0};
     for (uint32_t j = 0; j < ts_node_named_child_count(d); ++j) {
       TSNode c = ts_node_named_child(d, j);
-      if (!strcmp(ts_node_type(c), "block")) {
+      if (!(dyn_kind(c) != K_block)) {
         block = c;
         break;
       }

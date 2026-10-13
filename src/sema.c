@@ -18,6 +18,9 @@ typedef struct {
   DynType current_return_type;
   DynAstStmt **active_loops;
   size_t active_loop_count, active_loop_capacity;
+  /* Per function: 0 unknown, 1 not a std/mem function, 2 + i is mem_names[i]. */
+  uint8_t *mem_kinds;
+  size_t mem_kind_count;
 } Sema;
 
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
@@ -3637,6 +3640,7 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
     error_span((DynSpan){0}, s, errors, "interned type capacity exceeded");
     ok = false;
   }
+  free(sema.mem_kinds);
   free(sema.functions.buckets);
   free(sema.functions.next);
   free(sema.globals.buckets);

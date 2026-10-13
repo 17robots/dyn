@@ -44,7 +44,18 @@ typedef struct {
   size_t interface_bucket_count;
   struct Prefetched *prefetched;
   size_t prefetched_count;
+  /* When set, visit records each module's reference checks here instead of
+     running them, and load runs them all in parallel once every interface is
+     known. */
+  bool defer_refs;
+  struct DeferredRefs *deferred;
+  size_t deferred_count;
 } Resolver;
+typedef struct DeferredRefs {
+  char *directory;
+  char **aliases, **targets;
+  size_t alias_count, first, count; /* Sources r->out[first..first + count]. */
+} DeferredRefs;
 /* Module directories parsed ahead of the serial visit. A failed load stays
    empty so visit repeats it and reports the error in the usual order. */
 typedef struct Prefetched {
@@ -820,7 +831,8 @@ static int visit(Resolver *r, const char *directory,
     }
     ts_tree_delete(t);
   }
-  for (size_t si = 0; si < sources->count && !result; ++si) {
+  size_t first_out = r->out ? r->out->count : 0;
+  for (size_t si = 0; si < sources->count && !result && !r->defer_refs; ++si) {
     if (!dyn_work_step(&r->context, 1)) { result = 2; break; }
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
@@ -833,9 +845,37 @@ static int visit(Resolver *r, const char *directory,
     dyn_scope_free(&locals);
     if (t) ts_tree_delete(t);
   }
-  for (size_t i = 0; i < sources->count && !result; ++i)
-    if (r->out && !append_source(r->out, &sources->items[i]))
+  if (r->out && sources == &owned && !result) {
+    /* Hand loaded sources over instead of copying their text and trees. */
+    DynSource *grown = realloc(r->out->items, (r->out->count + owned.count) * sizeof(*grown));
+    if (!grown)
       result = 2;
+    else {
+      r->out->items = grown;
+      memcpy(grown + r->out->count, owned.items, owned.count * sizeof(*grown));
+      r->out->count += owned.count;
+      owned.count = 0;
+    }
+  } else
+    for (size_t i = 0; i < sources->count && !result; ++i)
+      if (r->out && !append_source(r->out, &sources->items[i]))
+        result = 2;
+  if (!result && r->defer_refs) {
+    DeferredRefs *grown = realloc(r->deferred, (r->deferred_count + 1) * sizeof(*grown));
+    char *owned_directory = strdup(directory);
+    if (!grown || !owned_directory) {
+      if (grown) r->deferred = grown;
+      free(owned_directory);
+      result = 2;
+    } else {
+      r->deferred = grown;
+      r->deferred[r->deferred_count++] = (DeferredRefs){
+          .directory = owned_directory, .aliases = aliases, .targets = targets,
+          .alias_count = alias_count, .first = first_out, .count = r->out->count - first_out};
+      aliases = targets = NULL;
+      alias_count = target_count = 0;
+    }
+  }
   for (size_t i = 0; i < alias_count; ++i)
     free(aliases[i]);
   for (size_t i = 0; i < target_count; ++i)
@@ -960,6 +1000,109 @@ static void prefetch_free(Resolver *r) {
   }
   free(r->prefetched);
 }
+/* Scope and reference checks for one source; diagnostics go to its context. */
+static int check_refs(Resolver *r, const DeferredRefs *d, const DynSource *s) {
+  if (dyn_source_target_enabled(s) == 0)
+    return 0;
+  TSTree *t = dyn_source_tree(s);
+  DynScopeIndex locals = {0};
+  int result;
+  if (!t || !dyn_scope_build(&locals, ts_tree_root_node(t), s)) result = -1;
+  else result = validate_refs(r, ts_tree_root_node(t), s, d->directory, d->aliases,
+                              d->targets, d->alias_count, &locals) ? 1 : 0;
+  dyn_scope_free(&locals);
+  if (t) ts_tree_delete(t);
+  return result;
+}
+#ifndef _WIN32
+static void ignore_diagnostic(const char *severity, const char *path, unsigned line,
+                              unsigned column, unsigned end_line, unsigned end_column,
+                              const char *message, void *data) {
+  (void)severity; (void)path; (void)line; (void)column;
+  (void)end_line; (void)end_column; (void)message; (void)data;
+}
+typedef struct {
+  Resolver *resolver;
+  size_t *owners; /* Deferred record of each source in r->out. */
+  int *status;
+  size_t first, count; /* Sources r->out[first..first + count]. */
+  atomic_size_t next;
+} RefsWave;
+static void *refs_worker(void *raw) {
+  RefsWave *wave = raw;
+  for (;;) {
+    size_t i = atomic_fetch_add(&wave->next, 1);
+    if (i >= wave->count)
+      return NULL;
+    Resolver *r = wave->resolver;
+    const DeferredRefs *d = &r->deferred[wave->owners[i]];
+    DynSource quiet = r->out->items[wave->first + i];
+    quiet.context.diagnostic = ignore_diagnostic;
+    wave->status[i] = check_refs(r, d, &quiet);
+  }
+}
+#endif
+/* Runs every deferred reference check. A parallel quiet pass finds the
+   failures; only those run again, in module order, to report diagnostics, so
+   output is the same as a serial run. */
+static int check_deferred_refs(Resolver *r) {
+  if (!r->deferred_count)
+    return 0;
+  size_t first = r->deferred[0].first;
+  size_t count = r->out->count - first;
+  size_t *owners = malloc((count ? count : 1) * sizeof(*owners));
+  int *status = calloc(count ? count : 1, sizeof(*status));
+  if (!owners || !status) { free(owners); free(status); return 2; }
+  for (size_t d = 0; d < r->deferred_count; ++d)
+    for (size_t i = 0; i < r->deferred[d].count; ++i)
+      owners[r->deferred[d].first - first + i] = d;
+#ifndef _WIN32
+  RefsWave wave = {.resolver = r, .owners = owners, .status = status, .first = first, .count = count};
+  atomic_init(&wave.next, 0);
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  size_t workers = online > 1 ? (size_t)online : 1;
+  if (workers > count) workers = count;
+  if (workers > 256) workers = 256;
+  pthread_t threads[256];
+  size_t started = 0;
+  for (; started + 1 < workers; ++started)
+    if (pthread_create(&threads[started], NULL, refs_worker, &wave))
+      break;
+  refs_worker(&wave);
+  for (size_t i = 0; i < started; ++i)
+    pthread_join(threads[i], NULL);
+#else
+  for (size_t i = 0; i < count; ++i) status[i] = 1;
+#endif
+  /* 1 for reported errors, as visit returned; 2 only for allocation failure. */
+  int result = 0;
+  for (size_t i = 0; i < count; ++i)
+    if (status[i] < 0)
+      result = 2; /* Allocation failed in the quiet pass; a retry may not. */
+    else if (status[i]) {
+      int checked = check_refs(r, &r->deferred[owners[i]], &r->out->items[first + i]);
+      if (checked < 0) result = 2;
+      else if (checked && result != 2) result = 1;
+      /* The quiet pass failed for a reason the retry did not reproduce, such
+         as an allocation failure, which validate_refs reports as an error. */
+      else if (!checked) result = 2;
+    }
+  free(owners);
+  free(status);
+  return result;
+}
+static void free_deferred_refs(Resolver *r) {
+  for (size_t d = 0; d < r->deferred_count; ++d) {
+    for (size_t i = 0; i < r->deferred[d].alias_count; ++i) {
+      free(r->deferred[d].aliases[i]);
+      free(r->deferred[d].targets[i]);
+    }
+    free(r->deferred[d].aliases);
+    free(r->deferred[d].targets);
+    free(r->deferred[d].directory);
+  }
+  free(r->deferred);
+}
 static int load(const char *project_root, const DynSources *root_sources,
                 const DynSources *overrides, DynSources *out) {
   if (out)
@@ -976,10 +1119,14 @@ static int load(const char *project_root, const DynSources *root_sources,
 #ifndef _WIN32
   if (!result && out)
     result = prefetch(&r, root_sources);
+  r.defer_refs = out && !overrides && !r.context.work && !r.context.syntax_cache;
 #endif
   if (!result)
     result = visit(&r, root, root_sources);
   prefetch_free(&r);
+  if (!result)
+    result = check_deferred_refs(&r);
+  free_deferred_refs(&r);
   if (!result && out)
     result = dyn_module_rewrite_project(root, out);
   for (size_t i = 0; i < r.visited_count; ++i)
