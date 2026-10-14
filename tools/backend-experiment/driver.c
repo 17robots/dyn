@@ -2245,18 +2245,19 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   size_t shbytes=h.e_shnum*sizeof(*sh),total=h.e_shoff+shbytes;
   unsigned char *data = calloc(total, 1);
   if (!data) goto done;
-  memcpy(data, &h, sizeof(h)); memcpy(data+sh[1].sh_offset, ctx->text.data, ctx->text.n);
-  memcpy(data+sh[2].sh_offset, ctx->rodata.data, ctx->rodata.n);
-  memcpy(data+sh[3].sh_offset, ctx->relocations, relbytes);
+  memcpy(data, &h, sizeof(h));
+  if (ctx->text.n) memcpy(data+sh[1].sh_offset, ctx->text.data, ctx->text.n);
+  if (ctx->rodata.n) memcpy(data+sh[2].sh_offset, ctx->rodata.data, ctx->rodata.n);
+  if (relbytes) memcpy(data+sh[3].sh_offset, ctx->relocations, relbytes);
   memcpy(data+sh[4].sh_offset, symbols, symbytes); memcpy(data+sh[5].sh_offset, strings, names);
   memcpy(data+sh[6].sh_offset, section_names, sizeof(section_names));
-  memcpy(data+sh[8].sh_offset,ctx->globals_data.data,ctx->globals_data.n);
+  if (ctx->globals_data.n) memcpy(data+sh[8].sh_offset,ctx->globals_data.data,ctx->globals_data.n);
   if (ctx->initializer_symbol) {
     Elf64_Rela init={.r_info=ELF64_R_INFO(ctx->initializer_symbol,ctx->a64?R_AARCH64_ABS64:R_X86_64_64)};
     memcpy(data+sh[10].sh_offset,&init,sizeof(init));
   }
-  memcpy(data+sh[11].sh_offset,ctx->constants_data.data,ctx->constants_data.n);
-  memcpy(data+sh[12].sh_offset,ctx->constant_relocations,sh[12].sh_size);
+  if (ctx->constants_data.n) memcpy(data+sh[11].sh_offset,ctx->constants_data.data,ctx->constants_data.n);
+  if (sh[12].sh_size) memcpy(data+sh[12].sh_offset,ctx->constant_relocations,sh[12].sh_size);
   for (unsigned i=0;ctx->dwarf && i<4;++i) {
     unsigned section=13+2*i; size_t count=0;
     if (debug.sections[i].size) memcpy(data+sh[section].sh_offset,debug.sections[i].data,debug.sections[i].size);
