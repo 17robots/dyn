@@ -2,7 +2,7 @@
 #include "frontend.h"
 #include "ir.h"
 #include "dyn_location.h"
-#include <elf.h>
+#include "elf64.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

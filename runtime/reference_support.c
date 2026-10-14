@@ -222,6 +222,100 @@ void *memmove(void *destination, const void *source, size_t count) {
   return destination;
 }
 
+/* Float remainder lowers to fmod/fmodf calls in both backends. These are exact
+ * (fmod has no rounding), so programs without libm still link, and a C
+ * library's copy gives identical results. Algorithm after musl's fmod. */
+static uint64_t dyn_f64_bits(double x) { union { double f; uint64_t i; } u = {x}; return u.i; }
+static double dyn_f64_value(uint64_t i) { union { uint64_t i; double f; } u = {i}; return u.f; }
+static uint32_t dyn_f32_bits(float x) { union { float f; uint32_t i; } u = {x}; return u.i; }
+static float dyn_f32_value(uint32_t i) { union { uint32_t i; float f; } u = {i}; return u.f; }
+
+DYN_RUNTIME_HIDDEN double fmod(double x, double y) {
+  uint64_t ux = dyn_f64_bits(x), uy = dyn_f64_bits(y), i;
+  int ex = (int)(ux >> 52 & 0x7ff), ey = (int)(uy >> 52 & 0x7ff);
+  uint64_t sx = ux >> 63;
+  if (uy << 1 == 0 || (uy << 1) > 0xffeull << 52 || ex == 0x7ff) return (x * y) / (x * y);
+  if (ux << 1 <= uy << 1) return ux << 1 == uy << 1 ? 0 * x : x;
+  if (!ex) {
+    for (i = ux << 12; i >> 63 == 0; ex--, i <<= 1) {}
+    ux <<= -ex + 1;
+  } else {
+    ux &= -1ull >> 12;
+    ux |= 1ull << 52;
+  }
+  if (!ey) {
+    for (i = uy << 12; i >> 63 == 0; ey--, i <<= 1) {}
+    uy <<= -ey + 1;
+  } else {
+    uy &= -1ull >> 12;
+    uy |= 1ull << 52;
+  }
+  for (; ex > ey; ex--) {
+    i = ux - uy;
+    if (i >> 63 == 0) {
+      if (i == 0) return 0 * x;
+      ux = i;
+    }
+    ux <<= 1;
+  }
+  i = ux - uy;
+  if (i >> 63 == 0) {
+    if (i == 0) return 0 * x;
+    ux = i;
+  }
+  for (; ux >> 52 == 0; ux <<= 1, ex--) {}
+  if (ex > 0) {
+    ux -= 1ull << 52;
+    ux |= (uint64_t)ex << 52;
+  } else {
+    ux >>= -ex + 1;
+  }
+  return dyn_f64_value(ux | sx << 63);
+}
+
+DYN_RUNTIME_HIDDEN float fmodf(float x, float y) {
+  uint32_t ux = dyn_f32_bits(x), uy = dyn_f32_bits(y), i;
+  int ex = (int)(ux >> 23 & 0xff), ey = (int)(uy >> 23 & 0xff);
+  uint32_t sx = ux & 0x80000000u;
+  if (uy << 1 == 0 || (uy << 1) > 0xff000000u || ex == 0xff) return (x * y) / (x * y);
+  if (ux << 1 <= uy << 1) return ux << 1 == uy << 1 ? 0 * x : x;
+  if (!ex) {
+    for (i = ux << 9; i >> 31 == 0; ex--, i <<= 1) {}
+    ux <<= -ex + 1;
+  } else {
+    ux &= -1u >> 9;
+    ux |= 1u << 23;
+  }
+  if (!ey) {
+    for (i = uy << 9; i >> 31 == 0; ey--, i <<= 1) {}
+    uy <<= -ey + 1;
+  } else {
+    uy &= -1u >> 9;
+    uy |= 1u << 23;
+  }
+  for (; ex > ey; ex--) {
+    i = ux - uy;
+    if (i >> 31 == 0) {
+      if (i == 0) return 0 * x;
+      ux = i;
+    }
+    ux <<= 1;
+  }
+  i = ux - uy;
+  if (i >> 31 == 0) {
+    if (i == 0) return 0 * x;
+    ux = i;
+  }
+  for (; ux >> 23 == 0; ux <<= 1, ex--) {}
+  if (ex > 0) {
+    ux -= 1u << 23;
+    ux |= (uint32_t)ex << 23;
+  } else {
+    ux >>= -ex + 1;
+  }
+  return dyn_f32_value(ux | sx);
+}
+
 #if defined(DYN_AARCH64) && !defined(DYN_RELEASE)
 long dyn_syscall6(long, long, long, long, long, long, long);
 enum { TRACE_SLOTS = 64, TRACE_FRAMES = 64 };

@@ -153,7 +153,8 @@ locals in gdb.
   64-bit conversions handle the high bit without signed overflow; f32/f64→integer
   truncates toward zero. NaN/infinite/out-of-range FP→integer is outside LLVM's
   defined conversion domain; this experiment adds no new runtime check for it.
-  Float remainder uses `fmod`/`fmodf`, as LLVM does, and requires libm at link time.
+  Float remainder calls `fmod`/`fmodf`, as LLVM does; the runtime support object
+  defines exact copies, so programs link without libm.
 - Explicit `#panic` uses the runtime unwind mechanism, which owns the message before
   cleanup can mutate its backing storage. Tests include replacement panic in cleanup,
   recursive cleanup output, exact traces, and both debug/release production oracles.

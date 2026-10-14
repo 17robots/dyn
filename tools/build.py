@@ -95,13 +95,15 @@ compact_first_inputs = [compact_parser/'parser.h', compact_parser/'source.inc', 
 if (TS_DIR/'grammar.js').exists():
     import runpy
     runpy.run_path(str(compact_parser/'grammar-pin.py'))['verify'](TS_DIR)
-# Native x86_64-linux debug emission needs ELF host headers; other hosts use LLVM.
+# The native debug emitter is host-independent C with POSIX file output, so every
+# POSIX host gets it; Windows hosts use LLVM.
 backend_experiment = COMPILER/'tools/backend-experiment'
 native_flags, native_sources, native_inputs = [], [], []
-if sys.platform.startswith('linux') and platform.machine() in ('x86_64', 'AMD64'):
+if sys.platform != 'win32':
     native_flags = ['-DDYN_NATIVE_BACKEND']
     native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
-    native_inputs = [backend_experiment/'driver.c', backend_experiment/'output.h', backend_experiment/'dwarf.h']
+    native_inputs = [backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc',
+                     backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
 default_flags = [*compact_first_flags, *native_flags]
 default_sources = [*compact_first_sources, *native_sources]
 default_inputs = [*compact_first_inputs, *native_inputs]
