@@ -3,14 +3,19 @@
    The emitter records symbols and relocations in ELF form. This writer maps
    them onto four COFF sections and moves RELA addends into the relocated bytes,
    as COFF requires. Sections: .text, .rdata (string literals), .data (mutable
-   globals) and .rdata (constant globals, which carry ADDR64 relocations). */
+   globals), .rdata (constant globals, which carry ADDR64 relocations), and the
+   .xdata/.pdata unwind tables Windows needs to walk native frames. */
 
-enum { COFF_TEXT = 1, COFF_RODATA, COFF_DATA, COFF_CONSTANTS, COFF_SECTIONS = 4 };
-enum { IMAGE_REL_AMD64_ADDR64 = 1, IMAGE_REL_AMD64_REL32 = 4 };
+enum { COFF_TEXT = 1, COFF_RODATA, COFF_DATA, COFF_CONSTANTS, COFF_XDATA, COFF_PDATA, COFF_SECTIONS = 6 };
+enum { IMAGE_REL_AMD64_ADDR64 = 1, IMAGE_REL_AMD64_ADDR32NB = 3, IMAGE_REL_AMD64_REL32 = 4 };
 
 static void put16(unsigned char *p, uint16_t v) { p[0] = (unsigned char)v; p[1] = (unsigned char)(v >> 8); }
 static void put32(unsigned char *p, uint32_t v) { for (unsigned i = 0; i < 4; ++i) p[i] = (unsigned char)(v >> 8 * i); }
 static void put64(unsigned char *p, uint64_t v) { for (unsigned i = 0; i < 8; ++i) p[i] = (unsigned char)(v >> 8 * i); }
+
+static void coff_append(Bytes *b, const void *data, size_t n) {
+  if (reserve(b, b->n + n)) { memcpy(b->data + b->n, data, n); b->n += n; }
+}
 
 /* ELF section index (driver.c layout) to COFF section number; 0 is undefined. */
 static int coff_section(unsigned shndx) {
@@ -18,15 +23,19 @@ static int coff_section(unsigned shndx) {
 }
 
 /* Relocations of one section: 10 bytes each, with the in-place addend written
-   into `bytes`. Returns false for a relocation COFF cannot express. */
+   into `bytes`. A null symbol_map means the symbols are already COFF indices.
+   Returns false for a relocation COFF cannot express. */
 static bool coff_relocations(const Elf64_Rela *items, size_t count, unsigned char *bytes, size_t size,
                              const unsigned *symbol_map, unsigned symbol_count, unsigned char *out) {
   for (size_t i = 0; i < count; ++i) {
     const Elf64_Rela *r = &items[i];
     unsigned symbol = (unsigned)ELF64_R_SYM(r->r_info), type = (unsigned)ELF64_R_TYPE(r->r_info);
-    if (symbol >= symbol_count || r->r_offset > UINT32_MAX) return false;
+    if ((symbol_map && symbol >= symbol_count) || r->r_offset > UINT32_MAX) return false;
     unsigned coff;
-    if (type == R_X86_64_64) {
+    if (!symbol_map) {
+      if (r->r_offset + 4 > size) return false;
+      put32(bytes + r->r_offset, (uint32_t)r->r_addend); coff = IMAGE_REL_AMD64_ADDR32NB;
+    } else if (type == R_X86_64_64) {
       if (r->r_offset + 8 > size) return false;
       put64(bytes + r->r_offset, (uint64_t)r->r_addend); coff = IMAGE_REL_AMD64_ADDR64;
     } else if (type == R_X86_64_PC32 || type == R_X86_64_PLT32) {
@@ -35,9 +44,32 @@ static bool coff_relocations(const Elf64_Rela *items, size_t count, unsigned cha
       if (r->r_offset + 4 > size || addend < INT32_MIN || addend > INT32_MAX) return false;
       put32(bytes + r->r_offset, (uint32_t)addend); coff = IMAGE_REL_AMD64_REL32;
     } else return false;
-    put32(out + 10 * i, (uint32_t)r->r_offset); put32(out + 10 * i + 4, symbol_map[symbol]); put16(out + 10 * i + 8, (uint16_t)coff);
+    put32(out + 10 * i, (uint32_t)r->r_offset); put32(out + 10 * i + 4, symbol_map ? symbol_map[symbol] : symbol); put16(out + 10 * i + 8, (uint16_t)coff);
   }
   return true;
+}
+
+/* UNWIND_INFO for the isa_enter prologue: push rbp; mov rbp, rsp; save RSI/RDI
+   in the home area; allocate the frame. Codes are listed last-instruction first. */
+static void coff_unwind_info(Bytes *out, const uint32_t frame[3]) {
+  uint32_t size = frame[2];
+  unsigned char codes[20];
+  unsigned n = 0;
+  if (size <= 128) { codes[n++] = (unsigned char)frame[1]; codes[n++] = (unsigned char)(2 | (size - 8) / 8 << 4); }
+  else if (size <= 524280) {
+    codes[n++] = (unsigned char)frame[1]; codes[n++] = 1;
+    put16(codes + n, (uint16_t)(size / 8)); n += 2;
+  } else {
+    codes[n++] = (unsigned char)frame[1]; codes[n++] = 1 | 1 << 4;
+    put32(codes + n, size); n += 4;
+  }
+  /* UWOP_SAVE_NONVOL offsets are eight-byte units above the frame pointer. */
+  const unsigned char fixed[] = {12, 4 | 7 << 4, 3, 0, 8, 4 | 6 << 4, 2, 0, 4, 3, 1, 0 | 5 << 4};
+  memcpy(codes + n, fixed, sizeof(fixed)); n += sizeof(fixed);
+  unsigned slots = n / 2;
+  unsigned char header[4] = {1, (unsigned char)frame[1], (unsigned char)slots, 5};
+  coff_append(out, header, 4); coff_append(out, codes, n);
+  if (slots & 1) { unsigned char pad[2] = {0}; coff_append(out, pad, 2); }
 }
 
 static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *symbols, unsigned symbol_count, const char *strings) {
@@ -50,15 +82,33 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
   symbol_map[1] = COFF_RODATA - 1;
   for (unsigned i = section_symbols; i < symbol_count; ++i) symbol_map[i] = COFF_SECTIONS + i - section_symbols;
 
-  const Bytes *contents[COFF_SECTIONS] = {&ctx->text, &ctx->rodata, &ctx->globals_data, &ctx->constants_data};
-  const char *names[COFF_SECTIONS] = {".text", ".rdata", ".data", ".rdata"};
+  /* .pdata: {begin, end, unwind info} per function, image-relative. */
+  Bytes xdata = {0}, pdata = {0};
+  unsigned frames = ctx->unwind_frame_count;
+  Elf64_Rela *table_relocations = calloc(3 * (size_t)frames + 1, sizeof(*table_relocations));
+  if (!table_relocations) { free(symbol_map); return false; }
+  for (unsigned i = 0; i < frames; ++i) {
+    const uint32_t *frame = ctx->unwind_frames[i];
+    uint32_t entry[3] = {frame[0], i + 1 < frames ? ctx->unwind_frames[i + 1][0] : (uint32_t)ctx->text.n, (uint32_t)xdata.n};
+    for (unsigned j = 0; j < 3; ++j) {
+      table_relocations[3 * i + j] = (Elf64_Rela){.r_offset = 12 * (size_t)i + 4 * j,
+        .r_info = ELF64_R_INFO(j == 2 ? COFF_XDATA - 1u : COFF_TEXT - 1u, 0u), .r_addend = entry[j]};
+    }
+    unsigned char zero[12] = {0};
+    coff_append(&pdata, zero, sizeof(zero));
+    coff_unwind_info(&xdata, frame);
+  }
+  const Bytes *contents[COFF_SECTIONS] = {&ctx->text, &ctx->rodata, &ctx->globals_data, &ctx->constants_data, &xdata, &pdata};
+  const char *names[COFF_SECTIONS] = {".text", ".rdata", ".data", ".rdata", ".xdata", ".pdata"};
   const uint32_t flags[COFF_SECTIONS] = {
     0x60500020u, /* code, execute, read, 16-byte aligned */
     0x40400040u, /* initialized data, read, 8-byte aligned */
     0xc0400040u, /* initialized data, read, write */
-    0x40400040u};
-  const Elf64_Rela *relocations[COFF_SECTIONS] = {ctx->relocations, NULL, NULL, ctx->constant_relocations};
-  size_t relocation_counts[COFF_SECTIONS] = {ctx->relocation_count, 0, 0, ctx->constant_relocation_count};
+    0x40400040u,
+    0x40300040u, /* .xdata: initialized data, read, 4-byte aligned */
+    0x40300040u};
+  const Elf64_Rela *relocations[COFF_SECTIONS] = {ctx->relocations, NULL, NULL, ctx->constant_relocations, NULL, table_relocations};
+  size_t relocation_counts[COFF_SECTIONS] = {ctx->relocation_count, 0, 0, ctx->constant_relocation_count, 0, 3 * (size_t)frames};
 
   size_t header = 20 + 40 * COFF_SECTIONS, cursor = header, raw[COFF_SECTIONS], relocation_at[COFF_SECTIONS];
   for (unsigned i = 0; i < COFF_SECTIONS; ++i) {
@@ -72,14 +122,17 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
     size_t length = strlen(strings + symbols[i].st_name);
     if (length > 8) string_size += length + 1;
   }
+  bool ok = true;
   size_t total = symbol_table + 18 * (size_t)coff_count + string_size;
-  if (total > LIMIT) { free(symbol_map); return false; }
-  unsigned char *data = calloc(total, 1);
-  if (!data) { free(symbol_map); return false; }
+  if (total > LIMIT || xdata.failed || pdata.failed) ok = false;
+  unsigned char *data = ok ? calloc(total, 1) : NULL;
+  if (!data) {
+    free(symbol_map); free(table_relocations); free(xdata.data); free(pdata.data);
+    return false;
+  }
 
   put16(data, 0x8664); put16(data + 2, COFF_SECTIONS);
   put32(data + 8, (uint32_t)symbol_table); put32(data + 12, coff_count);
-  bool ok = true;
   for (unsigned i = 0; i < COFF_SECTIONS && ok; ++i) {
     unsigned char *h = data + 20 + 40 * i;
     memcpy(h, names[i], strlen(names[i]));
@@ -94,7 +147,8 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
         characteristics |= 0x01000000u; /* IMAGE_SCN_LNK_NRELOC_OVFL */
         put16(h + 32, 0xffff); put32(out, (uint32_t)(count + 1)); out += 10;
       } else put16(h + 32, (uint16_t)count);
-      ok = coff_relocations(relocations[i], count, data + raw[i], contents[i]->n, symbol_map, symbol_count, out);
+      ok = coff_relocations(relocations[i], count, data + raw[i], contents[i]->n,
+                           i == COFF_PDATA - 1 ? NULL : symbol_map, symbol_count, out);
     }
     put32(h + 36, characteristics);
   }
@@ -121,6 +175,6 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
   }
   put32(string_table, (uint32_t)string_size);
   if (ok) ok = backend_write_object(path, data, total);
-  free(data); free(symbol_map);
+  free(data); free(symbol_map); free(table_relocations); free(xdata.data); free(pdata.data);
   return ok;
 }

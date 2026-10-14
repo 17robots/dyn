@@ -87,6 +87,9 @@ typedef struct {
   bool a64; /* AArch64 encodings, relocations and ABI instead of x86-64 */
   bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
   bool darwin; /* AArch64 macOS: Apple's AAPCS64 variant and Mach-O objects */
+  /* Windows unwind data: per function {text start, prologue length, frame bytes}. */
+  uint32_t unwind_frames[MAX_SYMBOLS + 1][3];
+  unsigned unwind_frame_count;
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
 } BackendContext;

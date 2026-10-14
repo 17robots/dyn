@@ -607,16 +607,23 @@ static void isa_enter(BackendContext *ctx) {
     return;
   }
   if (ctx->win64) {
+    size_t start = ctx->text.n;
+    if (ctx->unwind_frame_count > MAX_SYMBOLS) ctx->text.failed = true;
+    else ctx->unwind_frame_count++;
     CODE(0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0x75, 16, 0x48, 0x89, 0x7d, 24);
+    uint32_t *frame = ctx->unwind_frames[ctx->unwind_frame_count ? ctx->unwind_frame_count - 1 : 0];
+    frame[0] = (uint32_t)start; frame[2] = ctx->frame_bytes;
     /* Windows commits stack one guard page at a time: probe large frames. */
     if (ctx->frame_bytes >= 4096) {
       byte(ctx, 0xb8); word(ctx, ctx->frame_bytes); /* mov eax, frame */
       if (!ctx->runtime_index[RUNTIME_CHKSTK]) ctx->runtime_index[RUNTIME_CHKSTK] = (unsigned)(ctx->runtime_base + ctx->runtime_count++);
       byte(ctx, 0xe8); relocate(ctx, ctx->runtime_index[RUNTIME_CHKSTK], R_X86_64_PLT32, -4); word(ctx, 0);
       CODE(0x48, 0x29, 0xc4); /* sub rsp, rax */
-      return;
-    }
-  } else CODE(0x55, 0x48, 0x89, 0xe5);
+    } else { CODE(0x48, 0x81, 0xec); word(ctx, ctx->frame_bytes); }
+    frame[1] = (uint32_t)(ctx->text.n - start);
+    return;
+  }
+  CODE(0x55, 0x48, 0x89, 0xe5);
   CODE(0x48, 0x81, 0xec); word(ctx, ctx->frame_bytes);
 }
 /* [A, A + size) <- 0. */
