@@ -29,7 +29,7 @@ static bool space(unsigned char c) {
 }
 static void fail(Parser *p, uint32_t offset, const char *message) {
   if (!p->tree->error) {
-    p->tree->error = message; p->tree->error_offset = offset;
+    p->tree->error = message; p->tree->error_offset = offset; p->tree->error_expected = NULL;
     p->tree->error_kind = !strcmp(message, "out of memory") ? EXP_ALLOCATION_ERROR :
       (!strcmp(message, "tree too large") || strstr(message, "limit exceeded")) ? EXP_LIMIT_ERROR : EXP_SYNTAX_ERROR;
   }
@@ -39,6 +39,7 @@ static void propagate_error(Parser *p, const ExpTree *from) {
     p->tree->error = from->error;
     p->tree->error_offset = from->error_offset;
     p->tree->error_kind = from->error_kind;
+    p->tree->error_expected = from->error_expected;
   }
 }
 static bool charge(Parser *p, uint64_t units, uint32_t offset) {
@@ -186,7 +187,7 @@ static void lex(Parser *p) {
         if (((c == '.' && next == '.') || ((c == '<' || c == '>') && next == c)) &&
             i < p->length && p->text[i] == '=') ++i;
       } else if (!c || !strchr("()[]{}.,:+-*/%&|^!~<>=", c)) {
-        kind = BAD; fail(p, start, "unsupported token");
+        kind = BAD; fail(p, start, "unexpected character");
       }
     }
   }
@@ -197,7 +198,9 @@ static bool take(Parser *p, const char *s) {
   lex(p); return true;
 }
 static void expect(Parser *p, const char *s) {
-  if (!take(p, s)) fail(p, p->token.start, "unexpected token");
+  if (take(p, s) || p->tree->error) return;
+  fail(p, p->token.start, "unexpected token");
+  p->tree->error_expected = s;
 }
 static uint32_t node(Parser *p, ExpKind kind, uint32_t start, uint32_t end, uint32_t first, Token op) {
   ExpTree *t = p->tree;
@@ -484,7 +487,7 @@ static uint32_t parse(Parser *p, int minimum) {
     else if (token.kind == NAME && (is(p, "true") || is(p, "false"))) kind = EXP_BOOL;
     else if (token.kind == NAME && is(p, "nil")) kind = EXP_NIL;
     else if (token.kind == NAME) primary = true;
-    else { fail(p, token.start, "expected supported expression"); return NONE; }
+    else { fail(p, token.start, "expected expression"); return NONE; }
     lex(p); left = node(p, kind, token.start, token.end, NONE, (Token){0});
   }
   if (primary) mark(p, left, EXP_PRIMARY);
@@ -544,7 +547,7 @@ static uint32_t expression(Parser *p, int minimum) {
   uint32_t result = parse(p, minimum); --p->depth; return result;
 }
 bool exp_parse_with_options(const char *source, size_t length, ExpTree *tree, const ExpOptions *options) {
-  tree->count = 0; tree->root = NONE; tree->error = NULL; tree->error_kind = EXP_OK; tree->error_offset = 0;
+  tree->count = 0; tree->root = NONE; tree->error = NULL; tree->error_expected = NULL; tree->error_kind = EXP_OK; tree->error_offset = 0;
   if (length > UINT32_MAX || (!source && length)) { tree->error = "invalid source or source too large"; tree->error_kind = EXP_LIMIT_ERROR; return false; }
   uint64_t work_remaining = options && options->max_work ? options->max_work : (uint64_t)length * 128 + 1024;
   Parser p = {.text = source, .length = (uint32_t)length, .tree = tree, .work_remaining = &work_remaining, .options = options};

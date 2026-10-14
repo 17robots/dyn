@@ -56,9 +56,12 @@ typedef struct {
   ExpNode *nodes;
   uint32_t count, capacity, root, error_offset;
   const char *error;
+  /* Static spelling a failed expect() wanted at error_offset, otherwise NULL. */
+  const char *error_expected;
   ExpError error_kind;
 } ExpTree;
-/* No recovery or partial success. Error offsets are byte offsets in source.
+/* No recovery or partial success. Syntax errors are reported at the first
+   failure; error_offset is the start of the offending token. Error offsets are byte offsets in source.
    Trees must be zero-initialized. Repeated parses reuse storage. */
 bool exp_parse(const char *source, size_t length, ExpTree *tree);
 bool exp_parse_source(const char *source, size_t length, ExpTree *tree);

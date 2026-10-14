@@ -7,6 +7,7 @@ typedef struct {
   ExpError kind;
   const char *message; /* Static lifetime; NULL on success. */
   uint32_t offset;
+  const char *expected; /* Static spelling a syntax error wanted, or NULL. */
 } ExpSnapshotError;
 /* Unlike const ExpTree, this view cannot expose mutable node storage. */
 typedef struct {

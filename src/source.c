@@ -148,8 +148,9 @@ static int sources_load(const DynContext *context, const char *dir,
       if (s->syntax_too_deep)
         if (!quiet) dyn_diagnostic(&s->context, "error", s->path, 1, 1, 1, 1,
                        "syntax nesting exceeds 1024 tree levels");
+      bool syntax_error = quiet ? s->syntax_error != NULL : dyn_source_report_syntax(s);
       closedir(d);
-      return s->syntax_too_deep ? 1 : 2;
+      return s->syntax_too_deep || syntax_error ? 1 : 2;
     }
     if (failed) {
       if (!quiet) fprintf(stderr, "error: cannot completely read '%s'\n", s->path);

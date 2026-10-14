@@ -454,7 +454,7 @@ static uint32_t src_declaration(Parser *p) {
   return mark(p, src_node(p, SRC_DECLARATION, start, src_end(p, child, start), child), public ? EXP_PUBLIC : 0);
 }
 bool exp_parse_source_with_options(const char *source, size_t length, ExpTree *tree, const ExpOptions *options) {
-  tree->count = 0; tree->root = NONE; tree->error = NULL; tree->error_kind = EXP_OK; tree->error_offset = 0;
+  tree->count = 0; tree->root = NONE; tree->error = NULL; tree->error_expected = NULL; tree->error_kind = EXP_OK; tree->error_offset = 0;
   if (length > UINT32_MAX || (!source && length)) { tree->error = "invalid source or source too large"; tree->error_kind = EXP_LIMIT_ERROR; return false; }
   uint64_t work_remaining = options && options->max_work ? options->max_work : (uint64_t)length * 128 + 1024;
   Parser p = {.text = source, .length = (uint32_t)length, .tree = tree,

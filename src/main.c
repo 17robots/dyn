@@ -353,7 +353,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
                         .optimization = &options->optimization,
                         .json_diagnostics = options->json_diagnostics,
                         .vet = vet, .vet_findings = &vet_findings,
-                        .timings = options->timings};
+                        .timings = options->timings, .strict_syntax = true};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);
     return 0;

@@ -17,6 +17,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import syntax_messages
+
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 
@@ -125,7 +128,7 @@ def main():
                     invalid |= any(r[0] != 0 for r in results)
                 if origin == 'calibration-invalid' and mutation == 'original':
                     invalid |= any(r[0] != 1 or not r[2] for r in results)
-                if invalid or results[0] != results[1]:
+                if invalid or not syntax_messages.equivalent(results[0], results[1], data):
                     (output/'failure.dyn').write_bytes(data)
                     for name, result in zip(('reference', 'candidate'), results):
                         (output/f'{name}.stdout').write_bytes(result[1])
@@ -135,7 +138,8 @@ def main():
                     (output/'results.json').write_text(json.dumps(report, indent=2)+'\n')
                     raise AssertionError(f'acceptance/diagnostic mismatch: {row}; evidence: {output}')
                 row[mode] = dict(returncode=results[0][0], stdout_sha256=digest(results[0][1]),
-                                 stderr_sha256=digest(results[0][2]))
+                                 stderr_sha256=digest(results[0][2]),
+                                 syntax_rejection=results[0] != results[1])
             report['cases'].append(row)
     assert compiler_hashes == [digest(p.read_bytes()) for p in compilers], 'compiler changed during gate'
     assert sdk_hashes == sdk_manifest(), 'standard library changed during gate'

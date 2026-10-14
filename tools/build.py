@@ -83,8 +83,8 @@ def compiler_link(name, objects):
         [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, '-ltree-sitter', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', BUILD/name],
         objects)
 
-# Default compilers parse batch sources with the handwritten parser first. Tree-sitter
-# still validates syntax errors, deep sources, cached/budgeted paths and editors.
+# Default compilers parse batch sources with the handwritten parser, which also reports
+# their syntax errors. Tree-sitter still handles deep sources, cached/budgeted paths and editors.
 compact_parser = COMPILER/'tools/parser-experiment'
 compact_first_flags = ['-DDYN_EXPERIMENT_COMPACT_DECLARATIONS', '-DDYN_EXPERIMENT_COMPACT_SOURCES',
                        '-DDYN_EXPERIMENT_COMPACT_AST', '-DDYN_EXPERIMENT_COMPACT_FIRST']

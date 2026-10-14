@@ -12,6 +12,16 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- `dyn check`, `build` and `run` report syntax errors from the handwritten
+  parser instead of the Tree-sitter grammar: one diagnostic per file, at the
+  offending token, naming what was expected (for example `expected ')', found
+  'bar'` instead of `invalid syntax near 'ERROR'`). A file with a syntax error
+  now reports only its first error. Syntax errors in files whose `#target`
+  excludes the current platform are now errors too; they were silently ignored.
+  `--max-work` and editors still use Tree-sitter.
+
 ## 0.1.0-preview.24
 
 Compatible with preview 23, except that calling `main` is now an error.

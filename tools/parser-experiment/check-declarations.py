@@ -8,6 +8,8 @@ import shlex
 import subprocess
 import tempfile
 
+import syntax_messages
+
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 parser = argparse.ArgumentParser(description=__doc__)
@@ -53,5 +55,5 @@ if args.compiler:
                     assert result.returncode in (0, 1, 2), (index, result)
                     assert not any(x in result.stderr for x in (b'AddressSanitizer', b'runtime error:', b'LeakSanitizer'))
                     results.append((result.returncode, result.stdout, result.stderr))
-                assert results[0] == results[1], (index, source, diagnostic_flags, results)
+                assert syntax_messages.equivalent(results[0], results[1]), (index, source, diagnostic_flags, results)
     print(f'PASS {len(cases)} compiler diagnostic/depth cases in text and JSON modes')

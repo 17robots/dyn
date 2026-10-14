@@ -23,10 +23,14 @@ The default `dyn` and `dyn-release` artifacts parse batch CLI sources with the
 handwritten compact parser (`tools/parser-experiment/parser.c`) first. A source
 uses the compact tree only when it parses without error, its normalized depth is
 certified below the production 1024-level syntax depth limit for the pinned
-grammar, and its string literals pass the legacy-lexer safety check. Otherwise
-the compiler parses that source with Tree-sitter, which owns syntax diagnostics,
-error recovery and raw-tree depth reporting. Syntax-cache, work-budget and editor
-paths always use Tree-sitter. The build verifies the grammar pin before linking.
+grammar, and its string literals pass the legacy-lexer safety check. A compact
+syntax error ends source loading for batch commands (`DynContext.strict_syntax`)
+with one diagnostic at the offending token (`dyn_source_report_syntax`); there is
+no recovery. This includes files whose `#target` excludes the host, which
+Tree-sitter used to skip. Sources that parse but fail the depth or string checks
+fall back to Tree-sitter, which also owns raw-tree depth reporting. Syntax-cache,
+work-budget and editor paths always use Tree-sitter, including its error
+recovery. The build verifies the grammar pin before linking.
 
 `dyn-legacy` is the Tree-sitter-only rollback artifact and the differential
 reference for `just test-compact-first`. The staged `dyn-compact-*` artifacts

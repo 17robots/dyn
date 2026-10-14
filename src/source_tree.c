@@ -103,6 +103,12 @@ bool dyn_source_prepare(DynSource *source) {
       ExpSnapshotError error;
       source->compact=exp_snapshot_create(source->text,source->length,NULL,&error);
       if (!source->compact && (error.kind==EXP_ALLOCATION_ERROR || error.kind==EXP_CANCELLED)) return false;
+      if (!source->compact && error.kind==EXP_SYNTAX_ERROR && source->context.strict_syntax) {
+        source->syntax_error=error.message;
+        source->syntax_expected=error.expected;
+        source->syntax_error_offset=error.offset;
+        return false;
+      }
     }
     const ExpSnapshotTree *tree=dyn_compact_tree(source);
     if (exp_depth_certified(tree,DYN_SYNTAX_DEPTH_LIMIT) && compact_first_strings_safe(source,tree)) {
@@ -149,6 +155,60 @@ bool dyn_source_prepare(DynSource *source) {
 #endif
   return source->syntax != NULL;
 }
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+static size_t syntax_token_end(const char *text, size_t length, size_t at) {
+  unsigned char c = (unsigned char)text[at];
+  size_t end = at + 1;
+  if (c == '_' || (c >= '0' && c <= '9') || ((c | 32) >= 'a' && (c | 32) <= 'z')) {
+    while (end < length) {
+      c = (unsigned char)text[end];
+      if (c != '_' && !(c >= '0' && c <= '9') && !((c | 32) >= 'a' && (c | 32) <= 'z')) break;
+      ++end;
+    }
+  } else if (c >= 0x80)
+    while (end < length && ((unsigned char)text[end] & 0xc0) == 0x80) ++end;
+  return end - at > 32 ? at + 32 : end;
+}
+#endif
+bool dyn_source_report_syntax(const DynSource *source) {
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  if (!source->syntax_error) return false;
+  size_t start = source->syntax_error_offset;
+  if (start > source->length) start = source->length;
+  size_t end = start;
+  char found[48];
+  if (start == source->length) snprintf(found, sizeof(found), "end of file");
+  else {
+    end = syntax_token_end(source->text, source->length, start);
+    unsigned char c = (unsigned char)source->text[start];
+    if (c == '\n') snprintf(found, sizeof(found), "end of line");
+    else if (c < 0x20 || c == 0x7f) snprintf(found, sizeof(found), "U+%04X", c);
+    else if (c >= 0x80) {
+      /* Name the code point: it may be invisible or a line separator. */
+      unsigned value = c >= 0xf0 ? c & 7 : c >= 0xe0 ? c & 15 : c & 31;
+      for (size_t i = start + 1; i < end; ++i)
+        value = value << 6 | ((unsigned char)source->text[i] & 63);
+      snprintf(found, sizeof(found), "U+%04X", value);
+    } else snprintf(found, sizeof(found), "'%.*s'", (int)(end - start), source->text + start);
+  }
+  char message[160];
+  if (source->syntax_expected)
+    snprintf(message, sizeof(message), "expected '%s', found %s", source->syntax_expected, found);
+  else if (!strcmp(source->syntax_error, "unexpected token"))
+    snprintf(message, sizeof(message), "unexpected %s", found);
+  else if (!strcmp(source->syntax_error, "unexpected character"))
+    snprintf(message, sizeof(message), "unexpected character %s", found);
+  else if (!strncmp(source->syntax_error, "expected ", 9))
+    snprintf(message, sizeof(message), "%s, found %s", source->syntax_error, found);
+  else
+    snprintf(message, sizeof(message), "%s", source->syntax_error);
+  dyn_diagnostic_source("error", source, start, end, message);
+  return true;
+#else
+  (void)source;
+  return false;
+#endif
+}
 TSTree *dyn_source_tree(const DynSource *source) {
   return source->syntax ? ts_tree_copy(source->syntax)
                         : dyn_syntax_reparse_context(source->text, source->length, NULL, NULL, &source->context);
@@ -167,6 +227,7 @@ bool dyn_source_reflection(const DynSource *source, bool *reflection) {
   return true;
 }
 void dyn_source_discard_syntax(DynSource *source) {
+  source->syntax_error = source->syntax_expected = NULL;
 #ifdef DYN_EXPERIMENT_COMPACT_AST
   source->compact_only = false;
 #ifdef DYN_EXPERIMENT_COMPACT_FIRST

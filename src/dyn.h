@@ -67,6 +67,9 @@ typedef struct {
   bool timings;
   DynWork *work; /* Borrowed, never owned by a source or cached snapshot. */
   DynSyntaxCache *syntax_cache; /* Optional owner-scoped immutable source trees. */
+  /* Batch commands: a handwritten-parser syntax error ends source loading.
+     Editors keep partial trees for recovery. */
+  bool strict_syntax;
 } DynContext;
 static inline bool dyn_work_step(const DynContext *context, uint64_t units) {
   DynWork *w = context ? context->work : NULL;
@@ -161,6 +164,9 @@ typedef struct {
   TSTree **syntax_parts;
   size_t syntax_part_count;
   bool syntax_too_deep;
+  /* Set when the handwritten parser rejects this revision; static strings. */
+  const char *syntax_error, *syntax_expected;
+  uint32_t syntax_error_offset;
   bool needs_reflection; /* Synthetic interface dependency on the compiler ABI.
                           */
   DynSourceMap *maps;
@@ -232,6 +238,8 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
 /* Prepare caches a tree; tree returns an independently owned tree reference.
    Discard syntax before mutating source text. */
 bool dyn_source_prepare(DynSource *);
+/* Reports a syntax error recorded by dyn_source_prepare; false if none. */
+bool dyn_source_report_syntax(const DynSource *);
 TSTree *dyn_source_tree(const DynSource *);
 bool dyn_source_reflection(const DynSource *, bool *);
 void dyn_source_discard_syntax(DynSource *);
