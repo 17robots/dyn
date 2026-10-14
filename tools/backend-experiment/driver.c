@@ -1,4 +1,4 @@
-/* Native x86-64 Linux ELF emitter for checked Dyn IR (debug builds). */
+/* Native x86-64 and AArch64 Linux ELF emitter for checked Dyn IR (debug builds). */
 #include "frontend.h"
 #include "ir.h"
 #include "dyn_location.h"
@@ -37,6 +37,10 @@ static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_push", "dyn_
 enum { GUARD_OVERFLOW, GUARD_DIVIDE, GUARD_DIVISION_OVERFLOW, GUARD_SHIFT, GUARD_FUNCTION, GUARD_NONNULL, GUARD_ALIGNED, GUARD_INDEX, GUARD_SLICE_ORDER, GUARD_SLICE_BOUNDS, GUARD_ENUM, GUARD_COUNT };
 static const char *const guard_names[] = {"overflow.ok", "divide.ok", "division.overflow.ok", "shift.count.ok", "function.nonnull.ok", "pointer.nonnull.ok", "pointer.aligned.ok", "index.ok", "slice.order.ok", "slice.bounds.ok", "enum.cast.ok"};
 typedef struct { DynType type; uint32_t offset; } ArrayPart;
+/* One register- or stack-passed piece of an argument. cls: GP index, 8 + FP
+   index, or -1 for the next eight-byte stack slot. offset/size locate the
+   bytes inside an aggregate; leaf is the scalar type of an array leaf. */
+typedef struct { uint32_t offset, size; int cls; DynType leaf; } AbiPart;
 typedef struct {
   Bytes text, rodata, globals_data, constants_data;
   BackendDwarf *dwarf;
@@ -64,6 +68,7 @@ typedef struct {
   uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
   bool visited_expr[MAX_NODES];
   uint32_t pack_offsets[MAX_NODES];
+  uint32_t copy_offsets[MAX_NODES]; /* AAPCS64 caller copies of large struct arguments */
   /* Ids written while sizing one function; reset touches only these, not the program. */
   uint32_t touched_exprs[2 * MAX_NODES], touched_stmts[MAX_NODES];
   size_t touched_expr_count, touched_stmt_count;
@@ -72,11 +77,13 @@ typedef struct {
   bool debug_mode, relocation_failed;
   bool report; /* false: the caller selects another backend silently */
   ArrayPart call_leaves[512];
+  AbiPart call_parts[512];
   /* DWARF lexical scopes: [begin, end) text offsets per local; zero end means
      the variable is visible in the whole function. */
   size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
   uint32_t scope_stack[MAX_LOCALS];
   unsigned scope_count;
+  bool a64; /* AArch64 Linux encodings, relocations and ABI instead of x86-64 */
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
 } BackendContext;
@@ -121,15 +128,13 @@ static void relocate(BackendContext *ctx, unsigned symbol, unsigned type, int64_
   ctx->relocations[ctx->relocation_count++] = (Elf64_Rela){.r_offset = ctx->text.n,
       .r_info = ELF64_R_INFO(symbol, type), .r_addend = addend};
 }
+static void isa_call_symbol(BackendContext *ctx, unsigned symbol);
 static void runtime_call(BackendContext *ctx, unsigned runtime) {
   if (!ctx->runtime_index[runtime]) ctx->runtime_index[runtime] = (unsigned)(ctx->runtime_base + ctx->runtime_count++);
-  byte(ctx, 0xe8); relocate(ctx, ctx->runtime_index[runtime], R_X86_64_PLT32, -4); word(ctx, 0);
+  isa_call_symbol(ctx, ctx->runtime_index[runtime]);
 }
-static void string_arguments(BackendContext *ctx, size_t offset, size_t length) {
-  CODE(0x48, 0x8d, 0x3d); /* lea rdi, [rip + string] */
-  relocate(ctx, 1, R_X86_64_PC32, (int64_t)offset - 4); word(ctx, 0);
-  byte(ctx, 0xbe); word(ctx, (uint32_t)length); /* mov esi, length */
-}
+#include "a64.inc"
+#include "isa.inc"
 static bool signed_scalar(DynType type) {
   return (type >= DYN_TYPE_I8 && type <= DYN_TYPE_I64) || type == DYN_TYPE_ISIZE;
 }
@@ -155,33 +160,21 @@ static bool raw_aggregate(const DynIrProgram *ir,DynType t) { return dyn_type_is
 static void normalize(BackendContext *ctx, DynType t) {
   if (payload_enum(ctx->active_ir,t)) return;
   t=storage_type(ctx->active_ir,t);
-  unsigned bits=integer_bits(t);
-  if (bits == 1) CODE(0x48,0x83,0xe0,1);
-  else if (bits == 8) { if (signed_scalar(t)) CODE(0x48,0x0f,0xbe,0xc0); else CODE(0x0f,0xb6,0xc0); }
-  else if (bits == 16) { if (signed_scalar(t)) CODE(0x48,0x0f,0xbf,0xc0); else CODE(0x0f,0xb7,0xc0); }
-  else if (bits == 32) { if (signed_scalar(t)) CODE(0x48,0x63,0xc0); else CODE(0x89,0xc0); }
+  isa_extend(ctx, integer_bits(t), signed_scalar(t));
 }
 static unsigned memory_bits(DynType type) { return type==DYN_TYPE_F32?32:integer_bits(type); }
 /* Address in RAX for loads; destination in R11 and value in RAX for stores. */
 static void load_memory(BackendContext *ctx, DynType type) {
   type=storage_type(ctx->active_ir,type);
-  unsigned bits=memory_bits(type);
-  if (bits==1 || bits==8) { if (signed_scalar(type)) CODE(0x48,0x0f,0xbe,0x00); else CODE(0x0f,0xb6,0x00); }
-  else if (bits==16) { if (signed_scalar(type)) CODE(0x48,0x0f,0xbf,0x00); else CODE(0x0f,0xb7,0x00); }
-  else if (bits==32) { if (signed_scalar(type)) CODE(0x48,0x63,0x00); else CODE(0x8b,0x00); }
-  else CODE(0x48,0x8b,0x00);
+  isa_load_value(ctx, memory_bits(type), signed_scalar(type));
   normalize(ctx, type);
 }
 static void store_memory(BackendContext *ctx, DynType type) {
   type=storage_type(ctx->active_ir,type);
-  unsigned bits=memory_bits(type);
-  if (bits==1 || bits==8) CODE(0x41,0x88,0x03);
-  else if (bits==16) CODE(0x66,0x41,0x89,0x03);
-  else if (bits==32) CODE(0x41,0x89,0x03);
-  else CODE(0x49,0x89,0x03);
+  isa_store_value(ctx, memory_bits(type));
 }
 static const char *function_name(const DynIrFunction *f) { return f->foreign ? f->link_name : f->name; }
-static void guard(BackendContext *ctx, const DynIrFunction *f, unsigned success, unsigned check) {
+static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {
   if (ctx->message_offsets[check] == SIZE_MAX) {
     char message[1024];
     const char *name = function_name(f);
@@ -191,18 +184,17 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, unsigned success,
     ctx->message_lengths[check] = strlen(message);
     ctx->message_offsets[check] = literal(ctx, message, ctx->message_lengths[check]);
   }
-  /* The caller supplies a near conditional-jump opcode for success.
+  /* The caller supplies the success condition of the preceding compare.
      Restore the fixed frame before calling the noreturn runtime: nested
      expression pushes may otherwise leave the call stack misaligned. */
-  CODE(0x0f); byte(ctx, success);
-  size_t branch = ctx->text.n; word(ctx, 0);
-  CODE(0x48, 0x8d, 0xa5); word(ctx, 0u - ctx->frame_bytes); /* restore aligned frame */
+  size_t branch = isa_branch(ctx, success);
+  isa_reset_stack(ctx);
   unsigned saved_stack=ctx->stack_slots; ctx->stack_slots=0;
   if (!ctx->unwinding && !emit_defers(ctx, ctx->active_ir,f,0)) ctx->text.failed=true;
   ctx->stack_slots=saved_stack;
-  string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check]);
-  runtime_call(ctx, 0); CODE(0x0f, 0x0b); /* panic must not return */
-  patch_word(ctx, branch, (uint32_t)(ctx->text.n - (branch + 4)));
+  isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check]);
+  runtime_call(ctx, 0); isa_trap(ctx); /* panic must not return */
+  isa_patch(ctx, branch, ctx->text.n);
 }
 static bool scalar(const DynIrProgram *ir, DynType);
 static bool float_type(DynType);
@@ -309,7 +301,43 @@ static bool array_parts(const DynIrProgram *ir,DynType type,uint32_t offset,Arra
   }
   return true;
 }
-static bool abi_memory(const DynIrProgram *ir,DynType type) {
+/* AAPCS64 homogeneous floating aggregate: one to four members of one float type. */
+static bool a64_hfa(const DynIrProgram *ir,DynType type,DynType *element,unsigned *count,unsigned depth) {
+  if (depth>MAX_DEPTH) return false;
+  if (float_type(type)) {
+    if (*element && *element!=type) return false;
+    *element=type; return ++*count<=4;
+  }
+  if (dyn_type_is_struct(type) && type-DYN_TYPE_STRUCT_BASE<ir->struct_count) {
+    const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
+    if (!record->field_count) return false;
+    for (uint32_t i=0;i<record->field_count;++i)
+      if (!a64_hfa(ir,ir->fields[record->field_start+i].type,element,count,depth+1)) return false;
+    return true;
+  }
+  if (dyn_type_is_array(type) && type-DYN_TYPE_ARRAY_BASE<ir->array_count) {
+    const DynIrArray *array=&ir->arrays[type-DYN_TYPE_ARRAY_BASE];
+    if (!array->length || array->length>4) return false;
+    for (uint64_t i=0;i<array->length;++i) if (!a64_hfa(ir,array->element,element,count,depth+1)) return false;
+    return true;
+  }
+  return false;
+}
+/* Mirrors codegen_abi.h: an HFA whose size equals its members, else none. */
+static bool a64_struct_hfa(const DynIrProgram *ir,DynType type,DynType *element,unsigned *count) {
+  uint32_t size,alignment; *element=0; *count=0;
+  return dyn_type_is_struct(type) && layout(ir,type,&size,&alignment,0) &&
+         a64_hfa(ir,type,element,count,0) && *count && size==*count*(memory_bits(*element)/8);
+}
+/* Results returned through a hidden pointer. AArch64 Dyn-only raw aggregates
+   always use memory; C structs follow AAPCS64. */
+static bool abi_memory(bool a64,const DynIrProgram *ir,DynType type) {
+  if (a64) {
+    if (raw_aggregate(ir,type)) return true;
+    DynType element; unsigned count; uint32_t size,alignment;
+    return dyn_type_is_struct(type) && !a64_struct_hfa(ir,type,&element,&count) &&
+           (!layout(ir,type,&size,&alignment,0) || size>16);
+  }
   if (raw_aggregate(ir,type)) {
     ArrayPart parts[512]; unsigned count=0,gp=0,fp=0;
     if (!array_parts(ir,type,0,parts,&count,0)) return true;
@@ -318,28 +346,59 @@ static bool abi_memory(const DynIrProgram *ir,DynType type) {
   }
   unsigned parts,cls[2]; return dyn_type_is_struct(type) && !abi_value(ir,type,&parts,cls);
 }
-static bool abi_assign(const DynIrProgram *ir,DynType type,unsigned *gp,unsigned *fp,unsigned *parts,int *classes,unsigned capacity) {
-  unsigned cls[2];
+static int abi_gp(bool a64,unsigned *gp) { return *gp<(a64?8u:6u)?(int)(*gp)++:-1; }
+static int abi_fp(unsigned *fp) { return *fp<8?(int)(*fp)++ + 8:-1; }
+/* Assign argument registers. *indirect means the single part is a pointer to a
+   caller-owned copy (AAPCS64 composites over 16 bytes). */
+static bool abi_assign(bool a64,const DynIrProgram *ir,DynType type,unsigned *gp,unsigned *fp,AbiPart *parts,unsigned *count,unsigned capacity,bool *indirect) {
+  unsigned cls[2]; uint32_t size=8,alignment;
+  *indirect=false; *count=0;
   if (raw_aggregate(ir,type)) {
-    ArrayPart leaves[512]; *parts=0;
-    if (!array_parts(ir,type,0,leaves,parts,0) || *parts>capacity) return false;
-    for (unsigned i=0;i<*parts;++i) classes[i]=float_type(leaves[i].type)?(*fp<8?(int)(*fp)++ + 8:-1):(*gp<6?(int)(*gp)++:-1);
+    ArrayPart leaves[512];
+    if (!array_parts(ir,type,0,leaves,count,0) || *count>capacity) return false;
+    for (unsigned i=0;i<*count;++i)
+      parts[i]=(AbiPart){leaves[i].offset,(memory_bits(leaves[i].type)+7)/8,float_type(leaves[i].type)?abi_fp(fp):abi_gp(a64,gp),leaves[i].type};
     return true;
   }
-  if (abi_memory(ir,type)) {
-    uint32_t size,alignment; if (!layout(ir,type,&size,&alignment,0)) return false;
-    *parts=(size+7)/8; if (*parts>capacity) return false;
-    for (unsigned i=0;i<*parts;++i) classes[i]=-1;
+  if (dyn_type_is_struct(type) && !layout(ir,type,&size,&alignment,0)) return false;
+  if (a64 && dyn_type_is_struct(type)) {
+    DynType element; unsigned members;
+    unsigned chunks=(size+7)/8;
+    if (a64_struct_hfa(ir,type,&element,&members) && *fp+members<=8) {
+      if (members>capacity) return false;
+      for (unsigned i=0;i<members;++i) parts[i]=(AbiPart){i*(memory_bits(element)/8),memory_bits(element)/8,abi_fp(fp),element};
+      *count=members; return true;
+    }
+    if (a64_struct_hfa(ir,type,&element,&members)) *fp=8;
+    else if (size>16) { *indirect=true; parts[0]=(AbiPart){0,8,abi_gp(true,gp),DYN_TYPE_RAWPTR}; *count=1; return true; }
+    bool registers=*gp+chunks<=8 && !(element && members);
+    if (!registers && !(element && members)) *gp=8;
+    if (chunks>capacity) return false;
+    for (unsigned i=0;i<chunks;++i)
+      parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,registers?abi_gp(true,gp):-1,DYN_TYPE_U64};
+    *count=chunks; return true;
+  }
+  if (a64) {
+    *count=descriptor(type)?2:1;
+    for (unsigned i=0;i<*count;++i)
+      parts[i]=(AbiPart){i*8,8,float_type(type)?abi_fp(fp):abi_gp(true,gp),descriptor(type)?DYN_TYPE_U64:type};
     return true;
   }
-  if (!abi_value(ir,type,parts,cls) || *parts>capacity) return false;
+  if (abi_memory(false,ir,type)) {
+    *count=(size+7)/8; if (*count>capacity) return false;
+    for (unsigned i=0;i<*count;++i) parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,-1,DYN_TYPE_U64};
+    return true;
+  }
+  if (!abi_value(ir,type,count,cls) || *count>capacity) return false;
   unsigned integers=0,floats=0;
-  for (unsigned i=0;i<*parts;++i) { if (cls[i]==2) ++floats; else ++integers; }
+  for (unsigned i=0;i<*count;++i) { if (cls[i]==2) ++floats; else ++integers; }
   bool spill=dyn_type_is_struct(type) && (*gp+integers>6 || *fp+floats>8);
-  for (unsigned i=0;i<*parts;++i) {
-    if (spill) classes[i]=-1;
-    else if (cls[i]==2) classes[i]=*fp<8?(int)(*fp)++ + 8:-1;
-    else classes[i]=*gp<6?(int)(*gp)++:-1;
+  for (unsigned i=0;i<*count;++i) {
+    int assigned;
+    if (spill) assigned=-1;
+    else if (cls[i]==2) assigned=abi_fp(fp);
+    else assigned=abi_gp(false,gp);
+    parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,assigned,DYN_TYPE_U64};
   }
   return true;
 }
@@ -348,65 +407,47 @@ static bool abi_supported(const DynIrProgram *ir,DynType type) {
   uint32_t size,alignment; return type==DYN_TYPE_VOID || value_type(ir, type) ||
     (dyn_type_is_struct(type) && layout(ir,type,&size,&alignment,0));
 }
-/* Load exactly the occupied bytes from [R11+offset] into R10. Padding must not
-   read beyond externally supplied storage at a page boundary. */
-static void load_chunk(BackendContext *ctx, unsigned offset,unsigned size) {
-  if (size==8) { CODE(0x4d,0x8b,0x93); word(ctx, offset); return; }
-  CODE(0x45,0x31,0xd2);
-  for (unsigned i=0;i<size;++i) {
-    CODE(0x4d,0x0f,0xb6,0x83); word(ctx, offset+i);
-    if (i) { CODE(0x49,0xc1,0xe0); byte(ctx, i*8); }
-    CODE(0x4d,0x09,0xc2);
-  }
-}
+static void load_chunk(BackendContext *ctx, unsigned offset,unsigned size) { isa_load_chunk(ctx, offset, size); }
 static void save_struct(BackendContext *ctx, uint32_t offset,DynType type) {
   uint32_t size,alignment; if (!layout(ctx->active_ir,type,&size,&alignment,0)) { ctx->text.failed=true; return; }
-  CODE(0x49,0x89,0xc3);
+  isa_move(ctx, R_11, R_A);
   for (unsigned part=0;part<(size+7)/8;++part) {
     load_chunk(ctx, part*8,size-part*8>8?8:size-part*8);
-    CODE(0x4c,0x89,0x95); word(ctx, offset+part*8);
+    isa_store(ctx, R_10, offset+part*8);
   }
 }
 static void checked_address(BackendContext *ctx, const DynIrFunction *f, DynType pointee) {
-  CODE(0x48,0x85,0xc0); guard(ctx, f,0x85,GUARD_NONNULL);
+  isa_test(ctx, R_A); guard(ctx, f, CC_NE, GUARD_NONNULL);
   uint32_t size,alignment;
   if (!layout(ctx->active_ir,pointee,&size,&alignment,0)) { ctx->text.failed=true; return; }
-  if (alignment>1) { CODE(0x48,0xa9); word(ctx, alignment-1); guard(ctx, f,0x84,GUARD_ALIGNED); }
-}
-static void overflow_guard(BackendContext *ctx, const DynIrFunction *f, bool signed_operation) {
-  /* JNO for signed operations; JNC for unsigned carry/borrow and MUL. */
-  guard(ctx, f, signed_operation ? 0x81 : 0x83, GUARD_OVERFLOW);
+  if (alignment>1) { isa_test_mask(ctx, alignment-1); guard(ctx, f, CC_E, GUARD_ALIGNED); }
 }
 static void divide(BackendContext *ctx, const DynIrFunction *f, bool signed_operation, bool remainder, unsigned bits) {
-  CODE(0x48, 0x85, 0xc9); /* test rcx, rcx */
-  guard(ctx, f, 0x85, GUARD_DIVIDE); /* jne: divisor must not be zero */
+  isa_test(ctx, R_C);
+  guard(ctx, f, CC_NE, GUARD_DIVIDE); /* divisor must not be zero */
   if (signed_operation) {
-    CODE(0x48, 0xba); immediate(ctx, UINT64_C(0) - (UINT64_C(1) << (bits-1))); /* movabs rdx, INT64_MIN */
-    CODE(0x48, 0x39, 0xd0, 0x0f, 0x85); /* cmp rax, rdx; jne safe */
-    size_t skip = ctx->text.n; word(ctx, 0);
-    CODE(0x48, 0x83, 0xf9, 0xff); /* cmp rcx, -1 */
-    guard(ctx, f, 0x85, GUARD_DIVISION_OVERFLOW);
-    patch_word(ctx, skip, (uint32_t)(ctx->text.n - (skip + 4)));
-    CODE(0x48, 0x99, 0x48, 0xf7, 0xf9); /* cqo; idiv rcx */
-  } else CODE(0x31, 0xd2, 0x48, 0xf7, 0xf1); /* xor edx, edx; div rcx */
-  if (remainder) CODE(0x48, 0x89, 0xd0); /* mov rax, rdx */
+    isa_immediate(ctx, R_D, UINT64_C(0) - (UINT64_C(1) << (bits-1)));
+    isa_compare(ctx, R_A, R_D);
+    size_t skip = isa_branch(ctx, CC_NE);
+    isa_compare_small(ctx, R_C, -1);
+    guard(ctx, f, CC_NE, GUARD_DIVISION_OVERFLOW);
+    isa_patch(ctx, skip, ctx->text.n);
+  }
+  isa_divide(ctx, signed_operation, remainder);
 }
 static void shift(BackendContext *ctx, const DynIrFunction *f, bool signed_operation, bool left, bool wraps, unsigned bits) {
   /* Unsigned comparison also rejects negative signed counts. This dominates
      the redundant narrowed-count check in LLVM's checked_integer lowering. */
-  CODE(0x48, 0x83, 0xf9); byte(ctx, bits); /* cmp rcx, 64 */
-  guard(ctx, f, 0x82, GUARD_SHIFT); /* jb: original count is in [0, 63] */
-  if (!left) {
-    CODE(0x48, 0xd3); byte(ctx, signed_operation ? 0xf8 : 0xe8); /* sar/shr rax, cl */
-    return;
-  }
-  if (!wraps) CODE(0x48, 0x89, 0xc2); /* preserve original rax in rdx */
-  CODE(0x48, 0xd3, 0xe0); /* shl rax, cl */
+  isa_compare_small(ctx, R_C, (int)bits);
+  guard(ctx, f, CC_B, GUARD_SHIFT); /* original count is in [0, bits) */
+  int restore = signed_operation ? SHIFT_ARITHMETIC : SHIFT_RIGHT;
+  if (!left) { isa_shift(ctx, R_A, restore); return; }
+  if (!wraps) isa_move(ctx, R_D, R_A); /* preserve the original value */
+  isa_shift(ctx, R_A, SHIFT_LEFT);
   if (!wraps) {
-    CODE(0x49, 0x89, 0xc0, 0x49, 0xd3); /* copy result to r8, restore by sar/shr */
-    byte(ctx, signed_operation ? 0xf8 : 0xe8);
-    CODE(0x49, 0x39, 0xd0); /* cmp r8, rdx */
-    guard(ctx, f, 0x84, GUARD_OVERFLOW); /* je: no value/sign bits lost */
+    isa_move(ctx, R_8, R_A); isa_shift(ctx, R_8, restore); /* shifting back must restore it */
+    isa_compare(ctx, R_8, R_D);
+    guard(ctx, f, CC_E, GUARD_OVERFLOW); /* no value/sign bits lost */
   }
 }
 static bool float_type(DynType t) { return t == DYN_TYPE_F32 || t == DYN_TYPE_F64; }
@@ -418,14 +459,14 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *, const Dy
 static bool expression(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
                        DynExprId id, unsigned depth) {
   if (depth > MAX_DEPTH || id >= ir->expression_count) return false;
-  if (ctx->unwinding && ctx->captured_offsets[id] && aggregate(ir, ir->expressions[id].type)) { CODE(0x48,0x8d,0x85); word(ctx, ctx->captured_offsets[id]); return !ctx->text.failed; }
-  if (ctx->unwinding && ctx->captured_offsets[id]) { CODE(0x48,0x8b,0x85); word(ctx, ctx->captured_offsets[id]); if (descriptor(ir->expressions[id].type)) { CODE(0x48,0x8b,0x95); word(ctx, ctx->captured_offsets[id]+8); } return !ctx->text.failed; }
+  if (ctx->unwinding && ctx->captured_offsets[id] && aggregate(ir, ir->expressions[id].type)) { isa_lea(ctx, R_A, ctx->captured_offsets[id]); return !ctx->text.failed; }
+  if (ctx->unwinding && ctx->captured_offsets[id]) { isa_load(ctx, R_A, ctx->captured_offsets[id]); if (descriptor(ir->expressions[id].type)) isa_load(ctx, R_D, ctx->captured_offsets[id]+8); return !ctx->text.failed; }
   return expression_value(ctx, ir, f, &ir->expressions[id], depth);
 }
 static bool index_expression(BackendContext *ctx, const DynIrProgram *ir,const DynIrFunction *f,DynExprId id,unsigned depth) {
   if (!expression(ctx, ir,f,id,depth)) return false;
   unsigned bits=integer_bits(ir->expressions[id].type);
-  if (bits<64) { CODE(0x48,0xba); immediate(ctx, (UINT64_C(1)<<bits)-1); CODE(0x48,0x21,0xd0); }
+  if (bits<64) { isa_immediate(ctx, R_D, (UINT64_C(1)<<bits)-1); isa_alu(ctx, ALU_AND, R_A, R_D); }
   return !ctx->text.failed;
 }
 static bool local_slot(BackendContext *ctx, const DynIrFunction *f, uint64_t id, uint32_t *offset) {
@@ -438,10 +479,10 @@ static bool address(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunc
   const DynIrExpr *e=&ir->expressions[id]; uint32_t offset;
   if (e->kind==DYN_EXPR_NAME) {
     if (!local_slot(ctx, f,e->integer,&offset)) return false;
-    CODE(0x48); byte(ctx,ctx->local_alias[e->integer-f->local_start]?0x8b:0x8d); byte(ctx,0x85); word(ctx, offset);
+    if (ctx->local_alias[e->integer-f->local_start]) isa_load(ctx, R_A, offset); else isa_lea(ctx, R_A, offset);
   } else if (e->kind==DYN_EXPR_GLOBAL) {
     if (e->integer>=ir->global_count) return false;
-    CODE(0x48,0x8b,0x05); relocate(ctx, ctx->global_symbols[e->integer],R_X86_64_GOTPCREL,-4); word(ctx, 0);
+    isa_symbol_address(ctx, R_A, ctx->global_symbols[e->integer]);
   } else if (e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_DEREF) {
     uint32_t size,alignment;
     if (!layout(ir,e->type,&size,&alignment,0) || dyn_type_is_function(e->type) || !expression(ctx, ir,f,e->left,depth+1)) return false;
@@ -455,7 +496,7 @@ static bool address(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunc
     } else if (!address(ctx, ir,f,e->left,depth+1)) return false;
     uint32_t offset;
     if (!field_offset(ir,type,(uint32_t)e->integer,&offset)) return false;
-    CODE(0x48,0x05); word(ctx, offset);
+    isa_add_immediate(ctx, offset);
   } else if (e->kind==DYN_EXPR_INDEX) {
     if (e->left>=ir->expression_count || e->right>=ir->expression_count) return false;
     DynType type=ir->expressions[e->left].type;
@@ -465,43 +506,66 @@ static bool address(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunc
     uint32_t size,alignment;
     if (!layout(ir,e->type,&size,&alignment,0) || !expression(ctx, ir,f,e->right,depth+1)) return false;
     unsigned bits=integer_bits(ir->expressions[e->right].type);
-    if (bits<64) { CODE(0x48,0xba); immediate(ctx, (UINT64_C(1)<<bits)-1); CODE(0x48,0x21,0xd0); }
-    CODE(0x50); ++ctx->stack_slots;
+    if (bits<64) { isa_immediate(ctx, R_D, (UINT64_C(1)<<bits)-1); isa_alu(ctx, ALU_AND, R_A, R_D); }
+    isa_push(ctx, R_A);
     if (array) {
       if (!address(ctx, ir,f,e->left,depth+1)) return false;
-      CODE(0x48,0xba); immediate(ctx, ir->arrays[type-DYN_TYPE_ARRAY_BASE].length);
+      isa_immediate(ctx, R_D, ir->arrays[type-DYN_TYPE_ARRAY_BASE].length);
     } else if (!expression(ctx, ir,f,e->left,depth+1)) return false;
-    CODE(0x59); --ctx->stack_slots;
-    CODE(0x48,0x39,0xd1); guard(ctx, f,0x82,GUARD_INDEX);
-    CODE(0x48,0x69,0xc9); word(ctx, size); CODE(0x48,0x01,0xc8);
+    isa_pop(ctx, R_C);
+    isa_compare(ctx, R_C, R_D); guard(ctx, f, CC_B, GUARD_INDEX);
+    isa_scale(ctx, R_C, size); isa_alu(ctx, ALU_ADD, R_A, R_C);
   } else if (ctx->temporary_offsets[id]) return expression(ctx, ir,f,id,depth+1);
   else return false;
   return !ctx->text.failed && !ctx->relocation_failed;
 }
 static bool protect_call(BackendContext *ctx, const DynIrProgram *ir,const DynIrFunction *f) {
-  unsigned padding=ctx->stack_slots&1;
-  if (padding) CODE(0x48,0x83,0xec,8);
-  CODE(0x48,0x8d,0xbd); word(ctx, ctx->unwind_offset); runtime_call(ctx, 3);
-  CODE(0x85,0xc0,0x0f,0x84); size_t normal=ctx->text.n; word(ctx, 0);
-  CODE(0x48,0x8d,0xa5); word(ctx, 0u-ctx->frame_bytes);
+  bool padding=isa_align_call(ctx);
+  isa_lea(ctx, isa_argument(ctx, 0), ctx->unwind_offset); runtime_call(ctx, 3);
+  isa_test32(ctx); size_t normal=isa_branch(ctx, CC_E);
+  isa_reset_stack(ctx);
   unsigned saved_stack=ctx->stack_slots; ctx->stack_slots=0;
   if (!emit_defers(ctx, ir,f,0)) return false;
   ctx->stack_slots=saved_stack;
-  runtime_call(ctx, 6); CODE(0x0f,0x0b);
-  patch_word(ctx, normal,(uint32_t)(ctx->text.n-normal-4));
-  CODE(0x48,0x8d,0xbd); word(ctx, ctx->unwind_offset); runtime_call(ctx, 4);
-  if (padding) CODE(0x48,0x83,0xc4,8);
+  runtime_call(ctx, 6); isa_trap(ctx);
+  isa_patch(ctx, normal, ctx->text.n);
+  isa_lea(ctx, isa_argument(ctx, 0), ctx->unwind_offset); runtime_call(ctx, 4);
+  isa_unalign_call(ctx, padding);
   return !ctx->text.failed;
 }
 static bool initialize(BackendContext *ctx, const DynIrProgram *,const DynIrFunction *,DynType,DynExprId,unsigned);
+static bool a64_struct_result(BackendContext *ctx, const DynIrProgram *ir, DynType type, uint32_t offset);
+static void a64_struct_return(BackendContext *ctx, const DynIrProgram *ir, DynType type);
+/* Store a returned struct from its result registers into the temporary at offset. */
+static bool isa_struct_result(BackendContext *ctx, const DynIrProgram *ir, DynType type, bool sret, uint32_t offset) {
+  unsigned parts=0,cls[2],integers=0,floats=0;
+  if (sret) return true;
+  if (ctx->a64) return a64_struct_result(ctx, ir, type, offset);
+  if (!abi_value(ir,type,&parts,cls)) return false;
+  for (unsigned part=0;part<parts;++part) {
+    if (cls[part]==2) { CODE(0x66,0x49,0x0f,0x7e); byte(ctx, 0xc2+8*floats++); CODE(0x4c,0x89,0x95); }
+    else { CODE(0x48,0x89); byte(ctx, integers++?0x95:0x85); }
+    word(ctx, offset+part*8);
+  }
+  return true;
+}
 /* Calls keep their ABI classification arrays out of the recursive expression
    frame, so nested expressions use little stack per level. */
+typedef struct { AbiPart parts[512]; unsigned first[514]; bool indirect[513]; } CallPlan;
+static bool plan_argument(BackendContext *ctx, const DynIrProgram *ir, CallPlan *plan, unsigned index, DynType type,
+                          unsigned *gp, unsigned *fp, unsigned *argument_count) {
+  unsigned count;
+  plan->first[index]=*argument_count;
+  if (!abi_assign(ctx->a64,ir,type,gp,fp,plan->parts+*argument_count,&count,512-*argument_count,&plan->indirect[index])) return false;
+  *argument_count+=count; plan->first[index+1]=*argument_count;
+  return true;
+}
 static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
-                      const DynIrExpr *e, unsigned depth, int *classes) {
+                      const DynIrExpr *e, unsigned depth, CallPlan *plan) {
   bool indirect=e->kind == DYN_EXPR_INDIRECT_CALL;
   if (e->item_count > 512 || (uint64_t)e->item_start+e->item_count > ir->item_count) return false;
-  bool sret=abi_memory(ir,e->type);
-  unsigned argument_count=0,gp=sret?1:0,fp=0,outgoing=0;
+  bool sret=abi_memory(ctx->a64,ir,e->type);
+  unsigned argument_count=0,gp=sret&&!ctx->a64?1:0,fp=0,outgoing=0;
   const DynIrFunction *callee=NULL;
   const DynIrFnType *signature=NULL;
   bool packed=false,variadic=false; unsigned fixed=0; DynType pack_type=DYN_TYPE_VOID;
@@ -513,13 +577,11 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
     variadic=signature->variadic; fixed=signature->param_count;
     for (uint32_t i=0;i<e->item_count;++i) {
       DynType type=i<fixed?ir->fn_type_params[signature->param_start+i]:ir->expressions[ir->items[e->item_start+i].expression].type;
-      unsigned parts;
-      if (!abi_assign(ir,type,&gp,&fp,&parts,classes+argument_count,512-argument_count)) return false;
-      argument_count+=parts;
+      if (!plan_argument(ctx,ir,plan,i,type,&gp,&fp,&argument_count)) return false;
     }
     if (!expression(ctx, ir,f,e->left,depth+1)) return false;
-    CODE(0x48,0x85,0xc0); guard(ctx, f,0x85,GUARD_FUNCTION);
-    CODE(0x50); ++ctx->stack_slots;
+    isa_test(ctx, R_A); guard(ctx, f, CC_NE, GUARD_FUNCTION);
+    isa_push(ctx, R_A);
   } else {
     if (e->integer >= ir->function_count) return false;
     callee=&ir->functions[e->integer];
@@ -533,26 +595,28 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
     }
     for (uint32_t i=0;i<(packed?fixed+1:e->item_count);++i) {
       DynType type=i<fixed?ir->params[callee->param_start+i].type:packed?callee->variadic_type:ir->expressions[ir->items[e->item_start+i].expression].type;
-      unsigned parts;
-      if (!abi_assign(ir,type,&gp,&fp,&parts,classes+argument_count,512-argument_count)) return false;
-      argument_count+=parts;
+      if (!plan_argument(ctx,ir,plan,i,type,&gp,&fp,&argument_count)) return false;
     }
   }
   /* Keep arguments on the expression stack in source order. Nested calls
      cannot clobber earlier arguments; registers are loaded only afterwards. */
   for (uint32_t i = 0; i < (packed?fixed:e->item_count); ++i) {
-    if (!expression(ctx, ir, f, ir->items[e->item_start + i].expression, depth + 1)) return false;
-    DynType type=ir->expressions[ir->items[e->item_start+i].expression].type;
-    if (raw_aggregate(ir,type)) {
-      ArrayPart *leaves=ctx->call_leaves;unsigned count=0;
-      if (!array_parts(ir,type,0,leaves,&count,0)) return false;
-      CODE(0x49,0x89,0xc3);
-      for (unsigned part=0;part<count;++part) { load_chunk(ctx, leaves[part].offset,(memory_bits(leaves[part].type)+7)/8); CODE(0x41,0x52); ++ctx->stack_slots; }
-    } else if (dyn_type_is_struct(type)) {
-      uint32_t size,alignment; if (!layout(ir,type,&size,&alignment,0)) return false;
-      CODE(0x49,0x89,0xc3);
-      for (unsigned part=0;part<(size+7)/8;++part) { load_chunk(ctx, part*8,size-part*8>8?8:size-part*8); CODE(0x41,0x52); ++ctx->stack_slots; }
-    } else { CODE(0x50); ++ctx->stack_slots; if (descriptor(type)) { CODE(0x52); ++ctx->stack_slots; } }
+    DynExprId argument=ir->items[e->item_start + i].expression;
+    if (!expression(ctx, ir, f, argument, depth + 1)) return false;
+    DynType type=ir->expressions[argument].type;
+    if (plan->indirect[i]) {
+      /* AAPCS64: pass a pointer to a caller-owned copy the callee may modify. */
+      uint32_t size,alignment,copy=ctx->copy_offsets[argument];
+      if (!copy || !layout(ir,type,&size,&alignment,0)) return false;
+      isa_push(ctx, R_A); isa_lea(ctx, R_A, copy); isa_pop(ctx, R_C);
+      isa_push(ctx, R_A); isa_move(ctx, R_A, R_C); isa_copy(ctx, size);
+      isa_lea(ctx, R_A, copy); isa_push(ctx, R_A);
+    } else if (aggregate(ir,type)) {
+      isa_move(ctx, R_11, R_A);
+      for (unsigned part=plan->first[i];part<plan->first[i+1];++part) {
+        load_chunk(ctx, plan->parts[part].offset, plan->parts[part].size); isa_push(ctx, R_10);
+      }
+    } else { isa_push(ctx, R_A); if (descriptor(type)) isa_push(ctx, R_D); }
   }
   if (packed) {
     unsigned count=e->item_count-fixed; uint32_t offset=ctx->pack_offsets[e-ir->expressions],size,alignment;
@@ -563,48 +627,42 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
       DynType type=ir->expressions[argument].type;
       if (pack_type==DYN_TYPE_ANY) {
         uint32_t value_size,a; if (!layout(ir,type,&value_size,&a,0)) return false;
-        CODE(0x48,0x8d,0x85); word(ctx,boxed);
+        isa_lea(ctx, R_A, boxed);
         if (!initialize(ctx,ir,f,type,argument,depth+1)) return false;
-        CODE(0x48,0xb8); immediate(ctx,type); CODE(0x48,0x89,0x85); word(ctx,offset+i*size);
-        CODE(0x48,0x8d,0x85); word(ctx,boxed); CODE(0x48,0x89,0x85); word(ctx,offset+i*size+8);
+        isa_immediate(ctx, R_A, type); isa_store(ctx, R_A, offset+i*size);
+        isa_lea(ctx, R_A, boxed); isa_store(ctx, R_A, offset+i*size+8);
         boxed+=(value_size?value_size+7:8)/8*8;
       } else {
-        CODE(0x48,0x8d,0x85); word(ctx,offset+i*size);
+        isa_lea(ctx, R_A, offset+i*size);
         if (!initialize(ctx,ir,f,pack_type,argument,depth+1)) return false;
       }
     }
-    if (count) { CODE(0x48,0x8d,0x85); word(ctx,offset); } else CODE(0x31,0xc0);
-    CODE(0x50,0xb8); word(ctx,count); CODE(0x50); ctx->stack_slots+=2;
+    if (count) isa_lea(ctx, R_A, offset); else isa_zero(ctx, R_A);
+    isa_push(ctx, R_A); isa_small_immediate(ctx, R_A, count); isa_push(ctx, R_A);
   }
   bool protected_call=ctx->defer_count && !ctx->unwinding;
   if (protected_call && !protect_call(ctx, ir,f)) return false;
-  const unsigned char registers[] = {0xbc, 0xb4, 0x94, 0x8c, 0x84, 0x8c};
+  unsigned slot=isa_slot(ctx);
   for (uint32_t i=0;i<argument_count;++i) {
-    bool floating=classes[i]>=8;
-    if (classes[i]<0) { ++outgoing; continue; }
-    if (floating) { CODE(0xf3,0x0f,0x7e); byte(ctx, 0x84+8*(unsigned)(classes[i]-8)); byte(ctx, 0x24); }
-    else { byte(ctx, classes[i]<4?0x48:0x4c); byte(ctx, 0x8b); byte(ctx, registers[classes[i]]); byte(ctx, 0x24); }
-    word(ctx, 8*(argument_count-i-1));
+    if (plan->parts[i].cls<0) { ++outgoing; continue; }
+    isa_argument_load(ctx, plan->parts[i].cls, slot*(argument_count-i-1));
   }
-  unsigned padding=(ctx->stack_slots+outgoing)&1, reserved=(outgoing+padding)*8;
-  if (reserved) { CODE(0x48,0x81,0xec); word(ctx, reserved); }
+  /* Outgoing stack arguments occupy eight-byte slots; the area keeps SP 16-byte aligned. */
+  unsigned reserved=ctx->a64 ? (outgoing*8+15)/16*16 : (outgoing+((ctx->stack_slots+outgoing)&1))*8;
+  isa_reserve(ctx, reserved);
   unsigned spilled=0;
-  for (uint32_t i=0;i<argument_count;++i) if (classes[i]<0) {
-    CODE(0x48,0x8b,0x84,0x24); word(ctx, reserved+8*(argument_count-i-1));
-    CODE(0x48,0x89,0x84,0x24); word(ctx, 8*spilled++);
-  }
-  if (sret) { CODE(0x48,0x8d,0xbd); word(ctx, ctx->temporary_offsets[e-ir->expressions]); }
-  if (variadic) { byte(ctx,0xb8); word(ctx,fp); } /* SysV vector register count in AL. */
-  if (indirect) {
-    CODE(0x4c,0x8b,0x9c,0x24); word(ctx, reserved+argument_count*8);
-    CODE(0x41,0xff,0xd3); /* call r11 */
-  } else { byte(ctx, 0xe8); relocate(ctx, ctx->function_symbols[e->integer], R_X86_64_PLT32, -4); word(ctx, 0); }
-  unsigned cleanup = (argument_count + indirect) * 8 + reserved;
-  if (cleanup) { CODE(0x48, 0x81, 0xc4); word(ctx, cleanup); }
+  for (uint32_t i=0;i<argument_count;++i) if (plan->parts[i].cls<0)
+    isa_stack_copy(ctx, reserved+slot*(argument_count-i-1), 8*spilled++);
+  if (sret) isa_result_pointer(ctx, ctx->temporary_offsets[e-ir->expressions]);
+  if (variadic && !ctx->a64) { byte(ctx,0xb8); word(ctx,fp); } /* SysV vector register count in AL. */
+  if (indirect) isa_call_stack(ctx, reserved+argument_count*slot);
+  else isa_call_symbol(ctx, ctx->function_symbols[e->integer]);
+  isa_release(ctx, (argument_count + indirect) * slot + reserved);
   ctx->stack_slots -= argument_count + indirect;
   if (raw_aggregate(ir,e->type)) {
     DynExprId id=(DynExprId)(e-ir->expressions); if (!ctx->temporary_offsets[id]) return false;
     if (!sret) {
+      if (ctx->a64) return false; /* AArch64 returns raw aggregates through memory */
       ArrayPart *leaves=ctx->call_leaves; unsigned count=0,gp=0,fp=0;
       if (!array_parts(ir,e->type,0,leaves,&count,0)) return false;
       /* Preserve the three GP/two SSE return registers before scratch loads. */
@@ -614,36 +672,29 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
         if (float_type(type) && fp>=2) {
           byte(ctx, type==DYN_TYPE_F32?0xd9:0xdd); byte(ctx, 0x9d); word(ctx, at); ++fp;
         } else {
-          unsigned slot=float_type(type)?3+fp++:gp++;
-          CODE(0x48,0x8b,0x84,0x24); word(ctx, 8*(4-slot)); normalize(ctx, type);
-          CODE(0x4c,0x8d,0x9d); word(ctx, at); store_memory(ctx, type);
+          unsigned from=float_type(type)?3+fp++:gp++;
+          isa_peek(ctx, R_A, 4-from); normalize(ctx, type);
+          isa_lea(ctx, R_11, at); store_memory(ctx, type);
         }
       }
       CODE(0x48,0x83,0xc4,40); ctx->stack_slots-=5;
     }
-    CODE(0x48,0x8d,0x85); word(ctx, ctx->temporary_offsets[id]);
+    isa_lea(ctx, R_A, ctx->temporary_offsets[id]);
   } else if (dyn_type_is_struct(e->type)) {
-    unsigned parts,cls[2],integers=0,floats=0; DynExprId id=(DynExprId)(e-ir->expressions);
-    if (!ctx->temporary_offsets[id]) return false;
-    parts=0;
-    if (!sret && !abi_value(ir,e->type,&parts,cls)) return false;
-    for (unsigned part=0;part<parts;++part) {
-      if (cls[part]==2) { CODE(0x66,0x49,0x0f,0x7e); byte(ctx, 0xc2+8*floats++); CODE(0x4c,0x89,0x95); }
-      else { CODE(0x48,0x89); byte(ctx, integers++?0x95:0x85); }
-      word(ctx, ctx->temporary_offsets[id]+part*8);
-    }
-    CODE(0x48,0x8d,0x85); word(ctx, ctx->temporary_offsets[id]);
+    DynExprId id=(DynExprId)(e-ir->expressions);
+    if (!ctx->temporary_offsets[id] || !isa_struct_result(ctx, ir, e->type, sret, ctx->temporary_offsets[id])) return false;
+    isa_lea(ctx, R_A, ctx->temporary_offsets[id]);
   }
-  if (float_type(e->type)) CODE(0x66,0x48,0x0f,0x7e,0xc0); /* xmm0 result to bit carrier */
+  if (float_type(e->type)) isa_float_result(ctx, e->type==DYN_TYPE_F32); /* floating result to bit carrier */
   normalize(ctx, e->type);
   if (protected_call) {
-    CODE(0x48,0x89,0x85); word(ctx, ctx->call_offset);
-    if (descriptor(e->type)) { CODE(0x48,0x89,0x95); word(ctx, ctx->call_offset+8); }
-    if (ctx->stack_slots&1) CODE(0x48,0x83,0xec,8);
-    CODE(0x48,0x8d,0xbd); word(ctx, ctx->unwind_offset); runtime_call(ctx, 5);
-    if (ctx->stack_slots&1) CODE(0x48,0x83,0xc4,8);
-    CODE(0x48,0x8b,0x85); word(ctx, ctx->call_offset);
-    if (descriptor(e->type)) { CODE(0x48,0x8b,0x95); word(ctx, ctx->call_offset+8); }
+    isa_store(ctx, R_A, ctx->call_offset);
+    if (descriptor(e->type)) isa_store(ctx, R_D, ctx->call_offset+8);
+    bool padding=isa_align_call(ctx);
+    isa_lea(ctx, isa_argument(ctx, 0), ctx->unwind_offset); runtime_call(ctx, 5);
+    isa_unalign_call(ctx, padding);
+    isa_load(ctx, R_A, ctx->call_offset);
+    if (descriptor(e->type)) isa_load(ctx, R_D, ctx->call_offset+8);
   }
   return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed;
 }
@@ -651,10 +702,10 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
    owns a heap block; array leaves are filled and consumed without recursion. */
 static bool call_value(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
                        const DynIrExpr *e, unsigned depth) {
-  int *classes = malloc(512 * sizeof(*classes));
-  if (!classes) return false;
-  bool ok = call_with(ctx, ir, f, e, depth, classes);
-  free(classes);
+  CallPlan *plan = malloc(sizeof(*plan));
+  if (!plan) return false;
+  bool ok = call_with(ctx, ir, f, e, depth, plan);
+  free(plan);
   return ok;
 }
 static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
@@ -665,55 +716,51 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
       if (i<e->item_count) {
         DynExprId id=ir->items[e->item_start+i].expression;
         if (id>=ir->expression_count || !scalar(ir,ir->expressions[id].type) || !expression(ctx,ir,f,id,depth+1)) return false;
-      } else CODE(0x31,0xc0);
-      CODE(0x50); ++ctx->stack_slots;
+      } else isa_zero(ctx, R_A);
+      isa_push(ctx, R_A);
     }
-    const unsigned char regs[]={0xbc,0xb4,0x94,0x8c,0x84,0x8c};
-    for (unsigned i=0;i<6;++i) { byte(ctx,i<4?0x48:0x4c); CODE(0x8b); byte(ctx,regs[i]); byte(ctx,0x24); word(ctx,8*(6-i)); }
-    unsigned reserved=(1+((ctx->stack_slots+1)&1))*8;
-    CODE(0x48,0x8b,0x04,0x24,0x48,0x81,0xec); word(ctx,reserved); CODE(0x48,0x89,0x04,0x24);
-    runtime_call(ctx,9); CODE(0x48,0x81,0xc4); word(ctx,reserved+56); ctx->stack_slots-=7;
+    isa_syscall(ctx);
     return !ctx->text.failed && !ctx->relocation_failed;
   }
   if (e->kind==DYN_EXPR_ENUM) {
     if (!dyn_type_is_enum(e->type) || e->type-DYN_TYPE_ENUM_BASE>=ir->enum_count || e->integer>=ir->variant_count) return false;
     const DynIrEnum *en=&ir->enums[e->type-DYN_TYPE_ENUM_BASE];
     const DynIrVariant *variant=&ir->variants[e->integer];
-    if (!en->has_payload) { CODE(0x48,0xb8); immediate(ctx,variant->tag); normalize(ctx,e->type); return true; }
+    if (!en->has_payload) { isa_immediate(ctx, R_A, variant->tag); normalize(ctx,e->type); return true; }
     DynExprId id=(DynExprId)(e-ir->expressions); uint32_t offset=ctx->temporary_offsets[id];
     if (!offset) return false;
-    CODE(0x48,0x8d,0x85); word(ctx,offset);
+    isa_lea(ctx, R_A, offset);
     if (!initialize(ctx,ir,f,e->type,DYN_NO_EXPR,depth+1)) return false;
-    CODE(0x4c,0x8d,0x9d); word(ctx,offset); CODE(0x48,0xb8); immediate(ctx,variant->tag); store_memory(ctx,en->tag_type);
+    isa_lea(ctx, R_11, offset); isa_immediate(ctx, R_A, variant->tag); store_memory(ctx,en->tag_type);
     if (variant->payload_type!=DYN_TYPE_VOID) {
       if (e->item_count!=1 || e->item_start>=ir->item_count) return false;
       uint32_t tag_size=(memory_bits(en->tag_type)+7)/8, a=(uint32_t)en->payload_alignment;
-      CODE(0x48,0x8d,0x85); word(ctx,offset+((tag_size+a-1)&~(a-1)));
+      isa_lea(ctx, R_A, offset+((tag_size+a-1)&~(a-1)));
       if (!initialize(ctx,ir,f,variant->payload_type,ir->items[e->item_start].expression,depth+1)) return false;
     }
-    CODE(0x48,0x8d,0x85); word(ctx,offset); return !ctx->text.failed;
+    isa_lea(ctx, R_A, offset); return !ctx->text.failed;
   }
   if (e->kind==DYN_EXPR_CONVERT && e->type==DYN_TYPE_ANY) {
     if (e->left>=ir->expression_count) return false;
     uint32_t offset=ctx->temporary_offsets[e-ir->expressions]; if (!offset) return false;
     DynType source=ir->expressions[e->left].type;
-    CODE(0x48,0x8d,0x85); word(ctx,offset);
+    isa_lea(ctx, R_A, offset);
     if (!initialize(ctx,ir,f,source,e->left,depth+1)) return false;
-    CODE(0x48,0x8d,0x95); word(ctx,offset); CODE(0x48,0xb8); immediate(ctx,source); return !ctx->text.failed;
+    isa_lea(ctx, R_D, offset); isa_immediate(ctx, R_A, source); return !ctx->text.failed;
   }
   if (e->kind==DYN_EXPR_STRUCT || e->kind==DYN_EXPR_ARRAY) {
     DynExprId id=(DynExprId)(e-ir->expressions);
     if (!ctx->temporary_offsets[id]) return false;
-    CODE(0x48,0x8d,0x85); word(ctx, ctx->temporary_offsets[id]);
+    isa_lea(ctx, R_A, ctx->temporary_offsets[id]);
     return initialize(ctx, ir,f,e->type,id,depth+1);
   }
   if (descriptor(e->type)) {
-    if (e->kind==DYN_EXPR_NIL) { CODE(0x31,0xc0,0x31,0xd2); return true; }
+    if (e->kind==DYN_EXPR_NIL) { isa_zero(ctx, R_A); isa_zero(ctx, R_D); return true; }
     if (e->kind==DYN_EXPR_STRING) {
       if (e->integer>=ir->string_count) return false;
       const DynIrString *string=&ir->strings[e->integer]; size_t at=literal(ctx, (const char*)string->data,string->length);
-      CODE(0x48,0x8d,0x05); relocate(ctx, 1,R_X86_64_PC32,(int64_t)at-4); word(ctx, 0);
-      CODE(0x48,0xba); immediate(ctx, string->length); return !ctx->rodata.failed;
+      isa_rodata_address(ctx, R_A, at);
+      isa_immediate(ctx, R_D, string->length); return !ctx->rodata.failed;
     }
     if (e->kind==DYN_EXPR_CONVERT) {
       return e->left<ir->expression_count && descriptor(ir->expressions[e->left].type) && expression(ctx, ir,f,e->left,depth+1);
@@ -721,31 +768,31 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     if (e->kind==DYN_EXPR_GLOBAL || e->kind==DYN_EXPR_NAME || e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX ||
         (e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_DEREF)) {
       if (!address(ctx, ir,f,(DynExprId)(e-ir->expressions),depth+1)) return false;
-      CODE(0x48,0x8b,0x50,8,0x48,0x8b,0x00); return !ctx->text.failed;
+      isa_load_descriptor(ctx); return !ctx->text.failed;
     }
     if (e->kind==DYN_EXPR_SLICE) {
       if (e->left>=ir->expression_count) return false;
       DynType base=ir->expressions[e->left].type; bool raw=dyn_type_is_pointer(base);
       if (dyn_type_is_array(base)) {
         if (base-DYN_TYPE_ARRAY_BASE>=ir->array_count || !address(ctx, ir,f,e->left,depth+1)) return false;
-        CODE(0x48,0xba); immediate(ctx, ir->arrays[base-DYN_TYPE_ARRAY_BASE].length);
+        isa_immediate(ctx, R_D, ir->arrays[base-DYN_TYPE_ARRAY_BASE].length);
       } else if (raw) {
         if (base-DYN_TYPE_POINTER_BASE>=ir->pointer_count || !expression(ctx, ir,f,e->left,depth+1)) return false;
-        checked_address(ctx, f,ir->pointers[base-DYN_TYPE_POINTER_BASE].pointee); CODE(0x31,0xd2);
+        checked_address(ctx, f,ir->pointers[base-DYN_TYPE_POINTER_BASE].pointee); isa_zero(ctx, R_D);
       } else if (!descriptor(base) || !expression(ctx, ir,f,e->left,depth+1)) return false;
-      CODE(0x50,0x52); ctx->stack_slots+=2;
-      if (e->right==DYN_NO_EXPR) CODE(0x31,0xc0);
+      isa_push(ctx, R_A); isa_push(ctx, R_D);
+      if (e->right==DYN_NO_EXPR) isa_zero(ctx, R_A);
       else if (!index_expression(ctx, ir,f,e->right,depth+1)) return false;
-      CODE(0x50); ++ctx->stack_slots;
-      if (e->integer==DYN_NO_EXPR && !raw) CODE(0x48,0x8b,0x44,0x24,8);
+      isa_push(ctx, R_A);
+      if (e->integer==DYN_NO_EXPR && !raw) isa_peek_short(ctx, R_A, 1);
       else if (!index_expression(ctx, ir,f,(DynExprId)e->integer,depth+1)) return false;
-      CODE(0x59); --ctx->stack_slots; /* start RCX, end RAX */
-      CODE(0x48,0x39,0xc1); guard(ctx, f,0x86,GUARD_SLICE_ORDER);
-      if (!raw) { CODE(0x48,0x3b,0x04,0x24); guard(ctx, f,0x86,GUARD_SLICE_BOUNDS); }
-      CODE(0x48,0x89,0xc2,0x48,0x29,0xca,0x48,0x83,0xc4,8,0x58); ctx->stack_slots-=2;
+      isa_pop(ctx, R_C); /* start C, end A */
+      isa_compare(ctx, R_C, R_A); guard(ctx, f, CC_BE, GUARD_SLICE_ORDER);
+      if (!raw) { isa_compare_top(ctx); guard(ctx, f, CC_BE, GUARD_SLICE_BOUNDS); }
+      isa_move(ctx, R_D, R_A); isa_alu(ctx, ALU_SUB, R_D, R_C); isa_drop(ctx, 1); isa_pop(ctx, R_A);
       DynType element=e->type==DYN_TYPE_STRING?DYN_TYPE_U8:ir->slices[e->type-DYN_TYPE_SLICE_BASE].element;
       uint32_t size,alignment; if (!layout(ir,element,&size,&alignment,0)) return false;
-      CODE(0x48,0x69,0xc9); word(ctx, size); CODE(0x48,0x01,0xc8); return !ctx->text.failed;
+      isa_scale(ctx, R_C, size); isa_alu(ctx, ALU_ADD, R_A, R_C); return !ctx->text.failed;
     }
   }
   if (!scalar(ir, e->type) && (e->kind==DYN_EXPR_GLOBAL || e->kind==DYN_EXPR_NAME || e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX ||
@@ -760,43 +807,42 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     DynType type=ir->expressions[e->left].type;
     if (descriptor(type)) {
       if (!expression(ctx, ir,f,e->left,depth+1)) return false;
-      CODE(0x48,0x89,0xd0); return !ctx->text.failed;
+      isa_move(ctx, R_A, R_D); return !ctx->text.failed;
     }
     if (!dyn_type_is_array(type) || type-DYN_TYPE_ARRAY_BASE>=ir->array_count) return false;
-    CODE(0x48,0xb8); immediate(ctx, ir->arrays[type-DYN_TYPE_ARRAY_BASE].length); return !ctx->text.failed;
+    isa_immediate(ctx, R_A, ir->arrays[type-DYN_TYPE_ARRAY_BASE].length); return !ctx->text.failed;
   }
   if (!value_type(ir, e->type) && !((e->type==DYN_TYPE_VOID || abi_supported(ir,e->type)) && (e->kind==DYN_EXPR_CALL || e->kind==DYN_EXPR_INDIRECT_CALL))) return false;
   if (e->kind == DYN_EXPR_FLOAT) {
     uint64_t bits=0;
     if (e->type==DYN_TYPE_F32) { float value=(float)e->floating; uint32_t raw; memcpy(&raw,&value,4); bits=raw; }
     else memcpy(&bits,&e->floating,8);
-    CODE(0x48,0xb8); immediate(ctx, bits); return !ctx->text.failed;
+    isa_immediate(ctx, R_A, bits); return !ctx->text.failed;
   }
   if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR || e->kind == DYN_EXPR_BOOL) {
     uint64_t n = e->kind == DYN_EXPR_BOOL ? e->boolean : e->integer;
-    CODE(0x48, 0xb8); /* movabs rax, immediate */
-    immediate(ctx, n); normalize(ctx, e->type);
+    isa_immediate(ctx, R_A, n); normalize(ctx, e->type);
     return true;
   }
   if (e->kind == DYN_EXPR_NAME) {
     uint32_t offset;
     if (!local_slot(ctx, f, e->integer, &offset)) return false;
-    CODE(0x48, 0x8b, 0x85); word(ctx, offset);
+    isa_load(ctx, R_A, offset);
     if (ctx->local_alias[e->integer-f->local_start]) load_memory(ctx,e->type);
     normalize(ctx, e->type);
     return true;
   }
   if (e->kind == DYN_EXPR_GLOBAL) {
     if (e->integer >= ir->global_count || !ctx->global_symbols[e->integer]) return false;
-    CODE(0x48,0x8b,0x05); relocate(ctx, ctx->global_symbols[e->integer],R_X86_64_GOTPCREL,-4); word(ctx, 0);
+    isa_symbol_address(ctx, R_A, ctx->global_symbols[e->integer]);
     load_memory(ctx, e->type); return !ctx->text.failed && !ctx->relocation_failed;
   }
   if (e->kind == DYN_EXPR_FUNCTION) {
     if (e->integer >= ir->function_count || !ctx->function_symbols[e->integer]) return false;
-    CODE(0x48,0x8b,0x05); relocate(ctx, ctx->function_symbols[e->integer],R_X86_64_GOTPCREL,-4); word(ctx, 0);
+    isa_symbol_address(ctx, R_A, ctx->function_symbols[e->integer]);
     return !ctx->text.failed && !ctx->relocation_failed;
   }
-  if (e->kind == DYN_EXPR_NIL && (dyn_type_is_pointer(e->type) || e->type==DYN_TYPE_RAWPTR)) { CODE(0x31,0xc0); return true; }
+  if (e->kind == DYN_EXPR_NIL && (dyn_type_is_pointer(e->type) || e->type==DYN_TYPE_RAWPTR)) { isa_zero(ctx, R_A); return true; }
   if (e->kind == DYN_EXPR_CALL || e->kind == DYN_EXPR_INDIRECT_CALL) return call_value(ctx, ir, f, e, depth);
   if (e->kind == DYN_EXPR_BITCAST) {
     if (e->left>=ir->expression_count || !scalar(ir, ir->expressions[e->left].type) ||
@@ -812,14 +858,14 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     if (dyn_type_is_enum(e->type)) {
       if (payload_enum(ir,e->type) || !integer_type(from) || !expression(ctx,ir,f,e->left,depth+1)) return false;
       const DynIrEnum *en=&ir->enums[e->type-DYN_TYPE_ENUM_BASE];
-      CODE(0x45,0x31,0xc0);
+      isa_match_begin(ctx);
       for (unsigned i=0;i<en->variant_count;++i) {
         uint64_t tag=ir->variants[en->variant_start+i].tag; unsigned bits=integer_bits(en->tag_type);
         if (signed_scalar(en->tag_type) && bits<64 && (tag>>(bits-1)&1)) tag|=UINT64_MAX<<bits;
         if (signed_scalar(from)!=signed_scalar(en->tag_type) && (int64_t)tag<0) continue;
-        CODE(0x48,0xb9); immediate(ctx,tag); CODE(0x48,0x39,0xc8,0x0f,0x94,0xc1,0x41,0x08,0xc8);
+        isa_match_tag(ctx, tag);
       }
-      CODE(0x45,0x84,0xc0); guard(ctx,f,0x85,GUARD_ENUM); normalize(ctx,e->type); return !ctx->text.failed;
+      isa_match_test(ctx); guard(ctx, f, CC_NE, GUARD_ENUM); normalize(ctx,e->type); return !ctx->text.failed;
     }
     bool from_pointer=dyn_type_is_pointer(from)||from==DYN_TYPE_RAWPTR;
     bool to_pointer=dyn_type_is_pointer(e->type)||e->type==DYN_TYPE_RAWPTR;
@@ -829,45 +875,18 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     if (!((integer_type(e->type)&&integer_type(from)) || (float_type(e->type)&&float_type(from)) || pointer_conversion || integer_float || float_integer) ||
         !expression(ctx, ir,f,e->left,depth+1)) return false;
     if (integer_float) {
-      unsigned prefix=e->type==DYN_TYPE_F32?0xf3:0xf2;
-      CODE(0x0f,0x57,0xc0); /* clear upper carrier bits for scalar f32 conversion */
-      if (!signed_scalar(from) && integer_bits(from)==64) {
-        CODE(0x48,0x85,0xc0,0x0f,0x89); size_t ordinary=ctx->text.n; word(ctx, 0);
-        /* Sticky low bit preserves exact rounding when halving an unsigned i64. */
-        CODE(0x48,0x89,0xc1,0x83,0xe1,1,0x48,0xd1,0xe8,0x48,0x09,0xc8);
-        byte(ctx, prefix); CODE(0x48,0x0f,0x2a,0xc0);
-        byte(ctx, prefix); CODE(0x0f,0x58,0xc0,0xe9); size_t done=ctx->text.n; word(ctx, 0);
-        patch_word(ctx, ordinary,(uint32_t)(ctx->text.n-ordinary-4));
-        byte(ctx, prefix); CODE(0x48,0x0f,0x2a,0xc0);
-        patch_word(ctx, done,(uint32_t)(ctx->text.n-done-4));
-      } else { byte(ctx, prefix); CODE(0x48,0x0f,0x2a,0xc0); }
-      CODE(0x66,0x48,0x0f,0x7e,0xc0); return !ctx->text.failed;
+      isa_int_to_float(ctx, e->type==DYN_TYPE_F32, !signed_scalar(from) && integer_bits(from)==64);
+      return !ctx->text.failed;
     }
     if (float_integer) {
-      unsigned prefix=from==DYN_TYPE_F32?0xf3:0xf2;
-      CODE(0x66,0x48,0x0f,0x6e,0xc0);
-      if (!signed_scalar(e->type) && integer_bits(e->type)==64) {
-        CODE(0x48,0xb9); immediate(ctx, from==DYN_TYPE_F32?UINT64_C(0x5f000000):UINT64_C(0x43e0000000000000));
-        CODE(0x66,0x48,0x0f,0x6e,0xc9);
-        if (from==DYN_TYPE_F64) byte(ctx, 0x66);
-        CODE(0x0f,0x2e,0xc1,0x0f,0x82); size_t ordinary=ctx->text.n; word(ctx, 0);
-        byte(ctx, prefix); CODE(0x0f,0x5c,0xc1);
-        byte(ctx, prefix); CODE(0x48,0x0f,0x2c,0xc0);
-        CODE(0x48,0xb9); immediate(ctx, UINT64_C(1)<<63); CODE(0x48,0x31,0xc8,0xe9); size_t done=ctx->text.n; word(ctx, 0);
-        patch_word(ctx, ordinary,(uint32_t)(ctx->text.n-ordinary-4));
-        byte(ctx, prefix); CODE(0x48,0x0f,0x2c,0xc0);
-        patch_word(ctx, done,(uint32_t)(ctx->text.n-done-4));
-      } else { byte(ctx, prefix); CODE(0x48,0x0f,0x2c,0xc0); }
+      isa_float_to_int(ctx, from==DYN_TYPE_F32, !signed_scalar(e->type) && integer_bits(e->type)==64);
       normalize(ctx, e->type); return !ctx->text.failed;
     }
     /* LLVM inttoptr zero-extends the source bitwidth, even for signed integers. */
     if (to_pointer && integer_type(from) && integer_bits(from)<64) {
-      CODE(0x48,0xba); immediate(ctx, (UINT64_C(1)<<integer_bits(from))-1); CODE(0x48,0x21,0xd0);
+      isa_immediate(ctx, R_D, (UINT64_C(1)<<integer_bits(from))-1); isa_alu(ctx, ALU_AND, R_A, R_D);
     }
-    if (float_type(e->type) && e->type!=from) {
-      CODE(0x66,0x48,0x0f,0x6e,0xc0); byte(ctx, from==DYN_TYPE_F32?0xf3:0xf2);
-      CODE(0x0f,0x5a,0xc0,0x66,0x48,0x0f,0x7e,0xc0);
-    }
+    if (float_type(e->type) && e->type!=from) isa_float_convert(ctx, from==DYN_TYPE_F32);
     normalize(ctx, e->type); return !ctx->text.failed;
   }
   if (e->kind == DYN_EXPR_UNARY) {
@@ -882,8 +901,8 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
 
     if (float_type(e->type)) {
       if (e->op!=DYN_OP_NEG || !expression(ctx, ir,f,e->left,depth+1)) return false;
-      CODE(0x48,0xba); immediate(ctx, UINT64_C(1)<<(e->type==DYN_TYPE_F32?31:63));
-      CODE(0x48,0x31,0xd0); return !ctx->text.failed;
+      isa_immediate(ctx, R_D, UINT64_C(1)<<(e->type==DYN_TYPE_F32?31:63));
+      isa_alu(ctx, ALU_XOR, R_A, R_D); return !ctx->text.failed;
     }
     if (e->op != DYN_OP_BIT_NOT && e->op != DYN_OP_NOT &&
         e->op != DYN_OP_NEG) return false;
@@ -891,31 +910,31 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
        unsigned magnitude is not an independently representable signed value. */
     if (e->op == DYN_OP_NEG && e->boolean) {
       if (e->left >= ir->expression_count || ir->expressions[e->left].kind != DYN_EXPR_INT) return false;
-      CODE(0x48, 0xb8); immediate(ctx, UINT64_C(0) - ir->expressions[e->left].integer);
+      isa_immediate(ctx, R_A, UINT64_C(0) - ir->expressions[e->left].integer);
       return true;
     }
     if (!expression(ctx, ir, f, e->left, depth + 1)) return false;
-    if (e->op == DYN_OP_BIT_NOT) CODE(0x48, 0xf7, 0xd0);
+    if (e->op == DYN_OP_BIT_NOT) isa_unary(ctx, UNARY_NOT);
     else if (e->op == DYN_OP_NEG) {
-      CODE(0x48, 0xf7, 0xd8);
-      if (!e->wrap) overflow_guard(ctx, f, signed_scalar(e->type));
+      isa_unary(ctx, UNARY_NEGATE);
+      /* Negation borrows exactly when the operand is nonzero. */
+      if (!e->wrap) guard(ctx, f, signed_scalar(e->type) ? CC_NO : CC_AE, GUARD_OVERFLOW);
     }
-    else CODE(0x48, 0x83, 0xf0, 1);
+    else isa_unary(ctx, UNARY_BOOL_NOT);
     bool check=e->op == DYN_OP_NEG && !e->wrap && integer_bits(e->type)<64;
-    if (check) CODE(0x49,0x89,0xc2);
+    if (check) isa_move(ctx, R_10, R_A);
     normalize(ctx, e->type);
-    if (check) { CODE(0x4c,0x39,0xd0); guard(ctx, f,0x84,GUARD_OVERFLOW); }
+    if (check) { isa_compare(ctx, R_A, R_10); guard(ctx, f, CC_E, GUARD_OVERFLOW); }
     return !ctx->text.failed;
 
   }
   if (e->kind != DYN_EXPR_BINARY) return false;
   if (e->op == DYN_OP_LOGICAL_AND || e->op == DYN_OP_LOGICAL_OR) {
     if (!expression(ctx, ir, f, e->left, depth + 1)) return false;
-    CODE(0x48, 0x85, 0xc0, 0x0f); /* test rax, rax; je/jne done */
-    byte(ctx, e->op == DYN_OP_LOGICAL_AND ? 0x84 : 0x85);
-    size_t skip = ctx->text.n; word(ctx, 0);
+    isa_test(ctx, R_A);
+    size_t skip = isa_branch(ctx, e->op == DYN_OP_LOGICAL_AND ? CC_E : CC_NE);
     if (!expression(ctx, ir, f, e->right, depth + 1)) return false;
-    patch_word(ctx, skip, (uint32_t)(ctx->text.n - (skip + 4)));
+    isa_patch(ctx, skip, ctx->text.n);
     return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed;
   }
   bool comparison = e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE;
@@ -925,100 +944,85 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
       e->op != DYN_OP_DIV && e->op != DYN_OP_REM &&
       e->op != DYN_OP_SHL && e->op != DYN_OP_SHR && !comparison) return false;
   if (!expression(ctx, ir, f, e->left, depth + 1)) return false;
-  CODE(0x50); ++ctx->stack_slots; /* preserve left while evaluating the right operand */
+  isa_push(ctx, R_A); /* preserve left while evaluating the right operand */
   if (!expression(ctx, ir, f, e->right, depth + 1)) return false;
-  CODE(0x48, 0x89, 0xc1, 0x58); --ctx->stack_slots; /* mov rcx, rax; pop rax */
+  isa_move(ctx, R_C, R_A); isa_pop(ctx, R_A);
   return binary_result(ctx, ir,f,e);
 }
 static bool binary_result(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f, const DynIrExpr *e) {
   bool comparison=e->op>=DYN_OP_EQ && e->op<=DYN_OP_GE;
   DynType operand_type=ir->expressions[e->left].type;
   if (float_type(operand_type)) {
-    CODE(0x66,0x48,0x0f,0x6e,0xc0,0x66,0x48,0x0f,0x6e,0xc9); /* xmm0=left,xmm1=right */
+    bool f32=operand_type==DYN_TYPE_F32;
+    isa_float_operands(ctx, f32);
     if (e->op==DYN_OP_REM) {
-      if (ctx->stack_slots&1) CODE(0x48,0x83,0xec,8);
-      runtime_call(ctx, operand_type==DYN_TYPE_F32?8:7);
-      if (ctx->stack_slots&1) CODE(0x48,0x83,0xc4,8);
-      CODE(0x66,0x48,0x0f,0x7e,0xc0); return !ctx->text.failed && !ctx->relocation_failed;
+      bool padding=isa_align_call(ctx);
+      runtime_call(ctx, f32?8:7);
+      isa_unalign_call(ctx, padding);
+      isa_float_result(ctx, f32); return !ctx->text.failed && !ctx->relocation_failed;
     }
-    if (comparison) {
-      if (operand_type==DYN_TYPE_F64) byte(ctx, 0x66);
-      CODE(0x0f,0x2e,0xc1); /* unordered compare sets parity for NaN */
-      const unsigned char predicates[]={0x94,0x95,0x92,0x96,0x97,0x93};
-      byte(ctx, 0x0f); byte(ctx, predicates[e->op-DYN_OP_EQ]); byte(ctx, 0xc0);
-      CODE(0x0f); byte(ctx, e->op==DYN_OP_NE?0x9a:0x9b); byte(ctx, 0xc2);
-      byte(ctx, e->op==DYN_OP_NE?0x08:0x20); byte(ctx, 0xd0); CODE(0x0f,0xb6,0xc0);
-    } else {
-      unsigned opcode=e->op==DYN_OP_ADD?0x58:e->op==DYN_OP_SUB?0x5c:e->op==DYN_OP_MUL?0x59:e->op==DYN_OP_DIV?0x5e:0;
-      if (!opcode) return false;
-      byte(ctx, operand_type==DYN_TYPE_F32?0xf3:0xf2); byte(ctx, 0x0f); byte(ctx, opcode); byte(ctx, 0xc1);
-      CODE(0x66,0x48,0x0f,0x7e,0xc0);
+    if (comparison) isa_float_compare(ctx, f32, e->op-DYN_OP_EQ);
+    else {
+      int op=e->op==DYN_OP_ADD?FLOAT_ADD:e->op==DYN_OP_SUB?FLOAT_SUB:e->op==DYN_OP_MUL?FLOAT_MUL:e->op==DYN_OP_DIV?FLOAT_DIV:-1;
+      if (op<0) return false;
+      isa_float_arithmetic(ctx, f32, op);
     }
     return !ctx->text.failed;
   }
   if (comparison) {
-    static const unsigned char signed_conditions[] = {0x94, 0x95, 0x9c, 0x9e, 0x9f, 0x9d};
-    static const unsigned char unsigned_conditions[] = {0x94, 0x95, 0x92, 0x96, 0x97, 0x93};
-    const unsigned char *conditions = signed_scalar(storage_type(ir,ir->expressions[e->left].type))
+    static const Cond signed_conditions[] = {CC_E, CC_NE, CC_L, CC_LE, CC_G, CC_GE};
+    static const Cond unsigned_conditions[] = {CC_E, CC_NE, CC_B, CC_BE, CC_A, CC_AE};
+    const Cond *conditions = signed_scalar(storage_type(ir,ir->expressions[e->left].type))
         ? signed_conditions : unsigned_conditions;
-    CODE(0x48, 0x39, 0xc8, 0x0f); byte(ctx, conditions[e->op - DYN_OP_EQ]);
-    CODE(0xc0, 0x0f, 0xb6, 0xc0); /* setcc al; movzx eax, al */
+    isa_compare(ctx, R_A, R_C); isa_set(ctx, conditions[e->op - DYN_OP_EQ]);
     return !ctx->text.failed;
   }
   if (!integer_type(operand_type)) return false;
+  bool sign=signed_scalar(e->type);
   switch (e->op) {
-  case DYN_OP_ADD: CODE(0x48, 0x01, 0xc8); break;
-  case DYN_OP_SUB: CODE(0x48, 0x29, 0xc8); break;
-  case DYN_OP_MUL:
-    if (!e->wrap && !signed_scalar(e->type)) CODE(0x48, 0xf7, 0xe1); /* mul rcx: rdx:rax */
-    else CODE(0x48, 0x0f, 0xaf, 0xc1); /* imul rax, rcx */
-    break;
+  case DYN_OP_ADD: isa_alu(ctx, ALU_ADD, R_A, R_C); break;
+  case DYN_OP_SUB: isa_alu(ctx, ALU_SUB, R_A, R_C); break;
+  case DYN_OP_MUL: isa_multiply(ctx, !e->wrap, sign); break;
   case DYN_OP_DIV: case DYN_OP_REM:
-    divide(ctx, f, signed_scalar(e->type), e->op == DYN_OP_REM, integer_bits(e->type)); break;
+    divide(ctx, f, sign, e->op == DYN_OP_REM, integer_bits(e->type)); break;
   case DYN_OP_SHL: case DYN_OP_SHR:
-    shift(ctx, f, signed_scalar(e->type), e->op == DYN_OP_SHL, e->wrap, integer_bits(e->type)); break;
-  case DYN_OP_BIT_AND: CODE(0x48, 0x21, 0xc8); break;
-  case DYN_OP_BIT_OR: CODE(0x48, 0x09, 0xc8); break;
-  case DYN_OP_BIT_XOR: CODE(0x48, 0x31, 0xc8); break;
+    shift(ctx, f, sign, e->op == DYN_OP_SHL, e->wrap, integer_bits(e->type)); break;
+  case DYN_OP_BIT_AND: isa_alu(ctx, ALU_AND, R_A, R_C); break;
+  case DYN_OP_BIT_OR: isa_alu(ctx, ALU_OR, R_A, R_C); break;
+  case DYN_OP_BIT_XOR: isa_alu(ctx, ALU_XOR, R_A, R_C); break;
   default: return false;
   }
-  if (!e->wrap && (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB || e->op == DYN_OP_MUL))
-    overflow_guard(ctx, f, signed_scalar(e->type));
+  if (!e->wrap && (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB || e->op == DYN_OP_MUL)) {
+    int op=e->op==DYN_OP_ADD?ALU_ADD:e->op==DYN_OP_SUB?ALU_SUB:ALU_ADD+16;
+    guard(ctx, f, isa_overflow_condition(ctx, op, sign), GUARD_OVERFLOW);
+  }
   bool check=!e->wrap && integer_bits(e->type)<64 &&
     (e->op==DYN_OP_ADD || e->op==DYN_OP_SUB || e->op==DYN_OP_MUL || e->op==DYN_OP_SHL);
-  if (check) CODE(0x49,0x89,0xc2);
+  if (check) isa_move(ctx, R_10, R_A);
   normalize(ctx, e->type);
-  if (check) { CODE(0x4c,0x39,0xd0); guard(ctx, f,0x84,GUARD_OVERFLOW); }
+  if (check) { isa_compare(ctx, R_A, R_10); guard(ctx, f, CC_E, GUARD_OVERFLOW); }
   return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed;
 }
 static void return_value(BackendContext *ctx, DynType type) {
   const DynIrProgram *ir=ctx->active_ir;
-  bool sret=abi_memory(ctx->active_ir,type);
-  if (aggregate(ir, type)) { save_struct(ctx, ctx->return_offset,type); CODE(0x48,0x8d,0x85); word(ctx, ctx->return_offset); }
+  bool sret=abi_memory(ctx->a64,ctx->active_ir,type);
+  if (aggregate(ir, type)) { save_struct(ctx, ctx->return_offset,type); isa_lea(ctx, R_A, ctx->return_offset); }
   if (sret) {
     uint32_t size,alignment; if (!layout(ctx->active_ir,type,&size,&alignment,0)) { ctx->text.failed=true; return; }
-    CODE(0x49,0x89,0xc3,0x48,0x8b,0xbd); word(ctx, ctx->sret_offset);
+    isa_move(ctx, R_11, R_A); isa_load(ctx, R_DI, ctx->sret_offset);
     for (unsigned part=0;part<(size+7)/8;++part) {
       unsigned bytes=size-part*8>8?8:size-part*8; load_chunk(ctx, part*8,bytes);
-      if (bytes==8) { CODE(0x4c,0x89,0x97); word(ctx, part*8); }
-      else for (unsigned j=0;j<bytes;++j) {
-        CODE(0x44,0x88,0x97); word(ctx, part*8+j);
-        if (j+1<bytes) CODE(0x49,0xc1,0xea,8);
-      }
+      isa_store_chunk(ctx, part*8, bytes);
     }
-    CODE(0x48,0x89,0xf8);
+    isa_move(ctx, R_A, R_DI);
   }
   if (ctx->debug_mode) {
     if (aggregate(ir, type) && !sret) {
       /* The aggregate snapshot may occupy rbp-8 itself in a zero-local function. */
-      runtime_call(ctx, 2); CODE(0x48,0x8d,0x85); word(ctx, ctx->return_offset);
-    } else {
-      CODE(0x48,0x89,0x45,0xf8);
-      if (descriptor(type)) CODE(0x48,0x89,0x55,0xf0);
-      runtime_call(ctx, 2); CODE(0x48,0x8b,0x45,0xf8);
-      if (descriptor(type)) CODE(0x48,0x8b,0x55,0xf0);
-    }
+      runtime_call(ctx, 2); isa_lea(ctx, R_A, ctx->return_offset);
+    } else isa_trace_pop(ctx, descriptor(type));
   }
+  if (ctx->a64 && aggregate(ir, type) && !sret) { a64_struct_return(ctx, ir, type); isa_return(ctx); return; }
   if (raw_aggregate(ir,type) && !sret) {
     ArrayPart leaves[512]; unsigned count=0,gp=0,fp=0; uint32_t x87_offset[2]; DynType x87_type[2]; unsigned x87=0;
     if (!array_parts(ctx->active_ir,type,0,leaves,&count,0)) { ctx->text.failed=true; return; }
@@ -1042,28 +1046,27 @@ static void return_value(BackendContext *ctx, DynType type) {
       else { CODE(0x4c,0x89); byte(ctx, integers++?0xd2:0xd0); }
     }
   }
-  if (float_type(type)) CODE(0x66,0x48,0x0f,0x6e,0xc0);
-  if (ctx->dwarf && !backend_dwarf_epilogue(ctx->dwarf,ctx->text.n)) ctx->text.failed=true;
-  CODE(0xc9, 0xc3); /* leave; ret */
+  if (float_type(type)) isa_a_to_float(ctx);
+  isa_return(ctx);
 }
 /* Forward branches form bounded linked lists in their pending displacement words. */
-static void pending_jump(BackendContext *ctx, unsigned condition, size_t *head) {
-  if (condition) { byte(ctx, 0x0f); byte(ctx, condition); } else byte(ctx, 0xe9);
-  size_t at = ctx->text.n; word(ctx, (uint32_t)*head); *head = at;
+static void pending_jump(BackendContext *ctx, int condition, size_t *head) {
+  size_t at = isa_branch(ctx, condition);
+  patch_word(ctx, at, (uint32_t)*head); *head = at;
 }
 static bool resolve_jumps(BackendContext *ctx, size_t head, size_t destination) {
   if (ctx->text.failed) return false;
   while (head != UINT32_MAX) {
     if (head > ctx->text.n || ctx->text.n - head < 4) return false;
     uint32_t next; memcpy(&next, ctx->text.data + head, 4);
-    patch_word(ctx, head, (uint32_t)(destination - head - 4)); head = next;
+    isa_patch(ctx, head, destination); head = next;
   }
   return true;
 }
 static void reset_scratch(BackendContext *ctx) {
   for (size_t i=0;i<ctx->touched_expr_count;++i) {
     uint32_t id=ctx->touched_exprs[i];
-    ctx->captured_offsets[id]=ctx->temporary_offsets[id]=ctx->pack_offsets[id]=0; ctx->visited_expr[id]=false;
+    ctx->captured_offsets[id]=ctx->temporary_offsets[id]=ctx->pack_offsets[id]=ctx->copy_offsets[id]=0; ctx->visited_expr[id]=false;
   }
   for (size_t i=0;i<ctx->touched_stmt_count;++i) ctx->statement_scratch[ctx->touched_stmts[i]]=0;
   ctx->touched_expr_count=ctx->touched_stmt_count=0;
@@ -1117,6 +1120,15 @@ static bool expression_scratch(BackendContext *ctx, const DynIrProgram *ir,DynEx
   if (e->kind==DYN_EXPR_SYSCALL || e->kind==DYN_EXPR_ENUM || e->kind==DYN_EXPR_ARRAY || e->kind==DYN_EXPR_STRUCT || e->kind==DYN_EXPR_CALL || e->kind==DYN_EXPR_INDIRECT_CALL) {
     if ((uint64_t)e->item_start+e->item_count>ir->item_count) return false;
     for (uint32_t i=0;i<e->item_count;++i) if (!expression_scratch(ctx, ir,ir->items[e->item_start+i].expression,depth+1,slots)) return false;
+    if (ctx->a64 && (e->kind==DYN_EXPR_CALL || e->kind==DYN_EXPR_INDIRECT_CALL))
+      for (uint32_t i=0;i<e->item_count;++i) {
+        DynExprId argument=ir->items[e->item_start+i].expression; DynType type=ir->expressions[argument].type;
+        DynType element; unsigned members; uint32_t size,alignment;
+        if (!dyn_type_is_struct(type) || a64_struct_hfa(ir,type,&element,&members) ||
+            !layout(ir,type,&size,&alignment,0) || size<=16 || ctx->copy_offsets[argument]) continue;
+        *slots+=(size+7)/8; if (*slots>MAX_SCRATCH) return false;
+        ctx->copy_offsets[argument]=0u-8*(ctx->local_words+*slots); ctx->touched_exprs[ctx->touched_expr_count++]=argument;
+      }
     if (e->kind==DYN_EXPR_STRUCT) {
       const DynIrStruct *record=&ir->structs[e->type-DYN_TYPE_STRUCT_BASE];
       for (uint32_t i=0;i<record->field_count;++i) if (!expression_scratch(ctx, ir,ir->fields[record->field_start+i].default_expression,depth+1,slots)) return false;
@@ -1178,23 +1190,23 @@ static bool count_scratch(BackendContext *ctx, const DynIrProgram *ir, const Dyn
 static bool initialize(BackendContext *ctx, const DynIrProgram *ir,const DynIrFunction *f,DynType type,DynExprId id,unsigned depth) {
   uint32_t size,alignment;
   if (depth > MAX_DEPTH || !layout(ir,type,&size,&alignment,0) || (id!=DYN_NO_EXPR && id>=ir->expression_count)) return false;
-  CODE(0x50); ++ctx->stack_slots;
+  isa_push(ctx, R_A);
   const DynIrExpr *value=id==DYN_NO_EXPR?NULL:&ir->expressions[id];
   if (value_type(ir, type)) {
-    if (value) { if (!expression(ctx, ir,f,id,0)) return false; } else { CODE(0x31,0xc0); if (descriptor(type)) CODE(0x31,0xd2); }
-    CODE(0x41,0x5b); --ctx->stack_slots;
-    if (descriptor(type)) { CODE(0x49,0x89,0x03,0x49,0x89,0x53,8); }
+    if (value) { if (!expression(ctx, ir,f,id,0)) return false; } else { isa_zero(ctx, R_A); if (descriptor(type)) isa_zero(ctx, R_D); }
+    isa_pop(ctx, R_11);
+    if (descriptor(type)) isa_store_descriptor(ctx);
     else store_memory(ctx, type);
     return !ctx->text.failed;
   }
   if (!value || value->kind==DYN_EXPR_ARRAY || value->kind==DYN_EXPR_STRUCT) {
-    CODE(0x48,0x89,0xc7,0x31,0xc0,0xb9); word(ctx, size); CODE(0xfc,0xf3,0xaa);
+    isa_zero_fill(ctx, size);
     if (value && value->kind==DYN_EXPR_ARRAY) {
       if (!dyn_type_is_array(type) || (uint64_t)value->item_start+value->item_count>ir->item_count) return false;
       const DynIrArray *array=&ir->arrays[type-DYN_TYPE_ARRAY_BASE]; uint32_t element,a;
       if (value->item_count>array->length || !layout(ir,array->element,&element,&a,0)) return false;
       for (uint32_t i=0;i<value->item_count;++i) {
-        CODE(0x48,0x8b,0x04,0x24,0x48,0x05); word(ctx, i*element);
+        isa_peek_short(ctx, R_A, 0); isa_add_immediate(ctx, i*element);
         if (!initialize(ctx, ir,f,array->element,ir->items[value->item_start+i].expression,depth+1)) return false;
       }
     } else if (value) {
@@ -1206,33 +1218,21 @@ static bool initialize(BackendContext *ctx, const DynIrProgram *ir,const DynIrFu
         const DynIrField *definition=&ir->fields[record->field_start+field];
         DynExprId expr=i<record->field_count?definition->default_expression:ir->items[value->item_start+i-record->field_count].expression;
         if (expr==DYN_NO_EXPR) continue;
-        CODE(0x48,0x8b,0x04,0x24,0x48,0x05); word(ctx, offset);
+        isa_peek_short(ctx, R_A, 0); isa_add_immediate(ctx, offset);
         if (!initialize(ctx, ir,f,definition->type,expr,depth+1)) return false;
       }
     }
-    CODE(0x58); --ctx->stack_slots; return !ctx->text.failed;
+    isa_pop(ctx, R_A); return !ctx->text.failed;
   }
   if (!expression(ctx, ir,f,id,0)) return false;
-  CODE(0x48,0x89,0xc6,0x5f); --ctx->stack_slots; /* source RSI, destination RDI */
-  CODE(0xb9); word(ctx, size);
-  CODE(0x48,0x39,0xf7,0x0f,0x86); size_t forward=ctx->text.n; word(ctx, 0);
-  if (size) { CODE(0x48,0x81,0xc6); word(ctx, size-1); CODE(0x48,0x81,0xc7); word(ctx, size-1); }
-  CODE(0xfd,0xf3,0xa4,0xfc,0xe9); size_t done=ctx->text.n; word(ctx, 0);
-  patch_word(ctx, forward,(uint32_t)(ctx->text.n-forward-4)); CODE(0xfc,0xf3,0xa4);
-  patch_word(ctx, done,(uint32_t)(ctx->text.n-done-4)); return !ctx->text.failed;
+  isa_copy(ctx, size); return !ctx->text.failed;
 }
 static bool assign_value(BackendContext *ctx,const DynIrProgram *ir,const DynIrFunction *f,DynType type,DynExprId value) {
   if (!aggregate(ir,type)) return initialize(ctx,ir,f,type,value,0);
   uint32_t size,alignment; if (!layout(ir,type,&size,&alignment,0)) return false;
-  CODE(0x50); ++ctx->stack_slots;
+  isa_push(ctx, R_A);
   if (!expression(ctx,ir,f,value,0)) return false;
-  CODE(0x48,0x89,0xc6,0x5f); --ctx->stack_slots; /* source RSI, destination RDI */
-  CODE(0xb9); word(ctx, size);
-  CODE(0x48,0x39,0xf7,0x0f,0x86); size_t forward=ctx->text.n; word(ctx, 0);
-  if (size) { CODE(0x48,0x81,0xc6); word(ctx, size-1); CODE(0x48,0x81,0xc7); word(ctx, size-1); }
-  CODE(0xfd,0xf3,0xa4,0xfc,0xe9); size_t done=ctx->text.n; word(ctx, 0);
-  patch_word(ctx, forward,(uint32_t)(ctx->text.n-forward-4)); CODE(0xfc,0xf3,0xa4);
-  patch_word(ctx, done,(uint32_t)(ctx->text.n-done-4)); return !ctx->text.failed;
+  isa_copy(ctx, size); return !ctx->text.failed;
 }
 static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
                              uint32_t start, uint32_t count, unsigned depth, bool *falls);
@@ -1286,10 +1286,10 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
     if (s->kind==DYN_STMT_PANIC) {
       if (s->expression>=ir->expression_count || !descriptor(ir->expressions[s->expression].type) ||
           !expression(ctx, ir,f,s->expression,0)) return false;
-      CODE(0x50,0x52); ctx->stack_slots+=2;
+      isa_push(ctx, R_A); isa_push(ctx, R_D);
       if (ctx->defer_count && !ctx->unwinding && !protect_call(ctx, ir,f)) return false;
-      CODE(0x5e,0x5f); ctx->stack_slots-=2;
-      runtime_call(ctx, 0); CODE(0x0f,0x0b); reachable=false;
+      isa_pop(ctx, isa_argument(ctx, 1)); isa_pop(ctx, isa_argument(ctx, 0));
+      runtime_call(ctx, 0); isa_trap(ctx); reachable=false;
     } else if (s->kind==DYN_STMT_DEFER) {
       if (ctx->defer_count==MAX_DEFERS || ctx->unwinding) return false;
       if (!s->defer_block && s->body_count==1) {
@@ -1299,14 +1299,14 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
           if (call->kind==DYN_EXPR_CALL || call->kind==DYN_EXPR_INDIRECT_CALL) {
             if (call->kind==DYN_EXPR_INDIRECT_CALL) {
               if (!expression(ctx, ir,f,call->left,0)) return false;
-              CODE(0x48,0x89,0x85); word(ctx, ctx->captured_offsets[call->left]);
+              isa_store(ctx, R_A, ctx->captured_offsets[call->left]);
             }
             for (uint32_t j=0;j<call->item_count;++j) {
               DynExprId value=ir->items[call->item_start+j].expression;
               if (!expression(ctx, ir,f,value,0)) return false;
               if (aggregate(ir, ir->expressions[value].type)) save_struct(ctx, ctx->captured_offsets[value],ir->expressions[value].type);
-              else { CODE(0x48,0x89,0x85); word(ctx, ctx->captured_offsets[value]); }
-              if (descriptor(ir->expressions[value].type)) { CODE(0x48,0x89,0x95); word(ctx, ctx->captured_offsets[value]+8); }
+              else isa_store(ctx, R_A, ctx->captured_offsets[value]);
+              if (descriptor(ir->expressions[value].type)) isa_store(ctx, R_D, ctx->captured_offsets[value]+8);
             }
           }
         }
@@ -1318,26 +1318,24 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
       } else if (f->return_type != DYN_TYPE_VOID) return false;
       if (ctx->defer_count) {
         if (aggregate(ir, f->return_type)) save_struct(ctx, ctx->return_offset,f->return_type);
-        else { CODE(0x48,0x89,0x85); word(ctx, ctx->return_offset); }
-        if (descriptor(f->return_type)) { CODE(0x48,0x89,0x95); word(ctx, ctx->return_offset+8); }
+        else isa_store(ctx, R_A, ctx->return_offset);
+        if (descriptor(f->return_type)) isa_store(ctx, R_D, ctx->return_offset+8);
         if (!emit_defers(ctx, ir,f,0)) return false;
-        if (aggregate(ir, f->return_type)) CODE(0x48,0x8d,0x85);
-        else CODE(0x48,0x8b,0x85);
-        word(ctx, ctx->return_offset);
-        if (descriptor(f->return_type)) { CODE(0x48,0x8b,0x95); word(ctx, ctx->return_offset+8); }
+        if (aggregate(ir, f->return_type)) isa_lea(ctx, R_A, ctx->return_offset);
+        else isa_load(ctx, R_A, ctx->return_offset);
+        if (descriptor(f->return_type)) isa_load(ctx, R_D, ctx->return_offset+8);
       }
-      if (f->is_main) CODE(0x31,0xc0);
+      if (f->is_main) isa_zero(ctx, R_A);
       return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type); reachable = false;
     } else if (s->kind == DYN_STMT_IF) {
       if (!expression(ctx, ir, f, s->expression, 0)) return false;
-      CODE(0x48, 0x85, 0xc0, 0x0f, 0x84); /* test rax, rax; je else */
-      size_t otherwise = ctx->text.n; word(ctx, 0);
+      isa_test(ctx, R_A); size_t otherwise = isa_branch(ctx, CC_E);
       bool then_falls, else_falls;
       if (!block(ctx, ir, f, s->body_start, s->body_count, depth + 1, &then_falls)) return false;
-      byte(ctx, 0xe9); size_t done = ctx->text.n; word(ctx, 0); /* jmp join */
-      patch_word(ctx, otherwise, (uint32_t)(ctx->text.n - (otherwise + 4)));
+      size_t done = isa_branch(ctx, -1); /* join */
+      isa_patch(ctx, otherwise, ctx->text.n);
       if (!block(ctx, ir, f, s->else_start, s->else_count, depth + 1, &else_falls)) return false;
-      patch_word(ctx, done, (uint32_t)(ctx->text.n - (done + 4)));
+      isa_patch(ctx, done, ctx->text.n);
       reachable = reachable && (then_falls || else_falls);
     } else if (s->kind == DYN_STMT_LOCAL || s->kind == DYN_STMT_ASSIGN) {
       if (s->kind == DYN_STMT_ASSIGN && s->local_id == UINT32_MAX && s->target == DYN_NO_EXPR) {
@@ -1348,7 +1346,7 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
           s->local_id<ir->local_count && !scalar(ir, ir->locals[s->local_id].type)) {
         if (s->assignment_op!=DYN_OP_NONE) return false;
         uint32_t offset; if (!local_slot(ctx, f,s->local_id,&offset)) return false;
-        CODE(0x48); byte(ctx,ctx->local_alias[s->local_id-f->local_start]?0x8b:0x8d); byte(ctx,0x85); word(ctx,offset);
+        if (ctx->local_alias[s->local_id-f->local_start]) isa_load(ctx, R_A, offset); else isa_lea(ctx, R_A, offset);
         if (s->kind==DYN_STMT_ASSIGN) { if (!assign_value(ctx,ir,f,ir->locals[s->local_id].type,s->expression)) return false; }
         else if (!initialize(ctx,ir,f,ir->locals[s->local_id].type,s->expression,0)) return false;
         continue;
@@ -1363,15 +1361,15 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
           (ir->expressions[s->target].kind==DYN_EXPR_UNARY && ir->expressions[s->target].op==DYN_OP_DEREF))) {
         DynType type=ir->expressions[s->target].type;
         if (!scalar(ir, type) || !address(ctx, ir,f,s->target,0)) return false;
-        CODE(0x50); ++ctx->stack_slots;
+        isa_push(ctx, R_A);
         if (s->assignment_op!=DYN_OP_NONE) {
-          load_memory(ctx, type); CODE(0x50); ++ctx->stack_slots;
+          load_memory(ctx, type); isa_push(ctx, R_A);
           if (!expression(ctx, ir,f,s->expression,0)) return false;
-          CODE(0x48,0x89,0xc1,0x58); --ctx->stack_slots;
+          isa_move(ctx, R_C, R_A); isa_pop(ctx, R_A);
           DynIrExpr op={.type=type,.op=s->assignment_op,.left=s->target,.right=s->expression};
           if (!binary_result(ctx, ir,f,&op)) return false;
         } else if (!expression(ctx, ir,f,s->expression,0)) return false;
-        CODE(0x41,0x5b); --ctx->stack_slots; store_memory(ctx, type); continue;
+        isa_pop(ctx, R_11); store_memory(ctx, type); continue;
       }
       uint64_t id = s->local_id; bool global=false;
       if (s->kind == DYN_STMT_ASSIGN && s->target != DYN_NO_EXPR) {
@@ -1395,13 +1393,13 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
           .op=s->assignment_op, .left=s->target, .right=s->expression};
         if (!expression_value(ctx, ir, f, &operation, 0)) return false;
       } else if (s->expression == DYN_NO_EXPR && s->kind == DYN_STMT_LOCAL) {
-        CODE(0x31, 0xc0);
+        isa_zero(ctx, R_A);
       } else if (!expression(ctx, ir, f, s->expression, 0)) return false;
       if (global) {
-        CODE(0x4c,0x8b,0x1d); relocate(ctx, ctx->global_symbols[id],R_X86_64_GOTPCREL,-4); word(ctx, 0);
+        isa_symbol_address(ctx, R_11, ctx->global_symbols[id]);
         store_memory(ctx, type);
-      } else if (ctx->local_alias[id-f->local_start]) { CODE(0x4c,0x8b,0x9d); word(ctx,offset); store_memory(ctx,type); }
-      else { CODE(0x48, 0x89, 0x85); word(ctx, offset); }
+      } else if (ctx->local_alias[id-f->local_start]) { isa_load(ctx, R_11, offset); store_memory(ctx,type); }
+      else isa_store(ctx, R_A, offset);
     } else if (s->kind == DYN_STMT_EXPR) {
       if (!expression(ctx, ir, f, s->expression, 0)) return false;
     } else if (s->kind == DYN_STMT_CASE) {
@@ -1417,10 +1415,10 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
       if (reference) { if (!payload || !address(ctx,ir,f,s->expression,0)) return false; }
       else if (!expression(ctx,ir,f,s->expression,0)) return false;
       if (payload) {
-        if (!reference) { save_struct(ctx,subject+16,type); CODE(0x48,0x8d,0x85); word(ctx,subject+16); }
-        CODE(0x48,0x89,0x85); word(ctx,subject+8); load_memory(ctx,storage_type(ir,type));
-      } else if (any) { CODE(0x48,0x89,0x95); word(ctx,subject+8); }
-      CODE(0x48,0x89,0x85); word(ctx,subject);
+        if (!reference) { save_struct(ctx,subject+16,type); isa_lea(ctx, R_A, subject+16); }
+        isa_store(ctx, R_A, subject+8); load_memory(ctx,storage_type(ir,type));
+      } else if (any) isa_store(ctx, R_D, subject+8);
+      isa_store(ctx, R_A, subject);
       bool all_terminate = true;
       size_t done=UINT32_MAX;
       bool sign=signed_scalar(storage_type(ir,type));
@@ -1437,14 +1435,14 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
             unsigned bits=integer_bits(storage_type(ir,type));
             if (sign && bits<64 && (first>>(bits-1)&1)) first=last=first|(UINT64_MAX<<bits);
           } else if (p->is_type) { if (!any) return false; first=last=p->type; }
-          CODE(0x48,0x8b,0x85); word(ctx,subject);
-          CODE(0x48,0xb9); immediate(ctx,first); CODE(0x48,0x39,0xc8);
-          size_t lower=UINT32_MAX; pending_jump(ctx,sign?0x8c:0x82,&lower);
-          CODE(0x48,0xb9); immediate(ctx,last); CODE(0x48,0x39,0xc8);
-          pending_jump(ctx,sign?0x8e:0x86,&matches);
+          isa_load(ctx, R_A, subject);
+          isa_immediate(ctx, R_C, first); isa_compare(ctx, R_A, R_C);
+          size_t lower=UINT32_MAX; pending_jump(ctx,sign?CC_L:CC_B,&lower);
+          isa_immediate(ctx, R_C, last); isa_compare(ctx, R_A, R_C);
+          pending_jump(ctx,sign?CC_LE:CC_BE,&matches);
           if (!resolve_jumps(ctx,lower,ctx->text.n)) return false;
         }
-        if (!a->wildcard) pending_jump(ctx,0,&next);
+        if (!a->wildcard) pending_jump(ctx,-1,&next);
         if (!resolve_jumps(ctx,matches,ctx->text.n)) return false;
         bool old_alias=false;
         if (a->local_id!=UINT32_MAX) {
@@ -1452,20 +1450,20 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
           const DynIrPattern *pattern=&ir->patterns[a->pattern_start];
           DynType binding=ir->locals[a->local_id].type;
           if (!pattern->is_type && !pattern->is_enum) return false;
-          CODE(0x48,0x8b,0x85); word(ctx,subject+8);
-          if (payload) { CODE(0x48,0x05); word(ctx,payload_offset); }
+          isa_load(ctx, R_A, subject+8);
+          if (payload) isa_add_immediate(ctx, payload_offset);
           old_alias=ctx->local_alias[a->local_id-f->local_start];
           ctx->local_alias[a->local_id-f->local_start]=a->pointer_binding;
-          if (a->pointer_binding) { CODE(0x48,0x89,0x85); word(ctx,offset); }
+          if (a->pointer_binding) isa_store(ctx, R_A, offset);
           else save_struct(ctx,offset,binding);
         }
         bool arm_falls;
         if (!block(ctx,ir,f,a->body_start,a->body_count,depth+1,&arm_falls)) return false;
         if (a->local_id!=UINT32_MAX) ctx->local_alias[a->local_id-f->local_start]=old_alias;
-        all_terminate &= !arm_falls; pending_jump(ctx,0,&done);
+        all_terminate &= !arm_falls; pending_jump(ctx,-1,&done);
         if (!resolve_jumps(ctx,next,ctx->text.n)) return false;
       }
-      CODE(0x0f,0x0b);
+      isa_trap(ctx);
       if (!resolve_jumps(ctx,done,ctx->text.n)) return false;
       reachable &= !all_terminate;
     } else if (s->kind==DYN_STMT_FOR && !s->for_range && s->target!=DYN_NO_EXPR) {
@@ -1484,27 +1482,27 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
         if (!s->for_pointer) {
           uint32_t bytes,a; if (!layout(ir,collection,&bytes,&a,0)) return false;
           uint32_t snapshot=counter-8*(2+(bytes+7)/8);
-          save_struct(ctx, snapshot,collection); CODE(0x48,0x8d,0x85); word(ctx, snapshot);
+          save_struct(ctx, snapshot,collection); isa_lea(ctx, R_A, snapshot);
         }
-        CODE(0x48,0xba); immediate(ctx, definition->length);
+        isa_immediate(ctx, R_D, definition->length);
       }
-      CODE(0x48,0x89,0x85); word(ctx, data); CODE(0x48,0x89,0x95); word(ctx, length);
-      if (s->for_reverse) CODE(0x48,0x89,0xd0); else CODE(0x31,0xc0);
-      CODE(0x48,0x89,0x85); word(ctx, counter);
+      isa_store(ctx, R_A, data); isa_store(ctx, R_D, length);
+      if (s->for_reverse) isa_move(ctx, R_A, R_D); else isa_zero(ctx, R_A);
+      isa_store(ctx, R_A, counter);
       unsigned loop=ctx->loop_depth++; ctx->loops[loop].id=s->loop_id; ctx->loops[loop].defer_base=ctx->defer_count;
       ctx->loops[loop].breaks=ctx->loops[loop].continues=UINT32_MAX; ctx->loops[loop].condition=ctx->text.n;
-      CODE(0x48,0x8b,0x85); word(ctx, counter);
-      if (s->for_reverse) { CODE(0x48,0x85,0xc0); pending_jump(ctx, 0x84,&ctx->loops[loop].breaks); CODE(0x48,0xff,0xc8); }
-      else { CODE(0x48,0x3b,0x85); word(ctx, length); pending_jump(ctx, 0x83,&ctx->loops[loop].breaks); }
-      CODE(0x48,0x69,0xc0); word(ctx, element_size); CODE(0x48,0x03,0x85); word(ctx, data);
-      if (s->for_pointer) { CODE(0x48,0x89,0x85); word(ctx, binding); }
-      else if (scalar(ir, element)) { load_memory(ctx, element); CODE(0x48,0x89,0x85); word(ctx, binding); }
+      isa_load(ctx, R_A, counter);
+      if (s->for_reverse) { isa_test(ctx, R_A); pending_jump(ctx, CC_E,&ctx->loops[loop].breaks); isa_step(ctx, -1); }
+      else { isa_compare_frame(ctx, length); pending_jump(ctx, CC_AE,&ctx->loops[loop].breaks); }
+      isa_scale(ctx, R_A, element_size); isa_add_frame(ctx, data);
+      if (s->for_pointer) isa_store(ctx, R_A, binding);
+      else if (scalar(ir, element)) { load_memory(ctx, element); isa_store(ctx, R_A, binding); }
       else save_struct(ctx, binding,element);
       bool body_falls;
       if (!block(ctx, ir,f,s->body_start,s->body_count,depth+1,&body_falls) || !resolve_jumps(ctx, ctx->loops[loop].continues,ctx->text.n)) return false;
-      CODE(0x48,0x8b,0x85); word(ctx, counter); CODE(0x48,0xff); byte(ctx, s->for_reverse?0xc8:0xc0);
-      CODE(0x48,0x89,0x85); word(ctx, counter);
-      byte(ctx, 0xe9); word(ctx, (uint32_t)(ctx->loops[loop].condition-ctx->text.n-4));
+      isa_load(ctx, R_A, counter); isa_step(ctx, s->for_reverse ? -1 : 1);
+      isa_store(ctx, R_A, counter);
+      isa_jump_back(ctx, ctx->loops[loop].condition);
       if (!resolve_jumps(ctx, ctx->loops[loop].breaks,ctx->text.n)) return false;
       --ctx->loop_depth;
     } else if (s->kind == DYN_STMT_FOR) {
@@ -1517,36 +1515,36 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
         if (s->for_pointer || !local_slot(ctx, f,s->local_id,&binding) ||
             !expression(ctx, ir,f,s->target,0)) return false;
         counter=ctx->statement_scratch[id]; stop=counter-8;
-        CODE(0x48,0x89,0x85); word(ctx, s->for_reverse?stop:counter);
+        isa_store(ctx, R_A, s->for_reverse?stop:counter);
         if (!expression(ctx, ir,f,s->expression,0)) return false;
-        CODE(0x48,0x89,0x85); word(ctx, s->for_reverse?counter:stop);
+        isa_store(ctx, R_A, s->for_reverse?counter:stop);
       }
       ctx->loops[loop].condition = ctx->text.n;
       if (s->for_range) {
-        CODE(0x48,0x8b,0x85); word(ctx, counter);
-        CODE(0x48,0x3b,0x85); word(ctx, stop);
+        isa_load(ctx, R_A, counter);
+        isa_compare_frame(ctx, stop);
         bool sign=signed_scalar(ir->expressions[s->target].type);
-        unsigned exit = s->for_reverse ? (s->for_inclusive ? (sign?0x8c:0x82) : (sign?0x8e:0x86))
-          : (s->for_inclusive ? (sign?0x8f:0x87) : (sign?0x8d:0x83));
+        Cond exit = s->for_reverse ? (s->for_inclusive ? (sign?CC_L:CC_B) : (sign?CC_LE:CC_BE))
+          : (s->for_inclusive ? (sign?CC_G:CC_A) : (sign?CC_GE:CC_AE));
         pending_jump(ctx, exit,&ctx->loops[loop].breaks);
-        if (s->for_reverse && !s->for_inclusive) CODE(0x48,0xff,0xc8);
-        CODE(0x48,0x89,0x85); word(ctx, binding);
+        if (s->for_reverse && !s->for_inclusive) isa_step(ctx, -1);
+        isa_store(ctx, R_A, binding);
       } else if (s->expression != DYN_NO_EXPR) {
         if (!expression(ctx, ir, f, s->expression, 0)) return false;
-        CODE(0x48, 0x85, 0xc0); pending_jump(ctx, 0x84,&ctx->loops[loop].breaks);
+        isa_test(ctx, R_A); pending_jump(ctx, CC_E,&ctx->loops[loop].breaks);
       }
       bool body_falls;
       if (!block(ctx, ir, f, s->body_start, s->body_count, depth + 1, &body_falls)) return false;
       if (!resolve_jumps(ctx, ctx->loops[loop].continues,ctx->text.n)) return false;
       if (s->for_range) {
-        CODE(0x48,0x8b,0x85); word(ctx, counter);
+        isa_load(ctx, R_A, counter);
         if (s->for_inclusive) {
-          CODE(0x48,0x3b,0x85); word(ctx, stop); pending_jump(ctx, 0x84,&ctx->loops[loop].breaks);
+          isa_compare_frame(ctx, stop); pending_jump(ctx, CC_E,&ctx->loops[loop].breaks);
         }
-        CODE(0x48,0xff); byte(ctx, s->for_reverse?0xc8:0xc0);
-        CODE(0x48,0x89,0x85); word(ctx, counter);
+        isa_step(ctx, s->for_reverse ? -1 : 1);
+        isa_store(ctx, R_A, counter);
       }
-      byte(ctx, 0xe9); word(ctx, (uint32_t)(ctx->loops[loop].condition - (ctx->text.n + 4)));
+      isa_jump_back(ctx, ctx->loops[loop].condition);
       if (!resolve_jumps(ctx, ctx->loops[loop].breaks,ctx->text.n)) return false;
       --ctx->loop_depth;
     } else if (s->kind == DYN_STMT_BREAK || s->kind == DYN_STMT_CONTINUE) {
@@ -1555,7 +1553,7 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
       if (!loop) return false;
       --loop;
       if (!emit_defers(ctx, ir,f,ctx->loops[loop].defer_base)) return false;
-      pending_jump(ctx, 0,s->kind == DYN_STMT_CONTINUE ? &ctx->loops[loop].continues : &ctx->loops[loop].breaks);
+      pending_jump(ctx, -1,s->kind == DYN_STMT_CONTINUE ? &ctx->loops[loop].continues : &ctx->loops[loop].breaks);
       reachable = false;
     } else return false;
     /* Validate even unreachable statements: unsupported IR never gets hidden
@@ -1611,7 +1609,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (aggregate(ir, f->return_type)) {
     uint32_t size,alignment; if (!layout(ir,f->return_type,&size,&alignment,0)) return false;
     scratch=(size?size+7:8)/8; ctx->return_offset=0u-8*(ctx->local_words+scratch);
-    if (abi_memory(ir,f->return_type)) { ++scratch; ctx->sret_offset=0u-8*(ctx->local_words+scratch); }
+    if (abi_memory(ctx->a64,ir,f->return_type)) { ++scratch; ctx->sret_offset=0u-8*(ctx->local_words+scratch); }
     if (scratch>MAX_SCRATCH) return false;
   }
   if (!count_scratch(ctx, ir,f,f->body_start,f->body_count,0,&scratch)) return false;
@@ -1619,37 +1617,30 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (!ctx->frame_bytes) ctx->frame_bytes = 16;
   ctx->stack_slots = ctx->loop_depth = 0;
   for (unsigned i = 0; i < GUARD_COUNT; ++i) ctx->message_offsets[i] = SIZE_MAX;
-  CODE(0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec); word(ctx, ctx->frame_bytes);
-  /* GP and SSE register banks exhaust independently; stack slots retain source order. */
-  const unsigned char regs[] = {0xbd,0xb5,0x95,0x8d,0x85,0x8d};
-  unsigned gp=ctx->sret_offset?1:0,fp=0,spilled=0;
-  if (ctx->sret_offset) { CODE(0x48,0x89,0xbd); word(ctx, ctx->sret_offset); }
+  isa_enter(ctx);
+  /* GP and FP register banks exhaust independently; stack slots retain source order. */
+  unsigned gp=ctx->sret_offset && !ctx->a64?1:0,fp=0,spilled=0;
+  if (ctx->sret_offset) isa_store_result_pointer(ctx, ctx->sret_offset);
   for (uint32_t i=0;i<f->param_count+(unsigned)f->variadic;++i) {
     DynIrParam packed={.type=f->variadic_type,.local_id=f->variadic_local_id};
     const DynIrParam *p=i<f->param_count?&ir->params[f->param_start+i]:&packed; uint32_t offset;
     if (!local_slot(ctx, f,p->local_id,&offset)) return false;
-    unsigned parts; int classes[512]; ArrayPart leaves[512]; unsigned leaf_count=0;
+    unsigned parts; bool indirect; AbiPart *assigned=ctx->call_parts;
     bool array=raw_aggregate(ir,p->type);
-    if (!abi_assign(ir,p->type,&gp,&fp,&parts,classes,512) ||
-        (array && !array_parts(ir,p->type,0,leaves,&leaf_count,0))) return false;
+    if (!abi_assign(ctx->a64,ir,p->type,&gp,&fp,assigned,&parts,512,&indirect)) return false;
     for (unsigned part=0;part<parts;++part) {
-      int cls=classes[part];
-      if (array) {
-        if (cls>=8) { CODE(0x66,0x48,0x0f,0x7e);byte(ctx, 0xc0+8*(unsigned)(cls-8)); }
-        else if (cls>=0) {
-          static const unsigned char gp_to_rax[]={0xf8,0xf0,0xd0,0xc8,0xc0,0xc8};
-          byte(ctx, cls<4?0x48:0x4c);byte(ctx, 0x89);byte(ctx, gp_to_rax[cls]);
-        } else { CODE(0x48,0x8b,0x85);word(ctx, 16+8*spilled++); }
-        normalize(ctx, leaves[part].type); CODE(0x4c,0x8d,0x9d); word(ctx, offset+leaves[part].offset); store_memory(ctx, leaves[part].type); continue;
+      int cls=assigned[part].cls;
+      if (array || indirect || (ctx->a64 && aggregate(ir,p->type))) {
+        if (cls>=0) isa_argument_to_a(ctx, cls);
+        else isa_load(ctx, R_A, 16+8*spilled++);
+        if (indirect) { save_struct(ctx, offset, p->type); continue; } /* copy the caller's memory */
+        if (array) { normalize(ctx, assigned[part].leaf); isa_lea(ctx, R_11, offset+assigned[part].offset); store_memory(ctx, assigned[part].leaf); continue; }
+        /* AArch64 struct pieces (HFA members or eightbytes) keep their exact size. */
+        isa_move(ctx, R_10, R_A); isa_lea(ctx, R_DI, offset+assigned[part].offset); isa_store_chunk(ctx, 0, assigned[part].size);
+        continue;
       }
-      if (cls>=8) {
-        CODE(0x66,0x48,0x0f,0x7e); byte(ctx, 0xc0+8*(unsigned)(cls-8)); CODE(0x48,0x89,0x85);
-      } else if (cls>=0) {
-        byte(ctx, cls<4?0x48:0x4c); byte(ctx, 0x89); byte(ctx, regs[cls]);
-      } else {
-        CODE(0x48,0x8b,0x85); word(ctx, 16+8*spilled++); CODE(0x48,0x89,0x85);
-      }
-      word(ctx, offset+part*8);
+      if (cls>=0) isa_store_argument(ctx, cls, offset+part*8);
+      else { isa_load(ctx, R_A, 16+8*spilled++); isa_store(ctx, R_A, offset+part*8); }
     }
   }
   if (ctx->debug_mode) {
@@ -1657,18 +1648,25 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
     dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
     snprintf(label, sizeof(label), "%s (%s:%u)", f->debug_name ? f->debug_name : f->name, path, line);
     size_t length = strlen(label), offset = literal(ctx, label, length);
-    string_arguments(ctx, offset, length); runtime_call(ctx, 1);
+    isa_string_arguments(ctx, offset, length); runtime_call(ctx, 1);
   }
   if (ctx->dwarf) {
     const char *path; unsigned line,column;
     dyn_location_get(locations,source,f->source_offset,&path,&line,&column);
     if (!backend_dwarf_line(ctx->dwarf,ctx->text.n,path,line,column,true)) return false;
   }
-  if (f->is_main && ctx->initializer_symbol) { byte(ctx,0xe8); relocate(ctx,ctx->initializer_symbol,R_X86_64_PLT32,-4); word(ctx,0); }
+  if (f->is_main && ctx->initializer_symbol) isa_call_symbol(ctx, ctx->initializer_symbol);
   bool falls;
   if (!block(ctx, ir, f, f->body_start, f->body_count, 0, &falls) || ctx->stack_slots) return false;
-  if (falls) { if (f->return_type != DYN_TYPE_VOID) return false; if (f->is_main) CODE(0x31,0xc0); return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type); }
+  if (falls) { if (f->return_type != DYN_TYPE_VOID) return false; if (f->is_main) isa_zero(ctx, R_A); return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type); }
   return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed;
+}
+/* AArch64 struct results: not yet supported natively; emission fails over to LLVM. */
+static bool a64_struct_result(BackendContext *ctx, const DynIrProgram *ir, DynType type, uint32_t offset) {
+  (void)ir; (void)type; (void)offset; a64_unsupported(ctx); return false;
+}
+static void a64_struct_return(BackendContext *ctx, const DynIrProgram *ir, DynType type) {
+  (void)ir; (void)type; a64_unsupported(ctx);
 }
 static size_t align8(size_t n) { return (n + 7) & ~(size_t)7; }
 /* Static scalar initializers only. Runtime initialization is a separate contract. */
@@ -1798,9 +1796,9 @@ static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
     if (!g->foreign && !ctx->global_static[id] && !expression_scratch(ctx,ir,g->initializer,0,&slots)) return false;
   }
   ctx->frame_bytes=((slots*8+15)/16)*16; if (!ctx->frame_bytes) ctx->frame_bytes=16;
-  CODE(0x55,0x48,0x89,0xe5,0x48,0x81,0xec); word(ctx,ctx->frame_bytes);
-  CODE(0x48,0x8b,0x05); relocate(ctx,ctx->initializer_flag_symbol,R_X86_64_GOTPCREL,-4); word(ctx,0);
-  CODE(0x80,0x38,0,0x0f,0x85); size_t done=ctx->text.n; word(ctx,0); CODE(0xc6,0x00,1);
+  isa_enter(ctx);
+  isa_symbol_address(ctx, R_A, ctx->initializer_flag_symbol);
+  size_t done=isa_once(ctx);
   for (size_t i=0;i<ir->global_init_count;++i) {
     uint32_t id=ir->global_init_order[i]; const DynIrGlobal *g=&ir->globals[id];
     if (g->foreign || ctx->global_static[id] || g->initializer==DYN_NO_EXPR) continue;
@@ -1809,14 +1807,13 @@ static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
     else snprintf(name,sizeof(name),"__dyn_init_root");
     f.name=name;
     for (unsigned j=0;j<GUARD_COUNT;++j) ctx->message_offsets[j]=SIZE_MAX;
-    CODE(0x48,0x8b,0x05); relocate(ctx,ctx->global_symbols[id],R_X86_64_GOTPCREL,-4); word(ctx,0);
+    isa_symbol_address(ctx, R_A, ctx->global_symbols[id]);
     if (dyn_type_is_array(g->type) && ir->expressions[g->initializer].kind==DYN_EXPR_ARRAY) {
       if (!initialize(ctx,ir,&f,g->type,g->initializer,0)) return false;
     } else if (!assign_value(ctx,ir,&f,g->type,g->initializer)) return false;
   }
-  patch_word(ctx,done,(uint32_t)(ctx->text.n-done-4));
-  if (ctx->dwarf && !backend_dwarf_epilogue(ctx->dwarf,ctx->text.n)) return false;
-  CODE(0xc9,0xc3);
+  isa_patch(ctx, done, ctx->text.n);
+  isa_return(ctx);
   return !ctx->stack_slots && !ctx->text.failed && !ctx->relocation_failed;
 }
 /* Mirrors codegen.c debug_type. Unknown types yield zero and omit the variable. */
