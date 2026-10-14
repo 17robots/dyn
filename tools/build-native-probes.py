@@ -39,6 +39,8 @@ for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('
         for label, fixture in fixtures:
             run([DYN,'build',ROOT/'tests'/fixture,'--target',target,'--no-cache','--quiet',
                  '--output',destination/(label+suffix), *(['--release'] if mode == 'release' else [])])
+        # macOS debug builds keep <output>.dynnative.o for the debugger; it is not a probe.
+        for kept in destination.glob('*.dynnative.o'): kept.unlink()
         for artifact in sorted(destination.iterdir()):
             rows.append({'path':str(artifact.relative_to(OUT)), 'mode':mode,
                          'sha256':hashlib.sha256(artifact.read_bytes()).hexdigest()})

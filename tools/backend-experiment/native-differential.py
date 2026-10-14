@@ -417,7 +417,7 @@ def main():
         staged = json.loads((args.run/'cases.json').read_text())
         prefix = runner(staged['target'])
         if prefix is None: sys.exit(f'no runner for {staged["target"]} on this machine')
-        outputs = {backend: args.run/name for backend, name in staged['programs'].items()}
+        outputs = {backend: args.run.resolve()/name for backend, name in staged['programs'].items()}
         if sys.platform != 'win32':  # artifact downloads drop the executable bit
             for path in outputs.values(): path.chmod(path.stat().st_mode | 0o111)
         compare(staged['target'], prefix, outputs, staged['count'], args.run, args.jobs)
