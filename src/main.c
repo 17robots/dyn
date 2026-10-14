@@ -521,14 +521,14 @@ static int execute_command(DynOptions *options, const char *compiler) {
     return 1;
   }
   phase = timer_start();
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  /* Module resolution, rewriting and interface reads are complete. */
+  (void)dyn_ast_release_project_trees(&sources);
+#endif
   if (is_command(options, "query")) {
     result = dyn_query_sources(&sources, main_path);
     dyn_sources_free(&sources); free(main_path); return result;
   }
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-  /* Module resolution, rewriting and interface reads are complete. */
-  if (!vet) (void)dyn_ast_release_project_trees(&sources);
-#endif
   DynCheckResult checked = {0};
   if (!build)
     checked = dyn_check_sources(&sources, main_path, false);

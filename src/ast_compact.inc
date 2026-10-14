@@ -815,6 +815,8 @@ static bool compact_comments(const DynSource *s, DynSpan span) {
   return false;
 }
 static bool compact_compatible_node(CompactNode n, const DynSource *s) {
+  /* Batch commands have no legacy reader to defer to. */
+  if (s->context.strict_syntax) return true;
   if (compact_kind(n) == SRC_ENUM_MEMBER && compact_comments(s, compact_span(n))) return false;
   if (compact_kind(n) == EXP_STRUCT) {
     CompactNode first = compact_first(n), last = first;

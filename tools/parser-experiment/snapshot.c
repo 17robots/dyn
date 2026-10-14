@@ -97,7 +97,9 @@ ExpSnapshot *exp_snapshot_create(const char *text, size_t length,
   }
   snapshot->view = (ExpSnapshotTree){snapshot->storage.nodes,
                                     snapshot->storage.count,
-                                    snapshot->storage.root};
+                                    snapshot->storage.root,
+                                    snapshot->storage.errors,
+                                    snapshot->storage.error_count};
   return snapshot;
 }
 

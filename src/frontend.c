@@ -152,7 +152,7 @@ DynAnalysisResult dyn_analyze(const DynSource *source, DynAstProgram *ast,
   bool certified = false;
 #ifdef DYN_EXPERIMENT_COMPACT_AST
   certified = source->compact_only && !options.recover &&
-              !source->context.work && !source->context.syntax_cache;
+              (!source->context.work || source->context.strict_syntax) && !source->context.syntax_cache;
 #endif
   TSTree **trees = certified ? NULL : calloc(count, sizeof(*trees));
   TSNode *roots = certified ? NULL : calloc(count, sizeof(*roots));

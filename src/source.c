@@ -361,6 +361,14 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   }
   out->text[at] = 0;
   out->length = at;
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  /* No enabled source: batch commands certify the empty text directly. */
+  if (!out->map_count && !prelude && out->context.strict_syntax) {
+    if (!dyn_source_prepare(out)) { dyn_source_free(out); return 2; }
+    out->compact_only = out->compact_validated;
+    return 0;
+  }
+#endif
   if (sources_have_syntax(sources)) {
 #ifdef DYN_EXPERIMENT_COMPACT_AST
     out->compact_only = out->map_count != 0 || prelude != 0;
@@ -376,8 +384,21 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
     if (!out->compact_parts) { dyn_source_free(out); return 2; }
 #endif
     if (prelude) {
-      TSTree *tree = dyn_syntax_reparse(out->text, prelude, NULL);
-      if (!tree) { dyn_source_free(out); return 2; }
+      TSTree *tree = NULL;
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+      if (out->compact_only && out->context.strict_syntax) {
+        DynSource part = {.text = out->text, .length = prelude, .context = out->context};
+        if (!dyn_source_prepare(&part) || !part.compact_validated) {
+          exp_snapshot_release(part.compact); dyn_source_free(out); return 2;
+        }
+        out->syntax_parts[out->syntax_part_count++] = NULL;
+        out->compact_parts[0] = part.compact;
+        out->compact_root_start = part.compact_root_start;
+        out->compact_root_end = part.compact_root_end;
+      } else
+#endif
+      tree = dyn_syntax_reparse(out->text, prelude, NULL);
+      if (tree) {
       out->syntax_parts[out->syntax_part_count++] = tree;
 #ifdef DYN_EXPERIMENT_COMPACT_SOURCES
       DynSource part = {.text = out->text, .length = prelude, .syntax = tree, .context = out->context};
@@ -391,6 +412,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
       }
 #endif
 #endif
+      } else if (!out->syntax_part_count) { dyn_source_free(out); return 2; }
     }
     TSPoint point = dyn_syntax_advance((TSPoint){0}, out->text, prelude);
     for (size_t i = 0, map = 0; i < sources->count; ++i) {

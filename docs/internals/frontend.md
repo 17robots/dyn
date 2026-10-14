@@ -20,17 +20,20 @@ facility.
 ## Default parser policy
 
 The default `dyn` and `dyn-release` artifacts parse batch CLI sources with the
-handwritten compact parser (`tools/parser-experiment/parser.c`) first. A source
-uses the compact tree only when it parses without error, its normalized depth is
-certified below the production 1024-level syntax depth limit for the pinned
-grammar, and its string literals pass the legacy-lexer safety check. A compact
-syntax error ends source loading for batch commands (`DynContext.strict_syntax`)
-with one diagnostic at the offending token (`dyn_source_report_syntax`); there is
-no recovery. This includes files whose `#target` excludes the host, which
-Tree-sitter used to skip. Sources that parse but fail the depth or string checks
-fall back to Tree-sitter, which also owns raw-tree depth reporting. Syntax-cache,
-work-budget and editor paths always use Tree-sitter, including its error
-recovery. The build verifies the grammar pin before linking.
+handwritten compact parser (`tools/parser-experiment/parser.c`). Batch commands
+(`DynContext.strict_syntax`) use only that parser: a syntax error ends source
+loading, including in files whose `#target` excludes the host. These parses
+recover (`ExpOptions.recover`): a failed statement or top-level declaration
+becomes an `SRC_ERROR` node, the parser resumes at the next line-initial token
+outside the item's brackets or no deeper than the item, and
+`dyn_source_report_syntax` reports up to 20 recorded errors. A source
+whose certified depth bound exceeds the 1024-level limit, or that hits the
+1024-call parser cap, is reported as too deep; the bound can exceed raw
+Tree-sitter depth by one level. NUL bytes are syntax errors. Work budgets reach
+the parser through its work callback. Other callers use the compact tree only when
+it parses, its depth is certified and its string literals pass the legacy-lexer
+safety check, and otherwise parse with Tree-sitter. Syntax-cache and editor paths
+always use Tree-sitter, including its error recovery. The build verifies the grammar pin before linking.
 
 `dyn-legacy` is the Tree-sitter-only rollback artifact and the differential
 reference for `just test-compact-first`. The staged `dyn-compact-*` artifacts

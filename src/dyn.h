@@ -238,7 +238,9 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
 /* Prepare caches a tree; tree returns an independently owned tree reference.
    Discard syntax before mutating source text. */
 bool dyn_source_prepare(DynSource *);
-/* Reports a syntax error recorded by dyn_source_prepare; false if none. */
+/* Reports syntax errors recorded by dyn_source_prepare, at most
+   DYN_SYNTAX_ERROR_LIMIT; false if none. */
+#define DYN_SYNTAX_ERROR_LIMIT 20
 bool dyn_source_report_syntax(const DynSource *);
 TSTree *dyn_source_tree(const DynSource *);
 bool dyn_source_reflection(const DynSource *, bool *);

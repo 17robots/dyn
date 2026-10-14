@@ -13,6 +13,9 @@ typedef struct {
 typedef struct {
   const ExpNode *nodes;
   uint32_t count, root;
+  /* Nonempty only for recovering parses; such trees contain SRC_ERROR nodes. */
+  const ExpSyntaxError *errors;
+  uint32_t error_count;
 } ExpSnapshotTree;
 
 /* Copy the exact source revision and parse it before publication. The returned

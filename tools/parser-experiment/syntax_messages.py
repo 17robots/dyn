@@ -30,9 +30,10 @@ def messages(stderr):
 
 
 def is_syntax_rejection(returncode, stderr):
-    """One parser diagnostic and a user-error exit."""
+    """Only parser diagnostics (at most 20, from recovery) and a user-error exit."""
     found = messages(stderr)
-    return returncode == 1 and found is not None and len(found) == 1 and bool(_pattern.match(found[0]))
+    return returncode == 1 and found is not None and 1 <= len(found) <= 20 and \
+        all(_pattern.match(m) or m == 'syntax nesting exceeds 1024 tree levels' for m in found)
 
 
 def _location(stderr):
@@ -67,6 +68,11 @@ def equivalent(reference, candidate, source=b''):
     host; the handwritten parser cannot read the target of an unparsable file."""
     if reference == candidate:
         return True
+    # The pinned lexer can choose a comment inside a string literal at its start
+    # or after an escape, rejecting valid sources such as "//x".
+    if reference[0] == 1 and candidate[0] == 0 and \
+            re.search(rb'"(?:[^"\\\n]|\\.)*(//|/\*)', source):
+        return True
     if not is_syntax_rejection(candidate[0], candidate[2]):
         return False
     # Tree-sitter references may also exit 2 without a diagnostic, e.g. for a
@@ -77,5 +83,16 @@ def equivalent(reference, candidate, source=b''):
         return False
     if re.search(rb'(?m)^#target\(', source):
         return True
-    return messages(candidate[2]) == ['unterminated literal'] and \
+    # The depth limit is measured on the compact tree, whose bound can exceed
+    # the raw Tree-sitter depth by one terminal edge.
+    if messages(candidate[2]) == ['syntax nesting exceeds 1024 tree levels']:
+        return True
+    # Tree-sitter accepts invalid UTF-8 inside literals and comments.
+    if 'invalid UTF-8' in messages(candidate[2]):
+        try:
+            source.decode('utf-8')
+        except UnicodeDecodeError:
+            return True
+        return False
+    return messages(candidate[2])[:1] == ['unterminated literal'] and \
         _string_spans_line(source, _location(candidate[2]))

@@ -15,12 +15,18 @@ servers so they pick up the new `dyn`.
 ## Unreleased
 
 - `dyn check`, `build` and `run` report syntax errors from the handwritten
-  parser instead of the Tree-sitter grammar: one diagnostic per file, at the
-  offending token, naming what was expected (for example `expected ')', found
-  'bar'` instead of `invalid syntax near 'ERROR'`). A file with a syntax error
-  now reports only its first error. Syntax errors in files whose `#target`
+  parser instead of the Tree-sitter grammar, at the offending token and naming
+  what was expected (for example `expected ')', found 'bar'` instead of
+  `invalid syntax near 'ERROR'`). The parser resumes at the next statement or
+  declaration and reports up to 20 errors per file. Syntax errors in files whose `#target`
   excludes the current platform are now errors too; they were silently ignored.
-  `--max-work` and editors still use Tree-sitter.
+  Batch commands no longer use Tree-sitter at all, including `--max-work`, deeply
+  nested sources and string literals containing `//` or `/*`, which the grammar
+  could reject (`"//x"`). The 1024-level nesting limit is measured on the new
+  parser's tree and can be one level stricter. Invalid UTF-8 in string and
+  character literals, and NUL bytes anywhere, are syntax errors. `dyn fmt`,
+  `docs`, `vet` and `query` use the new parser too. Editors still use
+  Tree-sitter.
 
 ## 0.1.0-preview.24
 

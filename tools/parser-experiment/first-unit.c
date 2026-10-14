@@ -69,7 +69,7 @@ int main(int argc,char **argv) {
   char deep[6000]="type T=";size_t at=strlen(deep);
   for(unsigned i=0;i<300;++i) deep[at++]='*';
   strcpy(deep+at,"u8");
-  s=source(deep);assert(dyn_source_prepare(&s) && s.syntax && !s.compact_validated);dyn_source_free(&s);
+  s=source(deep);assert(dyn_source_prepare(&s) && !s.syntax && s.compact_validated);dyn_source_free(&s);
   strcpy(deep,"const x:=1");at=strlen(deep);
   for(unsigned i=0;i<1100;++i) {deep[at++]='+';deep[at++]='1';}deep[at]=0;
   s=source(deep);assert(!dyn_source_prepare(&s) && s.syntax_too_deep && !s.compact_validated && !s.compact);
@@ -78,5 +78,21 @@ int main(int argc,char **argv) {
   assert(!dyn_source_prepare(&s) && !s.syntax_too_deep && !s.syntax);
   fail_at=0;assert(dyn_source_prepare(&s) && !s.syntax_too_deep && s.compact_validated);
   dyn_source_free(&s);
+  /* Batch commands never fall back: NUL, legacy string cases and budgets use
+     the compact tree; errors and excess depth are reported without Tree-sitter. */
+  s=(DynSource){.path=strdup("main.dyn"),.text=malloc(sizeof(nul)),.length=sizeof(nul)-1};
+  memcpy(s.text,nul,sizeof(nul));s.context.strict_syntax=true;
+  assert(!dyn_source_prepare(&s) && !s.syntax && s.syntax_error && s.syntax_error_offset==19);
+  dyn_source_free(&s);
+  s=source("fn main(){_=\"a//x\"}");s.context.strict_syntax=true;
+  assert(dyn_source_prepare(&s) && !s.syntax && s.compact_validated);dyn_source_free(&s);
+  s=source(valid);work=(DynWork){.remaining=UINT64_MAX};s.context.work=&work;s.context.strict_syntax=true;
+  assert(dyn_source_prepare(&s) && !s.syntax && s.compact_validated);dyn_source_free(&s);
+  s=source(valid);work=(DynWork){.status=DYN_WORK_CANCELLED};s.context.work=&work;s.context.strict_syntax=true;
+  assert(!dyn_source_prepare(&s) && !s.syntax && !s.compact_validated && !s.syntax_error);dyn_source_free(&s);
+  s=source("fn main( {");s.context.strict_syntax=true;
+  assert(!dyn_source_prepare(&s) && !s.syntax && s.syntax_error && s.syntax_error_offset==9);dyn_source_free(&s);
+  s=source(deep);s.context.strict_syntax=true;
+  assert(!dyn_source_prepare(&s) && !s.syntax && s.syntax_too_deep && !s.compact);dyn_source_free(&s);
   return 0;
 }

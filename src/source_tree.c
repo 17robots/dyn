@@ -96,22 +96,43 @@ bool dyn_source_prepare(DynSource *source) {
   bool inspect_compact = source->compact == NULL;
 #endif
 #ifdef DYN_EXPERIMENT_COMPACT_FIRST
-  if (!source->syntax && !source->context.work && !source->context.syntax_cache &&
-      !memchr(source->text, '\0', source->length)) {
+  /* Batch commands rely on the handwritten parser alone. Other callers keep
+     Tree-sitter for anything the compact tree cannot certify. */
+  bool strict = source->context.strict_syntax;
+  if (!source->syntax && !source->context.syntax_cache &&
+      (strict || (!source->context.work && !memchr(source->text, '\0', source->length)))) {
     source->syntax_too_deep=false;
     if (!source->compact) {
       ExpSnapshotError error;
-      source->compact=exp_snapshot_create(source->text,source->length,NULL,&error);
+      ExpOptions options={.work=compact_source_work,.data=&source->context,.recover=strict};
+      source->compact=exp_snapshot_create(source->text,source->length,source->context.work || strict ? &options : NULL,&error);
       if (!source->compact && (error.kind==EXP_ALLOCATION_ERROR || error.kind==EXP_CANCELLED)) return false;
-      if (!source->compact && error.kind==EXP_SYNTAX_ERROR && source->context.strict_syntax) {
+      if (!source->compact && strict && error.kind==EXP_SYNTAX_ERROR) {
         source->syntax_error=error.message;
         source->syntax_expected=error.expected;
         source->syntax_error_offset=error.offset;
         return false;
       }
+      if (!source->compact && strict && error.kind==EXP_LIMIT_ERROR && strstr(error.message, "nesting")) {
+        source->syntax_too_deep=true;
+        return false;
+      }
     }
     const ExpSnapshotTree *tree=dyn_compact_tree(source);
-    if (exp_depth_certified(tree,DYN_SYNTAX_DEPTH_LIMIT) && compact_first_strings_safe(source,tree)) {
+    if (tree && tree->error_count) {
+      /* Recovered errors: the partial tree is kept only for reporting. */
+      source->syntax_error=tree->errors[0].message;
+      source->syntax_expected=tree->errors[0].expected;
+      source->syntax_error_offset=tree->errors[0].offset;
+      return false;
+    }
+    bool certified=exp_depth_certified(tree,DYN_SYNTAX_DEPTH_LIMIT);
+    if (tree && strict && !certified) {
+      exp_snapshot_release(source->compact); source->compact=NULL;
+      source->syntax_too_deep=true;
+      return false;
+    }
+    if (certified && (strict || compact_first_strings_safe(source,tree))) {
       source->compact_validated=true;
       source->compact_root_start=tree->nodes[tree->root].start;
       source->compact_root_end=tree->nodes[tree->root].end;
@@ -167,13 +188,15 @@ static size_t syntax_token_end(const char *text, size_t length, size_t at) {
     }
   } else if (c >= 0x80)
     while (end < length && ((unsigned char)text[end] & 0xc0) == 0x80) ++end;
+  else if (strchr(":=<>!&|+-*/%^.~", c))
+    while (end < length && end - at < 3 && text[end] && strchr(":=<>!&|+-*/%^.~", text[end])) ++end;
   return end - at > 32 ? at + 32 : end;
 }
 #endif
-bool dyn_source_report_syntax(const DynSource *source) {
 #ifdef DYN_EXPERIMENT_COMPACT_FIRST
-  if (!source->syntax_error) return false;
-  size_t start = source->syntax_error_offset;
+static void report_syntax_error(const DynSource *source, uint32_t offset,
+                                const char *error, const char *expected) {
+  size_t start = offset;
   if (start > source->length) start = source->length;
   size_t end = start;
   char found[48];
@@ -192,17 +215,32 @@ bool dyn_source_report_syntax(const DynSource *source) {
     } else snprintf(found, sizeof(found), "'%.*s'", (int)(end - start), source->text + start);
   }
   char message[160];
-  if (source->syntax_expected)
-    snprintf(message, sizeof(message), "expected '%s', found %s", source->syntax_expected, found);
-  else if (!strcmp(source->syntax_error, "unexpected token"))
+  if (expected)
+    snprintf(message, sizeof(message), "expected '%s', found %s", expected, found);
+  else if (!strcmp(error, "unexpected token"))
     snprintf(message, sizeof(message), "unexpected %s", found);
-  else if (!strcmp(source->syntax_error, "unexpected character"))
+  else if (!strcmp(error, "unexpected character"))
     snprintf(message, sizeof(message), "unexpected character %s", found);
-  else if (!strncmp(source->syntax_error, "expected ", 9))
-    snprintf(message, sizeof(message), "%s, found %s", source->syntax_error, found);
+  else if (!strncmp(error, "expected ", 9))
+    snprintf(message, sizeof(message), "%s, found %s", error, found);
   else
-    snprintf(message, sizeof(message), "%s", source->syntax_error);
+    snprintf(message, sizeof(message), "%s", error);
   dyn_diagnostic_source("error", source, start, end, message);
+}
+#endif
+bool dyn_source_report_syntax(const DynSource *source) {
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+  if (!source->syntax_error) return false;
+  const ExpSnapshotTree *tree = dyn_compact_tree(source);
+  if (!tree || !tree->error_count) {
+    report_syntax_error(source, source->syntax_error_offset, source->syntax_error,
+                        source->syntax_expected);
+    return true;
+  }
+  /* Later errors can follow from recovery; report a bounded prefix. */
+  for (uint32_t i = 0; i < tree->error_count && i < DYN_SYNTAX_ERROR_LIMIT; ++i)
+    report_syntax_error(source, tree->errors[i].offset, tree->errors[i].message,
+                        tree->errors[i].expected);
   return true;
 #else
   (void)source;

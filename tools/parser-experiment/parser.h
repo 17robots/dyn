@@ -23,7 +23,9 @@ typedef enum {
   SRC_BLOCK, SRC_RETURN, SRC_CONTINUE, SRC_BREAK, SRC_IF, SRC_ELSE,
   SRC_CASE, SRC_CASE_ARM, SRC_CASE_PATTERN, SRC_TYPE_PATTERN, SRC_FOR,
   SRC_FOR_CONDITION, SRC_DEFER, SRC_ASSIGNMENT, SRC_ASSERT, SRC_PANIC,
-  SRC_RANGE, SRC_QUALIFIER, SRC_REVERSE
+  SRC_RANGE, SRC_QUALIFIER, SRC_REVERSE,
+  /* Recovering parses replace a failed statement or declaration with this leaf. */
+  SRC_ERROR
 } ExpSourceKind;
 
 typedef enum {
@@ -44,14 +46,21 @@ typedef enum {
   EXP_OK, EXP_SYNTAX_ERROR, EXP_ALLOCATION_ERROR, EXP_LIMIT_ERROR, EXP_CANCELLED
 } ExpError;
 typedef struct {
-  /* Zero selects the default limits. max_depth can lower the hard cap of 256.
+  /* Zero selects the default limits. max_depth can lower the hard cap of 1024.
      The callback is
      borrowed only for this invocation; false stops parsing immediately. */
   uint64_t max_work;
   uint32_t max_depth;
   bool (*work)(void *data, uint64_t units);
   void *data;
+  /* Record syntax errors, replace each failed statement or top-level
+     declaration with an SRC_ERROR node and publish the partial tree. */
+  bool recover;
 } ExpOptions;
+typedef struct {
+  uint32_t offset;
+  const char *message, *expected; /* Static strings; expected may be NULL. */
+} ExpSyntaxError;
 typedef struct {
   ExpNode *nodes;
   uint32_t count, capacity, root, error_offset;
@@ -59,6 +68,9 @@ typedef struct {
   /* Static spelling a failed expect() wanted at error_offset, otherwise NULL. */
   const char *error_expected;
   ExpError error_kind;
+  /* Errors recovered from by a recovering parse, in source order. */
+  ExpSyntaxError *errors;
+  uint32_t error_count, error_capacity;
 } ExpTree;
 /* No recovery or partial success. Syntax errors are reported at the first
    failure; error_offset is the start of the offending token. Error offsets are byte offsets in source.

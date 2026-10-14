@@ -2984,7 +2984,7 @@ bool dyn_ast_release_project_trees(DynSources *sources) {
   /* All-or-nothing: legacy declaration phases may read any partition. */
   for (size_t i = 0; i < sources->count; ++i) {
     const DynSource *s = &sources->items[i];
-    if (s->context.work || s->context.syntax_cache) return false;
+    if (s->context.syntax_cache || (s->context.work && !s->context.strict_syntax)) return false;
     int enabled = dyn_source_target_enabled(s);
     if (!enabled) continue;
     const ExpSnapshotTree *tree = exp_snapshot_tree(s->compact);

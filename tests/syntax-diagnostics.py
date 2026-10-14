@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch syntax errors come from the handwritten parser: one precise diagnostic per file."""
+"""Batch syntax errors come from the handwritten parser, which recovers per statement and declaration."""
 import os
 import subprocess
 import tempfile
@@ -13,7 +13,7 @@ CASES = {
     'unclosed-block': ('fn main() {\n  if true {\n}\n', '4:1: error: expected \'}\', found end of file [range 4:1-4:1]'),
     'unclosed-call': ('fn main() {\n  foo(1, 2\n  bar()\n}\n', '3:3: error: expected \')\', found \'bar\' [range 3:3-3:6]'),
     'missing-parameter': ('fn f(a: i32, -> i32 { return a }\nfn main() {}\n',
-                          '1:14: error: expected identifier, found \'-\' [range 1:14-1:15]'),
+                          '1:14: error: expected identifier, found \'->\' [range 1:14-1:16]'),
     'unterminated-string': ('fn main() {\n  x := "abc\n}\n', '2:8: error: unterminated literal [range 2:8-2:9]'),
     'stray-character': ('fn main() {\n  x := 1;\n}\n', '2:9: error: unexpected character \';\' [range 2:9-2:10]'),
     'invisible-character': ('fn main() {\n  return \u2028\n}\n', '2:10: error: unexpected character U+2028 [range 2:10-2:13]'),
@@ -34,6 +34,20 @@ with tempfile.TemporaryDirectory(prefix='dyn-syntax-diagnostics-') as temporary:
             assert result.returncode == 1, (name, command, result.returncode, result.stderr)
             assert len(errors) == 1 and errors[0].endswith('main.dyn:' + expected), (name, command, result.stderr)
             assert not (directory/'out').exists(), (name, command)
+
+    # Recovery resumes at the next statement or declaration and reports each error.
+    several = root/'several'
+    several.mkdir()
+    (several/'main.dyn').write_text('fn main() {\n  x := (1 +\n  y := 2\n  foo(y\n}\nstruct P { x: i32 y: i32 }\nfn ok() {}\n')
+    result = subprocess.run([DYN, 'check', str(several)], capture_output=True, text=True, timeout=60)
+    errors = [line.split('main.dyn:', 1)[1] for line in result.stderr.splitlines() if 'error:' in line]
+    assert result.returncode == 1 and errors == [
+        "3:5: error: expected ')', found ':=' [range 3:5-3:7]",
+        "5:1: error: expected ')', found '}' [range 5:1-5:2]",
+        "6:19: error: expected '}', found 'y' [range 6:19-6:20]"], result.stderr
+    (several/'main.dyn').write_text('fn main() {\n' + '  x := )\n' * 30 + '}\n')
+    result = subprocess.run([DYN, 'check', str(several)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1 and result.stderr.count('error:') == 20, result.stderr
 
     # A broken imported module is reported at its own path; the importer is never analyzed.
     imported = root/'imported'

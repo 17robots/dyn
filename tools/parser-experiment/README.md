@@ -33,7 +33,11 @@ replaces reliance on the anonymous closing parenthesis in the current AST reader
 Only reachable nodes receive parent links; discarded speculative nodes may remain
 in the allocation and must not be traversed as declarations.
 Source bytes are borrowed. Parsing does not perform semantic analysis or escape
-decoding. Failed parses never expose a root; callers can reuse or release storage
+decoding. With `ExpOptions.recover`, a syntax error inside a block or top-level
+declaration is recorded in `ExpTree.errors`, the item becomes an `SRC_ERROR`
+leaf, and parsing resumes at the next line-initial token outside the item's
+brackets or indented no deeper than it (column zero at top level); invalid
+tokens resume on the next line. Without it, failed parses never expose a root; callers can reuse or release storage
 on every failure path. Type/array ambiguity reuses the parsed bracket contents,
 avoiding exponential replay of nested array arguments.
 
@@ -56,7 +60,7 @@ imports, directives, and statement/loop builtins. Syntax acceptance does not imp
 semantic validity. Contextual keyword rules follow the pinned parser, including
 identifiers that would be keywords in another context.
 
-Both entry points limit recursive parser calls to 256 and share a non-resetting
+Both entry points limit recursive parser calls to 1024 and share a non-resetting
 work budget of `128 * source_bytes + 1024` units. `ExpOptions` can lower the
 recursion limit, supply a work limit, and provide an invocation-local cooperative
 work callback. Work includes the initial source length, token reads (including
@@ -305,9 +309,9 @@ the only removed nonterminal and cannot contain another `primary` directly.
 Other removed children are terminal tokens, comments or string/character escape
 leaves. Assign root depth zero and each compact child edge weight one plus its
 primary flag. The maximum weighted depth plus one bounds visible raw Tree-sitter
-depth; synthetic slice endpoints only overestimate it. A bound above 1024 triggers
-Tree-sitter validation rather than rejecting the source. The 256-call compact
-parser cap remains an independent reason to fall back. `grammar-pin.py` pins the
+depth; synthetic slice endpoints only overestimate it. Batch commands reject a
+bound above 1024, or the 1024-call compact parser cap, as too deep; other callers
+still fall back to Tree-sitter validation. `grammar-pin.py` pins the
 grammar, generated parser and scanner; changing them requires another audit.
 
 This argument is conditional on normalized-tree parity. It does **not** formally

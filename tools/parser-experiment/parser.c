@@ -3,7 +3,7 @@
 #include <string.h>
 
 #define NONE UINT32_MAX
-#define MAX_DEPTH 256
+#define MAX_DEPTH 1024
 /* Multi-byte punctuation uses its spelling rather than a public token enum. */
 typedef enum { END, NAME, NUMBER, STRING, CHARACTER, PUNCT, BAD } TokenKind;
 typedef struct { uint32_t start, end; TokenKind kind; } Token;
@@ -561,7 +561,7 @@ bool exp_parse_with_options(const char *source, size_t length, ExpTree *tree, co
 bool exp_parse(const char *source, size_t length, ExpTree *tree) {
   return exp_parse_with_options(source, length, tree, NULL);
 }
-void exp_free(ExpTree *tree) { free(tree->nodes); memset(tree, 0, sizeof(*tree)); }
+void exp_free(ExpTree *tree) { free(tree->nodes); free(tree->errors); memset(tree, 0, sizeof(*tree)); }
 
 /* Full-source experiment shares the bounded lexer and expression parser. */
 #include "source.inc"

@@ -122,19 +122,14 @@ int main(void) {
   assert(strstr(diagnostics.bytes, "original/second.dyn|2:4-2:8|duplicate function 'main'"));
   dyn_ast_program_free(&ast); dyn_source_free(&merged);
   dyn_source_discard_syntax(&inputs[0]); dyn_source_discard_syntax(&inputs[1]);
-  /* Production-valid depth beyond the compact recursion cap must use the
-     existing consumer. Its diagnostics and locations remain authoritative. */
+  /* The compact recursion cap covers production-valid depth. */
   char deep[2048]; size_t n = 0;
   memcpy(deep, "fn main(){_=", 12); n = 12;
   memset(deep+n, '(', 300); n += 300; deep[n++] = '1';
   memset(deep+n, ')', 300); n += 300; deep[n++] = '}'; deep[n] = 0;
   s.text = deep; s.length = n; diagnostics = (Diagnostics){0}; result = (DynAnalysisResult){0};
-  TSTree *tree = dyn_source_tree(&s); assert(tree && !ts_node_has_error(ts_tree_root_node(tree)));
-  assert(analysis_compact_declarations(&s, 0, (uint32_t)s.length, NULL, &result) == COMPACT_DECL_FALLBACK);
-  assert(!result.errors && !result.has_main && !diagnostics.length);
-  analysis_declarations(ts_tree_root_node(tree), &s, NULL, &result);
-  assert(result.has_main && !result.errors);
-  ts_tree_delete(tree);
+  assert(analysis_compact_declarations(&s, 0, (uint32_t)s.length, NULL, &result) == COMPACT_DECL_USED);
+  assert(result.has_main && !result.errors && !diagnostics.length);
   /* Compact syntax rejection must not invent diagnostics for the old reader. */
   s.text = "fn"; s.length = 2; result = (DynAnalysisResult){0};
   assert(analysis_compact_declarations(&s, 0, (uint32_t)s.length, NULL, &result) == COMPACT_DECL_FALLBACK);
