@@ -426,14 +426,14 @@ static int execute_command(DynOptions *options, const char *compiler) {
 #ifdef DYN_NATIVE_BACKEND
   native = options->backend != DYN_BACKEND_LLVM &&
            (is_command(options, "build") || run) && !options->release &&
-           !strcmp(DYN_HOST_TARGET, "x86_64-linux") &&
-           !strcmp(options->target, "x86_64-linux") && !options->shared &&
+           (!strcmp(options->target, "x86_64-linux") || !strcmp(options->target, "aarch64-linux")) &&
+           !options->shared &&
            !options->emit_ir && !options->emit_asm &&
            !options->optimization.native_cpu && !options->optimization.cpu &&
            !options->optimization.features && !options->optimization.remarks;
 #endif
   if (options->backend == DYN_BACKEND_NATIVE && !native) {
-    fprintf(stderr, "error: --backend native requires an x86_64-linux debug build "
+    fprintf(stderr, "error: --backend native requires an x86_64-linux or aarch64-linux debug build "
                     "without --shared, --emit-ir, --emit-asm, CPU/features or "
                     "optimization remarks\n");
     return 2;

@@ -1,9 +1,28 @@
 # Native debug backend
 
 This backend consumes the checked `DynIrProgram` produced by `dyn_analyze` and
-`dyn_ir_lower` and writes x86-64 Linux ELF64 relocatable objects directly, without
-LLVM or an assembler. The default `dyn` and `dyn-release` compilers link it on
-x86-64 Linux hosts (`-DDYN_NATIVE_BACKEND`); other hosts build without it.
+`dyn_ir_lower` and writes x86-64 or AArch64 Linux ELF64 relocatable objects
+directly, without LLVM or an assembler. The default `dyn` and `dyn-release`
+compilers link it on x86-64 Linux hosts (`-DDYN_NATIVE_BACKEND`); other hosts
+build without it.
+
+The IR walker in `driver.c` emits named operations from `isa.inc` over a small
+register model (accumulator, descriptor word, operand, scratch and copy
+registers, frame pointer and expression stack). `isa.inc` holds the x86-64
+encodings, which are byte-identical to the original emitter
+(`object-hashes.py --compare`), and `a64.inc` the AArch64 ones. AArch64 pushes
+are 16 bytes so SP stays aligned.
+
+AArch64 follows AAPCS64 for C-visible types: eight GP and eight FP argument
+registers, HFAs in consecutive FP registers, other composites up to 16 bytes in
+GP pairs, larger composites through a pointer to a caller-owned copy, and X8 for
+indirect results. Dyn-only arrays and payload enums are passed as flattened
+leaves and returned through memory, since every function in a build is emitted
+by the same backend. `a64-differential.py` builds a 3,000-case corpus (the
+scalar suite plus aggregates, enums, `any`, variadics, defers, globals and a
+clang-compiled C provider with callbacks) with both backends and compares every
+case's status, stdout and stderr under `qemu-aarch64`; `just test-native-a64`
+runs it, and it verifies DWARF with `llvm-dwarfdump` when available.
 
 ## Compiler integration
 
@@ -17,7 +36,7 @@ x86-64 Linux hosts (`-DDYN_NATIVE_BACKEND`); other hosts build without it.
 - `llvm`: always use LLVM.
 
 `--release`, `--shared`, `--emit-ir`, `--emit-asm`, CPU/feature selection,
-optimization remarks and non-x86_64-linux targets always use LLVM; combining them
+optimization remarks and targets other than x86_64-linux and aarch64-linux always use LLVM; combining them
 with `--backend native` is an error. Debug builds emit DWARF by default: lines,
 frames, parameters, and typed locals nested in lexical blocks, with payload enums
 as `tag` plus a `payload` union; `--debug-info` is accepted.

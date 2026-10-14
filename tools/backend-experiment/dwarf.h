@@ -22,9 +22,13 @@ typedef struct {
   size_t relocation_count, relocation_capacity;
 } BackendDwarfOutput;
 BackendDwarf *backend_dwarf_create(void);
+/* AArch64 frames: stp x29, x30, [sp, #-16]!; mov x29, sp ... mov sp, x29; ldp; ret. */
+BackendDwarf *backend_dwarf_create_a64(void);
 void backend_dwarf_free(BackendDwarf *);
 /* All offsets are relative to this object's .text. Functions cannot overlap.
-   Frames must begin with push rbp; mov rbp,rsp, and end with leave; ret. */
+   x86-64 frames begin with push rbp; mov rbp,rsp and end with leave; ret.
+   Epilogue offsets mark the first epilogue instruction. Relocation types
+   are x86-64 R_X86_64_32/64; AArch64 writers map them to ABS32/ABS64. */
 bool backend_dwarf_begin(BackendDwarf *, size_t begin, const char *name,
                          const char *path, unsigned line, unsigned column);
 bool backend_dwarf_line(BackendDwarf *, size_t pc, const char *path,

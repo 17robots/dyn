@@ -47,7 +47,7 @@ struct BackendDwarf {
   size_t variable_count, variable_capacity;
   const char *last_path; /* callers pass stable location-index paths */
   unsigned last_file;
-  bool active, failed;
+  bool active, failed, a64;
 };
 static bool grow(void **data, size_t *capacity, size_t count, size_t size, size_t limit) {
   if (count > limit || size > SIZE_MAX / count) return false;
@@ -82,6 +82,11 @@ static unsigned file_index(BackendDwarf *d, const char *path) {
   return d->last_file;
 }
 BackendDwarf *backend_dwarf_create(void) { return calloc(1, sizeof(BackendDwarf)); }
+BackendDwarf *backend_dwarf_create_a64(void) {
+  BackendDwarf *d = calloc(1, sizeof(BackendDwarf));
+  if (d) d->a64 = true;
+  return d;
+}
 void backend_dwarf_free(BackendDwarf *d) {
   if (!d) return;
   for (size_t i = 0; i < d->function_count; ++i) free(d->functions[i].name);
@@ -326,7 +331,7 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
   }
   for (size_t i=0;ok && i<d->function_count;++i) {
     Function *f=&d->functions[i];
-    static const unsigned char frame_base[]={1,0x56}; /* DW_OP_reg6 (rbp) */
+    const unsigned char frame_base[]={1,d->a64?0x6d:0x56}; /* DW_OP_reg29 (x29) / reg6 (rbp) */
     ok=uleb(b,2) && string(b,f->name) && string(b,f->name) && uleb(b,f->file) &&
        uleb(b,f->line) && uleb(b,f->column) &&
        relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,R_X86_64_64,f->begin) &&
@@ -401,7 +406,35 @@ static bool advance(BackendDwarfBytes *b,size_t delta) {
   if (delta<64) return number(b,0x40|delta,1);
   return number(b,4,1) && number(b,delta,4);
 }
+static bool frames_a64(BackendDwarf *d,BackendDwarfOutput *out) {
+  BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_FRAME];
+  /* CIE: code alignment 4, data alignment -8, return address x30, CFA = sp. */
+  PUT(number(b,0,4)); PUT(number(b,UINT32_MAX,4)); PUT(number(b,1,1)); PUT(number(b,0,1));
+  PUT(uleb(b,4)); PUT(sleb(b,-8)); PUT(number(b,30,1));
+  const unsigned char initial[]={0x0c,31,0}; PUT(bytes(b,initial,sizeof(initial)));
+  while (b->size%8) PUT(number(b,0,1));
+  patch32(b,0,b->size-4);
+  for (size_t i=0;i<d->function_count;++i) {
+    Function *f=&d->functions[i]; size_t start=b->size;
+    PUT(number(b,0,4)); PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_FRAME,R_X86_64_32,0));
+    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,R_X86_64_64,f->begin));
+    PUT(number(b,f->end-f->begin,8));
+    /* After stp: CFA = sp + 16, x29 at CFA-16, x30 at CFA-8; after mov: CFA = x29 + 16. */
+    const unsigned char prologue[]={0x41,0x0e,16,0x80|29,2,0x80|30,1,0x41,0x0d,29};
+    PUT(bytes(b,prologue,sizeof(prologue))); size_t pc=f->begin+8;
+    for (size_t j=f->first_epilogue;j<f->last_epilogue;++j) {
+      size_t after_ldp=d->epilogues[j]+8; /* mov sp, x29; ldp x29, x30, [sp], #16 */
+      PUT(advance(b,(after_ldp-pc)/4));
+      const unsigned char epilogue[]={0x0a,0x0c,31,0,0xc0|29,0xc0|30,0x41,0x0b};
+      PUT(bytes(b,epilogue,sizeof(epilogue))); pc=after_ldp+4;
+    }
+    while (b->size%8) PUT(number(b,0,1));
+    patch32(b,start,b->size-start-4);
+  }
+  return true;
+}
 static bool frames(BackendDwarf *d,BackendDwarfOutput *out) {
+  if (d->a64) return frames_a64(d,out);
   BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_FRAME];
   PUT(number(b,0,4)); PUT(number(b,UINT32_MAX,4)); PUT(number(b,1,1)); PUT(number(b,0,1));
   PUT(uleb(b,1)); PUT(sleb(b,-8)); PUT(number(b,16,1));

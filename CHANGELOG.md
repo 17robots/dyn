@@ -20,7 +20,10 @@ servers so they pick up the new `dyn`.
   debugger information (lines, frames, parameters and typed locals). Programs the
   native code generator cannot handle fall back to LLVM automatically.
   `--backend llvm` restores the old behavior; `--backend native` makes a
-  fallback an error. Release builds and other targets still use LLVM.
+  fallback an error. Debug builds cross-compiled to AArch64 Linux use the same
+  native code generator. Release builds and other targets still use LLVM.
+- Native debug information shows each local only within its scope, and payload
+  enums as `tag` plus a `payload` union.
 - The compiler parses sources with a handwritten parser, making `dyn check`
   about 1.9 times faster with 40% less peak memory on large projects. Files with
   syntax errors are still reported through the Tree-sitter grammar, so

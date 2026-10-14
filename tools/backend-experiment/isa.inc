@@ -14,7 +14,6 @@ static const unsigned char x86_setcc[] = {0x94, 0x95, 0x92, 0x93, 0x96, 0x97, 0x
 static const unsigned char x86_code[] = {0, 1, 2, 6, 7, 0, 2, 3};
 static const unsigned char x86_extended[] = {0, 0, 0, 0, 0, 1, 1, 1};
 
-static void a64_unsupported(BackendContext *ctx) { ctx->text.failed = true; }
 
 /* reg <- [FP + offset], 64-bit. */
 static void isa_load(BackendContext *ctx, Reg r, uint32_t offset) {

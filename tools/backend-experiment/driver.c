@@ -13,7 +13,7 @@
 #define LIMIT (1024u * 1024u * 1024u)
 /* Fixed per-object capacities; exceeding one fails emission explicitly. */
 #define MAX_SYMBOLS 32768
-#define MAX_LOCALS 4096
+#define MAX_LOCALS 65536
 #define MAX_SCRATCH (1u << 21) /* frame eightbytes: 16 MiB */
 #define MAX_AGGREGATE (1u << 24)
 #define MAX_NODES (1u << 22)
@@ -364,15 +364,16 @@ static bool abi_assign(bool a64,const DynIrProgram *ir,DynType type,unsigned *gp
   if (a64 && dyn_type_is_struct(type)) {
     DynType element; unsigned members;
     unsigned chunks=(size+7)/8;
-    if (a64_struct_hfa(ir,type,&element,&members) && *fp+members<=8) {
+    bool hfa=a64_struct_hfa(ir,type,&element,&members);
+    if (hfa && *fp+members<=8) {
       if (members>capacity) return false;
       for (unsigned i=0;i<members;++i) parts[i]=(AbiPart){i*(memory_bits(element)/8),memory_bits(element)/8,abi_fp(fp),element};
       *count=members; return true;
     }
-    if (a64_struct_hfa(ir,type,&element,&members)) *fp=8;
+    if (hfa) *fp=8; /* an HFA that does not fit goes entirely to the stack */
     else if (size>16) { *indirect=true; parts[0]=(AbiPart){0,8,abi_gp(true,gp),DYN_TYPE_RAWPTR}; *count=1; return true; }
-    bool registers=*gp+chunks<=8 && !(element && members);
-    if (!registers && !(element && members)) *gp=8;
+    bool registers=!hfa && *gp+chunks<=8;
+    if (!registers && !hfa) *gp=8;
     if (chunks>capacity) return false;
     for (unsigned i=0;i<chunks;++i)
       parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,registers?abi_gp(true,gp):-1,DYN_TYPE_U64};
@@ -1588,7 +1589,8 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (f->foreign) return true;
   if (f->variadic && (!dyn_type_is_slice(f->variadic_type) || !abi_supported(ir,f->variadic_type))) return false;
   if (f->local_count > MAX_LOCALS || (uint64_t)f->local_start + f->local_count > ir->local_count) return false;
-  ctx->local_words=0; memset(ctx->local_alias,0,sizeof(ctx->local_alias));
+  ctx->local_words=0;
+  if (f->local_count <= MAX_LOCALS) memset(ctx->local_alias,0,f->local_count*sizeof(*ctx->local_alias));
   if (f->local_count <= MAX_LOCALS) {
     memset(ctx->local_scope_begin,0,f->local_count*sizeof(*ctx->local_scope_begin));
     memset(ctx->local_scope_end,0,f->local_count*sizeof(*ctx->local_scope_end));
@@ -1661,12 +1663,40 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (falls) { if (f->return_type != DYN_TYPE_VOID) return false; if (f->is_main) isa_zero(ctx, R_A); return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type); }
   return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed;
 }
-/* AArch64 struct results: not yet supported natively; emission fails over to LLVM. */
+/* AArch64 struct results: HFA members arrive in v0-v3, other structs up to
+   16 bytes in x0/x1 (AAPCS64); larger structs used the hidden pointer. */
 static bool a64_struct_result(BackendContext *ctx, const DynIrProgram *ir, DynType type, uint32_t offset) {
-  (void)ir; (void)type; (void)offset; a64_unsupported(ctx); return false;
+  DynType element; unsigned members; uint32_t size,alignment;
+  if (!layout(ir,type,&size,&alignment,0)) return false;
+  if (a64_struct_hfa(ir,type,&element,&members)) {
+    unsigned bytes=memory_bits(element)/8;
+    for (unsigned i=0;i<members;++i) {
+      a64_frame_address(ctx, A64_SCRATCH, (int32_t)(offset+i*bytes));
+      a64_word(ctx, (bytes==4?0xbd000000u:0xfd000000u) | A64_SCRATCH << 5 | i); /* str s/d i, [x16] */
+    }
+    return !ctx->text.failed;
+  }
+  /* Spill x1 before A/D are reused as scratch. */
+  isa_store(ctx, R_A, offset);
+  if (size>8) isa_store(ctx, R_D, offset+8);
+  return !ctx->text.failed;
 }
 static void a64_struct_return(BackendContext *ctx, const DynIrProgram *ir, DynType type) {
-  (void)ir; (void)type; a64_unsupported(ctx);
+  DynType element; unsigned members; uint32_t size,alignment;
+  if (!layout(ir,type,&size,&alignment,0)) { ctx->text.failed=true; return; }
+  isa_move(ctx, R_11, R_A);
+  if (a64_struct_hfa(ir,type,&element,&members)) {
+    unsigned bytes=memory_bits(element)/8;
+    for (unsigned i=0;i<members;++i) {
+      a64_immediate(ctx, A64_SCRATCH, i*bytes);
+      a64_word(ctx, 0x8b100000 | a64_reg[R_11] << 5 | A64_SCRATCH); /* add x16, x12, x16 */
+      a64_word(ctx, (bytes==4?0xbd400000u:0xfd400000u) | A64_SCRATCH << 5 | i); /* ldr s/d i, [x16] */
+    }
+    return;
+  }
+  /* Exact-size loads: the struct may end at a page boundary. */
+  if (size>8) { load_chunk(ctx, 8, size-8); isa_move(ctx, R_D, R_10); }
+  load_chunk(ctx, 0, size>8?8:size); isa_move(ctx, R_A, R_10);
 }
 static size_t align8(size_t n) { return (n + 7) & ~(size_t)7; }
 /* Static scalar initializers only. Runtime initialization is a separate contract. */
@@ -1710,7 +1740,7 @@ static bool static_scalar(const DynIrProgram *ir, DynExprId id, uint64_t *value,
 static bool constant_relocation(BackendContext *ctx,uint32_t at,unsigned symbol,int64_t addend) {
   if (!symbol || (ctx->constant_relocation_count==ctx->constant_relocation_capacity &&
                   !grow_relocations(&ctx->constant_relocations,&ctx->constant_relocation_capacity))) return false;
-  ctx->constant_relocations[ctx->constant_relocation_count++]=(Elf64_Rela){.r_offset=at,.r_info=ELF64_R_INFO(symbol,R_X86_64_64),.r_addend=addend};
+  ctx->constant_relocations[ctx->constant_relocation_count++]=(Elf64_Rela){.r_offset=at,.r_info=ELF64_R_INFO(symbol,ctx->a64?R_AARCH64_ABS64:R_X86_64_64),.r_addend=addend};
   return true;
 }
 static bool constant_value(BackendContext *ctx,const DynIrProgram *ir,DynType type,DynExprId id,uint32_t offset,unsigned depth) {
@@ -2080,14 +2110,14 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   size_t debug_name=sizeof("\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.data\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0")-1;
   const char section_names[] = "\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.data\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0" ".debug_info\0.rela.debug_info\0.debug_abbrev\0.rela.debug_abbrev\0.debug_line\0.rela.debug_line\0.debug_frame\0.rela.debug_frame\0";
   Elf64_Ehdr h = {.e_ident = {0x7f,'E','L','F',ELFCLASS64,ELFDATA2LSB,EV_CURRENT},
-    .e_type = ET_REL, .e_machine = EM_X86_64, .e_version = EV_CURRENT,
+    .e_type = ET_REL, .e_machine = ctx->a64 ? EM_AARCH64 : EM_X86_64, .e_version = EV_CURRENT,
     .e_ehsize = sizeof(h), .e_shentsize = sizeof(Elf64_Shdr), .e_shnum = ctx->dwarf?21:13,
     .e_shstrndx = 6};
   Elf64_Shdr sh[21] = {0};
   size_t symbytes = (ctx->runtime_base + ctx->runtime_count) * sizeof(*symbols);
   size_t relbytes = ctx->relocation_count * sizeof(*ctx->relocations);
   sh[1] = (Elf64_Shdr){.sh_name=1, .sh_type=SHT_PROGBITS,
-    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=ctx->text.n, .sh_addralign=1};
+    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=ctx->text.n, .sh_addralign=ctx->a64?4:1};
   sh[2] = (Elf64_Shdr){.sh_name=7, .sh_type=SHT_PROGBITS, .sh_flags=SHF_ALLOC,
     .sh_offset=align8(sizeof(h)+ctx->text.n), .sh_size=ctx->rodata.n, .sh_addralign=8};
   sh[3] = (Elf64_Shdr){.sh_name=15, .sh_type=SHT_RELA,
@@ -2133,7 +2163,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   memcpy(data+sh[6].sh_offset, section_names, sizeof(section_names));
   memcpy(data+sh[8].sh_offset,ctx->globals_data.data,ctx->globals_data.n);
   if (ctx->initializer_symbol) {
-    Elf64_Rela init={.r_info=ELF64_R_INFO(ctx->initializer_symbol,R_X86_64_64)};
+    Elf64_Rela init={.r_info=ELF64_R_INFO(ctx->initializer_symbol,ctx->a64?R_AARCH64_ABS64:R_X86_64_64)};
     memcpy(data+sh[10].sh_offset,&init,sizeof(init));
   }
   memcpy(data+sh[11].sh_offset,ctx->constants_data.data,ctx->constants_data.n);
@@ -2144,7 +2174,8 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     for (size_t j=0;j<debug.relocation_count;++j) {
       const BackendDwarfRelocation *r=&debug.relocations[j]; if (r->section!=i) continue;
       unsigned symbol=r->target==BACKEND_DWARF_TEXT?2:3+r->target;
-      Elf64_Rela relocation={.r_offset=r->offset,.r_info=ELF64_R_INFO(symbol,r->type),.r_addend=r->addend};
+      unsigned type=!ctx->a64?r->type:r->type==R_X86_64_64?R_AARCH64_ABS64:R_AARCH64_ABS32;
+      Elf64_Rela relocation={.r_offset=r->offset,.r_info=ELF64_R_INFO(symbol,type),.r_addend=r->addend};
       memcpy(data+sh[section+1].sh_offset+count++*sizeof(relocation),&relocation,sizeof(relocation));
     }
   }
@@ -2158,12 +2189,12 @@ done:
   dyn_location_free(&locations);
   free(symbols); free(strings); return ok;
 }
-static bool object_report(const DynSource *source, const DynIrProgram *ir,
-                          const char *path, bool debug, bool debug_info, bool report) {
+static bool object_target(const DynSource *source, const DynIrProgram *ir,
+                          const char *path, bool debug, bool debug_info, bool report, bool a64) {
   BackendContext *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return false;
-  ctx->debug_mode = debug; ctx->report = report;
-  if (debug_info && (!(ctx->dwarf=backend_dwarf_create()) ||
+  ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64;
+  if (debug_info && (!(ctx->dwarf=a64?backend_dwarf_create_a64():backend_dwarf_create()) ||
                      !(ctx->dwarf_types=calloc(DYN_TYPE_PARAM_BASE, sizeof(*ctx->dwarf_types))))) {
     backend_dwarf_free(ctx->dwarf); free(ctx); return false;
   }
@@ -2174,6 +2205,10 @@ static bool object_report(const DynSource *source, const DynIrProgram *ir,
   free(ctx->relocations); free(ctx->constant_relocations);
   free(ctx);
   return ok;
+}
+static bool object_report(const DynSource *source, const DynIrProgram *ir,
+                          const char *path, bool debug, bool debug_info, bool report) {
+  return object_target(source, ir, path, debug, debug_info, report, false);
 }
 static bool object_options(const DynSource *source, const DynIrProgram *ir,
                            const char *path, bool debug, bool debug_info) {

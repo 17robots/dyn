@@ -124,6 +124,11 @@ test-native-debug: release
     python3 tools/build.py dyn dyn-legacy
     python3 tools/backend-experiment/check-compiler.py --compiler "$BUILD/dyn" --reference "$BUILD/dyn-legacy"
 
+# AArch64 Linux native emission against LLVM under qemu-aarch64 (skips without qemu).
+test-native-a64: release
+    python3 tools/build.py dyn
+    python3 tools/backend-experiment/a64-differential.py
+
 # Regression suite with native emission required wherever it is eligible.
 test-native-strict: release
     python3 tools/build.py dyn
