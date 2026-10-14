@@ -87,6 +87,9 @@ typedef struct {
   bool a64; /* AArch64 encodings, relocations and ABI instead of x86-64 */
   bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
   bool darwin; /* AArch64 macOS: Apple's AAPCS64 variant and Mach-O objects */
+  /* Windows unwind data: per function {text start, prologue length, frame bytes}. */
+  uint32_t unwind_frames[MAX_SYMBOLS + 1][3];
+  unsigned unwind_frame_count;
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
 } BackendContext;
@@ -2191,7 +2194,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   if (ctx->dwarf && !backend_dwarf_finish(ctx->dwarf,&debug)) goto done;
   if (ctx->win64 || ctx->darwin) {
     unsigned symbol_count=(unsigned)(ctx->runtime_base+ctx->runtime_count);
-    ok = ctx->win64 ? write_coff(ctx,path,symbols,symbol_count,strings)
+    ok = ctx->win64 ? write_coff(ctx,path,symbols,symbol_count,strings,&debug)
                     : write_macho(ctx,path,symbols,symbol_count,strings,&debug);
     if (!ok) backend_report(ctx, "native backend: failed to write object\n");
     goto done;
@@ -2287,7 +2290,6 @@ static bool object_target(const DynSource *source, const DynIrProgram *ir,
   bool a64 = target == TARGET_A64_ELF || target == TARGET_A64_MACHO;
   ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64;
   ctx->win64 = target == TARGET_X64_COFF; ctx->darwin = target == TARGET_A64_MACHO;
-  if (ctx->win64) debug_info = false; /* Windows debuggers read CodeView, which this backend does not write */
   if (debug_info && (!(ctx->dwarf=a64?backend_dwarf_create_a64():backend_dwarf_create()) ||
                      !(ctx->dwarf_types=calloc(DYN_TYPE_PARAM_BASE, sizeof(*ctx->dwarf_types))))) {
     backend_dwarf_free(ctx->dwarf); free(ctx); return false;

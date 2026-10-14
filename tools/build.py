@@ -103,6 +103,7 @@ if sys.platform != 'win32':
     native_flags = ['-DDYN_NATIVE_BACKEND']
     native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
     native_inputs = [backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc',
+                     backend_experiment/'coff.inc', backend_experiment/'macho.inc',
                      backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
 default_flags = [*compact_first_flags, *native_flags]
 default_sources = [*compact_first_sources, *native_sources]

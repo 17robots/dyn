@@ -366,7 +366,7 @@ def build(args, root, program):
         outputs[backend] = output
     dwarfdump = shutil.which('llvm-dwarfdump')
     debug_object = outputs['native'].with_name(outputs['native'].name + '.dynnative.o')
-    dwarf = outputs['native'] if args.target.endswith('-linux') else debug_object if args.target == 'aarch64-macos' else None
+    dwarf = debug_object if args.target == 'aarch64-macos' else outputs['native']
     if dwarfdump and dwarf:
         verify = subprocess.run([dwarfdump, '--verify', str(dwarf)], capture_output=True, text=True)
         assert verify.returncode == 0 and 'No errors.' in verify.stdout, verify.stdout[-2000:]

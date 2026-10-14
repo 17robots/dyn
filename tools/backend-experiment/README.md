@@ -14,8 +14,10 @@ Mach-O page references take a preceding `ARM64_RELOC_ADDEND`, and every Darwin
 symbol gains a leading underscore. Mach-O objects lay sections out from address
 zero, so their DWARF needs no relocations; macOS builds keep the object beside
 the output (`<output>.dynnative.o`), where the executable's debug map finds it.
-Windows builds carry no debug information, since Windows debuggers read
-CodeView. Global initializers run from `main` on every target; only ELF also
+Windows objects carry DWARF in COFF sections, as LLVM's own Windows debug
+builds do (GDB and LLDB read it; Visual Studio and WinDbg need CodeView, which
+neither backend writes), plus `.pdata`/`.xdata` unwind tables describing the
+fixed prologue. Global initializers run from `main` on every target; only ELF also
 lists them in `.init_array`.
 
 The IR walker in `driver.c` emits named operations from `isa.inc` over a small

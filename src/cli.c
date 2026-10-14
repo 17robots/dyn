@@ -22,7 +22,7 @@ void dyn_cli_help(const char *command) {
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <2|3>  --opt-remarks\n"
       "  --sample-profile <LLVM sample profile>  (x86_64 Linux ThinLTO only)\n"
-      "  --backend <auto|native|llvm>  debug code generator (auto: native on x86_64 Linux)\n"
+      "  --backend <auto|native|llvm>  debug code generator (auto: native for supported debug targets)\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
       "Global options:\n  --quiet  --verbose  --timings  --no-cache  "
       "\n"

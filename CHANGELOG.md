@@ -24,7 +24,8 @@ servers so they pick up the new `dyn`.
   Windows use the same native code generator, and compilers on macOS and ARM
   Linux hosts include it. Release builds and Wasm still use LLVM. On macOS the
   object `<output>.dynnative.o` stays beside the executable so debuggers can
-  read its DWARF; Windows debug builds carry no debug information.
+  read its DWARF. Windows debug builds carry DWARF for GDB and LLDB, as LLVM's
+  Windows debug builds do, and unwind tables for every native function.
 - Native debug information shows each local only within its scope, and payload
   enums as `tag` plus a `payload` union.
 - The compiler parses sources with a handwritten parser, making `dyn check`
