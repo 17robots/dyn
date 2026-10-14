@@ -45,4 +45,9 @@ for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('
     manifest['targets'][name] = rows
 (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 shutil.copy2(ROOT/'tests/run-native-artifacts.py', OUT/'run-native-artifacts.py')
+# Debug builds use native emission: stage the native/LLVM differential corpus too.
+differential = ROOT/'tools/backend-experiment/native-differential.py'
+for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('aarch64','aarch64-linux')]:
+    run([sys.executable, differential, '--target', target, '--compiler', DYN, '--stage', OUT/'differential'/name])
+shutil.copy2(differential, OUT/'native-differential.py')
 print('Prepared native probes:', {k:len(v) for k,v in manifest['targets'].items()})

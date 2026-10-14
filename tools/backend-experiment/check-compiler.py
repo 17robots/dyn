@@ -100,7 +100,7 @@ fn main() {
         checks += 1
         # LLVM-only options route auto builds to LLVM; explicit native rejects them.
         for flags in (['--shared'],['--emit-ir'],['--emit-asm'],['--cpu','native'],
-                      ['--opt-remarks'],['--target','aarch64-macos'],['--release']):
+                      ['--opt-remarks'],['--target','wasm32-wasi'],['--release']):
             output.write_bytes(b'keep-existing-output')
             result=run([candidate,'build',root,'--backend','native',*flags,'--output',output])
             assert result.returncode == 2 and b'--backend native requires' in result.stderr, (flags,result.stderr)

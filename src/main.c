@@ -420,22 +420,24 @@ static int execute_command(DynOptions *options, const char *compiler) {
     fprintf(stderr, "error: Wasm requires an external host; browser builds require --shared, WASI commands forbid --shared\n");
     return 2;
   }
-  /* Native emission covers debug x86_64-linux executables and objects; every
-     other build, and any program it does not support under auto, uses LLVM. */
+  /* Native emission covers debug executables and objects for the Linux, macOS
+     and Windows targets; every other build, and any program it does not
+     support under auto, uses LLVM. */
   bool native = false;
 #ifdef DYN_NATIVE_BACKEND
   native = options->backend != DYN_BACKEND_LLVM &&
            (is_command(options, "build") || run) && !options->release &&
-           (!strcmp(options->target, "x86_64-linux") || !strcmp(options->target, "aarch64-linux")) &&
+           (!strcmp(options->target, "x86_64-linux") || !strcmp(options->target, "aarch64-linux") ||
+            !strcmp(options->target, "aarch64-macos") || !strcmp(options->target, "x86_64-windows")) &&
            !options->shared &&
            !options->emit_ir && !options->emit_asm &&
            !options->optimization.native_cpu && !options->optimization.cpu &&
            !options->optimization.features && !options->optimization.remarks;
 #endif
   if (options->backend == DYN_BACKEND_NATIVE && !native) {
-    fprintf(stderr, "error: --backend native requires an x86_64-linux or aarch64-linux debug build "
-                    "without --shared, --emit-ir, --emit-asm, CPU/features or "
-                    "optimization remarks\n");
+    fprintf(stderr, "error: --backend native requires an x86_64-linux, aarch64-linux, aarch64-macos "
+                    "or x86_64-windows debug build without --shared, --emit-ir, --emit-asm, "
+                    "CPU/features or optimization remarks\n");
     return 2;
   }
   options->native_backend = native;
@@ -589,8 +591,17 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   char object[4096], ir[4096], assembly[4096];
   /* A native object is private unless requested: "<output>.o" may name a
-     --link input. */
+     --link input. On macOS it is kept beside the output instead, because the
+     executable's debug map refers to the object's DWARF. */
   bool private_object = native && !options->emit_object && !options->no_link;
+  bool kept_object = private_object && !strcmp(options->target, "aarch64-macos");
+  if (kept_object) {
+    private_object = false;
+    if (snprintf(object, sizeof(object), "%s.dynnative.o", output) >= (int)sizeof(object)) {
+      fprintf(stderr, "error: output path too long\n");
+      dyn_sources_free(&sources); free(main_path); free(base); return 2;
+    }
+  }
   if (private_object) {
     if (snprintf(object, sizeof(object), "%s/dyn-object-XXXXXX", temporary_root) >= (int)sizeof(object)) {
       dyn_sources_free(&sources); free(main_path); free(base); return 2;
@@ -602,7 +613,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     }
     close(temporary);
   }
-  if ((!private_object && snprintf(object, sizeof(object), "%s.o", output) >= (int)sizeof(object)) ||
+  if ((!private_object && !kept_object && snprintf(object, sizeof(object), "%s.o", output) >= (int)sizeof(object)) ||
       snprintf(ir, sizeof(ir), "%s.ll", output) >= (int)sizeof(ir) ||
       snprintf(assembly, sizeof(assembly), "%s.s", output) >= (int)sizeof(assembly)) {
     fprintf(stderr, "error: output path too long\n");
@@ -724,7 +735,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (options->timings && !options->no_link)
     fprintf(stderr, "timing link %.3f ms\n", elapsed_ms(phase));
   if (!options->emit_object && !options->no_link) {
-    remove(object);
+    if (!kept_object || run) remove(object);
     if (!strcmp(context.target->arch, "wasm32")) {
       char *imports = malloc(strlen(object) + 9);
       if (imports) { sprintf(imports, "%s.imports", object); remove(imports); free(imports); }

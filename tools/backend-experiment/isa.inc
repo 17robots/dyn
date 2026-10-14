@@ -13,6 +13,19 @@ static const unsigned char x86_setcc[] = {0x94, 0x95, 0x92, 0x93, 0x96, 0x97, 0x
 /* ModRM register field and REX.R/B bit for each model register. */
 static const unsigned char x86_code[] = {0, 1, 2, 6, 7, 0, 2, 3};
 static const unsigned char x86_extended[] = {0, 0, 0, 0, 0, 1, 1, 1};
+/* Hardware numbers of the integer argument registers: SysV RDI, RSI, RDX, RCX,
+   R8, R9; Microsoft x64 RCX, RDX, R8, R9. */
+static const unsigned char x86_sysv_arguments[] = {7, 6, 2, 1, 8, 9};
+static const unsigned char x86_win64_arguments[] = {1, 2, 8, 9};
+static unsigned x86_argument_register(BackendContext *ctx, int cls) {
+  return ctx->win64 ? x86_win64_arguments[cls] : x86_sysv_arguments[cls];
+}
+/* REX.W opcode with a hardware register and [base + disp32] (base RSP or RBP). */
+static void x86_memory(BackendContext *ctx, unsigned opcode, unsigned reg, unsigned base, uint32_t displacement) {
+  byte(ctx, 0x48 | (reg >= 8) << 2); byte(ctx, opcode); byte(ctx, 0x80 | (reg & 7) << 3 | base);
+  if (base == 4) byte(ctx, 0x24);
+  word(ctx, displacement);
+}
 
 
 /* reg <- [FP + offset], 64-bit. */
@@ -114,7 +127,11 @@ static void isa_trap(BackendContext *ctx) {
 /* Relocated references. x86-64 uses RIP-relative forms; AArch64 uses adrp pairs. */
 static void isa_call_symbol(BackendContext *ctx, unsigned symbol) {
   if (ctx->a64) { relocate(ctx, symbol, R_AARCH64_CALL26, 0); a64_word(ctx, 0x94000000); return; }
+  /* Microsoft x64 callers reserve a 32-byte home area just above the return
+     address; stack arguments already pushed then sit at [RSP + 32]. */
+  if (ctx->win64) CODE(0x48, 0x83, 0xec, 32);
   byte(ctx, 0xe8); relocate(ctx, symbol, R_X86_64_PLT32, -4); word(ctx, 0);
+  if (ctx->win64) CODE(0x48, 0x83, 0xc4, 32);
 }
 /* reg <- address of .rodata + offset. */
 static void isa_rodata_address(BackendContext *ctx, Reg r, size_t offset) {
@@ -133,12 +150,14 @@ static void isa_symbol_address(BackendContext *ctx, Reg r, unsigned symbol) {
     relocate(ctx, symbol, R_AARCH64_LD64_GOT_LO12_NC, 0); a64_word(ctx, 0xf9400000 | a64_reg[r] << 5 | a64_reg[r]);
     return;
   }
-  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8b); byte(ctx, 0x05 | x86_code[r] << 3);
-  relocate(ctx, symbol, R_X86_64_GOTPCREL, -4); word(ctx, 0);
+  /* COFF has no GOT: Dyn and its runtime link statically, so use the address directly. */
+  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, ctx->win64 ? 0x8d : 0x8b); byte(ctx, 0x05 | x86_code[r] << 3);
+  relocate(ctx, symbol, ctx->win64 ? R_X86_64_PC32 : R_X86_64_GOTPCREL, -4); word(ctx, 0);
 }
 /* Panic message arguments: pointer and length in the first two argument registers. */
 static void isa_string_arguments(BackendContext *ctx, size_t offset, size_t length) {
   if (ctx->a64) { isa_rodata_address(ctx, R_A, offset); a64_immediate(ctx, 1, length); return; }
+  if (ctx->win64) { isa_rodata_address(ctx, R_C, offset); byte(ctx, 0xba); word(ctx, (uint32_t)length); return; } /* rcx, edx */
   CODE(0x48, 0x8d, 0x3d); /* lea rdi, [rip + string] */
   relocate(ctx, 1, R_X86_64_PC32, (int64_t)offset - 4); word(ctx, 0);
   byte(ctx, 0xbe); word(ctx, (uint32_t)length); /* mov esi, length */
@@ -298,7 +317,7 @@ static void isa_unalign_call(BackendContext *ctx, bool padded) {
 }
 /* The nth integer argument register (n < 2), for runtime calls. */
 static Reg isa_argument(BackendContext *ctx, unsigned n) {
-  return ctx->a64 ? (n ? R_D : R_A) : (n ? R_SI : R_DI);
+  return ctx->a64 ? (n ? R_D : R_A) : ctx->win64 ? (n ? R_D : R_C) : (n ? R_SI : R_DI);
 }
 /* Flags from the 32-bit integer result in A. */
 static void isa_test32(BackendContext *ctx) {
@@ -319,10 +338,8 @@ static void isa_argument_load(BackendContext *ctx, int cls, uint32_t offset) {
     a64_sp_offset(ctx, A64_LDR, (unsigned)cls, offset);
     return;
   }
-  static const unsigned char registers[] = {0xbc, 0xb4, 0x94, 0x8c, 0x84, 0x8c};
-  if (cls >= 8) { CODE(0xf3,0x0f,0x7e); byte(ctx, 0x84+8*(unsigned)(cls-8)); byte(ctx, 0x24); }
-  else { byte(ctx, cls<4?0x48:0x4c); byte(ctx, 0x8b); byte(ctx, registers[cls]); byte(ctx, 0x24); }
-  word(ctx, offset);
+  if (cls >= 8) { CODE(0xf3,0x0f,0x7e); byte(ctx, 0x84+8*(unsigned)(cls-8)); byte(ctx, 0x24); word(ctx, offset); return; }
+  x86_memory(ctx, 0x8b, x86_argument_register(ctx, cls), 4, offset);
 }
 /* Reserve bytes below SP for outgoing stack arguments (a multiple of 16 on AArch64). */
 static void isa_reserve(BackendContext *ctx, uint32_t bytes) {
@@ -335,22 +352,32 @@ static void isa_release(BackendContext *ctx, uint32_t bytes) {
   if (ctx->a64) { a64_sp_adjust(ctx, bytes); return; }
   CODE(0x48, 0x81, 0xc4); word(ctx, bytes);
 }
-/* [SP + to] <- [SP + from], 64-bit, through A. */
-static void isa_stack_copy(BackendContext *ctx, uint32_t from, uint32_t to) {
-  if (ctx->a64) { a64_sp_offset(ctx, A64_LDR, A64_SCRATCH, from); a64_sp_offset(ctx, A64_STR, A64_SCRATCH, to); return; }
+/* [SP + to] <- the low `bytes` of the 64-bit [SP + from]; only Apple AArch64
+   stores fewer than eight. */
+static void isa_stack_store(BackendContext *ctx, uint32_t from, uint32_t to, uint32_t bytes) {
+  if (ctx->a64) {
+    a64_sp_offset(ctx, A64_LDR, A64_SCRATCH, from);
+    if (bytes == 8) { a64_sp_offset(ctx, A64_STR, A64_SCRATCH, to); return; }
+    if (to / bytes >= 4096) { ctx->text.failed = true; return; }
+    uint32_t opcode = bytes == 1 ? 0x39000000u : bytes == 2 ? 0x79000000u : 0xb9000000u; /* strb/strh/str w16 */
+    a64_word(ctx, opcode | (to / bytes) << 10 | A64_SP << 5 | A64_SCRATCH);
+    return;
+  }
   CODE(0x48,0x8b,0x84,0x24); word(ctx, from);
   CODE(0x48,0x89,0x84,0x24); word(ctx, to);
 }
-/* Hidden result pointer argument: RDI on x86-64, X8 on AArch64. */
+/* Hidden result pointer argument: RDI on SysV, RCX on Microsoft x64, X8 on AArch64. */
 static void isa_result_pointer(BackendContext *ctx, uint32_t offset) {
   if (ctx->a64) { a64_frame_address(ctx, 8, (int32_t)offset); return; }
-  CODE(0x48,0x8d,0xbd); word(ctx, offset);
+  x86_memory(ctx, 0x8d, ctx->win64 ? 1 : 7, 5, offset);
 }
 /* Call the address stored at [SP + offset]. */
 static void isa_call_stack(BackendContext *ctx, uint32_t offset) {
   if (ctx->a64) { a64_sp_offset(ctx, A64_LDR, A64_SCRATCH, offset); a64_word(ctx, 0xd63f0000 | A64_SCRATCH << 5); return; }
   CODE(0x4c,0x8b,0x9c,0x24); word(ctx, offset);
+  if (ctx->win64) CODE(0x48, 0x83, 0xec, 32); /* home area */
   CODE(0x41,0xff,0xd3); /* call r11 */
+  if (ctx->win64) CODE(0x48, 0x83, 0xc4, 32);
 }
 /* First floating argument/result register <- raw bits in A. */
 static void isa_a_to_float(BackendContext *ctx) {
@@ -567,6 +594,8 @@ static void isa_return(BackendContext *ctx) {
     a64_word(ctx, 0xd65f03c0); /* ret */
     return;
   }
+  /* Microsoft x64 RSI/RDI are callee-saved; isa_enter kept them in the home area. */
+  if (ctx->win64) CODE(0x48, 0x8b, 0x75, 16, 0x48, 0x8b, 0x7d, 24);
   CODE(0xc9, 0xc3); /* leave; ret */
 }
 /* Function prologue with a frame of ctx->frame_bytes below FP. */
@@ -577,7 +606,18 @@ static void isa_enter(BackendContext *ctx) {
     a64_sp_adjust(ctx, -(int64_t)ctx->frame_bytes);
     return;
   }
-  CODE(0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec); word(ctx, ctx->frame_bytes);
+  if (ctx->win64) {
+    CODE(0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0x75, 16, 0x48, 0x89, 0x7d, 24);
+    /* Windows commits stack one guard page at a time: probe large frames. */
+    if (ctx->frame_bytes >= 4096) {
+      byte(ctx, 0xb8); word(ctx, ctx->frame_bytes); /* mov eax, frame */
+      if (!ctx->runtime_index[RUNTIME_CHKSTK]) ctx->runtime_index[RUNTIME_CHKSTK] = (unsigned)(ctx->runtime_base + ctx->runtime_count++);
+      byte(ctx, 0xe8); relocate(ctx, ctx->runtime_index[RUNTIME_CHKSTK], R_X86_64_PLT32, -4); word(ctx, 0);
+      CODE(0x48, 0x29, 0xc4); /* sub rsp, rax */
+      return;
+    }
+  } else CODE(0x55, 0x48, 0x89, 0xe5);
+  CODE(0x48, 0x81, 0xec); word(ctx, ctx->frame_bytes);
 }
 /* [A, A + size) <- 0. */
 static void isa_zero_fill(BackendContext *ctx, uint32_t size) {
@@ -632,7 +672,7 @@ static void isa_add_frame(BackendContext *ctx, uint32_t offset) {
 /* Save the hidden result pointer register on entry. */
 static void isa_store_result_pointer(BackendContext *ctx, uint32_t offset) {
   if (ctx->a64) { a64_frame_raw(ctx, A64_STR, 8, offset); return; }
-  CODE(0x48,0x89,0xbd); word(ctx, offset);
+  x86_memory(ctx, 0x89, ctx->win64 ? 1 : 7, 5, offset);
 }
 /* [FP + offset] <- incoming argument register cls (GP index or 8 + FP index). */
 static void isa_store_argument(BackendContext *ctx, int cls, uint32_t offset) {
@@ -641,10 +681,8 @@ static void isa_store_argument(BackendContext *ctx, int cls, uint32_t offset) {
     else a64_frame_raw(ctx, A64_STR, (unsigned)cls, offset);
     return;
   }
-  static const unsigned char regs[] = {0xbd,0xb5,0x95,0x8d,0x85,0x8d};
-  if (cls>=8) { CODE(0x66,0x48,0x0f,0x7e); byte(ctx, 0xc0+8*(unsigned)(cls-8)); CODE(0x48,0x89,0x85); }
-  else { byte(ctx, cls<4?0x48:0x4c); byte(ctx, 0x89); byte(ctx, regs[cls]); }
-  word(ctx, offset);
+  if (cls>=8) { CODE(0x66,0x48,0x0f,0x7e); byte(ctx, 0xc0+8*(unsigned)(cls-8)); CODE(0x48,0x89,0x85); word(ctx, offset); return; }
+  x86_memory(ctx, 0x89, x86_argument_register(ctx, cls), 5, offset);
 }
 /* A <- incoming argument register cls. */
 static void isa_argument_to_a(BackendContext *ctx, int cls) {
@@ -653,9 +691,9 @@ static void isa_argument_to_a(BackendContext *ctx, int cls) {
     else a64_word(ctx, 0xaa0003e0 | (unsigned)cls << 16);
     return;
   }
-  static const unsigned char gp_to_rax[]={0xf8,0xf0,0xd0,0xc8,0xc0,0xc8};
-  if (cls>=8) { CODE(0x66,0x48,0x0f,0x7e);byte(ctx, 0xc0+8*(unsigned)(cls-8)); }
-  else { byte(ctx, cls<4?0x48:0x4c);byte(ctx, 0x89);byte(ctx, gp_to_rax[cls]); }
+  if (cls>=8) { CODE(0x66,0x48,0x0f,0x7e);byte(ctx, 0xc0+8*(unsigned)(cls-8)); return; }
+  unsigned reg = x86_argument_register(ctx, cls); /* mov rax, reg */
+  byte(ctx, 0x48 | (reg >= 8) << 2); byte(ctx, 0x89); byte(ctx, 0xc0 | (reg & 7) << 3);
 }
 /* Run-once flag at [A]: branch (returned slot) when already set, else set it. */
 static size_t isa_once(BackendContext *ctx) {

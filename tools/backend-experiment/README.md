@@ -1,10 +1,22 @@
 # Native debug backend
 
 This backend consumes the checked `DynIrProgram` produced by `dyn_analyze` and
-`dyn_ir_lower` and writes x86-64 or AArch64 Linux ELF64 relocatable objects
-directly, without LLVM or an assembler. The default `dyn` and `dyn-release`
-compilers link it on x86-64 Linux hosts (`-DDYN_NATIVE_BACKEND`); other hosts
-build without it.
+`dyn_ir_lower` and writes relocatable objects directly, without LLVM or an
+assembler: ELF64 for x86-64 and AArch64 Linux, COFF for x86-64 Windows and
+Mach-O for AArch64 macOS. The default `dyn` and `dyn-release` compilers link it
+on every POSIX host (`-DDYN_NATIVE_BACKEND`); Windows-hosted compilers build
+without it. The emitter carries its own ELF definitions (`elf64.h`), so it does
+not depend on the host's headers.
+
+Code generation records symbols and relocations in ELF form. `coff.inc` and
+`macho.inc` translate them: COFF and Mach-O keep addends in the relocated bytes,
+Mach-O page references take a preceding `ARM64_RELOC_ADDEND`, and every Darwin
+symbol gains a leading underscore. Mach-O objects lay sections out from address
+zero, so their DWARF needs no relocations; macOS builds keep the object beside
+the output (`<output>.dynnative.o`), where the executable's debug map finds it.
+Windows builds carry no debug information, since Windows debuggers read
+CodeView. Global initializers run from `main` on every target; only ELF also
+lists them in `.init_array`.
 
 The IR walker in `driver.c` emits named operations from `isa.inc` over a small
 register model (accumulator, descriptor word, operand, scratch and copy
@@ -18,25 +30,41 @@ registers, HFAs in consecutive FP registers, other composites up to 16 bytes in
 GP pairs, larger composites through a pointer to a caller-owned copy, and X8 for
 indirect results. Dyn-only arrays and payload enums are passed as flattened
 leaves and returned through memory, since every function in a build is emitted
-by the same backend. `a64-differential.py` builds a 3,000-case corpus (the
-scalar suite plus aggregates, enums, `any`, variadics, defers, globals and a
-clang-compiled C provider with callbacks) with both backends and compares every
-case's status, stdout and stderr under `qemu-aarch64`; `just test-native-a64`
-runs it, and it verifies DWARF with `llvm-dwarfdump` when available.
+by the same backend. Apple's variant packs stack arguments narrower than eight
+bytes at their natural size and passes every C variadic argument on the stack.
+
+Windows follows the Microsoft x64 convention: the first four arguments take
+RCX, RDX, R8 and R9 or XMM0-3 by position, structs of 1, 2, 4 or 8 bytes travel
+as integers and other structs through a pointer to a caller-owned copy, RCX
+carries the hidden result pointer, and variadic floating arguments are copied
+into the matching integer register. Every call reserves the 32-byte home area,
+where functions also save the callee-saved RSI and RDI. Frames of 4 KiB or more
+call `__chkstk` to touch each guard page in order.
+
+`native-differential.py` builds a 3,300-case corpus (the scalar suite plus
+aggregates, enums, `any`, variadics, defers, globals and a clang-compiled C
+provider with callbacks, narrow stack arguments and C variadics) with both
+backends and compares every case's status, stdout and stderr. `--target`
+selects x86_64-linux (on the host), aarch64-linux (`qemu-aarch64`),
+x86_64-windows (wine) or aarch64-macos (Apple silicon only); `just
+test-native-a64`, `test-native-windows` and `test-native-macos` run them.
+DWARF is checked with `llvm-dwarfdump` when available. CI cross-builds the
+Windows, macOS and AArch64 corpora with `--stage` and runs them on native
+runners with `--run`.
 
 ## Compiler integration
 
 `dyn build` and `dyn run` select the code generator with `--backend`:
 
-- `auto` (default): debug builds for an x86_64-linux host and target use native
-  emission. If the program exceeds a native capacity or uses an unsupported
+- `auto` (default): debug builds for x86_64-linux, aarch64-linux,
+  aarch64-macos and x86_64-windows use native emission. If the program exceeds a native capacity or uses an unsupported
   construct, the compiler silently uses LLVM instead (`--verbose` prints a note).
 - `native`: native emission is required. Unsupported programs fail with
   `use --backend llvm`; an existing output is never replaced.
 - `llvm`: always use LLVM.
 
 `--release`, `--shared`, `--emit-ir`, `--emit-asm`, CPU/feature selection,
-optimization remarks and targets other than x86_64-linux and aarch64-linux always use LLVM; combining them
+optimization remarks and the Wasm targets always use LLVM; combining them
 with `--backend native` is an error. Debug builds emit DWARF by default: lines,
 frames, parameters, and typed locals nested in lexical blocks, with payload enums
 as `tag` plus a `payload` union; `--debug-info` is accepted.
@@ -45,7 +73,7 @@ Native emission handles the complete merged program in one object. Executables u
 the whole-executable build cache, keyed separately from LLVM builds; LLVM module and
 chunk caches are not used, because native emission of the whole program is cheaper
 than restoring them. A private temporary object is linked unless `--no-link` or
-`--emit-object` requests `<output>.o`.
+`--emit-object` requests `<output>.o` (macOS keeps `<output>.dynnative.o`).
 
 `dyn-legacy` (Tree-sitter parsing, LLVM emission) is the differential reference.
 `just test-native-debug` runs routing/fallback/runtime contracts against it, and
@@ -56,7 +84,9 @@ locals in gdb.
 
 ## Supported slice
 
-- Host and target: x86-64 Linux, little-endian ELF64, System V calling convention.
+- Targets: x86-64 and AArch64 Linux (ELF64), AArch64 macOS (Mach-O) and x86-64
+  Windows (COFF). The sections below describe x86-64 System V; the other ABIs
+  are summarized above.
 - Functions with zero to 256 parameters and a supported scalar, descriptor, struct, or void return. Bodies may
   contain returns, locals/assignments, expression statements, nested
   `if`/`else`, and conditional or infinite `for` loops. Break/continue support

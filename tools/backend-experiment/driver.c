@@ -32,15 +32,16 @@ static bool reserve(Bytes *b, size_t total) {
   b->data = data; b->capacity = capacity;
   return true;
 }
-static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_push", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6"};
-#define RUNTIME_COUNT 10
+static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_push", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6", "__chkstk"};
+#define RUNTIME_COUNT 11
+enum { RUNTIME_CHKSTK = 10 };
 enum { GUARD_OVERFLOW, GUARD_DIVIDE, GUARD_DIVISION_OVERFLOW, GUARD_SHIFT, GUARD_FUNCTION, GUARD_NONNULL, GUARD_ALIGNED, GUARD_INDEX, GUARD_SLICE_ORDER, GUARD_SLICE_BOUNDS, GUARD_ENUM, GUARD_COUNT };
 static const char *const guard_names[] = {"overflow.ok", "divide.ok", "division.overflow.ok", "shift.count.ok", "function.nonnull.ok", "pointer.nonnull.ok", "pointer.aligned.ok", "index.ok", "slice.order.ok", "slice.bounds.ok", "enum.cast.ok"};
 typedef struct { DynType type; uint32_t offset; } ArrayPart;
 /* One register- or stack-passed piece of an argument. cls: GP index, 8 + FP
    index, or -1 for the next eight-byte stack slot. offset/size locate the
    bytes inside an aggregate; leaf is the scalar type of an array leaf. */
-typedef struct { uint32_t offset, size; int cls; DynType leaf; } AbiPart;
+typedef struct { uint32_t offset, size; int cls; DynType leaf; uint32_t stack; } AbiPart;
 typedef struct {
   Bytes text, rodata, globals_data, constants_data;
   BackendDwarf *dwarf;
@@ -83,14 +84,16 @@ typedef struct {
   size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
   uint32_t scope_stack[MAX_LOCALS];
   unsigned scope_count;
-  bool a64; /* AArch64 Linux encodings, relocations and ABI instead of x86-64 */
+  bool a64; /* AArch64 encodings, relocations and ABI instead of x86-64 */
+  bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
+  bool darwin; /* AArch64 macOS: Apple's AAPCS64 variant and Mach-O objects */
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
 } BackendContext;
 static bool emit_defers(BackendContext *ctx, const DynIrProgram *, const DynIrFunction *, unsigned);
 #define backend_report(ctx, ...) do { if ((ctx)->report) fprintf(stderr, __VA_ARGS__); } while (0)
 /* Words in the runtime's DynUnwind for this target (runtime/reference_support.c). */
-static unsigned unwind_words(const BackendContext *ctx) { return ctx->a64 ? 22 : 16; }
+static unsigned unwind_words(const BackendContext *ctx) { return ctx->win64 ? 32 : ctx->a64 ? 22 : 16; }
 static void byte(BackendContext *ctx, unsigned x) {
   if (ctx->text.n < ctx->text.capacity || reserve(&ctx->text, ctx->text.n + 1))
     ctx->text.data[ctx->text.n++] = (unsigned char)x;
@@ -137,6 +140,8 @@ static void runtime_call(BackendContext *ctx, unsigned runtime) {
 }
 #include "a64.inc"
 #include "isa.inc"
+#include "coff.inc"
+#include "macho.inc"
 static bool signed_scalar(DynType type) {
   return (type >= DYN_TYPE_I8 && type <= DYN_TYPE_I64) || type == DYN_TYPE_ISIZE;
 }
@@ -333,8 +338,15 @@ static bool a64_struct_hfa(const DynIrProgram *ir,DynType type,DynType *element,
 }
 /* Results returned through a hidden pointer. AArch64 Dyn-only raw aggregates
    always use memory; C structs follow AAPCS64. */
-static bool abi_memory(bool a64,const DynIrProgram *ir,DynType type) {
-  if (a64) {
+/* Microsoft x64 passes and returns structs of 1, 2, 4 or 8 bytes as integers;
+   other sizes go through memory. */
+static bool win64_scalar_size(const DynIrProgram *ir,DynType type) {
+  uint32_t size,alignment;
+  return layout(ir,type,&size,&alignment,0) && (size==1 || size==2 || size==4 || size==8);
+}
+static bool abi_memory(const BackendContext *ctx,const DynIrProgram *ir,DynType type) {
+  if (ctx->win64) return raw_aggregate(ir,type) || (dyn_type_is_struct(type) && !win64_scalar_size(ir,type));
+  if (ctx->a64) {
     if (raw_aggregate(ir,type)) return true;
     DynType element; unsigned count; uint32_t size,alignment;
     return dyn_type_is_struct(type) && !a64_struct_hfa(ir,type,&element,&count) &&
@@ -350,16 +362,49 @@ static bool abi_memory(bool a64,const DynIrProgram *ir,DynType type) {
 }
 static int abi_gp(bool a64,unsigned *gp) { return *gp<(a64?8u:6u)?(int)(*gp)++:-1; }
 static int abi_fp(unsigned *fp) { return *fp<8?(int)(*fp)++ + 8:-1; }
+/* Microsoft x64 assigns registers by argument position: the nth of the first
+   four uses RCX/RDX/R8/R9 or XMM0-3. *position counts every eight-byte slot. */
+static int win64_register(unsigned *position,bool floating) {
+  int cls=*position<4?(int)*position+(floating?8:0):-1; ++*position; return cls;
+}
+/* Struct arguments passed as a pointer to a caller-owned copy. */
+static bool abi_copied(const BackendContext *ctx,const DynIrProgram *ir,DynType type) {
+  if (!dyn_type_is_struct(type)) return false;
+  if (ctx->win64) return !win64_scalar_size(ir,type);
+  DynType element; unsigned members; uint32_t size,alignment;
+  return ctx->a64 && !a64_struct_hfa(ir,type,&element,&members) && layout(ir,type,&size,&alignment,0) && size>16;
+}
 /* Assign argument registers. *indirect means the single part is a pointer to a
    caller-owned copy (AAPCS64 composites over 16 bytes). */
-static bool abi_assign(bool a64,const DynIrProgram *ir,DynType type,unsigned *gp,unsigned *fp,AbiPart *parts,unsigned *count,unsigned capacity,bool *indirect) {
+static bool abi_assign(const BackendContext *ctx,const DynIrProgram *ir,DynType type,unsigned *gp,unsigned *fp,AbiPart *parts,unsigned *count,unsigned capacity,bool *indirect) {
   unsigned cls[2]; uint32_t size=8,alignment;
+  bool a64=ctx->a64;
   *indirect=false; *count=0;
+  if (ctx->win64) {
+    if (raw_aggregate(ir,type)) {
+      /* Dyn-only fixed arrays: one position per leaf, like LLVM's split aggregate. */
+      ArrayPart leaves[512];
+      if (!array_parts(ir,type,0,leaves,count,0) || *count>capacity) return false;
+      for (unsigned i=0;i<*count;++i)
+        parts[i]=(AbiPart){leaves[i].offset,(memory_bits(leaves[i].type)+7)/8,win64_register(gp,float_type(leaves[i].type)),leaves[i].type,0};
+      return true;
+    }
+    if (dyn_type_is_struct(type)) {
+      if (!layout(ir,type,&size,&alignment,0)) return false;
+      *indirect=!win64_scalar_size(ir,type); *count=1;
+      parts[0]=(AbiPart){0,*indirect?8:size,win64_register(gp,false),*indirect?DYN_TYPE_RAWPTR:DYN_TYPE_U64,0};
+      return true;
+    }
+    *count=descriptor(type)?2:1;
+    for (unsigned i=0;i<*count;++i)
+      parts[i]=(AbiPart){i*8,8,win64_register(gp,float_type(type)),descriptor(type)?DYN_TYPE_U64:type,0};
+    return true;
+  }
   if (raw_aggregate(ir,type)) {
     ArrayPart leaves[512];
     if (!array_parts(ir,type,0,leaves,count,0) || *count>capacity) return false;
     for (unsigned i=0;i<*count;++i)
-      parts[i]=(AbiPart){leaves[i].offset,(memory_bits(leaves[i].type)+7)/8,float_type(leaves[i].type)?abi_fp(fp):abi_gp(a64,gp),leaves[i].type};
+      parts[i]=(AbiPart){leaves[i].offset,(memory_bits(leaves[i].type)+7)/8,float_type(leaves[i].type)?abi_fp(fp):abi_gp(a64,gp),leaves[i].type,0};
     return true;
   }
   if (dyn_type_is_struct(type) && !layout(ir,type,&size,&alignment,0)) return false;
@@ -369,27 +414,27 @@ static bool abi_assign(bool a64,const DynIrProgram *ir,DynType type,unsigned *gp
     bool hfa=a64_struct_hfa(ir,type,&element,&members);
     if (hfa && *fp+members<=8) {
       if (members>capacity) return false;
-      for (unsigned i=0;i<members;++i) parts[i]=(AbiPart){i*(memory_bits(element)/8),memory_bits(element)/8,abi_fp(fp),element};
+      for (unsigned i=0;i<members;++i) parts[i]=(AbiPart){i*(memory_bits(element)/8),memory_bits(element)/8,abi_fp(fp),element,0};
       *count=members; return true;
     }
     if (hfa) *fp=8; /* an HFA that does not fit goes entirely to the stack */
-    else if (size>16) { *indirect=true; parts[0]=(AbiPart){0,8,abi_gp(true,gp),DYN_TYPE_RAWPTR}; *count=1; return true; }
+    else if (size>16) { *indirect=true; parts[0]=(AbiPart){0,8,abi_gp(true,gp),DYN_TYPE_RAWPTR,0}; *count=1; return true; }
     bool registers=!hfa && *gp+chunks<=8;
     if (!registers && !hfa) *gp=8;
     if (chunks>capacity) return false;
     for (unsigned i=0;i<chunks;++i)
-      parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,registers?abi_gp(true,gp):-1,DYN_TYPE_U64};
+      parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,registers?abi_gp(true,gp):-1,DYN_TYPE_U64,0};
     *count=chunks; return true;
   }
   if (a64) {
     *count=descriptor(type)?2:1;
     for (unsigned i=0;i<*count;++i)
-      parts[i]=(AbiPart){i*8,8,float_type(type)?abi_fp(fp):abi_gp(true,gp),descriptor(type)?DYN_TYPE_U64:type};
+      parts[i]=(AbiPart){i*8,8,float_type(type)?abi_fp(fp):abi_gp(true,gp),descriptor(type)?DYN_TYPE_U64:type,0};
     return true;
   }
-  if (abi_memory(false,ir,type)) {
+  if (abi_memory(ctx,ir,type)) {
     *count=(size+7)/8; if (*count>capacity) return false;
-    for (unsigned i=0;i<*count;++i) parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,-1,DYN_TYPE_U64};
+    for (unsigned i=0;i<*count;++i) parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,-1,DYN_TYPE_U64,0};
     return true;
   }
   if (!abi_value(ir,type,count,cls) || *count>capacity) return false;
@@ -401,7 +446,7 @@ static bool abi_assign(bool a64,const DynIrProgram *ir,DynType type,unsigned *gp
     if (spill) assigned=-1;
     else if (cls[i]==2) assigned=abi_fp(fp);
     else assigned=abi_gp(false,gp);
-    parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,assigned,DYN_TYPE_U64};
+    parts[i]=(AbiPart){i*8,size-i*8>8?8:size-i*8,assigned,DYN_TYPE_U64,0};
   }
   return true;
 }
@@ -411,6 +456,25 @@ static bool abi_supported(const DynIrProgram *ir,DynType type) {
     (dyn_type_is_struct(type) && layout(ir,type,&size,&alignment,0));
 }
 static void load_chunk(BackendContext *ctx, unsigned offset,unsigned size) { isa_load_chunk(ctx, offset, size); }
+/* Bytes a stack-passed part occupies: eight, except that Apple AArch64 packs
+   scalars narrower than eight bytes at their natural size and alignment. */
+static uint32_t stack_width(const BackendContext *ctx, const AbiPart *part) {
+  unsigned bits=memory_bits(storage_type(ctx->active_ir,part->leaf));
+  return ctx->darwin && bits<64 ? (bits+7)/8 : 8;
+}
+/* Assign the next stack offset to a stack-passed part. */
+static uint32_t stack_slot(const BackendContext *ctx, AbiPart *part, uint32_t *cursor) {
+  uint32_t width=stack_width(ctx,part);
+  *cursor=(*cursor+width-1)/width*width; part->stack=*cursor; *cursor+=width;
+  return part->stack;
+}
+/* A <- an incoming stack-passed part. Arguments sit above the saved FP and
+   return address (and, on Windows, the caller's 32-byte register home area). */
+static void incoming_stack(BackendContext *ctx, AbiPart *part, uint32_t *cursor) {
+  uint32_t at=(ctx->win64?48:16)+stack_slot(ctx,part,cursor);
+  if (stack_width(ctx,part)==8) { isa_load(ctx, R_A, at); return; }
+  isa_lea(ctx, R_A, at); load_memory(ctx, part->leaf);
+}
 static void save_struct(BackendContext *ctx, uint32_t offset,DynType type) {
   uint32_t size,alignment; if (!layout(ctx->active_ir,type,&size,&alignment,0)) { ctx->text.failed=true; return; }
   isa_move(ctx, R_11, R_A);
@@ -544,6 +608,12 @@ static bool isa_struct_result(BackendContext *ctx, const DynIrProgram *ir, DynTy
   unsigned parts=0,cls[2],integers=0,floats=0;
   if (sret) return true;
   if (ctx->a64) return a64_struct_result(ctx, ir, type, offset);
+  if (ctx->win64) {
+    /* A 1, 2, 4 or 8-byte struct arrives in RAX; store exactly its size. */
+    uint32_t size,alignment; if (!layout(ir,type,&size,&alignment,0)) return false;
+    isa_move(ctx, R_10, R_A); isa_lea(ctx, R_DI, offset); isa_store_chunk(ctx, 0, size);
+    return !ctx->text.failed;
+  }
   if (!abi_value(ir,type,&parts,cls)) return false;
   for (unsigned part=0;part<parts;++part) {
     if (cls[part]==2) { CODE(0x66,0x49,0x0f,0x7e); byte(ctx, 0xc2+8*floats++); CODE(0x4c,0x89,0x95); }
@@ -559,7 +629,7 @@ static bool plan_argument(BackendContext *ctx, const DynIrProgram *ir, CallPlan 
                           unsigned *gp, unsigned *fp, unsigned *argument_count) {
   unsigned count;
   plan->first[index]=*argument_count;
-  if (!abi_assign(ctx->a64,ir,type,gp,fp,plan->parts+*argument_count,&count,512-*argument_count,&plan->indirect[index])) return false;
+  if (!abi_assign(ctx,ir,type,gp,fp,plan->parts+*argument_count,&count,512-*argument_count,&plan->indirect[index])) return false;
   *argument_count+=count; plan->first[index+1]=*argument_count;
   return true;
 }
@@ -567,7 +637,7 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
                       const DynIrExpr *e, unsigned depth, CallPlan *plan) {
   bool indirect=e->kind == DYN_EXPR_INDIRECT_CALL;
   if (e->item_count > 512 || (uint64_t)e->item_start+e->item_count > ir->item_count) return false;
-  bool sret=abi_memory(ctx->a64,ir,e->type);
+  bool sret=abi_memory(ctx,ir,e->type);
   unsigned argument_count=0,gp=sret&&!ctx->a64?1:0,fp=0,outgoing=0;
   const DynIrFunction *callee=NULL;
   const DynIrFnType *signature=NULL;
@@ -581,6 +651,7 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
     for (uint32_t i=0;i<e->item_count;++i) {
       DynType type=i<fixed?ir->fn_type_params[signature->param_start+i]:ir->expressions[ir->items[e->item_start+i].expression].type;
       if (!plan_argument(ctx,ir,plan,i,type,&gp,&fp,&argument_count)) return false;
+      if (ctx->darwin && i>=fixed) for (unsigned k=plan->first[i];k<argument_count;++k) { plan->parts[k].cls=-1; plan->parts[k].leaf=DYN_TYPE_U64; }
     }
     if (!expression(ctx, ir,f,e->left,depth+1)) return false;
     isa_test(ctx, R_A); guard(ctx, f, CC_NE, GUARD_FUNCTION);
@@ -599,6 +670,8 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
     for (uint32_t i=0;i<(packed?fixed+1:e->item_count);++i) {
       DynType type=i<fixed?ir->params[callee->param_start+i].type:packed?callee->variadic_type:ir->expressions[ir->items[e->item_start+i].expression].type;
       if (!plan_argument(ctx,ir,plan,i,type,&gp,&fp,&argument_count)) return false;
+      /* Apple AArch64 passes every variadic argument on the stack. */
+      if (ctx->darwin && variadic && i>=fixed) for (unsigned k=plan->first[i];k<argument_count;++k) { plan->parts[k].cls=-1; plan->parts[k].leaf=DYN_TYPE_U64; }
     }
   }
   /* Keep arguments on the expression stack in source order. Nested calls
@@ -646,18 +719,21 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
   bool protected_call=ctx->defer_count && !ctx->unwinding;
   if (protected_call && !protect_call(ctx, ir,f)) return false;
   unsigned slot=isa_slot(ctx);
+  uint32_t outgoing_bytes=0;
   for (uint32_t i=0;i<argument_count;++i) {
-    if (plan->parts[i].cls<0) { ++outgoing; continue; }
+    if (plan->parts[i].cls<0) { ++outgoing; stack_slot(ctx,&plan->parts[i],&outgoing_bytes); continue; }
     isa_argument_load(ctx, plan->parts[i].cls, slot*(argument_count-i-1));
+    /* Microsoft x64 variadic callees read floating arguments from the GP register too. */
+    if (ctx->win64 && variadic && plan->parts[i].cls>=8) isa_argument_load(ctx, plan->parts[i].cls-8, slot*(argument_count-i-1));
   }
-  /* Outgoing stack arguments occupy eight-byte slots; the area keeps SP 16-byte aligned. */
-  unsigned reserved=ctx->a64 ? (outgoing*8+15)/16*16 : (outgoing+((ctx->stack_slots+outgoing)&1))*8;
+  /* Outgoing stack arguments occupy eight-byte slots (Apple packs narrower
+     scalars); the area keeps SP 16-byte aligned. */
+  unsigned reserved=ctx->a64 ? (outgoing_bytes+15)/16*16 : (outgoing+((ctx->stack_slots+outgoing)&1))*8;
   isa_reserve(ctx, reserved);
-  unsigned spilled=0;
   for (uint32_t i=0;i<argument_count;++i) if (plan->parts[i].cls<0)
-    isa_stack_copy(ctx, reserved+slot*(argument_count-i-1), 8*spilled++);
+    isa_stack_store(ctx, reserved+slot*(argument_count-i-1), plan->parts[i].stack, stack_width(ctx,&plan->parts[i]));
   if (sret) isa_result_pointer(ctx, ctx->temporary_offsets[e-ir->expressions]);
-  if (variadic && !ctx->a64) { byte(ctx,0xb8); word(ctx,fp); } /* SysV vector register count in AL. */
+  if (variadic && !ctx->a64 && !ctx->win64) { byte(ctx,0xb8); word(ctx,fp); } /* SysV vector register count in AL. */
   if (indirect) isa_call_stack(ctx, reserved+argument_count*slot);
   else isa_call_symbol(ctx, ctx->function_symbols[e->integer]);
   isa_release(ctx, (argument_count + indirect) * slot + reserved);
@@ -714,6 +790,7 @@ static bool call_value(BackendContext *ctx, const DynIrProgram *ir, const DynIrF
 static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
                              const DynIrExpr *e, unsigned depth) {
   if (e->kind==DYN_EXPR_SYSCALL) {
+    if (ctx->win64) return false; /* no Windows system call runtime */
     if (e->item_count>7 || (uint64_t)e->item_start+e->item_count>ir->item_count) return false;
     for (unsigned i=0;i<7;++i) {
       if (i<e->item_count) {
@@ -1008,7 +1085,7 @@ static bool binary_result(BackendContext *ctx, const DynIrProgram *ir, const Dyn
 }
 static void return_value(BackendContext *ctx, DynType type) {
   const DynIrProgram *ir=ctx->active_ir;
-  bool sret=abi_memory(ctx->a64,ctx->active_ir,type);
+  bool sret=abi_memory(ctx,ctx->active_ir,type);
   if (aggregate(ir, type)) { save_struct(ctx, ctx->return_offset,type); isa_lea(ctx, R_A, ctx->return_offset); }
   if (sret) {
     uint32_t size,alignment; if (!layout(ctx->active_ir,type,&size,&alignment,0)) { ctx->text.failed=true; return; }
@@ -1026,6 +1103,10 @@ static void return_value(BackendContext *ctx, DynType type) {
     } else isa_trace_pop(ctx, descriptor(type));
   }
   if (ctx->a64 && aggregate(ir, type) && !sret) { a64_struct_return(ctx, ir, type); isa_return(ctx); return; }
+  if (ctx->win64 && aggregate(ir, type) && !sret) {
+    uint32_t size,alignment; if (!layout(ir,type,&size,&alignment,0)) { ctx->text.failed=true; return; }
+    isa_move(ctx, R_11, R_A); load_chunk(ctx, 0, size); isa_move(ctx, R_A, R_10); isa_return(ctx); return;
+  }
   if (raw_aggregate(ir,type) && !sret) {
     ArrayPart leaves[512]; unsigned count=0,gp=0,fp=0; uint32_t x87_offset[2]; DynType x87_type[2]; unsigned x87=0;
     if (!array_parts(ctx->active_ir,type,0,leaves,&count,0)) { ctx->text.failed=true; return; }
@@ -1123,12 +1204,11 @@ static bool expression_scratch(BackendContext *ctx, const DynIrProgram *ir,DynEx
   if (e->kind==DYN_EXPR_SYSCALL || e->kind==DYN_EXPR_ENUM || e->kind==DYN_EXPR_ARRAY || e->kind==DYN_EXPR_STRUCT || e->kind==DYN_EXPR_CALL || e->kind==DYN_EXPR_INDIRECT_CALL) {
     if ((uint64_t)e->item_start+e->item_count>ir->item_count) return false;
     for (uint32_t i=0;i<e->item_count;++i) if (!expression_scratch(ctx, ir,ir->items[e->item_start+i].expression,depth+1,slots)) return false;
-    if (ctx->a64 && (e->kind==DYN_EXPR_CALL || e->kind==DYN_EXPR_INDIRECT_CALL))
+    if (e->kind==DYN_EXPR_CALL || e->kind==DYN_EXPR_INDIRECT_CALL)
       for (uint32_t i=0;i<e->item_count;++i) {
         DynExprId argument=ir->items[e->item_start+i].expression; DynType type=ir->expressions[argument].type;
-        DynType element; unsigned members; uint32_t size,alignment;
-        if (!dyn_type_is_struct(type) || a64_struct_hfa(ir,type,&element,&members) ||
-            !layout(ir,type,&size,&alignment,0) || size<=16 || ctx->copy_offsets[argument]) continue;
+        uint32_t size,alignment;
+        if (!abi_copied(ctx,ir,type) || !layout(ir,type,&size,&alignment,0) || ctx->copy_offsets[argument]) continue;
         *slots+=(size+7)/8; if (*slots>MAX_SCRATCH) return false;
         ctx->copy_offsets[argument]=0u-8*(ctx->local_words+*slots); ctx->touched_exprs[ctx->touched_expr_count++]=argument;
       }
@@ -1613,7 +1693,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (aggregate(ir, f->return_type)) {
     uint32_t size,alignment; if (!layout(ir,f->return_type,&size,&alignment,0)) return false;
     scratch=(size?size+7:8)/8; ctx->return_offset=0u-8*(ctx->local_words+scratch);
-    if (abi_memory(ctx->a64,ir,f->return_type)) { ++scratch; ctx->sret_offset=0u-8*(ctx->local_words+scratch); }
+    if (abi_memory(ctx,ir,f->return_type)) { ++scratch; ctx->sret_offset=0u-8*(ctx->local_words+scratch); }
     if (scratch>MAX_SCRATCH) return false;
   }
   if (!count_scratch(ctx, ir,f,f->body_start,f->body_count,0,&scratch)) return false;
@@ -1623,7 +1703,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   for (unsigned i = 0; i < GUARD_COUNT; ++i) ctx->message_offsets[i] = SIZE_MAX;
   isa_enter(ctx);
   /* GP and FP register banks exhaust independently; stack slots retain source order. */
-  unsigned gp=ctx->sret_offset && !ctx->a64?1:0,fp=0,spilled=0;
+  unsigned gp=ctx->sret_offset && !ctx->a64?1:0,fp=0; uint32_t spilled=0;
   if (ctx->sret_offset) isa_store_result_pointer(ctx, ctx->sret_offset);
   for (uint32_t i=0;i<f->param_count+(unsigned)f->variadic;++i) {
     DynIrParam packed={.type=f->variadic_type,.local_id=f->variadic_local_id};
@@ -1631,12 +1711,12 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
     if (!local_slot(ctx, f,p->local_id,&offset)) return false;
     unsigned parts; bool indirect; AbiPart *assigned=ctx->call_parts;
     bool array=raw_aggregate(ir,p->type);
-    if (!abi_assign(ctx->a64,ir,p->type,&gp,&fp,assigned,&parts,512,&indirect)) return false;
+    if (!abi_assign(ctx,ir,p->type,&gp,&fp,assigned,&parts,512,&indirect)) return false;
     for (unsigned part=0;part<parts;++part) {
       int cls=assigned[part].cls;
       if (array || indirect || (ctx->a64 && aggregate(ir,p->type))) {
         if (cls>=0) isa_argument_to_a(ctx, cls);
-        else isa_load(ctx, R_A, 16+8*spilled++);
+        else incoming_stack(ctx, &assigned[part], &spilled);
         if (indirect) { save_struct(ctx, offset, p->type); continue; } /* copy the caller's memory */
         if (array) { normalize(ctx, assigned[part].leaf); isa_lea(ctx, R_11, offset+assigned[part].offset); store_memory(ctx, assigned[part].leaf); continue; }
         /* AArch64 struct pieces (HFA members or eightbytes) keep their exact size. */
@@ -1644,7 +1724,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
         continue;
       }
       if (cls>=0) isa_store_argument(ctx, cls, offset+part*8);
-      else { isa_load(ctx, R_A, 16+8*spilled++); isa_store(ctx, R_A, offset+part*8); }
+      else { incoming_stack(ctx, &assigned[part], &spilled); isa_store(ctx, R_A, offset+part*8); }
     }
   }
   if (ctx->debug_mode) {
@@ -2109,6 +2189,13 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     memcpy(strings + names, runtime_names[i], length); names += length;
   }
   if (ctx->dwarf && !backend_dwarf_finish(ctx->dwarf,&debug)) goto done;
+  if (ctx->win64 || ctx->darwin) {
+    unsigned symbol_count=(unsigned)(ctx->runtime_base+ctx->runtime_count);
+    ok = ctx->win64 ? write_coff(ctx,path,symbols,symbol_count,strings)
+                    : write_macho(ctx,path,symbols,symbol_count,strings,&debug);
+    if (!ok) backend_report(ctx, "native backend: failed to write object\n");
+    goto done;
+  }
   size_t debug_name=sizeof("\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.data\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0")-1;
   const char section_names[] = "\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.data\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0" ".debug_info\0.rela.debug_info\0.debug_abbrev\0.rela.debug_abbrev\0.debug_line\0.rela.debug_line\0.debug_frame\0.rela.debug_frame\0";
   Elf64_Ehdr h = {.e_ident = {0x7f,'E','L','F',ELFCLASS64,ELFDATA2LSB,EV_CURRENT},
@@ -2191,11 +2278,15 @@ done:
   dyn_location_free(&locations);
   free(symbols); free(strings); return ok;
 }
+typedef enum { TARGET_X64_ELF, TARGET_A64_ELF, TARGET_X64_COFF, TARGET_A64_MACHO } ObjectTarget;
 static bool object_target(const DynSource *source, const DynIrProgram *ir,
-                          const char *path, bool debug, bool debug_info, bool report, bool a64) {
+                          const char *path, bool debug, bool debug_info, bool report, ObjectTarget target) {
   BackendContext *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return false;
+  bool a64 = target == TARGET_A64_ELF || target == TARGET_A64_MACHO;
   ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64;
+  ctx->win64 = target == TARGET_X64_COFF; ctx->darwin = target == TARGET_A64_MACHO;
+  if (ctx->win64) debug_info = false; /* Windows debuggers read CodeView, which this backend does not write */
   if (debug_info && (!(ctx->dwarf=a64?backend_dwarf_create_a64():backend_dwarf_create()) ||
                      !(ctx->dwarf_types=calloc(DYN_TYPE_PARAM_BASE, sizeof(*ctx->dwarf_types))))) {
     backend_dwarf_free(ctx->dwarf); free(ctx); return false;
@@ -2210,7 +2301,7 @@ static bool object_target(const DynSource *source, const DynIrProgram *ir,
 }
 static bool object_report(const DynSource *source, const DynIrProgram *ir,
                           const char *path, bool debug, bool debug_info, bool report) {
-  return object_target(source, ir, path, debug, debug_info, report, false);
+  return object_target(source, ir, path, debug, debug_info, report, TARGET_X64_ELF);
 }
 static bool object_options(const DynSource *source, const DynIrProgram *ir,
                            const char *path, bool debug, bool debug_info) {

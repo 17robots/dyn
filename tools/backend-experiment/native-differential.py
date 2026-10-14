@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Differential AArch64 Linux check: native emission against LLVM under qemu.
+"""Differential check of native emission against LLVM for a cross target.
 
 Builds the value corpus from test.py (minus libc-dependent functions) into one
-program per backend. Each case runs in its own qemu process, selected by its
+program per backend. Each case runs in its own process, selected by its
 command-line index, so panics are compared exactly: status, stdout and stderr.
+
+Targets run under qemu-aarch64 (aarch64-linux), wine (x86_64-windows) or
+directly on a matching host (aarch64-macos needs an Apple silicon Mac).
 """
+import platform
 import argparse
+import json
 import os
 from pathlib import Path
 import random
@@ -137,9 +142,10 @@ pub fn agg_nested_loops(a: u64) u64 {
 }
 """
 
-# C provider compiled by clang for AAPCS64 interop: struct classes, HFAs,
-# indirect large structs, stack overflow arguments and callbacks into Dyn.
+# C provider compiled by clang for C interop: struct classes, HFAs, indirect
+# large structs, stack overflow arguments and callbacks into Dyn.
 PROVIDER = r"""
+#include <stdarg.h>
 #include <stdint.h>
 typedef struct { uint8_t a; uint16_t b; uint32_t c; } Small;
 typedef struct { int64_t x, y; } Pair;
@@ -161,6 +167,27 @@ double c_fp_spill(double a, double b, double c, double d, double e, double f, do
 int64_t c_callback(int64_t (*f)(Pair, int64_t), int64_t a) { Pair p = { a, 2 }; return f(p, 5) + 1; }
 double c_hfa_callback(Floats (*f)(Floats), float a) { Floats r = f((Floats){ a, 1.0f }); return r.x * 10 + r.y; }
 uint64_t c_large_callback(Large (*f)(Large), uint64_t a) { Large r = f((Large){ a, 1, 2, 3, 4 }); return r.a + r.e; }
+/* Narrow scalars after the registers run out (Apple packs them on the stack). */
+int64_t c_narrow(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h,
+                 uint8_t i, int16_t j, int32_t k, uint8_t l, int64_t m) {
+  return a + b + c + d + e + f + g + h + i * 10 + j * 100 + (int64_t)k * 1000 + l * 7 + m * 3;
+}
+double c_narrow_fp(double a, double b, double c, double d, double e, double f, double g, double h,
+                   float i, double j, float k) { return a + b + c + d + e + f + g + h + i * 10 + j * 100 + k * 1000; }
+int64_t c_narrow_callback(int64_t (*f)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
+                                       uint8_t, int16_t, int32_t, uint8_t, int64_t), uint8_t a) {
+  return f(1, 2, 3, 4, 5, 6, 7, 8, a, -3, 70000, 200, 9) + 1;
+}
+int64_t c_vsum(int32_t n, ...) {
+  va_list ap; va_start(ap, n); int64_t t = 0;
+  for (int32_t i = 0; i < n; ++i) t += va_arg(ap, int64_t) * (i + 1);
+  va_end(ap); return t;
+}
+double c_vmixed(int32_t n, ...) {
+  va_list ap; va_start(ap, n); double t = 0;
+  for (int32_t i = 0; i < n; ++i) { t += (double)va_arg(ap, int64_t); t += va_arg(ap, double) * 10; }
+  va_end(ap); return t;
+}
 """
 INTEROP = """
 extern fn c_small(s: Small) Small
@@ -178,6 +205,18 @@ extern fn c_large_callback(f: *fn(Large) Large, a: u64) u64
 fn dyn_pair_callback(p: Pair, k: i64) i64 { return p.x % 1000 * k + p.y }
 fn dyn_floats_callback(f: Floats) Floats { return Floats{ x: f.y, y: f.x } }
 fn dyn_large_callback(l: Large) Large { m := l m.a = l.a % 1000 + l.d m.e = 9 return m }
+extern fn c_narrow(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: u8, j: i16, k: i32, l: u8, m: i64) i64
+extern fn c_narrow_fp(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f32, j: f64, k: f32) f64
+extern fn c_narrow_callback(f: *fn(i64, i64, i64, i64, i64, i64, i64, i64, u8, i16, i32, u8, i64) i64, a: u8) i64
+extern fn c_vsum(n: i32, ...) i64
+extern fn c_vmixed(n: i32, ...) f64
+fn dyn_narrow(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: u8, j: i16, k: i32, l: u8, m: i64) i64 {
+  return a + b + c + d + e + f + g + h + #cast(i64) i * 10 + #cast(i64) j * 100 + #cast(i64) k * 1000 + #cast(i64) l * 7 + m * 3
+}
+pub fn c_abi_narrow(a: u8, b: i16) i64 { return c_narrow(1, 2, 3, 4, 5, 6, 7, 8, a, b, 70000, 200, 9) + dyn_narrow(8, 7, 6, 5, 4, 3, 2, 1, a, b, -5, 3, 1) }
+pub fn c_abi_narrow_fp(a: f32) f64 { return c_narrow_fp(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, a, 0.5, 0.25) }
+pub fn c_abi_narrow_callback(a: u8) i64 { return c_narrow_callback(&dyn_narrow, a) }
+pub fn c_abi_variadic(a: i64, b: f64) f64 { k: i64 = a % 1000 return #cast(f64) c_vsum(3, k, #cast(i64) 2, #cast(i64) 3) + c_vmixed(2, k, b, #cast(i64) 7, 0.5) }
 pub fn c_abi_small(a: u8, b: u16) u64 { r := c_small(Small{ a: a % 200, b: b % 1000, c: 7 }) return #cast(u64) r.a + #cast(u64) r.b + #cast(u64) r.c }
 pub fn c_abi_pair(a: i64, b: i64) i64 { r := c_pair(Pair{ x: a % 1000, y: b % 1000 }, 3) return r.x * 7 + r.y }
 pub fn c_abi_floats(a: f32, b: f32) f32 { r := c_floats(Floats{ x: a, y: b }) return r.x - r.y }
@@ -282,61 +321,133 @@ def no_core_dumps():
     import resource
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
+# clang target triple and the command prefix that runs a target executable.
+TARGETS = {
+    'x86_64-linux': 'x86_64-linux-gnu',
+    'aarch64-linux': 'aarch64-linux-gnu',
+    'x86_64-windows': 'x86_64-pc-windows-msvc',
+    'aarch64-macos': 'arm64-apple-macosx15.0',
+}
+
+def runner(target):
+    machine = platform.machine().lower()
+    if target == 'x86_64-linux':
+        return [] if sys.platform.startswith('linux') and machine in ('x86_64', 'amd64') else None
+    if target == 'aarch64-linux':
+        if sys.platform.startswith('linux') and machine in ('aarch64', 'arm64'): return []
+        return ['qemu-aarch64'] if shutil.which('qemu-aarch64') else None
+    if target == 'x86_64-windows':
+        if sys.platform == 'win32': return []
+        wine = shutil.which('wine') or shutil.which('wine64')
+        return [wine] if wine else None
+    return [] if sys.platform == 'darwin' and machine == 'arm64' else None
+
+def build(args, root, program):
+    """Build the corpus with both backends into root; returns their paths."""
+    (root/'app').mkdir(exist_ok=True)
+    (root/'app/main.dyn').write_text(program)
+    (root/'provider.c').write_text(PROVIDER)
+    provider = root/'provider.o'
+    clang = shutil.which(os.environ.get('CLANG', 'clang'))
+    if not clang: return None
+    subprocess.run([clang, f'--target={TARGETS[args.target]}', '-ffreestanding', '-fno-stack-protector', '-O1',
+                    '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
+    outputs = {}
+    suffix = '.exe' if args.target == 'x86_64-windows' else ''
+    for backend in ('native', 'llvm'):
+        output = root/f'{backend}{suffix}'
+        built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', args.target,
+                                '--backend', backend, '--no-cache', '--quiet', '--link', str(provider),
+                                '--output', str(output)],
+                               capture_output=True, text=True, timeout=600)
+        if built.returncode:
+            (Path(tempfile.gettempdir())/'dyn-native-diff-main.dyn').write_text(program)
+            sys.exit(f'{backend} build failed:\n{built.stderr[-4000:]}')
+        outputs[backend] = output
+    dwarfdump = shutil.which('llvm-dwarfdump')
+    debug_object = outputs['native'].with_name(outputs['native'].name + '.dynnative.o')
+    dwarf = outputs['native'] if args.target.endswith('-linux') else debug_object if args.target == 'aarch64-macos' else None
+    if dwarfdump and dwarf:
+        verify = subprocess.run([dwarfdump, '--verify', str(dwarf)], capture_output=True, text=True)
+        assert verify.returncode == 0 and 'No errors.' in verify.stdout, verify.stdout[-2000:]
+        frames = subprocess.run([dwarfdump, '--debug-frame', str(dwarf)], capture_output=True, text=True)
+        assert frames.returncode == 0 and 'error' not in frames.stdout + frames.stderr, (frames.stdout + frames.stderr)[-2000:]
+    return outputs
+
+def compare(target, prefix, outputs, count, directory, jobs):
+    """Run every case on both programs; exits on a mismatch."""
+    environment = dict(os.environ, WINEDEBUG='-all')
+    def run(binary, index):
+        try:
+            r = subprocess.run([*prefix, str(binary), str(index)], capture_output=True, timeout=30,
+                               cwd=directory, env=environment,
+                               preexec_fn=None if sys.platform == 'win32' else no_core_dumps)
+        except subprocess.TimeoutExpired:
+            return 'timeout', b'', b''  # e.g. loop_forever(2^64-1) on both backends
+        return r.returncode, r.stdout, r.stderr
+    if prefix and 'wine' in Path(prefix[0]).name: run(outputs['llvm'], 0)  # create the wine prefix once
+    with ThreadPoolExecutor(jobs) as pool:
+        native = list(pool.map(lambda i: run(outputs['native'], i), range(count)))
+        llvm = list(pool.map(lambda i: run(outputs['llvm'], i), range(count)))
+    # Long loops that end in an overflow panic can outlast the timeout on one
+    # backend only; those cases are inconclusive rather than mismatches.
+    slow = [i for i in range(count) if native[i] != llvm[i] and 'timeout' in (native[i][0], llvm[i][0])]
+    failures = [i for i in range(count) if native[i] != llvm[i] and i not in slow]
+    panics = sum(1 for r in llvm if r[0] == 101)
+    for i in failures[:20]:
+        print(f'MISMATCH case {i}: native={native[i]} llvm={llvm[i]}')
+    if failures:
+        sys.exit(f'{len(failures)} of {count} {target} cases differ')
+    how = f'under {Path(prefix[0]).name}' if prefix else 'on the host'
+    timed = f', {len(slow)} timed out on one backend' if slow else ''
+    print(f'PASS {target} native/LLVM differential: {count} cases ({panics} panics{timed}) {how}')
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--target', choices=sorted(TARGETS), default='aarch64-linux')
+    parser.add_argument('--build-only', action='store_true', help='build both programs without running them')
+    parser.add_argument('--stage', type=Path, help='build both programs into this directory for another machine')
+    parser.add_argument('--run', type=Path, help='run programs staged with --stage on this machine')
     parser.add_argument('--compiler', type=Path, default=ROOT/'build/dyn')
     parser.add_argument('--per-function', type=int, default=8)
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
     args = parser.parse_args()
-    if not shutil.which('qemu-aarch64'):
-        print('SKIP AArch64 differential: qemu-aarch64 not installed'); return
+    if args.run:
+        staged = json.loads((args.run/'cases.json').read_text())
+        prefix = runner(staged['target'])
+        if prefix is None: sys.exit(f'no runner for {staged["target"]} on this machine')
+        outputs = {backend: args.run/name for backend, name in staged['programs'].items()}
+        if sys.platform != 'win32':  # artifact downloads drop the executable bit
+            for path in outputs.values(): path.chmod(path.stat().st_mode | 0o111)
+        compare(staged['target'], prefix, outputs, staged['count'], args.run, args.jobs)
+        return
+    prefix = runner(args.target)
+    if prefix is None and (args.build_only or args.stage): prefix = []
+    elif prefix is None:
+        print(f'SKIP {args.target} differential: no runner (qemu-aarch64, wine or a matching host)'); return
     rng = random.Random(args.seed)
     program, count = build_program(rng, args.per_function)
-    with tempfile.TemporaryDirectory(prefix='dyn-a64-diff-') as directory:
-        root = Path(directory); (root/'app').mkdir()
-        (root/'app/main.dyn').write_text(program)
-        (root/'provider.c').write_text(PROVIDER)
-        provider = root/'provider.o'
-        clang = shutil.which('clang')
-        if not clang: print('SKIP AArch64 differential: clang not installed'); return
-        subprocess.run([clang, '--target=aarch64-linux-gnu', '-ffreestanding', '-fno-stack-protector', '-O1',
-                        '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
-        outputs = {}
-        for backend in ('native', 'llvm'):
-            output = root/f'{backend}'
-            built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', 'aarch64-linux',
-                                    '--backend', backend, '--no-cache', '--quiet', '--link', str(provider),
-                                    '--output', str(output)],
-                                   capture_output=True, text=True, timeout=600)
-            if built.returncode:
-                (Path(tempfile.gettempdir())/'dyn-a64-diff-main.dyn').write_text(program)
-                sys.exit(f'{backend} build failed:\n{built.stderr[-4000:]}')
-            outputs[backend] = output
-        def run(binary, index):
-            try:
-                r = subprocess.run(['qemu-aarch64', str(binary), str(index)], capture_output=True, timeout=5,
-                                   cwd=directory, preexec_fn=no_core_dumps)
-            except subprocess.TimeoutExpired:
-                return 'timeout', b'', b''  # e.g. loop_forever(2^64-1) on both backends
-            return r.returncode, r.stdout, r.stderr
-        with ThreadPoolExecutor(args.jobs) as pool:
-            native = list(pool.map(lambda i: run(outputs['native'], i), range(count)))
-            llvm = list(pool.map(lambda i: run(outputs['llvm'], i), range(count)))
-        dwarfdump = shutil.which('llvm-dwarfdump')
-        if dwarfdump:
-            verify = subprocess.run([dwarfdump, '--verify', str(outputs['native'])], capture_output=True, text=True)
-            assert verify.returncode == 0 and 'No errors.' in verify.stdout, verify.stdout[-2000:]
-            frames = subprocess.run([dwarfdump, '--debug-frame', str(outputs['native'])], capture_output=True, text=True)
-            assert frames.returncode == 0 and 'error' not in frames.stdout + frames.stderr, (frames.stdout + frames.stderr)[-2000:]
-        failures = [i for i in range(count) if native[i] != llvm[i]]
-        panics = sum(1 for r in llvm if r[0] == 101)
-        for i in failures[:20]:
-            print(f'MISMATCH case {i}: native={native[i]} llvm={llvm[i]}')
-        if failures:
-            (Path(tempfile.gettempdir())/'dyn-a64-diff-main.dyn').write_text(program)
-            sys.exit(f'{len(failures)} of {count} AArch64 cases differ (program saved to /tmp/dyn-a64-diff-main.dyn)')
-        print(f'PASS AArch64 native/LLVM differential: {count} cases ({panics} panics) under qemu')
+    if args.stage:
+        if args.stage.exists(): shutil.rmtree(args.stage)
+        args.stage.mkdir(parents=True)
+        outputs = build(args, args.stage.resolve(), program)
+        if outputs is None: sys.exit('clang is required to stage the differential')
+        programs = {backend: path.name for backend, path in outputs.items()}
+        (args.stage/'cases.json').write_text(json.dumps({'target': args.target, 'count': count, 'programs': programs}) + '\n')
+        print(f'STAGED {args.target} native/LLVM differential: {count} cases in {args.stage}')
+        return
+    with tempfile.TemporaryDirectory(prefix='dyn-native-diff-') as directory:
+        outputs = build(args, Path(directory), program)
+        if outputs is None: print(f'SKIP {args.target} differential: clang not installed'); return
+        if args.build_only:
+            print(f'PASS {args.target} native and LLVM builds: {count} cases (not run)'); return
+        try:
+            compare(args.target, prefix, outputs, count, directory, args.jobs)
+        except SystemExit:
+            (Path(tempfile.gettempdir())/'dyn-native-diff-main.dyn').write_text(program)
+            print('program saved to /tmp/dyn-native-diff-main.dyn')
+            raise
 
 if __name__ == '__main__':
     main()

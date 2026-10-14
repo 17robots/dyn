@@ -18,8 +18,9 @@
 `--diagnostics json` for machine-readable errors, `--timings`, `--no-cache`
 and `--link PATH` to add a native object or library.
 
-On x86-64 Linux hosts, debug builds for x86-64 and AArch64 Linux generate
-machine code directly instead of through LLVM, which is much faster. Programs the native code generator cannot
+Debug builds for Linux (x86-64 and AArch64), macOS and Windows generate
+machine code directly instead of through LLVM, which is much faster. Compilers
+on Linux and macOS hosts include this code generator. Programs the native code generator cannot
 handle fall back to LLVM automatically. `--backend llvm` forces LLVM;
 `--backend native` makes a fallback an error. Release builds always use LLVM.
 

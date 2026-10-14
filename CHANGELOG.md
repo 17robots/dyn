@@ -20,14 +20,19 @@ servers so they pick up the new `dyn`.
   debugger information (lines, frames, parameters and typed locals). Programs the
   native code generator cannot handle fall back to LLVM automatically.
   `--backend llvm` restores the old behavior; `--backend native` makes a
-  fallback an error. Debug builds cross-compiled to AArch64 Linux use the same
-  native code generator. Release builds and other targets still use LLVM.
+  fallback an error. Debug builds for AArch64 Linux, AArch64 macOS and x86-64
+  Windows use the same native code generator, and compilers on macOS and ARM
+  Linux hosts include it. Release builds and Wasm still use LLVM. On macOS the
+  object `<output>.dynnative.o` stays beside the executable so debuggers can
+  read its DWARF; Windows debug builds carry no debug information.
 - Native debug information shows each local only within its scope, and payload
   enums as `tag` plus a `payload` union.
 - The compiler parses sources with a handwritten parser, making `dyn check`
   about 1.9 times faster with 40% less peak memory on large projects. Files with
   syntax errors are still reported through the Tree-sitter grammar, so
   diagnostics are unchanged. Editors keep Tree-sitter.
+- Float remainder (`%` on `f32`/`f64`) no longer needs libm: the runtime
+  provides exact `fmod` and `fmodf`.
 - Calling `main` is now a compile error (`entry function 'main' cannot be
   called`). It reran global initialization: debug builds overflowed the stack
   and release builds looped.

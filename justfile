@@ -127,7 +127,17 @@ test-native-debug: release
 # AArch64 Linux native emission against LLVM under qemu-aarch64 (skips without qemu).
 test-native-a64: release
     python3 tools/build.py dyn
-    python3 tools/backend-experiment/a64-differential.py
+    python3 tools/backend-experiment/native-differential.py --target aarch64-linux
+
+# x86-64 Windows native emission against LLVM under wine (skips without wine).
+test-native-windows: release
+    python3 tools/build.py dyn
+    python3 tools/backend-experiment/native-differential.py --target x86_64-windows
+
+# AArch64 macOS native emission against LLVM (runs on Apple silicon Macs only).
+test-native-macos: release
+    python3 tools/build.py dyn
+    python3 tools/backend-experiment/native-differential.py --target aarch64-macos
 
 # Regression suite with native emission required wherever it is eligible.
 test-native-strict: release
