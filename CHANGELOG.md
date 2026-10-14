@@ -12,7 +12,10 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.24
+
+Compatible with preview 23, except that calling `main` is now an error.
+Checked arithmetic and runtime safety guarantees are unchanged.
 
 - Debug builds on x86-64 Linux generate machine code directly instead of through
   LLVM: 3 to 10 times faster on generated 100k-line, 500k-line and 4,000-file
