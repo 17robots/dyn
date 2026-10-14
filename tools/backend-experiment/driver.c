@@ -89,6 +89,8 @@ typedef struct {
 } BackendContext;
 static bool emit_defers(BackendContext *ctx, const DynIrProgram *, const DynIrFunction *, unsigned);
 #define backend_report(ctx, ...) do { if ((ctx)->report) fprintf(stderr, __VA_ARGS__); } while (0)
+/* Words in the runtime's DynUnwind for this target (runtime/reference_support.c). */
+static unsigned unwind_words(const BackendContext *ctx) { return ctx->a64 ? 22 : 16; }
 static void byte(BackendContext *ctx, unsigned x) {
   if (ctx->text.n < ctx->text.capacity || reserve(&ctx->text, ctx->text.n + 1))
     ctx->text.data[ctx->text.n++] = (unsigned char)x;
@@ -1159,7 +1161,7 @@ static bool count_scratch(BackendContext *ctx, const DynIrProgram *ir, const Dyn
     }
     if (needed) { ctx->touched_stmts[ctx->touched_stmt_count++]=ir->children[start+i]; ctx->statement_scratch[ir->children[start+i]]=0u-8*(ctx->local_words+*slots+(s->kind==DYN_STMT_CASE?needed:1)); *slots+=needed; }
     if (s->kind==DYN_STMT_DEFER) {
-      if (!ctx->unwind_offset) { *slots+=16; ctx->unwind_offset=0u-8*(ctx->local_words+*slots); if (!ctx->return_offset) { *slots+=2; ctx->return_offset=0u-8*(ctx->local_words+*slots); } *slots+=2; ctx->call_offset=0u-8*(ctx->local_words+*slots); }
+      if (!ctx->unwind_offset) { *slots+=unwind_words(ctx); ctx->unwind_offset=0u-8*(ctx->local_words+*slots); if (!ctx->return_offset) { *slots+=2; ctx->return_offset=0u-8*(ctx->local_words+*slots); } *slots+=2; ctx->call_offset=0u-8*(ctx->local_words+*slots); }
       if (!s->defer_block && s->body_count==1) {
         if (s->body_start>=ir->child_count || ir->children[s->body_start]>=ir->statement_count) return false;
         const DynIrStmt *action=&ir->statements[ir->children[s->body_start]];

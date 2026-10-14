@@ -112,6 +112,12 @@ fn deferred(a: u64, b: u64) u64 {
   return a / b
 }
 pub fn agg_defer(a: u64, b: u64) u64 { counter = 0 r := deferred(a % 5, b % 3) return r * 1000 + counter }
+pub fn agg_defer_locals(a: u64, b: u64) u64 {
+  x := a % 1000 y := b % 1000 z := x * 3 w := y * 5 v := x + y u := z + w t := v * 2
+  defer bump(1)
+  bump(2)
+  return x + y + z + w + v + u + t
+}
 table: [4]u64 = [1, 2, 3, 4]
 computed: u64 = table[2] * 10
 pub fn agg_globals(a: u64) u64 { table[a % 4] += a % 100 return table[0] + table[3] + computed }
@@ -207,7 +213,7 @@ def build_program(rng, per_function):
     lines = [l for l in source.split('\n') if not l.startswith('extern fn') or l.startswith('extern fn c_')]
     source = '\n'.join(lines)
     functions = re.findall(r'pub fn (\w+)\(([^)]*)\)\s*([\w]*)\s*\{', source)
-    blocked = set(FOREIGN) | {'float_f32_rem', 'float_f64_rem'}  # float % needs libm
+    blocked = set(FOREIGN)
     # Iterate so callers of removed functions are removed too.
     bodies = {}
     for match in re.finditer(r'pub fn (\w+)\(', source):
