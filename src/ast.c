@@ -796,6 +796,9 @@ static const char *anonymous_operator(TSNode n) {
   return "";
 }
 static DynType parse_type(TSNode, const DynSource *, DynAstProgram *);
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+static DynType compact_alias_type(DynAstCompactRef, const DynSource *, DynAstProgram *);
+#endif
 static DynType resolve_alias(DynAstProgram *a, uint32_t id,
                              const DynSource *s) {
   DynAstAlias *x = &a->aliases[id];
@@ -806,7 +809,12 @@ static DynType resolve_alias(DynAstProgram *a, uint32_t id,
     return DYN_TYPE_ERROR;
   }
   x->state = 1;
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  x->target = x->compact_type.snapshot ? compact_alias_type(x->compact_type, s, a)
+                                     : parse_type(x->type_node, s, a);
+#else
   x->target = parse_type(x->type_node, s, a);
+#endif
   DynType representation = x->target;
   size_t guard = 0;
   while (dyn_type_is_distinct(representation) && guard++ <= a->alias_count) {
@@ -828,8 +836,8 @@ static DynType resolve_alias(DynAstProgram *a, uint32_t id,
   x->state = 2;
   return x->distinct ? DYN_TYPE_DISTINCT_BASE + id : x->target;
 }
-static uint64_t parse_uint(TSNode n, const DynSource *s, bool *ok) {
-  uint32_t i = ts_node_start_byte(n), e = ts_node_end_byte(n);
+static uint64_t parse_uint(DynSpan n, const DynSource *s, bool *ok) {
+  uint32_t i = n.start_byte, e = n.end_byte;
   unsigned base = 10;
   uint64_t v = 0;
   *ok = true;
@@ -862,8 +870,8 @@ static uint64_t parse_uint(TSNode n, const DynSource *s, bool *ok) {
   }
   return v;
 }
-static bool parse_char(TSNode n, const DynSource *s, uint64_t *value) {
-  uint32_t i = ts_node_start_byte(n) + 1, e = ts_node_end_byte(n) - 1;
+static bool parse_char(DynSpan n, const DynSource *s, uint64_t *value) {
+  uint32_t i = n.start_byte + 1, e = n.end_byte - 1;
   if (i >= e) {
     return false;
   }
@@ -932,9 +940,9 @@ static bool parse_char(TSNode n, const DynSource *s, uint64_t *value) {
   *value = v;
   return true;
 }
-static uint32_t parse_string(TSNode n, const DynSource *s, DynAstProgram *a,
+static uint32_t parse_string(DynSpan n, const DynSource *s, DynAstProgram *a,
                              unsigned *errors) {
-  uint32_t begin = ts_node_start_byte(n) + 1, end = ts_node_end_byte(n) - 1;
+  uint32_t begin = n.start_byte + 1, end = n.end_byte - 1;
   unsigned char *out = malloc(end - begin + 1);
   size_t count = 0;
   if (!out || !reserve_string(a)) {
@@ -1089,7 +1097,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
       bool ok;
       e.kind = DYN_EXPR_INT;
       e.type = DYN_TYPE_I32;
-      e.integer = parse_uint(node, s, &ok);
+      e.integer = parse_uint(span(node), s, &ok);
       if (!ok) {
         diagnostic(node, s, errors, "integer literal exceeds u64");
       }
@@ -1100,7 +1108,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
     e.boolean = s->text[e.span.start_byte] == 't';
   } else if (!(k != K_char_)) {
     e.kind = DYN_EXPR_CHAR;
-    if (!parse_char(node, s, &e.integer)) {
+    if (!parse_char(span(node), s, &e.integer)) {
       diagnostic(node, s, errors, "invalid Unicode scalar literal");
       return DYN_NO_EXPR;
     }
@@ -1108,7 +1116,7 @@ static DynExprId lower_expr(TSNode node, const DynSource *s, DynAstProgram *a,
   } else if (!(k != K_string_)) {
     e.kind = DYN_EXPR_STRING;
     e.type = DYN_TYPE_STRING;
-    e.integer = parse_string(node, s, a, errors);
+    e.integer = parse_string(span(node), s, a, errors);
   } else if (!(k != K_null_)) {
     e.kind = DYN_EXPR_NIL;
     e.type = DYN_TYPE_INFER;
@@ -1407,7 +1415,7 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
     for (size_t i = 0; i < length; ++i)
       if (text[i] == '.' || (!hex && (text[i] == 'e' || text[i] == 'E'))) return false;
     bool ok;
-    *value = parse_uint(node, s, &ok);
+    *value = parse_uint(span(node), s, &ok);
     return ok;
   }
   if (!(kind != K_identifier)) {
@@ -1459,6 +1467,33 @@ static bool array_extent(TSNode node, const DynSource *s, DynAstProgram *a, uint
   }
 }
 
+static DynType parse_type_name(DynSpan p, const DynSource *s, DynAstProgram *a) {
+  struct {
+    const char *n;
+    DynType t;
+  } m[] = {{"bool", DYN_TYPE_BOOL},   {"i8", DYN_TYPE_I8},
+           {"i16", DYN_TYPE_I16},     {"i32", DYN_TYPE_I32},
+           {"i64", DYN_TYPE_I64},     {"u8", DYN_TYPE_U8},
+           {"u16", DYN_TYPE_U16},     {"u32", DYN_TYPE_U32},
+           {"u64", DYN_TYPE_U64},     {"isize", DYN_TYPE_ISIZE},
+           {"usize", DYN_TYPE_USIZE}, {"f32", DYN_TYPE_F32},
+           {"f64", DYN_TYPE_F64},     {"rawptr", DYN_TYPE_RAWPTR},
+           {"any", DYN_TYPE_ANY}};
+  for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
+    if (p.end_byte - p.start_byte == strlen(m[i].n) &&
+        !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n))) {
+      return m[i].t;
+    }
+  DynType bound = scope_type(a, p, s, false);
+  if (bound != DYN_TYPE_ERROR)
+    return bound;
+  uint32_t alias = find_alias(a, p, s);
+  if (alias != UINT32_MAX) {
+    return resolve_alias(a, alias, s);
+  }
+  uint32_t id = find_struct(a, p, s);
+  return id == UINT32_MAX ? DYN_TYPE_ERROR : DYN_TYPE_STRUCT_BASE + id;
+}
 static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
   n = unwrap(n);
   if (!(dyn_kind(n) != K_type) && dyn_syntax_child_count(n) == 1) {
@@ -1526,33 +1561,9 @@ static DynType parse_type(TSNode n, const DynSource *s, DynAstProgram *a) {
     bool is_const = dyn_syntax_has_token(n, "const");
     return intern_slice(a, element, is_const);
   }
-  DynSpan p = span(n);
-  struct {
-    const char *n;
-    DynType t;
-  } m[] = {{"bool", DYN_TYPE_BOOL},   {"i8", DYN_TYPE_I8},
-           {"i16", DYN_TYPE_I16},     {"i32", DYN_TYPE_I32},
-           {"i64", DYN_TYPE_I64},     {"u8", DYN_TYPE_U8},
-           {"u16", DYN_TYPE_U16},     {"u32", DYN_TYPE_U32},
-           {"u64", DYN_TYPE_U64},     {"isize", DYN_TYPE_ISIZE},
-           {"usize", DYN_TYPE_USIZE}, {"f32", DYN_TYPE_F32},
-           {"f64", DYN_TYPE_F64},     {"rawptr", DYN_TYPE_RAWPTR},
-           {"any", DYN_TYPE_ANY}};
-  for (size_t i = 0; i < sizeof(m) / sizeof(m[0]); ++i)
-    if (p.end_byte - p.start_byte == strlen(m[i].n) &&
-        !memcmp(s->text + p.start_byte, m[i].n, strlen(m[i].n))) {
-      return m[i].t;
-    }
-  DynType bound = scope_type(a, p, s, false);
-  if (bound != DYN_TYPE_ERROR)
-    return bound;
-  uint32_t alias = find_alias(a, p, s);
-  if (alias != UINT32_MAX) {
-    return resolve_alias(a, alias, s);
-  }
-  uint32_t id = find_struct(a, p, s);
-  return id == UINT32_MAX ? DYN_TYPE_ERROR : DYN_TYPE_STRUCT_BASE + id;
+  return parse_type_name(span(n), s, a);
 }
+
 /* A name in the generic scope. While declaring a signature, `$T` introduces
    T as type parameter k; while lowering an instance, T is a concrete type. */
 static DynType scope_type(DynAstProgram *a, DynSpan name, const DynSource *s,
@@ -1677,9 +1688,11 @@ static void lower_case_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
   st->case_arm_count = arm_index;
   for (uint32_t i = 0; i < arm_index; ++i)
     if (!ts_node_is_null(blocks[i])) {
-      lower_block(blocks[i], s, a, errors, loop_depth,
-                  &a->case_arms[st->case_arm_start + i].body_start,
-                  &a->case_arms[st->case_arm_start + i].body_count);
+      /* Nested cases can grow the arm arena while lowering this body. */
+      uint32_t start = 0, count = 0;
+      lower_block(blocks[i], s, a, errors, loop_depth, &start, &count);
+      a->case_arms[st->case_arm_start + i].body_start = start;
+      a->case_arms[st->case_arm_start + i].body_count = count;
     }
   free(blocks);
 }
@@ -1744,6 +1757,7 @@ static uint32_t lower_stmt(TSNode n, const DynSource *s, DynAstProgram *a,
       diagnostic(
           target, s, errors,
           "assignment target must be local, field, dereference, or index");
+      a->statements[id] = st;
       return id;
     }
     st.expression = lower_expr(dyn_syntax_last_child(n), s, a, errors);
@@ -1891,6 +1905,10 @@ static bool lower_block(TSNode block, const DynSource *s, DynAstProgram *a,
   free(ids);
   return true;
 }
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+#include "ast_compact.inc"
+#endif
+
 bool dyn_ast_lower_main(TSNode fn, const DynSource *s, DynAstProgram *a,
                         unsigned *errors) {
   a->span = span(fn);
@@ -1912,6 +1930,14 @@ bool dyn_ast_lower_main(TSNode fn, const DynSource *s, DynAstProgram *a,
   return *errors == 0;
 }
 void dyn_ast_program_free(DynAstProgram *a) {
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  for (size_t i = 0; i < a->compact_body_count; ++i)
+    exp_snapshot_release(a->compact_bodies[i].snapshot);
+  free(a->compact_bodies);
+  for (size_t i = 0; i < a->compact_declaration_count; ++i)
+    exp_snapshot_release(a->compact_declarations[i].ref.snapshot);
+  free(a->compact_declarations);
+#endif
   ast_name_index_free(&a->struct_names);
   ast_name_index_free(&a->enum_names);
   ast_name_index_free(&a->alias_names);
@@ -2037,6 +2063,16 @@ bool dyn_ast_lower_instance(DynAstProgram *a, const DynSource *s, uint32_t funct
   DynAstInstance instance = a->instances[fn->instance];
   DynAstGeneric g = a->generics[instance.generic];
   TSNode block = {0};
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  CompactNode prepared = compact_none();
+  if (g.compact_node.snapshot) {
+    for (CompactNode c = compact_first(compact_node(g.compact_node)); !compact_null(c); c = compact_next(c))
+      if (compact_kind(c) == SRC_BLOCK) prepared = c;
+  } else {
+    prepared = compact_function_body(a, ts_node_start_byte(g.node));
+  }
+  if (compact_null(prepared))
+#endif
   for (uint32_t j = 0; j < ts_node_named_child_count(g.node); ++j) {
     TSNode c = ts_node_named_child(g.node, j);
     if (!(dyn_kind(c) != K_block))
@@ -2046,7 +2082,13 @@ bool dyn_ast_lower_instance(DynAstProgram *a, const DynSource *s, uint32_t funct
   memcpy(a->scope_types, instance.args, sizeof(a->scope_types));
   a->scope_count = g.type_param_count;
   uint32_t start = 0, count = 0;
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  bool ok = !compact_null(prepared)
+      ? compact_block(prepared, s, a, errors, 0, &start, &count)
+      : lower_block(block, s, a, errors, 0, &start, &count);
+#else
   bool ok = lower_block(block, s, a, errors, 0, &start, &count);
+#endif
   a->scope_count = 0;
   fn = &a->functions[function];
   fn->body_start = start;
@@ -2586,7 +2628,7 @@ static bool add_globals(const DynSource *s, DynAstProgram *a,
         .name = ns,
         .link_name = link,
         .type = type,
-        .initializer = ts_node_is_null(init) ? DYN_NO_EXPR
+        .initializer = foreign || ts_node_is_null(init) ? DYN_NO_EXPR
                                              : lower_expr(init, s, a, errors),
         .is_const = is_const,
         .foreign = foreign,
@@ -2656,7 +2698,13 @@ static bool reserve_generic(DynAstProgram *a, size_t params) {
 static bool add_generic(const DynSource *s, DynAstProgram *a, unsigned *errors,
                         TSNode d, DynSpan ns, bool is_public) {
   uint32_t named = ts_node_named_child_count(d);
-  if (!reserve_generic(a, named * 4)) {
+  size_t parameter_capacity = 0;
+  for (uint32_t i = 0; i < named; ++i) {
+    TSNode child = ts_node_named_child(d, i);
+    if (dyn_kind(child) == K_fn_param)
+      parameter_capacity += ts_node_named_child_count(child);
+  }
+  if (!reserve_generic(a, parameter_capacity)) {
     diagnostic(d, s, errors, "out of memory");
     return false;
   }
@@ -2862,8 +2910,15 @@ static void lower_function_bodies(const DynSource *s,
         break;
       }
     }
-    lower_block(block, s, a, errors, 0, &a->functions[id].body_start,
-                &a->functions[id].body_count);
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+    CompactNode prepared = compact_function_body(a, ts_node_start_byte(d));
+    if (!compact_null(prepared))
+      compact_block(prepared, s, a, errors, 0, &a->functions[id].body_start,
+                    &a->functions[id].body_count);
+    else
+#endif
+      lower_block(block, s, a, errors, 0, &a->functions[id].body_start,
+                  &a->functions[id].body_count);
     if (a->functions[id].is_main) {
       a->span = a->functions[id].span;
       a->name = a->functions[id].name;
@@ -2874,42 +2929,107 @@ static void lower_function_bodies(const DynSource *s,
     }
   }
 }
-static bool lower_declarations(TSNode root, const DynSource *s, DynAstProgram *a,
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+#include "ast_compact_declarations.inc"
+#endif
+
+static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *a,
                                unsigned *errors, const char *owner_key) {
   unsigned before = *errors;
   DynNameIndex functions = {0}, globals = {0};
-  if (!add_enum_names(s, a, errors) ||
-      !add_struct_names(s, a, errors) ||
-      !add_alias_names(s, a, errors) ||
-      !add_struct_fields(s, a, errors) ||
-      !add_enum_variants(s, a, errors) ||
-      !compute_layouts_v2(a, s, errors) ||
-      !add_globals(s, a, errors, &globals) ||
-      !add_asserts(s, a, errors) ||
-      !add_function_signatures(s, a, errors, &functions, &globals)) {
+  bool declarations_ok;
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  if (a->compact_complete)
+    declarations_ok = compact_add_enum_names(s, a, errors) &&
+      compact_add_struct_names(s, a, errors) && compact_add_alias_names(s, a, errors) &&
+      compact_add_struct_fields(s, a, errors) && compact_add_enum_variants(s, a, errors) &&
+      compute_layouts_v2(a, s, errors) && compact_add_globals(s, a, errors, &globals) &&
+      compact_add_asserts(s, a, errors) && compact_add_function_signatures(s, a, errors, &functions, &globals);
+  else
+#endif
+    declarations_ok = add_enum_names(s, a, errors) && add_struct_names(s, a, errors) &&
+      add_alias_names(s, a, errors) && add_struct_fields(s, a, errors) && add_enum_variants(s, a, errors) &&
+      compute_layouts_v2(a, s, errors) && add_globals(s, a, errors, &globals) &&
+      add_asserts(s, a, errors) && add_function_signatures(s, a, errors, &functions, &globals);
+  if (!declarations_ok) {
     ast_name_index_free(&functions);
     ast_name_index_free(&globals);
     if (a->invalid_array_extent.end_byte)
       diagnostic(a->invalid_array_extent, s, errors,
           "array length requires nonnegative integer constant arithmetic (no runtime values, cycles, overflow, or division by zero)");
     if (*errors == before)
-      diagnostic_node(root, s, errors, "out of memory");
+      diagnostic(root, s, errors, "out of memory");
     return false;
   }
-  lower_function_bodies(s, a, errors, owner_key, &functions);
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  if (a->compact_complete) compact_lower_function_bodies(s, a, errors, owner_key, &functions);
+  else
+#endif
+    lower_function_bodies(s, a, errors, owner_key, &functions);
   if (a->invalid_array_extent.end_byte)
     diagnostic(a->invalid_array_extent, s, errors,
         "array length requires nonnegative integer constant arithmetic (no runtime values, cycles, overflow, or division by zero)");
   ast_name_index_free(&functions);
   ast_name_index_free(&globals);
   if (a->type_capacity_exceeded)
-    diagnostic_node(root, s, errors, "interned type capacity exceeded");
+    diagnostic(root, s, errors, "interned type capacity exceeded");
   bool found = false;
   for (uint32_t i = 0; i < a->function_count; ++i)
     if (a->functions[i].is_main)
       found = true;
   return found;
 }
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+bool dyn_ast_release_project_trees(DynSources *sources) {
+  /* All-or-nothing: legacy declaration phases may read any partition. */
+  for (size_t i = 0; i < sources->count; ++i) {
+    const DynSource *s = &sources->items[i];
+    if (s->context.work || s->context.syntax_cache) return false;
+    int enabled = dyn_source_target_enabled(s);
+    if (!enabled) continue;
+    const ExpSnapshotTree *tree = exp_snapshot_tree(s->compact);
+    bool validated=s->syntax && !ts_node_has_error(ts_tree_root_node(s->syntax));
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+    validated |= s->compact_validated;
+#endif
+    if (enabled != 1 || !validated || !tree ||
+        !compact_shape_supported((CompactNode){tree,tree->root,0,s->compact},s)) return false;
+  }
+  for (size_t i = 0; i < sources->count; ++i) {
+    DynSource *s = &sources->items[i];
+    if (dyn_source_target_enabled(s) != 1) continue;
+    if (s->syntax) {
+      DynSpan root = span(ts_tree_root_node(s->syntax));
+      s->compact_root_start = root.start_byte; s->compact_root_end = root.end_byte;
+    }
+    s->compact_only = true;
+    dyn_source_release_batch_trees(s);
+  }
+  return true;
+}
+bool dyn_ast_lower_compact(const DynSource *s, DynAstProgram *a,
+                           unsigned *errors, const char *owner_key) {
+  memset(a,0,sizeof(*a));
+  DynSpan root={s->compact_root_start,s->compact_root_end};
+  size_t count=s->syntax_part_count ? s->syntax_part_count : 1;
+  for (size_t i=0;i<count;++i) {
+    const ExpSnapshotTree *tree=exp_snapshot_tree(s->syntax_part_count ? s->compact_parts[i] : s->compact);
+    if (!tree) { diagnostic(root,s,errors,"missing validated compact source"); return false; }
+    for (uint32_t child=tree->nodes[tree->root].first;child!=UINT32_MAX;child=tree->nodes[child].next) {
+      if (a->decl_count==UINT32_MAX) { diagnostic(root,s,errors,"too many declarations"); return false; }
+      ++a->decl_count;
+    }
+  }
+  if (!compact_prepare_bodies(a,s)) {
+    a->decl_count=0;
+    if (a->allocation_failed) diagnostic(root,s,errors,"out of memory");
+    return false;
+  }
+  a->decl_count=0;
+  if (!a->compact_complete) { diagnostic(root,s,errors,"invalid compact source certificate"); return false; }
+  return lower_declarations(root,s,a,errors,owner_key);
+}
+#endif
 bool dyn_ast_lower_roots(const TSNode *roots, size_t root_count,
                          const DynSource *s, DynAstProgram *a,
                          unsigned *errors, const char *owner_key) {
@@ -2939,7 +3059,14 @@ bool dyn_ast_lower_roots(const TSNode *roots, size_t root_count,
     } while (ts_tree_cursor_goto_next_sibling(&cursor));
     ts_tree_cursor_delete(&cursor);
   }
-  bool found = lower_declarations(root, s, a, errors, owner_key);
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  if (!compact_prepare_bodies(a, s)) {
+    free(a->decls); a->decls = NULL; a->decl_count = 0;
+    if (a->allocation_failed) diagnostic_node(root, s, errors, "out of memory");
+    return false;
+  }
+#endif
+  bool found = lower_declarations(span(root), s, a, errors, owner_key);
   free(a->decls);
   a->decls = NULL;
   a->decl_count = 0;

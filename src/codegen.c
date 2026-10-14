@@ -585,7 +585,7 @@ static uint64_t type_alignment(Gen *g, DynType t) {
     return 8;
   }
 }
-static void emit_defers(Gen *, size_t);
+static bool emit_defers(Gen *, size_t);
 static void emit_trace_pop(Gen *g) {
   if (!g->tracing)
     return;
@@ -637,10 +637,11 @@ static LLVMValueRef emit_call(Gen *g, LLVMTypeRef type, LLVMValueRef callee,
   LLVMBuildBr(g->builder, done);
   LLVMBasicBlockRef result_block = LLVMGetInsertBlock(g->builder);
   LLVMPositionBuilderAtEnd(g->builder, unwind);
-  emit_defers(g, 0);
-  LLVMBuildCall2(g->builder, g->unwind_continue_type, g->unwind_continue_fn,
-                 NULL, 0, "");
-  LLVMBuildUnreachable(g->builder);
+  if (!emit_defers(g, 0)) {
+    LLVMBuildCall2(g->builder, g->unwind_continue_type, g->unwind_continue_fn,
+                   NULL, 0, "");
+    LLVMBuildUnreachable(g->builder);
+  }
   LLVMPositionBuilderAtEnd(g->builder, done);
   if (LLVMGetReturnType(type) == LLVMVoidTypeInContext(g->context))
     return result;
@@ -692,9 +693,11 @@ static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
   char message[1024];
   snprintf(message, sizeof(message), "runtime check failed (%s) in %.*s", name,
            (int)(function_length > 800 ? 800 : function_length), function_name);
-  emit_panic(g, LLVMBuildGlobalStringPtr(g->builder, message, ".dyn.guard.message"),
-             LLVMConstInt(LLVMInt64TypeInContext(g->context), strlen(message), 0));
-  LLVMBuildUnreachable(g->builder);
+  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(g->builder))) {
+    emit_panic(g, LLVMBuildGlobalStringPtr(g->builder, message, ".dyn.guard.message"),
+               LLVMConstInt(LLVMInt64TypeInContext(g->context), strlen(message), 0));
+    LLVMBuildUnreachable(g->builder);
+  }
   LLVMPositionBuilderAtEnd(g->builder, ok);
   /* The success edge has a single predecessor. Carry only facts from that
      predecessor, without searching the growing CFG for every check. */
@@ -1085,8 +1088,17 @@ static LLVMValueRef lvalue_pointer(Gen *g, DynExprId id) {
       LLVMValueRef zero =
                        LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0),
                    indices[] = {zero, index};
+      LLVMValueRef storage;
+      if (addressable(g, e->left))
+        storage = lvalue_pointer(g, e->left);
+      else {
+        /* Calls and literals yield array values, not storage. Evaluate once
+           after the index, preserving the established operand order. */
+        storage = gen_stack_slot(g, llvm_type(g, base), "index.array.temporary");
+        LLVMBuildStore(g->builder, gen_expr(g, e->left), storage);
+      }
       data = LLVMBuildGEP2(g->builder, llvm_type(g, base),
-                           lvalue_pointer(g, e->left), indices, 2,
+                           storage, indices, 2,
                            "array.element");
     } else {
       DynIrSlice *sl = ir_slice(g, base);
@@ -1705,7 +1717,7 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
                                   llvm_type(g, DYN_TYPE_USIZE), "panic.length");
     /* Native panic owns the message before the call's unwind path runs
        local defers. Wasm traps do not report messages or unwind callers. */
-    if (g->wasm) emit_defers(g, 0);
+    if (g->wasm && emit_defers(g, 0)) return true;
     (void)emit_call(g, g->panic_type, g->panic_fn, arguments, 2, "", true, NULL);
     LLVMBuildUnreachable(g->builder);
     return true;
@@ -1714,7 +1726,7 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     LLVMValueRef result = NULL;
     if (!g->is_main && g->return_type != DYN_TYPE_VOID)
       result = gen_expr(g, st->expression);
-    emit_defers(g, 0);
+    if (emit_defers(g, 0)) return true;
     emit_trace_pop(g);
     if (g->is_main)
       LLVMBuildRet(g->builder,
@@ -1726,12 +1738,12 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
     return true;
   }
   if (st->kind == DYN_STMT_BREAK) {
-    emit_defers(g, g->defer_stack[st->target_loop_id].break_defer);
+    if (emit_defers(g, g->defer_stack[st->target_loop_id].break_defer)) return true;
     LLVMBuildBr(g->builder, g->defer_stack[st->target_loop_id].break_target);
     return true;
   }
   if (st->kind == DYN_STMT_CONTINUE) {
-    emit_defers(g, g->defer_stack[st->target_loop_id].continue_defer);
+    if (emit_defers(g, g->defer_stack[st->target_loop_id].continue_defer)) return true;
     LLVMBuildBr(g->builder, g->defer_stack[st->target_loop_id].continue_target);
     return true;
   }
@@ -2143,17 +2155,23 @@ static bool gen_stmt(Gen *g, DynIrStmt *st) {
                    g->locals[st->local_id]);
   return false;
 }
-static void emit_defers(Gen *g, size_t base) {
+/* A cleanup may terminate with its own panic, replacing the pending exit. */
+static bool emit_defers(Gen *g, size_t base) {
+  bool terminated = false;
   size_t saved = g->defer_count;
   bool old_unwinding = g->unwinding;
   g->unwinding = true;
   for (size_t i = saved; i > base; --i) {
     DynIrStmt *defer =
         &g->ir->statements[g->defer_stack[i - 1].defer_statement];
-    (void)gen_block(g, defer->body_start, defer->body_count);
+    if (gen_block(g, defer->body_start, defer->body_count)) {
+      terminated = true;
+      break;
+    }
   }
   g->unwinding = old_unwinding;
   g->defer_count = saved;
+  return terminated;
 }
 static bool gen_block(Gen *g, uint32_t start, uint32_t count) {
   size_t base = g->defer_count, facts = g->local_fact_count;
@@ -2164,7 +2182,7 @@ static bool gen_block(Gen *g, uint32_t start, uint32_t count) {
       break;
     }
   if (!terminated)
-    emit_defers(g, base);
+    terminated = emit_defers(g, base);
   g->defer_count = base;
   g->local_fact_count = facts;
   return terminated;
@@ -2390,8 +2408,8 @@ static bool local_facts_build(DynIrProgram *ir) {
   }
   return true;
 }
-int dyn_codegen_prepare(const DynSource *source, bool shared,
-                        const char *owner_key, DynIrProgram *ir) {
+static int codegen_prepare(const DynSource *source, DynSource *owned_source,
+                           bool shared, const char *owner_key, DynIrProgram *ir) {
   memset(ir, 0, sizeof(*ir));
   DynAstProgram ast = {0};
   if (!source)
@@ -2407,6 +2425,12 @@ int dyn_codegen_prepare(const DynSource *source, bool shared,
     dyn_ast_program_free(&ast);
     return 1;
   }
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+  if (owned_source && ast.compact_complete)
+    dyn_source_release_batch_trees(owned_source);
+#else
+  (void)owned_source;
+#endif
   struct timespec phase = dyn_timing_start(&source->context);
   if (!dyn_ir_lower(&ast, source, ir)) {
     fprintf(stderr, "error: failed to lower typed Dyn IR\n");
@@ -2435,6 +2459,16 @@ int dyn_codegen_prepare(const DynSource *source, bool shared,
   dyn_timing_phase(&source->context, &phase, "ir");
   return 0;
 }
+int dyn_codegen_prepare(const DynSource *source, bool shared,
+                        const char *owner_key, DynIrProgram *ir) {
+  return codegen_prepare(source, NULL, shared, owner_key, ir);
+}
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+int dyn_codegen_prepare_owned(DynSource *source, bool shared,
+                              const char *owner_key, DynIrProgram *ir) {
+  return codegen_prepare(source, source, shared, owner_key, ir);
+}
+#endif
 int dyn_codegen_module(const DynSource *source, const char *object_path,
                        const char *ir_path, const char *asm_path, bool release,
                        bool debug_info, bool shared, const char *owner_key) {

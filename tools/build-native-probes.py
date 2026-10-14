@@ -39,10 +39,17 @@ for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('
         for label, fixture in fixtures:
             run([DYN,'build',ROOT/'tests'/fixture,'--target',target,'--no-cache','--quiet',
                  '--output',destination/(label+suffix), *(['--release'] if mode == 'release' else [])])
+        # macOS debug builds keep <output>.dynnative.o for the debugger; it is not a probe.
+        for kept in destination.glob('*.dynnative.o'): kept.unlink()
         for artifact in sorted(destination.iterdir()):
             rows.append({'path':str(artifact.relative_to(OUT)), 'mode':mode,
                          'sha256':hashlib.sha256(artifact.read_bytes()).hexdigest()})
     manifest['targets'][name] = rows
 (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 shutil.copy2(ROOT/'tests/run-native-artifacts.py', OUT/'run-native-artifacts.py')
+# Debug builds use native emission: stage the native/LLVM differential corpus too.
+differential = ROOT/'tools/backend-experiment/native-differential.py'
+for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('aarch64','aarch64-linux')]:
+    run([sys.executable, differential, '--target', target, '--compiler', DYN, '--stage', OUT/'differential'/name])
+shutil.copy2(differential, OUT/'native-differential.py')
 print('Prepared native probes:', {k:len(v) for k,v in manifest['targets'].items()})

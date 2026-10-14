@@ -1449,6 +1449,9 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
          which grows a->functions and would leave a pointer dangling. */
       DynAstFn callee_value = a->functions[fn];
       DynAstFn *callee = &callee_value;
+      /* Entering main again would rerun global initialization. */
+      if (callee->is_main)
+        error_span(a->expressions[id].span, s, errors, "entry function 'main' cannot be called");
       if (!sema_c_abi_function(a, callee))
         error_span(a->expressions[id].span, s, errors,
                    "type has no supported C ABI; use C-compatible storage or a pointer adapter");

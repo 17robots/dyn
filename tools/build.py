@@ -46,7 +46,7 @@ cppflags = flags('CPPFLAGS') + [f for f in llvm('--cflags') if f != '-D_GNU_SOUR
 llvm_ldflags = llvm('--ldflags')
 llvm_libs = llvm('--link-shared', '--libs', fallback='-lLLVM')
 sources = sorted(COMPILER.glob('src/*.c'))
-headers = sorted(COMPILER.glob('src/*.h'))
+headers = sorted(COMPILER.glob('src/*.h')) + sorted(COMPILER.glob('src/*.inc'))
 ts_sources = [TS_DIR/'src/parser.c', TS_DIR/'src/scanner.c']
 frontend = [COMPILER/'src'/name for name in ('frontend.c', 'ast.c', 'sema.c', 'sema_globals.c', 'source.c', 'source_tree.c', 'diagnostic.c', 'target.c')]
 artifacts = {}
@@ -69,11 +69,11 @@ add('thinlto.o', [COMPILER/'src/thinlto.cpp'],
     [*cxx, *object_cppflags, *llvm('--cxxflags'), *flags('CXXFLAGS'), '-O2', '-c',
      COMPILER/'src/thinlto.cpp', '-o', BUILD/'thinlto.o'])
 
-def compiler_objects(kind, optimize):
+def compiler_objects(kind, optimize, extra_sources=(), extra_inputs=()):
     names = []
-    for source in sources:
+    for source in [*sources, *extra_sources]:
         name = f'obj/{kind}/{source.stem}.o'
-        add(name, [source, *headers],
+        add(name, [source, *headers, *extra_inputs],
             [*cc, *object_cppflags, *cflags, *optimize, f'-I{COMPILER}/src', f'-I{TS_DIR}/src', '-c', source, '-o', BUILD/name])
         names.append(name)
     return names + ['thinlto.o', 'tree-sitter-dyn-parser.o', 'tree-sitter-dyn-scanner.o']
@@ -83,8 +83,65 @@ def compiler_link(name, objects):
         [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, '-ltree-sitter', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', BUILD/name],
         objects)
 
-compiler_link('dyn-release', compiler_objects('release', ['-O2']))
-compiler_link('dyn', compiler_objects('debug', []))
+# Default compilers parse batch sources with the handwritten parser first. Tree-sitter
+# still validates syntax errors, deep sources, cached/budgeted paths and editors.
+compact_parser = COMPILER/'tools/parser-experiment'
+compact_first_flags = ['-DDYN_EXPERIMENT_COMPACT_DECLARATIONS', '-DDYN_EXPERIMENT_COMPACT_SOURCES',
+                       '-DDYN_EXPERIMENT_COMPACT_AST', '-DDYN_EXPERIMENT_COMPACT_FIRST']
+compact_first_sources = [compact_parser/'parser.c', compact_parser/'snapshot.c']
+compact_first_inputs = [compact_parser/'parser.h', compact_parser/'source.inc', compact_parser/'snapshot.h',
+                        compact_parser/'depth.h', compact_parser/'grammar-pin.py', TS_DIR/'grammar.js']
+# The depth certificate is only valid for the pinned grammar.
+if (TS_DIR/'grammar.js').exists():
+    import runpy
+    runpy.run_path(str(compact_parser/'grammar-pin.py'))['verify'](TS_DIR)
+# The native debug emitter is host-independent C with POSIX file output, so every
+# POSIX host gets it; Windows hosts use LLVM.
+backend_experiment = COMPILER/'tools/backend-experiment'
+native_flags, native_sources, native_inputs = [], [], []
+if sys.platform != 'win32':
+    native_flags = ['-DDYN_NATIVE_BACKEND']
+    native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
+    native_inputs = [backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc',
+                     backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
+default_flags = [*compact_first_flags, *native_flags]
+default_sources = [*compact_first_sources, *native_sources]
+default_inputs = [*compact_first_inputs, *native_inputs]
+compiler_link('dyn-release', compiler_objects('release', ['-O2', *default_flags],
+    default_sources, default_inputs))
+compiler_link('dyn', compiler_objects('debug', default_flags, default_sources, default_inputs))
+# Rollback and differential reference: Tree-sitter parsing and LLVM emission only.
+compiler_link('dyn-legacy', compiler_objects('legacy', ['-O2']))
+
+# Matched prepared-IR benchmark harness. Not installed or part of normal builds.
+backend_benchmark_objects = [f'obj/release/{name}.o' for name in
+    ('frontend', 'ast', 'sema', 'sema_globals', 'source', 'source_tree',
+     'diagnostic', 'target', 'ir', 'codegen')]
+add('obj/benchmark/backend.o',
+    [backend_experiment/'benchmark-driver.c', backend_experiment/'driver.c', backend_experiment/'output.h', *headers],
+    [*cc, *object_cppflags, *cflags, '-O2', f'-I{COMPILER}/src',
+     '-c', backend_experiment/'benchmark-driver.c', '-o', BUILD/'obj/benchmark/backend.o'])
+compiler_link('backend-benchmark', [*backend_benchmark_objects, 'obj/benchmark/backend.o',
+    'thinlto.o', 'tree-sitter-dyn-parser.o', 'tree-sitter-dyn-scanner.o'])
+
+
+# Staged qualification artifacts retained for bisecting consumer migrations.
+compiler_link('dyn-compact-declarations', compiler_objects('compact-declarations',
+    ['-O2', '-DDYN_EXPERIMENT_COMPACT_DECLARATIONS'],
+    [compact_parser/'parser.c'], [compact_parser/'parser.h', compact_parser/'source.inc']))
+compiler_link('dyn-compact-sources', compiler_objects('compact-sources',
+    ['-O2', '-DDYN_EXPERIMENT_COMPACT_DECLARATIONS', '-DDYN_EXPERIMENT_COMPACT_SOURCES'],
+    [compact_parser/'parser.c', compact_parser/'snapshot.c'],
+    [compact_parser/'parser.h', compact_parser/'source.inc', compact_parser/'snapshot.h']))
+
+compiler_link('dyn-compact-ast', compiler_objects('compact-ast',
+    ['-O2', '-DDYN_EXPERIMENT_COMPACT_DECLARATIONS', '-DDYN_EXPERIMENT_COMPACT_SOURCES', '-DDYN_EXPERIMENT_COMPACT_AST'],
+    [compact_parser/'parser.c', compact_parser/'snapshot.c'],
+    [compact_parser/'parser.h', compact_parser/'source.inc', compact_parser/'snapshot.h']))
+
+compiler_link('dyn-compact-first', compiler_objects('compact-first',
+    ['-O2', *compact_first_flags], compact_first_sources, compact_first_inputs))
+
 
 add('dynrt_start.o', [f'{COMPILER}/runtime/linux_x86_64_start.S'],
     [*cc, '-c', f'{COMPILER}/runtime/linux_x86_64_start.S', '-o', f'{BUILD}/dynrt_start.o'])
@@ -187,6 +244,51 @@ add('frontend-state-test', [f'{COMPILER}/tests/frontend-state.c', *frontend, *he
 
 add('frontend-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', *headers, *ts_sources],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', *ts_sources, '-ltree-sitter', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/frontend-failure-test'])
+
+# Reuse the production concurrency and failure contracts with the qualified
+# declaration reader enabled, including parser allocations in failure injection.
+for name, test, extra, link in (
+    ('frontend-state-compact-test', 'frontend-state.c', [], ['-pthread']),
+    ('frontend-failure-compact-test', 'frontend-failure.c', [COMPILER/'src/ir.c'],
+     ['-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup']),
+):
+    add(name, [COMPILER/'tests'/test, COMPILER/'tests/fault-alloc.h', *frontend,
+               *extra, *headers, *ts_sources, compact_parser/'parser.c',
+               compact_parser/'parser.h', compact_parser/'source.inc'],
+        [*cc, *cppflags, *cflags, '-DDYN_EXPERIMENT_COMPACT_DECLARATIONS',
+         f'-I{COMPILER}/src', f'-I{TS_DIR}/src', COMPILER/'tests'/test,
+         *frontend, *extra, compact_parser/'parser.c', *ts_sources,
+         '-ltree-sitter', *link, '-o', BUILD/name])
+
+# Retained source snapshots also participate in frontend lifetime/failure gates.
+for name, test, extra, link in (
+    ('frontend-state-sources-test', 'frontend-state.c', [], ['-pthread']),
+    ('frontend-state-ast-test', 'frontend-state.c', [], ['-pthread']),
+    ('frontend-failure-ast-test', 'frontend-failure.c', [COMPILER/'src/ir.c'],
+     ['-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup']),
+    ('frontend-failure-sources-test', 'frontend-failure.c', [COMPILER/'src/ir.c'],
+     ['-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup']),
+):
+    add(name, [COMPILER/'tests'/test, COMPILER/'tests/fault-alloc.h', *frontend,
+               *extra, *headers, *ts_sources, compact_parser/'parser.c', compact_parser/'snapshot.c',
+               compact_parser/'parser.h', compact_parser/'source.inc', compact_parser/'snapshot.h'],
+        [*cc, *cppflags, *cflags, '-DDYN_EXPERIMENT_COMPACT_DECLARATIONS', '-DDYN_EXPERIMENT_COMPACT_SOURCES',
+         *(['-DDYN_EXPERIMENT_COMPACT_AST'] if name.endswith('-ast-test') else []),
+         f'-I{COMPILER}/src', f'-I{TS_DIR}/src', COMPILER/'tests'/test,
+         *frontend, *extra, compact_parser/'parser.c', compact_parser/'snapshot.c', *ts_sources,
+         '-ltree-sitter', *link, '-o', BUILD/name])
+
+add('batch-trees-ast-test', [BUILD/'thinlto.o', compact_parser/'batch-trees-unit.c', *frontend,
+    COMPILER/'src/ir.c', COMPILER/'src/codegen.c', *headers, *ts_sources,
+    compact_parser/'parser.c', compact_parser/'snapshot.c', compact_parser/'parser.h',
+    compact_parser/'source.inc', compact_parser/'snapshot.h'],
+    [*cc, *cppflags, *cflags, '-DDYN_EXPERIMENT_COMPACT_DECLARATIONS',
+     '-DDYN_EXPERIMENT_COMPACT_SOURCES', '-DDYN_EXPERIMENT_COMPACT_AST',
+     f'-I{COMPILER}/src', f'-I{TS_DIR}/src', compact_parser/'batch-trees-unit.c',
+     *frontend, COMPILER/'src/ir.c', COMPILER/'src/codegen.c',
+     compact_parser/'parser.c', compact_parser/'snapshot.c', *ts_sources,
+     BUILD/'thinlto.o', '-ltree-sitter', *llvm_ldflags, *llvm_libs, *cxxlibs,
+     '-pthread', '-o', BUILD/'batch-trees-ast-test'], needs=['thinlto.o'])
 
 add('analysis-cache-test', [f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/tests/fault-alloc.h', f'{COMPILER}/src/analysis_cache.c', *frontend, *headers, *ts_sources],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'-I{TS_DIR}/src', f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/src/analysis_cache.c', *frontend, *ts_sources, '-ltree-sitter', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/analysis-cache-test'])

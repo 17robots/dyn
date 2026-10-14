@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
 #include "dyn_syntax.h"
+#include "dyn_compact.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
@@ -259,8 +260,15 @@ int dyn_source_target_enabled(const DynSource *s) {
 }
 static bool sources_have_syntax(const DynSources *sources) {
   for (size_t i = 0; i < sources->count; ++i)
-    if (dyn_source_target_enabled(&sources->items[i]) && !sources->items[i].syntax)
+    if (dyn_source_target_enabled(&sources->items[i]) && !sources->items[i].syntax) {
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+      if (sources->items[i].compact_only && sources->items[i].compact) continue;
+#ifdef DYN_EXPERIMENT_COMPACT_FIRST
+      if (sources->items[i].compact_validated && sources->items[i].compact) continue;
+#endif
+#endif
       return false;
+    }
   return true;
 }
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
@@ -289,13 +297,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
     if (!enabled)
       continue;
     reflection |= sources->items[i].needs_reflection;
-    if (!reflection && strstr(sources->items[i].text, "#typeof")) {
-      TSTree *tree = dyn_source_tree(&sources->items[i]);
-      if (!tree)
-        return 2;
-      reflection = dyn_syntax_has_reflection(ts_tree_root_node(tree));
-      ts_tree_delete(tree);
-    }
+    if (!reflection && !dyn_source_reflection(&sources->items[i], &reflection)) return 2;
     if (SIZE_MAX - total < sources->items[i].length + 1)
       return 2;
     total += sources->items[i].length + 1;
@@ -329,10 +331,14 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
     const DynSource *input = &sources->items[i];
     DynSourceMap *map = &out->maps[out->map_count++];
     map->path = strdup(input->path);
-    map->original_text =
-        strdup(input->original_text ? input->original_text : input->text);
     map->original_length =
         input->original_text ? input->original_length : input->length;
+    map->original_text = malloc(map->original_length + 1);
+    if (map->original_text) {
+      memcpy(map->original_text, input->original_text ? input->original_text : input->text,
+             map->original_length);
+      map->original_text[map->original_length] = 0;
+    }
     if (!map->path || !map->original_text) {
       dyn_source_free(out);
       return 2;
@@ -355,13 +361,35 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   out->text[at] = 0;
   out->length = at;
   if (sources_have_syntax(sources)) {
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+    out->compact_only = out->map_count != 0 || prelude != 0;
+    for (size_t i=0;i<sources->count;++i)
+      if (dyn_source_target_enabled(&sources->items[i]) && !sources->items[i].compact_only)
+        out->compact_only = false;
+#endif
     size_t count = (prelude ? 1 : 0) + out->map_count;
     out->syntax_parts = calloc(count ? count : 1, sizeof(*out->syntax_parts));
     if (!out->syntax_parts) { dyn_source_free(out); return 2; }
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+    out->compact_parts = calloc(count ? count : 1, sizeof(*out->compact_parts));
+    if (!out->compact_parts) { dyn_source_free(out); return 2; }
+#endif
     if (prelude) {
       TSTree *tree = dyn_syntax_reparse(out->text, prelude, NULL);
       if (!tree) { dyn_source_free(out); return 2; }
       out->syntax_parts[out->syntax_part_count++] = tree;
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+      DynSource part = {.text = out->text, .length = prelude, .syntax = tree, .context = out->context};
+      if (!dyn_source_prepare(&part)) { dyn_source_free(out); return 2; }
+      out->compact_parts[0] = part.compact;
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+      if (out->compact_only) {
+        out->compact_root_start=ts_node_start_byte(ts_tree_root_node(tree));
+        out->compact_root_end=ts_node_end_byte(ts_tree_root_node(tree));
+        ts_tree_delete(tree); out->syntax_parts[0]=NULL;
+      }
+#endif
+#endif
     }
     TSPoint point = dyn_syntax_advance((TSPoint){0}, out->text, prelude);
     for (size_t i = 0, map = 0; i < sources->count; ++i) {
@@ -369,9 +397,29 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
       if (!dyn_source_target_enabled(input)) continue;
       /* Inserting the preceding text shifts every node without reparsing. */
       size_t start = out->maps[map++].start;
-      TSTree *tree = ts_tree_copy(input->syntax);
-      TSInputEdit shift = {0, 0, (uint32_t)start, {0}, {0}, point};
-      ts_tree_edit(tree, &shift);
+      TSTree *tree = NULL;
+#ifdef DYN_EXPERIMENT_COMPACT_AST
+      if (out->compact_only) {
+        if (!out->syntax_part_count) {
+          out->compact_root_start=(uint32_t)start+input->compact_root_start;
+          out->compact_root_end=(uint32_t)start+input->compact_root_end;
+        }
+      } else
+#endif
+      {
+        tree = dyn_source_tree(input);
+        if (!tree) { dyn_source_free(out); return 2; }
+        TSInputEdit shift = {0, 0, (uint32_t)start, {0}, {0}, point};
+        ts_tree_edit(tree, &shift);
+      }
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+      if (input->compact) {
+        if (!exp_snapshot_retain(input->compact)) {
+          ts_tree_delete(tree); dyn_source_free(out); return 2;
+        }
+        out->compact_parts[out->syntax_part_count] = input->compact;
+      }
+#endif
       out->syntax_parts[out->syntax_part_count++] = tree;
       point = dyn_syntax_advance(point, out->text + start, input->length + 1);
     }
@@ -464,10 +512,17 @@ void dyn_source_location(const DynSource *s, size_t byte, const char **path,
 }
 void dyn_source_free(DynSource *s) {
   dyn_source_discard_syntax(s);
+#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
+  if (s->compact_parts) {
+    for (size_t i = 0; i < s->syntax_part_count; ++i)
+      exp_snapshot_release(s->compact_parts[i]);
+    free(s->compact_parts);
+  }
+#endif
   if (!s)
     return;
   for (size_t i = 0; i < s->syntax_part_count; ++i)
-    ts_tree_delete(s->syntax_parts[i]);
+    if (s->syntax_parts[i]) ts_tree_delete(s->syntax_parts[i]);
   free(s->syntax_parts);
   free(s->path);
   free(s->text);

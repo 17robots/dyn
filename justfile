@@ -70,7 +70,84 @@ bench-scale: release
 
 # Isolated parser experiment; does not select a different production parser.
 test-parser-experiment: deps
-    python3 tools/parser-experiment/check.py
+    python3 tools/parser-experiment/check.py --sources --corpus std --corpus tests
+
+# Opt-in declaration reader; production syntax/recovery/depth policy stays authoritative.
+test-compact-declarations: release
+    python3 tools/build.py dyn-legacy dyn-compact-declarations frontend-state-compact-test frontend-failure-compact-test
+    "$BUILD/frontend-state-compact-test"
+    "$BUILD/frontend-failure-compact-test"
+    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-declarations" --reference "$BUILD/dyn-legacy"
+
+# Opt-in retained source consumers; syntax, recovery, AST and editor still use Tree-sitter.
+test-compact-sources: release
+    python3 tools/build.py dyn-legacy dyn-compact-sources frontend-state-sources-test frontend-failure-sources-test
+    python3 tools/parser-experiment/check-sources.py
+    python3 tools/parser-experiment/check-scopes.py
+    python3 tools/parser-experiment/check-refs.py
+    python3 tools/parser-experiment/check-rewrite.py
+    python3 tools/parser-experiment/check-interfaces.py
+    "$BUILD/frontend-state-sources-test"
+    "$BUILD/frontend-failure-sources-test"
+    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-sources" --reference "$BUILD/dyn-legacy"
+    DYN="$BUILD/dyn-compact-sources" python3 tests/frontend-audit.py
+    DYN="$BUILD/dyn-compact-sources" python3 tests/compiler-contracts.py
+    DYN="$BUILD/dyn-compact-sources" python3 tests/lsp-contracts.py
+    DYN="$BUILD/dyn-compact-sources" python3 tests/generics.py
+
+# Direct compact AST lowering with retained aliases/generics; default remains Tree-sitter.
+test-compact-ast: release
+    python3 tools/build.py dyn-legacy dyn-compact-ast frontend-state-ast-test frontend-failure-ast-test batch-trees-ast-test
+    python3 tools/parser-experiment/check-ast.py --corpus std --corpus tests
+    "$BUILD/frontend-state-ast-test"
+    "$BUILD/frontend-failure-ast-test"
+    "$BUILD/batch-trees-ast-test"
+    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-ast" --reference "$BUILD/dyn-legacy"
+    DYN="$BUILD/dyn-compact-ast" python3 tests/run.py
+
+# Compact-first parity against the Tree-sitter-only dyn-legacy rollback artifact.
+test-compact-first: release
+    python3 tools/build.py dyn-legacy dyn-compact-first
+    python3 tools/parser-experiment/check-depth.py --corpus std --corpus tests
+    python3 tools/parser-experiment/check-first.py
+    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-first" --reference "$BUILD/dyn-legacy"
+    evidence="$(mktemp -d "$BUILD/compact-first-acceptance.XXXXXX")"; python3 tools/parser-experiment/check-acceptance.py --compiler "$BUILD/dyn-compact-first" --reference "$BUILD/dyn-legacy" --samples 1000 --corpus std --corpus tests --output "$evidence/run"
+    DYN="$BUILD/dyn-compact-first" python3 tests/run.py
+
+# Test-only x86-64 Linux scalar object emitter; never selects a production backend.
+test-backend-experiment: release
+    python3 tools/backend-experiment/build.py
+    python3 tools/backend-experiment/test.py
+
+# Default debug builds emit natively on x86_64 Linux; dyn-legacy is the LLVM reference.
+test-native-debug: release
+    python3 tools/build.py dyn dyn-legacy
+    python3 tools/backend-experiment/check-compiler.py --compiler "$BUILD/dyn" --reference "$BUILD/dyn-legacy"
+
+# AArch64 Linux native emission against LLVM under qemu-aarch64 (skips without qemu).
+test-native-a64: release
+    python3 tools/build.py dyn
+    python3 tools/backend-experiment/native-differential.py --target aarch64-linux
+
+# x86-64 Windows native emission against LLVM under wine (skips without wine).
+test-native-windows: release
+    python3 tools/build.py dyn
+    python3 tools/backend-experiment/native-differential.py --target x86_64-windows
+
+# AArch64 macOS native emission against LLVM (runs on Apple silicon Macs only).
+test-native-macos: release
+    python3 tools/build.py dyn
+    python3 tools/backend-experiment/native-differential.py --target aarch64-macos
+
+# Regression suite with native emission required wherever it is eligible.
+test-native-strict: release
+    python3 tools/build.py dyn
+    DYN_REAL="$BUILD/dyn" python3 tools/backend-experiment/strict-suite.py
+
+# Matched prepared-IR timing; correctness and runtime checks are outside emission timing.
+bench-backend-experiment: release
+    python3 tools/build.py backend-benchmark
+    python3 tools/backend-experiment/benchmark.py
 
 native-probes: release
     python3 tools/build-native-probes.py

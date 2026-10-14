@@ -27,6 +27,20 @@ jobs:
       - run: just release-check
       - name: Differential expression parser experiment
         run: just test-parser-experiment
+      - name: Qualify compact declaration consumer
+        run: just test-compact-declarations
+      - name: Qualify retained compact source consumers
+        run: just test-compact-sources
+      - name: Qualify direct compact AST lowering
+        run: just test-compact-ast
+      - name: Qualify compact-first validation
+        run: just test-compact-first
+      - name: Paired compiler equivalence and provenance
+        run: python3 tools/compare-compilers.py --candidate build/dyn-compact-sources --lines 1000 --flat 10 --runs 1 --output build/compiler-paired-smoke
+      - name: Differential scalar backend experiment
+        run: just test-backend-experiment
+      - name: Native debug compiler integration
+        run: just test-native-debug
       - name: Qualify native vendor wrappers and generated bindings
         env:
           BIND_CLANG: clang-19
@@ -51,6 +65,17 @@ jobs:
           python3 tests/compiler-contracts.py
           python3 tests/generics.py
           python3 tools/parser-experiment/check.py --sanitize --samples 100
+          python3 tools/parser-experiment/check-declarations.py --sanitize
+          python3 tools/parser-experiment/check-sources.py --sanitize
+          python3 tools/parser-experiment/check-ast.py --sanitize --corpus std --corpus tests
+          python3 tools/parser-experiment/check-depth.py --sanitize --corpus std --corpus tests
+          python3 tools/parser-experiment/check-first.py --sanitize
+          python3 tools/parser-experiment/check-scopes.py --sanitize
+          python3 tools/parser-experiment/check-refs.py --sanitize
+          python3 tools/parser-experiment/check-rewrite.py --sanitize
+          python3 tools/parser-experiment/check-interfaces.py --sanitize
+          BUILD=build/backend-sanitize CFLAGS='-O1 -fsanitize=address,undefined -fno-omit-frame-pointer' python3 tools/backend-experiment/build.py
+          BUILD=build/backend-sanitize DYN=./build/dyn-release python3 tools/backend-experiment/test.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -58,4 +83,5 @@ jobs:
           path: |
             build/release-check/
             build/readiness/
+            build/compact-first-acceptance.*/run/
             build/dist/

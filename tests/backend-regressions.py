@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 import subprocess
+import shlex
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +160,83 @@ fn main() {
 }
 
 
+CLOSED_SUM = """fn main() {
+  values: [4]u8 = [1, 2, 3, 4]
+  sum: u32 = 0
+  i: usize = 0
+  for i <= 3 {
+    sum += #cast(u32) values[i]
+    i += 1
+  }
+  if sum != 10 { #panic("CLOSED SUM") }
+}
+"""
+CASES['closed_sum'] = (CLOSED_SUM, None)
+CASES['closed_bounds'] = (CLOSED_SUM.replace('i <= 3', 'i <= 4'), 'index.ok')
+CASES['closed_maximum'] = ("""fn main() {
+  i: u8 = 254
+  for i <= 255 { i += 1 }
+  #panic("WRAPPED")
+}
+""", 'overflow.ok')
+CASES['closed_accumulator'] = ("""fn main() {
+  sum: u8 = 250
+  i: usize = 0
+  for i <= 3 { sum += 2 i += 1 }
+  #panic("WRAPPED")
+}
+""", 'overflow.ok')
+# Preserve rejection of mutable bounds/steps and multiple loop-carried writes.
+for original in ('range_mutated_bound', 'range_mutated_step', 'range_multiple_writes'):
+    source, error = CASES[original]
+    CASES['closed_' + original] = (source.replace('i < ', 'i <= '), error)
+CASES['closed_multiple_increments'] = ("""fn main() {
+  i: u8 = 254
+  for i <= 254 { i += 1 i += 1 }
+  #panic("WRAPPED")
+}
+""", 'overflow.ok')
+CASES['closed_call'] = ("""fn change(p: *u8) { p.* = 255 }
+fn main() {
+  i: u8 = 0
+  for i <= 3 { change(&i) i += 1 }
+  #panic("WRAPPED")
+}
+""", 'overflow.ok')
+
+
+# A terminating cleanup replaces each exit and prevents older cleanups from
+# being emitted after its LLVM terminator.
+for name, body in {
+    'panic': 'defer { #panic("older") } defer { #panic("cleanup") } #panic("original")',
+    'return': 'defer { #panic("older") } defer { #panic("cleanup") } return 0',
+    'fallthrough': 'if true { defer { #panic("older") } defer { #panic("cleanup") } } return 0',
+    'guard': 'defer { #panic("older") } defer { #panic("cleanup") } return 1/a',
+    'break': 'for i in 0..1 { defer { #panic("older") } defer { #panic("cleanup") } break } return 0',
+    'continue': 'for i in 0..1 { defer { #panic("older") } defer { #panic("cleanup") } continue } return 0',
+}.items():
+    CASES['cleanup_' + name] = (
+        'fn fail(a:u64) u64 {' + body + '}\nfn main() { _=fail(0) }\n', 'cleanup')
+
+
+CASES['array_rvalue_index'] = ("""order:u64=0
+struct Record { values:[2]u64 }
+fn index() usize { order=order*10+1 return 1 }
+fn values() [2]u64 { order=order*10+2 return [11,22] }
+fn nested() [2][2]u64 { return [[1,2],[3,4]] }
+fn record() Record { return Record{values:[5,6]} }
+fn main() {
+  if values()[index()]!=22 || order!=12 { #panic("EVALUATION ORDER") }
+  f:=&values
+  if f()[0]!=11 || order!=122 { #panic("INDIRECT ARRAY") }
+  if nested()[1][0]!=3 || record().values[1]!=6 || ([7,8])[0]!=7 { #panic("ARRAY VALUE") }
+}
+""", None)
+CASES['array_rvalue_bounds'] = ("""fn values() [2]u64 { return [11,22] }
+fn main() { i:usize=2 _=values()[i] #panic("BOUNDS SKIPPED") }
+""", 'index.ok')
+
+
 def build(directory, output, *options):
     result = subprocess.run(
         [DYN, 'build', str(directory), '--no-cache', '--jobs', '1',
@@ -168,6 +247,51 @@ def build(directory, output, *options):
 
 with tempfile.TemporaryDirectory(prefix='dyn-backend-regressions-') as temporary:
     root = Path(temporary)
+    if sys.platform == 'linux':
+        directory = root / 'foreign-global-alias'
+        directory.mkdir()
+        (directory / 'main.dyn').write_text('''extern value "backend_foreign_value": u64
+extern plain: u64
+fn initial() u64 { return value + plain }
+ordinary: u64 = initial()
+pub fn check() u64 {
+  if ordinary != 24 || value != 11 || plain != 13 { return 1 }
+  value += 2
+  plain += 3
+  return 0
+}
+''')
+        host = root / 'foreign-host.c'
+        host.write_text('''#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+struct guarded { uint64_t value, canary; };
+struct guarded backend_foreign_value = {11, UINT64_C(0xabcdef0123456789)};
+struct guarded plain = {13, UINT64_C(0xfedcba9876543210)};
+int main(int argc, char **argv) {
+  if (argc != 2) return 2;
+  void *library = dlopen(argv[1], RTLD_NOW);
+  if (!library) return 3;
+  if (backend_foreign_value.value != 11 || plain.value != 13 ||
+      backend_foreign_value.canary != UINT64_C(0xabcdef0123456789) ||
+      plain.canary != UINT64_C(0xfedcba9876543210)) return 4;
+  void *symbol = dlsym(library, "check");
+  uint64_t (*check)(void); memcpy(&check, &symbol, sizeof(check));
+  if (!check || check() || backend_foreign_value.value != 13 || plain.value != 16 ||
+      backend_foreign_value.canary != UINT64_C(0xabcdef0123456789) ||
+      plain.canary != UINT64_C(0xfedcba9876543210)) return 5;
+  return dlclose(library) != 0;
+}
+''')
+        executable = root / 'foreign-host'
+        subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), str(host),
+                        '-Wl,--export-dynamic', '-ldl', '-o', str(executable)], check=True)
+        for release in (False, True):
+            output = directory / ('release.so' if release else 'debug.so')
+            build(directory, output, '--shared', *(['--release'] if release else ['--debug']))
+            result = subprocess.run([str(executable), str(output)], capture_output=True,
+                                    text=True, timeout=10)
+            assert result.returncode == 0, ('foreign-global-alias', release, result.returncode, result.stderr)
     for name, (source, expected_error) in CASES.items():
         directory = root / name
         directory.mkdir()
@@ -183,6 +307,33 @@ with tempfile.TemporaryDirectory(prefix='dyn-backend-regressions-') as temporary
                     name, release, result.returncode, diagnostic)
             else:
                 assert result.returncode == 0, (name, release, diagnostic)
+            if name.startswith('cleanup_'):
+                assert result.returncode == 101, (name, release, diagnostic)
+                assert result.stderr.splitlines()[0] == 'cleanup', (name, release, diagnostic)
+                assert 'older' not in diagnostic and 'original' not in diagnostic, (name, diagnostic)
+                if not release:
+                    assert 'fail' in result.stderr and 'stack trace:' in result.stderr, (name, diagnostic)
+
+    # Inspect unoptimized IR: the frontend proof, independent of LLVM's passes.
+    directory = root / 'closed_sum'
+    output = directory / 'proof'
+    build(directory, output, '--emit-ir', '--no-link')
+    ir = output.with_suffix('.ll').read_text()
+    assert 'index.ok' not in ir, ir
+    assert 'call { i32, i1 } @llvm.uadd.with.overflow.i32' not in ir, ir
+    assert 'call { i64, i1 } @llvm.uadd.with.overflow.i64' not in ir, ir
+
+    directory = root / 'closed-usize-wasm32'
+    directory.mkdir()
+    (directory / 'main.dyn').write_text("""fn main() {
+  i: usize = 4294967294
+  for i <= 4294967295 { i += 1 }
+}
+""")
+    output = directory / 'wasm32'
+    build(directory, output, '--target', 'wasm32-wasi', '--emit-ir', '--no-link')
+    ir = output.with_suffix('.ll').read_text()
+    assert 'call { i32, i1 } @llvm.uadd.with.overflow.i32' in ir, ir
 
     # usize must use the target width rather than the host's 64-bit width.
     # Emit unoptimized IR so the assertion checks the compiler's proof itself.

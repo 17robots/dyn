@@ -210,7 +210,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
                                 ' + '.join(f'value{n}()' for n in range(1, 8)) +
                                 '\n  _ = io.println(io.stdout(), "{}", total)\n}\n')
     def build_big():
-        built = subprocess.run([DYN, 'build', str(big), '--verbose', '--output', str(big/'program')],
+        # Per-module instance caching is an LLVM contract; native debug re-emits all.
+        built = subprocess.run([DYN, 'build', str(big), '--verbose', '--backend', 'llvm', '--output', str(big/'program')],
                                capture_output=True, text=True, timeout=300, env=env)
         assert built.returncode == 0, built.stderr
         out = subprocess.run([str(big/'program')], capture_output=True, text=True, timeout=30)
