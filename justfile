@@ -6,19 +6,16 @@ export BUILD := absolute_path(env('BUILD', COMPILER_DIR / 'build'))
 export DYN := env('DYN', BUILD / 'dyn-release')
 export DYN_SDK := env('DYN_SDK', COMPILER_DIR)
 
-deps:
-    python3 tools/fetch-grammar.py
-
-all: deps
+all:
     python3 tools/build.py all
 
 release: all
     python3 tools/build.py dyn-release
 
-artifact +names: deps
+artifact +names:
     python3 tools/build.py "$@"
 
-per-file: deps
+per-file:
     python3 tools/build.py dyn-per-file
 
 smoke: release
@@ -30,9 +27,11 @@ smoke: release
 test: smoke
     python3 tests/run.py
 
-# Qualification of generated ABI bindings and the compiler's required provider.
+# Qualification of generated ABI bindings and the Tree-sitter provider binding
+# (needs libtree-sitter; fetches the grammar it parses with).
 test-vendors: release
     python3 tests/vendor-bindings.py
+    python3 tools/fetch-grammar.py
     python3 tests/vendor-provider-host.py
 
 # Requires native Lua 5.4, PCRE2, SQLite, LZ4 and zstd development packages.
@@ -68,51 +67,10 @@ release-check:
 bench-scale: release
     python3 tools/scale-benchmark.py --budget
 
-# Isolated parser experiment; does not select a different production parser.
-test-parser-experiment: deps
-    python3 tools/parser-experiment/check.py --sources --corpus std --corpus tests
-
-# Opt-in declaration reader; production syntax/recovery/depth policy stays authoritative.
-test-compact-declarations: release
-    python3 tools/build.py dyn-legacy dyn-compact-declarations frontend-state-compact-test frontend-failure-compact-test
-    "$BUILD/frontend-state-compact-test"
-    "$BUILD/frontend-failure-compact-test"
-    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-declarations" --reference "$BUILD/dyn-legacy"
-
-# Opt-in retained source consumers; syntax, recovery, AST and editor still use Tree-sitter.
-test-compact-sources: release
-    python3 tools/build.py dyn-legacy dyn-compact-sources frontend-state-sources-test frontend-failure-sources-test
-    python3 tools/parser-experiment/check-sources.py
-    python3 tools/parser-experiment/check-scopes.py
-    python3 tools/parser-experiment/check-refs.py
-    python3 tools/parser-experiment/check-rewrite.py
-    python3 tools/parser-experiment/check-interfaces.py
-    "$BUILD/frontend-state-sources-test"
-    "$BUILD/frontend-failure-sources-test"
-    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-sources" --reference "$BUILD/dyn-legacy"
-    DYN="$BUILD/dyn-compact-sources" python3 tests/frontend-audit.py
-    DYN="$BUILD/dyn-compact-sources" python3 tests/compiler-contracts.py
-    DYN="$BUILD/dyn-compact-sources" python3 tests/lsp-contracts.py
-    DYN="$BUILD/dyn-compact-sources" python3 tests/generics.py
-
-# Direct compact AST lowering with retained aliases/generics; default remains Tree-sitter.
-test-compact-ast: release
-    python3 tools/build.py dyn-legacy dyn-compact-ast frontend-state-ast-test frontend-failure-ast-test batch-trees-ast-test
-    python3 tools/parser-experiment/check-ast.py --corpus std --corpus tests
-    "$BUILD/frontend-state-ast-test"
-    "$BUILD/frontend-failure-ast-test"
-    "$BUILD/batch-trees-ast-test"
-    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-ast" --reference "$BUILD/dyn-legacy"
-    DYN="$BUILD/dyn-compact-ast" python3 tests/run.py
-
-# Compact-first parity against the Tree-sitter-only dyn-legacy rollback artifact.
-test-compact-first: release
-    python3 tools/build.py dyn-legacy dyn-compact-first
-    python3 tools/parser-experiment/check-depth.py --corpus std --corpus tests
-    python3 tools/parser-experiment/check-first.py
-    python3 tools/parser-experiment/check-declarations.py --compiler "$BUILD/dyn-compact-first" --reference "$BUILD/dyn-legacy"
-    evidence="$(mktemp -d "$BUILD/compact-first-acceptance.XXXXXX")"; python3 tools/parser-experiment/check-acceptance.py --compiler "$BUILD/dyn-compact-first" --reference "$BUILD/dyn-legacy" --samples 1000 --corpus std --corpus tests --output "$evidence/run"
-    DYN="$BUILD/dyn-compact-first" python3 tests/run.py
+# Language-server responses against a reference compiler over std, tests and an
+# optional external project (REFERENCE=path/to/dyn, PROJECT=path).
+test-lsp-differential: release
+    python3 tools/lsp-differential.py --reference "${REFERENCE:?set REFERENCE to a reference dyn}" --candidate "$BUILD/dyn-release" --corpus std --corpus tests ${PROJECT:+--corpus "$PROJECT"}
 
 # Test-only x86-64 Linux scalar object emitter; never selects a production backend.
 test-backend-experiment: release

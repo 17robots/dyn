@@ -17,53 +17,40 @@ function, return-type, and loop state belong to one analysis invocation. Compile
 C allocations retain explicit C ownership. Dyn arenas remain a standard-library
 facility.
 
-## Default parser policy
+## Parser
 
-The default `dyn` and `dyn-release` artifacts parse batch CLI sources with the
-handwritten compact parser (`tools/parser-experiment/parser.c`). Batch commands
-(`DynContext.strict_syntax`) use only that parser: a syntax error ends source
-loading, including in files whose `#target` excludes the host. These parses
-recover (`ExpOptions.recover`): a failed statement or top-level declaration
-becomes an `SRC_ERROR` node, the parser resumes at the next line-initial token
-outside the item's brackets or no deeper than the item, and
-`dyn_source_report_syntax` reports up to 20 recorded errors. A source
-whose certified depth bound exceeds the 1024-level limit, or that hits the
-1024-call parser cap, is reported as too deep; the bound can exceed raw
-Tree-sitter depth by one level. NUL bytes are syntax errors. Work budgets reach
-the parser through its work callback. Other callers use the compact tree only when
-it parses, its depth is certified and its string literals pass the legacy-lexer
-safety check, and otherwise parse with Tree-sitter. Syntax-cache and editor paths
-always use Tree-sitter, including its error recovery. The build verifies the grammar pin before linking.
+All sources are parsed by the handwritten parser in `src/parser.c` and
+`src/parser_source.inc` into 32-byte indexed nodes (`ExpNode`) with byte spans,
+parent links and field roles. `src/snapshot.c` wraps a parse in an immutable,
+reference-counted `ExpSnapshot` of the exact text revision. There is no other
+parser; the compiler does not use Tree-sitter.
 
-`dyn-legacy` is the Tree-sitter-only rollback artifact and the differential
-reference for `just test-compact-first`. The staged `dyn-compact-*` artifacts
-below remain for bisecting consumer migrations.
+Every parse recovers (`ExpOptions.recover`): a failed statement or top-level
+declaration becomes an `SRC_ERROR` leaf, its error is recorded in
+`ExpTree.errors`, and parsing resumes at the next line-initial token outside the
+item's brackets or indented no deeper than it (column zero at top level); an
+invalid token resumes on the next line. A recovering parse of valid text equals
+the strict parse, and its first error is the strict error (`tests/parser-recovery.c`).
 
-## Compact declaration qualification
-
-`just test-compact-declarations` builds an explicit `dyn-compact-declarations`
-artifact. Default artifacts keep the existing parser and declaration reader. The qualification build
-uses compact nodes for strict entry-declaration checks after Tree-sitter has
-validated syntax and depth. Both declaration readers share the same original-span
-entry policy. File partitions and any reflection prelude remain separate; source
-maps preserve original locations. Recovery requests keep the existing reader.
-
-Compact syntax or internal capacity failures use the existing declaration reader
-for that partition. Allocation failure and external cancellation/work exhaustion
-terminate analysis without retrying or reporting a false missing entry. The
-external budget is shared and never reset. Compact trees are transient and freed
-before AST lowering; all existing retained-tree contracts below still apply.
-This transition adds parsing work and does not establish an end-to-end speedup.
-Select the ordinary `dyn` or `dyn-release` artifact to leave the qualification path.
+Batch commands (`DynContext.strict_syntax`) stop loading at a file with errors and
+`dyn_source_report_syntax` prints up to 20 of them, including in files whose
+`#target` excludes the host. Editors keep the partial tree: consumers skip
+`SRC_ERROR` nodes. The 1024-level nesting limit is measured on the compact tree
+(`src/syntax_depth.h`); the parser itself stops at 1024 nested calls. NUL bytes and
+invalid UTF-8 in literals are syntax errors. Work budgets reach the parser through
+its work callback.
 
 ## Parsed source and symbol ownership
 
-Loaded sources own immutable Tree-sitter trees for their exact text revision.
-`dyn_source_tree` returns an independently releasable tree reference. Import
-extraction, validation, rewriting, interface extraction, and reflection detection
-share those trees. Rewriting and overlay replacement invalidate the old revision;
-open-buffer overlays can reuse the editor's current tree. A retained tree remains
-valid after its source owner is released. Source bytes remain separately owned.
+Loaded sources own an immutable snapshot (`DynSource.compact`) for their exact
+text revision; merged sources hold one per input (`compact_parts`), so file
+boundaries never change how a file parses. Import extraction, validation,
+rewriting, interface extraction, reflection detection and AST lowering share
+those snapshots. Rewriting and overlay replacement invalidate the old revision;
+open-buffer overlays adopt the editor's current snapshot. A retained snapshot
+remains valid after its source owner is released, and lazily lowered generic
+bodies retain the snapshot they read. `dyn_analyze` and `dyn_interface_build`
+parse private copies of text-only sources.
 
 Global/function name indexes belong to one semantic analysis invocation. Lookup
 still checks original module visibility and preserves declaration order for
@@ -165,7 +152,7 @@ notification. The same fixture and harness can run against a saved compiler via
 frontend analysis, allocation-failure enumeration for project loading,
 AST/IR/backend construction, and cache insertion and lookup (`frontend-state-test`,
 `frontend-failure-test`, `analysis-cache-test` and their neighbours).
-`tests/lsp-contracts.py` checks that incremental and full-text edits agree.
+`tests/lsp-contracts.py` checks that ranged and full-text edits agree.
 
 Use `DYN_FUZZ_SEED=29 python3 tests/frontend-fuzz.py` for another deterministic
 sequence, or set `DYN` to a sanitized compiler. `DYN_FUZZ_CASES` controls mutations.
@@ -173,11 +160,10 @@ These bounded checks expose regressions; they do not prove absence of other bugs
 
 ## Source and metadata preparation
 
-Merging sources can seed Tree-sitter with the largest prepared file (at least
-4 KiB), applying prefix/suffix insertions before incremental parsing. The merged
-source owns its new tree; input trees stay immutable. This preserves reusable
-subtrees in large constant tables while still parsing boundaries and surrounding
-files. Recovery and source-map behavior use the same canonical frontend.
+Merging sources concatenates text and retains each enabled input's snapshot;
+inputs that arrive as text only (interfaces) are parsed on the way. Editor
+syntax caches (`DynSyntaxCache`) share snapshots by path and exact text; rewritten
+text never replaces a cached disk revision.
 
 Scope indexing skips expressions, which cannot introduce scopes. Target filtering
 first rejects files without the `#target` substring; the existing comment/string

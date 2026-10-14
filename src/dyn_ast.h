@@ -2,15 +2,12 @@
 #define DYN_AST_H
 
 #include "dyn.h"
-#include <tree_sitter/api.h>
 
-#ifdef DYN_EXPERIMENT_COMPACT_AST
 /* Borrowed from the AST's retained compact declaration/body tables. */
 typedef struct {
   struct ExpSnapshot *snapshot;
   uint32_t node, offset;
 } DynAstCompactRef;
-#endif
 
 typedef uint32_t DynExprId;
 #define DYN_NO_EXPR UINT32_MAX
@@ -212,10 +209,7 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType target;
-  TSNode type_node;
-#ifdef DYN_EXPERIMENT_COMPACT_AST
   DynAstCompactRef compact_type;
-#endif
   bool distinct;
   bool is_public;
   uint64_t module_owner;
@@ -246,10 +240,7 @@ typedef struct {
   bool is_type;
 } DynAstGenericParam;
 typedef struct {
-  TSNode node;
-#ifdef DYN_EXPERIMENT_COMPACT_AST
   DynAstCompactRef compact_node;
-#endif
   uint32_t function, param_start, param_count, type_param_count;
   DynType return_pattern;
   DynSpan type_names[DYN_MAX_TYPE_PARAMS];
@@ -316,14 +307,12 @@ typedef struct {
   bool type_capacity_exceeded;
   DynSpan invalid_array_extent;
   uint32_t body_start, body_count;
-#ifdef DYN_EXPERIMENT_COMPACT_AST
   /* Retained concrete body references also cover lazy generic instances. */
   struct DynCompactBody *compact_bodies;
   size_t compact_body_count;
   struct DynCompactDeclaration *compact_declarations;
   size_t compact_declaration_count;
   bool compact_complete;
-#endif
   DynAstExpr *expressions;
   size_t expression_count, expression_capacity;
   DynAstItem *items;
@@ -386,32 +375,11 @@ typedef struct {
   uint32_t scope_count;
   bool declaring_generic;
   /* Top-level declarations of every root, valid only while lowering. */
-  TSNode *decls;
   uint32_t decl_count;
 } DynAstProgram;
 
-bool dyn_ast_lower_main(TSNode function, const DynSource *source,
-                        DynAstProgram *ast, unsigned *errors);
-bool dyn_ast_parse_main_source(const DynSource *source, DynAstProgram *ast,
-                               unsigned *errors);
-/* Parse every declaration, but lower bodies only for owner_key. NULL lowers
-   all. This is the frontend seam used by per-module compilation and cached
-   interfaces: dependencies contribute types/signatures, never bodies. */
-bool dyn_ast_parse_source_owner(const DynSource *source, DynAstProgram *ast,
-                                unsigned *errors, const char *owner_key,
-                                bool allow_no_main);
-bool dyn_ast_lower_source(TSNode root, const DynSource *, DynAstProgram *,
-                          unsigned *, const char *owner_key);
-/* Roots are top-level trees whose byte offsets already address source text. */
-bool dyn_ast_lower_roots(const TSNode *roots, size_t root_count,
-                         const DynSource *, DynAstProgram *, unsigned *,
-                         const char *owner_key);
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-/* After all module rewrites/checks: certify every enabled source before release. */
-bool dyn_ast_release_project_trees(DynSources *sources);
 bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *,
                            const char *owner_key);
-#endif
 void dyn_ast_program_free(DynAstProgram *ast);
 /* Add an instance of a generic with concrete type arguments. The body is
    lowered later by dyn_ast_lower_instance. Returns the function id. */

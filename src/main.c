@@ -11,14 +11,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <tree_sitter/api.h>
 #include <unistd.h>
 #ifndef DYN_VERSION
 #define DYN_VERSION "0.1.0-dev"
 #endif
 
 extern char *realpath(const char *, char *);
-extern const TSLanguage *tree_sitter_dyn(void);
 
 static bool native_link_matches(const char *path, const char *name) {
   const char *base = strrchr(path, '/');
@@ -122,43 +120,18 @@ static int add_source_native_links(const DynContext *context,
   for (size_t i = 0; i < sources->count; ++i) {
     if (dyn_source_target_enabled(&sources->items[i]) == 0)
       continue;
-    TSTree *tree = NULL;
-    TSNode root = {0};
-    uint32_t child = 0;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
     const ExpSnapshotTree *compact = dyn_compact_tree(&sources->items[i]);
-    uint32_t compact_child = compact ? compact->nodes[compact->root].first : UINT32_MAX;
-    if (!compact)
-#endif
-    {
-      tree = dyn_source_tree(&sources->items[i]);
-      if (!tree) return 2;
-      root = ts_tree_root_node(tree);
-    }
-    for (;;) {
-      uint32_t start, end;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-      if (compact) {
-        if (compact_child == UINT32_MAX) break;
-        if (!dyn_work_step(&sources->items[i].context, 1)) return 2;
-        uint32_t id = compact_child; compact_child = compact->nodes[id].next;
-        if (compact->nodes[id].kind != SRC_LINK) continue;
-        uint32_t value = dyn_compact_field(compact, id, EXP_ROLE_LIBRARY);
-        if (value == UINT32_MAX) return 2;
-        start = compact->nodes[value].start; end = compact->nodes[value].end;
-      } else
-#endif
-      {
-        if (child == ts_node_named_child_count(root)) break;
-        TSNode directive = ts_node_named_child(root, child++);
-        if (strcmp(ts_node_type(directive), "link_directive")) continue;
-        TSNode value = ts_node_child_by_field_name(directive, "library", 7);
-        start = ts_node_start_byte(value); end = ts_node_end_byte(value);
-      }
+    if (!compact) return 2;
+    for (uint32_t id = compact->nodes[compact->root].first; id != UINT32_MAX;
+         id = compact->nodes[id].next) {
+      if (!dyn_work_step(&sources->items[i].context, 1)) return 2;
+      if (compact->nodes[id].kind != SRC_LINK) continue;
+      uint32_t value = dyn_compact_field(compact, id, EXP_ROLE_LIBRARY);
+      if (value == UINT32_MAX) return 2;
+      uint32_t start = compact->nodes[value].start, end = compact->nodes[value].end;
       if (end <= start + 2 || end - start - 2 >= sizeof(names[0])) {
         fprintf(stderr, "error: invalid #link library in %s\n",
                 sources->items[i].path);
-        if (tree) ts_tree_delete(tree);
         return 1;
       }
       char name[128];
@@ -172,7 +145,6 @@ static int add_source_native_links(const DynContext *context,
               (name[byte] >= 'a' && name[byte] <= 'z'))) {
           fprintf(stderr, "error: invalid #link library '%s' in %s\n", name,
                   sources->items[i].path);
-          if (tree) ts_tree_delete(tree);
           return 1;
         }
       bool duplicate = false;
@@ -183,14 +155,12 @@ static int add_source_native_links(const DynContext *context,
         }
       if (!duplicate) {
         if (name_count == 32) {
-          if (tree) ts_tree_delete(tree);
           fprintf(stderr, "error: too many native libraries\n");
           return 2;
         }
         strcpy(names[name_count++], name);
       }
     }
-    if (tree) ts_tree_delete(tree);
   }
   for (size_t i = 0; i < name_count; ++i) {
     bool supplied = false;
@@ -521,10 +491,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
     return 1;
   }
   phase = timer_start();
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-  /* Module resolution, rewriting and interface reads are complete. */
-  (void)dyn_ast_release_project_trees(&sources);
-#endif
   if (is_command(options, "query")) {
     result = dyn_query_sources(&sources, main_path);
     dyn_sources_free(&sources); free(main_path); return result;
@@ -649,13 +615,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     DynIrProgram shared_ir;
     bool prepared = false;
     if (!result) {
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-      for (size_t i = 0; i < sources.count; ++i)
-        dyn_source_release_batch_trees(&sources.items[i]);
       result = dyn_codegen_prepare_owned(&module_source, false, NULL, &shared_ir);
-#else
-      result = dyn_codegen_prepare(&module_source, false, NULL, &shared_ir);
-#endif
       prepared = !result;
       module_build.ir = prepared ? &shared_ir : NULL;
     }
@@ -687,15 +647,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
     result = dyn_sources_merge(&sources, main_path, &module_source);
     module_source.context = context;
     if (!result) {
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-      for (size_t i = 0; i < sources.count; ++i)
-        dyn_source_release_batch_trees(&sources.items[i]);
       DynIrProgram prepared;
       result = dyn_codegen_prepare_owned(&module_source, options->shared, NULL, &prepared);
-#else
-      DynIrProgram prepared;
-      result = dyn_codegen_prepare(&module_source, options->shared, NULL, &prepared);
-#endif
       bool have_ir = !result;
       if (!result && native) {
         native_built = !emit_native(&module_source, &prepared, object, options);

@@ -920,14 +920,3 @@ static bool compact_prepare_bodies(DynAstProgram *a, const DynSource *s) {
   }
   return dyn_work_step(&s->context, 0);
 }
-static CompactNode compact_function_body(const DynAstProgram *a, uint32_t start) {
-  size_t low = 0, high = a->compact_body_count;
-  while (low < high) {
-    size_t mid = low + (high - low) / 2;
-    const struct DynCompactBody *body = &a->compact_bodies[mid];
-    if (body->function_start < start) low = mid + 1;
-    else if (body->function_start > start) high = mid;
-    else return (CompactNode){exp_snapshot_tree(body->snapshot), body->node, body->offset, body->snapshot};
-  }
-  return compact_none();
-}

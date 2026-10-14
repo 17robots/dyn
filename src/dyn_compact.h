@@ -1,8 +1,7 @@
 #ifndef DYN_COMPACT_H
 #define DYN_COMPACT_H
 #include "dyn.h"
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-#include "../tools/parser-experiment/snapshot.h"
+#include "snapshot.h"
 static inline const ExpSnapshotTree *dyn_compact_tree(const DynSource *source) {
   return exp_snapshot_tree(source->compact);
 }
@@ -30,5 +29,4 @@ static inline uint32_t dyn_compact_name(const ExpSnapshotTree *tree,
     if (tree->nodes[child].kind == EXP_NAME) return child;
   return UINT32_MAX;
 }
-#endif
 #endif

@@ -135,7 +135,6 @@ typedef struct {
   DynSourceSpan *spans;
   size_t span_count;
 } DynSourceMap;
-typedef struct TSTree TSTree;
 typedef struct {
   char *path;
   char *text;
@@ -145,23 +144,17 @@ typedef struct {
   DynSourceSpan *spans;
   size_t span_count;
   DynContext context;
-  TSTree *syntax; /* Owned, immutable tree for this exact text revision. */
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-  struct ExpSnapshot *compact; /* Owned immutable source revision; no callbacks. */
-  struct ExpSnapshot **compact_parts; /* References parallel to syntax_parts. */
+  /* Owned immutable source revision and its tree. Editor revisions may hold
+     recovered syntax errors; batch commands never keep one with errors. */
+  struct ExpSnapshot *compact;
+  /* Merged sources own one snapshot per input instead, each covering its
+     partition of text; syntax_part_count counts them. */
+  struct ExpSnapshot **compact_parts;
   bool compact_reflection;
-#ifdef DYN_EXPERIMENT_COMPACT_AST
   /* Batch-only certificate for this validated, immutable text revision. */
   bool compact_only;
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
   bool compact_validated; /* Compact-first syntax/depth certificate, exact revision. */
-#endif
   uint32_t compact_root_start, compact_root_end;
-#endif
-#endif
-  /* Merged sources may instead own one tree per input, shifted to its offset
-     in text. Together they cover the text without a second parse. */
-  TSTree **syntax_parts;
   size_t syntax_part_count;
   bool syntax_too_deep;
   /* Set when the handwritten parser rejects this revision; static strings. */
@@ -242,14 +235,15 @@ bool dyn_source_prepare(DynSource *);
    DYN_SYNTAX_ERROR_LIMIT; false if none. */
 #define DYN_SYNTAX_ERROR_LIMIT 20
 bool dyn_source_report_syntax(const DynSource *);
-TSTree *dyn_source_tree(const DynSource *);
+/* Message naming the offending token at offset, and that token's end. */
+void dyn_syntax_error_message(const char *text, size_t length, uint32_t offset,
+                              const char *error, const char *expected,
+                              char *message, size_t capacity, uint32_t *token_end);
+/* One parser diagnostic at offset in source text, naming the offending token. */
+void dyn_report_syntax_error(const DynSource *, uint32_t offset, const char *message,
+                             const char *expected);
 bool dyn_source_reflection(const DynSource *, bool *);
 void dyn_source_discard_syntax(DynSource *);
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-/* Terminal batch phase only: preserve compact snapshots, text and partition maps.
-   The caller owns this source and must not analyze or rewrite it again. */
-void dyn_source_release_batch_trees(DynSource *);
-#endif
 void dyn_source_free(DynSource *source);
 void dyn_source_position(const DynSource *, size_t, const char **,
                          const char **, size_t *, size_t *);
@@ -285,11 +279,9 @@ int dyn_native_object(const DynSource *, const struct DynIrProgram *,
 #endif
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, struct DynIrProgram *ir);
-#ifdef DYN_EXPERIMENT_COMPACT_AST
 /* Consumes syntax ownership after complete strict compact analysis. */
 int dyn_codegen_prepare_owned(DynSource *source, bool shared,
                               const char *owner_key, struct DynIrProgram *ir);
-#endif
 int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
                      const char *object_path, const char *ir_path,
                      const char *asm_path, bool release, bool debug_info,

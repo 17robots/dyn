@@ -1,5 +1,5 @@
 name: Setup standalone compiler
-description: Install LLVM 19, Tree-sitter runtime, Zig and just
+description: Install LLVM 19, Zig, just and the Tree-sitter runtime for vendor binding tests
 runs:
   using: composite
   steps:

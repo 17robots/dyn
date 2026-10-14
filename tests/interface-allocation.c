@@ -79,6 +79,7 @@ int main(void) {
                 "const Private: usize = 2\npub const Public: usize = Private * 2\npub struct Data { bytes: [Public]u8 }\n";
   DynSource source = {.path = "test.dyn", .text = text, .length = strlen(text)};
   DynSources sources = {.items = &source, .count = 1};
+  assert(dyn_source_prepare(&source));
   size_t total = 0;
   for (fail_at = 0; fail_at <= total; ++fail_at) {
     calls = 0;
@@ -100,5 +101,6 @@ int main(void) {
 #endif
     assert(live == 0);
   }
+  dyn_source_discard_syntax(&source);
   puts("interface allocation failure cleanup passed");
 }

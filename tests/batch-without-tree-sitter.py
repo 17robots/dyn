@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch commands parse with the handwritten parser only; they never create a Tree-sitter parser."""
+"""The compiler does not link Tree-sitter, and batch commands never create a parser through it."""
 import os
 import shutil
 import subprocess
@@ -13,6 +13,11 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 if not sys.platform.startswith('linux'):
     print('SKIP batch commands without Tree-sitter: needs an LD_PRELOAD host')
     sys.exit(0)
+
+# Dynamic dependencies: no Tree-sitter library at all, editors included.
+needed = subprocess.run(['readelf', '-d', DYN], capture_output=True, text=True)
+if needed.returncode == 0:
+    assert 'tree-sitter' not in needed.stdout, needed.stdout
 
 GUARD = r'''
 #include <stdio.h>

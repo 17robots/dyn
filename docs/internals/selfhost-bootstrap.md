@@ -6,9 +6,9 @@ compiler stays the specification oracle until three successive stages agree.
 
 ## Contracts to keep stable during the rewrite
 
-- Syntax is `tree-sitter-dyn/grammar.js`; semantic behavior is covered by
-  `tests/run.py`. New syntax requires grammar, compiler, highlighting, LSP, and
-  regression tests together.
+- Syntax is the bootstrap compiler's parser (`src/parser.c`); semantic behavior
+  is covered by `tests/run.py`. New syntax requires parser, editor grammar,
+  highlighting, LSP, and regression tests together.
 - Integer widths, aggregate layout, calling convention, `any`, slices,
   `rawptr`, C variadics, target properties, and runtime entry points are ABI.
 - Diagnostics use original file byte spans. Module rewriting and generated
@@ -19,7 +19,7 @@ compiler stays the specification oracle until three successive stages agree.
 - Iteration and emitted declaration order are deterministic. Cache keys include
   compiler schema, target, options, source content, and imported interfaces.
 - The bootstrap depends only on the shipped runtime, standard library,
-  Tree-sitter C API, LLVM C API, linker, and C ABI bindings.
+  LLVM C API, linker, and C ABI bindings.
 
 ## Required stage gates
 

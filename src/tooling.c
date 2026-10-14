@@ -1,10 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
-#include "dyn_syntax.h"
+#include "syntax_tree.h"
 #include "dyn_compact.h"
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-#include "../tools/parser-experiment/depth.h"
-#endif
+#include "syntax_depth.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdint.h>
@@ -55,53 +53,6 @@ static unsigned format_line_indent(const char *text, uint32_t offset) {
   return indent;
 }
 
-#ifndef DYN_EXPERIMENT_COMPACT_FIRST
-/* anchor_row/anchor_indent give the post-format indent of a line whose
-   statement moved; other lines keep their existing indentation. */
-static void format_layout(FormatEdits *edits, TSNode node, uint32_t anchor_row,
-                          unsigned anchor_indent) {
-  const char *text = edits->text;
-  if (!ts_node_is_named(node) && !strcmp(ts_node_type(node), ",")) {
-    char next = text[ts_node_end_byte(node)];
-    if (next && !strchr(" \t\r\n)]}", next))
-      format_insert(edits, ts_node_end_byte(node), UINT_MAX);
-    return;
-  }
-  uint32_t count = ts_node_child_count(node);
-  if (strcmp(ts_node_type(node), "block")) {
-    for (uint32_t i = 0; i < count; ++i)
-      format_layout(edits, ts_node_child(node, i), anchor_row, anchor_indent);
-    return;
-  }
-  uint32_t row = ts_node_start_point(node).row;
-  unsigned base = row == anchor_row
-                      ? anchor_indent
-                      : format_line_indent(text, ts_node_start_byte(node));
-  uint32_t previous = row;
-  bool statements = false;
-  for (uint32_t i = 0; i < count; ++i) {
-    TSNode child = ts_node_child(node, i);
-    uint32_t start = ts_node_start_point(child).row;
-    /* Every named child of a block except a comment is a statement. */
-    if (ts_node_is_named(child) && !ts_node_is_extra(child)) {
-      unsigned indent = format_line_indent(text, ts_node_start_byte(child));
-      if (start == previous) {
-        indent = base + 2;
-        format_insert(edits, ts_node_start_byte(child), indent);
-      }
-      format_layout(edits, child, start, indent);
-      previous = ts_node_end_point(child).row;
-      statements = true;
-    } else if (statements && !ts_node_is_named(child) &&
-               !strcmp(ts_node_type(child), "}") && start == previous)
-      format_insert(edits, ts_node_start_byte(child), base);
-    else
-      format_layout(edits, child, anchor_row, anchor_indent);
-  }
-}
-
-#endif
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
 /* Line starts give statement rows without a syntax-tree point API. */
 typedef struct {
   const ExpSnapshotTree *tree;
@@ -200,7 +151,6 @@ static void format_compact(FormatEdits *edits, const DynSource *s) {
   free(lines);
   exp_snapshot_release(snapshot);
 }
-#endif
 
 static int format_insert_order(const void *a, const void *b) {
   size_t x = ((const FormatInsert *)a)->offset,
@@ -213,15 +163,7 @@ static int format_insert_order(const void *a, const void *b) {
    sources receive only the whitespace rules. */
 bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
   FormatEdits edits = {.text = s->text};
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
   format_compact(&edits, s);
-#else
-  TSTree *tree = dyn_syntax_parse(s->text, s->length);
-  if (tree && !ts_node_has_error(ts_tree_root_node(tree)))
-    format_layout(&edits, ts_tree_root_node(tree), UINT32_MAX, 0);
-  if (tree)
-    ts_tree_delete(tree);
-#endif
   size_t extra = 0;
   for (size_t i = 0; i < edits.count; ++i)
     extra += edits.items[i].indent == UINT_MAX ? 1 : 1 + edits.items[i].indent;
@@ -305,7 +247,6 @@ static int replace_file(const DynSource *s, const char *text, size_t length) {
 /* Formatting only rewrites whitespace, so a clean parse is its whole
    precondition. Semantic checking would need the project's imports. */
 bool dyn_format_syntax_ok(const DynSource *s, bool report) {
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
   ExpSnapshotError error;
   ExpSnapshot *snapshot = exp_snapshot_create(s->text, s->length, NULL, &error);
   if (snapshot) {
@@ -327,46 +268,14 @@ bool dyn_format_syntax_ok(const DynSource *s, bool report) {
   else
     fprintf(stderr, "%s: cannot parse source\n", s->path);
   return false;
-#else
-  TSTree *tree = dyn_syntax_parse(s->text, s->length);
-  if (!tree) {
-    if (report)
-      fprintf(stderr, "%s: cannot parse source\n", s->path);
-    return false;
-  }
-  TSNode node = ts_tree_root_node(tree);
-  bool ok = !ts_node_has_error(node);
-  while (!ok && report) {
-    if (ts_node_is_error(node) || ts_node_is_missing(node)) {
-      dyn_syntax_diagnostic(node, s, "error", ts_node_is_missing(node)
-                                                  ? "missing syntax"
-                                                  : "syntax error");
-      break;
-    }
-    uint32_t count = ts_node_child_count(node), i = 0;
-    while (i < count && !ts_node_has_error(ts_node_child(node, i)))
-      ++i;
-    if (i == count) {
-      dyn_syntax_diagnostic(node, s, "error", "syntax error");
-      break;
-    }
-    node = ts_node_child(node, i);
-  }
-  ts_tree_delete(tree);
-  return ok;
-#endif
 }
 
 /* Batch tools parse with the handwritten parser only; loading reports a
    syntax error itself. */
 static int tooling_load(const char *directory, DynSources *sources) {
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
   DynContext context = {.strict_syntax = true};
   int result = dyn_sources_load(&context, directory, sources);
   return result == 1 ? 1 : result ? 2 : 0;
-#else
-  return dyn_sources_load(NULL, directory, sources) ? 2 : 0;
-#endif
 }
 
 int dyn_format_directory(const char *directory, bool check) {
@@ -479,19 +388,9 @@ int dyn_docs_directory(const char *directory, bool json) {
     fprintf(out, "# %s\n\n", name ? name : "module");
   for (size_t si = 0; si < sources.count; ++si) {
     DynSource *source = &sources.items[si];
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
     const ExpSnapshotTree *tree = dyn_compact_tree(source);
     if (!tree) { result = 2; break; }
     const ExpNode *nodes = tree->nodes;
-#else
-    TSTree *tree = dyn_syntax_parse(source->text, source->length);
-    if (!tree) { result = 2; break; }
-    if (ts_node_has_error(ts_tree_root_node(tree))) {
-      fprintf(stderr, "%s: cannot document malformed source\n", source->path);
-      ts_tree_delete(tree); result = 1; break;
-    }
-    TSNode root = ts_tree_root_node(tree);
-#endif
     if (json) {
       if (si) fputc(',', out);
       fputs("{\"path\":", out);
@@ -500,16 +399,9 @@ int dyn_docs_directory(const char *directory, bool json) {
     } else
       fprintf(out, "## Source: %s\n\n", source->path);
     bool gate_comma = false;
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
     for (uint32_t gate = nodes[tree->root].first; gate != UINT32_MAX; gate = nodes[gate].next) {
       if (nodes[gate].kind != SRC_TARGET) continue;
       uint32_t at = nodes[gate].start, end = nodes[gate].end;
-#else
-    for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-      TSNode gate = ts_node_named_child(root, i);
-      if (strcmp(ts_node_type(gate), "target_directive")) continue;
-      uint32_t at = ts_node_start_byte(gate), end = ts_node_end_byte(gate);
-#endif
       if (json) {
         if (gate_comma) fputc(',', out);
         docs_quote(out, source->text + at, end - at);
@@ -519,7 +411,6 @@ int dyn_docs_directory(const char *directory, bool json) {
     }
     if (json) fputs("],\"declarations\":[", out);
     bool declaration_comma = false;
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
     for (uint32_t wrapper = nodes[tree->root].first; wrapper != UINT32_MAX; wrapper = nodes[wrapper].next) {
       uint32_t name = dyn_compact_name(tree, wrapper);
       if (name == UINT32_MAX || !(nodes[wrapper].flags & EXP_PUBLIC)) continue;
@@ -543,23 +434,6 @@ int dyn_docs_directory(const char *directory, bool json) {
         if (source->text[at] == '\n') { ++row; column = 0; }
         else ++column;
       }
-#else
-    for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-      TSNode wrapper = ts_node_named_child(root, i);
-      DynDeclaration decl;
-      if (!dyn_syntax_declaration(wrapper, &decl) || !decl.is_public)
-        continue;
-      DynDeclarationKind kind = decl.kind;
-      uint32_t start = ts_node_start_byte(wrapper), end = ts_node_end_byte(wrapper);
-      if (decl.kind == DYN_DECL_FUNCTION)
-        for (uint32_t j = 0; j < ts_node_named_child_count(decl.node); ++j) {
-          TSNode child = ts_node_named_child(decl.node, j);
-          if (!strcmp(ts_node_type(child), "block")) { end = ts_node_start_byte(child); break; }
-        }
-      uint32_t ns = ts_node_start_byte(decl.name), ne = ts_node_end_byte(decl.name);
-      TSPoint point = ts_node_start_point(wrapper);
-      unsigned row = point.row, column = point.column;
-#endif
       while (end > start && isspace((unsigned char)source->text[end - 1])) --end;
       /* Adjacent line comments are the contract source, not a second registry. */
       size_t comment = start;
@@ -602,9 +476,6 @@ int dyn_docs_directory(const char *directory, bool json) {
       }
     }
     if (json) fputs("]}", out);
-#ifndef DYN_EXPERIMENT_COMPACT_FIRST
-    ts_tree_delete(tree);
-#endif
   }
   if (json) fputs("]}\n", out);
   if (ferror(out)) result = 2;

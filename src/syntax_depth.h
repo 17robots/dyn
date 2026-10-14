@@ -1,6 +1,8 @@
 #ifndef EXP_DEPTH_H
 #define EXP_DEPTH_H
 #include "snapshot.h"
+/* Production syntax nesting limit, measured on the bound below. */
+#define DYN_SYNTAX_DEPTH_LIMIT 1024u
 /* Pinned grammar: expression/literal/statement are inline, primary is the only
    removed nonterminal and cannot directly contain another primary. All other
    discarded children (tokens, comments, escapes) are leaves. Thus retained

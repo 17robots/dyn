@@ -564,4 +564,4 @@ bool exp_parse(const char *source, size_t length, ExpTree *tree) {
 void exp_free(ExpTree *tree) { free(tree->nodes); free(tree->errors); memset(tree, 0, sizeof(*tree)); }
 
 /* Full-source experiment shares the bounded lexer and expression parser. */
-#include "source.inc"
+#include "parser_source.inc"

@@ -14,19 +14,24 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
-- `dyn check`, `build` and `run` report syntax errors from the handwritten
-  parser instead of the Tree-sitter grammar, at the offending token and naming
-  what was expected (for example `expected ')', found 'bar'` instead of
-  `invalid syntax near 'ERROR'`). The parser resumes at the next statement or
-  declaration and reports up to 20 errors per file. Syntax errors in files whose `#target`
-  excludes the current platform are now errors too; they were silently ignored.
-  Batch commands no longer use Tree-sitter at all, including `--max-work`, deeply
-  nested sources and string literals containing `//` or `/*`, which the grammar
-  could reject (`"//x"`). The 1024-level nesting limit is measured on the new
-  parser's tree and can be one level stricter. Invalid UTF-8 in string and
-  character literals, and NUL bytes anywhere, are syntax errors. `dyn fmt`,
-  `docs`, `vet` and `query` use the new parser too. Editors still use
-  Tree-sitter.
+- The compiler no longer uses Tree-sitter. Its handwritten parser handles every
+  command and the language server, and source builds no longer need the
+  Tree-sitter library or a grammar checkout. Editor highlighting still uses the
+  separate `tree-sitter-dyn` grammar.
+- Syntax errors name the offending token and what was expected (for example
+  `expected ')', found 'bar'` instead of `invalid syntax near 'ERROR'`). The
+  parser resumes at the next statement or declaration and reports up to 20
+  errors per file, in `dyn check`/`build`/`run` and in editors.
+- Stricter syntax: errors in files whose `#target` excludes the current
+  platform are now reported (they were ignored); NUL bytes anywhere and invalid
+  UTF-8 in string or character literals are errors; string literals may not
+  span lines. String literals containing `//` or `/*` (such as `"//x"`), which
+  the grammar could reject, are accepted. The 1024-level nesting limit is
+  measured on the new parser's tree and can be one level stricter.
+- Language server: syntax diagnostics list every recovered error. Selection
+  ranges skip redundant nested ranges, and completion inside partially written
+  statements resolves more local and field types. Recovery from broken code is
+  per statement, so a broken statement contributes nothing until it parses.
 
 ## 0.1.0-preview.24
 

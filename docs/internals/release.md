@@ -33,13 +33,13 @@ publishing.
 | `just test` | Smoke programs and the full regression suite (`tests/run.py`) |
 | `just release-check` | The standalone release gate and a relocated SDK package |
 | `just bench-scale` | Compile-speed floors and linear growth on generated programs |
-| `just test-vendors` | Vendor ABI bindings and the compiler's required provider |
+| `just test-vendors` | Vendor ABI bindings and the Tree-sitter provider binding |
 | `just artifact dyn-sanitize` | A compiler built with ASan and UBSan; run tests with `DYN=build/dyn-sanitize` |
 
-The grammar is pinned in `grammar.lock.json`. Merge grammar changes in
-`tree-sitter-dyn` first, then move the pin; `just deps` fetches the pinned
-revision into `build/deps/tree-sitter-dyn`. Set `TS_DIR` to build against a
-local grammar checkout instead.
+Syntax changes land in the compiler's parser and in `tree-sitter-dyn` (editor
+highlighting) together. `grammar.lock.json` pins only the grammar that
+`just test-vendors` parses with to qualify the `vendor/tree_sitter` binding;
+`tools/fetch-grammar.py` fetches it.
 
 ## Support scope
 

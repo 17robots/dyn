@@ -11,7 +11,7 @@ containing exactly `fn main()` (optional `pub`, no arguments or return value). `
 also accepts library modules.
 
 Compiler resource contract currently limits one source file to 64 MiB, one module to 4096 source
-files, one merged module to 256 MiB, and syntax nesting to 1024 Tree-sitter tree levels. Exceeding a limit is a diagnostic, not an allocation
+files, one merged module to 256 MiB, and syntax nesting to 1024 levels. Exceeding a limit is a diagnostic, not an allocation
 failure or compiler crash.
 
 `use "std/terminal"` binds `terminal`; `use "std/io" raw_io` binds `raw_io`; `use "std/io" io,

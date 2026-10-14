@@ -26,7 +26,6 @@ try:
     if digest!=source['sha256']:raise RuntimeError('Runtime source hash mismatch')
     report['artifacts']['build/release-check/artifacts/'+source_archive.name]=digest
     report['compiler_sha256']=hashlib.sha256((BUILD/'dyn-release').read_bytes()).hexdigest()
-    report['grammar']=json.loads((ROOT/'grammar.lock.json').read_text())
     report['status']='passed'
 except BaseException as error:
     report.update(status='failed',error=str(error));raise
