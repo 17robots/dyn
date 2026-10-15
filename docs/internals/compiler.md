@@ -142,7 +142,12 @@ through `JUMP_SLOT` slots at load time (`BIND_NOW`, no lazy PLT), canonical PLT
 addresses for imported functions whose address is taken, and copy relocations
 for imported data read by non-PIC code. `--shared` output is linked in-process
 as well; as with lld, its default-visibility definitions stay preemptible.
-macOS, Windows and Wasm still use external linkers. `DYN_LINKER=external`
+macOS arm64 executables and dylibs link in-process too (`src/link_macho.c`):
+objects, archives, dylibs and `.tbd` stubs in; out comes a PIE or dylib whose
+imports bind at load time through `LC_DYLD_INFO_ONLY` (non-lazy stubs), with
+an export trie and the ad-hoc, linker-signed code signature Apple silicon
+requires. Debug info stays in the objects and no `__unwind_info` is written.
+Windows and Wasm still use external linkers. `DYN_LINKER=external`
 forces the external linker, including its ThinLTO, for differential checks.
 
 Standard-library imports resolve relative to compiler executable, never process working

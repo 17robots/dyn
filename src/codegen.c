@@ -7,6 +7,7 @@
 #include "frontend.h"
 #include "ir.h"
 #include "link_elf.h"
+#include "link_macho.h"
 #include "thinlto.h"
 #include "llvm_shim.h"
 #include "sema.h"
@@ -3122,6 +3123,43 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
   return dyn_codegen_module(source, object_path, ir_path, asm_path, release,
                             debug_info, shared, NULL);
 }
+/* Links macOS output with the runtime, explicit inputs and the libSystem
+   stub, then moves it into place. */
+static int link_macho(const char *runtime, const char *support, const char *const *objects, size_t object_count,
+                      const char *const *link_inputs, size_t link_input_count, const char *temporary,
+                      const char *output_path, bool shared, bool verbose) {
+  char system_stub[4096];
+  bool stub = dyn_host_runtime_file("libSystem.tbd", system_stub, sizeof(system_stub));
+  const char **inputs = calloc(object_count + link_input_count + 3, sizeof(*inputs));
+  if (!inputs)
+    return 2;
+  size_t count = 0;
+  inputs[count++] = runtime;
+  inputs[count++] = support;
+  for (size_t i = 0; i < object_count; ++i)
+    inputs[count++] = objects[i];
+  for (size_t i = 0; i < link_input_count; ++i)
+    inputs[count++] = link_inputs[i];
+  if (stub)
+    inputs[count++] = system_stub;
+  if (verbose) {
+    fprintf(stderr, "+ (built-in) link%s -o %s", shared ? " -dylib" : "", temporary);
+    for (size_t i = 0; i < count; ++i)
+      fprintf(stderr, " %s", inputs[i]);
+    fputc('\n', stderr);
+  }
+  DynMachOOptions options = {.shared = shared, .entry = "_dyn_start", .install_name = output_path};
+  int status = dyn_link_macho(inputs, count, temporary, &options);
+  free(inputs);
+  if (status)
+    return 2;
+  if (rename(temporary, output_path)) {
+    perror("error: rename output");
+    remove(temporary);
+    return 2;
+  }
+  return 0;
+}
 /* Symbols that the runtime and explicit link inputs define or use must stay
    visible; everything else in the bitcode may be internalized. */
 static int thin_link(const DynContext *context, const char *runtime, const char *support,
@@ -3247,6 +3285,15 @@ int dyn_link_executable_objects(const DynContext *context,
         lto_object_count, output_path, link_inputs, link_input_count, release, verbose, NULL, 0);
     dyn_thinlto_free(lto_objects, lto_object_count);
     return status;
+  }
+  /* macOS executables link in-process. */
+  if (darwin && !forced) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_macho_supported(link_inputs[i]);
+    if (supported)
+      return link_macho(runtime, support, object_paths, object_count, link_inputs, link_input_count,
+                        temporary, output_path, false, verbose);
   }
   /* Linux executables link in-process. */
   bool builtin = !thin && !forced && !strcmp(dyn_context_target(context)->kernel, "linux");
@@ -3524,6 +3571,15 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
   const char *external = getenv("DYN_LINKER");
+  if (darwin && !(external && !strcmp(external, "external"))) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_macho_supported(link_inputs[i]);
+    const char *object = object_path;
+    if (supported)
+      return link_macho(assembly, support, &object, 1, link_inputs, link_input_count, temporary, output_path,
+                        true, verbose);
+  }
   if (!strcmp(dyn_context_target(context)->kernel, "linux") &&
       !(external && !strcmp(external, "external"))) {
     bool builtin = true;

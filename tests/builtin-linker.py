@@ -2,9 +2,11 @@
 """x86-64 Linux executables link in-process: no external linker on PATH,
 archive members load on demand, unused sections are dropped, link errors name
 the symbol, and release ThinLTO output matches ld.lld's."""
+import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -216,4 +218,56 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
             assert run('qemu-aarch64', ours).stdout == run('qemu-aarch64', theirs).stdout
             assert arm_code(ours) == arm_code(theirs), f'AArch64 {mode}: built-in link differs from ld.lld'
 
-print('PASS built-in x86-64/AArch64 linker and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, lld code parity')
+    # macOS arm64: a signed executable and dylib whose ad-hoc signature
+    # hashes every page; with zig present, program code matches its link.
+    def verify_signature(path):
+        data = Path(path).read_bytes()
+        commands = struct.unpack_from('<I', data, 16)[0]
+        at, signature, entry = 32, None, False
+        for _ in range(commands):
+            command, size = struct.unpack_from('<II', data, at)
+            if command == 0x1d:
+                signature = struct.unpack_from('<II', data, at + 8)
+            entry |= command == 0x80000028
+            at += size
+        assert signature, f'{path}: no LC_CODE_SIGNATURE'
+        offset, size = signature
+        blob = data[offset:offset + size]
+        assert struct.unpack_from('>I', blob)[0] == 0xfade0cc0
+        directory = blob[struct.unpack_from('>I', blob, 16)[0]:]
+        magic, _, _, flags, hashes, _, _, slots, limit, hash_size, hash_type, _, shift = struct.unpack_from('>IIIIIIIIIBBBB', directory)
+        assert magic == 0xfade0c02 and flags == 0x20002 and hash_size == 32 and hash_type == 2 and limit == offset
+        for page in range(slots):
+            chunk = data[page << shift:min((page + 1) << shift, limit)]
+            assert hashlib.sha256(chunk).digest() == directory[hashes + 32 * page:hashes + 32 * page + 32], f'{path}: page {page}'
+        return entry
+
+    (root/'library').mkdir()
+    (root/'library'/'main.dyn').write_text('pub fn add_one(value: i32) i32 {\n  return value + 1\n}\n')
+    for mode in ([], ['--release']):
+        mac = root/'mac-builtin'
+        run(DYN, 'build', root/'release', '--target', 'aarch64-macos', '--output', mac, *mode,
+            env=dict(bare, DYN_CACHE_DIR=str(root/'mac-a')))
+        assert verify_signature(mac), 'macOS executable has no LC_MAIN'
+        if shutil.which('zig') and shutil.which('llvm-objdump'):
+            reference = root/'mac-zig'
+            run(DYN, 'build', root/'release', '--target', 'aarch64-macos', '--output', reference, *mode,
+                env=dict(os.environ, DYN_LINKER='external', DYN_CACHE_DIR=str(root/'mac-b')))
+
+            def mac_code(path):
+                listing = run('llvm-objdump', '-d', '--no-show-raw-insn', '--section=__TEXT,__text', path).stdout
+                lines = []
+                for line in listing.splitlines():
+                    if not re.match(r'^ *[0-9a-f]+:', line):
+                        continue
+                    text = re.sub(r'^ *[0-9a-f]+:\s+', '', line).split(';')[0]
+                    text = re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'#-?[0-9]+', '#N', re.sub(r'0x[0-9a-f]+', 'X', text))))
+                    lines.append(re.sub(r'\[(x[0-9]+), #N\]', r'[\1]', text.rstrip()))
+                return lines
+
+            assert mac_code(mac) == mac_code(reference), f'macOS {mode}: program code differs from the zig link'
+    dylib = root/'libadd.dylib'
+    run(DYN, 'build', root/'library', '--shared', '--target', 'aarch64-macos', '--output', dylib, env=bare)
+    assert not verify_signature(dylib), 'dylib has LC_MAIN'
+
+print('PASS built-in ELF and Mach-O linkers and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, signed macOS output, code parity')
