@@ -20,7 +20,11 @@ servers so they pick up the new `dyn`.
   separate `tree-sitter-dyn` grammar.
 - Linux executables and shared libraries (x86-64 and AArch64) link
   in-process, x86-64 release ThinLTO included, so no external linker is
-  needed; cross-building for AArch64 Linux no longer needs `ld.lld` or Zig. Release code is the same as before: ThinLTO
+  needed; cross-building for AArch64 Linux no longer needs `ld.lld` or Zig.
+- macOS arm64 executables and dylibs link in-process and carry an ad-hoc code
+  signature, so building for macOS needs neither `ld64.lld` nor Zig. A
+  `--shared` dylib's install name is now its output path (it was the
+  temporary `.tmp` path). Release code is the same as before: ThinLTO
   runs inside the compiler with `ld.lld`'s settings, including profile-guided
   function ordering. `--link` and `#link` accept objects, `ar` archives,
   shared libraries and GNU linker scripts, and `--shared` libraries link
