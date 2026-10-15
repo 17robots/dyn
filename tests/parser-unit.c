@@ -92,7 +92,7 @@ static void options_contract(void) {
 int main(void) {
   options_contract();
   allocations = 0; fail_at = 0;
-  char source[8192]; size_t length = 0;
+  char source[16384]; size_t length = 0;
   for (unsigned i = 0; i < 500; ++i) {
     memcpy(source + length, i ? "+a*b" : "a*b", i ? 4 : 3);
     length += i ? 4 : 3;
@@ -143,8 +143,8 @@ int main(void) {
   assert(exp_parse(chain, chain_length, &tree));
   assert(tree.count == chain_length);
   free(chain); exp_free(&tree);
-  memset(source, '(', 300); source[300] = 'a'; memset(source + 301, ')', 300);
-  assert(!exp_parse(source, 601, &tree));
+  memset(source, '(', 1100); source[1100] = 'a'; memset(source + 1101, ')', 1100);
+  assert(!exp_parse(source, 2201, &tree));
   assert(tree.root == NONE && !strcmp(tree.error, "expression nesting limit exceeded"));
   assert(exp_parse("a", 1, &tree));
   exp_free(&tree);
@@ -161,8 +161,8 @@ int main(void) {
   exp_free(&tree);
   length = 0;
   memcpy(source, "fn f(){", 7); length = 7;
-  for (unsigned i = 0; i < 300; ++i) { memcpy(source + length, "if true{", 8); length += 8; }
-  memset(source + length, '}', 301); length += 301;
+  for (unsigned i = 0; i < 1100; ++i) { memcpy(source + length, "if true{", 8); length += 8; }
+  memset(source + length, '}', 1101); length += 1101;
   assert(!exp_parse_source(source, length, &tree));
   assert(tree.root == NONE && tree.error_offset <= length);
   assert(strstr(tree.error, "nesting limit exceeded"));

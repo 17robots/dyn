@@ -5,7 +5,7 @@
 Dyn uses a thin vertical slice from source to native executable:
 
 ```text
-module directory -> source manager -> Tree-sitter -> owned AST -> semantic checks
+module directory -> source manager -> handwritten parser -> owned AST -> semantic checks
                  -> typed IR -> LLVM C ABI -> ELF object -> linker -> executable
 ```
 
@@ -141,8 +141,8 @@ its ABI is documented in [the std ABI](standard-library-abi.md).
 `tools/build.py` compiles each source file to its own object in parallel (`JOBS` or `--jobs` sets
 the worker count) and relinks only when an object changes. `just per-file` builds a single-command
 per-file binary.
-The parser comes from `tree-sitter-dyn` at the revision in `grammar.lock.json`;
-`just deps` fetches it. `just test` runs the regression suite. `just artifact
+The parser is part of the compiler (`src/parser.c`); building needs no grammar
+checkout. `just test` runs the regression suite. `just artifact
 dyn-sanitize` builds the compiler with ASan and UBSan; CI runs the compiler
 contracts and generics tests with it. A minimized regression case belongs in
 `tests/` next to the fix.

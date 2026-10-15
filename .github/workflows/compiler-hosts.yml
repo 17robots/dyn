@@ -30,6 +30,7 @@ jobs:
           cache: false
       - name: Install host dependencies
         run: |
+          # Tree-sitter only qualifies the vendor/tree_sitter binding.
           brew install llvm@19 lld@19 tree-sitter
           echo "$(brew --prefix llvm@19)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld@19)/bin" >> "$GITHUB_PATH"
@@ -40,7 +41,6 @@ jobs:
           CLANG: clang
           LLVM_CONFIG: llvm-config
         run: |
-          python3 tools/fetch-grammar.py
           python3 tools/build.py host
           python3 tests/compiler-host.py
           python3 tests/lsp-navigation.py
@@ -50,6 +50,7 @@ jobs:
           python3 tests/concurrency-net-host.py
           python3 tests/dns-host.py
           python3 tests/watch-macos.py
+          python3 tools/fetch-grammar.py
           python3 tests/vendor-provider-host.py
           python3 tools/package-host-sdk.py
           python3 tests/mise-package.py "build/dist/dyn-$DYN_VERSION-macos-aarch64.tar.gz" --version "$DYN_VERSION" --report build/dist/package-macos-aarch64.json
@@ -94,7 +95,6 @@ jobs:
           CLANG: clang
           LLVM_CONFIG: llvm-config
         run: |
-          python tools/fetch-grammar.py
           python tools/build.py host
           python tests/compiler-host.py
           python tests/lsp-navigation.py
@@ -104,6 +104,7 @@ jobs:
           python tests/concurrency-net-host.py
           python tests/dns-host.py
           python tests/watch-windows.py
+          python tools/fetch-grammar.py
           python tests/vendor-provider-host.py
           python tests/windows-sockets.py
           python tools/package-host-sdk.py

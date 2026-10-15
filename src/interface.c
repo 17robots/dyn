@@ -1,16 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
-#include "dyn_syntax.h"
 #include "dyn_compact.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <tree_sitter/api.h>
 #include <unistd.h>
 
-extern const TSLanguage *tree_sitter_dyn(void);
 
 #define DYNMI_VERSION 1u
 #define DYNMI_SCHEMA 2u
@@ -107,6 +104,26 @@ static int string_compare(const void *a, const void *b) {
 
 int dyn_interface_build(const DynSources *sources, DynInterface *result) {
   memset(result, 0, sizeof(*result));
+  bool unprepared = false;
+  for (size_t i = 0; i < sources->count; ++i) unprepared |= !sources->items[i].compact;
+  if (unprepared) {
+    /* Text-only sources: build from privately parsed copies. */
+    DynSource *items = calloc(sources->count ? sources->count : 1, sizeof(*items));
+    if (!items) return 1;
+    int status = 0;
+    for (size_t i = 0; i < sources->count && !status; ++i) {
+      items[i] = sources->items[i];
+      if (items[i].compact && !exp_snapshot_retain(items[i].compact)) items[i].compact = NULL, status = 1;
+      else if (!dyn_source_prepare(&items[i])) status = 1;
+    }
+    if (!status) {
+      DynSources prepared = {items, sources->count};
+      status = dyn_interface_build(&prepared, result);
+    }
+    for (size_t i = 0; i < sources->count; ++i) exp_snapshot_release(items[i].compact);
+    free(items);
+    return status;
+  }
   char **decls = NULL;
   size_t count = 0;
   InterfaceConstant *constants = NULL;
@@ -116,140 +133,14 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
     const DynSource *s = &sources->items[si];
     if (dyn_source_target_enabled(s) == 0)
       continue;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
     const ExpSnapshotTree *compact=dyn_compact_tree(s);
-    int compatible=compact ? interface_compact_compatible(s,compact) : 0;
-    if(compatible<0) goto fail;
-    if(compatible) {
-      int status=interface_compact_declarations(s,compact,constants,constant_count,&decls,&count);
-      if(status==3) {
-        for(size_t i=0;i<count;++i) free(decls[i]);
-        free(decls); free(constants); return 3;
-      }
-      if(status) goto fail;
-      continue;
+    if (!compact || compact->error_count) goto fail;
+    int status=interface_compact_declarations(s,compact,constants,constant_count,&decls,&count);
+    if(status==3) {
+      for(size_t i=0;i<count;++i) free(decls[i]);
+      free(decls); free(constants); return 3;
     }
-#endif
-    TSTree *tree = dyn_source_tree(s);
-    if (!tree || ts_node_has_error(ts_tree_root_node(tree))) {
-      if (tree)
-        ts_tree_delete(tree);
-      goto fail;
-    }
-    TSNode root = ts_tree_root_node(tree);
-    for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-      TSNode wrapper = ts_node_named_child(root, i);
-      if (strcmp(ts_node_type(wrapper), "declaration"))
-        continue;
-      TSNode d = dyn_syntax_declaration_node(wrapper);
-      const char *kind = ts_node_type(d);
-      bool representation = !strcmp(kind, "struct") || !strcmp(kind, "enum") ||
-                            !strcmp(kind, "type_alias") ||
-                            (!strcmp(kind, "const_variable") &&
-                             interface_constant_needed(constants, constant_count, d, s));
-      if (!dyn_syntax_public(wrapper) && !representation)
-        continue;
-      uint32_t a = ts_node_start_byte(wrapper), b = ts_node_end_byte(wrapper);
-      if (!strcmp(ts_node_type(d), "fn")) {
-        for (uint32_t k = 0; k < ts_node_named_child_count(d); ++k) {
-          TSNode child = ts_node_named_child(d, k);
-          if (!strcmp(ts_node_type(child), "block")) {
-            b = ts_node_start_byte(child);
-            break;
-          }
-        }
-        size_t raw_length = (size_t)(b - a) + 4;
-        char *raw = malloc(raw_length);
-        if (!raw) {
-          ts_tree_delete(tree);
-          goto fail;
-        }
-        int written =
-            snprintf(raw, raw_length, "%.*s{}", (int)(b - a), s->text + a);
-        size_t length = 0;
-        char *text =
-            written > 0 ? canonical(raw, (size_t)written, &length) : NULL;
-        free(raw);
-        if (!text) {
-          ts_tree_delete(tree);
-          goto fail;
-        }
-        char **next = realloc(decls, (count + 1) * sizeof(*next));
-        if (!next) {
-          free(text);
-          ts_tree_delete(tree);
-          goto fail;
-        }
-        decls = next;
-        decls[count++] = text;
-        continue;
-      }
-      if (!strcmp(kind, "variable")) {
-        TSNode name = dyn_syntax_name(d), type = {0};
-        for (uint32_t k = 1; k < ts_node_named_child_count(d); ++k) {
-          TSNode child = ts_node_named_child(d, k);
-          if (!strcmp(ts_node_type(child), "type_qualifier") ||
-              !strcmp(ts_node_type(child), "type")) {
-            type = child;
-            break;
-          }
-        }
-        if (ts_node_is_null(type)) {
-          ts_tree_delete(tree);
-          for (size_t k = 0; k < count; ++k)
-            free(decls[k]);
-          free(decls);
-          free(constants);
-          return 3;
-        }
-        TSNode actual = !strcmp(ts_node_type(type), "type_qualifier")
-                            ? ts_node_named_child(type, 0)
-                            : type;
-        uint32_t na = ts_node_start_byte(name), nb = ts_node_end_byte(name),
-                 ta = ts_node_start_byte(actual), tb = ts_node_end_byte(actual);
-        size_t raw_length = (nb - na) * 2 + (tb - ta) + 21;
-        char *raw = malloc(raw_length);
-        if (!raw) {
-          ts_tree_delete(tree);
-          goto fail;
-        }
-        int written = snprintf(raw, raw_length, "pub extern %.*s \"%.*s\":%.*s",
-                               (int)(nb - na), s->text + na, (int)(nb - na),
-                               s->text + na, (int)(tb - ta), s->text + ta);
-        size_t length = 0;
-        char *text =
-            written > 0 ? canonical(raw, (size_t)written, &length) : NULL;
-        free(raw);
-        if (!text) {
-          ts_tree_delete(tree);
-          goto fail;
-        }
-        char **next = realloc(decls, (count + 1) * sizeof(*next));
-        if (!next) {
-          free(text);
-          ts_tree_delete(tree);
-          goto fail;
-        }
-        decls = next;
-        decls[count++] = text;
-        continue;
-      }
-      size_t length = 0;
-      char *text = canonical(s->text + a, b - a, &length);
-      if (!text) {
-        ts_tree_delete(tree);
-        goto fail;
-      }
-      char **next = realloc(decls, (count + 1) * sizeof(*next));
-      if (!next) {
-        free(text);
-        ts_tree_delete(tree);
-        goto fail;
-      }
-      decls = next;
-      decls[count++] = text;
-    }
-    ts_tree_delete(tree);
+    if(status) goto fail;
   }
   if (count)
     qsort(decls, count, sizeof(*decls), string_compare);

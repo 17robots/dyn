@@ -2408,7 +2408,7 @@ static bool local_facts_build(DynIrProgram *ir) {
   }
   return true;
 }
-static int codegen_prepare(const DynSource *source, DynSource *owned_source,
+static int codegen_prepare(const DynSource *source,
                            bool shared, const char *owner_key, DynIrProgram *ir) {
   memset(ir, 0, sizeof(*ir));
   DynAstProgram ast = {0};
@@ -2425,12 +2425,6 @@ static int codegen_prepare(const DynSource *source, DynSource *owned_source,
     dyn_ast_program_free(&ast);
     return 1;
   }
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-  if (owned_source && ast.compact_complete)
-    dyn_source_release_batch_trees(owned_source);
-#else
-  (void)owned_source;
-#endif
   struct timespec phase = dyn_timing_start(&source->context);
   if (!dyn_ir_lower(&ast, source, ir)) {
     fprintf(stderr, "error: failed to lower typed Dyn IR\n");
@@ -2461,14 +2455,12 @@ static int codegen_prepare(const DynSource *source, DynSource *owned_source,
 }
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, DynIrProgram *ir) {
-  return codegen_prepare(source, NULL, shared, owner_key, ir);
+  return codegen_prepare(source, shared, owner_key, ir);
 }
-#ifdef DYN_EXPERIMENT_COMPACT_AST
 int dyn_codegen_prepare_owned(DynSource *source, bool shared,
                               const char *owner_key, DynIrProgram *ir) {
-  return codegen_prepare(source, source, shared, owner_key, ir);
+  return codegen_prepare(source, shared, owner_key, ir);
 }
-#endif
 int dyn_codegen_module(const DynSource *source, const char *object_path,
                        const char *ir_path, const char *asm_path, bool release,
                        bool debug_info, bool shared, const char *owner_key) {

@@ -128,7 +128,7 @@ production artifact, build both first, then run on an idle machine:
 
 ```sh
 python3 tools/compare-compilers.py --reference build/dyn-release \
-  --candidate build/dyn-compact-first --runs 5 \
+  --candidate path/to/candidate/dyn --runs 5 \
   --output build/compiler-comparison
 ```
 
@@ -142,65 +142,10 @@ changes. Override `--lines`, `--flat`, and `--jobs` to choose workload sizes and
 parallelism. A short correctness smoke uses `--lines 1000 --flat 10 --runs 1`;
 its timings are not evidence of a general speedup.
 
-A local paired run on 2026-10-13 compared the production compiler with the
-compact-source consumer candidate, before direct AST lowering and compact module
-rewrite integration. Three alternating samples used `--jobs 1`, `--no-cache`, and
-identical generated sources. The result is a transition baseline, not evidence
-for changing the default parser.
-
-| Workload | Check, production / candidate | Debug build, production / candidate | Release build, production / candidate | Check peak RSS, production / candidate |
-| --- | --- | --- | --- | --- |
-| 100k lines | 0.138 / 0.135 s | 2.043 / 2.021 s | 13.614 / 13.588 s | 128.5 / 152.2 MiB |
-| 500k lines | 0.689 / 0.664 s | 11.607 / 11.389 s | 70.060 / 69.358 s | 511.0 / 620.9 MiB |
-| 4,000 files | 0.148 / 0.124 s | 0.710 / 0.692 s | 1.157 / 1.129 s | 103.6 / 103.6 MiB |
-
-The candidate retained both parser representations. The large-source memory
-increase remains a migration cost to address. The measured changes are small for
-builds dominated by LLVM. The serial build policy differs from earlier parallel
-scale measurements, so their absolute build times are not directly comparable.
-All diagnostics and executed outputs matched. Local raw samples, commands, binary
-hashes, runtime inputs, and source manifests are in
-`build/compiler-paired-sources/results.json`. For focused frontend measurements,
-`--modes check` skips debug and release builds; the default still measures all
-three modes.
-
-Direct AST lowering was then measured separately, first releasing Tree-sitter
-trees after analysis and then releasing them before source merge/analysis. Each
-run used three alternating samples and the same serial job policy:
-
-| Candidate stage | 500k check, production / candidate | 500k check peak RSS, production / candidate | 500k debug build, production / candidate |
-| --- | --- | --- | --- |
-| Direct AST, post-analysis release | 0.699 / 0.457 s | 510.8 / 624.6 MiB | 12.089 / 11.751 s |
-| Direct AST, pre-analysis release | 0.703 / 0.592 s | 510.4 / 611.6 MiB | 11.976 / 11.719 s |
-
-The earlier release moved tree destruction onto the check command's timed path;
-it did not remove the simultaneous representations during loading and rewriting.
-Its modest peak-memory reduction therefore accompanied slower checks than the
-prior candidate, although both candidates beat their paired production baseline.
-This is not sufficient evidence to promote either parser artifact. Diagnostics
-and executed outputs matched in both runs. Evidence is in
-`build/compiler-paired-ast/results.json` and
-`build/compiler-paired-early-release/results.json`.
-
-The separately qualified compact-first candidate avoids initial Tree-sitter trees
-for its certified input domain. A subsequent quiet run used three alternating
-samples with **eight jobs**, cold compiler caches and matching executed outputs:
-
-| Workload | Check, production / candidate | Debug build, production / candidate | Release build, production / candidate | Check peak RSS, production / candidate |
-| --- | --- | --- | --- | --- |
-| 100k lines | 0.143 / 0.072 s | 0.482 / 0.383 s | 2.045 / 1.929 s | 129.3 / 83.9 MiB |
-| 500k lines | 0.695 / 0.362 s | 2.571 / 2.111 s | 10.211 / 9.733 s | 510.9 / 304.6 MiB |
-| 4,000 files | 0.141 / 0.038 s | 0.707 / 0.590 s | 1.137 / 1.009 s | 104.6 / 104.6 MiB |
-
-The 500k-line check is 1.92 times faster and uses about 40% less peak memory;
-debug builds improve 1.22 times and release builds 1.05 times on that workload.
-Absolute build times are not directly comparable to the earlier single-job runs.
-LLVM still dominates release compilation. The candidate remains opt-in and
-retains explicit syntax/depth/legacy-lexer fallbacks; the gains do not imply that
-Tree-sitter has been removed from editor or recovery paths. Raw samples and
-provenance are in `build/compiler-paired-compact-first/results.json`. This snapshot
-includes the source-map NUL fix and string-lexer fallbacks but precedes the later
-foreign-global initializer correction; the benchmark has no aliased foreign globals.
+During the parser migration (preview 24) the handwritten parser made the
+500k-line `check` about 1.9 times faster with about 40% less peak memory than the
+Tree-sitter frontend, at eight jobs with matching outputs. Raw samples were local
+build artifacts and are not retained.
 
 Release-policy profiling uses an isolated standard-library workload and alternates
 policy order. Run it separately from builds and other benchmarks:

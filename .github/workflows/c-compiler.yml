@@ -25,18 +25,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-compiler
       - run: just release-check
-      - name: Differential expression parser experiment
-        run: just test-parser-experiment
-      - name: Qualify compact declaration consumer
-        run: just test-compact-declarations
-      - name: Qualify retained compact source consumers
-        run: just test-compact-sources
-      - name: Qualify direct compact AST lowering
-        run: just test-compact-ast
-      - name: Qualify compact-first validation
-        run: just test-compact-first
-      - name: Paired compiler equivalence and provenance
-        run: python3 tools/compare-compilers.py --candidate build/dyn-compact-sources --lines 1000 --flat 10 --runs 1 --output build/compiler-paired-smoke
       - name: Differential scalar backend experiment
         run: just test-backend-experiment
       - name: Native debug compiler integration
@@ -53,7 +41,7 @@ jobs:
         run: |
           ulimit -s 1024
           python3 tests/lsp-navigation.py
-      - name: SDK without system LLVM or Tree-sitter
+      - name: SDK without system LLVM
         run: bash tests/package-container.sh "build/dist/dyn-$DYN_VERSION-linux-x86_64.tar.gz" "$DYN_VERSION"
       - name: Compiler contracts under sanitizers
         env:
@@ -64,16 +52,11 @@ jobs:
           just artifact dyn-sanitize
           python3 tests/compiler-contracts.py
           python3 tests/generics.py
-          python3 tools/parser-experiment/check.py --sanitize --samples 100
-          python3 tools/parser-experiment/check-declarations.py --sanitize
-          python3 tools/parser-experiment/check-sources.py --sanitize
-          python3 tools/parser-experiment/check-ast.py --sanitize --corpus std --corpus tests
-          python3 tools/parser-experiment/check-depth.py --sanitize --corpus std --corpus tests
-          python3 tools/parser-experiment/check-first.py --sanitize
-          python3 tools/parser-experiment/check-scopes.py --sanitize
-          python3 tools/parser-experiment/check-refs.py --sanitize
-          python3 tools/parser-experiment/check-rewrite.py --sanitize
-          python3 tools/parser-experiment/check-interfaces.py --sanitize
+          for unit in parser-recovery parser-unit parser-snapshot; do
+            cc -std=c11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -D_POSIX_C_SOURCE=200809L \
+              -Isrc tests/$unit.c $([ $unit = parser-recovery ] && echo src/parser.c src/snapshot.c) -pthread -o build/$unit-sanitize
+            ./build/$unit-sanitize
+          done
           BUILD=build/backend-sanitize CFLAGS='-O1 -fsanitize=address,undefined -fno-omit-frame-pointer' python3 tools/backend-experiment/build.py
           BUILD=build/backend-sanitize DYN=./build/dyn-release python3 tools/backend-experiment/test.py
       - uses: actions/upload-artifact@v4
@@ -83,5 +66,4 @@ jobs:
           path: |
             build/release-check/
             build/readiness/
-            build/compact-first-acceptance.*/run/
             build/dist/

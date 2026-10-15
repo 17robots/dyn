@@ -9,7 +9,8 @@ and the compiler; start with [idiomatic Dyn](docs/guide/idiomatic-dyn.md).
 
 This repository contains the C bootstrap compiler, target runtime, SDK (`std/`
 and optional native bindings in `vendor/`), compiler tools and regression tests.
-The grammar lives in [17robots/tree-sitter-dyn](https://github.com/17robots/tree-sitter-dyn).
+The editor grammar lives in [17robots/tree-sitter-dyn](https://github.com/17robots/tree-sitter-dyn);
+the compiler has its own parser.
 Editor extensions and applications are separate projects.
 
 Preview 7 fixes repeated compilation in `dyn run`, including invocation through
@@ -39,7 +40,7 @@ cache distinguishes this mode from normal release builds.
 | macOS 15+, Apple Silicon | `dyn-0.1.0-preview.24-macos-aarch64.tar.gz` |
 
 The SDKs include the compiler, standard library, runtime, host linker and library
-dependencies. LLVM, Tree-sitter, MSYS2 and Homebrew are not required to use the
+dependencies. LLVM, MSYS2 and Homebrew are not required to use the
 prebuilt SDKs. Choose either mise or a manual download below.
 
 ### With mise
@@ -134,10 +135,8 @@ equivalents. `std/terminal` retains Linux terminal controls and key decoding.
 
 The executable [memory patterns](docs/guide/memory-patterns.md) cover fixed budgets,
 constant array sizes, explicit growth, scratch, retained output, and failure behavior.
-For local compiler/grammar development in the combined workspace, set
-`TS_DIR` to the sibling `tree-sitter-dyn` checkout containing the matching generated
-parser. The workspace justfile does this automatically. The standalone grammar pin
-must be advanced to the matching published grammar before releasing these syntax changes.
+Syntax changes go into the compiler's parser (`src/parser.c`) and, for editor
+highlighting, the sibling `tree-sitter-dyn` grammar in the same change.
 
 The current source tree provides these APIs and ownership contracts. Source changes
 may be newer than the latest published preview.
@@ -175,8 +174,8 @@ compiler written in Dyn. The expression compiler tests scanning, precedence,
 symbol lookup, bounded output and diagnostics; it is not a self-hosted Dyn compiler
 or a bootstrap-equivalence test.
 
-Native host CI executes stdlib contracts and the Tree-sitter provider lifecycle
-against each host's installed library. Linux also qualifies the selected providers
+Native host CI executes stdlib contracts and the `vendor/tree_sitter` provider
+lifecycle against each host's installed library. Linux also qualifies the selected providers
 in `just test-vendors-native`. These gates qualify their named providers and host
 versions, not every optional provider or every ABI/version combination.
 
@@ -228,20 +227,14 @@ Source builds require their build-time libraries and linker to remain installed.
 ### Linux x64 (Ubuntu 24.04)
 
 Run in Bash. Building requires a C++ compiler and LLVM development headers for
-the ThinLTO writer, plus the C compiler. Install LLVM/Clang/LLD 19 and the pinned
-Tree-sitter runtime:
+the ThinLTO writer, plus the C compiler. Install LLVM/Clang/LLD 19:
 
 ```sh
 sudo apt-get update
 sudo apt-get install -y build-essential python3 clang-19 llvm-19-dev lld-19
-mkdir -p build/deps
-git clone --depth 1 --branch v0.25.8 https://github.com/tree-sitter/tree-sitter build/deps/tree-sitter-runtime
-sudo make -C build/deps/tree-sitter-runtime install PREFIX=/usr/local
-sudo ldconfig
 export LLVM_CONFIG=llvm-config-19
 export CLANG=clang-19
 export PATH=/usr/lib/llvm-19/bin:$PATH
-python3 tools/fetch-grammar.py
 python3 tools/build.py host
 python3 tests/compiler-host.py
 ./build/dyn-release version
@@ -253,11 +246,9 @@ Install Xcode Command Line Tools (`xcode-select --install`) and
 [Homebrew](https://brew.sh/), then run in Bash or Zsh:
 
 ```sh
-brew install llvm@19 lld@19 tree-sitter python
+brew install llvm@19 lld@19 python
 export PATH="$(brew --prefix llvm@19)/bin:$(brew --prefix lld@19)/bin:$PATH"
-export CPPFLAGS="-I$(brew --prefix tree-sitter)/include -L$(brew --prefix tree-sitter)/lib"
 export CC=clang CLANG=clang LLVM_CONFIG=llvm-config
-python3 tools/fetch-grammar.py
 python3 tools/build.py host
 python3 tests/compiler-host.py
 ./build/dyn-release version
@@ -270,9 +261,8 @@ Install [MSYS2](https://www.msys2.org/) and open its **CLANG64** shell. Run
 Clone the repository above if you have not already, then run from its directory:
 
 ```sh
-pacman -S --needed git mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-libtree-sitter
+pacman -S --needed git mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-python
 export CC=clang CLANG=clang LLVM_CONFIG=llvm-config
-python tools/fetch-grammar.py
 python tools/build.py host
 python tests/compiler-host.py
 ./build/dyn-release.exe version
@@ -280,8 +270,6 @@ python tests/compiler-host.py
 
 Use `./build/dyn-release run path/to/project` (`.exe` on Windows) to try your
 source build. Keep the compiler in its build directory so it can locate the SDK.
-The grammar fetch uses `grammar.lock.json`; generated sources stay under ignored
-`build/deps/tree-sitter-dyn`. Set `TS_DIR` for a separate generated grammar checkout.
 
 ## Development and preview limits
 

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "lsp_internal.h"
+#include "dyn_compact.h"
 
 typedef struct {
   const char *text;
@@ -24,7 +25,7 @@ static void lsp_collect_diagnostic(const char *severity, const char *path,
                                    unsigned end_line, unsigned end_column,
                                    const char *message, void *context);
 static int lsp_identifier_compare(const void *left, const void *right);
-static bool lsp_usage_collect(LspUsage *usage, TSNode node, const char *text);
+static bool lsp_usage_collect(LspUsage *usage, const ExpSnapshotTree *tree, const char *text);
 static int lsp_binding_compare(const void *left, const void *right);
 static void lsp_binding_index(LspUsage *usage);
 static LspUsage lsp_usage_build(LspDocument *documents, size_t count,
@@ -32,8 +33,8 @@ static LspUsage lsp_usage_build(LspDocument *documents, size_t count,
 static size_t lsp_usage_count(const LspUsage *usage, const char *name);
 static void lsp_usage_free(LspUsage *usage);
 static bool lsp_binding_used(const LspUsage *usage, LspDocument *document,
-                             TSNode name);
-static void lsp_unused_nodes(TSNode node, LspDocument *document,
+                             DynNode name);
+static void lsp_unused_nodes(const ExpSnapshotTree *tree, LspDocument *document,
                              const LspUsage *usage, char *body, size_t capacity,
                              size_t *at, bool *comma);
 static bool lsp_overlay_sources(DynSources *sources, LspDocument *documents,
@@ -74,26 +75,19 @@ static int lsp_identifier_compare(const void *left, const void *right) {
   return result ? result : (a->length > b->length) - (a->length < b->length);
 }
 
-static bool lsp_usage_collect(LspUsage *usage, TSNode node, const char *text) {
-  const char *kind = ts_node_type(node);
-  if (!strcmp(kind, "use"))
-    return true;
-  if (!strcmp(kind, "identifier")) {
-    TSNode base = node, parent = ts_node_parent(base);
-    while (!ts_node_is_null(parent) &&
-           !strcmp(ts_node_type(parent), "primary") &&
-           ts_node_named_child_count(parent) == 1) {
-      base = parent;
-      parent = ts_node_parent(base);
-    }
-    bool qualified = !ts_node_is_null(parent) &&
-                     (!strcmp(ts_node_type(parent), "field_access") ||
-                      !strcmp(ts_node_type(parent), "field_type")) &&
-                     ts_node_named_child_count(parent) > 1 &&
-                     ts_node_start_byte(base) ==
-                         ts_node_start_byte(ts_node_named_child(parent, 0));
-    if (!qualified)
-      return true;
+/* Qualifiers: the first name of a field access or qualified type. */
+static bool lsp_usage_collect(LspUsage *usage, const ExpSnapshotTree *tree, const char *text) {
+  for (uint32_t id = 0; tree && id < tree->count; ++id) {
+    DynNode node = dyn_node(tree, id), parent = dyn_node_parent(node);
+    if (!dyn_node_is(node, EXP_NAME) || dyn_node_null(parent) ||
+        (!dyn_node_is(parent, EXP_FIELD) && !dyn_node_is(parent, EXP_FIELD_TYPE)) ||
+        dyn_node_first(parent).id != id || dyn_node_child_count(parent) < 2)
+      continue;
+    bool imported = false;
+    for (DynNode up = parent; !dyn_node_null(up); up = dyn_node_parent(up))
+      if (dyn_node_is(up, SRC_USE)) imported = true;
+    if (imported)
+      continue;
     if (usage->count == usage->capacity) {
       size_t capacity = usage->capacity ? usage->capacity * 2 : 128;
       LspIdentifier *items = realloc(usage->items, capacity * sizeof(*items));
@@ -102,12 +96,9 @@ static bool lsp_usage_collect(LspUsage *usage, TSNode node, const char *text) {
       usage->items = items;
       usage->capacity = capacity;
     }
-    uint32_t start = ts_node_start_byte(node), end = ts_node_end_byte(node);
+    uint32_t start = dyn_node_start(node), end = dyn_node_end(node);
     usage->items[usage->count++] = (LspIdentifier){text + start, end - start};
   }
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
-    if (!lsp_usage_collect(usage, ts_node_named_child(node, i), text))
-      return false;
   return true;
 }
 
@@ -180,8 +171,8 @@ static LspUsage lsp_usage_build(LspDocument *documents, size_t count,
     char *other = lsp_directory(lsp_file_path(documents[i].uri));
     if (!other)
       usage.complete = false;
-    else if (!strcmp(directory, other) && documents[i].tree &&
-             !lsp_usage_collect(&usage, ts_tree_root_node(documents[i].tree),
+    else if (!strcmp(directory, other) && documents[i].syntax &&
+             !lsp_usage_collect(&usage, lsp_tree(&documents[i]),
                                 documents[i].text))
       usage.complete = false;
     free(other);
@@ -190,29 +181,17 @@ static LspUsage lsp_usage_build(LspDocument *documents, size_t count,
     if (dyn_sources_load(NULL, directory, &usage.sources))
       usage.complete = false;
     else {
-      TSParser *parser = ts_parser_new();
-      if (!parser || !ts_parser_set_language(parser, tree_sitter_dyn()))
-        usage.complete = false;
-      else
-        for (size_t i = 0; i < usage.sources.count && usage.complete; ++i) {
-          DynSource *source = &usage.sources.items[i];
-          bool opened = false;
-          for (size_t j = 0; j < count; ++j)
-            if (!strcmp(source->path, lsp_file_path(documents[j].uri)))
-              opened = true;
-          if (opened)
-            continue;
-          TSTree *tree = dyn_source_tree(source);
-          if (!tree)
-            usage.complete = false;
-          else {
-            usage.complete = lsp_usage_collect(&usage, ts_tree_root_node(tree),
-                                               source->text);
-            ts_tree_delete(tree);
-          }
-        }
-      if (parser)
-        ts_parser_delete(parser);
+      for (size_t i = 0; i < usage.sources.count && usage.complete; ++i) {
+        DynSource *source = &usage.sources.items[i];
+        bool opened = false;
+        for (size_t j = 0; j < count; ++j)
+          if (!strcmp(source->path, lsp_file_path(documents[j].uri)))
+            opened = true;
+        if (opened)
+          continue;
+        const ExpSnapshotTree *tree = dyn_compact_tree(source);
+        usage.complete = tree && lsp_usage_collect(&usage, tree, source->text);
+      }
     }
   }
   free(directory);
@@ -251,10 +230,10 @@ static void lsp_usage_free(LspUsage *usage) {
 }
 
 static bool lsp_binding_used(const LspUsage *usage, LspDocument *document,
-                             TSNode name) {
+                             DynNode name) {
   if (!usage->semantic.checked)
     return true;
-  TSPoint point = ts_node_start_point(name);
+  DynPoint point = lsp_point(document, dyn_node_start(name));
   LspBinding key = {lsp_file_path(document->uri), point.row + 1,
                     point.column + 1, false};
   size_t first = 0, end = usage->binding_count;
@@ -272,74 +251,72 @@ static bool lsp_binding_used(const LspUsage *usage, LspDocument *document,
                 */
 }
 
-static void lsp_unused_nodes(TSNode node, LspDocument *document,
+static void lsp_unused_nodes(const ExpSnapshotTree *tree, LspDocument *document,
                              const LspUsage *usage, char *body, size_t capacity,
                              size_t *at, bool *comma) {
-  if (*at + 1024 >= capacity)
-    return;
-  const char *kind = ts_node_type(node);
-  TSNode names[16];
-  size_t name_count = 0;
-  const char *label = NULL;
-  TSNode ancestor = node;
-  bool exported = false, foreign = false;
-  for (unsigned depth = 0; depth < 3 && !ts_node_is_null(ancestor); ++depth) {
-    if (!strcmp(ts_node_type(ancestor), "extern_fn"))
-      foreign = true;
-    if (!strcmp(ts_node_type(ancestor), "declaration")) {
-      uint32_t start = ts_node_start_byte(ancestor);
-      exported = start + 4 <= strlen(document->text) &&
-                 !memcmp(document->text + start, "pub ", 4);
-    }
-    ancestor = ts_node_parent(ancestor);
-  }
-  if (!strcmp(kind, "variable")) {
-    if (ts_node_named_child_count(node))
-      names[name_count++] = ts_node_named_child(node, 0);
-    label = !strcmp(ts_node_type(ts_node_parent(node)), "const_variable")
-                ? "constant"
-                : "variable";
-  } else if (!strcmp(kind, "fn_param") && !foreign) {
-    for (uint32_t i = 0; i < ts_node_named_child_count(node) && name_count < 16;
-         ++i) {
-      TSNode child = ts_node_named_child(node, i);
-      if (!strcmp(ts_node_type(child), "identifier"))
-        names[name_count++] = child;
-    }
-    label = "parameter";
-  } else if (!strcmp(kind, "fn") && !exported) {
-    TSNode name = ts_node_child_by_field_name(node, "name", 4);
-    if (!ts_node_is_null(name)) {
-      names[name_count++] = name;
-      label = "function";
-    }
-  }
-  if (exported && label &&
-      (!strcmp(label, "variable") || !strcmp(label, "constant")))
-    name_count = 0;
-  for (size_t i = 0; i < name_count && *at + 1024 < capacity; ++i) {
-    uint32_t a = ts_node_start_byte(names[i]), b = ts_node_end_byte(names[i]);
-    size_t n = b - a;
-    if (!n || n >= 128 || document->text[a] == '_')
+  for (uint32_t id = 0; id < tree->count && *at + 1024 < capacity; ++id) {
+    DynNode node = dyn_node(tree, id);
+    /* Recovering parses can leave detached nodes behind; skip them. */
+    if (id != tree->root && dyn_node_null(dyn_node_parent(node)))
       continue;
-    char name[128];
-    memcpy(name, document->text + a, n);
-    name[n] = 0;
-    if (!strcmp(name, "main") || lsp_binding_used(usage, document, names[i]))
-      continue;
-    TSPoint p = ts_node_start_point(names[i]), e = ts_node_end_point(names[i]);
-    *at += (size_t)lsp_bounded_printf(
-        body + *at, capacity - *at,
-        "%s{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
-        "\"line\":%u,\"character\":%u}},\"severity\":2,\"source\":\"dyn\","
-        "\"code\":\"unused-%s\",\"message\":\"unused %s '%s'\"}",
-        *comma ? "," : "", p.row, p.column, e.row, e.column, label, label,
-        name);
-    *comma = true;
+    unsigned kind = dyn_node_kind(node);
+    DynNode names[16];
+    size_t name_count = 0;
+    const char *label = NULL;
+    DynNode ancestor = node;
+    bool exported = false, foreign = false;
+    for (unsigned depth = 0; depth < 3 && !dyn_node_null(ancestor); ++depth) {
+      if (dyn_node_is(ancestor, SRC_EXTERN_FN))
+        foreign = true;
+      if (dyn_node_is(ancestor, SRC_DECLARATION)) {
+        uint32_t start = dyn_node_start(ancestor);
+        exported = start + 4 <= strlen(document->text) &&
+                   !memcmp(document->text + start, "pub ", 4);
+      }
+      ancestor = dyn_node_parent(ancestor);
+    }
+    if (kind == SRC_VARIABLE) {
+      DynNode name = dyn_node_first(node);
+      if (dyn_node_is(name, EXP_NAME))
+        names[name_count++] = name;
+      label = dyn_node_is(dyn_node_parent(node), SRC_CONST) ? "constant" : "variable";
+    } else if (kind == SRC_FN_PARAM && !foreign) {
+      for (DynNode child = dyn_node_first(node); !dyn_node_null(child) && name_count < 16;
+           child = dyn_node_next(child))
+        if (dyn_node_is(child, EXP_NAME))
+          names[name_count++] = child;
+      label = "parameter";
+    } else if (kind == SRC_FN && !exported) {
+      DynNode name = dyn_node_field(node, EXP_ROLE_NAME);
+      if (!dyn_node_null(name)) {
+        names[name_count++] = name;
+        label = "function";
+      }
+    }
+    if (exported && label &&
+        (!strcmp(label, "variable") || !strcmp(label, "constant")))
+      name_count = 0;
+    for (size_t i = 0; i < name_count && *at + 1024 < capacity; ++i) {
+      uint32_t a = dyn_node_start(names[i]), b = dyn_node_end(names[i]);
+      size_t n = b - a;
+      if (!n || n >= 128 || document->text[a] == '_')
+        continue;
+      char name[128];
+      memcpy(name, document->text + a, n);
+      name[n] = 0;
+      if (!strcmp(name, "main") || lsp_binding_used(usage, document, names[i]))
+        continue;
+      DynPoint p = lsp_point(document, a), e = lsp_point(document, b);
+      *at += (size_t)lsp_bounded_printf(
+          body + *at, capacity - *at,
+          "%s{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
+          "\"line\":%u,\"character\":%u}},\"severity\":2,\"source\":\"dyn\","
+          "\"code\":\"unused-%s\",\"message\":\"unused %s '%s'\"}",
+          *comma ? "," : "", p.row, p.column, e.row, e.column, label, label,
+          name);
+      *comma = true;
+    }
   }
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
-    lsp_unused_nodes(ts_node_named_child(node, i), document, usage, body,
-                     capacity, at, comma);
 }
 
 static bool lsp_overlay_sources(DynSources *sources, LspDocument *documents,
@@ -358,8 +335,11 @@ static bool lsp_overlay_sources(DynSources *sources, LspDocument *documents,
       free(sources->items[i].text);
       sources->items[i].text = text;
       sources->items[i].length = length;
-      sources->items[i].syntax =
-          documents[j].tree ? ts_tree_copy(documents[j].tree) : NULL;
+      if (documents[j].syntax && documents[j].parsed_revision == documents[j].revision &&
+          exp_snapshot_retain(documents[j].syntax))
+        sources->items[i].compact = documents[j].syntax;
+      if (!dyn_source_prepare(&sources->items[i]))
+        return false;
     }
   return true;
 }
@@ -377,9 +357,9 @@ static int lsp_load_semantic_project(LspDocument *documents, size_t count,
                                                     : documents[i].text),
         .length = strlen(&documents[i] == requested ? replacement
                                                     : documents[i].text),
-        .syntax = &documents[i] != requested || replacement == requested->text
-                      ? documents[i].tree
-                      : NULL};
+        .compact = (&documents[i] != requested || replacement == requested->text) &&
+                   documents[i].parsed_revision == documents[i].revision
+                       ? documents[i].syntax : NULL};
   DynSources overrides = {override_items, count};
   for (size_t i = 0; i < count; ++i)
     override_items[i].context = context;
@@ -524,8 +504,8 @@ void lsp_publish_semantic(LspDocument *documents, size_t count) {
       free(document_root);
       if (!same)
         continue;
-      if (documents[d].syntax_too_deep || (documents[d].tree &&
-          ts_node_has_error(ts_tree_root_node(documents[d].tree)))) {
+      if (documents[d].syntax_too_deep || (lsp_tree(&documents[d]) &&
+          lsp_tree(&documents[d])->error_count)) {
         (void)lsp_publish_syntax(&documents[d]);
         continue;
       }
@@ -575,16 +555,11 @@ void lsp_publish_semantic(LspDocument *documents, size_t count) {
       LspUsage usage = lsp_usage_build(documents, count, &documents[d], view);
       LspImport imports[32];
       size_t import_count = lsp_imports(&documents[d], imports, 32);
-      TSNode root = documents[d].tree ? ts_tree_root_node(documents[d].tree)
-                                      : (TSNode){0};
+      const ExpSnapshotTree *root = lsp_tree(&documents[d]);
       for (size_t i = 0; i < import_count && at + 4096 < capacity; ++i)
-        if (!ts_node_is_null(root) &&
-            !lsp_usage_count(&usage, imports[i].alias)) {
-          TSNode marked = ts_node_is_null(imports[i].alias_node)
-                              ? imports[i].node
-                              : imports[i].alias_node;
-          TSPoint a = ts_node_start_point(marked),
-                  b = ts_node_end_point(marked);
+        if (root && !lsp_usage_count(&usage, imports[i].alias)) {
+          DynPoint a = lsp_point(&documents[d], imports[i].has_alias ? imports[i].alias_start : imports[i].start),
+                   b = lsp_point(&documents[d], imports[i].has_alias ? imports[i].alias_end : imports[i].end);
           char *escaped_path = json_escape(imports[i].path, strlen(imports[i].path));
           char *escaped_alias = json_escape(imports[i].alias, strlen(imports[i].alias));
           if (!escaped_path || !escaped_alias) { free(escaped_path); free(escaped_alias); continue; }
@@ -599,7 +574,7 @@ void lsp_publish_semantic(LspDocument *documents, size_t count) {
           free(escaped_path); free(escaped_alias);
           comma = true;
         }
-      if (!ts_node_is_null(root))
+      if (root)
         lsp_unused_nodes(root, &documents[d], &usage, body, capacity, &at,
                          &comma);
       lsp_usage_free(&usage);
@@ -636,7 +611,8 @@ LspSemantic lsp_semantic_build(LspDocument *documents, size_t count) {
                                        .work = lsp_work_current()},
                            .text = documents[i].text,
                            .length = strlen(documents[i].text),
-                           .syntax = documents[i].tree};
+                           .compact = documents[i].parsed_revision == documents[i].revision
+                                          ? documents[i].syntax : NULL};
   DynSources sources = {items, count};
   int merged = dyn_sources_merge(&sources, "<lsp>", &semantic.source);
   free(items);

@@ -319,10 +319,8 @@ int dyn_lsp(const DynTarget *target) {
           free(escaped);
           free(documents[i].uri);
           free(documents[i].text);
-          if (documents[i].tree)
-            ts_tree_delete(documents[i].tree);
-          if (documents[i].parser)
-            ts_parser_delete(documents[i].parser);
+          exp_snapshot_release(documents[i].syntax);
+          free(documents[i].line_starts);
           memmove(&documents[i], &documents[i + 1],
                   (document_count - i - 1) * sizeof(*documents));
           --document_count;
@@ -341,8 +339,6 @@ int dyn_lsp(const DynTarget *target) {
       char *text = changing
                        ? (document ? lsp_apply_changes(document, body) : NULL)
                        : json_string_after(body, "\"text\"", 1024u * 1024u);
-      if (document && text && document->tree)
-        dyn_syntax_edit_text(document->tree, document->text, text);
       if (!document && !changing && uri && text && *lsp_file_path(uri)) {
         if (document_count == document_capacity) {
           size_t capacity = document_capacity ? document_capacity * 2 : 32;
@@ -374,7 +370,9 @@ int dyn_lsp(const DynTarget *target) {
         document->analysis_cache = &analysis_cache;
         document->revision = ++revision;
         document->content_hash = dyn_analysis_text_hash(text, strlen(text));
-        if (changing) { document->dirty = true; dirty = true; }
+        /* Requests between a change and its diagnostics must not see the
+           previous revision's syntax. */
+        if (changing) { document->dirty = true; dirty = true; (void)lsp_document_parse(document); }
         else {
           bool syntax_error = lsp_publish_syntax(document);
           if (!syntax_error) lsp_publish_semantic(documents, document_count);
@@ -908,10 +906,8 @@ int dyn_lsp(const DynTarget *target) {
   for (size_t i = 0; i < document_count; ++i) {
     free(documents[i].uri);
     free(documents[i].text);
-    if (documents[i].tree)
-      ts_tree_delete(documents[i].tree);
-    if (documents[i].parser)
-      ts_parser_delete(documents[i].parser);
+    exp_snapshot_release(documents[i].syntax);
+    free(documents[i].line_starts);
   }
   if (getenv("DYN_LSP_ANALYSIS_STATS"))
     fprintf(stderr, "analysis-cache hits=%llu misses=%llu syntax-hits=%llu syntax-misses=%llu\n",

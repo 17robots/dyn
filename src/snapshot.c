@@ -13,7 +13,7 @@ struct ExpSnapshot {
 
 static void snapshot_error(ExpSnapshotError *out, ExpError kind,
                            const char *message, uint32_t offset) {
-  if (out) *out = (ExpSnapshotError){kind, message, offset};
+  if (out) *out = (ExpSnapshotError){kind, message, offset, NULL};
 }
 
 ExpSnapshot *exp_snapshot_create(const char *text, size_t length,
@@ -78,6 +78,7 @@ ExpSnapshot *exp_snapshot_create(const char *text, size_t length,
                                      &parse_options)) {
     snapshot_error(error, snapshot->storage.error_kind, snapshot->storage.error,
                     snapshot->storage.error_offset);
+    if (error) error->expected = snapshot->storage.error_expected;
     exp_snapshot_release(snapshot);
     return NULL;
   }
@@ -96,7 +97,9 @@ ExpSnapshot *exp_snapshot_create(const char *text, size_t length,
   }
   snapshot->view = (ExpSnapshotTree){snapshot->storage.nodes,
                                     snapshot->storage.count,
-                                    snapshot->storage.root};
+                                    snapshot->storage.root,
+                                    snapshot->storage.errors,
+                                    snapshot->storage.error_count};
   return snapshot;
 }
 

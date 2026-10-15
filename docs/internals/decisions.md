@@ -3,14 +3,15 @@
 - Compiler hosting and generated-code targets are separate support claims. See
   [releasing](release.md) for the supported scope.
 - SDK archives contain the compiler, standard-library sources and runtime objects.
-  Current Linux packages require external LLVM and Tree-sitter shared libraries.
-- `tree-sitter-dyn/grammar.js` is the grammar's source of truth. The compiler
-  pins a revision in `grammar.lock.json`; editor packages pin theirs in `dyn-editors`.
+  Current Linux packages require external LLVM shared libraries.
+- The compiler's handwritten parser (`src/parser.c`) defines Dyn syntax.
+  `tree-sitter-dyn` serves editor highlighting and must accept the same syntax;
+  editor packages pin its revision in `dyn-editors`.
 - Directory builds output directory basename into command working directory; `--output`
   overrides. Existing output is atomically replaced without embedded compiler marker.
 - Debug default. SDK ships standard-library source plus prebuilt platform runtime objects.
 - C bootstrap uses strict C11 and compiles one object per source file, in parallel.
-- Linux release builds use the LLVM and Tree-sitter versions pinned in
+- Linux release builds use the LLVM version pinned in
   `.github/workflows/c-compiler.yml`.
 - Executable builds use a content-keyed, artifact-verifying sidecar cache; `--no-cache` bypasses it.
   Source diagnostics use byte spans internally and 1-based Unicode

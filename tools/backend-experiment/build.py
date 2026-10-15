@@ -7,19 +7,17 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = Path(os.environ.get('BUILD', ROOT / 'build')).resolve()
-GRAMMAR = Path(os.environ.get('TS_DIR', ROOT / 'build/deps/tree-sitter-dyn')).resolve()
 BUILD.mkdir(parents=True, exist_ok=True)
 sources = ['frontend.c', 'ast.c', 'sema.c', 'sema_globals.c', 'source.c',
-           'source_tree.c', 'diagnostic.c', 'target.c', 'ir.c']
+           'source_tree.c', 'diagnostic.c', 'target.c', 'ir.c', 'parser.c', 'snapshot.c']
 command = [*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2', '-g',
            '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-D_POSIX_C_SOURCE=200809L',
            *shlex.split(os.environ.get('CFLAGS', '')),
-           '-I' + str(ROOT / 'src'), '-I' + str(GRAMMAR / 'src'),
+           '-I' + str(ROOT / 'src'),
            str(Path(__file__).with_name('driver.c')),
            str(Path(__file__).with_name('dwarf.c')),
            *(str(ROOT / 'src' / name) for name in sources),
-           str(GRAMMAR / 'src/parser.c'), str(GRAMMAR / 'src/scanner.c'),
-           '-ltree-sitter', '-pthread', '-o', str(BUILD / 'scalar-backend')]
+           '-pthread', '-o', str(BUILD / 'scalar-backend')]
 subprocess.run(command, check=True)
 
 # The native unit exercises multiple emissions in one process and concurrent calls.

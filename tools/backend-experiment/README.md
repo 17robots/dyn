@@ -77,7 +77,7 @@ chunk caches are not used, because native emission of the whole program is cheap
 than restoring them. A private temporary object is linked unless `--no-link` or
 `--emit-object` requests `<output>.o` (macOS keeps `<output>.dynnative.o`).
 
-`dyn-legacy` (Tree-sitter parsing, LLVM emission) is the differential reference.
+`dyn-legacy` (LLVM emission only) is the differential reference.
 `just test-native-debug` runs routing/fallback/runtime contracts against it, and
 `just test-native-strict` runs the regression suite through
 `strict-dyn.py`, which turns every silent fallback into a failure.
@@ -270,7 +270,7 @@ state, deterministic output, and recovery after failure. Fixed capacities still 
 
 ## Commands
 
-From the compiler directory, with existing grammar and Tree-sitter dependencies:
+From the compiler directory:
 
 ```sh
 python3 tools/backend-experiment/build.py
@@ -288,7 +288,7 @@ cc -shared -Wl,--no-undefined output.o \
   build/dynrt_shared.o build/dynrt_support_pic.o -lm -o output.so
 ```
 
-`build.py` honors `CC`, additional `CFLAGS`, `BUILD`, and `TS_DIR`. It builds
+`build.py` honors `CC`, additional `CFLAGS`, and `BUILD`. It builds
 `build/scalar-backend` and the native context/output units, then runs the output unit.
 Tests require the production `build/dyn-release` executable
 (or `DYN` override), a C compiler/linker, and `readelf`. The test compiles the
@@ -348,7 +348,7 @@ checks, not performance evidence.
 To run a sanitized frontend/emitter build without replacing the normal binary:
 
 ```sh
-BUILD=/tmp/dyn-backend-sanitize TS_DIR="$PWD/build/deps/tree-sitter-dyn" \
+BUILD=/tmp/dyn-backend-sanitize \
   CFLAGS='-O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie' \
   python3 tools/backend-experiment/build.py
 BUILD=/tmp/dyn-backend-sanitize DYN="$PWD/build/dyn-release" \

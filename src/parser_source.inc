@@ -9,7 +9,7 @@ const char *exp_source_kind(unsigned kind) {
     "block", "return_", "continue_", "break_", "if_", "else_",
     "case_", "case_arm", "case_pattern", "type_pattern", "for_",
     "for_condition", "defer", "assignment", "static_assert", "panic",
-    "range", "type_qualifier", "reverse"
+    "range", "type_qualifier", "reverse", "ERROR"
   };
   return kind >= SRC_FILE && kind - SRC_FILE < sizeof(names) / sizeof(*names)
       ? names[kind - SRC_FILE] : "unknown_source_node";
@@ -300,11 +300,81 @@ static uint32_t src_statement(Parser *p) {
   if (++p->depth > depth_limit(p)) { --p->depth; fail(p, p->token.start, "source nesting limit exceeded"); return NONE; }
   uint32_t value = src_statement_body(p); --p->depth; return value;
 }
+/* Recovery records the pending syntax error, rewinds to the failed item and
+   skips to a synchronization token: one at the start of a line, at or after the
+   error, and either outside every bracket opened by the item or indented no
+   deeper than the item. Blocks also stop before their closing brace; the top
+   level stops only at column zero. At least one token is always skipped. */
+static bool src_line_start(Parser *p, uint32_t offset) {
+  while (offset && (p->text[offset - 1] == ' ' || p->text[offset - 1] == '\t')) --offset;
+  return !offset || p->text[offset - 1] == '\n';
+}
+static uint32_t src_column(Parser *p, uint32_t offset) {
+  uint32_t line = offset;
+  while (line && p->text[line - 1] != '\n') --line;
+  return offset - line;
+}
+static bool src_record(Parser *p) {
+  ExpTree *t = p->tree;
+  if (!p->options || !p->options->recover || t->error_kind != EXP_SYNTAX_ERROR) return false;
+  if (t->error_count == t->error_capacity) {
+    uint32_t capacity = t->error_capacity ? t->error_capacity * 2 : 8;
+    ExpSyntaxError *errors = capacity > t->error_capacity ? realloc(t->errors, capacity * sizeof(*errors)) : NULL;
+    if (!errors) { t->error = "out of memory"; t->error_kind = EXP_ALLOCATION_ERROR; return false; }
+    t->errors = errors; t->error_capacity = capacity;
+  }
+  t->errors[t->error_count++] = (ExpSyntaxError){t->error_offset, t->error, t->error_expected};
+  return true;
+}
+/* An invalid token: resume lexing at the end of its line. */
+static void src_resume(Parser *p, uint32_t *end) {
+  ExpTree *t = p->tree;
+  while (t->error_kind == EXP_SYNTAX_ERROR) {
+    uint32_t resume = t->error_offset > *end ? t->error_offset : *end;
+    while (resume < p->length && p->text[resume] != '\n') ++resume;
+    t->error = NULL; t->error_expected = NULL; t->error_kind = EXP_OK;
+    *end = resume; p->offset = resume; lex(p);
+  }
+}
+static uint32_t src_recover(Parser *p, Parser saved, uint32_t count, bool top) {
+  ExpTree *t = p->tree;
+  uint32_t offset = t->error_offset;
+  if (!src_record(p)) return NONE;
+  uint32_t start = saved.token.start, column = src_column(p, start), end = saved.token.end;
+  if (!src_restore(p, saved, count)) return NONE;
+  t->error_expected = NULL;
+  /* Braces are counted apart from parentheses and brackets: an unmatched
+     brace always belongs to an enclosing block. */
+  uint32_t braces = 0, parens = 0;
+  while (p->token.kind != END && !t->error) {
+    uint32_t at = p->token.start;
+    bool brace = is(p, "}"), closer = brace || is(p, ")") || is(p, "]");
+    if (!top && brace && !braces && at > start) break;
+    if (at > start && at >= offset && src_line_start(p, at)) {
+      uint32_t indent = src_column(p, at);
+      /* A closer aligned with the item ends the item's own bracket. */
+      bool own = closer && indent == column && (brace ? braces : parens) > 0;
+      if (!own && (top ? !indent : (!braces && !parens) || indent <= column)) break;
+    }
+    if (is(p, "{")) ++braces;
+    else if (is(p, "(") || is(p, "[")) ++parens;
+    else if (brace) { if (braces) --braces; }
+    else if (closer && parens) --parens;
+    end = p->token.end; lex(p);
+    src_resume(p, &end);
+  }
+  if (t->error) return NONE;
+  return src_node(p, SRC_ERROR, start, end, NONE);
+}
 static uint32_t src_block(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   expect(p, "{");
-  while (!is(p, "}") && !p->tree->error && p->token.kind != END)
-    append(p, &first, &last, src_statement(p));
+  while (!is(p, "}") && !p->tree->error && p->token.kind != END) {
+    Parser saved = *p; uint32_t count = p->tree->count;
+    uint32_t statement = src_statement(p);
+    if (p->tree->error) statement = src_recover(p, saved, count, false);
+    append(p, &first, &last, statement);
+  }
   uint32_t end = p->token.end; expect(p, "}");
   return src_node(p, SRC_BLOCK, start, end, first);
 }
@@ -454,16 +524,27 @@ static uint32_t src_declaration(Parser *p) {
   return mark(p, src_node(p, SRC_DECLARATION, start, src_end(p, child, start), child), public ? EXP_PUBLIC : 0);
 }
 bool exp_parse_source_with_options(const char *source, size_t length, ExpTree *tree, const ExpOptions *options) {
-  tree->count = 0; tree->root = NONE; tree->error = NULL; tree->error_kind = EXP_OK; tree->error_offset = 0;
+  tree->count = 0; tree->root = NONE; tree->error = NULL; tree->error_expected = NULL; tree->error_kind = EXP_OK; tree->error_offset = 0;
+  tree->error_count = 0;
   if (length > UINT32_MAX || (!source && length)) { tree->error = "invalid source or source too large"; tree->error_kind = EXP_LIMIT_ERROR; return false; }
   uint64_t work_remaining = options && options->max_work ? options->max_work : (uint64_t)length * 128 + 1024;
   Parser p = {.text = source, .length = (uint32_t)length, .tree = tree,
               .work_remaining = &work_remaining, .options = options};
   if (!charge(&p, length, 0)) return false;
+  /* Sources are text: NUL is never valid, even in comments or literals. */
+  const char *nul = length ? memchr(source, '\0', length) : NULL;
+  if (nul) { fail(&p, (uint32_t)(nul - source), "unexpected character"); return false; }
   lex(&p); uint32_t first = NONE, last = NONE;
+  if (tree->error && src_record(&p)) {
+    uint32_t end = 0;
+    src_resume(&p, &end);
+  }
   while (p.token.kind != END && !tree->error) {
     uint32_t offset = p.token.start;
-    append(&p, &first, &last, src_declaration(&p));
+    Parser saved = p; uint32_t count = tree->count;
+    uint32_t declaration = src_declaration(&p);
+    if (tree->error) declaration = src_recover(&p, saved, count, true);
+    append(&p, &first, &last, declaration);
     if (!tree->error && p.token.start == offset) fail(&p, offset, "source parser made no progress");
   }
   uint32_t start = 0; p.scan_next = 0;
