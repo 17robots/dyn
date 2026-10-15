@@ -84,15 +84,15 @@ def receive_exact(connection, size):
 
 
 def paired_sockets():
-    """TCP and UDP sockets on one free port. The TCP port's number can be taken
-    or reserved for UDP (Windows reports WinError 10013), so retry."""
+    """Reserve UDP first: Windows may reserve much of TCP's ephemeral range
+    for UDP. Retry if the selected UDP port is unavailable to TCP."""
     for _ in range(50):
         tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcp.bind(('127.0.0.1', 0))
-        port = tcp.getsockname()[1]
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            udp.bind(('127.0.0.1', port))
+            udp.bind(('127.0.0.1', 0))
+            port = udp.getsockname()[1]
+            tcp.bind(('127.0.0.1', port))
         except OSError:
             udp.close()
             tcp.close()

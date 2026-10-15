@@ -147,7 +147,13 @@ objects, archives, dylibs and `.tbd` stubs in; out comes a PIE or dylib whose
 imports bind at load time through `LC_DYLD_INFO_ONLY` (non-lazy stubs), with
 an export trie and the ad-hoc, linker-signed code signature Apple silicon
 requires. Debug info stays in the objects and no `__unwind_info` is written.
-Windows and Wasm still use external linkers. `DYN_LINKER=external`
+x86-64 Windows executables and DLLs link in-process too (`src/link_coff.c`):
+COFF objects and ar/.lib archives, including short import objects, whose
+imports extend the runtime's own `.idata$2..$7` directory; grouped sections
+merge in suffix order. Executables keep GNU ld's fixed base; DLLs get base
+relocations, an export table of every external definition, and an import
+library in `llvm-dlltool`'s layout that both GNU ld and the built-in linker
+read. Only Wasm still uses an external linker (`wasm-ld`). `DYN_LINKER=external`
 forces the external linker, including its ThinLTO, for differential checks.
 
 Standard-library imports resolve relative to compiler executable, never process working
