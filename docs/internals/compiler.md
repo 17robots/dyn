@@ -131,8 +131,13 @@ arena. The present source loader still uses libc allocation; replacing that with
 arenas is next implementation slice.
 
 Linux x86-64 starts without libc: `dynrt_start.o` defines `_start`, calls generated
-`main`, then performs exit syscall. LLVM emits native objects. Linker selection prefers
-bundled `ld.lld` in SDK; development fallback currently uses system `ld`.
+`main`, then performs exit syscall. LLVM emits native objects. Static x86-64 Linux
+executables link in-process (`src/link_elf.c`): relocatable objects and `ar`
+archives, lazy archive members, section garbage collection, a GOT for
+GOT-relative relocations, and `.eh_frame` records pruned with their code. No
+external linker is spawned. ThinLTO bitcode, shared-library inputs, `--shared`
+and the other targets still use `ld.lld` (or system `ld`). `DYN_LINKER=external`
+forces the external linker for differential checks.
 
 Standard-library imports resolve relative to compiler executable, never process working
 directory. Initial `std/terminal` and `std/io` are ordinary Dyn over `{data,len}` UTF-8 strings and `#syscall`;
@@ -186,7 +191,7 @@ post-optimization target assembly beside other requested build artifacts.
 Build output is created through a temporary sibling and atomically renamed.
 On x86-64 Linux release builds, separately compiled modules use ThinLTO bitcode
 when a version-compatible `ld.lld` is available; otherwise the compiler emits
-cached native objects and falls back to the system linker. Debug builds always
+cached native objects and links them in-process. Debug builds always
 use native objects. Zig's bundled linker is not selected because its LLVM major
 may differ from the compiler's bitcode producer.
 

@@ -6,6 +6,7 @@
 #include "dyn_ast.h"
 #include "frontend.h"
 #include "ir.h"
+#include "link_elf.h"
 #include "llvm_shim.h"
 #include "sema.h"
 #include <assert.h>
@@ -3183,6 +3184,40 @@ int dyn_link_executable_objects(const DynContext *context,
   bool darwin = !strcmp(dyn_context_target(context)->kernel, "darwin");
   bool thin = release && object_count && strstr(object_paths[0], ".bc");
   const char *linker = darwin ? DYN_DARWIN_LINKER : windows ? DYN_WINDOWS_LINKER : "ld.lld";
+  /* Static x86-64 Linux executables link in-process; ThinLTO bitcode and
+     shared-library inputs still need ld.lld. */
+  const char *external = getenv("DYN_LINKER");
+  bool builtin = !thin && !dynamic && !(external && !strcmp(external, "external")) &&
+                 !strcmp(dyn_context_target(context)->name, "x86_64-linux");
+  for (size_t i = 0; builtin && i < link_input_count; ++i)
+    builtin = dyn_link_elf_supported(link_inputs[i]);
+  if (builtin) {
+    const char **inputs = calloc(object_count + link_input_count + 2, sizeof(*inputs));
+    if (!inputs)
+      return 2;
+    size_t input_count = 0;
+    inputs[input_count++] = runtime;
+    inputs[input_count++] = support;
+    for (size_t i = 0; i < object_count; ++i)
+      inputs[input_count++] = object_paths[i];
+    for (size_t i = 0; i < link_input_count; ++i)
+      inputs[input_count++] = link_inputs[i];
+    if (verbose) {
+      fprintf(stderr, "+ (built-in) link -o %s", temporary);
+      for (size_t i = 0; i < input_count; ++i)
+        fprintf(stderr, " %s", inputs[i]);
+      fputc('\n', stderr);
+    }
+    int status = dyn_link_elf(inputs, input_count, temporary, "_start");
+    free(inputs);
+    if (status)
+      return 2;
+    if (rename(temporary, output_path)) {
+      perror("error: rename output");
+      return 2;
+    }
+    return 0;
+  }
   if (verbose) {
     fprintf(
         stderr, "+ %s %s -o %s %s %s", linker,
