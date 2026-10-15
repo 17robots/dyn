@@ -3248,9 +3248,8 @@ int dyn_link_executable_objects(const DynContext *context,
     dyn_thinlto_free(lto_objects, lto_object_count);
     return status;
   }
-  /* Static x86-64 Linux executables link in-process; shared-library inputs
-     still need ld.lld. */
-  bool builtin = !thin && !dynamic && !forced &&
+  /* x86-64 Linux executables link in-process. */
+  bool builtin = !thin && !forced &&
                  !strcmp(dyn_context_target(context)->name, "x86_64-linux");
   for (size_t i = 0; builtin && i < link_input_count; ++i)
     builtin = dyn_link_elf_supported(link_inputs[i]);
@@ -3271,8 +3270,10 @@ int dyn_link_executable_objects(const DynContext *context,
         fprintf(stderr, " %s", inputs[i]);
       fputc('\n', stderr);
     }
-    int status = dyn_link_elf(inputs, input_count, temporary, "_start",
-                              dyn_cache_directed_layout);
+    DynLinkOptions options = {.entry = "_start",
+                              .interpreter = dyn_context_target(context)->dynamic_linker,
+                              .layout = dyn_cache_directed_layout};
+    int status = dyn_link_elf(inputs, input_count, temporary, &options);
     free(inputs);
     if (status)
       return 2;
@@ -3523,6 +3524,41 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
       snprintf(assembly, sizeof(assembly), "%s/../lib/dyn/%s", executable,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
+  const char *external = getenv("DYN_LINKER");
+  if (!strcmp(dyn_context_target(context)->name, "x86_64-linux") &&
+      !(external && !strcmp(external, "external"))) {
+    bool builtin = true;
+    for (size_t i = 0; builtin && i < link_input_count; ++i)
+      builtin = dyn_link_elf_supported(link_inputs[i]);
+    const char **inputs = builtin ? calloc(link_input_count + 3, sizeof(*inputs)) : NULL;
+    if (builtin && !inputs)
+      return 2;
+    if (builtin) {
+      size_t input_count = 0;
+      inputs[input_count++] = assembly;
+      inputs[input_count++] = support;
+      inputs[input_count++] = object_path;
+      for (size_t i = 0; i < link_input_count; ++i)
+        inputs[input_count++] = link_inputs[i];
+      if (verbose) {
+        fprintf(stderr, "+ (built-in) link -shared -o %s", temporary);
+        for (size_t i = 0; i < input_count; ++i)
+          fprintf(stderr, " %s", inputs[i]);
+        fputc('\n', stderr);
+      }
+      DynLinkOptions options = {.shared = true};
+      int status = dyn_link_elf(inputs, input_count, temporary, &options);
+      free(inputs);
+      if (status)
+        return 2;
+      if (rename(temporary, output_path)) {
+        perror("error: rename output");
+        remove(temporary);
+        return 2;
+      }
+      return 0;
+    }
+  }
   if (verbose) {
     fprintf(stderr, "+ %s -o %s %s %s %s",
             darwin ?

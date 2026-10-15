@@ -21,9 +21,9 @@ servers so they pick up the new `dyn`.
 - x86-64 Linux executables link in-process, release ThinLTO included, so no
   external linker is needed. Release code is the same as before: ThinLTO
   runs inside the compiler with `ld.lld`'s settings, including profile-guided
-  function ordering. `--link` accepts objects and `ar` archives there;
-  shared-library inputs still use `ld.lld`. Set `DYN_LINKER=external` to use
-  the old path. Release builds without `ld.lld` installed now get ThinLTO too.
+  function ordering. `--link` and `#link` accept objects, `ar` archives,
+  shared libraries and GNU linker scripts, and `--shared` libraries link
+  in-process too. Set `DYN_LINKER=external` to use the old path. Release builds without `ld.lld` installed now get ThinLTO too.
 - Syntax errors name the offending token and what was expected (for example
   `expected ')', found 'bar'` instead of `invalid syntax near 'ERROR'`). The
   parser resumes at the next statement or declaration and reports up to 20
