@@ -167,9 +167,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
 
     # Release: in-process ThinLTO must produce the same code, in the same
     # order, as ld.lld's ThinLTO, with and without a call-graph profile.
+    (root/'release').mkdir()
+    (root/'release'/'main.dyn').write_text(RELEASE)
     if shutil.which('ld.lld') and shutil.which('objdump') and shutil.which('nm'):
-        (root/'release').mkdir()
-        (root/'release'/'main.dyn').write_text(RELEASE)
         profile = root/'sample.prof'
         profile.write_text('main:1000000:1\n' + ''.join(f' {line}: 1000\n' for line in range(40)))
 
@@ -193,4 +193,27 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
             assert run(ours).stdout == run(theirs).stdout
             assert code(ours) == code(theirs), f'{name}: in-process ThinLTO differs from ld.lld'
 
-print('PASS built-in x86-64 linker and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, lld code parity')
+    # AArch64 Linux: same instructions as ld.lld, debug and release, run
+    # under qemu (relaxed adrp pairs included).
+    if shutil.which('ld.lld') and shutil.which('llvm-objdump') and shutil.which('qemu-aarch64'):
+        def arm_code(path):
+            listing = run('llvm-objdump', '-d', '--no-show-raw-insn', path).stdout
+            lines = []
+            for line in listing.splitlines():
+                if not re.match(r'^\s+[0-9a-f]+:', line):
+                    continue
+                text = re.sub(r'^\s+[0-9a-f]+:\s+', '', line)
+                text = re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'#-?[0-9]+', '#N', re.sub(r'0x[0-9a-f]+', 'X', text))))
+                lines.append(text.rstrip())
+            return lines
+
+        for mode in ([], ['--release']):
+            ours, theirs = root/'arm-builtin', root/'arm-lld'
+            run(DYN, 'build', root/'release', '--target', 'aarch64-linux', '--output', ours, *mode,
+                env=dict(bare, DYN_CACHE_DIR=str(root/'arm-a')))
+            run(DYN, 'build', root/'release', '--target', 'aarch64-linux', '--output', theirs, *mode,
+                env=dict(os.environ, DYN_LINKER='external', DYN_CACHE_DIR=str(root/'arm-b')))
+            assert run('qemu-aarch64', ours).stdout == run('qemu-aarch64', theirs).stdout
+            assert arm_code(ours) == arm_code(theirs), f'AArch64 {mode}: built-in link differs from ld.lld'
+
+print('PASS built-in x86-64/AArch64 linker and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, lld code parity')

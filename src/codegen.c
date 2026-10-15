@@ -3248,9 +3248,8 @@ int dyn_link_executable_objects(const DynContext *context,
     dyn_thinlto_free(lto_objects, lto_object_count);
     return status;
   }
-  /* x86-64 Linux executables link in-process. */
-  bool builtin = !thin && !forced &&
-                 !strcmp(dyn_context_target(context)->name, "x86_64-linux");
+  /* Linux executables link in-process. */
+  bool builtin = !thin && !forced && !strcmp(dyn_context_target(context)->kernel, "linux");
   for (size_t i = 0; builtin && i < link_input_count; ++i)
     builtin = dyn_link_elf_supported(link_inputs[i]);
   if (builtin) {
@@ -3525,7 +3524,7 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
   const char *external = getenv("DYN_LINKER");
-  if (!strcmp(dyn_context_target(context)->name, "x86_64-linux") &&
+  if (!strcmp(dyn_context_target(context)->kernel, "linux") &&
       !(external && !strcmp(external, "external"))) {
     bool builtin = true;
     for (size_t i = 0; builtin && i < link_input_count; ++i)

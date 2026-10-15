@@ -14,7 +14,7 @@
 
 enum {
   ELF_REL = 1, ELF_EXEC = 2, ELF_DYN = 3,
-  MACHINE_X86_64 = 62,
+  MACHINE_X86_64 = 62, MACHINE_AARCH64 = 183,
   SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_RELA = 4, SHT_NOBITS = 8,
   SHT_REL = 9, SHT_INIT_ARRAY = 14, SHT_FINI_ARRAY = 15, SHT_PREINIT_ARRAY = 16,
   SHT_GROUP = 17, SHT_SYMTAB_SHNDX = 18, SHT_X86_64_UNWIND = 0x70000001,
@@ -42,7 +42,19 @@ enum {
   R_X86_64_REX_GOTPCRELX = 42, R_X86_64_COPY = 5, R_X86_64_GLOB_DAT = 6, R_X86_64_JUMP_SLOT = 7,
   R_X86_64_RELATIVE = 8,
 };
-#define PAGE 0x1000u
+enum {
+  R_AARCH64_NONE = 256, R_AARCH64_ABS64 = 257, R_AARCH64_ABS32 = 258, R_AARCH64_ABS16 = 259,
+  R_AARCH64_PREL64 = 260, R_AARCH64_PREL32 = 261, R_AARCH64_PREL16 = 262,
+  R_AARCH64_MOVW_UABS_G0 = 263, R_AARCH64_MOVW_UABS_G3 = 269,
+  R_AARCH64_LD_PREL_LO19 = 273, R_AARCH64_ADR_PREL_LO21 = 274, R_AARCH64_ADR_PREL_PG_HI21 = 275,
+  R_AARCH64_ADR_PREL_PG_HI21_NC = 276, R_AARCH64_ADD_ABS_LO12_NC = 277, R_AARCH64_LDST8_ABS_LO12_NC = 278,
+  R_AARCH64_TSTBR14 = 279, R_AARCH64_CONDBR19 = 280, R_AARCH64_JUMP26 = 282, R_AARCH64_CALL26 = 283,
+  R_AARCH64_LDST16_ABS_LO12_NC = 284, R_AARCH64_LDST32_ABS_LO12_NC = 285, R_AARCH64_LDST64_ABS_LO12_NC = 286,
+  R_AARCH64_LDST128_ABS_LO12_NC = 299, R_AARCH64_ADR_GOT_PAGE = 311, R_AARCH64_LD64_GOT_LO12_NC = 312,
+  R_AARCH64_COPY = 1024, R_AARCH64_GLOB_DAT = 1025, R_AARCH64_JUMP_SLOT = 1026, R_AARCH64_RELATIVE = 1027,
+};
+/* How a relocation uses its symbol, for dynamic linking decisions. */
+typedef enum { USE_OTHER, USE_GOT, USE_CALL, USE_WORD, USE_ADDRESS, USE_ABSOLUTE } SymbolUse;
 #define IMAGE_BASE 0x200000u
 #define SHF_EXCLUDE 0x80000000u
 
@@ -158,6 +170,9 @@ typedef struct {
   char **signatures;
   size_t signature_count, signature_capacity;
   bool shared_output, dynamic;
+  uint16_t machine; /* Of the first input; all must match. */
+  uint64_t page; /* Maximum page size: segments never share one. */
+  uint32_t copy_type, glob_dat_type, jump_slot_type, relative_type, word_type;
   const char *interpreter;
   uint64_t base;
   LinkShared **shareds;
@@ -321,14 +336,51 @@ static bool define_symbol(Linker *linker, LinkObject *object, LinkSymbol *symbol
   return true;
 }
 
+/* x86-64 and AArch64 differ in relocation numbering, page size and PLT. */
+static bool set_machine(Linker *linker, const char *path, uint16_t machine) {
+  if (machine != MACHINE_X86_64 && machine != MACHINE_AARCH64)
+    return fail(linker, "'%s' is neither x86-64 nor AArch64%s", path, "");
+  if (linker->machine && linker->machine != machine)
+    return fail(linker, "'%s' is for a different architecture than the other inputs%s", path, "");
+  linker->machine = machine;
+  bool arm = machine == MACHINE_AARCH64;
+  linker->page = arm ? 0x10000 : 0x1000;
+  linker->copy_type = arm ? R_AARCH64_COPY : R_X86_64_COPY;
+  linker->glob_dat_type = arm ? R_AARCH64_GLOB_DAT : R_X86_64_GLOB_DAT;
+  linker->jump_slot_type = arm ? R_AARCH64_JUMP_SLOT : R_X86_64_JUMP_SLOT;
+  linker->relative_type = arm ? R_AARCH64_RELATIVE : R_X86_64_RELATIVE;
+  linker->word_type = arm ? R_AARCH64_ABS64 : R_X86_64_64;
+  return true;
+}
+static SymbolUse symbol_use(const Linker *linker, uint32_t type) {
+  if (linker->machine == MACHINE_AARCH64) {
+    switch (type) {
+    case R_AARCH64_ADR_GOT_PAGE: case R_AARCH64_LD64_GOT_LO12_NC: return USE_GOT;
+    case R_AARCH64_CALL26: case R_AARCH64_JUMP26: return USE_CALL;
+    case R_AARCH64_ABS64: return USE_WORD;
+    case R_AARCH64_ABS32: case R_AARCH64_ABS16: return USE_ABSOLUTE;
+    case R_AARCH64_NONE: case 0: return USE_OTHER;
+    default:
+      if (type >= R_AARCH64_MOVW_UABS_G0 && type <= R_AARCH64_MOVW_UABS_G3) return USE_ABSOLUTE;
+      return USE_ADDRESS;
+    }
+  }
+  switch (type) {
+  case R_X86_64_GOTPCREL: case R_X86_64_GOTPCRELX: case R_X86_64_REX_GOTPCRELX: return USE_GOT;
+  case R_X86_64_PLT32: return USE_CALL;
+  case R_X86_64_64: return USE_WORD;
+  case R_X86_64_32: case R_X86_64_32S: return USE_ABSOLUTE;
+  case R_X86_64_PC32: case R_X86_64_PC64: return USE_ADDRESS;
+  default: return USE_OTHER;
+  }
+}
 static bool kept_section(const LinkSection *section);
 static bool load_object(Linker *linker, const char *path, const uint8_t *data, size_t size) {
   if (size < 64 || memcmp(data, "\x7f" "ELF", 4))
     return fail(linker, "'%s' is not an ELF object%s", path, "");
   if (data[4] != 2 || data[5] != 1 || read16(data + 16) != ELF_REL)
     return fail(linker, "'%s' is not a 64-bit little-endian relocatable object%s", path, "");
-  if (read16(data + 18) != MACHINE_X86_64)
-    return fail(linker, "'%s' is not an x86-64 object%s", path, "");
+  if (!set_machine(linker, path, read16(data + 18))) return false;
   LinkObject *object = calloc(1, sizeof(*object));
   if (!object || !grow((void **)&linker->objects, &linker->object_capacity, linker->object_count, sizeof(*linker->objects))) {
     free(object);
@@ -487,8 +539,9 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
    name's default version) and its undefined names, which the output must
    export if it defines them. */
 static bool load_shared(Linker *linker, const char *path, const uint8_t *data, size_t size, bool as_needed) {
-  if (size < 64 || data[4] != 2 || data[5] != 1 || read16(data + 18) != MACHINE_X86_64)
-    return fail(linker, "'%s' is not an x86-64 shared library%s", path, "");
+  if (size < 64 || data[4] != 2 || data[5] != 1)
+    return fail(linker, "'%s' is not a 64-bit little-endian shared library%s", path, "");
+  if (!set_machine(linker, path, read16(data + 18))) return false;
   uint64_t header_offset = read64(data + 40);
   size_t count = read16(data + 60);
   if (!in_bounds(size, header_offset, (uint64_t)count * 64))
@@ -974,9 +1027,6 @@ static bool allocate_commons(Linker *linker) {
   }
   return true;
 }
-static bool needs_got(uint32_t type) {
-  return type == R_X86_64_GOTPCREL || type == R_X86_64_GOTPCRELX || type == R_X86_64_REX_GOTPCRELX;
-}
 static bool assign_outputs(Linker *linker) {
   static const struct {
     const char *name;
@@ -1112,7 +1162,6 @@ static bool synthetic(Linker *linker, int kind, uint64_t size, uint64_t align) {
   }
   return add_to_output(linker, &linker->outputs[kind], section);
 }
-static bool needs_got(uint32_t type);
 static bool plan_dynamic(Linker *linker) {
   for (size_t o = 0; o < linker->object_count; ++o) {
     LinkObject *object = linker->objects[o];
@@ -1123,29 +1172,29 @@ static bool plan_dynamic(Linker *linker) {
         LinkRela *rela = &section->relas[r];
         LinkSymbol *symbol = object->symbols[rela->symbol];
         if (!symbol) continue;
-        if (needs_got(rela->type)) {
+        SymbolUse use = symbol_use(linker, rela->type);
+        if (use == USE_GOT) {
           if (!add_symbol(linker, &linker->got_symbols, &linker->got_count, &linker->got_capacity, symbol, &symbol->got))
             return false;
           continue;
         }
         if (!(section->flags & SHF_ALLOC)) continue;
-        bool absolute = rela->type == R_X86_64_64 || rela->type == R_X86_64_32 || rela->type == R_X86_64_32S;
-        bool relative = rela->type == R_X86_64_PC32 || rela->type == R_X86_64_PC64;
+        bool direct = use == USE_WORD || use == USE_ABSOLUTE || use == USE_ADDRESS;
         if (preemptible(linker, symbol)) {
-          if (rela->type == R_X86_64_PLT32) {
+          if (use == USE_CALL) {
             if (!add_symbol(linker, &linker->plt_symbols, &linker->plt_count, &linker->plt_capacity, symbol, &symbol->plt))
               return false;
           } else if (linker->shared_output) {
-            if (rela->type != R_X86_64_64)
+            if (use != USE_WORD)
               return fail(linker, "'%s' cannot refer to '%s' this way in a shared library; recompile with -fPIC",
                           object->path, symbol->name);
-            if (!add_relocation(linker, section, rela->offset, R_X86_64_64, symbol, rela->addend)) return false;
-          } else if ((absolute || relative) && function_like(symbol)) {
+            if (!add_relocation(linker, section, rela->offset, linker->word_type, symbol, rela->addend)) return false;
+          } else if (direct && function_like(symbol)) {
             /* The PLT entry stands in as the function's address. */
             symbol->canonical = true;
             if (!add_symbol(linker, &linker->plt_symbols, &linker->plt_count, &linker->plt_capacity, symbol, &symbol->plt))
               return false;
-          } else if (absolute || relative) {
+          } else if (direct) {
             /* Data the executable addresses directly is copied into .bss. */
             LinkSection *copy = calloc(1, sizeof(*copy));
             if (!copy || !grow((void **)&linker->copies, &linker->copy_capacity, linker->copy_count, sizeof(*linker->copies))) {
@@ -1158,7 +1207,7 @@ static bool plan_dynamic(Linker *linker) {
             *copy = (LinkSection){.name = ".bss", .size = symbol->shared_size, .type = SHT_NOBITS, .align = align,
                                   .flags = SHF_ALLOC | SHF_WRITE, .live = true, .output = OUT_BSS};
             if (!add_to_output(linker, &linker->outputs[OUT_BSS], copy) ||
-                !add_relocation(linker, copy, 0, R_X86_64_COPY, symbol, 0))
+                !add_relocation(linker, copy, 0, linker->copy_type, symbol, 0))
               return false;
             symbol->defined = true;
             symbol->section = copy;
@@ -1172,11 +1221,11 @@ static bool plan_dynamic(Linker *linker) {
           }
           continue;
         }
-        if (linker->shared_output && absolute && symbol->defined && !symbol->absolute) {
-          if (rela->type != R_X86_64_64)
+        if (linker->shared_output && (use == USE_WORD || use == USE_ABSOLUTE) && symbol->defined && !symbol->absolute) {
+          if (use != USE_WORD)
             return fail(linker, "'%s' uses absolute addressing for '%s' in a shared library; recompile with -fPIC",
                         object->path, symbol->name);
-          if (!add_relocation(linker, section, rela->offset, R_X86_64_RELATIVE, symbol, rela->addend)) return false;
+          if (!add_relocation(linker, section, rela->offset, linker->relative_type, symbol, rela->addend)) return false;
         }
       }
     }
@@ -1196,20 +1245,21 @@ static bool plan_dynamic(Linker *linker) {
     LinkSymbol *symbol = linker->got_symbols[i];
     bool ok = true;
     if (preemptible(linker, symbol)) {
-      ok = add_relocation(linker, &linker->got, i * 8, R_X86_64_GLOB_DAT, symbol, 0) && add_dynsym(linker, symbol);
+      ok = add_relocation(linker, &linker->got, i * 8, linker->glob_dat_type, symbol, 0) && add_dynsym(linker, symbol);
     } else if (linker->shared_output && symbol->defined && !symbol->absolute) {
-      ok = add_relocation(linker, &linker->got, i * 8, R_X86_64_RELATIVE, symbol, 0);
+      ok = add_relocation(linker, &linker->got, i * 8, linker->relative_type, symbol, 0);
     }
     if (!ok) return false;
   }
   for (size_t i = 0; i < linker->plt_count; ++i) {
     LinkSymbol *symbol = linker->plt_symbols[i];
-    if (!add_relocation(linker, &linker->got, (linker->got_count + i) * 8, R_X86_64_JUMP_SLOT, symbol, 0) ||
+    if (!add_relocation(linker, &linker->got, (linker->got_count + i) * 8, linker->jump_slot_type, symbol, 0) ||
         !add_dynsym(linker, symbol))
       return false;
   }
   for (size_t i = 0; i < linker->relocation_count; ++i)
-    if (linker->relocations[i].type == R_X86_64_64 && !add_dynsym(linker, linker->relocations[i].symbol)) return false;
+    if (linker->relocations[i].type == linker->word_type && !add_dynsym(linker, linker->relocations[i].symbol))
+      return false;
   for (size_t i = 0; i < linker->table_capacity; ++i) {
     LinkSymbol *symbol = linker->table[i];
     if (symbol && exported(linker, symbol) && (!symbol->section || symbol->section->live) && !add_dynsym(linker, symbol))
@@ -1284,10 +1334,10 @@ typedef struct {
   uint64_t offset, address, file_size, memory_size;
   uint32_t flags;
 } Segment;
-static void place(LinkOutput *output, uint64_t *offset, uint64_t base, bool allocated) {
+static void place(LinkOutput *output, uint64_t *offset, uint64_t delta, bool allocated) {
   *offset = align_up(*offset, output->align);
   output->file_offset = *offset;
-  output->address = allocated ? base + *offset : 0;
+  output->address = allocated ? delta + *offset : 0;
   uint64_t size = 0;
   for (size_t i = 0; i < output->count; ++i) {
     LinkSection *section = output->sections[i];
@@ -1299,26 +1349,30 @@ static void place(LinkOutput *output, uint64_t *offset, uint64_t base, bool allo
   output->size = size;
   if (output->type != SHT_NOBITS) *offset += size;
 }
+/* As lld does, segments are contiguous in the file; each starts on a fresh
+   page in memory at an address congruent to its file offset. */
 static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
   static const int groups[3][2] = {{OUT_INTERP, OUT_EH_FRAME}, {OUT_TEXT, OUT_PLT}, {OUT_DYNAMIC, OUT_GOT}};
   static const uint32_t flags[3] = {4, 5, 6};
-  uint64_t offset = header_size, base = linker->base;
+  uint64_t offset = header_size, end = linker->base, page = linker->page;
   size_t count = 0;
   for (int g = 0; g < 3; ++g) {
     bool any = g == 0;
     for (int k = groups[g][0]; k <= groups[g][1]; ++k) any |= linker->outputs[k].count != 0;
     if (g == 2) any |= linker->outputs[OUT_BSS].count != 0;
     if (!any) continue;
-    if (g) offset = align_up(offset, PAGE);
     uint64_t start = g ? offset : 0;
-    for (int k = groups[g][0]; k <= groups[g][1]; ++k) place(&linker->outputs[k], &offset, base, true);
+    uint64_t address = g ? align_up(end, page) + (offset & (page - 1)) : linker->base;
+    uint64_t delta = address - start;
+    for (int k = groups[g][0]; k <= groups[g][1]; ++k) place(&linker->outputs[k], &offset, delta, true);
     uint64_t file_end = offset, memory_end = offset;
     if (g == 2) {
       uint64_t bss = offset;
-      place(&linker->outputs[OUT_BSS], &bss, base, true);
+      place(&linker->outputs[OUT_BSS], &bss, delta, true);
       memory_end = bss + linker->outputs[OUT_BSS].size;
     }
-    segments[count++] = (Segment){start, base + start, file_end - start, memory_end - start, flags[g]};
+    segments[count++] = (Segment){start, address, file_end - start, memory_end - start, flags[g]};
+    end = address + (memory_end - start);
   }
   for (size_t e = 0; e < linker->extra_count; ++e) place(&linker->extra[e], &offset, 0, false);
   return count;
@@ -1354,9 +1408,128 @@ static void define_linker_symbols(Linker *linker, Segment *segments, size_t segm
   }
 }
 
+/* AArch64 instruction fields. */
+static bool fits_signed(int64_t value, int bits) {
+  return value >= -((int64_t)1 << (bits - 1)) && value < ((int64_t)1 << (bits - 1));
+}
+static void set_bits(uint8_t *at, uint32_t mask, int shift, uint64_t value) {
+  write32(at, (read32(at) & ~(mask << shift)) | ((uint32_t)value & mask) << shift);
+}
+static void set_adr(uint8_t *at, uint64_t immediate) {
+  set_bits(at, 3, 29, immediate);
+  set_bits(at, 0x7ffff, 5, immediate >> 2);
+}
+static uint64_t page_of(uint64_t address) { return address & ~0xfffull; }
+/* lld's relaxations of adjacent pairs naming one symbol with no addend:
+   adrp+add becomes nop+adr when the target is within 1 MiB, and adrp+ldr of
+   a GOT slot for a local symbol becomes adrp+add. */
+static bool relax_aarch64(Linker *linker, LinkSection *section, size_t i, uint8_t *out) {
+  if (i + 1 >= section->rela_count) return false;
+  LinkRela *first = &section->relas[i], *second = &section->relas[i + 1];
+  LinkSymbol *symbol = section->object->symbols[first->symbol];
+  if (!symbol || first->symbol != second->symbol || second->offset != first->offset + 4 ||
+      first->addend || second->addend || !symbol->defined || symbol->absolute || preemptible(linker, symbol) ||
+      symbol->type == STT_GNU_IFUNC)
+    return false;
+  uint8_t *at = out + first->offset;
+  uint32_t adrp = read32(at), next = read32(at + 4), rd = adrp & 31;
+  if ((adrp & 0x9f000000u) != 0x90000000u) return false;
+  uint64_t place = section->address + first->offset, target = symbol_address(symbol) + first->addend;
+  if (first->type == R_AARCH64_ADR_GOT_PAGE && second->type == R_AARCH64_LD64_GOT_LO12_NC) {
+    if ((next & 0xffc00000u) != 0xf9400000u || (next & 31) != rd || ((next >> 5) & 31) != rd || first->addend) return false;
+    if (!fits_signed((int64_t)(page_of(target) - page_of(place)), 33)) return false;
+    set_adr(at, (page_of(target) - page_of(place)) >> 12);
+    write32(at + 4, 0x91000000u | (uint32_t)(target & 0xfff) << 10 | rd << 5 | rd);
+    next = read32(at + 4);
+  } else if (!(first->type == R_AARCH64_ADR_PREL_PG_HI21 && second->type == R_AARCH64_ADD_ABS_LO12_NC)) {
+    return false;
+  } else if ((next & 0xffc00000u) != 0x91000000u || (next & 31) != rd || ((next >> 5) & 31) != rd) {
+    return false;
+  }
+  int64_t delta = (int64_t)(target - (place + 4));
+  if (fits_signed(delta, 21)) {
+    write32(at, 0xd503201fu);
+    write32(at + 4, 0x10000000u | rd);
+    set_adr(at + 4, (uint64_t)delta);
+  } else {
+    set_adr(at, (page_of(target) - page_of(place)) >> 12);
+    set_bits(at + 4, 0xfff, 10, target);
+  }
+  return true;
+}
+static bool relocate_aarch64(Linker *linker, LinkSection *section, LinkRela *rela, LinkSymbol *symbol, uint8_t *at,
+                             uint64_t value, bool debug) {
+  uint64_t place = section->address + rela->offset, target = value + rela->addend;
+  uint64_t got = symbol && symbol->got ? linker->got.address + (uint64_t)(symbol->got - 1) * 8 : 0;
+  int64_t relative = (int64_t)(target - place);
+  bool ok = true;
+  int width = rela->type == R_AARCH64_ABS64 || rela->type == R_AARCH64_PREL64 ? 8
+              : rela->type == R_AARCH64_ABS16 || rela->type == R_AARCH64_PREL16 ? 2 : 4;
+  if (rela->offset + (uint64_t)width > section->size)
+    return fail(linker, "relocation outside its section in '%s'%s", section->object->path, "");
+  switch (rela->type) {
+  case 0: case R_AARCH64_NONE: return true;
+  case R_AARCH64_ABS64: write64(at, target); return true;
+  case R_AARCH64_PREL64: write64(at, (uint64_t)relative); return true;
+  case R_AARCH64_ABS32:
+    ok = fits_signed((int64_t)target, 32) || target <= UINT32_MAX;
+    write32(at, (uint32_t)target);
+    break;
+  case R_AARCH64_PREL32:
+    ok = fits_signed(relative, 32) || (uint64_t)relative <= UINT32_MAX;
+    write32(at, (uint32_t)relative);
+    break;
+  case R_AARCH64_ABS16: ok = fits_signed((int64_t)target, 16) || target <= 0xffff; write16(at, (uint16_t)target); break;
+  case R_AARCH64_PREL16: ok = fits_signed(relative, 16); write16(at, (uint16_t)relative); break;
+  case R_AARCH64_ADR_PREL_PG_HI21: case R_AARCH64_ADR_PREL_PG_HI21_NC: {
+    int64_t pages = (int64_t)(page_of(target) - page_of(place));
+    ok = rela->type == R_AARCH64_ADR_PREL_PG_HI21_NC || fits_signed(pages, 33);
+    set_adr(at, (uint64_t)pages >> 12);
+    break;
+  }
+  case R_AARCH64_ADR_PREL_LO21: ok = fits_signed(relative, 21); set_adr(at, (uint64_t)relative); break;
+  case R_AARCH64_ADD_ABS_LO12_NC: set_bits(at, 0xfff, 10, target); break;
+  case R_AARCH64_LDST8_ABS_LO12_NC: set_bits(at, 0xfff, 10, target & 0xfff); break;
+  case R_AARCH64_LDST16_ABS_LO12_NC: set_bits(at, 0xfff, 10, (target & 0xfff) >> 1); break;
+  case R_AARCH64_LDST32_ABS_LO12_NC: set_bits(at, 0xfff, 10, (target & 0xfff) >> 2); break;
+  case R_AARCH64_LDST64_ABS_LO12_NC: set_bits(at, 0xfff, 10, (target & 0xfff) >> 3); break;
+  case R_AARCH64_LDST128_ABS_LO12_NC: set_bits(at, 0xfff, 10, (target & 0xfff) >> 4); break;
+  case R_AARCH64_CALL26: case R_AARCH64_JUMP26:
+    if (symbol && symbol->plt) relative = (int64_t)(plt_address + (uint64_t)(symbol->plt - 1) * 16 + rela->addend - place);
+    /* A branch to an absent weak function falls through, as with lld. */
+    else if (symbol && !symbol->defined) relative = 4;
+    ok = fits_signed(relative, 28);
+    set_bits(at, 0x3ffffff, 0, (uint64_t)relative >> 2);
+    break;
+  case R_AARCH64_CONDBR19: case R_AARCH64_LD_PREL_LO19:
+    ok = fits_signed(relative, 21);
+    set_bits(at, 0x7ffff, 5, (uint64_t)relative >> 2);
+    break;
+  case R_AARCH64_TSTBR14: ok = fits_signed(relative, 16); set_bits(at, 0x3fff, 5, (uint64_t)relative >> 2); break;
+  case R_AARCH64_ADR_GOT_PAGE: {
+    int64_t pages = (int64_t)(page_of(got) - page_of(place));
+    ok = fits_signed(pages, 33);
+    set_adr(at, (uint64_t)pages >> 12);
+    break;
+  }
+  case R_AARCH64_LD64_GOT_LO12_NC: set_bits(at, 0xfff, 10, (got & 0xfff) >> 3); break;
+  default:
+    if (rela->type >= R_AARCH64_MOVW_UABS_G0 && rela->type <= R_AARCH64_MOVW_UABS_G3) {
+      set_bits(at, 0xffff, 5, target >> (16 * ((rela->type - R_AARCH64_MOVW_UABS_G0) / 2)));
+      break;
+    }
+    char type[32];
+    snprintf(type, sizeof(type), "%u", rela->type);
+    return fail(linker, "unsupported relocation type %s in '%s'", type, section->object->path);
+  }
+  if (!ok && !debug)
+    return fail(linker, "relocation to '%s' out of range in '%s'", symbol ? symbol->name : "?", section->object->path);
+  return true;
+}
 static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
   LinkObject *object = section->object;
   bool debug = !(section->flags & SHF_ALLOC);
+  bool arm = linker->machine == MACHINE_AARCH64;
   for (size_t i = 0; i < section->rela_count; ++i) {
     LinkRela *rela = &section->relas[i];
     LinkSymbol *symbol = object->symbols[rela->symbol];
@@ -1374,11 +1547,19 @@ static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
     if (dead && debug) {
       /* Point descriptions of discarded code at nothing, as lld does. */
       bool ranges = !strcmp(section->name, ".debug_ranges") || !strcmp(section->name, ".debug_loc");
-      if (rela->type == R_X86_64_64) write64(at, ranges ? 1 : 0);
-      else if (rela->type == R_X86_64_32) write32(at, 0);
+      if (rela->type == (arm ? R_AARCH64_ABS64 : R_X86_64_64)) write64(at, ranges ? 1 : 0);
+      else if (rela->type == (arm ? R_AARCH64_ABS32 : R_X86_64_32)) write32(at, 0);
       continue;
     }
     if (dead) return fail(linker, "'%s' references discarded section of '%s'", object->path, symbol->name);
+    if (arm) {
+      if (!debug && relax_aarch64(linker, section, i, out)) {
+        ++i;
+        continue;
+      }
+      if (!relocate_aarch64(linker, section, rela, symbol, at, value, debug)) return false;
+      continue;
+    }
     uint64_t result;
     int width;
     bool is_signed = true;
@@ -1631,17 +1812,27 @@ static void fill_dynamic(Linker *linker) {
   for (size_t i = 0; i < linker->relocation_count; ++i) {
     DynamicRelocation *relocation = &linker->relocations[i];
     uint8_t *entry = rela + i * 24;
-    bool relative = relocation->type == R_X86_64_RELATIVE;
+    bool relative = relocation->type == linker->relative_type;
     write64(entry, relocation->section->address + relocation->offset);
     write64(entry + 8, (uint64_t)(relative ? 0 : relocation->symbol->dynsym) << 32 | relocation->type);
     write64(entry + 16, relative ? symbol_address(relocation->symbol) + relocation->addend : relocation->addend);
   }
-  /* Each PLT entry jumps through its GOT slot: jmp *slot(%rip), then traps. */
+  /* Each PLT entry jumps through its GOT slot. x86-64: jmp *slot(%rip),
+     then traps. AArch64: adrp x16, slot; ldr x17, [x16, :lo12:slot];
+     add x16, x16, :lo12:slot; br x17. */
   uint8_t *plt = linker->synthetic[OUT_PLT].owned;
   for (size_t i = 0; plt && i < linker->plt_count; ++i) {
     uint8_t *entry = plt + i * 16;
     uint64_t at = linker->synthetic[OUT_PLT].address + i * 16;
     uint64_t slot = linker->got.address + (uint64_t)(linker->got_count + i) * 8;
+    if (linker->machine == MACHINE_AARCH64) {
+      uint64_t pages = ((slot & ~0xfffull) - (at & ~0xfffull)) >> 12;
+      write32(entry, 0x90000010u | (uint32_t)(pages & 3) << 29 | (uint32_t)((pages >> 2) & 0x7ffff) << 5);
+      write32(entry + 4, 0xf9400211u | (uint32_t)((slot & 0xfff) >> 3) << 10);
+      write32(entry + 8, 0x91000210u | (uint32_t)(slot & 0xfff) << 10);
+      write32(entry + 12, 0xd61f0220u);
+      continue;
+    }
     memset(entry, 0xcc, 16);
     entry[0] = 0xff;
     entry[1] = 0x25;
@@ -1744,7 +1935,7 @@ static bool write_output(Linker *linker, const char *entry_name) {
     LinkOutput *output = &linker->outputs[k];
     if (output->type == SHT_NOBITS) continue;
     /* Gaps between functions trap, as with lld. */
-    if (k == OUT_TEXT) memset(image + output->file_offset, 0xcc, output->size);
+    if (k == OUT_TEXT) memset(image + output->file_offset, linker->machine == MACHINE_AARCH64 ? 0xd4 : 0xcc, output->size);
     for (size_t i = 0; ok && i < output->count; ++i) {
       LinkSection *section = output->sections[i];
       uint8_t *at = image + output->file_offset + section->offset;
@@ -1770,7 +1961,7 @@ static bool write_output(Linker *linker, const char *entry_name) {
   if (ok) {
     memcpy(image, "\x7f" "ELF\x02\x01\x01", 7);
     write16(image + 16, linker->shared_output ? ELF_DYN : ELF_EXEC);
-    write16(image + 18, MACHINE_X86_64);
+    write16(image + 18, linker->machine);
     write32(image + 20, 1);
     write64(image + 24, entry ? symbol_address(entry) : 0);
     write64(image + 32, 64);
@@ -1793,7 +1984,7 @@ static bool write_output(Linker *linker, const char *entry_name) {
     }
     for (size_t s = 0; s < segment_count; ++s)
       PROGRAM_HEADER(PT_LOAD, segments[s].flags, segments[s].offset, segments[s].address, segments[s].file_size,
-                     segments[s].memory_size, PAGE);
+                     segments[s].memory_size, linker->page);
     if (linker->dynamic) {
       const LinkOutput *dynamic = &linker->outputs[OUT_DYNAMIC];
       PROGRAM_HEADER(PT_DYNAMIC, 6, dynamic->file_offset, dynamic->address, dynamic->size, dynamic->size, 8);
@@ -1904,7 +2095,7 @@ bool dyn_link_elf_supported(const char *path) {
   if (n >= 8 && !memcmp(magic, "!<arch>\n", 8)) return true;
   if (n >= 20 && !memcmp(magic, "\x7f" "ELF", 4))
     return magic[4] == 2 && (read16(magic + 16) == ELF_REL || read16(magic + 16) == ELF_DYN) &&
-           read16(magic + 18) == MACHINE_X86_64;
+           (read16(magic + 18) == MACHINE_X86_64 || read16(magic + 18) == MACHINE_AARCH64);
   return is_script(magic, n);
 }
 
