@@ -16,6 +16,7 @@ enum {
   SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_RELA = 4, SHT_NOBITS = 8,
   SHT_REL = 9, SHT_INIT_ARRAY = 14, SHT_FINI_ARRAY = 15, SHT_PREINIT_ARRAY = 16,
   SHT_GROUP = 17, SHT_SYMTAB_SHNDX = 18, SHT_X86_64_UNWIND = 0x70000001,
+  SHT_CALL_GRAPH_PROFILE = 0x6fff4c09,
   SHF_WRITE = 1, SHF_ALLOC = 2, SHF_EXEC = 4, SHF_GROUP = 0x200, SHF_TLS = 0x400,
   SHF_RETAIN = 0x200000,
   SHN_UNDEF = 0, SHN_ABS = 0xfff1, SHN_COMMON = 0xfff2, SHN_XINDEX = 0xffff,
@@ -35,6 +36,10 @@ enum {
 #define SHF_EXCLUDE 0x80000000u
 
 typedef struct LinkObject LinkObject;
+typedef struct {
+  uint32_t from, to; /* Symbol indexes. */
+  uint64_t weight;
+} LinkProfileEdge;
 typedef struct LinkSymbol LinkSymbol;
 typedef struct {
   uint64_t offset, addend;
@@ -76,6 +81,8 @@ struct LinkObject {
   LinkSymbol *locals;
   size_t symbol_count;
   const char *strings;
+  LinkProfileEdge *profile; /* .llvm.call-graph-profile entries. */
+  size_t profile_count;
 };
 typedef struct {
   const char *path;
@@ -254,6 +261,7 @@ static bool define_symbol(Linker *linker, LinkObject *object, LinkSymbol *symbol
   return true;
 }
 
+static bool kept_section(const LinkSection *section);
 static bool load_object(Linker *linker, const char *path, const uint8_t *data, size_t size) {
   if (size < 64 || memcmp(data, "\x7f" "ELF", 4))
     return fail(linker, "'%s' is not an ELF object%s", path, "");
@@ -375,11 +383,29 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
   }
   for (uint32_t i = 1; i < count; ++i) {
     LinkSection *relocation = &object->sections[i];
-    if (relocation->type == SHT_REL)
-      return fail(linker, "'%s' uses REL relocations%s", path, "");
-    if (relocation->type != SHT_RELA) continue;
+    if (relocation->type != SHT_RELA && relocation->type != SHT_REL) continue;
     uint32_t target = read32(headers + (size_t)i * 64 + 44);
     if (target >= count) return fail(linker, "'%s' has a malformed relocation section%s", path, "");
+    LinkSection *profile = &object->sections[target];
+    if (profile->type == SHT_CALL_GRAPH_PROFILE && !object->profile) {
+      /* Each 8-byte weight pairs with two relocations naming caller and callee. */
+      size_t entry = relocation->type == SHT_RELA ? 24 : 16;
+      size_t n = (size_t)(profile->size / 8);
+      if (relocation->size / entry < (uint64_t)n * 2) continue;
+      object->profile = calloc(n ? n : 1, sizeof(*object->profile));
+      if (!object->profile) return fail(linker, "out of memory%s%s", "", "");
+      for (size_t k = 0; k < n; ++k) {
+        uint32_t from = (uint32_t)(read64(relocation->data + 2 * k * entry + 8) >> 32);
+        uint32_t to = (uint32_t)(read64(relocation->data + (2 * k + 1) * entry + 8) >> 32);
+        if (from >= object->symbol_count || to >= object->symbol_count) continue;
+        object->profile[object->profile_count++] = (LinkProfileEdge){from, to, read64(profile->data + k * 8)};
+      }
+      continue;
+    }
+    /* Other metadata is not output. */
+    if (!kept_section(profile)) continue;
+    if (relocation->type == SHT_REL)
+      return fail(linker, "'%s' uses REL relocations%s", path, "");
     LinkSection *section = &object->sections[target];
     size_t n = (size_t)(relocation->size / 24);
     section->relas = malloc((n ? n : 1) * sizeof(LinkRela));
@@ -857,6 +883,14 @@ static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
     case R_X86_64_SIZE32: result = (symbol ? symbol->size : 0) + addend; width = 32; is_signed = false; break;
     case R_X86_64_SIZE64: result = (symbol ? symbol->size : 0) + addend; width = 64; break;
     case R_X86_64_GOTPCREL: case R_X86_64_GOTPCRELX: case R_X86_64_REX_GOTPCRELX:
+      /* A load of a defined symbol's address becomes lea, as lld does. */
+      if (rela->type != R_X86_64_GOTPCREL && symbol->defined && !symbol->absolute && rela->offset >= 2 &&
+          at[-2] == 0x8b) {
+        at[-2] = 0x8d;
+        result = value + addend - place;
+        width = 32;
+        break;
+      }
       result = linker->got.address + (uint64_t)(symbol->got - 1) * 8 + addend - place;
       width = 32;
       break;
@@ -939,6 +973,87 @@ static bool build_symtab(Linker *linker, Bytes *symbols, Bytes *names, uint32_t 
   return true;
 }
 
+/* With a sample profile, order code by its call graph the way lld does by
+   default (cache-directed sort): profiled sections first in layout order, then
+   the rest in input order. */
+typedef struct {
+  LinkSection *from, *to;
+  uint64_t weight;
+} SectionEdge;
+static bool order_text(Linker *linker, DynLinkLayout layout) {
+  LinkOutput *text = &linker->outputs[OUT_TEXT];
+  SectionEdge *edges = NULL;
+  size_t edge_count = 0, edge_capacity = 0;
+  bool ok = true;
+  for (size_t o = 0; ok && o < linker->object_count; ++o) {
+    LinkObject *object = linker->objects[o];
+    for (size_t i = 0; ok && i < object->profile_count; ++i) {
+      LinkSymbol *from = object->symbols[object->profile[i].from], *to = object->symbols[object->profile[i].to];
+      LinkSection *a = from ? symbol_section(from) : NULL, *b = to ? symbol_section(to) : NULL;
+      if (!a || !b) continue;
+      size_t k = 0;
+      while (k < edge_count && (edges[k].from != a || edges[k].to != b)) ++k;
+      if (k == edge_count) {
+        if (!(ok = grow((void **)&edges, &edge_capacity, edge_count, sizeof(*edges)))) break;
+        edges[edge_count++] = (SectionEdge){a, b, 0};
+      }
+      edges[k].weight += object->profile[i].weight;
+    }
+  }
+  LinkSection **nodes = NULL;
+  uint64_t *sizes = NULL, *counts = NULL, *offsets = NULL, *order = NULL;
+  DynLinkEdge *calls = NULL;
+  size_t node_count = 0, call_count = 0;
+  if (ok && edge_count) {
+    nodes = calloc(edge_count * 2, sizeof(*nodes));
+    sizes = calloc(edge_count * 2, sizeof(*sizes));
+    counts = calloc(edge_count * 2, sizeof(*counts));
+    order = calloc(edge_count * 2, sizeof(*order));
+    offsets = calloc(edge_count, sizeof(*offsets));
+    calls = calloc(edge_count, sizeof(*calls));
+    ok = nodes && sizes && counts && order && offsets && calls;
+  }
+  for (size_t k = 0; ok && k < edge_count; ++k) {
+    SectionEdge *edge = &edges[k];
+    bool same = edge->from->live && edge->to->live && edge->from->output == edge->to->output;
+    if (!same || !edge->weight) continue;
+    size_t ends[2];
+    LinkSection *pair[2] = {edge->from, edge->to};
+    for (int e = 0; e < 2; ++e) {
+      size_t n = 0;
+      while (n < node_count && nodes[n] != pair[e]) ++n;
+      if (n == node_count) {
+        nodes[node_count] = pair[e];
+        sizes[node_count] = pair[e]->size;
+        counts[node_count++] = 0;
+      }
+      ends[e] = n;
+    }
+    if (ends[0] == ends[1]) continue;
+    calls[call_count] = (DynLinkEdge){ends[0], ends[1], edge->weight};
+    offsets[call_count++] = (sizes[ends[0]] + 1) / 2;
+    counts[ends[1]] += edge->weight;
+  }
+  if (ok && node_count && nodes[0]->output == OUT_TEXT) {
+    ok = layout(sizes, counts, node_count, calls, offsets, call_count, order);
+    if (ok) {
+      LinkSection **sorted = malloc(text->count * sizeof(*sorted));
+      ok = sorted != NULL;
+      size_t at = 0;
+      for (size_t n = 0; ok && n < node_count; ++n)
+        if (order[n] < node_count && nodes[order[n]]->output == OUT_TEXT) sorted[at++] = nodes[order[n]];
+      for (size_t i = 0; ok && i < text->count; ++i) {
+        size_t n = 0;
+        while (n < node_count && nodes[n] != text->sections[i]) ++n;
+        if (n == node_count) sorted[at++] = text->sections[i];
+      }
+      if (ok && at == text->count) memcpy(text->sections, sorted, at * sizeof(*sorted));
+      free(sorted);
+    }
+  }
+  free(edges); free(nodes); free(sizes); free(counts); free(offsets); free(order); free(calls);
+  return ok || fail(linker, "call-graph ordering failed%s%s", "", "");
+}
 static bool write_output(Linker *linker, const char *entry_name) {
   Segment segments[3];
   const size_t phdr_count = 4; /* Up to three loads plus the stack note. */
@@ -998,6 +1113,8 @@ static bool write_output(Linker *linker, const char *entry_name) {
   for (int k = 0; ok && k < OUT_ALLOC_COUNT; ++k) {
     LinkOutput *output = &linker->outputs[k];
     if (output->type == SHT_NOBITS) continue;
+    /* Gaps between functions trap, as with lld. */
+    if (k == OUT_TEXT) memset(image + output->file_offset, 0xcc, output->size);
     for (size_t i = 0; ok && i < output->count; ++i) {
       LinkSection *section = output->sections[i];
       uint8_t *at = image + output->file_offset + section->offset;
@@ -1112,6 +1229,7 @@ static void linker_free(Linker *linker) {
     free(object->sections);
     free(object->symbols);
     free(object->locals);
+    free(object->profile);
     free(object);
   }
   free(linker->objects);
@@ -1139,7 +1257,8 @@ bool dyn_link_elf_supported(const char *path) {
   return n >= 20 && !memcmp(magic, "\x7f" "ELF", 4) && read16(magic + 16) == ELF_REL;
 }
 
-int dyn_link_elf(const char *const *inputs, size_t input_count, const char *output, const char *entry) {
+int dyn_link_elf(const char *const *inputs, size_t input_count, const char *output, const char *entry,
+                 DynLinkLayout layout) {
   Linker linker = {.output_path = output};
   bool ok = true;
   for (size_t i = 0; ok && i < input_count; ++i) {
@@ -1150,11 +1269,110 @@ int dyn_link_elf(const char *const *inputs, size_t input_count, const char *outp
     else ok = load_object(&linker, inputs[i], data, size);
   }
   ok = ok && resolve_archives(&linker) && allocate_commons(&linker) && collect_garbage(&linker, entry) &&
-       assign_outputs(&linker) && write_output(&linker, entry);
+       assign_outputs(&linker) && (!layout || order_text(&linker, layout)) && write_output(&linker, entry);
   if (!ok) {
     fprintf(stderr, "error: link: %s\n", linker.error[0] ? linker.error : "out of memory");
     remove(output);
   }
   linker_free(&linker);
   return ok ? 0 : 2;
+}
+
+/* Global symbols that non-bitcode inputs define or reference, for ThinLTO
+   symbol resolution. Archive members count only through their references,
+   since a bitcode definition keeps them from loading. */
+typedef struct {
+  char **names;
+  size_t count, capacity;
+} NameList;
+static bool name_add(NameList *list, const char *name, size_t length) {
+  if (!grow((void **)&list->names, &list->capacity, list->count, sizeof(*list->names))) return false;
+  char *copy = malloc(length + 1);
+  if (!copy) return false;
+  memcpy(copy, name, length);
+  copy[length] = 0;
+  list->names[list->count++] = copy;
+  return true;
+}
+static bool scan_symbols(const uint8_t *data, size_t size, bool member, NameList *defined, NameList *used) {
+  if (size < 64 || memcmp(data, "\x7f" "ELF", 4) || data[4] != 2 || data[5] != 1) return true;
+  uint16_t kind = read16(data + 16);
+  if (kind != ELF_REL && kind != 3) return true;
+  uint64_t header_offset = read64(data + 40);
+  size_t count = read16(data + 60);
+  if (!in_bounds(size, header_offset, (uint64_t)count * 64)) return true;
+  const uint8_t *headers = data + header_offset;
+  uint32_t wanted = kind == ELF_REL ? SHT_SYMTAB : 11; /* SHT_DYNSYM */
+  for (size_t i = 0; i < count; ++i) {
+    const uint8_t *h = headers + i * 64;
+    if (read32(h + 4) != wanted) continue;
+    uint32_t link = read32(h + 40);
+    if (link >= count) continue;
+    const uint8_t *sh = headers + (size_t)link * 64;
+    uint64_t offset = read64(h + 24), length = read64(h + 32);
+    uint64_t names = read64(sh + 24), names_size = read64(sh + 32);
+    if (!in_bounds(size, offset, length) || !in_bounds(size, names, names_size)) continue;
+    for (uint64_t at = 24; at + 24 <= length; at += 24) {
+      const uint8_t *entry = data + offset + at;
+      uint8_t binding = entry[4] >> 4;
+      uint32_t name = read32(entry);
+      if (binding == STB_LOCAL || name >= names_size) continue;
+      const char *text = (const char *)data + names + name;
+      const char *end = memchr(text, 0, names_size - name);
+      if (!end || !*text) continue;
+      bool undefined = read16(entry + 6) == SHN_UNDEF;
+      /* Shared libraries' definitions never displace bitcode ones. */
+      NameList *list = undefined ? used : kind == ELF_REL && !member ? defined : NULL;
+      if (list && !name_add(list, text, (size_t)(end - text))) return false;
+    }
+  }
+  return true;
+}
+static bool scan_archive(const uint8_t *data, size_t size, NameList *defined, NameList *used) {
+  for (size_t at = 8; at + 60 <= size;) {
+    const uint8_t *header = data + at;
+    size_t member_size = (size_t)strtoull((const char *)header + 48, NULL, 10);
+    size_t body = at + 60;
+    if (member_size > size - body) return true;
+    const uint8_t *member = data + body;
+    size_t length = member_size;
+    if (!memcmp(header, "#1/", 3)) {
+      size_t skip = (size_t)strtoull((const char *)header + 3, NULL, 10);
+      if (skip > length) return true;
+      member += skip;
+      length -= skip;
+    }
+    if (!scan_symbols(member, length, true, defined, used)) return false;
+    at = body + member_size + (member_size & 1);
+  }
+  return true;
+}
+void dyn_link_elf_names_free(char **names, size_t count) {
+  for (size_t i = 0; i < count; ++i) free(names[i]);
+  free(names);
+}
+bool dyn_link_elf_symbols(const char *const *inputs, size_t input_count, char ***defined, size_t *defined_count,
+                          char ***used, size_t *used_count) {
+  NameList define = {0}, use = {0};
+  bool ok = true;
+  for (size_t i = 0; ok && i < input_count; ++i) {
+    Linker scratch = {0};
+    size_t size = 0;
+    uint8_t *data = read_file(&scratch, inputs[i], &size);
+    if (data) {
+      ok = size >= 8 && !memcmp(data, "!<arch>\n", 8) ? scan_archive(data, size, &define, &use)
+                                                      : scan_symbols(data, size, false, &define, &use);
+    }
+    linker_free(&scratch);
+  }
+  if (!ok) {
+    dyn_link_elf_names_free(define.names, define.count);
+    dyn_link_elf_names_free(use.names, use.count);
+    return false;
+  }
+  *defined = define.names;
+  *defined_count = define.count;
+  *used = use.names;
+  *used_count = use.count;
+  return true;
 }

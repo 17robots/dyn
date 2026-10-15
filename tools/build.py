@@ -64,7 +64,7 @@ object_cppflags = [f for f in cppflags if not is_link_flag(f)]
 link_cppflags = [f for f in cppflags if is_link_flag(f)]
 
 # LLVM's C API cannot emit the summary needed by ThinLTO.
-add('thinlto.o', [COMPILER/'src/thinlto.cpp'],
+add('thinlto.o', [COMPILER/'src/thinlto.cpp', COMPILER/'src/thinlto.h', COMPILER/'src/link_elf.h'],
     [*cxx, *object_cppflags, *llvm('--cxxflags'), *flags('CXXFLAGS'), '-O2', '-c',
      COMPILER/'src/thinlto.cpp', '-o', BUILD/'thinlto.o'])
 

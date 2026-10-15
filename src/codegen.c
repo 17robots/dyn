@@ -7,6 +7,7 @@
 #include "frontend.h"
 #include "ir.h"
 #include "link_elf.h"
+#include "thinlto.h"
 #include "llvm_shim.h"
 #include "sema.h"
 #include <assert.h>
@@ -3121,6 +3122,53 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
   return dyn_codegen_module(source, object_path, ir_path, asm_path, release,
                             debug_info, shared, NULL);
 }
+/* Symbols that the runtime and explicit link inputs define or use must stay
+   visible; everything else in the bitcode may be internalized. */
+static int thin_link(const DynContext *context, const char *runtime, const char *support,
+                     const char *const *bitcode, size_t bitcode_count, const char *output_path,
+                     const char *const *link_inputs, size_t link_input_count,
+                     const char *lto_cache, unsigned lto_jobs, char ***objects,
+                     size_t *object_count) {
+  pthread_once(&llvm_targets_once, initialize_llvm_targets);
+  const char **regular = calloc(link_input_count + 2, sizeof(*regular));
+  if (!regular)
+    return 2;
+  size_t regular_count = 0;
+  regular[regular_count++] = runtime;
+  regular[regular_count++] = support;
+  for (size_t i = 0; i < link_input_count; ++i)
+    regular[regular_count++] = link_inputs[i];
+  char **defined = NULL, **used = NULL;
+  size_t defined_count = 0, used_count = 0;
+  bool scanned = dyn_link_elf_symbols(regular, regular_count, &defined, &defined_count,
+                                      &used, &used_count);
+  free(regular);
+  if (!scanned)
+    return 2;
+  const DynOptimization *optimization = context ? context->optimization : NULL;
+  char cache[8192];
+  bool cached = lto_cache && snprintf(cache, sizeof(cache), "%s/thinlto", lto_cache) <
+                                 (int)sizeof(cache);
+  DynThinLto options = {
+      .bitcode = bitcode,
+      .bitcode_count = bitcode_count,
+      .regular_defined = (const char *const *)defined,
+      .regular_defined_count = defined_count,
+      .regular_used = (const char *const *)used,
+      .regular_used_count = used_count,
+      .level = optimization && optimization->level == 3 ? 3 : 2,
+      .jobs = lto_jobs,
+      .aggressive_codegen = optimization && optimization->level == 3,
+      .remarks = optimization && optimization->remarks,
+      .sample_profile = optimization ? optimization->sample_profile : NULL,
+      .cache_directory = cached ? cache : NULL,
+      .output_prefix = output_path,
+  };
+  int status = dyn_thinlto_link(&options, objects, object_count);
+  dyn_link_elf_names_free(defined, defined_count);
+  dyn_link_elf_names_free(used, used_count);
+  return status;
+}
 static int link_wasm(const DynContext *, const char *, const char *,
                      const char *const *, size_t, bool);
 int dyn_link_executable_objects(const DynContext *context,
@@ -3184,10 +3232,25 @@ int dyn_link_executable_objects(const DynContext *context,
   bool darwin = !strcmp(dyn_context_target(context)->kernel, "darwin");
   bool thin = release && object_count && strstr(object_paths[0], ".bc");
   const char *linker = darwin ? DYN_DARWIN_LINKER : windows ? DYN_WINDOWS_LINKER : "ld.lld";
-  /* Static x86-64 Linux executables link in-process; ThinLTO bitcode and
-     shared-library inputs still need ld.lld. */
+  /* ThinLTO runs in-process and hands native objects to the link below.
+     DYN_LINKER=external keeps ld.lld's ThinLTO for differential checks. */
   const char *external = getenv("DYN_LINKER");
-  bool builtin = !thin && !dynamic && !(external && !strcmp(external, "external")) &&
+  bool forced = external && !strcmp(external, "external");
+  char **lto_objects = NULL;
+  size_t lto_object_count = 0;
+  if (thin && !forced) {
+    if (thin_link(context, runtime, support, object_paths, object_count, output_path,
+                  link_inputs, link_input_count, lto_cache, lto_jobs, &lto_objects,
+                  &lto_object_count))
+      return 2;
+    int status = dyn_link_executable_objects(context, (const char *const *)lto_objects,
+        lto_object_count, output_path, link_inputs, link_input_count, release, verbose, NULL, 0);
+    dyn_thinlto_free(lto_objects, lto_object_count);
+    return status;
+  }
+  /* Static x86-64 Linux executables link in-process; shared-library inputs
+     still need ld.lld. */
+  bool builtin = !thin && !dynamic && !forced &&
                  !strcmp(dyn_context_target(context)->name, "x86_64-linux");
   for (size_t i = 0; builtin && i < link_input_count; ++i)
     builtin = dyn_link_elf_supported(link_inputs[i]);
@@ -3208,7 +3271,8 @@ int dyn_link_executable_objects(const DynContext *context,
         fprintf(stderr, " %s", inputs[i]);
       fputc('\n', stderr);
     }
-    int status = dyn_link_elf(inputs, input_count, temporary, "_start");
+    int status = dyn_link_elf(inputs, input_count, temporary, "_start",
+                              dyn_cache_directed_layout);
     free(inputs);
     if (status)
       return 2;

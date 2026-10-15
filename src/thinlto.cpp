@@ -406,3 +406,188 @@ extern "C" void dyn_scalarize_aggregates(LLVMModuleRef module) {
     if (!f.isDeclaration())
       Scalarizer(f, m.getDataLayout()).run();
 }
+
+// In-process ThinLTO: the release link step ld.lld used to run. Settings
+// mirror lld for a static, non-PIE executable so generated code is the same.
+#include "thinlto.h"
+#include <llvm/IR/DiagnosticInfo.h>
+#include <llvm/IR/DiagnosticPrinter.h>
+#include <llvm/LTO/Config.h>
+#include <llvm/LTO/LTO.h>
+#include <llvm/Support/CachePruning.h>
+#include <llvm/Support/Caching.h>
+#include <llvm/Support/CommandLine.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Threading.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <atomic>
+#include <mutex>
+#include <set>
+#include <string>
+
+namespace {
+// Backends run on worker threads; any error diagnostic fails the link.
+std::atomic<bool> diagnostic_failed;
+std::mutex diagnostic_lock;
+void print_diagnostic(const llvm::DiagnosticInfo &info) {
+  std::lock_guard<std::mutex> guard(diagnostic_lock);
+  llvm::raw_ostream &out = llvm::errs();
+  switch (info.getSeverity()) {
+  case llvm::DS_Error: out << "error: "; diagnostic_failed = true; break;
+  case llvm::DS_Warning: out << "warning: "; break;
+  case llvm::DS_Remark: out << "remark: "; break;
+  case llvm::DS_Note: out << "note: "; break;
+  }
+  llvm::DiagnosticPrinterRawOStream printer(out);
+  info.print(printer);
+  out << "\n";
+}
+bool report(llvm::Error error) {
+  bool failed = false;
+  llvm::handleAllErrors(std::move(error), [&](const llvm::ErrorInfoBase &info) {
+    std::fprintf(stderr, "error: ThinLTO: %s\n", info.message().c_str());
+    failed = true;
+  });
+  return failed;
+}
+} // namespace
+
+extern "C" int dyn_thinlto_link(const DynThinLto *options, char ***objects, size_t *object_count) {
+  *objects = nullptr;
+  *object_count = 0;
+  static bool remarks_enabled = false;
+  if (options->remarks && !remarks_enabled) {
+    const char *argv[] = {"dyn",
+        "-pass-remarks=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile",
+        "-pass-remarks-missed=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile",
+        "-pass-remarks-analysis=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile"};
+    llvm::cl::ParseCommandLineOptions(4, argv);
+    remarks_enabled = true;
+  }
+  llvm::lto::Config config;
+  config.Options.FunctionSections = true;
+  config.Options.DataSections = true;
+  config.Options.UniqueSectionNames = true;
+  config.RelocModel = llvm::Reloc::Static;
+  config.OptLevel = options->level;
+  config.CGOptLevel = options->aggressive_codegen ? llvm::CodeGenOptLevel::Aggressive
+                                                  : llvm::CodeGenOptLevel::Default;
+  config.PTO.LoopVectorization = config.OptLevel > 1;
+  config.PTO.SLPVectorization = config.OptLevel > 1;
+  if (options->sample_profile)
+    config.SampleProfile = options->sample_profile;
+  config.DiagHandler = print_diagnostic;
+  unsigned jobs = options->jobs;
+  llvm::lto::LTO lto(std::move(config),
+                     llvm::lto::createInProcessThinBackend(
+                         jobs ? llvm::heavyweight_hardware_concurrency(jobs)
+                              : llvm::heavyweight_hardware_concurrency()));
+  std::set<std::string> regular_defined(options->regular_defined,
+                                        options->regular_defined + options->regular_defined_count);
+  std::set<std::string> regular_used(options->regular_used,
+                                     options->regular_used + options->regular_used_count);
+  std::set<std::string> defined;
+  std::vector<std::unique_ptr<llvm::MemoryBuffer>> inputs;
+  for (size_t i = 0; i < options->bitcode_count; ++i) {
+    auto buffer = llvm::MemoryBuffer::getFile(options->bitcode[i]);
+    if (!buffer) {
+      std::fprintf(stderr, "error: ThinLTO: cannot read '%s'\n", options->bitcode[i]);
+      return 2;
+    }
+    auto input = llvm::lto::InputFile::create((*buffer)->getMemBufferRef());
+    if (!input)
+      return report(input.takeError()) ? 2 : 2;
+    inputs.push_back(std::move(*buffer));
+    std::vector<llvm::lto::SymbolResolution> resolutions;
+    for (const llvm::lto::InputFile::Symbol &symbol : (*input)->symbols()) {
+      std::string name = symbol.getName().str();
+      bool definition = !symbol.isUndefined();
+      llvm::lto::SymbolResolution resolution;
+      resolution.Prevailing = definition && !regular_defined.count(name) && defined.insert(name).second;
+      resolution.VisibleToRegularObj = regular_used.count(name) || regular_defined.count(name) || symbol.isUsed();
+      resolution.FinalDefinitionInLinkageUnit = definition;
+      resolution.LinkerRedefined = false;
+      resolutions.push_back(resolution);
+    }
+    if (report(lto.add(std::move(*input), resolutions)))
+      return 2;
+  }
+  size_t tasks = lto.getMaxTasks();
+  std::vector<llvm::SmallString<0>> buffers(tasks);
+  std::vector<std::unique_ptr<llvm::MemoryBuffer>> cached(tasks);
+  llvm::FileCache cache;
+  if (options->cache_directory) {
+    auto local = llvm::localCache("ThinLTO", "Thin", options->cache_directory,
+        [&](size_t task, const llvm::Twine &, std::unique_ptr<llvm::MemoryBuffer> buffer) {
+          cached[task] = std::move(buffer);
+        });
+    if (!local)
+      return report(local.takeError()) ? 2 : 2;
+    cache = std::move(*local);
+  }
+  auto stream = [&](size_t task, const llvm::Twine &) -> llvm::Expected<std::unique_ptr<llvm::CachedFileStream>> {
+    return std::make_unique<llvm::CachedFileStream>(
+        std::make_unique<llvm::raw_svector_ostream>(buffers[task]));
+  };
+  diagnostic_failed = false;
+  if (report(lto.run(stream, cache)) || diagnostic_failed)
+    return 2;
+  if (options->cache_directory) {
+    auto policy = llvm::parseCachePruningPolicy("cache_size=10%:cache_size_bytes=1g:prune_after=168h");
+    if (policy) {
+      llvm::Expected<bool> pruned = llvm::pruneCache(options->cache_directory, *policy, cached);
+      if (!pruned)
+        llvm::consumeError(pruned.takeError());
+    } else
+      llvm::consumeError(policy.takeError());
+  }
+  char **paths = static_cast<char **>(std::calloc(tasks ? tasks : 1, sizeof(char *)));
+  if (!paths)
+    return 2;
+  size_t count = 0;
+  for (size_t task = 0; task < tasks; ++task) {
+    llvm::StringRef data = cached[task] ? cached[task]->getBuffer() : llvm::StringRef(buffers[task]);
+    if (data.empty())
+      continue;
+    std::string path = std::string(options->output_prefix) + ".lto." + std::to_string(task) + ".o";
+    FILE *file = std::fopen(path.c_str(), "wb");
+    bool written = file && std::fwrite(data.data(), 1, data.size(), file) == data.size();
+    if (file && std::fclose(file))
+      written = false;
+    paths[count] = written ? strdup(path.c_str()) : nullptr;
+    if (!paths[count]) {
+      std::fprintf(stderr, "error: ThinLTO: cannot write '%s'\n", path.c_str());
+      std::remove(path.c_str());
+      dyn_thinlto_free(paths, count);
+      return 2;
+    }
+    ++count;
+  }
+  *objects = paths;
+  *object_count = count;
+  return 0;
+}
+#include <llvm/Transforms/Utils/CodeLayout.h>
+extern "C" bool dyn_cache_directed_layout(const uint64_t *sizes, const uint64_t *counts, size_t node_count,
+                                          const DynLinkEdge *edges, const uint64_t *offsets, size_t edge_count,
+                                          uint64_t *order) {
+  static_assert(sizeof(llvm::codelayout::EdgeCount) == 3 * sizeof(uint64_t), "edge layout");
+  std::vector<uint64_t> result = llvm::codelayout::computeCacheDirectedLayout(
+      llvm::ArrayRef<uint64_t>(sizes, node_count), llvm::ArrayRef<uint64_t>(counts, node_count),
+      llvm::ArrayRef<llvm::codelayout::EdgeCount>(
+          reinterpret_cast<const llvm::codelayout::EdgeCount *>(edges), edge_count),
+      llvm::ArrayRef<uint64_t>(offsets, edge_count));
+  if (result.size() != node_count)
+    return false;
+  std::copy(result.begin(), result.end(), order);
+  return true;
+}
+extern "C" void dyn_thinlto_free(char **objects, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    std::remove(objects[i]);
+    std::free(objects[i]);
+  }
+  std::free(objects);
+}

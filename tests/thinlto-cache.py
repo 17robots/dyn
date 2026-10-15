@@ -3,13 +3,12 @@
 import os
 from pathlib import Path
 import platform
-import shutil
 import subprocess
 import tempfile
 
 DYN = str(Path(os.environ.get('DYN', './build/dyn-release')).resolve())
-if platform.system() != 'Linux' or platform.machine() != 'x86_64' or not shutil.which('ld.lld'):
-    print('SKIP ThinLTO requires x86_64 Linux and LLD')
+if platform.system() != 'Linux' or platform.machine() != 'x86_64':
+    print('SKIP ThinLTO requires x86_64 Linux')
     raise SystemExit(0)
 
 with tempfile.TemporaryDirectory(prefix='dyn-thinlto-') as directory:

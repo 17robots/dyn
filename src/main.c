@@ -197,28 +197,6 @@ typedef struct {
   /* Analyzed and lowered once by the parent; forked workers share it. */
   const DynIrProgram *ir;
 } ModuleBuild;
-static bool command_available(const char *name) {
-  const char *path = getenv("PATH");
-  if (!path)
-    return false;
-  size_t name_length = strlen(name);
-  for (const char *at = path; *at;) {
-    const char *end = strchr(at, DYN_PATH_SEPARATOR);
-    if (!end)
-      end = at + strlen(at);
-    size_t length = (size_t)(end - at);
-    char candidate[4096];
-    if (length + name_length + 2 < sizeof(candidate)) {
-      memcpy(candidate, at, length);
-      candidate[length] = '/';
-      memcpy(candidate + length + 1, name, name_length + 1);
-      if (!access(candidate, X_OK))
-        return true;
-    }
-    at = *end ? end + 1 : end;
-  }
-  return false;
-}
 static uint64_t path_hash(const char *s) {
   uint64_t h = UINT64_C(1469598103934665603);
   for (; *s; ++s) {
@@ -426,7 +404,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (options->optimization.sample_profile &&
       (!options->release || options->no_lto || options->no_link || options->shared ||
        options->emit_ir || options->emit_asm || options->emit_object ||
-       strcmp(options->target, "x86_64-linux") || !command_available("ld.lld") ||
+       strcmp(options->target, "x86_64-linux") ||
        access(options->optimization.sample_profile, R_OK))) {
     fprintf(stderr, "error: --sample-profile requires a readable profile and a release x86_64-linux ThinLTO executable\n");
     return 2;
@@ -603,8 +581,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
       result = dyn_sources_merge(&sources, main_path, &module_source);
     module_source.context = context;
     bool thin_lto = options->release && !options->no_lto &&
-                    !strcmp(options->target, "x86_64-linux") &&
-                    command_available("ld.lld");
+                    !strcmp(options->target, "x86_64-linux");
     ModuleBuild module_build = {.merged = &module_source,
                                 .thin_lto = thin_lto,
                                 .options = options,
