@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """x86-64 Linux executables link in-process: no external linker on PATH,
-archive members load on demand, unused sections are dropped, and link errors
-name the symbol."""
+archive members load on demand, unused sections are dropped, link errors name
+the symbol, and release ThinLTO output matches ld.lld's."""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,23 @@ fn main() {
   if used(1) != 111 { #panic("second call") }
 }
 '''
+RELEASE = '''use "std/io" io
+use "std/mem" mem
+fn mix(x: u64) u64 {
+  return (x ^ 0x9e3779b9) * 2654435761
+}
+fn main() {
+  arena := mem.arena_create(4096)
+  values := mem.arena_push(&arena, 64, 8)[..64]
+  state: u64 = 1
+  for i in 0..64 {
+    state = mix(state + #cast(u64) i) % 1000003
+    values[i] = #cast(u8) state
+  }
+  _ = io.println(io.stdout(), "{}", state)
+  mem.arena_release(&arena)
+}
+'''
 MISSING = '''extern fn missing "dyn_fixture_missing"(value: i32) i32
 fn main() {
   if missing(1) != 0 { #panic("unreachable") }
@@ -76,8 +94,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
     for name, text in (('program', MAIN), ('missing', MISSING)):
         (root/name).mkdir()
         (root/name/'main.dyn').write_text(text)
-    # An empty PATH proves no linker is spawned.
-    bare = dict(os.environ, PATH=str(root/'empty'))
+    # A PATH holding only Python (for wrapper compilers) proves no linker is spawned.
+    (root/'bin').mkdir()
+    (root/'bin'/'python3').symlink_to(sys.executable)
+    bare = dict(os.environ, PATH=str(root/'bin'))
     output = root/'program.out'
     process = run(DYN, 'build', root/'program', '--output', output, '--verbose',
                   '--link', root/'used.o', '--link', root/'libfixture.a', env=bare)
@@ -100,4 +120,32 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
                   '--link', root/'helper.o', '--link', root/'duplicate.o', env=bare, ok=False)
     assert "duplicate symbol 'dyn_fixture_helper'" in process.stderr, process.stderr
 
-print('PASS built-in x86-64 linker: no external linker, lazy archives, section GC and link errors')
+    # Release: in-process ThinLTO must produce the same code, in the same
+    # order, as ld.lld's ThinLTO, with and without a call-graph profile.
+    if shutil.which('ld.lld') and shutil.which('objdump') and shutil.which('nm'):
+        (root/'release').mkdir()
+        (root/'release'/'main.dyn').write_text(RELEASE)
+        profile = root/'sample.prof'
+        profile.write_text('main:1000000:1\n' + ''.join(f' {line}: 1000\n' for line in range(40)))
+
+        def code(path):
+            listing = run('objdump', '-d', '--no-show-raw-insn', path).stdout
+            lines = []
+            for line in listing.splitlines():
+                if ':\t' not in line or 'int3' in line:
+                    continue
+                text = line.split(':\t', 1)[1]
+                lines.append(re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'0x[0-9a-f]+', 'X', text))))
+            order = [line.split()[2] for line in run('nm', '-n', path).stdout.splitlines()
+                     if len(line.split()) == 3 and line.split()[1] in 'tT']
+            return lines, order
+
+        for name, extra in (('plain', []), ('profiled', ['--sample-profile', profile])):
+            ours, theirs = root/f'{name}-builtin', root/f'{name}-lld'
+            run(DYN, 'build', root/'release', '--release', '--output', ours, *extra, env=dict(bare, DYN_CACHE_DIR=str(root/f'{name}-a')))
+            run(DYN, 'build', root/'release', '--release', '--output', theirs, *extra,
+                env=dict(os.environ, DYN_LINKER='external', DYN_CACHE_DIR=str(root/f'{name}-b')))
+            assert run(ours).stdout == run(theirs).stdout
+            assert code(ours) == code(theirs), f'{name}: in-process ThinLTO differs from ld.lld'
+
+print('PASS built-in x86-64 linker and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, lld code parity')
