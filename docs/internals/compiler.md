@@ -131,8 +131,8 @@ arena. The present source loader still uses libc allocation; replacing that with
 arenas is next implementation slice.
 
 Linux x86-64 starts without libc: `dynrt_start.o` defines `_start`, calls generated
-`main`, then performs exit syscall. LLVM emits native objects. Static x86-64 Linux
-executables link in-process (`src/link_elf.c`): relocatable objects and `ar`
+`main`, then performs exit syscall. LLVM emits native objects. Linux executables
+(x86-64 and AArch64) link in-process (`src/link_elf.c`): relocatable objects and `ar`
 archives, lazy archive members, section garbage collection, a GOT for
 GOT-relative relocations, and `.eh_frame` records pruned with their code. No
 external linker is spawned. Shared libraries and GNU linker scripts (such as
@@ -142,7 +142,7 @@ through `JUMP_SLOT` slots at load time (`BIND_NOW`, no lazy PLT), canonical PLT
 addresses for imported functions whose address is taken, and copy relocations
 for imported data read by non-PIC code. `--shared` output is linked in-process
 as well; as with lld, its default-visibility definitions stay preemptible.
-Other targets still use `ld.lld` (or system `ld`). `DYN_LINKER=external`
+macOS, Windows and Wasm still use external linkers. `DYN_LINKER=external`
 forces the external linker, including its ThinLTO, for differential checks.
 
 Standard-library imports resolve relative to compiler executable, never process working
@@ -162,8 +162,10 @@ contracts and generics tests with it. A minimized regression case belongs in
 installs compiler, runtime objects, and standard library under `PREFIX`; `just
 package` builds and validates a relocated SDK outside the source tree. Both Linux targets
 ship startup/support objects; target seam remains explicit, not a portability claim.
-Cross-linking AArch64 Linux executables uses `ld.lld` or Zig's bundled `ld.lld`;
-compiler never feeds AArch64 objects to host `ld`. Object and assembly emission
+AArch64 Linux executables and shared libraries link in-process too, with
+lld's 64 KiB maximum page size and its adrp relaxations (adrp+add to nop+adr
+within 1 MiB, GOT adrp+ldr to adrp+add for local symbols), so code matches
+`ld.lld` output instruction for instruction. Object and assembly emission
 need only LLVM backend. Tests execute through `qemu-aarch64` when available.
 
 ## Error boundaries

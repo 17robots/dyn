@@ -18,8 +18,9 @@ servers so they pick up the new `dyn`.
   command and the language server, and source builds no longer need the
   Tree-sitter library or a grammar checkout. Editor highlighting still uses the
   separate `tree-sitter-dyn` grammar.
-- x86-64 Linux executables link in-process, release ThinLTO included, so no
-  external linker is needed. Release code is the same as before: ThinLTO
+- Linux executables and shared libraries (x86-64 and AArch64) link
+  in-process, x86-64 release ThinLTO included, so no external linker is
+  needed; cross-building for AArch64 Linux no longer needs `ld.lld` or Zig. Release code is the same as before: ThinLTO
   runs inside the compiler with `ld.lld`'s settings, including profile-guided
   function ordering. `--link` and `#link` accept objects, `ar` archives,
   shared libraries and GNU linker scripts, and `--shared` libraries link
