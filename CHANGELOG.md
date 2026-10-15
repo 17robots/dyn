@@ -18,6 +18,10 @@ servers so they pick up the new `dyn`.
   command and the language server, and source builds no longer need the
   Tree-sitter library or a grammar checkout. Editor highlighting still uses the
   separate `tree-sitter-dyn` grammar.
+- x86-64 Linux executables link in-process: debug builds, `--release --no-lto`
+  and release builds without `ld.lld` no longer need any external linker.
+  `--link` accepts objects and `ar` archives there; shared-library inputs and
+  ThinLTO still use `ld.lld`. Set `DYN_LINKER=external` to use the old path.
 - Syntax errors name the offending token and what was expected (for example
   `expected ')', found 'bar'` instead of `invalid syntax near 'ERROR'`). The
   parser resumes at the next statement or declaration and reports up to 20

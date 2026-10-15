@@ -104,7 +104,7 @@ compiler_link('dyn-legacy', compiler_objects('legacy', ['-O2']))
 # Matched prepared-IR benchmark harness. Not installed or part of normal builds.
 backend_benchmark_objects = [f'obj/release/{name}.o' for name in
     ('frontend', 'ast', 'sema', 'sema_globals', 'source', 'source_tree',
-     'diagnostic', 'target', 'ir', 'codegen', 'parser', 'snapshot')]
+     'diagnostic', 'target', 'ir', 'codegen', 'link_elf', 'parser', 'snapshot')]
 add('obj/benchmark/backend.o',
     [backend_experiment/'benchmark-driver.c', backend_experiment/'driver.c', backend_experiment/'output.h', *headers],
     [*cc, *object_cppflags, *cflags, '-O2', f'-I{COMPILER}/src',
@@ -209,8 +209,8 @@ add('frontend-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILE
 add('analysis-cache-test', [f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/tests/fault-alloc.h', f'{COMPILER}/src/analysis_cache.c', *frontend, *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/src/analysis_cache.c', *frontend, '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/analysis-cache-test'])
 
-add('codegen-failure-test', [BUILD/'thinlto.o', f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', *headers],
-    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'], needs=['thinlto.o'])
+add('codegen-failure-test', [BUILD/'thinlto.o', f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', *headers],
+    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'], needs=['thinlto.o'])
 
 add('project-failure-test', [f'{COMPILER}/tests/project-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/project-failure.c', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/project-failure-test'])
