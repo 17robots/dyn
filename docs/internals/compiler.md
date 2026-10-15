@@ -135,9 +135,15 @@ Linux x86-64 starts without libc: `dynrt_start.o` defines `_start`, calls genera
 executables link in-process (`src/link_elf.c`): relocatable objects and `ar`
 archives, lazy archive members, section garbage collection, a GOT for
 GOT-relative relocations, and `.eh_frame` records pruned with their code. No
-external linker is spawned. Shared-library inputs, `--shared` and the other
-targets still use `ld.lld` (or system `ld`). `DYN_LINKER=external` forces the
-external linker, including its ThinLTO, for differential checks.
+external linker is spawned. Shared libraries and GNU linker scripts (such as
+`/usr/lib/libc.so`) are inputs too: the executable becomes dynamic, with
+`PT_INTERP`, `.dynamic`, a SysV `.hash`, symbol versions, PLT entries bound
+through `JUMP_SLOT` slots at load time (`BIND_NOW`, no lazy PLT), canonical PLT
+addresses for imported functions whose address is taken, and copy relocations
+for imported data read by non-PIC code. `--shared` output is linked in-process
+as well; as with lld, its default-visibility definitions stay preemptible.
+Other targets still use `ld.lld` (or system `ld`). `DYN_LINKER=external`
+forces the external linker, including its ThinLTO, for differential checks.
 
 Standard-library imports resolve relative to compiler executable, never process working
 directory. Initial `std/terminal` and `std/io` are ordinary Dyn over `{data,len}` UTF-8 strings and `#syscall`;

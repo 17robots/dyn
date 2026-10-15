@@ -64,6 +64,29 @@ fn main() {
   mem.arena_release(&arena)
 }
 '''
+LIBRARY = r'''
+int dyn_shared_value = 41;
+int dyn_shared_add(int value) { return value + dyn_shared_value; }
+int dyn_shared_call(int (*callback)(int)) { dyn_shared_value += 1; return callback(dyn_shared_value); }
+'''
+READER = r'''
+extern int dyn_shared_value;
+int dyn_fixture_read(void) { return dyn_shared_value; }
+'''
+DYNAMIC = '''extern fn add "dyn_shared_add"(value: i32) i32
+extern fn call "dyn_shared_call"(callback: *fn(i32) i32) i32
+extern fn read "dyn_fixture_read"() i32
+fn twice(value: i32) i32 {
+  return value * 2
+}
+fn main() {
+  if add(1) != 42 { #panic("PLT call") }
+  if read() != 41 { #panic("copied data") }
+  if call(&twice) != 84 { #panic("callback") }
+  // The library writes the executable's copy, so both sides agree.
+  if read() != 42 { #panic("shared copy") }
+}
+'''
 MISSING = '''extern fn missing "dyn_fixture_missing"(value: i32) i32
 fn main() {
   if missing(1) != 0 { #panic("unreachable") }
@@ -120,6 +143,28 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
                   '--link', root/'helper.o', '--link', root/'duplicate.o', env=bare, ok=False)
     assert "duplicate symbol 'dyn_fixture_helper'" in process.stderr, process.stderr
 
+    # Shared libraries: PLT calls, a function pointer passed back in, data
+    # read directly by non-PIC code (a copy relocation), and the C library
+    # through its GROUP linker script.
+    (root/'library.c').write_text(LIBRARY)
+    run(CC, '-shared', '-fPIC', '-O1', root/'library.c', '-o', root/'libdynfixture.so')
+    (root/'reader.c').write_text(READER)
+    run(CC, *flags, '-fno-pic', root/'reader.c', '-o', root/'reader.o')
+    (root/'dynamic').mkdir()
+    (root/'dynamic'/'main.dyn').write_text(DYNAMIC)
+    libc = next((path for path in ('/usr/lib/x86_64-linux-gnu/libc.so', '/usr/lib64/libc.so', '/usr/lib/libc.so')
+                 if Path(path).exists()), None)
+    inputs = ['--link', root/'reader.o', '--link', root/'libdynfixture.so']
+    if libc:
+        inputs += ['--link', libc]
+    for mode in ([], ['--release']):
+        dynamic = root/'dynamic.out'
+        run(DYN, 'build', root/'dynamic', '--output', dynamic, *mode, *inputs, env=bare)
+        run(dynamic)
+        if shutil.which('readelf'):
+            relocations = run('readelf', '-rW', dynamic).stdout
+            assert 'R_X86_64_COPY' in relocations and 'R_X86_64_JUMP_SLOT' in relocations, relocations
+
     # Release: in-process ThinLTO must produce the same code, in the same
     # order, as ld.lld's ThinLTO, with and without a call-graph profile.
     if shutil.which('ld.lld') and shutil.which('objdump') and shutil.which('nm'):
@@ -148,4 +193,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
             assert run(ours).stdout == run(theirs).stdout
             assert code(ours) == code(theirs), f'{name}: in-process ThinLTO differs from ld.lld'
 
-print('PASS built-in x86-64 linker and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, lld code parity')
+print('PASS built-in x86-64 linker and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, lld code parity')

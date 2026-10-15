@@ -1,8 +1,10 @@
-/* Built-in static ELF linker for executables, so a build needs no external
-   linker. Inputs are relocatable objects and ar archives; the output is a
-   non-PIE executable with unused sections removed, matching what the
-   compiler previously asked ld.lld for. The host may be any OS, so ELF
-   structures are read field by field instead of through <elf.h>. */
+/* Built-in ELF linker, so a build needs no external linker. Inputs are
+   relocatable objects, ar archives, shared libraries and GNU linker scripts
+   (GROUP/INPUT/AS_NEEDED); the output is a non-PIE executable, dynamic when
+   it uses shared libraries, or a shared library. Unused sections are
+   removed, matching what the compiler previously asked ld.lld for. The host
+   may be any OS, so ELF structures are read field by field instead of
+   through <elf.h>. */
 #include "link_elf.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -11,25 +13,34 @@
 #include <sys/stat.h>
 
 enum {
-  ELF_REL = 1, ELF_EXEC = 2,
+  ELF_REL = 1, ELF_EXEC = 2, ELF_DYN = 3,
   MACHINE_X86_64 = 62,
   SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_RELA = 4, SHT_NOBITS = 8,
   SHT_REL = 9, SHT_INIT_ARRAY = 14, SHT_FINI_ARRAY = 15, SHT_PREINIT_ARRAY = 16,
   SHT_GROUP = 17, SHT_SYMTAB_SHNDX = 18, SHT_X86_64_UNWIND = 0x70000001,
-  SHT_CALL_GRAPH_PROFILE = 0x6fff4c09,
+  SHT_CALL_GRAPH_PROFILE = 0x6fff4c09, SHT_HASH = 5, SHT_DYNAMIC = 6, SHT_DYNSYM = 11,
+  SHT_VERDEF = 0x6ffffffd, SHT_VERNEED = 0x6ffffffe, SHT_VERSYM = 0x6fffffff,
   SHF_WRITE = 1, SHF_ALLOC = 2, SHF_EXEC = 4, SHF_GROUP = 0x200, SHF_TLS = 0x400,
   SHF_RETAIN = 0x200000,
   SHN_UNDEF = 0, SHN_ABS = 0xfff1, SHN_COMMON = 0xfff2, SHN_XINDEX = 0xffff,
   STB_LOCAL = 0, STB_GLOBAL = 1, STB_WEAK = 2,
   STT_NOTYPE = 0, STT_OBJECT = 1, STT_FUNC = 2, STT_SECTION = 3, STT_FILE = 4, STT_TLS = 6,
-  PT_LOAD = 1, PT_GNU_STACK = 0x6474e551,
+  STT_GNU_IFUNC = 10,
+  STV_DEFAULT = 0, STV_PROTECTED = 3,
+  PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_PHDR = 6, PT_GNU_STACK = 0x6474e551,
+  DT_NULL = 0, DT_NEEDED = 1, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
+  DT_RELAENT = 9, DT_STRSZ = 10, DT_SYMENT = 11, DT_SONAME = 14, DT_DEBUG = 21, DT_INIT_ARRAY = 25,
+  DT_FINI_ARRAY = 26, DT_INIT_ARRAYSZ = 27, DT_FINI_ARRAYSZ = 28, DT_FLAGS = 30, DF_BIND_NOW = 8,
+  DT_VERSYM = 0x6ffffff0, DT_FLAGS_1 = 0x6ffffffb, DF_1_NOW = 1, DT_VERNEED = 0x6ffffffe,
+  DT_VERNEEDNUM = 0x6fffffff,
   GRP_COMDAT = 1,
 };
 enum {
   R_X86_64_NONE = 0, R_X86_64_64 = 1, R_X86_64_PC32 = 2, R_X86_64_PLT32 = 4,
   R_X86_64_GOTPCREL = 9, R_X86_64_32 = 10, R_X86_64_32S = 11, R_X86_64_PC64 = 24,
   R_X86_64_SIZE32 = 32, R_X86_64_SIZE64 = 33, R_X86_64_GOTPCRELX = 41,
-  R_X86_64_REX_GOTPCRELX = 42,
+  R_X86_64_REX_GOTPCRELX = 42, R_X86_64_COPY = 5, R_X86_64_GLOB_DAT = 6, R_X86_64_JUMP_SLOT = 7,
+  R_X86_64_RELATIVE = 8,
 };
 #define PAGE 0x1000u
 #define IMAGE_BASE 0x200000u
@@ -45,10 +56,20 @@ typedef struct {
   uint64_t offset, addend;
   uint32_t type, symbol;
 } LinkRela;
+/* Allocated outputs in address order: read-only, code, then writable. */
 typedef enum {
-  OUT_TEXT, OUT_RODATA, OUT_EH_FRAME, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
+  OUT_INTERP, OUT_HASH, OUT_DYNSYM, OUT_DYNSTR, OUT_VERSYM, OUT_VERNEED, OUT_RELA_DYN,
+  OUT_RODATA, OUT_EH_FRAME, OUT_TEXT, OUT_PLT, OUT_DYNAMIC, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
   OUT_DATA, OUT_GOT, OUT_BSS, OUT_ALLOC_COUNT
 } OutputKind;
+typedef struct {
+  const char *path; /* As given; also the DT_NEEDED name without a soname. */
+  const char *soname;
+  const char **versions; /* Version names by verdef index. */
+  size_t version_count;
+  uint32_t name_string; /* Offset in .dynstr. */
+  bool as_needed, used;
+} LinkShared;
 typedef struct {
   LinkObject *object; /* NULL for synthetic sections. */
   const char *name;
@@ -65,12 +86,29 @@ struct LinkSymbol {
   const char *name;
   LinkSection *section;
   uint64_t value, size, common_align;
-  uint8_t binding, type;
+  uint8_t binding, type, visibility;
   bool defined, absolute, common, referenced, strong_reference;
-  uint32_t got; /* One-based GOT slot. */
+  bool library_reference; /* A loaded shared library uses it. */
+  bool canonical; /* Imported function whose address is its PLT entry. */
+  bool copied; /* Imported data copied into the executable's .bss. */
+  uint32_t got, plt, dynsym; /* One-based slots; 0 when absent. */
+  uint32_t dynstr;
+  uint16_t version; /* .gnu.version index. */
+  /* First shared-library definition, used when no object defines it. */
+  LinkShared *shared;
+  const char *shared_version;
+  uint64_t shared_value, shared_size;
+  uint8_t shared_type;
+  bool shared_hidden;
   int archive_member; /* Lazy archive member, or -1. */
   size_t archive;
 };
+typedef struct {
+  LinkSection *section;
+  uint64_t offset, addend;
+  uint32_t type;
+  LinkSymbol *symbol;
+} DynamicRelocation;
 struct LinkObject {
   const char *path;
   const uint8_t *data;
@@ -94,8 +132,9 @@ typedef struct {
   char *name;
   LinkSection **sections;
   size_t count, capacity;
-  uint64_t align, size, address, file_offset, flags;
-  uint32_t type, header_index;
+  uint64_t align, size, address, file_offset, flags, entry_size;
+  uint32_t type, header_index, info;
+  int link; /* Output whose section index goes in sh_link, or -1. */
 } LinkOutput;
 typedef struct {
   const char *output_path;
@@ -118,6 +157,23 @@ typedef struct {
   size_t extra_count, extra_capacity;
   char **signatures;
   size_t signature_count, signature_capacity;
+  bool shared_output, dynamic;
+  const char *interpreter;
+  uint64_t base;
+  LinkShared **shareds;
+  size_t shared_count, shared_capacity;
+  LinkSymbol **plt_symbols, **dynsyms;
+  size_t plt_count, plt_capacity, dynsym_count, dynsym_capacity;
+  DynamicRelocation *relocations;
+  size_t relocation_count, relocation_capacity;
+  LinkSection synthetic[OUT_ALLOC_COUNT];
+  LinkSection **copies;
+  size_t copy_count, copy_capacity;
+  struct { LinkShared *library; const char *version; uint32_t string; } *needs;
+  size_t need_count, need_capacity;
+  uint8_t *dynstr;
+  size_t dynstr_size, dynstr_capacity;
+  size_t dynamic_entries;
 } Linker;
 
 static bool fail(Linker *linker, const char *format, const char *a, const char *b) {
@@ -228,6 +284,10 @@ static bool signature_seen(Linker *linker, const char *signature) {
   return false;
 }
 
+static void merge_visibility(LinkSymbol *symbol, uint8_t visibility) {
+  if (visibility != STV_DEFAULT && (symbol->visibility == STV_DEFAULT || visibility < symbol->visibility))
+    symbol->visibility = visibility;
+}
 static bool define_symbol(Linker *linker, LinkObject *object, LinkSymbol *symbol, const uint8_t *entry,
                           LinkSection *section) {
   uint8_t binding = entry[4] >> 4, type = entry[4] & 15;
@@ -372,6 +432,7 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
     LinkSymbol *symbol = symbol_intern(linker, (const char *)names->data + name);
     if (!symbol) return fail(linker, "out of memory%s%s", "", "");
     object->symbols[i] = symbol;
+    merge_visibility(symbol, entry[5] & 3);
     if (index == SHN_UNDEF || discarded) {
       symbol->referenced = true;
       if (binding != STB_WEAK) symbol->strong_reference = true;
@@ -420,6 +481,198 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
     }
   }
   return true;
+}
+
+/* A shared library contributes its exported definitions (preferring each
+   name's default version) and its undefined names, which the output must
+   export if it defines them. */
+static bool load_shared(Linker *linker, const char *path, const uint8_t *data, size_t size, bool as_needed) {
+  if (size < 64 || data[4] != 2 || data[5] != 1 || read16(data + 18) != MACHINE_X86_64)
+    return fail(linker, "'%s' is not an x86-64 shared library%s", path, "");
+  uint64_t header_offset = read64(data + 40);
+  size_t count = read16(data + 60);
+  if (!in_bounds(size, header_offset, (uint64_t)count * 64))
+    return fail(linker, "'%s' has malformed section headers%s", path, "");
+  const uint8_t *headers = data + header_offset;
+  LinkShared *library = calloc(1, sizeof(*library));
+  if (!library || !grow((void **)&linker->shareds, &linker->shared_capacity, linker->shared_count, sizeof(*linker->shareds))) {
+    free(library);
+    return fail(linker, "out of memory%s%s", "", "");
+  }
+  linker->shareds[linker->shared_count++] = library;
+  library->path = path;
+  library->as_needed = as_needed;
+  const uint8_t *dynsym = NULL, *versym = NULL, *verdef = NULL, *dynamic = NULL;
+  uint64_t dynsym_size = 0, verdef_size = 0, dynamic_size = 0, verdef_count = 0;
+  const char *strings = NULL;
+  uint64_t strings_size = 0;
+  for (size_t i = 0; i < count; ++i) {
+    const uint8_t *h = headers + i * 64;
+    uint32_t type = read32(h + 4);
+    uint64_t offset = read64(h + 24), length = read64(h + 32);
+    if (!in_bounds(size, offset, length)) continue;
+    if (type == SHT_DYNSYM) {
+      dynsym = data + offset;
+      dynsym_size = length;
+      uint32_t link = read32(h + 40);
+      if (link < count) {
+        const uint8_t *sh = headers + (size_t)link * 64;
+        if (in_bounds(size, read64(sh + 24), read64(sh + 32))) {
+          strings = (const char *)data + read64(sh + 24);
+          strings_size = read64(sh + 32);
+        }
+      }
+    } else if (type == SHT_VERSYM) {
+      versym = data + offset;
+    } else if (type == SHT_VERDEF) {
+      verdef = data + offset;
+      verdef_size = length;
+      verdef_count = read32(h + 44);
+    } else if (type == SHT_DYNAMIC) {
+      dynamic = data + offset;
+      dynamic_size = length;
+    }
+  }
+  if (!dynsym || !strings) return fail(linker, "'%s' has no dynamic symbol table%s", path, "");
+  if (strings_size && strings[strings_size - 1]) return fail(linker, "'%s' has a malformed string table%s", path, "");
+  for (uint64_t at = 0; dynamic && at + 16 <= dynamic_size; at += 16)
+    if (read64(dynamic + at) == DT_SONAME && read64(dynamic + at + 8) < strings_size)
+      library->soname = strings + read64(dynamic + at + 8);
+  /* Version definitions name each verdef index. */
+  for (uint64_t at = 0, n = 0; verdef && n < verdef_count && at + 20 <= verdef_size; ++n) {
+    uint16_t index = read16(verdef + at + 4);
+    uint32_t aux = read32(verdef + at + 12), next = read32(verdef + at + 16);
+    if (at + aux + 8 <= verdef_size && read32(verdef + at + aux) < strings_size) {
+      if (index >= library->version_count) {
+        const char **versions = realloc(library->versions, (index + 1u) * sizeof(*versions));
+        if (!versions) return fail(linker, "out of memory%s%s", "", "");
+        for (size_t v = library->version_count; v <= index; ++v) versions[v] = NULL;
+        library->versions = versions;
+        library->version_count = index + 1u;
+      }
+      library->versions[index] = strings + read32(verdef + at + aux);
+    }
+    if (!next) break;
+    at += next;
+  }
+  for (uint64_t i = 1; i < dynsym_size / 24; ++i) {
+    const uint8_t *entry = dynsym + i * 24;
+    uint8_t binding = entry[4] >> 4, type = entry[4] & 15;
+    uint32_t name = read32(entry);
+    if (binding == STB_LOCAL || name >= strings_size || !strings[name]) continue;
+    uint16_t version = versym ? read16(versym + i * 2) : 1;
+    uint16_t index = version & 0x7fff;
+    bool hidden = (version & 0x8000) != 0;
+    if (index == 0) continue;
+    LinkSymbol *symbol = symbol_intern(linker, strings + name);
+    if (!symbol) return fail(linker, "out of memory%s%s", "", "");
+    if (read16(entry + 6) == SHN_UNDEF) {
+      symbol->library_reference = true;
+      continue;
+    }
+    if (symbol->shared && (symbol->shared != library || hidden || !symbol->shared_hidden)) continue;
+    symbol->shared = library;
+    symbol->shared_value = read64(entry + 8);
+    symbol->shared_size = read64(entry + 16);
+    symbol->shared_type = type;
+    symbol->shared_hidden = hidden;
+    symbol->shared_version = index >= 2 && index < library->version_count ? library->versions[index] : NULL;
+  }
+  return true;
+}
+
+static char *keep_string(Linker *linker, const char *text, size_t length) {
+  char *copy = malloc(length + 1);
+  if (!copy || !grow((void **)&linker->buffers, &linker->buffer_capacity, linker->buffer_count, sizeof(*linker->buffers))) {
+    free(copy);
+    return NULL;
+  }
+  memcpy(copy, text, length);
+  copy[length] = 0;
+  linker->buffers[linker->buffer_count++] = (uint8_t *)copy;
+  return copy;
+}
+/* GNU linker scripts as installed for C libraries: GROUP, INPUT and
+   AS_NEEDED lists of files, with OUTPUT_FORMAT and comments ignored. */
+typedef bool (*ScriptFile)(void *context, const char *path, size_t length, bool as_needed);
+static bool parse_script(const char *text, size_t size, ScriptFile file, void *context) {
+  size_t at = 0;
+  int depth = 0, needed_depth = -1;
+  bool listing = false, skipping = false;
+  while (at < size) {
+    char c = text[at];
+    if (c == '/' && at + 1 < size && text[at + 1] == '*') {
+      const char *end = NULL;
+      for (size_t k = at + 2; k + 1 < size; ++k)
+        if (text[k] == '*' && text[k + 1] == '/') { end = text + k; break; }
+      if (!end) return false;
+      at = (size_t)(end - text) + 2;
+      continue;
+    }
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',') { ++at; continue; }
+    if (c == '(') { ++depth; ++at; continue; }
+    if (c == ')') {
+      if (--depth < 0) return false;
+      if (depth == needed_depth) needed_depth = -1;
+      if (depth == 0) listing = skipping = false;
+      ++at;
+      continue;
+    }
+    size_t start = at;
+    while (at < size && !strchr(" \t\n\r,()", text[at])) ++at;
+    size_t length = at - start;
+    const char *word = text + start;
+    if (depth == 0) {
+      listing = (length == 5 && !memcmp(word, "GROUP", 5)) || (length == 5 && !memcmp(word, "INPUT", 5));
+      skipping = !listing;
+      bool ignored = (length == 13 && !memcmp(word, "OUTPUT_FORMAT", 13)) ||
+                     (length == 11 && !memcmp(word, "OUTPUT_ARCH", 11)) ||
+                     (length == 10 && !memcmp(word, "SEARCH_DIR", 10));
+      if (skipping && !ignored) return false;
+      continue;
+    }
+    if (skipping) continue;
+    if (length == 9 && !memcmp(word, "AS_NEEDED", 9)) { needed_depth = depth; continue; }
+    if (!listing || !file(context, word, length, needed_depth >= 0)) return false;
+  }
+  return depth == 0;
+}
+static bool is_script(const uint8_t *data, size_t size) {
+  size_t n = size < 512 ? size : 512;
+  for (size_t i = 0; i < n; ++i)
+    if (!data[i] || data[i] > 0x7e) return false;
+  return n > 0;
+}
+static bool load_input(Linker *linker, const char *path, bool as_needed, int depth);
+typedef struct {
+  Linker *linker;
+  const char *script;
+  int depth;
+} ScriptLoad;
+static bool script_file(void *context, const char *word, size_t length, bool as_needed) {
+  ScriptLoad *load = context;
+  if (length >= 2 && word[0] == '-' && word[1] == 'l')
+    return fail(load->linker, "linker script '%s' uses -l, which the linker does not support%s", load->script, "");
+  char *path = keep_string(load->linker, word, length);
+  if (!path) return fail(load->linker, "out of memory%s%s", "", "");
+  return load_input(load->linker, path, as_needed, load->depth + 1);
+}
+static bool load_archive(Linker *linker, const char *path, const uint8_t *data, size_t size);
+static bool load_input(Linker *linker, const char *path, bool as_needed, int depth) {
+  size_t size = 0;
+  uint8_t *data = read_file(linker, path, &size);
+  if (!data) return false;
+  if (size >= 8 && !memcmp(data, "!<arch>\n", 8)) return load_archive(linker, path, data, size);
+  if (size >= 18 && !memcmp(data, "\x7f" "ELF", 4)) {
+    if (read16(data + 16) == ELF_DYN) return load_shared(linker, path, data, size, as_needed);
+    return load_object(linker, path, data, size);
+  }
+  if (depth < 4 && is_script(data, size)) {
+    ScriptLoad load = {linker, path, depth};
+    if (parse_script((const char *)data, size, script_file, &load)) return true;
+    return fail(linker, "cannot read linker script '%s'%s", path, "");
+  }
+  return fail(linker, "'%s' is not an object, archive, shared library or linker script%s", path, "");
 }
 
 /* GNU and BSD ar archives. Members load on demand from the symbol index. */
@@ -485,7 +738,8 @@ static bool resolve_archives(Linker *linker) {
     changed = false;
     for (size_t i = 0; i < linker->table_capacity; ++i) {
       LinkSymbol *symbol = linker->table[i];
-      if (!symbol || symbol->defined || !symbol->strong_reference || symbol->archive_member < 0) continue;
+      if (!symbol || symbol->defined || symbol->shared || !symbol->strong_reference || symbol->archive_member < 0)
+        continue;
       if (!load_member(linker, symbol)) return false;
       changed = true;
     }
@@ -623,12 +877,26 @@ static bool rewrite_frames(Linker *linker, LinkSection *section) {
   section->live = size != 0;
   return true;
 }
+/* Dynamic symbols the output defines: everything visible from a shared
+   library, or what an executable's libraries refer back to. */
+static bool exported(const Linker *linker, const LinkSymbol *symbol) {
+  if (!symbol->defined || (symbol->absolute && !linker->shared_output)) return false;
+  if (symbol->visibility != STV_DEFAULT && symbol->visibility != STV_PROTECTED) return false;
+  return linker->shared_output || (linker->dynamic && symbol->library_reference);
+}
 static bool collect_garbage(Linker *linker, const char *entry) {
   LinkSection **stack = NULL;
   size_t count = 0, capacity = 0;
-  LinkSymbol *start = symbol_find(linker, entry);
-  if (!start || !start->defined) return fail(linker, "entry symbol '%s' is undefined%s", entry, "");
-  bool ok = mark(linker, &stack, &count, &capacity, symbol_section(start));
+  bool ok = true;
+  if (entry) {
+    LinkSymbol *start = symbol_find(linker, entry);
+    if (!start || !start->defined) return fail(linker, "entry symbol '%s' is undefined%s", entry, "");
+    ok = mark(linker, &stack, &count, &capacity, symbol_section(start));
+  }
+  for (size_t i = 0; ok && i < linker->table_capacity; ++i) {
+    LinkSymbol *symbol = linker->table[i];
+    if (symbol && exported(linker, symbol)) ok = mark(linker, &stack, &count, &capacity, symbol_section(symbol));
+  }
   for (size_t o = 0; ok && o < linker->object_count; ++o) {
     LinkObject *object = linker->objects[o];
     for (size_t i = 1; ok && i < object->section_count; ++i) {
@@ -710,17 +978,41 @@ static bool needs_got(uint32_t type) {
   return type == R_X86_64_GOTPCREL || type == R_X86_64_GOTPCRELX || type == R_X86_64_REX_GOTPCRELX;
 }
 static bool assign_outputs(Linker *linker) {
-  static const char *names[OUT_ALLOC_COUNT] = {".text", ".rodata", ".eh_frame", ".init_array",
-                                               ".fini_array", ".data", ".got", ".bss"};
-  static const uint32_t types[OUT_ALLOC_COUNT] = {SHT_PROGBITS, SHT_PROGBITS, SHT_PROGBITS, SHT_INIT_ARRAY,
-                                                  SHT_FINI_ARRAY, SHT_PROGBITS, SHT_PROGBITS, SHT_NOBITS};
+  static const struct {
+    const char *name;
+    uint32_t type;
+    uint64_t entry_size;
+    int link;
+  } kinds[OUT_ALLOC_COUNT] = {
+    [OUT_INTERP] = {".interp", SHT_PROGBITS, 0, -1},
+    [OUT_HASH] = {".hash", SHT_HASH, 4, OUT_DYNSYM},
+    [OUT_DYNSYM] = {".dynsym", SHT_DYNSYM, 24, OUT_DYNSTR},
+    [OUT_DYNSTR] = {".dynstr", SHT_STRTAB, 0, -1},
+    [OUT_VERSYM] = {".gnu.version", SHT_VERSYM, 2, OUT_DYNSYM},
+    [OUT_VERNEED] = {".gnu.version_r", SHT_VERNEED, 0, OUT_DYNSTR},
+    [OUT_RELA_DYN] = {".rela.dyn", SHT_RELA, 24, OUT_DYNSYM},
+    [OUT_RODATA] = {".rodata", SHT_PROGBITS, 0, -1},
+    [OUT_EH_FRAME] = {".eh_frame", SHT_PROGBITS, 0, -1},
+    [OUT_TEXT] = {".text", SHT_PROGBITS, 0, -1},
+    [OUT_PLT] = {".plt", SHT_PROGBITS, 16, -1},
+    [OUT_DYNAMIC] = {".dynamic", SHT_DYNAMIC, 16, OUT_DYNSTR},
+    [OUT_INIT_ARRAY] = {".init_array", SHT_INIT_ARRAY, 8, -1},
+    [OUT_FINI_ARRAY] = {".fini_array", SHT_FINI_ARRAY, 8, -1},
+    [OUT_DATA] = {".data", SHT_PROGBITS, 0, -1},
+    [OUT_GOT] = {".got", SHT_PROGBITS, 8, -1},
+    [OUT_BSS] = {".bss", SHT_NOBITS, 0, -1},
+  };
   for (int k = 0; k < OUT_ALLOC_COUNT; ++k) {
-    linker->outputs[k].name = (char *)names[k];
-    linker->outputs[k].type = types[k];
-    linker->outputs[k].align = 1;
-    linker->outputs[k].flags = SHF_ALLOC | (k == OUT_TEXT ? SHF_EXEC : 0) |
-                               (k >= OUT_INIT_ARRAY ? SHF_WRITE : 0);
+    LinkOutput *output = &linker->outputs[k];
+    output->name = (char *)kinds[k].name;
+    output->type = kinds[k].type;
+    output->entry_size = kinds[k].entry_size;
+    output->link = kinds[k].link;
+    output->align = 1;
+    output->flags = SHF_ALLOC | (k == OUT_TEXT || k == OUT_PLT ? SHF_EXEC : 0) |
+                    (k >= OUT_DYNAMIC ? SHF_WRITE : 0);
   }
+  linker->outputs[OUT_DYNSYM].info = 1;
   for (size_t o = 0; o < linker->object_count; ++o) {
     LinkObject *object = linker->objects[o];
     for (size_t i = 1; i < object->section_count; ++i) {
@@ -747,28 +1039,243 @@ static bool assign_outputs(Linker *linker) {
   }
   for (size_t i = 0; i < linker->common_count; ++i)
     if (!add_to_output(linker, &linker->outputs[OUT_BSS], linker->commons[i])) return false;
-  /* One GOT slot per symbol a GOT-relative relocation in live code names. */
+  return true;
+}
+
+/* Dynamic linking: which symbols need GOT slots, PLT entries or copy
+   relocations, what the dynamic symbol table holds, and the run-time
+   relocations. Sizes are fixed here; contents are written after layout. */
+/* Whether the dynamic loader decides what a reference means: imports, and
+   in a shared library its own default-visibility definitions, which an
+   executable may interpose or copy. */
+static bool preemptible(const Linker *linker, const LinkSymbol *symbol) {
+  if (symbol->defined)
+    return linker->shared_output && symbol->binding != STB_LOCAL && symbol->visibility == STV_DEFAULT &&
+           !symbol->absolute;
+  return symbol->shared || (linker->shared_output && symbol->referenced);
+}
+static bool function_like(const LinkSymbol *symbol) {
+  return symbol->shared_type == STT_FUNC || symbol->shared_type == STT_GNU_IFUNC;
+}
+static bool add_symbol(Linker *linker, LinkSymbol ***list, size_t *count, size_t *capacity, LinkSymbol *symbol,
+                       uint32_t *slot) {
+  if (*slot) return true;
+  if (!grow((void **)list, capacity, *count, sizeof(**list))) return fail(linker, "out of memory%s%s", "", "");
+  (*list)[(*count)++] = symbol;
+  *slot = (uint32_t)*count;
+  return true;
+}
+static bool add_relocation(Linker *linker, LinkSection *section, uint64_t offset, uint32_t type,
+                           LinkSymbol *symbol, uint64_t addend) {
+  if (!grow((void **)&linker->relocations, &linker->relocation_capacity, linker->relocation_count,
+            sizeof(*linker->relocations)))
+    return fail(linker, "out of memory%s%s", "", "");
+  linker->relocations[linker->relocation_count++] = (DynamicRelocation){section, offset, addend, type, symbol};
+  return true;
+}
+static bool add_dynsym(Linker *linker, LinkSymbol *symbol) {
+  return add_symbol(linker, &linker->dynsyms, &linker->dynsym_count, &linker->dynsym_capacity, symbol,
+                    &symbol->dynsym);
+}
+static uint32_t dynstr_add(Linker *linker, const char *text) {
+  size_t length = strlen(text) + 1;
+  while (linker->dynstr_size + length > linker->dynstr_capacity) {
+    size_t next = linker->dynstr_capacity ? linker->dynstr_capacity * 2 : 1024;
+    uint8_t *grown = realloc(linker->dynstr, next);
+    if (!grown) return UINT32_MAX;
+    linker->dynstr = grown;
+    linker->dynstr_capacity = next;
+  }
+  memcpy(linker->dynstr + linker->dynstr_size, text, length);
+  linker->dynstr_size += length;
+  return (uint32_t)(linker->dynstr_size - length);
+}
+static uint32_t elf_hash(const char *name) {
+  uint32_t hash = 0;
+  for (; *name; ++name) {
+    hash = (hash << 4) + (uint8_t)*name;
+    uint32_t high = hash & 0xf0000000u;
+    if (high) hash ^= high >> 24;
+    hash &= ~high;
+  }
+  return hash;
+}
+static bool synthetic(Linker *linker, int kind, uint64_t size, uint64_t align) {
+  LinkSection *section = &linker->synthetic[kind];
+  *section = (LinkSection){.name = linker->outputs[kind].name, .size = size, .align = align,
+                           .type = linker->outputs[kind].type, .flags = linker->outputs[kind].flags,
+                           .live = true, .output = kind};
+  if (size) {
+    section->owned = calloc(1, size);
+    if (!section->owned) return fail(linker, "out of memory%s%s", "", "");
+    section->data = section->owned;
+  }
+  return add_to_output(linker, &linker->outputs[kind], section);
+}
+static bool needs_got(uint32_t type);
+static bool plan_dynamic(Linker *linker) {
   for (size_t o = 0; o < linker->object_count; ++o) {
     LinkObject *object = linker->objects[o];
     for (size_t i = 1; i < object->section_count; ++i) {
       LinkSection *section = &object->sections[i];
       if (!section->live) continue;
       for (size_t r = 0; r < section->rela_count; ++r) {
-        LinkSymbol *symbol = object->symbols[section->relas[r].symbol];
-        if (!needs_got(section->relas[r].type) || !symbol || symbol->got) continue;
-        if (!grow((void **)&linker->got_symbols, &linker->got_capacity, linker->got_count, sizeof(*linker->got_symbols)))
-          return fail(linker, "out of memory%s%s", "", "");
-        linker->got_symbols[linker->got_count++] = symbol;
-        symbol->got = (uint32_t)linker->got_count;
+        LinkRela *rela = &section->relas[r];
+        LinkSymbol *symbol = object->symbols[rela->symbol];
+        if (!symbol) continue;
+        if (needs_got(rela->type)) {
+          if (!add_symbol(linker, &linker->got_symbols, &linker->got_count, &linker->got_capacity, symbol, &symbol->got))
+            return false;
+          continue;
+        }
+        if (!(section->flags & SHF_ALLOC)) continue;
+        bool absolute = rela->type == R_X86_64_64 || rela->type == R_X86_64_32 || rela->type == R_X86_64_32S;
+        bool relative = rela->type == R_X86_64_PC32 || rela->type == R_X86_64_PC64;
+        if (preemptible(linker, symbol)) {
+          if (rela->type == R_X86_64_PLT32) {
+            if (!add_symbol(linker, &linker->plt_symbols, &linker->plt_count, &linker->plt_capacity, symbol, &symbol->plt))
+              return false;
+          } else if (linker->shared_output) {
+            if (rela->type != R_X86_64_64)
+              return fail(linker, "'%s' cannot refer to '%s' this way in a shared library; recompile with -fPIC",
+                          object->path, symbol->name);
+            if (!add_relocation(linker, section, rela->offset, R_X86_64_64, symbol, rela->addend)) return false;
+          } else if ((absolute || relative) && function_like(symbol)) {
+            /* The PLT entry stands in as the function's address. */
+            symbol->canonical = true;
+            if (!add_symbol(linker, &linker->plt_symbols, &linker->plt_count, &linker->plt_capacity, symbol, &symbol->plt))
+              return false;
+          } else if (absolute || relative) {
+            /* Data the executable addresses directly is copied into .bss. */
+            LinkSection *copy = calloc(1, sizeof(*copy));
+            if (!copy || !grow((void **)&linker->copies, &linker->copy_capacity, linker->copy_count, sizeof(*linker->copies))) {
+              free(copy);
+              return fail(linker, "out of memory%s%s", "", "");
+            }
+            linker->copies[linker->copy_count++] = copy;
+            uint64_t align = 1;
+            while (align < 64 && !(symbol->shared_value & align)) align <<= 1;
+            *copy = (LinkSection){.name = ".bss", .size = symbol->shared_size, .type = SHT_NOBITS, .align = align,
+                                  .flags = SHF_ALLOC | SHF_WRITE, .live = true, .output = OUT_BSS};
+            if (!add_to_output(linker, &linker->outputs[OUT_BSS], copy) ||
+                !add_relocation(linker, copy, 0, R_X86_64_COPY, symbol, 0))
+              return false;
+            symbol->defined = true;
+            symbol->section = copy;
+            symbol->value = 0;
+            symbol->size = symbol->shared_size;
+            symbol->type = symbol->shared_type;
+            symbol->binding = STB_GLOBAL;
+            symbol->copied = true;
+            symbol->shared->used = true;
+            if (!add_dynsym(linker, symbol)) return false;
+          }
+          continue;
+        }
+        if (linker->shared_output && absolute && symbol->defined && !symbol->absolute) {
+          if (rela->type != R_X86_64_64)
+            return fail(linker, "'%s' uses absolute addressing for '%s' in a shared library; recompile with -fPIC",
+                        object->path, symbol->name);
+          if (!add_relocation(linker, section, rela->offset, R_X86_64_RELATIVE, symbol, rela->addend)) return false;
+        }
       }
     }
   }
-  if (linker->got_count) {
-    linker->got = (LinkSection){.name = ".got", .size = linker->got_count * 8, .align = 8, .type = SHT_PROGBITS,
+  /* PLT slots follow the GOT. They bind with JUMP_SLOT, which never resolves
+     to an executable's own canonical PLT entry. */
+  size_t slots = linker->got_count + linker->plt_count;
+  if (slots) {
+    linker->got = (LinkSection){.name = ".got", .size = slots * 8, .align = 8, .type = SHT_PROGBITS,
                                 .flags = SHF_ALLOC | SHF_WRITE, .live = true, .output = OUT_GOT};
     if (!add_to_output(linker, &linker->outputs[OUT_GOT], &linker->got)) return false;
   }
-  return true;
+  if (!linker->dynamic) return true;
+  /* GOT slots of imports are bound at load time; position-independent
+     output also rebases slots of its own definitions. */
+  for (size_t i = 0; i < linker->got_count; ++i) {
+    LinkSymbol *symbol = linker->got_symbols[i];
+    bool ok = true;
+    if (preemptible(linker, symbol)) {
+      ok = add_relocation(linker, &linker->got, i * 8, R_X86_64_GLOB_DAT, symbol, 0) && add_dynsym(linker, symbol);
+    } else if (linker->shared_output && symbol->defined && !symbol->absolute) {
+      ok = add_relocation(linker, &linker->got, i * 8, R_X86_64_RELATIVE, symbol, 0);
+    }
+    if (!ok) return false;
+  }
+  for (size_t i = 0; i < linker->plt_count; ++i) {
+    LinkSymbol *symbol = linker->plt_symbols[i];
+    if (!add_relocation(linker, &linker->got, (linker->got_count + i) * 8, R_X86_64_JUMP_SLOT, symbol, 0) ||
+        !add_dynsym(linker, symbol))
+      return false;
+  }
+  for (size_t i = 0; i < linker->relocation_count; ++i)
+    if (linker->relocations[i].type == R_X86_64_64 && !add_dynsym(linker, linker->relocations[i].symbol)) return false;
+  for (size_t i = 0; i < linker->table_capacity; ++i) {
+    LinkSymbol *symbol = linker->table[i];
+    if (symbol && exported(linker, symbol) && (!symbol->section || symbol->section->live) && !add_dynsym(linker, symbol))
+      return false;
+  }
+  /* Strings, needed libraries and symbol versions. */
+  if (dynstr_add(linker, "") == UINT32_MAX) return fail(linker, "out of memory%s%s", "", "");
+  for (size_t i = 0; i < linker->dynsym_count; ++i) {
+    LinkSymbol *symbol = linker->dynsyms[i];
+    if (!symbol->defined && symbol->shared) symbol->shared->used = true;
+    symbol->dynstr = dynstr_add(linker, symbol->name);
+    if (symbol->dynstr == UINT32_MAX) return fail(linker, "out of memory%s%s", "", "");
+  }
+  size_t needed = 0;
+  for (size_t i = 0; i < linker->shared_count; ++i) {
+    LinkShared *library = linker->shareds[i];
+    if (library->as_needed && !library->used) continue;
+    library->used = true;
+    library->name_string = dynstr_add(linker, library->soname ? library->soname : library->path);
+    if (library->name_string == UINT32_MAX) return fail(linker, "out of memory%s%s", "", "");
+    ++needed;
+  }
+  for (size_t i = 0; i < linker->dynsym_count; ++i) {
+    LinkSymbol *symbol = linker->dynsyms[i];
+    symbol->version = 1;
+    bool imported = symbol->shared && (!symbol->defined || symbol->copied);
+    if (!imported || !symbol->shared_version) continue;
+    size_t n = 0;
+    while (n < linker->need_count &&
+           (linker->needs[n].library != symbol->shared || strcmp(linker->needs[n].version, symbol->shared_version)))
+      ++n;
+    if (n == linker->need_count) {
+      if (!grow((void **)&linker->needs, &linker->need_capacity, linker->need_count, sizeof(*linker->needs)))
+        return fail(linker, "out of memory%s%s", "", "");
+      linker->needs[n].library = symbol->shared;
+      linker->needs[n].version = symbol->shared_version;
+      linker->needs[n].string = dynstr_add(linker, symbol->shared_version);
+      if (linker->needs[n].string == UINT32_MAX) return fail(linker, "out of memory%s%s", "", "");
+      ++linker->need_count;
+    }
+    symbol->version = (uint16_t)(n + 2);
+  }
+  size_t libraries = 0;
+  for (size_t i = 0; i < linker->shared_count; ++i) {
+    bool any = false;
+    for (size_t n = 0; n < linker->need_count; ++n) any |= linker->needs[n].library == linker->shareds[i];
+    libraries += any;
+  }
+  size_t symbols = linker->dynsym_count + 1;
+  linker->dynamic_entries = needed + 5 + 3 + 1 + (linker->shared_output ? 0 : 1) + 2 +
+                            (linker->outputs[OUT_INIT_ARRAY].count ? 2 : 0) +
+                            (linker->outputs[OUT_FINI_ARRAY].count ? 2 : 0) + (linker->need_count ? 3 : 0);
+  bool ok = (linker->shared_output || synthetic(linker, OUT_INTERP, strlen(linker->interpreter) + 1, 1)) &&
+            synthetic(linker, OUT_HASH, 4 * (2 + 2 * (uint64_t)symbols), 4) &&
+            synthetic(linker, OUT_DYNSYM, 24 * (uint64_t)symbols, 8) &&
+            synthetic(linker, OUT_DYNSTR, linker->dynstr_size, 1) &&
+            (!linker->need_count || (synthetic(linker, OUT_VERSYM, 2 * (uint64_t)symbols, 2) &&
+                                     synthetic(linker, OUT_VERNEED, 16 * (uint64_t)(libraries + linker->need_count), 4))) &&
+            synthetic(linker, OUT_RELA_DYN, 24 * (uint64_t)linker->relocation_count, 8) &&
+            (!linker->plt_count || synthetic(linker, OUT_PLT, 16 * (uint64_t)linker->plt_count, 16)) &&
+            synthetic(linker, OUT_DYNAMIC, 16 * (uint64_t)linker->dynamic_entries, 8);
+  if (ok) {
+    linker->outputs[OUT_VERNEED].info = (uint32_t)libraries;
+    memcpy(linker->synthetic[OUT_DYNSTR].owned, linker->dynstr, linker->dynstr_size);
+  }
+  return ok;
 }
 
 /* Segments: headers and read-only data, then code, then writable data with
@@ -777,10 +1284,10 @@ typedef struct {
   uint64_t offset, address, file_size, memory_size;
   uint32_t flags;
 } Segment;
-static void place(LinkOutput *output, uint64_t *offset, bool allocated) {
+static void place(LinkOutput *output, uint64_t *offset, uint64_t base, bool allocated) {
   *offset = align_up(*offset, output->align);
   output->file_offset = *offset;
-  output->address = allocated ? IMAGE_BASE + *offset : 0;
+  output->address = allocated ? base + *offset : 0;
   uint64_t size = 0;
   for (size_t i = 0; i < output->count; ++i) {
     LinkSection *section = output->sections[i];
@@ -793,33 +1300,34 @@ static void place(LinkOutput *output, uint64_t *offset, bool allocated) {
   if (output->type != SHT_NOBITS) *offset += size;
 }
 static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
-  static const int groups[3][4] = {{OUT_RODATA, OUT_EH_FRAME, -1, -1}, {OUT_TEXT, -1, -1, -1},
-                                   {OUT_INIT_ARRAY, OUT_FINI_ARRAY, OUT_DATA, OUT_GOT}};
+  static const int groups[3][2] = {{OUT_INTERP, OUT_EH_FRAME}, {OUT_TEXT, OUT_PLT}, {OUT_DYNAMIC, OUT_GOT}};
   static const uint32_t flags[3] = {4, 5, 6};
-  uint64_t offset = header_size;
+  uint64_t offset = header_size, base = linker->base;
   size_t count = 0;
   for (int g = 0; g < 3; ++g) {
     bool any = g == 0;
-    for (int k = 0; k < 4 && groups[g][k] >= 0; ++k) any |= linker->outputs[groups[g][k]].count != 0;
+    for (int k = groups[g][0]; k <= groups[g][1]; ++k) any |= linker->outputs[k].count != 0;
     if (g == 2) any |= linker->outputs[OUT_BSS].count != 0;
     if (!any) continue;
     if (g) offset = align_up(offset, PAGE);
     uint64_t start = g ? offset : 0;
-    for (int k = 0; k < 4 && groups[g][k] >= 0; ++k) place(&linker->outputs[groups[g][k]], &offset, true);
+    for (int k = groups[g][0]; k <= groups[g][1]; ++k) place(&linker->outputs[k], &offset, base, true);
     uint64_t file_end = offset, memory_end = offset;
     if (g == 2) {
       uint64_t bss = offset;
-      place(&linker->outputs[OUT_BSS], &bss, true);
+      place(&linker->outputs[OUT_BSS], &bss, base, true);
       memory_end = bss + linker->outputs[OUT_BSS].size;
     }
-    segments[count++] = (Segment){start, IMAGE_BASE + start, file_end - start, memory_end - start, flags[g]};
+    segments[count++] = (Segment){start, base + start, file_end - start, memory_end - start, flags[g]};
   }
-  for (size_t e = 0; e < linker->extra_count; ++e) place(&linker->extra[e], &offset, false);
+  for (size_t e = 0; e < linker->extra_count; ++e) place(&linker->extra[e], &offset, 0, false);
   return count;
 }
 
+/* Start of .plt for the link in progress; links run one at a time. */
+static uint64_t plt_address;
 static uint64_t symbol_address(const LinkSymbol *symbol) {
-  if (!symbol->defined) return 0;
+  if (!symbol->defined) return symbol->plt ? plt_address + (uint64_t)(symbol->plt - 1) * 16 : 0;
   if (symbol->absolute || !symbol->section) return symbol->value;
   return symbol->section->address + symbol->value;
 }
@@ -828,7 +1336,8 @@ static void define_linker_symbols(Linker *linker, Segment *segments, size_t segm
   const LinkOutput *bss = &linker->outputs[OUT_BSS], *text = &linker->outputs[OUT_TEXT];
   const Segment *last = &segments[segment_count - 1];
   struct { const char *name; uint64_t value; } defined[] = {
-    {"__ehdr_start", IMAGE_BASE}, {"__executable_start", IMAGE_BASE},
+    {"__ehdr_start", linker->base}, {"__executable_start", linker->base},
+    {"_DYNAMIC", linker->outputs[OUT_DYNAMIC].address},
     {"__init_array_start", init->address}, {"__init_array_end", init->address + init->size},
     {"__preinit_array_start", init->address}, {"__preinit_array_end", init->address},
     {"__fini_array_start", fini->address}, {"__fini_array_end", fini->address + fini->size},
@@ -858,7 +1367,7 @@ static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
     if (symbol) {
       LinkSection *target = symbol_section(symbol);
       dead = symbol->defined && target && !target->live;
-      if (!symbol->defined && symbol->binding != STB_WEAK && symbol->strong_reference && !debug)
+      if (!symbol->defined && !symbol->shared && !linker->shared_output && symbol->strong_reference && !debug)
         return fail(linker, "undefined symbol '%s' (referenced from %s)", symbol->name, object->path);
       value = symbol_address(symbol);
     }
@@ -878,14 +1387,19 @@ static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
     case R_X86_64_64: result = value + addend; width = 64; break;
     case R_X86_64_32: result = value + addend; width = 32; is_signed = false; break;
     case R_X86_64_32S: result = value + addend; width = 32; break;
-    case R_X86_64_PC32: case R_X86_64_PLT32: result = value + addend - place; width = 32; break;
+    case R_X86_64_PLT32:
+      if (symbol && symbol->plt) value = plt_address + (uint64_t)(symbol->plt - 1) * 16;
+      result = value + addend - place;
+      width = 32;
+      break;
+    case R_X86_64_PC32: result = value + addend - place; width = 32; break;
     case R_X86_64_PC64: result = value + addend - place; width = 64; break;
     case R_X86_64_SIZE32: result = (symbol ? symbol->size : 0) + addend; width = 32; is_signed = false; break;
     case R_X86_64_SIZE64: result = (symbol ? symbol->size : 0) + addend; width = 64; break;
     case R_X86_64_GOTPCREL: case R_X86_64_GOTPCRELX: case R_X86_64_REX_GOTPCRELX:
       /* A load of a defined symbol's address becomes lea, as lld does. */
-      if (rela->type != R_X86_64_GOTPCREL && symbol->defined && !symbol->absolute && rela->offset >= 2 &&
-          at[-2] == 0x8b) {
+      if (rela->type != R_X86_64_GOTPCREL && symbol->defined && !symbol->absolute && !preemptible(linker, symbol) &&
+          rela->offset >= 2 && at[-2] == 0x8b) {
         at[-2] = 0x8d;
         result = value + addend - place;
         width = 32;
@@ -1054,11 +1568,126 @@ static bool order_text(Linker *linker, DynLinkLayout layout) {
   free(edges); free(nodes); free(sizes); free(counts); free(offsets); free(order); free(calls);
   return ok || fail(linker, "call-graph ordering failed%s%s", "", "");
 }
+/* Writes .interp, .hash, .dynsym, versions, .rela.dyn, .plt and .dynamic
+   once addresses and section indexes are final. */
+static uint16_t output_index(Linker *linker, const LinkSymbol *symbol);
+static void fill_dynamic(Linker *linker) {
+  LinkSection *section = &linker->synthetic[OUT_INTERP];
+  if (section->owned) memcpy(section->owned, linker->interpreter, strlen(linker->interpreter) + 1);
+  size_t symbols = linker->dynsym_count + 1;
+  uint8_t *dynsym = linker->synthetic[OUT_DYNSYM].owned;
+  for (size_t i = 0; i < linker->dynsym_count; ++i) {
+    LinkSymbol *symbol = linker->dynsyms[i];
+    uint8_t *entry = dynsym + (i + 1) * 24;
+    uint8_t binding = symbol->defined ? (symbol->binding == STB_WEAK ? STB_WEAK : STB_GLOBAL)
+                                      : (symbol->strong_reference || symbol->shared ? STB_GLOBAL : STB_WEAK);
+    uint8_t type = symbol->defined ? symbol->type : symbol->shared_type == STT_GNU_IFUNC ? STT_FUNC : symbol->shared_type;
+    write32(entry, symbol->dynstr);
+    entry[4] = (uint8_t)(binding << 4 | type);
+    entry[5] = symbol->defined ? symbol->visibility : 0;
+    write16(entry + 6, symbol->defined ? output_index(linker, symbol) : SHN_UNDEF);
+    write64(entry + 8, symbol->defined || symbol->canonical ? symbol_address(symbol) : 0);
+    write64(entry + 16, symbol->defined ? symbol->size : 0);
+  }
+  /* SysV hash: one bucket per symbol. */
+  uint8_t *hash = linker->synthetic[OUT_HASH].owned;
+  write32(hash, (uint32_t)symbols);
+  write32(hash + 4, (uint32_t)symbols);
+  for (size_t i = 0; i < linker->dynsym_count; ++i) {
+    uint32_t bucket = elf_hash(linker->dynsyms[i]->name) % (uint32_t)symbols;
+    uint8_t *head = hash + 8 + bucket * 4;
+    write32(hash + 8 + (symbols + i + 1) * 4, read32(head));
+    write32(head, (uint32_t)(i + 1));
+  }
+  if (linker->need_count) {
+    uint8_t *versions = linker->synthetic[OUT_VERSYM].owned;
+    for (size_t i = 0; i < linker->dynsym_count; ++i) write16(versions + (i + 1) * 2, linker->dynsyms[i]->version);
+    uint8_t *need = linker->synthetic[OUT_VERNEED].owned, *previous = NULL;
+    for (size_t l = 0; l < linker->shared_count; ++l) {
+      LinkShared *library = linker->shareds[l];
+      uint16_t count = 0;
+      for (size_t n = 0; n < linker->need_count; ++n) count += linker->needs[n].library == library;
+      if (!count) continue;
+      if (previous) write32(previous + 12, (uint32_t)(need - previous));
+      write16(need, 1);
+      write16(need + 2, count);
+      write32(need + 4, library->name_string);
+      write32(need + 8, 16);
+      uint8_t *aux = need + 16, *last = NULL;
+      for (size_t n = 0; n < linker->need_count; ++n) {
+        if (linker->needs[n].library != library) continue;
+        if (last) write32(last + 12, 16);
+        write32(aux, elf_hash(linker->needs[n].version));
+        write16(aux + 6, (uint16_t)(n + 2));
+        write32(aux + 8, linker->needs[n].string);
+        last = aux;
+        aux += 16;
+      }
+      previous = need;
+      need = aux;
+    }
+  }
+  uint8_t *rela = linker->synthetic[OUT_RELA_DYN].owned;
+  for (size_t i = 0; i < linker->relocation_count; ++i) {
+    DynamicRelocation *relocation = &linker->relocations[i];
+    uint8_t *entry = rela + i * 24;
+    bool relative = relocation->type == R_X86_64_RELATIVE;
+    write64(entry, relocation->section->address + relocation->offset);
+    write64(entry + 8, (uint64_t)(relative ? 0 : relocation->symbol->dynsym) << 32 | relocation->type);
+    write64(entry + 16, relative ? symbol_address(relocation->symbol) + relocation->addend : relocation->addend);
+  }
+  /* Each PLT entry jumps through its GOT slot: jmp *slot(%rip), then traps. */
+  uint8_t *plt = linker->synthetic[OUT_PLT].owned;
+  for (size_t i = 0; plt && i < linker->plt_count; ++i) {
+    uint8_t *entry = plt + i * 16;
+    uint64_t at = linker->synthetic[OUT_PLT].address + i * 16;
+    uint64_t slot = linker->got.address + (uint64_t)(linker->got_count + i) * 8;
+    memset(entry, 0xcc, 16);
+    entry[0] = 0xff;
+    entry[1] = 0x25;
+    write32(entry + 2, (uint32_t)(slot - (at + 6)));
+  }
+  uint8_t *dynamic = linker->synthetic[OUT_DYNAMIC].owned;
+  size_t n = 0;
+#define DYNAMIC_ENTRY(tag, value) (write64(dynamic + n * 16, (tag)), write64(dynamic + n * 16 + 8, (value)), ++n)
+  for (size_t l = 0; l < linker->shared_count; ++l)
+    if (linker->shareds[l]->used) DYNAMIC_ENTRY(DT_NEEDED, linker->shareds[l]->name_string);
+  if (!linker->shared_output) DYNAMIC_ENTRY(DT_DEBUG, 0);
+  if (linker->outputs[OUT_INIT_ARRAY].count) {
+    DYNAMIC_ENTRY(DT_INIT_ARRAY, linker->outputs[OUT_INIT_ARRAY].address);
+    DYNAMIC_ENTRY(DT_INIT_ARRAYSZ, linker->outputs[OUT_INIT_ARRAY].size);
+  }
+  if (linker->outputs[OUT_FINI_ARRAY].count) {
+    DYNAMIC_ENTRY(DT_FINI_ARRAY, linker->outputs[OUT_FINI_ARRAY].address);
+    DYNAMIC_ENTRY(DT_FINI_ARRAYSZ, linker->outputs[OUT_FINI_ARRAY].size);
+  }
+  DYNAMIC_ENTRY(DT_HASH, linker->synthetic[OUT_HASH].address);
+  DYNAMIC_ENTRY(DT_STRTAB, linker->synthetic[OUT_DYNSTR].address);
+  DYNAMIC_ENTRY(DT_SYMTAB, linker->synthetic[OUT_DYNSYM].address);
+  DYNAMIC_ENTRY(DT_STRSZ, linker->dynstr_size);
+  DYNAMIC_ENTRY(DT_SYMENT, 24);
+  DYNAMIC_ENTRY(DT_RELA, linker->synthetic[OUT_RELA_DYN].address);
+  DYNAMIC_ENTRY(DT_RELASZ, linker->relocation_count * 24);
+  DYNAMIC_ENTRY(DT_RELAENT, 24);
+  if (linker->need_count) {
+    DYNAMIC_ENTRY(DT_VERSYM, linker->synthetic[OUT_VERSYM].address);
+    DYNAMIC_ENTRY(DT_VERNEED, linker->synthetic[OUT_VERNEED].address);
+    DYNAMIC_ENTRY(DT_VERNEEDNUM, linker->outputs[OUT_VERNEED].info);
+  }
+  /* Slots are filled at load time, so there is no lazy PLT. */
+  DYNAMIC_ENTRY(DT_FLAGS, DF_BIND_NOW);
+  DYNAMIC_ENTRY(DT_FLAGS_1, DF_1_NOW);
+  DYNAMIC_ENTRY(DT_NULL, 0);
+#undef DYNAMIC_ENTRY
+}
 static bool write_output(Linker *linker, const char *entry_name) {
   Segment segments[3];
-  const size_t phdr_count = 4; /* Up to three loads plus the stack note. */
+  /* Loads and the stack note; dynamic output adds PT_DYNAMIC, and
+     executables PT_PHDR and PT_INTERP. */
+  const size_t phdr_count = linker->dynamic ? (linker->shared_output ? 5 : 7) : 4;
   uint64_t header_size = 64 + 56 * phdr_count;
   size_t segment_count = layout(linker, segments, header_size);
+  plt_address = linker->outputs[OUT_PLT].address;
   define_linker_symbols(linker, segments, segment_count);
   /* Section headers: null, allocated outputs, extras, .symtab, .strtab, .shstrtab. */
   Bytes shstrtab = {0}, symtab = {0}, strtab = {0};
@@ -1086,6 +1715,7 @@ static bool write_output(Linker *linker, const char *entry_name) {
   ok = ok && bytes_append(&shstrtab, ".shstrtab", 10);
   uint32_t first_global = 0;
   ok = ok && build_symtab(linker, &symtab, &strtab, &first_global);
+  if (ok && linker->dynamic) fill_dynamic(linker);
   if (!ok) {
     free(extra_names); free(shstrtab.data); free(symtab.data); free(strtab.data);
     return fail(linker, "out of memory%s%s", "", "");
@@ -1119,7 +1749,8 @@ static bool write_output(Linker *linker, const char *entry_name) {
       LinkSection *section = output->sections[i];
       uint8_t *at = image + output->file_offset + section->offset;
       if (section == &linker->got) {
-        for (size_t g = 0; g < linker->got_count; ++g) write64(at + g * 8, symbol_address(linker->got_symbols[g]));
+        for (size_t g = 0; g < linker->got_count; ++g)
+          if (!preemptible(linker, linker->got_symbols[g])) write64(at + g * 8, symbol_address(linker->got_symbols[g]));
         continue;
       }
       if (section->data) memcpy(at, section->data, section->size);
@@ -1135,13 +1766,13 @@ static bool write_output(Linker *linker, const char *entry_name) {
       ok = relocate(linker, section, at);
     }
   }
-  LinkSymbol *entry = symbol_find(linker, entry_name);
+  LinkSymbol *entry = entry_name ? symbol_find(linker, entry_name) : NULL;
   if (ok) {
     memcpy(image, "\x7f" "ELF\x02\x01\x01", 7);
-    write16(image + 16, ELF_EXEC);
+    write16(image + 16, linker->shared_output ? ELF_DYN : ELF_EXEC);
     write16(image + 18, MACHINE_X86_64);
     write32(image + 20, 1);
-    write64(image + 24, symbol_address(entry));
+    write64(image + 24, entry ? symbol_address(entry) : 0);
     write64(image + 32, 64);
     write64(image + 40, section_headers);
     write16(image + 52, 64);
@@ -1150,23 +1781,25 @@ static bool write_output(Linker *linker, const char *entry_name) {
     write16(image + 58, 64);
     write16(image + 60, (uint16_t)header_count);
     write16(image + 62, (uint16_t)(header_count - 1));
-    for (size_t s = 0; s < phdr_count; ++s) {
-      uint8_t *p = image + 64 + s * 56;
-      if (s < segment_count) {
-        write32(p, PT_LOAD);
-        write32(p + 4, segments[s].flags);
-        write64(p + 8, segments[s].offset);
-        write64(p + 16, segments[s].address);
-        write64(p + 24, segments[s].address);
-        write64(p + 32, segments[s].file_size);
-        write64(p + 40, segments[s].memory_size);
-        write64(p + 48, PAGE);
-      } else if (s == segment_count) {
-        write32(p, PT_GNU_STACK);
-        write32(p + 4, 6);
-        write64(p + 48, 16);
-      }
+    uint8_t *p = image + 64;
+#define PROGRAM_HEADER(type, flags, offset, address, file_size, memory_size, align)                                  \
+  (write32(p, (type)), write32(p + 4, (flags)), write64(p + 8, (offset)), write64(p + 16, (address)),                 \
+   write64(p + 24, (address)), write64(p + 32, (file_size)), write64(p + 40, (memory_size)), write64(p + 48, (align)), \
+   p += 56)
+    if (linker->dynamic && !linker->shared_output) {
+      const LinkOutput *interp = &linker->outputs[OUT_INTERP];
+      PROGRAM_HEADER(PT_PHDR, 4, 64, linker->base + 64, 56 * phdr_count, 56 * phdr_count, 8);
+      PROGRAM_HEADER(PT_INTERP, 4, interp->file_offset, interp->address, interp->size, interp->size, 1);
     }
+    for (size_t s = 0; s < segment_count; ++s)
+      PROGRAM_HEADER(PT_LOAD, segments[s].flags, segments[s].offset, segments[s].address, segments[s].file_size,
+                     segments[s].memory_size, PAGE);
+    if (linker->dynamic) {
+      const LinkOutput *dynamic = &linker->outputs[OUT_DYNAMIC];
+      PROGRAM_HEADER(PT_DYNAMIC, 6, dynamic->file_offset, dynamic->address, dynamic->size, dynamic->size, 8);
+    }
+    PROGRAM_HEADER(PT_GNU_STACK, 6, 0, 0, 0, 0, 16);
+#undef PROGRAM_HEADER
     memcpy(image + symtab_offset, symtab.data, symtab.size);
     memcpy(image + strtab_offset, strtab.data, strtab.size);
     memcpy(image + shstrtab_offset, shstrtab.data, shstrtab.size);
@@ -1181,7 +1814,9 @@ static bool write_output(Linker *linker, const char *entry_name) {
       write64(h + 24, output->file_offset);
       write64(h + 32, output->size);
       write64(h + 48, output->align);
-      write64(h + 56, k == OUT_GOT || k == OUT_INIT_ARRAY || k == OUT_FINI_ARRAY ? 8 : 0);
+      write64(h + 56, output->entry_size);
+      if (output->link >= 0) write32(h + 40, linker->outputs[output->link].header_index);
+      write32(h + 44, output->info);
       h += 64;
     }
     for (size_t e = 0; e < linker->extra_count; ++e) {
@@ -1232,6 +1867,19 @@ static void linker_free(Linker *linker) {
     free(object->profile);
     free(object);
   }
+  for (size_t i = 0; i < linker->shared_count; ++i) {
+    free(linker->shareds[i]->versions);
+    free(linker->shareds[i]);
+  }
+  free(linker->shareds);
+  for (size_t i = 0; i < linker->copy_count; ++i) free(linker->copies[i]);
+  free(linker->copies);
+  for (int k = 0; k < OUT_ALLOC_COUNT; ++k) free(linker->synthetic[k].owned);
+  free(linker->plt_symbols);
+  free(linker->dynsyms);
+  free(linker->relocations);
+  free(linker->needs);
+  free(linker->dynstr);
   free(linker->objects);
   free(linker->archives);
   for (size_t i = 0; i < linker->buffer_count; ++i) free(linker->buffers[i]);
@@ -1254,22 +1902,23 @@ bool dyn_link_elf_supported(const char *path) {
   size_t n = fread(magic, 1, sizeof(magic), file);
   fclose(file);
   if (n >= 8 && !memcmp(magic, "!<arch>\n", 8)) return true;
-  return n >= 20 && !memcmp(magic, "\x7f" "ELF", 4) && read16(magic + 16) == ELF_REL;
+  if (n >= 20 && !memcmp(magic, "\x7f" "ELF", 4))
+    return magic[4] == 2 && (read16(magic + 16) == ELF_REL || read16(magic + 16) == ELF_DYN) &&
+           read16(magic + 18) == MACHINE_X86_64;
+  return is_script(magic, n);
 }
 
-int dyn_link_elf(const char *const *inputs, size_t input_count, const char *output, const char *entry,
-                 DynLinkLayout layout) {
-  Linker linker = {.output_path = output};
+int dyn_link_elf(const char *const *inputs, size_t input_count, const char *output, const DynLinkOptions *options) {
+  Linker linker = {.output_path = output, .shared_output = options->shared,
+                   .interpreter = options->interpreter ? options->interpreter : "/lib64/ld-linux-x86-64.so.2",
+                   .base = options->shared ? 0 : IMAGE_BASE};
+  const char *entry = options->shared ? NULL : options->entry;
   bool ok = true;
-  for (size_t i = 0; ok && i < input_count; ++i) {
-    size_t size = 0;
-    uint8_t *data = read_file(&linker, inputs[i], &size);
-    if (!data) { ok = false; break; }
-    if (size >= 8 && !memcmp(data, "!<arch>\n", 8)) ok = load_archive(&linker, inputs[i], data, size);
-    else ok = load_object(&linker, inputs[i], data, size);
-  }
+  for (size_t i = 0; ok && i < input_count; ++i) ok = load_input(&linker, inputs[i], false, 0);
+  linker.dynamic = linker.shared_output || linker.shared_count;
   ok = ok && resolve_archives(&linker) && allocate_commons(&linker) && collect_garbage(&linker, entry) &&
-       assign_outputs(&linker) && (!layout || order_text(&linker, layout)) && write_output(&linker, entry);
+       assign_outputs(&linker) && plan_dynamic(&linker) && (!options->layout || order_text(&linker, options->layout)) &&
+       write_output(&linker, entry);
   if (!ok) {
     fprintf(stderr, "error: link: %s\n", linker.error[0] ? linker.error : "out of memory");
     remove(output);
@@ -1351,20 +2000,43 @@ void dyn_link_elf_names_free(char **names, size_t count) {
   for (size_t i = 0; i < count; ++i) free(names[i]);
   free(names);
 }
+typedef struct {
+  NameList *defined, *used;
+  int depth;
+} ScanContext;
+static bool scan_file(const char *path, NameList *defined, NameList *used, int depth);
+static bool scan_script_file(void *context, const char *word, size_t length, bool as_needed) {
+  ScanContext *scan = context;
+  (void)as_needed;
+  char path[4096];
+  if (length >= sizeof(path)) return true;
+  memcpy(path, word, length);
+  path[length] = 0;
+  return scan_file(path, scan->defined, scan->used, scan->depth + 1);
+}
+static bool scan_file(const char *path, NameList *defined, NameList *used, int depth) {
+  Linker scratch = {0};
+  size_t size = 0;
+  uint8_t *data = read_file(&scratch, path, &size);
+  bool ok = true;
+  if (data) {
+    if (size >= 8 && !memcmp(data, "!<arch>\n", 8)) {
+      ok = scan_archive(data, size, defined, used);
+    } else if (size >= 4 && !memcmp(data, "\x7f" "ELF", 4)) {
+      ok = scan_symbols(data, size, false, defined, used);
+    } else if (depth < 4 && is_script(data, size)) {
+      ScanContext scan = {defined, used, depth};
+      parse_script((const char *)data, size, scan_script_file, &scan);
+    }
+  }
+  linker_free(&scratch);
+  return ok;
+}
 bool dyn_link_elf_symbols(const char *const *inputs, size_t input_count, char ***defined, size_t *defined_count,
                           char ***used, size_t *used_count) {
   NameList define = {0}, use = {0};
   bool ok = true;
-  for (size_t i = 0; ok && i < input_count; ++i) {
-    Linker scratch = {0};
-    size_t size = 0;
-    uint8_t *data = read_file(&scratch, inputs[i], &size);
-    if (data) {
-      ok = size >= 8 && !memcmp(data, "!<arch>\n", 8) ? scan_archive(data, size, &define, &use)
-                                                      : scan_symbols(data, size, false, &define, &use);
-    }
-    linker_free(&scratch);
-  }
+  for (size_t i = 0; ok && i < input_count; ++i) ok = scan_file(inputs[i], &define, &use, 0);
   if (!ok) {
     dyn_link_elf_names_free(define.names, define.count);
     dyn_link_elf_names_free(use.names, use.count);
