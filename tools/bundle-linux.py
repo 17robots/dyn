@@ -21,6 +21,18 @@ def run(*args):
 
 
 def bundle(sdk):
+    if os.environ.get('DYN_WITH_LLVM') == '0':
+        binary = sdk/'bin/dyn'
+        dependencies = run('ldd', str(binary))
+        if 'not found' in dependencies:
+            raise RuntimeError(dependencies)
+        names = re.findall(r'^\s*(\S+) => ', dependencies, re.M)
+        if any(name not in HOST_LIBS and Path(name).name != 'ld-linux-x86-64.so.2' for name in names):
+            raise RuntimeError('Unexpected dependency in LLVM-free SDK: '+dependencies)
+        versions = re.findall(r'\bGLIBC_(\d+)\.(\d+)\b', run('readelf', '--version-info', str(binary)))
+        baseline = max(tuple(map(int, version)) for version in versions)
+        return dict(os='linux', arch='x86_64', glibc_min='.'.join(map(str, baseline)),
+                    bundled=[], packages={}, backend='native', targets=['x86_64-linux'])
     libraries = sdk/'lib/dyn/host'
     linkers = sdk/'lib/dyn/tools'
     notices = sdk/'share/dyn/licenses'
@@ -94,6 +106,17 @@ def runtime_sources(dist, version):
     archive = dist/f'dyn-{version}-runtime-sources.tar.gz'
     with tempfile.TemporaryDirectory(prefix='dyn-runtime-source-') as temporary:
         work = Path(temporary)
+        if os.environ.get('DYN_WITH_LLVM') == '0':
+            root = Path(__file__).resolve().parents[1]
+            shutil.copytree(root/'runtime', work/'runtime')
+            shutil.copy2(root/'LICENSE', work/'LICENSE')
+            shutil.copy2(root/'tools/build.py', work/'build.py')
+            (work/'README.txt').write_text(
+                'Dyn runtime sources for the LLVM-free host SDK. No third-party runtime libraries are bundled.\n'
+                'The matching compiler checkout tools/build.py records the GCC compile commands.\n')
+            with tarfile.open(archive, 'w:gz') as tar:
+                tar.add(work, arcname='runtime-sources')
+            return dict(archive=archive.name, sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
         versions = set()
         for package in ('libstdc++6', 'libgcc-s1'):
             value = run('dpkg-query', '-W', '-f=${source:Package}=${source:Version}', package)

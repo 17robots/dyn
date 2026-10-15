@@ -99,8 +99,8 @@ fn main() {
         assert ok([output]).stdout == b'native compiler ok\n'
         checks += 1
         # LLVM-only options route auto builds to LLVM; explicit native rejects them.
-        for flags in (['--shared'],['--emit-ir'],['--emit-asm'],['--cpu','native'],
-                      ['--opt-remarks'],['--target','wasm32-wasi'],['--release']):
+        for flags in (['--emit-ir'],['--emit-asm'],['--cpu','native'],
+                      ['--opt-remarks'],['--target','wasm32-wasi'],['--release','--opt-level','2']):
             output.write_bytes(b'keep-existing-output')
             result=run([candidate,'build',root,'--backend','native',*flags,'--output',output])
             assert result.returncode == 2 and b'--backend native requires' in result.stderr, (flags,result.stderr)

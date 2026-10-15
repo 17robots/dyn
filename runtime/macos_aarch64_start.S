@@ -37,6 +37,7 @@ _dyn_panic:
     movk x16, #0x200, lsl #16
     svc #0x80
 .Lpanic_exit:
+    bl _dyn_trace_dump
     mov x0, #101
     mov x16, #1
     movk x16, #0x200, lsl #16
@@ -79,10 +80,6 @@ _dyn_unwind_jump:
     mov x0, #1
     ret
 
-.global _dyn_trace_push
-_dyn_trace_push: ret
-.global _dyn_trace_pop
-_dyn_trace_pop: ret
 
 // Darwin arm64 syscall shim. Dyn passes Darwin's unclassed syscall number;
 // x16 selects the Unix syscall class. Kernel errno is normalized to -errno.

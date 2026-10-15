@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -213,7 +214,7 @@ class Contracts(unittest.TestCase):
                                 self.assertIn('returned value borrows function-local storage', result.stderr)
 
 
-    @unittest.skipUnless(os.uname().sysname == 'Linux', 'native Linux link fixture')
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'native Linux link fixture')
     def test_discovered_native_libraries_are_released_on_all_exits(self):
         with tempfile.TemporaryDirectory(prefix='dyn-native-ownership-') as directory:
             root = Path(directory)

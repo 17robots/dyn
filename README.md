@@ -31,6 +31,46 @@ objects directly, avoiding link-time optimization. Executable performance and si
 can differ; benchmark your workload before choosing this for distribution. The
 cache distinguishes this mode from normal release builds.
 
+## LLVM removal progress
+
+The native compiler can now be built without LLVM headers, libraries, C++, or
+`llvm-config`. On x86-64 Linux, using GCC and GNU binutils:
+
+```sh
+DYN_WITH_LLVM=0 CC=gcc BUILD=build/no-llvm python3 tools/build.py dyn host
+DYN_SDK="$PWD" build/no-llvm/dyn build path/to/program --output program
+python3 tests/no-llvm.py
+```
+
+This is an opt-in migration build, not a replacement for the complete SDK yet.
+It supports native debug and release executables, shared libraries, objects,
+frontend commands, and the language server. Release emission omits runtime
+tracing and folds literal integer expressions; it does not yet replace LLVM's
+full optimization pipeline. Explicit CPU, optimization-level and profile options
+remain unavailable in this build.
+
+Object emission supports x86-64 Linux, AArch64 Linux, AArch64 macOS, and x86-64
+Windows. Cross-target runtimes are separate; the command above builds only the
+host runtime. GCC-only Linux packaging is available with:
+
+```sh
+DYN_WITH_LLVM=0 BUILD=build/no-llvm python3 tools/package-sdk.py
+```
+
+The resulting host SDK does not bundle LLVM, LLD or C++ libraries. Packaging
+checks debug/release compilation and standard-library execution after relocation.
+The independent CI job builds from scratch with LLVM tool commands replaced by
+failing sentinels, checks library dependencies and unresolved symbols, and tests
+native execution, shared-library callbacks, all four object formats, and LSP.
+Separate jobs qualify native Windows emission with GCC and macOS emission with
+system C tools; macOS packaging rejects non-system library dependencies.
+
+Wasm emission/linking, assembly/LLVM IR output, advanced optimization, and LLVM-free cross-runtime builds remain migration
+work. Unsupported modes and external linker fallback fail explicitly. The normal
+build remains available with `DYN_WITH_LLVM=1` (the default) for compatibility
+and differential tests. Explicit `--backend native` also selects native release
+and shared-library emission in that reference build.
+
 ## Install a preview
 
 | System | Download from the release |

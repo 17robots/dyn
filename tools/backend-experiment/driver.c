@@ -58,7 +58,8 @@ typedef struct {
   unsigned symbol_remap[2 * MAX_SYMBOLS + 16];
   /* Production symbol policy: local bodies named like a foreign link name or exit/_exit get ".dyn". */
   bool function_suffixed[MAX_SYMBOLS];
-  unsigned initializer_symbol, initializer_flag_symbol, first_global;
+  unsigned initializer_symbol, initializer_flag_symbol, first_global, dll_entry_symbol;
+  bool shared;
   unsigned runtime_index[RUNTIME_COUNT], stack_slots, frame_bytes, local_words;
   uint32_t local_offsets[MAX_LOCALS];
   bool local_alias[MAX_LOCALS];
@@ -88,7 +89,7 @@ typedef struct {
   bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
   bool darwin; /* AArch64 macOS: Apple's AAPCS64 variant and Mach-O objects */
   /* Windows unwind data: per function {text start, prologue length, frame bytes}. */
-  uint32_t unwind_frames[MAX_SYMBOLS + 1][3];
+  uint32_t unwind_frames[MAX_SYMBOLS + 2][3];
   unsigned unwind_frame_count;
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
@@ -159,6 +160,56 @@ static unsigned integer_bits(DynType t) {
   case DYN_TYPE_I32: case DYN_TYPE_U32: return 32;
   default: return 64;
   }
+}
+/* Only literal integer trees are folded. Checked overflow remains in the
+   emitter, preserving runtime guards and deferred cleanup. */
+static bool fold_integer(const DynIrProgram *ir, const DynIrExpr *e,
+                         uint64_t *value, unsigned depth) {
+  if (depth > MAX_DEPTH || !integer_type(e->type)) return false;
+  unsigned bits = integer_bits(e->type);
+  uint64_t mask = UINT64_MAX >> (64-bits), sign = UINT64_C(1) << (bits-1);
+  uint64_t a, b, result;
+  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR || e->kind == DYN_EXPR_BOOL) {
+    result = e->kind == DYN_EXPR_BOOL ? e->boolean : e->integer;
+  } else {
+    if (e->kind != DYN_EXPR_BINARY || e->left >= ir->expression_count ||
+        e->right >= ir->expression_count || ir->expressions[e->left].type != e->type ||
+        ir->expressions[e->right].type != e->type ||
+        !fold_integer(ir, &ir->expressions[e->left], &a, depth+1) ||
+        !fold_integer(ir, &ir->expressions[e->right], &b, depth+1)) return false;
+    a &= mask; b &= mask;
+    bool overflow = false;
+    switch (e->op) {
+    case DYN_OP_ADD:
+      result = (a+b)&mask;
+      overflow = signed_scalar(e->type) ? ((~(a^b)&(a^result)&sign) != 0) : b > mask-a;
+      break;
+    case DYN_OP_SUB:
+      result = (a-b)&mask;
+      overflow = signed_scalar(e->type) ? (((a^b)&(a^result)&sign) != 0) : a < b;
+      break;
+    case DYN_OP_MUL: {
+      result = (a*b)&mask;
+      uint64_t magnitude_a = a, magnitude_b = b, limit = mask;
+      if (signed_scalar(e->type)) {
+        magnitude_a = (a&sign) ? (0-a)&mask : a;
+        magnitude_b = (b&sign) ? (0-b)&mask : b;
+        limit = ((a^b)&sign) ? sign : sign-1;
+      }
+      overflow = magnitude_b && magnitude_a > limit/magnitude_b;
+      break;
+    }
+    case DYN_OP_BIT_AND: result = a&b; break;
+    case DYN_OP_BIT_OR: result = a|b; break;
+    case DYN_OP_BIT_XOR: result = a^b; break;
+    default: return false;
+    }
+    if (overflow && !e->wrap) return false;
+  }
+  result &= mask;
+  if (signed_scalar(e->type) && (result&sign)) result |= ~mask;
+  *value = result;
+  return true;
 }
 static DynType storage_type(const DynIrProgram *ir, DynType t) {
   return dyn_type_is_enum(t) && t-DYN_TYPE_ENUM_BASE<ir->enum_count ? ir->enums[t-DYN_TYPE_ENUM_BASE].tag_type : t;
@@ -901,6 +952,11 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     if (e->type==DYN_TYPE_F32) { float value=(float)e->floating; uint32_t raw; memcpy(&raw,&value,4); bits=raw; }
     else memcpy(&bits,&e->floating,8);
     isa_immediate(ctx, R_A, bits); return !ctx->text.failed;
+  }
+  uint64_t folded;
+  if (!ctx->debug_mode && e->kind == DYN_EXPR_BINARY && fold_integer(ir, e, &folded, 0)) {
+    isa_immediate(ctx, R_A, folded);
+    return !ctx->text.failed;
   }
   if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR || e->kind == DYN_EXPR_BOOL) {
     uint64_t n = e->kind == DYN_EXPR_BOOL ? e->boolean : e->integer;
@@ -2040,7 +2096,7 @@ static bool suffix_functions(BackendContext *ctx, const DynIrProgram *ir) {
 }
 static bool emit_object(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const char *path) {
   ctx->active_ir=ir;
-  if (!ir->function_count || ir->function_count > MAX_SYMBOLS || ir->global_count > MAX_SYMBOLS) {
+  if ((!ir->function_count && !ctx->shared) || ir->function_count > MAX_SYMBOLS || ir->global_count > MAX_SYMBOLS) {
     backend_report(ctx, "unsupported by native backend: global/function count\n");
     return false;
   }
@@ -2070,6 +2126,15 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     ctx->initializer_symbol=(unsigned)ctx->runtime_base++;
     ctx->initializer_flag_symbol=(unsigned)ctx->runtime_base++; break;
   }
+  if (ctx->shared && ctx->win64) {
+    for (size_t i=0;i<ir->function_count;++i) {
+      if (!strcmp(function_name(&ir->functions[i]), "DllMainCRTStartup")) {
+        backend_report(ctx, "error: shared Windows modules reserve DllMainCRTStartup\n");
+        dyn_location_free(&locations); return false;
+      }
+    }
+    ctx->dll_entry_symbol=(unsigned)ctx->runtime_base++;
+  }
   /* ELF requires every local before sh_info. Reindex once before code emission,
      including address relocations already recorded for constant initializers. */
   unsigned *remap=ctx->symbol_remap, next=section_symbols;
@@ -2087,6 +2152,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
       const DynIrGlobal *g=&ir->globals[i];
       if ((unsigned)(g->foreign||g->is_public)!=pass) continue;
       unsigned old=ctx->global_symbols[i]; ctx->global_symbols[i]=next; remap[old]=next++;
+    }
+    if (pass && ctx->dll_entry_symbol) {
+      remap[ctx->dll_entry_symbol]=next; ctx->dll_entry_symbol=next++;
     }
     if (!pass && ctx->initializer_symbol) {
       remap[ctx->initializer_symbol]=next; ctx->initializer_symbol=next++;
@@ -2182,6 +2250,25 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     if (length>string_limit-names || !global_initializer(ctx,ir)) { backend_report(ctx,"unsupported by native backend global initialization\n"); goto done; }
     if (ctx->dwarf && !backend_dwarf_end(ctx->dwarf,ctx->text.n)) goto done;
     symbols[ctx->initializer_symbol]=(Elf64_Sym){.st_name=(Elf64_Word)names,.st_info=ELF64_ST_INFO(STB_LOCAL,STT_FUNC),.st_shndx=1,.st_value=begin,.st_size=ctx->text.n-begin};
+    memcpy(strings+names,name,length); names+=length;
+  }
+  if (ctx->dll_entry_symbol) {
+    const char *name="DllMainCRTStartup"; size_t length=strlen(name)+1, begin=ctx->text.n;
+    if (length>string_limit-names) goto done;
+    BackendDwarf *dwarf=ctx->dwarf; ctx->dwarf=NULL;
+    ctx->frame_bytes=0; ctx->stack_slots=0;
+    isa_enter(ctx);
+    if (ctx->initializer_symbol) {
+      CODE(0x83,0xfa,1); /* cmp edx, DLL_PROCESS_ATTACH */
+      size_t done_attach=isa_branch(ctx,CC_NE);
+      isa_call_symbol(ctx,ctx->initializer_symbol);
+      isa_patch(ctx,done_attach,ctx->text.n);
+    }
+    isa_immediate(ctx,R_A,1); isa_return(ctx);
+    ctx->dwarf=dwarf;
+    if (ctx->text.failed || ctx->relocation_failed) goto done;
+    symbols[ctx->dll_entry_symbol]=(Elf64_Sym){.st_name=(Elf64_Word)names,
+      .st_info=ELF64_ST_INFO(STB_GLOBAL,STT_FUNC),.st_shndx=1,.st_value=begin,.st_size=ctx->text.n-begin};
     memcpy(strings+names,name,length); names+=length;
   }
   for (unsigned i = 0; i < RUNTIME_COUNT; ++i) if (ctx->runtime_index[i]) {
@@ -2283,12 +2370,12 @@ done:
   free(symbols); free(strings); return ok;
 }
 typedef enum { TARGET_X64_ELF, TARGET_A64_ELF, TARGET_X64_COFF, TARGET_A64_MACHO } ObjectTarget;
-static bool object_target(const DynSource *source, const DynIrProgram *ir,
-                          const char *path, bool debug, bool debug_info, bool report, ObjectTarget target) {
+static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
+                          const char *path, bool debug, bool debug_info, bool report, ObjectTarget target, bool shared) {
   BackendContext *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return false;
   bool a64 = target == TARGET_A64_ELF || target == TARGET_A64_MACHO;
-  ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64;
+  ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64; ctx->shared = shared;
   ctx->win64 = target == TARGET_X64_COFF; ctx->darwin = target == TARGET_A64_MACHO;
   if (debug_info && (!(ctx->dwarf=a64?backend_dwarf_create_a64():backend_dwarf_create()) ||
                      !(ctx->dwarf_types=calloc(DYN_TYPE_PARAM_BASE, sizeof(*ctx->dwarf_types))))) {
@@ -2301,6 +2388,10 @@ static bool object_target(const DynSource *source, const DynIrProgram *ir,
   free(ctx->relocations); free(ctx->constant_relocations);
   free(ctx);
   return ok;
+}
+static bool object_target(const DynSource *source, const DynIrProgram *ir,
+                          const char *path, bool debug, bool debug_info, bool report, ObjectTarget target) {
+  return object_target_mode(source, ir, path, debug, debug_info, report, target, false);
 }
 static bool object_report(const DynSource *source, const DynIrProgram *ir,
                           const char *path, bool debug, bool debug_info, bool report) {

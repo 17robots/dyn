@@ -316,13 +316,44 @@ DYN_RUNTIME_HIDDEN float fmodf(float x, float y) {
   return dyn_f32_value(ux | sx);
 }
 
-#if defined(DYN_AARCH64) && !defined(DYN_RELEASE)
+#if defined(_WIN32) || defined(__APPLE__) || (defined(DYN_AARCH64) && !defined(DYN_RELEASE))
 long dyn_syscall6(long, long, long, long, long, long, long);
 enum { TRACE_SLOTS = 64, TRACE_FRAMES = 64 };
 typedef struct { const unsigned char *name; uint64_t length; } DynFrame;
 typedef struct { uint64_t tid, count; DynFrame frames[TRACE_FRAMES]; } DynSlot;
 static DynSlot trace_slots[TRACE_SLOTS];
-static uint64_t trace_tid(void) { return (uint64_t)dyn_syscall6(178,0,0,0,0,0,0); }
+static uint64_t trace_tid(void) {
+#if defined(_WIN32)
+  return (uint64_t)GetCurrentThreadId();
+#elif defined(__APPLE__)
+  return (uint64_t)(uintptr_t)pthread_self();
+#else
+  return (uint64_t)dyn_syscall6(178,0,0,0,0,0,0);
+#endif
+}
+static void trace_write(const unsigned char *data, uint64_t length) {
+#if defined(_WIN32)
+  __declspec(dllimport) void *__stdcall GetStdHandle(unsigned long);
+  __declspec(dllimport) int __stdcall WriteFile(void *, const void *, unsigned long, unsigned long *, void *);
+  void *handle = GetStdHandle((unsigned long)-12);
+  while (length) {
+    unsigned long written = 0;
+    unsigned long chunk = length > 0x7fffffff ? 0x7fffffff : (unsigned long)length;
+    if (!WriteFile(handle, data, chunk, &written, 0) || !written) return;
+    data += written; length -= written;
+  }
+#else
+  while (length) {
+#if defined(__APPLE__)
+    long written = dyn_syscall6(4,2,(long)data,(long)length,0,0,0);
+#else
+    long written = dyn_syscall6(64,2,(long)data,(long)length,0,0,0);
+#endif
+    if (written <= 0) return;
+    data += written; length -= (uint64_t)written;
+  }
+#endif
+}
 static DynSlot *trace_slot(uint64_t id, int claim) {
   for (size_t i = 0; i < TRACE_SLOTS; ++i) {
     uint64_t seen = __atomic_load_n(&trace_slots[i].tid, __ATOMIC_ACQUIRE);
@@ -346,13 +377,13 @@ void dyn_trace_pop(void) {
 void dyn_trace_dump(void) {
   static const unsigned char h[]="stack trace:\n", a[]="  at ", n[]="\n";
   DynSlot *s = trace_slot(trace_tid(), 0);
-  dyn_syscall6(64,2,(long)h,sizeof(h)-1,0,0,0);
-  if (!s) return;
+  if (!s || !s->count) return;
+  trace_write(h,sizeof(h)-1);
   for (uint64_t i=s->count < TRACE_FRAMES ? s->count : TRACE_FRAMES;i;--i) {
     DynFrame *f=&s->frames[i-1];
-    dyn_syscall6(64,2,(long)a,sizeof(a)-1,0,0,0);
-    dyn_syscall6(64,2,(long)f->name,f->length,0,0,0);
-    dyn_syscall6(64,2,(long)n,1,0,0,0);
+    trace_write(a,sizeof(a)-1);
+    trace_write(f->name,f->length);
+    trace_write(n,1);
   }
 }
 #endif

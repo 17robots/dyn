@@ -9,7 +9,7 @@ DIST=BUILD/'dist';DIST.mkdir(parents=True,exist_ok=True)
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 with tempfile.TemporaryDirectory(prefix='dyn-sdk-') as temporary:
     work=Path(temporary);sdk=work/'stage/dyn-sdk'
-    subprocess.run(['python3',str(ROOT/'tools/install.py')],env=dict(os.environ,BUILD=str(BUILD),DESTDIR=str(work/'stage'),PREFIX='/dyn-sdk'),check=True)
+    subprocess.run(['python3',str(ROOT/'tools/install.py'), *(['--host'] if os.environ.get('DYN_WITH_LLVM') == '0' else [])],env=dict(os.environ,BUILD=str(BUILD),DESTDIR=str(work/'stage'),PREFIX='/dyn-sdk'),check=True)
     for name in ('README.md','CHANGELOG.md','LICENSE','THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT/name,sdk/name)
     shutil.copytree(ROOT/'docs/migrations', sdk/'docs/migrations')
