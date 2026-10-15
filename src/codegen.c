@@ -8,6 +8,7 @@
 #include "ir.h"
 #include "link_elf.h"
 #include "link_macho.h"
+#include "link_coff.h"
 #include "thinlto.h"
 #include "llvm_shim.h"
 #include "sema.h"
@@ -3123,6 +3124,46 @@ int dyn_codegen_main(const DynSource *source, const char *object_path,
   return dyn_codegen_module(source, object_path, ir_path, asm_path, release,
                             debug_info, shared, NULL);
 }
+/* Links Windows output: an executable, or with import_library a DLL and its
+   import library. */
+static int link_coff(const char *runtime, const char *support, const char *const *objects, size_t object_count,
+                     const char *const *link_inputs, size_t link_input_count, const char *temporary,
+                     const char *output_path, const char *import_library, bool verbose) {
+  const char **inputs = calloc(object_count + link_input_count + 2, sizeof(*inputs));
+  if (!inputs)
+    return 2;
+  size_t count = 0;
+  inputs[count++] = runtime;
+  inputs[count++] = support;
+  for (size_t i = 0; i < object_count; ++i)
+    inputs[count++] = objects[i];
+  for (size_t i = 0; i < link_input_count; ++i)
+    inputs[count++] = link_inputs[i];
+  if (verbose) {
+    fprintf(stderr, "+ (built-in) link%s -o %s", import_library ? " -dll" : "", temporary);
+    for (size_t i = 0; i < count; ++i)
+      fprintf(stderr, " %s", inputs[i]);
+    fputc('\n', stderr);
+  }
+  const char *slash = strrchr(output_path, '/');
+  const char *backslash = strrchr(output_path, '\\');
+  if (backslash && (!slash || backslash > slash))
+    slash = backslash;
+  DynCoffOptions options = {.shared = import_library != NULL,
+                            .entry = import_library ? "DllMainCRTStartup" : "dyn_start",
+                            .dll_name = slash ? slash + 1 : output_path,
+                            .import_library = import_library};
+  int status = dyn_link_coff(inputs, count, temporary, &options);
+  free(inputs);
+  if (status)
+    return 2;
+  if (rename(temporary, output_path)) {
+    perror("error: rename output");
+    remove(temporary);
+    return 2;
+  }
+  return 0;
+}
 /* Links macOS output with the runtime, explicit inputs and the libSystem
    stub, then moves it into place. */
 static int link_macho(const char *runtime, const char *support, const char *const *objects, size_t object_count,
@@ -3285,6 +3326,15 @@ int dyn_link_executable_objects(const DynContext *context,
         lto_object_count, output_path, link_inputs, link_input_count, release, verbose, NULL, 0);
     dyn_thinlto_free(lto_objects, lto_object_count);
     return status;
+  }
+  /* Windows executables link in-process. */
+  if (windows && !forced) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_coff_supported(link_inputs[i]);
+    if (supported)
+      return link_coff(runtime, support, object_paths, object_count, link_inputs, link_input_count, temporary,
+                       output_path, NULL, verbose);
   }
   /* macOS executables link in-process. */
   if (darwin && !forced) {
@@ -3571,6 +3621,21 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
   const char *external = getenv("DYN_LINKER");
+  if (windows && !(external && !strcmp(external, "external"))) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_coff_supported(link_inputs[i]);
+    const char *object = object_path;
+    if (supported) {
+      int status = link_coff(assembly, support, &object, 1, link_inputs, link_input_count, temporary, output_path,
+                             import_temporary, verbose);
+      if (!status && rename(import_temporary, import_output)) {
+        perror("error: rename import library");
+        return 2;
+      }
+      return status;
+    }
+  }
   if (darwin && !(external && !strcmp(external, "external"))) {
     bool supported = true;
     for (size_t i = 0; supported && i < link_input_count; ++i)

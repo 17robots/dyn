@@ -270,4 +270,64 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
     run(DYN, 'build', root/'library', '--shared', '--target', 'aarch64-macos', '--output', dylib, env=bare)
     assert not verify_signature(dylib), 'dylib has LC_MAIN'
 
-print('PASS built-in ELF and Mach-O linkers and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, signed macOS output, code parity')
+    # Windows x86-64: with GNU ld present (it ran these links before), code
+    # matches ld's apart from padding, and the DLL's import library works with
+    # both linkers.
+    if shutil.which('ld') and shutil.which('llvm-objdump') and shutil.which('llvm-readobj') and \
+            'i386pep' in run('ld', '-V').stdout:
+        def pe_code(path):
+            listing = run('llvm-objdump', '-d', '--no-show-raw-insn', path).stdout
+            lines = []
+            linker_table = False
+            for line in listing.splitlines():
+                label = re.match(r'^[0-9a-f]+ <([^>]+)>:', line)
+                if label:
+                    # Older GNU ld places sentinel data tables in .text.
+                    linker_table = label.group(1) in ('___CTOR_LIST__', '___DTOR_LIST__')
+                if linker_table:
+                    continue
+                if not re.match(r'^ *[0-9a-f]+:', line):
+                    continue
+                text = re.sub(r'^ *[0-9a-f]+:\s+', '', line).split('#')[0]
+                text = re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'0x[0-9a-f]+', 'X', text))).rstrip()
+                # Padding between functions: int3 here, nop forms (some with
+                # data16/cs prefixes) from GNU ld.
+                if text != 'int3' and 'nop' not in text:
+                    lines.append(text)
+            return lines
+
+        def imports(path):
+            listing = run('llvm-readobj', '--coff-imports', path).stdout
+            return sorted(line.strip() for line in listing.splitlines() if 'Name:' in line or 'Symbol:' in line)
+
+        ours = root/'windows-builtin.exe'
+        run(DYN, 'build', root/'release', '--target', 'x86_64-windows', '--output', ours, env=dict(bare, DYN_CACHE_DIR=str(root/'win-a')))
+        objects = root/'windows.o'
+        run(DYN, 'build', root/'release', '--target', 'x86_64-windows', '--emit-object', '--no-link', '--output', objects,
+            env=dict(os.environ, DYN_CACHE_DIR=str(root/'win-b')))
+        build = Path(DYN).parent
+        reference = root/'windows-ld.exe'
+        run('ld', '-mi386pep', '--entry=dyn_start', '--subsystem', 'console', '-o', reference,
+            build/'dynrt_windows_start.o', build/'dynrt_windows_support.o', str(objects) + '.o')
+        assert pe_code(ours) == pe_code(reference), 'Windows: built-in link differs from GNU ld'
+        assert imports(ours) == imports(reference), 'Windows: import tables differ'
+        # Windows refuses an image with an empty section; release objects
+        # bring empty .data contributions.
+        release_exe = root/'windows-release.exe'
+        run(DYN, 'build', root/'release', '--target', 'x86_64-windows', '--release', '--output', release_exe,
+            env=dict(bare, DYN_CACHE_DIR=str(root/'win-c')))
+        for path in (ours, release_exe):
+            sizes = re.findall(r'VirtualSize: (0x[0-9A-F]+)', run('llvm-readobj', '--sections', path).stdout)
+            assert sizes and all(int(size, 16) for size in sizes), f'{path}: empty section {sizes}'
+        dll = root/'add.dll'
+        run(DYN, 'build', root/'library', '--shared', '--target', 'x86_64-windows', '--output', dll, env=bare)
+        exports = run('llvm-readobj', '--coff-exports', dll).stdout
+        assert 'Name: add_one' in exports, exports
+        (root/'caller').mkdir()
+        (root/'caller'/'main.dyn').write_text('extern fn add "add_one"(value: i32) i32\nfn main() {\n  if add(1) != 2 { #panic("dll") }\n}\n')
+        for name, env in (('caller-builtin.exe', bare), ('caller-ld.exe', dict(os.environ, DYN_LINKER='external'))):
+            caller = root/name
+            run(DYN, 'build', root/'caller', '--target', 'x86_64-windows', '--output', caller, '--link', str(dll) + '.a', env=env)
+            assert 'Name: add.dll' in run('llvm-readobj', '--coff-imports', caller).stdout, f'{name}: no add.dll import'
+
+print('PASS built-in ELF, Mach-O and PE linkers and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, signed macOS output, DLL import libraries, code parity')

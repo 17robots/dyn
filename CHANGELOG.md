@@ -24,7 +24,11 @@ servers so they pick up the new `dyn`.
 - macOS arm64 executables and dylibs link in-process and carry an ad-hoc code
   signature, so building for macOS needs neither `ld64.lld` nor Zig. A
   `--shared` dylib's install name is now its output path (it was the
-  temporary `.tmp` path). Release code is the same as before: ThinLTO
+  temporary `.tmp` path).
+- x86-64 Windows executables and DLLs link in-process, so building for Windows
+  needs no `ld.lld`, GNU ld or Visual Studio libraries. DLLs are now
+  relocatable (they have a base relocation table) and their import library
+  uses the short import format that `llvm-dlltool` writes. Release code is the same as before: ThinLTO
   runs inside the compiler with `ld.lld`'s settings, including profile-guided
   function ordering. `--link` and `#link` accept objects, `ar` archives,
   shared libraries and GNU linker scripts, and `--shared` libraries link
