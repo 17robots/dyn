@@ -9,7 +9,7 @@
    builds use. */
 
 enum { COFF_TEXT = 1, COFF_RODATA, COFF_DATA, COFF_CONSTANTS, COFF_XDATA, COFF_PDATA, COFF_DEBUG, COFF_SECTION_LIMIT = COFF_DEBUG + BACKEND_DWARF_SECTION_COUNT - 1 };
-enum { IMAGE_REL_AMD64_ADDR64 = 1, IMAGE_REL_AMD64_ADDR32NB = 3, IMAGE_REL_AMD64_REL32 = 4, IMAGE_REL_AMD64_SECREL = 11 };
+enum { DYN_COFF_REL_AMD64_ADDR64 = 1, DYN_COFF_REL_AMD64_ADDR32NB = 3, DYN_COFF_REL_AMD64_REL32 = 4, DYN_COFF_REL_AMD64_SECREL = 11 };
 
 static void put16(unsigned char *p, uint16_t v) { p[0] = (unsigned char)v; p[1] = (unsigned char)(v >> 8); }
 static void put32(unsigned char *p, uint32_t v) { for (unsigned i = 0; i < 4; ++i) p[i] = (unsigned char)(v >> 8 * i); }
@@ -38,15 +38,15 @@ static bool coff_relocations(const Elf64_Rela *items, size_t count, unsigned cha
     if (!symbol_map && type != R_X86_64_64) {
       if (r->r_offset + 4 > size || (type && type != R_X86_64_32)) return false;
       put32(bytes + r->r_offset, (uint32_t)r->r_addend);
-      coff = type ? IMAGE_REL_AMD64_SECREL : IMAGE_REL_AMD64_ADDR32NB;
+      coff = type ? DYN_COFF_REL_AMD64_SECREL : DYN_COFF_REL_AMD64_ADDR32NB;
     } else if (type == R_X86_64_64) {
       if (r->r_offset + 8 > size) return false;
-      put64(bytes + r->r_offset, (uint64_t)r->r_addend); coff = IMAGE_REL_AMD64_ADDR64;
+      put64(bytes + r->r_offset, (uint64_t)r->r_addend); coff = DYN_COFF_REL_AMD64_ADDR64;
     } else if (type == R_X86_64_PC32 || type == R_X86_64_PLT32) {
       /* COFF REL32 is relative to the end of the field; ELF folds that -4 into the addend. */
       int64_t addend = r->r_addend + 4;
       if (r->r_offset + 4 > size || addend < INT32_MIN || addend > INT32_MAX) return false;
-      put32(bytes + r->r_offset, (uint32_t)addend); coff = IMAGE_REL_AMD64_REL32;
+      put32(bytes + r->r_offset, (uint32_t)addend); coff = DYN_COFF_REL_AMD64_REL32;
     } else return false;
     put32(out + 10 * i, (uint32_t)r->r_offset); put32(out + 10 * i + 4, symbol_map ? symbol_map[symbol] : symbol); put16(out + 10 * i + 8, (uint16_t)coff);
   }

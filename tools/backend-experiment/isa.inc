@@ -608,7 +608,7 @@ static void isa_enter(BackendContext *ctx) {
   }
   if (ctx->win64) {
     size_t start = ctx->text.n;
-    if (ctx->unwind_frame_count > MAX_SYMBOLS) ctx->text.failed = true;
+    if (ctx->unwind_frame_count >= sizeof(ctx->unwind_frames)/sizeof(ctx->unwind_frames[0])) ctx->text.failed = true;
     else ctx->unwind_frame_count++;
     CODE(0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0x75, 16, 0x48, 0x89, 0x7d, 24);
     uint32_t *frame = ctx->unwind_frames[ctx->unwind_frame_count ? ctx->unwind_frame_count - 1 : 0];

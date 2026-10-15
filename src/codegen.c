@@ -9,8 +9,10 @@
 #include "link_elf.h"
 #include "link_macho.h"
 #include "link_coff.h"
+#ifndef DYN_NO_LLVM
 #include "thinlto.h"
 #include "llvm_shim.h"
+#endif
 #include "sema.h"
 #include <assert.h>
 #include <limits.h>
@@ -20,6 +22,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifndef DYN_NO_LLVM
 typedef struct GenAbi GenAbi;
 typedef struct {
   uint32_t defer_statement;
@@ -2198,6 +2201,8 @@ static int write_text(const char *p, const char *t) {
   fputs(t, f);
   return fclose(f) != 0;
 }
+#endif
+
 static void global_module_key(const char *name, char *out, size_t capacity) {
   if (!strncmp(name, "dyn_m", 5) && strlen(name) > 21 && name[21] == '_')
     snprintf(out, capacity, "%.21s", name);
@@ -2217,6 +2222,7 @@ static bool module_owns(const char *owner_key, const char *name) {
    when a C library is linked). Those get a ".dyn" suffix, the same in every
    object file, so the extern and the Dyn function never merge or get renamed
    differently per object. */
+#ifndef DYN_NO_LLVM
 static const char *function_symbol(const DynIrProgram *ir, const DynIrFunction *fn,
                                    char *buffer, size_t capacity) {
   if (fn->foreign)
@@ -2294,6 +2300,8 @@ static LLVMValueRef function_value(Gen *g, uint32_t i) {
     LLVMSetVisibility(g->functions[i], LLVMHiddenVisibility);
   return g->functions[i];
 }
+#endif
+
 static uint64_t interface_bytes(uint64_t hash, const void *data, size_t length) {
   const unsigned char *bytes = data;
   for (size_t i = 0; i < length; ++i)
@@ -2483,6 +2491,13 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
                      const char *asm_path, bool release, bool debug_info,
                      bool shared, const char *owner_key, unsigned chunk,
                      unsigned chunks) {
+#ifdef DYN_NO_LLVM
+  (void)source; (void)prepared; (void)object_path; (void)ir_path;
+  (void)asm_path; (void)release; (void)debug_info; (void)shared;
+  (void)owner_key; (void)chunk; (void)chunks;
+  fprintf(stderr, "error: this build requires native emission; LLVM is disabled\n");
+  return 2;
+#else
   DynIrProgram ir = *prepared;
   struct timespec phase = dyn_timing_start(&source->context);
   pthread_once(&llvm_targets_once, initialize_llvm_targets);
@@ -3116,6 +3131,7 @@ cleanup:
   LLVMDisposeModule(g.module);
   LLVMContextDispose(g.context);
   return failed;
+#endif
 }
 void dyn_codegen_release(DynIrProgram *ir) { dyn_ir_free(ir); }
 int dyn_codegen_main(const DynSource *source, const char *object_path,
@@ -3203,6 +3219,7 @@ static int link_macho(const char *runtime, const char *support, const char *cons
 }
 /* Symbols that the runtime and explicit link inputs define or use must stay
    visible; everything else in the bitcode may be internalized. */
+#ifndef DYN_NO_LLVM
 static int thin_link(const DynContext *context, const char *runtime, const char *support,
                      const char *const *bitcode, size_t bitcode_count, const char *output_path,
                      const char *const *link_inputs, size_t link_input_count,
@@ -3248,6 +3265,8 @@ static int thin_link(const DynContext *context, const char *runtime, const char 
   dyn_link_elf_names_free(used, used_count);
   return status;
 }
+#endif
+
 static int link_wasm(const DynContext *, const char *, const char *,
                      const char *const *, size_t, bool);
 int dyn_link_executable_objects(const DynContext *context,
@@ -3315,6 +3334,7 @@ int dyn_link_executable_objects(const DynContext *context,
      DYN_LINKER=external keeps ld.lld's ThinLTO for differential checks. */
   const char *external = getenv("DYN_LINKER");
   bool forced = external && !strcmp(external, "external");
+#ifndef DYN_NO_LLVM
   char **lto_objects = NULL;
   size_t lto_object_count = 0;
   if (thin && !forced) {
@@ -3327,6 +3347,12 @@ int dyn_link_executable_objects(const DynContext *context,
     dyn_thinlto_free(lto_objects, lto_object_count);
     return status;
   }
+#else
+  if (thin) {
+    fprintf(stderr, "error: LLVM bitcode is not supported by this build\n");
+    return 2;
+  }
+#endif
   /* Windows executables link in-process. */
   if (windows && !forced) {
     bool supported = true;
@@ -3368,7 +3394,10 @@ int dyn_link_executable_objects(const DynContext *context,
     }
     DynLinkOptions options = {.entry = "_start",
                               .interpreter = dyn_context_target(context)->dynamic_linker,
-                              .layout = dyn_cache_directed_layout};
+#ifndef DYN_NO_LLVM
+                              .layout = dyn_cache_directed_layout,
+#endif
+                             };
     int status = dyn_link_elf(inputs, input_count, temporary, &options);
     free(inputs);
     if (status)
@@ -3379,6 +3408,10 @@ int dyn_link_executable_objects(const DynContext *context,
     }
     return 0;
   }
+#ifdef DYN_NO_LLVM
+  fprintf(stderr, "error: external linker fallback is disabled in the LLVM-free compiler\n");
+  return 2;
+#endif
   if (verbose) {
     fprintf(
         stderr, "+ %s %s -o %s %s %s", linker,
@@ -3679,6 +3712,10 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
       return 0;
     }
   }
+#ifdef DYN_NO_LLVM
+  fprintf(stderr, "error: external linker fallback is disabled in the LLVM-free compiler\n");
+  return 2;
+#endif
   if (verbose) {
     fprintf(stderr, "+ %s -o %s %s %s %s",
             darwin ?

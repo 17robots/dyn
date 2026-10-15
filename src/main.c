@@ -3,7 +3,9 @@
 #include "dyn.h"
 #include "dyn_compact.h"
 #include "ir.h"
+#ifndef DYN_NO_LLVM
 #include "llvm_shim.h"
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -268,7 +270,7 @@ static int emit_native(const DynSource *source, const DynIrProgram *ir,
 #ifdef DYN_NATIVE_BACKEND
   bool report = options->backend == DYN_BACKEND_NATIVE;
   struct timespec phase = timer_start();
-  int result = dyn_native_object(source, ir, object, true, options->debug_info, report);
+  int result = dyn_native_object(source, ir, object, !options->release, options->debug_info, options->shared, report);
   if (options->timings)
     fprintf(stderr, "timing detail native emit %.3f ms\n", elapsed_ms(phase));
   if (result && !report && options->verbose)
@@ -368,35 +370,52 @@ static int execute_command(DynOptions *options, const char *compiler) {
     fprintf(stderr, "error: Wasm requires an external host; browser builds require --shared, WASI commands forbid --shared\n");
     return 2;
   }
-  /* Native emission covers debug executables and objects for the Linux, macOS
-     and Windows targets; every other build, and any program it does not
-     support under auto, uses LLVM. */
+  /* Keep automatic release/shared routing on the reference backend until
+     the independent backend is qualified for every supported target. */
   bool native = false;
 #ifdef DYN_NATIVE_BACKEND
+  bool independent = options->backend == DYN_BACKEND_NATIVE;
+#ifdef DYN_NO_LLVM
+  independent = true;
+#endif
   native = options->backend != DYN_BACKEND_LLVM &&
-           (is_command(options, "build") || run) && !options->release &&
+           (is_command(options, "build") || run) && (!options->release || independent) &&
            (!strcmp(options->target, "x86_64-linux") || !strcmp(options->target, "aarch64-linux") ||
             !strcmp(options->target, "aarch64-macos") || !strcmp(options->target, "x86_64-windows")) &&
-           !options->shared &&
+           (!options->shared || independent) &&
            !options->emit_ir && !options->emit_asm &&
            !options->optimization.native_cpu && !options->optimization.cpu &&
-           !options->optimization.features && !options->optimization.remarks;
+           !options->optimization.features && !options->optimization.remarks &&
+           !options->optimization.sample_profile && !options->optimization.level;
 #endif
   if (options->backend == DYN_BACKEND_NATIVE && !native) {
     fprintf(stderr, "error: --backend native requires an x86_64-linux, aarch64-linux, aarch64-macos "
-                    "or x86_64-windows debug build without --shared, --emit-ir, --emit-asm, "
-                    "CPU/features or optimization remarks\n");
+                    "or x86_64-windows build without --emit-ir, --emit-asm, "
+                    "CPU/features, optimization levels, profiles or remarks\n");
     return 2;
   }
+#ifdef DYN_NO_LLVM
+  if ((is_command(options, "build") || run) && !native) {
+    fprintf(stderr, "error: LLVM is disabled; supported builds are native executables, shared libraries and objects\n");
+    return 2;
+  }
+  if (native)
+    options->backend = DYN_BACKEND_NATIVE;
+#endif
   options->native_backend = native;
   struct timespec phase = timer_start();
   if (options->optimization.native_cpu) {
     if (strcmp(options->target, DYN_HOST_TARGET)) {
       fprintf(stderr, "error: --cpu native requires the host target\n"); return 2;
     }
+#ifdef DYN_NO_LLVM
+    fprintf(stderr, "error: --cpu native is unavailable without LLVM\n");
+    return 2;
+#else
     options->optimization.cpu = LLVMGetHostCPUName();
     options->optimization.features = LLVMGetHostCPUFeatures();
     if (!options->optimization.cpu || !options->optimization.features) return 2;
+#endif
   }
   if (options->optimization.level && !options->release) {
     fprintf(stderr, "error: --opt-level requires --release\n"); return 2;
@@ -760,8 +779,13 @@ int main(int argc, char **argv) {
     compiler = executable;
   }
   int result = execute_command(&o, compiler);
+#ifndef DYN_NO_LLVM
   if (o.optimization.cpu) LLVMDisposeMessage(o.optimization.cpu);
   if (o.optimization.features) LLVMDisposeMessage(o.optimization.features);
+#else
+  free(o.optimization.cpu);
+  free(o.optimization.features);
+#endif
   for (size_t i = borrowed_links; i < o.link_input_count; ++i)
     free((void *)o.link_inputs[i]);
   return result;

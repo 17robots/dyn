@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -29,13 +30,21 @@ def sha(path):
 
 
 def windows_bundle(sdk):
-    prefix = Path(run('llvm-config', '--prefix'))
+    independent = os.environ.get('DYN_WITH_LLVM') == '0'
+    if independent:
+        compiler = shutil.which(shlex.split(os.environ.get('CC', 'gcc'))[0])
+        if not compiler:
+            raise RuntimeError('Cannot locate the native compiler toolchain')
+        prefix = Path(compiler).resolve().parent.parent
+    else:
+        prefix = Path(run('llvm-config', '--prefix'))
     binary_dir = prefix/'bin'
     files = {p.name.lower(): p for p in binary_dir.glob('*.dll')}
     tools = sdk/'lib/dyn/tools'; tools.mkdir(parents=True)
-    shutil.copy2(binary_dir/'ld.lld.exe', tools/'ld.lld.exe')
-    queue = [(sdk/'bin/dyn.exe', BUILD/'dyn-release.exe'),
-             (tools/'ld.lld.exe', binary_dir/'ld.lld.exe')]
+    queue = [(sdk/'bin/dyn.exe', BUILD/'dyn-release.exe')]
+    if not independent:
+        shutil.copy2(binary_dir/'ld.lld.exe', tools/'ld.lld.exe')
+        queue.append((tools/'ld.lld.exe', binary_dir/'ld.lld.exe'))
     seen = set()
     packages = {}
     notices = sdk/'share/dyn/licenses'; notices.mkdir()
@@ -60,7 +69,11 @@ def windows_bundle(sdk):
         if target.name.lower() in seen: continue
         seen.add(target.name.lower())
         if source != BUILD/'dyn-release.exe': notice(source)
-        for name in re.findall(r'^\s*Name: (.+\.dll)\s*$', run('llvm-readobj', '--coff-imports', source), re.M | re.I):
+        imports = (re.findall(r'^\s*DLL Name: (.+\.dll)\s*$', run('objdump', '-p', source), re.M | re.I)
+                   if independent else re.findall(r'^\s*Name: (.+\.dll)\s*$', run('llvm-readobj', '--coff-imports', source), re.M | re.I))
+        if independent and any('llvm' in name.lower() or 'stdc++' in name.lower() for name in imports):
+            raise RuntimeError('Unexpected LLVM/C++ dependency in native SDK')
+        for name in imports:
             key = name.lower()
             if key in files:
                 destination = sdk/'bin'/files[key].name
@@ -89,13 +102,23 @@ def windows_bundle(sdk):
             'Unmodified MSYS2 libiconv corresponding source, including upstream source,\n'
             'patches and PKGBUILD. Extract with tar; build with makepkg-mingw in CLANG64.\n'
             'The bundled DLL can be replaced with a compatible rebuilt version.\n')
-    # CLANG64 uses libc++; unexpected GCC/MSYS runtimes need separate qualification.
+    # The independent GCC build links libgcc statically; no GNU DLL is expected.
     if any('gcc' in name or 'stdc++' in name or 'msys-2.0' in name for name in seen):
         raise RuntimeError('Unexpected GNU/MSYS runtime in CLANG64 SDK')
     return dict(platform=PLATFORM, dependencies=sorted(seen), packages=packages, sources=sources)
 
 
 def macos_bundle(sdk):
+    if os.environ.get('DYN_WITH_LLVM') == '0':
+        binary = sdk/'bin/dyn'
+        dependencies = [line.strip().split(' (', 1)[0]
+                        for line in run('otool', '-L', binary).splitlines()[1:]]
+        if any(not name.startswith(('/usr/lib/', '/System/Library/')) for name in dependencies):
+            raise RuntimeError('Unexpected dependency in LLVM-free SDK: '+str(dependencies))
+        run('codesign', '--force', '--sign', '-', binary)
+        run('codesign', '--verify', binary)
+        return dict(platform=PLATFORM, dependencies=dependencies, packages={},
+                    macos_min='15.0', backend='native', targets=['aarch64-macos'])
     libraries = sdk/'lib/dyn/host'; libraries.mkdir(parents=True)
     tools = sdk/'lib/dyn/tools'; tools.mkdir()
     notices = sdk/'share/dyn/licenses'; notices.mkdir()

@@ -275,7 +275,7 @@ static inline unsigned dyn_chunk_of_path(const char *path, unsigned chunks) {
    With report false, unsupported programs fail silently for LLVM fallback. */
 int dyn_native_object(const DynSource *, const struct DynIrProgram *,
                       const char *path, bool runtime_trace, bool debug_info,
-                      bool report);
+                      bool shared, bool report);
 #endif
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, struct DynIrProgram *ir);

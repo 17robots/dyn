@@ -14,6 +14,13 @@ permissions:
 env:
   DYN_VERSION: ${{ inputs.release_version || '0.1.0-dev' }}
 jobs:
+  no-llvm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and exercise the compiler without LLVM
+        run: python3 tests/no-llvm.py
   quality:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

@@ -251,7 +251,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-unwind-registers-') as temporary:
     if platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64'):
         source = (ROOT / 'runtime/windows_x86_64_start.S').read_text()
         source = source[source.index('.global dyn_unwind_set'):
-                        source.index('.global dyn_trace_push')]
+                        source.index('.global dyn_atomic_load_u32')]
         runtime = root / 'windows-unwind.S'
         runtime.write_text(source + '\n.section .note.GNU-stack,"",@progbits\n')
         (root / 'probe.S').write_text(register_probe())
