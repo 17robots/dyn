@@ -1,5 +1,5 @@
 /* Both emitters receive the same prepared IR in a fresh process. */
-#define main scalar_experiment_cli
+#define main backend_cli
 #include "driver.c"
 #undef main
 #include <sys/resource.h>

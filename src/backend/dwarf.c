@@ -297,7 +297,7 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
   BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_INFO];
   PUT(number(b,0,4)); PUT(number(b,4,2));
   PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_ABBREV,R_X86_64_32,0)); PUT(number(b,8,1));
-  PUT(uleb(b,1)); PUT(string(b,d->files[0])); PUT(string(b,"dyn native experimental"));
+  PUT(uleb(b,1)); PUT(string(b,d->files[0])); PUT(string(b,"dyn"));
   PUT(number(b,0x15b9,2)); /* LLVM's existing Dyn language code. */
   PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_LINE,R_X86_64_32,0));
   PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,R_X86_64_64,d->functions[0].begin));

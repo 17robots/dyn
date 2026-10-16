@@ -273,10 +273,10 @@ state, deterministic output, and recovery after failure. Fixed capacities still 
 From the compiler directory:
 
 ```sh
-python3 tools/backend-experiment/build.py
+python3 tools/backend/build.py
 build/scalar-backend input.dyn output.o
 build/scalar-backend --debug input.dyn debug-output.o
-python3 tools/backend-experiment/test.py
+python3 tools/backend/test.py
 ```
 
 Objects with checked operations require the existing Dyn runtime at link time.
@@ -294,7 +294,7 @@ Tests require the production `build/dyn-release` executable
 (or `DYN` override), a C compiler/linker, and `readelf`. The test compiles the
 unmodified native runtime sources itself for its temporary shared libraries.
 
-`python3 tools/backend-experiment/feature-contracts.py` adds 332 value checks and
+`python3 tools/backend/feature-contracts.py` adds 332 value checks and
 36 panic subprocess checks for enums, `any`, and variadics in LLVM/native debug
 and release libraries. It also checks cross-backend payload callbacks, aggregate
 assignment snapshots, mutable payloads, type identity, argument order, register
@@ -302,7 +302,7 @@ exhaustion, and deferred pack cleanup. `--oracle-only` validates the LLVM baseli
 Run `build/backend-reentrant-test` for repeated/concurrent object emission and
 allocation-failure recovery; `build/backend-output-test` checks atomic publication
 under short writes, interrupted writes, failures, and concurrent readers/writers.
-`python3 tools/backend-experiment/global-contracts.py` adds 52 checks covering runtime
+`python3 tools/backend/global-contracts.py` adds 52 checks covering runtime
 global ordering, foreign/aggregate/descriptor/function-pointer storage, reflection,
 syscalls, shared constructors, freestanding entry, constant data protection, private
 symbol isolation from linked C definitions, and exact initializer panic traces.
@@ -350,9 +350,9 @@ To run a sanitized frontend/emitter build without replacing the normal binary:
 ```sh
 BUILD=/tmp/dyn-backend-sanitize \
   CFLAGS='-O1 -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie' \
-  python3 tools/backend-experiment/build.py
+  python3 tools/backend/build.py
 BUILD=/tmp/dyn-backend-sanitize DYN="$PWD/build/dyn-release" \
-  python3 tools/backend-experiment/test.py
+  python3 tools/backend/test.py
 ```
 
 Further backend work must qualify each new operation's safety behavior, broaden
@@ -363,11 +363,11 @@ supply that gate.
 
 ## Matched-IR benchmark
 
-Run `just bench-backend-experiment` from the compiler directory. For a short
+Run `just bench-backend` from the compiler directory. For a short
 correctness smoke:
 
 ```sh
-python3 tools/backend-experiment/benchmark.py --sizes 4 --runs 1 --calls 1000
+python3 tools/backend/benchmark.py --sizes 4 --runs 1 --calls 1000
 ```
 
 The harness gives both emitters identical prepared IR in fresh processes. It

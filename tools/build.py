@@ -67,7 +67,7 @@ def compiler_objects(kind, optimize, extra_sources=(), extra_inputs=()):
     names = []
     for source in [*sources, *extra_sources]:
         name = f'obj/{kind}/{source.stem}.o'
-        add(name, [source, *headers, *extra_inputs, *([COMPILER/'src/codegen.c', COMPILER/'tools/backend-experiment/output.h'] if source.name == 'codegen_text.c' else [])],
+        add(name, [source, *headers, *extra_inputs, *([COMPILER/'src/codegen.c', COMPILER/'src/backend/output.h'] if source.name == 'codegen_text.c' else [])],
             [*cc, *object_cppflags, *cflags, *optimize, f'-I{COMPILER}/src', '-c', source, '-o', BUILD/name])
         names.append(name)
     return names
@@ -78,12 +78,12 @@ def compiler_link(name, objects):
         objects)
 
 # Native emission also bootstraps portable runtime support on every host.
-backend_experiment = COMPILER/'tools/backend-experiment'
+backend = COMPILER/'src/backend'
 native_flags = ['-DDYN_NATIVE_BACKEND']
-native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
-native_inputs = [backend_experiment/'vector.inc', backend_experiment/'allocation.inc', backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc', backend_experiment/'rv64.inc',
-                 backend_experiment/'coff.inc', backend_experiment/'macho.inc',
-                 backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
+native_sources = [backend/'compiler.c', backend/'dwarf.c']
+native_inputs = [backend/'vector.inc', backend/'allocation.inc', backend/'driver.c', backend/'isa.inc', backend/'a64.inc', backend/'rv64.inc',
+                 backend/'coff.inc', backend/'macho.inc', backend/'reachability.inc',
+                 backend/'elf64.h', backend/'output.h', backend/'dwarf.h']
 default_flags = native_flags
 default_sources = native_sources
 default_inputs = native_inputs
@@ -96,9 +96,9 @@ backend_benchmark_objects = [f'obj/release/{name}.o' for name in
     ('frontend', 'ast', 'sema', 'sema_globals', 'source', 'source_tree',
      'diagnostic', 'target', 'ir', 'codegen', 'codegen_text', 'llvm_text', 'native_asm', 'codegen_wasm', 'link_elf', 'link_macho', 'link_coff', 'link_wasm', 'parser', 'snapshot')]
 add('obj/benchmark/backend.o',
-    [backend_experiment/'benchmark-driver.c', *native_inputs, *headers],
+    [backend/'benchmark-driver.c', *native_inputs, *headers],
     [*cc, *object_cppflags, *cflags, '-O2', f'-I{COMPILER}/src',
-     '-c', backend_experiment/'benchmark-driver.c', '-o', BUILD/'obj/benchmark/backend.o'])
+     '-c', backend/'benchmark-driver.c', '-o', BUILD/'obj/benchmark/backend.o'])
 compiler_link('backend-benchmark', [*backend_benchmark_objects, 'obj/benchmark/backend.o',
     'obj/release/compiler.o', 'obj/release/dwarf.o'])
 
@@ -134,7 +134,7 @@ for name in WASM_RUNTIME:
         [sys.executable, COMPILER/'tools/wasm-runtime.py', '--output', BUILD/name])
 
 add('llvm-text-unit-test', [COMPILER/'tests/llvm-text-unit.c', COMPILER/'src/llvm_text.c',
-    COMPILER/'tools/backend-experiment/output.h', *headers],
+    COMPILER/'src/backend/output.h', *headers],
     [*cc, *cflags, COMPILER/'tests/llvm-text-unit.c', '-o', BUILD/'llvm-text-unit-test'])
 
 add('cache-failure-test', [f'{COMPILER}/tests/cache-failure.c', f'{COMPILER}/src/cache.c', f'{COMPILER}/src/build.c', *headers],

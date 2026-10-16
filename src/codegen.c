@@ -14,7 +14,7 @@
 #include "sema.h"
 #include "native_asm.h"
 #ifdef DYN_TEXT_ONLY
-#include "../tools/backend-experiment/output.h"
+#include "backend/output.h"
 #endif
 #include <assert.h>
 #include <limits.h>

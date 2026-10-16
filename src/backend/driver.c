@@ -2740,7 +2740,7 @@ int main(int argc, char **argv) {
     --argc; ++argv;
   }
   if (argc != 3) { fprintf(stderr, "usage: scalar-backend [--debug] [--debug-info] input.dyn output.o\n"); return 2; }
-  /* ELF structs are deliberately host-native only in this isolated experiment. */
+  /* This standalone command only writes x86-64 Linux ELF objects. */
 #if !defined(__x86_64__) || !defined(__linux__)
   fprintf(stderr, "native backend requires x86-64 Linux host\n"); return 2;
 #endif

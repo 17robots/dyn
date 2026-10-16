@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the isolated backend against the existing checked frontend; no LLVM."""
+"""Build the standalone native backend and its unit tests against the frontend."""
 import os
 from pathlib import Path
 import shlex
@@ -14,22 +14,22 @@ command = [*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2', '-g',
            '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-D_POSIX_C_SOURCE=200809L',
            *shlex.split(os.environ.get('CFLAGS', '')),
            '-I' + str(ROOT / 'src'),
-           str(Path(__file__).with_name('driver.c')),
-           str(Path(__file__).with_name('dwarf.c')),
+           str(ROOT / 'src/backend' / 'driver.c'),
+           str(ROOT / 'src/backend' / 'dwarf.c'),
            *(str(ROOT / 'src' / name) for name in sources),
            '-pthread', '-o', str(BUILD / 'scalar-backend')]
 subprocess.run(command, check=True)
 
 # The native unit exercises multiple emissions in one process and concurrent calls.
 unit = command.copy()
-unit[unit.index(str(Path(__file__).with_name('driver.c')))] = str(Path(__file__).with_name('reentrant-unit.c'))
+unit[unit.index(str(ROOT / 'src/backend' / 'driver.c'))] = str(ROOT / 'src/backend' / 'reentrant-unit.c')
 unit[-1] = str(BUILD / 'backend-reentrant-test')
 subprocess.run(unit, check=True)
 
 output_unit = [*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2', '-g',
                '-Wall', '-Wextra', '-Wpedantic', '-Werror',
                *shlex.split(os.environ.get('CFLAGS', '')),
-               str(Path(__file__).with_name('output-unit.c')), '-pthread',
+               str(ROOT / 'src/backend' / 'output-unit.c'), '-pthread',
                '-o', str(BUILD / 'backend-output-test')]
 subprocess.run(output_unit, check=True)
 subprocess.run([str(BUILD / 'backend-output-test')], check=True)

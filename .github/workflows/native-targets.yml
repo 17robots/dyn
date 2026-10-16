@@ -107,4 +107,4 @@ jobs:
           python3 tests/aggregate-abi.py --riscv
           python3 tests/riscv-linker.py
       - name: Compare native arithmetic and control flow with external LLVM oracle
-        run: python3 tools/backend-experiment/native-differential.py --compiler build/dyn-release --target riscv64-linux --jobs 4
+        run: python3 tools/backend/native-differential.py --compiler build/dyn-release --target riscv64-linux --jobs 4

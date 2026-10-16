@@ -1,5 +1,5 @@
-#ifndef DYN_EXPERIMENT_SNAPSHOT_H
-#define DYN_EXPERIMENT_SNAPSHOT_H
+#ifndef DYN_SNAPSHOT_H
+#define DYN_SNAPSHOT_H
 #include "parser.h"
 
 typedef struct ExpSnapshot ExpSnapshot;

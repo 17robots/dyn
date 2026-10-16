@@ -5,7 +5,7 @@
  * after lowering, so neither temporary counts nor frame sizes require a
  * prepass. The object uses the standard linking v2 and reloc.CODE conventions.
  */
-#include "../tools/backend-experiment/output.h"
+#include "backend/output.h"
 #include "ir.h"
 
 #include <setjmp.h>

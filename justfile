@@ -72,35 +72,35 @@ bench-scale: release
 test-lsp-differential: release
     python3 tools/lsp-differential.py --reference "${REFERENCE:?set REFERENCE to a reference dyn}" --candidate "$BUILD/dyn-release" --corpus std --corpus tests ${PROJECT:+--corpus "$PROJECT"}
 
-# Test-only x86-64 Linux scalar object emitter; never selects a production backend.
-test-backend-experiment: release
-    python3 tools/backend-experiment/build.py
-    python3 tools/backend-experiment/test.py
+# Differential tests of the native backend's x86-64 Linux object output.
+test-backend: release
+    python3 tools/backend/build.py
+    python3 tools/backend/test.py
 
 # Debug and release builds use independent emission on every supported target.
 test-native-debug: release
     python3 tools/build.py dyn dyn-release
-    python3 tools/backend-experiment/check-compiler.py --compiler "$BUILD/dyn" --reference "$BUILD/dyn-release"
+    python3 tools/backend/check-compiler.py --compiler "$BUILD/dyn" --reference "$BUILD/dyn-release"
 
 # AArch64 Linux native emission against LLVM under qemu-aarch64 (skips without qemu).
 test-native-a64: release
     python3 tools/build.py dyn
-    python3 tools/backend-experiment/native-differential.py --target aarch64-linux
+    python3 tools/backend/native-differential.py --target aarch64-linux
 
 # x86-64 Windows native emission against LLVM under wine (skips without wine).
 test-native-windows: release
     python3 tools/build.py dyn
-    python3 tools/backend-experiment/native-differential.py --target x86_64-windows
+    python3 tools/backend/native-differential.py --target x86_64-windows
 
 # AArch64 macOS native emission against LLVM (runs on Apple silicon Macs only).
 test-native-macos: release
     python3 tools/build.py dyn
-    python3 tools/backend-experiment/native-differential.py --target aarch64-macos
+    python3 tools/backend/native-differential.py --target aarch64-macos
 
 # Matched prepared-IR timing; correctness and runtime checks are outside emission timing.
-bench-backend-experiment: release
+bench-backend: release
     python3 tools/build.py backend-benchmark
-    python3 tools/backend-experiment/benchmark.py
+    python3 tools/backend/benchmark.py
 
 native-probes: release
     python3 tools/build-native-probes.py

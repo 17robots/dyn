@@ -92,7 +92,7 @@ report = {
     'runtime_sha256': {name:sha(BUILD/name) for name in ('dynrt_shared.o','dynrt_support_pic.o')},
     'harness_sha256': sha(exe), 'runner_sha256': sha(runner_source),
     'implementation_sha256': {str(p.relative_to(ROOT)): sha(p) for p in [
-        ROOT/'tools/backend-experiment/driver.c', ROOT/'tools/backend-experiment/benchmark-driver.c',
+        ROOT/'src/backend/driver.c', ROOT/'src/backend/benchmark-driver.c',
         Path(__file__).resolve(), ROOT/'src/codegen.c', ROOT/'src/ir.c', ROOT/'src/dyn_location.h']},
     'runs': args.runs, 'runtime_calls': args.calls, 'rows': [],
 }

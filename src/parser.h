@@ -1,10 +1,10 @@
-#ifndef DYN_EXPERIMENT_PARSER_H
-#define DYN_EXPERIMENT_PARSER_H
+#ifndef DYN_PARSER_H
+#define DYN_PARSER_H
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/* Experimental expression and source parser. Source bytes are borrowed; the caller
+/* Expression and source parser. Source bytes are borrowed; the caller
    owns the flat tree and releases it with exp_free, including on failure. */
 typedef enum {
   EXP_NAME, EXP_NUMBER, EXP_BOOL, EXP_NIL, EXP_STRING, EXP_CHAR,
