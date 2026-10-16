@@ -78,9 +78,9 @@ than restoring them. A private temporary object is linked unless `--no-link` or
 `--emit-object` requests `<output>.o` (macOS keeps `<output>.dynnative.o`).
 
 `dyn-legacy` (LLVM emission only) is the differential reference.
-`just test-native-debug` runs routing/fallback/runtime contracts against it, and
-`just test-native-strict` runs the regression suite through
-`strict-dyn.py`, which turns every silent fallback into a failure.
+`just test-native-debug` runs routing/runtime contracts against it. There is
+no other backend to fall back to, so `just test` exercises native emission
+everywhere.
 `tests/native-debugger.py` checks breakpoints, backtraces, parameters and typed
 locals in gdb.
 

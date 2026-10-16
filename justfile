@@ -97,11 +97,6 @@ test-native-macos: release
     python3 tools/build.py dyn
     python3 tools/backend-experiment/native-differential.py --target aarch64-macos
 
-# Regression suite with native emission required wherever it is eligible.
-test-native-strict: release
-    python3 tools/build.py dyn
-    DYN_REAL="$BUILD/dyn" python3 tools/backend-experiment/strict-suite.py
-
 # Matched prepared-IR timing; correctness and runtime checks are outside emission timing.
 bench-backend-experiment: release
     python3 tools/build.py backend-benchmark

@@ -44,13 +44,14 @@ typedef struct { DynType type; uint32_t offset; } ArrayPart;
    bytes inside an aggregate; leaf is the scalar type of an array leaf. */
 typedef struct { uint32_t offset, size; int cls; DynType leaf; uint32_t stack; } AbiPart;
 typedef struct {
-  Bytes text, rodata, globals_data, constants_data;
+  Bytes text, rodata, globals_data, constants_data; /* globals_data tracks zero-fill size only. */
   BackendDwarf *dwarf;
   const DynSource *debug_source;
   const DynLocationIndex *debug_locations;
   Elf64_Rela *constant_relocations;
   size_t constant_relocation_count, constant_relocation_capacity;
   bool global_static[MAX_SYMBOLS];
+  bool function_live[MAX_SYMBOLS];
   uint32_t constant_offsets[MAX_SYMBOLS];
   Elf64_Rela *relocations;
   size_t relocation_capacity;
@@ -107,8 +108,62 @@ typedef struct {
   unsigned arm_epilogue_count;
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
+  /* Per function, the failure path of each runtime check without pending
+     defers is emitted once; later checks of that kind branch to it. */
+  size_t guard_stubs[GUARD_COUNT];
+  /* x86-64: R9 holds a binary operator's left value while its call-free
+     right operand is evaluated; any call emitted meanwhile is a bug. */
+  bool holding;
+  /* Shared cleanup ladders: paths that run every pending defer and then end
+     the same way emit the cleanup once per defer stack and jump to it. */
+  struct { unsigned kind, count, first; size_t at; } ladders[128];
+  unsigned ladder_count, ladder_pool_used;
+  uint32_t ladder_pool[16384];
 } BackendContext;
+enum { LADDER_PANIC, LADDER_UNWIND, LADDER_RETURN };
 static bool emit_defers(BackendContext *ctx, const DynIrProgram *, const DynIrFunction *, unsigned);
+/* Text offset of an earlier ladder for the current defer stack, or SIZE_MAX. */
+static size_t ladder_find(BackendContext *ctx, unsigned kind) {
+  for (unsigned i = 0; i < ctx->ladder_count; ++i) {
+    if (ctx->ladders[i].kind != kind || ctx->ladders[i].count != ctx->defer_count) continue;
+    if (!memcmp(ctx->ladder_pool + ctx->ladders[i].first, ctx->defer_ids, ctx->defer_count * sizeof(uint32_t)))
+      return ctx->ladders[i].at;
+  }
+  return SIZE_MAX;
+}
+static void ladder_remember(BackendContext *ctx, unsigned kind) {
+  if (ctx->ladder_count == sizeof(ctx->ladders) / sizeof(ctx->ladders[0]) ||
+      ctx->ladder_pool_used + ctx->defer_count > sizeof(ctx->ladder_pool) / sizeof(ctx->ladder_pool[0]))
+    return;
+  memcpy(ctx->ladder_pool + ctx->ladder_pool_used, ctx->defer_ids, ctx->defer_count * sizeof(uint32_t));
+  ctx->ladders[ctx->ladder_count++] = (__typeof__(ctx->ladders[0])){kind, ctx->defer_count, ctx->ladder_pool_used, ctx->text.n};
+  ctx->ladder_pool_used += ctx->defer_count;
+}
+static void isa_jump_back(BackendContext *ctx, size_t destination);
+/* Runs the pending defers innermost first. Each level is recorded as a
+   ladder entry, so a later path whose defer stack is a prefix enters partway
+   in; *jumped says the path joined an existing ladder, tail included. */
+static bool ladder_cleanup(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f, unsigned kind,
+                           bool *jumped) {
+  unsigned saved = ctx->defer_count;
+  *jumped = false;
+  for (unsigned level = saved; level > 0; --level) {
+    ctx->defer_count = level;
+    size_t shared = ladder_find(ctx, kind);
+    if (shared != SIZE_MAX) {
+      isa_jump_back(ctx, shared);
+      *jumped = true;
+      break;
+    }
+    ladder_remember(ctx, kind);
+    if (!emit_defers(ctx, ir, f, level - 1)) {
+      ctx->defer_count = saved;
+      return false;
+    }
+  }
+  ctx->defer_count = saved;
+  return true;
+}
 #define backend_report(ctx, ...) do { if ((ctx)->report) fprintf(stderr, __VA_ARGS__); } while (0)
 /* Words in the runtime's DynUnwind for this target (runtime/reference_support.c). */
 static unsigned unwind_words(const BackendContext *ctx) { return ctx->win64 ? 32 : ctx->rv64 ? 28 : ctx->a64 ? 22 : 16; }
@@ -263,13 +318,41 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
   /* The caller supplies the success condition of the preceding compare.
      Restore the fixed frame before calling the noreturn runtime: nested
      expression pushes may otherwise leave the call stack misaligned. */
+  bool plain = ctx->unwinding || !ctx->defer_count;
+  if (plain && ctx->guard_stubs[check] != SIZE_MAX) {
+    /* x86-64 branches straight to the shared failure path on the inverse
+       condition; elsewhere a success branch skips a jump to it. */
+    static const signed char inverse[] = {1, 0, 3, 2, 5, 4, 7, 6, 9, 8, -1, 2};
+    int failure = !ctx->a64 && !ctx->rv64 && (unsigned)success < sizeof(inverse) ? inverse[success] : -1;
+    if (failure >= 0) isa_patch(ctx, isa_branch(ctx, failure), ctx->guard_stubs[check]);
+    else {
+      size_t skip = isa_branch(ctx, success);
+      isa_jump_back(ctx, ctx->guard_stubs[check]);
+      isa_patch(ctx, skip, ctx->text.n);
+    }
+    return;
+  }
   size_t branch = isa_branch(ctx, success);
+  if (plain) ctx->guard_stubs[check] = ctx->text.n;
+  bool held = ctx->holding; ctx->holding = false; /* the failure path never returns */
   isa_reset_stack(ctx);
   unsigned saved_stack=ctx->stack_slots; ctx->stack_slots=0;
-  if (!ctx->unwinding && !emit_defers(ctx, ctx->active_ir,f,0)) ctx->text.failed=true;
+  if (!ctx->unwinding && ctx->defer_count) {
+    /* The message waits in the call slot while the shared cleanup runs. */
+    isa_rodata_address(ctx, R_A, ctx->message_offsets[check]); isa_store(ctx, R_A, ctx->call_offset);
+    isa_small_immediate(ctx, R_A, (uint32_t)ctx->message_lengths[check]); isa_store(ctx, R_A, ctx->call_offset+8);
+    bool jumped;
+    if (!ladder_cleanup(ctx, ctx->active_ir, f, LADDER_PANIC, &jumped)) ctx->text.failed=true;
+    else if (!jumped) {
+      isa_load(ctx, isa_argument(ctx, 0), ctx->call_offset); isa_load(ctx, isa_argument(ctx, 1), ctx->call_offset+8);
+      runtime_call(ctx, 0); isa_trap(ctx); /* panic must not return */
+    }
+  } else {
+    isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check]);
+    runtime_call(ctx, 0); isa_trap(ctx); /* panic must not return */
+  }
   ctx->stack_slots=saved_stack;
-  isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check]);
-  runtime_call(ctx, 0); isa_trap(ctx); /* panic must not return */
+  ctx->holding = held;
   isa_patch(ctx, branch, ctx->text.n);
 }
 static bool scalar(const DynIrProgram *ir, DynType);
@@ -701,9 +784,10 @@ static bool protect_call(BackendContext *ctx, const DynIrProgram *ir,const DynIr
   isa_test32(ctx); size_t normal=isa_branch(ctx, CC_E);
   isa_reset_stack(ctx);
   unsigned saved_stack=ctx->stack_slots; ctx->stack_slots=0;
-  if (!emit_defers(ctx, ir,f,0)) return false;
+  bool jumped;
+  if (!ladder_cleanup(ctx, ir, f, LADDER_UNWIND, &jumped)) return false;
+  if (!jumped) { runtime_call(ctx, 6); isa_trap(ctx); }
   ctx->stack_slots=saved_stack;
-  runtime_call(ctx, 6); isa_trap(ctx);
   isa_patch(ctx, normal, ctx->text.n);
   isa_lea(ctx, isa_argument(ctx, 0), ctx->unwind_offset); runtime_call(ctx, 4);
   isa_unalign_call(ctx, padding);
@@ -753,6 +837,57 @@ static bool plan_argument(BackendContext *ctx, const DynIrProgram *ir, CallPlan 
   if (!abi_assign(ctx,ir,type,gp,fp,plan->parts+*argument_count,&count,512-*argument_count,&plan->indirect[index])) return false;
   *argument_count+=count; plan->first[index+1]=*argument_count;
   return true;
+}
+/* Whether evaluating a scalar expression emits no call, system call or
+   runtime helper other than a check's noreturn failure path. */
+static bool call_free(const DynIrProgram *ir, DynExprId id, unsigned depth) {
+  if (depth > 12 || id >= ir->expression_count) return false;
+  const DynIrExpr *e = &ir->expressions[id];
+  if (!scalar(ir, e->type)) return false;
+  switch (e->kind) {
+  case DYN_EXPR_NAME: case DYN_EXPR_INT: case DYN_EXPR_CHAR: case DYN_EXPR_BOOL: case DYN_EXPR_FLOAT:
+  case DYN_EXPR_NIL: case DYN_EXPR_GLOBAL:
+    return true;
+  case DYN_EXPR_BINARY:
+    return call_free(ir, e->left, depth + 1) && call_free(ir, e->right, depth + 1);
+  case DYN_EXPR_UNARY: case DYN_EXPR_CAST: case DYN_EXPR_CONVERT: case DYN_EXPR_BITCAST:
+    return call_free(ir, e->left, depth + 1);
+  default:
+    return false;
+  }
+}
+/* Value bits of a compile-time scalar: literals (normalized to their type),
+   folded integer trees, and in optimized builds const globals initialized by
+   such a value. */
+static bool constant_bits(BackendContext *ctx, const DynIrProgram *ir, const DynIrExpr *e, uint64_t *bits,
+                          unsigned depth) {
+  if (depth > 8) return false;
+  if (e->kind == DYN_EXPR_FLOAT) {
+    if (e->type == DYN_TYPE_F32) { float value = (float)e->floating; uint32_t raw; memcpy(&raw, &value, 4); *bits = raw; }
+    else memcpy(bits, &e->floating, 8);
+    return e->type == DYN_TYPE_F32 || e->type == DYN_TYPE_F64;
+  }
+  if ((e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR || e->kind == DYN_EXPR_BOOL) && integer_type(e->type)) {
+    uint64_t n = e->kind == DYN_EXPR_BOOL ? e->boolean : e->integer;
+    unsigned width = integer_bits(e->type);
+    if (width == 1) n &= 1;
+    else if (width < 64) {
+      uint64_t mask = (UINT64_C(1) << width) - 1;
+      n &= mask;
+      if (signed_scalar(e->type) && (n >> (width - 1)) & 1) n |= ~mask;
+    }
+    *bits = n;
+    return true;
+  }
+  if (ctx->debug_mode) return false;
+  if (e->kind == DYN_EXPR_BINARY) return fold_integer(ir, e, bits, 0);
+  if (e->kind == DYN_EXPR_GLOBAL && e->integer < ir->global_count) {
+    const DynIrGlobal *g = &ir->globals[e->integer];
+    if (!g->is_const || g->foreign || g->type != e->type || g->initializer >= ir->expression_count) return false;
+    const DynIrExpr *value = &ir->expressions[g->initializer];
+    return value->type == e->type && constant_bits(ctx, ir, value, bits, depth + 1);
+  }
+  return false;
 }
 static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
                       const DynIrExpr *e, unsigned depth, CallPlan *plan) {
@@ -804,7 +939,21 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
     }
   }
   /* Keep arguments on the expression stack in source order. Nested calls
-     cannot clobber earlier arguments; registers are loaded only afterwards. */
+     cannot clobber earlier arguments; registers are loaded only afterwards.
+     On x86-64 the last argument, when it is one integer register value and
+     nothing runs between it and the call, moves straight into its register
+     instead of being pushed and reloaded. */
+  bool protected_call=ctx->defer_count && !ctx->unwinding;
+  bool held=false;
+  if (!ctx->a64 && !ctx->rv64 && !indirect && !packed && !protected_call && !variadic && e->item_count) {
+    uint32_t last=e->item_count-1;
+    DynType type=ir->expressions[ir->items[e->item_start+last].expression].type;
+    bool registers=true;
+    for (uint32_t i=0;i<argument_count;++i) registers=registers && plan->parts[i].cls>=0;
+    held=registers && !plan->indirect[last] && !aggregate(ir,type) && !descriptor(type) &&
+         plan->first[last]+1==plan->first[last+1] && plan->first[last+1]==argument_count &&
+         plan->parts[plan->first[last]].cls<8;
+  }
   for (uint32_t i = 0; i < (packed?fixed:e->item_count); ++i) {
     DynExprId argument=ir->items[e->item_start + i].expression;
     if (!expression(ctx, ir, f, argument, depth + 1)) return false;
@@ -823,6 +972,9 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
         if(ctx->rv64 && plan->parts[part].leaf==DYN_TYPE_U32)rv_i(ctx,0x1b,15,15,0,0);
         isa_push(ctx, R_10);
       }
+    } else if (held && i+1==e->item_count) {
+      unsigned target=x86_argument_register(ctx, plan->parts[plan->first[i]].cls);
+      byte(ctx, 0x48 | (target >= 8)); byte(ctx, 0x89); byte(ctx, 0xc0 | (target & 7));
     } else { if(ctx->rv64 && type==DYN_TYPE_U32)rv_i(ctx,0x1b,10,10,0,0);isa_push(ctx, R_A); if (descriptor(type)) isa_push(ctx, R_D); }
   }
   if (packed) {
@@ -847,28 +999,27 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
     if (count) isa_lea(ctx, R_A, offset); else isa_zero(ctx, R_A);
     isa_push(ctx, R_A); isa_small_immediate(ctx, R_A, count); isa_push(ctx, R_A);
   }
-  bool protected_call=ctx->defer_count && !ctx->unwinding;
   if (protected_call && !protect_call(ctx, ir,f)) return false;
   unsigned slot=isa_slot(ctx);
-  uint32_t outgoing_bytes=0;
-  for (uint32_t i=0;i<argument_count;++i) {
+  uint32_t outgoing_bytes=0, pushed=argument_count-(held?1u:0u);
+  for (uint32_t i=0;i<pushed;++i) {
     if (plan->parts[i].cls<0) { ++outgoing; stack_slot(ctx,&plan->parts[i],&outgoing_bytes); continue; }
-    isa_argument_load(ctx, plan->parts[i].cls, slot*(argument_count-i-1));
+    isa_argument_load(ctx, plan->parts[i].cls, slot*(pushed-i-1));
     /* Microsoft x64 variadic callees read floating arguments from the GP register too. */
-    if (ctx->win64 && variadic && plan->parts[i].cls>=8) isa_argument_load(ctx, plan->parts[i].cls-8, slot*(argument_count-i-1));
+    if (ctx->win64 && variadic && plan->parts[i].cls>=8) isa_argument_load(ctx, plan->parts[i].cls-8, slot*(pushed-i-1));
   }
   /* Outgoing stack arguments occupy eight-byte slots (Apple packs narrower
      scalars); the area keeps SP 16-byte aligned. */
   unsigned reserved=(ctx->a64||ctx->rv64) ? (outgoing_bytes+15)/16*16 : (outgoing+((ctx->stack_slots+outgoing)&1))*8;
   isa_reserve(ctx, reserved);
-  for (uint32_t i=0;i<argument_count;++i) if (plan->parts[i].cls<0)
-    isa_stack_store(ctx, reserved+slot*(argument_count-i-1), plan->parts[i].stack, stack_width(ctx,&plan->parts[i]));
+  for (uint32_t i=0;i<pushed;++i) if (plan->parts[i].cls<0)
+    isa_stack_store(ctx, reserved+slot*(pushed-i-1), plan->parts[i].stack, stack_width(ctx,&plan->parts[i]));
   if (sret) isa_result_pointer(ctx, ctx->temporary_offsets[e-ir->expressions]);
   if (variadic && !ctx->a64 && !ctx->rv64 && !ctx->win64) { byte(ctx,0xb8); word(ctx,fp); } /* SysV vector register count in AL. */
   if (indirect) isa_call_stack(ctx, reserved+argument_count*slot);
   else isa_call_symbol(ctx, ctx->function_symbols[e->integer]);
-  isa_release(ctx, (argument_count + indirect) * slot + reserved);
-  ctx->stack_slots -= argument_count + indirect;
+  isa_release(ctx, (pushed + indirect) * slot + reserved);
+  ctx->stack_slots -= pushed + indirect;
   if (raw_aggregate(ir,e->type)) {
     DynExprId id=(DynExprId)(e-ir->expressions); if (!ctx->temporary_offsets[id]) return false;
     if (!sret) {
@@ -1049,6 +1200,8 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     return true;
   }
   if (e->kind == DYN_EXPR_GLOBAL) {
+    uint64_t bits;
+    if (scalar(ir, e->type) && constant_bits(ctx, ir, e, &bits, 0)) { isa_immediate(ctx, R_A, bits); return !ctx->text.failed; }
     if (e->integer >= ir->global_count || !ctx->global_symbols[e->integer]) return false;
     isa_symbol_address(ctx, R_A, ctx->global_symbols[e->integer]);
     load_memory(ctx, e->type); return !ctx->text.failed && !ctx->relocation_failed;
@@ -1160,6 +1313,31 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
       e->op != DYN_OP_DIV && e->op != DYN_OP_REM &&
       e->op != DYN_OP_SHL && e->op != DYN_OP_SHR && !comparison) return false;
   if (!expression(ctx, ir, f, e->left, depth + 1)) return false;
+  /* A constant or plain local right operand loads straight into C, with no
+     push and pop around it. */
+  const DynIrExpr *right=&ir->expressions[e->right];
+  uint64_t bits;
+  if (constant_bits(ctx, ir, right, &bits, 0)) {
+    isa_immediate(ctx, R_C, bits);
+    return binary_result(ctx, ir,f,e);
+  }
+  uint32_t slot;
+  if (right->kind == DYN_EXPR_NAME && local_slot(ctx, f, right->integer, &slot) &&
+      !ctx->local_alias[right->integer-f->local_start] &&
+      !payload_enum(ir, right->type) && integer_bits(storage_type(ir, right->type)) == 64) {
+    isa_load(ctx, R_C, slot);
+    return binary_result(ctx, ir,f,e);
+  }
+  if (!ctx->a64 && !ctx->rv64 && !ctx->holding && call_free(ir, e->right, 0)) {
+    CODE(0x49, 0x89, 0xc1); /* mov r9, rax */
+    ctx->holding = true;
+    bool ok = expression(ctx, ir, f, e->right, depth + 1);
+    ctx->holding = false;
+    if (!ok) return false;
+    isa_move(ctx, R_C, R_A);
+    CODE(0x4c, 0x89, 0xc8); /* mov rax, r9 */
+    return binary_result(ctx, ir,f,e);
+  }
   isa_push(ctx, R_A); /* preserve left while evaluating the right operand */
   if (!expression(ctx, ir, f, e->right, depth + 1)) return false;
   isa_move(ctx, R_C, R_A); isa_pop(ctx, R_A);
@@ -1542,17 +1720,26 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
       if (s->expression != DYN_NO_EXPR) {
         if (!expression(ctx, ir, f, s->expression, 0)) return false;
       } else if (f->return_type != DYN_TYPE_VOID) return false;
+      bool jumped=false;
       if (ctx->defer_count) {
         if (aggregate(ir, f->return_type)) save_struct(ctx, ctx->return_offset,f->return_type);
         else isa_store(ctx, R_A, ctx->return_offset);
         if (descriptor(f->return_type)) isa_store(ctx, R_D, ctx->return_offset+8);
-        if (!emit_defers(ctx, ir,f,0)) return false;
-        if (aggregate(ir, f->return_type)) isa_lea(ctx, R_A, ctx->return_offset);
-        else isa_load(ctx, R_A, ctx->return_offset);
-        if (descriptor(f->return_type)) isa_load(ctx, R_D, ctx->return_offset+8);
+        /* Returns with the same pending defers share one cleanup and epilogue. */
+        if (!ctx->stack_slots && !ctx->unwinding) {
+          if (!ladder_cleanup(ctx, ir, f, LADDER_RETURN, &jumped)) return false;
+        } else if (!emit_defers(ctx, ir,f,0)) return false;
+        if (!jumped) {
+          if (aggregate(ir, f->return_type)) isa_lea(ctx, R_A, ctx->return_offset);
+          else isa_load(ctx, R_A, ctx->return_offset);
+          if (descriptor(f->return_type)) isa_load(ctx, R_D, ctx->return_offset+8);
+        }
       }
-      if (f->is_main) isa_zero(ctx, R_A);
-      return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type); reachable = false;
+      if (!jumped) {
+        if (f->is_main) isa_zero(ctx, R_A);
+        return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type);
+      }
+      reachable = false;
     } else if (s->kind == DYN_STMT_IF) {
       if (!ctx->debug_mode && s->expression < ir->expression_count &&
           ir->expressions[s->expression].kind == DYN_EXPR_BOOL) {
@@ -1843,6 +2030,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (ir->expression_count>MAX_NODES || ir->statement_count>MAX_NODES) return false;
   reset_scratch(ctx);
   ctx->active_ir=ir; ctx->sret_offset=ctx->return_offset=ctx->defer_count=ctx->unwind_offset=ctx->cleanup_depth=0; ctx->unwinding=false;
+  ctx->ladder_count=ctx->ladder_pool_used=0; ctx->holding=false;
   if (!allocation_plan(ctx, source, ir, f)) return false;
   unsigned scratch=0;
   if (aggregate(ir, f->return_type)) {
@@ -1858,7 +2046,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   ctx->frame_bytes = (((ctx->local_words+scratch) * 8 + 15) / 16) * 16;
   if (!ctx->frame_bytes) ctx->frame_bytes = 16;
   ctx->stack_slots = ctx->loop_depth = 0;
-  for (unsigned i = 0; i < GUARD_COUNT; ++i) ctx->message_offsets[i] = SIZE_MAX;
+  for (unsigned i = 0; i < GUARD_COUNT; ++i) ctx->message_offsets[i] = ctx->guard_stubs[i] = SIZE_MAX;
   isa_enter(ctx);
   /* GP and FP register banks exhaust independently; stack slots retain source order. */
   unsigned gp=ctx->sret_offset && !ctx->a64?1:0,fp=0; uint32_t spilled=0;
@@ -2078,7 +2266,7 @@ static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
     if (!strncmp(g->name,"dyn_m",5) && strlen(g->name)>21 && g->name[21]=='_') snprintf(name,sizeof(name),"__dyn_init_%.21s",g->name);
     else snprintf(name,sizeof(name),"__dyn_init_root");
     f.name=name;
-    for (unsigned j=0;j<GUARD_COUNT;++j) ctx->message_offsets[j]=SIZE_MAX;
+    for (unsigned j=0;j<GUARD_COUNT;++j) ctx->message_offsets[j]=ctx->guard_stubs[j]=SIZE_MAX;
     isa_symbol_address(ctx, R_A, ctx->global_symbols[id]);
     if (dyn_type_is_array(g->type) && ir->expressions[g->initializer].kind==DYN_EXPR_ARRAY) {
       if (!initialize(ctx,ir,&f,g->type,g->initializer,0)) return false;
@@ -2195,6 +2383,8 @@ static bool suffix_functions(BackendContext *ctx, const DynIrProgram *ir) {
   free(foreign);
   return true;
 }
+#include "reachability.inc"
+
 static bool emit_object(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const char *path) {
   ctx->active_ir=ir;
   if ((!ir->function_count && !ctx->shared) || ir->function_count > MAX_SYMBOLS || ir->global_count > MAX_SYMBOLS) {
@@ -2205,10 +2395,11 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   if ((ctx->debug_mode || ctx->dwarf) && !dyn_location_build(&locations, source)) return false;
   ctx->debug_source=source; ctx->debug_locations=&locations;
   if (!suffix_functions(ctx, ir)) { dyn_location_free(&locations); return false; }
+  if (!reachable_functions(ctx, source, ir)) { dyn_location_free(&locations); return false; }
   unsigned section_symbols=ctx->dwarf?7:2;
   ctx->runtime_base=section_symbols;
   for (size_t i=0;i<ir->function_count;++i)
-    ctx->function_symbols[i]=ir->functions[i].generic?0:(unsigned)ctx->runtime_base++;
+    ctx->function_symbols[i]=ctx->function_live[i]?(unsigned)ctx->runtime_base++:0;
 
   for (size_t i=0;i<ir->global_count;++i) ctx->global_symbols[i]=(unsigned)ctx->runtime_base++;
   for (size_t i=0;i<ir->global_count;++i) {
@@ -2246,7 +2437,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     if (pass) ctx->first_global=next;
     for (size_t i=0;i<ir->function_count;++i) {
       const DynIrFunction *f=&ir->functions[i];
-      if (f->generic || (unsigned)(f->foreign||f->is_public||f->is_main)!=pass) continue;
+      if (!ctx->function_live[i] || (unsigned)(f->foreign||f->is_public||f->is_main)!=pass) continue;
       unsigned old=ctx->function_symbols[i]; ctx->function_symbols[i]=next; remap[old]=next++;
     }
     for (size_t i=0;i<ir->global_count;++i) {
@@ -2305,8 +2496,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     size_t at=0;
     if (ctx->global_static[i]) at=ctx->constant_offsets[i];
     else if (!g->foreign) {
-      at=align8(ctx->globals_data.n); if (at>LIMIT || size>LIMIT-at || !reserve(&ctx->globals_data,at+size)) goto done;
-      memset(ctx->globals_data.data+ctx->globals_data.n,0,at+size-ctx->globals_data.n); ctx->globals_data.n=at+size;
+      at=align8(ctx->globals_data.n); if (at>LIMIT || size>LIMIT-at) goto done;
+      /* Mutable globals begin zeroed; initializer code supplies their values. */
+      ctx->globals_data.n=at+size;
     }
     symbols[ctx->global_symbols[i]]=(Elf64_Sym){.st_name=(Elf64_Word)names,
       .st_info=ELF64_ST_INFO(g->foreign||g->is_public?STB_GLOBAL:STB_LOCAL,STT_OBJECT),.st_shndx=g->foreign?SHN_UNDEF:ctx->global_static[i]?11:8,.st_value=at,.st_size=size};
@@ -2314,14 +2506,14 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   }
   if (ctx->initializer_symbol) {
     const char *flag="__dyn_backend_initialized"; size_t length=strlen(flag)+1,at=align8(ctx->globals_data.n);
-    if (at>LIMIT-8 || length>string_limit-names || !reserve(&ctx->globals_data,at+8)) goto done;
-    memset(ctx->globals_data.data+ctx->globals_data.n,0,at+8-ctx->globals_data.n); ctx->globals_data.n=at+8;
+    if (at>LIMIT-8 || length>string_limit-names) goto done;
+    ctx->globals_data.n=at+8;
     symbols[ctx->initializer_flag_symbol]=(Elf64_Sym){.st_name=(Elf64_Word)names,.st_info=ELF64_ST_INFO(STB_LOCAL,STT_OBJECT),.st_shndx=8,.st_value=at,.st_size=1};
     memcpy(strings+names,flag,length); names+=length;
   }
   for (size_t i = 0; i < ir->function_count; ++i) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->generic) continue; /* only checked concrete instances have machine code */
+    if (!ctx->function_live[i]) continue; /* checked, reachable concrete functions only */
     const char *name = function_name(f);
     size_t length = strlen(name) + 1 + (ctx->function_suffixed[i] ? 4 : 0), begin = ctx->text.n;
     if (ctx->dwarf && !f->foreign) {
@@ -2409,8 +2601,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     if (!ok) backend_report(ctx, "native backend: failed to write object\n");
     goto done;
   }
-  size_t debug_name=sizeof("\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.data\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0")-1;
-  const char section_names[] = "\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.data\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0" ".debug_info\0.rela.debug_info\0.debug_abbrev\0.rela.debug_abbrev\0.debug_line\0.rela.debug_line\0.debug_frame\0.rela.debug_frame\0";
+  /* Keep the extra terminator after .bss so later section-name offsets stay fixed. */
+  size_t debug_name=sizeof("\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.bss\0\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0")-1;
+  const char section_names[] = "\0.text\0.rodata\0.rela.text\0.symtab\0.strtab\0.shstrtab\0.note.GNU-stack\0.bss\0\0.init_array\0.rela.init_array\0.data.rel.ro\0.rela.data.rel.ro\0" ".debug_info\0.rela.debug_info\0.debug_abbrev\0.rela.debug_abbrev\0.debug_line\0.rela.debug_line\0.debug_frame\0.rela.debug_frame\0";
   Elf64_Ehdr h = {.e_ident = {0x7f,'E','L','F',ELFCLASS64,ELFDATA2LSB,EV_CURRENT},
     .e_type = ET_REL, .e_machine = ctx->rv64 ? 243 : ctx->a64 ? EM_AARCH64 : EM_X86_64, .e_flags=ctx->rv64?4:0, .e_version = EV_CURRENT,
     .e_ehsize = sizeof(h), .e_shentsize = sizeof(Elf64_Shdr), .e_shnum = ctx->dwarf?21:13,
@@ -2433,10 +2626,10 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   sh[6] = (Elf64_Shdr){.sh_name=42, .sh_type=SHT_STRTAB,
     .sh_offset=sh[5].sh_offset+names, .sh_size=sizeof(section_names), .sh_addralign=1};
   sh[7] = (Elf64_Shdr){.sh_name=52, .sh_type=SHT_PROGBITS, .sh_addralign=1};
-  sh[8]=(Elf64_Shdr){.sh_name=68,.sh_type=SHT_PROGBITS,.sh_flags=SHF_ALLOC|SHF_WRITE,
+  sh[8]=(Elf64_Shdr){.sh_name=68,.sh_type=SHT_NOBITS,.sh_flags=SHF_ALLOC|SHF_WRITE,
     .sh_offset=align8(sh[6].sh_offset+sizeof(section_names)),.sh_size=ctx->globals_data.n,.sh_addralign=8};
   sh[9]=(Elf64_Shdr){.sh_name=74,.sh_type=SHT_INIT_ARRAY,.sh_flags=SHF_ALLOC|SHF_WRITE,
-    .sh_offset=align8(sh[8].sh_offset+ctx->globals_data.n),.sh_size=ctx->initializer_symbol?8:0,.sh_addralign=8,.sh_entsize=8};
+    .sh_offset=sh[8].sh_offset,.sh_size=ctx->initializer_symbol?8:0,.sh_addralign=8,.sh_entsize=8};
   sh[10]=(Elf64_Shdr){.sh_name=86,.sh_type=SHT_RELA,.sh_offset=sh[9].sh_offset+sh[9].sh_size,
     .sh_size=ctx->initializer_symbol?sizeof(Elf64_Rela):0,.sh_link=4,.sh_info=9,.sh_addralign=8,.sh_entsize=sizeof(Elf64_Rela)};
   sh[11]=(Elf64_Shdr){.sh_name=103,.sh_type=SHT_PROGBITS,.sh_flags=SHF_ALLOC|SHF_WRITE,
@@ -2464,7 +2657,6 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   if (relbytes) memcpy(data+sh[3].sh_offset, ctx->relocations, relbytes);
   memcpy(data+sh[4].sh_offset, symbols, symbytes); memcpy(data+sh[5].sh_offset, strings, names);
   memcpy(data+sh[6].sh_offset, section_names, sizeof(section_names));
-  if (ctx->globals_data.n) memcpy(data+sh[8].sh_offset,ctx->globals_data.data,ctx->globals_data.n);
   if (ctx->initializer_symbol) {
     Elf64_Rela init={.r_info=ELF64_R_INFO(ctx->initializer_symbol,ctx->rv64?2:ctx->a64?R_AARCH64_ABS64:R_X86_64_64)};
     memcpy(data+sh[10].sh_offset,&init,sizeof(init));

@@ -4,7 +4,7 @@
    Section addresses are laid out from zero, so DWARF needs no relocations: its
    text addresses and section offsets are written in place, and the linker's
    debug map relates them to the executable. Sections: __TEXT,__text,
-   __TEXT,__const (string literals), __DATA,__data (mutable globals),
+   __TEXT,__const (string literals), __DATA,__bss (mutable globals),
    __DATA,__const (constant globals) and the __DWARF sections. */
 
 enum { MACHO_TEXT, MACHO_RODATA, MACHO_DATA, MACHO_CONSTANTS, MACHO_INIT, MACHO_DEBUG };
@@ -79,7 +79,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   Elf64_Rela initializer={.r_info=ELF64_R_INFO(ctx->initializer_symbol,ctx->a64?R_AARCH64_ABS64:R_X86_64_64)};
   const void *contents[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT] = {ctx->text.data, ctx->rodata.data, ctx->globals_data.data, ctx->constants_data.data, &initialize};
   size_t sizes[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT] = {ctx->text.n, ctx->rodata.n, ctx->globals_data.n, ctx->constants_data.n, ctx->initializer_symbol?8:0};
-  const char *section_names[][2] = {{"__text", "__TEXT"}, {"__const", "__TEXT"}, {"__data", "__DATA"}, {"__const", "__DATA"}, {"__mod_init_func", "__DATA"},
+  const char *section_names[][2] = {{"__text", "__TEXT"}, {"__const", "__TEXT"}, {"__bss", "__DATA"}, {"__const", "__DATA"}, {"__mod_init_func", "__DATA"},
                                     {"__debug_info", "__DWARF"}, {"__debug_abbrev", "__DWARF"}, {"__debug_line", "__DWARF"}, {"__debug_frame", "__DWARF"}};
   for (unsigned i = 0; dwarf && i < BACKEND_DWARF_SECTION_COUNT; ++i) {
     contents[MACHO_DEBUG + i] = debug->sections[i].data; sizes[MACHO_DEBUG + i] = debug->sections[i].size;
@@ -101,14 +101,21 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
     if (ELF64_ST_BIND(symbols[i].st_info) != STB_LOCAL && symbols[i].st_shndx == SHN_UNDEF) order[nsyms++] = i;
   for (unsigned i = 0; i < nsyms; ++i) symbol_map[order[i]] = i;
 
-  /* Section addresses and file layout. */
+  /* Zero-fill storage belongs at the VM tail and consumes no file bytes. */
   uint64_t address[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT], vm = 0;
-  for (unsigned i = 0; i < section_count; ++i) { vm = (vm + 7) & ~(uint64_t)7; address[i] = vm; vm += sizes[i]; }
+  for (unsigned i = 0; i < section_count; ++i) {
+    if (i == MACHO_DATA) continue;
+    vm = (vm + 7) & ~(uint64_t)7; address[i] = vm; vm += sizes[i];
+  }
+  vm = (vm + 7) & ~(uint64_t)7; address[MACHO_DATA] = vm; vm += sizes[MACHO_DATA];
   size_t commands = 72 + 80 * (size_t)section_count + 24 + 24 + 80;
   size_t cursor = 32 + commands, offsets[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT];
   size_t data_start = (cursor + 15) & ~(size_t)15;
   cursor = data_start;
-  for (unsigned i = 0; i < section_count; ++i) { cursor = (cursor + 7) & ~(size_t)7; offsets[i] = cursor; cursor += sizes[i]; }
+  for (unsigned i = 0; i < section_count; ++i) {
+    if (i == MACHO_DATA) { offsets[i] = 0; continue; }
+    cursor = (cursor + 7) & ~(size_t)7; offsets[i] = cursor; cursor += sizes[i];
+  }
   size_t data_end = cursor;
   const Elf64_Rela *relocations[3] = {ctx->relocations, ctx->constant_relocations, &initializer};
   size_t relocation_counts[3] = {ctx->relocation_count, ctx->constant_relocation_count, ctx->initializer_symbol?1:0}, entries[3], relocation_at[3];
@@ -137,9 +144,9 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
     memcpy(s, section_names[i][0], strlen(section_names[i][0])); memcpy(s + 16, section_names[i][1], strlen(section_names[i][1]));
     put64(s + 32, address[i]); put64(s + 40, sizes[i]); put32(s + 48, (uint32_t)offsets[i]);
     put32(s + 52, i == MACHO_TEXT ? 2 : i >= MACHO_DEBUG ? 0 : 3);
-    put32(s + 64, i == MACHO_TEXT ? 0x80000400u : i == MACHO_INIT ? 9u : i >= MACHO_DEBUG ? 0x02000000u : 0); /* instructions; debug */
+    put32(s + 64, i == MACHO_TEXT ? 0x80000400u : i == MACHO_INIT ? 9u : i == MACHO_DATA ? 1u : i >= MACHO_DEBUG ? 0x02000000u : 0); /* instructions; debug */
     for (unsigned k = 0; k < 3; ++k) if (relocated[k] == i && entries[k]) { put32(s + 56, (uint32_t)relocation_at[k]); put32(s + 60, (uint32_t)entries[k]); }
-    if (sizes[i]) memcpy(data + offsets[i], contents[i], sizes[i]);
+    if (sizes[i] && i != MACHO_DATA) memcpy(data + offsets[i], contents[i], sizes[i]);
   }
   c += 72 + 80 * section_count;
   put32(c, 0x32); put32(c + 4, 24); put32(c + 8, 1); put32(c + 12, 0x000f0000); /* LC_BUILD_VERSION macOS 15.0 */

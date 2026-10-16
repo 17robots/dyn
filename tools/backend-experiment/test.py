@@ -366,7 +366,8 @@ def inspect(path, debug):
     sections = {strings[h[0]:].split(b'\0')[0]: h for h in headers}
     assert sections[b'.text'][2] == 6
     assert sections[b'.rodata'][2] == 2 and sections[b'.rodata'][8] == 8
-    assert sections[b'.data'][2] == 3 and sections[b'.data'][8] == 8
+    # Mutable globals are zero-filled storage: .bss (SHT_NOBITS), writable and allocated.
+    assert sections[b'.bss'][1] == 8 and sections[b'.bss'][2] == 3 and sections[b'.bss'][8] == 8
     assert sections[b'.note.GNU-stack'][2] == 0
     table = sections[b'.symtab']
     symbols = [struct.unpack_from('<IBBHQQ', data, offset)

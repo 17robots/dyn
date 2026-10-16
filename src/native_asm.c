@@ -230,9 +230,11 @@ static bool coff(Assembly *a) {
     out->flags = get(s + 36, 4);
     unsigned align = (unsigned)((out->flags >> 20) & 15);
     out->align = align ? UINT64_C(1) << (align - 1) : 1;
-    if (!out->name || !range(a, at, out->size))
+    /* Uninitialized data has a size but no file contents. */
+    bool uninitialized = (out->flags & 0x80) != 0;
+    if (!out->name || (!uninitialized && !range(a, at, out->size)))
       return false;
-    out->data = b + at;
+    out->data = uninitialized ? NULL : b + at;
     uint64_t rel = get(s + 24, 4);
     size_t nr = (size_t)get(s + 32, 2);
     if ((out->flags & 0x01000000) && nr == 65535) {
@@ -329,10 +331,12 @@ static bool macho(Assembly *a) {
     out->flags = get(s + 64, 4);
     uint64_t pos = get(s + 48, 4), rel = get(s + 56, 4);
     unsigned nr = (unsigned)get(s + 60, 4);
-    if (!out->name || !out->segment || !range(a, pos, out->size) ||
+    /* Zero-fill sections have a size but no file contents. */
+    bool zerofill = (out->flags & 255) == 1 || (out->flags & 255) == 12;
+    if (!out->name || !out->segment || (!zerofill && !range(a, pos, out->size)) ||
         !range(a, rel, 8u * (uint64_t)nr))
       return false;
-    out->data = b + pos;
+    out->data = zerofill ? NULL : b + pos;
     out->relocs = calloc(nr ? nr : 1, sizeof(*out->relocs));
     if (!out->relocs)
       return false;
@@ -630,7 +634,7 @@ static bool emit(Assembly *a) {
     print(t, "\n.section ");
     if (a->format == MACHO) {
       print(t, "%s,%s", s->segment, s->name);
-      print(t, ",%s", (s->flags & 255) == 9 ? "mod_init_funcs" : "regular");
+      print(t, ",%s", (s->flags & 255) == 9 ? "mod_init_funcs" : !s->data ? "zerofill" : "regular");
       if (s->flags & 0x80000000)
         print(t, ",pure_instructions");
       else if (s->flags & 0x02000000)
@@ -645,7 +649,7 @@ static bool emit(Assembly *a) {
               : s->flags & (UINT64_C(1) << 63) ? "init_array"
                                                : "progbits");
       else
-        print(t, ",\"%s%s%s%s\"", s->flags & 0x20 ? "x" : "d",
+        print(t, ",\"%s%s%s%s\"", s->flags & 0x20 ? "x" : !s->data ? "b" : "d",
               s->flags & 0x80000000 ? "w" : "r",
               s->flags & 0x02000000 ? "D" : "", "");
     }

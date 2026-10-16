@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run executes current code each time and cleans temporary outputs.
-Native debug emission regenerates the whole program instead; it is covered below."""
+Native objects are shared across runs; each invocation still links and executes."""
 import os
 from pathlib import Path
 import subprocess
@@ -22,6 +22,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-run-cache-') as directory:
     cold=run(); warm=run()
     assert 'first' in cold.stdout and 'first' in warm.stdout
     assert 'timing detail native emit' in cold.stderr,cold.stderr
+    assert 'timing detail native emit' not in warm.stderr, warm.stderr
     # Run regenerates its private executable; each invocation must execute.
     (source/'main.dyn').write_text('use "std/io" io\nfn main() { _ = io.println(io.stdout(), "second") }\n')
     changed=run();assert 'second' in changed.stdout and 'timing detail native emit' in changed.stderr

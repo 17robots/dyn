@@ -329,8 +329,6 @@ char *dyn_module_resolve_import(const DynContext *, const char *project_root,
                                 const char *current, const char *path);
 bool dyn_cache_hit(const DynSources *sources, const DynOptions *options,
                    const char *compiler_path, const char *output);
-bool dyn_cache_fast_hit(const DynOptions *options, const char *compiler_path,
-                        const char *output);
 uint64_t dyn_cache_file_hash(const char *compiler_path);
 bool dyn_cache_directory(char *path, size_t capacity);
 int dyn_cache_command(const char *action);
