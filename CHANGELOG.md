@@ -22,7 +22,9 @@ servers so they pick up the new `dyn`.
   WASI builds use independent code generation and built-in linkers. The retained
   LLVM backend and C++ ThinLTO bridge are removed; `--backend llvm` now reports
   an error. Source builds require a C11 compiler and Python. Optional LLVM tools
-  remain useful for validating exported IR and assembly in tests.
+  remain useful for validating exported assembly in tests.
+- `--emit-ir` is removed; use `--emit-asm` to inspect generated code. The
+  LLVM-syntax writer behind it was the last LLVM-shaped code in the compiler.
 - Native targets include Linux x86-64, AArch64 and RISC-V64, macOS x86-64 and
   AArch64, and Windows x86-64 and ARM64. Runtime objects are generated directly,
   without a target assembler. macOS output carries an ad-hoc signature; Windows

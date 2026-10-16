@@ -12,12 +12,7 @@ int dyn_native_object(const DynSource *source, const DynIrProgram *ir,
                       : !strcmp(target->kernel, "darwin") ? (a64 ? TARGET_A64_MACHO : TARGET_X64_MACHO)
                       : a64 ? TARGET_A64_ELF : TARGET_X64_ELF;
   if (object_target_mode(source, ir, path, runtime_trace, debug_info, report, object, shared)) return 0;
-  if (report) {
-#ifdef DYN_NO_LLVM
-    fprintf(stderr, "error: native emission failed; LLVM fallback is disabled\n");
-#else
-    fprintf(stderr, "error: native emission failed; use --backend llvm\n");
-#endif
-  }
+  if (report)
+    fprintf(stderr, "error: native emission failed\n");
   return 1;
 }

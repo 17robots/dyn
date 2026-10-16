@@ -22,12 +22,6 @@ External LLVM tools remain optional format-validation oracles in tests.
 
 ## Textual outputs
 
-`--emit-ir` writes real LLVM IR to `<output>.ll` using a standalone syntax writer.
-It uses the compiler’s semantic lowering and includes ABI lowering,
-checked failures, cleanup, initialization, and requested debug metadata. LLVM is
-not loaded or invoked to produce the file. LLVM tools are optional consumers of
-this interchange format, not compiler dependencies.
-
 `--emit-asm` writes reassemblable target assembly to `<output>.s`. Native output
 preserves emitted instruction bytes, sections, symbols, relocations, constructors,
 and debug/unwind data. Recognized AArch64 instructions and unambiguous x86-64
@@ -37,9 +31,9 @@ RISC-V output also annotates recognized instructions while retaining their bytes
 The exporter does not guess instruction boundaries after an unknown x86 encoding. Wasm output uses symbolic stack instructions and type
 directives. When assembling Wasm output with Clang, pass
 `--target=wasm32 -mbulk-memory` for its memory copy/fill instructions.
-Export does not replace the native object with an LLVM-generated one.
+Export does not replace the native object.
 
-These switches retain normal object generation and linking. Add `--no-link` to
+This switch keeps normal object generation and linking. Add `--no-link` to
 stop before linking. Library object export uses
 `--shared --emit-object --no-link`. Existing text output files are preserved when text
 publication fails.

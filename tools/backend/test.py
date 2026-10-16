@@ -914,11 +914,11 @@ Big c_big(Big x) { x.c+=x.a+x.b;return x; }
 Packed c_packed(Packed x) { x.value+=x.tag;return x; }
 """)
         run([*CC,'-O2','-fPIC','-c',provider,'-o',provider_obj])
-        foreign_obj=root/('foreign-'+mode+'.o');foreign_native=root/('foreign-native-'+mode+'.so');foreign_llvm=root/('foreign-production-'+mode+'.so')
+        foreign_obj=root/('foreign-'+mode+'.o');foreign_native=root/('foreign-native-'+mode+'.so');foreign_compiler=root/('foreign-production-'+mode+'.so')
         run([BACKEND,*(['--debug'] if mode=='debug' else []),foreign_source,foreign_obj])
         run([*CC,'-shared','-Wl,--no-undefined',foreign_obj,runtime,support,provider_obj,'-o',foreign_native])
-        run([DYN,'build',foreign_root,'--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--output',foreign_llvm])
-        for library in (foreign_native,foreign_llvm):
+        run([DYN,'build',foreign_root,'--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--output',foreign_compiler])
+        for library in (foreign_native,foreign_compiler):
             lib=ctypes.CDLL(str(library))
             fn=lib.foreign_pair;fn.argtypes=[i64];fn.restype=ctypes.c_double;assert fn(9)==11.5
             assert configure(lib,'foreign_big',u64,1)(9)==12

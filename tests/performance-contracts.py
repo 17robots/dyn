@@ -150,12 +150,6 @@ fn main() {
     assert 'cached' not in build('--cpu','native').stdout
     assert 'cached' in build('--cpu','native').stdout
     assert 'cached' not in build('--opt-level','3').stdout
-    build('--cpu','native','--emit-ir','--no-link')
-    ir=Path(str(output)+'.ll').read_text()
-    # Native CPU selection is also recorded in the independent IR export.
-    assert '"target-cpu"=' in ir and '"target-features"' in ir, ir
-    build('--debug-info','--emit-ir','--no-link')
-    assert 'noinline' not in Path(str(output)+'.ll').read_text()
     remarks=build('--opt-remarks')
     assert 'independent O2:' in remarks.stderr and 'scalar folds' in remarks.stderr, remarks.stderr
     for args in (['--cpu','bogus'],['--opt-level','0'],['--sample-profile',root/'missing'],['--cpu','native','--target','wasm32-wasi','--no-link']):

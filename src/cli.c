@@ -17,7 +17,7 @@ void dyn_cli_help(const char *command) {
       "  cache    inspect or clean shared compilation cache\n"
       "  help     show help\n  version  show version\n\n"
       "Build options:\n  --output <path>  --debug  --release  --debug-info\n"
-      "  --emit-ir  --emit-object  --emit-asm  --no-link  --shared  --no-lto\n"
+      "  --emit-object  --emit-asm  --no-link  --shared\n"
       "  --target <x86_64-linux|aarch64-linux|riscv64-linux|x86_64-macos|aarch64-macos|x86_64-windows|aarch64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <1|2|3>  --opt-remarks\n"
@@ -108,7 +108,7 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       if (!o->debug_info_set)
         o->debug_info = true;
     } else if (strcmp(a, "--no-lto") == 0) {
-      o->no_lto = true;
+      /* Accepted for compatibility; there is no link-time optimizer. */
     } else if (strcmp(a, "--release") == 0) {
       o->release = true;
       if (!o->debug_info_set)
@@ -130,8 +130,10 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       o->format_check = true;
     else if (strcmp(a, "--runtime-support") == 0)
       o->runtime_support = true;
-    else if (strcmp(a, "--emit-ir") == 0)
-      o->emit_ir = true;
+    else if (strcmp(a, "--emit-ir") == 0) {
+      fprintf(stderr, "error: --emit-ir was removed; use --emit-asm\n");
+      return 2;
+    }
     else if (strcmp(a, "--emit-object") == 0)
       o->emit_object = true;
     else if (strcmp(a, "--emit-asm") == 0)
