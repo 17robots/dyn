@@ -51,7 +51,7 @@ remain unavailable in this build.
 
 Object emission supports x86-64 Linux, AArch64 Linux, AArch64 macOS, and x86-64
 Windows. Cross-target runtimes are separate; the command above builds only the
-host runtime. GCC-only Linux packaging is available with:
+host runtime and portable Wasm runtime objects. GCC-only Linux packaging is available with:
 
 ```sh
 DYN_WITH_LLVM=0 BUILD=build/no-llvm python3 tools/package-sdk.py
@@ -61,12 +61,15 @@ The resulting host SDK does not bundle LLVM, LLD or C++ libraries. Packaging
 checks debug/release compilation and standard-library execution after relocation.
 The independent CI job builds from scratch with LLVM tool commands replaced by
 failing sentinels, checks library dependencies and unresolved symbols, and tests
-native execution, shared-library callbacks, all four object formats, and LSP.
+native execution, shared-library callbacks, all four native object formats, LSP,
+and browser/WASI modules executed by Node without LLVM tools on PATH.
 Separate jobs qualify native Windows emission with GCC and macOS emission with
 system C tools; macOS packaging rejects non-system library dependencies.
 
-Wasm emission/linking, assembly/LLVM IR output, advanced optimization, and LLVM-free cross-runtime builds remain migration
-work. Unsupported modes and external linker fallback fail explicitly. The normal
+Wasm browser modules and WASI Preview 1 commands also have independent code
+generation, built-in object/archive linking, and directly generated runtime
+objects. See [WebAssembly](docs/guide/webassembly.md). Native cross-runtime
+builds, assembly/LLVM IR output, and advanced optimization remain migration work. Unsupported modes and external linker fallback fail explicitly. The normal
 build remains available with `DYN_WITH_LLVM=1` (the default) for compatibility
 and differential tests. Explicit `--backend native` also selects native release
 and shared-library emission in that reference build.

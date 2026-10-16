@@ -67,14 +67,14 @@ fn main() {
             assert data[:2] == b'\x64\x86'
     # Unsupported modes must fail before producing output, never silently fall back.
     for options in (['--emit-ir'], ['--emit-asm'],
-                    ['--backend', 'llvm'], ['--target', 'wasm32-wasi']):
+                    ['--backend', 'llvm']):
         destination = root / 'unsupported'
         result = run([compiler, 'build', app, '--output', destination, *options], env, success=False)
         assert 'LLVM is disabled' in result.stderr, result.stderr
         assert not destination.exists()
     env['DYN'] = str(compiler)
     for test in ('lsp-navigation', 'shared-host', 'compiler-contracts', 'aggregate-abi',
-                 'panic-lifetime', 'native-release', 'wrap-enum-values', 'sync-host', 'concurrency-net-host'):
+                 'panic-lifetime', 'native-release', 'wasm-independent', 'wrap-enum-values', 'sync-host', 'concurrency-net-host'):
         run(['python3', 'tests/'+test+'.py'], env)
     run(['python3', 'tools/package-sdk.py'], env)
 print('PASS LLVM-free GCC build, debug/release execution, shared libraries, four object targets, LSP and relocated SDK')

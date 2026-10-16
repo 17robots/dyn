@@ -270,7 +270,9 @@ static int emit_native(const DynSource *source, const DynIrProgram *ir,
 #ifdef DYN_NATIVE_BACKEND
   bool report = options->backend == DYN_BACKEND_NATIVE;
   struct timespec phase = timer_start();
-  int result = dyn_native_object(source, ir, object, !options->release, options->debug_info, options->shared, report);
+  int result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
+      ? dyn_wasm_object(source, ir, object, report)
+      : dyn_native_object(source, ir, object, !options->release, options->debug_info, options->shared, report);
   if (options->timings)
     fprintf(stderr, "timing detail native emit %.3f ms\n", elapsed_ms(phase));
   if (result && !report && options->verbose)
@@ -381,7 +383,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   native = options->backend != DYN_BACKEND_LLVM &&
            (is_command(options, "build") || run) && (!options->release || independent) &&
            (!strcmp(options->target, "x86_64-linux") || !strcmp(options->target, "aarch64-linux") ||
-            !strcmp(options->target, "aarch64-macos") || !strcmp(options->target, "x86_64-windows")) &&
+            !strcmp(options->target, "aarch64-macos") || !strcmp(options->target, "x86_64-windows") ||
+            (independent && !strcmp(context.target->arch, "wasm32"))) &&
            (!options->shared || independent) &&
            !options->emit_ir && !options->emit_asm &&
            !options->optimization.native_cpu && !options->optimization.cpu &&
@@ -390,7 +393,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
 #endif
   if (options->backend == DYN_BACKEND_NATIVE && !native) {
     fprintf(stderr, "error: --backend native requires an x86_64-linux, aarch64-linux, aarch64-macos "
-                    "or x86_64-windows build without --emit-ir, --emit-asm, "
+                    "x86_64-windows or wasm32 build without --emit-ir, --emit-asm, "
                     "CPU/features, optimization levels, profiles or remarks\n");
     return 2;
   }

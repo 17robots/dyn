@@ -273,6 +273,7 @@ static inline unsigned dyn_chunk_of_path(const char *path, unsigned chunks) {
 #ifdef DYN_NATIVE_BACKEND
 /* Native x86_64-linux ELF emission of the whole program. Returns 0 on success.
    With report false, unsupported programs fail silently for LLVM fallback. */
+int dyn_wasm_object(const DynSource *, const struct DynIrProgram *, const char *, bool);
 int dyn_native_object(const DynSource *, const struct DynIrProgram *,
                       const char *path, bool runtime_trace, bool debug_info,
                       bool shared, bool report);
