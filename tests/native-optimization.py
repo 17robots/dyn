@@ -142,22 +142,21 @@ fn main() { exercise() }
     for level in (2, 3):
         output = work/f'inline-{level}'
         result = run(DYN, 'build', module, '--release', '--opt-level', level,
-                     '--opt-remarks', '--emit-ir', '--output', output)
+                     '--opt-remarks', '--emit-asm', '--output', output)
         run(output)
         if level == 3:
             count = sum(map(int, re.findall(r'(\d+) direct calls inlined', result.stderr)))
             assert count >= 5, result.stderr
-            ir = output.with_suffix('.ll').read_text()
-            exercise = re.search(r'define[^\n]*@exercise\([^\n]*\)\s*\{(.*?)\n\}', ir, re.S)
-            assert exercise, ir
-            assert not re.search(r'call[^\n]*@(choose|pair|take|text|captures)\(', exercise[1]), exercise[1]
-            assert re.search(r'call[^\n]*@next\(', exercise[1]), 'argument effects must remain'
-    # The same transformed IR feeds every target. Reassemble with an optional
-    # oracle; execution on foreign hosts remains the corresponding CI job.
+            # Every call to these private functions is inlined, so none remain.
+            functions = set(re.findall(r'^"([^"]+)":$', output.with_suffix('.s').read_text(), re.M))
+            assert not functions & {'choose', 'pair', 'take', 'text', 'captures'}, functions
+            assert 'next' in functions, 'argument effects must remain'
+    # The same transformed IR feeds every target; execution on foreign hosts
+    # remains the corresponding CI job.
     for target in ('x86_64-linux', 'aarch64-linux', 'aarch64-macos', 'x86_64-macos', 'x86_64-windows', 'aarch64-windows',
                    'wasm32-browser', 'wasm32-wasi'):
         run(DYN, 'build', module, '--release', '--opt-level', 3, '--target', target,
-            '--emit-object', '--emit-ir', '--no-link', '--output', work/target,
+            '--emit-object', '--no-link', '--output', work/target,
             *(['--shared'] if target == 'wasm32-browser' else []))
     if shutil.which('node'):
         wasm = work/'inline.wasm'

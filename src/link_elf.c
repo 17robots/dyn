@@ -28,7 +28,7 @@ enum {
   STT_NOTYPE = 0, STT_OBJECT = 1, STT_FUNC = 2, STT_SECTION = 3, STT_FILE = 4, STT_TLS = 6,
   STT_GNU_IFUNC = 10,
   STV_DEFAULT = 0, STV_HIDDEN = 2, STV_PROTECTED = 3,
-  PT_TLS = 7, PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_PHDR = 6, PT_GNU_STACK = 0x6474e551,
+  PT_TLS = 7, PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_PHDR = 6, PT_GNU_STACK = 0x6474e551, PT_GNU_RELRO = 0x6474e552,
   DT_PLTGOT = 3, DT_PLTRELSZ = 2, DT_PLTREL = 20, DT_JMPREL = 23,
   DT_NULL = 0, DT_NEEDED = 1, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
   DT_RELAENT = 9, DT_STRSZ = 10, DT_SYMENT = 11, DT_SONAME = 14, DT_RUNPATH = 29, DT_DEBUG = 21, DT_INIT_ARRAY = 25,
@@ -86,7 +86,7 @@ typedef struct {
 typedef enum {
   OUT_INTERP, OUT_HASH, OUT_DYNSYM, OUT_DYNSTR, OUT_VERSYM, OUT_VERNEED, OUT_RELA_DYN, OUT_RELA_PLT,
   OUT_RODATA, OUT_EH_FRAME, OUT_TEXT, OUT_PLT, OUT_DYNAMIC, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
-  OUT_DATA, OUT_GOT, OUT_TDATA, OUT_TBSS, OUT_BSS, OUT_ALLOC_COUNT
+  OUT_DATA_REL_RO, OUT_DATA, OUT_GOT, OUT_TDATA, OUT_TBSS, OUT_BSS, OUT_ALLOC_COUNT
 } OutputKind;
 typedef struct {
   const char *path; /* As given; also the DT_NEEDED name without a soname. */
@@ -186,6 +186,7 @@ typedef struct {
   char **signatures;
   size_t signature_count, signature_capacity;
   bool shared_output, dynamic, lazy_plt;
+  uint64_t relro_offset, relro_address, relro_size;
   uint16_t machine; /* Of the first input; all must match. */
   uint32_t riscv_flags;
   uint64_t page; /* Maximum page size: segments never share one. */
@@ -879,7 +880,8 @@ static int classify(const LinkSection *section) {
   if (section->flags & SHF_EXEC) return OUT_TEXT;
   if (section->flags & SHF_TLS) return section->type == SHT_NOBITS ? OUT_TBSS : OUT_TDATA;
   if (section->type == SHT_NOBITS) return OUT_BSS;
-  if (section->flags & SHF_WRITE) return OUT_DATA;
+  if (section->flags & SHF_WRITE)
+    return strncmp(section->name, ".data.rel.ro", 12) ? OUT_DATA : OUT_DATA_REL_RO;
   return OUT_RODATA;
 }
 static bool kept_section(const LinkSection *section) {
@@ -1119,6 +1121,7 @@ static bool assign_outputs(Linker *linker) {
     [OUT_DYNAMIC] = {".dynamic", SHT_DYNAMIC, 16, OUT_DYNSTR},
     [OUT_INIT_ARRAY] = {".init_array", SHT_INIT_ARRAY, 8, -1},
     [OUT_FINI_ARRAY] = {".fini_array", SHT_FINI_ARRAY, 8, -1},
+    [OUT_DATA_REL_RO] = {".data.rel.ro", SHT_PROGBITS, 0, -1},
     [OUT_DATA] = {".data", SHT_PROGBITS, 0, -1},
     [OUT_GOT] = {".got", SHT_PROGBITS, 8, -1},
     [OUT_TDATA] = {".tdata", SHT_PROGBITS, 0, -1},
@@ -1423,7 +1426,11 @@ static bool plan_dynamic(Linker *linker) {
 }
 
 /* Segments: headers and read-only data, then code, then writable data with
-   zero-fill. Each starts on a page so it can carry its own permissions. */
+   zero-fill. Each starts on a page so it can carry its own permissions.
+   Data that is constant after relocation (.data.rel.ro) joins the read-only
+   segment when nothing relocates at load time. Otherwise it leads the
+   writable segment, ends on a page boundary, and PT_GNU_RELRO tells the
+   loader to make it read-only once relocations are applied. */
 typedef struct {
   uint64_t offset, address, file_size, memory_size;
   uint32_t flags;
@@ -1445,6 +1452,9 @@ static void place(LinkOutput *output, uint64_t *offset, uint64_t delta, bool all
 }
 /* As lld does, segments are contiguous in the file; each starts on a fresh
    page in memory at an address congruent to its file offset. */
+static bool relro(const Linker *linker) {
+  return linker->dynamic && linker->outputs[OUT_DATA_REL_RO].count;
+}
 static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
   static const int groups[3][2] = {{OUT_INTERP, OUT_EH_FRAME}, {OUT_TEXT, OUT_PLT}, {OUT_DYNAMIC, OUT_TDATA}};
   static const uint32_t flags[3] = {4, 5, 6};
@@ -1460,7 +1470,20 @@ static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
     uint64_t start = g ? offset : 0;
     uint64_t address = g ? align_up(end, page) + (offset & (page - 1)) : linker->base;
     uint64_t delta = address - start;
-    for (int k = groups[g][0]; k <= groups[g][1]; ++k) place(&linker->outputs[k], &offset, delta, true);
+    for (int k = groups[g][0]; k <= groups[g][1]; ++k) {
+      if (k == OUT_DATA_REL_RO && !linker->dynamic) continue;
+      place(&linker->outputs[k], &offset, delta, true);
+      if (k == OUT_DATA_REL_RO && relro(linker)) {
+        linker->relro_offset = start;
+        linker->relro_address = address;
+        offset = align_up(offset, page);
+        linker->relro_size = offset - start;
+      }
+    }
+    if (g == 0 && !linker->dynamic) {
+      place(&linker->outputs[OUT_DATA_REL_RO], &offset, delta, true);
+      linker->outputs[OUT_DATA_REL_RO].flags &= ~(uint64_t)SHF_WRITE;
+    }
     uint64_t file_end = offset, memory_end = offset;
     if (g == 2) {
       uint64_t tls_end = offset;
@@ -2102,7 +2125,8 @@ static bool write_output(Linker *linker, const char *entry_name) {
   Segment segments[3];
   /* Loads and the stack note; dynamic output adds PT_DYNAMIC, and
      executables PT_PHDR and PT_INTERP. */
-  const size_t phdr_count = (linker->dynamic ? (linker->shared_output ? 5 : 7) : 4) + (linker->has_tls ? 1 : 0);
+  const size_t phdr_count = (linker->dynamic ? (linker->shared_output ? 5 : 7) : 4) + (linker->has_tls ? 1 : 0) +
+                            (relro(linker) ? 1 : 0);
   uint64_t header_size = 64 + 56 * phdr_count;
   size_t segment_count = layout(linker, segments, header_size);
   plt_address = linker->outputs[OUT_PLT].address + (linker->lazy_plt ? 16 : 0);
@@ -2227,6 +2251,9 @@ static bool write_output(Linker *linker, const char *entry_name) {
       PROGRAM_HEADER(PT_TLS, 4, data->file_offset, data->address, data->size,
                      bss->address + bss->size - data->address, data->align);
     }
+    if (relro(linker))
+      PROGRAM_HEADER(PT_GNU_RELRO, 4, linker->relro_offset, linker->relro_address, linker->relro_size,
+                     linker->relro_size, 1);
     PROGRAM_HEADER(PT_GNU_STACK, 6, 0, 0, 0, 0, 16);
 #undef PROGRAM_HEADER
     memcpy(image + symtab_offset, symtab.data, symtab.size);

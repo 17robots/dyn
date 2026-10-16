@@ -206,7 +206,7 @@ static struct timespec timer_start(void) {
 }
 /* Every supported target uses independent emission. */
 static int emit_native(const DynSource *source, const DynIrProgram *ir,
-                       const char *object, const char *ir_path, const char *asm_path,
+                       const char *object, const char *asm_path,
                        const DynOptions *options) {
   bool report = true;
   struct timespec phase = timer_start();
@@ -223,8 +223,6 @@ static int emit_native(const DynSource *source, const DynIrProgram *ir,
     result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
         ? dyn_wasm_assembly(source, ir, asm_path, report)
         : dyn_native_assembly(object, asm_path);
-  if (!result && ir_path)
-    result = dyn_codegen_text(source, ir, ir_path, options->release, options->debug_info, options->shared);
   if (options->release) dyn_native_optimization_free(&optimized);
   if (options->timings)
     fprintf(stderr, "timing detail native emit %.3f ms\n", elapsed_ms(phase));
@@ -332,7 +330,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (native)
     options->backend = DYN_BACKEND_NATIVE;
   if (options->runtime_support && (!native || !options->release || !options->shared ||
-      !options->emit_object || !options->no_link || options->emit_ir || options->emit_asm)) {
+      !options->emit_object || !options->no_link || options->emit_asm)) {
     fprintf(stderr, "error: --runtime-support requires native --release --shared --emit-object --no-link\n"); return 2;
   }
   options->native_backend = native;
@@ -473,7 +471,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
                                          : base;
   // Run reuses native objects, but never persists its temporary executable.
   bool cacheable = strcmp(context.target->arch, "wasm32") && !options->shared && !options->no_link &&
-                   !options->emit_ir && !options->emit_object &&
+                   !options->emit_object &&
                    !options->emit_asm;
   if (cacheable && !options->no_cache)
     options->compiler_hash = dyn_cache_file_hash(compiler);
@@ -485,7 +483,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     free(base);
     return 0;
   }
-  char object[4096], ir[4096], assembly[4096];
+  char object[4096], assembly[4096];
   /* A native object is private unless requested: "<output>.o" may name a
      --link input. On macOS it is kept beside the output instead, because the
      executable's debug map refers to the object's DWARF. */
@@ -510,7 +508,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
     close(temporary);
   }
   if ((!private_object && !kept_object && snprintf(object, sizeof(object), "%s.o", output) >= (int)sizeof(object)) ||
-      snprintf(ir, sizeof(ir), "%s.ll", output) >= (int)sizeof(ir) ||
       snprintf(assembly, sizeof(assembly), "%s.s", output) >= (int)sizeof(assembly)) {
     fprintf(stderr, "error: output path too long\n");
     dyn_sources_free(&sources); free(main_path); free(base); return 2;
@@ -534,7 +531,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     }
     if (!result)
       result = emit_native(&module_source, &prepared, object,
-          options->emit_ir ? ir : NULL, options->emit_asm ? assembly : NULL, options);
+          options->emit_asm ? assembly : NULL, options);
     if (have_ir)
       dyn_codegen_release(&prepared);
     dyn_source_free(&module_source);

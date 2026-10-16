@@ -34,7 +34,6 @@ cflags += ['-DDYN_VERSION="' + version + '"']
 if os.environ.get('DYN_WITH_LLVM', '0') != '0':
     sys.exit('LLVM backend was removed; omit DYN_WITH_LLVM or set it to 0')
 cppflags = flags('CPPFLAGS')
-cflags += ['-DDYN_NO_LLVM']
 sources = sorted(COMPILER.glob('src/*.c'))
 headers = sorted(COMPILER.glob('src/*.h')) + sorted(COMPILER.glob('src/*.inc'))
 parser_sources = [COMPILER/'src/parser.c', COMPILER/'src/snapshot.c']
@@ -67,7 +66,7 @@ def compiler_objects(kind, optimize, extra_sources=(), extra_inputs=()):
     names = []
     for source in [*sources, *extra_sources]:
         name = f'obj/{kind}/{source.stem}.o'
-        add(name, [source, *headers, *extra_inputs, *([COMPILER/'src/codegen.c', COMPILER/'tools/backend-experiment/output.h'] if source.name == 'codegen_text.c' else [])],
+        add(name, [source, *headers, *extra_inputs],
             [*cc, *object_cppflags, *cflags, *optimize, f'-I{COMPILER}/src', '-c', source, '-o', BUILD/name])
         names.append(name)
     return names
@@ -78,30 +77,15 @@ def compiler_link(name, objects):
         objects)
 
 # Native emission also bootstraps portable runtime support on every host.
-backend_experiment = COMPILER/'tools/backend-experiment'
-native_flags = ['-DDYN_NATIVE_BACKEND']
-native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
-native_inputs = [backend_experiment/'vector.inc', backend_experiment/'allocation.inc', backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc', backend_experiment/'rv64.inc',
-                 backend_experiment/'coff.inc', backend_experiment/'macho.inc',
-                 backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
-default_flags = native_flags
-default_sources = native_sources
-default_inputs = native_inputs
-compiler_link('dyn-release', compiler_objects('release', ['-O2', *default_flags],
-    default_sources, default_inputs))
-compiler_link('dyn', compiler_objects('debug', default_flags, default_sources, default_inputs))
-
-# Matched prepared-IR benchmark harness. Not installed or part of normal builds.
-backend_benchmark_objects = [f'obj/release/{name}.o' for name in
-    ('frontend', 'ast', 'sema', 'sema_globals', 'source', 'source_tree',
-     'diagnostic', 'target', 'ir', 'codegen', 'codegen_text', 'llvm_text', 'native_asm', 'codegen_wasm', 'link_elf', 'link_macho', 'link_coff', 'link_wasm', 'parser', 'snapshot')]
-add('obj/benchmark/backend.o',
-    [backend_experiment/'benchmark-driver.c', *native_inputs, *headers],
-    [*cc, *object_cppflags, *cflags, '-O2', f'-I{COMPILER}/src',
-     '-c', backend_experiment/'benchmark-driver.c', '-o', BUILD/'obj/benchmark/backend.o'])
-compiler_link('backend-benchmark', [*backend_benchmark_objects, 'obj/benchmark/backend.o',
-    'obj/release/compiler.o', 'obj/release/dwarf.o'])
-
+backend = COMPILER/'src/backend'
+native_sources = [backend/'compiler.c', backend/'dwarf.c']
+native_inputs = [backend/'vector.inc', backend/'allocation.inc', backend/'driver.c', backend/'isa.inc', backend/'a64.inc', backend/'rv64.inc',
+                 backend/'coff.inc', backend/'macho.inc', backend/'reachability.inc',
+                 backend/'elf64.h', backend/'output.h', backend/'dwarf.h']
+# The shipped compiler carries symbols but no DWARF: 1 MB instead of 4.6 MB.
+# Debug the unoptimized build/dyn instead.
+compiler_link('dyn-release', compiler_objects('release', ['-O2', '-g0'], native_sources, native_inputs))
+compiler_link('dyn', compiler_objects('debug', [], native_sources, native_inputs))
 
 # Runtime objects are portable build products: no target C compiler/assembler.
 NATIVE_STARTUPS = [
@@ -125,17 +109,13 @@ for name, target in NATIVE_SUPPORT.items():
          '--target', target, '--output', BUILD/name], needs=['dyn-release'])
 
 add('dyn-sanitize', [*sources, *headers, *native_sources, *native_inputs],
-    [*cc, *cppflags, *cflags, *native_flags, '-O1', '-fno-omit-frame-pointer', '-fsanitize=address,undefined', f'-I{COMPILER}/src', *sources, *native_sources, '-pthread', '-o', f'{BUILD}/dyn-sanitize'])
+    [*cc, *cppflags, *cflags, '-O1', '-fno-omit-frame-pointer', '-fsanitize=address,undefined', f'-I{COMPILER}/src', *sources, *native_sources, '-pthread', '-o', f'{BUILD}/dyn-sanitize'])
 
 # Wasm runtime objects are generated directly; no target C compiler is needed.
 WASM_RUNTIME = ['dynrt_wasm.o', 'dynrt_wasi_start.o', 'dynrt_wasi_support.o']
 for name in WASM_RUNTIME:
     add(name, [COMPILER/'tools/wasm-runtime.py'],
         [sys.executable, COMPILER/'tools/wasm-runtime.py', '--output', BUILD/name])
-
-add('llvm-text-unit-test', [COMPILER/'tests/llvm-text-unit.c', COMPILER/'src/llvm_text.c',
-    COMPILER/'tools/backend-experiment/output.h', *headers],
-    [*cc, *cflags, COMPILER/'tests/llvm-text-unit.c', '-o', BUILD/'llvm-text-unit-test'])
 
 add('cache-failure-test', [f'{COMPILER}/tests/cache-failure.c', f'{COMPILER}/src/cache.c', f'{COMPILER}/src/build.c', *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', 'tests/cache-failure.c', f'{COMPILER}/src/build.c', '-pthread', '-o', f'{BUILD}/cache-failure-test'])
@@ -170,8 +150,8 @@ add('frontend-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILE
 add('analysis-cache-test', [f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/tests/fault-alloc.h', f'{COMPILER}/src/analysis_cache.c', *frontend, *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/src/analysis_cache.c', *frontend, '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/analysis-cache-test'])
 
-add('codegen-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *[COMPILER/'src'/n for n in ('codegen_text.c', 'llvm_text.c', 'native_asm.c', 'codegen_wasm.c')], *native_sources, *native_inputs, *headers],
-    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *[COMPILER/'src'/n for n in ('codegen_text.c', 'llvm_text.c', 'native_asm.c', 'codegen_wasm.c')], *native_sources, *native_flags, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'])
+add('codegen-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *[COMPILER/'src'/n for n in ('native_asm.c', 'codegen_wasm.c')], *native_sources, *native_inputs, *headers],
+    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *[COMPILER/'src'/n for n in ('native_asm.c', 'codegen_wasm.c')], *native_sources, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'])
 
 add('project-failure-test', [f'{COMPILER}/tests/project-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/project-failure.c', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/project-failure-test'])
@@ -194,7 +174,7 @@ add('unwind-capacity-test', [f'{COMPILER}/tests/unwind-capacity.c', f'{COMPILER}
     [*cc, *cppflags, *cflags, '-ffreestanding', '-fno-builtin', 'tests/unwind-capacity.c', '-o', f'{BUILD}/unwind-capacity-test'])
 
 add('dyn-per-file', [*sources, *headers, *native_sources, *native_inputs],
-    [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', *sources, *native_sources, *native_flags, '-pthread', '-o', BUILD/'dyn-per-file'])
+    [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', *sources, *native_sources, '-pthread', '-o', BUILD/'dyn-per-file'])
 
 add('build-plan-test', [COMPILER/'tests/build-plan.c', COMPILER/'src/build.c', *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', COMPILER/'tests/build-plan.c', COMPILER/'src/build.c', '-pthread', '-Wl,--wrap=waitpid', '-o', BUILD/'build-plan-test'])

@@ -3,7 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "link_wasm.h"
-#include "../tools/backend-experiment/output.h"
+#include "backend/output.h"
 #include "host.h"
 #include <setjmp.h>
 #include <stdarg.h>

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Differential check of native emission against LLVM for a cross target.
+"""Differential check of a cross target against x86-64 Linux native output.
 
 Builds the value corpus from test.py (minus libc-dependent functions) into one
-program per backend. Each case runs in its own process, selected by its
-command-line index, so panics are compared exactly: status, stdout and stderr.
+program for the target and one for x86-64 Linux, the reference. Each case runs
+in its own process, selected by its command-line index, so panics are compared
+exactly: status, stdout and stderr.
 
 Targets run under qemu-aarch64 (aarch64-linux), wine (x86_64-windows) or
 directly on a matching host (aarch64-macos needs an Apple silicon Mac).
 """
 import platform
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -367,60 +369,27 @@ def runner(target):
     return [] if sys.platform == 'darwin' and machine == 'arm64' else None
 
 def build(args, root, program):
-    """Build the corpus with both backends into root; returns their paths."""
+    """Build the corpus for the target and for the x86-64 Linux reference."""
     (root/'app').mkdir(exist_ok=True)
     (root/'app/main.dyn').write_text(program)
     (root/'provider.c').write_text(PROVIDER)
-    provider = root/'provider.o'
     clang = shutil.which(os.environ.get('CLANG', 'clang'))
     if not clang: return None
-    target_flags = ['-march=rv64g', '-mno-relax'] if args.target == 'riscv64-linux' else []
-    subprocess.run([clang, f'--target={TARGETS[args.target]}', *target_flags, '-ffreestanding', '-fno-stack-protector', '-O1',
-                    '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
-    harness = root/'oracle-link.c'
-    harness.write_text('#include "link_elf.h"\n#include "link_macho.h"\n#include "link_coff.h"\n#include <string.h>\n'
-        'int main(int n,char **v){const char *const *p=(const char *const *)v+3;'
-        'if(strstr(v[1],"windows")){DynCoffOptions o={.entry="dyn_start"};return dyn_link_coff(p,n-3,v[2],&o);}'
-        'if(strstr(v[1],"macos")){DynMachOOptions o={.entry="_dyn_start"};return dyn_link_macho(p,n-3,v[2],&o);}'
-        'DynLinkOptions o={.entry="_start"};return dyn_link_elf(p,n-3,v[2],&o);}')
-    linker = root/('oracle-link.exe' if os.name == 'nt' else 'oracle-link')
-    subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2',
-                    '-D_POSIX_C_SOURCE=200809L', '-I'+str(ROOT/'src'), str(harness),
-                    *[str(ROOT/'src'/name) for name in ('link_elf.c','link_macho.c','link_coff.c')],
-                    '-o', str(linker)], check=True)
     outputs = {}
     suffix = '.exe' if args.target.endswith('-windows') else ''
-    for backend in ('native', 'llvm'):
-        output = root/f'{backend}{suffix}'
-        built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', args.target,
-                                '--backend', 'native', *(['--emit-ir', '--no-link'] if backend == 'llvm' else []), '--no-cache', '--quiet', '--link', str(provider),
-                                '--output', str(output)],
+    for name, target in (('native', args.target), ('reference', 'x86_64-linux')):
+        provider = root/f'provider-{name}.o'
+        target_flags = ['-march=rv64g', '-mno-relax'] if target == 'riscv64-linux' else []
+        subprocess.run([clang, f'--target={TARGETS[target]}', *target_flags, '-ffreestanding', '-fno-stack-protector', '-O1',
+                        '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
+        output = root/(name + (suffix if name == 'native' else ''))
+        built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', target,
+                                '--no-cache', '--quiet', '--link', str(provider), '--output', str(output)],
                                capture_output=True, text=True, timeout=600)
         if built.returncode:
             (Path(tempfile.gettempdir())/'dyn-native-diff-main.dyn').write_text(program)
-            sys.exit(f'{backend} build failed:\n{built.stderr[-4000:]}')
-        if backend == 'llvm':
-            # LLVM is an optional external test oracle, never a compiler backend.
-            obj = Path(str(output) + '.oracle.o')
-            subprocess.run([clang, f'--target={TARGETS[args.target]}', *target_flags, '-O0', '-c',
-                            str(output) + '.ll', '-o', str(obj)], check=True)
-            runtime = args.compiler.resolve().parent
-            names = {
-                'x86_64-linux': ('dynrt_start.o', 'dynrt_support.o'),
-                'aarch64-linux': ('dynrt_aarch64_start.o', 'dynrt_aarch64_support.o'),
-                'riscv64-linux': ('dynrt_riscv64_start.o', 'dynrt_riscv64_support.o'),
-                'x86_64-windows': ('dynrt_windows_start.o', 'dynrt_windows_support.o'),
-                'aarch64-macos': ('dynrt_macos_start.o', 'dynrt_macos_support.o'),
-                'x86_64-macos': ('dynrt_macos_x64_start.o', 'dynrt_macos_x64_support.o'),
-                'aarch64-windows': ('dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_support.o'),
-            }[args.target]
-            if not (runtime/names[0]).exists():
-                runtime = runtime.parent/'lib/dyn'
-            inputs = [str(runtime/name) for name in names] + [str(obj), str(provider)]
-            if args.target.endswith('-macos'):
-                inputs += [str(ROOT/'runtime/libSystem.tbd')]
-            subprocess.run([str(linker), args.target, str(output), *inputs], check=True)
-        outputs[backend] = output
+            sys.exit(f'{name} build failed:\n{built.stderr[-4000:]}')
+        outputs[name] = output
     dwarfdump = shutil.which('llvm-dwarfdump')
     debug_object = outputs['native'].with_name(outputs['native'].name + '.dynnative.o')
     dwarf = debug_object if args.target.endswith('-macos') else outputs['native']
@@ -431,33 +400,47 @@ def build(args, root, program):
         assert frames.returncode == 0 and 'error' not in frames.stdout + frames.stderr, (frames.stdout + frames.stderr)[-2000:]
     return outputs
 
-def compare(target, prefix, outputs, count, directory, jobs):
-    """Run every case on both programs; exits on a mismatch."""
+def run_cases(prefix, binary, count, directory, jobs):
+    """Runs every case in its own process; returns (status, stdout, stderr) per case."""
     environment = dict(os.environ, WINEDEBUG='-all')
-    def run(binary, index):
+    def run(index):
         try:
             r = subprocess.run([*prefix, str(binary), str(index)], capture_output=True, timeout=30,
                                cwd=directory, env=environment,
                                preexec_fn=None if sys.platform == 'win32' else no_core_dumps)
         except subprocess.TimeoutExpired:
-            return 'timeout', b'', b''  # e.g. loop_forever(2^64-1) on both backends
-        return r.returncode, r.stdout, r.stderr
-    if prefix and 'wine' in Path(prefix[0]).name: run(outputs['llvm'], 0)  # create the wine prefix once
+            return 'timeout', b'', b''  # e.g. loop_forever(2^64-1)
+        # qemu reports fatal signals itself; the status already records them.
+        stderr = re.sub(rb'qemu: uncaught target signal [^\n]*\n', b'', r.stderr)
+        return r.returncode, r.stdout, stderr
+    if prefix and 'wine' in Path(prefix[0]).name: run(0)  # create the wine prefix once
     with ThreadPoolExecutor(jobs) as pool:
-        native = list(pool.map(lambda i: run(outputs['native'], i), range(count)))
-        llvm = list(pool.map(lambda i: run(outputs['llvm'], i), range(count)))
+        return list(pool.map(run, range(count)))
+
+def save_expected(path, results):
+    path.write_text(json.dumps([[status, base64.b64encode(out).decode(), base64.b64encode(err).decode()]
+                                for status, out, err in results]) + '\n')
+
+def load_expected(path):
+    return [(status, base64.b64decode(out), base64.b64decode(err))
+            for status, out, err in json.loads(path.read_text())]
+
+def compare(target, prefix, binary, expected, directory, jobs):
+    """Runs every case on the target program against the reference results; exits on a mismatch."""
+    count = len(expected)
+    native = run_cases(prefix, binary, count, directory, jobs)
     # Long loops that end in an overflow panic can outlast the timeout on one
-    # backend only; those cases are inconclusive rather than mismatches.
-    slow = [i for i in range(count) if native[i] != llvm[i] and 'timeout' in (native[i][0], llvm[i][0])]
-    failures = [i for i in range(count) if native[i] != llvm[i] and i not in slow]
-    panics = sum(1 for r in llvm if r[0] == 101)
+    # side only; those cases are inconclusive rather than mismatches.
+    slow = [i for i in range(count) if native[i] != expected[i] and 'timeout' in (native[i][0], expected[i][0])]
+    failures = [i for i in range(count) if native[i] != expected[i] and i not in slow]
+    panics = sum(1 for r in expected if r[0] == 101)
     for i in failures[:20]:
-        print(f'MISMATCH case {i}: native={native[i]} llvm={llvm[i]}')
+        print(f'MISMATCH case {i}: {target}={native[i]} reference={expected[i]}')
     if failures:
         sys.exit(f'{len(failures)} of {count} {target} cases differ')
     how = f'under {Path(prefix[0]).name}' if prefix else 'on the host'
-    timed = f', {len(slow)} timed out on one backend' if slow else ''
-    print(f'PASS {target} native/LLVM differential: {count} cases ({panics} panics{timed}) {how}')
+    timed = f', {len(slow)} timed out on one side' if slow else ''
+    print(f'PASS {target} differential against x86-64 Linux: {count} cases ({panics} panics{timed}) {how}')
 
 def main():
     parser = argparse.ArgumentParser()
@@ -474,11 +457,13 @@ def main():
         staged = json.loads((args.run/'cases.json').read_text())
         prefix = runner(staged['target'])
         if prefix is None: sys.exit(f'no runner for {staged["target"]} on this machine')
-        outputs = {backend: args.run.resolve()/name for backend, name in staged['programs'].items()}
+        binary = args.run.resolve()/staged['program']
         if sys.platform != 'win32':  # artifact downloads drop the executable bit
-            for path in outputs.values(): path.chmod(path.stat().st_mode | 0o111)
-        compare(staged['target'], prefix, outputs, staged['count'], args.run, args.jobs)
+            binary.chmod(binary.stat().st_mode | 0o111)
+        compare(staged['target'], prefix, binary, load_expected(args.run/'expected.json'), args.run, args.jobs)
         return
+    if runner('x86_64-linux') is None:
+        print('SKIP differential: the x86-64 Linux reference needs an x86-64 Linux host'); return
     prefix = runner(args.target)
     if prefix is None and (args.build_only or args.stage): prefix = []
     elif prefix is None:
@@ -490,17 +475,19 @@ def main():
         args.stage.mkdir(parents=True)
         outputs = build(args, args.stage.resolve(), program)
         if outputs is None: sys.exit('clang is required to stage the differential')
-        programs = {backend: path.name for backend, path in outputs.items()}
-        (args.stage/'cases.json').write_text(json.dumps({'target': args.target, 'count': count, 'programs': programs}) + '\n')
-        print(f'STAGED {args.target} native/LLVM differential: {count} cases in {args.stage}')
+        save_expected(args.stage/'expected.json', run_cases([], outputs['reference'], count, args.stage, args.jobs))
+        outputs['reference'].unlink()
+        (args.stage/'cases.json').write_text(json.dumps({'target': args.target, 'program': outputs['native'].name}) + '\n')
+        print(f'STAGED {args.target} differential: {count} cases in {args.stage}')
         return
     with tempfile.TemporaryDirectory(prefix='dyn-native-diff-') as directory:
         outputs = build(args, Path(directory), program)
         if outputs is None: print(f'SKIP {args.target} differential: clang not installed'); return
         if args.build_only:
-            print(f'PASS {args.target} native and LLVM builds: {count} cases (not run)'); return
+            print(f'PASS {args.target} and reference builds: {count} cases (not run)'); return
         try:
-            compare(args.target, prefix, outputs, count, directory, args.jobs)
+            expected = run_cases([], outputs['reference'], count, directory, args.jobs)
+            compare(args.target, prefix, outputs['native'], expected, directory, args.jobs)
         except SystemExit:
             (Path(tempfile.gettempdir())/'dyn-native-diff-main.dyn').write_text(program)
             print('program saved to /tmp/dyn-native-diff-main.dyn')

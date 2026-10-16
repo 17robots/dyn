@@ -43,8 +43,8 @@ jobs:
         env:
           CC: clang-19 -fsanitize=address,undefined -fno-sanitize-recover=all
         run: python3 tests/macho-relocations.py
-      - name: Differential scalar backend experiment
-        run: just test-backend-experiment
+      - name: Native backend differential tests
+        run: just test-backend
       - name: Native debug compiler integration
         run: just test-native-debug
       - name: Qualify native vendor wrappers and generated bindings
@@ -68,8 +68,6 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           just artifact dyn-sanitize
-          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined tests/llvm-text-unit.c -o build/llvm-text-unit-sanitize
-          ./build/llvm-text-unit-sanitize
           python3 tests/compiler-contracts.py
           python3 tests/generics.py
           python3 tests/native-optimization.py
@@ -80,8 +78,8 @@ jobs:
               -Isrc tests/$unit.c $([ $unit = parser-recovery ] && echo src/parser.c src/snapshot.c) -pthread -o build/$unit-sanitize
             ./build/$unit-sanitize
           done
-          BUILD=build/backend-sanitize CFLAGS='-O1 -fsanitize=address,undefined -fno-omit-frame-pointer' python3 tools/backend-experiment/build.py
-          BUILD=build/backend-sanitize DYN=./build/dyn-release python3 tools/backend-experiment/test.py
+          BUILD=build/backend-sanitize CFLAGS='-O1 -fsanitize=address,undefined -fno-omit-frame-pointer' python3 tools/backend/build.py
+          BUILD=build/backend-sanitize DYN=./build/dyn-release python3 tools/backend/test.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -268,7 +268,6 @@ static uint64_t build_key(const DynSources *sources, const DynOptions *options,
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
@@ -283,7 +282,6 @@ static uint64_t codegen_key(const DynSources *sources,
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
@@ -470,7 +468,6 @@ static uint64_t module_key(const DynSources *sources, size_t first,
   hash = hash_bytes(hash, &chunks, sizeof(chunks));
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   size_t object_length = strlen(object);

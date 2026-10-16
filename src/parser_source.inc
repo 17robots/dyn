@@ -1,4 +1,4 @@
-/* Full-source syntax experiment. Included by parser.c; no semantic analysis. */
+/* Full-source syntax. Included by parser.c; no semantic analysis. */
 
 const char *exp_source_kind(unsigned kind) {
   static const char *const names[] = {

@@ -72,7 +72,7 @@ jobs:
       - name: Execute debug and release probes
         shell: bash
         run: python run-native-artifacts.py --target "${{ matrix.target }}"
-      - name: Compare native and LLVM debug builds
+      - name: Compare debug builds with the x86-64 Linux reference
         shell: bash
         run: python native-differential.py --run "differential/${{ matrix.target }}"
       - uses: actions/upload-artifact@v4
@@ -106,5 +106,5 @@ jobs:
           python3 tests/cross-runtime.py
           python3 tests/aggregate-abi.py --riscv
           python3 tests/riscv-linker.py
-      - name: Compare native arithmetic and control flow with external LLVM oracle
-        run: python3 tools/backend-experiment/native-differential.py --compiler build/dyn-release --target riscv64-linux --jobs 4
+      - name: Compare native arithmetic and control flow with the x86-64 Linux reference
+        run: python3 tools/backend/native-differential.py --compiler build/dyn-release --target riscv64-linux --jobs 4

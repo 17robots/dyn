@@ -105,14 +105,12 @@ typedef struct {
   bool quiet;
   bool verbose;
   bool runtime_support;
-  bool emit_ir;
   bool emit_object;
   bool emit_asm;
   bool no_link;
   bool shared;
   bool timings;
   bool no_cache;
-  bool no_lto;
   DynBackend backend;
   bool native_backend; /* Resolved for this command; part of the build cache key. */
   bool format_check;
@@ -254,13 +252,13 @@ void dyn_source_location(const DynSource *source, size_t byte,
 DynCheckResult dyn_check_sources(const DynSources *sources,
                                  const char *main_path, bool require_main);
 int dyn_codegen_main(const DynSource *source, const char *object_path,
-                     const char *ir_path, const char *asm_path, bool release,
+                     const char *asm_path, bool release,
                      bool debug_info, bool shared);
 /* owner_key is "root" or a rewritten dyn_m<hash> prefix. NULL emits one
    monolithic object. Every object sees the full typed program, but defines
    only symbols owned by owner_key. */
 int dyn_codegen_module(const DynSource *source, const char *object_path,
-                       const char *ir_path, const char *asm_path, bool release,
+                       const char *asm_path, bool release,
                        bool debug_info, bool shared, const char *owner_key);
 /* dyn_codegen_module in two steps: analyze and lower once (owner_key NULL
    keeps every body), then emit any number of owners from the shared result. */
@@ -272,23 +270,20 @@ static inline unsigned dyn_chunk_of_path(const char *path, unsigned chunks) {
     h = (h ^ (unsigned char)*path) * UINT64_C(1099511628211);
   return chunks > 1 ? (unsigned)(h % chunks) : 0;
 }
-int dyn_codegen_text(const DynSource *, const struct DynIrProgram *, const char *, bool, bool, bool);
-#ifdef DYN_NATIVE_BACKEND
-/* Native x86_64-linux ELF emission of the whole program. Returns 0 on success.
-   With report false, unsupported programs fail silently for LLVM fallback. */
+/* Native and Wasm emission of the whole program. Returns 0 on success.
+   With report false, unsupported programs fail without a diagnostic. */
 int dyn_wasm_object(const DynSource *, const struct DynIrProgram *, const char *, bool);
 int dyn_wasm_assembly(const DynSource *, const struct DynIrProgram *, const char *, bool);
 int dyn_native_object(const DynSource *, const struct DynIrProgram *,
                       const char *path, bool runtime_trace, bool debug_info,
                       bool shared, bool report);
-#endif
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, struct DynIrProgram *ir);
 /* Consumes syntax ownership after complete strict compact analysis. */
 int dyn_codegen_prepare_owned(DynSource *source, bool shared,
                               const char *owner_key, struct DynIrProgram *ir);
 int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
-                     const char *object_path, const char *ir_path,
+                     const char *object_path,
                      const char *asm_path, bool release, bool debug_info,
                      bool shared, const char *owner_key, unsigned chunk,
                      unsigned chunks);
@@ -307,8 +302,7 @@ int dyn_link_executable_objects(const DynContext *context,
                                 size_t object_count, const char *output_path,
                                 const char *const *link_inputs,
                                 size_t link_input_count, bool release,
-                                bool verbose, const char *lto_cache,
-                                unsigned lto_jobs);
+                                bool verbose);
 int dyn_link_shared(const DynContext *context, const char *object_path,
                     const char *output_path, const char *const *link_inputs,
                     size_t link_input_count, bool verbose);

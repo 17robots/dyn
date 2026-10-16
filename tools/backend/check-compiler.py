@@ -99,7 +99,7 @@ fn main() {
         assert ok([output]).stdout == b'native compiler ok\n'
         checks += 1
         # Independent output and optimization options must execute without fallback.
-        for flags in (['--emit-ir'], ['--emit-asm'], ['--cpu', 'native'],
+        for flags in (['--emit-asm'], ['--cpu', 'native'],
                       ['--opt-remarks'], ['--release', '--opt-level', '2']):
             result=run([candidate,'build',root,'--backend','native',*flags,'--output',output])
             assert result.returncode == 0, (flags,result.stderr)
