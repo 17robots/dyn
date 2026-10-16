@@ -32,7 +32,9 @@ preserves emitted instruction bytes, sections, symbols, relocations, constructor
 and debug/unwind data. Much of the native instruction stream uses `.byte`
 directives; this is an exact assembler representation, not a fully mnemonic
 instruction listing. Wasm output uses symbolic stack instructions and type
-directives. Export does not replace the native object with an LLVM-generated one.
+directives. When assembling Wasm output with Clang, pass
+`--target=wasm32 -mbulk-memory` for its memory copy/fill instructions.
+Export does not replace the native object with an LLVM-generated one.
 
 These switches retain normal object generation and linking. Add `--no-link` to
 stop before linking. Library object export uses

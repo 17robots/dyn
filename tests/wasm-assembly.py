@@ -71,7 +71,8 @@ pub fn text() []const u8 { return "assembly data" }
         if oracle:
             obj = root / ('roundtrip-' + mode + '.o')
             rebuilt = root / ('roundtrip-' + mode + '.wasm')
-            run([*clang, '--target=wasm32', '-c', assembly, '-o', obj])
+            # Clang 19 does not enable Wasm bulk memory by default.
+            run([*clang, '--target=wasm32', '-mbulk-memory', '-c', assembly, '-o', obj])
             run([linker, rebuilt, obj, runtime])
             run([node, '-e', constants['JS'], rebuilt])
     print('PASS Wasm stack assembly emitted' + (' with empty PATH' if os.name != 'nt' else '') + ('; independently assembled and executed debug/release' if oracle else ''))
