@@ -169,7 +169,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
     bool external = ELF64_ST_BIND(symbol->st_info) != STB_LOCAL;
     if (symbol->st_shndx == SHN_UNDEF) { entry[4] = 0x01; continue; } /* N_UNDF | N_EXT */
     if (section < 0) { ok = false; break; }
-    entry[4] = (unsigned char)(0x0e | external); entry[5] = (unsigned char)(section + 1); /* N_SECT */
+    entry[4] = (unsigned char)(0x0e | external | (external && symbol->st_other == 2 ? 0x10 : 0)); entry[5] = (unsigned char)(section + 1); /* N_SECT */
     put64(entry + 8, address[section] + symbol->st_value);
   }
   if (ok) ok = backend_write_object(path, data, total);

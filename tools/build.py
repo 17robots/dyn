@@ -87,7 +87,7 @@ def compiler_objects(kind, optimize, extra_sources=(), extra_inputs=()):
     names = []
     for source in [*sources, *extra_sources]:
         name = f'obj/{kind}/{source.stem}.o'
-        add(name, [source, *headers, *extra_inputs],
+        add(name, [source, *headers, *extra_inputs, *([COMPILER/'src/codegen.c', COMPILER/'tools/backend-experiment/output.h'] if source.name == 'codegen_text.c' else [])],
             [*cc, *object_cppflags, *cflags, *optimize, f'-I{COMPILER}/src', '-c', source, '-o', BUILD/name])
         names.append(name)
     return names + (['thinlto.o'] if with_llvm else [])
@@ -97,16 +97,13 @@ def compiler_link(name, objects):
         [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', BUILD/name],
         objects)
 
-# Native emission is available on POSIX hosts and in the independent Windows
-# build. The reference Windows build retains LLVM during host qualification.
+# Native emission also bootstraps portable runtime support on every host.
 backend_experiment = COMPILER/'tools/backend-experiment'
-native_flags, native_sources, native_inputs = [], [], []
-if sys.platform != 'win32' or not with_llvm:
-    native_flags = ['-DDYN_NATIVE_BACKEND']
-    native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
-    native_inputs = [backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc',
-                     backend_experiment/'coff.inc', backend_experiment/'macho.inc',
-                     backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
+native_flags = ['-DDYN_NATIVE_BACKEND']
+native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
+native_inputs = [backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc',
+                 backend_experiment/'coff.inc', backend_experiment/'macho.inc',
+                 backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
 default_flags = native_flags
 default_sources = native_sources
 default_inputs = native_inputs
@@ -128,53 +125,24 @@ compiler_link('backend-benchmark', [*backend_benchmark_objects, 'obj/benchmark/b
     'thinlto.o'])
 
 
-add('dynrt_start.o', [f'{COMPILER}/runtime/linux_x86_64_start.S'],
-    [*cc, '-c', f'{COMPILER}/runtime/linux_x86_64_start.S', '-o', f'{BUILD}/dynrt_start.o'])
-
-add('dynrt_release.o', [f'{COMPILER}/runtime/linux_x86_64_start.S'],
-    [*cc, '-DDYN_RELEASE', '-c', f'{COMPILER}/runtime/linux_x86_64_start.S', '-o', f'{BUILD}/dynrt_release.o'])
-
-add('dynrt_support.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*cc, '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_support.o'])
-
-add('dynrt_support_pic.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*cc, '-O2', '-fPIC', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_support_pic.o'])
-
-add('dynrt_aarch64_support_pic.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*clang, *([] if not with_llvm and sys.platform == 'linux' and platform.machine() == 'aarch64' else ['--target=aarch64-linux-gnu']), '-DDYN_AARCH64', '-O2', '-fPIC', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_aarch64_support_pic.o'])
-
-add('dynrt_shared.o', [f'{COMPILER}/runtime/linux_x86_64_start.S'],
-    [*cc, '-DDYN_SHARED', '-fPIC', '-c', f'{COMPILER}/runtime/linux_x86_64_start.S', '-o', f'{BUILD}/dynrt_shared.o'])
-
-add('dynrt_aarch64_shared.o', [f'{COMPILER}/runtime/linux_aarch64_start.S'],
-    [*clang, *([] if not with_llvm and sys.platform == 'linux' and platform.machine() == 'aarch64' else ['--target=aarch64-linux-gnu']), '-DDYN_SHARED', '-DDYN_RELEASE', '-fPIC', '-c', f'{COMPILER}/runtime/linux_aarch64_start.S', '-o', f'{BUILD}/dynrt_aarch64_shared.o'])
-
-add('dynrt_aarch64_start.o', [f'{COMPILER}/runtime/linux_aarch64_start.S'],
-    [*clang, *([] if not with_llvm and sys.platform == 'linux' and platform.machine() == 'aarch64' else ['--target=aarch64-linux-gnu']), '-c', f'{COMPILER}/runtime/linux_aarch64_start.S', '-o', f'{BUILD}/dynrt_aarch64_start.o'])
-
-add('dynrt_aarch64_release.o', [f'{COMPILER}/runtime/linux_aarch64_start.S'],
-    [*clang, *([] if not with_llvm and sys.platform == 'linux' and platform.machine() == 'aarch64' else ['--target=aarch64-linux-gnu']), '-DDYN_RELEASE', '-c', f'{COMPILER}/runtime/linux_aarch64_start.S', '-o', f'{BUILD}/dynrt_aarch64_release.o'])
-
-add('dynrt_aarch64_support.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*clang, *([] if not with_llvm and sys.platform == 'linux' and platform.machine() == 'aarch64' else ['--target=aarch64-linux-gnu']), '-DDYN_AARCH64', '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_aarch64_support.o'])
-
-add('dynrt_windows_start.o', [f'{COMPILER}/runtime/windows_x86_64_start.S', f'{COMPILER}/runtime/windows_stack_probe.S'],
-    [*clang, *([] if not with_llvm and sys.platform == 'win32' else ['--target=x86_64-pc-windows-msvc']), '-c', f'{COMPILER}/runtime/windows_x86_64_start.S', '-o', f'{BUILD}/dynrt_windows_start.o'])
-
-add('dynrt_windows_shared.o', [f'{COMPILER}/runtime/windows_x86_64_start.S', f'{COMPILER}/runtime/windows_stack_probe.S'],
-    [*clang, *([] if not with_llvm and sys.platform == 'win32' else ['--target=x86_64-pc-windows-msvc']), '-DDYN_SHARED', '-DDYN_RELEASE', '-c', f'{COMPILER}/runtime/windows_x86_64_start.S', '-o', f'{BUILD}/dynrt_windows_shared.o'])
-
-add('dynrt_windows_support.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*clang, *([] if not with_llvm and sys.platform == 'win32' else ['--target=x86_64-pc-windows-msvc']), '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_windows_support.o'])
-
-add('dynrt_macos_start.o', [f'{COMPILER}/runtime/macos_aarch64_start.S'],
-    [*clang, *([] if not with_llvm and sys.platform == 'darwin' else ['--target=arm64-apple-macosx']), '-c', f'{COMPILER}/runtime/macos_aarch64_start.S', '-o', f'{BUILD}/dynrt_macos_start.o'])
-
-add('dynrt_macos_shared.o', [f'{COMPILER}/runtime/macos_aarch64_start.S'],
-    [*clang, *([] if not with_llvm and sys.platform == 'darwin' else ['--target=arm64-apple-macosx']), '-DDYN_SHARED', '-DDYN_RELEASE', '-c', f'{COMPILER}/runtime/macos_aarch64_start.S', '-o', f'{BUILD}/dynrt_macos_shared.o'])
-
-add('dynrt_macos_support.o', [f'{COMPILER}/runtime/reference_support.c'],
-    [*clang, *([] if not with_llvm and sys.platform == 'darwin' else ['--target=arm64-apple-macosx']), '-DDYN_AARCH64', '-DDYN_RELEASE', '-O2', '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-c', f'{COMPILER}/runtime/reference_support.c', '-o', f'{BUILD}/dynrt_macos_support.o'])
+# Runtime objects are portable build products: no target C compiler/assembler.
+NATIVE_STARTUPS = [
+    'dynrt_start.o', 'dynrt_release.o', 'dynrt_shared.o',
+    'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_shared.o',
+    'dynrt_windows_start.o', 'dynrt_windows_shared.o',
+    'dynrt_macos_start.o', 'dynrt_macos_shared.o']
+for name in NATIVE_STARTUPS:
+    add(name, [COMPILER/'tools/native-runtime.py', *sorted(COMPILER.glob('runtime/*.S'))],
+        [sys.executable, COMPILER/'tools/native-runtime.py', '--output', BUILD/name])
+NATIVE_SUPPORT = {
+    'dynrt_support.o': 'x86_64-linux', 'dynrt_support_pic.o': 'x86_64-linux',
+    'dynrt_aarch64_support.o': 'aarch64-linux', 'dynrt_aarch64_support_pic.o': 'aarch64-linux',
+    'dynrt_windows_support.o': 'x86_64-windows', 'dynrt_macos_support.o': 'aarch64-macos'}
+for name, target in NATIVE_SUPPORT.items():
+    compiler = BUILD/('dyn-release.exe' if sys.platform == 'win32' else 'dyn-release')
+    add(name, [COMPILER/'tools/build-native-support.py', *sorted(COMPILER.glob('runtime/support/*.dyn')), compiler],
+        [sys.executable, COMPILER/'tools/build-native-support.py', '--compiler', compiler,
+         '--target', target, '--output', BUILD/name], needs=['dyn-release'])
 
 add('llvm-bridge.o', [f'{COMPILER}/runtime/llvm_bridge.c'],
     [*cc, '-O2', '-fno-stack-protector', '-c', f'{COMPILER}/runtime/llvm_bridge.c', '-o', f'{BUILD}/llvm-bridge.o'])
@@ -187,6 +155,10 @@ WASM_RUNTIME = ['dynrt_wasm.o', 'dynrt_wasi_start.o', 'dynrt_wasi_support.o']
 for name in WASM_RUNTIME:
     add(name, [COMPILER/'tools/wasm-runtime.py'],
         [sys.executable, COMPILER/'tools/wasm-runtime.py', '--output', BUILD/name])
+
+add('llvm-text-unit-test', [COMPILER/'tests/llvm-text-unit.c', COMPILER/'src/llvm_text.c',
+    COMPILER/'tools/backend-experiment/output.h', *headers],
+    [*cc, *cflags, COMPILER/'tests/llvm-text-unit.c', '-o', BUILD/'llvm-text-unit-test'])
 
 add('cache-failure-test', [f'{COMPILER}/tests/cache-failure.c', f'{COMPILER}/src/cache.c', f'{COMPILER}/src/build.c', *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', 'tests/cache-failure.c', f'{COMPILER}/src/build.c', '-pthread', '-o', f'{BUILD}/cache-failure-test'])
@@ -254,11 +226,10 @@ add('interface-test', [COMPILER/'tests/interface-cache.c', *[COMPILER/'src'/n fo
 
 ALL = ['dynrt_wasi_start.o', 'dynrt_wasi_support.o', 'dynrt_wasm.o', 'dyn', 'dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o', 'dynrt_support_pic.o', 'dynrt_aarch64_support_pic.o', 'dynrt_shared.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_windows_shared.o', 'dynrt_macos_shared.o', 'llvm-bridge.o']
 
-HOST = ['dyn-release', *WASM_RUNTIME] + (
-    ['dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_windows_shared.o'] if sys.platform == 'win32' else
-    ['dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_macos_shared.o'] if sys.platform == 'darwin' else
-    ['dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_support_pic.o'] if platform.machine() == 'aarch64' else
-    ['dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o', 'dynrt_shared.o', 'dynrt_support_pic.o'])
+if not with_llvm:
+    ALL.remove('llvm-bridge.o')
+
+HOST = ['dyn-release', *WASM_RUNTIME, *NATIVE_STARTUPS, *NATIVE_SUPPORT]
 if sys.platform == 'win32':
     for name, (inputs, command) in artifacts.items():
         if name.startswith('dyn') and not name.endswith('.o'):

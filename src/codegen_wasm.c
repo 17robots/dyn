@@ -1320,6 +1320,13 @@ static void statement(WG *g, const DynIrStmt *s) {
     op(g, 0);
     break;
   case DYN_STMT_IF:
+    if (s->expression < g->ir->expression_count &&
+        g->ir->expressions[s->expression].kind == DYN_EXPR_BOOL) {
+      bool chosen = g->ir->expressions[s->expression].boolean;
+      block(g, chosen ? s->body_start : s->else_start,
+            chosen ? s->body_count : s->else_count);
+      break;
+    }
     v = expr(g, s->expression);
     get(g, v);
     begin(g, 4, 0x40);
@@ -1645,8 +1652,10 @@ static void finishbody(WG *g) {
   g->localtypes.n = 0;
   g->bodyrelocs.n = 0;
 }
+#include "codegen_wasm_asm.inc"
+
 static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
-                            const char *path, bool report) {
+                            const char *path, bool report, bool assembly) {
   WG g = {.ir = ir, .source = source};
   size_t nf = ir->function_count;
   g.fn_symbol = calloc(nf, sizeof(unsigned));
@@ -1907,8 +1916,9 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
       wn(&allowed, name, strlen(name));
       wb(&allowed, '\n');
     }
-  bool ok = !g.failed && backend_write_object(imports, allowed.p, allowed.n) &&
-            backend_write_object(path, out.p, out.n);
+  bool ok = !g.failed && (assembly ? wasm_assembly_write(&g, path, init_type)
+            : backend_write_object(imports, allowed.p, allowed.n) &&
+              backend_write_object(path, out.p, out.n));
   free(imports);
   free(allowed.p);
   if (!ok && report)
@@ -1938,8 +1948,8 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   return ok ? 0 : 2;
 }
 
-int dyn_wasm_object(const DynSource *source, const DynIrProgram *ir,
-                    const char *path, bool report) {
+static int wasm_emit(const DynSource *source, const DynIrProgram *ir,
+                     const char *path, bool report, bool assembly) {
   WHeap *heap = wasm_heap_new();
   if (!heap) {
     if (report)
@@ -1954,8 +1964,16 @@ int dyn_wasm_object(const DynSource *source, const DynIrProgram *ir,
       fprintf(stderr, "error: Wasm compiler allocation failed\n");
     result = 2;
   } else
-    result = wasm_object_impl(source, ir, path, report);
+    result = wasm_object_impl(source, ir, path, report, assembly);
   wasm_heap = heap->previous;
   wasm_heap_destroy(heap);
   return result;
+}
+
+int dyn_wasm_object(const DynSource *source, const DynIrProgram *ir, const char *path, bool report) {
+  return wasm_emit(source, ir, path, report, false);
+}
+
+int dyn_wasm_assembly(const DynSource *source, const DynIrProgram *ir, const char *path, bool report) {
+  return wasm_emit(source, ir, path, report, true);
 }

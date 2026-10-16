@@ -271,6 +271,16 @@ static void isa_shift(BackendContext *ctx, Reg r, int kind) {
     a64_word(ctx, op | a64_reg[R_C] << 16 | a64_reg[r] << 5 | a64_reg[r]);
     return;
   }
+  if (ctx->bmi2) {
+    /* VEX.NDD.LZ.F2/F3/66.0F38.W1 F7 /r: RCX is VEX.vvvv.
+       REX.R and REX.B are inverted in VEX because source == destination. */
+    CODE(0xc4);
+    byte(ctx, x86_extended[r] ? 0x42 : 0xe2);
+    byte(ctx, kind == SHIFT_LEFT ? 0xf1 : kind == SHIFT_RIGHT ? 0xf3 : 0xf2);
+    CODE(0xf7);
+    byte(ctx, 0xc0 | (x86_code[r] << 3) | x86_code[r]);
+    return;
+  }
   byte(ctx, x86_extended[r] ? 0x49 : 0x48); byte(ctx, 0xd3);
   byte(ctx, (kind == SHIFT_LEFT ? 0xe0 : kind == SHIFT_RIGHT ? 0xe8 : 0xf8) | x86_code[r]);
 }

@@ -28,7 +28,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-no-llvm-') as directory:
     forbidden.chmod(0o755)
     env = dict(os.environ, BUILD=str(root / 'build'), DYN_WITH_LLVM='0',
                CC='gcc', CXX=str(forbidden), LLVM_CONFIG=str(forbidden),
-               CLANG=str(forbidden), DYN_SDK=str(ROOT))
+               CLANG=str(forbidden), DYN_SDK=str(ROOT),
+               DYN_ASSEMBLY_ORACLE='0', DYN_TEXT_ORACLE='0')
     env.pop('DYN_LINKER', None)
     run(['python3', 'tools/build.py', 'dyn', 'host'], env)
     compiler = root / 'build/dyn'
@@ -66,15 +67,15 @@ fn main() {
         else:
             assert data[:2] == b'\x64\x86'
     # Unsupported modes must fail before producing output, never silently fall back.
-    for options in (['--emit-ir'], ['--emit-asm'],
-                    ['--backend', 'llvm']):
+    for options in (['--backend', 'llvm'],):
         destination = root / 'unsupported'
         result = run([compiler, 'build', app, '--output', destination, *options], env, success=False)
         assert 'LLVM is disabled' in result.stderr, result.stderr
         assert not destination.exists()
     env['DYN'] = str(compiler)
     for test in ('lsp-navigation', 'shared-host', 'compiler-contracts', 'aggregate-abi',
-                 'panic-lifetime', 'native-release', 'wasm-independent', 'wrap-enum-values', 'sync-host', 'concurrency-net-host'):
+                 'panic-lifetime', 'native-release', 'native-optimization', 'text-output', 'native-assembly', 'cross-runtime', 'wasm-independent', 'wrap-enum-values', 'sync-host', 'concurrency-net-host'):
         run(['python3', 'tests/'+test+'.py'], env)
+    run(['python3', 'tests/runtime-support.py'], env)
     run(['python3', 'tools/package-sdk.py'], env)
 print('PASS LLVM-free GCC build, debug/release execution, shared libraries, four object targets, LSP and relocated SDK')

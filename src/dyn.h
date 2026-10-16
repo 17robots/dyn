@@ -58,6 +58,7 @@ typedef struct {
 typedef struct {
   const DynTarget *target;
   const DynOptimization *optimization;
+  bool runtime_support; /* Internal freestanding support-object compilation. */
   DynDiagnosticSink diagnostic;
   void *diagnostic_data;
   bool json_diagnostics;
@@ -103,6 +104,7 @@ typedef struct {
   bool debug_info_set;
   bool quiet;
   bool verbose;
+  bool runtime_support;
   bool emit_ir;
   bool emit_object;
   bool emit_asm;
@@ -270,10 +272,12 @@ static inline unsigned dyn_chunk_of_path(const char *path, unsigned chunks) {
     h = (h ^ (unsigned char)*path) * UINT64_C(1099511628211);
   return chunks > 1 ? (unsigned)(h % chunks) : 0;
 }
+int dyn_codegen_text(const DynSource *, const struct DynIrProgram *, const char *, bool, bool, bool);
 #ifdef DYN_NATIVE_BACKEND
 /* Native x86_64-linux ELF emission of the whole program. Returns 0 on success.
    With report false, unsupported programs fail silently for LLVM fallback. */
 int dyn_wasm_object(const DynSource *, const struct DynIrProgram *, const char *, bool);
+int dyn_wasm_assembly(const DynSource *, const struct DynIrProgram *, const char *, bool);
 int dyn_native_object(const DynSource *, const struct DynIrProgram *,
                       const char *path, bool runtime_trace, bool debug_info,
                       bool shared, bool report);

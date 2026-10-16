@@ -183,8 +183,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
                     continue
                 text = line.split(':\t', 1)[1]
                 lines.append(re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'0x[0-9a-f]+', 'X', text))))
+            # Temporary assembler labels are not functions; linkers may retain
+            # or discard them without changing instruction/function order.
             order = [line.split()[2] for line in run('nm', '-n', path).stdout.splitlines()
-                     if len(line.split()) == 3 and line.split()[1] in 'tT']
+                     if len(line.split()) == 3 and line.split()[1] in 'tT'
+                     and not line.split()[2].startswith('.L')]
             return lines, order
 
         for name, extra in (('plain', []), ('profiled', ['--sample-profile', profile])):

@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-independent-wasm-') as directory:
     oracle.function('c_single', [0x7d], [0x7d], [get(0), b'\x43\x00\x00\x80\x3f\x92'])
     oracle.write(work/'oracle.o')
     env = dict(os.environ, DYN=str(compiler), WASM_ORACLE=str(work/'oracle.o'),
-               DYN_SDK=str(ROOT), DYN_LINKER='builtin')
+               DYN_SDK=str(ROOT), DYN_LINKER='builtin', DYN_ASSEMBLY_ORACLE='0')
     if os.environ.get('DYN_TEST_INSTALLED') == '1':
         env.pop('DYN_SDK', None)
     if os.name != 'nt':
@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-independent-wasm-') as directory:
         tools.mkdir()
         (tools/'node').symlink_to(node)
         env['PATH'] = str(tools)
-    for name in ('wasm-browser', 'wasm-memory', 'wasi', 'wasm-semantics'):
+    for name in ('wasm-browser', 'wasm-memory', 'wasi', 'wasm-semantics', 'wasm-assembly'):
         subprocess.run([sys.executable, str(ROOT/'tests'/f'{name}.py')],
                        cwd=ROOT, env=env, check=True, timeout=180)
     stack = work/'stack'
