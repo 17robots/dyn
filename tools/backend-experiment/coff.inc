@@ -163,12 +163,12 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
   const unsigned char *contents[COFF_SECTION_LIMIT] = {ctx->text.data, ctx->rodata.data, ctx->globals_data.data,
     ctx->constants_data.data, xdata.data, pdata.data};
   size_t sizes[COFF_SECTION_LIMIT] = {ctx->text.n, ctx->rodata.n, ctx->globals_data.n, ctx->constants_data.n, xdata.n, pdata.n};
-  const char *names[COFF_SECTION_LIMIT] = {".text", ".rdata", ".data", ".rdata", ".xdata", ".pdata",
+  const char *names[COFF_SECTION_LIMIT] = {".text", ".rdata", ".bss", ".rdata", ".xdata", ".pdata",
     ".debug_info", ".debug_abbrev", ".debug_line", ".debug_frame"};
   uint32_t flags[COFF_SECTION_LIMIT] = {
     0x60500020u, /* code, execute, read, 16-byte aligned */
     0x40400040u, /* initialized data, read, 8-byte aligned */
-    0xc0400040u, /* initialized data, read, write */
+    0xc0400080u, /* zero-filled data, read, write */
     0x40400040u,
     0x40300040u, /* .xdata: initialized data, read, 4-byte aligned */
     0x40300040u};
@@ -193,7 +193,9 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
 
   size_t header = 20 + 40 * section_count, cursor = header, raw[COFF_SECTION_LIMIT], relocation_at[COFF_SECTION_LIMIT];
   for (unsigned i = 0; i < section_count; ++i) {
-    raw[i] = cursor = (cursor + 15) & ~(size_t)15; cursor += sizes[i];
+    raw[i] = cursor = (cursor + 15) & ~(size_t)15;
+    if (i != COFF_DATA - 1) cursor += sizes[i];
+    else raw[i] = 0;
     /* Over 65535 relocations: the count moves into an extra first entry. */
     size_t entries = relocation_counts[i] + (relocation_counts[i] > 0xfffe);
     relocation_at[i] = cursor; cursor += 10 * entries;
@@ -230,7 +232,7 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
     put16(entry + 12, (uint16_t)(i + 1));
     entry[16] = 3; /* IMAGE_SYM_CLASS_STATIC */
     put32(h + 16, (uint32_t)sizes[i]); put32(h + 20, sizes[i] ? (uint32_t)raw[i] : 0);
-    if (sizes[i]) memcpy(data + raw[i], contents[i], sizes[i]);
+    if (sizes[i] && i != COFF_DATA - 1) memcpy(data + raw[i], contents[i], sizes[i]);
     size_t count = relocation_counts[i];
     uint32_t characteristics = flags[i];
     if (count) {

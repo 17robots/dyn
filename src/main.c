@@ -193,68 +193,6 @@ static int add_source_native_links(const DynContext *context,
   }
   return 0;
 }
-typedef struct {
-  const DynSource *merged;
-  bool thin_lto;
-  const DynOptions *options;
-  const char *compiler, *output, *root, *cache_root;
-  /* Analyzed and lowered once by the parent; forked workers share it. */
-  const DynIrProgram *ir;
-} ModuleBuild;
-static uint64_t path_hash(const char *s) {
-  uint64_t h = UINT64_C(1469598103934665603);
-  for (; *s; ++s) {
-    h ^= (unsigned char)*s;
-    h *= UINT64_C(1099511628211);
-  }
-  return h;
-}
-static int build_module(const DynSources *sources, size_t first, size_t count,
-                        unsigned chunk, unsigned chunks, void *raw,
-                        uint64_t *value) {
-  ModuleBuild *b = raw;
-  char object[4096], owner[32];
-  bool thin = b->thin_lto;
-  /* Chunk counts never exceed 64, so ids stay unique per job. */
-  *value = (uint64_t)first * 64 + chunk;
-  if (snprintf(object, sizeof(object), "%s.dynmod.%llu.%s", b->output,
-               (unsigned long long)*value, thin ? "bc" : "o") >= (int)sizeof(object))
-    return 2;
-  char *full = realpath(sources->items[first].path, NULL);
-  if (!full)
-    return 2;
-  char *slash = strrchr(full, '/');
-  if (slash)
-    *slash = 0;
-  if (!strcmp(full, b->root))
-    strcpy(owner, "root");
-  else
-    snprintf(owner, sizeof(owner), "dyn_m%016llx",
-             (unsigned long long)path_hash(full));
-  free(full);
-  if (!b->ir)
-    return 1;
-  /* Callers depend on signatures; a chunk also depends on which generic
-     instances it emits. */
-  uint64_t key = b->ir->interface_hash ^
-                 dyn_codegen_chunk_instances(b->merged, b->ir, owner, chunk, chunks);
-  if (dyn_module_cache_restore(sources, first, count, chunk, chunks,
-                               key, b->options,
-                               b->compiler, b->cache_root, object)) {
-    if (b->options->verbose)
-      fprintf(stderr, "cached module %s\n", sources->items[first].path);
-    return 0;
-  }
-  int result = dyn_codegen_emit(b->merged, b->ir, object, NULL, NULL,
-                                b->options->release, b->options->debug_info,
-                                false, owner, chunk, chunks);
-  if (!result)
-    dyn_module_cache_store(sources, first, count, chunk, chunks,
-                           key, b->options,
-                           b->compiler, b->cache_root, object);
-  return result;
-}
-
 static double elapsed_ms(struct timespec start) {
   struct timespec end;
   clock_gettime(CLOCK_MONOTONIC, &end);
@@ -533,7 +471,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   const char *output = run               ? run_output
                        : options->output ? options->output
                                          : base;
-  // Run uses shared module artifacts, but never persists its temporary executable.
+  // Run reuses native objects, but never persists its temporary executable.
   bool cacheable = strcmp(context.target->arch, "wasm32") && !options->shared && !options->no_link &&
                    !options->emit_ir && !options->emit_object &&
                    !options->emit_asm;
@@ -577,103 +515,42 @@ static int execute_command(DynOptions *options, const char *compiler) {
     fprintf(stderr, "error: output path too long\n");
     dyn_sources_free(&sources); free(main_path); free(base); return 2;
   }
-  DynSource module_source = {0};
   phase = timer_start();
-  uint64_t *module_ids = NULL;
-  size_t module_count = 0;
-  char **module_objects = NULL;
-  bool modular = cacheable, native_built = false;
-  char cache_root[4096];
-  const char *cache = NULL;
-  if (modular) {
-    char *root = realpath(options->input, NULL);
-    cache = !options->no_cache &&
-                    dyn_cache_directory(cache_root, sizeof(cache_root))
-                ? cache_root : NULL;
-    if (!root) result = 2;
-    if (!result)
-      result = dyn_sources_merge(&sources, main_path, &module_source);
-    module_source.context = context;
-    bool thin_lto = false;
-    ModuleBuild module_build = {.merged = &module_source,
-                                .thin_lto = thin_lto,
-                                .options = options,
-                                .compiler = compiler,
-                                .output = output,
-                                .root = root,
-                                .cache_root = cache};
-    DynIrProgram shared_ir;
-    bool prepared = false;
-    if (!result) {
-      result = dyn_codegen_prepare_owned(&module_source, false, NULL, &shared_ir);
-      prepared = !result;
-      module_build.ir = prepared ? &shared_ir : NULL;
-    }
-    if (!result && native)
-      native_built = !emit_native(&module_source, &shared_ir, object, NULL, NULL, options);
-    if (!result && native && !native_built && options->backend == DYN_BACKEND_NATIVE)
-      result = 1;
-    if (!result && !native_built)
-      result = dyn_build_plan_run(&sources, options->jobs, build_module,
-                                  &module_build, &module_ids, &module_count);
-    if (prepared)
-      dyn_codegen_release(&shared_ir);
-    free(root);
-    if (!result && module_count) {
-      module_objects = calloc(module_count, sizeof(*module_objects));
-      if (!module_objects)
-        result = 2;
-    }
-    bool thin = thin_lto;
-    for (size_t i = 0; !result && i < module_count; ++i) {
-      module_objects[i] = malloc(4096);
-      if (!module_objects[i] ||
-          snprintf(module_objects[i], 4096, "%s.dynmod.%llu.%s", output,
-                   (unsigned long long)module_ids[i],
-                   thin ? "bc" : "o") >= 4096)
-        result = 2;
-    }
-  } else {
+  /* Native objects depend on source and code-generation options, not link
+     inputs or output names. Reuse them when relinking or running again. */
+  bool restored = cacheable && dyn_object_cache_restore(
+      &sources, options, compiler, output, object);
+  if (restored && options->verbose)
+    fprintf(stderr, "cached native object\n");
+  if (!restored) {
+    DynSource module_source = {0};
     result = dyn_sources_merge(&sources, main_path, &module_source);
     module_source.context = context;
+    DynIrProgram prepared;
+    bool have_ir = false;
     if (!result) {
-      DynIrProgram prepared;
       result = dyn_codegen_prepare_owned(&module_source, options->shared, NULL, &prepared);
-      bool have_ir = !result;
-      if (!result && native) {
-        native_built = !emit_native(&module_source, &prepared, object,
-            options->emit_ir ? ir : NULL, options->emit_asm ? assembly : NULL, options);
-        if (!native_built && options->backend == DYN_BACKEND_NATIVE)
-          result = 1;
-      }
-      if (!result && !native_built)
-        result = dyn_codegen_emit(&module_source, &prepared, object,
-            options->emit_ir ? ir : NULL, options->emit_asm ? assembly : NULL,
-            options->release, options->debug_info, options->shared, NULL, 0, 1);
-      if (have_ir)
-        dyn_codegen_release(&prepared);
+      have_ir = !result;
     }
+    if (!result)
+      result = emit_native(&module_source, &prepared, object,
+          options->emit_ir ? ir : NULL, options->emit_asm ? assembly : NULL, options);
+    if (have_ir)
+      dyn_codegen_release(&prepared);
+    dyn_source_free(&module_source);
+    if (!result && cacheable)
+      dyn_object_cache_store(&sources, options, compiler, output, object);
   }
   if (options->timings)
     fprintf(stderr, "timing codegen %.3f ms\n", elapsed_ms(phase));
-  dyn_source_free(&module_source);
-  if (native_built)
-    modular = false;
   phase = timer_start();
   if (!result && !options->no_link)
-    result =
-        options->shared
-            ? dyn_link_shared(&context, object, output, options->link_inputs,
-                              options->link_input_count, options->verbose)
-        : modular
-            ? dyn_link_executable_objects(
-                  &context, (const char *const *)module_objects, module_count,
-                  output, options->link_inputs, options->link_input_count,
-                  options->release, options->verbose, cache, options->jobs)
-            : dyn_link_executable(&context, object, output,
-                                  options->link_inputs,
-                                  options->link_input_count, options->release,
-                                  options->verbose);
+    result = options->shared
+        ? dyn_link_shared(&context, object, output, options->link_inputs,
+                          options->link_input_count, options->verbose)
+        : dyn_link_executable(&context, object, output, options->link_inputs,
+                              options->link_input_count, options->release,
+                              options->verbose);
   if (!result && !run && cacheable)
     dyn_cache_store(&sources, options, compiler, output);
   if (options->timings && !options->no_link)
@@ -685,14 +562,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
       if (imports) { sprintf(imports, "%s.imports", object); remove(imports); free(imports); }
     }
   }
-  if (module_objects)
-    for (size_t i = 0; i < module_count; ++i) {
-      if (module_objects[i])
-        remove(module_objects[i]);
-      free(module_objects[i]);
-    }
-  free(module_objects);
-  free(module_ids);
   if (!result && !options->quiet)
     printf("built %s\n", options->no_link ? object : output);
   if (!result && run) {

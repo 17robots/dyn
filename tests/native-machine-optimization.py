@@ -35,6 +35,30 @@ fn pressure(seed: i64) i64 {
   return total + escaped
 }
 '''
+# Small aggregate copies must retain memmove semantics at every byte
+# alignment, including overlapping source/destination and exact self-copy.
+copy_kernels = []
+for size in (1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 40, 63, 64, 65, 129):
+    shifts = sorted(set((0, -1, 1, -3, 3, -7, 7, -size, size, -size-1, size+1)))
+    name = f'copy_case_{size}'
+    source += f'''
+struct CopyBlock{size} {{ bytes: [{size}]u8 }}
+fn {name}(shift: i64) {{
+  storage: [520]u8 = []
+  for i in 0..520 {{ storage[i] = #cast(u8) (i % 251) }}
+  origin: usize = 193
+  destination := #cast(usize) (#cast(i64) origin + shift)
+  from := #cast(*CopyBlock{size}) &storage[origin]
+  to := #cast(*CopyBlock{size}) &storage[destination]
+  to.* = from.*
+  for i in 0..520 {{
+    expected := i
+    if i >= destination && i < destination + {size} {{ expected = origin + i - destination }}
+    if storage[i] != #cast(u8) (expected % 251) {{ #panic("overlapping small aggregate copy") }}
+  }}
+}}
+'''
+    copy_kernels.extend(f'{name}({shift})' for shift in shifts)
 kernels = []
 for t in ('u32', 'i32', 'u64', 'i64'):
     for op, name in (('+', 'add'), ('-', 'sub'), ('&', 'and'), ('|', 'or'), ('^', 'xor')):
@@ -60,7 +84,8 @@ source += '''fn main() {
     if result != 30 * (36 * signed_seed + 204) + signed_seed + 10 { #panic("register pressure/calls/escape") }
   }
 '''
-source += '\n'.join(f'  {name}()' for name in kernels) + '\n}\n'
+source += '\n'.join(f'  {name}()' for name in kernels) + '\n'
+source += '\n'.join(f'  {call}' for call in copy_kernels) + '\n}\n'
 with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
     work = Path(directory)
     module = work/'src'
@@ -71,6 +96,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
         p = run(DYN, 'build', module, '--release', '--opt-level', level,
                 '--opt-remarks', '--emit-object', '--output', output)
         run(output)
+        if level == 2 and platform.machine().lower() in ('x86_64', 'amd64') and shutil.which('objdump'):
+            listing = run('objdump', '-d', '--disassemble=copy_case_40', output.with_suffix('.o')).stdout
+            assert '<copy_case_40>:' in listing, listing
+            assert not re.search(r'\bstd\b|\brep(?:z)? movsb\b', listing), 'small copies regressed to direction-flag byte strings'
         if level == 3:
             optimized_isa = platform.machine().lower() in ('x86_64', 'amd64', 'aarch64', 'arm64')
             if optimized_isa:
@@ -121,4 +150,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
     assert 'vectorized' not in p.stderr, p.stderr
     failed = subprocess.run([str(checked)], capture_output=True)
     assert failed.returncode != 0, 'checked overflow disappeared'
-print('PASS register pressure, calls, loop liveness, escapes, SSE2/NEON arithmetic, aliases and scalar tails')
+print('PASS register pressure, calls, loop liveness, escapes, overlapping copies, SSE2/NEON arithmetic, aliases and scalar tails')

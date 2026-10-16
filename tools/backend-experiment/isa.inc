@@ -43,11 +43,28 @@ static void allocation_move(BackendContext *ctx, unsigned dest, unsigned source)
 static unsigned x86_argument_register(BackendContext *ctx, int cls) {
   return ctx->win64 ? x86_win64_arguments[cls] : x86_sysv_arguments[cls];
 }
-/* REX.W opcode with a hardware register and [base + disp32] (base RSP or RBP). */
-static void x86_memory(BackendContext *ctx, unsigned opcode, unsigned reg, unsigned base, uint32_t displacement) {
-  byte(ctx, 0x48 | (reg >= 8) << 2); byte(ctx, opcode); byte(ctx, 0x80 | (reg & 7) << 3 | base);
+/* ModRM (+SIB) and displacement for [base + displacement] with base RSP or
+   RBP: no displacement, 8 bits or 32 bits, whichever is shortest. */
+static void x86_address(BackendContext *ctx, unsigned reg, unsigned base, uint32_t displacement) {
+  int32_t value = (int32_t)displacement;
+  unsigned mode = value == 0 && base != 5 ? 0x00 : value >= -128 && value <= 127 ? 0x40 : 0x80;
+  byte(ctx, mode | (reg & 7) << 3 | base);
   if (base == 4) byte(ctx, 0x24);
-  word(ctx, displacement);
+  if (mode == 0x40) byte(ctx, (uint8_t)value);
+  else if (mode == 0x80) word(ctx, displacement);
+}
+/* REX.W opcode with a hardware register and [base + displacement] (base RSP or RBP). */
+static void x86_memory(BackendContext *ctx, unsigned opcode, unsigned reg, unsigned base, uint32_t displacement) {
+  byte(ctx, 0x48 | (reg >= 8) << 2); byte(ctx, opcode);
+  x86_address(ctx, reg, base, displacement);
+}
+/* RSP += value (negative to reserve), in the shortest form. */
+static void x86_stack_adjust(BackendContext *ctx, int64_t value) {
+  bool add = value >= 0;
+  uint64_t amount = add ? (uint64_t)value : (uint64_t)-value;
+  if (!amount) return;
+  if (amount < 128) { CODE(0x48, 0x83, add ? 0xc4 : 0xec); byte(ctx, (uint8_t)amount); return; }
+  CODE(0x48, 0x81, add ? 0xc4 : 0xec); word(ctx, (uint32_t)amount);
 }
 
 
@@ -57,7 +74,7 @@ static void isa_load(BackendContext *ctx, Reg r, uint32_t offset) {
   int assigned = allocation_register(ctx, offset);
   if (assigned >= 0) { allocation_move(ctx, allocation_model(ctx, r), allocation_hardware(ctx, (unsigned)assigned)); return; }
   if (ctx->a64) { a64_frame(ctx, A64_LDR, r, offset); return; }
-  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8b); byte(ctx, 0x85 | x86_code[r] << 3); word(ctx, offset);
+  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8b); x86_address(ctx, x86_code[r], 5, offset);
 }
 /* [FP + offset] <- reg, 64-bit. */
 static void isa_store(BackendContext *ctx, Reg r, uint32_t offset) {
@@ -65,18 +82,29 @@ static void isa_store(BackendContext *ctx, Reg r, uint32_t offset) {
   int assigned = allocation_register(ctx, offset);
   if (assigned >= 0) { allocation_move(ctx, allocation_hardware(ctx, (unsigned)assigned), allocation_model(ctx, r)); return; }
   if (ctx->a64) { a64_frame(ctx, A64_STR, r, offset); return; }
-  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x89); byte(ctx, 0x85 | x86_code[r] << 3); word(ctx, offset);
+  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x89); x86_address(ctx, x86_code[r], 5, offset);
 }
 /* reg <- FP + offset. */
 static void isa_lea(BackendContext *ctx, Reg r, uint32_t offset) {
   if (ctx->rv64) { rv_address(ctx,rv_reg[r],8,(int32_t)offset); return; }
   if (allocation_register(ctx, offset) >= 0) { ctx->text.failed = true; return; }
   if (ctx->a64) { a64_frame(ctx, A64_ADD, r, offset); return; }
-  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8d); byte(ctx, 0x85 | x86_code[r] << 3); word(ctx, offset);
+  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8d); x86_address(ctx, x86_code[r], 5, offset);
 }
 static void isa_immediate(BackendContext *ctx, Reg r, uint64_t n) {
   if (ctx->rv64) { rv_imm(ctx,rv_reg[r],n); return; }
   if (ctx->a64) { a64_immediate(ctx, a64_reg[r], n); return; }
+  /* Shortest flag-preserving move: zero-extending 32-bit, sign-extending
+     32-bit, then the full 64-bit form. */
+  if (n <= UINT32_MAX) {
+    if (x86_extended[r]) byte(ctx, 0x41);
+    byte(ctx, 0xb8 + x86_code[r]); word(ctx, (uint32_t)n);
+    return;
+  }
+  if ((int64_t)n >= INT32_MIN && (int64_t)n <= INT32_MAX) {
+    byte(ctx, x86_extended[r] ? 0x49 : 0x48); byte(ctx, 0xc7); byte(ctx, 0xc0 | x86_code[r]); word(ctx, (uint32_t)n);
+    return;
+  }
   byte(ctx, x86_extended[r] ? 0x49 : 0x48); byte(ctx, 0xb8 + x86_code[r]); immediate(ctx, n);
 }
 static void isa_zero(BackendContext *ctx, Reg r) {
@@ -116,8 +144,7 @@ static void isa_peek_short(BackendContext *ctx, Reg r, unsigned slot) {
 static void isa_peek(BackendContext *ctx, Reg r, unsigned slot) {
   if (ctx->rv64) { rv_memory(ctx,false,rv_reg[r],2,(uint64_t)slot*16,3,false); return; }
   if (ctx->a64) { a64_sp_offset(ctx, A64_LDR, a64_reg[r], slot * 16); return; }
-  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8b); byte(ctx, 0x84 | x86_code[r] << 3); byte(ctx, 0x24);
-  word(ctx, slot * 8);
+  byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8b); x86_address(ctx, x86_code[r], 4, slot * 8);
 }
 /* Forget `count` pushed values without loading them. */
 static void isa_drop(BackendContext *ctx, unsigned count) {
@@ -125,8 +152,7 @@ static void isa_drop(BackendContext *ctx, unsigned count) {
   ctx->stack_slots -= count;
   if (!count) return;
   if (ctx->a64) { a64_sp_adjust(ctx, (int64_t)count * 16); return; }
-  if (count * 8 < 128) { CODE(0x48, 0x83, 0xc4); byte(ctx, count * 8); return; }
-  CODE(0x48, 0x81, 0xc4); word(ctx, count * 8);
+  x86_stack_adjust(ctx, (int64_t)count * 8);
 }
 /* Branches: a forward branch slot is patched once its destination is known. */
 static size_t isa_branch(BackendContext *ctx, int condition) {
@@ -180,6 +206,7 @@ static void isa_trap(BackendContext *ctx) {
 }
 /* Relocated references. x86-64 uses RIP-relative forms; AArch64 uses adrp pairs. */
 static void isa_call_symbol(BackendContext *ctx, unsigned symbol) {
+  if (ctx->holding) ctx->text.failed = true; /* R9 would not survive the call */
   if (ctx->rv64) { rv_call(ctx,symbol); return; }
   if (ctx->a64) { relocate(ctx, symbol, R_AARCH64_CALL26, 0); a64_word(ctx, 0x94000000); return; }
   /* Microsoft x64 callers reserve a 32-byte home area just above the return
@@ -412,7 +439,7 @@ static void isa_scale(BackendContext *ctx, Reg r, uint32_t n) {
 static bool isa_align_call(BackendContext *ctx) {
   if (ctx->rv64) { return false; }
   if (ctx->a64 || !(ctx->stack_slots & 1)) return false;
-  CODE(0x48,0x83,0xec,8);
+  x86_stack_adjust(ctx, -8);
   return true;
 }
 static void isa_unalign_call(BackendContext *ctx, bool padded) {
@@ -447,7 +474,7 @@ static void isa_argument_load(BackendContext *ctx, int cls, uint32_t offset) {
     a64_sp_offset(ctx, A64_LDR, (unsigned)cls, offset);
     return;
   }
-  if (cls >= 8) { CODE(0xf3,0x0f,0x7e); byte(ctx, 0x84+8*(unsigned)(cls-8)); byte(ctx, 0x24); word(ctx, offset); return; }
+  if (cls >= 8) { CODE(0xf3,0x0f,0x7e); x86_address(ctx, (unsigned)(cls - 8), 4, offset); return; }
   x86_memory(ctx, 0x8b, x86_argument_register(ctx, cls), 4, offset);
 }
 /* Reserve bytes below SP for outgoing stack arguments (a multiple of 16 on AArch64). */
@@ -455,13 +482,13 @@ static void isa_reserve(BackendContext *ctx, uint32_t bytes) {
   if (ctx->rv64) { rv_address(ctx,2,2,-(int64_t)bytes); return; }
   if (!bytes) return;
   if (ctx->a64) { a64_sp_adjust(ctx, -(int64_t)bytes); return; }
-  CODE(0x48,0x81,0xec); word(ctx, bytes);
+  x86_stack_adjust(ctx, -(int64_t)bytes);
 }
 static void isa_release(BackendContext *ctx, uint32_t bytes) {
   if (ctx->rv64) { rv_address(ctx,2,2,bytes); return; }
   if (!bytes) return;
   if (ctx->a64) { a64_sp_adjust(ctx, bytes); return; }
-  CODE(0x48, 0x81, 0xc4); word(ctx, bytes);
+  x86_stack_adjust(ctx, bytes);
 }
 /* [SP + to] <- the low `bytes` of the 64-bit [SP + from]; only Apple AArch64
    stores fewer than eight. */
@@ -475,8 +502,8 @@ static void isa_stack_store(BackendContext *ctx, uint32_t from, uint32_t to, uin
     a64_word(ctx, opcode | (to / bytes) << 10 | A64_SP << 5 | A64_SCRATCH);
     return;
   }
-  CODE(0x48,0x8b,0x84,0x24); word(ctx, from);
-  CODE(0x48,0x89,0x84,0x24); word(ctx, to);
+  x86_memory(ctx, 0x8b, 0, 4, from);
+  x86_memory(ctx, 0x89, 0, 4, to);
 }
 /* Hidden result pointer argument: RDI on SysV, RCX on Microsoft x64, X8 on AArch64. */
 static void isa_result_pointer(BackendContext *ctx, uint32_t offset) {
@@ -488,7 +515,7 @@ static void isa_result_pointer(BackendContext *ctx, uint32_t offset) {
 static void isa_call_stack(BackendContext *ctx, uint32_t offset) {
   if (ctx->rv64) { rv_memory(ctx,false,6,2,offset,3,false);rv_i(ctx,0x67,1,6,0,0); return; }
   if (ctx->a64) { a64_sp_offset(ctx, A64_LDR, A64_SCRATCH, offset); a64_word(ctx, 0xd63f0000 | A64_SCRATCH << 5); return; }
-  CODE(0x4c,0x8b,0x9c,0x24); word(ctx, offset);
+  x86_memory(ctx, 0x8b, 11, 4, offset);
   if (ctx->win64) CODE(0x48, 0x83, 0xec, 32); /* home area */
   CODE(0x41,0xff,0xd3); /* call r11 */
   if (ctx->win64) CODE(0x48, 0x83, 0xc4, 32);
@@ -806,6 +833,24 @@ static void isa_zero_fill(BackendContext *ctx, uint32_t size) {
   }
   CODE(0x48,0x89,0xc7,0x31,0xc0,0xb9); word(ctx, size); CODE(0xfc,0xf3,0xaa);
 }
+/* Small constant memmoves use word loads/stores instead of the expensive
+   direction-flag byte-string path. Only RCX is scratch, matching isa_copy's
+   existing clobbers; directional order preserves even one-byte overlaps. */
+static void x86_copy_words(BackendContext *ctx, uint32_t size, bool backward) {
+  uint32_t at = backward ? size : 0, remaining = size;
+  while (remaining) {
+    unsigned width = remaining >= 8 ? 8 : remaining >= 4 ? 4 : remaining >= 2 ? 2 : 1;
+    if (backward) at -= width;
+    if (width == 8) byte(ctx, 0x48);
+    else if (width == 2) byte(ctx, 0x66);
+    byte(ctx, width == 1 ? 0x8a : 0x8b); byte(ctx, 0x8e); word(ctx, at); /* mov rcx, [rsi+at] */
+    if (width == 8) byte(ctx, 0x48);
+    else if (width == 2) byte(ctx, 0x66);
+    byte(ctx, width == 1 ? 0x88 : 0x89); byte(ctx, 0x8f); word(ctx, at); /* mov [rdi+at], rcx */
+    if (!backward) at += width;
+    remaining -= width;
+  }
+}
 /* Copy size bytes from A to the popped destination, preserving overlap like memmove. */
 static void isa_copy(BackendContext *ctx, uint32_t size) {
   if (ctx->rv64) { rv_copy(ctx,size); return; }
@@ -827,11 +872,26 @@ static void isa_copy(BackendContext *ctx, uint32_t size) {
     a64_word(ctx, 0x17fffffc); /* b forward */
     return;
   }
+  if (size <= 64) {
+    if (!size) return;
+    CODE(0x48,0x39,0xf7,0x0f,0x86); size_t forward=ctx->text.n; word(ctx,0);
+    x86_copy_words(ctx,size,true);
+    byte(ctx,0xe9); size_t done=ctx->text.n; word(ctx,0);
+    patch_word(ctx,forward,(uint32_t)(ctx->text.n-forward-4));
+    x86_copy_words(ctx,size,false);
+    patch_word(ctx,done,(uint32_t)(ctx->text.n-done-4));
+    return;
+  }
   CODE(0xb9); word(ctx, size);
   CODE(0x48,0x39,0xf7,0x0f,0x86); size_t forward=ctx->text.n; word(ctx, 0);
+  /* A higher destination only needs backwards copying when ranges overlap. */
+  CODE(0x48,0x8d,0x8e); word(ctx,size); /* lea rcx, [rsi+size] */
+  CODE(0x48,0x39,0xcf,0xb9); word(ctx,size); /* cmp rdi, rcx; mov ecx, size */
+  CODE(0x0f,0x83); size_t disjoint=ctx->text.n; word(ctx,0);
   if (size) { CODE(0x48,0x81,0xc6); word(ctx, size-1); CODE(0x48,0x81,0xc7); word(ctx, size-1); }
   CODE(0xfd,0xf3,0xa4,0xfc,0xe9); size_t done=ctx->text.n; word(ctx, 0);
-  patch_word(ctx, forward,(uint32_t)(ctx->text.n-forward-4)); CODE(0xfc,0xf3,0xa4);
+  patch_word(ctx, forward,(uint32_t)(ctx->text.n-forward-4));
+  patch_word(ctx, disjoint,(uint32_t)(ctx->text.n-disjoint-4)); CODE(0xfc,0xf3,0xa4);
   patch_word(ctx, done,(uint32_t)(ctx->text.n-done-4));
 }
 /* A <- A + delta (delta is 1 or -1); loop counters never overflow here. */

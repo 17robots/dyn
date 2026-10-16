@@ -40,6 +40,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-release-cache-') as directory:
     build('first')
     warm = build('first', preserve_output=True)
     assert 'timing detail native emit' not in warm, warm
+    relinked = build('first')
+    assert 'timing detail native emit' not in relinked, relinked
     body.write_text('pub fn text() []const u8 { return "second" }\n')
     changed = build('second', preserve_output=True)
     assert 'timing detail native emit' in changed, changed
