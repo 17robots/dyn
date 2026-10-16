@@ -20,7 +20,7 @@ void dyn_cli_help(const char *command) {
       "  --emit-ir  --emit-object  --emit-asm  --no-link  --shared  --no-lto\n"
       "  --target <x86_64-linux|aarch64-linux|aarch64-macos|x86_64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
-      "  --cpu <generic|native>  --opt-level <2|3>  --opt-remarks\n"
+      "  --cpu <generic|native>  --opt-level <1|2|3>  --opt-remarks\n"
       "  --sample-profile <LLVM sample profile>  (x86_64 Linux ThinLTO only)\n"
       "  --backend <auto|native|llvm>  debug code generator (auto: native for supported debug targets)\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
@@ -57,8 +57,8 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
         }
         o->optimization.native_cpu = !strcmp(argv[i], "native");
       } else if (strcmp(a, "--opt-level") == 0) {
-        if (strcmp(argv[i], "2") && strcmp(argv[i], "3")) {
-          fprintf(stderr, "error: --opt-level accepts 2 or 3\n"); return 2;
+        if (strcmp(argv[i], "1") && strcmp(argv[i], "2") && strcmp(argv[i], "3")) {
+          fprintf(stderr, "error: --opt-level accepts 1, 2 or 3\n"); return 2;
         }
         o->optimization.level = (unsigned)(argv[i][0] - '0');
       } else if (strcmp(a, "--backend") == 0) {
@@ -128,6 +128,8 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       o->docs_json = true;
     else if (strcmp(a, "--check") == 0)
       o->format_check = true;
+    else if (strcmp(a, "--runtime-support") == 0)
+      o->runtime_support = true;
     else if (strcmp(a, "--emit-ir") == 0)
       o->emit_ir = true;
     else if (strcmp(a, "--emit-object") == 0)

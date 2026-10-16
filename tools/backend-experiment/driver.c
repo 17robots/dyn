@@ -85,6 +85,7 @@ typedef struct {
   size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
   uint32_t scope_stack[MAX_LOCALS];
   unsigned scope_count;
+  bool bmi2; /* Host-selected flag-preserving variable shifts. */
   bool a64; /* AArch64 encodings, relocations and ABI instead of x86-64 */
   bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
   bool darwin; /* AArch64 macOS: Apple's AAPCS64 variant and Mach-O objects */
@@ -1470,6 +1471,14 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
       if (f->is_main) isa_zero(ctx, R_A);
       return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type); reachable = false;
     } else if (s->kind == DYN_STMT_IF) {
+      if (!ctx->debug_mode && s->expression < ir->expression_count &&
+          ir->expressions[s->expression].kind == DYN_EXPR_BOOL) {
+        bool chosen = ir->expressions[s->expression].boolean, falls;
+        if (!block(ctx, ir, f, chosen ? s->body_start : s->else_start,
+                   chosen ? s->body_count : s->else_count, depth + 1, &falls)) return false;
+        reachable = reachable && falls;
+        continue;
+      }
       if (!expression(ctx, ir, f, s->expression, 0)) return false;
       isa_test(ctx, R_A); size_t otherwise = isa_branch(ctx, CC_E);
       bool then_falls, else_falls;
@@ -1724,7 +1733,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   const char *symbol = function_name(f);
   if (!strcmp(symbol,"__dyn_backend_initialize") || !strcmp(symbol,"__dyn_backend_initialized")) return false;
   for (unsigned i = 0; i < RUNTIME_COUNT; ++i)
-    if (!strcmp(symbol, runtime_names[i])) return false;
+    if (!source->context.runtime_support && !strcmp(symbol, runtime_names[i])) return false;
   for (uint32_t i = 0; i < f->param_count; ++i)
     if (!abi_supported(ir,ir->params[f->param_start + i].type)) return false;
   if (f->foreign) return true;
@@ -2126,7 +2135,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     ctx->initializer_symbol=(unsigned)ctx->runtime_base++;
     ctx->initializer_flag_symbol=(unsigned)ctx->runtime_base++; break;
   }
-  if (ctx->shared && ctx->win64) {
+  if (ctx->shared && ctx->win64 && !source->context.runtime_support) {
     for (size_t i=0;i<ir->function_count;++i) {
       if (!strcmp(function_name(&ir->functions[i]), "DllMainCRTStartup")) {
         backend_report(ctx, "error: shared Windows modules reserve DllMainCRTStartup\n");
@@ -2237,6 +2246,8 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     symbols[ctx->function_symbols[i]] = (Elf64_Sym){.st_name = (Elf64_Word)names,
       .st_info = ELF64_ST_INFO(f->foreign||f->is_public||f->is_main?STB_GLOBAL:STB_LOCAL, STT_FUNC), .st_shndx = f->foreign ? SHN_UNDEF : 1,
       .st_value = f->foreign ? 0 : begin, .st_size = ctx->text.n - begin};
+    if (source->context.runtime_support && !f->foreign)
+      symbols[ctx->function_symbols[i]].st_other = 2; /* STV_HIDDEN */
     memcpy(strings + names, name, strlen(name));
     if (ctx->function_suffixed[i]) memcpy(strings + names + strlen(name), ".dyn", 4);
     strings[names + length - 1] = 0; names += length;
@@ -2376,6 +2387,11 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   if (!ctx) return false;
   bool a64 = target == TARGET_A64_ELF || target == TARGET_A64_MACHO;
   ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64; ctx->shared = shared;
+  ctx->bmi2 = !a64 && source->context.optimization && source->context.optimization->features &&
+              !strcmp(source->context.optimization->features, "+bmi2");
+  if (source->context.optimization && source->context.optimization->remarks &&
+      source->context.optimization->native_cpu)
+    fprintf(stderr, "remark: independent CPU selection: %s\n", ctx->bmi2 ? "+bmi2 variable shifts" : "baseline ISA (no additional implemented host features)");
   ctx->win64 = target == TARGET_X64_COFF; ctx->darwin = target == TARGET_A64_MACHO;
   if (debug_info && (!(ctx->dwarf=a64?backend_dwarf_create_a64():backend_dwarf_create()) ||
                      !(ctx->dwarf_types=calloc(DYN_TYPE_PARAM_BASE, sizeof(*ctx->dwarf_types))))) {

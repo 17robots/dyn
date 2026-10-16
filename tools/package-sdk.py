@@ -43,5 +43,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-sdk-') as temporary:
     if os.environ.get('DYN_WITH_LLVM') == '0':
         subprocess.run([sys.executable,str(ROOT/'tests/wasm-independent.py')],
                        env=dict(env, DYN_TEST_INSTALLED='1'),check=True,timeout=180)
+        subprocess.run([sys.executable,str(ROOT/'tests/cross-runtime.py')],
+                       env=dict(env, DYN_TEST_INSTALLED='1'),check=True,timeout=180)
     (DIST/'package-validation.json').write_text(json.dumps(dict(status='passed',runtime_sources=runtime_sources,archive=archive.name,sha256=sha(archive),manifest=manifest),indent=2)+'\n')
     print('PASS packaged and relocated standalone SDK:',archive)

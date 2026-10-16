@@ -12,11 +12,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = Path(os.environ.get('BUILD', ROOT/'build')).resolve()
 env = dict(os.environ, DYN_WITH_LLVM='0', LLVM_CONFIG='false', CXX='false',
-           DYN_SDK=str(ROOT))
+           DYN_SDK=str(ROOT), DYN_ASSEMBLY_ORACLE='0', DYN_TEXT_ORACLE='0')
 subprocess.run([sys.executable, 'tools/build.py', 'host'], cwd=ROOT, env=env, check=True)
 env['DYN'] = str(BUILD/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))
 for test in ('lsp-navigation', 'shared-host', 'compiler-contracts', 'zero-values',
-             'panic-lifetime', 'native-release', 'wasm-independent', 'wrap-enum-values', 'stdlib-host',
+             'panic-lifetime', 'native-release', 'native-optimization', 'text-output', 'native-assembly', 'cross-runtime', 'wasm-independent', 'wrap-enum-values', 'stdlib-host',
              'sync-host', 'concurrency-net-host'):
     subprocess.run([sys.executable, 'tests/'+test+'.py'], cwd=ROOT, env=env, check=True)
 if sys.platform in ('darwin', 'win32'):
@@ -36,7 +36,7 @@ if sys.platform in ('darwin', 'win32'):
         relocated.pop('DYN_SDK', None)
         relocated['DYN'] = str(destination/'dyn-sdk/bin'/('dyn.exe' if os.name == 'nt' else 'dyn'))
         relocated['DYN_TEST_INSTALLED'] = '1'
-        for test in ('shared-host', 'stdlib-host', 'wasm-independent'):
+        for test in ('shared-host', 'stdlib-host', 'cross-runtime', 'wasm-independent'):
             subprocess.run([sys.executable, str(ROOT/'tests'/ (test+'.py'))],
                            cwd=destination, env=relocated, check=True)
 print('PASS LLVM-free host compiler and debug/release runtime contracts')

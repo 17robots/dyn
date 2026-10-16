@@ -111,10 +111,11 @@ def runtime_sources(dist, version):
             shutil.copytree(root/'runtime', work/'runtime')
             shutil.copy2(root/'LICENSE', work/'LICENSE')
             shutil.copy2(root/'tools/build.py', work/'build.py')
-            shutil.copy2(root/'tools/wasm-runtime.py', work/'wasm-runtime.py')
+            for tool in ('wasm-runtime.py', 'native-runtime.py', 'build-native-support.py'):
+                shutil.copy2(root/'tools'/tool, work/tool)
             (work/'README.txt').write_text(
                 'Dyn runtime sources for the LLVM-free host SDK. No third-party runtime libraries are bundled.\n'
-                'The matching compiler checkout tools/build.py records the GCC compile commands.\n')
+                'The matching compiler checkout tools/build.py records the independent runtime build commands.\n')
             with tarfile.open(archive, 'w:gz') as tar:
                 tar.add(work, arcname='runtime-sources')
             return dict(archive=archive.name, sha256=hashlib.sha256(archive.read_bytes()).hexdigest())

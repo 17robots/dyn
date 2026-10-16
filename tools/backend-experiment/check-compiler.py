@@ -98,13 +98,12 @@ fn main() {
         assert not cached('--backend','llvm') and cached('--backend','llvm')
         assert ok([output]).stdout == b'native compiler ok\n'
         checks += 1
-        # LLVM-only options route auto builds to LLVM; explicit native rejects them.
-        for flags in (['--emit-ir'],['--emit-asm'],['--cpu','native'],
-                      ['--opt-remarks'],['--release','--opt-level','2']):
-            output.write_bytes(b'keep-existing-output')
+        # Independent output and optimization options must execute without fallback.
+        for flags in (['--emit-ir'], ['--emit-asm'], ['--cpu', 'native'],
+                      ['--opt-remarks'], ['--release', '--opt-level', '2']):
             result=run([candidate,'build',root,'--backend','native',*flags,'--output',output])
-            assert result.returncode == 2 and b'--backend native requires' in result.stderr, (flags,result.stderr)
-            assert output.read_bytes() == b'keep-existing-output'
+            assert result.returncode == 0, (flags,result.stderr)
+            assert ok([output]).stdout == b'native compiler ok\n'
             checks += 1
         # Semantic and syntax errors use the ordinary frontend, including JSON spans.
         for text in ('fn main(){ missing() }', 'fn main( {'):

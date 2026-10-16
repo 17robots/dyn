@@ -1,0 +1,22 @@
+#target(kernel: windows)
+extern fn get_tid "GetCurrentThreadId"() u32
+extern fn get_handle "GetStdHandle"(kind: u32) rawptr
+extern fn write_file "WriteFile"(handle: rawptr, data: rawptr, size: u32, written: *u32, overlapped: rawptr) i32
+pub _fltused: i32
+fn thread_id() u64 { return #cast(u64) get_tid() }
+fn trace_write(data: *const u8, size: u64) {
+  if size == 0 { return }
+  handle := get_handle(4294967284)
+  bytes := data[..#cast(usize) size]
+  offset: usize = 0
+  for offset < #len(bytes) {
+    chunk := #len(bytes) - offset
+    if chunk > 2147483647 { chunk = 2147483647 }
+    written: u32 = 0
+    if write_file(handle, #cast(rawptr) &bytes[offset], #cast(u32) chunk, &written, nil) == 0 || written == 0 { return }
+    offset += #cast(usize) written
+  }
+}
+pub fn dyn_trace_push(name: *const u8, length: u64) { trace_push(name, length) }
+pub fn dyn_trace_pop() { trace_pop() }
+pub fn dyn_trace_dump() { trace_dump() }

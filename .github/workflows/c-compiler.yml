@@ -63,6 +63,8 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           just artifact dyn-sanitize
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined tests/llvm-text-unit.c -o build/llvm-text-unit-sanitize
+          ./build/llvm-text-unit-sanitize
           python3 tests/compiler-contracts.py
           python3 tests/generics.py
           for unit in parser-recovery parser-unit parser-snapshot; do

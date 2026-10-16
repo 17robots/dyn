@@ -1,0 +1,108 @@
+// Freestanding runtime compiled by Dyn's independent backend.
+// No std imports, allocations, defer, or tracing may be introduced here.
+struct Unwind { previous: *Unwind }
+struct UnwindSlot {
+  tid: u64, top: *Unwind, message: *const u8, length: u64, unwinding: u64,
+  storage: [4096]u8
+}
+unwind_slots: [64]UnwindSlot
+extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
+extern fn atomic_store "dyn_atomic_store_u64"(p: *u64, value: u64)
+extern fn atomic_claim "dyn_atomic_compare_exchange_u64"(p: *u64, expected: u64, desired: u64) bool
+extern fn jump "dyn_unwind_jump"(frame: *Unwind)
+extern fn panic_raw "dyn_panic"(message: *const u8, length: u64)
+
+fn unwind_slot(claim: bool) *UnwindSlot {
+  tid := thread_id()
+  for i in 0..64 {
+    slot := &unwind_slots[i]
+    seen := atomic_load(&slot.tid)
+    if seen == tid { return slot }
+    if claim && seen == 0 && atomic_claim(&slot.tid, 0, tid) { return slot }
+  }
+  return nil
+}
+pub fn dyn_unwind_link(frame: *Unwind) {
+  slot := unwind_slot(true)
+  if slot == nil {
+    message: []const u8 = "runtime unwind thread capacity exceeded"
+    panic_raw(&message[0], #cast(u64) #len(message))
+    return
+  }
+  frame.previous = slot.top
+  slot.top = frame
+}
+pub fn dyn_unwind_unlink(frame: *Unwind) {
+  slot := unwind_slot(false)
+  if slot != nil && slot.top == frame {
+    slot.top = frame.previous
+    if slot.top == nil && slot.unwinding == 0 { atomic_store(&slot.tid, 0) }
+  }
+}
+pub fn dyn_unwind_begin(message: *const u8, length: u64) {
+  slot := unwind_slot(true)
+  if slot == nil || slot.unwinding != 0 || slot.top == nil { return }
+  slot.unwinding = 1
+  truncated: []const u8 = " [truncated]"
+  copied := length
+  total := length
+  if message == nil { copied = 0 total = 0 }
+  if copied > 4096 {
+    copied = 4096 - #cast(u64) #len(truncated)
+    bytes := message[..#cast(usize) total]
+    for copied != 0 && (bytes[copied] & 0xc0) == 0x80 { copied -= 1 }
+  }
+  if copied != 0 {
+    bytes := message[..#cast(usize) total]
+    for i in 0..copied { slot.storage[i] = bytes[i] }
+  }
+  if copied < total {
+    for i in 0..#len(truncated) { slot.storage[copied + #cast(u64) i] = truncated[i] }
+    total = copied + #cast(u64) #len(truncated)
+  }
+  slot.message = &slot.storage[0]
+  slot.length = total
+  frame := slot.top
+  slot.top = frame.previous
+  jump(frame)
+}
+pub fn dyn_unwind_continue() {
+  slot := unwind_slot(false)
+  if slot != nil && slot.top != nil {
+    frame := slot.top
+    slot.top = frame.previous
+    jump(frame)
+  }
+  if slot != nil { panic_raw(slot.message, slot.length) }
+  panic_raw(nil, 0)
+}
+
+// Exact binary scaling: each subtraction is exact, including subnormals.
+pub fn fmod(input: f64, divisor: f64) f64 {
+  sign := (#bitcast(u64) input) & 0x8000000000000000
+  x := #bitcast(f64) ((#bitcast(u64) input) & 0x7fffffffffffffff)
+  y := #bitcast(f64) ((#bitcast(u64) divisor) & 0x7fffffffffffffff)
+  if x - x != 0.0 || y != y || y == 0.0 { return (input * divisor) / (input * divisor) }
+  scale := y
+  for scale <= x * 0.5 { scale *= 2.0 }
+  for true {
+    if x >= scale { x -= scale }
+    if scale <= y { break }
+    scale *= 0.5
+  }
+  return #bitcast(f64) ((#bitcast(u64) x) | sign)
+}
+pub fn fmodf(input: f32, divisor: f32) f32 {
+  sign := (#bitcast(u32) input) & 0x80000000
+  x := #bitcast(f32) ((#bitcast(u32) input) & 0x7fffffff)
+  y := #bitcast(f32) ((#bitcast(u32) divisor) & 0x7fffffff)
+  if x - x != 0.0 || y != y || y == 0.0 { return (input * divisor) / (input * divisor) }
+  scale := y
+  for scale <= x * 0.5 { scale *= 2.0 }
+  for true {
+    if x >= scale { x -= scale }
+    if scale <= y { break }
+    scale *= 0.5
+  }
+  return #bitcast(f32) ((#bitcast(u32) x) | sign)
+}
