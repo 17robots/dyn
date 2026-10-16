@@ -77,10 +77,10 @@ test-backend-experiment: release
     python3 tools/backend-experiment/build.py
     python3 tools/backend-experiment/test.py
 
-# Default debug builds emit natively on x86_64 Linux; dyn-legacy is the LLVM reference.
+# Debug and release builds use independent emission on every supported target.
 test-native-debug: release
-    python3 tools/build.py dyn dyn-legacy
-    python3 tools/backend-experiment/check-compiler.py --compiler "$BUILD/dyn" --reference "$BUILD/dyn-legacy"
+    python3 tools/build.py dyn dyn-release
+    python3 tools/backend-experiment/check-compiler.py --compiler "$BUILD/dyn" --reference "$BUILD/dyn-release"
 
 # AArch64 Linux native emission against LLVM under qemu-aarch64 (skips without qemu).
 test-native-a64: release

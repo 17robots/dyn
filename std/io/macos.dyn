@@ -1,4 +1,4 @@
-#target(arch: aarch64, kernel: darwin)
+#target(kernel: darwin)
 
 // Darwin syscall shim returns negative errno, including EINTR (-4).
 // Borrow the process standard descriptors; callers do not own or close them.

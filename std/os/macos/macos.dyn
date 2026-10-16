@@ -1,4 +1,4 @@
-#target(arch: aarch64, kernel: darwin, abi: aapcs)
+#target(kernel: darwin)
 
 use "std/c" cstrings
 

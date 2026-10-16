@@ -13,55 +13,42 @@ The editor grammar lives in [17robots/tree-sitter-dyn](https://github.com/17robo
 the compiler has its own parser.
 Editor extensions and applications are separate projects.
 
-Preview 7 fixes repeated compilation in `dyn run`, including invocation through
-PATH, and avoids oversized LLVM values for large struct/array copies and literal
-assignments. Unchanged modules reuse the cache; source edits still rebuild their
-module. Use `--timings` to inspect compilation and `--no-cache` to force a rebuild.
+Builds cache the complete executable and invalidate it when source or build options
+change. Use `--timings` to inspect compilation and `--no-cache` to force a rebuild.
+Release optimization runs inside the compiler before independent native emission.
+There is no LLVM or ThinLTO stage.
 
-On x86_64 Linux with LLD, release builds emit ThinLTO summaries and cache native
-backend results under `DYN_CACHE_DIR` (or the normal Dyn cache). Relinking reuses
-unchanged backend work; `--no-cache` bypasses this cache too. LLD periodically
-prunes the backend cache to 10% of available disk space or 1 GiB, whichever is
-smaller, and removes entries unused for seven days. `--jobs` also limits ThinLTO
-backend workers. Cold release builds still perform LLVM optimization.
+## Independent compiler
 
-Use `dyn build --release --no-lto src` when cold-build latency matters more than
-cross-module optimization. This keeps per-module O2 optimization and emits native
-objects directly, avoiding link-time optimization. Executable performance and size
-can differ; benchmark your workload before choosing this for distribution. The
-cache distinguishes this mode from normal release builds.
-
-## LLVM removal progress
-
-The native compiler can now be built without LLVM headers, libraries, C++, or
+The compiler builds without LLVM headers, libraries, C++, or
 `llvm-config`. On x86-64 Linux, using GCC and GNU binutils:
 
 ```sh
-DYN_WITH_LLVM=0 CC=gcc BUILD=build/no-llvm python3 tools/build.py dyn host
+CC=gcc BUILD=build/no-llvm python3 tools/build.py dyn host
 DYN_SDK="$PWD" build/no-llvm/dyn build path/to/program --output program
 python3 tests/no-llvm.py
 ```
 
-This opt-in compiler supports native debug/release executables, shared libraries,
+The compiler supports native debug/release executables, shared libraries,
 objects, assembly and LLVM-text export, frontend commands, and the language
 server. Independent release passes support optimization levels, host CPU
 selection, remarks, and a strict text sample-profile subset. These are real
 optimizations, but do not claim LLVM's complete optimization/performance parity.
 
-The build includes cross-target runtimes for x86-64 Linux, AArch64 Linux,
-AArch64 macOS, x86-64 Windows, browser Wasm, and WASI Preview 1. Native runtime
+The build includes cross-target runtimes for x86-64 Linux, AArch64 Linux, RISC-V64 Linux,
+x86-64/AArch64 macOS, x86-64/AArch64 Windows, browser Wasm, and WASI Preview 1. Native runtime
 assembly is generated directly; portable support is compiled by Dyn itself.
 No target Clang or assembler is required. GCC-only Linux packaging is available with:
 
 ```sh
-DYN_WITH_LLVM=0 BUILD=build/no-llvm python3 tools/package-sdk.py
+BUILD=build/no-llvm python3 tools/package-sdk.py
 ```
 
 The resulting host SDK does not bundle LLVM, LLD or C++ libraries. Packaging
 checks debug/release compilation and standard-library execution after relocation.
 The independent CI job builds from scratch with LLVM tool commands replaced by
 failing sentinels, checks library dependencies and unresolved symbols, and tests
-native execution, shared-library callbacks, all four native object formats, LSP,
+native execution, shared-library callbacks, all seven native targets, LSP,
 and browser/WASI modules executed by Node without LLVM tools on PATH.
 Separate jobs qualify native Windows emission with GCC and macOS emission with
 system C tools; macOS packaging rejects non-system library dependencies.
@@ -71,9 +58,8 @@ generation, built-in object/archive linking, and directly generated runtime
 objects. See [WebAssembly](docs/guide/webassembly.md) and the
 [independent toolchain guide](docs/guide/independent-toolchain.md) for output
 formats, supported optimization/profile behavior, and qualification limits.
-The normal build remains available with `DYN_WITH_LLVM=1` (the default) for
-compatibility and differential tests. Explicit `--backend native` selects
-independent emission, including textual outputs, in that reference build.
+The LLVM backend implementation has been removed. Independent emission is now
+the default and only backend, including textual exports.
 
 ## Install a preview
 
@@ -194,7 +180,7 @@ may be newer than the latest published preview.
 | `time.try_monotonic_now()` / `try_realtime_now()` | Fallible native clocks; monotonic measures durations, realtime uses Unix epoch. `sleep_result` reports failure. Date and duration helpers are portable; WASI supports clocks but not sleep. |
 | `std/errors` | Portable `kind` accompanies the original native `error` code. Check `ok` or `status` first: library failures may have code zero. |
 | `std/sync` | Atomics, mutexes, conditions, semaphores and once initialization work on Linux x64/ARM64, macOS ARM64 and Windows x64. Darwin mutexes use ownership-aware unfair locks; other waiters use native address waits. |
-| `std/thread` / `std/net` | Thread lifecycle and TCP/UDP, IPv4/IPv6, DNS, socket options and poll work on all four native targets. Epoll remains Linux-only. Winsock initializes once per process. Darwin binaries require macOS 15 or newer. DNS uses native cryptographic entropy and portable UDP truncation detection for TCP fallback. |
+| `std/thread` / `std/net` | Thread lifecycle and TCP/UDP, IPv4/IPv6, DNS, socket options and poll work on the native targets. Epoll remains Linux-only. Winsock initializes once per process. Darwin binaries require macOS 15 or newer. DNS uses native cryptographic entropy and portable UDP truncation detection for TCP fallback. |
 | `net.Connection{}` / `net.Listener{}` | Inactive, including results from failed constructors. Successful values own their descriptors; do not copy owners. Stream adapters borrow the connection's address. Close each successful owner; writes to disconnected sockets return errors without SIGPIPE. |
 | `std/fs/watch` | Non-recursive watches use Linux inotify, Windows asynchronous directory changes or macOS FSEvents. Inactive/failed opens are safe to close. Overflow requires rebuilding and reconciling the directory snapshot; consult the platform capabilities below. |
 | `std/encoding/json` | Parsing and both string-writing APIs reject invalid UTF-8. Arena parse failures rewind allocations. Streaming writer errors can leave earlier output written; check status and transferred bytes. |
@@ -270,15 +256,11 @@ Source builds require their build-time libraries and linker to remain installed.
 
 ### Linux x64 (Ubuntu 24.04)
 
-Run in Bash. Building requires a C++ compiler and LLVM development headers for
-the ThinLTO writer, plus the C compiler. Install LLVM/Clang/LLD 19:
+Building requires a C11 compiler and Python. LLVM headers, libraries, and linkers are not required.
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential python3 clang-19 llvm-19-dev lld-19
-export LLVM_CONFIG=llvm-config-19
-export CLANG=clang-19
-export PATH=/usr/lib/llvm-19/bin:$PATH
+sudo apt-get install -y build-essential python3
 python3 tools/build.py host
 python3 tests/compiler-host.py
 ./build/dyn-release version
@@ -290,9 +272,8 @@ Install Xcode Command Line Tools (`xcode-select --install`) and
 [Homebrew](https://brew.sh/), then run in Bash or Zsh:
 
 ```sh
-brew install llvm@19 lld@19 python
-export PATH="$(brew --prefix llvm@19)/bin:$(brew --prefix lld@19)/bin:$PATH"
-export CC=clang CLANG=clang LLVM_CONFIG=llvm-config
+brew install python
+export CC=clang
 python3 tools/build.py host
 python3 tests/compiler-host.py
 ./build/dyn-release version
@@ -305,8 +286,8 @@ Install [MSYS2](https://www.msys2.org/) and open its **CLANG64** shell. Run
 Clone the repository above if you have not already, then run from its directory:
 
 ```sh
-pacman -S --needed git mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-python
-export CC=clang CLANG=clang LLVM_CONFIG=llvm-config
+pacman -S --needed git mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-python
+export CC=clang
 python tools/build.py host
 python tests/compiler-host.py
 ./build/dyn-release.exe version
@@ -321,8 +302,8 @@ The Linux full suite additionally needs `just`, Zig 0.16.0 and Python 3.12+;
 [the CI setup](.github/actions/setup-compiler/action.yml) records the dependencies.
 `just test` covers compiler, LSP, lifetime, semantic and ABI regressions.
 [Native host CI](.github/workflows/compiler-hosts.yml) tests Windows/macOS compiler
-and standard streams; native output jobs execute 14 Windows, 14 macOS and 12 ARM
-Linux probes. `python3 tests/standard-streams.py --host-only` tests host streams.
+and standard streams; native output jobs execute Windows x64/ARM64, macOS x64/ARM64 and ARM64
+Linux probes, with RISC-V64 runtime and linker checks under QEMU. `python3 tests/standard-streams.py --host-only` tests host streams.
 `python3 tests/stdlib-host.py` exercises portable files, ownership, arguments,
 clocks and line boundaries in debug and release builds, also against installed SDKs.
 
@@ -371,27 +352,15 @@ The default release policy remains portable O2. Optional controls:
 - `--cpu native` targets this host's CPU/features. Do not distribute that binary
   to machines lacking those features. Cross-target use is rejected; cache keys
   include the resolved CPU and features.
-- `--release --opt-level 3` requests LLVM O3, including the ThinLTO backend.
-  Measure runtime, size and build time; O3 is not universally faster.
-- `--release --debug-info` retains optimization, including inlining. Debug info
-  no longer implicitly adds `noinline` to every function.
-- `--opt-remarks` reports inlining, vectorization, unrolling and sample-profile
-  decisions (compiler stderr and linker stdout; capture both). It disables caches
-  and uses one worker for readable
-  output; do not use this diagnostic mode for build-time comparisons.
-- `--release --sample-profile profile.prof` consumes an LLVM sample profile on
-  x86_64 Linux with ThinLTO/LLD. It emits the source information needed by the
-  profile loader. Missing/invalid profiles fail the build; profile content is
-  part of the cache identity. It cannot combine with `--no-lto`, `--no-link`,
-  shared builds or standalone IR/object/assembly output.
+- `--release --opt-level 1`, `2`, or `3` selects independent optimization passes.
+- `--release --debug-info` retains debug information alongside optimization.
+- `--opt-remarks` reports actual transformations and disables caches for diagnostics.
+- `--release --sample-profile profile.prof` accepts the documented text profile subset
+  for bounded specialization. Profile content participates in cache identity.
 
-For sample PGO, build with `--release --debug-info`, record a representative
-workload with an external sampling profiler, convert it to LLVM's sample format,
-then rebuild with `--sample-profile`. Keep source paths and source revision stable:
-module symbols currently include a path-derived identity. Dyn does not bundle a
-profiler or automatically train profiles. Verify applied samples with
-`--opt-remarks`; synthetic test profiles prove plumbing, not performance gains.
-See [LLVM's sampling workflow](https://clang.llvm.org/docs/UsersManual.html#using-sampling-profilers).
+See [independent optimization](docs/guide/independent-toolchain.md) for pass coverage,
+profile syntax, and limitations. Measure runtime, size, and build time; higher
+optimization levels are not universally faster.
 
 Run the isolated cold/warm/edited/runtime matrix with:
 
@@ -406,7 +375,7 @@ version, timing and per-child resource usage into a new build directory. It edit
 only its own fixture copy. Cold means an empty compiler cache with OS page caches
 retained; edited samples use novel executed code, not alternating cached versions.
 `max_rss_bytes` is the OS child maximum, **not** aggregate concurrent process-tree
-memory. Compare on the same machine and LLVM/toolchain, without competing builds.
+memory. Compare on the same machine and toolchain, without competing builds.
 The general benchmark runner also supports `--reset-dir` for cold builds; both
 compiler cache and output artifact must be inside that dedicated directory.
 See [performance qualification](PERFORMANCE.md) for measured results and limits.

@@ -18,21 +18,27 @@ servers so they pick up the new `dyn`.
   command and the language server, and source builds no longer need the
   Tree-sitter library or a grammar checkout. Editor highlighting still uses the
   separate `tree-sitter-dyn` grammar.
-- Linux executables and shared libraries (x86-64 and AArch64) link
-  in-process, x86-64 release ThinLTO included, so no external linker is
-  needed; cross-building for AArch64 Linux no longer needs `ld.lld` or Zig.
-- macOS arm64 executables and dylibs link in-process and carry an ad-hoc code
-  signature, so building for macOS needs neither `ld64.lld` nor Zig. A
-  `--shared` dylib's install name is now its output path (it was the
-  temporary `.tmp` path).
-- x86-64 Windows executables and DLLs link in-process, so building for Windows
-  needs no `ld.lld`, GNU ld or Visual Studio libraries. DLLs are now
-  relocatable (they have a base relocation table) and their import library
-  uses the short import format that `llvm-dlltool` writes. Release code is the same as before: ThinLTO
-  runs inside the compiler with `ld.lld`'s settings, including profile-guided
-  function ordering. `--link` and `#link` accept objects, `ar` archives,
-  shared libraries and GNU linker scripts, and `--shared` libraries link
-  in-process too. Set `DYN_LINKER=external` to use the old path. Release builds without `ld.lld` installed now get ThinLTO too.
+- LLVM is no longer a compiler dependency. Debug, release, browser Wasm and
+  WASI builds use independent code generation and built-in linkers. The retained
+  LLVM backend and C++ ThinLTO bridge are removed; `--backend llvm` now reports
+  an error. Source builds require a C11 compiler and Python. Optional LLVM tools
+  remain useful for validating exported IR and assembly in tests.
+- Native targets include Linux x86-64, AArch64 and RISC-V64, macOS x86-64 and
+  AArch64, and Windows x86-64 and ARM64. Runtime objects are generated directly,
+  without a target assembler. macOS output carries an ad-hoc signature; Windows
+  DLLs include base relocations and short-format import libraries.
+- Release O3 adds direct-call inlining, integer local register allocation on
+  x86-64/AArch64 Linux and macOS, and fixed-bound integer array SIMD loops using
+  SSE2/NEON. Unsupported cases retain scalar code and stack storage. These
+  improvements do not promise LLVM-equivalent performance on every workload.
+  See the independent toolchain guide for exact limits and benchmark commands.
+- Builds reuse complete executable cache entries. The removed ThinLTO pipeline
+  no longer supplies per-module native cache reuse. `--no-cache` still forces
+  rebuilding; `--no-lto` is accepted for command-line compatibility.
+- ELF linking supports anonymous symbol visibility scripts, RUNPATH, x86-64
+  lazy binding, and executable thread-local storage for supported x86-64 C
+  object relocations. Large heap layouts no longer inherit the stack-frame
+  size limit. These fixes support DNA's native dependencies.
 - Syntax errors name the offending token and what was expected (for example
   `expected ')', found 'bar'` instead of `invalid syntax near 'ERROR'`). The
   parser resumes at the next statement or declaration and reports up to 20

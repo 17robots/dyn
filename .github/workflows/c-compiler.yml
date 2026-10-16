@@ -28,7 +28,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      LLVM_CONFIG: llvm-config-19
       CLANG: clang-19
       DYN: ./build/dyn-release
     steps:
@@ -38,6 +37,12 @@ jobs:
         with:
           node-version: '24'
       - run: just release-check
+      - name: Check ARM64 COFF relocations and import thunks under sanitizers
+        run: python3 tests/arm64-coff.py
+      - name: Check Mach-O x64 relocation addends under sanitizers
+        env:
+          CC: clang-19 -fsanitize=address,undefined -fno-sanitize-recover=all
+        run: python3 tests/macho-relocations.py
       - name: Differential scalar backend experiment
         run: just test-backend-experiment
       - name: Native debug compiler integration
@@ -67,6 +72,9 @@ jobs:
           ./build/llvm-text-unit-sanitize
           python3 tests/compiler-contracts.py
           python3 tests/generics.py
+          python3 tests/native-optimization.py
+          python3 tests/native-machine-optimization.py
+          python3 tests/runtime-support.py
           for unit in parser-recovery parser-unit parser-snapshot; do
             cc -std=c11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -D_POSIX_C_SOURCE=200809L \
               -Isrc tests/$unit.c $([ $unit = parser-recovery ] && echo src/parser.c src/snapshot.c) -pthread -o build/$unit-sanitize

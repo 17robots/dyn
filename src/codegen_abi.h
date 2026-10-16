@@ -124,7 +124,7 @@ static AbiValue abi_value(Gen *g, DynType t, bool result) {
         abi_size(g, scalar) == size)
       v.parts[0] = llvm_type(g, scalar);
     else { v.mode = ABI_INDIRECT; v.byval = !result; }
-  } else if (abi_windows(g)) {
+  } else if (abi_windows(g) && !abi_arm(g)) {
     if (size == 1 || size == 2 || size == 4 || size == 8)
       v.parts[0] = LLVMIntTypeInContext(g->context, (unsigned)size * 8);
     else v.mode = ABI_INDIRECT;
@@ -173,7 +173,8 @@ static GenAbi *abi_plan(Gen *g, DynType result, const DynType *types, uint32_t c
   if (!p->params) { free(p); free(llvm_params); g->allocation_failed = true; return NULL; }
   p->count = count;
   p->result = abi_value(g, result, true);
-  bool sysv = !g->wasm && !abi_arm(g) && !abi_windows(g);
+  bool sysv = !g->wasm && !abi_arm(g) && !abi_windows(g) &&
+      strcmp(dyn_context_target(&g->source->context)->arch, "riscv64");
   unsigned gp = 0, fp = 0;
   LLVMTypeRef returned = p->result.parts[0];
   if (p->result.mode == ABI_INDIRECT) {

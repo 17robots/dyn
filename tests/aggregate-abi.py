@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--cross', action='store_true')
+p.add_argument('--riscv', action='store_true', help='execute RV64 LP64D ABI oracle under QEMU')
 a = p.parse_args()
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 work = ROOT/'build/aggregate-abi'; work.mkdir(parents=True, exist_ok=True)
@@ -83,6 +84,19 @@ dyn += ['extern fn pressure "pressure"(a:i64,b:i64,c:i64,d:i64,e:i64,x:Two,tail:
 body += ['if pressure(1,2,3,4,5,Two{other:7,value:9},11) != 42 { #panic("GP pressure") }',
          'if fp_pressure(1.0,2.0,3.0,4.0,5.0,6.0,7.0,Doubles{a:1.5,value:2.5},10.0) != 42.0 { #panic("FP pressure") }',
          'if independent(1,2,3,4,5,6,7,Doubles{a:1.5,value:2.5}) != 32.0 { #panic("independent classes") }']
+if a.riscv:
+    # LP64D scalar u32 values must be sign-extended through bit31 at ABI boundaries.
+    c += ['#include <stdarg.h>',
+          'unsigned long long narrow_bits(unsigned int v) { unsigned long long r; __asm__("mv %0, %1" : "=r"(r) : "r"(v)); return r; }',
+          'unsigned long long narrow_callback(unsigned int (*f)(void)) { return narrow_bits(f()); }',
+          'double variadic_sum(int count, ...) { va_list ap; va_start(ap,count); double sum=0; for(int i=0;i<count;i++) sum += va_arg(ap,double); va_end(ap); return sum; }']
+    dyn += ['extern fn narrow_bits(v:u32) u64',
+            'extern fn narrow_callback(f: *fn() u32) u64',
+            'extern fn variadic_sum(n:i32, ...) f64',
+            'fn narrow_return() u32 { return 0x80000000 }']
+    body += ['if narrow_bits(0x80000000) != 0xffffffff80000000 { #panic("LP64D unsigned32 argument") }',
+             'if narrow_callback(&narrow_return) != 0xffffffff80000000 { #panic("LP64D unsigned32 return") }',
+             'if variadic_sum(9,0.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5) != 40.5 { #panic("LP64D variadic stack") }']
 source = work/'source'; source.mkdir(exist_ok=True)
 (source/'char_linux_arm.dyn').write_text('#target(kernel: linux, arch: aarch64)\nfn check_unsigned_char() { value: c.char = 255 _ = value }\n')
 (source/'main.dyn').write_text('\n'.join(dyn)+'\nfn main() {\n'+'\n'.join(body)+'\n}\n')
@@ -92,6 +106,8 @@ targets = [('linux','x86_64-linux',shlex.split(os.environ.get('CC','cc')),True),
 if a.cross:
     targets += [(name,target,['zig','cc','-target',triple],False) for name,target,triple in (
         ('windows','x86_64-windows','x86_64-windows-gnu'),('macos','aarch64-macos','aarch64-macos-none'),('aarch64','aarch64-linux','aarch64-linux-musl'))]
+if a.riscv:
+    targets = [('riscv64','riscv64-linux',['clang','--target=riscv64-unknown-linux-gnu','-march=rv64g','-mno-relax'],True)]
 rows=[]
 for name,target,cc,native in targets:
     for release in (False,True):
@@ -100,7 +116,7 @@ for name,target,cc,native in targets:
         subprocess.run([*cc,'-std=c11','-O2' if release else '-O0','-ffreestanding','-fno-sanitize=all','-fno-stack-protector','-c',str(work/'provider.c'),'-o',str(obj)],check=True)
         output=work/(f'{name}-{mode}'+('.exe' if name=='windows' else ''))
         subprocess.run([DYN,'build',str(source),'--target',target,'--no-cache','--quiet','--link',str(obj),'--output',str(output)]+(['--release'] if release else []),check=True,timeout=120)
-        if native: subprocess.run([str(output)],check=True,timeout=30)
+        if native: subprocess.run((['qemu-riscv64'] if target == 'riscv64-linux' else []) + [str(output)],check=True,timeout=30)
         rows.append(dict(target=target,provider=cc,release=release,artifact=str(output.relative_to(ROOT)),status='executed' if native else 'cross-linked-only'))
         print('PASS',name,mode,'executed' if native else 'cross-linked',flush=True)
 (work/'results.json').write_text(json.dumps(dict(struct_shapes=len(cases),host=platform.platform(),results=rows),indent=2)+'\n')

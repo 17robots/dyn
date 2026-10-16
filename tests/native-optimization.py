@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -100,6 +101,84 @@ fn main() {
             assert bytes.fromhex('c4e2f1f7c0') in data, 'missing selected shlx'
             assert bytes.fromhex('c4e2f3f7c0') in data, 'missing selected shrx'
             assert bytes.fromhex('c4e2f2f7c0') in data, 'missing selected sarx'
+    # Dynamic calls must preserve argument snapshots, local identities, lexical
+    # cleanup and all return paths. These cannot use constant-call evaluation.
+    (module/'main.dyn').write_text('''
+state: i64 = 0
+fn next() i64 { state += 1 return state }
+fn choose(a: i64, b: i64) i64 {
+  defer { state += 100 }
+  if a > b { return a - b }
+  for i in 0..b { if i == a { return a + b } }
+  return b
+}
+fn recursive(n: i64) i64 { if n == 0 { return 7 } return recursive(n - 1) }
+struct Pair { a: i64, b: i64 }
+fn pair(x: i64) Pair { defer { state += 10 } return Pair{a: x, b: x + 2} }
+fn mutate(p: *Pair) i64 { p.a = 999 return 0 }
+fn take(p: Pair, ignored: i64) Pair { return p }
+fn text(x: i64) []const u8 { if x > 0 { return "yes" } return "no" }
+fn add(x: i64) { state += x }
+fn captures() { defer add(next()) state += 10 }
+pub fn exercise() {
+  state = 0
+  answer := choose(next(), next())
+  if answer != 3 || state != 102 { #panic("argument/return/defer") }
+  p := pair(next())
+  if p.a != 103 || p.b != 105 || state != 113 { #panic("aggregate return") }
+  snapshot := take(p, mutate(&p))
+  if snapshot.a != 103 || p.a != 999 { #panic("argument snapshot") }
+  r := recursive(4)
+  if r != 7 { #panic("recursion") }
+  s := text(next())
+  if #len(s) != 3 { #panic("descriptor") }
+  answer = choose(4, 2)
+  if answer != 2 || state != 214 { #panic("second expansion") }
+  captures()
+  if state != 440 { #panic("deferred argument capture") }
+}
+fn main() { exercise() }
+''')
+    for level in (2, 3):
+        output = work/f'inline-{level}'
+        result = run(DYN, 'build', module, '--release', '--opt-level', level,
+                     '--opt-remarks', '--emit-ir', '--output', output)
+        run(output)
+        if level == 3:
+            count = sum(map(int, re.findall(r'(\d+) direct calls inlined', result.stderr)))
+            assert count >= 5, result.stderr
+            ir = output.with_suffix('.ll').read_text()
+            exercise = re.search(r'define[^\n]*@exercise\([^\n]*\)\s*\{(.*?)\n\}', ir, re.S)
+            assert exercise, ir
+            assert not re.search(r'call[^\n]*@(choose|pair|take|text|captures)\(', exercise[1]), exercise[1]
+            assert re.search(r'call[^\n]*@next\(', exercise[1]), 'argument effects must remain'
+    # The same transformed IR feeds every target. Reassemble with an optional
+    # oracle; execution on foreign hosts remains the corresponding CI job.
+    for target in ('x86_64-linux', 'aarch64-linux', 'aarch64-macos', 'x86_64-macos', 'x86_64-windows', 'aarch64-windows',
+                   'wasm32-browser', 'wasm32-wasi'):
+        run(DYN, 'build', module, '--release', '--opt-level', 3, '--target', target,
+            '--emit-object', '--emit-ir', '--no-link', '--output', work/target,
+            *(['--shared'] if target == 'wasm32-browser' else []))
+    if shutil.which('node'):
+        wasm = work/'inline.wasm'
+        run(DYN, 'build', module, '--release', '--opt-level', 3, '--target',
+            'wasm32-browser', '--shared', '--output', wasm)
+        run('node', '-e', '''const fs=require('fs');
+WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{}).then(({instance})=>{
+  instance.exports.dyn_initialize(); instance.exports.exercise();
+}).catch(e=>{console.error(e);process.exit(1)});''', wasm)
+
+    (module/'main.dyn').write_text('''use "std/io" io
+fn fail() { defer { _ = io.println(io.stdout(), "inner") } #panic("inline panic") }
+fn main() { defer { _ = io.println(io.stdout(), "outer") } fail() }
+''')
+    for level in (2, 3):
+        output = work/f'inline-panic-{level}'
+        run(DYN, 'build', module, '--release', '--opt-level', level, '--output', output)
+        result = run(output, success=False)
+        assert result.stdout.splitlines() == ['inner', 'outer'], result.stdout
+        assert 'inline panic' in result.stderr, result.stderr
+
     # Checked failure must remain a runtime failure at every optimization level.
     (module/'main.dyn').write_text('fn main() { a: i8 = 127 b: i8 = 1 _ = a + b }\n')
     for level in (1, 2, 3):
@@ -107,4 +186,4 @@ fn main() {
         run(DYN, 'build', module, '--backend', 'native', '--release', '--opt-level', level,
             '--output', output)
         run(output, success=False)
-print('PASS independent optimization levels, effect ordering, aliases, deferred cleanup and checked overflow')
+print('PASS independent optimization levels, effect ordering, aliases, inlining, deferred cleanup and checked overflow')

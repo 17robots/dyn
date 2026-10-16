@@ -24,6 +24,7 @@ typedef struct {
 BackendDwarf *backend_dwarf_create(void);
 /* AArch64 frames: stp x29, x30, [sp, #-16]!; mov x29, sp ... mov sp, x29; ldp; ret. */
 BackendDwarf *backend_dwarf_create_a64(void);
+BackendDwarf *backend_dwarf_create_rv64(void);
 void backend_dwarf_free(BackendDwarf *);
 /* All offsets are relative to this object's .text. Functions cannot overlap.
    x86-64 frames begin with push rbp; mov rbp,rsp and end with leave; ret.

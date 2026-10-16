@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn')).resolve())
 CLANG = shutil.which('clang') if os.environ.get('DYN_ASSEMBLY_ORACLE') != '0' else None
 TARGETS = {'x86_64-linux':'x86_64-linux-gnu', 'aarch64-linux':'aarch64-linux-gnu',
-           'aarch64-macos':'arm64-apple-macos15', 'x86_64-windows':'x86_64-windows-gnu'}
+           'aarch64-macos':'arm64-apple-macos15', 'x86_64-windows':'x86_64-windows-gnu',
+           'x86_64-macos':'x86_64-apple-macos15', 'aarch64-windows':'aarch64-pc-windows-msvc',
+           'riscv64-linux':'riscv64-unknown-linux-gnu'}
 SOURCE = '''
 extern fn ext "external"(x: i64) i64
 pub state: i64 = 7
@@ -70,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-asm-') as directory:
         assert ('"_answer":' if target.endswith('macos') else '"answer":') in text
         if not CLANG:
             continue
-        run(CLANG,'--target='+triple,'-c',assembly,'-o',rebuilt)
+        run(CLANG,'--target='+triple,*(['-march=rv64g'] if target=='riscv64-linux' else []),'-c',assembly,'-o',rebuilt)
         before,after=sections(original),sections(rebuilt)
         # Debug/unwind payloads and constructor entries survive assembly output.
         for name in ('.debug_abbrev','.debug_line','.xdata','__debug_abbrev','__debug_line'):
@@ -103,5 +105,24 @@ int main(void) {
             executable=work/'roundtrip'
             run(CLANG,harness,rebuilt,'-o',executable)
             run(executable)
-print('PASS independent assembly generation all four formats' +
+    # Machine optimization adds callee-save moves and SIMD. Reassembling the
+    # readable forms must preserve every instruction byte, including tails.
+    (module/'main.dyn').write_text('''pub fn kernel(seed: u32) u32 {
+  a: [19]u32 = [] b: [19]u32 = [] c: [19]u32 = []
+  for i in 0..19 { a[i] = #wrap(seed + (#cast(u32) i)) b[i] = 4294967295 }
+  for i in 0..19 { c[i] = #wrap(a[i] + b[i]) }
+  return c[18]
+}''')
+    for target in ('x86_64-linux', 'aarch64-linux'):
+        output = work/('optimized-'+target)
+        run(DYN, 'build', module, '--release', '--opt-level', 3, '--shared', '--no-link',
+            '--emit-object', '--emit-asm', '--target', target, '--output', output)
+        assembly = output.with_suffix('.s')
+        text = assembly.read_text()
+        assert ('paddd' if target.startswith('x86') else 'add v0.4s') in text, text
+        if CLANG:
+            rebuilt = work/('optimized-'+target+'-roundtrip.o')
+            run(CLANG, '--target='+TARGETS[target], '-c', assembly, '-o', rebuilt)
+            assert sections(output.with_suffix('.o'))['.text'] == sections(rebuilt)['.text'], target
+print('PASS independent assembly generation all seven native targets' +
       ('; roundtrip host C ABI, debug/unwind and constructors' if CLANG else ' (oracle disabled/unavailable)'))

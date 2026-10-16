@@ -19,11 +19,11 @@ typedef struct {
   const char *interpreter; /* Dynamic loader, for executables using shared libraries. */
   DynLinkLayout layout; /* Orders code by a call-graph profile; may be NULL. */
 } DynLinkOptions;
-/* Links x86-64 objects, archives, shared libraries and GNU linker scripts
+/* Links x86-64, AArch64 and RV64 objects, archives, shared libraries and GNU linker scripts
    into an executable or shared library at output. Prints a diagnostic and
    returns nonzero on failure. */
 int dyn_link_elf(const char *const *inputs, size_t input_count, const char *output, const DynLinkOptions *options);
-/* Whether the built-in linker reads this input: x86-64 objects, archives,
+/* Whether the built-in linker reads this input: native ELF objects, archives,
    shared libraries and linker scripts. */
 bool dyn_link_elf_supported(const char *path);
 /* Global symbol names that objects, archive members and shared libraries

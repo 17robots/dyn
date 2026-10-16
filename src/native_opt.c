@@ -295,7 +295,452 @@ static bool profile_read(const char *path, const DynIrProgram *ir,
   fclose(f);
   return ok && records;
 }
+/* Direct calls in statement positions can be expanded without changing the IR
+   contract. A one-shot loop supplies a lexical cleanup boundary and a common
+   exit for multiple returns. Arguments are captured before entering that scope.
+   Calls inside larger expressions and deferred call captures remain calls. */
+typedef struct {
+  const DynIrProgram *in;
+  DynIrProgram out;
+  size_t expressions_cap, statements_cap, items_cap, children_cap, locals_cap,
+      arms_cap;
+  uint32_t loop_stride, next_loop;
+  unsigned expansions, budget;
+  bool failed;
+  bool *active;
+} Inline;
+typedef struct {
+  const DynIrFunction *function;
+  uint32_t local_base, loop_base, exit_loop, result_local;
+  bool returns, expand;
+} InlineScope;
+typedef struct {
+  uint32_t *ids;
+  size_t count, capacity;
+} InlineList;
+static bool inline_grow(Inline *b, void **array, size_t *capacity, size_t need,
+                        size_t element) {
+  if (b->failed)
+    return false;
+  if (need <= *capacity)
+    return true;
+  if (need > (1u << 22) || element > SIZE_MAX / need) {
+    b->failed = true;
+    return false;
+  }
+  size_t n = *capacity ? *capacity : 16;
+  while (n < need)
+    n *= 2;
+  void *p = realloc(*array, n * element);
+  if (!p) {
+    b->failed = true;
+    return false;
+  }
+  *array = p;
+  *capacity = n;
+  return true;
+}
+#define INLINE_APPEND(b, field, cap, value, result)                            \
+  do {                                                                         \
+    (result) = (uint32_t)(b)->out.field##_count;                               \
+    if (inline_grow((b), (void **)&(b)->out.field##s, &(b)->cap,               \
+                    (b)->out.field##_count + 1, sizeof(*(b)->out.field##s)))   \
+      (b)->out.field##s[(b)->out.field##_count++] = (value);                   \
+  } while (0)
+static void inline_list(Inline *b, InlineList *list, uint32_t id) {
+  if (inline_grow(b, (void **)&list->ids, &list->capacity, list->count + 1,
+                  sizeof(*list->ids)))
+    list->ids[list->count++] = id;
+}
+static uint32_t inline_children(Inline *b, InlineList *list) {
+  uint32_t start = (uint32_t)b->out.child_count;
+  if (inline_grow(b, (void **)&b->out.children, &b->children_cap,
+                  b->out.child_count + list->count, sizeof(*b->out.children))) {
+    if (list->count)
+      memcpy(b->out.children + start, list->ids,
+             list->count * sizeof(*list->ids));
+    b->out.child_count += list->count;
+  }
+  free(list->ids);
+  list->ids = NULL;
+  return start;
+}
+static uint32_t inline_local(Inline *b, const InlineScope *s, uint32_t id) {
+  if (id == UINT32_MAX)
+    return id;
+  if (id < s->function->local_start ||
+      id - s->function->local_start >= s->function->local_count) {
+    b->failed = true;
+    return UINT32_MAX;
+  }
+  return s->local_base + id - s->function->local_start;
+}
+static uint32_t inline_locals(Inline *b, const DynIrFunction *f) {
+  uint32_t start = (uint32_t)b->out.local_count;
+  if ((uint64_t)f->local_start + f->local_count > b->in->local_count) {
+    b->failed = true;
+    return start;
+  }
+  if (inline_grow(b, (void **)&b->out.locals, &b->locals_cap,
+                  b->out.local_count + f->local_count,
+                  sizeof(*b->out.locals))) {
+    if (f->local_count)
+      memcpy(b->out.locals + start, b->in->locals + f->local_start,
+             f->local_count * sizeof(*b->out.locals));
+    b->out.local_count += f->local_count;
+  }
+  return start;
+}
+static uint32_t inline_loop_base(Inline *b) {
+  uint32_t base = b->next_loop;
+  if (b->next_loop > UINT32_MAX - b->loop_stride)
+    b->failed = true;
+  else
+    b->next_loop += b->loop_stride;
+  return base;
+}
+static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
+                             unsigned depth) {
+  if (id == DYN_NO_EXPR || b->failed)
+    return id;
+  if (id >= b->in->expression_count || depth > 1024) {
+    b->failed = true;
+    return DYN_NO_EXPR;
+  }
+  DynIrExpr e = b->in->expressions[id];
+  /* Literal and global nodes never contain function-local references. */
+  if (e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT ||
+      e.kind == DYN_EXPR_BOOL || e.kind == DYN_EXPR_CHAR ||
+      e.kind == DYN_EXPR_STRING || e.kind == DYN_EXPR_NIL ||
+      e.kind == DYN_EXPR_GLOBAL || e.kind == DYN_EXPR_FUNCTION)
+    return id;
+  if (e.kind == DYN_EXPR_NAME)
+    e.integer = inline_local(b, scope, (uint32_t)e.integer);
+  if (e.kind == DYN_EXPR_SLICE)
+    e.integer = inline_expr(b, scope, (DynExprId)e.integer, depth + 1);
+  e.left = inline_expr(b, scope, e.left, depth + 1);
+  e.right = inline_expr(b, scope, e.right, depth + 1);
+  if ((uint64_t)e.item_start + e.item_count > b->in->item_count) {
+    b->failed = true;
+    return DYN_NO_EXPR;
+  }
+  /* Reserve each contiguous item range before recursively cloning values. */
+  uint32_t start = (uint32_t)b->out.item_count;
+  if (!inline_grow(b, (void **)&b->out.items, &b->items_cap,
+                   b->out.item_count + e.item_count, sizeof(*b->out.items)))
+    return DYN_NO_EXPR;
+  b->out.item_count += e.item_count;
+  for (uint32_t i = 0; i < e.item_count; ++i) {
+    DynIrItem item = b->in->items[e.item_start + i];
+    item.expression = inline_expr(b, scope, item.expression, depth + 1);
+    b->out.items[start + i] = item;
+  }
+  e.item_start = start;
+  uint32_t result;
+  INLINE_APPEND(b, expression, expressions_cap, e, result);
+  return result;
+}
+static DynExprId inline_name(Inline *b, uint32_t local, DynSpan span) {
+  DynIrExpr e = {.kind = DYN_EXPR_NAME,
+                 .type = b->out.locals[local].type,
+                 .integer = local,
+                 .left = DYN_NO_EXPR,
+                 .right = DYN_NO_EXPR,
+                 .span = span};
+  uint32_t id;
+  INLINE_APPEND(b, expression, expressions_cap, e, id);
+  return id;
+}
+static void inline_statement(Inline *b, InlineList *list, DynIrStmt s) {
+  uint32_t id;
+  INLINE_APPEND(b, statement, statements_cap, s, id);
+  inline_list(b, list, id);
+}
+static DynIrStmt inline_empty(DynStmtKind kind, DynSpan span) {
+  return (DynIrStmt){.kind = kind,
+                     .expression = DYN_NO_EXPR,
+                     .target = DYN_NO_EXPR,
+                     .local_id = UINT32_MAX,
+                     .span = span};
+}
+static unsigned inline_cost(const DynIrProgram *ir, uint32_t start,
+                            uint32_t count, unsigned depth) {
+  if (depth > 32 || (uint64_t)start + count > ir->child_count)
+    return 257;
+  unsigned cost = 0;
+  for (uint32_t i = 0; i < count && cost <= 256; ++i) {
+    uint32_t id = ir->children[start + i];
+    if (id >= ir->statement_count)
+      return 257;
+    const DynIrStmt *s = &ir->statements[id];
+    cost += 1 + inline_cost(ir, s->body_start, s->body_count, depth + 1) +
+            inline_cost(ir, s->else_start, s->else_count, depth + 1);
+    if ((uint64_t)s->case_arm_start + s->case_arm_count > ir->case_arm_count)
+      return 257;
+    for (uint32_t j = 0; j < s->case_arm_count && cost <= 256; ++j) {
+      const DynIrCaseArm *arm = &ir->case_arms[s->case_arm_start + j];
+      cost += inline_cost(ir, arm->body_start, arm->body_count, depth + 1);
+    }
+  }
+  return cost;
+}
+static void inline_block(Inline *, const InlineScope *, uint32_t, uint32_t,
+                         InlineList *, unsigned);
+static bool inline_call(Inline *b, const InlineScope *scope,
+                        const DynIrExpr *call, InlineList *list,
+                        DynExprId *result, unsigned depth) {
+  if (!scope->expand || call->kind != DYN_EXPR_CALL ||
+      call->integer >= b->in->function_count || depth > 16 ||
+      b->active[call->integer])
+    return false;
+  const DynIrFunction *f = &b->in->functions[call->integer];
+  if (f->foreign || f->generic || f->variadic || f->is_main ||
+      f->local_count > 128 || call->item_count != f->param_count ||
+      (uint64_t)call->item_start + call->item_count > b->in->item_count ||
+      (uint64_t)f->param_start + f->param_count > b->in->param_count)
+    return false;
+  unsigned cost = inline_cost(b->in, f->body_start, f->body_count, 0);
+  if (cost > 64 || cost + f->param_count + 2 > b->budget)
+    return false;
+  b->budget -= cost + f->param_count + 2;
+  InlineScope nested = {.function = f,
+                        .local_base = inline_locals(b, f),
+                        .loop_base = inline_loop_base(b),
+                        .returns = true,
+                        .expand = true,
+                        .result_local = UINT32_MAX};
+  nested.exit_loop = inline_loop_base(b);
+  if (f->return_type != DYN_TYPE_VOID) {
+    DynIrLocal local = {.name = "__inline_result", .type = f->return_type};
+    INLINE_APPEND(b, local, locals_cap, local, nested.result_local);
+  }
+  if (b->failed)
+    return true;
+  for (uint32_t i = 0; i < f->param_count; ++i) {
+    DynIrStmt s = inline_empty(DYN_STMT_LOCAL, call->span);
+    s.local_id =
+        inline_local(b, &nested, b->in->params[f->param_start + i].local_id);
+    s.expression =
+        inline_expr(b, scope, b->in->items[call->item_start + i].expression, 0);
+    inline_statement(b, list, s);
+  }
+  InlineList body = {0};
+  b->active[call->integer] = true;
+  inline_block(b, &nested, f->body_start, f->body_count, &body, depth + 1);
+  b->active[call->integer] = false;
+  DynIrStmt exit = inline_empty(DYN_STMT_BREAK, call->span);
+  exit.target_loop_id = nested.exit_loop;
+  inline_statement(b, &body, exit);
+  DynIrStmt loop = inline_empty(DYN_STMT_FOR, call->span);
+  loop.loop_id = nested.exit_loop;
+  loop.body_count = (uint32_t)body.count;
+  loop.body_start = inline_children(b, &body);
+  inline_statement(b, list, loop);
+  *result = nested.result_local == UINT32_MAX
+                ? DYN_NO_EXPR
+                : inline_name(b, nested.result_local, call->span);
+  ++b->expansions;
+  return true;
+}
+static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
+                         uint32_t count, InlineList *list, unsigned depth) {
+  if (b->failed)
+    return;
+  if (depth > 1024 || (uint64_t)start + count > b->in->child_count) {
+    b->failed = true;
+    return;
+  }
+  for (uint32_t i = 0; i < count && !b->failed; ++i) {
+    uint32_t id = b->in->children[start + i];
+    if (id >= b->in->statement_count) {
+      b->failed = true;
+      break;
+    }
+    DynIrStmt s = b->in->statements[id];
+    DynExprId value = DYN_NO_EXPR;
+    bool eligible =
+        s.kind == DYN_STMT_LOCAL || s.kind == DYN_STMT_RETURN ||
+        s.kind == DYN_STMT_EXPR || s.kind == DYN_STMT_IF ||
+        (s.kind == DYN_STMT_ASSIGN && s.assignment_op == DYN_OP_NONE &&
+         (s.target == DYN_NO_EXPR ||
+          (s.target < b->in->expression_count &&
+           (b->in->expressions[s.target].kind == DYN_EXPR_NAME ||
+            b->in->expressions[s.target].kind == DYN_EXPR_GLOBAL))));
+    bool expanded = eligible && s.expression < b->in->expression_count &&
+                    inline_call(b, scope, &b->in->expressions[s.expression],
+                                list, &value, depth);
+    if (expanded && s.kind == DYN_STMT_EXPR && value == DYN_NO_EXPR)
+      continue;
+    s.expression = expanded ? value : inline_expr(b, scope, s.expression, 0);
+    s.target = inline_expr(b, scope, s.target, 0);
+    if (s.kind == DYN_STMT_LOCAL || s.kind == DYN_STMT_ASSIGN ||
+        s.kind == DYN_STMT_FOR) {
+      /* Non-binding loops use a sentinel local id. */
+      if (s.kind != DYN_STMT_FOR || s.for_range || s.target != DYN_NO_EXPR)
+        s.local_id = inline_local(b, scope, s.local_id);
+    }
+    if (s.kind == DYN_STMT_FOR)
+      s.loop_id += scope->loop_base;
+    if (s.kind == DYN_STMT_BREAK || s.kind == DYN_STMT_CONTINUE)
+      s.target_loop_id += scope->loop_base;
+    InlineScope child = *scope;
+    if (s.kind == DYN_STMT_DEFER)
+      child.expand = false;
+    InlineList body = {0}, otherwise = {0};
+    inline_block(b, &child, s.body_start, s.body_count, &body, depth + 1);
+    inline_block(b, &child, s.else_start, s.else_count, &otherwise, depth + 1);
+    s.body_count = (uint32_t)body.count;
+    s.body_start = inline_children(b, &body);
+    s.else_count = (uint32_t)otherwise.count;
+    s.else_start = inline_children(b, &otherwise);
+    if ((uint64_t)s.case_arm_start + s.case_arm_count > b->in->case_arm_count) {
+      b->failed = true;
+      break;
+    }
+    uint32_t arm_start = (uint32_t)b->out.case_arm_count;
+    if (!inline_grow(b, (void **)&b->out.case_arms, &b->arms_cap,
+                     b->out.case_arm_count + s.case_arm_count,
+                     sizeof(*b->out.case_arms)))
+      break;
+    b->out.case_arm_count += s.case_arm_count;
+    for (uint32_t j = 0; j < s.case_arm_count; ++j) {
+      DynIrCaseArm arm = b->in->case_arms[s.case_arm_start + j];
+      arm.local_id = inline_local(b, scope, arm.local_id);
+      InlineList arm_body = {0};
+      inline_block(b, scope, arm.body_start, arm.body_count, &arm_body,
+                   depth + 1);
+      arm.body_count = (uint32_t)arm_body.count;
+      arm.body_start = inline_children(b, &arm_body);
+      b->out.case_arms[arm_start + j] = arm;
+    }
+    s.case_arm_start = arm_start;
+    if (s.kind == DYN_STMT_RETURN && scope->returns) {
+      if (scope->result_local != UINT32_MAX) {
+        DynIrStmt assign = inline_empty(DYN_STMT_ASSIGN, s.span);
+        assign.local_id = scope->result_local;
+        assign.expression = s.expression;
+        inline_statement(b, list, assign);
+      }
+      DynIrStmt exit = inline_empty(DYN_STMT_BREAK, s.span);
+      exit.target_loop_id = scope->exit_loop;
+      inline_statement(b, list, exit);
+    } else
+      inline_statement(b, list, s);
+  }
+}
+static void inline_free(DynIrProgram *ir) {
+  free(ir->expressions);
+  free(ir->statements);
+  free(ir->items);
+  free(ir->children);
+  free(ir->locals);
+  free(ir->params);
+  free(ir->functions);
+  free(ir->case_arms);
+  free(ir->unstable_locals);
+  free(ir->local_statements);
+}
+static bool inline_program(DynNativeOptimization *o) {
+  Inline b = {.in = &o->ir, .out = o->ir, .loop_stride = 1};
+  b.out.expressions = NULL;
+  b.out.statements = NULL;
+  b.out.items = NULL;
+  b.out.children = NULL;
+  b.out.locals = NULL;
+  b.out.params = NULL;
+  b.out.functions = NULL;
+  b.out.case_arms = NULL;
+  b.out.unstable_locals = NULL;
+  b.out.local_statements = NULL;
+  b.out.local_count = 0;
+  b.out.child_count = 0;
+  b.out.case_arm_count = 0;
+  b.active = calloc(o->ir.function_count ? o->ir.function_count : 1,
+                    sizeof(*b.active));
+  if (!b.active)
+    return false;
+#define INLINE_COPY(field, count, cap)                                         \
+  do {                                                                         \
+    if (inline_grow(&b, (void **)&b.out.field, &b.cap, b.in->count,            \
+                    sizeof(*b.out.field)) &&                                   \
+        b.in->count)                                                           \
+      memcpy(b.out.field, b.in->field, b.in->count * sizeof(*b.out.field));    \
+  } while (0)
+  INLINE_COPY(expressions, expression_count, expressions_cap);
+  INLINE_COPY(statements, statement_count, statements_cap);
+  INLINE_COPY(items, item_count, items_cap);
+  size_t bytes = (b.in->function_count ? b.in->function_count : 1) *
+                 sizeof(*b.out.functions);
+  b.out.functions = malloc(bytes);
+  if (b.out.functions && b.in->function_count)
+    memcpy(b.out.functions, b.in->functions, bytes);
+  bytes = (b.in->param_count ? b.in->param_count : 1) * sizeof(*b.out.params);
+  b.out.params = malloc(bytes);
+  if (b.out.params && b.in->param_count)
+    memcpy(b.out.params, b.in->params, bytes);
+  if (!b.out.functions || !b.out.params)
+    b.failed = true;
+  for (size_t i = 0; i < b.in->statement_count; ++i) {
+    const DynIrStmt *s = &b.in->statements[i];
+    if (s->kind == DYN_STMT_FOR && s->loop_id >= b.loop_stride) {
+      if (s->loop_id == UINT32_MAX)
+        b.failed = true;
+      else
+        b.loop_stride = s->loop_id + 1;
+    }
+  }
+  for (size_t i = 0; i < b.in->function_count && !b.failed; ++i) {
+    const DynIrFunction *f = &b.in->functions[i];
+    if (f->foreign || f->generic)
+      continue;
+    InlineScope scope = {.function = f,
+                         .local_base = inline_locals(&b, f),
+                         .loop_base = inline_loop_base(&b),
+                         .expand = true};
+    b.budget = 256;
+    b.active[i] = true;
+    InlineList body = {0};
+    inline_block(&b, &scope, f->body_start, f->body_count, &body, 0);
+    b.active[i] = false;
+    DynIrFunction *dest = &b.out.functions[i];
+    dest->body_count = (uint32_t)body.count;
+    dest->body_start = inline_children(&b, &body);
+    dest->local_start = scope.local_base;
+    dest->local_count = (uint32_t)b.out.local_count - scope.local_base;
+    if (f->variadic)
+      dest->variadic_local_id = inline_local(&b, &scope, f->variadic_local_id);
+    for (uint32_t j = 0; j < f->param_count; ++j)
+      b.out.params[f->param_start + j].local_id =
+          inline_local(&b, &scope, b.in->params[f->param_start + j].local_id);
+  }
+  b.out.unstable_locals = malloc(b.out.local_count ? b.out.local_count : 1);
+  b.out.local_statements = calloc(b.out.local_count ? b.out.local_count : 1,
+                                  sizeof(*b.out.local_statements));
+  if (!b.out.unstable_locals || !b.out.local_statements)
+    b.failed = true;
+  if (!b.failed)
+    memset(b.out.unstable_locals, 1, b.out.local_count);
+  free(b.active);
+  if (b.failed) {
+    inline_free(&b.out);
+    return false;
+  }
+  free(o->ir.expressions);
+  free(o->ir.statements);
+  o->ir = b.out;
+  o->inlined = b.expansions;
+  o->owns_expansion = true;
+  return true;
+#undef INLINE_COPY
+}
+#undef INLINE_APPEND
+
 void dyn_native_optimization_free(DynNativeOptimization *o) {
+  if (o->owns_expansion) {
+    inline_free(&o->ir);
+    memset(o, 0, sizeof(*o));
+    return;
+  }
   free(o->ir.expressions);
   free(o->ir.statements);
   memset(o, 0, sizeof(*o));
@@ -379,6 +824,11 @@ bool dyn_native_optimize(const DynSource *source, const DynIrProgram *input,
         s->body_count = 0;
       ++o->branches;
     }
+  if (level >= 3 && !inline_program(o)) {
+    free(samples);
+    dyn_native_optimization_free(o);
+    return false;
+  }
   if (policy && policy->remarks)
     fprintf(stderr,
             "remark: independent O%u: %zu scalar folds, %zu immutable loads, "
@@ -387,6 +837,11 @@ bool dyn_native_optimize(const DynSource *source, const DynIrProgram *input,
   if (samples && policy->remarks)
     fprintf(stderr, "remark: samples from profile control constant-call "
                     "budgets (hot 1024, cold 16 nodes)\n");
+  if (policy && policy->remarks && level >= 3)
+    fprintf(stderr,
+            "remark: %zu direct calls inlined with argument capture and "
+            "lexical cleanup\n",
+            o->inlined);
   free(samples);
   return true;
 }

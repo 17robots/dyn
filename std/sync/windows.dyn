@@ -1,4 +1,4 @@
-#target(arch: x86_64, kernel: windows)
+#target(kernel: windows)
 
 // WaitOnAddress/WakeByAddress* are process-local synchronization primitives.
 // Runtime imports API-MS-Win-Core-Synch-l1-2-0.dll, without SDK import libraries.

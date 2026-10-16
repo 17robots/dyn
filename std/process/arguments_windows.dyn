@@ -1,4 +1,4 @@
-#target(arch: x86_64, kernel: windows)
+#target(kernel: windows)
 extern fn argument_command "dyn_arguments_command"() *const u16
 struct ArgumentToken { next: usize, length: usize, ok: bool }
 fn argument_emit(destination: []u8, at: usize, value: u32, writing: bool) usize {

@@ -16,6 +16,7 @@ from pathlib import Path
 import random
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -296,12 +297,25 @@ def build_program(rng, per_function):
             call = f'{name}(' + ', '.join(f'v{k}' for k in range(len(types))) + ')'
             body = f'_ = io.println(io.stdout(), "{{}}", {call})' if result else f'{call} _ = io.println(io.stdout(), "void")'
             cases.append(f'{locals_} {body}')
-    arms = '\n'.join(f'    {i} => {{ {case} }},' for i, case in enumerate(cases))
+    # Keep the dispatcher below object-format function/unwind size limits while
+    # retaining every generated case. Large-frame functions remain in the corpus.
+    dispatchers = []
+    dispatch_arms = []
+    for start in range(0, len(cases), 128):
+        group = start // 128
+        arms = '\n'.join(f'    {i} => {{ {case} }},'
+                         for i, case in enumerate(cases[start:start + 128], start))
+        dispatchers.append(f'fn dispatch_{group}(index:u64) {{ case index {{\n{arms}\n'
+                           '    _ => { #panic("unknown case") },\n  }\n}\n')
+        dispatch_arms.append(f'    {group} => {{ dispatch_{group}(index) }},')
+    dispatch_source = '\n'.join(dispatchers)
+    arms = '\n'.join(dispatch_arms)
     program = f'''use "std/io"
 use "std/mem"
 use "std/process"
 use "std/strings"
 {source}
+{dispatch_source}
 fn main() {{
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
@@ -309,7 +323,7 @@ fn main() {{
   if !arguments.ok || #len(arguments.values) < 2 {{ #panic("case index required") }}
   index: u64 = 0
   if !strings.parse_u64(arguments.values[1], &index) {{ #panic("bad case index") }}
-  case index {{
+  case index / 128 {{
 {arms}
     _ => {{ #panic("unknown case") }},
   }}
@@ -325,17 +339,27 @@ def no_core_dumps():
 TARGETS = {
     'x86_64-linux': 'x86_64-linux-gnu',
     'aarch64-linux': 'aarch64-linux-gnu',
+    'riscv64-linux': 'riscv64-unknown-linux-gnu',
     'x86_64-windows': 'x86_64-pc-windows-msvc',
     'aarch64-macos': 'arm64-apple-macosx15.0',
+    'x86_64-macos': 'x86_64-apple-macosx15.0',
+    'aarch64-windows': 'aarch64-pc-windows-msvc',
 }
 
 def runner(target):
     machine = platform.machine().lower()
     if target == 'x86_64-linux':
         return [] if sys.platform.startswith('linux') and machine in ('x86_64', 'amd64') else None
+    if target == 'riscv64-linux':
+        if sys.platform.startswith('linux') and machine == 'riscv64': return []
+        return ['qemu-riscv64'] if shutil.which('qemu-riscv64') else None
     if target == 'aarch64-linux':
         if sys.platform.startswith('linux') and machine in ('aarch64', 'arm64'): return []
         return ['qemu-aarch64'] if shutil.which('qemu-aarch64') else None
+    if target == 'aarch64-windows':
+        return [] if sys.platform == 'win32' and machine in ('aarch64', 'arm64') else None
+    if target == 'x86_64-macos':
+        return [] if sys.platform == 'darwin' and machine in ('x86_64', 'amd64') else None
     if target == 'x86_64-windows':
         if sys.platform == 'win32': return []
         wine = shutil.which('wine') or shutil.which('wine64')
@@ -350,23 +374,56 @@ def build(args, root, program):
     provider = root/'provider.o'
     clang = shutil.which(os.environ.get('CLANG', 'clang'))
     if not clang: return None
-    subprocess.run([clang, f'--target={TARGETS[args.target]}', '-ffreestanding', '-fno-stack-protector', '-O1',
+    target_flags = ['-march=rv64g', '-mno-relax'] if args.target == 'riscv64-linux' else []
+    subprocess.run([clang, f'--target={TARGETS[args.target]}', *target_flags, '-ffreestanding', '-fno-stack-protector', '-O1',
                     '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
+    harness = root/'oracle-link.c'
+    harness.write_text('#include "link_elf.h"\n#include "link_macho.h"\n#include "link_coff.h"\n#include <string.h>\n'
+        'int main(int n,char **v){const char *const *p=(const char *const *)v+3;'
+        'if(strstr(v[1],"windows")){DynCoffOptions o={.entry="dyn_start"};return dyn_link_coff(p,n-3,v[2],&o);}'
+        'if(strstr(v[1],"macos")){DynMachOOptions o={.entry="_dyn_start"};return dyn_link_macho(p,n-3,v[2],&o);}'
+        'DynLinkOptions o={.entry="_start"};return dyn_link_elf(p,n-3,v[2],&o);}')
+    linker = root/('oracle-link.exe' if os.name == 'nt' else 'oracle-link')
+    subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2',
+                    '-D_POSIX_C_SOURCE=200809L', '-I'+str(ROOT/'src'), str(harness),
+                    *[str(ROOT/'src'/name) for name in ('link_elf.c','link_macho.c','link_coff.c')],
+                    '-o', str(linker)], check=True)
     outputs = {}
-    suffix = '.exe' if args.target == 'x86_64-windows' else ''
+    suffix = '.exe' if args.target.endswith('-windows') else ''
     for backend in ('native', 'llvm'):
         output = root/f'{backend}{suffix}'
         built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', args.target,
-                                '--backend', backend, '--no-cache', '--quiet', '--link', str(provider),
+                                '--backend', 'native', *(['--emit-ir', '--no-link'] if backend == 'llvm' else []), '--no-cache', '--quiet', '--link', str(provider),
                                 '--output', str(output)],
                                capture_output=True, text=True, timeout=600)
         if built.returncode:
             (Path(tempfile.gettempdir())/'dyn-native-diff-main.dyn').write_text(program)
             sys.exit(f'{backend} build failed:\n{built.stderr[-4000:]}')
+        if backend == 'llvm':
+            # LLVM is an optional external test oracle, never a compiler backend.
+            obj = Path(str(output) + '.oracle.o')
+            subprocess.run([clang, f'--target={TARGETS[args.target]}', *target_flags, '-O0', '-c',
+                            str(output) + '.ll', '-o', str(obj)], check=True)
+            runtime = args.compiler.resolve().parent
+            names = {
+                'x86_64-linux': ('dynrt_start.o', 'dynrt_support.o'),
+                'aarch64-linux': ('dynrt_aarch64_start.o', 'dynrt_aarch64_support.o'),
+                'riscv64-linux': ('dynrt_riscv64_start.o', 'dynrt_riscv64_support.o'),
+                'x86_64-windows': ('dynrt_windows_start.o', 'dynrt_windows_support.o'),
+                'aarch64-macos': ('dynrt_macos_start.o', 'dynrt_macos_support.o'),
+                'x86_64-macos': ('dynrt_macos_x64_start.o', 'dynrt_macos_x64_support.o'),
+                'aarch64-windows': ('dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_support.o'),
+            }[args.target]
+            if not (runtime/names[0]).exists():
+                runtime = runtime.parent/'lib/dyn'
+            inputs = [str(runtime/name) for name in names] + [str(obj), str(provider)]
+            if args.target.endswith('-macos'):
+                inputs += [str(ROOT/'runtime/libSystem.tbd')]
+            subprocess.run([str(linker), args.target, str(output), *inputs], check=True)
         outputs[backend] = output
     dwarfdump = shutil.which('llvm-dwarfdump')
     debug_object = outputs['native'].with_name(outputs['native'].name + '.dynnative.o')
-    dwarf = debug_object if args.target == 'aarch64-macos' else outputs['native']
+    dwarf = debug_object if args.target.endswith('-macos') else outputs['native']
     if dwarfdump and dwarf:
         verify = subprocess.run([dwarfdump, '--verify', str(dwarf)], capture_output=True, text=True)
         assert verify.returncode == 0 and 'No errors.' in verify.stdout, verify.stdout[-2000:]

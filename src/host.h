@@ -18,7 +18,11 @@
 #include <fcntl.h>
 #include <io.h>
 #define DYN_PATH_SEPARATOR ';'
+#if defined(_M_ARM64) || defined(__aarch64__)
+#define DYN_HOST_TARGET "aarch64-windows"
+#else
 #define DYN_HOST_TARGET "x86_64-windows"
+#endif
 #define DYN_WINDOWS_LINKER "ld.lld.exe"
 static inline void dyn_host_slashes(char *path) {
   for (; *path; ++path) if (*path == '\\') *path = '/';
@@ -132,8 +136,14 @@ static inline int dyn_host_setenv(const char *key, const char *value, int overwr
 #define st_mtim st_mtimespec
 #define st_ctim st_ctimespec
 #endif
+#if defined(__aarch64__) || defined(__arm64__)
 #define DYN_HOST_TARGET "aarch64-macos"
+#else
+#define DYN_HOST_TARGET "x86_64-macos"
+#endif
 #define DYN_DARWIN_LINKER "ld64.lld"
+#elif defined(__riscv) && __riscv_xlen == 64
+#define DYN_HOST_TARGET "riscv64-linux"
 #elif defined(__aarch64__)
 #define DYN_HOST_TARGET "aarch64-linux"
 #else

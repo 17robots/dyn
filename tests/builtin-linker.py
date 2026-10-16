@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """x86-64 Linux executables link in-process: no external linker on PATH,
 archive members load on demand, unused sections are dropped, link errors name
-the symbol, and release ThinLTO output matches ld.lld's."""
+the symbol, and release native output matches ld.lld's."""
 import hashlib
 import os
 import re
@@ -167,8 +167,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
             relocations = run('readelf', '-rW', dynamic).stdout
             assert 'R_X86_64_COPY' in relocations and 'R_X86_64_JUMP_SLOT' in relocations, relocations
 
-    # Release: in-process ThinLTO must produce the same code, in the same
-    # order, as ld.lld's ThinLTO, with and without a call-graph profile.
+    # Release: independent native emission must produce the same code, in the same
+    # order, as ld.lld, with and without a call-graph profile.
     (root/'release').mkdir()
     (root/'release'/'main.dyn').write_text(RELEASE)
     if shutil.which('ld.lld') and shutil.which('objdump') and shutil.which('nm'):
@@ -196,7 +196,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
             run(DYN, 'build', root/'release', '--release', '--output', theirs, *extra,
                 env=dict(os.environ, DYN_LINKER='external', DYN_CACHE_DIR=str(root/f'{name}-b')))
             assert run(ours).stdout == run(theirs).stdout
-            assert code(ours) == code(theirs), f'{name}: in-process ThinLTO differs from ld.lld'
+            assert code(ours) == code(theirs), f'{name}: independent native emission differs from ld.lld'
 
     # AArch64 Linux: same instructions as ld.lld, debug and release, run
     # under qemu (relaxed adrp pairs included).
@@ -333,4 +333,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
             run(DYN, 'build', root/'caller', '--target', 'x86_64-windows', '--output', caller, '--link', str(dll) + '.a', env=env)
             assert 'Name: add.dll' in run('llvm-readobj', '--coff-imports', caller).stdout, f'{name}: no add.dll import'
 
-print('PASS built-in ELF, Mach-O and PE linkers and in-process ThinLTO: no external linker, lazy archives, section GC, link errors, shared libraries, signed macOS output, DLL import libraries, code parity')
+print('PASS built-in ELF, Mach-O and PE linkers and independent native emission: no external linker, lazy archives, section GC, link errors, shared libraries, signed macOS output, DLL import libraries, code parity')

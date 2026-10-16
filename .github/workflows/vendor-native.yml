@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      LLVM_CONFIG: llvm-config-19
       CLANG: clang-19
       BIND_CLANG: clang-19
       DYN: ./build/dyn-release

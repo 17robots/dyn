@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native debug routing, LLVM fallback, frontend and whole-program runtime contracts."""
+"""Independent debug routing, frontend and whole-program runtime contracts."""
 import argparse
 import os
 import shlex
@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--compiler', type=Path, default=ROOT/'build/dyn')
-    parser.add_argument('--reference', type=Path, default=ROOT/'build/dyn-legacy')
+    parser.add_argument('--reference', type=Path, default=ROOT/'build/dyn-release')
     args = parser.parse_args()
     candidate, reference = args.compiler.resolve(), args.reference.resolve()
     checks = 0
@@ -87,7 +87,7 @@ fn main() {
             ok([output])
         checks += 1
         source.write_text(original)
-        # Native executables use the whole-executable cache, keyed apart from LLVM.
+        # Native executables use the whole-executable cache, keyed by emission options.
         cache=root/'cache'; env=dict(os.environ,DYN_CACHE_DIR=str(cache))
         def cached(*flags):
             result=subprocess.run(list(map(str,[candidate,'build',root,*flags,'--output',output])),
@@ -95,7 +95,7 @@ fn main() {
             assert result.returncode == 0, result.stderr
             return b'cached ' in result.stdout
         assert not cached('--backend','native') and cached('--backend','native') and cached()
-        assert not cached('--backend','llvm') and cached('--backend','llvm')
+        assert not cached('--release') and cached('--release')
         assert ok([output]).stdout == b'native compiler ok\n'
         checks += 1
         # Independent output and optimization options must execute without fallback.
@@ -121,18 +121,17 @@ fn main() {
         assert (result.returncode,result.stdout,result.stderr)==(oracle.returncode,oracle.stdout,oracle.stderr),(result,oracle)
         checks += 1
         # Programs beyond native capacity fail under --backend native without
-        # replacing a published object; auto falls back to LLVM and still runs.
+        # replacing a published object; auto also rejects unsupported emission.
         source.write_text('fn wide('+', '.join(f'a{i}: u64' for i in range(600))+') u64 { return a599 }\n'
                           'fn main() { if wide('+', '.join(map(str,range(600)))+') != 599 { #panic("wide") } }\n')
         obj=Path(str(output)+'.o');obj.write_bytes(b'previous object')
         result=run([candidate,'build',root,'--backend','native','--no-link','--output',output])
-        assert result.returncode != 0 and b'use --backend llvm' in result.stderr,result.stderr
+        assert result.returncode != 0 and b'native emission failed' in result.stderr,result.stderr
         assert obj.read_bytes() == b'previous object'
-        result=ok([candidate,'build',root,'--verbose','--no-cache','--output',output])
-        assert b'using LLVM' in result.stderr, result.stderr
-        ok([output])
+        result=run([candidate,'build',root,'--verbose','--no-cache','--output',output])
+        assert result.returncode != 0, result.stderr
         checks += 1
-        # Debug builds carry DWARF by default; --release objects come from LLVM.
+        # Debug builds carry DWARF by default; release builds use independent emission too.
         source.write_text('fn main() {}\n')
         ok([candidate,'build',root,'--backend','native','--no-link','--output',output])
         sections=ok(['readelf','-S',str(output)+'.o']).stdout

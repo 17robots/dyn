@@ -16,7 +16,7 @@
 #include <sys/stat.h>
 
 enum {
-  MACHINE_AMD64 = 0x8664,
+  MACHINE_AMD64 = 0x8664, MACHINE_ARM64 = 0xaa64,
   SCN_CNT_CODE = 0x20, SCN_CNT_INITIALIZED = 0x40, SCN_CNT_UNINITIALIZED = 0x80, SCN_LNK_INFO = 0x200,
   SCN_LNK_REMOVE = 0x800, SCN_LNK_COMDAT = 0x1000, SCN_ALIGN_MASK = 0x00f00000, SCN_LNK_NRELOC_OVFL = 0x01000000,
   SCN_MEM_DISCARDABLE = 0x02000000, SCN_MEM_EXECUTE = 0x20000000, SCN_MEM_READ = 0x40000000,
@@ -88,6 +88,7 @@ typedef struct {
 typedef struct {
   const char *output_path;
   bool shared;
+  uint16_t machine;
   char error[512];
   CObject **objects;
   size_t object_count, object_capacity;
@@ -266,7 +267,10 @@ static bool comdat_seen(CLinker *linker, const char *key) {
   return false;
 }
 static bool load_object(CLinker *linker, const char *path, const uint8_t *data, size_t size) {
-  if (size < 20 || read16(data) != MACHINE_AMD64) return fail(linker, "'%s' is not an x86-64 COFF object%s", path, "");
+  if (size < 20 || (read16(data) != MACHINE_AMD64 && read16(data) != MACHINE_ARM64) ||
+      (linker->machine && read16(data) != linker->machine))
+    return fail(linker, "'%s' has an incompatible COFF architecture%s", path, "");
+  linker->machine = read16(data);
   uint16_t section_count = read16(data + 2);
   uint32_t symbol_offset = read32(data + 8), symbol_count = read32(data + 12);
   uint16_t optional = read16(data + 16);
@@ -409,7 +413,19 @@ static bool load_object(CLinker *linker, const char *path, const uint8_t *data, 
       uint32_t index = read32(entry + 4);
       CSymbol *symbol = index < symbol_count ? symbols[index] : NULL;
       if (!symbol) { ok = fail(linker, "'%s' has a relocation to a missing symbol%s", path, ""); break; }
-      section->relocs[section->reloc_count++] = (CReloc){read32(entry), read16(entry + 8), symbol};
+      uint16_t type=read16(entry+8);
+      if (linker->machine == MACHINE_ARM64) {
+        switch(type) {
+        case 0: break;
+        case 1: type=REL_ADDR32; break;
+        case 2: type=REL_ADDR32NB; break;
+        case 8: type=REL_SECREL; break;
+        case 13: type=REL_SECTION; break;
+        case 14: type=REL_ADDR64; break;
+        default: type+=256; break;
+        }
+      }
+      section->relocs[section->reloc_count++] = (CReloc){read32(entry), type, symbol};
     }
   }
   free(symbols);
@@ -422,7 +438,10 @@ static bool load_object(CLinker *linker, const char *path, const uint8_t *data, 
 /* Short import objects describe one DLL export: the code symbol gets a
    jmp thunk, and __imp_ names its IAT slot. */
 static bool load_import(CLinker *linker, const char *path, const uint8_t *data, size_t size) {
-  if (size < 20 || read16(data + 6) != MACHINE_AMD64) return fail(linker, "'%s' has a non-x86-64 import%s", path, "");
+  if (size < 20 || (read16(data+6)!=MACHINE_AMD64 && read16(data+6)!=MACHINE_ARM64) ||
+      (linker->machine && read16(data+6)!=linker->machine))
+    return fail(linker,"'%s' has an incompatible import architecture%s",path,"");
+  linker->machine=read16(data+6);
   uint32_t length = read32(data + 12);
   if (!in_bounds(size, 20, length)) return fail(linker, "'%s' has a malformed import%s", path, "");
   const char *symbol = (const char *)data + 20, *end = symbol + length;
@@ -580,12 +599,17 @@ static bool build_imports(CLinker *linker) {
         CSymbol *code = symbol_intern(linker, import->symbol);
         if (!code) return fail(linker, "out of memory%s%s", "", "");
         if (!code->defined) {
-          CSection *thunk = synthetic(linker, ".text$thunk", 8, 8, SCN_CNT_CODE | SCN_MEM_EXECUTE | SCN_MEM_READ);
+          CSection *thunk = synthetic(linker, ".text$thunk", linker->machine==MACHINE_ARM64?12:8, 8, SCN_CNT_CODE | SCN_MEM_EXECUTE | SCN_MEM_READ);
           if (!thunk) return fail(linker, "out of memory%s%s", "", "");
+          if (linker->machine==MACHINE_ARM64) {
+            write32(thunk->owned,0x90000010); write32(thunk->owned+4,0xf9400210); write32(thunk->owned+8,0xd61f0200);
+            if (!add_reloc(thunk,0,260,imp) || !add_reloc(thunk,4,263,imp)) return false;
+          } else {
           thunk->owned[0] = 0xff;
           thunk->owned[1] = 0x25;
           memset(thunk->owned + 6, 0xcc, 2);
           if (!add_reloc(thunk, 2, REL_REL32, imp)) return fail(linker, "out of memory%s%s", "", "");
+          }
           code->defined = code->code = true;
           code->section = thunk;
           code->value = 0;
@@ -711,10 +735,35 @@ static bool relocate(CLinker *linker, CSection *section, uint8_t *out, Relocatio
     uint8_t *at = out + reloc->offset;
     bool absolute = symbol_absolute(target);
     uint64_t address = absolute ? (uint64_t)target->value : linker->base + symbol_rva(linker, target);
+    if (reloc->type>=256) {
+      uint32_t insn=read32(at), type=reloc->type-256;
+      int64_t place=(int64_t)(linker->base+section_rva+reloc->offset);
+      if (type==3) {
+        int64_t delta=(int64_t)address-place+((int64_t)((int32_t)(insn<<6)>>6)*4);
+        if ((delta&3) || delta<-(1ll<<27) || delta>=(1ll<<27)) return fail(linker,"ARM64 branch to '%s' out of range%s",symbol->name,"");
+        write32(at,(insn&0xfc000000)|((uint32_t)(delta>>2)&0x3ffffff));
+      } else if(type==4) {
+        int32_t immediate=(int32_t)((((insn>>5)&0x7ffff)<<2)|((insn>>29)&3));
+        if (immediate & (1<<20)) immediate -= 1<<21;
+        /* COFF stores a byte addend in ADRP's immediate, unlike the final
+           instruction's page displacement (LLD applyArm64Addr). Include it
+           before rounding the symbol address down to a page. */
+        uint64_t destination=address+(uint64_t)(int64_t)immediate;
+        int64_t pages=((int64_t)(destination&~4095ull)-(place&~4095ll))/4096;
+        if(pages<-(1<<20)||pages>=(1<<20)) return fail(linker,"ARM64 page of '%s' out of range%s",symbol->name,"");
+        write32(at,(insn&~0x60ffffe0u)|((uint32_t)pages&3)<<29|(((uint32_t)pages>>2)&0x7ffff)<<5);
+      } else if(type==6 || type==7) {
+        unsigned scale=type==7?insn>>30:0;
+        uint32_t value=(uint32_t)(address&4095)+(((insn>>10)&4095)<<scale);
+        if(value&((1u<<scale)-1)) return fail(linker,"unaligned ARM64 reference to '%s'%s",symbol->name,"");
+        write32(at,(insn&~0x003ffc00u)|((value>>scale)&4095)<<10);
+      } else return fail(linker,"unsupported ARM64 relocation for '%s'%s",symbol->name,"");
+      continue;
+    }
     switch (reloc->type) {
     case REL_ADDR64:
       write64(at, address + read64(at));
-      if (linker->shared && !absolute && !debug && base_relocations) {
+      if ((linker->shared || linker->machine == MACHINE_ARM64) && !absolute && !debug && base_relocations) {
         if (!grow((void **)&base_relocations->rvas, &base_relocations->capacity, base_relocations->count, sizeof(uint32_t)))
           return fail(linker, "out of memory%s%s", "", "");
         base_relocations->rvas[base_relocations->count++] = section_rva + reloc->offset;
@@ -773,7 +822,7 @@ typedef struct {
   int16_t section;
   uint8_t storage;
 } TinySymbol;
-static size_t tiny_object(uint8_t *out, const TinySection *sections, size_t section_count, const TinySymbol *symbols,
+static size_t tiny_object(uint16_t machine, uint8_t *out, const TinySection *sections, size_t section_count, const TinySymbol *symbols,
                           size_t symbol_count) {
   size_t size = 20 + 40 * section_count;
   size_t data_at[4], relocs_at[4];
@@ -792,7 +841,7 @@ static size_t tiny_object(uint8_t *out, const TinySection *sections, size_t sect
   size += strings;
   if (!out) return size;
   memset(out, 0, size);
-  write16(out, MACHINE_AMD64);
+  write16(out, machine);
   write16(out + 2, (uint16_t)section_count);
   write32(out + 8, (uint32_t)symbol_at);
   write32(out + 12, (uint32_t)symbol_count);
@@ -812,7 +861,7 @@ static size_t tiny_object(uint8_t *out, const TinySection *sections, size_t sect
       uint8_t *entry = out + relocs_at[i] + 10 * r;
       write32(entry, sections[i].relocs[r].offset);
       write32(entry + 4, sections[i].relocs[r].symbol);
-      write16(entry + 8, REL_ADDR32NB);
+      write16(entry + 8, machine==MACHINE_ARM64?2:REL_ADDR32NB);
     }
   }
   uint32_t string_offset = 4;
@@ -863,9 +912,9 @@ static bool write_import_library(CLinker *linker, const char *path, const char *
   TinySymbol null_symbols[1] = {{"__NULL_IMPORT_DESCRIPTOR", 1, CLASS_EXTERNAL}};
   TinySection thunk_sections[2] = {{".idata$5", zero, 8, {{0, 0}}, 0}, {".idata$4", zero, 8, {{0, 0}}, 0}};
   TinySymbol thunk_symbols[1] = {{thunk_name, 1, CLASS_EXTERNAL}};
-  size_t helper_sizes[3] = {tiny_object(NULL, descriptor_sections, 2, descriptor_symbols, 7),
-                            tiny_object(NULL, null_sections, 1, null_symbols, 1),
-                            tiny_object(NULL, thunk_sections, 2, thunk_symbols, 1)};
+  size_t helper_sizes[3] = {tiny_object(linker->machine, NULL, descriptor_sections, 2, descriptor_symbols, 7),
+                            tiny_object(linker->machine, NULL, null_sections, 1, null_symbols, 1),
+                            tiny_object(linker->machine, NULL, thunk_sections, 2, thunk_symbols, 1)};
   const char *helper_names[3] = {descriptor_name, "__NULL_IMPORT_DESCRIPTOR", thunk_name};
   size_t names = 0, index_entries = 3;
   for (int h = 0; h < 3; ++h) names += strlen(helper_names[h]) + 1;
@@ -910,9 +959,9 @@ static bool write_import_library(CLinker *linker, const char *path, const char *
     memcpy(strings, helper_names[h], strlen(helper_names[h]) + 1);
     strings += strlen(helper_names[h]) + 1;
     MEMBER_HEADER(at, member_name, helper_sizes[h]);
-    if (h == 0) tiny_object(archive + at + 60, descriptor_sections, 2, descriptor_symbols, 7);
-    if (h == 1) tiny_object(archive + at + 60, null_sections, 1, null_symbols, 1);
-    if (h == 2) tiny_object(archive + at + 60, thunk_sections, 2, thunk_symbols, 1);
+    if (h == 0) tiny_object(linker->machine, archive + at + 60, descriptor_sections, 2, descriptor_symbols, 7);
+    if (h == 1) tiny_object(linker->machine, archive + at + 60, null_sections, 1, null_symbols, 1);
+    if (h == 2) tiny_object(linker->machine, archive + at + 60, thunk_sections, 2, thunk_symbols, 1);
     at += 60 + helper_sizes[h];
     if (helper_sizes[h] & 1) archive[at++] = '\n';
   }
@@ -932,7 +981,7 @@ static bool write_import_library(CLinker *linker, const char *path, const char *
     uint8_t *object = archive + at + 60;
     write16(object, 0);
     write16(object + 2, 0xffff);
-    write16(object + 6, MACHINE_AMD64);
+    write16(object + 6, linker->machine);
     write32(object + 12, (uint32_t)(body - 20));
     write16(object + 16, (uint16_t)i);
     write16(object + 18, (uint16_t)((exports[i]->code ? 0 : 1) | 1 << 2)); /* IMPORT_NAME */
@@ -993,7 +1042,8 @@ static bool write_output(CLinker *linker, const char *entry_name, const char *im
   }
   size_t section_count = 0;
   for (size_t i = 0; i < linker->output_count; ++i) section_count += linker->outputs[i].count != 0;
-  size_t reloc_section = shared ? 1 : 0;
+  bool relocatable = shared || linker->machine == MACHINE_ARM64;
+  size_t reloc_section = relocatable ? 1 : 0;
   uint32_t headers = align_up((uint32_t)(0x80 + 4 + 20 + 240 + 40 * (section_count + reloc_section)), FILE_ALIGN);
   uint32_t rva = align_up(headers, SECTION_ALIGN), file_offset = headers;
   uint16_t index = 0;
@@ -1065,7 +1115,7 @@ static bool write_output(CLinker *linker, const char *entry_name, const char *im
   /* Base relocations, one block per 4 KiB page. */
   uint8_t *reloc_data = NULL;
   uint32_t reloc_size = 0, reloc_rva = rva, reloc_file = file_offset, reloc_file_size = 0;
-  if (ok && shared) {
+  if (ok && relocatable) {
     for (size_t i = 1; i < base_relocations.count; ++i)
       for (size_t j = i; j > 0 && base_relocations.rvas[j - 1] > base_relocations.rvas[j]; --j) {
         uint32_t swap = base_relocations.rvas[j - 1];
@@ -1114,7 +1164,7 @@ static bool write_output(CLinker *linker, const char *entry_name, const char *im
     uint8_t *pe = image + 0x80;
     memcpy(pe, "PE\0\0", 4);
     uint8_t *coff = pe + 4;
-    write16(coff, MACHINE_AMD64);
+    write16(coff, linker->machine);
     write16(coff + 2, (uint16_t)(section_count + reloc_section));
     write32(coff + 8, string_size > 4 ? file_offset : 0);
     write16(coff + 16, 240);
@@ -1139,13 +1189,15 @@ static bool write_output(CLinker *linker, const char *entry_name, const char *im
     write64(optional + 24, linker->base);
     write32(optional + 32, SECTION_ALIGN);
     write32(optional + 36, FILE_ALIGN);
-    write16(optional + 40, 4);
-    write16(optional + 48, 5);
-    write16(optional + 50, 2);
+    write16(optional + 40, linker->machine == MACHINE_ARM64 ? 6 : 4);
+    write16(optional + 48, linker->machine == MACHINE_ARM64 ? 6 : 5);
+    write16(optional + 50, linker->machine == MACHINE_ARM64 ? 0 : 2);
     write32(optional + 56, rva);
     write32(optional + 60, headers);
     write16(optional + 68, 3); /* Console. */
-    write16(optional + 70, shared ? 0x0060 : 0); /* High-entropy and dynamic base for DLLs. */
+    /* ARM64 requires ASLR (Microsoft /DYNAMICBASE); match the LLD ARM64
+       OS/subsystem 6.0 and NX-compatible image policy for EXEs and DLLs. */
+    write16(optional + 70, linker->machine == MACHINE_ARM64 ? 0x0160 : shared ? 0x0060 : 0);
     write64(optional + 72, 0x200000);
     write64(optional + 80, 0x1000);
     write64(optional + 88, 0x100000);
@@ -1177,7 +1229,7 @@ static bool write_output(CLinker *linker, const char *entry_name, const char *im
         if (iat_end) { write32(directories + 96, iat_start); write32(directories + 100, iat_end - iat_start); }
       }
     }
-    if (shared && reloc_size) { write32(directories + 40, reloc_rva); write32(directories + 44, reloc_size); }
+    if (relocatable && reloc_size) { write32(directories + 40, reloc_rva); write32(directories + 44, reloc_size); }
     uint8_t *section_header = optional + 240;
     uint32_t string_at = 4;
     for (size_t i = 0; i < linker->output_count; ++i) {
@@ -1202,7 +1254,7 @@ static bool write_output(CLinker *linker, const char *entry_name, const char *im
       section_header += 40;
       if (output->file_size) memcpy(image + output->file_offset, contents[i], output->file_size);
     }
-    if (shared) {
+    if (relocatable) {
       memcpy(section_header, ".reloc", 6);
       write32(section_header + 8, reloc_size);
       write32(section_header + 12, reloc_rva);
@@ -1265,7 +1317,7 @@ bool dyn_link_coff_supported(const char *path) {
   size_t n = fread(magic, 1, sizeof(magic), file);
   fclose(file);
   if (n >= 8 && !memcmp(magic, "!<arch>\n", 8)) return true;
-  return n >= 2 && read16(magic) == MACHINE_AMD64;
+  return n >= 2 && (read16(magic) == MACHINE_AMD64 || read16(magic) == MACHINE_ARM64);
 }
 
 int dyn_link_coff(const char *const *inputs, size_t input_count, const char *output, const DynCoffOptions *options) {

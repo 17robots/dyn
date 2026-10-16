@@ -1961,17 +1961,17 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     if (a->expressions[id].item_count &&
         !strcmp(dyn_context_target(&s->context)->kernel, "linux") &&
-        !strcmp(dyn_context_target(&s->context)->arch, "aarch64")) {
+        strcmp(dyn_context_target(&s->context)->arch, "x86_64")) {
       DynAstExpr *number = &a->expressions[a->items[a->expressions[id].item_start].expression];
       uint64_t native = 0;
       if (number->kind != DYN_EXPR_INT)
         error_span(number->span, s, errors,
-                   "AArch64 #syscall number must be a constant portable Linux "
+                   "non-x86 Linux #syscall number must be a constant portable Linux "
                    "syscall ID");
       else if (!dyn_target_syscall_number(dyn_context_target(&s->context),
                                           number->integer, &native))
         error_span(number->span, s, errors,
-                   "syscall has no AArch64 Linux mapping");
+                   "syscall has no mapping for this Linux target");
       else
         number->integer = native;
     }

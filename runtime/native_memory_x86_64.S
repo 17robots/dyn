@@ -1,13 +1,33 @@
 // Freestanding memory primitives. String instructions permit arbitrary
 // alignment; zero counts never dereference. Never change ABI's direction flag.
 .text
+#ifdef DYN_MACOS
+.global _memcpy
+.global _memmove
+.global _memset
+.global _bzero
+.private_extern _memcpy
+.private_extern _memmove
+.private_extern _memset
+.private_extern _bzero
+.set _memcpy, memcpy
+.set _memmove, memmove
+.set _memset, memset
+_bzero:
+    mov %rsi, %rdx
+    xor %esi, %esi
+    jmp memset
+#else
 .global memcpy
 .global memmove
 .global memset
+#endif
 #ifndef DYN_WINDOWS
+#ifndef DYN_MACOS
 .hidden memcpy
 .hidden memmove
 .hidden memset
+#endif
 #endif
 memcpy:
 #ifdef DYN_WINDOWS
