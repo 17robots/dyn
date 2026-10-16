@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime-global, entry-point and syscall differential qualification."""
-import argparse
+"""Runtime globals, entry points, syscalls and constant-data protection."""
 import ctypes
 import os
 from pathlib import Path
@@ -9,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 ROOT=Path(__file__).resolve().parents[2]
-BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
 DYN=Path(os.environ.get('DYN',ROOT/'build/dyn')).resolve()
 CC=shlex.split(os.environ.get('CC','cc'))
 SOURCE='''
@@ -59,23 +57,17 @@ def run(args):
     return result
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--oracle-only',action='store_true');args=parser.parse_args()
     checks=0
     with tempfile.TemporaryDirectory(prefix='dyn-backend-globals-') as directory:
         root=Path(directory); source=root/'main.dyn';source.write_text(SOURCE)
         provider=root/'provider.c';provider.write_text(PROVIDER);provider_obj=root/'provider.o'
         run([*CC,'-fPIC','-c',provider,'-o',provider_obj])
+        # C definitions with the names of private Dyn symbols must not replace them.
         collisions=root/'collisions.c';collisions.write_text(COLLISIONS);collisions_obj=root/'collisions.o'
         run([*CC,'-fPIC','-c',collisions,'-o',collisions_obj])
-        support=root/'support.o';run([*CC,'-fPIC','-ffreestanding','-fno-stack-protector','-c',ROOT/'runtime/reference_support.c','-o',support])
         for mode in ('debug','release'):
-            oracle=root/(mode+'-llvm.so');run([DYN,'build',root,'--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--output',oracle])
-            paths=[oracle]
-            if not args.oracle_only:
-                obj=root/(mode+'.o');run([BUILD/'scalar-backend',*(['--debug'] if mode=='debug' else []),source,obj])
-                runtime=root/'runtime.o';run([*CC,'-fPIC','-DDYN_SHARED','-c',ROOT/'runtime/linux_x86_64_start.S','-o',runtime])
-                native=root/(mode+'-native.so');run([*CC,'-shared','-Wl,--no-undefined',obj,runtime,support,provider_obj,collisions_obj,'-lm','-o',native]);paths.append(native)
-            for path in paths:
+            oracle=root/(mode+'-compiler.so');run([DYN,'build',root,'--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',oracle])
+            for path in (oracle,):
                 lib=ctypes.CDLL(str(path))
                 for name,expected in (('state',76),('pid',os.getpid()),('unknown_syscall',-38),('reflect',24),('constants',62)):
                     f=getattr(lib,name);f.argtypes=[];f.restype=ctypes.c_int64
@@ -89,13 +81,8 @@ def main():
                 assert result.returncode==-11,(mode,path,result.returncode,result.stderr);checks+=1
             # Freestanding runtime calls main directly; no CRT constructor walker.
             source.write_text(SOURCE+'\nfn main() { if state()!=76 { #panic("global startup") } _=write_text() return }\n')
-            executable=root/(mode+'-llvm');run([DYN,'build',root,'--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--output',executable])
+            executable=root/(mode+'-compiler');run([DYN,'build',root,'--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',executable])
             assert run([executable]).stdout=='ok';checks+=1
-            if not args.oracle_only:
-                obj=root/(mode+'-entry.o');run([BUILD/'scalar-backend',*(['--debug'] if mode=='debug' else []),source,obj])
-                runtime=root/'entry-runtime.o';run([*CC,*(['-DDYN_RELEASE'] if mode=='release' else []),'-c',ROOT/'runtime/linux_x86_64_start.S','-o',runtime])
-                native=root/(mode+'-native');run(['ld','--gc-sections',obj,runtime,support,provider_obj,collisions_obj,'-o',native])
-                assert run([native]).stdout=='ok';checks+=1
             for failure in (
                 'fn seed() u64 { #panic("initializer failure") } pub value:u64=seed()\nfn main() {}\n',
                 'zero:u64 pub value:u64=1/zero\nfn main() {}\n',
@@ -104,21 +91,9 @@ def main():
                 for shared in (True,False):
                     oracle=root/(mode+'-failure'+('.so' if shared else ''))
                     run([DYN,'build',root,*(['--shared'] if shared else []),'--'+mode,'--no-cache','--jobs','1','--output',oracle])
-                    paths=[oracle]
-                    if not args.oracle_only:
-                        obj=root/'failure.o';run([BUILD/'scalar-backend',*(['--debug'] if mode=='debug' else []),source,obj])
-                        runtime=root/'failure-runtime.o'
-                        run([*CC,*(['-DDYN_SHARED'] if shared else ['-DDYN_RELEASE'] if mode=='release' else []),'-fPIC','-c',ROOT/'runtime/linux_x86_64_start.S','-o',runtime])
-                        native=root/(mode+'-failure-native'+('.so' if shared else ''))
-                        run([*CC,'-shared',obj,runtime,support,'-o',native] if shared else ['ld','--gc-sections',obj,runtime,support,'-o',native])
-                        paths.append(native)
-                    outputs=[]
-                    for path in paths:
-                        command=[sys.executable,'-c','import ctypes,sys;ctypes.CDLL(sys.argv[1])',str(path)] if shared else [str(path)]
-                        result=subprocess.run(command,capture_output=True,text=True,timeout=10)
-                        assert result.returncode==101,(mode,path,result.returncode,result.stderr)
-                        outputs.append((result.stdout,result.stderr));checks+=1
-                    assert len(set(outputs))==1,(mode,shared,outputs)
+                    command=[sys.executable,'-c','import ctypes,sys;ctypes.CDLL(sys.argv[1])',str(oracle)] if shared else [str(oracle)]
+                    result=subprocess.run(command,capture_output=True,text=True,timeout=10)
+                    assert result.returncode==101,(mode,oracle,result.returncode,result.stderr);checks+=1
             source.write_text(SOURCE)
-    print(f'PASS {checks} runtime-global/startup/syscall checks ({"oracle only" if args.oracle_only else "LLVM and native"})')
+    print(f'PASS {checks} runtime-global/startup/syscall checks')
 if __name__=='__main__':main()

@@ -806,7 +806,11 @@ static bool assign_outputs(MLinker *linker) {
         bool text = !strcmp(section->segment, "__TEXT");
         int wanted = text ? 0 : zerofill(section) ? 2 : 1;
         if (wanted != pass) continue;
-        const char *segment = text ? "__TEXT" : "__DATA";
+        /* Constant data that only needs fixups goes in __DATA_CONST, which
+           dyld makes read-only once they are applied. */
+        bool constant = !strcmp(section->segment, "__DATA_CONST") ||
+                        (!strcmp(section->segment, "__DATA") && !strcmp(section->name, "__const"));
+        const char *segment = text ? "__TEXT" : constant ? "__DATA_CONST" : "__DATA";
         int index = output_for(linker, segment, section->name, section->flags);
         if (index < 0 || !add_section(linker, index, section)) return fail(linker, "out of memory%s%s", "", "");
       }
