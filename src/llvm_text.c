@@ -158,6 +158,10 @@ static const char *finish(LLVMContextRef c, Text *s) {
   return p;
 }
 static const char *fmt(LLVMContextRef c, const char *f, ...) {
+  if (!f) {
+    c->error = "missing LLVM IR format string";
+    return "";
+  }
   va_list a, b;
   va_start(a, f);
   va_copy(b, a);

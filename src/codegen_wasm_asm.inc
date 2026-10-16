@@ -39,6 +39,8 @@ static int64_t wa_signed(WARead *r) {
   return (int64_t)v;
 }
 static void wa_print(WB *out, const char *format, ...) {
+  if (!format)
+    allocation_failure();
   va_list a, b;
   va_start(a, format);
   va_copy(b, a);
