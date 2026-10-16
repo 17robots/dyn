@@ -19,7 +19,7 @@ DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn.exe' if os.name == 'nt' 
 
 def run(command, **kwargs):
     p = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=90, **kwargs)
-    assert p.returncode == 0, (command, p.stdout, p.stderr)
+    assert p.returncode == 0, (command, p.returncode, p.stdout, p.stderr)
     return p
 
 
@@ -38,7 +38,11 @@ pub fn constant_bits() f64 { value: u64 = 0x7ff8000000000042 return #bitcast(f64
 pub fn text() []const u8 { return "assembly data" }
 ''')
     empty = root / 'empty'; empty.mkdir()
-    environment = dict(os.environ, DYN_SDK=str(ROOT), DYN_LINKER='builtin', PATH=str(empty))
+    environment = dict(os.environ, DYN_SDK=str(ROOT), DYN_LINKER='builtin')
+    # Windows needs PATH to locate the host compiler's MinGW runtime DLLs,
+    # just as in wasm-independent.py. Unix can isolate target tools entirely.
+    if os.name != 'nt':
+        environment['PATH'] = str(empty)
     if os.environ.get('DYN_TEST_INSTALLED') == '1':
         environment.pop('DYN_SDK', None)
     oracle = os.environ.get('DYN_ASSEMBLY_ORACLE', '1') != '0'
@@ -70,4 +74,4 @@ pub fn text() []const u8 { return "assembly data" }
             run([*clang, '--target=wasm32', '-c', assembly, '-o', obj])
             run([linker, rebuilt, obj, runtime])
             run([node, '-e', constants['JS'], rebuilt])
-    print('PASS Wasm stack assembly emitted with empty PATH' + ('; independently assembled and executed debug/release' if oracle else ''))
+    print('PASS Wasm stack assembly emitted' + (' with empty PATH' if os.name != 'nt' else '') + ('; independently assembled and executed debug/release' if oracle else ''))
