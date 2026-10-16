@@ -76,6 +76,8 @@ test-lsp-differential: release
 test-backend: release
     python3 tools/backend/build.py
     python3 tools/backend/test.py
+    python3 tools/backend/feature-contracts.py
+    python3 tools/backend/global-contracts.py
 
 # Debug and release builds use independent emission on every supported target.
 test-native-debug: release
@@ -96,11 +98,6 @@ test-native-windows: release
 test-native-macos: release
     python3 tools/build.py dyn
     python3 tools/backend/native-differential.py --target aarch64-macos
-
-# Matched prepared-IR timing; correctness and runtime checks are outside emission timing.
-bench-backend: release
-    python3 tools/build.py backend-benchmark
-    python3 tools/backend/benchmark.py
 
 native-probes: release
     python3 tools/build-native-probes.py

@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--dyn',type=Path,default=ROOT/'build'/('dyn-release.exe' if os.name=='nt' else 'dyn-release'))
 p.add_argument('--samples',type=int,default=5)
-p.add_argument('--profile-ir',action='store_true',help='separate monolithic optimized IR size/phase measurements')
+p.add_argument('--profile-code',action='store_true',help='separate monolithic optimized code size/phase measurements')
 p.add_argument('--output',type=Path,default=ROOT/'build'/('performance-'+str(time.time_ns())))
 a=p.parse_args()
 if a.samples<1: p.error('--samples must be positive')
@@ -36,7 +36,7 @@ def checked_measure(command,env):
     row['phase_samples']=[dict(phase=phase,seconds=float(ms)/1000,peak_mib=int(peak))
         for phase,ms,peak in re.findall(r'^timing detail (\w+) ([\d.]+) ms, peak (\d+) MiB$',row['stderr'],re.M)]
     return row
-variants={'portable':[], 'native':['--cpu','native'], 'o3':['--opt-level','3'], 'no-lto':['--no-lto']}
+variants={'portable':[], 'native':['--cpu','native'], 'o3':['--opt-level','3']}
 rows=[]
 for name in variants:
     (work/name/'src').mkdir(parents=True)
@@ -65,15 +65,15 @@ for trial in range(a.samples):
         print(name,trial,flush=True)
 assert len({(r['stdout_sha256'],r['stderr']) for r in rows if r['case']=='runtime'})==1, 'runtime output mismatch'
 assert digest(compiler)==compiler_hash and std_manifest()==stdlib and runtime_manifest()==runtimes, 'compiler/SDK changed during measurements'
-if a.profile_ir:
+if a.profile_code:
     profiles=[]
     for name,flags in variants.items():
         folder=work/name; output=folder/'profile'; env=dict(os.environ,DYN_SDK=str(ROOT),DYN_CACHE_DIR=str(folder/'profile-cache'))
-        command=[str(compiler),'build',str(folder/'src'),'--release','--emit-ir','--no-link','--no-cache','--timings','--jobs','1','--output',str(output),*flags]
-        row=checked_measure(command,env); ir=Path(str(output)+'.ll'); text=ir.read_text()
-        profiles.append(dict(variant=name,scope='Separate monolithic optimized IR emission; not the modular timed build path.',
-            ir_bytes=ir.stat().st_size,ir_sha256=digest(ir),function_definitions=len(re.findall(r'^define ',text,re.M)),**row))
-    (work/'ir-profiles.json').write_text(json.dumps(profiles,indent=2)+'\n')
+        command=[str(compiler),'build',str(folder/'src'),'--release','--emit-asm','--no-link','--no-cache','--timings','--jobs','1','--output',str(output),*flags]
+        row=checked_measure(command,env); assembly=Path(str(output)+'.s'); text=assembly.read_text()
+        profiles.append(dict(variant=name,scope='Separate monolithic optimized assembly emission; not the modular timed build path.',
+            object_bytes=Path(str(output)+'.o').stat().st_size,assembly_sha256=digest(assembly),function_definitions=len(re.findall(r'^"[^"]+":$',text,re.M)),**row))
+    (work/'code-profiles.json').write_text(json.dumps(profiles,indent=2)+'\n')
 assert digest(compiler)==compiler_hash and std_manifest()==stdlib and runtime_manifest()==runtimes, 'compiler/SDK changed during profiling' 
 summary={name:{case:statistics.median(r['seconds'] for r in rows if r['variant']==name and r['case']==case)
               for case in ('cold','warm','edited','runtime')} for name in variants}

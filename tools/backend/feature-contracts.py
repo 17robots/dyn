@@ -174,7 +174,7 @@ def main():
         provider_obj = root / 'provider.o'
         run([*CC,'-fPIC','-c',provider,'-o',provider_obj])
         for mode in ('debug','release'):
-            oracle = root / (mode + '-llvm.so')
+            oracle = root / (mode + '-compiler.so')
             run([DYN,'build',root,'--shared','--'+mode,'--no-cache','--jobs','1',
                  '--link',provider_obj,'--output',oracle])
             paths = [oracle]
@@ -264,7 +264,7 @@ def main():
                     outputs.append((result.stdout,result.stderr))
                     panics += 1
                 assert len(set(outputs)) == 1, (mode,name,outputs)
-    print(f'PASS {checks} enum/any/variadic values; {panics} panics ({"oracle only" if args.oracle_only else "LLVM and native"})')
+    print(f'PASS {checks} enum/any/variadic values; {panics} panics ({"oracle only" if args.oracle_only else "compiler and standalone backend"})')
 
 if __name__ == '__main__':
     main()

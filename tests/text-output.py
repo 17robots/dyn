@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
-"""Independent LLVM text: real parser/target oracles and reconstructed execution.
+"""Assembly export across targets: native object preservation and safe publication.
 
-LLVM tools are test oracles only. The compiler produces the text with a PATH
-containing no LLVM executables. Without oracles, output/isolation checks run.
+The compiler writes assembly with a PATH that contains no external tools.
 """
 import os
 from pathlib import Path
-import shutil
-import platform
-import re
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn')).resolve())
-AS = shutil.which('llvm-as') if os.environ.get('DYN_TEXT_ORACLE') != '0' else None
-CLANG = shutil.which('clang') if os.environ.get('DYN_TEXT_ORACLE') != '0' else None
-LD = shutil.which('ld')
 SOURCE = r'''
 struct Pair { integer: i64, real: f64 }
 struct Large { bytes: [40]u8, value: i64 }
@@ -67,16 +60,6 @@ fn main() {
   if checked(3) != 4 || counter != 1 || #len(message) != 15 { #panic("cleanup globals") }
 }
 '''
-C = r'''
-typedef struct { long long integer; double real; } Pair;
-typedef struct { float x,y; } Floats;
-Floats floats_provider(Floats x) { x.x+=1; x.y+=1; return x; }
-typedef struct { unsigned char bytes[40]; long long value; } Large;
-typedef struct __attribute__((packed)) { unsigned char small; long long wide; } Packed;
-Pair provider(Pair x) { ++x.integer; x.real += 1; return x; }
-Large large_provider(Large x) { ++x.value; return x; }
-Packed packed_provider(Packed x) { ++x.wide; return x; }
-'''
 TARGETS = [('x86_64-linux', 'x86_64-unknown-linux-gnu'),
            ('aarch64-linux', 'aarch64-unknown-linux-gnu'),
            ('riscv64-linux', 'riscv64-unknown-linux-gnu'),
@@ -98,12 +81,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-text-') as directory:
     module = work/'module'
     module.mkdir()
     (module/'main.dyn').write_text(SOURCE)
-    (work/'provider.c').write_text(C)
     empty = work/'empty-path'
     empty.mkdir()
     env = dict(os.environ, DYN_SDK=str(ROOT), PATH=str(empty))
-    # Windows needs DLL lookup through its normal PATH; noLLVM compilation is
-    # additionally enforced by independent SDK qualification on that platform.
+    # Windows needs DLL lookup through its normal PATH.
     if os.name == 'nt':
         env['PATH'] = os.environ.get('PATH','')
     for target, triple in TARGETS:
@@ -118,85 +99,28 @@ with tempfile.TemporaryDirectory(prefix='dyn-text-') as directory:
             run([DYN,'build',module,*flags],env=env,cwd=ROOT)
             object_path = Path(str(output)+'.o')
             original = object_path.read_bytes()
-            run([DYN,'build',module,*flags,'--emit-ir'],env=env,cwd=ROOT)
-            assert object_path.read_bytes() == original, 'IR export replaced native object'
-            ll = Path(str(output)+'.ll')
-            text = ll.read_text()
-            assert 'independent LLVM syntax writer' in text
-            assert 'DICompileUnit' in text and 'DISubprogram' in text
-            assert 'llvm.memmove' in text and 'getelementptr' in text
-            if target.startswith('aarch64-'):
-                declarations = {name: re.search(r'^declare[^\n]*@'+name+r'\([^\n]*',text,re.M).group(0)
-                                for name in ('provider','floats_provider','large_provider')}
-                assert '[2 x i64]' in declarations['provider'].split('@')[0] and '[2 x i64]' in declarations['provider'].split('@')[1] and 'sret' not in declarations['provider'], declarations
-                assert '[2 x float]' in declarations['floats_provider'] and 'sret' not in declarations['floats_provider'] and 'void' not in declarations['floats_provider'].split('@')[0], declarations
-                assert 'sret(' in declarations['large_provider'] and declarations['large_provider'].count('ptr')==2, declarations
-                if CLANG:
-                    # Clang's C frontend independently chooses the ABI. Its
-                    # literal struct names differ; compare register coercions
-                    # and the hidden-result pointer rather than type spelling.
-                    oracle=run([CLANG,'--target='+triple,'-S','-emit-llvm','-ffreestanding',work/'provider.c','-o','-']).stdout
-                    definitions = {name: re.search(r'^define[^\n]*@'+name+r'\([^\n]*',oracle,re.M).group(0)
-                                   for name in declarations}
-                    for name in ('provider','floats_provider'):
-                        coercion='[2 x i64]' if name=='provider' else '[2 x float]'
-                        assert coercion in definitions[name] and 'sret' not in definitions[name] and 'void' not in definitions[name].split('@')[0], definitions
-                    assert '[2 x i64]' in definitions['provider'].split('@')[0], definitions
-                    assert 'sret(' in definitions['large_provider'] and definitions['large_provider'].count('ptr')==2, definitions
-            if AS:
-                parsed = run([AS,ll,'-o',os.devnull])
-                assert 'invalid debug info' not in parsed.stderr, parsed.stderr
-            if CLANG:
-                obj = work/'oracle.o'
-                compiled = run([CLANG,'--target='+triple,'-c','-x','ir',ll,'-o',obj])
-                assert 'invalid debug info' not in compiled.stderr, compiled.stderr
-                if target == 'x86_64-linux' and LD and platform.system() == 'Linux' and platform.machine() == 'x86_64':
-                    runtime = Path(DYN).parent
-                    if (runtime/'dynrt_start.o').exists() and (runtime/'dynrt_support.o').exists():
-                        provider = work/'provider.o'
-                        run([CLANG,'--target='+triple,'-ffreestanding','-fno-stack-protector',
-                             '-c',work/'provider.c','-o',provider])
-                        executable = work/'oracle'
-                        run([LD,'-o',executable,runtime/'dynrt_start.o',
-                             runtime/'dynrt_support.o',obj,provider])
-                        run([executable])
-    # Execute checked failure from the exported IR itself, including cleanup.
-    runtime = Path(DYN).parent
-    if CLANG and LD and platform.system() == 'Linux' and platform.machine() == 'x86_64' and (runtime/'dynrt_start.o').exists():
-        (module/'main.dyn').write_text('extern fn report "report"()\nfn divide(x: i32) i32 { defer report() return 10 / x }\nfn main() { _ = divide(0) }\n')
-        (work/'report.c').write_text('extern long dyn_syscall6(long,long,long,long,long,long,long);\nvoid report(void) { static const char text[]="cleanup\\n"; dyn_syscall6(1,2,(long)text,8,0,0,0); }\n')
-        report = work/'report.o'
-        run([CLANG,'--target=x86_64-unknown-linux-gnu','-ffreestanding','-fno-stack-protector','-c',work/'report.c','-o',report])
-        for mode in ([], ['--release']):
-            out = work/'checked'
-            run([DYN,'build',module,'--backend','native','--emit-ir','--no-link','--no-cache','--output',out,*mode],env=env,cwd=ROOT)
-            obj = work/'checked-oracle.o'
-            run([CLANG,'--target=x86_64-unknown-linux-gnu','-c','-x','ir',str(out)+'.ll','-o',obj])
-            exe = work/'checked-oracle'
-            run([LD,'-o',exe,runtime/'dynrt_start.o',runtime/'dynrt_support.o',obj,report])
-            result = subprocess.run([exe],capture_output=True,text=True,timeout=10)
-            assert result.returncode != 0
-            assert result.stderr.startswith('cleanup\n') and 'runtime check failed' in result.stderr, result.stderr
-        (module/'main.dyn').write_text(SOURCE)
+            run([DYN,'build',module,*flags,'--emit-asm'],env=env,cwd=ROOT)
+            assert object_path.read_bytes() == original, 'assembly export replaced native object'
+            text = Path(str(output)+'.s').read_text()
+            assert 'checked' in text and 'aggregate' in text, text[:2000]
     # Failed publication cannot remove an existing destination or leak staging
     # files. A directory destination fails identically across supported hosts.
-    blocked = work/'blocked.ll'
+    blocked = work/'blocked.s'
     blocked.mkdir()
     (blocked/'sentinel').write_text('keep')
     result = subprocess.run([DYN,'build',str(module),'--backend','native',
-                             '--emit-ir','--no-link','--output',str(work/'blocked')],
+                             '--emit-asm','--no-link','--output',str(work/'blocked')],
                             env=env,cwd=ROOT,capture_output=True,text=True)
     assert result.returncode != 0
     assert (blocked/'sentinel').read_text() == 'keep'
     assert not list(work.glob('.dyn-object.*'))
     # Failed frontend input must leave a previously published sidecar intact.
-    sentinel = work/'preserved.ll'
+    sentinel = work/'preserved.s'
     sentinel.write_text('previous successful export\n')
     (module/'main.dyn').write_text('fn main( { invalid')
     result = subprocess.run([DYN,'build',str(module),'--backend','native',
-                             '--emit-ir','--no-link','--output',str(work/'preserved')],
+                             '--emit-asm','--no-link','--output',str(work/'preserved')],
                             env=env,cwd=ROOT,capture_output=True,text=True)
     assert result.returncode != 0
     assert sentinel.read_text() == 'previous successful export\n'
-print('PASS independent LLVM IR across nine targets: isolated export, native object preservation, debug metadata'
-      + (', LLVM parser' if AS else '') + (', target compilation/runtime oracle' if CLANG else ''))
+print('PASS assembly export across nine targets: native object preservation and safe publication')
