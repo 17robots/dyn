@@ -1,4 +1,4 @@
-#target(arch: x86_64, kernel: windows)
+#target(kernel: windows)
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/unicode/utf16" utf16

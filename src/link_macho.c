@@ -15,7 +15,7 @@
 #include <sys/stat.h>
 
 enum {
-  CPU_ARM64 = 0x0100000c,
+  CPU_ARM64 = 0x0100000c, CPU_X86_64 = 0x01000007,
   MH_OBJECT = 1, MH_EXECUTE = 2, MH_DYLIB = 6,
   MH_NOUNDEFS = 1, MH_DYLDLINK = 4, MH_TWOLEVEL = 0x80, MH_PIE = 0x200000, MH_NO_REEXPORTED_DYLIBS = 0x100000,
   LC_SYMTAB = 0x2, LC_DYSYMTAB = 0xb, LC_LOAD_DYLIB = 0xc, LC_ID_DYLIB = 0xd, LC_LOAD_DYLINKER = 0xe,
@@ -104,6 +104,7 @@ typedef struct {
 typedef struct {
   const char *output_path;
   bool shared;
+  uint32_t cpu;
   char error[512];
   MObject **objects;
   size_t object_count, object_capacity;
@@ -359,7 +360,10 @@ static bool define(MLinker *linker, MObject *object, MSymbol *symbol, MSection *
 static bool load_object(MLinker *linker, const char *path, const uint8_t *data, size_t size) {
   if (size < 32 || read32(data) != MH_MAGIC_64 || read32(data + 12) != MH_OBJECT)
     return fail(linker, "'%s' is not a 64-bit Mach-O object%s", path, "");
-  if (read32(data + 4) != CPU_ARM64) return fail(linker, "'%s' is not an arm64 object%s", path, "");
+  uint32_t cpu = read32(data + 4);
+  if ((cpu != CPU_ARM64 && cpu != CPU_X86_64) || (linker->cpu && linker->cpu != cpu))
+    return fail(linker, "'%s' has an incompatible Mach-O architecture%s", path, "");
+  linker->cpu = cpu;
   MObject *object = calloc(1, sizeof(*object));
   if (!object || !grow((void **)&linker->objects, &linker->object_capacity, linker->object_count, sizeof(*linker->objects))) {
     free(object);
@@ -413,12 +417,12 @@ static bool load_object(MLinker *linker, const char *path, const uint8_t *data, 
           bool pcrel = (info >> 24) & 1, external = (info >> 27) & 1;
           uint8_t length = (info >> 25) & 3, type = (uint8_t)(info >> 28);
           if (address < 0) return fail(linker, "'%s' uses scattered relocations%s", path, "");
-          if (type == ARM64_RELOC_ADDEND) {
+          if (linker->cpu == CPU_ARM64 && type == ARM64_RELOC_ADDEND) {
             addend = (int32_t)(symbol << 8) >> 8;
             pending_addend = true;
             continue;
           }
-          if (type == ARM64_RELOC_SUBTRACTOR) {
+          if (type == (linker->cpu == CPU_ARM64 ? ARM64_RELOC_SUBTRACTOR : 5)) {
             if (!external) return fail(linker, "'%s' has a section-relative subtractor%s", path, "");
             subtrahend = symbol;
             pending_subtractor = true;
@@ -428,7 +432,7 @@ static bool load_object(MLinker *linker, const char *path, const uint8_t *data, 
           *reloc = (MReloc){(uint64_t)address, pending_addend ? addend : 0, symbol, subtrahend, type, length, pcrel, pending_subtractor};
           if (!external) {
             /* Section-relative: point at the section's own symbol below. */
-            if (type != ARM64_RELOC_UNSIGNED || symbol == 0 || symbol > count)
+            if ((type != ARM64_RELOC_UNSIGNED && !(linker->cpu == CPU_X86_64 && pcrel && (type == 1 || type == 2 || type == 6 || type == 7 || type == 8))) || symbol == 0 || symbol > count)
               return fail(linker, "'%s' has an unsupported section-relative relocation%s", path, "");
             reloc->symbol = UINT32_MAX - symbol;
           }
@@ -447,7 +451,7 @@ static bool load_object(MLinker *linker, const char *path, const uint8_t *data, 
     return fail(linker, "'%s' has a malformed symbol table%s", path, "");
   const char *strings = (const char *)data + string_offset;
   object->symbol_count = count;
-  object->symbols = calloc(count + 1, sizeof(MSymbol *));
+  object->symbols = calloc(count + object->section_count + 1, sizeof(MSymbol *));
   object->locals = calloc(count + object->section_count + 1, sizeof(MSymbol));
   if (!object->symbols || !object->locals) return fail(linker, "out of memory%s%s", "", "");
   for (uint32_t i = 0; i < count; ++i) {
@@ -517,8 +521,13 @@ static bool load_object(MLinker *linker, const char *path, const uint8_t *data, 
         /* The pointer holds an address in the object's layout. */
         if (reloc->length == 3 && section->data && reloc->offset + 8 <= section->size)
           reloc->addend = (int64_t)(read64(section->data + reloc->offset) - object->sections[target].object_address);
-        else if (reloc->length == 2 && section->data && reloc->offset + 4 <= section->size)
+        else if (reloc->length == 2 && section->data && reloc->offset + 4 <= section->size) {
           reloc->addend = (int64_t)(read32(section->data + reloc->offset) - object->sections[target].object_address);
+          if (linker->cpu == CPU_X86_64 && reloc->pcrel) {
+            unsigned extra = reloc->type >= 6 ? 1u << (reloc->type-6) : 0;
+            reloc->addend = (int32_t)read32(section->data + reloc->offset) + (int64_t)(section->object_address + reloc->offset + 4 + extra - object->sections[target].object_address);
+          }
+        }
         reloc->length |= 0x80; /* Addend already taken from the contents. */
       } else if (reloc->symbol >= count || (reloc->has_subtrahend && reloc->subtrahend >= count)) {
         return fail(linker, "'%s' has a relocation to a missing symbol%s", path, "");
@@ -638,7 +647,7 @@ static bool walk_trie(MLinker *linker, MDylib *dylib, const uint8_t *trie, size_
   return true;
 }
 static bool load_dylib(MLinker *linker, const char *path, const uint8_t *data, size_t size) {
-  if (read32(data + 4) != CPU_ARM64) return fail(linker, "'%s' is not an arm64 dylib%s", path, "");
+  if (read32(data + 4) != linker->cpu) return fail(linker, "'%s' has an incompatible dylib architecture%s", path, "");
   uint32_t commands = read32(data + 16);
   const char *install_name = NULL;
   const uint8_t *trie = NULL;
@@ -866,7 +875,13 @@ static bool plan(MLinker *linker) {
           for (size_t d = 0; d < linker->dylib_count; ++d) used += linker->dylibs[d]->ordinal != 0;
           symbol->dylib->ordinal = used + 1;
         }
-        switch (reloc->type) {
+        unsigned planned_type = reloc->type;
+        if (linker->cpu == CPU_X86_64) {
+          if (reloc->type == 3 || reloc->type == 4) planned_type = ARM64_RELOC_GOT_LOAD_PAGE21;
+          else if (reloc->type == 2) planned_type = ARM64_RELOC_BRANCH26;
+          else if (reloc->type) planned_type = 255;
+        }
+        switch (planned_type) {
         case ARM64_RELOC_GOT_LOAD_PAGE21: case ARM64_RELOC_GOT_LOAD_PAGEOFF12: case ARM64_RELOC_POINTER_TO_GOT:
           if (!add_slot(linker, &linker->got_symbols, &linker->got_count, &linker->got_capacity, symbol, &symbol->got)) return false;
           break;
@@ -1061,6 +1076,19 @@ static bool relocate(MLinker *linker, MSection *section, uint8_t *out, uint64_t 
       return fail(linker, "relocation outside its section in '%s'%s", object->path, "");
     uint64_t target = symbol_address(symbol, stubs) + (uint64_t)reloc->addend;
     uint64_t slot = symbol->got ? got + (uint64_t)(symbol->got - 1) * 8 : 0;
+    if (linker->cpu == CPU_X86_64 && reloc->type) {
+      if (length != 2 || !reloc->pcrel || reloc->type > 8 || reloc->type == 5)
+        return fail(linker, "unsupported x86-64 relocation in '%s'%s", object->path, "");
+      /* External SIGNED_1/2/4 contents already include the trailing immediate
+         bias. Section-relative addends above were normalized to the target
+         address, so only those need the bias restored here. */
+      int64_t extra = contents && reloc->type >= 6 ? (int64_t)1 << (reloc->type-6) : 0;
+      int64_t delta = (int64_t)((reloc->type==3 || reloc->type==4 ? slot : target)-place-4-extra);
+      if (!contents) delta += (int32_t)read32(at);
+      if (!fits(delta,32)) return fail(linker,"relocation to '%s' out of range in '%s'",symbol->name,object->path);
+      write32(at,(uint32_t)delta);
+      continue;
+    }
     switch (reloc->type) {
     case ARM64_RELOC_UNSIGNED: {
       uint64_t value = target;
@@ -1421,8 +1449,8 @@ static bool write_output(MLinker *linker, const char *entry_name, const char *in
       ++command_count;
     }
     write32(image, MH_MAGIC_64);
-    write32(image + 4, CPU_ARM64);
-    write32(image + 8, 0);
+    write32(image + 4, linker->cpu);
+    write32(image + 8, linker->cpu == CPU_X86_64 ? 3 : 0);
     write32(image + 12, executable ? MH_EXECUTE : MH_DYLIB);
     write32(image + 16, command_count);
     write32(image + 20, (uint32_t)commands_size);
@@ -1444,6 +1472,13 @@ static bool write_output(MLinker *linker, const char *entry_name, const char *in
       uint8_t *at = image + stubs_output->file_offset + section->offset + i * STUB_SIZE;
       uint64_t place = section->address + i * STUB_SIZE;
       uint64_t slot = got + (uint64_t)(linker->stub_symbols[i]->got - 1) * 8;
+      if (linker->cpu == CPU_X86_64) {
+        at[0]=0xff; at[1]=0x25;
+        if (!fits((int64_t)(slot-place-6),32)) { ok=false; break; }
+        write32(at+2,(uint32_t)(slot-place-6));
+        memset(at+6,0x90,STUB_SIZE-6);
+        continue;
+      }
       write32(at, 0x90000010u);
       set_adrp(at, (int64_t)((slot & ~0xfffull) - (place & ~0xfffull)) >> 12);
       write32(at + 4, 0xf9400210u | (uint32_t)((slot & 0xfff) >> 3) << 10);
@@ -1545,7 +1580,7 @@ bool dyn_link_macho_supported(const char *path) {
   size_t n = fread(magic, 1, sizeof(magic), file);
   fclose(file);
   if (n >= 8 && !memcmp(magic, "!<arch>\n", 8)) return true;
-  if (n >= 16 && read32(magic) == MH_MAGIC_64) return read32(magic + 4) == CPU_ARM64;
+  if (n >= 16 && read32(magic) == MH_MAGIC_64) return read32(magic + 4) == CPU_ARM64 || read32(magic + 4) == CPU_X86_64;
   return n >= 3 && !memcmp(magic, "---", 3);
 }
 

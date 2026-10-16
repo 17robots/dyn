@@ -520,7 +520,12 @@ static uint32_t src_declaration(Parser *p) {
   else if (is(p, "type") || is(p, "distinct")) child = src_alias(p);
   else if (!public && is(p, "use")) child = src_use(p);
   else if (!public && is(p, "#assert")) child = src_assert(p);
-  else child = src_variable(p);
+  else if (p->token.kind == NAME && src_peek(p).kind == END) {
+    /* A dangling declaration name is the offending token, not the empty
+       position after its trailing newline. Editors need a visible range. */
+    fail(p, p->token.start, "incomplete or invalid syntax");
+    child = NONE;
+  } else child = src_variable(p);
   return mark(p, src_node(p, SRC_DECLARATION, start, src_end(p, child, start), child), public ? EXP_PUBLIC : 0);
 }
 bool exp_parse_source_with_options(const char *source, size_t length, ExpTree *tree, const ExpOptions *options) {

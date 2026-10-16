@@ -72,8 +72,18 @@ int main(void) { dyn_entry(); }
 def windows_as_elf(assembly):
     """Change object-format directives only; leave instructions intact."""
     lines = []
+    skip_section = False
     for line in assembly.splitlines():
         token = line.strip()
+        section = re.match(r'\.section\s+"?([^",\s]+)', token)
+        if section:
+            name = section.group(1)
+            skip_section = name in ('.pdata', '.xdata')
+            if not skip_section:
+                line = '.section ' + ('.rodata' if name == '.rdata' else name)
+        if skip_section:
+            continue
+        line = re.sub(r'(?<![A-Za-z0-9_])"?main"?(?=[:\s]|$)', 'dyn_entry', line)
         if token.startswith(('.def', '.scl', '.type', '.endef', '.seh_',
                              '.globl\t@feat', '@feat.')):
             continue

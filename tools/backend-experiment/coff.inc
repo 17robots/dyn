@@ -28,13 +28,31 @@ static int coff_section(unsigned shndx) {
    into `bytes`. A null symbol_map means the symbols are already COFF section
    symbols; there R_X86_64_32 is a section offset and type 0 an image-relative
    address. Returns false for a relocation COFF cannot express. */
-static bool coff_relocations(const Elf64_Rela *items, size_t count, unsigned char *bytes, size_t size,
+static bool coff_relocations(bool a64, const Elf64_Rela *items, size_t count, unsigned char *bytes, size_t size,
                              const unsigned *symbol_map, unsigned symbol_count, unsigned char *out) {
   for (size_t i = 0; i < count; ++i) {
     const Elf64_Rela *r = &items[i];
     unsigned symbol = (unsigned)ELF64_R_SYM(r->r_info), type = (unsigned)ELF64_R_TYPE(r->r_info);
     if ((symbol_map && symbol >= symbol_count) || r->r_offset > UINT32_MAX) return false;
     unsigned coff;
+    if (a64 && symbol_map) {
+      uint32_t insn = r->r_offset+4<=size ? (uint32_t)bytes[r->r_offset] | (uint32_t)bytes[r->r_offset+1]<<8 | (uint32_t)bytes[r->r_offset+2]<<16 | (uint32_t)bytes[r->r_offset+3]<<24 : 0;
+      switch (type) {
+      case R_AARCH64_ABS64:
+        if (r->r_offset+8>size) return false;
+        put64(bytes+r->r_offset,(uint64_t)r->r_addend); coff=14; break;
+      case R_AARCH64_CALL26: coff=3; break;
+      case R_AARCH64_ADR_PREL_PG_HI21:
+        if (r->r_addend<0 || r->r_addend>0x7fffff) return false;
+        insn|=((uint32_t)r->r_addend & 3)<<29 | (((uint32_t)r->r_addend>>2)&0x7ffff)<<5;
+        put32(bytes+r->r_offset,insn); coff=4; break;
+      case R_AARCH64_ADD_ABS_LO12_NC:
+        insn|=((uint32_t)r->r_addend & 0xfff)<<10; put32(bytes+r->r_offset,insn); coff=6; break;
+      default: return false;
+      }
+      put32(out+10*i,(uint32_t)r->r_offset); put32(out+10*i+4,symbol_map[symbol]); put16(out+10*i+8,(uint16_t)coff);
+      continue;
+    }
     if (!symbol_map && type != R_X86_64_64) {
       if (r->r_offset + 4 > size || (type && type != R_X86_64_32)) return false;
       put32(bytes + r->r_offset, (uint32_t)r->r_addend);
@@ -48,6 +66,7 @@ static bool coff_relocations(const Elf64_Rela *items, size_t count, unsigned cha
       if (r->r_offset + 4 > size || addend < INT32_MIN || addend > INT32_MAX) return false;
       put32(bytes + r->r_offset, (uint32_t)addend); coff = DYN_COFF_REL_AMD64_REL32;
     } else return false;
+    if (a64) coff = coff == DYN_COFF_REL_AMD64_ADDR64 ? 14 : coff == DYN_COFF_REL_AMD64_SECREL ? 8 : 2;
     put32(out + 10 * i, (uint32_t)r->r_offset); put32(out + 10 * i + 4, symbol_map ? symbol_map[symbol] : symbol); put16(out + 10 * i + 8, (uint16_t)coff);
   }
   return true;
@@ -76,6 +95,38 @@ static void coff_unwind_info(Bytes *out, const uint32_t frame[3]) {
   if (slots & 1) { unsigned char pad[2] = {0}; coff_append(out, pad, 2); }
 }
 
+static bool coff_arm_unwind(BackendContext *ctx, Bytes *out, unsigned frame, uint32_t end) {
+  const uint32_t *f=ctx->unwind_frames[frame];
+  unsigned epilogues=0;
+  for (unsigned i=0;i<ctx->arm_epilogue_count;++i) epilogues += ctx->arm_epilogues[i][0]==frame;
+  if ((end-f[0])/4 > 0x3ffff || epilogues>65535) { backend_report(ctx,"native backend: Windows ARM64 unwind format limit exceeded (function must be below 1 MiB with at most 65535 epilogues)\n"); return false; }
+  Bytes codes={0};
+  uint32_t left=f[2], last=left%4080;
+  while (left) {
+    uint32_t chunk=last?last:4080; last=0;
+    unsigned char bytes[3]={0xe3,0,0}; /* store probe has no unwind effect */
+    if (chunk<512) { bytes[1]=(unsigned char)(chunk/16); coff_append(&codes,bytes,2); }
+    else { bytes[1]=(unsigned char)(0xc0 | (chunk/16)>>8); bytes[2]=(unsigned char)(chunk/16); coff_append(&codes,bytes,3); }
+    left-=chunk;
+  }
+  unsigned char tail[]={0xe1,0x81,0xe4}; /* set_fp; save_fplr_x 16; end */
+  coff_append(&codes,tail,sizeof(tail));
+  unsigned epilogue_index=(unsigned)codes.n;
+  coff_append(&codes,tail,sizeof(tail));
+  while (codes.n%4) { unsigned char pad=0xe3; coff_append(&codes,&pad,1); }
+  unsigned words=(unsigned)codes.n/4;
+  if (words>255 || epilogue_index>1023 || codes.failed) { backend_report(ctx,"native backend: Windows ARM64 unwind instruction record exceeds format capacity\n"); free(codes.data); return false; }
+  bool extended=words>31 || epilogues>31;
+  unsigned char header[8]={0};
+  put32(header,(end-f[0])/4 | (extended?0:epilogues)<<22 | (extended?0:words)<<27);
+  if (extended) put32(header+4,epilogues | words<<16);
+  coff_append(out,header,extended?8:4);
+  for (unsigned i=0;i<ctx->arm_epilogue_count;++i) if (ctx->arm_epilogues[i][0]==frame) {
+    unsigned char scope[4]; put32(scope,(ctx->arm_epilogues[i][1]-f[0])/4 | epilogue_index<<22); coff_append(out,scope,4);
+  }
+  coff_append(out,codes.data,codes.n); free(codes.data); return !out->failed;
+}
+
 static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *symbols, unsigned symbol_count, const char *strings,
                        const BackendDwarfOutput *debug) {
   /* COFF symbols: one static symbol per section, then every ELF symbol after the
@@ -93,19 +144,22 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
   /* .pdata: {begin, end, unwind info} per function, image-relative. */
   Bytes xdata = {0}, pdata = {0};
   unsigned frames = ctx->unwind_frame_count;
-  Elf64_Rela *table_relocations = calloc(3 * (size_t)frames + 1, sizeof(*table_relocations));
+  Elf64_Rela *table_relocations = calloc((ctx->a64?2:3) * (size_t)frames + 1, sizeof(*table_relocations));
   if (!table_relocations) { free(symbol_map); return false; }
   for (unsigned i = 0; i < frames; ++i) {
     const uint32_t *frame = ctx->unwind_frames[i];
     uint32_t entry[3] = {frame[0], i + 1 < frames ? ctx->unwind_frames[i + 1][0] : (uint32_t)ctx->text.n, (uint32_t)xdata.n};
-    for (unsigned j = 0; j < 3; ++j) {
-      table_relocations[3 * i + j] = (Elf64_Rela){.r_offset = 12 * (size_t)i + 4 * j,
-        .r_info = ELF64_R_INFO(j == 2 ? COFF_XDATA - 1u : COFF_TEXT - 1u, 0u), .r_addend = entry[j]};
+    unsigned fields=ctx->a64?2:3;
+    for (unsigned j = 0; j < fields; ++j) {
+      bool unwind=j==fields-1;
+      table_relocations[fields*i+j]=(Elf64_Rela){.r_offset=4*(size_t)(fields*i+j),
+        .r_info=ELF64_R_INFO(unwind?COFF_XDATA-1u:COFF_TEXT-1u,0u), .r_addend=unwind?entry[2]:entry[j]};
     }
-    unsigned char zero[12] = {0};
-    coff_append(&pdata, zero, sizeof(zero));
-    coff_unwind_info(&xdata, frame);
+    unsigned char zero[12]={0}; coff_append(&pdata,zero,4*fields);
+    if (ctx->a64) { if (!coff_arm_unwind(ctx,&xdata,i,entry[1])) { free(table_relocations); free(symbol_map); free(xdata.data); free(pdata.data); return false; } }
+    else coff_unwind_info(&xdata, frame);
   }
+
   const unsigned char *contents[COFF_SECTION_LIMIT] = {ctx->text.data, ctx->rodata.data, ctx->globals_data.data,
     ctx->constants_data.data, xdata.data, pdata.data};
   size_t sizes[COFF_SECTION_LIMIT] = {ctx->text.n, ctx->rodata.n, ctx->globals_data.n, ctx->constants_data.n, xdata.n, pdata.n};
@@ -119,7 +173,7 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
     0x40300040u, /* .xdata: initialized data, read, 4-byte aligned */
     0x40300040u};
   const Elf64_Rela *relocations[COFF_SECTION_LIMIT] = {ctx->relocations, NULL, NULL, ctx->constant_relocations, NULL, table_relocations};
-  size_t relocation_counts[COFF_SECTION_LIMIT] = {ctx->relocation_count, 0, 0, ctx->constant_relocation_count, 0, 3 * (size_t)frames};
+  size_t relocation_counts[COFF_SECTION_LIMIT] = {ctx->relocation_count, 0, 0, ctx->constant_relocation_count, 0, (ctx->a64?2:3) * (size_t)frames};
   /* DWARF relocations name DWARF sections or .text; regroup them per section. */
   Elf64_Rela *debug_relocations = calloc(debug->relocation_count + 1, sizeof(*debug_relocations));
   if (!debug_relocations) { free(symbol_map); free(table_relocations); free(xdata.data); free(pdata.data); return false; }
@@ -159,7 +213,7 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
     return false;
   }
 
-  put16(data, 0x8664); put16(data + 2, section_count);
+  put16(data, ctx->a64 ? 0xaa64 : 0x8664); put16(data + 2, section_count);
   put32(data + 8, (uint32_t)symbol_table); put32(data + 12, coff_count);
   unsigned char *table = data + symbol_table, *string_table = table + 18 * (size_t)coff_count;
   size_t string_at = 4;
@@ -186,7 +240,7 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
         characteristics |= 0x01000000u; /* IMAGE_SCN_LNK_NRELOC_OVFL */
         put16(h + 32, 0xffff); put32(out, (uint32_t)(count + 1)); out += 10;
       } else put16(h + 32, (uint16_t)count);
-      ok = coff_relocations(relocations[i], count, data + raw[i], sizes[i],
+      ok = coff_relocations(ctx->a64, relocations[i], count, data + raw[i], sizes[i],
                            i >= COFF_PDATA - 1 ? NULL : symbol_map, symbol_count, out);
     }
     put32(h + 36, characteristics);

@@ -1,4 +1,4 @@
-#target(arch: x86_64, kernel: windows)
+#target(kernel: windows)
 use "std/unicode/utf8" utf8
 use "std/unicode/utf16" utf16
 extern fn win_open "dyn_fs_open"(path: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr

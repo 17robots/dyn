@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import platform
+import re
 import subprocess
 import tempfile
 
@@ -19,9 +20,11 @@ LD = shutil.which('ld')
 SOURCE = r'''
 struct Pair { integer: i64, real: f64 }
 struct Large { bytes: [40]u8, value: i64 }
+struct Floats { x:f32, y:f32 }
 packed struct Packed { small: u8, wide: i64 }
 enum(i8) Sign { Minus = -1, Plus = 1 }
 extern fn provider "provider"(x: Pair) Pair
+extern fn floats_provider "floats_provider"(x:Floats) Floats
 extern fn large_provider "large_provider"(x: Large) Large
 extern fn packed_provider "packed_provider"(x: Packed) Packed
 counter: i32 = 0
@@ -33,6 +36,8 @@ fn cleanup() { counter += 1 }
 fn checked(x: i32) i32 { defer cleanup() return 12 / x }
 fn aggregate(x: Pair) Pair { value := x value.integer += 1 return value }
 fn main() {
+  floats := floats_provider(Floats{x:1.25,y:2.5})
+  if floats.x != 2.25 || floats.y != 3.5 { #panic("HFA") }
   defer cleanup()
   original := Pair{integer: 7, real: 2.5}
   local := aggregate(original)
@@ -64,6 +69,8 @@ fn main() {
 '''
 C = r'''
 typedef struct { long long integer; double real; } Pair;
+typedef struct { float x,y; } Floats;
+Floats floats_provider(Floats x) { x.x+=1; x.y+=1; return x; }
 typedef struct { unsigned char bytes[40]; long long value; } Large;
 typedef struct __attribute__((packed)) { unsigned char small; long long wide; } Packed;
 Pair provider(Pair x) { ++x.integer; x.real += 1; return x; }
@@ -72,6 +79,9 @@ Packed packed_provider(Packed x) { ++x.wide; return x; }
 '''
 TARGETS = [('x86_64-linux', 'x86_64-unknown-linux-gnu'),
            ('aarch64-linux', 'aarch64-unknown-linux-gnu'),
+           ('riscv64-linux', 'riscv64-unknown-linux-gnu'),
+           ('x86_64-macos', 'x86_64-apple-macos15'),
+           ('aarch64-windows', 'aarch64-pc-windows-msvc'),
            ('aarch64-macos', 'arm64-apple-macos11'),
            ('x86_64-windows', 'x86_64-pc-windows-msvc'),
            ('wasm32-wasi', 'wasm32-unknown-wasi'),
@@ -115,6 +125,24 @@ with tempfile.TemporaryDirectory(prefix='dyn-text-') as directory:
             assert 'independent LLVM syntax writer' in text
             assert 'DICompileUnit' in text and 'DISubprogram' in text
             assert 'llvm.memmove' in text and 'getelementptr' in text
+            if target.startswith('aarch64-'):
+                declarations = {name: re.search(r'^declare[^\n]*@'+name+r'\([^\n]*',text,re.M).group(0)
+                                for name in ('provider','floats_provider','large_provider')}
+                assert '[2 x i64]' in declarations['provider'].split('@')[0] and '[2 x i64]' in declarations['provider'].split('@')[1] and 'sret' not in declarations['provider'], declarations
+                assert '[2 x float]' in declarations['floats_provider'] and 'sret' not in declarations['floats_provider'] and 'void' not in declarations['floats_provider'].split('@')[0], declarations
+                assert 'sret(' in declarations['large_provider'] and declarations['large_provider'].count('ptr')==2, declarations
+                if CLANG:
+                    # Clang's C frontend independently chooses the ABI. Its
+                    # literal struct names differ; compare register coercions
+                    # and the hidden-result pointer rather than type spelling.
+                    oracle=run([CLANG,'--target='+triple,'-S','-emit-llvm','-ffreestanding',work/'provider.c','-o','-']).stdout
+                    definitions = {name: re.search(r'^define[^\n]*@'+name+r'\([^\n]*',oracle,re.M).group(0)
+                                   for name in declarations}
+                    for name in ('provider','floats_provider'):
+                        coercion='[2 x i64]' if name=='provider' else '[2 x float]'
+                        assert coercion in definitions[name] and 'sret' not in definitions[name] and 'void' not in definitions[name].split('@')[0], definitions
+                    assert '[2 x i64]' in definitions['provider'].split('@')[0], definitions
+                    assert 'sret(' in definitions['large_provider'] and definitions['large_provider'].count('ptr')==2, definitions
             if AS:
                 parsed = run([AS,ll,'-o',os.devnull])
                 assert 'invalid debug info' not in parsed.stderr, parsed.stderr
@@ -170,5 +198,5 @@ with tempfile.TemporaryDirectory(prefix='dyn-text-') as directory:
                             env=env,cwd=ROOT,capture_output=True,text=True)
     assert result.returncode != 0
     assert sentinel.read_text() == 'previous successful export\n'
-print('PASS independent LLVM IR across six targets: isolated export, native object preservation, debug metadata'
+print('PASS independent LLVM IR across nine targets: isolated export, native object preservation, debug metadata'
       + (', LLVM parser' if AS else '') + (', target compilation/runtime oracle' if CLANG else ''))

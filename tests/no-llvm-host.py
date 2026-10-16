@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify the independent compiler on Windows and macOS hosts."""
 import os
+import platform
 import json
 import tarfile
 import tempfile
@@ -16,12 +17,13 @@ env = dict(os.environ, DYN_WITH_LLVM='0', LLVM_CONFIG='false', CXX='false',
 subprocess.run([sys.executable, 'tools/build.py', 'host'], cwd=ROOT, env=env, check=True)
 env['DYN'] = str(BUILD/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))
 for test in ('lsp-navigation', 'shared-host', 'compiler-contracts', 'zero-values',
-             'panic-lifetime', 'native-release', 'native-optimization', 'text-output', 'native-assembly', 'cross-runtime', 'wasm-independent', 'wrap-enum-values', 'stdlib-host',
+             'panic-lifetime', 'native-release', 'native-optimization', 'native-machine-optimization', 'text-output', 'native-assembly', 'native-decode', 'cross-runtime', 'wasm-independent', 'wrap-enum-values', 'stdlib-host',
              'sync-host', 'concurrency-net-host'):
     subprocess.run([sys.executable, 'tests/'+test+'.py'], cwd=ROOT, env=env, check=True)
 if sys.platform in ('darwin', 'win32'):
     subprocess.run([sys.executable, 'tools/package-host-sdk.py'], cwd=ROOT, env=env, check=True)
-    platform_name = 'windows-x86_64' if os.name == 'nt' else 'macos-aarch64'
+    arch = 'aarch64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x86_64'
+    platform_name = ('windows-' if os.name == 'nt' else 'macos-') + arch
     report = json.loads((BUILD/'dist'/('package-'+platform_name+'.json')).read_text())
     archive = BUILD/'dist'/report['archive']
     with tempfile.TemporaryDirectory(prefix='dyn-independent-sdk-') as temporary:

@@ -55,27 +55,27 @@ fn main() {
     for mode in ('--debug', '--release'):
         run([compiler, 'build', app, mode, '--quiet', '--no-cache', '--output', output], env)
         assert run([output], env).stdout == 'no LLVM\n'
-    # All four existing object emitters must work without LLVM linkage.
-    for target in ('x86_64-linux', 'aarch64-linux', 'aarch64-macos', 'x86_64-windows'):
+    # Every registered native object format must work without LLVM linkage.
+    for target in ('riscv64-linux', 'x86_64-linux', 'aarch64-linux', 'aarch64-macos', 'x86_64-macos', 'x86_64-windows', 'aarch64-windows'):
         run([compiler, 'build', app, '--quiet', '--no-cache', '--emit-object', '--no-link',
              '--target', target, '--output', output], env)
         data = output.with_suffix('.o').read_bytes()
         if target.endswith('linux'):
-            assert data[:4] == b'\x7fELF' and int.from_bytes(data[18:20], 'little') == (62 if target.startswith('x86') else 183)
+            assert data[:4] == b'\x7fELF' and int.from_bytes(data[18:20], 'little') == (243 if target.startswith('riscv') else 62 if target.startswith('x86') else 183)
         elif target.endswith('macos'):
             assert data[:4] == b'\xcf\xfa\xed\xfe'
         else:
-            assert data[:2] == b'\x64\x86'
+            assert data[:2] == (b'\x64\x86' if target.startswith('x86') else b'\x64\xaa')
     # Unsupported modes must fail before producing output, never silently fall back.
     for options in (['--backend', 'llvm'],):
         destination = root / 'unsupported'
         result = run([compiler, 'build', app, '--output', destination, *options], env, success=False)
-        assert 'LLVM is disabled' in result.stderr, result.stderr
+        assert 'LLVM backend was removed' in result.stderr, result.stderr
         assert not destination.exists()
     env['DYN'] = str(compiler)
     for test in ('lsp-navigation', 'shared-host', 'compiler-contracts', 'aggregate-abi',
-                 'panic-lifetime', 'native-release', 'native-optimization', 'text-output', 'native-assembly', 'cross-runtime', 'wasm-independent', 'wrap-enum-values', 'sync-host', 'concurrency-net-host'):
+                 'panic-lifetime', 'native-release', 'native-optimization', 'native-machine-optimization', 'text-output', 'native-assembly', 'native-decode', 'cross-runtime', 'wasm-independent', 'wrap-enum-values', 'sync-host', 'concurrency-net-host'):
         run(['python3', 'tests/'+test+'.py'], env)
     run(['python3', 'tests/runtime-support.py'], env)
     run(['python3', 'tools/package-sdk.py'], env)
-print('PASS LLVM-free GCC build, debug/release execution, shared libraries, four object targets, LSP and relocated SDK')
+print('PASS LLVM-free GCC build, debug/release execution, shared libraries, seven object targets, LSP and relocated SDK')

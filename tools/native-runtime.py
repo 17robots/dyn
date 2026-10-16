@@ -33,6 +33,7 @@ class Section:
 class Assembler:
     def __init__(self, target):
         self.target = target
+        self.rv64 = target.startswith('riscv64')
         self.a64 = target.startswith('aarch64')
         self.macho = target.endswith('macos')
         self.coff = target.endswith('windows')
@@ -144,6 +145,12 @@ class Assembler:
             if kind == 'x8':
                 value = target - offset - 1
                 data[offset:offset + 1] = pack('b', value)
+            elif kind == 'rvb':
+                value=target-offset
+                if value&1 or not -4096<=value<4096:raise ValueError('RISC-V branch range')
+                insn,=struct.unpack_from('<I',data,offset)
+                insn|=((value>>11)&1)<<7|((value>>1)&15)<<8|((value>>5)&63)<<25|((value>>12)&1)<<31
+                struct.pack_into('<I',data,offset,insn)
             elif kind == 'x32':
                 data[offset:offset + 4] = pack('i', target - offset - 4)
             else:
@@ -179,8 +186,11 @@ class Assembler:
                 self.hidden.add(arg)
                 if op == '.private_extern':
                     self.globals.add(arg)
-            elif op in ('.type',):
+            elif op == '.type':
                 pass
+            elif op == '.option':
+                if not self.rv64 or arg not in ('norelax', 'norvc'):
+                    raise ValueError('unsupported assembler option ' + arg)
             elif op == '.set':
                 alias, original = map(str.strip, arg.split(','))
                 self.aliases[alias] = original
@@ -200,14 +210,20 @@ class Assembler:
             elif op in ('.byte', '.short', '.long', '.quad'):
                 width = {'.byte': 1, '.short': 2, '.long': 4, '.quad': 8}[op]
                 for n in arg.split(','):
-                    self.emit((int(n, 0) & ((1 << (width * 8)) - 1)).to_bytes(width, 'little'))
+                    if width == 8 and re.fullmatch(r'[A-Za-z_.$][\w.$]*', n.strip()):
+                        self.relocation(n.strip(), 'abs64')
+                        self.emit(bytes(8))
+                    else:
+                        self.emit((int(n, 0) & ((1 << (width * 8)) - 1)).to_bytes(width, 'little'))
             elif op == '.rva':
                 self.relocation(arg, 'rva')
                 self.word(0)
             else:
                 raise ValueError(f'unsupported directive {op}')
             return
-        if self.a64:
+        if self.rv64:
+            self.riscv(line)
+        elif self.a64:
             self.arm(line)
         else:
             self.x86(line)
@@ -326,6 +342,8 @@ class Assembler:
         if width is None:
             width = next((self.reg(arg)[1] for arg in args if arg.startswith('%')), 64)
         prefix = b'\xf0' if lock else b''
+        if base == 'neg':
+            self.modrm(b'\xf7', 3, args[0], width); return
         if base in ('inc', 'dec'):
             self.modrm(b'\xff', 0 if base == 'inc' else 1, args[0], width); return
         if base == 'shl':
@@ -381,6 +399,8 @@ class Assembler:
         if op.startswith('b.'):
             condition = {'eq': 0, 'ne': 1, 'cs': 2, 'cc': 3, 'ls': 9}[op[2:]]
             self.branch(a[0], (19, 5)); self.word(0x54000000 | condition); return
+        if op in ('br','blr'):
+            self.word((0xd61f0000 if op == 'br' else 0xd63f0000) | r(a[0]) << 5); return
         if op in ('cbz', 'cbnz'):
             self.branch(a[1], (19, 5)); self.word((0xb4000000 if a[0][0] == 'x' else 0x34000000) | (0x1000000 if op == 'cbnz' else 0) | r(a[0])); return
         if op == 'adrp':
@@ -447,6 +467,8 @@ class Assembler:
             byte = op in ('strb', 'ldrb')
             if disp.startswith(':got_lo12:'):
                 self.relocation(disp[10:], 'gotlo12'); value = 0
+            elif disp.startswith(':lo12:'):
+                self.relocation(disp[6:], 'loadlo12'); value = 0
             else:
                 value = number(disp)
             size = 1 if byte else 8 if wide else 4
@@ -461,6 +483,66 @@ class Assembler:
         local = sorted(n for n in all_names if n in self.symbols and n not in self.globals and n not in self.weak)
         external = sorted(all_names - set(local))
         return local, external
+
+    @staticmethod
+    def rr(text):
+        names = {'zero':0,'ra':1,'sp':2,'gp':3,'tp':4,'t0':5,'t1':6,'t2':7,
+                 'fp':8,'s0':8,'s1':9,'t3':28,'t4':29,'t5':30,'t6':31}
+        if text in names: return names[text]
+        if text.startswith('a'): return 10+int(text[1:])
+        if text.startswith('s'): return 16+int(text[1:])
+        if text.startswith('fs'): return 8+int(text[2:]) if int(text[2:])<2 else 16+int(text[2:])
+        if text.startswith(('x','f')): return int(text[1:])
+        raise ValueError('unknown RISC-V register '+text)
+
+    def riscv(self, line):
+        op,*tail=line.split(None,1)
+        a=self.operands(tail[0]) if tail else []
+        r=self.rr
+        def i(rd,rs,n,f3=0,opcode=0x13): self.word(opcode|rd<<7|f3<<12|rs<<15|(n&4095)<<20)
+        def rr(rd,rs,rt,f3=0,f7=0,opcode=0x33): self.word(opcode|rd<<7|f3<<12|rs<<15|rt<<20|f7<<25)
+        def li(rd,n):
+            n &= (1<<64)-1
+            signed=n if n<(1<<63) else n-(1<<64)
+            if -2048<=signed<=2047: i(rd,0,signed); return
+            lo=(n&4095);lo=lo if lo<2048 else lo-4096
+            li(rd,((n-lo)&((1<<64)-1))>>12);i(rd,rd,12,1)
+            if lo:i(rd,rd,lo)
+        if op=='li':li(r(a[0]),int(a[1],0));return
+        if op=='mv':i(r(a[0]),r(a[1]),0);return
+        if op in ('ret','jr','jalr'):
+            i(0 if op!='jalr' else 1,1 if op=='ret' else r(a[0]),0,0,0x67);return
+        if op in ('call','j','tail'):
+            rd=1 if op=='call' else 5
+            self.relocation(a[0],'rvcall');self.word(rd<<7|0x17);i(1 if op=='call' else 0,rd,0,0,0x67);return
+        if op in ('la','lga'):
+            anchor=f'.Lrv_anchor_{len(self.symbols)}';at=len(self.current.data)
+            self.symbols[anchor]=(self.current.name,at)
+            self.relocation(a[1],'rvgot' if op=='lga' else 'rvhi');self.word(r(a[0])<<7|0x17)
+            self.relocation(anchor,'rvlo');i(r(a[0]),r(a[0]),0,3 if op=='lga' else 0,3 if op=='lga' else 0x13);return
+        if op in ('beq','bne','bltu','bgeu','blt','bge'):
+            f3={'beq':0,'bne':1,'blt':4,'bge':5,'bltu':6,'bgeu':7}[op]
+            self.branch(a[2],'rvb');self.word(0x63|f3<<12|r(a[0])<<15|r(a[1])<<20);return
+        if op in ('addi','andi','xori','slli','srli','srai'):
+            n=int(a[2],0);f3={'addi':0,'andi':7,'xori':4,'slli':1,'srli':5,'srai':5}[op]
+            i(r(a[0]),r(a[1]),n+(0x400 if op=='srai' else 0),f3);return
+        if op in ('add','sub','xor','or','and','sltu'):
+            rr(r(a[0]),r(a[1]),r(a[2]),{'add':0,'sub':0,'xor':4,'or':6,'and':7,'sltu':3}[op],32 if op=='sub' else 0);return
+        if op in ('ld','lw','lwu','lbu','sd','sw','sb','fld','fsd'):
+            m=re.fullmatch(r'(-?\d+)\((\w+)\)',a[1]);n=int(m[1]);base=r(m[2]);reg=r(a[0]);store=op in ('sd','sw','sb','fsd')
+            f3={'ld':3,'lw':2,'lwu':6,'lbu':4,'sd':3,'sw':2,'sb':0,'fld':3,'fsd':3}[op]
+            if store:self.word((0x27 if op=='fsd' else 0x23)|(n&31)<<7|f3<<12|base<<15|reg<<20|((n&4095)>>5)<<25)
+            else:i(reg,base,n,f3,7 if op=='fld' else 3)
+            return
+        if op=='ecall':self.word(0x73);return
+        if op=='ebreak':self.word(0x100073);return
+        if op=='fence':self.word(0x0330000f);return
+        if op.startswith(('amo','lr.','sc.')):
+            parts=op.split('.');baseop=parts[0];width=parts[1];aq='aq' in parts or 'aqrl' in parts;rl='rl' in parts or 'aqrl' in parts
+            rd=r(a[0]);rs2=0 if baseop=='lr' else r(a[1]);memory=a[1] if baseop=='lr' else a[2];rs1=r(memory.strip('()'))
+            f5={'amoswap':1,'amoadd':0,'lr':2,'sc':3}[baseop]
+            self.word(0x2f|rd<<7|(2 if width=='w' else 3)<<12|rs1<<15|rs2<<20|int(rl)<<25|int(aq)<<26|f5<<27);return
+        raise ValueError('unsupported RISC-V instruction '+line)
 
     def elf(self):
         sections = list(self.sections.values())
@@ -482,12 +564,13 @@ class Assembler:
             executable = section.name.startswith('.text')
             writable = section.name.startswith(('.data', '.bss'))
             flags = 0 if section.name == '.note.GNU-stack' else 2 | (4 if executable else 0) | (1 if writable else 0)
-            records.append([section.name, 1, flags, section.data, 0, 0, max(section.alignment, 4 if executable and self.a64 else 1), 0])
+            records.append([section.name, 1, flags, section.data, 0, 0, max(section.alignment, 4 if executable and (self.a64 or self.rv64) else 1), 0])
         symtab_id = len(sections) + 1 + sum(bool(s.relocs) for s in sections)
         for section in sections:
             if not section.relocs: continue
             data = bytearray()
-            kinds = {'pc32': 2, 'call': 4, 'got': 9} if not self.a64 else {'call26': 283, 'jump26': 282, 'page': 275, 'lo12': 277, 'gotpage': 311, 'gotlo12': 312}
+            kinds = {'abs64': 1, 'pc32': 2, 'call': 4, 'got': 9} if not self.a64 else {'abs64': 257, 'call26': 283, 'jump26': 282, 'page': 275, 'lo12': 277, 'gotpage': 311, 'gotlo12': 312}
+            if self.rv64: kinds = {'abs64':2,'rvcall':19,'rvgot':20,'rvhi':23,'rvlo':24}
             for offset, name, kind, addend in section.relocs:
                 data.extend(pack('QQq', offset, (symids[name] << 32) | kinds[kind], addend))
             records.append(['.rela' + section.name, 4, 0, data, symtab_id, ids[section.name], 8, 24])
@@ -507,7 +590,7 @@ class Assembler:
             headers.extend(pack('IIQQQQIIQQ', name_offset, kind, flags, 0, offset, len(content), link, info, alignment, entsize))
         data.extend(bytes(align(len(data), 8) - len(data)))
         shoff = len(data); data.extend(headers)
-        data[:64] = pack('16sHHIQQQIHHHHHH', b'\x7fELF\x02\x01\x01' + bytes(9), 1, 183 if self.a64 else 62, 1, 0, 0, shoff, 0, 64, 0, 0, 64, len(records) + 1, len(records))
+        data[:64] = pack('16sHHIQQQIHHHHHH', b'\x7fELF\x02\x01\x01' + bytes(9), 1, 243 if self.rv64 else 183 if self.a64 else 62, 1, 0, 0, shoff, 4 if self.rv64 else 0, 64, 0, 0, 64, len(records) + 1, len(records))
         return data
 
     def pe(self):
@@ -528,9 +611,15 @@ class Assembler:
             contents = bytearray(section.data)
             relocs = bytearray()
             for at, name, kind, addend in section.relocs:
-                reloc_kind = 3 if kind == 'rva' else 4 if kind in ('pc32', 'call') else None
+                if self.a64:
+                    reloc_kind = {'rva': 2, 'call26': 3, 'jump26': 3, 'page': 4, 'lo12': 6, 'loadlo12': 7, 'abs64': 14}.get(kind)
+                else:
+                    reloc_kind = 3 if kind == 'rva' else 4 if kind in ('pc32', 'call') else None
                 if reloc_kind is None: raise ValueError('COFF relocation ' + kind)
-                struct.pack_into('<i', contents, at, addend + (4 if reloc_kind == 4 else 0))
+                if not self.a64 or kind in ('rva','abs64'):
+                    struct.pack_into('<q' if kind == 'abs64' else '<i', contents, at, addend + (4 if not self.a64 and reloc_kind == 4 else 0))
+                elif addend:
+                    raise ValueError('ARM64 runtime relocation addend')
                 relocs.extend(pack('IIH', at, symids[name], reloc_kind))
             data.extend(contents)
             rel_offset = len(data); data.extend(relocs)
@@ -546,7 +635,7 @@ class Assembler:
             data.extend(pack('8sIhHBB', symbol_name(name), offset, ids.get(section, 0), 0x20 if section and section.startswith('.text') else 0, 3 if name in local else 2, 0))
         struct.pack_into('<I', strings, 0, len(strings))
         data.extend(strings)
-        data[:20] = pack('HHIIIHH', 0x8664, len(sections), 0, symbol_offset, len(names), 0, 0)
+        data[:20] = pack('HHIIIHH', 0xaa64 if self.a64 else 0x8664, len(sections), 0, symbol_offset, len(names), 0, 0)
         data[20:20 + 40 * len(sections)] = b''.join(headers)
         return data
 
@@ -573,10 +662,15 @@ class Assembler:
             data.extend(bytes(align(len(data), 4) - len(data)))
             reloc_offsets[section.name] = len(data)
             for at, name, kind, addend in reversed(section.relocs):
-                if addend: raise ValueError('Mach-O nonzero addend')
+                if self.a64 and addend: raise ValueError('Mach-O nonzero addend')
                 types = {'call26': 2, 'jump26': 2, 'page': 3, 'lo12': 4, 'gotpage': 5, 'gotlo12': 6}
-                relative = kind in ('call26', 'jump26', 'page', 'gotpage')
-                bits = symids[name] | (int(relative) << 24) | (2 << 25) | (1 << 27) | (types[kind] << 28)
+                if not self.a64:
+                    types = {'call': 2, 'pc32': 1, 'got': 3, 'abs64': 0}
+                    width = 8 if kind == 'abs64' else 4
+                    value = addend + (0 if width == 8 else 4)
+                    data[offsets[section.name]+at:offsets[section.name]+at+width] = (value & ((1 << (width*8))-1)).to_bytes(width, 'little')
+                relative = kind in ('call26', 'jump26', 'page', 'gotpage', 'call', 'pc32', 'got')
+                bits = symids[name] | (int(relative) << 24) | ((3 if kind == 'abs64' else 2) << 25) | (1 << 27) | (types[kind] << 28)
                 data.extend(pack('II', at, bits))
         data.extend(bytes(align(len(data), 8) - len(data)))
         symbol_offset = len(data)
@@ -586,7 +680,7 @@ class Assembler:
             section, offset = self.symbols.get(name, (None, 0))
             data.extend(pack('IBBHQ', at, (0x0e if section else 0) | (0 if name in local else 1) | (0x10 if name in self.hidden else 0), ids.get(section, 0), 0, addresses.get(section, 0) + offset))
         string_offset = len(data); data.extend(strings)
-        data[:32] = pack('IIIIIIII', 0xfeedfacf, 0x100000c, 0, 1, 2, command_size, 0, 0)
+        data[:32] = pack('IIIIIIII', 0xfeedfacf, 0x100000c if self.a64 else 0x1000007, 0 if self.a64 else 3, 1, 2, command_size, 0, 0)
         file_offset = min(offsets.values())
         file_end = max(offsets[s.name] + len(s.data) for s in sections)
         data[32:104] = pack('II16sQQQQIIII', 0x19, segment_size, bytes(16), 0, address, file_offset, file_end - file_offset, 7, 7, len(sections), 0)
@@ -612,10 +706,19 @@ def main():
     valid = {'dynrt_start.o', 'dynrt_release.o', 'dynrt_shared.o',
              'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_shared.o',
              'dynrt_windows_start.o', 'dynrt_windows_shared.o',
-             'dynrt_macos_start.o', 'dynrt_macos_shared.o'}
+             'dynrt_macos_start.o', 'dynrt_macos_shared.o',
+             'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o',
+             'dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o',
+             'dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o'}
     if name not in valid:
         parser.error('unknown startup runtime output: ' + name)
-    if 'aarch64' in name:
+    if 'riscv64' in name:
+        target, source = 'riscv64-linux', 'linux_riscv64_start.S'
+    elif 'windows_arm64' in name:
+        target, source = 'aarch64-windows', 'windows_aarch64_start.S'
+    elif 'macos_x64' in name:
+        target, source = 'x86_64-macos', 'macos_x86_64_start.S'
+    elif 'aarch64' in name:
         target, source = 'aarch64-linux', 'linux_aarch64_start.S'
     elif 'windows' in name:
         target, source = 'x86_64-windows', 'windows_x86_64_start.S'
@@ -629,8 +732,8 @@ def main():
     if 'shared' in name:
         defines.add('DYN_SHARED')
     assembler = Assembler(target).assemble(ROOT / 'runtime' / source, defines)
-    assembler.assemble(ROOT / 'runtime' / ('native_memory_aarch64.S' if assembler.a64 else 'native_memory_x86_64.S'), defines | ({'DYN_WINDOWS'} if assembler.coff else set()) | ({'DYN_MACOS'} if assembler.macho else set()))
-    if assembler.coff:
+    assembler.assemble(ROOT / 'runtime' / ('native_memory_riscv64.S' if assembler.rv64 else 'native_memory_aarch64.S' if assembler.a64 else 'native_memory_x86_64.S'), defines | ({'DYN_WINDOWS'} if assembler.coff else set()) | ({'DYN_MACOS'} if assembler.macho else set()))
+    if assembler.coff and not assembler.a64:
         assembler.assemble(ROOT / 'runtime/native_windows_imports.S')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_suffix('.tmp')

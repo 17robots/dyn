@@ -29,7 +29,7 @@ def run_lsp(messages, initialize=None, target=None):
     for message in messages:
         body = message if isinstance(message, bytes) else json.dumps(message).encode()
         wire.extend(b'Content-Length: %d\r\n\r\n' % len(body) + body)
-    env = dict(os.environ, DYN_SDK=str(Path('compiler').resolve()))
+    env = dict(os.environ, DYN_SDK=str(Path(__file__).resolve().parents[1]))
     process = subprocess.run([DYN, 'lsp', *(['--target', target] if target else [])], input=wire, capture_output=True,
                              env=env, timeout=20, check=True)
     output = process.stdout
@@ -59,6 +59,16 @@ class Contracts(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
         return path
+
+    def test_dangling_top_level_name_has_visible_range(self):
+        text = 'fn main() {}\n\nffefefefefefe\n'
+        path = self.file('main.dyn', text)
+        responses, _ = run_lsp([opened(path, text)])
+        errors = diagnostics(responses, path)
+        self.assertTrue(errors)
+        self.assertEqual(errors[0]['range'], {
+            'start': {'line': 2, 'character': 0},
+            'end': {'line': 2, 'character': 13}})
 
     def test_completion_precedes_queued_change_diagnostics(self):
         path = self.file('main.dyn', 'fn main() {}\n')

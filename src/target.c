@@ -10,8 +10,14 @@ static const DynTarget targets[] = {
      "x86_64", "linux", "sysv", "none", "little", "64", true},
     {"aarch64-linux", "aarch64-unknown-linux-gnu", "/lib/ld-linux-aarch64.so.1",
      "aarch64", "linux", "sysv", "none", "little", "64", true},
+    {"riscv64-linux", "riscv64-unknown-linux-gnu", "/lib/ld-linux-riscv64-lp64d.so.1",
+     "riscv64", "linux", "lp64d", "none", "little", "64", true},
+    {"x86_64-macos", "x86_64-apple-macosx", NULL, "x86_64", "darwin", "sysv",
+     "system", "little", "64", true},
     {"aarch64-macos", "arm64-apple-macosx", NULL, "aarch64", "darwin", "aapcs",
      "system", "little", "64", true},
+    {"aarch64-windows", "aarch64-pc-windows-msvc", NULL, "aarch64", "windows",
+     "aapcs", "system", "little", "64", true},
     {"x86_64-windows", "x86_64-pc-windows-msvc", NULL, "x86_64", "windows",
      "win64", "system", "little", "64", true}};
 

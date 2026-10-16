@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real ThinLTO must cache native backends and invalidate imported bodies."""
+"""Native release cache must invalidate imported bodies."""
 import os
 from pathlib import Path
 import platform
@@ -8,10 +8,10 @@ import tempfile
 
 DYN = str(Path(os.environ.get('DYN', './build/dyn-release')).resolve())
 if platform.system() != 'Linux' or platform.machine() != 'x86_64':
-    print('SKIP ThinLTO requires x86_64 Linux')
+    print('SKIP release cache qualification requires x86_64 Linux')
     raise SystemExit(0)
 
-with tempfile.TemporaryDirectory(prefix='dyn-thinlto-') as directory:
+with tempfile.TemporaryDirectory(prefix='dyn-release-cache-') as directory:
     root = Path(directory)
     source = root/'src'
     dependency = source/'value'
@@ -37,35 +37,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-thinlto-') as directory:
         assert result_run.stdout.strip() == expected, result_run.stdout
         return result.stderr
 
-    def backends():
-        return {p.name: (p.stat().st_mtime_ns, p.read_bytes())
-                for p in (cache/'thinlto').glob('llvmcache-*')}
-
     build('first')
-    cold = backends()
-    assert cold, 'No ThinLTO backend entries: emission fell back to full LTO'
-    warm = build('first')
-    assert 'timing detail emit' not in warm, warm
-    assert backends() == cold, 'Identical relink regenerated backend cache entries'
+    warm = build('first', preserve_output=True)
+    assert 'timing detail native emit' not in warm, warm
     body.write_text('pub fn text() []const u8 { return "second" }\n')
-    build('second')
-    changed = backends()
-    assert changed.keys() > cold.keys(), 'Changed dependency did not invalidate ThinLTO'
-    # Keep the old executable to exercise both the fast options key and the
-    # object cache: native O2 and ThinLTO must not reuse each other's outputs.
-    native = build('second', '--no-lto', preserve_output=True)
-    assert 'timing detail emit' in native, 'no-lto reused the ThinLTO executable'
-    assert backends() == changed, 'no-lto used the ThinLTO backend cache'
-    native_warm = build('second', '--no-lto')
-    assert 'timing detail emit' not in native_warm, native_warm
-    thin_again = build('second', preserve_output=True)
-    assert 'timing link' in thin_again, 'ThinLTO reused a native-only executable'
+    changed = build('second', preserve_output=True)
+    assert 'timing detail native emit' in changed, changed
     fresh = build('second', '--no-cache')
-    assert 'timing detail emit' in fresh, fresh
-    assert backends() == changed, '--no-cache touched the ThinLTO cache'
+    assert 'timing detail native emit' in fresh, fresh
     isolated = root/'uncached'
     env['DYN_CACHE_DIR'] = str(isolated)
     build('second', '--no-cache')
     assert not isolated.exists(), '--no-cache created a cache directory'
 
-print('PASS ThinLTO backend reuse, imported-body invalidation, no-lto, and no-cache')
+print('PASS native release cache reuse, imported-body invalidation and no-cache')

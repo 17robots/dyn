@@ -9,7 +9,7 @@ DIST=BUILD/'dist';DIST.mkdir(parents=True,exist_ok=True)
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 with tempfile.TemporaryDirectory(prefix='dyn-sdk-') as temporary:
     work=Path(temporary);sdk=work/'stage/dyn-sdk'
-    subprocess.run(['python3',str(ROOT/'tools/install.py'), *(['--host'] if os.environ.get('DYN_WITH_LLVM') == '0' else [])],env=dict(os.environ,BUILD=str(BUILD),DESTDIR=str(work/'stage'),PREFIX='/dyn-sdk'),check=True)
+    subprocess.run(['python3',str(ROOT/'tools/install.py'), '--host'],env=dict(os.environ,BUILD=str(BUILD),DESTDIR=str(work/'stage'),PREFIX='/dyn-sdk'),check=True)
     for name in ('README.md','CHANGELOG.md','LICENSE','THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT/name,sdk/name)
     shutil.copytree(ROOT/'docs/migrations', sdk/'docs/migrations')
@@ -40,10 +40,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-sdk-') as temporary:
         subprocess.run([str(work/'smoke')],check=True,timeout=30)
     env['DYN'] = str(installed/'bin/dyn')
     subprocess.run([sys.executable,str(ROOT/'tests/stdlib-host.py')],env=env,check=True,timeout=180)
-    if os.environ.get('DYN_WITH_LLVM') == '0':
-        subprocess.run([sys.executable,str(ROOT/'tests/wasm-independent.py')],
+    subprocess.run([sys.executable,str(ROOT/'tests/wasm-independent.py')],
                        env=dict(env, DYN_TEST_INSTALLED='1'),check=True,timeout=180)
-        subprocess.run([sys.executable,str(ROOT/'tests/cross-runtime.py')],
+    subprocess.run([sys.executable,str(ROOT/'tests/cross-runtime.py')],
                        env=dict(env, DYN_TEST_INSTALLED='1'),check=True,timeout=180)
     (DIST/'package-validation.json').write_text(json.dumps(dict(status='passed',runtime_sources=runtime_sources,archive=archive.name,sha256=sha(archive),manifest=manifest),indent=2)+'\n')
     print('PASS packaged and relocated standalone SDK:',archive)

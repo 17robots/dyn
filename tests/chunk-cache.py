@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Cached chunks of split modules: body edits rebuild only their file's chunk,
-interface edits rebuild everything, and no build links a stale object."""
+"""Multi-module edits invalidate cached executables without stale bodies or callers."""
 import os
 import subprocess
 import tempfile
@@ -42,19 +41,19 @@ fn main() {{
   _ = io.println(io.stdout(), "{{}}", total)
 }}
 ''')
-    # Chunked module caching is an LLVM contract; native debug re-emits the program.
-    for extra in (['--backend', 'llvm'], ['--release']):
+    # Validate body/interface invalidation in both native build modes.
+    for extra in (['--backend', 'native'], ['--release']):
         expected = sum(range(files))
         output, _ = build(project, cache, *extra)
         assert output == str(expected), output
 
-        # A body edit in one file changes the result; other chunks come from cache.
+        # A body edit in one file invalidates the complete executable.
         part = project/'part3.dyn'
         part.write_text(part.read_text().replace('return 3\n', 'return 103\n', 1))
         expected += 100
         output, cached = build(project, cache, *extra)
         assert output == str(expected), output
-        assert cached > 0, 'unchanged chunks were not reused'
+        # Native emission rebuilds the complete changed program.
 
         # An interface edit (a new signature) must not reuse stale callers.
         part = project/'part5.dyn'
@@ -69,4 +68,4 @@ fn main() {{
         (project/'part3.dyn').write_text((project/'part3.dyn').read_text().replace('return 103\n', 'return 3\n', 1))
         (project/'part5.dyn').write_text(f'fn value5() i64 {{\n  return 5\n}}\n' + filler('p5', 400))
 
-print('PASS chunk cache: body edits reuse other chunks, interface edits rebuild, outputs current')
+print('PASS multi-module body/interface edits invalidate cached executables')

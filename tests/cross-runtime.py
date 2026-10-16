@@ -27,8 +27,11 @@ def run(command, **kwargs):
 
 NAMES = ('dynrt_start.o', 'dynrt_release.o', 'dynrt_shared.o',
          'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_shared.o',
+         'dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o',
          'dynrt_windows_start.o', 'dynrt_windows_shared.o',
-         'dynrt_macos_start.o', 'dynrt_macos_shared.o')
+         'dynrt_macos_start.o', 'dynrt_macos_shared.o',
+         'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o',
+         'dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o')
 
 SOURCE = 'use "std/io"\nuse "std/thread"\nuse "std/sync"\nfn remainder(x: f64, y: f64) f64 { return x % y }\nfn remainder32(x: f32, y: f32) f32 { return x % y }\nstruct Context { count: sync.AtomicU64 }\nfn worker(pointer: rawptr) isize {\n  context := #cast(*Context) pointer\n  defer { _ = sync.fetch_add_u64(&context.count, 1) }\n  for i in 0..1000 { _ = sync.fetch_add_u64(&context.count, 1) }\n  return 0\n}\nfn main() {\n  context := Context{}\n  active := thread.Thread{}\n  if thread.spawn_with_size(&active, 65536, &worker, #cast(rawptr) &context) < 0 { #panic("spawn") }\n  if thread.join(&active) != 0 || sync.load_u64(&context.count) != 1001 { #panic("join") }\n\n  if remainder(5.5, 2.0) != 1.5 || remainder(-5.5, 2.0) != -1.5 { #panic("fmod") }\n  if remainder32(5.5, 2.0) != 1.5 { #panic("fmodf") }\n  if (#bitcast(u64) remainder(-4.0, 2.0)) != 0x8000000000000000 { #panic("negative zero") }\n  _ = io.println(io.stdout(), "cross runtime ready")\n}\n'
 PANIC = '''use "std/io"
@@ -103,12 +106,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
             env=dict(os.environ, PATH=str(empty)))
         assert output.read_bytes() == original, ('nondeterministic runtime', name)
         if 'windows' in name:
-            assert struct.unpack_from('<H', original)[0] == 0x8664
+            assert struct.unpack_from('<H', original)[0] == (0xaa64 if 'arm64' in name else 0x8664)
         elif 'macos' in name:
-            assert struct.unpack_from('<II', original) == (0xfeedfacf, 0x100000c)
+            assert struct.unpack_from('<II', original) == (0xfeedfacf, 0x1000007 if 'x64' in name else 0x100000c)
         else:
             assert original[:4] == b'\x7fELF'
-            assert struct.unpack_from('<H', original, 18)[0] == (183 if 'aarch64' in name else 62)
+            assert struct.unpack_from('<H', original, 18)[0] == (243 if 'riscv64' in name else 183 if 'aarch64' in name else 62)
     print('PASS all native startup/shared runtime objects with empty PATH; reproducible bytes')
 
     if platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64'):
@@ -143,7 +146,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
             shutil.copy2(original, compiler)
             for name in ('dynrt_support.o', 'dynrt_support_pic.o',
                          'dynrt_aarch64_support.o', 'dynrt_aarch64_support_pic.o',
-                         'dynrt_windows_support.o', 'dynrt_macos_support.o', 'libSystem.tbd'):
+                         'dynrt_riscv64_support.o', 'dynrt_riscv64_support_pic.o',
+                         'dynrt_windows_support.o', 'dynrt_macos_support.o',
+                         'dynrt_macos_x64_support.o', 'dynrt_windows_arm64_support.o', 'libSystem.tbd'):
                 candidate = original.parent / name
                 if not candidate.exists():
                     candidate = original.parent.parent / 'lib/dyn' / name
@@ -159,11 +164,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
         if os.name == 'nt':
             environment['PATH'] = os.environ.get('PATH', '')
         machine = platform.machine().lower()
-        host_target = ('x86_64-windows' if os.name == 'nt' else
-                       'aarch64-macos' if platform.system() == 'Darwin' else
-                       'aarch64-linux' if machine in ('aarch64', 'arm64') else 'x86_64-linux')
+        host_target = (('aarch64-windows' if machine in ('aarch64', 'arm64') else 'x86_64-windows') if os.name == 'nt' else
+                       ('aarch64-macos' if machine in ('aarch64', 'arm64') else 'x86_64-macos') if platform.system() == 'Darwin' else
+                       'riscv64-linux' if machine == 'riscv64' else 'aarch64-linux' if machine in ('aarch64', 'arm64') else 'x86_64-linux')
         qemu = shutil.which('qemu-aarch64') if platform.system() == 'Linux' else None
-        for target in ('x86_64-linux', 'aarch64-linux', 'aarch64-macos', 'x86_64-windows'):
+        rv_qemu = shutil.which('qemu-riscv64') if platform.system() == 'Linux' else None
+        for target in ('riscv64-linux', 'x86_64-linux', 'aarch64-linux', 'aarch64-macos', 'x86_64-macos', 'x86_64-windows', 'aarch64-windows'):
             for mode in ('debug', 'release'):
                 source.write_text('pub fn calculate(value: f64) f64 { return value % 2.0 }\n')
                 shared = root / (target + '-' + mode + '-shared')
@@ -174,7 +180,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
                     output = root / (target + '-' + mode + '-' + name + ('.exe' if target.endswith('windows') else ''))
                     run([compiler, 'build', project, '--target', target, '--backend', 'native',
                          '--' + mode, '--no-cache', '--jobs', '1', '--output', output], env=environment)
-                    runner = [] if target == host_target else [qemu] if target == 'aarch64-linux' and qemu else None
+                    runner = [] if target == host_target else [rv_qemu] if target == 'riscv64-linux' and rv_qemu else [qemu] if target == 'aarch64-linux' and qemu else None
                     if runner is not None:
                         result = subprocess.run([*runner, str(output)], text=True, capture_output=True, timeout=20)
                         assert result.returncode == (101 if name == 'panic' else 0), (target, mode, name, result)
@@ -183,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
                             assert 'cross runtime panic' in result.stderr, result
                         else:
                             assert result.stdout == 'cross runtime ready\n', result
-        print('PASS all four native targets link debug/release with empty PATH; host and available ARM emulator execute threads/atomics/fmod/panic/defer')
+        print('PASS all seven native targets link debug/release with empty PATH; host and available ARM/RV emulators execute threads/atomics/fmod/panic/defer')
     else:
         print('SKIP cross-link execution: build compiler or set DYN')
 

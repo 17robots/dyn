@@ -6,6 +6,7 @@
    may be any OS, so ELF structures are read field by field instead of
    through <elf.h>. */
 #include "link_elf.h"
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +15,7 @@
 
 enum {
   ELF_REL = 1, ELF_EXEC = 2, ELF_DYN = 3,
-  MACHINE_X86_64 = 62, MACHINE_AARCH64 = 183,
+  MACHINE_X86_64 = 62, MACHINE_AARCH64 = 183, MACHINE_RISCV = 243,
   SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_RELA = 4, SHT_NOBITS = 8,
   SHT_REL = 9, SHT_INIT_ARRAY = 14, SHT_FINI_ARRAY = 15, SHT_PREINIT_ARRAY = 16,
   SHT_GROUP = 17, SHT_SYMTAB_SHNDX = 18, SHT_X86_64_UNWIND = 0x70000001,
@@ -26,10 +27,11 @@ enum {
   STB_LOCAL = 0, STB_GLOBAL = 1, STB_WEAK = 2,
   STT_NOTYPE = 0, STT_OBJECT = 1, STT_FUNC = 2, STT_SECTION = 3, STT_FILE = 4, STT_TLS = 6,
   STT_GNU_IFUNC = 10,
-  STV_DEFAULT = 0, STV_PROTECTED = 3,
-  PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_PHDR = 6, PT_GNU_STACK = 0x6474e551,
+  STV_DEFAULT = 0, STV_HIDDEN = 2, STV_PROTECTED = 3,
+  PT_TLS = 7, PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_PHDR = 6, PT_GNU_STACK = 0x6474e551,
+  DT_PLTGOT = 3, DT_PLTRELSZ = 2, DT_PLTREL = 20, DT_JMPREL = 23,
   DT_NULL = 0, DT_NEEDED = 1, DT_HASH = 4, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT_RELASZ = 8,
-  DT_RELAENT = 9, DT_STRSZ = 10, DT_SYMENT = 11, DT_SONAME = 14, DT_DEBUG = 21, DT_INIT_ARRAY = 25,
+  DT_RELAENT = 9, DT_STRSZ = 10, DT_SYMENT = 11, DT_SONAME = 14, DT_RUNPATH = 29, DT_DEBUG = 21, DT_INIT_ARRAY = 25,
   DT_FINI_ARRAY = 26, DT_INIT_ARRAYSZ = 27, DT_FINI_ARRAYSZ = 28, DT_FLAGS = 30, DF_BIND_NOW = 8,
   DT_VERSYM = 0x6ffffff0, DT_FLAGS_1 = 0x6ffffffb, DF_1_NOW = 1, DT_VERNEED = 0x6ffffffe,
   DT_VERNEEDNUM = 0x6fffffff,
@@ -40,7 +42,8 @@ enum {
   R_X86_64_GOTPCREL = 9, R_X86_64_32 = 10, R_X86_64_32S = 11, R_X86_64_PC64 = 24,
   R_X86_64_SIZE32 = 32, R_X86_64_SIZE64 = 33, R_X86_64_GOTPCRELX = 41,
   R_X86_64_REX_GOTPCRELX = 42, R_X86_64_COPY = 5, R_X86_64_GLOB_DAT = 6, R_X86_64_JUMP_SLOT = 7,
-  R_X86_64_RELATIVE = 8,
+  R_X86_64_RELATIVE = 8, R_X86_64_DTPOFF64 = 17, R_X86_64_TPOFF64 = 18,
+  R_X86_64_TLSLD = 20, R_X86_64_DTPOFF32 = 21, R_X86_64_TPOFF32 = 23,
 };
 enum {
   R_AARCH64_NONE = 256, R_AARCH64_ABS64 = 257, R_AARCH64_ABS32 = 258, R_AARCH64_ABS16 = 259,
@@ -52,6 +55,17 @@ enum {
   R_AARCH64_LDST16_ABS_LO12_NC = 284, R_AARCH64_LDST32_ABS_LO12_NC = 285, R_AARCH64_LDST64_ABS_LO12_NC = 286,
   R_AARCH64_LDST128_ABS_LO12_NC = 299, R_AARCH64_ADR_GOT_PAGE = 311, R_AARCH64_LD64_GOT_LO12_NC = 312,
   R_AARCH64_COPY = 1024, R_AARCH64_GLOB_DAT = 1025, R_AARCH64_JUMP_SLOT = 1026, R_AARCH64_RELATIVE = 1027,
+};
+enum {
+  R_RISCV_NONE = 0, R_RISCV_32 = 1, R_RISCV_64 = 2, R_RISCV_RELATIVE = 3,
+  R_RISCV_COPY = 4, R_RISCV_JUMP_SLOT = 5, R_RISCV_BRANCH = 16, R_RISCV_JAL = 17,
+  R_RISCV_CALL = 18, R_RISCV_CALL_PLT = 19, R_RISCV_GOT_HI20 = 20,
+  R_RISCV_PCREL_HI20 = 23, R_RISCV_PCREL_LO12_I = 24, R_RISCV_PCREL_LO12_S = 25,
+  R_RISCV_HI20 = 26, R_RISCV_LO12_I = 27, R_RISCV_LO12_S = 28,
+  R_RISCV_ADD8 = 33, R_RISCV_ADD16 = 34, R_RISCV_ADD32 = 35, R_RISCV_ADD64 = 36,
+  R_RISCV_SUB8 = 37, R_RISCV_SUB16 = 38, R_RISCV_SUB32 = 39, R_RISCV_SUB64 = 40,
+  R_RISCV_RELAX = 51, R_RISCV_SUB6 = 52, R_RISCV_SET6 = 53, R_RISCV_SET8 = 54,
+  R_RISCV_SET16 = 55, R_RISCV_SET32 = 56, R_RISCV_32_PCREL = 57,
 };
 /* How a relocation uses its symbol, for dynamic linking decisions. */
 typedef enum { USE_OTHER, USE_GOT, USE_CALL, USE_WORD, USE_ADDRESS, USE_ABSOLUTE } SymbolUse;
@@ -70,9 +84,9 @@ typedef struct {
 } LinkRela;
 /* Allocated outputs in address order: read-only, code, then writable. */
 typedef enum {
-  OUT_INTERP, OUT_HASH, OUT_DYNSYM, OUT_DYNSTR, OUT_VERSYM, OUT_VERNEED, OUT_RELA_DYN,
+  OUT_INTERP, OUT_HASH, OUT_DYNSYM, OUT_DYNSTR, OUT_VERSYM, OUT_VERNEED, OUT_RELA_DYN, OUT_RELA_PLT,
   OUT_RODATA, OUT_EH_FRAME, OUT_TEXT, OUT_PLT, OUT_DYNAMIC, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
-  OUT_DATA, OUT_GOT, OUT_BSS, OUT_ALLOC_COUNT
+  OUT_DATA, OUT_GOT, OUT_TDATA, OUT_TBSS, OUT_BSS, OUT_ALLOC_COUNT
 } OutputKind;
 typedef struct {
   const char *path; /* As given; also the DT_NEEDED name without a soname. */
@@ -161,7 +175,9 @@ typedef struct {
   size_t table_capacity, table_count;
   LinkSection **commons;
   size_t common_count, common_capacity;
-  LinkSection got;
+  LinkSection got, tls_index;
+  uint8_t tls_index_data[16];
+  bool has_tls;
   LinkSymbol **got_symbols;
   size_t got_count, got_capacity;
   LinkOutput outputs[OUT_ALLOC_COUNT];
@@ -169,11 +185,14 @@ typedef struct {
   size_t extra_count, extra_capacity;
   char **signatures;
   size_t signature_count, signature_capacity;
-  bool shared_output, dynamic;
+  bool shared_output, dynamic, lazy_plt;
   uint16_t machine; /* Of the first input; all must match. */
+  uint32_t riscv_flags;
   uint64_t page; /* Maximum page size: segments never share one. */
   uint32_t copy_type, glob_dat_type, jump_slot_type, relative_type, word_type;
   const char *interpreter;
+  const char *runpath;
+  uint32_t runpath_string;
   uint64_t base;
   LinkShared **shareds;
   size_t shared_count, shared_capacity;
@@ -189,6 +208,8 @@ typedef struct {
   uint8_t *dynstr;
   size_t dynstr_size, dynstr_capacity;
   size_t dynamic_entries;
+  char **local_scripts;
+  size_t local_script_count, local_script_capacity;
 } Linker;
 
 static bool fail(Linker *linker, const char *format, const char *a, const char *b) {
@@ -336,23 +357,33 @@ static bool define_symbol(Linker *linker, LinkObject *object, LinkSymbol *symbol
   return true;
 }
 
-/* x86-64 and AArch64 differ in relocation numbering, page size and PLT. */
+/* Architectures differ in relocation numbering, page size and PLT. */
 static bool set_machine(Linker *linker, const char *path, uint16_t machine) {
-  if (machine != MACHINE_X86_64 && machine != MACHINE_AARCH64)
-    return fail(linker, "'%s' is neither x86-64 nor AArch64%s", path, "");
+  if (machine != MACHINE_X86_64 && machine != MACHINE_AARCH64 && machine != MACHINE_RISCV)
+    return fail(linker, "'%s' is not x86-64, AArch64 or RV64%s", path, "");
   if (linker->machine && linker->machine != machine)
     return fail(linker, "'%s' is for a different architecture than the other inputs%s", path, "");
   linker->machine = machine;
-  bool arm = machine == MACHINE_AARCH64;
+  bool arm = machine == MACHINE_AARCH64, riscv = machine == MACHINE_RISCV;
   linker->page = arm ? 0x10000 : 0x1000;
-  linker->copy_type = arm ? R_AARCH64_COPY : R_X86_64_COPY;
-  linker->glob_dat_type = arm ? R_AARCH64_GLOB_DAT : R_X86_64_GLOB_DAT;
-  linker->jump_slot_type = arm ? R_AARCH64_JUMP_SLOT : R_X86_64_JUMP_SLOT;
-  linker->relative_type = arm ? R_AARCH64_RELATIVE : R_X86_64_RELATIVE;
-  linker->word_type = arm ? R_AARCH64_ABS64 : R_X86_64_64;
+  linker->copy_type = riscv ? R_RISCV_COPY : arm ? R_AARCH64_COPY : R_X86_64_COPY;
+  linker->glob_dat_type = riscv ? R_RISCV_64 : arm ? R_AARCH64_GLOB_DAT : R_X86_64_GLOB_DAT;
+  linker->jump_slot_type = riscv ? R_RISCV_JUMP_SLOT : arm ? R_AARCH64_JUMP_SLOT : R_X86_64_JUMP_SLOT;
+  linker->relative_type = riscv ? R_RISCV_RELATIVE : arm ? R_AARCH64_RELATIVE : R_X86_64_RELATIVE;
+  linker->word_type = riscv ? R_RISCV_64 : arm ? R_AARCH64_ABS64 : R_X86_64_64;
   return true;
 }
 static SymbolUse symbol_use(const Linker *linker, uint32_t type) {
+  if (linker->machine == MACHINE_RISCV) {
+    switch (type) {
+    case R_RISCV_GOT_HI20: return USE_GOT;
+    case R_RISCV_CALL: case R_RISCV_CALL_PLT: case R_RISCV_JAL: return USE_CALL;
+    case R_RISCV_64: return USE_WORD;
+    case R_RISCV_32: case R_RISCV_HI20: case R_RISCV_LO12_I: case R_RISCV_LO12_S: return USE_ABSOLUTE;
+    case R_RISCV_PCREL_HI20: case R_RISCV_BRANCH: return USE_ADDRESS;
+    default: return USE_OTHER;
+    }
+  }
   if (linker->machine == MACHINE_AARCH64) {
     switch (type) {
     case R_AARCH64_ADR_GOT_PAGE: case R_AARCH64_LD64_GOT_LO12_NC: return USE_GOT;
@@ -381,6 +412,12 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
   if (data[4] != 2 || data[5] != 1 || read16(data + 16) != ELF_REL)
     return fail(linker, "'%s' is not a 64-bit little-endian relocatable object%s", path, "");
   if (!set_machine(linker, path, read16(data + 18))) return false;
+  if (linker->machine == MACHINE_RISCV) {
+    uint32_t flags = read32(data + 48);
+    if ((flags & 6) != 4 || (flags & ~7u))
+      return fail(linker, "'%s' does not use the supported RISC-V LP64D ABI%s", path, "");
+    linker->riscv_flags |= flags;
+  }
   LinkObject *object = calloc(1, sizeof(*object));
   if (!object || !grow((void **)&linker->objects, &linker->object_capacity, linker->object_count, sizeof(*linker->objects))) {
     free(object);
@@ -463,7 +500,8 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
       return fail(linker, "'%s' has a malformed symbol name%s", path, "");
     uint8_t binding = entry[4] >> 4, type = entry[4] & 15;
     uint16_t index = read16(entry + 6);
-    if (type == STT_TLS) return fail(linker, "'%s' uses thread-local storage, which the linker does not support%s", path, "");
+    if (type == STT_TLS && (linker->machine != MACHINE_X86_64 || linker->shared_output))
+      return fail(linker, "'%s' needs TLS outside the supported x86-64 executable model%s", path, "");
     if (index == SHN_XINDEX) return fail(linker, "'%s' needs extended section indexes%s", path, "");
     LinkSection *section = index && index < count ? &object->sections[index] : NULL;
     bool discarded = section && section->discarded;
@@ -542,6 +580,12 @@ static bool load_shared(Linker *linker, const char *path, const uint8_t *data, s
   if (size < 64 || data[4] != 2 || data[5] != 1)
     return fail(linker, "'%s' is not a 64-bit little-endian shared library%s", path, "");
   if (!set_machine(linker, path, read16(data + 18))) return false;
+  if (linker->machine == MACHINE_RISCV) {
+    uint32_t flags = read32(data + 48);
+    if ((flags & 6) != 4 || (flags & ~7u))
+      return fail(linker, "'%s' does not use the supported RISC-V LP64D ABI%s", path, "");
+    linker->riscv_flags |= flags;
+  }
   uint64_t header_offset = read64(data + 40);
   size_t count = read16(data + 60);
   if (!in_bounds(size, header_offset, (uint64_t)count * 64))
@@ -616,7 +660,9 @@ static bool load_shared(Linker *linker, const char *path, const uint8_t *data, s
     uint16_t version = versym ? read16(versym + i * 2) : 1;
     uint16_t index = version & 0x7fff;
     bool hidden = (version & 0x8000) != 0;
-    if (index == 0) continue;
+    /* Undefined imports may carry VER_NDX_LOCAL (GNU ld); they still
+       require matching executable definitions in .dynsym. */
+    if (index == 0 && read16(entry + 6) != SHN_UNDEF) continue;
     LinkSymbol *symbol = symbol_intern(linker, strings + name);
     if (!symbol) return fail(linker, "out of memory%s%s", "", "");
     if (read16(entry + 6) == SHN_UNDEF) {
@@ -648,7 +694,7 @@ static char *keep_string(Linker *linker, const char *text, size_t length) {
 /* GNU linker scripts as installed for C libraries: GROUP, INPUT and
    AS_NEEDED lists of files, with OUTPUT_FORMAT and comments ignored. */
 typedef bool (*ScriptFile)(void *context, const char *path, size_t length, bool as_needed);
-static bool parse_script(const char *text, size_t size, ScriptFile file, void *context) {
+static bool parse_script(const char *text, size_t size, ScriptFile file, ScriptFile version, void *context) {
   size_t at = 0;
   int depth = 0, needed_depth = -1;
   bool listing = false, skipping = false;
@@ -676,6 +722,20 @@ static bool parse_script(const char *text, size_t size, ScriptFile file, void *c
     size_t length = at - start;
     const char *word = text + start;
     if (depth == 0) {
+      if (length == 7 && !memcmp(word, "VERSION", 7)) {
+        while (at < size && isspace((unsigned char)text[at])) ++at;
+        if (at == size || text[at++] != '{') return false;
+        size_t begin = at;
+        unsigned braces = 1;
+        while (at < size && braces) {
+          if (text[at] == '{') ++braces;
+          else if (text[at] == '}') --braces;
+          if (braces) ++at;
+        }
+        if (braces || (version && !version(context, text + begin, at - begin, false))) return false;
+        ++at;
+        continue;
+      }
       listing = (length == 5 && !memcmp(word, "GROUP", 5)) || (length == 5 && !memcmp(word, "INPUT", 5));
       skipping = !listing;
       bool ignored = (length == 13 && !memcmp(word, "OUTPUT_FORMAT", 13)) ||
@@ -702,6 +762,15 @@ typedef struct {
   const char *script;
   int depth;
 } ScriptLoad;
+static bool script_version(void *context, const char *text, size_t length, bool unused) {
+  ScriptLoad *load = context;
+  (void)unused;
+  char *copy = keep_string(load->linker, text, length);
+  if (!copy || !grow((void **)&load->linker->local_scripts, &load->linker->local_script_capacity,
+                    load->linker->local_script_count, sizeof(char *))) return false;
+  load->linker->local_scripts[load->linker->local_script_count++] = copy;
+  return true;
+}
 static bool script_file(void *context, const char *word, size_t length, bool as_needed) {
   ScriptLoad *load = context;
   if (length >= 2 && word[0] == '-' && word[1] == 'l')
@@ -722,7 +791,7 @@ static bool load_input(Linker *linker, const char *path, bool as_needed, int dep
   }
   if (depth < 4 && is_script(data, size)) {
     ScriptLoad load = {linker, path, depth};
-    if (parse_script((const char *)data, size, script_file, &load)) return true;
+    if (parse_script((const char *)data, size, script_file, script_version, &load)) return true;
     return fail(linker, "cannot read linker script '%s'%s", path, "");
   }
   return fail(linker, "'%s' is not an object, archive, shared library or linker script%s", path, "");
@@ -808,6 +877,7 @@ static int classify(const LinkSection *section) {
     return OUT_INIT_ARRAY;
   if (section->type == SHT_FINI_ARRAY || !strncmp(section->name, ".fini_array", 11)) return OUT_FINI_ARRAY;
   if (section->flags & SHF_EXEC) return OUT_TEXT;
+  if (section->flags & SHF_TLS) return section->type == SHT_NOBITS ? OUT_TBSS : OUT_TDATA;
   if (section->type == SHT_NOBITS) return OUT_BSS;
   if (section->flags & SHF_WRITE) return OUT_DATA;
   return OUT_RODATA;
@@ -1041,6 +1111,7 @@ static bool assign_outputs(Linker *linker) {
     [OUT_VERSYM] = {".gnu.version", SHT_VERSYM, 2, OUT_DYNSYM},
     [OUT_VERNEED] = {".gnu.version_r", SHT_VERNEED, 0, OUT_DYNSTR},
     [OUT_RELA_DYN] = {".rela.dyn", SHT_RELA, 24, OUT_DYNSYM},
+    [OUT_RELA_PLT] = {".rela.plt", SHT_RELA, 24, OUT_DYNSYM},
     [OUT_RODATA] = {".rodata", SHT_PROGBITS, 0, -1},
     [OUT_EH_FRAME] = {".eh_frame", SHT_PROGBITS, 0, -1},
     [OUT_TEXT] = {".text", SHT_PROGBITS, 0, -1},
@@ -1050,6 +1121,8 @@ static bool assign_outputs(Linker *linker) {
     [OUT_FINI_ARRAY] = {".fini_array", SHT_FINI_ARRAY, 8, -1},
     [OUT_DATA] = {".data", SHT_PROGBITS, 0, -1},
     [OUT_GOT] = {".got", SHT_PROGBITS, 8, -1},
+    [OUT_TDATA] = {".tdata", SHT_PROGBITS, 0, -1},
+    [OUT_TBSS] = {".tbss", SHT_NOBITS, 0, -1},
     [OUT_BSS] = {".bss", SHT_NOBITS, 0, -1},
   };
   for (int k = 0; k < OUT_ALLOC_COUNT; ++k) {
@@ -1060,7 +1133,8 @@ static bool assign_outputs(Linker *linker) {
     output->link = kinds[k].link;
     output->align = 1;
     output->flags = SHF_ALLOC | (k == OUT_TEXT || k == OUT_PLT ? SHF_EXEC : 0) |
-                    (k >= OUT_DYNAMIC ? SHF_WRITE : 0);
+                    (k >= OUT_DYNAMIC ? SHF_WRITE : 0) |
+                    (k == OUT_TDATA || k == OUT_TBSS ? SHF_TLS : 0);
   }
   linker->outputs[OUT_DYNSYM].info = 1;
   for (size_t o = 0; o < linker->object_count; ++o) {
@@ -1068,8 +1142,11 @@ static bool assign_outputs(Linker *linker) {
     for (size_t i = 1; i < object->section_count; ++i) {
       LinkSection *section = &object->sections[i];
       if (!section->live) continue;
-      if (section->flags & SHF_TLS)
-        return fail(linker, "'%s' uses thread-local storage, which the linker does not support%s", object->path, "");
+      if (section->flags & SHF_TLS) {
+        if (linker->machine != MACHINE_X86_64 || linker->shared_output || !linker->dynamic)
+          return fail(linker, "'%s' needs TLS outside the supported x86-64 dynamic executable model%s", object->path, "");
+        linker->has_tls = true;
+      }
       int kind = classify(section);
       if (kind >= 0) {
         section->output = kind;
@@ -1173,6 +1250,17 @@ static bool plan_dynamic(Linker *linker) {
         LinkSymbol *symbol = object->symbols[rela->symbol];
         if (!symbol) continue;
         SymbolUse use = symbol_use(linker, rela->type);
+        if (linker->machine == MACHINE_X86_64 && rela->type == R_X86_64_TLSLD && !linker->tls_index.size) {
+          if (!linker->has_tls || linker->shared_output)
+            return fail(linker, "unsupported TLS local-dynamic use in '%s'%s", object->path, "");
+          /* The main executable owns TLS module 1. __tls_get_addr accepts
+             this (module, offset) pair for every local-dynamic access. */
+          write64(linker->tls_index_data, 1);
+          linker->tls_index = (LinkSection){.name = ".got", .data = linker->tls_index_data,
+              .size = 16, .align = 8, .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE,
+              .live = true, .output = OUT_GOT};
+          if (!add_to_output(linker, &linker->outputs[OUT_GOT], &linker->tls_index)) return false;
+        }
         if (use == USE_GOT) {
           if (!add_symbol(linker, &linker->got_symbols, &linker->got_count, &linker->got_capacity, symbol, &symbol->got))
             return false;
@@ -1232,7 +1320,8 @@ static bool plan_dynamic(Linker *linker) {
   }
   /* PLT slots follow the GOT. They bind with JUMP_SLOT, which never resolves
      to an executable's own canonical PLT entry. */
-  size_t slots = linker->got_count + linker->plt_count;
+  linker->lazy_plt = linker->shared_output && linker->machine == MACHINE_X86_64 && linker->plt_count;
+  size_t slots = linker->got_count + linker->plt_count + (linker->lazy_plt ? 3 : 0);
   if (slots) {
     linker->got = (LinkSection){.name = ".got", .size = slots * 8, .align = 8, .type = SHT_PROGBITS,
                                 .flags = SHF_ALLOC | SHF_WRITE, .live = true, .output = OUT_GOT};
@@ -1253,7 +1342,7 @@ static bool plan_dynamic(Linker *linker) {
   }
   for (size_t i = 0; i < linker->plt_count; ++i) {
     LinkSymbol *symbol = linker->plt_symbols[i];
-    if (!add_relocation(linker, &linker->got, (linker->got_count + i) * 8, linker->jump_slot_type, symbol, 0) ||
+    if ((!linker->lazy_plt && !add_relocation(linker, &linker->got, (linker->got_count + i) * 8, linker->jump_slot_type, symbol, 0)) ||
         !add_dynsym(linker, symbol))
       return false;
   }
@@ -1272,6 +1361,10 @@ static bool plan_dynamic(Linker *linker) {
     if (!symbol->defined && symbol->shared) symbol->shared->used = true;
     symbol->dynstr = dynstr_add(linker, symbol->name);
     if (symbol->dynstr == UINT32_MAX) return fail(linker, "out of memory%s%s", "", "");
+  }
+  if (linker->runpath) {
+    linker->runpath_string = dynstr_add(linker, linker->runpath);
+    if (linker->runpath_string == UINT32_MAX) return fail(linker, "out of memory%s%s", "", "");
   }
   size_t needed = 0;
   for (size_t i = 0; i < linker->shared_count; ++i) {
@@ -1309,7 +1402,7 @@ static bool plan_dynamic(Linker *linker) {
     libraries += any;
   }
   size_t symbols = linker->dynsym_count + 1;
-  linker->dynamic_entries = needed + 5 + 3 + 1 + (linker->shared_output ? 0 : 1) + 2 +
+  linker->dynamic_entries = (linker->lazy_plt ? 2 : 0) + (linker->runpath ? 1 : 0) + needed + 5 + 3 + 1 + (linker->shared_output ? 0 : 1) + 2 +
                             (linker->outputs[OUT_INIT_ARRAY].count ? 2 : 0) +
                             (linker->outputs[OUT_FINI_ARRAY].count ? 2 : 0) + (linker->need_count ? 3 : 0);
   bool ok = (linker->shared_output || synthetic(linker, OUT_INTERP, strlen(linker->interpreter) + 1, 1)) &&
@@ -1319,7 +1412,8 @@ static bool plan_dynamic(Linker *linker) {
             (!linker->need_count || (synthetic(linker, OUT_VERSYM, 2 * (uint64_t)symbols, 2) &&
                                      synthetic(linker, OUT_VERNEED, 16 * (uint64_t)(libraries + linker->need_count), 4))) &&
             synthetic(linker, OUT_RELA_DYN, 24 * (uint64_t)linker->relocation_count, 8) &&
-            (!linker->plt_count || synthetic(linker, OUT_PLT, 16 * (uint64_t)linker->plt_count, 16)) &&
+            (!linker->lazy_plt || synthetic(linker, OUT_RELA_PLT, 24 * (uint64_t)linker->plt_count, 8)) &&
+            (!linker->plt_count || synthetic(linker, OUT_PLT, 16 * ((uint64_t)linker->plt_count + (linker->lazy_plt ? 1 : 0)), 16)) &&
             synthetic(linker, OUT_DYNAMIC, 16 * (uint64_t)linker->dynamic_entries, 8);
   if (ok) {
     linker->outputs[OUT_VERNEED].info = (uint32_t)libraries;
@@ -1352,8 +1446,10 @@ static void place(LinkOutput *output, uint64_t *offset, uint64_t delta, bool all
 /* As lld does, segments are contiguous in the file; each starts on a fresh
    page in memory at an address congruent to its file offset. */
 static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
-  static const int groups[3][2] = {{OUT_INTERP, OUT_EH_FRAME}, {OUT_TEXT, OUT_PLT}, {OUT_DYNAMIC, OUT_GOT}};
+  static const int groups[3][2] = {{OUT_INTERP, OUT_EH_FRAME}, {OUT_TEXT, OUT_PLT}, {OUT_DYNAMIC, OUT_TDATA}};
   static const uint32_t flags[3] = {4, 5, 6};
+  if (linker->outputs[OUT_TBSS].align > linker->outputs[OUT_TDATA].align)
+    linker->outputs[OUT_TDATA].align = linker->outputs[OUT_TBSS].align;
   uint64_t offset = header_size, end = linker->base, page = linker->page;
   size_t count = 0;
   for (int g = 0; g < 3; ++g) {
@@ -1367,6 +1463,8 @@ static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
     for (int k = groups[g][0]; k <= groups[g][1]; ++k) place(&linker->outputs[k], &offset, delta, true);
     uint64_t file_end = offset, memory_end = offset;
     if (g == 2) {
+      uint64_t tls_end = offset;
+      place(&linker->outputs[OUT_TBSS], &tls_end, delta, true);
       uint64_t bss = offset;
       place(&linker->outputs[OUT_BSS], &bss, delta, true);
       memory_end = bss + linker->outputs[OUT_BSS].size;
@@ -1526,6 +1624,87 @@ static bool relocate_aarch64(Linker *linker, LinkSection *section, LinkRela *rel
     return fail(linker, "relocation to '%s' out of range in '%s'", symbol ? symbol->name : "?", section->object->path);
   return true;
 }
+static bool relocate_riscv(Linker *linker, LinkSection *section, const LinkRela *rela,
+                           LinkSymbol *symbol, uint8_t *at, uint64_t value, bool debug) {
+  uint32_t type = rela->type;
+  if (type == R_RISCV_NONE || type == R_RISCV_RELAX) return true;
+  unsigned width = type == R_RISCV_64 || type == R_RISCV_CALL || type == R_RISCV_CALL_PLT ||
+                   type == R_RISCV_ADD64 || type == R_RISCV_SUB64 ? 8 : 4;
+  if (type == R_RISCV_ADD8 || type == R_RISCV_SUB8 || type == R_RISCV_SET8 || type == R_RISCV_SET6 || type == R_RISCV_SUB6) width = 1;
+  if (type == R_RISCV_ADD16 || type == R_RISCV_SUB16 || type == R_RISCV_SET16) width = 2;
+  if (rela->offset > section->size || width > section->size - rela->offset)
+    return fail(linker, "relocation outside its section in '%s'%s", section->object->path, "");
+  uint64_t target = value + rela->addend;
+  int64_t relative = (int64_t)(target - (section->address + rela->offset));
+  if ((type == R_RISCV_CALL || type == R_RISCV_CALL_PLT || type == R_RISCV_JAL) && symbol && symbol->plt)
+    relative = (int64_t)(plt_address + (uint64_t)(symbol->plt - 1) * 16 + rela->addend - (section->address + rela->offset));
+  if (type == R_RISCV_PCREL_LO12_I || type == R_RISCV_PCREL_LO12_S) {
+    if (rela->addend) return fail(linker, "nonzero RISC-V LO12 addend in '%s'%s", section->object->path, "");
+    /* LO12 names a local label at its matching HI20, not the target symbol. */
+    LinkSection *high_section = symbol_section(symbol);
+    const LinkRela *high = NULL;
+    if (high_section) for (size_t i = 0; i < high_section->rela_count; ++i) {
+      const LinkRela *candidate = &high_section->relas[i];
+      if (candidate->offset == symbol->value &&
+          (candidate->type == R_RISCV_PCREL_HI20 || candidate->type == R_RISCV_GOT_HI20)) { high = candidate; break; }
+    }
+    if (!high) return fail(linker, "missing RISC-V HI20 pair in '%s'%s", section->object->path, "");
+    LinkSymbol *destination = high_section->object->symbols[high->symbol];
+    if (!destination || (high->type == R_RISCV_GOT_HI20 && !destination->got))
+      return fail(linker, "invalid RISC-V HI20 target in '%s'%s", section->object->path, "");
+    uint64_t address = high->type == R_RISCV_GOT_HI20
+        ? linker->got.address + (uint64_t)(destination->got - 1) * 8 : symbol_address(destination);
+    relative = (int64_t)(address + high->addend - (high_section->address + high->offset));
+  } else if (type == R_RISCV_GOT_HI20) {
+    if (!symbol || !symbol->got) return fail(linker, "invalid RISC-V GOT target in '%s'%s", section->object->path, "");
+    relative = (int64_t)(linker->got.address + (uint64_t)(symbol->got - 1) * 8 + rela->addend - (section->address + rela->offset));
+  }
+  switch (type) {
+  case R_RISCV_64: write64(at, target); return true;
+  case R_RISCV_32: if (!debug && target > UINT32_MAX) break; write32(at, (uint32_t)target); return true;
+  case R_RISCV_32_PCREL: if (!debug && !fits_signed(relative, 32)) break; write32(at, (uint32_t)relative); return true;
+  case R_RISCV_HI20: relative = (int64_t)target; /* fall through */
+  case R_RISCV_PCREL_HI20: case R_RISCV_GOT_HI20:
+    if (relative > INT64_MAX - 0x800 || !fits_signed((relative + 0x800) >> 12, 20)) break;
+    write32(at, (read32(at) & 0xfff) | ((uint32_t)(relative + 0x800) & 0xfffff000)); return true;
+  case R_RISCV_LO12_I: relative = (int64_t)target; /* fall through */
+  case R_RISCV_PCREL_LO12_I:
+    write32(at, (read32(at) & 0xfffff) | (uint32_t)relative << 20); return true;
+  case R_RISCV_LO12_S: relative = (int64_t)target; /* fall through */
+  case R_RISCV_PCREL_LO12_S:
+    write32(at, (read32(at) & 0x01fff07f) | ((uint32_t)relative & 0xfe0) << 20 | ((uint32_t)relative & 31) << 7); return true;
+  case R_RISCV_CALL: case R_RISCV_CALL_PLT:
+    if (relative > INT64_MAX - 0x800 || !fits_signed((relative + 0x800) >> 12, 20)) break;
+    write32(at, (read32(at) & 0xfff) | ((uint32_t)(relative + 0x800) & 0xfffff000));
+    write32(at + 4, (read32(at + 4) & 0xfffff) | (uint32_t)relative << 20); return true;
+  case R_RISCV_JAL:
+    if ((relative & 1) || !fits_signed(relative, 21)) break;
+    write32(at, (read32(at) & 0xfff) | ((uint32_t)relative & 0x100000) << 11 |
+            ((uint32_t)relative & 0x7fe) << 20 | ((uint32_t)relative & 0x800) << 9 | ((uint32_t)relative & 0xff000)); return true;
+  case R_RISCV_BRANCH:
+    if ((relative & 1) || !fits_signed(relative, 13)) break;
+    write32(at, (read32(at) & 0x01fff07f) | ((uint32_t)relative & 0x1000) << 19 |
+            ((uint32_t)relative & 0x7e0) << 20 | ((uint32_t)relative & 0x1e) << 7 | ((uint32_t)relative & 0x800) >> 4); return true;
+  case R_RISCV_ADD8: *at += (uint8_t)target; return true;
+  case R_RISCV_ADD16: write16(at, (uint16_t)(read16(at) + target)); return true;
+  case R_RISCV_ADD32: write32(at, (uint32_t)(read32(at) + target)); return true;
+  case R_RISCV_ADD64: write64(at, read64(at) + target); return true;
+  case R_RISCV_SUB8: *at -= (uint8_t)target; return true;
+  case R_RISCV_SUB16: write16(at, (uint16_t)(read16(at) - target)); return true;
+  case R_RISCV_SUB32: write32(at, (uint32_t)(read32(at) - target)); return true;
+  case R_RISCV_SUB64: write64(at, read64(at) - target); return true;
+  case R_RISCV_SET6: *at = (*at & 0xc0) | (target & 0x3f); return true;
+  case R_RISCV_SUB6: *at = (*at & 0xc0) | ((*at - target) & 0x3f); return true;
+  case R_RISCV_SET8: *at = (uint8_t)target; return true;
+  case R_RISCV_SET16: write16(at, (uint16_t)target); return true;
+  case R_RISCV_SET32: write32(at, (uint32_t)target); return true;
+  default: {
+    char number[32]; snprintf(number, sizeof(number), "%u", type);
+    return fail(linker, "unsupported RISC-V relocation %s in '%s'", number, section->object->path);
+  }
+  }
+  return fail(linker, "relocation to '%s' out of range in '%s'", symbol ? symbol->name : "?", section->object->path);
+}
 static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
   LinkObject *object = section->object;
   bool debug = !(section->flags & SHF_ALLOC);
@@ -1547,11 +1726,15 @@ static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
     if (dead && debug) {
       /* Point descriptions of discarded code at nothing, as lld does. */
       bool ranges = !strcmp(section->name, ".debug_ranges") || !strcmp(section->name, ".debug_loc");
-      if (rela->type == (arm ? R_AARCH64_ABS64 : R_X86_64_64)) write64(at, ranges ? 1 : 0);
-      else if (rela->type == (arm ? R_AARCH64_ABS32 : R_X86_64_32)) write32(at, 0);
+      if (rela->type == linker->word_type) write64(at, ranges ? 1 : 0);
+      else if (rela->type == (linker->machine == MACHINE_RISCV ? R_RISCV_32 : arm ? R_AARCH64_ABS32 : R_X86_64_32)) write32(at, 0);
       continue;
     }
     if (dead) return fail(linker, "'%s' references discarded section of '%s'", object->path, symbol->name);
+    if (linker->machine == MACHINE_RISCV) {
+      if (!relocate_riscv(linker, section, rela, symbol, at, value, debug)) return false;
+      continue;
+    }
     if (arm) {
       if (!debug && relax_aarch64(linker, section, i, out)) {
         ++i;
@@ -1565,6 +1748,20 @@ static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
     bool is_signed = true;
     switch (rela->type) {
     case R_X86_64_NONE: continue;
+    case R_X86_64_TLSLD:
+      result = linker->tls_index.address + addend - place; width = 32; break;
+    case R_X86_64_DTPOFF32: case R_X86_64_DTPOFF64:
+      if (!symbol || symbol->type != STT_TLS) return fail(linker, "invalid TLS offset in '%s'%s", object->path, "");
+      result = value - linker->outputs[OUT_TDATA].address + addend;
+      width = rela->type == R_X86_64_DTPOFF64 ? 64 : 32; break;
+    case R_X86_64_TPOFF32: case R_X86_64_TPOFF64: {
+      if (!symbol || symbol->type != STT_TLS) return fail(linker, "invalid TLS offset in '%s'%s", object->path, "");
+      uint64_t start = linker->outputs[OUT_TDATA].address;
+      uint64_t size = linker->outputs[OUT_TBSS].address + linker->outputs[OUT_TBSS].size - start;
+      size = align_up(size, linker->outputs[OUT_TDATA].align);
+      result = value - start - size + addend;
+      width = rela->type == R_X86_64_TPOFF64 ? 64 : 32; break;
+    }
     case R_X86_64_64: result = value + addend; width = 64; break;
     case R_X86_64_32: result = value + addend; width = 32; is_signed = false; break;
     case R_X86_64_32S: result = value + addend; width = 32; break;
@@ -1635,13 +1832,13 @@ static bool symbol_entry(Linker *linker, Bytes *symbols, Bytes *names, const Lin
   write32(entry, (uint32_t)names->size);
   entry[4] = (uint8_t)((global ? symbol->binding : STB_LOCAL) << 4 | symbol->type);
   write16(entry + 6, output_index(linker, symbol));
-  write64(entry + 8, symbol_address(symbol));
+  write64(entry + 8, symbol_address(symbol) - (symbol->type == STT_TLS ? linker->outputs[OUT_TDATA].address : 0));
   write64(entry + 16, symbol->size);
   return bytes_append(names, symbol->name, strlen(symbol->name) + 1) && bytes_append(symbols, entry, 24);
 }
 static bool listed(const LinkSymbol *symbol) {
   if (!symbol->defined || !symbol->name[0]) return false;
-  if (symbol->type != STT_FUNC && symbol->type != STT_OBJECT && symbol->type != STT_NOTYPE) return false;
+  if (symbol->type != STT_FUNC && symbol->type != STT_OBJECT && symbol->type != STT_NOTYPE && symbol->type != STT_TLS) return false;
   if (symbol->section && (!symbol->section->live || symbol->section->output < 0 ||
                           symbol->section->output >= OUT_ALLOC_COUNT))
     return false;
@@ -1767,7 +1964,7 @@ static void fill_dynamic(Linker *linker) {
     entry[4] = (uint8_t)(binding << 4 | type);
     entry[5] = symbol->defined ? symbol->visibility : 0;
     write16(entry + 6, symbol->defined ? output_index(linker, symbol) : SHN_UNDEF);
-    write64(entry + 8, symbol->defined || symbol->canonical ? symbol_address(symbol) : 0);
+    write64(entry + 8, symbol->defined || symbol->canonical ? symbol_address(symbol) - (symbol->type == STT_TLS ? linker->outputs[OUT_TDATA].address : 0) : 0);
     write64(entry + 16, symbol->defined ? symbol->size : 0);
   }
   /* SysV hash: one bucket per symbol. */
@@ -1822,9 +2019,18 @@ static void fill_dynamic(Linker *linker) {
      add x16, x16, :lo12:slot; br x17. */
   uint8_t *plt = linker->synthetic[OUT_PLT].owned;
   for (size_t i = 0; plt && i < linker->plt_count; ++i) {
-    uint8_t *entry = plt + i * 16;
-    uint64_t at = linker->synthetic[OUT_PLT].address + i * 16;
-    uint64_t slot = linker->got.address + (uint64_t)(linker->got_count + i) * 8;
+    uint64_t index = i + (linker->lazy_plt ? 1 : 0);
+    uint8_t *entry = plt + index * 16;
+    uint64_t at = linker->synthetic[OUT_PLT].address + index * 16;
+    uint64_t slot = linker->got.address + (uint64_t)(linker->got_count + i + (linker->lazy_plt ? 3 : 0)) * 8;
+    if (linker->machine == MACHINE_RISCV) {
+      int64_t displacement = (int64_t)(slot - at);
+      write32(entry, ((uint32_t)(displacement + 0x800) & 0xfffff000) | (28u << 7) | 0x17);
+      write32(entry + 4, ((uint32_t)displacement & 0xfff) << 20 | (28u << 15) | (3u << 12) | (28u << 7) | 3);
+      write32(entry + 8, (28u << 15) | 0x67);
+      write32(entry + 12, 0x13);
+      continue;
+    }
     if (linker->machine == MACHINE_AARCH64) {
       uint64_t pages = ((slot & ~0xfffull) - (at & ~0xfffull)) >> 12;
       write32(entry, 0x90000010u | (uint32_t)(pages & 3) << 29 | (uint32_t)((pages >> 2) & 0x7ffff) << 5);
@@ -1837,6 +2043,20 @@ static void fill_dynamic(Linker *linker) {
     entry[0] = 0xff;
     entry[1] = 0x25;
     write32(entry + 2, (uint32_t)(slot - (at + 6)));
+    if (linker->lazy_plt) {
+      entry[6] = 0x68; write32(entry + 7, (uint32_t)i);
+      entry[11] = 0xe9; write32(entry + 12, (uint32_t)(linker->synthetic[OUT_PLT].address - (at + 16)));
+      uint8_t *relocation = linker->synthetic[OUT_RELA_PLT].owned + i * 24;
+      write64(relocation, slot);
+      write64(relocation + 8, (uint64_t)linker->plt_symbols[i]->dynsym << 32 | linker->jump_slot_type);
+    }
+  }
+  if (linker->lazy_plt) {
+    uint64_t at = linker->synthetic[OUT_PLT].address;
+    uint64_t got = linker->got.address + linker->got_count * 8;
+    memset(plt, 0x90, 16);
+    plt[0] = 0xff; plt[1] = 0x35; write32(plt + 2, (uint32_t)(got + 8 - (at + 6)));
+    plt[6] = 0xff; plt[7] = 0x25; write32(plt + 8, (uint32_t)(got + 16 - (at + 12)));
   }
   uint8_t *dynamic = linker->synthetic[OUT_DYNAMIC].owned;
   size_t n = 0;
@@ -1844,6 +2064,7 @@ static void fill_dynamic(Linker *linker) {
   for (size_t l = 0; l < linker->shared_count; ++l)
     if (linker->shareds[l]->used) DYNAMIC_ENTRY(DT_NEEDED, linker->shareds[l]->name_string);
   if (!linker->shared_output) DYNAMIC_ENTRY(DT_DEBUG, 0);
+  if (linker->runpath) DYNAMIC_ENTRY(DT_RUNPATH, linker->runpath_string);
   if (linker->outputs[OUT_INIT_ARRAY].count) {
     DYNAMIC_ENTRY(DT_INIT_ARRAY, linker->outputs[OUT_INIT_ARRAY].address);
     DYNAMIC_ENTRY(DT_INIT_ARRAYSZ, linker->outputs[OUT_INIT_ARRAY].size);
@@ -1865,9 +2086,15 @@ static void fill_dynamic(Linker *linker) {
     DYNAMIC_ENTRY(DT_VERNEED, linker->synthetic[OUT_VERNEED].address);
     DYNAMIC_ENTRY(DT_VERNEEDNUM, linker->outputs[OUT_VERNEED].info);
   }
-  /* Slots are filled at load time, so there is no lazy PLT. */
-  DYNAMIC_ENTRY(DT_FLAGS, DF_BIND_NOW);
-  DYNAMIC_ENTRY(DT_FLAGS_1, DF_1_NOW);
+  if (linker->lazy_plt) {
+    DYNAMIC_ENTRY(DT_PLTGOT, linker->got.address + linker->got_count * 8);
+    DYNAMIC_ENTRY(DT_JMPREL, linker->synthetic[OUT_RELA_PLT].address);
+    DYNAMIC_ENTRY(DT_PLTRELSZ, linker->plt_count * 24);
+    DYNAMIC_ENTRY(DT_PLTREL, DT_RELA);
+  } else {
+    DYNAMIC_ENTRY(DT_FLAGS, DF_BIND_NOW);
+    DYNAMIC_ENTRY(DT_FLAGS_1, DF_1_NOW);
+  }
   DYNAMIC_ENTRY(DT_NULL, 0);
 #undef DYNAMIC_ENTRY
 }
@@ -1875,10 +2102,10 @@ static bool write_output(Linker *linker, const char *entry_name) {
   Segment segments[3];
   /* Loads and the stack note; dynamic output adds PT_DYNAMIC, and
      executables PT_PHDR and PT_INTERP. */
-  const size_t phdr_count = linker->dynamic ? (linker->shared_output ? 5 : 7) : 4;
+  const size_t phdr_count = (linker->dynamic ? (linker->shared_output ? 5 : 7) : 4) + (linker->has_tls ? 1 : 0);
   uint64_t header_size = 64 + 56 * phdr_count;
   size_t segment_count = layout(linker, segments, header_size);
-  plt_address = linker->outputs[OUT_PLT].address;
+  plt_address = linker->outputs[OUT_PLT].address + (linker->lazy_plt ? 16 : 0);
   define_linker_symbols(linker, segments, segment_count);
   /* Section headers: null, allocated outputs, extras, .symtab, .strtab, .shstrtab. */
   Bytes shstrtab = {0}, symtab = {0}, strtab = {0};
@@ -1942,6 +2169,11 @@ static bool write_output(Linker *linker, const char *entry_name) {
       if (section == &linker->got) {
         for (size_t g = 0; g < linker->got_count; ++g)
           if (!preemptible(linker, linker->got_symbols[g])) write64(at + g * 8, symbol_address(linker->got_symbols[g]));
+        if (linker->lazy_plt) {
+          write64(at + linker->got_count * 8, linker->outputs[OUT_DYNAMIC].address);
+          for (size_t g = 0; g < linker->plt_count; ++g)
+            write64(at + (linker->got_count + 3 + g) * 8, plt_address + g * 16 + 6);
+        }
         continue;
       }
       if (section->data) memcpy(at, section->data, section->size);
@@ -1966,6 +2198,7 @@ static bool write_output(Linker *linker, const char *entry_name) {
     write64(image + 24, entry ? symbol_address(entry) : 0);
     write64(image + 32, 64);
     write64(image + 40, section_headers);
+    if (linker->machine == MACHINE_RISCV) write32(image + 48, linker->riscv_flags);
     write16(image + 52, 64);
     write16(image + 54, 56);
     write16(image + 56, (uint16_t)phdr_count);
@@ -1988,6 +2221,11 @@ static bool write_output(Linker *linker, const char *entry_name) {
     if (linker->dynamic) {
       const LinkOutput *dynamic = &linker->outputs[OUT_DYNAMIC];
       PROGRAM_HEADER(PT_DYNAMIC, 6, dynamic->file_offset, dynamic->address, dynamic->size, dynamic->size, 8);
+    }
+    if (linker->has_tls) {
+      const LinkOutput *data = &linker->outputs[OUT_TDATA], *bss = &linker->outputs[OUT_TBSS];
+      PROGRAM_HEADER(PT_TLS, 4, data->file_offset, data->address, data->size,
+                     bss->address + bss->size - data->address, data->align);
     }
     PROGRAM_HEADER(PT_GNU_STACK, 6, 0, 0, 0, 0, 16);
 #undef PROGRAM_HEADER
@@ -2077,6 +2315,7 @@ static void linker_free(Linker *linker) {
   free(linker->buffers);
   for (size_t i = 0; i < linker->table_capacity; ++i) free(linker->table[i]);
   free(linker->table);
+  free(linker->local_scripts);
   for (size_t i = 0; i < linker->common_count; ++i) free(linker->commons[i]);
   free(linker->commons);
   free(linker->got_symbols);
@@ -2095,8 +2334,49 @@ bool dyn_link_elf_supported(const char *path) {
   if (n >= 8 && !memcmp(magic, "!<arch>\n", 8)) return true;
   if (n >= 20 && !memcmp(magic, "\x7f" "ELF", 4))
     return magic[4] == 2 && (read16(magic + 16) == ELF_REL || read16(magic + 16) == ELF_DYN) &&
-           (read16(magic + 18) == MACHINE_X86_64 || read16(magic + 18) == MACHINE_AARCH64);
+           (read16(magic + 18) == MACHINE_X86_64 || read16(magic + 18) == MACHINE_AARCH64 || read16(magic + 18) == MACHINE_RISCV);
   return is_script(magic, n);
+}
+
+/* Anonymous local-only scripts preserve runtime symbol isolation. Reject richer
+   versioning syntax rather than silently changing the requested ABI. */
+static bool local_version_text(Linker *linker, const char *path, const char *p, size_t size) {
+  const char *end = p + size;
+#define SKIP_SPACE() do { while (p < end && isspace((unsigned char)*p)) ++p; } while (0)
+  SKIP_SPACE();
+  if (p == end || *p++ != '{') goto unsupported;
+  SKIP_SPACE();
+  if (end - p < 5 || memcmp(p, "local", 5)) goto unsupported;
+  p += 5;
+  SKIP_SPACE();
+  if (p == end || *p++ != ':') goto unsupported;
+  for (;;) {
+    SKIP_SPACE();
+    if (p < end && *p == '}') { ++p; break; }
+    const char *start = p;
+    while (p < end && (isalnum((unsigned char)*p) || *p == '_' || *p == '.' || *p == '$')) ++p;
+    if (p == start) goto unsupported;
+    char *name = keep_string(linker, start, (size_t)(p - start));
+    if (!name) return false;
+    SKIP_SPACE();
+    if (p == end || *p++ != ';') goto unsupported;
+    LinkSymbol *symbol = symbol_find(linker, name);
+    if (symbol && symbol->defined) symbol->visibility = STV_HIDDEN;
+  }
+  SKIP_SPACE();
+  if (p == end || *p++ != ';') goto unsupported;
+  SKIP_SPACE();
+  if (p != end) goto unsupported;
+#undef SKIP_SPACE
+  return true;
+unsupported:
+  return fail(linker, "unsupported version script '%s': only anonymous local symbol lists are supported%s", path, "");
+}
+
+static bool local_version_script(Linker *linker, const char *path) {
+  size_t size = 0;
+  uint8_t *data = read_file(linker, path, &size);
+  return data && local_version_text(linker, path, (const char *)data, size);
 }
 
 int dyn_link_elf(const char *const *inputs, size_t input_count, const char *output, const DynLinkOptions *options) {
@@ -2105,9 +2385,21 @@ int dyn_link_elf(const char *const *inputs, size_t input_count, const char *outp
                    .base = options->shared ? 0 : IMAGE_BASE};
   const char *entry = options->shared ? NULL : options->entry;
   bool ok = true;
-  for (size_t i = 0; ok && i < input_count; ++i) ok = load_input(&linker, inputs[i], false, 0);
+  for (size_t i = 0; ok && i < input_count; ++i) {
+    const char *input = inputs[i];
+    if (!strncmp(input, "-rpath=", 7)) linker.runpath = input + 7;
+    else if (!strncmp(input, "--rpath=", 8)) linker.runpath = input + 8;
+    else if (!strncmp(input, "--version-script=", 17)) continue;
+    else if (input[0] == '-') ok = fail(&linker, "unsupported ELF linker option '%s'%s", input, "");
+    else ok = load_input(&linker, input, false, 0);
+  }
+  ok = ok && resolve_archives(&linker) && allocate_commons(&linker);
+  for (size_t i = 0; ok && i < input_count; ++i)
+    if (!strncmp(inputs[i], "--version-script=", 17)) ok = local_version_script(&linker, inputs[i] + 17);
+  for (size_t i = 0; ok && i < linker.local_script_count; ++i)
+    ok = local_version_text(&linker, "embedded VERSION", linker.local_scripts[i], strlen(linker.local_scripts[i]));
   linker.dynamic = linker.shared_output || linker.shared_count;
-  ok = ok && resolve_archives(&linker) && allocate_commons(&linker) && collect_garbage(&linker, entry) &&
+  ok = ok && collect_garbage(&linker, entry) &&
        assign_outputs(&linker) && plan_dynamic(&linker) && (!options->layout || order_text(&linker, options->layout)) &&
        write_output(&linker, entry);
   if (!ok) {
@@ -2217,7 +2509,7 @@ static bool scan_file(const char *path, NameList *defined, NameList *used, int d
       ok = scan_symbols(data, size, false, defined, used);
     } else if (depth < 4 && is_script(data, size)) {
       ScanContext scan = {defined, used, depth};
-      parse_script((const char *)data, size, scan_script_file, &scan);
+      parse_script((const char *)data, size, scan_script_file, NULL, &scan);
     }
   }
   linker_free(&scratch);

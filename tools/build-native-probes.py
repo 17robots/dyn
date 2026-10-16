@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cross-build an exact, hashed set of probes for execution on native CI runners."""
+import ast
 import hashlib
 import json
 import os
@@ -45,11 +46,35 @@ for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('
             rows.append({'path':str(artifact.relative_to(OUT)), 'mode':mode,
                          'sha256':hashlib.sha256(artifact.read_bytes()).hexdigest()})
     manifest['targets'][name] = rows
+# New ports run the same thread/atomic/remainder and panic-cleanup contracts.
+contracts = {}
+for node in ast.parse((ROOT/'tests/cross-runtime.py').read_text()).body:
+    if isinstance(node, ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('SOURCE','PANIC'):
+        contracts[node.targets[0].id] = ast.literal_eval(node.value)
+for name,target in [('windows-arm64','aarch64-windows'),('macos-x64','x86_64-macos')]:
+    rows=[]
+    for mode in ('debug','release'):
+        destination=OUT/name/mode;destination.mkdir(parents=True)
+        for label,key in [('runtime','SOURCE'),('panic','PANIC')]:
+            project=OUT/'sources'/name/mode/label;project.mkdir(parents=True)
+            (project/'main.dyn').write_text(contracts[key])
+            output=destination/(label+('.exe' if 'windows' in name else ''))
+            run([DYN,'build',project,'--target',target,'--no-cache','--quiet','--'+mode,'--output',output])
+            rows.append(dict(path=str(output.relative_to(OUT)),mode=mode,sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
+                             expected_returncode=101 if key=='PANIC' else 0,
+                             expected_stdout='inner cleanup\nouter cleanup\n' if key=='PANIC' else 'cross runtime ready\n'))
+        project=OUT/'sources'/name/mode/'shared';project.mkdir(parents=True)
+        (project/'main.dyn').write_text('pub fn calculate(value:f64) f64 { return value % 2.0 }\n')
+        output=destination/('shared.dll' if 'windows' in name else 'shared.dylib')
+        run([DYN,'build',project,'--target',target,'--no-cache','--quiet','--'+mode,'--shared','--output',output])
+        rows.append(dict(path=str(output.relative_to(OUT)),mode=mode,kind='shared',
+                         sha256=hashlib.sha256(output.read_bytes()).hexdigest()))
+    manifest['targets'][name]=rows
 (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 shutil.copy2(ROOT/'tests/run-native-artifacts.py', OUT/'run-native-artifacts.py')
 # Debug builds use native emission: stage the native/LLVM differential corpus too.
 differential = ROOT/'tools/backend-experiment/native-differential.py'
-for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('aarch64','aarch64-linux')]:
+for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('aarch64','aarch64-linux'), ('windows-arm64','aarch64-windows'), ('macos-x64','x86_64-macos')]:
     run([sys.executable, differential, '--target', target, '--compiler', DYN, '--stage', OUT/'differential'/name])
 shutil.copy2(differential, OUT/'native-differential.py')
 print('Prepared native probes:', {k:len(v) for k,v in manifest['targets'].items()})

@@ -18,7 +18,7 @@ static uint32_t macho_relocation_info(unsigned symbol, bool pcrel, unsigned leng
 /* Count (out == NULL) or write the Mach-O entries for one section's relocations.
    Every reference is external: section-relative references use the local
    symbol placed at that section's start. */
-static bool macho_relocations(const Elf64_Rela *items, size_t count, unsigned char *bytes, size_t size,
+static bool macho_relocations(bool a64, const Elf64_Rela *items, size_t count, unsigned char *bytes, size_t size,
                               const unsigned *symbol_map, unsigned symbol_count, unsigned char *out, size_t *written) {
   size_t n = 0;
   for (size_t i = 0; i < count; ++i) {
@@ -26,7 +26,21 @@ static bool macho_relocations(const Elf64_Rela *items, size_t count, unsigned ch
     unsigned symbol = (unsigned)ELF64_R_SYM(r->r_info), type = (unsigned)ELF64_R_TYPE(r->r_info);
     if (symbol >= symbol_count || r->r_offset > INT32_MAX) return false;
     unsigned kind, length = 2; bool pcrel = false; int64_t addend = r->r_addend;
-    switch (type) {
+    if (!a64) {
+      switch (type) {
+      case R_X86_64_64: kind=0; length=3; break;
+      case R_X86_64_PC32: kind=1; pcrel=true; addend+=4; break;
+      case R_X86_64_PLT32: kind=2; pcrel=true; addend+=4; break;
+      case R_X86_64_GOTPCREL: kind=3; pcrel=true; addend+=4; break;
+      default: return false;
+      }
+      if (r->r_offset + (length==3?8:4) > size) return false;
+      if (out) {
+        if (length==3) put64(bytes+r->r_offset,(uint64_t)addend);
+        else put32(bytes+r->r_offset,(uint32_t)addend);
+      }
+      addend=0;
+    } else switch (type) {
     case R_AARCH64_ABS64:
       if (r->r_offset + 8 > size) return false;
       if (out) put64(bytes + r->r_offset, (uint64_t)addend);
@@ -62,7 +76,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   bool dwarf = ctx->dwarf != NULL;
   unsigned section_count = MACHO_DEBUG + (dwarf ? BACKEND_DWARF_SECTION_COUNT : 0);
   uint64_t initialize=0;
-  Elf64_Rela initializer={.r_info=ELF64_R_INFO(ctx->initializer_symbol,R_AARCH64_ABS64)};
+  Elf64_Rela initializer={.r_info=ELF64_R_INFO(ctx->initializer_symbol,ctx->a64?R_AARCH64_ABS64:R_X86_64_64)};
   const void *contents[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT] = {ctx->text.data, ctx->rodata.data, ctx->globals_data.data, ctx->constants_data.data, &initialize};
   size_t sizes[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT] = {ctx->text.n, ctx->rodata.n, ctx->globals_data.n, ctx->constants_data.n, ctx->initializer_symbol?8:0};
   const char *section_names[][2] = {{"__text", "__TEXT"}, {"__const", "__TEXT"}, {"__data", "__DATA"}, {"__const", "__DATA"}, {"__mod_init_func", "__DATA"},
@@ -101,7 +115,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   unsigned relocated[3] = {MACHO_TEXT, MACHO_CONSTANTS, MACHO_INIT};
   bool ok = true;
   for (unsigned i = 0; i < 3 && ok; ++i) {
-    ok = macho_relocations(relocations[i], relocation_counts[i], NULL, sizes[relocated[i]], symbol_map, symbol_count, NULL, &entries[i]);
+    ok = macho_relocations(ctx->a64, relocations[i], relocation_counts[i], NULL, sizes[relocated[i]], symbol_map, symbol_count, NULL, &entries[i]);
     cursor = (cursor + 7) & ~(size_t)7; relocation_at[i] = cursor; cursor += 8 * entries[i];
   }
   size_t symbol_at = (cursor + 7) & ~(size_t)7, string_at = symbol_at + 16 * (size_t)nsyms, string_size = 2;
@@ -112,7 +126,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   if (!data) { free(symbol_map); free(order); return false; }
 
   unsigned char *h = data;
-  put32(h, 0xfeedfacfu); put32(h + 4, 0x0100000cu); /* MH_MAGIC_64, CPU_TYPE_ARM64 */
+  put32(h, 0xfeedfacfu); put32(h + 4, ctx->a64 ? 0x0100000cu : 0x01000007u); put32(h + 8, ctx->a64 ? 0 : 3); /* MH_MAGIC_64, CPU_TYPE_ARM64 */
   put32(h + 12, 1); put32(h + 16, 4); put32(h + 20, (uint32_t)commands); /* MH_OBJECT, four commands */
   unsigned char *c = data + 32;
   put32(c, 0x19); put32(c + 4, (uint32_t)(72 + 80 * section_count)); /* LC_SEGMENT_64 */
@@ -138,7 +152,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
 
   for (unsigned i = 0; i < 3 && ok; ++i) {
     size_t written;
-    ok = macho_relocations(relocations[i], relocation_counts[i], data + offsets[relocated[i]], sizes[relocated[i]],
+    ok = macho_relocations(ctx->a64, relocations[i], relocation_counts[i], data + offsets[relocated[i]], sizes[relocated[i]],
                            symbol_map, symbol_count, data + relocation_at[i], &written);
   }
   /* DWARF: resolve every relocation in place (text starts at address zero). */

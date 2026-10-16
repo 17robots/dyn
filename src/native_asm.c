@@ -1,4 +1,5 @@
 #include "native_asm.h"
+#include "native_decode.h"
 #include "../tools/backend-experiment/output.h"
 #include <inttypes.h>
 #include <stdarg.h>
@@ -171,6 +172,12 @@ static bool elf(Assembly *a) {
     out->section_symbol = out->type == 3;
     if (!out->name || out->section >= n)
       return false;
+    if (out->section && !out->section_symbol && !*out->name) {
+      char label[64];snprintf(label,sizeof(label),".Ldyn_asm_anchor_%zu",i);
+      free(out->name);out->name=malloc(strlen(label)+1);
+      if(!out->name)return false;
+      strcpy(out->name,label);
+    }
   }
   for (unsigned i = 1; i < n; ++i) {
     const unsigned char *s = b + table + 64u * i;
@@ -197,10 +204,10 @@ static bool elf(Assembly *a) {
 }
 static bool coff(Assembly *a) {
   const unsigned char *b = a->bytes;
-  if (!range(a, 0, 20) || get(b, 2) != 0x8664 || get(b + 16, 2))
+  if (!range(a, 0, 20) || (get(b, 2) != 0x8664 && get(b, 2) != 0xaa64) || get(b + 16, 2))
     return false;
   a->format = COFF;
-  a->machine = 62;
+  a->machine = get(b, 2) == 0xaa64 ? 183 : 62;
   unsigned n = (unsigned)get(b + 2, 2), count = (unsigned)get(b + 12, 4);
   uint64_t syms = get(b + 8, 4), str = syms + 18u * (uint64_t)count;
   if (!range(a, 20, 40u * n) || !range(a, syms, 18u * (uint64_t)count) ||
@@ -249,7 +256,7 @@ static bool coff(Assembly *a) {
       dest->at = get(r, 4);
       dest->symbol = (unsigned)get(r + 4, 4);
       dest->type = (unsigned)get(r + 8, 2);
-      dest->width = dest->type == 1 ? 8 : 4;
+      dest->width = dest->type == (a->machine == 183 ? 14u : 1u) ? 8 : 4;
       if (dest->at > out->size || dest->width > out->size - dest->at)
         return false;
       uint64_t v = get(out->data + dest->at, dest->width);
@@ -274,10 +281,10 @@ static bool coff(Assembly *a) {
 }
 static bool macho(Assembly *a) {
   const unsigned char *b = a->bytes;
-  if (!range(a, 0, 32) || get(b + 4, 4) != 0x0100000c || get(b + 12, 4) != 1)
+  if (!range(a, 0, 32) || (get(b + 4, 4) != 0x0100000c && get(b + 4, 4) != 0x01000007) || get(b + 12, 4) != 1)
     return false;
   a->format = MACHO;
-  a->machine = 183;
+  a->machine = get(b + 4, 4) == 0x01000007 ? 62 : 183;
   uint64_t at = 32, section_table = 0, syms = 0, strings = 0, strsize = 0;
   unsigned n = 0, count = 0;
   for (unsigned i = 0; i < get(b + 16, 4); ++i) {
@@ -336,7 +343,7 @@ static bool macho(Assembly *a) {
       uint32_t info = (uint32_t)get(r + 4, 4);
       unsigned type = info >> 28;
       uint64_t offset = get(r, 4);
-      if (type == 10) {
+      if (a->machine == 183 && type == 10) {
         addend = (int32_t)((info & 0xffffff) << 8) >> 8;
         add_at = offset;
         continue;
@@ -346,8 +353,8 @@ static bool macho(Assembly *a) {
           width > out->size - offset ||
           (add_at != UINT64_MAX && add_at != offset))
         return false;
-      if (type == 0)
-        addend = (int64_t)get(out->data + offset, width);
+      if (type == 0 || a->machine == 62)
+        addend = width == 4 ? (int32_t)get(out->data + offset, width) : (int64_t)get(out->data + offset, width);
       out->relocs[out->count++] = (Reloc){.at = offset,
                                           .symbol = info & 0xffffff,
                                           .type = type,
@@ -419,6 +426,14 @@ static const char *elf_reloc(unsigned machine, unsigned type) {
     default:
       return NULL;
     }
+  if (machine == 243) {
+    switch(type) {
+    case 1:return "R_RISCV_32";case 2:return "R_RISCV_64";
+    case 19:return "R_RISCV_CALL_PLT";case 20:return "R_RISCV_GOT_HI20";
+    case 23:return "R_RISCV_PCREL_HI20";case 24:return "R_RISCV_PCREL_LO12_I";
+    default:return NULL;
+    }
+  }
   if (machine == 183)
     switch (type) {
     case 257:
@@ -442,6 +457,25 @@ static const char *elf_reloc(unsigned machine, unsigned type) {
 }
 static bool relocation(Assembly *a, Section *s, Reloc *r) {
   Text *t = &a->text;
+  if (a->format == COFF && a->machine == 183) {
+    uint32_t word=(uint32_t)get(s->data+r->at,4);
+    unsigned rd=word&31,rn=(word>>5)&31;
+    switch(r->type) {
+    case 14: print(t,"  .quad "); break;
+    case 2: print(t,"  .rva "); break;
+    case 8: print(t,"  .secrel32 "); break;
+    case 3: print(t,(word&0x80000000)?"  bl ":"  b "); break;
+    case 4: print(t,"  adrp x%u, ",rd); break;
+    case 6: print(t,"  add x%u, x%u, :lo12:",rd,rn); break;
+    case 7: print(t,"  ldr x%u, [x%u, :lo12:",rd,rn); break;
+    default: return false;
+    }
+    if(!symbol(a,r->symbol)) return false;
+    if(r->type==7) print(t,"]");
+    if(r->type==14 || r->type==2 || r->type==8)
+      print(t," %c 0x%" PRIx64,r->addend<0?'-':'+',r->addend<0?UINT64_C(0)-(uint64_t)r->addend:(uint64_t)r->addend);
+    print(t,"\n"); return true;
+  }
   if (a->format == COFF) {
     switch (r->type) {
     case 1:
@@ -470,6 +504,17 @@ static bool relocation(Assembly *a, Section *s, Reloc *r) {
   }
   if (a->format != MACHO)
     return false;
+  if (a->machine == 62) {
+    if (r->type > 4 || (r->width != 4 && r->width != 8)) return false;
+    print(t, r->type == 0 ? "  .quad " : "  .long ");
+    if (!symbol(a, r->symbol)) return false;
+    if (r->type == 3 || r->type == 4) print(t, "@GOTPCREL");
+    else if (r->type) print(t, " - .");
+    int64_t addend = r->addend - (r->type ? 4 : 0);
+    print(t, " %c 0x%" PRIx64 "\n", addend < 0 ? '-' : '+',
+          addend < 0 ? UINT64_C(0)-(uint64_t)addend : (uint64_t)addend);
+    return true;
+  }
   uint32_t word = (uint32_t)get(s->data + r->at, 4);
   unsigned rd = word & 31, rn = (word >> 5) & 31;
   switch (r->type) {
@@ -537,6 +582,7 @@ static bool emit(Assembly *a) {
   Text *t = &a->text;
   print(t, "// Dyn independent assembly. Exact instruction encodings; symbolic "
            "relocations.\n");
+  if (a->machine == 243) print(t,".option norelax\n.option norvc\n.attribute arch, \"rv64imafd\"\n");
   if (a->format == MACHO)
     print(t, ".build_version macos, 15, 0\n");
   for (size_t i = 0; i < a->symbol_count; ++i) {
@@ -645,13 +691,20 @@ static bool emit(Assembly *a) {
               r->addend < 0 ? UINT64_C(0) - (uint64_t)r->addend
                             : (uint64_t)r->addend);
       }
-    uint64_t at = 0;
-    size_t li = 0, ri = 0;
+    uint64_t at = 0, instruction_end = 0;
+    bool executable = a->format == ELF ? (s->flags & 4) != 0
+                    : a->format == COFF ? (s->flags & 0x20000000) != 0
+                    : (s->flags & 0x80000400) != 0;
+    bool decoding = executable;
+    size_t li = 0, ri = 0, decoded_reloc = 0;
     while (ok && at <= s->size) {
       while (li < nl && labels[li].at == at) {
         Symbol *sym = &a->symbols[labels[li++].index];
-        if (sym->type == 2)
+        if (sym->type == 2) {
           print(t, "// Function boundary\n");
+          decoding = executable;
+          instruction_end = at;
+        }
         quoted(t, sym->name);
         print(t, ":\n");
         if (a->format == ELF && sym->size) {
@@ -662,6 +715,50 @@ static bool emit(Assembly *a) {
       }
       if (at == s->size)
         break;
+      if (a->format == MACHO && a->machine == 62 && s->data && ri<s->count &&
+          s->relocs[ri].type==2 && s->relocs[ri].at==at+1 && at+5<=s->size &&
+          (s->data[at]==0xe8 || s->data[at]==0xe9) && !(li<nl&&labels[li].at<at+5)) {
+        Reloc *r=&s->relocs[ri++];print(t,"  %s ",s->data[at]==0xe8?"callq":"jmp");
+        if(!symbol(a,r->symbol)) {ok=false;break;}
+        if(r->addend)print(t," %c 0x%" PRIx64,r->addend<0?'-':'+',r->addend<0?UINT64_C(0)-(uint64_t)r->addend:(uint64_t)r->addend);
+        print(t,"\n");at+=5;instruction_end=at;continue;
+      }
+      if (decoding && s->data && at >= instruction_end) {
+        char instruction[512];
+        size_t length = a->machine == 62
+          ? nd_x64(s->data + at, (size_t)(s->size-at), instruction, sizeof instruction)
+          : a->machine == 183
+          ? nd_a64(s->data + at, (size_t)(s->size-at), instruction, sizeof instruction)
+          : a->machine == 243 ? nd_rv64(s->data + at, (size_t)(s->size-at), instruction, sizeof instruction) : 0;
+        if (length) {
+          instruction_end = at + length;
+          while (decoded_reloc < s->count && s->relocs[decoded_reloc].at +
+                 (s->relocs[decoded_reloc].width ? s->relocs[decoded_reloc].width : 8) <= at)
+            ++decoded_reloc;
+          bool relocated = decoded_reloc < s->count && s->relocs[decoded_reloc].at < instruction_end;
+          /* AArch64 encodings have a fixed width. The supported decoder forms
+             round-trip exactly. x86 operands can select shorter encodings, so
+             retain authoritative bytes except for fixed, operand-free forms. */
+          unsigned op = s->data[at];
+          bool exact = a->machine == 183 || (a->machine == 62 &&
+              ((length == 1 && (op == 0xc3 || op == 0xc9 || op == 0x90 || op == 0xcc || op == 0xfc || op == 0xfd)) ||
+               (length == 2 && ((op == 0x0f && (s->data[at+1] == 5 || s->data[at+1] == 11)) ||
+                                (op == 0x48 && s->data[at+1] == 0x99)))));
+          if (exact && !relocated && !(li < nl && labels[li].at < instruction_end)) {
+            print(t, "  %s // +0x%" PRIx64 "\n", instruction, at);
+            at = instruction_end;
+            continue;
+          }
+          if (relocated)
+            print(t, "  // +0x%" PRIx64 ": %s (encoded operand; relocation supplies final value)\n", at, instruction);
+          else
+            print(t, "  // +0x%" PRIx64 ": %s\n", at, instruction);
+        } else {
+          print(t, "  // Undecoded encoding at +0x%" PRIx64 "; raw bytes remain authoritative.\n", at);
+          decoding = a->machine == 183 || a->machine == 243;
+          instruction_end = at + (decoding ? 4 : 0);
+        }
+      }
       if (a->format != ELF && ri < s->count && s->relocs[ri].at == at) {
         Reloc *r = &s->relocs[ri++];
         if ((li < nl && labels[li].at < at + r->width) ||
@@ -681,6 +778,8 @@ static bool emit(Assembly *a) {
         ok = false;
         break;
       }
+      if (decoding && instruction_end > at && instruction_end < next)
+        next = instruction_end;
       if (next - at > 16)
         next = at + 16;
       if (!s->data)

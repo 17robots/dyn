@@ -157,3 +157,16 @@ dyn_thread_spawn:
     mov x8, #93
     svc #0
     brk #0
+
+# libc's atexit/pthread_atfork wrappers require the CRT DSO identity.
+# An external C driver may provide a strong crtbegin definition instead.
+.section .data.__dso_handle,"aw",@progbits
+.p2align 3
+.weak __dso_handle
+.hidden __dso_handle
+__dso_handle:
+#ifdef DYN_SHARED
+    .quad __dso_handle
+#else
+    .quad 0
+#endif

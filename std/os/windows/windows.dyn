@@ -1,4 +1,4 @@
-#target(arch: x86_64, kernel: windows, abi: win64)
+#target(kernel: windows)
 
 use "std/c" cstrings
 use "std/sync" sync

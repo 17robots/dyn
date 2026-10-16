@@ -20,8 +20,6 @@ def flags(name, default=''):
 
 cc = flags('CC', 'cc')
 clang = flags('CLANG', 'clang')
-cxx = flags('CXX', 'clang++' if sys.platform == 'win32' else 'c++')
-cxxlibs = flags('CXXLIBS', '-lc++' if sys.platform in ('darwin', 'win32') else '-lstdc++')
 cflags = flags('CFLAGS', '-std=c11 -Wall -Wextra -Wpedantic -Werror -g')
 if os.name != 'nt':
     # host.h exposes POSIX helpers even in independently compiled test units.
@@ -32,29 +30,11 @@ if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A
 if sys.platform == 'darwin':
     cflags += ['-D_DARWIN_C_SOURCE']
 cflags += ['-DDYN_VERSION="' + version + '"']
-llvm_mode = os.environ.get('DYN_WITH_LLVM', '1')
-if llvm_mode not in ('0', '1'):
-    sys.exit('DYN_WITH_LLVM must be 0 or 1')
-with_llvm = llvm_mode == '1'
-llvm_config = flags('LLVM_CONFIG', 'llvm-config')
-def llvm(*args, fallback=''):
-    if not with_llvm:
-        return []
-    if shutil.which(llvm_config[0]):
-        return shlex.split(subprocess.check_output(llvm_config + list(args), text=True))
-    return shlex.split(fallback)
-# LLVM's own GNU feature policy is unnecessary for its C headers. Importing it
-# makes newer glibc redefine _POSIX_C_SOURCE after test harness headers, then
-# conflict with the included compiler source under -Werror. Dyn sets its own
-# POSIX/XSI requirements; keep LLVM include/ABI flags, not this feature policy.
-cppflags = flags('CPPFLAGS') + [f for f in llvm('--cflags') if f != '-D_GNU_SOURCE']
-llvm_ldflags = llvm('--ldflags')
-llvm_libs = llvm('--link-shared', '--libs', fallback='-lLLVM')
-if not with_llvm:
-    cflags += ['-DDYN_NO_LLVM']
-    cxxlibs = []
-    if sys.platform == 'win32':
-        cflags += ['-static-libgcc']
+# LLVM is an interchange format only; every compiler uses independent emission.
+if os.environ.get('DYN_WITH_LLVM', '0') != '0':
+    sys.exit('LLVM backend was removed; omit DYN_WITH_LLVM or set it to 0')
+cppflags = flags('CPPFLAGS')
+cflags += ['-DDYN_NO_LLVM']
 sources = sorted(COMPILER.glob('src/*.c'))
 headers = sorted(COMPILER.glob('src/*.h')) + sorted(COMPILER.glob('src/*.inc'))
 parser_sources = [COMPILER/'src/parser.c', COMPILER/'src/snapshot.c']
@@ -65,9 +45,8 @@ def add(name, inputs, command, needs=()):
     artifacts[name] = (list(map(Path, inputs)), list(map(str, command)))
     requires[name] = list(needs)
 
-if not with_llvm:
-    if sys.platform in ('win32', 'darwin') or platform.machine() == 'aarch64':
-        clang = cc
+if sys.platform in ('win32', 'darwin') or platform.machine() == 'aarch64':
+    clang = cc
 
 # One object per source file lets independent units compile in parallel and
 # recompiles only edited files.
@@ -77,11 +56,12 @@ def is_link_flag(flag):
     return flag.startswith(('-L', '-l', '-Wl,'))
 object_cppflags = [f for f in cppflags if not is_link_flag(f)]
 link_cppflags = [f for f in cppflags if is_link_flag(f)]
-
-# LLVM's C API cannot emit the summary needed by ThinLTO.
-add('thinlto.o', [COMPILER/'src/thinlto.cpp', COMPILER/'src/thinlto.h', COMPILER/'src/link_elf.h'],
-    [*cxx, *object_cppflags, *llvm('--cxxflags'), *flags('CXXFLAGS'), '-O2', '-c',
-     COMPILER/'src/thinlto.cpp', '-o', BUILD/'thinlto.o'])
+# GCC's Windows runtime must be static in packaged compilers. This is a
+# link option, and Clang's compiler-rt toolchain does not consume it.
+if sys.platform == 'win32':
+    compiler_version = subprocess.check_output([*cc, '--version'], text=True)
+    if 'clang' not in compiler_version.lower():
+        link_cppflags += ['-static-libgcc']
 
 def compiler_objects(kind, optimize, extra_sources=(), extra_inputs=()):
     names = []
@@ -90,18 +70,18 @@ def compiler_objects(kind, optimize, extra_sources=(), extra_inputs=()):
         add(name, [source, *headers, *extra_inputs, *([COMPILER/'src/codegen.c', COMPILER/'tools/backend-experiment/output.h'] if source.name == 'codegen_text.c' else [])],
             [*cc, *object_cppflags, *cflags, *optimize, f'-I{COMPILER}/src', '-c', source, '-o', BUILD/name])
         names.append(name)
-    return names + (['thinlto.o'] if with_llvm else [])
+    return names
 
 def compiler_link(name, objects):
     add(name, [BUILD/o for o in objects],
-        [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', BUILD/name],
+        [*cc, *cflags, *[BUILD/o for o in objects], *link_cppflags, '-pthread', '-o', BUILD/name],
         objects)
 
 # Native emission also bootstraps portable runtime support on every host.
 backend_experiment = COMPILER/'tools/backend-experiment'
 native_flags = ['-DDYN_NATIVE_BACKEND']
 native_sources = [backend_experiment/'compiler.c', backend_experiment/'dwarf.c']
-native_inputs = [backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc',
+native_inputs = [backend_experiment/'vector.inc', backend_experiment/'allocation.inc', backend_experiment/'driver.c', backend_experiment/'isa.inc', backend_experiment/'a64.inc', backend_experiment/'rv64.inc',
                  backend_experiment/'coff.inc', backend_experiment/'macho.inc',
                  backend_experiment/'elf64.h', backend_experiment/'output.h', backend_experiment/'dwarf.h']
 default_flags = native_flags
@@ -110,45 +90,42 @@ default_inputs = native_inputs
 compiler_link('dyn-release', compiler_objects('release', ['-O2', *default_flags],
     default_sources, default_inputs))
 compiler_link('dyn', compiler_objects('debug', default_flags, default_sources, default_inputs))
-# LLVM-only reference for native backend differentials.
-compiler_link('dyn-legacy', compiler_objects('legacy', ['-O2']))
 
 # Matched prepared-IR benchmark harness. Not installed or part of normal builds.
 backend_benchmark_objects = [f'obj/release/{name}.o' for name in
     ('frontend', 'ast', 'sema', 'sema_globals', 'source', 'source_tree',
-     'diagnostic', 'target', 'ir', 'codegen', 'link_elf', 'link_macho', 'link_coff', 'link_wasm', 'parser', 'snapshot')]
+     'diagnostic', 'target', 'ir', 'codegen', 'codegen_text', 'llvm_text', 'native_asm', 'codegen_wasm', 'link_elf', 'link_macho', 'link_coff', 'link_wasm', 'parser', 'snapshot')]
 add('obj/benchmark/backend.o',
-    [backend_experiment/'benchmark-driver.c', backend_experiment/'driver.c', backend_experiment/'output.h', *headers],
+    [backend_experiment/'benchmark-driver.c', *native_inputs, *headers],
     [*cc, *object_cppflags, *cflags, '-O2', f'-I{COMPILER}/src',
      '-c', backend_experiment/'benchmark-driver.c', '-o', BUILD/'obj/benchmark/backend.o'])
 compiler_link('backend-benchmark', [*backend_benchmark_objects, 'obj/benchmark/backend.o',
-    'thinlto.o'])
+    'obj/release/compiler.o', 'obj/release/dwarf.o'])
 
 
 # Runtime objects are portable build products: no target C compiler/assembler.
 NATIVE_STARTUPS = [
     'dynrt_start.o', 'dynrt_release.o', 'dynrt_shared.o',
+    'dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o',
     'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_shared.o',
-    'dynrt_windows_start.o', 'dynrt_windows_shared.o',
-    'dynrt_macos_start.o', 'dynrt_macos_shared.o']
+    'dynrt_windows_start.o', 'dynrt_windows_shared.o', 'dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o',
+    'dynrt_macos_start.o', 'dynrt_macos_shared.o', 'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o']
 for name in NATIVE_STARTUPS:
     add(name, [COMPILER/'tools/native-runtime.py', *sorted(COMPILER.glob('runtime/*.S'))],
         [sys.executable, COMPILER/'tools/native-runtime.py', '--output', BUILD/name])
 NATIVE_SUPPORT = {
     'dynrt_support.o': 'x86_64-linux', 'dynrt_support_pic.o': 'x86_64-linux',
+    'dynrt_riscv64_support.o': 'riscv64-linux', 'dynrt_riscv64_support_pic.o': 'riscv64-linux',
     'dynrt_aarch64_support.o': 'aarch64-linux', 'dynrt_aarch64_support_pic.o': 'aarch64-linux',
-    'dynrt_windows_support.o': 'x86_64-windows', 'dynrt_macos_support.o': 'aarch64-macos'}
+    'dynrt_windows_support.o': 'x86_64-windows', 'dynrt_windows_arm64_support.o': 'aarch64-windows', 'dynrt_macos_support.o': 'aarch64-macos', 'dynrt_macos_x64_support.o': 'x86_64-macos'}
 for name, target in NATIVE_SUPPORT.items():
     compiler = BUILD/('dyn-release.exe' if sys.platform == 'win32' else 'dyn-release')
     add(name, [COMPILER/'tools/build-native-support.py', *sorted(COMPILER.glob('runtime/support/*.dyn')), compiler],
         [sys.executable, COMPILER/'tools/build-native-support.py', '--compiler', compiler,
          '--target', target, '--output', BUILD/name], needs=['dyn-release'])
 
-add('llvm-bridge.o', [f'{COMPILER}/runtime/llvm_bridge.c'],
-    [*cc, '-O2', '-fno-stack-protector', '-c', f'{COMPILER}/runtime/llvm_bridge.c', '-o', f'{BUILD}/llvm-bridge.o'])
-
-add('dyn-sanitize', [BUILD/'thinlto.o', *sources, *headers],
-    [*cc, *cppflags, *cflags, '-O1', '-fno-omit-frame-pointer', '-fsanitize=address,undefined', f'-I{COMPILER}/src', *sources, BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', f'{BUILD}/dyn-sanitize'], needs=['thinlto.o'])
+add('dyn-sanitize', [*sources, *headers, *native_sources, *native_inputs],
+    [*cc, *cppflags, *cflags, *native_flags, '-O1', '-fno-omit-frame-pointer', '-fsanitize=address,undefined', f'-I{COMPILER}/src', *sources, *native_sources, '-pthread', '-o', f'{BUILD}/dyn-sanitize'])
 
 # Wasm runtime objects are generated directly; no target C compiler is needed.
 WASM_RUNTIME = ['dynrt_wasm.o', 'dynrt_wasi_start.o', 'dynrt_wasi_support.o']
@@ -193,8 +170,8 @@ add('frontend-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILE
 add('analysis-cache-test', [f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/tests/fault-alloc.h', f'{COMPILER}/src/analysis_cache.c', *frontend, *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/src/analysis_cache.c', *frontend, '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/analysis-cache-test'])
 
-add('codegen-failure-test', [BUILD/'thinlto.o', f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *headers],
-    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'], needs=['thinlto.o'])
+add('codegen-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *[COMPILER/'src'/n for n in ('codegen_text.c', 'llvm_text.c', 'native_asm.c', 'codegen_wasm.c')], *native_sources, *native_inputs, *headers],
+    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *[COMPILER/'src'/n for n in ('codegen_text.c', 'llvm_text.c', 'native_asm.c', 'codegen_wasm.c')], *native_sources, *native_flags, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'])
 
 add('project-failure-test', [f'{COMPILER}/tests/project-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/project-failure.c', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/project-failure-test'])
@@ -216,19 +193,19 @@ add('parser-snapshot-test', [COMPILER/'tests/parser-snapshot.c', *parser_sources
 add('unwind-capacity-test', [f'{COMPILER}/tests/unwind-capacity.c', f'{COMPILER}/runtime/reference_support.c'],
     [*cc, *cppflags, *cflags, '-ffreestanding', '-fno-builtin', 'tests/unwind-capacity.c', '-o', f'{BUILD}/unwind-capacity-test'])
 
-add('dyn-per-file', [BUILD/'thinlto.o', *sources, *headers],
-    [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', *sources, BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', BUILD/'dyn-per-file'], needs=['thinlto.o'])
+add('dyn-per-file', [*sources, *headers, *native_sources, *native_inputs],
+    [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', *sources, *native_sources, *native_flags, '-pthread', '-o', BUILD/'dyn-per-file'])
 
 add('build-plan-test', [COMPILER/'tests/build-plan.c', COMPILER/'src/build.c', *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', COMPILER/'tests/build-plan.c', COMPILER/'src/build.c', '-pthread', '-Wl,--wrap=waitpid', '-o', BUILD/'build-plan-test'])
 add('interface-test', [COMPILER/'tests/interface-cache.c', *[COMPILER/'src'/n for n in ('interface.c', 'source.c', 'source_tree.c', 'diagnostic.c', 'target.c')], *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', COMPILER/'tests/interface-cache.c', *[COMPILER/'src'/n for n in ('interface.c', 'source.c', 'source_tree.c', 'diagnostic.c', 'target.c')], *parser_sources, '-o', BUILD/'interface-test'])
 
-ALL = ['dynrt_wasi_start.o', 'dynrt_wasi_support.o', 'dynrt_wasm.o', 'dyn', 'dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o', 'dynrt_support_pic.o', 'dynrt_aarch64_support_pic.o', 'dynrt_shared.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_windows_shared.o', 'dynrt_macos_shared.o', 'llvm-bridge.o']
+ALL = ['dynrt_wasi_start.o', 'dynrt_wasi_support.o', 'dynrt_wasm.o', 'dyn', 'dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o', 'dynrt_support_pic.o', 'dynrt_aarch64_support_pic.o', 'dynrt_shared.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_windows_shared.o', 'dynrt_macos_shared.o']
 
-if not with_llvm:
-    ALL.remove('llvm-bridge.o')
 
+ALL += ['dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o', 'dynrt_windows_arm64_support.o', 'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o', 'dynrt_macos_x64_support.o']
+ALL += ['dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o', 'dynrt_riscv64_support.o', 'dynrt_riscv64_support_pic.o']
 HOST = ['dyn-release', *WASM_RUNTIME, *NATIVE_STARTUPS, *NATIVE_SUPPORT]
 if sys.platform == 'win32':
     for name, (inputs, command) in artifacts.items():
@@ -241,9 +218,6 @@ def write_changed(path, text):
         path.write_text(text)
 
 def build(name):
-    if not with_llvm and (name in ('thinlto.o', 'llvm-bridge.o', 'dyn-legacy') or
-                          'thinlto.o' in requires[name]):
-        raise ValueError(f'{name} requires LLVM; select dyn or dyn-release for the LLVM-free compiler')
     inputs, command = artifacts[name]
     inputs = list(inputs)
     output = BUILD/(name + ('.exe' if sys.platform == 'win32' and name.startswith('dyn') and not name.endswith('.o') else ''))

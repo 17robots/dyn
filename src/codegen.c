@@ -10,13 +10,9 @@
 #include "link_macho.h"
 #include "link_coff.h"
 #include "link_wasm.h"
-#ifndef DYN_NO_LLVM
-#include "thinlto.h"
-#include "llvm_shim.h"
-#else
 #include "llvm_text.h"
-#endif
 #include "sema.h"
+#include "native_asm.h"
 #ifdef DYN_TEXT_ONLY
 #include "../tools/backend-experiment/output.h"
 #endif
@@ -28,7 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#if !defined(DYN_NO_LLVM) || defined(DYN_TEXT_ONLY)
+#ifdef DYN_TEXT_ONLY
 typedef struct GenAbi GenAbi;
 typedef struct {
   uint32_t defer_statement;
@@ -138,16 +134,6 @@ static LLVMMetadataRef debug_source_file(Gen *g, DynSpan span) {
              : g->di_file;
 }
 
-#ifndef DYN_NO_LLVM
-static int dyn_verify_module(LLVMModuleRef module, int action, char **message) {
-  int failed = LLVMVerifyModule(module, action, message);
-  if (!failed && message && *message) {
-    LLVMDisposeMessage(*message);
-    *message = NULL;
-  }
-  return failed;
-}
-#endif
 static bool signed_type(DynType);
 static unsigned type_bits(Gen *, DynType);
 typedef struct {
@@ -2234,7 +2220,7 @@ static bool module_owns(const char *owner_key, const char *name) {
    when a C library is linked). Those get a ".dyn" suffix, the same in every
    object file, so the extern and the Dyn function never merge or get renamed
    differently per object. */
-#if !defined(DYN_NO_LLVM) || defined(DYN_TEXT_ONLY)
+#ifdef DYN_TEXT_ONLY
 static const char *function_symbol(const DynIrProgram *ir, const DynIrFunction *fn,
                                    char *buffer, size_t capacity) {
   if (fn->foreign)
@@ -2249,23 +2235,6 @@ static const char *function_symbol(const DynIrProgram *ir, const DynIrFunction *
   snprintf(buffer, capacity, "%s.dyn", fn->name);
   return buffer;
 }
-#ifndef DYN_NO_LLVM
-static pthread_once_t llvm_targets_once = PTHREAD_ONCE_INIT;
-static void initialize_llvm_targets(void) {
-  LLVMInitializeWebAssemblyTargetInfo();
-  LLVMInitializeWebAssemblyTarget();
-  LLVMInitializeWebAssemblyTargetMC();
-  LLVMInitializeWebAssemblyAsmPrinter();
-  LLVMInitializeX86TargetInfo();
-  LLVMInitializeX86Target();
-  LLVMInitializeX86TargetMC();
-  LLVMInitializeX86AsmPrinter();
-  LLVMInitializeAArch64TargetInfo();
-  LLVMInitializeAArch64Target();
-  LLVMInitializeAArch64TargetMC();
-  LLVMInitializeAArch64AsmPrinter();
-}
-#endif
 static LLVMValueRef function_value(Gen *g, uint32_t i) {
   if (g->functions[i])
     return g->functions[i];
@@ -2507,39 +2476,35 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
                      const char *asm_path, bool release, bool debug_info,
                      bool shared, const char *owner_key, unsigned chunk,
                      unsigned chunks) {
-#if defined(DYN_NO_LLVM) && !defined(DYN_TEXT_ONLY)
-  (void)source; (void)prepared; (void)object_path; (void)ir_path;
-  (void)asm_path; (void)release; (void)debug_info; (void)shared;
-  (void)owner_key; (void)chunk; (void)chunks;
-  fprintf(stderr, "error: this build requires native emission; LLVM is disabled\n");
-  return 2;
+#ifndef DYN_TEXT_ONLY
+  (void)owner_key;
+  if (chunk || chunks != 1) {
+    fprintf(stderr, "error: independent emission requires a complete prepared module\n");
+    return 2;
+  }
+  int result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
+    ? dyn_wasm_object(source, prepared, object_path, true)
+    : dyn_native_object(source, prepared, object_path, !release, debug_info, shared, true);
+  if (!result && ir_path)
+    result = dyn_codegen_text(source, prepared, ir_path, release, debug_info, shared);
+  if (!result && asm_path)
+    result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
+      ? dyn_wasm_assembly(source, prepared, asm_path, true)
+      : dyn_native_assembly(object_path, asm_path);
+  return result;
 #else
-#ifdef DYN_NO_LLVM
   if (!ir_path || asm_path) {
     fprintf(stderr, "error: independent LLVM export requires an IR path and separate native object emission\n");
     return 2;
   }
   (void)object_path;
-#endif
   DynIrProgram ir = *prepared;
   struct timespec phase = dyn_timing_start(&source->context);
-#ifndef DYN_NO_LLVM
-  pthread_once(&llvm_targets_once, initialize_llvm_targets);
-#endif
   Gen *g = calloc(1, sizeof(*g));
   if (!g) return 2;
   int failed = 0;
   char *error = NULL;
-#ifndef DYN_NO_LLVM
-  bool pass_message = false;
-  LLVMTargetMachineRef tm = NULL;
-#endif
   LLVMValueRef *volatile init_functions = NULL;
-#ifndef DYN_NO_LLVM
-  size_t object_length = strlen(object_path);
-  bool thin_bitcode = release && object_length >= 3 &&
-                      !strcmp(object_path + object_length - 3, ".bc");
-#endif
   g->source = source;
   g->wasm = !strcmp(dyn_context_target(&source->context)->arch, "wasm32");
   g->pointer_bytes = dyn_target_pointer_bytes(dyn_context_target(&source->context));
@@ -2550,10 +2515,6 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   if (setjmp(*dyn_text_jump(g->context))) goto allocation_failure;
 #endif
   const DynOptimization *optimization = source->context.optimization;
-#ifndef DYN_NO_LLVM
-  if (optimization && optimization->remarks)
-    dyn_enable_optimization_remarks(g->context);
-#endif
   g->module = LLVMModuleCreateWithNameInContext("dyn_module", g->context);
   if (debug_info || (optimization && optimization->sample_profile)) {
     char directory[4096];
@@ -2680,8 +2641,8 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   g->trace_pop_fn = LLVMAddFunction(g->module, "dyn_trace_pop", g->trace_pop_type);
   /* Match DynUnwind without growing x86-64 Linux frames for other ABIs. */
   const DynTarget *unwind_target = dyn_context_target(&source->context);
-  unsigned unwind_words = !strcmp(unwind_target->kernel, "windows") ? 32
-      : !strcmp(unwind_target->arch, "aarch64") ? 22 : 16;
+  unsigned unwind_words = !strcmp(unwind_target->kernel, "windows") && !strcmp(unwind_target->arch, "x86_64") ? 32
+      : !strcmp(unwind_target->arch, "riscv64") ? 28 : !strcmp(unwind_target->arch, "aarch64") ? 22 : 16;
   g->unwind_frame_type =
       LLVMArrayType2(LLVMInt64TypeInContext(g->context), unwind_words);
   LLVMTypeRef unwind_pointer[] = {LLVMPointerTypeInContext(g->context, 0)};
@@ -3044,77 +3005,12 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
   LLVMSetTarget(g->module, triple);
   if (g->allocation_failed)
     goto allocation_failure;
-#ifdef DYN_NO_LLVM
   failed = dyn_text_verify(g->module, &error);
   if (!failed) {
     char *llvm_ir = LLVMPrintModuleToString(g->module);
     failed = !llvm_ir || write_text(ir_path, llvm_ir);
     LLVMDisposeMessage(llvm_ir);
   }
-#else
-  /* Debug builds verify once, after scalarizing, below. */
-  if (release && dyn_verify_module(g->module, 2, &error)) {
-    fprintf(stderr, "error: invalid LLVM module: %s\n", error ? error : "");
-    failed = 1;
-    if (error) {
-      LLVMDisposeMessage(error);
-      error = NULL;
-    }
-  }
-  LLVMTargetRef target = NULL;
-  if (!failed && LLVMGetTargetFromTriple(triple, &target, &error))
-    failed = 1;
-  if (!failed)
-    tm = LLVMCreateTargetMachine(target, triple,
-                                 optimization && optimization->cpu ? optimization->cpu : "generic",
-                                 optimization && optimization->features ? optimization->features : "",
-                                 release ? (optimization && optimization->level == 3 ? 3 : 2) : 0,
-                                 shared && !g->wasm ? 2 : 0, 0);
-  if (!failed && !tm)
-    failed = 1;
-  if (!failed) {
-    LLVMTargetDataRef layout = LLVMCreateTargetDataLayout(tm);
-    char *layout_text = LLVMCopyStringRepOfTargetData(layout);
-    LLVMSetDataLayout(g->module, layout_text);
-    LLVMDisposeMessage(layout_text);
-    LLVMDisposeTargetData(layout);
-  }
-  dyn_timing_phase(&source->context, &phase, "llvm");
-  if (!failed && release) {
-    LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
-    LLVMErrorRef pass_error = LLVMRunPasses(
-        g->module, thin_bitcode
-          ? (optimization && optimization->level == 3 ? "thinlto-pre-link<O3>" : "thinlto-pre-link<O2>")
-          : (optimization && optimization->level == 3 ? "default<O3>" : "default<O2>"), tm,
-        options);
-    LLVMDisposePassBuilderOptions(options);
-    if (pass_error) {
-      error = LLVMGetErrorMessage(pass_error);
-      pass_message = true;
-      failed = 1;
-    }
-  }
-  if (!failed && !release)
-    dyn_scalarize_aggregates(g->module);
-  dyn_timing_phase(&source->context, &phase, "optimize");
-  if (!failed && dyn_verify_module(g->module, 2, &error)) {
-    fprintf(stderr, "error: optimized LLVM module is invalid: %s\n",
-            error ? error : "");
-    failed = 1;
-  }
-  if (!failed && ir_path) {
-    char *llvm_ir = LLVMPrintModuleToString(g->module);
-    failed = write_text(ir_path, llvm_ir);
-    LLVMDisposeMessage(llvm_ir);
-  }
-  if (!failed && asm_path)
-    failed =
-        LLVMTargetMachineEmitToFile(tm, g->module, (char *)asm_path, 0, &error);
-  if (!failed)
-    failed = thin_bitcode ? dyn_write_thin_bitcode(g->module, object_path)
-                          : LLVMTargetMachineEmitToFile(
-                                tm, g->module, (char *)object_path, 1, &error);
-#endif
 #ifndef DYN_TEXT_ONLY
   if (!failed && g->wasm) {
     const char *wasi_imports = !strcmp(dyn_context_target(&source->context)->kernel, "wasi")
@@ -3138,17 +3034,8 @@ int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
     fprintf(stderr, "error: LLVM emission failed%s%s\n", error ? ": " : "",
             error ? error : "");
   if (error) {
-#ifndef DYN_NO_LLVM
-    if (pass_message)
-      LLVMDisposeErrorMessage(error);
-    else
-#endif
       LLVMDisposeMessage(error);
   }
-#ifndef DYN_NO_LLVM
-  if (tm)
-    LLVMDisposeTargetMachine(tm);
-#endif
   goto cleanup;
 allocation_failure:
   dyn_diagnostic_source("error", source, 0, 0, "out of memory generating code");
@@ -3272,53 +3159,6 @@ static int link_macho(const char *runtime, const char *support, const char *cons
 }
 /* Symbols that the runtime and explicit link inputs define or use must stay
    visible; everything else in the bitcode may be internalized. */
-#ifndef DYN_NO_LLVM
-static int thin_link(const DynContext *context, const char *runtime, const char *support,
-                     const char *const *bitcode, size_t bitcode_count, const char *output_path,
-                     const char *const *link_inputs, size_t link_input_count,
-                     const char *lto_cache, unsigned lto_jobs, char ***objects,
-                     size_t *object_count) {
-  pthread_once(&llvm_targets_once, initialize_llvm_targets);
-  const char **regular = calloc(link_input_count + 2, sizeof(*regular));
-  if (!regular)
-    return 2;
-  size_t regular_count = 0;
-  regular[regular_count++] = runtime;
-  regular[regular_count++] = support;
-  for (size_t i = 0; i < link_input_count; ++i)
-    regular[regular_count++] = link_inputs[i];
-  char **defined = NULL, **used = NULL;
-  size_t defined_count = 0, used_count = 0;
-  bool scanned = dyn_link_elf_symbols(regular, regular_count, &defined, &defined_count,
-                                      &used, &used_count);
-  free(regular);
-  if (!scanned)
-    return 2;
-  const DynOptimization *optimization = context ? context->optimization : NULL;
-  char cache[8192];
-  bool cached = lto_cache && snprintf(cache, sizeof(cache), "%s/thinlto", lto_cache) <
-                                 (int)sizeof(cache);
-  DynThinLto options = {
-      .bitcode = bitcode,
-      .bitcode_count = bitcode_count,
-      .regular_defined = (const char *const *)defined,
-      .regular_defined_count = defined_count,
-      .regular_used = (const char *const *)used,
-      .regular_used_count = used_count,
-      .level = optimization && optimization->level == 3 ? 3 : 2,
-      .jobs = lto_jobs,
-      .aggressive_codegen = optimization && optimization->level == 3,
-      .remarks = optimization && optimization->remarks,
-      .sample_profile = optimization ? optimization->sample_profile : NULL,
-      .cache_directory = cached ? cache : NULL,
-      .output_prefix = output_path,
-  };
-  int status = dyn_thinlto_link(&options, objects, object_count);
-  dyn_link_elf_names_free(defined, defined_count);
-  dyn_link_elf_names_free(used, used_count);
-  return status;
-}
-#endif
 
 static int link_wasm(const DynContext *, const char *, const char *,
                      const char *const *, size_t, bool);
@@ -3329,6 +3169,7 @@ int dyn_link_executable_objects(const DynContext *context,
                                 size_t link_input_count, bool release,
                                 bool verbose, const char *lto_cache,
                                 unsigned lto_jobs) {
+  (void)lto_cache; (void)lto_jobs;
   char temporary[4096], runtime[4096], support[4096], executable[4096];
   bool dynamic = false;
   for (size_t i = 0; i < link_input_count; ++i) {
@@ -3351,11 +3192,12 @@ int dyn_link_executable_objects(const DynContext *context,
   *slash = 0;
   const char *runtime_name =
       !strcmp(dyn_context_target(context)->kernel, "windows")
-          ? "dynrt_windows_start.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_start.o" : "dynrt_windows_start.o")
       : !strcmp(dyn_context_target(context)->kernel, "darwin")
-          ? "dynrt_macos_start.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_start.o" : "dynrt_macos_start.o")
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? (release ? "dynrt_aarch64_release.o" : "dynrt_aarch64_start.o")
+          : !strcmp(dyn_context_target(context)->arch, "riscv64") ? (release ? "dynrt_riscv64_release.o" : "dynrt_riscv64_start.o")
           : (release ? "dynrt_release.o" : "dynrt_start.o");
   if (snprintf(runtime, sizeof(runtime), "%s/%s", executable, runtime_name) >=
       (int)sizeof(runtime))
@@ -3366,12 +3208,12 @@ int dyn_link_executable_objects(const DynContext *context,
     return 2;
   const char *support_name =
       !strcmp(dyn_context_target(context)->kernel, "windows")
-          ? "dynrt_windows_support.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_support.o" : "dynrt_windows_support.o")
       : !strcmp(dyn_context_target(context)->kernel, "darwin")
-          ? "dynrt_macos_support.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_support.o" : "dynrt_macos_support.o")
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? "dynrt_aarch64_support.o"
-          : "dynrt_support.o";
+          : !strcmp(dyn_context_target(context)->arch, "riscv64") ? "dynrt_riscv64_support.o" : "dynrt_support.o";
   if (snprintf(support, sizeof(support), "%s/%s", executable, support_name) >=
       (int)sizeof(support))
     return 2;
@@ -3387,25 +3229,10 @@ int dyn_link_executable_objects(const DynContext *context,
      DYN_LINKER=external keeps ld.lld's ThinLTO for differential checks. */
   const char *external = getenv("DYN_LINKER");
   bool forced = external && !strcmp(external, "external");
-#ifndef DYN_NO_LLVM
-  char **lto_objects = NULL;
-  size_t lto_object_count = 0;
-  if (thin && !forced) {
-    if (thin_link(context, runtime, support, object_paths, object_count, output_path,
-                  link_inputs, link_input_count, lto_cache, lto_jobs, &lto_objects,
-                  &lto_object_count))
-      return 2;
-    int status = dyn_link_executable_objects(context, (const char *const *)lto_objects,
-        lto_object_count, output_path, link_inputs, link_input_count, release, verbose, NULL, 0);
-    dyn_thinlto_free(lto_objects, lto_object_count);
-    return status;
-  }
-#else
   if (thin) {
     fprintf(stderr, "error: LLVM bitcode is not supported by this build\n");
     return 2;
   }
-#endif
   /* Windows executables link in-process. */
   if (windows && !forced) {
     bool supported = true;
@@ -3447,9 +3274,6 @@ int dyn_link_executable_objects(const DynContext *context,
     }
     DynLinkOptions options = {.entry = "_start",
                               .interpreter = dyn_context_target(context)->dynamic_linker,
-#ifndef DYN_NO_LLVM
-                              .layout = dyn_cache_directed_layout,
-#endif
                              };
     int status = dyn_link_elf(inputs, input_count, temporary, &options);
     free(inputs);
@@ -3461,18 +3285,22 @@ int dyn_link_executable_objects(const DynContext *context,
     }
     return 0;
   }
-#ifdef DYN_NO_LLVM
-  fprintf(stderr, "error: external linker fallback is disabled in the LLVM-free compiler\n");
-  return 2;
-#endif
+  if (!forced) {
+    fprintf(stderr, "error: unsupported built-in linker input; external linking requires DYN_LINKER=external\n");
+    return 2;
+  }
+  if (windows && !strcmp(dyn_context_target(context)->arch,"aarch64")) {
+    fprintf(stderr,"error: external linking for aarch64-windows is unsupported; use DYN_LINKER=builtin\n");
+    return 2;
+  }
   if (verbose) {
     fprintf(
         stderr, "+ %s %s -o %s %s %s", linker,
         darwin ?
 #ifdef __APPLE__
-          "-arch arm64 -platform_version macos 15.0 15.0 -e _dyn_start"
+          (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "-arch x86_64 -platform_version macos 15.0 15.0 -e _dyn_start" : "-arch arm64 -platform_version macos 15.0 15.0 -e _dyn_start")
 #else
-          "cc --target=aarch64-macos.15.0-none -nostdlib -Wl,-e,_dyn_start"
+          (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "cc --target=x86_64-macos.15.0-none -nostdlib -Wl,-e,_dyn_start" : "cc --target=aarch64-macos.15.0-none -nostdlib -Wl,-e,_dyn_start")
 #endif
         : windows
             ? "-mi386pep --gc-sections --entry=dyn_start --subsystem console"
@@ -3491,20 +3319,18 @@ int dyn_link_executable_objects(const DynContext *context,
       calloc(object_count + link_input_count + 28, sizeof(*arguments));
   if (!arguments)
     return 2;
-  char cache_argument[8192], jobs_argument[64];
-  char profile_argument[8192];
   size_t argument_count = 0;
   arguments[argument_count++] = (char *)linker;
   if (darwin) {
 #ifdef __APPLE__
-    arguments[argument_count++] = "-arch"; arguments[argument_count++] = "arm64";
+    arguments[argument_count++] = "-arch"; arguments[argument_count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "x86_64" : "arm64";
     arguments[argument_count++] = "-platform_version";
     arguments[argument_count++] = "macos";
     arguments[argument_count++] = "15.0"; arguments[argument_count++] = "15.0";
     arguments[argument_count++] = "-e"; arguments[argument_count++] = "_dyn_start";
 #else
     arguments[argument_count++] = "cc";
-    arguments[argument_count++] = "--target=aarch64-macos.15.0-none";
+    arguments[argument_count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "--target=x86_64-macos.15.0-none" : "--target=aarch64-macos.15.0-none";
     arguments[argument_count++] = "-nostdlib";
     arguments[argument_count++] = "-Wl,-e,_dyn_start";
 #endif
@@ -3516,35 +3342,7 @@ int dyn_link_executable_objects(const DynContext *context,
     arguments[argument_count++] = "console";
   } else {
     arguments[argument_count++] = "--gc-sections";
-    if (thin) {
-      const DynOptimization *optimization = context ? context->optimization : NULL;
-      arguments[argument_count++] = optimization && optimization->level == 3 ? "--lto-O3" : "--lto-O2";
-      if (optimization && optimization->level == 3)
-        arguments[argument_count++] = "--lto-CGO3";
-      if (optimization && optimization->remarks) {
-        arguments[argument_count++] = "--mllvm=-pass-remarks=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
-        arguments[argument_count++] = "--mllvm=-pass-remarks-missed=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
-        arguments[argument_count++] = "--mllvm=-pass-remarks-analysis=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
-      }
-      if (optimization && optimization->sample_profile) {
-        if (snprintf(profile_argument, sizeof(profile_argument), "--lto-sample-profile=%s",
-                     optimization->sample_profile) >= (int)sizeof(profile_argument)) {
-          free(arguments); remove(temporary); return 2;
-        }
-        arguments[argument_count++] = profile_argument;
-      }
-      if (lto_jobs) {
-        snprintf(jobs_argument, sizeof(jobs_argument), "--thinlto-jobs=%u", lto_jobs);
-        arguments[argument_count++] = jobs_argument;
-      }
-      if (lto_cache && snprintf(cache_argument, sizeof(cache_argument),
-                               "--thinlto-cache-dir=%s/thinlto", lto_cache) <
-                           (int)sizeof(cache_argument)) {
-        arguments[argument_count++] = cache_argument;
-        arguments[argument_count++] =
-            "--thinlto-cache-policy=cache_size=10%:cache_size_bytes=1g:prune_after=168h";
-      }
-    }
+
   }
   arguments[argument_count++] = "-o";
   arguments[argument_count++] = temporary;
@@ -3685,10 +3483,7 @@ wasm_done:
     free(objects);
     return result;
   }
-#ifdef DYN_NO_LLVM
-  fprintf(stderr, "error: external Wasm linking is disabled in the LLVM-free compiler\n");
-  return 2;
-#endif
+  /* Explicit external linker selection is an optional comparison tool. */
   if (snprintf(temporary, sizeof(temporary), "%s.tmp", output_path) >= (int)sizeof(temporary)) return 2;
   if (verbose) fprintf(stderr, "+ wasm-ld --no-entry --export-memory -o %s %s %s\n", temporary, support, object_path);
   char **args = calloc(count + 16, sizeof(*args));
@@ -3741,11 +3536,11 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                   snprintf(import_temporary, sizeof(import_temporary), "%s.tmp",
                            import_output) >= (int)sizeof(import_temporary)))
     return 2;
-  const char *name = windows  ? "dynrt_windows_support.o"
-                     : darwin ? "dynrt_macos_support.o"
+  const char *name = windows  ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_support.o" : "dynrt_windows_support.o")
+                     : darwin ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_support.o" : "dynrt_macos_support.o")
                      : !strcmp(dyn_context_target(context)->arch, "aarch64")
                          ? "dynrt_aarch64_support_pic.o"
-                         : "dynrt_support_pic.o";
+                         : !strcmp(dyn_context_target(context)->arch, "riscv64") ? "dynrt_riscv64_support_pic.o" : "dynrt_support_pic.o";
   if (snprintf(support, sizeof(support), "%s/%s", executable, name) >=
       (int)sizeof(support))
     return 2;
@@ -3754,11 +3549,11 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                name) >= (int)sizeof(support))
     return 2;
   const char *assembly_name =
-      windows  ? "dynrt_windows_shared.o"
-      : darwin ? "dynrt_macos_shared.o"
+      windows  ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_shared.o" : "dynrt_windows_shared.o")
+      : darwin ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_shared.o" : "dynrt_macos_shared.o")
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? "dynrt_aarch64_shared.o"
-          : "dynrt_shared.o";
+          : !strcmp(dyn_context_target(context)->arch, "riscv64") ? "dynrt_riscv64_shared.o" : "dynrt_shared.o";
   if (snprintf(assembly, sizeof(assembly), "%s/%s", executable,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
@@ -3825,17 +3620,21 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
       return 0;
     }
   }
-#ifdef DYN_NO_LLVM
-  fprintf(stderr, "error: external linker fallback is disabled in the LLVM-free compiler\n");
-  return 2;
-#endif
+  if (!(external && !strcmp(external, "external"))) {
+    fprintf(stderr, "error: unsupported built-in linker input; external linking requires DYN_LINKER=external\n");
+    return 2;
+  }
+  if (windows && !strcmp(dyn_context_target(context)->arch,"aarch64")) {
+    fprintf(stderr,"error: external linking for aarch64-windows is unsupported; use DYN_LINKER=builtin\n");
+    return 2;
+  }
   if (verbose) {
     fprintf(stderr, "+ %s -o %s %s %s %s",
             darwin ?
 #ifdef __APPLE__
-                "ld64.lld -arch arm64 -platform_version macos 15.0 15.0 -dylib"
+                (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "ld64.lld -arch x86_64 -platform_version macos 15.0 15.0 -dylib" : "ld64.lld -arch arm64 -platform_version macos 15.0 15.0 -dylib")
 #else
-                "zig cc --target=aarch64-macos.15.0-none -dynamiclib -nostdlib"
+                (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "zig cc --target=x86_64-macos.15.0-none -dynamiclib -nostdlib" : "zig cc --target=aarch64-macos.15.0-none -dynamiclib -nostdlib")
 #endif
             : windows ? DYN_WINDOWS_LINKER " -mi386pep -shared"
                       : "ld.lld -shared",
@@ -3851,13 +3650,13 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
   arguments[count++] = darwin ? DYN_DARWIN_LINKER : windows ? DYN_WINDOWS_LINKER : "ld.lld";
   if (darwin) {
 #ifdef __APPLE__
-    arguments[count++] = "-arch"; arguments[count++] = "arm64";
+    arguments[count++] = "-arch"; arguments[count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "x86_64" : "arm64";
     arguments[count++] = "-platform_version"; arguments[count++] = "macos";
     arguments[count++] = "15.0"; arguments[count++] = "15.0";
     arguments[count++] = "-dylib";
 #else
     arguments[count++] = "cc";
-    arguments[count++] = "--target=aarch64-macos.15.0-none";
+    arguments[count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "--target=x86_64-macos.15.0-none" : "--target=aarch64-macos.15.0-none";
     arguments[count++] = "-dynamiclib";
     arguments[count++] = "-nostdlib";
 #endif

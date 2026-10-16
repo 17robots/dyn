@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect ELF and compare normal and panic execution with production LLVM."""
+"""Inspect ELF and compare normal and panic execution with the production compiler."""
 import ctypes
 import itertools
 import math
@@ -624,9 +624,9 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             # and all panic comparisons use the unmodified Dyn runtime.
             run([sys.executable, '-c', alignment_code, native, alignment_library],
                 env=dict(os.environ, LD_PRELOAD=str(alignment_library)))
-        llvm_path = root / ('llvm-' + mode + '.so')
+        production_path = root / ('production-' + mode + '.so')
         run([DYN, 'build', root, '--shared', '--' + mode, '--no-cache',
-             '--jobs', '1', '--output', llvm_path])
+             '--jobs', '1', '--output', production_path])
         # An executable's smaller overriding symbol has no experiment-owned padding.
         override_asm=root/'override.S';override_c=root/'override.c'
         text='.data\n'
@@ -635,14 +635,14 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             text+=f'.global {name}_canary\n{name}_canary: .byte 1,2,3,4,5,6,7\n'
         override_asm.write_text(text+'.section .note.GNU-stack,"",@progbits\n')
         override_c.write_text('#include <stdint.h>\nextern int8_t globals_small(int8_t);\nextern uint16_t globals_u16(uint16_t);\nextern int32_t globals_i32(int32_t);\nextern float globals_f32(float);\nextern unsigned char global_small_canary[],global_u16_canary[],global_i32_canary[],global_f32_canary[];\nint main(void) {\n if(globals_small(-2)!=-1 || globals_u16(65535)!=65535 || globals_i32(-12345)!=-12345 || globals_f32(1.25f)!=1.25f) return 1;\n unsigned char *p[]={global_small_canary,global_u16_canary,global_i32_canary,global_f32_canary};\n for(unsigned j=0;j<4;j++) for(unsigned i=0;i<7;i++) if(p[j][i]!=i+1) return 2;\n return 0;\n}\n')
-        for library in (native,llvm_path):
+        for library in (native,production_path):
             override_exe=root/'override'
             run([*CC,override_c,override_asm,library,'-lm','-Wl,-rpath,'+str(root),'-o',override_exe])
             run([override_exe])
-        fast, llvm = ctypes.CDLL(str(native)), ctypes.CDLL(str(llvm_path))
+        fast, production = ctypes.CDLL(str(native)), ctypes.CDLL(str(production_path))
         generic_symbol=next(line.split()[-1] for line in run(['nm','-D',native]).stdout.splitlines() if ' generic_add__g' in line)
         for name, ty, argc in specs:
-            ours, reference = [configure(lib, name, ty, argc) for lib in (fast, llvm)]
+            ours, reference = [configure(lib, name, ty, argc) for lib in (fast, production)]
             edges = [0, 1, 2, (1 << 63) - 1, 1 << 63, (1 << 64) - 1]
             vectors = [[n] * argc for n in edges]
             vectors += [[rng.getrandbits(64) for _ in range(argc)] for _ in range(100)]
@@ -658,7 +658,7 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             for operation, (_, compare) in COMPARISONS.items():
                 if ty == boolean and operation not in ('eq', 'ne'): continue
                 name = f'compare_{type_name}_{operation}'
-                ours, reference = [configure(lib, name, ty, 2) for lib in (fast, llvm)]
+                ours, reference = [configure(lib, name, ty, 2) for lib in (fast, production)]
                 ours.restype = reference.restype = boolean
                 for args in vectors:
                     assert ours(*args) == reference(*args) == compare(*args), (mode, name, args)
@@ -690,7 +690,7 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             branch_cases += [('choose', u64, (a, b), max(a, b)), ('early', i64, (a, b), a + b),
                              ('nested_branch', u64, (a, b, c), c if a == b == 0 else b if a == 0 else a if b == 0 else a + b)]
         for name, ty, args, expected in branch_cases:
-            ours, reference = [configure(lib, name, ty, len(args)) for lib in (fast, llvm)]
+            ours, reference = [configure(lib, name, ty, len(args)) for lib in (fast, production)]
             if isinstance(expected, bool): ours.restype = reference.restype = boolean
             assert ours(*args) == reference(*args) == expected, (mode, name, args)
             count += 1
@@ -706,7 +706,7 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
                      ('call_short', [0,0], True)]
             cases += [(f'call_arity{n}', args[:n], sum(args[i] * 10 ** (n-i-1) for i in range(n)) & mask) for n in (3,4,5)]
             for name, values, expected in cases:
-                ours, reference = [configure(lib, name, u64, len(values)) for lib in (fast, llvm)]
+                ours, reference = [configure(lib, name, u64, len(values)) for lib in (fast, production)]
                 if isinstance(expected, bool): ours.restype = reference.restype = boolean
                 assert ours(*values) == reference(*values) == expected, (mode,name,values)
                 count += 1
@@ -717,28 +717,28 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
                 expected = sum(values[i]*(i+1) for i in selected) & mask
                 for name, result in ((f'stack{arity}', expected),
                                      (f'stack_call{arity}', (expected+values[0]) & mask)):
-                    ours, reference = [configure(lib, name, u64, arity) for lib in (fast,llvm)]
+                    ours, reference = [configure(lib, name, u64, arity) for lib in (fast,production)]
                     assert ours(*values) == reference(*values) == result, (mode,name,values)
                     count += 1
         for a,b in itertools.product((False,True),repeat=2):
-            for lib in (fast,llvm): assert configure(lib,'call_bool',boolean,2)(a,b) == ((a and b) or not a)
+            for lib in (fast,production): assert configure(lib,'call_bool',boolean,2)(a,b) == ((a and b) or not a)
             count += 1
         for values in itertools.product((False,True), repeat=8):
             expected = (values[6] and not values[7]) or values[0]
             for name in ('stack_bool','stack_call_bool'):
-                for lib in (fast,llvm): assert configure(lib,name,boolean,8)(*values) == expected
+                for lib in (fast,production): assert configure(lib,name,boolean,8)(*values) == expected
                 count += 1
         for _ in range(100):
             values = [rng.randrange(-(1<<63),1<<63) for _ in range(8)]
             expected = (values[6]-values[7]+values[0]) & mask
             if expected >= 1<<63: expected -= 1<<64
             for name in ('stack_i64','stack_call_i64'):
-                for lib in (fast,llvm): assert configure(lib,name,i64,8)(*values) == expected
+                for lib in (fast,production): assert configure(lib,name,i64,8)(*values) == expected
                 count += 1
         factorial_value = 1
         for n in range(21):
             if n: factorial_value *= n
-            for lib in (fast,llvm):
+            for lib in (fast,production):
                 assert configure(lib,'factorial',u64,1)(n) == factorial_value
                 for name, expected in [('mutual_even', n % 2 == 0), ('mutual_odd', n % 2 == 1)]:
                     fn=configure(lib,name,u64,1); fn.restype=boolean
@@ -751,18 +751,18 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
                 ('loop_nested',[n],n*(n+1)+4*n), ('loop_early',[n],min(n,5)),
                 ('loop_forever',[n],n), ('loop_label',[n],sum(i for i in range(1,min(n,5)+1) if i != 2)), ('local_zero',[],0), ('local_scope',[n],n),
                 ('large_frame',[n],24*n), ('local_wrap',[(1<<64)-1,n],(n-1)&((1<<64)-1))]:
-                for lib in (fast,llvm): assert configure(lib,name,u64,len(args))(*args) == expected, (name,args)
+                for lib in (fast,production): assert configure(lib,name,u64,len(args))(*args) == expected, (name,args)
                 count += 1
         for a in (False, True):
-            for lib in (fast,llvm): assert configure(lib,'local_bool',boolean,1)(a) == False
+            for lib in (fast,production): assert configure(lib,'local_bool',boolean,1)(a) == False
             count += 1
         for a,b in [(-(1<<63),0),((1<<63)-1,0),(-100,99),(100,-99)]:
-            for lib in (fast,llvm): assert configure(lib,'local_signed',i64,2)(a,b) == a+b
+            for lib in (fast,production): assert configure(lib,'local_signed',i64,2)(a,b) == a+b
             count += 1
         callback_type = ctypes.CFUNCTYPE(u64,u64)
         seen=[]
         callback=callback_type(lambda value: seen.append(value) or ((value*7)&((1<<64)-1)))
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             fn=lib.indirect_apply;fn.argtypes=[callback_type,u64];fn.restype=u64
             assert fn(callback,123)==861
             count+=1
@@ -778,10 +778,10 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
                     for value in values: expected=(expected*17+value)&((1<<64)-1)
                     if tyname=='i64' and expected>=1<<63: expected-=1<<64
                     name=f'range_{tyname}_{int(reverse)}_{int(inclusive)}'
-                    for lib in (fast,llvm): assert configure(lib,name,ty,2)(a,b)==expected,(name,a,b,expected)
+                    for lib in (fast,production): assert configure(lib,name,ty,2)(a,b)==expected,(name,a,b,expected)
                     count+=1
         for a in range(-10,11):
-            for lib in (fast,llvm):
+            for lib in (fast,production):
                 assert configure(lib,'scalar_case',i64,1)(a)==(-1 if -5<=a<=-1 else 10 if a in (0,2,4) else 99)
                 assert configure(lib,'foreign_abs32',ctypes.c_int32,1)(a)==abs(a)
                 assert configure(lib,'foreign_abs',i64,1)(a)==abs(a)
@@ -793,7 +793,7 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
                 if i==2: continue
                 if i==5: break
                 values.append(i)
-            for lib in (fast,llvm):
+            for lib in (fast,production):
                 assert configure(lib,'range_controls',u64,2)(a,b)==sum(values)
                 assert configure(lib,'range_nested',u64,2)(a,b)==sum(3*i+3 for i in values)
                 assert configure(lib,'void_caller',u64,2)(a,b or 1)==a
@@ -810,7 +810,7 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             values+=[rng.uniform(-1e6,1e6) for _ in range(8)]
             for op in ('add','sub','mul','div','rem',*COMPARISONS):
                 name=f'float_{tyname}_{op}'
-                ours,ref=[configure(lib,name,ty,2) for lib in (fast,llvm)]
+                ours,ref=[configure(lib,name,ty,2) for lib in (fast,production)]
                 if op in COMPARISONS: ours.restype=ref.restype=boolean
                 for a,b in itertools.product(values,repeat=2):
                     actual,expected=ours(a,b),ref(a,b)
@@ -819,9 +819,9 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             for a in values:
                 for suffix in ('neg',):
                     name=f'float_{tyname}_{suffix}'
-                    actual,expected=[configure(lib,name,ty,1)(a) for lib in (fast,llvm)]
+                    actual,expected=[configure(lib,name,ty,1)(a) for lib in (fast,production)]
                     assert same_float(actual,expected,ty),(name,a,actual,expected);count+=1
-            for lib in (fast,llvm):
+            for lib in (fast,production):
                 assert configure(lib,f'float_{tyname}_constant',ty,0)()==1.25
                 assert configure(lib,f'float_{tyname}_call',ty,2)(1.25,2.5)==3.75
                 assert configure(lib,f'float_{tyname}_local',ty,2)(-1.25,-2.5)==3.75
@@ -831,7 +831,7 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
                 fn=getattr(lib,f'float_{tyname}_apply');fn.argtypes=[cb_type,ty,ty];fn.restype=ty
                 assert fn(callback,1.25,2.5)==3.75
                 count+=6
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             for name in ('float_mixed_call','float_mixed_indirect'):
                 assert configure(lib,name,ctypes.c_double,0)()==47.5;count+=1
             assert configure(lib,'float_max',ctypes.c_double,256)(*range(256))==397.0;count+=1
@@ -841,11 +841,11 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             fn=configure(lib,'foreign_time',i64,2);fn.restype=ctypes.c_double;assert fn(20,3)==17.0;count+=1
             fn=configure(lib,'float_widen',ctypes.c_float,1);fn.restype=ctypes.c_double;assert fn(1.25)==1.25;count+=1
             fn=configure(lib,'float_narrow',ctypes.c_double,1);fn.restype=ctypes.c_float;assert fn(1.25)==1.25;count+=1
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             for name,ty,a,b in [('generic_i8',ctypes.c_int8,-128,127),('generic_i64',i64,-(1<<63),(1<<63)-1),('generic_f64',ctypes.c_double,-1.25,2.5)]:
                 assert configure(lib,name,ty,2)(a,b)==min(a,b);count+=1
             assert configure(lib,'generic_recursion',u64,1)(10)==10;count+=1
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             assert configure(lib,'globals_read',u64,0)()==106
             assert ctypes.c_int8.in_dll(lib,'global_small').value==-128
             assert ctypes.c_double.in_dll(lib,'global_float').value==-1.25
@@ -866,10 +866,10 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
             integers=[low,low+1,0,1,2,high-1,high]+([-(1<<31)+1] if signed and bits==64 else [])
             if bits==64 and not signed: integers += [(1<<63)-1,1<<63,(1<<63)+1,(1<<63)+(1<<39)+1]
             for floating,fty in [('f32',ctypes.c_float),('f64',ctypes.c_double)]:
-                ours,ref=[getattr(lib,f'cast_{integer}_{floating}') for lib in (fast,llvm)]
+                ours,ref=[getattr(lib,f'cast_{integer}_{floating}') for lib in (fast,production)]
                 for fn in (ours,ref):fn.argtypes=[ity];fn.restype=fty
                 for value in integers: assert same_float(ours(value),ref(value),fty),(integer,floating,value,ours(value),ref(value));count+=1
-                ours,ref=[getattr(lib,f'cast_{floating}_{integer}') for lib in (fast,llvm)]
+                ours,ref=[getattr(lib,f'cast_{floating}_{integer}') for lib in (fast,production)]
                 for fn in (ours,ref):fn.argtypes=[fty];fn.restype=ity
                 values=[fty(x).value for x in [low,low+1,high,high-1,0.0,-0.0,0.75,-0.75,1.9,127.9,-127.9,65535.5,2**31+0.5,2**63,2**63+2**40]]
                 for value in values:
@@ -877,14 +877,14 @@ assert probe.alignment_seen()>100, 'alignment interposer did not run'
                         assert ours(value)==ref(value)==math.trunc(value),(floating,integer,value,ours(value),ref(value));count+=1
         for name,ty in ARRAY_ABI_TYPES:
             for n in range(1,7):
-                for lib,other in ((fast,llvm),(llvm,fast)):
+                for lib,other in ((fast,production),(production,fast)):
                     direct=configure(lib,f'arrayabi_{name}_{n}_call',ty,1)
                     indirect=getattr(lib,f'arrayabi_{name}_{n}_apply');indirect.argtypes=[ctypes.c_void_p,ty];indirect.restype=ty
                     for value in (0,2,7):
                         assert direct(value)==value+1,(mode,name,n,'direct',direct(value))
                         assert indirect(ctypes.cast(getattr(other,f'arrayabi_{name}_{n}'),ctypes.c_void_p),value)==value+1,(mode,name,n,'cross')
                         count+=2
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             for name,ty,want in [('arrayabi_gp_call',u64,789),('arrayabi_fp_call',ctypes.c_float,27.0),('arrayabi_mixed_call',ctypes.c_double,28.0),('arrayabi_nested_call',u64,4321)]:
                 assert configure(lib,name,ty,0)()==want,(mode,name);count+=1
             for name,arg,want in [('each_array',0,123),('each_slice',0,193),('each_pointer',7,27),('each_reverse',0,321),('each_nested',0,1234),('each_defer',0,123),('each_early',2,2)]:
@@ -913,7 +913,7 @@ Big c_big(Big x) { x.c+=x.a+x.b;return x; }
 Packed c_packed(Packed x) { x.value+=x.tag;return x; }
 """)
         run([*CC,'-O2','-fPIC','-c',provider,'-o',provider_obj])
-        foreign_obj=root/('foreign-'+mode+'.o');foreign_native=root/('foreign-native-'+mode+'.so');foreign_llvm=root/('foreign-llvm-'+mode+'.so')
+        foreign_obj=root/('foreign-'+mode+'.o');foreign_native=root/('foreign-native-'+mode+'.so');foreign_llvm=root/('foreign-production-'+mode+'.so')
         run([BACKEND,*(['--debug'] if mode=='debug' else []),foreign_source,foreign_obj])
         run([*CC,'-shared','-Wl,--no-undefined',foreign_obj,runtime,support,provider_obj,'-o',foreign_native])
         run([DYN,'build',foreign_root,'--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--output',foreign_llvm])
@@ -947,7 +947,7 @@ unsigned char *dest=area+page-9; packed_boundary(dest,0x907,0); int64_t value; m
 if (dest[0]!=7 || value!=10) return 4;
 return munmap(area,(size_t)page*2)!=0; }
 """)
-        for library in (native,llvm_path):
+        for library in (native,production_path):
             host=root/(library.stem+'-packed')
             run([*CC,packed_source,str(library),'-lm','-Wl,-rpath,'+str(root),'-o',host]);run([host]);count+=1
         for name,fields,decl,field,value in ABI_STRUCTS:
@@ -964,7 +964,7 @@ return munmap(area,(size_t)page*2)!=0; }
             target=field.split('[')[0]; index=[n for n,_ in fields].index(target)
             if '[' in field: expected[index][2]+=1
             else: expected[index]+=1
-            for lib,other in ((fast,llvm),(llvm,fast)):
+            for lib,other in ((fast,production),(production,fast)):
                 for suffix in ('','_call','_apply','_defer'):
                     fn=getattr(lib,'abi_'+name+suffix);fn.restype=Ty
                     if suffix=='_apply':
@@ -974,7 +974,7 @@ return munmap(area,(size_t)page*2)!=0; }
                         fn.argtypes=[Ty];actual=fn(item)
                     assert components(actual)==(components(item) if suffix=='_defer' else expected),(mode,name,suffix,components(actual),expected)
                     count+=1
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             class NoLocal(ctypes.Structure):
                 _fields_=[('other',u64),('value',u64)]
             actual=configure(lib,'abi_no_local',NoLocal,0)()
@@ -990,7 +990,7 @@ return munmap(area,(size_t)page*2)!=0; }
             count+=2
         class Slice(ctypes.Structure):
             _fields_=[('data',ctypes.c_void_p),('length',ctypes.c_size_t)]
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             for a in (0,1,7,1000):
                 assert configure(lib,'slice_call',u64,1)(a)==a+4
                 assert configure(lib,'slice_stack_call',u64,1)(a)==a+18
@@ -1013,7 +1013,7 @@ return munmap(area,(size_t)page*2)!=0; }
                     for b in range(a,length+1): assert fn(a,b)==b-a;count+=1
         class Storage(ctypes.Structure):
             _fields_=[('tag',ctypes.c_uint8),('wide',u64),('small',ctypes.c_int16),('values',u64*3)]
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             for a in (0,1,7,1000):
                 for name,want in [('array_nested',a+6),('array_assign',a+5),('struct_local',2*a+14),('struct_nested',a+5)]:
                     assert configure(lib,name,u64,1)(a)==want,(mode,name)
@@ -1041,7 +1041,7 @@ return munmap(area,(size_t)page*2)!=0; }
                 fn(ctypes.byref(buf,dst*2),ctypes.byref(buf,src*2))
                 assert list(buf)==want,(mode,dst,src,list(buf))
                 count+=1
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             read=configure(lib,'defer_read',u64,0)
             for name,args,want,side in [
                 ('defer_capture',(3,),10,93), ('defer_scope',(1,),21,21),
@@ -1062,14 +1062,14 @@ return munmap(area,(size_t)page*2)!=0; }
             ('defer_panic_recursive',(3,),'0123'), ('defer_panic_parent',(0,),'218')]:
             results=[]
             code="import ctypes,sys; l=ctypes.CDLL(sys.argv[1]); f=getattr(l,sys.argv[2]); f.argtypes=[ctypes.c_uint64]; f.restype=ctypes.c_uint64; f(int(sys.argv[3]))"
-            for library in (native,llvm_path):
+            for library in (native,production_path):
                 result=subprocess.run([sys.executable,'-c',code,str(library),name,str(args[0])],capture_output=True,text=True,timeout=10)
                 clean_stderr(result)
                 assert result.returncode==101 and result.stdout==output,(mode,name,result)
                 results.append(result.stderr)
             assert results[0]==results[1],(mode,name,results)
             panic_count+=1
-        for lib in (fast,llvm):
+        for lib in (fast,production):
             for a in (0,1,10,1000):
                 assert configure(lib,'pointer_local',u64,1)(a)==a+1
                 assert configure(lib,'pointer_global',u64,1)(a)==a
@@ -1106,32 +1106,32 @@ return munmap(area,(size_t)page*2)!=0; }
                             if wrap: expected=ty(expected).value
                             elif not low<=expected<=high: error='overflow.ok'
                         if error: failures.setdefault(error,args);continue
-                        for lib in (fast,llvm):
+                        for lib in (fast,production):
                             fn=configure(lib,name,ty,len(args))
                             if op in ('shl','shr'): fn.argtypes=[ty,u64]
                             assert fn(*args)==expected,(mode,name,args,expected)
                         count+=1
                     panics.extend((name,signed,args,error) for error,args in failures.items())
             for a,b in itertools.product(values,repeat=2):
-                for lib in (fast,llvm):
+                for lib in (fast,production):
                     assert configure(lib,f'narrow_{tyname}_bits',ty,2)(a,b)==ty((~a&b)|(a^b)).value
                     assert configure(lib,f'narrow_{tyname}_stack',ty,8)(a,0,0,0,0,0,b,1)==ty(a+b+1).value
                 count+=2
             cb_type=ctypes.CFUNCTYPE(ty,ty)
             callback=cb_type(lambda value: ty(value+1).value)
-            for lib in (fast,llvm):
+            for lib in (fast,production):
                 fn=getattr(lib,f'narrow_{tyname}_apply');fn.argtypes=[cb_type,ty];fn.restype=ty
                 assert fn(callback,high)==ty(high+1).value
                 count+=1
             for a in values:
-                for lib in (fast,llvm):
+                for lib in (fast,production):
                     fn=configure(lib,f'narrow_{tyname}_ptr',ty,1);fn.restype=u64
                     assert fn(a)==(a&((1<<bits)-1))
                 count+=1
-                for lib in (fast,llvm): assert configure(lib,f'narrow_{tyname}_call',ty,1)(a)==a
+                for lib in (fast,production): assert configure(lib,f'narrow_{tyname}_call',ty,1)(a)==a
                 count+=1
             for a in (0,1,255,256,65535,65536,(1<<32)-1,(1<<64)-1):
-                for lib in (fast,llvm):
+                for lib in (fast,production):
                     fn=configure(lib,f'narrow_{tyname}_cast',u64,1);fn.restype=ty
                     assert fn(a)==ty(a).value
                 count+=1
@@ -1151,7 +1151,7 @@ return munmap(area,(size_t)page*2)!=0; }
                         if not low <= expected <= high: error = 'overflow.ok'
                     if error:
                         failures.setdefault(error,(a,b)); continue
-                    for lib in (fast,llvm): assert configure(lib,name,ty,2)(a,b) == expected, (name,a,b)
+                    for lib in (fast,production): assert configure(lib,name,ty,2)(a,b) == expected, (name,a,b)
                     count += 1
                 panics.extend((name,signed,args,error) for error,args in failures.items())
         for type_name in ('i64', 'u64', 'isize', 'usize'):
@@ -1162,7 +1162,7 @@ return munmap(area,(size_t)page*2)!=0; }
             for operation in OPERATORS:
                 name = f'checked_{type_name}_{operation}'
                 argc = 1 if operation == 'neg' else 2
-                ours, reference = [configure(lib, name, ty, argc) for lib in (fast, llvm)]
+                ours, reference = [configure(lib, name, ty, argc) for lib in (fast, production)]
                 vectors = list(itertools.product(edges, repeat=argc))
                 vectors += [tuple(rng.randint(low, high) for _ in range(argc)) for _ in range(100)]
                 vectors += [tuple(rng.randint(-1000000 if signed else 0, 1000000) for _ in range(argc)) for _ in range(100)]
@@ -1186,7 +1186,7 @@ return munmap(area,(size_t)page*2)!=0; }
                 right_values = values if operation in ('div', 'rem') else [0, 1, 2, 31, 32, 62, 63, 64, 65, 1 << 63, (1 << 64) - 1]
                 for wrap in (False, True):
                     name = f'{"wrap" if wrap else "checked"}_{type_name}_{operation}'
-                    ours, reference = [configure(lib, name, ty, 2) for lib in (fast, llvm)]
+                    ours, reference = [configure(lib, name, ty, 2) for lib in (fast, production)]
                     vectors = list(itertools.product(values, right_values))
                     vectors += [(rng.randint(low, high), rng.randint(low, high) if operation in ('div', 'rem') else rng.randrange(64)) for _ in range(100)]
                     failures = {}
@@ -1204,7 +1204,7 @@ return munmap(area,(size_t)page*2)!=0; }
                                              ('nested_div', False, (1, 8, 2), 5),
                                              ('nested_shift', True, (1, -1, 3), -7)]:
             ty = i64 if signed else u64
-            for lib in (fast, llvm): assert configure(lib, name, ty, len(args))(*args) == expected
+            for lib in (fast, production): assert configure(lib, name, ty, len(args))(*args) == expected
             count += 1
         panics += [('stack_order',False,((1<<64)-1,0),'divide.ok'),
                    ('stack_order',False,((1<<64)-1,1),'overflow.ok'),
@@ -1295,7 +1295,7 @@ raise AssertionError('overflow returned normally')
 '''
             import json
             results = []
-            for library in (native, llvm_path):
+            for library in (native, production_path):
                 result = subprocess.run([sys.executable, '-c', code, str(library), name,
                                          'signed' if signed else 'unsigned', json.dumps(args)],
                                         capture_output=True, text=True, timeout=10)
@@ -1318,7 +1318,7 @@ raise AssertionError('overflow returned normally')
         'frame-limit': 'pub fn fail() u64 {' + ''.join(f'x{i}:[1048576]u64 ' for i in range(3)) + 'return 0}',
         'enum-storage-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:E) E { return a }',
         'indirect-aggregate-limit': 'pub fn fail(f:*fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',
-        'global-aggregate-limit': 'stored:[2097153]u64 pub fn fail() u64 { return 0 }',
+        'global-aggregate-limit': 'stored:[536870912]u64 pub fn fail() u64 { return 0 }',
         'global-symbol-collision': 'stored:u64 extern fn alias "stored"() u64 pub fn fail() u64 { return alias() }',
         'parameter-limit': 'pub fn fail('+','.join(f'a{i}:u64' for i in range(513))+') u64 { return a512 }',
         'reserved-runtime': 'pub fn dyn_panic(a: u64) u64 { return a }',
@@ -1338,5 +1338,5 @@ raise AssertionError('overflow returned normally')
     source.write_bytes(b' ' * (16 * 1024 * 1024 + 1))
     reject(source, obj, 'exceeds 16 MiB')
     assert obj.read_bytes() == b'KEEP EXISTING OUTPUT'
-    print(f'PASS ELF relocations; {count} LLVM value comparisons; {panic_count} exact panic comparisons; '
+    print(f'PASS ELF relocations; {count} production value comparisons; {panic_count} exact panic comparisons; '
           f'{len(rejected)} rejection cases, new/existing outputs')
