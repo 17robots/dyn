@@ -82,7 +82,9 @@ native_sources = [backend/'compiler.c', backend/'dwarf.c']
 native_inputs = [backend/'vector.inc', backend/'allocation.inc', backend/'driver.c', backend/'isa.inc', backend/'a64.inc', backend/'rv64.inc',
                  backend/'coff.inc', backend/'macho.inc', backend/'reachability.inc',
                  backend/'elf64.h', backend/'output.h', backend/'dwarf.h']
-compiler_link('dyn-release', compiler_objects('release', ['-O2'], native_sources, native_inputs))
+# The shipped compiler carries symbols but no DWARF: 1 MB instead of 4.6 MB.
+# Debug the unoptimized build/dyn instead.
+compiler_link('dyn-release', compiler_objects('release', ['-O2', '-g0'], native_sources, native_inputs))
 compiler_link('dyn', compiler_objects('debug', [], native_sources, native_inputs))
 
 # Runtime objects are portable build products: no target C compiler/assembler.
