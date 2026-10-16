@@ -19,6 +19,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Build and exercise the compiler without LLVM
         run: python3 tests/no-llvm.py
   quality:
@@ -31,6 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-compiler
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - run: just release-check
       - name: Differential scalar backend experiment
         run: just test-backend-experiment

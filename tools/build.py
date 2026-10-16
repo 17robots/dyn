@@ -119,7 +119,7 @@ compiler_link('dyn-legacy', compiler_objects('legacy', ['-O2']))
 # Matched prepared-IR benchmark harness. Not installed or part of normal builds.
 backend_benchmark_objects = [f'obj/release/{name}.o' for name in
     ('frontend', 'ast', 'sema', 'sema_globals', 'source', 'source_tree',
-     'diagnostic', 'target', 'ir', 'codegen', 'link_elf', 'link_macho', 'link_coff', 'parser', 'snapshot')]
+     'diagnostic', 'target', 'ir', 'codegen', 'link_elf', 'link_macho', 'link_coff', 'link_wasm', 'parser', 'snapshot')]
 add('obj/benchmark/backend.o',
     [backend_experiment/'benchmark-driver.c', backend_experiment/'driver.c', backend_experiment/'output.h', *headers],
     [*cc, *object_cppflags, *cflags, '-O2', f'-I{COMPILER}/src',
@@ -182,14 +182,11 @@ add('llvm-bridge.o', [f'{COMPILER}/runtime/llvm_bridge.c'],
 add('dyn-sanitize', [BUILD/'thinlto.o', *sources, *headers],
     [*cc, *cppflags, *cflags, '-O1', '-fno-omit-frame-pointer', '-fsanitize=address,undefined', f'-I{COMPILER}/src', *sources, BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-o', f'{BUILD}/dyn-sanitize'], needs=['thinlto.o'])
 
-add('dynrt_wasm.o', [f'{COMPILER}/runtime/wasm_support.c'],
-    [*clang, '--target=wasm32-unknown-unknown', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasm_support.c', '-o', f'{BUILD}/dynrt_wasm.o'])
-
-add('dynrt_wasi_start.o', [f'{COMPILER}/runtime/wasi_start.c'],
-    [*clang, '--target=wasm32-wasip1', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasi_start.c', '-o', f'{BUILD}/dynrt_wasi_start.o'])
-
-add('dynrt_wasi_support.o', [f'{COMPILER}/runtime/wasi_support.c'],
-    [*clang, '--target=wasm32-wasip1', '-O2', '-ffreestanding', '-fno-builtin', '-c', f'{COMPILER}/runtime/wasi_support.c', '-o', f'{BUILD}/dynrt_wasi_support.o'])
+# Wasm runtime objects are generated directly; no target C compiler is needed.
+WASM_RUNTIME = ['dynrt_wasm.o', 'dynrt_wasi_start.o', 'dynrt_wasi_support.o']
+for name in WASM_RUNTIME:
+    add(name, [COMPILER/'tools/wasm-runtime.py'],
+        [sys.executable, COMPILER/'tools/wasm-runtime.py', '--output', BUILD/name])
 
 add('cache-failure-test', [f'{COMPILER}/tests/cache-failure.c', f'{COMPILER}/src/cache.c', f'{COMPILER}/src/build.c', *headers],
     [*cc, *cppflags, *cflags, f'-I{COMPILER}/src', 'tests/cache-failure.c', f'{COMPILER}/src/build.c', '-pthread', '-o', f'{BUILD}/cache-failure-test'])
@@ -224,8 +221,8 @@ add('frontend-failure-test', [f'{COMPILER}/tests/frontend-failure.c', f'{COMPILE
 add('analysis-cache-test', [f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/tests/fault-alloc.h', f'{COMPILER}/src/analysis_cache.c', *frontend, *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/analysis-cache.c', f'{COMPILER}/src/analysis_cache.c', *frontend, '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/analysis-cache-test'])
 
-add('codegen-failure-test', [BUILD/'thinlto.o', f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', *headers],
-    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'], needs=['thinlto.o'])
+add('codegen-failure-test', [BUILD/'thinlto.o', f'{COMPILER}/tests/frontend-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', *headers],
+    [*cc, *cppflags, *cflags, '-DTEST_CODEGEN', '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/frontend-failure.c', *frontend, f'{COMPILER}/src/ir.c', f'{COMPILER}/src/codegen.c', f'{COMPILER}/src/link_elf.c', f'{COMPILER}/src/link_macho.c', f'{COMPILER}/src/link_coff.c', f'{COMPILER}/src/link_wasm.c', BUILD/'thinlto.o', *llvm_ldflags, *llvm_libs, *cxxlibs, '-pthread', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/codegen-failure-test'], needs=['thinlto.o'])
 
 add('project-failure-test', [f'{COMPILER}/tests/project-failure.c', f'{COMPILER}/tests/fault-alloc.h', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', f'-I{COMPILER}/src', f'{COMPILER}/tests/project-failure.c', *frontend, f'{COMPILER}/src/module.c', f'{COMPILER}/src/module_rewrite.c', '-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=strdup,--wrap=strndup', '-o', f'{BUILD}/project-failure-test'])
@@ -257,7 +254,7 @@ add('interface-test', [COMPILER/'tests/interface-cache.c', *[COMPILER/'src'/n fo
 
 ALL = ['dynrt_wasi_start.o', 'dynrt_wasi_support.o', 'dynrt_wasm.o', 'dyn', 'dynrt_start.o', 'dynrt_release.o', 'dynrt_support.o', 'dynrt_support_pic.o', 'dynrt_aarch64_support_pic.o', 'dynrt_shared.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_windows_shared.o', 'dynrt_macos_shared.o', 'llvm-bridge.o']
 
-HOST = ['dyn-release'] + (
+HOST = ['dyn-release', *WASM_RUNTIME] + (
     ['dynrt_windows_start.o', 'dynrt_windows_support.o', 'dynrt_windows_shared.o'] if sys.platform == 'win32' else
     ['dynrt_macos_start.o', 'dynrt_macos_support.o', 'dynrt_macos_shared.o'] if sys.platform == 'darwin' else
     ['dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_support.o', 'dynrt_aarch64_shared.o', 'dynrt_aarch64_support_pic.o'] if platform.machine() == 'aarch64' else

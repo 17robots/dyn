@@ -15,6 +15,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Native compiler and SDK with system C tools
         run: python3 tests/no-llvm-host.py
   windows:
@@ -22,9 +25,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
+          path-type: inherit
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc

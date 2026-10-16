@@ -9,6 +9,7 @@
 #include "link_elf.h"
 #include "link_macho.h"
 #include "link_coff.h"
+#include "link_wasm.h"
 #ifndef DYN_NO_LLVM
 #include "thinlto.h"
 #include "llvm_shim.h"
@@ -3576,6 +3577,66 @@ static int link_wasm(const DynContext *context, const char *object_path, const c
     if (snprintf(wasi_support, sizeof(wasi_support), "%.*s/dynrt_wasi_support.o", (int)length, support) >= (int)sizeof(wasi_support) ||
         snprintf(wasi_start, sizeof(wasi_start), "%.*s/dynrt_wasi_start.o", (int)length, support) >= (int)sizeof(wasi_start)) return 2;
   }
+  const char *selection = getenv("DYN_LINKER");
+  if (!selection || strcmp(selection, "external")) {
+    const char **objects = calloc(count + 4, sizeof(*objects));
+    char **allowed = NULL;
+    size_t object_count = 0, allowed_count = 0;
+    uint32_t maximum = 0;
+    int result = 2;
+    if (!objects) return 2;
+    objects[object_count++] = support;
+    objects[object_count++] = object_path;
+    if (wasi) { objects[object_count++] = wasi_support; objects[object_count++] = wasi_start; }
+    for (size_t i = 0; i < count; ++i) {
+      if (!strncmp(inputs[i], "--max-memory=", 13)) {
+        char *end;
+        unsigned long long value = strtoull(inputs[i] + 13, &end, 10);
+        if (!inputs[i][13] || *end || !value || value > UINT32_MAX || value % 65536) {
+          fprintf(stderr, "error: Wasm maximum memory must be a positive multiple of 65536 below 4 GiB\n");
+          goto wasm_done;
+        }
+        maximum = (uint32_t)value;
+      } else if (inputs[i][0] == '-') {
+        fprintf(stderr, "error: unsupported built-in Wasm linker option: %s\n", inputs[i]);
+        goto wasm_done;
+      } else objects[object_count++] = inputs[i];
+    }
+    /* The emitter records explicitly declared imports. Undefined symbols must
+       never silently become host imports. */
+    char import_path[8192];
+    if (snprintf(import_path, sizeof(import_path), "%s.imports", object_path) >= (int)sizeof(import_path)) goto wasm_done;
+    FILE *file = fopen(import_path, "rb");
+    if (!file) { fprintf(stderr, "error: cannot read Wasm import manifest: %s\n", import_path); goto wasm_done; }
+    char line[4096];
+    bool manifest_ok = true;
+    while (fgets(line, sizeof(line), file)) {
+      size_t length = strcspn(line, "\r\n");
+      if (length == sizeof(line)-1) { manifest_ok = false; break; }
+      line[length] = 0;
+      if (!length) continue;
+      char **grown = realloc(allowed, (allowed_count + 1) * sizeof(*allowed));
+      if (!grown) { manifest_ok = false; break; }
+      allowed = grown;
+      allowed[allowed_count] = strdup(line);
+      if (!allowed[allowed_count]) { manifest_ok = false; break; }
+      ++allowed_count;
+    }
+    if (ferror(file)) manifest_ok = false;
+    fclose(file);
+    if (manifest_ok)
+      result = dyn_link_wasm_objects(objects, object_count, output_path,
+          (const char *const *)allowed, allowed_count, wasi, maximum, verbose);
+wasm_done:
+    for (size_t i = 0; i < allowed_count; ++i) free(allowed[i]);
+    free(allowed);
+    free(objects);
+    return result;
+  }
+#ifdef DYN_NO_LLVM
+  fprintf(stderr, "error: external Wasm linking is disabled in the LLVM-free compiler\n");
+  return 2;
+#endif
   if (snprintf(temporary, sizeof(temporary), "%s.tmp", output_path) >= (int)sizeof(temporary)) return 2;
   if (verbose) fprintf(stderr, "+ wasm-ld --no-entry --export-memory -o %s %s %s\n", temporary, support, object_path);
   char **args = calloc(count + 16, sizeof(*args));

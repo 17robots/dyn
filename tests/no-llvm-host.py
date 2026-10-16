@@ -16,7 +16,7 @@ env = dict(os.environ, DYN_WITH_LLVM='0', LLVM_CONFIG='false', CXX='false',
 subprocess.run([sys.executable, 'tools/build.py', 'host'], cwd=ROOT, env=env, check=True)
 env['DYN'] = str(BUILD/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))
 for test in ('lsp-navigation', 'shared-host', 'compiler-contracts', 'zero-values',
-             'panic-lifetime', 'native-release', 'wrap-enum-values', 'stdlib-host',
+             'panic-lifetime', 'native-release', 'wasm-independent', 'wrap-enum-values', 'stdlib-host',
              'sync-host', 'concurrency-net-host'):
     subprocess.run([sys.executable, 'tests/'+test+'.py'], cwd=ROOT, env=env, check=True)
 if sys.platform in ('darwin', 'win32'):
@@ -35,7 +35,8 @@ if sys.platform in ('darwin', 'win32'):
         relocated = dict(env)
         relocated.pop('DYN_SDK', None)
         relocated['DYN'] = str(destination/'dyn-sdk/bin'/('dyn.exe' if os.name == 'nt' else 'dyn'))
-        for test in ('shared-host', 'stdlib-host'):
+        relocated['DYN_TEST_INSTALLED'] = '1'
+        for test in ('shared-host', 'stdlib-host', 'wasm-independent'):
             subprocess.run([sys.executable, str(ROOT/'tests'/ (test+'.py'))],
                            cwd=destination, env=relocated, check=True)
 print('PASS LLVM-free host compiler and debug/release runtime contracts')
