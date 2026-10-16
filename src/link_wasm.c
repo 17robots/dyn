@@ -744,9 +744,8 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
   l->na = import_count;
   l->wasi = wasi;
   inputs(l, paths, count);
-  count = l->count;
   uint32_t address = 1024, nf = 0, ng = 1, nd = 0;
-  for (size_t k = 0; k < count; k++) {
+  for (size_t k = 0; k < l->count; k++) {
     Object *o = &l->objects[k];
     nf += o->nf;
     ng += o->ng;
@@ -773,7 +772,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
   uint32_t stack_low = (address + 15u) & ~15u;
   uint32_t heap = stack_low + 1048576u;
   uint32_t fn = l->ni, gn = 1;
-  for (size_t k = 0; k < count; k++) {
+  for (size_t k = 0; k < l->count; k++) {
     Object *o = &l->objects[k];
     for (uint32_t i = 0; i < o->nf; i++)
       o->fmap[o->nfimp + i] = fn++;
@@ -794,7 +793,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
       }
     }
   }
-  for (size_t k = 0; k < count; k++) {
+  for (size_t k = 0; k < l->count; k++) {
     Object *o = &l->objects[k];
     for (uint32_t i = 0; i < o->ny; i++) {
       Symbol *y = &o->symbols[i];
@@ -841,7 +840,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
     b = (Buf){0};
   }
   uleb(l, &b, nf);
-  for (size_t k = 0; k < count; k++) {
+  for (size_t k = 0; k < l->count; k++) {
     Object *o = &l->objects[k];
     for (uint32_t i = 0; i < o->nf; i++)
       uleb(l, &b, mapped_type(l, o, o->functions[i]));
@@ -872,7 +871,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
   byte(l, &b, 0x41);
   sleb(l, &b, (int32_t)heap);
   byte(l, &b, 0xb);
-  for (size_t k = 0; k < count; k++)
+  for (size_t k = 0; k < l->count; k++)
     for (uint32_t i = 0; i < l->objects[k].ng; i++)
       put(l, &b, l->objects[k].globals[i].p, l->objects[k].globals[i].n);
   section(l, &out, 6, &b);
@@ -880,7 +879,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
   Buf ex = {0};
   uint32_t ne = 1;
   export_one(l, &ex, "memory", 2, 0);
-  for (size_t k = 0; k < count; k++) {
+  for (size_t k = 0; k < l->count; k++) {
     Object *o = &l->objects[k];
     for (uint32_t i = 0; i < o->ne; i++) {
       Export *e = &o->exports[i];
@@ -924,7 +923,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
     b = (Buf){0};
   }
   uleb(l, &b, nf);
-  for (size_t k = 0; k < count; k++) {
+  for (size_t k = 0; k < l->count; k++) {
     Object *o = &l->objects[k];
     for (uint32_t i = 0; i < o->nf; i++) {
       uleb(l, &b, o->sizes[i]);
@@ -935,7 +934,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
   b = (Buf){0};
   if (nd) {
     uleb(l, &b, nd);
-    for (size_t k = 0; k < count; k++) {
+    for (size_t k = 0; k < l->count; k++) {
       Object *o = &l->objects[k];
       for (uint32_t i = 0; i < o->nd; i++) {
         Segment *d = &o->data[i];
@@ -955,7 +954,7 @@ int dyn_link_wasm_objects(const char *const *paths, size_t count,
     fprintf(stderr,
             "+ built-in Wasm linker: %zu objects, %u functions, %u memory "
             "pages -> %s\n",
-            count, nf, pages, output);
+            l->count, nf, pages, output);
   status = 0;
 cleanup:
   while (l->allocations) {
