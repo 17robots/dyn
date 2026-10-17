@@ -23,6 +23,11 @@ servers so they pick up the new `dyn`.
   LLVM backend and C++ ThinLTO bridge are removed; `--backend llvm` now reports
   an error. Source builds require a C11 compiler and Python. Optional LLVM tools
   remain useful for validating exported assembly in tests.
+- Release builds for x86-64 and AArch64 on Linux and macOS generate code
+  through an SSA optimizer and register allocator. Typical loops run two to
+  three times faster and binaries are about 30% smaller. Runtime checks, their
+  order and their messages are unchanged. `DYN_NO_SSA=1` selects the previous
+  code generator, and `--opt-remarks` reports functions that still use it.
 - `--emit-ir` is removed; use `--emit-asm` to inspect generated code. The
   LLVM-syntax writer behind it was the last LLVM-shaped code in the compiler.
 - Native targets include Linux x86-64, AArch64 and RISC-V64, macOS x86-64 and

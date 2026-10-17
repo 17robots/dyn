@@ -15,7 +15,9 @@ Wasm output is written by `src/codegen_wasm.c`, not by this backend.
 | File | Contents |
 | --- | --- |
 | `compiler.c` | Entry point used by the compiler (`dyn_native_object`) |
-| `driver.c` | IR walker: functions, statements, expressions, calls, runtime checks, defers |
+| `driver.c` | Tree emitter: functions, statements, expressions, calls, runtime checks, defers |
+| `ssa.inc` | SSA code generation: construction, optimization, register allocation, x86-64 emission |
+| `ssa_a64.inc` | AArch64 emission for SSA code generation |
 | `isa.inc` | x86-64 encodings |
 | `a64.inc` | AArch64 encodings |
 | `rv64.inc` | RISC-V64 encodings |
@@ -29,6 +31,23 @@ Wasm output is written by `src/codegen_wasm.c`, not by this backend.
 | `reentrant-unit.c`, `output-unit.c` | Unit tests for repeated emission and publication |
 
 ## Code generation
+
+Optimized builds for x86-64 Linux and macOS and AArch64 Linux and macOS use
+SSA code generation (`ssa.inc`), modeled on Go's compiler. Each function is
+built into SSA form while walking the IR (Braun et al.), then optimized:
+constant folding, dominator-based CSE that also removes repeated checks, a
+range prover that removes bounds and overflow checks it can prove, division
+by constants through multiplication, and loop-invariant code motion. Dense
+`case` statements become jump tables. Linear-scan register allocation runs
+over all values, with clobber-aware live intervals and hints that coalesce
+moves. Emission runs twice so the second pass can use short branches.
+
+A function the SSA path cannot build yet falls back to the tree emitter;
+`--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds,
+Windows, RISC-V64 and AArch64 functions with stack-passed arguments use the
+tree emitter. `DYN_NO_SSA=1` selects the tree emitter everywhere. SSA code
+keeps the runtime checks, their order and their messages, so both paths
+produce the same output; `tests/native-ssa.py` checks that across targets.
 
 `driver.c` emits named operations from the target `.inc` file over a small
 register model: an accumulator, a descriptor word, an operand register, scratch
@@ -106,6 +125,9 @@ From the compiler directory:
   the x86-64 Linux results, and runs them on native runners with `--run`.
 - `tools/backend/feature-contracts.py` and `global-contracts.py` cover enums,
   `any`, variadics, globals, initializers and shared constructors.
+- `tests/native-ssa.py` checks division by constants against hardware
+  division and compares SSA and tree-emitter output on x86-64 and AArch64.
+- `tools/bench/run.py` times five kernels against `cc -O2` and Go.
 - `tools/backend/object-hashes.py --compare` checks that a refactor leaves
   emitted objects byte-identical.
 
