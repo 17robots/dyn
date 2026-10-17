@@ -95,6 +95,21 @@ fn main() {
   _ = io.println(io.stdout(), "{}", total)
 }
 ''',
+    'stack-arguments': '''use "std/io"
+struct Pair { a: i64, b: f64 }
+struct Wide { a: i64, b: i64, c: i64 }
+fn many(a: i64, b: i8, c: i64, d: u16, e: i64, f: i32, g: i64, h: u8, i: i64, j: i8, k: f32, l: f64, m: Pair, n: Wide) f64 {
+  return #cast(f64) (a + #cast(i64) b + c + #cast(i64) d + e + #cast(i64) f + g + #cast(i64) h + i + #cast(i64) j) + #cast(f64) k + l + m.b + #cast(f64) (m.a + n.a + n.b + n.c)
+}
+fn floats(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f32, j: f64, k: f32) f64 {
+  return a + b * 2.0 + c * 3.0 + d * 4.0 + e * 5.0 + f * 6.0 + g * 7.0 + h * 8.0 + #cast(f64) i * 9.0 + j * 10.0 + #cast(f64) k * 11.0
+}
+fn main() {
+  x := many(1, -2, 3, 4, 5, -6, 7, 8, 9, -10, 1.5, 2.25, Pair{a: 11, b: 0.5}, Wide{a: 12, b: 13, c: 14})
+  y := floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5, 10.0, 11.5)
+  _ = io.println(io.stdout(), "{} {}", #cast(i64) (x * 4.0), #cast(i64) (y * 2.0))
+}
+''',
 }
 
 

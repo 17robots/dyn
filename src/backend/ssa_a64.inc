@@ -280,6 +280,14 @@ static void a64s_protect_end(SsaEmit *e) {
   a64s_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 5);
   for (unsigned i = 0; i < 6; ++i) a64s_slot_access(ctx, false, saved[i], (SsaMemory){A64_FP, -1, 1, at + 8 * (int32_t)i});
 }
+/* A stack argument: `width` bytes of the value at SP + offset. */
+static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsigned width) {
+  SsaValue *v = &e->s->values[value];
+  bool floating = v->cls == SC_F64 || v->cls == SC_F32;
+  unsigned reg = a64s_get(e, value, floating ? X_XMM0 + A_F1 : A_S1);
+  if (floating && width < 4) width = 4;
+  a64s_memory(e->ctx, width * 8, false, floating, true, floating ? a64s_v(reg) : reg, (SsaMemory){A64_SP, -1, 1, (int32_t)offset});
+}
 static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   uint32_t id = block->values.items[*k];

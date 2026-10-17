@@ -44,8 +44,8 @@ moves. Emission runs twice so the second pass can use short branches.
 
 A function the SSA path cannot build yet falls back to the tree emitter;
 `--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds,
-Windows, RISC-V64 and AArch64 functions with stack-passed arguments use the
-tree emitter. `DYN_NO_SSA=1` selects the tree emitter everywhere. SSA code
+Windows and RISC-V64 use the tree emitter. `DYN_NO_SSA=1` selects the tree
+emitter everywhere. SSA code
 keeps the runtime checks, their order and their messages, so both paths
 produce the same output; `tests/native-ssa.py` checks that across targets.
 

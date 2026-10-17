@@ -945,6 +945,22 @@ static void ssa_argument(Ssa *s, SsaArguments *list, int32_t value, int32_t loca
 static void ssa_pass(Ssa *s, SsaArguments *list, DynType type, int32_t value, int32_t second,
                      AbiPart *parts, unsigned count, uint32_t *stack) {
   const DynIrProgram *ir = s->ir;
+  if (s->ctx->a64) {
+    /* AAPCS64 stack parts take their own slots: eight bytes on Linux, natural
+       size on Apple. bytes = -width marks a stack store of that width. */
+    for (unsigned i = 0; i < count; ++i) {
+      bool floating = float_type(storage_type(ir, parts[i].leaf)) || parts[i].cls >= 8;
+      int32_t part;
+      if (aggregate(ir, type))
+        part = floating ? ssa_load(s, value, -1, 1, parts[i].offset, SSA_MEM(parts[i].size == 4 ? 32 : 64, 0, 1))
+                        : ssa_load_bytes(s, value, parts[i].offset, parts[i].size);
+      else part = i ? second : value;
+      if (parts[i].cls >= 0) { ssa_argument(s, list, part, parts[i].cls, 0); continue; }
+      uint32_t at = stack_slot(s->ctx, &parts[i], stack);
+      ssa_argument(s, list, part, SSA_STACK + (int32_t)at, -(int32_t)stack_width(s->ctx, &parts[i]));
+    }
+    return;
+  }
   if (aggregate(ir, type)) {
     uint32_t size, alignment;
     if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
@@ -1050,7 +1066,6 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       SSA_GIVE_UP(s); break;
     }
     /* AArch64 stack arguments differ by platform; they stay with the tree emitter. */
-    for (unsigned k = 0; k < count; ++k) if (ctx->a64 && parts[k].cls < 0) SSA_GIVE_UP(s);
     int32_t value, length = -1;
     if (i < fixed) {
       DynExprId argument = ir->items[e->item_start + i].expression;
@@ -1080,10 +1095,11 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     if (by_pointer) {
       /* AAPCS64 composites over 16 bytes: a pointer to a caller-owned copy. */
       uint32_t size, alignment;
-      if (!layout(ir, type, &size, &alignment, 0) || parts[0].cls < 0) { SSA_GIVE_UP(s); break; }
+      if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); break; }
       int32_t copy = ssa_temporary(s, type);
       ssa_emit(s, SO_COPYMEM, SC_NONE, copy, value, -1, size, 0);
-      ssa_argument(s, &list, copy, parts[0].cls, 0);
+      if (parts[0].cls >= 0) ssa_argument(s, &list, copy, parts[0].cls, 0);
+      else ssa_argument(s, &list, copy, SSA_STACK + (int32_t)stack_slot(ctx, &parts[0], &stack), -8);
       continue;
     }
     ssa_pass(s, &list, type, value, length, parts, count, &stack);
@@ -1975,7 +1991,6 @@ static void ssa_build(Ssa *s) {
     if (raw_aggregate(ir, type) || !abi_assign(ctx, ir, type, &gp, &fp, parts, &n, 512, &by_pointer) ||
         count + n > 512 || i >= 512) { SSA_GIVE_UP(s); return; }
     if (by_pointer) parts[0].leaf = DYN_TYPE_RAWPTR; /* marks the copy-from pointer */
-    for (unsigned k = 0; k < n; ++k) if (ctx->a64 && parts[k].cls < 0) { SSA_GIVE_UP(s); return; }
     firsts[i] = count;
     for (unsigned k = 0; k < n; ++k) {
       AbiPart part = parts[k];
@@ -1984,7 +1999,8 @@ static void ssa_build(Ssa *s) {
         uint8_t cls = part.cls >= 8 ? (part.leaf == DYN_TYPE_F32 || (aggregate(ir, type) && part.size == 4) ? SC_F32 : SC_F64) : SC_INT;
         if (part.cls >= 8 && !aggregate(ir, type)) cls = ssa_class(type);
         v = ssa_emit(s, SO_PARAM, cls, -1, -1, -1, part.cls, 0);
-      } else { part.stack = stack; stack += 8; }
+      } else if (ctx->a64) stack_slot(ctx, &part, &stack);
+      else { part.stack = stack; stack += 8; }
       incoming[count++] = (Incoming){v, part};
     }
   }
@@ -2009,7 +2025,9 @@ static void ssa_build(Ssa *s) {
       int32_t address = ssa_frame(s, s->local_offset[local]);
       if (n == 1 && incoming[next].part.leaf == DYN_TYPE_RAWPTR) {
         /* Passed as a pointer to the caller's copy. */
-        ssa_emit(s, SO_COPYMEM, SC_NONE, address, incoming[next].value, -1, size, 1);
+        int32_t pointer = incoming[next].part.cls >= 0 ? incoming[next].value
+                          : ssa_load(s, ssa_frame(s, 16 + incoming[next].part.stack), -1, 1, 0, SSA_MEM(64, 0, 0));
+        ssa_emit(s, SO_COPYMEM, SC_NONE, address, pointer, -1, size, 1);
         next += 1;
         continue;
       }
@@ -3554,6 +3572,7 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
   ssa_transfer(e, L_REG, X_RDI, move.src_kind, move.src, SC_INT, X_R10);
   CODE(0x31, 0xc0, 0xb9); word(ctx, size); CODE(0xfc, 0xf3, 0xaa);
 }
+static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsigned width);
 static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   uint32_t id = block->values.items[*k];
@@ -3577,10 +3596,16 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
       at += (int32_t)width;
     }
   }
+  for (uint32_t i = 0; i < v->count && ctx->a64; ++i) {
+    int32_t value = (int32_t)s->lists[v->list + 3 * i], location = (int32_t)s->lists[v->list + 3 * i + 1];
+    int32_t bytes = (int32_t)s->lists[v->list + 3 * i + 2];
+    if (location < SSA_STACK || bytes > 0) continue;
+    a64s_store_outgoing(e, value, (uint32_t)(location - SSA_STACK), bytes ? (unsigned)-bytes : 8);
+  }
   for (uint32_t i = 0; i < v->count; ++i) {
     int32_t value = (int32_t)s->lists[v->list + 3 * i], location = (int32_t)s->lists[v->list + 3 * i + 1];
     int32_t bytes = (int32_t)s->lists[v->list + 3 * i + 2];
-    if (bytes > 0) continue;
+    if (bytes > 0 || (ctx->a64 && location >= SSA_STACK)) continue;
     SsaMove m = ssa_source(e, value);
     if (location >= SSA_STACK) { m.dst_kind = L_OUT; m.dst = location - SSA_STACK; }
     else if (location == SSA_TARGET || location == SSA_RESULT_POINTER) { m.dst_kind = L_REG; m.dst = ssa_location_register(ctx, location); }
