@@ -379,5 +379,22 @@ int main(int argc, char **argv) {
         sizes.append(len(assembly))
     assert sizes[1] < sizes[0] * 20, sizes
 
+    # Iterating a large array by value copies it with a loop, not one load and
+    # store per word.
+    directory = root / 'large-copy'
+    directory.mkdir()
+    (directory / 'main.dyn').write_text('''values: [65536]u64
+fn main() {
+  values[3] = 7
+  total: u64 = 0
+  for value in values { total += value }
+  if total != 7 { #panic("WRONG TOTAL") }
+}
+''')
+    output = directory / 'large-copy'
+    build(directory, output, '--release')
+    assert subprocess.run([str(output)], timeout=10).returncode == 0
+    assert output.stat().st_size < 200_000, output.stat().st_size
+
 print('PASS backend ranges, compound targets, NaN, guard dominance, string bytes '
       '(debug/release), and bounded guard code')

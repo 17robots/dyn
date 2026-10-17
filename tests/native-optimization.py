@@ -99,9 +99,13 @@ fn main() {
             '--emit-object', '--no-link', '--output', output)
         data = output.with_suffix('.o').read_bytes()
         if cpu == 'native' and '+bmi2 variable shifts' in result.stderr:
-            assert bytes.fromhex('c4e2f1f7c0') in data, 'missing selected shlx'
-            assert bytes.fromhex('c4e2f3f7c0') in data, 'missing selected shrx'
-            assert bytes.fromhex('c4e2f2f7c0') in data, 'missing selected sarx'
+            # VEX.0F38.W1 F7 with any registers; pp selects shlx, shrx or sarx.
+            def vex_shift(pp):
+                return any(data[i] == 0xc4 and data[i + 1] & 0x1f == 2 and data[i + 2] & 0x83 == 0x80 | pp and
+                           data[i + 3] == 0xf7 for i in range(len(data) - 3))
+            assert vex_shift(1), 'missing selected shlx'
+            assert vex_shift(3), 'missing selected shrx'
+            assert vex_shift(2), 'missing selected sarx'
     # Dynamic calls must preserve argument snapshots, local identities, lexical
     # cleanup and all return paths. These cannot use constant-call evaluation.
     (module/'main.dyn').write_text('''
