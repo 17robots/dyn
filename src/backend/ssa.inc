@@ -76,7 +76,8 @@ typedef struct {
 typedef struct {
   uint32_t *items; uint32_t count, capacity;
 } SsaList;
-enum { SB_PLAIN, SB_IF, SB_RETURN, SB_EXIT, SB_CALL /* protected call: succ[0] normal, succ[1] unwinding */ };
+enum { SB_PLAIN, SB_IF, SB_RETURN, SB_EXIT, SB_CALL /* protected call: succ[0] normal, succ[1] unwinding */,
+       SB_SWITCH /* jump table on control: lists[table] = minimum, entries, default, targets... */ };
 typedef struct {
   SsaList values, preds;
   uint32_t succ[2];
@@ -85,6 +86,7 @@ typedef struct {
   int32_t control;     /* SB_IF: condition; SB_RETURN: value or -1 */
   int32_t control2;    /* SB_RETURN: second word of a descriptor result */
   int32_t control3, control4; /* SB_RETURN: third and fourth result parts (AArch64 HFAs) */
+  uint32_t table;      /* SB_SWITCH: index into the value lists */
   uint32_t order, idom, depth, loop_depth;
   size_t at;           /* emitted text offset */
 } SsaBlock;
@@ -1413,6 +1415,114 @@ static bool ssa_vector(Ssa *s, const DynIrStmt *st) {
             s->f->name, (unsigned long long)n, lanes, (unsigned long long)(n % lanes));
   return true;
 }
+/* The value a case pattern matches, as the subject compares it. */
+static bool ssa_pattern_range(Ssa *s, const DynIrPattern *p, DynType type, bool any, uint64_t *first, uint64_t *last) {
+  const DynIrProgram *ir = s->ir;
+  *first = p->first; *last = p->last;
+  if (p->is_enum) {
+    if (!dyn_type_is_enum(type) || p->variant >= ir->variant_count) return false;
+    *first = *last = ir->variants[p->variant].tag;
+    unsigned bits = integer_bits(storage_type(ir, type));
+    if (signed_scalar(storage_type(ir, type)) && bits < 64 && (*first >> (bits - 1) & 1)) *first = *last = *first | (UINT64_MAX << bits);
+  } else if (p->is_type) { if (!any) return false; *first = *last = p->type; }
+  return true;
+}
+/* An arm's binding and statements, then the jump past the case. */
+static void ssa_case_body(Ssa *s, const DynIrCaseArm *arm, int32_t pointer, uint32_t done, unsigned depth) {
+  const DynIrProgram *ir = s->ir;
+  if (arm->local_id != UINT32_MAX) {
+    uint32_t binding;
+    if (!arm->pattern_count || !ssa_local_index(s, arm->local_id, &binding)) { SSA_GIVE_UP(s); return; }
+    const DynIrPattern *pattern = &ir->patterns[arm->pattern_start];
+    if (!pattern->is_type && !pattern->is_enum) { SSA_GIVE_UP(s); return; }
+    DynType bound = ir->locals[arm->local_id].type;
+    if (arm->pointer_binding) s->alias[binding] = pointer;
+    else if (value_type(ir, bound)) {
+      int32_t second = -1, value = ssa_load_value(s, pointer, bound, &second);
+      ssa_set_local(s, binding, value, second);
+    } else {
+      if (!ssa_in_memory(s, binding)) { SSA_GIVE_UP(s); return; }
+      ssa_store_value(s, ssa_local_address(s, binding), bound, pointer, -1);
+    }
+  }
+  ssa_statements(s, arm->body_start, arm->body_count, depth + 1);
+  if (arm->local_id != UINT32_MAX && arm->pointer_binding) s->alias[arm->local_id - s->f->local_start] = -1;
+  ssa_jump(s, done);
+}
+/* Dense single-value cases dispatch through a jump table: at least four
+   values spanning at most four slots per value. Earlier arms win, as in the
+   compare chain. Returns false when the case does not qualify. */
+static bool ssa_case_table(Ssa *s, const DynIrStmt *st, DynType type, bool any, int32_t subject, int32_t pointer,
+                           uint32_t done, unsigned depth) {
+  const DynIrProgram *ir = s->ir;
+  uint32_t values = 0, wildcard = UINT32_MAX;
+  int64_t minimum = INT64_MAX, maximum = INT64_MIN;
+  for (uint32_t i = 0; i < st->case_arm_count && wildcard == UINT32_MAX; ++i) {
+    const DynIrCaseArm *arm = &ir->case_arms[st->case_arm_start + i];
+    if (arm->wildcard) { if (arm->pattern_count) return false; wildcard = i; break; }
+    for (uint32_t j = 0; j < arm->pattern_count; ++j) {
+      uint64_t first, last;
+      if (!ssa_pattern_range(s, &ir->patterns[arm->pattern_start + j], type, any, &first, &last) || first != last) return false;
+      if ((int64_t)first < minimum) minimum = (int64_t)first;
+      if ((int64_t)first > maximum) maximum = (int64_t)first;
+      ++values;
+    }
+  }
+  if (values < 4 || (uint64_t)maximum - (uint64_t)minimum >= 4096 || (uint64_t)maximum - (uint64_t)minimum + 1 > 4 * (uint64_t)values) return false;
+  uint32_t entries = (uint32_t)((uint64_t)maximum - (uint64_t)minimum + 1);
+  uint32_t *bodies = malloc((st->case_arm_count + 1) * sizeof(uint32_t)), *targets = malloc(entries * sizeof(uint32_t));
+  if (!bodies || !targets) { free(bodies); free(targets); s->failed = true; return true; }
+  for (uint32_t i = 0; i < st->case_arm_count; ++i) bodies[i] = ssa_block(s);
+  uint32_t fallback = wildcard != UINT32_MAX ? bodies[wildcard] : ssa_block(s);
+  for (uint32_t k = 0; k < entries; ++k) targets[k] = fallback;
+  uint32_t last_arm = wildcard != UINT32_MAX ? wildcard : st->case_arm_count;
+  for (uint32_t i = last_arm; i-- > 0;) {
+    const DynIrCaseArm *arm = &ir->case_arms[st->case_arm_start + i];
+    for (uint32_t j = arm->pattern_count; j-- > 0;) {
+      uint64_t first, last;
+      ssa_pattern_range(s, &ir->patterns[arm->pattern_start + j], type, any, &first, &last);
+      targets[first - (uint64_t)minimum] = bodies[i];
+    }
+  }
+  int32_t *items = malloc((3 + entries) * sizeof(int32_t));
+  if (!items) { free(bodies); free(targets); s->failed = true; return true; }
+  items[0] = (int32_t)(uint32_t)(uint64_t)minimum; items[1] = (int32_t)entries; items[2] = (int32_t)fallback;
+  for (uint32_t k = 0; k < entries; ++k) items[3 + k] = (int32_t)targets[k];
+  uint32_t from = s->current;
+  SsaBlock *b = &s->blocks[from];
+  b->kind = SB_SWITCH; b->control = subject;
+  b->table = ssa_list(s, items, 3 + entries) ;
+  /* lists[table]: low half of the minimum, then [table+1] entries; keep the
+     full 64-bit minimum in aux of a constant control offset. */
+  b->control2 = ssa_value(s, from, SO_CONST, SC_INT, -1, -1, -1, minimum, 0);
+  free(items);
+  /* One predecessor edge per distinct target. */
+  for (uint32_t i = 0; i <= st->case_arm_count; ++i) {
+    uint32_t target = i < st->case_arm_count ? bodies[i] : fallback;
+    if (i == st->case_arm_count && wildcard != UINT32_MAX) break;
+    bool used = target == fallback;
+    for (uint32_t k = 0; k < entries && !used; ++k) used = targets[k] == target;
+    if (used) ssa_push(s, &s->blocks[target].preds, from);
+  }
+  s->current = UINT32_MAX;
+  for (uint32_t i = 0; i < st->case_arm_count && !s->unsupported; ++i) {
+    ssa_seal(s, bodies[i]);
+    if (!s->blocks[bodies[i]].preds.count) continue;
+    s->current = bodies[i];
+    ssa_case_body(s, &ir->case_arms[st->case_arm_start + i], pointer, done, depth);
+  }
+  if (wildcard == UINT32_MAX) {
+    ssa_seal(s, fallback);
+    s->current = fallback;
+    ssa_emit(s, SO_TRAP, SC_NONE, -1, -1, -1, 0, 0);
+    s->blocks[fallback].kind = SB_EXIT;
+  }
+  s->current = UINT32_MAX;
+  free(bodies); free(targets);
+  ssa_seal(s, done);
+  s->current = s->blocks[done].preds.count ? done : UINT32_MAX;
+  return true;
+}
 /* case: arms test their patterns in order; each pattern is a value or an
    inclusive range, compared signed or unsigned like the subject. Payload
    enums match on a snapshot of the value unless an arm binds a pointer. */
@@ -1444,20 +1554,15 @@ static void ssa_case(Ssa *s, const DynIrStmt *st, unsigned depth) {
   bool sign = signed_scalar(storage_type(ir, type));
   uint32_t done = ssa_block(s);
   if (s->failed) return;
+  if (ssa_case_table(s, st, type, any, subject, payload ? ssa_add_offset(s, data, payload_offset) : data, done, depth)) return;
   for (uint32_t i = 0; i < st->case_arm_count && !s->unsupported && s->current != UINT32_MAX; ++i) {
     const DynIrCaseArm *arm = &ir->case_arms[st->case_arm_start + i];
     if ((uint64_t)arm->pattern_start + arm->pattern_count > ir->pattern_count) { SSA_GIVE_UP(s); return; }
     uint32_t body = ssa_block(s), next = ssa_block(s);
     if (s->failed) return;
     for (uint32_t j = 0; j < arm->pattern_count; ++j) {
-      const DynIrPattern *p = &ir->patterns[arm->pattern_start + j];
-      uint64_t first = p->first, last = p->last;
-      if (p->is_enum) {
-        if (!dyn_type_is_enum(type) || p->variant >= ir->variant_count) { SSA_GIVE_UP(s); return; }
-        first = last = ir->variants[p->variant].tag;
-        unsigned bits = integer_bits(storage_type(ir, type));
-        if (sign && bits < 64 && (first >> (bits - 1) & 1)) first = last = first | (UINT64_MAX << bits);
-      } else if (p->is_type) { if (!any) { SSA_GIVE_UP(s); return; } first = last = p->type; }
+      uint64_t first, last;
+      if (!ssa_pattern_range(s, &ir->patterns[arm->pattern_start + j], type, any, &first, &last)) { SSA_GIVE_UP(s); return; }
       uint32_t miss = ssa_block(s);
       if (s->failed) return;
       if (first == last) ssa_branch(s, ssa_compare(s, subject, ssa_const(s, first, SC_INT), CC_E), body, miss);
@@ -1475,25 +1580,7 @@ static void ssa_case(Ssa *s, const DynIrStmt *st, unsigned depth) {
     ssa_jump(s, arm->wildcard ? body : next);
     ssa_seal(s, body);
     s->current = body;
-    if (arm->local_id != UINT32_MAX) {
-      uint32_t binding;
-      if (!arm->pattern_count || !ssa_local_index(s, arm->local_id, &binding)) { SSA_GIVE_UP(s); return; }
-      const DynIrPattern *pattern = &ir->patterns[arm->pattern_start];
-      if (!pattern->is_type && !pattern->is_enum) { SSA_GIVE_UP(s); return; }
-      int32_t pointer = payload ? ssa_add_offset(s, data, payload_offset) : data;
-      DynType bound = ir->locals[arm->local_id].type;
-      if (arm->pointer_binding) s->alias[binding] = pointer;
-      else if (value_type(ir, bound)) {
-        int32_t second = -1, value = ssa_load_value(s, pointer, bound, &second);
-        ssa_set_local(s, binding, value, second);
-      } else {
-        if (!ssa_in_memory(s, binding)) { SSA_GIVE_UP(s); return; }
-        ssa_store_value(s, ssa_local_address(s, binding), bound, pointer, -1);
-      }
-    }
-    ssa_statements(s, arm->body_start, arm->body_count, depth + 1);
-    if (arm->local_id != UINT32_MAX && arm->pointer_binding) s->alias[arm->local_id - s->f->local_start] = -1;
-    ssa_jump(s, done);
+    ssa_case_body(s, arm, payload ? ssa_add_offset(s, data, payload_offset) : data, done, depth);
     ssa_seal(s, next);
     s->current = s->blocks[next].preds.count ? next : UINT32_MAX;
   }
@@ -2002,6 +2089,18 @@ static void ssa_resolve_all(Ssa *s) {
   }
 }
 /* Reverse postorder of reachable blocks; drops unreachable predecessors. */
+static uint32_t ssa_successors(const Ssa *s, const SsaBlock *b) {
+  switch (b->kind) {
+  case SB_PLAIN: return 1;
+  case SB_IF: case SB_CALL: return 2;
+  case SB_SWITCH: return 1 + s->lists[b->table + 1];
+  default: return 0;
+  }
+}
+static uint32_t ssa_successor(const Ssa *s, const SsaBlock *b, uint32_t i) {
+  if (b->kind == SB_SWITCH) return s->lists[b->table + 2 + i];
+  return b->succ[i];
+}
 static uint32_t *ssa_order(Ssa *s, uint32_t *count) {
   uint32_t *order = malloc((s->block_count + 1) * sizeof(uint32_t));
   uint32_t *stack = malloc((s->block_count + 1) * 2 * sizeof(uint32_t));
@@ -2015,13 +2114,12 @@ static uint32_t *ssa_order(Ssa *s, uint32_t *count) {
   while (top) {
     uint32_t b = stack[top - 2], next = stack[top - 1];
     SsaBlock *block = &s->blocks[b];
-    if (next < 2 && block->succ[next] != UINT32_MAX && (block->kind == SB_PLAIN ? next == 0 : block->kind == SB_IF || block->kind == SB_CALL)) {
+    if (next < ssa_successors(s, block)) {
       stack[top - 1] = next + 1;
-      uint32_t succ = block->succ[next];
-      if (!s->blocks[succ].reachable) { s->blocks[succ].reachable = true; stack[top++] = succ; stack[top++] = 0; }
+      uint32_t succ = ssa_successor(s, block, next);
+      if (succ != UINT32_MAX && !s->blocks[succ].reachable) { s->blocks[succ].reachable = true; stack[top++] = succ; stack[top++] = 0; }
       continue;
     }
-    if (next < 2) { stack[top - 1] = next + 1; continue; }
     post[posts++] = b;
     top -= 2;
   }
@@ -2695,7 +2793,7 @@ static void ssa_dce(Ssa *s, const uint32_t *order, uint32_t n) {
     }
     int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
     for (unsigned c = 0; c < 4; ++c) {
-      if (controls[c] < 0 || (block->kind != SB_IF && block->kind != SB_RETURN)) continue;
+      if (controls[c] < 0 || (block->kind != SB_IF && block->kind != SB_RETURN && block->kind != SB_SWITCH)) continue;
       ++s->values[controls[c]].uses;
       if (s->values[controls[c]].dead) { s->values[controls[c]].dead = false; work[top++] = (uint32_t)controls[c]; }
     }
@@ -2866,7 +2964,7 @@ static bool ssa_intervals(SsaAlloc *a) {
         if ((v->op == SO_CALL || v->op == SO_PANIC) && v->cond) at = v->start + 1;
         if (v->fused) at = a->block_end[b];
       } else {
-        if (block->kind == SB_IF || block->kind == SB_RETURN) {
+        if (block->kind == SB_IF || block->kind == SB_RETURN || block->kind == SB_SWITCH) {
           if (block->control >= 0) operands[count++] = block->control;
           if (block->control2 >= 0) operands[count++] = block->control2;
           if (block->control3 >= 0) operands[count++] = block->control3;
@@ -3062,6 +3160,7 @@ typedef struct {
   size_t stubs[GUARD_COUNT];
   struct { size_t at; unsigned kind; } *stub_uses; uint32_t stub_use_count, stub_use_capacity;
   struct { size_t at; uint32_t block; } *jumps; uint32_t jump_count, jump_capacity;
+  struct { size_t at; uint32_t block; } *tables; uint32_t table_count, table_capacity;
 } SsaEmit;
 
 static void x86_rex(BackendContext *ctx, bool w, unsigned reg, unsigned index, unsigned base, bool byte_reg) {
@@ -3945,7 +4044,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   if (ctx->a64) {
     a64_word(ctx, 0xa9bf7bfdu); /* stp x29, x30, [sp, #-16]! */
     a64_word(ctx, 0x910003fdu); /* mov x29, sp */
-    a64_sp_adjust(ctx, -(int64_t)total);
+    if (total) a64_sp_adjust(ctx, -(int64_t)total);
     for (unsigned r = 0; r < 32; ++r)
       if (a->used_callee >> r & 1)
         a64s_slot_access(ctx, true, r, (SsaMemory){A64_FP, -1, 1, (int32_t)(e->save_base - 8 * k++)});
@@ -3999,6 +4098,33 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       else { ssa_jump_to(e, cond, block->succ[0]); ssa_jump_to(e, -1, block->succ[1]); }
     } else if (block->kind == SB_CALL) {
       if (block->succ[0] != next) ssa_jump_to(e, -1, block->succ[0]);
+    } else if (block->kind == SB_SWITCH) {
+      /* index = control - minimum; out of range goes to the default target. */
+      uint32_t entries = s->lists[block->table + 1], fallback = s->lists[block->table + 2];
+      int64_t minimum = s->values[block->control2].aux;
+      size_t at;
+      if (ctx->a64) {
+        a64s_mov(ctx, A_S1, a64s_get(e, block->control, A_S1));
+        a64s_add_immediate(ctx, A_S1, A_S1, -minimum);
+        a64_word(ctx, 0xf100001fu | (entries - 1) << 10 | A_S1 << 5);
+        ssa_jump_to(e, CC_A, fallback);
+        at = ctx->text.n;
+        a64_word(ctx, 0x10000000u | A_S2);              /* adr x17, table */
+        a64_word(ctx, 0xb8a07800u | A_S1 << 16 | A_S2 << 5 | A_S1); /* ldrsw x16, [x17, x16, lsl #2] */
+        a64_word(ctx, 0x8b000000u | A_S1 << 16 | A_S2 << 5 | A_S1); /* add x16, x17, x16 */
+        a64_word(ctx, 0xd61f0000u | A_S1 << 5);         /* br x16 */
+      } else {
+        x86_mov(ctx, X_R11, ssa_get(e, block->control, X_R11));
+        if (minimum == (int32_t)minimum) { if (minimum) { x86_reg_op(ctx, -1, true, OP1(0x81), 5, X_R11, false); word(ctx, (uint32_t)minimum); } }
+        else { x86_move_immediate(ctx, X_R10, (uint64_t)minimum); x86_reg_op(ctx, -1, true, OP1(0x29), X_R10, X_R11, false); }
+        x86_reg_op(ctx, -1, true, OP1(0x81), 7, X_R11, false); word(ctx, entries - 1);
+        ssa_jump_to(e, CC_A, fallback);
+        CODE(0x4c, 0x8d, 0x15); at = ctx->text.n; word(ctx, 0); /* lea r10, [rip + table] */
+        CODE(0x4f, 0x63, 0x1c, 0x9a);                    /* movsxd r11, [r10 + r11*4] */
+        CODE(0x4d, 0x01, 0xd3, 0x41, 0xff, 0xe3);        /* add r11, r10; jmp r11 */
+      }
+      e->tables = ssa_grow(e->tables, &e->table_capacity, e->table_count + 1, sizeof(*e->tables), &s->failed);
+      if (!s->failed) { e->tables[e->table_count].at = at; e->tables[e->table_count++].block = b; }
     } else if (block->kind == SB_RETURN) {
       SsaMove results[4]; uint32_t parts = 0;
       unsigned integers = 0, floats = 0;
@@ -4028,6 +4154,18 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       isa_trap(ctx);
     }
     isa_patch(ctx, e->stub_uses[i].at, e->stubs[kind]);
+  }
+  /* Jump tables: 32-bit offsets of each target from the table start. */
+  for (uint32_t i = 0; i < e->table_count && !s->failed; ++i) {
+    while (ctx->text.n & 3) byte(ctx, ctx->a64 ? 0 : 0xcc);
+    size_t table = ctx->text.n, at = e->tables[i].at;
+    SsaBlock *block = &s->blocks[e->tables[i].block];
+    uint32_t entries = s->lists[block->table + 1];
+    for (uint32_t k = 0; k < entries; ++k) word(ctx, (uint32_t)(s->blocks[s->lists[block->table + 3 + k]].at - table));
+    if (ctx->a64) {
+      uint32_t delta = (uint32_t)(table - at);
+      patch_word(ctx, at, 0x10000000u | (delta & 3) << 29 | (delta >> 2 & 0x7ffff) << 5 | A_S2);
+    } else patch_word(ctx, at, (uint32_t)(table - (at + 4)));
   }
   for (uint32_t i = 0; i < e->jump_count; ++i) {
     size_t at = e->jumps[i].at;
@@ -4102,7 +4240,7 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
 done:
   free(order);
   free(alloc.block_start); free(alloc.block_end); free(alloc.clobbers);
-  free(emit.stub_uses); free(emit.jumps);
+  free(emit.stub_uses); free(emit.jumps); free(emit.tables);
   ssa_free(&s);
   return result;
 }
