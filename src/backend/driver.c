@@ -715,6 +715,12 @@ static void incoming_stack(BackendContext *ctx, AbiPart *part, uint32_t *cursor)
 }
 static void save_struct(BackendContext *ctx, uint32_t offset,DynType type) {
   uint32_t size,alignment; if (!layout(ctx->active_ir,type,&size,&alignment,0)) { ctx->text.failed=true; return; }
+  if (size>64) {
+    /* Large values copy with a loop instead of one load and store per word. */
+    isa_push(ctx, R_A); isa_move(ctx, R_11, R_A); isa_lea(ctx, R_A, offset); isa_push(ctx, R_A);
+    isa_move(ctx, R_A, R_11); isa_copy(ctx, size); isa_pop(ctx, R_A);
+    return;
+  }
   isa_move(ctx, R_11, R_A);
   for (unsigned part=0;part<(size+7)/8;++part) {
     load_chunk(ctx, part*8,size-part*8>8?8:size-part*8);
@@ -2094,6 +2100,7 @@ static bool emit_defers(BackendContext *ctx, const DynIrProgram *ir, const DynIr
   ctx->unwinding=old; ctx->defer_count=saved; --ctx->cleanup_depth; return true;
 }
 #include "allocation.inc"
+#include "ssa.inc"
 
 static bool function(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const DynIrFunction *f, const DynLocationIndex *locations) {
   if (f->generic ||
@@ -2108,6 +2115,10 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (f->foreign) return true;
   if (f->variadic && (!dyn_type_is_slice(f->variadic_type) || !abi_supported(ir,f->variadic_type))) return false;
   if (f->local_count > MAX_LOCALS || (uint64_t)f->local_start + f->local_count > ir->local_count) return false;
+  ctx->active_ir=ir;
+  int ssa=ssa_function(ctx, source, ir, f);
+  if (ssa==SSA_EMITTED) return true;
+  if (ssa==SSA_FAILED) return false;
   ctx->local_words=0;
   if (f->local_count <= MAX_LOCALS) memset(ctx->local_alias,0,f->local_count*sizeof(*ctx->local_alias));
   if (f->local_count <= MAX_LOCALS) {

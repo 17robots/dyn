@@ -106,14 +106,18 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
                 assert len(re.findall(r'vectorized 19 integer elements', p.stderr)) >= 20, p.stderr
             else:
                 assert 'vectorized' not in p.stderr, p.stderr
-            if optimized_isa and platform.system() != 'Windows':
+            # x86-64 System V functions take the SSA path and its register
+            # allocator; AArch64 keeps the callee-saved local allocator.
+            if platform.machine().lower() in ('x86_64', 'amd64') and platform.system() != 'Windows':
+                assert 'SSA code generation' in p.stderr, p.stderr
+            elif optimized_isa and platform.system() != 'Windows':
                 assert 'integer locals allocated to callee-saved registers' in p.stderr, p.stderr
             else:
                 assert 'integer locals allocated to callee-saved registers' not in p.stderr, p.stderr
             data = output.with_suffix('.o').read_bytes()
             if platform.machine().lower() in ('x86_64', 'amd64'):
-                assert bytes.fromhex('660ffec1') in data, 'missing SSE2 paddd'
-                assert bytes.fromhex('660fd4c1') in data, 'missing SSE2 paddq'
+                assert re.search(rb'\x66[\x40-\x4f]?\x0f\xfe[\xc0-\xff]', data), 'missing SSE2 paddd'
+                assert re.search(rb'\x66[\x40-\x4f]?\x0f\xd4[\xc0-\xff]', data), 'missing SSE2 paddq'
             elif platform.machine().lower() in ('aarch64', 'arm64'):
                 assert bytes.fromhex('0084a14e') in data, 'missing NEON add .4s'
                 assert bytes.fromhex('0084e14e') in data, 'missing NEON add .2d'
