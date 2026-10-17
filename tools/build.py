@@ -80,7 +80,7 @@ def compiler_link(name, objects):
 backend = COMPILER/'src/backend'
 native_sources = [backend/'compiler.c', backend/'dwarf.c']
 native_inputs = [backend/'vector.inc', backend/'allocation.inc', backend/'driver.c', backend/'isa.inc', backend/'a64.inc', backend/'rv64.inc',
-                 backend/'coff.inc', backend/'macho.inc', backend/'reachability.inc', backend/'ssa.inc',
+                 backend/'coff.inc', backend/'macho.inc', backend/'reachability.inc', backend/'ssa.inc', backend/'ssa_a64.inc',
                  backend/'elf64.h', backend/'output.h', backend/'dwarf.h']
 # The shipped compiler carries symbols but no DWARF: 1 MB instead of 4.6 MB.
 # Debug the unoptimized build/dyn instead.

@@ -106,12 +106,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
                 assert len(re.findall(r'vectorized 19 integer elements', p.stderr)) >= 20, p.stderr
             else:
                 assert 'vectorized' not in p.stderr, p.stderr
-            # x86-64 System V functions take the SSA path and its register
-            # allocator; AArch64 keeps the callee-saved local allocator.
-            if platform.machine().lower() in ('x86_64', 'amd64') and platform.system() != 'Windows':
+            # x86-64 System V and AArch64 functions take the SSA path and
+            # its register allocator.
+            if optimized_isa and platform.system() != 'Windows':
                 assert 'SSA code generation' in p.stderr, p.stderr
-            elif optimized_isa and platform.system() != 'Windows':
-                assert 'integer locals allocated to callee-saved registers' in p.stderr, p.stderr
             else:
                 assert 'integer locals allocated to callee-saved registers' not in p.stderr, p.stderr
             data = output.with_suffix('.o').read_bytes()
@@ -119,8 +117,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
                 assert re.search(rb'\x66[\x40-\x4f]?\x0f\xfe[\xc0-\xff]', data), 'missing SSE2 paddd'
                 assert re.search(rb'\x66[\x40-\x4f]?\x0f\xd4[\xc0-\xff]', data), 'missing SSE2 paddq'
             elif platform.machine().lower() in ('aarch64', 'arm64'):
-                assert bytes.fromhex('0084a14e') in data, 'missing NEON add .4s'
-                assert bytes.fromhex('0084e14e') in data, 'missing NEON add .2d'
+                # Any registers: 0x4ea08400 | m << 16 | n << 5 | d, little endian.
+                words = [int.from_bytes(data[i:i + 4], 'little') for i in range(0, len(data) - 3, 4)]
+                assert any(w & 0xffe0fc00 == 0x4ea08400 for w in words), 'missing NEON add .4s'
+                assert any(w & 0xffe0fc00 == 0x4ee08400 for w in words), 'missing NEON add .2d'
     # Cross-host execution proves the AArch64 encodings and callee saves too.
     if platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64') and shutil.which('qemu-aarch64'):
         output = work/'arm64'

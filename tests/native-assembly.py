@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reassemble independent output for every native target; execute the host ABI."""
 import os
+import re
 from pathlib import Path
 import platform
 import shutil
@@ -120,7 +121,7 @@ int main(void) {
             '--emit-object', '--emit-asm', '--target', target, '--output', output)
         assembly = output.with_suffix('.s')
         text = assembly.read_text()
-        assert ('paddd' if target.startswith('x86') else 'add v0.4s') in text, text
+        assert re.search(r'paddd' if target.startswith('x86') else r'add v\d+\.4s', text), text
         if CLANG:
             rebuilt = work/('optimized-'+target+'-roundtrip.o')
             run(CLANG, '--target='+TARGETS[target], '-c', assembly, '-o', rebuilt)
