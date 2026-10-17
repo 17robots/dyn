@@ -374,11 +374,12 @@ def inspect(path, debug):
                for offset in range(table[4], table[4] + table[5], table[9])]
     assert all(s[1] >> 4 == 0 for s in symbols[:table[7]])
     assert all(s[1] >> 4 == 1 for s in symbols[table[7]:])
-    assert len(symbols) == SOURCE.count('pub fn ') + SOURCE.count('extern fn ') + GLOBAL_COUNT + 12 + (3 if debug else 1)
+    # Fixed symbols: dyn_check_failed and the local constant-literals label.
+    assert len(symbols) == SOURCE.count('pub fn ') + SOURCE.count('extern fn ') + GLOBAL_COUNT + 14 + (3 if debug else 1)
     names = headers[table[6]]
     names = data[names[4]:names[4] + names[5]]
     undefined = {names[s[0]:].split(b'\0')[0] for s in symbols[2:] if s[3] == 0}
-    assert undefined == {b'llabs',b'abs',b'difftime',b'malloc',b'free',b'write',b'dyn_unwind_set',b'dyn_unwind_link',b'dyn_unwind_unlink',b'dyn_unwind_continue',b'fmod',b'fmodf'} | ({b'dyn_panic', b'dyn_trace_push', b'dyn_trace_pop'} if debug else {b'dyn_panic'})
+    assert undefined == {b'llabs',b'abs',b'difftime',b'malloc',b'free',b'write',b'dyn_unwind_set',b'dyn_unwind_link',b'dyn_unwind_unlink',b'dyn_unwind_continue',b'fmod',b'fmodf',b'dyn_check_failed'} | ({b'dyn_panic', b'dyn_trace_push', b'dyn_trace_pop'} if debug else {b'dyn_panic'})
     constructors = sections[b'.init_array']
     assert constructors[1] == 14 and constructors[2] == 3 and constructors[5] == 8
     init_reloc = sections[b'.rela.init_array']
@@ -393,11 +394,15 @@ def inspect(path, debug):
                    for offset in range(rel[4], rel[4] + rel[5], rel[9])]
     assert relocations
     function_relocations = 0
+    # Constant struct and array literals are addressed through a local label.
+    literals = next((i for i, x in enumerate(symbols) if names[x[0]:].split(b'\0')[0] == b'__dyn_backend_literals'), None)
     for offset, info, addend in relocations:
         assert offset + 4 <= sections[b'.text'][5]
         symbol, kind = info >> 32, info & 0xffffffff
         assert kind in (2, 4, 9)  # R_X86_64_PC32 and R_X86_64_PLT32 only
-        if kind == 2:
+        if kind == 2 and symbol == literals:
+            assert 0 <= addend + 4 < sections[b'.data.rel.ro'][5]
+        elif kind == 2:
             assert symbol == 1 and 0 <= addend + 4 < sections[b'.rodata'][5]
         else:
             assert addend == -4
