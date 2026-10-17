@@ -8,6 +8,7 @@ programs also run with DYN_NO_SSA=1, which selects the tree emitter.
 import os
 from pathlib import Path
 import random
+import shutil
 import subprocess
 import tempfile
 
@@ -42,6 +43,81 @@ def division_program():
     return '\n'.join(lines) + '\n'
 
 
+# Programs printing values the SSA and tree emitters must agree on, on every
+# target this host can run.
+PROGRAMS = {
+    'wide-memory': '''use "std/io"
+big: i64 = -7234210387
+small: i32 = -5
+bytes: [4]i8 = [-1, 2, -3, 4]
+halves: [2]i16 = [-30000, 30000]
+fn main() {
+  _ = io.println(io.stdout(), "{} {} {} {} {}", big, small, bytes[0] + bytes[2], halves[0], #cast(u64) (-(big + 1)))
+}
+''',
+    'jump-tables': '''use "std/io"
+enum Key { Up, Down, Left, Right, Enter, Escape, Tab }
+fn pick(x: i64) i64 {
+  case x {
+    0 => { return 10 },
+    1 => { return 11 },
+    2, 3 => { return 23 },
+    5 => { return 15 },
+    -1 => { return 99 },
+    7 => { return 17 },
+    _ => { return -5 }
+  }
+}
+fn letter(x: u8) u64 {
+  case x {
+    65 => { return 1 },
+    66 => { return 2 },
+    67 => { return 3 },
+    70 => { return 4 },
+    _ => { return 0 }
+  }
+}
+fn key(k: Key) i64 {
+  case k {
+    Key.Up => { return 1 },
+    Key.Down => { return 2 },
+    Key.Left => { return 3 },
+    Key.Right => { return 4 },
+    Key.Enter => { return 5 },
+    _ => { return 6 }
+  }
+}
+fn main() {
+  total: i64 = 0
+  for i in -3..12 { total = total * 7 + pick(#cast(i64) i) }
+  for c in 60..75 { total += #cast(i64) letter(#cast(u8) c) * #cast(i64) c }
+  total += key(Key.Up) + key(Key.Enter) * 10 + key(Key.Tab) * 100
+  _ = io.println(io.stdout(), "{}", total)
+}
+''',
+}
+
+
+def run_programs(work):
+    targets = [('x86_64-linux', [])]
+    if shutil.which('qemu-aarch64'):
+        targets.append(('aarch64-linux', ['qemu-aarch64']))
+    for name, source in PROGRAMS.items():
+        directory = work/name
+        directory.mkdir()
+        (directory/'main.dyn').write_text(source)
+        outputs = {}
+        for target, runner in targets:
+            for mode, environment in (('ssa', {}), ('tree', {'DYN_NO_SSA': '1'})):
+                output = directory/f'{target}-{mode}'
+                subprocess.run([DYN, 'build', directory, '--release', '--no-cache', '--quiet', '--target', target,
+                                '--output', output], check=True, timeout=300, env=dict(os.environ, **environment))
+                result = subprocess.run([*runner, output], capture_output=True, text=True, timeout=60)
+                outputs[(target, mode)] = (result.returncode, result.stdout)
+        assert len(set(outputs.values())) == 1, (name, outputs)
+    return len(targets)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='dyn-ssa-') as directory:
         work = Path(directory)
@@ -52,7 +128,9 @@ def main():
                            check=True, timeout=300, env=dict(os.environ, **environment))
             result = subprocess.run([output], capture_output=True, text=True, timeout=60)
             assert result.returncode == 0, (name, result.stderr)
-    print(f'PASS SSA division by {len(CONSTANTS)} constants at 64 and 32 bits against hardware division')
+        targets = run_programs(work)
+    print(f'PASS SSA division by {len(CONSTANTS)} constants against hardware division; '
+          f'{len(PROGRAMS)} programs match the tree emitter on {targets} targets')
 
 
 if __name__ == '__main__':
