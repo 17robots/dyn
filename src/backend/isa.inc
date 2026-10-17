@@ -216,21 +216,25 @@ static void isa_call_symbol(BackendContext *ctx, unsigned symbol) {
   if (ctx->win64) CODE(0x48, 0x83, 0xc4, 32);
 }
 /* reg <- address of .rodata + offset. */
-static void isa_rodata_address(BackendContext *ctx, Reg r, size_t offset) {
-  if (ctx->rv64) { rv_symbol(ctx,rv_reg[r],1,(int64_t)offset,false); return; }
+/* reg <- address of a local symbol plus offset, PC-relative with no GOT. */
+static void isa_local_address(BackendContext *ctx, Reg r, unsigned symbol, size_t offset) {
+  if (ctx->rv64) { rv_symbol(ctx,rv_reg[r],symbol,(int64_t)offset,false); return; }
   if (ctx->a64) {
     if (ctx->winarm64) {
-      relocate(ctx,1,R_AARCH64_ADR_PREL_PG_HI21,0); a64_word(ctx,0x90000000|a64_reg[r]);
-      relocate(ctx,1,R_AARCH64_ADD_ABS_LO12_NC,0); a64_word(ctx,0x91000000|a64_reg[r]<<5|a64_reg[r]);
+      relocate(ctx,symbol,R_AARCH64_ADR_PREL_PG_HI21,0); a64_word(ctx,0x90000000|a64_reg[r]);
+      relocate(ctx,symbol,R_AARCH64_ADD_ABS_LO12_NC,0); a64_word(ctx,0x91000000|a64_reg[r]<<5|a64_reg[r]);
       if (offset) { a64_immediate(ctx,A64_SCRATCH,offset); a64_word(ctx,0x8b000000|A64_SCRATCH<<16|a64_reg[r]<<5|a64_reg[r]); }
       return;
     }
-    relocate(ctx, 1, R_AARCH64_ADR_PREL_PG_HI21, (int64_t)offset); a64_word(ctx, 0x90000000 | a64_reg[r]);
-    relocate(ctx, 1, R_AARCH64_ADD_ABS_LO12_NC, (int64_t)offset); a64_word(ctx, 0x91000000 | a64_reg[r] << 5 | a64_reg[r]);
+    relocate(ctx, symbol, R_AARCH64_ADR_PREL_PG_HI21, (int64_t)offset); a64_word(ctx, 0x90000000 | a64_reg[r]);
+    relocate(ctx, symbol, R_AARCH64_ADD_ABS_LO12_NC, (int64_t)offset); a64_word(ctx, 0x91000000 | a64_reg[r] << 5 | a64_reg[r]);
     return;
   }
   byte(ctx, x86_extended[r] ? 0x4c : 0x48); byte(ctx, 0x8d); byte(ctx, 0x05 | x86_code[r] << 3);
-  relocate(ctx, 1, R_X86_64_PC32, (int64_t)offset - 4); word(ctx, 0);
+  relocate(ctx, symbol, R_X86_64_PC32, (int64_t)offset - 4); word(ctx, 0);
+}
+static void isa_rodata_address(BackendContext *ctx, Reg r, size_t offset) {
+  isa_local_address(ctx, r, 1, offset);
 }
 /* reg <- address of a symbol through the GOT, so interposed definitions win. */
 static void isa_symbol_address(BackendContext *ctx, Reg r, unsigned symbol) {
@@ -852,6 +856,12 @@ static void isa_zero_fill(BackendContext *ctx, uint32_t size) {
 /* Small constant memmoves use word loads/stores instead of the expensive
    direction-flag byte-string path. Only RCX is scratch, matching isa_copy's
    existing clobbers; directional order preserves even one-byte overlaps. */
+/* [base+at] with RCX as the register operand, in its shortest form. */
+static void x86_copy_operand(BackendContext *ctx, unsigned base, uint32_t at) {
+  if (!at) byte(ctx, 0x08 | base);
+  else if (at < 128) { byte(ctx, 0x48 | base); byte(ctx, (unsigned char)at); }
+  else { byte(ctx, 0x88 | base); word(ctx, at); }
+}
 static void x86_copy_words(BackendContext *ctx, uint32_t size, bool backward) {
   uint32_t at = backward ? size : 0, remaining = size;
   while (remaining) {
@@ -859,10 +869,10 @@ static void x86_copy_words(BackendContext *ctx, uint32_t size, bool backward) {
     if (backward) at -= width;
     if (width == 8) byte(ctx, 0x48);
     else if (width == 2) byte(ctx, 0x66);
-    byte(ctx, width == 1 ? 0x8a : 0x8b); byte(ctx, 0x8e); word(ctx, at); /* mov rcx, [rsi+at] */
+    byte(ctx, width == 1 ? 0x8a : 0x8b); x86_copy_operand(ctx, 6, at); /* mov rcx, [rsi+at] */
     if (width == 8) byte(ctx, 0x48);
     else if (width == 2) byte(ctx, 0x66);
-    byte(ctx, width == 1 ? 0x88 : 0x89); byte(ctx, 0x8f); word(ctx, at); /* mov [rdi+at], rcx */
+    byte(ctx, width == 1 ? 0x88 : 0x89); x86_copy_operand(ctx, 7, at); /* mov [rdi+at], rcx */
     if (!backward) at += width;
     remaining -= width;
   }
@@ -909,6 +919,13 @@ static void isa_copy(BackendContext *ctx, uint32_t size) {
   patch_word(ctx, forward,(uint32_t)(ctx->text.n-forward-4));
   patch_word(ctx, disjoint,(uint32_t)(ctx->text.n-disjoint-4)); CODE(0xfc,0xf3,0xa4);
   patch_word(ctx, done,(uint32_t)(ctx->text.n-done-4));
+}
+/* Copy size bytes from A to the popped destination when the two cannot
+   overlap, as when A is constant data. */
+static void isa_copy_disjoint(BackendContext *ctx, uint32_t size) {
+  if (ctx->rv64 || ctx->a64 || size > 64) { isa_copy(ctx, size); return; }
+  isa_move(ctx, R_SI, R_A); isa_pop(ctx, R_DI);
+  x86_copy_words(ctx, size, false);
 }
 /* A <- A + delta (delta is 1 or -1); loop counters never overflow here. */
 static void isa_step(BackendContext *ctx, int delta) {

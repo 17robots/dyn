@@ -92,6 +92,7 @@ struct Slice { const char *data; uint64_t length; };
 extern struct Slice text(void);
 int64_t external(int64_t x) { return 2*x; }
 void dyn_panic(void) { abort(); }
+void dyn_check_failed(void) { abort(); }
 int main(void) {
   /* Windows library objects expose explicit initialization through DllMain;
      setting this fixture's scalar also lets the executable test focus on ABI. */
