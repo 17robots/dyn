@@ -1,0 +1,25 @@
+use "std/io"
+
+flags: [8000000]u8
+
+fn main() {
+  total: u64 = 0
+  for round in 0..10 {
+    for i in 0..#len(flags) {
+      flags[i] = 1
+    }
+    count: u64 = 0
+    for i in 2..#len(flags) {
+      if flags[i] == 1 {
+        count += 1
+        j := i * 2
+        for j < #len(flags) {
+          flags[j] = 0
+          j += i
+        }
+      }
+    }
+    total += count + #cast(u64) round
+  }
+  _ = io.println(io.stdout(), "{}", total)
+}
