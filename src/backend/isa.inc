@@ -270,7 +270,7 @@ static void isa_reset_stack(BackendContext *ctx) {
     a64_word(ctx, 0xcb3063bf | A64_SCRATCH << 16); /* sub sp, x29, x16 */
     return;
   }
-  CODE(0x48, 0x8d, 0xa5); word(ctx, 0u - ctx->frame_bytes); /* lea rsp, [rbp - frame] */
+  CODE(0x48, 0x8d); x86_address(ctx, 4, 5, 0u - ctx->frame_bytes); /* lea rsp, [rbp - frame] */
 }
 /* Sign- or zero-extend A from a narrow integer width (bool keeps bit zero). */
 static void isa_extend(BackendContext *ctx, unsigned bits, bool sign) {
@@ -330,10 +330,10 @@ static void isa_load_chunk(BackendContext *ctx, unsigned offset, unsigned size) 
     }
     return;
   }
-  if (size==8) { CODE(0x4d,0x8b,0x93); word(ctx, offset); return; }
+  if (size==8) { CODE(0x4d,0x8b); x86_address(ctx, 10, 3, offset); return; } /* mov r10, [r11+offset] */
   CODE(0x45,0x31,0xd2);
   for (unsigned i=0;i<size;++i) {
-    CODE(0x4d,0x0f,0xb6,0x83); word(ctx, offset+i);
+    CODE(0x4d,0x0f,0xb6); x86_address(ctx, 8, 3, offset+i); /* movzx r8, byte [r11+offset+i] */
     if (i) { CODE(0x49,0xc1,0xe0); byte(ctx, i*8); }
     CODE(0x4d,0x09,0xc2);
   }
@@ -346,6 +346,7 @@ static void isa_test_mask(BackendContext *ctx, uint32_t mask) {
     a64_word(ctx, 0xf240001f | (ones - 1) << 10 | a64_reg[R_A] << 5); /* tst x0, #mask */
     return;
   }
+  if (mask < 256) { CODE(0xa8); byte(ctx, (uint8_t)mask); return; } /* test al, mask */
   CODE(0x48,0xa9); word(ctx, mask);
 }
 /* Flags from reg compared with a small signed immediate. */
@@ -433,6 +434,8 @@ static void isa_add_immediate(BackendContext *ctx, uint32_t n) {
   }
   /* add rax,imm32 sign-extends; large heap field offsets are unsigned. */
   while (n > INT32_MAX) { CODE(0x48,0x05); word(ctx, INT32_MAX); n -= INT32_MAX; }
+  if (!n) return;
+  if (n < 128) { CODE(0x48,0x83,0xc0); byte(ctx, (uint8_t)n); return; }
   CODE(0x48,0x05); word(ctx, n);
 }
 /* reg <- reg * unsigned 32-bit immediate (element scaling; cannot overflow after bounds checks). */
@@ -452,7 +455,13 @@ static void isa_scale(BackendContext *ctx, Reg r, uint32_t n) {
     isa_pop(ctx, scratch);
     return;
   }
-  byte(ctx, x86_extended[r] ? 0x4d : 0x48); byte(ctx, 0x69); byte(ctx, 0xc0 | x86_code[r] << 3 | x86_code[r]); word(ctx, n);
+  if (n && !(n & (n - 1)) && n >= 128) { /* shl r, log2(n) */
+    unsigned shift = 0; while (!(n >> shift & 1)) ++shift;
+    byte(ctx, x86_extended[r] ? 0x49 : 0x48); byte(ctx, 0xc1); byte(ctx, 0xe0 | x86_code[r]); byte(ctx, (uint8_t)shift);
+    return;
+  }
+  byte(ctx, x86_extended[r] ? 0x4d : 0x48); byte(ctx, n < 128 ? 0x6b : 0x69); byte(ctx, 0xc0 | x86_code[r] << 3 | x86_code[r]);
+  if (n < 128) byte(ctx, (uint8_t)n); else word(ctx, n);
 }
 /* Calls need a 16-byte aligned stack. x86-64 pushes are 8 bytes, so an odd
    push count needs one padding slot; AArch64 pushes keep alignment. */
@@ -746,9 +755,9 @@ static void isa_store_chunk(BackendContext *ctx, unsigned offset, unsigned bytes
     }
     return;
   }
-  if (bytes==8) { CODE(0x4c,0x89,0x97); word(ctx, offset); return; }
+  if (bytes==8) { CODE(0x4c,0x89); x86_address(ctx, 10, 7, offset); return; } /* mov [rdi+offset], r10 */
   for (unsigned j=0;j<bytes;++j) {
-    CODE(0x44,0x88,0x97); word(ctx, offset+j);
+    CODE(0x44,0x88); x86_address(ctx, 10, 7, offset+j); /* mov [rdi+offset+j], r10b */
     if (j+1<bytes) CODE(0x49,0xc1,0xea,8);
   }
 }
@@ -836,7 +845,7 @@ static void isa_enter(BackendContext *ctx) {
     return;
   }
   CODE(0x55, 0x48, 0x89, 0xe5);
-  CODE(0x48, 0x81, 0xec); word(ctx, ctx->frame_bytes);
+  x86_stack_adjust(ctx, -(int64_t)ctx->frame_bytes);
   allocation_preserve(ctx, false);
 }
 /* [A, A + size) <- 0. */
