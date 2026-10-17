@@ -117,6 +117,8 @@ def run_programs(work):
     targets = [('x86_64-linux', [])]
     if shutil.which('qemu-aarch64'):
         targets.append(('aarch64-linux', ['qemu-aarch64']))
+    if shutil.which('qemu-riscv64'):
+        targets.append(('riscv64-linux', ['qemu-riscv64']))
     for name, source in PROGRAMS.items():
         directory = work/name
         directory.mkdir()
@@ -127,7 +129,7 @@ def run_programs(work):
                 output = directory/f'{target}-{mode}'
                 subprocess.run([DYN, 'build', directory, '--release', '--no-cache', '--quiet', '--target', target,
                                 '--output', output], check=True, timeout=300, env=dict(os.environ, **environment))
-                result = subprocess.run([*runner, output], capture_output=True, text=True, timeout=60)
+                result = subprocess.run([*runner, output], capture_output=True, text=True, timeout=60, cwd=directory)
                 outputs[(target, mode)] = (result.returncode, result.stdout)
         assert len(set(outputs.values())) == 1, (name, outputs)
     return len(targets)

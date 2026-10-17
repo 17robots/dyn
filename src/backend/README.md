@@ -18,6 +18,7 @@ Wasm output is written by `src/codegen_wasm.c`, not by this backend.
 | `driver.c` | Tree emitter: functions, statements, expressions, calls, runtime checks, defers |
 | `ssa.inc` | SSA code generation: construction, optimization, register allocation, x86-64 emission |
 | `ssa_a64.inc` | AArch64 emission for SSA code generation |
+| `ssa_rv64.inc` | RISC-V64 emission for SSA code generation |
 | `isa.inc` | x86-64 encodings |
 | `a64.inc` | AArch64 encodings |
 | `rv64.inc` | RISC-V64 encodings |
@@ -32,7 +33,7 @@ Wasm output is written by `src/codegen_wasm.c`, not by this backend.
 
 ## Code generation
 
-Optimized builds for x86-64 Linux and macOS and AArch64 Linux and macOS use
+Optimized builds for x86-64 and AArch64 Linux and macOS and RISC-V64 Linux use
 SSA code generation (`ssa.inc`), modeled on Go's compiler. Each function is
 built into SSA form while walking the IR (Braun et al.), then optimized:
 constant folding, dominator-based CSE that also removes repeated checks, a
@@ -43,8 +44,8 @@ over all values, with clobber-aware live intervals and hints that coalesce
 moves. Emission runs twice so the second pass can use short branches.
 
 A function the SSA path cannot build yet falls back to the tree emitter;
-`--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds,
-Windows and RISC-V64 use the tree emitter. `DYN_NO_SSA=1` selects the tree
+`--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds
+and Windows use the tree emitter. `DYN_NO_SSA=1` selects the tree
 emitter everywhere. SSA code
 keeps the runtime checks, their order and their messages, so both paths
 produce the same output; `tests/native-ssa.py` checks that across targets.
