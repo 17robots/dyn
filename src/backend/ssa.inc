@@ -3159,7 +3159,10 @@ typedef struct {
   uint32_t frame_bytes, spill_base, save_base;
   size_t stubs[GUARD_COUNT];
   struct { size_t at; unsigned kind; } *stub_uses; uint32_t stub_use_count, stub_use_capacity;
-  struct { size_t at; uint32_t block; } *jumps; uint32_t jump_count, jump_capacity;
+  struct { size_t at; uint32_t block; bool short_branch; } *jumps; uint32_t jump_count, jump_capacity;
+  /* From a first emission: block and jump offsets from the function start,
+     so the final emission can pick short branches. */
+  size_t start, *measured_blocks, *measured_jumps; uint32_t measured_jump_count;
   struct { size_t at; uint32_t block; } *tables; uint32_t table_count, table_capacity;
 } SsaEmit;
 
@@ -3372,10 +3375,26 @@ static void ssa_parallel(SsaEmit *e, SsaMove *moves, uint32_t count) {
       if (ssa_reads(&moves[j], m->dst_kind, m->dst)) { moves[j].src_kind = L_REG; moves[j].src = temp; }
   }
 }
+/* Branches to blocks: short forms when the first emission measured the
+   target within reach. Code between a branch and its target only shrinks
+   in the final emission, so a measured distance stays an upper bound. */
 static void ssa_jump_to(SsaEmit *e, int condition, uint32_t block) {
-  size_t at = isa_branch(e->ctx, condition);
+  BackendContext *ctx = e->ctx;
+  bool short_branch = false;
+  if (e->measured_blocks && e->jump_count < e->measured_jump_count) {
+    int64_t distance = (int64_t)e->measured_blocks[block] - (int64_t)e->measured_jumps[e->jump_count];
+    short_branch = ctx->a64 ? condition >= 0 && distance > -(1 << 20) && distance < (1 << 20) : distance > -100 && distance < 100;
+  }
+  size_t at;
+  if (short_branch && ctx->a64) { at = ctx->text.n; a64_word(ctx, 0x54000000u | a64_cond[condition]); }
+  else if (short_branch) {
+    byte(ctx, condition >= 0 ? 0x70 | (x86_jcc[condition] & 0x0f) : 0xeb);
+    at = ctx->text.n; byte(ctx, 0);
+  } else at = isa_branch(ctx, condition);
   e->jumps = ssa_grow(e->jumps, &e->jump_capacity, e->jump_count + 1, sizeof(*e->jumps), &e->s->failed);
-  if (!e->s->failed) { e->jumps[e->jump_count].at = at; e->jumps[e->jump_count++].block = block; }
+  if (!e->s->failed) {
+    e->jumps[e->jump_count].at = at; e->jumps[e->jump_count].block = block; e->jumps[e->jump_count++].short_branch = short_branch;
+  }
 }
 /* Branch to the shared failure path of a check kind when `failure` holds. */
 static void ssa_fail_when(SsaEmit *e, int failure, unsigned kind) {
@@ -4072,6 +4091,19 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   for (uint32_t i = 0; i < n && !ctx->text.failed && !s->failed; ++i) {
     uint32_t b = order[i];
     SsaBlock *block = &s->blocks[b];
+    /* Loop headers start on a 16-byte boundary, so short loops do not
+       straddle fetch lines; the padding is one multi-byte NOP run. */
+    if (!ctx->a64) {
+      bool header = false;
+      for (uint32_t p = 0; p < block->preds.count && !header; ++p) header = s->blocks[block->preds.items[p]].order >= block->order;
+      if (header) {
+        static const unsigned char nops[][9] = {{0x90}, {0x66, 0x90}, {0x0f, 0x1f, 0x00}, {0x0f, 0x1f, 0x40, 0x00},
+          {0x0f, 0x1f, 0x44, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00}, {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00},
+          {0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}};
+        unsigned pad = (unsigned)(-ctx->text.n & 15);
+        while (pad) { unsigned n = pad > 9 ? 9 : pad; code(ctx, nops[n - 1], n); pad -= n; }
+      }
+    }
     block->at = ctx->text.n;
     for (uint32_t k = 0; k < block->values.count; ++k) {
       if (ctx->a64) a64s_emit_value(e, block, &k);
@@ -4168,8 +4200,22 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     } else patch_word(ctx, at, (uint32_t)(table - (at + 4)));
   }
   for (uint32_t i = 0; i < e->jump_count; ++i) {
-    size_t at = e->jumps[i].at;
-    isa_patch(ctx, at, s->blocks[e->jumps[i].block].at);
+    size_t at = e->jumps[i].at, target = s->blocks[e->jumps[i].block].at;
+    if (e->jumps[i].short_branch && ctx->a64) {
+      int64_t delta = ((int64_t)target - (int64_t)at) / 4;
+      if (delta >= (1 << 18) || delta < -(1 << 18)) { ctx->text.failed = true; continue; }
+      patch_word(ctx, at, (uint32_t)ctx->text.data[at] | (uint32_t)ctx->text.data[at + 1] << 8 |
+                          (uint32_t)ctx->text.data[at + 2] << 16 | (uint32_t)ctx->text.data[at + 3] << 24 |
+                          ((uint32_t)delta & 0x7ffff) << 5);
+      continue;
+    }
+    if (e->jumps[i].short_branch) {
+      int64_t delta = (int64_t)target - (int64_t)(at + 1);
+      if (delta < -128 || delta > 127) { ctx->text.failed = true; continue; }
+      ctx->text.data[at] = (unsigned char)(int8_t)delta;
+      continue;
+    }
+    isa_patch(ctx, at, target);
   }
   return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed && !s->failed;
 }
@@ -4229,7 +4275,23 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   if (!ssa_intervals(&alloc) || s.failed) goto done;
   ssa_hints(&alloc);
   if (!ssa_allocate(&alloc) || s.failed) goto done;
-  if (ssa_emit_function(&emit, order, n)) result = SSA_EMITTED;
+  /* Measure, then emit again with short branches. */
+  emit.start = ctx->text.n;
+  size_t built_rodata = ctx->rodata.n;
+  bool measured = ssa_emit_function(&emit, order, n);
+  if (measured) {
+    emit.measured_blocks = malloc(s.block_count * sizeof(size_t));
+    emit.measured_jumps = malloc((emit.jump_count + 1) * sizeof(size_t));
+    if (emit.measured_blocks && emit.measured_jumps) {
+      for (uint32_t i = 0; i < n; ++i) emit.measured_blocks[order[i]] = s.blocks[order[i]].at;
+      for (uint32_t i = 0; i < emit.jump_count; ++i) emit.measured_jumps[i] = emit.jumps[i].at;
+      emit.measured_jump_count = emit.jump_count;
+      ctx->text.n = text; ctx->relocation_count = relocations; ctx->rodata.n = built_rodata;
+      emit.jump_count = emit.stub_use_count = emit.table_count = 0;
+      measured = ssa_emit_function(&emit, order, n);
+    }
+  }
+  if (measured) result = SSA_EMITTED;
   else {
     /* Roll back; the tree emitter takes the function instead. */
     ctx->text.n = text; ctx->relocation_count = relocations; ctx->rodata.n = rodata;
@@ -4240,7 +4302,7 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
 done:
   free(order);
   free(alloc.block_start); free(alloc.block_end); free(alloc.clobbers);
-  free(emit.stub_uses); free(emit.jumps); free(emit.tables);
+  free(emit.stub_uses); free(emit.jumps); free(emit.tables); free(emit.measured_blocks); free(emit.measured_jumps);
   ssa_free(&s);
   return result;
 }
