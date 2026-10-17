@@ -4137,7 +4137,22 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     uint32_t next = i + 1 < n ? order[i + 1] : UINT32_MAX;
     if (block->kind == SB_PLAIN) {
       ssa_phi_moves(e, b, block->succ[0]);
-      if (block->succ[0] != next) ssa_jump_to(e, -1, block->succ[0]);
+      SsaBlock *target = &s->blocks[block->succ[0]];
+      /* A back edge to a header that only compares and branches repeats the
+         comparison here, saving a jump per iteration (loop rotation). */
+      bool rotate = block->succ[0] != next && target->order < block->order && target->kind == SB_IF &&
+                    s->values[target->control].fused;
+      for (uint32_t k = 0; rotate && k < target->values.count; ++k) {
+        SsaValue *v = &s->values[target->values.items[k]];
+        rotate = v->op == SO_PHI || (int32_t)target->values.items[k] == target->control;
+      }
+      if (rotate) {
+        SsaValue *c = &s->values[target->control];
+        int cond = ctx->a64 ? a64s_compare(e, c->a, c->b, (Cond)c->cond) : ssa_compare_values(e, c->a, c->b, (Cond)c->cond);
+        if (target->succ[1] == next) ssa_jump_to(e, cond, target->succ[0]);
+        else if (target->succ[0] == next) ssa_jump_to(e, cond ^ 1, target->succ[1]);
+        else { ssa_jump_to(e, cond, target->succ[0]); ssa_jump_to(e, -1, target->succ[1]); }
+      } else if (block->succ[0] != next) ssa_jump_to(e, -1, block->succ[0]);
     } else if (block->kind == SB_IF) {
       SsaValue *c = &s->values[block->control];
       int cond;
@@ -4288,7 +4303,12 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   }
   ssa_divisions(&s, order, n);
   ssa_resolve_all(&s);
-  ssa_hoist(&s, order, n);
+  if (ssa_hoist(&s, order, n)) {
+    /* Hoisted copies of one computation meet in the same preheader. */
+    ssa_dominators(&s, order, n);
+    ssa_cse(&s, order, n);
+    ssa_resolve_all(&s);
+  }
   ssa_split_edges(&s);
   free(order);
   order = ssa_order(&s, &n);
