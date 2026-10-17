@@ -279,7 +279,13 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
     case 0xff:
     case 0xc7:
     case 0x69:
+    case 0x6b:
       break;
+    case 0xa8:
+      if (rex || word16 || n - i < 1)
+        return 0;
+      snprintf(out, cap, "test al, 0x%x", p[i]);
+      return i + 1;
     case 0x05:
     case 0x25:
     case 0x2d:
@@ -420,18 +426,18 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
     snprintf(out, cap, "%s %s", name, operand);
     return i;
   }
-  if (!two && (op == 0xc6 || op == 0xc7 || op == 0x69)) {
-    name = op == 0x69 ? "imul" : "mov";
-    imm = op == 0xc6 ? 1 : bits == 16 ? 2 : 4;
+  if (!two && (op == 0xc6 || op == 0xc7 || op == 0x69 || op == 0x6b)) {
+    name = op == 0x69 || op == 0x6b ? "imul" : "mov";
+    imm = op == 0xc6 || op == 0x6b ? 1 : bits == 16 ? 2 : 4;
   }
   if (imm) {
     if (n - i < imm)
       return 0;
-    bool sign = op == 0x83 || (bits == 64 && imm == 4);
+    bool sign = op == 0x83 || op == 0x6b || (bits == 64 && imm == 4);
     int64_t signed_value = imm == 1   ? (int8_t)p[i]
                            : imm == 2 ? (int16_t)nd_read(p + i, 2)
                                       : (int32_t)nd_read(p + i, 4);
-    if (op == 0x69 && sign)
+    if ((op == 0x69 || op == 0x6b) && sign)
       snprintf(out, cap, "%s %s, %s, %lld", name, reg, operand,
                (long long)signed_value);
     else if (op == 0x69)

@@ -77,6 +77,40 @@ pub fn dyn_unwind_continue() {
   panic_raw(nil, 0)
 }
 
+fn check_name(kind: u64) []const u8 {
+  case kind {
+    0 => { return "overflow.ok" },
+    1 => { return "divide.ok" },
+    2 => { return "division.overflow.ok" },
+    3 => { return "shift.count.ok" },
+    4 => { return "function.nonnull.ok" },
+    5 => { return "pointer.nonnull.ok" },
+    6 => { return "pointer.aligned.ok" },
+    7 => { return "index.ok" },
+    8 => { return "slice.order.ok" },
+    9 => { return "slice.bounds.ok" },
+    10 => { return "enum.cast.ok" },
+    _ => { return "unknown" },
+  }
+}
+fn append_bytes(buffer: []u8, at: u64, text: []const u8) u64 {
+  for i in 0..#len(text) { buffer[at + #cast(u64) i] = text[i] }
+  return at + #cast(u64) #len(text)
+}
+// Failed runtime checks pass the function name and kind << 24 | name length
+// rather than a full message, so each function stores its name once. The
+// compiler caps names at 800 bytes, so the message always fits.
+pub fn dyn_check_failed(name: *const u8, packed: u64) {
+  length := packed & 0xffffff
+  storage: [1024]u8 = []
+  buffer := storage[..]
+  used := append_bytes(buffer, 0, "runtime check failed (")
+  used = append_bytes(buffer, used, check_name(packed >> 24))
+  used = append_bytes(buffer, used, ") in ")
+  if length != 0 && length <= 800 { used = append_bytes(buffer, used, name[..#cast(usize) length]) }
+  panic_raw(&storage[0], used)
+}
+
 // Exact binary scaling: each subtraction is exact, including subnormals.
 pub fn fmod(input: f64, divisor: f64) f64 {
   sign := (#bitcast(u64) input) & 0x8000000000000000

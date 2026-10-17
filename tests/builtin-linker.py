@@ -182,7 +182,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
                 if ':\t' not in line or 'int3' in line:
                     continue
                 text = line.split(':\t', 1)[1]
-                lines.append(re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'0x[0-9a-f]+', 'X', text))))
+                # Displacements differ in sign where the linkers order sections differently.
+                lines.append(re.sub(r'<[^>]*>', '', re.sub(r'[0-9a-f]{6,}', 'A', re.sub(r'-?0x[0-9a-f]+', 'X', text))))
             # Temporary assembler labels are not functions; linkers may retain
             # or discard them without changing instruction/function order.
             order = [line.split()[2] for line in run('nm', '-n', path).stdout.splitlines()

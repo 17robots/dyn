@@ -33,11 +33,12 @@ static bool reserve(Bytes *b, size_t total) {
   b->data = data; b->capacity = capacity;
   return true;
 }
-static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_push", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6", "__chkstk"};
-#define RUNTIME_COUNT 11
-enum { RUNTIME_CHKSTK = 10 };
+static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_push", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6", "__chkstk", "dyn_check_failed"};
+#define RUNTIME_COUNT 12
+enum { RUNTIME_CHKSTK = 10, RUNTIME_CHECK_FAILED = 11 };
+/* Check kinds pass to dyn_check_failed by number; runtime/support/support.dyn
+   and runtime/reference_support.c name them in this order. */
 enum { GUARD_OVERFLOW, GUARD_DIVIDE, GUARD_DIVISION_OVERFLOW, GUARD_SHIFT, GUARD_FUNCTION, GUARD_NONNULL, GUARD_ALIGNED, GUARD_INDEX, GUARD_SLICE_ORDER, GUARD_SLICE_BOUNDS, GUARD_ENUM, GUARD_COUNT };
-static const char *const guard_names[] = {"overflow.ok", "divide.ok", "division.overflow.ok", "shift.count.ok", "function.nonnull.ok", "pointer.nonnull.ok", "pointer.aligned.ok", "index.ok", "slice.order.ok", "slice.bounds.ok", "enum.cast.ok"};
 typedef struct { DynType type; uint32_t offset; } ArrayPart;
 /* One register- or stack-passed piece of an argument. cls: GP index, 8 + FP
    index, or -1 for the next eight-byte stack slot. offset/size locate the
@@ -73,6 +74,15 @@ typedef struct {
   const DynIrProgram *active_ir;
   uint32_t defer_ids[MAX_DEFERS], defer_count, unwind_offset, return_offset, call_offset, sret_offset;
   uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
+  /* Struct and array literals whose every field is constant are laid out in
+     the constants section once; literal_offsets holds offset + 1 from
+     literals_symbol, or 0. */
+  uint32_t literal_offsets[MAX_NODES];
+  unsigned literals_symbol;
+  /* Read-only byte strings already written, by content, so each is stored
+     once. Entries past a rolled-back end of rodata are ignored. */
+  struct StoredString { size_t offset, length; } *strings;
+  size_t string_capacity, string_count;
   bool visited_expr[MAX_NODES];
   uint32_t pack_offsets[MAX_NODES];
   uint32_t copy_offsets[MAX_NODES]; /* AAPCS64 caller copies of large struct arguments */
@@ -114,6 +124,12 @@ typedef struct {
   /* x86-64: R9 holds a binary operator's left value while its call-free
      right operand is evaluated; any call emitted meanwhile is a bug. */
   bool holding;
+  /* A comparison that a branch consumes directly leaves its operands
+     compared and records the condition instead of producing 0 or 1. */
+  const DynIrExpr *flags_for, *flags_from;
+  int flags_condition;
+  /* The operands of the comparison being lowered are already compared. */
+  bool compared;
   /* Shared cleanup ladders: paths that run every pending defer and then end
      the same way emit the cleanup once per defer stack and jump to it. */
   struct { unsigned kind, count, first; size_t at; } ladders[128];
@@ -183,7 +199,37 @@ static void patch_word(BackendContext *ctx, size_t offset, uint32_t n) {
   if (offset > ctx->text.n || ctx->text.n - offset < 4) { ctx->text.failed = true; return; }
   for (unsigned i = 0; i < 4; ++i) ctx->text.data[offset + i] = (unsigned char)(n >> (8 * i));
 }
+static uint64_t bytes_hash(const char *s, size_t length) {
+  uint64_t hash = UINT64_C(1469598103934665603) ^ length;
+  for (size_t i = 0; i < length; ++i) hash = (hash ^ (unsigned char)s[i]) * UINT64_C(1099511628211);
+  return hash;
+}
+static size_t literal_store(BackendContext *ctx, const char *s, size_t length);
 static size_t literal(BackendContext *ctx, const char *s, size_t length) {
+  if (!length) return 0;
+  if (2 * (ctx->string_count + 1) > ctx->string_capacity) {
+    size_t capacity = ctx->string_capacity ? 2 * ctx->string_capacity : 1024;
+    struct StoredString *grown = calloc(capacity, sizeof(*grown));
+    if (!grown) return literal_store(ctx, s, length);
+    for (size_t i = 0; i < ctx->string_capacity; ++i) {
+      if (!ctx->strings[i].length) continue;
+      size_t j = bytes_hash((const char *)ctx->rodata.data + ctx->strings[i].offset, ctx->strings[i].length) & (capacity - 1);
+      while (grown[j].length) j = (j + 1) & (capacity - 1);
+      grown[j] = ctx->strings[i];
+    }
+    free(ctx->strings); ctx->strings = grown; ctx->string_capacity = capacity;
+  }
+  size_t mask = ctx->string_capacity - 1, j = bytes_hash(s, length) & mask;
+  for (; ctx->strings[j].length; j = (j + 1) & mask) {
+    size_t at = ctx->strings[j].offset;
+    if (ctx->strings[j].length == length && at + length <= ctx->rodata.n &&
+        !memcmp(ctx->rodata.data + at, s, length)) return at;
+  }
+  size_t at = literal_store(ctx, s, length);
+  if (!ctx->rodata.failed) { ctx->strings[j].offset = at; ctx->strings[j].length = length; ++ctx->string_count; }
+  return at;
+}
+static size_t literal_store(BackendContext *ctx, const char *s, size_t length) {
   size_t offset = ctx->rodata.n;
   if (length > LIMIT - ctx->rodata.n || !reserve(&ctx->rodata, ctx->rodata.n + length)) { ctx->rodata.failed = true; return 0; }
   if (length) memcpy(ctx->rodata.data + ctx->rodata.n, s, length);
@@ -307,13 +353,13 @@ static void store_memory(BackendContext *ctx, DynType type) {
 static const char *function_name(const DynIrFunction *f) { return f->foreign ? f->link_name : f->name; }
 static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {
   if (ctx->message_offsets[check] == SIZE_MAX) {
-    char message[1024];
+    /* dyn_check_failed builds "runtime check failed (KIND) in NAME" from the
+       name and kind << 24 | name length, so each name is stored once. */
     const char *name = function_name(f);
     size_t length = strlen(name);
-    snprintf(message, sizeof(message), "runtime check failed (%s) in %.*s", guard_names[check],
-             (int)(length > 800 ? 800 : length), name);
-    ctx->message_lengths[check] = strlen(message);
-    ctx->message_offsets[check] = literal(ctx, message, ctx->message_lengths[check]);
+    if (length > 800) length = 800;
+    ctx->message_lengths[check] = (size_t)check << 24 | length;
+    ctx->message_offsets[check] = literal(ctx, name, length);
   }
   /* The caller supplies the success condition of the preceding compare.
      Restore the fixed frame before calling the noreturn runtime: nested
@@ -345,11 +391,11 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     if (!ladder_cleanup(ctx, ctx->active_ir, f, LADDER_PANIC, &jumped)) ctx->text.failed=true;
     else if (!jumped) {
       isa_load(ctx, isa_argument(ctx, 0), ctx->call_offset); isa_load(ctx, isa_argument(ctx, 1), ctx->call_offset+8);
-      runtime_call(ctx, 0); isa_trap(ctx); /* panic must not return */
+      runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); /* never returns */
     }
   } else {
     isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check]);
-    runtime_call(ctx, 0); isa_trap(ctx); /* panic must not return */
+    runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); /* never returns */
   }
   ctx->stack_slots=saved_stack;
   ctx->holding = held;
@@ -721,6 +767,32 @@ static bool expression(BackendContext *ctx, const DynIrProgram *ir, const DynIrF
   if (ctx->unwinding && ctx->captured_offsets[id] && aggregate(ir, ir->expressions[id].type)) { isa_lea(ctx, R_A, ctx->captured_offsets[id]); return !ctx->text.failed; }
   if (ctx->unwinding && ctx->captured_offsets[id]) { isa_load(ctx, R_A, ctx->captured_offsets[id]); if (descriptor(ir->expressions[id].type)) isa_load(ctx, R_D, ctx->captured_offsets[id]+8); return !ctx->text.failed; }
   return expression_value(ctx, ir, f, &ir->expressions[id], depth);
+}
+/* Evaluates a condition and returns the condition code that holds when it is
+   false, so the caller branches past the guarded code on that code. Integer
+   comparisons branch on their own flags instead of testing a 0 or 1.
+   Conditions nest: a runtime check inside this one emits its failure path,
+   which runs pending defers and their own conditions, so only flags that this
+   expression produced count. */
+static bool condition(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
+                      DynExprId id, unsigned depth, int *when_false) {
+  if (id >= ir->expression_count) return false;
+  const DynIrExpr *e = &ir->expressions[id], *outer = ctx->flags_for;
+  ctx->flags_for = e->kind == DYN_EXPR_BINARY && e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE ? e : NULL;
+  ctx->flags_from = NULL;
+  bool ok = expression(ctx, ir, f, id, depth);
+  bool flags = ctx->flags_from == e;
+  ctx->flags_for = outer;
+  ctx->flags_from = NULL;
+  if (!ok) return false;
+  if (flags) {
+    /* Conditions come in complementary pairs: E/NE, B/AE, BE/A, L/GE, LE/G. */
+    *when_false = ctx->flags_condition ^ 1;
+  } else {
+    isa_test(ctx, R_A);
+    *when_false = CC_E;
+  }
+  return !ctx->text.failed;
 }
 static bool index_expression(BackendContext *ctx, const DynIrProgram *ir,const DynIrFunction *f,DynExprId id,unsigned depth) {
   if (!expression(ctx, ir,f,id,depth)) return false;
@@ -1112,6 +1184,10 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
   }
   if (e->kind==DYN_EXPR_STRUCT || e->kind==DYN_EXPR_ARRAY) {
     DynExprId id=(DynExprId)(e-ir->expressions);
+    if (ctx->literal_offsets[id]) {
+      isa_local_address(ctx, R_A, ctx->literals_symbol, ctx->literal_offsets[id]-1);
+      return !ctx->text.failed && !ctx->relocation_failed;
+    }
     if (!ctx->temporary_offsets[id]) return false;
     isa_lea(ctx, R_A, ctx->temporary_offsets[id]);
     return initialize(ctx, ir,f,e->type,id,depth+1);
@@ -1318,6 +1394,14 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
   const DynIrExpr *right=&ir->expressions[e->right];
   uint64_t bits;
   if (constant_bits(ctx, ir, right, &bits, 0)) {
+    bool comparison = e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE;
+    if (comparison && !float_type(ir->expressions[e->left].type) &&
+        isa_compare_immediate(ctx, bits)) {
+      ctx->compared = true;
+      bool ok = binary_result(ctx, ir, f, e);
+      ctx->compared = false;
+      return ok;
+    }
     isa_immediate(ctx, R_C, bits);
     return binary_result(ctx, ir,f,e);
   }
@@ -1368,7 +1452,12 @@ static bool binary_result(BackendContext *ctx, const DynIrProgram *ir, const Dyn
     static const Cond unsigned_conditions[] = {CC_E, CC_NE, CC_B, CC_BE, CC_A, CC_AE};
     const Cond *conditions = signed_scalar(storage_type(ir,ir->expressions[e->left].type))
         ? signed_conditions : unsigned_conditions;
-    isa_compare(ctx, R_A, R_C); isa_set(ctx, conditions[e->op - DYN_OP_EQ]);
+    if (!ctx->compared) isa_compare(ctx, R_A, R_C);
+    if (ctx->flags_for == e) {
+      ctx->flags_for = NULL;
+      ctx->flags_from = e;
+      ctx->flags_condition = conditions[e->op - DYN_OP_EQ];
+    } else isa_set(ctx, conditions[e->op - DYN_OP_EQ]);
     return !ctx->text.failed;
   }
   if (!integer_type(operand_type)) return false;
@@ -1601,6 +1690,11 @@ static bool initialize(BackendContext *ctx, const DynIrProgram *ir,const DynIrFu
     else store_memory(ctx, type);
     return !ctx->text.failed;
   }
+  if (value && ctx->literal_offsets[id]) {
+    isa_local_address(ctx, R_A, ctx->literals_symbol, ctx->literal_offsets[id]-1);
+    isa_copy_disjoint(ctx, size);
+    return !ctx->text.failed && !ctx->relocation_failed;
+  }
   if (!value || value->kind==DYN_EXPR_ARRAY || value->kind==DYN_EXPR_STRUCT) {
     isa_zero_fill(ctx, size);
     if (value && value->kind==DYN_EXPR_ARRAY) {
@@ -1749,8 +1843,9 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
         reachable = reachable && falls;
         continue;
       }
-      if (!expression(ctx, ir, f, s->expression, 0)) return false;
-      isa_test(ctx, R_A); size_t otherwise = isa_branch(ctx, CC_E);
+      int when_false;
+      if (!condition(ctx, ir, f, s->expression, 0, &when_false)) return false;
+      size_t otherwise = isa_branch(ctx, when_false);
       bool then_falls, else_falls;
       if (!block(ctx, ir, f, s->body_start, s->body_count, depth + 1, &then_falls)) return false;
       size_t done = isa_branch(ctx, -1); /* join */
@@ -1952,8 +2047,9 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
         if (s->for_reverse && !s->for_inclusive) isa_step(ctx, -1);
         isa_store(ctx, R_A, binding);
       } else if (s->expression != DYN_NO_EXPR) {
-        if (!expression(ctx, ir, f, s->expression, 0)) return false;
-        isa_test(ctx, R_A); pending_jump(ctx, CC_E,&ctx->loops[loop].breaks);
+        int when_false;
+        if (!condition(ctx, ir, f, s->expression, 0, &when_false)) return false;
+        pending_jump(ctx, when_false, &ctx->loops[loop].breaks);
       }
       bool body_falls;
       if (!block(ctx, ir, f, s->body_start, s->body_count, depth + 1, &body_falls)) return false;
@@ -2243,6 +2339,56 @@ static bool constant_value(BackendContext *ctx,const DynIrProgram *ir,DynType ty
   }
   return false;
 }
+/* Lays out every outermost struct or array literal of 16 to 512 bytes whose
+   fields are all constant and mostly nonzero, so code copies or reads it
+   instead of building it field by field. */
+static bool constant_literals(BackendContext *ctx, const DynIrProgram *ir) {
+  if (!ir->expression_count) return true;
+  bool *nested = calloc(ir->expression_count, 1);
+  if (!nested) return false;
+  for (size_t id = 0; id < ir->expression_count; ++id) {
+    const DynIrExpr *e = &ir->expressions[id];
+    if ((e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) ||
+        (uint64_t)e->item_start + e->item_count > ir->item_count) continue;
+    for (uint32_t i = 0; i < e->item_count; ++i) {
+      DynExprId item = ir->items[e->item_start + i].expression;
+      if (item < ir->expression_count) nested[item] = true;
+    }
+  }
+  bool any = false;
+  for (size_t id = 0; id < ir->expression_count; ++id) {
+    const DynIrExpr *e = &ir->expressions[id];
+    uint32_t size, alignment;
+    if ((e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) || nested[id] || !aggregate(ir, e->type) ||
+        !layout(ir, e->type, &size, &alignment, 0) || size < 16 || size > 512 || alignment > 8) continue;
+    size_t previous = ctx->constants_data.n, at = align8(previous), rodata = ctx->rodata.n;
+    size_t relocations = ctx->constant_relocation_count;
+    if (at > LIMIT || size > LIMIT - at || !reserve(&ctx->constants_data, at + size)) { free(nested); return false; }
+    memset(ctx->constants_data.data + previous, 0, at + size - previous);
+    ctx->constants_data.n = at + size;
+    bool dense = false;
+    if (constant_value(ctx, ir, e->type, (DynExprId)id, (uint32_t)at, 0)) {
+      /* Building a literal costs a zero fill plus a store per nonzero word;
+         the image costs every byte. Keep images that are mostly nonzero. */
+      uint32_t words = (size + 7) / 8, used = 0;
+      for (uint32_t w = 0; w < words; ++w) {
+        bool nonzero = false;
+        for (uint32_t i = w * 8; !nonzero && i < size && i < w * 8 + 8; ++i) nonzero = ctx->constants_data.data[at + i] != 0;
+        for (size_t r = relocations; !nonzero && r < ctx->constant_relocation_count; ++r)
+          nonzero = ctx->constant_relocations[r].r_offset / 8 == (at / 8) + w;
+        used += nonzero;
+      }
+      dense = 2 * used >= words;
+      if (dense) { ctx->literal_offsets[id] = (uint32_t)at + 1; any = true; }
+    }
+    if (!dense) {
+      ctx->constants_data.n = previous; ctx->rodata.n = rodata; ctx->constant_relocation_count = relocations;
+    }
+  }
+  free(nested);
+  if (any) ctx->literals_symbol = (unsigned)ctx->runtime_base++;
+  return true;
+}
 static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
   ctx->allocator_used = ctx->allocator_local_count = 0;
   DynIrFunction f={.name="__dyn_init_root",.return_type=DYN_TYPE_VOID};
@@ -2414,6 +2560,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
       ctx->constants_data.n=previous; ctx->rodata.n=rodata; ctx->constant_relocation_count=relocations;
     }
   }
+  if (!constant_literals(ctx, ir)) { dyn_location_free(&locations); return false; }
   for (size_t i=0;i<ir->global_count;++i) if (!ir->globals[i].foreign && !ctx->global_static[i] && ir->globals[i].initializer!=DYN_NO_EXPR) {
     ctx->initializer_symbol=(unsigned)ctx->runtime_base++;
     ctx->initializer_flag_symbol=(unsigned)ctx->runtime_base++; break;
@@ -2447,6 +2594,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     }
     if (pass && ctx->dll_entry_symbol) {
       remap[ctx->dll_entry_symbol]=next; ctx->dll_entry_symbol=next++;
+    }
+    if (!pass && ctx->literals_symbol) {
+      remap[ctx->literals_symbol]=next; ctx->literals_symbol=next++;
     }
     if (!pass && ctx->initializer_symbol) {
       remap[ctx->initializer_symbol]=next; ctx->initializer_symbol=next++;
@@ -2503,6 +2653,12 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     symbols[ctx->global_symbols[i]]=(Elf64_Sym){.st_name=(Elf64_Word)names,
       .st_info=ELF64_ST_INFO(g->foreign||g->is_public?STB_GLOBAL:STB_LOCAL,STT_OBJECT),.st_shndx=g->foreign?SHN_UNDEF:ctx->global_static[i]?11:8,.st_value=at,.st_size=size};
     memcpy(strings+names,name,length); names+=length;
+  }
+  if (ctx->literals_symbol) {
+    const char *label="__dyn_backend_literals"; size_t length=strlen(label)+1;
+    if (length>string_limit-names) goto done;
+    symbols[ctx->literals_symbol]=(Elf64_Sym){.st_name=(Elf64_Word)names,.st_info=ELF64_ST_INFO(STB_LOCAL,STT_OBJECT),.st_shndx=11};
+    memcpy(strings+names,label,length); names+=length;
   }
   if (ctx->initializer_symbol) {
     const char *flag="__dyn_backend_initialized"; size_t length=strlen(flag)+1,at=align8(ctx->globals_data.n);
@@ -2709,6 +2865,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   backend_dwarf_free(ctx->dwarf);
   free(ctx->dwarf_types);
   free(ctx->text.data); free(ctx->rodata.data); free(ctx->globals_data.data); free(ctx->constants_data.data);
+  free(ctx->strings);
   free(ctx->relocations); free(ctx->constant_relocations);
   free(ctx);
   return ok;
