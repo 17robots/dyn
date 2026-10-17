@@ -197,6 +197,24 @@ CASES['closed_multiple_increments'] = ("""fn main() {
   #panic("WRAPPED")
 }
 """, 'overflow.ok')
+# A runtime check inside a condition emits its failure path, which runs the
+# pending defer and its comparison. That comparison must not decide the
+# outer branch.
+CASES['nested_condition'] = ("""struct State { flag: bool, operator: u32, count: u32 }
+fn step(state: *State) bool {
+  defer {
+    if state.operator == 0 { state.count = 0 }
+  }
+  if state.flag { return true }
+  return false
+}
+fn main() {
+  state := State{flag: true, operator: 0, count: 3}
+  if !step(&state) { #panic("NESTED CONDITION") }
+  state.flag = false
+  if step(&state) { #panic("NESTED CONDITION FALSE") }
+}
+""", None)
 CASES['closed_call'] = ("""fn change(p: *u8) { p.* = 255 }
 fn main() {
   i: u8 = 0
