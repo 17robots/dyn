@@ -114,6 +114,12 @@ typedef struct {
   /* x86-64: R9 holds a binary operator's left value while its call-free
      right operand is evaluated; any call emitted meanwhile is a bug. */
   bool holding;
+  /* A comparison that a branch consumes directly leaves its operands
+     compared and records the condition instead of producing 0 or 1. */
+  const DynIrExpr *flags_for, *flags_from;
+  int flags_condition;
+  /* The operands of the comparison being lowered are already compared. */
+  bool compared;
   /* Shared cleanup ladders: paths that run every pending defer and then end
      the same way emit the cleanup once per defer stack and jump to it. */
   struct { unsigned kind, count, first; size_t at; } ladders[128];
@@ -722,6 +728,32 @@ static bool expression(BackendContext *ctx, const DynIrProgram *ir, const DynIrF
   if (ctx->unwinding && ctx->captured_offsets[id]) { isa_load(ctx, R_A, ctx->captured_offsets[id]); if (descriptor(ir->expressions[id].type)) isa_load(ctx, R_D, ctx->captured_offsets[id]+8); return !ctx->text.failed; }
   return expression_value(ctx, ir, f, &ir->expressions[id], depth);
 }
+/* Evaluates a condition and returns the condition code that holds when it is
+   false, so the caller branches past the guarded code on that code. Integer
+   comparisons branch on their own flags instead of testing a 0 or 1.
+   Conditions nest: a runtime check inside this one emits its failure path,
+   which runs pending defers and their own conditions, so only flags that this
+   expression produced count. */
+static bool condition(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
+                      DynExprId id, unsigned depth, int *when_false) {
+  if (id >= ir->expression_count) return false;
+  const DynIrExpr *e = &ir->expressions[id], *outer = ctx->flags_for;
+  ctx->flags_for = e->kind == DYN_EXPR_BINARY && e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE ? e : NULL;
+  ctx->flags_from = NULL;
+  bool ok = expression(ctx, ir, f, id, depth);
+  bool flags = ctx->flags_from == e;
+  ctx->flags_for = outer;
+  ctx->flags_from = NULL;
+  if (!ok) return false;
+  if (flags) {
+    /* Conditions come in complementary pairs: E/NE, B/AE, BE/A, L/GE, LE/G. */
+    *when_false = ctx->flags_condition ^ 1;
+  } else {
+    isa_test(ctx, R_A);
+    *when_false = CC_E;
+  }
+  return !ctx->text.failed;
+}
 static bool index_expression(BackendContext *ctx, const DynIrProgram *ir,const DynIrFunction *f,DynExprId id,unsigned depth) {
   if (!expression(ctx, ir,f,id,depth)) return false;
   unsigned bits=integer_bits(ir->expressions[id].type);
@@ -1318,6 +1350,14 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
   const DynIrExpr *right=&ir->expressions[e->right];
   uint64_t bits;
   if (constant_bits(ctx, ir, right, &bits, 0)) {
+    bool comparison = e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE;
+    if (comparison && !float_type(ir->expressions[e->left].type) &&
+        isa_compare_immediate(ctx, bits)) {
+      ctx->compared = true;
+      bool ok = binary_result(ctx, ir, f, e);
+      ctx->compared = false;
+      return ok;
+    }
     isa_immediate(ctx, R_C, bits);
     return binary_result(ctx, ir,f,e);
   }
@@ -1368,7 +1408,12 @@ static bool binary_result(BackendContext *ctx, const DynIrProgram *ir, const Dyn
     static const Cond unsigned_conditions[] = {CC_E, CC_NE, CC_B, CC_BE, CC_A, CC_AE};
     const Cond *conditions = signed_scalar(storage_type(ir,ir->expressions[e->left].type))
         ? signed_conditions : unsigned_conditions;
-    isa_compare(ctx, R_A, R_C); isa_set(ctx, conditions[e->op - DYN_OP_EQ]);
+    if (!ctx->compared) isa_compare(ctx, R_A, R_C);
+    if (ctx->flags_for == e) {
+      ctx->flags_for = NULL;
+      ctx->flags_from = e;
+      ctx->flags_condition = conditions[e->op - DYN_OP_EQ];
+    } else isa_set(ctx, conditions[e->op - DYN_OP_EQ]);
     return !ctx->text.failed;
   }
   if (!integer_type(operand_type)) return false;
@@ -1749,8 +1794,9 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
         reachable = reachable && falls;
         continue;
       }
-      if (!expression(ctx, ir, f, s->expression, 0)) return false;
-      isa_test(ctx, R_A); size_t otherwise = isa_branch(ctx, CC_E);
+      int when_false;
+      if (!condition(ctx, ir, f, s->expression, 0, &when_false)) return false;
+      size_t otherwise = isa_branch(ctx, when_false);
       bool then_falls, else_falls;
       if (!block(ctx, ir, f, s->body_start, s->body_count, depth + 1, &then_falls)) return false;
       size_t done = isa_branch(ctx, -1); /* join */
@@ -1952,8 +1998,9 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
         if (s->for_reverse && !s->for_inclusive) isa_step(ctx, -1);
         isa_store(ctx, R_A, binding);
       } else if (s->expression != DYN_NO_EXPR) {
-        if (!expression(ctx, ir, f, s->expression, 0)) return false;
-        isa_test(ctx, R_A); pending_jump(ctx, CC_E,&ctx->loops[loop].breaks);
+        int when_false;
+        if (!condition(ctx, ir, f, s->expression, 0, &when_false)) return false;
+        pending_jump(ctx, when_false, &ctx->loops[loop].breaks);
       }
       bool body_falls;
       if (!block(ctx, ir, f, s->body_start, s->body_count, depth + 1, &body_falls)) return false;

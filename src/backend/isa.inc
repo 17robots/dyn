@@ -354,6 +354,22 @@ static void isa_compare_small(BackendContext *ctx, Reg r, int value) {
   }
   byte(ctx, x86_extended[r] ? 0x49 : 0x48); byte(ctx, 0x83); byte(ctx, 0xf8 | x86_code[r]); byte(ctx, (unsigned)value & 0xff);
 }
+/* Compares A with a 64-bit constant without loading it into a register.
+   Returns false when the constant has no immediate form on this target. */
+static bool isa_compare_immediate(BackendContext *ctx, uint64_t value) {
+  int64_t n = (int64_t)value;
+  if (ctx->rv64) { rv_imm(ctx, 6, value); rv_compare(ctx, rv_reg[R_A], 6); return true; }
+  if (ctx->a64) {
+    if (n < -4095 || n > 4095) return false;
+    isa_compare_small(ctx, R_A, (int)n);
+    return true;
+  }
+  if (n == 0) { isa_test(ctx, R_A); return true; }
+  if (n >= -128 && n <= 127) { isa_compare_small(ctx, R_A, (int)n); return true; }
+  if (n < INT32_MIN || n > INT32_MAX) return false;
+  CODE(0x48, 0x3d); word(ctx, (uint32_t)n); /* cmp rax, imm32 */
+  return true;
+}
 /* A <- A / C or A % C; the caller has already checked the divisor. */
 static void isa_divide(BackendContext *ctx, bool sign, bool remainder) {
   if (ctx->rv64) { rv_r(ctx,0x33,10,10,5,(remainder?6:4)+(sign?0:1),1); return; }
