@@ -64,6 +64,27 @@ fn main() {
   _ = io.println(io.stdout(), "{} {} {}", text[0], text[4100], text[5999])
 }
 ''',
+    'struct-values': '''use "std/io"
+struct Mixed { a: i32, b: u8, flag: bool, scale: f64, small: f32, wide: i64 = -9 }
+struct Point { x: i64, y: i64 }
+points: [64]Point
+fn step(p: Point, d: Point) Point { return Point{x: (p.x + d.x) % 1009, y: (p.y * 3 + d.y) % 1009} }
+fn mix(m: Mixed, by: i32) Mixed { return Mixed{a: m.a - by, b: m.b + 1, flag: !m.flag, scale: m.scale * 2.5, small: m.small + 1.0} }
+fn main() {
+  for i in 0..#len(points) { points[i] = Point{x: #cast(i64) i, y: #cast(i64) (i * 7)} }
+  delta := Point{x: 5, y: 11}
+  for round in 0..20 { for *p in points { p.* = step(p.*, delta) } }
+  total: i64 = 0
+  for p in points { total += p.x + p.y }
+  m := Mixed{a: -70000, b: 250, flag: true, scale: 1.25, small: -0.5}
+  copy := m
+  copy.a = 3
+  m = mix(m, 2)
+  partial := Mixed{b: 7}
+  _ = io.println(io.stdout(), "{} {} {} {} {} {} {} {}", total, m.a, m.b, m.flag, m.scale, m.small, m.wide, copy.a)
+  _ = io.println(io.stdout(), "{} {} {} {}", partial.a, partial.b, partial.flag, partial.wide)
+}
+''',
     'jump-tables': '''use "std/io"
 enum Key { Up, Down, Left, Right, Enter, Escape, Tab }
 fn pick(x: i64) i64 {
@@ -157,6 +178,14 @@ def main():
             result = subprocess.run([output], capture_output=True, text=True, timeout=60)
             assert result.returncode == 0, (name, result.stderr)
         targets = run_programs(work)
+        # Struct parameters, literals and results stay in registers: `step`
+        # never touches its frame.
+        output = work/'struct-values'/'listing'
+        subprocess.run([DYN, 'build', work/'struct-values', '--release', '--no-cache', '--quiet', '--emit-asm',
+                        '--target', 'x86_64-linux', '--output', output], check=True, timeout=300)
+        listing = output.with_suffix('.s').read_text()
+        body = listing.split('"step":', 1)[1].split('ret', 1)[0]
+        assert 'rbp-' not in body and 'rbp+' not in body, body
     print(f'PASS SSA division by {len(CONSTANTS)} constants against hardware division; '
           f'{len(PROGRAMS)} programs match the tree emitter on {targets} targets')
 

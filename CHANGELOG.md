@@ -29,6 +29,9 @@ servers so they pick up the new `dyn`.
   are about 30% smaller. Runtime checks, their order and their messages are
   unchanged. `DYN_NO_SSA=1` selects the previous code generator, and
   `--opt-remarks` reports functions that still use it.
+- Small structs passed, returned and built as literals in release builds stay
+  in registers instead of going through stack memory. Code that works on small
+  structs runs faster, and binaries are about 3% smaller.
 - `--emit-ir` is removed; use `--emit-asm` to inspect generated code. The
   LLVM-syntax writer behind it was the last LLVM-shaped code in the compiler.
 - Native targets include Linux x86-64, AArch64 and RISC-V64, macOS x86-64 and

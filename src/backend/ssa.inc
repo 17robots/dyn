@@ -93,6 +93,7 @@ typedef struct {
 typedef struct { uint64_t key; int32_t value; } SsaDef;
 typedef struct { uint32_t block, variable, phi; } SsaPending;
 typedef struct { uint32_t id, exit, next; unsigned depth, defer_base; } SsaLoop;
+typedef struct { uint32_t offset, size; } SsaRegion; /* one ssa_reserve, offset below FP */
 typedef struct { DynExprId expression; uint32_t variable; } SsaCapture;
 
 typedef struct {
@@ -113,6 +114,7 @@ typedef struct {
   int32_t *alias;      /* case pointer bindings: the pointer standing for a local, or -1 */
   uint32_t variable_count, hidden_variables;
   uint32_t frame;      /* bytes of frame memory below FP, before spills */
+  SsaRegion *regions; uint32_t region_count, region_capacity; /* by falling offset */
   SsaLoop loops[MAX_DEPTH]; unsigned loop_count, loop_depth;
 
   uint32_t return_slot; /* sret pointer, saved on entry */
@@ -317,7 +319,7 @@ static void ssa_write(Ssa *s, uint32_t variable, int32_t value) {
 static void ssa_free(Ssa *s) {
   for (uint32_t i = 0; i < s->block_count; ++i) { free(s->blocks[i].values.items); free(s->blocks[i].preds.items); }
   free(s->values); free(s->blocks); free(s->lists); free(s->defs); free(s->pending);
-  free(s->memory_local); free(s->local_offset); free(s->alias); free(s->captures);
+  free(s->memory_local); free(s->local_offset); free(s->alias); free(s->captures); free(s->regions);
 }
 
 /* ---- Building ---- */
@@ -388,6 +390,8 @@ static uint32_t ssa_reserve(Ssa *s, uint32_t size, uint32_t alignment) {
   if (alignment < 8) alignment = 8;
   if (size > MAX_AGGREGATE || s->frame > MAX_AGGREGATE) { SSA_GIVE_UP(s); return 0; }
   s->frame = (s->frame + size + alignment - 1) / alignment * alignment;
+  s->regions = ssa_grow(s->regions, &s->region_capacity, s->region_count + 1, sizeof(SsaRegion), &s->failed);
+  if (!s->failed) s->regions[s->region_count++] = (SsaRegion){0u - s->frame, size};
   return 0u - s->frame;
 }
 static int32_t ssa_frame(Ssa *s, uint32_t offset) {
@@ -2496,6 +2500,241 @@ static bool ssa_cse(Ssa *s, const uint32_t *order, uint32_t n) {
   free(table);
   return changed;
 }
+/* ---- Frame memory forwarding ----
+
+   Struct literals, call results and by-value parameters live in frame
+   regions. A region whose address never escapes is touched only by loads,
+   stores, copies and zeroing at known offsets. Within a block a load from
+   such a region takes the value last stored to the same bytes, a copy out of
+   a fully known region becomes plain stores to the destination, and stores to
+   a region nobody reads are removed. Go's compiler gets the same effect by
+   decomposing small structs into SSA values (decompose.go). */
+enum { SSA_TRACKED = 64, SSA_UNKNOWN = -1, SSA_ZERO = -2 };
+enum { REGION_ESCAPED = 1, REGION_READ = 2 };
+typedef struct { int32_t value; uint32_t offset, width; int64_t type; } SsaKnown;
+/* Frame offset an address points at, through copies and constant LEAs. */
+static bool ssa_frame_offset(Ssa *s, int32_t id, int64_t *offset) {
+  int64_t disp = 0;
+  for (unsigned depth = 0; id >= 0 && depth < 16; ++depth) {
+    SsaValue *v = &s->values[id];
+    if (v->op == SO_COPY) id = v->a;
+    else if (v->op == SO_LEA && v->b < 0) { disp += v->aux; id = v->a; }
+    else if (v->op == SO_FRAME) { *offset = (int32_t)v->aux + disp; return true; }
+    else return false;
+  }
+  return false;
+}
+/* Region containing a frame offset, or -1. Offsets fall as regions are reserved. */
+static int32_t ssa_region(Ssa *s, int64_t offset) {
+  uint32_t lo = 0, hi = s->region_count;
+  while (lo < hi) {
+    uint32_t mid = (lo + hi) / 2;
+    if ((int32_t)s->regions[mid].offset > offset) lo = mid + 1; else hi = mid;
+  }
+  if (lo == s->region_count || offset >= (int64_t)(int32_t)s->regions[lo].offset + s->regions[lo].size) return -1;
+  return (int32_t)lo;
+}
+/* Region and offset within it that a memory operation addresses, or -1. */
+static int32_t ssa_region_access(Ssa *s, int32_t address, int64_t disp, uint64_t size, uint32_t *at, bool *inside) {
+  int64_t offset;
+  *inside = false;
+  if (!ssa_frame_offset(s, address, &offset)) return -1;
+  int32_t r = ssa_region(s, offset + disp);
+  if (r < 0) r = ssa_region(s, offset);
+  if (r < 0) return -1;
+  int64_t start = (int32_t)s->regions[r].offset, rel = offset + disp - start;
+  *inside = rel >= 0 && (uint64_t)rel + size <= s->regions[r].size;
+  *at = (uint32_t)rel;
+  return r;
+}
+static uint64_t ssa_access_size(const SsaValue *v) {
+  return v->op == SO_LOAD || v->op == SO_STORE ? (uint64_t)(v->aux2 & 0xff) / 8 : (uint64_t)v->aux;
+}
+/* Marks regions whose address escapes and regions something reads. */
+static void ssa_classify_regions(Ssa *s, const uint32_t *order, uint32_t n, uint8_t *state) {
+  memset(state, 0, s->region_count);
+  uint32_t fixed[2] = {s->unwind_offset, s->results_offset};
+  for (unsigned i = 0; i < 2; ++i) {
+    int32_t r = fixed[i] ? ssa_region(s, (int32_t)fixed[i]) : -1;
+    if (r >= 0) state[r] |= REGION_ESCAPED;
+  }
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      uint32_t count = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t j = 0; j < count; ++j) {
+        int32_t operand = *ssa_slots[j];
+        int64_t offset;
+        if (operand < 0 || !ssa_frame_offset(s, operand, &offset)) continue;
+        int32_t r = ssa_region(s, offset);
+        if (r < 0) continue;
+        bool address = ssa_slots[j] == &v->a, source = ssa_slots[j] == &v->b;
+        if (v->op == SO_COPY || (v->op == SO_LEA && v->b < 0)) continue; /* checked at their uses */
+        bool memory = ((v->op == SO_LOAD || v->op == SO_STORE) && address && v->b < 0) ||
+                      ((v->op == SO_COPYMEM || v->op == SO_ZEROMEM) && address) || (v->op == SO_COPYMEM && source);
+        uint32_t at;
+        bool inside = false;
+        if (memory) ssa_region_access(s, operand, source || v->op == SO_COPYMEM || v->op == SO_ZEROMEM ? 0 : v->aux,
+                                      ssa_access_size(v), &at, &inside);
+        if (!memory || !inside) { state[r] |= REGION_ESCAPED; continue; }
+        if (v->op == SO_LOAD || source) state[r] |= REGION_READ;
+      }
+    }
+    int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
+    for (unsigned c = 0; c < 4; ++c) {
+      int64_t offset;
+      int32_t r = controls[c] >= 0 && ssa_frame_offset(s, controls[c], &offset) ? ssa_region(s, offset) : -1;
+      if (r >= 0) state[r] |= REGION_ESCAPED;
+    }
+  }
+}
+/* Replaces the value at position k of block b with `count` new values. */
+static void ssa_splice(Ssa *s, uint32_t b, uint32_t k, const int32_t *items, uint32_t count) {
+  SsaList *list = &s->blocks[b].values;
+  for (uint32_t i = 1; i < count; ++i) ssa_push(s, list, 0);
+  if (s->failed) return;
+  memmove(list->items + k + count, list->items + k + 1, (list->count - k - count) * sizeof(uint32_t));
+  for (uint32_t i = 0; i < count; ++i) list->items[k + i] = (uint32_t)items[i];
+}
+/* A copy out of a region whose bytes are all known becomes stores; returns
+   whether it did. */
+static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner, const SsaKnown *known) {
+  SsaValue *v = &s->values[s->blocks[b].values.items[k]];
+  int32_t destination = v->a;
+  uint32_t size = (uint32_t)v->aux, at = 0, count = 0;
+  int32_t items[2 * SSA_TRACKED + 1];
+  int32_t zero = -1;
+  while (at < size) {
+    int32_t owned = owner[at];
+    uint32_t width;
+    int32_t value;
+    int64_t type;
+    if (owned == SSA_ZERO) {
+      width = 8;
+      while (width > 1 && (at % width || at + width > size)) width /= 2;
+      for (uint32_t i = 0; i < width; ++i) if (owner[at + i] != SSA_ZERO) width = 1;
+      if (zero < 0) { zero = ssa_value(s, b, SO_CONST, SC_INT, -1, -1, -1, 0, 0); items[count++] = zero; }
+      value = zero; type = SSA_MEM(width * 8, 0, 0);
+    } else if (owned >= 0 && known[owned].offset == at && at + known[owned].width <= size) {
+      width = known[owned].width;
+      for (uint32_t i = 0; i < width; ++i) if (owner[at + i] != owned) return false;
+      value = known[owned].value; type = known[owned].type;
+    } else return false;
+    if (s->failed) return false;
+    items[count++] = ssa_value(s, b, SO_STORE, SC_NONE, destination, -1, value, at, type);
+    at += width;
+  }
+  if (s->failed) return false;
+  s->values[s->blocks[b].values.items[k]].dead = true;
+  ssa_splice(s, b, k, items, count);
+  return !s->failed;
+}
+static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
+  uint32_t regions = s->region_count;
+  if (!regions) return false;
+  uint8_t *state = malloc(regions);
+  int32_t *owner = malloc((size_t)regions * SSA_TRACKED * sizeof(int32_t));
+  uint32_t *touched = malloc(regions * sizeof(uint32_t)), touched_count = 0;
+  SsaKnown *known = NULL;
+  uint32_t known_count = 0, known_capacity = 0;
+  bool changed = false;
+  if (!state || !owner || !touched) { s->failed = true; goto done; }
+  ssa_classify_regions(s, order, n, state);
+  for (size_t i = 0; i < (size_t)regions * SSA_TRACKED; ++i) owner[i] = SSA_UNKNOWN;
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    uint32_t b = order[i];
+    for (uint32_t t = 0; t < touched_count; ++t)
+      for (uint32_t j = 0; j < SSA_TRACKED; ++j) owner[(size_t)touched[t] * SSA_TRACKED + j] = SSA_UNKNOWN;
+    touched_count = 0; known_count = 0;
+    for (uint32_t k = 0; k < s->blocks[b].values.count && !s->failed; ++k) {
+      uint32_t id = s->blocks[b].values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->op != SO_LOAD && v->op != SO_STORE && v->op != SO_COPYMEM && v->op != SO_ZEROMEM) continue;
+      bool inside;
+      uint32_t at;
+      uint64_t size = ssa_access_size(v);
+      /* A copy out of a tracked region. */
+      if (v->op == SO_COPYMEM) {
+        uint32_t from;
+        int32_t source = ssa_region_access(s, v->b, 0, size, &from, &inside), target;
+        uint32_t to;
+        bool target_inside;
+        target = ssa_region_access(s, v->a, 0, size, &to, &target_inside);
+        if (source >= 0 && inside && !(state[source] & REGION_ESCAPED) && s->regions[source].size <= SSA_TRACKED &&
+            target != source && ssa_copy_known(s, b, k, owner + (size_t)source * SSA_TRACKED + from, known)) {
+          changed = true;
+          --k; /* the new stores update what the destination holds */
+          continue;
+        }
+      }
+      if (v->op == SO_LOAD && v->b >= 0) continue;
+      int32_t r = ssa_region_access(s, v->a, v->op == SO_LOAD || v->op == SO_STORE ? v->aux : 0, size, &at, &inside);
+      if (r < 0 || !inside || (state[r] & REGION_ESCAPED) || s->regions[r].size > SSA_TRACKED) continue;
+      int32_t *bytes = owner + (size_t)r * SSA_TRACKED + at;
+      bool seen = false;
+      for (uint32_t t = 0; t < touched_count && !seen; ++t) seen = touched[t] == (uint32_t)r;
+      if (!seen) touched[touched_count++] = (uint32_t)r;
+      if (v->op == SO_LOAD) {
+        unsigned bits = (unsigned)(v->aux2 & 0xff);
+        bool sign = v->aux2 >> 8 & 1, floating = v->aux2 >> 9 & 1;
+        bool zero = true;
+        for (uint32_t j = 0; j < size; ++j) zero = zero && bytes[j] == SSA_ZERO;
+        if (zero) {
+          v->op = SO_CONST; v->a = v->b = v->c = -1; v->aux = 0; v->aux2 = 0; v->effect = false;
+          changed = true;
+          continue;
+        }
+        int32_t e = bytes[0];
+        if (e < 0 || known[e].offset != at || known[e].width != size) continue;
+        bool whole = true;
+        for (uint32_t j = 0; j < size; ++j) whole = whole && bytes[j] == e;
+        int64_t stored = known[e].type;
+        if (!whole || (stored >> 9 & 1) != floating || (stored & 0xff) != bits) continue;
+        if (floating || bits == 64) ssa_replace(s, id, known[e].value);
+        else { v->op = SO_EXT; v->a = known[e].value; v->b = v->c = -1; v->aux = bits; v->aux2 = sign; v->effect = false; v->cls = SC_INT; }
+        changed = true;
+        continue;
+      }
+      int32_t fill = SSA_UNKNOWN;
+      if (v->op == SO_ZEROMEM) fill = SSA_ZERO;
+      else if (v->op == SO_STORE && v->b < 0) {
+        known = ssa_grow(known, &known_capacity, known_count + 1, sizeof(SsaKnown), &s->failed);
+        if (s->failed) break;
+        known[known_count] = (SsaKnown){v->c, at, (uint32_t)size, v->aux2};
+        fill = (int32_t)known_count++;
+      }
+      for (uint32_t j = 0; j < size; ++j) bytes[j] = fill;
+    }
+  }
+  if (s->failed) goto done;
+  /* Stores to regions nothing reads any more. */
+  ssa_classify_regions(s, order, n, state);
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    uint32_t kept = 0;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->op == SO_STORE || v->op == SO_COPYMEM || v->op == SO_ZEROMEM) {
+        bool inside;
+        uint32_t at;
+        int32_t r = ssa_region_access(s, v->a, v->op == SO_STORE ? v->aux : 0, ssa_access_size(v), &at, &inside);
+        if (r >= 0 && inside && !(state[r] & (REGION_ESCAPED | REGION_READ)) && (v->op != SO_STORE || v->b < 0)) {
+          v->dead = true;
+          changed = true;
+          continue;
+        }
+      }
+      block->values.items[kept++] = id;
+    }
+    block->values.count = kept;
+  }
+done:
+  free(state); free(owner); free(touched); free(known);
+  return changed;
+}
 /* Unsigned bounds of a value where `block` executes: arithmetic over
    constants, induction variables and the branch conditions that dominate
    the block, in the spirit of Go's prove pass. */
@@ -4475,7 +4714,9 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
     order = ssa_order(&s, &n);
     if (!order) goto done;
     ssa_dominators(&s, order, n);
-    bool changed = ssa_fold(&s, order, n);
+    bool changed = ssa_forward(&s, order, n);
+    ssa_resolve_all(&s);
+    changed |= ssa_fold(&s, order, n);
     ssa_resolve_all(&s);
     changed |= ssa_cse(&s, order, n);
     ssa_resolve_all(&s);
