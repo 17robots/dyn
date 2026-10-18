@@ -754,6 +754,7 @@ static int32_t ssa_expr(Ssa *s, DynExprId id, int32_t *second, unsigned depth) {
   case DYN_EXPR_CALL: case DYN_EXPR_INDIRECT_CALL:
     return ssa_call(s, e, second, depth);
   case DYN_EXPR_SYSCALL: {
+    if (s->ctx->win64) break;
     /* dyn_syscall6: six register arguments and the seventh on the stack. */
     if (e->item_count > 7 || (uint64_t)e->item_start + e->item_count > ir->item_count) break;
     int32_t items[21];
@@ -1004,6 +1005,12 @@ static bool ssa_struct_parts(Ssa *s, DynType type, SsaPart *parts, unsigned *cou
   const DynIrProgram *ir = s->ir;
   uint32_t size, alignment;
   if (!layout(ir, type, &size, &alignment, 0) || abi_memory(s->ctx, ir, type)) return false;
+  if (s->ctx->win64) {
+    /* Microsoft x64 returns 1, 2, 4 and 8-byte structs in RAX. */
+    *count = 1;
+    parts[0] = (SsaPart){0, size, 0, false, DYN_TYPE_U64};
+    return true;
+  }
   if (s->ctx->rv64) {
     /* RISC-V flattens up to two leaves into integer and float registers. */
     AbiPart abi[4]; unsigned gp = 0, fp = 0; bool indirect;
@@ -1070,7 +1077,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   }
   SsaArguments list = {0};
   unsigned gp = sret && !ctx->a64 ? 1 : 0, fp = 0;
-  uint32_t stack = 0;
+  uint32_t stack = ctx->win64 ? 32 : 0; /* Microsoft x64: the 32-byte home area precedes stack arguments */
   int32_t result_address = -1;
   if (sret) {
     result_address = ssa_temporary(s, result);
@@ -2004,7 +2011,7 @@ static void ssa_build(Ssa *s) {
   bool sret = abi_memory(ctx, ir, f->return_type);
   if (raw_aggregate(ir, f->return_type)) { SSA_GIVE_UP(s); return; }
   unsigned gp = sret && !ctx->a64 ? 1 : 0, fp = 0;
-  uint32_t stack = 0;
+  uint32_t stack = ctx->win64 ? 32 : 0; /* Microsoft x64: the 32-byte home area precedes stack arguments */
   /* Pass 1: every register parameter as an SO_PARAM value. */
   typedef struct { int32_t value; AbiPart part; } Incoming;
   Incoming incoming[512]; unsigned count = 0, firsts[514];
@@ -2902,6 +2909,13 @@ static const unsigned char a64_gp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1
 static const unsigned char a64_fp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29};
 #define A64_CALLER_SAVED (UINT64_C(0x7ffff) | UINT64_C(0xff) << X_XMM0 | UINT64_C(0xffff0000) << X_XMM0)
 #define A64_CALLEE_SAVED (UINT64_C(0x1ff80000))
+/* Microsoft x64: four callee-saved registers fit the caller's home area,
+   where the prologue saves them; XMM4/XMM5 are scratch and XMM6-XMM15 stay
+   untouched. */
+static const unsigned char win64_gp_order[] = {X_RAX, X_RCX, X_RDX, X_R8, X_R9, X_RSI, X_RDI, X_RBX, X_R12};
+static const unsigned char win64_home[] = {X_RSI, X_RDI, X_RBX, X_R12};
+#define WIN64_CALLER_SAVED ((UINT64_C(1) << X_RAX) | (UINT64_C(1) << X_RCX) | (UINT64_C(1) << X_RDX) | (UINT64_C(1) << X_R8) | \
+                            (UINT64_C(1) << X_R9) | (UINT64_C(1) << X_R10) | (UINT64_C(1) << X_R11) | UINT64_C(0x3f) << X_XMM0)
 /* RISC-V: a0-a7 and s1-s11 are allocated; t0-t6 are emitter scratch and s0
    is the frame pointer. Floating: ft0-ft7, fa0-fa7, ft8/ft9. */
 static const unsigned char rv_gp_order[] = {10, 11, 12, 13, 14, 15, 16, 17, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27};
@@ -2912,6 +2926,7 @@ static const unsigned char rv_fp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 
 static int ssa_location_register(const BackendContext *ctx, int location) {
   if (location == SSA_RESULT_POINTER) return 8;
   if (location == SSA_TARGET) return ctx->a64 ? 9 : ctx->rv64 ? 28 : X_RAX;
+  if (ctx->win64) { static const unsigned char order[] = {X_RCX, X_RDX, X_R8, X_R9}; return location >= 8 ? X_XMM0 + location - 8 : order[location & 3]; }
   if (ctx->rv64) return location >= 16 ? X_XMM0 + 10 + location - 16 : location >= 8 ? X_XMM0 + 10 + location - 8 : 10 + location;
   if (location >= 8) return X_XMM0 + location - 8;
   return ctx->a64 ? location : ssa_arguments[location];
@@ -2937,7 +2952,8 @@ static bool ssa_located(const SsaValue *v) {
 static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
   if ((s->ctx->a64 || s->ctx->rv64) && v->op != SO_CALL && v->op != SO_PANIC) return 0;
   switch (v->op) {
-  case SO_CALL: case SO_PANIC: return s->ctx->a64 ? A64_CALLER_SAVED : s->ctx->rv64 ? RV_CALLER_SAVED : SSA_CALLER_SAVED;
+  case SO_CALL: case SO_PANIC:
+    return s->ctx->a64 ? A64_CALLER_SAVED : s->ctx->rv64 ? RV_CALLER_SAVED : s->ctx->win64 ? WIN64_CALLER_SAVED : SSA_CALLER_SAVED;
   case SO_DIV: case SO_REM: case SO_MULH: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RDX;
   case SO_MULO: return v->aux2 ? 0 : UINT64_C(1) << X_RAX | UINT64_C(1) << X_RDX;
   case SO_SHL: case SO_SHR: case SO_SAR: {
@@ -3116,8 +3132,9 @@ static bool ssa_allocatable(const BackendContext *ctx, unsigned reg) {
     id = reg - X_XMM0;
     if (ctx->a64) { list = a64_fp_order; count = sizeof(a64_fp_order); }
     else if (ctx->rv64) { list = rv_fp_order; count = sizeof(rv_fp_order); }
-    else return id < 14;
+    else return id < (ctx->win64 ? 4u : 14u);
   } else if (ctx->a64) { list = a64_gp_order; count = sizeof(a64_gp_order); }
+  else if (ctx->win64) { list = win64_gp_order; count = sizeof(win64_gp_order); }
   else if (ctx->rv64) { list = rv_gp_order; count = sizeof(rv_gp_order); }
   else { list = ssa_gp_order; count = sizeof(ssa_gp_order); }
   for (unsigned i = 0; i < count; ++i) if (list[i] == id) return true;
@@ -3170,14 +3187,15 @@ static bool ssa_allocate(SsaAlloc *a) {
       chosen = want;
     if (chosen >= 0) {}
     else if (floating) {
-      unsigned count = s->ctx->a64 ? sizeof(a64_fp_order) : s->ctx->rv64 ? sizeof(rv_fp_order) : 14;
+      unsigned count = s->ctx->a64 ? sizeof(a64_fp_order) : s->ctx->rv64 ? sizeof(rv_fp_order) : s->ctx->win64 ? 4 : 14;
       for (unsigned j = 0; j < count && chosen < 0; ++j) {
         unsigned r = X_XMM0 + (s->ctx->a64 ? a64_fp_order[j] : s->ctx->rv64 ? rv_fp_order[j] : j);
         if (owner[r] == UINT32_MAX && !ssa_clobbered(a, r, v->start, v->end)) chosen = (int)r;
       }
     } else {
-      const unsigned char *gp = s->ctx->a64 ? a64_gp_order : s->ctx->rv64 ? rv_gp_order : ssa_gp_order;
-      unsigned count = s->ctx->a64 ? sizeof(a64_gp_order) : s->ctx->rv64 ? sizeof(rv_gp_order) : sizeof(ssa_gp_order);
+      const unsigned char *gp = s->ctx->a64 ? a64_gp_order : s->ctx->rv64 ? rv_gp_order : s->ctx->win64 ? win64_gp_order : ssa_gp_order;
+      unsigned count = s->ctx->a64 ? sizeof(a64_gp_order) : s->ctx->rv64 ? sizeof(rv_gp_order)
+                     : s->ctx->win64 ? sizeof(win64_gp_order) : sizeof(ssa_gp_order);
       for (unsigned j = 0; j < count && chosen < 0; ++j) {
         unsigned r = gp[j];
         if (owner[r] == UINT32_MAX && !ssa_clobbered(a, r, v->start, v->end)) chosen = (int)r;
@@ -3210,6 +3228,7 @@ static bool ssa_allocate(SsaAlloc *a) {
     SsaValue *v = &s->values[list[i]];
     if (v->reg < 0) v->slot = (int32_t)a->spill_slots++;
     else if (s->ctx->a64 ? (A64_CALLEE_SAVED >> v->reg & 1) : s->ctx->rv64 ? (RV_CALLEE_SAVED >> v->reg & 1)
+                         : s->ctx->win64 ? (v->reg == X_RSI || v->reg == X_RDI || v->reg == X_RBX || v->reg == X_R12)
                          : (v->reg == X_RBX || (v->reg >= X_R12 && v->reg <= X_R15)))
       a->used_callee |= UINT64_C(1) << v->reg;
   }
@@ -3232,9 +3251,14 @@ typedef struct {
      so the final emission can pick short branches. */
   size_t start, *measured_blocks, *measured_jumps; uint32_t measured_jump_count;
   unsigned rv_a, rv_b; /* RISC-V: operands of the comparison the next branch tests */
-  struct { size_t at; uint32_t block; } *tables; uint32_t table_count, table_capacity;
+  struct { size_t at, anchor; uint32_t block; } *tables; uint32_t table_count, table_capacity;
+  size_t anchor;
 } SsaEmit;
 
+/* x86-64 floating scratch: XMM15 and XMM14, or XMM5 and XMM4 on Windows,
+   where XMM6-XMM15 are callee-saved. Every user has `ctx` in scope. */
+#define SSA_XS1 (ctx->win64 ? X_XMM0 + 5u : X_XMM0 + 15u)
+#define SSA_XS2 (ctx->win64 ? X_XMM0 + 4u : X_XMM0 + 14u)
 static void x86_rex(BackendContext *ctx, bool w, unsigned reg, unsigned index, unsigned base, bool byte_reg) {
   unsigned rex = 0x40 | (w ? 8 : 0) | (reg >> 3 & 1) << 2 | (index >> 3 & 1) << 1 | (base >> 3 & 1);
   if (rex != 0x40 || byte_reg) byte(ctx, rex);
@@ -3312,7 +3336,7 @@ static unsigned ssa_get(SsaEmit *e, int32_t id, unsigned scratch) {
   SsaValue *v = &s->values[id];
   if (v->op == SO_CONST && !ssa_located(v)) {
     bool fl = v->cls == SC_F64 || v->cls == SC_F32;
-    if (fl && scratch < X_XMM0) scratch = X_XMM0 + 15;
+    if (fl && scratch < X_XMM0) scratch = SSA_XS1;
     x86_move_immediate(ctx, scratch, (uint64_t)v->aux);
     return scratch;
   }
@@ -3324,16 +3348,16 @@ static unsigned ssa_get(SsaEmit *e, int32_t id, unsigned scratch) {
   if (v->slot < 0) { e->ctx->text.failed = true; return scratch; }
   SsaMemory m = ssa_slot_memory(e, v);
   if (v->cls == SC_F64 || v->cls == SC_F32) {
-    if (scratch < X_XMM0) scratch = X_XMM0 + 15;
+    if (scratch < X_XMM0) scratch = SSA_XS1;
     x86_mem_op(ctx, 0xf2, false, OP2(0x0f, 0x10), scratch - X_XMM0, m, false); /* movsd */
   } else x86_mem_op(ctx, -1, true, OP1(0x8b), scratch, m, false);
   return scratch;
 }
 /* Destination register; ssa_put stores it when the value is spilled. */
 static unsigned ssa_target(SsaEmit *e, const SsaValue *v) {
-  (void)e;
+  BackendContext *ctx = e->ctx;
   if (v->reg >= 0) return (unsigned)v->reg;
-  return v->cls == SC_F64 || v->cls == SC_F32 ? X_XMM0 + 15 : X_R11;
+  return v->cls == SC_F64 || v->cls == SC_F32 ? SSA_XS1 : X_R11;
 }
 static void ssa_put(SsaEmit *e, const SsaValue *v, unsigned reg) {
   if (v->reg >= 0) { x86_mov(e->ctx, (unsigned)v->reg, reg); return; }
@@ -3390,7 +3414,7 @@ static void ssa_transfer(SsaEmit *e, uint8_t dst_kind, int64_t dst, uint8_t src_
   if (ctx->a64) { a64s_transfer(e, dst_kind, dst, src_kind, src, cls); return; }
   if (ctx->rv64) { rvs_transfer(e, dst_kind, dst, src_kind, src, cls); return; }
   bool fl = ssa_float_class(cls);
-  if (fl && via < X_XMM0) via = X_XMM0 + 14;
+  if (fl && via < X_XMM0) via = SSA_XS2;
   unsigned reg;
   if (dst_kind == L_REG) reg = (unsigned)dst;
   else reg = via;
@@ -3420,6 +3444,7 @@ static bool ssa_reads(const SsaMove *m, uint8_t kind, int64_t location) {
   return (m->src_kind == L_REG || m->src_kind == L_SLOT || m->src_kind == L_OUT) && m->src_kind == kind && m->src == location;
 }
 static void ssa_parallel(SsaEmit *e, SsaMove *moves, uint32_t count) {
+  BackendContext *ctx = e->ctx;
   /* Drop moves onto themselves. */
   uint32_t n = 0;
   for (uint32_t i = 0; i < count; ++i)
@@ -3440,7 +3465,7 @@ static void ssa_parallel(SsaEmit *e, SsaMove *moves, uint32_t count) {
     /* Every remaining move is in a cycle: park one destination's value. */
     SsaMove *m = &moves[0];
     bool fl = ssa_float_class(m->cls);
-    unsigned temp = e->ctx->a64 ? (fl ? X_XMM0 + 31 : 16) : e->ctx->rv64 ? (fl ? X_XMM0 + 31 : 30) : fl ? X_XMM0 + 15 : X_R11;
+    unsigned temp = e->ctx->a64 ? (fl ? X_XMM0 + 31 : 16) : e->ctx->rv64 ? (fl ? X_XMM0 + 31 : 30) : fl ? SSA_XS1 : X_R11;
     ssa_transfer(e, L_REG, temp, m->dst_kind, m->dst, m->cls, X_R10);
     for (uint32_t j = 0; j < n; ++j)
       if (ssa_reads(&moves[j], m->dst_kind, m->dst)) { moves[j].src_kind = L_REG; moves[j].src = temp; }
@@ -3526,11 +3551,11 @@ static void ssa_float_op(SsaEmit *e, SsaValue *v, unsigned char opcode, bool com
   SsaValue *vb = &s->values[b];
   if (vb->reg >= 0 && (unsigned)vb->reg == d && a != b) {
     if (commutative) { int32_t t = a; a = b; b = t; vb = &s->values[b]; }
-    else { x86_mov(ctx, X_XMM0 + 14, d); x86_mov(ctx, d, ssa_get(e, a, d)); x86_reg_op(ctx, prefix, false, OP2(0x0f, opcode), d - X_XMM0, 14, false); return; }
+    else { x86_mov(ctx, SSA_XS2, d); x86_mov(ctx, d, ssa_get(e, a, d)); x86_reg_op(ctx, prefix, false, OP2(0x0f, opcode), d - X_XMM0, SSA_XS2 - X_XMM0, false); return; }
   }
   x86_mov(ctx, d, ssa_get(e, a, d));
   if (vb->op != SO_CONST && vb->reg < 0) x86_mem_op(ctx, prefix, false, OP2(0x0f, opcode), d - X_XMM0, ssa_slot_memory(e, vb), false);
-  else x86_reg_op(ctx, prefix, false, OP2(0x0f, opcode), d - X_XMM0, ssa_get(e, b, X_XMM0 + 14) - X_XMM0, false);
+  else x86_reg_op(ctx, prefix, false, OP2(0x0f, opcode), d - X_XMM0, ssa_get(e, b, SSA_XS2) - X_XMM0, false);
 }
 static void ssa_extend_register(BackendContext *ctx, unsigned d, unsigned source, unsigned bits, bool sign) {
   if (bits == 1) { x86_mov(ctx, d, source); x86_reg_op(ctx, -1, false, OP1(0x83), 4, d, false); byte(ctx, 1); }
@@ -3594,6 +3619,7 @@ static void ssa_copy_memory(SsaEmit *e, SsaValue *v) {
   SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
   moves[0].dst_kind = moves[1].dst_kind = L_REG; moves[0].dst = X_RDI; moves[1].dst = X_RSI;
   moves[0].cls = moves[1].cls = SC_INT;
+  if (ctx->win64) CODE(0x56, 0x57); /* RSI and RDI are callee-saved on Windows */
   ssa_parallel(e, moves, 2);
   /* The tree emitter's memmove: backwards only when the ranges overlap with
      the destination above the source. */
@@ -3608,6 +3634,7 @@ static void ssa_copy_memory(SsaEmit *e, SsaValue *v) {
   patch_word(ctx, disjoint, (uint32_t)(ctx->text.n - disjoint - 4));
   CODE(0xfc, 0xf3, 0xa4);
   patch_word(ctx, done, (uint32_t)(ctx->text.n - done - 4));
+  if (ctx->win64) CODE(0x5f, 0x5e);
 }
 static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
   BackendContext *ctx = e->ctx;
@@ -3627,8 +3654,10 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
     return;
   }
   SsaMove move = ssa_source(e, v->a);
+  if (ctx->win64) CODE(0x57);
   ssa_transfer(e, L_REG, X_RDI, move.src_kind, move.src, SC_INT, X_R10);
   CODE(0x31, 0xc0, 0xb9); word(ctx, size); CODE(0xfc, 0xf3, 0xaa);
+  if (ctx->win64) CODE(0x5f);
 }
 static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsigned width);
 static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
@@ -3685,6 +3714,7 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   else if (v->aux2 == 2 && ctx->rv64) rv_i(ctx, 0x67, 1, 28, 0, 0); /* jalr ra, x28 */
   else if (v->aux2 == 2) CODE(0xff, 0xd0); /* call rax */
   else if (v->aux2 == 1) runtime_call(ctx, (unsigned)v->aux);
+  else if (ctx->win64) { byte(ctx, 0xe8); relocate(ctx, (unsigned)v->aux, R_X86_64_PLT32, -4); word(ctx, 0); } /* home area is in the frame */
   else isa_call_symbol(ctx, (unsigned)v->aux);
   /* Results follow their call directly. */
   count = 0;
@@ -3700,7 +3730,7 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   ssa_parallel(e, moves, count);
 }
 static void ssa_frame_argument(SsaEmit *e, uint32_t offset) {
-  x86_mem_op(e->ctx, -1, true, OP1(0x8d), X_RDI, (SsaMemory){X_RBP, -1, 1, (int32_t)offset}, false);
+  x86_mem_op(e->ctx, -1, true, OP1(0x8d), (unsigned)ssa_location_register(e->ctx, 0), (SsaMemory){X_RBP, -1, 1, (int32_t)offset}, false);
 }
 /* dyn_unwind_set, branching to the landing block when it returns again
    during unwinding, then dyn_unwind_link. */
@@ -3871,7 +3901,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   }
   case SO_FCMP: {
     bool f32 = s->values[v->a].cls == SC_F32;
-    unsigned ra = ssa_get(e, v->a, X_XMM0 + 15), rb = ssa_get(e, v->b, X_XMM0 + 14);
+    unsigned ra = ssa_get(e, v->a, SSA_XS1), rb = ssa_get(e, v->b, SSA_XS2);
     x86_reg_op(ctx, f32 ? -1 : 0x66, false, OP2(0x0f, 0x2e), ra - X_XMM0, rb - X_XMM0, false);
     static const unsigned char predicates[] = {0x94, 0x95, 0x92, 0x96, 0x97, 0x93};
     d = ssa_target(e, v);
@@ -3891,8 +3921,8 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     d = ssa_target(e, v);
     x86_mov(ctx, d, ssa_get(e, v->a, d));
     x86_move_immediate(ctx, X_R11, v->cls == SC_F32 ? UINT64_C(0x80000000) : UINT64_C(1) << 63);
-    x86_mov(ctx, X_XMM0 + 14, X_R11);
-    x86_reg_op(ctx, -1, false, OP2(0x0f, 0x57), d - X_XMM0, 14, false);
+    x86_mov(ctx, SSA_XS2, X_R11);
+    x86_reg_op(ctx, -1, false, OP2(0x0f, 0x57), d - X_XMM0, SSA_XS2 - X_XMM0, false);
     ssa_put(e, v, d);
     return;
   case SO_ITOF: {
@@ -3921,20 +3951,20 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     bool f32 = s->values[v->a].cls == SC_F32;
     int prefix = f32 ? 0xf3 : 0xf2;
     d = ssa_target(e, v);
-    unsigned ra = ssa_get(e, v->a, X_XMM0 + 15);
+    unsigned ra = ssa_get(e, v->a, SSA_XS1);
     if (v->aux) {
-      x86_mov(ctx, X_XMM0 + 15, ra);
+      x86_mov(ctx, SSA_XS1, ra);
       x86_move_immediate(ctx, X_R11, f32 ? UINT64_C(0x5f000000) : UINT64_C(0x43e0000000000000));
-      x86_mov(ctx, X_XMM0 + 14, X_R11);
-      x86_reg_op(ctx, f32 ? -1 : 0x66, false, OP2(0x0f, 0x2e), 15, 14, false);
+      x86_mov(ctx, SSA_XS2, X_R11);
+      x86_reg_op(ctx, f32 ? -1 : 0x66, false, OP2(0x0f, 0x2e), SSA_XS1 - X_XMM0, SSA_XS2 - X_XMM0, false);
       CODE(0x0f, 0x82); size_t ordinary = ctx->text.n; word(ctx, 0);
-      x86_reg_op(ctx, prefix, false, OP2(0x0f, 0x5c), 15, 14, false);
-      x86_reg_op(ctx, prefix, true, OP2(0x0f, 0x2c), X_R11, 15, false);
+      x86_reg_op(ctx, prefix, false, OP2(0x0f, 0x5c), SSA_XS1 - X_XMM0, SSA_XS2 - X_XMM0, false);
+      x86_reg_op(ctx, prefix, true, OP2(0x0f, 0x2c), X_R11, SSA_XS1 - X_XMM0, false);
       x86_move_immediate(ctx, X_R10, UINT64_C(1) << 63);
       x86_reg_op(ctx, -1, true, OP1(0x31), X_R10, X_R11, false);
       byte(ctx, 0xe9); size_t done = ctx->text.n; word(ctx, 0);
       patch_word(ctx, ordinary, (uint32_t)(ctx->text.n - ordinary - 4));
-      x86_reg_op(ctx, prefix, true, OP2(0x0f, 0x2c), X_R11, 15, false);
+      x86_reg_op(ctx, prefix, true, OP2(0x0f, 0x2c), X_R11, SSA_XS1 - X_XMM0, false);
       patch_word(ctx, done, (uint32_t)(ctx->text.n - done - 4));
       x86_mov(ctx, d, X_R11);
     } else x86_reg_op(ctx, prefix, true, OP2(0x0f, 0x2c), d, ra - X_XMM0, false);
@@ -3944,13 +3974,13 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FCVT: {
     d = ssa_target(e, v);
     bool to32 = v->cls == SC_F32;
-    x86_reg_op(ctx, to32 ? 0xf2 : 0xf3, false, OP2(0x0f, 0x5a), d - X_XMM0, ssa_get(e, v->a, X_XMM0 + 15) - X_XMM0, false);
+    x86_reg_op(ctx, to32 ? 0xf2 : 0xf3, false, OP2(0x0f, 0x5a), d - X_XMM0, ssa_get(e, v->a, SSA_XS1) - X_XMM0, false);
     ssa_put(e, v, d);
     return;
   }
   case SO_BITS: {
     d = ssa_target(e, v);
-    unsigned ra = ssa_get(e, v->a, d >= X_XMM0 ? X_R11 : X_XMM0 + 15);
+    unsigned ra = ssa_get(e, v->a, d >= X_XMM0 ? X_R11 : SSA_XS1);
     bool wide = v->cls == SC_F64 || s->values[v->a].cls == SC_F64;
     if (d >= X_XMM0) x86_reg_op(ctx, 0x66, wide, OP2(0x0f, 0x6e), d - X_XMM0, ra, false);
     else x86_reg_op(ctx, 0x66, wide, OP2(0x0f, 0x7e), ra - X_XMM0, d, false);
@@ -3988,7 +4018,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
       m = (SsaMemory){X_R10, -1, 1, (int32_t)v->aux};
       rv = ssa_get(e, v->c, X_R11);
     } else {
-      if (!immediate_store) rv = ssa_get(e, v->c, fl ? X_XMM0 + 15 : (base_scratch ? X_R11 : X_R10));
+      if (!immediate_store) rv = ssa_get(e, v->c, fl ? SSA_XS1 : (base_scratch ? X_R11 : X_R10));
       m = ssa_address_of(e, v->a, v->b, v->scale, v->aux, value_scratch && rv == X_R10 ? X_R11 : X_R10,
                          value_scratch && rv == X_R11 ? X_R10 : X_R11);
     }
@@ -4012,7 +4042,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   }
   case SO_SYMBOL: {
     d = ssa_target(e, v);
-    bool got = v->aux2 != SYM_LOCAL;
+    bool got = v->aux2 != SYM_LOCAL && !ctx->win64; /* COFF has no GOT */
     x86_rex(ctx, true, d, 0, 0, false);
     byte(ctx, got ? 0x8b : 0x8d); byte(ctx, 0x05 | (d & 7) << 3);
     relocate(ctx, (unsigned)v->aux, got ? R_X86_64_GOTPCREL : R_X86_64_PC32, got ? -4 : (int64_t)v->c - 4);
@@ -4032,12 +4062,12 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     uint32_t limit = (uint32_t)v->aux * bytes;
     x86_move_immediate(ctx, X_R11, 0);
     size_t begin = ctx->text.n;
-    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x6f), 14, (SsaMemory){X_RBP, X_R11, 1, left}, false);
-    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x6f), 15, (SsaMemory){X_RBP, X_R11, 1, right}, false);
+    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x6f), SSA_XS2 - X_XMM0, (SsaMemory){X_RBP, X_R11, 1, left}, false);
+    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x6f), SSA_XS1 - X_XMM0, (SsaMemory){X_RBP, X_R11, 1, right}, false);
     unsigned char opcode = op == DYN_OP_ADD ? (bytes == 8 ? 0xd4 : 0xfe) : op == DYN_OP_SUB ? (bytes == 8 ? 0xfb : 0xfa)
                          : op == DYN_OP_BIT_AND ? 0xdb : op == DYN_OP_BIT_OR ? 0xeb : 0xef;
-    x86_reg_op(ctx, 0x66, false, OP2(0x0f, opcode), 14, 15, false);
-    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x7f), 14, (SsaMemory){X_RBP, X_R11, 1, destination}, false);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f, opcode), SSA_XS2 - X_XMM0, SSA_XS1 - X_XMM0, false);
+    x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x7f), SSA_XS2 - X_XMM0, (SsaMemory){X_RBP, X_R11, 1, destination}, false);
     x86_reg_op(ctx, -1, true, OP1(0x83), 0, X_R11, false); byte(ctx, 16);
     x86_reg_op(ctx, -1, true, OP1(0x81), 7, X_R11, false); word(ctx, limit);
     isa_patch(ctx, isa_branch(ctx, CC_NE), begin);
@@ -4062,7 +4092,8 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_CONTINUE: runtime_call(ctx, 6); isa_trap(ctx); return;
   case SO_PANIC: {
     SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
-    moves[0].dst_kind = moves[1].dst_kind = L_REG; moves[0].dst = X_RDI; moves[1].dst = X_RSI;
+    moves[0].dst_kind = moves[1].dst_kind = L_REG;
+    moves[0].dst = ssa_location_register(ctx, 0); moves[1].dst = ssa_location_register(ctx, 1);
     moves[0].cls = moves[1].cls = SC_INT;
     if (v->cond) ssa_protect_begin(e, block);
     ssa_parallel(e, moves, 2);
@@ -4143,7 +4174,11 @@ static void ssa_epilogue(SsaEmit *e) {
     a64_word(ctx, 0xd65f03c0u); /* ret */
     return;
   }
-  for (unsigned r = 0; r < 16; ++r) {
+  if (ctx->win64) {
+    for (unsigned h = 0; h < 4; ++h)
+      if (e->alloc->used_callee >> win64_home[h] & 1)
+        x86_mem_op(ctx, -1, true, OP1(0x8b), win64_home[h], (SsaMemory){X_RBP, -1, 1, 16 + 8 * (int32_t)h}, false);
+  } else for (unsigned r = 0; r < 16; ++r) {
     if (!(e->alloc->used_callee >> r & 1)) continue;
     x86_mem_op(ctx, -1, true, OP1(0x8b), r, (SsaMemory){X_RBP, -1, 1, (int32_t)(e->save_base - 8 * k++)}, false);
   }
@@ -4153,10 +4188,13 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   SsaAlloc *a = e->alloc;
   unsigned saves = 0;
-  for (unsigned r = 0; r < 32; ++r) saves += a->used_callee >> r & 1;
+  for (unsigned r = 0; r < 32 && !ctx->win64; ++r) saves += a->used_callee >> r & 1;
   uint32_t frame = (s->frame + 7) / 8 * 8;
   e->save_base = 0u - frame - 8;
   e->spill_base = 0u - frame - 8 * saves - 8;
+  /* Microsoft x64: every call needs the 32-byte home area, even one
+     without stack arguments such as main's initializer call. */
+  if (ctx->win64 && s->calls && s->outgoing < 32) s->outgoing = 32;
   uint64_t total = (uint64_t)frame + 8 * saves + 8 * (uint64_t)a->spill_slots + s->outgoing;
   total = (total + 15) / 16 * 16;
   if (total > MAX_AGGREGATE + (1u << 20)) return false;
@@ -4178,6 +4216,26 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     for (unsigned r = 0; r < 32; ++r)
       if (a->used_callee >> r & 1)
         a64s_slot_access(ctx, true, r, (SsaMemory){A64_FP, -1, 1, (int32_t)(e->save_base - 8 * k++)});
+  } else if (ctx->win64) {
+    /* Callee-saved registers go to the caller's home area, in a fixed order
+       the unwind codes describe (coff_unwind_info). */
+    size_t start = ctx->text.n;
+    if (ctx->unwind_frame_count >= sizeof(ctx->unwind_frames) / sizeof(ctx->unwind_frames[0])) { ctx->text.failed = true; return false; }
+    uint32_t *frame = ctx->unwind_frames[ctx->unwind_frame_count++];
+    CODE(0x55, 0x48, 0x89, 0xe5);
+    uint32_t mask = 0;
+    for (unsigned h = 0; h < 4; ++h)
+      if (a->used_callee >> win64_home[h] & 1) {
+        mask |= 1u << h;
+        x86_mem_op(ctx, -1, true, OP1(0x89), win64_home[h], (SsaMemory){X_RBP, -1, 1, 16 + 8 * (int32_t)h}, false);
+      }
+    if (total >= 4096) {
+      byte(ctx, 0xb8); word(ctx, (uint32_t)total);
+      if (!ctx->runtime_index[RUNTIME_CHKSTK]) ctx->runtime_index[RUNTIME_CHKSTK] = (unsigned)(ctx->runtime_base + ctx->runtime_count++);
+      byte(ctx, 0xe8); relocate(ctx, ctx->runtime_index[RUNTIME_CHKSTK], R_X86_64_PLT32, -4); word(ctx, 0);
+      CODE(0x48, 0x29, 0xc4);
+    } else { CODE(0x48, 0x81, 0xec); word(ctx, (uint32_t)total); }
+    frame[0] = (uint32_t)start; frame[1] = (uint32_t)(ctx->text.n - start); frame[2] = (uint32_t)total; frame[3] = mask;
   } else {
     CODE(0x55, 0x48, 0x89, 0xe5); /* push rbp; mov rbp, rsp */
     x86_stack_adjust(ctx, -(int64_t)total);
@@ -4295,12 +4353,17 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         else { x86_move_immediate(ctx, X_R10, (uint64_t)minimum); x86_reg_op(ctx, -1, true, OP1(0x29), X_R10, X_R11, false); }
         x86_reg_op(ctx, -1, true, OP1(0x81), 7, X_R11, false); word(ctx, entries - 1);
         ssa_jump_to(e, CC_A, fallback);
-        CODE(0x4c, 0x8d, 0x15); at = ctx->text.n; word(ctx, 0); /* lea r10, [rip + table] */
+        /* The table lives in read-only data, so disassemblers never decode it;
+           entries are offsets from the address after the second lea. */
+        CODE(0x4c, 0x8d, 0x15); at = ctx->relocation_count;
+        relocate(ctx, 1, R_X86_64_PC32, -4); word(ctx, 0);   /* lea r10, [rip + table] */
         CODE(0x4f, 0x63, 0x1c, 0x9a);                    /* movsxd r11, [r10 + r11*4] */
+        CODE(0x4c, 0x8d, 0x15, 0x00, 0x00, 0x00, 0x00);  /* lea r10, [rip] */
         CODE(0x4d, 0x01, 0xd3, 0x41, 0xff, 0xe3);        /* add r11, r10; jmp r11 */
+        e->anchor = ctx->text.n - 6;
       }
       e->tables = ssa_grow(e->tables, &e->table_capacity, e->table_count + 1, sizeof(*e->tables), &s->failed);
-      if (!s->failed) { e->tables[e->table_count].at = at; e->tables[e->table_count++].block = b; }
+      if (!s->failed) { e->tables[e->table_count].at = at; e->tables[e->table_count].anchor = e->anchor; e->tables[e->table_count++].block = b; }
     } else if (block->kind == SB_RETURN) {
       SsaMove results[4]; uint32_t parts = 0;
       unsigned integers = 0, floats = 0;
@@ -4333,6 +4396,21 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   }
   /* Jump tables: 32-bit offsets of each target from the table start. */
   for (uint32_t i = 0; i < e->table_count && !s->failed; ++i) {
+    if (!ctx->a64 && !ctx->rv64) {
+      /* x86-64: entries in read-only data, relative to the anchor. */
+      SsaBlock *block = &s->blocks[e->tables[i].block];
+      uint32_t entries = s->lists[block->table + 1];
+      static const char zeros[4] = {0};
+      if (ctx->rodata.n & 3) literal_store(ctx, zeros, 4 - (ctx->rodata.n & 3));
+      size_t table = ctx->rodata.n;
+      for (uint32_t k = 0; k < entries; ++k) {
+        int32_t delta = (int32_t)((int64_t)s->blocks[s->lists[block->table + 3 + k]].at - (int64_t)e->tables[i].anchor);
+        char bytes[4] = {(char)delta, (char)(delta >> 8), (char)(delta >> 16), (char)(delta >> 24)};
+        literal_store(ctx, bytes, 4);
+      }
+      ctx->relocations[e->tables[i].at].r_addend = (int64_t)table - 4;
+      continue;
+    }
     while (ctx->text.n & 3) byte(ctx, ctx->a64 || ctx->rv64 ? 0 : 0xcc);
     size_t table = ctx->text.n, at = e->tables[i].at;
     SsaBlock *block = &s->blocks[e->tables[i].block];
@@ -4374,7 +4452,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
 
 static bool ssa_enabled(BackendContext *ctx, const DynSource *source) {
   const DynOptimization *policy = source->context.optimization;
-  if (ctx->debug_mode || ctx->dwarf || ctx->win64 || ctx->winarm64) return false;
+  if (ctx->debug_mode || ctx->dwarf || ctx->winarm64) return false;
   if (policy && policy->level == 1) return false;
   const char *disabled = getenv("DYN_NO_SSA");
   return !disabled || !*disabled || !strcmp(disabled, "0");

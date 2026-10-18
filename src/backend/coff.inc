@@ -74,9 +74,9 @@ static bool coff_relocations(bool a64, const Elf64_Rela *items, size_t count, un
 
 /* UNWIND_INFO for the isa_enter prologue: push rbp; mov rbp, rsp; save RSI/RDI
    in the home area; allocate the frame. Codes are listed last-instruction first. */
-static void coff_unwind_info(Bytes *out, const uint32_t frame[3]) {
+static void coff_unwind_info(Bytes *out, const uint32_t frame[4]) {
   uint32_t size = frame[2];
-  unsigned char codes[20];
+  unsigned char codes[32];
   unsigned n = 0;
   if (size <= 128) { codes[n++] = (unsigned char)frame[1]; codes[n++] = (unsigned char)(2 | (size - 8) / 8 << 4); }
   else if (size <= 524280) {
@@ -86,8 +86,18 @@ static void coff_unwind_info(Bytes *out, const uint32_t frame[3]) {
     codes[n++] = (unsigned char)frame[1]; codes[n++] = 1 | 1 << 4;
     put32(codes + n, size); n += 4;
   }
-  /* UWOP_SAVE_NONVOL offsets are eight-byte units above the frame pointer. */
-  const unsigned char fixed[] = {12, 4 | 7 << 4, 3, 0, 8, 4 | 6 << 4, 2, 0, 4, 3, 1, 0 | 5 << 4};
+  /* Home-area saves of RSI, RDI, RBX and R12 (frame[3] bits), each a
+     four-byte mov after push rbp; mov rbp, rsp, newest first.
+     UWOP_SAVE_NONVOL offsets are eight-byte units above the frame pointer. */
+  static const unsigned char registers[] = {6, 7, 3, 12};
+  unsigned saved = 0, order[4];
+  for (unsigned h = 0; h < 4; ++h) if (frame[3] >> h & 1) order[saved++] = h;
+  for (unsigned k = saved; k > 0; --k) {
+    unsigned h = order[k - 1];
+    codes[n++] = (unsigned char)(4 + 4 * k); codes[n++] = (unsigned char)(4 | registers[h] << 4);
+    codes[n++] = (unsigned char)(2 + h); codes[n++] = 0;
+  }
+  const unsigned char fixed[] = {4, 3, 1, 0 | 5 << 4};
   memcpy(codes + n, fixed, sizeof(fixed)); n += sizeof(fixed);
   unsigned slots = n / 2;
   unsigned char header[4] = {1, (unsigned char)frame[1], (unsigned char)slots, 5};

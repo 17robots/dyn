@@ -833,7 +833,7 @@ static void isa_enter(BackendContext *ctx) {
     else ctx->unwind_frame_count++;
     CODE(0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0x75, 16, 0x48, 0x89, 0x7d, 24);
     uint32_t *frame = ctx->unwind_frames[ctx->unwind_frame_count ? ctx->unwind_frame_count - 1 : 0];
-    frame[0] = (uint32_t)start; frame[2] = ctx->frame_bytes;
+    frame[0] = (uint32_t)start; frame[2] = ctx->frame_bytes; frame[3] = 3; /* RSI, RDI */
     /* Windows commits stack one guard page at a time: probe large frames. */
     if (ctx->frame_bytes >= 4096) {
       byte(ctx, 0xb8); word(ctx, ctx->frame_bytes); /* mov eax, frame */
