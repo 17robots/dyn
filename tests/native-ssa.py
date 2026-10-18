@@ -85,6 +85,48 @@ fn main() {
   _ = io.println(io.stdout(), "{} {} {} {}", partial.a, partial.b, partial.flag, partial.wide)
 }
 ''',
+    'unroll-jam': '''use "std/io"
+a: [1024]f64
+b: [1024]f64
+c: [1024]f64
+d: [1024]f32
+e: [99]f64
+f: [32]f32
+fn main() {
+  for i in 0..1024 { a[i] = #cast(f64) (i % 13) * 0.37 b[i] = #cast(f64) (i % 7) * -1.25 d[i] = #cast(f32) (i % 5) * 0.5 }
+  n: usize = 32
+  for i in 0..n {
+    for j in 0..n {
+      sum: f64 = 0.1
+      for k in 0..n { sum += a[i * n + k] * b[k * n + j] }
+      c[i * n + j] = sum
+    }
+  }
+  for j in 0..32 {
+    part: f32 = 0.0
+    for k in 0..32 { part += d[k * 32 + j] * d[j * 32 + k] }
+    f[j] = part
+  }
+  small: f32 = 0.0
+  for value in f { small += value }
+  // Odd trip count: not jammed.
+  for j in 0..99 {
+    acc: f64 = 0.0
+    for k in 0..10 { acc += a[k * 99 + j] }
+    e[j] = acc
+  }
+  // Stores feed later loads of the same array: not jammed.
+  for j in 0..30 {
+    acc: f64 = 1.0
+    for k in 0..30 { acc += c[k + j] * 0.5 }
+    c[j + 31] = acc
+  }
+  total: f64 = 0.0
+  for value in c { total += value }
+  for value in e { total += value }
+  _ = io.println(io.stdout(), "{} {} {}", total, small, c[100])
+}
+''',
     'jump-tables': '''use "std/io"
 enum Key { Up, Down, Left, Right, Enter, Escape, Tab }
 fn pick(x: i64) i64 {
@@ -178,6 +220,9 @@ def main():
             result = subprocess.run([output], capture_output=True, text=True, timeout=60)
             assert result.returncode == 0, (name, result.stderr)
         targets = run_programs(work)
+        remarks = subprocess.run([DYN, 'build', work/'unroll-jam', '--release', '--no-cache', '--opt-remarks',
+                                  '--output', work/'unroll-jam'/'remarks'], capture_output=True, text=True, timeout=300)
+        assert remarks.stderr.count('unrolled and jammed') == 2, remarks.stderr
         # Struct parameters, literals and results stay in registers: `step`
         # never touches its frame.
         output = work/'struct-values'/'listing'

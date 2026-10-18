@@ -3124,6 +3124,234 @@ static void ssa_divisions(Ssa *s, const uint32_t *order, uint32_t n) {
 /* Loop-invariant code motion: pure values whose operands come from outside
    a loop move to the block that enters the loop. Checks, loads and calls stay
    where they are, so panics and memory effects keep their order. */
+/* ---- Unroll and jam ----
+
+   A loop nest such as matrix multiply,
+
+     for j in 0..n { sum := 0.0  for k in 0..m { sum += a[..k] * b[k..j] }  c[j] = sum }
+
+   is bound by the latency of the floating add that carries `sum` across
+   iterations of the inner loop. Unrolling the outer loop by two and fusing
+   the copies of the inner loop runs two independent sums side by side and
+   shares every value that does not depend on j. Each sum still adds the same
+   terms in the same order, so results are bit-identical. This applies only
+   when it is plainly safe: an even, constant trip count; no calls, checks or
+   phis outside the inner loop header; no branch that depends on j; and stores
+   only to globals the nest never loads from. */
+static int32_t ssa_global_base(Ssa *s, int32_t address) {
+  for (unsigned depth = 0; address >= 0 && depth < 16; ++depth) {
+    SsaValue *v = &s->values[address];
+    if (v->op == SO_COPY || v->op == SO_LEA) address = v->a;
+    else if (v->op == SO_SYMBOL && v->aux2 == SYM_GLOBAL) return (int32_t)v->aux;
+    else return -1;
+  }
+  return -1;
+}
+static bool ssa_jam_loop(Ssa *s, const uint32_t *order, uint32_t n, uint32_t index, uint32_t *stamp, uint32_t mark,
+                         uint32_t *work, uint8_t *depends) {
+  uint32_t header = order[index];
+  SsaBlock *h = &s->blocks[header];
+  if (h->kind != SB_IF || h->preds.count != 2) return false;
+  uint32_t entry = h->preds.items[0], latch = h->preds.items[1];
+  if (s->blocks[entry].order >= h->order) { uint32_t t = entry; entry = latch; latch = t; }
+  if (s->blocks[latch].order < h->order || s->blocks[entry].order >= h->order) return false;
+  /* The header holds the counter phi and its comparison with a constant bound. */
+  int32_t counter = -1, compare = h->control;
+  for (uint32_t k = 0; k < h->values.count; ++k) {
+    int32_t id = (int32_t)h->values.items[k];
+    SsaValue *v = &s->values[id];
+    if (v->op == SO_PHI && counter < 0) counter = id;
+    else if (id != compare) return false;
+  }
+  if (counter < 0 || compare < 0) return false;
+  SsaValue *c = &s->values[compare], *phi = &s->values[counter];
+  uint64_t start, bound, one;
+  int32_t step = (int32_t)s->lists[phi->list + (h->preds.items[0] == latch ? 0 : 1)];
+  int32_t initial = (int32_t)s->lists[phi->list + (h->preds.items[0] == latch ? 1 : 0)];
+  if (c->op != SO_CMP || (c->cond != CC_B && c->cond != CC_AE) || c->a != counter || !ssa_is_const(s, c->b, &bound) ||
+      !ssa_is_const(s, initial, &start) || start >= bound || (bound - start) % 2) return false;
+  SsaValue *increment = &s->values[step];
+  if (increment->op != SO_ADD || increment->a != counter || !ssa_is_const(s, increment->b, &one) || one != 1 ||
+      increment->block != latch) return false;
+  /* The body: blocks reaching the latch without passing the header. */
+  uint32_t top = 0;
+  stamp[header] = mark;
+  stamp[latch] = mark; work[top++] = latch;
+  while (top) {
+    SsaBlock *x = &s->blocks[work[--top]];
+    for (uint32_t p = 0; p < x->preds.count; ++p) {
+      uint32_t pred = x->preds.items[p];
+      if (stamp[pred] != mark) { stamp[pred] = mark; work[top++] = pred; }
+    }
+  }
+  /* One inner loop whose header holds the only other phis, at least one of
+     them a floating accumulator. */
+  uint32_t inner = UINT32_MAX;
+  int32_t stores = -1;
+  int32_t loads[64]; unsigned load_count = 0;
+  for (uint32_t i = index + 1; i < n; ++i) {
+    uint32_t b = order[i];
+    if (stamp[b] != mark) continue;
+    SsaBlock *block = &s->blocks[b];
+    bool back = false;
+    for (uint32_t p = 0; p < block->preds.count; ++p) back |= s->blocks[block->preds.items[p]].order >= block->order;
+    if (back) {
+      if (inner != UINT32_MAX || block->kind != SB_IF) return false;
+      inner = b;
+    }
+    if (block->kind == SB_RETURN || block->kind == SB_EXIT || block->kind == SB_CALL || block->kind == SB_SWITCH) return false;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->op == SO_PHI && b != inner) return false;
+      if (v->op == SO_STORE) {
+        int32_t base = ssa_global_base(s, v->a);
+        if (base < 0 || (stores >= 0 && stores != base)) return false;
+        stores = base;
+      } else if (v->op == SO_LOAD) {
+        int32_t base = ssa_global_base(s, v->a);
+        int64_t offset;
+        if (base < 0 && !ssa_frame_offset(s, v->a, &offset)) return false;
+        if (base >= 0 && load_count < 64) loads[load_count++] = base;
+        else if (base >= 0) return false;
+      } else if (v->effect) return false;
+    }
+  }
+  /* The body starts with a plain block of its own, where counter + 1 goes. */
+  if (h->succ[0] == UINT32_MAX || h->succ[1] == UINT32_MAX || (stamp[h->succ[0]] == mark) == (stamp[h->succ[1]] == mark)) return false;
+  uint32_t first = stamp[h->succ[0]] == mark ? h->succ[0] : h->succ[1];
+  /* The body runs while counter < bound. */
+  if ((first == h->succ[0]) != (c->cond == CC_B)) return false;
+  if (inner == UINT32_MAX || first == inner || s->blocks[first].preds.count != 1) return false;
+  for (unsigned i = 0; i < load_count; ++i) if (loads[i] == stores) return false;
+  /* Values that depend on the counter, to a fixed point through the inner phis. */
+  memset(depends, 0, s->value_count);
+  depends[counter] = 1;
+  bool grew = true, floating = false;
+  while (grew) {
+    grew = false;
+    for (uint32_t i = index + 1; i < n; ++i) {
+      uint32_t b = order[i];
+      if (stamp[b] != mark) continue;
+      SsaBlock *block = &s->blocks[b];
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t id = block->values.items[k];
+        if (depends[id] || (int32_t)id == step) continue;
+        uint32_t count = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+        for (uint32_t o = 0; o < count; ++o)
+          if (*ssa_slots[o] >= 0 && depends[*ssa_slots[o]]) { depends[id] = 1; grew = true; break; }
+      }
+    }
+  }
+  for (uint32_t i = index + 1; i < n; ++i) {
+    uint32_t b = order[i];
+    if (stamp[b] != mark) continue;
+    SsaBlock *block = &s->blocks[b];
+    int32_t controls[2] = {block->control, block->control2};
+    for (unsigned k = 0; k < 2; ++k)
+      if ((block->kind == SB_IF) && controls[k] >= 0 && depends[controls[k]]) return false;
+    if (b != inner) continue;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->op == SO_PHI && depends[block->values.items[k]] && (v->cls == SC_F64 || v->cls == SC_F32)) floating = true;
+    }
+  }
+  if (!floating) return false;
+  /* The second copy reads counter + 1. */
+  uint32_t value_limit = s->value_count;
+  int32_t *map = malloc(value_limit * sizeof(int32_t));
+  if (!map) { s->failed = true; return false; }
+  for (uint32_t i = 0; i < value_limit; ++i) map[i] = -1;
+  int32_t next = ssa_value(s, first, SO_ADD, SC_INT, counter, -1, -1, 0, 0);
+  int32_t constant = ssa_value(s, first, SO_CONST, SC_INT, -1, -1, -1, 1, 0);
+  if (s->failed) { free(map); return false; }
+  s->values[next].b = constant;
+  map[counter] = next;
+  SsaList *list = &s->blocks[first].values;
+  ssa_push(s, list, 0); ssa_push(s, list, 0);
+  if (s->failed) { free(map); return false; }
+  memmove(list->items + 2, list->items, (list->count - 2) * sizeof(uint32_t));
+  list->items[0] = (uint32_t)constant; list->items[1] = (uint32_t)next;
+  /* Phi copies first, since the inner loop's back edges refer to them. */
+  SsaBlock *ib = &s->blocks[inner];
+  for (uint32_t k = 0; k < ib->values.count; ++k) {
+    uint32_t id = ib->values.items[k];
+    if (s->values[id].op != SO_PHI || !depends[id]) continue;
+    int32_t copy = ssa_value(s, inner, SO_PHI, s->values[id].cls, -1, -1, -1, 0, 0);
+    if (s->failed) { free(map); return false; }
+    map[id] = copy;
+  }
+  for (uint32_t i = index + 1; i < n && !s->failed; ++i) {
+    uint32_t b = order[i];
+    if (stamp[b] != mark) continue;
+    SsaList *values = &s->blocks[b].values;
+    uint32_t count = values->count;
+    uint32_t *items = malloc(2 * (count + 1) * sizeof(uint32_t)), out = 0;
+    if (!items) { s->failed = true; break; }
+    for (uint32_t k = 0; k < count; ++k) {
+      uint32_t id = s->blocks[b].values.items[k];
+      items[out++] = id;
+      if (id >= value_limit || !depends[id] || (int32_t)id == next || (int32_t)id == constant) continue;
+      if (s->values[id].op == SO_PHI) { items[out++] = (uint32_t)map[id]; continue; }
+      int32_t copy = ssa_value(s, b, (SsaOp)s->values[id].op, s->values[id].cls, -1, -1, -1, 0, 0);
+      if (s->failed) break;
+      SsaValue saved = s->values[id];
+      saved.reg = saved.slot = saved.hint = -1;
+      s->values[copy] = saved;
+      uint32_t operands = ssa_operands(s, (uint32_t)copy, ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t o = 0; o < operands; ++o)
+        if (*ssa_slots[o] >= 0 && (uint32_t)*ssa_slots[o] < value_limit && map[*ssa_slots[o]] >= 0) *ssa_slots[o] = map[*ssa_slots[o]];
+      map[id] = copy;
+      items[out++] = (uint32_t)copy;
+    }
+    SsaList *target = &s->blocks[b].values;
+    for (uint32_t k = target->count; k < out; ++k) ssa_push(s, target, 0);
+    if (!s->failed) { memcpy(target->items, items, out * sizeof(uint32_t)); target->count = out; }
+    free(items);
+  }
+  /* Phi copies take the copies of their incoming values. */
+  for (uint32_t k = 0; k < s->blocks[inner].values.count && !s->failed; ++k) {
+    uint32_t id = s->blocks[inner].values.items[k];
+    if (id >= value_limit || s->values[id].op != SO_PHI || !depends[id]) continue;
+    SsaValue *original = &s->values[id];
+    int32_t operands[64];
+    if (original->count > 64) { s->failed = true; break; }
+    for (uint32_t p = 0; p < original->count; ++p) {
+      int32_t op = (int32_t)s->lists[original->list + p];
+      operands[p] = op >= 0 && (uint32_t)op < value_limit && map[op] >= 0 ? map[op] : op;
+    }
+    uint32_t at = ssa_list(s, operands, s->values[id].count);
+    s->values[map[id]].list = at; s->values[map[id]].count = s->values[id].count;
+  }
+  free(map);
+  if (s->failed) return false;
+  /* The counter now steps by two. */
+  int32_t two = ssa_value(s, latch, SO_CONST, SC_INT, -1, -1, -1, 2, 0);
+  ssa_push(s, &s->blocks[latch].values, 0);
+  if (s->failed) return false;
+  SsaList *latch_values = &s->blocks[latch].values;
+  memmove(latch_values->items + 1, latch_values->items, (latch_values->count - 1) * sizeof(uint32_t));
+  latch_values->items[0] = (uint32_t)two;
+  s->values[step].b = two;
+  return true;
+}
+static bool ssa_jam(Ssa *s, const uint32_t *order, uint32_t n) {
+  uint32_t *stamp = calloc(s->block_count, sizeof(uint32_t)), *work = malloc((s->block_count + 1) * sizeof(uint32_t));
+  uint8_t *depends = malloc(s->value_count + 1);
+  bool changed = false;
+  if (!stamp || !work || !depends) { s->failed = true; goto done; }
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    if (s->value_count > 100000) break;
+    uint8_t *grown = realloc(depends, s->value_count + 1);
+    if (!grown) { s->failed = true; break; }
+    depends = grown;
+    if (!ssa_jam_loop(s, order, n, i, stamp, i + 1, work, depends)) continue;
+    changed = true;
+    if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: unrolled and jammed a loop nest by 2\n", s->f->name);
+  }
+done:
+  free(stamp); free(work); free(depends);
+  return changed;
+}
 static bool ssa_hoist(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *stamp = calloc(s->block_count, sizeof(uint32_t)), *work = malloc((s->block_count + 1) * sizeof(uint32_t));
   if (!stamp || !work) { free(stamp); free(work); s->failed = true; return false; }
@@ -4847,6 +5075,7 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
     SsaBlock *block = &s.blocks[order[i]];
     for (uint32_t k = 0; k < block->values.count; ++k) s.values[block->values.items[k]].block = order[i];
   }
+  if (ssa_jam(&s, order, n)) ssa_resolve_all(&s);
   ssa_divisions(&s, order, n);
   ssa_resolve_all(&s);
   if (ssa_hoist(&s, order, n)) {
