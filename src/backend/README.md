@@ -42,7 +42,9 @@ range prover that removes bounds and overflow checks it can prove, division
 by constants through multiplication, and loop-invariant code motion. Small
 structs in frame memory that never escape (literals, call results, by-value
 parameters) are forwarded: loads take the stored values, copies out of them
-become plain stores, and stores nothing reads are removed. Dense
+become plain stores, and stores nothing reads are removed. Constants stored in
+one block reach loads in the blocks it dominates. The prover also removes
+null and alignment checks on addresses of globals and frame memory. Dense
 `case` statements become jump tables. Linear-scan register allocation runs
 over all values, with clobber-aware live intervals and hints that coalesce
 moves. Emission runs twice so the second pass can use short branches.

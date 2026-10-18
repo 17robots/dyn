@@ -1187,7 +1187,8 @@ static void ssa_initialize(Ssa *s, int32_t destination, DynType type, DynExprId 
   }
   uint32_t size, alignment;
   if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
-  if (value && s->ctx->literal_offsets[id]) {
+  /* Small literals are built field by field so ssa_forward sees the values. */
+  if (value && s->ctx->literal_offsets[id] && size > 64) {
     int32_t source = ssa_symbol(s, s->ctx->literals_symbol, SYM_LOCAL, s->ctx->literal_offsets[id] - 1);
     ssa_emit(s, SO_COPYMEM, SC_NONE, destination, source, -1, size, 1);
     return;
@@ -2631,23 +2632,72 @@ static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner,
   ssa_splice(s, b, k, items, count);
   return !s->failed;
 }
+/* Object a copy operand addresses: frame region r + 1, or -(symbol + 1) for
+   a global addressed directly; 0 when unknown. */
+static int64_t ssa_copy_object(Ssa *s, int32_t address, uint64_t size) {
+  bool inside;
+  uint32_t at;
+  int32_t r = ssa_region_access(s, address, 0, size, &at, &inside);
+  if (r >= 0) return inside ? r + 1 : 0;
+  while (address >= 0 && s->values[address].op == SO_COPY) address = s->values[address].a;
+  SsaValue *v = address >= 0 ? &s->values[address] : NULL;
+  if (v && v->op == SO_SYMBOL && v->aux2 == SYM_GLOBAL && v->c == 0) return -(int64_t)v->aux - 1;
+  return 0;
+}
+/* Copies between different objects, or out of a region whose address never
+   escapes, cannot overlap; they skip memmove's direction test. */
+static void ssa_disjoint_copies(Ssa *s, const uint32_t *order, uint32_t n, const uint8_t *state) {
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->op != SO_COPYMEM || v->aux2) continue;
+      int64_t to = ssa_copy_object(s, v->a, (uint64_t)v->aux), from = ssa_copy_object(s, v->b, (uint64_t)v->aux);
+      bool hidden = (from > 0 && !(state[from - 1] & REGION_ESCAPED)) || (to > 0 && !(state[to - 1] & REGION_ESCAPED));
+      if ((to && from && to != from) || (hidden && to != from)) v->aux2 = 1;
+    }
+  }
+}
 static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t regions = s->region_count;
   if (!regions) return false;
   uint8_t *state = malloc(regions);
   int32_t *owner = malloc((size_t)regions * SSA_TRACKED * sizeof(int32_t));
   uint32_t *touched = malloc(regions * sizeof(uint32_t)), touched_count = 0;
+  /* A region written in one block only: what that block leaves holds
+     wherever the block dominates. */
+  uint32_t *writer = malloc(regions * sizeof(uint32_t));
+  int32_t *saved = malloc((size_t)regions * SSA_TRACKED * sizeof(int32_t));
   SsaKnown *known = NULL;
   uint32_t known_count = 0, known_capacity = 0;
   bool changed = false;
-  if (!state || !owner || !touched) { s->failed = true; goto done; }
+  if (!state || !owner || !touched || !writer || !saved) { s->failed = true; goto done; }
   ssa_classify_regions(s, order, n, state);
-  for (size_t i = 0; i < (size_t)regions * SSA_TRACKED; ++i) owner[i] = SSA_UNKNOWN;
+  for (size_t i = 0; i < (size_t)regions * SSA_TRACKED; ++i) owner[i] = saved[i] = SSA_UNKNOWN;
+  for (uint32_t r = 0; r < regions; ++r) writer[r] = UINT32_MAX;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if ((v->op != SO_STORE || v->b >= 0) && v->op != SO_COPYMEM && v->op != SO_ZEROMEM) continue;
+      bool inside;
+      uint32_t at;
+      int32_t r = ssa_region_access(s, v->a, v->op == SO_STORE ? v->aux : 0, ssa_access_size(v), &at, &inside);
+      if (r >= 0) writer[r] = writer[r] == UINT32_MAX || writer[r] == order[i] ? order[i] : UINT32_MAX - 1;
+    }
+  }
   for (uint32_t i = 0; i < n && !s->failed; ++i) {
     uint32_t b = order[i];
     for (uint32_t t = 0; t < touched_count; ++t)
       for (uint32_t j = 0; j < SSA_TRACKED; ++j) owner[(size_t)touched[t] * SSA_TRACKED + j] = SSA_UNKNOWN;
-    touched_count = 0; known_count = 0;
+    touched_count = 0;
+    uint32_t local = known_count; /* entries from here on belong to this block */
+    for (uint32_t r = 0; r < regions; ++r) {
+      if (writer[r] >= UINT32_MAX - 1 || writer[r] == b || saved[(size_t)r * SSA_TRACKED] == SSA_UNKNOWN ||
+          (state[r] & REGION_ESCAPED) || !ssa_dominates(s, writer[r], b)) continue;
+      memcpy(owner + (size_t)r * SSA_TRACKED, saved + (size_t)r * SSA_TRACKED, SSA_TRACKED * sizeof(int32_t));
+      touched[touched_count++] = r;
+    }
     for (uint32_t k = 0; k < s->blocks[b].values.count && !s->failed; ++k) {
       uint32_t id = s->blocks[b].values.items[k];
       SsaValue *v = &s->values[id];
@@ -2688,6 +2738,9 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
         }
         int32_t e = bytes[0];
         if (e < 0 || known[e].offset != at || known[e].width != size) continue;
+        /* Across blocks only constants: other values would stay live
+           through the gap and cost registers or spills. */
+        if ((uint32_t)e < local && s->values[known[e].value].op != SO_CONST) continue;
         bool whole = true;
         for (uint32_t j = 0; j < size; ++j) whole = whole && bytes[j] == e;
         int64_t stored = known[e].type;
@@ -2707,6 +2760,9 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
       }
       for (uint32_t j = 0; j < size; ++j) bytes[j] = fill;
     }
+    for (uint32_t t = 0; t < touched_count; ++t)
+      if (writer[touched[t]] == b)
+        memcpy(saved + (size_t)touched[t] * SSA_TRACKED, owner + (size_t)touched[t] * SSA_TRACKED, SSA_TRACKED * sizeof(int32_t));
   }
   if (s->failed) goto done;
   /* Stores to regions nothing reads any more. */
@@ -2731,8 +2787,9 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
     }
     block->values.count = kept;
   }
+  ssa_disjoint_copies(s, order, n, state);
 done:
-  free(state); free(owner); free(touched); free(known);
+  free(state); free(owner); free(touched); free(writer); free(saved); free(known);
   return changed;
 }
 /* Unsigned bounds of a value where `block` executes: arithmetic over
@@ -2871,6 +2928,62 @@ static void ssa_range(Ssa *s, int32_t id, uint32_t block, uint64_t *lo, uint64_t
   if (*lo > *hi) { *lo = 0; *hi = UINT64_MAX; }
 }
 /* Removes checks and overflow tests the ranges prove. */
+/* Whether an address is known non-null, and log2 of the alignment it is
+   known to have. Globals start 8-byte aligned and frame offsets are relative
+   to a 16-byte aligned FP. Constant offsets and scaled indexes keep a valid
+   object address valid; they lower only the alignment. */
+static unsigned ssa_low_zero_bits(uint64_t x, unsigned cap) {
+  unsigned bits = 0;
+  while (bits < cap && !(x >> bits & 1)) ++bits;
+  return bits;
+}
+/* Low bits of an integer value known to be zero, up to 6. */
+static unsigned ssa_zero_bits(Ssa *s, int32_t id, unsigned depth) {
+  if (id < 0 || depth > 8) return 0;
+  SsaValue *v = &s->values[id];
+  uint64_t x;
+  if (ssa_is_const(s, id, &x)) return ssa_low_zero_bits(x, 6);
+  switch (v->op) {
+  case SO_COPY: return ssa_zero_bits(s, v->a, depth + 1);
+  case SO_SHL: {
+    if (!ssa_is_const(s, v->b, &x) || x > 6) return 0;
+    unsigned bits = ssa_zero_bits(s, v->a, depth + 1) + (unsigned)x;
+    return bits > 6 ? 6 : bits;
+  }
+  case SO_MUL: case SO_AND: {
+    unsigned a = ssa_zero_bits(s, v->a, depth + 1), b = ssa_zero_bits(s, v->b, depth + 1);
+    unsigned bits = v->op == SO_MUL ? a + b : (a > b ? a : b);
+    return bits > 6 ? 6 : bits;
+  }
+  case SO_ADD: case SO_SUB: {
+    unsigned a = ssa_zero_bits(s, v->a, depth + 1), b = ssa_zero_bits(s, v->b, depth + 1);
+    return a < b ? a : b;
+  }
+  default: return 0;
+  }
+}
+static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, unsigned depth) {
+  if (id < 0 || depth > 8) return false;
+  SsaValue *v = &s->values[id];
+  switch (v->op) {
+  case SO_COPY: return ssa_address_facts(s, v->a, align, depth + 1);
+  case SO_FRAME: *align = ssa_low_zero_bits((uint64_t)v->aux, 4); return true;
+  case SO_SYMBOL:
+    if (v->aux2 != SYM_GLOBAL) return false;
+    *align = ssa_low_zero_bits((uint64_t)v->c, 3);
+    return true;
+  case SO_LEA: {
+    unsigned base;
+    if (!ssa_address_facts(s, v->a, &base, depth + 1)) return false;
+    unsigned index = v->b >= 0 ? ssa_low_zero_bits(v->scale, 3) + ssa_zero_bits(s, v->b, 0) : 6;
+    unsigned offset = ssa_low_zero_bits((uint64_t)v->aux, 6);
+    *align = base < index ? base : index;
+    if (offset < *align) *align = offset;
+    return true;
+  }
+  default: return false;
+  }
+}
 static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
   bool changed = false;
   for (uint32_t i = 0; i < n; ++i) {
@@ -2900,6 +3013,10 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
         }
         default: break;
         }
+        unsigned align;
+        if (v->aux == GUARD_NONNULL && ssa_address_facts(s, v->a, &align, 0)) proven = true;
+        if (v->aux == GUARD_ALIGNED && s->values[v->a].op == SO_AND && ssa_is_const(s, s->values[v->a].b, &blo) &&
+            ssa_address_facts(s, s->values[v->a].a, &align, 0) && !(blo & ~((UINT64_C(1) << align) - 1))) proven = true;
         if (proven) { changed = true; continue; }
       } else if (v->op == SO_ITOF && v->aux) {
         ssa_range(s, v->a, b, &alo, &ahi, 0);
