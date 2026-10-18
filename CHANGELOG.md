@@ -23,8 +23,8 @@ servers so they pick up the new `dyn`.
   LLVM backend and C++ ThinLTO bridge are removed; `--backend llvm` now reports
   an error. Source builds require a C11 compiler and Python. Optional LLVM tools
   remain useful for validating exported assembly in tests.
-- Release builds for x86-64 and AArch64 on Linux and macOS, and for RISC-V64
-  Linux, generate code through an SSA optimizer and register allocator.
+- Release builds for x86-64 and AArch64 on Linux and macOS, RISC-V64 Linux and
+  x86-64 Windows generate code through an SSA optimizer and register allocator.
   Typical loops run two to three times faster (more on RISC-V64) and binaries
   are about 30% smaller. Runtime checks, their order and their messages are
   unchanged. `DYN_NO_SSA=1` selects the previous code generator, and

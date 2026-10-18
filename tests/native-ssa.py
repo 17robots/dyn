@@ -55,6 +55,15 @@ fn main() {
   _ = io.println(io.stdout(), "{} {} {} {} {}", big, small, bytes[0] + bytes[2], halves[0], #cast(u64) (-(big + 1)))
 }
 ''',
+    'large-frame': '''use "std/io"
+seed: u8 = initial()
+fn initial() u8 { return 120 }
+fn main() {
+  text: [6000]u8 = []
+  index: usize = 0 for index < 6000 { text[index] = seed + #cast(u8) (index % 7) index += 1 }
+  _ = io.println(io.stdout(), "{} {} {}", text[0], text[4100], text[5999])
+}
+''',
     'jump-tables': '''use "std/io"
 enum Key { Up, Down, Left, Right, Enter, Escape, Tab }
 fn pick(x: i64) i64 {
@@ -119,6 +128,8 @@ def run_programs(work):
         targets.append(('aarch64-linux', ['qemu-aarch64']))
     if shutil.which('qemu-riscv64'):
         targets.append(('riscv64-linux', ['qemu-riscv64']))
+    if shutil.which('wine'):
+        targets.append(('x86_64-windows', ['wine']))
     for name, source in PROGRAMS.items():
         directory = work/name
         directory.mkdir()

@@ -33,7 +33,8 @@ Wasm output is written by `src/codegen_wasm.c`, not by this backend.
 
 ## Code generation
 
-Optimized builds for x86-64 and AArch64 Linux and macOS and RISC-V64 Linux use
+Optimized builds for x86-64 and AArch64 Linux and macOS, RISC-V64 Linux and
+x86-64 Windows use
 SSA code generation (`ssa.inc`), modeled on Go's compiler. Each function is
 built into SSA form while walking the IR (Braun et al.), then optimized:
 constant folding, dominator-based CSE that also removes repeated checks, a
@@ -45,7 +46,7 @@ moves. Emission runs twice so the second pass can use short branches.
 
 A function the SSA path cannot build yet falls back to the tree emitter;
 `--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds
-and Windows use the tree emitter. `DYN_NO_SSA=1` selects the tree
+and Windows ARM64 use the tree emitter. `DYN_NO_SSA=1` selects the tree
 emitter everywhere. SSA code
 keeps the runtime checks, their order and their messages, so both paths
 produce the same output; `tests/native-ssa.py` checks that across targets.

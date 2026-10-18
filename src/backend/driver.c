@@ -112,7 +112,7 @@ typedef struct {
   bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
   bool darwin; /* macOS: Apple's AAPCS64 variant and Mach-O objects */
   /* Windows unwind data: per function {text start, prologue length, frame bytes}. */
-  uint32_t unwind_frames[MAX_SYMBOLS + 2][3];
+  uint32_t unwind_frames[MAX_SYMBOLS + 2][4]; /* start, prologue bytes, frame bytes, saved home registers */
   unsigned unwind_frame_count;
   uint32_t arm_epilogues[MAX_SYMBOLS * 8][2]; /* frame index, text offset */
   unsigned arm_epilogue_count;
