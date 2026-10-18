@@ -35,6 +35,9 @@ servers so they pick up the new `dyn`.
 - Release builds unroll and jam loop nests that sum floating-point products,
   such as matrix multiply: two outer iterations share each inner loop. Results
   are bit-identical, and the matrix multiply benchmark runs twice as fast.
+- Recursive functions that return `f(...) + x` on unsigned 64-bit integers, such
+  as Fibonacci, loop on their last call instead of recursing. Overflow still
+  panics with the same message.
 - `--emit-ir` is removed; use `--emit-asm` to inspect generated code. The
   LLVM-syntax writer behind it was the last LLVM-shaped code in the compiler.
 - Native targets include Linux x86-64, AArch64 and RISC-V64, macOS x86-64 and

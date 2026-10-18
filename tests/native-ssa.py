@@ -8,6 +8,7 @@ programs also run with DYN_NO_SSA=1, which selects the tree emitter.
 import os
 from pathlib import Path
 import random
+import re
 import shutil
 import subprocess
 import tempfile
@@ -127,6 +128,35 @@ fn main() {
   _ = io.println(io.stdout(), "{} {} {}", total, small, c[100])
 }
 ''',
+    'accumulate': '''use "std/io"
+fn fib(n: u64) u64 {
+  if n < 2 { return n }
+  return fib(n - 1) + fib(n - 2)
+}
+fn weighted(n: u64, k: u64) u64 {
+  if n == 0 { return k }
+  return weighted(n - 1, k + 1) + k * 3
+}
+fn signed(n: i64) i64 {
+  if n < 2 { return n - 5 }
+  return signed(n - 1) + signed(n - 2)
+}
+count: u64 = 0
+fn noisy(n: u64) u64 {
+  count += 1
+  if n == 0 { return 1 }
+  return noisy(n - 1) + n
+}
+fn grow(n: u64) u64 {
+  if n == 0 { return 0 }
+  return grow(n - 1) + 6148914691236517205
+}
+fn main() {
+  _ = io.println(io.stdout(), "{} {} {} {} {}", fib(30), weighted(50, 7), signed(20), noisy(40), count)
+  _ = io.println(io.stdout(), "{}", grow(2))
+  _ = io.println(io.stdout(), "{}", grow(4))
+}
+''',
     'jump-tables': '''use "std/io"
 enum Key { Up, Down, Left, Right, Enter, Escape, Tab }
 fn pick(x: i64) i64 {
@@ -223,6 +253,10 @@ def main():
         remarks = subprocess.run([DYN, 'build', work/'unroll-jam', '--release', '--no-cache', '--opt-remarks',
                                   '--output', work/'unroll-jam'/'remarks'], capture_output=True, text=True, timeout=300)
         assert remarks.stderr.count('unrolled and jammed') == 2, remarks.stderr
+        remarks = subprocess.run([DYN, 'build', work/'accumulate', '--release', '--no-cache', '--opt-remarks',
+                                  '--output', work/'accumulate'/'remarks'], capture_output=True, text=True, timeout=300)
+        accumulated = re.findall(r'remark: (\w+): self-recursive', remarks.stderr)
+        assert sorted(accumulated) == ['fib', 'grow', 'weighted'], remarks.stderr
         # Struct parameters, literals and results stay in registers: `step`
         # never touches its frame.
         output = work/'struct-values'/'listing'

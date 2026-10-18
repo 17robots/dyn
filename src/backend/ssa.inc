@@ -2919,6 +2919,9 @@ static void ssa_range(Ssa *s, int32_t id, uint32_t block, uint64_t *lo, uint64_t
           if ((cond == CC_A || cond == CC_G) && olo < UINT64_MAX && olo + 1 > *lo) *lo = olo + 1;
           if ((cond == CC_AE || cond == CC_GE) && olo > *lo) *lo = olo;
           if (cond == CC_E) { if (olo > *lo) *lo = olo; if (ohi < *hi) *hi = ohi; }
+          /* Not equal to a range end trims that end: n != 0 gives n >= 1. */
+          if (cond == CC_NE && olo == ohi && olo == *lo && *lo < *hi) ++*lo;
+          else if (cond == CC_NE && olo == ohi && olo == *hi && *lo < *hi) --*hi;
         }
       }
     }
@@ -3124,6 +3127,194 @@ static void ssa_divisions(Ssa *s, const uint32_t *order, uint32_t n) {
 /* Loop-invariant code motion: pure values whose operands come from outside
    a loop move to the block that enters the loop. Checks, loads and calls stay
    where they are, so panics and memory effects keep their order. */
+/* ---- Accumulator recursion ----
+
+   `return f(a) + x` in a function that only computes, where + is checked
+   unsigned 64-bit addition, becomes a jump back to the start with the
+   arguments as the new parameters and x added to an accumulator; every other
+   return adds the accumulator. Fibonacci-style recursion then makes one call
+   per level instead of two. Unsigned partial sums only grow, so the
+   accumulated additions overflow exactly when the original ones do. The
+   function's only checks are overflow checks, which all report the same
+   message, so a different order among them cannot change the outcome. */
+static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
+  const DynIrProgram *ir = s->ir;
+  const DynIrFunction *f = s->f;
+  size_t index = (size_t)(f - ir->functions);
+  if (f->is_main || index >= ir->function_count || storage_type(ir, f->return_type) != DYN_TYPE_U64 || !n) return false;
+  unsigned self = s->ctx->function_symbols[index];
+  uint32_t entry = order[0];
+  int32_t params[16]; unsigned param_count = 0;
+  int32_t tails[16]; unsigned tail_count = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    uint32_t b = order[i];
+    SsaBlock *block = &s->blocks[b];
+    if (block->kind != SB_PLAIN && block->kind != SB_IF && block->kind != SB_RETURN) return false;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      switch (v->op) {
+      case SO_PARAM:
+        if (b != entry || param_count == 16 || v->aux >= SSA_TARGET) return false;
+        params[param_count++] = (int32_t)id;
+        break;
+      case SO_CALL:
+        if (v->aux2 || (unsigned)v->aux != self || v->cond) return false;
+        break;
+      case SO_ADDO: case SO_SUBO: case SO_MULO: case SO_RESULT: case SO_LOAD: break;
+      case SO_CHECK: if (v->aux != GUARD_OVERFLOW) return false; break;
+      case SO_PHI: return false; /* keeps the rewrite to straight-line returns */
+      default: if (v->effect) return false;
+      }
+    }
+    if (block->kind != SB_RETURN || block->control2 >= 0) continue;
+    /* A tail: the block returns unsigned call result + other, the call is
+       its last call, and nothing after the call uses the result. */
+    uint32_t count = block->values.count;
+    SsaValue *add = &s->values[block->control];
+    if (!count || add->op != SO_ADDO || add->aux2 || block->values.items[count - 1] != (uint32_t)block->control) continue;
+    int32_t last = -1;
+    for (uint32_t k = 0; k < count; ++k)
+      if (s->values[block->values.items[k]].op == SO_CALL) last = (int32_t)block->values.items[k];
+    int32_t result = add->b, other = add->a;
+    if (s->values[result].op != SO_RESULT || s->values[result].a != last) { result = add->a; other = add->b; }
+    SsaValue *r = &s->values[result];
+    if (last < 0 || r->op != SO_RESULT || r->a != last || r->aux || other == result) continue;
+    bool after = false, tail = true;
+    for (uint32_t k = 0; k < count && tail; ++k) {
+      uint32_t id = block->values.items[k];
+      if ((int32_t)id == r->a) { after = true; continue; }
+      if (!after || (int32_t)id == block->control) continue;
+      SsaValue *v = &s->values[id];
+      if (v->op == SO_RESULT && v->a == r->a) continue;
+      if (v->op == SO_CALL) tail = false;
+      uint32_t operands = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t o = 0; o < operands; ++o) if (*ssa_slots[o] == result || *ssa_slots[o] == r->a) tail = false;
+    }
+    if (tail && after && tail_count < 16) tails[tail_count++] = (int32_t)b;
+  }
+  if (!tail_count || !param_count) return false;
+  /* Each tail call passes one register argument per parameter, and its
+     result feeds only the addition. */
+  int32_t calls[16];
+  for (unsigned t = 0; t < tail_count; ++t) {
+    SsaBlock *block = &s->blocks[tails[t]];
+    int32_t last = -1;
+    for (uint32_t k = 0; k < block->values.count; ++k)
+      if (s->values[block->values.items[k]].op == SO_CALL) last = (int32_t)block->values.items[k];
+    calls[t] = last;
+    SsaValue *call = &s->values[calls[t]];
+    if (call->count != param_count) return false;
+    for (uint32_t a = 0; a < call->count; ++a) {
+      int32_t location = (int32_t)s->lists[call->list + 3 * a + 1], bytes = (int32_t)s->lists[call->list + 3 * a + 2];
+      bool found = false;
+      for (unsigned p = 0; p < param_count; ++p) found |= s->values[params[p]].aux == location;
+      if (!found || bytes) return false;
+    }
+  }
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t count = ssa_operands(s, block->values.items[k], ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t o = 0; o < count; ++o) {
+        SsaValue *used = &s->values[*ssa_slots[o]];
+        if (used->op == SO_RESULT && s->values[block->values.items[k]].op != SO_ADDO) return false;
+      }
+    }
+  }
+  /* The old entry's work moves to a loop header after the parameters. */
+  uint32_t header = ssa_block(s);
+  if (s->failed) return false;
+  SsaBlock *e = &s->blocks[entry], *h = &s->blocks[header];
+  h->kind = e->kind; h->control = e->control; h->control2 = e->control2;
+  h->succ[0] = e->succ[0]; h->succ[1] = e->succ[1]; h->loop_depth = e->loop_depth; h->sealed = true;
+  for (unsigned k = 0; k < 2; ++k) {
+    if (h->succ[k] == UINT32_MAX) continue;
+    SsaBlock *next = &s->blocks[h->succ[k]];
+    for (uint32_t p = 0; p < next->preds.count; ++p) if (next->preds.items[p] == entry) next->preds.items[p] = header;
+  }
+  int32_t phis[17];
+  for (unsigned p = 0; p <= param_count; ++p) {
+    phis[p] = ssa_value(s, header, SO_PHI, p < param_count ? s->values[params[p]].cls : SC_INT, -1, -1, -1, 0, 0);
+    if (s->failed) return false;
+    ssa_push(s, &s->blocks[header].values, (uint32_t)phis[p]);
+  }
+  int32_t zero = ssa_value(s, entry, SO_CONST, SC_INT, -1, -1, -1, 0, 0);
+  if (s->failed) return false;
+  e = &s->blocks[entry];
+  uint32_t kept = 0;
+  for (uint32_t k = 0; k < e->values.count; ++k) {
+    uint32_t id = e->values.items[k];
+    if (s->values[id].op == SO_PARAM) e->values.items[kept++] = id;
+    else { s->values[id].block = header; ssa_push(s, &s->blocks[header].values, id); e = &s->blocks[entry]; }
+  }
+  e->values.count = kept;
+  ssa_push(s, &e->values, (uint32_t)zero);
+  e = &s->blocks[entry];
+  e->kind = SB_PLAIN; e->control = e->control2 = -1; e->succ[0] = e->succ[1] = UINT32_MAX;
+  ssa_edge(s, entry, header);
+  /* Parameters are read through the phis from here on. */
+  for (uint32_t i = 0; i <= n; ++i) {
+    SsaBlock *block = &s->blocks[i < n ? order[i] : header];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      if (s->values[id].op == SO_PHI) continue;
+      uint32_t count = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t o = 0; o < count; ++o)
+        for (unsigned p = 0; p < param_count; ++p) if (*ssa_slots[o] == params[p]) *ssa_slots[o] = phis[p];
+    }
+    int32_t *controls[4] = {&block->control, &block->control2, &block->control3, &block->control4};
+    for (unsigned c = 0; c < 4; ++c)
+      for (unsigned p = 0; p < param_count; ++p) if (*controls[c] == params[p]) *controls[c] = phis[p];
+  }
+  /* Incoming values: the parameters first, then one set per tail. */
+  int32_t incoming[17][17];
+  for (unsigned p = 0; p < param_count; ++p) incoming[p][0] = params[p];
+  incoming[param_count][0] = zero;
+  for (unsigned t = 0; t < tail_count; ++t) {
+    uint32_t b = (uint32_t)tails[t];
+    SsaBlock *block = &s->blocks[b];
+    int32_t call_id = calls[t];
+    SsaValue *add = &s->values[block->control];
+    int32_t other = s->values[add->a].op == SO_RESULT && s->values[add->a].a == call_id ? add->b : add->a;
+    if (other == add->b && s->values[add->b].op == SO_RESULT && s->values[add->b].a == call_id) other = add->a;
+    SsaValue *call = &s->values[call_id];
+    for (uint32_t a = 0; a < call->count; ++a) {
+      int32_t value = (int32_t)s->lists[call->list + 3 * a], location = (int32_t)s->lists[call->list + 3 * a + 1];
+      for (unsigned p = 0; p < param_count; ++p) if (s->values[params[p]].aux == location) incoming[p][t + 1] = value;
+    }
+    /* The addition now takes the accumulator in place of the call. */
+    int32_t sum = block->control;
+    s->values[sum].a = phis[param_count]; s->values[sum].b = other;
+    uint32_t kept = 0;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if ((int32_t)id == call_id || (v->op == SO_RESULT && v->a == call_id)) { v->dead = true; continue; }
+      block->values.items[kept++] = id;
+    }
+    block->values.count = kept;
+    block->kind = SB_PLAIN; block->control = -1;
+    ssa_edge(s, b, header);
+    incoming[param_count][t + 1] = sum;
+  }
+  for (unsigned p = 0; p <= param_count && !s->failed; ++p) {
+    uint32_t at = ssa_list(s, incoming[p], tail_count + 1);
+    s->values[phis[p]].list = at; s->values[phis[p]].count = tail_count + 1;
+  }
+  /* Every other return adds the accumulator. */
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    if (block->kind != SB_RETURN || block->control < 0) continue;
+    int32_t sum = ssa_value(s, order[i], SO_ADDO, SC_INT, phis[param_count], block->control, -1, 0, 0);
+    if (s->failed) break;
+    ssa_push(s, &s->blocks[order[i]].values, (uint32_t)sum);
+    s->blocks[order[i]].control = sum;
+  }
+  if (!s->failed && s->ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: self-recursive tail additions accumulate in a loop\n", f->name);
+  return !s->failed;
+}
 /* ---- Unroll and jam ----
 
    A loop nest such as matrix multiply,
@@ -4873,7 +5064,8 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
                     s->values[target->control].fused;
       for (uint32_t k = 0; rotate && k < target->values.count; ++k) {
         SsaValue *v = &s->values[target->values.items[k]];
-        rotate = v->op == SO_PHI || (int32_t)target->values.items[k] == target->control;
+        /* Integer constants emit nothing; uses rematerialize them. */
+        rotate = v->op == SO_PHI || (int32_t)target->values.items[k] == target->control || (v->op == SO_CONST && !ssa_located(v));
       }
       if (rotate) {
         SsaValue *c = &s->values[target->control];
@@ -5071,6 +5263,13 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   free(order);
   order = ssa_order(&s, &n);
   if (!order || s.failed) goto done;
+  if (ssa_accumulate(&s, order, n)) {
+    ssa_resolve_all(&s);
+    free(order);
+    order = ssa_order(&s, &n);
+    if (!order || s.failed) goto done;
+    ssa_dominators(&s, order, n);
+  }
   for (unsigned i = 0; i < n; ++i) {
     SsaBlock *block = &s.blocks[order[i]];
     for (uint32_t k = 0; k < block->values.count; ++k) s.values[block->values.items[k]].block = order[i];

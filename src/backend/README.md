@@ -47,7 +47,10 @@ one block reach loads in the blocks it dominates. The prover also removes
 null and alignment checks on addresses of globals and frame memory. Loop
 nests whose inner loop carries a floating accumulator, such as matrix
 multiply, are unrolled by two and jammed: two independent sums run side by
-side, each adding the same terms in the same order. Dense
+side, each adding the same terms in the same order. A function that returns
+`f(...) + x` with checked unsigned 64-bit addition, and has no effects or
+checks other than overflow checks, keeps the sum in an accumulator and jumps
+back to its start instead of making the last call. Dense
 `case` statements become jump tables. Linear-scan register allocation runs
 over all values, with clobber-aware live intervals and hints that coalesce
 moves. Emission runs twice so the second pass can use short branches.
