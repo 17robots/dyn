@@ -34,7 +34,7 @@ Wasm output is written by `src/codegen_wasm.c`, not by this backend.
 ## Code generation
 
 Optimized builds for x86-64 and AArch64 Linux and macOS, RISC-V64 Linux and
-x86-64 Windows use
+Windows x86-64 and ARM64 use
 SSA code generation (`ssa.inc`), modeled on Go's compiler. Each function is
 built into SSA form while walking the IR (Braun et al.), then optimized:
 constant folding, dominator-based CSE that also removes repeated checks, a
@@ -51,13 +51,22 @@ side, each adding the same terms in the same order. A function that returns
 `f(...) + x` with checked unsigned 64-bit addition, and has no effects or
 checks other than overflow checks, keeps the sum in an accumulator and jumps
 back to its start instead of making the last call. Dense
-`case` statements become jump tables. Linear-scan register allocation runs
-over all values, with clobber-aware live intervals and hints that coalesce
+`case` statements become jump tables. On x86-64 System V, a recursive
+function whose first pure unsigned guard returns an argument can bypass frame
+setup on that path. A two-statement unsigned recurrence with two decreasing
+self calls can also pack its first eight proved byte-sized results into a
+constant. Larger arguments execute the original checked code. Small leaf
+functions inside loops are inlined under a separate size budget at O2; their
+arguments are captured once, and constant subtrees are shared. Runtime checks
+retain their originating callee through inlining, including tree fallback and
+cleanup. Linear-scan register allocation runs over all values, with clobber-aware live intervals and hints that coalesce
 moves. Emission runs twice so the second pass can use short branches.
 
 A function the SSA path cannot build yet falls back to the tree emitter;
 `--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds
-and Windows ARM64 use the tree emitter. `DYN_NO_SSA=1` selects the tree
+use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers
+and spills values that cross calls, so it can reuse the canonical Windows
+unwind records and stack probing. `DYN_NO_SSA=1` selects the tree
 emitter everywhere. SSA code
 keeps the runtime checks, their order and their messages, so both paths
 produce the same output; `tests/native-ssa.py` checks that across targets.
@@ -68,8 +77,8 @@ and copy registers, the frame pointer and an expression stack. AArch64 pushes
 are 16 bytes so SP stays aligned. In release builds, integer locals that never
 escape and do not live across deferred cleanup move to callee-saved registers.
 
-Runtime-check failures share one failure path per check kind in each function;
-later checks branch to it. Paths that run pending defers and then panic, keep
+Runtime-check failures share one failure path per check kind and originating
+function; later checks with the same origin branch to it. Paths that run pending defers and then panic, keep
 unwinding or return share one cleanup ladder per defer stack.
 
 Code generation records symbols and relocations in ELF form. `coff.inc` and

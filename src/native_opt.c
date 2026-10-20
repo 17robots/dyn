@@ -306,13 +306,13 @@ typedef struct {
       arms_cap;
   uint32_t loop_stride, next_loop;
   unsigned expansions, budget;
-  bool failed;
+  bool failed, leaf_only;
   bool *active;
 } Inline;
 typedef struct {
   const DynIrFunction *function;
-  uint32_t local_base, loop_base, exit_loop, result_local;
-  bool returns, expand;
+  uint32_t local_base, loop_base, exit_loop, result_local, check_origin;
+  bool returns, expand, in_loop;
 } InlineScope;
 typedef struct {
   uint32_t *ids;
@@ -399,6 +399,57 @@ static uint32_t inline_loop_base(Inline *b) {
     b->next_loop += b->loop_stride;
   return base;
 }
+/* Keep constant subtrees shared. Cloning their IR identities would duplicate
+   the backend's literal pool even when the enclosing function is unchanged. */
+static bool inline_shared_expr(const DynIrProgram *ir, DynExprId id,
+                               unsigned depth, unsigned *remaining,
+                               bool needs_origin) {
+  if (id == DYN_NO_EXPR)
+    return true;
+  if (depth > 32 || id >= ir->expression_count || !*remaining)
+    return false;
+  --*remaining;
+  const DynIrExpr *e = &ir->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL:
+  case DYN_EXPR_CHAR: case DYN_EXPR_STRING: case DYN_EXPR_NIL:
+  case DYN_EXPR_GLOBAL: case DYN_EXPR_FUNCTION:
+    return true;
+  case DYN_EXPR_STRUCT:
+    /* Defaults run even when explicit fields subsequently replace them. */
+    if (needs_origin) {
+      if (!dyn_type_is_struct(e->type) ||
+          e->type - DYN_TYPE_STRUCT_BASE >= ir->struct_count)
+        return false;
+      const DynIrStruct *record = &ir->structs[e->type - DYN_TYPE_STRUCT_BASE];
+      for (uint32_t i = 0; i < record->field_count; ++i)
+        if (ir->fields[record->field_start + i].default_expression != DYN_NO_EXPR)
+          return false;
+    }
+    break;
+  case DYN_EXPR_ARRAY:
+    break;
+  case DYN_EXPR_UNARY: case DYN_EXPR_BINARY: case DYN_EXPR_CONVERT:
+  case DYN_EXPR_FIELD: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST:
+  case DYN_EXPR_ENUM:
+    /* The regular folder has already replaced evaluable scalar constants.
+       Clone the remaining operations so any failure retains its callee. */
+    if (needs_origin)
+      return false;
+    break;
+  default:
+    return false;
+  }
+  if (!inline_shared_expr(ir, e->left, depth + 1, remaining, needs_origin) ||
+      !inline_shared_expr(ir, e->right, depth + 1, remaining, needs_origin) ||
+      (uint64_t)e->item_start + e->item_count > ir->item_count)
+    return false;
+  for (uint32_t i = 0; i < e->item_count; ++i)
+    if (!inline_shared_expr(ir, ir->items[e->item_start + i].expression,
+                            depth + 1, remaining, needs_origin))
+      return false;
+  return true;
+}
 static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
                              unsigned depth) {
   if (id == DYN_NO_EXPR || b->failed)
@@ -407,13 +458,13 @@ static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
     b->failed = true;
     return DYN_NO_EXPR;
   }
-  DynIrExpr e = b->in->expressions[id];
-  /* Literal and global nodes never contain function-local references. */
-  if (e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT ||
-      e.kind == DYN_EXPR_BOOL || e.kind == DYN_EXPR_CHAR ||
-      e.kind == DYN_EXPR_STRING || e.kind == DYN_EXPR_NIL ||
-      e.kind == DYN_EXPR_GLOBAL || e.kind == DYN_EXPR_FUNCTION)
+  unsigned shared_budget = 1024;
+  if (inline_shared_expr(b->in, id, 0, &shared_budget,
+                         scope->check_origin != 0))
     return id;
+  DynIrExpr e = b->in->expressions[id];
+  if (!e.check_origin)
+    e.check_origin = scope->check_origin;
   if (e.kind == DYN_EXPR_NAME)
     e.integer = inline_local(b, scope, (uint32_t)e.integer);
   if (e.kind == DYN_EXPR_SLICE)
@@ -484,6 +535,109 @@ static unsigned inline_cost(const DynIrProgram *ir, uint32_t start,
   }
   return cost;
 }
+/* Default optimization expands only small, straight-line leaves in loops.
+   Count expressions, not statements: a single return can contain a large tree.
+   Capturing parameters still preserves argument order, aliasing and checks. */
+static bool inline_leaf_expr(const DynIrProgram *ir, DynExprId id,
+                             unsigned *remaining) {
+  if (id == DYN_NO_EXPR)
+    return true;
+  if (id >= ir->expression_count || !*remaining)
+    return false;
+  --*remaining;
+  const DynIrExpr *e = &ir->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL:
+  case DYN_EXPR_CHAR: case DYN_EXPR_NIL: case DYN_EXPR_NAME:
+    return true;
+  case DYN_EXPR_UNARY:
+    if (e->op == DYN_OP_ADDRESS || e->op == DYN_OP_DEREF)
+      return false;
+    break;
+  case DYN_EXPR_BINARY: case DYN_EXPR_CONVERT: case DYN_EXPR_STRUCT:
+  case DYN_EXPR_FIELD: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST:
+    break;
+  default:
+    return false;
+  }
+  if (!inline_leaf_expr(ir, e->left, remaining) ||
+      !inline_leaf_expr(ir, e->right, remaining) ||
+      (uint64_t)e->item_start + e->item_count > ir->item_count)
+    return false;
+  for (uint32_t i = 0; i < e->item_count; ++i)
+    if (!inline_leaf_expr(ir, ir->items[e->item_start + i].expression,
+                          remaining))
+      return false;
+  return true;
+}
+static bool inline_small_type(const DynIrProgram *ir, DynType type) {
+  if (type < DYN_TYPE_STRUCT_BASE)
+    return true;
+  if (type < DYN_TYPE_POINTER_BASE) {
+    size_t index = type - DYN_TYPE_STRUCT_BASE;
+    return index < ir->struct_count && ir->structs[index].size <= 32;
+  }
+  return type < DYN_TYPE_ARRAY_BASE;
+}
+static bool inline_leaf(const DynIrProgram *ir, const DynIrFunction *f) {
+  if (f->body_count != 1 || f->param_count > 4 ||
+      f->local_count != f->param_count ||
+      f->body_start >= ir->child_count ||
+      !inline_small_type(ir, f->return_type))
+    return false;
+  for (uint32_t i = 0; i < f->param_count; ++i)
+    if (!inline_small_type(ir, ir->params[f->param_start + i].type))
+      return false;
+  uint32_t id = ir->children[f->body_start];
+  if (id >= ir->statement_count || ir->statements[id].kind != DYN_STMT_RETURN)
+    return false;
+  unsigned remaining = 24;
+  return inline_leaf_expr(ir, ir->statements[id].expression, &remaining);
+}
+static bool inline_simple_target(const DynIrProgram *ir, DynExprId id) {
+  if (id == DYN_NO_EXPR)
+    return true;
+  if (id >= ir->expression_count)
+    return false;
+  const DynIrExpr *e = &ir->expressions[id];
+  if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL)
+    return true;
+  return e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF &&
+         e->left < ir->expression_count &&
+         ir->expressions[e->left].kind == DYN_EXPR_NAME;
+}
+/* Snapshot the checked assignment address before argument capture. Merely
+   requiring read-only arguments would still reorder null/alignment failures
+   against checks in the arguments or the inlined body. */
+static DynExprId inline_capture_target(Inline *b, const InlineScope *scope,
+                                       DynExprId id, InlineList *list) {
+  const DynIrExpr *target = &b->in->expressions[id];
+  DynType pointer_type = b->in->expressions[target->left].type;
+  DynIrLocal local = {.name = "__inline_target", .type = pointer_type};
+  uint32_t local_id;
+  INLINE_APPEND(b, local, locals_cap, local, local_id);
+  if (b->failed)
+    return DYN_NO_EXPR;
+  DynIrExpr address = {.kind = DYN_EXPR_UNARY, .type = pointer_type,
+                        .op = DYN_OP_ADDRESS,
+                        .left = inline_expr(b, scope, id, 0),
+                        .right = DYN_NO_EXPR, .span = target->span,
+                        .check_origin = target->check_origin ? target->check_origin :
+                                        scope->check_origin};
+  uint32_t address_id;
+  INLINE_APPEND(b, expression, expressions_cap, address, address_id);
+  DynIrStmt capture = inline_empty(DYN_STMT_LOCAL, target->span);
+  capture.local_id = local_id;
+  capture.expression = address_id;
+  inline_statement(b, list, capture);
+  DynIrExpr dereference = *target;
+  if (!dereference.check_origin)
+    dereference.check_origin = scope->check_origin;
+  dereference.left = inline_name(b, local_id, target->span);
+  uint32_t result;
+  INLINE_APPEND(b, expression, expressions_cap, dereference, result);
+  return result;
+}
 static void inline_block(Inline *, const InlineScope *, uint32_t, uint32_t,
                          InlineList *, unsigned);
 static bool inline_call(Inline *b, const InlineScope *scope,
@@ -499,6 +653,8 @@ static bool inline_call(Inline *b, const InlineScope *scope,
       (uint64_t)call->item_start + call->item_count > b->in->item_count ||
       (uint64_t)f->param_start + f->param_count > b->in->param_count)
     return false;
+  if (b->leaf_only && (!scope->in_loop || !inline_leaf(b->in, f)))
+    return false;
   unsigned cost = inline_cost(b->in, f->body_start, f->body_count, 0);
   if (cost > 64 || cost + f->param_count + 2 > b->budget)
     return false;
@@ -507,6 +663,7 @@ static bool inline_call(Inline *b, const InlineScope *scope,
                         .local_base = inline_locals(b, f),
                         .loop_base = inline_loop_base(b),
                         .returns = true,
+                        .check_origin = (uint32_t)call->integer + 1,
                         .expand = true,
                         .result_local = UINT32_MAX};
   nested.exit_loop = inline_loop_base(b);
@@ -557,22 +714,32 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
       break;
     }
     DynIrStmt s = b->in->statements[id];
+    if (!s.check_origin) s.check_origin = scope->check_origin;
     DynExprId value = DYN_NO_EXPR;
     bool eligible =
         s.kind == DYN_STMT_LOCAL || s.kind == DYN_STMT_RETURN ||
         s.kind == DYN_STMT_EXPR || s.kind == DYN_STMT_IF ||
         (s.kind == DYN_STMT_ASSIGN && s.assignment_op == DYN_OP_NONE &&
-         (s.target == DYN_NO_EXPR ||
-          (s.target < b->in->expression_count &&
-           (b->in->expressions[s.target].kind == DYN_EXPR_NAME ||
-            b->in->expressions[s.target].kind == DYN_EXPR_GLOBAL))));
+         inline_simple_target(b->in, s.target));
+    InlineList expansion = {0};
     bool expanded = eligible && s.expression < b->in->expression_count &&
                     inline_call(b, scope, &b->in->expressions[s.expression],
-                                list, &value, depth);
+                                &expansion, &value, depth);
+    bool captured = expanded && s.kind == DYN_STMT_ASSIGN &&
+                    s.target < b->in->expression_count &&
+                    b->in->expressions[s.target].kind == DYN_EXPR_UNARY;
+    if (captured)
+      s.target = inline_capture_target(b, scope, s.target, list);
+    for (size_t j = 0; j < expansion.count; ++j)
+      inline_list(b, list, expansion.ids[j]);
+    free(expansion.ids);
+    if (b->failed)
+      return;
     if (expanded && s.kind == DYN_STMT_EXPR && value == DYN_NO_EXPR)
       continue;
     s.expression = expanded ? value : inline_expr(b, scope, s.expression, 0);
-    s.target = inline_expr(b, scope, s.target, 0);
+    if (!captured)
+      s.target = inline_expr(b, scope, s.target, 0);
     if (s.kind == DYN_STMT_LOCAL || s.kind == DYN_STMT_ASSIGN ||
         s.kind == DYN_STMT_FOR) {
       /* Non-binding loops use a sentinel local id. */
@@ -584,6 +751,8 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
     if (s.kind == DYN_STMT_BREAK || s.kind == DYN_STMT_CONTINUE)
       s.target_loop_id += scope->loop_base;
     InlineScope child = *scope;
+    if (s.kind == DYN_STMT_FOR)
+      child.in_loop = true;
     if (s.kind == DYN_STMT_DEFER)
       child.expand = false;
     InlineList body = {0}, otherwise = {0};
@@ -640,8 +809,9 @@ static void inline_free(DynIrProgram *ir) {
   free(ir->unstable_locals);
   free(ir->local_statements);
 }
-static bool inline_program(DynNativeOptimization *o) {
-  Inline b = {.in = &o->ir, .out = o->ir, .loop_stride = 1};
+static bool inline_program(DynNativeOptimization *o, bool leaf_only) {
+  Inline b = {.in = &o->ir, .out = o->ir, .loop_stride = 1,
+              .leaf_only = leaf_only};
   b.out.expressions = NULL;
   b.out.statements = NULL;
   b.out.items = NULL;
@@ -697,7 +867,7 @@ static bool inline_program(DynNativeOptimization *o) {
                          .local_base = inline_locals(&b, f),
                          .loop_base = inline_loop_base(&b),
                          .expand = true};
-    b.budget = 256;
+    b.budget = leaf_only ? 24 : 256;
     b.active[i] = true;
     InlineList body = {0};
     inline_block(&b, &scope, f->body_start, f->body_count, &body, 0);
@@ -721,6 +891,10 @@ static bool inline_program(DynNativeOptimization *o) {
   if (!b.failed)
     memset(b.out.unstable_locals, 1, b.out.local_count);
   free(b.active);
+  if (!b.failed && !b.expansions) {
+    inline_free(&b.out);
+    return true;
+  }
   if (b.failed) {
     inline_free(&b.out);
     return false;
@@ -824,7 +998,7 @@ bool dyn_native_optimize(const DynSource *source, const DynIrProgram *input,
         s->body_count = 0;
       ++o->branches;
     }
-  if (level >= 3 && !inline_program(o)) {
+  if (level >= 2 && !inline_program(o, level == 2)) {
     free(samples);
     dyn_native_optimization_free(o);
     return false;
@@ -837,7 +1011,7 @@ bool dyn_native_optimize(const DynSource *source, const DynIrProgram *input,
   if (samples && policy->remarks)
     fprintf(stderr, "remark: samples from profile control constant-call "
                     "budgets (hot 1024, cold 16 nodes)\n");
-  if (policy && policy->remarks && level >= 3)
+  if (policy && policy->remarks && level >= 2)
     fprintf(stderr,
             "remark: %zu direct calls inlined with argument capture and "
             "lexical cleanup\n",

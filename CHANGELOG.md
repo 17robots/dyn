@@ -24,7 +24,7 @@ servers so they pick up the new `dyn`.
   an error. Source builds require a C11 compiler and Python. Optional LLVM tools
   remain useful for validating exported assembly in tests.
 - Release builds for x86-64 and AArch64 on Linux and macOS, RISC-V64 Linux and
-  x86-64 Windows generate code through an SSA optimizer and register allocator.
+  Windows x86-64 and ARM64 generate code through an SSA optimizer and register allocator.
   Typical loops run two to three times faster (more on RISC-V64) and binaries
   are about 30% smaller. Runtime checks, their order and their messages are
   unchanged. `DYN_NO_SSA=1` selects the previous code generator, and
@@ -38,6 +38,14 @@ servers so they pick up the new `dyn`.
 - Recursive functions that return `f(...) + x` on unsigned 64-bit integers, such
   as Fibonacci, loop on their last call instead of recursing. Overflow still
   panics with the same message.
+- RISC-V64 release calls preserve structs split between the final argument
+  register and the stack, including arguments following the struct.
+- Default release builds inline small leaf functions inside loops. Argument
+  evaluation, assignment targets, overflow checks and deferred cleanup retain
+  their original behavior; constant data is shared instead of duplicated.
+- On x86-64 Linux and macOS, unsigned recursive base cases can return before
+  setting up a frame. Pure two-branch additive recurrences also specialize their
+  first eight inputs when those results are proved non-overflowing.
 - `--emit-ir` is removed; use `--emit-asm` to inspect generated code. The
   LLVM-syntax writer behind it was the last LLVM-shaped code in the compiler.
 - Native targets include Linux x86-64, AArch64 and RISC-V64, macOS x86-64 and

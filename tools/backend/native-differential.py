@@ -384,7 +384,8 @@ def build(args, root, program):
                         '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
         output = root/(name + (suffix if name == 'native' else ''))
         built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', target,
-                                '--no-cache', '--quiet', '--link', str(provider), '--output', str(output)],
+                                '--no-cache', '--quiet', *(['--release'] if args.release else []),
+                                '--link', str(provider), '--output', str(output)],
                                capture_output=True, text=True, timeout=600)
         if built.returncode:
             (Path(tempfile.gettempdir())/'dyn-native-diff-main.dyn').write_text(program)
@@ -393,7 +394,7 @@ def build(args, root, program):
     dwarfdump = shutil.which('llvm-dwarfdump')
     debug_object = outputs['native'].with_name(outputs['native'].name + '.dynnative.o')
     dwarf = debug_object if args.target.endswith('-macos') else outputs['native']
-    if dwarfdump and dwarf:
+    if dwarfdump and dwarf and not args.release:
         verify = subprocess.run([dwarfdump, '--verify', str(dwarf)], capture_output=True, text=True)
         assert verify.returncode == 0 and 'No errors.' in verify.stdout, verify.stdout[-2000:]
         frames = subprocess.run([dwarfdump, '--debug-frame', str(dwarf)], capture_output=True, text=True)
@@ -453,6 +454,7 @@ def compare(target, prefix, binary, expected, directory, jobs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--target', choices=sorted(TARGETS), default='aarch64-linux')
+    parser.add_argument('--release', action='store_true', help='compare optimized SSA builds instead of debug builds')
     parser.add_argument('--build-only', action='store_true', help='build both programs without running them')
     parser.add_argument('--stage', type=Path, help='build both programs into this directory for another machine')
     parser.add_argument('--run', type=Path, help='run programs staged with --stage on this machine')

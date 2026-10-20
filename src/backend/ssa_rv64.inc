@@ -159,7 +159,7 @@ static void rvs_patch_near(BackendContext *ctx, size_t at, size_t target) {
 static void rvs_fail(SsaEmit *e, int condition, unsigned kind) {
   size_t at = rvs_branch(e, condition, false);
   e->stub_uses = ssa_grow(e->stub_uses, &e->stub_use_capacity, e->stub_use_count + 1, sizeof(*e->stub_uses), &e->s->failed);
-  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count++].kind = kind; }
+  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count++].kind = kind; }
 }
 /* Records a comparison of a and b for the next branch. */
 static Cond rvs_compare(SsaEmit *e, int32_t a, int32_t b, Cond cond) {
@@ -264,6 +264,7 @@ static void rvs_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   uint32_t id = block->values.items[*k];
   SsaValue *v = &s->values[id];
+  e->check_origin = v->check_origin;
   if (v->dead && v->op != SO_CALL) return;
   unsigned d;
   uint64_t c;
@@ -438,7 +439,9 @@ static void rvs_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     else ssa_call_emit(e, block, k);
     return;
   case SO_FAIL: {
-    const char *name = function_name(s->f);
+    const DynIrFunction *origin = v->check_origin && v->check_origin <= s->ir->function_count
+        ? &s->ir->functions[v->check_origin - 1] : s->f;
+    const char *name = function_name(origin);
     size_t length = strlen(name);
     if (length > 800) length = 800;
     isa_string_arguments(ctx, literal(ctx, name, length), (size_t)v->aux << 24 | length);

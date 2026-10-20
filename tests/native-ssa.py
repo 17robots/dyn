@@ -69,7 +69,7 @@ fn main() {
 struct Mixed { a: i32, b: u8, flag: bool, scale: f64, small: f32, wide: i64 = -9 }
 struct Point { x: i64, y: i64 }
 points: [64]Point
-fn step(p: Point, d: Point) Point { return Point{x: (p.x + d.x) % 1009, y: (p.y * 3 + d.y) % 1009} }
+pub fn step(p: Point, d: Point) Point { return Point{x: (p.x + d.x) % 1009, y: (p.y * 3 + d.y) % 1009} }
 fn mix(m: Mixed, by: i32) Mixed { return Mixed{a: m.a - by, b: m.b + 1, flag: !m.flag, scale: m.scale * 2.5, small: m.small + 1.0} }
 fn main() {
   for i in 0..#len(points) { points[i] = Point{x: #cast(i64) i, y: #cast(i64) (i * 7)} }

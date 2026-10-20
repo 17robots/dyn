@@ -118,6 +118,7 @@ typedef struct {
   unsigned arm_epilogue_count;
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
+  uint32_t check_origin, message_origins[GUARD_COUNT], stub_origins[GUARD_COUNT];
   /* Per function, the failure path of each runtime check without pending
      defers is emitted once; later checks of that kind branch to it. */
   size_t guard_stubs[GUARD_COUNT];
@@ -352,10 +353,13 @@ static void store_memory(BackendContext *ctx, DynType type) {
 }
 static const char *function_name(const DynIrFunction *f) { return f->foreign ? f->link_name : f->name; }
 static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {
-  if (ctx->message_offsets[check] == SIZE_MAX) {
+  if (ctx->message_offsets[check] == SIZE_MAX || ctx->message_origins[check] != ctx->check_origin) {
+    ctx->message_origins[check] = ctx->check_origin;
     /* dyn_check_failed builds "runtime check failed (KIND) in NAME" from the
        name and kind << 24 | name length, so each name is stored once. */
-    const char *name = function_name(f);
+    const DynIrFunction *origin = ctx->check_origin && ctx->check_origin <= ctx->active_ir->function_count
+        ? &ctx->active_ir->functions[ctx->check_origin - 1] : f;
+    const char *name = function_name(origin);
     size_t length = strlen(name);
     if (length > 800) length = 800;
     ctx->message_lengths[check] = (size_t)check << 24 | length;
@@ -365,7 +369,7 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
      Restore the fixed frame before calling the noreturn runtime: nested
      expression pushes may otherwise leave the call stack misaligned. */
   bool plain = ctx->unwinding || !ctx->defer_count;
-  if (plain && ctx->guard_stubs[check] != SIZE_MAX) {
+  if (plain && ctx->guard_stubs[check] != SIZE_MAX && ctx->stub_origins[check] == ctx->check_origin) {
     /* x86-64 branches straight to the shared failure path on the inverse
        condition; elsewhere a success branch skips a jump to it. */
     static const signed char inverse[] = {1, 0, 3, 2, 5, 4, 7, 6, 9, 8, -1, 2};
@@ -379,7 +383,7 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     return;
   }
   size_t branch = isa_branch(ctx, success);
-  if (plain) ctx->guard_stubs[check] = ctx->text.n;
+  if (plain) { ctx->guard_stubs[check] = ctx->text.n; ctx->stub_origins[check] = ctx->check_origin; }
   bool held = ctx->holding; ctx->holding = false; /* the failure path never returns */
   isa_reset_stack(ctx);
   unsigned saved_stack=ctx->stack_slots; ctx->stack_slots=0;
@@ -388,7 +392,10 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     isa_rodata_address(ctx, R_A, ctx->message_offsets[check]); isa_store(ctx, R_A, ctx->call_offset);
     isa_small_immediate(ctx, R_A, (uint32_t)ctx->message_lengths[check]); isa_store(ctx, R_A, ctx->call_offset+8);
     bool jumped;
-    if (!ladder_cleanup(ctx, ctx->active_ir, f, LADDER_PANIC, &jumped)) ctx->text.failed=true;
+    uint32_t saved_origin = ctx->check_origin; ctx->check_origin = 0;
+    bool cleaned = ladder_cleanup(ctx, ctx->active_ir, f, LADDER_PANIC, &jumped);
+    ctx->check_origin = saved_origin;
+    if (!cleaned) ctx->text.failed=true;
     else if (!jumped) {
       isa_load(ctx, isa_argument(ctx, 0), ctx->call_offset); isa_load(ctx, isa_argument(ctx, 1), ctx->call_offset+8);
       runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); /* never returns */
@@ -772,7 +779,11 @@ static bool expression(BackendContext *ctx, const DynIrProgram *ir, const DynIrF
   if (depth > MAX_DEPTH || id >= ir->expression_count) return false;
   if (ctx->unwinding && ctx->captured_offsets[id] && aggregate(ir, ir->expressions[id].type)) { isa_lea(ctx, R_A, ctx->captured_offsets[id]); return !ctx->text.failed; }
   if (ctx->unwinding && ctx->captured_offsets[id]) { isa_load(ctx, R_A, ctx->captured_offsets[id]); if (descriptor(ir->expressions[id].type)) isa_load(ctx, R_D, ctx->captured_offsets[id]+8); return !ctx->text.failed; }
-  return expression_value(ctx, ir, f, &ir->expressions[id], depth);
+  uint32_t saved_origin = ctx->check_origin;
+  if (ir->expressions[id].check_origin) ctx->check_origin = ir->expressions[id].check_origin;
+  bool ok = expression_value(ctx, ir, f, &ir->expressions[id], depth);
+  ctx->check_origin = saved_origin;
+  return ok;
 }
 /* Evaluates a condition and returns the condition code that holds when it is
    false, so the caller branches past the guarded code on that code. Integer
@@ -811,7 +822,15 @@ static bool local_slot(BackendContext *ctx, const DynIrFunction *f, uint64_t id,
   *offset = ctx->local_offsets[id-f->local_start];
   return true;
 }
+static bool address_value(BackendContext *, const DynIrProgram *, const DynIrFunction *, DynExprId, unsigned);
 static bool address(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f, DynExprId id, unsigned depth) {
+  uint32_t saved_origin = ctx->check_origin;
+  if (id < ir->expression_count && ir->expressions[id].check_origin) ctx->check_origin = ir->expressions[id].check_origin;
+  bool ok = address_value(ctx, ir, f, id, depth);
+  ctx->check_origin = saved_origin;
+  return ok;
+}
+static bool address_value(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f, DynExprId id, unsigned depth) {
   if (id>=ir->expression_count || depth > MAX_DEPTH) return false;
   const DynIrExpr *e=&ir->expressions[id]; uint32_t offset;
   if (e->kind==DYN_EXPR_NAME) {
@@ -1768,8 +1787,17 @@ static void statement_scopes(BackendContext *ctx, const DynIrProgram *ir, const 
 }
 #include "vector.inc"
 
+static bool block_statements_value(BackendContext *, const DynIrProgram *, const DynIrFunction *, uint32_t, uint32_t, unsigned, bool *);
 static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
                              uint32_t start, uint32_t count, unsigned depth, bool *falls) {
+  uint32_t saved_origin = ctx->check_origin;
+  bool ok = block_statements_value(ctx, ir, f, start, count, depth, falls);
+  ctx->check_origin = saved_origin;
+  return ok;
+}
+static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f,
+                             uint32_t start, uint32_t count, unsigned depth, bool *falls) {
+  uint32_t enclosing_origin = ctx->check_origin;
   if (depth > MAX_DEPTH || (uint64_t)start + count > ir->child_count) return false;
   unsigned defer_base=ctx->defer_count;
   bool reachable = true;
@@ -1780,6 +1808,7 @@ static bool block_statements(BackendContext *ctx, const DynIrProgram *ir, const 
     uint32_t id = ir->children[start + i];
     if (id >= ir->statement_count) return false;
     const DynIrStmt *s = &ir->statements[id];
+    ctx->check_origin = s->check_origin ? s->check_origin : enclosing_origin;
     if (previous) statement_scopes(ctx, ir, f, previous, previous_start);
     previous = s; previous_start = ctx->text.n;
     if (ctx->dwarf) {

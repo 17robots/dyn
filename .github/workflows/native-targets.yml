@@ -75,6 +75,10 @@ jobs:
       - name: Compare debug builds with the x86-64 Linux reference
         shell: bash
         run: python native-differential.py --run "differential/${{ matrix.target }}"
+      - name: Compare Windows ARM64 SSA release builds with the Linux reference
+        if: matrix.target == 'windows-arm64'
+        shell: bash
+        run: python native-differential.py --run differential/windows-arm64-release
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -106,5 +110,6 @@ jobs:
           python3 tests/cross-runtime.py
           python3 tests/aggregate-abi.py --riscv
           python3 tests/riscv-linker.py
+          python3 tests/riscv-ssa-abi.py
       - name: Compare native arithmetic and control flow with the x86-64 Linux reference
         run: python3 tools/backend/native-differential.py --compiler build/dyn-release --target riscv64-linux --jobs 4

@@ -15,6 +15,9 @@ typedef struct {
   uint32_t item_start, item_count;
   DynSpan span;
   bool wrap;
+  /* Zero inherits the enclosing expression or emitted function; otherwise
+     the original function index plus one identifies runtime check failures. */
+  uint32_t check_origin;
 } DynIrExpr;
 
 typedef struct {
@@ -103,6 +106,7 @@ typedef struct {
       target_loop_id, case_arm_start, case_arm_count;
   bool defer_block, for_pointer, for_const, for_range, for_inclusive, for_reverse;
   DynSpan span;
+  uint32_t check_origin;
 } DynIrStmt;
 typedef struct {
   char *name;
