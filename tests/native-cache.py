@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Native object reuse and executable invalidation through real linker inputs."""
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import platform
 import shlex
+import shutil
 import subprocess
 import tempfile
 
@@ -71,7 +73,55 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-cache-') as directory:
     output.unlink()
     rebuilt = build(9)
     assert 'timing detail native emit' in rebuilt.stderr, rebuilt.stderr
+    # Optimization changes must emit independent objects and reuse each one
+    # when returning to a previous setting, including a preserved executable.
+    changed = build(9, '--opt-level', '1')
+    assert 'timing detail native emit' in changed.stderr, changed.stderr
+    changed = build(9, '--opt-level', '2')
+    assert 'cached native object' in changed.stderr, changed.stderr
+    warm = build(9, '--opt-level', '2')
+    assert 'cached ' in warm.stdout, warm.stdout
+    # Runtime bytes belong to the executable key, not the Dyn object key.
+    # Use a private compiler layout so this test never modifies the real SDK.
+    private_bin = work/'private-bin'
+    private_bin.mkdir()
+    compiler = DYN
+    shutil.copy2(compiler, private_bin/'dyn')
+    for name in ('dynrt_release.o', 'dynrt_support.o'):
+        runtime = Path(compiler).parent/name
+        if not runtime.exists():
+            runtime = Path(compiler).parent/'../lib/dyn'/name
+        shutil.copy2(runtime, private_bin/name)
+    DYN = str(private_bin/'dyn')
+    warm = build(9)
+    assert 'cached ' in warm.stdout, warm.stdout
+    with (private_bin/'dynrt_support.o').open('ab') as runtime:
+        runtime.write(b'cache-runtime-invalidation')
+    changed = build(9)
+    assert 'cached ' not in changed.stdout, changed.stdout
+    assert 'cached native object' in changed.stderr, changed.stderr
+    warm = build(9)
+    assert 'cached ' in warm.stdout, warm.stdout
+    DYN = compiler
+    # Real compiler processes race to populate one cold cache. Each output has
+    # its own linker destination; only content-addressed objects are shared.
+    concurrent_cache = work/'concurrent-cache'
+    concurrent_env = dict(env, DYN_CACHE_DIR=str(concurrent_cache))
+
+    def concurrent_build(index):
+        destination = work/f'parallel-{index}'
+        result = subprocess.run([DYN, 'build', str(source), '--release', '--output',
+                                 str(destination), '--link', str(obj)],
+                                env=concurrent_env, text=True, capture_output=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+        ran = subprocess.run([str(destination)], text=True, capture_output=True, timeout=10)
+        assert ran.returncode == 0 and ran.stdout.strip() == '9', (ran.stdout, ran.stderr)
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        list(workers.map(concurrent_build, range(8)))
+    assert len(list(concurrent_cache.glob('native-*.o'))) == 1
+    assert not list(concurrent_cache.glob('*.??????'))
     fresh = build(9, '--no-cache')
     assert 'timing detail native emit' in fresh.stderr, fresh.stderr
 
-print('PASS native cache: linker directives, provider/script edits, corruption, cross-output reuse, no-cache')
+print('PASS native cache: linker directives, provider/script edits, corruption, optimization/runtime changes, concurrent builds, cross-output reuse, no-cache')

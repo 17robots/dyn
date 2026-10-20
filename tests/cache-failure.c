@@ -2,6 +2,18 @@
 #include <assert.h>
 #include <stdio.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <unistd.h>
+static int interrupted_write = -1;
+static size_t failure_write(const void *data, size_t size, size_t count, FILE *file) {
+  if (interrupted_write >= 0) {
+    assert(fwrite(data, size, count ? 1 : 0, file) == (count ? 1 : 0));
+    assert(!fflush(file));
+    assert(write(interrupted_write, "x", 1) == 1);
+    for (;;) pause();
+  }
+  return fwrite(data, size, count, file);
+}
 static unsigned injected_reads;
 static int inject_read_error;
 static size_t failure_read(void *data, size_t size, size_t count, FILE *file) {
@@ -11,9 +23,11 @@ static size_t failure_read(void *data, size_t size, size_t count, FILE *file) {
   return 0;
 }
 static int failure_error(FILE *file) { return inject_read_error ? 1 : ferror(file); }
+#define fwrite failure_write
 #define fread failure_read
 #define ferror failure_error
 #include "../src/cache.c"
+#undef fwrite
 #undef fread
 #undef ferror
 
@@ -71,6 +85,28 @@ int main(void) {
   assert(!codegen_key(&sources, &options, compiler));
   write_text(loaded, "first");
   assert(key == codegen_key(&sources, &options, compiler));
+  /* Optimization options must partition shared objects. */
+  uint64_t generic = codegen_key(&sources, &options, compiler);
+  options.optimization.level = 1;
+  assert(generic != codegen_key(&sources, &options, compiler));
+  options.optimization.level = 3;
+  assert(generic != codegen_key(&sources, &options, compiler));
+  options.optimization.level = 0;
+  options.optimization.cpu = "native";
+  assert(generic != codegen_key(&sources, &options, compiler));
+  options.optimization.cpu = NULL;
+  options.optimization.features = "+avx2";
+  assert(generic != codegen_key(&sources, &options, compiler));
+  options.optimization.features = NULL;
+  options.optimization.sample_profile = "profile";
+  options.optimization.profile_hash = 1;
+  uint64_t profiled = codegen_key(&sources, &options, compiler);
+  assert(generic != profiled);
+  options.optimization.profile_hash = 2;
+  assert(profiled != codegen_key(&sources, &options, compiler));
+  options.optimization.sample_profile = NULL;
+  options.optimization.profile_hash = 0;
+  assert(generic == codegen_key(&sources, &options, compiler));
   options.link_input_count = 1;
   options.link_inputs[0] = "-rpath=/one";
   uint64_t link = hash_link_inputs(123, &options);
@@ -114,6 +150,39 @@ int main(void) {
   uint64_t preserved = dyn_cache_file_hash(output);
   assert(!dyn_object_cache_restore(&sources, &options, compiler, "other-output", output));
   assert(preserved == dyn_cache_file_hash(output));
+  /* An interrupted metadata publication is a miss, never a trusted object. */
+  dyn_object_cache_store(&sources, &options, compiler, "unused", object);
+  write_text(metadata, "incomplete");
+  assert(!dyn_object_cache_restore(&sources, &options, compiler, "unused", output));
+  assert(preserved == dyn_cache_file_hash(output));
+  /* Kill a producer after a partial temporary write. The previous artifact
+     and metadata must survive; abandoned temporaries must never be restored. */
+  dyn_object_cache_store(&sources, &options, compiler, "unused", object);
+  uint64_t original = dyn_cache_file_hash(object);
+  write_text(object, "replacement object");
+  int ready[2];
+  assert(!pipe(ready));
+  pid_t interrupted = fork();
+  assert(interrupted >= 0);
+  if (!interrupted) {
+    close(ready[0]);
+    interrupted_write = ready[1];
+    dyn_object_cache_store(&sources, &options, compiler, "unused", object);
+    _exit(1);
+  }
+  close(ready[1]);
+  char signal_byte;
+  assert(read(ready[0], &signal_byte, 1) == 1);
+  close(ready[0]);
+  assert(!kill(interrupted, SIGKILL));
+  int interrupted_status;
+  assert(waitpid(interrupted, &interrupted_status, 0) == interrupted);
+  assert(WIFSIGNALED(interrupted_status) && WTERMSIG(interrupted_status) == SIGKILL);
+  assert(dyn_object_cache_restore(&sources, &options, compiler, "unused", output));
+  assert(dyn_cache_file_hash(output) == original);
+  dyn_object_cache_store(&sources, &options, compiler, "unused", object);
+  assert(dyn_object_cache_restore(&sources, &options, compiler, "unused", output));
+  assert(dyn_cache_file_hash(output) == dyn_cache_file_hash(object));
   /* Concurrent producers must publish complete artifacts, and a consumer
      verifies the bytes it actually copies rather than a previous pathname. */
   pid_t children[4];

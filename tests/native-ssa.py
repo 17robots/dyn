@@ -47,6 +47,25 @@ def division_program():
 # Programs printing values the SSA and tree emitters must agree on, on every
 # target this host can run.
 PROGRAMS = {
+    'aggregate-snapshot': """
+struct Quad { a:i64, b:i64, c:i64, d:i64 }
+values: [3]Quad
+fn change(p:*Quad) { p.a = 99 p.b = 98 p.c = 97 p.d = 96 }
+fn main() {
+  values[0] = Quad{a:1,b:2,c:3,d:4}
+  values[1] = Quad{a:5,b:6,c:7,d:8}
+  copy := values[0]
+  change(&values[0])
+  if copy.a != 1 || copy.b != 2 || copy.c != 3 || copy.d != 4 { #panic("snapshot mutation") }
+  values[2] = copy
+  values[2] = values[2]
+  if values[2].d != 4 { #panic("snapshot self assignment") }
+  pair: [2]Quad = [values[1],values[2]]
+  pair[1] = pair[0]
+  change(&pair[0])
+  if pair[1].a != 5 || pair[1].d != 8 { #panic("snapshot alias") }
+}
+""",
     'wide-memory': '''use "std/io"
 big: i64 = -7234210387
 small: i32 = -5

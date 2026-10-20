@@ -2666,6 +2666,26 @@ static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner,
   ssa_splice(s, b, k, items, count);
   return !s->failed;
 }
+/* Expose small aggregate snapshots to forwarding. Read the complete source
+   before writing the private destination, preserving overlap and snapshot
+   semantics even if later code changes the source. x86 permits these unaligned
+   word loads; other targets retain their existing copy lowering. */
+static bool ssa_snapshot_copy(Ssa *s, uint32_t b, uint32_t k) {
+  SsaValue original = s->values[s->blocks[b].values.items[k]];
+  if (s->ctx->a64 || s->ctx->rv64 || original.aux <= 0 || original.aux > 32 || original.aux % 8) return false;
+  int32_t items[8], loads[4];
+  uint32_t words = (uint32_t)original.aux / 8, count = 0;
+  for (uint32_t i = 0; i < words; ++i) {
+    loads[i] = ssa_value(s, b, SO_LOAD, SC_INT, original.b, -1, -1, i * 8, SSA_MEM(64, 0, 0));
+    items[count++] = loads[i];
+  }
+  for (uint32_t i = 0; i < words; ++i)
+    items[count++] = ssa_value(s, b, SO_STORE, SC_NONE, original.a, -1, loads[i], i * 8, SSA_MEM(64, 0, 0));
+  if (s->failed) return false;
+  s->values[s->blocks[b].values.items[k]].dead = true;
+  ssa_splice(s, b, k, items, count);
+  return !s->failed;
+}
 /* Object a copy operand addresses: frame region r + 1, or -(symbol + 1) for
    a global addressed directly; 0 when unknown. */
 static int64_t ssa_copy_object(Ssa *s, int32_t address, uint64_t size) {
@@ -2752,7 +2772,16 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
           --k; /* the new stores update what the destination holds */
           continue;
         }
+        if (target >= 0 && target_inside && !(state[target] & REGION_ESCAPED) &&
+            s->regions[target].size <= SSA_TRACKED && ssa_snapshot_copy(s, b, k)) {
+          changed = true;
+          --k;
+          continue;
+        }
       }
+      if (s->failed) break;
+      /* Copy expansion can grow the value array even when it cannot finish. */
+      v = &s->values[id];
       if (v->op == SO_LOAD && v->b >= 0) continue;
       int32_t r = ssa_region_access(s, v->a, v->op == SO_LOAD || v->op == SO_STORE ? v->aux : 0, size, &at, &inside);
       if (r < 0 || !inside || (state[r] & REGION_ESCAPED) || s->regions[r].size > SSA_TRACKED) continue;

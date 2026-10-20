@@ -248,6 +248,30 @@ def values(ty, rng):
     picks |= {rng.randint(-20 if signed else 0, 20) for _ in range(3)}
     return sorted(v for v in picks if low <= v <= high)
 
+def bounded_combo(name, types, combo):
+    """Bound work, not integer coverage, for loops with input-sized execution.
+
+    Arithmetic and ABI cases keep their full-width inputs. Range cases retain
+    their starting endpoint (including integer extrema), but use nearby ending
+    endpoints. These tests compare results, not architecture-specific exhaustion
+    of time or stack space. Any remaining timeout is a qualification failure.
+    """
+    result = list(combo)
+    if name in ('loop_nested', 'loop_forever', 'loop_condition_div', 'generic_recursion'):
+        result[0] = str(int(result[0]) % 65)
+    elif name == 'range_bound_panic':
+        # Preserve a+1 overflow and divide-by-zero cases, otherwise bound work.
+        if int(result[0]) != (1 << 64) - 1:
+            result[0] = str(int(result[0]) % 65)
+    elif re.fullmatch(r'range_(?:i64|u64)_[01]_[01]', name) or name in ('range_controls', 'range_nested'):
+        bits, signed = SCALARS[types[0]]
+        low = -(1 << (bits - 1)) if signed else 0
+        high = (1 << (bits - int(signed))) - 1
+        start = int(result[0])
+        # Include empty, forward and reverse ranges near either integer limit.
+        result[1] = str(max(low, min(high, start + int(result[1]) % 65 - 32)))
+    return tuple(result)
+
 def build_program(rng, per_function):
     source = corpus() + EXTRA + INTEROP
 
@@ -291,7 +315,7 @@ def build_program(rng, per_function):
         pools = [values(t, rng) for t in types]
         combos = set()
         for _ in range(per_function * 3):
-            combos.add(tuple(rng.choice(pool) for pool in pools))
+            combos.add(bounded_combo(name, types, tuple(rng.choice(pool) for pool in pools)))
             if len(combos) >= per_function: break
         if not types: combos = {()}
         for combo in sorted(combos, key=str):
@@ -417,7 +441,7 @@ def run_cases(prefix, binary, count, directory, jobs):
                                cwd=directory, env=environment,
                                preexec_fn=None if sys.platform == 'win32' else no_core_dumps)
         except subprocess.TimeoutExpired:
-            return 'timeout', b'', b''  # e.g. loop_forever(2^64-1)
+            return 'timeout', b'', b''
         # qemu reports fatal signals itself; the status already records them.
         stderr = re.sub(rb'qemu: uncaught target signal [^\n]*\n', b'', r.stderr)
         return outcome(r.returncode, r.stdout, stderr)
@@ -438,18 +462,17 @@ def compare(target, prefix, binary, expected, directory, jobs):
     count = len(expected)
     expected = [outcome(*result) for result in expected]
     native = run_cases(prefix, binary, count, directory, jobs)
-    # Long loops that end in an overflow panic can outlast the timeout on one
-    # side only; those cases are inconclusive rather than mismatches.
-    slow = [i for i in range(count) if native[i] != expected[i] and 'timeout' in (native[i][0], expected[i][0])]
-    failures = [i for i in range(count) if native[i] != expected[i] and i not in slow]
+    # Equal timeouts do not prove equal behavior either. Every case must finish.
+    timed = [i for i in range(count) if 'timeout' in (native[i][0], expected[i][0])]
+    failures = [i for i in range(count) if native[i] != expected[i] or i in timed]
     panics = sum(1 for r in expected if r[0] == 101)
     for i in failures[:20]:
-        print(f'MISMATCH case {i}: {target}={native[i]} reference={expected[i]}')
+        label = 'TIMEOUT' if i in timed else 'MISMATCH'
+        print(f'{label} case {i}: {target}={native[i]} reference={expected[i]}')
     if failures:
-        sys.exit(f'{len(failures)} of {count} {target} cases differ')
+        sys.exit(f'{len(failures)} of {count} {target} cases differ or did not finish')
     how = f'under {Path(prefix[0]).name}' if prefix else 'on the host'
-    timed = f', {len(slow)} timed out on one side' if slow else ''
-    print(f'PASS {target} differential against x86-64 Linux: {count} cases ({panics} panics{timed}) {how}')
+    print(f'PASS {target} differential against x86-64 Linux: {count} cases ({panics} panics, no timeouts) {how}')
 
 def main():
     parser = argparse.ArgumentParser()
