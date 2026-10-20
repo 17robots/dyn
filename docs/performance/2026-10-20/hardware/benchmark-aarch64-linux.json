@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "target": "aarch64-linux",
+  "host": "Linux-7.0.0-1017-azure-aarch64-with-glibc2.39",
+  "machine": "aarch64",
+  "processor": "aarch64",
+  "runner": "GitHub Actions 1000007098",
+  "revision": "91c47dbea5bc818fb85719c7e4a5b1cf82423ac0",
+  "python": "3.12.15",
+  "compiler_sha256": "e96c811da074d6628cb15009cd1f857c8c36987b99edc69c98abc06adc43a99e",
+  "timing": "wall clock including process startup",
+  "execution": "native hardware",
+  "warmups": 1,
+  "samples": 7,
+  "kernels": [
+    {
+      "kernel": "fib",
+      "file": "fib",
+      "expected": "102334155",
+      "source_sha256": "d51cc9969cb529a8917d36af04a185ec992521875ef457d187fe1b84c555f069",
+      "sha256": "45f1643535553c46f45ff3ac6c581a9ed52f9c272c7ee17391fb650026a0c693",
+      "bytes": 31976,
+      "seconds": [
+        0.3695991710000044,
+        0.37140820999999846,
+        0.3699121790000106,
+        0.36906419700000015,
+        0.3705855480000082,
+        0.3687903739999854,
+        0.36957403400001
+      ],
+      "median_seconds": 0.3695991710000044
+    },
+    {
+      "kernel": "hash",
+      "file": "hash",
+      "expected": "15118522325907425936",
+      "source_sha256": "0702bf1a27c0a9b0fb53ca7252354ba62e3620d089f0ce41d673e06402eaeaf5",
+      "sha256": "6de87c4f4927f64d8b41dcbd0ec739c503721c6497903eb66d35c763b6d948e8",
+      "bytes": 32104,
+      "seconds": [
+        0.09915083800001412,
+        0.09911310999999046,
+        0.09899090599998317,
+        0.09888640000002624,
+        0.09890255199999842,
+        0.09897171299999741,
+        0.09890044799999487
+      ],
+      "median_seconds": 0.09897171299999741
+    },
+    {
+      "kernel": "matmul",
+      "file": "matmul",
+      "expected": "13041151",
+      "source_sha256": "d982c7fee61c3f290f82bb9d205960163b0fdb4abdd7b6af47f60fc08590e45e",
+      "sha256": "d83aa8fab3e29adaca1f461e564669056397a5bfb653b64d9f83dcf2f9add7e1",
+      "bytes": 32304,
+      "seconds": [
+        0.12480020199998876,
+        0.12384163400000148,
+        0.123913755000018,
+        0.12391083500000377,
+        0.12350425599998971,
+        0.12705415700000344,
+        0.12326817799998935
+      ],
+      "median_seconds": 0.12391083500000377
+    },
+    {
+      "kernel": "points",
+      "file": "points",
+      "expected": "2094662128",
+      "source_sha256": "9f5de9e5d87190fd4b570a11c43271e359b0ff5d2da8c9287f940289b17f760c",
+      "sha256": "95cb17ad4e3bf47deba003336894d8eebf25d7c79b158e92c11f35213e1dcf83",
+      "bytes": 32312,
+      "seconds": [
+        0.035496360999985654,
+        0.03567780599999537,
+        0.03548048000001813,
+        0.03555739500001209,
+        0.03548792899999853,
+        0.03551044099998535,
+        0.03543150400000172
+      ],
+      "median_seconds": 0.035496360999985654
+    },
+    {
+      "kernel": "sieve",
+      "file": "sieve",
+      "expected": "5397815",
+      "source_sha256": "6c0d759e8d30a5d452b35991741445e7514f1aba7711f91a93803056cb598383",
+      "sha256": "ee1f29f07ea4839b7c81e2f085e71b9781125f6043fdfc5c4dd2d0298b5cd0ef",
+      "bytes": 32096,
+      "seconds": [
+        0.35661900700000615,
+        0.3709193079999977,
+        0.3696153319999951,
+        0.3591020119999939,
+        0.37154364700000997,
+        0.3548786709999945,
+        0.3610984450000103
+      ],
+      "median_seconds": 0.3610984450000103
+    }
+  ]
+}

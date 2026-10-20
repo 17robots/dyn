@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "target": "wasm32-wasi",
+  "host": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "processor": "x86_64",
+  "runner": "GitHub Actions 1000007101",
+  "revision": "91c47dbea5bc818fb85719c7e4a5b1cf82423ac0",
+  "python": "3.12.15",
+  "compiler_sha256": "e96c811da074d6628cb15009cd1f857c8c36987b99edc69c98abc06adc43a99e",
+  "timing": "wall clock including process startup and WASI module compilation",
+  "execution": "native hardware",
+  "warmups": 1,
+  "samples": 7,
+  "kernels": [
+    {
+      "kernel": "fib",
+      "file": "fib.wasm",
+      "expected": "102334155",
+      "source_sha256": "d51cc9969cb529a8917d36af04a185ec992521875ef457d187fe1b84c555f069",
+      "sha256": "2a7b9f353e963e5332e61bc0753223a0d7b48c7cba480e7e84a02ce6640a3a39",
+      "bytes": 54873,
+      "seconds": [
+        1.924160361999995,
+        1.9230462409999944,
+        1.9370255370000038,
+        1.8999170749999976,
+        1.9045452980000022,
+        1.912676427000001,
+        1.9203754959999983
+      ],
+      "median_seconds": 1.9203754959999983
+    },
+    {
+      "kernel": "hash",
+      "file": "hash.wasm",
+      "expected": "15118522325907425936",
+      "source_sha256": "0702bf1a27c0a9b0fb53ca7252354ba62e3620d089f0ce41d673e06402eaeaf5",
+      "sha256": "dab60839cfb2dd7e7ef1caaf4ccfabb85757a49efe8eec2e99696becf021a291",
+      "bytes": 1104067,
+      "seconds": [
+        0.19412712000000454,
+        0.2030272830000044,
+        0.19479076000000362,
+        0.19328326200000134,
+        0.19346558299999828,
+        0.19460006500000304,
+        0.19544929199999928
+      ],
+      "median_seconds": 0.19460006500000304
+    },
+    {
+      "kernel": "matmul",
+      "file": "matmul.wasm",
+      "expected": "13041151",
+      "source_sha256": "d982c7fee61c3f290f82bb9d205960163b0fdb4abdd7b6af47f60fc08590e45e",
+      "sha256": "5c755825a11f4451e0bedc780a95497c019672e44d0c4d68290c9882a1cdf3c0",
+      "bytes": 1628977,
+      "seconds": [
+        1.4163161529999968,
+        1.4064175639999945,
+        1.3952116439999998,
+        1.4145992669999998,
+        1.4352221050000011,
+        1.3954254140000018,
+        1.3965441030000036
+      ],
+      "median_seconds": 1.4064175639999945
+    },
+    {
+      "kernel": "points",
+      "file": "points.wasm",
+      "expected": "2094662128",
+      "source_sha256": "9f5de9e5d87190fd4b570a11c43271e359b0ff5d2da8c9287f940289b17f760c",
+      "sha256": "073e2cd585b7c4bb589e38816ebd6a180c7773376228e0633b73279d92bec70b",
+      "bytes": 122063,
+      "seconds": [
+        0.4691853229999978,
+        0.45370078599999886,
+        0.47426799499999817,
+        0.45859475599999655,
+        0.46693877999999955,
+        0.47842951100000164,
+        0.4532871749999927
+      ],
+      "median_seconds": 0.46693877999999955
+    },
+    {
+      "kernel": "sieve",
+      "file": "sieve.wasm",
+      "expected": "5397815",
+      "source_sha256": "6c0d759e8d30a5d452b35991741445e7514f1aba7711f91a93803056cb598383",
+      "sha256": "84aeae883337c575f3c2c2a5a43bb87ea42701ed7dfe0598426942d2ea976c2f",
+      "bytes": 8055451,
+      "seconds": [
+        2.046931869000005,
+        2.0270478500000024,
+        2.0344354639999978,
+        2.029157976999997,
+        2.0497723870000044,
+        2.0471277179999987,
+        2.028590126999987
+      ],
+      "median_seconds": 2.0344354639999978
+    }
+  ],
+  "runtime": "v22.23.3"
+}

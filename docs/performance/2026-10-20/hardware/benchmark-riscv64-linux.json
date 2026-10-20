@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "target": "riscv64-linux",
+  "host": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "processor": "x86_64",
+  "runner": "GitHub Actions 1000007106",
+  "revision": "91c47dbea5bc818fb85719c7e4a5b1cf82423ac0",
+  "python": "3.12.15",
+  "compiler_sha256": "e96c811da074d6628cb15009cd1f857c8c36987b99edc69c98abc06adc43a99e",
+  "timing": "wall clock including process startup",
+  "execution": "QEMU emulation",
+  "warmups": 1,
+  "samples": 7,
+  "kernels": [
+    {
+      "kernel": "fib",
+      "file": "fib",
+      "expected": "102334155",
+      "source_sha256": "d51cc9969cb529a8917d36af04a185ec992521875ef457d187fe1b84c555f069",
+      "sha256": "f43baecc1eb02b97f5dd29902d7eb72cec2202cc970a3d52d0c79337ada06bc5",
+      "bytes": 37776,
+      "seconds": [
+        9.807874791000003,
+        9.778567273000007,
+        9.664361890999999,
+        9.685962176999993,
+        9.815526918000018,
+        9.805227365000007,
+        9.663583148999976
+      ],
+      "median_seconds": 9.778567273000007
+    },
+    {
+      "kernel": "hash",
+      "file": "hash",
+      "expected": "15118522325907425936",
+      "source_sha256": "0702bf1a27c0a9b0fb53ca7252354ba62e3620d089f0ce41d673e06402eaeaf5",
+      "sha256": "70b442c08d2fe5530163e84e6e2f5c3185ec1b86ff4fd746a16621b5517000d0",
+      "bytes": 37920,
+      "seconds": [
+        0.2039034640000068,
+        0.20367300899999918,
+        0.20423757000000364,
+        0.20392101699999898,
+        0.2041371650000201,
+        0.20462020600001551,
+        0.2039596099999983
+      ],
+      "median_seconds": 0.2039596099999983
+    },
+    {
+      "kernel": "matmul",
+      "file": "matmul",
+      "expected": "13041151",
+      "source_sha256": "d982c7fee61c3f290f82bb9d205960163b0fdb4abdd7b6af47f60fc08590e45e",
+      "sha256": "a7797515aab67b71ad34a1d181984eaf6794e5d8506023cd4305abc7f30abc07",
+      "bytes": 38280,
+      "seconds": [
+        3.323012927999997,
+        3.1709676469999977,
+        3.151047726999991,
+        3.1597675609999953,
+        3.1528004580000015,
+        3.182512040000006,
+        3.18373158
+      ],
+      "median_seconds": 3.1709676469999977
+    },
+    {
+      "kernel": "points",
+      "file": "points",
+      "expected": "2094662128",
+      "source_sha256": "9f5de9e5d87190fd4b570a11c43271e359b0ff5d2da8c9287f940289b17f760c",
+      "sha256": "6e2d1efc7a22f48e692a981b60af42011ec2071aff59ac12b9933ccb9e313848",
+      "bytes": 38320,
+      "seconds": [
+        0.48576260900000534,
+        0.48843383199999835,
+        0.4875876650000066,
+        0.48830015199999366,
+        0.487241068000003,
+        0.49176717099999223,
+        0.48918169099999886
+      ],
+      "median_seconds": 0.48830015199999366
+    },
+    {
+      "kernel": "sieve",
+      "file": "sieve",
+      "expected": "5397815",
+      "source_sha256": "6c0d759e8d30a5d452b35991741445e7514f1aba7711f91a93803056cb598383",
+      "sha256": "e4915964648c7f82a001503cd86c718245d760f4d44ce831e88ebac362735975",
+      "bytes": 37880,
+      "seconds": [
+        1.629361407999994,
+        1.6236315939999884,
+        1.6278166519999786,
+        1.630199406999992,
+        1.6313409040000124,
+        1.6341178069999955,
+        1.6332808479999983
+      ],
+      "median_seconds": 1.630199406999992
+    }
+  ],
+  "runtime": "qemu-riscv64 version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)"
+}
