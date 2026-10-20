@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "scope": "Two-round DNA workflow; input latency and resident memory, not compute throughput",
+  "binaries": {
+    "baseline": {
+      "path": "/tmp/dyn-dna-current-profile/llvm",
+      "sha256": "bf016962fd353c9af9febe12188f67308432321e1b625be58efe005468f93c6c",
+      "bytes": 1387856
+    },
+    "candidate": {
+      "path": "/tmp/dyn-dna-current-profile/snapshot",
+      "sha256": "e088e3e969470842f3177af5e13b474df71668a3bfa6c3362538bd84acb6b797",
+      "bytes": 1564040
+    }
+  },
+  "samples": [
+    {
+      "variant": "baseline",
+      "index": 0,
+      "baseline_RSS_KiB": 23088,
+      "final_RSS_KiB": 44908,
+      "input_mean_ms": 2.689,
+      "input_max_ms": 6.583
+    },
+    {
+      "variant": "candidate",
+      "index": 0,
+      "baseline_RSS_KiB": 29132,
+      "final_RSS_KiB": 51024,
+      "input_mean_ms": 2.698,
+      "input_max_ms": 7.867
+    },
+    {
+      "variant": "candidate",
+      "index": 1,
+      "baseline_RSS_KiB": 31308,
+      "final_RSS_KiB": 53092,
+      "input_mean_ms": 2.678,
+      "input_max_ms": 6.298
+    },
+    {
+      "variant": "baseline",
+      "index": 1,
+      "baseline_RSS_KiB": 23184,
+      "final_RSS_KiB": 44108,
+      "input_mean_ms": 2.668,
+      "input_max_ms": 6.712
+    },
+    {
+      "variant": "baseline",
+      "index": 2,
+      "baseline_RSS_KiB": 23156,
+      "final_RSS_KiB": 43180,
+      "input_mean_ms": 2.677,
+      "input_max_ms": 5.423
+    },
+    {
+      "variant": "candidate",
+      "index": 2,
+      "baseline_RSS_KiB": 33224,
+      "final_RSS_KiB": 55044,
+      "input_mean_ms": 2.654,
+      "input_max_ms": 6.416
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "baseline_RSS_KiB": 23156,
+      "final_RSS_KiB": 44108,
+      "input_mean_ms": 2.677
+    },
+    "candidate": {
+      "baseline_RSS_KiB": 31308,
+      "final_RSS_KiB": 53092,
+      "input_mean_ms": 2.678
+    }
+  }
+}
