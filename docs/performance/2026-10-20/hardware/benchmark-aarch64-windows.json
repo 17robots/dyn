@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "target": "aarch64-windows",
+  "host": "Windows-11-10.0.26200-SP0",
+  "machine": "ARM64",
+  "processor": "ARMv8 (64-bit) Family 8 Model D49 Revision   0, MICROSOFT CORPORATION",
+  "runner": "GitHub Actions 1000007103",
+  "revision": "91c47dbea5bc818fb85719c7e4a5b1cf82423ac0",
+  "python": "3.12.10",
+  "compiler_sha256": "e96c811da074d6628cb15009cd1f857c8c36987b99edc69c98abc06adc43a99e",
+  "timing": "wall clock including process startup",
+  "execution": "native hardware",
+  "warmups": 1,
+  "samples": 7,
+  "kernels": [
+    {
+      "kernel": "fib",
+      "file": "fib.exe",
+      "expected": "102334155",
+      "source_sha256": "d51cc9969cb529a8917d36af04a185ec992521875ef457d187fe1b84c555f069",
+      "sha256": "585e4cfb9a300ad28b0b954c101d643a139d71e3002080c5b7836548c35f9cdf",
+      "bytes": 36864,
+      "seconds": [
+        0.5182998000000225,
+        0.5177626999999347,
+        0.5173867999999402,
+        0.5170259999999871,
+        0.5188094000000092,
+        0.5170066000000588,
+        0.5171121000000767
+      ],
+      "median_seconds": 0.5173867999999402
+    },
+    {
+      "kernel": "hash",
+      "file": "hash.exe",
+      "expected": "15118522325907425936",
+      "source_sha256": "0702bf1a27c0a9b0fb53ca7252354ba62e3620d089f0ce41d673e06402eaeaf5",
+      "sha256": "2e2eaa547da78b5cae15d8dd1acc588fadb569e1e8f2f533ea72291810a3819f",
+      "bytes": 37376,
+      "seconds": [
+        0.10726550000003954,
+        0.10757809999995516,
+        0.10773360000007415,
+        0.1077132000000347,
+        0.10756659999992735,
+        0.10756450000008044,
+        0.10777099999995698
+      ],
+      "median_seconds": 0.10757809999995516
+    },
+    {
+      "kernel": "matmul",
+      "file": "matmul.exe",
+      "expected": "13041151",
+      "source_sha256": "d982c7fee61c3f290f82bb9d205960163b0fdb4abdd7b6af47f60fc08590e45e",
+      "sha256": "ed2e303c7183c0008b22040bb4b0b230dab985ad2868bb19b1ac286b2974bf3d",
+      "bytes": 37376,
+      "seconds": [
+        0.13180150000005142,
+        0.13033419999999296,
+        0.13090169999998125,
+        0.13212239999995745,
+        0.13061879999997927,
+        0.1305121999999983,
+        0.13049000000000888
+      ],
+      "median_seconds": 0.13061879999997927
+    },
+    {
+      "kernel": "points",
+      "file": "points.exe",
+      "expected": "2094662128",
+      "source_sha256": "9f5de9e5d87190fd4b570a11c43271e359b0ff5d2da8c9287f940289b17f760c",
+      "sha256": "40c91a4ffdd0142a8c50540fce51aa3e4db1c12760c6946107be11f88456b314",
+      "bytes": 37376,
+      "seconds": [
+        0.04417000000000826,
+        0.04394060000004174,
+        0.04383860000007189,
+        0.043701199999986784,
+        0.04377110000007178,
+        0.04358100000001741,
+        0.043966500000010456
+      ],
+      "median_seconds": 0.04383860000007189
+    },
+    {
+      "kernel": "sieve",
+      "file": "sieve.exe",
+      "expected": "5397815",
+      "source_sha256": "6c0d759e8d30a5d452b35991741445e7514f1aba7711f91a93803056cb598383",
+      "sha256": "b892af3c488a3349d27b539381df7772d47881599917f338e07786d0f807e457",
+      "bytes": 37376,
+      "seconds": [
+        0.37564959999997427,
+        0.3754199999999628,
+        0.37613070000008975,
+        0.37686840000003485,
+        0.3759317999999894,
+        0.3721699999999828,
+        0.37861930000008215
+      ],
+      "median_seconds": 0.3759317999999894
+    }
+  ]
+}
