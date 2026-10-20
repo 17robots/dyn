@@ -49,26 +49,66 @@ static inline unsigned char *dyn_load_read(const char *path, size_t *length) {
   fclose(f);
   return data;
 }
-/* Folds the contents of every file a source #loads into hash, so caches
-   keyed on source text also notice edits to loaded files. */
+/* A load argument may contain lexer trivia between its tokens. Unknown or
+   escaped spellings fail closed instead of trusting an incomplete dependency
+   list; semantic analysis remains responsible for diagnostics. */
+static inline size_t dyn_load_trivia(const char *text, size_t length, size_t at) {
+  for (;;) {
+    while (at < length && (text[at] == ' ' || text[at] == '\t' ||
+           text[at] == '\r' || text[at] == '\n' || text[at] == '\f' || text[at] == '\v')) ++at;
+    if (at + 1 >= length || text[at] != '/') return at;
+    if (text[at + 1] == '/') {
+      while (at < length && text[at] != '\n') ++at;
+    } else if (text[at + 1] == '*') {
+      at += 2;
+      while (at + 1 < length && !(text[at] == '*' && text[at + 1] == '/')) ++at;
+      if (at + 1 >= length) return length;
+      at += 2;
+    } else return at;
+  }
+}
+
+/* Folds loaded-file contents into source keys. Failure must remain zero so
+   unavailable dependencies cannot accidentally produce reusable artifacts. */
 static inline uint64_t dyn_load_hash(uint64_t hash, const char *source_path,
                                      const char *text, size_t length) {
-  static const char marker[] = "#load(\"";
-  for (size_t i = 0; i + sizeof(marker) - 1 < length; ++i) {
-    if (memcmp(text + i, marker, sizeof(marker) - 1))
+  if (!hash) return 0;
+  static const char marker[] = "#load";
+  for (size_t i = 0; i + sizeof(marker) - 1 <= length; ++i) {
+    size_t token = dyn_load_trivia(text, length, i);
+    if (token != i) {
+      if (token >= length) break;
+      i = token;
+    }
+    if (text[i] == '"' || text[i] == '\'') {
+      char quote = text[i++];
+      while (i < length && text[i] != quote) {
+        if (text[i] == '\\' && i + 1 < length) ++i;
+        ++i;
+      }
       continue;
-    size_t start = i + sizeof(marker) - 1, end = start;
-    while (end < length && text[end] != '"' && text[end] != '\n')
-      ++end;
-    char *path = dyn_load_path(source_path, text + start, end - start);
+    }
+    if (length - i < sizeof(marker) - 1 || memcmp(text + i, marker, sizeof(marker) - 1)) continue;
+    size_t at = dyn_load_trivia(text, length, i + sizeof(marker) - 1);
+    if (at >= length || text[at] != '(') return 0;
+    at = dyn_load_trivia(text, length, at + 1);
+    if (at >= length || text[at] != '"') return 0;
+    size_t start = ++at;
+    while (at < length && text[at] != '"' && text[at] != '\n') {
+      if (text[at] == '\\') return 0;
+      ++at;
+    }
+    if (at >= length || text[at] != '"') return 0;
+    char *path = dyn_load_path(source_path, text + start, at - start);
     size_t size = 0;
     unsigned char *data = path ? dyn_load_read(path, &size) : NULL;
-    for (size_t j = 0; data && j < size; ++j)
-      hash = (hash ^ data[j]) * UINT64_C(1099511628211);
-    hash = (hash ^ (data ? size : UINT64_MAX)) * UINT64_C(1099511628211);
-    free(data);
     free(path);
-    i = end;
+    if (!data) return 0;
+    for (size_t j = 0; j < size; ++j)
+      hash = (hash ^ data[j]) * UINT64_C(1099511628211);
+    hash = (hash ^ size) * UINT64_C(1099511628211);
+    free(data);
+    i = at;
   }
   return hash;
 }

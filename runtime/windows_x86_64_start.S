@@ -49,6 +49,7 @@ dyn_panic:
     movq $0, 32(%rsp)
     callq *__imp_WriteFile(%rip)
 .Lpanic_exit:
+    callq dyn_trace_dump
     movl $101, %ecx
     callq *__imp_ExitProcess(%rip)
     ud2
@@ -111,10 +112,6 @@ dyn_unwind_jump:
     movl $1, %eax
     jmpq *%rdx
 
-.global dyn_trace_push
-dyn_trace_push: retq
-.global dyn_trace_pop
-dyn_trace_pop: retq
 
 // Sequentially consistent atomics. x86 loads/stores already preserve acquire/release;
 // locked read/modify/write instructions provide total ordering.
@@ -386,6 +383,7 @@ iat VirtualAlloc
 iat VirtualFree
 iat CreateFileA
 iat ReadFile
+.global __imp_WriteFile
 iat WriteFile
 iat LoadLibraryA
 iat GetProcAddress
@@ -400,6 +398,7 @@ iat CreatePipe
 iat PeekNamedPipe
 iat GetTickCount64
 iat Sleep
+.global __imp_GetStdHandle
 iat GetStdHandle
 iat GetCurrentProcess
 .global __imp_GetCurrentThreadId

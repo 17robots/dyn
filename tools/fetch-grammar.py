@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fetch the immutable external grammar dependency; never vendor it into Dyn."""
+"""Fetch the Tree-sitter grammar used only to qualify the vendor/tree_sitter binding
+(tests/vendor-provider-host.py). The compiler does not use it; never vendor it."""
 import json
 import os
 from pathlib import Path

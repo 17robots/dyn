@@ -1,18 +1,15 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
-#include "dyn_syntax.h"
 #include "dyn_scope.h"
 #include "dyn_imports.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <tree_sitter/api.h>
 #include <unistd.h>
 #include <stdatomic.h>
 #ifndef _WIN32
 #include <pthread.h>
 #endif
-extern const TSLanguage *tree_sitter_dyn(void);
 extern char *realpath(const char *, char *);
 
 typedef struct {
@@ -36,32 +33,12 @@ typedef struct {
 typedef struct {
   uint32_t start, end;
   char *text;
-  TSPoint start_point, end_point;
 } Edit;
 typedef struct {
   Edit *items;
   size_t count, capacity;
 } Edits;
 
-static TSNode rewrite_unwrap(TSNode n) {
-  while (dyn_syntax_child_count(n) == 1)
-    n = dyn_syntax_child(n, 0);
-  return n;
-}
-static TSNode global_name_node(TSNode node) {
-  DynDeclaration declaration;
-  return dyn_syntax_declaration(node, &declaration) &&
-                 (declaration.kind == DYN_DECL_VARIABLE ||
-                  declaration.kind == DYN_DECL_CONSTANT)
-             ? declaration.name
-             : (TSNode){0};
-}
-static bool top_level_node(TSNode n) {
-  TSNode p = ts_node_parent(n);
-  if (!strcmp(ts_node_type(p), "declaration"))
-    p = ts_node_parent(p);
-  return !strcmp(ts_node_type(p), "source_file");
-}
 static char *source_dir(const char *path) {
   char *full = realpath(path, NULL);
   if (!full) {
@@ -210,212 +187,12 @@ static bool append_edit(Edits *e, Edit edit) {
   e->items[e->count++] = edit;
   return true;
 }
-static bool add_edit(Edits *e, TSNode n, char *replacement) {
-  return append_edit(e, (Edit){ts_node_start_byte(n), ts_node_end_byte(n),
-      replacement, ts_node_start_point(n), ts_node_end_point(n)});
-}
 static Module *target_module(Module *modules, size_t count,
                              const Module *current, const char *alias) {
   const char *dir = alias_target(current, alias);
   return dir ? find_module(modules, count, dir) : NULL;
 }
-static bool rewrite_node(TSNode n, const DynSource *s, Module *current,
-                         Module *modules, size_t module_count, Edits *edits,
-                         const DynScopeIndex *locals) {
-  /* Missing syntax is handled by frontend diagnostics, not allocation errors.
-   */
-  if (ts_node_is_error(n) || ts_node_is_missing(n))
-    return true;
-  if (ts_node_has_error(n))
-    for (uint32_t i = 0; i < ts_node_named_child_count(n); ++i)
-      if (ts_node_is_missing(ts_node_named_child(n, i))) goto children;
-  const char *k = ts_node_type(n);
-  if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") || !strcmp(k, "struct") ||
-      !strcmp(k, "enum") || !strcmp(k, "type_alias")) {
-    TSNode name = {0};
-    if (!strcmp(k, "fn") || !strcmp(k, "extern_fn"))
-      name = ts_node_child_by_field_name(n, "name", 4);
-    else
-      for (uint32_t i = 0; i < ts_node_named_child_count(n); ++i) {
-        TSNode c = ts_node_named_child(n, i);
-        if (!strcmp(ts_node_type(c), "identifier")) {
-          name = c;
-          break;
-        }
-      }
-    if (!current->root && !ts_node_is_null(name)) {
-      char *t = dyn_syntax_copy_text(name, s, false),
-           *replacement = t ? symbol(current, t) : NULL;
-      if (!t)
-        return false;
-      free(t);
-      if (!add_edit(edits, name, replacement))
-        return false;
-    }
-  }
-  if ((!strcmp(k, "variable") || !strcmp(k, "const_variable") ||
-       !strcmp(k, "extern_variable")) &&
-      top_level_node(n)) {
-    TSNode name = global_name_node(n);
-    if (!current->root && !ts_node_is_null(name)) {
-      char *t = dyn_syntax_copy_text(name, s, false),
-           *replacement = t ? symbol(current, t) : NULL;
-      if (!t)
-        return false;
-      free(t);
-      if (!add_edit(edits, name, replacement))
-        return false;
-    }
-  }
-  if (!strcmp(k, "field_type")) {
-    uint32_t count = dyn_syntax_child_count(n);
-    char *first =
-        count ? dyn_syntax_copy_text(dyn_syntax_child(n, 0), s, false)
-              : NULL;
-    if (count && !first)
-      return false;
-    if (first && dyn_syntax_value_type(n) && dyn_scope_local(locals, n, s, first)) {
-      free(first);
-      return true;
-    }
-    if (count > 1) {
-      Module *target = target_module(modules, module_count, current, first);
-      if (target) {
-        char *member =
-                 dyn_syntax_copy_text(dyn_syntax_child(n, 1), s, false),
-             *replacement = member ? symbol(target, member) : NULL;
-        free(member);
-        free(first);
-        return add_edit(edits, n, replacement);
-      }
-    }
-    if (count == 1 && first && has_decl(current, first)) {
-      char *replacement = symbol(current, first);
-      free(first);
-      return add_edit(edits, n, replacement);
-    }
-    free(first);
-  }
-  if (!strcmp(k, "struct_literal")) {
-    uint32_t names = 0, total = dyn_syntax_child_count(n);
-    while (names < total &&
-           !strcmp(ts_node_type(dyn_syntax_child(n, names)), "identifier"))
-      ++names;
-    if (names > 1) {
-      TSNode a = dyn_syntax_child(n, 0), b = dyn_syntax_child(n, 1);
-      char *first = dyn_syntax_copy_text(a, s, false);
-      if (!first)
-        return false;
-      Module *target =
-          first ? target_module(modules, module_count, current, first) : NULL;
-      if (target) {
-        char *member = dyn_syntax_copy_text(b, s, false),
-             *replacement = member ? symbol(target, member) : NULL;
-        uint32_t start = ts_node_start_byte(a), end = ts_node_end_byte(b);
-        free(member);
-        free(first);
-        if (!replacement)
-          return false;
-        if (!append_edit(edits, (Edit){start, end, replacement,
-                ts_node_start_point(a), ts_node_end_point(b)}))
-          return false;
-        goto children;
-      }
-      free(first);
-    } else if (names == 1) {
-      TSNode name = dyn_syntax_child(n, 0);
-      char *t = dyn_syntax_copy_text(name, s, false);
-      if (!t)
-        return false;
-      if (t && has_decl(current, t)) {
-        char *replacement = symbol(current, t);
-        free(t);
-        if (!add_edit(edits, name, replacement))
-          return false;
-      } else
-        free(t);
-    }
-  }
-  if (!strcmp(k, "field_access")) {
-    TSNode base = rewrite_unwrap(dyn_syntax_child(n, 0));
-    if (!ts_node_is_missing(base) &&
-        !strcmp(ts_node_type(base), "identifier")) {
-      char *first = dyn_syntax_copy_text(base, s, false);
-      if (!first)
-        return false;
-      Module *target =
-          first ? target_module(modules, module_count, current, first) : NULL;
-      if (target && !dyn_scope_local(locals, base, s, first)) {
-        char *member =
-                 dyn_syntax_copy_text(dyn_syntax_child(n, 1), s, false),
-             *replacement = member ? symbol(target, member) : NULL;
-        free(member);
-        free(first);
-        return add_edit(edits, n, replacement);
-      }
-      if (first && has_decl(current, first) && !dyn_scope_local(locals, base, s, first)) {
-        char *replacement = symbol(current, first);
-        free(first);
-        if (!add_edit(edits, base, replacement))
-          return false;
-      } else
-        free(first);
-    }
-  }
-  if (!strcmp(k, "call")) {
-    TSNode callee = rewrite_unwrap(dyn_syntax_child(n, 0));
-    if (!ts_node_is_missing(callee) &&
-        !strcmp(ts_node_type(callee), "identifier")) {
-      char *t = dyn_syntax_copy_text(callee, s, false);
-      if (!t)
-        return false;
-      if (t && has_decl(current, t) && !dyn_scope_local(locals, n, s, t)) {
-        char *replacement = symbol(current, t);
-        free(t);
-        if (!add_edit(edits, callee, replacement))
-          return false;
-      } else
-        free(t);
-    }
-  }
-  if (!strcmp(k, "primary") && dyn_syntax_child_count(n) == 1) {
-    TSNode child = dyn_syntax_child(n, 0);
-    if (!strcmp(ts_node_type(child), "identifier")) {
-      char *t = dyn_syntax_copy_text(child, s, false);
-      if (!t)
-        return false;
-      if (t && has_decl(current, t) && !dyn_scope_local(locals, n, s, t)) {
-        char *replacement = symbol(current, t);
-        free(t);
-        if (!add_edit(edits, child, replacement))
-          return false;
-      } else
-        free(t);
-    }
-  }
-children:;
-  TSTreeCursor cursor = ts_tree_cursor_new(n);
-  bool ok = true;
-  if (ts_tree_cursor_goto_first_child(&cursor)) do {
-    TSNode child = ts_tree_cursor_current_node(&cursor);
-    if (ts_node_is_named(child) &&
-        !rewrite_node(child, s, current, modules, module_count, edits, locals)) {
-      ok = false; break;
-    }
-  } while (ts_tree_cursor_goto_next_sibling(&cursor));
-  ts_tree_cursor_delete(&cursor);
-  return ok;
-}
 #include "module_compact_rewrite.h"
-static bool rewrite_source_nodes(TSNode root,const DynSource *source,Module *current,
-                                  Module *modules,size_t module_count,Edits *edits,
-                                  const DynScopeIndex *locals) {
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-  const ExpSnapshotTree *tree=dyn_compact_tree(source);
-  if(tree) return compact_rewrite_nodes(source,tree,current,modules,module_count,edits,locals);
-#endif
-  return rewrite_node(root,source,current,modules,module_count,edits,locals);
-}
 static int edit_compare(const void *a, const void *b) {
   const Edit *x = a, *y = b;
   if (x->start != y->start) return x->start < y->start ? -1 : 1;
@@ -545,39 +322,19 @@ static bool apply_edits(DynSource *s, Edits *e) {
   memcpy(out + at, s->text + in, s->length - in);
   at += s->length - in;
   out[at] = 0;
-  /* Edit from the end so earlier node coordinates remain valid. Incremental
-     parsing can then retain large unchanged function bodies and literal tables. */
-  if (s->syntax)
-    for (size_t i = e->count; i; --i) {
-      const Edit *item = &e->items[i - 1];
-      size_t length = strlen(item->text);
-      TSInputEdit edit = {item->start, item->end, item->start + (uint32_t)length,
-          item->start_point, item->end_point,
-          dyn_syntax_advance(item->start_point, item->text, length)};
-      ts_tree_edit(s->syntax, &edit);
-    }
-  TSTree *tree = NULL;
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-  if (!s->compact_validated)
-#endif
-    tree = dyn_syntax_reparse(out, at, s->syntax);
   dyn_source_discard_syntax(s);
-  s->syntax = tree;
   free(s->text);
   free(s->spans);
   s->text = out;
   s->length = at;
   s->spans = spans;
   s->span_count = span_count;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-  return dyn_source_prepare(s);
-#else
-  return s->syntax && dyn_source_prepare(s);
-#endif
-#else
-  return s->syntax != NULL;
-#endif
+  /* Rewritten text must not replace the cached parse of the file on disk. */
+  DynSyntaxCache *cache = s->context.syntax_cache;
+  s->context.syntax_cache = NULL;
+  bool prepared = dyn_source_prepare(s);
+  s->context.syntax_cache = cache;
+  return prepared;
 }
 static void free_modules(Module *m, size_t count) {
   for (size_t i = 0; i < count; ++i) {
@@ -603,26 +360,6 @@ static uint64_t rewrite_hash(uint64_t hash, const void *data, size_t length) {
     hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
   return hash;
 }
-static void rewrite_abi_tree(const DynSource *source, TSNode root, Module *module) {
-  for (uint32_t j = 0; j < ts_node_named_child_count(root); ++j) {
-    TSNode wrapper = ts_node_named_child(root, j);
-    TSNode node = dyn_syntax_declaration_node(wrapper);
-    const char *kind = ts_node_type(node);
-    if (!strcmp(kind, "comment") || !strcmp(kind, "use")) continue;
-    uint32_t start = ts_node_start_byte(wrapper), end = ts_node_end_byte(wrapper);
-    if (!strcmp(kind, "fn")) {
-      if (!dyn_syntax_public(wrapper)) continue;
-      for (uint32_t k = 0; k < ts_node_named_child_count(node); ++k) {
-        TSNode child = ts_node_named_child(node, k);
-        if (!strcmp(ts_node_type(child), "block")) { end = ts_node_start_byte(child); break; }
-      }
-    }
-    size_t length = end - start;
-    module->abi = rewrite_hash(module->abi, &length, sizeof(length));
-    module->abi = rewrite_hash(module->abi, source->text + start, length);
-  }
-}
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
 static bool compact_rewrite_abi(const DynSource *source, const ExpSnapshotTree *tree, Module *module) {
   const ExpNode *nodes = tree->nodes;
   for (uint32_t wrapper = nodes[tree->root].first; wrapper != UINT32_MAX; wrapper = nodes[wrapper].next) {
@@ -680,7 +417,6 @@ static bool compact_rewrite_imports(const DynSource *source, Module *module, con
   dyn_imports_close(&reader);
   return ok;
 }
-#endif
 static bool capture_dependencies(DynSources *sources, Module *modules, size_t count) {
   bool reflection = false;
   size_t *owners = calloc(sources->count, sizeof(*owners));
@@ -695,21 +431,10 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
     if (!module) { free(owners); free(selected); return false; }
     owners[i] = (size_t)(module - modules);
     if (!dyn_source_target_enabled(source)) continue;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
     const ExpSnapshotTree *compact = dyn_compact_tree(source);
-    if (compact) {
-      reflection |= source->needs_reflection || source->compact_reflection;
-      if (!compact_rewrite_abi(source, compact, module)) { free(owners); free(selected); return false; }
-      continue;
-    }
-#endif
-    TSTree *tree = dyn_source_tree(source);
-    if (!tree) { free(owners); free(selected); return false; }
-    TSNode root = ts_tree_root_node(tree);
-    reflection |= source->needs_reflection ||
-        (strstr(source->text, "#typeof") && dyn_syntax_has_reflection(root));
-    rewrite_abi_tree(source, root, module);
-    ts_tree_delete(tree);
+    if (!compact) { free(owners); free(selected); return false; }
+    reflection |= source->needs_reflection || source->compact_reflection;
+    if (!compact_rewrite_abi(source, compact, module)) { free(owners); free(selected); return false; }
   }
   for (size_t i = 0; i < sources->count; ++i) {
     if (i && owners[i] == owners[i - 1]) continue;
@@ -759,24 +484,17 @@ static bool rewrite_source(DynSource *s, Module *modules, size_t module_count) {
   char *dir = source_dir(s->path);
   Module *m = dir ? find_module(modules, module_count, dir) : NULL;
   free(dir);
-  bool compact=false;
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-  compact=s->compact_validated;
-#endif
-  TSTree *t = m && !compact ? dyn_source_tree(s) : NULL;
-  if (!m || (!compact && !t)) return false;
-  TSNode root=t ? ts_tree_root_node(t) : (TSNode){0};
+  const ExpSnapshotTree *tree = dyn_compact_tree(s);
+  if (!m || !tree) return false;
   Edits edits = {0};
   DynScopeIndex locals = {0};
-  bool ok = dyn_scope_build(&locals, root, s) &&
-            rewrite_source_nodes(root, s, m, modules, module_count,
-                         &edits, &locals) &&
+  bool ok = dyn_scope_build(&locals, s) &&
+            compact_rewrite_nodes(s, tree, m, modules, module_count, &edits, &locals) &&
             apply_edits(s, &edits);
   for (size_t i = 0; i < edits.count; ++i)
     free(edits.items[i].text);
   free(edits.items);
   dyn_scope_free(&locals);
-  if (t) ts_tree_delete(t);
   return ok;
 }
 static void *rewrite_worker(void *raw) {
@@ -849,63 +567,9 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     char *dir = source_dir(s->path);
     Module *m = find_module(modules, module_count, dir);
     free(dir);
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
-    if (compact) {
-      if (!compact_rewrite_declarations(s, compact, m, false) ||
-          !compact_rewrite_imports(s, m, root)) result = 2;
-      continue;
-    }
-#endif
-    TSTree *t = dyn_source_tree(s);
-    if (!t) {
-      result = 2;
-      break;
-    }
-    TSNode file = ts_tree_root_node(t);
-    for (uint32_t i = 0; i < ts_node_named_child_count(file) && !result; ++i) {
-      TSNode d = dyn_syntax_declaration_node(ts_node_named_child(file, i));
-      const char *k = ts_node_type(d);
-      if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") ||
-          !strcmp(k, "extern_variable") || !strcmp(k, "struct") ||
-          !strcmp(k, "enum") || !strcmp(k, "type_alias")) {
-        TSNode name = {0};
-        if (!strcmp(k, "fn") || !strcmp(k, "extern_fn") ||
-            !strcmp(k, "extern_variable"))
-          name = ts_node_child_by_field_name(d, "name", 4);
-        else
-          for (uint32_t q = 0; q < ts_node_named_child_count(d); ++q)
-            if (!strcmp(ts_node_type(ts_node_named_child(d, q)),
-                        "identifier")) {
-              name = ts_node_named_child(d, q);
-              break;
-            }
-        char *n = dyn_syntax_copy_text(name, s, false);
-        if (!n || !add_decl(m, n))
-          result = 2;
-        free(n);
-      } else if (!strcmp(k, "use")) {
-        for (uint32_t q = 0; q < ts_node_named_child_count(d) && !result; ++q) {
-          TSNode im = ts_node_named_child(d, q);
-          if (strcmp(ts_node_type(im), "import"))
-            continue;
-          char *path = dyn_syntax_copy_text(
-              ts_node_child_by_field_name(im, "path", 4), s, true);
-          char *target =
-              path ? dyn_module_resolve_import(&s->context, root, m->dir, path)
-                   : NULL;
-          TSNode an = ts_node_child_by_field_name(im, "alias", 5);
-          char *alias = ts_node_is_null(an) ? dyn_path_basename(path ? path : "")
-                                            : dyn_syntax_copy_text(an, s, false);
-          if (!target || !alias || !add_alias(m, alias, target))
-            result = 2;
-          free(path);
-          free(target);
-          free(alias);
-        }
-      }
-    }
-    ts_tree_delete(t);
+    if (!compact || !compact_rewrite_declarations(s, compact, m, false) ||
+        !compact_rewrite_imports(s, m, root)) result = 2;
   }
   for (size_t si = 0; si < sources->count && !result; ++si) {
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
@@ -914,30 +578,8 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     char *dir = source_dir(s->path);
     Module *m = find_module(modules, module_count, dir);
     free(dir);
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
-    if (compact) {
-      if (!compact_rewrite_declarations(s, compact, m, true)) result = 2;
-      continue;
-    }
-#endif
-    TSTree *t = dyn_source_tree(s);
-    if (!t) {
-      result = 2;
-      break;
-    }
-    TSNode file = ts_tree_root_node(t);
-    for (uint32_t i = 0; i < ts_node_named_child_count(file) && !result; ++i) {
-      TSNode d = dyn_syntax_declaration_node(ts_node_named_child(file, i)),
-             name = global_name_node(d);
-      if (!ts_node_is_null(name)) {
-        char *n = dyn_syntax_copy_text(name, s, false);
-        if (!n || !add_decl(m, n))
-          result = 2;
-        free(n);
-      }
-    }
-    ts_tree_delete(t);
+    if (!compact || !compact_rewrite_declarations(s, compact, m, true)) result = 2;
   }
   if (!result) {
     RewriteJobs jobs = {.sources = sources, .modules = modules,

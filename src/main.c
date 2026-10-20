@@ -3,7 +3,9 @@
 #include "dyn.h"
 #include "dyn_compact.h"
 #include "ir.h"
-#include "llvm_shim.h"
+#include "native_opt.h"
+#include "native_cpu.h"
+#include "native_asm.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -11,14 +13,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <tree_sitter/api.h>
 #include <unistd.h>
 #ifndef DYN_VERSION
 #define DYN_VERSION "0.1.0-dev"
 #endif
 
 extern char *realpath(const char *, char *);
-extern const TSLanguage *tree_sitter_dyn(void);
 
 static bool native_link_matches(const char *path, const char *name) {
   const char *base = strrchr(path, '/');
@@ -101,6 +101,8 @@ static char *find_native_link(const DynContext *context, const char *name) {
       "/lib",
       "/usr/lib/x86_64-linux-gnu",
       "/lib/x86_64-linux-gnu",
+      "/usr/lib/riscv64-linux-gnu",
+      "/lib/riscv64-linux-gnu",
       "/usr/lib/aarch64-linux-gnu",
       "/lib/aarch64-linux-gnu",
       "/opt/homebrew/lib",
@@ -122,43 +124,18 @@ static int add_source_native_links(const DynContext *context,
   for (size_t i = 0; i < sources->count; ++i) {
     if (dyn_source_target_enabled(&sources->items[i]) == 0)
       continue;
-    TSTree *tree = NULL;
-    TSNode root = {0};
-    uint32_t child = 0;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
     const ExpSnapshotTree *compact = dyn_compact_tree(&sources->items[i]);
-    uint32_t compact_child = compact ? compact->nodes[compact->root].first : UINT32_MAX;
-    if (!compact)
-#endif
-    {
-      tree = dyn_source_tree(&sources->items[i]);
-      if (!tree) return 2;
-      root = ts_tree_root_node(tree);
-    }
-    for (;;) {
-      uint32_t start, end;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-      if (compact) {
-        if (compact_child == UINT32_MAX) break;
-        if (!dyn_work_step(&sources->items[i].context, 1)) return 2;
-        uint32_t id = compact_child; compact_child = compact->nodes[id].next;
-        if (compact->nodes[id].kind != SRC_LINK) continue;
-        uint32_t value = dyn_compact_field(compact, id, EXP_ROLE_LIBRARY);
-        if (value == UINT32_MAX) return 2;
-        start = compact->nodes[value].start; end = compact->nodes[value].end;
-      } else
-#endif
-      {
-        if (child == ts_node_named_child_count(root)) break;
-        TSNode directive = ts_node_named_child(root, child++);
-        if (strcmp(ts_node_type(directive), "link_directive")) continue;
-        TSNode value = ts_node_child_by_field_name(directive, "library", 7);
-        start = ts_node_start_byte(value); end = ts_node_end_byte(value);
-      }
+    if (!compact) return 2;
+    for (uint32_t id = compact->nodes[compact->root].first; id != UINT32_MAX;
+         id = compact->nodes[id].next) {
+      if (!dyn_work_step(&sources->items[i].context, 1)) return 2;
+      if (compact->nodes[id].kind != SRC_LINK) continue;
+      uint32_t value = dyn_compact_field(compact, id, EXP_ROLE_LIBRARY);
+      if (value == UINT32_MAX) return 2;
+      uint32_t start = compact->nodes[value].start, end = compact->nodes[value].end;
       if (end <= start + 2 || end - start - 2 >= sizeof(names[0])) {
         fprintf(stderr, "error: invalid #link library in %s\n",
                 sources->items[i].path);
-        if (tree) ts_tree_delete(tree);
         return 1;
       }
       char name[128];
@@ -172,7 +149,6 @@ static int add_source_native_links(const DynContext *context,
               (name[byte] >= 'a' && name[byte] <= 'z'))) {
           fprintf(stderr, "error: invalid #link library '%s' in %s\n", name,
                   sources->items[i].path);
-          if (tree) ts_tree_delete(tree);
           return 1;
         }
       bool duplicate = false;
@@ -183,14 +159,12 @@ static int add_source_native_links(const DynContext *context,
         }
       if (!duplicate) {
         if (name_count == 32) {
-          if (tree) ts_tree_delete(tree);
           fprintf(stderr, "error: too many native libraries\n");
           return 2;
         }
         strcpy(names[name_count++], name);
       }
     }
-    if (tree) ts_tree_delete(tree);
   }
   for (size_t i = 0; i < name_count; ++i) {
     bool supplied = false;
@@ -219,90 +193,6 @@ static int add_source_native_links(const DynContext *context,
   }
   return 0;
 }
-typedef struct {
-  const DynSource *merged;
-  bool thin_lto;
-  const DynOptions *options;
-  const char *compiler, *output, *root, *cache_root;
-  /* Analyzed and lowered once by the parent; forked workers share it. */
-  const DynIrProgram *ir;
-} ModuleBuild;
-static bool command_available(const char *name) {
-  const char *path = getenv("PATH");
-  if (!path)
-    return false;
-  size_t name_length = strlen(name);
-  for (const char *at = path; *at;) {
-    const char *end = strchr(at, DYN_PATH_SEPARATOR);
-    if (!end)
-      end = at + strlen(at);
-    size_t length = (size_t)(end - at);
-    char candidate[4096];
-    if (length + name_length + 2 < sizeof(candidate)) {
-      memcpy(candidate, at, length);
-      candidate[length] = '/';
-      memcpy(candidate + length + 1, name, name_length + 1);
-      if (!access(candidate, X_OK))
-        return true;
-    }
-    at = *end ? end + 1 : end;
-  }
-  return false;
-}
-static uint64_t path_hash(const char *s) {
-  uint64_t h = UINT64_C(1469598103934665603);
-  for (; *s; ++s) {
-    h ^= (unsigned char)*s;
-    h *= UINT64_C(1099511628211);
-  }
-  return h;
-}
-static int build_module(const DynSources *sources, size_t first, size_t count,
-                        unsigned chunk, unsigned chunks, void *raw,
-                        uint64_t *value) {
-  ModuleBuild *b = raw;
-  char object[4096], owner[32];
-  bool thin = b->thin_lto;
-  /* Chunk counts never exceed 64, so ids stay unique per job. */
-  *value = (uint64_t)first * 64 + chunk;
-  if (snprintf(object, sizeof(object), "%s.dynmod.%llu.%s", b->output,
-               (unsigned long long)*value, thin ? "bc" : "o") >= (int)sizeof(object))
-    return 2;
-  char *full = realpath(sources->items[first].path, NULL);
-  if (!full)
-    return 2;
-  char *slash = strrchr(full, '/');
-  if (slash)
-    *slash = 0;
-  if (!strcmp(full, b->root))
-    strcpy(owner, "root");
-  else
-    snprintf(owner, sizeof(owner), "dyn_m%016llx",
-             (unsigned long long)path_hash(full));
-  free(full);
-  if (!b->ir)
-    return 1;
-  /* Callers depend on signatures; a chunk also depends on which generic
-     instances it emits. */
-  uint64_t key = b->ir->interface_hash ^
-                 dyn_codegen_chunk_instances(b->merged, b->ir, owner, chunk, chunks);
-  if (dyn_module_cache_restore(sources, first, count, chunk, chunks,
-                               key, b->options,
-                               b->compiler, b->cache_root, object)) {
-    if (b->options->verbose)
-      fprintf(stderr, "cached module %s\n", sources->items[first].path);
-    return 0;
-  }
-  int result = dyn_codegen_emit(b->merged, b->ir, object, NULL, NULL,
-                                b->options->release, b->options->debug_info,
-                                false, owner, chunk, chunks);
-  if (!result)
-    dyn_module_cache_store(sources, first, count, chunk, chunks,
-                           key, b->options,
-                           b->compiler, b->cache_root, object);
-  return result;
-}
-
 static double elapsed_ms(struct timespec start) {
   struct timespec end;
   clock_gettime(CLOCK_MONOTONIC, &end);
@@ -314,22 +204,29 @@ static struct timespec timer_start(void) {
   clock_gettime(CLOCK_MONOTONIC, &value);
   return value;
 }
-/* Under auto, an unsupported program falls back to LLVM without diagnostics. */
+/* Every supported target uses independent emission. */
 static int emit_native(const DynSource *source, const DynIrProgram *ir,
-                       const char *object, const DynOptions *options) {
-#ifdef DYN_NATIVE_BACKEND
-  bool report = options->backend == DYN_BACKEND_NATIVE;
+                       const char *object, const char *asm_path,
+                       const DynOptions *options) {
+  bool report = true;
   struct timespec phase = timer_start();
-  int result = dyn_native_object(source, ir, object, true, options->debug_info, report);
+  DynNativeOptimization optimized = {0};
+  if (options->release) {
+    unsigned level = options->optimization.level ? options->optimization.level : 2;
+    if (!dyn_native_optimize(source, ir, level, &optimized)) return 2;
+    ir = &optimized.ir;
+  }
+  int result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
+      ? dyn_wasm_object(source, ir, object, report)
+      : dyn_native_object(source, ir, object, !options->release, options->debug_info, options->shared, report);
+  if (!result && asm_path)
+    result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
+        ? dyn_wasm_assembly(source, ir, asm_path, report)
+        : dyn_native_assembly(object, asm_path);
+  if (options->release) dyn_native_optimization_free(&optimized);
   if (options->timings)
     fprintf(stderr, "timing detail native emit %.3f ms\n", elapsed_ms(phase));
-  if (result && !report && options->verbose)
-    fprintf(stderr, "note: native emission does not support this program; using LLVM\n");
   return result;
-#else
-  (void)source; (void)ir; (void)object; (void)options;
-  return 1;
-#endif
 }
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -351,9 +248,10 @@ static int execute_command(DynOptions *options, const char *compiler) {
   bool vet = is_command(options, "vet");
   DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target),
                         .optimization = &options->optimization,
+                        .runtime_support = options->runtime_support,
                         .json_diagnostics = options->json_diagnostics,
                         .vet = vet, .vet_findings = &vet_findings,
-                        .timings = options->timings};
+                        .timings = options->timings, .strict_syntax = true};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);
     return 0;
@@ -397,8 +295,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
     fprintf(stderr, "error: run cannot be combined with --shared\n");
     return 2;
   }
-  if (options->shared && options->no_link) {
-    fprintf(stderr, "error: --shared cannot be combined with --no-link\n");
+  if (options->shared && options->no_link && !options->emit_object) {
+    fprintf(stderr, "error: --shared --no-link requires --emit-object\n");
     return 2;
   }
   if (!dyn_path_is_directory(options->input)) {
@@ -409,7 +307,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   if (!context.target) {
     fprintf(stderr,
             "error: target '%s' is not implemented; supported targets: "
-            "x86_64-linux, aarch64-linux, aarch64-macos, x86_64-windows, wasm32-browser, wasm32-wasi\n",
+            "x86_64-linux, aarch64-linux, riscv64-linux, x86_64-macos, aarch64-macos, x86_64-windows, aarch64-windows, wasm32-browser, wasm32-wasi\n",
             options->target);
     return 2;
   }
@@ -420,25 +318,20 @@ static int execute_command(DynOptions *options, const char *compiler) {
     fprintf(stderr, "error: Wasm requires an external host; browser builds require --shared, WASI commands forbid --shared\n");
     return 2;
   }
-  /* Native emission covers debug executables and objects for the Linux, macOS
-     and Windows targets; every other build, and any program it does not
-     support under auto, uses LLVM. */
-  bool native = false;
-#ifdef DYN_NATIVE_BACKEND
-  native = options->backend != DYN_BACKEND_LLVM &&
-           (is_command(options, "build") || run) && !options->release &&
-           (!strcmp(options->target, "x86_64-linux") || !strcmp(options->target, "aarch64-linux") ||
-            !strcmp(options->target, "aarch64-macos") || !strcmp(options->target, "x86_64-windows")) &&
-           !options->shared &&
-           !options->emit_ir && !options->emit_asm &&
-           !options->optimization.native_cpu && !options->optimization.cpu &&
-           !options->optimization.features && !options->optimization.remarks;
-#endif
-  if (options->backend == DYN_BACKEND_NATIVE && !native) {
-    fprintf(stderr, "error: --backend native requires an x86_64-linux, aarch64-linux, aarch64-macos "
-                    "or x86_64-windows debug build without --shared, --emit-ir, --emit-asm, "
-                    "CPU/features or optimization remarks\n");
+  bool native = (is_command(options, "build") || run);
+  if (options->backend == DYN_BACKEND_LLVM) {
+    fprintf(stderr, "error: LLVM backend was removed; use --backend native\n");
     return 2;
+  }
+  if (options->backend == DYN_BACKEND_NATIVE && !native) {
+    fprintf(stderr, "error: --backend native requires build/run\n");
+    return 2;
+  }
+  if (native)
+    options->backend = DYN_BACKEND_NATIVE;
+  if (options->runtime_support && (!native || !options->release || !options->shared ||
+      !options->emit_object || !options->no_link || options->emit_asm)) {
+    fprintf(stderr, "error: --runtime-support requires native --release --shared --emit-object --no-link\n"); return 2;
   }
   options->native_backend = native;
   struct timespec phase = timer_start();
@@ -446,19 +339,24 @@ static int execute_command(DynOptions *options, const char *compiler) {
     if (strcmp(options->target, DYN_HOST_TARGET)) {
       fprintf(stderr, "error: --cpu native requires the host target\n"); return 2;
     }
-    options->optimization.cpu = LLVMGetHostCPUName();
-    options->optimization.features = LLVMGetHostCPUFeatures();
-    if (!options->optimization.cpu || !options->optimization.features) return 2;
+    if (native) {
+      options->optimization.cpu = strdup("native");
+      options->optimization.features = strdup(dyn_native_host_features());
+      if (!options->optimization.cpu || !options->optimization.features) return 2;
+    }
   }
   if (options->optimization.level && !options->release) {
     fprintf(stderr, "error: --opt-level requires --release\n"); return 2;
   }
-  if (options->optimization.sample_profile &&
-      (!options->release || options->no_lto || options->no_link || options->shared ||
-       options->emit_ir || options->emit_asm || options->emit_object ||
-       strcmp(options->target, "x86_64-linux") || !command_available("ld.lld") ||
-       access(options->optimization.sample_profile, R_OK))) {
-    fprintf(stderr, "error: --sample-profile requires a readable profile and a release x86_64-linux ThinLTO executable\n");
+  if (options->optimization.level == 1 && !native) {
+    fprintf(stderr, "error: --opt-level 1 currently requires the independent backend\n"); return 2;
+  }
+  if (options->optimization.sample_profile && native &&
+      (!options->release || access(options->optimization.sample_profile, R_OK))) {
+    fprintf(stderr, "error: independent --sample-profile requires --release and a readable text profile\n"); return 2;
+  }
+  if (options->optimization.sample_profile && !native) {
+    fprintf(stderr, "error: --sample-profile requires build/run\n");
     return 2;
   }
   if (options->optimization.sample_profile) {
@@ -470,7 +368,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   /* Diagnostics must be regenerated even when all artifacts were cached. */
   if (options->optimization.remarks) {
     options->no_cache = true;
-    options->jobs = 1; /* Keep diagnostics from independent LLVM contexts legible. */
+    options->jobs = 1; /* Keep optimization diagnostics ordered. */
   }
   DynSources sources;
   int result = dyn_sources_load(&context, options->input, &sources);
@@ -525,10 +423,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
     result = dyn_query_sources(&sources, main_path);
     dyn_sources_free(&sources); free(main_path); return result;
   }
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-  /* Module resolution, rewriting and interface reads are complete. */
-  if (!vet) (void)dyn_ast_release_project_trees(&sources);
-#endif
   DynCheckResult checked = {0};
   if (!build)
     checked = dyn_check_sources(&sources, main_path, false);
@@ -575,9 +469,9 @@ static int execute_command(DynOptions *options, const char *compiler) {
   const char *output = run               ? run_output
                        : options->output ? options->output
                                          : base;
-  // Run uses shared module artifacts, but never persists its temporary executable.
+  // Run reuses native objects, but never persists its temporary executable.
   bool cacheable = strcmp(context.target->arch, "wasm32") && !options->shared && !options->no_link &&
-                   !options->emit_ir && !options->emit_object &&
+                   !options->emit_object &&
                    !options->emit_asm;
   if (cacheable && !options->no_cache)
     options->compiler_hash = dyn_cache_file_hash(compiler);
@@ -589,12 +483,12 @@ static int execute_command(DynOptions *options, const char *compiler) {
     free(base);
     return 0;
   }
-  char object[4096], ir[4096], assembly[4096];
+  char object[4096], assembly[4096];
   /* A native object is private unless requested: "<output>.o" may name a
      --link input. On macOS it is kept beside the output instead, because the
      executable's debug map refers to the object's DWARF. */
   bool private_object = native && !options->emit_object && !options->no_link;
-  bool kept_object = private_object && !strcmp(options->target, "aarch64-macos");
+  bool kept_object = private_object && !strcmp(context.target->kernel, "darwin");
   if (kept_object) {
     private_object = false;
     if (snprintf(object, sizeof(object), "%s.dynnative.o", output) >= (int)sizeof(object)) {
@@ -614,122 +508,46 @@ static int execute_command(DynOptions *options, const char *compiler) {
     close(temporary);
   }
   if ((!private_object && !kept_object && snprintf(object, sizeof(object), "%s.o", output) >= (int)sizeof(object)) ||
-      snprintf(ir, sizeof(ir), "%s.ll", output) >= (int)sizeof(ir) ||
       snprintf(assembly, sizeof(assembly), "%s.s", output) >= (int)sizeof(assembly)) {
     fprintf(stderr, "error: output path too long\n");
     dyn_sources_free(&sources); free(main_path); free(base); return 2;
   }
-  DynSource module_source = {0};
   phase = timer_start();
-  uint64_t *module_ids = NULL;
-  size_t module_count = 0;
-  char **module_objects = NULL;
-  bool modular = cacheable, native_built = false;
-  char cache_root[4096];
-  const char *cache = NULL;
-  if (modular) {
-    char *root = realpath(options->input, NULL);
-    cache = !options->no_cache &&
-                    dyn_cache_directory(cache_root, sizeof(cache_root))
-                ? cache_root : NULL;
-    if (!root) result = 2;
-    if (!result)
-      result = dyn_sources_merge(&sources, main_path, &module_source);
-    module_source.context = context;
-    bool thin_lto = options->release && !options->no_lto &&
-                    !strcmp(options->target, "x86_64-linux") &&
-                    command_available("ld.lld");
-    ModuleBuild module_build = {.merged = &module_source,
-                                .thin_lto = thin_lto,
-                                .options = options,
-                                .compiler = compiler,
-                                .output = output,
-                                .root = root,
-                                .cache_root = cache};
-    DynIrProgram shared_ir;
-    bool prepared = false;
-    if (!result) {
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-      for (size_t i = 0; i < sources.count; ++i)
-        dyn_source_release_batch_trees(&sources.items[i]);
-      result = dyn_codegen_prepare_owned(&module_source, false, NULL, &shared_ir);
-#else
-      result = dyn_codegen_prepare(&module_source, false, NULL, &shared_ir);
-#endif
-      prepared = !result;
-      module_build.ir = prepared ? &shared_ir : NULL;
-    }
-    if (!result && native)
-      native_built = !emit_native(&module_source, &shared_ir, object, options);
-    if (!result && native && !native_built && options->backend == DYN_BACKEND_NATIVE)
-      result = 1;
-    if (!result && !native_built)
-      result = dyn_build_plan_run(&sources, options->jobs, build_module,
-                                  &module_build, &module_ids, &module_count);
-    if (prepared)
-      dyn_codegen_release(&shared_ir);
-    free(root);
-    if (!result && module_count) {
-      module_objects = calloc(module_count, sizeof(*module_objects));
-      if (!module_objects)
-        result = 2;
-    }
-    bool thin = thin_lto;
-    for (size_t i = 0; !result && i < module_count; ++i) {
-      module_objects[i] = malloc(4096);
-      if (!module_objects[i] ||
-          snprintf(module_objects[i], 4096, "%s.dynmod.%llu.%s", output,
-                   (unsigned long long)module_ids[i],
-                   thin ? "bc" : "o") >= 4096)
-        result = 2;
-    }
-  } else {
+  /* Native objects depend on source and code-generation options, not link
+     inputs or output names. Reuse them when relinking or running again. */
+  bool restored = cacheable && dyn_object_cache_restore(
+      &sources, options, compiler, output, object);
+  if (restored && options->verbose)
+    fprintf(stderr, "cached native object\n");
+  if (!restored) {
+    DynSource module_source = {0};
     result = dyn_sources_merge(&sources, main_path, &module_source);
     module_source.context = context;
+    DynIrProgram prepared;
+    bool have_ir = false;
     if (!result) {
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-      for (size_t i = 0; i < sources.count; ++i)
-        dyn_source_release_batch_trees(&sources.items[i]);
-      DynIrProgram prepared;
       result = dyn_codegen_prepare_owned(&module_source, options->shared, NULL, &prepared);
-#else
-      DynIrProgram prepared;
-      result = dyn_codegen_prepare(&module_source, options->shared, NULL, &prepared);
-#endif
-      bool have_ir = !result;
-      if (!result && native) {
-        native_built = !emit_native(&module_source, &prepared, object, options);
-        if (!native_built && options->backend == DYN_BACKEND_NATIVE)
-          result = 1;
-      }
-      if (!result && !native_built)
-        result = dyn_codegen_emit(&module_source, &prepared, object,
-            options->emit_ir ? ir : NULL, options->emit_asm ? assembly : NULL,
-            options->release, options->debug_info, options->shared, NULL, 0, 1);
-      if (have_ir)
-        dyn_codegen_release(&prepared);
+      have_ir = !result;
     }
+    if (!result)
+      result = emit_native(&module_source, &prepared, object,
+          options->emit_asm ? assembly : NULL, options);
+    if (have_ir)
+      dyn_codegen_release(&prepared);
+    dyn_source_free(&module_source);
+    if (!result && cacheable)
+      dyn_object_cache_store(&sources, options, compiler, output, object);
   }
   if (options->timings)
     fprintf(stderr, "timing codegen %.3f ms\n", elapsed_ms(phase));
-  dyn_source_free(&module_source);
-  if (native_built)
-    modular = false;
   phase = timer_start();
   if (!result && !options->no_link)
-    result =
-        options->shared
-            ? dyn_link_shared(&context, object, output, options->link_inputs,
-                              options->link_input_count, options->verbose)
-        : modular
-            ? dyn_link_executable_objects(
-                  &context, (const char *const *)module_objects, module_count,
-                  output, options->link_inputs, options->link_input_count,
-                  options->release, options->verbose, cache, options->jobs)
-            : dyn_link_executable(&context, object, output,
-                                  options->link_inputs,
-                                  options->link_input_count, options->release,
-                                  options->verbose);
+    result = options->shared
+        ? dyn_link_shared(&context, object, output, options->link_inputs,
+                          options->link_input_count, options->verbose)
+        : dyn_link_executable(&context, object, output, options->link_inputs,
+                              options->link_input_count, options->release,
+                              options->verbose);
   if (!result && !run && cacheable)
     dyn_cache_store(&sources, options, compiler, output);
   if (options->timings && !options->no_link)
@@ -741,14 +559,6 @@ static int execute_command(DynOptions *options, const char *compiler) {
       if (imports) { sprintf(imports, "%s.imports", object); remove(imports); free(imports); }
     }
   }
-  if (module_objects)
-    for (size_t i = 0; i < module_count; ++i) {
-      if (module_objects[i])
-        remove(module_objects[i]);
-      free(module_objects[i]);
-    }
-  free(module_objects);
-  free(module_ids);
   if (!result && !options->quiet)
     printf("built %s\n", options->no_link ? object : output);
   if (!result && run) {
@@ -830,8 +640,10 @@ int main(int argc, char **argv) {
     compiler = executable;
   }
   int result = execute_command(&o, compiler);
-  if (o.optimization.cpu) LLVMDisposeMessage(o.optimization.cpu);
-  if (o.optimization.features) LLVMDisposeMessage(o.optimization.features);
+  {
+    free(o.optimization.cpu);
+    free(o.optimization.features);
+  }
   for (size_t i = borrowed_links; i < o.link_input_count; ++i)
     free((void *)o.link_inputs[i]);
   return result;

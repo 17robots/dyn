@@ -5,7 +5,7 @@
 Dyn uses a thin vertical slice from source to native executable:
 
 ```text
-module directory -> source manager -> Tree-sitter -> owned AST -> semantic checks
+module directory -> source manager -> handwritten parser -> owned AST -> semantic checks
                  -> typed IR -> LLVM C ABI -> ELF object -> linker -> executable
 ```
 
@@ -131,8 +131,30 @@ arena. The present source loader still uses libc allocation; replacing that with
 arenas is next implementation slice.
 
 Linux x86-64 starts without libc: `dynrt_start.o` defines `_start`, calls generated
-`main`, then performs exit syscall. LLVM emits native objects. Linker selection prefers
-bundled `ld.lld` in SDK; development fallback currently uses system `ld`.
+`main`, then performs exit syscall. LLVM emits native objects. Linux executables
+(x86-64 and AArch64) link in-process (`src/link_elf.c`): relocatable objects and `ar`
+archives, lazy archive members, section garbage collection, a GOT for
+GOT-relative relocations, and `.eh_frame` records pruned with their code. No
+external linker is spawned. Shared libraries and GNU linker scripts (such as
+`/usr/lib/libc.so`) are inputs too: the executable becomes dynamic, with
+`PT_INTERP`, `.dynamic`, a SysV `.hash`, symbol versions, PLT entries bound
+through `JUMP_SLOT` slots at load time (`BIND_NOW`, no lazy PLT), canonical PLT
+addresses for imported functions whose address is taken, and copy relocations
+for imported data read by non-PIC code. `--shared` output is linked in-process
+as well; as with lld, its default-visibility definitions stay preemptible.
+macOS arm64 executables and dylibs link in-process too (`src/link_macho.c`):
+objects, archives, dylibs and `.tbd` stubs in; out comes a PIE or dylib whose
+imports bind at load time through `LC_DYLD_INFO_ONLY` (non-lazy stubs), with
+an export trie and the ad-hoc, linker-signed code signature Apple silicon
+requires. Debug info stays in the objects and no `__unwind_info` is written.
+x86-64 Windows executables and DLLs link in-process too (`src/link_coff.c`):
+COFF objects and ar/.lib archives, including short import objects, whose
+imports extend the runtime's own `.idata$2..$7` directory; grouped sections
+merge in suffix order. Executables keep GNU ld's fixed base; DLLs get base
+relocations, an export table of every external definition, and an import
+library in `llvm-dlltool`'s layout that both GNU ld and the built-in linker
+read. Only Wasm still uses an external linker (`wasm-ld`). `DYN_LINKER=external`
+forces the external linker, including its ThinLTO, for differential checks.
 
 Standard-library imports resolve relative to compiler executable, never process working
 directory. Initial `std/terminal` and `std/io` are ordinary Dyn over `{data,len}` UTF-8 strings and `#syscall`;
@@ -141,8 +163,8 @@ its ABI is documented in [the std ABI](standard-library-abi.md).
 `tools/build.py` compiles each source file to its own object in parallel (`JOBS` or `--jobs` sets
 the worker count) and relinks only when an object changes. `just per-file` builds a single-command
 per-file binary.
-The parser comes from `tree-sitter-dyn` at the revision in `grammar.lock.json`;
-`just deps` fetches it. `just test` runs the regression suite. `just artifact
+The parser is part of the compiler (`src/parser.c`); building needs no grammar
+checkout. `just test` runs the regression suite. `just artifact
 dyn-sanitize` builds the compiler with ASan and UBSan; CI runs the compiler
 contracts and generics tests with it. A minimized regression case belongs in
 `tests/` next to the fix.
@@ -151,8 +173,10 @@ contracts and generics tests with it. A minimized regression case belongs in
 installs compiler, runtime objects, and standard library under `PREFIX`; `just
 package` builds and validates a relocated SDK outside the source tree. Both Linux targets
 ship startup/support objects; target seam remains explicit, not a portability claim.
-Cross-linking AArch64 Linux executables uses `ld.lld` or Zig's bundled `ld.lld`;
-compiler never feeds AArch64 objects to host `ld`. Object and assembly emission
+AArch64 Linux executables and shared libraries link in-process too, with
+lld's 64 KiB maximum page size and its adrp relaxations (adrp+add to nop+adr
+within 1 MiB, GOT adrp+ldr to adrp+add for local symbols), so code matches
+`ld.lld` output instruction for instruction. Object and assembly emission
 need only LLVM backend. Tests execute through `qemu-aarch64` when available.
 
 ## Error boundaries
@@ -184,11 +208,15 @@ control, defer, calls, unknown stores, and possible local aliases invalidate the
 status, and removes the executable. `--no-link` is rejected for `run`. `--emit-asm` writes the
 post-optimization target assembly beside other requested build artifacts.
 Build output is created through a temporary sibling and atomically renamed.
-On x86-64 Linux release builds, separately compiled modules use ThinLTO bitcode
-when a version-compatible `ld.lld` is available; otherwise the compiler emits
-cached native objects and falls back to the system linker. Debug builds always
-use native objects. Zig's bundled linker is not selected because its LLVM major
-may differ from the compiler's bitcode producer.
+On x86-64 Linux release builds, separately compiled modules use ThinLTO bitcode.
+The compiler runs ThinLTO itself (`src/thinlto.cpp`) with lld's settings for a
+static executable: symbols the runtime or `--link` inputs define or use stay
+visible, everything else may be internalized, loop and SLP vectorization follow
+the optimization level, and backends are cached under the build cache's
+`thinlto/` directory with lld's pruning policy. A sample profile's call graph
+orders functions with LLVM's cache-directed sort, as lld does by default.
+`tests/builtin-linker.py` checks that the code and function order match
+`ld.lld`'s. Debug builds always use native objects.
 
 Plain executable builds use a content cache beside output. A versioned input snapshot validates
 compiler, target, mode, output, link inputs, module directories, manifests, and transitive sources

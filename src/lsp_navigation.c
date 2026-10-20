@@ -1,28 +1,23 @@
 #define _POSIX_C_SOURCE 200809L
 #include "lsp_internal.h"
 
-static void lsp_identifier_edits(TSNode node, const LspDocument *document,
+static void lsp_identifier_edits(const ExpSnapshotTree *tree, const LspDocument *document,
                                  const char *word, size_t word_length,
                                  const char *uri, const char *replacement,
                                  char *body, size_t capacity, size_t *at,
                                  bool *comma);
-static void lsp_rename_edits(TSNode node, const LspDocument *document,
+static void lsp_rename_edits(const ExpSnapshotTree *tree, const LspDocument *document,
                              const char *word, size_t word_length,
                              const char *replacement, char *body,
                              size_t capacity, size_t *at, bool *comma);
-static void lsp_symbols(TSTree *tree, const char *text, const char *uri,
+static void lsp_symbols(const LspDocument *document, const char *uri,
                         const char *query, char *body, size_t capacity,
                         size_t *at, bool *comma);
-static bool lsp_foldable(const char *kind);
-static void lsp_folding_nodes(TSNode node, char *body, size_t capacity,
+static bool lsp_foldable(unsigned kind);
+static void lsp_folding_nodes(const LspDocument *document, char *body, size_t capacity,
                               size_t *at, bool *comma);
-static void lsp_selection_node(TSNode node, char *body, size_t capacity,
-                               size_t *at);
-static void lsp_semantic_token_node(TSNode node, unsigned *previous_line,
-                                    unsigned *previous_column, bool *first,
-                                    char *body, size_t capacity, size_t *at,
-                                    bool *comma, const uint32_t *constants,
-                                    size_t constant_count);
+static void lsp_selection_node(const LspDocument *document, DynNode node, char *body,
+                               size_t capacity, size_t *at);
 static bool lsp_symbol_matches(const char *name, size_t length,
                                const char *query);
 static void lsp_workspace_symbol_text(const char *text, const char *uri,
@@ -197,15 +192,19 @@ bool lsp_call_identifier(const char *text, size_t line, size_t character,
   return true;
 }
 
-static void lsp_identifier_edits(TSNode node, const LspDocument *document,
+static void lsp_identifier_edits(const ExpSnapshotTree *tree, const LspDocument *document,
                                  const char *word, size_t word_length,
                                  const char *uri, const char *replacement,
                                  char *body, size_t capacity, size_t *at,
                                  bool *comma) {
-  if (!strcmp(ts_node_type(node), "identifier") &&
-      ts_node_end_byte(node) - ts_node_start_byte(node) == word_length &&
-      !memcmp(document->text + ts_node_start_byte(node), word, word_length)) {
-    TSPoint a = ts_node_start_point(node), b = ts_node_end_point(node);
+  DynNode root = dyn_node_root(tree);
+  for (DynNode node = root; !dyn_node_null(node); node = dyn_node_preorder(node, root)) {
+    if (!dyn_node_is(node, EXP_NAME) ||
+        dyn_node_end(node) - dyn_node_start(node) != word_length ||
+        memcmp(document->text + dyn_node_start(node), word, word_length))
+      continue;
+    DynPoint a = lsp_point(document, dyn_node_start(node)),
+             b = lsp_point(document, dyn_node_end(node));
     *at += (size_t)lsp_bounded_printf(
         body + *at, capacity - *at,
         "%s{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u},"
@@ -215,10 +214,6 @@ static void lsp_identifier_edits(TSNode node, const LspDocument *document,
         replacement ? "\"" : "");
     *comma = true;
   }
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
-    lsp_identifier_edits(ts_node_named_child(node, i), document, word,
-                         word_length, uri, replacement, body, capacity, at,
-                         comma);
 }
 
 void lsp_references(long id, LspDocument *documents, size_t count,
@@ -232,10 +227,10 @@ void lsp_references(long id, LspDocument *documents, size_t count,
       body, capacity, "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[", id);
   bool comma = false;
   for (size_t i = 0; i < count; ++i)
-    if (documents[i].tree) {
+    if (lsp_tree(&documents[i])) {
       char *uri = json_escape(documents[i].uri, strlen(documents[i].uri));
       if (uri)
-        lsp_identifier_edits(ts_tree_root_node(documents[i].tree),
+        lsp_identifier_edits(lsp_tree(&documents[i]),
                              &documents[i], word, word_length, uri, replacement,
                              body, capacity, &at, &comma);
       free(uri);
@@ -265,23 +260,18 @@ void lsp_references(long id, LspDocument *documents, size_t count,
       continue;
     }
     size_t length = strlen(source);
-    TSParser *parser = ts_parser_new();
-    TSTree *tree = NULL;
-    if (parser && ts_parser_set_language(parser, tree_sitter_dyn()))
-      tree = ts_parser_parse_string(parser, NULL, source, (uint32_t)length);
+    ExpSnapshot *tree = lsp_parse(source, length);
     char *uri = lsp_path_uri(path),
          *escaped = uri ? json_escape(uri, strlen(uri)) : NULL;
-    LspDocument disk = {
-        .uri = uri, .text = source, .parser = parser, .tree = tree};
+    LspDocument disk = {.uri = uri, .text = source, .syntax = tree};
+    lsp_document_lines(&disk);
     if (tree && escaped)
-      lsp_identifier_edits(ts_tree_root_node(tree), &disk, word, word_length,
+      lsp_identifier_edits(exp_snapshot_tree(tree), &disk, word, word_length,
                            escaped, replacement, body, capacity, &at, &comma);
+    free(disk.line_starts);
     free(escaped);
     free(uri);
-    if (tree)
-      ts_tree_delete(tree);
-    if (parser)
-      ts_parser_delete(parser);
+    exp_snapshot_release(tree);
     free(source);
     free(path);
   }
@@ -292,14 +282,18 @@ void lsp_references(long id, LspDocument *documents, size_t count,
   free(body);
 }
 
-static void lsp_rename_edits(TSNode node, const LspDocument *document,
+static void lsp_rename_edits(const ExpSnapshotTree *tree, const LspDocument *document,
                              const char *word, size_t word_length,
                              const char *replacement, char *body,
                              size_t capacity, size_t *at, bool *comma) {
-  if (!strcmp(ts_node_type(node), "identifier") &&
-      ts_node_end_byte(node) - ts_node_start_byte(node) == word_length &&
-      !memcmp(document->text + ts_node_start_byte(node), word, word_length)) {
-    TSPoint a = ts_node_start_point(node), b = ts_node_end_point(node);
+  DynNode root = dyn_node_root(tree);
+  for (DynNode node = root; !dyn_node_null(node); node = dyn_node_preorder(node, root)) {
+    if (!dyn_node_is(node, EXP_NAME) ||
+        dyn_node_end(node) - dyn_node_start(node) != word_length ||
+        memcmp(document->text + dyn_node_start(node), word, word_length))
+      continue;
+    DynPoint a = lsp_point(document, dyn_node_start(node)),
+             b = lsp_point(document, dyn_node_end(node));
     *at += (size_t)lsp_bounded_printf(
         body + *at, capacity - *at,
         "%s{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
@@ -307,9 +301,6 @@ static void lsp_rename_edits(TSNode node, const LspDocument *document,
         *comma ? "," : "", a.row, a.column, b.row, b.column, replacement);
     *comma = true;
   }
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
-    lsp_rename_edits(ts_node_named_child(node, i), document, word, word_length,
-                     replacement, body, capacity, at, comma);
 }
 
 void lsp_rename(long id, LspDocument *documents, size_t count, const char *word,
@@ -324,14 +315,14 @@ void lsp_rename(long id, LspDocument *documents, size_t count, const char *word,
       "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":{\"changes\":{", id);
   bool document_comma = false;
   for (size_t i = 0; i < count; ++i)
-    if (documents[i].tree) {
+    if (lsp_tree(&documents[i])) {
       char *uri = json_escape(documents[i].uri, strlen(documents[i].uri));
       if (!uri)
         continue;
       at += (size_t)lsp_bounded_printf(body + at, capacity - at, "%s\"%s\":[",
                                        document_comma ? "," : "", uri);
       bool edit_comma = false;
-      lsp_rename_edits(ts_tree_root_node(documents[i].tree), &documents[i],
+      lsp_rename_edits(lsp_tree(&documents[i]), &documents[i],
                        word, word_length, replacement, body, capacity, &at,
                        &edit_comma);
       at += (size_t)lsp_bounded_printf(body + at, capacity - at, "]");
@@ -363,18 +354,17 @@ void lsp_rename(long id, LspDocument *documents, size_t count, const char *word,
       continue;
     }
     size_t length = strlen(source);
-    TSParser *parser = ts_parser_new();
-    TSTree *tree = NULL;
-    if (parser && ts_parser_set_language(parser, tree_sitter_dyn()))
-      tree = ts_parser_parse_string(parser, NULL, source, (uint32_t)length);
+    ExpSnapshot *tree = lsp_parse(source, length);
     char edits[65536];
     size_t edit_at = 0;
     bool edit_comma = false;
-    LspDocument disk = {.text = source, .tree = tree};
+    LspDocument disk = {.text = source, .syntax = tree};
+    lsp_document_lines(&disk);
     if (tree)
-      lsp_rename_edits(ts_tree_root_node(tree), &disk, word, word_length,
+      lsp_rename_edits(exp_snapshot_tree(tree), &disk, word, word_length,
                        replacement, edits, sizeof(edits), &edit_at,
                        &edit_comma);
+    free(disk.line_starts);
     if (edit_comma) {
       char *uri = lsp_path_uri(path),
            *escaped = uri ? json_escape(uri, strlen(uri)) : NULL;
@@ -386,10 +376,7 @@ void lsp_rename(long id, LspDocument *documents, size_t count, const char *word,
       free(escaped);
       free(uri);
     }
-    if (tree)
-      ts_tree_delete(tree);
-    if (parser)
-      ts_parser_delete(parser);
+    exp_snapshot_release(tree);
     free(source);
     free(path);
   }
@@ -400,26 +387,28 @@ void lsp_rename(long id, LspDocument *documents, size_t count, const char *word,
   free(body);
 }
 
-static void lsp_symbols(TSTree *tree, const char *text, const char *uri,
+static void lsp_symbols(const LspDocument *document, const char *uri,
                         const char *query, char *body, size_t capacity,
                         size_t *at, bool *comma) {
+  const ExpSnapshotTree *tree = lsp_tree(document);
   if (!tree)
     return;
   static const unsigned kinds[] = {12, 23, 10, 5, 14, 13};
-  TSNode root = ts_tree_root_node(tree);
+  const char *text = document->text;
   char *escaped = uri ? json_escape(uri, strlen(uri)) : NULL;
   if (uri && !escaped)
     return;
-  for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
+  for (DynNode wrapper = dyn_node_first(dyn_node_root(tree)); !dyn_node_null(wrapper);
+       wrapper = dyn_node_next(wrapper)) {
     DynDeclaration decl;
-    if (!dyn_syntax_declaration(ts_node_named_child(root, i), &decl))
+    if (!dyn_node_declaration(wrapper, &decl))
       continue;
-    const char *name = text + ts_node_start_byte(decl.name);
-    size_t length = ts_node_end_byte(decl.name) - ts_node_start_byte(decl.name);
+    const char *name = text + dyn_node_start(decl.name);
+    size_t length = dyn_node_end(decl.name) - dyn_node_start(decl.name);
     if (!lsp_symbol_matches(name, length, query))
       continue;
-    TSPoint a = ts_node_start_point(decl.name),
-            b = ts_node_end_point(decl.name);
+    DynPoint a = lsp_point(document, dyn_node_start(decl.name)),
+             b = lsp_point(document, dyn_node_end(decl.name));
     *at += (size_t)lsp_bounded_printf(
         body + *at, capacity - *at, "%s{\"name\":\"%.*s\",\"kind\":%u,",
         *comma ? "," : "", (int)length, name, kinds[decl.kind]);
@@ -427,8 +416,8 @@ static void lsp_symbols(TSTree *tree, const char *text, const char *uri,
       *at += (size_t)lsp_bounded_printf(
           body + *at, capacity - *at, "\"location\":{\"uri\":\"%s\",", escaped);
     } else {
-      TSPoint start = ts_node_start_point(decl.node),
-              end = ts_node_end_point(decl.node);
+      DynPoint start = lsp_point(document, dyn_node_start(decl.node)),
+               end = lsp_point(document, dyn_node_end(decl.node));
       *at += (size_t)lsp_bounded_printf(
           body + *at, capacity - *at,
           "\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
@@ -454,24 +443,27 @@ void lsp_document_symbols(long id, const LspDocument *document) {
   size_t at = (size_t)lsp_bounded_printf(
       body, capacity, "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[", id);
   bool comma = false;
-  lsp_symbols(document->tree, document->text, NULL, NULL, body, capacity, &at,
-              &comma);
+  lsp_symbols(document, NULL, NULL, body, capacity, &at, &comma);
   lsp_bounded_printf(body + at, capacity - at, "]}");
   lsp_send(body);
   free(body);
 }
 
-static bool lsp_foldable(const char *kind) {
-  return !strcmp(kind, "fn") || !strcmp(kind, "extern_fn") ||
-         !strcmp(kind, "struct") || !strcmp(kind, "enum") ||
-         !strcmp(kind, "block") || !strcmp(kind, "case") ||
-         !strcmp(kind, "if") || !strcmp(kind, "for") || !strcmp(kind, "defer");
+static bool lsp_foldable(unsigned kind) {
+  return kind == SRC_FN || kind == SRC_EXTERN_FN || kind == SRC_STRUCT ||
+         kind == SRC_ENUM || kind == SRC_BLOCK || kind == SRC_CASE || kind == SRC_DEFER;
 }
 
-static void lsp_folding_nodes(TSNode node, char *body, size_t capacity,
+static void lsp_folding_nodes(const LspDocument *document, char *body, size_t capacity,
                               size_t *at, bool *comma) {
-  TSPoint a = ts_node_start_point(node), b = ts_node_end_point(node);
-  if (b.row > a.row && lsp_foldable(ts_node_type(node))) {
+  DynNode root = dyn_node_root(lsp_tree(document));
+  for (DynNode node = root; !dyn_node_null(node); node = dyn_node_preorder(node, root)) {
+    if (!lsp_foldable(dyn_node_kind(node)))
+      continue;
+    DynPoint a = lsp_point(document, dyn_node_start(node)),
+             b = lsp_point(document, dyn_node_end(node));
+    if (b.row <= a.row)
+      continue;
     *at += (size_t)lsp_bounded_printf(
         body + *at, capacity - *at,
         "%s{\"startLine\":%u,\"startCharacter\":%u,\"endLine\":%u,"
@@ -479,8 +471,6 @@ static void lsp_folding_nodes(TSNode node, char *body, size_t capacity,
         *comma ? "," : "", a.row, a.column, b.row, b.column);
     *comma = true;
   }
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
-    lsp_folding_nodes(ts_node_named_child(node, i), body, capacity, at, comma);
 }
 
 void lsp_folding_ranges(long id, const LspDocument *document) {
@@ -488,28 +478,30 @@ void lsp_folding_ranges(long id, const LspDocument *document) {
   size_t at = (size_t)lsp_bounded_printf(
       body, sizeof(body), "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[", id);
   bool comma = false;
-  if (document->tree)
-    lsp_folding_nodes(ts_tree_root_node(document->tree), body, sizeof(body),
-                      &at, &comma);
+  if (lsp_tree(document))
+    lsp_folding_nodes(document, body, sizeof(body), &at, &comma);
   lsp_bounded_printf(body + at, sizeof(body) - at, "]}");
   lsp_send(body);
 }
 
-static void lsp_selection_node(TSNode node, char *body, size_t capacity,
-                               size_t *at) {
-  TSPoint a = ts_node_start_point(node), b = ts_node_end_point(node);
+static void lsp_selection_node(const LspDocument *document, DynNode node, char *body,
+                               size_t capacity, size_t *at) {
+  DynPoint a = lsp_point(document, dyn_node_start(node)),
+           b = lsp_point(document, dyn_node_end(node));
   *at += (size_t)lsp_bounded_printf(
       body + *at, capacity - *at,
       "{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{\"line\":%"
       "u,\"character\":%u}}",
       a.row, a.column, b.row, b.column);
-  TSNode parent = ts_node_parent(node);
-  while (!ts_node_is_null(parent) && !ts_node_is_named(parent))
-    parent = ts_node_parent(parent);
-  if (!ts_node_is_null(parent)) {
+  /* Wrappers spanning the same text add nothing to expand to. */
+  DynNode parent = dyn_node_parent(node);
+  while (!dyn_node_null(parent) && dyn_node_start(parent) == dyn_node_start(node) &&
+         dyn_node_end(parent) == dyn_node_end(node))
+    parent = dyn_node_parent(parent);
+  if (!dyn_node_null(parent)) {
     *at +=
         (size_t)lsp_bounded_printf(body + *at, capacity - *at, ",\"parent\":");
-    lsp_selection_node(parent, body, capacity, at);
+    lsp_selection_node(document, parent, body, capacity, at);
   }
   *at += (size_t)lsp_bounded_printf(body + *at, capacity - *at, "}");
 }
@@ -523,18 +515,17 @@ void lsp_selection_range(long id, const LspDocument *document,
   const char *position =
       positions && *positions == '[' ? lsp_json_space(positions + 1) : NULL;
   bool comma = false;
-  while (position && *position != ']' && document->tree) {
+  while (position && *position != ']' && lsp_tree(document)) {
     size_t line, character;
     if (!json_point(position, &line, &character))
       break;
     character = lsp_wire_column(document->text, line, character, true);
-    TSPoint point = {(uint32_t)line, (uint32_t)character};
-    TSNode node = ts_node_named_descendant_for_point_range(
-        ts_tree_root_node(document->tree), point, point);
+    uint32_t cursor = lsp_offset(document, line, character);
+    DynNode node = dyn_node_at(lsp_tree(document), cursor, cursor);
     if (comma)
       at += (size_t)lsp_bounded_printf(body + at, sizeof(body) - at, ",");
-    if (!ts_node_is_null(node))
-      lsp_selection_node(node, body, sizeof(body), &at);
+    if (!dyn_node_null(node))
+      lsp_selection_node(document, node, body, sizeof(body), &at);
     else
       at += (size_t)lsp_bounded_printf(
           body + at, sizeof(body) - at,
@@ -554,39 +545,38 @@ void lsp_selection_range(long id, const LspDocument *document,
   lsp_send(body);
 }
 
-static void lsp_semantic_token_node(TSNode node, unsigned *previous_line,
-                                    unsigned *previous_column, bool *first,
-                                    char *body, size_t capacity, size_t *at,
-                                    bool *comma, const uint32_t *constants,
-                                    size_t constant_count) {
-  if (*at + 128 >= capacity)
-    return;
-  if (!strcmp(ts_node_type(node), "identifier")) {
-    TSNode parent = ts_node_parent(node);
-    const char *kind = ts_node_type(parent);
+static void lsp_semantic_token_nodes(const LspDocument *document, char *body,
+                                     size_t capacity, size_t *at, bool *comma,
+                                     const uint32_t *constants, size_t constant_count) {
+  unsigned previous_line = 0, previous_column = 0;
+  bool first = true;
+  DynNode root = dyn_node_root(lsp_tree(document));
+  for (DynNode node = root; !dyn_node_null(node) && *at + 128 < capacity;
+       node = dyn_node_preorder(node, root)) {
+    if (!dyn_node_is(node, EXP_NAME))
+      continue;
+    DynNode parent = dyn_node_parent(node);
+    unsigned kind = dyn_node_kind(parent);
     unsigned type = 5, modifiers = 0;
-    if (!strcmp(kind, "variable") &&
-        !strcmp(ts_node_type(ts_node_parent(parent)), "const_variable"))
+    if (kind == SRC_VARIABLE && dyn_node_is(dyn_node_parent(parent), SRC_CONST))
       modifiers = 1;
-    if (!strcmp(kind, "fn") || !strcmp(kind, "extern_fn")) {
-      TSNode name = ts_node_child_by_field_name(parent, "name", 4);
-      if (ts_node_start_byte(name) == ts_node_start_byte(node))
+    if (kind == SRC_FN || kind == SRC_EXTERN_FN) {
+      if (dyn_node_field(parent, EXP_ROLE_NAME).id == node.id)
         type = 8;
-    } else if (!strcmp(kind, "fn_param") || !strcmp(kind, "variadic_param"))
+    } else if (kind == SRC_FN_PARAM || kind == SRC_VARIADIC_PARAM)
       type = 4;
-    else if (!strcmp(kind, "struct"))
+    else if (kind == SRC_STRUCT)
       type = 2;
-    else if (!strcmp(kind, "enum"))
+    else if (kind == SRC_ENUM)
       type = 3;
-    else if (!strcmp(kind, "struct_member") || !strcmp(kind, "field_access"))
+    else if (kind == SRC_STRUCT_MEMBER ||
+             (kind == EXP_FIELD && dyn_node_first(parent).id != node.id))
       type = 6;
-    else if (!strcmp(kind, "enum_member"))
+    else if (kind == SRC_ENUM_MEMBER)
       type = 7;
-    else if (!strcmp(kind, "use"))
-      type = 0;
-    else if (!strcmp(kind, "field_type") || !strcmp(kind, "type"))
+    else if (kind == EXP_FIELD_TYPE || kind == EXP_TYPE)
       type = 1;
-    uint32_t byte = ts_node_start_byte(node);
+    uint32_t byte = dyn_node_start(node);
     size_t low = 0, high = constant_count;
     while (low < high) {
       size_t mid = low + (high - low) / 2;
@@ -594,23 +584,18 @@ static void lsp_semantic_token_node(TSNode node, unsigned *previous_line,
       else high = mid;
     }
     if (low < constant_count && constants[low] == byte) modifiers = 1;
-    TSPoint p = ts_node_start_point(node);
-    unsigned delta_line = *first ? p.row : p.row - *previous_line;
+    DynPoint p = lsp_point(document, byte);
+    unsigned delta_line = first ? p.row : p.row - previous_line;
     unsigned delta_column =
-        (*first || delta_line) ? p.column : p.column - *previous_column;
+        (first || delta_line) ? p.column : p.column - previous_column;
     *at += (size_t)lsp_bounded_printf(
         body + *at, capacity - *at, "%s%u,%u,%u,%u,%u", *comma ? "," : "",
-        delta_line, delta_column, ts_node_end_point(node).column - p.column,
-        type, modifiers);
+        delta_line, delta_column, dyn_node_end(node) - byte, type, modifiers);
     *comma = true;
-    *first = false;
-    *previous_line = p.row;
-    *previous_column = p.column;
+    first = false;
+    previous_line = p.row;
+    previous_column = p.column;
   }
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i)
-    lsp_semantic_token_node(ts_node_named_child(node, i), previous_line,
-                            previous_column, first, body, capacity, at, comma,
-                            constants, constant_count);
 }
 
 static int lsp_offset_compare(const void *left, const void *right) {
@@ -701,12 +686,10 @@ void lsp_semantic_tokens(long id, LspDocument *documents, size_t count,
   }
   size_t constant_count = 0;
   uint32_t *constants = lsp_const_offsets(&semantic, document, &constant_count);
-  unsigned line = 0, column = 0;
-  bool first = true, comma = false;
-  if (document->tree)
-    lsp_semantic_token_node(ts_tree_root_node(document->tree), &line, &column,
-                            &first, body, capacity, &at, &comma, constants,
-                            constant_count);
+  bool comma = false;
+  if (lsp_tree(document))
+    lsp_semantic_token_nodes(document, body, capacity, &at, &comma, constants,
+                             constant_count);
   lsp_bounded_printf(body + at, capacity - at, "]}}");
   lsp_send(body);
   free(body);
@@ -731,10 +714,11 @@ static void lsp_workspace_symbol_text(const char *text, const char *uri,
                                       const char *query, char *body,
                                       size_t capacity, size_t *at,
                                       bool *comma) {
-  TSTree *tree = lsp_parse(text, strlen(text));
-  lsp_symbols(tree, text, uri, query, body, capacity, at, comma);
-  if (tree)
-    ts_tree_delete(tree);
+  LspDocument disk = {.text = (char *)text, .syntax = lsp_parse(text, strlen(text))};
+  lsp_document_lines(&disk);
+  lsp_symbols(&disk, uri, query, body, capacity, at, comma);
+  free(disk.line_starts);
+  exp_snapshot_release(disk.syntax);
 }
 
 static void lsp_workspace_symbol_directory(const char *directory,
@@ -1454,19 +1438,17 @@ static bool lsp_field_source_type(LspSemantic *semantic, DynAstField *field,
     p += source_column - 1;
     break;
   }
-  TSTree *tree = lsp_parse(text, length);
+  ExpSnapshot *tree = lsp_parse(text, length);
   if (!tree)
     return false;
   uint32_t offset = (uint32_t)(p - text);
-  TSNode member = ts_node_named_descendant_for_byte_range(
-      ts_tree_root_node(tree), offset, offset);
-  while (!ts_node_is_null(member) &&
-         strcmp(ts_node_type(member), "struct_member"))
-    member = ts_node_parent(member);
-  TSNode type = ts_node_is_null(member) ? (TSNode){0} : lsp_type_node(member);
-  bool found = !ts_node_is_null(type);
+  DynNode member = dyn_node_at(exp_snapshot_tree(tree), offset, offset);
+  while (!dyn_node_null(member) && !dyn_node_is(member, SRC_STRUCT_MEMBER))
+    member = dyn_node_parent(member);
+  DynNode type = dyn_node_null(member) ? member : lsp_type_node(member);
+  bool found = !dyn_node_null(type);
   if (found) {
-    size_t start = ts_node_start_byte(type), n = ts_node_end_byte(type) - start;
+    size_t start = dyn_node_start(type), n = dyn_node_end(type) - start;
     if (!n || n >= capacity)
       found = false;
     else {
@@ -1474,7 +1456,7 @@ static bool lsp_field_source_type(LspSemantic *semantic, DynAstField *field,
       out[n] = 0;
     }
   }
-  ts_tree_delete(tree);
+  exp_snapshot_release(tree);
   return found;
 }
 
@@ -1810,8 +1792,7 @@ bool lsp_import_definition(LspDocument *document, size_t line, size_t character,
   LspImport *import = NULL;
   char member[128] = {0};
   for (size_t i = 0; i < count; ++i)
-    if (offset >= ts_node_start_byte(imports[i].node) &&
-        offset <= ts_node_end_byte(imports[i].node)) {
+    if (offset >= imports[i].start && offset <= imports[i].end) {
       import = &imports[i];
       break;
     }
@@ -1893,47 +1874,48 @@ void lsp_import_hover_text(const char *path, size_t line, char *out,
   char *text = lsp_read_source(path);
   if (!text)
     return;
-  TSTree *tree = lsp_parse(text, strlen(text));
-  if (tree) {
-    TSNode root = ts_tree_root_node(tree);
-    for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-      DynDeclaration decl;
-      TSNode wrapper = ts_node_named_child(root, i);
-      if (!dyn_syntax_declaration(wrapper, &decl) ||
-          ts_node_start_point(decl.name).row != line)
-        continue;
-      size_t start = ts_node_start_byte(wrapper),
-             end = ts_node_end_byte(wrapper);
-      if (decl.kind == DYN_DECL_FUNCTION)
-        for (uint32_t j = 0; j < ts_node_named_child_count(decl.node); ++j) {
-          TSNode child = ts_node_named_child(decl.node, j);
-          if (!strcmp(ts_node_type(child), "block")) {
-            end = ts_node_start_byte(child);
-            break;
-          }
-        }
-      while (end > start && isspace((unsigned char)text[end - 1]))
-        --end;
-      snprintf(out, capacity, "%.*s", (int)(end - start), text + start);
-      if (decl.kind == DYN_DECL_STRUCT || decl.kind == DYN_DECL_ENUM) {
-        /* Omit optional end-of-line separators in the hover presentation. */
-        for (uint32_t j = ts_node_child_count(decl.node); j; --j) {
-          TSNode token = ts_node_child(decl.node, j - 1);
-          if (strcmp(ts_node_type(token), ","))
-            continue;
-          size_t offset = ts_node_start_byte(token) - start;
-          if (offset >= strlen(out))
-            continue;
-          size_t after = offset + 1;
-          while (out[after] == ' ' || out[after] == '\t' || out[after] == '\r')
-            ++after;
-          if (!out[after] || out[after] == '\n')
-            memmove(out + offset, out + offset + 1, strlen(out + offset));
-        }
-      }
-      break;
+  ExpSnapshot *tree = lsp_parse(text, strlen(text));
+  for (DynNode wrapper = dyn_node_first(dyn_node_root(exp_snapshot_tree(tree)));
+       !dyn_node_null(wrapper); wrapper = dyn_node_next(wrapper)) {
+    DynDeclaration decl;
+    if (!dyn_node_declaration(wrapper, &decl) ||
+        dyn_text_point(text, dyn_node_start(decl.name)).row != line)
+      continue;
+    size_t start = dyn_node_start(wrapper), end = dyn_node_end(wrapper);
+    if (decl.kind == DYN_DECL_FUNCTION) {
+      DynNode block = dyn_node_child_kind(decl.node, SRC_BLOCK);
+      if (!dyn_node_null(block))
+        end = dyn_node_start(block);
     }
-    ts_tree_delete(tree);
+    while (end > start && isspace((unsigned char)text[end - 1]))
+      --end;
+    snprintf(out, capacity, "%.*s", (int)(end - start), text + start);
+    if (decl.kind == DYN_DECL_STRUCT || decl.kind == DYN_DECL_ENUM) {
+      /* Omit optional end-of-line separators in the hover presentation.
+         Later members first, so earlier offsets stay valid. */
+      uint32_t members = dyn_node_child_count(decl.node);
+      for (uint32_t j = members; j; --j) {
+        DynNode m = dyn_node_child(decl.node, j - 1);
+        if (!dyn_node_is(m, SRC_STRUCT_MEMBER) && !dyn_node_is(m, SRC_ENUM_MEMBER))
+          continue;
+        size_t comma = dyn_node_end(m);
+        while (comma < dyn_node_end(decl.node) && isspace((unsigned char)text[comma]) &&
+               text[comma] != '\n')
+          ++comma;
+        if (text[comma] != ',' || comma < start)
+          continue;
+        size_t offset = comma - start;
+        if (offset >= strlen(out))
+          continue;
+        size_t after = offset + 1;
+        while (out[after] == ' ' || out[after] == '\t' || out[after] == '\r')
+          ++after;
+        if (!out[after] || out[after] == '\n')
+          memmove(out + offset, out + offset + 1, strlen(out + offset));
+      }
+    }
+    break;
   }
+  exp_snapshot_release(tree);
   free(text);
 }

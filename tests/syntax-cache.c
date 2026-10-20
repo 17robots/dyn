@@ -6,76 +6,51 @@
 #include "fault-alloc.h"
 #include "../src/source_tree.c"
 
-static void same_tree(TSNode a, TSNode b) {
-  assert(!strcmp(ts_node_type(a), ts_node_type(b)));
-  assert(ts_node_start_byte(a) == ts_node_start_byte(b));
-  assert(ts_node_end_byte(a) == ts_node_end_byte(b));
-  assert(ts_node_is_missing(a) == ts_node_is_missing(b));
-  TSPoint x = ts_node_start_point(a), y = ts_node_start_point(b);
-  assert(x.row == y.row && x.column == y.column);
-  x = ts_node_end_point(a); y = ts_node_end_point(b);
-  assert(x.row == y.row && x.column == y.column);
-  assert(ts_node_child_count(a) == ts_node_child_count(b));
-  for (uint32_t i = 0; i < ts_node_child_count(a); ++i)
-    same_tree(ts_node_child(a, i), ts_node_child(b, i));
+static void same_tree(const ExpSnapshotTree *a, const ExpSnapshotTree *b) {
+  assert(a->count == b->count && a->root == b->root && a->error_count == b->error_count);
+  assert(!memcmp(a->nodes, b->nodes, a->count * sizeof(*a->nodes)));
 }
 int main(void) {
-  const char *edits[] = {
-      "fn main() {}", "fn main() { /* 😀 */ _ = 1 }",
-      "fn main() { /* 😁 */ _ = 12 }", "use \"std/", "use \"std/mem\"\nfn main() {}",
-      "fn main() {\nconst x := [1, /* é */ 2]\n_ = x\n}",
-      "fn main() {\nconst x := [1, /* ê */ 2]\n_ = x\n}",
-      "fn main() {\nconst x := [1, /* ê */ 2]\n_ = x\n}",
-      "fn main() {\nconst x := [1, /* ê */ 2]\n_ = x\n", "", "// é", "// e"};
-  TSTree *tree = dyn_syntax_parse(edits[0], strlen(edits[0])); assert(tree);
-  const char *before = edits[0];
-  for (unsigned repeat = 0; repeat < 10; ++repeat)
-    for (size_t i = 0; i < sizeof(edits) / sizeof(edits[0]); ++i) {
-      dyn_syntax_edit_text(tree, before, edits[i]);
-      TSTree *updated = dyn_syntax_reparse(edits[i], strlen(edits[i]), tree);
-      TSTree *fresh = dyn_syntax_parse(edits[i], strlen(edits[i]));
-      assert(updated && fresh);
-      same_tree(ts_tree_root_node(updated), ts_tree_root_node(fresh));
-      ts_tree_delete(tree); ts_tree_delete(fresh); tree = updated; before = edits[i];
-    }
-  ts_tree_delete(tree);
+  /* Every allocation failure either fails preparation cleanly or succeeds
+     without the optional cache entry. */
   size_t total = 0;
   for (size_t failure = 0; !failure || failure <= total; ++failure) {
     DynSyntaxCache cache = {0};
     DynSource source = {.path = "main.dyn", .text = "fn aa() {}", .length = 10,
                         .context = {.syntax_cache = &cache}};
     calls = failed = 0; fail_at = failure;
-    assert(dyn_source_prepare(&source)); /* Optional cache allocation may fail. */
-    if (!failure) total = calls; else assert(failed);
+    bool prepared = dyn_source_prepare(&source);
+    if (!failure) { assert(prepared); total = calls; } else assert(failed);
     fail_at = 0;
-    dyn_syntax_cache_clear(&cache);
-    assert(!ts_node_has_error(ts_tree_root_node(source.syntax)));
+    assert(prepared ? source.compact && !dyn_compact_tree(&source)->error_count : !source.compact);
     dyn_source_discard_syntax(&source);
+    dyn_syntax_cache_clear(&cache);
   }
   DynSyntaxCache cache = {0};
   DynSource source = {.path = "main.dyn", .text = "fn aa() {}", .length = 10,
                       .context = {.syntax_cache = &cache}};
   assert(dyn_source_prepare(&source));
-  TSTree *held = source.syntax; source.syntax = NULL;
+  ExpSnapshot *held = source.compact; source.compact = NULL;
+  /* A hit shares the immutable snapshot. */
   assert(dyn_source_prepare(&source) && cache.hits == 1 && cache.misses == 1);
-  /* Editing a returned copy must not mutate the cache's immutable tree. */
-  dyn_syntax_edit_text(source.syntax, source.text, "fn a() { }");
+  assert(source.compact == held);
   dyn_source_discard_syntax(&source);
-  assert(dyn_source_prepare(&source) && cache.hits == 2);
-  same_tree(ts_tree_root_node(source.syntax), ts_tree_root_node(held));
+  source.text = "fn a() { }"; source.length = 10;
+  assert(dyn_source_prepare(&source) && cache.misses == 2 && source.compact != held);
+  ExpSnapshot *fresh = exp_snapshot_create(source.text, source.length, NULL, NULL);
+  same_tree(dyn_compact_tree(&source), exp_snapshot_tree(fresh));
+  exp_snapshot_release(fresh); dyn_source_discard_syntax(&source);
+  /* Editor revisions keep their recovered errors. */
+  source.text = "fn a( {"; source.length = 7;
+  assert(dyn_source_prepare(&source) && dyn_compact_tree(&source)->error_count == 1);
   dyn_source_discard_syntax(&source);
-  source.text = "fn a() { }";
-  assert(dyn_source_prepare(&source) && cache.misses == 2);
-  TSTree *fresh = dyn_syntax_parse(source.text, source.length);
-  same_tree(ts_tree_root_node(source.syntax), ts_tree_root_node(fresh));
-  ts_tree_delete(fresh); dyn_source_discard_syntax(&source);
   for (unsigned i = 0; i < 100; ++i) {
     char path[64]; snprintf(path, sizeof(path), "file%u.dyn", i);
     source.path = path;
     assert(dyn_source_prepare(&source)); dyn_source_discard_syntax(&source);
     assert(cache.count <= 64 && cache.bytes <= 8u * 1024u * 1024u);
   }
-  size_t large_length = 5u * 1024u * 1024u;
+  size_t large_length = 3u * 1024u * 1024u;
   char *large = malloc(large_length + 1); assert(large);
   memset(large, ' ', large_length); large[large_length] = 0;
   source.text = large; source.length = large_length;
@@ -86,8 +61,8 @@ int main(void) {
   assert(cache.count == 1 && cache.bytes > large_length);
   free(large);
   dyn_syntax_cache_clear(&cache);
-  /* Dense trees must consume the budget even when their source is tiny. */
-  size_t statements = 1000, dense_length = 14 + statements * 6;
+  /* Dense trees must consume the budget even when their source is small. */
+  size_t statements = 8000, dense_length = 14 + statements * 6;
   char *dense = malloc(dense_length + 1); assert(dense);
   memcpy(dense, "fn main() {\n", 12);
   for (size_t i = 0; i < statements; ++i)
@@ -105,6 +80,6 @@ int main(void) {
   free(dense);
   dyn_syntax_cache_clear(&cache);
   assert(cache.count == 0 && cache.bytes == 0);
-  assert(!ts_node_has_error(ts_tree_root_node(held))); ts_tree_delete(held);
-  puts("PASS incremental/fresh trees, UTF-8 edits, immutable syntax cache, eviction and allocation failure");
+  assert(!exp_snapshot_tree(held)->error_count); exp_snapshot_release(held);
+  puts("PASS immutable syntax cache, recovered editor revisions, eviction and allocation failure");
 }

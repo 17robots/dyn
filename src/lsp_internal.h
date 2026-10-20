@@ -5,7 +5,7 @@
 #include "analysis_cache.h"
 #include "dyn.h"
 #include "dyn_ast.h"
-#include "dyn_syntax.h"
+#include "syntax_tree.h"
 #include "frontend.h"
 #include "lsp_json.h"
 #include "sema.h"
@@ -18,7 +18,6 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
-#include <tree_sitter/api.h>
 #include <unistd.h>
 
 typedef struct {
@@ -26,10 +25,12 @@ typedef struct {
   char *text;
   DynAnalysisCache *analysis_cache;
   uint64_t revision, content_hash;
-  TSParser *parser;
-  TSTree *tree;
-  size_t parsed_length;
-  TSPoint parsed_end;
+  /* Recovering parse of text; NULL before the first parse or when too deep.
+     line_starts index the same revision. */
+  ExpSnapshot *syntax;
+  uint32_t *line_starts;
+  uint32_t line_count;
+  uint64_t parsed_revision; /* revision of text that syntax describes */
   bool dirty, syntax_too_deep;
 } LspDocument;
 typedef struct {
@@ -43,7 +44,10 @@ typedef DynAnalysisDiagnostic LspDiagnostic;
 typedef DynAnalysisDiagnostics LspDiagnostics;
 typedef struct {
   char path[512], alias[512];
-  TSNode node, alias_node;
+  /* The import's span (a lone import owns its whole use), the span removing
+     it also removes a joining comma, and the alias. */
+  uint32_t start, end, remove_start, remove_end, alias_start, alias_end;
+  bool has_alias;
 } LspImport;
 typedef bool (*LspPublicVisitor)(const char *, size_t, DynDeclarationKind,
                                  void *);
@@ -59,7 +63,15 @@ static inline bool lsp_work_step(uint64_t units) {
   DynContext context = {.target = lsp_target_current(), .work = lsp_work_current()};
   return dyn_work_step(&context, units);
 }
-TSTree *lsp_parse(const char *, size_t);
+/* Recovering parse of a whole text; NULL on resource failure or excess depth. */
+ExpSnapshot *lsp_parse(const char *, size_t);
+static inline const ExpSnapshotTree *lsp_tree(const LspDocument *document) {
+  return exp_snapshot_tree(document->syntax);
+}
+/* Zero-based row and byte column of an offset in the document's parsed text. */
+DynPoint lsp_point(const LspDocument *, uint32_t offset);
+/* Offset of a zero-based row and byte column, clamped to the line's end. */
+uint32_t lsp_offset(const LspDocument *, size_t row, size_t column);
 
 /* actions */
 void lsp_code_actions(long id, LspDocument *documents, size_t count,
@@ -84,7 +96,7 @@ bool lsp_semantic_offset(LspSemantic *semantic, LspDocument *document,
 void lsp_completion_signature(const char *start, char *out, size_t capacity);
 void lsp_completion(long id, LspDocument *documents, size_t count,
                     LspDocument *requested, size_t line, size_t character);
-TSNode lsp_type_node(TSNode node);
+DynNode lsp_type_node(DynNode node);
 
 /* document */
 LspDocument *lsp_document(LspDocument *documents, size_t count,
@@ -112,7 +124,12 @@ bool identifier_at(const char *text, size_t line, size_t character,
 bool find_declaration(const char *text, const char *word, size_t word_length,
                       size_t *line, size_t *column, const char **display,
                       size_t *display_length);
-TSPoint lsp_text_end(const char *text);
+DynPoint lsp_text_end(const char *text);
+/* Parses text unless syntax already describes this revision. False only when
+   the work budget was exhausted. */
+bool lsp_document_parse(LspDocument *document);
+/* Rebuilds line_starts for the current text. */
+void lsp_document_lines(LspDocument *document);
 bool lsp_publish_syntax(LspDocument *document);
 
 /* navigation */

@@ -1,26 +1,5 @@
 #ifndef DYN_INTERFACE_COMPACT_H
 #define DYN_INTERFACE_COMPACT_H
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-/* The legacy serializer treats a leading comment inside a bare global type
-   qualifier as its type node. Preserve that historical payload until a separate
-   interface-format compatibility change; never fall back on resource failure. */
-static int interface_compact_compatible(const DynSource *source,const ExpSnapshotTree *tree) {
-  const ExpNode *nodes=tree->nodes;
-  for(uint32_t wrapper=nodes[tree->root].first;wrapper!=UINT32_MAX;wrapper=nodes[wrapper].next) {
-    if(!dyn_work_step(&source->context,1)) return -1;
-    if(nodes[wrapper].kind!=SRC_DECLARATION || !(nodes[wrapper].flags&EXP_PUBLIC)) continue;
-    uint32_t node=nodes[wrapper].first;
-    if(node==UINT32_MAX || nodes[node].kind!=SRC_VARIABLE) continue;
-    for(uint32_t child=nodes[node].first;child!=UINT32_MAX;child=nodes[child].next) {
-      if(!dyn_work_step(&source->context,1)) return -1;
-      if(nodes[child].kind!=SRC_QUALIFIER || nodes[child].first==UINT32_MAX) continue;
-      uint32_t start=nodes[child].start+1,end=nodes[nodes[child].first].start;
-      if(!dyn_work_step(&source->context,end-start)) return -1;
-      for(uint32_t at=start;at<end;++at) if(!isspace((unsigned char)source->text[at])) return 0;
-    }
-  }
-  return 1;
-}
 /* Serialize the same canonical declaration fragments without retaining syntax
    handles. Constant reachability has already been computed across all files. */
 static int interface_compact_declarations(const DynSource *source,const ExpSnapshotTree *tree,
@@ -79,5 +58,4 @@ static int interface_compact_declarations(const DynSource *source,const ExpSnaps
   }
   return 0;
 }
-#endif
 #endif

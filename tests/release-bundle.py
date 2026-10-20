@@ -30,7 +30,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-release-bundle-') as directory:
         (evidence/'release-check/report.json').write_text(json.dumps(report))
         (evidence/'dist/package-validation.json').write_text(json.dumps(package))
     write_evidence()
-    for target,count in [('windows',14),('macos',14),('aarch64',12)]:
+    for target,count in [('windows',14),('macos',14),('aarch64',12),
+                         ('windows-arm64',8),('macos-x64',6)]:
         (native/f'native-{target}.json').write_text(json.dumps(dict(target=target,status='passed',probes=[dict(status='passed') for _ in range(count)])))
     hosts=work/'hosts'; hosts.mkdir()
     for host,ext in [('macos-aarch64','tar.gz'),('windows-x86_64','zip')]:
@@ -75,5 +76,24 @@ with tempfile.TemporaryDirectory(prefix='dyn-release-bundle-') as directory:
     win.write_bytes(b'altered');rejected();win.write_bytes(b'windows-x86_64')
     host_report=hosts/'package-windows-x86_64.json';saved=host_report.read_text()
     host_report.write_text(saved.replace('passed','packaged'));rejected();host_report.write_text(saved)
+    # Every native runner must provide a complete, successful report. Missing,
+    # failed, truncated and mislabelled reports must remove the partial bundle.
+    for target in ('windows-arm64', 'macos-x64'):
+        path = native/f'native-{target}.json'
+        saved = path.read_text()
+        path.unlink(); rejected(); path.write_text(saved)
+        result = json.loads(saved)
+        result['status'] = 'failed'
+        path.write_text(json.dumps(result)); rejected()
+        result = json.loads(saved)
+        result['probes'][0]['status'] = 'failed'
+        path.write_text(json.dumps(result)); rejected()
+        result = json.loads(saved)
+        result['probes'].pop()
+        path.write_text(json.dumps(result)); rejected()
+        result = json.loads(saved)
+        result['target'] = 'windows'
+        path.write_text(json.dumps(result)); rejected()
+        path.write_text(saved)
     (native/'native-macos.json').unlink();rejected()
-print('PASS release checksums/config and rejection of partial gates, version mismatch, tampering, missing native evidence')
+print('PASS release checksums/config and rejection of partial gates, version mismatch, tampering, missing/failed/incomplete native evidence')

@@ -30,7 +30,7 @@ static void lsp_completion_auto_imports(const LspDocument *document,
                                         size_t capacity, size_t *at,
                                         bool *comma);
 static void lsp_call_snippet(const char *name, size_t name_length,
-                             TSNode declaration, const char *source, char *out,
+                             DynNode declaration, const char *source, char *out,
                              size_t capacity);
 static void lsp_completion_decls(const char *text, bool public_only, char *body,
                                  size_t capacity, size_t *at, bool *comma);
@@ -68,7 +68,7 @@ static void lsp_completion_expected_enum(LspDocument *documents, size_t count,
                                          size_t character, char *body,
                                          size_t capacity, size_t *at,
                                          bool *comma);
-static bool lsp_type_name(TSNode node, const char *text, char *out,
+static bool lsp_type_name(DynNode node, const char *text, char *out,
                           size_t capacity);
 static bool lsp_expected_enum_name(LspDocument *documents, size_t count,
                                    LspDocument *requested, size_t line,
@@ -315,22 +315,21 @@ void lsp_completion_signature(const char *start, char *out, size_t capacity) {
 }
 
 static void lsp_call_snippet(const char *name, size_t name_length,
-                             TSNode declaration, const char *source, char *out,
+                             DynNode declaration, const char *source, char *out,
                              size_t capacity) {
   size_t at = (size_t)lsp_bounded_printf(out, capacity, "%.*s(",
                                          (int)name_length, name);
   unsigned slot = 1;
-  for (uint32_t i = 0; i < ts_node_named_child_count(declaration); ++i) {
-    TSNode param = ts_node_named_child(declaration, i);
-    if (strcmp(ts_node_type(param), "fn_param") &&
-        strcmp(ts_node_type(param), "variadic_param"))
+  for (DynNode param = dyn_node_first(declaration); !dyn_node_null(param);
+       param = dyn_node_next(param)) {
+    if (!dyn_node_is(param, SRC_FN_PARAM) && !dyn_node_is(param, SRC_VARIADIC_PARAM))
       continue;
-    for (uint32_t j = 0; j < ts_node_named_child_count(param); ++j) {
-      TSNode label = ts_node_named_child(param, j);
-      if (strcmp(ts_node_type(label), "identifier"))
+    for (DynNode label = dyn_node_first(param); !dyn_node_null(label);
+         label = dyn_node_next(label)) {
+      if (!dyn_node_is(label, EXP_NAME))
         continue;
-      size_t start = ts_node_start_byte(label),
-             length = ts_node_end_byte(label) - start;
+      size_t start = dyn_node_start(label),
+             length = dyn_node_end(label) - start;
       at += (size_t)lsp_bounded_printf(out + at, capacity - at, "%s${%u:%.*s}",
                                        slot > 1 ? ", " : "", slot, (int)length,
                                        source + start);
@@ -342,27 +341,27 @@ static void lsp_call_snippet(const char *name, size_t name_length,
 
 static void lsp_completion_decls(const char *text, bool public_only, char *body,
                                  size_t capacity, size_t *at, bool *comma) {
-  TSTree *tree = lsp_parse(text, strlen(text));
+  ExpSnapshot *tree = lsp_parse(text, strlen(text));
   if (!tree)
     return;
   static const char *details[] = {"function", "struct",   "enum",
                                   "type",     "constant", "global"};
-  TSNode root = ts_tree_root_node(tree);
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && lsp_work_step(1); ++i) {
+  for (DynNode wrapper = dyn_node_first(dyn_node_root(exp_snapshot_tree(tree)));
+       !dyn_node_null(wrapper) && lsp_work_step(1); wrapper = dyn_node_next(wrapper)) {
     DynDeclaration decl;
-    if (!dyn_syntax_declaration(ts_node_named_child(root, i), &decl) ||
+    if (!dyn_node_declaration(wrapper, &decl) ||
         (public_only && !decl.is_public))
       continue;
-    TSNode declaration = decl.node;
+    DynNode declaration = decl.node;
     unsigned item_kind = lsp_completion_kinds[decl.kind];
     const char *detail = details[decl.kind];
-    const char *name = text + ts_node_start_byte(decl.name);
-    size_t length = ts_node_end_byte(decl.name) - ts_node_start_byte(decl.name);
+    const char *name = text + dyn_node_start(decl.name);
+    size_t length = dyn_node_end(decl.name) - dyn_node_start(decl.name);
     if (!length || lsp_completion_has_label(body, *at, name, length))
       continue;
     if (item_kind == 3) {
-      size_t start = ts_node_start_byte(declaration),
-             end = ts_node_end_byte(declaration);
+      size_t start = dyn_node_start(declaration),
+             end = dyn_node_end(declaration);
       char *source = strndup(text + start, end - start);
       if (!source)
         continue;
@@ -396,7 +395,7 @@ static void lsp_completion_decls(const char *text, bool public_only, char *body,
       *comma = true;
     }
   }
-  ts_tree_delete(tree);
+  exp_snapshot_release(tree);
 }
 
 static void lsp_completion_module(LspDocument *documents, size_t count,
@@ -898,25 +897,16 @@ static void lsp_completion_locals(LspDocument *documents, size_t count,
     free(patched);
     patched = repaired;
   }
-  TSParser *scope_parser = ts_parser_new();
-  TSTree *scope_tree = NULL;
-  if (scope_parser && ts_parser_set_language(scope_parser, tree_sitter_dyn()))
-    scope_tree = ts_parser_parse_string(scope_parser, NULL, patched,
-                                        (uint32_t)strlen(patched));
+  ExpSnapshot *scope_snapshot = lsp_parse(patched, strlen(patched));
+  const ExpSnapshotTree *scope_tree = exp_snapshot_tree(scope_snapshot);
   /* Top-level completion has no local scope. Avoid rebuilding the entire
      project with a synthetic local identifier just to discover that fact. */
   const char *scope_marker = strstr(patched, marker);
   if (scope_tree && scope_marker) {
     uint32_t offset = (uint32_t)(scope_marker - patched);
-    TSNode scope = ts_node_named_descendant_for_byte_range(
-        ts_tree_root_node(scope_tree), offset, offset);
-    bool in_function = false;
-    for (; !ts_node_is_null(scope); scope = ts_node_parent(scope)) {
-      if (!strcmp(ts_node_type(scope), "fn")) { in_function = true; break; }
-    }
-    if (!in_function) {
-      ts_tree_delete(scope_tree);
-      ts_parser_delete(scope_parser);
+    DynNode scope = dyn_node_at(scope_tree, offset, offset);
+    if (!dyn_node_is(scope, SRC_FN) && dyn_node_null(dyn_node_ancestor(scope, SRC_FN))) {
+      exp_snapshot_release(scope_snapshot);
       free(patched);
       return;
     }
@@ -924,10 +914,7 @@ static void lsp_completion_locals(LspDocument *documents, size_t count,
   LspSemantic semantic =
       lsp_semantic_project(documents, count, requested, patched);
   if (!semantic.ok) {
-    if (scope_tree)
-      ts_tree_delete(scope_tree);
-    if (scope_parser)
-      ts_parser_delete(scope_parser);
+    exp_snapshot_release(scope_snapshot);
     free(patched);
     lsp_semantic_free(&semantic);
     return;
@@ -935,10 +922,7 @@ static void lsp_completion_locals(LspDocument *documents, size_t count,
   const char *position = strstr(semantic.source.text, marker),
              *scope_position = strstr(patched, marker);
   if (!position || !scope_position) {
-    if (scope_tree)
-      ts_tree_delete(scope_tree);
-    if (scope_parser)
-      ts_parser_delete(scope_parser);
+    exp_snapshot_release(scope_snapshot);
     free(patched);
     lsp_semantic_free(&semantic);
     return;
@@ -963,59 +947,31 @@ static void lsp_completion_locals(LspDocument *documents, size_t count,
         continue;
       const char *name = semantic.source.text + local->name.start_byte;
       bool visible = false;
-      if (scope_tree) {
-        TSNode root = ts_tree_root_node(scope_tree);
-        TSNode stack[256];
-        uint32_t indices[256] = {0};
-        size_t depth = 1;
-        stack[0] = root;
-        while (depth && !visible) {
-          TSNode node = stack[depth - 1];
-          uint32_t child_count = ts_node_named_child_count(node);
-          if (indices[depth - 1] < child_count && depth < 256) {
-            TSNode child = ts_node_named_child(node, indices[depth - 1]++);
-            stack[depth] = child;
-            indices[depth++] = 0;
-            continue;
-          }
-          const char *kind = ts_node_type(node);
-          if (!strcmp(kind, "identifier") &&
-              ts_node_end_byte(node) - ts_node_start_byte(node) == length &&
-              !memcmp(patched + ts_node_start_byte(node), name, length) &&
-              ts_node_start_byte(node) < document_offset) {
-            TSNode parent = ts_node_parent(node);
-            const char *parent_kind = ts_node_type(parent);
-            bool declaration =
-                (!strcmp(parent_kind, "variable") ||
-                 !strcmp(parent_kind, "const_variable")) &&
-                ts_node_start_byte(ts_node_named_child(parent, 0)) ==
-                    ts_node_start_byte(node);
-            declaration = declaration || !strcmp(parent_kind, "fn_param") ||
-                          !strcmp(parent_kind, "variadic_param");
-            if (!strcmp(parent_kind, "for_condition") &&
-                ts_node_named_child_count(parent) > 1 &&
-                ts_node_start_byte(ts_node_named_child(parent, 0)) ==
-                    ts_node_start_byte(node))
-              declaration = true;
-            if (!strcmp(parent_kind, "case_arm") ||
-                !strcmp(parent_kind, "type_pattern"))
-              declaration = true;
-            if (declaration) {
-              TSNode scope = parent;
-              while (!ts_node_is_null(scope) &&
-                     strcmp(ts_node_type(scope), "block") &&
-                     strcmp(ts_node_type(scope), "fn") &&
-                     strcmp(ts_node_type(scope), "for_") &&
-                     strcmp(ts_node_type(scope), "case_arm"))
-                scope = ts_node_parent(scope);
-              if (!ts_node_is_null(scope) &&
-                  document_offset >= ts_node_start_byte(scope) &&
-                  document_offset <= ts_node_end_byte(scope))
-                visible = true;
-            }
-          }
-          --depth;
-        }
+      for (uint32_t id = 0; scope_tree && id < scope_tree->count && !visible; ++id) {
+        DynNode node = dyn_node(scope_tree, id), parent = dyn_node_parent(node);
+        if (!dyn_node_is(node, EXP_NAME) || dyn_node_null(parent) ||
+            dyn_node_end(node) - dyn_node_start(node) != length ||
+            memcmp(patched + dyn_node_start(node), name, length) ||
+            dyn_node_start(node) >= document_offset)
+          continue;
+        unsigned parent_kind = dyn_node_kind(parent);
+        bool first_child = dyn_node_first(parent).id == id;
+        bool declaration =
+            (parent_kind == SRC_VARIABLE && first_child) ||
+            parent_kind == SRC_FN_PARAM || parent_kind == SRC_VARIADIC_PARAM ||
+            (parent_kind == SRC_FOR_CONDITION && first_child &&
+             dyn_node_child_count(parent) > 1) ||
+            parent_kind == SRC_CASE_ARM || parent_kind == SRC_TYPE_PATTERN;
+        if (!declaration)
+          continue;
+        DynNode scope = parent;
+        while (!dyn_node_null(scope) && !dyn_node_is(scope, SRC_BLOCK) &&
+               !dyn_node_is(scope, SRC_FN) && !dyn_node_is(scope, SRC_FOR) &&
+               !dyn_node_is(scope, SRC_CASE_ARM))
+          scope = dyn_node_parent(scope);
+        if (!dyn_node_null(scope) && document_offset >= dyn_node_start(scope) &&
+            document_offset <= dyn_node_end(scope))
+          visible = true;
       }
       if (!visible)
         continue;
@@ -1031,10 +987,7 @@ static void lsp_completion_locals(LspDocument *documents, size_t count,
         *comma = true;
       }
     }
-  if (scope_tree)
-    ts_tree_delete(scope_tree);
-  if (scope_parser)
-    ts_parser_delete(scope_parser);
+  exp_snapshot_release(scope_snapshot);
   free(patched);
   lsp_semantic_free(&semantic);
 }
@@ -1171,27 +1124,26 @@ static void lsp_completion_expected_enum(LspDocument *documents, size_t count,
                                  capacity, at, comma);
 }
 
-TSNode lsp_type_node(TSNode node) {
-  for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i) {
-    TSNode child = ts_node_named_child(node, i);
-    if (!strcmp(ts_node_type(child), "type"))
+DynNode lsp_type_node(DynNode node) {
+  for (DynNode child = dyn_node_first(node); !dyn_node_null(child); child = dyn_node_next(child)) {
+    if (dyn_node_is(child, EXP_TYPE))
       return child;
-    if (!strcmp(ts_node_type(child), "type_qualifier"))
+    if (dyn_node_is(child, SRC_QUALIFIER))
       return lsp_type_node(child);
   }
-  return (TSNode){0};
+  return (DynNode){node.tree, UINT32_MAX};
 }
 
-static bool lsp_type_name(TSNode node, const char *text, char *out,
+static bool lsp_type_name(DynNode node, const char *text, char *out,
                           size_t capacity) {
-  if (ts_node_is_null(node))
+  if (dyn_node_null(node))
     return false;
-  while (dyn_syntax_child_count(node) == 1)
-    node = dyn_syntax_child(node, 0);
-  if (strcmp(ts_node_type(node), "identifier"))
+  while (dyn_node_child_count(node) == 1)
+    node = dyn_node_first(node);
+  if (!dyn_node_is(node, EXP_NAME))
     return false;
-  size_t start = ts_node_start_byte(node),
-         length = ts_node_end_byte(node) - start;
+  size_t start = dyn_node_start(node),
+         length = dyn_node_end(node) - start;
   if (!length || length >= capacity)
     return false;
   memcpy(out, text + start, length);
@@ -1203,79 +1155,61 @@ static bool lsp_expected_enum_name(LspDocument *documents, size_t count,
                                    LspDocument *requested, size_t line,
                                    size_t character, char *out,
                                    size_t capacity) {
-  if (!requested->tree)
+  const ExpSnapshotTree *tree = lsp_tree(requested);
+  if (!tree)
     return false;
-  TSPoint point = {(uint32_t)line, (uint32_t)(character ? character - 1 : 0)};
-  TSNode node = ts_node_named_descendant_for_point_range(
-      ts_tree_root_node(requested->tree), point, point);
-  for (; !ts_node_is_null(node); node = ts_node_parent(node)) {
-    const char *kind = ts_node_type(node);
-    if (!strcmp(kind, "variable"))
+  uint32_t cursor = lsp_offset(requested, line, character ? character - 1 : 0);
+  DynNode node = dyn_node_at(tree, cursor, cursor);
+  for (; !dyn_node_null(node); node = dyn_node_parent(node)) {
+    unsigned kind = dyn_node_kind(node);
+    if (kind == SRC_VARIABLE)
       return lsp_type_name(lsp_type_node(node), requested->text, out, capacity);
-    if (!strcmp(kind, "return_")) {
-      TSNode fn = ts_node_parent(node);
-      while (!ts_node_is_null(fn) && strcmp(ts_node_type(fn), "fn"))
-        fn = ts_node_parent(fn);
-      return !ts_node_is_null(fn) &&
+    if (kind == SRC_RETURN) {
+      DynNode fn = dyn_node_ancestor(node, SRC_FN);
+      return !dyn_node_null(fn) &&
              lsp_type_name(lsp_type_node(fn), requested->text, out, capacity);
     }
-    if (strcmp(kind, "call"))
+    if (kind != EXP_CALL)
       continue;
-    TSNode callee = dyn_syntax_child(node, 0);
-    while (dyn_syntax_child_count(callee) == 1)
-      callee = dyn_syntax_child(callee, 0);
-    if (strcmp(ts_node_type(callee), "identifier"))
+    DynNode callee = dyn_node_first(node);
+    while (dyn_node_child_count(callee) == 1)
+      callee = dyn_node_first(callee);
+    if (!dyn_node_is(callee, EXP_NAME))
       return false;
-    size_t start = ts_node_start_byte(callee),
-           length = ts_node_end_byte(callee) - start;
+    size_t start = dyn_node_start(callee),
+           length = dyn_node_end(callee) - start;
     size_t active = 0;
     /* Arguments are the call's operands after the callee. */
-    bool seen_callee = false;
-    for (uint32_t i = 0; i < ts_node_named_child_count(node); ++i) {
-      TSNode arg = ts_node_named_child(node, i);
-      if (ts_node_is_extra(arg))
-        continue;
-      if (!seen_callee) {
-        seen_callee = true;
-        continue;
-      }
-      TSPoint end = ts_node_end_point(arg);
-      if (end.row < point.row ||
-          (end.row == point.row && end.column <= point.column))
+    for (DynNode arg = dyn_node_next(dyn_node_first(node)); !dyn_node_null(arg);
+         arg = dyn_node_next(arg))
+      if (dyn_node_end(arg) <= cursor)
         ++active;
-    }
     char *root = lsp_project_root(requested->uri);
     bool found = false;
     for (size_t d = 0; d < count && !found; ++d) {
       char *other = lsp_project_root(documents[d].uri);
       bool same = root && other && !strcmp(root, other);
       free(other);
-      if (!same || !documents[d].tree)
+      if (!same || !lsp_tree(&documents[d]))
         continue;
-      TSNode file = ts_tree_root_node(documents[d].tree);
-      for (uint32_t i = 0; i < ts_node_named_child_count(file) && !found; ++i) {
+      for (DynNode wrapper = dyn_node_first(dyn_node_root(lsp_tree(&documents[d])));
+           !dyn_node_null(wrapper) && !found; wrapper = dyn_node_next(wrapper)) {
         DynDeclaration decl;
-        if (!dyn_syntax_declaration(ts_node_named_child(file, i), &decl) ||
-            decl.kind != DYN_DECL_FUNCTION)
+        if (!dyn_node_declaration(wrapper, &decl) || decl.kind != DYN_DECL_FUNCTION)
           continue;
-        size_t first = ts_node_start_byte(decl.name),
-               last = ts_node_end_byte(decl.name);
+        size_t first = dyn_node_start(decl.name), last = dyn_node_end(decl.name);
         if (last - first != length ||
             memcmp(documents[d].text + first, requested->text + start, length))
           continue;
         size_t parameter = 0;
-        for (uint32_t j = 0; j < ts_node_named_child_count(decl.node); ++j) {
-          TSNode param = ts_node_named_child(decl.node, j);
-          if (strcmp(ts_node_type(param), "fn_param"))
+        for (DynNode param = dyn_node_first(decl.node); !dyn_node_null(param) && !found;
+             param = dyn_node_next(param)) {
+          if (!dyn_node_is(param, SRC_FN_PARAM))
             continue;
-          for (uint32_t k = 0; k < ts_node_named_child_count(param); ++k)
-            if (!strcmp(ts_node_type(ts_node_named_child(param, k)),
-                        "identifier") &&
-                parameter++ == active)
+          for (DynNode name = dyn_node_first(param); !dyn_node_null(name); name = dyn_node_next(name))
+            if (dyn_node_is(name, EXP_NAME) && parameter++ == active)
               found = lsp_type_name(lsp_type_node(param), documents[d].text,
                                     out, capacity);
-          if (found)
-            break;
         }
       }
     }

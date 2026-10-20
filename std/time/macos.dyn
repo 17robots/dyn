@@ -1,4 +1,4 @@
-#target(arch: aarch64, kernel: darwin)
+#target(kernel: darwin)
 #link("System")
 extern fn clock_read "dyn_time_clock"(clock: i32, value: *Instant) i32
 extern fn clock_sleep "dyn_time_sleep"(request: *const Instant, remaining: *Instant) i32

@@ -47,7 +47,8 @@ def prepare(version, evidence, native, output, hosts):
             target = name.replace('-linux-x86_64.tar.gz', '-linux-x86_64-glibc2.39.tar.gz') if name == sdk_name else name
             shutil.copy2(source, public/target)
         counts = {}
-        for target, expected_count in [('windows',14), ('macos',14), ('aarch64',12)]:
+        for target, expected_count in [('windows',14), ('macos',14), ('aarch64',12),
+                                       ('windows-arm64',8), ('macos-x64',6)]:
             path = native/f'native-{target}.json'
             result = json.loads(path.read_text())
             probes = result['probes']

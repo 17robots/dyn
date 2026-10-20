@@ -6,8 +6,12 @@
 #include "dyn_ast.h"
 #include "frontend.h"
 #include "ir.h"
-#include "llvm_shim.h"
+#include "link_elf.h"
+#include "link_macho.h"
+#include "link_coff.h"
+#include "link_wasm.h"
 #include "sema.h"
+#include "native_asm.h"
 #include <assert.h>
 #include <limits.h>
 #include <pthread.h>
@@ -16,2184 +20,6 @@
 #include <string.h>
 #include <unistd.h>
 
-typedef struct GenAbi GenAbi;
-typedef struct {
-  uint32_t defer_statement;
-  LLVMBasicBlockRef break_target, continue_target;
-  size_t break_defer, continue_defer;
-} GenControl;
-typedef struct {
-  LLVMValueRef function;
-  const char *name;
-  LLVMBasicBlockRef block;
-} GenPanicBlock;
-typedef struct {
-  LLVMContextRef context;
-  LLVMModuleRef module;
-  LLVMBuilderRef builder, stack_builder;
-  LLVMDIBuilderRef di_builder;
-  LLVMMetadataRef di_file, di_unit, di_function_type, di_scope;
-  LLVMMetadataRef *di_struct_types, *di_enum_types, *di_array_types;
-  LLVMValueRef function, panic_fn, init_fn, syscall_fn, memset_fn,
-      trace_push_fn, trace_pop_fn, unwind_set_fn, unwind_link_fn,
-      unwind_unlink_fn, unwind_continue_fn, unwind_frame, variadic_data,
-      variadic_count;
-  LLVMTypeRef panic_type, init_type, syscall_type, memset_type, trace_push_type,
-      trace_pop_type, unwind_set_type, unwind_frame_type, unwind_void_type;
-  LLVMTypeRef unwind_continue_type;
-  LLVMValueRef *locals, *functions, *globals, *captured_values;
-  bool *static_globals;
-  const uint32_t *local_statements;
-  const DynLocationIndex *locations;
-  LLVMTypeRef *struct_types, *enum_types, *function_types;
-  DynIrProgram *ir;
-  GenAbi **abis, **pointer_abis, *current_abi;
-  DynType return_type;
-  bool is_main, unwinding, tracing, allocation_failed, wasm;
-  unsigned pointer_bytes;
-  LLVMBasicBlockRef break_target, continue_target;
-  GenControl *defer_stack;
-  size_t defer_count, break_defer_count, continue_defer_count, string_serial;
-  /* Proven facts are reusable only in their current straight-line block.
-     LLVM SSA identity makes loads separated by possible aliasing stores differ.
-   */
-  LLVMBasicBlockRef pointer_fact_block, bounds_fact_block;
-  LLVMValueRef pointer_fact, bounds_index, bounds_length;
-  DynType pointer_fact_pointee;
-  uint64_t statement_epoch, pointer_fact_epoch, bounds_fact_epoch;
-  const DynSource *source;
-  const char *owner_key;
-  bool *defines; /* Functions with a body in this object. */
-  /* Panic blocks reusable by later failed checks of the same kind. */
-  GenPanicBlock panic_blocks[32];
-  unsigned panic_block_count;
-  /* Locals whose value never changes after definition (never assigned and
-     never address-taken). A pointer check of such a local holds for the rest
-     of the scope that made it; facts are popped when the scope ends. */
-  const bool *unstable_locals;
-  struct { uint32_t local; DynType pointee; } *local_facts;
-  size_t local_fact_count, local_fact_capacity;
-  LLVMValueRef last_local_load;
-  uint32_t last_local;
-  bool release, shared;
-  const DynOptimization *optimization;
-} Gen;
-static LLVMValueRef function_value(Gen *g, uint32_t i);
-
-/* Every slot has a compile-time size. Emit it once in the entry block, even
- * when the expression using it appears in a loop. Allocation in the current
- * block grows the stack on every iteration at -O0. Initializers stay in place. */
-static LLVMValueRef gen_stack_slot(Gen *g, LLVMTypeRef type, const char *name) {
-  LLVMBasicBlockRef entry = LLVMGetEntryBasicBlock(g->function);
-  LLVMValueRef first = LLVMGetFirstInstruction(entry);
-  if (first)
-    LLVMPositionBuilderBefore(g->stack_builder, first);
-  else
-    LLVMPositionBuilderAtEnd(g->stack_builder, entry);
-  /* Repositioning can retain another function's debug location. These
-   * hoisted storage slots have no source statement of their own. */
-  LLVMSetCurrentDebugLocation2(g->stack_builder, NULL);
-  return LLVMBuildAlloca(g->stack_builder, type, name);
-}
-
-static void debug_location(Gen *g, DynSpan span) {
-  if (!g->di_builder || !g->di_scope || !g->source ||
-      span.start_byte > g->source->length)
-    return;
-  const char *path;
-  unsigned line, column;
-  dyn_location_get(g->locations, g->source, span.start_byte, &path, &line, &column);
-  LLVMSetCurrentDebugLocation2(
-      g->builder, LLVMDIBuilderCreateDebugLocation(g->context, line, column,
-                                                   g->di_scope, NULL));
-}
-static unsigned span_line(Gen *g, DynSpan span) {
-  if (!g->source)
-    return 0;
-  const char *path;
-  unsigned line, column;
-  dyn_location_get(g->locations, g->source, span.start_byte, &path, &line, &column);
-  return line;
-}
-
-static LLVMMetadataRef debug_source_file(Gen *g, DynSpan span) {
-  const char *path;
-  unsigned line, column;
-  dyn_location_get(g->locations, g->source, span.start_byte, &path, &line, &column);
-  return path
-             ? LLVMDIBuilderCreateFile(g->di_builder, path, strlen(path), "", 0)
-             : g->di_file;
-}
-
-static int dyn_verify_module(LLVMModuleRef module, int action, char **message) {
-  int failed = LLVMVerifyModule(module, action, message);
-  if (!failed && message && *message) {
-    LLVMDisposeMessage(*message);
-    *message = NULL;
-  }
-  return failed;
-}
-static bool signed_type(DynType);
-static unsigned type_bits(Gen *, DynType);
-typedef struct {
-  bool ok;
-  uint64_t value;
-} StaticInt;
-static StaticInt static_integer(Gen *g, DynExprId id, size_t depth) {
-  if (id == DYN_NO_EXPR || id >= g->ir->expression_count ||
-      depth > g->ir->global_count + g->ir->expression_count)
-    return (StaticInt){0};
-  DynIrExpr *e = &g->ir->expressions[id];
-  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR)
-    return (StaticInt){true, e->integer};
-  if (e->kind == DYN_EXPR_BOOL)
-    return (StaticInt){true, e->boolean};
-  if (e->kind == DYN_EXPR_GLOBAL) {
-    uint32_t q = (uint32_t)e->integer;
-    return q < g->ir->global_count && g->ir->globals[q].is_const
-               ? static_integer(g, g->ir->globals[q].initializer, depth + 1)
-               : (StaticInt){0};
-  }
-  if (e->kind == DYN_EXPR_CONVERT)
-    return static_integer(g, e->left, depth + 1);
-  if (e->kind == DYN_EXPR_UNARY) {
-    StaticInt x = static_integer(g, e->left, depth + 1);
-    if (!x.ok)
-      return x;
-    if (e->op == DYN_OP_NEG)
-      x.value = UINT64_C(0) - x.value;
-    else if (e->op == DYN_OP_NOT)
-      x.value = !x.value;
-    else if (e->op == DYN_OP_BIT_NOT)
-      x.value = ~x.value;
-    else
-      x.ok = false;
-    return x;
-  }
-  if (e->kind != DYN_EXPR_BINARY)
-    return (StaticInt){0};
-  StaticInt l = static_integer(g, e->left, depth + 1),
-            r = static_integer(g, e->right, depth + 1);
-  if (!l.ok || !r.ok)
-    return (StaticInt){0};
-  DynType operand = g->ir->expressions[e->left].type;
-  switch (e->op) {
-  case DYN_OP_ADD:
-    l.value += r.value;
-    break;
-  case DYN_OP_SUB:
-    l.value -= r.value;
-    break;
-  case DYN_OP_MUL:
-    l.value *= r.value;
-    break;
-  case DYN_OP_DIV:
-    l.value = signed_type(operand)
-                  ? (uint64_t)((int64_t)l.value / (int64_t)r.value)
-                  : l.value / r.value;
-    break;
-  case DYN_OP_REM:
-    l.value = signed_type(operand)
-                  ? (uint64_t)((int64_t)l.value % (int64_t)r.value)
-                  : l.value % r.value;
-    break;
-  case DYN_OP_BIT_AND:
-  case DYN_OP_LOGICAL_AND:
-    l.value &= r.value;
-    break;
-  case DYN_OP_BIT_OR:
-  case DYN_OP_LOGICAL_OR:
-    l.value |= r.value;
-    break;
-  case DYN_OP_BIT_XOR:
-    l.value ^= r.value;
-    break;
-  case DYN_OP_SHL:
-    l.value <<= r.value;
-    break;
-  case DYN_OP_SHR:
-    l.value = signed_type(operand) ? (uint64_t)((int64_t)l.value >> r.value)
-                                   : l.value >> r.value;
-    break;
-  case DYN_OP_EQ:
-    l.value = l.value == r.value;
-    break;
-  case DYN_OP_NE:
-    l.value = l.value != r.value;
-    break;
-  case DYN_OP_LT:
-    l.value = signed_type(operand) ? (int64_t)l.value < (int64_t)r.value
-                                   : l.value < r.value;
-    break;
-  case DYN_OP_LE:
-    l.value = signed_type(operand) ? (int64_t)l.value <= (int64_t)r.value
-                                   : l.value <= r.value;
-    break;
-  case DYN_OP_GT:
-    l.value = signed_type(operand) ? (int64_t)l.value > (int64_t)r.value
-                                   : l.value > r.value;
-    break;
-  case DYN_OP_GE:
-    l.value = signed_type(operand) ? (int64_t)l.value >= (int64_t)r.value
-                                   : l.value >= r.value;
-    break;
-  default:
-    return (StaticInt){0};
-  }
-  unsigned width = type_bits(g, e->type);
-  if (width < 64)
-    l.value &= (UINT64_C(1) << width) - 1;
-  return l;
-}
-static bool signed_type(DynType t) {
-  return (t >= DYN_TYPE_I8 && t <= DYN_TYPE_I64) || t == DYN_TYPE_ISIZE;
-}
-static bool int_type(DynType t) {
-  return t >= DYN_TYPE_I8 && t <= DYN_TYPE_USIZE;
-}
-static bool float_type(DynType t) {
-  return t == DYN_TYPE_F32 || t == DYN_TYPE_F64;
-}
-static unsigned type_bits(Gen *g, DynType t) {
-  if (t == DYN_TYPE_USIZE || t == DYN_TYPE_ISIZE || t == DYN_TYPE_RAWPTR ||
-      dyn_type_is_pointer(t) || dyn_type_is_function(t)) return g->pointer_bytes * 8;
-  switch (t) {
-  case DYN_TYPE_BOOL:
-    return 1;
-  case DYN_TYPE_I8:
-  case DYN_TYPE_U8:
-    return 8;
-  case DYN_TYPE_I16:
-  case DYN_TYPE_U16:
-    return 16;
-  case DYN_TYPE_I32:
-  case DYN_TYPE_U32:
-  case DYN_TYPE_F32:
-    return 32;
-  default:
-    return 64;
-  }
-}
-static uint64_t type_alignment(Gen *, DynType);
-static uint64_t debug_type_size(Gen *g, DynType t) {
-  if (dyn_type_is_struct(t))
-    return g->ir->structs[t - DYN_TYPE_STRUCT_BASE].size;
-  if (dyn_type_is_enum(t))
-    return g->ir->enums[t - DYN_TYPE_ENUM_BASE].size;
-  if (dyn_type_is_array(t)) {
-    DynIrArray *a = &g->ir->arrays[t - DYN_TYPE_ARRAY_BASE];
-    return debug_type_size(g, a->element) * a->length;
-  }
-  if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING) return 2 * g->pointer_bytes;
-  if (t == DYN_TYPE_ANY) return 16;
-  return type_bits(g, t) / 8;
-}
-static LLVMTypeRef llvm_type(Gen *g, DynType t) {
-  if (dyn_type_is_pointer(t) || t == DYN_TYPE_RAWPTR)
-    return LLVMPointerTypeInContext(g->context, 0);
-  if (t == DYN_TYPE_ANY) {
-    LLVMTypeRef fields[] = {LLVMInt64TypeInContext(g->context),
-                            LLVMPointerTypeInContext(g->context, 0)};
-    return LLVMStructTypeInContext(g->context, fields, 2, 0);
-  }
-  if (dyn_type_is_struct(t))
-    return g->struct_types[t - DYN_TYPE_STRUCT_BASE];
-  if (dyn_type_is_enum(t)) {
-    DynIrEnum *en = &g->ir->enums[t - DYN_TYPE_ENUM_BASE];
-    return en->has_payload ? g->enum_types[t - DYN_TYPE_ENUM_BASE]
-                           : llvm_type(g, en->tag_type);
-  }
-  if (dyn_type_is_array(t)) {
-    DynIrArray *a = &g->ir->arrays[t - DYN_TYPE_ARRAY_BASE];
-    return LLVMArrayType2(llvm_type(g, a->element), a->length);
-  }
-  if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING) {
-    LLVMTypeRef fields[] = {LLVMPointerTypeInContext(g->context, 0),
-                            LLVMIntTypeInContext(g->context, g->pointer_bytes * 8)};
-    return LLVMStructTypeInContext(g->context, fields, 2, 0);
-  }
-  switch (t) {
-  case DYN_TYPE_USIZE:
-  case DYN_TYPE_ISIZE:
-    return LLVMIntTypeInContext(g->context, g->pointer_bytes * 8);
-  case DYN_TYPE_BOOL:
-    return LLVMInt1TypeInContext(g->context);
-  case DYN_TYPE_I8:
-  case DYN_TYPE_U8:
-    return LLVMInt8TypeInContext(g->context);
-  case DYN_TYPE_I16:
-  case DYN_TYPE_U16:
-    return LLVMInt16TypeInContext(g->context);
-  case DYN_TYPE_I32:
-  case DYN_TYPE_U32:
-    return LLVMInt32TypeInContext(g->context);
-  case DYN_TYPE_F32:
-    return LLVMFloatTypeInContext(g->context);
-  case DYN_TYPE_F64:
-    return LLVMDoubleTypeInContext(g->context);
-  default:
-    return LLVMInt64TypeInContext(g->context);
-  }
-}
-
-static LLVMMetadataRef debug_type(Gen *g, DynType t) {
-  if (!g->di_builder)
-    return NULL;
-  unsigned pointer_bits = g->pointer_bytes * 8;
-  const char *name = dyn_type_name(t);
-  unsigned encoding = signed_type(t) ? 5 : int_type(t) ? 7 : 0;
-  if (t == DYN_TYPE_BOOL)
-    encoding = 2;
-  if (float_type(t))
-    encoding = 4;
-  if (encoding)
-    return LLVMDIBuilderCreateBasicType(g->di_builder, name, strlen(name),
-                                        type_bits(g, t), encoding, 0);
-  if (dyn_type_is_pointer(t) || t == DYN_TYPE_RAWPTR) {
-    LLVMMetadataRef pointee = NULL;
-    if (dyn_type_is_pointer(t))
-      pointee =
-          debug_type(g, g->ir->pointers[t - DYN_TYPE_POINTER_BASE].pointee);
-    return LLVMDIBuilderCreatePointerType(g->di_builder, pointee, pointer_bits, pointer_bits, 0,
-                                          name, strlen(name));
-  }
-  if (t == DYN_TYPE_ANY) {
-    LLVMMetadataRef members[] = {
-        LLVMDIBuilderCreateMemberType(g->di_builder, g->di_file, "type", 4,
-                                      g->di_file, 0, 64, 64, 0, 0,
-                                      debug_type(g, DYN_TYPE_U64)),
-        LLVMDIBuilderCreateMemberType(g->di_builder, g->di_file, "data", 4,
-                                      g->di_file, 0, pointer_bits, pointer_bits, 64, 0,
-                                      debug_type(g, DYN_TYPE_RAWPTR))};
-    return LLVMDIBuilderCreateStructType(g->di_builder, g->di_file, "any", 3,
-                                         g->di_file, 0, 128, 64, 0, NULL,
-                                         members, 2, 0, NULL, "", 0);
-  }
-  if (dyn_type_is_slice(t) || t == DYN_TYPE_STRING) {
-    DynType element = t == DYN_TYPE_STRING
-                          ? DYN_TYPE_U8
-                          : g->ir->slices[t - DYN_TYPE_SLICE_BASE].element;
-    LLVMMetadataRef pointer = LLVMDIBuilderCreatePointerType(
-        g->di_builder, debug_type(g, element), pointer_bits, pointer_bits, 0, "", 0);
-    LLVMMetadataRef length = debug_type(g, DYN_TYPE_USIZE);
-    LLVMMetadataRef members[] = {
-        LLVMDIBuilderCreateMemberType(g->di_builder, g->di_file, "data", 4,
-                                      g->di_file, 0, pointer_bits, pointer_bits, 0, 0, pointer),
-        LLVMDIBuilderCreateMemberType(g->di_builder, g->di_file, "len", 3,
-                                      g->di_file, 0, pointer_bits, pointer_bits, pointer_bits, 0, length)};
-    return LLVMDIBuilderCreateStructType(g->di_builder, g->di_file, name,
-                                         strlen(name), g->di_file, 0, 2 * pointer_bits, pointer_bits,
-                                         0, NULL, members, 2, 0, NULL, "", 0);
-  }
-  if (dyn_type_is_array(t)) {
-    size_t id = t - DYN_TYPE_ARRAY_BASE;
-    if (g->di_array_types[id])
-      return g->di_array_types[id];
-    DynIrArray *a = &g->ir->arrays[id];
-    LLVMMetadataRef sub =
-        LLVMDIBuilderGetOrCreateSubrange(g->di_builder, 0, (int64_t)a->length);
-    return g->di_array_types[id] = LLVMDIBuilderCreateArrayType(
-               g->di_builder, debug_type_size(g, t) * 8,
-               (uint32_t)(type_alignment(g, t) * 8), debug_type(g, a->element),
-               &sub, 1);
-  }
-  if (dyn_type_is_struct(t)) {
-    size_t id = t - DYN_TYPE_STRUCT_BASE;
-    if (g->di_struct_types[id])
-      return g->di_struct_types[id];
-    DynIrStruct *st = &g->ir->structs[id];
-    LLVMMetadataRef *members = calloc(st->field_count, sizeof(*members));
-    if (st->field_count && !members) {
-      g->allocation_failed = true;
-      return NULL;
-    }
-    uint64_t offset = 0;
-    unsigned line = span_line(g, st->span);
-    LLVMMetadataRef file = debug_source_file(g, st->span);
-    LLVMMetadataRef forward = LLVMDIBuilderCreateReplaceableCompositeType(
-        g->di_builder, 0x13, st->name, strlen(st->name), file, file, line, 0,
-        st->size * 8, (uint32_t)(st->alignment * 8), 0, "", 0);
-    g->di_struct_types[id] = forward;
-    for (uint32_t i = 0; i < st->field_count; ++i) {
-      DynIrField *field = &g->ir->fields[st->field_start + i];
-      uint64_t alignment = st->packed ? 1 : type_alignment(g, field->type),
-               size = debug_type_size(g, field->type);
-      offset = (offset + alignment - 1) & ~(alignment - 1);
-      members[i] = LLVMDIBuilderCreateMemberType(
-          g->di_builder, file, field->name, strlen(field->name), file, line,
-          size * 8, (uint32_t)(alignment * 8), offset * 8, 0,
-          debug_type(g, field->type));
-      offset += size;
-    }
-    LLVMMetadataRef complete = LLVMDIBuilderCreateStructType(
-        g->di_builder, file, st->name, strlen(st->name), file, line,
-        st->size * 8, (uint32_t)(st->alignment * 8), 0, NULL, members,
-        st->field_count, 0, NULL, "", 0);
-    LLVMMetadataReplaceAllUsesWith(forward, complete);
-    g->di_struct_types[id] = complete;
-    free(members);
-    return complete;
-  }
-  if (dyn_type_is_enum(t)) {
-    size_t id = t - DYN_TYPE_ENUM_BASE;
-    if (g->di_enum_types[id])
-      return g->di_enum_types[id];
-    DynIrEnum *en = &g->ir->enums[id];
-    unsigned line = span_line(g, en->span);
-    LLVMMetadataRef file = debug_source_file(g, en->span);
-    LLVMMetadataRef *values = calloc(en->variant_count, sizeof(*values));
-    if (en->variant_count && !values) {
-      g->allocation_failed = true;
-      return NULL;
-    }
-    for (uint32_t i = 0; i < en->variant_count; ++i) {
-      DynIrVariant *v = &g->ir->variants[en->variant_start + i];
-      values[i] = LLVMDIBuilderCreateEnumerator(g->di_builder, v->name,
-                                                strlen(v->name), v->tag,
-                                                !signed_type(en->tag_type));
-    }
-    LLVMMetadataRef tag = LLVMDIBuilderCreateEnumerationType(
-        g->di_builder, file, en->name, strlen(en->name), file, line,
-        debug_type_size(g, en->tag_type) * 8,
-        (uint32_t)(type_alignment(g, en->tag_type) * 8), values,
-        en->variant_count, debug_type(g, en->tag_type));
-    free(values);
-    if (!en->has_payload)
-      return g->di_enum_types[id] = tag;
-    LLVMMetadataRef *variants = calloc(en->variant_count, sizeof(*variants));
-    if (en->variant_count && !variants) {
-      g->allocation_failed = true;
-      return NULL;
-    }
-    unsigned variant_count = 0;
-    for (uint32_t i = 0; i < en->variant_count; ++i) {
-      DynIrVariant *v = &g->ir->variants[en->variant_start + i];
-      if (v->payload_type == DYN_TYPE_VOID)
-        continue;
-      variants[variant_count++] = LLVMDIBuilderCreateMemberType(
-          g->di_builder, file, v->name, strlen(v->name), file, line,
-          debug_type_size(g, v->payload_type) * 8,
-          (uint32_t)(type_alignment(g, v->payload_type) * 8), 0, 0,
-          debug_type(g, v->payload_type));
-    }
-    LLVMMetadataRef payload = LLVMDIBuilderCreateUnionType(
-        g->di_builder, file, "payload", 7, file, line, en->payload_size * 8,
-        (uint32_t)(en->payload_alignment * 8), 0, variants, variant_count, 0,
-        "", 0);
-    free(variants);
-    LLVMMetadataRef members[] = {
-        LLVMDIBuilderCreateMemberType(
-            g->di_builder, file, "tag", 3, file, line,
-            debug_type_size(g, en->tag_type) * 8,
-            (uint32_t)(type_alignment(g, en->tag_type) * 8), 0, 0, tag),
-        LLVMDIBuilderCreateMemberType(g->di_builder, file, "payload", 7, file,
-                                      line, en->payload_size * 8,
-                                      (uint32_t)(en->payload_alignment * 8),
-                                      en->payload_alignment * 8, 0, payload)};
-    return g->di_enum_types[id] = LLVMDIBuilderCreateStructType(
-               g->di_builder, file, en->name, strlen(en->name), file, line,
-               en->size * 8, (uint32_t)(en->alignment * 8), 0, NULL, members, 2,
-               0, NULL, "", 0);
-  }
-  return NULL;
-}
-
-static unsigned local_line(Gen *g, uint32_t local, unsigned fallback) {
-  uint32_t entry = g->local_statements ? g->local_statements[local] : 0;
-  if (entry) {
-    const char *path;
-    unsigned line, column;
-    dyn_location_get(g->locations, g->source, g->ir->statements[entry - 1].span.start_byte,
-                        &path, &line, &column);
-    return line;
-  }
-  return fallback;
-}
-
-static LLVMMetadataRef debug_declare(Gen *g, LLVMValueRef storage,
-                                     const char *name, DynType type,
-                                     unsigned line, unsigned argument) {
-  LLVMMetadataRef ty = debug_type(g, type);
-  if (!g->di_builder || !g->di_scope || !ty || !name || !name[0])
-    return NULL;
-  LLVMMetadataRef variable =
-      argument
-          ? LLVMDIBuilderCreateParameterVariable(g->di_builder, g->di_scope,
-                                                 name, strlen(name), argument,
-                                                 g->di_file, line, ty, 1, 0)
-          : LLVMDIBuilderCreateAutoVariable(g->di_builder, g->di_scope, name,
-                                            strlen(name), g->di_file, line, ty,
-                                            1, 0, 0);
-  LLVMMetadataRef expression =
-      LLVMDIBuilderCreateExpression(g->di_builder, NULL, 0);
-  LLVMMetadataRef location =
-      LLVMDIBuilderCreateDebugLocation(g->context, line, 1, g->di_scope, NULL);
-  LLVMDIBuilderInsertDeclareRecordAtEnd(g->di_builder, storage, variable,
-                                        expression, location,
-                                        LLVMGetInsertBlock(g->builder));
-  return variable;
-}
-
-static void debug_value(Gen *g, LLVMValueRef value, LLVMMetadataRef variable,
-                        unsigned line) {
-  if (!g->di_builder || !variable)
-    return;
-  LLVMMetadataRef expression =
-      LLVMDIBuilderCreateExpression(g->di_builder, NULL, 0);
-  LLVMMetadataRef location =
-      LLVMDIBuilderCreateDebugLocation(g->context, line, 1, g->di_scope, NULL);
-  LLVMDIBuilderInsertDbgValueRecordAtEnd(g->di_builder, value, variable,
-                                         expression, location,
-                                         LLVMGetInsertBlock(g->builder));
-}
-static LLVMTypeRef llvm_fn_type(Gen *, uint32_t);
-static DynIrPointer *ir_pointer(Gen *g, DynType t) {
-  return dyn_type_is_pointer(t) &&
-                 t - DYN_TYPE_POINTER_BASE < g->ir->pointer_count
-             ? &g->ir->pointers[t - DYN_TYPE_POINTER_BASE]
-             : NULL;
-}
-static DynIrArray *ir_array(Gen *g, DynType t) {
-  return dyn_type_is_array(t) ? &g->ir->arrays[t - DYN_TYPE_ARRAY_BASE] : NULL;
-}
-static DynIrSlice *ir_slice(Gen *g, DynType t) {
-  return dyn_type_is_slice(t) ? &g->ir->slices[t - DYN_TYPE_SLICE_BASE] : NULL;
-}
-static uint64_t type_alignment(Gen *g, DynType t) {
-  if (dyn_type_is_pointer(t) || dyn_type_is_slice(t) || dyn_type_is_function(t) ||
-      t == DYN_TYPE_RAWPTR || t == DYN_TYPE_USIZE || t == DYN_TYPE_ISIZE ||
-      t == DYN_TYPE_STRING) return g->pointer_bytes;
-  if (dyn_type_is_array(t))
-    return type_alignment(g, ir_array(g, t)->element);
-  if (dyn_type_is_struct(t))
-    return g->ir->structs[t - DYN_TYPE_STRUCT_BASE].alignment;
-  if (dyn_type_is_enum(t))
-    return g->ir->enums[t - DYN_TYPE_ENUM_BASE].alignment;
-  switch (t) {
-  case DYN_TYPE_BOOL:
-  case DYN_TYPE_I8:
-  case DYN_TYPE_U8:
-    return 1;
-  case DYN_TYPE_I16:
-  case DYN_TYPE_U16:
-    return 2;
-  case DYN_TYPE_I32:
-  case DYN_TYPE_U32:
-  case DYN_TYPE_F32:
-    return 4;
-  default:
-    return 8;
-  }
-}
-static bool emit_defers(Gen *, size_t);
-static void emit_trace_pop(Gen *g) {
-  if (!g->tracing)
-    return;
-  LLVMBuildCall2(g->builder, g->trace_pop_type, g->trace_pop_fn, NULL, 0, "");
-}
-static void emit_panic(Gen *g, LLVMValueRef message, LLVMValueRef length) {
-  if (LLVMTypeOf(length) != llvm_type(g, DYN_TYPE_USIZE))
-    length = LLVMBuildTrunc(g->builder, length, llvm_type(g, DYN_TYPE_USIZE), "panic.length");
-  LLVMValueRef arguments[2] = {message, length};
-  LLVMBuildCall2(g->builder, g->panic_type, g->panic_fn, arguments, 2, "");
-}
-static void abi_attributes(Gen *, LLVMValueRef, const GenAbi *, bool);
-static LLVMValueRef emit_call(Gen *g, LLVMTypeRef type, LLVMValueRef callee,
-                              LLVMValueRef *args, unsigned count,
-                              const char *name, bool may_panic, const GenAbi *abi) {
-  ++g->statement_epoch; /* A call may mutate storage reachable through aliases.
-                         */
-  if (g->wasm || !may_panic || !g->defer_count || g->unwinding) {
-    LLVMValueRef call = LLVMBuildCall2(g->builder, type, callee, args, count, name);
-    if (abi) abi_attributes(g, call, abi, true);
-    return call;
-  }
-  if (!g->unwind_frame)
-    g->unwind_frame = gen_stack_slot(g, g->unwind_frame_type, "unwind.frame");
-  LLVMValueRef frame = g->unwind_frame;
-  LLVMValueRef state =
-      LLVMBuildCall2(g->builder, g->unwind_set_type, g->unwind_set_fn, &frame,
-                     1, "unwind.state");
-  LLVMBasicBlockRef normal =
-      LLVMAppendBasicBlockInContext(g->context, g->function, "call.normal");
-  LLVMBasicBlockRef unwind =
-      LLVMAppendBasicBlockInContext(g->context, g->function, "call.unwind");
-  LLVMBasicBlockRef done =
-      LLVMAppendBasicBlockInContext(g->context, g->function, "call.done");
-  LLVMBuildCondBr(
-      g->builder,
-      LLVMBuildICmp(g->builder, 32, state,
-                    LLVMConstInt(LLVMInt32TypeInContext(g->context), 0, 0),
-                    "unwind.normal"),
-      normal, unwind);
-  LLVMPositionBuilderAtEnd(g->builder, normal);
-  LLVMBuildCall2(g->builder, g->unwind_void_type, g->unwind_link_fn, &frame, 1,
-                 "");
-  LLVMValueRef result =
-      LLVMBuildCall2(g->builder, type, callee, args, count, name);
-  if (abi) abi_attributes(g, result, abi, true);
-  LLVMBuildCall2(g->builder, g->unwind_void_type, g->unwind_unlink_fn, &frame,
-                 1, "");
-  LLVMBuildBr(g->builder, done);
-  LLVMBasicBlockRef result_block = LLVMGetInsertBlock(g->builder);
-  LLVMPositionBuilderAtEnd(g->builder, unwind);
-  if (!emit_defers(g, 0)) {
-    LLVMBuildCall2(g->builder, g->unwind_continue_type, g->unwind_continue_fn,
-                   NULL, 0, "");
-    LLVMBuildUnreachable(g->builder);
-  }
-  LLVMPositionBuilderAtEnd(g->builder, done);
-  if (LLVMGetReturnType(type) == LLVMVoidTypeInContext(g->context))
-    return result;
-  LLVMValueRef phi = LLVMBuildPhi(g->builder, LLVMGetReturnType(type), name);
-  LLVMAddIncoming(phi, &result, &result_block, 1);
-  return phi;
-}
-#include "codegen_abi.h"
-
-static LLVMValueRef guard(Gen *g, LLVMValueRef condition, const char *name) {
-  /* The builder folds checks on constants, such as a nonzero constant divisor,
-     to true. Those cannot fail, so they need no branch or panic block. */
-  if (LLVMIsAConstantInt(condition) && LLVMConstIntGetZExtValue(condition))
-    return condition;
-  LLVMBasicBlockRef before = LLVMGetInsertBlock(g->builder);
-  uint64_t epoch = g->statement_epoch;
-  LLVMBasicBlockRef ok = LLVMAppendBasicBlockInContext(g->context, g->function,
-                                                       name);
-  /* Without pending defers a failed check only panics with a message naming
-     the check and function, so checks of one kind share a single block. */
-  bool shareable = !g->defer_count && !g->unwinding;
-  for (unsigned i = 0; shareable && i < g->panic_block_count; ++i)
-    if (g->panic_blocks[i].function == g->function &&
-        !strcmp(g->panic_blocks[i].name, name)) {
-      LLVMBuildCondBr(g->builder, condition, ok, g->panic_blocks[i].block);
-      LLVMPositionBuilderAtEnd(g->builder, ok);
-      if (g->statement_epoch == epoch) {
-        if (g->pointer_fact_block == before)
-          g->pointer_fact_block = ok;
-        if (g->bounds_fact_block == before)
-          g->bounds_fact_block = ok;
-      }
-      return condition;
-    }
-  LLVMBasicBlockRef bad = LLVMAppendBasicBlockInContext(g->context, g->function,
-                                                        "panic");
-  if (shareable) {
-    if (g->panic_block_count == sizeof(g->panic_blocks) / sizeof(g->panic_blocks[0]))
-      g->panic_block_count = 0;
-    g->panic_blocks[g->panic_block_count++] =
-        (GenPanicBlock){g->function, name, bad};
-  }
-  LLVMBuildCondBr(g->builder, condition, ok, bad);
-  LLVMPositionBuilderAtEnd(g->builder, bad);
-  if (!g->unwinding)
-    emit_defers(g, 0);
-  size_t function_length = 0;
-  const char *function_name = LLVMGetValueName2(g->function, &function_length);
-  char message[1024];
-  snprintf(message, sizeof(message), "runtime check failed (%s) in %.*s", name,
-           (int)(function_length > 800 ? 800 : function_length), function_name);
-  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(g->builder))) {
-    emit_panic(g, LLVMBuildGlobalStringPtr(g->builder, message, ".dyn.guard.message"),
-               LLVMConstInt(LLVMInt64TypeInContext(g->context), strlen(message), 0));
-    LLVMBuildUnreachable(g->builder);
-  }
-  LLVMPositionBuilderAtEnd(g->builder, ok);
-  /* The success edge has a single predecessor. Carry only facts from that
-     predecessor, without searching the growing CFG for every check. */
-  if (g->statement_epoch == epoch) {
-    if (g->pointer_fact_block == before)
-      g->pointer_fact_block = ok;
-    if (g->bounds_fact_block == before)
-      g->bounds_fact_block = ok;
-  }
-  return condition;
-}
-static bool same_guard_value(LLVMValueRef a, LLVMValueRef b,
-                             bool same_statement) {
-  if (a == b)
-    return true;
-  return same_statement && LLVMIsALoadInst(a) && LLVMIsALoadInst(b) &&
-         LLVMGetOperand(a, 0) == LLVMGetOperand(b, 0);
-}
-static LLVMValueRef checked_pointer(Gen *g, LLVMValueRef pointer,
-                                    DynType pointee) {
-  bool stable = g->unstable_locals && pointer == g->last_local_load &&
-                !g->unstable_locals[g->last_local];
-  if (stable)
-    for (size_t i = 0; i < g->local_fact_count; ++i)
-      if (g->local_facts[i].local == g->last_local &&
-          g->local_facts[i].pointee == pointee)
-        return pointer;
-  if (stable && g->local_fact_count == g->local_fact_capacity) {
-    size_t capacity = g->local_fact_capacity ? g->local_fact_capacity * 2 : 32;
-    void *grown = realloc(g->local_facts, capacity * sizeof(*g->local_facts));
-    if (grown) {
-      g->local_facts = grown;
-      g->local_fact_capacity = capacity;
-    } else
-      stable = false;
-  }
-  uint32_t local = g->last_local;
-  if (g->pointer_fact_block == LLVMGetInsertBlock(g->builder) &&
-      same_guard_value(g->pointer_fact, pointer,
-                       g->pointer_fact_epoch == g->statement_epoch) &&
-      g->pointer_fact_pointee == pointee)
-    return pointer;
-  LLVMTypeRef pt = LLVMPointerTypeInContext(g->context, 0);
-  guard(g,
-        LLVMBuildICmp(g->builder, 33, pointer, LLVMConstNull(pt),
-                      "pointer.nonnull"),
-        "pointer.nonnull.ok");
-  uint64_t alignment = type_alignment(g, pointee);
-  if (alignment > 1) {
-    LLVMTypeRef i64 = LLVMInt64TypeInContext(g->context);
-    LLVMValueRef address = LLVMBuildPtrToInt(g->builder, pointer, i64,
-                                             "pointer.address"),
-                 mask = LLVMConstInt(i64, alignment - 1, 0);
-    LLVMValueRef aligned =
-        LLVMBuildICmp(g->builder, 32,
-                      LLVMBuildAnd(g->builder, address, mask, "alignment.bits"),
-                      LLVMConstInt(i64, 0, 0), "pointer.aligned");
-    guard(g, aligned, "pointer.aligned.ok");
-  }
-  g->pointer_fact_block = LLVMGetInsertBlock(g->builder);
-  g->pointer_fact = pointer;
-  g->pointer_fact_pointee = pointee;
-  g->pointer_fact_epoch = g->statement_epoch;
-  if (stable) {
-    g->local_facts[g->local_fact_count].local = local;
-    g->local_facts[g->local_fact_count++].pointee = pointee;
-  }
-  return pointer;
-}
-
-static void checked_index(Gen *g, LLVMValueRef index, LLVMValueRef length) {
-  if (g->bounds_fact_block == LLVMGetInsertBlock(g->builder) &&
-      same_guard_value(g->bounds_index, index,
-                       g->bounds_fact_epoch == g->statement_epoch) &&
-      same_guard_value(g->bounds_length, length,
-                       g->bounds_fact_epoch == g->statement_epoch))
-    return;
-  guard(g, LLVMBuildICmp(g->builder, 36, index, length, "index.in.bounds"),
-        "index.ok");
-  g->bounds_fact_block = LLVMGetInsertBlock(g->builder);
-  g->bounds_index = index;
-  g->bounds_length = length;
-  g->bounds_fact_epoch = g->statement_epoch;
-}
-static LLVMValueRef checked_overflow(Gen *g, DynOperator op, DynType type,
-                                     LLVMValueRef l, LLVMValueRef r) {
-  const char *operation = op == DYN_OP_ADD   ? "add"
-                          : op == DYN_OP_SUB ? "sub"
-                                             : "mul";
-  char name[64];
-  snprintf(name, sizeof(name), "llvm.%c%s.with.overflow.i%u",
-           signed_type(type) ? 's' : 'u', operation, type_bits(g, type));
-  LLVMTypeRef narrow = llvm_type(g, type), fn_type;
-  LLVMValueRef fn = LLVMGetNamedFunction(g->module, name);
-  if (fn)
-    fn_type = LLVMGlobalGetValueType(fn);
-  else {
-    LLVMTypeRef fields[] = {narrow, LLVMInt1TypeInContext(g->context)},
-                result_type = LLVMStructTypeInContext(g->context, fields, 2, 0),
-                params[] = {narrow, narrow};
-    fn_type = LLVMFunctionType(result_type, params, 2, 0);
-    fn = LLVMAddFunction(g->module, name, fn_type);
-  }
-  LLVMValueRef args[] = {l, r}, pair = LLVMBuildCall2(g->builder, fn_type, fn,
-                                                      args, 2, "checked");
-  LLVMValueRef result =
-                   LLVMBuildExtractValue(g->builder, pair, 0, "checked.value"),
-               overflow = LLVMBuildExtractValue(g->builder, pair, 1,
-                                                "checked.overflow");
-  guard(g, LLVMBuildNot(g->builder, overflow, "checked.valid"), "overflow.ok");
-  return result;
-}
-static LLVMValueRef proven_integer(Gen *g, DynOperator op, LLVMValueRef l,
-                                   LLVMValueRef r) {
-  if (op == DYN_OP_ADD)
-    return LLVMBuildAdd(g->builder, l, r, "proven.add");
-  if (op == DYN_OP_SUB)
-    return LLVMBuildSub(g->builder, l, r, "proven.sub");
-  return LLVMBuildMul(g->builder, l, r, "proven.mul");
-}
-static LLVMValueRef checked_integer(Gen *g, DynOperator op, DynType type,
-                                    LLVMValueRef l, LLVMValueRef r) {
-  unsigned width = type_bits(g, type);
-  LLVMTypeRef narrow = llvm_type(g, type);
-  if (op == DYN_OP_DIV || op == DYN_OP_REM) {
-    LLVMValueRef nz =
-        LLVMBuildICmp(g->builder, 33, r, LLVMConstInt(narrow, 0, 0), "nonzero");
-    guard(g, nz, "divide.ok");
-    if (signed_type(type)) {
-      LLVMValueRef minimum =
-                       LLVMConstInt(narrow, UINT64_C(1) << (width - 1), 1),
-                   negative_one = LLVMConstInt(narrow, UINT64_MAX, 1);
-      LLVMValueRef overflow = LLVMBuildAnd(
-          g->builder,
-          LLVMBuildICmp(g->builder, 32, l, minimum, "division.minimum"),
-          LLVMBuildICmp(g->builder, 32, r, negative_one,
-                        "division.negative_one"),
-          "division.overflow");
-      guard(g, LLVMBuildNot(g->builder, overflow, "division.valid"),
-            "division.overflow.ok");
-      return op == DYN_OP_DIV ? LLVMBuildSDiv(g->builder, l, r, "div")
-                              : LLVMBuildSRem(g->builder, l, r, "rem");
-    }
-    return op == DYN_OP_DIV ? LLVMBuildUDiv(g->builder, l, r, "div")
-                            : LLVMBuildURem(g->builder, l, r, "rem");
-  }
-  LLVMTypeRef wide = LLVMIntTypeInContext(g->context, width * 2);
-  LLVMValueRef result = NULL;
-  if (op == DYN_OP_SHL || op == DYN_OP_SHR) {
-    LLVMValueRef valid = LLVMBuildICmp(
-        g->builder, 36, r, LLVMConstInt(llvm_type(g, type), width, 0),
-        "shift.valid");
-    guard(g, valid, "shift.ok");
-    if (op == DYN_OP_SHR)
-      return signed_type(type) ? LLVMBuildAShr(g->builder, l, r, "shr")
-                               : LLVMBuildLShr(g->builder, l, r, "shr");
-    LLVMValueRef wl = signed_type(type)
-                          ? LLVMBuildSExt(g->builder, l, wide, "lhs.wide")
-                          : LLVMBuildZExt(g->builder, l, wide, "lhs.wide");
-    LLVMValueRef wr = LLVMBuildZExt(g->builder, r, wide, "rhs.wide");
-    result = LLVMBuildShl(g->builder, wl, wr, "shl.wide");
-  } else
-    return checked_overflow(g, op, type, l, r);
-  LLVMValueRef narrowed = LLVMBuildTrunc(g->builder, result, narrow, "narrow");
-  LLVMValueRef restored =
-      signed_type(type) ? LLVMBuildSExt(g->builder, narrowed, wide, "restored")
-                        : LLVMBuildZExt(g->builder, narrowed, wide, "restored");
-  LLVMValueRef fits = LLVMBuildICmp(g->builder, 32, result, restored, "fits");
-  guard(g, fits, "overflow.ok");
-  return narrowed;
-}
-static LLVMValueRef static_expr(Gen *g, DynExprId id, size_t depth) {
-  if (id == DYN_NO_EXPR || id >= g->ir->expression_count ||
-      depth > g->ir->global_count + g->ir->expression_count)
-    return NULL;
-  DynIrExpr *e = &g->ir->expressions[id];
-  LLVMTypeRef type = llvm_type(g, e->type);
-  if (e->kind == DYN_EXPR_FUNCTION) {
-    return function_value(g, (uint32_t)e->integer);
-  }
-  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR)
-    return LLVMConstInt(type, e->integer, 0);
-  if (e->kind == DYN_EXPR_BOOL)
-    return LLVMConstInt(type, e->boolean, 0);
-  if (e->kind == DYN_EXPR_FLOAT)
-    return LLVMConstReal(type, e->floating);
-  if (e->kind == DYN_EXPR_NIL)
-    return LLVMConstNull(type);
-  if (e->kind == DYN_EXPR_GLOBAL) {
-    uint32_t idg = (uint32_t)e->integer;
-    return idg < g->ir->global_count && g->ir->globals[idg].is_const
-               ? static_expr(g, g->ir->globals[idg].initializer, depth + 1)
-               : NULL;
-  }
-  if (e->kind == DYN_EXPR_CONVERT) {
-    DynIrExpr *from = &g->ir->expressions[e->left];
-    LLVMValueRef v = static_expr(g, e->left, depth + 1);
-    if (!v)
-      return NULL;
-    /* LLVM has no constant-expression API for these conversions. Returning
-       NULL selects the existing runtime initializer path. */
-    if ((int_type(from->type) && float_type(e->type)) ||
-        (from->type == DYN_TYPE_F32 && e->type == DYN_TYPE_F64))
-      return NULL;
-    unsigned fb = type_bits(g, from->type), tb = type_bits(g, e->type);
-    return fb > tb ? LLVMConstTrunc(v, type) : NULL;
-  }
-  if (e->kind == DYN_EXPR_UNARY) {
-    LLVMValueRef v = static_expr(g, e->left, depth + 1);
-    if (!v)
-      return NULL;
-    if (e->op == DYN_OP_NEG)
-      return float_type(e->type) ? NULL : LLVMConstNeg(v);
-    if (e->op == DYN_OP_NOT || e->op == DYN_OP_BIT_NOT)
-      return LLVMConstNot(v);
-    return NULL;
-  }
-  if (e->kind != DYN_EXPR_BINARY)
-    return NULL;
-  LLVMValueRef l = static_expr(g, e->left, depth + 1),
-               r = static_expr(g, e->right, depth + 1);
-  if (!l || !r)
-    return NULL;
-  if (e->op == DYN_OP_BIT_XOR)
-    return LLVMConstXor(l, r);
-  if (!float_type(e->type)) {
-    if (e->op == DYN_OP_ADD)
-      return LLVMConstAdd(l, r);
-    if (e->op == DYN_OP_SUB)
-      return LLVMConstSub(l, r);
-  }
-  /* Other operators use the runtime initializer when scalar folding above
-     cannot produce a constant. */
-  return NULL;
-}
-static LLVMValueRef static_value(Gen *g, DynExprId id, size_t depth) {
-  if (id == DYN_NO_EXPR || id >= g->ir->expression_count ||
-      depth > g->ir->global_count + g->ir->expression_count)
-    return NULL;
-  DynIrExpr *e = &g->ir->expressions[id];
-  if (e->kind == DYN_EXPR_STRING) {
-    DynIrString *string = &g->ir->strings[e->integer];
-    LLVMTypeRef byte = LLVMInt8TypeInContext(g->context),
-                array = LLVMArrayType2(byte, string->length);
-    if (string->length > UINT_MAX) {
-      g->allocation_failed = true;
-      return NULL;
-    }
-    LLVMValueRef initializer = LLVMConstStringInContext(
-        g->context, string->length ? (const char *)string->data : "",
-        (unsigned)string->length, 1);
-    char name[64];
-    snprintf(name, sizeof(name), ".dyn.reflect.string.%zu", g->string_serial++);
-    LLVMValueRef global = LLVMAddGlobal(g->module, array, name);
-    LLVMSetLinkage(global, LLVMPrivateLinkage);
-    LLVMSetGlobalConstant(global, 1);
-    LLVMSetInitializer(global, initializer);
-    LLVMValueRef values[] = {
-        global,
-        LLVMConstInt(llvm_type(g, DYN_TYPE_USIZE), string->length, 0)};
-    return LLVMConstNamedStruct(llvm_type(g, e->type), values, 2);
-  }
-  if (int_type(e->type) || e->type == DYN_TYPE_BOOL) {
-    StaticInt x = static_integer(g, id, depth);
-    if (x.ok)
-      return LLVMConstInt(llvm_type(g, e->type), x.value, signed_type(e->type));
-  }
-  if (e->kind == DYN_EXPR_GLOBAL) {
-    uint32_t q = (uint32_t)e->integer;
-    return q < g->ir->global_count && g->ir->globals[q].is_const
-               ? static_value(g, g->ir->globals[q].initializer, depth + 1)
-               : NULL;
-  }
-  if (e->kind == DYN_EXPR_ARRAY) {
-    DynIrArray *a = ir_array(g, e->type);
-    if (!e->item_count)
-      return LLVMConstNull(llvm_type(g, e->type));
-    /* Dense tables already have one source item per element. Keeping them
-       static avoids generating thousands of stores and making LLVM recover
-       the constant initializer. Retain the sparse-array bound: expanding a
-       short initializer into a huge zero tail would consume excessive memory. */
-    if (a->length > 4096 && a->length != e->item_count)
-      return NULL;
-    LLVMValueRef *values = calloc(a->length, sizeof(*values));
-    if (a->length && !values)
-      return NULL;
-    for (uint64_t i = 0; i < a->length; ++i)
-      values[i] = LLVMConstNull(llvm_type(g, a->element));
-    for (uint32_t i = 0; i < e->item_count; ++i) {
-      values[i] = static_value(g, g->ir->items[e->item_start + i].expression,
-                               depth + 1);
-      if (!values[i]) {
-        free(values);
-        return NULL;
-      }
-    }
-    LLVMValueRef result =
-        LLVMConstArray2(llvm_type(g, a->element), values, a->length);
-    free(values);
-    return result;
-  }
-  if (e->kind == DYN_EXPR_STRUCT) {
-    DynIrStruct *st = &g->ir->structs[e->integer];
-    LLVMValueRef *values = calloc(st->field_count, sizeof(*values));
-    if (st->field_count && !values)
-      return NULL;
-    for (uint32_t i = 0; i < st->field_count; ++i) {
-      DynIrField *f = &g->ir->fields[st->field_start + i];
-      values[i] = f->default_expression == DYN_NO_EXPR
-                      ? LLVMConstNull(llvm_type(g, f->type))
-                      : static_value(g, f->default_expression, depth + 1);
-      if (!values[i]) {
-        free(values);
-        return NULL;
-      }
-    }
-    for (uint32_t i = 0; i < e->item_count; ++i) {
-      DynIrItem *item = &g->ir->items[e->item_start + i];
-      values[item->field_index] = static_value(g, item->expression, depth + 1);
-      if (!values[item->field_index]) {
-        free(values);
-        return NULL;
-      }
-    }
-    LLVMValueRef result =
-        LLVMConstNamedStruct(llvm_type(g, e->type), values, st->field_count);
-    free(values);
-    return result;
-  }
-  return static_expr(g, id, depth);
-}
-static LLVMValueRef gen_expr(Gen *, DynExprId);
-static bool addressable(Gen *g, DynExprId id) {
-  DynIrExpr *e = &g->ir->expressions[id];
-  if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL)
-    return true;
-  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF)
-    return true;
-  if (e->kind == DYN_EXPR_FIELD)
-    return dyn_type_is_pointer(g->ir->expressions[e->left].type) ||
-           addressable(g, e->left);
-  if (e->kind == DYN_EXPR_INDEX)
-    return true;
-  return false;
-}
-static LLVMValueRef as_usize(Gen *g, DynExprId id) {
-  LLVMValueRef v = gen_expr(g, id);
-  unsigned b = type_bits(g, g->ir->expressions[id].type);
-  LLVMTypeRef u = llvm_type(g, DYN_TYPE_USIZE);
-  unsigned width = g->pointer_bytes * 8;
-  if (b > width)
-    guard(g, LLVMBuildICmp(g->builder, 37, v,
-      LLVMConstInt(LLVMTypeOf(v), UINT32_MAX, 0), "index.fits"), "index.width.ok");
-  return b < width ? LLVMBuildZExt(g->builder, v, u, "usize")
-       : b > width ? LLVMBuildTrunc(g->builder, v, u, "usize") : v;
-}
-static LLVMValueRef lvalue_pointer(Gen *g, DynExprId id) {
-  DynIrExpr *e = &g->ir->expressions[id];
-  if (e->kind == DYN_EXPR_NAME)
-    return g->locals[e->integer];
-  if (e->kind == DYN_EXPR_GLOBAL)
-    return g->globals[e->integer];
-  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF) {
-    DynIrPointer *p = ir_pointer(g, g->ir->expressions[e->left].type);
-    return checked_pointer(g, gen_expr(g, e->left), p->pointee);
-  }
-  if (e->kind == DYN_EXPR_FIELD) {
-    DynIrExpr *base = &g->ir->expressions[e->left];
-    DynType aggregate_type = base->type;
-    LLVMValueRef aggregate_pointer;
-    if (dyn_type_is_pointer(aggregate_type)) {
-      DynIrPointer *p = ir_pointer(g, aggregate_type);
-      aggregate_type = p->pointee;
-      aggregate_pointer =
-          checked_pointer(g, gen_expr(g, e->left), aggregate_type);
-    } else
-      aggregate_pointer = lvalue_pointer(g, e->left);
-    return LLVMBuildStructGEP2(g->builder, llvm_type(g, aggregate_type),
-                               aggregate_pointer, (unsigned)e->integer,
-                               "field.pointer");
-  }
-  if (e->kind == DYN_EXPR_INDEX) {
-    DynType base = g->ir->expressions[e->left].type;
-    LLVMValueRef index = as_usize(g, e->right), length, data;
-    if (dyn_type_is_array(base)) {
-      DynIrArray *a = ir_array(g, base);
-      length = LLVMConstInt(llvm_type(g, DYN_TYPE_USIZE), a->length, 0);
-      LLVMValueRef zero =
-                       LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0),
-                   indices[] = {zero, index};
-      LLVMValueRef storage;
-      if (addressable(g, e->left))
-        storage = lvalue_pointer(g, e->left);
-      else {
-        /* Calls and literals yield array values, not storage. Evaluate once
-           after the index, preserving the established operand order. */
-        storage = gen_stack_slot(g, llvm_type(g, base), "index.array.temporary");
-        LLVMBuildStore(g->builder, gen_expr(g, e->left), storage);
-      }
-      data = LLVMBuildGEP2(g->builder, llvm_type(g, base),
-                           storage, indices, 2,
-                           "array.element");
-    } else {
-      DynIrSlice *sl = ir_slice(g, base);
-      LLVMValueRef value = gen_expr(g, e->left);
-      data = LLVMBuildExtractValue(g->builder, value, 0, "slice.data");
-      length = LLVMBuildExtractValue(g->builder, value, 1, "slice.len");
-      (void)sl;
-      LLVMValueRef indices[] = {index};
-      data = LLVMBuildGEP2(g->builder, llvm_type(g, e->type), data, indices, 1,
-                           "slice.element");
-    }
-    if (!e->boolean)
-      checked_index(g, index, length);
-    return data;
-  }
-  return NULL;
-}
-static LLVMValueRef gen_binary(Gen *g, const DynIrExpr *e,
-                               LLVMValueRef l, LLVMValueRef r) {
-  LLVMTypeRef type = llvm_type(g, e->type);
-  if (e->op >= DYN_OP_EQ && e->op <= DYN_OP_GE) {
-    int predicates_signed[] = {32, 33, 40, 41, 38, 39},
-        predicates_unsigned[] = {32, 33, 36, 37, 34, 35},
-        predicates_float[] = {1, 14, 4, 5, 2, 3};
-    unsigned index = (unsigned)e->op - (unsigned)DYN_OP_EQ;
-    if (float_type(g->ir->expressions[e->left].type))
-      return LLVMBuildFCmp(g->builder, predicates_float[index], l, r, "fcmp");
-    return LLVMBuildICmp(g->builder,
-                         signed_type(g->ir->expressions[e->left].type)
-                             ? predicates_signed[index]
-                             : predicates_unsigned[index],
-                         l, r, "icmp");
-  }
-  if (e->op == DYN_OP_BIT_AND)
-    return LLVMBuildAnd(g->builder, l, r, "and");
-  if (e->op == DYN_OP_BIT_OR)
-    return LLVMBuildOr(g->builder, l, r, "or");
-  if (e->op == DYN_OP_BIT_XOR)
-    return LLVMBuildXor(g->builder, l, r, "xor");
-  if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) {
-    DynType right_type = g->ir->expressions[e->right].type;
-    LLVMTypeRef right_llvm = llvm_type(g, right_type);
-    LLVMValueRef valid = LLVMBuildICmp(
-        g->builder, 36, r, LLVMConstInt(right_llvm, type_bits(g, e->type), 0),
-        "shift.count.valid");
-    guard(g, valid, "shift.count.ok");
-    unsigned rb = type_bits(g, right_type), lb = type_bits(g, e->type);
-    if (rb > lb)
-      r = LLVMBuildTrunc(g->builder, r, type, "shift.count");
-    else if (rb < lb)
-      r = LLVMBuildZExt(g->builder, r, type, "shift.count");
-    if (e->wrap && e->op == DYN_OP_SHL)
-      return LLVMBuildShl(g->builder, l, r, "wrap.shl");
-    return checked_integer(g, e->op, e->type, l, r);
-  }
-  bool wraps = e->wrap && (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB ||
-                           e->op == DYN_OP_MUL);
-  if (int_type(e->type))
-    return e->boolean || wraps ? proven_integer(g, e->op, l, r)
-                               : checked_integer(g, e->op, e->type, l, r);
-  if (e->op == DYN_OP_ADD)
-    return LLVMBuildFAdd(g->builder, l, r, "fadd");
-  if (e->op == DYN_OP_SUB)
-    return LLVMBuildFSub(g->builder, l, r, "fsub");
-  if (e->op == DYN_OP_MUL)
-    return LLVMBuildFMul(g->builder, l, r, "fmul");
-  if (e->op == DYN_OP_DIV)
-    return LLVMBuildFDiv(g->builder, l, r, "fdiv");
-  return LLVMBuildFRem(g->builder, l, r, "frem");
-}
-static LLVMValueRef integer_convert(Gen *g, LLVMValueRef value, DynType from,
-                                    DynType to, LLVMTypeRef type) {
-  unsigned from_bits = type_bits(g, from), to_bits = type_bits(g, to);
-  if (from_bits == to_bits)
-    return value;
-  if (from_bits > to_bits)
-    return LLVMBuildTrunc(g->builder, value, type, "cast.trunc");
-  return signed_type(from) ? LLVMBuildSExt(g->builder, value, type, "cast.sext")
-                           : LLVMBuildZExt(g->builder, value, type, "cast.zext");
-}
-static LLVMValueRef gen_expr(Gen *g, DynExprId id);
-/* An integer becomes an enum only when it equals one of the variant values. */
-static LLVMValueRef integer_to_enum(Gen *g, const DynIrExpr *e) {
-  DynType source = g->ir->expressions[e->left].type;
-  DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
-  LLVMTypeRef wide = LLVMInt64TypeInContext(g->context);
-  LLVMValueRef value = gen_expr(g, e->left),
-               widened = integer_convert(g, value, source, DYN_TYPE_I64, wide),
-               valid = LLVMConstInt(LLVMInt1TypeInContext(g->context), 0, 0);
-  bool tag_signed = signed_type(en->tag_type);
-  unsigned tag_bits = type_bits(g, en->tag_type);
-  for (uint32_t i = 0; i < en->variant_count; ++i) {
-    uint64_t tag = g->ir->variants[en->variant_start + i].tag;
-    if (tag_signed && tag_bits < 64 && (tag >> (tag_bits - 1)) & 1)
-      tag |= ~UINT64_C(0) << tag_bits;
-    LLVMValueRef same = LLVMBuildICmp(g->builder, 32, widened,
-                                      LLVMConstInt(wide, tag, 0), "enum.value");
-    /* A negative source never equals an unsigned tag above INT64_MAX. */
-    if (signed_type(source) != tag_signed && (int64_t)tag < 0)
-      same = LLVMConstInt(LLVMInt1TypeInContext(g->context), 0, 0);
-    valid = LLVMBuildOr(g->builder, valid, same, "enum.valid");
-  }
-  guard(g, valid, "enum.cast.ok");
-  return LLVMBuildTrunc(g->builder, widened, llvm_type(g, en->tag_type),
-                        "enum.tag");
-}
-static LLVMValueRef gen_expr(Gen *g, DynExprId id) {
-  DynIrExpr *e = &g->ir->expressions[id];
-  debug_location(g, e->span);
-  LLVMTypeRef type = llvm_type(g, e->type);
-  if (g->captured_values && g->captured_values[id])
-    return LLVMBuildLoad2(g->builder, type, g->captured_values[id],
-                          "defer.capture");
-  if (e->kind == DYN_EXPR_STRING) {
-    DynIrString *string = &g->ir->strings[e->integer];
-    LLVMTypeRef byte = LLVMInt8TypeInContext(g->context),
-                array = LLVMArrayType2(byte, string->length);
-    if (string->length > UINT_MAX) {
-      g->allocation_failed = true;
-      return LLVMConstNull(type);
-    }
-    LLVMValueRef initializer = LLVMConstStringInContext(
-        g->context, string->length ? (const char *)string->data : "",
-        (unsigned)string->length, 1);
-    char name[64];
-    snprintf(name, sizeof(name), ".dyn.string.%zu", g->string_serial++);
-    LLVMValueRef global = LLVMAddGlobal(g->module, array, name);
-    LLVMSetLinkage(global, LLVMPrivateLinkage);
-    LLVMSetInitializer(global, initializer);
-    LLVMSetGlobalConstant(global, 1);
-    LLVMSetLinkage(global, LLVMPrivateLinkage);
-    LLVMValueRef value = LLVMConstNull(type);
-    value = LLVMBuildInsertValue(g->builder, value, global, 0, "string.data");
-    return LLVMBuildInsertValue(
-        g->builder, value,
-        LLVMConstInt(llvm_type(g, DYN_TYPE_USIZE), string->length, 0), 1,
-        "string.len");
-  }
-  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR)
-    return LLVMConstInt(type, e->integer, 0);
-  if (e->kind == DYN_EXPR_BOOL)
-    return LLVMConstInt(type, e->boolean, 0);
-  if (e->kind == DYN_EXPR_FLOAT)
-    return LLVMConstReal(type, e->floating);
-  if (e->kind == DYN_EXPR_NIL)
-    return LLVMConstNull(type);
-  if (e->kind == DYN_EXPR_NAME) {
-    g->last_local_load = LLVMBuildLoad2(g->builder, type, g->locals[e->integer], "load");
-    g->last_local = (uint32_t)e->integer;
-    return g->last_local_load;
-  }
-  if (e->kind == DYN_EXPR_GLOBAL)
-    return LLVMBuildLoad2(g->builder, type, g->globals[e->integer],
-                          "global.load");
-  if (e->kind == DYN_EXPR_FUNCTION)
-    return function_value(g, (uint32_t)e->integer);
-  if (e->kind == DYN_EXPR_ENUM) {
-    DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
-    DynIrVariant *v = &g->ir->variants[e->integer];
-    if (!en->has_payload)
-      return LLVMConstInt(llvm_type(g, en->tag_type), v->tag,
-                          signed_type(en->tag_type));
-    LLVMValueRef storage = gen_stack_slot(g, type, "enum.temporary"),
-                 tagp = LLVMBuildStructGEP2(g->builder, type, storage, 0,
-                                            "enum.tag.pointer");
-    LLVMBuildStore(g->builder,
-                   LLVMConstInt(llvm_type(g, en->tag_type), v->tag,
-                                signed_type(en->tag_type)),
-                   tagp);
-    if (v->payload_type != DYN_TYPE_VOID) {
-      LLVMValueRef payloadp = LLVMBuildStructGEP2(g->builder, type, storage, 1,
-                                                  "enum.payload.pointer");
-      LLVMBuildStore(g->builder,
-                     gen_expr(g, g->ir->items[e->item_start].expression),
-                     payloadp);
-    }
-    return LLVMBuildLoad2(g->builder, type, storage, "enum.value");
-  }
-  if (e->kind == DYN_EXPR_ARRAY) {
-    LLVMValueRef value = LLVMConstNull(type);
-    for (uint32_t i = 0; i < e->item_count; ++i)
-      value = LLVMBuildInsertValue(
-          g->builder, value,
-          gen_expr(g, g->ir->items[e->item_start + i].expression), i,
-          "array.item");
-    return value;
-  }
-  if (e->kind == DYN_EXPR_INDEX)
-    return LLVMBuildLoad2(g->builder, type, lvalue_pointer(g, id), "index");
-  if (e->kind == DYN_EXPR_LEN) {
-    DynType base = g->ir->expressions[e->left].type;
-    if (dyn_type_is_array(base))
-      return LLVMConstInt(type, ir_array(g, base)->length, 0);
-    return LLVMBuildExtractValue(g->builder, gen_expr(g, e->left), 1,
-                                 "slice.len");
-  }
-  if (e->kind == DYN_EXPR_SLICE) {
-    DynType base = g->ir->expressions[e->left].type;
-    LLVMTypeRef usize = llvm_type(g, DYN_TYPE_USIZE);
-    LLVMValueRef data, length = NULL;
-    bool raw = dyn_type_is_pointer(base);
-    if (dyn_type_is_array(base)) {
-      DynIrArray *a = ir_array(g, base);
-      length = LLVMConstInt(usize, a->length, 0);
-      LLVMValueRef zero = LLVMConstInt(usize, 0, 0), indices[] = {zero, zero};
-      LLVMValueRef pointer = lvalue_pointer(g, e->left);
-      if (!pointer) {
-        LLVMValueRef constant = static_value(g, e->left, 0);
-        if (constant) {
-          char name[64];
-          snprintf(name, sizeof(name), ".dyn.reflect.members.%zu",
-                   g->string_serial++);
-          pointer = LLVMAddGlobal(g->module, llvm_type(g, base), name);
-          LLVMSetLinkage(pointer, LLVMPrivateLinkage);
-          LLVMSetGlobalConstant(pointer, 1);
-          LLVMSetInitializer(pointer, constant);
-        } else {
-          pointer = gen_stack_slot(g, llvm_type(g, base),
-                                    "slice.array.temporary");
-          LLVMBuildStore(g->builder, gen_expr(g, e->left), pointer);
-        }
-      }
-      data = LLVMBuildGEP2(g->builder, llvm_type(g, base), pointer, indices, 2,
-                           "array.data");
-    } else if (raw) {
-      DynIrPointer *p = ir_pointer(g, base);
-      data = checked_pointer(g, gen_expr(g, e->left), p->pointee);
-    } else {
-      LLVMValueRef source = gen_expr(g, e->left);
-      data = LLVMBuildExtractValue(g->builder, source, 0, "slice.data");
-      length = LLVMBuildExtractValue(g->builder, source, 1, "slice.len");
-    }
-    LLVMValueRef start = e->right == DYN_NO_EXPR ? LLVMConstInt(usize, 0, 0)
-                                                 : as_usize(g, e->right),
-                 end = raw ? as_usize(g, (DynExprId)e->integer)
-                       : e->integer == DYN_NO_EXPR
-                           ? length
-                           : as_usize(g, (DynExprId)e->integer);
-    guard(g, LLVMBuildICmp(g->builder, 37, start, end, "slice.ordered"),
-          "slice.order.ok");
-    if (!raw)
-      guard(g, LLVMBuildICmp(g->builder, 37, end, length, "slice.in.bounds"),
-            "slice.bounds.ok");
-    LLVMValueRef indices[] = {start};
-    data =
-        LLVMBuildGEP2(g->builder, llvm_type(g, ir_slice(g, e->type)->element),
-                      data, indices, 1, "slice.start");
-    LLVMValueRef value = LLVMConstNull(type);
-    value =
-        LLVMBuildInsertValue(g->builder, value, data, 0, "slice.data.value");
-    return LLVMBuildInsertValue(
-        g->builder, value, LLVMBuildSub(g->builder, end, start, "slice.count"),
-        1, "slice.len.value");
-  }
-  if (e->kind == DYN_EXPR_CALL) {
-    DynIrFunction *callee = &g->ir->functions[e->integer];
-    bool packed = callee->variadic && !callee->foreign &&
-                  dyn_type_is_slice(callee->variadic_type);
-    uint32_t extra = packed ? 2 : 0;
-    LLVMValueRef *args = calloc(e->item_count + extra, sizeof(*args));
-    if ((e->item_count + extra) && !args) {
-      g->allocation_failed = true;
-      return e->type == DYN_TYPE_VOID ? NULL : LLVMConstNull(type);
-    }
-    for (uint32_t i = 0; i < (packed ? callee->param_count : e->item_count);
-         ++i)
-      args[i] = gen_expr(g, g->ir->items[e->item_start + i].expression);
-    if (packed) {
-      uint32_t n = e->item_count - callee->param_count;
-      DynType arg_type = ir_slice(g, callee->variadic_type)->element;
-      LLVMTypeRef descriptor = llvm_type(g, arg_type);
-      LLVMValueRef data =
-          LLVMConstNull(LLVMPointerTypeInContext(g->context, 0));
-      if (n) {
-        LLVMTypeRef array = LLVMArrayType2(descriptor, n);
-        LLVMValueRef storage =
-            gen_stack_slot(g, array, "variadic.args");
-        LLVMValueRef zero =
-            LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0);
-        for (uint32_t i = 0; i < n; ++i) {
-          DynExprId id =
-              g->ir->items[e->item_start + callee->param_count + i].expression;
-          DynType value_type = g->ir->expressions[id].type;
-          LLVMValueRef item;
-          if (arg_type == DYN_TYPE_ANY) {
-            LLVMValueRef slot = gen_stack_slot(
-                g, llvm_type(g, value_type), "variadic.value");
-            LLVMBuildStore(g->builder, gen_expr(g, id), slot);
-            item = LLVMConstNull(descriptor);
-            item = LLVMBuildInsertValue(
-                g->builder, item,
-                LLVMConstInt(LLVMInt64TypeInContext(g->context), value_type, 0),
-                0, "any.type");
-            item = LLVMBuildInsertValue(g->builder, item, slot, 1, "any.data");
-          } else
-            item = gen_expr(g, id);
-          LLVMValueRef indexes[] = {
-              zero, LLVMConstInt(LLVMInt64TypeInContext(g->context), i, 0)};
-          LLVMValueRef destination = LLVMBuildGEP2(g->builder, array, storage,
-                                                   indexes, 2, "variadic.item");
-          LLVMBuildStore(g->builder, item, destination);
-        }
-        LLVMValueRef indexes[] = {zero, zero};
-        data = LLVMBuildGEP2(g->builder, array, storage, indexes, 2,
-                             "variadic.data.pointer");
-      }
-      args[callee->param_count] = data;
-      args[callee->param_count + 1] =
-          LLVMConstInt(llvm_type(g, DYN_TYPE_USIZE), n, 0);
-    }
-    LLVMValueRef function = function_value(g, (uint32_t)e->integer);
-    if (!function) { free(args); return NULL; }
-    LLVMValueRef result =
-        abi_call(g, g->abis[e->integer], function,
-                  args, packed ? callee->param_count + 2 : e->item_count, "call", true);
-    free(args);
-    return result;
-  }
-  if (e->kind == DYN_EXPR_INDIRECT_CALL) {
-    LLVMValueRef callee = gen_expr(g, e->left),
-                 nonnull = LLVMBuildICmp(
-                     g->builder, 33, callee,
-                     LLVMConstNull(LLVMPointerTypeInContext(g->context, 0)),
-                     "function.nonnull");
-    guard(g, nonnull, "function.nonnull.ok");
-    LLVMValueRef *args = calloc(e->item_count, sizeof(*args));
-    if ((e->item_count) && !args) {
-      g->allocation_failed = true;
-      return e->type == DYN_TYPE_VOID ? NULL : LLVMConstNull(type);
-    }
-    for (uint32_t i = 0; i < e->item_count; ++i)
-      args[i] = gen_expr(g, g->ir->items[e->item_start + i].expression);
-    LLVMTypeRef signature = llvm_fn_type(g, (uint32_t)e->integer);
-    if (!signature) {
-      free(args);
-      return e->type == DYN_TYPE_VOID ? NULL : LLVMConstNull(type);
-    }
-    LLVMValueRef result =
-        abi_call(g, g->pointer_abis[e->integer], callee, args, e->item_count, "indirect.call", true);
-    free(args);
-    return result;
-  }
-  if (e->kind == DYN_EXPR_FIELD)
-    return addressable(g, id)
-               ? LLVMBuildLoad2(g->builder, type, lvalue_pointer(g, id),
-                                "field")
-               : LLVMBuildExtractValue(g->builder, gen_expr(g, e->left),
-                                       (unsigned)e->integer, "field");
-  if (e->kind == DYN_EXPR_STRUCT) {
-    uint32_t sid = (uint32_t)e->integer;
-    DynIrStruct *st = &g->ir->structs[sid];
-    LLVMValueRef value = LLVMConstNull(type);
-    for (uint32_t i = 0; i < st->field_count; ++i) {
-      DynIrField *f = &g->ir->fields[st->field_start + i];
-      if (f->default_expression != DYN_NO_EXPR)
-        value = LLVMBuildInsertValue(g->builder, value,
-                                     gen_expr(g, f->default_expression), i,
-                                     "default.field");
-    }
-    for (uint32_t i = 0; i < e->item_count; ++i) {
-      DynIrItem *item = &g->ir->items[e->item_start + i];
-      value =
-          LLVMBuildInsertValue(g->builder, value, gen_expr(g, item->expression),
-                               item->field_index, "literal.field");
-    }
-    return value;
-  }
-  if (e->kind == DYN_EXPR_CAST && dyn_type_is_enum(e->type) &&
-      !dyn_type_is_enum(g->ir->expressions[e->left].type))
-    return integer_to_enum(g, e);
-  if (e->kind == DYN_EXPR_CAST) {
-    DynIrExpr *source = &g->ir->expressions[e->left];
-    LLVMValueRef value = gen_expr(g, e->left);
-    if (dyn_type_is_enum(source->type) && source->type != e->type) {
-      DynType tag = g->ir->enums[source->type - DYN_TYPE_ENUM_BASE].tag_type;
-      return integer_convert(g, value, tag, e->type, type);
-    }
-    bool source_ptr =
-        dyn_type_is_pointer(source->type) || source->type == DYN_TYPE_RAWPTR;
-    bool target_ptr =
-        dyn_type_is_pointer(e->type) || e->type == DYN_TYPE_RAWPTR;
-    if (source->type == e->type || (source_ptr && target_ptr))
-      return value;
-    if (source_ptr && int_type(e->type))
-      return LLVMBuildPtrToInt(g->builder, value, type,
-                               "cast.pointer.to.integer");
-    if (int_type(source->type) && target_ptr)
-      return LLVMBuildIntToPtr(g->builder, value, type,
-                               "cast.integer.to.pointer");
-    if (int_type(source->type) && int_type(e->type)) {
-      unsigned from = type_bits(g, source->type), to = type_bits(g, e->type);
-      if (from == to)
-        return value;
-      if (from > to)
-        return LLVMBuildTrunc(g->builder, value, type, "cast.trunc");
-      return signed_type(source->type)
-                 ? LLVMBuildSExt(g->builder, value, type, "cast.sext")
-                 : LLVMBuildZExt(g->builder, value, type, "cast.zext");
-    }
-    if (int_type(source->type) && float_type(e->type))
-      return signed_type(source->type)
-                 ? LLVMBuildSIToFP(g->builder, value, type, "cast.sitofp")
-                 : LLVMBuildUIToFP(g->builder, value, type, "cast.uitofp");
-    if (float_type(source->type) && int_type(e->type))
-      return signed_type(e->type)
-                 ? LLVMBuildFPToSI(g->builder, value, type, "cast.fptosi")
-                 : LLVMBuildFPToUI(g->builder, value, type, "cast.fptoui");
-    return source->type == DYN_TYPE_F64
-               ? LLVMBuildFPTrunc(g->builder, value, type, "cast.fptrunc")
-               : LLVMBuildFPExt(g->builder, value, type, "cast.fpext");
-  }
-  if (e->kind == DYN_EXPR_BITCAST)
-    return LLVMBuildBitCast(g->builder, gen_expr(g, e->left), type, "bitcast");
-  if (e->kind == DYN_EXPR_SYSCALL) {
-    LLVMTypeRef i64 = LLVMInt64TypeInContext(g->context);
-    LLVMValueRef args[7];
-    for (uint32_t i = 0; i < 7; ++i)
-      args[i] = LLVMConstInt(i64, 0, 0);
-    for (uint32_t i = 0; i < e->item_count && i < 7; ++i) {
-      DynExprId arg = g->ir->items[e->item_start + i].expression;
-      DynType at = g->ir->expressions[arg].type;
-      LLVMValueRef value = gen_expr(g, arg);
-      if (dyn_type_is_pointer(at))
-        value = LLVMBuildPtrToInt(g->builder, value, i64, "syscall.pointer");
-      else {
-        unsigned width = type_bits(g, at);
-        if (width < 64)
-          value = signed_type(at)
-                      ? LLVMBuildSExt(g->builder, value, i64, "syscall.sext")
-                      : LLVMBuildZExt(g->builder, value, i64, "syscall.zext");
-        else if (width > 64)
-          value = LLVMBuildTrunc(g->builder, value, i64, "syscall.trunc");
-      }
-      args[i] = value;
-    }
-    ++g->statement_epoch;
-    return LLVMBuildCall2(g->builder, g->syscall_type, g->syscall_fn, args, 7,
-                          "syscall");
-  }
-  if (e->kind == DYN_EXPR_CONVERT) {
-    DynIrExpr *source = &g->ir->expressions[e->left];
-    LLVMValueRef value = gen_expr(g, e->left);
-    if (e->type == DYN_TYPE_ANY) {
-      LLVMValueRef slot =
-          gen_stack_slot(g, llvm_type(g, source->type), "any.value");
-      LLVMBuildStore(g->builder, value, slot);
-      LLVMValueRef boxed = LLVMConstNull(type);
-      boxed = LLVMBuildInsertValue(
-          g->builder, boxed,
-          LLVMConstInt(LLVMInt64TypeInContext(g->context), source->type, 0), 0,
-          "any.type");
-      return LLVMBuildInsertValue(g->builder, boxed, slot, 1, "any.data");
-    }
-    if ((dyn_type_is_pointer(source->type) && dyn_type_is_pointer(e->type)) ||
-        (dyn_type_is_slice(source->type) && dyn_type_is_slice(e->type)))
-      return value;
-    if (int_type(source->type) && float_type(e->type))
-      return signed_type(source->type)
-                 ? LLVMBuildSIToFP(g->builder, value, type, "sitofp")
-                 : LLVMBuildUIToFP(g->builder, value, type, "uitofp");
-    if (source->type == DYN_TYPE_F32 && e->type == DYN_TYPE_F64)
-      return LLVMBuildFPExt(g->builder, value, type, "fpext");
-    return signed_type(source->type)
-               ? LLVMBuildSExt(g->builder, value, type, "sext")
-               : LLVMBuildZExt(g->builder, value, type, "zext");
-  }
-  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS)
-    return lvalue_pointer(g, e->left);
-  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF)
-    return LLVMBuildLoad2(g->builder, type, lvalue_pointer(g, id),
-                          "dereference");
-  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG && e->boolean) {
-    uint64_t magnitude = g->ir->expressions[e->left].integer;
-    return LLVMConstInt(type, UINT64_C(0) - magnitude, 1);
-  }
-  LLVMValueRef l = gen_expr(g, e->left);
-  if (e->kind == DYN_EXPR_UNARY) {
-    if (e->op == DYN_OP_NOT || e->op == DYN_OP_BIT_NOT)
-      return LLVMBuildNot(g->builder, l, "not");
-    if (float_type(e->type))
-      return LLVMBuildFNeg(g->builder, l, "neg");
-    LLVMValueRef zero = LLVMConstInt(type, 0, 0);
-    if (e->wrap)
-      return LLVMBuildSub(g->builder, zero, l, "wrap.neg");
-    return checked_integer(g, DYN_OP_SUB, e->type, zero, l);
-  }
-  if (e->op == DYN_OP_LOGICAL_AND || e->op == DYN_OP_LOGICAL_OR) {
-    LLVMValueRef short_value =
-        LLVMConstInt(type, e->op == DYN_OP_LOGICAL_OR, 0);
-    LLVMBasicBlockRef left_block = LLVMGetInsertBlock(g->builder);
-    LLVMBasicBlockRef rhs = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "logical.rhs"),
-                      done = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "logical.done");
-    if (e->op == DYN_OP_LOGICAL_AND)
-      LLVMBuildCondBr(g->builder, l, rhs, done);
-    else
-      LLVMBuildCondBr(g->builder, l, done, rhs);
-    LLVMPositionBuilderAtEnd(g->builder, rhs);
-    size_t facts = g->local_fact_count;
-    LLVMValueRef right_value = gen_expr(g, e->right);
-    g->local_fact_count = facts; /* The right side may not run. */
-    LLVMBasicBlockRef right_block = LLVMGetInsertBlock(g->builder);
-    LLVMBuildBr(g->builder, done);
-    LLVMPositionBuilderAtEnd(g->builder, done);
-    LLVMValueRef value = LLVMBuildPhi(g->builder, type, "logical.value");
-    LLVMValueRef incoming[] = {short_value, right_value};
-    LLVMBasicBlockRef blocks[] = {left_block, right_block};
-    LLVMAddIncoming(value, incoming, blocks, 2);
-    return value;
-  }
-  LLVMValueRef r = gen_expr(g, e->right);
-  return gen_binary(g, e, l, r);
-}
-
-static bool gen_block(Gen *, uint32_t, uint32_t);
-static bool aggregate_initializer(Gen *g, DynExprId expression) {
-  DynIrExpr *value = &g->ir->expressions[expression];
-  return (dyn_type_is_struct(value->type) || dyn_type_is_array(value->type)) &&
-         (addressable(g, expression) || value->kind == DYN_EXPR_STRUCT ||
-          value->kind == DYN_EXPR_ARRAY) &&
-         (!g->captured_values || !g->captured_values[expression]);
-}
-static void capture_defer_expr(Gen *g, DynExprId id) {
-  if (id == DYN_NO_EXPR || g->captured_values[id])
-    return;
-  LLVMTypeRef type = llvm_type(g, g->ir->expressions[id].type);
-  LLVMValueRef value = gen_expr(g, id),
-               slot = gen_stack_slot(g, type, "defer.capture.slot");
-  LLVMBuildStore(g->builder, value, slot);
-  g->captured_values[id] = slot;
-}
-static void capture_defer(Gen *g, DynIrStmt *st) {
-  if (st->defer_block || st->body_count != 1)
-    return;
-  DynIrStmt *action = &g->ir->statements[g->ir->children[st->body_start]];
-  if (action->kind != DYN_STMT_EXPR)
-    return;
-  DynIrExpr *call = &g->ir->expressions[action->expression];
-  if (call->kind != DYN_EXPR_CALL && call->kind != DYN_EXPR_INDIRECT_CALL)
-    return;
-  if (call->kind == DYN_EXPR_INDIRECT_CALL)
-    capture_defer_expr(g, call->left);
-  for (uint32_t i = 0; i < call->item_count; ++i)
-    capture_defer_expr(g, g->ir->items[call->item_start + i].expression);
-}
-/* Initialize aggregates in their destination. Materializing a large struct as
-   one SSA value expands every array element in LLVM's instruction selector. */
-static void gen_initialize(Gen *g, DynType type, DynExprId expression,
-                           LLVMValueRef destination) {
-  DynIrExpr *value = expression == DYN_NO_EXPR ? NULL : &g->ir->expressions[expression];
-  LLVMTypeRef llvm = llvm_type(g, type);
-  if (value && (dyn_type_is_struct(type) || dyn_type_is_array(type)) &&
-      addressable(g, expression) &&
-      (!g->captured_values || !g->captured_values[expression])) {
-    LLVMBuildMemMove(g->builder, destination, 1,
-                     lvalue_pointer(g, expression), 1, LLVMSizeOf(llvm));
-    return;
-  }
-  if ((!value && (dyn_type_is_struct(type) || dyn_type_is_array(type))) ||
-      (value && (value->kind == DYN_EXPR_ARRAY || value->kind == DYN_EXPR_STRUCT))) {
-    LLVMValueRef arguments[] = {
-        destination, LLVMConstInt(LLVMInt8TypeInContext(g->context), 0, 0),
-        LLVMSizeOf(llvm), LLVMConstInt(LLVMInt1TypeInContext(g->context), 0, 0)};
-    LLVMBuildCall2(g->builder, g->memset_type, g->memset_fn, arguments, 4, "");
-    if (!value) return;
-    if (value->kind == DYN_EXPR_ARRAY) {
-      DynType element_type = ir_array(g, type)->element;
-      for (uint32_t i = 0; i < value->item_count; ++i) {
-        LLVMValueRef indices[] = {
-            LLVMConstInt(LLVMInt64TypeInContext(g->context), 0, 0),
-            LLVMConstInt(LLVMInt64TypeInContext(g->context), i, 0)};
-        LLVMValueRef element = LLVMBuildGEP2(g->builder, llvm, destination,
-                                            indices, 2, "array.initializer.element");
-        gen_initialize(g, element_type,
-                       g->ir->items[value->item_start + i].expression, element);
-      }
-    } else {
-      DynIrStruct *record = &g->ir->structs[value->integer];
-      for (uint32_t i = 0; i < record->field_count; ++i) {
-        DynIrField *field = &g->ir->fields[record->field_start + i];
-        if (field->default_expression == DYN_NO_EXPR) continue;
-        LLVMValueRef address = LLVMBuildStructGEP2(g->builder, llvm, destination,
-                                                    i, "default.field.address");
-        gen_initialize(g, field->type, field->default_expression, address);
-      }
-      for (uint32_t i = 0; i < value->item_count; ++i) {
-        DynIrItem *item = &g->ir->items[value->item_start + i];
-        DynIrField *field = &g->ir->fields[record->field_start + item->field_index];
-        LLVMValueRef address = LLVMBuildStructGEP2(g->builder, llvm, destination,
-                                                    item->field_index, "literal.field.address");
-        gen_initialize(g, field->type, item->expression, address);
-      }
-    }
-    return;
-  }
-  LLVMBuildStore(g->builder, value ? gen_expr(g, expression) : LLVMConstNull(llvm),
-                 destination);
-}
-static bool gen_stmt(Gen *g, DynIrStmt *st) {
-  ++g->statement_epoch;
-  debug_location(g, st->span);
-  if (st->kind == DYN_STMT_DEFER) {
-    capture_defer(g, st);
-    g->defer_stack[g->defer_count++].defer_statement =
-        (uint32_t)(st - g->ir->statements);
-    return false;
-  }
-  if (st->kind == DYN_STMT_PANIC) {
-    LLVMValueRef message = gen_expr(g, st->expression);
-    LLVMValueRef arguments[] = {
-        LLVMBuildExtractValue(g->builder, message, 0, "panic.data"),
-        LLVMBuildExtractValue(g->builder, message, 1, "panic.len")};
-    if (LLVMTypeOf(arguments[1]) != llvm_type(g, DYN_TYPE_USIZE))
-      arguments[1] = LLVMBuildTrunc(g->builder, arguments[1],
-                                  llvm_type(g, DYN_TYPE_USIZE), "panic.length");
-    /* Native panic owns the message before the call's unwind path runs
-       local defers. Wasm traps do not report messages or unwind callers. */
-    if (g->wasm && emit_defers(g, 0)) return true;
-    (void)emit_call(g, g->panic_type, g->panic_fn, arguments, 2, "", true, NULL);
-    LLVMBuildUnreachable(g->builder);
-    return true;
-  }
-  if (st->kind == DYN_STMT_RETURN) {
-    LLVMValueRef result = NULL;
-    if (!g->is_main && g->return_type != DYN_TYPE_VOID)
-      result = gen_expr(g, st->expression);
-    if (emit_defers(g, 0)) return true;
-    emit_trace_pop(g);
-    if (g->is_main)
-      LLVMBuildRet(g->builder,
-                   LLVMConstInt(LLVMInt32TypeInContext(g->context), 0, 0));
-    else if (g->return_type == DYN_TYPE_VOID)
-      LLVMBuildRetVoid(g->builder);
-    else
-      abi_return(g, result);
-    return true;
-  }
-  if (st->kind == DYN_STMT_BREAK) {
-    if (emit_defers(g, g->defer_stack[st->target_loop_id].break_defer)) return true;
-    LLVMBuildBr(g->builder, g->defer_stack[st->target_loop_id].break_target);
-    return true;
-  }
-  if (st->kind == DYN_STMT_CONTINUE) {
-    if (emit_defers(g, g->defer_stack[st->target_loop_id].continue_defer)) return true;
-    LLVMBuildBr(g->builder, g->defer_stack[st->target_loop_id].continue_target);
-    return true;
-  }
-  if (st->kind == DYN_STMT_IF) {
-    LLVMBasicBlockRef yes = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "if.then"),
-                      no = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "if.else"),
-                      done = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "if.done");
-    LLVMBuildCondBr(g->builder, gen_expr(g, st->expression), yes,
-                    st->else_count ? no : done);
-    LLVMPositionBuilderAtEnd(g->builder, yes);
-    bool yes_term = gen_block(g, st->body_start, st->body_count);
-    if (!yes_term)
-      LLVMBuildBr(g->builder, done);
-    bool no_term = false;
-    if (st->else_count) {
-      LLVMPositionBuilderAtEnd(g->builder, no);
-      no_term = gen_block(g, st->else_start, st->else_count);
-      if (!no_term)
-        LLVMBuildBr(g->builder, done);
-    } else {
-      LLVMPositionBuilderAtEnd(g->builder, no);
-      LLVMBuildUnreachable(g->builder);
-    }
-    LLVMPositionBuilderAtEnd(g->builder, done);
-    if (st->else_count && yes_term && no_term) {
-      LLVMBuildUnreachable(g->builder);
-      return true;
-    }
-    return false;
-  }
-  if (st->kind == DYN_STMT_CASE) {
-    DynType subject_type = g->ir->expressions[st->expression].type;
-    bool enum_case = dyn_type_is_enum(subject_type),
-         any_case = subject_type == DYN_TYPE_ANY, reference_subject = false;
-    DynIrEnum *en =
-        enum_case ? &g->ir->enums[subject_type - DYN_TYPE_ENUM_BASE] : NULL;
-    for (uint32_t i = 0; i < st->case_arm_count; ++i)
-      if (g->ir->case_arms[st->case_arm_start + i].pointer_binding)
-        reference_subject = true;
-    LLVMValueRef subject_storage = NULL, subject = NULL;
-    if (reference_subject) {
-      subject_storage = lvalue_pointer(g, st->expression);
-      subject = LLVMBuildLoad2(g->builder, llvm_type(g, subject_type),
-                               subject_storage, "case.subject.value");
-    } else
-      subject = gen_expr(g, st->expression);
-    LLVMValueRef test_value = subject;
-    if (any_case)
-      test_value = LLVMBuildExtractValue(g->builder, subject, 0, "any.type");
-    if (enum_case && en->has_payload) {
-      if (!subject_storage) {
-        subject_storage = gen_stack_slot(
-            g, llvm_type(g, subject_type), "case.subject");
-        LLVMBuildStore(g->builder, subject, subject_storage);
-      }
-      test_value = LLVMBuildExtractValue(g->builder, subject, 0, "case.tag");
-    }
-    LLVMTypeRef test_type = enum_case  ? llvm_type(g, en->tag_type)
-                            : any_case ? LLVMInt64TypeInContext(g->context)
-                                       : llvm_type(g, subject_type);
-    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "case.done"),
-                      next = NULL;
-    bool all_terminate = true;
-    for (uint32_t i = 0; i < st->case_arm_count; ++i) {
-      DynIrCaseArm *arm = &g->ir->case_arms[st->case_arm_start + i];
-      LLVMBasicBlockRef body =
-          LLVMAppendBasicBlockInContext(g->context, g->function, "case.arm");
-      next =
-          LLVMAppendBasicBlockInContext(g->context, g->function, "case.next");
-      if (arm->wildcard)
-        LLVMBuildBr(g->builder, body);
-      else {
-        LLVMValueRef condition =
-            LLVMConstInt(LLVMInt1TypeInContext(g->context), 0, 0);
-        for (uint32_t j = 0; j < arm->pattern_count; ++j) {
-          DynIrPattern *p = &g->ir->patterns[arm->pattern_start + j];
-          LLVMValueRef match;
-          if (p->is_type) {
-            match =
-                LLVMBuildICmp(g->builder, 32, test_value,
-                              LLVMConstInt(test_type, p->type, 0), "case.type");
-          } else if (p->is_enum) {
-            DynIrVariant *v = &g->ir->variants[p->variant];
-            match = LLVMBuildICmp(g->builder, 32, test_value,
-                                  LLVMConstInt(test_type, v->tag,
-                                               signed_type(en->tag_type)),
-                                  "case.variant");
-          } else {
-            LLVMValueRef lo = LLVMConstInt(test_type, (uint64_t)p->first, 1),
-                         hi = LLVMConstInt(test_type, (uint64_t)p->last, 1);
-            unsigned ge = signed_type(subject_type) ? 39 : 35,
-                     le = signed_type(subject_type) ? 41 : 37;
-            LLVMValueRef lower = LLVMBuildICmp(g->builder, ge, test_value, lo,
-                                               "case.lower"),
-                         upper = LLVMBuildICmp(g->builder, le, test_value, hi,
-                                               "case.upper");
-            match = LLVMBuildAnd(g->builder, lower, upper, "case.range");
-          }
-          condition = LLVMBuildOr(g->builder, condition, match, "case.match");
-        }
-        LLVMBuildCondBr(g->builder, condition, body, next);
-      }
-      LLVMPositionBuilderAtEnd(g->builder, body);
-      if (arm->local_id != UINT32_MAX) {
-        DynIrPattern *p = &g->ir->patterns[arm->pattern_start];
-        if (p->is_type) {
-          LLVMValueRef data =
-              LLVMBuildExtractValue(g->builder, subject, 1, "any.data");
-          LLVMBuildStore(g->builder,
-                         LLVMBuildLoad2(g->builder, llvm_type(g, p->type), data,
-                                        "case.binding"),
-                         g->locals[arm->local_id]);
-        } else {
-          DynIrVariant *v = &g->ir->variants[p->variant];
-          LLVMValueRef payload =
-              LLVMBuildStructGEP2(g->builder, llvm_type(g, subject_type),
-                                  subject_storage, 1, "case.payload");
-          if (arm->pointer_binding)
-            g->locals[arm->local_id] = payload;
-          else
-            LLVMBuildStore(g->builder,
-                           LLVMBuildLoad2(g->builder,
-                                          llvm_type(g, v->payload_type),
-                                          payload, "case.binding"),
-                           g->locals[arm->local_id]);
-        }
-      }
-      bool terminated = gen_block(g, arm->body_start, arm->body_count);
-      all_terminate = all_terminate && terminated;
-      if (!terminated) {
-        LLVMBuildBr(g->builder, done);
-      }
-      LLVMPositionBuilderAtEnd(g->builder, next);
-    }
-    LLVMBuildUnreachable(g->builder);
-    LLVMPositionBuilderAtEnd(g->builder, done);
-    if (all_terminate) {
-      LLVMBuildUnreachable(g->builder);
-      return true;
-    }
-    return false;
-  }
-  if (st->kind == DYN_STMT_FOR && st->for_range) {
-    DynType type = g->ir->expressions[st->target].type;
-    LLVMTypeRef t = llvm_type(g, type);
-    LLVMValueRef counter = gen_stack_slot(g, t, "for.range.index");
-    LLVMValueRef first = gen_expr(g, st->target),
-                 last = gen_expr(g, st->expression);
-    /* #reverse walks the same values from the far end. Exclusive reverse
-       ranges keep the counter one above the value, so no bound wraps. */
-    bool reverse = st->for_reverse, sign = signed_type(type);
-    LLVMValueRef stop = reverse ? first : last;
-    LLVMBuildStore(g->builder, reverse ? last : first, counter);
-    /* LLVM predicates: UGT 34, UGE 35, ULT 36, ULE 37, SGT 38, SGE 39,
-       SLT 40, SLE 41. */
-    int more = reverse ? (st->for_inclusive ? (sign ? 39 : 35) : (sign ? 38 : 34))
-                       : (st->for_inclusive ? (sign ? 41 : 37) : (sign ? 40 : 36));
-    LLVMBasicBlockRef condition = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.condition"),
-                      body = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.body"),
-                      increment = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.increment"),
-                      step = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.step"),
-                      done = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.done");
-    LLVMBuildBr(g->builder, condition);
-    LLVMPositionBuilderAtEnd(g->builder, condition);
-    LLVMValueRef index =
-        LLVMBuildLoad2(g->builder, t, counter, "for.index.value");
-    LLVMBuildCondBr(g->builder,
-                    LLVMBuildICmp(g->builder, more, index, stop, "for.more"),
-                    body, done);
-    LLVMPositionBuilderAtEnd(g->builder, body);
-    /* The binding is a copy; assigning it does not change iteration. */
-    LLVMBuildStore(g->builder,
-                   reverse && !st->for_inclusive
-                       ? LLVMBuildSub(g->builder, index, LLVMConstInt(t, 1, 0),
-                                      "for.reverse.value")
-                       : index,
-                   g->locals[st->local_id]);
-    LLVMBasicBlockRef old_break = g->break_target,
-                      old_continue = g->continue_target;
-    size_t old_break_defer = g->break_defer_count,
-           old_continue_defer = g->continue_defer_count;
-    g->break_target = done;
-    g->continue_target = increment;
-    g->break_defer_count = g->continue_defer_count = g->defer_count;
-    g->defer_stack[st->loop_id].break_target = done;
-    g->defer_stack[st->loop_id].continue_target = increment;
-    g->defer_stack[st->loop_id].break_defer = g->defer_count;
-    g->defer_stack[st->loop_id].continue_defer = g->defer_count;
-    bool terminated = gen_block(g, st->body_start, st->body_count);
-    g->break_target = old_break;
-    g->continue_target = old_continue;
-    g->break_defer_count = old_break_defer;
-    g->continue_defer_count = old_continue_defer;
-    if (!terminated)
-      LLVMBuildBr(g->builder, increment);
-    /* An inclusive range may end at the type's maximum, so stop before the
-       increment instead of relying on a wrapped comparison. */
-    LLVMPositionBuilderAtEnd(g->builder, increment);
-    index = LLVMBuildLoad2(g->builder, t, counter, "for.index.next");
-    if (st->for_inclusive)
-      LLVMBuildCondBr(g->builder,
-                      LLVMBuildICmp(g->builder, 32, index, stop,
-                                    "for.last"),
-                      done, step);
-    else
-      LLVMBuildBr(g->builder, step);
-    LLVMPositionBuilderAtEnd(g->builder, step);
-    LLVMBuildStore(g->builder,
-                   reverse ? LLVMBuildSub(g->builder, index,
-                                          LLVMConstInt(t, 1, 0),
-                                          "for.index.decrement")
-                           : LLVMBuildAdd(g->builder, index,
-                                          LLVMConstInt(t, 1, 0),
-                                          "for.index.increment"),
-                   counter);
-    LLVMBuildBr(g->builder, condition);
-    LLVMPositionBuilderAtEnd(g->builder, done);
-    return false;
-  }
-  if (st->kind == DYN_STMT_FOR && st->target != DYN_NO_EXPR) {
-    DynType collection = g->ir->expressions[st->target].type;
-    bool array = dyn_type_is_array(collection);
-    LLVMTypeRef usize = llvm_type(g, DYN_TYPE_USIZE),
-                ct = llvm_type(g, collection);
-    LLVMValueRef source = NULL, storage = NULL,
-                 counter = gen_stack_slot(g, usize, "for.index");
-    if (array) {
-      if (st->for_pointer)
-        storage = lvalue_pointer(g, st->target);
-      else {
-        source = gen_expr(g, st->target);
-        storage = gen_stack_slot(g, ct, "for.collection");
-        LLVMBuildStore(g->builder, source, storage);
-      }
-    } else
-      source = gen_expr(g, st->target);
-    LLVMValueRef length =
-        array ? LLVMConstInt(usize, ir_array(g, collection)->length, 0)
-              : LLVMBuildExtractValue(g->builder, source, 1, "for.len");
-    /* #reverse counts remaining elements down; the element is counter - 1. */
-    LLVMValueRef zero = LLVMConstInt(usize, 0, 0), one = LLVMConstInt(usize, 1, 0);
-    LLVMBuildStore(g->builder, st->for_reverse ? length : zero, counter);
-    LLVMBasicBlockRef condition = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.condition"),
-                      body = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.body"),
-                      increment = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.increment"),
-                      done = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.done");
-    LLVMBuildBr(g->builder, condition);
-    LLVMPositionBuilderAtEnd(g->builder, condition);
-    LLVMValueRef index =
-        LLVMBuildLoad2(g->builder, usize, counter, "for.index.value");
-    LLVMBuildCondBr(g->builder,
-                    st->for_reverse
-                        ? LLVMBuildICmp(g->builder, 34, index, zero, "for.more")
-                        : LLVMBuildICmp(g->builder, 36, index, length,
-                                        "for.more"),
-                    body, done);
-    LLVMPositionBuilderAtEnd(g->builder, body);
-    if (st->for_reverse)
-      index = LLVMBuildSub(g->builder, index, one, "for.reverse.index");
-    DynType element = array ? ir_array(g, collection)->element
-                            : ir_slice(g, collection)->element;
-    LLVMValueRef pointer;
-    if (array) {
-      LLVMValueRef indices[] = {zero, index};
-      pointer =
-          LLVMBuildGEP2(g->builder, ct, storage, indices, 2, "for.element");
-    } else {
-      LLVMValueRef data =
-                       LLVMBuildExtractValue(g->builder, source, 0, "for.data"),
-                   indices[] = {index};
-      pointer = LLVMBuildGEP2(g->builder, llvm_type(g, element), data, indices,
-                              1, "for.element");
-    }
-    LLVMBuildStore(g->builder,
-                   st->for_pointer
-                       ? pointer
-                       : LLVMBuildLoad2(g->builder, llvm_type(g, element),
-                                        pointer, "for.value"),
-                   g->locals[st->local_id]);
-    LLVMBasicBlockRef old_break = g->break_target,
-                      old_continue = g->continue_target;
-    size_t old_break_defer = g->break_defer_count,
-           old_continue_defer = g->continue_defer_count;
-    g->break_target = done;
-    g->continue_target = increment;
-    g->break_defer_count = g->continue_defer_count = g->defer_count;
-    g->defer_stack[st->loop_id].break_target = done;
-    g->defer_stack[st->loop_id].continue_target = increment;
-    g->defer_stack[st->loop_id].break_defer = g->defer_count;
-    g->defer_stack[st->loop_id].continue_defer = g->defer_count;
-    bool terminated = gen_block(g, st->body_start, st->body_count);
-    g->break_target = old_break;
-    g->continue_target = old_continue;
-    g->break_defer_count = old_break_defer;
-    g->continue_defer_count = old_continue_defer;
-    if (!terminated)
-      LLVMBuildBr(g->builder, increment);
-    LLVMPositionBuilderAtEnd(g->builder, increment);
-    index = LLVMBuildLoad2(g->builder, usize, counter, "for.index.next");
-    LLVMBuildStore(g->builder,
-                   st->for_reverse
-                       ? LLVMBuildSub(g->builder, index, one, "for.index.decrement")
-                       : LLVMBuildAdd(g->builder, index, one, "for.index.increment"),
-                   counter);
-    LLVMBuildBr(g->builder, condition);
-    LLVMPositionBuilderAtEnd(g->builder, done);
-    return false;
-  }
-  if (st->kind == DYN_STMT_FOR) {
-    LLVMBasicBlockRef condition = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.condition"),
-                      body = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.body"),
-                      done = LLVMAppendBasicBlockInContext(
-                          g->context, g->function, "for.done");
-    LLVMBuildBr(g->builder, condition);
-    LLVMPositionBuilderAtEnd(g->builder, condition);
-    LLVMValueRef test =
-        st->expression == DYN_NO_EXPR
-            ? LLVMConstInt(LLVMInt1TypeInContext(g->context), 1, 0)
-            : gen_expr(g, st->expression);
-    LLVMBuildCondBr(g->builder, test, body, done);
-    LLVMPositionBuilderAtEnd(g->builder, body);
-    LLVMBasicBlockRef old_break = g->break_target,
-                      old_continue = g->continue_target;
-    size_t old_break_defer = g->break_defer_count,
-           old_continue_defer = g->continue_defer_count;
-    g->break_target = done;
-    g->continue_target = condition;
-    g->break_defer_count = g->continue_defer_count = g->defer_count;
-    g->defer_stack[st->loop_id].break_target = done;
-    g->defer_stack[st->loop_id].continue_target = condition;
-    g->defer_stack[st->loop_id].break_defer = g->defer_count;
-    g->defer_stack[st->loop_id].continue_defer = g->defer_count;
-    bool terminated = gen_block(g, st->body_start, st->body_count);
-    g->break_target = old_break;
-    g->continue_target = old_continue;
-    g->break_defer_count = old_break_defer;
-    g->continue_defer_count = old_continue_defer;
-    if (!terminated)
-      LLVMBuildBr(g->builder, condition);
-    LLVMPositionBuilderAtEnd(g->builder, done);
-    return false;
-  }
-  if (st->kind == DYN_STMT_EXPR) {
-    (void)gen_expr(g, st->expression);
-    return false;
-  }
-  if (st->kind == DYN_STMT_LOCAL) {
-    DynType local_type = g->ir->locals[st->local_id].type;
-    gen_initialize(g, local_type, st->expression, g->locals[st->local_id]);
-    return false;
-  }
-  if (st->target != DYN_NO_EXPR && st->assignment_op != DYN_OP_NONE) {
-    DynType type = g->ir->expressions[st->target].type;
-    LLVMValueRef destination = lvalue_pointer(g, st->target);
-    LLVMValueRef left = LLVMBuildLoad2(g->builder, llvm_type(g, type),
-                                      destination, "assignment.value");
-    LLVMValueRef right = gen_expr(g, st->expression);
-    DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type,
-                           .op = st->assignment_op, .left = st->target,
-                           .right = st->expression};
-    LLVMBuildStore(g->builder, gen_binary(g, &operation, left, right),
-                   destination);
-    return false;
-  }
-  if (st->target != DYN_NO_EXPR) {
-    DynType type = g->ir->expressions[st->expression].type;
-    if (aggregate_initializer(g, st->expression)) {
-      /* Snapshot the RHS before evaluating a potentially mutating target.
-         memmove also preserves self-assignment and overlapping storage. */
-      LLVMTypeRef llvm = llvm_type(g, type);
-      LLVMValueRef snapshot = gen_stack_slot(g, llvm, "assignment.snapshot");
-      gen_initialize(g, type, st->expression, snapshot);
-      LLVMBuildMemMove(g->builder, lvalue_pointer(g, st->target), 1,
-                       snapshot, 1, LLVMSizeOf(llvm));
-      return false;
-    }
-    LLVMBuildStore(g->builder, gen_expr(g, st->expression),
-                   lvalue_pointer(g, st->target));
-    return false;
-  }
-  if (st->local_id == UINT32_MAX) {
-    (void)gen_expr(g, st->expression);
-    return false;
-  }
-  DynType assigned_type = g->ir->locals[st->local_id].type;
-  if (aggregate_initializer(g, st->expression)) {
-    LLVMTypeRef llvm = llvm_type(g, assigned_type);
-    LLVMValueRef snapshot = gen_stack_slot(g, llvm, "assignment.snapshot");
-    gen_initialize(g, assigned_type, st->expression, snapshot);
-    LLVMBuildMemMove(g->builder, g->locals[st->local_id], 1,
-                     snapshot, 1, LLVMSizeOf(llvm));
-  } else
-    LLVMBuildStore(g->builder, gen_expr(g, st->expression),
-                   g->locals[st->local_id]);
-  return false;
-}
-/* A cleanup may terminate with its own panic, replacing the pending exit. */
-static bool emit_defers(Gen *g, size_t base) {
-  bool terminated = false;
-  size_t saved = g->defer_count;
-  bool old_unwinding = g->unwinding;
-  g->unwinding = true;
-  for (size_t i = saved; i > base; --i) {
-    DynIrStmt *defer =
-        &g->ir->statements[g->defer_stack[i - 1].defer_statement];
-    if (gen_block(g, defer->body_start, defer->body_count)) {
-      terminated = true;
-      break;
-    }
-  }
-  g->unwinding = old_unwinding;
-  g->defer_count = saved;
-  return terminated;
-}
-static bool gen_block(Gen *g, uint32_t start, uint32_t count) {
-  size_t base = g->defer_count, facts = g->local_fact_count;
-  bool terminated = false;
-  for (uint32_t i = 0; i < count; ++i)
-    if (gen_stmt(g, &g->ir->statements[g->ir->children[start + i]])) {
-      terminated = true;
-      break;
-    }
-  if (!terminated)
-    terminated = emit_defers(g, base);
-  g->defer_count = base;
-  g->local_fact_count = facts;
-  return terminated;
-}
-static int write_text(const char *p, const char *t) {
-  FILE *f = fopen(p, "wb");
-  if (!f)
-    return 1;
-  fputs(t, f);
-  return fclose(f) != 0;
-}
 static void global_module_key(const char *name, char *out, size_t capacity) {
   if (!strncmp(name, "dyn_m", 5) && strlen(name) > 21 && name[21] == '_')
     snprintf(out, capacity, "%.21s", name);
@@ -2213,83 +39,6 @@ static bool module_owns(const char *owner_key, const char *name) {
    when a C library is linked). Those get a ".dyn" suffix, the same in every
    object file, so the extern and the Dyn function never merge or get renamed
    differently per object. */
-static const char *function_symbol(const DynIrProgram *ir, const DynIrFunction *fn,
-                                   char *buffer, size_t capacity) {
-  if (fn->foreign)
-    return fn->link_name;
-  if (fn->is_main)
-    return "main";
-  bool taken = !strcmp(fn->name, "exit") || !strcmp(fn->name, "_exit");
-  for (size_t i = 0; !taken && i < ir->function_count; ++i)
-    taken = ir->functions[i].foreign && !strcmp(ir->functions[i].link_name, fn->name);
-  if (!taken)
-    return fn->name;
-  snprintf(buffer, capacity, "%s.dyn", fn->name);
-  return buffer;
-}
-static pthread_once_t llvm_targets_once = PTHREAD_ONCE_INIT;
-static void initialize_llvm_targets(void) {
-  LLVMInitializeWebAssemblyTargetInfo();
-  LLVMInitializeWebAssemblyTarget();
-  LLVMInitializeWebAssemblyTargetMC();
-  LLVMInitializeWebAssemblyAsmPrinter();
-  LLVMInitializeX86TargetInfo();
-  LLVMInitializeX86Target();
-  LLVMInitializeX86TargetMC();
-  LLVMInitializeX86AsmPrinter();
-  LLVMInitializeAArch64TargetInfo();
-  LLVMInitializeAArch64Target();
-  LLVMInitializeAArch64TargetMC();
-  LLVMInitializeAArch64AsmPrinter();
-}
-static LLVMValueRef function_value(Gen *g, uint32_t i) {
-  if (g->functions[i])
-    return g->functions[i];
-  DynIrFunction *fn = &g->ir->functions[i];
-  bool packed =
-      fn->variadic && !fn->foreign && dyn_type_is_slice(fn->variadic_type);
-  uint32_t llvm_param_count = fn->param_count + (packed ? 2 : 0);
-  DynType *params = calloc(llvm_param_count ? llvm_param_count : 1, sizeof(*params));
-  if (!params) { g->allocation_failed = true; return NULL; }
-  for (uint32_t j = 0; j < fn->param_count; ++j)
-    params[j] = g->ir->params[fn->param_start + j].type;
-  if (packed) { params[fn->param_count] = DYN_TYPE_RAWPTR; params[fn->param_count + 1] = DYN_TYPE_USIZE; }
-  g->abis[i] = abi_plan(g, fn->is_main ? DYN_TYPE_I32 : fn->return_type, params, llvm_param_count, fn->foreign && fn->variadic);
-  free(params);
-  if (!g->abis[i]) { g->allocation_failed = true; return NULL; }
-  g->function_types[i] = g->abis[i]->type;
-  char symbol[512];
-  g->functions[i] = LLVMAddFunction(g->module,
-                                   function_symbol(g->ir, fn, symbol, sizeof(symbol)),
-                                   g->function_types[i]);
-  abi_attributes(g, g->functions[i], g->abis[i], false);
-  if (g->optimization && g->optimization->cpu) {
-    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
-      LLVMCreateStringAttribute(g->context, "target-cpu", 10,
-        g->optimization->cpu, (unsigned)strlen(g->optimization->cpu)));
-    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
-      LLVMCreateStringAttribute(g->context, "target-features", 15,
-        g->optimization->features, (unsigned)strlen(g->optimization->features)));
-  }
-  if (g->wasm && fn->is_public && !fn->foreign && module_owns("root", fn->name))
-    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
-      LLVMCreateStringAttribute(g->context, "wasm-export-name", 16, fn->name, (unsigned)strlen(fn->name)));
-  if (g->wasm && fn->foreign)
-    LLVMAddAttributeAtIndex(g->functions[i], ~0u,
-      LLVMCreateStringAttribute(g->context, "wasm-import-module", 18, "env", 3));
-  if (g->optimization && g->optimization->sample_profile && !fn->foreign)
-    LLVMAddAttributeAtIndex(
-        g->functions[i], ~0u,
-        LLVMCreateStringAttribute(g->context, "use-sample-profile", 18, "", 0));
-  if (!g->owner_key && !fn->is_main && !fn->foreign &&
-      ((g->release && !g->shared) || (g->shared && !fn->is_public)))
-    LLVMSetLinkage(g->functions[i], LLVMInternalLinkage);
-  /* An executable never exports its functions: a debug build's free or
-     write must not replace the C library's for its shared libraries. */
-  else if (!g->shared && !g->wasm && !fn->is_main && !fn->foreign)
-    LLVMSetVisibility(g->functions[i], LLVMHiddenVisibility);
-  return g->functions[i];
-}
 static uint64_t interface_bytes(uint64_t hash, const void *data, size_t length) {
   const unsigned char *bytes = data;
   for (size_t i = 0; i < length; ++i)
@@ -2408,7 +157,7 @@ static bool local_facts_build(DynIrProgram *ir) {
   }
   return true;
 }
-static int codegen_prepare(const DynSource *source, DynSource *owned_source,
+static int codegen_prepare(const DynSource *source,
                            bool shared, const char *owner_key, DynIrProgram *ir) {
   memset(ir, 0, sizeof(*ir));
   DynAstProgram ast = {0};
@@ -2425,12 +174,6 @@ static int codegen_prepare(const DynSource *source, DynSource *owned_source,
     dyn_ast_program_free(&ast);
     return 1;
   }
-#ifdef DYN_EXPERIMENT_COMPACT_AST
-  if (owned_source && ast.compact_complete)
-    dyn_source_release_batch_trees(owned_source);
-#else
-  (void)owned_source;
-#endif
   struct timespec phase = dyn_timing_start(&source->context);
   if (!dyn_ir_lower(&ast, source, ir)) {
     fprintf(stderr, "error: failed to lower typed Dyn IR\n");
@@ -2461,672 +204,127 @@ static int codegen_prepare(const DynSource *source, DynSource *owned_source,
 }
 int dyn_codegen_prepare(const DynSource *source, bool shared,
                         const char *owner_key, DynIrProgram *ir) {
-  return codegen_prepare(source, NULL, shared, owner_key, ir);
+  return codegen_prepare(source, shared, owner_key, ir);
 }
-#ifdef DYN_EXPERIMENT_COMPACT_AST
 int dyn_codegen_prepare_owned(DynSource *source, bool shared,
                               const char *owner_key, DynIrProgram *ir) {
-  return codegen_prepare(source, source, shared, owner_key, ir);
+  return codegen_prepare(source, shared, owner_key, ir);
 }
-#endif
 int dyn_codegen_module(const DynSource *source, const char *object_path,
-                       const char *ir_path, const char *asm_path, bool release,
+                       const char *asm_path, bool release,
                        bool debug_info, bool shared, const char *owner_key) {
   DynIrProgram ir;
   int result = dyn_codegen_prepare(source, shared, owner_key, &ir);
   if (result)
     return result;
-  result = dyn_codegen_emit(source, &ir, object_path, ir_path, asm_path,
+  result = dyn_codegen_emit(source, &ir, object_path, asm_path,
                             release, debug_info, shared, owner_key, 0, 1);
   dyn_ir_free(&ir);
   return result;
 }
 /* The prepared program is shared by concurrent emitters and never modified. */
 int dyn_codegen_emit(const DynSource *source, const DynIrProgram *prepared,
-                     const char *object_path, const char *ir_path,
+                     const char *object_path,
                      const char *asm_path, bool release, bool debug_info,
                      bool shared, const char *owner_key, unsigned chunk,
                      unsigned chunks) {
-  DynIrProgram ir = *prepared;
-  struct timespec phase = dyn_timing_start(&source->context);
-  pthread_once(&llvm_targets_once, initialize_llvm_targets);
-  Gen g = {0};
-  int failed = 0;
-  char *error = NULL;
-  bool pass_message = false;
-  LLVMTargetMachineRef tm = NULL;
-  LLVMValueRef *init_functions = NULL;
-  size_t object_length = strlen(object_path);
-  bool thin_bitcode = release && object_length >= 3 &&
-                      !strcmp(object_path + object_length - 3, ".bc");
-  g.source = source;
-  g.wasm = !strcmp(dyn_context_target(&source->context)->arch, "wasm32");
-  g.pointer_bytes = dyn_target_pointer_bytes(dyn_context_target(&source->context));
-  g.tracing = !release && !g.wasm;
-  g.context = LLVMContextCreate();
-  const DynOptimization *optimization = source->context.optimization;
-  if (optimization && optimization->remarks)
-    dyn_enable_optimization_remarks(g.context);
-  g.module = LLVMModuleCreateWithNameInContext("dyn_module", g.context);
-  if (debug_info || (optimization && optimization->sample_profile)) {
-    char directory[4096];
-    if (!getcwd(directory, sizeof(directory)))
-      strcpy(directory, ".");
-    g.di_builder = LLVMCreateDIBuilder(g.module);
-    g.di_file = LLVMDIBuilderCreateFile(g.di_builder, source->path,
-                                        strlen(source->path), directory,
-                                        strlen(directory));
-    g.di_unit = LLVMDIBuilderCreateCompileUnit(g.di_builder, 0x8000, g.di_file,
-                                               "dyn", 3, release, "", 0, 0, "",
-                                               0, 1, 0, 0, 0, "", 0, "", 0);
-    g.di_function_type =
-        LLVMDIBuilderCreateSubroutineType(g.di_builder, g.di_file, NULL, 0, 0);
-    LLVMTypeRef i32_type = LLVMInt32TypeInContext(g.context);
-    LLVMAddModuleFlag(g.module, 1, "Debug Info Version", 18,
-                      LLVMValueAsMetadata(LLVMConstInt(
-                          i32_type, LLVMDebugMetadataVersion(), 0)));
-    LLVMAddModuleFlag(g.module, 1, "Dwarf Version", 13,
-                      LLVMValueAsMetadata(LLVMConstInt(i32_type, 5, 0)));
+  (void)owner_key;
+  if (chunk || chunks != 1) {
+    fprintf(stderr, "error: independent emission requires a complete prepared module\n");
+    return 2;
   }
-  g.ir = &ir;
-  if (g.di_builder) {
-    g.di_struct_types = calloc(ir.struct_count, sizeof(*g.di_struct_types));
-    g.di_enum_types = calloc(ir.enum_count, sizeof(*g.di_enum_types));
-    g.di_array_types = calloc(ir.array_count, sizeof(*g.di_array_types));
-    if ((ir.struct_count && !g.di_struct_types) ||
-        (ir.enum_count && !g.di_enum_types) ||
-        (ir.array_count && !g.di_array_types)) {
-      goto allocation_failure;
-    }
-  }
-  g.struct_types = calloc(ir.struct_count, sizeof(*g.struct_types));
-  if (ir.struct_count && !g.struct_types)
-    goto allocation_failure;
-  for (uint32_t i = 0; i < ir.struct_count; ++i) {
-    char name[64];
-    snprintf(name, sizeof(name), "dyn.struct.%u", i);
-    g.struct_types[i] = LLVMStructCreateNamed(g.context, name);
-  }
-  g.enum_types = calloc(ir.enum_count, sizeof(*g.enum_types));
-  if (ir.enum_count && !g.enum_types)
-    goto allocation_failure;
-  for (uint32_t i = 0; i < ir.enum_count; ++i)
-    if (ir.enums[i].has_payload) {
-      char name[64];
-      snprintf(name, sizeof(name), "dyn.enum.%u", i);
-      g.enum_types[i] = LLVMStructCreateNamed(g.context, name);
-    }
-  for (uint32_t i = 0; i < ir.struct_count; ++i) {
-    DynIrStruct *st = &ir.structs[i];
-    uint32_t llvm_field_count = st->field_count ? st->field_count : 1;
-    LLVMTypeRef *fields = calloc(llvm_field_count, sizeof(*fields));
-    if (!fields)
-      goto allocation_failure;
-    if (!st->field_count)
-      fields[0] = LLVMInt8TypeInContext(g.context);
-    for (uint32_t j = 0; j < st->field_count; ++j)
-      fields[j] = llvm_type(&g, ir.fields[st->field_start + j].type);
-    LLVMStructSetBody(g.struct_types[i], fields, llvm_field_count, st->packed);
-    free(fields);
-  }
-  for (uint32_t i = 0; i < ir.enum_count; ++i)
-    if (ir.enums[i].has_payload) {
-      DynIrEnum *en = &ir.enums[i];
-      LLVMTypeRef unit = LLVMIntTypeInContext(
-                      g.context, (unsigned)(en->payload_alignment * 8)),
-                  fields[] = {llvm_type(&g, en->tag_type),
-                              LLVMArrayType2(unit, (en->payload_size +
-                                                    en->payload_alignment - 1) /
-                                                       en->payload_alignment)};
-      LLVMStructSetBody(g.enum_types[i], fields, 2, 0);
-    }
-  LLVMTypeRef i32 = LLVMInt32TypeInContext(g.context);
-  g.functions = calloc(ir.function_count, sizeof(*g.functions));
-  g.function_types = calloc(ir.function_count, sizeof(*g.function_types));
-  g.abis = calloc(ir.function_count ? ir.function_count : 1, sizeof(*g.abis));
-  g.pointer_abis = calloc(ir.fn_type_count ? ir.fn_type_count : 1, sizeof(*g.pointer_abis));
-  if (!g.abis || !g.pointer_abis) goto allocation_failure;
-  if (ir.function_count && (!g.functions || !g.function_types))
-    goto allocation_failure;
-  g.owner_key = owner_key;
-  g.release = release;
-  g.shared = shared;
-  g.optimization = optimization;
-  /* Declare defined functions in order; others only when a body uses them.
-     A module split into chunks assigns each source file to one chunk, so an
-     edit recompiles only that file's chunk. Module data and initializers
-     belong to chunk 0. */
-  g.defines = calloc(ir.function_count ? ir.function_count : 1, sizeof(*g.defines));
-  if (!g.defines)
-    goto allocation_failure;
-  bool owns_data = chunk == 0;
-  for (uint32_t i = 0; i < ir.function_count; ++i) {
-    if (ir.functions[i].generic ||
-        (owner_key &&
-         (ir.functions[i].foreign || !module_owns(owner_key, ir.functions[i].name))))
-      continue;
-    const char *path = source->path;
-    unsigned line, column;
-    if (chunks > 1)
-      dyn_location_get(&prepared->locations, source, ir.functions[i].source_offset,
-                       &path, &line, &column);
-    g.defines[i] = !owner_key || ir.functions[i].foreign ||
-                   dyn_chunk_of_path(path, chunks) == chunk;
-    if (g.defines[i] && !function_value(&g, i))
-      goto allocation_failure;
-  }
-  LLVMTypeRef panic_params[2] = {LLVMPointerTypeInContext(g.context, 0),
-                                 llvm_type(&g, DYN_TYPE_USIZE)};
-  g.panic_type =
-      LLVMFunctionType(LLVMVoidTypeInContext(g.context), panic_params, 2, 0);
-  g.panic_fn = LLVMAddFunction(g.module, "dyn_panic", g.panic_type);
-  LLVMAddAttributeAtIndex(
-      g.panic_fn, ~0u,
-      LLVMCreateEnumAttribute(
-          g.context, LLVMGetEnumAttributeKindForName("noreturn", 8), 0));
-  g.trace_push_type =
-      LLVMFunctionType(LLVMVoidTypeInContext(g.context), panic_params, 2, 0);
-  g.trace_push_fn =
-      LLVMAddFunction(g.module, "dyn_trace_push", g.trace_push_type);
-  g.trace_pop_type =
-      LLVMFunctionType(LLVMVoidTypeInContext(g.context), NULL, 0, 0);
-  g.trace_pop_fn = LLVMAddFunction(g.module, "dyn_trace_pop", g.trace_pop_type);
-  /* Match DynUnwind without growing x86-64 Linux frames for other ABIs. */
-  const DynTarget *unwind_target = dyn_context_target(&source->context);
-  unsigned unwind_words = !strcmp(unwind_target->kernel, "windows") ? 32
-      : !strcmp(unwind_target->arch, "aarch64") ? 22 : 16;
-  g.unwind_frame_type =
-      LLVMArrayType2(LLVMInt64TypeInContext(g.context), unwind_words);
-  LLVMTypeRef unwind_pointer[] = {LLVMPointerTypeInContext(g.context, 0)};
-  g.unwind_set_type = LLVMFunctionType(i32, unwind_pointer, 1, 0);
-  g.unwind_set_fn =
-      LLVMAddFunction(g.module, "dyn_unwind_set", g.unwind_set_type);
-  LLVMAddAttributeAtIndex(
-      g.unwind_set_fn, ~0u,
-      LLVMCreateEnumAttribute(
-          g.context, LLVMGetEnumAttributeKindForName("returns_twice", 13), 0));
-  g.unwind_void_type =
-      LLVMFunctionType(LLVMVoidTypeInContext(g.context), unwind_pointer, 1, 0);
-  g.unwind_link_fn =
-      LLVMAddFunction(g.module, "dyn_unwind_link", g.unwind_void_type);
-  g.unwind_unlink_fn =
-      LLVMAddFunction(g.module, "dyn_unwind_unlink", g.unwind_void_type);
-  g.unwind_continue_type =
-      LLVMFunctionType(LLVMVoidTypeInContext(g.context), NULL, 0, 0);
-  g.unwind_continue_fn =
-      LLVMAddFunction(g.module, "dyn_unwind_continue", g.unwind_continue_type);
-  LLVMAddAttributeAtIndex(
-      g.unwind_continue_fn, ~0u,
-      LLVMCreateEnumAttribute(
-          g.context, LLVMGetEnumAttributeKindForName("noreturn", 8), 0));
-  LLVMTypeRef syscall_params[7];
-  for (uint32_t i = 0; i < 7; ++i)
-    syscall_params[i] = LLVMInt64TypeInContext(g.context);
-  g.syscall_type =
-      LLVMFunctionType(LLVMInt64TypeInContext(g.context), syscall_params, 7, 0);
-  g.syscall_fn = LLVMAddFunction(g.module, "dyn_syscall6", g.syscall_type);
-  LLVMTypeRef memset_params[] = {
-      LLVMPointerTypeInContext(g.context, 0), LLVMInt8TypeInContext(g.context),
-      LLVMInt64TypeInContext(g.context), LLVMInt1TypeInContext(g.context)};
-  g.memset_type =
-      LLVMFunctionType(LLVMVoidTypeInContext(g.context), memset_params, 4, 0);
-  g.memset_fn = LLVMAddFunction(g.module, "llvm.memset.p0.i64", g.memset_type);
-  g.builder = LLVMCreateBuilderInContext(g.context);
-  g.stack_builder = LLVMCreateBuilderInContext(g.context);
-  g.locations = &prepared->locations;
-  g.locals = calloc(ir.local_count, sizeof(*g.locals));
-  g.unstable_locals = ir.unstable_locals;
-  if (g.di_builder)
-    g.local_statements = ir.local_statements;
-  g.captured_values = calloc(ir.expression_count, sizeof(*g.captured_values));
-  g.defer_stack = calloc(ir.statement_count, sizeof(*g.defer_stack));
-  g.globals = calloc(ir.global_count, sizeof(*g.globals));
-  g.static_globals = calloc(ir.global_count, sizeof(*g.static_globals));
-  if ((ir.local_count && !g.locals) ||
-      (ir.expression_count && !g.captured_values) ||
-      (ir.statement_count && !g.defer_stack) ||
-      (ir.global_count && (!g.globals || !g.static_globals)))
-    goto allocation_failure;
-  for (uint32_t i = 0; i < ir.global_count; ++i) {
-    g.globals[i] = LLVMAddGlobal(g.module, llvm_type(&g, ir.globals[i].type),
-                                 ir.globals[i].foreign ? ir.globals[i].link_name
-                                                       : ir.globals[i].name);
-    bool owned = owns_data &&
-        !ir.globals[i].foreign && module_owns(owner_key, ir.globals[i].name);
-    if (owned)
-      LLVMSetInitializer(g.globals[i],
-                         LLVMConstNull(llvm_type(&g, ir.globals[i].type)));
-    if (!owner_key && owned &&
-        ((release && !shared) || (shared && !ir.globals[i].is_public)))
-      LLVMSetLinkage(g.globals[i], LLVMInternalLinkage);
-    if (g.di_builder && owned) {
-      DynIrGlobal *global = &ir.globals[i];
-      unsigned line = span_line(&g, global->span);
-      LLVMMetadataRef type = debug_type(&g, global->type),
-                      expression =
-                          LLVMDIBuilderCreateExpression(g.di_builder, NULL, 0);
-      if (type) {
-        LLVMMetadataRef metadata = LLVMDIBuilderCreateGlobalVariableExpression(
-            g.di_builder, g.di_unit, global->name, strlen(global->name),
-            global->name, strlen(global->name),
-            debug_source_file(&g, global->span), line, type, !global->is_public,
-            expression, NULL, (uint32_t)(type_alignment(&g, global->type) * 8));
-        LLVMGlobalSetMetadata(g.globals[i],
-                              LLVMGetMDKindIDInContext(g.context, "dbg", 3),
-                              metadata);
-      }
-    }
-  }
-  for (uint32_t i = 0; i < ir.global_count; ++i)
-    if (ir.globals[i].is_const) {
-      DynIrExpr *initializer = &ir.expressions[ir.globals[i].initializer];
-      LLVMValueRef value = initializer->kind == DYN_EXPR_FUNCTION
-                               ? function_value(&g, (uint32_t)initializer->integer)
-                               : static_value(&g, ir.globals[i].initializer, 0);
-      if (value) {
-        if (owns_data && module_owns(owner_key, ir.globals[i].name)) {
-          LLVMSetInitializer(g.globals[i], value);
-          LLVMSetGlobalConstant(g.globals[i], 1);
-        }
-        g.static_globals[i] = true;
-      }
-    }
-  g.init_type = LLVMFunctionType(LLVMVoidTypeInContext(g.context), NULL, 0, 0);
-  init_functions = calloc(ir.global_count, sizeof(*init_functions));
-  if (ir.global_count && !init_functions)
-    goto allocation_failure;
-  size_t init_function_count = 0;
-  for (uint32_t at = 0; at < ir.global_init_count;) {
-    while (at < ir.global_init_count &&
-           g.static_globals[ir.global_init_order[at]])
-      ++at;
-    if (at >= ir.global_init_count)
-      break;
-    uint32_t first = ir.global_init_order[at];
-    char key[32], function_name[64];
-    global_module_key(ir.globals[first].name, key, sizeof(key));
-    snprintf(function_name, sizeof(function_name), "__dyn_init_%s", key);
-    bool owns_init = !owner_key || (owns_data && !strcmp(owner_key, key));
-    LLVMValueRef init = LLVMAddFunction(g.module, function_name, g.init_type);
-    if (release && !owner_key)
-      LLVMSetLinkage(init, LLVMInternalLinkage);
-    init_functions[init_function_count++] = init;
-    if (!owns_init) {
-      for (; at < ir.global_init_count; ++at) {
-        uint32_t id = ir.global_init_order[at];
-        if (g.static_globals[id])
-          continue;
-        char next[32];
-        global_module_key(ir.globals[id].name, next, sizeof(next));
-        if (strcmp(key, next))
-          break;
-      }
-      continue;
-    }
-    g.function = init;
-    g.return_type = DYN_TYPE_VOID;
-    g.is_main = false;
-    LLVMPositionBuilderAtEnd(
-        g.builder, LLVMAppendBasicBlockInContext(g.context, init, "entry"));
-    for (; at < ir.global_init_count; ++at) {
-      uint32_t id = ir.global_init_order[at];
-      if (g.static_globals[id])
-        continue;
-      char next[32];
-      global_module_key(ir.globals[id].name, next, sizeof(next));
-      if (strcmp(key, next))
-        break;
-      DynIrExpr *initializer = &ir.expressions[ir.globals[id].initializer];
-      if (initializer->kind == DYN_EXPR_ARRAY) {
-        LLVMTypeRef array_type = llvm_type(&g, initializer->type);
-        for (uint32_t item = 0; item < initializer->item_count; ++item) {
-          LLVMValueRef indices[] = {
-              LLVMConstInt(LLVMInt64TypeInContext(g.context), 0, 0),
-              LLVMConstInt(LLVMInt64TypeInContext(g.context), item, 0)};
-          LLVMBuildStore(
-              g.builder,
-              gen_expr(&g, ir.items[initializer->item_start + item].expression),
-              LLVMBuildGEP2(g.builder, array_type, g.globals[id], indices, 2,
-                            "global.array.initializer.element"));
-        }
-      } else {
-        LLVMBuildStore(g.builder, gen_expr(&g, ir.globals[id].initializer),
-                       g.globals[id]);
-      }
-    }
-    LLVMBuildRetVoid(g.builder);
-  }
-  if (g.wasm) {
-    LLVMValueRef initialize = LLVMAddFunction(g.module, "dyn_initialize", g.init_type);
-    g.init_fn = initialize;
-    LLVMAddAttributeAtIndex(initialize, ~0u, LLVMCreateStringAttribute(
-      g.context, "wasm-export-name", 16, "dyn_initialize", 14));
-    g.function = initialize;
-    LLVMPositionBuilderAtEnd(g.builder, LLVMAppendBasicBlockInContext(g.context, initialize, "entry"));
-    LLVMValueRef initialized = LLVMAddGlobal(g.module, LLVMInt1TypeInContext(g.context), "__dyn_initialized");
-    LLVMSetLinkage(initialized, LLVMInternalLinkage);
-    LLVMSetInitializer(initialized, LLVMConstInt(LLVMInt1TypeInContext(g.context), 0, 0));
-    LLVMBasicBlockRef run_init = LLVMAppendBasicBlockInContext(g.context, initialize, "initialize"),
-                     done_init = LLVMAppendBasicBlockInContext(g.context, initialize, "done");
-    LLVMBuildCondBr(g.builder, LLVMBuildLoad2(g.builder, LLVMInt1TypeInContext(g.context), initialized, "initialized"), done_init, run_init);
-    LLVMPositionBuilderAtEnd(g.builder, run_init);
-    LLVMBuildStore(g.builder, LLVMConstInt(LLVMInt1TypeInContext(g.context), 1, 0), initialized);
-    for (size_t q = 0; q < init_function_count; ++q)
-      LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
-    LLVMBuildBr(g.builder, done_init);
-    LLVMPositionBuilderAtEnd(g.builder, done_init);
-    LLVMBuildRetVoid(g.builder);
-  }
-  if (shared && !g.wasm) {
-    bool windows_dll = !strcmp(dyn_context_target(&source->context)->kernel, "windows");
-    LLVMValueRef initialize;
-    if (windows_dll) {
-      if (LLVMGetNamedFunction(g.module, "DllMainCRTStartup")) {
-        fprintf(stderr, "error: shared Windows modules reserve DllMainCRTStartup\n");
-        failed = 1;
-        goto cleanup;
-      }
-      LLVMTypeRef parameters[] = {LLVMPointerTypeInContext(g.context, 0),
-                                 LLVMInt32TypeInContext(g.context),
-                                 LLVMPointerTypeInContext(g.context, 0)};
-      LLVMTypeRef entry_type = LLVMFunctionType(LLVMInt32TypeInContext(g.context),
-                                                parameters, 3, false);
-      initialize = LLVMAddFunction(g.module, "DllMainCRTStartup", entry_type);
-      LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(g.context, initialize, "entry"),
-                       attach = LLVMAppendBasicBlockInContext(g.context, initialize, "attach"),
-                       done_attach = LLVMAppendBasicBlockInContext(g.context, initialize, "done");
-      LLVMPositionBuilderAtEnd(g.builder, entry);
-      LLVMValueRef process_attach = LLVMBuildICmp(g.builder, 32,
-          LLVMGetParam(initialize, 1), LLVMConstInt(LLVMInt32TypeInContext(g.context), 1, false), "process.attach");
-      LLVMBuildCondBr(g.builder, process_attach, attach, done_attach);
-      LLVMPositionBuilderAtEnd(g.builder, attach);
-      for (size_t q = 0; q < init_function_count; ++q)
-        LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
-      LLVMBuildBr(g.builder, done_attach);
-      LLVMPositionBuilderAtEnd(g.builder, done_attach);
-      LLVMBuildRet(g.builder, LLVMConstInt(LLVMInt32TypeInContext(g.context), 1, false));
-    } else if (init_function_count) {
-      initialize = LLVMAddFunction(g.module, "__dyn_shared_initialize", g.init_type);
-      LLVMSetLinkage(initialize, LLVMInternalLinkage);
-      LLVMPositionBuilderAtEnd(g.builder,
-          LLVMAppendBasicBlockInContext(g.context, initialize, "entry"));
-      for (size_t q = 0; q < init_function_count; ++q)
-        LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
-      LLVMBuildRetVoid(g.builder);
-      if (!strcmp(dyn_context_target(&source->context)->kernel, "linux")) {
-        /* The freestanding LLVM target defaults to legacy .ctors, which has
-           no CRT walker here. Register directly with the ELF loader instead. */
-        LLVMValueRef constructor = LLVMAddGlobal(g.module, LLVMTypeOf(initialize),
-                                                 "__dyn_shared_constructor");
-        LLVMSetLinkage(constructor, LLVMInternalLinkage);
-        LLVMSetInitializer(constructor, initialize);
-        LLVMSetSection(constructor, ".init_array");
-        LLVMSetAlignment(constructor, 8);
-        LLVMValueRef retained = LLVMAddGlobal(g.module,
-            LLVMArrayType2(LLVMTypeOf(constructor), 1), "llvm.used");
-        LLVMSetLinkage(retained, 7); /* LLVMAppendingLinkage */
-        LLVMSetSection(retained, "llvm.metadata");
-        LLVMSetInitializer(retained, LLVMConstArray2(LLVMTypeOf(constructor), &constructor, 1));
-      } else {
-        LLVMValueRef fields[] = {LLVMConstInt(LLVMInt32TypeInContext(g.context), 65535, false),
-                                initialize, LLVMConstNull(LLVMPointerTypeInContext(g.context, 0))};
-        LLVMTypeRef field_types[] = {LLVMTypeOf(fields[0]), LLVMTypeOf(fields[1]), LLVMTypeOf(fields[2])};
-        LLVMValueRef constructor = LLVMConstNamedStruct(
-            LLVMStructTypeInContext(g.context, field_types, 3, false), fields, 3);
-        LLVMValueRef constructors = LLVMAddGlobal(g.module,
-            LLVMArrayType2(LLVMTypeOf(constructor), 1), "llvm.global_ctors");
-        LLVMSetLinkage(constructors, 7); /* LLVMAppendingLinkage */
-        LLVMSetInitializer(constructors, LLVMConstArray2(LLVMTypeOf(constructor), &constructor, 1));
-      }
-    }
-  }
-  bool has_init = init_function_count != 0;
-  for (uint32_t i = 0; i < ir.function_count; ++i) {
-    DynIrFunction *fn = &ir.functions[i];
-    if (fn->foreign || !g.defines[i])
-      continue;
-    g.function = g.functions[i];
-    g.local_fact_count = 0;
-    g.last_local_load = NULL;
-    g.return_type = fn->return_type;
-    g.current_abi = g.abis[i];
-    g.is_main = fn->is_main;
-    g.variadic_data = g.variadic_count = NULL;
-    g.break_target = NULL;
-    g.continue_target = NULL;
-    LLVMPositionBuilderAtEnd(g.builder, LLVMAppendBasicBlockInContext(
-                                            g.context, g.function, "entry"));
-    LLVMSetCurrentDebugLocation2(g.builder, NULL);
-    if (g.di_builder)
-      LLVMSetCurrentDebugLocation2(g.builder, NULL);
-    /* Allocate an entry-block frame lazily, only for protected calls. Calls
-       cannot overlap, and loop iterations must reuse the same stack slot. */
-    g.unwind_frame = NULL;
-    if (g.di_builder) {
-      const char *debug_path;
-      unsigned debug_line, debug_column;
-      dyn_location_get(g.locations, source, fn->source_offset, &debug_path, &debug_line,
-                          &debug_column);
-      g.di_file = LLVMDIBuilderCreateFile(g.di_builder, debug_path,
-                                          strlen(debug_path), "", 0);
-      /* gdb shows the linkage name for C-like units when one is present,
-         so instances omit it and show "min(u32)" instead of the hash. */
-      const char *debug_name = fn->debug_name ? fn->debug_name : fn->name;
-      const char *linkage_name = fn->debug_name ? "" : fn->name;
-      LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(
-          g.di_builder, g.di_file, debug_name, strlen(debug_name), linkage_name,
-          strlen(linkage_name), g.di_file, fn->source_line, g.di_function_type,
-          owner_key != NULL, 1, fn->source_line, 0, release);
-      LLVMSetSubprogram(g.function, subprogram);
-      g.di_scope = subprogram;
-      LLVMSetCurrentDebugLocation2(
-          g.builder, LLVMDIBuilderCreateDebugLocation(
-                         g.context, fn->source_line, 1, subprogram, NULL));
-    }
-    if (g.tracing) {
-      char label[4096];
-      const char *trace_path;
-      unsigned trace_line, trace_column;
-      dyn_location_get(g.locations, source, fn->source_offset, &trace_path, &trace_line,
-                          &trace_column);
-      snprintf(label, sizeof(label), "%s (%s:%u)",
-               fn->debug_name ? fn->debug_name : fn->name, trace_path,
-               trace_line);
-      LLVMValueRef trace_name =
-          LLVMBuildGlobalStringPtr(g.builder, label, ".dyn.trace.name");
-      LLVMValueRef trace_arguments[2] = {
-          trace_name,
-          LLVMConstInt(LLVMInt64TypeInContext(g.context), strlen(label), 0)};
-      LLVMBuildCall2(g.builder, g.trace_push_type, g.trace_push_fn,
-                     trace_arguments, 2, "");
-    }
-    if (fn->is_main && g.wasm)
-      LLVMBuildCall2(g.builder, g.init_type, g.init_fn, NULL, 0, "");
-    else if (fn->is_main && has_init && !shared)
-      for (size_t q = 0; q < init_function_count; ++q)
-        LLVMBuildCall2(g.builder, g.init_type, init_functions[q], NULL, 0, "");
-    for (uint32_t j = 0; j < fn->local_count; ++j) {
-      uint32_t local = fn->local_start + j;
-      g.locals[local] = gen_stack_slot(
-          &g, llvm_type(&g, ir.locals[local].type), "local");
-    }
-    for (uint32_t j = 0; j < fn->param_count; ++j) {
-      DynIrParam *p = &ir.params[fn->param_start + j];
-      LLVMMetadataRef variable = debug_declare(
-          &g, g.locals[p->local_id], p->name, p->type, fn->source_line, j + 1);
-      const AbiValue *parameter = &g.current_abi->params[j];
-      LLVMValueRef parts[2] = {0};
-      for (unsigned k = 0; k < parameter->count; ++k) parts[k] = LLVMGetParam(g.function, parameter->index + k);
-      LLVMValueRef value = abi_decode(&g, parameter, parts);
-      debug_value(&g, value, variable, fn->source_line);
-      LLVMBuildStore(g.builder, value, g.locals[p->local_id]);
-    }
-    for (uint32_t j = 0; g.di_builder && j < fn->local_count; ++j) {
-      uint32_t local = fn->local_start + j;
-      bool parameter = false;
-      for (uint32_t q = 0; q < fn->param_count; ++q)
-        if (ir.params[fn->param_start + q].local_id == local)
-          parameter = true;
-      if (!parameter && (!fn->variadic || local != fn->variadic_local_id))
-        debug_declare(&g, g.locals[local], ir.locals[local].name,
-                      ir.locals[local].type,
-                      local_line(&g, local, fn->source_line), 0);
-    }
-    if (fn->variadic && !fn->foreign && dyn_type_is_slice(fn->variadic_type)) {
-      g.variadic_data = LLVMGetParam(g.function, g.current_abi->params[fn->param_count].index);
-      g.variadic_count = LLVMGetParam(g.function, g.current_abi->params[fn->param_count + 1].index);
-      LLVMValueRef pack = LLVMConstNull(llvm_type(&g, fn->variadic_type));
-      pack = LLVMBuildInsertValue(g.builder, pack, g.variadic_data, 0,
-                                  "variadic.data");
-      pack = LLVMBuildInsertValue(g.builder, pack, g.variadic_count, 1,
-                                  "variadic.count");
-      LLVMBuildStore(g.builder, pack, g.locals[fn->variadic_local_id]);
-    }
-    bool terminated = gen_block(&g, fn->body_start, fn->body_count);
-    if (!terminated) {
-      emit_trace_pop(&g);
-      if (fn->is_main)
-        LLVMBuildRet(g.builder, LLVMConstInt(i32, 0, 0));
-      else
-        LLVMBuildRetVoid(g.builder);
-    }
-  }
-  const char *triple = dyn_context_target(&source->context)->triple;
-  if (g.di_builder)
-    LLVMDIBuilderFinalize(g.di_builder);
-  LLVMSetTarget(g.module, triple);
-  if (g.allocation_failed)
-    goto allocation_failure;
-  /* Debug builds verify once, after scalarizing, below. */
-  if (release && dyn_verify_module(g.module, 2, &error)) {
-    fprintf(stderr, "error: invalid LLVM module: %s\n", error ? error : "");
-    failed = 1;
-    if (error) {
-      LLVMDisposeMessage(error);
-      error = NULL;
-    }
-  }
-  LLVMTargetRef target = NULL;
-  if (!failed && LLVMGetTargetFromTriple(triple, &target, &error))
-    failed = 1;
-  if (!failed)
-    tm = LLVMCreateTargetMachine(target, triple,
-                                 optimization && optimization->cpu ? optimization->cpu : "generic",
-                                 optimization && optimization->features ? optimization->features : "",
-                                 release ? (optimization && optimization->level == 3 ? 3 : 2) : 0,
-                                 shared && !g.wasm ? 2 : 0, 0);
-  if (!failed && !tm)
-    failed = 1;
-  if (!failed) {
-    LLVMTargetDataRef layout = LLVMCreateTargetDataLayout(tm);
-    char *layout_text = LLVMCopyStringRepOfTargetData(layout);
-    LLVMSetDataLayout(g.module, layout_text);
-    LLVMDisposeMessage(layout_text);
-    LLVMDisposeTargetData(layout);
-  }
-  dyn_timing_phase(&source->context, &phase, "llvm");
-  if (!failed && release) {
-    LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
-    LLVMErrorRef pass_error = LLVMRunPasses(
-        g.module, thin_bitcode
-          ? (optimization && optimization->level == 3 ? "thinlto-pre-link<O3>" : "thinlto-pre-link<O2>")
-          : (optimization && optimization->level == 3 ? "default<O3>" : "default<O2>"), tm,
-        options);
-    LLVMDisposePassBuilderOptions(options);
-    if (pass_error) {
-      error = LLVMGetErrorMessage(pass_error);
-      pass_message = true;
-      failed = 1;
-    }
-  }
-  if (!failed && !release)
-    dyn_scalarize_aggregates(g.module);
-  dyn_timing_phase(&source->context, &phase, "optimize");
-  if (!failed && dyn_verify_module(g.module, 2, &error)) {
-    fprintf(stderr, "error: optimized LLVM module is invalid: %s\n",
-            error ? error : "");
-    failed = 1;
-  }
-  if (!failed && ir_path) {
-    char *llvm_ir = LLVMPrintModuleToString(g.module);
-    failed = write_text(ir_path, llvm_ir);
-    LLVMDisposeMessage(llvm_ir);
-  }
-  if (!failed && asm_path)
-    failed =
-        LLVMTargetMachineEmitToFile(tm, g.module, (char *)asm_path, 0, &error);
-  if (!failed)
-    failed = thin_bitcode ? dyn_write_thin_bitcode(g.module, object_path)
-                          : LLVMTargetMachineEmitToFile(
-                                tm, g.module, (char *)object_path, 1, &error);
-  if (!failed && g.wasm) {
-    const char *wasi_imports = !strcmp(dyn_context_target(&source->context)->kernel, "wasi")
-      ? "wasi_proc_exit\nwasi_fd_write\nwasi_fd_read\nwasi_fd_close\nwasi_args_sizes_get\nwasi_args_get\nwasi_path_open\nwasi_random_get\nwasi_clock_time_get\n" : "";
-    size_t capacity = strlen(wasi_imports) + 1;
-    for (size_t i = 0; i < ir.function_count; ++i)
-      if (ir.functions[i].foreign) capacity += strlen(ir.functions[i].link_name) + 1;
-    char *imports = calloc(capacity, 1), *path = malloc(strlen(object_path) + 9);
-    if (!imports || !path) { free(imports); free(path); goto allocation_failure; }
-    strcpy(imports, wasi_imports);
-    size_t at = strlen(wasi_imports);
-    for (size_t i = 0; i < ir.function_count; ++i)
-      if (ir.functions[i].foreign) at += (size_t)sprintf(imports + at, "%s\n", ir.functions[i].link_name);
-    sprintf(path, "%s.imports", object_path);
-    failed = write_text(path, imports);
-    free(imports); free(path);
-  }
-  dyn_timing_phase(&source->context, &phase, "emit");
-  if (failed)
-    fprintf(stderr, "error: LLVM emission failed%s%s\n", error ? ": " : "",
-            error ? error : "");
-  if (error) {
-    if (pass_message)
-      LLVMDisposeErrorMessage(error);
-    else
-      LLVMDisposeMessage(error);
-  }
-  if (tm)
-    LLVMDisposeTargetMachine(tm);
-  goto cleanup;
-allocation_failure:
-  dyn_diagnostic_source("error", source, 0, 0, "out of memory generating code");
-  failed = 2;
-cleanup:
-  free(init_functions);
-  free(g.locals);
-  free(g.captured_values);
-  free(g.defer_stack);
-  free(g.globals);
-  free(g.static_globals);
-  free(g.functions);
-  free(g.defines);
-  free(g.local_facts);
-  free(g.function_types);
-  if (g.abis) for (size_t i = 0; i < ir.function_count; ++i) abi_free(g.abis[i]);
-  if (g.pointer_abis) for (size_t i = 0; i < ir.fn_type_count; ++i) abi_free(g.pointer_abis[i]);
-  free(g.abis); free(g.pointer_abis);
-  free(g.struct_types);
-  free(g.enum_types);
-  free(g.di_struct_types);
-  free(g.di_enum_types);
-  free(g.di_array_types);
-
-  if (g.di_builder)
-    LLVMDisposeDIBuilder(g.di_builder);
-  if (g.builder)
-    LLVMDisposeBuilder(g.builder);
-  if (g.stack_builder)
-    LLVMDisposeBuilder(g.stack_builder);
-  LLVMDisposeModule(g.module);
-  LLVMContextDispose(g.context);
-  return failed;
+  int result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
+    ? dyn_wasm_object(source, prepared, object_path, true)
+    : dyn_native_object(source, prepared, object_path, !release, debug_info, shared, true);
+  if (!result && asm_path)
+    result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32")
+      ? dyn_wasm_assembly(source, prepared, asm_path, true)
+      : dyn_native_assembly(object_path, asm_path);
+  return result;
 }
 void dyn_codegen_release(DynIrProgram *ir) { dyn_ir_free(ir); }
 int dyn_codegen_main(const DynSource *source, const char *object_path,
-                     const char *ir_path, const char *asm_path, bool release,
+                     const char *asm_path, bool release,
                      bool debug_info, bool shared) {
-  return dyn_codegen_module(source, object_path, ir_path, asm_path, release,
+  return dyn_codegen_module(source, object_path, asm_path, release,
                             debug_info, shared, NULL);
+}
+/* Links Windows output: an executable, or with import_library a DLL and its
+   import library. */
+static int link_coff(const char *runtime, const char *support, const char *const *objects, size_t object_count,
+                     const char *const *link_inputs, size_t link_input_count, const char *temporary,
+                     const char *output_path, const char *import_library, bool verbose) {
+  const char **inputs = calloc(object_count + link_input_count + 2, sizeof(*inputs));
+  if (!inputs)
+    return 2;
+  size_t count = 0;
+  inputs[count++] = runtime;
+  inputs[count++] = support;
+  for (size_t i = 0; i < object_count; ++i)
+    inputs[count++] = objects[i];
+  for (size_t i = 0; i < link_input_count; ++i)
+    inputs[count++] = link_inputs[i];
+  if (verbose) {
+    fprintf(stderr, "+ (built-in) link%s -o %s", import_library ? " -dll" : "", temporary);
+    for (size_t i = 0; i < count; ++i)
+      fprintf(stderr, " %s", inputs[i]);
+    fputc('\n', stderr);
+  }
+  const char *slash = strrchr(output_path, '/');
+  const char *backslash = strrchr(output_path, '\\');
+  if (backslash && (!slash || backslash > slash))
+    slash = backslash;
+  DynCoffOptions options = {.shared = import_library != NULL,
+                            .entry = import_library ? "DllMainCRTStartup" : "dyn_start",
+                            .dll_name = slash ? slash + 1 : output_path,
+                            .import_library = import_library};
+  int status = dyn_link_coff(inputs, count, temporary, &options);
+  free(inputs);
+  if (status)
+    return 2;
+  if (rename(temporary, output_path)) {
+    perror("error: rename output");
+    remove(temporary);
+    return 2;
+  }
+  return 0;
+}
+/* Links macOS output with the runtime, explicit inputs and the libSystem
+   stub, then moves it into place. */
+static int link_macho(const char *runtime, const char *support, const char *const *objects, size_t object_count,
+                      const char *const *link_inputs, size_t link_input_count, const char *temporary,
+                      const char *output_path, bool shared, bool verbose) {
+  char system_stub[4096];
+  bool stub = dyn_host_runtime_file("libSystem.tbd", system_stub, sizeof(system_stub));
+  const char **inputs = calloc(object_count + link_input_count + 3, sizeof(*inputs));
+  if (!inputs)
+    return 2;
+  size_t count = 0;
+  inputs[count++] = runtime;
+  inputs[count++] = support;
+  for (size_t i = 0; i < object_count; ++i)
+    inputs[count++] = objects[i];
+  for (size_t i = 0; i < link_input_count; ++i)
+    inputs[count++] = link_inputs[i];
+  if (stub)
+    inputs[count++] = system_stub;
+  if (verbose) {
+    fprintf(stderr, "+ (built-in) link%s -o %s", shared ? " -dylib" : "", temporary);
+    for (size_t i = 0; i < count; ++i)
+      fprintf(stderr, " %s", inputs[i]);
+    fputc('\n', stderr);
+  }
+  DynMachOOptions options = {.shared = shared, .entry = "_dyn_start", .install_name = output_path};
+  int status = dyn_link_macho(inputs, count, temporary, &options);
+  free(inputs);
+  if (status)
+    return 2;
+  if (rename(temporary, output_path)) {
+    perror("error: rename output");
+    remove(temporary);
+    return 2;
+  }
+  return 0;
 }
 static int link_wasm(const DynContext *, const char *, const char *,
                      const char *const *, size_t, bool);
@@ -3135,8 +333,7 @@ int dyn_link_executable_objects(const DynContext *context,
                                 size_t object_count, const char *output_path,
                                 const char *const *link_inputs,
                                 size_t link_input_count, bool release,
-                                bool verbose, const char *lto_cache,
-                                unsigned lto_jobs) {
+                                bool verbose) {
   char temporary[4096], runtime[4096], support[4096], executable[4096];
   bool dynamic = false;
   for (size_t i = 0; i < link_input_count; ++i) {
@@ -3159,11 +356,12 @@ int dyn_link_executable_objects(const DynContext *context,
   *slash = 0;
   const char *runtime_name =
       !strcmp(dyn_context_target(context)->kernel, "windows")
-          ? "dynrt_windows_start.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_start.o" : "dynrt_windows_start.o")
       : !strcmp(dyn_context_target(context)->kernel, "darwin")
-          ? "dynrt_macos_start.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_start.o" : "dynrt_macos_start.o")
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? (release ? "dynrt_aarch64_release.o" : "dynrt_aarch64_start.o")
+          : !strcmp(dyn_context_target(context)->arch, "riscv64") ? (release ? "dynrt_riscv64_release.o" : "dynrt_riscv64_start.o")
           : (release ? "dynrt_release.o" : "dynrt_start.o");
   if (snprintf(runtime, sizeof(runtime), "%s/%s", executable, runtime_name) >=
       (int)sizeof(runtime))
@@ -3174,12 +372,12 @@ int dyn_link_executable_objects(const DynContext *context,
     return 2;
   const char *support_name =
       !strcmp(dyn_context_target(context)->kernel, "windows")
-          ? "dynrt_windows_support.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_support.o" : "dynrt_windows_support.o")
       : !strcmp(dyn_context_target(context)->kernel, "darwin")
-          ? "dynrt_macos_support.o"
+          ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_support.o" : "dynrt_macos_support.o")
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? "dynrt_aarch64_support.o"
-          : "dynrt_support.o";
+          : !strcmp(dyn_context_target(context)->arch, "riscv64") ? "dynrt_riscv64_support.o" : "dynrt_support.o";
   if (snprintf(support, sizeof(support), "%s/%s", executable, support_name) >=
       (int)sizeof(support))
     return 2;
@@ -3189,16 +387,78 @@ int dyn_link_executable_objects(const DynContext *context,
     return 2;
   bool windows = !strcmp(dyn_context_target(context)->kernel, "windows");
   bool darwin = !strcmp(dyn_context_target(context)->kernel, "darwin");
-  bool thin = release && object_count && strstr(object_paths[0], ".bc");
   const char *linker = darwin ? DYN_DARWIN_LINKER : windows ? DYN_WINDOWS_LINKER : "ld.lld";
+  /* DYN_LINKER=external selects the system linker for differential checks. */
+  const char *external = getenv("DYN_LINKER");
+  bool forced = external && !strcmp(external, "external");
+  /* Windows executables link in-process. */
+  if (windows && !forced) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_coff_supported(link_inputs[i]);
+    if (supported)
+      return link_coff(runtime, support, object_paths, object_count, link_inputs, link_input_count, temporary,
+                       output_path, NULL, verbose);
+  }
+  /* macOS executables link in-process. */
+  if (darwin && !forced) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_macho_supported(link_inputs[i]);
+    if (supported)
+      return link_macho(runtime, support, object_paths, object_count, link_inputs, link_input_count,
+                        temporary, output_path, false, verbose);
+  }
+  /* Linux executables link in-process. */
+  bool builtin = !forced && !strcmp(dyn_context_target(context)->kernel, "linux");
+  for (size_t i = 0; builtin && i < link_input_count; ++i)
+    builtin = dyn_link_elf_supported(link_inputs[i]);
+  if (builtin) {
+    const char **inputs = calloc(object_count + link_input_count + 2, sizeof(*inputs));
+    if (!inputs)
+      return 2;
+    size_t input_count = 0;
+    inputs[input_count++] = runtime;
+    inputs[input_count++] = support;
+    for (size_t i = 0; i < object_count; ++i)
+      inputs[input_count++] = object_paths[i];
+    for (size_t i = 0; i < link_input_count; ++i)
+      inputs[input_count++] = link_inputs[i];
+    if (verbose) {
+      fprintf(stderr, "+ (built-in) link -o %s", temporary);
+      for (size_t i = 0; i < input_count; ++i)
+        fprintf(stderr, " %s", inputs[i]);
+      fputc('\n', stderr);
+    }
+    DynLinkOptions options = {.entry = "_start",
+                              .interpreter = dyn_context_target(context)->dynamic_linker,
+                             };
+    int status = dyn_link_elf(inputs, input_count, temporary, &options);
+    free(inputs);
+    if (status)
+      return 2;
+    if (rename(temporary, output_path)) {
+      perror("error: rename output");
+      return 2;
+    }
+    return 0;
+  }
+  if (!forced) {
+    fprintf(stderr, "error: unsupported built-in linker input; external linking requires DYN_LINKER=external\n");
+    return 2;
+  }
+  if (windows && !strcmp(dyn_context_target(context)->arch,"aarch64")) {
+    fprintf(stderr,"error: external linking for aarch64-windows is unsupported; use DYN_LINKER=builtin\n");
+    return 2;
+  }
   if (verbose) {
     fprintf(
         stderr, "+ %s %s -o %s %s %s", linker,
         darwin ?
 #ifdef __APPLE__
-          "-arch arm64 -platform_version macos 15.0 15.0 -e _dyn_start"
+          (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "-arch x86_64 -platform_version macos 15.0 15.0 -e _dyn_start" : "-arch arm64 -platform_version macos 15.0 15.0 -e _dyn_start")
 #else
-          "cc --target=aarch64-macos.15.0-none -nostdlib -Wl,-e,_dyn_start"
+          (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "cc --target=x86_64-macos.15.0-none -nostdlib -Wl,-e,_dyn_start" : "cc --target=aarch64-macos.15.0-none -nostdlib -Wl,-e,_dyn_start")
 #endif
         : windows
             ? "-mi386pep --gc-sections --entry=dyn_start --subsystem console"
@@ -3217,20 +477,18 @@ int dyn_link_executable_objects(const DynContext *context,
       calloc(object_count + link_input_count + 28, sizeof(*arguments));
   if (!arguments)
     return 2;
-  char cache_argument[8192], jobs_argument[64];
-  char profile_argument[8192];
   size_t argument_count = 0;
   arguments[argument_count++] = (char *)linker;
   if (darwin) {
 #ifdef __APPLE__
-    arguments[argument_count++] = "-arch"; arguments[argument_count++] = "arm64";
+    arguments[argument_count++] = "-arch"; arguments[argument_count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "x86_64" : "arm64";
     arguments[argument_count++] = "-platform_version";
     arguments[argument_count++] = "macos";
     arguments[argument_count++] = "15.0"; arguments[argument_count++] = "15.0";
     arguments[argument_count++] = "-e"; arguments[argument_count++] = "_dyn_start";
 #else
     arguments[argument_count++] = "cc";
-    arguments[argument_count++] = "--target=aarch64-macos.15.0-none";
+    arguments[argument_count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "--target=x86_64-macos.15.0-none" : "--target=aarch64-macos.15.0-none";
     arguments[argument_count++] = "-nostdlib";
     arguments[argument_count++] = "-Wl,-e,_dyn_start";
 #endif
@@ -3242,35 +500,7 @@ int dyn_link_executable_objects(const DynContext *context,
     arguments[argument_count++] = "console";
   } else {
     arguments[argument_count++] = "--gc-sections";
-    if (thin) {
-      const DynOptimization *optimization = context ? context->optimization : NULL;
-      arguments[argument_count++] = optimization && optimization->level == 3 ? "--lto-O3" : "--lto-O2";
-      if (optimization && optimization->level == 3)
-        arguments[argument_count++] = "--lto-CGO3";
-      if (optimization && optimization->remarks) {
-        arguments[argument_count++] = "--mllvm=-pass-remarks=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
-        arguments[argument_count++] = "--mllvm=-pass-remarks-missed=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
-        arguments[argument_count++] = "--mllvm=-pass-remarks-analysis=inline|loop-vectorize|slp-vectorizer|loop-unroll|sample-profile";
-      }
-      if (optimization && optimization->sample_profile) {
-        if (snprintf(profile_argument, sizeof(profile_argument), "--lto-sample-profile=%s",
-                     optimization->sample_profile) >= (int)sizeof(profile_argument)) {
-          free(arguments); remove(temporary); return 2;
-        }
-        arguments[argument_count++] = profile_argument;
-      }
-      if (lto_jobs) {
-        snprintf(jobs_argument, sizeof(jobs_argument), "--thinlto-jobs=%u", lto_jobs);
-        arguments[argument_count++] = jobs_argument;
-      }
-      if (lto_cache && snprintf(cache_argument, sizeof(cache_argument),
-                               "--thinlto-cache-dir=%s/thinlto", lto_cache) <
-                           (int)sizeof(cache_argument)) {
-        arguments[argument_count++] = cache_argument;
-        arguments[argument_count++] =
-            "--thinlto-cache-policy=cache_size=10%:cache_size_bytes=1g:prune_after=168h";
-      }
-    }
+
   }
   arguments[argument_count++] = "-o";
   arguments[argument_count++] = temporary;
@@ -3290,13 +520,6 @@ int dyn_link_executable_objects(const DynContext *context,
     arguments[argument_count++] = system_stub;
   int status;
   status = dyn_host_spawn(arguments);
-  if (status == 127 && thin) {
-    for (size_t i = argument_count; i > 0; --i)
-      arguments[i + 1] = arguments[i];
-    arguments[0] = "zig";
-    arguments[1] = "ld.lld";
-    status = dyn_host_spawn(arguments);
-  }
   if (status == 127 && !strcmp(dyn_context_target(context)->name, "aarch64-linux")) {
     for (size_t i = argument_count; i > 0; --i)
       arguments[i + 1] = arguments[i];
@@ -3331,7 +554,7 @@ int dyn_link_executable(const DynContext *context, const char *object_path,
 
   return dyn_link_executable_objects(context, &object_path, 1, output_path,
                                      link_inputs, link_input_count, release,
-                                     verbose, NULL, 0);
+                                     verbose);
 }
 /* Browser modules use a static Wasm link, not a native dynamic library. */
 static int link_wasm(const DynContext *context, const char *object_path, const char *output_path,
@@ -3355,6 +578,63 @@ static int link_wasm(const DynContext *context, const char *object_path, const c
     if (snprintf(wasi_support, sizeof(wasi_support), "%.*s/dynrt_wasi_support.o", (int)length, support) >= (int)sizeof(wasi_support) ||
         snprintf(wasi_start, sizeof(wasi_start), "%.*s/dynrt_wasi_start.o", (int)length, support) >= (int)sizeof(wasi_start)) return 2;
   }
+  const char *selection = getenv("DYN_LINKER");
+  if (!selection || strcmp(selection, "external")) {
+    const char **objects = calloc(count + 4, sizeof(*objects));
+    char **allowed = NULL;
+    size_t object_count = 0, allowed_count = 0;
+    uint32_t maximum = 0;
+    int result = 2;
+    if (!objects) return 2;
+    objects[object_count++] = support;
+    objects[object_count++] = object_path;
+    if (wasi) { objects[object_count++] = wasi_support; objects[object_count++] = wasi_start; }
+    for (size_t i = 0; i < count; ++i) {
+      if (!strncmp(inputs[i], "--max-memory=", 13)) {
+        char *end;
+        unsigned long long value = strtoull(inputs[i] + 13, &end, 10);
+        if (!inputs[i][13] || *end || !value || value > UINT32_MAX || value % 65536) {
+          fprintf(stderr, "error: Wasm maximum memory must be a positive multiple of 65536 below 4 GiB\n");
+          goto wasm_done;
+        }
+        maximum = (uint32_t)value;
+      } else if (inputs[i][0] == '-') {
+        fprintf(stderr, "error: unsupported built-in Wasm linker option: %s\n", inputs[i]);
+        goto wasm_done;
+      } else objects[object_count++] = inputs[i];
+    }
+    /* The emitter records explicitly declared imports. Undefined symbols must
+       never silently become host imports. */
+    char import_path[8192];
+    if (snprintf(import_path, sizeof(import_path), "%s.imports", object_path) >= (int)sizeof(import_path)) goto wasm_done;
+    FILE *file = fopen(import_path, "rb");
+    if (!file) { fprintf(stderr, "error: cannot read Wasm import manifest: %s\n", import_path); goto wasm_done; }
+    char line[4096];
+    bool manifest_ok = true;
+    while (fgets(line, sizeof(line), file)) {
+      size_t length = strcspn(line, "\r\n");
+      if (length == sizeof(line)-1) { manifest_ok = false; break; }
+      line[length] = 0;
+      if (!length) continue;
+      char **grown = realloc(allowed, (allowed_count + 1) * sizeof(*allowed));
+      if (!grown) { manifest_ok = false; break; }
+      allowed = grown;
+      allowed[allowed_count] = strdup(line);
+      if (!allowed[allowed_count]) { manifest_ok = false; break; }
+      ++allowed_count;
+    }
+    if (ferror(file)) manifest_ok = false;
+    fclose(file);
+    if (manifest_ok)
+      result = dyn_link_wasm_objects(objects, object_count, output_path,
+          (const char *const *)allowed, allowed_count, wasi, maximum, verbose);
+wasm_done:
+    for (size_t i = 0; i < allowed_count; ++i) free(allowed[i]);
+    free(allowed);
+    free(objects);
+    return result;
+  }
+  /* Explicit external linker selection is an optional comparison tool. */
   if (snprintf(temporary, sizeof(temporary), "%s.tmp", output_path) >= (int)sizeof(temporary)) return 2;
   if (verbose) fprintf(stderr, "+ wasm-ld --no-entry --export-memory -o %s %s %s\n", temporary, support, object_path);
   char **args = calloc(count + 16, sizeof(*args));
@@ -3407,11 +687,11 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                   snprintf(import_temporary, sizeof(import_temporary), "%s.tmp",
                            import_output) >= (int)sizeof(import_temporary)))
     return 2;
-  const char *name = windows  ? "dynrt_windows_support.o"
-                     : darwin ? "dynrt_macos_support.o"
+  const char *name = windows  ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_support.o" : "dynrt_windows_support.o")
+                     : darwin ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_support.o" : "dynrt_macos_support.o")
                      : !strcmp(dyn_context_target(context)->arch, "aarch64")
                          ? "dynrt_aarch64_support_pic.o"
-                         : "dynrt_support_pic.o";
+                         : !strcmp(dyn_context_target(context)->arch, "riscv64") ? "dynrt_riscv64_support_pic.o" : "dynrt_support_pic.o";
   if (snprintf(support, sizeof(support), "%s/%s", executable, name) >=
       (int)sizeof(support))
     return 2;
@@ -3420,11 +700,11 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
                name) >= (int)sizeof(support))
     return 2;
   const char *assembly_name =
-      windows  ? "dynrt_windows_shared.o"
-      : darwin ? "dynrt_macos_shared.o"
+      windows  ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_shared.o" : "dynrt_windows_shared.o")
+      : darwin ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_shared.o" : "dynrt_macos_shared.o")
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? "dynrt_aarch64_shared.o"
-          : "dynrt_shared.o";
+          : !strcmp(dyn_context_target(context)->arch, "riscv64") ? "dynrt_riscv64_shared.o" : "dynrt_shared.o";
   if (snprintf(assembly, sizeof(assembly), "%s/%s", executable,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
@@ -3432,13 +712,80 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
       snprintf(assembly, sizeof(assembly), "%s/../lib/dyn/%s", executable,
                assembly_name) >= (int)sizeof(assembly))
     return 2;
+  const char *external = getenv("DYN_LINKER");
+  if (windows && !(external && !strcmp(external, "external"))) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_coff_supported(link_inputs[i]);
+    const char *object = object_path;
+    if (supported) {
+      int status = link_coff(assembly, support, &object, 1, link_inputs, link_input_count, temporary, output_path,
+                             import_temporary, verbose);
+      if (!status && rename(import_temporary, import_output)) {
+        perror("error: rename import library");
+        return 2;
+      }
+      return status;
+    }
+  }
+  if (darwin && !(external && !strcmp(external, "external"))) {
+    bool supported = true;
+    for (size_t i = 0; supported && i < link_input_count; ++i)
+      supported = dyn_link_macho_supported(link_inputs[i]);
+    const char *object = object_path;
+    if (supported)
+      return link_macho(assembly, support, &object, 1, link_inputs, link_input_count, temporary, output_path,
+                        true, verbose);
+  }
+  if (!strcmp(dyn_context_target(context)->kernel, "linux") &&
+      !(external && !strcmp(external, "external"))) {
+    bool builtin = true;
+    for (size_t i = 0; builtin && i < link_input_count; ++i)
+      builtin = dyn_link_elf_supported(link_inputs[i]);
+    const char **inputs = builtin ? calloc(link_input_count + 3, sizeof(*inputs)) : NULL;
+    if (builtin && !inputs)
+      return 2;
+    if (builtin) {
+      size_t input_count = 0;
+      inputs[input_count++] = assembly;
+      inputs[input_count++] = support;
+      inputs[input_count++] = object_path;
+      for (size_t i = 0; i < link_input_count; ++i)
+        inputs[input_count++] = link_inputs[i];
+      if (verbose) {
+        fprintf(stderr, "+ (built-in) link -shared -o %s", temporary);
+        for (size_t i = 0; i < input_count; ++i)
+          fprintf(stderr, " %s", inputs[i]);
+        fputc('\n', stderr);
+      }
+      DynLinkOptions options = {.shared = true};
+      int status = dyn_link_elf(inputs, input_count, temporary, &options);
+      free(inputs);
+      if (status)
+        return 2;
+      if (rename(temporary, output_path)) {
+        perror("error: rename output");
+        remove(temporary);
+        return 2;
+      }
+      return 0;
+    }
+  }
+  if (!(external && !strcmp(external, "external"))) {
+    fprintf(stderr, "error: unsupported built-in linker input; external linking requires DYN_LINKER=external\n");
+    return 2;
+  }
+  if (windows && !strcmp(dyn_context_target(context)->arch,"aarch64")) {
+    fprintf(stderr,"error: external linking for aarch64-windows is unsupported; use DYN_LINKER=builtin\n");
+    return 2;
+  }
   if (verbose) {
     fprintf(stderr, "+ %s -o %s %s %s %s",
             darwin ?
 #ifdef __APPLE__
-                "ld64.lld -arch arm64 -platform_version macos 15.0 15.0 -dylib"
+                (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "ld64.lld -arch x86_64 -platform_version macos 15.0 15.0 -dylib" : "ld64.lld -arch arm64 -platform_version macos 15.0 15.0 -dylib")
 #else
-                "zig cc --target=aarch64-macos.15.0-none -dynamiclib -nostdlib"
+                (!strcmp(dyn_context_target(context)->arch,"x86_64") ? "zig cc --target=x86_64-macos.15.0-none -dynamiclib -nostdlib" : "zig cc --target=aarch64-macos.15.0-none -dynamiclib -nostdlib")
 #endif
             : windows ? DYN_WINDOWS_LINKER " -mi386pep -shared"
                       : "ld.lld -shared",
@@ -3454,13 +801,13 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
   arguments[count++] = darwin ? DYN_DARWIN_LINKER : windows ? DYN_WINDOWS_LINKER : "ld.lld";
   if (darwin) {
 #ifdef __APPLE__
-    arguments[count++] = "-arch"; arguments[count++] = "arm64";
+    arguments[count++] = "-arch"; arguments[count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "x86_64" : "arm64";
     arguments[count++] = "-platform_version"; arguments[count++] = "macos";
     arguments[count++] = "15.0"; arguments[count++] = "15.0";
     arguments[count++] = "-dylib";
 #else
     arguments[count++] = "cc";
-    arguments[count++] = "--target=aarch64-macos.15.0-none";
+    arguments[count++] = !strcmp(dyn_context_target(context)->arch,"x86_64") ? "--target=x86_64-macos.15.0-none" : "--target=aarch64-macos.15.0-none";
     arguments[count++] = "-dynamiclib";
     arguments[count++] = "-nostdlib";
 #endif
@@ -3524,3 +871,4 @@ int dyn_link_shared(const DynContext *context, const char *object_path,
   }
   return 0;
 }
+

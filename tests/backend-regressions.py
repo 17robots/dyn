@@ -2,6 +2,7 @@
 """Backend safety checks, expression evaluation, strings, and guard scaling."""
 import os
 from pathlib import Path
+import re
 import subprocess
 import shlex
 import sys
@@ -196,6 +197,24 @@ CASES['closed_multiple_increments'] = ("""fn main() {
   #panic("WRAPPED")
 }
 """, 'overflow.ok')
+# A runtime check inside a condition emits its failure path, which runs the
+# pending defer and its comparison. That comparison must not decide the
+# outer branch.
+CASES['nested_condition'] = ("""struct State { flag: bool, operator: u32, count: u32 }
+fn step(state: *State) bool {
+  defer {
+    if state.operator == 0 { state.count = 0 }
+  }
+  if state.flag { return true }
+  return false
+}
+fn main() {
+  state := State{flag: true, operator: 0, count: 3}
+  if !step(&state) { #panic("NESTED CONDITION") }
+  state.flag = false
+  if step(&state) { #panic("NESTED CONDITION FALSE") }
+}
+""", None)
 CASES['closed_call'] = ("""fn change(p: *u8) { p.* = 255 }
 fn main() {
   i: u8 = 0
@@ -314,15 +333,6 @@ int main(int argc, char **argv) {
                 if not release:
                     assert 'fail' in result.stderr and 'stack trace:' in result.stderr, (name, diagnostic)
 
-    # Inspect unoptimized IR: the frontend proof, independent of LLVM's passes.
-    directory = root / 'closed_sum'
-    output = directory / 'proof'
-    build(directory, output, '--emit-ir', '--no-link')
-    ir = output.with_suffix('.ll').read_text()
-    assert 'index.ok' not in ir, ir
-    assert 'call { i32, i1 } @llvm.uadd.with.overflow.i32' not in ir, ir
-    assert 'call { i64, i1 } @llvm.uadd.with.overflow.i64' not in ir, ir
-
     directory = root / 'closed-usize-wasm32'
     directory.mkdir()
     (directory / 'main.dyn').write_text("""fn main() {
@@ -331,12 +341,11 @@ int main(int argc, char **argv) {
 }
 """)
     output = directory / 'wasm32'
-    build(directory, output, '--target', 'wasm32-wasi', '--emit-ir', '--no-link')
-    ir = output.with_suffix('.ll').read_text()
-    assert 'call { i32, i1 } @llvm.uadd.with.overflow.i32' in ir, ir
+    build(directory, output, '--target', 'wasm32-wasi', '--emit-asm', '--no-link')
+    assembly = output.with_suffix('.s').read_text()
+    assert re.search(r'i64\.add\s+(?:\S+\s+){0,4}i64\.const 4294967295\s+i64\.le_u', assembly), assembly
 
     # usize must use the target width rather than the host's 64-bit width.
-    # Emit unoptimized IR so the assertion checks the compiler's proof itself.
     directory = root / 'range-usize-wasm32'
     directory.mkdir()
     (directory / 'main.dyn').write_text('''fn main() {
@@ -350,12 +359,12 @@ int main(int argc, char **argv) {
 }
 ''')
     output = directory / 'wasm32'
-    build(directory, output, '--target', 'wasm32-wasi', '--emit-ir', '--no-link')
-    ir = output.with_suffix('.ll').read_text()
-    assert 'call { i32, i1 } @llvm.uadd.with.overflow.i32' in ir, ir
+    build(directory, output, '--target', 'wasm32-wasi', '--emit-asm', '--no-link')
+    assembly = output.with_suffix('.s').read_text()
+    assert re.search(r'i64\.add\s+(?:\S+\s+){0,4}i64\.const 4294967295\s+i64\.le_u', assembly), assembly
 
     # Exercise thousands of guard pairs without comparing wall-clock timings.
-    # IR growth should track the source size, and every pair retains its check.
+    # Code growth should track the source size, and every pair retains its check.
     sizes = []
     for count in (100, 1600):
         directory = root / f'guards-{count}'
@@ -364,11 +373,28 @@ int main(int argc, char **argv) {
             'fn main() {\n values := [1, 2, 3]\n index: usize = 0\n' +
             ' _ = index + 1\n _ = values[index]\n' * count + '}\n')
         output = directory / 'guards'
-        build(directory, output, '--emit-ir', '--no-link')
-        ir = output.with_suffix('.ll').read_text()
-        assert ir.count('icmp ult i64') >= count, (count, 'missing bounds checks')
-        sizes.append(len(ir))
+        build(directory, output, '--emit-asm', '--no-link')
+        assembly = output.with_suffix('.s').read_text()
+        assert assembly.count('cmp ') >= count, (count, 'missing bounds checks')
+        sizes.append(len(assembly))
     assert sizes[1] < sizes[0] * 20, sizes
 
+    # Iterating a large array by value copies it with a loop, not one load and
+    # store per word.
+    directory = root / 'large-copy'
+    directory.mkdir()
+    (directory / 'main.dyn').write_text('''values: [65536]u64
+fn main() {
+  values[3] = 7
+  total: u64 = 0
+  for value in values { total += value }
+  if total != 7 { #panic("WRONG TOTAL") }
+}
+''')
+    output = directory / 'large-copy'
+    build(directory, output, '--release')
+    assert subprocess.run([str(output)], timeout=10).returncode == 0
+    assert output.stat().st_size < 200_000, output.stat().st_size
+
 print('PASS backend ranges, compound targets, NaN, guard dominance, string bytes '
-      '(debug/release), and bounded guard IR')
+      '(debug/release), and bounded guard code')

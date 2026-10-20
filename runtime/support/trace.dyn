@@ -1,0 +1,44 @@
+struct Frame { name: *const u8, length: u64 }
+struct TraceSlot { tid: u64, count: u64, frames: [64]Frame }
+trace_slots: [64]TraceSlot
+fn trace_slot(id: u64, claim: bool) *TraceSlot {
+  for i in 0..64 {
+    slot := &trace_slots[i]
+    seen := atomic_load(&slot.tid)
+    if seen == id { return slot }
+    if claim && seen == 0 && atomic_claim(&slot.tid, 0, id) { return slot }
+  }
+  return nil
+}
+fn trace_push(name: *const u8, length: u64) {
+  slot := trace_slot(thread_id(), true)
+  if slot != nil {
+    if slot.count < 64 {
+      slot.frames[slot.count].name = name
+      slot.frames[slot.count].length = length
+    }
+    slot.count += 1
+  }
+}
+fn trace_pop() {
+  slot := trace_slot(thread_id(), false)
+  if slot != nil && slot.count != 0 {
+    slot.count -= 1
+    if slot.count == 0 { atomic_store(&slot.tid, 0) }
+  }
+}
+fn write_string(text: []const u8) { trace_write(&text[0], #cast(u64) #len(text)) }
+fn trace_dump() {
+  slot := trace_slot(thread_id(), false)
+  if slot == nil || slot.count == 0 { return }
+  write_string("stack trace:\n")
+  count := slot.count
+  if count > 64 { count = 64 }
+  for count != 0 {
+    count -= 1
+    frame := &slot.frames[count]
+    write_string("  at ")
+    trace_write(frame.name, frame.length)
+    write_string("\n")
+  }
+}

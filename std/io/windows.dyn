@@ -1,4 +1,4 @@
-#target(arch: x86_64, kernel: windows)
+#target(kernel: windows)
 
 extern fn standard_handle "dyn_stdio_handle"(kind: u32) rawptr
 extern fn standard_read "dyn_stdio_read"(handle: rawptr, bytes: *u8, count: u32, received: *u32, overlapped: rawptr) i32

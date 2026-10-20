@@ -1,0 +1,86 @@
+[
+  {
+    "variant": "before",
+    "trial": 0,
+    "seconds": 0.14049449900630862,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "after",
+    "trial": 0,
+    "seconds": 0.10985512600746006,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "after",
+    "trial": 1,
+    "seconds": 0.11024290998466313,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "before",
+    "trial": 1,
+    "seconds": 0.125408248975873,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "before",
+    "trial": 2,
+    "seconds": 0.1256168809486553,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "after",
+    "trial": 2,
+    "seconds": 0.10973257501609623,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "after",
+    "trial": 3,
+    "seconds": 0.10873943602200598,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "before",
+    "trial": 3,
+    "seconds": 0.12671401200350374,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "before",
+    "trial": 4,
+    "seconds": 0.12412732804659754,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "after",
+    "trial": 4,
+    "seconds": 0.11085766495671123,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "after",
+    "trial": 5,
+    "seconds": 0.11067311395891011,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "before",
+    "trial": 5,
+    "seconds": 0.12888454203493893,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "before",
+    "trial": 6,
+    "seconds": 0.12531277909874916,
+    "stdout": "2466909750\n"
+  },
+  {
+    "variant": "after",
+    "trial": 6,
+    "seconds": 0.10865093499887735,
+    "stdout": "2466909750\n"
+  }
+]

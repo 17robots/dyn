@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "frontend.h"
-#include "dyn_syntax.h"
+#include "dyn_compact.h"
 #include "dyn_location.h"
 #include <assert.h>
 #include <pthread.h>
@@ -41,28 +41,16 @@ static void *analyze(void *argument) {
   }
   return NULL;
 }
-static void same_subtree(TSNode x, TSNode y) {
-  TSTreeCursor a = ts_tree_cursor_new(x), b = ts_tree_cursor_new(y);
-  bool done = false;
-  while (!done) {
-    x = ts_tree_cursor_current_node(&a); y = ts_tree_cursor_current_node(&b);
-    assert(!strcmp(ts_node_type(x), ts_node_type(y)));
-    assert(ts_node_start_byte(x) == ts_node_start_byte(y) && ts_node_end_byte(x) == ts_node_end_byte(y));
-    TSPoint xp = ts_node_start_point(x), yp = ts_node_start_point(y);
-    assert(xp.row == yp.row && xp.column == yp.column);
-    bool child = ts_tree_cursor_goto_first_child(&a);
-    assert(child == ts_tree_cursor_goto_first_child(&b));
-    if (child) continue;
-    for (;;) {
-      bool sibling = ts_tree_cursor_goto_next_sibling(&a);
-      assert(sibling == ts_tree_cursor_goto_next_sibling(&b));
-      if (sibling) break;
-      bool parent = ts_tree_cursor_goto_parent(&a);
-      assert(parent == ts_tree_cursor_goto_parent(&b));
-      if (!parent) { done = true; break; }
-    }
-  }
-  ts_tree_cursor_delete(&a); ts_tree_cursor_delete(&b);
+/* Same shape and spans; offset shifts x into the merged text. */
+static void same_subtree(const ExpSnapshotTree *xt, uint32_t x, uint32_t offset,
+                         const ExpSnapshotTree *yt, uint32_t y) {
+  const ExpNode *a = &xt->nodes[x], *b = &yt->nodes[y];
+  assert(a->kind == b->kind && a->flags == b->flags && a->field == b->field);
+  assert(a->start + offset == b->start && a->end + offset == b->end);
+  uint32_t i = a->first, j = b->first;
+  for (; i != UINT32_MAX && j != UINT32_MAX; i = xt->nodes[i].next, j = yt->nodes[j].next)
+    same_subtree(xt, i, offset, yt, j);
+  assert(i == UINT32_MAX && j == UINT32_MAX);
 }
 static void merged_syntax(void) {
   char table[32768] = "const values: [2048]i32 = [";
@@ -80,18 +68,24 @@ static void merged_syntax(void) {
   }
   DynSource merged = {0}; DynSources sources = {inputs, 3};
   assert(!dyn_sources_merge(&sources, "merged", &merged) && merged.syntax_part_count == 4);
-  /* Shifted per-file trees must match a fresh parse of the merged text. */
-  TSTree *fresh = dyn_syntax_parse(merged.text, merged.length);
-  assert(fresh && !ts_node_has_error(ts_tree_root_node(fresh)));
-  TSNode root = ts_tree_root_node(fresh);
-  uint32_t top = 0;
+  /* Per-file trees, shifted by their partition, match a fresh parse of the
+     merged text. */
+  ExpSnapshot *fresh = exp_snapshot_create(merged.text, merged.length, NULL, NULL);
+  assert(fresh && !exp_snapshot_tree(fresh)->error_count);
+  const ExpSnapshotTree *root = exp_snapshot_tree(fresh);
+  uint32_t top = root->nodes[root->root].first;
+  size_t prelude = merged.syntax_part_count - merged.map_count;
   for (size_t part = 0; part < merged.syntax_part_count; ++part) {
-    TSNode shifted = ts_tree_root_node(merged.syntax_parts[part]);
-    for (uint32_t i = 0; i < ts_node_named_child_count(shifted); ++i)
-      same_subtree(ts_node_named_child(shifted, i), ts_node_named_child(root, top++));
+    const ExpSnapshotTree *shifted = exp_snapshot_tree(merged.compact_parts[part]);
+    uint32_t offset = part < prelude ? 0 : (uint32_t)merged.maps[part - prelude].start;
+    for (uint32_t i = shifted->nodes[shifted->root].first; i != UINT32_MAX; i = shifted->nodes[i].next) {
+      assert(top != UINT32_MAX);
+      same_subtree(shifted, i, offset, root, top);
+      top = root->nodes[top].next;
+    }
   }
-  assert(top == ts_node_named_child_count(root));
-  ts_tree_delete(fresh);
+  assert(top == UINT32_MAX);
+  exp_snapshot_release(fresh);
   DynLocationIndex index = {0}; assert(dyn_location_build(&index, &merged));
   for (size_t i = 0; i <= merged.length + 1; ++i) {
     const char *a_path, *b_path; unsigned al, ac, bl, bc;

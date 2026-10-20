@@ -145,8 +145,10 @@ static int hash_module(const DynSources *sources, size_t first, size_t count,
   (void)context;
   uint64_t hash = UINT64_C(1469598103934665603);
   for (size_t i = first; i < first + count; ++i) {
-    hash = hash_bytes(hash, sources->items[i].path,
-                      strlen(sources->items[i].path));
+    size_t path_length = strlen(sources->items[i].path);
+    hash = hash_bytes(hash, &path_length, sizeof(path_length));
+    hash = hash_bytes(hash, sources->items[i].path, path_length);
+    hash = hash_bytes(hash, &sources->items[i].length, sizeof(sources->items[i].length));
     hash = hash_bytes(hash, sources->items[i].text, sources->items[i].length);
     hash = dyn_load_hash(hash, sources->items[i].path, sources->items[i].text,
                          sources->items[i].length);
@@ -176,6 +178,7 @@ static uint64_t hash_project_sources(uint64_t hash, const DynSources *sources) {
     }
     uint64_t module = 0;
     hash_module(sources, first, end - first, NULL, &module);
+    if (!module) return 0;
     hash = hash_bytes(hash, &module, sizeof(module));
     first = end;
   }
@@ -191,6 +194,13 @@ static uint64_t hash_runtime(uint64_t hash, const DynOptions *options,
     support = "dynrt_aarch64_support.o";
   } else if (!strcmp(options->target, "aarch64-macos")) {
     start = "dynrt_macos_start.o"; support = "dynrt_macos_support.o";
+  } else if (!strcmp(options->target, "x86_64-macos")) {
+    start = "dynrt_macos_x64_start.o"; support = "dynrt_macos_x64_support.o";
+  } else if (!strcmp(options->target, "aarch64-windows")) {
+    start = "dynrt_windows_arm64_start.o"; support = "dynrt_windows_arm64_support.o";
+  } else if (!strcmp(options->target, "riscv64-linux")) {
+    start = options->release ? "dynrt_riscv64_release.o" : "dynrt_riscv64_start.o";
+    support = "dynrt_riscv64_support.o";
   } else if (!strcmp(options->target, "x86_64-windows")) {
     start = "dynrt_windows_start.o"; support = "dynrt_windows_support.o";
   }
@@ -198,14 +208,20 @@ static uint64_t hash_runtime(uint64_t hash, const DynOptions *options,
   if (!slash) return 0;
   size_t directory = (size_t)(slash - compiler_path);
   if (directory > 4000) return 0;
-  const char *names[] = {start, support};
-  for (size_t i = 0; hash && i < 2; ++i) {
+  bool darwin = strstr(options->target, "-macos") != NULL;
+  const char *names[] = {start, support, "libSystem.tbd"};
+  for (size_t i = 0; hash && i < (darwin ? 3u : 2u); ++i) {
     char path[4096];
     int n = snprintf(path, sizeof(path), "%.*s/%s", (int)directory, compiler_path, names[i]);
     if (n < 0 || (size_t)n >= sizeof(path)) return 0;
     if (access(path, R_OK)) {
       n = snprintf(path, sizeof(path), "%.*s/../lib/dyn/%s", (int)directory, compiler_path, names[i]);
       if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+    }
+    if (i == 2) {
+      bool present = !access(path, R_OK);
+      hash = hash_bytes(hash, &present, sizeof(present));
+      if (!present) continue; /* Matches the linker's optional system stub. */
     }
     hash = hash_file(hash, path);
   }
@@ -215,8 +231,6 @@ static uint64_t hash_runtime(uint64_t hash, const DynOptions *options,
 /* Include resolved host features, not just the word "native": caches can be
    shared by machines. Profile content changes must invalidate final outputs. */
 static uint64_t optimization_key(uint64_t hash, const DynOptions *options) {
-  // Cached artifacts skip semantic diagnostics. Warning policy must therefore
-  // participate in every executable/module key, not only emitted-code options.
   const DynOptimization *o = &options->optimization;
   unsigned level = o->level ? o->level : 2;
   hash = hash_bytes(hash, &level, sizeof(level));
@@ -230,18 +244,35 @@ static uint64_t optimization_key(uint64_t hash, const DynOptions *options) {
   return hash;
 }
 
+/* Linker arguments are not all files. Include spelling/order (SONAME and
+   search semantics can depend on paths), and contents of file-valued options.
+   Unknown options cannot be safely fingerprinted without resolving their
+   dependencies, so leave executable caching unavailable for those commands. */
+static uint64_t hash_link_inputs(uint64_t hash, const DynOptions *options) {
+  const char *selection = getenv("DYN_LINKER");
+  if (selection && *selection && strcmp(selection, "builtin")) return 0;
+  hash = hash_bytes(hash, &options->link_input_count, sizeof(options->link_input_count));
+  for (size_t i = 0; hash && i < options->link_input_count; ++i) {
+    const char *input = options->link_inputs[i];
+    hash = hash_bytes(hash, input, strlen(input) + 1);
+    if (!strncmp(input, "-rpath=", 7) || !strncmp(input, "--rpath=", 8)) continue;
+    if (!strncmp(input, "--version-script=", 17)) input += 17;
+    else if (*input == '-') return 0;
+    hash = hash_file(hash, input);
+  }
+  return hash;
+}
+
 static uint64_t build_key(const DynSources *sources, const DynOptions *options,
                           const char *compiler_path) {
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
   hash = hash_project_sources(hash, sources);
-  for (size_t i = 0; i < options->link_input_count; ++i)
-    hash = hash_file(hash, options->link_inputs[i]);
+  hash = hash_link_inputs(hash, options);
   return hash_runtime(hash, options, compiler_path);
 }
 
@@ -251,7 +282,6 @@ static uint64_t codegen_key(const DynSources *sources,
   uint64_t hash = compiler_key(options, compiler_path);
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
@@ -269,7 +299,7 @@ static char *suffixed_path(const char *output, const char *suffix) {
   return path;
 }
 
-static bool copy_file(const char *from, const char *to) {
+static bool copy_file_contents(const char *from, const char *to) {
   FILE *input = fopen(from, "rb"), *output = input ? fopen(to, "wb") : NULL;
   if (!output) {
     if (input)
@@ -296,6 +326,45 @@ static bool copy_file(const char *from, const char *to) {
   return ok;
 }
 
+static bool cache_replace(const char *from, const char *to) {
+#ifdef _WIN32
+  return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+  return rename(from, to) == 0;
+#endif
+}
+
+/* Publish complete artifacts only; failed restore must preserve the caller's
+   output. A unique temporary also keeps concurrent writers independent. */
+static bool copy_file_verified(const char *from, const char *to, uint64_t digest) {
+  char *temporary = suffixed_path(to, ".XXXXXX");
+  if (!temporary) return false;
+  int descriptor = mkstemp(temporary);
+  bool ok = descriptor >= 0;
+  if (ok) close(descriptor);
+  if (ok) ok = copy_file_contents(from, temporary);
+  if (ok && digest) ok = hash_file(UINT64_C(1469598103934665603), temporary) == digest;
+  if (ok) ok = cache_replace(temporary, to);
+  if (!ok) remove(temporary);
+  free(temporary);
+  return ok;
+}
+
+static bool store_digest(const char *path, uint64_t key, uint64_t digest) {
+  char *temporary = suffixed_path(path, ".XXXXXX");
+  if (!temporary) return false;
+  int descriptor = mkstemp(temporary);
+  FILE *file = descriptor < 0 ? NULL : fdopen(descriptor, "w");
+  if (!file && descriptor >= 0) close(descriptor);
+  bool ok = file && fprintf(file, "%016llx %016llx\n",
+                            (unsigned long long)key, (unsigned long long)digest) > 0;
+  if (file && fclose(file)) ok = false;
+  if (ok) ok = cache_replace(temporary, path);
+  if (!ok) remove(temporary);
+  free(temporary);
+  return ok;
+}
+
 static char *cache_path(const char *output) {
   size_t length = strlen(output);
   char *path = malloc(length + sizeof(".dyncache"));
@@ -304,192 +373,6 @@ static char *cache_path(const char *output) {
   memcpy(path, output, length);
   memcpy(path + length, ".dyncache", sizeof(".dyncache"));
   return path;
-}
-
-typedef struct {
-  uint64_t magic, options;
-  uint32_t count;
-} FastHeader;
-typedef struct {
-  uint64_t device, inode, size, seconds, nanoseconds, change_seconds,
-      change_nanoseconds;
-  uint32_t path_length;
-} FastEntry;
-
-static uint64_t fast_options(const DynOptions *options, const char *compiler_path) {
-  uint64_t hash = UINT64_C(1469598103934665603);
-  hash = hash_bytes(hash, options->target, strlen(options->target));
-  hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
-  hash = optimization_key(hash, options);
-  hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
-  hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
-  return hash_runtime(hash, options, compiler_path);
-}
-static bool fast_stat(FILE *file, const char *path, bool write) {
-  struct stat st;
-  FastEntry entry = {0};
-  size_t length = strlen(path);
-  if (stat(path, &st) || length > UINT32_MAX)
-    return false;
-  entry.device = (uint64_t)st.st_dev;
-  entry.inode = (uint64_t)st.st_ino;
-  entry.size = (uint64_t)st.st_size;
-  entry.seconds = (uint64_t)st.st_mtim.tv_sec;
-  entry.nanoseconds = (uint64_t)st.st_mtim.tv_nsec;
-  entry.change_seconds = (uint64_t)st.st_ctim.tv_sec;
-  entry.change_nanoseconds = (uint64_t)st.st_ctim.tv_nsec;
-  entry.path_length = (uint32_t)length;
-  if (write)
-    return fwrite(&entry, sizeof(entry), 1, file) == 1 &&
-           fwrite(path, 1, length, file) == length;
-  FastEntry stored;
-  char *name;
-  if (fread(&stored, sizeof(stored), 1, file) != 1 || stored.path_length > 4096)
-    return false;
-  name = malloc((size_t)stored.path_length + 1);
-  if (!name)
-    return false;
-  bool ok = fread(name, 1, stored.path_length, file) == stored.path_length;
-  name[stored.path_length] = 0;
-  ok = ok && !strcmp(name, path) && stored.device == entry.device &&
-       stored.inode == entry.inode && stored.size == entry.size &&
-       stored.seconds == entry.seconds &&
-       stored.nanoseconds == entry.nanoseconds;
-  ok = ok && stored.change_seconds == entry.change_seconds &&
-       stored.change_nanoseconds == entry.change_nanoseconds;
-  free(name);
-  return ok;
-}
-static char *fast_path(const char *output) {
-  return suffixed_path(output, ".dyncache.files");
-}
-
-bool dyn_cache_fast_hit(const DynOptions *options, const char *compiler_path,
-                        const char *output) {
-  if (options->no_cache)
-    return false;
-  char *path = fast_path(output);
-  FILE *file = path ? fopen(path, "rb") : NULL;
-  FastHeader header;
-  bool ok = file && fread(&header, sizeof(header), 1, file) == 1 &&
-            header.magic == UINT64_C(0x44594e4641535431) &&
-            header.options && header.options == fast_options(options, compiler_path) &&
-            header.count == options->link_input_count + 2 &&
-            fast_stat(file, output, false) &&
-            fast_stat(file, compiler_path, false);
-  for (size_t i = 0; ok && i < options->link_input_count; ++i)
-    ok = fast_stat(file, options->link_inputs[i], false);
-  uint32_t source_count = 0;
-  if (ok)
-    ok = fread(&source_count, sizeof(source_count), 1, file) == 1 &&
-         source_count <= 16384;
-  for (uint32_t i = 0; ok && i < source_count; ++i) {
-    FastEntry stored;
-    if (fread(&stored, sizeof(stored), 1, file) != 1 ||
-        stored.path_length > 4096) {
-      ok = false;
-      break;
-    }
-    char *name = malloc((size_t)stored.path_length + 1);
-    if (!name) {
-      ok = false;
-      break;
-    }
-    ok = fread(name, 1, stored.path_length, file) == stored.path_length;
-    name[stored.path_length] = 0;
-    struct stat st;
-    ok = ok && !stat(name, &st) && stored.device == (uint64_t)st.st_dev &&
-         stored.inode == (uint64_t)st.st_ino &&
-         stored.size == (uint64_t)st.st_size &&
-         stored.seconds == (uint64_t)st.st_mtim.tv_sec &&
-         stored.nanoseconds == (uint64_t)st.st_mtim.tv_nsec &&
-         stored.change_seconds == (uint64_t)st.st_ctim.tv_sec &&
-         stored.change_nanoseconds == (uint64_t)st.st_ctim.tv_nsec;
-    free(name);
-  }
-  if (file)
-    fclose(file);
-  free(path);
-  return ok;
-}
-
-static void fast_store(const DynSources *sources, const DynOptions *options,
-                       const char *compiler_path, const char *output) {
-  char *path = fast_path(output);
-  if (!path)
-    return;
-  size_t n = strlen(path) + 32;
-  char *temporary = malloc(n);
-  if (!temporary) {
-    free(path);
-    return;
-  }
-  snprintf(temporary, n, "%s.%ld.tmp", path, (long)getpid());
-  FILE *file = fopen(temporary, "wb");
-  FastHeader header = {UINT64_C(0x44594e4641535431), fast_options(options, compiler_path),
-                       (uint32_t)(options->link_input_count + 2)};
-  bool ok = file && fwrite(&header, sizeof(header), 1, file) == 1 &&
-            fast_stat(file, output, true) &&
-            fast_stat(file, compiler_path, true);
-  for (size_t i = 0; ok && i < options->link_input_count; ++i)
-    ok = fast_stat(file, options->link_inputs[i], true);
-  long count_position = file ? ftell(file) : -1;
-  uint32_t count = 0;
-  if (count_position < 0)
-    ok = false;
-  if (ok)
-    ok = fwrite(&count, sizeof(count), 1, file) == 1;
-  for (size_t i = 0; ok && i < sources->count; ++i) {
-    ok = fast_stat(file, sources->items[i].path, true);
-    if (ok)
-      ++count;
-    char directory[4096];
-    size_t length = strlen(sources->items[i].path);
-    if (length >= sizeof(directory)) {
-      ok = false;
-      break;
-    }
-    memcpy(directory, sources->items[i].path, length + 1);
-    char *slash = strrchr(directory, '/');
-    if (slash) {
-      *slash = 0;
-      bool seen = false;
-      for (size_t j = 0; j < i; ++j) {
-        const char *prior = sources->items[j].path;
-        size_t n = (size_t)(strrchr(prior, '/') - prior);
-        if (strlen(directory) == n && !memcmp(directory, prior, n)) {
-          seen = true;
-          break;
-        }
-      }
-      if (!seen) {
-        ok = fast_stat(file, directory, true);
-        if (ok)
-          ++count;
-        char manifest[4096];
-        if (snprintf(manifest, sizeof(manifest), "%s/dyn.project", directory) <
-                (int)sizeof(manifest) &&
-            !access(manifest, F_OK)) {
-          ok = fast_stat(file, manifest, true);
-          if (ok)
-            ++count;
-        }
-      }
-    }
-  }
-  if (ok) {
-    long end = ftell(file);
-    ok = fseek(file, count_position, SEEK_SET) == 0 &&
-         fwrite(&count, sizeof(count), 1, file) == 1 &&
-         fseek(file, end, SEEK_SET) == 0;
-  }
-  if (file && fclose(file))
-    ok = false;
-  if (!ok || rename(temporary, path))
-    remove(temporary);
-  free(temporary);
-  free(path);
 }
 
 bool dyn_cache_hit(const DynSources *sources, const DynOptions *options,
@@ -521,66 +404,57 @@ void dyn_cache_store(const DynSources *sources, const DynOptions *options,
   char *path = cache_path(output);
   if (!path)
     return;
-  FILE *file = fopen(path, "w");
-  if (file) {
-    fprintf(
-        file, "%016llx %016llx\n",
-        (unsigned long long)build_key(sources, options, compiler_path),
-        (unsigned long long)hash_file(UINT64_C(1469598103934665603), output));
-    fclose(file);
-  }
+  uint64_t key = build_key(sources, options, compiler_path);
+  uint64_t digest = hash_file(UINT64_C(1469598103934665603), output);
+  if (key && digest) store_digest(path, key, digest);
   free(path);
-  fast_store(sources, options, compiler_path, output);
+}
+
+static bool object_cache_paths(uint64_t key, char *artifact, size_t capacity,
+                               char *metadata, size_t metadata_capacity) {
+  char root[4096];
+  if (!key || !dyn_cache_directory(root, sizeof(root))) return false;
+  int n = snprintf(artifact, capacity, "%s/native-%016llx.o", root,
+                   (unsigned long long)key);
+  if (n < 0 || (size_t)n >= capacity) return false;
+  n = snprintf(metadata, metadata_capacity, "%s.sum", artifact);
+  return n >= 0 && (size_t)n < metadata_capacity;
 }
 
 bool dyn_object_cache_restore(const DynSources *sources,
                               const DynOptions *options,
                               const char *compiler_path, const char *output,
                               const char *object) {
-  if (options->no_cache)
-    return false;
-  char *artifact = suffixed_path(output, ".dyncache.o");
-  char *metadata = suffixed_path(output, ".dyncache.obj");
-  FILE *file = metadata ? fopen(metadata, "r") : NULL;
+  (void)output; /* Native objects are reusable across output paths and run. */
+  if (options->no_cache) return false;
+  char artifact[4096], metadata[4096];
+  uint64_t key = codegen_key(sources, options, compiler_path);
+  if (!object_cache_paths(key, artifact, sizeof(artifact), metadata, sizeof(metadata))) return false;
+  FILE *file = fopen(metadata, "r");
   unsigned long long stored = 0, digest = 0;
-  bool hit =
-      artifact && file && fscanf(file, "%llx %llx", &stored, &digest) == 2 &&
-      stored && digest &&
-      (uint64_t)stored == codegen_key(sources, options, compiler_path) &&
-      (uint64_t)digest == hash_file(UINT64_C(1469598103934665603), artifact) &&
-      copy_file(artifact, object);
-  if (file)
-    fclose(file);
-  free(artifact);
-  free(metadata);
-  return hit;
+  bool hit = file && fscanf(file, "%llx %llx", &stored, &digest) == 2 &&
+             stored == key && digest;
+  if (file) fclose(file);
+  return hit && copy_file_verified(artifact, object, (uint64_t)digest);
 }
 
 void dyn_object_cache_store(const DynSources *sources,
                             const DynOptions *options,
                             const char *compiler_path, const char *output,
                             const char *object) {
-  if (options->no_cache)
-    return;
-  char *artifact = suffixed_path(output, ".dyncache.o");
-  char *metadata = suffixed_path(output, ".dyncache.obj");
-  if (artifact && metadata && copy_file(object, artifact)) {
-    FILE *file = fopen(metadata, "w");
-    if (file) {
-      fprintf(file, "%016llx %016llx\n",
-              (unsigned long long)codegen_key(sources, options, compiler_path),
-              (unsigned long long)hash_file(UINT64_C(1469598103934665603),
-                                            artifact));
-      fclose(file);
-    }
-  }
-  free(artifact);
-  free(metadata);
+  (void)output;
+  if (options->no_cache) return;
+  char artifact[4096], metadata[4096];
+  uint64_t key = codegen_key(sources, options, compiler_path);
+  if (!object_cache_paths(key, artifact, sizeof(artifact), metadata, sizeof(metadata))) return;
+  uint64_t digest = hash_file(UINT64_C(1469598103934665603), object);
+  if (digest && copy_file_verified(object, artifact, digest))
+    store_digest(metadata, key, digest);
 }
 
 /* One artifact per rewritten module. The key deliberately excludes output and
    link inputs: identical module code is reusable across executables and a
-   link-only change never triggers LLVM. Stores are atomic, so process workers
+   link-only change never triggers code generation. Stores are atomic, so process workers
    may populate the same cache safely. */
 /* A chunk depends on its own source files and on the program interface
    (types, globals, signatures). Edits to other files' function bodies leave
@@ -594,7 +468,6 @@ static uint64_t module_key(const DynSources *sources, size_t first,
   hash = hash_bytes(hash, &chunks, sizeof(chunks));
   hash = hash_bytes(hash, options->target, strlen(options->target));
   hash = hash_bytes(hash, &options->release, sizeof(options->release));
-  hash = hash_bytes(hash, &options->no_lto, sizeof(options->no_lto));
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   size_t object_length = strlen(object);
@@ -614,7 +487,7 @@ static uint64_t module_key(const DynSources *sources, size_t first,
     hash = hash_bytes(hash, source->text, source->length);
     hash = dyn_load_hash(hash, source->path, source->text, source->length);
   }
-  return hash ? hash : 1;
+  return hash;
 }
 
 static bool module_artifact(char *path, size_t capacity, const char *root,
@@ -648,7 +521,7 @@ bool dyn_module_cache_restore(const DynSources *sources, size_t first,
       (uint64_t)digest == hash_file(UINT64_C(1469598103934665603), artifact);
   if (file)
     fclose(file);
-  return valid && copy_file(artifact, object);
+  return valid && copy_file_verified(artifact, object, (uint64_t)digest);
 }
 
 void dyn_module_cache_store(const DynSources *sources, size_t first,
@@ -669,7 +542,8 @@ void dyn_module_cache_store(const DynSources *sources, size_t first,
       snprintf(metadata_temporary, sizeof(metadata_temporary), "%s.%ld.tmp",
                metadata, (long)getpid()) >= (int)sizeof(metadata_temporary))
     return;
-  if (!copy_file(object, temporary) || rename(temporary, artifact)) {
+  uint64_t digest = hash_file(UINT64_C(1469598103934665603), object);
+  if (!digest || !copy_file_verified(object, temporary, digest) || !cache_replace(temporary, artifact)) {
     remove(temporary);
     return;
   }
@@ -678,7 +552,7 @@ void dyn_module_cache_store(const DynSources *sources, size_t first,
     return;
   fprintf(
       file, "%016llx\n",
-      (unsigned long long)hash_file(UINT64_C(1469598103934665603), artifact));
-  if (fclose(file) || rename(metadata_temporary, metadata))
+      (unsigned long long)digest);
+  if (fclose(file) || !cache_replace(metadata_temporary, metadata))
     remove(metadata_temporary);
 }

@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
-#include "dyn_syntax.h"
 #include "dyn_scope.h"
 #include "dyn_compact.h"
 #include "dyn_imports.h"
@@ -9,13 +8,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <tree_sitter/api.h>
 #include <unistd.h>
 #ifndef _WIN32
 #include <pthread.h>
 #include <stdatomic.h>
 #endif
-extern const TSLanguage *tree_sitter_dyn(void);
 extern char *realpath(const char *, char *);
 
 typedef struct {
@@ -67,6 +64,7 @@ typedef struct Prefetched {
   bool taken;
 } Prefetched;
 static bool append_source(DynSources *, const DynSource *);
+static bool share_syntax(DynSource *, const DynSource *);
 static int overlay_source_order(const void *left, const void *right) {
   return strcmp(((const DynSource *)left)->path,
                 ((const DynSource *)right)->path);
@@ -107,8 +105,7 @@ static bool apply_overrides(const DynContext *context, DynSources *sources,
       free(sources->items[i].text);
       sources->items[i].text = text;
       sources->items[i].length = replacement->length;
-      sources->items[i].syntax = dyn_source_tree(replacement);
-      if (!sources->items[i].syntax)
+      if (!share_syntax(&sources->items[i], replacement))
         return false;
     }
   }
@@ -135,6 +132,15 @@ static bool push(char ***v, size_t *n, const char *s) {
   return true;
 }
 static void pop(char **v, size_t *n) { free(v[--*n]); }
+/* Text copies share the immutable syntax snapshot of their revision. */
+static bool share_syntax(DynSource *d, const DynSource *s) {
+  if (s->compact) {
+    if (!exp_snapshot_retain(s->compact)) return false;
+    d->compact = s->compact;
+  }
+  /* Facts (reflection, certificate) are derived for the adopted revision. */
+  return dyn_source_prepare(d);
+}
 static bool append_source(DynSources *out, const DynSource *s) {
   DynSource *p = realloc(out->items, (out->count + 1) * sizeof(*p));
   if (!p)
@@ -152,28 +158,10 @@ static bool append_source(DynSources *out, const DynSource *s) {
     return false;
   }
   memcpy(d->text, s->text, s->length + 1);
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-  if (s->compact_validated) {
-    d->compact_validated=true;
-    d->compact_root_start=s->compact_root_start; d->compact_root_end=s->compact_root_end;
-  } else
-#endif
-  d->syntax = dyn_source_tree(s);
-  if (!d->syntax
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-      && !d->compact_validated
-#endif
-     ) {
+  if (!share_syntax(d, s)) {
     dyn_source_free(d);
     return false;
   }
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-  if (s->compact) {
-    if (!exp_snapshot_retain(s->compact)) { dyn_source_free(d); return false; }
-    d->compact = s->compact;
-    d->compact_reflection = s->compact_reflection;
-  }
-#endif
   ++out->count;
   return true;
 }
@@ -483,56 +471,24 @@ static int extract_interface(Resolver *r, const char *directory,
     if (!dyn_work_step(&s->context, 1)) { free_interface(&value); return 2; }
     if (dyn_source_target_enabled(s) == 0)
       continue;
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
-    if (compact) {
-      for (uint32_t wrapper = compact->nodes[compact->root].first;
-           wrapper != UINT32_MAX; wrapper = compact->nodes[wrapper].next) {
-        if (!dyn_work_step(&s->context, 1)) { free_interface(&value); return 2; }
-        uint32_t name = dyn_compact_name(compact, wrapper);
-        if (name == UINT32_MAX) continue;
-        const ExpNode *n = &compact->nodes[name];
-        char *text = dyn_import_copy(s->text + n->start, n->end - n->start);
-        InterfaceDecl *next = text ? realloc(value.decls,
-            (value.decl_count + 1) * sizeof(*next)) : NULL;
-        if (!text || !next) { free(text); free_interface(&value); return 2; }
-        value.decls = next;
-        value.decls[value.decl_count] = (InterfaceDecl){.name = text,
-          .is_public = (compact->nodes[wrapper].flags & EXP_PUBLIC) != 0,
-          .order = value.decl_count};
-        ++value.decl_count;
-      }
-      continue;
-    }
-#endif
-    TSTree *t = dyn_source_tree(s);
-    if (!t) {
-      free_interface(&value);
-      return 2;
-    }
-    TSNode root = ts_tree_root_node(t);
-    for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
-      DynDeclaration declaration;
-      if (!dyn_syntax_declaration(ts_node_named_child(root, i), &declaration))
-        continue;
-      TSNode n = declaration.name;
-      char *text = dyn_syntax_copy_text(n, s, false);
-      InterfaceDecl *next =
-          text ? realloc(value.decls, (value.decl_count + 1) * sizeof(*next))
-               : NULL;
-      if (!text || !next) {
-        free(text);
-        ts_tree_delete(t);
-        free_interface(&value);
-        return 2;
-      }
+    if (!compact) { free_interface(&value); return 2; }
+    for (uint32_t wrapper = compact->nodes[compact->root].first;
+         wrapper != UINT32_MAX; wrapper = compact->nodes[wrapper].next) {
+      if (!dyn_work_step(&s->context, 1)) { free_interface(&value); return 2; }
+      uint32_t name = dyn_compact_name(compact, wrapper);
+      if (name == UINT32_MAX) continue;
+      const ExpNode *n = &compact->nodes[name];
+      char *text = dyn_import_copy(s->text + n->start, n->end - n->start);
+      InterfaceDecl *next = text ? realloc(value.decls,
+          (value.decl_count + 1) * sizeof(*next)) : NULL;
+      if (!text || !next) { free(text); free_interface(&value); return 2; }
       value.decls = next;
-      value.decls[value.decl_count] =
-          (InterfaceDecl){.name = text, .is_public = declaration.is_public,
-                          .order = value.decl_count};
+      value.decls[value.decl_count] = (InterfaceDecl){.name = text,
+        .is_public = (compact->nodes[wrapper].flags & EXP_PUBLIC) != 0,
+        .order = value.decl_count};
       ++value.decl_count;
     }
-    ts_tree_delete(t);
   }
   ModuleInterface *next =
       realloc(r->interfaces, (r->interface_count + 1) * sizeof(*next));
@@ -609,144 +565,11 @@ static int validate_member_at(Resolver *r, uint32_t start, uint32_t end, const D
   }
   return 0;
 }
-static int validate_member(Resolver *r, TSNode n, const DynSource *s,
-                           char **aliases, char **targets, size_t count,
-                           const char *qualifier, const char *member) {
-  return validate_member_at(r, ts_node_start_byte(n), ts_node_end_byte(n), s,
-                            aliases, targets, count, qualifier, member);
-}
-static int validate_refs(Resolver *r, TSNode n, const DynSource *s,
-                         const char *directory, char **aliases, char **targets,
-                         size_t count, const DynScopeIndex *locals) {
-  int errors = 0;
-  const char *kind = ts_node_type(n);
-  if (!strcmp(kind, "field_access")) {
-    TSNode base = dyn_syntax_child(n, 0);
-    if (strcmp(ts_node_type(base), "field_access")) {
-      while (dyn_syntax_child_count(base) == 1)
-        base = dyn_syntax_child(base, 0);
-      if (!strcmp(ts_node_type(base), "identifier")) {
-        char *qualifier = dyn_syntax_copy_text(base, s, false),
-             *member =
-                 dyn_syntax_copy_text(dyn_syntax_child(n, 1), s, false);
-        if (!qualifier || !member) {
-          free(qualifier);
-          free(member);
-          return 1;
-        }
-        // An exported member name does not make an arbitrary expression an
-        // import qualifier. Ordinary fields are resolved by semantic analysis.
-        if (alias_index(aliases, count, qualifier) < count &&
-            !dyn_scope_local(locals, base, s, qualifier))
-          errors += validate_member(r, n, s, aliases, targets, count, qualifier,
-                                    member);
-        free(qualifier);
-        free(member);
-      }
-    }
-  } else if (!strcmp(kind, "field_type")) {
-    uint32_t names = dyn_syntax_child_count(n);
-    if (names > 1) {
-      char *qualifier =
-               dyn_syntax_copy_text(dyn_syntax_child(n, 0), s, false),
-           *member = dyn_syntax_copy_text(dyn_syntax_child(n, 1), s, false);
-      if (!qualifier || !member) {
-        free(qualifier);
-        free(member);
-        return 1;
-      }
-      if (!(dyn_syntax_value_type(n) && dyn_scope_local(locals, n, s, qualifier)))
-        errors += validate_member(r, n, s, aliases, targets, count, qualifier, member);
-      free(qualifier);
-      free(member);
-    } else if (names == 1) {
-      char *name = dyn_syntax_copy_text(dyn_syntax_child(n, 0), s, false);
-      if (!name)
-        return 1;
-      bool pub = false;
-      if (!decl_named(r, directory, name, &pub) &&
-          !(dyn_syntax_value_type(n) && dyn_scope_local(locals, n, s, name)) &&
-          imported_decl(r, targets, count, name)) {
-        char message[512];
-        snprintf(message, sizeof(message),
-                 "imported type '%s' must be module-qualified", name);
-        dyn_syntax_diagnostic(n, s, "error", message);
-        ++errors;
-      }
-      free(name);
-    }
-  } else if (!strcmp(kind, "call")) {
-    TSNode callee = dyn_syntax_child(n, 0);
-    while (dyn_syntax_child_count(callee) == 1)
-      callee = dyn_syntax_child(callee, 0);
-    if (!strcmp(ts_node_type(callee), "identifier")) {
-      char *name = dyn_syntax_copy_text(callee, s, false);
-      if (!name)
-        return 1;
-      bool pub = false;
-      if (!decl_named(r, directory, name, &pub) &&
-          !dyn_scope_local(locals, callee, s, name) &&
-          imported_decl(r, targets, count, name)) {
-        char message[512];
-        snprintf(message, sizeof(message),
-                 "imported function '%s' must be module-qualified", name);
-        dyn_syntax_diagnostic(callee, s, "error", message);
-        ++errors;
-      }
-      free(name);
-    }
-  } else if (!strcmp(kind, "struct_literal")) {
-    uint32_t names = 0, total = dyn_syntax_child_count(n);
-    while (names < total &&
-           !strcmp(ts_node_type(dyn_syntax_child(n, names)), "identifier"))
-      ++names;
-    if (names > 1) {
-      char *qualifier =
-               dyn_syntax_copy_text(dyn_syntax_child(n, 0), s, false),
-           *member = dyn_syntax_copy_text(dyn_syntax_child(n, 1), s, false);
-      if (!qualifier || !member) {
-        free(qualifier);
-        free(member);
-        return 1;
-      }
-      errors +=
-          validate_member(r, n, s, aliases, targets, count, qualifier, member);
-      free(qualifier);
-      free(member);
-    } else if (names == 1) {
-      char *name = dyn_syntax_copy_text(dyn_syntax_child(n, 0), s, false);
-      if (!name)
-        return 1;
-      bool pub = false;
-      if (!decl_named(r, directory, name, &pub) &&
-          imported_decl(r, targets, count, name)) {
-        char message[512];
-        snprintf(message, sizeof(message),
-                 "imported type '%s' must be module-qualified", name);
-        dyn_syntax_diagnostic(n, s, "error", message);
-        ++errors;
-      }
-      free(name);
-    }
-  }
-  TSTreeCursor children = ts_tree_cursor_new(n);
-  if (ts_tree_cursor_goto_first_child(&children)) do {
-    TSNode child = ts_tree_cursor_current_node(&children);
-    if (ts_node_is_named(child))
-      errors += validate_refs(r, child, s, directory, aliases, targets, count, locals);
-  } while (ts_tree_cursor_goto_next_sibling(&children));
-  ts_tree_cursor_delete(&children);
-  return errors;
-}
 #include "module_compact_refs.h"
-static int validate_source_refs(Resolver *r, TSNode root, const DynSource *s,
+static int validate_source_refs(Resolver *r, const DynSource *s,
                                 const char *directory, char **aliases, char **targets,
                                 size_t count, const DynScopeIndex *locals) {
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
-  const ExpSnapshotTree *tree = dyn_compact_tree(s);
-  if (tree) return validate_compact_refs(r, s, tree, directory, aliases, targets, count, locals);
-#endif
-  return validate_refs(r, root, s, directory, aliases, targets, count, locals);
+  return validate_compact_refs(r, s, dyn_compact_tree(s), directory, aliases, targets, count, locals);
 }
 static int visit(Resolver *r, const char *directory,
                  const DynSources *provided) {
@@ -882,19 +705,11 @@ static int visit(Resolver *r, const char *directory,
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     const DynSource *s = &sources->items[si];
-    TSTree *t = NULL;
-    bool compact=false;
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-    compact=s->compact_validated;
-#endif
-    if (!compact) t=dyn_source_tree(s);
-    TSNode root=t ? ts_tree_root_node(t) : (TSNode){0};
     DynScopeIndex locals = {0};
-    if ((!compact && !t) || !dyn_scope_build(&locals, root, s)) result = 2;
-    else result += validate_source_refs(r, root, s, directory, aliases,
+    if (!dyn_scope_build(&locals, s)) result = 2;
+    else result += validate_source_refs(r, s, directory, aliases,
                                 targets, alias_count, &locals);
     dyn_scope_free(&locals);
-    if (t) ts_tree_delete(t);
   }
   if (r->out && sources == &owned && !result) {
     /* Hand loaded sources over instead of copying their text and trees. */
@@ -968,11 +783,7 @@ static bool prefetch_imports(Resolver *r, const char *directory,
                              const DynSources *sources) {
   for (size_t si = 0; si < sources->count; ++si) {
     const DynSource *s = &sources->items[si];
-    if (dyn_source_target_enabled(s) != 1 || (!s->syntax
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-        && !s->compact_validated
-#endif
-        )) continue;
+    if (dyn_source_target_enabled(s) != 1 || !s->compact) continue;
     DynImports imports;
     if (!dyn_imports_open(&imports, s)) return false;
     DynImportView item;
@@ -1049,20 +860,12 @@ static void prefetch_free(Resolver *r) {
 static int check_refs(Resolver *r, const DeferredRefs *d, const DynSource *s) {
   if (dyn_source_target_enabled(s) == 0)
     return 0;
-  TSTree *t = NULL;
-  bool compact=false;
-#ifdef DYN_EXPERIMENT_COMPACT_FIRST
-  compact=s->compact_validated;
-#endif
-  if (!compact) t=dyn_source_tree(s);
-  TSNode root=t ? ts_tree_root_node(t) : (TSNode){0};
   DynScopeIndex locals = {0};
   int result;
-  if ((!compact && !t) || !dyn_scope_build(&locals, root, s)) result = -1;
-  else result = validate_source_refs(r, root, s, d->directory, d->aliases,
+  if (!dyn_scope_build(&locals, s)) result = -1;
+  else result = validate_source_refs(r, s, d->directory, d->aliases,
                               d->targets, d->alias_count, &locals) ? 1 : 0;
   dyn_scope_free(&locals);
-  if (t) ts_tree_delete(t);
   return result;
 }
 #ifndef _WIN32

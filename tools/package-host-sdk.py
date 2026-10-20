@@ -3,9 +3,11 @@
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -17,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = Path(os.environ.get('BUILD', ROOT/'build')).resolve()
 DIST = BUILD/'dist'
 WINDOWS = sys.platform == 'win32'
-PLATFORM = 'windows-x86_64' if WINDOWS else 'macos-aarch64'
+ARCH = 'aarch64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x86_64'
+PLATFORM = ('windows-' if WINDOWS else 'macos-') + ARCH
 
 
 def run(*command):
@@ -29,13 +32,17 @@ def sha(path):
 
 
 def windows_bundle(sdk):
-    prefix = Path(run('llvm-config', '--prefix'))
+    compiler = shutil.which(shlex.split(os.environ.get('CC', 'gcc'))[0])
+    if not compiler:
+        raise RuntimeError('Cannot locate the native compiler toolchain')
+    inspector = shutil.which('objdump') or shutil.which('llvm-objdump')
+    if not inspector:
+        raise RuntimeError('Packaging requires objdump or llvm-objdump to inspect DLL imports')
+    prefix = Path(compiler).resolve().parent.parent
     binary_dir = prefix/'bin'
     files = {p.name.lower(): p for p in binary_dir.glob('*.dll')}
     tools = sdk/'lib/dyn/tools'; tools.mkdir(parents=True)
-    shutil.copy2(binary_dir/'ld.lld.exe', tools/'ld.lld.exe')
-    queue = [(sdk/'bin/dyn.exe', BUILD/'dyn-release.exe'),
-             (tools/'ld.lld.exe', binary_dir/'ld.lld.exe')]
+    queue = [(sdk/'bin/dyn.exe', BUILD/'dyn-release.exe')]
     seen = set()
     packages = {}
     notices = sdk/'share/dyn/licenses'; notices.mkdir()
@@ -60,7 +67,10 @@ def windows_bundle(sdk):
         if target.name.lower() in seen: continue
         seen.add(target.name.lower())
         if source != BUILD/'dyn-release.exe': notice(source)
-        for name in re.findall(r'^\s*Name: (.+\.dll)\s*$', run('llvm-readobj', '--coff-imports', source), re.M | re.I):
+        imports = re.findall(r'^\s*DLL Name: (.+\.dll)\s*$', run(inspector, '-p', source), re.M | re.I)
+        if any('llvm' in name.lower() or 'stdc++' in name.lower() for name in imports):
+            raise RuntimeError('Unexpected LLVM/C++ dependency in native SDK')
+        for name in imports:
             key = name.lower()
             if key in files:
                 destination = sdk/'bin'/files[key].name
@@ -89,73 +99,28 @@ def windows_bundle(sdk):
             'Unmodified MSYS2 libiconv corresponding source, including upstream source,\n'
             'patches and PKGBUILD. Extract with tar; build with makepkg-mingw in CLANG64.\n'
             'The bundled DLL can be replaced with a compatible rebuilt version.\n')
-    # CLANG64 uses libc++; unexpected GCC/MSYS runtimes need separate qualification.
+    # The independent GCC build links libgcc statically; no GNU DLL is expected.
     if any('gcc' in name or 'stdc++' in name or 'msys-2.0' in name for name in seen):
         raise RuntimeError('Unexpected GNU/MSYS runtime in CLANG64 SDK')
     return dict(platform=PLATFORM, dependencies=sorted(seen), packages=packages, sources=sources)
 
 
 def macos_bundle(sdk):
-    libraries = sdk/'lib/dyn/host'; libraries.mkdir(parents=True)
-    tools = sdk/'lib/dyn/tools'; tools.mkdir()
-    notices = sdk/'share/dyn/licenses'; notices.mkdir()
-    linker = Path(run('brew', '--prefix', 'lld@19'))/'bin/ld64.lld'
-    shutil.copy2(linker, tools/'ld64.lld')
-    queue = [(sdk/'bin/dyn', BUILD/'dyn-release'), (tools/'ld64.lld', linker)]
-    seen = {}; packages = {}
-
-    def notice(source):
-        for parent in source.resolve().parents:
-            if (parent/'INSTALL_RECEIPT.json').is_file():
-                if str(parent) in packages: return
-                candidates = [p for p in parent.rglob('*') if p.is_file() and
-                              p.name.upper().startswith(('LICENSE', 'COPYING', 'NOTICE'))]
-                if not candidates: raise RuntimeError('Missing dependency license: '+str(parent))
-                directory = notices/(parent.parent.name+'-'+parent.name); directory.mkdir()
-                for i, path in enumerate(candidates): shutil.copy2(path, directory/(str(i)+'-'+path.name))
-                shutil.copy2(parent/'INSTALL_RECEIPT.json', directory/'INSTALL_RECEIPT.json')
-                packages[str(parent)] = parent.parent.name
-                return
-        raise RuntimeError('No Homebrew provenance for '+str(source))
-
-    for target, source in queue:
-        if source != BUILD/'dyn-release': notice(source)
-        changes = []
-        rpaths = re.findall(r'cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset', run('otool','-l',source))
-        dependencies = [line.strip().split(' (', 1)[0] for line in run('otool','-L',source).splitlines()[1:]]
-        for dependency in dependencies:
-            if dependency.startswith(('/usr/lib/', '/System/Library/')): continue
-            if dependency.startswith('@loader_path/'):
-                original = source.parent/dependency.removeprefix('@loader_path/')
-            elif dependency.startswith('@rpath/'):
-                candidates = [Path(r.replace('@loader_path', str(source.parent)))/dependency.removeprefix('@rpath/') for r in rpaths]
-                candidates += [source.parent/Path(dependency).name]
-                original = next((p for p in candidates if p.is_file()), None)
-                if original is None: raise RuntimeError('Unresolved Mach-O dependency: '+dependency)
-            else:
-                original = Path(dependency)
-            original = original.resolve()
-            if original == source.resolve(): continue  # dylib's own install ID
-            destination = libraries/original.name
-            if original.name in seen and seen[original.name] != original:
-                raise RuntimeError('Conflicting dylib basename: '+original.name)
-            if original.name not in seen:
-                seen[original.name] = original
-                shutil.copy2(original, destination)
-                queue.append((destination, original))
-            relative = os.path.relpath(destination, target.parent)
-            changes += ['-change', dependency, '@loader_path/'+relative]
-        if target.suffix == '.dylib': changes += ['-id', '@rpath/'+target.name]
-        if changes: run('install_name_tool', *changes, target)
-    # Sign after all load commands have been relocated; signatures cover final bytes.
-    for target, _ in queue:
-        run('codesign', '--force', '--sign', '-', target)
-        run('codesign', '--verify', target)
-        for line in run('otool','-L',target).splitlines()[1:]:
-            dependency = line.strip().split(' (',1)[0]
-            if dependency.startswith('/') and not dependency.startswith(('/usr/lib/', '/System/Library/')):
-                raise RuntimeError('Unbundled Mach-O dependency: '+dependency)
-    return dict(platform=PLATFORM, dependencies=sorted(seen), packages=packages, macos_min='15.0')
+    binary = sdk/'bin/dyn'
+    dependencies = [line.strip().split(' (', 1)[0]
+                    for line in run('otool', '-L', binary).splitlines()[1:]]
+    if any(not name.startswith(('/usr/lib/', '/System/Library/')) for name in dependencies):
+        raise RuntimeError('Unexpected dependency in LLVM-free SDK: '+str(dependencies))
+    commands = run('otool', '-l', binary)
+    minimum = re.search(r'cmd LC_BUILD_VERSION\s+cmdsize \d+\s+platform \S+\s+minos ([0-9.]+)', commands)
+    if minimum is None:
+        minimum = re.search(r'cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([0-9.]+)', commands)
+    if minimum is None:
+        raise RuntimeError('Compiler has no macOS deployment version')
+    run('codesign', '--force', '--sign', '-', binary)
+    run('codesign', '--verify', binary)
+    return dict(platform=PLATFORM, dependencies=dependencies, packages={},
+                macos_min=minimum.group(1), backend='native', targets=['x86_64-linux', 'aarch64-linux', 'riscv64-linux', 'x86_64-macos', 'aarch64-macos', 'x86_64-windows', 'aarch64-windows', 'wasm32-browser', 'wasm32-wasi'])
 
 
 if __name__ == '__main__':
@@ -167,7 +132,7 @@ if __name__ == '__main__':
         work = Path(temporary); sdk = work/'stage/dyn-sdk'
         subprocess.run([sys.executable, str(ROOT/'tools/install.py'), '--host'], check=True,
                        env=dict(os.environ, DESTDIR=(work/'stage').as_posix(), PREFIX='/dyn-sdk'))
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md','README.md','CHANGELOG.md','grammar.lock.json'): shutil.copy2(ROOT/name,sdk/name)
+        for name in ('LICENSE','THIRD_PARTY_NOTICES.md','README.md','CHANGELOG.md'): shutil.copy2(ROOT/name,sdk/name)
         shutil.copytree(ROOT/'docs/migrations', sdk/'docs/migrations')
         distribution = windows_bundle(sdk) if WINDOWS else macos_bundle(sdk)
         compiler = sdk/'bin'/('dyn.exe' if WINDOWS else 'dyn')

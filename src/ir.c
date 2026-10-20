@@ -411,7 +411,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
         a->expressions[i].right,      a->expressions[i].integer,
         a->expressions[i].floating,   a->expressions[i].boolean,
         a->expressions[i].item_start, a->expressions[i].item_count,
-        a->expressions[i].span,       a->expressions[i].wrap};
+        a->expressions[i].span,       a->expressions[i].wrap, 0};
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
       ir->expressions[i].kind = DYN_EXPR_NIL;
@@ -643,7 +643,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
                                     a->statements[i].for_range,
                                     a->statements[i].for_inclusive,
                                     a->statements[i].for_reverse,
-                                    a->statements[i].span};
+                                    a->statements[i].span, 0};
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value,
                                      a->patterns[i].last_value,

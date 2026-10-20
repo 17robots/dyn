@@ -1,5 +1,5 @@
 name: Setup standalone compiler
-description: Install LLVM 19, Tree-sitter runtime, Zig and just
+description: Install C tools, optional format-validation tools, and vendor-test dependencies
 runs:
   using: composite
   steps:
@@ -8,7 +8,7 @@ runs:
         set -euo pipefail
         sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
         sudo apt-get update
-        sudo apt-get install -y build-essential python3 clang-19 llvm-19-dev lld-19 patchelf
+        sudo apt-get install -y build-essential python3 clang-19 llvm-19 lld-19 patchelf
         echo /usr/lib/llvm-19/bin >> "$GITHUB_PATH"
         tool_root=$(mktemp -d)
         git clone --depth 1 --branch v0.25.8 https://github.com/tree-sitter/tree-sitter "$tool_root/tree-sitter"

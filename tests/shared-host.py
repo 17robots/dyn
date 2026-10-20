@@ -41,4 +41,13 @@ library.invoke.argtypes = [callback_type, c.c_int32]
 library.invoke.restype = c.c_int32
 assert library.invoke(callback, 41) == 42
 ''', str(output)], check=True, timeout=10)
+    (root / 'main.dyn').write_text('pub value:i32=41\n')
+    for mode in ('debug', 'release'):
+        output = root / ('globals-' + mode + suffix)
+        subprocess.run([str(DYN), 'build', str(root), '--shared', '--' + mode,
+                        '--output', str(output)], check=True, timeout=30)
+        subprocess.run([sys.executable, '-c',
+                        'import ctypes,sys; library=ctypes.CDLL(sys.argv[1]); '
+                        'assert ctypes.c_int32.in_dll(library,"value").value==41', str(output)],
+                       check=True, timeout=10)
 print('PASS native host loading and callbacks in debug/release shared libraries')

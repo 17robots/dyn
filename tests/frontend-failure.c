@@ -64,7 +64,7 @@ int main(void) {
   total = 0;
   for (size_t iteration = 0; !iteration || iteration <= total; ++iteration) {
     calls = failed = 0; fail_at = iteration;
-    int result = dyn_codegen_main(&source, object, NULL, NULL, false, true, false);
+    int result = dyn_codegen_main(&source, object, NULL, false, true, false);
     if (!iteration) { assert(!result); total = calls; }
     else { assert(failed); assert(result == 0 || result == 1 || result == 2); }
     unlink(object);

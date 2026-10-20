@@ -1,6 +1,5 @@
 #ifndef DYN_MODULE_COMPACT_REFS_H
 #define DYN_MODULE_COMPACT_REFS_H
-#ifdef DYN_EXPERIMENT_COMPACT_SOURCES
 /* Concrete source-reference checks over immutable compact nodes. Module lookup
    and diagnostics share the production policy; recovery keeps its TS walker. */
 static uint32_t compact_ref_unwrap(const ExpSnapshotTree *tree, uint32_t node) {
@@ -91,5 +90,4 @@ static int validate_compact_refs(Resolver *r, const DynSource *s, const ExpSnaps
   }
   return errors;
 }
-#endif
 #endif

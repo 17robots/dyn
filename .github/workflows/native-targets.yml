@@ -27,7 +27,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      LLVM_CONFIG: llvm-config-19
       CLANG: clang-19
       DYN: ./build/dyn-release
     steps:
@@ -55,6 +54,10 @@ jobs:
             runner: windows-2022
           - target: macos
             runner: macos-15
+          - target: windows-arm64
+            runner: windows-11-arm
+          - target: macos-x64
+            runner: macos-15-intel
           - target: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -69,9 +72,13 @@ jobs:
       - name: Execute debug and release probes
         shell: bash
         run: python run-native-artifacts.py --target "${{ matrix.target }}"
-      - name: Compare native and LLVM debug builds
+      - name: Compare debug builds with the x86-64 Linux reference
         shell: bash
         run: python native-differential.py --run "differential/${{ matrix.target }}"
+      - name: Compare Windows ARM64 SSA release builds with the Linux reference
+        if: matrix.target == 'windows-arm64'
+        shell: bash
+        run: python native-differential.py --run differential/windows-arm64-release
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -79,3 +86,30 @@ jobs:
           path: native-${{ matrix.target }}.json
           if-no-files-found: error
           retention-days: 30
+
+  riscv64:
+    name: Native riscv64-linux (QEMU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      DYN: ./build/dyn-release
+      DYN_SDK: ${{ github.workspace }}
+      CLANG: clang-19
+      DYN_RISCV_SYSROOT: /usr/riscv64-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host compiler and execution oracles
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 clang-19 llvm-19 qemu-user libc6-riscv64-cross
+          echo /usr/lib/llvm-19/bin >> "$GITHUB_PATH"
+      - name: Build independent compiler and runtimes
+        run: python3 tools/build.py host
+      - name: Execute runtime and C ABI probes
+        run: |
+          python3 tests/cross-runtime.py
+          python3 tests/aggregate-abi.py --riscv
+          python3 tests/riscv-linker.py
+          python3 tests/riscv-ssa-abi.py
+      - name: Compare native arithmetic and control flow with the x86-64 Linux reference
+        run: python3 tools/backend/native-differential.py --compiler build/dyn-release --target riscv64-linux --jobs 4

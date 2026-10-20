@@ -12,6 +12,73 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- The compiler no longer uses Tree-sitter. Its handwritten parser handles every
+  command and the language server, and source builds no longer need the
+  Tree-sitter library or a grammar checkout. Editor highlighting still uses the
+  separate `tree-sitter-dyn` grammar.
+- LLVM is no longer a compiler dependency. Debug, release, browser Wasm and
+  WASI builds use independent code generation and built-in linkers. The retained
+  LLVM backend and C++ ThinLTO bridge are removed; `--backend llvm` now reports
+  an error. Source builds require a C11 compiler and Python. Optional LLVM tools
+  remain useful for validating exported assembly in tests.
+- Release builds for x86-64 and AArch64 on Linux and macOS, RISC-V64 Linux and
+  Windows x86-64 and ARM64 generate code through an SSA optimizer and register allocator.
+  Typical loops run two to three times faster (more on RISC-V64) and binaries
+  are about 30% smaller. Runtime checks, their order and their messages are
+  unchanged. `DYN_NO_SSA=1` selects the previous code generator, and
+  `--opt-remarks` reports functions that still use it.
+- Small structs passed, returned and built as literals in release builds stay
+  in registers instead of going through stack memory. Code that works on small
+  structs runs faster, and binaries are about 3% smaller.
+- Release builds unroll and jam loop nests that sum floating-point products,
+  such as matrix multiply: two outer iterations share each inner loop. Results
+  are bit-identical, and the matrix multiply benchmark runs twice as fast.
+- Recursive functions that return `f(...) + x` on unsigned 64-bit integers, such
+  as Fibonacci, loop on their last call instead of recursing. Overflow still
+  panics with the same message.
+- RISC-V64 release calls preserve structs split between the final argument
+  register and the stack, including arguments following the struct.
+- Default release builds inline small leaf functions inside loops. Argument
+  evaluation, assignment targets, overflow checks and deferred cleanup retain
+  their original behavior; constant data is shared instead of duplicated.
+- On x86-64 Linux and macOS, unsigned recursive base cases can return before
+  setting up a frame. Pure two-branch additive recurrences also specialize their
+  first eight inputs when those results are proved non-overflowing.
+- `--emit-ir` is removed; use `--emit-asm` to inspect generated code. The
+  LLVM-syntax writer behind it was the last LLVM-shaped code in the compiler.
+- Native targets include Linux x86-64, AArch64 and RISC-V64, macOS x86-64 and
+  AArch64, and Windows x86-64 and ARM64. Runtime objects are generated directly,
+  without a target assembler. macOS output carries an ad-hoc signature; Windows
+  DLLs include base relocations and short-format import libraries.
+- Release O3 adds direct-call inlining, integer local register allocation on
+  x86-64/AArch64 Linux and macOS, and fixed-bound integer array SIMD loops using
+  SSE2/NEON. Unsupported cases retain scalar code and stack storage. These
+  improvements do not promise LLVM-equivalent performance on every workload.
+  See the independent toolchain guide for exact limits and benchmark commands.
+- Builds reuse complete executable cache entries. The removed ThinLTO pipeline
+  no longer supplies per-module native cache reuse. `--no-cache` still forces
+  rebuilding; `--no-lto` is accepted for command-line compatibility.
+- ELF linking supports anonymous symbol visibility scripts, RUNPATH, x86-64
+  lazy binding, and executable thread-local storage for supported x86-64 C
+  object relocations. Large heap layouts no longer inherit the stack-frame
+  size limit. These fixes support DNA's native dependencies.
+- Syntax errors name the offending token and what was expected (for example
+  `expected ')', found 'bar'` instead of `invalid syntax near 'ERROR'`). The
+  parser resumes at the next statement or declaration and reports up to 20
+  errors per file, in `dyn check`/`build`/`run` and in editors.
+- Stricter syntax: errors in files whose `#target` excludes the current
+  platform are now reported (they were ignored); NUL bytes anywhere and invalid
+  UTF-8 in string or character literals are errors; string literals may not
+  span lines. String literals containing `//` or `/*` (such as `"//x"`), which
+  the grammar could reject, are accepted. The 1024-level nesting limit is
+  measured on the new parser's tree and can be one level stricter.
+- Language server: syntax diagnostics list every recovered error. Selection
+  ranges skip redundant nested ranges, and completion inside partially written
+  statements resolves more local and field types. Recovery from broken code is
+  per statement, so a broken statement contributes nothing until it parses.
+
 ## 0.1.0-preview.24
 
 Compatible with preview 23, except that calling `main` is now an error.

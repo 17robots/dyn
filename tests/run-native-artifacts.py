@@ -8,11 +8,11 @@ from pathlib import Path
 import subprocess
 import time
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--target', required=True, choices=['windows','macos','aarch64'])
+parser.add_argument('--target', required=True, choices=['windows','macos','aarch64','windows-arm64','macos-x64'])
 parser.add_argument('--root', type=Path, default=Path.cwd())
 args = parser.parse_args()
 root = args.root.resolve()
-expected = {'windows':('Windows',('amd64','x86_64')), 'macos':('Darwin',('arm64','aarch64')), 'aarch64':('Linux',('aarch64','arm64'))}[args.target]
+expected = {'windows-arm64':('Windows',('arm64','aarch64')), 'macos-x64':('Darwin',('x86_64','amd64')), 'windows':('Windows',('amd64','x86_64')), 'macos':('Darwin',('arm64','aarch64')), 'aarch64':('Linux',('aarch64','arm64'))}[args.target]
 report = dict(target=args.target,host=platform.platform(),machine=platform.machine(),status='running',probes=[])
 try:
     if platform.system()!=expected[0] or platform.machine().lower() not in expected[1]:
@@ -33,9 +33,20 @@ try:
             row['sha256']=digest
             if digest!=probe['sha256']: raise RuntimeError('Artifact hash mismatch')
             if platform.system()!='Windows': artifact.chmod(artifact.stat().st_mode|0o111)
-            result=subprocess.run([str(artifact)],cwd=artifact.parent,capture_output=True,text=True,errors="replace",timeout=60)
+            if probe.get('kind') == 'shared':
+                # Isolate loader faults and ABI crashes from the remaining probes.
+                script = ('import ctypes,sys; library=ctypes.CDLL(sys.argv[1]); '
+                          'f=library.calculate; f.argtypes=[ctypes.c_double]; f.restype=ctypes.c_double; '
+                          'assert f(5.5)==1.5; assert f(-5.5)==-1.5')
+                import sys
+                command=[sys.executable,'-c',script,str(artifact)]
+            else:
+                command=[str(artifact)]
+            result=subprocess.run(command,cwd=artifact.parent,capture_output=True,text=True,errors="replace",timeout=60)
             row.update(returncode=result.returncode,stdout=result.stdout,stderr=result.stderr)
-            if result.returncode:
+            if 'expected_stdout' in probe and result.stdout != probe['expected_stdout']:
+                raise RuntimeError('Unexpected stdout: '+repr(result.stdout))
+            if result.returncode != probe.get('expected_returncode',0):
                 if platform.system()=='Darwin':
                     trace=subprocess.run(['lldb','--batch','-o','run','-k','bt all','-k','register read',str(artifact)],
                                          cwd=artifact.parent,capture_output=True,text=True,errors='replace',timeout=60)
@@ -44,6 +55,7 @@ try:
             row['status']='passed'
         except (OSError,RuntimeError,subprocess.SubprocessError) as error:
             row['error']=str(error);failures.append(name)
+            print(json.dumps(row), flush=True)
         finally:
             row['seconds']=time.monotonic()-start
             report['probes'].append(row)

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Qualify the shipped Tree-sitter wrapper against the native installed provider.
 
-Requires the same C compiler, headers, library and grammar objects as build.py
-host. No downloads or successful missing-provider skips. This qualifies one
-provider on the executing host, not the entire vendor collection.
+Requires a C compiler, the Tree-sitter headers and library, and a generated
+tree-sitter-dyn grammar checkout (TREE_SITTER_DYN, default
+build/deps/tree-sitter-dyn). The compiler itself does not use Tree-sitter; this
+qualifies the vendor binding. No downloads or successful missing-provider skips.
 """
 import json
 import os
@@ -43,10 +44,14 @@ for index, flag in enumerate(flags):
 for key in ('DYN_LIBRARY_PATH', 'PATH' if os.name == 'nt' else 'DYLD_LIBRARY_PATH' if platform.system() == 'Darwin' else 'LD_LIBRARY_PATH'):
     paths = [str(Path(path).resolve().parent/'bin') for path in directories] if key == 'PATH' else directories
     env[key] = os.pathsep.join([*paths, *([env[key]] if env.get(key) else [])])
-objects = [BUILD/'tree-sitter-dyn-parser.o', BUILD/'tree-sitter-dyn-scanner.o']
-for path in [DYN, *objects]:
+GRAMMAR = Path(os.environ.get('TREE_SITTER_DYN', BUILD/'deps/tree-sitter-dyn')).resolve()
+grammar_sources = [GRAMMAR/'src/parser.c', GRAMMAR/'src/scanner.c']
+for path in [DYN, *grammar_sources]:
     if not path.is_file():
-        raise RuntimeError('Missing required native compiler artifact: ' + str(path))
+        raise RuntimeError('Missing required artifact (set TREE_SITTER_DYN to a grammar checkout): ' + str(path))
+objects = [BUILD/'vendor-provider-grammar-parser.o', BUILD/'vendor-provider-grammar-scanner.o']
+for source, output in zip(grammar_sources, objects):
+    subprocess.run([*CC, '-O2', '-I' + str(GRAMMAR/'src'), '-c', str(source), '-o', str(output)], check=True)
 LAYOUTS = {'Point': ('TSPoint', ['row', 'column']),
            'Edit': ('TSInputEdit', ['start_byte', 'old_end_byte', 'new_end_byte', 'start_point', 'old_end_point', 'new_end_point']),
            'Node': ('TSNode', ['context', 'id', 'tree'])}

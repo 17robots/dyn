@@ -1,9 +1,44 @@
 #define _POSIX_C_SOURCE 200809L
 #include "lsp_internal.h"
+#include "syntax_depth.h"
 
-TSTree *lsp_parse(const char *text, size_t length) {
+static bool lsp_parse_work(void *data, uint64_t units) {
+  return dyn_work_step(data, units);
+}
+ExpSnapshot *lsp_parse(const char *text, size_t length) {
   DynContext context = {.target = lsp_target_current(), .work = lsp_work_current()};
-  return dyn_syntax_reparse_context(text, length, NULL, NULL, &context);
+  ExpOptions options = {.work = lsp_parse_work, .data = &context, .recover = true};
+  ExpSnapshot *snapshot = exp_snapshot_create(text, length, &options, NULL);
+  if (snapshot && !exp_depth_certified(exp_snapshot_tree(snapshot), DYN_SYNTAX_DEPTH_LIMIT)) {
+    exp_snapshot_release(snapshot);
+    return NULL;
+  }
+  return snapshot;
+}
+uint32_t lsp_offset(const LspDocument *document, size_t row, size_t column) {
+  size_t start = 0;
+  if (document->line_starts) {
+    if (row >= document->line_count) return (uint32_t)strlen(document->text);
+    start = document->line_starts[row];
+  } else
+    for (size_t r = 0; r < row; ++r) {
+      const char *newline = strchr(document->text + start, '\n');
+      if (!newline) return (uint32_t)strlen(document->text);
+      start = (size_t)(newline - document->text) + 1;
+    }
+  size_t at = start;
+  while (at < start + column && document->text[at] && document->text[at] != '\n') ++at;
+  return (uint32_t)at;
+}
+DynPoint lsp_point(const LspDocument *document, uint32_t offset) {
+  if (!document->line_starts) return dyn_text_point(document->text, offset);
+  uint32_t low = 0, high = document->line_count;
+  while (high - low > 1) {
+    uint32_t middle = low + (high - low) / 2;
+    if (document->line_starts[middle] <= offset) low = middle;
+    else high = middle;
+  }
+  return (DynPoint){low, offset - document->line_starts[low]};
 }
 
 typedef struct LspUriPath {
@@ -17,7 +52,6 @@ static bool lsp_text_offset(const char *text, size_t line, size_t character,
 static char *lsp_apply_change(LspDocument *document, const char *replacement,
                               size_t start_line, size_t start_character,
                               size_t end_line, size_t end_character);
-static TSNode first_syntax_error(TSNode node);
 
 LspDocument *lsp_document(LspDocument *documents, size_t count,
                           const char *uri) {
@@ -133,35 +167,39 @@ char *lsp_project_root(const char *uri) {
 
 size_t lsp_imports(const LspDocument *document, LspImport *imports,
                    size_t capacity) {
-  if (!document->tree)
-    return 0;
-  TSNode root = ts_tree_root_node(document->tree);
+  const ExpSnapshotTree *tree = lsp_tree(document);
   size_t count = 0;
-  for (uint32_t i = 0; i < ts_node_named_child_count(root) && count < capacity;
-       ++i) {
-    TSNode u = ts_node_named_child(root, i);
-    if (!strcmp(ts_node_type(u), "declaration"))
-      u = ts_node_named_child(u, ts_node_named_child_count(u) - 1);
-    if (strcmp(ts_node_type(u), "use"))
+  for (DynNode wrapper = dyn_node_first(dyn_node_root(tree));
+       !dyn_node_null(wrapper) && count < capacity; wrapper = dyn_node_next(wrapper)) {
+    DynNode u = dyn_node_first(wrapper);
+    if (!dyn_node_is(wrapper, SRC_DECLARATION) || !dyn_node_is(u, SRC_USE))
       continue;
-    for (uint32_t k = 0; k < ts_node_named_child_count(u) && count < capacity; ++k) {
-      TSNode im = ts_node_named_child(u, k);
-      if (strcmp(ts_node_type(im), "import"))
-        continue;
-      TSNode string = ts_node_child_by_field_name(im, "path", 4),
-             alias = ts_node_child_by_field_name(im, "alias", 5);
-      uint32_t a = ts_node_start_byte(string) + 1,
-               b = ts_node_end_byte(string) - 1;
-      if (b <= a || b - a >= sizeof(imports[count].path))
+    bool lone = dyn_node_child_count(u) == 1;
+    for (DynNode im = dyn_node_first(u); !dyn_node_null(im) && count < capacity;
+         im = dyn_node_next(im)) {
+      DynNode string = dyn_node_field(im, EXP_ROLE_PATH),
+              alias = dyn_node_field(im, EXP_ROLE_ALIAS);
+      uint32_t a = dyn_node_start(string) + 1, b = dyn_node_end(string) - 1;
+      if (dyn_node_null(string) || b <= a || b - a >= sizeof(imports[count].path))
         continue;
       memcpy(imports[count].path, document->text + a, b - a);
       imports[count].path[b - a] = 0;
       /* A lone import owns its whole use, so removing it removes the line. */
-      imports[count].node = ts_node_named_child_count(u) == 1 ? u : im;
-      imports[count].alias_node = alias;
-      if (!ts_node_is_null(alias)) {
-        a = ts_node_start_byte(alias);
-        b = ts_node_end_byte(alias);
+      DynNode owner = lone ? wrapper : im;
+      imports[count].start = imports[count].remove_start = dyn_node_start(owner);
+      imports[count].end = imports[count].remove_end = dyn_node_end(owner);
+      if (!lone) {
+        DynNode previous = {im.tree, UINT32_MAX}, next = dyn_node_next(im);
+        for (DynNode c = dyn_node_first(u); c.id != im.id; c = dyn_node_next(c)) previous = c;
+        if (!dyn_node_null(previous)) imports[count].remove_start = dyn_node_end(previous);
+        else if (!dyn_node_null(next)) imports[count].remove_end = dyn_node_start(next);
+      }
+      imports[count].has_alias = !dyn_node_null(alias);
+      imports[count].alias_start = dyn_node_start(alias);
+      imports[count].alias_end = dyn_node_end(alias);
+      if (!dyn_node_null(alias)) {
+        a = dyn_node_start(alias);
+        b = dyn_node_end(alias);
       } else {
         const char *base = strrchr(imports[count].path, '/');
         const char *name = base ? base + 1 : imports[count].path;
@@ -370,16 +408,16 @@ static bool lsp_export_stamp(const struct stat *a, const struct stat *b) {
       a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
       a->st_ctim.tv_sec == b->st_ctim.tv_sec && a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
 }
-static bool lsp_visit_exports(TSTree *tree, const char *text,
+static bool lsp_visit_exports(const ExpSnapshot *snapshot, const char *text,
                               LspPublicVisitor visit, void *context) {
-  if (!tree) return false;
-  TSNode root = ts_tree_root_node(tree);
-  for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
+  if (!snapshot) return false;
+  for (DynNode wrapper = dyn_node_first(dyn_node_root(exp_snapshot_tree(snapshot)));
+       !dyn_node_null(wrapper); wrapper = dyn_node_next(wrapper)) {
     if (!lsp_work_step(1)) return true;
     DynDeclaration decl;
-    if (!dyn_syntax_declaration(ts_node_named_child(root, i), &decl) || !decl.is_public) continue;
-    size_t start = ts_node_start_byte(decl.name);
-    if (visit(text + start, ts_node_end_byte(decl.name) - start, decl.kind, context)) return true;
+    if (!dyn_node_declaration(wrapper, &decl) || !decl.is_public) continue;
+    size_t start = dyn_node_start(decl.name);
+    if (visit(text + start, dyn_node_end(decl.name) - start, decl.kind, context)) return true;
   }
   return false;
 }
@@ -400,10 +438,10 @@ bool lsp_public_declarations(const char *path, LspPublicVisitor visit,
   for (size_t i = 0; i < lsp_export_document_count; ++i) {
     LspDocument *document = &lsp_export_documents[i];
     if (!strcmp(path, lsp_file_path(document->uri))) {
-      TSTree *tree = document->tree ? ts_tree_copy(document->tree) :
-          lsp_parse(document->text, strlen(document->text));
+      ExpSnapshot *tree = document->syntax && exp_snapshot_retain(document->syntax)
+          ? document->syntax : lsp_parse(document->text, strlen(document->text));
       bool stop = lsp_visit_exports(tree, document->text, visit, context);
-      if (tree) ts_tree_delete(tree);
+      exp_snapshot_release(tree);
       return stop;
     }
   }
@@ -428,7 +466,7 @@ bool lsp_public_declarations(const char *path, LspPublicVisitor visit,
   }
   char *text = lsp_read_source(path);
   if (!text) return false;
-  TSTree *tree = lsp_parse(text, strlen(text));
+  ExpSnapshot *tree = lsp_parse(text, strlen(text));
   bool stop = lsp_visit_exports(tree, text, visit, context);
   LspExportEntry *entry = tree ? calloc(1, sizeof(*entry)) : NULL;
   if (entry) {
@@ -452,7 +490,7 @@ bool lsp_public_declarations(const char *path, LspPublicVisitor visit,
       ++lsp_exports_count; lsp_exports_bytes += entry->bytes;
     }
   }
-  if (tree) ts_tree_delete(tree);
+  exp_snapshot_release(tree);
   free(text);
   return stop;
 }
@@ -494,24 +532,6 @@ static char *lsp_apply_change(LspDocument *document, const char *replacement,
   memcpy(text, document->text, start);
   memcpy(text + start, replacement, new_length);
   memcpy(text + start + new_length, document->text + end, old_length - end + 1);
-  if (document->tree) {
-    TSPoint new_end = {(uint32_t)start_line, (uint32_t)start_character};
-    for (size_t i = 0; i < new_length; ++i) {
-      if (replacement[i] == '\n') {
-        ++new_end.row;
-        new_end.column = 0;
-      } else
-        ++new_end.column;
-    }
-    TSInputEdit edit = {
-        .start_byte = (uint32_t)start,
-        .old_end_byte = (uint32_t)end,
-        .new_end_byte = (uint32_t)(start + new_length),
-        .start_point = {(uint32_t)start_line, (uint32_t)start_character},
-        .old_end_point = {(uint32_t)end_line, (uint32_t)end_character},
-        .new_end_point = new_end};
-    ts_tree_edit(document->tree, &edit);
-  }
   return text;
 }
 
@@ -523,7 +543,8 @@ char *lsp_apply_changes(LspDocument *document, char *body) {
     return NULL;
   LspDocument next = *document;
   next.text = strdup(document->text);
-  next.tree = NULL;
+  next.syntax = NULL;
+  next.line_starts = NULL; next.line_count = 0;
   if (!next.text)
     return NULL;
   for (;;) {
@@ -621,51 +642,34 @@ bool identifier_at(const char *text, size_t line, size_t character,
 bool find_declaration(const char *text, const char *word, size_t word_length,
                       size_t *line, size_t *column, const char **display,
                       size_t *display_length) {
-  TSTree *tree = lsp_parse(text, strlen(text));
+  ExpSnapshot *tree = lsp_parse(text, strlen(text));
   if (!tree)
     return false;
   bool found = false;
-  TSNode root = ts_tree_root_node(tree);
-  for (uint32_t i = 0; i < ts_node_named_child_count(root); ++i) {
+  for (DynNode wrapper = dyn_node_first(dyn_node_root(exp_snapshot_tree(tree)));
+       !dyn_node_null(wrapper); wrapper = dyn_node_next(wrapper)) {
     DynDeclaration decl;
-    if (!dyn_syntax_declaration(ts_node_named_child(root, i), &decl))
+    if (!dyn_node_declaration(wrapper, &decl))
       continue;
-    size_t start = ts_node_start_byte(decl.name);
-    if (ts_node_end_byte(decl.name) - start != word_length ||
+    size_t start = dyn_node_start(decl.name);
+    if (dyn_node_end(decl.name) - start != word_length ||
         memcmp(text + start, word, word_length))
       continue;
-    TSPoint point = ts_node_start_point(decl.name);
+    DynPoint point = dyn_text_point(text, (uint32_t)start);
     *line = point.row;
     *column = point.column;
-    *display = text + ts_node_start_byte(decl.node);
+    *display = text + dyn_node_start(decl.node);
     const char *end = strchr(*display, '\n');
     *display_length = end ? (size_t)(end - *display) : strlen(*display);
     found = true;
     break;
   }
-  ts_tree_delete(tree);
+  exp_snapshot_release(tree);
   return found;
 }
 
-static TSNode first_syntax_error(TSNode node) {
-  if (ts_node_is_error(node) || ts_node_is_missing(node))
-    return node;
-  uint32_t count = ts_node_child_count(node);
-  for (uint32_t i = 0; i < count; ++i) {
-    TSNode child = ts_node_child(node, i);
-    if (ts_node_is_error(child) || ts_node_is_missing(child))
-      return child;
-    if (ts_node_has_error(child)) {
-      TSNode found = first_syntax_error(child);
-      if (!ts_node_is_null(found))
-        return found;
-    }
-  }
-  return (TSNode){0};
-}
-
-TSPoint lsp_text_end(const char *text) {
-  TSPoint point = {0};
+DynPoint lsp_text_end(const char *text) {
+  DynPoint point = {0, 0};
   for (; *text; ++text) {
     if (*text == '\n') {
       ++point.row;
@@ -676,112 +680,86 @@ TSPoint lsp_text_end(const char *text) {
   return point;
 }
 
+void lsp_document_lines(LspDocument *document) {
+  free(document->line_starts);
+  document->line_starts = NULL; document->line_count = 0;
+  uint32_t count = 1;
+  for (const char *p = document->text; *p; ++p) count += *p == '\n';
+  uint32_t *starts = malloc(count * sizeof(*starts));
+  if (!starts) return;
+  starts[0] = 0;
+  uint32_t at = 1;
+  for (uint32_t i = 0; document->text[i]; ++i)
+    if (document->text[i] == '\n') starts[at++] = i + 1;
+  document->line_starts = starts; document->line_count = count;
+}
+
+bool lsp_document_parse(LspDocument *document) {
+  if (document->syntax && document->parsed_revision == document->revision)
+    return true;
+  DynContext parse_context = {.target = lsp_target_current(), .work = lsp_work_current()};
+  ExpSnapshot *tree = lsp_parse(document->text, strlen(document->text));
+  exp_snapshot_release(document->syntax);
+  document->syntax = tree;
+  lsp_document_lines(document);
+  document->parsed_revision = document->revision;
+  if (!tree && !dyn_work_step(&parse_context, 0)) {
+    document->syntax_too_deep = false;
+    return false;
+  }
+  document->syntax_too_deep = !tree;
+  return true;
+}
+
 bool lsp_publish_syntax(LspDocument *document) {
   if (!document->uri || !document->text)
     return false;
-  if (!document->parser) {
-    document->parser = ts_parser_new();
-    if (document->parser)
-      ts_parser_set_language(document->parser, tree_sitter_dyn());
-  }
-  size_t length = strlen(document->text);
-  TSPoint end = lsp_text_end(document->text);
-  DynContext parse_context = {.target = lsp_target_current(), .work = lsp_work_current()};
-  TSTree *tree = document->parser
-                     ? dyn_parse_with_context(document->parser, document->tree,
-                                              document->text, length, &parse_context)
-                     : NULL;
-  if (!tree && !dyn_work_step(&parse_context, 0)) {
-    if (document->tree) ts_tree_delete(document->tree);
-    document->tree = NULL; document->parsed_length = 0;
+  if (!lsp_document_parse(document))
     return false;
-  }
-  document->syntax_too_deep = tree && !dyn_syntax_depth_ok(ts_tree_root_node(tree));
+  size_t length = strlen(document->text);
+  ExpSnapshot *tree = document->syntax;
+  char *uri = json_escape(document->uri, strlen(document->uri));
+  if (!uri) return false;
   if (document->syntax_too_deep) {
-    ts_tree_delete(tree);
-    if (document->tree) ts_tree_delete(document->tree);
-    document->tree = NULL;
-    document->parsed_length = 0; document->parsed_end = (TSPoint){0};
-    char *uri = json_escape(document->uri, strlen(document->uri));
-    if (uri) {
-      size_t capacity = strlen(uri) + 384;
-      char *body = malloc(capacity);
-      if (body) {
-        snprintf(body, capacity, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"%s\",\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}},\"severity\":1,\"message\":\"syntax nesting exceeds 1024 tree levels\"}]}}", uri);
-        lsp_send(body); free(body);
-      }
-      free(uri);
+    size_t capacity = strlen(uri) + 384;
+    char *body = malloc(capacity);
+    if (body) {
+      snprintf(body, capacity, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"%s\",\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}},\"severity\":1,\"message\":\"syntax nesting exceeds 1024 tree levels\"}]}}", uri);
+      lsp_send(body); free(body);
     }
+    free(uri);
     return true;
   }
-  if (tree) {
-    if (document->tree)
-      ts_tree_delete(document->tree);
-    document->tree = tree;
-    document->parsed_length = length;
-    document->parsed_end = end;
-  }
-  TSNode error = document->tree
-                     ? first_syntax_error(ts_tree_root_node(document->tree))
-                     : (TSNode){0};
-  char *uri = json_escape(document->uri, strlen(document->uri));
-  char *body = uri ? malloc(strlen(uri) + 512) : NULL;
+  /* Every recovered error, with the parser's message for its token. */
+  const ExpSnapshotTree *syntax = exp_snapshot_tree(tree);
+  uint32_t errors = syntax->error_count < DYN_SYNTAX_ERROR_LIMIT ? syntax->error_count : DYN_SYNTAX_ERROR_LIMIT;
+  size_t capacity = strlen(uri) + 256 + (size_t)errors * 512;
+  char *body = malloc(capacity);
   if (body) {
-    if (ts_node_is_null(error))
-      lsp_bounded_printf(body, strlen(uri) + 512,
-                         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/"
-                         "publishDiagnostics\",\"params\":{\"uri\":\"%s\","
-                         "\"diagnostics\":[]}}",
-                         uri);
-    else {
-      TSPoint a = ts_node_start_point(error), b = ts_node_end_point(error);
-      const char *message = "incomplete or invalid syntax";
-      /* Only name an expected delimiter when the parser actually marks it
-         missing. An error inside a complete body is not a missing body. */
-      if (ts_node_is_missing(error)) {
-        const char *kind = ts_node_type(error);
-        if (!strcmp(kind, ")"))
-          message = "incomplete function call; expected ')'";
-        else if (!strcmp(kind, "}"))
-          message = "incomplete block; expected '}'";
-      }
-      const char *tail = document->text + length;
-      while (tail > document->text && isspace((unsigned char)tail[-1]))
-        --tail;
-      /* Recovery can represent an unfinished declaration/call as ERROR rather
-         than MISSING. Restrict those hints to an error reaching end of input. */
-      if (ts_node_end_byte(error) >= (size_t)(tail - document->text)) {
-        const char *callee = NULL;
-        size_t callee_length = 0;
-        if (lsp_call_identifier(document->text, end.row, end.column, &callee,
-                                &callee_length))
-          message = "incomplete function call; expected ')'";
-        else {
-          const char *line_start = tail;
-          while (line_start > document->text && line_start[-1] != '\n')
-            --line_start;
-          while (line_start < tail && isspace((unsigned char)*line_start))
-            ++line_start;
-          size_t line_length = (size_t)(tail - line_start);
-          if (line_length >= 3 && !memcmp(line_start, "fn ", 3) &&
-              !memchr(line_start, '{', line_length))
-            message = "incomplete function declaration; expected a function body";
-        }
-      }
+    size_t at = (size_t)lsp_bounded_printf(body, capacity,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
+        "\"params\":{\"uri\":\"%s\",\"diagnostics\":[", uri);
+    for (uint32_t i = 0; i < errors; ++i) {
+      const ExpSyntaxError *error = &syntax->errors[i];
+      char message[160];
+      uint32_t end;
+      dyn_syntax_error_message(document->text, length, error->offset, error->message,
+                               error->expected, message, sizeof(message), &end);
+      char *escaped = json_escape(message, strlen(message));
+      DynPoint a = lsp_point(document, error->offset), b = lsp_point(document, end);
       if (a.row == b.row && a.column == b.column)
         ++b.column;
-      lsp_bounded_printf(
-          body, strlen(uri) + 512,
-          "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/"
-          "publishDiagnostics\",\"params\":{\"uri\":\"%s\",\"diagnostics\":[{"
-          "\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
+      at += (size_t)lsp_bounded_printf(body + at, capacity - at,
+          "%s{\"range\":{\"start\":{\"line\":%u,\"character\":%u},\"end\":{"
           "\"line\":%u,\"character\":%u}},\"severity\":1,\"source\":\"dyn\","
-          "\"code\":\"syntax\",\"message\":\"%s\"}]}}",
-          uri, a.row, a.column, b.row, b.column, message);
+          "\"code\":\"syntax\",\"message\":\"%s\"}",
+          i ? "," : "", a.row, a.column, b.row, b.column, escaped ? escaped : "syntax error");
+      free(escaped);
     }
+    lsp_bounded_printf(body + at, capacity - at, "]}}");
     lsp_send(body);
   }
   free(body);
   free(uri);
-  return !ts_node_is_null(error);
+  return syntax->error_count != 0;
 }

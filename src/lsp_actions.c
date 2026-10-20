@@ -18,7 +18,7 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
 static bool lsp_fill_struct_fields(LspDocument *documents, size_t count,
                                    LspDocument *document, size_t line,
                                    size_t character, char *text,
-                                   size_t capacity, TSPoint *edit);
+                                   size_t capacity, DynPoint *edit);
 static bool lsp_action_diagnostic(const char *body, const char *key,
                                   const char *value);
 
@@ -206,38 +206,41 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
 static bool lsp_fill_struct_fields(LspDocument *documents, size_t count,
                                    LspDocument *document, size_t line,
                                    size_t character, char *text,
-                                   size_t capacity, TSPoint *edit) {
-  if (!document->tree || !capacity)
+                                   size_t capacity, DynPoint *edit) {
+  const ExpSnapshotTree *tree = lsp_tree(document);
+  if (!tree || !capacity)
     return false;
-  TSPoint point = {(uint32_t)line, (uint32_t)character};
-  TSNode literal = ts_node_named_descendant_for_point_range(
-      ts_tree_root_node(document->tree), point, point);
-  while (!ts_node_is_null(literal) &&
-         strcmp(ts_node_type(literal), "struct_literal"))
-    literal = ts_node_parent(literal);
-  if (ts_node_is_null(literal))
+  uint32_t cursor = lsp_offset(document, line, character);
+  DynNode literal = dyn_node_at(tree, cursor, cursor);
+  while (!dyn_node_null(literal) && !dyn_node_is(literal, EXP_STRUCT))
+    literal = dyn_node_parent(literal);
+  /* A cursor just past the closing brace is outside the literal. */
+  if (dyn_node_null(literal) || cursor >= dyn_node_end(literal) ||
+      dyn_node_end(literal) <= dyn_node_start(literal) ||
+      document->text[dyn_node_end(literal) - 1] != '}')
     return false;
-  TSNode close = {0};
-  bool comma = false, has_members = false;
-  for (uint32_t i = 0; i < ts_node_child_count(literal); ++i) {
-    TSNode child = ts_node_child(literal, i);
-    if (ts_node_is_extra(child))
-      continue;
-    const char *kind = ts_node_type(child);
-    if (!strcmp(kind, "}")) {
-      close = child;
+  uint32_t close = dyn_node_end(literal) - 1;
+  DynNode last = dyn_node_last(literal);
+  bool has_members = dyn_node_is(last, EXP_MEMBER), comma = false;
+  /* A separator after the last member, past whitespace and comments. */
+  for (uint32_t at = has_members ? dyn_node_end(last) : close; at < close;) {
+    const char *text = document->text;
+    if (isspace((unsigned char)text[at])) ++at;
+    else if (text[at] == '/' && text[at + 1] == '/')
+      while (at < close && text[at] != '\n') ++at;
+    else if (text[at] == '/' && text[at + 1] == '*') {
+      at += 2;
+      while (at < close && !(text[at] == '*' && text[at + 1] == '/')) ++at;
+      at += 2;
+    } else {
+      comma = text[at] == ',';
       break;
     }
-    comma = !strcmp(kind, ",");
-    if (!strcmp(kind, "struct_literal_member"))
-      has_members = true;
   }
-  if (ts_node_is_null(close) || ts_node_is_missing(close))
-    return false;
   LspSemantic semantic =
       lsp_semantic_project(documents, count, document, document->text);
   uint32_t offset;
-  TSPoint start = ts_node_start_point(literal);
+  DynPoint start = lsp_point(document, dyn_node_start(literal));
   bool ok = semantic.ok && lsp_semantic_offset(&semantic, document, start.row,
                                                start.column, &offset);
   DynType type = DYN_TYPE_ERROR;
@@ -262,12 +265,12 @@ static bool lsp_fill_struct_fields(LspDocument *documents, size_t count,
       size_t length = field->name.end_byte - field->name.start_byte;
       const char *name = semantic.source.text + field->name.start_byte;
       bool present = false;
-      for (uint32_t j = 0; j < ts_node_named_child_count(literal); ++j) {
-        TSNode member = ts_node_named_child(literal, j);
-        if (strcmp(ts_node_type(member), "struct_literal_member"))
+      for (DynNode member = dyn_node_first(literal); !dyn_node_null(member);
+           member = dyn_node_next(member)) {
+        if (!dyn_node_is(member, EXP_MEMBER))
           continue;
-        TSNode named = dyn_syntax_child(member, 0);
-        size_t a = ts_node_start_byte(named), b = ts_node_end_byte(named);
+        DynNode named = dyn_node_first(member);
+        size_t a = dyn_node_start(named), b = dyn_node_end(named);
         if (b - a == length && !memcmp(document->text + a, name, length)) {
           present = true;
           break;
@@ -289,7 +292,7 @@ static bool lsp_fill_struct_fields(LspDocument *documents, size_t count,
       }
     }
   }
-  *edit = ts_node_start_point(close);
+  *edit = lsp_point(document, close);
   lsp_semantic_free(&semantic);
   return ok && at > 0;
 }
@@ -329,43 +332,32 @@ void lsp_code_actions(long id, LspDocument *documents, size_t count,
   bool unknown =
       lsp_action_diagnostic(body_text, "\"message\"", "unknown name") ||
       lsp_action_diagnostic(body_text, "\"message\"", "unknown function");
-  TSNode use = {0};
+  const LspImport *use = NULL;
   LspImport imports[32];
   size_t import_count = lsp_imports(document, imports, 32);
-  for (size_t i = 0; i < import_count; ++i) {
-    TSPoint start = ts_node_start_point(imports[i].node),
-            end = ts_node_end_point(imports[i].node);
-    if ((line > start.row ||
-         (line == start.row && character >= start.column)) &&
-        (line < end.row || (line == end.row && character <= end.column))) {
-      use = imports[i].node;
+  uint32_t cursor = lsp_offset(document, line, character);
+  for (size_t i = 0; i < import_count; ++i)
+    if (cursor >= imports[i].start && cursor <= imports[i].end) {
+      use = &imports[i];
       break;
     }
-  }
   char *uri = json_escape(document->uri, strlen(document->uri));
   char response[8192];
   const char *word = NULL;
   size_t word_length = 0;
   char fields[2048] = {0};
   LspImportChoices choices = {0};
-  TSPoint insert = {0};
+  DynPoint insert = {0, 0};
   if (unknown && identifier_at(document->text, line, character, &word, &word_length))
     lsp_missing_import(document, word, word_length, &choices);
   bool can_import = choices.count != 0;
   bool can_fill =
       lsp_fill_struct_fields(documents, count, document, line, character,
                              fields, sizeof(fields), &insert);
-  if (unused && !ts_node_is_null(use) && uri) {
-    TSPoint start = ts_node_start_point(use), end = ts_node_end_point(use);
+  if (unused && use && uri) {
     /* One import of several: also remove the comma joining it to a neighbor. */
-    if (!strcmp(ts_node_type(use), "import")) {
-      TSNode previous = ts_node_prev_named_sibling(use),
-             next = ts_node_next_named_sibling(use);
-      if (!ts_node_is_null(previous))
-        start = ts_node_end_point(previous);
-      else if (!ts_node_is_null(next))
-        end = ts_node_start_point(next);
-    }
+    DynPoint start = lsp_point(document, use->remove_start),
+             end = lsp_point(document, use->remove_end);
     lsp_bounded_printf(
         response, sizeof(response),
         "{\"jsonrpc\":\"2.0\",\"id\":%ld,\"result\":[{\"title\":\"Remove "
@@ -454,8 +446,8 @@ void lsp_format(long id, const LspDocument *document) {
   while (suffix && !(text[source.length - suffix - 1] == '\n' &&
                      formatted[length - suffix - 1] == '\n'))
     --suffix;
-  TSPoint start = dyn_syntax_advance((TSPoint){0, 0}, text, prefix);
-  TSPoint end = dyn_syntax_advance(start, text + prefix,
+  DynPoint start = dyn_text_advance((DynPoint){0, 0}, text, prefix);
+  DynPoint end = dyn_text_advance(start, text + prefix,
                                    source.length - suffix - prefix);
   char *escaped = json_escape(formatted + prefix, length - suffix - prefix);
   size_t capacity = (escaped ? strlen(escaped) : 0) + 256;

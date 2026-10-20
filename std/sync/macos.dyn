@@ -1,4 +1,4 @@
-#target(arch: aarch64, kernel: darwin)
+#target(kernel: darwin)
 #link("System")
 
 // macOS 14.4 public futex APIs; Dyn's macOS deployment floor is 15.0.

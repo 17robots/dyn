@@ -19,6 +19,7 @@ static int source_test_fseek(FILE *stream, long offset, int origin) {
 #define malloc source_test_malloc
 #define fread source_test_fread
 #define fseek source_test_fseek
+#include "../src/snapshot.h"
 #include "../src/source.c"
 #undef malloc
 #undef fread
@@ -39,12 +40,14 @@ int main(void) {
     DynSources sources;
     int status = dyn_sources_load(NULL, directory, &sources);
     assert(cases[i] ? status != 0 : status == 0);
-    TSTree *retained = !status && sources.count ? dyn_source_tree(&sources.items[0]) : NULL;
-    if (retained) assert(!ts_node_has_error(ts_tree_root_node(retained)));
+    /* A retained snapshot outlives the loaded sources. */
+    ExpSnapshot *retained = !status && sources.count ? sources.items[0].compact : NULL;
+    if (retained) assert(exp_snapshot_retain(retained) && !exp_snapshot_tree(retained)->error_count);
     dyn_sources_free(&sources);
     if (retained) {
-      assert(ts_node_end_byte(ts_tree_root_node(retained)) == strlen("fn main() {}\n"));
-      ts_tree_delete(retained);
+      const ExpSnapshotTree *tree = exp_snapshot_tree(retained);
+      assert(tree->nodes[tree->root].end == strlen("fn main() {}\n"));
+      exp_snapshot_release(retained);
     }
   }
   assert(!unlink(path));

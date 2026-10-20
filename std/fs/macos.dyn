@@ -1,4 +1,4 @@
-#target(arch: aarch64, kernel: darwin)
+#target(kernel: darwin)
 use "std/c" cstrings
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {

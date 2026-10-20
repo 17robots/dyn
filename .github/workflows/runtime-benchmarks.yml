@@ -1,0 +1,84 @@
+name: Runtime benchmarks
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/bench/**'
+      - '.github/workflows/runtime-benchmarks.yml'
+permissions:
+  contents: read
+concurrency:
+  group: runtime-benchmarks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compiler and benchmark artifacts
+        run: |
+          python3 tools/build.py host
+          DYN_SDK="$PWD" python3 tools/bench/runtime.py --stage build/runtime-benchmarks
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-benchmark-programs
+          path: build/runtime-benchmarks
+          if-no-files-found: error
+  measure:
+    needs: stage
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            runner: ubuntu-24.04
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - target: x86_64-macos
+            runner: macos-15-intel
+          - target: aarch64-macos
+            runner: macos-15
+          - target: x86_64-windows
+            runner: windows-2022
+          - target: aarch64-windows
+            runner: windows-11-arm
+          - target: riscv64-linux
+            runner: ubuntu-24.04
+          - target: wasm32-wasi
+            runner: ubuntu-24.04
+          - target: wasm32-browser
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-benchmark-programs
+          path: benchmarks
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        if: matrix.target == 'wasm32-wasi'
+        with:
+          node-version: '22'
+      - name: Install RISC-V emulation
+        if: matrix.target == 'riscv64-linux'
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - name: Install browser benchmark runtime
+        if: matrix.target == 'wasm32-browser'
+        run: |
+          python -m pip install playwright==1.56.0
+          python -m playwright install --with-deps chromium
+      - name: Measure on target hardware or labelled emulation
+        shell: bash
+        run: |
+          options=()
+          if [[ '${{ matrix.target }}' == riscv64-linux ]]; then options+=(--qemu qemu-riscv64); fi
+          python benchmarks/runtime.py --run benchmarks --target '${{ matrix.target }}' --output 'benchmark-${{ matrix.target }}.json' "${options[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.target }}
+          path: benchmark-${{ matrix.target }}.json
+          if-no-files-found: error
