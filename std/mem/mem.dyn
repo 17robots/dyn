@@ -1,10 +1,9 @@
 use "std/observe" observe
 
-// Arenas and fixed-slot reuse primitives.
+// Arenas and typed pushes.
 //
 // Arena owns heap backing or borrows a caller slice. Reset or rewind invalidates affected allocations.
-// FreeList borrows one fixed region, commonly carved from an arena. Returning a slot
-// recycles it inside the list; it does not return memory to the arena.
+// Reuse of individual objects is intrusive: see std/container/list free lists.
 
 pub enum ErrorKind { None, InvalidAlignment, Capacity, InvalidState, Overflow, System }
 
@@ -145,6 +144,19 @@ pub fn arena_rewind(arena: *Arena, mark: usize) {
   }
   arena_event(arena, observe.Kind.Reclaimed, arena.offset - mark)
   arena.offset = mark
+}
+
+fn align_size(size: usize, alignment: usize) usize {
+  remainder := size & (alignment - 1)
+  if remainder == 0 {
+    return size
+  }
+  padding := alignment - remainder
+  maximum := ~#cast(usize, 0)
+  if size > maximum - padding {
+    return 0
+  }
+  return size + padding
 }
 
 fn valid_alignment(alignment: usize) bool {
@@ -322,35 +334,53 @@ pub fn try_push_array($T: type, arena: *Arena, count: usize) []T {
   return (#cast(*T, allocation.memory))[..count]
 }
 
-// Appends value to the first count elements of items, growing items from arena
-// by doubling when full, and returns the new element's index. Keep items and
-// count together. When items is the arena's newest allocation it grows in place
-// with no copy; otherwise growth copies into a new slice and leaves the old one
-// allocated, so reacquire element pointers after an append. Panics when the
-// arena is exhausted.
-pub fn append(items: *[]$T, count: *usize, arena: *Arena, value: T) usize {
-  if count.* > #len(items.*) {
-    #panic("append count exceeds items")
+// Appends value to items, a slice that owns the rest of arena: its elements
+// must be the newest allocation on arena, so give each growing list its own
+// arena. The new element goes directly after the last one, so nothing is copied
+// and element addresses never change. Returns the new element.
+// Panics when something else was pushed onto arena after items, or when the
+// arena is exhausted. A zero Arena{} reserves address space lazily, so one arena
+// per list is cheap on 64-bit targets.
+pub fn append(arena: *Arena, items: *[]$T, value: T) *T {
+  count := #len(items.*)
+  if count == 0 {
+    items.* = push_array(T, arena, 1)
+  } else if !arena_try_extend(arena, #cast(*u8, &items.*[0]), count * #sizeof(T), #sizeof(T)) {
+    append_failure(arena, #cast(*u8, &items.*[0]), count * #sizeof(T))
+  } else {
+    items.* = (&items.*[0])[..count + 1]
   }
-  if count.* == #len(items.*) {
-    length := #len(items.*)
-    capacity := length * 2
-    if capacity == 0 {
-      capacity = 8
-    }
-    // The newest allocation grows in place; otherwise copy into a new one.
-    extended := length != 0 && arena_try_extend(arena, #cast(*u8, &items.*[0]), length * #sizeof(T), length * #sizeof(T))
-    if extended {
-      items.* = (&items.*[0])[..capacity]
-    } else {
-      grown := push_array(T, arena, capacity)
-      _ = copy(grown, items.*[..count.*])
-      items.* = grown
-    }
+  slot := &items.*[count]
+  slot.* = value
+  return slot
+}
+
+// Appends every element of values to items, under the same rules as append.
+pub fn append_many(arena: *Arena, items: *[]$T, values: []const T) {
+  count := #len(items.*)
+  extra := #len(values)
+  if extra == 0 {
+    return
   }
-  items.*[count.*] = value
-  count.* += 1
-  return count.* - 1
+  if count == 0 {
+    items.* = push_array(T, arena, extra)
+  } else if !arena_try_extend(arena, #cast(*u8, &items.*[0]), count * #sizeof(T), extra * #sizeof(T)) {
+    append_failure(arena, #cast(*u8, &items.*[0]), count * #sizeof(T))
+  } else {
+    items.* = (&items.*[0])[..count + extra]
+  }
+  for i in 0..extra {
+    items.*[count + i] = values[i]
+  }
+}
+
+fn append_failure(arena: *Arena, memory: *u8, size: usize) {
+  base := #cast(usize, &arena.data[0])
+  start := #cast(usize, memory)
+  if start < base || start - base + size != arena.offset {
+    #panic("append: items are not the newest allocation on this arena; give the list its own arena")
+  }
+  #panic("append: arena exhausted")
 }
 
 // Pushes count uninitialized bytes, for buffers that are overwritten right away.
@@ -462,232 +492,6 @@ pub fn frames_release(frames: *Frames) {
   for i in 0..2 {
     arena_release(&frames.arenas[i])
   }
-}
-
-struct FreeListNode { next: *FreeListNode }
-
-pub struct FreeList {
-  backing: []u8,
-  slot_size: usize,
-  slot_count: usize,
-  free_count: usize,
-  free_head: *FreeListNode,
-  // One bit per slot, set while allocated; empty when metadata is unavailable.
-  occupied: []u8,
-}
-
-fn align_size(size: usize, alignment: usize) usize {
-  remainder := size & (alignment - 1)
-  if remainder == 0 {
-    return size
-  }
-  padding := alignment - remainder
-  maximum := ~#cast(usize, 0)
-  if size > maximum - padding {
-    return 0
-  }
-  return size + padding
-}
-
-fn free_list_alignment(requested: usize) usize {
-  if !valid_alignment(requested) {
-    #panic("free-list alignment must be non-zero power of two")
-  }
-  if requested < #alignof(FreeListNode) {
-    return #alignof(FreeListNode)
-  }
-  return requested
-}
-
-// Slots include an internal pointer link. Effective alignment is at least pointer
-// alignment, even for byte-sized objects. Backing must satisfy that alignment;
-// slot stride is rounded up. Storage is borrowed and must outlive the free list.
-// All complete slots remain usable; without separate metadata, release scans
-// the free chain to detect double frees.
-pub fn free_list_init(backing: []u8, requested_slot_size: usize, alignment: usize) FreeList {
-  effective_alignment := free_list_alignment(alignment)
-  slot_size := requested_slot_size
-  if slot_size < #sizeof(FreeListNode) {
-    slot_size = #sizeof(FreeListNode)
-  }
-  slot_size = align_size(slot_size, effective_alignment)
-  if slot_size == 0 || #len(backing) < slot_size {
-    #panic("free list requires at least one slot")
-  }
-  if #len(backing) > 0 && (#cast(usize, &backing[0]) & (effective_alignment - 1)) != 0 {
-    #panic("free-list backing has wrong alignment")
-  }
-
-  count := #len(backing) / slot_size
-  for i in 0..count {
-    node := #cast(*FreeListNode, &backing[i * slot_size])
-    if i + 1 < count {
-      node.next = #cast(*FreeListNode, &backing[(i + 1) * slot_size])
-    }
-    else {
-      node.next = nil
-    }
-  }
-  return FreeList{
-    backing: backing,
-    slot_size: slot_size,
-    slot_count: count,
-    free_count: count,
-    free_head: #cast(*FreeListNode, &backing[0]),
-  }
-}
-
-// Reserves slot storage, plus ceil(slot_count / 8) zeroed metadata bytes when
-// the arena has room. The optional bitmap makes allocation and release constant
-// time; otherwise release scans the free chain. Exact slot capacity still works.
-// Ownership: slots and optional bitmap borrow the arena; descriptor is a single owner.
-// Invalidation: backing rewind/reset/release; individual free permits slot reuse.
-// Panics on invalid alignment, zero slots, size overflow or an exhausted arena.
-// Thread safety: caller synchronized.
-pub fn free_list_from_arena(arena: *Arena, slot_count: usize, slot_size: usize, alignment: usize) FreeList {
-  if !valid_alignment(alignment) {
-    #panic("free-list alignment must be a power of two")
-  }
-  if slot_count == 0 {
-    #panic("free list needs at least one slot")
-  }
-  effective_alignment := free_list_alignment(alignment)
-  actual := slot_size
-  if actual < #sizeof(FreeListNode) {
-    actual = #sizeof(FreeListNode)
-  }
-  actual = align_size(actual, effective_alignment)
-  maximum := ~#cast(usize, 0)
-  if actual == 0 || slot_count > maximum / actual {
-    #panic("free-list size overflow")
-  }
-  size := slot_count * actual
-  memory := arena_push_uninit(arena, size, effective_alignment)
-  list := free_list_init(memory[..size], actual, effective_alignment)
-  bitmap_size := slot_count / 8
-  if slot_count % 8 != 0 {
-    bitmap_size += 1
-  }
-  if arena_remaining(arena) >= bitmap_size {
-    bitmap := arena_push(arena, bitmap_size, 1)
-    list.occupied = bitmap[..bitmap_size]
-  }
-  return list
-}
-
-pub fn free_list_try_alloc(list: *FreeList) rawptr {
-  if list.free_head == nil {
-    return nil
-  }
-  node := list.free_head
-  list.free_head = node.next
-  list.free_count -= 1
-  if #len(list.occupied) != 0 {
-    slot := (#cast(usize, node) - #cast(usize, &list.backing[0])) / list.slot_size
-    mask: u8 = 1
-    mask = mask << (slot % 8)
-    list.occupied[slot / 8] |= mask
-  }
-  return node
-}
-
-pub fn free_list_alloc(list: *FreeList) rawptr {
-  memory := free_list_try_alloc(list)
-  if memory == nil {
-    #panic("free list exhausted")
-  }
-  return memory
-}
-
-pub fn free_list_free(list: *FreeList, memory: rawptr) {
-  if memory == nil {
-    return
-  }
-  address := #cast(usize, memory)
-  start := #cast(usize, &list.backing[0])
-  end := start + list.slot_count * list.slot_size
-  if address < start || address >= end || (address - start) % list.slot_size != 0 {
-    #panic("pointer does not belong to free list")
-  }
-  node := #cast(*FreeListNode, memory)
-  if #len(list.occupied) != 0 {
-    slot := (address - start) / list.slot_size
-    mask: u8 = 1
-    mask = mask << (slot % 8)
-    if (list.occupied[slot / 8] & mask) == 0 {
-      #panic("free-list double free")
-    }
-    list.occupied[slot / 8] &= ~mask
-  }
-  else {
-    existing := list.free_head
-    for existing != nil {
-      if existing == node {
-        #panic("free-list double free")
-      }
-      existing = existing.next
-    }
-  }
-  node.next = list.free_head
-  list.free_head = node
-  list.free_count += 1
-  if list.free_count > list.slot_count {
-    #panic("free-list double free")
-  }
-}
-
-// Arena-backed fixed-size object storage. Pool is the ordinary reuse interface;
-// FreeList remains available when callers need its lower-level accounting.
-pub struct Pool { list: FreeList }
-
-// Ownership: pool borrows arena backing; do not independently mutate descriptor copies.
-// Invalidation: release reuses a slot; arena rewind/reset/release invalidates the pool.
-// Allocation: fixed arena slots with optional occupancy bitmap.
-// Panics like free_list_from_arena.
-// Thread safety: caller synchronized.
-pub fn pool_init(arena: *Arena, slot_count: usize, slot_size: usize, alignment: usize) Pool {
-  return Pool{ list: free_list_from_arena(arena, slot_count, slot_size, alignment) }
-}
-
-pub fn pool_capacity(pool: *const Pool) usize {
-  return pool.list.slot_count
-}
-pub fn pool_available(pool: *const Pool) usize {
-  return pool.list.free_count
-}
-// Returns nil when exhausted. Reused slot bytes are uninitialized.
-// Retained pointers must not be used after pool_release; use generation handles
-// (std/container/slot_map) when references can outlive individual deletion.
-pub fn pool_try_acquire(pool: *Pool) rawptr {
-  return free_list_try_alloc(&pool.list)
-}
-pub fn pool_acquire(pool: *Pool) rawptr {
-  return free_list_alloc(&pool.list)
-}
-pub fn pool_release(pool: *Pool, memory: rawptr) {
-  free_list_free(&pool.list, memory)
-}
-
-// Typed pool: slots sized and aligned for T.
-// Allocation: count slots plus the occupancy bitmap from arena; panics like pool_init.
-pub fn pool_for($T: type, arena: *Arena, count: usize) Pool {
-  return pool_init(arena, count, #sizeof(T), #alignof(T))
-}
-
-// Takes a zeroed T from pool. Panics when the pool is exhausted or its slots
-// are smaller than T. The pointer is valid until release or arena invalidation.
-pub fn acquire($T: type, pool: *Pool) *T {
-  if pool.list.slot_size < #sizeof(T) {
-    #panic("pool slots are smaller than the requested type")
-  }
-  item := #cast(*T, pool_acquire(pool))
-  clear(item)
-  return item
-}
-
-// Returns item to pool. Panics on a foreign pointer or a double release.
-pub fn release(pool: *Pool, item: *$T) {
-  pool_release(pool, item)
 }
 
 // Copies source into the start of destination and returns the element count.

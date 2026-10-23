@@ -14,6 +14,19 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking:** containers are intrusive. New `std/container/list` (stacks,
+  queues, doubly linked lists, trees and free lists through `next`, `prev`,
+  `first`, `last`, `parent` and `free_next`), `std/container/hash` (chained
+  slot tables through `key`, `hash` and `hash_next`, with seeded SipHash-1-3)
+  and `std/container/chunk` (chunk lists on a shared arena). `slot_map` now
+  works on the caller's slot array through a `generation` field. Removed:
+  `std/container/string_map`, `mem.Pool`, `mem.FreeList` and their functions.
+  See `docs/migrations/containers.md`.
+- **Breaking:** `mem.append(&arena, &items, value)` replaces
+  `mem.append(&items, &count, &arena, value)`. The slice owns the rest of its
+  arena, so appends never copy and element addresses never change; it panics
+  when something else was pushed on that arena. New `mem.append_many`.
+- Unknown field errors name the type and field: `Node has no field 'prev'`.
 - **Breaking:** function types drop the `*`: write `fn(i32, i32) i32`, not
   `*fn(i32, i32) i32`. Parameters may be named for documentation:
   `fn(target: *Entity, damage: i32) bool`. `*fn(...)` now means a pointer to

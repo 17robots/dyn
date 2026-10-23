@@ -50,13 +50,30 @@ fn main() {
 ''',
     'containers': r'''
 use "std/mem" mem
-use "std/container/string_map" maps
+use "std/container/hash" hash
+use "std/container/list" list
 use "std/container/slot_map" slots
 use "std/fmt" fmt
+struct Entry {
+  generation: u32,
+  key: []const u8,
+  hash: u64,
+  hash_next: *Entry,
+  free_next: *Entry,
+  text: [32]u8,
+  value: usize,
+}
+const nil_entry: Entry = Entry{}
 fn main() {
   owned := mem.arena_create(1000000)
-  map := maps.Map{}
-  live: [128]bool = []
+  table := hash.slots(Entry, &owned, 8)
+  entries := mem.push_array(Entry, &owned, 128)
+  first_free: *Entry
+  for i in 0..128 {
+    list.free_push(&first_free, &entries[127 - i])
+  }
+  live: [128]*Entry = []
+  handles: [128]slots.Handle = []
   key: [32]u8 = []
   seed: u64 = 7
   for step in 0..4000 {
@@ -64,40 +81,36 @@ fn main() {
     index := #cast(usize, (seed % 128))
     text := fmt.u64_decimal(key[..], #cast(u64, index))
     if (seed / 128) % 2 == 0 {
-      if maps.put(&map, &owned, text, index) != maps.ErrorKind.None { #panic("put") }
-      live[index] = true
-    } else {
-      if maps.remove(&map, text) != live[index] { #panic("remove") }
-      live[index] = false
+      if live[index] == nil {
+        entry := list.free_pop(&first_free, &nil_entry)
+        if entry == &nil_entry { #panic("free list exhausted") }
+        slots.reset(entry)
+        entry.key = fmt.u64_decimal(entry.text[..], #cast(u64, index))
+        entry.value = index
+        entry.hash = hash.hash_bytes(1, entry.key)
+        hash.insert(table, entry)
+        live[index] = entry
+        handles[index] = slots.handle_of(entries, entry)
+      }
+    } else if live[index] != nil {
+      entry := live[index]
+      if !hash.remove(table, entry) { #panic("remove") }
+      slots.retire(entry)
+      list.free_push(&first_free, entry)
+      if slots.resolve(entries, handles[index], &nil_entry) != &nil_entry { #panic("stale handle") }
+      live[index] = nil
     }
     if step % 13 == 0 {
-      count: usize = 0
       for i in 0..128 {
-        found := maps.get(&map, fmt.u64_decimal(key[..], #cast(u64, i)))
-        if found.found != live[i] { #panic("collision chain") }
-        if live[i] {
-          count += 1
-          if found.value != i { #panic("value") }
+        name := fmt.u64_decimal(key[..], #cast(u64, i))
+        found := hash.find(table, hash.hash_bytes(1, name), name, &nil_entry)
+        if (found != &nil_entry) != (live[i] != nil) { #panic("collision chain") }
+        if live[i] != nil {
+          if found.value != i || slots.resolve(entries, handles[i], &nil_entry) != found { #panic("value") }
         }
       }
-      if count != map.length { #panic("length") }
     }
   }
-  data: [4]u8 = []
-  generations: [4]u32 = [0, 4294967294, 0, 0]
-  occupied: [1]u64 = []
-  state := slots.init(data[..], generations[..], occupied[..], 1)
-  handles: [3]slots.Handle = []
-  byte: [1]u8 = [42]
-  for i in 0..3 { handles[i] = slots.insert(&state, byte[..]) }
-  if handles[0].index != 0 || handles[1].index != 2 || handles[2].index != 3 { #panic("retired slot") }
-  if slots.insert(&state, byte[..]).generation != 0 { #panic("full") }
-  if !slots.remove(&state, handles[2]) || !slots.remove(&state, handles[0]) { #panic("remove slot") }
-  fresh := slots.insert(&state, byte[..])
-  if fresh.index != 0 || slots.get(&state, handles[0]).ok { #panic("reuse") }
-  if slots.insert(&state, byte[..]).index != 3 { #panic("second reuse") }
-  state = slots.init(data[..], generations[..], occupied[..], 1)
-  if slots.get(&state, fresh).ok || slots.insert(&state, byte[..]).index != 0 { #panic("reinit") }
   mem.arena_release(&owned)
 }
 ''',

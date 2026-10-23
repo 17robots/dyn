@@ -14,7 +14,7 @@ struct Output {
 
 fn put(out: *Output, arena: *mem.Arena, text: []const u8) {
   for byte in text {
-    _ = mem.append(&out.data, &out.count, arena, byte)
+    _ = append_grow(&out.data, &out.count, arena, byte)
   }
 }
 

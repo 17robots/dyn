@@ -10,6 +10,9 @@ def run(args, **kw):
     return result
 source = r'''
 use "std/mem" mem
+use "std/container/list" list
+struct Slot { free_next: *Slot, value: u32 }
+const nil_slot: Slot = Slot{}
 extern fn host_add "host_add"(a: i32, b: i32) i32
 struct Pair { x: i32, y: usize }
 struct Single { x: f32 }
@@ -39,14 +42,16 @@ pub fn abi() bool {
 }
 pub fn pool_test() bool {
   mem.arena_reset(&arena)
-  pool := mem.pool_init(&arena, 2, 4, 4)
-  first := mem.pool_acquire(&pool)
-  second := mem.pool_acquire(&pool)
-  if mem.pool_try_acquire(&pool) != nil { return false }
-  mem.pool_release(&pool, first)
-  same := mem.pool_acquire(&pool)
-  mem.pool_release(&pool, same) mem.pool_release(&pool, second)
-  return same == first && mem.pool_available(&pool) == 2
+  slots := mem.push_array(Slot, &arena, 2)
+  first_free: *Slot
+  list.free_push(&first_free, &slots[1])
+  list.free_push(&first_free, &slots[0])
+  first := list.free_pop(&first_free, &nil_slot)
+  second := list.free_pop(&first_free, &nil_slot)
+  if list.free_pop(&first_free, &nil_slot) != &nil_slot { return false }
+  list.free_push(&first_free, first)
+  same := list.free_pop(&first_free, &nil_slot)
+  return same == first && second == &slots[1] && first_free == nil
 }
 pub fn heap_available() bool { created := mem.arena_create(32) mem.arena_release(&created) return true }
 pub fn wide_index(index: u64) u8 { return backing[index] }

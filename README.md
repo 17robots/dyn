@@ -414,10 +414,9 @@ non-aliasing merely because they are `const`.
   allocation. Both needle and table must remain alive and unchanged. Prefer it
   for repeated searches or adversarial repeated-prefix input; simple one-off
   searches remain available in `std/bytes`.
-- `std/container/string_map.reserve`: reserve capacity before bulk insertion to
-  avoid intermediate arena tables. Keys are copied; growth preserves key bytes.
-  `clear` reuses the table but retains key allocations. Deletion does not reclaim
-  arena memory. Never rewind storage belonging to a live map.
+- `std/container/hash`: the slot count is fixed when the table is made and
+  insertion never allocates, so size the slots for the expected entry count.
+  Seed `hash_bytes` from `std/crypto/random` for keys from untrusted input.
 - `std/bytes/builder.reserve`: extends the last arena allocation in place when
   possible; otherwise copies live bytes to new storage. Interleaved allocations
   can therefore increase retained storage. Reacquire views after mutation.

@@ -1,4 +1,8 @@
 use "std/mem" memory
+use "std/container/list" list
+
+struct Slot { free_next: *Slot, value: [16]u8 }
+const nil_slot: Slot = Slot{}
 
 fn main() {
   backing: [512]u8 = []
@@ -42,26 +46,17 @@ fn main() {
   if fallback_scratch.arena != &second_scratch { #panic("scratch nil first candidate") }
   memory.scratch_end(&fallback_scratch)
 
+  // Fixed-buffer reuse through an intrusive free list.
   list_arena_storage: [256]u8 = []
   list_arena := memory.arena_from_buffer(list_arena_storage[..])
-  list := memory.free_list_from_arena(&list_arena, 4, 24, 8)
-  slots: [4]rawptr = []
-  for *slot in slots { slot.* = memory.free_list_alloc(&list) }
-  if list.free_count != 0 { #panic("free-list count failed") }
-  if memory.free_list_try_alloc(&list) != nil { #panic("free-list exhaustion failed") }
-  memory.free_list_free(&list, slots[2])
-  if memory.free_list_alloc(&list) != slots[2] { #panic("free-list reuse failed") }
-
-  pool_storage: [128]u8 = []
-  pool_arena := memory.arena_from_buffer(pool_storage[..])
-  pool := memory.pool_init(&pool_arena, 4, 16, 8)
-  if memory.pool_capacity(&pool) != 4 || memory.pool_available(&pool) != 4 {
-    #panic("pool capacity")
-  }
-  pooled := memory.pool_acquire(&pool)
-  if pooled == nil || memory.pool_available(&pool) != 3 { #panic("pool acquire") }
-  memory.pool_release(&pool, pooled)
-  if memory.pool_available(&pool) != 4 { #panic("pool release") }
+  slots := memory.push_array(Slot, &list_arena, 4)
+  first_free: *Slot
+  for *slot in slots { list.free_push(&first_free, slot) }
+  taken: [4]*Slot = []
+  for *slot in taken { slot.* = list.free_pop(&first_free, &nil_slot) }
+  if list.free_pop(&first_free, &nil_slot) != &nil_slot { #panic("free-list exhaustion failed") }
+  list.free_push(&first_free, taken[2])
+  if list.free_pop(&first_free, &nil_slot) != taken[2] { #panic("free-list reuse failed") }
 
   memory.arena_reset(&arena)
   if memory.arena_used(&arena) != 0 { #panic("arena reset failed") }

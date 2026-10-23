@@ -10,6 +10,9 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/mem"
 use "std/strings"
 use "std/encoding/ini"
+use "std/container/list" list
+struct Slot { free_next: *Slot, value: u64 }
+const nil_slot: Slot = Slot{}
 fn expect(ok: bool) { if !ok { #panic("std memory contract") } }
 fn fixed_empty(arena: *mem.Arena) {
   before := mem.arena_snapshot(arena)
@@ -64,16 +67,15 @@ fn main() {
   expect(#len(strings.clone(&tiny, "")) == 0)
   expect(mem.arena_used(&tiny) == 0)
 
-  pool := mem.pool_init(&arena, 2, #sizeof(u64), #alignof(u64))
-  one := mem.pool_try_acquire(&pool)
-  two := mem.pool_try_acquire(&pool)
-  expect(one != nil && two != nil && mem.pool_try_acquire(&pool) == nil)
-  mem.pool_release(&pool, one)
-  again := mem.pool_try_acquire(&pool)
-  expect(again == one && mem.pool_available(&pool) == 0)
-  mem.pool_release(&pool, again)
-  mem.pool_release(&pool, two)
-  expect(mem.pool_available(&pool) == 2)
+  slots := mem.push_array(Slot, &arena, 2)
+  first_free: *Slot
+  list.free_push(&first_free, &slots[1])
+  list.free_push(&first_free, &slots[0])
+  one := list.free_pop(&first_free, &nil_slot)
+  two := list.free_pop(&first_free, &nil_slot)
+  expect(one == &slots[0] && two == &slots[1] && list.free_pop(&first_free, &nil_slot) == &nil_slot)
+  list.free_push(&first_free, one)
+  expect(list.free_pop(&first_free, &nil_slot) == one && first_free == nil)
 
   growing := mem.growing_create_bounded(128, mem.KiB)
   initial := mem.growing_push(&growing, 32, 1)[..32]

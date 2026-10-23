@@ -1,6 +1,7 @@
 # Std standardization
 
-Status: agreed 2026-10-22 and 2026-10-23, not started. This is the contract std is moving to
+Status: agreed 2026-10-22 and 2026-10-23. Done: the language changes and rule 1
+(containers). This is the contract std is moving to
 before the syntax freeze. When a module meets it, move the matching text into
 [the std guide](../guide/std.md) conventions.
 
@@ -112,13 +113,14 @@ Intrusive helpers find fields by name, so the names are part of the API:
 | `count`, `items` | `usize`, `[N]T` | `chunk`, on each chunk |
 | `total` | `usize` | `chunk`, on the list |
 
-A struct in several lists of the same kind uses a second set through the
-explicit-field forms, which take a field offset:
-`list.dll_push_back_at(&a.first, &a.last, node, #offsetof(Node, order_next))`.
+A struct in two lists of the same kind needs a second set of link fields and,
+for now, a hand-written loop for the second list. Offset-taking forms
+(`dll_push_back_at`) wait for a real case.
 
 Free lists use `free_next`, not `next`, so freeing a node that is still linked
-elsewhere cannot corrupt that other list. `list.free_push` panics if the node
-still has a non-nil `next` or `parent`, which catches freeing before unlinking.
+elsewhere cannot corrupt that other list. Generic code cannot test for a field
+that may be absent, so `free_push` does not check that the node was unlinked
+first; that is the caller's job.
 
 ### Helper additions
 
@@ -195,7 +197,7 @@ element type; `std/container/chunk` works through their field names:
 struct EnemyChunk { next: *EnemyChunk, count: usize, items: [64]Enemy }
 struct EnemyList { first: *EnemyChunk, last: *EnemyChunk, total: usize }
 
-e := chunk.push(&level.arena, &level.enemies) // *Enemy, zeroed
+e := chunk.push(&level.arena, &level.enemies, Enemy{hp: 10}) // *Enemy, stable
 flat := chunk.to_slice(&scratch, &level.enemies)
 ```
 

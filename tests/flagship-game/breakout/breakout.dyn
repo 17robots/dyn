@@ -146,12 +146,12 @@ pub fn step(game: *Game, input: Input) {
   }
 }
 
-// Builds this frame's draw list in the frame arena, then rasterizes it.
+// Builds this frame's draw list in the frame arena, then rasterizes it. The
+// list is the only thing pushed on the frame arena while it grows.
 // pixels holds Width * Height RGBA values.
 pub fn render(game: *const Game, frame: *mem.Arena, pixels: []u32) {
   rects: []Rect
-  count: usize
-  _ = mem.append(&rects, &count, frame, Rect{ width: Width, height: Height, color: 0xFF201810 })
+  _ = mem.append(frame, &rects, Rect{ width: Width, height: Height, color: 0xFF201810 })
   row: i32 = 0
   for row < Rows {
     column: i32 = 0
@@ -159,20 +159,20 @@ pub fn render(game: *const Game, frame: *mem.Arena, pixels: []u32) {
       if game.bricks[#cast(usize, row * Columns + column)] {
         color := 0xFF3060E0 + #cast(u32, row) * 0x00201000
         brick := Rect{ x: column * BrickWidth + 1, y: BrickTop + row * BrickHeight + 1, width: BrickWidth - 2, height: BrickHeight - 2, color: color }
-        _ = mem.append(&rects, &count, frame, brick)
+        _ = mem.append(frame, &rects, brick)
       }
       column += 1
     }
     row += 1
   }
-  _ = mem.append(&rects, &count, frame, Rect{ x: game.paddle, y: PaddleTop, width: PaddleWidth, height: 4, color: 0xFFE0E0E0 })
-  _ = mem.append(&rects, &count, frame, Rect{ x: game.ball_x / Unit, y: game.ball_y / Unit, width: BallSize, height: BallSize, color: 0xFFFFFFFF })
+  _ = mem.append(frame, &rects, Rect{ x: game.paddle, y: PaddleTop, width: PaddleWidth, height: 4, color: 0xFFE0E0E0 })
+  _ = mem.append(frame, &rects, Rect{ x: game.ball_x / Unit, y: game.ball_y / Unit, width: BallSize, height: BallSize, color: 0xFFFFFFFF })
   life: i32 = 0
   for life < game.lives {
-    _ = mem.append(&rects, &count, frame, Rect{ x: 2 + life * 6, y: 2, width: 4, height: 4, color: 0xFF40C040 })
+    _ = mem.append(frame, &rects, Rect{ x: 2 + life * 6, y: 2, width: 4, height: 4, color: 0xFF40C040 })
     life += 1
   }
-  for rect in rects[..count] {
+  for rect in rects {
     fill(pixels, rect)
   }
 }

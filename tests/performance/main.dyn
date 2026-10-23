@@ -1,11 +1,14 @@
 use "std/bytes" bytes
 use "std/bytes/search" search
-use "std/container/string_map" maps
+use "std/container/hash" hash
 use "std/bytes/builder" builder
 use "std/mem" memory
 use "std/testing" testing
 use "std/io" io
 use "std/unicode/utf8" utf8
+
+struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
+const nil_entry: Entry = Entry{}
 
 fn main() {
   haystack: [32768]u8 = []
@@ -30,17 +33,22 @@ fn main() {
   }
   backing: [65536]u8 = []
   arena := memory.arena_from_buffer(backing[..])
-  map := maps.Map{}
-  testing.expect(maps.reserve(&map, &arena, 128) == maps.ErrorKind.None, "reserve")
-  key: [8]u8 = []
+  names := hash.slots(Entry, &arena, 128)
+  entries := memory.push_array(Entry, &arena, 128)
   for i in 0..128 {
-    key[0] = #cast(u8, i)
-    testing.expect(maps.put(&map, &arena, key[..], i) == maps.ErrorKind.None, "put")
+    entry := &entries[i]
+    entry.bytes[0] = #cast(u8, i)
+    entry.key = entry.bytes[..]
+    entry.hash = hash.hash_bytes(7, entry.key)
+    entry.value = i
+    hash.insert(names, entry)
   }
+  key: [1]u8 = []
   for i in 0..128 {
     key[0] = #cast(u8, i)
-    checksum += #cast(i64, maps.get(&map, key[..]).value)
-    testing.expect(maps.remove(&map, key[..]), "remove")
+    found := hash.find(names, hash.hash_bytes(7, key[..]), key[..], &nil_entry)
+    checksum += #cast(i64, found.value)
+    testing.expect(hash.remove(names, found), "remove")
   }
   built := builder.from_buffer(backing[..0])
   for i in 0..1024 { _ = builder.append_grow(&built, &arena, "x") }
