@@ -11,7 +11,7 @@ fn main() {
   defer mem.arena_release(&allocation)
   argv: [4][]const u8 = [executable(),"argument with spaces","quote\"and\\slashes\\",""]
   environment: [1][]const u8 = ["DYN_PROCESS_CHILD=yes"]
-  options := process.options() options.environment = environment[..]
+  options := process.Options{} options.environment = environment[..]
   output: [8]u8 = [] errors: [8]u8 = []
   result := process.capture(&allocation,executable(),argv[..],options,output[..],errors[..],5000)
   if !result.ok || result.exit.code != 0 || #len(result.output) != 0 || #len(result.errors) != 0 { #panic("native process capture") }

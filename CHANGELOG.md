@@ -14,6 +14,15 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking:** `process.Options{}` is valid and inherits every stream.
+  Streams are `process.Redirect` values made with `process.redirect(handle)`;
+  `process.options()` is removed.
+- `bytes/builder.Builder` keeps its first error in `error` and `fmt.Buffer`
+  sets `failed`; later calls do nothing, so callers may check once at the end.
+  `clear` resets both.
+- A zeroed `watch.Watcher` is inactive and `close` leaves descriptor 0 alone.
+- New `tools/std-lint.py`, run by the test suite, flags `_into` forms, size
+  companions, out parameters and `-1` positions in std.
 - **Breaking:** one result shape at the edges. Single-payload results name
   the payload `value`: `fs.FileResult`, `OffsetResult`, `ReadAllResult`,
   `PathResult`, `DirectoryResult`, `AtomicResult`; `net.ConnectionResult`,

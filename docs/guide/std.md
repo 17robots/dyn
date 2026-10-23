@@ -15,10 +15,9 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
   buffer or the arena, as each function's comment says. Reader-backed scanners
   return views that last until the next call.
 - **Zero is initialization.** A zeroed struct is a valid empty value: `Arena{}`,
-  `Builder{}`, `Map{}`, `GrowingArena{}`, scanners given only their `source`.
-  Constructors exist for convenience, not because zero is broken. The exception
-  is `process.Options`, where 0 is a real file descriptor; use
-  `process.options()`.
+  `Builder{}`, `GrowingArena{}`, `process.Options{}` (inherit every stream),
+  scanners given only their `source`. Constructors exist for convenience, not
+  because zero is broken.
 - **Errors are values, in one shape.** Results at the edges (OS, files,
   network, processes) are `{value, ok, kind, error}`: `value` is the payload,
   `kind` a portable `std/errors` category and `error` the native code. Test

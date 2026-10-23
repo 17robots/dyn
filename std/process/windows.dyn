@@ -179,7 +179,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     }
   }
   handles: [3]rawptr = []
-  sources: [3]isize = [configuration.input, configuration.output, configuration.error]
+  sources: [3]isize = [native_stream(configuration.input), native_stream(configuration.output), native_stream(configuration.error)]
   inherited_count: usize = 0
   defer {
     for owned in handles {
