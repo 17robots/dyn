@@ -9,7 +9,7 @@ fn main() {
   if memory.arena_capacity(&empty_child) != 0 { #panic("zero-capacity subarena succeeds") }
   first := memory.arena_try_push(&arena, 13, 8)
   if !first.ok || first.size != 13 { #panic("arena allocation failed") }
-  if (#cast(usize) first.memory & 7) != 0 { #panic("arena alignment failed") }
+  if (#cast(usize, first.memory) & 7) != 0 { #panic("arena alignment failed") }
   first_bytes := first.memory[..first.size]
   i: usize = 0
   for i < first.size {
@@ -46,11 +46,11 @@ fn main() {
   list_arena := memory.arena_from_buffer(list_arena_storage[..])
   list := memory.free_list_from_arena(&list_arena, 4, 24, 8)
   slots: [4]rawptr = []
-  for *slot in slots { slot.* = memory.free_list_alloc_or_panic(&list) }
+  for *slot in slots { slot.* = memory.free_list_alloc(&list) }
   if list.free_count != 0 { #panic("free-list count failed") }
-  if memory.free_list_alloc(&list) != nil { #panic("free-list exhaustion failed") }
+  if memory.free_list_try_alloc(&list) != nil { #panic("free-list exhaustion failed") }
   memory.free_list_free(&list, slots[2])
-  if memory.free_list_alloc_or_panic(&list) != slots[2] { #panic("free-list reuse failed") }
+  if memory.free_list_alloc(&list) != slots[2] { #panic("free-list reuse failed") }
 
   pool_storage: [128]u8 = []
   pool_arena := memory.arena_from_buffer(pool_storage[..])
@@ -58,7 +58,7 @@ fn main() {
   if memory.pool_capacity(&pool) != 4 || memory.pool_available(&pool) != 4 {
     #panic("pool capacity")
   }
-  pooled := memory.pool_acquire_or_panic(&pool)
+  pooled := memory.pool_acquire(&pool)
   if pooled == nil || memory.pool_available(&pool) != 3 { #panic("pool acquire") }
   memory.pool_release(&pool, pooled)
   if memory.pool_available(&pool) != 4 { #panic("pool release") }

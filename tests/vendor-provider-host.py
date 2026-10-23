@@ -134,7 +134,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-tree-sitter-provider-') as temporar
                        f'  require(#alignof(ts.{dyn}) == {values[dyn+".align"]})',
                        f'  layout_{dyn} := ts.{dyn}{{}}']
         for field in fields:
-            assertions.append(f'  require(#cast(usize) &layout_{dyn}.{field} - #cast(usize) &layout_{dyn} == {values[dyn+"."+field]})')
+            assertions.append(f'  require(#cast(usize, &layout_{dyn}.{field}) - #cast(usize, &layout_{dyn}) == {values[dyn+"."+field]})')
     (work/'main.dyn').write_text(SOURCE.replace('LAYOUT', '\n'.join(assertions)))
     for release in (False, True):
         binary = work/('probe.exe' if os.name == 'nt' else 'probe')

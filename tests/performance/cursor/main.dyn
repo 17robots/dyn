@@ -1,0 +1,30 @@
+use "std/io"
+
+struct Cursor { source: []const u8, at: usize }
+bytes: [1048576]u8
+
+fn scan(cursor: *Cursor) u64 {
+  total: u64 = 0
+  for cursor.at < #len(cursor.source) {
+    byte := cursor.source[cursor.at]
+    cursor.at += 1
+    total += #cast(u64, byte)
+  }
+  return total
+}
+
+fn main() {
+  expected: u64 = 0
+  for i in 0..#len(bytes) {
+    bytes[i] = #cast(u8, (i % 251))
+    expected += #cast(u64, bytes[i])
+  }
+  total: u64 = 0
+  for round in 0..100 {
+    cursor := Cursor{source: bytes[..]}
+    total += scan(&cursor)
+    if cursor.at != #len(bytes) { #panic("cursor position") }
+  }
+  if total != expected * 100 { #panic("cursor checksum") }
+  _ = io.println(io.stdout(), "{}", total)
+}

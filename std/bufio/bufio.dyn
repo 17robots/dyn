@@ -44,7 +44,7 @@ pub fn writer_flush(state: *Writer) io.Result {
 }
 
 fn writer_write(data: rawptr, source: []const u8) io.Result {
-  state := #cast(*Writer) data
+  state := #cast(*Writer, data)
   if state.used > #len(state.storage) {
     state.error = -22
     state.kind = errors.Kind.InvalidInput
@@ -111,7 +111,7 @@ pub fn reader(source: io.Reader, storage: []u8) Reader {
 }
 
 fn reader_read(data: rawptr, destination: []u8) io.Result {
-  state := #cast(*Reader) data
+  state := #cast(*Reader, data)
   if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {
     return io.Result{ kind: errors.Kind.InvalidState, status: io.Status.Error }
   }

@@ -8,15 +8,15 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = os.environ.get('DYN', str(ROOT/'build/dyn'))
 SOURCE = r'''
-enum(u64) Big { Top = 0xFFFFFFFFFFFFFFFF }
-enum(i8) Sign { Minus = -1, Plus = 1 }
+enum(u64) Big { Zero = 0, Top = 0xFFFFFFFFFFFFFFFF }
+enum(i8) Sign { Minus = -1, Zero = 0, Plus = 1 }
 extern fn note "note"(value: i32)
 struct Pair { x: i32, y: i32 }
 pub fn rem64(a: f64,b: f64) f64 { return a % b }
 pub fn rem32(a: f32,b: f32) f32 { return a % b }
 pub fn high() u32 { return 4294967295 }
-pub fn badenum(x: i64) u64 { return #cast(u64) #cast(Big) x }
-pub fn goodenum(x: i64) i8 { return #cast(i8) #cast(Sign) x }
+pub fn badenum(x: i64) u64 { return #cast(u64, #cast(Big, x)) }
+pub fn goodenum(x: i64) i8 { return #cast(i8, #cast(Sign, x)) }
 pub fn divsmall(x: i8, y: i8) i8 { return x / y }
 pub fn remsmall(x: i8, y: i8) i8 { return x % y }
 pub fn deref(p: *i32) i32 { return p.* }

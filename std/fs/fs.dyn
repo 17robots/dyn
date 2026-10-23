@@ -83,7 +83,7 @@ pub fn read(file: *File, destination: []u8) Result {
   if value < 0 {
     return failure(value)
   }
-  return Result{ transferred: #cast(usize) value, ok: true }
+  return Result{ transferred: #cast(usize, value), ok: true }
 }
 pub fn write(file: *File, source: []const u8) Result {
   if !is_open(file) {
@@ -101,12 +101,12 @@ pub fn write(file: *File, source: []const u8) Result {
     if value == 0 {
       return Result{ transferred: written, kind: errors.Kind.System }
     }
-    written += #cast(usize) value
+    written += #cast(usize, value)
   }
   return Result{ transferred: written, ok: true }
 }
 fn adapter_read(data: rawptr, destination: []u8) stream.Result {
-  result := read(#cast(*File) data, destination)
+  result := read(#cast(*File, data), destination)
   if !result.ok {
     return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error }
   }
@@ -117,7 +117,7 @@ fn adapter_read(data: rawptr, destination: []u8) stream.Result {
   return stream.Result{ transferred: result.transferred, status: status }
 }
 fn adapter_write(data: rawptr, source: []const u8) stream.Result {
-  result := write(#cast(*File) data, source)
+  result := write(#cast(*File, data), source)
   if !result.ok {
     return stream.Result{ transferred: result.transferred, error: result.error, kind: result.kind, status: stream.Status.Error }
   }
@@ -142,7 +142,7 @@ pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
   if value < 0 {
     return OffsetResult{ error: value, kind: native_kind(value) }
   }
-  return OffsetResult{ offset: #cast(usize) value, ok: true }
+  return OffsetResult{ offset: #cast(usize, value), ok: true }
 }
 pub fn sync(file: *File) Result {
   if !is_open(file) {

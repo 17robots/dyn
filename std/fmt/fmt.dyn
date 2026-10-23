@@ -41,7 +41,7 @@ pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
   if base < 2 || base > 36 {
     #panic("format base must be between 2 and 36")
   }
-  radix := #cast(u64) base
+  radix := #cast(u64, base)
   digit_count: usize = 1
   remaining_value := value
   for remaining_value >= radix {
@@ -55,7 +55,7 @@ pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
   remaining_value = value
   for at > 0 {
     at -= 1
-    digit := #cast(u8) (remaining_value % radix)
+    digit := #cast(u8, (remaining_value % radix))
     if digit < 10 {
       destination[at] = digit + '0'
     }
@@ -78,11 +78,11 @@ pub fn i64_decimal(destination: []u8, value: i64) []u8 {
   negative := value < 0
   magnitude: u64 = 0
   if negative {
-    magnitude = #cast(u64) (-(value + 1))
+    magnitude = #cast(u64, (-(value + 1)))
     magnitude += 1
   }
   else {
-    magnitude = #cast(u64) value
+    magnitude = #cast(u64, value)
   }
   if !negative {
     return u64_decimal(destination, magnitude)
@@ -189,7 +189,7 @@ pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
     ok := false
     case argument {
       is f32 value => {
-        ok = write_f64(state, #cast(f64) value)
+        ok = write_f64(state, #cast(f64, value))
       },
       is f64 value => {
         ok = write_f64(state, value)
@@ -198,34 +198,34 @@ pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
         ok = write_bool(state, value)
       },
       is i8 value => {
-        ok = write_i64(state, #cast(i64) value)
+        ok = write_i64(state, #cast(i64, value))
       },
       is i16 value => {
-        ok = write_i64(state, #cast(i64) value)
+        ok = write_i64(state, #cast(i64, value))
       },
       is i32 value => {
-        ok = write_i64(state, #cast(i64) value)
+        ok = write_i64(state, #cast(i64, value))
       },
       is i64 value => {
         ok = write_i64(state, value)
       },
       is isize value => {
-        ok = write_i64(state, #cast(i64) value)
+        ok = write_i64(state, #cast(i64, value))
       },
       is u8 value => {
-        ok = write_u64(state, #cast(u64) value)
+        ok = write_u64(state, #cast(u64, value))
       },
       is u16 value => {
-        ok = write_u64(state, #cast(u64) value)
+        ok = write_u64(state, #cast(u64, value))
       },
       is u32 value => {
-        ok = write_u64(state, #cast(u64) value)
+        ok = write_u64(state, #cast(u64, value))
       },
       is u64 value => {
         ok = write_u64(state, value)
       },
       is usize value => {
-        ok = write_u64(state, #cast(u64) value)
+        ok = write_u64(state, #cast(u64, value))
       },
       is []const u8 value => {
         ok = write(state, value)
@@ -258,7 +258,7 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
   }
   scratch: [64]u8 = []
   state := buffer(scratch[..])
-  bits := #bitcast(u64) value
+  bits := #bitcast(u64, value)
   negative := (bits >> 63) != 0
   exponent_bits := (bits >> 52) & 2047
   fraction_bits := bits & 4503599627370495
@@ -281,7 +281,7 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
       for i in 0..precision {
         scale *= 10
       }
-      scientific := magnitude != 0.0 && (magnitude < 0.000001 || magnitude * #cast(f64) scale >= 1000000000000000000.0)
+      scientific := magnitude != 0.0 && (magnitude < 0.000001 || magnitude * #cast(f64, scale) >= 1000000000000000000.0)
       exponent: i64 = 0
       if scientific {
         for magnitude >= 10.0 {
@@ -293,9 +293,9 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
           exponent -= 1
         }
       }
-      scaled := magnitude * #cast(f64) scale
-      rounded := #cast(u64) scaled
-      if scaled - #cast(f64) rounded >= 0.5 {
+      scaled := magnitude * #cast(f64, scale)
+      rounded := #cast(u64, scaled)
+      if scaled - #cast(f64, rounded) >= 0.5 {
         rounded += 1
       }
       if scientific && rounded >= 10 * scale {

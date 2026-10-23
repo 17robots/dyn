@@ -368,7 +368,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
     #panic("create shader")
   }
   pointer := &source[0]
-  length := #cast(i32) #len(source)
+  length := #cast(i32, #len(source))
   api.shader_source(value, 1, &pointer, &length)
   api.compile_shader(value)
   compiled: i32 = 0
@@ -378,7 +378,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
     written: i32 = 0
     api.get_shader_log(value, 2048, &written, &log[0])
     if written > 0 && written <= 2048 {
-      _ = io.println(io.stderr(), "{}", log[..#cast(usize) written])
+      _ = io.println(io.stderr(), "{}", log[..#cast(usize, written)])
     }
     api.delete_shader(value)
     #panic("compile shader")
@@ -445,7 +445,7 @@ fn main() {
     }
     bad_source := "this is not GLSL"
     bad_pointer := &bad_source[0]
-    bad_length := #cast(i32) #len(bad_source)
+    bad_length := #cast(i32, #len(bad_source))
     api.shader_source(invalid, 1, &bad_pointer, &bad_length)
     api.compile_shader(invalid)
     compiled: i32 = 0
@@ -485,7 +485,7 @@ fn main() {
   api.bind_vertex_array(vao)
   api.bind_buffer(gl.ArrayBuffer, vbo)
   vertices: [6]f32 = [-0.8, -0.8, 0.8, -0.8, 0.0, 0.8]
-  api.buffer_data(gl.ArrayBuffer, #cast(isize) #sizeof(vertices), #cast(rawptr) &vertices[0], gl.StaticDraw)
+  api.buffer_data(gl.ArrayBuffer, #cast(isize, #sizeof(vertices)), #cast(rawptr, &vertices[0]), gl.StaticDraw)
   api.enable_vertex_attribute(0)
   api.vertex_attribute(0, 2, gl.Float, 0, 8, nil)
   event := sdl3.Event{}
@@ -512,7 +512,7 @@ fn main() {
     api.draw_arrays(gl.Triangles, 0, 3)
     if smoke {
       pixel: [4]u8 = []
-      api.read_pixels(width / 2, height / 2, 1, 1, gl.Rgba, gl.UnsignedByte, #cast(rawptr) &pixel[0])
+      api.read_pixels(width / 2, height / 2, 1, 1, gl.Rgba, gl.UnsignedByte, #cast(rawptr, &pixel[0]))
       if pixel[0] < 200 || pixel[1] > 30 || pixel[2] > 30 {
         #panic("triangle pixel mismatch")
       }

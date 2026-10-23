@@ -82,7 +82,7 @@ static bool allocation_plan(BackendContext *ctx, const DynSource *source,
                             const DynIrProgram *ir, const DynIrFunction *f) {
   ctx->allocator_used = 0; ctx->allocator_local_count = 0;
   const DynOptimization *policy = source->context.optimization;
-  if (ctx->debug_mode || ctx->dwarf || ctx->win64 || ctx->winarm64 || ctx->rv64 || !policy || policy->level < 3)
+  if (ctx->debug_mode || ctx->dwarf || ctx->win64 || ctx->winarm64 || ctx->rv64 || ctx->rv32 || ctx->t32 || !policy || policy->level < 3)
     return true;
   AllocationInterval *v = calloc(f->local_count ? f->local_count : 1, sizeof(*v));
   if (!v) return false;

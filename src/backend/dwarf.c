@@ -15,7 +15,7 @@ typedef struct {
   bool prologue_end;
 } Row;
 typedef struct {
-  size_t begin, end, first_row, last_row, first_epilogue, last_epilogue,
+  size_t begin, prologue, end, first_row, last_row, first_epilogue, last_epilogue,
       first_variable, last_variable;
   char *name;
   unsigned file, line, column;
@@ -47,7 +47,7 @@ struct BackendDwarf {
   size_t variable_count, variable_capacity;
   const char *last_path; /* callers pass stable location-index paths */
   unsigned last_file;
-  bool active, failed, a64, rv64;
+  bool active, failed, a64, rv64, rv32, t32;
 };
 static bool grow(void **data, size_t *capacity, size_t count, size_t size, size_t limit) {
   if (count > limit || (count && size > SIZE_MAX / count)) return false;
@@ -92,6 +92,22 @@ BackendDwarf *backend_dwarf_create_rv64(void) {
   if (d) d->rv64 = true;
   return d;
 }
+BackendDwarf *backend_dwarf_create_rv32(void) {
+  BackendDwarf *d = backend_dwarf_create_rv64();
+  if (d) d->rv32 = true;
+  return d;
+}
+BackendDwarf *backend_dwarf_create_t32(void) {
+  BackendDwarf *d = backend_dwarf_create();
+  if (d) d->t32 = true;
+  return d;
+}
+static unsigned address_size(const BackendDwarf *d) {
+  return d && (d->rv32 || d->t32) ? 4 : 8;
+}
+static unsigned address_relocation(const BackendDwarf *d) {
+  return address_size(d)==4 ? R_X86_64_32 : R_X86_64_64;
+}
 void backend_dwarf_free(BackendDwarf *d) {
   if (!d) return;
   for (size_t i = 0; i < d->function_count; ++i) free(d->functions[i].name);
@@ -112,7 +128,7 @@ bool backend_dwarf_begin(BackendDwarf *d, size_t pc, const char *name,
   unsigned file = file_index(d, path);
   char *copy = file ? copy_string(d, name) : NULL;
   if (!copy) return !(d->failed = true);
-  d->functions[d->function_count++] = (Function){.begin=pc, .first_row=d->row_count,
+  d->functions[d->function_count++] = (Function){.begin=pc, .prologue=pc, .first_row=d->row_count,
     .first_epilogue=d->epilogue_count, .first_variable=d->variable_count,
     .name=copy, .file=file, .line=line, .column=column};
   d->active = true;
@@ -128,6 +144,13 @@ bool backend_dwarf_line(BackendDwarf *d, size_t pc, const char *path,
   unsigned file = file_index(d, path);
   if (!file) return !(d->failed = true);
   d->rows[d->row_count++] = (Row){pc, file, line, column, prologue_end}; return true;
+}
+bool backend_dwarf_prologue(BackendDwarf *d, size_t pc) {
+  if (!d || d->failed) return false;
+  if (!d->active || pc < d->functions[d->function_count - 1].begin || pc > UINT32_MAX)
+    return !(d->failed = true);
+  d->functions[d->function_count - 1].prologue = pc;
+  return true;
 }
 bool backend_dwarf_epilogue(BackendDwarf *d, size_t pc) {
   if (!d || d->failed) return false;
@@ -166,7 +189,7 @@ unsigned backend_dwarf_base_type(BackendDwarf *d, const char *name,
   return add_type(d, (Type){.kind=TYPE_BASE, .encoding=encoding, .size=size}, name, 0);
 }
 unsigned backend_dwarf_pointer_type(BackendDwarf *d, unsigned target) {
-  return add_type(d, (Type){.kind=TYPE_POINTER, .target=target, .size=8}, NULL, 0);
+  return add_type(d, (Type){.kind=TYPE_POINTER, .target=target, .size=address_size(d)}, NULL, 0);
 }
 unsigned backend_dwarf_struct_type(BackendDwarf *d, const char *name,
                                    uint64_t size, unsigned members) {
@@ -296,11 +319,11 @@ static bool emit_variable(BackendDwarfOutput *out, BackendDwarfBytes *b, const V
 static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
   BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_INFO];
   PUT(number(b,0,4)); PUT(number(b,4,2));
-  PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_ABBREV,R_X86_64_32,0)); PUT(number(b,8,1));
+  PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_ABBREV,R_X86_64_32,0)); PUT(number(b,address_size(d),1));
   PUT(uleb(b,1)); PUT(string(b,d->files[0])); PUT(string(b,"dyn"));
   PUT(number(b,0x15b9,2)); /* LLVM's existing Dyn language code. */
   PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_LINE,R_X86_64_32,0));
-  PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,R_X86_64_64,d->functions[0].begin));
+  PUT(relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,address_relocation(d),d->functions[0].begin));
   PUT(number(b,d->functions[d->function_count-1].end-d->functions[0].begin,8));
   /* Type DIEs precede functions; ref4 forms are patched once offsets exist. */
   size_t *offsets=calloc(d->type_count?d->type_count:1,sizeof(*offsets));
@@ -314,8 +337,8 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
     case TYPE_BASE:
       ok=uleb(b,5) && string(b,type->name) && number(b,type->encoding,1) && uleb(b,type->size); break;
     case TYPE_POINTER:
-      if (type->target) { ok=uleb(b,6) && uleb(b,8); if (ok) REF(type->target); }
-      else ok=uleb(b,7) && uleb(b,8);
+      if (type->target) { ok=uleb(b,6) && uleb(b,type->size); if (ok) REF(type->target); }
+      else ok=uleb(b,7) && uleb(b,type->size);
       break;
     case TYPE_ARRAY:
       ok=uleb(b,10); if (ok) REF(type->target);
@@ -336,11 +359,13 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
   }
   for (size_t i=0;ok && i<d->function_count;++i) {
     Function *f=&d->functions[i];
-    const unsigned char frame_base[]={1,d->rv64?0x58:d->a64?0x6d:0x56}; /* DW_OP_reg29 (x29) / reg6 (rbp) */
+    const unsigned char frame_base[]={1,d->rv64?0x58:d->a64?0x6d:0x56}; /* DW_OP_reg8 / reg29 / reg6 */
+    const unsigned char thumb_frame_base[]={3,0x7b,0xfc,0x1f}; /* DW_OP_breg11 +4092 */
     ok=uleb(b,2) && string(b,f->name) && string(b,f->name) && uleb(b,f->file) &&
        uleb(b,f->line) && uleb(b,f->column) &&
-       relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,R_X86_64_64,f->begin) &&
-       number(b,f->end-f->begin,8) && bytes(b,frame_base,sizeof(frame_base));
+       relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,address_relocation(d),f->begin) &&
+       number(b,f->end-f->begin,8) && bytes(b,d->t32?thumb_frame_base:frame_base,
+                                          d->t32?sizeof(thumb_frame_base):sizeof(frame_base));
     /* Function-wide variables first; scoped ones nest as lexical blocks ordered
        by start, outer ranges before the ranges they contain. */
     size_t first=f->first_variable,count=f->last_variable-first,scoped=0;
@@ -363,7 +388,7 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
       if (ok && !(open && stack_begin[open-1]==variable->begin && stack_end[open-1]==variable->end)) {
         if (open==64) { ok=uleb(b,0); --open; }
         ok=ok && uleb(b,14) &&
-           relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,R_X86_64_64,(int64_t)variable->begin) &&
+           relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,address_relocation(d),(int64_t)variable->begin) &&
            number(b,variable->end-variable->begin,8);
         stack_begin[open]=variable->begin; stack_end[open++]=variable->end;
       }
@@ -391,8 +416,8 @@ static bool lines(BackendDwarf *d,BackendDwarfOutput *out) {
   PUT(number(b,0,1)); patch32(b,6,b->size-10);
   for (size_t i=0;i<d->function_count;++i) {
     Function *f=&d->functions[i]; size_t pc=f->begin; unsigned file=1,line=1,column=0;
-    PUT(number(b,0,1)); PUT(uleb(b,9)); PUT(number(b,2,1));
-    PUT(relocation(out,BACKEND_DWARF_LINE,BACKEND_DWARF_TEXT,R_X86_64_64,pc));
+    PUT(number(b,0,1)); PUT(uleb(b,1+address_size(d))); PUT(number(b,2,1));
+    PUT(relocation(out,BACKEND_DWARF_LINE,BACKEND_DWARF_TEXT,address_relocation(d),pc));
     for (size_t j=f->first_row;j<f->last_row;++j) {
       Row *r=&d->rows[j];
       if (r->pc!=pc) { PUT(number(b,2,1)); PUT(uleb(b,r->pc-pc)); pc=r->pc; }
@@ -422,8 +447,8 @@ static bool frames_a64(BackendDwarf *d,BackendDwarfOutput *out) {
   for (size_t i=0;i<d->function_count;++i) {
     Function *f=&d->functions[i]; size_t start=b->size;
     PUT(number(b,0,4)); PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_FRAME,R_X86_64_32,0));
-    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,R_X86_64_64,f->begin));
-    PUT(number(b,f->end-f->begin,8));
+    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,address_relocation(d),f->begin));
+    PUT(number(b,f->end-f->begin,address_size(d)));
     /* After stp: CFA = sp + 16, x29 at CFA-16, x30 at CFA-8; after mov: CFA = x29 + 16. */
     const unsigned char prologue[]={0x41,0x0e,16,0x80|29,2,0x80|30,1,0x41,0x0d,29};
     PUT(bytes(b,prologue,sizeof(prologue))); size_t pc=f->begin+8;
@@ -438,33 +463,59 @@ static bool frames_a64(BackendDwarf *d,BackendDwarfOutput *out) {
   }
   return true;
 }
-static bool frames_rv64(BackendDwarf *d,BackendDwarfOutput *out) {
+static bool frames_riscv(BackendDwarf *d,BackendDwarfOutput *out) {
   BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_FRAME];
   PUT(number(b,0,4)); PUT(number(b,UINT32_MAX,4)); PUT(number(b,1,1)); PUT(number(b,0,1));
-  PUT(uleb(b,4)); PUT(sleb(b,-8)); PUT(number(b,1,1));
+  PUT(uleb(b,4)); PUT(sleb(b,-(int64_t)address_size(d))); PUT(number(b,1,1));
   const unsigned char initial[]={0x0c,2,0}; PUT(bytes(b,initial,sizeof(initial)));
-  while (b->size%8) PUT(number(b,0,1));
+  while (b->size%address_size(d)) PUT(number(b,0,1));
   patch32(b,0,b->size-4);
   for (size_t i=0;i<d->function_count;++i) {
     Function *f=&d->functions[i]; size_t start=b->size;
     PUT(number(b,0,4)); PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_FRAME,R_X86_64_32,0));
-    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,R_X86_64_64,f->begin));
-    PUT(number(b,f->end-f->begin,8));
-    const unsigned char prologue[]={0x41,0x0e,16,0x41,0x80|8,2,0x41,0x80|1,1,0x41,0x0d,8};
-    PUT(bytes(b,prologue,sizeof(prologue))); size_t pc=f->begin+16;
+    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,address_relocation(d),f->begin));
+    PUT(number(b,f->end-f->begin,address_size(d)));
+    if (f->prologue != f->begin) PUT(advance(b,(f->prologue-f->begin)/4));
+    const unsigned char prologue[]={0x41,0x0e,16,0x41,0x80|8,16/address_size(d),0x41,0x80|1,8/address_size(d),0x41,0x0d,8};
+    PUT(bytes(b,prologue,sizeof(prologue))); size_t pc=f->prologue+16;
     for (size_t j=f->first_epilogue;j<f->last_epilogue;++j) {
       size_t after_sp=d->epilogues[j]+4;
       PUT(advance(b,(after_sp-pc)/4));
       const unsigned char epilogue[]={0x0a,0x0c,2,16,0x41,0xc0|8,0x41,0xc0|1,0x41,0x0e,0,0x41,0x0b};
       PUT(bytes(b,epilogue,sizeof(epilogue))); pc=after_sp+16;
     }
-    while (b->size%8) PUT(number(b,0,1));
+    while (b->size%address_size(d)) PUT(number(b,0,1));
+    patch32(b,start,b->size-start-4);
+  }
+  return true;
+}
+static bool frames_t32(BackendDwarf *d,BackendDwarfOutput *out) {
+  BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_FRAME];
+  /* Thumb instructions can be two bytes; this fixed prologue uses four each. */
+  PUT(number(b,0,4)); PUT(number(b,UINT32_MAX,4)); PUT(number(b,1,1)); PUT(number(b,0,1));
+  PUT(uleb(b,2)); PUT(sleb(b,-4)); PUT(number(b,14,1));
+  const unsigned char initial[]={0x0c,13,0}; PUT(bytes(b,initial,sizeof(initial)));
+  while (b->size%4) PUT(number(b,0,1));
+  patch32(b,0,b->size-4);
+  for (size_t i=0;i<d->function_count;++i) {
+    Function *f=&d->functions[i]; size_t start=b->size;
+    PUT(number(b,0,4)); PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_FRAME,R_X86_64_32,0));
+    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,address_relocation(d),f->begin));
+    PUT(number(b,f->end-f->begin,address_size(d)));
+    /* push {r3-r11,lr}: CFA = sp+40, r11 at CFA-8, lr at CFA-4.
+       subw r11,sp,#4092: CFA = r11+4132. Final pop restores r11 and pc
+       atomically, so no epilogue row is needed within the function range. */
+    if (f->prologue != f->begin) PUT(advance(b,(f->prologue-f->begin)/2));
+    const unsigned char prologue[]={0x42,0x0e,40,0x80|11,2,0x80|14,1,0x42,0x0c,11};
+    PUT(bytes(b,prologue,sizeof(prologue))); PUT(uleb(b,4132));
+    while (b->size%4) PUT(number(b,0,1));
     patch32(b,start,b->size-start-4);
   }
   return true;
 }
 static bool frames(BackendDwarf *d,BackendDwarfOutput *out) {
-  if (d->rv64) return frames_rv64(d,out);
+  if (d->t32) return frames_t32(d,out);
+  if (d->rv64) return frames_riscv(d,out);
   if (d->a64) return frames_a64(d,out);
   BackendDwarfBytes *b=&out->sections[BACKEND_DWARF_FRAME];
   PUT(number(b,0,4)); PUT(number(b,UINT32_MAX,4)); PUT(number(b,1,1)); PUT(number(b,0,1));
@@ -475,8 +526,8 @@ static bool frames(BackendDwarf *d,BackendDwarfOutput *out) {
   for (size_t i=0;i<d->function_count;++i) {
     Function *f=&d->functions[i]; size_t start=b->size;
     PUT(number(b,0,4)); PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_FRAME,R_X86_64_32,0));
-    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,R_X86_64_64,f->begin));
-    PUT(number(b,f->end-f->begin,8));
+    PUT(relocation(out,BACKEND_DWARF_FRAME,BACKEND_DWARF_TEXT,address_relocation(d),f->begin));
+    PUT(number(b,f->end-f->begin,address_size(d)));
     const unsigned char prologue[]={0x41,0x0e,16,0x86,2,0x43,0x0d,6};
     PUT(bytes(b,prologue,sizeof(prologue))); size_t pc=f->begin+4;
     for (size_t j=f->first_epilogue;j<f->last_epilogue;++j) {

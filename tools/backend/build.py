@@ -25,6 +25,7 @@ unit = command.copy()
 unit[unit.index(str(ROOT / 'src/backend' / 'driver.c'))] = str(ROOT / 'src/backend' / 'reentrant-unit.c')
 unit[-1] = str(BUILD / 'backend-reentrant-test')
 subprocess.run(unit, check=True)
+subprocess.run([str(BUILD / 'backend-reentrant-test')], check=True)
 
 output_unit = [*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2', '-g',
                '-Wall', '-Wextra', '-Wpedantic', '-Werror',

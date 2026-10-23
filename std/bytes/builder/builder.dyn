@@ -64,7 +64,7 @@ pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) Er
   if state.length > #len(state.storage) {
     return ErrorKind.InvalidState
   }
-  maximum := #cast(usize) -1
+  maximum := #cast(usize, -1)
   if #len(source) > maximum - state.length {
     return ErrorKind.Overflow
   }

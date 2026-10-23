@@ -2,9 +2,7 @@
 #define DYN_INTERFACE_COMPACT_H
 /* Serialize the same canonical declaration fragments without retaining syntax
    handles. Constant reachability has already been computed across all files. */
-static int interface_compact_declarations(const DynSource *source,const ExpSnapshotTree *tree,
-                                          InterfaceConstant *constants,size_t constant_count,
-                                          char ***decls,size_t *count) {
+static int interface_compact_declarations(const DynSource *source,const ExpSnapshotTree *tree, InterfaceConstant *constants,size_t constant_count, char ***decls,size_t *count) {
   const ExpNode *nodes=tree->nodes;
   for(uint32_t wrapper=nodes[tree->root].first;wrapper!=UINT32_MAX;wrapper=nodes[wrapper].next) {
     if(!dyn_work_step(&source->context,1)) return 1;
@@ -17,7 +15,7 @@ static int interface_compact_declarations(const DynSource *source,const ExpSnaps
       uint32_t name=dyn_compact_name(tree,wrapper);
       for(size_t i=0;i<constant_count;++i) {
         if(!dyn_work_step(&source->context,1)) return 1;
-        if(constants[i].needed && interface_compact_named(&constants[i],tree,name,source)) representation=true;
+        if(constants[i].needed && interface_compact_named(&constants[i],tree,name,source)) representation = true;
       }
     }
     if(!(nodes[wrapper].flags&EXP_PUBLIC) && !representation) continue;
@@ -44,9 +42,7 @@ static int interface_compact_declarations(const DynSource *source,const ExpSnaps
       size_t size=(size_t)(nb-na)*2+(tb-ta)+21;
       raw=malloc(size);
       if(!raw) return 1;
-      int written=snprintf(raw,size,"pub extern %.*s \"%.*s\":%.*s",
-                            (int)(nb-na),source->text+na,(int)(nb-na),source->text+na,
-                            (int)(tb-ta),source->text+ta);
+      int written=snprintf(raw,size,"pub extern %.*s \"%.*s\":%.*s", (int)(nb-na),source->text+na,(int)(nb-na),source->text+na, (int)(tb-ta),source->text+ta);
       if(written>0) text=canonical(raw,(size_t)written,&length);
     } else text=canonical(source->text+start,end-start,&length);
     free(raw);

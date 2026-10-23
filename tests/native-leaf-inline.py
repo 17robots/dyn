@@ -88,7 +88,7 @@ fn main() {
         assert result.stdout.splitlines() == ['cleanup'], result.stdout
         assert 'overflow' in result.stderr, result.stderr
     # Target checks precede both argument checks and checks in the leaf body.
-    for pointer, message in (('nil', 'null'), ('#cast(*i64) #cast(usize) 1', 'align')):
+    for pointer, message in (('nil', 'null'), ('#cast(*i64, #cast(usize, 1))', 'align')):
         (module / 'main.dyn').write_text(f'''
 fn add(a: i64, b: i64) i64 {{ return a + b }}
 fn main() {{

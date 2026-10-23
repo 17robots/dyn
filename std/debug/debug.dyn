@@ -26,7 +26,7 @@ pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpRes
     shift: usize = 8
     for shift > 0 {
       shift -= 1
-      destination[output_at] = digit(#cast(u8) ((input_at >> (shift * 4)) & 15))
+      destination[output_at] = digit(#cast(u8, ((input_at >> (shift * 4)) & 15)))
       output_at += 1
     }
     destination[output_at] = ' '

@@ -40,7 +40,7 @@ pub fn ends_with(value: []const u8, suffix: []const u8) bool {
 pub fn find_byte(value: []const u8, byte: u8) isize {
   for i in 0..#len(value) {
     if value[i] == byte {
-      return #cast(isize) i
+      return #cast(isize, i)
     }
   }
   return -1
@@ -51,7 +51,7 @@ pub fn find_last_byte(value: []const u8, byte: u8) isize {
   for i > 0 {
     i -= 1
     if value[i] == byte {
-      return #cast(isize) i
+      return #cast(isize, i)
     }
   }
   return -1
@@ -64,12 +64,14 @@ pub fn find(value: []const u8, needle: []const u8) isize {
   if #len(needle) > #len(value) {
     return -1
   }
-  if #len(needle) == 1 { return find_byte(value, needle[0]) }
+  if #len(needle) == 1 {
+    return find_byte(value, needle[0])
+  }
   last := #len(needle) - 1
   i: usize = 0
   for i <= #len(value) - #len(needle) {
     if value[i + last] == needle[last] && equal(value[i..i + #len(needle)], needle) {
-      return #cast(isize) i
+      return #cast(isize, i)
     }
     i += 1
   }
@@ -78,17 +80,19 @@ pub fn find(value: []const u8, needle: []const u8) isize {
 
 pub fn find_last(value: []const u8, needle: []const u8) isize {
   if #len(needle) == 0 {
-    return #cast(isize) #len(value)
+    return #cast(isize, #len(value))
   }
   if #len(needle) > #len(value) {
     return -1
   }
-  if #len(needle) == 1 { return find_last_byte(value, needle[0]) }
+  if #len(needle) == 1 {
+    return find_last_byte(value, needle[0])
+  }
   i := #len(value) - #len(needle) + 1
   for i > 0 {
     i -= 1
     if equal(value[i..i + #len(needle)], needle) {
-      return #cast(isize) i
+      return #cast(isize, i)
     }
   }
   return -1
@@ -140,7 +144,7 @@ pub fn split_next(state: *Splitter, output: *[]const u8) bool {
     state.done = true
     return true
   }
-  end := state.offset + #cast(usize) found
+  end := state.offset + #cast(usize, found)
   output.* = state.value[state.offset..end]
   state.offset = end + #len(state.separator)
   return true
@@ -230,8 +234,8 @@ pub fn overlaps(left: []const u8, right: []const u8) bool {
   if #len(left) == 0 || #len(right) == 0 {
     return false
   }
-  a := #cast(usize) &left[0]
-  b := #cast(usize) &right[0]
+  a := #cast(usize, &left[0])
+  b := #cast(usize, &right[0])
   if a <= b {
     return b - a < #len(left)
   }

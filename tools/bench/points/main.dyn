@@ -13,7 +13,7 @@ fn step(p: Point, d: Point) Point {
 
 fn main() {
   for i in 0..#len(points) {
-    points[i] = Point{x: #cast(i64) i, y: #cast(i64) (i * 7)}
+    points[i] = Point{x: #cast(i64, i), y: #cast(i64, (i * 7))}
   }
   delta := Point{x: 5, y: 11}
   for round in 0..2000 {

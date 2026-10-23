@@ -7,7 +7,7 @@ const Inserts: usize = 4000000
 
 // Open addressing with linear probing; key 0 marks an empty slot.
 fn slot(key: u64) usize {
-  return #cast(usize) (#wrap(key * 11400714819323198485) >> (64 - Bits))
+  return #cast(usize, (#wrap(key * 11400714819323198485) >> (64 - Bits)))
 }
 
 fn main() {

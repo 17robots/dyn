@@ -164,7 +164,7 @@ pub fn parse(
 pub struct TextResult { value: []u8, error: ErrorKind, required: usize, ok: bool }
 
 fn render_piece(destination: []u8, offset: *usize, piece: []const u8, write: bool) bool {
-  if #len(piece) > #cast(usize) -1 - offset.* {
+  if #len(piece) > #cast(usize, -1) - offset.* {
     return false
   }
   if write {

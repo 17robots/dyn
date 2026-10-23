@@ -99,7 +99,7 @@ fn print_value(writer: Writer, value: any) Result {
   storage: [64]u8 = []
   case value {
     is f32 item => {
-      return write_all(writer, format.f64_decimal(storage[..], #cast(f64) item, 6))
+      return write_all(writer, format.f64_decimal(storage[..], #cast(f64, item), 6))
     },
     is f64 item => {
       return write_all(writer, format.f64_decimal(storage[..], item, 6))
@@ -111,34 +111,34 @@ fn print_value(writer: Writer, value: any) Result {
       return write_all(writer, "false")
     },
     is i8 item => {
-      return write_all(writer, format.i64_decimal(storage[..], #cast(i64) item))
+      return write_all(writer, format.i64_decimal(storage[..], #cast(i64, item)))
     },
     is i16 item => {
-      return write_all(writer, format.i64_decimal(storage[..], #cast(i64) item))
+      return write_all(writer, format.i64_decimal(storage[..], #cast(i64, item)))
     },
     is i32 item => {
-      return write_all(writer, format.i64_decimal(storage[..], #cast(i64) item))
+      return write_all(writer, format.i64_decimal(storage[..], #cast(i64, item)))
     },
     is i64 item => {
       return write_all(writer, format.i64_decimal(storage[..], item))
     },
     is isize item => {
-      return write_all(writer, format.i64_decimal(storage[..], #cast(i64) item))
+      return write_all(writer, format.i64_decimal(storage[..], #cast(i64, item)))
     },
     is u8 item => {
-      return write_all(writer, format.u64_decimal(storage[..], #cast(u64) item))
+      return write_all(writer, format.u64_decimal(storage[..], #cast(u64, item)))
     },
     is u16 item => {
-      return write_all(writer, format.u64_decimal(storage[..], #cast(u64) item))
+      return write_all(writer, format.u64_decimal(storage[..], #cast(u64, item)))
     },
     is u32 item => {
-      return write_all(writer, format.u64_decimal(storage[..], #cast(u64) item))
+      return write_all(writer, format.u64_decimal(storage[..], #cast(u64, item)))
     },
     is u64 item => {
       return write_all(writer, format.u64_decimal(storage[..], item))
     },
     is usize item => {
-      return write_all(writer, format.u64_decimal(storage[..], #cast(u64) item))
+      return write_all(writer, format.u64_decimal(storage[..], #cast(u64, item)))
     },
     is []u8 item => {
       return write_all(writer, item)
@@ -180,7 +180,7 @@ fn format_argument_count(template: []const u8) isize {
 // write literal braces. Invalid formats and argument-count mismatches write nothing.
 pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) Result {
   count := format_argument_count(template)
-  if count < 0 || #cast(usize) count != #len(arguments) {
+  if count < 0 || #cast(usize, count) != #len(arguments) {
     return Result{ transferred: 0, error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
   }
 
@@ -315,7 +315,7 @@ pub fn cursor(data: []const u8) Cursor {
 }
 
 fn cursor_read(data: rawptr, destination: []u8) Result {
-  state := #cast(*Cursor) data
+  state := #cast(*Cursor, data)
   if state.offset > #len(state.data) {
     return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
   }
@@ -357,7 +357,7 @@ pub fn buffer_writer_reset(state: *BufferWriter) {
 }
 
 fn buffer_write(data: rawptr, source: []const u8) Result {
-  state := #cast(*BufferWriter) data
+  state := #cast(*BufferWriter, data)
   if state.length > #len(state.data) {
     return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
   }

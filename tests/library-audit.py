@@ -22,7 +22,7 @@ fn main() {
   arena.poison_on_rewind=true
   for i in 0..32 {
     control:[1]u8=[]
-    control[0]=#cast(u8) i
+    control[0]=#cast(u8, i)
     encoded:[16]u8=[]
     written:=json.write_string(encoded[..],control[..])
     if #len(written)==0 { #panic("control escape") }
@@ -61,8 +61,8 @@ fn main() {
   seed: u64 = 7
   for step in 0..4000 {
     seed = (seed * 1664525 + 1013904223) % 4294967296
-    index := #cast(usize) (seed % 128)
-    text := fmt.u64_decimal(key[..], #cast(u64) index)
+    index := #cast(usize, (seed % 128))
+    text := fmt.u64_decimal(key[..], #cast(u64, index))
     if (seed / 128) % 2 == 0 {
       if maps.put(&map, &owned, text, index) != maps.ErrorKind.None { #panic("put") }
       live[index] = true
@@ -73,7 +73,7 @@ fn main() {
     if step % 13 == 0 {
       count: usize = 0
       for i in 0..128 {
-        found := maps.get(&map, fmt.u64_decimal(key[..], #cast(u64) i))
+        found := maps.get(&map, fmt.u64_decimal(key[..], #cast(u64, i)))
         if found.found != live[i] { #panic("collision chain") }
         if live[i] {
           count += 1

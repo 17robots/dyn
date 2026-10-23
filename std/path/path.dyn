@@ -53,7 +53,7 @@ pub fn is_absolute(path: []const u8) bool {
 
 pub fn join(destination: []u8, left: []const u8, right: []const u8) Result {
   separator := #len(left) > 0 && left[#len(left) - 1] != '/' && #len(right) > 0 && right[0] != '/'
-  maximum: usize = 18446744073709551615
+  maximum := ~#cast(usize, 0)
   if #len(left) > maximum - #len(right) {
     return Result{ value: destination[..0], ok: false }
   }

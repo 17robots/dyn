@@ -7,8 +7,8 @@ c: [65536]f64
 fn main() {
   n: usize = 256
   for i in 0..n * n {
-    a[i] = #cast(f64) (i % 7) * 0.5
-    b[i] = #cast(f64) (i % 5) * 0.25
+    a[i] = #cast(f64, (i % 7)) * 0.5
+    b[i] = #cast(f64, (i % 5)) * 0.25
   }
   for round in 0..8 {
     for i in 0..n {
@@ -17,7 +17,7 @@ fn main() {
         for k in 0..n {
           sum += a[i * n + k] * b[k * n + j]
         }
-        c[i * n + j] = sum + #cast(f64) round
+        c[i * n + j] = sum + #cast(f64, round)
       }
     }
   }
@@ -25,5 +25,5 @@ fn main() {
   for value in c {
     total += value
   }
-  _ = io.println(io.stdout(), "{}", #cast(u64) total)
+  _ = io.println(io.stdout(), "{}", #cast(u64, total))
 }

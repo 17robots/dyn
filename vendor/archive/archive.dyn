@@ -11,37 +11,74 @@ pub struct ReadResult { count: usize, code: isize, end: bool, ok: bool }
 // Reader retains source until destroy. Decoding is streaming; entry/data access
 // advances the reader. No filesystem extraction or path interpretation is done.
 pub fn open_memory_owned(source: []const u8) OpenResult {
-  if #len(source) == 0 { return OpenResult{ code: -30 } }
-  reader := native_new() if reader == nil { return OpenResult{ code: -30 } }
+  if #len(source) == 0 {
+    return OpenResult{ code: -30 }
+  }
+  reader := native_new()
+  if reader == nil {
+    return OpenResult{ code: -30 }
+  }
   code := native_filters(reader)
-  if code < Warn { _ = native_free(reader) return OpenResult{ code: code } }
+  if code < Warn {
+    _ = native_free(reader)
+    return OpenResult{ code: code }
+  }
   code = native_formats(reader)
-  if code < Warn { _ = native_free(reader) return OpenResult{ code: code } }
-  code = native_open(reader, #cast(rawptr) &source[0], #len(source))
-  if code != Ok { _ = native_free(reader) return OpenResult{ code: code } }
+  if code < Warn {
+    _ = native_free(reader)
+    return OpenResult{ code: code }
+  }
+  code = native_open(reader, #cast(rawptr, &source[0]), #len(source))
+  if code != Ok {
+    _ = native_free(reader)
+    return OpenResult{ code: code }
+  }
   return OpenResult{ reader: reader, code: code, ok: true }
 }
-pub fn destroy_owned(reader: Reader) i32 { if reader == nil { return Ok } return native_free(reader) }
+pub fn destroy_owned(reader: Reader) i32 {
+  if reader == nil {
+    return Ok
+  }
+  return native_free(reader)
+}
 // Entry and its strings expire at next header/read mutation or reader destruction.
 pub fn next(reader: Reader) EntryResult {
-  if reader == nil { return EntryResult{ code: -30 } }
-  entry: Entry = nil code := native_next(reader, &entry)
+  if reader == nil {
+    return EntryResult{ code: -30 }
+  }
+  entry: Entry = nil
+  code := native_next(reader, &entry)
   return EntryResult{ entry: entry, code: code, end: code == End, ok: code == Ok }
 }
 pub fn entry_name(entry: Entry, maximum: usize) c.BytesResult {
-  if entry == nil { return c.BytesResult{} }
+  if entry == nil {
+    return c.BytesResult{}
+  }
   return c.bytes_from_string(native_name(entry), maximum)
 }
-pub fn entry_size(entry: Entry) i64 { if entry == nil { return -1 } return native_size(entry) }
+pub fn entry_size(entry: Entry) i64 {
+  if entry == nil {
+    return -1
+  }
+  return native_size(entry)
+}
 pub fn read(reader: Reader, destination: []u8) ReadResult {
-  if reader == nil { return ReadResult{ code: -30 } }
-  if #len(destination) == 0 { return ReadResult{ ok: true } }
-  count := native_read(reader, #cast(rawptr) &destination[0], #len(destination))
-  if count < 0 { return ReadResult{ code: count } }
-  return ReadResult{ count: #cast(usize) count, end: count == 0, ok: true }
+  if reader == nil {
+    return ReadResult{ code: -30 }
+  }
+  if #len(destination) == 0 {
+    return ReadResult{ ok: true }
+  }
+  count := native_read(reader, #cast(rawptr, &destination[0]), #len(destination))
+  if count < 0 {
+    return ReadResult{ code: count }
+  }
+  return ReadResult{ count: #cast(usize, count), end: count == 0, ok: true }
 }
 pub fn error_message(reader: Reader, maximum: usize) c.BytesResult {
-  if reader == nil { return c.BytesResult{} }
+  if reader == nil {
+    return c.BytesResult{}
+  }
   return c.bytes_from_string(native_error(reader), maximum)
 }
 extern fn native_new "archive_read_new"() Reader

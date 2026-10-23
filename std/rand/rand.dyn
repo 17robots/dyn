@@ -32,6 +32,6 @@ pub fn below(state: *State, limit: u64, output: *u64) bool {
 
 pub fn fill(state: *State, destination: []u8) {
   for *byte in destination {
-    byte.* = #cast(u8) (next_u64(state) % 256)
+    byte.* = #cast(u8, (next_u64(state) % 256))
   }
 }

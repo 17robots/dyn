@@ -15,7 +15,7 @@ struct Pair { integer: i64, real: f64 }
 struct Large { bytes: [40]u8, value: i64 }
 struct Floats { x:f32, y:f32 }
 packed struct Packed { small: u8, wide: i64 }
-enum(i8) Sign { Minus = -1, Plus = 1 }
+enum(i8) Sign { Minus = -1, Zero = 0, Plus = 1 }
 extern fn provider "provider"(x: Pair) Pair
 extern fn floats_provider "floats_provider"(x:Floats) Floats
 extern fn large_provider "large_provider"(x: Large) Large
@@ -47,16 +47,16 @@ fn main() {
   values := [1, 2, 3, 4]
   sum: i32 = 0
   for value in values { sum += value }
-  for i in 0..3 { sum += #cast(i32) i }
+  for i in 0..3 { sum += #cast(i32, i) }
   if sum != 13 { #panic("loops") }
   ptr := &sum
   add(ptr)
   if ptr.* != 14 || callback(3) != 5 { #panic("pointer") }
-  sign := #cast(Sign) -1
-  if #cast(i8) sign != -1 { #panic("signed enum") }
+  sign := #cast(Sign, -1)
+  if #cast(i8, sign) != -1 { #panic("signed enum") }
   number: f32 = 1.25
-  wide := #cast(f64) number
-  if wide + 0.75 != 2.0 || #cast(i32) wide != 1 { #panic("float") }
+  wide := #cast(f64, number)
+  if wide + 0.75 != 2.0 || #cast(i32, wide) != 1 { #panic("float") }
   if checked(3) != 4 || counter != 1 || #len(message) != 15 { #panic("cleanup globals") }
 }
 '''

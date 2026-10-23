@@ -43,8 +43,8 @@ pub fn size(descriptor: isize) Size {
   if #syscall(16, descriptor, 21523, &bytes[0]) < 0 {
     return Size{}
   }
-  rows := #cast(usize) bytes[0] + #cast(usize) bytes[1] * 256
-  columns := #cast(usize) bytes[2] + #cast(usize) bytes[3] * 256
+  rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
+  columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows, ok: true }
 }
 

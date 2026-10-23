@@ -15,15 +15,13 @@ typedef struct {
   DynScopeBinding *items;
   size_t count, capacity;
 } DynScopeIndex;
-
-static inline int dyn_scope_name_compare(const DynScopeBinding *a,
-                                          const DynScopeBinding *b) {
+static inline int dyn_scope_name_compare(const DynScopeBinding *a, const DynScopeBinding *b) {
   size_t length = a->length < b->length ? a->length : b->length;
   int order = memcmp(a->name, b->name, length);
   return order ? order : (a->length > b->length) - (a->length < b->length);
 }
 static inline int dyn_scope_compare(const void *left, const void *right) {
-  const DynScopeBinding *a = left, *b = right;
+  const DynScopeBinding *a = (DynScopeBinding*)left, *b = (DynScopeBinding*)right;
   int order = dyn_scope_name_compare(a, b);
   return order ? order : (a->start > b->start) - (a->start < b->start);
 }
@@ -41,19 +39,14 @@ static inline bool dyn_scope_add_text(DynScopeIndex *index, const char *text,
   index->items[index->count++] = (DynScopeBinding){text, length, start, end, end};
   return true;
 }
-static inline bool dyn_scope_compact_add(DynScopeIndex *index, const DynSource *source,
-                                         const ExpSnapshotTree *tree, uint32_t name,
-                                         uint32_t start, uint32_t end) {
+static inline bool dyn_scope_compact_add(DynScopeIndex *index, const DynSource *source, const ExpSnapshotTree *tree, uint32_t name, uint32_t start, uint32_t end) {
   if (name == UINT32_MAX || tree->nodes[name].kind != EXP_NAME) return true;
   const ExpNode *node = &tree->nodes[name];
-  return dyn_scope_add_text(index, source->text + node->start,
-                            node->end - node->start, start, end);
+  return dyn_scope_add_text(index, source->text + node->start, node->end - node->start, start, end);
 }
-static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSource *source,
-                                             const ExpSnapshotTree *tree, uint32_t id) {
+static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSource *source, const ExpSnapshotTree *tree, uint32_t id) {
   const ExpNode *nodes = tree->nodes, *scope = &nodes[id];
-  bool block = scope->kind == SRC_BLOCK, function = scope->kind == SRC_FN,
-       loop = scope->kind == SRC_FOR, arm = scope->kind == SRC_CASE_ARM;
+  bool block = scope->kind == SRC_BLOCK, function = scope->kind == SRC_FN, loop = scope->kind == SRC_FOR, arm = scope->kind == SRC_CASE_ARM;
   if (!block && !function && !loop && !arm) return true;
   uint32_t start = scope->start, end = scope->end;
   if (loop || arm) {
@@ -70,11 +63,9 @@ static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSour
     uint32_t node = child;
     if (block) {
       uint32_t visible = nodes[node].end;
-      while (node != UINT32_MAX &&
-             nodes[node].kind == SRC_CONST)
+      while (node != UINT32_MAX && nodes[node].kind == SRC_CONST)
         node = nodes[node].first;
-      if (node != UINT32_MAX && nodes[node].kind == SRC_VARIABLE &&
-          !dyn_scope_compact_add(index, source, tree, nodes[node].first, visible, end)) return false;
+      if (node != UINT32_MAX && nodes[node].kind == SRC_VARIABLE && !dyn_scope_compact_add(index, source, tree, nodes[node].first, visible, end)) return false;
     } else if (function) {
       if (nodes[node].kind != SRC_FN_PARAM && nodes[node].kind != SRC_VARIADIC_PARAM) continue;
       for (uint32_t name = nodes[node].first; name != UINT32_MAX; name = nodes[name].next) {
@@ -82,8 +73,7 @@ static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSour
             !dyn_scope_compact_add(index, source, tree, name, start, end)) return false;
       }
     } else if (loop) {
-      if (nodes[node].kind == SRC_FOR_CONDITION && (nodes[node].flags & EXP_ITERATION) &&
-          !dyn_scope_compact_add(index, source, tree, nodes[node].first, start, end)) return false;
+      if (nodes[node].kind == SRC_FOR_CONDITION && (nodes[node].flags & EXP_ITERATION) && !dyn_scope_compact_add(index, source, tree, nodes[node].first, start, end)) return false;
     } else {
       if (nodes[node].kind == SRC_TYPE_PATTERN) {
         node = nodes[node].first;
@@ -97,18 +87,15 @@ static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSour
   }
   return true;
 }
-static inline bool dyn_scope_compact_build(DynScopeIndex *index, const DynSource *source,
-                                           const ExpSnapshotTree *tree) {
+static inline bool dyn_scope_compact_build(DynScopeIndex *index, const DynSource *source, const ExpSnapshotTree *tree) {
   uint32_t node = tree->root;
   while (node != UINT32_MAX) {
-    if (!dyn_work_step(&source->context, 1) ||
-        !dyn_scope_compact_collect(index, source, tree, node)) return false;
+    if (!dyn_work_step(&source->context, 1) || !dyn_scope_compact_collect(index, source, tree, node)) return false;
     /* Expressions and types cannot introduce scopes. Skip their subtrees. */
     if (tree->nodes[node].kind >= SRC_FILE && tree->nodes[node].first != UINT32_MAX) {
       node = tree->nodes[node].first; continue;
     }
-    while (node != UINT32_MAX && tree->nodes[node].next == UINT32_MAX)
-      node = tree->nodes[node].parent;
+    while (node != UINT32_MAX && tree->nodes[node].next == UINT32_MAX) node = tree->nodes[node].parent;
     if (node != UINT32_MAX) node = tree->nodes[node].next;
   }
   return true;
@@ -119,8 +106,7 @@ static inline void dyn_scope_free(DynScopeIndex *index) {
 static inline bool dyn_scope_finish(DynScopeIndex *index) {
   if (index->count) qsort(index->items, index->count, sizeof(*index->items), dyn_scope_compare);
   for (size_t i = 1; i < index->count; ++i)
-    if (!dyn_scope_name_compare(&index->items[i - 1], &index->items[i]) &&
-        index->items[i - 1].prefix_end > index->items[i].prefix_end)
+    if (!dyn_scope_name_compare(&index->items[i - 1], &index->items[i]) && index->items[i - 1].prefix_end > index->items[i].prefix_end)
       index->items[i].prefix_end = index->items[i - 1].prefix_end;
   return true;
 }
@@ -132,8 +118,7 @@ static inline bool dyn_scope_build(DynScopeIndex *index, const DynSource *source
   }
   return dyn_scope_finish(index);
 }
-static inline bool dyn_scope_local_at(const DynScopeIndex *index, uint32_t byte,
-                                       const char *name) {
+static inline bool dyn_scope_local_at(const DynScopeIndex *index, uint32_t byte, const char *name) {
   DynScopeBinding key = {.name = name, .length = strlen(name)};
   size_t first = 0, end = index->count;
   while (first < end) {
@@ -142,9 +127,7 @@ static inline bool dyn_scope_local_at(const DynScopeIndex *index, uint32_t byte,
     if (order < 0 || (!order && index->items[middle].start <= byte)) first = middle + 1;
     else end = middle;
   }
-  /* Within one name, prefix_end answers whether any earlier-starting interval
-     still contains this use. No scan through same-name sibling scopes. */
-  return first && !dyn_scope_name_compare(&index->items[first - 1], &key) &&
-         byte < index->items[first - 1].prefix_end;
+  /* Within one name, prefix_end answers whether any earlier-starting interval still contains this use. No scan through same-name sibling scopes. */
+  return first && !dyn_scope_name_compare(&index->items[first - 1], &key) && byte < index->items[first - 1].prefix_end;
 }
 #endif

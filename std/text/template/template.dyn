@@ -30,9 +30,9 @@ fn valid_name(name: []const u8) bool {
   for i in 0..#len(name) {
     byte := name[i]
     if !((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
-      (byte >= '0' && byte <= '9') || byte == '_' || byte == '.') {
-        return false
-      }
+        (byte >= '0' && byte <= '9') || byte == '_' || byte == '.') {
+      return false
+    }
   }
   return true
 }

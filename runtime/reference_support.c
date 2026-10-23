@@ -119,11 +119,11 @@ static uint64_t check_append(unsigned char *out, uint64_t at, const char *text) 
 void dyn_check_failed(const unsigned char *name, uint64_t packed) {
   static const char *const kinds[] = {"overflow.ok", "divide.ok", "division.overflow.ok", "shift.count.ok",
     "function.nonnull.ok", "pointer.nonnull.ok", "pointer.aligned.ok", "index.ok", "slice.order.ok",
-    "slice.bounds.ok", "enum.cast.ok"};
+    "slice.bounds.ok", "enum.cast.ok", "enum.tag.ok"};
   static unsigned char message[1024];
   uint64_t kind = packed >> 24, length = packed & 0xffffff;
   uint64_t used = check_append(message, 0, "runtime check failed (");
-  used = check_append(message, used, kind < 11 ? kinds[kind] : "unknown");
+  used = check_append(message, used, kind < 12 ? kinds[kind] : "unknown");
   used = check_append(message, used, ") in ");
   for (uint64_t i = 0; i < length && i < 800; ++i) message[used++] = name[i];
   dyn_panic(message, used);

@@ -39,6 +39,10 @@ use the same functions.
 - A zero `mem.Arena{}` reserves 64 GiB (4 MiB on wasm32) on its first push, so a
   struct with an arena field works without a constructor.
 - `mem.arena_from_buffer(storage)` borrows a fixed buffer, such as a stack array.
+  An empty buffer has zero capacity; it never falls back to OS allocation.
+  Reset and rewind preserve this fixed-buffer mode, as does `arena_take`.
+  Release clears the descriptor to the default `Arena{}` state; reinitialize
+  it with `arena_from_buffer` before using it again under a fixed budget.
 - `mem.arena_sub(&parent, capacity)` carves a fixed child out of a parent.
 - `mem.arena_mark` and `mem.arena_rewind` bracket temporary allocations;
   `mem.arena_reset` empties the arena.
@@ -56,9 +60,9 @@ scratch := mem.arena_sub(&root, 256 * mem.MiB)
 Keep application state in `permanent`, reset `frame` once per loop or request,
 and rewind `scratch` around temporary work.
 
-### Pushes cannot fail
+### Fatal and fallible pushes
 
-Every arena push either succeeds or stops the program:
+The ordinary arena pushes either succeed or stop the program:
 
 - `mem.push(T, &arena)` and `mem.push_array(T, &arena, count)` return zeroed,
   typed memory; `push_array` checks the size multiplication.
@@ -66,24 +70,58 @@ Every arena push either succeeds or stops the program:
 - `mem.arena_push`, `arena_push_uninit` and `arena_push_array` are the untyped
   forms and return `*u8`.
 
-Running out of an owned arena means the OS is out of memory or address space,
-and running out of a fixed one means the budget was wrong. Neither is something
-the caller can fix at the call site, so choosing the budget is the only
-decision. Code with a strict budget on a fixed arena can use
-`mem.arena_try_push`, the one push that reports exhaustion. It returns an
-`Allocation`, and failure leaves the arena unchanged.
+Owned and borrowed contiguous arenas both have a fixed capacity. Pushes can
+exhaust that capacity even when the OS has memory available. Owned arenas can
+also fail while reserving or committing backing. The ordinary push APIs treat
+these failures as fatal. Code with a strict budget uses the fallible forms:
+`mem.try_push(T, &arena)` returns nil and `mem.try_push_array(T, &arena, count)`
+returns an empty slice on exhaustion or size overflow. The untyped
+`mem.arena_try_push` returns an `Allocation` with the error kind. Failure preserves the offset and existing payload bytes, but
+increments the failure counter and can record an observation event. A lazy
+owned arena may retain newly acquired backing after a failed oversized push;
+Windows commitment failure still panics. Use `arena_from_buffer` for a fixed
+budget without OS allocation. A zero-byte push with valid alignment succeeds
+without acquiring backing.
 
 Bounded growing arenas, free lists and pools keep fallible forms, since running
 out of them is an expected outcome:
 
 | Recoverable | Fatal |
 | --- | --- |
-| `arena_try_push` | every other arena push |
-| `growing_push` / `growing_push_uninit` | `growing_push_or_panic` |
-| `free_list_alloc` / `pool_acquire` (nil when empty) | `free_list_alloc_or_panic` / `pool_acquire_or_panic` |
+| `try_push` / `try_push_array` / `arena_try_push` | every other arena push |
+| `growing_try_push` / `growing_try_push_uninit` | `growing_push` |
+| `free_list_try_alloc` / `pool_try_acquire` (nil when empty) | `free_list_alloc` / `pool_acquire` |
 
 Bounds checks, invalid frees, invalid rewinds and broken layout preconditions
 panic everywhere.
+
+### Bounding work that can fail
+
+Std parsers and builders (`strings`, `encoding/json`, `ini`, `string_map`, and
+others) use the fatal pushes. To reject one oversized request and keep running,
+give that work its own budget instead of a fallible API:
+
+```dyn
+fn handle(server: *mem.Arena, request: []const u8) bool {
+  if mem.arena_remaining(server) < RequestBudget {
+    return false // reject before starting
+  }
+  mark := mem.arena_mark(server)
+  defer mem.arena_rewind(server, mark)
+  scratch := mem.arena_sub(server, RequestBudget)
+  // ... parse and respond using &scratch ...
+  return true
+}
+```
+
+Size `RequestBudget` from the largest input you accept, checked up front.
+Inside the budget, `try_push` lets your own code report exhaustion.
+
+### Partial output on failure
+
+When a function fails after pushing some output, the arena keeps those bytes.
+Std never rewinds for you. Take `mem.arena_mark` before the call and
+`mem.arena_rewind` to it on failure if the partial output is not wanted.
 
 ### Other arena kinds
 
@@ -97,8 +135,40 @@ panic everywhere.
   an internal link, so its alignment is at least pointer alignment and fewer
   slots may fit than `backing / size` suggests. Releasing a slot does not shrink
   the backing arena.
+  For one element type, `mem.pool_for(T, &arena, count)` sizes the slots,
+  `mem.acquire(T, &pool)` returns a zeroed `*T`, and `mem.release(&pool, item)`
+  returns the slot.
+
+  ```dyn
+  pool := mem.pool_for(Particle, &arena, 256)
+  spark := mem.acquire(Particle, &pool)
+  spark.life = 30
+  mem.release(&pool, spark)
+  ```
 - `std/container/slot_map` adds generation-checked handles for objects that are
   deleted independently. See [collections](collections.md).
+
+## Handles
+
+Arenas are the only owners of memory. Everything else that must be cleaned up,
+such as files, sockets, child processes, threads, watchers, loaded libraries and
+TLS objects, is a handle: a plain value naming an outside resource. Ownership
+of handles stays a programmer discipline, with these conventions:
+
+- Each handle has one owner, the variable that will close it. Pass `*T` to
+  borrow it; never keep a second copy that might also close it.
+- `take(&owner)` (`fs.take`, `process.take`, `net.listener_take`,
+  `net.connection_take`, `mem.arena_take`) moves the handle out and leaves the
+  source closed, so only the result can close it.
+- `close(&handle)` for OS resources and `release(&handle)` for library or memory
+  state clear the handle before returning, even on failure. Never retry a
+  failed close: the OS may already have reused the descriptor. A second close of
+  the same variable is harmless (it reports `InvalidState` or does nothing).
+- Close each handle once, usually with `defer` right after a successful open.
+- `dyn vet` warns when code copies an arena or a std handle struct (`fs.File`,
+  `watch.Watcher`, `process.Child`, `thread.Thread`, `net.Listener`,
+  `net.Connection`). Handles that are raw pointers, such as `dynlib.Handle`
+  and the TLS types, cannot be tracked; follow the conventions by hand.
 
 ## Lifetimes
 
@@ -164,16 +234,16 @@ dropped events; keep its storage outside the observed arena.
 
 ## Cleanup failures
 
-Releasing memory or joining a thread can fail at the OS level. On failure the
-owner keeps its descriptor so the call can be retried; do not discard it. A
-`defer` that ignores a failed release is not proof that cleanup happened.
+Arena cleanup is infallible at the API boundary: `arena_release`,
+`growing_release`, and `growing_trim` return no status and panic if an underlying
+memory release fails. Dyn has no panic recovery, so callers cannot retry that
+failure. Earlier successful block releases remain done. A panic during deferred
+cleanup aborts the remaining cleanup.
 
-| Operation | On failure |
-| --- | --- |
-| Owned arena release | Keeps descriptor and backing; retry on the same arena |
-| Growing release | Earlier releases stay done; the remaining chain stays owned |
-| Growing trim | Frees only empty blocks; accounting stays accurate |
-| Thread join (all platforms) | Keeps the native handle and context; a successful retry clears them |
+Thread join is different: returned native errors retain the owner for retry.
+Keep the thread, context, and stack alive until a successful join. On Linux,
+releasing an owned stack uses `arena_release`, so a memory-release failure
+panics instead of returning a join error.
 
 ## WebAssembly
 

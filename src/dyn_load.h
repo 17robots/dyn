@@ -5,8 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* #load reads a file next to the source that names it. The path must be
-   relative without `..` so a module cannot read outside its directory. */
+/* #load reads a file next to the source that names it. The path must be relative without `..` so a module cannot read outside its directory. */
 #define DYN_MAX_LOAD_BYTES (64u * 1024u * 1024u)
 
 static inline char *dyn_load_path(const char *source_path, const char *relative, size_t length) {
@@ -23,9 +22,8 @@ static inline char *dyn_load_path(const char *source_path, const char *relative,
   }
   const char *slash = strrchr(source_path, '/');
   size_t directory = slash ? (size_t)(slash - source_path) : 1;
-  char *out = malloc(directory + 1 + length + 1);
-  if (!out)
-    return NULL;
+  char *out = (char*)malloc(directory + 1 + length + 1);
+  if (!out) return NULL;
   memcpy(out, slash ? source_path : ".", directory);
   out[directory] = '/';
   memcpy(out + directory + 1, relative, length);
@@ -49,9 +47,7 @@ static inline unsigned char *dyn_load_read(const char *path, size_t *length) {
   fclose(f);
   return data;
 }
-/* A load argument may contain lexer trivia between its tokens. Unknown or
-   escaped spellings fail closed instead of trusting an incomplete dependency
-   list; semantic analysis remains responsible for diagnostics. */
+/* A load argument may contain lexer trivia between its tokens. Unknown or escaped spellings fail closed instead of trusting an incomplete dependency list; semantic analysis remains responsible for diagnostics. */
 static inline size_t dyn_load_trivia(const char *text, size_t length, size_t at) {
   for (;;) {
     while (at < length && (text[at] == ' ' || text[at] == '\t' ||
@@ -70,8 +66,7 @@ static inline size_t dyn_load_trivia(const char *text, size_t length, size_t at)
 
 /* Folds loaded-file contents into source keys. Failure must remain zero so
    unavailable dependencies cannot accidentally produce reusable artifacts. */
-static inline uint64_t dyn_load_hash(uint64_t hash, const char *source_path,
-                                     const char *text, size_t length) {
+static inline uint64_t dyn_load_hash(uint64_t hash, const char *source_path, const char *text, size_t length) {
   if (!hash) return 0;
   static const char marker[] = "#load";
   for (size_t i = 0; i + sizeof(marker) - 1 <= length; ++i) {

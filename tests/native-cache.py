@@ -124,4 +124,27 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-cache-') as directory:
     fresh = build(9, '--no-cache')
     assert 'timing detail native emit' in fresh.stderr, fresh.stderr
 
+    # Switching from a closed executable to external inputs changes public
+    # roots. An object with those symbols pruned cannot serve the second build.
+    (source/'main.dyn').write_text('pub fn exported_value() u64 { return 7 }\nfn main() {}\n')
+    provider.write_text('extern unsigned long long exported_value(void);\n'
+                        '__attribute__((constructor)) static void check_export(void) {\n'
+                        '  if (exported_value() != 7) __builtin_trap();\n}\n')
+    subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), '-c', str(provider),
+                    '-o', str(obj)], check=True)
+    command = [DYN, 'build', str(source), '--release', '--verbose', '--timings',
+               '--output', str(output)]
+    closed = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+    assert closed.returncode == 0, closed.stderr
+    assert b'exported_value' not in output.read_bytes()
+    linked = subprocess.run([*command, '--link', str(obj)], env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert linked.returncode == 0, linked.stderr
+    assert 'timing detail native emit' in linked.stderr, linked.stderr
+    assert b'exported_value' in output.read_bytes()
+    subprocess.run([str(output)], check=True, timeout=10)
+    closed = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+    assert closed.returncode == 0 and 'cached native object' in closed.stderr, closed.stderr
+    assert b'exported_value' not in output.read_bytes()
+
 print('PASS native cache: linker directives, provider/script edits, corruption, optimization/runtime changes, concurrent builds, cross-output reuse, no-cache')

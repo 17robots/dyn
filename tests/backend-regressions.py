@@ -166,7 +166,7 @@ CLOSED_SUM = """fn main() {
   sum: u32 = 0
   i: usize = 0
   for i <= 3 {
-    sum += #cast(u32) values[i]
+    sum += #cast(u32, values[i])
     i += 1
   }
   if sum != 10 { #panic("CLOSED SUM") }

@@ -19,8 +19,11 @@ pub fn selected_alpn(connection: Connection) []const u8 {
 pub fn peer_certificate_owned(connection: Connection) Certificate {
   return provider.peer_certificate_owned(connection)
 }
-pub fn certificate_free_owned(certificate: Certificate) {
-  provider.certificate_free_owned(certificate)
+// Frees the certificate and clears the handle; releasing a cleared handle does nothing.
+pub fn certificate_release(certificate: *Certificate) {
+  value := certificate.*
+  certificate.* = nil
+  provider.certificate_free_owned(value)
 }
 pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 {
   return provider.certificate_subject(destination, certificate)
@@ -60,8 +63,11 @@ pub fn server_config_create(
 pub fn server_config_create_into(certificate: []const u8, key: []const u8, certificate_storage: []u8, key_storage: []u8) ContextResult {
   return provider.server_context_create_owned(certificate, key, certificate_storage, key_storage)
 }
-pub fn config_destroy(context: Context) {
-  provider.context_free_owned(context)
+// Frees the configuration and clears the handle; releasing a cleared handle does nothing.
+pub fn config_release(context: *Context) {
+  value := context.*
+  context.* = nil
+  provider.context_free_owned(value)
 }
 pub fn client_connection_create(
   arena: *memory.Arena,
@@ -77,15 +83,18 @@ pub fn client_connection_create_into(context: Context, descriptor: i32, hostname
 pub fn server_connection_create(context: Context, descriptor: i32) ConnectionResult {
   return provider.server_connection_create_owned(context, descriptor)
 }
-pub fn connection_destroy(connection: Connection) {
-  provider.connection_free_owned(connection)
+// Frees the connection state and clears the handle. The socket stays open; close it separately.
+pub fn connection_release(connection: *Connection) {
+  value := connection.*
+  connection.* = nil
+  provider.connection_free_owned(value)
 }
 
 fn reader_read(data: rawptr, destination: []u8) stream.Result {
-  connection := #cast(*Connection) data
+  connection := #cast(*Connection, data)
   result := read(connection.*, destination)
   if !result.ok {
-    return stream.Result{ error: #cast(isize) result.provider_status, status: stream.Status.Error }
+    return stream.Result{ error: #cast(isize, result.provider_status), status: stream.Status.Error }
   }
   status := stream.Status.Complete
   if result.count == 0 {
@@ -95,10 +104,10 @@ fn reader_read(data: rawptr, destination: []u8) stream.Result {
 }
 
 fn writer_write(data: rawptr, source: []const u8) stream.Result {
-  connection := #cast(*Connection) data
+  connection := #cast(*Connection, data)
   result := write(connection.*, source)
   if !result.ok {
-    return stream.Result{ transferred: result.count, error: #cast(isize) result.provider_status, status: stream.Status.Error }
+    return stream.Result{ transferred: result.count, error: #cast(isize, result.provider_status), status: stream.Status.Error }
   }
   return stream.Result{ transferred: result.count, status: stream.Status.Complete }
 }

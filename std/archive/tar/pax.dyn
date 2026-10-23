@@ -11,10 +11,10 @@ fn decimal(source: []const u8, output: *u64) bool {
   }
   value: u64 = 0
   for byte in source {
-    if byte < '0' || byte > '9' || value > (18446744073709551615 - #cast(u64) (byte - '0')) / 10 {
+    if byte < '0' || byte > '9' || value > (18446744073709551615 - #cast(u64, (byte - '0'))) / 10 {
       return false
     }
-    value = value * 10 + #cast(u64) (byte - '0')
+    value = value * 10 + #cast(u64, (byte - '0'))
   }
   output.* = value
   return true
@@ -30,10 +30,10 @@ fn pax(source: []const u8, values: *Overrides, global: bool) bool {
       return false
     }
     length: u64 = 0
-    if !decimal(source[at..space], &length) || length > #cast(u64) (#len(source) - at) || length <= #cast(u64) (space - at + 2) {
+    if !decimal(source[at..space], &length) || length > #cast(u64, (#len(source) - at)) || length <= #cast(u64, (space - at + 2)) {
       return false
     }
-    end := at + #cast(usize) length
+    end := at + #cast(usize, length)
     if source[end - 1] != '\n' {
       return false
     }
@@ -139,10 +139,10 @@ pub fn next(state: *ArchiveReader) Result {
       apply_overrides(&entry, combined_overrides(global, local))
     }
     start := cursor + 512
-    if entry.size > #cast(u64) (#len(state.source) - start) {
+    if entry.size > #cast(u64, (#len(state.source) - start)) {
       return Result{ status: Status.Error, error: ErrorKind.Truncated }
     }
-    size := #cast(usize) entry.size
+    size := #cast(usize, entry.size)
     padding: usize = (512 - size % 512) % 512
     if padding > #len(state.source) - start - size {
       return Result{ status: Status.Error, error: ErrorKind.Truncated }

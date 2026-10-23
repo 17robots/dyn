@@ -38,8 +38,8 @@ pub fn abs(value: $T) T {
 }
 // Converts value to T and panics if it does not fit; the checked form of #cast.
 pub fn narrow($T: type, value: $U) T {
-  result := #cast(T) value
-  if #cast(U) result != value || (result < 0) != (value < 0) {
+  result := #cast(T, value)
+  if #cast(U, result) != value || (result < 0) != (value < 0) {
     #panic("narrow: value does not fit")
   }
   return result

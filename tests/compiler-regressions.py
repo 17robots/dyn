@@ -74,7 +74,7 @@ fn release(pointer: rawptr) {
     shadow = 'parameter has the name of a global'
     check_fails(project(root, 'shadow-root', {'main.dyn': '''output: [16]u8 = []
 fn encode(character: u32, output: []u8) usize {
-  output[0] = #cast(u8) character
+  output[0] = #cast(u8, character)
   return 1
 }
 fn main() {
@@ -139,9 +139,9 @@ fn identity(pointer: rawptr) rawptr { return pointer }
 fn main() {
   task := Task{id: 7}
   stored: rawptr = &task
-  back := #cast(*Task) identity(&task)
+  back := #cast(*Task, identity(&task))
   if back.id != 7 || stored != identity(&task) { #panic("rawptr round trip") }
-  heap := #cast(*Task) libc_malloc(#sizeof(Task))
+  heap := #cast(*Task, libc_malloc(#sizeof(Task)))
   libc_free(heap)
 }
 '''})

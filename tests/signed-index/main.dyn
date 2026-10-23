@@ -1,0 +1,25 @@
+// Signed integers index arrays and slices; negative values fail the bounds check.
+use "std/io"
+
+fn pick(values: []const u8, index: i32) u8 {
+  return values[index]
+}
+
+fn main() {
+  values: [4]u8 = [10, 20, 30, 40]
+  i: i32 = 2
+  small: i8 = 3
+  wide: isize = 1
+  if values[i] != 30 || values[small] != 40 || values[wide] != 20 {
+    #panic("signed index")
+  }
+  view := values[wide..i]
+  if #len(view) != 1 || view[0] != 20 {
+    #panic("signed slice")
+  }
+  // Empty standard input makes this index -1, unknown to the compiler.
+  buffer: [1]u8
+  input := io.read(io.stdin(), buffer[..])
+  _ = io.write_all(io.stdout(), "ok\n")
+  _ = pick(values[..], #cast(i32, input.transferred) - 1)
+}

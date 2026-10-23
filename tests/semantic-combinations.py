@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-semantic-combinations-') as d:
     (lib/'module.dyn').write_text('pub type Count = i64\npub const Base: Count = 40\npub struct Pair { value: Count }\n')
     for alias in ('lib','data'):
       for comment in ('','/* between import and declaration */'):
-       for expression in (f'{alias}.Base + 2',f'#cast({alias}.Count) 42'):
+       for expression in (f'{alias}.Base + 2',f'#cast({alias}.Count, 42)'):
         use='use "./lib"'+(' data' if alias=='data' else '')
         source=f'''{use}
 {comment}
@@ -27,8 +27,8 @@ fn early(stop: bool) i32 {{
 }}
 fn main() {{
   function := &callback
-  raw := #cast(rawptr) function
-  restored := #cast(*fn({alias}.Pair) {alias}.Pair) raw
+  raw := #cast(rawptr, function)
+  restored := #cast(*fn({alias}.Pair) {alias}.Pair, raw)
   value := restored({alias}.Pair{{value: {alias}.Base}})
   if value.value != Expected || calls != 1 {{ #panic("alias/import/callback/cast") }}
   if early(true) != 7 || calls != 111 {{ #panic("defer early return") }}
@@ -44,7 +44,7 @@ fn main() {{
             subprocess.run([str(output)],check=True,timeout=5)
             rows.append(dict(alias=alias,comment=bool(comment),expression=expression,release=release,cached=cached,status='passed'))
     # Forward constants and field defaults are validated after all names resolve.
-    (root/'main.dyn').write_text('const First: i64 = Second + 1\nconst Second: i64 = #cast(i64) 41\nstruct Defaults { value: i64 = First }\nconst Arithmetic: i64 = '+ '+'.join(['1']*40)+'\nfn main() { value := Defaults{} if value.value != 42 || Arithmetic != 40 { #panic("constants") } }\n')
+    (root/'main.dyn').write_text('const First: i64 = Second + 1\nconst Second: i64 = #cast(i64, 41)\nstruct Defaults { value: i64 = First }\nconst Arithmetic: i64 = '+ '+'.join(['1']*40)+'\nfn main() { value := Defaults{} if value.value != 42 || Arithmetic != 40 { #panic("constants") } }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--output',str(root/'run')]+(['--release'] if release else []),check=True)
         subprocess.run([str(root/'run')],check=True)

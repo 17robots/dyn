@@ -156,7 +156,7 @@ class Contracts(unittest.TestCase):
         action = next(a for a in actions if a['title'] == 'Fill missing struct fields')
         edit = action['edit']['changes'][path.as_uri()][0]
         self.assertEqual(edit['range']['start'], {'line': 4, 'character': 1})
-        self.assertEqual(edit['newText'], 'flag: false, values: ([#cast(i32) 0])[..0], pointer: nil')
+        self.assertEqual(edit['newText'], 'flag: false, values: ([#cast(i32, 0)])[..0], pointer: nil')
         lines = text.splitlines(keepends=True)
         offset = sum(map(len, lines[:4])) + 1
         path.write_text(text[:offset] + edit['newText'] + text[offset:])

@@ -79,8 +79,8 @@ def compiler_link(name, objects):
 # Native emission also bootstraps portable runtime support on every host.
 backend = COMPILER/'src/backend'
 native_sources = [backend/'compiler.c', backend/'dwarf.c']
-native_inputs = [backend/'vector.inc', backend/'allocation.inc', backend/'driver.c', backend/'isa.inc', backend/'a64.inc', backend/'rv64.inc',
-                 backend/'coff.inc', backend/'macho.inc', backend/'reachability.inc', backend/'ssa.inc', backend/'ssa_a64.inc', backend/'ssa_rv64.inc',
+native_inputs = [backend/'vector.inc', backend/'allocation.inc', backend/'driver.c', backend/'isa.inc', backend/'a64.inc', backend/'rv64.inc', backend/'rv32.inc', backend/'t32.inc', COMPILER/'src/elf_class.h',
+                 backend/'coff.inc', backend/'macho.inc', backend/'reachability.inc', backend/'ssa.inc', backend/'ssa_a64.inc', backend/'ssa_rv64.inc', backend/'ssa_32.inc',
                  backend/'elf64.h', backend/'output.h', backend/'dwarf.h']
 # The shipped compiler carries symbols but no DWARF: 1 MB instead of 4.6 MB.
 # Debug the unoptimized build/dyn instead.
@@ -91,6 +91,12 @@ compiler_link('dyn', compiler_objects('debug', [], native_sources, native_inputs
 NATIVE_STARTUPS = [
     'dynrt_start.o', 'dynrt_release.o', 'dynrt_shared.o',
     'dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o',
+    'dynrt_riscv64_none_start.o', 'dynrt_riscv64_none_release.o',
+    'dynrt_riscv32_none_start.o', 'dynrt_riscv32_none_release.o',
+    'dynrt_riscv32_none_soft_start.o', 'dynrt_riscv32_none_soft_release.o',
+    'dynrt_thumbv7em_none_soft_start.o', 'dynrt_thumbv7em_none_soft_release.o',
+    'dynrt_thumbv7em_none_start.o', 'dynrt_thumbv7em_none_release.o',
+    'dynrt_nucleo_h753zi_start.o', 'dynrt_nucleo_h753zi_release.o',
     'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_shared.o',
     'dynrt_windows_start.o', 'dynrt_windows_shared.o', 'dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o',
     'dynrt_macos_start.o', 'dynrt_macos_shared.o', 'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o']
@@ -100,6 +106,11 @@ for name in NATIVE_STARTUPS:
 NATIVE_SUPPORT = {
     'dynrt_support.o': 'x86_64-linux', 'dynrt_support_pic.o': 'x86_64-linux',
     'dynrt_riscv64_support.o': 'riscv64-linux', 'dynrt_riscv64_support_pic.o': 'riscv64-linux',
+    'dynrt_riscv64_none_support.o': 'riscv64-none', 'dynrt_riscv32_none_support.o': 'riscv32-none',
+    'dynrt_riscv32_none_soft_support.o': 'riscv32-none-soft',
+    'dynrt_thumbv7em_none_soft_support.o': 'thumbv7em-none-soft',
+    'dynrt_thumbv7em_none_support.o': 'thumbv7em-none',
+    'dynrt_nucleo_h753zi_support.o': 'thumbv7em-none-nucleo-h753zi',
     'dynrt_aarch64_support.o': 'aarch64-linux', 'dynrt_aarch64_support_pic.o': 'aarch64-linux',
     'dynrt_windows_support.o': 'x86_64-windows', 'dynrt_windows_arm64_support.o': 'aarch64-windows', 'dynrt_macos_support.o': 'aarch64-macos', 'dynrt_macos_x64_support.o': 'x86_64-macos'}
 for name, target in NATIVE_SUPPORT.items():
@@ -186,6 +197,13 @@ ALL = ['dynrt_wasi_start.o', 'dynrt_wasi_support.o', 'dynrt_wasm.o', 'dyn', 'dyn
 
 ALL += ['dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o', 'dynrt_windows_arm64_support.o', 'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o', 'dynrt_macos_x64_support.o']
 ALL += ['dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o', 'dynrt_riscv64_support.o', 'dynrt_riscv64_support_pic.o']
+ALL += ['dynrt_riscv64_none_start.o', 'dynrt_riscv64_none_release.o', 'dynrt_riscv64_none_support.o',
+        'dynrt_riscv32_none_start.o', 'dynrt_riscv32_none_release.o', 'dynrt_riscv32_none_support.o',
+        'dynrt_thumbv7em_none_start.o', 'dynrt_thumbv7em_none_release.o',
+        'dynrt_nucleo_h753zi_start.o', 'dynrt_nucleo_h753zi_release.o',
+        'dynrt_nucleo_h753zi_support.o', 'dynrt_thumbv7em_none_support.o']
+ALL += ['dynrt_riscv32_none_soft_start.o', 'dynrt_riscv32_none_soft_release.o', 'dynrt_riscv32_none_soft_support.o']
+ALL += ['dynrt_thumbv7em_none_soft_start.o', 'dynrt_thumbv7em_none_soft_release.o', 'dynrt_thumbv7em_none_soft_support.o']
 HOST = ['dyn-release', *WASM_RUNTIME, *NATIVE_STARTUPS, *NATIVE_SUPPORT]
 if sys.platform == 'win32':
     for name, (inputs, command) in artifacts.items():

@@ -1,0 +1,46 @@
+// distinct, packed and is are keywords only where they start their construct.
+use "std/io"
+
+distinct type Meters = i64
+packed struct Header { tag: u8, size: u32 }
+
+struct Flags {
+  distinct: bool,
+  packed: bool,
+  is: bool,
+}
+
+fn describe(value: any) i64 {
+  case value {
+    is i64 number => {
+      return number
+    },
+    is bool => {
+      return 1
+    },
+    _ => {
+      return 0
+    },
+  }
+}
+
+fn main() {
+  is: i64 = 1
+  distinct: i64 = 2
+  packed: i64 = 3
+  flags := Flags{distinct: true, packed: false, is: true}
+  length: Meters = #cast(Meters, 4)
+  header := Header{tag: 1, size: 2}
+  total := is + distinct + packed + #cast(i64, length) + #cast(i64, header.size)
+  if flags.distinct && flags.is && !flags.packed {
+    total += describe(#cast(i64, 10)) + describe(true)
+  }
+  case total {
+    23 => {
+      _ = io.write_all(io.stdout(), "ok\n")
+    },
+    _ => {
+      #panic("contextual keywords")
+    },
+  }
+}

@@ -261,10 +261,13 @@ static bool primitive(Parser *p) {
     if (is(p, names[i])) return true;
   return false;
 }
+static bool src_distinct(Parser *p);
+static bool src_packed(Parser *p);
 static bool optional_type_start(Parser *p) {
-  static const char *const declarations[] = {"fn", "pub", "use", "const", "type", "distinct", "packed", "struct", "enum", "extern"};
+  static const char *const declarations[] = {"fn", "pub", "use", "const", "type", "struct", "enum", "extern"};
   for (size_t i = 0; i < sizeof(declarations) / sizeof(*declarations); ++i)
     if (is(p, declarations[i])) return false;
+  if (src_distinct(p) || src_packed(p)) return false;
   return p->token.kind == NAME || is(p, "*") || is(p, "[") || at(p, p->token.start, "$");
 }
 static void append(Parser *p, uint32_t *first, uint32_t *last, uint32_t child) {
@@ -446,11 +449,14 @@ static uint32_t parse(Parser *p, int minimum) {
     if (child != NONE) left = node(p, EXP_PREFIX, token.start, p->tree->nodes[child].end, child, token);
   } else if (is(p, "#cast") || is(p, "#bitcast")) {
     lex(p); expect(p, "("); uint32_t target = type(p);
-    expect(p, ")"); uint32_t value = expression(p, 12);
+    if (is(p, ")")) fail(p, p->token.start, "use #cast(type, value) or #bitcast(type, value); prefix cast syntax is no longer supported");
+    expect(p, ","); uint32_t value = expression(p, 0);
+    uint32_t end = p->token.end; expect(p, ")");
     if (!p->tree->error) {
       p->tree->nodes[target].next = value;
-      left = mark(p, node(p, EXP_CAST, token.start, p->tree->nodes[value].end, target, token),
+      left = mark(p, node(p, EXP_CAST, token.start, end, target, token),
           at(p, token.start, "#bitcast") ? EXP_BITCAST : 0);
+      primary = true;
     }
   } else if (is(p, "#sizeof") || is(p, "#alignof") || is(p, "#typeof") || is(p, "#offsetof")) {
     ExpKind kind = is(p, "#sizeof") ? EXP_SIZE : is(p, "#alignof") ? EXP_ALIGN : is(p, "#typeof") ? EXP_TYPEOF : EXP_OFFSET;
@@ -487,6 +493,7 @@ static uint32_t parse(Parser *p, int minimum) {
     else if (token.kind == NAME && (is(p, "true") || is(p, "false"))) kind = EXP_BOOL;
     else if (token.kind == NAME && is(p, "nil")) kind = EXP_NIL;
     else if (token.kind == NAME) primary = true;
+    else if (is(p, "#reverse")) { fail(p, token.start, "#reverse is valid only as a for-loop iterable"); return NONE; }
     else { fail(p, token.start, "expected expression"); return NONE; }
     lex(p); left = node(p, kind, token.start, token.end, NONE, (Token){0});
   }

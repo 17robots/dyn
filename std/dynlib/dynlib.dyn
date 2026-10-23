@@ -46,11 +46,14 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   return SymbolResult{ value: value, error: error, ok: error == nil }
 }
 
-pub fn close(handle: Handle) bool {
-  if handle == nil {
+// Closes the library and clears the handle. Closing a cleared handle returns false.
+pub fn close(handle: *Handle) bool {
+  value := handle.*
+  if value == nil {
     return false
   }
-  return native_close(handle) == 0
+  handle.* = nil
+  return native_close(value) == 0
 }
 
 // Returned bytes borrow loader-owned storage and die at next loader operation.

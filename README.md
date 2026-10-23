@@ -36,7 +36,9 @@ selection, remarks, and a strict text sample-profile subset. These are real
 optimizations, but do not claim LLVM's complete optimization/performance parity.
 
 The build includes cross-target runtimes for x86-64 Linux, AArch64 Linux, RISC-V64 Linux,
-x86-64/AArch64 macOS, x86-64/AArch64 Windows, browser Wasm, and WASI Preview 1. Native runtime
+x86-64/AArch64 macOS, x86-64/AArch64 Windows, browser Wasm, and WASI Preview 1.
+Not every target is natively qualified; see the
+[support scope](docs/internals/release.md#support-scope). Native runtime
 assembly is generated directly; portable support is compiled by Dyn itself.
 No target Clang or assembler is required. GCC-only Linux packaging is available with:
 
@@ -58,6 +60,9 @@ generation, built-in object/archive linking, and directly generated runtime
 objects. See [WebAssembly](docs/guide/webassembly.md) and the
 [independent toolchain guide](docs/guide/independent-toolchain.md) for output
 formats, supported optimization/profile behavior, and qualification limits.
+The experimental `riscv64-none` and `riscv32-none` targets build bare-metal
+images for the QEMU `virt` board, and `thumbv7em-none` for the QEMU
+`mps2-an500` board (Cortex-M7); see [bare metal](docs/guide/bare-metal.md).
 The LLVM backend implementation has been removed. Independent emission is now
 the default and only backend, including textual exports.
 
@@ -119,9 +124,9 @@ export PATH="$PWD/dyn-sdk/bin:$PATH"
 On Windows, in PowerShell:
 
 ```powershell
-Expand-Archive .\dyn-0.1.0-preview.25-windows-x86_64.zip -DestinationPath .\dyn-preview20
-.\dyn-preview20\dyn-sdk\bin\dyn.exe version
-$env:Path = "$PWD\dyn-preview20\dyn-sdk\bin;$env:Path"
+Expand-Archive .\dyn-0.1.0-preview.25-windows-x86_64.zip -DestinationPath .\dyn-preview25
+.\dyn-preview25\dyn-sdk\bin\dyn.exe version
+$env:Path = "$PWD\dyn-preview25\dyn-sdk\bin;$env:Path"
 ```
 
 These PATH changes last for the current shell. For future shells, add the SDK's
@@ -347,7 +352,22 @@ license. This is source-available software, not open source.
 
 ### Performance controls and measurement
 
-The default release policy remains portable O2. Optional controls:
+The default release policy remains portable O2.
+
+Ordinary native release executables compute function reachability before
+optimization, retaining callbacks and global initialization while skipping unused
+function bodies. Explicit object/assembly output, shared libraries, and builds
+with external link inputs preserve public symbol roots. Debug and Wasm output
+retain their existing policies. Object cache keys distinguish executables that
+prune public functions from builds that retain them for external inputs.
+
+O3 inlining estimates expression and aggregate work as well as statements,
+caches callee costs, and limits total expansion. `--timings` separates scalar
+optimization, inlining, SSA construction/optimization, register allocation,
+machine emission, and object serialization. Backend phase totals aggregate work
+across functions; they are contained within the overall native emission time.
+
+Optional controls:
 
 - `--cpu native` targets this host's CPU/features. Do not distribute that binary
   to machines lacking those features. Cross-target use is rejected; cache keys

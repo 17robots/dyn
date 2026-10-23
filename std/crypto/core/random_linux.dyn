@@ -7,7 +7,7 @@ pub fn secure_random(destination: []u8) bool {
     if got == -4 { } else if got <= 0 {
       return false
     } else {
-      total += #cast(usize) got
+      total += #cast(usize, got)
     }
   }
   return true

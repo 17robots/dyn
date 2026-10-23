@@ -4,9 +4,10 @@ Dyn is pre-1.0. Source and standard-library compatibility may change, but change
 in release notes and accompanied by migrations for shipped examples and tests. Core syntax should
 be frozen during a release cycle; experimental APIs must not be presented as stable.
 
-Implemented executable targets are Linux x86-64/AArch64, Windows x86-64, and macOS AArch64.
-Linux x86-64 is the primary candidate target. Other targets remain experimental until
-their native release gates have recorded passing results; configured CI jobs alone are not evidence.
+Linux x86-64 is the primary target. The [support scope](../internals/release.md#support-scope)
+table is the authoritative list of targets and their status. A target leaves
+experimental status only after its native release gates record passing results;
+configured CI jobs alone are not evidence.
 Unsupported names and incomplete executable links are rejected rather than
 silently producing partial programs. Stable C interoperation means the documented ABI
 for that target, not a cross-platform ABI promise.

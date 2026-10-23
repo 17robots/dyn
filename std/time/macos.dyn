@@ -10,7 +10,7 @@ fn native_clock(monotonic: bool) ClockResult {
     clock = 6
   }
   if clock_read(clock, &value) != 0 {
-    code: isize = 0 - #cast(isize) clock_error().*
+    code: isize = 0 - #cast(isize, clock_error().*)
     return ClockResult{ error: code, kind: errors.darwin(code) }
   }
   return ClockResult{ value: value, ok: true }
@@ -22,7 +22,7 @@ fn native_sleep(duration: i64) SleepResult {
     if clock_sleep(&request, &remaining) == 0 {
       return SleepResult{ ok: true }
     }
-    code: isize = 0 - #cast(isize) clock_error().*
+    code: isize = 0 - #cast(isize, clock_error().*)
     if code != -4 {
       return SleepResult{ error: code, kind: errors.darwin(code) }
     }

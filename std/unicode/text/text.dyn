@@ -139,8 +139,8 @@ fn mapping(table: []const u32, codepoint: u32) []const u32 {
       low = mid + 1
     }
     else {
-      start := #cast(usize) table[at + 1]
-      return MappingValues[start..start + #cast(usize) table[at + 2]]
+      start := #cast(usize, table[at + 1])
+      return MappingValues[start..start + #cast(usize, table[at + 2])]
     }
   }
   return MappingValues[..0]
@@ -206,7 +206,7 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
     return Result{ error: ErrorKind.Overlap }
   }
   if #len(work) > 0 {
-    workspace := (#cast(*u8) &work[0])[..#len(work) * 4]
+    workspace := (#cast(*u8, &work[0]))[..#len(work) * 4]
     if bytes.overlaps(workspace, source) || bytes.overlaps(workspace, destination) {
       return Result{ error: ErrorKind.Overlap }
     }
@@ -262,7 +262,7 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
     buckets: [256]usize = []
     i := start
     for i < end {
-      buckets[#cast(usize) combining_class(values[i])] += 1
+      buckets[#cast(usize, combining_class(values[i]))] += 1
       i += 1
     }
     sum: usize = 0
@@ -273,7 +273,7 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
     }
     i = start
     for i < end {
-      cls := #cast(usize) combining_class(values[i])
+      cls := #cast(usize, combining_class(values[i]))
       temporary[buckets[cls]] = values[i]
       buckets[cls] += 1
       i += 1

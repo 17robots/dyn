@@ -116,10 +116,10 @@ fn leap_year(year: i32) bool {
 pub fn valid(value: *const DateTime) bool {
   if value.month < 1 || value.month > 12 || value.day < 1 || value.hour > 23 ||
     value.minute > 59 || value.second > 60 || value.nanosecond >= 1000000000 {
-      return false
-    }
+    return false
+  }
   days: [12]u8 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-  maximum := days[#cast(usize) value.month - 1]
+  maximum := days[#cast(usize, value.month) - 1]
   if value.month == 2 && leap_year(value.year) {
     maximum = 29
   }
@@ -133,11 +133,11 @@ pub fn format_iso8601(destination: []u8, value: *const DateTime) []u8 {
   if #len(destination) < 20 || !valid(value) || value.year < 0 || value.year > 9999 {
     return destination[..0]
   }
-  year := #cast(u32) value.year
-  destination[0] = '0' + #cast(u8) (year / 1000)
-  destination[1] = '0' + #cast(u8) ((year / 100) % 10)
-  destination[2] = '0' + #cast(u8) ((year / 10) % 10)
-  destination[3] = '0' + #cast(u8) (year % 10)
+  year := #cast(u32, value.year)
+  destination[0] = '0' + #cast(u8, (year / 1000))
+  destination[1] = '0' + #cast(u8, ((year / 100) % 10))
+  destination[2] = '0' + #cast(u8, ((year / 10) % 10))
+  destination[3] = '0' + #cast(u8, (year % 10))
   destination[4] = '-'
   write_two(destination, 5, value.month)
   destination[7] = '-'
@@ -160,16 +160,16 @@ fn read_two(input: []const u8, at: usize) u8 {
 pub fn parse_iso8601(input: []const u8, output: *DateTime) bool {
   if #len(input) != 20 || input[4] != '-' || input[7] != '-' || input[10] != 'T' ||
     input[13] != ':' || input[16] != ':' || input[19] != 'Z' {
-      return false
-    }
+    return false
+  }
   positions: [14]u8 = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
   for i in 0..#len(positions) {
-    if !decimal(input[#cast(usize) positions[i]]) {
+    if !decimal(input[#cast(usize, positions[i])]) {
       return false
     }
   }
   output.* = DateTime{
-    year: #cast(i32) ((#cast(u32) (input[0] - '0')) * 1000 + (#cast(u32) (input[1] - '0')) * 100 + (#cast(u32) (input[2] - '0')) * 10 + #cast(u32) (input[3] - '0')),
+    year: #cast(i32, ((#cast(u32, (input[0] - '0'))) * 1000 + (#cast(u32, (input[1] - '0'))) * 100 + (#cast(u32, (input[2] - '0'))) * 10 + #cast(u32, (input[3] - '0')))),
     month: read_two(input, 5), day: read_two(input, 8), hour: read_two(input, 11),
     minute: read_two(input, 14), second: read_two(input, 17), nanosecond: 0,
   }

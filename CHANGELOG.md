@@ -14,6 +14,151 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- New experimental target `thumbv7em-none`: bare-metal images for Cortex-M7
+  (Thumb-2, double-precision FPU, AAPCS with floating-point registers),
+  tested on the QEMU `mps2-an500` board. It uses the same 32-bit model as
+  `riscv32-none`. The runtime assembler and the ELF linker now handle Thumb
+  code and Arm relocations. The value corpus of 3,249 cases matches x86-64
+  Linux in debug and release builds (`just test-native-thumb`).
+- New experimental target `riscv32-none`: 32-bit bare-metal images for the
+  QEMU `virt` board (RV32GC, ILP32D). The native backend now handles 32-bit
+  pointers and `usize`: 64-bit values use register pairs, and 64-bit division,
+  checked multiplication and integer/float conversions call start-runtime
+  helpers. The ELF linker reads ELF32 objects and writes ELF32 executables.
+  The value corpus of 3,249 cases matches x86-64 Linux in debug and release
+  builds (`tools/backend/bare-differential.py`).
+- Importing a member of a module that has no source file for the target now
+  reports the missing module once, instead of "imported member is missing".
+- `std/strings`, `std/path`, `std/encoding`, `std/crypto/der`,
+  `std/crypto/password`, `std/text/regex`, `std/net/http` and
+  `std/net/websocket` no longer assume a 64-bit `usize`.
+- `distinct`, `packed` and `is` are contextual keywords. They stay keywords at
+  the start of `distinct type`, `packed struct` and a `case` type pattern, and
+  are ordinary names everywhere else. `type` stays reserved.
+- Type mismatch errors name the full types, for example
+  `expected *u8, found *i32` instead of `expected pointer, found pointer`.
+- `mem.append` grows the arena's newest allocation in place instead of copying,
+  through the new `mem.arena_try_extend`. A slice built in a loop with nothing
+  else allocated in between now costs its final size, not twice that.
+- Typed pools: `mem.pool_for(T, &arena, count)`, `mem.acquire(T, &pool)`
+  (zeroed `*T`) and `mem.release(&pool, item)`.
+- `tests/bare-metal.py` kills the QEMU process group on timeout. A trap raised
+  while reporting a trap on `riscv64-none` exits with status 103 instead of
+  trapping again.
+
+- Every enum now needs a variant with value 0, so zeroed storage is always a
+  valid variant. Enums such as `enum(u8) Op { Add = 1, Halt = 0xFF }` must add
+  one, for example `None = 0`, and handle it in exhaustive `case` statements.
+  An exhaustive `case` that sees an invalid tag now panics with `enum.tag.ok`
+  instead of executing an illegal instruction.
+- Documented binary operator precedence. Bitwise operators bind tighter than
+  comparisons, unlike C.
+- Handle cleanup now follows one convention: `close(&handle)` or
+  `release(&handle)` takes a pointer and clears the handle. Renamed:
+  `tls.config_destroy(c)` to `tls.config_release(&c)`,
+  `tls.connection_destroy(c)` to `tls.connection_release(&c)`,
+  `tls.certificate_free_owned(c)` to `tls.certificate_release(&c)`, and
+  `dynlib.close(h)` now takes `&h`. `net.listener_close` and
+  `net.connection_close` clear the descriptor even when close fails, so a
+  reused descriptor is never closed twice. New `net.listener_take` and
+  `net.connection_take`. `dyn vet` now also warns on copies of std handle
+  structs.
+- `net.Connection` and `net.Listener` gain an `active` field, so zeroed storage
+  is a closed handle; closing one no longer closes descriptor 0 (stdin).
+  Construct from a raw descriptor with `net.connection_from_descriptor` or
+  `net.listener_from_descriptor` instead of a struct literal, and test
+  `handle.active` instead of `handle.descriptor >= 0`.
+- New `mem.try_push(T, &arena)` and `mem.try_push_array(T, &arena, count)`
+  return nil or an empty slice instead of panicking when the arena is
+  exhausted. The memory guide documents per-request budgets and that std never
+  rewinds partial output on failure.
+- New `mem.append(&items, &count, &arena, value)` grows any typed slice, and
+  `slot_map` gains `init_for`, `insert_value` and `get_value` for typed records
+  without casts. Generic structs remain deferred.
+- `net.Result`, `dns.Result` and `watch.Result` gain a portable
+  `kind: errors.Kind`, matching `fs`. New `net.error_kind(code)` maps a native
+  socket error code. DNS NXDOMAIN reports `NotFound`.
+- `dyn fmt` now owns indentation: two spaces per enclosing bracket, one extra
+  level for a line continuing an expression, and closing brackets at their
+  opener's level. Block comment interiors are untouched. Run `dyn fmt` once;
+  `dyn fmt --check` reports code that only differs in indentation. All std,
+  runtime and vendor modules are now formatted and checked in CI.
+- Fixed two undefined-behaviour bugs found by the new `just sanitize-test`
+  gate: formatting a file with no layout edits, and language-server import
+  completion in a module with no other sources.
+- Clearer diagnostics: `#reverse` outside a `for` iterable, and a type
+  parameter written `$T` more than once in one signature.
+- The language guide now defines assignment and literal evaluation order, what
+  `string` guarantees about UTF-8 (nothing, without validation), and shallow
+  `*const` with an example.
+
+- Empty caller-buffer arenas and zero-capacity subarenas now remain fixed at
+  zero capacity instead of silently allocating OS backing. Reset, rewind, and
+  transfer preserve this mode. Release clears the descriptor to the lazy default;
+  use `arena_from_buffer` again before reusing it under a fixed budget. `Arena`
+  gains a `fixed_buffer` field; rebuild consumers rather than relying on its
+  previous binary layout. Memory documentation now distinguishes fatal cleanup
+  from retryable thread errors and accounts for zeroing and page commitment costs.
+
+- **Breaking syntax change:** conversions now use `#cast(Type, value)` and
+  `#bitcast(Type, value)`. The old prefix forms are rejected with a migration
+  diagnostic. Conversion behavior is unchanged; the operand is evaluated once.
+  Cast results support ordinary postfix operations. SDK sources, generators,
+  examples, and language-server snippets use the new forms. See the
+  [cast syntax migration](docs/migrations/cast-syntax.md).
+- `http.serve_stream` and `http.serve_connection` now answer a malformed
+  request with `400 Bad Request` and an oversized one with
+  `413 Payload Too Large` before closing the connection. Before, the client
+  saw the connection close with no reply.
+- Fixed `http.receive` waiting for more input forever after a complete
+  request head that does not parse. It now returns `ErrorKind.Invalid`.
+- Added `tests/flagship-http`, a notes server on four worker threads using
+  `Request.context` for its state, checked
+  with concurrent keep-alive clients, pipelined requests and bad input.
+- Added `tests/flagship-game`, a headless Breakout that renders every frame
+  through a per-frame arena. The test checks that debug and release builds
+  produce identical frames, that frames retain no memory, and that the game
+  core builds for `wasm32-browser`, `aarch64-linux`, `x86_64-windows` and
+  `aarch64-macos`.
+- Added the experimental `riscv64-none` target: static bare-metal images for
+  the QEMU `virt` board, with no operating system. Output goes to the board's
+  UART, arenas take memory from a fixed region after the image, and a panic or
+  a return from `main` ends QEMU with the program's exit status. `std/mem`,
+  `std/io` and the modules built only on them work; modules that need an
+  operating system do not. See [bare metal](docs/guide/bare-metal.md).
+- The built-in ELF linker accepts a load address. Bare-metal images place code
+  first at that address and do not load the ELF headers.
+- `dyn docs` creates its temporary output in `TMPDIR` and reports when it
+  cannot, instead of exiting silently.
+- `just sanitize-test` instruments only the compiler, so C helpers the tests
+  build no longer load the ASan runtime into Dyn programs.
+- **Breaking:** fallible memory functions now all use the `try_` prefix, and
+  the plain names panic, matching `arena_push` and `arena_try_push`:
+  `growing_push` (was `growing_push_or_panic`) and `growing_try_push` (was
+  `growing_push`), `growing_try_push_uninit` (was `growing_push_uninit`),
+  `pool_acquire` / `pool_try_acquire`, and `free_list_alloc` /
+  `free_list_try_alloc`. The `_or_panic` names are gone.
+- Signed integers can index arrays and slices and bound slices, as in C, with
+  the same bounds check: a negative index panics with `index.ok`. Types wider
+  than `usize` (such as `i64` on 32-bit targets) still need `#cast`.
+- Using a module with no source file for the target (for example `std/process`
+  on `wasm32-wasi`) reports one error naming the module instead of an error
+  for every missing name inside it.
+- Added `std/mmio` for memory-mapped device registers: `load_u8` through
+  `load_u64` and `store_u8` through `store_u64` take an address and perform
+  exactly one access each, never removed, merged or cached by the compiler.
+  Each access is one call into the runtime support object.
+- HTTP handlers can reach application state without module globals:
+  `http.Request` has a `context: rawptr` field, set by the new
+  `http.serve_stream_context`, `http.serve_connection_context` and
+  `concurrent.start_context`. The existing functions pass nil.
+- Added a Dyn port of the fail-fast source parser in `tests/selfhost-parser`,
+  the first self-hosting step. `tests/selfhost-parser.py` checks that it
+  produces the same tree, node for node, as the C parser on every `.dyn` file
+  in the repository and on generated broken and deeply nested inputs.
+
+## 0.1.0-preview.25
+
 - The compiler no longer uses Tree-sitter. Its handwritten parser handles every
   command and the language server, and source builds no longer need the
   Tree-sitter library or a grammar checkout. Editor highlighting still uses the

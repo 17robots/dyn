@@ -20,43 +20,69 @@ pub struct RendererResult { value: Renderer, ok: bool }
 pub struct Event { words: [16]u64 }
 
 
-pub fn init_video() bool { return native_init(InitVideo) }
-pub fn init_audio() bool { return native_init(InitAudio) }
-pub fn quit() { native_quit() }
+pub fn init_video() bool {
+  return native_init(InitVideo)
+}
+pub fn init_audio() bool {
+  return native_init(InitAudio)
+}
+pub fn quit() {
+  native_quit()
+}
 pub fn window_create(title: []const u8, title_buffer: []u8, width: i32, height: i32, flags: u64) WindowResult {
-  if width <= 0 || height <= 0 { return WindowResult{} }
+  if width <= 0 || height <= 0 {
+    return WindowResult{}
+  }
   native_title := c.string_from_bytes(title_buffer, title)
-  if !native_title.ok { return WindowResult{} }
+  if !native_title.ok {
+    return WindowResult{}
+  }
   value := native_create_window(native_title.value, width, height, flags)
   return WindowResult{ value: value, ok: value != nil }
 }
-pub fn window_destroy_owned(window: Window) { if window != nil { native_destroy_window(window) } }
+pub fn window_destroy_owned(window: Window) {
+  if window != nil {
+    native_destroy_window(window)
+  }
+}
 pub fn renderer_create_default_owned(window: Window) RendererResult {
-  if window == nil { return RendererResult{} }
+  if window == nil {
+    return RendererResult{}
+  }
   value := native_create_renderer(window, nil)
   return RendererResult{ value: value, ok: value != nil }
 }
-pub fn renderer_destroy_owned(renderer: Renderer) { if renderer != nil { native_destroy_renderer(renderer) } }
+pub fn renderer_destroy_owned(renderer: Renderer) {
+  if renderer != nil {
+    native_destroy_renderer(renderer)
+  }
+}
 pub fn clear(renderer: Renderer, red: u8, green: u8, blue: u8, alpha: u8) bool {
   return renderer != nil && native_set_draw_color(renderer, red, green, blue, alpha) && native_clear(renderer)
 }
-pub fn present(renderer: Renderer) bool { return renderer != nil && native_present(renderer) }
+pub fn present(renderer: Renderer) bool {
+  return renderer != nil && native_present(renderer)
+}
 pub fn event_type(event: *const Event) u32 {
-  if event == nil { return 0 }
-  return #cast(u32) (event.words[0] & 4294967295)
+  if event == nil {
+    return 0
+  }
+  return #cast(u32, (event.words[0] & 4294967295))
 }
 pub fn poll_event(event: *Event) bool {
-  return event != nil && native_poll_event(#cast(rawptr) event)
+  return event != nil && native_poll_event(#cast(rawptr, event))
 }
 pub fn wait_event(event: *Event) bool {
-  return event != nil && native_wait_event(#cast(rawptr) event)
+  return event != nil && native_wait_event(#cast(rawptr, event))
 }
 pub fn event_requests_close(event: *const Event) bool {
   kind := event_type(event)
   return kind == EventQuit || kind == EventWindowCloseRequested || kind == EventWindowDestroyed
 }
 // Borrows SDL thread-local buffer until the next SDL call.
-pub fn last_error(maximum: usize) c.BytesResult { return c.bytes_from_string(native_error(), maximum) }
+pub fn last_error(maximum: usize) c.BytesResult {
+  return c.bytes_from_string(native_error(), maximum)
+}
 
 pub type AudioStream = rawptr
 pub type AudioDevice = u32
@@ -71,28 +97,55 @@ pub struct AudioStreamResult { value: AudioStream, ok: bool }
 
 // SDL owns the stream allocation. nil callbacks select explicitly queued audio.
 pub fn stream_open_playback_owned(spec: *const AudioSpec) AudioStreamResult {
-  if spec == nil { return AudioStreamResult{} }
+  if spec == nil {
+    return AudioStreamResult{}
+  }
   value := native_open_audio_stream(AudioDeviceDefaultPlayback, spec, nil, nil)
   return AudioStreamResult{ value: value, ok: value != nil }
 }
 pub fn stream_open_playback_callback_owned(spec: *const AudioSpec, callback: AudioCallback, context: rawptr) AudioStreamResult {
-  if spec == nil || callback == nil { return AudioStreamResult{} }
-  value := native_open_audio_stream(AudioDeviceDefaultPlayback, spec, #cast(rawptr) callback, context)
+  if spec == nil || callback == nil {
+    return AudioStreamResult{}
+  }
+  value := native_open_audio_stream(AudioDeviceDefaultPlayback, spec, #cast(rawptr, callback), context)
   return AudioStreamResult{ value: value, ok: value != nil }
 }
 // SDL copies source before return; source stays caller-owned.
 pub fn stream_put(stream: AudioStream, source: []const u8) bool {
-  if stream == nil || #len(source) > 2147483647 { return false }
-  if #len(source) == 0 { return true }
-  return native_put_audio(stream, #cast(rawptr) &source[0], #cast(i32) #len(source))
+  if stream == nil || #len(source) > 2147483647 {
+    return false
+  }
+  if #len(source) == 0 {
+    return true
+  }
+  return native_put_audio(stream, #cast(rawptr, &source[0]), #cast(i32, #len(source)))
 }
-pub fn stream_resume(stream: AudioStream) bool { return stream != nil && native_resume_audio(stream) }
-pub fn stream_pause(stream: AudioStream) bool { return stream != nil && native_pause_audio(stream) }
-pub fn stream_available(stream: AudioStream) i32 { if stream == nil { return -1 } return native_audio_available(stream) }
-pub fn stream_flush(stream: AudioStream) bool { return stream != nil && native_flush_audio(stream) }
-pub fn stream_clear(stream: AudioStream) bool { return stream != nil && native_clear_audio(stream) }
-pub fn stream_format(stream: AudioStream, source: *AudioSpec, destination: *AudioSpec) bool { return stream != nil && source != nil && destination != nil && native_audio_format(stream, source, destination) }
-pub fn stream_destroy_owned(stream: AudioStream) { if stream != nil { native_destroy_audio(stream) } }
+pub fn stream_resume(stream: AudioStream) bool {
+  return stream != nil && native_resume_audio(stream)
+}
+pub fn stream_pause(stream: AudioStream) bool {
+  return stream != nil && native_pause_audio(stream)
+}
+pub fn stream_available(stream: AudioStream) i32 {
+  if stream == nil {
+    return -1
+  }
+  return native_audio_available(stream)
+}
+pub fn stream_flush(stream: AudioStream) bool {
+  return stream != nil && native_flush_audio(stream)
+}
+pub fn stream_clear(stream: AudioStream) bool {
+  return stream != nil && native_clear_audio(stream)
+}
+pub fn stream_format(stream: AudioStream, source: *AudioSpec, destination: *AudioSpec) bool {
+  return stream != nil && source != nil && destination != nil && native_audio_format(stream, source, destination)
+}
+pub fn stream_destroy_owned(stream: AudioStream) {
+  if stream != nil {
+    native_destroy_audio(stream)
+  }
+}
 
 pub type GpuDevice = rawptr
 pub type GpuCommandBuffer = rawptr
@@ -134,31 +187,85 @@ pub fn gpu_create_default_owned(formats: u32, debug: bool) GpuDeviceResult {
   value := native_gpu_create(formats, debug, nil)
   return GpuDeviceResult{ value: value, ok: value != nil }
 }
-pub fn gpu_destroy_owned(device: GpuDevice) { if device != nil { native_gpu_destroy(device) } }
-pub fn gpu_claim_window(device: GpuDevice, window: Window) bool { return device != nil && window != nil && native_gpu_claim_window(device, window) }
-pub fn gpu_release_window(device: GpuDevice, window: Window) { if device != nil && window != nil { native_gpu_release_window(device, window) } }
-pub fn gpu_commands(device: GpuDevice) GpuCommandBuffer { if device == nil { return nil } return native_gpu_acquire(device) }
+pub fn gpu_destroy_owned(device: GpuDevice) {
+  if device != nil {
+    native_gpu_destroy(device)
+  }
+}
+pub fn gpu_claim_window(device: GpuDevice, window: Window) bool {
+  return device != nil && window != nil && native_gpu_claim_window(device, window)
+}
+pub fn gpu_release_window(device: GpuDevice, window: Window) {
+  if device != nil && window != nil {
+    native_gpu_release_window(device, window)
+  }
+}
+pub fn gpu_commands(device: GpuDevice) GpuCommandBuffer {
+  if device == nil {
+    return nil
+  }
+  return native_gpu_acquire(device)
+}
 pub fn gpu_wait_swapchain(commands: GpuCommandBuffer, window: Window) GpuSwapchainResult {
-  texture: GpuTexture = nil width: u32 = 0 height: u32 = 0
+  texture: GpuTexture = nil
+  width: u32 = 0
+  height: u32 = 0
   ok := commands != nil && window != nil && native_gpu_swapchain(commands, window, &texture, &width, &height)
   return GpuSwapchainResult{ texture: texture, width: width, height: height, ok: ok }
 }
 // Submission consumes the command buffer regardless of success.
-pub fn gpu_submit(commands: GpuCommandBuffer) bool { return commands != nil && native_gpu_submit(commands) }
-pub fn gpu_shader_create_owned(device: GpuDevice, info: *const GpuShaderInfo) GpuShader { if device == nil || info == nil { return nil } return native_gpu_shader_create(device, info) }
-pub fn gpu_shader_release_owned(device: GpuDevice, shader: GpuShader) { if device != nil && shader != nil { native_gpu_shader_release(device, shader) } }
-pub fn gpu_texture_create_owned(device: GpuDevice, info: *const GpuTextureInfo) GpuTexture { if device == nil || info == nil { return nil } return native_gpu_texture_create(device, info) }
-pub fn gpu_texture_release_owned(device: GpuDevice, texture: GpuTexture) { if device != nil && texture != nil { native_gpu_texture_release(device, texture) } }
-pub fn gpu_buffer_create_owned(device: GpuDevice, info: *const GpuBufferInfo) GpuBuffer { if device == nil || info == nil { return nil } return native_gpu_buffer_create(device, info) }
-pub fn gpu_buffer_release_owned(device: GpuDevice, buffer: GpuBuffer) { if device != nil && buffer != nil { native_gpu_buffer_release(device, buffer) } }
+pub fn gpu_submit(commands: GpuCommandBuffer) bool {
+  return commands != nil && native_gpu_submit(commands)
+}
+pub fn gpu_shader_create_owned(device: GpuDevice, info: *const GpuShaderInfo) GpuShader {
+  if device == nil || info == nil {
+    return nil
+  }
+  return native_gpu_shader_create(device, info)
+}
+pub fn gpu_shader_release_owned(device: GpuDevice, shader: GpuShader) {
+  if device != nil && shader != nil {
+    native_gpu_shader_release(device, shader)
+  }
+}
+pub fn gpu_texture_create_owned(device: GpuDevice, info: *const GpuTextureInfo) GpuTexture {
+  if device == nil || info == nil {
+    return nil
+  }
+  return native_gpu_texture_create(device, info)
+}
+pub fn gpu_texture_release_owned(device: GpuDevice, texture: GpuTexture) {
+  if device != nil && texture != nil {
+    native_gpu_texture_release(device, texture)
+  }
+}
+pub fn gpu_buffer_create_owned(device: GpuDevice, info: *const GpuBufferInfo) GpuBuffer {
+  if device == nil || info == nil {
+    return nil
+  }
+  return native_gpu_buffer_create(device, info)
+}
+pub fn gpu_buffer_release_owned(device: GpuDevice, buffer: GpuBuffer) {
+  if device != nil && buffer != nil {
+    native_gpu_buffer_release(device, buffer)
+  }
+}
 
 // Clears and presents one swapchain frame, consuming commands on success.
 // A minimized window may have no texture; submit the empty buffer successfully.
 pub fn gpu_clear_swapchain(commands: GpuCommandBuffer, window: Window, color: FColor) bool {
-  acquired := gpu_wait_swapchain(commands, window) if !acquired.ok { return false }
-  if acquired.texture == nil { return gpu_submit(commands) }
+  acquired := gpu_wait_swapchain(commands, window)
+  if !acquired.ok {
+    return false
+  }
+  if acquired.texture == nil {
+    return gpu_submit(commands)
+  }
   target := GpuColorTargetInfo{ texture: acquired.texture, clear_color: color, load_op: 1, store_op: 0 }
-  render_pass := native_gpu_begin_render(commands, &target, 1, nil) if render_pass == nil { return false }
+  render_pass := native_gpu_begin_render(commands, &target, 1, nil)
+  if render_pass == nil {
+    return false
+  }
   native_gpu_end_render(render_pass)
   return gpu_submit(commands)
 }

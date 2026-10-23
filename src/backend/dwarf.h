@@ -25,15 +25,22 @@ BackendDwarf *backend_dwarf_create(void);
 /* AArch64 frames: stp x29, x30, [sp, #-16]!; mov x29, sp ... mov sp, x29; ldp; ret. */
 BackendDwarf *backend_dwarf_create_a64(void);
 BackendDwarf *backend_dwarf_create_rv64(void);
+/* RV32 uses the RV64 fixed 16-byte frame with word-sized saves. */
+BackendDwarf *backend_dwarf_create_rv32(void);
+/* Thumb: push {r3-r11,lr}; subw r11,sp,#4092; final pop {r3-r11,pc}.
+   Frame base is r11+4092; no epilogue marker is needed. */
+BackendDwarf *backend_dwarf_create_t32(void);
 void backend_dwarf_free(BackendDwarf *);
 /* All offsets are relative to this object's .text. Functions cannot overlap.
    x86-64 frames begin with push rbp; mov rbp,rsp and end with leave; ret.
    Epilogue offsets mark the first epilogue instruction. Relocation types
-   are x86-64 R_X86_64_32/64; AArch64 writers map them to ABS32/ABS64. */
+   are x86-64 R_X86_64_32/64; target writers map them to native ELF types. */
 bool backend_dwarf_begin(BackendDwarf *, size_t begin, const char *name,
                          const char *path, unsigned line, unsigned column);
 bool backend_dwarf_line(BackendDwarf *, size_t pc, const char *path,
                         unsigned line, unsigned column, bool prologue_end);
+/* Marks the first frame-establishing instruction after an optional entry guard. */
+bool backend_dwarf_prologue(BackendDwarf *, size_t pc);
 bool backend_dwarf_epilogue(BackendDwarf *, size_t leave_pc);
 bool backend_dwarf_end(BackendDwarf *, size_t end);
 /* Type ids are nonzero; zero means unknown and suppresses dependent variables.
@@ -53,7 +60,7 @@ unsigned backend_dwarf_enum_type(BackendDwarf *, const char *name, unsigned base
                                  uint64_t size, unsigned enumerators);
 bool backend_dwarf_enumerator(BackendDwarf *, unsigned type, unsigned index,
                               const char *name, int64_t value);
-/* A variable of the active function at a fixed RBP-relative frame offset.
+/* A variable of the active function at a fixed frame-base-relative offset.
    A nonempty [scope_begin, scope_end) text range nests it in a lexical block;
    otherwise it is visible in the whole function. */
 bool backend_dwarf_variable(BackendDwarf *, const char *name, unsigned type,

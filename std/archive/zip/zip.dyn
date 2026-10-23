@@ -95,7 +95,7 @@ pub fn next_stream(state: *StreamReader) EntryResult {
       state.error = error
       return EntryResult{ error: error }
     }
-    if !stream_discard(state, #cast(usize) u16le(state.header_storage, 20)) {
+    if !stream_discard(state, #cast(usize, u16le(state.header_storage, 20))) {
       return EntryResult{ error: state.error }
     }
     state.ended = true
@@ -113,18 +113,18 @@ pub fn next_stream(state: *StreamReader) EntryResult {
     state.error = ErrorKind.Unsupported
     return EntryResult{ error: state.error }
   }
-  compressed_size := #cast(usize) u32le(header, 18)
-  uncompressed_size := #cast(usize) u32le(header, 22)
-  name_length := #cast(usize) u16le(header, 26)
-  extra_length := #cast(usize) u16le(header, 28)
+  compressed_size := #cast(usize, u32le(header, 18))
+  uncompressed_size := #cast(usize, u32le(header, 22))
+  name_length := #cast(usize, u16le(header, 26))
+  extra_length := #cast(usize, u16le(header, 28))
   if name_length > #len(state.name_storage) || compressed_size > #len(state.payload_storage) {
     state.error = ErrorKind.Capacity
     return EntryResult{ error: state.error }
   }
   if !stream_exact(state, state.name_storage[..name_length]) || !stream_discard(state, extra_length) ||
     !stream_exact(state, state.payload_storage[..compressed_size]) {
-      return EntryResult{ error: state.error }
-    }
+    return EntryResult{ error: state.error }
+  }
   name := state.name_storage[..name_length]
   return EntryResult{ entry: Entry{ name: name, payload: state.payload_storage[..compressed_size], method: method,
     flags: flags, checksum: checksum, compressed_size: compressed_size,
@@ -132,11 +132,11 @@ pub fn next_stream(state: *StreamReader) EntryResult {
 }
 
 fn u16le(source: []const u8, at: usize) u16 {
-  return #cast(u16) source[at] | (#cast(u16) source[at + 1] << 8)
+  return #cast(u16, source[at]) | (#cast(u16, source[at + 1]) << 8)
 }
 fn u32le(source: []const u8, at: usize) u32 {
-  return #cast(u32) source[at] | (#cast(u32) source[at + 1] << 8) |
-    (#cast(u32) source[at + 2] << 16) | (#cast(u32) source[at + 3] << 24)
+  return #cast(u32, source[at]) | (#cast(u32, source[at + 1]) << 8) |
+    (#cast(u32, source[at + 2]) << 16) | (#cast(u32, source[at + 3]) << 24)
 }
 fn end_record(source: []const u8) ErrorKind {
   if #len(source) < 22 {
@@ -168,10 +168,10 @@ pub fn next(state: *ArchiveReader) EntryResult {
     if error != ErrorKind.None {
       return EntryResult{ error: error }
     }
-    if #cast(usize) u16le(remaining, 20) > #len(remaining) - 22 {
+    if #cast(usize, u16le(remaining, 20)) > #len(remaining) - 22 {
       return EntryResult{ error: ErrorKind.Syntax }
     }
-    state.offset = start + 22 + #cast(usize) u16le(remaining, 20)
+    state.offset = start + 22 + #cast(usize, u16le(remaining, 20))
     return EntryResult{ error: ErrorKind.End }
   }
   if start + 30 > #len(state.source) || u32le(state.source, start) != 67324752 {
@@ -182,10 +182,10 @@ pub fn next(state: *ArchiveReader) EntryResult {
   if (flags & 1) != 0 || (flags & 8) != 0 {
     return EntryResult{ error: ErrorKind.Unsupported }
   }
-  compressed_size := #cast(usize) u32le(state.source, start + 18)
-  uncompressed_size := #cast(usize) u32le(state.source, start + 22)
-  name_length := #cast(usize) u16le(state.source, start + 26)
-  extra_length := #cast(usize) u16le(state.source, start + 28)
+  compressed_size := #cast(usize, u32le(state.source, start + 18))
+  uncompressed_size := #cast(usize, u32le(state.source, start + 22))
+  name_length := #cast(usize, u16le(state.source, start + 26))
+  extra_length := #cast(usize, u16le(state.source, start + 28))
   data_start := start + 30
   if name_length > #len(state.source) - data_start {
     return EntryResult{ error: ErrorKind.Syntax }

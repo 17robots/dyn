@@ -31,11 +31,17 @@ pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: ra
 // for portable code; Windows/macOS use OS-managed stacks for the same API.
 // Ownership: keep Thread and context unmoved until successful join.
 pub fn spawn_with_size(thread: *Thread, size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
-  if size < 256 || entry == nil { return -22 }
-  if sync.load_u32(&thread.tid) != 0 || #len(thread.stack_owner.data) != 0 { return -16 }
+  if size < 256 || entry == nil {
+    return -22
+  }
+  if sync.load_u32(&thread.tid) != 0 || #len(thread.stack_owner.data) != 0 {
+    return -16
+  }
   thread.stack_owner = mem.arena_create(size)
   value := spawn_raw(&thread.stack_owner.data[0], size, entry, context, &thread.tid)
-  if value < 0 { mem.arena_release(&thread.stack_owner) }
+  if value < 0 {
+    mem.arena_release(&thread.stack_owner)
+  }
   return value
 }
 

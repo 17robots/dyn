@@ -16,7 +16,7 @@ pub fn parse(text: []const u8) ParseResult {
   scan: usize = 0
   for scan < #len(text) && text[scan] != '/' && text[scan] != '?' && text[scan] != '#' {
     if text[scan] == ':' {
-      colon = #cast(isize) scan
+      colon = #cast(isize, scan)
       break
     }
     scan += 1
@@ -26,7 +26,7 @@ pub fn parse(text: []const u8) ParseResult {
       return ParseResult{ value: result, ok: false, error_offset: 0 }
     }
     i: usize = 0
-    for i < #cast(usize) colon {
+    for i < #cast(usize, colon) {
       byte := text[i]
       alpha := (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z')
       if !alpha && (i == 0 || !((byte >= '0' && byte <= '9') || byte == '+' || byte == '-' || byte == '.')) {
@@ -34,8 +34,8 @@ pub fn parse(text: []const u8) ParseResult {
       }
       i += 1
     }
-    result.scheme = text[..#cast(usize) colon]
-    at = #cast(usize) colon + 1
+    result.scheme = text[..#cast(usize, colon)]
+    at = #cast(usize, colon) + 1
   }
   if at + 2 <= #len(text) && text[at] == '/' && text[at + 1] == '/' {
     at += 2
@@ -74,13 +74,13 @@ fn unreserved(byte: u8) bool {
 }
 fn hex_value(byte: u8) isize {
   if byte >= '0' && byte <= '9' {
-    return #cast(isize) (byte - '0')
+    return #cast(isize, (byte - '0'))
   }
   if byte >= 'a' && byte <= 'f' {
-    return #cast(isize) (byte - 'a') + 10
+    return #cast(isize, (byte - 'a')) + 10
   }
   if byte >= 'A' && byte <= 'F' {
-    return #cast(isize) (byte - 'A') + 10
+    return #cast(isize, (byte - 'A')) + 10
   }
   return -1
 }
@@ -107,8 +107,8 @@ pub fn percent_encode(destination: []u8, source: []const u8) EncodingResult {
     }
     else {
       destination[at] = '%'
-      destination[at + 1] = alphabet[#cast(usize) (input_byte >> 4)]
-      destination[at + 2] = alphabet[#cast(usize) (input_byte & 15)]
+      destination[at + 1] = alphabet[#cast(usize, (input_byte >> 4))]
+      destination[at + 2] = alphabet[#cast(usize, (input_byte & 15))]
       at += 3
     }
   }
@@ -135,7 +135,7 @@ pub fn percent_decode(destination: []u8, source: []const u8) EncodingResult {
   at: usize = 0
   for i < #len(source) {
     if source[i] == '%' {
-      destination[at] = #cast(u8) (hex_value(source[i + 1]) * 16 + hex_value(source[i + 2]))
+      destination[at] = #cast(u8, (hex_value(source[i + 1]) * 16 + hex_value(source[i + 2])))
       i += 3
     } else {
       destination[at] = source[i]

@@ -14,4 +14,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-zero-values-') as temporary:
                         '--no-cache', '--quiet', '--output', str(output)] +
                        (['--release'] if release else []), check=True, timeout=90)
         subprocess.run([str(output)], check=True, timeout=15)
-print('PASS zero Arena, scanners and stream scanner (debug/release)')
+print('PASS zero Arena, scanners, stream scanner and net handles (debug/release)')

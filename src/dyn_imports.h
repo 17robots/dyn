@@ -62,7 +62,7 @@ static inline bool dyn_imports_next(DynImports *reader, DynImportView *out) {
 }
 static inline char *dyn_import_copy(const char *text, size_t length) {
   if (!text) return NULL;
-  char *copy = malloc(length + 1);
+  char *copy = (char*)malloc(length + 1);
   if (copy) { memcpy(copy, text, length); copy[length] = 0; }
   return copy;
 }

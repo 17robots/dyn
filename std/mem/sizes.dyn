@@ -10,7 +10,7 @@ pub struct SizeResult { bytes: usize, ok: bool }
 // allocation alignment padding or container metadata. Zero count/size succeeds.
 // Failure returns zero bytes; callers must inspect ok before allocating.
 pub fn size_for(count: usize, element_size: usize) SizeResult {
-  if element_size != 0 && count > (#cast(usize) -1) / element_size {
+  if element_size != 0 && count > (#cast(usize, -1)) / element_size {
     return SizeResult{}
   }
   return SizeResult{ bytes: count * element_size, ok: true }

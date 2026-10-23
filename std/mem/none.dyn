@@ -1,0 +1,35 @@
+#target(kernel: none)
+// Bare metal has no virtual memory. Arenas take backing from one fixed region
+// between the program image and the stack, in last-in first-out order: releasing
+// the newest mapping returns its memory, releasing an older one keeps it reserved
+// until every newer mapping is released too.
+extern fn memory_start "dyn_memory_start"() usize
+extern fn memory_end "dyn_memory_end"() usize
+// A zero Arena takes this much of the region on its first push.
+const ZeroArenaReserve: usize = 1 * MiB
+// Bytes in use from the region start.
+bare_used: usize
+
+fn mapping_allocate(size: usize) Mapping {
+  start := memory_start()
+  capacity := memory_end() - start
+  aligned := (size + 15) & ~#cast(usize, 15)
+  if size == 0 || aligned < size || aligned > capacity - bare_used {
+    return Mapping{ error: -12 }
+  }
+  bytes := (#cast(*u8, start + bare_used))[..size]
+  bare_used += aligned
+  return Mapping{ bytes: bytes, committed: size, ok: true }
+}
+fn mapping_release(bytes: []u8) isize {
+  start := memory_start()
+  at := #cast(usize, &bytes[0]) - start
+  if at + ((#len(bytes) + 15) & ~#cast(usize, 15)) == bare_used {
+    bare_used = at
+  }
+  return 0
+}
+// The whole mapping is committed at creation.
+fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
+  return true
+}

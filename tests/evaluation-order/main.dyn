@@ -1,0 +1,29 @@
+// Pins evaluation order rules in docs/guide/language.md.
+order: i64 = 0
+fn idx() usize {
+  order = order * 10 + 1
+  return 0
+}
+fn val() i64 {
+  order = order * 10 + 2
+  return 5
+}
+struct P {
+  a: i64,
+  b: i64,
+}
+fn main() {
+  arr: [2]i64 = [0, 0]
+  arr[idx()] = val()
+  first := order
+  order = 0
+  arr[idx()] += val()
+  second := order
+  order = 0
+  p := P{b: val(), a: #cast(i64, idx())}
+  third := order
+  if first != 12 { #panic("assign order") }
+  if second != 12 { #panic("compound order") }
+  if third != 21 { #panic("literal written order") }
+  if arr[0] != 10 || p.b != 5 { #panic("values") }
+}

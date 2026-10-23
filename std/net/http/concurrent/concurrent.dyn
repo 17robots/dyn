@@ -9,6 +9,7 @@ pub struct Worker {
   thread: threading.Thread,
   listener: *http.Listener,
   handler: http.Handler,
+  context: rawptr,
   storage: []u8,
   error: http.Result,
   stopping: sync.AtomicU32,
@@ -19,7 +20,7 @@ pub struct Worker {
 pub struct Result { started: usize, error: isize, ok: bool }
 
 fn worker_main(context: rawptr) isize {
-  worker := #cast(*Worker) context
+  worker := #cast(*Worker, context)
   for sync.load_u32(&worker.stopping) == 0 {
     accepted := http.accept(worker.listener)
     if !accepted.ok {
@@ -41,7 +42,7 @@ fn worker_main(context: rawptr) isize {
     }
     worker.active_descriptor = socket.descriptor
     sync.unlock(&worker.control)
-    handled := http.serve_connection(&socket, worker.storage, worker.handler)
+    handled := http.serve_connection_context(&socket, worker.storage, worker.handler, worker.context)
     // Serialize shutdown and close so stop cannot act on a recycled descriptor.
     sync.lock(&worker.control)
     close_error := http.close(&socket)
@@ -61,7 +62,7 @@ pub fn stop(workers: []Worker) {
     sync.store_u32(&worker.stopping, 1)
   }
   for *active_worker in workers {
-    if active_worker.listener != nil && active_worker.listener.descriptor >= 0 {
+    if active_worker.listener != nil && active_worker.listener.active {
       _ = network.shutdown(active_worker.listener.descriptor, network.ShutdownBoth)
     }
     sync.lock(&active_worker.control)
@@ -76,6 +77,13 @@ pub fn stop(workers: []Worker) {
 // zero-initialized or already joined. Partial startup is stopped and drained.
 pub fn start(workers: []Worker, listener: *http.Listener, receive_storage: []u8,
   worker_storage_size: usize, stacks: []u8, stack_size: usize, handler: http.Handler) Result {
+  return start_context(workers, listener, receive_storage, worker_storage_size, stacks, stack_size, handler, nil)
+}
+
+// Like start; every Request carries context. Workers share it, so the
+// application synchronizes any mutable state behind it.
+pub fn start_context(workers: []Worker, listener: *http.Listener, receive_storage: []u8,
+  worker_storage_size: usize, stacks: []u8, stack_size: usize, handler: http.Handler, context: rawptr) Result {
   if #len(workers) == 0 || listener == nil || handler == nil || worker_storage_size == 0 || stack_size < 256 ||
     worker_storage_size > #len(receive_storage) / #len(workers) || stack_size > #len(stacks) / #len(workers) {
     return Result{ error: -22 }
@@ -87,7 +95,7 @@ pub fn start(workers: []Worker, listener: *http.Listener, receive_storage: []u8,
   }
   i: usize = 0
   for i < #len(workers) {
-    workers[i] = Worker{ listener: listener, handler: handler,
+    workers[i] = Worker{ listener: listener, handler: handler, context: context,
       storage: receive_storage[i * worker_storage_size..(i + 1) * worker_storage_size], active_descriptor: -1 }
     spawned := threading.spawn(&workers[i].thread, stacks[i * stack_size..(i + 1) * stack_size],
       &worker_main, &workers[i])

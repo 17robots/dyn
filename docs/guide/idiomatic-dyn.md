@@ -120,10 +120,14 @@ FFI boundary. Use `*const T` for read-only borrowing. `rawptr` is only for untyp
 cast it to a typed pointer before access.
 
 ```dyn
-fn increment(value: *i32) { value.* += 1 }
+fn increment(value: *i32) {
+  value.* += 1
+}
 
-value: i32 = 4
-increment(&value)
+fn main() {
+  value: i32 = 4
+  increment(&value)
+}
 ```
 
 Do not retain a pointer or slice after its stack frame, arena mark, reset, or mapping has ended. Dyn

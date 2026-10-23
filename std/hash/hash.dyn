@@ -4,7 +4,7 @@
 pub fn hash64(source: []const u8) u64 {
   value: u64 = 14695981039346656037
   for byte in source {
-    value = #wrap((value ^ #cast(u64) byte) * 1099511628211)
+    value = #wrap((value ^ #cast(u64, byte)) * 1099511628211)
   }
   return value
 }
@@ -12,7 +12,7 @@ pub fn hash64(source: []const u8) u64 {
 pub fn crc32(source: []const u8) u32 {
   value: u32 = 4294967295
   for byte in source {
-    value ^= #cast(u32) byte
+    value ^= #cast(u32, byte)
     for bit in 0..8 {
       if value % 2 != 0 {
         value = (value / 2) ^ 3988292384
@@ -28,7 +28,7 @@ pub fn crc32(source: []const u8) u32 {
 pub fn checksum32(source: []const u8) u32 {
   value: u32 = 0
   for byte in source {
-    value += #cast(u32) byte
+    value += #cast(u32, byte)
   }
   return value
 }

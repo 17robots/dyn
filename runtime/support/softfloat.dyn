@@ -1,0 +1,474 @@
+// Standalone IEEE 754 binary32/binary64, using integers only. No imports,
+// allocations, floating types, runtime FP operations, or target ABI assumptions.
+// Original implementation. All arithmetic rounds to nearest, ties to even,
+// with gradual underflow. NaNs (including signaling inputs) become the positive
+// canonical quiet NaN 0x7fc00000 / 0x7ff8000000000000; no exception flags.
+// Public dyn_soft_f{32,64}_{add,sub,mul,div,rem} take/return raw u32/u64 bits.
+// rem is truncating remainder (fmod), with dividend's sign, including zero.
+// {eq,ne,lt,le,gt,ge,unordered} return bool; NaNs make ordered predicates false
+// (ne true). Signed zeros compare equal. f32_to_f64 / f64_to_f32 convert bits.
+// {i64,u64}_to_f{32,64} convert integers; f{32,64}_to_{i64,u64} truncate toward
+// zero, returning invalid/out-of-range bits 0x8000000000000000 before any
+// caller narrowing. Negative unsigned fractions greater than -1 truncate to 0.
+
+struct SoftFormat { fraction: u64, bias: i64, sign: u64, infinity: u64 }
+struct SoftParts { sign: u64, exponent: i64, significand: u64, kind: u64 }
+// kind: 0 finite (including zero), 1 infinity, 2 NaN.
+fn soft_format(wide: bool) SoftFormat {
+  if wide {
+    return SoftFormat{fraction:52, bias:1023, sign:0x8000000000000000, infinity:0x7ff0000000000000}
+  }
+  return SoftFormat{fraction:23, bias:127, sign:0x80000000, infinity:0x7f800000}
+}
+fn soft_nan(f: SoftFormat) u64 {
+  return f.infinity | (1 << (f.fraction - 1))
+}
+fn soft_unpack(bits: u64, f: SoftFormat) SoftParts {
+  hidden: u64 = 1 << f.fraction
+  fraction := bits & (hidden - 1)
+  field := (bits & f.infinity) >> f.fraction
+  result := SoftParts{sign:bits & f.sign, exponent:1-f.bias, significand:fraction}
+  if (bits & f.infinity) == f.infinity {
+    result.kind = 1
+    if fraction != 0 {
+      result.kind = 2
+    }
+    return result
+  }
+  if field != 0 {
+    result.exponent = #cast(i64, field) - f.bias
+    result.significand |= hidden
+  } else if fraction != 0 {
+    for result.significand < hidden {
+      result.significand <<= 1
+      result.exponent -= 1
+    }
+  }
+  return result
+}
+// Right shift with all discarded bits jammed into bit zero. Never shift by 64.
+fn soft_jam(value: u64, distance: u64) u64 {
+  if distance == 0 {
+    return value
+  }
+  if distance >= 64 {
+    if value != 0 {
+      return 1
+    }
+    return 0
+  }
+  discarded := value & ((1 << distance) - 1)
+  result := value >> distance
+  if discarded != 0 {
+    result |= 1
+  }
+  return result
+}
+// sig has three rounding bits. Normalize before imposing the subnormal floor,
+// then round exactly once, including carry from subnormal to minimum normal.
+fn soft_pack(sign: u64, exponent: i64, sig: u64, f: SoftFormat) u64 {
+  if sig == 0 {
+    return sign
+  }
+  e := exponent
+  s := sig
+  hidden: u64 = 1 << (f.fraction + 3)
+  for s >= (hidden << 1) {
+    s = soft_jam(s, 1)
+    e += 1
+  }
+  for s < hidden {
+    s <<= 1
+    e -= 1
+  }
+  minimum := 1 - f.bias
+  if e < minimum {
+    s = soft_jam(s, #cast(u64, minimum-e))
+    e = minimum
+  }
+  tail := s & 7
+  rounded := s >> 3
+  if tail > 4 || (tail == 4 && (rounded & 1) != 0) {
+    rounded += 1
+  }
+  if rounded >= (1 << (f.fraction + 1)) {
+    rounded >>= 1
+    e += 1
+  }
+  if e > f.bias {
+    return sign | f.infinity
+  }
+  field: u64 = 0
+  if rounded >= (1 << f.fraction) {
+    field = #cast(u64, e + f.bias) << f.fraction
+  }
+  return sign | field | (rounded & ((1 << f.fraction)-1))
+}
+fn soft_add(a: u64, b: u64, f: SoftFormat) u64 {
+  x := soft_unpack(a, f)
+  y := soft_unpack(b, f)
+  if x.kind == 2 || y.kind == 2 {
+    return soft_nan(f)
+  }
+  if x.kind == 1 {
+    if y.kind == 1 && x.sign != y.sign {
+      return soft_nan(f)
+    }
+    return x.sign | f.infinity
+  }
+  if y.kind == 1 {
+    return y.sign | f.infinity
+  }
+  if x.significand == 0 && y.significand == 0 {
+    return x.sign & y.sign
+  }
+  if x.significand == 0 {
+    return b
+  }
+  if y.significand == 0 {
+    return a
+  }
+  if x.exponent < y.exponent || (x.exponent == y.exponent && x.significand < y.significand) {
+    temp := x
+    x = y
+    y = temp
+  }
+  left := x.significand << 3
+  right := soft_jam(y.significand << 3, #cast(u64, x.exponent-y.exponent))
+  if x.sign == y.sign {
+    return soft_pack(x.sign, x.exponent, left+right, f)
+  }
+  if left == right {
+    return 0
+  }
+  return soft_pack(x.sign, x.exponent, left-right, f)
+}
+fn soft_mul(a: u64, b: u64, f: SoftFormat) u64 {
+  x := soft_unpack(a, f)
+  y := soft_unpack(b, f)
+  sign := x.sign ^ y.sign
+  if x.kind == 2 || y.kind == 2 {
+    return soft_nan(f)
+  }
+  if x.kind == 1 || y.kind == 1 {
+    if (x.kind == 0 && x.significand == 0) || (y.kind == 0 && y.significand == 0) {
+      return soft_nan(f)
+    }
+    return sign | f.infinity
+  }
+  if x.significand == 0 || y.significand == 0 {
+    return sign
+  }
+  // Exact 53x53 product in two 64-bit limbs, assembled with 32-bit pieces.
+  // middle fits 34 bits; high fits 42 bits; no addition can wrap.
+  low := (x.significand & 0xffffffff) * (y.significand & 0xffffffff)
+  cross1 := (x.significand >> 32) * (y.significand & 0xffffffff)
+  cross2 := (y.significand >> 32) * (x.significand & 0xffffffff)
+  middle := (low >> 32) + (cross1 & 0xffffffff) + (cross2 & 0xffffffff)
+  high := (x.significand >> 32) * (y.significand >> 32) + (cross1 >> 32) + (cross2 >> 32) + (middle >> 32)
+  low = (low & 0xffffffff) | ((middle & 0xffffffff) << 32)
+  shift := f.fraction - 3
+  sig := (low >> shift) | (high << (64-shift))
+  if (low & ((1 << shift)-1)) != 0 {
+    sig |= 1
+  }
+  return soft_pack(sign, x.exponent+y.exponent, sig, f)
+}
+fn soft_div(a: u64, b: u64, f: SoftFormat) u64 {
+  x := soft_unpack(a, f)
+  y := soft_unpack(b, f)
+  sign := x.sign ^ y.sign
+  if x.kind == 2 || y.kind == 2 || (x.kind == 1 && y.kind == 1) {
+    return soft_nan(f)
+  }
+  if x.kind == 1 {
+    return sign | f.infinity
+  }
+  if y.kind == 1 {
+    return sign
+  }
+  if y.significand == 0 {
+    if x.significand == 0 {
+      return soft_nan(f)
+    }
+    return sign | f.infinity
+  }
+  if x.significand == 0 {
+    return sign
+  }
+  remainder := x.significand
+  exponent := x.exponent-y.exponent
+  if remainder < y.significand {
+    remainder <<= 1
+    exponent -= 1
+  }
+  quotient: u64 = 0
+  // Leading bit plus fraction plus three rounding bits. Remainder < 2*y.
+  for i in 0..(f.fraction+4) {
+    quotient <<= 1
+    if remainder >= y.significand {
+      remainder -= y.significand
+      quotient |= 1
+    }
+    remainder <<= 1
+  }
+  if remainder != 0 {
+    quotient |= 1
+  }
+  return soft_pack(sign, exponent, quotient, f)
+}
+fn soft_rem(a: u64, b: u64, f: SoftFormat) u64 {
+  x := soft_unpack(a, f)
+  y := soft_unpack(b, f)
+  if x.kind != 0 || y.kind == 2 || (y.kind == 0 && y.significand == 0) {
+    return soft_nan(f)
+  }
+  if y.kind == 1 || x.significand == 0 {
+    return a
+  }
+  if x.exponent < y.exponent {
+    return a
+  }
+  remainder := x.significand
+  exponent := x.exponent
+  // Binary long remainder, exact even across the entire exponent range.
+  for exponent > y.exponent {
+    if remainder >= y.significand {
+      remainder -= y.significand
+    }
+    if remainder == 0 {
+      return x.sign
+    }
+    remainder <<= 1
+    exponent -= 1
+  }
+  if remainder >= y.significand {
+    remainder -= y.significand
+  }
+  return soft_pack(x.sign, exponent, remainder << 3, f)
+}
+// -1 less, 0 equal, 1 greater, 2 unordered. Magnitude encoding is monotonic.
+fn soft_compare(a: u64, b: u64, f: SoftFormat) i64 {
+  am := a & (f.sign-1)
+  bm := b & (f.sign-1)
+  if am > f.infinity || bm > f.infinity {
+    return 2
+  }
+  if a == b || (am == 0 && bm == 0) {
+    return 0
+  }
+  negative := (a & f.sign) != 0
+  if negative != ((b & f.sign) != 0) {
+    if negative {
+      return -1
+    }
+    return 1
+  }
+  if (am < bm) != negative {
+    return -1
+  }
+  return 1
+}
+fn soft_convert(a: u64, source: SoftFormat, dest: SoftFormat) u64 {
+  x := soft_unpack(a, source)
+  sign: u64 = 0
+  if x.sign != 0 {
+    sign = dest.sign
+  }
+  if x.kind == 2 {
+    return soft_nan(dest)
+  }
+  if x.kind == 1 {
+    return sign | dest.infinity
+  }
+  sig := x.significand << 3
+  if dest.fraction > source.fraction {
+    sig <<= dest.fraction-source.fraction
+  }
+  else {
+    sig = soft_jam(sig, source.fraction-dest.fraction)
+  }
+  return soft_pack(sign, x.exponent, sig, dest)
+}
+fn soft_from_integer(magnitude: u64, negative: bool, f: SoftFormat) u64 {
+  if magnitude == 0 {
+    return 0
+  }
+  sign: u64 = 0
+  if negative {
+    sign = f.sign
+  }
+  top := magnitude
+  exponent: i64 = 0
+  for top > 1 {
+    top >>= 1
+    exponent += 1
+  }
+  desired := f.fraction + 3
+  sig := magnitude
+  if #cast(u64, exponent) > desired {
+    sig = soft_jam(sig, #cast(u64, exponent)-desired)
+  }
+  else {
+    sig <<= desired-#cast(u64, exponent)
+  }
+  return soft_pack(sign, exponent, sig, f)
+}
+fn soft_from_signed(a: i64, f: SoftFormat) u64 {
+  bits := #bitcast(u64, a)
+  if a >= 0 {
+    return soft_from_integer(bits, false, f)
+  }
+  // Complement + 1 avoids overflowing signed MIN (and unsigned zero-minus).
+  return soft_from_integer((bits ^ 0xffffffffffffffff) + 1, true, f)
+}
+fn soft_to_integer(a: u64, signed: bool, f: SoftFormat) u64 {
+  x := soft_unpack(a, f)
+  invalid: u64 = 0x8000000000000000
+  if x.kind != 0 {
+    return invalid
+  }
+  if x.significand == 0 || x.exponent < 0 {
+    return 0
+  }
+  if x.exponent > 63 {
+    return invalid
+  }
+  magnitude := x.significand
+  if #cast(u64, x.exponent) > f.fraction {
+    magnitude <<= #cast(u64, x.exponent)-f.fraction
+  }
+  else {
+    magnitude >>= f.fraction-#cast(u64, x.exponent)
+  }
+  if signed {
+    if x.sign == 0 && magnitude >= invalid {
+      return invalid
+    }
+    if x.sign != 0 && magnitude > invalid {
+      return invalid
+    }
+  } else if x.sign != 0 {
+    return invalid
+  }
+  if x.sign != 0 {
+    return (magnitude ^ 0xffffffffffffffff) + 1
+  }
+  return magnitude
+}
+pub fn dyn_soft_f32_add(a: u32, b: u32) u32 {
+  return #cast(u32, soft_add(#cast(u64, a), #cast(u64, b), soft_format(false)))
+}
+pub fn dyn_soft_f32_sub(a: u32, b: u32) u32 {
+  return #cast(u32, soft_add(#cast(u64, a), #cast(u64, b) ^ soft_format(false).sign, soft_format(false)))
+}
+pub fn dyn_soft_f32_mul(a: u32, b: u32) u32 {
+  return #cast(u32, soft_mul(#cast(u64, a), #cast(u64, b), soft_format(false)))
+}
+pub fn dyn_soft_f32_div(a: u32, b: u32) u32 {
+  return #cast(u32, soft_div(#cast(u64, a), #cast(u64, b), soft_format(false)))
+}
+pub fn dyn_soft_f32_rem(a: u32, b: u32) u32 {
+  return #cast(u32, soft_rem(#cast(u64, a), #cast(u64, b), soft_format(false)))
+}
+pub fn dyn_soft_f32_eq(a: u32, b: u32) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  return c == 0
+}
+pub fn dyn_soft_f32_ne(a: u32, b: u32) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  return c != 0
+}
+pub fn dyn_soft_f32_lt(a: u32, b: u32) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  return c == -1
+}
+pub fn dyn_soft_f32_le(a: u32, b: u32) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  return c == -1 || c == 0
+}
+pub fn dyn_soft_f32_gt(a: u32, b: u32) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  return c == 1
+}
+pub fn dyn_soft_f32_ge(a: u32, b: u32) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  return c == 1 || c == 0
+}
+pub fn dyn_soft_f32_unordered(a: u32, b: u32) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  return c == 2
+}
+pub fn dyn_soft_i64_to_f32(a: i64) u32 {
+  return #cast(u32, soft_from_signed(a, soft_format(false)))
+}
+pub fn dyn_soft_f32_to_i64(a: u32) i64 {
+  return #bitcast(i64, soft_to_integer(#cast(u64, a), true, soft_format(false)))
+}
+pub fn dyn_soft_u64_to_f32(a: u64) u32 {
+  return #cast(u32, soft_from_integer(a, false, soft_format(false)))
+}
+pub fn dyn_soft_f32_to_u64(a: u32) u64 {
+  return soft_to_integer(#cast(u64, a), false, soft_format(false))
+}
+pub fn dyn_soft_f64_add(a: u64, b: u64) u64 {
+  return soft_add(#cast(u64, a), #cast(u64, b), soft_format(true))
+}
+pub fn dyn_soft_f64_sub(a: u64, b: u64) u64 {
+  return soft_add(#cast(u64, a), #cast(u64, b) ^ soft_format(true).sign, soft_format(true))
+}
+pub fn dyn_soft_f64_mul(a: u64, b: u64) u64 {
+  return soft_mul(#cast(u64, a), #cast(u64, b), soft_format(true))
+}
+pub fn dyn_soft_f64_div(a: u64, b: u64) u64 {
+  return soft_div(#cast(u64, a), #cast(u64, b), soft_format(true))
+}
+pub fn dyn_soft_f64_rem(a: u64, b: u64) u64 {
+  return soft_rem(#cast(u64, a), #cast(u64, b), soft_format(true))
+}
+pub fn dyn_soft_f64_eq(a: u64, b: u64) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return c == 0
+}
+pub fn dyn_soft_f64_ne(a: u64, b: u64) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return c != 0
+}
+pub fn dyn_soft_f64_lt(a: u64, b: u64) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return c == -1
+}
+pub fn dyn_soft_f64_le(a: u64, b: u64) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return c == -1 || c == 0
+}
+pub fn dyn_soft_f64_gt(a: u64, b: u64) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return c == 1
+}
+pub fn dyn_soft_f64_ge(a: u64, b: u64) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return c == 1 || c == 0
+}
+pub fn dyn_soft_f64_unordered(a: u64, b: u64) bool {
+  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return c == 2
+}
+pub fn dyn_soft_i64_to_f64(a: i64) u64 {
+  return soft_from_signed(a, soft_format(true))
+}
+pub fn dyn_soft_f64_to_i64(a: u64) i64 {
+  return #bitcast(i64, soft_to_integer(#cast(u64, a), true, soft_format(true)))
+}
+pub fn dyn_soft_u64_to_f64(a: u64) u64 {
+  return soft_from_integer(a, false, soft_format(true))
+}
+pub fn dyn_soft_f64_to_u64(a: u64) u64 {
+  return soft_to_integer(#cast(u64, a), false, soft_format(true))
+}
+pub fn dyn_soft_f32_to_f64(a: u32) u64 {
+  return soft_convert(#cast(u64, a), soft_format(false), soft_format(true))
+}
+pub fn dyn_soft_f64_to_f32(a: u64) u32 {
+  return #cast(u32, soft_convert(a, soft_format(true), soft_format(false)))
+}

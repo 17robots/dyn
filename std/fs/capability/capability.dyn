@@ -31,13 +31,13 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
   if descriptor < 0 {
     if directory.events != nil {
       _ = observe.record(directory.events,
-      observe.Event{kind: observe.Kind.Denied, resource: directory.resource, source: "std/fs/capability"})
+        observe.Event{kind: observe.Kind.Denied, resource: directory.resource, source: "std/fs/capability"})
     }
     return ReadResult.Failed(descriptor)
   }
   if directory.events != nil {
     _ = observe.record(directory.events,
-    observe.Event{kind: observe.Kind.ResourceOpened, resource: directory.resource, source: "std/fs/capability"})
+      observe.Event{kind: observe.Kind.ResourceOpened, resource: directory.resource, source: "std/fs/capability"})
   }
   value: isize = 0
   if #len(destination) != 0 {
@@ -46,7 +46,7 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
   closed := #syscall(3, descriptor)
   if directory.events != nil {
     _ = observe.record(directory.events,
-    observe.Event{kind: observe.Kind.ResourceClosed, resource: directory.resource, source: "std/fs/capability"})
+      observe.Event{kind: observe.Kind.ResourceClosed, resource: directory.resource, source: "std/fs/capability"})
   }
   if value < 0 {
     return ReadResult.Failed(value)
@@ -54,5 +54,5 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
   if closed < 0 {
     return ReadResult.Failed(closed)
   }
-  return ReadResult.Read(#cast(usize) value)
+  return ReadResult.Read(#cast(usize, value))
 }

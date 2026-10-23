@@ -45,7 +45,7 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   if !size.ok || !size.known {
     return BufferResult{}
   }
-  capacity := #cast(usize) size.size
+  capacity := #cast(usize, size.size)
   allocation := memory.arena_push_uninit(arena, capacity, 1)
   result := provider.decompress(allocation[..capacity], source)
   if !result.ok {
@@ -75,7 +75,7 @@ pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, wi
   return state
 }
 fn decoder_read(data: rawptr, destination: []u8) stream.Result {
-  state := #cast(*Decoder) data
+  state := #cast(*Decoder, data)
   if #len(destination) == 0 {
     return stream.Result{}
   }

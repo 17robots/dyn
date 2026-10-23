@@ -89,10 +89,10 @@ pub fn audit_callbacks() {
   allocation := mem.arena_create(#sizeof(State))
   defer { mem.arena_release(&allocation) }
   pushed := mem.arena_push(&allocation,#sizeof(State),#alignof(State))
-  state := #cast(*State) pushed
+  state := #cast(*State, pushed)
   slot := &state.slots[0]
   slot.owner = state slot.id = 7 slot.mask = Changes
-  slot.stream = #cast(rawptr) #cast(usize) 1
+  slot.stream = #cast(rawptr, #cast(usize, 1))
   root := "/watched"
   slot.length = #len(root)
   for i in 0..#len(root) { slot.root[i] = root[i] }
@@ -103,23 +103,23 @@ pub fn audit_callbacks() {
   pointers: [1]*const u8 = [path.value]
   flags: [1]u32 = [256]
   ids: [1]u64 = [1]
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   item := next(&watcher)
   if item.status != Status.Event || item.event.watch != 7 || item.event.mask != Create || !bytes.equal(item.event.name,"café-😀") { #panic("callback Unicode child") }
   for i in 0..128 { name_storage[i] = 0 }
   if !bytes.equal(item.event.name,"café-😀") { #panic("callback retained borrowed native path") }
   path = c.string_from_bytes(name_storage[..],"/watched/nested/file")
   pointers[0] = path.value
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   if next(&watcher).status != Status.Empty { #panic("recursive event leaked") }
   path = c.string_from_bytes(name_storage[..],"/watched/file")
   pointers[0] = path.value
   flags[0] = 2048
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   item = next(&watcher)
   if !item.event.rescan || item.event.cookie != 0 || item.event.mask != (MoveFrom|MoveTo) { #panic("callback rename") }
   flags[0] = 4
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   if !next(&watcher).event.rescan || !watcher.rescan_required { #panic("kernel dropped events") }
   for next(&watcher).status == Status.Event {}
   acknowledge_rescan(&watcher)

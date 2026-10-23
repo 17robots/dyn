@@ -66,7 +66,7 @@ fn parse_header(header: []const u8) Header {
     if i >= 148 && i < 156 {
       checksum += 32
     } else {
-      checksum += #cast(u64) header[i]
+      checksum += #cast(u64, header[i])
     }
   }
   if checksum != expected || size > 18446744073709551104 {
@@ -184,7 +184,7 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
       state.error = -74
       return StreamEntry{ error: state.error }
     }
-    state.remaining = #cast(usize) entry.size
+    state.remaining = #cast(usize, entry.size)
     state.padding = (512 - state.remaining % 512) % 512
     if !extension {
       state.active = true
@@ -304,10 +304,10 @@ fn octal(bytes: []const u8, output: *u64) bool {
     if byte < '0' || byte > '7' {
       return false
     }
-    if value > (18446744073709551615 - #cast(u64) (byte - '0')) / 8 {
+    if value > (18446744073709551615 - #cast(u64, (byte - '0'))) / 8 {
       return false
     }
-    value = value * 8 + #cast(u64) (byte - '0')
+    value = value * 8 + #cast(u64, (byte - '0'))
     found = true
   }
   output.* = value

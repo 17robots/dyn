@@ -5,18 +5,18 @@ text: [1048576]u8
 fn fnv(data: []const u8) u64 {
   h: u64 = 14695981039346656037
   for byte in data {
-    h = #wrap((h ^ #cast(u64) byte) * 1099511628211)
+    h = #wrap((h ^ #cast(u64, byte)) * 1099511628211)
   }
   return h
 }
 
 fn main() {
   for i in 0..#len(text) {
-    text[i] = #cast(u8) (i % 251)
+    text[i] = #cast(u8, (i % 251))
   }
   total: u64 = 0
   for round in 0..100 {
-    text[round] = #cast(u8) round
+    text[round] = #cast(u8, round)
     total = #wrap(total + fnv(text[..]))
   }
   _ = io.println(io.stdout(), "{}", total)

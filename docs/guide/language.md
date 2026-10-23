@@ -73,19 +73,36 @@ operation.
 A parameter written `$T: type` takes a type argument at the call, as in
 `mem.push(Node, &arena)`. A parameter type containing `$T`, such as `a: $T`, `p: *$T` or
 `s: []$T`, declares `T` and infers it from that argument, as in `sort.sort(values)`. Elsewhere in
-the declaration and body, `T` is an ordinary type name. Each distinct set of type arguments makes
+the declaration and body, `T` is an ordinary type name. Write `$T` once; later parameters write
+`T` and must match exactly, with no implicit widening:
+
+```dyn
+fn max(a: $T, b: T) T {
+  if a > b { return a }
+  return b
+}
+```
+
+`max(x, y)` with `x: i32` and `y: i64` is an error (`T is both i32 and i64`); cast one argument. Each distinct set of type arguments makes
 one instance, and the compiler checks each instance's body as ordinary code: a body that is invalid
 for a type is an error at the call that created the instance. There are no constraints, traits,
 interfaces, operator overloading or compile-time execution, and types are inferred only from
-arguments, never from the expected result. Structs and enums cannot take type parameters yet. The
+arguments, never from the expected result. Structs, enums and unions never take type parameters. The
 [generics design](../internals/generics-design.md) records the rules and what is deliberately left
 out.
 
 ## Values and types
 
-Strings are immutable UTF-8 `[]const u8` values with pointer and byte count; no trailing
-zero. Character literals contain Unicode scalar values, defaulting to `u8` through 255 and
+A string is a `[]const u8`: pointer and byte count, no trailing zero. The type does not
+guarantee UTF-8. Source files and literal text are UTF-8, but `\x` escapes can write any byte,
+and bytes read from files, sockets, or the OS arrive unchecked. Text APIs that require UTF-8
+say so and validate; check external input with `utf8.valid` from `std/unicode/utf8` before
+treating it as text. `const` prevents writes through this view only: another `[]u8` alias of the
+same memory can still change the bytes. Character literals contain Unicode scalar values, defaulting to `u8` through 255 and
 `u32` above it; expected `u8`, `u16`, or `u32` may apply when value fits.
+
+`distinct`, `packed` and `is` are keywords only where they begin `distinct type`, `packed
+struct` and a `case` type pattern; elsewhere they are ordinary names. `type` is always reserved.
 
 `type` creates module-level transparent aliases; aliases may be forward-referenced and
 alias cycles fail. There are no local aliases; declare them at module scope.
@@ -104,7 +121,10 @@ Explicit primitive locals without initializers start at zero. Inferred locals re
 initializer. Local shadowing is forbidden: a local cannot reuse the name of a visible local or
 parameter. A name becomes reusable after its block or loop ends, so sibling blocks and consecutive
 loops may each declare `value`. Assignments copy values; compound assignments use
-the same checked operators as ordinary expressions.
+the same checked operators as ordinary expressions. An assignment evaluates its target (indexes,
+pointer operands) before its value: in `a[i()] = f()`, `i()` runs first. A compound assignment
+evaluates its target once, so `a[i()] += f()` calls `i()` once. Struct literal fields evaluate in
+written order, not declaration order.
 
 `if` and condition-form `for` require `bool`. Bare `for {}` is an infinite loop. `break` and
 `continue` require an enclosing loop. Block locals are inaccessible after block exit. `for value in
@@ -141,11 +161,14 @@ Enums are nominal. Tags default to `u32` or use an explicit integer backing type
 `enum(u8) Op`. Variants receive declaration-order tags starting at 0. A plain enum may give
 variants explicit values: `enum(u8) Op { Add = 1, Sub, Halt = 0xFF }`. Values are integer
 literals that must fit the tag type, and a variant without one is the previous value plus one.
-Duplicate values are errors. Enums with payloads keep implicit values.
+Duplicate values are errors. Enums with payloads keep implicit values. Every enum needs a
+variant whose value is 0, so zeroed storage (`x: Color`, omitted struct fields, `mem.push`)
+always holds a valid variant. An exhaustive `case` that meets a tag matching no variant, which
+only foreign code or raw pointer writes can produce, panics with `enum.tag.ok`.
 Payload variants hold one typed value and use `Enum.Variant(payload)` construction. Plain
 variants use `Enum.Variant`; the type is always written, never inferred from context. Plain
 enums support equality only; payload enums are not comparable. Enum values copy by value.
-`#cast(u8) op` gives a plain enum's tag, and `#cast(Op) byte` converts an integer back,
+`#cast(u8, op)` gives a plain enum's tag, and `#cast(Op, byte)` converts an integer back,
 panicking when the value is not one of the variants.
 Plain enums have the size/alignment of the backing integer. A payload enum is laid out as its tag,
 padding to the maximum payload alignment, then storage large/aligned enough for the largest payload;
@@ -161,7 +184,16 @@ dereferences it. Struct fields automatically dereference struct pointers. Derefe
 and pointee alignment, then panics on failure. Pointer arithmetic and ordering are forbidden;
 equality with compatible pointers or `nil` is allowed. Mutable pointers implicitly widen to
 `*const T`, never back to mutable. Shallow const forbids replacing fields through the const pointer,
-while a mutable pointer stored in such a field still permits mutation of its own pointee. `rawptr`
+while a mutable pointer stored in such a field still permits mutation of its own pointee:
+
+```dyn
+fn touch(o: *const Outer) {
+  o.inner.n += 1 // allowed: inner is *Inner
+  o.count = 1    // error: assignment through *const pointer
+}
+```
+
+`rawptr`
 is untyped storage and cannot be dereferenced; explicitly cast it to a typed pointer before access.
 A mutable `*T` converts to `rawptr` implicitly, as C's `void *` does: `free(task)` needs no cast.
 The reverse, `rawptr` to `*T`, always requires `#cast`. `*const T` does not convert implicitly.
@@ -170,10 +202,10 @@ Pointers are thin. Dereference checks nil and alignment, but not lifetime or all
 bounds. Pointer comparisons support only equality. Thin pointers cannot be indexed as single values,
 but `pointer[start..end]` constructs a slice and requires an explicit end bound. Slices are `{data, len}` descriptors and are
 never comparable. Fixed arrays copy by value; omitted literal elements zero-fill, including typed
-`[]`. Array/slice indexing is bounds-checked. Exclusive ranges support `[..]`, `[..end]`,
+`[]`. Array/slice indexing is bounds-checked. Indexes and slice bounds accept any integer type no wider than `usize`, as in C; a negative signed value fails the bounds check like any other out-of-range index. Use `#cast` for wider types, such as `i64` on 32-bit targets. Exclusive ranges support `[..]`, `[..end]`,
 `[start..]`, and `[start..end]`, checking `start <= end <= len`. `#len` returns `usize`.
 `rawptr` has no direct indexing or slicing. Cast it explicitly to `*T`, then use
-the ordinary bounded pointer-slice form: `(#cast(*T) memory)[..count]`. No second
+the ordinary bounded pointer-slice form: `(#cast(*T, memory))[..count]`. No second
 raw-pointer range construct is planned.
 `rawptr` has native pointer size/alignment, zero-initializes to `nil`, and supports equality and
 an implicit conversion from mutable typed pointers, and explicit casts to/from compatible typed
@@ -197,7 +229,9 @@ site. Deferred blocks observe captured storage at execution. Deferred statements
 `return`, `break`, `continue`, declarations, and nested `defer`. Double panic aborts cleanup.
 
 Panic runs active defers through caller frames. Cleanup uses fixed stack records and performs no
-allocation. A panic raised by a defer aborts remaining cleanup. There is no recovery mechanism.
+allocation. A panic raised by a defer aborts remaining cleanup. There is no recovery mechanism. A panic that
+crosses foreign frames runs Dyn defers but skips cleanup in the C frames between them; see
+[FFI](ffi.md).
 
 ## Numeric rules
 
@@ -221,11 +255,57 @@ equal-sized scalar representations. Boolean/numeric conversion is never implicit
 Empty or partially specified fixed-array constants zero-fill omitted elements. Compiler work and IR
 for an empty aggregate must remain bounded by written initializer count rather than storage size.
 
+## Operator precedence
+
+Postfix forms bind tightest: calls, indexing, slicing, and field access. Prefix `-`, `!`, `~`, and
+`&` come next and apply to the whole postfix chain, so `-a[i]` is `-(a[i])`. `#cast(T, value)` and
+other builtins are self-delimiting and act like primary expressions.
+
+Binary operators, tightest first. Every binary operator is left-associative.
+
+| Level | Operators |
+| --- | --- |
+| 1 | `*` `/` `%` |
+| 2 | `+` `-` |
+| 3 | `<<` `>>` |
+| 4 | `&` |
+| 5 | `^` |
+| 6 | <code>&#124;</code> |
+| 7 | `<` `<=` `>` `>=` |
+| 8 | `==` `!=` |
+| 9 | `&&` |
+| 10 | <code>&#124;&#124;</code> |
+
+Unlike C, bitwise operators bind tighter than comparisons: `flags & mask == 0` means
+`(flags & mask) == 0`. Comparisons do not chain: `a < b < c` compares a `bool` with `c` and
+fails to type-check.
+
 ## Builtins
 
+The `#` prefix identifies a compiler intrinsic or module directive. It does not
+mean that the operation runs at compile time. Allocation, I/O, formatting,
+collections, and ordinary algorithms belong in libraries.
+
+- Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
+- Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
+- Representation and arithmetic: `#len` and `#wrap`.
+- Validation and termination: compile-time `#assert` and runtime `#panic`.
+- Build input and OS boundary: `#load` and `#syscall`.
+- Iteration: `#reverse`, valid only in a `for` iterable.
+- Module directives: `#target` and `#link`, documented with platform and FFI rules.
+
+Conversions require exactly two arguments, with the type first. The value may be
+any expression and is evaluated exactly once. The closing parenthesis delimits
+that expression: `#cast(i64, a + b)` converts the sum, while
+`#cast(i64, a) + b` converts only `a`. Cast results accept ordinary postfix
+operations, such as `#cast(*T, memory)[..count]`. The old `#cast(T) value` and
+`#bitcast(T) value` forms are rejected; see the
+[migration guide](../migrations/cast-syntax.md).
+
+
 `#sizeof(type_or_value)` and `#alignof(type_or_value)` return `usize` constants without evaluating
-value operands. `#len` accepts arrays and slices. `#cast(T)` performs explicit numeric conversion
-or compatible pointer conversion; explicit integer-pointer casts serve OS ABI boundaries. Narrowing follows destination representation. `#bitcast(T)`
+value operands. `#len` accepts arrays and slices. `#cast(T, value)` performs explicit numeric conversion
+or compatible pointer conversion; explicit integer-pointer casts serve OS ABI boundaries. Narrowing follows destination representation. `#bitcast(T, value)`
 requires equal-sized compatible numeric representations or compatible pointer representations.
 `#syscall(number, args...)` returns `isize` and accepts at most six integer/pointer arguments on
 Linux x86-64. It does not depend on `std`.
@@ -245,7 +325,7 @@ recursive relationships use IDs rather than nested metadata.
 ## Removed/deferred syntax
 
 No `inline`, `thread_local`, `as`, wrapping operators such as `+%` (use `#wrap`), `~=`, or C-style casts.
-`#cast(T) value` and `#bitcast(T) value` are explicit. Unary `!` is bool-only;
+`#cast(T, value)` and `#bitcast(T, value)` are explicit. Unary `!` is bool-only;
 unary `~` is integer-only. Comments do not nest; whitespace is insignificant; semicolons are
 unsupported.
 
@@ -270,7 +350,7 @@ is not a supported-feature claim:
 
 Debug and release have identical language correctness semantics. Both retain checked arithmetic,
 division, shifts, bounds, nil, and alignment checks unless proven redundant. Debug records function
-frames for panic diagnostics. Release omits that tracing and enables LLVM optimization/internal
+frames for panic diagnostics. Release omits that tracing and enables backend optimization/internal
 linkage; it may therefore show fewer diagnostic frames, never different valid results.
 
 Core syntax is frozen for the current `0.1` release cycle. A syntax addition requires a language
