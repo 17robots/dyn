@@ -56,7 +56,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/container/slot_map` | Generation handles into caller slot arrays |
 | `std/container/ring`, `bit_set` | Ring buffer and bit set over caller storage |
 | `std/sort` | In-place sort and binary search for any ordered element type |
-| `std/math` | `min`, `max`, `clamp`, `abs`, `narrow` and other scalar helpers |
+| `std/math` | Scalar arithmetic, bit helpers, concrete vectors, matrices, quaternions and ranges |
 | `std/hash` | Stable non-cryptographic hashes (FNV-1a) and checksums |
 | `std/rand` | Deterministic caller-owned PRNG; not for cryptography |
 
@@ -136,3 +136,34 @@ all four. `std/terminal` and `std/dynlib` are Linux only. On wasm32, see
 Optional bindings to native libraries live under `vendor/`. Importing one adds
 its native dependency, and each package documents its supported subset. See
 [vendor packages](vendor.md).
+
+## Math conventions
+
+`std/math` uses concrete `Vec2`, `Vec3`, `Vec4` (f32) and `Vec2i` (i32)
+structs. Functions use type prefixes such as `vec3_dot` and `vec3_normalize`.
+Vector multiplication is componentwise; matrix multiplication composes
+transforms. Finite vector normalization widens its intermediate arithmetic to
+f64. Zero normalization returns a zero vector. Integer vector arithmetic is
+checked, including intermediate dot products.
+
+`Mat3` and `Mat4` store columns and multiply column vectors; the right operand
+is applied first. Mat3 transforms are homogeneous 2D transforms. Rotations use
+radians and a right-handed convention. Cameras look down −Z; projection depth
+maps the near plane to −1 and the far plane to +1. Inverses and fallible
+constructors return `{value, ok}`; failure has a zero value. Inversion uses
+partial pivoting and does not guarantee a useful answer for ill-conditioned
+matrices. Quaternions store `x, y, z, w`.
+
+`Rng1u64`, `Rng1i64`, `Rng1f32`, `Rng2f32` and `Rng2i32` are half-open
+ranges: `min` is included and `max` is excluded. Equal endpoints are empty;
+rectangles are empty when either dimension is zero. Endpoints must be ordered
+and must not be NaN. Overlap excludes touching edges. Union treats empty
+ranges as identities. Range clamp uses the closed endpoint interval, so its
+result can equal `max`. Integer centers round toward the lower endpoint;
+integer dimensions and padding panic if their result cannot be represented.
+
+The floating-point implementation has sampled host and RV32/Thumb execution
+tests. It assumes round to
+nearest, ties to even, and requires no host libm at runtime. Sampled comparisons
+with host libm are not a global accuracy proof. Native instruction lowering
+for the proposed math intrinsics remains a separate task.

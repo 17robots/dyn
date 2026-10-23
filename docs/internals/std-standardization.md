@@ -1,9 +1,18 @@
 # Std standardization
 
-Status: agreed 2026-10-22 and 2026-10-23. Done: the language changes and rule 1
-(containers). This is the contract std is moving to
-before the syntax freeze. When a module meets it, move the matching text into
-[the std guide](../guide/std.md) conventions.
+Status: agreed 2026-10-22 and 2026-10-23. Language changes and rules 1–7
+have landed through std-sticky-zero. The portable math API is implemented and
+qualified by the registered regression suite: 145/145 gates pass across the
+initial and resumed runs, including the artifact build and all 21 executions.
+This was not one uninterrupted invocation.
+
+Math now includes scalar integer/float helpers, concrete vectors, matrices,
+quaternions and ranges. Independent reviews found and resolved range midpoint
+and operand-validation bugs and strengthened float/quaternion test coverage.
+Native math intrinsic lowering remains unfinished; portable implementations
+provide the API until that optimization is added. Floating-point sampling is
+not a global accuracy proof. See the qualification record below and the
+[std guide](../guide/std.md#math-conventions) for current conventions.
 
 The model is Ryan Fleury's: storage belongs to the caller, misses are not
 errors, arenas cannot fail, and real errors exist only where the program meets
@@ -236,8 +245,9 @@ A checker in `tools/` flags out parameters, `_into`/`_size`/`_count` names,
 
 ## Math
 
-`std/math` has scalar integer helpers only. There is no floating-point math at
-all. Fleury's code leans on concrete vector and range types, so std gets them
+`std/math` now provides the portable API below. Sampled numerical regression
+tests meet the accuracy target on the tested inputs; no global bound is
+established. Fleury's code leans on concrete vector and range types, so std gets them
 as ordinary structs (no generic types):
 
 - Scalars, f32 and f64: `sqrt`, `floor`, `ceil`, `trunc`, `round`, `fma`,
@@ -289,3 +299,37 @@ These add API and break nothing, so they can follow the freeze:
 6. Rules 6 and 7, comments, the checker.
 7. Math.
 8. Then the self-hosting order: IR dump, freeze, stage 0.
+
+## Math qualification (2026-10-23)
+
+All 145 registered gates pass across the initial, focused and resumed runs.
+No internal skips were reported. Two harness fixes were needed: Python
+3.11-compatible hash fixture escaping, and an explicit source SDK for
+native-cache's private compiler copy. The latter still uses adjacent private
+runtime objects for invalidation checks. Formatting changes were verified to
+change whitespace only.
+
+Per debug/release mode:
+
+- Integers: 545,576 bigint pair cases, including exhaustive signed/unsigned
+  8-bit pairs; 4,732 successful narrowing conversions and 1,116 panic cases.
+- Float: corrected default regression has 1,153,931 comparisons. The alternate
+  seed sweep has 11,793,931 comparisons. Exact primitives match bits; sampled
+  transcendentals remain within 1 ulp of extended host libm. Width-specific
+  f32 neighbors are checked for distinct bits and boundary bracketing.
+- Vectors: 5,449 reference checks, 203 unit-length checks, ten overflow panics.
+- Matrices/quaternions: 8,552 checks across 297 cases; twelve negative-control
+  runs reject broken small-angle and shortest-angle conversions.
+- Ranges: 2,160 interval checks, rectangle/clamp/boundary cases and nine
+  rejections, including invalid second operands after an empty rectangle.
+
+Eight additional RV32/Thumb hard/soft debug/release guests each pass 145
+bounded checks. Soft images pass no-FP audits and disabled-FPU execution;
+release wrappers select SSA. These samples extend backend coverage without
+establishing universal bit agreement or a global transcendental error bound.
+Matrix inversion remains sensitive to conditioning. Host-width usize/isize
+integer tests do not independently exhaust ILP32 width behavior.
+
+Logs and source hashes are retained under build/std-math-qualification,
+including resume2-20261023-181309/report.txt and results.json. No commit was
+made for this math layer in this continuation.

@@ -14,6 +14,13 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Expanded `std/math` with integer bit/overflow/saturating helpers, portable
+  floating-point functions, concrete vectors, column-major matrices,
+  quaternions and half-open ranges. Vector normalization widens intermediates;
+  matrix inverses and fallible constructors return `{value, ok}`. Floating
+  accuracy is checked by sampled host-libm comparisons and selected RV32/Thumb
+  cases; these tests do not establish a global transcendental error bound.
+
 - **Breaking:** `process.Options{}` is valid and inherits every stream.
   Streams are `process.Redirect` values made with `process.redirect(handle)`;
   `process.options()` is removed.

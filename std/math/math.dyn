@@ -1,4 +1,6 @@
-pub struct U64Result { value: u64, ok: bool }
+// Scalar helpers for every numeric type, integer bit operations and checked
+// arithmetic. Floating-point functions are in float.dyn, vectors, matrices and
+// quaternions in vector.dyn and matrix.dyn, ranges in range.dyn.
 
 // Operands must support <. The body is checked for each type it is called with.
 pub fn min(a, b: $T) T {
@@ -25,26 +27,165 @@ pub fn clamp(value, minimum, maximum: $T) T {
   }
   return value
 }
-// Signed integers and floats. Panics on the most negative integer.
+// Integers and floats. Unsigned values are unchanged. Panics on the most
+// negative signed integer.
 pub fn abs(value: $T) T {
-  if value < 0 {
+  zero := #cast(T, 0)
+  if value < zero {
     negated := -value
-    if negated < 0 {
+    if negated < zero {
       #panic("absolute value overflow")
     }
     return negated
   }
   return value
 }
+// -1, 0 or 1 for signed integers; -1.0, 0.0 or 1.0 for floats (zero and NaN
+// give zero). Unsigned integers give zero or one.
+pub fn sign(value: $T) T {
+  zero := #cast(T, 0)
+  if value < zero {
+    return #cast(T, -1)
+  }
+  if value > zero {
+    return #cast(T, 1)
+  }
+  return #cast(T, 0)
+}
 // Converts value to T and panics if it does not fit; the checked form of #cast.
 pub fn narrow($T: type, value: $U) T {
   result := #cast(T, value)
-  if #cast(U, result) != value || (result < 0) != (value < 0) {
+  if #cast(U, result) != value || (result < #cast(T, 0)) != (value < #cast(U, 0)) {
     #panic("narrow: value does not fit")
   }
   return result
 }
-pub fn gcd_u64(a_value, b_value: u64) u64 {
+
+// Integer type facts.
+pub fn is_signed($T: type) bool {
+  return #wrap(#cast(T, 0) - #cast(T, 1)) < #cast(T, 0)
+}
+pub fn max_value($T: type) T {
+  if is_signed(T) {
+    return #cast(T, (#cast(u64, 1) << #cast(u64, #sizeof(T) * 8 - 1)) - 1)
+  }
+  return #wrap(#cast(T, 0) - #cast(T, 1))
+}
+pub fn min_value($T: type) T {
+  if is_signed(T) {
+    return #wrap(-max_value(T) - #cast(T, 1))
+  }
+  return #cast(T, 0)
+}
+
+// The value's bits as an unsigned 64-bit number, without sign extension.
+fn bits_of(value: $T) u64 {
+  width := #cast(u64, #sizeof(T) * 8)
+  raw := #cast(u64, value)
+  if width == 64 {
+    return raw
+  }
+  return raw & ((#cast(u64, 1) << width) - 1)
+}
+
+pub fn count_ones(value: $T) u32 {
+  bits := bits_of(value)
+  count: u32 = 0
+  for bits != 0 {
+    bits &= bits - 1
+    count += 1
+  }
+  return count
+}
+// Zero bits above the highest set bit, within T's width.
+pub fn leading_zeros(value: $T) u32 {
+  bits := bits_of(value)
+  width := #cast(u32, #sizeof(T) * 8)
+  count: u32 = 0
+  for count < width && (bits & (#cast(u64, 1) << #cast(u64, width - 1 - count))) == 0 {
+    count += 1
+  }
+  return count
+}
+// Zero bits below the lowest set bit; T's width for zero.
+pub fn trailing_zeros(value: $T) u32 {
+  bits := bits_of(value)
+  width := #cast(u32, #sizeof(T) * 8)
+  count: u32 = 0
+  for count < width && (bits & (#cast(u64, 1) << #cast(u64, count))) == 0 {
+    count += 1
+  }
+  return count
+}
+pub fn rotate_left(value: $T, amount: u32) T {
+  width := #cast(u64, #sizeof(T) * 8)
+  shift := #cast(u64, amount) % width
+  bits := bits_of(value)
+  if shift == 0 {
+    return value
+  }
+  rotated := #wrap(bits << shift) | (bits >> (width - shift))
+  return #cast(T, rotated)
+}
+pub fn rotate_right(value: $T, amount: u32) T {
+  width := #cast(u32, #sizeof(T) * 8)
+  return rotate_left(value, (width - amount % width) % width)
+}
+pub fn is_pow2(value: $T) bool {
+  return value > #cast(T, 0) && (value & (value - #cast(T, 1))) == 0
+}
+// The smallest power of two at least value. Panics when it does not fit in T.
+pub fn next_pow2(value: $T) T {
+  result := #cast(T, 1)
+  for result < value {
+    if mul_overflows(result, #cast(T, 2)) {
+      #panic("next_pow2 overflows")
+    }
+    result *= #cast(T, 2)
+  }
+  return result
+}
+// value rounded up to a multiple of alignment, a power of two.
+pub fn align_up(value, alignment: $T) T {
+  if !is_pow2(alignment) {
+    #panic("alignment must be a power of two")
+  }
+  mask := alignment - #cast(T, 1)
+  remainder := value & mask
+  if remainder == #cast(T, 0) {
+    return value
+  }
+  return value + (alignment - remainder)
+}
+pub fn align_down(value, alignment: $T) T {
+  if !is_pow2(alignment) {
+    #panic("alignment must be a power of two")
+  }
+  return value & ~(alignment - #cast(T, 1))
+}
+// Division rounding up, for nonnegative operands.
+pub fn div_ceil(a, b: $T) T {
+  if a < #cast(T, 0) || b <= #cast(T, 0) {
+    #panic("div_ceil requires nonnegative numerator and positive divisor")
+  }
+  quotient := a / b
+  if a % b != #cast(T, 0) {
+    return quotient + #cast(T, 1)
+  }
+  return quotient
+}
+// Magnitudes are unsigned so the signed minimum remains representable.
+fn magnitude(value: $T) u64 {
+  raw := bits_of(value)
+  if is_signed(T) && value < #cast(T, 0) {
+    if #sizeof(T) == 8 {
+      return #wrap(#cast(u64, 0) - raw)
+    }
+    return (#cast(u64, 1) << #cast(u64, #sizeof(T) * 8)) - raw
+  }
+  return raw
+}
+fn gcd_magnitude(a_value, b_value: u64) u64 {
   a := a_value
   b := b_value
   for b != 0 {
@@ -54,72 +195,103 @@ pub fn gcd_u64(a_value, b_value: u64) u64 {
   }
   return a
 }
-pub fn checked_add_u64(a, b: u64) U64Result {
-  maximum: u64 = 18446744073709551615
-  if a > maximum - b {
-    return U64Result{}
+// The nonnegative gcd; panics if it does not fit in T.
+pub fn gcd(a, b: $T) T {
+  result := gcd_magnitude(magnitude(a), magnitude(b))
+  if result > #cast(u64, max_value(T)) {
+    #panic("gcd overflows")
   }
-  return U64Result{ value: a + b, ok: true }
+  return #cast(T, result)
 }
-pub fn checked_mul_u64(a, b: u64) U64Result {
-  maximum: u64 = 18446744073709551615
-  if b != 0 && a > maximum / b {
-    return U64Result{}
+// Panics when the nonnegative result does not fit in T.
+pub fn lcm(a, b: $T) T {
+  left := magnitude(a)
+  right := magnitude(b)
+  if left == 0 || right == 0 {
+    return #cast(T, 0)
   }
-  return U64Result{ value: a * b, ok: true }
-}
-pub fn lcm_u64(a, b: u64) U64Result {
-  if a == 0 || b == 0 {
-    return U64Result{ value: 0, ok: true }
+  reduced := left / gcd_magnitude(left, right)
+  if reduced > #cast(u64, max_value(T)) / right {
+    #panic("lcm overflows")
   }
-  return checked_mul_u64(a / gcd_u64(a, b), b)
+  return #cast(T, reduced * right)
 }
-pub fn pow_u64(base_value, exponent_value: u64) U64Result {
-  base := base_value
-  exponent := exponent_value
-  value: u64 = 1
-  for exponent > 0 {
-    if exponent % 2 != 0 {
-      product := checked_mul_u64(value, base)
-      if !product.ok {
-        return U64Result{}
-      }
-      value = product.value
-    }
-    exponent /= 2
-    if exponent > 0 {
-      square := checked_mul_u64(base, base)
-      if !square.ok {
-        return U64Result{}
-      }
-      base = square.value
-    }
+// The integer square root: the largest r with r * r <= value. Panics on a
+// negative value.
+pub fn isqrt(value: $T) T {
+  if value < #cast(T, 0) {
+    #panic("isqrt of a negative value")
   }
-  return U64Result{ value: value, ok: true }
-}
-pub fn sqrt_u64(value: u64) u64 {
-  if value < 2 {
+  if value < #cast(T, 2) {
     return value
   }
-  low: u64 = 1
-  high := value / 2 + 1
+  low := #cast(T, 1)
+  high := value / #cast(T, 2) + #cast(T, 1)
   for low < high {
-    middle := low + (high - low + 1) / 2
+    middle := low + (high - low + #cast(T, 1)) / #cast(T, 2)
     if middle <= value / middle {
       low = middle
     } else {
-      high = middle - 1
+      high = middle - #cast(T, 1)
     }
   }
   return low
 }
 
-pub fn sign_i64(value: i64) i64 {
-  if value < 0 {
-    return -1
+// Whether a + b, a - b or a * b leaves T's range. Use them before ordinary
+// arithmetic, which panics on overflow.
+pub fn add_overflows(a, b: $T) bool {
+  result := #wrap(a + b)
+  if is_signed(T) {
+    return (a < #cast(T, 0)) == (b < #cast(T, 0)) && (result < #cast(T, 0)) != (a < #cast(T, 0))
   }
-  if value > 0 {
-    return 1
+  return result < a
+}
+pub fn sub_overflows(a, b: $T) bool {
+  if is_signed(T) {
+    result := #wrap(a - b)
+    return (a < #cast(T, 0)) != (b < #cast(T, 0)) && (result < #cast(T, 0)) != (a < #cast(T, 0))
   }
-  return 0
+  return b > a
+}
+pub fn mul_overflows(a, b: $T) bool {
+  if a == #cast(T, 0) || b == #cast(T, 0) {
+    return false
+  }
+  if is_signed(T) {
+    minimum := min_value(T)
+    if (a == #cast(T, -1) && b == minimum) || (b == #cast(T, -1) && a == minimum) {
+      return true
+    }
+  }
+  result := #wrap(a * b)
+  return result / a != b
+}
+// Arithmetic that stops at T's limits instead of overflowing.
+pub fn saturating_add(a, b: $T) T {
+  if !add_overflows(a, b) {
+    return a + b
+  }
+  if is_signed(T) && a < #cast(T, 0) {
+    return min_value(T)
+  }
+  return max_value(T)
+}
+pub fn saturating_sub(a, b: $T) T {
+  if !sub_overflows(a, b) {
+    return a - b
+  }
+  if is_signed(T) && b < #cast(T, 0) {
+    return max_value(T)
+  }
+  return min_value(T)
+}
+pub fn saturating_mul(a, b: $T) T {
+  if !mul_overflows(a, b) {
+    return a * b
+  }
+  if is_signed(T) && (a < #cast(T, 0)) != (b < #cast(T, 0)) {
+    return min_value(T)
+  }
+  return max_value(T)
 }

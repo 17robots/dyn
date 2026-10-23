@@ -27,7 +27,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-cache-') as directory:
     script.write_text('{ local: value; };\n')
     output = work/'program'
     cache = work/'cache'
-    env = dict(os.environ, DYN_CACHE_DIR=str(cache))
+    # Source imports use the real SDK while runtime invalidation below uses
+    # the private executable's adjacent runtime objects.
+    env = dict(os.environ, DYN_CACHE_DIR=str(cache), DYN_SDK=str(ROOT))
 
     def compile_provider(value):
         provider.write_text(f'int value(void) {{ return {value}; }}\n')

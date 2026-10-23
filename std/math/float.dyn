@@ -1,0 +1,1380 @@
+// Portable floating-point functions. Arithmetic assumes round-to-nearest,
+// ties-to-even. No host libm is required. The regression oracle in
+// tests/math-float.py measures sampled error against host libm; it does not
+// establish a global ulp bound for the transcendental functions.
+// f32 transcendental results are rounded from the f64 approximation; they
+// are not guaranteed correctly rounded. FMA rounds directly to either width.
+// NaN payload propagation and floating-point exception flags are unspecified.
+
+pub const pi: f64 = 3.14159265358979323846
+pub const tau: f64 = 6.28318530717958647692
+pub const e: f64 = 2.71828182845904523536
+pub const ln2: f64 = 0.693147180559945309417
+pub const ln10: f64 = 2.30258509299404568402
+pub const sqrt2: f64 = 1.41421356237309504880
+// The gap between 1.0 and the next value.
+pub const epsilon64: f64 = 2.220446049250313e-16
+pub const epsilon32: f32 = 1.1920929e-07
+
+pub fn inf() f64 {
+  return #bitcast(f64, bits_7ff0000000000000)
+}
+pub fn nan() f64 {
+  return #bitcast(f64, bits_7ff8000000000000)
+}
+pub fn is_nan(x: $T) bool {
+  return x != x
+}
+// Inspect before widening: a hardware f32-to-f64 cast quiets signaling NaNs.
+fn signaling_nan(x: $T) bool {
+  if #sizeof(T) == 4 {
+    b := #bitcast(u32, #cast(f32, x)) & 0x7fffffff
+    return b > 0x7f800000 && (b & 0x00400000) == 0
+  }
+  b := #bitcast(u64, #cast(f64, x)) & bits_7fffffffffffffff
+  return b > bits_7ff0000000000000 && (b & 0x0008000000000000) == 0
+}
+pub fn is_inf(x: $T) bool {
+  wide := #cast(f64, x)
+  return wide == inf() || wide == -inf()
+}
+pub fn is_finite(x: $T) bool {
+  return !is_nan(x) && !is_inf(x)
+}
+
+pub fn sqrt(x: $T) T {
+  return #cast(T, sqrt64(#cast(f64, x)))
+}
+pub fn floor(x: $T) T {
+  return #cast(T, floor64(#cast(f64, x)))
+}
+pub fn ceil(x: $T) T {
+  return #cast(T, ceil64(#cast(f64, x)))
+}
+pub fn trunc(x: $T) T {
+  return #cast(T, trunc64(#cast(f64, x)))
+}
+// Rounds half away from zero.
+pub fn round(x: $T) T {
+  return #cast(T, round64(#cast(f64, x)))
+}
+// x's magnitude with sign's sign.
+pub fn copysign(x, sign: $T) T {
+  return #cast(T, copysign64(#cast(f64, x), #cast(f64, sign)))
+}
+// x * y + z with one rounding.
+pub fn fma(x, y, z: $T) T {
+  if #sizeof(T) == 4 {
+    return #cast(T, fused(#cast(f64, x), #cast(f64, y), #cast(f64, z), 24, -149))
+  }
+  return #cast(T, fma64(#cast(f64, x), #cast(f64, y), #cast(f64, z)))
+}
+pub fn sin(x: $T) T {
+  return #cast(T, sin64(#cast(f64, x)))
+}
+pub fn cos(x: $T) T {
+  return #cast(T, cos64(#cast(f64, x)))
+}
+pub fn tan(x: $T) T {
+  return #cast(T, tan64(#cast(f64, x)))
+}
+pub fn asin(x: $T) T {
+  return #cast(T, asin64(#cast(f64, x)))
+}
+pub fn acos(x: $T) T {
+  return #cast(T, acos64(#cast(f64, x)))
+}
+pub fn atan(x: $T) T {
+  return #cast(T, atan64(#cast(f64, x)))
+}
+pub fn atan2(y, x: $T) T {
+  return #cast(T, atan2_64(#cast(f64, y), #cast(f64, x)))
+}
+pub fn exp(x: $T) T {
+  return #cast(T, exp64(#cast(f64, x)))
+}
+pub fn exp2(x: $T) T {
+  return #cast(T, exp2_64(#cast(f64, x)))
+}
+pub fn log(x: $T) T {
+  return #cast(T, log64(#cast(f64, x)))
+}
+pub fn log2(x: $T) T {
+  return #cast(T, log2_64(#cast(f64, x)))
+}
+pub fn log10(x: $T) T {
+  return #cast(T, log10_64(#cast(f64, x)))
+}
+pub fn pow(x, y: $T) T {
+  if signaling_nan(x) || signaling_nan(y) {
+    return #cast(T, nan())
+  }
+  return #cast(T, pow64(#cast(f64, x), #cast(f64, y)))
+}
+// sqrt(x * x + y * y) without intermediate overflow.
+pub fn hypot(x, y: $T) T {
+  if signaling_nan(x) || signaling_nan(y) {
+    return #cast(T, nan())
+  }
+  return #cast(T, hypot64(#cast(f64, x), #cast(f64, y)))
+}
+// a + (b - a) * t.
+pub fn lerp(a, b, t: $T) T {
+  return a + (b - a) * t
+}
+// The t for which lerp(a, b, t) is value.
+pub fn unlerp(a, b, value: $T) T {
+  return (value - a) / (b - a)
+}
+// Hermite step from 0 at edge0 to 1 at edge1.
+pub fn smoothstep(edge0, edge1, x: $T) T {
+  zero := #cast(T, 0)
+  one := #cast(T, 1)
+  t := (x - edge0) / (edge1 - edge0)
+  if t < zero {
+    t = zero
+  }
+  if t > one {
+    t = one
+  }
+  return t * t * (#cast(T, 3) - #cast(T, 2) * t)
+}
+// x wrapped into [minimum, maximum).
+pub fn wrap(x, minimum, maximum: $T) T {
+  span := maximum - minimum
+  return x - span * floor((x - minimum) / span)
+}
+
+// Bit patterns.
+const bits_7ff0000000000000: u64 = 0x7ff0000000000000
+const bits_7ff8000000000000: u64 = 0x7ff8000000000000
+const bits_7fffffffffffffff: u64 = 0x7fffffffffffffff
+const bits_8000000000000000: u64 = 0x8000000000000000
+const bits_fffffffffffff: u64 = 0x000fffffffffffff
+const bits_10000000000000: u64 = 0x0010000000000000
+
+// Bit access.
+fn high(x: f64) u32 {
+  return #cast(u32, #bitcast(u64, x) >> 32)
+}
+fn low(x: f64) u32 {
+  return #cast(u32, #bitcast(u64, x))
+}
+fn words(high_word: u32, low_word: u32) f64 {
+  return #bitcast(f64, (#cast(u64, high_word) << 32) | #cast(u64, low_word))
+}
+fn with_low(x: f64, low_word: u32) f64 {
+  return words(high(x), low_word)
+}
+// 2^n for n in -1022..1023.
+fn power2(n: i32) f64 {
+  return #bitcast(f64, #cast(u64, #cast(i64, n) + 1023) << 52)
+}
+// x * 2^n, handling overflow, underflow and subnormal results.
+fn scale(x: f64, n_value: i32) f64 {
+  n := n_value
+  y := x
+  if n > 1023 {
+    y *= power2(1023)
+    n -= 1023
+    if n > 1023 {
+      y *= power2(1023)
+      n -= 1023
+      if n > 1023 {
+        n = 1023
+      }
+    }
+  } else if n < -1022 {
+    y *= power2(-1022) * power2(53)
+    n += 1022 - 53
+    if n < -1022 {
+      y *= power2(-1022) * power2(53)
+      n += 1022 - 53
+      if n < -1022 {
+        n = -1022
+      }
+    }
+  }
+  return y * power2(n)
+}
+
+pub fn copysign64(x, sign: f64) f64 {
+  magnitude := #bitcast(u64, x) & bits_7fffffffffffffff
+  sign_bit := #bitcast(u64, sign) & bits_8000000000000000
+  return #bitcast(f64, magnitude | sign_bit)
+}
+
+pub fn trunc64(x: f64) f64 {
+  bits := #bitcast(u64, x)
+  exponent := #cast(i64, (bits >> 52) & 0x7ff) - 1023
+  if exponent >= 52 {
+    return x
+  }
+  if exponent < 0 {
+    return #bitcast(f64, bits & bits_8000000000000000)
+  }
+  mask := (#cast(u64, 1) << #cast(u64, 52 - exponent)) - 1
+  return #bitcast(f64, bits & ~mask)
+}
+pub fn floor64(x: f64) f64 {
+  t := trunc64(x)
+  if t > x {
+    return t - 1.0
+  }
+  return t
+}
+pub fn ceil64(x: f64) f64 {
+  t := trunc64(x)
+  if t < x {
+    return t + 1.0
+  }
+  return t
+}
+pub fn round64(x: f64) f64 {
+  t := trunc64(x)
+  difference := x - t
+  if difference >= 0.5 {
+    return t + 1.0
+  }
+  if difference <= -0.5 {
+    return t - 1.0
+  }
+  return t
+}
+
+// Bit-by-bit square root, adapted from fdlibm e_sqrt; nearest-even rounding.
+pub fn sqrt64(x: f64) f64 {
+  sign: u32 = 0x80000000
+  ix0 := high(x)
+  ix1 := low(x)
+  if (ix0 & 0x7ff00000) == 0x7ff00000 {
+    return x * x + x
+  }
+  if (ix0 & ~sign) | ix1 == 0 {
+    return x
+  }
+  if (ix0 & sign) != 0 {
+    return nan()
+  }
+  m := #cast(i32, ix0 >> 20)
+  if m == 0 {
+    for ix0 == 0 {
+      m -= 21
+      ix0 |= ix1 >> 11
+      ix1 = #wrap(ix1 << 21)
+    }
+    i: i32 = 0
+    for (ix0 & 0x00100000) == 0 {
+      ix0 = #wrap(ix0 << 1)
+      i += 1
+    }
+    m -= i - 1
+    if i > 0 {
+      ix0 |= ix1 >> #cast(u32, 32 - i)
+      ix1 = #wrap(ix1 << #cast(u32, i))
+    }
+  }
+  m -= 1023
+  ix0 = (ix0 & 0x000fffff) | 0x00100000
+  if (m & 1) != 0 {
+    ix0 = #wrap(ix0 + ix0 + ((ix1 & sign) >> 31))
+    ix1 = #wrap(ix1 + ix1)
+  }
+  m >>= 1
+  ix0 = #wrap(ix0 + ix0 + ((ix1 & sign) >> 31))
+  ix1 = #wrap(ix1 + ix1)
+  q: u32 = 0
+  q1: u32 = 0
+  s0: u32 = 0
+  s1: u32 = 0
+  r: u32 = 0x00200000
+  for r != 0 {
+    t := s0 + r
+    if t <= ix0 {
+      s0 = t + r
+      ix0 -= t
+      q += r
+    }
+    ix0 = #wrap(ix0 + ix0 + ((ix1 & sign) >> 31))
+    ix1 = #wrap(ix1 + ix1)
+    r >>= 1
+  }
+  r = sign
+  for r != 0 {
+    t1 := #wrap(s1 + r)
+    t := s0
+    if t < ix0 || (t == ix0 && t1 <= ix1) {
+      s1 = #wrap(t1 + r)
+      if (t1 & sign) == sign && (s1 & sign) == 0 {
+        s0 += 1
+      }
+      ix0 -= t
+      if ix1 < t1 {
+        ix0 -= 1
+      }
+      ix1 = #wrap(ix1 - t1)
+      q1 = #wrap(q1 + r)
+    }
+    ix0 = #wrap(ix0 + ix0 + ((ix1 & sign) >> 31))
+    ix1 = #wrap(ix1 + ix1)
+    r >>= 1
+  }
+  // Round to nearest, ties to even.
+  if (ix0 | ix1) != 0 {
+    if q1 == 0xffffffff {
+      q1 = 0
+      q += 1
+    } else {
+      q1 += q1 & 1
+    }
+  }
+  result_high := (q >> 1) + 0x3fe00000
+  result_low := q1 >> 1
+  if (q & 1) == 1 {
+    result_low |= sign
+  }
+  result_high = #cast(u32, #wrap(#cast(i32, result_high) + m * 1048576))
+  return words(result_high, result_low)
+}
+
+// Exact integer product and aligned sum, rounded once to the target format.
+pub fn fma64(x, y, z: f64) f64 {
+  return fused(x, y, z, 53, -1074)
+}
+
+fn fused(x, y, z: f64, precision, minimum: i32) f64 {
+  if !is_finite(x) || !is_finite(y) {
+    return x * y + z
+  }
+  if !is_finite(z) {
+    return z
+  }
+  if x == 0.0 || y == 0.0 {
+    return x * y + z
+  }
+  xs := split_float(x)
+  ys := split_float(y)
+  p_high: u64 = 0
+  p_low: u64 = 0
+  multiply_64(xs.mantissa, ys.mantissa, &p_high, &p_low)
+  p_exponent := xs.exponent + ys.exponent
+  p_negative := xs.negative != ys.negative
+  if z == 0.0 {
+    return round_wide(p_negative, p_high, p_low, p_exponent, false, precision, minimum)
+  }
+  zs := split_float(z)
+  z_high: u64 = 0
+  z_low := zs.mantissa
+  z_exponent := zs.exponent
+  // Put each leading bit at position 125, leaving room for a carry and
+  // retaining at least 72 low bits beyond the output precision. Jam the
+  // smaller operand's discarded fraction into bit zero. Cancellation can
+  // expose those bits only when the exponents are close, when alignment is exact.
+  p_shift := 126 - wide_bits(p_high, p_low)
+  shift_left_128(&p_high, &p_low, p_shift)
+  p_exponent -= p_shift
+  z_shift := 126 - wide_bits(z_high, z_low)
+  shift_left_128(&z_high, &z_low, z_shift)
+  z_exponent -= z_shift
+  if p_exponent < z_exponent {
+    jam_right(&p_high, &p_low, z_exponent - p_exponent)
+    p_exponent = z_exponent
+  } else if z_exponent < p_exponent {
+    jam_right(&z_high, &z_low, p_exponent - z_exponent)
+  }
+  r_high := p_high
+  r_low := p_low
+  negative := p_negative
+  if p_negative == zs.negative {
+    r_low = #wrap(p_low + z_low)
+    carry: u64 = 0
+    if r_low < p_low {
+      carry = 1
+    }
+    r_high = p_high + z_high + carry
+  } else if z_high > p_high || (z_high == p_high && z_low > p_low) {
+    r_low = #wrap(z_low - p_low)
+    borrow: u64 = 0
+    if z_low < p_low {
+      borrow = 1
+    }
+    r_high = z_high - p_high - borrow
+    negative = zs.negative
+  } else {
+    r_low = #wrap(p_low - z_low)
+    borrow: u64 = 0
+    if p_low < z_low {
+      borrow = 1
+    }
+    r_high = p_high - z_high - borrow
+  }
+  if r_high == 0 && r_low == 0 {
+    return 0.0
+  }
+  return round_wide(negative, r_high, r_low, p_exponent, false, precision, minimum)
+}
+
+fn wide_bits(hi, lo: u64) i32 {
+  if hi != 0 {
+    return 128 - #cast(i32, leading_zeros(hi))
+  }
+  return 64 - #cast(i32, leading_zeros(lo))
+}
+
+fn jam_right(hi, lo: *u64, shift: i32) {
+  if shift >= 128 {
+    hi.* = 0
+    lo.* = 1
+  } else if shift_right_128(hi, lo, shift) {
+    lo.* |= 1
+  }
+}
+
+struct Split { mantissa: u64, exponent: i32, negative: bool }
+
+// x = mantissa * 2^exponent, with mantissa an integer below 2^53.
+fn split_float(x: f64) Split {
+  bits := #bitcast(u64, x)
+  raw_exponent := #cast(i32, (bits >> 52) & 0x7ff)
+  mantissa := bits & bits_fffffffffffff
+  if raw_exponent == 0 {
+    raw_exponent = 1
+  } else {
+    mantissa |= bits_10000000000000
+  }
+  return Split{ mantissa: mantissa, exponent: raw_exponent - 1075, negative: (bits >> 63) != 0 }
+}
+
+fn multiply_64(a, b: u64, high_out: *u64, low_out: *u64) {
+  a_low := a & 0xffffffff
+  a_high := a >> 32
+  b_low := b & 0xffffffff
+  b_high := b >> 32
+  low_low := a_low * b_low
+  high_low := a_high * b_low
+  low_high := a_low * b_high
+  high_high := a_high * b_high
+  middle := (low_low >> 32) + (high_low & 0xffffffff) + (low_high & 0xffffffff)
+  low_out.* = #wrap(low_low & 0xffffffff | (middle << 32))
+  high_out.* = high_high + (high_low >> 32) + (low_high >> 32) + (middle >> 32)
+}
+
+fn shift_left_128(high_word: *u64, low_word: *u64, shift: i32) {
+  if shift >= 64 {
+    high_word.* = #wrap(low_word.* << #cast(u64, shift - 64))
+    low_word.* = 0
+  } else if shift > 0 {
+    high_word.* = #wrap(high_word.* << #cast(u64, shift)) | (low_word.* >> #cast(u64, 64 - shift))
+    low_word.* = #wrap(low_word.* << #cast(u64, shift))
+  }
+}
+
+// Shifts right and reports whether any set bit fell off.
+fn shift_right_128(high_word: *u64, low_word: *u64, shift: i32) bool {
+  lost := false
+  if shift >= 64 {
+    lost = low_word.* != 0 || (shift > 64 && (high_word.* & ((#cast(u64, 1) << #cast(u64, shift - 64)) - 1)) != 0)
+    if shift == 64 {
+      lost = low_word.* != 0
+    }
+    low_word.* = high_word.* >> #cast(u64, shift - 64)
+    high_word.* = 0
+  } else if shift > 0 {
+    lost = (low_word.* & ((#cast(u64, 1) << #cast(u64, shift)) - 1)) != 0
+    low_word.* = (low_word.* >> #cast(u64, shift)) | #wrap(high_word.* << #cast(u64, 64 - shift))
+    high_word.* = high_word.* >> #cast(u64, shift)
+  }
+  return lost
+}
+
+// Rounds (high:low) * 2^exponent, plus a sticky fraction below it, to the
+// nearest f64, ties to even.
+fn round_wide(negative: bool, high_value: u64, low_value: u64, exponent_value: i32, sticky_value: bool, precision, minimum_exponent: i32) f64 {
+  high_word := high_value
+  low_word := low_value
+  exponent := exponent_value
+  sticky := sticky_value
+  // Keep the target precision plus a round bit in low_word, collecting
+  // the discarded lower bits into sticky.
+  bits: i32 = 0
+  if high_word != 0 {
+    bits = 128 - #cast(i32, leading_zeros(high_word))
+  } else {
+    bits = 64 - #cast(i32, leading_zeros(low_word))
+  }
+  if bits > precision + 1 {
+    shift := bits - precision - 1
+    if shift_right_128(&high_word, &low_word, shift) {
+      sticky = true
+    }
+    exponent += shift
+  } else if bits < precision + 1 {
+    shift := precision + 1 - bits
+    shift_left_128(&high_word, &low_word, shift)
+    exponent -= shift
+  }
+  // Subnormal results: shift further so the exponent reaches the minimum.
+  minimum := minimum_exponent - 1
+  if exponent < minimum {
+    shift := minimum - exponent
+    if shift > 60 {
+      if low_word != 0 {
+        sticky = true
+      }
+      low_word = 0
+    } else if shift_right_128(&high_word, &low_word, shift) {
+      sticky = true
+    }
+    exponent = minimum
+  }
+  round_bit := low_word & 1
+  mantissa := low_word >> 1
+  if round_bit != 0 && (sticky || (mantissa & 1) != 0) {
+    mantissa += 1
+  }
+  result := scale(#cast(f64, mantissa), exponent + 1)
+  if negative {
+    return -result
+  }
+  return result
+}
+
+// fdlibm-style kernels below. Constants are the published fdlibm values.
+
+pub fn exp64(x: f64) f64 {
+  if is_nan(x) {
+    return x
+  }
+  if x > 709.782712893383973096 {
+    return inf()
+  }
+  if x < -745.13321910194110842 {
+    return 0.0
+  }
+  ln2_high: f64 = 6.93147180369123816490e-01
+  ln2_low: f64 = 1.90821492927058770002e-10
+  inverse_ln2: f64 = 1.44269504088896338700e+00
+  absolute := x
+  if absolute < 0.0 {
+    absolute = -absolute
+  }
+  if absolute < 3.7252902984e-09 {
+    return 1.0 + x
+  }
+  k := round64(x * inverse_ln2)
+  high_part := x - k * ln2_high
+  low_part := k * ln2_low
+  r := high_part - low_part
+  z := r * r
+  c := r - z * (1.66666666666666019037e-01 + z * (-2.77777777770155933842e-03 + z * (6.61375632143793436117e-05 + z * (-1.65339022054652515390e-06 + z * 4.13813679705723846039e-08))))
+  y: f64 = 1.0 - ((low_part - (r * c) / (2.0 - c)) - high_part)
+  return scale(y, #cast(i32, k))
+}
+
+pub fn exp2_64(x: f64) f64 {
+  if is_nan(x) {
+    return x
+  }
+  if x >= 1024.0 {
+    return inf()
+  }
+  if x < -1075.0 {
+    return 0.0
+  }
+  k := round64(x)
+  f := x - k
+  return scale(exp64(f * ln2), #cast(i32, k))
+}
+
+// log of m in [sqrt(2)/2, sqrt(2)) through s = f / (2 + f) (fdlibm e_log).
+struct Reduced { k: i32, f: f64 }
+
+fn reduce_log(value: f64) Reduced {
+  x := value
+  k: i32 = 0
+  hx := high(x)
+  if hx < 0x00100000 {
+    x *= power2(54)
+    k -= 54
+    hx = high(x)
+  }
+  hx += 0x3ff00000 - 0x3fe6a09e
+  k += #cast(i32, hx >> 20) - 0x3ff
+  hx = (hx & 0x000fffff) + 0x3fe6a09e
+  x = words(hx, low(x))
+  return Reduced{ k: k, f: x - 1.0 }
+}
+
+fn log_tail(f: f64) f64 {
+  hfsq: f64 = 0.5 * f * f
+  s := f / (2.0 + f)
+  z := s * s
+  w := z * z
+  t1 := w * (3.999999999940941908e-01 + w * (2.222219843214978396e-01 + w * 1.531383769920937332e-01))
+  t2 := z * (6.666666666666735130e-01 + w * (2.857142874366239149e-01 + w * (1.818357216161805012e-01 + w * 1.479819860511658591e-01)))
+  return s * (hfsq + t2 + t1) - hfsq
+}
+
+fn log_special(x: f64) bool {
+  return is_nan(x) || x <= 0.0 || x == inf()
+}
+
+fn log_special_value(x: f64) f64 {
+  if is_nan(x) || x == inf() {
+    return x
+  }
+  if x == 0.0 {
+    return -inf()
+  }
+  return nan()
+}
+
+pub fn log64(x: f64) f64 {
+  if log_special(x) {
+    return log_special_value(x)
+  }
+  reduced := reduce_log(x)
+  dk := #cast(f64, reduced.k)
+  return dk * 6.93147180369123816490e-01 + (reduced.f + (log_tail(reduced.f) + dk * 1.90821492927058770002e-10))
+}
+
+// log2 and log10 follow musl: hi + lo with hi's low word cleared, so the
+// leading products are exact.
+struct Split2 { high: f64, low: f64, k: f64 }
+
+fn log_parts(x: f64) Split2 {
+  reduced := reduce_log(x)
+  f := reduced.f
+  hfsq: f64 = 0.5 * f * f
+  s := f / (2.0 + f)
+  z := s * s
+  w := z * z
+  t1 := w * (3.999999999940941908e-01 + w * (2.222219843214978396e-01 + w * 1.531383769920937332e-01))
+  t2 := z * (6.666666666666735130e-01 + w * (2.857142874366239149e-01 + w * (1.818357216161805012e-01 + w * 1.479819860511658591e-01)))
+  hi := with_low(f - hfsq, 0)
+  lo := f - hi - hfsq + s * (hfsq + t2 + t1)
+  return Split2{ high: hi, low: lo, k: #cast(f64, reduced.k) }
+}
+
+pub fn log2_64(x: f64) f64 {
+  if log_special(x) {
+    return log_special_value(x)
+  }
+  parts := log_parts(x)
+  inverse_high: f64 = 1.44269504072144627571e+00
+  inverse_low: f64 = 1.67517131648865118353e-10
+  value_high := parts.high * inverse_high
+  value_low := (parts.low + parts.high) * inverse_low + parts.low * inverse_high
+  w := parts.k + value_high
+  value_low += (parts.k - w) + value_high
+  return value_low + w
+}
+
+pub fn log10_64(x: f64) f64 {
+  if log_special(x) {
+    return log_special_value(x)
+  }
+  reduced := reduce_log(x)
+  logarithm := logarithm_dd(reduced.f)
+  fraction := dd_mul(logarithm, DoubleDouble{ hi: 4.34294481903251816668e-01, lo: 1.098319650216765073e-17 })
+  exponent := dd_mul(DoubleDouble{ hi: #cast(f64, reduced.k), lo: 0.0 }, DoubleDouble{ hi: 3.01029995663981198017e-01, lo: -2.803728127785170391e-18 })
+  result := dd_add(exponent, fraction)
+  return result.hi + result.lo
+}
+
+pub fn hypot64(x_value, y_value: f64) f64 {
+  if signaling_nan(x_value) || signaling_nan(y_value) {
+    return nan()
+  }
+  x := x_value
+  y := y_value
+  if x < 0.0 {
+    x = -x
+  }
+  if y < 0.0 {
+    y = -y
+  }
+  if x == inf() || y == inf() {
+    return inf()
+  }
+  if is_nan(x) || is_nan(y) {
+    return x + y
+  }
+  if x < y {
+    t := x
+    x = y
+    y = t
+  }
+  if x == 0.0 {
+    return 0.0
+  }
+  // Scale the larger operand near 1 and split the products to reduce
+  // rounding error in the sum of squares.
+  exponent := #cast(i32, (high(x) >> 20) & 0x7ff) - 1023
+  if exponent < -1000 {
+    exponent = -1000
+  }
+  x = scale(x, -exponent)
+  y = scale(y, -exponent)
+  x_high := with_low(x, 0)
+  y_high := with_low(y, 0)
+  x_low := x - x_high
+  y_low := y - y_high
+  square_high := x_high * x_high + y_high * y_high
+  square_low := (x + x_high) * x_low + (y + y_high) * y_low
+  return scale(sqrt64(square_high + square_low), exponent)
+}
+
+// Trigonometry. Arguments are reduced modulo pi/2 into y0 + y1.
+struct Remainder { n: i32, y0: f64, y1: f64 }
+
+// The 2/pi digits and fdlibm kernels above/below derive from Sun fdlibm,
+// via musl src/math/__rem_pio2_large.c (upstream consulted 2026-10-23):
+// https://git.musl-libc.org/cgit/musl/tree/src/math/__rem_pio2_large.c
+// Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+// Developed at SunSoft, a Sun Microsystems, Inc. business.
+// Permission to use, copy, modify, and distribute this software is freely
+// granted, provided that this notice is preserved.
+// The fixed integer multiplication/reconstruction here is a new implementation.
+const two_over_pi: [66]u64 = [
+  0xA2F983, 0x6E4E44, 0x1529FC, 0x2757D1, 0xF534DD, 0xC0DB62,
+  0x95993C, 0x439041, 0xFE5163, 0xABDEBB, 0xC561B7, 0x246E3A,
+  0x424DD2, 0xE00649, 0x2EEA09, 0xD1921C, 0xFE1DEB, 0x1CB129,
+  0xA73EE8, 0x8235F5, 0x2EBB44, 0x84E99C, 0x7026B4, 0x5F7E41,
+  0x3991D6, 0x398353, 0x39F49C, 0x845F8B, 0xBDF928, 0x3B1FF8,
+  0x97FFDE, 0x05980F, 0xEF2F11, 0x8B5A0A, 0x6D1F6D, 0x367ECF,
+  0x27CB09, 0xB74F46, 0x3F669E, 0x5FEA2D, 0x7527BA, 0xC7EBE5,
+  0xF17B3D, 0x0739F7, 0x8A5292, 0xEA6BFB, 0x5FB11F, 0x8D5D08,
+  0x560330, 0x46FC7B, 0x6BABF0, 0xCFBC20, 0x9AF436, 0x1DA9E3,
+  0x91615E, 0xE61B08, 0x659985, 0x5F14A0, 0x68408D, 0xFFD880,
+  0x4D7327, 0x310606, 0x1556CA, 0x73A8C9, 0x60E27B, 0xC08C6B
+]
+
+fn reduction_bit(product: *[69]u64, position: i32) u64 {
+  if position < 0 || position >= 1656 {
+    return 0
+  }
+  return (product.*[#cast(usize, position / 24)] >> #cast(u64, position % 24)) & 1
+}
+
+// Payne-Hanek reduction: enough 2/pi digits for every finite binary64 input,
+// with over 500 extra fractional bits even at the largest exponent.
+fn reduce_pi2_large(x: f64) Remainder {
+  xs := split_float(x)
+  product: [69]u64
+  j: i32 = 0
+  for j < 3 {
+    chunk := (xs.mantissa >> #cast(u64, j * 24)) & 0xffffff
+    carry: u64 = 0
+    i: i32 = 0
+    for i < 66 {
+      index := #cast(usize, i + j)
+      v := product[index] + two_over_pi[#cast(usize, 65 - i)] * chunk + carry
+      product[index] = v & 0xffffff
+      carry = v >> 24
+      i += 1
+    }
+    product[#cast(usize, 66 + j)] = carry
+    j += 1
+  }
+  point := 1584 - xs.exponent
+  n := #cast(i32, reduction_bit(&product, point) + 2 * reduction_bit(&product, point + 1))
+  upward := reduction_bit(&product, point - 1) != 0
+  // Retain only the fraction. For rounding upward form its positive complement
+  // before converting, so a near-integer argument never subtracts from 1.0.
+  i: i32 = 0
+  for i < 69 {
+    left := point - i * 24
+    if left <= 0 {
+      product[#cast(usize, i)] = 0
+    }
+    else if left < 24 {
+      product[#cast(usize, i)] &= (#cast(u64, 1) << #cast(u64, left)) - 1
+    }
+    i += 1
+  }
+  if upward {
+    n = (n + 1) & 3
+    carry: u64 = 1
+    i = 0
+    for i * 24 < point {
+      width := point - i * 24
+      if width > 24 {
+        width = 24
+      }
+      mask := (#cast(u64, 1) << #cast(u64, width)) - 1
+      v := (product[#cast(usize, i)] ^ mask) + carry
+      product[#cast(usize, i)] = v & mask
+      carry = v >> #cast(u64, width)
+      i += 1
+    }
+  }
+  top := point - 1
+  for top >= 0 && reduction_bit(&product, top) == 0 {
+    top -= 1
+  }
+  hi: u64 = 0
+  lo: u64 = 0
+  i = 0
+  for i < 53 {
+    hi = (hi << 1) | reduction_bit(&product, top - i)
+    lo = (lo << 1) | reduction_bit(&product, top - 53 - i)
+    i += 1
+  }
+  a := scale(#cast(f64, hi), top - point - 52)
+  b := scale(#cast(f64, lo), top - point - 105)
+  pio2_hi: f64 = 1.57079632679489655800
+  pio2_lo: f64 = 6.12323399573676603587e-17
+  h := a * pio2_hi
+  l := two_product_error(a, pio2_hi, h) + a * pio2_lo + b * pio2_hi
+  y0 := h + l
+  y1 := (h - y0) + l
+  if upward {
+    y0 = -y0
+    y1 = -y1
+  }
+  if xs.negative {
+    n = (-n) & 3
+    y0 = -y0
+    y1 = -y1
+  }
+  return Remainder{ n: n, y0: y0, y1: y1 }
+}
+
+fn reduce_pi2(x: f64) Remainder {
+  if (high(x) & 0x7fffffff) >= 0x41300000 {
+    return reduce_pi2_large(x)
+  }
+  inverse_pio2: f64 = 6.36619772367581382433e-01
+  pio2_1: f64 = 1.57079632673412561417e+00
+  pio2_1t: f64 = 6.07710050650619224932e-11
+  pio2_2: f64 = 6.07710050630396597660e-11
+  pio2_2t: f64 = 2.02226624879595063154e-21
+  pio2_3: f64 = 2.02226624871116645580e-21
+  pio2_3t: f64 = 8.47842766036889956997e-32
+  fn_value := round_even(x * inverse_pio2)
+  r := x - fn_value * pio2_1
+  w := fn_value * pio2_1t
+  y0 := r - w
+  exponent := #cast(i32, (high(x) >> 20) & 0x7ff)
+  if exponent - #cast(i32, (high(y0) >> 20) & 0x7ff) > 16 {
+    t := r
+    w = fn_value * pio2_2
+    r = t - w
+    w = fn_value * pio2_2t - ((t - r) - w)
+    y0 = r - w
+    if exponent - #cast(i32, (high(y0) >> 20) & 0x7ff) > 49 {
+      t = r
+      w = fn_value * pio2_3
+      r = t - w
+      w = fn_value * pio2_3t - ((t - r) - w)
+      y0 = r - w
+    }
+  }
+  y1 := (r - y0) - w
+  return Remainder{ n: #cast(i32, #cast(i64, fn_value) & 3), y0: y0, y1: y1 }
+}
+
+fn round_even(x: f64) f64 {
+  // Adding and subtracting 1.5 * 2^52 rounds to the nearest integer.
+  magic: f64 = 6755399441055744.0
+  if x >= 0.0 {
+    return (x + magic) - magic
+  }
+  return -((-x + magic) - magic)
+}
+
+fn kernel_sin(x, y: f64, has_tail: bool) f64 {
+  z := x * x
+  w := z * z
+  r: f64 = 8.33333333332248946124e-03 + z * (-1.98412698298579493134e-04 + z * 2.75573137070700676789e-06) + z * w * (-2.50507602534068634195e-08 + z * 1.58969099521155010221e-10)
+  v := z * x
+  if !has_tail {
+    return x + v * (-1.66666666666666324348e-01 + z * r)
+  }
+  return x - ((z * (0.5 * y - v * r) - y) - v * -1.66666666666666324348e-01)
+}
+
+fn kernel_cos(x, y: f64) f64 {
+  z := x * x
+  w := z * z
+  r := z * (4.16666666666666019037e-02 + z * (-1.38888888888741095749e-03 + z * 2.48015872894767294178e-05)) + w * w * (-2.75573143513906633035e-07 + z * (2.08757232129817482790e-09 + z * -1.13596475577881948265e-11))
+  hz: f64 = 0.5 * z
+  w = 1.0 - hz
+  return w + (((1.0 - w) - hz) + (z * r - x * y))
+}
+
+fn kernel_tan(x_value, y_value: f64, odd: bool) f64 {
+  x := x_value
+  y := y_value
+  hx := high(x)
+  big := (hx & 0x7fffffff) >= 0x3fe59428
+  negative := (hx >> 31) != 0
+  if big {
+    if negative {
+      x = -x
+      y = -y
+    }
+    x = (7.85398163397448278999e-01 - x) + (3.06161699786838301793e-17 - y)
+    y = 0.0
+  }
+  z := x * x
+  w := z * z
+  r: f64 = 1.33333333333201242699e-01 + w * (2.18694882948595424599e-02 + w * (3.59207910759131235356e-03 + w * (5.88041240820264096874e-04 + w * (7.81794442939557092300e-05 + w * -1.85586374855275456654e-05))))
+  v := z * (5.39682539762260521377e-02 + w * (8.86323982359930005737e-03 + w * (1.45620945432529025516e-03 + w * (2.46463134818469906812e-04 + w * (7.14072491382608190305e-05 + w * 2.59073051863633712884e-05)))))
+  s := z * x
+  r = y + z * (s * (r + v) + y) + s * 3.33333333333334091986e-01
+  w = x + r
+  if big {
+    sign_value: f64 = 1.0
+    if odd {
+      sign_value = -1.0
+    }
+    v = sign_value - 2.0 * (x + (r - w * w / (w + sign_value)))
+    if negative {
+      return -v
+    }
+    return v
+  }
+  if !odd {
+    return w
+  }
+  w0 := with_low(w, 0)
+  v = r - (w0 - x)
+  a: f64 = -1.0 / w
+  a0 := with_low(a, 0)
+  return a0 + a * (1.0 + a0 * w0 + a0 * v)
+}
+
+fn small_angle(x: f64) bool {
+  return (high(x) & 0x7fffffff) <= 0x3fe921fb
+}
+
+pub fn sin64(x: f64) f64 {
+  if x == 0.0 {
+    return x
+  }
+  if !is_finite(x) {
+    return nan()
+  }
+  if small_angle(x) {
+    return kernel_sin(x, 0.0, false)
+  }
+  reduced := reduce_pi2(x)
+  if reduced.n == 0 {
+    return kernel_sin(reduced.y0, reduced.y1, true)
+  }
+  if reduced.n == 1 {
+    return kernel_cos(reduced.y0, reduced.y1)
+  }
+  if reduced.n == 2 {
+    return -kernel_sin(reduced.y0, reduced.y1, true)
+  }
+  return -kernel_cos(reduced.y0, reduced.y1)
+}
+
+pub fn cos64(x: f64) f64 {
+  if !is_finite(x) {
+    return nan()
+  }
+  if small_angle(x) {
+    return kernel_cos(x, 0.0)
+  }
+  reduced := reduce_pi2(x)
+  if reduced.n == 0 {
+    return kernel_cos(reduced.y0, reduced.y1)
+  }
+  if reduced.n == 1 {
+    return -kernel_sin(reduced.y0, reduced.y1, true)
+  }
+  if reduced.n == 2 {
+    return -kernel_cos(reduced.y0, reduced.y1)
+  }
+  return kernel_sin(reduced.y0, reduced.y1, true)
+}
+
+pub fn tan64(x: f64) f64 {
+  if x == 0.0 {
+    return x
+  }
+  if !is_finite(x) {
+    return nan()
+  }
+  if small_angle(x) {
+    return kernel_tan(x, 0.0, false)
+  }
+  reduced := reduce_pi2(x)
+  return kernel_tan(reduced.y0, reduced.y1, (reduced.n & 1) != 0)
+}
+
+pub fn atan64(x_value: f64) f64 {
+  x := x_value
+  hx := high(x)
+  negative := (hx >> 31) != 0
+  ix := hx & 0x7fffffff
+  if ix >= 0x44100000 {
+    if is_nan(x) {
+      return x
+    }
+    if negative {
+      return -(1.57079632679489655800e+00 + 6.12323399573676603587e-17)
+    }
+    return 1.57079632679489655800e+00 + 6.12323399573676603587e-17
+  }
+  id: i32 = -1
+  if ix < 0x3fdc0000 {
+    if ix < 0x3e400000 {
+      return x
+    }
+  } else {
+    if x < 0.0 {
+      x = -x
+    }
+    if ix < 0x3ff30000 {
+      if ix < 0x3fe60000 {
+        id = 0
+        x = (2.0 * x - 1.0) / (2.0 + x)
+      } else {
+        id = 1
+        x = (x - 1.0) / (x + 1.0)
+      }
+    } else if ix < 0x40038000 {
+      id = 2
+      x = (x - 1.5) / (1.0 + 1.5 * x)
+    } else {
+      id = 3
+      x = -1.0 / x
+    }
+  }
+  z := x * x
+  w := z * z
+  s1 := z * (3.33333333333329318027e-01 + w * (1.42857142725034663711e-01 + w * (9.09088713343650656196e-02 + w * (6.66107313738753120669e-02 + w * (4.97687799461593236017e-02 + w * 1.62858201153657823623e-02)))))
+  s2 := w * (-1.99999999998764832476e-01 + w * (-1.11111104054623557880e-01 + w * (-7.69187620504482999495e-02 + w * (-5.83357013379057348645e-02 + w * -3.65315727442169155270e-02))))
+  if id < 0 {
+    return x - x * (s1 + s2)
+  }
+  high_parts: [4]f64 = [4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00]
+  low_parts: [4]f64 = [2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17]
+  index := #cast(usize, id)
+  result := high_parts[index] - ((x * (s1 + s2) - low_parts[index]) - x)
+  if negative {
+    return -result
+  }
+  return result
+}
+
+pub fn atan2_64(y, x: f64) f64 {
+  pi_low: f64 = 1.2246467991473531772e-16
+  if is_nan(x) || is_nan(y) {
+    return x + y
+  }
+  if x == 1.0 {
+    return atan64(y)
+  }
+  y_negative := (high(y) >> 31) != 0
+  x_negative := (high(x) >> 31) != 0
+  m: i32 = 0
+  if y_negative {
+    m |= 1
+  }
+  if x_negative {
+    m |= 2
+  }
+  if y == 0.0 {
+    if m <= 1 {
+      return y
+    }
+    if m == 2 {
+      return pi
+    }
+    return -pi
+  }
+  if x == 0.0 {
+    if y_negative {
+      return -pi / 2.0
+    }
+    return pi / 2.0
+  }
+  if is_inf(x) {
+    if is_inf(y) {
+      quarter: [4]f64 = [pi / 4.0, -pi / 4.0, 3.0 * pi / 4.0, -3.0 * pi / 4.0]
+      return quarter[#cast(usize, m)]
+    }
+    whole: [4]f64 = [0.0, -0.0, pi, -pi]
+    return whole[#cast(usize, m)]
+  }
+  ix := high(x) & 0x7fffffff
+  iy := high(y) & 0x7fffffff
+  if is_inf(y) || ix + (64 << 20) < iy {
+    if y_negative {
+      return -pi / 2.0
+    }
+    return pi / 2.0
+  }
+  z: f64 = 0.0
+  if x_negative && iy + (64 << 20) < ix {
+    z = 0.0
+  } else {
+    ratio := copysign64(y / x, 1.0)
+    z = atan64(ratio)
+  }
+  if m == 0 {
+    return z
+  }
+  if m == 1 {
+    return -z
+  }
+  if m == 2 {
+    return pi - (z - pi_low)
+  }
+  return (z - pi_low) - pi
+}
+
+fn asin_ratio(z: f64) f64 {
+  p := z * (1.66666666666666657415e-01 + z * (-3.25565818622400915405e-01 + z * (2.01212532134862925881e-01 + z * (-4.00555345006794114027e-02 + z * (7.91534994289814532176e-04 + z * 3.47933107596021167570e-05)))))
+  q: f64 = 1.0 + z * (-2.40339491173441421878e+00 + z * (2.02094576023350569471e+00 + z * (-6.88283971605453293030e-01 + z * 7.70381505559019352791e-02)))
+  return p / q
+}
+
+pub fn asin64(x: f64) f64 {
+  pio2_high: f64 = 1.57079632679489655800e+00
+  pio2_low: f64 = 6.12323399573676603587e-17
+  hx := high(x)
+  ix := hx & 0x7fffffff
+  negative := (hx >> 31) != 0
+  if ix >= 0x3ff00000 {
+    if ((ix - 0x3ff00000) | low(x)) == 0 {
+      return x * pio2_high + x * 7.52316384526264005e-37
+    }
+    return nan()
+  }
+  if ix < 0x3fe00000 {
+    if ix < 0x3e500000 && ix >= 0x00100000 {
+      return x
+    }
+    return x + x * asin_ratio(x * x)
+  }
+  absolute := x
+  if negative {
+    absolute = -x
+  }
+  z := (1.0 - absolute) * 0.5
+  s := sqrt64(z)
+  r := asin_ratio(z)
+  result: f64 = 0.0
+  if ix >= 0x3fef3333 {
+    result = pio2_high - (2.0 * (s + s * r) - pio2_low)
+  } else {
+    f := with_low(s, 0)
+    c := (z - f * f) / (s + f)
+    result = 0.5 * pio2_high - (2.0 * s * r - (pio2_low - 2.0 * c) - (0.5 * pio2_high - 2.0 * f))
+  }
+  if negative {
+    return -result
+  }
+  return result
+}
+
+pub fn acos64(x: f64) f64 {
+  pio2_high: f64 = 1.57079632679489655800e+00
+  pio2_low: f64 = 6.12323399573676603587e-17
+  hx := high(x)
+  ix := hx & 0x7fffffff
+  negative := (hx >> 31) != 0
+  if ix >= 0x3ff00000 {
+    if ((ix - 0x3ff00000) | low(x)) == 0 {
+      if negative {
+        return 2.0 * pio2_high + 7.52316384526264005e-37
+      }
+      return 0.0
+    }
+    return nan()
+  }
+  if ix < 0x3fe00000 {
+    if ix <= 0x3c600000 {
+      return pio2_high + 7.52316384526264005e-37
+    }
+    return pio2_high - (x - (pio2_low - x * asin_ratio(x * x)))
+  }
+  if negative {
+    z := (1.0 + x) * 0.5
+    s := sqrt64(z)
+    w := asin_ratio(z) * s - pio2_low
+    return 2.0 * (pio2_high - (s + w))
+  }
+  z := (1.0 - x) * 0.5
+  s := sqrt64(z)
+  f := with_low(s, 0)
+  c := (z - f * f) / (s + f)
+  w := asin_ratio(z) * s + c
+  return 2.0 * (f + w)
+}
+
+// x^y, using a compensated logarithm/product for finite positive magnitudes.
+pub fn pow64(x, y: f64) f64 {
+  if signaling_nan(x) || signaling_nan(y) {
+    return nan()
+  }
+  if y == 0.0 || x == 1.0 {
+    return 1.0
+  }
+  if is_nan(x) || is_nan(y) {
+    return x + y
+  }
+  y_integer := trunc64(y) == y
+  y_odd := y_integer && is_odd(y)
+  if x == 0.0 {
+    negative_zero := (high(x) >> 31) != 0
+    if y < 0.0 {
+      if y_odd && negative_zero {
+        return -inf()
+      }
+      return inf()
+    }
+    if y_odd && negative_zero {
+      return -0.0
+    }
+    return 0.0
+  }
+  if is_inf(y) {
+    absolute := x
+    if absolute < 0.0 {
+      absolute = -absolute
+    }
+    if absolute == 1.0 {
+      return 1.0
+    }
+    if (absolute > 1.0) == (y > 0.0) {
+      return inf()
+    }
+    return 0.0
+  }
+  if is_inf(x) {
+    if x < 0.0 {
+      return pow64(-0.0, -y)
+    }
+    if y < 0.0 {
+      return 0.0
+    }
+    return inf()
+  }
+  negative := false
+  base := x
+  if x < 0.0 {
+    if !y_integer {
+      return nan()
+    }
+    negative = y_odd
+    base = -x
+  }
+  result := pow_positive(base, y)
+  if negative {
+    return -result
+  }
+  return result
+}
+
+// Veltkamp split into 26-bit halves.
+fn split_high(a: f64) f64 {
+  c: f64 = 134217729.0 * a
+  return c - (c - a)
+}
+// a * b - product exactly, for product the rounded a * b.
+fn two_product_error(a, b, product: f64) f64 {
+  a_high := split_high(a)
+  a_low := a - a_high
+  b_high := split_high(b)
+  b_low := b - b_high
+  return ((a_high * b_high - product) + a_high * b_low + a_low * b_high) + a_low * b_low
+}
+
+fn is_odd(y: f64) bool {
+  half := y * 0.5
+  return trunc64(half) != half
+}
+
+// Double-double operations use the portable fused integer implementation.
+struct DoubleDouble { hi: f64, lo: f64 }
+
+fn dd_add(a, b: DoubleDouble) DoubleDouble {
+  h := a.hi + b.hi
+  v := h - a.hi
+  l := (a.hi - (h - v)) + (b.hi - v) + a.lo + b.lo
+  r := h + l
+  return DoubleDouble{ hi: r, lo: (h - r) + l }
+}
+fn dd_mul(a, b: DoubleDouble) DoubleDouble {
+  h := a.hi * b.hi
+  l := fma64(a.hi, b.hi, -h) + a.hi * b.lo + a.lo * b.hi
+  r := h + l
+  return DoubleDouble{ hi: r, lo: (h - r) + l }
+}
+fn dd_div_integer(a: DoubleDouble, n: f64) DoubleDouble {
+  h := a.hi / n
+  l := (fma64(-h, n, a.hi) + a.lo) / n
+  r := h + l
+  return DoubleDouble{ hi: r, lo: (h - r) + l }
+}
+
+// log(m) = 2 atanh((m-1)/(m+1)); |s| < 0.172. Twenty-six terms
+// leave a truncation error below 2^-130. This is not a global pow ulp proof:
+// double-double rounding and the final exp approximation also contribute.
+fn logarithm_dd(f: f64) DoubleDouble {
+  d: f64 = 2.0 + f
+  dl: f64 = (2.0 - d) + f
+  h := f / d
+  l := (fma64(-h, d, f) - h * dl) / d
+  term := DoubleDouble{ hi: h, lo: l }
+  square := dd_mul(term, term)
+  sum := term
+  n: i32 = 3
+  for n <= 51 {
+    term = dd_mul(term, square)
+    sum = dd_add(sum, dd_div_integer(term, #cast(f64, n)))
+    n += 2
+  }
+  return DoubleDouble{ hi: 2.0 * sum.hi, lo: 2.0 * sum.lo }
+}
+
+fn pow_positive(base, y: f64) f64 {
+  if y == 1.0 {
+    return base
+  }
+  if y == -1.0 {
+    return 1.0 / base
+  }
+  reduced := reduce_log(base)
+  logarithm := logarithm_dd(reduced.f)
+  inverse := DoubleDouble{ hi: 1.44269504088896338700, lo: 2.035527374093103311e-17 }
+  t := dd_add(DoubleDouble{ hi: #cast(f64, reduced.k), lo: 0.0 }, dd_mul(logarithm, inverse))
+  // Avoid infinite products and the invalid residual infinity - infinity.
+  estimate := y * t.hi
+  if estimate > 1025.0 {
+    return inf()
+  }
+  if estimate < -1080.0 {
+    return 0.0
+  }
+  product := dd_mul(DoubleDouble{ hi: y, lo: 0.0 }, t)
+  sum := product.hi + product.lo
+  if product.hi > 1024.0 || (product.hi == 1024.0 && product.lo >= 0.0) {
+    return inf()
+  }
+  if product.hi < -1075.0 {
+    return 0.0
+  }
+  if product.hi == -1075.0 {
+    // A positive residual lies above the half-minimum-subnormal tie even
+    // when exp of that residual would round to exactly 1 in binary64.
+    if product.lo > 0.0 {
+      return #bitcast(f64, #cast(u64, 1))
+    }
+    return 0.0
+  }
+  n := round64(sum)
+  fraction := dd_add(product, DoubleDouble{ hi: -n, lo: 0.0 })
+  argument := dd_mul(fraction, DoubleDouble{ hi: ln2, lo: 2.319046813846299558e-17 })
+  result := exp64(argument.hi)
+  result = fma64(result, argument.lo, result)
+  return scale(result, #cast(i32, n))
+}
