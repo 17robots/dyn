@@ -131,9 +131,10 @@ fn main() {''']
         # Target isolation must preserve the existing Linux temporary helpers.
         (src/'main.dyn').write_text('''use "std/testing" t
 use "std/fs" fs
+use "std/mem" mem
 fn main() {
-  path: [4096]u8 = []
-  created := t.temporary_directory(path[..], "dyn-performance-contract")
+  arena: mem.Arena
+  created := t.temporary_directory(&arena, "dyn-performance-contract")
   t.expect(created.ok && created.directory.active, "temporary directory")
   frames: [4]fs.RemovalFrame = []
   scratch: [4096]u8 = []

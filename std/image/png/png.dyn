@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/compress/deflate" deflate
 
 pub struct Info { width: u32, height: u32, channels: u8, ok: bool }
@@ -107,7 +108,7 @@ fn add_byte(value: u8, predictor: u8) u8 {
 }
 
 // Decodes non-interlaced 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG.
-pub fn decode(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u8) Result {
+fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u8) Result {
   info := inspect(source)
   if !info.ok {
     return Result{ error: -22 }
@@ -158,7 +159,8 @@ pub fn decode(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u
   if (cmf & 15) != 8 || (cmf >> 4) > 7 || header_value % 31 != 0 || (flg & 32) != 0 {
     return Result{ info: info, error: -74 }
   }
-  inflated := deflate.inflate(scanlines[..scanline_size], compressed[2..compressed_used - 4])
+  inflater := deflate.InflateState{}
+  inflated := deflate.resume(&inflater, scanlines[..scanline_size], compressed[2..compressed_used - 4])
   if !inflated.ok || inflated.written != scanline_size || adler32(scanlines[..scanline_size]) != u32be(compressed, compressed_used - 4) {
     return Result{ info: info, error: -74 }
   }
@@ -235,8 +237,7 @@ fn append_chunk(destination: []u8, at: usize, kind: []const u8, payload: []const
 }
 
 // Encodes tightly packed 8-bit grayscale, grayscale-alpha, RGB, or RGBA pixels.
-// `scanlines` and `compressed` are caller-owned workspaces.
-pub fn encode(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []const u8,
+fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []const u8,
   width: u32, height: u32, channels: u8) EncodeResult {
   if width == 0 || height == 0 || channels < 1 || channels > 4 {
     return EncodeResult{ error: -22 }
@@ -293,4 +294,46 @@ pub fn encode(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []co
     return EncodeResult{ error: -28 }
   }
   return EncodeResult{ data: destination[..at], ok: true }
+}
+
+// Decodes non-interlaced 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG.
+// Pixels are in arena; failure pushes nothing.
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  info := inspect(source)
+  if !info.ok {
+    return Result{ error: -22 }
+  }
+  row_size := #cast(usize, info.width) * #cast(usize, info.channels)
+  mark := mem.arena_mark(arena)
+  pixels := mem.push_bytes_uninit(arena, row_size * #cast(usize, info.height))
+  workspace := mem.arena_mark(arena)
+  compressed := mem.push_bytes_uninit(arena, #len(source))
+  scanlines := mem.push_bytes_uninit(arena, (row_size + 1) * #cast(usize, info.height))
+  result := decode_into(pixels, compressed, scanlines, source)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+    return result
+  }
+  mem.arena_rewind(arena, workspace)
+  return result
+}
+
+// Encodes tightly packed 8-bit grayscale, grayscale-alpha, RGB, or RGBA pixels
+// into arena.
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult {
+  scanline_size := (#cast(usize, width) * #cast(usize, channels) + 1) * #cast(usize, height)
+  compressed_size := scanline_size + (scanline_size / 65535 + 1) * 5 + 6
+  mark := mem.arena_mark(arena)
+  destination := mem.push_bytes_uninit(arena, compressed_size + 64)
+  workspace := mem.arena_mark(arena)
+  scanlines := mem.push_bytes_uninit(arena, scanline_size)
+  compressed := mem.push_bytes_uninit(arena, compressed_size)
+  result := encode_into(destination, scanlines, compressed, pixels, width, height, channels)
+  mem.arena_rewind(arena, workspace)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+    return result
+  }
+  mem.arena_rewind(arena, mark + #len(result.data))
+  return result
 }

@@ -14,6 +14,25 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking:** one way to produce variable-size data: the function takes
+  `arena: *mem.Arena` first and returns the result in it. Removed the
+  caller-buffer forms and size companions: `strings.clone_into`, `join_size`,
+  `join_into`, `split_count`, `split_into`; codec `encoded_size` and
+  `decoded_size`; `zstd.compress_into` and `decompress_into`; `tls`
+  `*_create_into`; `c.string_from_arena` (now `string_from_bytes(arena,
+  source)`). Converted to arena-first: `strings.replace`, `fmt` number
+  formatting, hex/base32/base64 `encode` and `decode`, JSON `encode`,
+  `encode_pretty` and `write_string`, `path` and `url` builders,
+  `time.format_iso8601`, `debug.hexdump`, `flags.usage` and `completion`,
+  Unicode `case_fold` and `normalize`, HTTP and WebSocket writers, DNS queries,
+  `tls.certificate_subject` and `error_string`, `deflate.inflate` (new
+  `gunzip`), `gzip.decompress`, `zip.extract`, `png` and `qoi` codecs,
+  `pem.decode`, `process.environment`, `fs.read_link`, `fs.app_directory` and
+  `testing.temporary_*`. Wrap fixed storage with `mem.arena_from_buffer`.
+  Fixed-size results and streaming reads keep caller buffers. New
+  `mem.trial_size` and `trial_next` for producers of unknown size.
+- The 32-bit SSA backends now accept `main`'s call to the global initializer
+  instead of falling back to the tree emitter.
 - **Breaking:** positions are `usize` and a miss returns the length, which is
   always a safe slice bound: `bytes.find`, `find_byte`, `find_last`,
   `find_last_byte`, the `strings` wrappers and `search.find`. The compiler now

@@ -222,8 +222,9 @@ fn render_checked(destination: []u8, program: []const u8, options: []const Optio
   return TextResult{ value: output, required: measured.required, ok: true }
 }
 // Failure writes nothing. Returned text borrows destination and excludes NUL.
-pub fn usage(destination: []u8, program: []const u8, options: []const Option) TextResult {
-  return render_checked(destination, program, options, true)
+// Usage text for options, in arena.
+pub fn usage(arena: *memory.Arena, program: []const u8, options: []const Option) []u8 {
+  return render_arena(arena, program, options, true)
 }
 
 pub fn required_string_option(name: []const u8, short: u8) Option {
@@ -239,6 +240,18 @@ pub fn choice_option(name: []const u8, short: u8, choices: [][]const u8) Option 
   return Option{ name: name, short: short, kind: Kind.Choice, choices: choices }
 }
 // One long-option candidate per line. Empty option lists succeed with empty text.
-pub fn completion(destination: []u8, options: []const Option) TextResult {
-  return render_checked(destination, "", options, false)
+// Shell completion words for options, in arena.
+pub fn completion(arena: *memory.Arena, options: []const Option) []u8 {
+  return render_arena(arena, "", options, false)
+}
+
+fn render_arena(arena: *memory.Arena, program: []const u8, options: []const Option, is_usage: bool) []u8 {
+  empty: [0]u8 = []
+  measured := render(empty[..], program, options, is_usage, false)
+  if !measured.ok {
+    #panic("flags: usage text size overflows")
+  }
+  output := memory.push_bytes_uninit(arena, measured.required)
+  _ = render_checked(output, program, options, is_usage)
+  return output
 }

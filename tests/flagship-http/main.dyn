@@ -71,7 +71,8 @@ fn handle_add(response: *http.Response, request: *const http.Request) http.Resul
     return text(response, http.StatusPayloadTooLarge, "notes full\n")
   }
   digits: [21]u8
-  number := fmt.u64_decimal(digits[..20], #cast(u64, count))
+  scratch := mem.arena_from_buffer(digits[..20])
+  number := fmt.u64_decimal(&scratch, #cast(u64, count))
   digits[#len(number)] = '\n'
   return text(response, http.StatusOk, digits[..#len(number) + 1])
 }
@@ -116,8 +117,9 @@ fn main() {
   }
 
   digits: [20]u8
+  scratch := mem.arena_from_buffer(digits[..])
   _ = io.write_all(io.stdout(), "port ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(digits[..], port))
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(&scratch, port))
   _ = io.write_all(io.stdout(), "\n")
 
   for sync.load_u32(&state.quit) == 0 {

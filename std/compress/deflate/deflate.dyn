@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/io" stream
 
 pub struct Result { written: usize, consumed: usize, ok: bool }
@@ -973,10 +974,50 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
   }
   return Result{ written: state.written, consumed: state.reader.at, ok: state.stage == 3 && state.error == 0 }
 }
-// RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE.
-pub fn inflate(destination: []u8, input: []const u8) Result {
-  state := InflateState{}
-  return resume(&state, destination, input)
+// Output in arena and the input bytes used. ok is false, with nothing pushed,
+// when the input is not valid.
+pub struct Inflated { value: []u8, consumed: usize, ok: bool }
+
+// RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
+pub fn inflate(arena: *mem.Arena, input: []const u8) Inflated {
+  return grow_until_done(arena, input, false)
+}
+
+// One RFC 1952 gzip member, into arena. consumed identifies any following
+// member or trailing data.
+pub fn gunzip(arena: *mem.Arena, input: []const u8) Inflated {
+  return grow_until_done(arena, input, true)
+}
+
+// The output size is unknown, so decode into a block from arena and retry with
+// a doubled block when it fills up. Each retry rewinds, so nothing is wasted.
+fn grow_until_done(arena: *mem.Arena, input: []const u8, gzip: bool) Inflated {
+  capacity := mem.trial_size(arena, 4 * #len(input) + 1024)
+  for capacity > 0 {
+    mark := mem.arena_mark(arena)
+    space := mem.push_bytes_uninit(arena, capacity)
+    result: Result
+    full := false
+    if gzip {
+      member := GzipState{}
+      result = resume_gzip(&member, space, input)
+      full = member.engine.error == -28 || member.error == -28
+    } else {
+      engine := InflateState{}
+      result = resume(&engine, space, input)
+      full = engine.error == -28
+    }
+    if result.ok {
+      mem.arena_rewind(arena, mark + result.written)
+      return Inflated{ value: space[..result.written], consumed: result.consumed, ok: true }
+    }
+    mem.arena_rewind(arena, mark)
+    if !full {
+      return Inflated{}
+    }
+    capacity = mem.trial_next(arena, capacity)
+  }
+  #panic("arena exhausted")
 }
 
 fn crc_byte(previous: u32, byte: u8) u32 {
@@ -1084,7 +1125,7 @@ pub fn resume_gzip(state: *GzipState, destination: []u8, input: []const u8) Resu
   return Result{ written: body.written, consumed: trailer + 8, ok: true }
 }
 // RFC 1952 single member; consumed identifies any following member/trailing data.
-pub fn gunzip_internal(destination: []u8, input: []const u8) Result {
+fn gunzip_internal(destination: []u8, input: []const u8) Result {
   state := GzipState{}
   return resume_gzip(&state, destination, input)
 }

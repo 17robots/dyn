@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/errors" errors
 
 pub const Nanosecond: i64 = 1
@@ -129,7 +130,7 @@ fn write_two(destination: []u8, at: usize, value: u8) {
   destination[at] = '0' + value / 10
   destination[at + 1] = '0' + value % 10
 }
-pub fn format_iso8601(destination: []u8, value: *const DateTime) []u8 {
+fn format_iso8601_into(destination: []u8, value: *const DateTime) []u8 {
   if #len(destination) < 20 || !valid(value) || value.year < 0 || value.year > 9999 {
     return destination[..0]
   }
@@ -185,4 +186,14 @@ fn parse_iso8601_into(input: []const u8, output: *DateTime) bool {
     minute: read_two(input, 14), second: read_two(input, 17), nanosecond: 0,
   }
   return valid(output)
+}
+
+// value as YYYY-MM-DDTHH:MM:SSZ in arena, or "" when value is not a valid
+// date in years 0 through 9999.
+pub fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8 {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, 20)
+  text := format_iso8601_into(space, value)
+  mem.arena_rewind(arena, mark + #len(text))
+  return text
 }

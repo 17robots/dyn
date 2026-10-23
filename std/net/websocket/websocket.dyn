@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/io" stream
 use "std/encoding/base64" base64
 use "std/net/http" http
@@ -170,7 +171,8 @@ fn ws_append(destination: []u8, offset: usize, source: []const u8) usize {
 // Computes RFC 6455 Sec-WebSocket-Accept into 28 caller-owned bytes.
 fn websocket_accept(destination: []u8, key: []const u8) []u8 {
   decoded: [18]u8 = []
-  if #len(key) != 24 || #len(base64.decode(decoded[..], key).data) != 16 || #len(destination) < 28 {
+  decoded_arena := mem.arena_from_buffer(decoded[..])
+  if #len(key) != 24 || #len(base64.decode(&decoded_arena, key).value) != 16 || #len(destination) < 28 {
     return destination[..0]
   }
   guid: []const u8 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -200,7 +202,8 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
     digest[i * 4 + 3] = #cast(u8, state[i])
     i += 1
   }
-  return base64.encode(destination, digest[..]).data
+  encoded := mem.arena_from_buffer(destination)
+  return base64.encode(&encoded, digest[..])
 }
 
 // Validates the HTTP request-side RFC 6455 upgrade fields. Returned key borrows request.
@@ -214,9 +217,10 @@ fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   version := http.header(request, "Sec-WebSocket-Version")
   key := http.header(request, "Sec-WebSocket-Key")
   scratch: [18]u8 = []
+  scratch_arena := mem.arena_from_buffer(scratch[..])
   if !upgrade.ok || !connection_header.ok || !version.ok || !key.ok || !ws_equal_case(upgrade.value, "websocket") ||
     !ws_equal_case(connection_header.value, "Upgrade") || !ws_equal(version.value, "13") ||
-    #len(base64.decode(scratch[..], key.value).data) != 16 {
+    #len(base64.decode(&scratch_arena, key.value).value) != 16 {
     return WebSocketUpgrade{}
   }
   return WebSocketUpgrade{ key: key.value, ok: true }
@@ -563,23 +567,38 @@ pub fn validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   return websocket_validate_upgrade_request(request)
 }
 
-pub fn write_upgrade_response(destination: []u8, key: []const u8) []u8 {
-  return websocket_write_upgrade_response(destination, key)
+// The 101 Switching Protocols response for key, in arena.
+pub fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8 {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, 160)
+  output := websocket_write_upgrade_response(space, key)
+  mem.arena_rewind(arena, mark + #len(output))
+  return output
 }
 
 pub fn validate_upgrade_response(response: []const u8, key: []const u8) bool {
   return websocket_validate_upgrade_response(response, key)
 }
 
-pub fn write_frame(destination: []u8, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8 {
-  return websocket_write(destination, opcode, payload, final, masked, mask)
+// One encoded frame, in arena.
+pub fn write_frame(arena: *mem.Arena, opcode: u8, payload: []const u8, final: bool, masked: bool, mask: u32) []u8 {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, #len(payload) + 14)
+  output := websocket_write(space, opcode, payload, final, masked, mask)
+  mem.arena_rewind(arena, mark + #len(output))
+  return output
 }
 
 pub fn parse_frame(input: []const u8) WebSocketFrame {
   return websocket_parse(input)
 }
-pub fn decode_frame(destination: []u8, frame: WebSocketFrame) []u8 {
-  return websocket_decode(destination, frame)
+// The frame's payload, unmasked, in arena.
+pub fn decode_frame(arena: *mem.Arena, frame: WebSocketFrame) []u8 {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, #len(frame.payload))
+  output := websocket_decode(space, frame)
+  mem.arena_rewind(arena, mark + #len(output))
+  return output
 }
 pub fn message_state(expect_masked: bool) WebSocketMessageState {
   return websocket_message_state(expect_masked)

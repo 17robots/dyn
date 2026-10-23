@@ -1,4 +1,7 @@
-// Formatting into bounded caller-owned storage. Failed compound writes roll back.
+// Formatting. Buffer writes into bounded caller-owned storage and rolls back
+// failed compound writes; the free functions return text in an arena.
+
+use "std/mem" mem
 
 pub struct Buffer { data: []u8, length: usize }
 pub fn buffer(storage: []u8) Buffer {
@@ -37,7 +40,7 @@ pub fn write_byte(state: *Buffer, value: u8) bool {
   return true
 }
 
-pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
+fn u64_base_into(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
   if base < 2 || base > 36 {
     #panic("format base must be between 2 and 36")
   }
@@ -70,11 +73,11 @@ pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
   return destination[..digit_count]
 }
 
-pub fn u64_decimal(destination: []u8, value: u64) []u8 {
-  return u64_base(destination, value, 10, false)
+fn u64_decimal_into(destination: []u8, value: u64) []u8 {
+  return u64_base_into(destination, value, 10, false)
 }
 
-pub fn i64_decimal(destination: []u8, value: i64) []u8 {
+fn i64_decimal_into(destination: []u8, value: i64) []u8 {
   negative := value < 0
   magnitude: u64 = 0
   if negative {
@@ -85,13 +88,13 @@ pub fn i64_decimal(destination: []u8, value: i64) []u8 {
     magnitude = #cast(u64, value)
   }
   if !negative {
-    return u64_decimal(destination, magnitude)
+    return u64_decimal_into(destination, magnitude)
   }
   if #len(destination) == 0 {
     return destination[..0]
   }
   destination[0] = '-'
-  digits := u64_decimal(destination[1..], magnitude)
+  digits := u64_decimal_into(destination[1..], magnitude)
   if #len(digits) == 0 {
     return destination[..0]
   }
@@ -100,12 +103,12 @@ pub fn i64_decimal(destination: []u8, value: i64) []u8 {
 
 pub fn write_u64(state: *Buffer, value: u64) bool {
   storage: [20]u8 = []
-  return write(state, u64_decimal(storage[..], value))
+  return write(state, u64_decimal_into(storage[..], value))
 }
 
 pub fn write_i64(state: *Buffer, value: i64) bool {
   storage: [20]u8 = []
-  return write(state, i64_decimal(storage[..], value))
+  return write(state, i64_decimal_into(storage[..], value))
 }
 
 pub fn write_bool(state: *Buffer, value: bool) bool {
@@ -252,7 +255,7 @@ pub fn write_values(state: *Buffer, values: ...any) bool {
 // Rounded decimal formatting, not a shortest-roundtrip serialization format.
 // Up to 15 fractional digits; trailing zeroes are removed. Very small/large
 // magnitudes use a decimal exponent. Failure returns an empty slice.
-pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
+fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
   if precision > 15 {
     return destination[..0]
   }
@@ -311,7 +314,7 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
           digits -= 1
         }
         fraction_storage: [20]u8 = []
-        rendered := u64_decimal(fraction_storage[..], fraction)
+        rendered := u64_decimal_into(fraction_storage[..], fraction)
         _ = write_byte(&state, '.')
         _ = write_padding(&state, '0', digits - #len(rendered))
         _ = write(&state, rendered)
@@ -335,12 +338,12 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
 
 pub fn write_f64(state: *Buffer, value: f64) bool {
   storage: [64]u8 = []
-  return write(state, f64_decimal(storage[..], value, 6))
+  return write(state, f64_decimal_into(storage[..], value, 6))
 }
 
 pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bool {
   storage: [20]u8 = []
-  rendered := u64_decimal(storage[..], value)
+  rendered := u64_decimal_into(storage[..], value)
   length := #len(rendered)
   if width > length {
     length = width
@@ -350,4 +353,37 @@ pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bo
   }
   _ = write_padding(state, padding, length - #len(rendered))
   return write(state, rendered)
+}
+
+fn copy_out(arena: *mem.Arena, text: []const u8) []u8 {
+  output := mem.push_bytes_uninit(arena, #len(text))
+  _ = mem.copy(output, text)
+  return output
+}
+
+// value in base 2 through 36. Panics on another base.
+pub fn u64_base(arena: *mem.Arena, value: u64, base: u8, uppercase: bool) []u8 {
+  storage: [64]u8 = []
+  return copy_out(arena, u64_base_into(storage[..], value, base, uppercase))
+}
+
+pub fn u64_decimal(arena: *mem.Arena, value: u64) []u8 {
+  storage: [20]u8 = []
+  return copy_out(arena, u64_decimal_into(storage[..], value))
+}
+
+pub fn i64_decimal(arena: *mem.Arena, value: i64) []u8 {
+  storage: [20]u8 = []
+  return copy_out(arena, i64_decimal_into(storage[..], value))
+}
+
+// Rounded decimal with up to 15 fractional digits; trailing zeroes are
+// removed. Very small or large magnitudes use a decimal exponent. Not a
+// shortest-roundtrip format. Panics when precision is above 15.
+pub fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8 {
+  if precision > 15 {
+    #panic("fmt.f64_decimal: precision above 15")
+  }
+  storage: [64]u8 = []
+  return copy_out(arena, f64_decimal_into(storage[..], value, precision))
 }

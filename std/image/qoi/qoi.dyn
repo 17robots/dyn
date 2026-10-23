@@ -1,3 +1,4 @@
+use "std/mem" mem
 pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, ok: bool }
 pub struct Result { info: Info, pixels: []u8, error: isize, ok: bool }
 pub struct EncodeResult { data: []u8, error: isize, ok: bool }
@@ -42,8 +43,7 @@ fn add(byte_value: u8, amount: i16) u8 {
   return #cast(u8, wide)
 }
 
-// Decodes QOI into caller-owned RGBA8 storage.
-pub fn decode(destination: []u8, source: []const u8) Result {
+fn decode_into(destination: []u8, source: []const u8) Result {
   info := inspect(source)
   if !info.ok {
     return Result{ error: -22 }
@@ -143,8 +143,7 @@ fn delta(current: u8, previous: u8) i16 {
   return difference
 }
 
-// Encodes tightly packed RGB8 or RGBA8 pixels into caller-owned storage.
-pub fn encode(destination: []u8, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
+fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
   if width == 0 || height == 0 || (channels != 3 && channels != 4) {
     return EncodeResult{ error: -22 }
   }
@@ -263,4 +262,31 @@ pub fn encode(destination: []u8, pixels: []const u8, width: u32, height: u32, ch
   destination[output + 7] = 1
   output += 8
   return EncodeResult{ data: destination[..output], ok: true }
+}
+
+// Decodes QOI into RGBA8 pixels in arena. Failure pushes nothing.
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  info := inspect(source)
+  if !info.ok {
+    return Result{ error: -22 }
+  }
+  mark := mem.arena_mark(arena)
+  result := decode_into(mem.push_bytes_uninit(arena, #cast(usize, info.width) * #cast(usize, info.height) * 4), source)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+  }
+  return result
+}
+
+// Encodes tightly packed RGB8 or RGBA8 pixels into arena.
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
+  bound := #cast(usize, width) * #cast(usize, height) * (#cast(usize, channels) + 1) + 22
+  mark := mem.arena_mark(arena)
+  result := encode_into(mem.push_bytes_uninit(arena, bound), pixels, width, height, channels, srgb)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+    return result
+  }
+  mem.arena_rewind(arena, mark + #len(result.data))
+  return result
 }

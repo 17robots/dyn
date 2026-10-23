@@ -1,3 +1,4 @@
+use "std/mem" mem
 pub struct URL {
   scheme: []const u8,
   authority: []const u8,
@@ -86,7 +87,7 @@ fn hex_value(byte: u8) isize {
 }
 // Encode one component, including slashes. Source and destination must not overlap.
 // Capacity/validation failures leave destination unchanged.
-pub fn percent_encode(destination: []u8, source: []const u8) EncodingResult {
+fn percent_encode_into(destination: []u8, source: []const u8) EncodingResult {
   required: usize = 0
   for byte in source {
     amount: usize = 3
@@ -115,7 +116,7 @@ pub fn percent_encode(destination: []u8, source: []const u8) EncodingResult {
   return EncodingResult{ data: destination[..at], ok: true }
 }
 // Percent decoding treats '+' literally; it is not form-urlencoded decoding.
-pub fn percent_decode(destination: []u8, source: []const u8) EncodingResult {
+fn percent_decode_into(destination: []u8, source: []const u8) EncodingResult {
   required: usize = 0
   i: usize = 0
   for i < #len(source) {
@@ -144,4 +145,27 @@ pub fn percent_decode(destination: []u8, source: []const u8) EncodingResult {
     at += 1
   }
   return EncodingResult{ data: destination[..at], ok: true }
+}
+
+// One component percent-encoded, slashes included, in arena.
+pub fn percent_encode(arena: *mem.Arena, source: []const u8) []u8 {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, 3 * #len(source))
+  encoded := percent_encode_into(space, source)
+  mem.arena_rewind(arena, mark + #len(encoded.data))
+  return encoded.data
+}
+
+// source with %XX escapes decoded, in arena. '+' stays literal. ok is false,
+// with nothing pushed, at a malformed escape.
+pub fn percent_decode(arena: *mem.Arena, source: []const u8) EncodingResult {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, #len(source))
+  decoded := percent_decode_into(space, source)
+  if !decoded.ok {
+    mem.arena_rewind(arena, mark)
+    return EncodingResult{}
+  }
+  mem.arena_rewind(arena, mark + #len(decoded.data))
+  return decoded
 }

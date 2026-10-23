@@ -55,7 +55,8 @@ pub fn play_file(engine: rawptr, path: []const u8, buffer: []u8) bool {
   if engine == nil {
     return false
   }
-  encoded := c.string_from_bytes(buffer, path)
+  cstring_space1 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space1, path)
   return encoded.ok && native_play(engine, encoded.value) == 0
 }
 // Offline engine only. Outputs interleaved stereo f32 at 48 kHz.
@@ -84,7 +85,8 @@ pub fn sound_create(arena: *mem.Arena, engine: rawptr, path: []const u8, buffer:
   if arena == nil || engine == nil {
     return Context{ code: -2 }
   }
-  encoded := c.string_from_bytes(buffer, path)
+  cstring_space2 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space2, path)
   if !encoded.ok {
     return Context{ code: -2 }
   }

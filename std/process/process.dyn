@@ -82,7 +82,28 @@ pub fn pipe() Pipe {
 pub fn close_pipe(handle: isize) Status {
   return close_native(handle)
 }
-pub fn environment(name: []const u8, destination: []u8) EnvironmentResult {
+// The value of environment variable name, in arena. A missing variable is ok
+// with found false.
+pub fn environment(arena: *mem.Arena, name: []const u8) EnvironmentResult {
+  capacity := mem.trial_size(arena, 256)
+  for capacity > 0 {
+    mark := mem.arena_mark(arena)
+    result := environment_into(name, mem.push_bytes_uninit(arena, capacity))
+    if result.error != -28 {
+      if result.ok {
+        mem.arena_rewind(arena, mark + #len(result.value))
+      } else {
+        mem.arena_rewind(arena, mark)
+      }
+      return result
+    }
+    mem.arena_rewind(arena, mark)
+    capacity = mem.trial_next(arena, capacity)
+  }
+  #panic("arena exhausted")
+}
+
+fn environment_into(name: []const u8, destination: []u8) EnvironmentResult {
   if #len(name) == 0 {
     return EnvironmentResult{ error: -22, kind: error_kinds.Kind.InvalidInput }
   }

@@ -25,8 +25,13 @@ pub fn certificate_release(certificate: *Certificate) {
   certificate.* = nil
   provider.certificate_free_owned(value)
 }
-pub fn certificate_subject(destination: []u8, certificate: Certificate) []u8 {
-  return provider.certificate_subject(destination, certificate)
+// The certificate's subject name, in arena.
+pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) []u8 {
+  mark := memory.arena_mark(arena)
+  space := memory.push_bytes_uninit(arena, 1024)
+  output := provider.certificate_subject(space, certificate)
+  memory.arena_rewind(arena, mark + #len(output))
+  return output
 }
 pub fn handshake(connection: Connection) Result {
   return provider.handshake(connection)
@@ -46,8 +51,13 @@ pub fn shutdown(connection: Connection) bool {
 pub fn error_code(connection: Connection, provider_result: i32) i32 {
   return provider.error_code(connection, provider_result)
 }
-pub fn error_string(destination: []u8, code: u64) []u8 {
-  return provider.error_string(destination, code)
+// The provider's text for an error code, in arena.
+pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
+  mark := memory.arena_mark(arena)
+  space := memory.push_bytes_uninit(arena, 256)
+  output := provider.error_string(space, code)
+  memory.arena_rewind(arena, mark + #len(output))
+  return output
 }
 
 pub fn client_config_create() ContextResult {
@@ -59,9 +69,6 @@ pub fn server_config_create(
   key: []const u8,
 ) ContextResult {
   return provider.server_context_create(arena, certificate, key)
-}
-pub fn server_config_create_into(certificate: []const u8, key: []const u8, certificate_storage: []u8, key_storage: []u8) ContextResult {
-  return provider.server_context_create_owned(certificate, key, certificate_storage, key_storage)
 }
 // Frees the configuration and clears the handle; releasing a cleared handle does nothing.
 pub fn config_release(context: *Context) {
@@ -76,9 +83,6 @@ pub fn client_connection_create(
   hostname: []const u8,
 ) ConnectionResult {
   return provider.connection_create(arena, context, descriptor, hostname)
-}
-pub fn client_connection_create_into(context: Context, descriptor: i32, hostname: []const u8, storage: []u8) ConnectionResult {
-  return provider.connection_create_owned(context, descriptor, hostname, storage)
 }
 pub fn server_connection_create(context: Context, descriptor: i32) ConnectionResult {
   return provider.server_connection_create_owned(context, descriptor)

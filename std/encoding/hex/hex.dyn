@@ -1,14 +1,15 @@
+use "std/mem" mem
 use "std/encoding" codec
 use "std/bytes" bytes
-pub type Result = codec.Result
-pub type ErrorKind = codec.ErrorKind
+type Result = codec.Result
+type ErrorKind = codec.ErrorKind
 
 // Source and destination must not overlap. All failures leave destination unchanged.
 
 const Lower: []const u8 = "0123456789abcdef"
 const Upper: []const u8 = "0123456789ABCDEF"
 
-pub fn encoded_size(source_size: usize) usize {
+fn encoded_size(source_size: usize) usize {
   maximum := ~#cast(usize, 0)
   if source_size > maximum / 2 {
     return 0
@@ -16,7 +17,7 @@ pub fn encoded_size(source_size: usize) usize {
   return source_size * 2
 }
 
-pub fn encode(destination: []u8, source: []const u8, uppercase: bool) Result {
+fn encode_into(destination: []u8, source: []const u8, uppercase: bool) Result {
   required := encoded_size(#len(source))
   if #len(source) != 0 && required == 0 {
     return Result{ error: ErrorKind.Overflow }
@@ -71,7 +72,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
 }
 
 
-pub fn decode(destination: []u8, source: []const u8) Result {
+fn decode_into(destination: []u8, source: []const u8) Result {
   measured := decode_pass(destination[..0], source, false)
   if !measured.ok {
     return measured
@@ -86,12 +87,37 @@ pub fn decode(destination: []u8, source: []const u8) Result {
   return Result{ data: destination[..measured.required], required: measured.required, ok: true }
 }
 
-pub struct Size { value: usize, ok: bool }
+struct Size { value: usize, ok: bool }
 
 // Validates the complete input and reports the exact decoded byte count.
 // ok with value zero is a valid empty encoding.
-pub fn decoded_size(source: []const u8) Size {
+fn decoded_size(source: []const u8) Size {
   empty: [0]u8 = []
   measured := decode_pass(empty[..], source, false)
   return Size{ value: measured.required, ok: measured.ok }
+}
+
+pub struct Decoded { value: []u8, ok: bool }
+
+// Encodes source into arena. Panics when the size overflows.
+pub fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8 {
+  required := encoded_size(#len(source))
+  if #len(source) != 0 && required == 0 {
+    #panic("hex.encode: size overflows")
+  }
+  output := mem.push_bytes_uninit(arena, required)
+  _ = encode_into(output, source, uppercase)
+  return output
+}
+
+// Decodes source into arena. ok is false, with nothing pushed, when source is
+// not valid hex.
+pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
+  size := decoded_size(source)
+  if !size.ok {
+    return Decoded{}
+  }
+  output := mem.push_bytes_uninit(arena, size.value)
+  _ = decode_into(output, source)
+  return Decoded{ value: output, ok: true }
 }

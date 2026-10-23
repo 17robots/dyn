@@ -138,7 +138,7 @@ fn main() {
   raw_input := bufio.reader(io.cursor_reader(&raw_cursor), error_storage[..1])
   raw_line := bufio.read_until(&raw_input, contents[..], 10)
   require(raw_line.status == bufio.ReadStatus.Complete && bytes.equal(contents[..raw_line.transferred], "a\r"), "stdlib assertion 125")
-  require(process.environment("", contents[..]).kind == errors.Kind.InvalidInput, "stdlib assertion 126")
+  require(process.environment(&arena, "").kind == errors.Kind.InvalidInput, "stdlib assertion 126")
   invalid_child := process.Child{}
   require(process.wait(&invalid_child, false).kind == errors.Kind.InvalidState, "stdlib assertion 128")
   minimum: isize = 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1

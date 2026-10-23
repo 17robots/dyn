@@ -92,6 +92,13 @@ static bool ssa32_call_parts(Ssa *s, SsaValue *v, AbiPart *parts, uint32_t *byte
       v->count < (v->aux2 == 2) || v->count > 512u + (v->aux2 == 2) ||
       (uint64_t)v->list + 3u * v->count > s->list_count ||
       v->abi_group_count > 512 || (uint64_t)v->abi_groups + 3u * v->abi_group_count > s->list_count) return false;
+  /* main's call to the global initializer has no arguments and no source
+     expression. */
+  if (v->aux2 == 0 && v->count == 0 && !v->abi_expr && s->f->is_main &&
+      s->ctx->initializer_symbol && v->aux == s->ctx->initializer_symbol) {
+    *bytes = 0;
+    return true;
+  }
   const DynIrExpr *e = ssa32_call_expression(s, v);
   if (!e || !abi_supported(s->ir, e->type)) return false;
   SsaCallPlan plan;

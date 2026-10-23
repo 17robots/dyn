@@ -12,8 +12,9 @@ struct Particle {
 
 fn print_number(label: []const u8, value: u64) {
   digits: [20]u8
+  scratch := mem.arena_from_buffer(digits[..])
   _ = io.write_all(io.stdout(), label)
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(digits[..], value))
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(&scratch, value))
   _ = io.write_all(io.stdout(), "\n")
 }
 

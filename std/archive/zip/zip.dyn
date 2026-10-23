@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/compress/deflate" deflate
 use "std/hash" hashing
 use "std/io" stream
@@ -209,18 +210,21 @@ pub fn next(state: *ArchiveReader) EntryResult {
   }, ok: true }
 }
 
-// Overlap/capacity/shape checks write nothing. Decode/checksum failures may write
-// destination, but expose no successful data. Source must remain immutable.
-pub fn extract(destination: []u8, archive_entry: Entry) ExtractResult {
-  if bytes.overlaps(destination, archive_entry.payload) {
-    return ExtractResult{ error: ErrorKind.Overlap }
-  }
+// The entry's bytes, decompressed and checksum-verified, in arena. Failure
+// pushes nothing. Source must remain immutable.
+pub fn extract(arena: *mem.Arena, archive_entry: Entry) ExtractResult {
   if #len(archive_entry.payload) != archive_entry.compressed_size {
     return ExtractResult{ error: ErrorKind.Syntax }
   }
-  if #len(destination) < archive_entry.uncompressed_size {
-    return ExtractResult{ error: ErrorKind.Capacity }
+  mark := mem.arena_mark(arena)
+  result := extract_into(mem.push_bytes_uninit(arena, archive_entry.uncompressed_size), archive_entry)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
   }
+  return result
+}
+
+fn extract_into(destination: []u8, archive_entry: Entry) ExtractResult {
   written: usize = 0
   if archive_entry.method == 0 {
     if archive_entry.compressed_size != archive_entry.uncompressed_size {
@@ -233,7 +237,8 @@ pub fn extract(destination: []u8, archive_entry: Entry) ExtractResult {
     }
     written = archive_entry.uncompressed_size
   } else if archive_entry.method == 8 {
-    result := deflate.inflate(destination[..archive_entry.uncompressed_size], archive_entry.payload)
+    inflater := deflate.InflateState{}
+    result := deflate.resume(&inflater, destination[..archive_entry.uncompressed_size], archive_entry.payload)
     if !result.ok || result.written != archive_entry.uncompressed_size || result.consumed != archive_entry.compressed_size {
       return ExtractResult{ error: ErrorKind.Syntax }
     }

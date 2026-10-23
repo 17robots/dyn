@@ -352,7 +352,7 @@ pub fn valid(source: []const u8) bool {
   return cursor.at == #len(source)
 }
 
-pub fn write_string(destination: []u8, source: []const u8) []u8 {
+fn write_string_into(destination: []u8, source: []const u8) []u8 {
   if #len(destination) < 2 || !utf8.valid(source) {
     return destination[..0]
   }
@@ -924,7 +924,7 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
     return copy(destination, at, value.text)
   }
   if value.kind == KindString {
-    string_encoded := write_string(destination[at.*..], value.text)
+    string_encoded := write_string_into(destination[at.*..], value.text)
     if #len(string_encoded) == 0 {
       return false
     }
@@ -951,7 +951,7 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
       }
     }
     if value.kind == KindObject {
-      key_encoded := write_string(destination[at.*..], child.key)
+      key_encoded := write_string_into(destination[at.*..], child.key)
       if #len(key_encoded) == 0 {
         return false
       }
@@ -974,7 +974,7 @@ fn encode_value(destination: []u8, at: *usize, value: *const Value, depth: usize
   return true
 }
 
-pub fn encode(destination: []u8, value: *const Value) []u8 {
+fn encode_into(destination: []u8, value: *const Value) []u8 {
   at: usize = 0
   if !encode_value(destination, &at, value, 0) {
     return destination[..0]
@@ -1026,7 +1026,7 @@ fn encode_pretty_value(destination: []u8, at: *usize, value: *const Value,
       return false
     }
     if value.kind == KindObject {
-      encoded := write_string(destination[at.*..], child.key)
+      encoded := write_string_into(destination[at.*..], child.key)
       if #len(encoded) == 0 {
         return false
       }
@@ -1047,9 +1047,9 @@ fn encode_pretty_value(destination: []u8, at: *usize, value: *const Value,
   return copy(destination, at, closing)
 }
 
-pub fn encode_pretty(destination: []u8, value: *const Value, indent: usize) []u8 {
+fn encode_pretty_into(destination: []u8, value: *const Value, indent: usize) []u8 {
   if indent == 0 {
-    return encode(destination, value)
+    return encode_into(destination, value)
   }
   at: usize = 0
   if !encode_pretty_value(destination, &at, value, 0, indent) {
@@ -1217,4 +1217,67 @@ fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) s
 
 pub fn write(destination: stream.Writer, value: *const Value) stream.Result {
   return stream_value(destination, value, 0)
+}
+
+// The output size is unknown, so write into a block from arena and retry with
+// a doubled block when it fills up. Each retry rewinds, so nothing is wasted.
+// Empty output means the value cannot be encoded (invalid UTF-8 or nesting
+// past MaximumDepth).
+fn encode_arena(arena: *memory.Arena, value: *const Value, indent: usize, string: []const u8, quote: bool) []u8 {
+  empty: []u8
+  if (quote && !utf8.valid(string)) || (!quote && !encodable(value, 0)) {
+    return empty
+  }
+  capacity := memory.trial_size(arena, 256)
+  for capacity > 0 {
+    mark := memory.arena_mark(arena)
+    space := memory.push_bytes_uninit(arena, capacity)
+    output: []u8
+    if quote {
+      output = write_string_into(space, string)
+    } else {
+      output = encode_pretty_into(space, value, indent)
+    }
+    if #len(output) > 0 {
+      memory.arena_rewind(arena, mark + #len(output))
+      return output
+    }
+    memory.arena_rewind(arena, mark)
+    capacity = memory.trial_next(arena, capacity)
+  }
+  #panic("arena exhausted")
+}
+
+// Whether every string and key is UTF-8 and nesting stays within
+// MaximumDepth, the only reasons other than space that encoding fails.
+fn encodable(value: *const Value, depth: usize) bool {
+  if value == nil || value.kind == KindMissing || value.kind > KindObject || depth > MaximumDepth {
+    return false
+  }
+  if (value.kind == KindString && !utf8.valid(value.text)) || !utf8.valid(value.key) {
+    return false
+  }
+  child := value.first
+  for child != nil {
+    if !encodable(child, depth + 1) {
+      return false
+    }
+    child = child.next
+  }
+  return true
+}
+
+// source as a quoted JSON string, in arena. Empty when source is not UTF-8.
+pub fn write_string(arena: *memory.Arena, source: []const u8) []u8 {
+  return encode_arena(arena, &nil_value, 0, source, true)
+}
+
+// value as compact JSON, in arena.
+pub fn encode(arena: *memory.Arena, value: *const Value) []u8 {
+  return encode_arena(arena, value, 0, "", false)
+}
+
+// value as JSON indented by indent spaces per level, in arena.
+pub fn encode_pretty(arena: *memory.Arena, value: *const Value, indent: usize) []u8 {
+  return encode_arena(arena, value, indent, "", false)
 }

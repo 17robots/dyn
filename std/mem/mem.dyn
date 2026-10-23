@@ -383,6 +383,31 @@ fn append_failure(arena: *Arena, memory: *u8, size: usize) {
   #panic("append: arena exhausted")
 }
 
+// For producers that cannot know their output size in advance: they push a
+// trial block, write into it, and on overflow rewind and try a bigger one.
+// trial_size gives the first block size, capped at what a fixed-buffer arena
+// has left. trial_next gives the next size, or panics when a fixed-buffer
+// arena cannot give more.
+pub fn trial_size(arena: *const Arena, wanted: usize) usize {
+  if arena.fixed_buffer && wanted > arena_remaining(arena) {
+    return arena_remaining(arena)
+  }
+  return wanted
+}
+
+pub fn trial_next(arena: *const Arena, current: usize) usize {
+  if arena.fixed_buffer {
+    if current >= arena_remaining(arena) {
+      #panic("arena exhausted")
+    }
+    return trial_size(arena, current * 2 + 1)
+  }
+  if current > ~#cast(usize, 0) / 4 {
+    #panic("output size overflows")
+  }
+  return current * 2 + 1
+}
+
 // Pushes count uninitialized bytes, for buffers that are overwritten right away.
 // Panics when the arena is exhausted.
 pub fn push_bytes_uninit(arena: *Arena, count: usize) []u8 {

@@ -1,9 +1,11 @@
+use "std/mem" mem
 use "std/c"
 use "vendor/sdl3"
 #link("SDL3_image")
 // SDL_image 3.x. Result surface is provider-owned; use sdl3.surface_destroy_owned.
 pub fn load_owned(path: []const u8, path_buffer: []u8) sdl3.SurfaceResult {
-  encoded := c.string_from_bytes(path_buffer, path)
+  cstring_space1 := mem.arena_from_buffer(path_buffer)
+  encoded := c.string_from_bytes(&cstring_space1, path)
   if !encoded.ok {
     return sdl3.SurfaceResult{}
   }

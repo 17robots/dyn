@@ -1,3 +1,4 @@
+use "std/mem" memory
 use "std/io" stream
 use "std/net" network
 use "std/bytes" bytes
@@ -53,10 +54,11 @@ fn append_bytes(destination: []u8, offset: usize, source: []const u8) usize {
 
 fn append_usize(destination: []u8, offset: usize, value: usize) usize {
   digits: [20]u8 = []
-  return append_bytes(destination, offset, format.u64_decimal(digits[..], #cast(u64, value)))
+  scratch := memory.arena_from_buffer(digits[..])
+  return append_bytes(destination, offset, format.u64_decimal(&scratch, #cast(u64, value)))
 }
 
-pub fn write_request(destination: []u8, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8 {
+fn request_into(destination: []u8, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8 {
   offset := append_bytes(destination, 0, method)
   offset = append_bytes(destination, offset, " ")
   if #len(target) > 0 && target[0] == '?' {
@@ -75,7 +77,7 @@ pub fn write_request(destination: []u8, method: []const u8, target: []const u8, 
   return destination[..offset]
 }
 
-pub fn write_response(destination: []u8, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8 {
+fn response_into(destination: []u8, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8 {
   offset := append_bytes(destination, 0, "HTTP/1.1 ")
   offset = append_usize(destination, offset, #cast(usize, code))
   offset = append_bytes(destination, offset, " ")
@@ -857,7 +859,8 @@ fn status_reason(status: u16) []const u8 {
 }
 
 fn decimal(destination: []u8, value: usize) []const u8 {
-  return format.u64_decimal(destination, #cast(u64, value))
+  scratch := memory.arena_from_buffer(destination)
+  return format.u64_decimal(&scratch, #cast(u64, value))
 }
 
 fn write_output(destination: stream.Writer, bytes: []const u8) Result {
@@ -1062,7 +1065,7 @@ pub fn serve_stream_context(input: stream.Reader, output: stream.Writer, storage
 // integration point: pass a TLS reader and writer. Returned slices borrow response_storage.
 pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: []u8, response_storage: []u8,
   method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse {
-  request_bytes := write_request(request_storage, method, target, host, body)
+  request_bytes := request_into(request_storage, method, target, host, body)
   if #len(request_bytes) == 0 {
     return ClientResponse{ error: ErrorKind.Capacity }
   }
@@ -1163,4 +1166,24 @@ pub fn client_do_connection(connection: *network.Connection, request_storage: []
   method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse {
   return client_do(network.connection_reader(connection), network.connection_writer(connection), request_storage,
     response_storage, method, target, host, body)
+}
+
+// A complete HTTP/1.1 request with Connection: close, in arena.
+pub fn write_request(arena: *memory.Arena, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8 {
+  size: usize = 64 + #len(method) + #len(target) + #len(host) + #len(body)
+  mark := memory.arena_mark(arena)
+  space := memory.push_bytes_uninit(arena, size)
+  output := request_into(space, method, target, host, body)
+  memory.arena_rewind(arena, mark + #len(output))
+  return output
+}
+
+// A complete HTTP/1.1 response with Connection: close, in arena.
+pub fn write_response(arena: *memory.Arena, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8 {
+  size: usize = 96 + #len(reason) + #len(content_type) + #len(body)
+  mark := memory.arena_mark(arena)
+  space := memory.push_bytes_uninit(arena, size)
+  output := response_into(space, code, reason, content_type, body)
+  memory.arena_rewind(arena, mark + #len(output))
+  return output
 }

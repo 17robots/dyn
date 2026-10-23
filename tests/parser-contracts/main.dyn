@@ -167,33 +167,15 @@ fn json_bytes(value: []const u8, expected: bool) {
   }
   object[#len(head)+length] = '}'
   json_document(object[..#len(head)+length+1], expected)
-  destination: [64]u8 = []
-  for capacity in 0..length+2 {
-    for i in 0..64 {
-      destination[i] = 123
+  storage: [64]u8 = []
+  output := mem.arena_from_buffer(storage[..])
+  written := json.write_string(&output, value)
+  if !expected {
+    if #len(written) != 0 || mem.arena_used(&output) != 0 {
+      #panic("JSON writes invalid UTF8")
     }
-    written := json.write_string(destination[..capacity], value)
-    if !expected {
-      if #len(written) != 0 {
-        #panic("JSON writes invalid UTF8")
-      }
-      for byte in destination {
-        if byte != 123 {
-          #panic("JSON invalid write changes destination")
-        }
-      }
-    } else if capacity >= length {
-      if !bytes.equal(written, quoted[..length]) {
-        #panic("JSON UTF8 roundtrip")
-      }
-    } else if #len(written) != 0 {
-      #panic("JSON insufficient output accepted")
-    }
-    for i in capacity..64 {
-      if destination[i] != 123 {
-        #panic("JSON exceeds output capacity")
-      }
-    }
+  } else if !bytes.equal(written, quoted[..length]) || mem.arena_used(&output) != length {
+    #panic("JSON UTF8 roundtrip")
   }
 }
 fn json_contracts() {

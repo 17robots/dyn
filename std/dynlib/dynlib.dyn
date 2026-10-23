@@ -1,5 +1,6 @@
 #target(kernel: linux)
 
+use "std/mem" mem
 use "std/c" cabi
 
 // POSIX dynamic-loader adapter. Handles and symbols are borrowed native pointers.
@@ -21,7 +22,8 @@ extern fn native_error "dlerror"() *const u8
 
 pub fn open(path: []const u8, flags: i32) OpenResult {
   storage: [4096]u8 = []
-  name := cabi.string_from_bytes(storage[..], path)
+  cstring_space1 := mem.arena_from_buffer(storage[..])
+  name := cabi.string_from_bytes(&cstring_space1, path)
   if !name.ok {
     return OpenResult{}
   }
@@ -35,7 +37,8 @@ pub fn open(path: []const u8, flags: i32) OpenResult {
 
 pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   storage: [4096]u8 = []
-  native_name := cabi.string_from_bytes(storage[..], name)
+  cstring_space2 := mem.arena_from_buffer(storage[..])
+  native_name := cabi.string_from_bytes(&cstring_space2, name)
   if handle == nil || !native_name.ok {
     return SymbolResult{}
   }

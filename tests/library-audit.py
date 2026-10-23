@@ -14,7 +14,8 @@ use "std/fmt" fmt
 use "std/bytes" bytes
 fn expect_decimal(value:f64, precision:usize, expected:[]const u8) {
   output:[128]u8=[]
-  if !bytes.equal(fmt.f64_decimal(output[..],value,precision),expected) { #panic("decimal rounding") }
+  scratch:=memory.arena_from_buffer(output[..])
+  if !bytes.equal(fmt.f64_decimal(&scratch,value,precision),expected) { #panic("decimal rounding") }
 }
 fn main() {
   backing:[16384]u8=[]
@@ -24,12 +25,14 @@ fn main() {
     control:[1]u8=[]
     control[0]=#cast(u8, i)
     encoded:[16]u8=[]
-    written:=json.write_string(encoded[..],control[..])
+    encoded_arena:=memory.arena_from_buffer(encoded[..])
+    written:=json.write_string(&encoded_arena,control[..])
     if #len(written)==0 { #panic("control escape") }
     parsed:=json.parse(&arena,written)
     if !parsed.ok || #len(parsed.root.text)!=1 || parsed.root.text[0]!=control[0] { #panic("control roundtrip") }
     roundtrip:[16]u8=[]
-    if !bytes.equal(json.encode(roundtrip[..],parsed.root),written) { #panic("node encode") }
+    roundtrip_arena:=memory.arena_from_buffer(roundtrip[..])
+    if !bytes.equal(json.encode(&roundtrip_arena,parsed.root),written) { #panic("node encode") }
   }
   memory.arena_reset(&arena)
   source:[6002]u8=[]
@@ -60,7 +63,6 @@ struct Entry {
   hash: u64,
   hash_next: *Entry,
   free_next: *Entry,
-  text: [32]u8,
   value: usize,
 }
 const nil_entry: Entry = Entry{}
@@ -74,18 +76,18 @@ fn main() {
   }
   live: [128]*Entry = []
   handles: [128]slots.Handle = []
-  key: [32]u8 = []
+  scratch: mem.Arena
   seed: u64 = 7
   for step in 0..4000 {
     seed = (seed * 1664525 + 1013904223) % 4294967296
     index := #cast(usize, (seed % 128))
-    text := fmt.u64_decimal(key[..], #cast(u64, index))
+    text := fmt.u64_decimal(&scratch, #cast(u64, index))
     if (seed / 128) % 2 == 0 {
       if live[index] == nil {
         entry := list.free_pop(&first_free, &nil_entry)
         if entry == &nil_entry { #panic("free list exhausted") }
         slots.reset(entry)
-        entry.key = fmt.u64_decimal(entry.text[..], #cast(u64, index))
+        entry.key = fmt.u64_decimal(&owned, #cast(u64, index))
         entry.value = index
         entry.hash = hash.hash_bytes(1, entry.key)
         hash.insert(table, entry)
@@ -102,7 +104,7 @@ fn main() {
     }
     if step % 13 == 0 {
       for i in 0..128 {
-        name := fmt.u64_decimal(key[..], #cast(u64, i))
+        name := fmt.u64_decimal(&scratch, #cast(u64, i))
         found := hash.find(table, hash.hash_bytes(1, name), name, &nil_entry)
         if (found != &nil_entry) != (live[i] != nil) { #panic("collision chain") }
         if live[i] != nil {

@@ -1,12 +1,15 @@
+use "std/mem" mem
 use "std/compress/deflate" deflate
 use "std/io" stream
 
 pub type Result = deflate.Result
 pub type Decoder = deflate.Decoder
 
-// One member; consumed identifies the next member or trailing data.
-pub fn decompress(destination: []u8, source: []const u8) Result {
-  return deflate.gunzip_internal(destination, source)
+pub type Inflated = deflate.Inflated
+
+// One member, into arena; consumed identifies the next member or trailing data.
+pub fn decompress(arena: *mem.Arena, source: []const u8) Inflated {
+  return deflate.gunzip(arena, source)
 }
 // Reads concatenated members through EOF, verifying every header/trailer.
 // Buffers borrow caller storage. 1024 input + 33026 history bytes suffice.
