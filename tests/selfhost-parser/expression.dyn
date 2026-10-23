@@ -54,7 +54,7 @@ fn add_node(p: *Parser, kind: u16, start: u32, end: u32, first: u32) u32 {
     return None
   }
   value := Node{ start: start, end: end, first: first, next: None, parent: None, kind: kind }
-  return #cast(u32, mem.append(&p.tree.nodes, &p.tree.count, p.arena, value))
+  return #cast(u32, append_grow(&p.tree.nodes, &p.tree.count, p.arena, value))
 }
 
 fn mark(p: *Parser, id: u32, flags: u16) u32 {

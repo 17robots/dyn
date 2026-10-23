@@ -1,0 +1,70 @@
+// Chunk lists: growing lists on a shared arena. Elements live in fixed-size
+// chunks that are linked together, so nothing is ever copied and element
+// addresses never change. The caller writes two small structs per element type:
+//
+//   struct EnemyChunk { next: *EnemyChunk, count: usize, items: [64]Enemy }
+//   struct EnemyList { first: *EnemyChunk, last: *EnemyChunk, total: usize }
+//
+// and these functions work through those field names. A zero list is empty.
+
+use "std/mem" mem
+
+// Same pointer, typed like the like argument. Lets push allocate a chunk
+// without naming the chunk type.
+fn typed_like(memory: *u8, like: *$C) *C {
+  return #cast(*C, memory)
+}
+
+// Appends value and returns its stable address. Pushes a new chunk from arena
+// when the last one is full. Panics when the arena is exhausted.
+pub fn push(arena: *mem.Arena, list: *$L, value: $E) *E {
+  chunk := list.last
+  if chunk == nil || chunk.count == #len(chunk.items) {
+    memory := mem.arena_push(arena, #sizeof(list.last.*), #alignof(list.last.*))
+    chunk = typed_like(memory, list.last)
+    if list.last == nil {
+      list.first = chunk
+    } else {
+      list.last.next = chunk
+    }
+    list.last = chunk
+  }
+  slot := &chunk.items[chunk.count]
+  slot.* = value
+  chunk.count += 1
+  list.total += 1
+  return slot
+}
+
+// Element number index, or nil_node when index is past the end. Walks the
+// chunks, so prefer iterating chunk by chunk for whole-list passes.
+pub fn at(list: *const $L, index: usize, nil_node: *const $E) *E {
+  if index >= list.total {
+    return #cast(*E, nil_node)
+  }
+  remaining := index
+  chunk := list.first
+  for chunk != nil {
+    if remaining < chunk.count {
+      return &chunk.items[remaining]
+    }
+    remaining -= chunk.count
+    chunk = chunk.next
+  }
+  return #cast(*E, nil_node)
+}
+
+// Copies every element, in order, into one new contiguous slice from arena.
+pub fn to_slice($T: type, arena: *mem.Arena, list: *const $L) []T {
+  result := mem.push_array(T, arena, list.total)
+  at: usize = 0
+  chunk := list.first
+  for chunk != nil {
+    for i in 0..chunk.count {
+      result[at] = chunk.items[i]
+      at += 1
+    }
+    chunk = chunk.next
+  }
+  return result
+}

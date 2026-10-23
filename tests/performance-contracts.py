@@ -11,12 +11,14 @@ with tempfile.TemporaryDirectory(prefix='dyn-performance-') as directory:
     root = Path(directory); src=root/'src'; src.mkdir()
     body=['use "std/bytes" bytes', 'use "std/bytes/search" search', 'use "std/testing" t',
           '''use "std/mem" mem
-use "std/container/string_map" maps
+use "std/container/hash" hash
 use "std/io" io
 use "std/bufio" bufio
 use "std/bytes/builder" builder
 use "std/errors" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
+struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
+const nil_entry: Entry = Entry{}
 fn sink_write(data: rawptr, source: []const u8) io.Result {
   state := #cast(*Sink, data)
   state.calls += 1
@@ -87,27 +89,26 @@ fn main() {''']
   t.expect(builder.reserve(&built, &arena, 4096) == builder.ErrorKind.None, "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
   mem.arena_reset(&arena)
-  map := maps.Map{}
-  t.expect(maps.reserve(&map, &arena, 30) == maps.ErrorKind.None, "reserve")
+  names := hash.slots(Entry, &arena, 32)
   initial := mem.arena_used(&arena)
-  key: [1]u8 = []
+  entries: [30]Entry = []
   for i in 0..30 {
-    key[0] = #cast(u8, i)
-    t.expect(maps.put(&map, &arena, key[..], i) == maps.ErrorKind.None, "put")
+    entries[i].bytes[0] = #cast(u8, i)
+    entries[i].key = entries[i].bytes[..]
+    entries[i].hash = hash.hash_bytes(3, entries[i].key)
+    entries[i].value = i
+    hash.insert(names, &entries[i])
   }
-  t.expect(mem.arena_used(&arena) == initial + 30, "preallocation avoids table growth")
-  t.expect(maps.reserve(&map, &arena, 60) == maps.ErrorKind.None, "reserve populated map")
-  used := mem.arena_used(&arena)
-  t.expect(maps.reserve(&map, &arena, #cast(usize, -1)) == maps.ErrorKind.Overflow, "reserve overflow")
-  t.expect(mem.arena_used(&arena) == used && map.length == 30, "reserve atomic")
+  t.expect(mem.arena_used(&arena) == initial, "insertion does not allocate")
+  key: [1]u8 = []
   for i in 0..30 { key[0] = #cast(u8, i)
-    t.expect(maps.get(&map, key[..]).value == i, "preserved values")
-    if i % 2 == 0 { t.expect(maps.remove(&map, key[..]), "deletion") }
+    found := hash.find(names, hash.hash_bytes(3, key[..]), key[..], &nil_entry)
+    t.expect(found.value == i, "values")
+    if i % 2 == 0 { t.expect(hash.remove(names, found), "deletion") }
   }
-  maps.clear(&map)
-  t.expect(map.length == 0 && mem.arena_used(&arena) == used, "clear retains storage")
   for i in 0..30 { key[0] = #cast(u8, i)
-    t.expect(!maps.get(&map, key[..]).found, "clear removes remaining entries")
+    found := hash.find(names, hash.hash_bytes(3, key[..]), key[..], &nil_entry)
+    t.expect((found == &nil_entry) == (i % 2 == 0), "removed entries miss")
   }
   values: [10]i64 = [10,9,8,7,6,5,4,3,2,1]
   stats := t.summarize(values[..])

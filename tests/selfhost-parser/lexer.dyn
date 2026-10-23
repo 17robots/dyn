@@ -35,6 +35,24 @@ struct Tree {
   error_kind: ErrorKind,
 }
 
+// Grows a slice with a separate count by doubling into arena, copying when the
+// slice is not the arena's newest allocation, like realloc in the C parser.
+// Returns the new element's index.
+fn append_grow(items: *[]$T, count: *usize, arena: *mem.Arena, value: T) usize {
+  if count.* == #len(items.*) {
+    capacity := #len(items.*) * 2
+    if capacity == 0 {
+      capacity = 8
+    }
+    grown := mem.push_array(T, arena, capacity)
+    _ = mem.copy(grown, items.*[..count.*])
+    items.* = grown
+  }
+  items.*[count.*] = value
+  count.* += 1
+  return count.* - 1
+}
+
 struct Parser {
   text: []const u8,
   length: u32,

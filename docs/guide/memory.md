@@ -83,22 +83,20 @@ Windows commitment failure still panics. Use `arena_from_buffer` for a fixed
 budget without OS allocation. A zero-byte push with valid alignment succeeds
 without acquiring backing.
 
-Bounded growing arenas, free lists and pools keep fallible forms, since running
-out of them is an expected outcome:
+Bounded growing arenas keep fallible forms, since running out of them is an
+expected outcome:
 
 | Recoverable | Fatal |
 | --- | --- |
 | `try_push` / `try_push_array` / `arena_try_push` | every other arena push |
 | `growing_try_push` / `growing_try_push_uninit` | `growing_push` |
-| `free_list_try_alloc` / `pool_try_acquire` (nil when empty) | `free_list_alloc` / `pool_acquire` |
 
 Bounds checks, invalid frees, invalid rewinds and broken layout preconditions
 panic everywhere.
 
 ### Bounding work that can fail
 
-Std parsers and builders (`strings`, `encoding/json`, `ini`, `string_map`, and
-others) use the fatal pushes. To reject one oversized request and keep running,
+Std parsers and builders (`strings`, `encoding/json`, `ini` and others) use the fatal pushes. To reject one oversized request and keep running,
 give that work its own budget instead of a fallible API:
 
 ```dyn
@@ -131,19 +129,19 @@ Std never rewinds for you. Take `mem.arena_mark` before the call and
   APIs that take `*mem.Arena` always get a contiguous arena, never a chain.
 - `mem.Frames` holds two arenas that alternate each frame, for data that must
   survive exactly one frame.
-- Pools and free lists reuse fixed-size slots inside an arena. Each slot holds
-  an internal link, so its alignment is at least pointer alignment and fewer
-  slots may fit than `backing / size` suggests. Releasing a slot does not shrink
-  the backing arena.
-  For one element type, `mem.pool_for(T, &arena, count)` sizes the slots,
-  `mem.acquire(T, &pool)` returns a zeroed `*T`, and `mem.release(&pool, item)`
-  returns the slot.
+- Individual objects are reused through an intrusive free list: the struct
+  carries `free_next`, and `list.free_push` / `list.free_pop` move nodes on and
+  off it. Freed nodes stay in the arena until it is reset.
 
   ```dyn
-  pool := mem.pool_for(Particle, &arena, 256)
-  spark := mem.acquire(Particle, &pool)
+  spark := list.free_pop(&state.first_free, &nil_particle)
+  if spark == &nil_particle {
+    spark = mem.push(Particle, &arena)
+  } else {
+    mem.clear(spark)
+  }
   spark.life = 30
-  mem.release(&pool, spark)
+  list.free_push(&state.first_free, spark)
   ```
 - `std/container/slot_map` adds generation-checked handles for objects that are
   deleted independently. See [collections](collections.md).

@@ -10,7 +10,7 @@ successive stages agree.
 | Start condition | State |
 | --- | --- |
 | Two previews without a breaking change | Not met: `Unreleased` has two breaking entries (cast syntax, `try_` memory names). The clock starts at the first release after a freeze. |
-| Compiler library settled | Mostly: arenas, `mem.append`, typed pools, slot maps, file reading, arguments and formatting exist. Open: `std/container/string_map` maps bytes to `usize` with unseeded FNV-1a. It is replaced by intrusive hash tables with seeded hashing during [std standardization](std-standardization.md). |
+| Compiler library settled | Mostly: arenas, `mem.append`, intrusive lists, hash tables and slot handles, file reading, arguments and formatting exist. Open: `std/container/string_map` maps bytes to `usize` with unseeded FNV-1a. It is replaced by intrusive hash tables with seeded hashing during [std standardization](std-standardization.md). |
 | Missing target modules reported | Met: one error names the module. |
 | Parser port stable | Met so far: `tests/selfhost-parser` passes on 234 sources and 607 generated inputs. |
 

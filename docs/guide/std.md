@@ -38,7 +38,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/mem` | Arenas, typed pushes, scratch scopes, frames, growing arenas, pools and free lists |
+| `std/mem` | Arenas, typed pushes, `append`, scratch scopes, frames and growing arenas |
 | `std/bytes` | Byte-slice operations, cursors and splitters |
 | `std/bytes/builder` | Byte and UTF-8 string builder over caller storage or an arena |
 | `std/bytes/search` | Prepared KMP search |
@@ -48,8 +48,10 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/text/scanner` | Line and field scanner with positions |
 | `std/text/regex` | Thompson-NFA regular expressions compiled into caller storage |
 | `std/text/template`, `std/html/template` | Text templates, and HTML templates that escape text and quoted attributes |
-| `std/container/string_map` | Open-addressing map from byte strings to `usize` |
-| `std/container/slot_map` | Generation-checked handles to fixed-size records |
+| `std/container/list` | Intrusive stacks, queues, doubly linked lists, trees and free lists |
+| `std/container/hash` | Intrusive chained hash tables and seeded SipHash-1-3 |
+| `std/container/chunk` | Chunk lists that grow on a shared arena without copying |
+| `std/container/slot_map` | Generation handles into caller slot arrays |
 | `std/container/ring`, `bit_set` | Ring buffer and bit set over caller storage |
 | `std/sort` | In-place sort and binary search for any ordered element type |
 | `std/math` | `min`, `max`, `clamp`, `abs`, `narrow` and other scalar helpers |

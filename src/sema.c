@@ -2090,7 +2090,12 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     uint32_t sid = base - DYN_TYPE_STRUCT_BASE,
              field = sema_find_field(a, sid, a->expressions[id].span, s);
     if (field == UINT32_MAX) {
-      error_span(a->expressions[id].span, s, errors, "unknown struct field");
+      char type_text[400], message[512];
+      DynSpan name = a->expressions[id].span;
+      type_name_into(a, base, s, type_text, sizeof(type_text));
+      snprintf(message, sizeof(message), "%s has no field '%.*s'", type_text,
+               (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+      error_span(name, s, errors, message);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     a->expressions[id].integer = field;

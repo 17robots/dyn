@@ -22,12 +22,11 @@ fn main() {
   arena := mem.arena_create(256 * mem.KiB)
   defer mem.arena_release(&arena)
   values: []u64
-  count: usize
   for i in 0..1000 {
-    _ = mem.append(&values, &count, &arena, #cast(u64, i) * 3)
+    _ = mem.append(&arena, &values, #cast(u64, i) * 3)
   }
   sum: u64 = 0
-  for value in values[..count] {
+  for value in values {
     sum += value
   }
   print_number("sum ", sum)
