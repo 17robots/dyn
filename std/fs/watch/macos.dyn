@@ -34,7 +34,7 @@ pub struct EventResult { event: Event, status: Status, error: isize }
 // FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
 pub struct Watcher { state: *State, storage: []u8, arena: mem.Arena, rescan_required: bool }
-pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
+pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
 struct API {
@@ -135,22 +135,22 @@ fn discard_slot(state: *State, slot: *Slot) {
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ error: -28 }
+    return OpenResult{ error: -28, kind: errors.darwin(-28) }
   }
   arena := mem.arena_create(#sizeof(State))
   state := mem.push(State, &arena)
   if !load(&state.api) {
     unload(&state.api)
     mem.arena_release(&arena)
-    return OpenResult{ error: -95 }
+    return OpenResult{ error: -95, kind: errors.darwin(-95) }
   }
   state.queue = queue_create(nil, nil)
   if state.queue == nil {
     unload(&state.api)
     mem.arena_release(&arena)
-    return OpenResult{ error: -12 }
+    return OpenResult{ error: -12, kind: errors.darwin(-12) }
   }
-  return OpenResult{ watcher: Watcher{ state: state, storage: storage, arena: arena }, ok: true }
+  return OpenResult{ value: Watcher{ state: state, storage: storage, arena: arena }, ok: true }
 }
 fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
   state := slot.owner

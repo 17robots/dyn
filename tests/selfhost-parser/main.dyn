@@ -57,7 +57,7 @@ fn main() {
   if !arguments.ok {
     #panic("cannot read arguments")
   }
-  for path in arguments.values[1..] {
+  for path in arguments.value[1..] {
     mark := mem.arena_mark(&arena)
     out := Output{}
     put(&out, &arena, "== ")
@@ -68,7 +68,7 @@ fn main() {
       #panic("cannot read source")
     }
     tree := Tree{}
-    root := parse_source(source.data, &tree, &arena)
+    root := parse_source(source.value, &tree, &arena)
     if root == None {
       put(&out, &arena, "error ")
       put_number(&out, &arena, #cast(u64, tree.error_offset))

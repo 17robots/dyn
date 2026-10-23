@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory(prefix='dyn process directory ') as temporary:
     (child/'main.dyn').write_text('''use "std/fs"\nuse "std/io"\nuse "std/mem"
 fn main() { storage: [128]u8 = [] arena := mem.arena_from_buffer(storage[..])
   value := fs.read_all(&arena, "marker", 16) if !value.ok { #panic("child cwd") }
-  _ = io.write(io.stdout(), value.data)
+  _ = io.write(io.stdout(), value.value)
 }''')
     executable = root/('child.exe' if os.name == 'nt' else 'child-bin')
     subprocess.run([str(DYN),'build',str(child),'--output',str(executable),'--jobs','1'], check=True, timeout=30)
@@ -32,14 +32,14 @@ fn main() {
   result := process.capture(&arena, command, arguments[..], configuration, output[..], error_output[..], 2000)
   if !result.ok || !bytes.equal(result.output, "child") {
     report := fs.create("capture-result")
-    if report.ok { _ = io.println(fs.writer(&report.file), "ok={} error={} exit={} output={} stderr={}", result.ok, result.error, result.exit.code, result.output, result.errors) _ = fs.close(&report.file) }
+    if report.ok { _ = io.println(fs.writer(&report.value), "ok={} error={} exit={} output={} stderr={}", result.ok, result.error, result.exit.code, result.output, result.errors) _ = fs.close(&report.value) }
     fail("child directory capture")
   }
   current := fs.read_all(&arena, "marker", 16)
-  if !current.ok || !bytes.equal(current.data, "parent") { fail("changed parent directory") }
+  if !current.ok || !bytes.equal(current.value, "parent") { fail("changed parent directory") }
   configuration.directory = "missing directory"
   rejected := process.spawn(&arena, command, arguments[..], configuration)
-  if rejected.ok || rejected.child.active { fail("missing directory accepted") }
+  if rejected.ok || rejected.value.active { fail("missing directory accepted") }
   configuration.directory = "bad\\0directory"
   if process.spawn(&arena, command, arguments[..], configuration).kind != errors.Kind.InvalidInput { fail("NUL directory") }
   configuration.directory = ""
@@ -47,8 +47,8 @@ fn main() {
   if !inherited.ok || !bytes.equal(inherited.output, "parent") { fail("inherit directory") }
   owned := process.spawn(&arena, command, arguments[..], configuration)
   if !owned.ok { fail("spawn transfer") }
-  moved := process.take(&owned.child)
-  if owned.child.active || process.wait(&owned.child, false).kind != errors.Kind.InvalidState { fail("moved owner active") }
+  moved := process.take(&owned.value)
+  if owned.value.active || process.wait(&owned.value, false).kind != errors.Kind.InvalidState { fail("moved owner active") }
   completed := process.wait(&moved, false)
   if !completed.ok || !completed.finished || moved.active { fail("transferred child wait") }
 }'''.replace('EXECUTABLE', json.dumps(str(executable),ensure_ascii=False)).replace('DIRECTORY', json.dumps(str(nested),ensure_ascii=False))

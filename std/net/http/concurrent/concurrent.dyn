@@ -33,7 +33,7 @@ fn worker_main(context: rawptr) isize {
       worker.error = http.Result{ error: http.ErrorKind.Io, system_error: accepted.error }
       return accepted.error
     }
-    socket := accepted.connection
+    socket := accepted.value
     sync.lock(&worker.control)
     if sync.load_u32(&worker.stopping) != 0 {
       _ = http.close(&socket)

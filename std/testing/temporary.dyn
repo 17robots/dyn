@@ -3,27 +3,28 @@ use "std/fmt" format
 use "std/os/linux" platform
 use "std/sync"
 use "std/fs" fs
+use "std/errors" errors
 use "std/mem" mem
 pub struct TemporaryDirectory { path: []const u8, active: bool }
-pub struct TemporaryResult { directory: TemporaryDirectory, error: isize, ok: bool }
+pub struct TemporaryResult { value: TemporaryDirectory, error: isize, kind: errors.Kind, ok: bool }
 // Reserves a private 0700 directory. Its path is in arena.
 pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult {
   for byte in prefix {
     if byte == 0 || byte == '/' {
-      return TemporaryResult{ error: -22 }
+      return TemporaryResult{ error: -22, kind: errors.linux(-22) }
     }
   }
   for attempt in 0..128 {
     path := temporary_path(arena, prefix, "")
     created := fs.make_directory(path, 448)
     if created.ok {
-      return TemporaryResult{ directory: TemporaryDirectory{ path: path, active: true }, ok: true }
+      return TemporaryResult{ value: TemporaryDirectory{ path: path, active: true }, ok: true }
     }
     if created.error != -17 {
-      return TemporaryResult{ error: created.error }
+      return TemporaryResult{ error: created.error, kind: created.kind }
     }
   }
-  return TemporaryResult{ error: -17 }
+  return TemporaryResult{ error: -17, kind: errors.linux(-17) }
 }
 pub fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) fs.Result {
   if !directory.active {

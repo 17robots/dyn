@@ -33,7 +33,7 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   if value < 0 {
     return FileResult{ error: value, kind: native_kind(value) }
   }
-  return FileResult{ file: owned_file(value), ok: true }
+  return FileResult{ value: owned_file(value), ok: true }
 }
 fn native_close(handle: isize) isize {
   return #syscall(6, handle)

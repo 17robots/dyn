@@ -30,7 +30,7 @@ struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
 // Windows reports paired rename actions without cookies, and cannot distinguish
 // close-write, directory flags, or deletion/movement of the watched directory.
 pub struct Watcher { native: *Native, owner: mem.Arena, storage: []u8, rescan_required: bool }
-pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
+pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
 // `error` keeps the native code; `kind` is its portable category.
 pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
@@ -64,12 +64,12 @@ fn arm(slot: *Slot) isize {
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ watcher: Watcher{}, error: -28 }
+    return OpenResult{ value: Watcher{}, error: -28, kind: errors.windows(-28) }
   }
   owner := mem.arena_create(#sizeof(Native))
   native := mem.push(Native, &owner)
   native.next_id = 1
-  return OpenResult{ watcher: Watcher{ native: native, owner: owner, storage: storage }, ok: true }
+  return OpenResult{ value: Watcher{ native: native, owner: owner, storage: storage }, ok: true }
 }
 fn retire(slot: *Slot) isize {
   if slot.pending {

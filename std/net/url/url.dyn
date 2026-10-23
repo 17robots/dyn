@@ -7,7 +7,7 @@ pub struct URL {
   fragment: []const u8,
 }
 
-pub struct ParseResult { value: URL, ok: bool, error_offset: usize }
+pub struct ParseResult { value: URL, ok: bool, offset: usize }
 
 pub fn parse(text: []const u8) ParseResult {
   empty := text[0..0]
@@ -24,14 +24,14 @@ pub fn parse(text: []const u8) ParseResult {
   }
   if colon >= 0 {
     if colon == 0 {
-      return ParseResult{ value: result, ok: false, error_offset: 0 }
+      return ParseResult{ value: result, ok: false, offset: 0 }
     }
     i: usize = 0
     for i < #cast(usize, colon) {
       byte := text[i]
       alpha := (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z')
       if !alpha && (i == 0 || !((byte >= '0' && byte <= '9') || byte == '+' || byte == '-' || byte == '.')) {
-        return ParseResult{ error_offset: i }
+        return ParseResult{ offset: i }
       }
       i += 1
     }
@@ -65,7 +65,7 @@ pub fn parse(text: []const u8) ParseResult {
   if at < #len(text) && text[at] == '#' {
     result.fragment = text[at + 1..]
   }
-  return ParseResult{ value: result, ok: true, error_offset: 0 }
+  return ParseResult{ value: result, ok: true, offset: 0 }
 }
 
 pub struct EncodingResult { data: []u8, ok: bool }

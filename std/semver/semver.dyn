@@ -8,7 +8,7 @@ pub struct Version {
   build: []const u8,
 }
 
-pub struct ParseResult { version: Version, offset: usize, ok: bool }
+pub struct ParseResult { value: Version, offset: usize, ok: bool }
 
 fn identifier_byte(byte: u8) bool {
   return (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'z') ||
@@ -109,7 +109,7 @@ pub fn parse(text: []const u8) ParseResult {
   if at != #len(text) {
     return ParseResult{ offset: at, ok: false }
   }
-  return ParseResult{ version: version, offset: at, ok: true }
+  return ParseResult{ value: version, offset: at, ok: true }
 }
 
 fn bytes_compare(a: []const u8, b: []const u8) i32 {

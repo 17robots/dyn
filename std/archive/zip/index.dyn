@@ -3,7 +3,7 @@
 // ZIP64, encryption, multi-disk and self-extracting offset correction are unsupported.
 use "std/bytes" bytes
 
-pub struct OpenResult { reader: ArchiveReader, error: ErrorKind, ok: bool }
+pub struct OpenResult { value: ArchiveReader, kind: ErrorKind, ok: bool }
 struct Central { entry: Entry, next: usize, error: ErrorKind, ok: bool }
 fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize) Central {
   if at > limit || limit > #len(source) || limit - at < 46 || u32le(source, at) != 33639248 {
@@ -65,7 +65,7 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 // Payload CRCs are verified by extract, without allocating or decompressing here.
 pub fn open_checked(source: []const u8) OpenResult {
   if #len(source) < 22 {
-    return OpenResult{ error: ErrorKind.Syntax }
+    return OpenResult{ kind: ErrorKind.Syntax }
   }
   end := #len(source) - 22
   floor: usize = 0
@@ -84,44 +84,44 @@ pub fn open_checked(source: []const u8) OpenResult {
     end -= 1
   }
   if !found {
-    return OpenResult{ error: ErrorKind.Syntax }
+    return OpenResult{ kind: ErrorKind.Syntax }
   }
   error := end_record(source[end..])
   if error != ErrorKind.None {
-    return OpenResult{ error: error }
+    return OpenResult{ kind: error }
   }
   start := #cast(usize, u32le(source, end + 16))
   size := #cast(usize, u32le(source, end + 12))
   if start == 4294967295 || size == 4294967295 {
-    return OpenResult{ error: ErrorKind.Unsupported }
+    return OpenResult{ kind: ErrorKind.Unsupported }
   }
   if start > end || size != end - start {
-    return OpenResult{ error: ErrorKind.Syntax }
+    return OpenResult{ kind: ErrorKind.Syntax }
   }
   count := #cast(usize, u16le(source, end + 10))
   cursor := start
   for i in 0..count {
     entry := central_entry(source, cursor, end, start)
     if !entry.ok {
-      return OpenResult{ error: entry.error }
+      return OpenResult{ kind: entry.error }
     }
     cursor = entry.next
   }
   if cursor != end {
-    return OpenResult{ error: ErrorKind.Syntax }
+    return OpenResult{ kind: ErrorKind.Syntax }
   }
-  return OpenResult{ reader: ArchiveReader{ source: source, offset: start, indexed: true,
+  return OpenResult{ value: ArchiveReader{ source: source, offset: start, indexed: true,
     directory_start: start, directory_end: end, remaining: count }, ok: true }
 }
 fn next_indexed(state: *ArchiveReader) EntryResult {
   if state.remaining == 0 {
-    return EntryResult{ error: ErrorKind.End }
+    return EntryResult{ kind: ErrorKind.End }
   }
   item := central_entry(state.source, state.offset, state.directory_end, state.directory_start)
   if !item.ok {
-    return EntryResult{ error: item.error }
+    return EntryResult{ kind: item.error }
   }
   state.offset = item.next
   state.remaining -= 1
-  return EntryResult{ entry: item.entry, ok: true }
+  return EntryResult{ value: item.entry, ok: true }
 }

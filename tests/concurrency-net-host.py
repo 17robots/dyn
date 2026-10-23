@@ -18,7 +18,7 @@ fn worker(context: rawptr) isize {
   for sync.load_u32(&shared.ready) == 0 { _ = thread.yield_now() }
   accepted := net.listener_accept(&shared.listener)
   if !accepted.ok { #panic("accept") }
-  connection := accepted.connection
+  connection := accepted.value
   defer { _ = net.connection_close(&connection) }
   buffer: [4]u8 = []
   at: usize = 0
@@ -40,7 +40,7 @@ fn main() {
   address := net.ipv4(127, 0, 0, 1, 0)
   opened := net.tcp_listen_ipv4(&address, 4)
   if !opened.ok { #panic("listen") }
-  shared := Context{ listener: opened.listener }
+  shared := Context{ listener: opened.value }
   defer { _ = net.listener_close(&shared.listener) }
   local := net.Address{}
   if !net.local_address(shared.listener.descriptor, &local).ok || local.length != 16 { #panic("local address") }
@@ -53,7 +53,7 @@ fn main() {
   address = net.ipv4(127, 0, 0, 1, port)
   connected := net.tcp_connect_ipv4(&address)
   if !connected.ok { #panic("connect") }
-  connection := connected.connection
+  connection := connected.value
   if !net.send_timeout(connection.descriptor, 2000).ok || !net.receive_timeout(connection.descriptor, 2000).ok { #panic("timeouts") }
   if !net.socket_error(connection.descriptor).ok { #panic("socket error") }
   peer := net.Address{}

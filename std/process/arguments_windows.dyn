@@ -117,7 +117,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     if !copied.ok {
       return ArgumentsResult{ kind: error_kinds.Kind.InvalidInput }
     }
-    result.values[index] = bytes[used..used + copied.length]
+    result.value[index] = bytes[used..used + copied.length]
     used += copied.length
     index += 1
     at = argument_skip(command, copied.next)

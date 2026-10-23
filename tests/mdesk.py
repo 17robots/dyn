@@ -19,7 +19,7 @@ fn expect(condition: bool, message: []const u8) {
 
 fn fails(arena: *mem.Arena, source: []const u8, error: mdesk.ErrorKind, offset: usize) {
   result := mdesk.parse(arena, source)
-  expect(!result.ok && result.error == error && result.error_offset == offset, source)
+  expect(!result.ok && result.kind == error && result.offset == offset, source)
   expect(!mdesk.is_nil(result.root), "root on failure")
 }
 

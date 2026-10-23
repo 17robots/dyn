@@ -41,7 +41,7 @@ pub struct Node {
 }
 
 // root is never nil, also on failure, where it holds what parsed before the error.
-pub struct ParseResult { root: *Node, error: ErrorKind, error_offset: usize, ok: bool }
+pub struct ParseResult { root: *Node, kind: ErrorKind, offset: usize, ok: bool }
 
 struct Parser {
   arena: *mem.Arena,
@@ -62,8 +62,8 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   parse_children(&parser, root, 0)
   return ParseResult{
     root: root,
-    error: parser.error,
-    error_offset: parser.error_offset,
+    kind: parser.error,
+    offset: parser.error_offset,
     ok: parser.error == ErrorKind.None,
   }
 }

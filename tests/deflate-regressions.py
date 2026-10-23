@@ -64,31 +64,31 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
   require(encoded.ok && expected.ok, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
-    check(encoded.data, expected.data, wrapped, corrupt, chunk, 7, 33026)
+    check(encoded.value, expected.value, wrapped, corrupt, chunk, 7, 33026)
     // Bytewise output already exercises every boundary with minimum history.
     // Larger chunks cover the second storage/input configuration without
     // repeating millions of debug-mode reader calls on shared CI runners.
-    if chunk != 1 { check(encoded.data, expected.data, wrapped, corrupt, chunk, 1024, 65536) }
+    if chunk != 1 { check(encoded.value, expected.value, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
-    inflated := deflate.inflate(&owned, encoded.data)
-    require(inflated.ok && #len(inflated.value) == #len(expected.data), "one-shot inflate")
-    for i in 0..#len(inflated.value) { require(inflated.value[i] == expected.data[i], "one-shot output") }
-    destination := memory.arena_push(&owned, #len(expected.data), 1)[..#len(expected.data)]
+    inflated := deflate.inflate(&owned, encoded.value)
+    require(inflated.ok && #len(inflated.value) == #len(expected.value), "one-shot inflate")
+    for i in 0..#len(inflated.value) { require(inflated.value[i] == expected.value[i], "one-shot output") }
+    destination := memory.arena_push(&owned, #len(expected.value), 1)[..#len(expected.value)]
     result: deflate.Result
     progressive := deflate.InflateState{}
     prefix: usize = 0
-    for prefix < #len(encoded.data) {
+    for prefix < #len(encoded.value) {
       prefix += 1024
-      if prefix > #len(encoded.data) { prefix = #len(encoded.data) }
-      result = deflate.resume(&progressive, destination, encoded.data[..prefix])
+      if prefix > #len(encoded.value) { prefix = #len(encoded.value) }
+      result = deflate.resume(&progressive, destination, encoded.value[..prefix])
       require(progressive.error == 0, "linear resume error")
     }
-    require(result.ok && result.written == #len(expected.data), "linear resume completion")
-    for i in 0..#len(destination) { require(destination[i] == expected.data[i], "linear resume output") }
+    require(result.ok && result.written == #len(expected.value), "linear resume completion")
+    for i in 0..#len(destination) { require(destination[i] == expected.value[i], "linear resume output") }
     tiny: [1]u8 = []
     capacity := deflate.InflateState{}
-    result = deflate.resume(&capacity, tiny[..], encoded.data)
+    result = deflate.resume(&capacity, tiny[..], encoded.value)
     require(!result.ok && capacity.error == -28, "linear output capacity")
   }
   memory.arena_release(&owned)

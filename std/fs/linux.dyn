@@ -10,7 +10,7 @@ fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
   if descriptor < 0 {
     return FileResult{ error: descriptor, kind: errors.linux(descriptor) }
   }
-  return FileResult{ file: owned_file(descriptor), error: 0, ok: true }
+  return FileResult{ value: owned_file(descriptor), error: 0, ok: true }
 }
 
 fn native_open_read(path: []const u8) FileResult {

@@ -14,6 +14,17 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking:** one result shape at the edges. Single-payload results name
+  the payload `value`: `fs.FileResult`, `OffsetResult`, `ReadAllResult`,
+  `PathResult`, `DirectoryResult`, `AtomicResult`; `net.ConnectionResult`,
+  `ListenerResult`, `http.AcceptResult`; `process.SpawnResult`,
+  `ArgumentsResult`; `testing.TemporaryResult`; `watch.OpenResult`; `zip`
+  `EntryResult`, `ExtractResult`, `OpenResult`; `dns.Result`; `xml` and `ini`
+  scanner results; `semver`, `template`, `der` and `certificate` results.
+  Network, watch and temporary-directory results gain `kind`. Parser results
+  use `kind` and `offset`: `json` and `mdesk` `ParseResult.error` is now `kind`
+  and `error_offset` is `offset`; `template`, `der` and `url` likewise; `ini`
+  `ParseResult` is `{value, kind, line, ok}`.
 - **Breaking:** one way to produce variable-size data: the function takes
   `arena: *mem.Arena` first and returns the result in it. Removed the
   caller-buffer forms and size companions: `strings.clone_into`, `join_size`,

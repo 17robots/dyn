@@ -237,7 +237,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     return SpawnResult{ error: create_error, kind: error_kinds.windows(create_error) }
   }
   _ = win_close(information.thread)
-  return SpawnResult{ child: Child{ handle: #cast(isize, #cast(usize, information.process)), active: true }, ok: true }
+  return SpawnResult{ value: Child{ handle: #cast(isize, #cast(usize, information.process)), active: true }, ok: true }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   timeout: u32 = 4294967295

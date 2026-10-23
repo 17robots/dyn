@@ -80,7 +80,7 @@ fn xml_check(source: []const u8, expected: bool) {
       if event.ok != original.ok || streamed.error != direct.error {
         #panic("XML chunk acceptance mismatch")
       }
-      if event.ok && (event.event.kind != original.event.kind || !bytes.equal(event.event.name, original.event.name) || !bytes.equal(event.event.text, original.event.text) || !bytes.equal(event.event.attributes, original.event.attributes)) {
+      if event.ok && (event.value.kind != original.value.kind || !bytes.equal(event.value.name, original.value.name) || !bytes.equal(event.value.text, original.value.text) || !bytes.equal(event.value.attributes, original.value.attributes)) {
         #panic("XML chunk contents mismatch")
       }
     }
@@ -207,7 +207,7 @@ fn recorded_errors() {
     if !item.ok {
       break
     }
-    if item.entry.kind == ini.Kind.Pair {
+    if item.value.kind == ini.Kind.Pair {
       keys += 1
     }
   }

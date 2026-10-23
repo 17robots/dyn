@@ -6,7 +6,7 @@ pub enum ErrorKind { None, Syntax, OutOfMemory, Io }
 
 pub struct Template { source: []const u8 }
 pub struct Field { name: []const u8, value: []const u8 }
-pub struct ParseResult { template: Template, error: ErrorKind, error_offset: usize, ok: bool }
+pub struct ParseResult { value: Template, kind: ErrorKind, offset: usize, ok: bool }
 pub struct RenderResult { error: ErrorKind, system_error: isize, ok: bool }
 
 
@@ -46,7 +46,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
         end += 1
       }
       if end + 1 >= #len(source) || !valid_name(trim(source[cursor + 2..end])) {
-        return ParseResult{ error: ErrorKind.Syntax, error_offset: cursor, ok: false }
+        return ParseResult{ kind: ErrorKind.Syntax, offset: cursor, ok: false }
       }
       cursor = end + 2
     } else {
@@ -61,7 +61,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
       retained[i] = source[i]
     }
   }
-  return ParseResult{ template: Template{ source: retained }, error: ErrorKind.None, ok: true }
+  return ParseResult{ value: Template{ source: retained }, kind: ErrorKind.None, ok: true }
 }
 
 fn value(fields: []const Field, name: []const u8) []const u8 {

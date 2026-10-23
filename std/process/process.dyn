@@ -10,7 +10,7 @@ pub fn options() Options {
   return Options{ input: -1, output: -1, error: -1 }
 }
 pub struct Child { handle: isize, active: bool }
-pub struct SpawnResult { child: Child, error: isize, kind: error_kinds.Kind, ok: bool }
+pub struct SpawnResult { value: Child, error: isize, kind: error_kinds.Kind, ok: bool }
 pub struct ExitResult { code: u32, signal: u32, finished: bool, error: isize, kind: error_kinds.Kind, ok: bool }
 pub struct Status { error: isize, kind: error_kinds.Kind, ok: bool }
 pub struct Pipe { input: isize, output: isize, error: isize, kind: error_kinds.Kind, ok: bool }
@@ -157,9 +157,9 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
     return CaptureResult{ error: child.error, kind: child.kind }
   }
   defer {
-    if child.child.active {
-      _ = terminate(&child.child)
-      _ = wait(&child.child, false)
+    if child.value.active {
+      _ = terminate(&child.value)
+      _ = wait(&child.value, false)
     }
   }
   started := milliseconds_native()
@@ -216,8 +216,8 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
     if result.kind != error_kinds.Kind.None {
       break
     }
-    if child.child.active {
-      exited := wait(&child.child, true)
+    if child.value.active {
+      exited := wait(&child.value, true)
       if !exited.ok {
         result.error = exited.error
         result.kind = exited.kind
@@ -227,7 +227,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
         result.exit = exited
       }
     }
-    if out_end && err_end && !child.child.active {
+    if out_end && err_end && !child.value.active {
       result.ok = true
       break
     }
@@ -249,7 +249,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
 // Includes argv[0]. Descriptors and argument bytes belong to arena.
 // Unix preserves native bytes; Windows converts UTF-16 to UTF-8.
 // Failure rewinds arena; success lives until its next reset/rewind/destroy.
-pub struct ArgumentsResult { values: [][]const u8, error: isize, kind: error_kinds.Kind, ok: bool }
+pub struct ArgumentsResult { value: [][]const u8, error: isize, kind: error_kinds.Kind, ok: bool }
 pub fn arguments(arena: *mem.Arena) ArgumentsResult {
   mark := mem.arena_mark(arena)
   result := arguments_native(arena)
@@ -266,5 +266,5 @@ fn argument_slots(arena: *mem.Arena, count: usize) ArgumentsResult {
     return ArgumentsResult{ kind: error_kinds.Kind.Overflow }
   }
   allocation := mem.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  return ArgumentsResult{ values: (#cast(*[]const u8, allocation))[..count], ok: true }
+  return ArgumentsResult{ value: (#cast(*[]const u8, allocation))[..count], ok: true }
 }
