@@ -11,10 +11,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve()
-SOURCE = '''extern fn invoke "fixture_invoke"(callback: *fn(u64) u64, value: u64) u64
+SOURCE = '''extern fn invoke "fixture_invoke"(callback: fn(u64) u64, value: u64) u64
 initialized: u64 = initialize_value()
 cleanups: u64
-const callback: *fn(u64) u64 = &recursive_callback
+const callback: fn(u64) u64 = &recursive_callback
 fn initialize_value() u64 { return 5 }
 fn recursive_callback(n: u64) u64 { if n == 0 { return 3 } return recursive_callback(n - 1) }
 fn ffi_callback(n: u64) u64 { return n + 2 }
@@ -78,7 +78,7 @@ pub fn cleanup() { cleanups += 1 }
 fn initialize() u64 { defer cleanup() return 5 }
 initialized: u64 = initialize()
 pub fn addressed(n: u64) u64 { return n + initialized }
-struct Callbacks { run: *fn(u64) u64 }
+struct Callbacks { run: fn(u64) u64 }
 const callbacks: Callbacks = Callbacks{run: &addressed}
 fn dead_helper() u64 { return 99 }
 pub fn unused_public_marker() u64 { return dead_helper() }

@@ -12,7 +12,7 @@ extern fn close_handle_raw "dyn_win_close_handle"(handle: rawptr) i32
 extern fn read_file_raw "dyn_win_read_file"(handle: rawptr, bytes: *u8, count: u32, done: *u32, overlapped: rawptr) i32
 extern fn write_file_raw "dyn_win_write_file"(handle: rawptr, bytes: *const u8, count: u32, done: *u32, overlapped: rawptr) i32
 extern fn last_error_raw "dyn_win_last_error"() u32
-extern fn thread_spawn_raw "dyn_win_thread_spawn"(size: usize, entry: *fn(rawptr) isize, context: rawptr, tid: *u32) rawptr
+extern fn thread_spawn_raw "dyn_win_thread_spawn"(size: usize, entry: fn(rawptr) isize, context: rawptr, tid: *u32) rawptr
 extern fn wait_raw "dyn_win_wait"(handle: rawptr, milliseconds: u32) u32
 extern fn yield_raw "dyn_win_yield"() i32
 extern fn socket_raw "dyn_win_socket"(family: i32, kind: i32, protocol: i32) usize
@@ -87,7 +87,7 @@ pub fn file_close(handle: isize) IoResult {
   }
   return IoResult{ value: 0, error: 0, ok: true }
 }
-pub fn thread_spawn(thread: *Thread, stack_size: usize, entry: *fn(rawptr) isize, context: rawptr) bool {
+pub fn thread_spawn(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) bool {
   if thread.handle != nil {
     return false
   }

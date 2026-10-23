@@ -26,7 +26,7 @@ fn take(p: Pair, ignored: i32) i32 { return p.x }
 pub fn snapshot() i32 { p := Pair{x: 7, y: 9} return take(p, mutate(&p)) }
 fn first(x: i32) i32 { return 11 }
 fn second(x: i32) i32 { return 22 }
-callback: *fn(i32) i32 = &first
+callback: fn(i32) i32 = &first
 fn change() i32 { callback = &second return 0 }
 pub fn order() i32 { callback = &first return callback(change()) }
 '''

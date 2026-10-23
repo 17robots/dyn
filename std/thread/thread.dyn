@@ -8,7 +8,7 @@ pub struct Thread { tid: sync.AtomicU32, stack_owner: mem.Arena }
 extern fn spawn_raw "dyn_thread_spawn"(
   stack: *u8,
   size: usize,
-  entry: *fn(rawptr) isize,
+  entry: fn(rawptr) isize,
   context: rawptr,
   tid: *sync.AtomicU32,
 ) isize
@@ -17,7 +17,7 @@ extern fn spawn_raw "dyn_thread_spawn"(
 // Allocation: none. Linux raw threads do not provide libc/pthread TLS.
 // Failure: negative native error; no worker starts on failure.
 // Thread safety: one caller controls each Thread's lifecycle; synchronize shared context.
-pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: rawptr) isize {
+pub fn spawn(thread: *Thread, stack: []u8, entry: fn(rawptr) isize, context: rawptr) isize {
   if #len(stack) < 256 || entry == nil {
     return -22
   }
@@ -30,7 +30,7 @@ pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: ra
 // Own a mapped stack until join. This avoids allocating an unused caller stack
 // for portable code; Windows/macOS use OS-managed stacks for the same API.
 // Ownership: keep Thread and context unmoved until successful join.
-pub fn spawn_with_size(thread: *Thread, size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
+pub fn spawn_with_size(thread: *Thread, size: usize, entry: fn(rawptr) isize, context: rawptr) isize {
   if size < 256 || entry == nil {
     return -22
   }

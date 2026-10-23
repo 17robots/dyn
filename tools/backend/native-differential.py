@@ -129,7 +129,7 @@ pub fn agg_defer_locals(a: u64, b: u64) u64 {
 table: [4]u64 = [1, 2, 3, 4]
 computed: u64 = table[2] * 10
 pub fn agg_globals(a: u64) u64 { table[a % 4] += a % 100 return table[0] + table[3] + computed }
-fn apply_pair(f: *fn(Pair) Pair, p: Pair) Pair { return f(p) }
+fn apply_pair(f: fn(Pair) Pair, p: Pair) Pair { return f(p) }
 pub fn agg_indirect(a: i64, b: i64) i64 { r := apply_pair(&pair_swap, Pair{ x: a, y: b }) return #wrap(r.x - r.y) }
 fn large_echo(l: Large) Large { return l }
 pub fn agg_large_indirect(a: u64) u64 { f := &large_echo r := f(Large{ a: a % 1000, b: 2, c: 3, d: 4, e: 5 }) return r.a + r.d }
@@ -202,15 +202,15 @@ extern fn c_large(l: Large) Large
 extern fn c_large_mutates(l: Large) u64
 extern fn c_spill(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, p: Pair, tail: i64) i64
 extern fn c_fp_spill(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, x: Doubles, tail: f64) f64
-extern fn c_callback(f: *fn(Pair, i64) i64, a: i64) i64
-extern fn c_hfa_callback(f: *fn(Floats) Floats, a: f32) f64
-extern fn c_large_callback(f: *fn(Large) Large, a: u64) u64
+extern fn c_callback(f: fn(Pair, i64) i64, a: i64) i64
+extern fn c_hfa_callback(f: fn(Floats) Floats, a: f32) f64
+extern fn c_large_callback(f: fn(Large) Large, a: u64) u64
 fn dyn_pair_callback(p: Pair, k: i64) i64 { return p.x % 1000 * k + p.y }
 fn dyn_floats_callback(f: Floats) Floats { return Floats{ x: f.y, y: f.x } }
 fn dyn_large_callback(l: Large) Large { m := l m.a = l.a % 1000 + l.d m.e = 9 return m }
 extern fn c_narrow(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: u8, j: i16, k: i32, l: u8, m: i64) i64
 extern fn c_narrow_fp(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f32, j: f64, k: f32) f64
-extern fn c_narrow_callback(f: *fn(i64, i64, i64, i64, i64, i64, i64, i64, u8, i16, i32, u8, i64) i64, a: u8) i64
+extern fn c_narrow_callback(f: fn(i64, i64, i64, i64, i64, i64, i64, i64, u8, i16, i32, u8, i64) i64, a: u8) i64
 extern fn c_vsum(n: i32, ...) i64
 extern fn c_vmixed(n: i32, ...) f64
 fn dyn_narrow(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: u8, j: i16, k: i32, l: u8, m: i64) i64 {

@@ -34,7 +34,7 @@ c='typedef unsigned W;\n'
 names=[];checks=[]
 for name,fields,values in [('Byte',[('a','u8')],[19]),('Odd',[('a','u8'),('b','u8'),('c','u8')],[19,23,27]),('Seven',[(x,'u8') for x in 'abcdefg'],list(range(11,18))),('Mixed',[('a','f64'),('b','u32')],[3.5,27]),('MixRev',[('a','u32'),('b','f32')],[27,3.5]),('Large',[(x,'u64') for x in 'abcde'],[11,22,33,44,55])]+[(f'H{n}',[(chr(97+i),'f32') for i in range(n)],[i+1.5 for i in range(n)]) for n in range(1,5)]+[(f'D{n}',[(chr(97+i),'f64') for i in range(n)],[i+1.5 for i in range(n)]) for n in range(1,5)]:
  source+=f'struct {name} {{'+','.join(f'{f}:{t}' for f,t in fields)+'}\n'
- source+=f'extern fn c{name}(x:{name}) {name}\npub fn id{name}(x:{name}) {name} {{ return x }}\npub fn round{name}(x:{name}) {name} {{ return c{name}(c{name}(x)) }}\npub fn indirect{name}(p:*fn({name}) {name},x:{name}) {name} {{ return p(x) }}\n'
+ source+=f'extern fn c{name}(x:{name}) {name}\npub fn id{name}(x:{name}) {name} {{ return x }}\npub fn round{name}(x:{name}) {name} {{ return c{name}(c{name}(x)) }}\npub fn indirect{name}(p:fn({name}) {name},x:{name}) {name} {{ return p(x) }}\n'
  names+=['id'+name,'round'+name,'indirect'+name]
  ct={'u8':'unsigned char','u32':'unsigned','u64':'unsigned long long','f32':'float','f64':'double'}
  c+=f'typedef struct {{'+''.join(f'{ct[t]} {f};' for f,t in fields)+f'}} {name};\n'
@@ -67,7 +67,7 @@ c+='extern unsigned isolation(void),rawtest(void);unsigned checkcopy(Large x,uns
 checks+=['if(isolation()!=0)return 101;','if(rawtest()!=66)return 102;']
 source+=r'''
 extern fn craw_addr() rawptr
-pub fn rawforeign(x:[3]u32) [3]u32 { return #cast(*fn([3]u32) [3]u32,craw_addr())(x) }
+pub fn rawforeign(x:[3]u32) [3]u32 { return #cast(fn([3]u32) [3]u32,craw_addr())(x) }
 extern fn touch(p:rawptr)
 pub fn bigframe(x:Mixed) Mixed { a:[1025]u64=[] touch(&a) return cMixed(x) }
 pub fn partialmix(x:Mixed) u32 { return cMixed(x).b }
@@ -85,7 +85,7 @@ checks+=['{W a[3]={0};rawid(a,7,11,13);if(a[0]!=7||a[1]!=11||a[2]!=13)return 103
 '{Mixed x={3.5,27},r=bigframe(x);if(r.a!=4.5||r.b!=27||partialmix(x)!=27)return 106;unusedmix(x);}']
 # Maximum operand list includes hidden sret and the indirect target.
 pars=','.join(f'a{i}:u32' for i in range(511));types=','.join(['u32']*511);args=','.join(str(i) for i in range(511))
-source+=f'pub fn capacitycallee({pars}) Large {{ return Large{{a:#cast(u64,a0),b:#cast(u64,a510),c:3,d:4,e:5}} }}\npub fn capacitycall(p:*fn({types}) Large) u64 {{ return p({args}).b }}\n'
+source+=f'pub fn capacitycallee({pars}) Large {{ return Large{{a:#cast(u64,a0),b:#cast(u64,a510),c:3,d:4,e:5}} }}\npub fn capacitycall(p:fn({types}) Large) u64 {{ return p({args}).b }}\n'
 names+=['capacitycallee','capacitycall']
 c+='extern unsigned long long capacitycall(void*);extern void capacitycallee(void);\n'
 checks+=['if(capacitycall((void*)capacitycallee)!=510)return 107;']

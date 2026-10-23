@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve()
 SOURCE = '''struct Pair { x: i64, y: i64 }
 extern fn c_spill(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64,g:i64,p:Pair,tail:i64) i64
-extern fn c_callback(callback:*fn(i64,i64,i64,i64,i64,i64,i64,Pair,i64) i64) i64
+extern fn c_callback(callback:fn(i64,i64,i64,i64,i64,i64,i64,Pair,i64) i64) i64
 fn dyn_spill(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64,g:i64,p:Pair,tail:i64) i64 {
   return a+b+c+d+e+f+g+p.x*10+p.y*100+tail*1000
 }

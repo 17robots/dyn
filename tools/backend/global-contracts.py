@@ -22,12 +22,12 @@ pub items:[3]u64=[next(),next(),next()]
 pub pair:Pair=Pair{a:next(),b:next()}
 pub payload:Box=Box.Value(Pair{a:8,b:9})
 pub text:[]const u8="ok"
-pub callback:*fn(u64) u64=&plus
+pub callback:fn(u64) u64=&plus
 extern foreign_value "backend_foreign_value":u64
 const frozen:Pair=Pair{a:10,b:20}
 const frozen_table:[3]u8=[1,2,3]
 const frozen_text:[]const u8="ice"
-const frozen_callback:*fn(u64) u64=&plus
+const frozen_callback:fn(u64) u64=&plus
 const computed:u64=15
 pub fn constants() u64 {
   total:=frozen.a+frozen.b+#cast(u64, frozen_table[2])+#cast(u64, #len(frozen_text))+frozen_callback(1)+computed

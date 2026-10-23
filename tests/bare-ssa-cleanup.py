@@ -117,12 +117,12 @@ def fixtures():
     extern fn cpacr() u32
     extern fn opaque() u32
     extern fn touch(p:rawptr)
-    extern fn callback(p:*fn())
+    extern fn callback(p:fn())
     fn mark(s:[]const u8) { _=io.write_all(io.stdout(),s) }
     pub fn boom() { #panic("BOOM") }
     pub fn inner() { defer mark("I\n") boom() }
     pub fn outer() { defer mark("O\n") inner() }
-    pub fn indirect(p:*fn()) { defer mark("D\n") p() }
+    pub fn indirect(p:fn()) { defer mark("D\n") p() }
     pub fn acrossc() { defer mark("C\n") callback(&boom) }
     pub fn recur(n:u32) { defer mark("R\n") if n==0 { boom() } recur(n-1) }
     pub fn repeated(n:u32) { defer mark("END\n") i:u32=0 for i<n { _=opaque() i+=1 } boom() }
@@ -173,19 +173,19 @@ def fixtures():
     groups.append(('minimal', source, cases))
     source = original
     source+=r'''
-    pub fn nullcall(p:*fn()) { defer mark("CHECK\n") p() }
+    pub fn nullcall(p:fn()) { defer mark("CHECK\n") p() }
     pub fn index(a:[]const u8,n:usize) u8 { defer mark("CHECK\n") return a[n] }
     pub fn slicing(a:[]const u8,l:usize,h:usize) []const u8 { defer mark("CHECK\n") return a[l..h] }
     fn highcheck(x:f64,y:u64) { if x!=123456789.25 || y!=0xdeadbeef87654321 { #panic("BANK") } mark("BANK\n") }
     pub fn bank(x:f64,y:u64) { defer highcheck(x,y) _=opaque() boom() }
     '''
-    cases=[('nullcall','nullcall(#cast(*fn(),#cast(rawptr,0)))',101,b'CHECK\nruntime check failed (function.nonnull.ok) in nullcall\n'),('index','_=index("abc",4)',101,b'CHECK\nruntime check failed (index.ok) in index\n'),('sliceorder','_=slicing("abc",2,1)',101,b'CHECK\nruntime check failed (slice.order.ok) in slicing\n'),('slicebounds','_=slicing("abc",0,4)',101,b'CHECK\nruntime check failed (slice.bounds.ok) in slicing\n'),('bank','bank(123456789.25,0xdeadbeef87654321)',101,b'BANK\nBOOM\n')]
+    cases=[('nullcall','nullcall(#cast(fn(),#cast(rawptr,0)))',101,b'CHECK\nruntime check failed (function.nonnull.ok) in nullcall\n'),('index','_=index("abc",4)',101,b'CHECK\nruntime check failed (index.ok) in index\n'),('sliceorder','_=slicing("abc",2,1)',101,b'CHECK\nruntime check failed (slice.order.ok) in slicing\n'),('slicebounds','_=slicing("abc",0,4)',101,b'CHECK\nruntime check failed (slice.bounds.ok) in slicing\n'),('bank','bank(123456789.25,0xdeadbeef87654321)',101,b'BANK\nBOOM\n')]
     groups.append(('guards', source, cases))
     source = original
     source+=r'''
     pub fn deref(p:*u64) u64 { defer mark("CHECK\n") return p.* }
     
-    pub fn nullcall(p:*fn()) { defer mark("CHECK\n") p() }
+    pub fn nullcall(p:fn()) { defer mark("CHECK\n") p() }
     pub fn index(a:[]const u8,n:usize) u8 { defer mark("CHECK\n") return a[n] }
     pub fn slicing(a:[]const u8,l:usize,h:usize) []const u8 { defer mark("CHECK\n") return a[l..h] }
     fn highcheck(x:f64,y:u64) { if x!=123456789.25 || y!=0xdeadbeef87654321 { #panic("BANK") } mark("BANK\n") }

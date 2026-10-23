@@ -87,7 +87,7 @@ pub fn render(destination: stream.Writer, template: *const Template, fields: []c
 
 // Field rendering seam shared by plain-text and HTML templates. Literal text is unchanged.
 pub fn render_with(destination: stream.Writer, template: *const Template, fields: []const Field,
-  render_field: *fn(stream.Writer, []const u8) RenderResult) RenderResult {
+  render_field: fn(stream.Writer, []const u8) RenderResult) RenderResult {
   if render_field == nil {
     return RenderResult{ error: ErrorKind.Syntax }
   }

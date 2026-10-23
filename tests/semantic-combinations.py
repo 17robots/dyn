@@ -28,7 +28,7 @@ fn early(stop: bool) i32 {{
 fn main() {{
   function := &callback
   raw := #cast(rawptr, function)
-  restored := #cast(*fn({alias}.Pair) {alias}.Pair, raw)
+  restored := #cast(fn({alias}.Pair) {alias}.Pair, raw)
   value := restored({alias}.Pair{{value: {alias}.Base}})
   if value.value != Expected || calls != 1 {{ #panic("alias/import/callback/cast") }}
   if early(true) != 7 || calls != 111 {{ #panic("defer early return") }}
@@ -51,7 +51,7 @@ fn main() {{
     for source in ('use "./lib" data\nconst Bad: data.Count = 1.5\nfn main() {}',
                    'const A: i64 = B\nconst B: i64 = A\nfn main() {}',
                    'use "./lib" data\nfn main() { _ = data.Pair(i32){value: 1} }',
-                   'use "./lib" data\nfn f(x: data.Pair) data.Pair { return x }\nfn main() { callback: *fn(i32) i32 = &f _ = callback(1) }'):
+                   'use "./lib" data\nfn f(x: data.Pair) data.Pair { return x }\nfn main() { callback: fn(i32) i32 = &f _ = callback(1) }'):
         (root/'main.dyn').write_text(source)
         for command in ('check','build'):
             r=subprocess.run([DYN,command,str(root),'--quiet','--no-cache','--output',str(root/'run')],capture_output=True,text=True,timeout=30)
@@ -60,7 +60,7 @@ fn main() {{
     # defer must run even though the intervening C function has no cleanup hook.
     (root/'provider.c').write_text('void invoke(void (*callback)(void)) { callback(); }\n')
     subprocess.run(['cc','-fno-stack-protector','-c',str(root/'provider.c'),'-o',str(root/'provider.o')],check=True)
-    (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: *fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { _ = io.println(io.stdout(),"caller cleanup") } invoke(&fails) }\n')
+    (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { _ = io.println(io.stdout(),"caller cleanup") } invoke(&fails) }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--link',str(root/'provider.o'),'--output',str(root/'run')]+(['--release'] if release else []),check=True)
         r=subprocess.run([str(root/'run')],capture_output=True,text=True,timeout=5)

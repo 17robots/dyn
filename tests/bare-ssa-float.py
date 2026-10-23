@@ -58,7 +58,7 @@ for width,ct,ut in [(32,'float','W'),(64,'double','U')]:
  src+=f'extern fn cf{s}(x:{t}) {t}\n'
  c+=f'{ct} cf{s}({ct} x) {{ return x*2; }}\n'
  add('call'+s,f'x:{t}',t,f'return cf{s}(x)',ct,ct)
- add('callback'+s,f'p:*fn({t}) {t},x:{t},wide:u64',t,f'return p(x)+#cast({t},wide)',f'{ct} (*)({ct}),{ct},U',ct)
+ add('callback'+s,f'p:fn({t}) {t},x:{t},wide:u64',t,f'return p(x)+#cast({t},wide)',f'{ct} (*)({ct}),{ct},U',ct)
  add('live'+s,f'x:{t},y:{t},wide:u64',t,f'a:=x+y b:=cf{s}(x) return a+b+y+#cast({t},wide)',ct+','+ct+',U',ct)
  # Exhaust FP, core pairs, and stack, alternating wide and floats.
  args=[];ctargs=[];vals=[]

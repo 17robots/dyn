@@ -7,10 +7,10 @@ pub struct Thread { native: win.Thread }
 // Windows owns the actual stack; the slice length requests its initial size.
 // Keep Thread, context, and caller storage alive/unmoved through join for the
 // portable contract. A completed native handle still requires joining.
-pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: rawptr) isize {
+pub fn spawn(thread: *Thread, stack: []u8, entry: fn(rawptr) isize, context: rawptr) isize {
   return spawn_with_size(thread, #len(stack), entry, context)
 }
-pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
+pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) isize {
   if stack_size < 256 || entry == nil {
     return -22
   }

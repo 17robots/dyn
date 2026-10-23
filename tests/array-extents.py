@@ -18,7 +18,7 @@ pub fn grid() Grid { return Grid{} }
 ''')
     (project / 'layout/constants.dyn').write_text('''const Half: usize = 2
 fn private_callback() {}
-const UnusedCallback: *fn() = &private_callback
+const UnusedCallback: fn() = &private_callback
 ''')
     source = project / 'main.dyn'
     source.write_text('''use "std/mem"

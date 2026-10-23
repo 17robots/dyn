@@ -38,14 +38,14 @@ SOURCE = r'''
 use "std/io"
 extern fn oracle() u32
 extern fn cdesc_addr() rawptr
-fn cdesc(x:[]const u8) []const u8 { return #cast(*fn([]const u8) []const u8,cdesc_addr())(x) }
+fn cdesc(x:[]const u8) []const u8 { return #cast(fn([]const u8) []const u8,cdesc_addr())(x) }
 extern fn ccheck_addr() rawptr
-fn ccheck(x:any) u32 { return #cast(*fn(any) u32,ccheck_addr())(x) }
+fn ccheck(x:any) u32 { return #cast(fn(any) u32,ccheck_addr())(x) }
 extern fn cmany_addr() rawptr
-fn cmany(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,g:u32,x:any,y:[]const u8,z:any) u32 { return #cast(*fn(u32,u32,u32,u32,u32,u32,u32,any,[]const u8,any) u32,cmany_addr())(a,b,c,d,e,f,g,x,y,z) }
+fn cmany(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,g:u32,x:any,y:[]const u8,z:any) u32 { return #cast(fn(u32,u32,u32,u32,u32,u32,u32,any,[]const u8,any) u32,cmany_addr())(a,b,c,d,e,f,g,x,y,z) }
 pub fn desc(x:[]const u8) []const u8 { return cdesc(x) }
 pub fn slice(x:[]u8) []u8 { return x }
-pub fn indirect(p:*fn([]const u8) []const u8,x:[]const u8) []const u8 { return p(x) }
+pub fn indirect(p:fn([]const u8) []const u8,x:[]const u8) []const u8 { return p(x) }
 pub fn anyround(x:any) u32 { return ccheck(x) }
 pub fn first(x:[]const u8) u8 { return cdesc(x)[0] }
 pub fn partial(x:[]const u8) usize { return #len(cdesc(x)) }
@@ -56,7 +56,7 @@ pub fn localdesc(x:[]const u8) []const u8 { a:=x p:=&a p.*=cdesc(p.*) return a }
 state:[]const u8
 pub fn mutate() []const u8 { state="changed" return state }
 extern fn paircheck_addr() rawptr
-fn paircheck(x:[]const u8,y:[]const u8) u32 { return #cast(*fn([]const u8,[]const u8) u32,paircheck_addr())(x,y) }
+fn paircheck(x:[]const u8,y:[]const u8) u32 { return #cast(fn([]const u8,[]const u8) u32,paircheck_addr())(x,y) }
 pub fn isolation(x:[]const u8) u32 { state=x return paircheck(state,mutate()) }
 fn main() { r:=oracle() if r!=0 { _=io.println(io.stdout(),"oracle {}",r) #panic("oracle") } _=io.write_all(io.stdout(),"DESCRIPTORS OK\n") }
 extern fn touch(p:rawptr)
@@ -115,7 +115,7 @@ FALLBACK = []
 types = ','.join(['[]const u8'] * 256)
 params = ','.join(f'a{i}:[]const u8' for i in range(256))
 args = ','.join(['x'] * 256)
-SOURCE += f'\npub fn capacitycallee({params}) usize {{ return #len(a0)+#len(a255) }}\npub fn capacitycall(p:*fn({types}) usize,x:[]const u8) usize {{ return p({args}) }}\n'
+SOURCE += f'\npub fn capacitycallee({params}) usize {{ return #len(a0)+#len(a255) }}\npub fn capacitycall(p:fn({types}) usize,x:[]const u8) usize {{ return p({args}) }}\n'
 
 RV_SHIM = '.text\n.globl cdesc\ncdesc: ret\n'
 ARM_SHIM = '.syntax unified\n.thumb\n.eabi_attribute 28,1\n.text\n.global cdesc\n.thumb_func\ncdesc: bx lr\n'

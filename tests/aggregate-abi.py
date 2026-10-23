@@ -59,7 +59,7 @@ for name, cf, df, init, field, expected in cases:
     c += [f'{name} c_{name}({name} x) {{ x.{field} += 1; return x; }}',
           f'{name} cb_{name}({name} (*f)({name}), {name} x) {{ return f(x); }}']
     dyn += [f'extern fn c_{name} "c_{name}"(x: {name}) {name}',
-            f'extern fn cb_{name} "cb_{name}"(f: *fn({name}) {name}, x: {name}) {name}',
+            f'extern fn cb_{name} "cb_{name}"(f: fn({name}) {name}, x: {name}) {name}',
             f'fn local_{name}(x: {name}) {name} {{ value := x value.{field} += {increment} return value }}']
     checksum = '+'.join(f'{2*i+1}*(double)x.{path}' for i,(path,_) in enumerate(leaves[name]))
     total = float(sum((2*i+1)*(value + (path == field)) for i,(path,value) in enumerate(leaves[name])))
@@ -91,7 +91,7 @@ if a.riscv:
           'unsigned long long narrow_callback(unsigned int (*f)(void)) { return narrow_bits(f()); }',
           'double variadic_sum(int count, ...) { va_list ap; va_start(ap,count); double sum=0; for(int i=0;i<count;i++) sum += va_arg(ap,double); va_end(ap); return sum; }']
     dyn += ['extern fn narrow_bits(v:u32) u64',
-            'extern fn narrow_callback(f: *fn() u32) u64',
+            'extern fn narrow_callback(f: fn() u32) u64',
             'extern fn variadic_sum(n:i32, ...) f64',
             'fn narrow_return() u32 { return 0x80000000 }']
     body += ['if narrow_bits(0x80000000) != 0xffffffff80000000 { #panic("LP64D unsigned32 argument") }',

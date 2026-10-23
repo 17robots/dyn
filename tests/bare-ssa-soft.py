@@ -114,7 +114,7 @@ def extend(ns):
         B += [f'if arithmetic_check{width}(&fastarithmetic{width}) != 0 {{ #panic("SSA arithmetic") }}']
         D += [f'fn specialbits{width}(x:f{width}) f{width} {{ return x }}',
               f'fn remainder{width}(x:f{width},y:f{width}) f{width} {{ return x%y }}',
-              f'extern fn extra{width}(p:*fn(f{width}) f{width},r:*fn(f{width},f{width}) f{width}) i32']
+              f'extern fn extra{width}(p:fn(f{width}) f{width},r:fn(f{width},f{width}) f{width}) i32']
         union='Fbits' if width==32 else 'Dbits'
         sign='0x80000000U' if width==32 else '0x8000000000000000ULL'
         C += [f'int extra{width}({ct} (*p)({ct}),{ct} (*r)({ct},{ct})) {{ {union} x={{.u={bits}}}, z={{.u={sign}}}; return ({union}){{.f=p(x.f)}}.u==x.u && ({union}){{.f=r(z.f,2)}}.u==z.u && ({union}){{.f=r(-7,2)}}.u==({union}){{.f=-1}}.u; }}']

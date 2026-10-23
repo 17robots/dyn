@@ -75,7 +75,7 @@ src+='extern fn cvother(x:u32,...) u32\n'
 c+='W choose(void){return 0;} W cv(W x,...){va_list ap;va_start(ap,x);W ok=bits(va_arg(ap,double))==0x3ff8000000000000ULL && va_arg(ap,int)==23;va_end(ap);return ok?77:0;} W cvother(W x,...){return 99;}\n'
 checks.append('indirect()!=77')
 fn('callback','x:f64','f64','return x')
-src+='extern fn cb(p:*fn(f64) f64,...) f64\n'
+src+='extern fn cb(p:fn(f64) f64,...) f64\n'
 fn('reentry','','f64','return cb(&callback,#cast(f32,1.5))')
 c+='double cb(double(*p)(double),...){va_list ap;va_start(ap,p);double x=va_arg(ap,double);va_end(ap);return p(x);}\n'
 checks.append('reentry()!=1.5')

@@ -7,12 +7,12 @@ struct Attributes { storage: [8]u64 }
 extern fn attr_init "pthread_attr_init"(attributes: *Attributes) i32
 extern fn attr_size "pthread_attr_setstacksize"(attributes: *Attributes, size: usize) i32
 extern fn attr_destroy "pthread_attr_destroy"(attributes: *Attributes) i32
-extern fn create "pthread_create"(thread: *rawptr, attributes: *const Attributes, entry: *fn(rawptr) rawptr, context: rawptr) i32
+extern fn create "pthread_create"(thread: *rawptr, attributes: *const Attributes, entry: fn(rawptr) rawptr, context: rawptr) i32
 extern fn wait "pthread_join"(thread: rawptr, value: *rawptr) i32
 extern fn native_id "pthread_mach_thread_np"(thread: rawptr) u32
 extern fn native_yield "sched_yield"() i32
 
-pub struct Thread { handle: rawptr, identifier: u32, entry: *fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
+pub struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
 
 fn trampoline(context: rawptr) rawptr {
   thread := #cast(*Thread, context)
@@ -27,10 +27,10 @@ fn trampoline(context: rawptr) rawptr {
 // Darwin owns the stack. Slice length requests its size, rounded up to an
 // ARM64 page with a 16 KiB minimum. Thread/context must remain alive and unmoved
 // until join, including after the entry returns. Do not copy active Threads.
-pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: rawptr) isize {
+pub fn spawn(thread: *Thread, stack: []u8, entry: fn(rawptr) isize, context: rawptr) isize {
   return spawn_with_size(thread, #len(stack), entry, context)
 }
-pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
+pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) isize {
   if stack_size < 256 || entry == nil || stack_size > (~#cast(usize, 0)) - 16383 {
     return -22
   }

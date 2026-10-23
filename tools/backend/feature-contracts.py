@@ -26,11 +26,11 @@ struct Pair { a: i64, b: i64 }
 enum Box { Empty, Value: Pair }
 pub fn enum_identity(value: Message) Message { return value }
 pub fn box_identity(value: Box) Box { return value }
-pub fn enum_cross(f:*fn(Message) Message,value:i64) i64 {
+pub fn enum_cross(f:fn(Message) Message,value:i64) i64 {
   result := f(Message.Number(value))
   case result { Message.Number number => { return number }, _ => { return -1 } }
 }
-pub fn box_cross(f:*fn(Box) Box,value:i64) i64 {
+pub fn box_cross(f:fn(Box) Box,value:i64) i64 {
   result := f(Box.Value(Pair{a:value,b:7}))
   case result { Box.Value pair => { return pair.a+pair.b }, _ => { return -1 } }
 }

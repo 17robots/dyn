@@ -262,8 +262,14 @@ static bool primitive(Parser *p) {
   return false;
 }
 static bool src_distinct(Parser *p);
+static bool src_next_is(Parser *p, const char *word);
 static bool src_packed(Parser *p);
+/* `fn(` with no space starts a function type; `fn name(` starts a declaration. */
+static bool fn_type_start(Parser *p) {
+  return is(p, "fn") && p->token.end < p->length && p->text[p->token.end] == '(';
+}
 static bool optional_type_start(Parser *p) {
+  if (fn_type_start(p)) return true;
   static const char *const declarations[] = {"fn", "pub", "use", "const", "type", "struct", "enum", "extern"};
   for (size_t i = 0; i < sizeof(declarations) / sizeof(*declarations); ++i)
     if (is(p, declarations[i])) return false;
@@ -288,27 +294,30 @@ static uint32_t type_body(Parser *p) {
   uint32_t first = NONE, last = NONE, end = token.end;
   ExpKind kind;
   unsigned flags = 0;
-  if (take(p, "*")) {
+  if (fn_type_start(p)) {
+    /* A function value is a code pointer: fn(A, B) R is *fn in the tree. */
     kind = EXP_POINTER_TYPE;
     uint32_t fn_start = p->token.start;
-    if (take(p, "fn")) {
-      expect(p, "(");
-      while (!is(p, ")") && !p->tree->error) {
-        append(p, &first, &last, type(p));
-        if (!take(p, ",")) break;
-      }
-      end = p->token.end; expect(p, ")");
-      if (optional_type_start(p)) {
-        append(p, &first, &last, type(p));
-        if (last != NONE) p->tree->nodes[last].field = EXP_ROLE_RETURN;
-        if (last != NONE) end = p->tree->nodes[last].end;
-      }
-      first = node(p, EXP_FN_TYPE, fn_start, end, first, (Token){0});
-    } else {
-      if (take(p, "const")) flags |= EXP_CONST;
-      first = type(p);
-      if (first != NONE) end = p->tree->nodes[first].end;
+    lex(p);
+    expect(p, "(");
+    while (!is(p, ")") && !p->tree->error) {
+      /* Parameter names are documentation only. */
+      if (p->token.kind == NAME && src_next_is(p, ":")) { lex(p); lex(p); }
+      append(p, &first, &last, type(p));
+      if (!take(p, ",")) break;
     }
+    end = p->token.end; expect(p, ")");
+    if (optional_type_start(p)) {
+      append(p, &first, &last, type(p));
+      if (last != NONE) p->tree->nodes[last].field = EXP_ROLE_RETURN;
+      if (last != NONE) end = p->tree->nodes[last].end;
+    }
+    first = node(p, EXP_FN_TYPE, fn_start, end, first, (Token){0});
+  } else if (take(p, "*")) {
+    kind = EXP_POINTER_TYPE;
+    if (take(p, "const")) flags |= EXP_CONST;
+    first = type(p);
+    if (first != NONE) end = p->tree->nodes[first].end;
   } else if (take(p, "[")) {
     kind = EXP_ARRAY_TYPE;
     if (!is(p, "]")) append(p, &first, &last, expression(p, 0));
@@ -381,7 +390,7 @@ static uint32_t argument(Parser *p, bool allow_named_type) {
     return array_type_suffix(p, array, false);
   }
   if (allow_named_type || primitive(p) || is(p, "*") || at(p, p->token.start, "$")) {
-    bool committed = primitive(p) || is(p, "*") || at(p, p->token.start, "$");
+    bool committed = primitive(p) || fn_type_start(p) || is(p, "*") || at(p, p->token.start, "$");
     Parser saved = *p;
     uint32_t count = p->tree->count;
     uint32_t child = allow_named_type ? type(p) : type_body(p);

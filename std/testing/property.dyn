@@ -8,7 +8,7 @@ pub struct PropertyResult {
 // A failure's minimized example borrows work. Reproduction requires the same
 // seed, iteration, work capacity, and deterministic predicate.
 pub fn check_property(options: PropertyOptions, work: []u8,
-  predicate: *fn(rawptr, []const u8) bool, context: rawptr) PropertyResult {
+  predicate: fn(rawptr, []const u8) bool, context: rawptr) PropertyResult {
   capacity := #len(work) / 2
   sample := work[..capacity]
   trial := work[capacity..]

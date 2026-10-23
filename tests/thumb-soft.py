@@ -209,19 +209,19 @@ for width, one, two, seven, half, inf, nan, sign in (
     C += [f'if(fn({op},UINT{width}_C({a}),UINT{width}_C({b})) != UINT{width}_C({expected})) return {i+1};'
           for i, (op, a, b, expected) in enumerate(vectors)]
     C += ['return 0; }']
-    D += [f'extern fn arithmetic_check{width}(f:*fn(i32,u{width},u{width}) u{width}) i32']
+    D += [f'extern fn arithmetic_check{width}(f:fn(i32,u{width},u{width}) u{width}) i32']
     B += [f'if arithmetic_check{width}(&arithmetic{width}) != 0 {{ #panic("arithmetic f{width}") }}']
 
 D += ['fn conversions(x:i64, y:u64, a:f32, b:f64) i32 {',
       'if #cast(f32,x) != -7.0 || #cast(f64,x) != -7.0 || #cast(f32,y) != 9.0 || #cast(f64,y) != 9.0 { return 1 }',
       'if #cast(i64,a) != -7 || #cast(i32,b) != 9 || #cast(u64,b) != 9 || #cast(u32,b) != 9 { return 2 }',
       'if #cast(f64,a) != -7.5 || #cast(f32,b) != 9.5 { return 3 } return 0 }',
-      'extern fn conversion_check(f:*fn(i64,u64,f32,f64) i32) i32']
+      'extern fn conversion_check(f:fn(i64,u64,f32,f64) i32) i32']
 C += ['int conversion_check(int (*fn)(int64_t,uint64_t,float,double)) { return fn(-7,9,(Fbits){.u=0xc0f00000}.f,(Dbits){.u=UINT64_C(0x4023000000000000)}.f); }']
 B += ['if conversion_check(&conversions) != 0 { #panic("conversions") }']
 D += ['fn widen(x:u32) u64 { return #bitcast(u64,#cast(f64,#bitcast(f32,x))) }',
       'fn narrow(x:u64) u32 { return #bitcast(u32,#cast(f32,#bitcast(f64,x))) }',
-      'extern fn width_check(w:*fn(u32) u64,n:*fn(u64) u32) i32']
+      'extern fn width_check(w:fn(u32) u64,n:fn(u64) u32) i32']
 C += ['int width_check(uint64_t (*w)(uint32_t),uint32_t (*n)(uint64_t)) {',
       'return w(1)==UINT64_C(0x36a0000000000000) && w(0x80000000)==UINT64_C(0x8000000000000000)',
       '&& n(UINT64_C(0x36a0000000000000))==1 && n(UINT64_C(0x3690000000000000))==0',
@@ -251,7 +251,7 @@ for name, ct, dt, ci, di, checks in (
         C += [f'{ct} c_{key}({",".join(cp)}) {{ if ({bad}) return ({ct}){{0}}; return x; }}',
               f'int cb_{key}({ct} (*fn)({",".join(cp)})) {{ {ct} x={ci}; {ct} r=fn({",".join(args)}); return {valid}; }}']
         D += [f'extern fn c_{key}({",".join(dp)}) {dt}',
-              f'extern fn cb_{key}(f:*fn({",".join(["i32"]*pressure+[dt,"i32"])}) {dt}) i32',
+              f'extern fn cb_{key}(f:fn({",".join(["i32"]*pressure+[dt,"i32"])}) {dt}) i32',
               f'fn local_{key}({",".join(dp)}) {dt} {{ if {bad} {{ #panic("incoming {key}") }} return x }}']
         B += [f'if cb_{key}(&local_{key}) != 1 {{ #panic("callback {key}") }}',
               f'if cb_{key}(&c_{key}) != 1 {{ #panic("C control {key}") }}',

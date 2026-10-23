@@ -212,13 +212,13 @@ SOURCE += """
 extern fn abs(a:i32) i32
 pub fn foreign_abs32(a:i32) i32 { return abs(a) }
 extern fn llabs(a:i64) i64
-pub fn indirect_apply(f:*fn(u64) u64,a:u64) u64 { return f(a) }
+pub fn indirect_apply(f:fn(u64) u64,a:u64) u64 { return f(a) }
 pub fn indirect_use(a:u64) u64 { f := &call_identity return #wrap(a + indirect_apply(f,a)) }
 pub fn indirect_six(a:u64) u64 { f := &call_six return f(a,2,3,4,5,6) }
 pub fn indirect_stack(a:u64) u64 { f := &stack_div return f(0,0,0,0,0,0,a,1) }
 pub fn indirect_void(a:u64) { f := &void_work f(a,1) }
 pub fn indirect_foreign(a:i64) i64 { f := &llabs return f(a) }
-pub fn indirect_nil(a:u64) u64 { f:*fn(u64) u64 = nil if a == 0 { return 0 } return f(a/(a-a)) }
+pub fn indirect_nil(a:u64) u64 { f:fn(u64) u64 = nil if a == 0 { return 0 } return f(a/(a-a)) }
 pub fn indirect_panic(a:u64,b:u64) u64 { f := &div_leaf return f(a,b) }
 pub fn foreign_abs(a:i64) i64 { return llabs(a) }
 pub fn void_empty() {}
@@ -251,7 +251,7 @@ for ty,(bits,sign,ctype) in NARROW_TYPES.items():
     SOURCE+=f'pub fn narrow_{ty}_cast(a:u64) {ty} {{ return #cast({ty}, a) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_ptr(a:{ty}) u64 {{ return #cast(u64, #cast(rawptr, a)) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_bits(a:{ty},b:{ty}) {ty} {{ return (~a & b) | (a ^ b) }}\n'
-    SOURCE+=f'pub fn narrow_{ty}_apply(f:*fn({ty}) {ty},a:{ty}) {ty} {{ return f(a) }}\n'
+    SOURCE+=f'pub fn narrow_{ty}_apply(f:fn({ty}) {ty},a:{ty}) {ty} {{ return f(a) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_stack(' + ','.join(f'a{i}:{ty}' for i in range(8)) + f') {ty} {{ return #wrap(a0+a6+a7) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_identity(a:{ty}) {ty} {{ return a }}\n'
     SOURCE+=f'pub fn narrow_{ty}_call(a:{ty}) {ty} {{ f:=&narrow_{ty}_identity return f(a) }}\n'
@@ -262,7 +262,7 @@ for ty in ('f32','f64'):
         SOURCE+=f'pub fn float_{ty}_{op}(a:{ty},b:{ty}) {ty} {{ return a {symbol} b }}\n'
     SOURCE+=f'pub fn float_{ty}_neg(a:{ty}) {ty} {{ return -a }}\n'
     SOURCE+=f'pub fn float_{ty}_constant() {ty} {{ return 1.25 }}\n'
-    SOURCE+=f'pub fn float_{ty}_apply(f:*fn({ty},{ty}) {ty},a:{ty},b:{ty}) {ty} {{ return f(a,b) }}\n'
+    SOURCE+=f'pub fn float_{ty}_apply(f:fn({ty},{ty}) {ty},a:{ty},b:{ty}) {ty} {{ return f(a,b) }}\n'
     SOURCE+=f'pub fn float_{ty}_call(a:{ty},b:{ty}) {ty} {{ f:=&float_{ty}_add return f(a,b) }}\n'
     SOURCE+=f'pub fn float_{ty}_local(a:{ty},b:{ty}) {ty} {{ x:=a x+=b if x>0.0 {{ return x }} return -x }}\n'
     for op,(symbol,_) in COMPARISONS.items():
@@ -304,7 +304,7 @@ pub global_u16:u16
 pub global_flag:bool
 const global_constant:u64 = 99
 pub global_copy:u64 = global_constant
-pub global_callback:*fn(u64) u64
+pub global_callback:fn(u64) u64
 pub fn globals_f32(a:f32) f32 { global_f32=a return global_f32 }
 pub fn globals_i32(a:i32) i32 { global_i32=a return global_i32 }
 pub fn globals_u16(a:u16) u16 { global_u16=a return global_u16 }
@@ -491,7 +491,7 @@ for name,fields,decl,field,value in ABI_STRUCTS:
     increment='1.0' if isinstance(value,float) else '1'
     SOURCE+=f'pub fn abi_{name}(x:Abi{name}) Abi{name} {{ x.{field}+={increment} return x }}\n'
     SOURCE+=f'pub fn abi_{name}_call(x:Abi{name}) Abi{name} {{ return abi_{name}(x) }}\n'
-    SOURCE+=f'pub fn abi_{name}_apply(f:*fn(Abi{name}) Abi{name},x:Abi{name}) Abi{name} {{ return f(x) }}\n'
+    SOURCE+=f'pub fn abi_{name}_apply(f:fn(Abi{name}) Abi{name},x:Abi{name}) Abi{name} {{ return f(x) }}\n'
     SOURCE+=f'pub fn abi_{name}_defer(x:Abi{name}) Abi{name} {{ defer {{ x.{field}+={increment} }} return x }}\n'
 SOURCE+="""
 packed struct AbiPacked { tag:u8,value:i64 }
@@ -522,7 +522,7 @@ for name,ty in ARRAY_ABI_TYPES:
         literal=','.join(f'{i}.0' if name.startswith('f') else str(i) for i in range(n))
         SOURCE+=f'pub fn arrayabi_{name}_{n}(x:[{n}]{name}) [{n}]{name} {{ x[{n-1}]+={increment} return x }}\n'
         SOURCE+=f'pub fn arrayabi_{name}_{n}_call(a:{name}) {name} {{ x:[{n}]{name}=[{literal}] x[{n-1}]=a return arrayabi_{name}_{n}(x)[{n-1}] }}\n'
-        SOURCE+=f'pub fn arrayabi_{name}_{n}_apply(f:*fn([{n}]{name}) [{n}]{name},a:{name}) {name} {{ x:[{n}]{name}=[{literal}] x[{n-1}]=a return f(x)[{n-1}] }}\n'
+        SOURCE+=f'pub fn arrayabi_{name}_{n}_apply(f:fn([{n}]{name}) [{n}]{name},a:{name}) {name} {{ x:[{n}]{name}=[{literal}] x[{n-1}]=a return f(x)[{n-1}] }}\n'
 SOURCE+="""
 pub fn arrayabi_gp(a:u64,b:u64,c:u64,d:u64,e:u64,x:[3]u8) [3]u8 { return x }
 pub fn arrayabi_gp_call() u64 { x:=arrayabi_gp(1,2,3,4,5,[7,8,9]) return #cast(u64,x[0])*100+#cast(u64,x[1])*10+#cast(u64,x[2]) }
@@ -1323,7 +1323,7 @@ raise AssertionError('overflow returned normally')
         'aggregate-local': 'pub fn fail(a: u64) u64 { b: [2097153]u64 return a }',
         'frame-limit': 'pub fn fail() u64 {' + ''.join(f'x{i}:[1048576]u64 ' for i in range(3)) + 'return 0}',
         'enum-storage-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:E) E { return a }',
-        'indirect-aggregate-limit': 'pub fn fail(f:*fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',
+        'indirect-aggregate-limit': 'pub fn fail(f:fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',
         'global-aggregate-limit': 'stored:[536870912]u64 pub fn fail() u64 { return 0 }',
         'global-symbol-collision': 'stored:u64 extern fn alias "stored"() u64 pub fn fail() u64 { return alias() }',
         'parameter-limit': 'pub fn fail('+','.join(f'a{i}:u64' for i in range(513))+') u64 { return a512 }',

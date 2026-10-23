@@ -28,4 +28,4 @@ fn scratch_allocate(context: rawptr, size: usize) rawptr {
   }
   return #cast(rawptr, work.memory)
 }
-extern fn native_resize "dyn_stb_resize"(source: rawptr, length: usize, width: i32, height: i32, output: rawptr, capacity: usize, out_width: i32, out_height: i32, channels: i32, srgb: bool, context: rawptr, allocate: *fn(rawptr, usize) rawptr) bool
+extern fn native_resize "dyn_stb_resize"(source: rawptr, length: usize, width: i32, height: i32, output: rawptr, capacity: usize, out_width: i32, out_height: i32, channels: i32, srgb: bool, context: rawptr, allocate: fn(rawptr, usize) rawptr) bool
