@@ -347,8 +347,8 @@ fn main() {{
   arena := mem.arena_from_buffer(backing[..])
   arguments := process.arguments(&arena)
   if !arguments.ok || #len(arguments.values) < 2 {{ #panic("case index required") }}
-  index: u64 = 0
-  if !strings.parse_u64(arguments.values[1], &index) {{ #panic("bad case index") }}
+  if !strings.valid(u64, arguments.values[1]) {{ #panic("bad case index") }}
+  index := strings.parse(u64, arguments.values[1])
   case index / 128 {{
 {arms}
     _ => {{ #panic("unknown case") }},

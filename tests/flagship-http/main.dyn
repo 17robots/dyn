@@ -51,7 +51,7 @@ fn handle_list(response: *http.Response, request: *const http.Request) http.Resu
 
 fn handle_add(response: *http.Response, request: *const http.Request) http.Result {
   body := request.body
-  if #len(body) == 0 || bytes.find_byte(body, '\n') >= 0 {
+  if #len(body) == 0 || bytes.find_byte(body, '\n') < #len(body) {
     return text(response, http.StatusBadRequest, "note must be one nonempty line\n")
   }
   state := app(request)

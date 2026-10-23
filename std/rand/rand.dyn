@@ -15,19 +15,19 @@ pub fn next_u64(state: *State) u64 {
   return state.value
 }
 
-// Unbiased result in [0, limit). Limits above generator range are rejected.
-pub fn below(state: *State, limit: u64, output: *u64) bool {
+// Unbiased result in [0, limit). Panics when limit is zero or above
+// 2147483646, the generator's range.
+pub fn below(state: *State, limit: u64) u64 {
   range: u64 = 2147483646
   if limit == 0 || limit > range {
-    return false
+    #panic("rand.below: limit must be in 1..2147483646")
   }
   usable := range - range % limit
   value := next_u64(state) - 1
   for value >= usable {
     value = next_u64(state) - 1
   }
-  output.* = value % limit
-  return true
+  return value % limit
 }
 
 pub fn fill(state: *State, destination: []u8) {

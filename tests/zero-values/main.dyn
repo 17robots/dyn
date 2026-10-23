@@ -30,8 +30,7 @@ fn zero_arena() {
 
 fn zero_scanners() {
   lines := text.Scanner{ source: "a\nbc" }
-  line: []const u8 = ""
-  _ = text.next_line(&lines, &line)
+  _ = text.next_line(&lines)
   _ = text.advance(&lines, 1)
   if lines.line != 1 || lines.column != 1 {
     #panic("text scanner positions are zero-based")

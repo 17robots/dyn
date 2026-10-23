@@ -14,6 +14,26 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking:** positions are `usize` and a miss returns the length, which is
+  always a safe slice bound: `bytes.find`, `find_byte`, `find_last`,
+  `find_last_byte`, the `strings` wrappers and `search.find`. The compiler now
+  rejects `x < 0` and `x >= 0` on unsigned values, which catches leftover `-1`
+  checks.
+- **Breaking:** typed reads. `strings.parse(T, text)`, `strings.parse_base(T,
+  text, base)` and `strings.valid(T, text)` replace `parse_u64`, `parse_i64`,
+  `parse_f64` and `parse_u64_base`; bad input gives zero. `json.get(T, value,
+  key)` and `json.as(T, value)` read members as integers, floats, bools,
+  strings or nested values.
+- **Breaking:** JSON lookups return the read-only `json.nil_value` stub
+  instead of nil, and a failed parse returns it as `root`. Kind zero is now
+  `KindMissing`; the other kind constants moved up by one. `mdesk.nil_node` is a
+  read-only constant.
+- **Breaking:** results are returned, not written through out parameters:
+  `bytes.split_next`, `strings.scan_until/scan_field/scan_line`,
+  `text/scanner.next_line/next_field`, `utf8.next`, `utf8/utf16.codepoint_count`,
+  the `decoded_size` functions, `time.parse_iso8601`, `terminal.read_state` and
+  `terminal.raw`, and `ring.pop` return `{value, ok}`. `rand.below` returns the
+  value and panics on an invalid limit. `path.Component.found` is now `ok`.
 - **Breaking:** containers are intrusive. New `std/container/list` (stacks,
   queues, doubly linked lists, trees and free lists through `next`, `prev`,
   `first`, `last`, `parent` and `free_next`), `std/container/hash` (chained

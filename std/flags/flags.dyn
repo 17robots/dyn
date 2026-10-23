@@ -139,10 +139,12 @@ pub fn parse(
       integer_value: i64 = 0
       float_value: f64 = 0.0
       if definition.kind == Kind.Integer {
-        valid = strings.parse_i64(text_value, &integer_value)
+        valid = strings.valid(i64, text_value)
+        integer_value = strings.parse(i64, text_value)
       }
       else if definition.kind == Kind.Float {
-        valid = strings.parse_f64(text_value, &float_value)
+        valid = strings.valid(f64, text_value)
+        float_value = strings.parse(f64, text_value)
       }
       else if definition.kind == Kind.Choice {
         valid = false

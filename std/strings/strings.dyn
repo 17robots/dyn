@@ -8,11 +8,12 @@ pub fn equal(left: []const u8, right: []const u8) bool {
   return byte_ops.equal(left, right)
 }
 
-pub fn find_byte(text: []const u8, byte: u8) isize {
+// Positions: a miss returns #len(text), always a safe slice bound.
+pub fn find_byte(text: []const u8, byte: u8) usize {
   return byte_ops.find_byte(text, byte)
 }
 
-pub fn find(text: []const u8, needle: []const u8) isize {
+pub fn find(text: []const u8, needle: []const u8) usize {
   return byte_ops.find(text, needle)
 }
 
@@ -86,7 +87,7 @@ fn digit_value(byte: u8) u8 {
   return 255
 }
 
-pub fn parse_u64_base(text: []const u8, base: u8, output: *u64) bool {
+fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
   if #len(text) == 0 || base < 2 || base > 36 {
     return false
   }
@@ -108,11 +109,7 @@ pub fn parse_u64_base(text: []const u8, base: u8, output: *u64) bool {
   return true
 }
 
-pub fn parse_u64(text: []const u8, output: *u64) bool {
-  return parse_u64_base(text, 10, output)
-}
-
-pub fn parse_i64(text: []const u8, output: *i64) bool {
+fn parse_i64_into(text: []const u8, base: u8, output: *i64) bool {
   if #len(text) == 0 {
     return false
   }
@@ -125,7 +122,7 @@ pub fn parse_i64(text: []const u8, output: *i64) bool {
     return false
   }
   magnitude: u64 = 0
-  if !parse_u64(text[start..], &magnitude) {
+  if !parse_u64_into(text[start..], base, &magnitude) {
     return false
   }
   if negative {
@@ -155,36 +152,38 @@ pub fn scanner_rest(state: *const Scanner) []const u8 {
   return state.text[state.offset..]
 }
 
-pub fn scan_until(state: *Scanner, delimiter: u8, output: *[]const u8) bool {
+pub struct Scanned { value: []const u8, ok: bool }
+
+// The text up to the next delimiter, which is consumed, or the rest of the
+// text. ok is false once the text is used up.
+pub fn scan_until(state: *Scanner, delimiter: u8) Scanned {
   if state.offset >= #len(state.text) {
-    return false
+    return Scanned{}
   }
   start := state.offset
-  found := find_byte(state.text[start..], delimiter)
-  if found < 0 {
+  rest := state.text[start..]
+  found := find_byte(rest, delimiter)
+  if found == #len(rest) {
     state.offset = #len(state.text)
-    output.* = state.text[start..]
   } else {
-    end := start + #cast(usize, found)
-    output.* = state.text[start..end]
-    state.offset = end + 1
+    state.offset = start + found + 1
   }
-  return true
+  return Scanned{ value: rest[..found], ok: true }
 }
 
-pub fn scan_field(state: *Scanner, output: *[]const u8) bool {
+// The next run of non-whitespace bytes. ok is false when only whitespace is left.
+pub fn scan_field(state: *Scanner) Scanned {
   for state.offset < #len(state.text) && ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
   if state.offset == #len(state.text) {
-    return false
+    return Scanned{}
   }
   start := state.offset
   for state.offset < #len(state.text) && !ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
-  output.* = state.text[start..state.offset]
-  return true
+  return Scanned{ value: state.text[start..state.offset], ok: true }
 }
 
 // Binary64 decimal conversion uses bounded integer arithmetic. Every binary64
@@ -306,7 +305,8 @@ fn decimal_compare_bits(numerator: *const DecimalInteger, denominator: *const De
 // Decimal syntax, rounded to binary64 with round-to-nearest/ties-to-even.
 // Overflow yields signed infinity; underflow preserves signed zero. Invalid
 // syntax leaves output unchanged. No heap allocations or locale dependence.
-pub fn parse_f64(text: []const u8, output: *f64) bool {
+// Reached through parse(f64, text).
+fn parse_f64_into(text: []const u8, output: *f64) bool {
   if #len(text) == 0 || #cast(u64, #len(text)) > 9223372036854765807 {
     return false
   }
@@ -452,18 +452,152 @@ pub fn trim_right(text: []const u8) []const u8 {
   }
   return text[..end]
 }
-pub fn find_last_byte(text: []const u8, byte: u8) isize {
+pub fn find_last_byte(text: []const u8, byte: u8) usize {
   return byte_ops.find_last_byte(text, byte)
 }
-pub fn find_last(text: []const u8, needle: []const u8) isize {
+pub fn find_last(text: []const u8, needle: []const u8) usize {
   return byte_ops.find_last(text, needle)
 }
-pub fn scan_line(state: *Scanner, output: *[]const u8) bool {
-  if !scan_until(state, 10, output) {
+// The next line without its \n or \r\n. ok is false at the end of the text.
+pub fn scan_line(state: *Scanner) Scanned {
+  line := scan_until(state, 10)
+  line.value = strip_suffix(line.value, "\r")
+  return line
+}
+
+// Parses text as T: an integer type, f32, f64 or bool ("true" or "false").
+// Integers accept an optional sign; floats use decimal syntax. Returns zero
+// when text is not a valid T or does not fit. Use valid first when bad input
+// must be reported. Another T panics.
+pub fn parse($T: type, text: []const u8) T {
+  result: T
+  _ = parse_into(text, 10, &result)
+  return result
+}
+
+// Like parse for integer types, in base 2 through 36.
+pub fn parse_base($T: type, text: []const u8, base: u8) T {
+  result: T
+  _ = parse_into(text, base, &result)
+  return result
+}
+
+// Whether text parses as T, by the same rules as parse.
+pub fn valid($T: type, text: []const u8) bool {
+  result: T
+  return parse_into(text, 10, &result)
+}
+
+fn signed_into(text: []const u8, base: u8, minimum: i64, maximum: i64, output: *i64) bool {
+  value: i64
+  if !parse_i64_into(text, base, &value) || value < minimum || value > maximum {
     return false
   }
-  output.* = strip_suffix(output.*, "\r")
+  output.* = value
   return true
+}
+
+fn unsigned_into(text: []const u8, base: u8, maximum: u64, output: *u64) bool {
+  value: u64
+  if #len(text) > 0 && text[0] == '+' {
+    if !parse_u64_into(text[1..], base, &value) {
+      return false
+    }
+  } else if !parse_u64_into(text, base, &value) {
+    return false
+  }
+  if value > maximum {
+    return false
+  }
+  output.* = value
+  return true
+}
+
+fn parse_into(text: []const u8, base: u8, target: any) bool {
+  wide: i64
+  natural: u64
+  case target {
+    is *i8 p => {
+      ok := signed_into(text, base, -128, 127, &wide)
+      p.* = #cast(i8, wide)
+      return ok
+    },
+    is *i16 p => {
+      ok := signed_into(text, base, -32768, 32767, &wide)
+      p.* = #cast(i16, wide)
+      return ok
+    },
+    is *i32 p => {
+      ok := signed_into(text, base, -2147483648, 2147483647, &wide)
+      p.* = #cast(i32, wide)
+      return ok
+    },
+    is *i64 p => {
+      return parse_i64_into(text, base, p)
+    },
+    is *isize p => {
+      ok := parse_i64_into(text, base, &wide)
+      if !ok || wide < #cast(i64, isize_minimum()) || wide > #cast(i64, isize_maximum()) {
+        return false
+      }
+      p.* = #cast(isize, wide)
+      return true
+    },
+    is *u8 p => {
+      ok := unsigned_into(text, base, 255, &natural)
+      p.* = #cast(u8, natural)
+      return ok
+    },
+    is *u16 p => {
+      ok := unsigned_into(text, base, 65535, &natural)
+      p.* = #cast(u16, natural)
+      return ok
+    },
+    is *u32 p => {
+      ok := unsigned_into(text, base, 4294967295, &natural)
+      p.* = #cast(u32, natural)
+      return ok
+    },
+    is *u64 p => {
+      return unsigned_into(text, base, 18446744073709551615, p)
+    },
+    is *usize p => {
+      ok := unsigned_into(text, base, #cast(u64, usize_maximum()), &natural)
+      p.* = #cast(usize, natural)
+      return ok
+    },
+    is *f64 p => {
+      return base == 10 && parse_f64_into(text, p)
+    },
+    is *f32 p => {
+      value: f64
+      if base != 10 || !parse_f64_into(text, &value) {
+        return false
+      }
+      p.* = #cast(f32, value)
+      return true
+    },
+    is *bool p => {
+      if equal(text, "true") {
+        p.* = true
+        return true
+      }
+      return equal(text, "false")
+    },
+    _ => {
+      #panic("strings.parse: unsupported type")
+    },
+  }
+}
+
+fn usize_maximum() usize {
+  return ~#cast(usize, 0)
+}
+fn isize_maximum() isize {
+  return #cast(isize, usize_maximum() / 2)
+}
+fn isize_minimum() isize {
+  return -isize_maximum() - 1
 }
 
 pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Overlap }
@@ -559,15 +693,16 @@ pub fn split_count(source: []const u8, separator: []const u8) SizeResult {
   count: usize = 1
   at: usize = 0
   for {
-    found := find(source[at..], separator)
-    if found < 0 {
+    rest := source[at..]
+    found := find(rest, separator)
+    if found == #len(rest) {
       break
     }
     if count == #cast(usize, -1) {
       return SizeResult{ error: ErrorKind.Overflow }
     }
     count += 1
-    at += #cast(usize, found) + #len(separator)
+    at += found + #len(separator)
   }
   return SizeResult{ value: count, ok: true }
 }
@@ -585,8 +720,7 @@ pub fn split_into(storage: [][]const u8, source: []const u8, separator: []const 
   at: usize = 0
   i: usize = 0
   for i + 1 < count.value {
-    next := find(source[at..], separator)
-    end := at + #cast(usize, next)
+    end := at + find(source[at..], separator)
     storage[i] = source[at..end]
     at = end + #len(separator)
     i += 1
@@ -615,8 +749,9 @@ pub fn replace(destination: []u8, source: []const u8, needle: []const u8, replac
   at: usize = 0
   maximum := #cast(usize, -1)
   for {
-    found := find(source[at..], needle)
-    if found < 0 {
+    rest := source[at..]
+    found := find(rest, needle)
+    if found == #len(rest) {
       break
     }
     total -= #len(needle)
@@ -624,7 +759,7 @@ pub fn replace(destination: []u8, source: []const u8, needle: []const u8, replac
       return Result{ error: ErrorKind.Overflow }
     }
     total += #len(replacement)
-    at += #cast(usize, found) + #len(needle)
+    at += found + #len(needle)
   }
   if total > #len(destination) {
     return Result{ error: ErrorKind.Capacity, required: total }
@@ -635,11 +770,12 @@ pub fn replace(destination: []u8, source: []const u8, needle: []const u8, replac
   at = 0
   written: usize = 0
   for {
-    next := find(source[at..], needle)
-    if next < 0 {
+    rest := source[at..]
+    next := find(rest, needle)
+    if next == #len(rest) {
       break
     }
-    end := at + #cast(usize, next)
+    end := at + next
     written += memory.copy(destination[written..], source[at..end])
     written += memory.copy(destination[written..], replacement)
     at = end + #len(needle)

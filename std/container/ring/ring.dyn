@@ -20,12 +20,15 @@ pub fn push(state: *Ring, byte: u8) bool {
   return true
 }
 
-pub fn pop(state: *Ring, output: *u8) bool {
+pub struct Popped { value: u8, ok: bool }
+
+// The oldest byte. ok is false when the ring is empty.
+pub fn pop(state: *Ring) Popped {
   if state.length == 0 {
-    return false
+    return Popped{}
   }
-  output.* = state.data[state.read]
+  value := state.data[state.read]
   state.read = (state.read + 1) % #len(state.data)
   state.length -= 1
-  return true
+  return Popped{ value: value, ok: true }
 }

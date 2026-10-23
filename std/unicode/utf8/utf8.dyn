@@ -60,19 +60,21 @@ pub fn valid(text: []const u8) bool {
   return true
 }
 
-pub fn codepoint_count(text: []const u8, output: *usize) bool {
+pub struct Count { value: usize, ok: bool }
+
+// Code points in text. ok is false when text is not valid UTF-8.
+pub fn codepoint_count(text: []const u8) Count {
   offset: usize = 0
   total: usize = 0
   for offset < #len(text) {
     decoded := decode(text, offset)
     if !decoded.ok {
-      return false
+      return Count{}
     }
     offset += decoded.width
     total += 1
   }
-  output.* = total
-  return true
+  return Count{ value: total, ok: true }
 }
 
 pub fn encoded_width(codepoint: u32) usize {
@@ -132,15 +134,17 @@ pub fn iterator(text: []const u8) Iterator {
   return Iterator{ text: text, offset: 0 }
 }
 
-pub fn next(state: *Iterator, output: *u32) bool {
+pub struct Next { value: u32, ok: bool }
+
+// The next code point. ok is false at the end or at invalid UTF-8.
+pub fn next(state: *Iterator) Next {
   if state.offset >= #len(state.text) {
-    return false
+    return Next{}
   }
   decoded := decode(state.text, state.offset)
   if !decoded.ok {
-    return false
+    return Next{}
   }
   state.offset += decoded.width
-  output.* = decoded.codepoint
-  return true
+  return Next{ value: decoded.codepoint, ok: true }
 }
