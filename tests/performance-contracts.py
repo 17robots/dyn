@@ -18,7 +18,7 @@ use "std/bytes/builder" builder
 use "std/errors" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 fn sink_write(data: rawptr, source: []const u8) io.Result {
-  state := #cast(*Sink) data
+  state := #cast(*Sink, data)
   state.calls += 1
   if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Result{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
   amount := #len(source)
@@ -43,7 +43,7 @@ fn main() {''']
     body += ['''
   sink := Sink{}
   staging: [4]u8 = []
-  buffered := bufio.writer(io.Writer{data: #cast(rawptr) &sink, write: &sink_write}, staging[..])
+  buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: &sink_write}, staging[..])
   result := io.write_all(bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
   t.expect(result.transferred == 20 && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
   t.expect(bufio.writer_flush(&buffered).status == io.Status.Complete, "flush tail")
@@ -55,7 +55,7 @@ fn main() {''']
   _ = io.write_all(bufio.writer_adapter(&buffered), "z")
   t.expect(sink.calls == calls, "sticky direct failure")
   sink = Sink{fail_after: 1}
-  buffered = bufio.writer(io.Writer{data: #cast(rawptr) &sink, write: &sink_write}, staging[..])
+  buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: &sink_write}, staging[..])
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
   t.expect(result.status == io.Status.Error && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
   chunk_storage: [8]u8 = []
@@ -63,7 +63,7 @@ fn main() {''']
   for capacity in 1..9 {
     for size in 0..21 {
       sink = Sink{}
-      buffered = bufio.writer(io.Writer{data: #cast(rawptr) &sink, write: &sink_write}, chunk_storage[..capacity])
+      buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: &sink_write}, chunk_storage[..capacity])
       result = io.write_all(bufio.writer_adapter(&buffered), text[..size])
       expected: usize = 0
       if size > 0 { expected = (size - 1) % capacity + 1 }
@@ -92,21 +92,21 @@ fn main() {''']
   initial := mem.arena_used(&arena)
   key: [1]u8 = []
   for i in 0..30 {
-    key[0] = #cast(u8) i
+    key[0] = #cast(u8, i)
     t.expect(maps.put(&map, &arena, key[..], i) == maps.ErrorKind.None, "put")
   }
   t.expect(mem.arena_used(&arena) == initial + 30, "preallocation avoids table growth")
   t.expect(maps.reserve(&map, &arena, 60) == maps.ErrorKind.None, "reserve populated map")
   used := mem.arena_used(&arena)
-  t.expect(maps.reserve(&map, &arena, #cast(usize) -1) == maps.ErrorKind.Overflow, "reserve overflow")
+  t.expect(maps.reserve(&map, &arena, #cast(usize, -1)) == maps.ErrorKind.Overflow, "reserve overflow")
   t.expect(mem.arena_used(&arena) == used && map.length == 30, "reserve atomic")
-  for i in 0..30 { key[0] = #cast(u8) i
+  for i in 0..30 { key[0] = #cast(u8, i)
     t.expect(maps.get(&map, key[..]).value == i, "preserved values")
     if i % 2 == 0 { t.expect(maps.remove(&map, key[..]), "deletion") }
   }
   maps.clear(&map)
   t.expect(map.length == 0 && mem.arena_used(&arena) == used, "clear retains storage")
-  for i in 0..30 { key[0] = #cast(u8) i
+  for i in 0..30 { key[0] = #cast(u8, i)
     t.expect(!maps.get(&map, key[..]).found, "clear removes remaining entries")
   }
   values: [10]i64 = [10,9,8,7,6,5,4,3,2,1]

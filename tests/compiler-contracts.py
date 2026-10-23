@@ -183,6 +183,14 @@ class Contracts(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(subprocess.run([str(root / 'program')]).returncode, 0)
 
+    def test_reverse_outside_for_iterable_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix='dyn-reverse-misuse-') as directory:
+            root = Path(directory)
+            (root / 'main.dyn').write_text('fn main() {\n  a: [3]i64 = [1, 2, 3]\n  b := #reverse(a)\n}\n')
+            result = subprocess.run([DYN, 'check', directory], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn('#reverse is valid only as a for-loop iterable', result.stderr + result.stdout)
+
     def test_direct_local_borrows_cannot_escape_returns(self):
         invalid = [
             'fn bad() *i32 { x: i32 = 1 return &x }',

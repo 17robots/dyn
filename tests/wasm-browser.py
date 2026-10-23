@@ -23,7 +23,7 @@ pub fn increment() { counter += 1 }
 pub fn layout() usize { return #sizeof(usize)*100 + #sizeof(rawptr)*10 + #sizeof([]u8) }
 pub fn arithmetic(a: isize, b: isize) isize { return a / b }
 pub fn big(a: i64) i64 { return a + 1 }
-pub fn alloc(n: usize) rawptr { return #cast(rawptr) mem.arena_try_push(&arena, n, 4).memory }
+pub fn alloc(n: usize) rawptr { return #cast(rawptr, mem.arena_try_push(&arena, n, 4).memory) }
 pub fn reset() { mem.arena_reset(&arena) }
 pub fn total(data: *u32, n: usize) u32 {
   values := data[..n]
@@ -40,11 +40,11 @@ pub fn abi() bool {
 pub fn pool_test() bool {
   mem.arena_reset(&arena)
   pool := mem.pool_init(&arena, 2, 4, 4)
-  first := mem.pool_acquire_or_panic(&pool)
-  second := mem.pool_acquire_or_panic(&pool)
-  if mem.pool_acquire(&pool) != nil { return false }
+  first := mem.pool_acquire(&pool)
+  second := mem.pool_acquire(&pool)
+  if mem.pool_try_acquire(&pool) != nil { return false }
   mem.pool_release(&pool, first)
-  same := mem.pool_acquire_or_panic(&pool)
+  same := mem.pool_acquire(&pool)
   mem.pool_release(&pool, same) mem.pool_release(&pool, second)
   return same == first && mem.pool_available(&pool) == 2
 }

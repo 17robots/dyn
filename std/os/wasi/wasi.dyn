@@ -15,9 +15,9 @@ pub fn write(fd: u32, bytes: []const u8) io.Result {
     return io.Result{ status: io.Status.Complete }
   }
   count: usize = 0
-  error := wasi_raw.write(fd, #cast(rawptr) &bytes[0], #len(bytes), &count)
+  error := wasi_raw.write(fd, #cast(rawptr, &bytes[0]), #len(bytes), &count)
   if error != 0 {
-    return io.Result{ transferred: count, error: 0 - #cast(isize) error, status: io.Status.Error }
+    return io.Result{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
   }
   return io.Result{ transferred: count, status: io.Status.Complete }
 }
@@ -28,7 +28,7 @@ pub fn read(fd: u32, bytes: []u8) io.Result {
   count: usize = 0
   error := wasi_raw.read(fd, &bytes[0], #len(bytes), &count)
   if error != 0 {
-    return io.Result{ transferred: count, error: 0 - #cast(isize) error, status: io.Status.Error }
+    return io.Result{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
   }
   if count == 0 {
     return io.Result{ status: io.Status.End }
@@ -64,7 +64,7 @@ pub fn arguments(arena: *mem.Arena) Arguments {
   if count == 0 {
     return Arguments{ ok: true }
   }
-  maximum := ~#cast(usize) 0
+  maximum := ~#cast(usize, 0)
   if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) {
     return Arguments{ error: 48 }
   }
@@ -84,11 +84,11 @@ pub fn arguments(arena: *mem.Arena) Arguments {
     mem.arena_rewind(arena, mark)
     return Arguments{ error: error }
   }
-  raw := (#cast(**u8) pointers)[..count]
-  values := (#cast(*[]const u8) slices)[..count]
+  raw := (#cast(**u8, pointers))[..count]
+  values := (#cast(*[]const u8, slices))[..count]
   i: usize = 0
   for i < count {
-    offset := #cast(usize) raw[i] - #cast(usize) bytes
+    offset := #cast(usize, raw[i]) - #cast(usize, bytes)
     if offset >= size {
       mem.arena_rewind(arena, mark)
       return Arguments{ error: 28 }

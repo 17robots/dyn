@@ -198,6 +198,24 @@ static uint64_t hash_runtime(uint64_t hash, const DynOptions *options,
     start = "dynrt_macos_x64_start.o"; support = "dynrt_macos_x64_support.o";
   } else if (!strcmp(options->target, "aarch64-windows")) {
     start = "dynrt_windows_arm64_start.o"; support = "dynrt_windows_arm64_support.o";
+  } else if (!strcmp(options->target, "riscv64-none")) {
+    start = options->release ? "dynrt_riscv64_none_release.o" : "dynrt_riscv64_none_start.o";
+    support = "dynrt_riscv64_none_support.o";
+  } else if (!strcmp(options->target, "riscv32-none-soft")) {
+    start = options->release ? "dynrt_riscv32_none_soft_release.o" : "dynrt_riscv32_none_soft_start.o";
+    support = "dynrt_riscv32_none_soft_support.o";
+  } else if (!strcmp(options->target, "riscv32-none")) {
+    start = options->release ? "dynrt_riscv32_none_release.o" : "dynrt_riscv32_none_start.o";
+    support = "dynrt_riscv32_none_support.o";
+  } else if (!strcmp(options->target, "thumbv7em-none-nucleo-h753zi")) {
+    start = options->release ? "dynrt_nucleo_h753zi_release.o" : "dynrt_nucleo_h753zi_start.o";
+    support = "dynrt_nucleo_h753zi_support.o";
+  } else if (!strcmp(options->target, "thumbv7em-none-soft")) {
+    start = options->release ? "dynrt_thumbv7em_none_soft_release.o" : "dynrt_thumbv7em_none_soft_start.o";
+    support = "dynrt_thumbv7em_none_soft_support.o";
+  } else if (!strcmp(options->target, "thumbv7em-none")) {
+    start = options->release ? "dynrt_thumbv7em_none_release.o" : "dynrt_thumbv7em_none_start.o";
+    support = "dynrt_thumbv7em_none_support.o";
   } else if (!strcmp(options->target, "riscv64-linux")) {
     start = options->release ? "dynrt_riscv64_release.o" : "dynrt_riscv64_start.o";
     support = "dynrt_riscv64_support.o";
@@ -285,6 +303,10 @@ static uint64_t codegen_key(const DynSources *sources,
   hash = optimization_key(hash, options);
   hash = hash_bytes(hash, &options->debug_info, sizeof(options->debug_info));
   hash = hash_bytes(hash, &options->native_backend, sizeof(options->native_backend));
+  /* Input contents still affect only linking, but their presence preserves
+     public function roots. Never restore a pruned executable object here. */
+  bool external_roots = options->link_input_count != 0;
+  hash = hash_bytes(hash, &external_roots, sizeof(external_roots));
   hash = hash_project_sources(hash, sources);
   return hash;
 }

@@ -271,13 +271,13 @@ fn valid_text(text: []const u8, attribute: bool) bool {
           byte := entity[index]
           digit: u32 = 16
           if byte >= '0' && byte <= '9' {
-            digit = #cast(u32) (byte - '0')
+            digit = #cast(u32, (byte - '0'))
           }
           else if byte >= 'a' && byte <= 'f' {
-            digit = #cast(u32) (byte - 'a') + 10
+            digit = #cast(u32, (byte - 'a')) + 10
           }
           else if byte >= 'A' && byte <= 'F' {
-            digit = #cast(u32) (byte - 'A') + 10
+            digit = #cast(u32, (byte - 'A')) + 10
           }
           if digit >= base || value > (1114111 - digit) / base {
             return false
@@ -290,8 +290,8 @@ fn valid_text(text: []const u8, attribute: bool) bool {
         }
       } else if !bytes.equal(entity, "amp") && !bytes.equal(entity, "lt") && !bytes.equal(entity, "gt") &&
         !bytes.equal(entity, "apos") && !bytes.equal(entity, "quot") {
-          return false
-        }
+        return false
+      }
       at = end + 1
     } else {
       at += decoded.width

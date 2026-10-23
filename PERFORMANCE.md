@@ -1,5 +1,97 @@
 # Performance qualification
 
+## Real-application follow-up — 2026-10-20
+
+The real-project matrix covers a 10.8 MB JSON validation input, a PTY-driven
+Field Notes session, DNA's existing document-buffer workload, and its complete
+headless search/open/edit/undo workflow. JSON and Field Notes require isolated
+API-adapted copies because the checked-in examples use retired memory APIs.
+DNA sources and its buffer workload remain unchanged. Both compilers use the
+same staged sources, input bytes, SDK and native libraries.
+
+Five paired cold-build samples measure JSON at 160,384 / 42,688 bytes and about
+30.7 / 10.8 ms before/after all changes. Field Notes measures 81,112 / 35,664
+bytes and about 9.7 / 7.6 ms. DNA's buffer remains 149,384 bytes; the editor falls
+only from 1,564,040 to 1,559,944 bytes, with build time roughly unchanged near
+0.31 s. External inputs conservatively preserve public roots, limiting pruning
+benefits in these two applications.
+
+Runtime profiling finds PCRE2 as the editor's largest sampled leaf. Its replay
+also contains scheduled waits, so its approximately 43 s wall duration is not
+an interactive-latency measure. The 30-run GDB/MI JSON profile records string
+scanning in 99 of 131 PC samples. These are directional samples, not hardware
+cycle counts. Disassembly exposes repeated loads of unchanged cursor fields.
+
+A new SSA pass reuses identical typed loads only within one basic block.
+Memory writes, calls and copies invalidate reuse; no pointer non-aliasing or
+cross-block assumptions are added. Fifteen shuffled runtime samples recover
+the intermediate compiler's JSON regression: about 14.9 / 12.8 ms immediately
+before/after load reuse. The original compiler also measures about 12.9 ms,
+so the cumulative result retains smaller code while restoring original speed.
+The standalone cursor and DNA buffer benchmarks show little runtime change.
+This is not a general runtime speedup claim.
+
+Separate native-launcher measurements avoid Python's inherited RSS floor.
+JSON remains about 10.3 MiB peak RSS; Field Notes about 0.5 MiB; the buffer
+workload varies around 4–5 MiB. No meaningful allocation reduction is shown.
+The editor's final integration run records 50.6 MiB peak RSS; its single final
+sample does not establish a memory improvement over the earlier paired runs.
+
+The complete compiler suite and the focused load-reuse gate pass. The new
+code-generation assertion fails on the preceding compiler, which emits two
+reads of the same pointer instead of one. Tests preserve aliasing stores,
+partial writes, calls, overlap copies, zeroing, branches and loop-carried writes.
+The rebuilt editor passes its workflow probe and matches full-reference Unicode,
+tab and zoom rendering pixel-for-pixel. Raw data and scripts are retained under
+`build/real-app-performance/`; the cursor benchmark lives in
+`tests/performance/cursor`, and the gate is `tests/native-load-reuse.py`.
+
+## Independent backend update — 2026-10-20
+
+Native release executables now compute function reachability before scalar
+optimization and inlining. Unused public bodies are skipped when the compiler
+has the complete executable and no external link inputs. Explicit object or
+assembly output, libraries, debug output, and Wasm retain their public-root
+policies. Global initialization, callback addresses, and cleanup remain live.
+Object cache keys distinguish builds with external public roots, so adding an
+external object cannot restore an executable object with required symbols pruned.
+
+O3 uses cached expression-aware callee costs and a program expansion budget.
+ELF x86-64 code sections now declare the 16-byte alignment required by SSA loop
+padding. Detailed timings separate reachability, scalar optimization, inlining,
+SSA construction/optimization, register allocation, machine emission, and object
+serialization. Backend totals aggregate per-function work and sit inside the
+overall native emission time; they are not additional command wall time.
+
+Seven shuffled samples after warm-up on this Linux x86-64 host measured the
+standard-library fixture as follows. Portable O2 executable size falls from
+143,592 to 36,928 bytes; cold build median falls from 29.30 to 10.04 ms. O3 size
+falls from 310,560 to 37,240 bytes; build median falls from 112.91 to 10.56 ms.
+The five smaller kernels produce O2 files about 32% smaller, with build times
+about 9–17% lower. Compiler caches are disabled; OS caches remain warm.
+
+Runtime is workload-dependent: O2 Fibonacci is about 2.6% slower, O3 matrix
+about 8.1% faster, and O2 sieve about 4.8% faster. Other changes are small.
+Every output/checksum matches. These samples establish size/build improvements,
+not a universal runtime improvement. The comparison uses a preserved pre-change
+compiler binary, not a fresh rebuild of old sources.
+
+The complete standalone regression suite passes after the final alignment fix.
+New tests check seven-target executable pruning, retained exports and external
+callbacks, initializer/defer effects, cache reuse, ELF code alignment, and bounded
+inlining. The growth regression fails with the old compiler: its O3 object grows
+from 3,832 to 18,240 bytes. The new compiler passes the growth limit.
+
+Raw commands, samples, compiler/artifact hashes, and logs are retained locally
+under `build/performance-implementation/`. Final paired samples after the cache fix are in
+`final-measurements/results.json`; `compare-aligned.py` reproduces them when the
+preserved baseline is available. These are local artifacts, not shipped SDK data.
+
+## Historical LLVM measurements
+
+The remainder predates the independent backend and must not be used as its
+current baseline.
+
 Local measurements from 2026-10-04, AMD Ryzen 9 9950X, Linux, LLVM/LLD 23.
 The new compiler controls also passed executable regression tests with LLVM/LLD
 19, the packaged release toolchain. Times are workload-specific, not promises.

@@ -145,7 +145,7 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
     } else if (element == DYN_TYPE_BOOL) {
       DEFAULT_APPEND("([false])[..0]");
     } else if (element >= DYN_TYPE_I8 && element <= DYN_TYPE_F64) {
-      DEFAULT_APPEND("([#cast(%s) 0])[..0]", dyn_type_name(element));
+      DEFAULT_APPEND("([#cast(%s, 0)])[..0]", dyn_type_name(element));
     } else
       return false;
   } else if (dyn_type_is_array(type)) {

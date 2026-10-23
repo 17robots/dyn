@@ -1,0 +1,16 @@
+use "std/io"
+use "std/mem"
+
+pub counter: u32 = 7
+pub storage: [32]u8
+
+fn main() {
+  if counter != 7 || storage[0] != 0 { #panic("startup memory") }
+  arena := mem.arena_create(64 * mem.KiB)
+  defer mem.arena_release(&arena)
+  value := mem.push(u32, &arena)
+  value.* = 42
+  if value.* != 42 { #panic("arena") }
+  _ = io.write_all(io.stdout(), "hello from NUCLEO-H753ZI\n")
+  counter = value.*
+}

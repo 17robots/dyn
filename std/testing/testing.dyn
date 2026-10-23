@@ -72,7 +72,7 @@ pub fn random_below(generator: *Random, bound: usize) usize {
   if bound == 0 {
     return 0
   }
-  return #cast(usize) (random_next(generator) % #cast(u64) bound)
+  return #cast(usize, (random_next(generator) % #cast(u64, bound)))
 }
 
 pub struct Benchmark { started: clock.Instant, iterations: usize }
@@ -90,5 +90,5 @@ pub fn benchmark_nanoseconds_each(benchmark: *const Benchmark) i64 {
   if benchmark.iterations == 0 {
     return 0
   }
-  return benchmark_elapsed(benchmark) / #cast(i64) benchmark.iterations
+  return benchmark_elapsed(benchmark) / #cast(i64, benchmark.iterations)
 }

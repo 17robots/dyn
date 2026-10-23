@@ -5,15 +5,15 @@ pub struct Result { info: Info, pixels: []u8, error: isize, ok: bool }
 pub struct EncodeResult { data: []u8, error: isize, ok: bool }
 
 fn u32be(source: []const u8, at: usize) u32 {
-  return #cast(u32) source[at] * 16777216 + #cast(u32) source[at + 1] * 65536 +
-    #cast(u32) source[at + 2] * 256 + #cast(u32) source[at + 3]
+  return #cast(u32, source[at]) * 16777216 + #cast(u32, source[at + 1]) * 65536 +
+    #cast(u32, source[at + 2]) * 256 + #cast(u32, source[at + 3])
 }
 
 fn put_u32be(destination: []u8, at: usize, value: u32) {
-  destination[at] = #cast(u8) (value >> 24)
-  destination[at + 1] = #cast(u8) (value >> 16)
-  destination[at + 2] = #cast(u8) (value >> 8)
-  destination[at + 3] = #cast(u8) value
+  destination[at] = #cast(u8, (value >> 24))
+  destination[at + 1] = #cast(u8, (value >> 16))
+  destination[at + 2] = #cast(u8, (value >> 8))
+  destination[at + 3] = #cast(u8, value)
 }
 
 fn chunk_type(source: []const u8, at: usize, a: u8, b: u8, c: u8, d: u8) bool {
@@ -21,7 +21,7 @@ fn chunk_type(source: []const u8, at: usize, a: u8, b: u8, c: u8, d: u8) bool {
 }
 
 fn crc_step(crc: u32, byte: u8) u32 {
-  value := crc ^ #cast(u32) byte
+  value := crc ^ #cast(u32, byte)
   for i in 0..8 {
     if (value & 1) != 0 {
       value = (value >> 1) ^ 3988292384
@@ -51,8 +51,8 @@ pub fn inspect(source: []const u8) Info {
   if #len(source) < 33 || source[0] != 137 || source[1] != 80 || source[2] != 78 || source[3] != 71 ||
     source[4] != 13 || source[5] != 10 || source[6] != 26 || source[7] != 10 || u32be(source, 8) != 13 ||
     !chunk_type(source, 12, 'I', 'H', 'D', 'R') {
-      return Info{}
-    }
+    return Info{}
+  }
   width := u32be(source, 16)
   height := u32be(source, 20)
   color := source[25]
@@ -76,9 +76,9 @@ pub fn inspect(source: []const u8) Info {
 }
 
 fn paeth(a: u8, b: u8, c: u8) u8 {
-  ai: i32 = #cast(i32) a
-  bi: i32 = #cast(i32) b
-  ci: i32 = #cast(i32) c
+  ai: i32 = #cast(i32, a)
+  bi: i32 = #cast(i32, b)
+  ci: i32 = #cast(i32, c)
   p := ai + bi - ci
   pa := p - ai
   if pa < 0 {
@@ -102,8 +102,8 @@ fn paeth(a: u8, b: u8, c: u8) u8 {
 }
 
 fn add_byte(value: u8, predictor: u8) u8 {
-  total: u16 = #cast(u16) value + #cast(u16) predictor
-  return #cast(u8) total
+  total: u16 = #cast(u16, value) + #cast(u16, predictor)
+  return #cast(u8, total)
 }
 
 // Decodes non-interlaced 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG.
@@ -112,10 +112,10 @@ pub fn decode(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u
   if !info.ok {
     return Result{ error: -22 }
   }
-  row_size := #cast(usize) info.width * #cast(usize) info.channels
-  pixel_size := row_size * #cast(usize) info.height
-  scanline_size := (row_size + 1) * #cast(usize) info.height
-  if #cast(usize) info.height != 0 && pixel_size / #cast(usize) info.height != row_size {
+  row_size := #cast(usize, info.width) * #cast(usize, info.channels)
+  pixel_size := row_size * #cast(usize, info.height)
+  scanline_size := (row_size + 1) * #cast(usize, info.height)
+  if #cast(usize, info.height) != 0 && pixel_size / #cast(usize, info.height) != row_size {
     return Result{ info: info, error: -75 }
   }
   if #len(pixels) < pixel_size || #len(scanlines) < scanline_size {
@@ -125,7 +125,7 @@ pub fn decode(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u
   compressed_used: usize = 0
   ended := false
   for at + 12 <= #len(source) {
-    length := #cast(usize) u32be(source, at)
+    length := #cast(usize, u32be(source, at))
     type_at := at + 4
     data_at := at + 8
     if length > #len(source) - data_at - 4 {
@@ -154,7 +154,7 @@ pub fn decode(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u
   }
   cmf := compressed[0]
   flg := compressed[1]
-  header_value: usize = #cast(usize) cmf * 256 + #cast(usize) flg
+  header_value: usize = #cast(usize, cmf) * 256 + #cast(usize, flg)
   if (cmf & 15) != 8 || (cmf >> 4) > 7 || header_value % 31 != 0 || (flg & 32) != 0 {
     return Result{ info: info, error: -74 }
   }
@@ -163,14 +163,14 @@ pub fn decode(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u
     return Result{ info: info, error: -74 }
   }
   y: usize = 0
-  for y < #cast(usize) info.height {
+  for y < #cast(usize, info.height) {
     filter := scanlines[y * (row_size + 1)]
     for x in 0..row_size {
       raw := scanlines[y * (row_size + 1) + 1 + x]
       left: u8 = 0
       above: u8 = 0
       upper_left: u8 = 0
-      channels := #cast(usize) info.channels
+      channels := #cast(usize, info.channels)
       if x >= channels {
         left = pixels[y * row_size + x - channels]
       }
@@ -188,7 +188,7 @@ pub fn decode(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u
         predictor = above
       }
       else if filter == 3 {
-        predictor = #cast(u8) ((#cast(u16) left + #cast(u16) above) / 2)
+        predictor = #cast(u8, ((#cast(u16, left) + #cast(u16, above)) / 2))
       }
       else if filter == 4 {
         predictor = paeth(left, above, upper_left)
@@ -207,7 +207,7 @@ fn adler32(source: []const u8) u32 {
   a: u32 = 1
   b: u32 = 0
   for byte in source {
-    a = (a + #cast(u32) byte) % 65521
+    a = (a + #cast(u32, byte)) % 65521
     b = (b + a) % 65521
   }
   return b * 65536 + a
@@ -216,9 +216,9 @@ fn adler32(source: []const u8) u32 {
 fn append_chunk(destination: []u8, at: usize, kind: []const u8, payload: []const u8) usize {
   if #len(kind) != 4 || at > #len(destination) || #len(payload) > #len(destination) - at ||
     #len(destination) - at - #len(payload) < 12 {
-      return #len(destination) + 1
-    }
-  put_u32be(destination, at, #cast(u32) #len(payload))
+    return #len(destination) + 1
+  }
+  put_u32be(destination, at, #cast(u32, #len(payload)))
   i: usize = 0
   for i < 4 {
     destination[at + 4 + i] = kind[i]
@@ -241,14 +241,14 @@ pub fn encode(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []co
   if width == 0 || height == 0 || channels < 1 || channels > 4 {
     return EncodeResult{ error: -22 }
   }
-  row_size := #cast(usize) width * #cast(usize) channels
-  pixel_size := row_size * #cast(usize) height
-  scanline_size := (row_size + 1) * #cast(usize) height
+  row_size := #cast(usize, width) * #cast(usize, channels)
+  pixel_size := row_size * #cast(usize, height)
+  scanline_size := (row_size + 1) * #cast(usize, height)
   if pixel_size != #len(pixels) || #len(scanlines) < scanline_size || #len(compressed) < 6 || #len(destination) < 57 {
     return EncodeResult{ error: -28 }
   }
   y: usize = 0
-  for y < #cast(usize) height {
+  for y < #cast(usize, height) {
     scanline_at := y * (row_size + 1)
     scanlines[scanline_at] = 0
     for x in 0..row_size {
@@ -257,7 +257,7 @@ pub fn encode(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []co
     y += 1
   }
   compressed[0] = 120
-    compressed[1] = 1
+  compressed[1] = 1
   encoded := deflate.deflate_stored_chunk(compressed[2..#len(compressed) - 4], scanlines[..scanline_size], true)
   if !encoded.ok {
     return EncodeResult{ error: -28 }
@@ -266,13 +266,13 @@ pub fn encode(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []co
   put_u32be(compressed, 2 + encoded.written, adler32(scanlines[..scanline_size]))
   signature: [8]u8 = [137, 80, 78, 71, 13, 10, 26, 10]
   i: usize = 0
-    for i < 8 {
-      destination[i] = signature[i]
-      i += 1
-    }
+  for i < 8 {
+    destination[i] = signature[i]
+    i += 1
+  }
   ihdr: [13]u8 = []
   put_u32be(ihdr[..], 0, width)
-    put_u32be(ihdr[..], 4, height)
+  put_u32be(ihdr[..], 4, height)
   ihdr[8] = 8
   if channels == 1 {
     ihdr[9] = 0

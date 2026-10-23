@@ -46,7 +46,7 @@ struct Mixed { f: f64, n: i32 }
 struct Large { a: u64, b: u64, c: u64, d: u64, e: u8 }
 enum Shape { Circle: f64, Square: i64, Point: Pair, Empty }
 fn small_make(a: u8, b: u16, c: u32) Small { return Small{ a: a, b: b, c: c } }
-fn small_sum(s: Small) u64 { return #cast(u64) s.a + #cast(u64) s.b + #cast(u64) s.c }
+fn small_sum(s: Small) u64 { return #cast(u64, s.a) + #cast(u64, s.b) + #cast(u64, s.c) }
 pub fn agg_small(a: u8, b: u16, c: u32) u64 { return small_sum(small_make(a, b, c)) }
 fn pair_swap(p: Pair) Pair { return Pair{ x: p.y, y: p.x } }
 pub fn agg_pair(a: i64, b: i64) i64 { q := pair_swap(Pair{ x: a, y: b }) return #wrap(q.x * 3 - q.y) }
@@ -55,36 +55,36 @@ pub fn agg_floats(a: f32, b: f32) f32 { r := floats_scale(Floats{ x: a, y: b }, 
 fn doubles_rotate(d: Doubles) Doubles { return Doubles{ a: d.c, b: d.a, c: d.b } }
 pub fn agg_doubles(a: f64, b: f64) f64 { r := doubles_rotate(Doubles{ a: a, b: b, c: 1.5 }) return r.a * 100.0 + r.b * 10.0 + r.c }
 fn mixed_echo(m: Mixed) Mixed { return Mixed{ f: m.f * 2.0, n: m.n + 1 } }
-pub fn agg_mixed(a: f64, b: i32) f64 { r := mixed_echo(Mixed{ f: a, n: b }) return r.f + #cast(f64) r.n }
+pub fn agg_mixed(a: f64, b: i32) f64 { r := mixed_echo(Mixed{ f: a, n: b }) return r.f + #cast(f64, r.n) }
 fn large_bump(l: Large) Large { m := l m.a += 1 m.e = 7 return m }
 fn large_mutate(l: Large) u64 { m := l m.b = 0 return m.a + m.b }
-pub fn agg_large(a: u64, b: u64) u64 { l := Large{ a: a % 1000, b: b % 1000, c: 3, d: 4, e: 5 } r := large_bump(l) _ = large_mutate(l) return r.a + l.b + #cast(u64) r.e + l.a }
+pub fn agg_large(a: u64, b: u64) u64 { l := Large{ a: a % 1000, b: b % 1000, c: 3, d: 4, e: 5 } r := large_bump(l) _ = large_mutate(l) return r.a + l.b + #cast(u64, r.e) + l.a }
 fn many_structs(a: Pair, b: Floats, c: Large, d: Pair, e: Doubles, f: Small, g: Pair, h: Pair, i: Pair) i64 {
-  extra := #cast(i64) (b.x + #cast(f32) e.c)
-  return a.x + d.y + g.x + h.y + i.x + #cast(i64) c.a + #cast(i64) f.c + extra
+  extra := #cast(i64, (b.x + #cast(f32, e.c)))
+  return a.x + d.y + g.x + h.y + i.x + #cast(i64, c.a) + #cast(i64, f.c) + extra
 }
 pub fn agg_pressure(a: i64, b: i64) i64 {
   p := Pair{ x: a % 100, y: b % 100 }
   return many_structs(p, Floats{ x: 1.0, y: 2.0 }, Large{ a: 9, b: 0, c: 0, d: 0, e: 0 }, p, Doubles{ a: 0.0, b: 0.0, c: 4.0 }, Small{ a: 1, b: 2, c: 3 }, p, p, p)
 }
-fn array_sum(values: [5]u32) u64 { total: u64 = 0 for v in values { total += #cast(u64) v } return total }
+fn array_sum(values: [5]u32) u64 { total: u64 = 0 for v in values { total += #cast(u64, v) } return total }
 fn array_make(seed: u32) [5]u32 { return [seed, seed + 1, seed + 2, seed + 3, seed % 7] }
 pub fn agg_array(a: u32) u64 { return array_sum(array_make(a % 1000)) }
 pub fn agg_slice(a: u64, b: u64) u64 {
   data: [16]u64 = []
-  for i in 0..16 { data[i] = #cast(u64) i * 3 }
+  for i in 0..16 { data[i] = #cast(u64, i) * 3 }
   s := data[a % 8..8 + b % 8]
   total: u64 = 0
   for p in s { total += p }
-  return total + #cast(u64) #len(s)
+  return total + #cast(u64, #len(s))
 }
 pub fn agg_index(a: u64) u64 { data: [4]u64 = [10, 20, 30, 40] return data[a] }
-pub fn agg_string(a: u64) u64 { text := "hello, native arm" part := text[a % 5..] return #cast(u64) part[0] + #cast(u64) #len(part) }
+pub fn agg_string(a: u64) u64 { text := "hello, native arm" part := text[a % 5..] return #cast(u64, part[0]) + #cast(u64, #len(part)) }
 fn shape_area(s: Shape) i64 {
   case s {
     Shape.Square side => { return side * side },
     Shape.Point p => { return p.x + p.y },
-    Shape.Circle r => { return #cast(i64) (r * 3.0) },
+    Shape.Circle r => { return #cast(i64, (r * 3.0)) },
     _ => { return -1 },
   }
 }
@@ -97,9 +97,9 @@ pub fn agg_enum(a: i64, b: u64) i64 {
 }
 fn any_kind(v: any) u64 {
   case v {
-    is i64 n => { return #cast(u64) (n % 100) + 1000 },
+    is i64 n => { return #cast(u64, (n % 100)) + 1000 },
     is f64 n => { _ = n return 2000 },
-    is Pair p => { return #cast(u64) (p.x % 10) + 3000 },
+    is Pair p => { return #cast(u64, (p.x % 10)) + 3000 },
     _ => { return 9 },
   }
 }
@@ -135,7 +135,7 @@ fn large_echo(l: Large) Large { return l }
 pub fn agg_large_indirect(a: u64) u64 { f := &large_echo r := f(Large{ a: a % 1000, b: 2, c: 3, d: 4, e: 5 }) return r.a + r.d }
 fn floats_echo(f: Floats) Floats { return f }
 pub fn agg_hfa_indirect(a: f32) f32 { g := &floats_echo r := g(Floats{ x: a, y: 1.0 }) return r.x + r.y }
-pub fn agg_pointer(a: u64) u64 { p := Pair{ x: 1, y: 2 } q := &p q.y = #cast(i64) (a % 100) r := q return #cast(u64) (r.x + r.y) }
+pub fn agg_pointer(a: u64) u64 { p := Pair{ x: 1, y: 2 } q := &p q.y = #cast(i64, (a % 100)) r := q return #cast(u64, (r.x + r.y)) }
 pub fn agg_nested_loops(a: u64) u64 {
   total: u64 = 0
   outer: for i in 0..(a % 10) {
@@ -214,18 +214,18 @@ extern fn c_narrow_callback(f: *fn(i64, i64, i64, i64, i64, i64, i64, i64, u8, i
 extern fn c_vsum(n: i32, ...) i64
 extern fn c_vmixed(n: i32, ...) f64
 fn dyn_narrow(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: u8, j: i16, k: i32, l: u8, m: i64) i64 {
-  return a + b + c + d + e + f + g + h + #cast(i64) i * 10 + #cast(i64) j * 100 + #cast(i64) k * 1000 + #cast(i64) l * 7 + m * 3
+  return a + b + c + d + e + f + g + h + #cast(i64, i) * 10 + #cast(i64, j) * 100 + #cast(i64, k) * 1000 + #cast(i64, l) * 7 + m * 3
 }
 pub fn c_abi_narrow(a: u8, b: i16) i64 { return c_narrow(1, 2, 3, 4, 5, 6, 7, 8, a, b, 70000, 200, 9) + dyn_narrow(8, 7, 6, 5, 4, 3, 2, 1, a, b, -5, 3, 1) }
 pub fn c_abi_narrow_fp(a: f32) f64 { return c_narrow_fp(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, a, 0.5, 0.25) }
 pub fn c_abi_narrow_callback(a: u8) i64 { return c_narrow_callback(&dyn_narrow, a) }
-pub fn c_abi_variadic(a: i64, b: f64) f64 { k: i64 = a % 1000 return #cast(f64) c_vsum(3, k, #cast(i64) 2, #cast(i64) 3) + c_vmixed(2, k, b, #cast(i64) 7, 0.5) }
-pub fn c_abi_small(a: u8, b: u16) u64 { r := c_small(Small{ a: a % 200, b: b % 1000, c: 7 }) return #cast(u64) r.a + #cast(u64) r.b + #cast(u64) r.c }
+pub fn c_abi_variadic(a: i64, b: f64) f64 { k: i64 = a % 1000 return #cast(f64, c_vsum(3, k, #cast(i64, 2), #cast(i64, 3))) + c_vmixed(2, k, b, #cast(i64, 7), 0.5) }
+pub fn c_abi_small(a: u8, b: u16) u64 { r := c_small(Small{ a: a % 200, b: b % 1000, c: 7 }) return #cast(u64, r.a) + #cast(u64, r.b) + #cast(u64, r.c) }
 pub fn c_abi_pair(a: i64, b: i64) i64 { r := c_pair(Pair{ x: a % 1000, y: b % 1000 }, 3) return r.x * 7 + r.y }
 pub fn c_abi_floats(a: f32, b: f32) f32 { r := c_floats(Floats{ x: a, y: b }) return r.x - r.y }
 pub fn c_abi_doubles(a: f64, b: f64) f64 { r := c_doubles(Doubles{ a: a, b: b, c: 0.25 }, 2.0) return r.a + r.b * 10.0 + r.c * 100.0 }
-pub fn c_abi_mixed(a: f64, b: i32) f64 { r := c_mixed(Mixed{ f: a, n: b % 1000 }) return r.f + #cast(f64) r.n }
-pub fn c_abi_large(a: u64, b: u64) u64 { l := Large{ a: a % 1000, b: b % 1000, c: 3, d: 4, e: 5 } r := c_large(l) m := c_large_mutates(l) return r.a + r.d + #cast(u64) r.e + l.a + m }
+pub fn c_abi_mixed(a: f64, b: i32) f64 { r := c_mixed(Mixed{ f: a, n: b % 1000 }) return r.f + #cast(f64, r.n) }
+pub fn c_abi_large(a: u64, b: u64) u64 { l := Large{ a: a % 1000, b: b % 1000, c: 3, d: 4, e: 5 } r := c_large(l) m := c_large_mutates(l) return r.a + r.d + #cast(u64, r.e) + l.a + m }
 pub fn c_abi_spill(a: i64, b: i64) i64 { return c_spill(1, 2, 3, 4, 5, 6, a % 100, Pair{ x: b % 100, y: 2 }, 3) }
 pub fn c_abi_fp_spill(a: f64) f64 { return c_fp_spill(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, a, Doubles{ a: 0.5, b: 0.25, c: 0.125 }, 9.0) }
 pub fn c_abi_callback(a: i64) i64 { return c_callback(&dyn_pair_callback, a % 1000) }

@@ -14,7 +14,7 @@ struct Shared {
   once: sync.Once, arrived: u32, completed: u32, total: u64, value: u64
 }
 fn worker(context: rawptr) isize {
-  shared := #cast(*Shared) context
+  shared := #cast(*Shared, context)
   sync.lock(&shared.mutex)
   shared.arrived += 1
   sync.condition_broadcast(&shared.condition)
@@ -43,7 +43,7 @@ fn main() {
   sync.unlock(&shared.mutex)
   threads: [4]thread.Thread = []
   for i in 0..4 {
-    if thread.spawn_with_size(&threads[i], 131072, &worker, #cast(rawptr) &shared) < 0 { #panic("spawn") }
+    if thread.spawn_with_size(&threads[i], 131072, &worker, #cast(rawptr, &shared)) < 0 { #panic("spawn") }
   }
   sync.lock(&shared.mutex)
   for shared.arrived != 4 { sync.condition_wait(&shared.condition, &shared.mutex) }

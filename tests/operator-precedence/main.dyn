@@ -1,0 +1,17 @@
+// Pins the binary operator table in docs/guide/language.md.
+fn main() {
+  a: i64 = 6
+  if (a & 3 == 2) != true { #panic("& binds tighter than ==") }
+  if 1 << 2 + 1 != 8 { #panic("+ binds tighter than <<") }
+  if 1 + 2 << 1 != 6 { #panic("+ binds tighter than <<") }
+  if 3 | 4 ^ 6 != 3 { #panic("^ binds tighter than |") }
+  if 6 ^ 3 & 1 != 7 { #panic("& binds tighter than ^") }
+  if 2 | 1 < 4 != true { #panic("| binds tighter than <") }
+  if -a % 4 != -2 { #panic("prefix binds tighter than %") }
+  if 10 - 3 - 2 != 5 { #panic("- is left associative") }
+  if 64 / 4 / 2 != 8 { #panic("/ is left associative") }
+  if 2 + 3 * 4 != 14 { #panic("* binds tighter than +") }
+  b := a > 1 && a < 9 || false
+  if !b { #panic("&& and || bind looser than comparisons") }
+  if (false && false || true) != true { #panic("&& binds tighter than ||") }
+}

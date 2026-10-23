@@ -28,8 +28,8 @@ static void *analyze(void *argument) {
   const char *target = argument;
   for (unsigned i = 0; i < 40; ++i) {
     Sink sink = {0};
-    char text[] = "distinct type Value = i32\nfn add(x: Value) Value { return x + #cast(Value) 1 }\n"
-                  "fn main() { x := add(#cast(Value) 2) for i in [0,1,2] { if i == 2 { break } } _ = #syscall(999) }";
+    char text[] = "distinct type Value = i32\nfn add(x: Value) Value { return x + #cast(Value, 1) }\n"
+                  "fn main() { x := add(#cast(Value, 2)) for i in [0,1,2] { if i == 2 { break } } _ = #syscall(999) }";
     DynSource source = {.path = "main.dyn", .text = text, .length = strlen(text),
       .context = {.target = dyn_target_find(target), .diagnostic = collect, .diagnostic_data = &sink}};
     DynAstProgram ast;

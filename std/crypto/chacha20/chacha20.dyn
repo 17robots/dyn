@@ -1,24 +1,24 @@
 const Mod32: u64 = 4294967296
 fn add(a: u32, b: u32) u32 {
-  return #cast(u32) ((#cast(u64) a + #cast(u64) b) % Mod32)
+  return #cast(u32, ((#cast(u64, a) + #cast(u64, b)) % Mod32))
 }
 fn rotate(value: u32, amount: usize) u32 {
   factor: u64 = 1
   for i in 0..amount {
     factor *= 2
   }
-  left := #cast(u32) ((#cast(u64) value * factor) % Mod32)
+  left := #cast(u32, ((#cast(u64, value) * factor) % Mod32))
   return left | (value >> (32 - amount))
 }
 fn load32(input: []const u8, at: usize) u32 {
-  return #cast(u32) input[at] | (#cast(u32) input[at + 1] << 8) |
-    (#cast(u32) input[at + 2] << 16) | (#cast(u32) input[at + 3] << 24)
+  return #cast(u32, input[at]) | (#cast(u32, input[at + 1]) << 8) |
+    (#cast(u32, input[at + 2]) << 16) | (#cast(u32, input[at + 3]) << 24)
 }
 fn store32(output: []u8, at: usize, value: u32) {
-  output[at] = #cast(u8) value
-  output[at + 1] = #cast(u8) (value >> 8)
-  output[at + 2] = #cast(u8) (value >> 16)
-  output[at + 3] = #cast(u8) (value >> 24)
+  output[at] = #cast(u8, value)
+  output[at + 1] = #cast(u8, (value >> 8))
+  output[at + 2] = #cast(u8, (value >> 16))
+  output[at + 3] = #cast(u8, (value >> 24))
 }
 fn quarter(state: []u32, a, b, c, d: usize) {
   state[a] = add(state[a], state[b])
@@ -74,7 +74,7 @@ pub fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const
     return false
   }
   blocks := (#len(input) + 63) / 64
-  if #cast(u64) blocks > 4294967296 - #cast(u64) counter {
+  if #cast(u64, blocks) > 4294967296 - #cast(u64, counter) {
     return false
   }
   stream: [64]u8 = []

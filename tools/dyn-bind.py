@@ -339,7 +339,7 @@ def verify_layout(header: pathlib.Path, source: str, generated: str,
             expressions = [(f"sizeof({ctype})", f"#sizeof({name})"),
                            (f"_Alignof({ctype})", f"#alignof({name})")]
             expressions += [(f"offsetof({ctype},{field})",
-                             f"(#cast(usize) &{variable}.{field} - #cast(usize) &{variable})") for field in members]
+                             f"(#cast(usize, &{variable}.{field}) - #cast(usize, &{variable}))") for field in members]
             for cexpr, dexpr in expressions:
                 symbol = f"dyn_binding_layout_{count}"
                 c.append(f"size_t {symbol}(void) {{ return {cexpr}; }}")

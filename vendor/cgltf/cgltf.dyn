@@ -5,20 +5,33 @@ use "std/c"
 pub type Model = rawptr
 pub struct Result { value: Model, code: i32, ok: bool }
 pub fn parse_owned(bytes: []const u8) Result {
-  if #len(bytes) == 0 { return Result{ code: -1 } }
-  model: Model = nil code := native_parse(#cast(rawptr) &bytes[0], #len(bytes), &model)
+  if #len(bytes) == 0 {
+    return Result{ code: -1 }
+  }
+  model: Model = nil
+  code := native_parse(#cast(rawptr, &bytes[0]), #len(bytes), &model)
   return Result{ value: model, code: code, ok: code == 0 }
 }
-pub fn destroy_owned(model: Model) { if model != nil { native_free(model) } }
-pub fn validate(model: Model) bool { return model != nil && native_validate(model) == 0 }
+pub fn destroy_owned(model: Model) {
+  if model != nil {
+    native_free(model)
+  }
+}
+pub fn validate(model: Model) bool {
+  return model != nil && native_validate(model) == 0
+}
 // Loads only embedded data URIs/GLB buffers, never external files. -2 rejects an
 // unresolved external resource before loading any buffers. Other codes are cgltf_result.
-pub fn load_embedded(model: Model) i32 { return native_embedded(model) }
+pub fn load_embedded(model: Model) i32 {
+  return native_embedded(model)
+}
 pub extern fn node_count "dyn_cgltf_nodes"(model: Model) usize
 pub extern fn accessor_count "dyn_cgltf_accessors"(model: Model) usize
 // Non-sparse accessors only. Output borrows caller storage; model remains owned.
 pub fn read_float(model: Model, accessor: usize, element: usize, output: []f32) bool {
-  if #len(output) == 0 { return false }
+  if #len(output) == 0 {
+    return false
+  }
   return native_read(model, accessor, element, &output[0], #len(output))
 }
 extern fn native_parse "dyn_cgltf_parse"(bytes: rawptr, length: usize, output: *Model) i32
@@ -33,12 +46,17 @@ extern fn native_read "dyn_cgltf_read"(model: Model, accessor: usize, element: u
 pub extern fn buffer_count "dyn_cgltf_buffers"(model: Model) usize
 pub extern fn buffer_size "dyn_cgltf_buffer_size"(model: Model, index: usize) usize
 pub fn attach_buffer(model: Model, index: usize, bytes: []const u8) bool {
-  if #len(bytes) == 0 { return false }
-  return native_attach(model, index, #cast(rawptr) &bytes[0], #len(bytes))
+  if #len(bytes) == 0 {
+    return false
+  }
+  return native_attach(model, index, #cast(rawptr, &bytes[0]), #len(bytes))
 }
 pub fn buffer_uri(model: Model, index: usize, maximum: usize) []const u8 {
   value := c.bytes_from_string(native_uri(model, index), maximum)
-  if !value.ok { return "" } return value.value
+  if !value.ok {
+    return ""
+  }
+  return value.value
 }
 pub const Position: i32 = 1
 pub const Normal: i32 = 2
@@ -60,7 +78,9 @@ pub extern fn element_count "dyn_cgltf_elements"(model: Model, accessor: usize) 
 pub extern fn node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
 pub struct Index { value: u32, ok: bool }
 pub fn read_index(model: Model, accessor: usize, element: usize) Index {
-  result := Index{} result.ok = native_index(model, accessor, element, &result.value) return result
+  result := Index{}
+  result.ok = native_index(model, accessor, element, &result.value)
+  return result
 }
 // Column-major world matrix and RGBA base factor, copied into caller storage.
 pub fn world_transform(model: Model, node: usize, output: []f32) bool {

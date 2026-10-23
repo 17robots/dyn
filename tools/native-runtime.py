@@ -28,17 +28,22 @@ class Section:
     data: bytearray = field(default_factory=bytearray)
     alignment: int = 1
     relocs: list = field(default_factory=list)
+    mapping: str = ''
 
 
 class Assembler:
     def __init__(self, target):
         self.target = target
-        self.rv64 = target.startswith('riscv64')
+        self.soft_float = target.endswith('-soft')
+        self.rv32 = target.startswith('riscv32')
+        self.rv64 = target.startswith('riscv64') or self.rv32  # the RISC-V assembler
         self.a64 = target.startswith('aarch64')
+        self.thumb = target.startswith('thumb')
         self.macho = target.endswith('macos')
         self.coff = target.endswith('windows')
         self.sections = {}
         self.symbols = {}
+        self.mapping_count = 0
         self.globals = set()
         self.weak = set()
         self.hidden = set()
@@ -53,7 +58,14 @@ class Assembler:
         self.current = self.sections[name]
         return self.current
 
-    def emit(self, data):
+    def emit(self, data, mapping='d'):
+        # Directives and zero-filled alignment are data; only Thumb.emit
+        # marks instructions. Keep state per section across source files.
+        if data and self.thumb and self.current.name.startswith('.text') and self.current.mapping != mapping:
+            name = f'${mapping}.{self.mapping_count}'
+            self.mapping_count += 1
+            self.symbols[name] = (self.current.name, len(self.current.data))
+            self.current.mapping = mapping
         self.current.data.extend(data)
 
     def word(self, n):
@@ -153,6 +165,8 @@ class Assembler:
                 struct.pack_into('<I',data,offset,insn)
             elif kind == 'x32':
                 data[offset:offset + 4] = pack('i', target - offset - 4)
+            elif kind in ('t32b', 't32bl') or kind[0] == 't32bc':
+                Thumb.patch(data, offset, target - offset - 4, kind)
             else:
                 bits, shift = kind
                 value = (target - offset) // 4
@@ -188,6 +202,9 @@ class Assembler:
                     self.globals.add(arg)
             elif op == '.type':
                 pass
+            elif op == '.syntax':
+                if not self.thumb or arg != 'unified':
+                    raise ValueError('unsupported syntax ' + arg)
             elif op == '.option':
                 if not self.rv64 or arg not in ('norelax', 'norvc'):
                     raise ValueError('unsupported assembler option ' + arg)
@@ -213,6 +230,9 @@ class Assembler:
                     if width == 8 and re.fullmatch(r'[A-Za-z_.$][\w.$]*', n.strip()):
                         self.relocation(n.strip(), 'abs64')
                         self.emit(bytes(8))
+                    elif width == 4 and (self.rv32 or self.thumb) and re.fullmatch(r'[A-Za-z_.$][\w.$]*', n.strip()):
+                        self.relocation(n.strip(), 'abs32')
+                        self.emit(bytes(4))
                     else:
                         self.emit((int(n, 0) & ((1 << (width * 8)) - 1)).to_bytes(width, 'little'))
             elif op == '.rva':
@@ -223,6 +243,8 @@ class Assembler:
             return
         if self.rv64:
             self.riscv(line)
+        elif self.thumb:
+            Thumb(self).line(line)
         elif self.a64:
             self.arm(line)
         else:
@@ -502,6 +524,14 @@ class Assembler:
         def i(rd,rs,n,f3=0,opcode=0x13): self.word(opcode|rd<<7|f3<<12|rs<<15|(n&4095)<<20)
         def rr(rd,rs,rt,f3=0,f7=0,opcode=0x33): self.word(opcode|rd<<7|f3<<12|rs<<15|rt<<20|f7<<25)
         def li(rd,n):
+            if self.rv32:
+                n &= 0xffffffff
+                signed = n if n < (1 << 31) else n - (1 << 32)
+                if -2048 <= signed <= 2047: i(rd,0,signed); return
+                lo = n & 4095; lo = lo if lo < 2048 else lo - 4096
+                self.word(0x37 | rd << 7 | ((n - lo) & 0xfffff000))
+                if lo: i(rd,rd,lo)
+                return
             n &= (1<<64)-1
             signed=n if n<(1<<63) else n-(1<<64)
             if -2048<=signed<=2047: i(rd,0,signed); return
@@ -526,15 +556,39 @@ class Assembler:
         if op in ('addi','andi','xori','slli','srli','srai'):
             n=int(a[2],0);f3={'addi':0,'andi':7,'xori':4,'slli':1,'srli':5,'srai':5}[op]
             i(r(a[0]),r(a[1]),n+(0x400 if op=='srai' else 0),f3);return
-        if op in ('add','sub','xor','or','and','sltu'):
-            rr(r(a[0]),r(a[1]),r(a[2]),{'add':0,'sub':0,'xor':4,'or':6,'and':7,'sltu':3}[op],32 if op=='sub' else 0);return
-        if op in ('ld','lw','lwu','lbu','sd','sw','sb','fld','fsd'):
-            m=re.fullmatch(r'(-?\d+)\((\w+)\)',a[1]);n=int(m[1]);base=r(m[2]);reg=r(a[0]);store=op in ('sd','sw','sb','fsd')
-            f3={'ld':3,'lw':2,'lwu':6,'lbu':4,'sd':3,'sw':2,'sb':0,'fld':3,'fsd':3}[op]
-            if store:self.word((0x27 if op=='fsd' else 0x23)|(n&31)<<7|f3<<12|base<<15|reg<<20|((n&4095)>>5)<<25)
-            else:i(reg,base,n,f3,7 if op=='fld' else 3)
+        if op in ('add','sub','xor','or','and','sltu','slt','sll','srl','sra'):
+            rr(r(a[0]),r(a[1]),r(a[2]),{'add':0,'sub':0,'xor':4,'or':6,'and':7,'sltu':3,'slt':2,'sll':1,'srl':5,'sra':5}[op],32 if op in ('sub','sra') else 0);return
+        if op in ('mul','mulhu','mulh','divu','remu'):
+            rr(r(a[0]),r(a[1]),r(a[2]),{'mul':0,'mulh':1,'mulhu':3,'divu':5,'remu':7}[op],1);return
+        if op=='sltiu':i(r(a[0]),r(a[1]),int(a[2],0),3);return
+        if op=='lui':self.word(0x37|r(a[0])<<7|(int(a[1],0)&0xfffff)<<12);return
+        # RV32D/F subset used by the start runtime's conversion helpers.
+        rounding={'rne':0,'rtz':1,'rdn':2,'rup':3,'rmm':4,'dyn':7}
+        fp3={'fadd.d':(0x01,None),'fsub.d':(0x05,None),'fmul.d':(0x09,None),'fdiv.d':(0x0d,None),
+             'fsgnj.d':(0x11,0),'fsgnjn.d':(0x11,1),'fsgnjn.s':(0x10,1),'feq.d':(0x51,2),'flt.d':(0x51,1),'fle.d':(0x51,0)}
+        if op in fp3:
+            f7,f3=fp3[op]
+            if f3 is None: f3=rounding[a[3]] if len(a)>3 else 7
+            rr(r(a[0]),r(a[1]),r(a[2]),f3,f7,0x53);return
+        fp2={'fcvt.d.w':(0x69,0),'fcvt.d.wu':(0x69,1),'fcvt.w.d':(0x61,0),'fcvt.wu.d':(0x61,1),
+             'fcvt.s.d':(0x20,1),'fcvt.d.s':(0x21,0),'fmv.x.w':(0x70,0),'fmv.w.x':(0x78,0)}
+        if op in fp2:
+            f7,rs2=fp2[op]
+            f3=rounding[a[2]] if len(a)>2 else (0 if op.startswith('fmv') else 7)
+            rr(r(a[0]),r(a[1]),rs2,f3,f7,0x53);return
+        if op in ('ld','lw','lwu','lbu','sd','sw','sb','fld','fsd','flw','fsw'):
+            m=re.fullmatch(r'(-?\d+)\((\w+)\)',a[1]);n=int(m[1]);base=r(m[2]);reg=r(a[0]);store=op in ('sd','sw','sb','fsd','fsw')
+            f3={'ld':3,'lw':2,'lwu':6,'lbu':4,'sd':3,'sw':2,'sb':0,'fld':3,'fsd':3,'flw':2,'fsw':2}[op]
+            if store:self.word((0x27 if op in ('fsd','fsw') else 0x23)|(n&31)<<7|f3<<12|base<<15|reg<<20|((n&4095)>>5)<<25)
+            else:i(reg,base,n,f3,7 if op in ('fld','flw') else 3)
             return
         if op=='ecall':self.word(0x73);return
+        if op in ('csrw','csrs','csrr'):
+            csr={'mstatus':0x300,'mtvec':0x305,'mcause':0x342,'mepc':0x341,'mtval':0x343}[a[1] if op=='csrr' else a[0]]
+            if op=='csrr':self.word(0x73|r(a[0])<<7|2<<12|csr<<20)
+            else:self.word(0x73|(1 if op=='csrw' else 2)<<12|r(a[1])<<15|csr<<20)
+            return
+        if op=='wfi':self.word(0x10500073);return
         if op=='ebreak':self.word(0x100073);return
         if op=='fence':self.word(0x0330000f);return
         if op.startswith(('amo','lr.','sc.')):
@@ -544,7 +598,58 @@ class Assembler:
             self.word(0x2f|rd<<7|(2 if width=='w' else 3)<<12|rs1<<15|rs2<<20|int(rl)<<25|int(aq)<<26|f5<<27);return
         raise ValueError('unsupported RISC-V instruction '+line)
 
+    def elf32(self):
+        sections = list(self.sections.values())
+        ids = {s.name: i + 1 for i, s in enumerate(sections)}
+        local, external = self.symbol_names()
+        names = local + external
+        symids = {name: i + 1 for i, name in enumerate(names)}
+        strings = bytearray(b'\0')
+        symtab = bytearray(16)
+        for name in names:
+            at = len(strings); strings.extend(name.encode() + b'\0')
+            sec, offset = self.symbols.get(name, (None, 0))
+            binding = 0 if name in local else 2 if name in self.weak else 1
+            kind = 2 if sec and sec.startswith('.text') else 1 if sec else 0
+            if self.thumb and re.fullmatch(r'\$[td]\.\d+', name):
+                kind = 0  # ARM mapping symbols are local STT_NOTYPE, never functions.
+            symtab.extend(pack('IIIBBH', at, offset, 0, binding << 4 | kind, 2 if name in self.hidden else 0, ids.get(sec, 0)))
+        records = []
+        for section in sections:
+            executable = section.name.startswith('.text')
+            writable = section.name.startswith(('.data', '.bss'))
+            flags = 0 if section.name == '.note.GNU-stack' else 2 | (4 if executable else 0) | (1 if writable else 0)
+            records.append([section.name, 1, flags, section.data, 0, 0, max(section.alignment, 4 if executable else 1), 0])
+        symtab_id = len(sections) + 1 + sum(bool(s.relocs) for s in sections)
+        kinds = {'abs32':2,'thmcall':10,'movw':47,'movt':48} if self.thumb else {'abs32':1,'abs64':2,'rvcall':19,'rvgot':20,'rvhi':23,'rvlo':24}
+        for section in sections:
+            if not section.relocs: continue
+            data = bytearray()
+            for offset, name, kind, addend in section.relocs:
+                data.extend(pack('IIi', offset, (symids[name] << 8) | kinds[kind], addend))
+            records.append(['.rela' + section.name, 4, 0, data, symtab_id, ids[section.name], 4, 12])
+        records.append(['.symtab', 2, 0, symtab, symtab_id + 1, len(local) + 1, 4, 16])
+        records.append(['.strtab', 3, 0, strings, 0, 0, 1, 0])
+        shstr = bytearray(b'\0'); shnames = []
+        for record in records:
+            shnames.append(len(shstr)); shstr.extend(record[0].encode() + b'\0')
+        shnames.append(len(shstr)); shstr.extend(b'.shstrtab\0')
+        records.append(['.shstrtab', 3, 0, shstr, 0, 0, 1, 0])
+        data = bytearray(52)
+        headers = bytearray(40)
+        for name_offset, record in zip(shnames, records):
+            _, kind, flags, content, link, info, alignment, entsize = record
+            data.extend(bytes(align(len(data), alignment) - len(data)))
+            offset = len(data); data.extend(content)
+            headers.extend(pack('IIIIIIIIII', name_offset, kind, flags, 0, offset, len(content), link, info, alignment, entsize))
+        data.extend(bytes(align(len(data), 4) - len(data)))
+        shoff = len(data); data.extend(headers)
+        data[:52] = pack('16sHHIIIIIHHHHHH', b'\x7fELF\x01\x01\x01' + bytes(9), 1, 40 if self.thumb else 243, 1, 0, 0, shoff, (0x05000200 if self.soft_float else 0x05000400) if self.thumb else (0 if self.soft_float else 4), 52, 0, 0, 40, len(records) + 1, len(records))
+        return data
+
     def elf(self):
+        if self.rv32 or self.thumb:
+            return self.elf32()
         sections = list(self.sections.values())
         ids = {s.name: i + 1 for i, s in enumerate(sections)}
         local, external = self.symbol_names()
@@ -698,6 +803,313 @@ class Assembler:
         return self.pe() if self.coff else self.mach() if self.macho else self.elf()
 
 
+class Thumb:
+    """Thumb-2 (ARMv7E-M with FPv5-D16) subset used by the Cortex-M runtime.
+    Instructions take their 32-bit encodings unless only a 16-bit one exists
+    (mov between registers, bx, it, bkpt, wfi, cpsid), so the byte output
+    matches a standard assembler given the same .w suffixes."""
+    CONDITIONS = ['eq', 'ne', 'hs', 'lo', 'mi', 'pl', 'vs', 'vc', 'hi', 'ls', 'ge', 'lt', 'gt', 'le']
+    ALIASES = {'cs': 'hs', 'cc': 'lo'}
+    DATA = {'and': 0, 'bic': 1, 'orr': 2, 'orn': 3, 'eor': 4, 'add': 8, 'adc': 10, 'sbc': 11, 'sub': 13, 'rsb': 14}
+    SHIFTS = {'lsl': 0, 'lsr': 1, 'asr': 2, 'ror': 3}
+    MEMORY = {'strb': 0xF880, 'strh': 0xF8A0, 'str': 0xF8C0, 'ldrb': 0xF890, 'ldrh': 0xF8B0, 'ldr': 0xF8D0,
+              'ldrsb': 0xF990, 'ldrsh': 0xF9B0}
+    BARRIERS = {'dsb': 0x8F4F, 'dmb': 0x8F5F, 'isb': 0x8F6F}
+
+    def __init__(self, assembler):
+        self.a = assembler
+
+    def emit(self, *halves):
+        for half in halves:
+            self.a.emit(pack('H', half & 0xffff), mapping='t')
+
+    @staticmethod
+    def reg(text):
+        text = text.strip().lower()
+        named = {'sp': 13, 'lr': 14, 'pc': 15, 'ip': 12, 'fp': 11}
+        if text in named:
+            return named[text]
+        m = re.fullmatch(r'r(\d+)', text)
+        if not m or int(m[1]) > 15:
+            raise ValueError('unknown register ' + text)
+        return int(m[1])
+
+    @staticmethod
+    def vreg(text):
+        m = re.fullmatch(r'([sd])(\d+)', text.strip().lower())
+        if not m:
+            raise ValueError('unknown VFP register ' + text)
+        return m[1], int(m[2])
+
+    @staticmethod
+    def immediate(text):
+        text = text.strip()
+        if not text.startswith('#'):
+            raise ValueError('expected immediate ' + text)
+        return int(text[1:], 0)
+
+    @staticmethod
+    def modified(value):
+        value &= 0xffffffff
+        if value <= 0xff:
+            return value
+        b, b2 = value & 0xff, (value >> 8) & 0xff
+        if value == b | b << 16:
+            return 0x100 | b
+        if value == b2 << 8 | b2 << 24:
+            return 0x200 | b2
+        if value == b * 0x01010101:
+            return 0x300 | b
+        for rot in range(8, 32):
+            x = ((value << rot) | (value >> (32 - rot))) & 0xffffffff
+            if 0x80 <= x <= 0xff:
+                return rot << 7 | (x & 0x7f)
+        return None
+
+    def data_immediate(self, op, s, d, n, value):
+        e = self.modified(value)
+        if e is None:
+            raise ValueError(f'immediate {value:#x} is not encodable')
+        self.emit(0xF000 | (e >> 11) << 10 | op << 5 | s << 4 | n, ((e >> 8) & 7) << 12 | d << 8 | (e & 0xff))
+
+    def data_register(self, op, s, d, n, m, shift='lsl', amount=0):
+        self.emit(0xEA00 | op << 5 | s << 4 | n, (amount >> 2) << 12 | d << 8 | (amount & 3) << 6 | self.SHIFTS[shift] << 4 | m)
+
+    def shifted(self, args):
+        """Last operand of a register form: (m, shift, amount)."""
+        if len(args) > 1 and args[-1].split()[0].lower() in self.SHIFTS:
+            kind, amount = args[-1].split(None, 1)
+            return self.reg(args[-2]), kind.lower(), self.immediate(amount), args[:-2]
+        return self.reg(args[-1]), 'lsl', 0, args[:-1]
+
+    @staticmethod
+    def patch(data, offset, value, kind):
+        if value & 1:
+            raise ValueError('odd Thumb branch')
+        u = value & 0xffffffff
+        if kind in ('t32b', 't32bl'):
+            if not -(1 << 24) <= value < (1 << 24):
+                raise ValueError('Thumb branch range')
+            s = 1 if value < 0 else 0
+            j1 = (~(u >> 23) ^ s) & 1
+            j2 = (~(u >> 22) ^ s) & 1
+            h1 = 0xF000 | s << 10 | ((u >> 12) & 0x3ff)
+            h2 = (0xD000 if kind == 't32bl' else 0x9000) | j1 << 13 | j2 << 11 | ((u >> 1) & 0x7ff)
+        else:
+            if not -(1 << 20) <= value < (1 << 20):
+                raise ValueError('Thumb conditional branch range')
+            s = 1 if value < 0 else 0
+            h1 = 0xF000 | s << 10 | kind[1] << 6 | ((u >> 12) & 63)
+            h2 = 0x8000 | ((u >> 18) & 1) << 13 | ((u >> 19) & 1) << 11 | ((u >> 1) & 0x7ff)
+        struct.pack_into('<HH', data, offset, h1, h2)
+
+    def memory(self, base, t, operand, rest):
+        m = re.fullmatch(r'\[\s*(\w+)\s*(?:,\s*(#-?\w+))?\s*\](!?)', operand.strip())
+        if not m:
+            raise ValueError('unsupported address ' + operand)
+        n = self.reg(m[1])
+        if rest:  # post-indexed: [rn], #imm
+            value = self.immediate(rest[0])
+            self.emit((base - 0x80) | n, t << 12 | 0x800 | (1 if value >= 0 else 0) << 9 | 0x100 | abs(value))
+            return
+        value = self.immediate(m[2]) if m[2] else 0
+        if m[3]:
+            self.emit((base - 0x80) | n, t << 12 | 0x800 | 0x400 | (1 if value >= 0 else 0) << 9 | 0x100 | abs(value))
+        elif 0 <= value <= 4095:
+            self.emit(base | n, t << 12 | value)
+        elif -255 <= value < 0:
+            self.emit((base - 0x80) | n, t << 12 | 0xC00 | -value)
+        else:
+            raise ValueError('offset out of range')
+
+    def vfp_register(self, kind, number, low_field, high_bit):
+        """(field bits, extra bit) for a register in a VFP encoding."""
+        return (number & 15, number >> 4) if kind == 'd' else (number >> 1, number & 1)
+
+    def line(self, line):
+        op, *tail = line.split(None, 1)
+        args = Assembler.operands(tail[0]) if tail else []
+        if tail and tail[0].strip().startswith('{'):
+            args = [tail[0].strip()]
+        op = op.lower()
+        wide = op.endswith('.w')
+        if wide:
+            op = op[:-2]
+        fixed = {'bx': None, 'wfi': 0xBF30, 'nop': 0xBF00, 'clrex': None, 'cpsid': 0xB672, 'cpsie': 0xB662}
+        if op == 'bx':
+            self.emit(0x4700 | self.reg(args[0]) << 3); return
+        if op == 'blx':
+            self.emit(0x4780 | self.reg(args[0]) << 3); return
+        if op in ('wfi', 'nop'):
+            self.emit(fixed[op]); return
+        if op in ('cpsid', 'cpsie'):
+            if args != ['i']:
+                raise ValueError('only cps i is supported')
+            self.emit(fixed[op]); return
+        if op == 'clrex':
+            self.emit(0xF3BF, 0x8F2F); return
+        if op in self.BARRIERS:
+            if args and args != ['sy']:
+                raise ValueError('only full-system barriers are supported')
+            self.emit(0xF3BF, self.BARRIERS[op]); return
+        if op == 'bkpt':
+            self.emit(0xBE00 | self.immediate(args[0])); return
+        if op == 'udf':
+            self.emit(0xDE00 | self.immediate(args[0])); return
+        if op == 'it':
+            self.emit(0xBF08 | self.CONDITIONS.index(self.ALIASES.get(args[0], args[0])) << 4); return
+        if op in ('push', 'pop'):
+            mask = 0
+            for item in args[0].strip('{}').split(','):
+                bounds = [self.reg(x) for x in item.split('-')]
+                for r in range(bounds[0], bounds[-1] + 1):
+                    mask |= 1 << r
+            self.emit(0xE92D if op == 'push' else 0xE8BD, mask); return
+        if op in ('vpush', 'vpop'):
+            registers = [self.vreg(x) for x in args[0].strip('{}').split(',')]
+            first = registers[0][1]
+            if any(k != 'd' or n != first + i for i, (k, n) in enumerate(registers)):
+                raise ValueError('vpush/vpop take consecutive d registers')
+            self.emit((0xED2D if op == 'vpush' else 0xECBD) | (first >> 4) << 6, (first & 15) << 12 | 0x0B00 | 2 * len(registers)); return
+        if op in ('b', 'bl') or (op[0] == 'b' and op[1:] in self.CONDITIONS + list(self.ALIASES)):
+            target = args[0]
+            if op == 'bl':
+                section, offset = self.a.symbols.get(target, (None, None))
+                if target.startswith('.L') or section == self.a.current.name:
+                    self.a.branch(target, 't32bl')
+                else:
+                    self.a.relocation(target, 'thmcall')
+                self.emit(0xF000, 0xD000); return
+            if op == 'b':
+                self.a.branch(target, 't32b'); self.emit(0xF000, 0x9000); return
+            cond = self.CONDITIONS.index(self.ALIASES.get(op[1:], op[1:]))
+            self.a.branch(target, ('t32bc', cond)); self.emit(0xF000, 0x8000); return
+        if op in ('movw', 'movt'):
+            d = self.reg(args[0])
+            m = re.fullmatch(r'#:(lower|upper)16:(.+)', args[1].strip())
+            if m:
+                if (m[1] == 'lower') != (op == 'movw'):
+                    raise ValueError('movw takes :lower16:, movt :upper16:')
+                self.a.relocation(m[2].strip(), 'movw' if op == 'movw' else 'movt')
+                value = 0
+            else:
+                value = self.immediate(args[1])
+            self.emit((0xF240 if op == 'movw' else 0xF2C0) | ((value >> 11) & 1) << 10 | (value >> 12) & 15,
+                      ((value >> 8) & 7) << 12 | self.reg(args[0]) << 8 | (value & 0xff)); return
+        if op in ('mrs', 'msr'):
+            special = {'apsr': 0, 'primask': 16}
+            if op == 'mrs':
+                self.emit(0xF3EF, 0x8000 | self.reg(args[0]) << 8 | special[args[1].lower()]); return
+            name = args[0].lower()
+            if name == 'apsr_nzcvq':
+                self.emit(0xF380 | self.reg(args[1]), 0x8800); return
+            self.emit(0xF380 | self.reg(args[1]), 0x8800 | special[name]); return
+        if op in ('ldrex', 'strex'):
+            if op == 'ldrex':
+                t, address = self.reg(args[0]), args[1]
+                n = self.reg(address.strip('[] '))
+                self.emit(0xE850 | n, t << 12 | 0xF00); return
+            d, t, n = self.reg(args[0]), self.reg(args[1]), self.reg(args[2].strip('[] '))
+            self.emit(0xE840 | n, t << 12 | d << 8); return
+        if op in self.MEMORY:
+            t = self.reg(args[0])
+            address = args[1]
+            self.memory(self.MEMORY[op], t, address, args[2:]); return
+        if op in ('vldr', 'vstr'):
+            kind, v = self.vreg(args[0])
+            m = re.fullmatch(r'\[\s*(\w+)\s*(?:,\s*#(-?\w+))?\s*\]', args[1].strip())
+            n, value = self.reg(m[1]), int(m[2], 0) if m[2] else 0
+            if value & 3 or not -1020 <= value <= 1020:
+                raise ValueError('VFP offset out of range')
+            field, bit = self.vfp_register(kind, v, 12, 22)
+            self.emit(0xED00 | (1 if value >= 0 else 0) << 7 | bit << 6 | (0x10 if op == 'vldr' else 0) | n,
+                      field << 12 | (0x0B00 if kind == 'd' else 0x0A00) | abs(value) // 4); return
+        if op == 'vmov':
+            kinds = [a.strip().lower()[0] for a in args]
+            if len(args) == 2 and kinds == ['s', 'r']:
+                _, s = self.vreg(args[0]); self.emit(0xEE00 | s >> 1, self.reg(args[1]) << 12 | 0x0A10 | (s & 1) << 7); return
+            if len(args) == 2 and kinds == ['r', 's']:
+                _, s = self.vreg(args[1]); self.emit(0xEE10 | s >> 1, self.reg(args[0]) << 12 | 0x0A10 | (s & 1) << 7); return
+            if len(args) == 3 and kinds[0] == 'd':
+                _, d = self.vreg(args[0]); self.emit(0xEC40 | self.reg(args[2]), self.reg(args[1]) << 12 | 0x0B10 | (d >> 4) << 5 | (d & 15)); return
+            if len(args) == 3 and kinds[2] == 'd':
+                _, d = self.vreg(args[2]); self.emit(0xEC50 | self.reg(args[1]), self.reg(args[0]) << 12 | 0x0B10 | (d >> 4) << 5 | (d & 15)); return
+            raise ValueError('unsupported vmov')
+        if op == 'vmrs':
+            if [a.lower() for a in args] != ['apsr_nzcv', 'fpscr']:
+                raise ValueError('only vmrs APSR_nzcv, fpscr is supported')
+            self.emit(0xEEF1, 0xFA10); return
+        m = re.fullmatch(r'(vadd|vsub|vmul|vdiv|vneg|vcmp|vcvt)\.(\w+)(?:\.(\w+))?', op)
+        if m:
+            name, first, second = m[1], m[2], m[3]
+            if name == 'vcvt':
+                (dk, dv), (sk, sv) = self.vreg(args[0]), self.vreg(args[1])
+                dfield, dbit = self.vfp_register(dk, dv, 12, 22)
+                sfield, sbit = self.vfp_register(sk, sv, 0, 5)
+                if first in ('f64', 'f32') and second in ('f32', 'f64'):
+                    top, bottom = 0xEEB7, (0x0BC0 if second == 'f64' else 0x0AC0)
+                elif first in ('f64', 'f32'):
+                    top, bottom = 0xEEB8, (0x0B00 if first == 'f64' else 0x0A00) | (0xC0 if second == 's32' else 0x40)
+                else:
+                    top, bottom = (0xEEBD if first == 's32' else 0xEEBC), (0x0BC0 if second == 'f64' else 0x0AC0)
+                self.emit(top | dbit << 6, dfield << 12 | bottom | sbit << 5 | sfield); return
+            size = 0x0B00 if first == 'f64' else 0x0A00
+            dk, dv = self.vreg(args[0]); dfield, dbit = self.vfp_register(dk, dv, 12, 22)
+            if name in ('vneg', 'vcmp'):
+                if name == 'vcmp' and args[1].strip() == '#0':
+                    self.emit(0xEEB5 | dbit << 6, dfield << 12 | size | 0x40); return
+                mk, mv = self.vreg(args[1]); mfield, mbit = self.vfp_register(mk, mv, 0, 5)
+                self.emit((0xEEB1 if name == 'vneg' else 0xEEB4) | dbit << 6, dfield << 12 | size | 0x40 | mbit << 5 | mfield); return
+            nk, nv = self.vreg(args[1]); nfield, nbit = self.vfp_register(nk, nv, 16, 7)
+            mk, mv = self.vreg(args[2]); mfield, mbit = self.vfp_register(mk, mv, 0, 5)
+            top = {'vadd': 0xEE30, 'vsub': 0xEE30, 'vmul': 0xEE20, 'vdiv': 0xEE80}[name]
+            self.emit(top | dbit << 6 | nfield, dfield << 12 | size | nbit << 7 | (0x40 if name == 'vsub' else 0) | mbit << 5 | mfield); return
+        if op == 'mov' and not wide:
+            d, m = self.reg(args[0]), self.reg(args[1])
+            self.emit(0x4600 | (d & 8) << 4 | m << 3 | (d & 7)); return
+        if op == 'umull':
+            lo, hi, n, m = (self.reg(x) for x in args)
+            self.emit(0xFBA0 | n, lo << 12 | hi << 8 | m); return
+        if op in ('ubfx', 'sbfx'):
+            d, n, lsb, width = self.reg(args[0]), self.reg(args[1]), self.immediate(args[2]), self.immediate(args[3])
+            self.emit((0xF3C0 if op == 'ubfx' else 0xF340) | n, (lsb >> 2) << 12 | d << 8 | (lsb & 3) << 6 | (width - 1)); return
+        # Data processing, with an optional S suffix and an optional condition
+        # (inside an IT block).
+        m = re.fullmatch(r'(mov|mvn|cmp|cmn|tst|teq|lsl|lsr|asr|and|bic|orr|orn|eor|add|adc|sbc|sub|rsb)(s?)(eq|ne|hs|lo|cs|cc|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)?', op)
+        if not m:
+            raise ValueError('unsupported Thumb instruction ' + op)
+        name, s = m[1], 1 if m[2] else 0
+        if name in ('cmp', 'cmn', 'tst', 'teq'):
+            data = {'cmp': 13, 'cmn': 8, 'tst': 0, 'teq': 4}[name]
+            n = self.reg(args[0])
+            if args[1].strip().startswith('#'):
+                self.data_immediate(data, 1, 15, n, self.immediate(args[1]))
+            else:
+                mreg, shift, amount, _ = self.shifted(args[1:])
+                self.data_register(data, 1, 15, n, mreg, shift, amount)
+            return
+        if name in ('mov', 'mvn'):
+            d = self.reg(args[0])
+            if args[1].strip().startswith('#'):
+                self.data_immediate(2 if name == 'mov' else 3, s, d, 15, self.immediate(args[1])); return
+            mreg, shift, amount, _ = self.shifted(args[1:])
+            self.data_register(2 if name == 'mov' else 3, s, d, 15, mreg, shift, amount); return
+        if name in self.SHIFTS:
+            d, mreg = self.reg(args[0]), self.reg(args[1])
+            if args[2].strip().startswith('#'):
+                self.data_register(2, s, d, 15, mreg, name, self.immediate(args[2]) & 31); return
+            self.emit(0xFA00 | self.SHIFTS[name] << 5 | s << 4 | mreg, 0xF000 | d << 8 | self.reg(args[2])); return
+        op_code = self.DATA[name]
+        d, n = self.reg(args[0]), self.reg(args[1])
+        if args[2].strip().startswith('#'):
+            value = self.immediate(args[2])
+            if self.modified(value) is None and name in ('add', 'sub') and not s and 0 <= value <= 4095:
+                self.emit((0xF200 if name == 'add' else 0xF2A0) | (value >> 11) << 10 | n, ((value >> 8) & 7) << 12 | d << 8 | (value & 0xff)); return
+            self.data_immediate(op_code, s, d, n, value); return
+        mreg, shift, amount, _ = self.shifted(args[2:])
+        self.data_register(op_code, s, d, n, mreg, shift, amount)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
@@ -709,10 +1121,28 @@ def main():
              'dynrt_macos_start.o', 'dynrt_macos_shared.o',
              'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o',
              'dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o',
-             'dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o'}
+             'dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o',
+             'dynrt_riscv64_none_start.o', 'dynrt_riscv64_none_release.o',
+             'dynrt_riscv32_none_start.o', 'dynrt_riscv32_none_release.o',
+             'dynrt_riscv32_none_soft_start.o', 'dynrt_riscv32_none_soft_release.o',
+             'dynrt_thumbv7em_none_soft_start.o', 'dynrt_thumbv7em_none_soft_release.o',
+             'dynrt_thumbv7em_none_start.o', 'dynrt_thumbv7em_none_release.o',
+             'dynrt_nucleo_h753zi_start.o', 'dynrt_nucleo_h753zi_release.o'}
     if name not in valid:
         parser.error('unknown startup runtime output: ' + name)
-    if 'riscv64' in name:
+    if 'nucleo_h753zi' in name:
+        target, source = 'thumbv7em-none', 'none_thumbv7em_start.S'
+    elif 'thumbv7em_none_soft' in name:
+        target, source = 'thumbv7em-none-soft', 'none_thumbv7em_start.S'
+    elif 'thumbv7em_none' in name:
+        target, source = 'thumbv7em-none', 'none_thumbv7em_start.S'
+    elif 'riscv32_none_soft' in name:
+        target, source = 'riscv32-none-soft', 'none_riscv32_start.S'
+    elif 'riscv32_none' in name:
+        target, source = 'riscv32-none', 'none_riscv32_start.S'
+    elif 'riscv64_none' in name:
+        target, source = 'riscv64-none', 'none_riscv64_start.S'
+    elif 'riscv64' in name:
         target, source = 'riscv64-linux', 'linux_riscv64_start.S'
     elif 'windows_arm64' in name:
         target, source = 'aarch64-windows', 'windows_aarch64_start.S'
@@ -726,13 +1156,17 @@ def main():
         target, source = 'aarch64-macos', 'macos_aarch64_start.S'
     else:
         target, source = 'x86_64-linux', 'linux_x86_64_start.S'
-    defines = {'__ELF__'} if target.endswith('linux') else set()
+    defines = {'__ELF__'} if target.endswith(('linux', 'none')) else set()
+    if target.endswith('-soft'):
+        defines.update({'__ELF__', 'DYN_SOFT_FLOAT'})
+    if 'nucleo_h753zi' in name:
+        defines.add('DYN_NUCLEO_H753ZI')
     if 'release' in name or ('shared' in name and target != 'x86_64-linux'):
         defines.add('DYN_RELEASE')
     if 'shared' in name:
         defines.add('DYN_SHARED')
     assembler = Assembler(target).assemble(ROOT / 'runtime' / source, defines)
-    assembler.assemble(ROOT / 'runtime' / ('native_memory_riscv64.S' if assembler.rv64 else 'native_memory_aarch64.S' if assembler.a64 else 'native_memory_x86_64.S'), defines | ({'DYN_WINDOWS'} if assembler.coff else set()) | ({'DYN_MACOS'} if assembler.macho else set()))
+    assembler.assemble(ROOT / 'runtime' / ('native_memory_thumb.S' if assembler.thumb else 'native_memory_riscv64.S' if assembler.rv64 else 'native_memory_aarch64.S' if assembler.a64 else 'native_memory_x86_64.S'), defines | ({'DYN_WINDOWS'} if assembler.coff else set()) | ({'DYN_MACOS'} if assembler.macho else set()))
     if assembler.coff and not assembler.a64:
         assembler.assemble(ROOT / 'runtime/native_windows_imports.S')
     args.output.parent.mkdir(parents=True, exist_ok=True)

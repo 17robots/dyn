@@ -7,7 +7,7 @@ pub fn linux(code: isize) Kind {
     return Kind.None
   }
   value := code
-  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 {
+  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
     return Kind.System
   }
   if value < 0 {
@@ -50,7 +50,7 @@ pub fn windows(code: isize) Kind {
     return Kind.None
   }
   value := code
-  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 {
+  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
     return Kind.System
   }
   if value < 0 {
@@ -93,7 +93,7 @@ pub fn wasi(code: isize) Kind {
     return Kind.None
   }
   value := code
-  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 {
+  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
     return Kind.System
   }
   if value < 0 {
@@ -134,7 +134,7 @@ pub fn wasi(code: isize) Kind {
 
 pub fn darwin(code: isize) Kind {
   value := code
-  if value == 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1 {
+  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
     return Kind.System
   }
   if value < 0 {

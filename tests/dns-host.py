@@ -39,7 +39,7 @@ fn main() {
   ipv6: [2]dns.Ipv6 = []
   result = dns.resolve_ipv6("aaaa.test",&server,ipv6[..],packet[..],4000)
   require(result.ok && result.count == 1,"AAAA response")
-  for i in 0..16 { require(ipv6[0].bytes[i] == #cast(u8) i,"AAAA value") }
+  for i in 0..16 { require(ipv6[0].bytes[i] == #cast(u8, i),"AAAA value") }
   result = dns.resolve_ipv4("missing.test",&server,addresses[..],packet[..],4000)
   require(!result.ok && result.error == -3,"NXDOMAIN response")
   result = dns.resolve_ipv4("large.test",&server,addresses[..],packet[..],4000)

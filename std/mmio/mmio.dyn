@@ -1,0 +1,38 @@
+// Memory-mapped device registers. Every call performs exactly one access of
+// the stated width, in program order with other mmio calls: the compiler never
+// removes, merges, or caches it. Use this, not ordinary pointers, for hardware
+// registers. Addresses must be aligned to the access width; a misaligned or
+// nil address panics. Each access costs one call into the runtime.
+extern fn load_u8_raw "dyn_mmio_load_u8"(address: usize) u8
+extern fn load_u16_raw "dyn_mmio_load_u16"(address: usize) u16
+extern fn load_u32_raw "dyn_mmio_load_u32"(address: usize) u32
+extern fn load_u64_raw "dyn_mmio_load_u64"(address: usize) u64
+extern fn store_u8_raw "dyn_mmio_store_u8"(address: usize, value: u8)
+extern fn store_u16_raw "dyn_mmio_store_u16"(address: usize, value: u16)
+extern fn store_u32_raw "dyn_mmio_store_u32"(address: usize, value: u32)
+extern fn store_u64_raw "dyn_mmio_store_u64"(address: usize, value: u64)
+
+pub fn load_u8(address: usize) u8 {
+  return load_u8_raw(address)
+}
+pub fn load_u16(address: usize) u16 {
+  return load_u16_raw(address)
+}
+pub fn load_u32(address: usize) u32 {
+  return load_u32_raw(address)
+}
+pub fn load_u64(address: usize) u64 {
+  return load_u64_raw(address)
+}
+pub fn store_u8(address: usize, value: u8) {
+  store_u8_raw(address, value)
+}
+pub fn store_u16(address: usize, value: u16) {
+  store_u16_raw(address, value)
+}
+pub fn store_u32(address: usize, value: u32) {
+  store_u32_raw(address, value)
+}
+pub fn store_u64(address: usize, value: u64) {
+  store_u64_raw(address, value)
+}

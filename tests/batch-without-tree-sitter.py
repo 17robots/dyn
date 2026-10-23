@@ -13,6 +13,10 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 if not sys.platform.startswith('linux'):
     print('SKIP batch commands without Tree-sitter: needs an LD_PRELOAD host')
     sys.exit(0)
+# An ASan compiler must load its runtime before any preloaded guard library.
+if b'__asan_init' in Path(DYN).read_bytes():
+    print('SKIP batch commands without Tree-sitter: sanitizer build cannot take LD_PRELOAD')
+    sys.exit(0)
 
 # Dynamic dependencies: no Tree-sitter library at all, editors included.
 needed = subprocess.run(['readelf', '-d', DYN], capture_output=True, text=True)

@@ -8,7 +8,7 @@ use "std/mem" mem
 use "std/unicode/utf8" utf8
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
 fn read_chunk(data: rawptr, destination: []u8) io.Result {
-  state := #cast(*Chunk) data
+  state := #cast(*Chunk, data)
   if state.at == #len(state.source) {
     return io.Result{ status: io.Status.End }
   }
@@ -29,7 +29,7 @@ fn read_chunk(data: rawptr, destination: []u8) io.Result {
   return io.Result{ transferred: take }
 }
 fn input(state: *Chunk) io.Reader {
-  return io.Reader{ data: #cast(rawptr) state, read: &read_chunk }
+  return io.Reader{ data: #cast(rawptr, state), read: &read_chunk }
 }
 fn csv_check(source: []const u8, expected: bool) {
   for limit in 1..4 {
@@ -256,7 +256,7 @@ fn main() {
   recorded_errors()
   for value in 0..256 {
     source: [4]u8 = ['"', 'a', '"', 0]
-    source[3] = #cast(u8) value
+    source[3] = #cast(u8, value)
     expected := value == 44 || value == 10 || value == 13
     csv_check(source[..], expected)
   }

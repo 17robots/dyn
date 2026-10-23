@@ -3,6 +3,7 @@ use "std/io" io
 use "std/encoding/csv" csv
 use "std/encoding/ini" ini
 use "std/text/scanner" text
+use "std/net"
 
 
 fn read_nothing(data: rawptr, destination: []u8) io.Result {
@@ -62,7 +63,19 @@ fn bytes_equal(a: []const u8, b: []const u8) bool {
   return true
 }
 
+// Zeroed net handles are closed; closing one must not touch descriptor 0.
+fn zero_net_handles() {
+  arena := mem.Arena{}
+  defer mem.arena_release(&arena)
+  connection := mem.push(net.Connection, &arena)
+  listener := mem.push(net.Listener, &arena)
+  if net.connection_close(connection).ok || net.listener_close(listener).ok {
+    #panic("zero net handle closed")
+  }
+}
+
 fn main() {
   zero_arena()
   zero_scanners()
+  zero_net_handles()
 }

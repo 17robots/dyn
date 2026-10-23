@@ -1,3 +1,7 @@
 #target(kernel: linux, arch: x86_64)
-fn thread_number() i64 { return 186 }
-fn write_number() i64 { return 1 }
+fn thread_number() i64 {
+  return 186
+}
+fn write_number() i64 {
+  return 1
+}

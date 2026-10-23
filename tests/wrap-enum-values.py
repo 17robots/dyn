@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/hash"
 
-enum(u8) Op { Add = 1, Sub, Halt = 0xFF }
+enum(u8) Op { Nop = 0, Add = 1, Sub, Halt = 0xFF }
 enum(i8) Dir { Back = -1, Stay, Forward }
-enum(u32) Chunk { Header = 0x49484452, Data = 0x49444154 }
+enum(u32) Chunk { None = 0, Header = 0x49484452, Data = 0x49444154 }
 enum Plain { A, B, C }
 
 seed: u32 = #wrap(4000000000 * 3)
@@ -24,6 +24,9 @@ fn expect(condition: bool, message: []const u8) {
 
 fn name(op: Op) []const u8 {
   case op {
+    Op.Nop => {
+      return "nop"
+    },
     Op.Add => {
       return "add"
     },
@@ -49,22 +52,23 @@ fn main() {
   expect(hash.hash64("") == 14695981039346656037, "fnv empty")
   expect(hash.hash64("foobar") == 9625390261332436968, "fnv foobar")
 
-  expect(#cast(u8) Op.Sub == 2 && #cast(u8) Op.Halt == 255, "implicit and hex values")
-  expect(#cast(i32) Dir.Back == -1 && #cast(i32) Dir.Forward == 1, "signed values")
-  expect(#cast(u32) Chunk.Data == 0x49444154 && #cast(u32) Plain.C == 2, "wide and plain")
+  expect(#cast(u8, Op.Sub) == 2 && #cast(u8, Op.Halt) == 255, "implicit and hex values")
+  expect(#cast(i32, Dir.Back) == -1 && #cast(i32, Dir.Forward) == 1, "signed values")
+  expect(#cast(u32, Chunk.Data) == 0x49444154 && #cast(u32, Plain.C) == 2, "wide and plain")
   byte: u8 = 255
-  expect(#cast(Op) byte == Op.Halt && #cast(Dir) 1 == Dir.Forward, "from integer")
-  expect(#len(name(#cast(Op) 2)) == 3, "case on cast value")
+  expect(#cast(Op, byte) == Op.Halt && #cast(Dir, 1) == Dir.Forward, "from integer")
+  expect(#len(name(#cast(Op, 2))) == 3, "case on cast value")
   wide: i64 = -1
-  expect(#cast(Dir) wide == Dir.Back, "wide signed")
+  expect(#cast(Dir, wide) == Dir.Back, "wide signed")
 }
 '''
 PANICS = {
   'overflow without wrap': ('a: u8 = 250\n  _ = a + 10', 'overflow.ok'),
   'wrapped division by zero': ('a: u8 = 0\n  _ = #wrap(a + 1 / a)', 'divide.ok'),
-  'enum value missing': ('enum(u8) Op { Add = 1, Halt = 0xFF }\nfn main() {\n  v: u16 = 3\n  _ = #cast(Op) v', 'enum.cast.ok'),
-  'enum value truncated': ('enum(u8) Op { Add = 1 }\nfn main() {\n  v: u16 = 257\n  _ = #cast(Op) v', 'enum.cast.ok'),
-  'enum negative unsigned': ('enum(u64) Big { Top = 0xFFFFFFFFFFFFFFFF }\nfn main() {\n  v: i64 = -1\n  _ = #cast(Big) v', 'enum.cast.ok'),
+  'enum value missing': ('enum(u8) Op { Nop = 0, Add = 1, Halt = 0xFF }\nfn main() {\n  v: u16 = 3\n  _ = #cast(Op, v)', 'enum.cast.ok'),
+  'enum value truncated': ('enum(u8) Op { Nop = 0, Add = 1 }\nfn main() {\n  v: u16 = 257\n  _ = #cast(Op, v)', 'enum.cast.ok'),
+  'enum corrupted tag': ('enum Color { Red, Green }\nfn name(c: Color) i64 {\n  case c {\n    Color.Red => { return 1 },\n    Color.Green => { return 2 },\n  }\n}\nfn main() {\n  c: Color = Color.Red\n  bits: *u32 = #cast(*u32, #cast(rawptr, &c))\n  bits.* = 7\n  _ = name(c)', 'enum.tag.ok'),
+  'enum negative unsigned': ('enum(u64) Big { Zero = 0, Top = 0xFFFFFFFFFFFFFFFF }\nfn main() {\n  v: i64 = -1\n  _ = #cast(Big, v)', 'enum.cast.ok'),
 }
 ERRORS = {
   'enum(u8) A { X = 256 }': 'enum value does not fit the tag type',
@@ -72,10 +76,12 @@ ERRORS = {
   'enum(i8) A { X = -129 }': 'enum value does not fit the tag type',
   'enum(u8) A { X = 0xFF, Y }': 'enum value does not fit the tag type',
   'enum A { X = 1, Y = 1 }': 'duplicate enum value',
+  'enum A { X = 1, Y = 2 }': 'enum requires a variant with value 0',
+  'enum(i8) A { X = -2, Y }': 'enum requires a variant with value 0',
   'enum A { X = 1, Y = 0, Z }': 'duplicate enum value',
   'enum Shape { Circle: f32 = 1, Box }': 'enums with payloads cannot have explicit values',
   'const K: u8 = 3\nenum A { X = K }': 'enum value must be an integer literal',
-  'enum Shape { Circle: f32, Box }\nfn f(s: Shape) u32 {\n  return #cast(u32) s\n}': 'cannot cast Shape to u32',
+  'enum Shape { Circle: f32, Box }\nfn f(s: Shape) u32 {\n  return #cast(u32, s)\n}': 'cannot cast Shape to u32',
   'fn f(x: f32) f32 {\n  return #wrap(x * 2.0)\n}': '#wrap requires integer arithmetic',
   'fn f(x: u8) u8 {\n  return #wrap(x / 2)\n}': '#wrap needs +, -, * or << inside',
 }

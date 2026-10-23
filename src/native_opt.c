@@ -1,4 +1,5 @@
 #include "native_opt.h"
+#include "dyn_timing.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -306,6 +307,8 @@ typedef struct {
       arms_cap;
   uint32_t loop_stride, next_loop;
   unsigned expansions, budget;
+  size_t growth_budget;
+  unsigned *costs;
   bool failed, leaf_only;
   bool *active;
 } Inline;
@@ -514,6 +517,24 @@ static DynIrStmt inline_empty(DynStmtKind kind, DynSpan span) {
                      .local_id = UINT32_MAX,
                      .span = span};
 }
+/* Saturating estimates include expression trees and aggregate elements.
+   Statement counts alone make large expressions look deceptively cheap. */
+static unsigned inline_expression_cost(const DynIrProgram *ir, DynExprId id,
+                                       unsigned depth) {
+  if (id == DYN_NO_EXPR) return 0;
+  if (id >= ir->expression_count || depth > 32) return 257;
+  const DynIrExpr *e = &ir->expressions[id];
+  unsigned cost = e->kind == DYN_EXPR_CALL ? 8 : 1;
+  cost += inline_expression_cost(ir, e->left, depth + 1);
+  if (cost > 256) return 257;
+  cost += inline_expression_cost(ir, e->right, depth + 1);
+  if (e->kind == DYN_EXPR_SLICE)
+    cost += inline_expression_cost(ir, (DynExprId)e->integer, depth + 1);
+  if ((uint64_t)e->item_start + e->item_count > ir->item_count) return 257;
+  for (uint32_t i = 0; i < e->item_count && cost <= 256; ++i)
+    cost += 1 + inline_expression_cost(ir, ir->items[e->item_start + i].expression, depth + 1);
+  return cost > 256 ? 257 : cost;
+}
 static unsigned inline_cost(const DynIrProgram *ir, uint32_t start,
                             uint32_t count, unsigned depth) {
   if (depth > 32 || (uint64_t)start + count > ir->child_count)
@@ -524,7 +545,9 @@ static unsigned inline_cost(const DynIrProgram *ir, uint32_t start,
     if (id >= ir->statement_count)
       return 257;
     const DynIrStmt *s = &ir->statements[id];
-    cost += 1 + inline_cost(ir, s->body_start, s->body_count, depth + 1) +
+    cost += 1 + inline_expression_cost(ir, s->expression, 0) +
+            inline_expression_cost(ir, s->target, 0) +
+            inline_cost(ir, s->body_start, s->body_count, depth + 1) +
             inline_cost(ir, s->else_start, s->else_count, depth + 1);
     if ((uint64_t)s->case_arm_start + s->case_arm_count > ir->case_arm_count)
       return 257;
@@ -655,10 +678,12 @@ static bool inline_call(Inline *b, const InlineScope *scope,
     return false;
   if (b->leaf_only && (!scope->in_loop || !inline_leaf(b->in, f)))
     return false;
-  unsigned cost = inline_cost(b->in, f->body_start, f->body_count, 0);
-  if (cost > 64 || cost + f->param_count + 2 > b->budget)
+  unsigned cost = b->costs[call->integer];
+  unsigned growth = cost + f->param_count + 2;
+  if (cost > 64 || growth > b->budget || growth > b->growth_budget)
     return false;
-  b->budget -= cost + f->param_count + 2;
+  b->budget -= growth;
+  b->growth_budget -= growth;
   InlineScope nested = {.function = f,
                         .local_base = inline_locals(b, f),
                         .loop_base = inline_loop_base(b),
@@ -827,8 +852,21 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only) {
   b.out.case_arm_count = 0;
   b.active = calloc(o->ir.function_count ? o->ir.function_count : 1,
                     sizeof(*b.active));
-  if (!b.active)
+  b.costs = calloc(o->ir.function_count ? o->ir.function_count : 1, sizeof(*b.costs));
+  if (!b.active || !b.costs) {
+    free(b.active); free(b.costs);
     return false;
+  }
+  size_t original_cost = 0;
+  for (size_t i = 0; i < b.in->function_count; ++i) {
+    const DynIrFunction *f = &b.in->functions[i];
+    if (f->foreign || f->generic || (b.in->live.functions && !b.in->live.functions[i])) continue;
+    b.costs[i] = inline_cost(b.in, f->body_start, f->body_count, 0);
+    original_cost += b.costs[i];
+  }
+  /* Bound total expansion as well as each caller. The small-program allowance
+     retains useful leaf inlining without permitting module-wide duplication. */
+  b.growth_budget = 256 + original_cost / 4;
 #define INLINE_COPY(field, count, cap)                                         \
   do {                                                                         \
     if (inline_grow(&b, (void **)&b.out.field, &b.cap, b.in->count,            \
@@ -861,7 +899,7 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only) {
   }
   for (size_t i = 0; i < b.in->function_count && !b.failed; ++i) {
     const DynIrFunction *f = &b.in->functions[i];
-    if (f->foreign || f->generic)
+    if (f->foreign || f->generic || (b.in->live.functions && !b.in->live.functions[i]))
       continue;
     InlineScope scope = {.function = f,
                          .local_base = inline_locals(&b, f),
@@ -891,6 +929,7 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only) {
   if (!b.failed)
     memset(b.out.unstable_locals, 1, b.out.local_count);
   free(b.active);
+  free(b.costs);
   if (!b.failed && !b.expansions) {
     inline_free(&b.out);
     return true;
@@ -902,6 +941,9 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only) {
   free(o->ir.expressions);
   free(o->ir.statements);
   o->ir = b.out;
+  /* Expansion creates new expression/statement indices; function IDs stay stable. */
+  o->ir.live.expressions = NULL;
+  o->ir.live.statements = NULL;
   o->inlined = b.expansions;
   o->owns_expansion = true;
   return true;
@@ -963,7 +1005,9 @@ bool dyn_native_optimize(const DynSource *source, const DynIrProgram *input,
     c.samples = samples;
     c.level = 3;
   }
+  struct timespec optimization_time = dyn_timing_start(&source->context);
   for (size_t i = 0; i < input->expression_count; ++i) {
+    if (input->live.expressions && !input->live.expressions[i]) continue;
     const DynIrExpr *e = &input->expressions[i];
     if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_BOOL ||
         e->kind == DYN_EXPR_CHAR)
@@ -985,6 +1029,7 @@ bool dyn_native_optimize(const DynSource *source, const DynIrProgram *input,
   }
   if (level >= 2)
     for (size_t i = 0; i < input->statement_count; ++i) {
+      if (input->live.statements && !input->live.statements[i]) continue;
       DynIrStmt *s = &o->ir.statements[i];
       if (s->kind != DYN_STMT_IF || s->expression >= input->expression_count)
         continue;
@@ -998,11 +1043,13 @@ bool dyn_native_optimize(const DynSource *source, const DynIrProgram *input,
         s->body_count = 0;
       ++o->branches;
     }
+  dyn_timing_phase(&source->context, &optimization_time, "scalar optimization");
   if (level >= 2 && !inline_program(o, level == 2)) {
     free(samples);
     dyn_native_optimization_free(o);
     return false;
   }
+  dyn_timing_phase(&source->context, &optimization_time, "inlining");
   if (policy && policy->remarks)
     fprintf(stderr,
             "remark: independent O%u: %zu scalar folds, %zu immutable loads, "

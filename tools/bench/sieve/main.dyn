@@ -19,7 +19,7 @@ fn main() {
         }
       }
     }
-    total += count + #cast(u64) round
+    total += count + #cast(u64, round)
   }
   _ = io.println(io.stdout(), "{}", total)
 }

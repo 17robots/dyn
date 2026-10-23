@@ -8,7 +8,7 @@
 | `dyn vet DIR` | Check, then report suspicious but valid code; exits 1 on findings |
 | `dyn build DIR` | Build an executable (`--debug` default, or `--release`) |
 | `dyn run DIR` | Build and run |
-| `dyn fmt DIR` | Format every file in the module; `--check` only reports |
+| `dyn fmt DIR` | Format every file in the module: one statement per line, two-space indentation, a space after commas; `--check` only reports |
 | `dyn docs DIR` | Print public declarations and their contracts; `--json` for tools |
 | `dyn query DIR` | Export a semantic program index as JSON |
 | `dyn lsp` | Run the language server on stdio |
@@ -18,11 +18,9 @@
 `--diagnostics json` for machine-readable errors, `--timings`, `--no-cache`
 and `--link PATH` to add a native object or library.
 
-Debug builds for Linux (x86-64 and AArch64), macOS and Windows generate
-machine code directly instead of through LLVM, which is much faster. Compilers
-on Linux and macOS hosts include this code generator. Programs the native code generator cannot
-handle fall back to LLVM automatically. `--backend llvm` forces LLVM;
-`--backend native` makes a fallback an error. Release builds always use LLVM.
+The compiler generates machine code directly for every target, in debug and
+release builds. There is no LLVM backend; `--backend llvm` reports an error.
+See the [independent toolchain guide](independent-toolchain.md).
 
 The compiler reports errors only. `dyn vet` runs extra checks on valid code: it
 flags copying an arena (the copies would hand out overlapping memory) and

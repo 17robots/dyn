@@ -1,4 +1,5 @@
 #target(kernel: linux)
+use "std/errors"
 use "std/fs" fs
 use "std/c" c
 
@@ -23,7 +24,8 @@ pub const FixedWatchCapacity: usize = 0
 pub enum Status { Event, Empty, Error }
 pub struct Watcher { descriptor: isize = -1, storage: []u8, used: usize, offset: usize, rescan_required: bool }
 pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
-pub struct Result { value: i32, error: isize, ok: bool }
+// `error` keeps the native code; `kind` is its portable category.
+pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
 pub struct EventResult { event: Event, status: Status, error: isize }
 
@@ -43,17 +45,17 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   storage: [4096]u8 = []
   name := c.string_from_bytes(storage[..], path)
   if !name.ok || #len(path) == 0 || state.descriptor < 0 {
-    return Result{ error: -22 }
+    return failure(-22)
   }
   value := #syscall(254, state.descriptor, name.value, mask)
   if value < 0 {
-    return Result{ error: value }
+    return failure(value)
   }
-  return Result{ value: #cast(i32) value, ok: true }
+  return Result{ value: #cast(i32, value), ok: true }
 }
 pub fn remove(state: *Watcher, watch: i32) Result {
   value := #syscall(255, state.descriptor, watch)
-  return Result{ error: value, ok: value == 0 }
+  return status(value)
 }
 pub fn close(state: *Watcher) Result {
   if state.descriptor < 0 {
@@ -63,10 +65,10 @@ pub fn close(state: *Watcher) Result {
   state.descriptor = -1
   state.used = 0
   state.offset = 0
-  return Result{ error: value, ok: value == 0 }
+  return status(value)
 }
 fn load(bytes: []const u8, at: usize) u32 {
-  return #cast(u32) bytes[at] | (#cast(u32) bytes[at+1] << 8) | (#cast(u32) bytes[at+2] << 16) | (#cast(u32) bytes[at+3] << 24)
+  return #cast(u32, bytes[at]) | (#cast(u32, bytes[at+1]) << 8) | (#cast(u32, bytes[at+2]) << 16) | (#cast(u32, bytes[at+3]) << 24)
 }
 pub fn next(state: *Watcher) EventResult {
   if state.descriptor < 0 {
@@ -91,7 +93,7 @@ pub fn next(state: *Watcher) EventResult {
   if at > state.used || state.used - at < 16 {
     return EventResult{ status: Status.Error, error: -74 }
   }
-  length := #cast(usize) load(state.storage, at+12)
+  length := #cast(usize, load(state.storage, at+12))
   if length > state.used - at - 16 {
     return EventResult{ status: Status.Error, error: -74 }
   }
@@ -108,7 +110,7 @@ pub fn next(state: *Watcher) EventResult {
   watch: i32 = -1
   raw_watch := load(state.storage, at)
   if raw_watch != 4294967295 {
-    watch = #cast(i32) raw_watch
+    watch = #cast(i32, raw_watch)
   }
   state.offset += 16 + length
   if rescan {
@@ -121,4 +123,14 @@ pub fn next(state: *Watcher) EventResult {
 // that scan, so drain/reconcile them before treating the workspace as current.
 pub fn acknowledge_rescan(state: *Watcher) {
   state.rescan_required = false
+}
+
+fn failure(code: isize) Result {
+  return Result{ error: code, kind: errors.linux(code) }
+}
+fn status(code: isize) Result {
+  if code == 0 {
+    return Result{ ok: true }
+  }
+  return failure(code)
 }

@@ -26,13 +26,13 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32) bool {
   value: u64 = 0
   i := start
   for i < offset.* {
-    value = value * 10 + #cast(u64) (text[i] - '0')
+    value = value * 10 + #cast(u64, (text[i] - '0'))
     if value > 4294967295 {
       return false
     }
     i += 1
   }
-  output.* = #cast(u32) value
+  output.* = #cast(u32, value)
   return true
 }
 

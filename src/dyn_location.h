@@ -15,7 +15,7 @@ static inline void dyn_location_free(DynLocationIndex *index) {
   free(index->files); memset(index, 0, sizeof(*index));
 }
 static inline bool dyn_location_build(DynLocationIndex *index, const DynSource *s) {
-  index->files = calloc(s->map_count + 1, sizeof(*index->files));
+  index->files = (DynLocationFile*)calloc(s->map_count + 1, sizeof(*index->files));
   if (!index->files) return false;
   index->count = s->map_count + 1;
   for (size_t i = 0; i < index->count; ++i) {
@@ -25,7 +25,7 @@ static inline bool dyn_location_build(DynLocationIndex *index, const DynSource *
     size_t count = 1;
     for (size_t j = 0; j < length; ++j) count += file->text[j] == '\n';
     if (count > SIZE_MAX / sizeof(*file->lines)) { dyn_location_free(index); return false; }
-    file->lines = malloc(count * sizeof(*file->lines));
+    file->lines = (size_t*)malloc(count * sizeof(*file->lines));
     if (!file->lines) { dyn_location_free(index); return false; }
     file->lines[file->count++] = 0;
     for (size_t j = 0; j < length; ++j)
@@ -33,9 +33,7 @@ static inline bool dyn_location_build(DynLocationIndex *index, const DynSource *
   }
   return true;
 }
-static inline void dyn_location_get(const DynLocationIndex *index, const DynSource *s,
-                                    size_t byte, const char **path,
-                                    unsigned *line, unsigned *column) {
+static inline void dyn_location_get(const DynLocationIndex *index, const DynSource *s, size_t byte, const char **path, unsigned *line, unsigned *column) {
   const char *text;
   size_t length, offset;
   dyn_source_position(s, byte, path, &text, &length, &offset);

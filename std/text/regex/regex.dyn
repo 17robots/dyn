@@ -159,11 +159,11 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       after = i + 2
     } else {
       if state.pattern[i] == ')' || state.pattern[i] == '|' ||
-         state.pattern[i] == '*' || state.pattern[i] == '+' ||
-         state.pattern[i] == '?' || state.pattern[i] == '{' {
-           state.ok = false
-           return false
-         }
+        state.pattern[i] == '*' || state.pattern[i] == '+' ||
+        state.pattern[i] == '?' || state.pattern[i] == '{' {
+        state.ok = false
+        return false
+      }
       op := Char
       if state.pattern[i] == '.' {
         op = Any
@@ -278,7 +278,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
   return pieces > 0
 }
 
-const NoPatch: usize = 18446744073709551615
+const NoPatch: usize = ~#cast(usize, 0)
 struct Fragment { start: usize, out: usize }
 
 fn field(code: []Instruction, slot: usize) usize {
@@ -459,11 +459,13 @@ fn class_matches(program: Program, instruction: Instruction, byte: u8) bool {
 // Thread rows contain a program counter and start/end offsets per capture.
 // An unset end marks a capture as incomplete. Lists retain leftmost-first order.
 fn copy_thread(destination: []usize, source: []usize) {
-  for i in 0..#len(destination) { destination[i] = source[i] }
+  for i in 0..#len(destination) {
+    destination[i] = source[i]
+  }
 }
 
 fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
-          output: []usize, used: *usize, pending: []usize, seen: []usize, stride: usize) {
+  output: []usize, used: *usize, pending: []usize, seen: []usize, stride: usize) {
   copy_thread(pending[..stride], seed)
   top: usize = 1
   for top > 0 {
@@ -471,7 +473,9 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
     row := pending[top * stride..(top + 1) * stride]
     for true {
       pc := row[0]
-      if pc >= #len(program.code) || seen[pc] != 0 { break }
+      if pc >= #len(program.code) || seen[pc] != 0 {
+        break
+      }
       seen[pc] = 1
       instruction := program.code[pc]
       if instruction.op == Split {
@@ -482,21 +486,29 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
         top += 2
         break
       }
-      if instruction.op == Jump { row[0] = instruction.x }
+      if instruction.op == Jump {
+        row[0] = instruction.x
+      }
       else if instruction.op == Save {
         slot := instruction.x + 1
         if slot < stride {
           row[slot] = at
-          if instruction.x % 2 == 0 { row[slot + 1] = NoPatch }
+          if instruction.x % 2 == 0 {
+            row[slot + 1] = NoPatch
+          }
         }
         row[0] = instruction.y
       }
       else if instruction.op == Begin {
-        if at != 0 { break }
+        if at != 0 {
+          break
+        }
         row[0] = instruction.x
       }
       else if instruction.op == End {
-        if at != #len(text) { break }
+        if at != #len(text) {
+          break
+        }
         row[0] = instruction.x
       }
       else {
@@ -511,27 +523,45 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
 // Number of usize slots required by find_compiled_workspace. Zero means invalid
 // program or size overflow. Space depends on the program, never on input length.
 pub fn match_workspace_size(program: Program, capture_count: usize) usize {
-  if !program.ok || #len(program.code) == 0 { return 0 }
+  if !program.ok || #len(program.code) == 0 {
+    return 0
+  }
   groups := capture_count
-  if groups > program.groups { groups = program.groups }
-  if groups > (NoPatch - 1) / 2 { return 0 }
+  if groups > program.groups {
+    groups = program.groups
+  }
+  if groups > (NoPatch - 1) / 2 {
+    return 0
+  }
   stride := groups * 2 + 1
   n := #len(program.code)
-  if n > (NoPatch - 1) / 3 { return 0 }
+  if n > (NoPatch - 1) / 3 {
+    return 0
+  }
   rows := n * 3 + 1
-  if stride > (NoPatch - n) / rows { return 0 }
+  if stride > (NoPatch - n) / rows {
+    return 0
+  }
   return rows * stride + n
 }
 
 // Ordered Thompson execution with caller-owned workspace. Insufficient workspace
 // returns MatchError.Capacity. Captures are cleared on failure; no hidden allocation.
 pub fn find_compiled_workspace(program: Program, text: []const u8, captures: []Match, workspace: []usize) Match {
-  for i in 0..#len(captures) { captures[i] = Match{} }
+  for i in 0..#len(captures) {
+    captures[i] = Match{}
+  }
   required := match_workspace_size(program, #len(captures))
-  if !program.ok { return Match{} }
-  if required == 0 || #len(workspace) < required { return Match{ error: MatchError.Capacity } }
+  if !program.ok {
+    return Match{}
+  }
+  if required == 0 || #len(workspace) < required {
+    return Match{ error: MatchError.Capacity }
+  }
   groups := #len(captures)
-  if groups > program.groups { groups = program.groups }
+  if groups > program.groups {
+    groups = program.groups
+  }
   stride := groups * 2 + 1
   n := #len(program.code)
   current := workspace[..n * stride]
@@ -540,15 +570,21 @@ pub fn find_compiled_workspace(program: Program, text: []const u8, captures: []M
   seen := workspace[(3 * n + 1) * stride..required]
   start: usize = 0
   for start <= #len(text) {
-    for i in 0..n { seen[i] = 0 }
-    for i in 0..stride { pending[i] = NoPatch }
+    for i in 0..n {
+      seen[i] = 0
+    }
+    for i in 0..stride {
+      pending[i] = NoPatch
+    }
     pending[0] = program.start
     count: usize = 0
     expand(program, text, start, pending[..stride], current, &count, pending, seen, stride)
     at := start
     found := Match{}
     for count > 0 {
-      for i in 0..n { seen[i] = 0 }
+      for i in 0..n {
+        seen[i] = 0
+      }
       next_count: usize = 0
       for i in 0..count {
         row := current[i * stride..(i + 1) * stride]
@@ -569,7 +605,9 @@ pub fn find_compiled_workspace(program: Program, text: []const u8, captures: []M
             (instruction.op == Class && class_matches(program, instruction, text[at]))
           if consumes {
             row[0] = instruction.x
-            if instruction.op == Class { row[0] = instruction.z }
+            if instruction.op == Class {
+              row[0] = instruction.z
+            }
             expand(program, text, at + 1, row, following, &next_count, pending, seen, stride)
           }
         }
@@ -580,7 +618,9 @@ pub fn find_compiled_workspace(program: Program, text: []const u8, captures: []M
       count = next_count
       at += 1
     }
-    if found.ok { return found }
+    if found.ok {
+      return found
+    }
     start += 1
   }
   return Match{}
@@ -664,7 +704,7 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
   min: usize = 0
   digits: usize = 0
   for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
-    digit := #cast(usize) (pattern[i] - '0')
+    digit := #cast(usize, (pattern[i] - '0'))
     if min > (NoPatch - digit) / 10 {
       return false
     }
@@ -684,7 +724,7 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
       max = 0
       unlimited = false
       for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
-        digit2 := #cast(usize) (pattern[i] - '0')
+        digit2 := #cast(usize, (pattern[i] - '0'))
         if max > (NoPatch - digit2) / 10 {
           return false
         }
@@ -741,7 +781,9 @@ fn match_here(pattern: []const u8, p: usize, text: []const u8, t: usize, end: *u
     quantified = true
   }
   if quantified {
-    if unbounded { maximum = #len(text) - t }
+    if unbounded {
+      maximum = #len(text) - t
+    }
     cursor := t
     count: usize = 0
     for cursor < #len(text) && count < maximum && atom(pattern, p, text[cursor]) {

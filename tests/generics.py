@@ -117,7 +117,7 @@ fn main() {
   x: u32 = 7
   _ = io.println(out, "{} {} {} {} {}", math.min(x, 3), math.max(2.5, 4.0), math.clamp(15, 0, 10), math.abs(-4), math.narrow(u8, 200))
   big: [40]i64
-  for i in 0..40 { big[i] = #cast(i64) ((i * 37) % 40) - 20 }
+  for i in 0..40 { big[i] = #cast(i64, ((i * 37) % 40)) - 20 }
   sort.sort(big[..])
   small: [5]f32 = [3.0, 1.0, 2.0, 5.0, 4.0]
   sort.sort(small[..])
@@ -181,6 +181,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
         checked = run('check', str(case))
         assert checked.returncode != 0 and message in checked.stderr, (message, checked.stderr)
 
+    case = root/'repeated'
+    case.mkdir()
+    (case/'main.dyn').write_text('fn same(a: $T, b: $T) T {\n  return a\n}\nfn main() {\n  _ = same(1, 2)\n}\n')
+    checked = run('check', str(case))
+    assert checked.returncode != 0 and 'write `T`, not `$T`' in checked.stderr, checked.stderr
+
     # A generic body edit changes the output; a new instance does too.
     env = dict(os.environ, DYN_CACHE_DIR=str(root/'cache'))
     output = project/'cached'
@@ -193,7 +199,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
     util.write_text(UTIL.replace('return helper(#sizeof(T))', 'return helper(#sizeof(T)) + 1'))
     assert build_and_run().splitlines()[1] == '17 33 17'
     main = project/'main.dyn'
-    main.write_text(MAIN.replace('util.min(2.5, 1.5)', 'util.min(#cast(i8) 2, 1)'))
+    main.write_text(MAIN.replace('util.min(2.5, 1.5)', 'util.min(#cast(i8, 2), 1)'))
     assert build_and_run().splitlines()[3] == '3 1'
 
     # In a module split into chunks, an instance lives in its generic's chunk.
@@ -217,7 +223,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
         out = subprocess.run([str(big/'program')], capture_output=True, text=True, timeout=30)
         return int(out.stdout), built.stderr.count('cached module')
     assert build_big()[0] == 28
-    (big/'part5.dyn').write_text('fn value5() i64 {\n  return #cast(i64) pick(#cast(i32) 2, 3)\n}\n' + filler('p5'))
+    (big/'part5.dyn').write_text('fn value5() i64 {\n  return #cast(i64, pick(#cast(i32, 2), 3))\n}\n' + filler('p5'))
     total, cached = build_big()
     assert total == 28 , (total, cached)
     part0 = big/'part0.dyn'

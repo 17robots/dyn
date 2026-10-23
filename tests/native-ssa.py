@@ -32,15 +32,15 @@ def division_program():
                       f'  if x / {c} != x / signed_divisor || x % {c} != x % signed_divisor {{ #panic("i64 {c}") }}']
     lines += ['}', 'fn runtime(c: i64) i64 { signed_divisor = c return signed_divisor }', 'fn narrow(x: i32, y: u32) {']
     for c in (3, 7, 10, 1000, 65537, 2147483647):
-        lines += [f'  if x / {c} != x / #cast(i32) runtime({c}) || x % {c} != x % #cast(i32) runtime({c}) {{ #panic("i32 {c}") }}',
-                  f'  if y / {c} != y / #cast(u32) runtime({c}) || y % {c} != y % #cast(u32) runtime({c}) {{ #panic("u32 {c}") }}']
+        lines += [f'  if x / {c} != x / #cast(i32, runtime({c})) || x % {c} != x % #cast(i32, runtime({c})) {{ #panic("i32 {c}") }}',
+                  f'  if y / {c} != y / #cast(u32, runtime({c})) || y % {c} != y % #cast(u32, runtime({c})) {{ #panic("u32 {c}") }}']
     rng = random.Random(5)
     values = [0, 1, 2, 3, 5, 7, (1 << 63) - 1, 1 << 63, (1 << 64) - 1, (1 << 64) - 2, (1 << 32) - 1, 1 << 32,
               999999, 1000003, 1000002] + [rng.getrandbits(64) for _ in range(40)] + [rng.getrandbits(20) for _ in range(9)]
     lines += ['}', 'fn main() {']
     lines += [f'  values[{i}] = {v}' for i, v in enumerate(values[:64])]
-    lines += ['  for v in values {', '    unsigned(v)', '    signed(#bitcast(i64) v)',
-              '    narrow(#cast(i32) (#bitcast(i64) v % 2147483647), #cast(u32) (v % 4294967295))', '  }', '}']
+    lines += ['  for v in values {', '    unsigned(v)', '    signed(#bitcast(i64, v))',
+              '    narrow(#cast(i32, (#bitcast(i64, v) % 2147483647)), #cast(u32, (v % 4294967295)))', '  }', '}']
     return '\n'.join(lines) + '\n'
 
 
@@ -72,7 +72,7 @@ small: i32 = -5
 bytes: [4]i8 = [-1, 2, -3, 4]
 halves: [2]i16 = [-30000, 30000]
 fn main() {
-  _ = io.println(io.stdout(), "{} {} {} {} {}", big, small, bytes[0] + bytes[2], halves[0], #cast(u64) (-(big + 1)))
+  _ = io.println(io.stdout(), "{} {} {} {} {}", big, small, bytes[0] + bytes[2], halves[0], #cast(u64, (-(big + 1))))
 }
 ''',
     'large-frame': '''use "std/io"
@@ -80,7 +80,7 @@ seed: u8 = initial()
 fn initial() u8 { return 120 }
 fn main() {
   text: [6000]u8 = []
-  index: usize = 0 for index < 6000 { text[index] = seed + #cast(u8) (index % 7) index += 1 }
+  index: usize = 0 for index < 6000 { text[index] = seed + #cast(u8, (index % 7)) index += 1 }
   _ = io.println(io.stdout(), "{} {} {}", text[0], text[4100], text[5999])
 }
 ''',
@@ -91,7 +91,7 @@ points: [64]Point
 pub fn step(p: Point, d: Point) Point { return Point{x: (p.x + d.x) % 1009, y: (p.y * 3 + d.y) % 1009} }
 fn mix(m: Mixed, by: i32) Mixed { return Mixed{a: m.a - by, b: m.b + 1, flag: !m.flag, scale: m.scale * 2.5, small: m.small + 1.0} }
 fn main() {
-  for i in 0..#len(points) { points[i] = Point{x: #cast(i64) i, y: #cast(i64) (i * 7)} }
+  for i in 0..#len(points) { points[i] = Point{x: #cast(i64, i), y: #cast(i64, (i * 7))} }
   delta := Point{x: 5, y: 11}
   for round in 0..20 { for *p in points { p.* = step(p.*, delta) } }
   total: i64 = 0
@@ -113,7 +113,7 @@ d: [1024]f32
 e: [99]f64
 f: [32]f32
 fn main() {
-  for i in 0..1024 { a[i] = #cast(f64) (i % 13) * 0.37 b[i] = #cast(f64) (i % 7) * -1.25 d[i] = #cast(f32) (i % 5) * 0.5 }
+  for i in 0..1024 { a[i] = #cast(f64, (i % 13)) * 0.37 b[i] = #cast(f64, (i % 7)) * -1.25 d[i] = #cast(f32, (i % 5)) * 0.5 }
   n: usize = 32
   for i in 0..n {
     for j in 0..n {
@@ -210,8 +210,8 @@ fn key(k: Key) i64 {
 }
 fn main() {
   total: i64 = 0
-  for i in -3..12 { total = total * 7 + pick(#cast(i64) i) }
-  for c in 60..75 { total += #cast(i64) letter(#cast(u8) c) * #cast(i64) c }
+  for i in -3..12 { total = total * 7 + pick(#cast(i64, i)) }
+  for c in 60..75 { total += #cast(i64, letter(#cast(u8, c))) * #cast(i64, c) }
   total += key(Key.Up) + key(Key.Enter) * 10 + key(Key.Tab) * 100
   _ = io.println(io.stdout(), "{}", total)
 }
@@ -220,15 +220,15 @@ fn main() {
 struct Pair { a: i64, b: f64 }
 struct Wide { a: i64, b: i64, c: i64 }
 fn many(a: i64, b: i8, c: i64, d: u16, e: i64, f: i32, g: i64, h: u8, i: i64, j: i8, k: f32, l: f64, m: Pair, n: Wide) f64 {
-  return #cast(f64) (a + #cast(i64) b + c + #cast(i64) d + e + #cast(i64) f + g + #cast(i64) h + i + #cast(i64) j) + #cast(f64) k + l + m.b + #cast(f64) (m.a + n.a + n.b + n.c)
+  return #cast(f64, (a + #cast(i64, b) + c + #cast(i64, d) + e + #cast(i64, f) + g + #cast(i64, h) + i + #cast(i64, j))) + #cast(f64, k) + l + m.b + #cast(f64, (m.a + n.a + n.b + n.c))
 }
 fn floats(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f32, j: f64, k: f32) f64 {
-  return a + b * 2.0 + c * 3.0 + d * 4.0 + e * 5.0 + f * 6.0 + g * 7.0 + h * 8.0 + #cast(f64) i * 9.0 + j * 10.0 + #cast(f64) k * 11.0
+  return a + b * 2.0 + c * 3.0 + d * 4.0 + e * 5.0 + f * 6.0 + g * 7.0 + h * 8.0 + #cast(f64, i) * 9.0 + j * 10.0 + #cast(f64, k) * 11.0
 }
 fn main() {
   x := many(1, -2, 3, 4, 5, -6, 7, 8, 9, -10, 1.5, 2.25, Pair{a: 11, b: 0.5}, Wide{a: 12, b: 13, c: 14})
   y := floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5, 10.0, 11.5)
-  _ = io.println(io.stdout(), "{} {}", #cast(i64) (x * 4.0), #cast(i64) (y * 2.0))
+  _ = io.println(io.stdout(), "{} {}", #cast(i64, (x * 4.0)), #cast(i64, (y * 2.0)))
 }
 ''',
 }

@@ -138,7 +138,7 @@ use "std/mem"
 
 fn main() {
   workspace := mem.growing_create_bounded(mem.KiB, 16 * mem.KiB)
-  _ = mem.growing_push_or_panic(&workspace, 8 * mem.KiB, 8)
+  _ = mem.growing_push(&workspace, 8 * mem.KiB, 8)
   mem.growing_reset(&workspace)
   if mem.growing_snapshot(&workspace).backing_bytes == 0 { #panic("reset should retain") }
   mem.growing_trim(&workspace, 0)
@@ -148,8 +148,8 @@ fn main() {
 ```
 
 Trim/release can partially succeed before an OS failure. Successfully released
-blocks stay released; unreleased blocks remain owned for retry. Do not discard the
-owner on failure. OS release failure is not exercised by these examples.
+blocks stay released; the failed release panics rather than returning a
+retryable error. OS release failure is not exercised by these examples.
 
 ## Choosing existing mechanisms
 

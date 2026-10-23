@@ -124,7 +124,7 @@ fn main() {
   }
   error_storage: [8]u8 = []
   for error_capacity in [0, 8] {
-    failing := bufio.reader(io.Reader{ read: &error_read }, error_storage[..#cast(usize) error_capacity])
+    failing := bufio.reader(io.Reader{ read: &error_read }, error_storage[..#cast(usize, error_capacity)])
     error_line := bufio.read_line(&failing, contents[..])
     require(error_line.status == bufio.ReadStatus.Error && error_line.transferred == 1, "stdlib assertion 114")
     require(contents[0] == 'x' && error_line.kind == errors.Kind.PermissionDenied && error_line.error == 0, "stdlib assertion 115")
@@ -141,7 +141,7 @@ fn main() {
   require(process.environment("", contents[..]).kind == errors.Kind.InvalidInput, "stdlib assertion 126")
   invalid_child := process.Child{}
   require(process.wait(&invalid_child, false).kind == errors.Kind.InvalidState, "stdlib assertion 128")
-  minimum: isize = 0 - #cast(isize) ((~#cast(usize) 0) >> 1) - 1
+  minimum: isize = 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1
   require(errors.linux(minimum) == errors.Kind.System, "stdlib assertion 130")
   require(errors.darwin(minimum) == errors.Kind.System, "stdlib assertion 131")
   require(errors.windows(minimum) == errors.Kind.System, "stdlib assertion 132")

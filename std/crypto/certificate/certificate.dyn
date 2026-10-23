@@ -18,8 +18,8 @@ pub fn parse(encoded: []const u8) Result {
   if !tbs.ok || tbs.element.tag != 48 || !algorithm.ok || algorithm.element.tag != 48 ||
     !signature.ok || signature.element.tag != 3 || #len(signature.element.content) < 1 ||
     signature.element.content[0] != 0 || !der.finished(&children) {
-      return Result{}
-    }
+    return Result{}
+  }
   return Result{ certificate: Certificate{
     encoded: encoded, tbs: tbs.element.encoded, signature_algorithm: algorithm.element.encoded,
     signature_bits: signature.element.content[1..],

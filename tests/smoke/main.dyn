@@ -6,6 +6,6 @@ fn main() {
   if !copied.ok || !strings.equal(copied.value, "compiler SDK smoke") { #panic("SDK copy") }
   values: [3]i16 = [10, 20, 12]
   total: i32 = 0
-  for value in values { total += #cast(i32) value }
+  for value in values { total += #cast(i32, value) }
   if total != 42 { #panic("code generation") }
 }

@@ -33,8 +33,8 @@ version=subprocess.check_output([str(compiler),'version'],text=True).strip()
 def checked_measure(command,env):
     row=measure(command,env,120)
     row.update(command=command,environment_overrides={key:env[key] for key in ('DYN_SDK','DYN_CACHE_DIR')})
-    row['phase_samples']=[dict(phase=phase,seconds=float(ms)/1000,peak_mib=int(peak))
-        for phase,ms,peak in re.findall(r'^timing detail (\w+) ([\d.]+) ms, peak (\d+) MiB$',row['stderr'],re.M)]
+    row['phase_samples']=[dict(phase=phase,seconds=float(ms)/1000,peak_mib=int(peak) if peak else None)
+        for phase,ms,peak in re.findall(r'^timing detail (.+?) ([\d.]+) ms(?:, peak (\d+) MiB)?$',row['stderr'],re.M)]
     return row
 variants={'portable':[], 'native':['--cpu','native'], 'o3':['--opt-level','3']}
 rows=[]

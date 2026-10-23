@@ -255,6 +255,14 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
     }
     if (!en->variant_count)
       compact_report(d, s, errors, "enum requires at least one variant");
+    /* Zeroed storage must hold a valid variant. */
+    bool has_zero = false;
+    for (uint32_t q = 0; q < en->variant_count; ++q)
+      if (a->variants[en->variant_start + q].tag == 0)
+        has_zero = true;
+    if (en->variant_count && !has_zero)
+      compact_report(en->name, s, errors,
+                 "enum requires a variant with value 0 so zeroed storage is valid");
     unsigned width =
         en->tag_type == DYN_TYPE_I8 || en->tag_type == DYN_TYPE_U8     ? 8
         : en->tag_type == DYN_TYPE_I16 || en->tag_type == DYN_TYPE_U16 ? 16
@@ -410,7 +418,13 @@ static bool compact_add_generic(const DynSource *s, DynAstProgram *a, unsigned *
         continue;
       }
       DynType type = compact_type(compact_child(qualifier, 0), s, a);
-      if (type == DYN_TYPE_ERROR) {
+      DynSpan written = compact_span(qualifier);
+      if (type == DYN_TYPE_ERROR &&
+          memchr(s->text + written.start_byte, '$', written.end_byte - written.start_byte)) {
+        compact_report(qualifier, s, errors,
+                       "type parameter declared more than once; write `T`, not `$T`, after its first use");
+        ok = false;
+      } else if (type == DYN_TYPE_ERROR) {
         compact_report(qualifier, s, errors, "unknown type in parameter");
         ok = false;
       }

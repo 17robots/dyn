@@ -7,8 +7,9 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 ## Conventions
 
 - **No hidden allocation.** A function that needs memory takes a `*mem.Arena`
-  or a caller slice. Arena pushes cannot fail; caller-slice functions report
-  `Capacity` with the exact size `required`. See [memory](memory.md) and
+  or a caller slice. Ordinary arena pushes panic when exhausted (`mem.try_push`
+  reports it instead); caller-slice functions report `Capacity` with the exact
+  size `required`. See [memory](memory.md) and
   [buffer contracts](buffer-contracts.md).
 - **Borrowing is the default.** Returned slices borrow the input, the caller's
   buffer or the arena, as each function's comment says. Reader-backed scanners
@@ -19,7 +20,9 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
   is `process.Options`, where 0 is a real file descriptor; use
   `process.options()`.
 - **Errors are values.** OS calls return `{value, error, kind, ok}`: `error`
-  keeps the native code and `kind` is a portable `std/errors` category.
+  keeps the native code and `kind` is a portable `std/errors` category. Test
+  `ok` first, then branch on `kind`; compare `error` only for platform-specific
+  handling. `fs`, `net`, `net/dns` and `fs/watch` follow this shape.
   Scanners and writers keep their first error in their state and turn later
   calls into no-ops, so callers check once at the end. Predicates return
   `bool`. Missing lookups and end of input are ordinary results, not errors.

@@ -20,8 +20,7 @@ typedef struct {
   uint32_t *buckets, *next;
   size_t count, capacity;
 } DynNameIndex;
-uint32_t dyn_name_index_find(DynNameIndex *, const void *, size_t, size_t,
-                            DynSpan, const DynSource *, bool, bool *);
+uint32_t dyn_name_index_find(DynNameIndex *, const void *, size_t, size_t, DynSpan, const DynSource *, bool, bool *);
 
 typedef uint32_t DynType;
 enum {
@@ -87,8 +86,7 @@ typedef enum {
   DYN_EXPR_SYSCALL,
   /* A type passed as a call argument; type holds the type. */
   DYN_EXPR_TYPE,
-  /* #offsetof: integer holds the struct type, item_start/item_count the
-     field name's byte span. Sema folds it to an integer. */
+  /* #offsetof: integer holds the struct type, item_start/item_count the field name's byte span. Sema folds it to an integer. */
   DYN_EXPR_OFFSET
 } DynExprKind;
 static inline bool dyn_type_is_param(DynType t) {
@@ -132,8 +130,7 @@ typedef struct {
   double floating;
   bool boolean;
   uint32_t item_start, item_count;
-  /* Set inside #wrap(...): integer +, -, *, unary - and << wrap instead of
-     trapping on overflow. */
+  /* Set inside #wrap(...): integer +, -, *, unary - and << wrap instead of trapping on overflow. */
   bool wrap;
 } DynAstExpr;
 typedef struct {
@@ -225,15 +222,13 @@ typedef struct {
   uint32_t param_start, param_count, body_start, body_count, local_start,
       local_count;
   bool is_main, foreign, variadic, is_public, interface_only;
-  /* A generic is a template: never checked or emitted. An instance is an
-     ordinary function whose body is lowered on first use. */
+  /* A generic is a template: never checked or emitted. An instance is an ordinary function whose body is lowered on first use. */
   bool is_generic, is_instance, body_pending;
   uint32_t generic, instance;
   uint64_t module_owner;
   DynType variadic_type;
   uint32_t variadic_local_id;
 } DynAstFn;
-
 typedef struct {
   DynSpan name;
   DynType pattern;
@@ -251,7 +246,6 @@ typedef struct {
   DynSpan call;
   uint64_t hash;
 } DynAstInstance;
-
 typedef enum {
   DYN_STMT_INVALID,
   DYN_STMT_LOCAL,
@@ -276,8 +270,7 @@ typedef struct {
   uint32_t body_start, body_count, else_start, else_count, loop_depth, loop_id,
       target_loop_id, case_arm_start, case_arm_count;
   /* Range for-in stores the first bound in target and the last in expression. */
-  bool defer_block, for_pointer, for_const, is_const, for_range, for_inclusive,
-      for_reverse;
+  bool defer_block, for_pointer, for_const, is_const, for_range, for_inclusive, for_reverse;
 } DynAstStmt;
 typedef struct {
   DynSpan name;
@@ -368,8 +361,7 @@ typedef struct {
   size_t generic_param_count, generic_param_capacity;
   DynAstInstance *instances;
   size_t instance_count, instance_capacity;
-  /* Lowering scope: names introduced while declaring a generic signature, or
-     bound to concrete types while lowering an instance. */
+  /* Lowering scope: names introduced while declaring a generic signature, or bound to concrete types while lowering an instance. */
   DynSpan scope_names[DYN_MAX_TYPE_PARAMS];
   DynType scope_types[DYN_MAX_TYPE_PARAMS];
   uint32_t scope_count;
@@ -378,16 +370,11 @@ typedef struct {
   uint32_t decl_count;
 } DynAstProgram;
 
-bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *,
-                           const char *owner_key);
+bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *, const char *owner_key);
 void dyn_ast_program_free(DynAstProgram *ast);
-/* Add an instance of a generic with concrete type arguments. The body is
-   lowered later by dyn_ast_lower_instance. Returns the function id. */
-uint32_t dyn_ast_instantiate(DynAstProgram *, const DynSource *, uint32_t generic,
-                             const DynType *args, uint32_t depth, DynSpan call,
-                             uint64_t hash);
-bool dyn_ast_lower_instance(DynAstProgram *, const DynSource *, uint32_t function,
-                            unsigned *errors);
+/* Add an instance of a generic with concrete type arguments. The body is lowered later by dyn_ast_lower_instance. Returns the function id. */
+uint32_t dyn_ast_instantiate(DynAstProgram *, const DynSource *, uint32_t generic, const DynType *args, uint32_t depth, DynSpan call, uint64_t hash);
+bool dyn_ast_lower_instance(DynAstProgram *, const DynSource *, uint32_t function, unsigned *errors);
 DynType dyn_ast_substitute(DynAstProgram *, DynType pattern, const DynType *args);
 /* The struct, enum or alias with this name, or DYN_TYPE_ERROR. */
 DynType dyn_ast_named_type(DynAstProgram *, DynSpan name, const DynSource *);
@@ -401,7 +388,6 @@ bool dyn_type_is_array(DynType type);
 bool dyn_type_is_slice(DynType type);
 bool dyn_type_is_function(DynType type);
 bool dyn_type_is_distinct(DynType type);
-void dyn_type_format(DynAstProgram *, DynType, const DynSource *, char *,
-                     size_t);
+void dyn_type_format(DynAstProgram *, DynType, const DynSource *, char *, size_t);
 
 #endif

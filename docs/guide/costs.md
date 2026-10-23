@@ -11,10 +11,11 @@ work only when semantics remain unchanged.
 | slice index | none | bounds check plus access unless proven safe |
 | pointer dereference | none | nil/alignment checks plus access unless proven safe |
 | checked integer arithmetic | none | operation plus failure branch unless proven safe |
-| `#wrap` arithmetic | none | plain machine operation, no failure branch |
-| `arena_push`, `mem.push` | caller arena | constant time; alignment check; returned bytes zeroed; panics when exhausted |
-| first push to a zero `Arena{}` | address space | one reservation syscall |
-| arena rewind/reset | none | constant time; does not clear old bytes |
+| `#wrap` arithmetic | none | modular operations; division and shift-count checks remain |
+| `arena_push`, `mem.push` | caller arena | constant-time bookkeeping plus zeroing proportional to bytes; owned backing may need OS commitment/page faults; panics when exhausted |
+| `arena_push_uninit` | caller arena | constant-time bookkeeping without zeroing; owned backing may still need OS commitment/page faults |
+| first nonzero push to a zero `Arena{}` | OS backing | reservation plus initialization; platform-dependent commitment/page faults; Wasm obtains backed linear memory |
+| arena rewind/reset | none | constant-time bookkeeping by default; poisoning touches every reclaimed byte when enabled |
 | `...any` call | caller stack | descriptor/value packing proportional to argument count |
 | typed call | none | native call; commonly inlined in release |
 | generic call | none | one compiled instance per distinct type argument set |

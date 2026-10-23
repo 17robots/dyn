@@ -1,5 +1,11 @@
 # Dyn bootstrap compiler
 
+> **Historical.** This document describes the removed LLVM backend and its
+> ThinLTO pipeline. Front-end sections (parsing, semantic checks, typed IR)
+> remain broadly accurate; code generation, linking, and optimization do not.
+> For the current backend, see [`src/backend/README.md`](../../src/backend/README.md)
+> and the [independent toolchain guide](../guide/independent-toolchain.md).
+
 ## Bootstrap architecture
 
 Dyn uses a thin vertical slice from source to native executable:

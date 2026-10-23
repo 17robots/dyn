@@ -33,10 +33,10 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
   }
   value := #syscall(0, descriptor, &temporary[0], #len(temporary))
   _ = #syscall(3, descriptor)
-  if value < 0 || #cast(usize) value == #len(temporary) {
+  if value < 0 || #cast(usize, value) == #len(temporary) {
     return no_arguments()
   }
-  used := #cast(usize) value
+  used := #cast(usize, value)
   count: usize = 0
   i = 0
   for i < used {
@@ -53,7 +53,7 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
   slots_allocation := memory.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
   bytes := bytes_allocation[..used]
   _ = memory.copy(bytes, temporary[..used])
-  arguments := (#cast(*[]const u8) slots_allocation)[..count]
+  arguments := (#cast(*[]const u8, slots_allocation))[..count]
   start: usize = 0
   at: usize = 0
   i = 0
@@ -96,7 +96,7 @@ pub fn pipe() PipeResult {
   if value < 0 {
     return PipeResult{ input: -1, output: -1, error: value, ok: false }
   }
-  return PipeResult{ input: #cast(isize) descriptors[0], output: #cast(isize) descriptors[1], ok: true }
+  return PipeResult{ input: #cast(isize, descriptors[0]), output: #cast(isize, descriptors[1]), ok: true }
 }
 pub fn close_descriptor(descriptor: isize) Result {
   return result(#syscall(3, descriptor))
@@ -153,7 +153,7 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
   }
   length := #len(arguments)
   slots := memory.arena_push_uninit(arena, (length + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  raw := #cast(*CStringPointer) slots
+  raw := #cast(*CStringPointer, slots)
   pointers := raw[..length + 1]
   for i in 0..length {
     pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) }
@@ -208,7 +208,7 @@ pub fn spawn_environment(
   }
   count := #len(arguments)
   allocation := memory.arena_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  raw := #cast(*CStringPointer) allocation
+  raw := #cast(*CStringPointer, allocation)
   pointers := raw[..count + 1]
   for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
@@ -218,7 +218,7 @@ pub fn spawn_environment(
   }
   pointers[count].value = nil
   env_allocation := memory.arena_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  environment_raw := #cast(*CStringPointer) env_allocation
+  environment_raw := #cast(*CStringPointer, env_allocation)
   environment_pointers := environment_raw[..#len(environment) + 1]
   env_index: usize = 0
   for env_index < #len(environment) {
@@ -261,8 +261,8 @@ pub fn spawn_environment(
   // were closed by the parent; redirection must not overwrite the reporting pipe.
   input := #syscall(72, descriptors[0], 1030, 3)
   output := #syscall(72, descriptors[1], 1030, 3)
-  _ = close_descriptor(#cast(isize) descriptors[0])
-  _ = close_descriptor(#cast(isize) descriptors[1])
+  _ = close_descriptor(#cast(isize, descriptors[0]))
+  _ = close_descriptor(#cast(isize, descriptors[1]))
   if input < 0 || output < 0 {
     if input >= 0 {
       _ = close_descriptor(input)
@@ -320,7 +320,7 @@ pub fn spawn_environment(
     _ = wait(child.value, false)
     if received < 0 {
       reported = received
-    } else if received != #cast(isize) #sizeof(isize) {
+    } else if received != #cast(isize, #sizeof(isize)) {
       reported = -5
     }
     return SpawnResult{ error: reported }
@@ -347,13 +347,13 @@ pub fn exited(status: i32) bool {
   return (status & 127) == 0
 }
 pub fn exit_status(status: i32) u8 {
-  return #cast(u8) ((status >> 8) & 255)
+  return #cast(u8, ((status >> 8) & 255))
 }
 pub fn signaled(status: i32) bool {
   return (status & 127) != 0 && (status & 127) != 127
 }
 pub fn termination_signal(status: i32) u8 {
-  return #cast(u8) (status & 127)
+  return #cast(u8, (status & 127))
 }
 
 // Ends the whole process: exit_group, so other threads end with it.
@@ -400,7 +400,7 @@ pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
       }
       return EnvironmentResult{ value: destination[..0], ok: true }
     }
-    for byte in scratch[..#cast(usize) count] {
+    for byte in scratch[..#cast(usize, count)] {
       if byte == 0 {
         if selected {
           return EnvironmentResult{ value: destination[..used], found: true, ok: true }
@@ -445,7 +445,7 @@ pub fn current_directory(destination: []u8) PathResult {
   if count == 0 {
     return PathResult{ value: destination[..0], error: -5 }
   }
-  return PathResult{ value: destination[..#cast(usize) count - 1], ok: true }
+  return PathResult{ value: destination[..#cast(usize, count) - 1], ok: true }
 }
 
 struct SignalDisposition { handler: usize, flags: usize, restorer: usize, mask: u64 }

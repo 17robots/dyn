@@ -1,0 +1,12 @@
+// std/mmio performs each access; repeated stores are all kept.
+use "std/mmio"
+
+fn main() {
+  cell: [2]u32 = [0, 0]
+  address := #cast(usize, &cell[1])
+  mmio.store_u32(address, 7)
+  mmio.store_u32(address, 9)
+  if mmio.load_u32(address) != 9 || cell[1] != 9 {
+    #panic("mmio")
+  }
+}

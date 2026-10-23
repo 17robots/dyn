@@ -19,7 +19,7 @@ use "std/mem" memory
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
 fn source_read(data: rawptr, destination: []u8) io.Result {
-  source := #cast(*Source) data
+  source := #cast(*Source, data)
   amount := #len(source.bytes) - source.at
   if amount > #len(destination) { amount = #len(destination) }
   if amount > source.chunk { amount = source.chunk }
@@ -31,7 +31,7 @@ fn source_read(data: rawptr, destination: []u8) io.Result {
 }
 fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool, chunk: usize, source_chunk: usize, history_size: usize) {
   source := Source{ bytes: encoded, chunk: source_chunk }
-  reader := io.Reader{ data: #cast(rawptr) &source, read: &source_read }
+  reader := io.Reader{ data: #cast(rawptr, &source), read: &source_read }
   compressed: [1024]u8 = []
   history: [65536]u8 = []
   output: [65536]u8 = []

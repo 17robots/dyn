@@ -122,7 +122,7 @@ fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
           index += 1
         }
         for index < #len(entity) {
-          digit := #cast(u32) entity[index]
+          digit := #cast(u32, entity[index])
           if digit >= 48 && digit <= 57 {
             digit -= 48
           }

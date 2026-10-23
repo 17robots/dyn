@@ -17,9 +17,9 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   }
   child.active = false
   if os.exited(value.status) {
-    return ExitResult{ code: #cast(u32) os.exit_status(value.status), finished: true, ok: true }
+    return ExitResult{ code: #cast(u32, os.exit_status(value.status)), finished: true, ok: true }
   }
-  return ExitResult{ signal: #cast(u32) os.termination_signal(value.status), finished: true, ok: true }
+  return ExitResult{ signal: #cast(u32, os.termination_signal(value.status)), finished: true, ok: true }
 }
 fn terminate_native(child: *Child) Status {
   result := os.send_signal(child.handle, 9)
@@ -38,11 +38,11 @@ fn pipe_native() Pipe {
   flags := #syscall(72, descriptors[0], 3, 0)
   changed := #syscall(72, descriptors[0], 4, flags | 2048)
   if changed < 0 {
-    _ = close_native(#cast(isize) descriptors[0])
-    _ = close_native(#cast(isize) descriptors[1])
+    _ = close_native(#cast(isize, descriptors[0]))
+    _ = close_native(#cast(isize, descriptors[1]))
     return Pipe{ error: changed, kind: error_kinds.linux(changed) }
   }
-  return Pipe{ input: #cast(isize) descriptors[0], output: #cast(isize) descriptors[1], ok: true }
+  return Pipe{ input: #cast(isize, descriptors[0]), output: #cast(isize, descriptors[1]), ok: true }
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
   file := fs.borrow_handle(handle)
@@ -54,7 +54,7 @@ fn read_native(handle: isize, destination: []u8) ReadResult {
 }
 fn milliseconds_native() u64 {
   now := time.monotonic_now()
-  return #cast(u64) now.seconds * 1000 + #cast(u64) (now.nanoseconds / 1000000)
+  return #cast(u64, now.seconds) * 1000 + #cast(u64, (now.nanoseconds / 1000000))
 }
 fn sleep_native() {
   _ = time.sleep(time.Millisecond)
@@ -73,7 +73,7 @@ fn duplicate_native(value: isize) HandleResult {
 }
 
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
-  raw := fs.read_all(arena, "/proc/self/cmdline", ~#cast(usize) 0)
+  raw := fs.read_all(arena, "/proc/self/cmdline", ~#cast(usize, 0))
   if !raw.ok {
     return ArgumentsResult{ error: raw.error, kind: raw.kind }
   }

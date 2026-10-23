@@ -1,0 +1,20 @@
+#target(kernel: none)
+// Bare metal: one hart, output through the board console in the start runtime.
+extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
+fn thread_id() u64 {
+  return 1
+}
+fn trace_write(data: *const u8, size: u64) {
+  if size != 0 {
+    console_write(data, size)
+  }
+}
+pub fn dyn_trace_push(name: *const u8, length: u64) {
+  trace_push(name, length)
+}
+pub fn dyn_trace_pop() {
+  trace_pop()
+}
+pub fn dyn_trace_dump() {
+  trace_dump()
+}

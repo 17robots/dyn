@@ -17,13 +17,13 @@ fn main() {
   size := mem.size_for(count, #sizeof(Item))
   expect(size.ok)
   allocation := mem.arena_push_array(&created, count, #sizeof(Item), #alignof(Item))
-  items := (#cast(*Item) allocation)[..count]
+  items := (#cast(*Item, allocation))[..count]
   for *item in items {
     expect(item.tag == 0 && item.value == 0)
     item.value = 42
   }
   expect(items[6].value == 42)
-  maximum := #cast(usize) -1
+  maximum := #cast(usize, -1)
   edge := mem.size_for(maximum / 8, 8)
   expect(edge.ok && edge.bytes == maximum - maximum % 8)
   before := mem.arena_used(&created)
@@ -40,9 +40,9 @@ fn main() {
 
   chain := mem.growing_create_bounded(128, mem.KiB)
   defer { mem.growing_release(&chain) }
-  first := mem.growing_push_or_panic(&chain, 128, 8)
+  first := mem.growing_push(&chain, 128, 8)
   first.* = 42
-  second := mem.growing_push_or_panic(&chain, 128, 8)
+  second := mem.growing_push(&chain, 128, 8)
   second.* = 17
   snapshot := mem.growing_snapshot(&chain)
   expect(snapshot.blocks == 2 && snapshot.used >= 256)
@@ -51,32 +51,32 @@ fn main() {
   mem.growing_trim(&chain, 0)
   expect(mem.growing_snapshot(&chain).backing_bytes == snapshot.backing_bytes)
   expect(first.* == 42 && second.* == 17)
-  too_large := mem.growing_push(&chain, mem.KiB, 1)
+  too_large := mem.growing_try_push(&chain, mem.KiB, 1)
   expect(!too_large.ok && too_large.error == mem.ErrorKind.Capacity)
   expect(mem.growing_snapshot(&chain).backing_bytes == snapshot.backing_bytes)
   expect(first.* == 42 && second.* == 17)
   mem.growing_reset(&chain)
   expect(mem.growing_snapshot(&chain).used == 0)
   // Keep one live block and trim an empty tail; append must still work afterwards.
-  live := mem.growing_push_or_panic(&chain, 128, 8)
+  live := mem.growing_push(&chain, 128, 8)
   live.* = 91
   mem.growing_trim(&chain, 0)
   expect(mem.growing_snapshot(&chain).blocks == 1 && live.* == 91)
-  _ = mem.growing_push_or_panic(&chain, 128, 8)
+  _ = mem.growing_push(&chain, 128, 8)
   expect(mem.growing_snapshot(&chain).blocks == 2 && live.* == 91)
   for cycle in 0..100 {
     mem.growing_reset(&chain)
     mem.growing_trim(&chain, 0)
     expect(mem.growing_snapshot(&chain).backing_bytes == 0)
     expect(chain.first == nil && chain.current == nil)
-    _ = mem.growing_push_or_panic(&chain, 64, 8)
+    _ = mem.growing_push(&chain, 64, 8)
   }
   tight := mem.growing_create_bounded(128, 1)
-  expect(mem.growing_push(&tight, 0, 1).ok)
-  expect(!mem.growing_push(&tight, 1, 1).ok)
+  expect(mem.growing_try_push(&tight, 0, 1).ok)
+  expect(!mem.growing_try_push(&tight, 1, 1).ok)
   expect(mem.growing_snapshot(&tight).blocks == 0)
   unbounded := mem.GrowingArena{}
-  _ = mem.growing_push_or_panic(&unbounded, 4096, 8)
+  _ = mem.growing_push(&unbounded, 4096, 8)
   expect(mem.growing_snapshot(&unbounded).blocks == 1)
   mem.growing_release(&unbounded)
 }

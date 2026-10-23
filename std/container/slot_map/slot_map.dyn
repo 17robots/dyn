@@ -19,11 +19,11 @@ pub struct SlotMap {
 }
 
 fn occupied(state: *const SlotMap, index: usize) bool {
-  return (state.occupied[index / 64] & (#cast(u64) 1 << (index % 64))) != 0
+  return (state.occupied[index / 64] & (#cast(u64, 1) << (index % 64))) != 0
 }
 
 fn set_occupied(state: *SlotMap, index: usize, value: bool) {
-  mask := #cast(u64) 1 << (index % 64)
+  mask := #cast(u64, 1) << (index % 64)
   if value {
     state.occupied[index / 64] = state.occupied[index / 64] | mask
   }
@@ -61,6 +61,19 @@ pub fn init(data: []u8, generations: []u32, occupied_words: []u64, slot_size: us
     occupied: occupied_words,
     slot_size: slot_size,
   }
+}
+
+// Allocates aligned backing for count values of T from arena and initializes the map.
+// Use insert_value and get_value with the same T.
+pub fn init_for($T: type, arena: *mem.Arena, count: usize) SlotMap {
+  if count == 0 || #sizeof(T) == 0 {
+    #panic("slot map requires non-zero slot size and count")
+  }
+  values := mem.push_array(T, arena, count)
+  data := (#cast(*u8, &values[0]))[..count * #sizeof(T)]
+  generations := mem.push_array(u32, arena, count)
+  words := mem.push_array(u64, arena, (count + 63) / 64)
+  return init(data, generations, words, #sizeof(T))
 }
 
 pub fn capacity(state: *const SlotMap) usize {
@@ -104,6 +117,25 @@ pub fn get(state: *SlotMap, handle: Handle) Value {
   }
   start := handle.index * state.slot_size
   return Value{ data: state.data[start..start + state.slot_size], ok: true }
+}
+
+// Copies value into a free slot. The map's slot size must equal #sizeof(T).
+// Wrong size or full returns Handle{}.
+pub fn insert_value(state: *SlotMap, value: *const $T) Handle {
+  return insert(state, (#cast(*const u8, value))[..#sizeof(T)])
+}
+
+// Returns a pointer to the live value, or nil for stale, empty or foreign handles.
+// The pointer borrows the slot until remove or init. Panics if T does not match the slot size.
+pub fn get_value($T: type, state: *SlotMap, handle: Handle) *T {
+  if state.slot_size != #sizeof(T) {
+    #panic("slot map value type does not match slot size")
+  }
+  found := get(state, handle)
+  if !found.ok {
+    return nil
+  }
+  return #cast(*T, &found.data[0])
 }
 
 // Invalid handle returns false without changes. Successful removal zeros data and expires views.

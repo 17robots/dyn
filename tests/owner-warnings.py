@@ -40,6 +40,20 @@ fn main() {
     assert aliases.returncode == 1 and 'imported more than once' in aliases.stderr, aliases.stderr
     assert 'imported more than once' not in subprocess.run(command, capture_output=True, text=True, timeout=30).stderr
     (project / 'other.dyn').unlink()
+    source.write_text('''use "std/fs"
+use "std/net"
+fn main() {
+  file := fs.File{}
+  copy := file
+  _ = copy
+  listener := net.Listener{}
+  moved := net.listener_take(&listener)
+  _ = moved
+}
+''')
+    handles = subprocess.run([DYN, 'vet', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
+    assert handles.returncode == 1 and handles.stderr.count('copying a handle') == 1, handles.stderr
+    assert 'main.dyn:5:' in handles.stderr, handles.stderr
     source.write_text('''use "std/mem"
 fn main() {
   storage: [64]u8 = []

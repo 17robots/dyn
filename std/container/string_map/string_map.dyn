@@ -15,7 +15,7 @@ fn locate(entries: []Entry, key: []const u8, hash: u64) usize {
   if #len(entries) == 0 {
     return 0
   }
-  index := #cast(usize) (hash % #cast(u64) #len(entries))
+  index := #cast(usize, (hash % #cast(u64, #len(entries))))
   for scanned in 0..#len(entries) {
     entry := entries[index]
     if entry.state == 0 {
@@ -53,7 +53,7 @@ pub fn put(state: *Map, arena: *memory.Arena, key: []const u8, value: usize) Err
   entries := state.entries
   if state.length >= #len(entries) - #len(entries) / 4 {
     capacity: usize = 8
-    maximum := #cast(usize) -1
+    maximum := #cast(usize, -1)
     if #len(entries) > 0 {
       if #len(entries) > maximum / 2 {
         return ErrorKind.Overflow
@@ -64,7 +64,7 @@ pub fn put(state: *Map, arena: *memory.Arena, key: []const u8, value: usize) Err
       return ErrorKind.Overflow
     }
     allocated := memory.arena_push(arena, capacity * #sizeof(Entry), #alignof(Entry))
-    entries = (#cast(*Entry) allocated)[..capacity]
+    entries = (#cast(*Entry, allocated))[..capacity]
     for old in state.entries {
       if old.state == 1 {
         entries[locate(entries, old.key, old.hash)] = old
@@ -106,7 +106,7 @@ pub fn remove(state: *Map, key: []const u8) bool {
     if entry.state == 0 {
       break
     }
-    home := #cast(usize) (entry.hash % #cast(u64) capacity)
+    home := #cast(usize, (entry.hash % #cast(u64, capacity)))
     scan_distance: usize = 0
     if scan >= home {
       scan_distance = scan - home
@@ -150,18 +150,28 @@ pub fn next(state: *const Map, cursor: *usize) Item {
 // allocated until arena reset/rewind. Mutation invalidates iteration.
 pub fn reserve(state: *Map, arena: *memory.Arena, count: usize) ErrorKind {
   capacity := #len(state.entries)
-  if count <= capacity - capacity / 4 { return ErrorKind.None }
-  if capacity == 0 { capacity = 8 }
-  maximum := #cast(usize) -1
+  if count <= capacity - capacity / 4 {
+    return ErrorKind.None
+  }
+  if capacity == 0 {
+    capacity = 8
+  }
+  maximum := #cast(usize, -1)
   for count > capacity - capacity / 4 {
-    if capacity > maximum / 2 { return ErrorKind.Overflow }
+    if capacity > maximum / 2 {
+      return ErrorKind.Overflow
+    }
     capacity *= 2
   }
-  if capacity > maximum / #sizeof(Entry) { return ErrorKind.Overflow }
+  if capacity > maximum / #sizeof(Entry) {
+    return ErrorKind.Overflow
+  }
   allocated := memory.arena_push(arena, capacity * #sizeof(Entry), #alignof(Entry))
-  entries := (#cast(*Entry) allocated)[..capacity]
+  entries := (#cast(*Entry, allocated))[..capacity]
   for old in state.entries {
-    if old.state == 1 { entries[locate(entries, old.key, old.hash)] = old }
+    if old.state == 1 {
+      entries[locate(entries, old.key, old.hash)] = old
+    }
   }
   state.entries = entries
   return ErrorKind.None
@@ -170,6 +180,8 @@ pub fn reserve(state: *Map, arena: *memory.Arena, count: usize) ErrorKind {
 // Reuse the table without allocating. Key bytes stay in the arena; repeated
 // clear/refill cycles still consume key storage. Never rewind a live map's arena.
 pub fn clear(state: *Map) {
-  for index in 0..#len(state.entries) { state.entries[index] = Entry{} }
+  for index in 0..#len(state.entries) {
+    state.entries[index] = Entry{}
+  }
   state.length = 0
 }

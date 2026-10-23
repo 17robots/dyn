@@ -359,10 +359,22 @@ int dyn_link_executable_objects(const DynContext *context,
           ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_start.o" : "dynrt_windows_start.o")
       : !strcmp(dyn_context_target(context)->kernel, "darwin")
           ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_start.o" : "dynrt_macos_start.o")
+      : !strcmp(dyn_context_target(context)->kernel, "none")
+          ? (!strcmp(dyn_context_target(context)->arch, "riscv32")
+                 ? (release ? "dynrt_riscv32_none_release.o" : "dynrt_riscv32_none_start.o")
+             : !strcmp(dyn_context_target(context)->arch, "thumbv7em")
+                 ? (release ? "dynrt_thumbv7em_none_release.o" : "dynrt_thumbv7em_none_start.o")
+                 : (release ? "dynrt_riscv64_none_release.o" : "dynrt_riscv64_none_start.o"))
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? (release ? "dynrt_aarch64_release.o" : "dynrt_aarch64_start.o")
           : !strcmp(dyn_context_target(context)->arch, "riscv64") ? (release ? "dynrt_riscv64_release.o" : "dynrt_riscv64_start.o")
           : (release ? "dynrt_release.o" : "dynrt_start.o");
+  bool nucleo = !strcmp(dyn_context_target(context)->name, "thumbv7em-none-nucleo-h753zi");
+  bool rv32_soft = !strcmp(dyn_context_target(context)->name, "riscv32-none-soft");
+  bool thumb_soft = !strcmp(dyn_context_target(context)->name, "thumbv7em-none-soft");
+  if (thumb_soft) runtime_name = release ? "dynrt_thumbv7em_none_soft_release.o" : "dynrt_thumbv7em_none_soft_start.o";
+  if (rv32_soft) runtime_name = release ? "dynrt_riscv32_none_soft_release.o" : "dynrt_riscv32_none_soft_start.o";
+  if (nucleo) runtime_name = release ? "dynrt_nucleo_h753zi_release.o" : "dynrt_nucleo_h753zi_start.o";
   if (snprintf(runtime, sizeof(runtime), "%s/%s", executable, runtime_name) >=
       (int)sizeof(runtime))
     return 2;
@@ -375,9 +387,15 @@ int dyn_link_executable_objects(const DynContext *context,
           ? (!strcmp(dyn_context_target(context)->arch, "aarch64") ? "dynrt_windows_arm64_support.o" : "dynrt_windows_support.o")
       : !strcmp(dyn_context_target(context)->kernel, "darwin")
           ? (!strcmp(dyn_context_target(context)->arch, "x86_64") ? "dynrt_macos_x64_support.o" : "dynrt_macos_support.o")
+      : !strcmp(dyn_context_target(context)->kernel, "none")
+          ? (!strcmp(dyn_context_target(context)->arch, "riscv32") ? "dynrt_riscv32_none_support.o"
+             : !strcmp(dyn_context_target(context)->arch, "thumbv7em") ? "dynrt_thumbv7em_none_support.o" : "dynrt_riscv64_none_support.o")
       : !strcmp(dyn_context_target(context)->arch, "aarch64")
           ? "dynrt_aarch64_support.o"
           : !strcmp(dyn_context_target(context)->arch, "riscv64") ? "dynrt_riscv64_support.o" : "dynrt_support.o";
+  if (nucleo) support_name = "dynrt_nucleo_h753zi_support.o";
+  if (rv32_soft) support_name = "dynrt_riscv32_none_soft_support.o";
+  if (thumb_soft) support_name = "dynrt_thumbv7em_none_soft_support.o";
   if (snprintf(support, sizeof(support), "%s/%s", executable, support_name) >=
       (int)sizeof(support))
     return 2;
@@ -391,6 +409,10 @@ int dyn_link_executable_objects(const DynContext *context,
   /* DYN_LINKER=external selects the system linker for differential checks. */
   const char *external = getenv("DYN_LINKER");
   bool forced = external && !strcmp(external, "external");
+  if (nucleo && forced) {
+    fprintf(stderr, "error: NUCLEO-H753ZI requires the built-in linker for its flash/RAM layout\n");
+    return 2;
+  }
   /* Windows executables link in-process. */
   if (windows && !forced) {
     bool supported = true;
@@ -410,7 +432,8 @@ int dyn_link_executable_objects(const DynContext *context,
                         temporary, output_path, false, verbose);
   }
   /* Linux executables link in-process. */
-  bool builtin = !forced && !strcmp(dyn_context_target(context)->kernel, "linux");
+  bool bare = !strcmp(dyn_context_target(context)->kernel, "none");
+  bool builtin = !forced && (bare || !strcmp(dyn_context_target(context)->kernel, "linux"));
   for (size_t i = 0; builtin && i < link_input_count; ++i)
     builtin = dyn_link_elf_supported(link_inputs[i]);
   if (builtin) {
@@ -430,9 +453,14 @@ int dyn_link_executable_objects(const DynContext *context,
         fprintf(stderr, " %s", inputs[i]);
       fputc('\n', stderr);
     }
+    /* Bare-metal images load where the board's RAM starts; Cortex-M reads its
+       vector table from address zero. */
+    bool cortex_m = !strcmp(dyn_context_target(context)->arch, "thumbv7em");
     DynLinkOptions options = {.entry = "_start",
                               .interpreter = dyn_context_target(context)->dynamic_linker,
-                             };
+                              .base = nucleo ? 0x08000000u : bare && !cortex_m ? 0x80000000u : 0, .bare = bare,
+                              .data_base = nucleo ? 0x24000000u : 0,
+                              .image_end = nucleo ? 0x08200000u : 0, .data_end = nucleo ? 0x24080000u : 0};
     int status = dyn_link_elf(inputs, input_count, temporary, &options);
     free(inputs);
     if (status)

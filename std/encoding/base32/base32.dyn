@@ -26,7 +26,7 @@ fn decode_symbol(byte: u8) u8 {
 }
 
 pub fn encoded_size(length: usize) usize {
-  maximum := #cast(usize) -1
+  maximum := #cast(usize, -1)
   if length > maximum - 4 || (length + 4) / 5 > maximum / 8 {
     return 0
   }
@@ -54,13 +54,13 @@ pub fn encode(destination: []u8, source: []const u8) Result {
     }
     block: u64 = 0
     for block_at in 0..take {
-      block = (block << 8) | #cast(u64) source[input_at + block_at]
+      block = (block << 8) | #cast(u64, source[input_at + block_at])
     }
     block = block << ((5 - take) * 8)
     symbols := (take * 8 + 4) / 5
     for digit in 0..8 {
       if digit < symbols {
-        destination[output_at] = symbol(#cast(u8) ((block >> (35 - digit * 5)) & 31))
+        destination[output_at] = symbol(#cast(u8, ((block >> (35 - digit * 5)) & 31)))
       }
       else {
         destination[output_at] = '='
@@ -117,7 +117,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
         if decoded == 255 || padding_started {
           return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
         }
-        block = (block << 5) | #cast(u64) decoded
+        block = (block << 5) | #cast(u64, decoded)
         symbols += 1
       }
       digit += 1
@@ -130,12 +130,12 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
       return Result{ error: ErrorKind.InvalidInput }
     }
     unused := symbols * 5 - bytes * 8
-    if unused > 0 && ((block >> ((8 - symbols) * 5)) & ((#cast(u64) 1 << unused) - 1)) != 0 {
+    if unused > 0 && ((block >> ((8 - symbols) * 5)) & ((#cast(u64, 1) << unused) - 1)) != 0 {
       return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
     }
     for byte_at in 0..bytes {
       if write {
-        destination[output_at] = #cast(u8) ((block >> (32 - byte_at * 8)) & 255)
+        destination[output_at] = #cast(u8, ((block >> (32 - byte_at * 8)) & 255))
       }
       output_at += 1
     }

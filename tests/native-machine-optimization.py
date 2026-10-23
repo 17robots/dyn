@@ -45,16 +45,16 @@ for size in (1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 40, 63, 64, 65, 129):
 struct CopyBlock{size} {{ bytes: [{size}]u8 }}
 fn {name}(shift: i64) {{
   storage: [520]u8 = []
-  for i in 0..520 {{ storage[i] = #cast(u8) (i % 251) }}
+  for i in 0..520 {{ storage[i] = #cast(u8, (i % 251)) }}
   origin: usize = 193
-  destination := #cast(usize) (#cast(i64) origin + shift)
-  from := #cast(*CopyBlock{size}) &storage[origin]
-  to := #cast(*CopyBlock{size}) &storage[destination]
+  destination := #cast(usize, (#cast(i64, origin) + shift))
+  from := #cast(*CopyBlock{size}, &storage[origin])
+  to := #cast(*CopyBlock{size}, &storage[destination])
   to.* = from.*
   for i in 0..520 {{
     expected := i
     if i >= destination && i < destination + {size} {{ expected = origin + i - destination }}
-    if storage[i] != #cast(u8) (expected % 251) {{ #panic("overlapping small aggregate copy") }}
+    if storage[i] != #cast(u8, (expected % 251)) {{ #panic("overlapping small aggregate copy") }}
   }}
 }}
 '''
@@ -69,7 +69,7 @@ for t in ('u32', 'i32', 'u64', 'i64'):
             source += f'''
 fn {function}() {{
   a: [{n}]{t} = [] b: [{n}]{t} = [] c: [{n}]{t} = []
-  for i in 0..{n} {{ a[i] = #cast({t}) i b[i] = #cast({t}) -1 }}
+  for i in 0..{n} {{ a[i] = #cast({t}, i) b[i] = #cast({t}, -1) }}
   for i in 0..{n} {{ c[i] = {operation} }}
   for i in 0..{n} {{ if c[i] != {operation} {{ #panic("SIMD scalar oracle") }} }}
   // Same-array destinations are safe because every lane uses the same index.
@@ -79,7 +79,7 @@ fn {function}() {{
 '''
 source += '''fn main() {
   for seed in 0..20 {
-    signed_seed := #cast(i64) seed
+    signed_seed := #cast(i64, seed)
     result := pressure(signed_seed)
     if result != 30 * (36 * signed_seed + 204) + signed_seed + 10 { #panic("register pressure/calls/escape") }
   }

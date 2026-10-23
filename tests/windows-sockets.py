@@ -12,7 +12,7 @@ fn sockets() {
   for i in 0..32 {
     opened := win.socket_open(2, 1, 6)
     if !opened.ok { #panic("socket_open without explicit WSAStartup") }
-    if !win.socket_close(#cast(usize) opened.value) { #panic("socket_close") }
+    if !win.socket_close(#cast(usize, opened.value)) { #panic("socket_close") }
   }
   invalid := win.socket_open(-1, 1, 0)
   if invalid.ok || invalid.error == 0 || invalid.error == 10093 || invalid.value != -1 {

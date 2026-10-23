@@ -335,7 +335,7 @@ class Generator:
    if name in declared or name in self.needed or name in self.functions:continue
    if kind=='pointer':
     if value=='0':lines.append(f'pub const {ident(name)}: rawptr = nil')
-    else:lines.append(f'pub fn {ident(name)}() rawptr {{ address: usize = {value} return #cast(rawptr) address }}')
+    else:lines.append(f'pub fn {ident(name)}() rawptr {{ address: usize = {value} return #cast(rawptr, address) }}')
    else:lines.append(f'pub const {ident(name)}: '+('[]const u8' if kind=='string' else kind)+' = '+value)
   checks=[]
   for name in sorted(self.needed):
@@ -348,7 +348,7 @@ class Generator:
     for f in children(self.records[name],'FieldDecl'):
      field=f['name'];offset=self.layout['@'+name+'.'+field][0]
      glue.append(f'_Static_assert(offsetof({self.cnames[name]},{field}) == {offset}, "regenerate {name}.{field} binding");')
-     checks.append(f'  if #cast(usize) &v_{target}.{ident(field)} - #cast(usize) &v_{target} != {offset} {{ return false }}')
+     checks.append(f'  if #cast(usize, &v_{target}.{ident(field)}) - #cast(usize, &v_{target}) != {offset} {{ return false }}')
    else:
     for field in children(self.records[name],'FieldDecl'):
      if not field.get('name'):continue

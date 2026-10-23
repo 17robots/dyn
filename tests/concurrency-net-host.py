@@ -14,7 +14,7 @@ use "std/sync"
 use "std/bytes"
 struct Context { listener: net.Listener, ready: sync.AtomicU32, count: sync.AtomicU64 }
 fn worker(context: rawptr) isize {
-  shared := #cast(*Context) context
+  shared := #cast(*Context, context)
   for sync.load_u32(&shared.ready) == 0 { _ = thread.yield_now() }
   accepted := net.listener_accept(&shared.listener)
   if !accepted.ok { #panic("accept") }
@@ -25,7 +25,7 @@ fn worker(context: rawptr) isize {
   for at < 4 {
     part := net.connection_read(&connection, buffer[at..])
     if !part.ok || part.value <= 0 { #panic("server read") }
-    at += #cast(usize) part.value
+    at += #cast(usize, part.value)
   }
   if !bytes.equal(buffer[..], "ping") { #panic("request") }
   if !net.connection_write(&connection, "pong").ok { #panic("server write") }
@@ -44,11 +44,11 @@ fn main() {
   defer { _ = net.listener_close(&shared.listener) }
   local := net.Address{}
   if !net.local_address(shared.listener.descriptor, &local).ok || local.length != 16 { #panic("local address") }
-  port := (#cast(u16) local.bytes[2] << 8) | #cast(u16) local.bytes[3]
+  port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   if port == 0 { #panic("ephemeral port") }
   active := thread.Thread{}
-  if thread.spawn(&active, stack[..], &worker, #cast(rawptr) &shared) < 0 { #panic("spawn") }
-  if thread.id(&active) == 0 || thread.spawn(&active, stack[..], &worker, #cast(rawptr) &shared) >= 0 { #panic("active ownership") }
+  if thread.spawn(&active, stack[..], &worker, #cast(rawptr, &shared)) < 0 { #panic("spawn") }
+  if thread.id(&active) == 0 || thread.spawn(&active, stack[..], &worker, #cast(rawptr, &shared)) >= 0 { #panic("active ownership") }
   sync.store_u32(&shared.ready, 1)
   address = net.ipv4(127, 0, 0, 1, port)
   connected := net.tcp_connect_ipv4(&address)
@@ -59,14 +59,14 @@ fn main() {
   peer := net.Address{}
   if !net.peer_address(connection.descriptor, &peer).ok || peer.bytes[2] != local.bytes[2] || peer.bytes[3] != local.bytes[3] { #panic("peer address") }
   if !net.connection_write(&connection, "ping").ok { #panic("request write") }
-  item := net.PollDescriptor{ descriptor: #cast(net.Descriptor) connection.descriptor, events: net.PollReadable | net.PollError | net.PollHangup }
+  item := net.PollDescriptor{ descriptor: #cast(net.Descriptor, connection.descriptor), events: net.PollReadable | net.PollError | net.PollHangup }
   if net.poll((&item)[..1], 2000).value != 1 || !net.poll_has(&item, net.PollReadable) || item.events != 25 { #panic("poll") }
   buffer: [4]u8 = []
   at: usize = 0
   for at < 4 {
     part := net.connection_read(&connection, buffer[at..])
     if !part.ok || part.value <= 0 { #panic("client read") }
-    at += #cast(usize) part.value
+    at += #cast(usize, part.value)
   }
   if !bytes.equal(buffer[..], "pong") { #panic("response") }
   if !net.connection_close(&connection).ok || net.connection_close(&connection).ok { #panic("connection close") }

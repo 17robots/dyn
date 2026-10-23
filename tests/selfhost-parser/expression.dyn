@@ -1,0 +1,699 @@
+// Port of the expression and type parser in src/parser.c.
+const ExpName: u16 = 0
+const ExpNumber: u16 = 1
+const ExpBool: u16 = 2
+const ExpNil: u16 = 3
+const ExpString: u16 = 4
+const ExpChar: u16 = 5
+const ExpGroup: u16 = 6
+const ExpPrefix: u16 = 7
+const ExpBinary: u16 = 8
+const ExpDeref: u16 = 9
+const ExpField: u16 = 10
+const ExpCall: u16 = 11
+const ExpIndex: u16 = 12
+const ExpSlice: u16 = 13
+const ExpWrap: u16 = 14
+const ExpLen: u16 = 15
+const ExpType: u16 = 16
+const ExpTypeArgument: u16 = 17
+const ExpPrimitive: u16 = 18
+const ExpTypeParameter: u16 = 19
+const ExpFieldType: u16 = 20
+const ExpPointerType: u16 = 21
+const ExpArrayType: u16 = 22
+const ExpFnType: u16 = 23
+const ExpCast: u16 = 24
+const ExpSize: u16 = 25
+const ExpAlign: u16 = 26
+const ExpOffset: u16 = 27
+const ExpTypeof: u16 = 28
+const ExpLoad: u16 = 29
+const ExpSyscall: u16 = 30
+const ExpStruct: u16 = 31
+const ExpMember: u16 = 32
+const ExpArray: u16 = 33
+
+const FlagConst: u16 = 1
+const FlagPublic: u16 = 2
+const FlagPacked: u16 = 4
+const FlagDistinct: u16 = 8
+const FlagPointerBinding: u16 = 16
+const FlagInclusive: u16 = 32
+const FlagIteration: u16 = 64
+const FlagPrimary: u16 = 128
+const FlagBitcast: u16 = 256
+const FlagWildcard: u16 = 512
+
+fn add_node(p: *Parser, kind: u16, start: u32, end: u32, first: u32) u32 {
+  if p.tree.failed {
+    return None
+  }
+  if p.tree.count >= 0xFFFFFFFE {
+    fail(p, start, "tree too large")
+    return None
+  }
+  value := Node{ start: start, end: end, first: first, next: None, parent: None, kind: kind }
+  return #cast(u32, mem.append(&p.tree.nodes, &p.tree.count, p.arena, value))
+}
+
+fn mark(p: *Parser, id: u32, flags: u16) u32 {
+  if id != None {
+    p.tree.nodes[id].flags |= flags
+  }
+  return id
+}
+
+fn node_end(p: *const Parser, id: u32) u32 {
+  return p.tree.nodes[id].end
+}
+
+fn precedence(p: *const Parser) i32 {
+  n := p.token.end - p.token.start
+  if n == 0 || n > 2 {
+    return 0
+  }
+  c := byte_at(p, p.token.start)
+  if n == 2 {
+    next := byte_at(p, p.token.start + 1)
+    if next == c {
+      if c == '|' {
+        return 2
+      }
+      if c == '&' {
+        return 3
+      }
+      if c == '<' || c == '>' {
+        return 9
+      }
+    }
+    if next == '=' {
+      if c == '=' || c == '!' {
+        return 4
+      }
+      if c == '<' || c == '>' {
+        return 5
+      }
+    }
+    return 0
+  }
+  case c {
+    '<', '>' => {
+      return 5
+    },
+    '|' => {
+      return 6
+    },
+    '^' => {
+      return 7
+    },
+    '&' => {
+      return 8
+    },
+    '+', '-' => {
+      return 10
+    },
+    '*', '/', '%' => {
+      return 11
+    },
+    _ => {
+      return 0
+    },
+  }
+}
+
+fn primitive(p: *const Parser) bool {
+  names: [15][]const u8 = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "isize", "usize", "bool", "rawptr", "any"]
+  for candidate in names {
+    if token_is(p, candidate) {
+      return true
+    }
+  }
+  return false
+}
+
+fn optional_type_start(p: *Parser) bool {
+  if src_distinct(p) || src_packed(p) {
+    return false
+  }
+  declarations: [8][]const u8 = ["fn", "pub", "use", "const", "type", "struct", "enum", "extern"]
+  for candidate in declarations {
+    if token_is(p, candidate) {
+      return false
+    }
+  }
+  return p.token.kind == TokenKind.Name || token_is(p, "*") || token_is(p, "[") || at(p, p.token.start, "$")
+}
+
+fn chain(p: *Parser, first: *u32, last: *u32, child: u32) {
+  if child == None || p.tree.failed {
+    return
+  }
+  if first.* == None {
+    first.* = child
+  } else {
+    p.tree.nodes[last.*].next = child
+  }
+  last.* = child
+}
+
+fn parse_name(p: *Parser) u32 {
+  token := p.token
+  if token.kind != TokenKind.Name {
+    fail(p, token.start, "expected identifier")
+    return None
+  }
+  lex(p)
+  return add_node(p, ExpName, token.start, token.end, None)
+}
+
+fn type_body(p: *Parser) u32 {
+  if p.tree.failed {
+    return None
+  }
+  token := p.token
+  first := None
+  last := None
+  end := token.end
+  kind: u16
+  flags: u16
+  if take(p, "*") {
+    kind = ExpPointerType
+    fn_start := p.token.start
+    if take(p, "fn") {
+      expect(p, "(")
+      for !token_is(p, ")") && !p.tree.failed {
+        chain(p, &first, &last, parse_type(p))
+        if !take(p, ",") {
+          break
+        }
+      }
+      end = p.token.end
+      expect(p, ")")
+      if optional_type_start(p) {
+        chain(p, &first, &last, parse_type(p))
+        if last != None {
+          end = node_end(p, last)
+        }
+      }
+      first = add_node(p, ExpFnType, fn_start, end, first)
+    } else {
+      if take(p, "const") {
+        flags |= FlagConst
+      }
+      first = parse_type(p)
+      if first != None {
+        end = node_end(p, first)
+      }
+    }
+  } else if take(p, "[") {
+    kind = ExpArrayType
+    if !token_is(p, "]") {
+      chain(p, &first, &last, expression(p, 0))
+    }
+    expect(p, "]")
+    if take(p, "const") {
+      flags |= FlagConst
+    }
+    chain(p, &first, &last, parse_type(p))
+    if last != None {
+      end = node_end(p, last)
+    }
+  } else if primitive(p) {
+    kind = ExpPrimitive
+    lex(p)
+  } else if at(p, token.start, "$") {
+    kind = ExpTypeParameter
+    lex(p)
+  } else if token.kind == TokenKind.Name {
+    kind = ExpFieldType
+    chain(p, &first, &last, parse_name(p))
+    for take(p, ".") && !p.tree.failed {
+      chain(p, &first, &last, parse_name(p))
+    }
+    if last != None {
+      end = node_end(p, last)
+    }
+  } else {
+    fail(p, token.start, "expected type")
+    return None
+  }
+  return mark(p, add_node(p, kind, token.start, end, first), flags)
+}
+
+fn parse_type(p: *Parser) u32 {
+  if p.tree.failed {
+    return None
+  }
+  p.depth += 1
+  if p.depth > MaxDepth {
+    fail(p, p.token.start, "expression nesting limit exceeded")
+    p.depth -= 1
+    return None
+  }
+  start := p.token.start
+  child := type_body(p)
+  p.depth -= 1
+  if child == None {
+    return None
+  }
+  return add_node(p, ExpType, start, node_end(p, child), child)
+}
+
+// Ambiguous array literals and names are resolved at the enclosing delimiter.
+fn resource_error(p: *const Parser) bool {
+  return p.tree.error_kind == ErrorKind.Allocation || p.tree.error_kind == ErrorKind.Limit
+}
+
+// Rewinds a failed speculation: lexer state, node count and error.
+fn restore(p: *Parser, saved: *const Parser, count: usize) {
+  p.* = saved.*
+  p.tree.count = count
+  p.tree.failed = false
+  p.tree.error = ""
+  p.tree.error_kind = ErrorKind.Ok
+  p.tree.error_offset = 0
+}
+
+fn array_type_suffix(p: *Parser, array: u32, named: bool) u32 {
+  first := p.tree.nodes[array].first
+  if first != None {
+    if p.tree.nodes[first].next != None {
+      fail(p, p.token.start, "array type requires one length")
+      return None
+    }
+    closing := p.*
+    closing.offset = node_end(p, first)
+    closing.scan_next = 0
+    lex(&closing)
+    if !token_is(&closing, "]") {
+      fail(p, closing.token.start, "array type length cannot have a comma")
+      return None
+    }
+  }
+  is_const := take(p, "const")
+  element := parse_type(p)
+  if element == None {
+    return None
+  }
+  if first != None {
+    p.tree.nodes[first].next = element
+  } else {
+    first = element
+  }
+  start := p.tree.nodes[array].start
+  end := node_end(p, element)
+  flags: u16
+  if is_const {
+    flags = FlagConst
+  }
+  child := mark(p, add_node(p, ExpArrayType, start, end, first), flags)
+  kind := ExpTypeArgument
+  if named {
+    kind = ExpType
+  }
+  return add_node(p, kind, start, end, child)
+}
+
+fn argument(p: *Parser, allow_named_type: bool) u32 {
+  if p.tree.failed {
+    return None
+  }
+  if token_is(p, "true") || token_is(p, "false") || token_is(p, "nil") {
+    return expression(p, 0)
+  }
+  if token_is(p, "[") {
+    // Parse the shared bracket contents once. Replaying them during type
+    // speculation makes nested array arguments take exponential work.
+    array := aggregate(p)
+    if array == None {
+      return None
+    }
+    saved := p.*
+    count := p.tree.count
+    first := p.tree.nodes[array].first
+    sibling := None
+    if first != None {
+      sibling = p.tree.nodes[first].next
+    }
+    if allow_named_type {
+      candidate := array_type_suffix(p, array, true)
+      if !p.tree.failed && (token_is(p, ")") || token_is(p, ",")) {
+        return candidate
+      }
+      if resource_error(p) {
+        return None
+      }
+      restore(p, &saved, count)
+      if first != None {
+        p.tree.nodes[first].next = sibling
+      }
+    }
+    value := expression_tail(p, array, false, 0)
+    if !p.tree.failed && (token_is(p, ")") || token_is(p, ",")) {
+      return value
+    }
+    if resource_error(p) {
+      return None
+    }
+    if allow_named_type {
+      fail(p, p.token.start, "expected argument delimiter")
+      return None
+    }
+    restore(p, &saved, count)
+    p.tree.nodes[array].next = None
+    return array_type_suffix(p, array, false)
+  }
+  committed := primitive(p) || token_is(p, "*") || at(p, p.token.start, "$")
+  if allow_named_type || committed {
+    saved := p.*
+    count := p.tree.count
+    child := None
+    if allow_named_type {
+      child = parse_type(p)
+    } else {
+      child = type_body(p)
+    }
+    if !p.tree.failed && (committed || token_is(p, ")") || token_is(p, ",")) {
+      if allow_named_type {
+        return child
+      }
+      return add_node(p, ExpTypeArgument, p.tree.nodes[child].start, node_end(p, child), child)
+    }
+    if resource_error(p) {
+      return None
+    }
+    restore(p, &saved, count)
+  }
+  return expression(p, 0)
+}
+
+fn aggregate(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  array := take(p, "[")
+  if !array {
+    if !take(p, ".") {
+      chain(p, &first, &last, parse_name(p))
+      for take(p, ".") && !p.tree.failed {
+        chain(p, &first, &last, parse_name(p))
+      }
+    }
+    expect(p, "{")
+  }
+  close := "}"
+  if array {
+    close = "]"
+  }
+  for !token_is(p, close) && !p.tree.failed {
+    child := None
+    if array {
+      child = expression(p, 0)
+    } else {
+      member_start := p.token.start
+      field := parse_name(p)
+      expect(p, ":")
+      value := expression(p, 0)
+      if p.tree.failed {
+        break
+      }
+      p.tree.nodes[field].next = value
+      child = add_node(p, ExpMember, member_start, node_end(p, value), field)
+    }
+    chain(p, &first, &last, child)
+    if !take(p, ",") {
+      break
+    }
+  }
+  end := p.token.end
+  expect(p, close)
+  kind := ExpStruct
+  if array {
+    kind = ExpArray
+  }
+  return add_node(p, kind, start, end, first)
+}
+
+fn struct_start(p: *Parser) bool {
+  if p.tree.failed {
+    return false
+  }
+  if token_is(p, ".") {
+    return true
+  }
+  if token_is(p, "true") || token_is(p, "false") || token_is(p, "nil") {
+    return false
+  }
+  if p.token.kind != TokenKind.Name {
+    return false
+  }
+  probe := p.*
+  scratch := Tree{}
+  probe.tree = &scratch
+  lex(&probe)
+  for take(&probe, ".") && !scratch.failed {
+    if probe.token.kind != TokenKind.Name {
+      return false
+    }
+    lex(&probe)
+  }
+  propagate_error(p, &scratch)
+  return !scratch.failed && token_is(&probe, "{") && probe.token.start != p.block_brace
+}
+
+fn parse_operand(p: *Parser, minimum: i32) u32 {
+  token := p.token
+  left := None
+  primary := false
+  if token_is(p, "[") || struct_start(p) {
+    left = aggregate(p)
+  } else if take(p, "(") {
+    child := expression(p, 0)
+    end := p.token.end
+    expect(p, ")")
+    left = add_node(p, ExpGroup, token.start, end, child)
+    primary = true
+  } else if token_is(p, "-") || token_is(p, "&") || token_is(p, "!") || token_is(p, "~") {
+    lex(p)
+    child := expression(p, 12)
+    if child != None {
+      left = add_node(p, ExpPrefix, token.start, node_end(p, child), child)
+    }
+  } else if token_is(p, "#cast") || token_is(p, "#bitcast") {
+    lex(p)
+    expect(p, "(")
+    target := parse_type(p)
+    if token_is(p, ")") {
+      fail(p, p.token.start, "use #cast(type, value) or #bitcast(type, value); prefix cast syntax is no longer supported")
+    }
+    expect(p, ",")
+    value := expression(p, 0)
+    end := p.token.end
+    expect(p, ")")
+    if !p.tree.failed {
+      p.tree.nodes[target].next = value
+      flags: u16
+      if at(p, token.start, "#bitcast") {
+        flags = FlagBitcast
+      }
+      left = mark(p, add_node(p, ExpCast, token.start, end, target), flags)
+      primary = true
+    }
+  } else if token_is(p, "#sizeof") || token_is(p, "#alignof") || token_is(p, "#typeof") || token_is(p, "#offsetof") {
+    kind := ExpOffset
+    if token_is(p, "#sizeof") {
+      kind = ExpSize
+    } else if token_is(p, "#alignof") {
+      kind = ExpAlign
+    } else if token_is(p, "#typeof") {
+      kind = ExpTypeof
+    }
+    lex(p)
+    expect(p, "(")
+    child := None
+    if kind == ExpOffset {
+      child = parse_type(p)
+      expect(p, ",")
+      field := parse_name(p)
+      if !p.tree.failed {
+        p.tree.nodes[child].next = field
+      }
+    } else {
+      child = argument(p, true)
+    }
+    end := p.token.end
+    expect(p, ")")
+    left = add_node(p, kind, token.start, end, child)
+  } else if token_is(p, "#load") || token_is(p, "#syscall") {
+    load := token_is(p, "#load")
+    lex(p)
+    expect(p, "(")
+    first := None
+    last := None
+    if load {
+      literal := p.token
+      if literal.kind != TokenKind.Text {
+        fail(p, literal.start, "expected string literal")
+      } else {
+        lex(p)
+        first = add_node(p, ExpString, literal.start, literal.end, None)
+      }
+    } else {
+      for !token_is(p, ")") && !p.tree.failed {
+        chain(p, &first, &last, expression(p, 0))
+        if !take(p, ",") {
+          break
+        }
+      }
+    }
+    end := p.token.end
+    expect(p, ")")
+    kind := ExpSyscall
+    if load {
+      kind = ExpLoad
+    }
+    left = add_node(p, kind, token.start, end, first)
+  } else if token_is(p, "#wrap") || token_is(p, "#len") {
+    kind := ExpLen
+    if token_is(p, "#wrap") {
+      kind = ExpWrap
+    }
+    lex(p)
+    expect(p, "(")
+    child := expression(p, 0)
+    end := p.token.end
+    expect(p, ")")
+    left = add_node(p, kind, token.start, end, child)
+  } else {
+    kind := ExpName
+    if token.kind == TokenKind.Number {
+      kind = ExpNumber
+    } else if token.kind == TokenKind.Text {
+      kind = ExpString
+    } else if token.kind == TokenKind.Character {
+      kind = ExpChar
+    } else if token.kind == TokenKind.Name && (token_is(p, "true") || token_is(p, "false")) {
+      kind = ExpBool
+    } else if token.kind == TokenKind.Name && token_is(p, "nil") {
+      kind = ExpNil
+    } else if token.kind == TokenKind.Name {
+      primary = true
+    } else if token_is(p, "#reverse") {
+      fail(p, token.start, "#reverse is valid only as a for-loop iterable")
+      return None
+    } else {
+      fail(p, token.start, "expected expression")
+      return None
+    }
+    lex(p)
+    left = add_node(p, kind, token.start, token.end, None)
+  }
+  if primary {
+    _ = mark(p, left, FlagPrimary)
+  }
+  return expression_tail(p, left, primary, minimum)
+}
+
+fn expression_tail(p: *Parser, operand: u32, primary_operand: bool, minimum: i32) u32 {
+  left := operand
+  primary := primary_operand
+  for left != None && !p.tree.failed {
+    token := p.token
+    start := p.tree.nodes[left].start
+    if take(p, ".*") {
+      left = mark(p, add_node(p, ExpDeref, start, token.end, left), FlagPrimary)
+      primary = true
+    } else if primary && take(p, ".") {
+      if p.token.kind != TokenKind.Name {
+        fail(p, p.token.start, "expected field name")
+        break
+      }
+      field := p.token
+      lex(p)
+      field_name := add_node(p, ExpName, field.start, field.end, None)
+      if field_name == None {
+        break
+      }
+      p.tree.nodes[left].next = field_name
+      left = mark(p, add_node(p, ExpField, start, field.end, left), FlagPrimary)
+    } else if primary && take(p, "(") {
+      last := left
+      for !token_is(p, ")") && !p.tree.failed {
+        value := argument(p, false)
+        if value == None {
+          break
+        }
+        p.tree.nodes[last].next = value
+        last = value
+        if !take(p, ",") {
+          break
+        }
+      }
+      end := p.token.end
+      expect(p, ")")
+      left = mark(p, add_node(p, ExpCall, start, end, left), FlagPrimary)
+    } else if primary && take(p, "[") {
+      low := None
+      high := None
+      if !token_is(p, "..") {
+        low = expression(p, 0)
+      }
+      slice := take(p, "..")
+      if slice && !token_is(p, "]") {
+        high = expression(p, 0)
+      }
+      end := p.token.end
+      expect(p, "]")
+      if p.tree.failed {
+        break
+      }
+      // Missing slice endpoints are represented by zero-width empty groups.
+      if slice && low == None {
+        low = add_node(p, ExpGroup, token.end, token.end, None)
+      }
+      if slice && high == None {
+        high = add_node(p, ExpGroup, end - 1, end - 1, None)
+      }
+      if p.tree.failed {
+        break
+      }
+      p.tree.nodes[left].next = low
+      kind := ExpIndex
+      if slice {
+        p.tree.nodes[low].next = high
+        kind = ExpSlice
+      }
+      left = mark(p, add_node(p, kind, start, end, left), FlagPrimary)
+    } else {
+      level := precedence(p)
+      if level == 0 || level < minimum {
+        break
+      }
+      lex(p)
+      right := expression(p, level + 1)
+      if right == None {
+        break
+      }
+      p.tree.nodes[left].next = right
+      left = add_node(p, ExpBinary, start, node_end(p, right), left)
+      primary = false
+    }
+  }
+  return left
+}
+
+fn expression(p: *Parser, minimum: i32) u32 {
+  if p.tree.failed {
+    return None
+  }
+  p.depth += 1
+  if p.depth > MaxDepth {
+    fail(p, p.token.start, "expression nesting limit exceeded")
+    p.depth -= 1
+    return None
+  }
+  result := parse_operand(p, minimum)
+  p.depth -= 1
+  return result
+}

@@ -19,14 +19,14 @@ fn main() {
   encoded: [4]u8 = [240,159,152,128]
   checksum: i64 = 0
   for iteration in 0..2000 {
-    haystack[32767] = #cast(u8) (97 + iteration % 2)
-    checksum += #cast(i64) search.find(pattern.pattern, haystack[..])
-    checksum += #cast(i64) bytes.find(haystack[..], needle[..])
+    haystack[32767] = #cast(u8, (97 + iteration % 2))
+    checksum += #cast(i64, search.find(pattern.pattern, haystack[..]))
+    checksum += #cast(i64, bytes.find(haystack[..], needle[..]))
     _ = memory.copy(copied[..], haystack[..128])
-    copied[iteration % 128] = #cast(u8) (96 + iteration % 3)
-    checksum += #cast(i64) bytes.compare(copied[..], haystack[..128])
-    encoded[3] = #cast(u8) (128 + iteration % 64)
-    checksum += #cast(i64) utf8.decode(encoded[..], 0).codepoint
+    copied[iteration % 128] = #cast(u8, (96 + iteration % 3))
+    checksum += #cast(i64, bytes.compare(copied[..], haystack[..128]))
+    encoded[3] = #cast(u8, (128 + iteration % 64))
+    checksum += #cast(i64, utf8.decode(encoded[..], 0).codepoint)
   }
   backing: [65536]u8 = []
   arena := memory.arena_from_buffer(backing[..])
@@ -34,12 +34,12 @@ fn main() {
   testing.expect(maps.reserve(&map, &arena, 128) == maps.ErrorKind.None, "reserve")
   key: [8]u8 = []
   for i in 0..128 {
-    key[0] = #cast(u8) i
+    key[0] = #cast(u8, i)
     testing.expect(maps.put(&map, &arena, key[..], i) == maps.ErrorKind.None, "put")
   }
   for i in 0..128 {
-    key[0] = #cast(u8) i
-    checksum += #cast(i64) maps.get(&map, key[..]).value
+    key[0] = #cast(u8, i)
+    checksum += #cast(i64, maps.get(&map, key[..]).value)
     testing.expect(maps.remove(&map, key[..]), "remove")
   }
   built := builder.from_buffer(backing[..0])

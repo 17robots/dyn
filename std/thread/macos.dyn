@@ -15,11 +15,13 @@ extern fn native_yield "sched_yield"() i32
 pub struct Thread { handle: rawptr, identifier: u32, entry: *fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
 
 fn trampoline(context: rawptr) rawptr {
-  thread := #cast(*Thread) context
+  thread := #cast(*Thread, context)
   // Publish the native handle/id before entry can complete and retire its port.
-  for sync.load_u32(&thread.ready) == 0 { _ = native_yield() }
+  for sync.load_u32(&thread.ready) == 0 {
+    _ = native_yield()
+  }
   value := thread.entry(thread.context)
-  return #cast(rawptr) #cast(usize) value
+  return #cast(rawptr, #cast(usize, value))
 }
 
 // Darwin owns the stack. Slice length requests its size, rounded up to an
@@ -29,15 +31,25 @@ pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: ra
   return spawn_with_size(thread, #len(stack), entry, context)
 }
 pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
-  if stack_size < 256 || entry == nil || stack_size > (~#cast(usize) 0) - 16383 { return -22 }
-  if thread.handle != nil { return -16 }
+  if stack_size < 256 || entry == nil || stack_size > (~#cast(usize, 0)) - 16383 {
+    return -22
+  }
+  if thread.handle != nil {
+    return -16
+  }
   attributes := Attributes{}
   error := attr_init(&attributes)
-  if error != 0 { return 0 - #cast(isize) error }
-  defer { _ = attr_destroy(&attributes) }
-  size := (stack_size + 16383) & ~#cast(usize) 16383
+  if error != 0 {
+    return 0 - #cast(isize, error)
+  }
+  defer {
+    _ = attr_destroy(&attributes)
+  }
+  size := (stack_size + 16383) & ~#cast(usize, 16383)
   error = attr_size(&attributes, size)
-  if error != 0 { return 0 - #cast(isize) error }
+  if error != 0 {
+    return 0 - #cast(isize, error)
+  }
   thread.entry = entry
   thread.context = context
   sync.store_u32(&thread.ready, 0)
@@ -46,22 +58,26 @@ pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) is
   if error != 0 {
     thread.entry = nil
     thread.context = nil
-    return 0 - #cast(isize) error
+    return 0 - #cast(isize, error)
   }
   thread.handle = handle
   thread.identifier = native_id(handle)
   sync.store_u32(&thread.ready, 1)
-  return #cast(isize) thread.identifier
+  return #cast(isize, thread.identifier)
 }
 
 // Ownership: success ends worker access and clears the native owner.
 // Failure: retains the handle for retry; keep thread/context alive until success.
 // Allocation: none. Thread safety: one caller controls this descriptor.
 pub fn join(thread: *Thread) isize {
-  if thread.handle == nil { return 0 }
+  if thread.handle == nil {
+    return 0
+  }
   value: rawptr = nil
   error := wait(thread.handle, &value)
-  if error != 0 { return 0 - #cast(isize) error }
+  if error != 0 {
+    return 0 - #cast(isize, error)
+  }
   thread.handle = nil
   thread.identifier = 0
   thread.entry = nil
@@ -70,5 +86,9 @@ pub fn join(thread: *Thread) isize {
 }
 
 // Mach thread identifier while unjoined; join is the lifetime boundary.
-pub fn id(thread: *const Thread) u32 { return thread.identifier }
-pub fn yield_now() isize { return #cast(isize) native_yield() }
+pub fn id(thread: *const Thread) u32 {
+  return thread.identifier
+}
+pub fn yield_now() isize {
+  return #cast(isize, native_yield())
+}

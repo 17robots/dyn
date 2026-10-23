@@ -18,6 +18,10 @@ typedef struct {
   const char *entry; /* Executable entry symbol. */
   const char *interpreter; /* Dynamic loader, for executables using shared libraries. */
   DynLinkLayout layout; /* Orders code by a call-graph profile; may be NULL. */
+  uint64_t base; /* Executable load address; zero selects the default. */
+  uint64_t data_base; /* Optional bare-metal RAM base; initialized bytes live after ROM. */
+  uint64_t image_end, data_end; /* Exclusive ROM/RAM limits; zero means unchecked. */
+  bool bare; /* Bare-metal image loaded at base, even when base is zero. */
 } DynLinkOptions;
 /* Links x86-64, AArch64 and RV64 objects, archives, shared libraries and GNU linker scripts
    into an executable or shared library at output. Prints a diagnostic and

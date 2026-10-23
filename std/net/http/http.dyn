@@ -53,7 +53,7 @@ fn append_bytes(destination: []u8, offset: usize, source: []const u8) usize {
 
 fn append_usize(destination: []u8, offset: usize, value: usize) usize {
   digits: [20]u8 = []
-  return append_bytes(destination, offset, format.u64_decimal(digits[..], #cast(u64) value))
+  return append_bytes(destination, offset, format.u64_decimal(digits[..], #cast(u64, value)))
 }
 
 pub fn write_request(destination: []u8, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8 {
@@ -77,7 +77,7 @@ pub fn write_request(destination: []u8, method: []const u8, target: []const u8, 
 
 pub fn write_response(destination: []u8, code: u16, reason: []const u8, content_type: []const u8, body: []const u8) []u8 {
   offset := append_bytes(destination, 0, "HTTP/1.1 ")
-  offset = append_usize(destination, offset, #cast(usize) code)
+  offset = append_usize(destination, offset, #cast(usize, code))
   offset = append_bytes(destination, offset, " ")
   offset = append_bytes(destination, offset, reason)
   offset = append_bytes(destination, offset, "\r\nContent-Type: ")
@@ -123,8 +123,8 @@ fn parse_decimal(input: []const u8, start: usize, end: usize) Decimal {
     if input[i] < '0' || input[i] > '9' {
       return Decimal{}
     }
-    digit := #cast(usize) (input[i] - '0')
-    if value > (18446744073709551615 - digit) / 10 {
+    digit := #cast(usize, (input[i] - '0'))
+    if value > (~#cast(usize, 0) - digit) / 10 {
       return Decimal{}
     }
     value = value * 10 + digit
@@ -172,7 +172,7 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
     if !parsed_code.ok || parsed_code.value < 100 || parsed_code.value > 999 {
       return HttpHead{}
     }
-    code = #cast(u16) parsed_code.value
+    code = #cast(u16, parsed_code.value)
   } else {
     first: usize = 0
     for first < line_end && token_byte(input[first]) {
@@ -332,11 +332,11 @@ pub fn header(input: []const u8, name: []const u8) HttpHeader {
 
 fn hex(value: u8) i16 {
   if value >= '0' && value <= '9' {
-    return #cast(i16) (value - '0')
+    return #cast(i16, (value - '0'))
   }
   lower := ascii_lower(value)
   if lower >= 'a' && lower <= 'f' {
-    return #cast(i16) (lower - 'a' + 10)
+    return #cast(i16, (lower - 'a' + 10))
   }
   return -1
 }
@@ -348,11 +348,19 @@ struct ChunkProgress { cursor: usize, line_scan: usize, count: usize, size: usiz
 fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
   for {
     if state.phase == 1 {
-      if state.size > #len(input) - state.cursor { return HttpIoResult{ error: -11 } }
+      if state.size > #len(input) - state.cursor {
+        return HttpIoResult{ error: -11 }
+      }
       end := state.cursor + state.size
-      if #len(input) - end < 2 { return HttpIoResult{ error: -11 } }
-      if input[end] != '\r' || input[end + 1] != '\n' { return HttpIoResult{ error: -22 } }
-      if state.size > 18446744073709551615 - state.count { return HttpIoResult{ error: -28 } }
+      if #len(input) - end < 2 {
+        return HttpIoResult{ error: -11 }
+      }
+      if input[end] != '\r' || input[end + 1] != '\n' {
+        return HttpIoResult{ error: -22 }
+      }
+      if state.size > ~#cast(usize, 0) - state.count {
+        return HttpIoResult{ error: -28 }
+      }
       state.count += state.size
       state.cursor = end + 2
       state.line_scan = state.cursor
@@ -366,33 +374,55 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
         byte := input[state.line_scan]
         if !state.extension && byte != ';' {
           value := hex(byte)
-          if value < 0 || state.size > (18446744073709551615 - #cast(usize) value) / 16 { return HttpIoResult{ error: -22 } }
-          state.size = state.size * 16 + #cast(usize) value
+          if value < 0 || state.size > (~#cast(usize, 0) - #cast(usize, value)) / 16 {
+            return HttpIoResult{ error: -22 }
+          }
+          state.size = state.size * 16 + #cast(usize, value)
           state.digits = true
         } else {
-          if !state.digits || byte < 32 || byte == 127 { return HttpIoResult{ error: -22 } }
+          if !state.digits || byte < 32 || byte == 127 {
+            return HttpIoResult{ error: -22 }
+          }
           state.extension = true
         }
         state.line_scan += 1
       }
-      if state.line_scan == #len(input) { return HttpIoResult{ error: -11 } }
-      if !state.digits { return HttpIoResult{ error: -22 } }
-      if state.line_scan + 1 >= #len(input) { return HttpIoResult{ error: -11 } }
-      if input[state.line_scan + 1] != '\n' { return HttpIoResult{ error: -22 } }
+      if state.line_scan == #len(input) {
+        return HttpIoResult{ error: -11 }
+      }
+      if !state.digits {
+        return HttpIoResult{ error: -22 }
+      }
+      if state.line_scan + 1 >= #len(input) {
+        return HttpIoResult{ error: -11 }
+      }
+      if input[state.line_scan + 1] != '\n' {
+        return HttpIoResult{ error: -22 }
+      }
       state.cursor = state.line_scan + 2
       state.line_scan = state.cursor
       state.phase = 1
-      if state.size == 0 { state.phase = 2 }
+      if state.size == 0 {
+        state.phase = 2
+      }
     } else {
       for state.line_scan + 1 < #len(input) && !(input[state.line_scan] == '\r' && input[state.line_scan + 1] == '\n') {
         state.line_scan += 1
       }
-      if state.line_scan + 1 >= #len(input) { return HttpIoResult{ error: -11 } }
+      if state.line_scan + 1 >= #len(input) {
+        return HttpIoResult{ error: -11 }
+      }
       end := state.line_scan
-      if end == state.cursor { return HttpIoResult{ count: state.count, consumed: end + 2, ok: true } }
+      if end == state.cursor {
+        return HttpIoResult{ count: state.count, consumed: end + 2, ok: true }
+      }
       colon := state.cursor
-      for colon < end && token_byte(input[colon]) { colon += 1 }
-      if colon == state.cursor || colon == end || input[colon] != ':' { return HttpIoResult{ error: -22 } }
+      for colon < end && token_byte(input[colon]) {
+        colon += 1
+      }
+      if colon == state.cursor || colon == end || input[colon] != ':' {
+        return HttpIoResult{ error: -22 }
+      }
       if ascii_equal(input[state.cursor..colon], "Content-Length") || ascii_equal(input[state.cursor..colon], "Transfer-Encoding") {
         return HttpIoResult{ error: -22 }
       }
@@ -407,7 +437,9 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
 fn head_complete(input: []const u8, cursor: *usize) bool {
   for cursor.* + 3 < #len(input) {
     at := cursor.*
-    if input[at] == '\r' && input[at + 1] == '\n' && input[at + 2] == '\r' && input[at + 3] == '\n' { return true }
+    if input[at] == '\r' && input[at + 1] == '\n' && input[at + 2] == '\r' && input[at + 3] == '\n' {
+      return true
+    }
     cursor.* += 1
   }
   return false
@@ -421,10 +453,10 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
     digits: usize = 0
     for cursor < #len(input) && input[cursor] != '\r' && input[cursor] != ';' {
       value := hex(input[cursor])
-      if value < 0 || size > (18446744073709551615 - #cast(usize) value) / 16 {
+      if value < 0 || size > (~#cast(usize, 0) - #cast(usize, value)) / 16 {
         return HttpIoResult{ error: -22 }
       }
-      size = size * 16 + #cast(usize) value
+      size = size * 16 + #cast(usize, value)
       cursor += 1
       digits += 1
     }
@@ -475,7 +507,7 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
     if size > #len(input) - cursor {
       return HttpIoResult{ error: -11 }
     }
-    if size > 18446744073709551615 - output {
+    if size > ~#cast(usize, 0) - output {
       return HttpIoResult{ error: -28 }
     }
     if write {
@@ -533,7 +565,7 @@ pub fn parse_url(input: []const u8) Url {
       return Url{}
     }
     host_start = 1
-    host_end = #cast(usize) bracket
+    host_end = #cast(usize, bracket)
     if host_end + 1 < #len(authority) {
       if authority[host_end + 1] != ':' {
         return Url{}
@@ -543,7 +575,7 @@ pub fn parse_url(input: []const u8) Url {
   } else {
     colon := bytes.find_byte(authority, ':')
     if colon >= 0 {
-      host_end = #cast(usize) colon
+      host_end = #cast(usize, colon)
       port_start = host_end + 1
     }
   }
@@ -559,7 +591,7 @@ pub fn parse_url(input: []const u8) Url {
     if !number.ok || number.value == 0 || number.value > 65535 {
       return Url{}
     }
-    port = #cast(u16) number.value
+    port = #cast(u16, number.value)
   } else if authority[#len(authority) - 1] == ':' {
     return Url{}
   }
@@ -569,7 +601,7 @@ pub fn parse_url(input: []const u8) Url {
   end := #len(input)
   fragment := bytes.find_byte(input[path_at..], '#')
   if fragment >= 0 {
-    end = path_at + #cast(usize) fragment
+    end = path_at + #cast(usize, fragment)
   }
   if path_at < end {
     target = input[path_at..end]
@@ -593,6 +625,8 @@ pub struct Request {
   body: []const u8,
   header_length: usize,
   keep_alive: bool,
+  // Borrowed application state given to serve_stream_context and friends; nil otherwise.
+  context: rawptr,
 }
 
 pub struct Response {
@@ -614,6 +648,8 @@ pub struct Server {
   storage: []u8,
   used: usize,
   consumed: usize,
+  // Copied into every received Request.
+  context: rawptr,
 }
 
 pub struct ReceiveResult {
@@ -751,6 +787,10 @@ pub fn receive(state: *Server) ReceiveResult {
     if !head_checked && head_complete(state.storage[..state.used], &head_scan) {
       head = parse_request(state.storage[..state.used])
       head_checked = true
+      // More bytes cannot repair a complete head that does not parse.
+      if !head.ok {
+        return ReceiveResult{ error: ErrorKind.Invalid, ok: false }
+      }
     }
     if head.ok {
       if head.chunked {
@@ -762,6 +802,7 @@ pub fn receive(state: *Server) ReceiveResult {
       total := head.header_length + head.content_length
       if state.used >= total {
         request := request_parts(state.storage[..state.used], head)
+        request.context = state.context
         if #len(request.method) == 0 {
           return ReceiveResult{ error: ErrorKind.Invalid, ok: false }
         }
@@ -819,7 +860,7 @@ fn status_reason(status: u16) []const u8 {
 }
 
 fn decimal(destination: []u8, value: usize) []const u8 {
-  return format.u64_decimal(destination, #cast(u64) value)
+  return format.u64_decimal(destination, #cast(u64, value))
 }
 
 fn write_output(destination: stream.Writer, bytes: []const u8) Result {
@@ -847,7 +888,7 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
     content_type = "application/octet-stream"
   }
   number_storage: [20]u8 = []
-  status_text := decimal(number_storage[..], #cast(usize) status)
+  status_text := decimal(number_storage[..], #cast(usize, status))
   if !write_output(response.output, "HTTP/1.1 ").ok || !write_output(response.output, status_text).ok ||
     !write_output(response.output, " ").ok || !write_output(response.output, reason).ok ||
     !write_output(response.output, "\r\nContent-Type: ").ok || !write_output(response.output, content_type).ok {
@@ -919,7 +960,7 @@ fn hex_size(destination: []u8, value: usize) []const u8 {
 }
 
 fn body_write(data: rawptr, source: []const u8) stream.Result {
-  body := #cast(*Body) data
+  body := #cast(*Body, data)
   if body.finished {
     return stream.Result{ error: -22, status: stream.Status.Error }
   }
@@ -968,20 +1009,44 @@ pub fn body_abort(body: *Body) Result {
 }
 
 pub fn serve_connection(connection: *network.Connection, storage: []u8, handler: Handler) Result {
-  return serve_stream(network.connection_reader(connection), network.connection_writer(connection), storage, handler)
+  return serve_connection_context(connection, storage, handler, nil)
+}
+
+// Like serve_connection; every Request carries context for the handler.
+pub fn serve_connection_context(connection: *network.Connection, storage: []u8, handler: Handler, context: rawptr) Result {
+  return serve_stream_context(network.connection_reader(connection), network.connection_writer(connection), storage, handler, context)
 }
 
 // Stream seam shared by plain TCP, TLS, tests, and embedded transports.
 pub fn serve_stream(input: stream.Reader, output: stream.Writer, storage: []u8, handler: Handler) Result {
+  return serve_stream_context(input, output, storage, handler, nil)
+}
+
+// Like serve_stream; every Request carries context, borrowed application state
+// the handler casts back to its own type. The caller keeps it alive.
+pub fn serve_stream_context(input: stream.Reader, output: stream.Writer, storage: []u8, handler: Handler, context: rawptr) Result {
   if handler == nil || #len(storage) == 0 {
     return Result{ error: ErrorKind.Invalid, ok: false }
   }
   state := connection_server(input, output, storage)
+  state.context = context
   for true {
     received := receive(&state)
     if !received.ok {
       if received.error == ErrorKind.End {
         return Result{ error: ErrorKind.None, ok: true }
+      }
+      // Tell the client why the connection closes. The reply is best effort:
+      // the receive error is reported either way.
+      if received.error == ErrorKind.Invalid || received.error == ErrorKind.Capacity {
+        rejected := Response{ output: output }
+        options := ResponseOptions{ status: StatusBadRequest, content_type: "text/plain; charset=utf-8", close_connection: true }
+        body := "bad request\n"
+        if received.error == ErrorKind.Capacity {
+          options.status = StatusPayloadTooLarge
+          body = "request too large\n"
+        }
+        _ = respond(&rejected, body, options)
       }
       return Result{ error: received.error, system_error: received.system_error, ok: false }
     }

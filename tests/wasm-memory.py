@@ -10,7 +10,7 @@ arenas: [8]mem.Arena
 pub fn allocate(slot: usize, size: usize) usize {
   made := mem.arena_create(size)
   arenas[slot] = made
-  return #cast(usize) mem.arena_push(&arenas[slot], size, 1)
+  return #cast(usize, mem.arena_push(&arenas[slot], size, 1))
 }
 pub fn release(slot: usize) bool { mem.arena_release(&arenas[slot]) return true }
 pub fn fixed() bool {
@@ -20,11 +20,11 @@ pub fn fixed() bool {
 }
 pub fn growing() bool {
   arena := mem.growing_create(65536)
-  first := mem.growing_push_or_panic(&arena, 65536, 8) first.* = 42
-  second := mem.growing_push_or_panic(&arena, 65536, 8) second.* = 17
+  first := mem.growing_push(&arena, 65536, 8) first.* = 42
+  second := mem.growing_push(&arena, 65536, 8) second.* = 17
   if first.* != 42 { return false }
   mem.growing_reset(&arena)
-  reused := mem.growing_push_or_panic(&arena, 65536, 8)
+  reused := mem.growing_push(&arena, 65536, 8)
   ok := first == reused
   mem.growing_release(&arena) return ok
 }

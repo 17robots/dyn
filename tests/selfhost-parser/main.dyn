@@ -1,0 +1,86 @@
+// Self-hosted source parser check. Parses every path argument and prints the
+// reachable tree in preorder, one "kind start end flags" line per node, or
+// "error offset message" when parsing fails. tests/selfhost-parser.py compares
+// the output with the C parser through tests/selfhost-parser-oracle.c.
+use "std/fmt"
+use "std/fs"
+use "std/io"
+use "std/process"
+
+struct Output {
+  data: []u8,
+  count: usize,
+}
+
+fn put(out: *Output, arena: *mem.Arena, text: []const u8) {
+  for byte in text {
+    _ = mem.append(&out.data, &out.count, arena, byte)
+  }
+}
+
+fn put_number(out: *Output, arena: *mem.Arena, value: u64) {
+  digits: [20]u8
+  put(out, arena, fmt.u64_decimal(digits[..], value))
+}
+
+fn dump(out: *Output, arena: *mem.Arena, tree: *const Tree, root: u32) {
+  id := root
+  for {
+    found := tree.nodes[id]
+    put_number(out, arena, #cast(u64, found.kind))
+    put(out, arena, " ")
+    put_number(out, arena, #cast(u64, found.start))
+    put(out, arena, " ")
+    put_number(out, arena, #cast(u64, found.end))
+    put(out, arena, " ")
+    put_number(out, arena, #cast(u64, found.flags))
+    put(out, arena, "\n")
+    if found.first != None {
+      id = found.first
+      continue
+    }
+    for id != root && tree.nodes[id].next == None {
+      id = tree.nodes[id].parent
+    }
+    if id == root {
+      return
+    }
+    id = tree.nodes[id].next
+  }
+}
+
+fn main() {
+  arena := mem.arena_create(4 * mem.GiB)
+  defer mem.arena_release(&arena)
+  arguments := process.arguments(&arena)
+  if !arguments.ok {
+    #panic("cannot read arguments")
+  }
+  for path in arguments.values[1..] {
+    mark := mem.arena_mark(&arena)
+    out := Output{}
+    put(&out, &arena, "== ")
+    put(&out, &arena, path)
+    put(&out, &arena, "\n")
+    source := fs.read_all(&arena, path, 64 * mem.MiB)
+    if !source.ok {
+      #panic("cannot read source")
+    }
+    tree := Tree{}
+    root := parse_source(source.data, &tree, &arena)
+    if root == None {
+      put(&out, &arena, "error ")
+      put_number(&out, &arena, #cast(u64, tree.error_offset))
+      put(&out, &arena, " ")
+      put(&out, &arena, tree.error)
+      put(&out, &arena, "\n")
+    } else {
+      dump(&out, &arena, &tree, root)
+    }
+    written := io.write_all(io.stdout(), out.data[..out.count])
+    if written.status != io.Status.Complete {
+      #panic("cannot write output")
+    }
+    mem.arena_rewind(&arena, mark)
+  }
+}

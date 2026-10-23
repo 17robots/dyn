@@ -9,7 +9,7 @@ const Lower: []const u8 = "0123456789abcdef"
 const Upper: []const u8 = "0123456789ABCDEF"
 
 pub fn encoded_size(source_size: usize) usize {
-  maximum: usize = 18446744073709551615
+  maximum := ~#cast(usize, 0)
   if source_size > maximum / 2 {
     return 0
   }
@@ -32,21 +32,21 @@ pub fn encode(destination: []u8, source: []const u8, uppercase: bool) Result {
     alphabet = Upper
   }
   for i in 0..#len(source) {
-    destination[i * 2] = alphabet[#cast(usize) (source[i] >> 4)]
-    destination[i * 2 + 1] = alphabet[#cast(usize) (source[i] & 15)]
+    destination[i * 2] = alphabet[#cast(usize, (source[i] >> 4))]
+    destination[i * 2 + 1] = alphabet[#cast(usize, (source[i] & 15))]
   }
   return Result{ data: destination[..required], required: required, ok: true }
 }
 
 fn digit_value(byte: u8) isize {
   if byte >= '0' && byte <= '9' {
-    return #cast(isize) (byte - '0')
+    return #cast(isize, (byte - '0'))
   }
   if byte >= 'a' && byte <= 'f' {
-    return #cast(isize) (byte - 'a') + 10
+    return #cast(isize, (byte - 'a')) + 10
   }
   if byte >= 'A' && byte <= 'F' {
-    return #cast(isize) (byte - 'A') + 10
+    return #cast(isize, (byte - 'A')) + 10
   }
   return -1
 }
@@ -63,7 +63,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
       return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
     }
     if write {
-      destination[i] = #cast(u8) (high * 16 + low)
+      destination[i] = #cast(u8, (high * 16 + low))
     }
     i += 1
   }

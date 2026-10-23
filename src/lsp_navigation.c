@@ -83,9 +83,9 @@ const char *lsp_builtin_hover(const char *text, size_t line, size_t character) {
   struct {
     const char *name, *hover;
   } builtins[] = {
-      {"#cast", "#cast(type) value -> type\nExplicitly converts compatible "
+      {"#cast", "#cast(type, value) -> type\nExplicitly converts compatible "
                 "numeric, integer, or pointer values."},
-      {"#bitcast", "#bitcast(type) value -> type\nReinterprets equal-sized "
+      {"#bitcast", "#bitcast(type, value) -> type\nReinterprets equal-sized "
                    "compatible scalar bits without numeric conversion."},
       {"#len", "#len(array_or_slice) -> usize\nReturns an array or slice "
                "element count."},

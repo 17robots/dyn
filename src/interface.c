@@ -7,14 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
+#include "interface_constants.h"
+static char *canonical(const char *p, size_t n, size_t *out_n);
+#include "interface_compact.h"
 
 #define DYNMI_VERSION 1u
 #define DYNMI_SCHEMA 2u
 #define DYNMI_MAX_SIZE (64u * 1024u * 1024u)
-static const unsigned char magic[8] = {'D', 'Y',  'N',  'M',
-                                       'I', '\r', '\n', 0x1a};
-
+static const unsigned char magic[8] = {'D', 'Y',  'N',  'M', 'I', '\r', '\n', 0x1a};
 static uint64_t interface_hash_bytes(uint64_t h, const void *p, size_t n) {
   const unsigned char *s = p;
   while (n--) {
@@ -31,12 +31,9 @@ static int interface_source_compare(const void *a, const void *b) {
 uint64_t dyn_interface_source_hash(const DynSources *sources) {
   uint64_t h = hash_start();
   DynSource **order = malloc(sources->count * sizeof(*order));
-  if (!order && sources->count)
-    return 0;
-  for (size_t i = 0; i < sources->count; ++i)
-    order[i] = &sources->items[i];
-  if (sources->count)
-    qsort(order, sources->count, sizeof(*order), interface_source_compare);
+  if (!order && sources->count) return 0;
+  for (size_t i = 0; i < sources->count; ++i) order[i] = &sources->items[i];
+  if (sources->count) qsort(order, sources->count, sizeof(*order), interface_source_compare);
   for (size_t i = 0; i < sources->count; ++i) {
     uint64_t n = strlen(order[i]->path), z = order[i]->length;
     h = interface_hash_bytes(h, &n, sizeof(n));
@@ -53,13 +50,11 @@ static char *canonical(const char *p, size_t n, size_t *out_n) {
   char *out = malloc(n + 2);
   size_t j = 0;
   bool space = false;
-  if (!out)
-    return NULL;
+  if (!out) return NULL;
   for (size_t i = 0; i < n;) {
     if (p[i] == '/' && i + 1 < n && p[i + 1] == '/') {
       i += 2;
-      while (i < n && p[i] != '\n')
-        ++i;
+      while (i < n && p[i] != '\n') ++i;
       space = true;
       continue;
     }
@@ -69,15 +64,13 @@ static char *canonical(const char *p, size_t n, size_t *out_n) {
       continue;
     }
     if (p[i] == '"' || p[i] == '\'') {
-      if (space && j && word((unsigned char)out[j - 1]))
-        out[j++] = ' ';
+      if (space && j && word((unsigned char)out[j - 1])) out[j++] = ' ';
       space = false;
       char quote = p[i];
       out[j++] = p[i++];
       while (i < n) {
         out[j++] = p[i];
-        if (p[i] == '\\' && i + 1 < n)
-          out[j++] = p[++i];
+        if (p[i] == '\\' && i + 1 < n) out[j++] = p[++i];
         else if (p[i] == quote) {
           ++i;
           break;
@@ -86,9 +79,7 @@ static char *canonical(const char *p, size_t n, size_t *out_n) {
       }
       continue;
     }
-    if (space && j && word((unsigned char)out[j - 1]) &&
-        word((unsigned char)p[i]))
-      out[j++] = ' ';
+    if (space && j && word((unsigned char)out[j - 1]) && word((unsigned char)p[i])) out[j++] = ' ';
     space = false;
     out[j++] = p[i++];
   }
@@ -99,9 +90,6 @@ static char *canonical(const char *p, size_t n, size_t *out_n) {
 static int string_compare(const void *a, const void *b) {
   return strcmp(*(char *const *)a, *(char *const *)b);
 }
-#include "interface_constants.h"
-#include "interface_compact.h"
-
 int dyn_interface_build(const DynSources *sources, DynInterface *result) {
   memset(result, 0, sizeof(*result));
   bool unprepared = false;
@@ -131,8 +119,7 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
   if (!interface_constants(sources, &constants, &constant_count)) goto fail;
   for (size_t si = 0; si < sources->count; ++si) {
     const DynSource *s = &sources->items[si];
-    if (dyn_source_target_enabled(s) == 0)
-      continue;
+    if (dyn_source_target_enabled(s) == 0) continue;
     const ExpSnapshotTree *compact=dyn_compact_tree(s);
     if (!compact || compact->error_count) goto fail;
     int status=interface_compact_declarations(s,compact,constants,constant_count,&decls,&count);
@@ -142,14 +129,11 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
     }
     if(status) goto fail;
   }
-  if (count)
-    qsort(decls, count, sizeof(*decls), string_compare);
+  if (count) qsort(decls, count, sizeof(*decls), string_compare);
   size_t total = 0;
-  for (size_t i = 0; i < count; ++i)
-    total += strlen(decls[i]) + 1;
+  for (size_t i = 0; i < count; ++i) total += strlen(decls[i]) + 1;
   result->data = malloc(total + 1);
-  if (!result->data)
-    goto fail;
+  if (!result->data) goto fail;
   result->length = total;
   total = 0;
   for (size_t i = 0; i < count; ++i) {
@@ -160,16 +144,13 @@ int dyn_interface_build(const DynSources *sources, DynInterface *result) {
   }
   result->data[total] = 0;
   result->source_hash = dyn_interface_source_hash(sources);
-  result->interface_hash =
-      interface_hash_bytes(hash_start(), result->data, result->length);
-  for (size_t i = 0; i < count; ++i)
-    free(decls[i]);
+  result->interface_hash = interface_hash_bytes(hash_start(), result->data, result->length);
+  for (size_t i = 0; i < count; ++i) free(decls[i]);
   free(decls);
   free(constants);
   return 0;
 fail:
-  for (size_t i = 0; i < count; ++i)
-    free(decls[i]);
+  for (size_t i = 0; i < count; ++i) free(decls[i]);
   free(decls);
   free(constants);
   dyn_interface_free(result);
@@ -182,20 +163,17 @@ typedef struct {
   uint64_t source_hash, interface_hash, payload_length, digest;
   uint32_t target_length, compiler_length;
 } Header;
-static uint64_t artifact_digest(Header h, const char *target,
-                                const char *compiler, const char *payload) {
+static uint64_t artifact_digest(Header h, const char *target, const char *compiler, const char *payload) {
   h.digest = 0;
   uint64_t d = interface_hash_bytes(hash_start(), &h, sizeof(h));
   d = interface_hash_bytes(d, target, h.target_length);
   d = interface_hash_bytes(d, compiler, h.compiler_length);
   return interface_hash_bytes(d, payload, (size_t)h.payload_length);
 }
-int dyn_interface_store(const char *path, const char *target,
-                        const char *compiler, const DynInterface *value) {
+int dyn_interface_store(const char *path, const char *target, const char *compiler, const DynInterface *value) {
   size_t pn = strlen(path);
   char *temporary = malloc(pn + 48);
-  if (!temporary)
-    return 1;
+  if (!temporary) return 1;
   snprintf(temporary, pn + 48, "%s.%ld.tmp", path, (long)getpid());
   Header h = {0};
   memcpy(h.magic, magic, sizeof(magic));
@@ -208,13 +186,8 @@ int dyn_interface_store(const char *path, const char *target,
   h.compiler_length = (uint32_t)strlen(compiler);
   h.digest = artifact_digest(h, target, compiler, value->data);
   FILE *f = fopen(temporary, "wb");
-  bool ok = f && fwrite(&h, sizeof(h), 1, f) == 1 &&
-            fwrite(target, 1, h.target_length, f) == h.target_length &&
-            fwrite(compiler, 1, h.compiler_length, f) == h.compiler_length &&
-            fwrite(value->data, 1, value->length, f) == value->length &&
-            fflush(f) == 0 && fsync(fileno(f)) == 0;
-  if (f && fclose(f))
-    ok = false;
+  bool ok = f && fwrite(&h, sizeof(h), 1, f) == 1 && fwrite(target, 1, h.target_length, f) == h.target_length && fwrite(compiler, 1, h.compiler_length, f) == h.compiler_length && fwrite(value->data, 1, value->length, f) == value->length && fflush(f) == 0 && fsync(fileno(f)) == 0;
+  if (f && fclose(f)) ok = false;
   if (!ok || rename(temporary, path)) {
     remove(temporary);
     free(temporary);
@@ -223,21 +196,12 @@ int dyn_interface_store(const char *path, const char *target,
   free(temporary);
   return 0;
 }
-DynInterfaceStatus dyn_interface_load(const char *path, const char *target,
-                                      const char *compiler,
-                                      uint64_t source_hash,
-                                      DynInterface *result) {
+DynInterfaceStatus dyn_interface_load(const char *path, const char *target, const char *compiler, uint64_t source_hash, DynInterface *result) {
   memset(result, 0, sizeof(*result));
   FILE *f = fopen(path, "rb");
   Header h;
-  if (!f)
-    return errno == ENOENT ? DYN_INTERFACE_MISS : DYN_INTERFACE_ERROR;
-  if (fread(&h, sizeof(h), 1, f) != 1 ||
-      memcmp(h.magic, magic, sizeof(magic)) || h.version != DYNMI_VERSION ||
-      h.schema != DYNMI_SCHEMA || h.source_hash != source_hash ||
-      h.target_length != strlen(target) ||
-      h.compiler_length != strlen(compiler) ||
-      h.payload_length > DYNMI_MAX_SIZE) {
+  if (!f) return errno == ENOENT ? DYN_INTERFACE_MISS : DYN_INTERFACE_ERROR;
+  if (fread(&h, sizeof(h), 1, f) != 1 || memcmp(h.magic, magic, sizeof(magic)) || h.version != DYNMI_VERSION || h.schema != DYNMI_SCHEMA || h.source_hash != source_hash || h.target_length != strlen(target) || h.compiler_length != strlen(compiler) || h.payload_length > DYNMI_MAX_SIZE) {
     fclose(f);
     return DYN_INTERFACE_MISS;
   }
@@ -247,16 +211,9 @@ DynInterfaceStatus dyn_interface_load(const char *path, const char *target,
     fclose(f);
     return DYN_INTERFACE_ERROR;
   }
-  bool ok = fread(bytes, 1, meta + (size_t)h.payload_length, f) ==
-                meta + (size_t)h.payload_length &&
-            fgetc(f) == EOF && !memcmp(bytes, target, h.target_length) &&
-            !memcmp(bytes + h.target_length, compiler, h.compiler_length);
+  bool ok = fread(bytes, 1, meta + (size_t)h.payload_length, f) == meta + (size_t)h.payload_length && fgetc(f) == EOF && !memcmp(bytes, target, h.target_length) && !memcmp(bytes + h.target_length, compiler, h.compiler_length);
   char *payload = bytes + meta;
-  if (ok)
-    ok =
-        h.interface_hash ==
-            interface_hash_bytes(hash_start(), payload, h.payload_length) &&
-        h.digest == artifact_digest(h, bytes, bytes + h.target_length, payload);
+  if (ok) ok = h.interface_hash == interface_hash_bytes(hash_start(), payload, h.payload_length) && h.digest == artifact_digest(h, bytes, bytes + h.target_length, payload);
   fclose(f);
   if (!ok) {
     free(bytes);
@@ -288,34 +245,24 @@ static bool interface_same_directory(const char *a, const char *b) {
   size_t an = interface_directory_length(a), bn = interface_directory_length(b);
   return an == bn && !memcmp(a, b, an);
 }
-int dyn_interface_compose(const DynSources *sources, size_t owner_first,
-                          size_t owner_count, const DynInterface *interfaces,
-                          size_t interface_count, const char *path,
-                          DynSource *out) {
+int dyn_interface_compose(const DynSources *sources, size_t owner_first, size_t owner_count, const DynInterface *interfaces, size_t interface_count, const char *path, DynSource *out) {
   memset(out, 0, sizeof(*out));
   size_t module = 0;
   for (size_t first = 0; first < sources->count;) {
     size_t end = first + 1;
-    while (end < sources->count &&
-           interface_same_directory(sources->items[first].path,
-                                    sources->items[end].path))
-      ++end;
-    if (module >= interface_count)
-      return 1;
+    while (end < sources->count && interface_same_directory(sources->items[first].path, sources->items[end].path)) ++end;
+    if (module >= interface_count) return 1;
     ++module;
     first = end;
   }
-  if (module != interface_count)
-    return 1;
+  if (module != interface_count) return 1;
   DynSources selected = {0};
   bool reflection = false;
   for (size_t i = 0; i < sources->count && !reflection; ++i) {
     if (!dyn_source_reflection(&sources->items[i], &reflection)) return 2;
   }
-  selected.items =
-      calloc(owner_count + interface_count, sizeof(*selected.items));
-  if (!selected.items)
-    return 2;
+  selected.items = calloc(owner_count + interface_count, sizeof(*selected.items));
+  if (!selected.items) return 2;
   if (reflection)
     selected.items[selected.count++] = (DynSource){
         .context = sources->count ? sources->items[0].context : (DynContext){0},
@@ -326,25 +273,14 @@ int dyn_interface_compose(const DynSources *sources, size_t owner_first,
   module = 0;
   for (size_t first = 0; first < sources->count;) {
     size_t end = first + 1;
-    while (end < sources->count &&
-           interface_same_directory(sources->items[first].path,
-                                    sources->items[end].path))
-      ++end;
+    while (end < sources->count && interface_same_directory(sources->items[first].path, sources->items[end].path)) ++end;
     bool needed = !sources->items[owner_first].dependency_hash;
-    for (size_t i = 0; !needed && i < sources->items[owner_first].dependency_count; ++i)
-      needed = sources->items[owner_first].dependency_sources[i] == first;
+    for (size_t i = 0; !needed && i < sources->items[owner_first].dependency_count; ++i) needed = sources->items[owner_first].dependency_sources[i] == first;
     if (!needed) { ++module; first = end; continue; }
     if (first == owner_first && end - first == owner_count) {
-      for (size_t i = first; i < end; ++i) {
-        selected.items[selected.count++] = sources->items[i];
-      }
+      for (size_t i = first; i < end; ++i) selected.items[selected.count++] = sources->items[i];
     } else {
-      selected.items[selected.count++] =
-          (DynSource){.context = sources->items[first].context,
-                      .path = sources->items[first].path,
-                      .text = interfaces[module].data,
-                      .length = interfaces[module].length};
-    }
+    selected.items[selected.count++] = (DynSource){.context = sources->items[first].context, .path = sources->items[first].path, .text = interfaces[module].data, .length = interfaces[module].length}; }
     ++module;
     first = end;
   }

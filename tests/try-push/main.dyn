@@ -1,0 +1,24 @@
+// Typed fallible pushes report exhaustion without panicking or moving the offset.
+use "std/mem"
+
+struct Pair {
+  a: u64,
+  b: u64,
+}
+
+fn main() {
+  storage: [64]u8 = []
+  arena := mem.arena_from_buffer(storage[..])
+  first := mem.try_push(Pair, &arena)
+  if first == nil || first.a != 0 { #panic("first") }
+  used := mem.arena_used(&arena)
+  big := mem.try_push_array(u64, &arena, 100)
+  if #len(big) != 0 || mem.arena_used(&arena) != used { #panic("big") }
+  huge := mem.try_push_array(u64, &arena, 0xFFFFFFFFFFFFFFFF)
+  if #len(huge) != 0 { #panic("overflow") }
+  small := mem.try_push_array(u64, &arena, 2)
+  if #len(small) != 2 { #panic("small") }
+  for mem.try_push(Pair, &arena) != nil {
+  }
+  if mem.try_push(Pair, &arena) != nil { #panic("exhausted") }
+}

@@ -1,4 +1,4 @@
-/* SSA code generation for optimized x86-64 System V builds (included by
+/* SSA code generation for optimized native builds (included by
    driver.c).
 
    The tree emitter in driver.c evaluates every expression through one
@@ -53,6 +53,7 @@ typedef enum {
   SO_ZEROMEM,    /* zero aux bytes at a */
   SO_PANIC,      /* dyn_panic(a, b) */
   SO_VECTOR,     /* SIMD loop over frame arrays a = b op c; aux: elements, aux2: op | bytes << 8 */
+  SO_MULOK32,   /* paired targets: checked product fits, without a guard */
   SO_MULH,       /* high 64 bits of a * b; aux2: signed */
   SO_TRAP,       /* unreachable: no case arm matched */
   SO_FAIL,       /* dyn_check_failed for check kind aux, after cleanup */
@@ -70,6 +71,9 @@ typedef struct {
   int32_t a, b, c;
   int64_t aux, aux2;
   uint32_t block, list, count, uses, check_origin;
+  /* ILP32 calls retain original signature identity and {type, first, count}
+     groups separately from the optimizer's flattened operand triples. */
+  uint32_t abi_expr, abi_groups, abi_group_count;
   int32_t reg, slot, hint; /* hint: a value whose register this one prefers */
   uint32_t start, end; /* live interval */
 } SsaValue;
@@ -131,7 +135,7 @@ typedef struct {
 } Ssa;
 
 /* Call argument locations; see ssa_argument. */
-enum { SSA_TARGET = 32, SSA_RESULT_POINTER = 33, SSA_STACK = 64 };
+enum { SSA_TARGET = 32, SSA_RESULT_POINTER = 33, SSA_STACK = 64, SSA_ILP32_PART = 128 };
 /* Records where building stopped, for --opt-remarks. */
 #define SSA_GIVE_UP(s) ((s)->unsupported = true, (s)->reason = (s)->reason ? (s)->reason : __LINE__)
 static void *ssa_grow(void *items, uint32_t *capacity, uint32_t need, size_t size, bool *failed) {
@@ -338,7 +342,8 @@ static int64_t ssa_memory_type(const DynIrProgram *ir, DynType type) {
 static int32_t ssa_normalize(Ssa *s, int32_t v, DynType type) {
   if (payload_enum(s->ir, type) || float_type(type)) return v;
   type = storage_type(s->ir, type);
-  unsigned bits = integer_bits(type);
+  unsigned bits = dyn_type_is_pointer(type) || dyn_type_is_function(type) || type == DYN_TYPE_RAWPTR
+                    ? backend_pointer_bits : integer_bits(type);
   if (bits >= 64) return v;
   return ssa_emit(s, SO_EXT, SC_INT, v, -1, -1, bits, signed_scalar(type));
 }
@@ -391,7 +396,9 @@ static int32_t ssa_add_offset(Ssa *s, int32_t base, int64_t offset) {
 static uint32_t ssa_reserve(Ssa *s, uint32_t size, uint32_t alignment) {
   if (alignment < 8) alignment = 8;
   if (size > MAX_AGGREGATE || s->frame > MAX_AGGREGATE) { SSA_GIVE_UP(s); return 0; }
-  s->frame = (s->frame + size + alignment - 1) / alignment * alignment;
+  uint64_t frame = ((uint64_t)s->frame + size + alignment - 1) / alignment * alignment;
+  if (frame > MAX_AGGREGATE) { SSA_GIVE_UP(s); return 0; }
+  s->frame = (uint32_t)frame;
   s->regions = ssa_grow(s->regions, &s->region_capacity, s->region_count + 1, sizeof(SsaRegion), &s->failed);
   if (!s->failed) s->regions[s->region_count++] = (SsaRegion){0u - s->frame, size};
   return 0u - s->frame;
@@ -511,12 +518,36 @@ static int32_t ssa_temporary(Ssa *s, DynType type) {
   return ssa_frame(s, ssa_reserve(s, size ? size : 1, alignment));
 }
 static int32_t ssa_binary(Ssa *s, const DynIrExpr *e, int32_t left, int32_t right);
+/* Dyn packs are an ordinary const slice parameter, outside param_count. */
+static bool ssa_packed_type(const DynIrProgram *ir, const DynIrFunction *f) {
+  return !f->foreign && !f->generic && !f->is_main &&
+         dyn_type_is_slice(f->variadic_type) &&
+         f->variadic_type - DYN_TYPE_SLICE_BASE < ir->slice_count &&
+         ir->slices[f->variadic_type - DYN_TYPE_SLICE_BASE].is_const &&
+         abi_supported(ir, f->variadic_type);
+}
 static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned depth);
+/* any retains its 64-bit tag and pointer at byte 8 on every target.
+   String/slice fields instead follow the target pointer width. */
+static unsigned ssa_descriptor_bits(DynType type, unsigned field) {
+  return type == DYN_TYPE_ANY && !field ? 64 : backend_pointer_bits;
+}
+static unsigned ssa_descriptor_offset(DynType type, unsigned field) {
+  return field ? (type == DYN_TYPE_ANY ? 8 : backend_pointer_bits / 8) : 0;
+}
+static int32_t ssa_descriptor_load(Ssa *s, int32_t address, DynType type, unsigned field) {
+  return ssa_load(s, address, -1, 1, ssa_descriptor_offset(type, field),
+                  SSA_MEM(ssa_descriptor_bits(type, field), 0, 0));
+}
+static void ssa_descriptor_store(Ssa *s, int32_t address, DynType type, unsigned field, int32_t value) {
+  ssa_store(s, address, -1, 1, ssa_descriptor_offset(type, field),
+            SSA_MEM(ssa_descriptor_bits(type, field), 0, 0), value);
+}
 /* Value of a scalar local, global, field or element in memory. */
 static int32_t ssa_load_value(Ssa *s, int32_t address, DynType type, int32_t *second) {
   if (descriptor(type)) {
-    int32_t data = ssa_load(s, address, -1, 1, 0, SSA_MEM(64, 0, 0));
-    int32_t length = ssa_load(s, address, -1, 1, 8, SSA_MEM(64, 0, 0));
+    int32_t data = ssa_descriptor_load(s, address, type, 0);
+    int32_t length = ssa_descriptor_load(s, address, type, 1);
     if (second) *second = length;
     return data;
   }
@@ -528,8 +559,8 @@ static int32_t ssa_load_value(Ssa *s, int32_t address, DynType type, int32_t *se
 }
 static void ssa_store_value(Ssa *s, int32_t address, DynType type, int32_t value, int32_t second) {
   if (descriptor(type)) {
-    ssa_store(s, address, -1, 1, 0, SSA_MEM(64, 0, 0), value);
-    ssa_store(s, address, -1, 1, 8, SSA_MEM(64, 0, 0), second);
+    ssa_descriptor_store(s, address, type, 0, value);
+    ssa_descriptor_store(s, address, type, 1, second);
     return;
   }
   if (aggregate(s->ir, type)) {
@@ -558,8 +589,8 @@ static int32_t ssa_cast(Ssa *s, const DynIrExpr *e, unsigned depth) {
     ssa_check(s, any < 0 ? ssa_const(s, 0, SC_INT) : any, ssa_const(s, 0, SC_INT), CC_NE, GUARD_ENUM);
     return ssa_normalize(s, v, e->type);
   }
-  bool from_pointer = dyn_type_is_pointer(from) || from == DYN_TYPE_RAWPTR;
-  bool to_pointer = dyn_type_is_pointer(e->type) || e->type == DYN_TYPE_RAWPTR;
+  bool from_pointer = dyn_type_is_pointer(from) || dyn_type_is_function(from) || from == DYN_TYPE_RAWPTR;
+  bool to_pointer = dyn_type_is_pointer(e->type) || dyn_type_is_function(e->type) || e->type == DYN_TYPE_RAWPTR;
   bool pointer_conversion = (from_pointer || to_pointer) &&
     (from_pointer || integer_type(from)) && (to_pointer || integer_type(e->type));
   bool integer_float = integer_type(from) && float_type(e->type), float_integer = float_type(from) && integer_type(e->type);
@@ -572,7 +603,7 @@ static int32_t ssa_cast(Ssa *s, const DynIrExpr *e, unsigned depth) {
     v = ssa_emit(s, SO_FTOI, SC_INT, v, -1, -1, !signed_scalar(e->type) && integer_bits(e->type) == 64, 0);
     return ssa_normalize(s, v, e->type);
   }
-  if (to_pointer && integer_type(from) && integer_bits(from) < 64)
+  if (to_pointer && integer_type(from) && integer_bits(from) < backend_pointer_bits)
     v = ssa_emit(s, SO_EXT, SC_INT, v, -1, -1, integer_bits(from), 0);
   if (float_type(e->type)) return e->type != from ? ssa_emit(s, SO_FCVT, ssa_class(e->type), v, -1, -1, 0, 0) : v;
   return ssa_normalize(s, v, e->type);
@@ -844,6 +875,11 @@ static int32_t ssa_checked(Ssa *s, SsaOp op, int32_t a, int32_t b, bool sign) {
   SsaOp plain = op == SO_ADDO ? SO_ADD : op == SO_SUBO ? SO_SUB : SO_MUL;
   int32_t r = ssa_emit(s, plain, SC_INT, a, b, -1, 0, 0), zero = ssa_const(s, 0, SC_INT);
   if (op == SO_MULO) {
+    if (s->ctx->rv32 || s->ctx->t32) {
+      int32_t fits = ssa_emit(s, SO_MULOK32, SC_INT, a, b, -1, 0, sign);
+      ssa_check(s, fits, zero, CC_NE, GUARD_OVERFLOW);
+      return r;
+    }
     int32_t high = ssa_emit(s, SO_MULH, SC_INT, a, b, -1, 0, sign);
     int32_t expected = sign ? ssa_emit(s, SO_SAR, SC_INT, r, ssa_const(s, 63, SC_INT), -1, 0, 0) : zero;
     ssa_check(s, high, expected, CC_E, GUARD_OVERFLOW);
@@ -959,7 +995,9 @@ static void ssa_store_bytes(Ssa *s, int32_t address, uint32_t offset, uint32_t s
 /* Call arguments are triples in the value's list: value, location, bytes.
    Locations: 0-5 GP argument registers, 8-15 XMM registers, 32 the indirect
    target (RAX), 64 + offset an outgoing stack slot. bytes > 0 copies that many
-   bytes from the address in value to the stack slot. */
+   bytes from the address in value to the stack slot. ILP32 instead uses
+   {value, SSA_ILP32_PART + AbiPart.cls, AbiPart.leaf}; only the indirect target
+   retains the common {value, SSA_TARGET, 0} encoding. */
 typedef struct { int32_t *items; uint32_t count, capacity; } SsaArguments;
 static void ssa_argument(Ssa *s, SsaArguments *list, int32_t value, int32_t location, int32_t bytes) {
   list->items = ssa_grow(list->items, &list->capacity, list->count + 3, sizeof(int32_t), &s->failed);
@@ -974,6 +1012,22 @@ static int32_t ssa_rv_word(Ssa *s, int32_t value, DynType leaf) {
 static void ssa_pass(Ssa *s, SsaArguments *list, DynType type, int32_t value, int32_t second,
                      AbiPart *parts, unsigned count, uint32_t *stack) {
   const DynIrProgram *ir = s->ir;
+  if (s->ctx->rv32 || s->ctx->t32) {
+    /* Keep ABI pair/split classes distinct from SSA_TARGET and SSA_STACK.
+       The slot emitter assigns outgoing offsets with stack_slot. */
+    if ((!scalar(ir, type) && !descriptor(type) && !aggregate(ir, type)) ||
+        list->count / 3 + count > 512 || (descriptor(type) && second < 0)) { SSA_GIVE_UP(s); return; }
+    for (unsigned i = 0; i < count; ++i) {
+      int32_t part = aggregate(ir, type)
+        ? (float_type(parts[i].leaf)
+           ? ssa_load(s, value, -1, 1, parts[i].offset, SSA_MEM(parts[i].size * 8, 0, 1))
+           : ssa_load_bytes(s, value, parts[i].offset, parts[i].size))
+        : i ? second : value;
+      ssa_argument(s, list, ssa_normalize(s, part, parts[i].leaf),
+                   SSA_ILP32_PART + parts[i].cls, parts[i].leaf);
+    }
+    return;
+  }
   if (s->ctx->a64) {
     /* AAPCS64 stack parts take their own slots: eight bytes on Linux, natural
        size on Apple. bytes = -width marks a stack store of that width. */
@@ -1025,9 +1079,9 @@ static void ssa_pass(Ssa *s, SsaArguments *list, DynType type, int32_t value, in
     else { ssa_argument(s, list, part, SSA_STACK + (int32_t)*stack, 0); *stack += 8; }
   }
 }
-/* Register parts of a struct result: System V eightbytes, or on AArch64 the
-   members of a homogeneous float aggregate or up to two words. aux: result
-   slot (0 and 1 integer, X_XMM0 + n floating). False: returned in memory. */
+/* Target register result plan, after abi_memory has ruled out sret.
+   Preserve exact offsets, tail sizes and leaves; aux names the integer or
+   floating result bank (0/1 core, X_XMM0 + n floating). */
 typedef struct { uint32_t offset, size; int aux; bool floating; DynType leaf; } SsaPart;
 static bool ssa_struct_parts(Ssa *s, DynType type, SsaPart *parts, unsigned *count) {
   const DynIrProgram *ir = s->ir;
@@ -1039,7 +1093,7 @@ static bool ssa_struct_parts(Ssa *s, DynType type, SsaPart *parts, unsigned *cou
     parts[0] = (SsaPart){0, size, 0, false, DYN_TYPE_U64};
     return true;
   }
-  if (s->ctx->rv64) {
+  if (s->ctx->rv64 || s->ctx->rv32) {
     /* RISC-V flattens up to two leaves into integer and float registers. */
     AbiPart abi[4]; unsigned gp = 0, fp = 0; bool indirect;
     if (!abi_assign(s->ctx, ir, type, &gp, &fp, abi, count, 4, &indirect) || indirect || *count > 2) return false;
@@ -1050,16 +1104,17 @@ static bool ssa_struct_parts(Ssa *s, DynType type, SsaPart *parts, unsigned *cou
     }
     return true;
   }
-  if (s->ctx->a64) {
+  if (s->ctx->a64 || s->ctx->t32) {
     DynType element; unsigned members;
-    if (a64_struct_hfa(ir, type, &element, &members)) {
+    if (!s->ctx->soft_float && !(s->ctx->t32 && s->ctx->rv_variadic) && a64_struct_hfa(ir, type, &element, &members)) {
       unsigned bytes = memory_bits(element) / 8;
       for (unsigned i = 0; i < members; ++i) parts[i] = (SsaPart){i * bytes, bytes, X_XMM0 + (int)i, true, element};
       *count = members;
       return true;
     }
-    *count = (size + 7) / 8;
-    for (unsigned i = 0; i < *count; ++i) parts[i] = (SsaPart){i * 8, size - i * 8 > 8 ? 8 : size - i * 8, (int)i, false, DYN_TYPE_U64};
+    unsigned word = s->ctx->t32 ? 4 : 8;
+    *count = (size + word - 1) / word;
+    for (unsigned i = 0; i < *count; ++i) parts[i] = (SsaPart){i * word, size - i * word > word ? word : size - i * word, (int)i, false, word == 4 ? DYN_TYPE_U32 : DYN_TYPE_U64};
     return true;
   }
   unsigned cls[2], integers = 0, floats = 0;
@@ -1070,14 +1125,98 @@ static bool ssa_struct_parts(Ssa *s, DynType type, SsaPart *parts, unsigned *cou
   }
   return true;
 }
+/* Shared call identity and scoped ABI classification. No mode survives into
+   recursive expression construction (including callbacks and packed values). */
+typedef struct {
+  uint32_t start, fixed, groups;
+  bool indirect, packed, variadic, sret;
+  DynType packed_type;
+} SsaCallPlan;
+static DynType ssa_call_type(Ssa *s, const DynIrExpr *e, const SsaCallPlan *p, unsigned i) {
+  if (i < p->fixed) return p->indirect ? s->ir->fn_type_params[p->start+i] : s->ir->params[p->start+i].type;
+  return p->packed ? p->packed_type : s->ir->expressions[s->ir->items[e->item_start+i].expression].type;
+}
+static bool ssa_call_memory(Ssa *s, DynType type, bool base) {
+  bool saved = s->ctx->rv_variadic;
+  s->ctx->rv_variadic = base;
+  bool memory = abi_memory(s->ctx, s->ir, type);
+  s->ctx->rv_variadic = saved;
+  return memory;
+}
+static bool ssa_call_parts(Ssa *s, DynType type, bool mode, unsigned *gp, unsigned *fp,
+                           AbiPart *parts, unsigned *count, unsigned capacity, bool *indirect) {
+  bool saved = s->ctx->rv_variadic;
+  s->ctx->rv_variadic = mode;
+  bool ok = abi_assign(s->ctx, s->ir, type, gp, fp, parts, count, capacity, indirect);
+  s->ctx->rv_variadic = saved;
+  return ok;
+}
+static bool ssa_call_result_parts(Ssa *s, DynType type, bool base, SsaPart *parts, unsigned *count) {
+  bool saved = s->ctx->rv_variadic;
+  s->ctx->rv_variadic = base;
+  bool ok = ssa_struct_parts(s, type, parts, count);
+  s->ctx->rv_variadic = saved;
+  return ok;
+}
+static bool ssa_call_plan(Ssa *s, const DynIrExpr *e, SsaCallPlan *p) {
+  const DynIrProgram *ir = s->ir;
+  *p = (SsaCallPlan){0};
+  p->indirect = e->kind == DYN_EXPR_INDIRECT_CALL;
+  if ((!p->indirect && e->kind != DYN_EXPR_CALL) || e->item_count > 512 ||
+      (uint64_t)e->item_start+e->item_count > ir->item_count || !abi_supported(ir,e->type)) return false;
+  DynType result;
+  if (p->indirect) {
+    if (e->integer >= ir->fn_type_count || e->left >= ir->expression_count) return false;
+    const DynIrFnType *f = &ir->fn_types[e->integer];
+    p->start=f->param_start; p->fixed=f->param_count; p->variadic=f->variadic; result=f->return_type;
+    if ((uint64_t)p->start+p->fixed > ir->fn_type_param_count) return false;
+  } else {
+    if (e->integer >= ir->function_count) return false;
+    const DynIrFunction *f = &ir->functions[e->integer];
+    if (f->generic || f->is_main || !s->ctx->function_symbols[e->integer]) return false;
+    p->start=f->param_start; p->fixed=f->param_count; result=f->return_type;
+    p->packed=f->variadic && !f->foreign; p->variadic=f->variadic && f->foreign;
+    p->packed_type=f->variadic_type;
+    if ((uint64_t)p->start+p->fixed > ir->param_count || (p->packed && !ssa_packed_type(ir,f))) return false;
+  }
+  if (result != e->type || p->fixed > e->item_count ||
+      (!p->packed && !p->variadic && p->fixed != e->item_count)) return false;
+  p->groups=p->packed ? p->fixed+1 : e->item_count;
+  if (p->groups > 512) return false;
+  for (unsigned i=0;i<e->item_count;++i)
+    if (ir->items[e->item_start+i].expression >= ir->expression_count) return false;
+  p->sret=ssa_call_memory(s,result,s->ctx->t32 && p->variadic);
+  if (dyn_type_is_struct(result) && !p->sret) {
+    SsaPart results[4]; unsigned count;
+    if (!ssa_call_result_parts(s,result,s->ctx->t32 && p->variadic,results,&count)) return false;
+  }
+  /* Source, group and flattened limits are independent; the indirect target
+     is an additional operand, so a full plan may have 513 call operands. */
+  unsigned gp=p->sret ? 1 : 0, fp=0, total=gp;
+  AbiPart parts[512];
+  for (unsigned i=0;i<p->groups;++i) {
+    DynType t=ssa_call_type(s,e,p,i);
+    if (!abi_supported(ir,t)) return false;
+    if (p->variadic && i>=p->fixed && t!=DYN_TYPE_I32 && t!=DYN_TYPE_U32 &&
+        t!=DYN_TYPE_I64 && t!=DYN_TYPE_U64 && t!=DYN_TYPE_ISIZE && t!=DYN_TYPE_USIZE &&
+        t!=DYN_TYPE_F64 && !dyn_type_is_pointer(t)) return false;
+    unsigned n; bool indirect;
+    if (!ssa_call_parts(s,t,p->variadic && (s->ctx->t32 || i>=p->fixed),&gp,&fp,parts,&n,512-total,&indirect) || n>512-total) return false;
+    total+=n;
+  }
+  return true;
+}
 static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned depth) {
   const DynIrProgram *ir = s->ir;
   BackendContext *ctx = s->ctx;
   bool indirect = e->kind == DYN_EXPR_INDIRECT_CALL;
   if (e->item_count > 512 || (uint64_t)e->item_start + e->item_count > ir->item_count) { SSA_GIVE_UP(s); return 0; }
   DynType result = e->type;
-  if (raw_aggregate(ir, result) || !abi_supported(ir, result)) { SSA_GIVE_UP(s); return 0; }
-  bool sret = abi_memory(ctx, ir, result);
+  if ((raw_aggregate(ir, result) && !ctx->rv32 && !ctx->t32) || !abi_supported(ir, result)) { SSA_GIVE_UP(s); return 0; }
+  SsaCallPlan plan = {0};
+  bool ilp32 = ctx->rv32 || ctx->t32;
+  if (ilp32 && !ssa_call_plan(s,e,&plan)) { SSA_GIVE_UP(s); return 0; }
+  bool sret = ilp32 ? plan.sret : abi_memory(ctx, ir, result);
   const DynIrFunction *callee = NULL;
   unsigned fixed;
   bool packed = false;
@@ -1086,52 +1225,62 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   if (indirect) {
     if (e->integer >= ir->fn_type_count) { SSA_GIVE_UP(s); return 0; }
     const DynIrFnType *signature = &ir->fn_types[e->integer];
-    if (signature->variadic || signature->param_count != e->item_count) { SSA_GIVE_UP(s); return 0; }
+    if (!ilp32 && (signature->variadic || signature->param_count != e->item_count)) { SSA_GIVE_UP(s); return 0; }
     fixed = signature->param_count;
-    target = ssa_expr(s, e->left, NULL, depth + 1);
-    ssa_check(s, target, ssa_const(s, 0, SC_INT), CC_NE, GUARD_FUNCTION);
   } else {
     if (e->integer >= ir->function_count) { SSA_GIVE_UP(s); return 0; }
     callee = &ir->functions[e->integer];
     if (callee->generic || callee->is_main || !ctx->function_symbols[e->integer] ||
         (!callee->variadic && callee->param_count != e->item_count) || callee->param_count > e->item_count ||
-        (callee->variadic && callee->foreign)) { SSA_GIVE_UP(s); return 0; }
+        (callee->variadic && callee->foreign && !ilp32)) { SSA_GIVE_UP(s); return 0; }
     fixed = callee->param_count;
-    packed = callee->variadic;
+    packed = callee->variadic && !callee->foreign;
     if (packed) {
-      if (!dyn_type_is_slice(callee->variadic_type)) { SSA_GIVE_UP(s); return 0; }
+      if (!ssa_packed_type(ir, callee)) { SSA_GIVE_UP(s); return 0; }
       pack_type = ir->slices[callee->variadic_type - DYN_TYPE_SLICE_BASE].element;
     }
   }
+  uint32_t pack_element = 0, pack_alignment = 0, pack_bytes = 0;
+  if (packed) {
+    if (!layout(ir, pack_type, &pack_element, &pack_alignment, 0)) { SSA_GIVE_UP(s); return 0; }
+    uint64_t bytes = (uint64_t)pack_element * (e->item_count - fixed);
+    if (bytes > MAX_AGGREGATE) { SSA_GIVE_UP(s); return 0; }
+    pack_bytes = (uint32_t)bytes;
+  }
+  if (indirect) {
+    target = ssa_expr(s, e->left, NULL, depth + 1);
+    ssa_check(s, target, ssa_const(s, 0, SC_INT), CC_NE, GUARD_FUNCTION);
+  }
   SsaArguments list = {0};
+  int32_t groups[1536]; uint32_t group_count = 0;
   unsigned gp = sret && !ctx->a64 ? 1 : 0, fp = 0;
   uint32_t stack = ctx->win64 ? 32 : 0; /* Microsoft x64: the 32-byte home area precedes stack arguments */
   int32_t result_address = -1;
   if (sret) {
     result_address = ssa_temporary(s, result);
-    ssa_argument(s, &list, result_address, ctx->a64 ? SSA_RESULT_POINTER : 0, 0);
+    ssa_argument(s, &list, result_address, (ctx->rv32 || ctx->t32) ? SSA_ILP32_PART : ctx->a64 ? SSA_RESULT_POINTER : 0, (ctx->rv32 || ctx->t32) ? DYN_TYPE_RAWPTR : 0);
   }
   AbiPart parts[512];
-  for (uint32_t i = 0; i < fixed + (packed ? 1u : 0u) && !s->unsupported && !s->failed; ++i) {
-    DynType type = i < fixed ? (indirect ? ir->fn_type_params[ir->fn_types[e->integer].param_start + i]
+  for (uint32_t i = 0; i < (ilp32 ? plan.groups : fixed + (packed ? 1u : 0u)) && !s->unsupported && !s->failed; ++i) {
+    if ((ctx->rv32 || ctx->t32) && group_count >= 512) { SSA_GIVE_UP(s); break; }
+    DynType type = ilp32 ? ssa_call_type(s,e,&plan,i) : i < fixed ? (indirect ? ir->fn_type_params[ir->fn_types[e->integer].param_start + i]
                                          : ir->params[callee->param_start + i].type)
                              : callee->variadic_type;
     unsigned count; bool by_pointer;
-    if (raw_aggregate(ir, type) || !abi_assign(ctx, ir, type, &gp, &fp, parts, &count, 512, &by_pointer)) {
+    if ((raw_aggregate(ir, type) && !ctx->rv32 && !ctx->t32) || !ssa_call_parts(s, type, ilp32 && plan.variadic && (ctx->t32 || i>=fixed), &gp, &fp, parts, &count, 512, &by_pointer)) {
       SSA_GIVE_UP(s); break;
     }
     /* AArch64 stack arguments differ by platform; they stay with the tree emitter. */
     int32_t value, length = -1;
-    if (i < fixed) {
+    if (i < fixed || !packed) {
       DynExprId argument = ir->items[e->item_start + i].expression;
       value = ssa_expr(s, argument, &length, depth + 1);
     } else {
       /* The packed variadic slice: elements in a frame array; with `any`,
          each value boxed beside it. */
       unsigned extra = e->item_count - fixed;
-      uint32_t element, a;
-      if (!layout(ir, pack_type, &element, &a, 0)) { SSA_GIVE_UP(s); break; }
-      int32_t array = extra ? ssa_frame(s, ssa_reserve(s, element * extra, a)) : ssa_const(s, 0, SC_INT);
+      uint32_t element = pack_element;
+      int32_t array = extra ? ssa_frame(s, ssa_reserve(s, pack_bytes, pack_alignment)) : ssa_const(s, 0, SC_INT);
       for (unsigned k = 0; k < extra && !s->unsupported; ++k) {
         DynExprId argument = ir->items[e->item_start + fixed + k].expression;
         DynType argument_type = ir->expressions[argument].type;
@@ -1141,19 +1290,27 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
           int32_t box = ssa_frame(s, ssa_reserve(s, size ? size : 1, alignment));
           ssa_initialize(s, box, argument_type, argument, depth + 1);
           int32_t slot = ssa_add_offset(s, array, (int64_t)k * element);
-          ssa_store(s, slot, -1, 1, 0, SSA_MEM(64, 0, 0), ssa_const(s, argument_type, SC_INT));
-          ssa_store(s, slot, -1, 1, 8, SSA_MEM(64, 0, 0), box);
+          ssa_descriptor_store(s, slot, DYN_TYPE_ANY, 0, ssa_const(s, argument_type, SC_INT));
+          ssa_descriptor_store(s, slot, DYN_TYPE_ANY, 1, box);
         } else ssa_initialize(s, ssa_add_offset(s, array, (int64_t)k * element), pack_type, argument, depth + 1);
       }
       value = array; length = ssa_const(s, extra, SC_INT);
     }
+    if (ctx->rv32 || ctx->t32) {
+      groups[3 * group_count] = type;
+      groups[3 * group_count + 1] = list.count / 3;
+      groups[3 * group_count++ + 2] = count;
+    }
     if (by_pointer) {
-      /* AAPCS64 composites over 16 bytes: a pointer to a caller-owned copy. */
+      /* Indirect composites point at a caller-owned snapshot taken now. */
       uint32_t size, alignment;
       if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); break; }
       int32_t copy = ssa_temporary(s, type);
       ssa_emit(s, SO_COPYMEM, SC_NONE, copy, value, -1, size, 0);
-      if (parts[0].cls >= 0) ssa_argument(s, &list, copy, parts[0].cls, 0);
+      if (ctx->rv32 || ctx->t32) {
+        if (list.count / 3 >= 512) { SSA_GIVE_UP(s); break; }
+        ssa_argument(s, &list, copy, SSA_ILP32_PART + parts[0].cls, DYN_TYPE_RAWPTR);
+      } else if (parts[0].cls >= 0) ssa_argument(s, &list, copy, parts[0].cls, 0);
       else ssa_argument(s, &list, copy, SSA_STACK + (int32_t)stack_slot(ctx, &parts[0], &stack), -8);
       continue;
     }
@@ -1165,6 +1322,12 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   if (!s->failed) {
     s->values[call].list = ssa_list(s, list.items, list.count);
     s->values[call].count = list.count / 3;
+    if (ctx->rv32 || ctx->t32) {
+      s->values[call].abi_expr = (uint32_t)(e - ir->expressions) + 1;
+      uint32_t at = ssa_list(s, groups, 3 * group_count);
+      s->values[call].abi_groups = at;
+      s->values[call].abi_group_count = group_count;
+    }
   }
   free(list.items);
   if (stack > s->outgoing) s->outgoing = stack;
@@ -1177,17 +1340,21 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   if (result == DYN_TYPE_VOID) return 0;
   if (sret) return result_address;
   if (descriptor(result)) {
-    int32_t data = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 0, 0);
-    int32_t length = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 1, 0);
+    int32_t data = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 0, (ctx->rv32 || ctx->t32) ? result : 0);
+    int32_t length = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 1, (ctx->rv32 || ctx->t32) ? result : 0);
+    if (ctx->rv32 || ctx->t32) {
+      if (result != DYN_TYPE_ANY) data = ssa_normalize(s, data, DYN_TYPE_USIZE);
+      length = ssa_normalize(s, length, DYN_TYPE_USIZE);
+    }
     if (second) *second = length;
     return data;
   }
   if (dyn_type_is_struct(result)) {
     SsaPart parts[4]; unsigned count;
-    if (!ssa_struct_parts(s, result, parts, &count)) { SSA_GIVE_UP(s); return 0; }
+    if (!ssa_call_result_parts(s, result, ctx->t32 && plan.variadic, parts, &count)) { SSA_GIVE_UP(s); return 0; }
     int32_t values[4];
     for (unsigned i = 0; i < count; ++i)
-      values[i] = ssa_emit(s, SO_RESULT, parts[i].floating ? (parts[i].size == 4 ? SC_F32 : SC_F64) : SC_INT, call, -1, -1, parts[i].aux, 0);
+      values[i] = ssa_emit(s, SO_RESULT, parts[i].floating ? (parts[i].size == 4 ? SC_F32 : SC_F64) : SC_INT, call, -1, -1, parts[i].aux, (ctx->rv32 || ctx->t32) ? result : 0);
     int32_t address = ssa_temporary(s, result);
     for (unsigned i = 0; i < count; ++i) {
       if (parts[i].floating) ssa_store(s, address, -1, 1, parts[i].offset, SSA_MEM(parts[i].size == 4 ? 32 : 64, 0, 1), values[i]);
@@ -1195,7 +1362,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     }
     return address;
   }
-  int32_t v = ssa_emit(s, SO_RESULT, ssa_class(result), call, -1, -1, float_type(result) ? X_XMM0 : 0, 0);
+  int32_t v = ssa_emit(s, SO_RESULT, ssa_class(result), call, -1, -1, float_type(result) ? X_XMM0 : 0, (ctx->rv32 || ctx->t32) ? result : 0);
   return ssa_normalize(s, v, result);
 }
 static void ssa_initialize(Ssa *s, int32_t destination, DynType type, DynExprId id, unsigned depth) {
@@ -1264,13 +1431,17 @@ static void ssa_return_value(Ssa *s, int32_t value, int32_t second) {
   if (s->f->is_main) { ssa_return(s, ssa_const(s, 0, SC_INT), -1); return; }
   if (type == DYN_TYPE_VOID || value_type(ir, type)) {
     if (scalar(ir, type) && value >= 0) value = ssa_rv_word(s, value, type);
+    if ((s->ctx->rv32 || s->ctx->t32) && descriptor(type)) {
+      if (type != DYN_TYPE_ANY) value = ssa_normalize(s, value, DYN_TYPE_USIZE);
+      second = ssa_normalize(s, second, DYN_TYPE_USIZE);
+    }
     ssa_return(s, value, second);
     return;
   }
   uint32_t size, alignment;
-  if (!dyn_type_is_struct(type) || !layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
+  if (!aggregate(ir, type) || !layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
   if (s->return_slot != UINT32_MAX) {
-    int32_t pointer = ssa_load(s, ssa_frame(s, s->return_slot), -1, 1, 0, SSA_MEM(64, 0, 0));
+    int32_t pointer = ssa_load(s, ssa_frame(s, s->return_slot), -1, 1, 0, SSA_MEM((s->ctx->rv32 || s->ctx->t32) ? 32 : 64, 0, 0));
     ssa_emit(s, SO_COPYMEM, SC_NONE, pointer, value, -1, size, 0);
     ssa_return(s, pointer, -1);
     return;
@@ -1528,8 +1699,17 @@ static void ssa_case_body(Ssa *s, const DynIrCaseArm *arm, int32_t pointer, uint
 /* Dense single-value cases dispatch through a jump table: at least four
    values spanning at most four slots per value. Earlier arms win, as in the
    compare chain. Returns false when the case does not qualify. */
+/* Valid enum values always match an exhaustive case; reaching the fallback
+   means storage was written through an unchecked path such as foreign code. */
+static void ssa_case_invalid_tag(Ssa *s, DynType type) {
+  if (!dyn_type_is_enum(type)) return;
+  int32_t zero = ssa_const(s, 0, SC_INT);
+  ssa_check(s, zero, zero, CC_NE, GUARD_ENUM_TAG);
+}
 static bool ssa_case_table(Ssa *s, const DynIrStmt *st, DynType type, bool any, int32_t subject, int32_t pointer,
                            uint32_t done, unsigned depth) {
+  /* ILP32 uses the ordered pair-comparison chain, including dense cases. */
+  if (s->ctx->rv32 || s->ctx->t32) return false;
   const DynIrProgram *ir = s->ir;
   uint32_t values = 0, wildcard = UINT32_MAX;
   int64_t minimum = INT64_MAX, maximum = INT64_MIN;
@@ -1590,6 +1770,7 @@ static bool ssa_case_table(Ssa *s, const DynIrStmt *st, DynType type, bool any, 
   if (wildcard == UINT32_MAX) {
     ssa_seal(s, fallback);
     s->current = fallback;
+    ssa_case_invalid_tag(s, type);
     ssa_emit(s, SO_TRAP, SC_NONE, -1, -1, -1, 0, 0);
     s->blocks[fallback].kind = SB_EXIT;
   }
@@ -1661,6 +1842,7 @@ static void ssa_case(Ssa *s, const DynIrStmt *st, unsigned depth) {
     s->current = s->blocks[next].preds.count ? next : UINT32_MAX;
   }
   if (s->current != UINT32_MAX) {
+    ssa_case_invalid_tag(s, type);
     ssa_emit(s, SO_TRAP, SC_NONE, -1, -1, -1, 0, 0);
     s->blocks[s->current].kind = SB_EXIT;
     s->current = UINT32_MAX;
@@ -2019,7 +2201,10 @@ static void ssa_scan(Ssa *s, uint32_t start, uint32_t count, unsigned depth) {
 }
 /* Builds the function. Parameters arrive first, as SO_PARAM values that the
    emitter moves out of the argument registers together. */
+static bool ssa32_signature(Ssa *s);
+static void ssa32_parameters(Ssa *s);
 static void ssa_build(Ssa *s) {
+  if ((s->ctx->rv32 || s->ctx->t32) && !ssa32_signature(s)) { SSA_GIVE_UP(s); return; }
   const DynIrProgram *ir = s->ir;
   const DynIrFunction *f = s->f;
   uint32_t locals = f->local_count ? f->local_count : 1;
@@ -2047,6 +2232,10 @@ static void ssa_build(Ssa *s) {
   s->blocks[entry].sealed = true;
   s->current = entry;
   BackendContext *ctx = s->ctx;
+  if (ctx->rv32 || ctx->t32) {
+    ssa32_parameters(s);
+    if (s->unsupported || s->failed) return;
+  } else {
   bool sret = abi_memory(ctx, ir, f->return_type);
   if (raw_aggregate(ir, f->return_type)) { SSA_GIVE_UP(s); return; }
   unsigned gp = sret && !ctx->a64 ? 1 : 0, fp = 0;
@@ -2125,6 +2314,7 @@ static void ssa_build(Ssa *s) {
     ssa_set_local(s, local, values[0], values[1]);
   }
   if (next != count) { SSA_GIVE_UP(s); return; }
+  }
   if (f->is_main && ctx->initializer_symbol) {
     int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, ctx->initializer_symbol, 0);
     (void)call;
@@ -2493,6 +2683,54 @@ static bool ssa_same(const SsaValue *x, const SsaValue *y) {
   return x->op == y->op && x->cls == y->cls && x->a == y->a && x->b == y->b && x->c == y->c &&
          x->aux == y->aux && x->aux2 == y->aux2 && x->cond == y->cond && x->scale == y->scale;
 }
+/* Reuse exact loads only inside one basic block and between memory effects.
+   Every store/call/copy is a barrier, including stores through const aliases.
+   Checks may fail, but cannot change memory on the path that continues here. */
+static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
+  uint32_t largest = 0, capacity = 64, reused = 0;
+  for (uint32_t i = 0; i < n; ++i)
+    if (s->blocks[order[i]].values.count > largest)
+      largest = s->blocks[order[i]].values.count;
+  while (capacity < (uint64_t)largest * 2) {
+    if (capacity > UINT32_MAX / 2) { s->failed = true; return false; }
+    capacity *= 2;
+  }
+  typedef struct { uint64_t epoch; int32_t value; } LoadEntry;
+  LoadEntry *table = calloc(capacity, sizeof(*table));
+  if (!table) { s->failed = true; return false; }
+  uint64_t epoch = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    ++epoch;
+    uint32_t kept = 0;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->op == SO_LOAD) {
+        uint32_t slot = (uint32_t)ssa_key(v) & (capacity - 1);
+        while (table[slot].epoch == epoch && !ssa_same(&s->values[table[slot].value], v))
+          slot = (slot + 1) & (capacity - 1);
+        if (table[slot].epoch == epoch) {
+          ssa_replace(s, (int32_t)id, table[slot].value);
+          v->dead = true;
+          ++reused;
+          continue;
+        }
+        table[slot] = (LoadEntry){epoch, (int32_t)id};
+      } else if (v->effect && v->op != SO_CHECK && v->op != SO_CHECK_SHL &&
+                 v->op != SO_ADDO && v->op != SO_SUBO && v->op != SO_MULO &&
+                 v->op != SO_DIV && v->op != SO_REM) {
+        ++epoch;
+      }
+      block->values.items[kept++] = id;
+    }
+    block->values.count = kept;
+  }
+  free(table);
+  if (reused && s->ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: %u repeated loads reused within basic blocks\n", s->f->name, reused);
+  return reused != 0;
+}
 /* Common subexpressions: a later value equal to a dominating one reuses it.
    Checks and overflow-checked arithmetic qualify too: once a check passed,
    an identical one cannot fail. */
@@ -2633,27 +2871,37 @@ static void ssa_splice(Ssa *s, uint32_t b, uint32_t k, const int32_t *items, uin
   memmove(list->items + k + count, list->items + k + 1, (list->count - k - count) * sizeof(uint32_t));
   for (uint32_t i = 0; i < count; ++i) list->items[k + i] = (uint32_t)items[i];
 }
+static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, unsigned depth);
 /* A copy out of a region whose bytes are all known becomes stores; returns
    whether it did. */
 static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner, const SsaKnown *known) {
   SsaValue *v = &s->values[s->blocks[b].values.items[k]];
   int32_t destination = v->a;
   uint32_t size = (uint32_t)v->aux, at = 0, count = 0;
+  /* An empty copy needs no stores; ssa_splice requires a nonempty replacement. */
+  if (!size) return false;
   int32_t items[2 * SSA_TRACKED + 1];
   int32_t zero = -1;
+  unsigned alignment = 0;
+  if (!ssa_address_facts(s, destination, &alignment, 0)) alignment = 0;
   while (at < size) {
     int32_t owned = owner[at];
     uint32_t width;
     int32_t value;
     int64_t type;
     if (owned == SSA_ZERO) {
-      width = 8;
+      /* A byte-array destination may be odd even when the source region
+         and copy size are aligned. Widen only with destination address proof. */
+      width = 1u << (alignment < 3 ? alignment : 3);
       while (width > 1 && (at % width || at + width > size)) width /= 2;
       for (uint32_t i = 0; i < width; ++i) if (owner[at + i] != SSA_ZERO) width = 1;
       if (zero < 0) { zero = ssa_value(s, b, SO_CONST, SC_INT, -1, -1, -1, 0, 0); items[count++] = zero; }
       value = zero; type = SSA_MEM(width * 8, 0, 0);
     } else if (owned >= 0 && known[owned].offset == at && at + known[owned].width <= size) {
       width = known[owned].width;
+      /* Known payloads keep their original type and width. If the destination
+         cannot support that width, leave the copy for bytewise lowering. */
+      if (width > (1u << (alignment < 3 ? alignment : 3)) || at % width) return false;
       for (uint32_t i = 0; i < width; ++i) if (owner[at + i] != owned) return false;
       value = known[owned].value; type = known[owned].type;
     } else return false;
@@ -2778,6 +3026,9 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
           --k;
           continue;
         }
+        /* A rejected forwarding attempt may still grow the value array. */
+        if (s->failed) break;
+        v = &s->values[id];
       }
       if (s->failed) break;
       /* Copy expansion can grow the value array even when it cannot finish. */
@@ -3133,6 +3384,9 @@ static int32_t ssa_insert(Ssa *s, uint32_t b, uint32_t *k, SsaOp op, int32_t a, 
    (Granlund and Montgomery, as libdivide computes it). The checks before it
    already ran; the result is bit-identical to the hardware division. */
 static void ssa_divisions(Ssa *s, const uint32_t *order, uint32_t n) {
+  /* Pair targets use the ISA's division helpers; reciprocal reduction would
+     introduce SO_MULH, which their slot emitter does not implement. */
+  if (s->ctx->rv32 || s->ctx->t32) return;
   for (uint32_t i = 0; i < n; ++i) {
     uint32_t b = order[i];
     for (uint32_t k = 0; k < s->blocks[b].values.count; ++k) {
@@ -5145,6 +5399,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   total = (total + 15) / 16 * 16;
   if (total > MAX_AGGREGATE + (1u << 20)) return false;
   e->frame_bytes = (uint32_t)total;
+  bare_stack_check(ctx,e->frame_bytes + 16);
   unsigned k = 0;
   ssa_x86_base_return(e);
   if (ctx->rv64) {
@@ -5408,6 +5663,9 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed && !s->failed;
 }
 
+/* Paired-register, frame-slot lowering; never enters the native allocator. */
+#include "ssa_32.inc"
+
 /* ---- Entry point ---- */
 
 static bool ssa_enabled(BackendContext *ctx, const DynSource *source) {
@@ -5426,10 +5684,13 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   int result = SSA_UNSUPPORTED;
   size_t text = ctx->text.n, relocations = ctx->relocation_count, rodata = ctx->rodata.n;
   unsigned unwind_frames = ctx->unwind_frame_count, arm_epilogues = ctx->arm_epilogue_count;
+  struct timespec phase = dyn_timing_start(&source->context);
   ssa_build(&s);
-  if (s.unsupported && ctx->optimization_remarks)
+  ctx->ssa_build_ms += backend_timing(&source->context, &phase);
+  if (s.unsupported && ctx->optimization_remarks && !(ctx->rv32 || ctx->t32))
     fprintf(stderr, "remark: %s: tree emitter (SSA stopped at ssa.inc:%u)\n", f->name, s.reason);
   if (s.unsupported || s.failed) goto done;
+  if ((ctx->rv32 || ctx->t32) && !ssa32_boundary(&s, false)) goto done;
   ssa_resolve_all(&s);
   for (unsigned round = 0; round < 6 && !s.failed; ++round) {
     free(order);
@@ -5441,6 +5702,8 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
     changed |= ssa_fold(&s, order, n);
     ssa_resolve_all(&s);
     changed |= ssa_cse(&s, order, n);
+    ssa_resolve_all(&s);
+    changed |= ssa_reuse_loads(&s, order, n);
     ssa_resolve_all(&s);
     changed |= ssa_prove(&s, order, n);
     if (!changed) break;
@@ -5474,11 +5737,19 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   if (!order || s.failed) goto done;
   ssa_addressing(&s, order, n);
   ssa_dce(&s, order, n);
+  if (ctx->rv32 || ctx->t32) {
+    ctx->ssa_optimize_ms += backend_timing(&source->context, &phase);
+    result = ssa32_function(&s, order, n);
+    ctx->ssa_emit_ms += backend_timing(&source->context, &phase);
+    goto done;
+  }
   ssa_fuse(&s, order, n);
+  ctx->ssa_optimize_ms += backend_timing(&source->context, &phase);
   alloc.order = order; alloc.n = n;
   if (!ssa_intervals(&alloc) || s.failed) goto done;
   ssa_hints(&alloc);
   if (!ssa_allocate(&alloc) || s.failed) goto done;
+  ctx->ssa_allocate_ms += backend_timing(&source->context, &phase);
   /* Measure, then emit again with short branches. */
   emit.start = ctx->text.n;
   size_t built_rodata = ctx->rodata.n;
@@ -5496,6 +5767,7 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
       measured = ssa_emit_function(&emit, order, n);
     }
   }
+  ctx->ssa_emit_ms += backend_timing(&source->context, &phase);
   if (measured) result = SSA_EMITTED;
   else {
     /* Roll back; the tree emitter takes the function instead. */
@@ -5506,6 +5778,10 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   if (result == SSA_EMITTED && source->context.optimization && source->context.optimization->remarks)
     fprintf(stderr, "remark: %s: SSA code generation, %u spill slots\n", f->name, alloc.spill_slots);
 done:
+  /* Paired-target preflight emits no instructions. Keep any literals interned
+     during SSA construction, just as on the normal build-time fallback path. */
+  if ((ctx->rv32 || ctx->t32) && result == SSA_UNSUPPORTED && ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: tree emitter (paired SSA boundary)\n", f->name);
   free(order);
   free(alloc.block_start); free(alloc.block_end); free(alloc.clobbers);
   free(emit.stub_uses); free(emit.jumps); free(emit.tables); free(emit.measured_blocks); free(emit.measured_jumps);

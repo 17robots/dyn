@@ -125,7 +125,7 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   state := scanner(source)
   count: usize = 0
   for next(&state).ok {
-    if count == #cast(usize) -1 {
+    if count == #cast(usize, -1) {
       return ParseResult{ error: ErrorKind.Overflow }
     }
     count += 1

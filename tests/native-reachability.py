@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import platform
 import shlex
+import struct
 import subprocess
 import tempfile
 
@@ -49,12 +50,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-reachability-') as directory
             run(DYN, 'build', module, '--'+mode, '--no-cache', '--no-link', '--emit-object',
                 '--target', target, '--output', output)
             data = Path(str(output)+'.o').read_bytes()
+            if target == 'x86_64-linux':
+                # SSA loop padding is relative to .text. Its linked address
+                # must retain 16-byte alignment after preceding runtime code.
+                sections = struct.unpack_from('<Q', data, 40)[0]
+                assert struct.unpack_from('<Q', data, sections + 64 + 48)[0] >= 16
             for name in ('unreachable_private_marker', 'unreachable_cycle_one', 'unreachable_cycle_two'):
                 assert name.encode() not in data, (target, mode, name)
             for name in ('initialize_value', 'recursive_callback', 'ffi_callback', 'deferred_cleanup', 'exported_value', 'export_helper'):
                 assert name.encode() in data, (target, mode, name)
     if platform.system() == 'Linux' and platform.machine() == 'x86_64':
-        (work/'callback.c').write_text('#include <stdint.h>\nuint64_t fixture_invoke(uint64_t (*f)(uint64_t),uint64_t n) {return f(n);}\n')
+        (work/'callback.c').write_text('#include <stdint.h>\nextern uint64_t exported_value(void);\nuint64_t fixture_invoke(uint64_t (*f)(uint64_t),uint64_t n) {return exported_value() == 9 ? f(n) : 0;}\n')
         run(*shlex.split(os.environ.get('CC', 'cc')), '-fPIC', '-c', work/'callback.c', '-o', work/'callback.o')
         for mode in ('debug', 'release'):
             output = work/mode
@@ -65,6 +71,49 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-reachability-') as directory
             loaded = ctypes.CDLL(str(library))
             loaded.exported_value.restype = ctypes.c_uint64
             assert loaded.exported_value() == 9
+    # A complete executable may remove public bodies, but address escapes and
+    # all initializer/defer effects remain roots. Reusable objects retain ABI.
+    (module/'main.dyn').write_text('''cleanups: u64
+pub fn cleanup() { cleanups += 1 }
+fn initialize() u64 { defer cleanup() return 5 }
+initialized: u64 = initialize()
+pub fn addressed(n: u64) u64 { return n + initialized }
+struct Callbacks { run: *fn(u64) u64 }
+const callbacks: Callbacks = Callbacks{run: &addressed}
+fn dead_helper() u64 { return 99 }
+pub fn unused_public_marker() u64 { return dead_helper() }
+fn main() {
+  if cleanups != 1 || callbacks.run(4) != 9 { #panic("executable roots") }
+}
+''')
+    for target in ('x86_64-linux', 'aarch64-linux', 'riscv64-linux', 'x86_64-windows',
+                   'aarch64-windows', 'x86_64-macos', 'aarch64-macos'):
+        output = work/f'pruned-{target}'
+        run(DYN, 'build', module, '--release', '--no-cache', '--target', target,
+            '--output', output)
+        assert b'unused_public_marker' not in output.read_bytes(), target
+    if platform.system() == 'Linux' and platform.machine() == 'x86_64':
+        for level in (2, 3):
+            output = work/f'pruned-{level}'
+            args = (DYN, 'build', module, '--release', '--opt-level', level,
+                    '--timings', '--output', output)
+            built = run(*args)
+            run(output)
+            assert b'unused_public_marker' not in output.read_bytes()
+            assert 'timing detail reachability ' in built.stderr
+            assert 'timing detail scalar optimization ' in built.stderr
+            assert 'timing detail ssa optimize ' in built.stderr
+            # Exercise both executable and object cache restoration.
+            assert 'cached' in run(*args).stdout
+            output.unlink()
+            run(*args)
+            run(output)
+            assert b'unused_public_marker' not in output.read_bytes()
+            kept = work/f'kept-{level}'
+            run(DYN, 'build', module, '--release', '--opt-level', level,
+                '--emit-object', '--no-link', '--output', kept)
+            assert b'unused_public_marker' in Path(str(kept)+'.o').read_bytes()
+
     (module/'main.dyn').write_text('fn unreachable_error() u64 { return true }\nfn main() {}\n')
     result = subprocess.run([str(DYN), 'build', str(module), '--release', '--no-cache',
                              '--output', str(work/'invalid')], capture_output=True, text=True, timeout=30)

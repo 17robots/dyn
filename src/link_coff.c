@@ -1,5 +1,4 @@
-/* Built-in PE/COFF linker for x86-64 Windows, so building for Windows needs
-   no external linker or Visual Studio libraries. Inputs are COFF objects and
+/* Built-in PE/COFF linker for x86-64 Windows, so building for Windows needs no external linker or Visual Studio libraries. Inputs are COFF objects and
    ar/.lib archives, whose members may be COFF objects or short import
    objects; the output is an executable at a fixed base, as GNU ld wrote it,
    or a relocatable DLL with an export table and a short-import library.

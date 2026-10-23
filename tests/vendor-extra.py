@@ -324,8 +324,8 @@ fn main() {
   triangles: [3]u16 = []
   triangles[1] = 1
   triangles[2] = 2
-  vertex_bytes := (#cast(*const u8) &vertices[0])[..36]
-  index_bytes := (#cast(*const u8) &triangles[0])[..6]
+  vertex_bytes := (#cast(*const u8, &vertices[0]))[..36]
+  index_bytes := (#cast(*const u8, &triangles[0]))[..6]
   if cgltf.buffer_count(mesh.value) != 2 || !strings.equal(cgltf.buffer_uri(mesh.value, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh.value, 0) != 36 || cgltf.attach_buffer(mesh.value, 0, vertex_bytes[..1]) {
     #panic("mesh resource metadata")
   }

@@ -185,6 +185,24 @@ fn main() { defer { _ = io.println(io.stdout(), "outer") } fail() }
         assert result.stdout.splitlines() == ['inner', 'outer'], result.stdout
         assert 'inline panic' in result.stderr, result.stderr
 
+    # Exported wrappers around a check-heavy writer must not multiply its body.
+    stores = '\n'.join(f'buffer.*[{i}] = value + {i}' for i in range(24))
+    wrappers = '\n'.join(
+        f'pub fn wrapper_{i}(buffer: *[24]u64, value: u64) {{ fill(buffer, value) }}'
+        for i in range(24))
+    (module/'main.dyn').write_text(
+        f'fn fill(buffer: *[24]u64, value: u64) {{ {stores} }}\n' + wrappers +
+        '\nfn main() { buffer: [24]u64 = [] wrapper_0(&buffer, 7) '
+        'if buffer[23] != 30 { #panic("bounded inlining") } }\n')
+    sizes = []
+    for level in (2, 3):
+        output = work/f'growth-{level}'
+        run(DYN, 'build', module, '--release', '--opt-level', level,
+            '--emit-object', '--output', output)
+        run(output)
+        sizes.append(Path(str(output)+'.o').stat().st_size)
+    assert sizes[1] <= sizes[0] * 1.5, ('unbounded code growth', sizes)
+
     # Checked failure must remain a runtime failure at every optimization level.
     (module/'main.dyn').write_text('fn main() { a: i8 = 127 b: i8 = 1 _ = a + b }\n')
     for level in (1, 2, 3):

@@ -75,15 +75,15 @@ pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
     creation = 4
   }
   handle := create_file_raw(name, access, 7, nil, creation, 128, nil)
-  raw := #cast(usize) handle
+  raw := #cast(usize, handle)
   if raw == 18446744073709551615 {
-    return IoResult{ value: -1, error: #cast(isize) last_error_raw(), ok: false }
+    return IoResult{ value: -1, error: #cast(isize, last_error_raw()), ok: false }
   }
-  return IoResult{ value: #cast(isize) raw, error: 0, ok: true }
+  return IoResult{ value: #cast(isize, raw), error: 0, ok: true }
 }
 pub fn file_close(handle: isize) IoResult {
-  if close_handle_raw(#cast(rawptr) #cast(usize) handle) == 0 {
-    return IoResult{ value: -1, error: #cast(isize) last_error_raw(), ok: false }
+  if close_handle_raw(#cast(rawptr, #cast(usize, handle))) == 0 {
+    return IoResult{ value: -1, error: #cast(isize, last_error_raw()), ok: false }
   }
   return IoResult{ value: 0, error: 0, ok: true }
 }
@@ -105,25 +105,32 @@ pub fn thread_join(thread: *Thread) bool {
     return false
   }
   result := close_handle_raw(thread.handle) != 0
-  if result { thread.handle = nil thread.id = 0 }
+  if result {
+    thread.handle = nil
+    thread.id = 0
+  }
   return result
 }
-pub fn thread_error() isize { return 0 - #cast(isize) last_error_raw() }
+pub fn thread_error() isize {
+  return 0 - #cast(isize, last_error_raw())
+}
 pub fn thread_yield() {
   _ = yield_raw()
 }
 pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
   startup := socket_initialize()
   if startup != 0 {
-    return IoResult{ value: -1, error: #cast(isize) startup, ok: false }
+    return IoResult{ value: -1, error: #cast(isize, startup), ok: false }
   }
   value := socket_raw(family, kind, protocol)
   if value == 18446744073709551615 {
-    return IoResult{ value: -1, error: #cast(isize) socket_error_raw(), ok: false }
+    return IoResult{ value: -1, error: #cast(isize, socket_error_raw()), ok: false }
   }
-  return IoResult{ value: #cast(isize) value, error: 0, ok: true }
+  return IoResult{ value: #cast(isize, value), error: 0, ok: true }
 }
-pub fn socket_error() isize { return 0 - #cast(isize) socket_error_raw() }
+pub fn socket_error() isize {
+  return 0 - #cast(isize, socket_error_raw())
+}
 pub fn socket_close(socket: usize) bool {
   return socket_close_raw(socket) == 0
 }
@@ -131,15 +138,15 @@ pub fn socket_connect(socket: usize, address: []const u8) bool {
   if #len(address) == 0 {
     return false
   }
-  return socket_connect_raw(socket, &address[0], #cast(i32) #len(address)) == 0
+  return socket_connect_raw(socket, &address[0], #cast(i32, #len(address))) == 0
 }
 pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
   if #len(items) == 0 {
     return 0
   }
-  value := socket_poll_raw(&items[0], #cast(u32) #len(items), milliseconds)
+  value := socket_poll_raw(&items[0], #cast(u32, #len(items)), milliseconds)
   if value < 0 {
-    return 0 - #cast(isize) socket_error_raw()
+    return 0 - #cast(isize, socket_error_raw())
   }
-  return #cast(isize) value
+  return #cast(isize, value)
 }

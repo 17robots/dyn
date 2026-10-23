@@ -158,8 +158,155 @@ static int format_insert_order(const void *a, const void *b) {
   return x < y ? -1 : x > y;
 }
 
-/* Canonical layout: one statement per line, a space after each comma, LF line
-   endings, no trailing horizontal whitespace, and a final newline. Malformed
+/* Indentation: two spaces per enclosing bracket, measured from the line that
+   starts the statement. A line ending in a binary operator continues its
+   statement one level deeper. Leading closers return to their opener's level.
+   Block comment interiors keep their text. Unbalanced input is left as is. */
+typedef struct {
+  unsigned statement;
+  char kind;
+} FormatBracket;
+
+static bool format_continues(const char *code, size_t length) {
+  static const char *const tails[] = {"||", "&&", "==", "!=", "<=", ">=", ":=", "+=", "-=",
+                                      "+", "-", "*", "/", "%", "|", "&", "^", "<", ">", "="};
+  if (length >= 2 && code[length - 2] == '.' && code[length - 1] == '*')
+    return false;
+  for (size_t i = 0; i < sizeof(tails) / sizeof(*tails); ++i) {
+    size_t n = strlen(tails[i]);
+    if (length >= n && !memcmp(code + length - n, tails[i], n))
+      return true;
+  }
+  return false;
+}
+
+static char *format_reindent(const char *text, size_t length, size_t *result_length) {
+  size_t lines = 1, capacity = 0;
+  for (size_t i = 0; i < length; ++i) {
+    lines += text[i] == '\n';
+    capacity += text[i] == '(' || text[i] == '[' || text[i] == '{';
+  }
+  FormatBracket *stack = malloc((capacity + 1) * sizeof(*stack));
+  char *code = malloc(length + 1);
+  /* Each line gains at most two spaces per open bracket plus one level. */
+  size_t limit = length + 1 + lines * 2 * (capacity + 2);
+  char *out = stack && code ? malloc(limit) : NULL;
+  if (!out) {
+    free(stack);
+    free(code);
+    return NULL;
+  }
+  size_t depth = 0, at = 0;
+  unsigned previous_statement = 0;
+  bool in_block = false, continued = false, balanced = true;
+  for (size_t start = 0; start < length;) {
+    size_t end = start;
+    while (end < length && text[end] != '\n')
+      ++end;
+    size_t first = start;
+    while (first < end && (text[first] == ' ' || text[first] == '\t'))
+      ++first;
+    if (in_block || first == end) {
+      size_t from = in_block ? start : end;
+      memcpy(out + at, text + from, end - from);
+      at += end - from;
+      for (size_t i = start; in_block && i + 1 < end; ++i)
+        if (text[i] == '*' && text[i + 1] == '/')
+          in_block = false;
+    } else {
+      size_t leading = 0;
+      while (first + leading < end && leading < depth && strchr(")]}", text[first + leading]))
+        ++leading;
+      unsigned indent, statement;
+      if (leading) {
+        indent = statement = stack[depth - leading].statement;
+      } else {
+        indent = (depth ? stack[depth - 1].statement + 1 : 0) + (continued ? 1 : 0);
+        if (continued)
+          statement = previous_statement;
+        else if (depth && stack[depth - 1].kind != '{')
+          statement = stack[depth - 1].statement;
+        else
+          statement = indent;
+      }
+      memset(out + at, ' ', 2 * (size_t)indent);
+      at += 2 * (size_t)indent;
+      memcpy(out + at, text + first, end - first);
+      at += end - first;
+      size_t code_length = 0;
+      for (size_t i = first; i < end; ++i) {
+        char c = text[i];
+        if (c == '/' && i + 1 < end && text[i + 1] == '/')
+          break;
+        if (c == '/' && i + 1 < end && text[i + 1] == '*') {
+          size_t close = i + 2;
+          while (close + 1 < end && !(text[close] == '*' && text[close + 1] == '/'))
+            ++close;
+          if (close + 1 >= end) {
+            in_block = true;
+            break;
+          }
+          i = close + 1;
+          continue;
+        }
+        if (c == '"') {
+          for (++i; i < end && text[i] != '"'; ++i)
+            if (text[i] == '\\')
+              ++i;
+          code[code_length++] = '"';
+          continue;
+        }
+        if (c == '\'') {
+          size_t close = i + 1;
+          if (close < end && text[close] == '\\')
+            while (close < end && text[close] != '\'')
+              ++close;
+          else if (close < end) {
+            ++close;
+            while (close < end && ((unsigned char)text[close] & 0xc0) == 0x80)
+              ++close;
+          }
+          if (close < end && text[close] == '\'') {
+            i = close;
+            code[code_length++] = '0';
+            continue;
+          }
+        }
+        if (c == '(' || c == '[' || c == '{')
+          stack[depth++] = (FormatBracket){statement, c};
+        else if (c == ')' || c == ']' || c == '}') {
+          if (!depth || stack[depth - 1].kind != (c == ')' ? '(' : c == ']' ? '[' : '{'))
+            balanced = false;
+          else
+            --depth;
+        }
+        code[code_length++] = c;
+      }
+      while (code_length && (code[code_length - 1] == ' ' || code[code_length - 1] == '\t'))
+        --code_length;
+      continued = format_continues(code, code_length);
+      previous_statement = statement;
+    }
+    if (end < length)
+      out[at++] = '\n';
+    start = end + 1;
+    if (!balanced)
+      break;
+  }
+  free(stack);
+  free(code);
+  if (!balanced || depth || in_block) {
+    free(out);
+    return NULL;
+  }
+  out[at] = 0;
+  *result_length = at;
+  return out;
+}
+
+/* Canonical layout: one statement per line, a space after each comma, two-space
+   indentation, LF line endings, no trailing horizontal whitespace, and a final
+   newline. Malformed
    sources receive only the whitespace rules. */
 bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
   FormatEdits edits = {.text = s->text};
@@ -172,7 +319,8 @@ bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
     free(edits.items);
     return false;
   }
-  qsort(edits.items, edits.count, sizeof(*edits.items), format_insert_order);
+  if (edits.count)
+    qsort(edits.items, edits.count, sizeof(*edits.items), format_insert_order);
   size_t at = 0, line = 0, next = 0;
   for (size_t i = 0; i <= s->length; ++i) {
     for (; next < edits.count && edits.items[next].offset == i; ++next) {
@@ -206,6 +354,13 @@ bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
   if (at && out[at - 1] != '\n')
     out[at++] = '\n';
   out[at] = 0;
+  size_t indented_length = 0;
+  char *indented = format_reindent(out, at, &indented_length);
+  if (indented) {
+    free(out);
+    out = indented;
+    at = indented_length;
+  }
   *result = out;
   *length = at;
   return true;
@@ -366,6 +521,23 @@ static void docs_contracts(FILE *out, const char *text, size_t start, size_t end
   fputc('}', out);
 }
 
+/* An anonymous temporary file in TMPDIR. tmpfile() always uses /tmp. */
+static FILE *docs_temporary(void) {
+#ifndef _WIN32
+  const char *root = getenv("TMPDIR");
+  char path[4096];
+  if (root && *root && snprintf(path, sizeof(path), "%s/dyn-docs-XXXXXX", root) < (int)sizeof(path)) {
+    int descriptor = mkstemp(path);
+    if (descriptor >= 0) {
+      unlink(path);
+      FILE *file = fdopen(descriptor, "w+b");
+      if (file) return file;
+      close(descriptor);
+    }
+  }
+#endif
+  return tmpfile();
+}
 int dyn_docs_directory(const char *directory, bool json) {
   DynSources sources = {0};
   int loaded = tooling_load(directory, &sources);
@@ -373,8 +545,8 @@ int dyn_docs_directory(const char *directory, bool json) {
     return loaded;
   /* Publish only complete output: a later malformed file must not leave a
    * plausible partial index on stdout. Bound memory using a temporary stream. */
-  FILE *out = tmpfile();
-  if (!out) { dyn_sources_free(&sources); return 2; }
+  FILE *out = docs_temporary();
+  if (!out) { perror("error: create temporary docs output"); dyn_sources_free(&sources); return 2; }
   char *name = dyn_path_basename(directory);
   int result = 0;
   if (json) {

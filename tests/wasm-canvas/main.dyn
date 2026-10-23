@@ -13,7 +13,7 @@ pub fn allocate(size: usize) rawptr {
   if !result.ok {
     return nil
   }
-  return #cast(rawptr) result.memory
+  return #cast(rawptr, result.memory)
 }
 
 // Caller supplies a live allocation of count RGBA pixels.
@@ -24,10 +24,10 @@ pub fn grayscale(data: *u8, count: usize) {
   pixels := data[..count * 4]
   i: usize = 0
   for i < #len(pixels) {
-    light := (#cast(u32) pixels[i] * 77 + #cast(u32) pixels[i + 1] * 150 + #cast(u32) pixels[i + 2] * 29) >> 8
-    pixels[i] = #cast(u8) light
-    pixels[i + 1] = #cast(u8) light
-    pixels[i + 2] = #cast(u8) light
+    light := (#cast(u32, pixels[i]) * 77 + #cast(u32, pixels[i + 1]) * 150 + #cast(u32, pixels[i + 2]) * 29) >> 8
+    pixels[i] = #cast(u8, light)
+    pixels[i + 1] = #cast(u8, light)
+    pixels[i + 2] = #cast(u8, light)
     i += 4
   }
   changed(count)

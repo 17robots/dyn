@@ -12,22 +12,22 @@ pub fn decode(text: []const u8, offset: usize) Decode {
   }
   first := text[offset]
   if first < 128 {
-    return Decode{ codepoint: #cast(u32) first, width: 1, ok: true }
+    return Decode{ codepoint: #cast(u32, first), width: 1, ok: true }
   }
   width: usize = 0
   value: u32 = 0
   minimum: u32 = 0
   if first >= 194 && first <= 223 {
     width = 2
-    value = #cast(u32) (first & 31)
+    value = #cast(u32, (first & 31))
     minimum = 128
   } else if first >= 224 && first <= 239 {
     width = 3
-    value = #cast(u32) (first & 15)
+    value = #cast(u32, (first & 15))
     minimum = 2048
   } else if first >= 240 && first <= 244 {
     width = 4
-    value = #cast(u32) (first & 7)
+    value = #cast(u32, (first & 7))
     minimum = 65536
   } else {
     return Decode{ codepoint: 0, width: 1, ok: false }
@@ -40,7 +40,7 @@ pub fn decode(text: []const u8, offset: usize) Decode {
     if byte < 128 || byte > 191 {
       return Decode{ codepoint: 0, width: 1, ok: false }
     }
-    value = (value << 6) | #cast(u32) (byte & 63)
+    value = (value << 6) | #cast(u32, (byte & 63))
   }
   if value < minimum || value > 1114111 || (value >= 55296 && value <= 57343) {
     return Decode{ codepoint: 0, width: 1, ok: false }
@@ -105,20 +105,20 @@ pub fn encode(destination: []u8, codepoint: u32) usize {
   lead3: u32 = 224
   lead4: u32 = 240
   if width == 1 {
-    destination[0] = #cast(u8) codepoint
+    destination[0] = #cast(u8, codepoint)
   }
   else if width == 2 {
-    destination[0] = #cast(u8) (lead2 | (codepoint >> 6))
-    destination[1] = #cast(u8) (continuation | (codepoint & mask))
+    destination[0] = #cast(u8, (lead2 | (codepoint >> 6)))
+    destination[1] = #cast(u8, (continuation | (codepoint & mask)))
   } else if width == 3 {
-    destination[0] = #cast(u8) (lead3 | (codepoint >> 12))
-    destination[1] = #cast(u8) (continuation | ((codepoint >> 6) & mask))
-    destination[2] = #cast(u8) (continuation | (codepoint & mask))
+    destination[0] = #cast(u8, (lead3 | (codepoint >> 12)))
+    destination[1] = #cast(u8, (continuation | ((codepoint >> 6) & mask)))
+    destination[2] = #cast(u8, (continuation | (codepoint & mask)))
   } else {
-    destination[0] = #cast(u8) (lead4 | (codepoint >> 18))
-    destination[1] = #cast(u8) (continuation | ((codepoint >> 12) & mask))
-    destination[2] = #cast(u8) (continuation | ((codepoint >> 6) & mask))
-    destination[3] = #cast(u8) (continuation | (codepoint & mask))
+    destination[0] = #cast(u8, (lead4 | (codepoint >> 18)))
+    destination[1] = #cast(u8, (continuation | ((codepoint >> 12) & mask)))
+    destination[2] = #cast(u8, (continuation | ((codepoint >> 6) & mask)))
+    destination[3] = #cast(u8, (continuation | (codepoint & mask)))
   }
   return width
 }

@@ -1,8 +1,12 @@
 #ifndef DYN_IR_H
 #define DYN_IR_H
-
 #include "dyn_ast.h"
 #include "dyn_location.h"
+
+typedef struct {
+  bool *functions;
+  unsigned char *expressions, *statements;
+} DynIrLiveness;
 
 typedef struct {
   DynExprKind kind;
@@ -19,7 +23,6 @@ typedef struct {
      the original function index plus one identifies runtime check failures. */
   uint32_t check_origin;
 } DynIrExpr;
-
 typedef struct {
   DynExprId expression;
   uint32_t field_index;
@@ -92,8 +95,7 @@ typedef struct {
   /* debug_name is set for instances only: "min(u32)" for debuggers. */
   char *name, *link_name, *debug_name;
   DynType return_type;
-  uint32_t param_start, param_count, body_start, body_count, local_start,
-      local_count, variadic_local_id, source_line, source_offset;
+  uint32_t param_start, param_count, body_start, body_count, local_start, local_count, variadic_local_id, source_line, source_offset;
   bool is_main, foreign, variadic, is_public, generic, instance;
   uint64_t module_owner;
   DynType variadic_type;
@@ -102,8 +104,7 @@ typedef struct {
   DynStmtKind kind;
   DynExprId expression, target;
   DynOperator assignment_op;
-  uint32_t local_id, body_start, body_count, else_start, else_count, loop_id,
-      target_loop_id, case_arm_start, case_arm_count;
+  uint32_t local_id, body_start, body_count, else_start, else_count, loop_id, target_loop_id, case_arm_start, case_arm_count;
   bool defer_block, for_pointer, for_const, for_range, for_inclusive, for_reverse;
   DynSpan span;
   uint32_t check_origin;
@@ -122,7 +123,6 @@ typedef struct {
   uint32_t pattern_start, pattern_count, body_start, body_count, local_id;
   bool wildcard, pointer_binding;
 } DynIrCaseArm;
-
 typedef struct DynIrProgram {
   DynIrExpr *expressions;
   size_t expression_count, expression_capacity;
@@ -140,6 +140,8 @@ typedef struct DynIrProgram {
   size_t param_count;
   DynIrFunction *functions;
   size_t function_count;
+  /* Optional executable liveness. Owned by the prepared IR; optimizers borrow it. */
+  DynIrLiveness live;
   DynIrGlobal *globals;
   size_t global_count;
   uint32_t *global_init_order;
@@ -168,18 +170,16 @@ typedef struct DynIrProgram {
   size_t local_count;
   /* Line tables of the lowered source, shared by every code generator. */
   DynLocationIndex locations;
-  /* Declarations every object may depend on: types, globals and function
-     signatures, but no function bodies. Keys cached chunk objects. */
+  /* Declarations every object may depend on: types, globals and function signatures, but no function bodies. Keys cached chunk objects. */
   uint64_t interface_hash;
-  /* Whole-program facts every code generator needs, computed once by
-     dyn_codegen_prepare instead of once per module. Per local: whether it is
-     assigned or address-taken, and the 1-based statement declaring it. */
+  /* Whole-program facts every code generator needs, computed once by dyn_codegen_prepare instead of once per module. Per local: whether it is assigned or address-taken, and the 1-based statement declaring it. */
   bool *unstable_locals;
   uint32_t *local_statements;
 } DynIrProgram;
-
-bool dyn_ir_lower(const DynAstProgram *ast, const DynSource *source,
-                  DynIrProgram *ir);
+bool dyn_ir_lower(const DynAstProgram *ast, const DynSource *source, DynIrProgram *ir);
+/* Only for complete executables without externally required public symbols.
+   Retains stable indices, callbacks and all global initialization effects. */
+bool dyn_ir_prune_functions(DynIrProgram *ir);
 void dyn_ir_free(DynIrProgram *ir);
 
 #endif

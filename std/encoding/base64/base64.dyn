@@ -7,7 +7,7 @@ pub type ErrorKind = codec.ErrorKind
 const Alphabet: []const u8 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 pub fn encoded_size(source_size: usize) usize {
-  maximum: usize = 18446744073709551615
+  maximum := ~#cast(usize, 0)
   if source_size > maximum - 2 {
     return 0
   }
@@ -33,14 +33,14 @@ pub fn encode(destination: []u8, source: []const u8) Result {
   output: usize = 0
   for input < #len(source) {
     left := #len(source) - input
-    a := #cast(usize) source[input]
+    a := #cast(usize, source[input])
     b: usize = 0
     c: usize = 0
     if left > 1 {
-      b = #cast(usize) source[input + 1]
+      b = #cast(usize, source[input + 1])
     }
     if left > 2 {
-      c = #cast(usize) source[input + 2]
+      c = #cast(usize, source[input + 2])
     }
     destination[output] = Alphabet[a / 4]
     destination[output + 1] = Alphabet[(a % 4) * 16 + b / 16]
@@ -64,13 +64,13 @@ pub fn encode(destination: []u8, source: []const u8) Result {
 
 fn digit_value(byte: u8) isize {
   if byte >= 'A' && byte <= 'Z' {
-    return #cast(isize) (byte - 'A')
+    return #cast(isize, (byte - 'A'))
   }
   if byte >= 'a' && byte <= 'z' {
-    return #cast(isize) (byte - 'a') + 26
+    return #cast(isize, (byte - 'a')) + 26
   }
   if byte >= '0' && byte <= '9' {
-    return #cast(isize) (byte - '0') + 52
+    return #cast(isize, (byte - '0')) + 52
   }
   if byte == '+' {
     return 62
@@ -139,18 +139,18 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
       return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
     }
     if write {
-      destination[output] = #cast(u8) (a * 4 + b / 16)
+      destination[output] = #cast(u8, (a * 4 + b / 16))
     }
     output += 1
     if source[input + 2] != '=' {
       if write {
-        destination[output] = #cast(u8) ((b % 16) * 16 + c / 4)
+        destination[output] = #cast(u8, ((b % 16) * 16 + c / 4))
       }
       output += 1
     }
     if source[input + 3] != '=' {
       if write {
-        destination[output] = #cast(u8) ((c % 4) * 64 + d)
+        destination[output] = #cast(u8, ((c % 4) * 64 + d))
       }
       output += 1
     }

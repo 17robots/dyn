@@ -12,7 +12,7 @@ fn native_clock(monotonic: bool) ClockResult {
     }
     // Divide before scaling; double conversion bounds the remainder without integer overflow.
     remainder := counter % frequency
-    nanos := #cast(i64) ((#cast(f64) remainder / #cast(f64) frequency) * 1000000000.0)
+    nanos := #cast(i64, ((#cast(f64, remainder) / #cast(f64, frequency)) * 1000000000.0))
     if nanos >= Second {
       nanos = Second - 1
     }
@@ -20,11 +20,11 @@ fn native_clock(monotonic: bool) ClockResult {
   }
   ticks: u64 = 0
   clock_realtime(&ticks)
-  seconds := #cast(i64) (ticks / 10000000) - 11644473600
-  return ClockResult{ value: Instant{ seconds: seconds, nanoseconds: #cast(i64) (ticks % 10000000) * 100 }, ok: true }
+  seconds := #cast(i64, (ticks / 10000000)) - 11644473600
+  return ClockResult{ value: Instant{ seconds: seconds, nanoseconds: #cast(i64, (ticks % 10000000)) * 100 }, ok: true }
 }
 fn native_sleep(duration: i64) SleepResult {
-  milliseconds := #cast(u64) (duration / Millisecond)
+  milliseconds := #cast(u64, (duration / Millisecond))
   if duration % Millisecond != 0 {
     milliseconds += 1
   }
@@ -32,6 +32,6 @@ fn native_sleep(duration: i64) SleepResult {
     clock_sleep(4294967294)
     milliseconds -= 4294967294
   }
-  clock_sleep(#cast(u32) milliseconds)
+  clock_sleep(#cast(u32, milliseconds))
   return SleepResult{ ok: true }
 }

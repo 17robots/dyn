@@ -13,7 +13,7 @@ fn main() {
   if descriptor >= 0 { _ = platform.file_close(descriptor) }
   socket := platform.socket_open(2, 1, 6)
   socket_value := platform.io_value(&socket)
-  if socket_value >= 0 { _ = platform.socket_close(#cast(usize) socket_value) }
+  if socket_value >= 0 { _ = platform.socket_close(#cast(usize, socket_value)) }
   events: [1]platform.PollDescriptor = []
   _ = platform.event_poll(events[..0], 0)
 }

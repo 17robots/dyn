@@ -1,7 +1,7 @@
 #ifndef DYN_H
 #define DYN_H
 
-#define DYN_FRONTEND_VERSION "7"
+#define DYN_FRONTEND_VERSION "8"
 #define DYN_FRONTEND_STAMP "dyn-c-frontend-" DYN_FRONTEND_VERSION
 
 #include <stdbool.h>
@@ -12,17 +12,14 @@
 
 /* Single honest target seam. Keep target-specific policy out of CLI/backend. */
 typedef struct {
-  const char *name, *triple, *dynamic_linker;
-  const char *arch, *kernel, *abi, *libc, *endian, *pointer_bits;
+  const char *name, *triple, *dynamic_linker, *arch, *kernel, *abi, *libc, *endian, *pointer_bits;
   bool executable_link;
 } DynTarget;
 
 unsigned dyn_target_pointer_bytes(const DynTarget *target);
 const DynTarget *dyn_target_find(const char *name);
 const char *dyn_target_property(const DynTarget *target, const char *key);
-bool dyn_target_syscall_number(const DynTarget *target, uint64_t source,
-                               uint64_t *native);
-
+bool dyn_target_syscall_number(const DynTarget *target, uint64_t source, uint64_t *native);
 typedef struct DynSyntaxCacheEntry DynSyntaxCacheEntry;
 typedef struct {
   DynSyntaxCacheEntry *entries;
@@ -31,9 +28,7 @@ typedef struct {
 } DynSyntaxCache;
 void dyn_syntax_cache_clear(DynSyntaxCache *);
 
-typedef void (*DynDiagnosticSink)(const char *, const char *, unsigned,
-                                  unsigned, unsigned, unsigned, const char *,
-                                  void *);
+typedef void (*DynDiagnosticSink)(const char *, const char *, unsigned, unsigned, unsigned, unsigned, const char *, void *);
 /* Borrowed cooperative frontend budget. A stopped analysis must not enter a
    semantic cache. Units cover input bytes and traversal checkpoints, not wall
    time. Deadlines use process CPU time; blocking filesystem I/O is not preempted. */
@@ -61,9 +56,8 @@ typedef struct {
   bool runtime_support; /* Internal freestanding support-object compilation. */
   DynDiagnosticSink diagnostic;
   void *diagnostic_data;
-  bool json_diagnostics;
+  bool json_diagnostics, vet;
   /* `dyn vet`: run the vet checks, counting findings when vet_findings is set. */
-  bool vet;
   unsigned *vet_findings;
   bool timings;
   DynWork *work; /* Borrowed, never owned by a source or cached snapshot. */
@@ -85,47 +79,26 @@ static inline bool dyn_work_step(const DynContext *context, uint64_t units) {
   return !w->status;
 }
 static inline const DynTarget *dyn_context_target(const DynContext *context) {
-  return context && context->target ? context->target
-                                    : dyn_target_find(DYN_HOST_TARGET);
+  return context && context->target ? context->target : dyn_target_find(DYN_HOST_TARGET);
 }
-
 /* Debug code generator. AUTO selects native emission where it is available
    and supports the program, otherwise LLVM. Release always uses LLVM. */
 typedef enum { DYN_BACKEND_AUTO, DYN_BACKEND_NATIVE, DYN_BACKEND_LLVM } DynBackend;
-
 typedef struct {
-  const char *command;
-  const char *input;
-  const char *output;
-  const char *target;
+  const char *command, *input, *output, *target;
   DynOptimization optimization;
-  bool release;
-  bool debug_info;
-  bool debug_info_set;
-  bool quiet;
-  bool verbose;
-  bool runtime_support;
-  bool emit_object;
-  bool emit_asm;
-  bool no_link;
-  bool shared;
-  bool timings;
-  bool no_cache;
+  bool release, debug_info, debug_info_set, quiet, verbose, runtime_support, emit_object, emit_asm, no_link, shared, timings, no_cache;
   DynBackend backend;
   bool native_backend; /* Resolved for this command; part of the build cache key. */
-  bool format_check;
-  bool docs_json;
-  bool json_diagnostics;
+  bool format_check, docs_json, json_diagnostics;
   unsigned jobs;
   uint64_t max_work;
   uint64_t compiler_hash; /* Command-scoped cache identity, inherited by workers. */
   const char *link_inputs[64];
   size_t link_input_count;
 } DynOptions;
-
 typedef struct {
-  size_t generated_start, generated_end;
-  size_t original_start, original_end;
+  size_t generated_start, generated_end, original_start, original_end;
 } DynSourceSpan;
 typedef struct {
   char *path;
@@ -136,19 +109,14 @@ typedef struct {
   size_t span_count;
 } DynSourceMap;
 typedef struct {
-  char *path;
-  char *text;
-  size_t length;
-  char *original_text;
-  size_t original_length;
+  char *path, *text, *original_text;
+  size_t length, original_length;
   DynSourceSpan *spans;
   size_t span_count;
   DynContext context;
-  /* Owned immutable source revision and its tree. Editor revisions may hold
-     recovered syntax errors; batch commands never keep one with errors. */
+  /* Owned immutable source revision and its tree. Editor revisions may hold recovered syntax errors; batch commands never keep one with errors. */
   struct ExpSnapshot *compact;
-  /* Merged sources own one snapshot per input instead, each covering its
-     partition of text; syntax_part_count counts them. */
+  /* Merged sources own one snapshot per input instead, each covering its partition of text; syntax_part_count counts them. */
   struct ExpSnapshot **compact_parts;
   bool compact_reflection;
   /* Batch-only certificate for this validated, immutable text revision. */
@@ -160,12 +128,10 @@ typedef struct {
   /* Set when the handwritten parser rejects this revision; static strings. */
   const char *syntax_error, *syntax_expected;
   uint32_t syntax_error_offset;
-  bool needs_reflection; /* Synthetic interface dependency on the compiler ABI.
-                          */
+  bool needs_reflection; /* Synthetic interface dependency on the compiler ABI.*/
   DynSourceMap *maps;
   size_t map_count;
-  /* First source of each rewritten module owns its transitive dependencies,
-     captured from resolved imports. Indices refer to the containing project. */
+  /* First source of each rewritten module owns its transitive dependencies, captured from resolved imports. Indices refer to the containing project. */
   size_t *dependency_sources;
   size_t dependency_count;
   uint64_t dependency_hash;
@@ -176,8 +142,7 @@ typedef struct {
   size_t count;
 } DynSources;
 
-/* Versioned, canonical public module interface. The payload is owned by the
-   value and contains newline-separated declarations; no function bodies. */
+/* Versioned, canonical public module interface. The payload is owned by the value and contains newline-separated declarations; no function bodies. */
 typedef struct {
   char *data;
   size_t length;
@@ -190,30 +155,17 @@ typedef enum {
 } DynInterfaceStatus;
 uint64_t dyn_interface_source_hash(const DynSources *);
 int dyn_interface_build(const DynSources *, DynInterface *);
-int dyn_interface_store(const char *, const char *target,
-                        const char *compiler_schema, const DynInterface *);
-DynInterfaceStatus dyn_interface_load(const char *, const char *target,
-                                      const char *compiler_schema,
-                                      uint64_t source_hash, DynInterface *);
+int dyn_interface_store(const char *, const char *target, const char *compiler_schema, const DynInterface *);
+DynInterfaceStatus dyn_interface_load(const char *, const char *target, const char *compiler_schema, uint64_t source_hash, DynInterface *);
 void dyn_interface_free(DynInterface *);
-int dyn_interface_compose(const DynSources *, size_t owner_first,
-                          size_t owner_count, const DynInterface *,
-                          size_t interface_count, const char *path,
-                          DynSource *);
+int dyn_interface_compose(const DynSources *, size_t owner_first, size_t owner_count, const DynInterface *, size_t interface_count, const char *path, DynSource *);
 
-/* Jobs receive one canonical, contiguous module slice. Large modules are split
-   into chunks (chunk of chunks); the count depends only on the module's source
-   size. Context must be safe for concurrent calls. Values are returned in
-   source order, never completion order. */
-typedef int (*DynModuleBuildFn)(const DynSources *, size_t first, size_t count,
-                                unsigned chunk, unsigned chunks, void *,
-                                uint64_t *);
-int dyn_build_plan_run(const DynSources *, unsigned, DynModuleBuildFn, void *,
-                       uint64_t **, size_t *);
+/* Jobs receive one canonical, contiguous module slice. Large modules are split into chunks (chunk of chunks); the count depends only on the module's source size. Context must be safe for concurrent calls. Values are returned in source order, never completion order. */
+typedef int (*DynModuleBuildFn)(const DynSources *, size_t first, size_t count, unsigned chunk, unsigned chunks, void *, uint64_t *);
+int dyn_build_plan_run(const DynSources *, unsigned, DynModuleBuildFn, void *, uint64_t **, size_t *);
 
 typedef struct {
-  bool has_main;
-  bool main_valid;
+  bool has_main, main_valid;
   unsigned errors;
 } DynCheckResult;
 
@@ -222,12 +174,13 @@ void dyn_cli_help(const char *command);
 int dyn_sources_load(const DynContext *context, const char *directory,
                      DynSources *sources);
 /* Same, without reporting errors: callers retry with dyn_sources_load. */
-int dyn_sources_load_quiet(const DynContext *context, const char *dir,
-                           DynSources *out);
+int dyn_sources_load_quiet(const DynContext *context, const char *dir, DynSources *out);
 void dyn_sources_free(DynSources *sources);
 int dyn_source_target_enabled(const DynSource *source);
-int dyn_sources_merge(const DynSources *sources, const char *module_name,
-                      DynSource *merged);
+int dyn_sources_merge(const DynSources *sources, const char *module_name, DynSource *merged);
+bool dyn_source_target_gap(const DynSource *source, size_t byte, char *message, size_t capacity);
+/* Whether the module in directory has platform files but none for the target. */
+bool dyn_module_target_gap(const DynContext *context, const char *directory, char *name, size_t capacity);
 /* Prepare caches a tree; tree returns an independently owned tree reference.
    Discard syntax before mutating source text. */
 bool dyn_source_prepare(DynSource *);
@@ -236,120 +189,64 @@ bool dyn_source_prepare(DynSource *);
 #define DYN_SYNTAX_ERROR_LIMIT 20
 bool dyn_source_report_syntax(const DynSource *);
 /* Message naming the offending token at offset, and that token's end. */
-void dyn_syntax_error_message(const char *text, size_t length, uint32_t offset,
-                              const char *error, const char *expected,
-                              char *message, size_t capacity, uint32_t *token_end);
+void dyn_syntax_error_message(const char *text, size_t length, uint32_t offset, const char *error, const char *expected, char *message, size_t capacity, uint32_t *token_end);
 /* One parser diagnostic at offset in source text, naming the offending token. */
-void dyn_report_syntax_error(const DynSource *, uint32_t offset, const char *message,
-                             const char *expected);
+void dyn_report_syntax_error(const DynSource *, uint32_t offset, const char *message, const char *expected);
 bool dyn_source_reflection(const DynSource *, bool *);
 void dyn_source_discard_syntax(DynSource *);
 void dyn_source_free(DynSource *source);
-void dyn_source_position(const DynSource *, size_t, const char **,
-                         const char **, size_t *, size_t *);
-void dyn_source_location(const DynSource *source, size_t byte,
-                         const char **path, unsigned *line, unsigned *column);
-DynCheckResult dyn_check_sources(const DynSources *sources,
-                                 const char *main_path, bool require_main);
-int dyn_codegen_main(const DynSource *source, const char *object_path,
-                     const char *asm_path, bool release,
-                     bool debug_info, bool shared);
+void dyn_source_position(const DynSource *, size_t, const char **, const char **, size_t *, size_t *);
+void dyn_source_location(const DynSource *source, size_t byte, const char **path, unsigned *line, unsigned *column);
+DynCheckResult dyn_check_sources(const DynSources *sources, const char *main_path, bool require_main);
+int dyn_codegen_main(const DynSource *source, const char *object_path, const char *asm_path, bool release, bool debug_info, bool shared);
 /* owner_key is "root" or a rewritten dyn_m<hash> prefix. NULL emits one
    monolithic object. Every object sees the full typed program, but defines
    only symbols owned by owner_key. */
-int dyn_codegen_module(const DynSource *source, const char *object_path,
-                       const char *asm_path, bool release,
-                       bool debug_info, bool shared, const char *owner_key);
+int dyn_codegen_module(const DynSource *source, const char *object_path, const char *asm_path, bool release, bool debug_info, bool shared, const char *owner_key);
 /* dyn_codegen_module in two steps: analyze and lower once (owner_key NULL
    keeps every body), then emit any number of owners from the shared result. */
 struct DynIrProgram;
 /* Which chunk of a split module compiles the functions of one source file. */
 static inline unsigned dyn_chunk_of_path(const char *path, unsigned chunks) {
   uint64_t h = UINT64_C(1469598103934665603);
-  for (; *path; ++path)
-    h = (h ^ (unsigned char)*path) * UINT64_C(1099511628211);
+  for (; *path; ++path) h = (h ^ (unsigned char)*path) * UINT64_C(1099511628211);
   return chunks > 1 ? (unsigned)(h % chunks) : 0;
 }
 /* Native and Wasm emission of the whole program. Returns 0 on success.
    With report false, unsupported programs fail without a diagnostic. */
 int dyn_wasm_object(const DynSource *, const struct DynIrProgram *, const char *, bool);
 int dyn_wasm_assembly(const DynSource *, const struct DynIrProgram *, const char *, bool);
-int dyn_native_object(const DynSource *, const struct DynIrProgram *,
-                      const char *path, bool runtime_trace, bool debug_info,
-                      bool shared, bool report);
-int dyn_codegen_prepare(const DynSource *source, bool shared,
-                        const char *owner_key, struct DynIrProgram *ir);
+int dyn_native_object(const DynSource *, const struct DynIrProgram *, const char *path, bool runtime_trace, bool debug_info, bool shared, bool report);
+int dyn_codegen_prepare(const DynSource *source, bool shared, const char *owner_key, struct DynIrProgram *ir);
 /* Consumes syntax ownership after complete strict compact analysis. */
-int dyn_codegen_prepare_owned(DynSource *source, bool shared,
-                              const char *owner_key, struct DynIrProgram *ir);
-int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir,
-                     const char *object_path,
-                     const char *asm_path, bool release, bool debug_info,
-                     bool shared, const char *owner_key, unsigned chunk,
-                     unsigned chunks);
+int dyn_codegen_prepare_owned(DynSource *source, bool shared, const char *owner_key, struct DynIrProgram *ir);
+int dyn_codegen_emit(const DynSource *source, const struct DynIrProgram *ir, const char *object_path, const char *asm_path, bool release, bool debug_info, bool shared, const char *owner_key, unsigned chunk, unsigned chunks);
 void dyn_codegen_release(struct DynIrProgram *ir);
 /* Hash of the generic instances a chunk defines. Instances are emitted with
    their generic, so a new instance rebuilds only that chunk. */
-uint64_t dyn_codegen_chunk_instances(const DynSource *source,
-                                     const struct DynIrProgram *ir,
-                                     const char *owner_key, unsigned chunk,
-                                     unsigned chunks);
-int dyn_link_executable(const DynContext *context, const char *object_path,
-                        const char *output_path, const char *const *link_inputs,
-                        size_t link_input_count, bool release, bool verbose);
-int dyn_link_executable_objects(const DynContext *context,
-                                const char *const *object_paths,
-                                size_t object_count, const char *output_path,
-                                const char *const *link_inputs,
-                                size_t link_input_count, bool release,
-                                bool verbose);
-int dyn_link_shared(const DynContext *context, const char *object_path,
-                    const char *output_path, const char *const *link_inputs,
-                    size_t link_input_count, bool verbose);
+uint64_t dyn_codegen_chunk_instances(const DynSource *source, const struct DynIrProgram *ir, const char *owner_key, unsigned chunk, unsigned chunks);
+int dyn_link_executable(const DynContext *context, const char *object_path, const char *output_path, const char *const *link_inputs, size_t link_input_count, bool release, bool verbose);
+int dyn_link_executable_objects(const DynContext *context, const char *const *object_paths, size_t object_count, const char *output_path, const char *const *link_inputs, size_t link_input_count, bool release, bool verbose);
+int dyn_link_shared(const DynContext *context, const char *object_path, const char *output_path, const char *const *link_inputs, size_t link_input_count, bool verbose);
 char *dyn_path_join(const char *left, const char *right);
 char *dyn_path_basename(const char *path);
 bool dyn_path_is_directory(const char *path);
-int dyn_module_validate_imports(const char *project_root,
-                                const DynSources *root_sources);
-int dyn_module_load_project(const char *project_root,
-                            const DynSources *root_sources,
-                            DynSources *project_sources);
-int dyn_module_load_project_overlay(const char *project_root,
-                                    const DynSources *root_sources,
-                                    const DynSources *overrides,
-                                    DynSources *project_sources);
+int dyn_module_validate_imports(const char *project_root, const DynSources *root_sources);
+int dyn_module_load_project(const char *project_root, const DynSources *root_sources, DynSources *project_sources);
+int dyn_module_load_project_overlay(const char *project_root, const DynSources *root_sources, const DynSources *overrides, DynSources *project_sources);
 int dyn_module_rewrite_project(const char *project_root, DynSources *sources);
-char *dyn_module_resolve_import(const DynContext *, const char *project_root,
-                                const char *current, const char *path);
-bool dyn_cache_hit(const DynSources *sources, const DynOptions *options,
-                   const char *compiler_path, const char *output);
+char *dyn_module_resolve_import(const DynContext *, const char *project_root, const char *current, const char *path);
+bool dyn_cache_hit(const DynSources *sources, const DynOptions *options, const char *compiler_path, const char *output);
 uint64_t dyn_cache_file_hash(const char *compiler_path);
 bool dyn_cache_directory(char *path, size_t capacity);
 int dyn_cache_command(const char *action);
-void dyn_cache_store(const DynSources *sources, const DynOptions *options,
-                     const char *compiler_path, const char *output);
-bool dyn_object_cache_restore(const DynSources *sources,
-                              const DynOptions *options,
-                              const char *compiler_path, const char *output,
-                              const char *object);
-void dyn_object_cache_store(const DynSources *sources,
-                            const DynOptions *options,
-                            const char *compiler_path, const char *output,
-                            const char *object);
-bool dyn_module_cache_restore(const DynSources *, size_t first, size_t count,
-                              unsigned chunk, unsigned chunks,
-                              uint64_t interface_hash,
-                              const DynOptions *, const char *compiler_path,
-                              const char *cache_root, const char *object);
-void dyn_module_cache_store(const DynSources *, size_t first, size_t count,
-                            unsigned chunk, unsigned chunks,
-                            uint64_t interface_hash,
-                            const DynOptions *, const char *compiler_path,
-                            const char *cache_root, const char *object);
-void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned,
-                    unsigned, unsigned, unsigned, const char *);
-void dyn_diagnostic_source(const char *severity, const DynSource *source,
-                           size_t start, size_t end, const char *message);
+void dyn_cache_store(const DynSources *sources, const DynOptions *options, const char *compiler_path, const char *output);
+bool dyn_object_cache_restore(const DynSources *sources, const DynOptions *options, const char *compiler_path, const char *output, const char *object);
+void dyn_object_cache_store(const DynSources *sources, const DynOptions *options, const char *compiler_path, const char *output, const char *object);
+bool dyn_module_cache_restore(const DynSources *, size_t first, size_t count, unsigned chunk, unsigned chunks, uint64_t interface_hash, const DynOptions *, const char *compiler_path, const char *cache_root, const char *object);
+void dyn_module_cache_store(const DynSources *, size_t first, size_t count, unsigned chunk, unsigned chunks, uint64_t interface_hash, const DynOptions *, const char *compiler_path, const char *cache_root, const char *object);
+void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned, unsigned, unsigned, unsigned, const char *);
+void dyn_diagnostic_source(const char *severity, const DynSource *source, size_t start, size_t end, const char *message);
 bool dyn_format_source(const DynSource *, char **, size_t *);
 bool dyn_format_syntax_ok(const DynSource *, bool);
 int dyn_format_directory(const char *, bool);

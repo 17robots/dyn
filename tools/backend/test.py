@@ -248,8 +248,8 @@ for ty,(bits,sign,ctype) in NARROW_TYPES.items():
             if wrap: expr=f'#wrap(({expr}) + 0)' if op in ('div','rem','shr') else f'#wrap({expr})'
             params=f'a:{ty}' + (f',b:{right}' if op!='neg' else '')
             SOURCE+=f'pub fn narrow_{ty}_{op}_{int(wrap)}({params}) {ty} {{ return {expr} }}\n'
-    SOURCE+=f'pub fn narrow_{ty}_cast(a:u64) {ty} {{ return #cast({ty}) a }}\n'
-    SOURCE+=f'pub fn narrow_{ty}_ptr(a:{ty}) u64 {{ return #cast(u64) #cast(rawptr) a }}\n'
+    SOURCE+=f'pub fn narrow_{ty}_cast(a:u64) {ty} {{ return #cast({ty}, a) }}\n'
+    SOURCE+=f'pub fn narrow_{ty}_ptr(a:{ty}) u64 {{ return #cast(u64, #cast(rawptr, a)) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_bits(a:{ty},b:{ty}) {ty} {{ return (~a & b) | (a ^ b) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_apply(f:*fn({ty}) {ty},a:{ty}) {ty} {{ return f(a) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_stack(' + ','.join(f'a{i}:{ty}' for i in range(8)) + f') {ty} {{ return #wrap(a0+a6+a7) }}\n'
@@ -270,7 +270,7 @@ for ty in ('f32','f64'):
     params=','.join(f'a{i}:{ty}' for i in range(10));expr='+'.join(f'a{i}' for i in range(10))
     SOURCE+=f'pub fn float_{ty}_stack({params}) {ty} {{ return {expr} }}\n'
     SOURCE+=f'pub fn float_{ty}_stack_call({params}) {ty} {{ return float_{ty}_stack('+','.join(f'a{i}' for i in range(10))+') }\n'
-SOURCE+='pub fn float_widen(a:f32) f64 { return a }\npub fn float_narrow(a:f64) f32 { return #cast(f32) a }\n'
+SOURCE+='pub fn float_widen(a:f32) f64 { return a }\npub fn float_narrow(a:f64) f32 { return #cast(f32, a) }\n'
 params=','.join(f'f{i}:f64,i{i}:u64' for i in range(10));checks=' || '.join(f'i{i} != {i}' for i in range(10))
 SOURCE+=f'pub fn float_mixed({params}) f64 {{ if {checks} {{ return -1.0 }} return '+ '+'.join(f'f{i}' for i in range(10))+' }\n'
 args=','.join(f'{i}.25,{i}' for i in range(10))
@@ -327,14 +327,14 @@ pub fn pointer_retarget(p:**u64,q:*u64) u64 { p.*=q return 7 }
 pub fn pointer_alias(a:u64) u64 { x:=a y:u64=99 p:=&x p.*=pointer_retarget(&p,&y) return x*100+y }
 pub fn pointer_alias_add(a:u64) u64 { x:=a y:u64=99 p:=&x p.*+=pointer_retarget(&p,&y) return x*100+y }
 pub fn pointer_null(a:u64) u64 { if a==0 { return 0 } p:*u64=nil return p.* }
-pub fn pointer_unaligned(a:u64) u64 { if a==0 { return 0 } p:=#cast(*u64) a return p.* }
+pub fn pointer_unaligned(a:u64) u64 { if a==0 { return 0 } p:=#cast(*u64, a) return p.* }
 pub fn pointer_store_panic(a:u64,b:u64) u64 {
-  if a==0 && b==0 { return 0 } x:u64=0 p:=#cast(*u64) a
+  if a==0 && b==0 { return 0 } x:u64=0 p:=#cast(*u64, a)
   if a==2 { p=&x } p.*=1/(b-b) return x
 }
-pub fn pointer_heap(a:u64) u64 { p:=#cast(*u64) malloc(8) p.*=a value:=p.* free(p) return value }
-pub fn float_bits(a:f32) u32 { return #bitcast(u32) a }
-pub fn bits_float(a:u32) f32 { return #bitcast(f32) a }
+pub fn pointer_heap(a:u64) u64 { p:=#cast(*u64, malloc(8)) p.*=a value:=p.* free(p) return value }
+pub fn float_bits(a:f32) u32 { return #bitcast(u32, a) }
+pub fn bits_float(a:u32) f32 { return #bitcast(f32, a) }
 """
 for ty in ('i8','u16','i32','u64','bool','f32','f64'):
     SOURCE+=f'pub fn pointer_{ty}(p:*{ty},a:{ty}) {ty} {{ p.*=a return p.* }}\n'
@@ -426,7 +426,7 @@ pub fn defer_indirect(a:u64) u64 { global_counter=0 f:=&defer_digit defer f(a) f
 pub fn defer_float(a:f64) f64 { defer defer_digit(1) return float_mixed_call()+a }
 pub fn defer_read() u64 { return global_counter }
 extern fn write(fd:i32,data:rawptr,length:usize) isize
-pub fn defer_emit(a:u64) { c:=#cast(u8) (a+48) _=write(1,#cast(rawptr) &c,1) }
+pub fn defer_emit(a:u64) { c:=#cast(u8, (a+48)) _=write(1,#cast(rawptr, &c),1) }
 pub fn defer_panic_leaf(a:u64) u64 { return 1/a }
 pub fn defer_panic_call(a:u64) u64 { defer defer_emit(1) defer defer_emit(2) return 4+defer_panic_leaf(a) }
 pub fn defer_panic_guard(a:u64) u64 { defer defer_emit(1) defer defer_emit(2) return 1/a }
@@ -439,36 +439,36 @@ pub fn defer_panic_parent(a:u64) u64 { defer defer_emit(8) return defer_panic_ca
 SOURCE += """
 struct Storage { tag:u8=3, wide:u64=7, small:i16=-2, values:[3]u64 }
 struct NestedStorage { first:u8, item:Storage, last:u16 }
-pub fn array_local(a:u64,i:usize) u64 { x:[3]u64=[a,2] x[2]=4 x[1]+=3 return x[i]+#cast(u64) #len(x) }
+pub fn array_local(a:u64,i:usize) u64 { x:[3]u64=[a,2] x[2]=4 x[1]+=3 return x[i]+#cast(u64, #len(x)) }
 pub fn array_zero(i:usize) u64 { x:[8]u64 return x[i] }
 pub fn array_nested(a:u64) u64 { x:[2][3]u64=[[a,2,3],[4,5,6]] y:=x x[0][0]=8 return y[0][0]+x[1][2] }
 pub fn array_assign(a:u64) u64 { x:[3]u64=[a,2,3] y:[3]u64 y=x y=y return y[0]+y[1]+y[2] }
 pub fn array_pointer(p:*[3]u16,i:usize,a:u16) u16 { p.*[i]=a return p.*[i] }
 pub fn array_copy(dst:*[3]u16,src:*[3]u16) { dst.*=src.* }
-pub fn struct_local(a:u64) u64 { x:=Storage{wide:a,values:[1,2,3]} y:=x x.wide+=2 y.values[1]=9 return x.wide+y.wide+#cast(u64) x.tag+y.values[1] }
-pub fn struct_nested(a:u64) u64 { x:=NestedStorage{first:1,item:Storage{wide:a},last:2} x.item.wide+=3 return x.item.wide+#cast(u64) x.last }
-pub fn struct_zero() u64 { x:Storage return x.wide+#cast(u64) x.tag }
+pub fn struct_local(a:u64) u64 { x:=Storage{wide:a,values:[1,2,3]} y:=x x.wide+=2 y.values[1]=9 return x.wide+y.wide+#cast(u64, x.tag)+y.values[1] }
+pub fn struct_nested(a:u64) u64 { x:=NestedStorage{first:1,item:Storage{wide:a},last:2} x.item.wide+=3 return x.item.wide+#cast(u64, x.last) }
+pub fn struct_zero() u64 { x:Storage return x.wide+#cast(u64, x.tag) }
 pub fn struct_pointer(p:*Storage,a:u64) u64 { p.wide=a p.tag=8 p.small=-3 p.values[1]=a+1 return p.wide+p.values[1] }
 pub fn aggregate_defer(a:u64) u64 { global_counter=0 x:[2]u64=[a,2] defer { defer_digit(x[0]) } x[0]=3 return x[1] }
 pub fn array_panic(i:usize) u64 { x:[3]u64=[1,2,3] defer defer_emit(4) return x[i] }
 """
 
 SOURCE += """
-pub fn slice_local(a:u64,i:usize) u64 { x:[4]u64=[a,2,3,4] s:=x[1..] s[0]+=5 t:=s[..2] return t[i]+#cast(u64) #len(s) }
-pub fn slice_read(s:[]const u64,i:usize) u64 { return s[i]+#cast(u64) #len(s) }
+pub fn slice_local(a:u64,i:usize) u64 { x:[4]u64=[a,2,3,4] s:=x[1..] s[0]+=5 t:=s[..2] return t[i]+#cast(u64, #len(s)) }
+pub fn slice_read(s:[]const u64,i:usize) u64 { return s[i]+#cast(u64, #len(s)) }
 pub fn slice_identity(s:[]u64) []u64 { return s }
 pub fn slice_raw(p:*u64,n:usize) []u64 { return p[0..n] }
 pub fn slice_call(a:u64) u64 { x:[4]u64=[a,2,3,4] return slice_read(slice_identity(x[..]),0) }
 pub fn slice_stack(a:u64,b:u64,c:u64,d:u64,e:u64,s:[]u64,t:[]u64) u64 { return a+b+c+d+e+s[0]+t[1] }
 pub fn slice_stack_call(a:u64) u64 { x:[3]u64=[a,2,3] f:=&slice_stack return f(1,2,3,4,5,x[..],x[1..]) }
 pub fn slice_capture(s:[]u64) u64 { global_counter=0 defer slice_observe(s) s=s[0..0] return 9 }
-pub fn slice_observe(s:[]u64) { global_counter=s[0]+#cast(u64) #len(s) }
+pub fn slice_observe(s:[]u64) { global_counter=s[0]+#cast(u64, #len(s)) }
 pub fn slice_defer_return(s:[]u64) []u64 { defer defer_digit(1) return slice_identity(s) }
 pub fn slice_string(i:usize) u8 { s:[]const u8="abc" return s[i] }
-pub fn slice_bounds(a:usize,b:usize) u64 { x:[4]u64=[1,2,3,4] s:=x[a..b] return #cast(u64) #len(s) }
+pub fn slice_bounds(a:usize,b:usize) u64 { x:[4]u64=[1,2,3,4] s:=x[a..b] return #cast(u64, #len(s)) }
 pub fn panic_replace(a:u64) u64 { defer { #panic("cleanup") } #panic("original") }
 pub fn panic_owned(a:u64) u64 { message:[2]u8=[111,107] defer { message[0]=120 defer_emit(5) } #panic(message[..]) }
-pub fn slice_nested_bounds(a:usize,b:usize) u64 { x:[5]u64=[1,2,3,4,5] s:=x[1..4] t:=s[a..b] return #cast(u64) #len(t) }
+pub fn slice_nested_bounds(a:usize,b:usize) u64 { x:[5]u64=[1,2,3,4,5] s:=x[1..4] t:=s[a..b] return #cast(u64, #len(t)) }
 """
 
 ABI_STRUCTS = [
@@ -513,8 +513,8 @@ pub fn abi_capture(a:u64) u64 { global_counter=0 x:=AbiTwo{other:1,value:a} defe
 CAST_TYPES=[('i8',ctypes.c_int8,8,True),('u8',ctypes.c_uint8,8,False),('i16',ctypes.c_int16,16,True),('u16',ctypes.c_uint16,16,False),('i32',ctypes.c_int32,32,True),('u32',ctypes.c_uint32,32,False),('i64',ctypes.c_int64,64,True),('u64',ctypes.c_uint64,64,False)]
 for integer,ty,bits,signed in CAST_TYPES:
     for floating in ('f32','f64'):
-        SOURCE+=f'pub fn cast_{integer}_{floating}(a:{integer}) {floating} {{ return #cast({floating}) a }}\n'
-        SOURCE+=f'pub fn cast_{floating}_{integer}(a:{floating}) {integer} {{ return #cast({integer}) a }}\n'
+        SOURCE+=f'pub fn cast_{integer}_{floating}(a:{integer}) {floating} {{ return #cast({floating}, a) }}\n'
+        SOURCE+=f'pub fn cast_{floating}_{integer}(a:{floating}) {integer} {{ return #cast({integer}, a) }}\n'
 ARRAY_ABI_TYPES=[('u8',ctypes.c_uint8),('i16',ctypes.c_int16),('u64',ctypes.c_uint64),('f32',ctypes.c_float),('f64',ctypes.c_double)]
 for name,ty in ARRAY_ABI_TYPES:
     for n in range(1,7):
@@ -525,21 +525,21 @@ for name,ty in ARRAY_ABI_TYPES:
         SOURCE+=f'pub fn arrayabi_{name}_{n}_apply(f:*fn([{n}]{name}) [{n}]{name},a:{name}) {name} {{ x:[{n}]{name}=[{literal}] x[{n-1}]=a return f(x)[{n-1}] }}\n'
 SOURCE+="""
 pub fn arrayabi_gp(a:u64,b:u64,c:u64,d:u64,e:u64,x:[3]u8) [3]u8 { return x }
-pub fn arrayabi_gp_call() u64 { x:=arrayabi_gp(1,2,3,4,5,[7,8,9]) return #cast(u64)x[0]*100+#cast(u64)x[1]*10+#cast(u64)x[2] }
+pub fn arrayabi_gp_call() u64 { x:=arrayabi_gp(1,2,3,4,5,[7,8,9]) return #cast(u64,x[0])*100+#cast(u64,x[1])*10+#cast(u64,x[2]) }
 pub fn arrayabi_fp(a:f64,b:f64,c:f64,d:f64,e:f64,f:f64,g:f64,x:[3]f32) [3]f32 { return x }
 pub fn arrayabi_fp_call() f32 { x:=arrayabi_fp(1.0,2.0,3.0,4.0,5.0,6.0,7.0,[8.0,9.0,10.0]) return x[0]+x[1]+x[2] }
 struct ArrayMixed { a:u64,b:u64,c:u64,d:f32,e:f64,f:f32,g:f64 }
 pub fn arrayabi_mixed(x:[1]ArrayMixed) [1]ArrayMixed { return x }
-pub fn arrayabi_mixed_call() f64 { x:=arrayabi_mixed([ArrayMixed{a:1,b:2,c:3,d:4.0,e:5.0,f:6.0,g:7.0}]) return #cast(f64)(x[0].a+x[0].b+x[0].c)+#cast(f64)x[0].d+x[0].e+#cast(f64)x[0].f+x[0].g }
+pub fn arrayabi_mixed_call() f64 { x:=arrayabi_mixed([ArrayMixed{a:1,b:2,c:3,d:4.0,e:5.0,f:6.0,g:7.0}]) return #cast(f64,(x[0].a+x[0].b+x[0].c))+#cast(f64,x[0].d)+x[0].e+#cast(f64,x[0].f)+x[0].g }
 pub fn arrayabi_nested(x:[2][2]u64) [2][2]u64 { return x }
 pub fn arrayabi_nested_call() u64 { x:=arrayabi_nested([[1,2],[3,4]]) return x[0][0]+x[0][1]*10+x[1][0]*100+x[1][1]*1000 }
 pub fn each_array(a:u64) u64 { x:[3]u64=[1,2,3] total:u64=0 for item in x { x[1]=9 total=total*10+item } return total }
 pub fn each_slice(a:u64) u64 { x:[3]u64=[1,2,3] total:u64=0 for item in x[..] { x[1]=9 total=total*10+item } return total }
 pub fn each_pointer(a:u64) u64 { x:[3]u64=[1,2,3] for *item in x { item.*+=a } return x[0]+x[1]+x[2] }
-pub fn each_reverse(a:u64) u64 { total:u64=0 for item in #reverse([1,2,3]) { total=total*10+#cast(u64)item } return total }
+pub fn each_reverse(a:u64) u64 { total:u64=0 for item in #reverse([1,2,3]) { total=total*10+#cast(u64,item) } return total }
 pub fn each_nested(a:u64) u64 { x:[2][2]u64=[[1,2],[3,4]] total:u64=0 for row in x { for item in row { total=total*10+item } } return total }
-pub fn each_defer(a:u64) u64 { global_counter=0 for item in [1,2,3,4] { defer defer_digit(#cast(u64)item) if item==1 { continue } if item==3 { break } } return global_counter }
-pub fn each_early(a:u64) u64 { global_counter=0 for item in [1,2,3] { defer defer_digit(#cast(u64)item) if #cast(u64)item==a { return #cast(u64)item } } return 0 }
+pub fn each_defer(a:u64) u64 { global_counter=0 for item in [1,2,3,4] { defer defer_digit(#cast(u64,item)) if item==1 { continue } if item==3 { break } } return global_counter }
+pub fn each_early(a:u64) u64 { global_counter=0 for item in [1,2,3] { defer defer_digit(#cast(u64,item)) if #cast(u64,item)==a { return #cast(u64,item) } } return 0 }
 """
 
 def configure(library, name, ty, argc):
