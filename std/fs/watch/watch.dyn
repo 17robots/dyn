@@ -1,4 +1,5 @@
 #target(kernel: linux)
+use "std/mem" mem
 use "std/errors"
 use "std/fs" fs
 use "std/c" c
@@ -43,7 +44,8 @@ pub fn open(storage: []u8) OpenResult {
 }
 pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   storage: [4096]u8 = []
-  name := c.string_from_bytes(storage[..], path)
+  cstring_space1 := mem.arena_from_buffer(storage[..])
+  name := c.string_from_bytes(&cstring_space1, path)
   if !name.ok || #len(path) == 0 || state.descriptor < 0 {
     return failure(-22)
   }

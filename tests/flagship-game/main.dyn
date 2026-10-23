@@ -31,9 +31,10 @@ fn hash_pixels(hash: u64, pixels: []const u32) u64 {
 
 fn print_field(name: []const u8, value: u64) {
   digits: [20]u8
+  scratch := mem.arena_from_buffer(digits[..])
   _ = io.write_all(io.stdout(), name)
   _ = io.write_all(io.stdout(), " ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(digits[..], value))
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(&scratch, value))
   _ = io.write_all(io.stdout(), "\n")
 }
 

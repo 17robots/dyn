@@ -29,7 +29,8 @@ pub fn window(context: Context, title: []const u8, buffer: []u8, bounds: Rectang
   if #len(title) > 4096 {
     return false
   }
-  encoded := c.string_from_bytes(buffer, title)
+  cstring_space1 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space1, title)
   return encoded.ok && native_window(context, encoded.value, bounds.x, bounds.y, bounds.width, bounds.height)
 }
 pub extern fn window_end "dyn_mu_window_end"(context: Context) bool
@@ -37,7 +38,8 @@ pub fn label(context: Context, text: []const u8, buffer: []u8) bool {
   if #len(text) > 4096 {
     return false
   }
-  encoded := c.string_from_bytes(buffer, text)
+  cstring_space2 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space2, text)
   return encoded.ok && native_label(context, encoded.value)
 }
 // -1 invalid/full, 0 idle, 1 clicked. Inputs must arrive before begin().
@@ -45,7 +47,8 @@ pub fn button(context: Context, text: []const u8, buffer: []u8) i32 {
   if #len(text) > 4096 {
     return -1
   }
-  encoded := c.string_from_bytes(buffer, text)
+  cstring_space3 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space3, text)
   if !encoded.ok {
     return -1
   }

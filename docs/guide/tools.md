@@ -79,10 +79,8 @@ reclamation and release events. The log and labels must outlive recording and re
 outside memory reclaimed by that arena. There is no implicit synchronization or
 whole-program tracing. Use one log per worker or synchronize externally.
 
-`slot_map.lookup` returns `Missing` or `Present(bytes)` so the result itself expresses
-whether a view exists. Present bytes remain borrowed. `copy_into` remains the way to
-retain data in disjoint caller storage. Exhaustive `case` handling makes failure
-states visible without making them exceptional.
+`slot_map.resolve` returns the live slot or the caller's read-only stub, so a
+stale handle reads as empty data instead of failing.
 
 ## Capabilities and execution isolation
 

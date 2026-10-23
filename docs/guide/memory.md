@@ -21,7 +21,7 @@ caller-buffer functions and their error reporting see
 | Layer | Responsibility |
 | --- | --- |
 | Compiler | Type parameters for typed pushes, `#sizeof`/`#alignof`, narrow escape and arena-copy checks |
-| Std | Arenas, typed pushes, mark/rewind/reset/release, scratch scopes, pools and free lists |
+| Std | Arenas, typed pushes, `append`, mark/rewind/reset/release, scratch scopes; intrusive free lists in `std/container/list` |
 | Application | Lifetime grouping, budgets, synchronization, cleanup order, recovery policy |
 
 The compiler's checks are deliberately narrow. There is no borrow checker,
@@ -200,12 +200,10 @@ reset or release, or with another arena.
 | Result | Storage that must stay alive |
 | --- | --- |
 | String trim, strip and scanner views | Input bytes |
-| `strings.clone_into` / `join_into` | Caller destination |
 | `strings.clone` / `join` / `format` | Output arena |
 | `strings.split` | Arena for the slice table, and the input for each element |
 | JSON `parse` | Arena for nodes and decoded strings; input for number text |
 | Text and HTML template `parse` | Output arena, which keeps a copy of the template source |
-| String-map keys after `put` | Arena that holds the copied keys |
 | Builder `bytes` | Builder storage; changes with mutation |
 | CSV, INI and XML scanner items | Input bytes, or reader storage until the next call for streams |
 | TAR entries | Archive input, or reader storage until the next call for streams |

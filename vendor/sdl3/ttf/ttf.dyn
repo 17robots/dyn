@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/c"
 use "vendor/sdl3"
 #link("SDL3_ttf")
@@ -16,7 +17,8 @@ pub fn open_owned(path: []const u8, buffer: []u8, points: f32) FontResult {
   if !(points > 0.0) {
     return FontResult{}
   }
-  encoded := c.string_from_bytes(buffer, path)
+  cstring_space1 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space1, path)
   if !encoded.ok {
     return FontResult{}
   }

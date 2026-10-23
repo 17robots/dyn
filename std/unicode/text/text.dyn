@@ -1,8 +1,9 @@
+use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
 pub const UnicodeVersion: []const u8 = "17.0.0"
-pub enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
-pub struct Result { written: usize, error: ErrorKind, ok: bool }
+enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
+struct Result { written: usize, error: ErrorKind, ok: bool }
 pub enum Form { NFD, NFC, NFKD, NFKC }
 pub enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }
 fn properties(codepoint: u32) u32 {
@@ -147,7 +148,7 @@ fn mapping(table: []const u32, codepoint: u32) []const u32 {
 }
 // Locale-independent full default case folding, without normalization.
 // Overlap is rejected before writing. Other failures report a complete UTF-8 prefix.
-pub fn case_fold(destination: []u8, source: []const u8) Result {
+fn case_fold_into(destination: []u8, source: []const u8) Result {
   if bytes.overlaps(destination, source) {
     return Result{ error: ErrorKind.Overlap }
   }
@@ -201,7 +202,7 @@ fn compose(left: u32, right: u32) u32 {
 // Work is split into equal decomposition/reordering buffers. Each half needs
 // one slot per fully decomposed scalar. Input/output/work must not overlap.
 // Errors may modify storage; written reports only the complete output prefix.
-pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32) Result {
+fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32) Result {
   if bytes.overlaps(destination, source) {
     return Result{ error: ErrorKind.Overlap }
   }
@@ -323,4 +324,57 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
     written += width
   }
   return Result{ written: written, ok: true }
+}
+
+// Text in arena. ok is false, with nothing pushed, when the input is not
+// valid UTF-8.
+pub struct Converted { value: []u8, ok: bool }
+
+// Locale-independent full default case folding, without normalization, into arena.
+pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
+  capacity := mem.trial_size(arena, 2 * #len(source) + 16)
+  for capacity > 0 {
+    mark := mem.arena_mark(arena)
+    space := mem.push_bytes_uninit(arena, capacity)
+    result := case_fold_into(space, source)
+    if result.ok {
+      mem.arena_rewind(arena, mark + result.written)
+      return Converted{ value: space[..result.written], ok: true }
+    }
+    mem.arena_rewind(arena, mark)
+    if result.error != ErrorKind.Capacity {
+      return Converted{}
+    }
+    capacity = mem.trial_next(arena, capacity)
+  }
+  #panic("arena exhausted")
+}
+
+// source in normalization form, into arena.
+pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
+  capacity := mem.trial_size(arena, 2 * #len(source) + 16)
+  for capacity > 0 {
+    mark := mem.arena_mark(arena)
+    work := mem.push_array(u32, arena, 2 * capacity)
+    space := mem.push_bytes_uninit(arena, capacity)
+    result := normalize_into(space, source, form, work)
+    if result.ok {
+      output := clone_down(arena, mark, space[..result.written])
+      return Converted{ value: output, ok: true }
+    }
+    mem.arena_rewind(arena, mark)
+    if result.error != ErrorKind.Capacity {
+      return Converted{}
+    }
+    capacity = mem.trial_next(arena, capacity)
+  }
+  #panic("arena exhausted")
+}
+
+// Moves text down to mark, dropping the work area pushed before it.
+fn clone_down(arena: *mem.Arena, mark: usize, text: []const u8) []u8 {
+  mem.arena_rewind(arena, mark)
+  output := mem.push_bytes_uninit(arena, #len(text))
+  _ = mem.move(output, text)
+  return output
 }

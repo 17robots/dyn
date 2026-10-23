@@ -1,59 +1,52 @@
 # Buffer and arena contracts
 
-Functions that write into a caller's slice report running out of room, because the caller
-picked the size and can retry with a bigger one. Arena forms of the same functions panic
-instead, like every arena push.
+Std has one way to produce data whose size depends on the input: the function
+takes `arena: *mem.Arena` first and returns the result in that arena. There are
+no caller-buffer duplicates (`_into`) and no size-query companions (`_size`,
+`_count`). To produce into fixed storage, wrap it in an arena:
 
-Caller buffers may be stack arrays or live arena slices. Capacity is always the supplied
-slice length, not the size of an underlying allocation. Returned slices borrow the named
-storage; no buffer function silently obtains heap memory. Arena operations retain data only
-in the supplied arena. Reset, rewind, or release invalidates affected results.
+```dyn
+storage: [64]u8 = []
+arena := mem.arena_from_buffer(storage[..])
+text := fmt.u64_decimal(&arena, 42)
+```
 
-The following interfaces provide checked, explicit outcomes:
+Running out of arena panics, like every arena push. Producers that cannot know
+their output size in advance (JSON encoding, inflate, case folding) write into a
+trial block and retry with a bigger one, rewinding between attempts, so the
+arena keeps only the final output. A fixed-buffer arena that cannot hold the
+output panics.
 
-| Interface | Capacity / error reporting | Overlap | Failure effects |
-| --- | --- | --- | --- |
-| `mem.copy` | Panics if destination is too small | Not supported | Check precedes writes |
-| `mem.move` | Panics if destination is too small | Supported | Check precedes writes |
-| `strings.clone_into` | `Result.error`, exact `required` bytes | Supported | No writes |
-| `strings.join_into`, `replace` | `Result.error`, exact `required` for valid input | Output/input byte overlap rejected | No writes |
-| `strings.split_into` | `SplitResult.error`, `required` slice entries | Table must be disjoint from input bytes | No table writes |
-| Hex/Base32/Base64 encode/decode | `encoding.Result.error`, exact `required` for valid, representable input | Output/input overlap rejected | No writes |
-| `c.string_from_bytes` | `StringResult.error`, `required` includes NUL | Supported | No writes |
-| `flags.usage`, `completion` | `TextResult.error`, exact `required` bytes | Output/input text overlap rejected | No writes |
-| `builder.append` | Builder `ErrorKind` | Self-append and overlapping bytes supported | Builder and contents preserved |
-| Unicode `case_fold`, `normalize` | `Result.error`, complete UTF-8 prefix `written` | Input/output/work overlap rejected | Overlap writes nothing; later failures may modify work/output |
-| ZIP `extract` | `ExtractResult.error` | Destination/payload overlap rejected | Preflight writes nothing; decode/CRC failure may modify output |
-| TAR `next_stream` | Sticky numeric error, explicit metadata capacity | Header/metadata overlap rejected | Input may be consumed; names expire at next call; metadata is reused |
-| XML `namespace_enter` | `ExpandedName.error` | Event name/attributes must be disjoint from context storage | Scope counters roll back; unused slots may change |
-| Process `capture` | Error plus captured prefixes, timeout/limit flags | stdout/stderr overlap rejected | Direct child is terminated/reaped on capture failure; prefixes remain |
-| I/O `read`, `write`, `read_exact`, `write_all` | Status plus transferred byte count | Adapter-specific | Partial progress may accompany failure |
+Caller storage remains in two places, where the size is not the function's to
+choose:
 
-Input metadata (slice tables, option definitions, builder/map state) must occupy storage
-separate from output bytes. Input bytes must remain unchanged throughout a call. The
-transactional guarantees above concern reported errors, not forged slices, mutated public
-state, or concurrent access. They do not change other modules' documented partial-output
-contracts, including compression and authenticated decryption provider failures.
+- Fixed-size results: hashes and keys (`sha2.finish`, `hmac.sha256`,
+  `x25519`), `binary.store_*`, `utf8.encode`, socket addresses.
+- Streaming: `io.read`, `fs.read`, socket and TLS reads, `bufio`, CSV and TAR
+  stream readers, `deflate.resume`. These fill the caller's buffer and report
+  how much they transferred.
 
-`InvalidInput`, `Capacity`, `Overflow`, and `Overlap` are distinct codec/string failures.
-An empty successful result has `ok=true`; never use slice length to infer success. On
-failure, codec/string output slices are empty. `required` is zero when input is invalid or
-its required length is not representable. Capacity errors include the exact requirement.
-Hex/Base32/Base64 decoders validate before writing; this uses two passes and no temporary
-allocation. `decoded_size(source)` validates input and returns `{value, ok}` with the
-exact decoded length. `encoded_size(n)` returns zero on overflow and for empty input.
+Failure of an arena producer pushes nothing: the arena is rewound to where it
+was. Input that is not valid (bad UTF-8, a malformed escape, a corrupt stream)
+is reported as `ok` false; size never is.
 
-C strings reject embedded NUL instead of silently truncating names/paths. The bounded C
-view distinguishes invalid pointers from missing terminators. Callers must still supply a
-maximum within readable foreign storage; a bound cannot validate an arbitrary pointer.
-
-The arena forms `strings.clone`, `join`, `split` and `format` size their output first and
-push exactly that much; running out of arena panics like any other push. `join_size` reports
-byte capacity and `split_count` reports slice-table capacity for callers that bring their own
-buffer. Split elements borrow the original source; only the table lives in the arena. Empty
-fields are preserved.
+| Producer | Result |
+| --- | --- |
+| `strings.clone`, `join`, `split`, `replace`, `format` | Slice in arena; `split` elements borrow the source |
+| `fmt.u64_decimal`, `i64_decimal`, `f64_decimal`, `u64_base` | Text in arena |
+| Hex/Base32/Base64 `encode`, `decode` | Bytes in arena; `decode` returns `{value, ok}` |
+| JSON `encode`, `encode_pretty`, `write_string` | Text in arena; empty when the value is not encodable |
+| `path.join`, `clean`, `safe_join`, `relative`, `url.percent_encode`, `percent_decode` | Text in arena |
+| `c.string_from_bytes` | NUL-terminated copy in arena; embedded NUL is invalid input |
+| `deflate.inflate`, `gunzip`, `gzip.decompress`, `zstd.compress`, `decompress`, `zip.extract` | Bytes in arena |
+| `png`, `qoi` `encode`, `decode` | Bytes or pixels in arena |
+| Unicode `case_fold`, `normalize` | Text in arena; `ok` false for invalid UTF-8 |
+| HTTP and WebSocket writers, DNS queries, `time.format_iso8601`, `debug.hexdump`, `flags.usage` | Bytes in arena |
+| `process.environment`, `fs.read_link`, `fs.app_directory` | Text in arena |
 
 `mem.arena_try_push` reports exhaustion through `Allocation.error`, which distinguishes invalid
 alignment, capacity, invalid arena state and overflow. Growing arenas also keep the OS code.
 
 Retained-result lifetimes are listed in [memory](memory.md#what-each-result-borrows).
+A numeric mark is not a generation-checked token: do not reuse marks across
+reset or release, or with another arena.

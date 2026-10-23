@@ -1,6 +1,7 @@
 #target(kernel: darwin)
 #link("System")
 // Native Darwin adapter. libSystem handles OS calls; buffers use the caller arena.
+use "std/mem" mem
 use "std/c" c
 extern fn native_chdir "chdir"(path: *const u8) i32
 extern fn native_fork "fork"() i32
@@ -27,7 +28,8 @@ fn mac_error() isize {
 fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
   allocation := mem.arena_push_uninit(arena, #len(value)+1, 1)
   storage := allocation[..#len(value)+1]
-  return c.string_from_bytes(storage, value).value
+  cstring_space1 := mem.arena_from_buffer(storage)
+  return c.string_from_bytes(&cstring_space1, value).value
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
   if #len(values) > 2305843009213693950 {
@@ -222,7 +224,8 @@ fn sleep_native() {
 }
 fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   buffer: [4096]u8 = []
-  key := c.string_from_bytes(buffer[..], name)
+  cstring_space2 := mem.arena_from_buffer(buffer[..])
+  key := c.string_from_bytes(&cstring_space2, name)
   if !key.ok {
     return EnvironmentResult{ error: -28, kind: error_kinds.Kind.Capacity }
   }

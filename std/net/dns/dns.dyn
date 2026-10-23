@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/net" network
 use "std/errors"
 use "std/crypto/random" random
@@ -91,11 +92,20 @@ fn question_matches(packet: []const u8, name: []const u8) bool {
   return parsed.ok && expected.ok && same_name(storage[..parsed.length], canonical[..expected.length])
 }
 
-pub fn query_ipv4(destination: []u8, name: []const u8, identifier: u16) []u8 {
-  return query(destination, name, identifier, 1)
+// An A query for name, in arena. Empty when name is not a valid DNS name.
+pub fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8 {
+  return query_arena(arena, name, identifier, 1)
 }
-pub fn query_ipv6(destination: []u8, name: []const u8, identifier: u16) []u8 {
-  return query(destination, name, identifier, 28)
+// An AAAA query for name, in arena. Empty when name is not a valid DNS name.
+pub fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8 {
+  return query_arena(arena, name, identifier, 28)
+}
+fn query_arena(arena: *mem.Arena, name: []const u8, identifier: u16, kind: u16) []u8 {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, #len(name) + 18)
+  output := query(space, name, identifier, kind)
+  mem.arena_rewind(arena, mark + #len(output))
+  return output
 }
 fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
   if #len(destination) < 17 || #len(name) == 0 || #len(name) > 253 {

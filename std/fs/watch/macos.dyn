@@ -62,7 +62,8 @@ extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback:
 extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
   backing: [128]u8 = []
-  value := c.string_from_bytes(backing[..], name)
+  cstring_space1 := mem.arena_from_buffer(backing[..])
+  value := c.string_from_bytes(&cstring_space1, name)
   if handle == nil || !value.ok {
     return nil
   }
@@ -70,7 +71,8 @@ fn symbol(handle: rawptr, name: []const u8) rawptr {
 }
 fn library(path: []const u8) rawptr {
   backing: [256]u8 = []
-  value := c.string_from_bytes(backing[..], path)
+  cstring_space2 := mem.arena_from_buffer(backing[..])
+  value := c.string_from_bytes(&cstring_space2, path)
   if !value.ok {
     return nil
   }
@@ -259,7 +261,8 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(-95)
   }
   input: [1024]u8 = []
-  terminated := c.string_from_bytes(input[..], path)
+  cstring_space3 := mem.arena_from_buffer(input[..])
+  terminated := c.string_from_bytes(&cstring_space3, path)
   if !terminated.ok {
     return failure(-22)
   }

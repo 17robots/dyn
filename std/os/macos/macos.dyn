@@ -1,5 +1,6 @@
 #target(kernel: darwin)
 
+use "std/mem" mem
 use "std/c" cstrings
 
 pub struct IoResult { value: isize, error: isize, ok: bool }
@@ -18,7 +19,8 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 {
     return nil
   }
-  result := cstrings.string_from_bytes(storage, path)
+  cstring_space1 := mem.arena_from_buffer(storage)
+  result := cstrings.string_from_bytes(&cstring_space1, path)
   if !result.ok {
     return nil
   }

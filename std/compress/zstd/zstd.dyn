@@ -22,12 +22,6 @@ pub fn version() u32 {
 pub fn compress_bound(source_size: usize) usize {
   return provider.compress_bound(source_size)
 }
-pub fn compress_into(destination: []u8, source: []const u8, level: i32) Result {
-  return provider.compress(destination, source, level)
-}
-pub fn decompress_into(destination: []u8, source: []const u8) Result {
-  return provider.decompress(destination, source)
-}
 pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResult {
   mark := memory.arena_mark(arena)
   capacity := compress_bound(#len(source))

@@ -20,7 +20,8 @@ fn put(out: *Output, arena: *mem.Arena, text: []const u8) {
 
 fn put_number(out: *Output, arena: *mem.Arena, value: u64) {
   digits: [20]u8
-  put(out, arena, fmt.u64_decimal(digits[..], value))
+  scratch := mem.arena_from_buffer(digits[..])
+  put(out, arena, fmt.u64_decimal(&scratch, value))
 }
 
 fn dump(out: *Output, arena: *mem.Arena, tree: *const Tree, root: u32) {

@@ -600,82 +600,33 @@ fn isize_minimum() isize {
   return -isize_maximum() - 1
 }
 
-pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Overlap }
-pub struct Result { value: []u8, error: ErrorKind, required: usize, ok: bool }
-pub struct SplitResult { values: [][]const u8, error: ErrorKind, required: usize, ok: bool }
-pub struct SizeResult { value: usize, error: ErrorKind, ok: bool }
+// Builders put their output in arena, arena first. Sizes too large to
+// address panic, like any exhausted arena.
 
-// Exact-capacity copies support overlap; failure leaves destination unchanged.
-// Copies into caller destination. Successful value borrows destination, not source. Inspect Result.ok.
-// Ownership: copies bytes; returned view borrows destination.
-// Invalidation: destination mutation or destruction.
-// Allocation: none.
-// Failure: destination is unchanged; required reports the source length.
-pub fn clone_into(destination: []u8, source: []const u8) Result {
-  if #len(destination) < #len(source) {
-    return Result{ error: ErrorKind.Capacity, required: #len(source) }
-  }
-  _ = memory.move(destination, source)
-  return Result{ value: destination[..#len(source)], required: #len(source), ok: true }
-}
-// Copies source into arena. The copy expires at the applicable rewind, reset or release.
+// Copies source into arena.
 pub fn clone(arena: *memory.Arena, source: []const u8) []u8 {
   output := memory.push_bytes_uninit(arena, #len(source))
   _ = memory.copy(output, source)
   return output
 }
 
-pub fn join_size(parts: [][]const u8, separator: []const u8) SizeResult {
-  total: usize = 0
-  maximum := #cast(usize, -1)
-  for i in 0..#len(parts) {
-    if #len(parts[i]) > maximum - total {
-      return SizeResult{ error: ErrorKind.Overflow }
-    }
-    total += #len(parts[i])
-    if i > 0 {
-      if #len(separator) > maximum - total {
-        return SizeResult{ error: ErrorKind.Overflow }
-      }
-      total += #len(separator)
-    }
+fn checked_add(total: usize, more: usize) usize {
+  if more > ~#cast(usize, 0) - total {
+    #panic("strings: size overflows")
   }
-  return SizeResult{ value: total, ok: true }
+  return total + more
 }
-// Output must not overlap any input bytes. Failure writes nothing.
-pub fn join_into(destination: []u8, parts: [][]const u8, separator: []const u8) Result {
-  size := join_size(parts, separator)
-  if !size.ok {
-    return Result{ error: size.error }
-  }
-  if size.value > #len(destination) {
-    return Result{ error: ErrorKind.Capacity, required: size.value }
-  }
-  output := destination[..size.value]
-  if byte_ops.overlaps(output, separator) {
-    return Result{ error: ErrorKind.Overlap, required: size.value }
-  }
-  for part in parts {
-    if byte_ops.overlaps(output, part) {
-      return Result{ error: ErrorKind.Overlap, required: size.value }
-    }
-  }
-  at: usize = 0
-  for i in 0..#len(parts) {
-    if i > 0 {
-      at += memory.copy(output[at..], separator)
-    }
-    at += memory.copy(output[at..], parts[i])
-  }
-  return Result{ value: output, required: size.value, ok: true }
-}
-// Joins parts into arena. Panics when the total size overflows.
+
+// Joins parts with separator between them.
 pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []u8 {
-  size := join_size(parts, separator)
-  if !size.ok {
-    #panic("join size overflows")
+  total: usize = 0
+  for i in 0..#len(parts) {
+    total = checked_add(total, #len(parts[i]))
+    if i > 0 {
+      total = checked_add(total, #len(separator))
+    }
   }
-  output := memory.push_bytes_uninit(arena, size.value)
+  output := memory.push_bytes_uninit(arena, total)
   at: usize = 0
   for i in 0..#len(parts) {
     if i > 0 {
@@ -686,9 +637,12 @@ pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []
   return output
 }
 
-pub fn split_count(source: []const u8, separator: []const u8) SizeResult {
+// Splits source on separator. Only the slice table lives in arena; elements
+// borrow source, so keep both alive. Empty fields, including the last, are
+// kept. Panics when separator is empty.
+pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) [][]const u8 {
   if #len(separator) == 0 {
-    return SizeResult{ error: ErrorKind.InvalidInput }
+    #panic("split separator is empty")
   }
   count: usize = 1
   at: usize = 0
@@ -698,75 +652,37 @@ pub fn split_count(source: []const u8, separator: []const u8) SizeResult {
     if found == #len(rest) {
       break
     }
-    if count == #cast(usize, -1) {
-      return SizeResult{ error: ErrorKind.Overflow }
-    }
     count += 1
     at += found + #len(separator)
   }
-  return SizeResult{ value: count, ok: true }
-}
-// Slice table and input bytes must occupy separate storage. Elements borrow source.
-// Empty fields, including the last, are retained. Failure changes no entries.
-// Writes views into caller slice-table storage. Elements still borrow source bytes; keep BOTH alive.
-pub fn split_into(storage: [][]const u8, source: []const u8, separator: []const u8) SplitResult {
-  count := split_count(source, separator)
-  if !count.ok {
-    return SplitResult{ error: count.error }
-  }
-  if count.value > #len(storage) {
-    return SplitResult{ error: ErrorKind.Capacity, required: count.value }
-  }
-  at: usize = 0
-  i: usize = 0
-  for i + 1 < count.value {
+  values := memory.push_array([]const u8, arena, count)
+  at = 0
+  for i in 0..count - 1 {
     end := at + find(source[at..], separator)
-    storage[i] = source[at..end]
+    values[i] = source[at..end]
     at = end + #len(separator)
-    i += 1
   }
-  storage[i] = source[at..]
-  return SplitResult{ values: storage[..count.value], required: count.value, ok: true }
-}
-// Splits source on separator. Only the slice table lives in arena; elements
-// borrow source, so keep both alive. Empty fields, including the last, are kept.
-// Panics when separator is empty.
-pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) [][]const u8 {
-  count := split_count(source, separator)
-  if !count.ok {
-    #panic("split separator is empty")
-  }
-  values := memory.push_array([]const u8, arena, count.value)
-  _ = split_into(values, source, separator)
+  values[count - 1] = source[at..]
   return values
 }
-// Caller storage must not overlap source. Capacity failure leaves it unchanged.
-pub fn replace(destination: []u8, source: []const u8, needle: []const u8, replacement: []const u8) Result {
+
+// A copy of source with every needle replaced. Panics when needle is empty.
+pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, replacement: []const u8) []u8 {
   if #len(needle) == 0 {
-    return Result{ error: ErrorKind.InvalidInput }
+    #panic("replace needle is empty")
   }
   total := #len(source)
   at: usize = 0
-  maximum := #cast(usize, -1)
   for {
     rest := source[at..]
     found := find(rest, needle)
     if found == #len(rest) {
       break
     }
-    total -= #len(needle)
-    if #len(replacement) > maximum - total {
-      return Result{ error: ErrorKind.Overflow }
-    }
-    total += #len(replacement)
+    total = checked_add(total - #len(needle), #len(replacement))
     at += found + #len(needle)
   }
-  if total > #len(destination) {
-    return Result{ error: ErrorKind.Capacity, required: total }
-  }
-  if byte_ops.overlaps(destination[..total], source) || byte_ops.overlaps(destination[..total], needle) || byte_ops.overlaps(destination[..total], replacement) {
-    return Result{ error: ErrorKind.Overlap, required: total }
-  }
+  output := memory.push_bytes_uninit(arena, total)
   at = 0
   written: usize = 0
   for {
@@ -776,12 +692,12 @@ pub fn replace(destination: []u8, source: []const u8, needle: []const u8, replac
       break
     }
     end := at + next
-    written += memory.copy(destination[written..], source[at..end])
-    written += memory.copy(destination[written..], replacement)
+    written += memory.copy(output[written..], source[at..end])
+    written += memory.copy(output[written..], replacement)
     at = end + #len(needle)
   }
-  written += memory.copy(destination[written..], source[at..])
-  return Result{ value: destination[..written], required: total, ok: true }
+  written += memory.copy(output[written..], source[at..])
+  return output
 }
 
 // Byte wildcard matching: * matches any sequence, ? one byte, backslash escapes.

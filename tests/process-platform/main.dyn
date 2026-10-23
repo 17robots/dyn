@@ -1,7 +1,7 @@
 use "std/process" process
 use "std/mem" mem
 fn main() {
-  value: [128]u8 = [] child_mode := process.environment("DYN_PROCESS_CHILD",value[..])
+  arena: mem.Arena child_mode := process.environment(&arena, "DYN_PROCESS_CHILD")
   if !child_mode.ok { #panic("environment") }
   if child_mode.found {
     if #len(child_mode.value) != 3 || child_mode.value[0] != 'y' { #panic("child environment") }

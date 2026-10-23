@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/c"
 #link("dyn_enet")
 // ENet 1.3.18, configurable reliable channels. Provider owns hosts/packets. Initialize once
@@ -84,7 +85,8 @@ extern fn native_disconnect "enet_peer_disconnect"(peer: Peer, data: u32)
 // Numeric IPv4 only. Use "0.0.0.0" to accept connections on all interfaces.
 // channels must be 1..255. No DNS lookup or hidden filesystem/network work.
 pub fn listen_at_owned(ip: []const u8, port: u16, peers: usize, channels: usize, buffer: []u8) Host {
-  encoded := c.string_from_bytes(buffer, ip)
+  cstring_space1 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space1, ip)
   if !encoded.ok {
     return nil
   }
@@ -94,7 +96,8 @@ pub fn client_channels_owned(peers: usize, channels: usize) Host {
   return native_host(nil, 0, peers, channels)
 }
 pub fn connect_channels(host: Host, ip: []const u8, port: u16, channels: usize, buffer: []u8) Peer {
-  encoded := c.string_from_bytes(buffer, ip)
+  cstring_space2 := mem.arena_from_buffer(buffer)
+  encoded := c.string_from_bytes(&cstring_space2, ip)
   if !encoded.ok {
     return nil
   }

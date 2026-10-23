@@ -1,11 +1,13 @@
 #target(kernel: darwin)
+use "std/mem" mem
 use "std/c" cstrings
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 {
     return nil
   }
-  value := cstrings.string_from_bytes(storage, path)
+  cstring_space1 := mem.arena_from_buffer(storage)
+  value := cstrings.string_from_bytes(&cstring_space1, path)
   if !value.ok {
     return nil
   }

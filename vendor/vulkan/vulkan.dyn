@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/c"
 #link("vulkan")
 
@@ -25,7 +26,8 @@ pub fn version_patch(version: u32) u32 {
 
 // name_buffer receives a temporary NUL-terminated copy. Returned function is loader-owned.
 pub fn procedure(instance: Instance, name: []const u8, name_buffer: []u8) ProcedureResult {
-  encoded := c.string_from_bytes(name_buffer, name)
+  cstring_space1 := mem.arena_from_buffer(name_buffer)
+  encoded := c.string_from_bytes(&cstring_space1, name)
   if !encoded.ok {
     return ProcedureResult{}
   }

@@ -33,7 +33,8 @@ pub fn window_create(title: []const u8, title_buffer: []u8, width: i32, height: 
   if width <= 0 || height <= 0 {
     return WindowResult{}
   }
-  native_title := c.string_from_bytes(title_buffer, title)
+  cstring_space1 := mem.arena_from_buffer(title_buffer)
+  native_title := c.string_from_bytes(&cstring_space1, title)
   if !native_title.ok {
     return WindowResult{}
   }

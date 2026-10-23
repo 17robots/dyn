@@ -153,14 +153,15 @@ retryable error. OS release failure is not exercised by these examples.
 
 ## Choosing existing mechanisms
 
-- Use `strings.clone_into` for caller-owned output, `strings.clone` for copied
-  arena output, and views only while their backing remains valid. `strings.split`
+- Use `strings.clone` for copied output, wrapping fixed storage in
+  `mem.arena_from_buffer` when the copy must live there, and views only while
+  their backing remains valid. `strings.split`
   copies the descriptor table but borrows the input bytes.
-- Use pools or slot maps for independent deletion. Reacquire a slot view through
-  its handle at each use. `slot_map.lookup` already separates Missing from Present;
-  `copy_into` produces retained data when the destination has independent backing.
-- String-map removal reuses table positions but does not reclaim copied keys.
-  Use an arena per map lifetime, or choose slot/pool storage for bounded churn.
+- Use intrusive free lists and generation handles (`std/container/list`,
+  `slot_map`) for independent deletion. Resolve a handle at each use; a stale
+  handle gives the stub.
+- Hash-table removal unlinks the node but does not reclaim its memory. Reuse
+  nodes through a free list, or use an arena per table lifetime.
 - Keep thread context, stack, and the Thread descriptor alive and unmoved through
   successful join. Cancellation is an application protocol, not proof of completion.
   A failed join does not authorize reclamation. Linux raw threads do not establish
