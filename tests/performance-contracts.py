@@ -135,11 +135,11 @@ use "std/mem" mem
 fn main() {
   arena: mem.Arena
   created := t.temporary_directory(&arena, "dyn-performance-contract")
-  t.expect(created.ok && created.directory.active, "temporary directory")
+  t.expect(created.ok && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame = []
   scratch: [4096]u8 = []
-  removed := t.remove_temporary(&created.directory, frames[..], scratch[..])
-  t.expect(removed.ok && !created.directory.active, "remove temporary directory")
+  removed := t.remove_temporary(&created.value, frames[..], scratch[..])
+  t.expect(removed.ok && !created.value.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):

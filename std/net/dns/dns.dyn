@@ -7,7 +7,7 @@ use "std/time" time
 pub struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }
 pub struct Ipv6 { bytes: [16]u8 }
 // `error` keeps the native or DNS code; `kind` is its portable category.
-pub struct Result { count: usize, error: isize, kind: errors.Kind, ok: bool }
+pub struct Result { value: usize, error: isize, kind: errors.Kind, ok: bool }
 
 fn load_u16(bytes: []const u8, offset: usize) u16 {
   return #cast(u16, bytes[offset]) * 256 + #cast(u16, bytes[offset + 1])
@@ -262,25 +262,25 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
     matches := same_name(record_owner[..parsed_owner.length], owner[..canonical.length])
     cursor = parsed_owner.end
     if cursor == 0 || cursor + 10 > #len(packet) {
-      return Result{ count: count, error: -22, kind: errors.Kind.InvalidInput, ok: false }
+      return Result{ value: count, error: -22, kind: errors.Kind.InvalidInput, ok: false }
     }
     kind := load_u16(packet, cursor)
     class := load_u16(packet, cursor + 2)
     length := #cast(usize, load_u16(packet, cursor + 8))
     cursor += 10
     if cursor + length > #len(packet) {
-      return Result{ count: count, error: -22, kind: errors.Kind.InvalidInput, ok: false }
+      return Result{ value: count, error: -22, kind: errors.Kind.InvalidInput, ok: false }
     }
     if matches && kind == 1 && query_kind == 1 && class == 1 && length == 4 {
       if count == #len(addresses) {
-        return Result{ count: count, error: -28, kind: errors.Kind.Capacity }
+        return Result{ value: count, error: -28, kind: errors.Kind.Capacity }
       }
       addresses[count] = Ipv4{ a: packet[cursor], b: packet[cursor + 1], c: packet[cursor + 2], d: packet[cursor + 3] }
       count += 1
     }
     if matches && kind == 28 && query_kind == 28 && class == 1 && length == 16 {
       if count == #len(ipv6) {
-        return Result{ count: count, error: -28, kind: errors.Kind.Capacity }
+        return Result{ value: count, error: -28, kind: errors.Kind.Capacity }
       }
       for i in 0..16 {
         ipv6[count].bytes[i] = packet[cursor + i]
@@ -289,7 +289,7 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
     }
     cursor += length
   }
-  return Result{ count: count, ok: true }
+  return Result{ value: count, ok: true }
 }
 
 // The server transport address is IPv4; IPv6 refers to AAAA result records.

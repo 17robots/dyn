@@ -3,26 +3,26 @@ use "std/crypto/core" crypto_core
 
 // Borrowed DER certificate view. TLS provider performs trust and hostname verification.
 pub struct Certificate { encoded: []const u8, tbs: []const u8, signature_algorithm: []const u8, signature_bits: []const u8 }
-pub struct Result { certificate: Certificate, ok: bool }
+pub struct Result { value: Certificate, ok: bool }
 
 pub fn parse(encoded: []const u8) Result {
   outer_cursor := der.cursor(encoded)
   outer := der.next(&outer_cursor)
-  if !outer.ok || outer.element.tag != 48 || !der.finished(&outer_cursor) {
+  if !outer.ok || outer.value.tag != 48 || !der.finished(&outer_cursor) {
     return Result{}
   }
-  children := der.enter(outer.element)
+  children := der.enter(outer.value)
   tbs := der.next(&children)
   algorithm := der.next(&children)
   signature := der.next(&children)
-  if !tbs.ok || tbs.element.tag != 48 || !algorithm.ok || algorithm.element.tag != 48 ||
-    !signature.ok || signature.element.tag != 3 || #len(signature.element.content) < 1 ||
-    signature.element.content[0] != 0 || !der.finished(&children) {
+  if !tbs.ok || tbs.value.tag != 48 || !algorithm.ok || algorithm.value.tag != 48 ||
+    !signature.ok || signature.value.tag != 3 || #len(signature.value.content) < 1 ||
+    signature.value.content[0] != 0 || !der.finished(&children) {
     return Result{}
   }
-  return Result{ certificate: Certificate{
-    encoded: encoded, tbs: tbs.element.encoded, signature_algorithm: algorithm.element.encoded,
-    signature_bits: signature.element.content[1..],
+  return Result{ value: Certificate{
+    encoded: encoded, tbs: tbs.value.encoded, signature_algorithm: algorithm.value.encoded,
+    signature_bits: signature.value.content[1..],
   }, ok: true }
 }
 

@@ -19,10 +19,13 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
   Constructors exist for convenience, not because zero is broken. The exception
   is `process.Options`, where 0 is a real file descriptor; use
   `process.options()`.
-- **Errors are values.** OS calls return `{value, error, kind, ok}`: `error`
-  keeps the native code and `kind` is a portable `std/errors` category. Test
+- **Errors are values, in one shape.** Results at the edges (OS, files,
+  network, processes) are `{value, ok, kind, error}`: `value` is the payload,
+  `kind` a portable `std/errors` category and `error` the native code. Test
   `ok` first, then branch on `kind`; compare `error` only for platform-specific
-  handling. `fs`, `net`, `net/dns` and `fs/watch` follow this shape.
+  handling. Parsers of external input return `{value, ok, kind, offset}`,
+  where `kind` is the module's error enum; tree parsers (`json`, `mdesk`) name
+  the payload `root` and return a usable stub on failure.
   Scanners and writers keep their first error in their state and turn later
   calls into no-ops, so callers check once at the end. Predicates return
   `bool`. Missing lookups and end of input are ordinary results, not errors.

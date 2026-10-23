@@ -55,11 +55,11 @@ fn main() {
   parts: [2][]const u8 = ["one", "two"]
   expect(strings.equal(strings.join(&arena, parts[..], "/"), "one/two"))
   parsed := ini.parse(&arena, "[window]\nwidth=80\nheight=25\n")
-  expect(parsed.ok && #len(parsed.entries) == 3)
-  expect(strings.equal(parsed.entries[2].section, "window") && strings.equal(parsed.entries[2].value, "25"))
+  expect(parsed.ok && #len(parsed.value) == 3)
+  expect(strings.equal(parsed.value[2].section, "window") && strings.equal(parsed.value[2].value, "25"))
   before := mem.arena_used(&arena)
   syntax := ini.parse(&arena, "x=1\ninvalid\n")
-  expect(!syntax.ok && syntax.error == ini.ErrorKind.Syntax && syntax.error_line == 2)
+  expect(!syntax.ok && syntax.kind == ini.ErrorKind.Syntax && syntax.line == 2)
   expect(mem.arena_used(&arena) == before)
   tiny_storage: [1]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])

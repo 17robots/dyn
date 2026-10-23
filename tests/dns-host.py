@@ -34,16 +34,16 @@ fn main() {
   packet: [128]u8 = []
   addresses: [2]dns.Ipv4 = []
   result := dns.resolve_ipv4("a.test",&server,addresses[..],packet[..],4000)
-  require(result.ok && result.count == 1,"A response")
+  require(result.ok && result.value == 1,"A response")
   require(addresses[0].a == 1 && addresses[0].b == 2 && addresses[0].c == 3 && addresses[0].d == 4,"A value / nonce filtering")
   ipv6: [2]dns.Ipv6 = []
   result = dns.resolve_ipv6("aaaa.test",&server,ipv6[..],packet[..],4000)
-  require(result.ok && result.count == 1,"AAAA response")
+  require(result.ok && result.value == 1,"AAAA response")
   for i in 0..16 { require(ipv6[0].bytes[i] == #cast(u8, i),"AAAA value") }
   result = dns.resolve_ipv4("missing.test",&server,addresses[..],packet[..],4000)
   require(!result.ok && result.error == -3,"NXDOMAIN response")
   result = dns.resolve_ipv4("large.test",&server,addresses[..],packet[..],4000)
-  require(result.ok && result.count == 1,"UDP truncation TCP fallback")
+  require(result.ok && result.value == 1,"UDP truncation TCP fallback")
   require(addresses[0].a == 9 && addresses[0].b == 8 && addresses[0].c == 7 && addresses[0].d == 6,"TCP response value")
 }
 '''

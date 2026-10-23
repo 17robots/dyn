@@ -36,16 +36,16 @@ pub fn connection_from_descriptor(descriptor: isize) Connection {
 pub fn listener_from_descriptor(descriptor: isize) Listener {
   return Listener{ descriptor: descriptor, active: descriptor >= 0 }
 }
-pub struct ConnectionResult { connection: Connection, error: isize, ok: bool }
-pub struct ListenerResult { listener: Listener, error: isize, ok: bool }
+pub struct ConnectionResult { value: Connection, error: isize, kind: errors.Kind, ok: bool }
+pub struct ListenerResult { value: Listener, error: isize, kind: errors.Kind, ok: bool }
 pub fn result_value(outcome: *const Result) isize {
   return outcome.value
 }
 pub fn connection_result_value(outcome: *const ConnectionResult) Connection {
-  return outcome.connection
+  return outcome.value
 }
 pub fn listener_result_value(outcome: *const ListenerResult) Listener {
-  return outcome.listener
+  return outcome.value
 }
 
 // Portable category for a native socket error code returned by this module.
@@ -174,50 +174,50 @@ pub fn accept(descriptor: isize) Result {
 pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResult {
   opened := socket(AddressFamilyIpv4, SocketStream, 0)
   if !opened.ok {
-    return ListenerResult{ listener: Listener{}, error: opened.error, ok: false }
+    return ListenerResult{ value: Listener{}, error: opened.error, kind: opened.kind, ok: false }
   }
   descriptor := result_value(&opened)
   reused := reuse_address(descriptor, true)
   if !reused.ok {
     _ = close(descriptor)
-    return ListenerResult{ listener: Listener{}, error: reused.error, ok: false }
+    return ListenerResult{ value: Listener{}, error: reused.error, kind: reused.kind, ok: false }
   }
   bound := bind_ipv4(descriptor, address)
   if !bound.ok {
     _ = close(descriptor)
-    return ListenerResult{ listener: Listener{}, error: bound.error, ok: false }
+    return ListenerResult{ value: Listener{}, error: bound.error, kind: bound.kind, ok: false }
   }
   listening := listen(descriptor, backlog)
   if !listening.ok {
     _ = close(descriptor)
-    return ListenerResult{ listener: Listener{}, error: listening.error, ok: false }
+    return ListenerResult{ value: Listener{}, error: listening.error, kind: listening.kind, ok: false }
   }
-  return ListenerResult{ listener: listener_from_descriptor(descriptor), ok: true }
+  return ListenerResult{ value: listener_from_descriptor(descriptor), ok: true }
 }
 
 pub fn tcp_connect_ipv4(address: *const Ipv4Address) ConnectionResult {
   opened := socket(AddressFamilyIpv4, SocketStream, 0)
   if !opened.ok {
-    return ConnectionResult{ connection: Connection{}, error: opened.error, ok: false }
+    return ConnectionResult{ value: Connection{}, error: opened.error, kind: opened.kind, ok: false }
   }
   descriptor := result_value(&opened)
   connected := connect_ipv4(descriptor, address)
   if !connected.ok {
     _ = close(descriptor)
-    return ConnectionResult{ connection: Connection{}, error: connected.error, ok: false }
+    return ConnectionResult{ value: Connection{}, error: connected.error, kind: connected.kind, ok: false }
   }
-  return ConnectionResult{ connection: connection_from_descriptor(descriptor), ok: true }
+  return ConnectionResult{ value: connection_from_descriptor(descriptor), ok: true }
 }
 
 pub fn listener_accept(listener: *Listener) ConnectionResult {
   if !listener.active {
-    return ConnectionResult{ connection: Connection{}, error: -9, ok: false }
+    return ConnectionResult{ value: Connection{}, error: -9, kind: errors.linux(-9), ok: false }
   }
   accepted := accept(listener.descriptor)
   if !accepted.ok {
-    return ConnectionResult{ connection: Connection{}, error: accepted.error, ok: false }
+    return ConnectionResult{ value: Connection{}, error: accepted.error, kind: accepted.kind, ok: false }
   }
-  return ConnectionResult{ connection: connection_from_descriptor(result_value(&accepted)), ok: true }
+  return ConnectionResult{ value: connection_from_descriptor(result_value(&accepted)), ok: true }
 }
 
 // Moves the listener out, leaving the source closed so only the result owns it.

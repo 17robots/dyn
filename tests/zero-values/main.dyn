@@ -38,7 +38,7 @@ fn zero_scanners() {
   entries := ini.Scanner{ source: "\n[s]\nk=v\n" }
   section := ini.next(&entries)
   pair := ini.next(&entries)
-  if section.entry.line != 2 || pair.entry.line != 3 || !bytes_equal(pair.entry.section, "s") {
+  if section.value.line != 2 || pair.value.line != 3 || !bytes_equal(pair.value.section, "s") {
     #panic("zero INI scanner lines")
   }
   // An empty stream holds one empty field, from the constructor or from zero.

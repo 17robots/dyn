@@ -196,7 +196,7 @@ if scan.error != ini.ErrorKind.None {
 }
 ```
 
-OS operations commonly return `{value, error, ok}`, because partial counts and native error
+OS operations return `{value, ok, kind, error}`, because partial counts and native error
 numbers matter. Ownership is independent of success: say whether a returned slice borrows the
 input, occupies caller storage or lives in a supplied arena, and never allocate on failure.
 

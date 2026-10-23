@@ -5,10 +5,10 @@ use "std/errors" errors
 // File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
 // Borrowed files never close the underlying handle. Their owner must outlive them.
 pub struct File { descriptor: isize = -1, active: bool, owned: bool }
-pub struct FileResult { file: File, error: isize, kind: errors.Kind, ok: bool }
+pub struct FileResult { value: File, error: isize, kind: errors.Kind, ok: bool }
 pub struct Result { transferred: usize, error: isize, kind: errors.Kind, ok: bool }
-pub struct OffsetResult { offset: usize, error: isize, kind: errors.Kind, ok: bool }
-pub struct ReadAllResult { data: []u8, error: isize, kind: errors.Kind, ok: bool }
+pub struct OffsetResult { value: usize, error: isize, kind: errors.Kind, ok: bool }
+pub struct ReadAllResult { value: []u8, error: isize, kind: errors.Kind, ok: bool }
 fn owned_file(handle: isize) File {
   return File{ descriptor: handle, active: true, owned: true }
 }
@@ -142,7 +142,7 @@ pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
   if value < 0 {
     return OffsetResult{ error: value, kind: native_kind(value) }
   }
-  return OffsetResult{ offset: #cast(usize, value), ok: true }
+  return OffsetResult{ value: #cast(usize, value), ok: true }
 }
 pub fn sync(file: *File) Result {
   if !is_open(file) {
@@ -175,7 +175,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     }
     if capacity == 0 {
       probe: [1]u8 = []
-      extra := read(&opened.file, probe[..])
+      extra := read(&opened.value, probe[..])
       if !extra.ok {
         error = extra.error
         kind = extra.kind
@@ -189,7 +189,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       break
     }
     allocation := memory.arena_push_uninit(arena, capacity, 1)
-    part := read(&opened.file, allocation[..capacity])
+    part := read(&opened.value, allocation[..capacity])
     total += part.transferred
     memory.arena_rewind(arena, mark + total)
     if !part.ok {
@@ -201,7 +201,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       break
     }
   }
-  closed := close(&opened.file)
+  closed := close(&opened.value)
   if kind == errors.Kind.None && !closed.ok {
     error = closed.error
     kind = closed.kind
@@ -210,7 +210,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     memory.arena_rewind(arena, mark)
     return ReadAllResult{ error: error, kind: kind }
   }
-  return ReadAllResult{ data: arena.data[mark..mark + total], ok: true }
+  return ReadAllResult{ value: arena.data[mark..mark + total], ok: true }
 }
 
 pub fn write_all(path: []const u8, source: []const u8) Result {
@@ -218,8 +218,8 @@ pub fn write_all(path: []const u8, source: []const u8) Result {
   if !created.ok {
     return Result{ error: created.error, kind: created.kind, ok: false }
   }
-  result := write(&created.file, source)
-  closed := close(&created.file)
+  result := write(&created.value, source)
+  closed := close(&created.value)
   if !result.ok {
     return result
   }

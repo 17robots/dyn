@@ -101,7 +101,7 @@ fn main() {
   if !listened.ok {
     #panic("cannot listen")
   }
-  listener := net.listener_take(&listened.listener)
+  listener := net.listener_take(&listened.value)
   bound := net.Address{}
   if !net.local_address(listener.descriptor, &bound).ok {
     #panic("cannot read local address")

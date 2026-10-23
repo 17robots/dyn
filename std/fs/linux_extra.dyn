@@ -4,7 +4,7 @@ use "std/c" cstrings
 use "std/os/linux" platform
 
 pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, error: isize, kind: errors.Kind, ok: bool }
-pub struct PathResult { path: []u8, error: isize, kind: errors.Kind, ok: bool }
+pub struct PathResult { value: []u8, error: isize, kind: errors.Kind, ok: bool }
 pub enum AppDirectory { Home, Config, Cache, Data, Runtime }
 pub struct Directory {
   file: File,
@@ -12,7 +12,7 @@ pub struct Directory {
   offset: usize,
   used: usize,
 }
-pub struct DirectoryResult { directory: Directory, error: isize, kind: errors.Kind, ok: bool }
+pub struct DirectoryResult { value: Directory, error: isize, kind: errors.Kind, ok: bool }
 pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize, error_kind: errors.Kind }
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
@@ -36,7 +36,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
     return DirectoryResult{ error: opened.error, kind: errors.linux(opened.error), ok: false }
   }
   return DirectoryResult{
-    directory: Directory{ file: opened.file, storage: storage, offset: 0, used: 0 },
+    value: Directory{ file: opened.value, storage: storage, offset: 0, used: 0 },
     error: 0,
     ok: true,
   }
@@ -104,11 +104,11 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
   }
   output_file := open_flags(destination, 65, 420)
   if !output_file.ok {
-    _ = close(&input.file)
+    _ = close(&input.value)
     return Result{ error: output_file.error, kind: errors.linux(output_file.error), ok: false }
   }
-  source_info := file_metadata(&input.file)
-  destination_info := file_metadata(&output_file.file)
+  source_info := file_metadata(&input.value)
+  destination_info := file_metadata(&output_file.value)
   validation_error: isize = 0
   if !source_info.ok {
     validation_error = source_info.error
@@ -123,16 +123,16 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
     validation_error = -22
   }
   if validation_error == 0 {
-    validation_error = #syscall(77, output_file.file.descriptor, 0)
+    validation_error = #syscall(77, output_file.value.descriptor, 0)
   }
   if validation_error != 0 {
-    _ = close(&input.file)
-    _ = close(&output_file.file)
+    _ = close(&input.value)
+    _ = close(&output_file.value)
     return Result{ error: validation_error, kind: errors.linux(validation_error) }
   }
-  copied := stream.copy(writer(&output_file.file), reader(&input.file), scratch)
-  input_closed := close(&input.file)
-  output_closed := close(&output_file.file)
+  copied := stream.copy(writer(&output_file.value), reader(&input.value), scratch)
+  input_closed := close(&input.value)
+  output_closed := close(&output_file.value)
   if copied.status == stream.Status.Error {
     return Result{ transferred: copied.transferred, error: copied.error, kind: copied.kind, ok: false }
   }
@@ -167,8 +167,8 @@ pub fn metadata(path: []const u8) Metadata {
   if !opened.ok {
     return Metadata{ error: opened.error, kind: errors.linux(opened.error) }
   }
-  info := file_metadata(&opened.file)
-  closed := close(&opened.file)
+  info := file_metadata(&opened.value)
+  closed := close(&opened.value)
   if !info.ok {
     return info
   }
@@ -251,16 +251,16 @@ fn read_link_into(path: []const u8, destination: []u8) PathResult {
   storage: [4096]u8 = []
   raw := terminated(path, storage[..])
   if raw == nil {
-    return PathResult{ path: destination[..0], error: -36, kind: errors.linux(-36), ok: false }
+    return PathResult{ value: destination[..0], error: -36, kind: errors.linux(-36), ok: false }
   }
   if #len(destination) == 0 {
-    return PathResult{ path: destination[..0], error: -22, kind: errors.linux(-22), ok: false }
+    return PathResult{ value: destination[..0], error: -22, kind: errors.linux(-22), ok: false }
   }
   value := #syscall(267, -100, raw, &destination[0], #len(destination))
   if value < 0 {
-    return PathResult{ path: destination[..0], error: value, kind: errors.linux(value), ok: false }
+    return PathResult{ value: destination[..0], error: value, kind: errors.linux(value), ok: false }
   }
-  return PathResult{ path: destination[..#cast(usize, value)], error: 0, kind: errors.linux(0), ok: true }
+  return PathResult{ value: destination[..#cast(usize, value)], error: 0, kind: errors.linux(0), ok: true }
 }
 
 pub fn sync_directory(path: []const u8) Result {
@@ -268,8 +268,8 @@ pub fn sync_directory(path: []const u8) Result {
   if !opened.ok {
     return Result{ error: opened.error, kind: errors.linux(opened.error), ok: false }
   }
-  synced := sync(&opened.file)
-  closed := close(&opened.file)
+  synced := sync(&opened.value)
+  closed := close(&opened.value)
   if !synced.ok {
     return synced
   }
@@ -282,7 +282,7 @@ pub struct AtomicFile {
   temporary: []const u8,
   active: bool,
 }
-pub struct AtomicResult { transaction: AtomicFile, error: isize, kind: errors.Kind, ok: bool }
+pub struct AtomicResult { value: AtomicFile, error: isize, kind: errors.Kind, ok: bool }
 
 // Both paths are borrowed until commit/abort. Temporary must be a sibling chosen by caller.
 pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult {
@@ -294,8 +294,8 @@ pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult
     return AtomicResult{ error: created.error, kind: errors.linux(created.error), ok: false }
   }
   return AtomicResult{
-    transaction: AtomicFile{
-      file: created.file,
+    value: AtomicFile{
+      file: created.value,
       destination: destination,
       temporary: temporary,
       active: true,
@@ -354,7 +354,7 @@ pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []co
   if !transaction_result.ok {
     return Result{ error: transaction_result.error, kind: errors.linux(transaction_result.error), ok: false }
   }
-  transaction := transaction_result.transaction
+  transaction := transaction_result.value
   written := write(&transaction.file, source)
   if !written.ok {
     _ = atomic_abort(&transaction)
@@ -373,17 +373,17 @@ pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []co
 fn environment_get(name: []const u8, destination: []u8) PathResult {
   result := platform.environment_get(name, destination)
   if !result.ok {
-    return PathResult{ path: destination[..0], error: result.error, kind: errors.linux(result.error) }
+    return PathResult{ value: destination[..0], error: result.error, kind: errors.linux(result.error) }
   }
   if !result.found {
-    return PathResult{ path: destination[..0], error: -2, kind: errors.linux(-2) }
+    return PathResult{ value: destination[..0], error: -2, kind: errors.linux(-2) }
   }
-  return PathResult{ path: result.value, ok: true }
+  return PathResult{ value: result.value, ok: true }
 }
 
 fn append_suffix(destination: []u8, base: []const u8, suffix: []const u8) PathResult {
   if #len(base) + #len(suffix) > #len(destination) {
-    return PathResult{ path: destination[..0], error: -28, kind: errors.linux(-28), ok: false }
+    return PathResult{ value: destination[..0], error: -28, kind: errors.linux(-28), ok: false }
   }
   i: usize = 0
   for i < #len(base) {
@@ -393,21 +393,21 @@ fn append_suffix(destination: []u8, base: []const u8, suffix: []const u8) PathRe
   for j in 0..#len(suffix) {
     destination[i + j] = suffix[j]
   }
-  return PathResult{ path: destination[..#len(base) + #len(suffix)], error: 0, kind: errors.linux(0), ok: true }
+  return PathResult{ value: destination[..#len(base) + #len(suffix)], error: 0, kind: errors.linux(0), ok: true }
 }
 
 fn app_directory_into(kind: AppDirectory, destination: []u8) PathResult {
   if kind == AppDirectory.Home {
     direct_home := environment_get("HOME", destination)
-    if direct_home.ok && #len(direct_home.path) == 0 {
-      return PathResult{ path: destination[..0], error: -2, kind: errors.linux(-2), ok: false }
+    if direct_home.ok && #len(direct_home.value) == 0 {
+      return PathResult{ value: destination[..0], error: -2, kind: errors.linux(-2), ok: false }
     }
     return direct_home
   }
   if kind == AppDirectory.Runtime {
     runtime := environment_get("XDG_RUNTIME_DIR", destination)
-    if runtime.ok && #len(runtime.path) == 0 {
-      return PathResult{ path: destination[..0], error: -2, kind: errors.linux(-2), ok: false }
+    if runtime.ok && #len(runtime.value) == 0 {
+      return PathResult{ value: destination[..0], error: -2, kind: errors.linux(-2), ok: false }
     }
     return runtime
   }
@@ -422,15 +422,15 @@ fn app_directory_into(kind: AppDirectory, destination: []u8) PathResult {
     suffix = "/.local/share"
   }
   configured := environment_get(variable, destination)
-  if configured.ok && #len(configured.path) > 0 {
+  if configured.ok && #len(configured.value) > 0 {
     return configured
   }
   home_storage: [4096]u8 = []
   fallback_home := environment_get("HOME", home_storage[..])
   if !fallback_home.ok {
-    return PathResult{ path: destination[..0], error: fallback_home.error, kind: errors.linux(fallback_home.error), ok: false }
+    return PathResult{ value: destination[..0], error: fallback_home.error, kind: errors.linux(fallback_home.error), ok: false }
   }
-  return append_suffix(destination, fallback_home.path, suffix)
+  return append_suffix(destination, fallback_home.value, suffix)
 }
 
 pub fn lock(file: *File, operation: usize) Result {
@@ -467,7 +467,7 @@ fn kept(arena: *mem.Arena, mark: usize, result: PathResult) PathResult {
     mem.arena_rewind(arena, mark)
     return result
   }
-  mem.arena_rewind(arena, mark + #len(result.path))
+  mem.arena_rewind(arena, mark + #len(result.value))
   return result
 }
 

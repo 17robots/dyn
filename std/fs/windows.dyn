@@ -70,7 +70,7 @@ fn native_open(path: []const u8, mode: u8) FileResult {
     code := last_error()
     return FileResult{ error: code, kind: native_kind(code) }
   }
-  return FileResult{ file: owned_file(handle), ok: true }
+  return FileResult{ value: owned_file(handle), ok: true }
 }
 fn native_close(handle: isize) isize {
   if win_close(pointer(handle)) == 0 {

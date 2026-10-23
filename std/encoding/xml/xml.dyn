@@ -9,7 +9,7 @@ pub enum ErrorKind { None, Syntax, Capacity, Mismatched, Overlap, Io }
 pub struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }
 pub struct Scanner { source: []const u8, offset: usize, error_offset: usize, error: ErrorKind }
 pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, error: ErrorKind, system_error: isize }
-pub struct Result { event: Event, ok: bool }
+pub struct Result { value: Event, ok: bool }
 pub struct AttributeScanner { source: []const u8, offset: usize, error: ErrorKind }
 pub struct Attribute { name: []const u8, value: []const u8, ok: bool }
 pub struct Writer { sink: stream.Writer, error: isize, failed: bool }
@@ -311,7 +311,7 @@ pub fn next(state: *Scanner) Result {
       text_end += 1
     }
     state.offset = text_end
-    return Result{ event: Event{ kind: Kind.Text, text: state.source[start..text_end] }, ok: true }
+    return Result{ value: Event{ kind: Kind.Text, text: state.source[start..text_end] }, ok: true }
   }
   if starts(state.source, start, "<![CDATA[") {
     cdata_end := start + 9
@@ -322,7 +322,7 @@ pub fn next(state: *Scanner) Result {
       return fail(state, start, ErrorKind.Syntax)
     }
     state.offset = cdata_end + 3
-    return Result{ event: Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }, ok: true }
+    return Result{ value: Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }, ok: true }
   }
   if starts(state.source, start, "<!--") {
     comment_end := start + 4
@@ -333,7 +333,7 @@ pub fn next(state: *Scanner) Result {
       return fail(state, start, ErrorKind.Syntax)
     }
     state.offset = comment_end + 3
-    return Result{ event: Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }, ok: true }
+    return Result{ value: Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }, ok: true }
   }
   processing := starts(state.source, start, "<?")
   closing := starts(state.source, start, "</")
@@ -355,7 +355,7 @@ pub fn next(state: *Scanner) Result {
       return fail(state, at, ErrorKind.Syntax)
     }
     state.offset = at + 1
-    return Result{ event: Event{ kind: Kind.End, name: name }, ok: true }
+    return Result{ value: Event{ kind: Kind.End, name: name }, ok: true }
   }
   attributes_start := at
   quote: u8 = 0
@@ -404,7 +404,7 @@ pub fn next(state: *Scanner) Result {
   if processing {
     event_kind = Kind.Processing
   }
-  return Result{ event: Event{ kind: event_kind, name: name, attributes: state.source[attributes_start..attributes_end], self_closing: self_closing }, ok: true }
+  return Result{ value: Event{ kind: event_kind, name: name, attributes: state.source[attributes_start..attributes_end], self_closing: self_closing }, ok: true }
 }
 
 pub fn attributes(event: Event) AttributeScanner {
@@ -495,50 +495,50 @@ pub fn valid(source: []const u8, stack: [][]const u8) bool {
     if !item.ok {
       return state.error == ErrorKind.None && depth == 0 && roots == 1
     }
-    if item.event.kind == Kind.Text && !valid_text(item.event.text, false) {
+    if item.value.kind == Kind.Text && !valid_text(item.value.text, false) {
       return false
     }
-    if item.event.kind == Kind.Cdata || item.event.kind == Kind.Comment {
-      if !valid_characters(item.event.text) {
+    if item.value.kind == Kind.Cdata || item.value.kind == Kind.Comment {
+      if !valid_characters(item.value.text) {
         return false
       }
-      if item.event.kind == Kind.Cdata && depth == 0 {
+      if item.value.kind == Kind.Cdata && depth == 0 {
         return false
       }
     }
-    if item.event.kind == Kind.Comment {
+    if item.value.kind == Kind.Comment {
       i: usize = 0
-      for i < #len(item.event.text) {
-        if i + 1 < #len(item.event.text) && item.event.text[i] == '-' && item.event.text[i + 1] == '-' {
+      for i < #len(item.value.text) {
+        if i + 1 < #len(item.value.text) && item.value.text[i] == '-' && item.value.text[i + 1] == '-' {
           return false
         }
         i += 1
       }
-      if #len(item.event.text) > 0 && item.event.text[#len(item.event.text) - 1] == '-' {
+      if #len(item.value.text) > 0 && item.value.text[#len(item.value.text) - 1] == '-' {
         return false
       }
     }
-    if item.event.kind == Kind.Start {
-      if !valid_attributes(item.event) {
+    if item.value.kind == Kind.Start {
+      if !valid_attributes(item.value) {
         return false
       }
       if depth == 0 {
         roots += 1
       }
-      if !item.event.self_closing {
+      if !item.value.self_closing {
         if depth == #len(stack) {
           return false
         }
-        stack[depth] = item.event.name
+        stack[depth] = item.value.name
         depth += 1
       }
-    } else if item.event.kind == Kind.End {
-      if depth == 0 || !bytes.equal(stack[depth - 1], item.event.name) {
+    } else if item.value.kind == Kind.End {
+      if depth == 0 || !bytes.equal(stack[depth - 1], item.value.name) {
         return false
       }
       depth -= 1
-    } else if item.event.kind == Kind.Text && depth == 0 {
-      for byte in item.event.text {
+    } else if item.value.kind == Kind.Text && depth == 0 {
+      for byte in item.value.text {
         if !whitespace(byte) {
           return false
         }

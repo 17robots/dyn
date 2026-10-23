@@ -1,3 +1,4 @@
+use "std/errors" errors
 use "std/mem" memory
 use "std/io" stream
 use "std/net" network
@@ -11,11 +12,11 @@ pub type StreamResult = stream.Result
 pub type Listener = network.Listener
 pub type Connection = network.Connection
 
-pub struct AcceptResult { connection: Connection, error: isize, ok: bool }
+pub struct AcceptResult { value: Connection, error: isize, kind: errors.Kind, ok: bool }
 
 pub fn accept(listener: *Listener) AcceptResult {
   accepted := network.listener_accept(listener)
-  return AcceptResult{ connection: accepted.connection, error: accepted.error, ok: accepted.ok }
+  return AcceptResult{ value: accepted.value, error: accepted.error, kind: accepted.kind, ok: accepted.ok }
 }
 pub fn close(connection: *Connection) isize {
   result := network.connection_close(connection)

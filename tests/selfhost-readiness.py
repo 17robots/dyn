@@ -77,13 +77,13 @@ fn expression(p: *Compiler, symbols: *const Symbols, depth: usize) {
 fn main() {
   storage: [16384]u8 = [] arena := mem.arena_from_buffer(storage[..])
   arguments := process.arguments(&arena)
-  if !arguments.ok || #len(arguments.values) != 2 { #panic("arguments") }
+  if !arguments.ok || #len(arguments.value) != 2 { #panic("arguments") }
   symbols := Symbols{}
   if !insert(&symbols, "alpha", '4') || !insert(&symbols, "beta", '7') { #panic("insert") }
   if insert(&symbols, "alpha", '8') || lookup(&symbols, "absent").ok { #panic("symbols") }
   for name in ["c", "d", "e", "f", "g", "h"] { if !insert(&symbols, name, '0') { #panic("capacity") } }
   if insert(&symbols, "full", '0') { #panic("overflow") }
-  p := Compiler{ source: arguments.values[1] }
+  p := Compiler{ source: arguments.value[1] }
   expression(&p, &symbols, 0) space(&p)
   if p.cursor != #len(p.source) { fail(&p, p.cursor) }
   if p.failed { _ = io.println(io.stdout(), "error:{}", p.offset) }
