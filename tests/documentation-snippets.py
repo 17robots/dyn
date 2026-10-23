@@ -9,7 +9,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 # Historical "before" code and proposals for syntax Dyn does not have.
-SKIP = ('docs/migrations/', 'docs/internals/generics-design.md')
+SKIP = ('docs/migrations/', 'docs/internals/generics-design.md',
+        'docs/internals/std-standardization.md')
 
 
 def parses(directory, source):
