@@ -3,7 +3,9 @@
 
 use "std/mem" mem
 
-pub struct Buffer { data: []u8, length: usize }
+// failed records the first write that did not fit; later writes do nothing
+// and return false, so callers may check failed once at the end.
+pub struct Buffer { data: []u8, length: usize, failed: bool }
 pub fn buffer(storage: []u8) Buffer {
   return Buffer{ data: storage, length: 0 }
 }
@@ -16,12 +18,15 @@ pub fn remaining(state: *const Buffer) usize {
   }
   return #len(state.data) - state.length
 }
+// Empties the buffer and clears failed.
 pub fn clear(state: *Buffer) {
   state.length = 0
+  state.failed = false
 }
 
 pub fn write(state: *Buffer, value: []const u8) bool {
-  if state.length > #len(state.data) || #len(value) > remaining(state) {
+  if state.failed || state.length > #len(state.data) || #len(value) > remaining(state) {
+    state.failed = true
     return false
   }
   for i in 0..#len(value) {
@@ -32,7 +37,8 @@ pub fn write(state: *Buffer, value: []const u8) bool {
 }
 
 pub fn write_byte(state: *Buffer, value: u8) bool {
-  if state.length >= #len(state.data) {
+  if state.failed || state.length >= #len(state.data) {
+    state.failed = true
     return false
   }
   state.data[state.length] = value
@@ -119,7 +125,8 @@ pub fn write_bool(state: *Buffer, value: bool) bool {
 }
 
 pub fn write_padding(state: *Buffer, byte: u8, amount: usize) bool {
-  if state.length > #len(state.data) || amount > remaining(state) {
+  if state.failed || state.length > #len(state.data) || amount > remaining(state) {
+    state.failed = true
     return false
   }
   for i in 0..amount {
@@ -348,7 +355,8 @@ pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bo
   if width > length {
     length = width
   }
-  if state.length > #len(state.data) || length > remaining(state) {
+  if state.failed || state.length > #len(state.data) || length > remaining(state) {
+    state.failed = true
     return false
   }
   _ = write_padding(state, padding, length - #len(rendered))

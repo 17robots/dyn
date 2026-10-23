@@ -23,7 +23,8 @@ pub const HasDirectoryFlag: bool = true
 // Zero means no fixed userspace slot limit; native inotify quotas still apply.
 pub const FixedWatchCapacity: usize = 0
 pub enum Status { Event, Empty, Error }
-pub struct Watcher { descriptor: isize = -1, storage: []u8, used: usize, offset: usize, rescan_required: bool }
+// Zero is a closed watcher: active is false.
+pub struct Watcher { descriptor: isize = -1, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool }
 pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
 // `error` keeps the native code; `kind` is its portable category.
 pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
@@ -40,13 +41,13 @@ pub fn open(storage: []u8) OpenResult {
   if descriptor < 0 {
     return OpenResult{ value: Watcher{}, error: descriptor, kind: errors.linux(descriptor) }
   }
-  return OpenResult{ value: Watcher{ descriptor: descriptor, storage: storage }, ok: true }
+  return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage }, ok: true }
 }
 pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   storage: [4096]u8 = []
   cstring_space1 := mem.arena_from_buffer(storage[..])
   name := c.string_from_bytes(&cstring_space1, path)
-  if !name.ok || #len(path) == 0 || state.descriptor < 0 {
+  if !name.ok || #len(path) == 0 || !state.active {
     return failure(-22)
   }
   value := #syscall(254, state.descriptor, name.value, mask)
@@ -60,11 +61,12 @@ pub fn remove(state: *Watcher, watch: i32) Result {
   return status(value)
 }
 pub fn close(state: *Watcher) Result {
-  if state.descriptor < 0 {
+  if !state.active {
     return Result{ ok: true }
   }
   value := #syscall(3, state.descriptor)
   state.descriptor = -1
+  state.active = false
   state.used = 0
   state.offset = 0
   return status(value)
@@ -72,11 +74,12 @@ pub fn close(state: *Watcher) Result {
 fn load(bytes: []const u8, at: usize) u32 {
   return #cast(u32, bytes[at]) | (#cast(u32, bytes[at+1]) << 8) | (#cast(u32, bytes[at+2]) << 16) | (#cast(u32, bytes[at+3]) << 24)
 }
+// Buffered records are returned first; reading more needs an active watcher.
 pub fn next(state: *Watcher) EventResult {
-  if state.descriptor < 0 {
-    return EventResult{ status: Status.Error, error: -9 }
-  }
   if state.offset == state.used {
+    if !state.active {
+      return EventResult{ status: Status.Error, error: -9 }
+    }
     file := fs.borrow_handle(state.descriptor)
     result := fs.read(&file, state.storage)
     if !result.ok {

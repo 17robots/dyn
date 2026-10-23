@@ -27,7 +27,7 @@ fn fail(message: []const u8) { _ = fs.write_all("failure", message) #panic(messa
 fn main() {
   storage: [65536]u8 = [] arena := mem.arena_from_buffer(storage[..])
   command: []const u8 = EXECUTABLE arguments: [1][]const u8 = [command]
-  configuration := process.options() configuration.directory = DIRECTORY
+  configuration := process.Options{} configuration.directory = DIRECTORY
   output: [32]u8 = [] error_output: [32]u8 = []
   result := process.capture(&arena, command, arguments[..], configuration, output[..], error_output[..], 2000)
   if !result.ok || !bytes.equal(result.output, "child") {

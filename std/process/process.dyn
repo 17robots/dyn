@@ -5,10 +5,21 @@ use "std/bytes" bytes
 // Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
 // Arguments include argv[0]. Environment is explicit NAME=value entries; empty
 // means an empty child environment. Empty directory inherits the parent directory. No shell parsing or PATH search is performed.
-pub struct Options { input: isize, output: isize, error: isize, environment: [][]const u8, directory: []const u8 }
-pub fn options() Options {
-  return Options{ input: -1, output: -1, error: -1 }
+// A standard stream for the child. The zero value inherits the parent's.
+pub struct Redirect { handle: isize, set: bool }
+// Connects the child's stream to handle.
+pub fn redirect(handle: isize) Redirect {
+  return Redirect{ handle: handle, set: true }
 }
+// The handle to pass to the OS: the redirected one, or -1 to inherit.
+fn native_stream(stream: Redirect) isize {
+  if stream.set {
+    return stream.handle
+  }
+  return -1
+}
+// Zero is valid: inherit all three streams, the parent's environment and directory.
+pub struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8 }
 pub struct Child { handle: isize, active: bool }
 pub struct SpawnResult { value: Child, error: isize, kind: error_kinds.Kind, ok: bool }
 pub struct ExitResult { code: u32, signal: u32, finished: bool, error: isize, kind: error_kinds.Kind, ok: bool }
@@ -124,13 +135,13 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   }
   config := configuration
   borrowed_input: isize = -1
-  if config.input >= 0 {
-    copied := duplicate_native(config.input)
+  if config.input.set {
+    copied := duplicate_native(config.input.handle)
     if !copied.ok {
       return CaptureResult{ error: copied.error, kind: copied.kind }
     }
     borrowed_input = copied.value
-    config.input = copied.value
+    config.input = redirect(copied.value)
   }
   defer {
     if borrowed_input >= 0 {
@@ -148,8 +159,8 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
     return CaptureResult{ error: stderr.error, kind: stderr.kind }
   }
   defer _ = close_native(stderr.input)
-  config.output = stdout.output
-  config.error = stderr.output
+  config.output = redirect(stdout.output)
+  config.error = redirect(stderr.output)
   child := spawn(arena, path, arguments, config)
   _ = close_native(stdout.output)
   _ = close_native(stderr.output)
