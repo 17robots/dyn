@@ -26,13 +26,14 @@ pub fn prepare(needle: []const u8, table: []usize) Prepared {
   return Prepared{ pattern: Pattern{needle: needle, table: table[..#len(needle)]}, ok: true }
 }
 
-// First byte offset, or -1. Empty needle matches at zero. No allocations.
-pub fn find(pattern: Pattern, text: []const u8) isize {
+// First byte offset, or #len(text) on a miss. Empty needle matches at zero.
+// No allocations.
+pub fn find(pattern: Pattern, text: []const u8) usize {
   if #len(pattern.needle) == 0 {
     return 0
   }
   if #len(pattern.needle) > #len(text) {
-    return -1
+    return #len(text)
   }
   matched: usize = 0
   for index in 0..#len(text) {
@@ -43,8 +44,8 @@ pub fn find(pattern: Pattern, text: []const u8) isize {
       matched += 1
     }
     if matched == #len(pattern.needle) {
-      return #cast(isize, (index + 1 - matched))
+      return index + 1 - matched
     }
   }
-  return -1
+  return #len(text)
 }

@@ -900,7 +900,7 @@ fn parse_source(source: []const u8, tree: *Tree, arena: *mem.Arena) u32 {
   }
   // Sources are text: NUL is never valid, even in comments or literals.
   nul := bytes.find_byte(source, 0)
-  if nul >= 0 {
+  if nul < #len(source) {
     fail(&p, #cast(u32, nul), "unexpected character")
     return None
   }

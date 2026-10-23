@@ -5,8 +5,13 @@ use "std/unicode/utf8"
 pub struct State { bytes: [60]u8 }
 pub struct Size { columns: usize, rows: usize, ok: bool }
 
-pub fn read_state(descriptor: isize, output: *State) bool {
-  return #syscall(16, descriptor, 21505, &output.bytes[0]) >= 0
+pub struct Read { value: State, ok: bool }
+
+// The terminal settings of descriptor. ok is false when it is not a terminal.
+pub fn read_state(descriptor: isize) Read {
+  result: Read
+  result.ok = #syscall(16, descriptor, 21505, &result.value.bytes[0]) >= 0
+  return result
 }
 
 pub fn restore(descriptor: isize, saved: *const State) bool {
@@ -14,15 +19,18 @@ pub fn restore(descriptor: isize, saved: *const State) bool {
 }
 
 pub fn is_attached(descriptor: isize) bool {
-  saved := State{ bytes: [] }
-  return read_state(descriptor, &saved)
+  return read_state(descriptor).ok
 }
 
-// Applies a small cfmakeraw-equivalent while retaining a restorable copy.
-pub fn raw(descriptor: isize, previous: *State) bool {
-  if !read_state(descriptor, previous) {
-    return false
+// Applies a small cfmakeraw-equivalent. Returns the previous settings, to
+// pass to restore; ok is false when descriptor is not a terminal or the change
+// failed.
+pub fn raw(descriptor: isize) Read {
+  saved := read_state(descriptor)
+  if !saved.ok {
+    return saved
   }
+  previous := &saved.value
   changed := State{ bytes: [] }
   i: usize = 0
   for i < #len(changed.bytes) {
@@ -35,7 +43,8 @@ pub fn raw(descriptor: isize, previous: *State) bool {
   changed.bytes[12] = changed.bytes[12] & 160
   changed.bytes[22] = 0
   changed.bytes[23] = 1
-  return restore(descriptor, &changed)
+  saved.ok = restore(descriptor, &changed)
+  return saved
 }
 
 pub fn size(descriptor: isize) Size {

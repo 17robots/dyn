@@ -553,7 +553,7 @@ pub fn parse_url(input: []const u8) Url {
     return Url{}
   }
   authority := value.authority
-  if #len(authority) == 0 || bytes.find_byte(authority, '@') >= 0 {
+  if #len(authority) == 0 || bytes.find_byte(authority, '@') < #len(authority) {
     return Url{}
   }
   host_end := #len(authority)
@@ -561,11 +561,11 @@ pub fn parse_url(input: []const u8) Url {
   host_start: usize = 0
   if authority[0] == '[' {
     bracket := bytes.find_byte(authority, ']')
-    if bracket <= 1 {
+    if bracket <= 1 || bracket == #len(authority) {
       return Url{}
     }
     host_start = 1
-    host_end = #cast(usize, bracket)
+    host_end = bracket
     if host_end + 1 < #len(authority) {
       if authority[host_end + 1] != ':' {
         return Url{}
@@ -574,8 +574,8 @@ pub fn parse_url(input: []const u8) Url {
     }
   } else {
     colon := bytes.find_byte(authority, ':')
-    if colon >= 0 {
-      host_end = #cast(usize, colon)
+    if colon < #len(authority) {
+      host_end = colon
       port_start = host_end + 1
     }
   }
@@ -599,10 +599,7 @@ pub fn parse_url(input: []const u8) Url {
   // Borrow the original suffix to retain query bytes; fragments are never sent.
   path_at := #len(value.scheme) + 3 + #len(authority)
   end := #len(input)
-  fragment := bytes.find_byte(input[path_at..], '#')
-  if fragment >= 0 {
-    end = path_at + #cast(usize, fragment)
-  }
+  end = path_at + bytes.find_byte(input[path_at..], '#')
   if path_at < end {
     target = input[path_at..end]
   }

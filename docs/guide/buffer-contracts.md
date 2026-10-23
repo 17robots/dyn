@@ -40,8 +40,8 @@ An empty successful result has `ok=true`; never use slice length to infer succes
 failure, codec/string output slices are empty. `required` is zero when input is invalid or
 its required length is not representable. Capacity errors include the exact requirement.
 Hex/Base32/Base64 decoders validate before writing; this uses two passes and no temporary
-allocation. `decoded_size(source, &size)` validates input and leaves `size` unchanged on
-failure. `encoded_size(n)` returns zero on overflow and for empty input.
+allocation. `decoded_size(source)` validates input and returns `{value, ok}` with the
+exact decoded length. `encoded_size(n)` returns zero on overflow and for empty input.
 
 C strings reject embedded NUL instead of silently truncating names/paths. The bounded C
 view distinguishes invalid pointers from missing terminators. Callers must still supply a

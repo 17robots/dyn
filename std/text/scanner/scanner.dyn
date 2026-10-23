@@ -31,9 +31,12 @@ pub fn advance(state: *Scanner, amount: usize) bool {
   return true
 }
 
-pub fn next_line(state: *Scanner, output: *[]const u8) bool {
+pub struct Scanned { value: []const u8, ok: bool }
+
+// The next line without its \n or \r\n. ok is false at the end.
+pub fn next_line(state: *Scanner) Scanned {
   if finished(state) {
-    return false
+    return Scanned{}
   }
   start := state.offset
   for state.offset < #len(state.source) && state.source[state.offset] != '\n' {
@@ -44,16 +47,17 @@ pub fn next_line(state: *Scanner, output: *[]const u8) bool {
   if end > start && state.source[end - 1] == '\r' {
     end -= 1
   }
-  output.* = state.source[start..end]
+  line := state.source[start..end]
   if state.offset < #len(state.source) {
     state.offset += 1
     state.line += 1
     state.column = 0
   }
-  return true
+  return Scanned{ value: line, ok: true }
 }
 
-pub fn next_field(state: *Scanner, output: *[]const u8) bool {
+// The next run of bytes without spaces, tabs or line breaks.
+pub fn next_field(state: *Scanner) Scanned {
   for state.offset < #len(state.source) {
     byte := state.source[state.offset]
     if byte != ' ' && byte != '\t' && byte != '\n' && byte != '\r' {
@@ -62,7 +66,7 @@ pub fn next_field(state: *Scanner, output: *[]const u8) bool {
     _ = advance(state, 1)
   }
   if finished(state) {
-    return false
+    return Scanned{}
   }
   start := state.offset
   for state.offset < #len(state.source) {
@@ -72,6 +76,5 @@ pub fn next_field(state: *Scanner, output: *[]const u8) bool {
     }
     _ = advance(state, 1)
   }
-  output.* = state.source[start..state.offset]
-  return true
+  return Scanned{ value: state.source[start..state.offset], ok: true }
 }

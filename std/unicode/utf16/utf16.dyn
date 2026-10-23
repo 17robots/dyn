@@ -54,17 +54,19 @@ pub fn valid(source: []const u16) bool {
   return true
 }
 
-pub fn codepoint_count(source: []const u16, output: *usize) bool {
+pub struct Count { value: usize, ok: bool }
+
+// Code points in source. ok is false when source is not valid UTF-16.
+pub fn codepoint_count(source: []const u16) Count {
   count: usize = 0
   offset: usize = 0
   for offset < #len(source) {
     decoded := decode(source, offset)
     if !decoded.ok {
-      return false
+      return Count{}
     }
     offset += decoded.width
     count += 1
   }
-  output.* = count
-  return true
+  return Count{ value: count, ok: true }
 }

@@ -195,7 +195,8 @@ pub fn safe_join(destination: []u8, root: []const u8, child: []const u8) Result 
 }
 
 pub struct Components { text: []const u8, offset: usize }
-pub struct Component { value: []const u8, offset: usize, found: bool }
+// ok is false after the last component.
+pub struct Component { value: []const u8, offset: usize, ok: bool }
 pub fn components(text: []const u8) Components {
   return Components{ text: text }
 }
@@ -207,7 +208,7 @@ pub fn component_next(state: *Components) Component {
   for state.offset < #len(state.text) && state.text[state.offset] != '/' {
     state.offset += 1
   }
-  return Component{ value: state.text[start..state.offset], offset: start, found: start != state.offset }
+  return Component{ value: state.text[start..state.offset], offset: start, ok: start != state.offset }
 }
 
 // Lexical relative path, for normalized inputs up to 4096 bytes each.
@@ -235,19 +236,19 @@ pub fn relative(destination: []u8, base: []const u8, target: []const u8) Result 
   for {
     left_part := component_next(&left_parts)
     right_part := component_next(&right_parts)
-    if left_part.found && right_part.found && strings.equal(left_part.value, right_part.value) {
+    if left_part.ok && right_part.ok && strings.equal(left_part.value, right_part.value) {
       continue
     }
-    if left_part.found && strings.equal(left_part.value, "..") {
+    if left_part.ok && strings.equal(left_part.value, "..") {
       return Result{ value: destination[..0] }
     }
-    if left_part.found {
+    if left_part.ok {
       parents = 1
     }
-    for component_next(&left_parts).found {
+    for component_next(&left_parts).ok {
       parents += 1
     }
-    if right_part.found {
+    if right_part.ok {
       remainder = right_text[right_part.offset..]
     }
     break

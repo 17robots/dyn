@@ -160,14 +160,12 @@ pub fn decode(destination: []u8, source: []const u8) Result {
   return Result{ data: destination[..measured.required], required: measured.required, ok: true }
 }
 
-// Validates the complete input and reports exact decoded bytes. Failure leaves
-// output unchanged; true with zero bytes is a valid empty encoding.
-pub fn decoded_size(source: []const u8, output: *usize) bool {
+pub struct Size { value: usize, ok: bool }
+
+// Validates the complete input and reports the exact decoded byte count.
+// ok with value zero is a valid empty encoding.
+pub fn decoded_size(source: []const u8) Size {
   empty: [0]u8 = []
   measured := decode_pass(empty[..], source, false)
-  if !measured.ok {
-    return false
-  }
-  output.* = measured.required
-  return true
+  return Size{ value: measured.required, ok: measured.ok }
 }

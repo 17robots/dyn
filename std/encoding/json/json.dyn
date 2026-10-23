@@ -5,12 +5,15 @@ use "std/unicode/utf8" utf8
 
 struct Cursor { source: []const u8, at: usize, error: ErrorKind }
 
-pub const KindNull: u8 = 0
-pub const KindBool: u8 = 1
-pub const KindNumber: u8 = 2
-pub const KindString: u8 = 3
-pub const KindArray: u8 = 4
-pub const KindObject: u8 = 5
+// Kind zero is a missing value: the nil_value stub that lookups return on a
+// miss. It is not a JSON null.
+pub const KindMissing: u8 = 0
+pub const KindNull: u8 = 1
+pub const KindBool: u8 = 2
+pub const KindNumber: u8 = 3
+pub const KindString: u8 = 4
+pub const KindArray: u8 = 5
+pub const KindObject: u8 = 6
 
 pub enum TokenKind {
   End, Invalid, Null, Bool, Number, String,
@@ -34,7 +37,13 @@ pub struct Value {
   parent: *Value,
 }
 
-pub struct ParseResult { root: *Value, error_offset: usize, error: ErrorKind, ok: bool }
+// Returned for every miss: a missing key, an index past the end, a lookup on
+// the wrong kind, and the root of a failed parse. Read-only; reading it gives
+// an empty value of kind KindMissing.
+pub const nil_value: Value = Value{}
+
+// root is the stub when parsing fails, so lookups work before ok is checked.
+pub struct ParseResult { root: *const Value, error_offset: usize, error: ErrorKind, ok: bool }
 
 pub fn tokenizer(source: []const u8) Tokenizer {
   return Tokenizer{ source: source, offset: 0 }
@@ -653,7 +662,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     if root != nil {
       error = ErrorKind.TrailingData
     }
-    return ParseResult{ root: nil, error_offset: cursor.at, error: error, ok: false }
+    return ParseResult{ root: &nil_value, error_offset: cursor.at, error: error, ok: false }
   }
   return ParseResult{ root: root, error_offset: 0, error: ErrorKind.None, ok: true }
 }
@@ -724,9 +733,10 @@ pub fn add_member(parent: *Value, key: []const u8, child: *Value) bool {
   return true
 }
 
+// The member named key, or &nil_value.
 pub fn object_get(object: *const Value, key: []const u8) *const Value {
   if object == nil || object.kind != KindObject {
-    return nil
+    return &nil_value
   }
   child := object.first
   for child != nil {
@@ -735,7 +745,103 @@ pub fn object_get(object: *const Value, key: []const u8) *const Value {
     }
     child = child.next
   }
-  return nil
+  return &nil_value
+}
+
+// Reads member key of object as T: an integer type, f32, f64, bool,
+// []const u8 (string text), or *const Value (the member itself). A missing
+// member or a member of another kind gives zero, "" or &nil_value. Another T
+// panics.
+pub fn get($T: type, object: *const Value, key: []const u8) T {
+  result: T
+  read_into(object_get(object, key), &result)
+  return result
+}
+
+// Reads value itself as T, by the same rules as get.
+pub fn as($T: type, value: *const Value) T {
+  result: T
+  read_into(value, &result)
+  return result
+}
+
+fn read_into(value: *const Value, target: any) {
+  case target {
+    is *[]const u8 p => {
+      if value.kind == KindString {
+        p.* = value.text
+      }
+    },
+    is *bool p => {
+      p.* = value.kind == KindBool && value.boolean
+    },
+    is **const Value p => {
+      p.* = value
+    },
+    is *f64 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(f64, value.text)
+      }
+    },
+    is *f32 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(f32, value.text)
+      }
+    },
+    is *i64 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(i64, value.text)
+      }
+    },
+    is *i32 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(i32, value.text)
+      }
+    },
+    is *i16 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(i16, value.text)
+      }
+    },
+    is *i8 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(i8, value.text)
+      }
+    },
+    is *isize p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(isize, value.text)
+      }
+    },
+    is *u64 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(u64, value.text)
+      }
+    },
+    is *u32 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(u32, value.text)
+      }
+    },
+    is *u16 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(u16, value.text)
+      }
+    },
+    is *u8 p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(u8, value.text)
+      }
+    },
+    is *usize p => {
+      if value.kind == KindNumber {
+        p.* = text.parse(usize, value.text)
+      }
+    },
+    _ => {
+      #panic("json.get: unsupported type")
+    },
+  }
 }
 
 pub fn array_length(array: *const Value) usize {
@@ -751,9 +857,10 @@ pub fn array_length(array: *const Value) usize {
   return count
 }
 
+// Element number index, or &nil_value.
 pub fn array_get(array: *const Value, index: usize) *const Value {
   if array == nil || array.kind != KindArray {
-    return nil
+    return &nil_value
   }
   child := array.first
   at: usize = 0
@@ -764,9 +871,12 @@ pub fn array_get(array: *const Value, index: usize) *const Value {
     at += 1
     child = child.next
   }
-  return nil
+  return &nil_value
 }
 
+pub fn is_missing(value: *const Value) bool {
+  return value == nil || value.kind == KindMissing
+}
 pub fn is_null(value: *const Value) bool {
   return value != nil && value.kind == KindNull
 }

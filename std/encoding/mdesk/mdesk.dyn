@@ -51,7 +51,8 @@ struct Parser {
   error_offset: usize,
 }
 
-nil_node: Node
+// The read-only stub returned for every miss. All fields are zero.
+pub const nil_node: Node = Node{}
 
 // Nodes are pushed with mem.push, so a full fixed arena panics.
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
@@ -69,7 +70,7 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
 
 // The shared nil node. Its fields are all zero.
 pub fn empty() *Node {
-  return &nil_node
+  return #cast(*Node, &nil_node)
 }
 
 pub fn is_nil(node: *const Node) bool {
@@ -87,7 +88,7 @@ pub fn child(node: *const Node, name: []const u8) *Node {
       current = current.next
     }
   }
-  return &nil_node
+  return #cast(*Node, &nil_node)
 }
 
 // Child number index, or the nil node.
@@ -103,7 +104,7 @@ pub fn child_at(node: *const Node, index: usize) *Node {
       current = current.next
     }
   }
-  return &nil_node
+  return #cast(*Node, &nil_node)
 }
 
 pub fn child_count(node: *const Node) usize {
@@ -129,7 +130,7 @@ pub fn tag(node: *const Node, name: []const u8) *Node {
       current = current.next
     }
   }
-  return &nil_node
+  return #cast(*Node, &nil_node)
 }
 
 pub fn has_tag(node: *const Node, name: []const u8) bool {

@@ -34,14 +34,15 @@ fn main() {''']
     cases=[(b'', b''),(b'a', b''),(b'', b'a'),(b'aaaaab',b'aaab'),(b'abcabc',b'abc'),(b'a'*1024,b'a'*30+b'b'+b'a'*30)]
     cases += [(bytes(randomizer.randrange(5) for _ in range(randomizer.randrange(50))),
                bytes(randomizer.randrange(5) for _ in range(randomizer.randrange(12)))) for _ in range(180)]
+    def position(found, text): return len(text) if found < 0 else found  # a miss is the length
     def literal(data): return '"'+''.join('\\x%02x'%v for v in data)+'"'
     for text, needle in cases:
         body += ['if true {',f'text := {literal(text)}',f'needle := {literal(needle)}',
                  'table: [64]usize = []','p := search.prepare(needle, table[..])',
                  't.expect(p.ok, "prepare")',
-                 f't.expect(search.find(p.pattern, text) == {text.find(needle)}, "KMP oracle")',
-                 f't.expect(bytes.find(text, needle) == {text.find(needle)}, "find oracle")',
-                 f't.expect(bytes.find_last(text, needle) == {text.rfind(needle)}, "rfind oracle")','}']
+                 f't.expect(search.find(p.pattern, text) == {position(text.find(needle), text)}, "KMP oracle")',
+                 f't.expect(bytes.find(text, needle) == {position(text.find(needle), text)}, "find oracle")',
+                 f't.expect(bytes.find_last(text, needle) == {position(text.rfind(needle), text)}, "rfind oracle")','}']
     body += ['''
   sink := Sink{}
   staging: [4]u8 = []

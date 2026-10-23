@@ -2305,6 +2305,23 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                                         : "pointers support equality only");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
+    /* x < 0 and x >= 0 on an unsigned x are constant: almost always a
+       leftover -1 sentinel check. */
+    bool in_instance = sema->current_function != UINT32_MAX &&
+                       a->functions[sema->current_function].is_instance;
+    if (integer(sema, left) && !signed_int(sema, left) && !in_instance) {
+      DynOperator cmp = a->expressions[id].op;
+      const DynAstExpr *l = &a->expressions[a->expressions[id].left];
+      const DynAstExpr *r = &a->expressions[a->expressions[id].right];
+      bool right_zero = r->kind == DYN_EXPR_INT && r->integer == 0;
+      bool left_zero = l->kind == DYN_EXPR_INT && l->integer == 0;
+      if ((right_zero && (cmp == DYN_OP_LT || cmp == DYN_OP_GE)) ||
+          (left_zero && (cmp == DYN_OP_GT || cmp == DYN_OP_LE))) {
+        error_span(a->expressions[id].span, s, errors,
+                   "comparison is constant: an unsigned value is never negative");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+    }
     return a->expressions[id].type = DYN_TYPE_BOOL;
   }
   if (a->expressions[id].op == DYN_OP_BIT_AND || a->expressions[id].op == DYN_OP_BIT_OR ||
