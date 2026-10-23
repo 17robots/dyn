@@ -14,6 +14,13 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking:** function types drop the `*`: write `fn(i32, i32) i32`, not
+  `*fn(i32, i32) i32`. Parameters may be named for documentation:
+  `fn(target: *Entity, damage: i32) bool`. `*fn(...)` now means a pointer to
+  a function value. See `docs/migrations/function-types.md`.
+- Taking the address of a constant gives a `*const T` into read-only data, so
+  constants work as shared read-only stubs: `const nil_node: Node = Node{}`
+  and `&nil_node`. Writing through it is a compile error.
 - New experimental target `thumbv7em-none`: bare-metal images for Cortex-M7
   (Thumb-2, double-precision FPU, AAPCS with floating-point registers),
   tested on the QEMU `mps2-an500` board. It uses the same 32-bit model as

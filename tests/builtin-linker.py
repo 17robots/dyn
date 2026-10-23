@@ -76,7 +76,7 @@ extern int dyn_shared_value;
 int dyn_fixture_read(void) { return dyn_shared_value; }
 '''
 DYNAMIC = '''extern fn add "dyn_shared_add"(value: i32) i32
-extern fn call "dyn_shared_call"(callback: *fn(i32) i32) i32
+extern fn call "dyn_shared_call"(callback: fn(i32) i32) i32
 extern fn read "dyn_fixture_read"() i32
 fn twice(value: i32) i32 {
   return value * 2

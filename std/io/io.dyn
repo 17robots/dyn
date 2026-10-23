@@ -14,12 +14,12 @@ pub struct Result {
 
 pub struct Reader {
   data: rawptr,
-  read: *fn(rawptr, []u8) Result,
+  read: fn(rawptr, []u8) Result,
 }
 
 pub struct Writer {
   data: rawptr,
-  write: *fn(rawptr, []const u8) Result,
+  write: fn(rawptr, []const u8) Result,
 }
 
 // Callback results are bounded by the supplied slice. Errors always have a

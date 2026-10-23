@@ -17,7 +17,7 @@ fn initial() i32 { return 42 }
 fn main() { stored += 1 }
 pub fn initialized() i32 { return stored }
 pub fn add(a: i32, b: i32) i32 { return a + b }
-pub fn invoke(callback: *fn(i32) i32, value: i32) i32 { return callback(value) }
+pub fn invoke(callback: fn(i32) i32, value: i32) i32 { return callback(value) }
 ''')
     suffix = '.dll' if os.name == 'nt' else '.dylib' if sys.platform == 'darwin' else '.so'
     for mode in ('debug', 'release'):

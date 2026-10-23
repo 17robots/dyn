@@ -27,19 +27,19 @@ spec.loader.exec_module(b)
 src=r'''
 use "std/io"
 g:u64
-cb:*fn(u64) u64
+cb:fn(u64) u64
 extern fn cwide(x:u64) u64
 extern fn csplit(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,h:u32,x:u64,y:u32,z:u64) u64
 extern fn cnarrow(a:i8,b:u16,c:i32) i64
 extern fn cptr(p:rawptr) rawptr
-extern fn ccallback() *fn(u64) u64
+extern fn ccallback() fn(u64) u64
 extern fn czero() u64
 extern fn cvoid(x:u64)
 extern fn oracle() i32
 pub fn wide(x:u64) u64 { return cwide(x) }
 pub fn directsplit(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,h:u32,x:u64,y:u32,z:u64) u64 { return csplit(a,b,c,d,e,f,h,x,y,z) }
-pub fn indirectsplit(p:*fn(u32,u32,u32,u32,u32,u32,u32,u64,u32,u64) u64,x:u64,z:u64) u64 { return p(1,2,3,4,5,6,7,x,9,z) }
-pub fn invoke(p:*fn(u64) u64,x:u64) u64 { return p(x) }
+pub fn indirectsplit(p:fn(u32,u32,u32,u32,u32,u32,u32,u64,u32,u64) u64,x:u64,z:u64) u64 { return p(1,2,3,4,5,6,7,x,9,z) }
+pub fn invoke(p:fn(u64) u64,x:u64) u64 { return p(x) }
 pub fn frommem(x:u64) u64 { return cb(x) }
 pub fn fromresult(x:u64) u64 { return ccallback()(x) }
 pub fn narrowcall(a:i8,b:u16,c:i32) i64 { return cnarrow(a,b,c) }
@@ -92,7 +92,7 @@ int oracle(void) {
 '''
 src += r"""
 extern fn cnovoid()
-pub fn indirectvoid(p:*fn()) { p() }
+pub fn indirectvoid(p:fn()) { p() }
 pub fn directvoid() { cnovoid() }
 extern fn cmix(a:u32,b:u64,c:u32,d:u64,e:u32,f:u64) u64
 pub fn mixcall(a:u32,b:u64,c:u32,d:u64,e:u32,f:u64) u64 { return cmix(a,b,c,d,e,f) }
@@ -102,7 +102,7 @@ extern fn cisize(x:isize) isize
 pub fn ret_i8(x:i8) i64 { return #cast(i64,ci8(x)) }
 pub fn ret_u16(x:u16) u64 { return #cast(u64,cu16(x)) }
 pub fn ret_isize(x:isize) i64 { return #cast(i64,cisize(x)) }
-pub fn castfn(p:rawptr,x:u64) u64 { return #cast(*fn(u64) u64,p)(x) }
+pub fn castfn(p:rawptr,x:u64) u64 { return #cast(fn(u64) u64,p)(x) }
 extern fn cfarg(x:f64) u32
 extern fn cfret() f64
 fn cdesc(x:[]const u8) u32 { return #cast(u32,#len(x)) }
@@ -138,7 +138,7 @@ src += 'extern fn extra() i32\n'
 src=src.replace('status:=oracle()', 'if extra()!=0 { #panic("extra") } status:=oracle()')
 # 512 scalar operands plus indirect target: exceed the old operand buffer.
 params=','.join(f'a{i}:u32' for i in range(512)); types=','.join(['u32']*512); args=','.join(str(i) for i in range(512))
-src+=f'\npub fn manycallee({params}) u64 {{ return #cast(u64,a0)+#cast(u64,a511) }}\npub fn manycall(p:*fn({types}) u64) u64 {{ return p({args}) }}\n'
+src+=f'\npub fn manycallee({params}) u64 {{ return #cast(u64,a0)+#cast(u64,a511) }}\npub fn manycall(p:fn({types}) u64) u64 {{ return p({args}) }}\n'
 c+='\nextern U manycall(void*); extern U manycallee();\n'
 # Include manycall from main; C oracle is kept straightforward.
 src=src.replace('status:=oracle()', 'if manycall(&manycallee)!=511 { #panic("many") } status:=oracle()')

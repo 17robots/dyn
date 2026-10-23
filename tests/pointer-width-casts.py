@@ -15,7 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-POINTERS = {'raw': 'rawptr', 'typed': '*u8', 'function': '*fn(i32) i32'}
+POINTERS = {'raw': 'rawptr', 'typed': '*u8', 'function': 'fn(i32) i32'}
 INPUTS = {'u64': (0x12345678fedcba98, 64), 'i64': (-81985529216486896, 64),
           'u32': (0xfedcba98, 32), 'i32': (-2, 32), 'i8': (-2, 8)}
 
@@ -36,7 +36,7 @@ def source(bits):
                           f'{{ #panic("{name}") }}')
     # Reinterpret through all legal pointer categories without calling/dereferencing.
     declarations.append('pub fn pointer_chain(x:u64) u64 { '
-                        'return #cast(u64,#cast(*fn(i32) i32,#cast(*u8,#cast(rawptr,x)))) }')
+                        'return #cast(u64,#cast(fn(i32) i32,#cast(*u8,#cast(rawptr,x)))) }')
     names.append('pointer_chain')
     expected = 0x12345678fedcba98 & ((1 << bits) - 1)
     checks.append(f'if pointer_chain(0x12345678fedcba98)!={expected} {{ #panic("pointer_chain") }}')

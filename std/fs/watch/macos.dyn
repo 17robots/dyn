@@ -36,16 +36,16 @@ pub struct EventResult { event: Event, status: Status, error: isize }
 pub struct Watcher { state: *State, storage: []u8, arena: mem.Arena, rescan_required: bool }
 pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
-type Callback = *fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
+type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
 struct API {
   services: rawptr, foundation: rawptr, system: rawptr,
-  string: *fn(rawptr, *const u8, isize, u32, u8) rawptr,
-  array: *fn(rawptr, *const rawptr, isize, rawptr) rawptr,
-  release: *fn(rawptr),
-  create: *fn(rawptr, Callback, *Context, rawptr, u64, f64, u32) rawptr,
-  schedule: *fn(rawptr, rawptr), start: *fn(rawptr) u8,
-  stop: *fn(rawptr), invalidate: *fn(rawptr), stream_release: *fn(rawptr),
-  canonical: *fn(*const u8, *u8) *u8,
+  string: fn(rawptr, *const u8, isize, u32, u8) rawptr,
+  array: fn(rawptr, *const rawptr, isize, rawptr) rawptr,
+  release: fn(rawptr),
+  create: fn(rawptr, Callback, *Context, rawptr, u64, f64, u32) rawptr,
+  schedule: fn(rawptr, rawptr), start: fn(rawptr) u8,
+  stop: fn(rawptr), invalidate: fn(rawptr), stream_release: fn(rawptr),
+  canonical: fn(*const u8, *u8) *u8,
 }
 struct Slot { owner: *State, stream: rawptr, started: bool, path: rawptr, paths: rawptr, id: i32, mask: u32, length: usize, root: [1024]u8 }
 struct Record { watch: i32, mask: u32, length: usize, rescan: bool, name: [1024]u8 }
@@ -58,7 +58,7 @@ extern fn library_open "dlopen"(path: *const u8, flags: i32) rawptr
 extern fn library_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
 extern fn library_close "dlclose"(handle: rawptr) i32
 extern fn queue_create "dispatch_queue_create"(label: *const u8, attributes: rawptr) rawptr
-extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback: *fn(rawptr))
+extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback: fn(rawptr))
 extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
   backing: [128]u8 = []
@@ -92,16 +92,16 @@ fn load(api: *API) bool {
   api.services = library("/System/Library/Frameworks/CoreServices.framework/CoreServices")
   api.foundation = library("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
   api.system = library("/usr/lib/libSystem.B.dylib")
-  api.string = #cast(*fn(rawptr, *const u8, isize, u32, u8) rawptr, symbol(api.foundation, "CFStringCreateWithBytes"))
-  api.array = #cast(*fn(rawptr, *const rawptr, isize, rawptr) rawptr, symbol(api.foundation, "CFArrayCreate"))
-  api.release = #cast(*fn(rawptr), symbol(api.foundation, "CFRelease"))
-  api.create = #cast(*fn(rawptr, Callback, *Context, rawptr, u64, f64, u32) rawptr, symbol(api.services, "FSEventStreamCreate"))
-  api.schedule = #cast(*fn(rawptr, rawptr), symbol(api.services, "FSEventStreamSetDispatchQueue"))
-  api.start = #cast(*fn(rawptr) u8, symbol(api.services, "FSEventStreamStart"))
-  api.stop = #cast(*fn(rawptr), symbol(api.services, "FSEventStreamStop"))
-  api.invalidate = #cast(*fn(rawptr), symbol(api.services, "FSEventStreamInvalidate"))
-  api.stream_release = #cast(*fn(rawptr), symbol(api.services, "FSEventStreamRelease"))
-  api.canonical = #cast(*fn(*const u8, *u8) *u8, symbol(api.system, "realpath"))
+  api.string = #cast(fn(rawptr, *const u8, isize, u32, u8) rawptr, symbol(api.foundation, "CFStringCreateWithBytes"))
+  api.array = #cast(fn(rawptr, *const rawptr, isize, rawptr) rawptr, symbol(api.foundation, "CFArrayCreate"))
+  api.release = #cast(fn(rawptr), symbol(api.foundation, "CFRelease"))
+  api.create = #cast(fn(rawptr, Callback, *Context, rawptr, u64, f64, u32) rawptr, symbol(api.services, "FSEventStreamCreate"))
+  api.schedule = #cast(fn(rawptr, rawptr), symbol(api.services, "FSEventStreamSetDispatchQueue"))
+  api.start = #cast(fn(rawptr) u8, symbol(api.services, "FSEventStreamStart"))
+  api.stop = #cast(fn(rawptr), symbol(api.services, "FSEventStreamStop"))
+  api.invalidate = #cast(fn(rawptr), symbol(api.services, "FSEventStreamInvalidate"))
+  api.stream_release = #cast(fn(rawptr), symbol(api.services, "FSEventStreamRelease"))
+  api.canonical = #cast(fn(*const u8, *u8) *u8, symbol(api.system, "realpath"))
   return api.string != nil && api.array != nil && api.release != nil && api.create != nil && api.schedule != nil && api.start != nil && api.stop != nil && api.invalidate != nil && api.stream_release != nil && api.canonical != nil
 }
 fn barrier(context: rawptr) {

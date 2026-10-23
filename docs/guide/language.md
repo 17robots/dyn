@@ -35,8 +35,10 @@ Runtime initializers execute once before `main`, after every initializer they re
 between otherwise independent globals is deterministic canonical module/source order but programs
 must not use that order as synchronization or as an implicit dependency. Cycles are rejected.
 
-Function pointer types use `*fn(ParamTypes) Result`; omitted result means `void`. Function
-addresses require `&name`. Function pointers may be copied, stored in aggregates, and called with
+Function types are written `fn(ParamTypes) Result`; omitted result means `void`. A function
+value is a code pointer, so there is no `*`; `*fn(...)` is a pointer to a function value.
+Parameters may be named for documentation, as in `fn(target: *Entity, damage: i32) bool`; the
+names do not affect the type. Function addresses require `&name`. Function pointers may be copied, stored in aggregates, and called with
 ordinary call syntax. Signature mismatches are errors, and calling `nil` traps at runtime.
 
 Foreign declarations use `extern fn local_name "link_symbol"(parameters) Result` and have no

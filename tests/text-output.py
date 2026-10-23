@@ -23,7 +23,7 @@ extern fn packed_provider "packed_provider"(x: Packed) Packed
 counter: i32 = 0
 message: []const u8 = "bytes\x00with null"
 fn first(x: i32) i32 { return x + 2 }
-callback: *fn(i32) i32 = &first
+callback: fn(i32) i32 = &first
 fn add(p: *i32) { p.* += 1 }
 fn cleanup() { counter += 1 }
 fn checked(x: i32) i32 { defer cleanup() return 12 / x }

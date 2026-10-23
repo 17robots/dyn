@@ -117,7 +117,7 @@ for name, cf, df, init, leaves in cases:
         c += [f'int cb_{key}({name} (*fn)({",".join(cp)})) {{ {name} x = {{0}}; {cinit} '
               f'{name} r = fn({",".join(args+["x","19","6.5","7.5"])}); return {result}; }}']
         dyn += [f'extern fn c_{key}({",".join(dp)}) {name}',
-                f'extern fn cb_{key}(f:*fn({",".join(prefix+[name,"i32","f32","f64"])}) {name}) i32',
+                f'extern fn cb_{key}(f:fn({",".join(prefix+[name,"i32","f32","f64"])}) {name}) i32',
                 f'fn local_{key}({",".join(dp)}) {name} {{ if {cond} {{ #panic("incoming {key}") }} '
                 f'y := x '+ ' '.join(f'y.{path} += {1.0 if isinstance(value,float) else 1}' for path,value in leaves) + ' return y }']
         body += [f'x_{key} := {name}{{{init}}}',

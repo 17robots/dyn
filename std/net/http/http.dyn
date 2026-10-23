@@ -677,7 +677,7 @@ pub struct BodyResult {
   ok: bool,
 }
 
-pub type Handler = *fn(*Response, *const Request) Result
+pub type Handler = fn(*Response, *const Request) Result
 
 pub struct Route {
   method: []const u8,

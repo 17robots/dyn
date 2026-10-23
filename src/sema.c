@@ -1048,7 +1048,11 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
   if (dyn_type_is_pointer(t)) {
     DynAstPointer *p = pointer_info(a, t);
     type_name_into(a, p->pointee, s, inner, sizeof(inner));
-    snprintf(out, cap, "*%s%s", p->is_const ? "const " : "", inner);
+    /* A function value is a code pointer and is spelled fn(...) R. */
+    if (dyn_type_is_function(p->pointee) && !p->is_const)
+      snprintf(out, cap, "%s", inner);
+    else
+      snprintf(out, cap, "*%s%s", p->is_const ? "const " : "", inner);
     return;
   }
   if (dyn_type_is_array(t)) {
@@ -2360,6 +2364,9 @@ static bool lvalue_const(DynAstProgram *a, DynExprId id) {
     DynAstSlice *sl = slice_info(a, a->expressions[e->left].type);
     return sl ? sl->is_const : lvalue_const(a, e->left);
   }
+  /* Constants live in read-only data; their address is *const T. */
+  if (e->kind == DYN_EXPR_GLOBAL)
+    return e->integer < a->global_count && a->globals[e->integer].is_const;
   return false;
 }
 static bool sema_block(Sema *sema, DynAstProgram *, uint32_t, uint32_t,

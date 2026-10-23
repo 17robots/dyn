@@ -25,7 +25,7 @@ fn main() {
   item := Item{value: 9}
   erased: rawptr = &item
   if #cast(*Item, erased).value != 9 { #panic("postfix field") }
-  if #cast(*fn(i32) i32, &identity)(11) != 11 { #panic("postfix call") }
+  if #cast(fn(i32) i32, &identity)(11) != 11 { #panic("postfix call") }
   if #cast(i32 /* target */, /* value */ 3 + 4) != 7 { #panic("comments") }
 }
 '''

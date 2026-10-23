@@ -132,7 +132,15 @@ fn primitive(p: *const Parser) bool {
   return false
 }
 
+// `fn(` with no space starts a function type; `fn name(` starts a declaration.
+fn fn_type_start(p: *Parser) bool {
+  return token_is(p, "fn") && p.token.end < p.length && p.text[p.token.end] == '('
+}
+
 fn optional_type_start(p: *Parser) bool {
+  if fn_type_start(p) {
+    return true
+  }
   if src_distinct(p) || src_packed(p) {
     return false
   }
@@ -177,34 +185,40 @@ fn type_body(p: *Parser) u32 {
   end := token.end
   kind: u16
   flags: u16
-  if take(p, "*") {
+  if fn_type_start(p) {
+    // A function value is a code pointer: fn(A, B) R is *fn in the tree.
     kind = ExpPointerType
     fn_start := p.token.start
-    if take(p, "fn") {
-      expect(p, "(")
-      for !token_is(p, ")") && !p.tree.failed {
-        chain(p, &first, &last, parse_type(p))
-        if !take(p, ",") {
-          break
-        }
+    lex(p)
+    expect(p, "(")
+    for !token_is(p, ")") && !p.tree.failed {
+      // Parameter names are documentation only.
+      if p.token.kind == TokenKind.Name && src_next_is(p, ":") {
+        lex(p)
+        lex(p)
       }
-      end = p.token.end
-      expect(p, ")")
-      if optional_type_start(p) {
-        chain(p, &first, &last, parse_type(p))
-        if last != None {
-          end = node_end(p, last)
-        }
+      chain(p, &first, &last, parse_type(p))
+      if !take(p, ",") {
+        break
       }
-      first = add_node(p, ExpFnType, fn_start, end, first)
-    } else {
-      if take(p, "const") {
-        flags |= FlagConst
+    }
+    end = p.token.end
+    expect(p, ")")
+    if optional_type_start(p) {
+      chain(p, &first, &last, parse_type(p))
+      if last != None {
+        end = node_end(p, last)
       }
-      first = parse_type(p)
-      if first != None {
-        end = node_end(p, first)
-      }
+    }
+    first = add_node(p, ExpFnType, fn_start, end, first)
+  } else if take(p, "*") {
+    kind = ExpPointerType
+    if take(p, "const") {
+      flags |= FlagConst
+    }
+    first = parse_type(p)
+    if first != None {
+      end = node_end(p, first)
     }
   } else if take(p, "[") {
     kind = ExpArrayType
@@ -364,7 +378,7 @@ fn argument(p: *Parser, allow_named_type: bool) u32 {
     p.tree.nodes[array].next = None
     return array_type_suffix(p, array, false)
   }
-  committed := primitive(p) || token_is(p, "*") || at(p, p.token.start, "$")
+  committed := primitive(p) || fn_type_start(p) || token_is(p, "*") || at(p, p.token.start, "$")
   if allow_named_type || committed {
     saved := p.*
     count := p.tree.count

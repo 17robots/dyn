@@ -86,7 +86,7 @@ pub fn last_error(maximum: usize) c.BytesResult {
 
 pub type AudioStream = rawptr
 pub type AudioDevice = u32
-pub type AudioCallback = *fn(rawptr, AudioStream, i32, i32)
+pub type AudioCallback = fn(rawptr, AudioStream, i32, i32)
 pub const AudioDeviceDefaultPlayback: AudioDevice = 4294967295
 pub const AudioU8: u32 = 8
 pub const AudioS16: u32 = 32784

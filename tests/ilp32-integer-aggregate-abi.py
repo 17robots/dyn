@@ -259,7 +259,7 @@ def suite(target, batch):
                          f'{crt} r = fn({",".join(callargs)}); return {result}; }}')
                 localret = ('y := x '+ ' '.join(f'y{path} += 1' for path,_ in leaves)+' return y') if returns_struct else 'return 1'
                 dyn += [f'extern fn c_{key}({",".join(dp)}) {drt}',
-                        f'extern fn cb_{key}(f:*fn({",".join(prefix+[dt,"i32","i64"])}) {drt}) i32',
+                        f'extern fn cb_{key}(f:fn({",".join(prefix+[dt,"i32","i64"])}) {drt}) i32',
                         f'fn local_{key}({",".join(dp)}) {drt} {{ if {cond} {{ #panic("incoming {key}") }} {localret} }}']
                 body += [f'x_{key}:{dt} = {init}']
                 dargs = ','.join(args+[f'x_{key}','19','1234605616436508552'])
