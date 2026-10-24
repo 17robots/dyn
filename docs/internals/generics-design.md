@@ -271,8 +271,10 @@ overwritten right away. Std functions that produced output through an
   `_i64`/`_u64` versions.
 - `mem`: `push`, `push_array`, `push_bytes_uninit`, `zero`, `clear`, `swap`, `copy`,
   `move`, `fill`, `equal`.
-- `sort`: `sort` (insertion sort below 16 elements, otherwise a heap sort;
-  elements must support `<`) and `search`, replacing the `i64`/`u64` versions.
+- `sort`: `sort` (allocation-free introsort with monotone-input fast paths,
+  insertion sort for small partitions, and a worst-case heap fallback; elements
+  must support `<` with a strict weak ordering) and `search`, replacing the
+  `i64`/`u64` versions.
 
 The `[]u8`-only versions of `copy`, `fill`, `zero` and `equal` are replaced,
 not kept alongside. `[]u8` calls keep working because `T` is inferred as `u8`.

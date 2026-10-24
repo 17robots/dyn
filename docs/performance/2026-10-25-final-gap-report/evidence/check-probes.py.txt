@@ -1,0 +1,20 @@
+from pathlib import Path
+import json,shutil,subprocess,hashlib
+ROOT=Path(__file__).resolve().parents[2];W=Path(__file__).resolve().parent/'checks';W.mkdir(exist_ok=True)
+compile_original=json.loads((ROOT/'build/obj/release/compiler.o.build.json').read_text())['command']
+link_original=json.loads((ROOT/'build/dyn-release.build.json').read_text())['command']
+for mode,kind in [('bounds','GUARD_INDEX'),('overflow','GUARD_OVERFLOW')]:
+ d=W/mode;d.mkdir(exist_ok=True);shutil.copytree(ROOT/'src',d/'src',dirs_exist_ok=True)
+ p=d/'src/backend/ssa.inc';s=p.read_text();needle='static int32_t ssa_emit(Ssa *s, SsaOp op, uint8_t cls, int32_t a, int32_t b, int32_t c, int64_t aux, int64_t aux2) {\n'
+ extra=f'  /* Diagnostic only: selected check family. */\n  if (op == SO_CHECK && aux == {kind}) {{ op = SO_CONST; cls = SC_INT; a = b = c = -1; aux = aux2 = 0; }}\n'
+ if mode=='overflow':extra+='  else if (op == SO_ADDO) { op = SO_ADD; aux2 = 0; }\n  else if (op == SO_SUBO) { op = SO_SUB; aux2 = 0; }\n  else if (op == SO_MULO) { op = SO_MUL; aux2 = 0; }\n'
+ assert s.count(needle)==1;s=s.replace(needle,needle+extra)
+ needle='static void ssa_check(Ssa *s, int32_t a, int32_t b, Cond holds, unsigned kind) {\n';assert s.count(needle)==1;s=s.replace(needle,needle+f'  if (kind == {kind}) return; /* Diagnostic only. */\n');p.write_text(s)
+ p=d/'src/backend/driver.c';s=p.read_text();needle='static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {\n';assert s.count(needle)==1;s=s.replace(needle,needle+f'  if (check == {kind}) return; /* Diagnostic only. */\n');p.write_text(s)
+ cmd=[str(d/'src/backend/compiler.c') if x==str(ROOT/'src/backend/compiler.c') else '-I'+str(d/'src') if x=='-I'+str(ROOT/'src') else str(d/'compiler.o') if x==str(ROOT/'build/obj/release/compiler.o') else x for x in compile_original]
+ subprocess.run(cmd,check=True,capture_output=True)
+ cmd=[str(d/'compiler.o') if x==str(ROOT/'build/obj/release/compiler.o') else str(d/'dyn-probe') if x==str(ROOT/'build/dyn-release') else x for x in link_original]
+ subprocess.run(cmd,check=True,capture_output=True)
+ for o in (ROOT/'build').glob('dynrt*.o'):(d/o.name).symlink_to(o) if not (d/o.name).exists() else None
+ (d/'commands.json').write_text(json.dumps({'compile':compile_original,'link':cmd},indent=2))
+ print('BUILT',mode,hashlib.sha256((d/'dyn-probe').read_bytes()).hexdigest(),flush=True)

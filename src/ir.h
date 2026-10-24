@@ -102,6 +102,13 @@ typedef enum {
   DYN_MATH_INTRINSIC_COPYSIGN,
   DYN_MATH_INTRINSIC_FMA
 } DynMathIntrinsic;
+/* Private derived identity; never serialized in the public IR dump. */
+typedef enum {
+  DYN_BYTE_INTRINSIC_NONE,
+  DYN_BYTE_INTRINSIC_FIND_BYTE,
+  DYN_BYTE_INTRINSIC_FIND,
+  DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX
+} DynByteIntrinsic;
 typedef struct {
   /* debug_name is set for instances only: "min(u32)" for debuggers. */
   char *name, *link_name, *debug_name;
@@ -111,6 +118,7 @@ typedef struct {
   uint64_t module_owner;
   DynType variadic_type;
   DynMathIntrinsic math_intrinsic;
+  DynByteIntrinsic byte_intrinsic;
 } DynIrFunction;
 typedef struct {
   DynStmtKind kind;

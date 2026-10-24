@@ -1,0 +1,62 @@
+[
+  {
+    "target": "riscv32-none",
+    "object": "dynrt_riscv32_none_support.o",
+    "passed": true
+  },
+  {
+    "target": "riscv32-none-soft",
+    "object": "dynrt_riscv32_none_soft_support.o",
+    "passed": true
+  },
+  {
+    "target": "thumbv7em-none",
+    "object": "dynrt_thumbv7em_none_support.o",
+    "passed": true
+  },
+  {
+    "target": "thumbv7em-none-soft",
+    "object": "dynrt_thumbv7em_none_soft_support.o",
+    "passed": true
+  },
+  {
+    "target": "aarch64-linux",
+    "object": "dynrt_aarch64_support.o",
+    "passed": true
+  },
+  {
+    "target": "riscv64-linux",
+    "object": "dynrt_riscv64_support.o",
+    "passed": true
+  },
+  {
+    "target": "x86_64-windows",
+    "object": "dynrt_windows_support.o",
+    "passed": true
+  },
+  {
+    "target": "aarch64-windows",
+    "object": "dynrt_windows_arm64_support.o",
+    "passed": true
+  },
+  {
+    "target": "aarch64-macos",
+    "object": "dynrt_macos_support.o",
+    "passed": true
+  },
+  {
+    "target": "x86_64-macos",
+    "object": "dynrt_macos_x64_support.o",
+    "passed": true
+  },
+  {
+    "target": "riscv64-none",
+    "object": "dynrt_riscv64_none_support.o",
+    "passed": true
+  },
+  {
+    "target": "thumbv7em-none-nucleo-h753zi",
+    "object": "dynrt_nucleo_h753zi_support.o",
+    "passed": true
+  }
+]

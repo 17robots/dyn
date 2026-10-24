@@ -88,7 +88,7 @@ typedef struct {
 /* Allocated outputs in address order: read-only, code, then writable. */
 typedef enum {
   OUT_INTERP, OUT_HASH, OUT_DYNSYM, OUT_DYNSTR, OUT_VERSYM, OUT_VERNEED, OUT_RELA_DYN, OUT_RELA_PLT,
-  OUT_RODATA, OUT_EH_FRAME, OUT_TEXT, OUT_PLT, OUT_DYNAMIC, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
+  OUT_RODATA, OUT_DYN_UNWIND, OUT_EH_FRAME, OUT_TEXT, OUT_PLT, OUT_DYNAMIC, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
   OUT_DATA_REL_RO, OUT_DATA, OUT_GOT, OUT_TDATA, OUT_TBSS, OUT_BSS, OUT_ALLOC_COUNT
 } OutputKind;
 typedef struct {
@@ -1019,6 +1019,7 @@ static int classify(const LinkSection *section) {
   if (section->type == SHT_NOBITS) return OUT_BSS;
   if (section->flags & SHF_WRITE)
     return strncmp(section->name, ".data.rel.ro", 12) ? OUT_DATA : OUT_DATA_REL_RO;
+  if (!strcmp(section->name, "dyn_unwind")) return OUT_DYN_UNWIND;
   return OUT_RODATA;
 }
 static bool kept_section(const LinkSection *section) {
@@ -1204,6 +1205,12 @@ static bool collect_garbage(Linker *linker, const char *entry) {
     for (size_t i = 1; ok && i < object->section_count; ++i) {
       LinkSection *section = &object->sections[i];
       if (section->eh_frame && !section->discarded && section->flags & SHF_ALLOC) ok = rewrite_frames(linker, section);
+      else if (!section->live && !section->discarded && !strcmp(section->name, "dyn_unwind")) {
+        /* Dyn frame tables describe their object's code; they live with it
+           and are found through __start_dyn_unwind, not by reference. */
+        for (size_t t = 1; t < object->section_count; ++t)
+          if (object->sections[t].live && object->sections[t].flags & SHF_EXEC) section->live = true;
+      }
       else if (!(section->flags & SHF_ALLOC) && kept_section(section)) section->live = true;
     }
   }
@@ -1252,6 +1259,7 @@ static bool assign_outputs(Linker *linker) {
     [OUT_RELA_DYN] = {".rela.dyn", SHT_RELA, 24, OUT_DYNSYM},
     [OUT_RELA_PLT] = {".rela.plt", SHT_RELA, 24, OUT_DYNSYM},
     [OUT_RODATA] = {".rodata", SHT_PROGBITS, 0, -1},
+    [OUT_DYN_UNWIND] = {"dyn_unwind", SHT_PROGBITS, 0, -1},
     [OUT_EH_FRAME] = {".eh_frame", SHT_PROGBITS, 0, -1},
     [OUT_TEXT] = {".text", SHT_PROGBITS, 0, -1},
     [OUT_PLT] = {".plt", SHT_PROGBITS, 16, -1},
@@ -1319,7 +1327,7 @@ static bool preemptible(const Linker *linker, const LinkSymbol *symbol) {
   if (symbol->defined)
     return linker->shared_output && symbol->binding != STB_LOCAL && symbol->visibility == STV_DEFAULT &&
            !symbol->absolute;
-  return symbol->shared || (linker->shared_output && symbol->referenced);
+  return symbol->shared || (linker->shared_output && symbol->referenced && symbol->visibility == STV_DEFAULT);
 }
 static bool function_like(const LinkSymbol *symbol) {
   return symbol->shared_type == STT_FUNC || symbol->shared_type == STT_GNU_IFUNC;
@@ -1676,6 +1684,8 @@ static void define_linker_symbols(Linker *linker, Segment *segments, size_t segm
     {"__bss_start", bss->address}, {"_edata", last->address + last->file_size},
     {"edata", last->address + last->file_size}, {"_end", last->address + last->memory_size},
     {"end", last->address + last->memory_size},
+    {"__start_dyn_unwind", linker->outputs[OUT_DYN_UNWIND].address},
+    {"__stop_dyn_unwind", linker->outputs[OUT_DYN_UNWIND].address + linker->outputs[OUT_DYN_UNWIND].size},
   };
   for (size_t i = 0; i < sizeof(defined) / sizeof(*defined); ++i) {
     LinkSymbol *symbol = symbol_find(linker, defined[i].name);

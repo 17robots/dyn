@@ -1,0 +1,67 @@
+[
+  {
+    "gate": "ssa-subtraction-range",
+    "exit": 0,
+    "seconds": 0.5638836830039509
+  },
+  {
+    "gate": "ssa-loop-bounds",
+    "exit": 0,
+    "seconds": 0.0837319900165312
+  },
+  {
+    "gate": "ssa-cleanup-proofs",
+    "exit": 0,
+    "seconds": 0.18906204402446747
+  },
+  {
+    "gate": "ssa-store-forward",
+    "exit": 0,
+    "seconds": 0.06580007000593469
+  },
+  {
+    "gate": "aggregate-literal-return",
+    "exit": 0,
+    "seconds": 0.14509104000171646
+  },
+  {
+    "gate": "native-optimization",
+    "exit": 0,
+    "seconds": 0.11972775199683383
+  },
+  {
+    "gate": "native-ssa",
+    "exit": 0,
+    "seconds": 62.97524407401215
+  },
+  {
+    "gate": "generics",
+    "exit": 0,
+    "seconds": 0.18242401396855712
+  },
+  {
+    "gate": "stdlib-host",
+    "exit": 0,
+    "seconds": 0.05065949395066127
+  },
+  {
+    "gate": "performance-contracts",
+    "exit": 0,
+    "seconds": 0.22020870295818895
+  },
+  {
+    "gate": "formatter",
+    "exit": 0,
+    "seconds": 0.25281133403768763
+  },
+  {
+    "gate": "sort-algorithms",
+    "exit": 0,
+    "seconds": 4.544466026010923
+  },
+  {
+    "gate": "ssa-masked-extension",
+    "exit": 0,
+    "seconds": 0.31333392701344565
+  }
+]

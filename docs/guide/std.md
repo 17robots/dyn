@@ -66,7 +66,8 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/encoding/json` | Validation, arena-backed DOM parsing, queries and writing |
+| `std/encoding/json` | Validation, arena-backed mutable DOM parsing, queries and writing |
+| `std/encoding/json/read` | [Experimental compact read-only DOM](json-read.md), with arena-owned values and text |
 | `std/encoding/csv` | RFC 4180 field scanner, stream scanner and writer |
 | `std/encoding/ini` | INI scanner and one-pass `parse` into an arena table |
 | `std/encoding/xml` | XML document trees, event scanner, attributes, namespaces and writer |

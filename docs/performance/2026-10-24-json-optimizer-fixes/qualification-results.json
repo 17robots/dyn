@@ -1,0 +1,2713 @@
+[
+  {
+    "index": 1,
+    "name": "memory-ergonomics.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/memory-ergonomics.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/001-memory-ergonomics.py.log"
+  },
+  {
+    "index": 2,
+    "name": "arena-strings.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/arena-strings.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/002-arena-strings.py.log"
+  },
+  {
+    "index": 3,
+    "name": "mdesk.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/mdesk.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/003-mdesk.py.log"
+  },
+  {
+    "index": 4,
+    "name": "wrap-enum-values.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wrap-enum-values.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/004-wrap-enum-values.py.log"
+  },
+  {
+    "index": 5,
+    "name": "cast-syntax.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/cast-syntax.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/005-cast-syntax.py.log"
+  },
+  {
+    "index": 6,
+    "name": "ir-dump.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ir-dump.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/006-ir-dump.py.log"
+  },
+  {
+    "index": 7,
+    "name": "inlining-budget.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/inlining-budget.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.366,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/007-inlining-budget.py.log"
+  },
+  {
+    "index": 8,
+    "name": "inlining-casts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/inlining-casts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/008-inlining-casts.py.log"
+  },
+  {
+    "index": 9,
+    "name": "global-alignment.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/global-alignment.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.564,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/009-global-alignment.py.log"
+  },
+  {
+    "index": 10,
+    "name": "function-alignment.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/function-alignment.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/010-function-alignment.py.log"
+  },
+  {
+    "index": 11,
+    "name": "aggregate-literal-return.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/aggregate-literal-return.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/011-aggregate-literal-return.py.log"
+  },
+  {
+    "index": 12,
+    "name": "ssa-subtraction-range.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ssa-subtraction-range.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.564,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/012-ssa-subtraction-range.py.log"
+  },
+  {
+    "index": 13,
+    "name": "ssa-loop-bounds.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ssa-loop-bounds.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/013-ssa-loop-bounds.py.log"
+  },
+  {
+    "index": 14,
+    "name": "ssa-loop-constants.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ssa-loop-constants.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 2.918,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/014-ssa-loop-constants.py.log"
+  },
+  {
+    "index": 15,
+    "name": "ssa-store-forward.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ssa-store-forward.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/015-ssa-store-forward.py.log"
+  },
+  {
+    "index": 16,
+    "name": "ssa-ordered-jam.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ssa-ordered-jam.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.865,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/016-ssa-ordered-jam.py.log"
+  },
+  {
+    "index": 17,
+    "name": "ssa-byte-fill.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ssa-byte-fill.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 31.116,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/017-ssa-byte-fill.py.log"
+  },
+  {
+    "index": 18,
+    "name": "aggregate-call-destination.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/aggregate-call-destination.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/018-aggregate-call-destination.py.log"
+  },
+  {
+    "index": 19,
+    "name": "ssa-zero-copy.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/ssa-zero-copy.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.466,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/019-ssa-zero-copy.py.log"
+  },
+  {
+    "index": 20,
+    "name": "small-zero-fill.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/small-zero-fill.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/020-small-zero-fill.py.log"
+  },
+  {
+    "index": 21,
+    "name": "arena-zero-fast.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/arena-zero-fast.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 15.837,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/021-arena-zero-fast.py.log"
+  },
+  {
+    "index": 22,
+    "name": "utf8-ascii-fast.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/utf8-ascii-fast.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 17.591,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/022-utf8-ascii-fast.py.log"
+  },
+  {
+    "index": 23,
+    "name": "json-string-fast.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/json-string-fast.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/023-json-string-fast.py.log"
+  },
+  {
+    "index": 24,
+    "name": "json-read.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/json-read.py",
+      "--cross"
+    ],
+    "timeout": 600,
+    "code": 0,
+    "seconds": 2.367,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/024-json-read.py.log"
+  },
+  {
+    "index": 25,
+    "name": "json-ascii-prefix.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/json-ascii-prefix.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.314,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/025-json-ascii-prefix.py.log"
+  },
+  {
+    "index": 26,
+    "name": "string-integer-fast.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/string-integer-fast.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.464,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/026-string-integer-fast.py.log"
+  },
+  {
+    "index": 27,
+    "name": "bytes-search-fast.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bytes-search-fast.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 7.325,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/027-bytes-search-fast.py.log"
+  },
+  {
+    "index": 28,
+    "name": "byte-intrinsic-provenance.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/byte-intrinsic-provenance.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/028-byte-intrinsic-provenance.py.log"
+  },
+  {
+    "index": 29,
+    "name": "simd-byte-search.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/simd-byte-search.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 10.481,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/029-simd-byte-search.py.log"
+  },
+  {
+    "index": 30,
+    "name": "fs-read-all-fast.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/fs-read-all-fast.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/030-fs-read-all-fast.py.log"
+  },
+  {
+    "index": 31,
+    "name": "function-types.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/function-types.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/031-function-types.py.log"
+  },
+  {
+    "index": 32,
+    "name": "zero-values.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/zero-values.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/032-zero-values.py.log"
+  },
+  {
+    "index": 33,
+    "name": "operator-precedence.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/operator-precedence.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.032,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/033-operator-precedence.py.log"
+  },
+  {
+    "index": 34,
+    "name": "evaluation-order.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/evaluation-order.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.032,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/034-evaluation-order.py.log"
+  },
+  {
+    "index": 35,
+    "name": "try-push.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/try-push.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/035-try-push.py.log"
+  },
+  {
+    "index": 36,
+    "name": "containers.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/containers.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/036-containers.py.log"
+  },
+  {
+    "index": 37,
+    "name": "typed-reads.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/typed-reads.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/037-typed-reads.py.log"
+  },
+  {
+    "index": 38,
+    "name": "arena-producers.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/arena-producers.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/038-arena-producers.py.log"
+  },
+  {
+    "index": 39,
+    "name": "sticky-zero.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/sticky-zero.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/039-sticky-zero.py.log"
+  },
+  {
+    "index": 40,
+    "name": "selfhost-parser.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/selfhost-parser.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.865,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/040-selfhost-parser.py.log"
+  },
+  {
+    "index": 41,
+    "name": "flagship-http.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/flagship-http.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 4.271,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/041-flagship-http.py.log"
+  },
+  {
+    "index": 42,
+    "name": "flagship-game.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/flagship-game.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.364,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/042-flagship-game.py.log"
+  },
+  {
+    "index": 43,
+    "name": "bare-metal.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-metal.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.366,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/043-bare-metal.py.log"
+  },
+  {
+    "index": 44,
+    "name": "rv32-soft.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/rv32-soft.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.564,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/044-rv32-soft.py.log"
+  },
+  {
+    "index": 45,
+    "name": "thumb-soft.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/thumb-soft.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.765,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/045-thumb-soft.py.log"
+  },
+  {
+    "index": 46,
+    "name": "arm-abi-attributes.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/arm-abi-attributes.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/046-arm-abi-attributes.py.log"
+  },
+  {
+    "index": 47,
+    "name": "pointer-width-casts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/pointer-width-casts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.215,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/047-pointer-width-casts.py.log"
+  },
+  {
+    "index": 48,
+    "name": "bare-stack.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-stack.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 3.87,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/048-bare-stack.py.log"
+  },
+  {
+    "index": 49,
+    "name": "bare-ssa.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.765,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/049-bare-ssa.py.log"
+  },
+  {
+    "index": 50,
+    "name": "bare-ssa-cases.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-cases.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 11.782,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/050-bare-ssa-cases.py.log"
+  },
+  {
+    "index": 51,
+    "name": "bare-ssa-checked.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-checked.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 25.555,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/051-bare-ssa-checked.py.log"
+  },
+  {
+    "index": 52,
+    "name": "bare-ssa-cleanup.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-cleanup.py"
+    ],
+    "timeout": 1800,
+    "code": 0,
+    "seconds": 98.215,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/052-bare-ssa-cleanup.py.log"
+  },
+  {
+    "index": 53,
+    "name": "bare-ssa-panic.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-panic.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 20.693,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/053-bare-ssa-panic.py.log"
+  },
+  {
+    "index": 54,
+    "name": "bare-ssa-calls.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-calls.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.867,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/054-bare-ssa-calls.py.log"
+  },
+  {
+    "index": 55,
+    "name": "bare-ssa-float.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-float.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.815,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/055-bare-ssa-float.py.log"
+  },
+  {
+    "index": 56,
+    "name": "bare-ssa-aggregates.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-aggregates.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 5.973,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/056-bare-ssa-aggregates.py.log"
+  },
+  {
+    "index": 57,
+    "name": "bare-ssa-aggregate-calls.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-aggregate-calls.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.316,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/057-bare-ssa-aggregate-calls.py.log"
+  },
+  {
+    "index": 58,
+    "name": "bare-ssa-packed.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-packed.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.917,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/058-bare-ssa-packed.py.log"
+  },
+  {
+    "index": 59,
+    "name": "bare-ssa-varargs.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-varargs.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 2.918,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/059-bare-ssa-varargs.py.log"
+  },
+  {
+    "index": 60,
+    "name": "bare-ssa-soft.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-soft.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 4.02,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/060-bare-ssa-soft.py.log"
+  },
+  {
+    "index": 61,
+    "name": "bare-ssa-descriptors.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-ssa-descriptors.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.815,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/061-bare-ssa-descriptors.py.log"
+  },
+  {
+    "index": 62,
+    "name": "bare-debugger.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/bare-debugger.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.915,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/062-bare-debugger.py.log"
+  },
+  {
+    "index": 63,
+    "name": "nucleo-profile.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/nucleo-profile.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.215,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/063-nucleo-profile.py.log"
+  },
+  {
+    "index": 64,
+    "name": "signed-index.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/signed-index.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/064-signed-index.py.log"
+  },
+  {
+    "index": 65,
+    "name": "contextual-keywords.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/contextual-keywords.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/065-contextual-keywords.py.log"
+  },
+  {
+    "index": 66,
+    "name": "mmio.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/mmio.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/066-mmio.py.log"
+  },
+  {
+    "index": 67,
+    "name": "documentation-snippets.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/documentation-snippets.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/067-documentation-snippets.py.log"
+  },
+  {
+    "index": 68,
+    "name": "std-lint.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tools/std-lint.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.715,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/068-std-lint.py.log"
+  },
+  {
+    "index": 69,
+    "name": "std-lint.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/std-lint.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.032,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/069-std-lint.py.log"
+  },
+  {
+    "index": 70,
+    "name": "sha256-zero.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/sha256-zero.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/070-sha256-zero.py.log"
+  },
+  {
+    "index": 71,
+    "name": "rand-zero.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/rand-zero.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.031,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/071-rand-zero.py.log"
+  },
+  {
+    "index": 72,
+    "name": "os-edge-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/os-edge-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/072-os-edge-results.py.log"
+  },
+  {
+    "index": 73,
+    "name": "watch-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/watch-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/073-watch-results.py.log"
+  },
+  {
+    "index": 74,
+    "name": "watch-platform-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/watch-platform-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/074-watch-platform-results.py.log"
+  },
+  {
+    "index": 75,
+    "name": "crypto-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/crypto-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/075-crypto-results.py.log"
+  },
+  {
+    "index": 76,
+    "name": "dns-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/dns-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/076-dns-results.py.log"
+  },
+  {
+    "index": 77,
+    "name": "process-capture-arena.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/process-capture-arena.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.665,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/077-process-capture-arena.py.log"
+  },
+  {
+    "index": 78,
+    "name": "http-workers.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/http-workers.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/078-http-workers.py.log"
+  },
+  {
+    "index": 79,
+    "name": "http-sticky.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/http-sticky.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/079-http-sticky.py.log"
+  },
+  {
+    "index": 80,
+    "name": "network-edge-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/network-edge-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/080-network-edge-results.py.log"
+  },
+  {
+    "index": 81,
+    "name": "http-arena.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/http-arena.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.316,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/081-http-arena.py.log"
+  },
+  {
+    "index": 82,
+    "name": "tls-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/tls-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/082-tls-results.py.log"
+  },
+  {
+    "index": 83,
+    "name": "std-sticky.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/std-sticky.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/083-std-sticky.py.log"
+  },
+  {
+    "index": 84,
+    "name": "std-miss-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/std-miss-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/084-std-miss-contracts.py.log"
+  },
+  {
+    "index": 85,
+    "name": "producer-overlap.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/producer-overlap.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/085-producer-overlap.py.log"
+  },
+  {
+    "index": 86,
+    "name": "encoding-edge-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/encoding-edge-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/086-encoding-edge-results.py.log"
+  },
+  {
+    "index": 87,
+    "name": "base32-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/base32-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/087-base32-results.py.log"
+  },
+  {
+    "index": 88,
+    "name": "unicode-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/unicode-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.414,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/088-unicode-results.py.log"
+  },
+  {
+    "index": 89,
+    "name": "template-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/template-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/089-template-results.py.log"
+  },
+  {
+    "index": 90,
+    "name": "time-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/time-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/090-time-results.py.log"
+  },
+  {
+    "index": 91,
+    "name": "clock-consumers.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/clock-consumers.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/091-clock-consumers.py.log"
+  },
+  {
+    "index": 92,
+    "name": "csv-xml-errors.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/csv-xml-errors.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/092-csv-xml-errors.py.log"
+  },
+  {
+    "index": 93,
+    "name": "tar-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/tar-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/093-tar-results.py.log"
+  },
+  {
+    "index": 94,
+    "name": "dynlib-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/dynlib-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/094-dynlib-results.py.log"
+  },
+  {
+    "index": 95,
+    "name": "websocket-sticky.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/websocket-sticky.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/095-websocket-sticky.py.log"
+  },
+  {
+    "index": 96,
+    "name": "flags-arena.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/flags-arena.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/096-flags-arena.py.log"
+  },
+  {
+    "index": 97,
+    "name": "parse-edge-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/parse-edge-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/097-parse-edge-results.py.log"
+  },
+  {
+    "index": 98,
+    "name": "image-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/image-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/098-image-results.py.log"
+  },
+  {
+    "index": 99,
+    "name": "der-pem-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/der-pem-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/099-der-pem-results.py.log"
+  },
+  {
+    "index": 100,
+    "name": "zstd-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/zstd-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/100-zstd-results.py.log"
+  },
+  {
+    "index": 101,
+    "name": "zip-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/zip-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/101-zip-results.py.log"
+  },
+  {
+    "index": 102,
+    "name": "thread-results.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/thread-results.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/102-thread-results.py.log"
+  },
+  {
+    "index": 103,
+    "name": "xml-tree.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/xml-tree.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/103-xml-tree.py.log"
+  },
+  {
+    "index": 104,
+    "name": "math-lowering.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/math-lowering.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.414,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/104-math-lowering.py.log"
+  },
+  {
+    "index": 105,
+    "name": "regex-arena.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/regex-arena.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/105-regex-arena.py.log"
+  },
+  {
+    "index": 106,
+    "name": "math-targets.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/math-targets.py"
+    ],
+    "timeout": 1800,
+    "code": 0,
+    "seconds": 1.867,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/106-math-targets.py.log"
+  },
+  {
+    "index": 107,
+    "name": "math-range.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/math-range.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 47.689,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/107-math-range.py.log"
+  },
+  {
+    "index": 108,
+    "name": "math-vector.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/math-vector.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.765,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/108-math-vector.py.log"
+  },
+  {
+    "index": 109,
+    "name": "math-integer.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/math-integer.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 11.281,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/109-math-integer.py.log"
+  },
+  {
+    "index": 110,
+    "name": "math-matrix.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/math-matrix.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.967,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/110-math-matrix.py.log"
+  },
+  {
+    "index": 111,
+    "name": "math-float.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/math-float.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 13.085,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/111-math-float.py.log"
+  },
+  {
+    "index": 112,
+    "name": "formatter.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/formatter.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.615,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/112-formatter.py.log"
+  },
+  {
+    "index": 113,
+    "name": "scale-benchmark.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tools/scale-benchmark.py",
+      "--lines",
+      "--flat",
+      "4000",
+      "--budget",
+      "--output",
+      "/home/mdray/17robots/dyn/compiler/build/scale-benchmark-flat.json"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/113-scale-benchmark.py.log"
+  },
+  {
+    "index": 114,
+    "name": "std-memory-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/std-memory-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/114-std-memory-contracts.py.log"
+  },
+  {
+    "index": 115,
+    "name": "array-extents.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/array-extents.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/115-array-extents.py.log"
+  },
+  {
+    "index": 116,
+    "name": "owner-warnings.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/owner-warnings.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/116-owner-warnings.py.log"
+  },
+  {
+    "index": 117,
+    "name": "documentation-examples.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/documentation-examples.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/117-documentation-examples.py.log"
+  },
+  {
+    "index": 118,
+    "name": "performance-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/performance-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/118-performance-contracts.py.log"
+  },
+  {
+    "index": 119,
+    "name": "backend-regressions.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/backend-regressions.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/119-backend-regressions.py.log"
+  },
+  {
+    "index": 120,
+    "name": "frontend-audit.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/frontend-audit.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/120-frontend-audit.py.log"
+  },
+  {
+    "index": 121,
+    "name": "regex-regressions.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/regex-regressions.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/121-regex-regressions.py.log"
+  },
+  {
+    "index": 122,
+    "name": "deflate-regressions.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/deflate-regressions.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 3.069,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/122-deflate-regressions.py.log"
+  },
+  {
+    "index": 123,
+    "name": "library-audit.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/library-audit.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/123-library-audit.py.log"
+  },
+  {
+    "index": 124,
+    "name": "runtime-audit.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/runtime-audit.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.414,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/124-runtime-audit.py.log"
+  },
+  {
+    "index": 125,
+    "name": "http-fragments.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/http-fragments.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.015,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/125-http-fragments.py.log"
+  },
+  {
+    "index": 126,
+    "name": "unwind-registers.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/unwind-registers.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.414,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/126-unwind-registers.py.log"
+  },
+  {
+    "index": 127,
+    "name": "unwind-owner.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/unwind-owner.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/127-unwind-owner.py.log"
+  },
+  {
+    "index": 128,
+    "name": "run-cache.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/run-cache.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/128-run-cache.py.log"
+  },
+  {
+    "index": 129,
+    "name": "chunk-cache.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/chunk-cache.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/129-chunk-cache.py.log"
+  },
+  {
+    "index": 130,
+    "name": "pointer-facts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/pointer-facts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/130-pointer-facts.py.log"
+  },
+  {
+    "index": 131,
+    "name": "generics.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/generics.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/131-generics.py.log"
+  },
+  {
+    "index": 132,
+    "name": "release-cache.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/release-cache.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/132-release-cache.py.log"
+  },
+  {
+    "index": 133,
+    "name": "net-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/net-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.316,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/133-net-contracts.py.log"
+  },
+  {
+    "index": 134,
+    "name": "concurrency-net-host.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/concurrency-net-host.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/134-concurrency-net-host.py.log"
+  },
+  {
+    "index": 135,
+    "name": "sync-host.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/sync-host.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/135-sync-host.py.log"
+  },
+  {
+    "index": 136,
+    "name": "dns-host.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/dns-host.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/136-dns-host.py.log"
+  },
+  {
+    "index": 137,
+    "name": "watch-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/watch-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/137-watch-contracts.py.log"
+  },
+  {
+    "index": 138,
+    "name": "windows-sockets.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/windows-sockets.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/138-windows-sockets.py.log"
+  },
+  {
+    "index": 139,
+    "name": "parser-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/parser-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/139-parser-contracts.py.log"
+  },
+  {
+    "index": 140,
+    "name": "vendor-bindings.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/vendor-bindings.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.065,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/140-vendor-bindings.py.log"
+  },
+  {
+    "index": 141,
+    "name": "selfhost-readiness.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/selfhost-readiness.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/141-selfhost-readiness.py.log"
+  },
+  {
+    "index": 142,
+    "name": "aggregate-copy.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/aggregate-copy.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.032,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/142-aggregate-copy.py.log"
+  },
+  {
+    "index": 143,
+    "name": "shared-host.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/shared-host.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/143-shared-host.py.log"
+  },
+  {
+    "index": 144,
+    "name": "process-directory.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/process-directory.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/144-process-directory.py.log"
+  },
+  {
+    "index": 145,
+    "name": "panic-lifetime.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/panic-lifetime.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/145-panic-lifetime.py.log"
+  },
+  {
+    "index": 146,
+    "name": "compiler-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/compiler-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/146-compiler-contracts.py.log"
+  },
+  {
+    "index": 147,
+    "name": "lsp-contracts.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/lsp-contracts.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.015,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/147-lsp-contracts.py.log"
+  },
+  {
+    "index": 148,
+    "name": "lifetime-flow.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/lifetime-flow.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/148-lifetime-flow.py.log"
+  },
+  {
+    "index": 149,
+    "name": "semantic-combinations.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/semantic-combinations.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/149-semantic-combinations.py.log"
+  },
+  {
+    "index": 150,
+    "name": "compiler-regressions.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/compiler-regressions.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/150-compiler-regressions.py.log"
+  },
+  {
+    "index": 151,
+    "name": "syntax-diagnostics.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/syntax-diagnostics.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.031,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/151-syntax-diagnostics.py.log"
+  },
+  {
+    "index": 152,
+    "name": "batch-without-tree-sitter.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/batch-without-tree-sitter.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/152-batch-without-tree-sitter.py.log"
+  },
+  {
+    "index": 153,
+    "name": "builtin-linker.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/builtin-linker.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.815,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/153-builtin-linker.py.log"
+  },
+  {
+    "index": 154,
+    "name": "native-zero-fill.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-zero-fill.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/154-native-zero-fill.py.log"
+  },
+  {
+    "index": 155,
+    "name": "native-constant-data.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-constant-data.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.314,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/155-native-constant-data.py.log"
+  },
+  {
+    "index": 156,
+    "name": "native-ssa.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-ssa.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 62.464,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/156-native-ssa.py.log"
+  },
+  {
+    "index": 157,
+    "name": "native-differential-harness.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-differential-harness.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/157-native-differential-harness.py.log"
+  },
+  {
+    "index": 158,
+    "name": "native-fast-return.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-fast-return.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/158-native-fast-return.py.log"
+  },
+  {
+    "index": 159,
+    "name": "native-leaf-inline.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-leaf-inline.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/159-native-leaf-inline.py.log"
+  },
+  {
+    "index": 160,
+    "name": "windows-arm64-ssa.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/windows-arm64-ssa.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/160-windows-arm64-ssa.py.log"
+  },
+  {
+    "index": 161,
+    "name": "riscv-ssa-abi.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/riscv-ssa-abi.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/161-riscv-ssa-abi.py.log"
+  },
+  {
+    "index": 162,
+    "name": "native-load-reuse.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-load-reuse.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/162-native-load-reuse.py.log"
+  },
+  {
+    "index": 163,
+    "name": "native-reachability.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-reachability.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/163-native-reachability.py.log"
+  },
+  {
+    "index": 164,
+    "name": "native-cache.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-cache.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/164-native-cache.py.log"
+  },
+  {
+    "index": 165,
+    "name": "macho-relocations.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/macho-relocations.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/165-macho-relocations.py.log"
+  },
+  {
+    "index": 166,
+    "name": "native-optimization.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-optimization.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/166-native-optimization.py.log"
+  },
+  {
+    "index": 167,
+    "name": "native-machine-optimization.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-machine-optimization.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/167-native-machine-optimization.py.log"
+  },
+  {
+    "index": 168,
+    "name": "native-assembly.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-assembly.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/168-native-assembly.py.log"
+  },
+  {
+    "index": 169,
+    "name": "native-decode.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-decode.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 1.917,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/169-native-decode.py.log"
+  },
+  {
+    "index": 170,
+    "name": "text-output.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/text-output.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/170-text-output.py.log"
+  },
+  {
+    "index": 171,
+    "name": "cross-runtime.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/cross-runtime.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 2.217,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/171-cross-runtime.py.log"
+  },
+  {
+    "index": 172,
+    "name": "native-memory.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-memory.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/172-native-memory.py.log"
+  },
+  {
+    "index": 173,
+    "name": "runtime-support.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/runtime-support.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.314,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/173-runtime-support.py.log"
+  },
+  {
+    "index": 174,
+    "name": "wasm-browser.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wasm-browser.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/174-wasm-browser.py.log"
+  },
+  {
+    "index": 175,
+    "name": "wasm-memory.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wasm-memory.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/175-wasm-memory.py.log"
+  },
+  {
+    "index": 176,
+    "name": "wasm-semantics.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wasm-semantics.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/176-wasm-semantics.py.log"
+  },
+  {
+    "index": 177,
+    "name": "wasm-assembly.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wasm-assembly.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/177-wasm-assembly.py.log"
+  },
+  {
+    "index": 178,
+    "name": "wasi.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wasi.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/178-wasi.py.log"
+  },
+  {
+    "index": 179,
+    "name": "wasm-runtime.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wasm-runtime.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/179-wasm-runtime.py.log"
+  },
+  {
+    "index": 180,
+    "name": "wasm-linker.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/wasm-linker.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/180-wasm-linker.py.log"
+  },
+  {
+    "index": 181,
+    "name": "standard-streams.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/standard-streams.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.164,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/181-standard-streams.py.log"
+  },
+  {
+    "index": 182,
+    "name": "stdlib-host.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/stdlib-host.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/182-stdlib-host.py.log"
+  },
+  {
+    "index": 183,
+    "name": "readiness-native.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/readiness-native.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.064,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/183-readiness-native.py.log"
+  },
+  {
+    "index": 184,
+    "name": "aggregate-abi.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/aggregate-abi.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.214,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/184-aggregate-abi.py.log"
+  },
+  {
+    "index": 185,
+    "name": "native-debugger.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/native-debugger.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/185-native-debugger.py.log"
+  },
+  {
+    "index": 186,
+    "name": "release-bundle.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tests/release-bundle.py"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.031,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/186-release-bundle.py.log"
+  },
+  {
+    "index": 187,
+    "name": "build.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/mdray/17robots/dyn/compiler/tools/build.py",
+      "cache-failure-test",
+      "interface-allocation-test",
+      "module-allocation-test",
+      "global-allocation-test",
+      "source-failure-test",
+      "ast-allocation-test",
+      "module-rewrite-allocation-test",
+      "stack-probe-test",
+      "frontend-state-test",
+      "frontend-failure-test",
+      "analysis-cache-test",
+      "codegen-failure-test",
+      "project-failure-test",
+      "syntax-cache-test",
+      "scope-index-test",
+      "parser-recovery-test",
+      "parser-unit-test",
+      "parser-snapshot-test",
+      "unwind-capacity-test",
+      "build-plan-test",
+      "interface-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 2.468,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/187-build.py.log"
+  },
+  {
+    "index": 188,
+    "name": "cache-failure-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/cache-failure-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.003,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/188-cache-failure-test.log"
+  },
+  {
+    "index": 189,
+    "name": "interface-allocation-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/interface-allocation-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/189-interface-allocation-test.log"
+  },
+  {
+    "index": 190,
+    "name": "module-allocation-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/module-allocation-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/190-module-allocation-test.log"
+  },
+  {
+    "index": 191,
+    "name": "global-allocation-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/global-allocation-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/191-global-allocation-test.log"
+  },
+  {
+    "index": 192,
+    "name": "source-failure-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/source-failure-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/192-source-failure-test.log"
+  },
+  {
+    "index": 193,
+    "name": "ast-allocation-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/ast-allocation-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/193-ast-allocation-test.log"
+  },
+  {
+    "index": 194,
+    "name": "module-rewrite-allocation-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/module-rewrite-allocation-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.003,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/194-module-rewrite-allocation-test.log"
+  },
+  {
+    "index": 195,
+    "name": "stack-probe-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/stack-probe-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/195-stack-probe-test.log"
+  },
+  {
+    "index": 196,
+    "name": "frontend-state-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/frontend-state-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.031,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/196-frontend-state-test.log"
+  },
+  {
+    "index": 197,
+    "name": "frontend-failure-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/frontend-failure-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.114,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/197-frontend-failure-test.log"
+  },
+  {
+    "index": 198,
+    "name": "analysis-cache-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/analysis-cache-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/198-analysis-cache-test.log"
+  },
+  {
+    "index": 199,
+    "name": "codegen-failure-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/codegen-failure-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.414,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/199-codegen-failure-test.log"
+  },
+  {
+    "index": 200,
+    "name": "project-failure-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/project-failure-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.007,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/200-project-failure-test.log"
+  },
+  {
+    "index": 201,
+    "name": "syntax-cache-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/syntax-cache-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.264,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/201-syntax-cache-test.log"
+  },
+  {
+    "index": 202,
+    "name": "scope-index-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/scope-index-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.016,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/202-scope-index-test.log"
+  },
+  {
+    "index": 203,
+    "name": "parser-recovery-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/parser-recovery-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.514,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/203-parser-recovery-test.log"
+  },
+  {
+    "index": 204,
+    "name": "parser-unit-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/parser-unit-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.032,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/204-parser-unit-test.log"
+  },
+  {
+    "index": 205,
+    "name": "parser-snapshot-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/parser-snapshot-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.007,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/205-parser-snapshot-test.log"
+  },
+  {
+    "index": 206,
+    "name": "unwind-capacity-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/unwind-capacity-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/206-unwind-capacity-test.log"
+  },
+  {
+    "index": 207,
+    "name": "build-plan-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/build-plan-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.003,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/207-build-plan-test.log"
+  },
+  {
+    "index": 208,
+    "name": "interface-test",
+    "command": [
+      "/home/mdray/17robots/dyn/compiler/build/interface-test"
+    ],
+    "timeout": 300,
+    "code": 0,
+    "seconds": 0.001,
+    "skip_lines": [],
+    "log": "/home/mdray/17robots/dyn/compiler/build/json-optimizer-fixes-20261024/qualification/208-interface-test.log"
+  }
+]

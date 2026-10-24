@@ -1,0 +1,134 @@
+{
+  "schema": 1,
+  "scope": "5 alternating paired two-round workflow samples; this-pass prebuild snapshot and rebuilt candidate use their own native libraries and embedded runtime; same current SDL interposer; Linux dummy display; wall input-update and RSS, not key-to-display latency",
+  "cpus": [
+    2,
+    3,
+    4,
+    5
+  ],
+  "binaries": {
+    "baseline": {
+      "sha256": "8b1d252a0d1996ce188910c81a253a2894bd2898332500cea2adb4663690594c",
+      "bytes": 1614640
+    },
+    "candidate": {
+      "sha256": "d64cd57f6fc49e0c840b71fe25d61e07e6fb136df627b9f35c672cb31e2f09f5",
+      "bytes": 1598272
+    }
+  },
+  "native_libraries": {
+    "baseline": "f84ebfe6bbcc203c50e0b42b69b2e374ca31a9a37675e56bee75f9ab9b6bf087",
+    "candidate": "7090ea6bbf43fffe9fa2611cc1ba03b7f3932f30e53d1ff18213e07059dbb5ab"
+  },
+  "samples": [
+    {
+      "variant": "baseline",
+      "index": 0,
+      "baseline_RSS_KiB": 31272,
+      "final_RSS_KiB": 50900,
+      "growth_RSS_KiB": 19628,
+      "input_mean_ms": 1.763,
+      "input_max_ms": 2.377
+    },
+    {
+      "variant": "candidate",
+      "index": 0,
+      "baseline_RSS_KiB": 31300,
+      "final_RSS_KiB": 50852,
+      "growth_RSS_KiB": 19552,
+      "input_mean_ms": 1.818,
+      "input_max_ms": 2.107
+    },
+    {
+      "variant": "candidate",
+      "index": 1,
+      "baseline_RSS_KiB": 33132,
+      "final_RSS_KiB": 52680,
+      "growth_RSS_KiB": 19548,
+      "input_mean_ms": 1.799,
+      "input_max_ms": 2.574
+    },
+    {
+      "variant": "baseline",
+      "index": 1,
+      "baseline_RSS_KiB": 31276,
+      "final_RSS_KiB": 50836,
+      "growth_RSS_KiB": 19560,
+      "input_mean_ms": 1.818,
+      "input_max_ms": 2.336
+    },
+    {
+      "variant": "candidate",
+      "index": 3,
+      "baseline_RSS_KiB": 30860,
+      "final_RSS_KiB": 50408,
+      "growth_RSS_KiB": 19548,
+      "input_mean_ms": 1.817,
+      "input_max_ms": 2.477
+    },
+    {
+      "variant": "baseline",
+      "index": 3,
+      "baseline_RSS_KiB": 31348,
+      "final_RSS_KiB": 50976,
+      "growth_RSS_KiB": 19628,
+      "input_mean_ms": 1.795,
+      "input_max_ms": 2.285
+    },
+    {
+      "variant": "baseline",
+      "index": 4,
+      "baseline_RSS_KiB": 29060,
+      "final_RSS_KiB": 48620,
+      "growth_RSS_KiB": 19560,
+      "input_mean_ms": 1.824,
+      "input_max_ms": 2.238
+    },
+    {
+      "variant": "candidate",
+      "index": 4,
+      "baseline_RSS_KiB": 31120,
+      "final_RSS_KiB": 50680,
+      "growth_RSS_KiB": 19560,
+      "input_mean_ms": 1.802,
+      "input_max_ms": 2.53
+    },
+    {
+      "variant": "candidate",
+      "index": 5,
+      "baseline_RSS_KiB": 31192,
+      "final_RSS_KiB": 50652,
+      "growth_RSS_KiB": 19460,
+      "input_mean_ms": 1.8,
+      "input_max_ms": 2.439
+    },
+    {
+      "variant": "baseline",
+      "index": 5,
+      "baseline_RSS_KiB": 30652,
+      "final_RSS_KiB": 50140,
+      "growth_RSS_KiB": 19488,
+      "input_mean_ms": 1.849,
+      "input_max_ms": 2.305
+    }
+  ],
+  "interposer_sha256": "e738a7770a67ed73aaa56d628390217ca2f52ea71411af35004069bfc99209ea",
+  "medians": {
+    "baseline": {
+      "baseline_RSS_KiB": 31272,
+      "final_RSS_KiB": 50836,
+      "growth_RSS_KiB": 19560,
+      "input_mean_ms": 1.818,
+      "input_max_ms": 2.305
+    },
+    "candidate": {
+      "baseline_RSS_KiB": 31192,
+      "final_RSS_KiB": 50680,
+      "growth_RSS_KiB": 19548,
+      "input_mean_ms": 1.802,
+      "input_max_ms": 2.477
+    }
+  },
+  "exclusion": "Original pair2 conservatively excluded because a 0.2-second corpus hash check overlapped harness execution. Replacement pair5 uses the same protocol without competing work. All raw samples remain retained."
+}

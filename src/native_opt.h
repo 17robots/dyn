@@ -10,5 +10,9 @@ typedef struct {
    Input remains immutable, so concurrent module emission is safe. */
 bool dyn_native_optimize(const DynSource *, const DynIrProgram *, unsigned,
                          DynNativeOptimization *);
+/* Target intrinsics need an SSA-capable emission mode. Debug/DWARF callers
+   disable them while retaining ordinary scalar inlining. */
+bool dyn_native_optimize_for_emission(const DynSource *, const DynIrProgram *, unsigned,
+                                      bool, DynNativeOptimization *);
 void dyn_native_optimization_free(DynNativeOptimization *);
 #endif

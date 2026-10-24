@@ -1,4 +1,8 @@
 #target(kernel: none)
+// This target retains thread lookup when unlinking an unwind frame.
+fn unwind_owner_offset() usize {
+  return 0
+}
 // Bare metal: one hart, output through the board console in the start runtime.
 extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
 fn thread_id() u64 {
@@ -17,4 +21,17 @@ pub fn dyn_trace_pop() {
 }
 pub fn dyn_trace_dump() {
   trace_dump()
+}
+// Resumes unwinding after a frame's cleanup has run.
+pub fn dyn_unwind_continue() {
+  slot := unwind_slot(false)
+  if slot != nil && slot.top != nil {
+    frame := slot.top
+    slot.top = frame.previous
+    jump(frame)
+  }
+  if slot != nil {
+    panic_raw(slot.message, slot.length)
+  }
+  panic_raw(nil, 0)
 }

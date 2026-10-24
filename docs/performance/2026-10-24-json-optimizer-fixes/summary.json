@@ -1,0 +1,50 @@
+{
+  "qualification": {
+    "gates": 208,
+    "passed": 208,
+    "failed": 0,
+    "skip_lines": 0
+  },
+  "source_hash_count": 669,
+  "hashes_identical_through_final_measurements": true,
+  "compiler_sha256": "c0c62b7ab149fac2169c774aa7bfe9cf0a11d25a4801a3c1af3d4708e799a414",
+  "input_sha256": "55632bc536a41285c2126eb1a0d684fc6778c303b95bdf380e9c3f8b509abfca",
+  "compact_reduction_percent": 8.403102295479336,
+  "compact_vs_c_ratio": 2.7381007268660116,
+  "compact_paired_bootstrap_ratio_95": [
+    0.8842275480075745,
+    0.9205447479601019
+  ],
+  "bootstrap_resamples": 10000,
+  "repeat_reduction_percent": 8.873649279262741,
+  "independent_reviews": "Bounds proof, SSE2 helper and constant retention: no remaining concrete findings; static reviews.",
+  "supplementary": {
+    "windows_wine_and_constant_eviction_sanitizers": [
+      {
+        "mode": "ssa",
+        "windows_wine": "PASS"
+      },
+      {
+        "mode": "tree",
+        "windows_wine": "PASS"
+      },
+      {
+        "constant_eviction_asan_ubsan": "PASS",
+        "output": "PASS loop constants ssa: 9 overflow boundaries\nPASS loop constants tree: 9 overflow boundaries\nPASS deterministic constant eviction and rejected-allocation rematerialization\n"
+      }
+    ],
+    "randomized_parser_cases": 1500,
+    "randomized_modes": [
+      "debug",
+      "release"
+    ],
+    "json_read_embedded_guests": 8
+  },
+  "remaining_limits": [
+    "General loop auto-vectorization not implemented.",
+    "Remaining yyjson parser gap not resolved.",
+    "No DNA source or performance changes.",
+    "One Linux x64 measurement host; no other-platform speed claims.",
+    "Mutable JSON shows no consistent timing change across repeated windows."
+  ]
+}

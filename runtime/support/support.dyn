@@ -6,6 +6,17 @@ struct UnwindSlot {
   storage: [4096]u8
 }
 unwind_slots: [64]UnwindSlot
+// A hint is one atomic word: the full eligible thread identity and slot index.
+// Collisions only discard hints. The owning thread is the only writer of a
+// hint with its identity, so a matching hint names its latest known slot.
+// Always validate/claim the slot atomically; never retain slot ownership here.
+// Large opaque identities use the complete search without truncation.
+unwind_hints: [64]u64
+fn unwind_remember(tid: u64, index: usize) {
+  if tid != 0 && tid >> 58 == 0 {
+    atomic_store(&unwind_hints[#cast(usize, tid & 63)], (tid << 6) | #cast(u64, index))
+  }
+}
 extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
 extern fn atomic_store "dyn_atomic_store_u64"(p: *u64, value: u64)
 extern fn atomic_claim "dyn_atomic_compare_exchange_u64"(p: *u64, expected: u64, desired: u64) bool
@@ -14,15 +25,53 @@ extern fn panic_raw "dyn_panic"(message: *const u8, length: u64)
 
 fn unwind_slot(claim: bool) *UnwindSlot {
   tid := thread_id()
-  for i in 0..64 {
-    slot := &unwind_slots[i]
-    seen := atomic_load(&slot.tid)
-    if seen == tid {
-      return slot
+  // Nested cleanup on the first owner already needs only one atomic read.
+  // Keep that path ahead of the hint, which benefits empty-stack registration.
+  first_seen := atomic_load(&unwind_slots[0].tid)
+  if first_seen == tid {
+    return &unwind_slots[0]
+  }
+  if tid != 0 && tid >> 58 == 0 {
+    hint := atomic_load(&unwind_hints[#cast(usize, tid & 63)])
+    if hint >> 6 == tid {
+      candidate := &unwind_slots[#cast(usize, hint & 63)]
+      seen := first_seen
+      if (hint & 63) != 0 {
+        seen = atomic_load(&candidate.tid)
+      }
+      if seen == tid {
+        return candidate
+      }
+      if claim && seen == 0 && atomic_claim(&candidate.tid, 0, tid) {
+        return candidate
+      }
     }
-    if claim && seen == 0 && atomic_claim(&slot.tid, 0, tid) {
-      return slot
+  }
+  for true {
+    empty: *UnwindSlot = nil
+    empty_index: usize = 0
+    // Find an existing owner before claiming a vacancy. A lower slot may
+    // have become empty while this thread still owns a higher slot.
+    for i in 0..64 {
+      slot := &unwind_slots[i]
+      seen := atomic_load(&slot.tid)
+      if seen == tid {
+        unwind_remember(tid, i)
+        return slot
+      }
+      if seen == 0 && empty == nil {
+        empty = slot
+        empty_index = i
+      }
     }
+    if !claim || empty == nil {
+      return nil
+    }
+    if atomic_claim(&empty.tid, 0, tid) {
+      unwind_remember(tid, empty_index)
+      return empty
+    }
+    // Another thread won the vacancy; repeat the ownership search.
   }
   return nil
 }
@@ -33,12 +82,31 @@ pub fn dyn_unwind_link(frame: *Unwind) {
     panic_raw(&message[0], #cast(u64, #len(message)))
     return
   }
+  // A target may reserve a private word beyond its saved register bank.
+  // Only the thread that linked this activation may unlink it.
+  offset := unwind_owner_offset()
+  if offset != 0 {
+    owner := #cast(*usize, #cast(usize, frame) + offset)
+    owner.* = #cast(usize, slot)
+  }
   frame.previous = slot.top
   slot.top = frame
 }
 pub fn dyn_unwind_unlink(frame: *Unwind) {
-  slot := unwind_slot(false)
+  slot: *UnwindSlot = nil
+  offset := unwind_owner_offset()
+  if offset != 0 {
+    owner := #cast(*usize, #cast(usize, frame) + offset)
+    slot = #cast(*UnwindSlot, owner.*)
+  }
+  else {
+    slot = unwind_slot(false)
+  }
   if slot != nil && slot.top == frame {
+    if offset != 0 {
+      owner := #cast(*usize, #cast(usize, frame) + offset)
+      owner.* = 0
+    }
     slot.top = frame.previous
     if slot.top == nil && slot.unwinding == 0 {
       atomic_store(&slot.tid, 0)
@@ -50,6 +118,14 @@ pub fn dyn_unwind_begin(message: *const u8, length: u64) {
   if slot == nil || slot.unwinding != 0 || slot.top == nil {
     return
   }
+  unwind_store_message(slot, message, length)
+  frame := slot.top
+  slot.top = frame.previous
+  jump(frame)
+}
+// Marks the slot as unwinding and keeps a copy of the message, which may live
+// in a frame the unwind discards.
+fn unwind_store_message(slot: *UnwindSlot, message: *const u8, length: u64) {
   slot.unwinding = 1
   truncated: []const u8 = " [truncated]"
   copied := length
@@ -79,21 +155,6 @@ pub fn dyn_unwind_begin(message: *const u8, length: u64) {
   }
   slot.message = &slot.storage[0]
   slot.length = total
-  frame := slot.top
-  slot.top = frame.previous
-  jump(frame)
-}
-pub fn dyn_unwind_continue() {
-  slot := unwind_slot(false)
-  if slot != nil && slot.top != nil {
-    frame := slot.top
-    slot.top = frame.previous
-    jump(frame)
-  }
-  if slot != nil {
-    panic_raw(slot.message, slot.length)
-  }
-  panic_raw(nil, 0)
 }
 
 fn check_name(kind: u64) []const u8 {

@@ -1,0 +1,213 @@
+[
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/points-stack",
+    "sha256": "0dac6b0b71d44eed21965677721ac4bb1d2eb2b4c6a32ec04e340feb2fc425da",
+    "output": "2094662128",
+    "changes": [
+      [
+        2144637,
+        "488945d0",
+        "90909090"
+      ],
+      [
+        2144645,
+        "488b45d0",
+        "90909090"
+      ],
+      [
+        2144641,
+        "488955d8",
+        "4989d290"
+      ],
+      [
+        2144705,
+        "488b45d8",
+        "4c89d090"
+      ]
+    ]
+  },
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/points-magic",
+    "sha256": "2f1e7575fd473a2a4cd16da57053baa6e0b609c5ecd0225ded76cfcb9e2ddbc6",
+    "output": "2094662128",
+    "changes": [
+      [
+        2144735,
+        "49bb35ce5a4ea2a23786",
+        "90909090909090909090"
+      ]
+    ]
+  },
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/points-stack-magic",
+    "sha256": "a48ca75e43853f4c0f7d426e3ae8cd727a638cb1f1ab9cb56d51ba6fb92d128a",
+    "output": "2094662128",
+    "changes": [
+      [
+        2144637,
+        "488945d0",
+        "90909090"
+      ],
+      [
+        2144645,
+        "488b45d0",
+        "90909090"
+      ],
+      [
+        2144641,
+        "488955d8",
+        "4989d290"
+      ],
+      [
+        2144705,
+        "488b45d8",
+        "4c89d090"
+      ],
+      [
+        2144735,
+        "49bb35ce5a4ea2a23786",
+        "90909090909090909090"
+      ]
+    ]
+  },
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/sieve-cmp",
+    "sha256": "41186337affcac86e685983cd1eba2500691182064e008bd5ecd172d0d6f0f0e",
+    "output": "5397815",
+    "changes": [
+      [
+        2144541,
+        "0fb63c024883ff01",
+        "803c020190909090"
+      ]
+    ]
+  },
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/sieve-phi",
+    "sha256": "4d02f829b499787018f63c14a04205c89bb11b98b96130aa37b16c6a07496c8e",
+    "output": "5397815",
+    "changes": [
+      [
+        2144551,
+        "4889cf",
+        "909090"
+      ],
+      [
+        2144556,
+        "4889cf",
+        "909090"
+      ],
+      [
+        2144559,
+        "4883c701",
+        "4883c101"
+      ],
+      [
+        2144606,
+        "4889f9",
+        "909090"
+      ]
+    ]
+  },
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/sieve-fill",
+    "sha256": "a81f4921d3b9e293ac5ea604ec7eb1f574ed434e5c5e39e7af1cbf69c94e6193",
+    "output": "5397815",
+    "changes": [
+      [
+        2144493,
+        "b801000000",
+        "b801010101"
+      ],
+      [
+        2144498,
+        "b900127a00",
+        "b980841e00"
+      ],
+      [
+        2144503,
+        "fcf3aa",
+        "f3ab90"
+      ]
+    ]
+  },
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/sieve-cmp-phi",
+    "sha256": "24316a32e5905eb16128edd37623a226ea9e6d804dae961b65aa78978f4adc50",
+    "output": "5397815",
+    "changes": [
+      [
+        2144541,
+        "0fb63c024883ff01",
+        "803c020190909090"
+      ],
+      [
+        2144551,
+        "4889cf",
+        "909090"
+      ],
+      [
+        2144556,
+        "4889cf",
+        "909090"
+      ],
+      [
+        2144559,
+        "4883c701",
+        "4883c101"
+      ],
+      [
+        2144606,
+        "4889f9",
+        "909090"
+      ]
+    ]
+  },
+  {
+    "binary": "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/compute/sieve-all",
+    "sha256": "bd694500bc529e3b609ae37e37c87edc7eaebd7c361f9e6dc91c6728918a6e72",
+    "output": "5397815",
+    "changes": [
+      [
+        2144541,
+        "0fb63c024883ff01",
+        "803c020190909090"
+      ],
+      [
+        2144551,
+        "4889cf",
+        "909090"
+      ],
+      [
+        2144556,
+        "4889cf",
+        "909090"
+      ],
+      [
+        2144559,
+        "4883c701",
+        "4883c101"
+      ],
+      [
+        2144606,
+        "4889f9",
+        "909090"
+      ],
+      [
+        2144493,
+        "b801000000",
+        "b801010101"
+      ],
+      [
+        2144498,
+        "b900127a00",
+        "b980841e00"
+      ],
+      [
+        2144503,
+        "fcf3aa",
+        "f3ab90"
+      ]
+    ]
+  }
+]

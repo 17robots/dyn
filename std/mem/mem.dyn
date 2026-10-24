@@ -177,6 +177,23 @@ fn arena_failure(arena: *Arena, error: ErrorKind) Allocation {
   return Allocation{error: error}
 }
 
+// Zero only payload bytes: align with scalar stores, then use bounded machine words.
+fn zero_bytes_fast(items: []u8) {
+  i: usize = 0
+  for i < #len(items) && (#cast(usize, &items[i]) & (#sizeof(usize) - 1)) != 0 {
+    items[i] = 0
+    i += 1
+  }
+  for #len(items) - i >= #sizeof(usize) {
+    (#cast(*usize, &items[i])).* = 0
+    i += #sizeof(usize)
+  }
+  for i < #len(items) {
+    items[i] = 0
+    i += 1
+  }
+}
+
 fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory: bool) Allocation {
   if !valid_alignment(alignment) {
     return arena_failure(arena, ErrorKind.InvalidAlignment)
@@ -227,7 +244,7 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
   }
   arena_event(arena, observe.Kind.Allocated, size)
   if zero_memory {
-    zero(memory[..size])
+    zero_bytes_fast(memory[..size])
   }
   return Allocation{ memory: memory, size: size, ok: true }
 }
@@ -252,7 +269,7 @@ pub fn arena_try_extend(arena: *Arena, memory: *u8, size: usize, extra: usize) b
   if arena.owns_memory && end > arena.committed {
     arena_commit(arena, end)
   }
-  zero(arena.data[arena.offset..end])
+  zero_bytes_fast(arena.data[arena.offset..end])
   arena.offset = end
   if arena.offset > arena.peak_used {
     arena.peak_used = arena.offset
@@ -306,7 +323,11 @@ pub fn push_array($T: type, arena: *Arena, count: usize) []T {
     empty: []T
     return empty
   }
-  return (#cast(*T, arena_push_array(arena, count, #sizeof(T), #alignof(T))))[..count]
+  size := size_for(count, #sizeof(T))
+  if !size.ok {
+    #panic("arena size overflow")
+  }
+  return (#cast(*T, arena_push(arena, size.bytes, #alignof(T))))[..count]
 }
 
 // Pushes one zeroed T, or returns nil when the arena is exhausted. Never panics

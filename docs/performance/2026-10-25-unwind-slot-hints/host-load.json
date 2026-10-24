@@ -1,0 +1,12 @@
+{
+  "observed_utc": "2026-10-25 04:29:52",
+  "phase": "immediately after final allocation timing window",
+  "load_average": [
+    11.01,
+    4.95,
+    2.78
+  ],
+  "cpu2_governor": "powersave",
+  "cpu2_frequency_khz": 5464862,
+  "observation": "unrelated browser renderers showed substantial CPU utilization; no user process was stopped or modified"
+}

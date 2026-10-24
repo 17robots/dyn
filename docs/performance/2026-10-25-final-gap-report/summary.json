@@ -1,0 +1,191 @@
+{
+  "compiler_sha256": "d604d7718621fc23b4f0459747c9ada4bcc3728eb3828063e39d8d2eae3246b4",
+  "extended": {
+    "sort": {
+      "c": 138.487139,
+      "rust": 15.982603,
+      "go": 88.28717,
+      "dyn": 83.606499,
+      "dyn_before": 123.777098
+    },
+    "map": {
+      "c": 35.452067,
+      "rust": 34.334217,
+      "go": 37.263634,
+      "dyn": 42.659162,
+      "dyn_before": 42.557861
+    },
+    "utf8": {
+      "c": 31.460042,
+      "rust": 44.092355,
+      "go": 53.71632,
+      "dyn": 55.539657,
+      "dyn_before": 55.102113
+    },
+    "allocate": {
+      "c": 23.613131,
+      "rust": 41.34713,
+      "go": 32.929184,
+      "dyn": 27.464526,
+      "dyn_before": 27.422115
+    }
+  },
+  "compute": {
+    "points": {
+      "dyn": 12.23953,
+      "c-O2": 9.846619,
+      "c-O3": 20.809256,
+      "go": 13.863584
+    },
+    "sieve": {
+      "dyn": 121.527107,
+      "c-O2": 110.938433,
+      "c-O3": 111.004104,
+      "go": 135.452052
+    },
+    "fib": {
+      "dyn": 23.917284,
+      "c-O2": 65.828469,
+      "c-O3": 55.481126,
+      "go": 277.937906
+    },
+    "hash": {
+      "dyn": 77.208971,
+      "c-O2": 77.17125,
+      "c-O3": 77.1406,
+      "go": 77.716066
+    },
+    "matmul": {
+      "dyn": 51.603131,
+      "c-O2": 58.729275,
+      "c-O3": 58.705275,
+      "go": 109.042035
+    }
+  },
+  "sort": {
+    "random": {
+      "heap": 124.940698,
+      "intro": 83.678888,
+      "c_qsort": 138.986334,
+      "c_same": 75.186353,
+      "rust": 17.467766
+    },
+    "sorted": {
+      "heap": 74.390335,
+      "intro": 3.31841,
+      "c_qsort": 26.620568,
+      "c_same": 2.702145,
+      "rust": 2.699944
+    },
+    "reverse": {
+      "heap": 77.994018,
+      "intro": 3.750273,
+      "c_qsort": 28.113792,
+      "c_same": 3.156458,
+      "rust": 2.754134
+    },
+    "equal": {
+      "heap": 4.831893,
+      "intro": 3.41429,
+      "c_qsort": 24.683111,
+      "c_same": 2.839235,
+      "rust": 2.734255
+    },
+    "duplicates": {
+      "heap": 94.482146,
+      "intro": 23.591271,
+      "c_qsort": 83.364016,
+      "c_same": 22.098798,
+      "rust": 6.993313
+    }
+  },
+  "cli": {
+    "report": {
+      "dyn": {
+        "seconds": 0.041087,
+        "rss_mib": 18.0
+      },
+      "gcc": {
+        "seconds": 0.012315,
+        "rss_mib": 15.4
+      },
+      "clang": {
+        "seconds": 0.012854,
+        "rss_mib": 15.6
+      },
+      "rust": {
+        "seconds": 0.041493,
+        "rss_mib": 15.1
+      },
+      "go": {
+        "seconds": 0.186708,
+        "rss_mib": 48.9
+      },
+      "node": {
+        "seconds": 0.071508,
+        "rss_mib": 98.5
+      },
+      "python": {
+        "seconds": 0.236517,
+        "rss_mib": 47.7
+      }
+    },
+    "search": {
+      "dyn": {
+        "seconds": 0.009985,
+        "rss_mib": 8.1
+      },
+      "gcc": {
+        "seconds": 0.032462,
+        "rss_mib": 2.3
+      },
+      "clang": {
+        "seconds": 0.031696,
+        "rss_mib": 2.2
+      },
+      "rust": {
+        "seconds": 0.045453,
+        "rss_mib": 2.2
+      },
+      "go": {
+        "seconds": 0.013188,
+        "rss_mib": 13.8
+      },
+      "node": {
+        "seconds": 0.069578,
+        "rss_mib": 67.3
+      },
+      "python": {
+        "seconds": 0.079913,
+        "rss_mib": 19.1
+      }
+    }
+  },
+  "http": {
+    "dyn": {
+      "four_requests_per_second": 11319.871771100592,
+      "single_median_seconds": 0.00011104100849479437,
+      "four_p95_seconds": 0.000865388021338731,
+      "peak_rss_kib": 18456
+    },
+    "go": {
+      "four_requests_per_second": 5228.983915669097,
+      "single_median_seconds": 0.0002182920288760215,
+      "four_p95_seconds": 0.0010947400005534291,
+      "peak_rss_kib": 17404
+    },
+    "node": {
+      "four_requests_per_second": 7461.56380841939,
+      "single_median_seconds": 0.00013971596490591764,
+      "four_p95_seconds": 0.0012581020127981901,
+      "peak_rss_kib": 72228
+    },
+    "python": {
+      "four_requests_per_second": 4596.4145734891035,
+      "single_median_seconds": 0.0002260369947180152,
+      "four_p95_seconds": 0.001363841991405934,
+      "peak_rss_kib": 21572
+    }
+  },
+  "qualification_gates": 13
+}

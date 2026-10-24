@@ -1,0 +1,16 @@
+{
+  "normal_record_body_bytes_identical": true,
+  "normal_body_size": 207,
+  "sha256": "c6ee43fab3296760bf0e7373b9b22c6f23613dc768fbc02db44dea33692f5e77",
+  "before_function_address": "0x21f00",
+  "final_function_address": "0x21f80",
+  "before_hot_loop": [
+    "0x21f65",
+    "0x21faa"
+  ],
+  "final_hot_loop": [
+    "0x21fe5",
+    "0x2202a"
+  ],
+  "hypothesis": "layout/front-end sensitivity; page crossing is a hypothesis, not causally isolated"
+}

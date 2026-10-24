@@ -162,6 +162,12 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     return ReadAllResult{ error: opened.error, kind: opened.kind }
   }
   mark := memory.arena_mark(arena)
+  if maximum != 0 && #len(arena.data) == 0 && arena.offset == 0 && !arena.fixed_buffer {
+    // Acquire lazy backing before consulting remaining capacity. Empty fixed
+    // buffers remain bounded; a zero maximum needs only the EOF probe below.
+    _ = memory.arena_push_uninit(arena, 1, 1)
+    memory.arena_rewind(arena, mark)
+  }
   total: usize = 0
   error: isize = 0
   kind := errors.Kind.None
@@ -170,8 +176,8 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     if capacity > memory.arena_remaining(arena) {
       capacity = memory.arena_remaining(arena)
     }
-    if capacity > 4096 {
-      capacity = 4096
+    if capacity > 65536 {
+      capacity = 65536
     }
     if capacity == 0 {
       probe: [1]u8 = []

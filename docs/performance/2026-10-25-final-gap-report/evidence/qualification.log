@@ -1,0 +1,40 @@
+GATE ssa-subtraction-range EXIT 0 SECONDS 0.56
+PASS subtraction range x86_64-linux ssa: 12 cases
+PASS subtraction range x86_64-linux tree: 12 cases
+PASS subtraction range aarch64-linux ssa: 12 cases
+PASS subtraction range aarch64-linux tree: 12 cases
+PASS subtraction range riscv64-linux ssa: 12 cases
+PASS subtraction range riscv64-linux tree: 12 cases
+ 
+GATE ssa-loop-bounds EXIT 0 SECONDS 0.08
+PASS exact loop bounds ssa: 6 cases
+PASS exact loop bounds tree: 6 cases
+ 
+GATE ssa-cleanup-proofs EXIT 0 SECONDS 0.19
+PASS cleanup proofs ssa: 6 exact cleanup/value cases
+PASS cleanup proofs tree: 6 exact cleanup/value cases
+PASS cleanup proofs: all four paired targets pass constructed/live SSA preflight
+ 
+GATE ssa-store-forward EXIT 0 SECONDS 0.07
+PASS exact store forwarding: globals, aliases, calls, copies, widths, raw float bits, guards and evaluate once
+ 
+GATE aggregate-literal-return EXIT 0 SECONDS 0.15
+built /tmp/dyn-aggregate-literal-dokdy74v/ssa
+built /tmp/dyn-aggregate-literal-dokdy74v/tree
+built /tmp/dyn-aggregate-literal-dokdy74v/panic-ssa
+built /tmp/dyn-aggregate-literal-dokdy74v/panic-tree
+built /tmp/dyn-aggregate-literal-dokdy74v/panic-ssa
+built /tmp/dyn-aggregate-literal-dokdy74v/panic-tree
+built /tmp/dyn-aggregate-literal-dokdy74v/panic-ssa
+built /tmp/dyn-aggregate-literal-dokdy74v/panic-tree
+PASS aggregate literal returns: C bytes, overlap, effects, defaults, defers, ABI fallbacks and emitted stores
+ 
+GATE native-optimization EXIT 0 SECONDS 0.12
+PASS independent optimization levels, effect ordering, aliases, inlining, deferred cleanup and checked overflow
+ 
+GATE ssa EXIT 2 SECONDS 0.01
+ /usr/bin/python3: can't open file '/home/mdray/17robots/dyn/compiler/tests/ssa.py': [Errno 2] No such file or directory
+
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+AssertionError: ssa

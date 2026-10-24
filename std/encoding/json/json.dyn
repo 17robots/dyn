@@ -424,44 +424,68 @@ fn failed_string(cursor: *Cursor) []const u8 {
 }
 
 fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
-  if cursor.at >= #len(cursor.source) || cursor.source[cursor.at] != '"' {
+  source := cursor.source
+  if cursor.at >= #len(source) || source[cursor.at] != '"' {
     return failed_string(cursor)
   }
   cursor.at += 1
   start := cursor.at
   end := start
-  for end < #len(cursor.source) && cursor.source[end] != '"' {
-    if cursor.source[end] == '\\' {
-      end += 1
+  has_escape: bool = false
+  ascii: bool = true
+  for end < #len(source) {
+    byte := source[end]
+    if byte == '"' {
+      break
     }
-    if end >= #len(cursor.source) || cursor.source[end] < 32 {
+    if byte >= 128 {
+      ascii = false
+    }
+    if byte == '\\' {
+      has_escape = true
+      end += 1
+      if end >= #len(source) {
+        return failed_string(cursor)
+      }
+      byte = source[end]
+      if byte >= 128 {
+        ascii = false
+      }
+    }
+    if byte < 32 {
       return failed_string(cursor)
     }
     end += 1
   }
-  if end >= #len(cursor.source) {
+
+  if end >= #len(source) {
     return failed_string(cursor)
   }
-  if !utf8.valid(cursor.source[start..end]) {
+  if !ascii && !utf8.valid(source[start..end]) {
     return failed_string(cursor)
   }
   if end == start {
     cursor.at = end + 1
-    return cursor.source[start..end]
+    return source[start..end]
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, end - start, 1)
   output := allocation[..end - start]
+  if !has_escape {
+    _ = memory.copy(output, source[start..end])
+    cursor.at = end + 1
+    return output
+  }
   source_at := start
   output_at: usize = 0
   for source_at < end {
-    byte := cursor.source[source_at]
+    byte := source[source_at]
     source_at += 1
     if byte == '\\' {
       if source_at >= end {
         return failed_string(cursor)
       }
-      escaped := cursor.source[source_at]
+      escaped := source[source_at]
       source_at += 1
       if escaped == '"' || escaped == '\\' || escaped == '/' {
         byte = escaped
@@ -487,7 +511,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
         }
         code: usize = 0
         for digits in 0..4 {
-          part := hex_value(cursor.source[source_at])
+          part := hex_value(source[source_at])
           if part == 16 {
             return failed_string(cursor)
           }
@@ -495,13 +519,13 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
           source_at += 1
         }
         if code >= 55296 && code <= 56319 {
-          if source_at + 6 > end || cursor.source[source_at] != '\\' || cursor.source[source_at + 1] != 'u' {
+          if source_at + 6 > end || source[source_at] != '\\' || source[source_at + 1] != 'u' {
             return failed_string(cursor)
           }
           source_at += 2
           low: usize = 0
           for low_digits in 0..4 {
-            low_part := hex_value(cursor.source[source_at])
+            low_part := hex_value(source[source_at])
             if low_part == 16 {
               return failed_string(cursor)
             }

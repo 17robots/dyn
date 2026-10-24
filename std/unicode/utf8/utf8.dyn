@@ -51,6 +51,11 @@ pub fn decode(text: []const u8, offset: usize) Decode {
 pub fn valid(text: []const u8) bool {
   offset: usize = 0
   for offset < #len(text) {
+    // ASCII bytes are complete code points; avoid constructing Decode for each.
+    if text[offset] < 128 {
+      offset += 1
+      continue
+    }
     decoded := decode(text, offset)
     if !decoded.ok {
       return false

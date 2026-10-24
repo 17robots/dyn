@@ -1,0 +1,8 @@
+{
+  "checks": 5490,
+  "libraries": [
+    "dyn",
+    "gcc-checked",
+    "clang-checked"
+  ]
+}

@@ -1,0 +1,44 @@
+from pathlib import Path
+import hashlib,importlib.util,json,os,random,statistics,subprocess,time
+W=Path(__file__).resolve().parent;ROOT=W.parents[1];spec=importlib.util.spec_from_file_location('ext',ROOT/'tools/bench/extended.py');ext=importlib.util.module_from_spec(spec);spec.loader.exec_module(ext)
+def digest(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+allowed=os.sched_getaffinity(0);cpu=2 if 2 in allowed else min(allowed);os.sched_setaffinity(0,{cpu});env=dict(os.environ,GOMAXPROCS='1');env.pop('DYN_NO_SSA',None);rng=random.Random(20261025)
+manifest=json.loads((W/'extended/manifest.json').read_text());compiler_hash=digest(ROOT/'build/dyn-release')
+report={'schema':1,'affinity':[cpu],'samples':25,'warmups':3,'compiler_sha256':compiler_hash,'source_sha256':{str(p.relative_to(ROOT)):digest(p) for p in [ROOT/'src/backend/ssa.inc',ROOT/'std/sort/sort.dyn']},'sections':{},'limits':['shared desktop host; pinning does not remove OS/frequency noise','whole-process timing; no universal language ranking','binary patches and unchecked compiler are diagnostic only']}
+def measure(section,name,ports,expected):
+ samples={label:[] for label in ports};orders=[];hashes={label:digest(command[0]) for label,command in ports.items()}
+ for i in range(28):
+  order=list(ports);rng.shuffle(order);orders.append(order)
+  for label in order:
+   start=time.perf_counter_ns();p=subprocess.run(list(map(str,ports[label])),capture_output=True,text=True,timeout=30,env=env);elapsed=(time.perf_counter_ns()-start)/1e6
+   assert p.returncode==0 and p.stdout==expected and not p.stderr,(section,name,label,p.returncode,p.stdout,p.stderr,expected)
+   if i>=3:samples[label].append(elapsed)
+ assert hashes=={label:digest(command[0]) for label,command in ports.items()}
+ result={'expected':expected,'commands':{k:list(map(str,v))for k,v in ports.items()},'sha256':hashes,'milliseconds':samples,'median_ms':{k:statistics.median(v) for k,v in samples.items()},'order':orders}
+ report['sections'].setdefault(section,{})[name]=result;(W/'measurements.json').write_text(json.dumps(report,indent=2)+'\n');print(section,name,{k:round(v,3)for k,v in result['median_ms'].items()},flush=True)
+for kind,case in manifest['cases'].items():
+ n=case['n'];rounds=case['rounds']*8;seed=case['seed'];expected=ext.oracle(kind,n,rounds,seed)
+ ports={k:[W/'extended'/manifest['languages'][k]['binary'],kind,n,rounds,seed]for k in ('dyn','c','rust','go')};ports['dyn_before']=[ROOT/'build/check-cost-20261025/checked-bin',kind,n,rounds,seed]
+ measure('extended',kind,ports,expected)
+for kind in ('map','utf8','allocate'):
+ case=manifest['cases'][kind];n=case['n'];rounds=case['rounds']*8;seed=case['seed'];expected=ext.oracle(kind,n,rounds,seed)
+ ports={k:[W/'checks'/(k+'-bin'),kind,n,rounds,seed]for k in ('checked','bounds','overflow','all')};measure('check_families',kind,ports,expected)
+expected=ext.oracle('utf8',262144,128,912345)
+measure('decoder','shared_driver',{k:[W/'utf8'/k,262144,128,912345]for k in ('checked-loop','fixed-loop','nocheck-loop','checked-unroll','nocheck-unroll','checked-guardunroll','checked-offsetunroll','c','c-no-unroll')},expected)
+compute=json.loads((W/'compute/probes.json').read_text());prior=ROOT/'build/check-cost-20261025/kernels'
+for name,output in [('points','2094662128\n'),('sieve','5397815\n')]:
+ ports={k:[prior/name/k] for k in ('checked','c','c-O2','suppression_probe')}
+ for probe in compute:
+  path=Path(probe['binary'])
+  if path.name.startswith(name+'-'):assert digest(path)==probe['sha256'];ports[path.name]=[path]
+ if name=='points':ports['c-no-interchange']=[W/'compute/points-c-O3-no-interchange']
+ measure('compute',name,ports,output)
+for pattern,name in enumerate(('random','sorted','reverse','equal','duplicates')):
+ n=32768;rounds=64;seed=912345;total=0
+ for r in range(rounds):
+  x=(seed+r)&0xffffffff;values=[]
+  for i in range(n):
+   x=(x*1664525+1013904223)&0xffffffff;values.append(x if pattern==0 else i if pattern==1 else n-i if pattern==2 else 7 if pattern==3 else (x>>24)&15)
+  total+=sum(v*(i+1)for i,v in enumerate(sorted(values)))
+ ports={'heap':[W/'sort/heap/run',n,rounds,seed,pattern],'intro':[W/'sort/intro/run',n,rounds,seed,pattern],'c':[W/'sort/c-run',n,rounds,seed,pattern],'rust':[W/'sort/rust-run',n,rounds,seed,pattern]};measure('sort_distributions',name,ports,str(total&((1<<64)-1))+'\n')
+assert compiler_hash==digest(ROOT/'build/dyn-release');print('PASS all measurements and hashes',flush=True)

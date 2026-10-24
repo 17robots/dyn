@@ -1,0 +1,20 @@
+[
+  {
+    "record": 0,
+    "mutable_nodes": 14,
+    "compact_nodes_with_keys": 25,
+    "mutable_retained_bytes": 1184,
+    "compact_retained_bytes": 616,
+    "mutable_peak_bytes": 1184,
+    "compact_peak_bytes": 728
+  },
+  {
+    "record": 1,
+    "mutable_nodes": 14,
+    "compact_nodes_with_keys": 25,
+    "mutable_retained_bytes": 1184,
+    "compact_retained_bytes": 616,
+    "mutable_peak_bytes": 1184,
+    "compact_peak_bytes": 728
+  }
+]

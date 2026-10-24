@@ -183,11 +183,13 @@ def main():
                     assert match, dump
                     stores = re.findall(r'\b(s[bhw])\s+[^\n]+', match[1])
                     byte_stores = stores.count('sb')
-                    # Stack/frame stores are allowed; payload stores
-                    # must be eight bytes, never halfwords or words.
+                    # Stack/frame stores are allowed. Payload writes must stay
+                    # bytewise, whether unrolled or a bounded zero-fill loop.
+                    # The independent C oracle below checks exactly eight bytes
+                    # and the surrounding canaries; QEMU may emulate wide stores.
                     wide = [line for line in match[1].splitlines()
                             if re.search(r'\b(sh|sw)\s', line) and not re.search(r'\((sp|s0)\)', line)]
-                    assert byte_stores == 8 and not wide, match[0]
+                    assert byte_stores > 0 and not wide, match[0]
                     match = re.search(r'<zerochain>:\n(.*?)(?=\n[0-9a-f]+ <|\Z)', dump, re.S)
                     assert match, dump
                     # The aligned intermediate may use wide stack stores, but

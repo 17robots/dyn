@@ -1,0 +1,82 @@
+{
+  "parser": {
+    "paired_median_final_before": 0.9961848086812549,
+    "bootstrap95": [
+      0.9827557656973464,
+      1.0015837902050297
+    ],
+    "samples": 25
+  },
+  "scan": {
+    "paired_median_final_before": 0.8435551446420352,
+    "bootstrap95": [
+      0.8422002261926657,
+      0.8465236360868128
+    ],
+    "samples": 25
+  },
+  "integers": {
+    "paired_median_final_before": 1.0174275034029705,
+    "bootstrap95": [
+      0.9808332927016286,
+      1.0300287892199296
+    ],
+    "samples": 25
+  },
+  "records": {
+    "paired_median_final_before": 0.9200861347209917,
+    "bootstrap95": [
+      0.9098726055444534,
+      0.9361935316325278
+    ],
+    "samples": 25
+  },
+  "parse_lines": {
+    "paired_median_final_before": 0.9668339873091091,
+    "bootstrap95": [
+      0.9619709407136015,
+      0.9752683543867835
+    ],
+    "samples": 25
+  },
+  "records-isolated": {
+    "paired_median_final_before": 0.9990472296938769,
+    "bootstrap95": [
+      0.9901579269658553,
+      1.0093348974513279
+    ],
+    "samples": 41
+  },
+  "compact": {
+    "paired_median_final_before": 0.9805121696250667,
+    "bootstrap95": [
+      0.9742996940091588,
+      0.9838788967743266
+    ],
+    "samples": 25
+  },
+  "mutable": {
+    "paired_median_final_before": 0.9696416105096789,
+    "bootstrap95": [
+      0.965609230845719,
+      0.9721289208720855
+    ],
+    "samples": 25
+  },
+  "large-search": {
+    "paired_median_final_before": 1.0235889333154384,
+    "bootstrap95": [
+      1.004705878827113,
+      1.0517370401394077
+    ],
+    "samples": 41
+  },
+  "project-search": {
+    "paired_median_final_before": 0.9862863840540449,
+    "bootstrap95": [
+      0.9753844705690454,
+      0.997114903926282
+    ],
+    "samples": 41
+  }
+}

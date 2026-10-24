@@ -1,0 +1,16 @@
+PASS same-algorithm C: 1000 complete Python oracle cases
+FINAL GATE sort-algorithms 0 PASS sort algorithms debug: 756 Python oracle cases
+PASS sort algorithms release: 756 Python oracle cases
+PASS sort algorithms release-tree: 756 Python oracle cases
+PASS sort algorithms heap-depth0: 756 Python oracle cases
+PASS sort algorithms heap-depth1: 756 Python oracle cases
+PASS sort signed-zero permutation negative control debug
+PASS sort signed-zero permutation negative control release
+ 
+FINAL GATE performance-contracts 0 PASS search oracles, preallocation, statistics, native CPU/cache, remarks and sample PGO
+ 
+FINAL GATE stdlib-host 0 PASS portable stdlib: atomics, files, ownership, arguments, clocks and buffered lines
+ 
+FINAL GATE formatter 0 PASS dyn fmt indentation, idempotence and comments; 119 std/runtime/vendor modules formatted
+ 
+FROZEN final sources 730b508a3e2ea03e0053f7dc39e285e092d81c386f161b4f54c5305a105bc84d

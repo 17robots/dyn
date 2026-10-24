@@ -1,7 +1,133 @@
 #target(kernel: linux, arch: x86_64)
+// Linux x64 saves registers through byte 71 in a 128-byte context.
+fn unwind_owner_offset() usize {
+  return 72
+}
 fn thread_number() i64 {
   return 186
 }
 fn write_number() i64 {
   return 1
+}
+
+// Table-driven unwinding. Each object's dyn_unwind section holds a header
+// {magic, size, .text relative to this field, text size, function count,
+// landing count}, then per function {start, end, saved-register mask, five
+// offsets from rbp for rbx and r12-r15}, then landings {return offset, landing
+// offset}. Direct calls between Dyn functions record a landing instead of
+// registering a handler at run time; other calls still register one.
+struct UnwindState {
+  previous: *Unwind, rbx: u64, rbp: u64, r12: u64, r13: u64, r14: u64, r15: u64, rsp: u64, rip: u64
+}
+extern fn unwind_tables_start "dyn_unwind_tables_start"() usize
+extern fn unwind_tables_stop "dyn_unwind_tables_stop"() usize
+fn unwind_u32(at: usize) u32 {
+  return #cast(*const u32, at).*
+}
+fn unwind_u64(at: u64) u64 {
+  return #cast(*const u64, #cast(usize, at)).*
+}
+// The function record covering rip, or zero; landing gets the landing address
+// when rip is the return address of a recorded call.
+fn unwind_find(rip: u64, landing: *u64) usize {
+  at := unwind_tables_start()
+  stop := unwind_tables_stop()
+  for at + 24 <= stop {
+    size := #cast(usize, unwind_u32(at + 4))
+    if unwind_u32(at) != 0x55594e44 || size < 24 || size > stop - at {
+      return 0
+    }
+    relative := #cast(i64, #cast(i32, unwind_u32(at + 8)))
+    text := #wrap(#cast(u64, at + 8) + #cast(u64, relative))
+    if rip >= text && rip - text < #cast(u64, unwind_u32(at + 12)) {
+      offset := #cast(u32, rip - text)
+      functions := #cast(usize, unwind_u32(at + 16))
+      landings := #cast(usize, unwind_u32(at + 20))
+      found: usize = 0
+      for i in 0..functions {
+        record := at + 24 + 32 * i
+        if offset >= unwind_u32(record) && offset < unwind_u32(record + 4) {
+          found = record
+          break
+        }
+      }
+      if found != 0 {
+        pads := at + 24 + 32 * functions
+        for i in 0..landings {
+          if unwind_u32(pads + 8 * i) == offset {
+            landing.* = text + #cast(u64, unwind_u32(pads + 8 * i + 4))
+            break
+          }
+        }
+      }
+      return found
+    }
+    at += size
+  }
+  return 0
+}
+// Walks frames from state until a landing or a registered handler takes the
+// unwind. Returns when neither is found.
+fn unwind_walk(slot: *UnwindSlot, state: *UnwindState) {
+  for true {
+    top := slot.top
+    // A handler registered in this frame or a deeper one is the nearest.
+    if top != nil && #cast(u64, #cast(usize, top)) < state.rbp {
+      slot.top = top.previous
+      jump(top)
+    }
+    landing: u64 = 0
+    record := unwind_find(state.rip, &landing)
+    if record == 0 {
+      // A frame without a table: only a registered handler can continue.
+      if top != nil {
+        slot.top = top.previous
+        jump(top)
+      }
+      return
+    }
+    if landing != 0 {
+      state.rip = landing
+      jump(#cast(*Unwind, state))
+    }
+    frame := state.rbp
+    mask := unwind_u32(record + 8)
+    if (mask & 1) != 0 {
+      state.rbx = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 12))))))
+    }
+    if (mask & 2) != 0 {
+      state.r12 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 16))))))
+    }
+    if (mask & 4) != 0 {
+      state.r13 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 20))))))
+    }
+    if (mask & 8) != 0 {
+      state.r14 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 24))))))
+    }
+    if (mask & 16) != 0 {
+      state.r15 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 28))))))
+    }
+    state.rip = unwind_u64(frame + 8)
+    state.rsp = frame + 16
+    state.rbp = unwind_u64(frame)
+  }
+}
+// Called by dyn_panic with the registers of its caller. Returns when nothing
+// handles the unwind, and dyn_panic then reports the message and exits.
+pub fn dyn_unwind_begin_state(message: *const u8, length: u64, state: *UnwindState) {
+  slot := unwind_slot(true)
+  if slot == nil || slot.unwinding != 0 {
+    return
+  }
+  unwind_store_message(slot, message, length)
+  unwind_walk(slot, state)
+}
+// Called by dyn_unwind_continue with the registers of the cleanup's frame.
+pub fn dyn_unwind_resume(state: *UnwindState) {
+  slot := unwind_slot(false)
+  if slot != nil {
+    unwind_walk(slot, state)
+    panic_raw(slot.message, slot.length)
+  }
+  panic_raw(nil, 0)
 }

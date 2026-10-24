@@ -94,16 +94,19 @@ fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
   value: u64 = 0
   radix := #cast(u64, base)
   maximum: u64 = 18446744073709551615
+  quotient := maximum / radix
+  remainder := maximum % radix
   for byte in text {
     digit := digit_value(byte)
     if digit >= base {
       return false
     }
     wide := #cast(u64, digit)
-    if value > (maximum - wide) / radix {
+    if value > quotient || (value == quotient && wide > remainder) {
       return false
     }
-    value = value * radix + wide
+    // The quotient/remainder test proves this product and sum fit.
+    value = #wrap(value * radix + wide)
   }
   output.* = value
   return true

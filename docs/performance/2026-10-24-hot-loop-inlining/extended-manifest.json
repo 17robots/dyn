@@ -1,0 +1,158 @@
+{
+  "schema": 1,
+  "scope": {
+    "sort": "library comparison: Dyn heapsort, C qsort, Rust sort_unstable, Go slices.Sort; same u32 keys/checksum",
+    "map": "matched linear probing, multiplicative hash, 50% maximum occupancy; explicit arrays, no standard maps",
+    "utf8": "matched generated valid UTF-8 and explicit scalar decoder; no malformed-input claim",
+    "allocate": "allocator/library comparison: Dyn arena bulk release; C malloc/free; Rust Box; Go heap slices + GC; 64-byte retained blocks"
+  },
+  "host": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "machine": "x86_64",
+  "timing_scope": "whole process, including startup, input generation and shutdown; no CPU pinning by default",
+  "small": false,
+  "seed": 912345,
+  "languages": {
+    "dyn": {
+      "compiler": "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/dyn-final",
+      "version": "dyn 0.1.0-dev",
+      "invoked_tool_sha256": "4a8ce93949e0309b26944f523cc4f3c046e9e28433a9b2bef45763f589943bc3",
+      "actual_compiler": "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/dyn-final",
+      "compiler_sha256": "4a8ce93949e0309b26944f523cc4f3c046e9e28433a9b2bef45763f589943bc3",
+      "source": "dyn/main.dyn",
+      "source_sha256": "b68a8373cb9dceafdce89955ad106115d13b4558ad53869fade83ae5c958c17c",
+      "binary": "dyn-bin",
+      "binary_sha256": "b9a0804e345b56b1a630916830e23dcedb9fdf96b40ff42fba530474d8aa176f",
+      "bytes": 72248,
+      "build_command": [
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/dyn-final",
+        "build",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/dyn",
+        "--release",
+        "--opt-level",
+        "3",
+        "--no-cache",
+        "--quiet",
+        "--output",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/dyn-bin"
+      ]
+    },
+    "c": {
+      "compiler": "/usr/bin/cc",
+      "version": "cc (GCC) 16.2.1 20260810\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+      "invoked_tool_sha256": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
+      "actual_compiler": "/usr/bin/gcc",
+      "compiler_sha256": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
+      "source": "c/main.c",
+      "source_sha256": "50d22b7bba585b3b48996dcf7307474f9fe7e265cdd38a31e125440a6b8d3ebc",
+      "binary": "c-bin",
+      "binary_sha256": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea",
+      "bytes": 16408,
+      "build_command": [
+        "/usr/bin/cc",
+        "-O3",
+        "-std=c11",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/c/main.c",
+        "-o",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/c-bin"
+      ]
+    },
+    "rust": {
+      "compiler": "/home/mdray/.cargo/bin/rustc",
+      "version": "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "invoked_tool_sha256": "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+      "actual_compiler": "/home/mdray/.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin/rustc",
+      "compiler_sha256": "ef6d716e5d1c6c93def277c0afa037c21e7a74f7de3aed4ee0700646c3301b1d",
+      "source": "rust/main.rs",
+      "source_sha256": "d283ba83486b81ef5abd0c3e27c4ed97da00a9947b3e36eda4b312b6481bd147",
+      "binary": "rust-bin",
+      "binary_sha256": "0982ebee3b58bcdb70834d9843fb7a631041ff187be483821b87af5e1a8d2114",
+      "bytes": 3972200,
+      "build_command": [
+        "/home/mdray/.cargo/bin/rustc",
+        "-C",
+        "opt-level=3",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/rust/main.rs",
+        "-o",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/rust-bin"
+      ]
+    },
+    "go": {
+      "compiler": "/home/mdray/.local/share/mise/shims/go",
+      "version": "go version go1.27.3 linux/amd64",
+      "invoked_tool_sha256": "f206837aae1dbbf62977db87ace89cee8f0bfe540cd4378e13bd49d9111a179c",
+      "actual_compiler": "/home/mdray/.local/share/mise/installs/go/1.27.3/bin/go",
+      "compiler_sha256": "5f5eb6d0b2fb6aa0bb5d5f8c5f1c944e0de955c925f0111af92a9d8f79680b5b",
+      "source": "go/main.go",
+      "source_sha256": "20fbce81b9c1b0b00694d54507e70209477d15ccd54b46db887f19a291c00049",
+      "binary": "go-bin",
+      "binary_sha256": "a5508d6f506d59cbc3cf9d5098fc762d2099c262280071370b5c95e742dcbf98",
+      "bytes": 2381393,
+      "build_command": [
+        "/home/mdray/.local/share/mise/shims/go",
+        "build",
+        "-o",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/go-bin",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/go/main.go"
+      ]
+    },
+    "before": {
+      "compiler": "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/dyn-before",
+      "version": "dyn 0.1.0-dev",
+      "invoked_tool_sha256": "11d472944f13982100f2d1167c00adfeed956493e01dca5afd2c3bd8e9e1d224",
+      "actual_compiler": "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/dyn-before",
+      "compiler_sha256": "11d472944f13982100f2d1167c00adfeed956493e01dca5afd2c3bd8e9e1d224",
+      "source": "dyn/main.dyn",
+      "source_sha256": "b68a8373cb9dceafdce89955ad106115d13b4558ad53869fade83ae5c958c17c",
+      "binary": "before-bin",
+      "binary_sha256": "ad6bd2a3a12503bf7bb042238e4d6db10ad5b6d26299e148c10f4c1fcc1e8063",
+      "bytes": 71968,
+      "build_command": [
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/dyn-before",
+        "build",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/dyn",
+        "--release",
+        "--opt-level",
+        "3",
+        "--no-cache",
+        "--quiet",
+        "--output",
+        "/home/mdray/17robots/dyn/compiler/build/hot-inline-20261024/extended/dyn-bin"
+      ]
+    }
+  },
+  "cases": {
+    "sort": {
+      "n": 32768,
+      "rounds": 8,
+      "seed": 912345,
+      "expected": "12314311163229575318\n"
+    },
+    "map": {
+      "n": 65536,
+      "rounds": 8,
+      "seed": 912345,
+      "expected": "291803840574\n"
+    },
+    "utf8": {
+      "n": 262144,
+      "rounds": 16,
+      "seed": 912345,
+      "expected": "2343734968320\n"
+    },
+    "allocate": {
+      "n": 8192,
+      "rounds": 32,
+      "seed": 912345,
+      "expected": "1126618515374080\n"
+    }
+  },
+  "dyn_sdk_source_sha256": "3cae58b7909ee5cc933333d9f93ba10c070596d64443d0fc44c70e84aca0a1d1",
+  "limitations": [
+    "native host only; no general language ranking",
+    "sort and allocation algorithms/libraries differ",
+    "valid UTF-8 only; uniformly generated Unicode is mostly four-byte sequences; explicit decoder omits validation for all languages",
+    "allocation uses native zero initialization and different release/GC policies",
+    "runtime seed and size opaque to each compiler; no external input I/O timed",
+    "no memory/RSS measurement; operating-system scheduling and startup may dominate short cases"
+  ]
+}

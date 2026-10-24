@@ -1,0 +1,272 @@
+{
+  "n": 8192,
+  "rounds": 128,
+  "expected": "4503357962059776\n",
+  "warmups": 2,
+  "samples": 15,
+  "milliseconds": {
+    "dyn": [
+      138.335516,
+      135.660183,
+      139.01036,
+      137.488403,
+      140.451238,
+      138.81702,
+      139.868756,
+      137.142782,
+      136.87346,
+      139.359064,
+      135.779316,
+      135.836486,
+      136.872582,
+      138.522921,
+      136.630112
+    ],
+    "dyn-constant-tid-diagnostic": [
+      103.893793,
+      103.203799,
+      106.366006,
+      107.23814,
+      105.552102,
+      106.561537,
+      106.460707,
+      104.653738,
+      107.175412,
+      108.780409,
+      106.182286,
+      103.699935,
+      110.166807,
+      106.82184,
+      104.261957
+    ],
+    "dyn-direct-slot-diagnostic": [
+      21.665709,
+      21.70695,
+      21.766139,
+      21.602619,
+      21.75027,
+      21.641409,
+      21.80759,
+      21.73037,
+      21.717239,
+      21.7302,
+      21.755359,
+      21.651149,
+      21.69067,
+      21.7142,
+      21.839621
+    ],
+    "dyn-no-cleanup-diagnostic": [
+      13.749079,
+      13.671749,
+      13.75306,
+      13.87892,
+      13.701179,
+      13.85562,
+      13.705029,
+      13.635259,
+      13.8367,
+      13.578919,
+      13.512159,
+      13.513598,
+      13.775619,
+      13.535249,
+      13.77082
+    ],
+    "c-arena": [
+      3.426158,
+      3.462698,
+      3.385537,
+      3.418317,
+      3.431147,
+      3.429188,
+      3.448698,
+      3.500668,
+      3.306826,
+      3.450367,
+      3.412757,
+      3.462178,
+      3.439738,
+      3.481968,
+      3.300666
+    ],
+    "c-arena-same-cleanup-runtime": [
+      129.456181,
+      128.502597,
+      126.675778,
+      125.864804,
+      125.254002,
+      126.94759,
+      137.058601,
+      136.020257,
+      124.82234,
+      135.240544,
+      126.140627,
+      127.712135,
+      128.388359,
+      124.069377,
+      129.577926
+    ]
+  },
+  "order": [
+    [
+      "dyn",
+      "dyn-constant-tid-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic",
+      "c-arena",
+      "c-arena-same-cleanup-runtime"
+    ],
+    [
+      "dyn",
+      "c-arena-same-cleanup-runtime",
+      "c-arena",
+      "dyn-no-cleanup-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic"
+    ],
+    [
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic",
+      "c-arena",
+      "c-arena-same-cleanup-runtime",
+      "dyn",
+      "dyn-constant-tid-diagnostic"
+    ],
+    [
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic",
+      "dyn",
+      "c-arena-same-cleanup-runtime",
+      "c-arena",
+      "dyn-no-cleanup-diagnostic"
+    ],
+    [
+      "c-arena",
+      "c-arena-same-cleanup-runtime",
+      "dyn",
+      "dyn-constant-tid-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic"
+    ],
+    [
+      "c-arena",
+      "dyn-no-cleanup-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic",
+      "dyn",
+      "c-arena-same-cleanup-runtime"
+    ],
+    [
+      "dyn",
+      "dyn-constant-tid-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic",
+      "c-arena",
+      "c-arena-same-cleanup-runtime"
+    ],
+    [
+      "dyn",
+      "c-arena-same-cleanup-runtime",
+      "c-arena",
+      "dyn-no-cleanup-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic"
+    ],
+    [
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic",
+      "c-arena",
+      "c-arena-same-cleanup-runtime",
+      "dyn",
+      "dyn-constant-tid-diagnostic"
+    ],
+    [
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic",
+      "dyn",
+      "c-arena-same-cleanup-runtime",
+      "c-arena",
+      "dyn-no-cleanup-diagnostic"
+    ],
+    [
+      "c-arena",
+      "c-arena-same-cleanup-runtime",
+      "dyn",
+      "dyn-constant-tid-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic"
+    ],
+    [
+      "c-arena",
+      "dyn-no-cleanup-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic",
+      "dyn",
+      "c-arena-same-cleanup-runtime"
+    ],
+    [
+      "dyn",
+      "dyn-constant-tid-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic",
+      "c-arena",
+      "c-arena-same-cleanup-runtime"
+    ],
+    [
+      "dyn",
+      "c-arena-same-cleanup-runtime",
+      "c-arena",
+      "dyn-no-cleanup-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic"
+    ],
+    [
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic",
+      "c-arena",
+      "c-arena-same-cleanup-runtime",
+      "dyn",
+      "dyn-constant-tid-diagnostic"
+    ],
+    [
+      "dyn-direct-slot-diagnostic",
+      "dyn-constant-tid-diagnostic",
+      "dyn",
+      "c-arena-same-cleanup-runtime",
+      "c-arena",
+      "dyn-no-cleanup-diagnostic"
+    ],
+    [
+      "c-arena",
+      "c-arena-same-cleanup-runtime",
+      "dyn",
+      "dyn-constant-tid-diagnostic",
+      "dyn-direct-slot-diagnostic",
+      "dyn-no-cleanup-diagnostic"
+    ]
+  ],
+  "c_build": [
+    "cc",
+    "-O3",
+    "-std=c11",
+    "/home/mdray/17robots/dyn/compiler/build/allocation-isolation-20261025/matched.c",
+    "/home/mdray/17robots/dyn/compiler/build/dynrt_support.o",
+    "/home/mdray/17robots/dyn/compiler/build/dynrt_shared.o",
+    "-o",
+    "/home/mdray/17robots/dyn/compiler/build/allocation-isolation-20261025/matched-c"
+  ],
+  "binaries": {
+    "typed-bin": "b9a0804e345b56b1a630916830e23dcedb9fdf96b40ff42fba530474d8aa176f",
+    "constant-tid-bin": "267e447f3d9e6cecdde618f202faac03e74676cd6eda87570c322120105f70ff",
+    "direct-slot-bin": "9787088e58ba20c8c9e35ae5173f36448fda767b10672fc786d9ccc94c868edc",
+    "no-defer-bin": "74e5eb18e5d15961b2b633979e490563f34a0a21ddffe3db3bb99514e5d4347a",
+    "matched-c": "bedf8c3f1b4643ff65b8714633593eb71a89a9952e415100336d95ef922252e1"
+  },
+  "limits": [
+    "constant-tid and direct-slot are unsafe single-thread diagnostic binary patches, never product changes",
+    "no-cleanup loses panic cleanup; never proposed for production",
+    "C arena uses simpler metadata than std mem; same size/lifetime/zero initialization",
+    "C protected path uses actual unchanged Dyn set/link/unlink runtime"
+  ]
+}

@@ -1,4 +1,8 @@
 #target(kernel: linux, arch: aarch64)
+// This target retains thread lookup when unlinking an unwind frame.
+fn unwind_owner_offset() usize {
+  return 0
+}
 fn thread_number() i64 {
   return 178
 }
@@ -13,4 +17,17 @@ pub fn dyn_trace_pop() {
 }
 pub fn dyn_trace_dump() {
   trace_dump()
+}
+// Resumes unwinding after a frame's cleanup has run.
+pub fn dyn_unwind_continue() {
+  slot := unwind_slot(false)
+  if slot != nil && slot.top != nil {
+    frame := slot.top
+    slot.top = frame.previous
+    jump(frame)
+  }
+  if slot != nil {
+    panic_raw(slot.message, slot.length)
+  }
+  panic_raw(nil, 0)
 }

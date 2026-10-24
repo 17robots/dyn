@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "scope": "5 alternating paired two-round workflow samples; this-pass prebuild snapshot and rebuilt candidate use their own native libraries and embedded runtime; same current SDL interposer; Linux dummy display; wall input-update and RSS, not key-to-display latency",
+  "cpus": [
+    2,
+    3,
+    4,
+    5
+  ],
+  "binaries": {
+    "baseline": {
+      "sha256": "d64cd57f6fc49e0c840b71fe25d61e07e6fb136df627b9f35c672cb31e2f09f5",
+      "bytes": 1598272
+    },
+    "candidate": {
+      "sha256": "e9af2a9df7e6e2d56ba432bfe853cc1be64aef1c89b6b707dff351a9843ac656",
+      "bytes": 1598312
+    }
+  },
+  "native_libraries": {
+    "baseline": "7090ea6bbf43fffe9fa2611cc1ba03b7f3932f30e53d1ff18213e07059dbb5ab",
+    "candidate": "a34fff82232aefcda64793907f6f6c43200bcc201cd4b732b77101eaa380ba49"
+  },
+  "samples": [
+    {
+      "variant": "baseline",
+      "index": 0,
+      "baseline_RSS_KiB": 33152,
+      "final_RSS_KiB": 51832,
+      "growth_RSS_KiB": 18680,
+      "input_mean_ms": 1.735,
+      "input_max_ms": 2.16
+    },
+    {
+      "variant": "candidate",
+      "index": 0,
+      "baseline_RSS_KiB": 33196,
+      "final_RSS_KiB": 53000,
+      "growth_RSS_KiB": 19804,
+      "input_mean_ms": 1.685,
+      "input_max_ms": 2.042
+    },
+    {
+      "variant": "candidate",
+      "index": 1,
+      "baseline_RSS_KiB": 31208,
+      "final_RSS_KiB": 50948,
+      "growth_RSS_KiB": 19740,
+      "input_mean_ms": 1.776,
+      "input_max_ms": 2.431
+    },
+    {
+      "variant": "baseline",
+      "index": 1,
+      "baseline_RSS_KiB": 31168,
+      "final_RSS_KiB": 50716,
+      "growth_RSS_KiB": 19548,
+      "input_mean_ms": 1.767,
+      "input_max_ms": 2.134
+    },
+    {
+      "variant": "baseline",
+      "index": 2,
+      "baseline_RSS_KiB": 30612,
+      "final_RSS_KiB": 50136,
+      "growth_RSS_KiB": 19524,
+      "input_mean_ms": 1.755,
+      "input_max_ms": 2.812
+    },
+    {
+      "variant": "candidate",
+      "index": 2,
+      "baseline_RSS_KiB": 29200,
+      "final_RSS_KiB": 48944,
+      "growth_RSS_KiB": 19744,
+      "input_mean_ms": 1.774,
+      "input_max_ms": 2.276
+    },
+    {
+      "variant": "candidate",
+      "index": 3,
+      "baseline_RSS_KiB": 31140,
+      "final_RSS_KiB": 50956,
+      "growth_RSS_KiB": 19816,
+      "input_mean_ms": 1.824,
+      "input_max_ms": 2.083
+    },
+    {
+      "variant": "baseline",
+      "index": 3,
+      "baseline_RSS_KiB": 29280,
+      "final_RSS_KiB": 48840,
+      "growth_RSS_KiB": 19560,
+      "input_mean_ms": 1.729,
+      "input_max_ms": 2.072
+    },
+    {
+      "variant": "baseline",
+      "index": 4,
+      "baseline_RSS_KiB": 31172,
+      "final_RSS_KiB": 50724,
+      "growth_RSS_KiB": 19552,
+      "input_mean_ms": 1.763,
+      "input_max_ms": 2.396
+    },
+    {
+      "variant": "candidate",
+      "index": 4,
+      "baseline_RSS_KiB": 29212,
+      "final_RSS_KiB": 49016,
+      "growth_RSS_KiB": 19804,
+      "input_mean_ms": 1.649,
+      "input_max_ms": 2.144
+    }
+  ],
+  "interposer_sha256": "efbbeac859207ceeced27cb9e1789c0d86f1980d2588591763af4f0454ac1f74",
+  "medians": {
+    "baseline": {
+      "baseline_RSS_KiB": 31168,
+      "final_RSS_KiB": 50716,
+      "growth_RSS_KiB": 19548,
+      "input_mean_ms": 1.755,
+      "input_max_ms": 2.16
+    },
+    "candidate": {
+      "baseline_RSS_KiB": 31140,
+      "final_RSS_KiB": 50948,
+      "growth_RSS_KiB": 19804,
+      "input_mean_ms": 1.774,
+      "input_max_ms": 2.144
+    }
+  }
+}

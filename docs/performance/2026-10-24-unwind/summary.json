@@ -1,0 +1,52 @@
+{
+  "workloads": {
+    "jsonl": {
+      "before_ms": 59.2428220261354,
+      "current_ms": 55.84683601045981,
+      "c_ms": 13.318663986865431,
+      "reduction_percent": 5.732316421688055,
+      "paired_bootstrap_ratio_95pct": [
+        0.9366662889261225,
+        0.9466197314755198
+      ],
+      "current_over_c": 4.193125982120632
+    },
+    "large-search": {
+      "before_ms": 9.376784990308806,
+      "current_ms": 9.085953992325813,
+      "c_ms": 31.495629984419793,
+      "reduction_percent": 3.101606769095977,
+      "paired_bootstrap_ratio_95pct": [
+        0.9612087772315457,
+        0.9786305852988746
+      ],
+      "current_over_c": 0.28848300531916454
+    },
+    "project-search": {
+      "before_ms": 5.2635449974332005,
+      "current_ms": 5.177214014111087,
+      "c_ms": 4.3390509963501245,
+      "reduction_percent": 1.640168049560009,
+      "paired_bootstrap_ratio_95pct": [
+        0.9612252221509631,
+        0.9916213881945428
+      ],
+      "current_over_c": 1.1931673581310749
+    }
+  },
+  "compiler_qualification": {
+    "gates": 204,
+    "passed": 204,
+    "failed": 0,
+    "skip_lines": 0
+  },
+  "dna_qualification": {
+    "passed": 9,
+    "skips": 0,
+    "source_changes": []
+  },
+  "compiler_sha256": "6e31b45bc6081dcec705fff28da87d1bc5fb9f6228183a9dade2ae4ffdd362cf",
+  "runtime_sha256": "12229ab6a915e0c6c5c439f9c15aab01c99f6b675e89cbe9c46137380b73a8f6",
+  "candidate_sha256": "bc67dbcc9b3f231d9126f05b0c08493a47b2ee08997171ff7cb47eeafb57666a",
+  "source_hashes_still_match": true
+}

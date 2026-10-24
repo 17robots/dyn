@@ -1,0 +1,295 @@
+// Freestanding runtime compiled by Dyn's independent backend.
+// No std imports, allocations, defer, or tracing may be introduced here.
+struct Unwind { previous: *Unwind }
+struct UnwindSlot {
+  tid: u64, top: *Unwind, message: *const u8, length: u64, unwinding: u64,
+  storage: [4096]u8
+}
+unwind_slots: [64]UnwindSlot
+// A hint is one atomic word: the full eligible thread identity and slot index.
+// Collisions only discard hints. The owning thread is the only writer of a
+// hint with its identity, so a matching hint names its latest known slot.
+// Always validate/claim the slot atomically; never retain slot ownership here.
+// Large opaque identities use the complete search without truncation.
+unwind_hints: [64]u64
+fn unwind_remember(tid: u64, index: usize) {
+  if tid != 0 && tid >> 58 == 0 {
+    atomic_store(&unwind_hints[#cast(usize, tid & 63)], (tid << 6) | #cast(u64, index))
+  }
+}
+extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
+extern fn atomic_store "dyn_atomic_store_u64"(p: *u64, value: u64)
+extern fn atomic_claim "dyn_atomic_compare_exchange_u64"(p: *u64, expected: u64, desired: u64) bool
+extern fn jump "dyn_unwind_jump"(frame: *Unwind)
+extern fn panic_raw "dyn_panic"(message: *const u8, length: u64)
+
+fn unwind_slot(claim: bool) *UnwindSlot {
+  tid := thread_id()
+  if tid != 0 && tid >> 58 == 0 {
+    hint := atomic_load(&unwind_hints[#cast(usize, tid & 63)])
+    if hint >> 6 == tid {
+      candidate := &unwind_slots[#cast(usize, hint & 63)]
+      seen := atomic_load(&candidate.tid)
+      if seen == tid {
+        return candidate
+      }
+      if claim && seen == 0 && atomic_claim(&candidate.tid, 0, tid) {
+        return candidate
+      }
+    }
+  }
+  for true {
+    empty: *UnwindSlot = nil
+    empty_index: usize = 0
+    // Find an existing owner before claiming a vacancy. A lower slot may
+    // have become empty while this thread still owns a higher slot.
+    for i in 0..64 {
+      slot := &unwind_slots[i]
+      seen := atomic_load(&slot.tid)
+      if seen == tid {
+        unwind_remember(tid, i)
+        return slot
+      }
+      if seen == 0 && empty == nil {
+        empty = slot
+        empty_index = i
+      }
+    }
+    if !claim || empty == nil {
+      return nil
+    }
+    if atomic_claim(&empty.tid, 0, tid) {
+      unwind_remember(tid, empty_index)
+      return empty
+    }
+    // Another thread won the vacancy; repeat the ownership search.
+  }
+  return nil
+}
+pub fn dyn_unwind_link(frame: *Unwind) {
+  slot := unwind_slot(true)
+  if slot == nil {
+    message: []const u8 = "runtime unwind thread capacity exceeded"
+    panic_raw(&message[0], #cast(u64, #len(message)))
+    return
+  }
+  // A target may reserve a private word beyond its saved register bank.
+  // Only the thread that linked this activation may unlink it.
+  offset := unwind_owner_offset()
+  if offset != 0 {
+    owner := #cast(*usize, #cast(usize, frame) + offset)
+    owner.* = #cast(usize, slot)
+  }
+  frame.previous = slot.top
+  slot.top = frame
+}
+pub fn dyn_unwind_unlink(frame: *Unwind) {
+  slot: *UnwindSlot = nil
+  offset := unwind_owner_offset()
+  if offset != 0 {
+    owner := #cast(*usize, #cast(usize, frame) + offset)
+    slot = #cast(*UnwindSlot, owner.*)
+  }
+  else {
+    slot = unwind_slot(false)
+  }
+  if slot != nil && slot.top == frame {
+    if offset != 0 {
+      owner := #cast(*usize, #cast(usize, frame) + offset)
+      owner.* = 0
+    }
+    slot.top = frame.previous
+    if slot.top == nil && slot.unwinding == 0 {
+      atomic_store(&slot.tid, 0)
+    }
+  }
+}
+pub fn dyn_unwind_begin(message: *const u8, length: u64) {
+  slot := unwind_slot(true)
+  if slot == nil || slot.unwinding != 0 || slot.top == nil {
+    return
+  }
+  slot.unwinding = 1
+  truncated: []const u8 = " [truncated]"
+  copied := length
+  total := length
+  if message == nil {
+    copied = 0
+    total = 0
+  }
+  if copied > 4096 {
+    copied = 4096 - #cast(u64, #len(truncated))
+    bytes := message[..#cast(usize, total)]
+    for copied != 0 && (bytes[copied] & 0xc0) == 0x80 {
+      copied -= 1
+    }
+  }
+  if copied != 0 {
+    bytes := message[..#cast(usize, total)]
+    for i in 0..copied {
+      slot.storage[i] = bytes[i]
+    }
+  }
+  if copied < total {
+    for i in 0..#len(truncated) {
+      slot.storage[copied + #cast(u64, i)] = truncated[i]
+    }
+    total = copied + #cast(u64, #len(truncated))
+  }
+  slot.message = &slot.storage[0]
+  slot.length = total
+  frame := slot.top
+  slot.top = frame.previous
+  jump(frame)
+}
+pub fn dyn_unwind_continue() {
+  slot := unwind_slot(false)
+  if slot != nil && slot.top != nil {
+    frame := slot.top
+    slot.top = frame.previous
+    jump(frame)
+  }
+  if slot != nil {
+    panic_raw(slot.message, slot.length)
+  }
+  panic_raw(nil, 0)
+}
+
+fn check_name(kind: u64) []const u8 {
+  case kind {
+    0 => {
+      return "overflow.ok"
+    },
+    1 => {
+      return "divide.ok"
+    },
+    2 => {
+      return "division.overflow.ok"
+    },
+    3 => {
+      return "shift.count.ok"
+    },
+    4 => {
+      return "function.nonnull.ok"
+    },
+    5 => {
+      return "pointer.nonnull.ok"
+    },
+    6 => {
+      return "pointer.aligned.ok"
+    },
+    7 => {
+      return "index.ok"
+    },
+    8 => {
+      return "slice.order.ok"
+    },
+    9 => {
+      return "slice.bounds.ok"
+    },
+    10 => {
+      return "enum.cast.ok"
+    },
+    11 => {
+      return "enum.tag.ok"
+    },
+    _ => {
+      return "unknown"
+    },
+  }
+}
+fn append_bytes(buffer: []u8, at: u64, text: []const u8) u64 {
+  for i in 0..#len(text) {
+    buffer[at + #cast(u64, i)] = text[i]
+  }
+  return at + #cast(u64, #len(text))
+}
+// Failed runtime checks pass the function name and kind << 24 | name length
+// rather than a full message, so each function stores its name once. The
+// compiler caps names at 800 bytes, so the message always fits.
+pub fn dyn_check_failed(name: *const u8, packed: u64) {
+  length := packed & 0xffffff
+  storage: [1024]u8 = []
+  buffer := storage[..]
+  used := append_bytes(buffer, 0, "runtime check failed (")
+  used = append_bytes(buffer, used, check_name(packed >> 24))
+  used = append_bytes(buffer, used, ") in ")
+  if length != 0 && length <= 800 {
+    used = append_bytes(buffer, used, name[..#cast(usize, length)])
+  }
+  panic_raw(&storage[0], used)
+}
+
+// Exact binary scaling: each subtraction is exact, including subnormals.
+pub fn fmod(input: f64, divisor: f64) f64 {
+  sign := (#bitcast(u64, input)) & 0x8000000000000000
+  x := #bitcast(f64, ((#bitcast(u64, input)) & 0x7fffffffffffffff))
+  y := #bitcast(f64, ((#bitcast(u64, divisor)) & 0x7fffffffffffffff))
+  if x - x != 0.0 || y != y || y == 0.0 {
+    return (input * divisor) / (input * divisor)
+  }
+  scale := y
+  for scale <= x * 0.5 {
+    scale *= 2.0
+  }
+  for true {
+    if x >= scale {
+      x -= scale
+    }
+    if scale <= y {
+      break
+    }
+    scale *= 0.5
+  }
+  return #bitcast(f64, ((#bitcast(u64, x)) | sign))
+}
+pub fn fmodf(input: f32, divisor: f32) f32 {
+  sign := (#bitcast(u32, input)) & 0x80000000
+  x := #bitcast(f32, ((#bitcast(u32, input)) & 0x7fffffff))
+  y := #bitcast(f32, ((#bitcast(u32, divisor)) & 0x7fffffff))
+  if x - x != 0.0 || y != y || y == 0.0 {
+    return (input * divisor) / (input * divisor)
+  }
+  scale := y
+  for scale <= x * 0.5 {
+    scale *= 2.0
+  }
+  for true {
+    if x >= scale {
+      x -= scale
+    }
+    if scale <= y {
+      break
+    }
+    scale *= 0.5
+  }
+  return #bitcast(f32, ((#bitcast(u32, x)) | sign))
+}
+
+// Device register access for std/mmio. This object is compiled apart from the
+// program, so a call here is opaque: the optimizer can neither remove, merge
+// nor reorder the access across other calls.
+pub fn dyn_mmio_load_u8(address: usize) u8 {
+  return (#cast(*u8, address)).*
+}
+pub fn dyn_mmio_load_u16(address: usize) u16 {
+  return (#cast(*u16, address)).*
+}
+pub fn dyn_mmio_load_u32(address: usize) u32 {
+  return (#cast(*u32, address)).*
+}
+pub fn dyn_mmio_load_u64(address: usize) u64 {
+  return (#cast(*u64, address)).*
+}
+pub fn dyn_mmio_store_u8(address: usize, value: u8) {
+  (#cast(*u8, address)).* = value
+}
+pub fn dyn_mmio_store_u16(address: usize, value: u16) {
+  (#cast(*u16, address)).* = value
+}
+pub fn dyn_mmio_store_u32(address: usize, value: u32) {
+  (#cast(*u32, address)).* = value
+}
+pub fn dyn_mmio_store_u64(address: usize, value: u64) {
+  (#cast(*u64, address)).* = value
+}

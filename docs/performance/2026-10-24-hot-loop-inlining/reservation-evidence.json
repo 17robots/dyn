@@ -1,0 +1,15 @@
+{
+  "source_sha256": "525d300eb0f9a81b0ef0b72d0a5e32d4c23491c1a4b7dca389fd0abe803b0ed8",
+  "probe_sha256": "4a8ce93949e0309b26944f523cc4f3c046e9e28433a9b2bef45763f589943bc3",
+  "tests": [
+    "inlining-hot-budget",
+    "baseline emitted-call negative control",
+    "inlining-expressions",
+    "inlining-casts",
+    "inlining-budget",
+    "O2 byte-identical",
+    "O3 no-loop byte-identical",
+    "ASan/UBSan direct reservation/resource harness"
+  ],
+  "timings": "none"
+}

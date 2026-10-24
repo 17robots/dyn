@@ -1,0 +1,57 @@
+{
+  "scope": "Fixed JSONL application; experimental read-only DOM adapter; Linux x64 one host; no DNA migration or language-wide speed claim",
+  "median_ms": {
+    "current": 55.89642599807121,
+    "compact": 39.84400400076993,
+    "c": 13.300421996973455
+  },
+  "runtime_reduction_percent": 28.71815453434392,
+  "current_over_yyjson": 4.20260545197668,
+  "compact_over_yyjson": 2.9956947238092546,
+  "paired_bootstrap_ratio_95pct": [
+    0.7093347030218088,
+    0.715609211954817
+  ],
+  "qualification": {
+    "gates": 205,
+    "passed": 205,
+    "failed": 0,
+    "skip_lines": 0
+  },
+  "focused": {
+    "independent_trees_per_mode": 82,
+    "invalid_cases_per_mode": 379,
+    "embedded_guests": 8,
+    "random_acceptance_cases_per_mode": 1500,
+    "random_seed": 539365412
+  },
+  "source_hashes_unchanged_during_qualification": true,
+  "qualified_source_files": 666,
+  "mutable_json_sha256": "b3da58c7557c04b4ada4d4f784f0c3f89f886b2e2f05a8439bbedf9b28c3d815",
+  "reader_sha256": "0c8dca3feaf58487e8b8f56730ad454067cf87e899e3ee1220f476cdc4fe30db",
+  "compiler_sha256": "6e31b45bc6081dcec705fff28da87d1bc5fb9f6228183a9dade2ae4ffdd362cf",
+  "source": {
+    "canonical_app_sha256": "ddbf2c5388f42f5eaddd9f699350e21002d2c92dd7ef4d874776c40502d9390a",
+    "readonly_adapter_sha256": "bbbceb9b9ada39c0e164f7ceb3500d2acaa6632176e57b7153f4e35cba6ed573",
+    "c_app_sha256": "e21251e9106c574c6f9a8dd722fe6e16b998281c0c757d4fa75374c0cfcff2d1"
+  },
+  "input_sha256": "55632bc536a41285c2126eb1a0d684fc6778c303b95bdf380e9c3f8b509abfca",
+  "binaries": {
+    "current": "bc67dbcc9b3f231d9126f05b0c08493a47b2ee08997171ff7cb47eeafb57666a",
+    "compact": "fb9868c4ce0988f4c1802bb23ad59879ffe3f63bde4d60b92dcd00afe3b173e8",
+    "c": "37822eb0769e49a5a003998cf56228a4ae096a6ff6fb12ee0d480631af32e4e2"
+  },
+  "binary_bytes": {
+    "current": 184416,
+    "compact": 200544,
+    "c": 21544
+  },
+  "host": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "cpu_model": "AMD Ryzen 9 9950X 16-Core Processor",
+  "versions": {
+    "gcc": "gcc (GCC) 16.2.1 20260810",
+    "yyjson": "0.13.0"
+  },
+  "archived_application_verified": true,
+  "archived_binary_matches_timed_binary": true
+}

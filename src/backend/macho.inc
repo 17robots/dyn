@@ -105,16 +105,18 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   uint64_t address[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT], vm = 0;
   for (unsigned i = 0; i < section_count; ++i) {
     if (i == MACHO_DATA) continue;
-    vm = (vm + 7) & ~(uint64_t)7; address[i] = vm; vm += sizes[i];
+    uint64_t alignment = i == MACHO_TEXT && ctx->function_alignment ? ctx->function_alignment : i == MACHO_CONSTANTS ? 16 : 8;
+    vm = (vm + alignment - 1) & ~(alignment - 1); address[i] = vm; vm += sizes[i];
   }
-  vm = (vm + 7) & ~(uint64_t)7; address[MACHO_DATA] = vm; vm += sizes[MACHO_DATA];
+  vm = (vm + 15) & ~(uint64_t)15; address[MACHO_DATA] = vm; vm += sizes[MACHO_DATA];
   size_t commands = 72 + 80 * (size_t)section_count + 24 + 24 + 80;
   size_t cursor = 32 + commands, offsets[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT];
   size_t data_start = (cursor + 15) & ~(size_t)15;
   cursor = data_start;
   for (unsigned i = 0; i < section_count; ++i) {
     if (i == MACHO_DATA) { offsets[i] = 0; continue; }
-    cursor = (cursor + 7) & ~(size_t)7; offsets[i] = cursor; cursor += sizes[i];
+    size_t alignment = i == MACHO_TEXT && ctx->function_alignment ? ctx->function_alignment : i == MACHO_CONSTANTS ? 16 : 8;
+    cursor = (cursor + alignment - 1) & ~(alignment - 1); offsets[i] = cursor; cursor += sizes[i];
   }
   size_t data_end = cursor;
   const Elf64_Rela *relocations[3] = {ctx->relocations, ctx->constant_relocations, &initializer};
@@ -139,11 +141,17 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   put32(c, 0x19); put32(c + 4, (uint32_t)(72 + 80 * section_count)); /* LC_SEGMENT_64 */
   put64(c + 32, vm); put64(c + 40, data_start); put64(c + 48, data_end - data_start);
   put32(c + 56, 7); put32(c + 60, 7); put32(c + 64, section_count);
+  unsigned text_alignment = 2;
+  if (ctx->function_alignment) {
+    text_alignment = 0;
+    for (unsigned alignment = ctx->function_alignment; alignment > 1; alignment >>= 1) ++text_alignment;
+  }
   for (unsigned i = 0; i < section_count; ++i) {
     unsigned char *s = c + 72 + 80 * i;
     memcpy(s, section_names[i][0], strlen(section_names[i][0])); memcpy(s + 16, section_names[i][1], strlen(section_names[i][1]));
     put64(s + 32, address[i]); put64(s + 40, sizes[i]); put32(s + 48, (uint32_t)offsets[i]);
-    put32(s + 52, i == MACHO_TEXT ? 2 : i >= MACHO_DEBUG ? 0 : 3);
+    put32(s + 52, i == MACHO_TEXT ? text_alignment : i >= MACHO_DEBUG ? 0 :
+                         (i == MACHO_DATA || i == MACHO_CONSTANTS) ? 4 : 3);
     put32(s + 64, i == MACHO_TEXT ? 0x80000400u : i == MACHO_INIT ? 9u : i == MACHO_DATA ? 1u : i >= MACHO_DEBUG ? 0x02000000u : 0); /* instructions; debug */
     for (unsigned k = 0; k < 3; ++k) if (relocated[k] == i && entries[k]) { put32(s + 56, (uint32_t)relocation_at[k]); put32(s + 60, (uint32_t)entries[k]); }
     if (sizes[i] && i != MACHO_DATA) memcpy(data + offsets[i], contents[i], sizes[i]);

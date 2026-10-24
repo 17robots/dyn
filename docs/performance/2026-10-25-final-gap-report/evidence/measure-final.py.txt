@@ -1,0 +1,20 @@
+from pathlib import Path
+# Reuse timing/oracle machinery; preserve first-round results separately.
+p=Path(__file__).resolve().parent/'measure-all.py';s=p.read_text();prefix=s[:s.index("for kind,case in manifest['cases'].items():")].replace("W/'measurements.json'","W/'final-measurements.json'");exec(compile(prefix,str(p),'exec'))
+report['phase']='final retained monotone introsort + exact masked extension; checks probes are separately frozen diagnostic compilers'
+for kind,case in manifest['cases'].items():
+ n=case['n'];rounds=case['rounds']*8;seed=case['seed'];ports={k:[W/'extended'/manifest['languages'][k]['binary'],kind,n,rounds,seed]for k in ('c','rust','go')};ports['dyn']=[W/'extended/dyn-final',kind,n,rounds,seed];ports['dyn_before']=[ROOT/'build/check-cost-20261025/checked-bin',kind,n,rounds,seed];measure('extended',kind,ports,ext.oracle(kind,n,rounds,seed))
+for kind in ('map','utf8','allocate'):
+ case=manifest['cases'][kind];n=case['n'];rounds=case['rounds']*8;seed=case['seed'];measure('check_families',kind,{k:[W/'checks-final'/(k+'-bin'),kind,n,rounds,seed]for k in ('checked','bounds','overflow','pointers','all')},ext.oracle(kind,n,rounds,seed))
+measure('decoder','common_driver',{k:[W/'utf8'/k,262144,128,912345]for k in ('checked-loop','fixed-loop','nocheck-loop','checked-unroll','checked-offsetunroll','c-common','c-no-unroll-common')},ext.oracle('utf8',262144,128,912345))
+for name,expected in [('points','2094662128\n'),('sieve','5397815\n')]:
+ d=ROOT/'build/check-cost-20261025/kernels'/name;ports={'dyn':[W/'compute-final'/name],'c-O2':[d/'c-O2'],'c-O3':[d/'c'],'go':[d/'go']};measure('compute_final',name,ports,expected)
+for pattern,name in enumerate(('random','sorted','reverse','equal','duplicates')):
+ n=32768;rounds=64;seed=912345;total=0
+ for r in range(rounds):
+  x=(seed+r)&0xffffffff;values=[]
+  for i in range(n):
+   x=(x*1664525+1013904223)&0xffffffff;values.append(x if pattern==0 else i if pattern==1 else n-i if pattern==2 else 7 if pattern==3 else (x>>24)&15)
+  total+=sum(v*(i+1)for i,v in enumerate(sorted(values)))
+ ports={'heap':[W/'sort/heap/run',n,rounds,seed,pattern],'intro':[W/'sort/intro-final-run',n,rounds,seed,pattern],'c_qsort':[W/'sort/c-run',n,rounds,seed,pattern],'c_same':[W/'sort/c-same-run',n,rounds,seed,pattern],'rust':[W/'sort/rust-run',n,rounds,seed,pattern]};measure('sort_distributions',name,ports,str(total&((1<<64)-1))+'\n')
+assert compiler_hash==digest(ROOT/'build/dyn-release');print('PASS final measurements and compiler hashes',flush=True)

@@ -1,0 +1,355 @@
+use "std/bytes"
+use "std/strings"
+use "std/encoding/json"
+use "std/encoding/json/read" read_json
+use "std/fs"
+use "std/path"
+use "std/process"
+use "std/mem"
+use "std/fmt"
+use "std/io"
+use "std/net"
+use "std/net/http"
+use "std/net/http/concurrent"
+use "std/sync"
+use "std/time"
+
+const Maximum: u64 = 9007199254740991
+const Services: [16][]const u8 = ["svc00", "svc01", "svc02", "svc03", "svc04", "svc05", "svc06", "svc07", "svc08", "svc09", "svc10", "svc11", "svc12", "svc13", "svc14", "svc15"]
+struct Summary { totals: [4]u64, services: [16][4]u64 }
+struct Search { files: u64, bytes: u64, lines: u64, matching_lines: u64, matching_files: u64 }
+struct Number { value: u64, ok: bool }
+fn numeric(root: *const json.Value, key: []const u8) Number {
+  node := json.object_get(root, key)
+  if node.kind != json.KindNumber {
+    return Number{}
+  }
+  // Integer fields normally use the integer reader. Fraction/exponent spellings
+  // retain the same binary64 validation semantics as the other DOM ports.
+  if strings.valid(u64, node.text) {
+    integer := json.as(u64, node)
+    return Number{ value: integer, ok: integer <= Maximum }
+  }
+  value := json.as(f64, node)
+  if !(value >= 0.0 && value <= 9007199254740991.0) {
+    return Number{}
+  }
+  integer := #cast(u64, value)
+  return Number{ value: integer, ok: #cast(f64, integer) == value }
+}
+fn add_record(summary: *Summary, root: *const json.Value) bool {
+  if root.kind != json.KindObject {
+    return false
+  }
+  service := json.object_get(root, "service")
+  if service.kind != json.KindString {
+    return false
+  }
+  index: usize = 16
+  for i in 0..16 {
+    if strings.equal(service.text, Services[i]) {
+      index = i
+      break
+    }
+  }
+  if index == 16 {
+    return false
+  }
+  status := numeric(root, "status")
+  size := numeric(root, "bytes")
+  latency := numeric(root, "latency_us")
+  if !status.ok || status.value > 599 || !size.ok || !latency.ok {
+    return false
+  }
+  error: u64
+  if status.value >= 500 {
+    error = 1
+  }
+  row: [4]u64 = [1, size.value, latency.value, error]
+  for i in 0..4 {
+    summary.totals[i] += row[i]
+    summary.services[index][i] += row[i]
+    if summary.totals[i] > Maximum {
+      return false
+    }
+  }
+  return true
+}
+fn member(arena: *mem.Arena, root: *json.Value, key: []const u8, value: u64) {
+  if !json.add_member(root, key, json.make_number(arena, fmt.u64_decimal(arena, value))) {
+    #panic("JSON output")
+  }
+}
+fn encoded_summary(arena: *mem.Arena, summary: *const Summary) []u8 {
+  root := json.make_object(arena)
+  member(arena, root, "records", summary.totals[0])
+  member(arena, root, "bytes", summary.totals[1])
+  member(arena, root, "latency_us", summary.totals[2])
+  member(arena, root, "errors", summary.totals[3])
+  groups := json.make_array(arena)
+  for i in 0..16 {
+    row := json.make_array(arena)
+    for j in 0..4 {
+      if !json.add(row, json.make_number(arena, fmt.u64_decimal(arena, summary.services[i][j]))) {
+        #panic("JSON output")
+      }
+    }
+    if !json.add(groups, row) {
+      #panic("JSON output")
+    }
+  }
+  if !json.add_member(root, "services", groups) {
+    #panic("JSON output")
+  }
+  return json.encode(arena, root)
+}
+fn print_json(value: []const u8) {
+  if io.write_all(io.stdout(), value).status != io.Status.Complete || io.write_all(io.stdout(), "\n").status != io.Status.Complete {
+    #panic("stdout")
+  }
+}
+fn read_numeric(root: *const read_json.Value, key: []const u8) Number {
+  node := read_json.get(root, key)
+  if read_json.kind(node) != json.KindNumber {
+    return Number{}
+  }
+  value := read_json.as_f64(node)
+  if !(value >= 0.0 && value <= 9007199254740991.0) {
+    return Number{}
+  }
+  integer := #cast(u64, value)
+  return Number{ value: integer, ok: #cast(f64, integer) == value }
+}
+fn add_read_record(summary: *Summary, root: *const read_json.Value) bool {
+  if read_json.kind(root) != json.KindObject {
+    return false
+  }
+  service := read_json.get(root, "service")
+  if read_json.kind(service) != json.KindString {
+    return false
+  }
+  index: usize = 16
+  for i in 0..16 {
+    if strings.equal(read_json.as_text(service), Services[i]) {
+      index = i
+      break
+    }
+  }
+  if index == 16 {
+    return false
+  }
+  status := read_numeric(root, "status")
+  size := read_numeric(root, "bytes")
+  latency := read_numeric(root, "latency_us")
+  if !status.ok || status.value > 599 || !size.ok || !latency.ok {
+    return false
+  }
+  error: u64
+  if status.value >= 500 {
+    error = 1
+  }
+  row: [4]u64 = [1, size.value, latency.value, error]
+  for i in 0..4 {
+    summary.totals[i] += row[i]
+    summary.services[index][i] += row[i]
+    if summary.totals[i] > Maximum {
+      return false
+    }
+  }
+  return true
+}
+fn report(file: []const u8) {
+  input := mem.arena_create(mem.GiB)
+  defer mem.arena_release(&input)
+  read := fs.read_all(&input, file, 1024 * mem.MiB)
+  if !read.ok {
+    #panic("read report")
+  }
+  scratch: mem.Arena
+  defer mem.arena_release(&scratch)
+  summary: Summary
+  at: usize
+  for at < #len(read.value) {
+    rest := read.value[at..]
+    length := bytes.find_byte(rest, '\n')
+    if length != 0 {
+      parsed := read_json.parse(&scratch, rest[..length])
+      if !parsed.ok || !add_read_record(&summary, parsed.root) {
+        #panic("invalid record")
+      }
+      mem.arena_reset(&scratch)
+    }
+    at += length
+    if at < #len(read.value) {
+      at += 1
+    }
+  }
+  print_json(encoded_summary(&scratch, &summary))
+}
+fn search_walk(directory: []const u8, result: *Search) {
+  buffer: [32768]u8
+  opened := fs.open_directory(directory, buffer[..])
+  if !opened.ok {
+    #panic("open directory")
+  }
+  state := opened.value
+  defer _ = fs.close_directory(&state)
+  scratch: mem.Arena
+  defer mem.arena_release(&scratch)
+  for {
+    entry := fs.directory_next(&state)
+    if !entry.ok {
+      if entry.error != 0 {
+        #panic("read directory")
+      }
+      break
+    }
+    // Linux directory entry types: DT_DIR=4, DT_REG=8
+    // Symlinks are skipped.
+    if entry.kind == 0 {
+      #panic("filesystem does not report entry types")
+    }
+    if entry.kind != 4 && entry.kind != 8 {
+      continue
+    }
+    joined := path.join(&scratch, directory, entry.name)
+    if !joined.ok {
+      #panic("path join")
+    }
+    if entry.kind == 4 {
+      search_walk(joined.value, result)
+    }
+    else if strings.ends_with(entry.name, ".txt") {
+      read := fs.read_all(&scratch, joined.value, 1024 * mem.MiB)
+      if !read.ok {
+        #panic("read search")
+      }
+      result.files += 1
+      result.bytes += #cast(u64, #len(read.value))
+      at: usize
+      matching: bool
+      for at < #len(read.value) {
+        rest := read.value[at..]
+        length := bytes.find_byte(rest, '\n')
+        result.lines += 1
+        if bytes.contains(rest[..length], "ERROR") {
+          result.matching_lines += 1
+          matching = true
+        }
+        at += length
+        if at < #len(read.value) {
+          at += 1
+        }
+      }
+      if matching {
+        result.matching_files += 1
+      }
+    }
+    mem.arena_reset(&scratch)
+  }
+}
+fn search(directory: []const u8) {
+  result: Search
+  search_walk(directory, &result)
+  arena: mem.Arena
+  defer mem.arena_release(&arena)
+  root := json.make_object(&arena)
+  member(&arena, root, "files", result.files)
+  member(&arena, root, "bytes", result.bytes)
+  member(&arena, root, "lines", result.lines)
+  member(&arena, root, "matching_lines", result.matching_lines)
+  member(&arena, root, "matching_files", result.matching_files)
+  print_json(json.encode(&arena, root))
+}
+struct App { quit: sync.AtomicU32 }
+fn handle(response: *http.Response, request: *const http.Request) http.Result {
+  if strings.equal(request.method, "GET") && strings.equal(request.target, "/health") {
+    return http.respond(response, "ok\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+  }
+  if strings.equal(request.method, "POST") && strings.equal(request.target, "/quit") {
+    result := http.respond(response, "bye\n", http.ResponseOptions{ close_connection: true })
+    sync.store_u32(&#cast(*App, request.context).quit, 1)
+    return result
+  }
+  if !strings.equal(request.method, "POST") || !strings.equal(request.target, "/summarize") {
+    return http.respond(response, "not found\n", http.ResponseOptions{ status: 404, close_connection: true })
+  }
+  arena: mem.Arena
+  defer mem.arena_release(&arena)
+  if #len(request.body) > mem.MiB {
+    return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+  }
+  parsed := json.parse(&arena, request.body)
+  if !parsed.ok || parsed.root.kind != json.KindArray {
+    return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+  }
+  summary: Summary
+  child := parsed.root.first
+  for child != nil {
+    if !add_record(&summary, child) {
+      return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
+    }
+    child = child.next
+  }
+  return http.respond(response, encoded_summary(&arena, &summary), http.ResponseOptions{ content_type: "application/json", close_connection: true })
+}
+fn serve() {
+  arena: mem.Arena
+  defer mem.arena_release(&arena)
+  state := mem.push(App, &arena)
+  address := net.ipv4(127, 0, 0, 1, 0)
+  opened := net.tcp_listen_ipv4(&address, 128)
+  if !opened.ok {
+    #panic("listen")
+  }
+  listener := net.listener_take(&opened.value)
+  bound: net.Address
+  if !net.local_address(listener.descriptor, &bound).ok {
+    #panic("local address")
+  }
+  workers := mem.push_array(concurrent.Worker, &arena, 4)
+  receive := mem.push_array(u8, &arena, #cast(usize, 4) * (mem.MiB + 16384))
+  stacks := mem.push_array(u8, &arena, #cast(usize, 4) * 512 * mem.KiB)
+  started := concurrent.start_context(&arena, workers, &listener, receive, mem.MiB + 16384, stacks, 512 * mem.KiB, &handle, state)
+  if !started.ok {
+    #panic("workers")
+  }
+  port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
+  _ = io.write_all(io.stdout(), "port ")
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(&arena, port))
+  _ = io.write_all(io.stdout(), "\n")
+  for sync.load_u32(&state.quit) == 0 {
+    _ = time.sleep(time.Millisecond)
+  }
+  concurrent.stop(workers)
+  joined := concurrent.join(workers)
+  _ = net.listener_close(&listener)
+  if !joined.ok {
+    #panic("join workers")
+  }
+}
+fn main() {
+  arena := mem.arena_create(mem.GiB)
+  defer mem.arena_release(&arena)
+  arguments := process.arguments(&arena)
+  if !arguments.ok {
+    #panic("arguments")
+  }
+  args := arguments.value
+  if #len(args) == 2 && strings.equal(args[1], "serve") {
+    serve()
+    return
+  }
+  if #len(args) != 3 {
+    #panic("usage: report FILE | search DIRECTORY | serve")
+  }
+  if strings.equal(args[1], "report") {
+    report(args[2])
+  }
+  else if strings.equal(args[1], "search") {
+    search(args[2])
+  }
+  else {
+    #panic("unknown mode")
+  }
+}

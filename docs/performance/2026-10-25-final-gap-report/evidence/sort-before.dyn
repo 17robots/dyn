@@ -1,0 +1,68 @@
+pub struct SearchResult { index: usize, found: bool }
+
+fn sift(values: []$T, root_value, length: usize) {
+  root := root_value
+  for root * 2 + 1 < length {
+    child := root * 2 + 1
+    if child + 1 < length && values[child] < values[child + 1] {
+      child += 1
+    }
+    if !(values[root] < values[child]) {
+      return
+    }
+    temporary := values[root]
+    values[root] = values[child]
+    values[child] = temporary
+    root = child
+  }
+}
+
+// Sorts in place without allocating: insertion sort below 16 elements,
+// otherwise heap sort. Not stable. Elements must support <.
+pub fn sort(values: []$T) {
+  length := #len(values)
+  if length < 16 {
+    for i in 1..length {
+      value := values[i]
+      j := i
+      for j > 0 && value < values[j - 1] {
+        values[j] = values[j - 1]
+        j -= 1
+      }
+      values[j] = value
+    }
+    return
+  }
+  parent := length / 2
+  for parent > 0 {
+    parent -= 1
+    sift(values, parent, length)
+  }
+  end := length
+  for end > 1 {
+    end -= 1
+    temporary := values[0]
+    values[0] = values[end]
+    values[end] = temporary
+    sift(values, 0, end)
+  }
+}
+
+// Binary search in sorted values. A miss returns len(values), never an
+// insertion point, so index is always a valid slice boundary.
+pub fn search(values: []const $T, target: T) SearchResult {
+  low: usize = 0
+  high := #len(values)
+  for low < high {
+    middle := low + (high - low) / 2
+    if values[middle] < target {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  if low < #len(values) && values[low] == target {
+    return SearchResult{ index: low, found: true }
+  }
+  return SearchResult{ index: #len(values) }
+}

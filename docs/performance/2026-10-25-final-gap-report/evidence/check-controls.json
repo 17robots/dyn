@@ -1,0 +1,36 @@
+{
+  "bounds": {
+    "checked": {
+      "exit": 101,
+      "stdout": "",
+      "stderr": "runtime check failed (index.ok) in main\n"
+    },
+    "bounds": {
+      "exit": 0,
+      "stdout": "20\n",
+      "stderr": ""
+    },
+    "overflow": {
+      "exit": 101,
+      "stdout": "",
+      "stderr": "runtime check failed (index.ok) in main\n"
+    }
+  },
+  "overflow": {
+    "checked": {
+      "exit": 101,
+      "stdout": "",
+      "stderr": "runtime check failed (overflow.ok) in main\n"
+    },
+    "bounds": {
+      "exit": 101,
+      "stdout": "",
+      "stderr": "runtime check failed (overflow.ok) in main\n"
+    },
+    "overflow": {
+      "exit": 0,
+      "stdout": "0\n",
+      "stderr": ""
+    }
+  }
+}

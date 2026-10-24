@@ -171,7 +171,7 @@ static int emit_native(const DynSource *source, const DynIrProgram *ir, const ch
   DynNativeOptimization optimized = {0};
   if (options->release) {
     unsigned level = options->optimization.level ? options->optimization.level : 2;
-    if (!dyn_native_optimize(source, ir, level, &optimized)) return 2;
+    if (!dyn_native_optimize_for_emission(source, ir, level, !options->debug_info, &optimized)) return 2;
     ir = &optimized.ir;
   }
   int result = !strcmp(dyn_context_target(&source->context)->arch, "wasm32") ? dyn_wasm_object(source, ir, object, report) : dyn_native_object(source, ir, object, !options->release, options->debug_info, options->shared, report);

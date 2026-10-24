@@ -1,0 +1,8 @@
+{
+  "records": 60000,
+  "nodes_per_record": 25,
+  "sha256_by_mode": {
+    "0": "fbfbec133aec898a13c602b2f553be93b1449a8a2cbde0d08358fcb2c6d68985",
+    "1": "fbfbec133aec898a13c602b2f553be93b1449a8a2cbde0d08358fcb2c6d68985"
+  }
+}

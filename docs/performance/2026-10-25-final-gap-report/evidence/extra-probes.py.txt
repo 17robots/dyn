@@ -1,0 +1,14 @@
+from pathlib import Path
+import json,shutil,subprocess,os
+W=Path(__file__).resolve().parent;ROOT=W.parents[1];d=W/'checks/pointers';d.mkdir(exist_ok=True);shutil.copytree(ROOT/'src',d/'src',dirs_exist_ok=True)
+p=d/'src/backend/ssa.inc';s=(W/'utf8/ssa.before.inc').read_text();needle='static int32_t ssa_emit(Ssa *s, SsaOp op, uint8_t cls, int32_t a, int32_t b, int32_t c, int64_t aux, int64_t aux2) {\n';s=s.replace(needle,needle+'  /* Diagnostic only. */\n  if (op == SO_CHECK && (aux == GUARD_NONNULL || aux == GUARD_ALIGNED || aux == GUARD_FUNCTION)) { op=SO_CONST; cls=SC_INT; a=b=c=-1; aux=aux2=0; }\n');needle='static void ssa_check(Ssa *s, int32_t a, int32_t b, Cond holds, unsigned kind) {\n';s=s.replace(needle,needle+'  if (kind == GUARD_NONNULL || kind == GUARD_ALIGNED || kind == GUARD_FUNCTION) return; /* Diagnostic only. */\n');p.write_text(s)
+p=d/'src/backend/driver.c';s=p.read_text();needle='static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {\n';s=s.replace(needle,needle+'  if (check == GUARD_NONNULL || check == GUARD_ALIGNED || check == GUARD_FUNCTION) return; /* Diagnostic only. */\n');p.write_text(s)
+cmd=json.loads((ROOT/'build/obj/release/compiler.o.build.json').read_text())['command'];cmd=[str(d/'src/backend/compiler.c')if x==str(ROOT/'src/backend/compiler.c')else '-I'+str(d/'src')if x=='-I'+str(ROOT/'src')else str(d/'compiler.o')if x==str(ROOT/'build/obj/release/compiler.o')else x for x in cmd];subprocess.run(cmd,check=True,capture_output=True)
+cmd=json.loads((ROOT/'build/dyn-release.build.json').read_text())['command'];cmd=[str(d/'compiler.o')if x==str(ROOT/'build/obj/release/compiler.o')else str(d/'dyn-probe')if x==str(ROOT/'build/dyn-release')else x for x in cmd];subprocess.run(cmd,check=True,capture_output=True)
+for o in (ROOT/'build').glob('dynrt*.o'):
+ if not (d/o.name).exists():(d/o.name).symlink_to(o)
+subprocess.run([d/'dyn-probe','build',W/'checks/benchmark','--release','--opt-level','3','--no-cache','--quiet','--output',W/'checks/pointers-bin'],check=True,capture_output=True,env=dict(os.environ,DYN_SDK=str(ROOT)))
+u=W/'utf8';subprocess.run(['cc','-O3','-c',u/'driver.c','-o',u/'common-driver.o'],check=True,capture_output=True)
+for label,flags in [('c-common',[]),('c-no-unroll-common',['-fdisable-tree-cunrolli','-fdisable-tree-cunroll'])]:
+ subprocess.run(['cc','-O3',*flags,'-c',u/'decoder.c','-o',u/(label+'.o')],check=True,capture_output=True);subprocess.run(['cc',u/'common-driver.o',u/(label+'.o'),'-o',u/label],check=True,capture_output=True)
+print('BUILT pointer family and common-driver C controls')

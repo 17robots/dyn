@@ -1,0 +1,66 @@
+use "std/mem" mem
+use "std/encoding/json/read" json
+pub fn scan(p:*const u8,n:usize,rounds:usize) u64 {
+ s:=p[..n]
+ count:u64=0
+ for r in 0..rounds {
+  for i in 0..n {
+   b:=s[i]
+   if b=='"' || b=='\\' || b<32 { count=#wrap(count+1) }
+  }
+ }
+ return count
+}
+pub fn integers(p:*const u8,n:usize,rounds:usize) u64 {
+ s:=p[..n]
+ sum:u64=0
+ for r in 0..rounds {
+  value:u64=0
+  for i in 0..n {
+   b:=s[i]
+   if b>='0' && b<='9' {
+    digit:=#cast(u64,b-'0')
+    if value>1844674407370955161 || (value==1844674407370955161 && digit>5) { return 0 }
+    value=#wrap(value*10+digit)
+   } else { sum=#wrap(sum+value) value=0 }
+  }
+  sum=#wrap(sum+value)
+ }
+ return sum
+}
+pub fn records(p:*const u64,n:usize,rounds:usize) u64 {
+ s:=p[..n/8]
+ sum:u64=0
+ for r in 0..rounds {
+  for i in 0..n/16 {
+   if s[i*2]==3 { sum=#wrap(sum+s[i*2+1]) }
+  }
+ }
+ return sum
+}
+pub fn parse_lines(p:*const u8,n:usize,rounds:usize) u64 {
+ s:=p[..n]
+ arena:=mem.arena_create(1048576)
+ defer mem.arena_release(&arena)
+ sum:u64=0
+ for r in 0..rounds {
+  start:usize=0
+  for i in 0..n {
+   if s[i]==10 {
+    if i==start { start=i+1 continue }
+    mem.arena_rewind(&arena,0)
+    result:=json.parse(&arena,s[start..i])
+    if !result.ok { return 0 }
+    sum+=#cast(u64,json.length(result.root))
+    start=i+1
+   }
+  }
+  if start<n {
+   mem.arena_rewind(&arena,0)
+   result:=json.parse(&arena,s[start..])
+   if !result.ok { return 0 }
+   sum+=#cast(u64,json.length(result.root))
+  }
+ }
+ return sum
+}

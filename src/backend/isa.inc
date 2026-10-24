@@ -1085,6 +1085,25 @@ static void isa_zero_fill(BackendContext *ctx, uint32_t size) {
     a64_word(ctx, 0x17fffffd); /* b loop */
     return;
   }
+  /* Bound code growth while avoiding byte-string setup for small objects.
+     Unaligned x86 word stores touch exactly the requested bytes and use only
+     the existing A/RDI clobbers. */
+  if (size <= 128) {
+    if (!size) return;
+    CODE(0x48,0x89,0xc7,0x31,0xc0); /* mov rdi, rax; xor eax, eax */
+    uint32_t at = 0;
+    while (at < size) {
+      unsigned remaining = size - at;
+      unsigned width = remaining >= 8 ? 8 : remaining >= 4 ? 4 : remaining >= 2 ? 2 : 1;
+      if (width == 8) byte(ctx, 0x48);
+      else if (width == 2) byte(ctx, 0x66);
+      byte(ctx, width == 1 ? 0x88 : 0x89); /* mov [rdi+at], a */
+      if (!at) byte(ctx, 0x07);
+      else { byte(ctx, 0x47); byte(ctx, (unsigned char)at); }
+      at += width;
+    }
+    return;
+  }
   CODE(0x48,0x89,0xc7,0x31,0xc0,0xb9); word(ctx, size); CODE(0xfc,0xf3,0xaa);
 }
 /* Small constant memmoves use word loads/stores instead of the expensive

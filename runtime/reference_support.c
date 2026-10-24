@@ -45,13 +45,18 @@ static DynUnwindSlot *unwind_slot(int claim) {
 #else
   uint64_t tid = (uint64_t)dyn_syscall6(186, 0, 0, 0, 0, 0, 0);
 #endif
-  for (size_t i = 0; i < 64; ++i) {
-    uint64_t seen = __atomic_load_n(&unwind_slots[i].tid, __ATOMIC_ACQUIRE);
-    if (seen == tid) return &unwind_slots[i];
-    if (claim && !seen && __atomic_compare_exchange_n(&unwind_slots[i].tid,
-        &seen, tid, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return &unwind_slots[i];
+  for (;;) {
+    DynUnwindSlot *empty = 0;
+    for (size_t i = 0; i < 64; ++i) {
+      uint64_t seen = __atomic_load_n(&unwind_slots[i].tid, __ATOMIC_ACQUIRE);
+      if (seen == tid) return &unwind_slots[i];
+      if (!seen && !empty) empty = &unwind_slots[i];
+    }
+    if (!claim || !empty) return 0;
+    uint64_t expected = 0;
+    if (__atomic_compare_exchange_n(&empty->tid, &expected, tid, 0,
+        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return empty;
   }
-  return 0;
 }
 void dyn_unwind_link(DynUnwind *frame) {
   DynUnwindSlot *slot = unwind_slot(1);

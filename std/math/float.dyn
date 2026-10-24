@@ -750,79 +750,100 @@ const two_over_pi: [66]u64 = [
   0x4D7327, 0x310606, 0x1556CA, 0x73A8C9, 0x60E27B, 0xC08C6B
 ]
 
-fn reduction_bit(product: *[69]u64, position: i32) u64 {
-  if position < 0 || position >= 1656 {
-    return 0
+// Bits [top - 64, top) of the window, where limb k of the window holds bits
+// [24 * (base + k), 24 * (base + k) + 24) of the full product.
+fn window_word(limbs: *[16]u64, base: i32, top: i32) u64 {
+  word: u64 = 0
+  bit := top - 64
+  for bit < top {
+    k := bit / 24 - base
+    offset := bit % 24
+    take := 24 - offset
+    if take > top - bit {
+      take = top - bit
+    }
+    if k >= 0 && k < 16 {
+      piece := (limbs.*[#cast(usize, k)] >> #cast(u64, offset)) & ((#cast(u64, 1) << #cast(u64, take)) - 1)
+      word |= piece << #cast(u64, bit - (top - 64))
+    }
+    bit += take
   }
-  return (product.*[#cast(usize, position / 24)] >> #cast(u64, position % 24)) & 1
+  return word
 }
 
-// Payne-Hanek reduction: enough 2/pi digits for every finite binary64 input,
-// with over 500 extra fractional bits even at the largest exponent.
+// Payne-Hanek reduction. The full product of x's mantissa with 2/pi is 69
+// 24-bit limbs; only the 2 integer bits above the binary point and 192
+// fraction bits below it matter, so only those limbs (and three below them
+// for carries) are computed.
 fn reduce_pi2_large(x: f64) Remainder {
   xs := split_float(x)
-  product: [69]u64
-  j: i32 = 0
-  for j < 3 {
-    chunk := (xs.mantissa >> #cast(u64, j * 24)) & 0xffffff
-    carry: u64 = 0
-    i: i32 = 0
-    for i < 66 {
-      index := #cast(usize, i + j)
-      v := product[index] + two_over_pi[#cast(usize, 65 - i)] * chunk + carry
-      product[index] = v & 0xffffff
-      carry = v >> 24
-      i += 1
-    }
-    product[#cast(usize, 66 + j)] = carry
-    j += 1
-  }
+  chunks: [3]u64 = [xs.mantissa & 0xffffff, (xs.mantissa >> 24) & 0xffffff, xs.mantissa >> 48]
   point := 1584 - xs.exponent
-  n := #cast(i32, reduction_bit(&product, point) + 2 * reduction_bit(&product, point + 1))
-  upward := reduction_bit(&product, point - 1) != 0
-  // Retain only the fraction. For rounding upward form its positive complement
-  // before converting, so a near-integer argument never subtracts from 1.0.
-  i: i32 = 0
-  for i < 69 {
-    left := point - i * 24
-    if left <= 0 {
-      product[#cast(usize, i)] = 0
-    }
-    else if left < 24 {
-      product[#cast(usize, i)] &= (#cast(u64, 1) << #cast(u64, left)) - 1
-    }
-    i += 1
+  base := (point - 192) / 24 - 3
+  if base < 0 {
+    base = 0
   }
+  limit := point / 24 + 1
+  if limit > 68 {
+    limit = 68
+  }
+  limbs: [16]u64
+  carry: u64 = 0
+  k := base
+  for k <= limit {
+    sum := carry
+    for j in 0..3 {
+      i := k - #cast(i32, j)
+      if i >= 0 && i <= 65 {
+        sum += two_over_pi[#cast(usize, 65 - i)] * chunks[j]
+      }
+    }
+    limbs[#cast(usize, k - base)] = sum & 0xffffff
+    carry = sum >> 24
+    k += 1
+  }
+  integer := window_word(&limbs, base, point + 2) >> 62
+  n := #cast(i32, integer)
+  w0 := window_word(&limbs, base, point)
+  w1 := window_word(&limbs, base, point - 64)
+  w2 := window_word(&limbs, base, point - 128)
+  // Round to the nearest multiple: above one half, use the complement and
+  // step the quadrant, so the fraction never subtracts from 1.0.
+  upward := (w0 >> 63) != 0
   if upward {
     n = (n + 1) & 3
-    carry: u64 = 1
-    i = 0
-    for i * 24 < point {
-      width := point - i * 24
-      if width > 24 {
-        width = 24
+    w0 = ~w0
+    w1 = ~w1
+    w2 = ~w2
+    w2 = #wrap(w2 + 1)
+    if w2 == 0 {
+      w1 = #wrap(w1 + 1)
+      if w1 == 0 {
+        w0 = #wrap(w0 + 1)
       }
-      mask := (#cast(u64, 1) << #cast(u64, width)) - 1
-      v := (product[#cast(usize, i)] ^ mask) + carry
-      product[#cast(usize, i)] = v & mask
-      carry = v >> #cast(u64, width)
-      i += 1
     }
   }
-  top := point - 1
-  for top >= 0 && reduction_bit(&product, top) == 0 {
-    top -= 1
+  // Normalize the 192-bit fraction F (value F * 2^-192).
+  shift: i32 = 0
+  for w0 == 0 && shift < 192 {
+    w0 = w1
+    w1 = w2
+    w2 = 0
+    shift += 64
   }
-  hi: u64 = 0
-  lo: u64 = 0
-  i = 0
-  for i < 53 {
-    hi = (hi << 1) | reduction_bit(&product, top - i)
-    lo = (lo << 1) | reduction_bit(&product, top - 53 - i)
-    i += 1
+  if w0 == 0 {
+    return Remainder{ n: n, y0: 0.0, y1: 0.0 }
   }
-  a := scale(#cast(f64, hi), top - point - 52)
-  b := scale(#cast(f64, lo), top - point - 105)
+  z := #cast(i32, leading_zeros(w0))
+  if z > 0 {
+    w0 = #wrap(w0 << #cast(u64, z)) | (w1 >> #cast(u64, 64 - z))
+    w1 = #wrap(w1 << #cast(u64, z)) | (w2 >> #cast(u64, 64 - z))
+  }
+  shift += z
+  hi := w0 >> 11
+  lo := ((w0 & 0x7ff) << 42) | (w1 >> 22)
+  a := scale(#cast(f64, hi), -shift - 53)
+  b := scale(#cast(f64, lo), -shift - 106)
   pio2_hi: f64 = 1.57079632679489655800
   pio2_lo: f64 = 6.12323399573676603587e-17
   h := a * pio2_hi
@@ -842,7 +863,7 @@ fn reduce_pi2_large(x: f64) Remainder {
 }
 
 fn reduce_pi2(x: f64) Remainder {
-  if (high(x) & 0x7fffffff) >= 0x41300000 {
+  if (high(x) & 0x7fffffff) >= 0x413921fb {
     return reduce_pi2_large(x)
   }
   inverse_pio2: f64 = 6.36619772367581382433e-01

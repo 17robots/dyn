@@ -1,0 +1,124 @@
+--- support.before.dyn
++++ runtime/support/support.dyn
+@@ -6,6 +6,17 @@
+   storage: [4096]u8
+ }
+ unwind_slots: [64]UnwindSlot
++// A hint is one atomic word: the full eligible thread identity and slot index.
++// Collisions only discard hints. The owning thread is the only writer of a
++// hint with its identity, so a matching hint names its latest known slot.
++// Always validate/claim the slot atomically; never retain slot ownership here.
++// Large opaque identities use the complete search without truncation.
++unwind_hints: [64]u64
++fn unwind_remember(tid: u64, index: usize) {
++  if tid != 0 && tid >> 58 == 0 {
++    atomic_store(&unwind_hints[#cast(usize, tid & 63)], (tid << 6) | #cast(u64, index))
++  }
++}
+ extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
+ extern fn atomic_store "dyn_atomic_store_u64"(p: *u64, value: u64)
+ extern fn atomic_claim "dyn_atomic_compare_exchange_u64"(p: *u64, expected: u64, desired: u64) bool
+@@ -14,24 +25,50 @@
+ 
+ fn unwind_slot(claim: bool) *UnwindSlot {
+   tid := thread_id()
++  // Nested cleanup on the first owner already needs only one atomic read.
++  // Keep that path ahead of the hint, which benefits empty-stack registration.
++  first_seen := atomic_load(&unwind_slots[0].tid)
++  if first_seen == tid {
++    return &unwind_slots[0]
++  }
++  if tid != 0 && tid >> 58 == 0 {
++    hint := atomic_load(&unwind_hints[#cast(usize, tid & 63)])
++    if hint >> 6 == tid {
++      candidate := &unwind_slots[#cast(usize, hint & 63)]
++      seen := first_seen
++      if (hint & 63) != 0 {
++        seen = atomic_load(&candidate.tid)
++      }
++      if seen == tid {
++        return candidate
++      }
++      if claim && seen == 0 && atomic_claim(&candidate.tid, 0, tid) {
++        return candidate
++      }
++    }
++  }
+   for true {
+     empty: *UnwindSlot = nil
++    empty_index: usize = 0
+     // Find an existing owner before claiming a vacancy. A lower slot may
+     // have become empty while this thread still owns a higher slot.
+     for i in 0..64 {
+       slot := &unwind_slots[i]
+       seen := atomic_load(&slot.tid)
+       if seen == tid {
++        unwind_remember(tid, i)
+         return slot
+       }
+       if seen == 0 && empty == nil {
+         empty = slot
++        empty_index = i
+       }
+     }
+     if !claim || empty == nil {
+       return nil
+     }
+     if atomic_claim(&empty.tid, 0, tid) {
++      unwind_remember(tid, empty_index)
+       return empty
+     }
+     // Another thread won the vacancy; repeat the ownership search.
+--- unwind-owner.before.py
++++ tests/unwind-owner.py
+@@ -23,12 +23,13 @@
+ extern void dyn_unwind_unlink(struct frame *);
+ static _Thread_local uint64_t identity = 1;
+ static _Thread_local unsigned calls;
++static _Thread_local unsigned loads;
+ static jmp_buf capacity;
+ static int expect_capacity;
+ long dyn_syscall6(long n,long a,long b,long c,long d,long e,long f) {
+  (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;assert(n==186);calls++;return (long)identity;
+ }
+-uint64_t dyn_atomic_load_u64(uint64_t *p) { return atomic_load((_Atomic uint64_t *)p); }
++uint64_t dyn_atomic_load_u64(uint64_t *p) { loads++;return atomic_load((_Atomic uint64_t *)p); }
+ void dyn_atomic_store_u64(uint64_t *p,uint64_t v) { atomic_store((_Atomic uint64_t *)p,v); }
+ _Bool dyn_atomic_compare_exchange_u64(uint64_t *p,uint64_t a,uint64_t b) {
+  return atomic_compare_exchange_strong((_Atomic uint64_t *)p,&a,b);
+@@ -55,6 +56,16 @@
+ }
+ static void *worker(void *p) { identity=(uintptr_t)p;exercise();return 0; }
+ int main(void) {
++ /* Repeated empty-stack calls reuse a validated hint, not a full scan.
++    Count atomic reads rather than asserting noisy wall-clock performance. */
++ struct frame repeated={0};
++ for(unsigned i=0;i<1000;i++) { dyn_unwind_link(&repeated);dyn_unwind_unlink(&repeated); }
++ assert(loads<=2100 && calls==1000);
++ /* An active first owner must retain the original one-read nested fast path. */
++ struct frame outer={0},inner={0};dyn_unwind_link(&outer);
++ unsigned nested_reads=loads;
++ for(unsigned i=0;i<1000;i++) { dyn_unwind_link(&inner);dyn_unwind_unlink(&inner); }
++ assert(loads-nested_reads==1000);dyn_unwind_unlink(&outer);
+  /* Releasing a lower slot must not hide an existing higher owner. */
+  struct frame lower={0},higher={0},nested={0};
+  identity=1;dyn_unwind_link(&lower);
+@@ -67,6 +78,12 @@
+  pthread_t threads[16];
+  for(uintptr_t i=0;i<16;i++) assert(!pthread_create(&threads[i],0,worker,(void *)(i+100)));
+  for(unsigned i=0;i<16;i++) assert(!pthread_join(threads[i],0));
++ /* Hash collisions must preserve nesting and independently owned frames. */
++ for(uintptr_t i=0;i<16;i++) assert(!pthread_create(&threads[i],0,worker,(void *)(i*64+1)));
++ for(unsigned i=0;i<16;i++) assert(!pthread_join(threads[i],0));
++ /* Opaque identities above the packed range must not alias a smaller tid. */
++ identity=UINT64_C(1)<<60;exercise();
++ identity=(UINT64_C(1)<<60)+1;exercise();
+  struct frame frames[65];memset(frames,0,sizeof frames);
+  for(identity=1;identity<=64;identity++) dyn_unwind_link(&frames[identity-1]);
+  expect_capacity=1;
+@@ -92,4 +109,4 @@
+                         '-Wall', '-Wextra', '-Werror', '-pthread', str(work / 'test.c'),
+                         str(work / 'support.o'), '-o', str(work / 'test')], check=True, timeout=60)
+         subprocess.run([str(work / 'test')], check=True, timeout=30)
+-    print('PASS unwind owner: nesting, identity count, register canaries, threads, capacity, reuse')
++    print('PASS unwind owner: nesting, identity count, register canaries, colliding threads, full identities, capacity, reuse, bounded hint reads, one-read nested path')

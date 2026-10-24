@@ -1,0 +1,140 @@
+pub struct SearchResult { index: usize, found: bool }
+
+fn sift(values: []$T, root_value, length: usize) {
+  root := root_value
+  for root < length / 2 {
+    child := root * 2 + 1
+    if child + 1 < length && values[child] < values[child + 1] {
+      child += 1
+    }
+    if !(values[root] < values[child]) {
+      return
+    }
+    temporary := values[root]
+    values[root] = values[child]
+    values[child] = temporary
+    root = child
+  }
+}
+
+fn insertion(values: []$T) {
+  for i in 1..#len(values) {
+    value := values[i]
+    j := i
+    for j > 0 && value < values[j - 1] {
+      values[j] = values[j - 1]
+      j -= 1
+    }
+    values[j] = value
+  }
+}
+
+fn heap(values: []$T) {
+  length := #len(values)
+  parent := length / 2
+  for parent > 0 {
+    parent -= 1
+    sift(values, parent, length)
+  }
+  end := length
+  for end > 1 {
+    end -= 1
+    temporary := values[0]
+    values[0] = values[end]
+    values[end] = temporary
+    sift(values, 0, end)
+  }
+}
+
+fn introsort(input: []$T, depth_value: usize) {
+  values := input
+  depth := depth_value
+  for #len(values) >= 16 {
+    if depth == 0 {
+      heap(values)
+      return
+    }
+    depth -= 1
+    last := #len(values) - 1
+    middle := #len(values) / 2
+    if values[middle] < values[0] {
+      temporary := values[0]
+      values[0] = values[middle]
+      values[middle] = temporary
+    }
+    if values[last] < values[middle] {
+      temporary := values[middle]
+      values[middle] = values[last]
+      values[last] = temporary
+    }
+    if values[middle] < values[0] {
+      temporary := values[0]
+      values[0] = values[middle]
+      values[middle] = temporary
+    }
+    pivot := values[middle]
+    lower: usize = 0
+    cursor: usize = 0
+    upper := #len(values)
+    // [0, lower) is below pivot; [lower, cursor) is equivalent;
+    // [upper, length) is above pivot. Only < is required.
+    for cursor < upper {
+      if values[cursor] < pivot {
+        temporary := values[lower]
+        values[lower] = values[cursor]
+        values[cursor] = temporary
+        lower += 1
+        cursor += 1
+      } else if pivot < values[cursor] {
+        upper -= 1
+        temporary := values[upper]
+        values[upper] = values[cursor]
+        values[cursor] = temporary
+      } else {
+        cursor += 1
+      }
+    }
+    // Recurse only into the smaller side, bounding stack depth.
+    if lower < #len(values) - upper {
+      introsort(values[..lower], depth)
+      values = values[upper..]
+    } else {
+      introsort(values[upper..], depth)
+      values = values[..lower]
+    }
+  }
+  insertion(values)
+}
+
+// Sorts in place without allocating. Introsort uses three-way partitioning,
+// insertion sort for small slices, and a heap fallback for O(n log n) worst
+// case comparisons. Stack usage is O(log n). Not stable. Elements must support
+// < with a strict weak ordering; unordered floating NaNs have no sort order.
+pub fn sort(values: []$T) {
+  remaining := #len(values)
+  depth: usize = 0
+  for remaining > 1 {
+    depth += 2
+    remaining /= 2
+  }
+  introsort(values, depth)
+}
+
+// Binary search in sorted values. A miss returns len(values), never an
+// insertion point, so index is always a valid slice boundary.
+pub fn search(values: []const $T, target: T) SearchResult {
+  low: usize = 0
+  high := #len(values)
+  for low < high {
+    middle := low + (high - low) / 2
+    if values[middle] < target {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  if low < #len(values) && values[low] == target {
+    return SearchResult{ index: low, found: true }
+  }
+  return SearchResult{ index: #len(values) }
+}

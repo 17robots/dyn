@@ -72,9 +72,17 @@ pub fn find(value: []const u8, needle: []const u8) usize {
     return find_byte(value, needle[0])
   }
   last := #len(needle) - 1
+  final_byte := needle[last]
+  candidates := #len(value) - #len(needle) + 1
   i: usize = 0
-  for i <= #len(value) - #len(needle) {
-    if value[i + last] == needle[last] && equal(value[i..i + #len(needle)], needle) {
+  for i < candidates {
+    remaining := value[i + last..]
+    skipped := find_byte(remaining, final_byte)
+    if skipped == #len(remaining) {
+      return #len(value)
+    }
+    i += skipped
+    if equal(value[i..i + #len(needle)], needle) {
       return i
     }
     i += 1

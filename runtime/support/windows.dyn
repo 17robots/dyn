@@ -1,4 +1,8 @@
 #target(kernel: windows)
+// This target retains thread lookup when unlinking an unwind frame.
+fn unwind_owner_offset() usize {
+  return 0
+}
 extern fn get_tid "GetCurrentThreadId"() u32
 extern fn get_handle "GetStdHandle"(kind: u32) rawptr
 extern fn write_file "WriteFile"(handle: rawptr, data: rawptr, size: u32, written: *u32, overlapped: rawptr) i32
@@ -39,4 +43,17 @@ pub fn dyn_panic_write(data: *const u8, size: u64) {
   trace_write(data, size)
   newline: [1]u8 = [10]
   trace_write(&newline[0], 1)
+}
+// Resumes unwinding after a frame's cleanup has run.
+pub fn dyn_unwind_continue() {
+  slot := unwind_slot(false)
+  if slot != nil && slot.top != nil {
+    frame := slot.top
+    slot.top = frame.previous
+    jump(frame)
+  }
+  if slot != nil {
+    panic_raw(slot.message, slot.length)
+  }
+  panic_raw(nil, 0)
 }

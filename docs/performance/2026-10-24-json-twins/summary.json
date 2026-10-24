@@ -1,0 +1,105 @@
+{
+  "compiler_sha256": "c0c62b7ab149fac2169c774aa7bfe9cf0a11d25a4801a3c1af3d4708e799a414",
+  "product_files_changed": 0,
+  "product_hash_count_unchanged": 669,
+  "host": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "gcc": "gcc (GCC) 16.2.1 20260810",
+  "clang": "clang version 23.1.3 (https://github.com/conda-forge/clangdev-feedstock 25b3b037ec2a28639e5f42c2012b1e4e80d96bcf)",
+  "cpu": 2,
+  "input_sha256": "55632bc536a41285c2126eb1a0d684fc6778c303b95bdf380e9c3f8b509abfca",
+  "headline_ms_per_pass": {
+    "dyn": 21.462763999999996,
+    "gcc-checked": 12.611178,
+    "gcc-checked-conservative": 12.153372,
+    "clang-checked": 12.756235666666667
+  },
+  "dyn_vs_checked_gcc": 1.7018841538831657,
+  "dyn_vs_conservative_gcc": 1.7659925163156363,
+  "dyn_vs_checked_clang": 1.682531160511903,
+  "bootstrap_95": [
+    1.6530918271298125,
+    1.7507545713583264
+  ],
+  "verification": {
+    "cases": 1828,
+    "full_comparisons": 32904,
+    "libraries": [
+      "dyn",
+      "dyn-tree",
+      "gcc",
+      "gcc-checked",
+      "gcc-scalar",
+      "gcc-checked-scalar",
+      "clang",
+      "clang-checked",
+      "gcc-noinline"
+    ],
+    "modes": [
+      0,
+      1
+    ],
+    "abi_sizes": [
+      16,
+      64,
+      32,
+      88,
+      48
+    ],
+    "misaligned_backing_offsets": 16,
+    "independent_oracle": "Python strict UTF8 JSON with lexical numbers and duplicate-preserving objects; exact normalized full DOM",
+    "case_sha256": "3155488eb74f00a4f1c075b153ff4072385c24f4e1e318ec59eaee7a13a434db"
+  },
+  "corpus_verification": {
+    "records": 60000,
+    "nodes_per_record": 25,
+    "modes": [
+      0,
+      1
+    ],
+    "libraries": [
+      "gcc-checked",
+      "dyn"
+    ],
+    "normalized_sha256": "fbfbec133aec898a13c602b2f553be93b1449a8a2cbde0d08358fcb2c6d68985",
+    "input_sha256": "55632bc536a41285c2126eb1a0d684fc6778c303b95bdf380e9c3f8b509abfca"
+  },
+  "c_sanitizers": "ASan/UBSan passed 1828 outcomes; exact normalized output matches reference. Dyn-generated machine code itself not sanitizer-instrumented.",
+  "review": "Independent static review found no concrete parser/control/harness mismatch; codegen differences and semantic limitations documented.",
+  "source_hashes": {
+    "twin.h": "cf4d01bb2aecea2be3b733c44ccce104503133f5ba9eb0a4a59bf0aa8d82789f",
+    "twin.c": "a133561f4df60a19ecbb948922e2f91c62833bab0bae6932c55093a48a9c0e81",
+    "twin-conservative.c": "4f280e657fc84736411df28150b7f8f6eb126e1cbc8298681754f3555e503025",
+    "common.c": "8a8a466d1894e5bb6cc86465b06012535c3836cc8bc274138b732fd8b5c742e1",
+    "driver.c": "59ea892e086f524939f390e4e202ce1daf1684e0cb25e159c27ddbab13892593",
+    "build.py": "6fe436ea6b6d8502626ef935cfebd5ed0328586999341713d8dcfec951d2ee12",
+    "verify.py": "be30a397d9c43b6b27885d4a27d574dbf4045143a835c829ffded93e93ed214e",
+    "verify-corpus.py": "789d8121727a10d422d9deb9419bab9f9d59efa568a2b59e4562222e85f7bf8c",
+    "measure.py": "939362c695a55c61bffae00ec4b615e2227a1349648870c1123ce8ee6e9d8b53",
+    "conservative.py": "bab51aff04fe00154c68a3b65745f973175e53cdc787575b583fd11d0dc98ba7",
+    "edge-protocol.py": "b8bdfd25c87fc21288ae33b9617ffea033f845524f266110e5a50d0c36a30717",
+    "generate-input.py": "59fb5b49168e531bfdbfed705d783486ec748f63740c7c778d9a8cf1b07d1158",
+    "cases.json": "5f7704b4902b6f8f14b18ea81bdf8dc753d9c343a9f94f5b2a61ac2028f2ad06",
+    "original-read.dyn": "ab6a3f95ae5bdd7136d861bdfb60a08cfeffad8952942bfe8991af6ceb2203b6",
+    "dyn-mapping.md": "f2ecd3aa5d8d943a7bf36f64a07cc8e8be1a29ff22644c5a6a59ba0884617335",
+    "dyn/main.dyn": "3b59e56ae1d0bbfb23890a7f35cb069459430714342c32c12cc76bf6e661cc1e"
+  },
+  "all_final_binary_hashes": {
+    "common-san.so": "96fdc1aabd3ee1bd62c75d3544a0efd25550294ad36b4f0f287bbab2c8859195",
+    "twin-san.so": "85ec1f95951914850f423d2a25efa55728b65bc8b5ceea850cd2ad6324492d38",
+    "common.so": "e59006ae5afb437d763e2c108d8370291ed2b4f6f129c7ba08b7e07c1d2e460d",
+    "common-thin.so": "c2b4888b8bbd4b49fb4c3acdc3bcbb7ebe6692ae83ef4f4d1cfa777c27314d0c",
+    "gcc.so": "784c938c726ffc2cd8e76140c51a455f99a63dbca9b23b449eb304918ba294e4",
+    "gcc-checked.so": "e3ac5343ae19bf5d897f735e68ca11b24fcf9d8de1cdc53b98207cfd62d1eba3",
+    "gcc-scalar.so": "dc2fcdb9f3be22d909aba4fda8b77a840227fa9aedbf94b0f81458aec72e16de",
+    "gcc-checked-scalar.so": "a4a72ae1c14b1cc82257538df5b86125cfa13dd6ad6e0f020fe286b4500ed0d8",
+    "clang.so": "09a8587b092cc861f13ab87cefb14f3d4aeb4daa0a96eb176c3c1ac35565ce2c",
+    "clang-checked.so": "c58c258c8a7de591f9f5c2297920fd34eedf4f7bbd7604331db000d6b29ae229",
+    "gcc-noinline.so": "76b835a549c8cd0d3c664c7714114775232e343e01b76af67afc2f38539df857",
+    "gcc-checked-noalias.so": "21291606e504b8a888f4a32b8ee92b3b63ba221f66db7fd7fdc924f98b26720d",
+    "gcc-checked-noclone.so": "0556ca0a0a656a2350b4fbf3b6ee6e119417071a7b2b8c4d155a4f254e167bba",
+    "gcc-checked-frame.so": "b0f15ea20083aa206cc433ebc36739e45111da302d1b04c2695283325b9cb4ce",
+    "gcc-checked-conservative.so": "1580f3357b4a1cecffe7ef2ec06665c8d681d3bba7038fbc001d733fa6dddcba",
+    "dyn.so": "7f0ab67df7c4bc8a14386a110f83dc46f4cab2af839d1880d4fa08bf5dd3a5ab",
+    "dyn-tree.so": "9914a30b2cdacfec86a53b3ecb3abc9be300c8d7ab6ab4a878bf574531f5c8f9"
+  }
+}
