@@ -1,3 +1,4 @@
+use "std/errors" errors
 use "std/io" stream
 use "std/mem" memory
 use "std/text/template" core
@@ -15,9 +16,13 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
 fn write(destination: stream.Writer, source: []const u8) RenderResult {
   result := stream.write_all(destination, source)
   if result.status == stream.Status.Error {
-    return RenderResult{ error: ErrorKind.Io, system_error: result.error, ok: false }
+    kind:=result.kind
+    if kind==errors.Kind.None {
+      kind=errors.Kind.System
+    }
+    return RenderResult{ kind: kind, error: result.error, detail: ErrorKind.Io, ok: false }
   }
-  return RenderResult{ error: ErrorKind.None, ok: true }
+  return RenderResult{ ok: true }
 }
 
 fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
@@ -56,7 +61,7 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
   if start < #len(source) {
     return write(destination, source[start..])
   }
-  return RenderResult{ error: ErrorKind.None, ok: true }
+  return RenderResult{ ok: true }
 }
 
 // Escapes text and quoted attribute values. Not a JS/CSS/URL-context sanitizer.

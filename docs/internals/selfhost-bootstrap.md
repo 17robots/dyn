@@ -5,19 +5,20 @@ Not started as a compiler. The parser exists in Dyn as a test
 seed of stage 0. The C compiler stays the specification oracle until three
 successive stages agree.
 
-## Status (2026-10-22)
+## Status (2026-10-24)
 
 | Start condition | State |
 | --- | --- |
-| Two previews without a breaking change | Not met: `Unreleased` has two breaking entries (cast syntax, `try_` memory names). The clock starts at the first release after a freeze. |
-| Compiler library settled | Mostly: arenas, `mem.append`, intrusive lists, hash tables and slot handles, file reading, arguments and formatting exist. Open: `std/container/string_map` maps bytes to `usize` with unseeded FNV-1a. It is replaced by intrusive hash tables with seeded hashing during [std standardization](std-standardization.md). |
+| Two previews without a breaking change | Not met: std standardization contains intentional breaking changes. The clock starts with the first preview after an explicit freeze; two real preview releases must pass without new breaks. |
+| Compiler library settled | Portable library implemented: arenas, `mem.append`, intrusive containers, seeded SipHash-1-3 tables, slot handles, file reading, arguments, formatting and math. The std closure pass is reviewed and the registered suite passes 183/183 gates across combined runs; see the qualification record. Compatibility is not yet frozen. |
 | Missing target modules reported | Met: one error names the module. |
-| Parser port stable | Met so far: `tests/selfhost-parser` passes on 234 sources and 607 generated inputs. |
+| Parser port stable | Met so far: `tests/selfhost-parser` passes on 246 sources and 607 generated inputs. |
 
 Gaps in the stage oracles:
 
-- Stage 3 needs an IR dump. `--emit-ir` was removed with LLVM; add a stable
-  text dump of the C compiler's IR first.
+- Stage 3 now has a [versioned structural IR dump](ir-dump.md):
+  `dyn build DIR --emit-ir --target x86_64-linux`. The self-hosted compiler
+  must reproduce this encoding before stage 3 is qualified.
 - Stage 2 compares `dyn check --diagnostics json`; that output exists.
 - Stage 4 compares executables; `--emit-asm` exists for x86-64.
 
@@ -45,8 +46,9 @@ starts only when all of these hold:
 - Two consecutive preview releases ship without a breaking syntax or semantic
   change (no entry marked breaking in `CHANGELOG.md`).
 - The library a compiler needs is settled: arenas, `mem.append`, slot maps,
-  a seeded string map, file reading, process arguments, and byte formatting.
-  Collision-resistant string hashing is the open item.
+  seeded intrusive hash tables, file reading, process arguments, and byte
+  formatting. These implementations now exist; the final std audit and
+  compatibility freeze still need recorded closure.
 - Using a module that does not support the target reports that, instead of
   "unknown function".
 - `tests/selfhost-parser` has kept passing through those releases with no
@@ -72,7 +74,7 @@ the C compiler on the repository corpus plus generated broken inputs, the way
 | 0. Syntax | Move `tests/selfhost-parser` to `selfhost/syntax` | Preorder node dump, as today |
 | 1. Modules | Import resolution, platform file selection, one namespace per module | File and declaration lists the C frontend loads |
 | 2. Semantics | Name resolution, types, constant evaluation, lifetime and ownership checks | `dyn check --diagnostics json` byte-identical; `dyn query` JSON for the program index |
-| 3. Lowering | The C compiler's IR, without optimization | IR dump (to add to the C compiler) |
+| 3. Lowering | The C compiler's IR, without optimization | `--emit-ir` structural snapshot v1 |
 | 4. Backend | x86-64 emission, the ELF object writer and the built-in linker | `--emit-asm` text, then executable output on the test corpus |
 | 5. Bootstrap | Stage 1 = C builds `selfhost`; stage 2 = stage 1 builds it; stage 3 = stage 2 builds it | Stage 2 and stage 3 executables byte-identical |
 

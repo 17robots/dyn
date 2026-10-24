@@ -52,9 +52,12 @@ fn read_native(handle: isize, destination: []u8) ReadResult {
   }
   return ReadResult{ count: result.transferred, ended: result.ok && result.transferred == 0, error: result.error, kind: result.kind, ok: result.ok }
 }
-fn milliseconds_native() u64 {
+fn milliseconds_native() MillisecondsResult {
   now := time.monotonic_now()
-  return #cast(u64, now.seconds) * 1000 + #cast(u64, (now.nanoseconds / 1000000))
+  if !now.ok {
+    return MillisecondsResult{error: now.error, kind: now.kind}
+  }
+  return MillisecondsResult{value: #cast(u64, now.value.seconds) * 1000 + #cast(u64, (now.value.nanoseconds / 1000000)), ok: true}
 }
 fn sleep_native() {
   _ = time.sleep(time.Millisecond)

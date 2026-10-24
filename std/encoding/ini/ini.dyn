@@ -1,13 +1,14 @@
+use "std/errors" errors
 use "std/bytes" byte_ops
 use "std/mem"
 // Allocation-free INI scanner. Names and values borrow the input.
-// A malformed line is skipped: the scanner keeps the first error and its line,
-// counts the rest, and goes on to the next line. Check state.error after the loop.
+// The first malformed line stops scanning and records its error and line.
+// Later calls do nothing. Check state.error after the loop.
 pub enum Kind { Section, Pair }
 pub enum ErrorKind { None, Syntax, Overflow }
 pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
 // line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
-pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind, error_line: usize, errors: usize }
+pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind, error_line: usize, error_offset: usize, errors: usize }
 pub struct Result { value: Entry, ok: bool }
 
 pub fn scanner(source: []const u8) Scanner {
@@ -28,15 +29,19 @@ fn trim(source: []const u8) []const u8 {
   return source[first..last]
 }
 
-fn record(state: *Scanner, line: usize) {
+fn record(state: *Scanner, line: usize, offset: usize) {
   if state.error == ErrorKind.None {
     state.error = ErrorKind.Syntax
     state.error_line = line
+    state.error_offset = offset
   }
   state.errors += 1
 }
 
 pub fn next(state: *Scanner) Result {
+  if state.error != ErrorKind.None {
+    return Result{}
+  }
   for state.offset < #len(state.source) {
     start := state.offset
     finish := start
@@ -59,9 +64,8 @@ pub fn next(state: *Scanner) Result {
         section_name = trim(line[1..#len(line) - 1])
       }
       if #len(section_name) == 0 {
-        // Pairs after a bad header must not land in the previous section.
-        state.section = line[..0]
-        record(state, line_number)
+        record(state, line_number, start)
+        return Result{}
       } else {
         state.section = section_name
         return Result{ value: Entry{ section: section_name, kind: Kind.Section, line: line_number }, ok: true }
@@ -82,7 +86,8 @@ pub fn next(state: *Scanner) Result {
         key_name = trim(line[..separator])
       }
       if #len(key_name) == 0 {
-        record(state, line_number)
+        record(state, line_number, start)
+        return Result{}
       } else {
         pair_value := trim(line[separator + 1..])
         return Result{ value: Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }, ok: true }
@@ -111,7 +116,10 @@ pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8
 // Any malformed line fails the whole parse; error_line is the first one.
 pub struct ParseResult {
   value: []Entry,
-  kind: ErrorKind,
+  kind: errors.Kind,
+  error: isize,
+  detail: ErrorKind,
+  offset: usize,
   line: usize,
   ok: bool,
 }
@@ -119,19 +127,19 @@ pub struct ParseResult {
 // Ownership: table borrows the arena; entry text separately borrows source.
 // Invalidation: arena rewind, reset or release; keep source alive and unchanged.
 // Allocation: two scans, one exact-size table allocation; no hidden scratch.
-// Failure: validates all syntax before allocating; a full fixed arena panics.
+// Failure: stops at the first syntax error before allocating; a full fixed arena panics.
 // Thread safety: source must remain stable throughout both passes; synchronize output.
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   state := scanner(source)
   count: usize = 0
   for next(&state).ok {
     if count == #cast(usize, -1) {
-      return ParseResult{ kind: ErrorKind.Overflow }
+      return ParseResult{ kind: errors.Kind.Overflow, detail: ErrorKind.Overflow, offset: state.offset }
     }
     count += 1
   }
   if state.error != ErrorKind.None {
-    return ParseResult{ kind: state.error, line: state.error_line }
+    return ParseResult{ kind: errors.Kind.InvalidInput, detail: state.error, offset: state.error_offset, line: state.error_line }
   }
   if count == 0 {
     return ParseResult{ ok: true }

@@ -1,12 +1,16 @@
 #target(kernel: linux)
 
 use "std/observe" observe
+use "std/errors" errors
 
 // A borrowed directory descriptor limits file lookup through this interface.
 // Descriptor owner keeps it open; do not close/reuse it while a capability exists.
 // This is not a sandbox for native code with unrestricted syscall access.
 pub struct Directory { descriptor: isize = -1, events: *observe.Log, resource: u64 }
-pub enum ReadResult { Read: usize, Failed: isize }
+pub struct ReadResult { value: usize, kind: errors.Kind, error: isize, ok: bool }
+fn failure(code: isize) ReadResult {
+  return ReadResult{ kind: errors.linux(code), error: code }
+}
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 
 // Kernel-enforced relative lookup: no absolute paths, parent escapes, symlinks or
@@ -15,13 +19,13 @@ struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 // Destination receives at most one read; partial reads are ordinary progress.
 // ENOSYS is reported on kernels lacking openat2; no insecure fallback.
 pub fn read(directory: *const Directory, path: []const u8, destination: []u8) ReadResult {
-  if #len(path) == 0 || #len(path) > 4095 || path[0] == '/' {
-    return ReadResult.Failed(-22)
+  if directory == nil || #len(path) == 0 || #len(path) > 4095 || path[0] == '/' {
+    return failure(-22)
   }
   name: [4096]u8 = []
   for i in 0..#len(path) {
     if path[i] == 0 {
-      return ReadResult.Failed(-22)
+      return failure(-22)
     }
     name[i] = path[i]
   }
@@ -33,7 +37,7 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
       _ = observe.record(directory.events,
         observe.Event{kind: observe.Kind.Denied, resource: directory.resource, source: "std/fs/capability"})
     }
-    return ReadResult.Failed(descriptor)
+    return failure(descriptor)
   }
   if directory.events != nil {
     _ = observe.record(directory.events,
@@ -49,10 +53,10 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
       observe.Event{kind: observe.Kind.ResourceClosed, resource: directory.resource, source: "std/fs/capability"})
   }
   if value < 0 {
-    return ReadResult.Failed(value)
+    return failure(value)
   }
   if closed < 0 {
-    return ReadResult.Failed(closed)
+    return failure(closed)
   }
-  return ReadResult.Read(#cast(usize, value))
+  return ReadResult{ value: #cast(usize, value), ok: true }
 }

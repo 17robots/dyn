@@ -1,4 +1,5 @@
 use "std/time" clock
+use "std/errors" errors
 
 // Caller-backed monotonic profiling. Event names are borrowed.
 pub struct Event {
@@ -7,12 +8,16 @@ pub struct Event {
   duration_nanoseconds: i64,
 }
 
-pub struct Span { name: []const u8, started: clock.Instant }
+pub struct Span { name: []const u8, started: clock.ClockResult }
+pub struct Result {kind: errors.Kind, error: isize, ok: bool}
 
 pub struct Trace {
   events: []Event,
   count: usize,
   dropped: usize,
+  failed: bool,
+  error: isize,
+  kind: errors.Kind,
 }
 
 pub fn trace(events: []Event) Trace {
@@ -23,23 +28,49 @@ pub fn begin(name: []const u8) Span {
   return Span{ name: name, started: clock.monotonic_now() }
 }
 
-pub fn finish(destination: *Trace, span: Span) bool {
-  finished := clock.monotonic_now()
-  if destination.count == #len(destination.events) {
-    destination.dropped += 1
-    return false
+fn fail(destination: *Trace, kind: errors.Kind, code: isize) Result {
+  destination.failed = true
+  destination.kind = kind
+  if destination.kind == errors.Kind.None {
+    destination.kind = errors.Kind.InvalidState
   }
-  duration := clock.elapsed(span.started, finished)
+  destination.error = code
+  return Result{kind: destination.kind, error: code}
+}
+pub fn finish(destination: *Trace, span: Span) Result {
+  if destination.failed {
+    return Result{kind: destination.kind, error: destination.error}
+  }
+  if !span.started.ok {
+    return fail(destination, span.started.kind, span.started.error)
+  }
+  if destination.count >= #len(destination.events) {
+    destination.dropped += 1
+    return Result{kind: errors.Kind.Capacity}
+  }
+  finished := clock.monotonic_now()
+  if !finished.ok {
+    return fail(destination, finished.kind, finished.error)
+  }
+  duration := clock.elapsed(span.started.value, finished.value)
   if !duration.ok {
-    return false
+    return fail(destination, errors.Kind.Overflow, 0)
+  }
+  scaled := span.started.value.seconds
+  if scaled > 9223372036 || scaled < -9223372036 {
+    return fail(destination, errors.Kind.Overflow, 0)
+  }
+  absolute := clock.checked_add(scaled * clock.Second, span.started.value.nanoseconds)
+  if !absolute.ok {
+    return fail(destination, errors.Kind.Overflow, 0)
   }
   destination.events[destination.count] = Event{
     name: span.name,
-    started_nanoseconds: span.started.seconds * clock.Second + span.started.nanoseconds,
+    started_nanoseconds: absolute.value,
     duration_nanoseconds: duration.value,
   }
   destination.count += 1
-  return true
+  return Result{ok: true}
 }
 
 pub fn recorded(value: *Trace) []Event {
@@ -48,4 +79,7 @@ pub fn recorded(value: *Trace) []Event {
 pub fn clear(value: *Trace) {
   value.count = 0
   value.dropped = 0
+  value.failed = false
+  value.error = 0
+  value.kind = errors.Kind.None
 }

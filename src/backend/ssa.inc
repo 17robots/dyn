@@ -34,7 +34,7 @@ typedef enum {
   SO_CMP,        /* 0 or 1: a cond b */
   SO_FCMP,       /* 0 or 1: float a op b; aux: DYN_OP_EQ.. offset */
   SO_FADD, SO_FSUB, SO_FMUL, SO_FDIV,
-  SO_FNEG,
+  SO_FNEG, SO_MATH,
   SO_ITOF,       /* aux: unsigned 64-bit source */
   SO_FTOI,       /* aux: unsigned 64-bit result */
   SO_FCVT,       /* f32 <-> f64 */
@@ -1239,6 +1239,30 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       if (!ssa_packed_type(ir, callee)) { SSA_GIVE_UP(s); return 0; }
       pack_type = ir->slices[callee->variadic_type - DYN_TYPE_SLICE_BASE].element;
     }
+  }
+  if (callee && isa_math_supported(ctx, callee->math_intrinsic, result)) {
+    DynMathIntrinsic kind = callee->math_intrinsic;
+    unsigned count = kind == DYN_MATH_INTRINSIC_FMA ? 3 : kind == DYN_MATH_INTRINSIC_COPYSIGN ? 2 : 1;
+    if (callee->variadic || callee->return_type != result || callee->param_count != count || e->item_count != count ||
+        (uint64_t)callee->param_start + count > ir->param_count) { SSA_GIVE_UP(s); return 0; }
+    for (unsigned i = 0; i < count; ++i) {
+      uint32_t argument = ir->items[e->item_start + i].expression;
+      if (argument >= ir->expression_count || ir->expressions[argument].type != result ||
+          ir->params[callee->param_start + i].type != result) { SSA_GIVE_UP(s); return 0; }
+    }
+    int32_t operands[3] = {-1, -1, -1};
+    for (unsigned i = 0; i < count; ++i)
+      operands[i] = ssa_expr(s, ir->items[e->item_start + i].expression, NULL, depth + 1);
+    if (kind == DYN_MATH_INTRINSIC_COPYSIGN) {
+      int32_t magnitude = ssa_emit(s, SO_BITS, SC_INT, operands[0], -1, -1, 0, 0);
+      int32_t sign = ssa_emit(s, SO_BITS, SC_INT, operands[1], -1, -1, 0, 0);
+      uint64_t mask = UINT64_C(1) << (result == DYN_TYPE_F32 ? 31 : 63);
+      magnitude = ssa_emit(s, SO_AND, SC_INT, magnitude, ssa_const(s, ~mask, SC_INT), -1, 0, 0);
+      sign = ssa_emit(s, SO_AND, SC_INT, sign, ssa_const(s, mask, SC_INT), -1, 0, 0);
+      int32_t bits = ssa_emit(s, SO_OR, SC_INT, magnitude, sign, -1, 0, 0);
+      return ssa_emit(s, SO_BITS, ssa_class(result), bits, -1, -1, 0, 0);
+    }
+    return ssa_emit(s, SO_MATH, ssa_class(result), operands[0], operands[1], operands[2], kind, 0);
   }
   uint32_t pack_element = 0, pack_alignment = 0, pack_bytes = 0;
   if (packed) {
@@ -2663,7 +2687,7 @@ static bool ssa_pure(const SsaValue *v) {
   switch (v->op) {
   case SO_CONST: case SO_ADD: case SO_SUB: case SO_MUL: case SO_AND: case SO_OR: case SO_XOR:
   case SO_SHL: case SO_SHR: case SO_SAR: case SO_NEG: case SO_NOT: case SO_EXT: case SO_CMP: case SO_FCMP:
-  case SO_FADD: case SO_FSUB: case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_ITOF: case SO_FTOI:
+  case SO_FADD: case SO_FSUB: case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_MATH: case SO_ITOF: case SO_FTOI:
   case SO_FCVT: case SO_BITS: case SO_FRAME: case SO_SYMBOL: case SO_LEA: case SO_MULH:
     return true;
   default:
@@ -3995,24 +4019,24 @@ static const unsigned char ssa_gp_order[] = {X_RAX, X_RCX, X_RDX, X_RSI, X_RDI, 
                                              X_RBX, X_R12, X_R13, X_R14, X_R15};
 static const unsigned char ssa_arguments[] = {X_RDI, X_RSI, X_RDX, X_RCX, X_R8, X_R9};
 /* AArch64: x14-x17 are emitter scratch, x18 is the platform register, x29 and
-   x30 hold the frame; v30 and v31 are floating scratch, and v8-v15 (callee
+   x30 hold the frame; v29-v31 are floating scratch, and v8-v15 (callee
    saved) are not allocated. */
 static const unsigned char a64_gp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
                                              19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
-static const unsigned char a64_fp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29};
+static const unsigned char a64_fp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
 #define A64_CALLER_SAVED (UINT64_C(0x7ffff) | UINT64_C(0xff) << X_XMM0 | UINT64_C(0xffff0000) << X_XMM0)
 #define A64_CALLEE_SAVED (UINT64_C(0x1ff80000))
 /* Microsoft x64: four callee-saved registers fit the caller's home area,
-   where the prologue saves them; XMM4/XMM5 are scratch and XMM6-XMM15 stay
+   where the prologue saves them; XMM3-XMM5 are scratch and XMM6-XMM15 stay
    untouched. */
 static const unsigned char win64_gp_order[] = {X_RAX, X_RCX, X_RDX, X_R8, X_R9, X_RSI, X_RDI, X_RBX, X_R12};
 static const unsigned char win64_home[] = {X_RSI, X_RDI, X_RBX, X_R12};
 #define WIN64_CALLER_SAVED ((UINT64_C(1) << X_RAX) | (UINT64_C(1) << X_RCX) | (UINT64_C(1) << X_RDX) | (UINT64_C(1) << X_R8) | \
                             (UINT64_C(1) << X_R9) | (UINT64_C(1) << X_R10) | (UINT64_C(1) << X_R11) | UINT64_C(0x3f) << X_XMM0)
 /* RISC-V: a0-a7 and s1-s11 are allocated; t0-t6 are emitter scratch and s0
-   is the frame pointer. Floating: ft0-ft7, fa0-fa7, ft8/ft9. */
+   is the frame pointer. Floating: ft0-ft7, fa0-fa7 and ft8; ft9-ft11 are scratch. */
 static const unsigned char rv_gp_order[] = {10, 11, 12, 13, 14, 15, 16, 17, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27};
-static const unsigned char rv_fp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 28, 29};
+static const unsigned char rv_fp_order[] = {0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 28};
 #define RV_CALLER_SAVED (UINT64_C(0xf003fce2) | (UINT64_C(0xf003fcff) << X_XMM0))
 #define RV_CALLEE_SAVED (UINT64_C(0x0ffc0200))
 /* Register an argument location names on this target. */
@@ -4189,7 +4213,7 @@ static void ssa_hints(SsaAlloc *a) {
         break;
       case SO_ADD: case SO_SUB: case SO_MUL: case SO_AND: case SO_OR: case SO_XOR: case SO_SHL: case SO_SHR:
       case SO_SAR: case SO_NEG: case SO_NOT: case SO_EXT: case SO_ADDO: case SO_SUBO: case SO_FADD: case SO_FSUB:
-      case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_LEA:
+      case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_MATH: case SO_LEA:
         if (v->hint == -1 && v->a >= 0 && s->values[v->a].op != SO_CONST && s->values[v->a].op != SO_FRAME &&
             s->values[v->a].end == v->start)
           v->hint = v->a;
@@ -4225,7 +4249,7 @@ static bool ssa_allocatable(const BackendContext *ctx, unsigned reg) {
     id = reg - X_XMM0;
     if (ctx->a64) { list = a64_fp_order; count = sizeof(a64_fp_order); }
     else if (ctx->rv64) { list = rv_fp_order; count = sizeof(rv_fp_order); }
-    else return id < (ctx->win64 ? 4u : 14u);
+    else return id < (ctx->win64 ? 3u : 13u);
   } else if (ctx->a64) { list = a64_gp_order; count = ctx->winarm64 ? 14 : sizeof(a64_gp_order); }
   else if (ctx->win64) { list = win64_gp_order; count = sizeof(win64_gp_order); }
   else if (ctx->rv64) { list = rv_gp_order; count = sizeof(rv_gp_order); }
@@ -4280,7 +4304,7 @@ static bool ssa_allocate(SsaAlloc *a) {
       chosen = want;
     if (chosen >= 0) {}
     else if (floating) {
-      unsigned count = s->ctx->a64 ? sizeof(a64_fp_order) : s->ctx->rv64 ? sizeof(rv_fp_order) : s->ctx->win64 ? 4 : 14;
+      unsigned count = s->ctx->a64 ? sizeof(a64_fp_order) : s->ctx->rv64 ? sizeof(rv_fp_order) : s->ctx->win64 ? 3 : 13;
       for (unsigned j = 0; j < count && chosen < 0; ++j) {
         unsigned r = X_XMM0 + (s->ctx->a64 ? a64_fp_order[j] : s->ctx->rv64 ? rv_fp_order[j] : j);
         if (owner[r] == UINT32_MAX && !ssa_clobbered(a, r, v->start, v->end)) chosen = (int)r;
@@ -4348,10 +4372,11 @@ typedef struct {
   size_t anchor;
 } SsaEmit;
 
-/* x86-64 floating scratch: XMM15 and XMM14, or XMM5 and XMM4 on Windows,
+/* x86-64 floating scratch: XMM13-XMM15, or XMM3-XMM5 on Windows,
    where XMM6-XMM15 are callee-saved. Every user has `ctx` in scope. */
 #define SSA_XS1 (ctx->win64 ? X_XMM0 + 5u : X_XMM0 + 15u)
 #define SSA_XS2 (ctx->win64 ? X_XMM0 + 4u : X_XMM0 + 14u)
+#define SSA_XS3 (ctx->win64 ? X_XMM0 + 3u : X_XMM0 + 13u)
 static void x86_rex(BackendContext *ctx, bool w, unsigned reg, unsigned index, unsigned base, bool byte_reg) {
   unsigned rex = 0x40 | (w ? 8 : 0) | (reg >> 3 & 1) << 2 | (index >> 3 & 1) << 1 | (base >> 3 & 1);
   if (rex != 0x40 || byte_reg) byte(ctx, rex);
@@ -4376,9 +4401,9 @@ static void x86_memory_operand(BackendContext *ctx, unsigned reg, SsaMemory m) {
 /* Opcodes of one or two bytes, packed with their length: OP1(0x8b), OP2(0x0f, 0xb6). */
 #define OP1(a) ((uint32_t)(a) | 1u << 24)
 #define OP2(a, b) ((uint32_t)(a) | (uint32_t)(b) << 8 | 2u << 24)
+#define OP3(a, b, c) ((uint32_t)(a) | (uint32_t)(b) << 8 | (uint32_t)(c) << 16 | 3u << 24)
 static void x86_opcode(BackendContext *ctx, uint32_t opcode) {
-  byte(ctx, opcode & 0xff);
-  if (opcode >> 24 == 2) byte(ctx, opcode >> 8 & 0xff);
+  for (unsigned i = 0; i < opcode >> 24; ++i) byte(ctx, opcode >> (8 * i) & 0xff);
 }
 /* [prefix] REX opcode modrm(mem) */
 static void x86_mem_op(BackendContext *ctx, int prefix, bool w, uint32_t opcode, unsigned reg, SsaMemory m, bool byte_reg) {
@@ -5011,6 +5036,31 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FSUB: ssa_float_op(e, v, 0x5c, false); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_FMUL: ssa_float_op(e, v, 0x59, true); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_FDIV: ssa_float_op(e, v, 0x5e, false); ssa_put(e, v, ssa_target(e, v)); return;
+  case SO_MATH:
+    if (v->aux == DYN_MATH_INTRINSIC_FMA) {
+      /* Snapshot every source before the destructive 213 form. The three
+         scratch registers are excluded from allocation on both x64 ABIs. */
+      x86_mov(ctx, SSA_XS1, ssa_get(e, v->a, SSA_XS1));
+      x86_mov(ctx, SSA_XS2, ssa_get(e, v->b, SSA_XS2));
+      x86_mov(ctx, SSA_XS3, ssa_get(e, v->c, SSA_XS3));
+      unsigned rd = SSA_XS1 - X_XMM0, rb = SSA_XS2 - X_XMM0, rc = SSA_XS3 - X_XMM0;
+      byte(ctx,0xc4);
+      byte(ctx,0x42 | ((~rd >> 3 & 1) << 7) | ((~rc >> 3 & 1) << 5));
+      byte(ctx,(v->cls == SC_F64 ? 0x80 : 0) | ((~rb & 15) << 3) | 1);
+      CODE(0xa9); byte(ctx,0xc0 | (rd & 7) << 3 | (rc & 7));
+      ssa_put(e, v, SSA_XS1);
+      return;
+    }
+    d = ssa_target(e, v);
+    if (v->aux == DYN_MATH_INTRINSIC_SQRT)
+      x86_reg_op(ctx, v->cls == SC_F32 ? 0xf3 : 0xf2, false, OP2(0x0f, 0x51),
+                 d - X_XMM0, ssa_get(e, v->a, SSA_XS1) - X_XMM0, false);
+    else if (v->aux == DYN_MATH_INTRINSIC_FLOOR || v->aux == DYN_MATH_INTRINSIC_CEIL || v->aux == DYN_MATH_INTRINSIC_TRUNC) {
+      x86_reg_op(ctx, 0x66, false, OP3(0x0f,0x3a,0x0b), d - X_XMM0, ssa_get(e, v->a, SSA_XS1) - X_XMM0, false);
+      byte(ctx,v->aux == DYN_MATH_INTRINSIC_FLOOR ? 9 : v->aux == DYN_MATH_INTRINSIC_CEIL ? 10 : 11);
+    } else { ctx->text.failed = true; return; }
+    ssa_put(e, v, d);
+    return;
   case SO_FNEG:
     d = ssa_target(e, v);
     x86_mov(ctx, d, ssa_get(e, v->a, d));

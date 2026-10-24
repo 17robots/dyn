@@ -73,7 +73,7 @@ pub fn append(state: *Builder, source: []const u8) ErrorKind {
   return ErrorKind.None
 }
 
-// Geometric growth with exact-size fallback for a nearly exhausted arena.
+// Geometric growth. Panics when the arena cannot hold the selected capacity.
 // Existing views must be reacquired after mutation. Source may borrow this builder.
 pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) ErrorKind {
   if state.error != ErrorKind.None {
@@ -100,9 +100,6 @@ pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) Er
       capacity *= 2
     }
     error := reserve(state, arena, capacity)
-    if error == ErrorKind.Capacity && capacity != required {
-      error = reserve(state, arena, required)
-    }
     if error != ErrorKind.None {
       return fail(state, error)
     }

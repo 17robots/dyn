@@ -210,12 +210,13 @@ fn read_native(handle: isize, destination: []u8) ReadResult {
   }
   return ReadResult{ count: #cast(usize, amount), ended: amount == 0, ok: true }
 }
-fn milliseconds_native() u64 {
+fn milliseconds_native() MillisecondsResult {
   time := Timespec{}
   if native_clock(6, &time) < 0 {
-    #panic("monotonic clock")
+    code := mac_error()
+    return MillisecondsResult{error: code, kind: error_kinds.darwin(code)}
   }
-  return #cast(u64, time.seconds)*1000 + #cast(u64, (time.nanoseconds/1000000))
+  return MillisecondsResult{value: #cast(u64, time.seconds)*1000 + #cast(u64, (time.nanoseconds/1000000)), ok: true}
 }
 fn sleep_native() {
   delay := Timespec{ nanoseconds: 1000000 }

@@ -1,7 +1,48 @@
 use "std/mem" mem
+use "std/errors" errors
 pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, ok: bool }
-pub struct Result { info: Info, pixels: []u8, error: isize, ok: bool }
-pub struct EncodeResult { data: []u8, error: isize, ok: bool }
+// Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
+// true inside successful values, false in the zero failure value.
+// On failure value is zero. error is zero: codec details are not native errors.
+// offset is a source byte offset when known, otherwise zero (also for encoding).
+pub struct Image { info: Info, pixels: []u8 }
+pub struct Result { value: Image, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+pub struct InfoResult { value: Info, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
+pub struct EncodeResult { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+struct EncodeWork { data: []u8, error: isize, ok: bool }
+
+fn codec_kind(detail: isize) errors.Kind {
+  if detail == -75 {
+    return errors.Kind.Overflow
+  }
+  if detail == -28 {
+    return errors.Kind.Capacity
+  }
+  return errors.Kind.InvalidInput
+}
+
+pub fn inspect(source: []const u8) InfoResult {
+  info := inspect_info(source)
+  if !info.ok {
+    return InfoResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+  }
+  return InfoResult{ value: info, ok: true }
+}
+
+fn decode_result(work: DecodeWork) Result {
+  if !work.ok {
+    return Result{ kind: codec_kind(work.error), detail: work.error, offset: work.offset }
+  }
+  return Result{ value: Image{ info: work.info, pixels: work.pixels }, ok: true }
+}
+
+fn encode_result(work: EncodeWork) EncodeResult {
+  if !work.ok {
+    return EncodeResult{ kind: codec_kind(work.error), detail: work.error }
+  }
+  return EncodeResult{ value: work.data, ok: true }
+}
 
 fn u32be(source: []const u8, at: usize) u32 {
   a: u32 = #cast(u32, source[at])
@@ -11,7 +52,7 @@ fn u32be(source: []const u8, at: usize) u32 {
   return a * 16777216 + b * 65536 + c * 256 + d
 }
 
-pub fn inspect(source: []const u8) Info {
+fn inspect_info(source: []const u8) Info {
   if #len(source) < 22 || source[0] != 'q' || source[1] != 'o' || source[2] != 'i' || source[3] != 'f' {
     return Info{}
   }
@@ -43,17 +84,27 @@ fn add(byte_value: u8, amount: i16) u8 {
   return #cast(u8, wide)
 }
 
-fn decode_into(destination: []u8, source: []const u8) Result {
-  info := inspect(source)
+fn decode_into(destination: []u8, source: []const u8) DecodeWork {
+  info := inspect_info(source)
   if !info.ok {
-    return Result{ error: -22 }
+    return DecodeWork{ error: -22 }
   }
   count := #cast(usize, info.width) * #cast(usize, info.height)
   if info.width != 0 && count / #cast(usize, info.width) != #cast(usize, info.height) {
-    return Result{ error: -75 }
+    return DecodeWork{ error: -75 }
   }
   if count > #len(destination) / 4 {
-    return Result{ info: info, error: -28 }
+    return DecodeWork{ info: info, error: -28 }
+  }
+  payload_end := #len(source) - 8
+  for i in 0..8 {
+    expected: u8 = 0
+    if i == 7 {
+      expected = 1
+    }
+    if source[payload_end + i] != expected {
+      return DecodeWork{ info: info, error: -74, offset: payload_end + i }
+    }
   }
   table: [64]u32 = []
   red: u8 = 0
@@ -69,13 +120,13 @@ fn decode_into(destination: []u8, source: []const u8) Result {
     }
     else {
       if input >= #len(source) - 8 {
-        return Result{ info: info, error: -74 }
+        return DecodeWork{ info: info, error: -74, offset: input }
       }
       tag := source[input]
       input += 1
       if tag == 254 {
         if input + 3 > #len(source) - 8 {
-          return Result{ info: info, error: -74 }
+          return DecodeWork{ info: info, error: -74, offset: input }
         }
         red = source[input]
         green = source[input + 1]
@@ -83,7 +134,7 @@ fn decode_into(destination: []u8, source: []const u8) Result {
         input += 3
       } else if tag == 255 {
         if input + 4 > #len(source) - 8 {
-          return Result{ info: info, error: -74 }
+          return DecodeWork{ info: info, error: -74, offset: input }
         }
         red = source[input]
         green = source[input + 1]
@@ -102,7 +153,7 @@ fn decode_into(destination: []u8, source: []const u8) Result {
         blue = add(blue, #cast(i16, (tag & 3)) - 2)
       } else if (tag & 192) == 128 {
         if input == #len(source) - 8 {
-          return Result{ info: info, error: -74 }
+          return DecodeWork{ info: info, error: -74, offset: input }
         }
         second := source[input]
         input += 1
@@ -112,6 +163,9 @@ fn decode_into(destination: []u8, source: []const u8) Result {
         blue = add(blue, dg - 8 + #cast(i16, (second & 15)))
       } else {
         run = #cast(usize, (tag & 63))
+        if run >= count - output {
+          return DecodeWork{ info: info, error: -74, offset: input - 1 }
+        }
       }
       table[hash(red, green, blue, alpha)] = packed(red, green, blue, alpha)
     }
@@ -122,7 +176,10 @@ fn decode_into(destination: []u8, source: []const u8) Result {
     destination[at + 3] = alpha
     output += 1
   }
-  return Result{ info: info, pixels: destination[..count * 4], ok: true }
+  if input != payload_end {
+    return DecodeWork{ info: info, error: -74, offset: input }
+  }
+  return DecodeWork{ info: info, pixels: destination[..count * 4], ok: true }
 }
 
 fn put_u32be(destination: []u8, at: usize, number: u32) {
@@ -143,14 +200,14 @@ fn delta(current: u8, previous: u8) i16 {
   return difference
 }
 
-fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
+fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeWork {
   if width == 0 || height == 0 || (channels != 3 && channels != 4) {
-    return EncodeResult{ error: -22 }
+    return EncodeWork{ error: -22 }
   }
   count := #cast(usize, width) * #cast(usize, height)
   if count / #cast(usize, width) != #cast(usize, height) || count > #len(pixels) / #cast(usize, channels) ||
     #len(pixels) != count * #cast(usize, channels) || #len(destination) < 22 {
-    return EncodeResult{ error: -28 }
+    return EncodeWork{ error: -28 }
   }
   destination[0] = 'q'
   destination[1] = 'o'
@@ -183,7 +240,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
       run += 1
       if run == 62 || pixel + 1 == count {
         if output == #len(destination) {
-          return EncodeResult{ error: -28 }
+          return EncodeWork{ error: -28 }
         }
         destination[output] = 192 | #cast(u8, (run - 1))
         output += 1
@@ -192,7 +249,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
     } else {
       if run > 0 {
         if output == #len(destination) {
-          return EncodeResult{ error: -28 }
+          return EncodeWork{ error: -28 }
         }
         destination[output] = 192 | #cast(u8, (run - 1))
         output += 1
@@ -202,7 +259,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
       packed_value := packed(red, green, blue, alpha)
       if table[index] == packed_value {
         if output == #len(destination) {
-          return EncodeResult{ error: -28 }
+          return EncodeWork{ error: -28 }
         }
         destination[output] = #cast(u8, index)
         output += 1
@@ -215,20 +272,20 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
         blue_green := blue_delta - green_delta
         if alpha == previous_alpha && red_delta >= -2 && red_delta <= 1 && green_delta >= -2 && green_delta <= 1 && blue_delta >= -2 && blue_delta <= 1 {
           if output == #len(destination) {
-            return EncodeResult{ error: -28 }
+            return EncodeWork{ error: -28 }
           }
           destination[output] = 64 | #cast(u8, ((red_delta + 2) << 4)) | #cast(u8, ((green_delta + 2) << 2)) | #cast(u8, (blue_delta + 2))
           output += 1
         } else if alpha == previous_alpha && green_delta >= -32 && green_delta <= 31 && red_green >= -8 && red_green <= 7 && blue_green >= -8 && blue_green <= 7 {
           if output + 2 > #len(destination) {
-            return EncodeResult{ error: -28 }
+            return EncodeWork{ error: -28 }
           }
           destination[output] = 128 | #cast(u8, (green_delta + 32))
           destination[output + 1] = #cast(u8, ((red_green + 8) << 4)) | #cast(u8, (blue_green + 8))
           output += 2
         } else if alpha == previous_alpha {
           if output + 4 > #len(destination) {
-            return EncodeResult{ error: -28 }
+            return EncodeWork{ error: -28 }
           }
           destination[output] = 254
           destination[output + 1] = red
@@ -237,7 +294,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
           output += 4
         } else {
           if output + 5 > #len(destination) {
-            return EncodeResult{ error: -28 }
+            return EncodeWork{ error: -28 }
           }
           destination[output] = 255
           destination[output + 1] = red
@@ -254,21 +311,21 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
     previous_alpha = alpha
   }
   if output + 8 > #len(destination) {
-    return EncodeResult{ error: -28 }
+    return EncodeWork{ error: -28 }
   }
   for i in 0..7 {
     destination[output + i] = 0
   }
   destination[output + 7] = 1
   output += 8
-  return EncodeResult{ data: destination[..output], ok: true }
+  return EncodeWork{ data: destination[..output], ok: true }
 }
 
 // Decodes QOI into RGBA8 pixels in arena. Failure pushes nothing.
-pub fn decode(arena: *mem.Arena, source: []const u8) Result {
-  info := inspect(source)
+fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
+  info := inspect_info(source)
   if !info.ok {
-    return Result{ error: -22 }
+    return DecodeWork{ error: -22 }
   }
   mark := mem.arena_mark(arena)
   result := decode_into(mem.push_bytes_uninit(arena, #cast(usize, info.width) * #cast(usize, info.height) * 4), source)
@@ -279,7 +336,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
 }
 
 // Encodes tightly packed RGB8 or RGBA8 pixels into arena.
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
+fn encode_work(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeWork {
   bound := #cast(usize, width) * #cast(usize, height) * (#cast(usize, channels) + 1) + 22
   mark := mem.arena_mark(arena)
   result := encode_into(mem.push_bytes_uninit(arena, bound), pixels, width, height, channels, srgb)
@@ -289,4 +346,46 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, ch
   }
   mem.arena_rewind(arena, mark + #len(result.data))
   return result
+}
+
+// Checked before allocation; no hidden allocator and failures preserve the arena mark.
+fn pixel_count(width: u32, height: u32, channels: u8) usize {
+  limit := ~#cast(usize, 0)
+  w := #cast(usize, width)
+  h := #cast(usize, height)
+  if w > limit / h {
+    return 0
+  }
+  count := w * h
+  if count > limit / #cast(usize, channels) {
+    return 0
+  }
+  return count * #cast(usize, channels)
+}
+
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  info := inspect_info(source)
+  if !info.ok {
+    return Result{ kind: errors.Kind.InvalidInput, detail: -22 }
+  }
+  size := pixel_count(info.width, info.height, 4)
+  if size == 0 {
+    return Result{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  return decode_result(decode_work(arena, source))
+}
+
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
+  if width == 0 || height == 0 || (channels != 3 && channels != 4) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+  }
+  size := pixel_count(width, height, channels)
+  bound_pixels := pixel_count(width, height, channels + 1)
+  if size == 0 || bound_pixels == 0 || bound_pixels > (~#cast(usize, 0)) - 22 {
+    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  if size != #len(pixels) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -28 }
+  }
+  return encode_result(encode_work(arena, pixels, width, height, channels, srgb))
 }

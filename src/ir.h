@@ -91,6 +91,17 @@ typedef struct {
   unsigned char *data;
   size_t length;
 } DynIrString;
+/* Private derived optimization metadata; precision is the function return_type. */
+typedef enum {
+  DYN_MATH_INTRINSIC_NONE,
+  DYN_MATH_INTRINSIC_SQRT,
+  DYN_MATH_INTRINSIC_FLOOR,
+  DYN_MATH_INTRINSIC_CEIL,
+  DYN_MATH_INTRINSIC_TRUNC,
+  DYN_MATH_INTRINSIC_ROUND,
+  DYN_MATH_INTRINSIC_COPYSIGN,
+  DYN_MATH_INTRINSIC_FMA
+} DynMathIntrinsic;
 typedef struct {
   /* debug_name is set for instances only: "min(u32)" for debuggers. */
   char *name, *link_name, *debug_name;
@@ -99,6 +110,7 @@ typedef struct {
   bool is_main, foreign, variadic, is_public, generic, instance;
   uint64_t module_owner;
   DynType variadic_type;
+  DynMathIntrinsic math_intrinsic;
 } DynIrFunction;
 typedef struct {
   DynStmtKind kind;
@@ -177,6 +189,8 @@ typedef struct DynIrProgram {
   uint32_t *local_statements;
 } DynIrProgram;
 bool dyn_ir_lower(const DynAstProgram *ast, const DynSource *source, DynIrProgram *ir);
+/* Checked structural lowering before optional range-proof optimization. */
+bool dyn_ir_lower_structural(const DynAstProgram *ast, const DynSource *source, DynIrProgram *ir);
 /* Only for complete executables without externally required public symbols.
    Retains stable indices, callbacks and all global initialization effects. */
 bool dyn_ir_prune_functions(DynIrProgram *ir);

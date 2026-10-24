@@ -2,8 +2,10 @@
 
 use "std/mem" mem
 use "std/c" cabi
+use "std/errors" errors
 
-// POSIX dynamic-loader adapter. Handles and symbols are borrowed native pointers.
+// POSIX dynamic-loader adapter. Handles own loader references; symbols borrow them.
+// Symbols are invalid after the library is successfully closed.
 // Linking a program using this module requires libc (or libdl on older systems).
 pub type Handle = rawptr
 
@@ -12,8 +14,12 @@ pub const Now: i32 = 2
 pub const Local: i32 = 0
 pub const Global: i32 = 256
 
-pub struct OpenResult { value: Handle, error: *const u8, ok: bool }
-pub struct SymbolResult { value: rawptr, error: *const u8, ok: bool }
+pub struct OpenResult { value: Handle, kind: errors.Kind, error: isize, message: *const u8, ok: bool }
+pub struct SymbolResult { value: rawptr, kind: errors.Kind, error: isize, message: *const u8, ok: bool }
+
+// Loader messages borrow storage until the next loader operation.
+// dlerror supplies text, not a native integer code; error remains zero.
+pub struct Result { ok: bool, kind: errors.Kind, error: isize, message: *const u8 }
 
 extern fn native_open "dlopen"(path: *const u8, flags: i32) rawptr
 extern fn native_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
@@ -23,40 +29,59 @@ extern fn native_error "dlerror"() *const u8
 pub fn open(path: []const u8, flags: i32) OpenResult {
   storage: [4096]u8 = []
   cstring_space1 := mem.arena_from_buffer(storage[..])
+  if #len(path) >= #len(storage) {
+    return OpenResult{ kind: errors.Kind.InvalidInput }
+  }
   name := cabi.string_from_bytes(&cstring_space1, path)
   if !name.ok {
-    return OpenResult{}
+    return OpenResult{ kind: errors.Kind.InvalidInput }
   }
   _ = native_error()
   value := native_open(name.value, flags)
   if value == nil {
-    return OpenResult{ value: nil, error: native_error(), ok: false }
+    return OpenResult{ value: nil, kind: errors.Kind.System, message: native_error(), ok: false }
   }
-  return OpenResult{ value: value, error: nil, ok: true }
+  return OpenResult{ value: value, ok: true }
 }
 
 pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
+  if handle == nil {
+    return SymbolResult{ kind: errors.Kind.InvalidState }
+  }
   storage: [4096]u8 = []
+  if #len(name) >= #len(storage) {
+    return SymbolResult{ kind: errors.Kind.InvalidInput }
+  }
   cstring_space2 := mem.arena_from_buffer(storage[..])
   native_name := cabi.string_from_bytes(&cstring_space2, name)
-  if handle == nil || !native_name.ok {
-    return SymbolResult{}
+  if !native_name.ok {
+    return SymbolResult{ kind: errors.Kind.InvalidInput }
   }
   // POSIX requires clearing prior error because a valid symbol may be null.
   _ = native_error()
   value := native_symbol(handle, native_name.value)
   error := native_error()
-  return SymbolResult{ value: value, error: error, ok: error == nil }
+  if error != nil {
+    return SymbolResult{ value: value, kind: errors.Kind.System, message: error }
+  }
+  return SymbolResult{ value: value, ok: true }
 }
 
-// Closes the library and clears the handle. Closing a cleared handle returns false.
-pub fn close(handle: *Handle) bool {
+// Clears the owned handle only after a successful close. Failure retains ownership.
+pub fn close(handle: *Handle) Result {
+  if handle == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
   value := handle.*
   if value == nil {
-    return false
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  _ = native_error()
+  if native_close(value) != 0 {
+    return Result{ kind: errors.Kind.System, message: native_error() }
   }
   handle.* = nil
-  return native_close(value) == 0
+  return Result{ ok: true }
 }
 
 // Returned bytes borrow loader-owned storage and die at next loader operation.

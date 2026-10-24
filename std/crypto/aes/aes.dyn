@@ -1,9 +1,19 @@
-use "vendor/openssl/crypto" provider
+use "std/crypto/aead" aead
+use "std/mem" mem
 
-pub type Result = provider.AeadResult
-pub fn gcm_seal(ciphertext: []u8, tag: []u8, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
-  return provider.aead_seal(provider.CipherAes256Gcm, ciphertext, tag, plaintext, additional, key, nonce)
+pub type Sealed = aead.Sealed
+pub type SealResult = aead.SealResult
+pub type OpenResult = aead.OpenResult
+
+// AES-256-GCM: arena-owned ciphertext and 16-byte tag. Inputs are borrowed for
+// the call; outputs expire on applicable arena rewind/reset/release. Caller
+// ensures nonce uniqueness per key. See std/crypto/aead for validation, overlap,
+// failure rollback and exhaustion contracts; key is 32 bytes, nonce is 1..128 bytes.
+pub fn gcm_seal(arena: *mem.Arena, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) SealResult {
+  return aead.seal(arena, aead.Cipher.Aes256Gcm, plaintext, additional, key, nonce)
 }
-pub fn gcm_open(plaintext: []u8, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
-  return provider.aead_open(provider.CipherAes256Gcm, plaintext, ciphertext, tag, additional, key, nonce)
+// Returns arena-owned authenticated plaintext; failed output is cleared before
+// rollback. Tag must be 16 bytes. Same lifetimes and contracts as gcm_seal.
+pub fn gcm_open(arena: *mem.Arena, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) OpenResult {
+  return aead.open(arena, aead.Cipher.Aes256Gcm, ciphertext, tag, additional, key, nonce)
 }

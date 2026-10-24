@@ -111,27 +111,28 @@ pub fn next(state: *ArchiveReader) Result {
   local := Overrides{}
   pending: bool = false
   for {
+    record_start := cursor
     if cursor > #len(state.source) {
-      return Result{ status: Status.Error, error: ErrorKind.InvalidOffset }
+      return Result{ status: Status.Error, detail: ErrorKind.InvalidOffset, kind: errors.Kind.InvalidInput, offset: cursor }
     }
     if cursor == #len(state.source) {
       if pending {
-        return Result{ status: Status.Error, error: ErrorKind.Truncated }
+        return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
       }
-      return Result{ status: Status.End }
+      return Result{ status: Status.End, offset: cursor }
     }
     if #len(state.source) - cursor < 512 {
-      return Result{ status: Status.Error, error: ErrorKind.Truncated }
+      return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
     }
     header := parse_header(state.source[cursor..cursor + 512])
     if !header.ok {
-      return Result{ status: Status.Error, error: ErrorKind.Header }
+      return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
     }
     if header.ended {
       if pending {
-        return Result{ status: Status.Error, error: ErrorKind.Header }
+        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
       }
-      return Result{ status: Status.End }
+      return Result{ status: Status.End, offset: cursor }
     }
     entry := header.entry
     extension := entry.kind == 'x' || entry.kind == 'g' || entry.kind == 'L' || entry.kind == 'K'
@@ -140,39 +141,39 @@ pub fn next(state: *ArchiveReader) Result {
     }
     start := cursor + 512
     if entry.size > #cast(u64, (#len(state.source) - start)) {
-      return Result{ status: Status.Error, error: ErrorKind.Truncated }
+      return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
     }
     size := #cast(usize, entry.size)
     padding: usize = (512 - size % 512) % 512
     if padding > #len(state.source) - start - size {
-      return Result{ status: Status.Error, error: ErrorKind.Truncated }
+      return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
     }
     entry.data = state.source[start..start + size]
     cursor = start + size + padding
     if !extension {
       state.offset = cursor
       state.defaults = global
-      return Result{ entry: entry, status: Status.Entry }
+      return Result{ entry: entry, status: Status.Entry, offset: cursor, ok: true }
     }
     pending = true
     if entry.kind == 'x' {
       if !pax(entry.data, &local, false) {
-        return Result{ status: Status.Error, error: ErrorKind.Header }
+        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
       }
     }
     else if entry.kind == 'g' {
       if !pax(entry.data, &global, true) {
-        return Result{ status: Status.Error, error: ErrorKind.Header }
+        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
       }
     }
     else {
       if size == 0 || entry.data[size - 1] != 0 {
-        return Result{ status: Status.Error, error: ErrorKind.Header }
+        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
       }
       value := entry.data[..size - 1]
       for byte in value {
         if byte == 0 {
-          return Result{ status: Status.Error, error: ErrorKind.Header }
+          return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
         }
       }
       if entry.kind == 'L' {
@@ -185,5 +186,5 @@ pub fn next(state: *ArchiveReader) Result {
       }
     }
   }
-  return Result{ status: Status.Error, error: ErrorKind.Header }
+  return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: cursor }
 }

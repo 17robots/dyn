@@ -22,9 +22,11 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
   network, processes) are `{value, ok, kind, error}`: `value` is the payload,
   `kind` a portable `std/errors` category and `error` the native code. Test
   `ok` first, then branch on `kind`; compare `error` only for platform-specific
-  handling. Parsers of external input return `{value, ok, kind, offset}`,
-  where `kind` is the module's error enum; tree parsers (`json`, `mdesk`) name
-  the payload `root` and return a usable stub on failure.
+  handling. Parsers of external input use the same portable `kind` and native `error`,
+  plus an `offset`. Pure parsers use native error `0`; an optional `detail`
+  preserves a module-specific diagnostic. Tree parsers (`json`, `mdesk`) name
+  the payload `root` and return a usable stub on failure. Migration status
+  and remaining exceptions are tracked in [std standardization](../internals/std-standardization.md).
   Scanners and writers keep their first error in their state and turn later
   calls into no-ops, so callers check once at the end. Predicates return
   `bool`. Missing lookups and end of input are ordinary results, not errors.
@@ -48,7 +50,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/fmt` | Formatting into a bounded caller buffer |
 | `std/unicode/utf8`, `utf16`, `text` | Strict UTF-8 and UTF-16, case folding and normalization |
 | `std/text/scanner` | Line and field scanner with positions |
-| `std/text/regex` | Thompson-NFA regular expressions compiled into caller storage |
+| `std/text/regex` | Thompson-NFA regular expressions compiled into an arena; reusable workspace |
 | `std/text/template`, `std/html/template` | Text templates, and HTML templates that escape text and quoted attributes |
 | `std/container/list` | Intrusive stacks, queues, doubly linked lists, trees and free lists |
 | `std/container/hash` | Intrusive chained hash tables and seeded SipHash-1-3 |
@@ -67,7 +69,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/encoding/json` | Validation, arena-backed DOM parsing, queries and writing |
 | `std/encoding/csv` | RFC 4180 field scanner, stream scanner and writer |
 | `std/encoding/ini` | INI scanner and one-pass `parse` into an arena table |
-| `std/encoding/xml` | XML event scanner, attributes, namespaces and writer |
+| `std/encoding/xml` | XML document trees, event scanner, attributes, namespaces and writer |
 | `std/encoding/mdesk` | Metadesk-style labeled trees with tags |
 | `std/encoding/hex`, `base32`, `base64` | Codecs into caller buffers that validate before writing |
 | `std/encoding/binary` | Fixed-width endian and unsigned LEB128 encoding |
@@ -87,7 +89,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |
 | `std/path` | Lexical slash-separated paths |
 | `std/process` | Spawn, capture, pipes, environment and arguments |
-| `std/thread`, `std/sync` | Caller-stack threads; mutexes, conditions, semaphores, once and atomics |
+| `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines and UTC ISO-8601 |
 | `std/terminal` | Raw mode, terminal control and key decoding (Linux) |
 | `std/dynlib` | Dynamic library loading (Linux; link libc explicitly) |
@@ -165,5 +167,4 @@ integer dimensions and padding panic if their result cannot be represented.
 The floating-point implementation has sampled host and RV32/Thumb execution
 tests. It assumes round to
 nearest, ties to even, and requires no host libm at runtime. Sampled comparisons
-with host libm are not a global accuracy proof. Native instruction lowering
-for the proposed math intrinsics remains a separate task.
+with host libm are not a global accuracy proof. Direct calls to trusted SDK math leaves use native instructions when the target permits them. Square root uses hardware FP on hard-float targets; copy-sign uses integer bits. AArch64 also lowers floor, ceil, truncation, ties-away rounding and fused FMA. RV32/RV64 and Thumb hard-float lower fused FMA. On x86, `--cpu native` enables SSE4.1 rounding and FMA only when CPU and OS support are present. Generic x86 and soft-float keep portable fallbacks where needed. Wasm lowers square root, floor, ceil, truncation and copy-sign; its nearest instruction does not implement ties-away round. Address-taken functions retain ordinary callable bodies.

@@ -211,8 +211,8 @@ fn recorded_errors() {
       keys += 1
     }
   }
-  if keys != 3 || scan.error != ini.ErrorKind.Syntax || scan.error_line != 2 || scan.errors != 2 {
-    #panic("INI keeps going and records the first error")
+  if keys != 1 || scan.error != ini.ErrorKind.Syntax || scan.error_line != 2 || scan.errors != 1 {
+    #panic("INI stops at the first error")
   }
   fields := csv.scanner("a,b\"c,d")
   buffer: [8]u8 = []

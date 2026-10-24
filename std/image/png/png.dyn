@@ -1,9 +1,50 @@
 use "std/mem" mem
+use "std/errors" errors
 use "std/compress/deflate" deflate
 
 pub struct Info { width: u32, height: u32, channels: u8, ok: bool }
-pub struct Result { info: Info, pixels: []u8, error: isize, ok: bool }
-pub struct EncodeResult { data: []u8, error: isize, ok: bool }
+// Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
+// true inside successful values, false in the zero failure value.
+// On failure value is zero. error is zero: codec details are not native errors.
+// offset is a source byte offset when known, otherwise zero (also for encoding).
+pub struct Image { info: Info, pixels: []u8 }
+pub struct Result { value: Image, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+pub struct InfoResult { value: Info, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
+pub struct EncodeResult { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+struct EncodeWork { data: []u8, error: isize, ok: bool }
+
+fn codec_kind(detail: isize) errors.Kind {
+  if detail == -75 {
+    return errors.Kind.Overflow
+  }
+  if detail == -28 {
+    return errors.Kind.Capacity
+  }
+  return errors.Kind.InvalidInput
+}
+
+pub fn inspect(source: []const u8) InfoResult {
+  info := inspect_info(source)
+  if !info.ok {
+    return InfoResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+  }
+  return InfoResult{ value: info, ok: true }
+}
+
+fn decode_result(work: DecodeWork) Result {
+  if !work.ok {
+    return Result{ kind: codec_kind(work.error), detail: work.error, offset: work.offset }
+  }
+  return Result{ value: Image{ info: work.info, pixels: work.pixels }, ok: true }
+}
+
+fn encode_result(work: EncodeWork) EncodeResult {
+  if !work.ok {
+    return EncodeResult{ kind: codec_kind(work.error), detail: work.error }
+  }
+  return EncodeResult{ value: work.data, ok: true }
+}
 
 fn u32be(source: []const u8, at: usize) u32 {
   return #cast(u32, source[at]) * 16777216 + #cast(u32, source[at + 1]) * 65536 +
@@ -48,7 +89,7 @@ fn chunk_crc(source: []const u8, type_at: usize, data_at: usize, length: usize) 
   return value ^ 4294967295
 }
 
-pub fn inspect(source: []const u8) Info {
+fn inspect_info(source: []const u8) Info {
   if #len(source) < 33 || source[0] != 137 || source[1] != 80 || source[2] != 78 || source[3] != 71 ||
     source[4] != 13 || source[5] != 10 || source[6] != 26 || source[7] != 10 || u32be(source, 8) != 13 ||
     !chunk_type(source, 12, 'I', 'H', 'D', 'R') {
@@ -108,19 +149,19 @@ fn add_byte(value: u8, predictor: u8) u8 {
 }
 
 // Decodes non-interlaced 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG.
-fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u8) Result {
-  info := inspect(source)
+fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u8) DecodeWork {
+  info := inspect_info(source)
   if !info.ok {
-    return Result{ error: -22 }
+    return DecodeWork{ error: -22 }
   }
   row_size := #cast(usize, info.width) * #cast(usize, info.channels)
   pixel_size := row_size * #cast(usize, info.height)
   scanline_size := (row_size + 1) * #cast(usize, info.height)
   if #cast(usize, info.height) != 0 && pixel_size / #cast(usize, info.height) != row_size {
-    return Result{ info: info, error: -75 }
+    return DecodeWork{ info: info, error: -75 }
   }
   if #len(pixels) < pixel_size || #len(scanlines) < scanline_size {
-    return Result{ info: info, error: -28 }
+    return DecodeWork{ info: info, error: -28 }
   }
   at: usize = 8
   compressed_used: usize = 0
@@ -130,15 +171,15 @@ fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const 
     type_at := at + 4
     data_at := at + 8
     if length > #len(source) - data_at - 4 {
-      return Result{ info: info, error: -74 }
+      return DecodeWork{ info: info, error: -74, offset: at }
     }
     expected_crc := u32be(source, data_at + length)
     if chunk_crc(source, type_at, data_at, length) != expected_crc {
-      return Result{ info: info, error: -74 }
+      return DecodeWork{ info: info, error: -74, offset: data_at + length }
     }
     if chunk_type(source, type_at, 'I', 'D', 'A', 'T') {
       if length > #len(compressed) - compressed_used {
-        return Result{ info: info, error: -28 }
+        return DecodeWork{ info: info, error: -28 }
       }
       for i in 0..length {
         compressed[compressed_used + i] = source[data_at + i]
@@ -151,18 +192,18 @@ fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const 
     at = data_at + length + 4
   }
   if !ended || compressed_used < 6 {
-    return Result{ info: info, error: -74 }
+    return DecodeWork{ info: info, error: -74 }
   }
   cmf := compressed[0]
   flg := compressed[1]
   header_value: usize = #cast(usize, cmf) * 256 + #cast(usize, flg)
   if (cmf & 15) != 8 || (cmf >> 4) > 7 || header_value % 31 != 0 || (flg & 32) != 0 {
-    return Result{ info: info, error: -74 }
+    return DecodeWork{ info: info, error: -74 }
   }
   inflater := deflate.InflateState{}
   inflated := deflate.resume(&inflater, scanlines[..scanline_size], compressed[2..compressed_used - 4])
   if !inflated.ok || inflated.written != scanline_size || adler32(scanlines[..scanline_size]) != u32be(compressed, compressed_used - 4) {
-    return Result{ info: info, error: -74 }
+    return DecodeWork{ info: info, error: -74 }
   }
   y: usize = 0
   for y < #cast(usize, info.height) {
@@ -196,13 +237,13 @@ fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const 
         predictor = paeth(left, above, upper_left)
       }
       else if filter != 0 {
-        return Result{ info: info, error: -74 }
+        return DecodeWork{ info: info, error: -74 }
       }
       pixels[y * row_size + x] = add_byte(raw, predictor)
     }
     y += 1
   }
-  return Result{ info: info, pixels: pixels[..pixel_size], ok: true }
+  return DecodeWork{ info: info, pixels: pixels[..pixel_size], ok: true }
 }
 
 fn adler32(source: []const u8) u32 {
@@ -238,15 +279,15 @@ fn append_chunk(destination: []u8, at: usize, kind: []const u8, payload: []const
 
 // Encodes tightly packed 8-bit grayscale, grayscale-alpha, RGB, or RGBA pixels.
 fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []const u8,
-  width: u32, height: u32, channels: u8) EncodeResult {
+  width: u32, height: u32, channels: u8) EncodeWork {
   if width == 0 || height == 0 || channels < 1 || channels > 4 {
-    return EncodeResult{ error: -22 }
+    return EncodeWork{ error: -22 }
   }
   row_size := #cast(usize, width) * #cast(usize, channels)
   pixel_size := row_size * #cast(usize, height)
   scanline_size := (row_size + 1) * #cast(usize, height)
   if pixel_size != #len(pixels) || #len(scanlines) < scanline_size || #len(compressed) < 6 || #len(destination) < 57 {
-    return EncodeResult{ error: -28 }
+    return EncodeWork{ error: -28 }
   }
   y: usize = 0
   for y < #cast(usize, height) {
@@ -261,7 +302,7 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
   compressed[1] = 1
   encoded := deflate.deflate_stored_chunk(compressed[2..#len(compressed) - 4], scanlines[..scanline_size], true)
   if !encoded.ok {
-    return EncodeResult{ error: -28 }
+    return EncodeWork{ error: -28 }
   }
   zlib_size: usize = encoded.written + 6
   put_u32be(compressed, 2 + encoded.written, adler32(scanlines[..scanline_size]))
@@ -291,17 +332,17 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
   at = append_chunk(destination, at, "IDAT", compressed[..zlib_size])
   at = append_chunk(destination, at, "IEND", compressed[..0])
   if at > #len(destination) {
-    return EncodeResult{ error: -28 }
+    return EncodeWork{ error: -28 }
   }
-  return EncodeResult{ data: destination[..at], ok: true }
+  return EncodeWork{ data: destination[..at], ok: true }
 }
 
 // Decodes non-interlaced 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG.
 // Pixels are in arena; failure pushes nothing.
-pub fn decode(arena: *mem.Arena, source: []const u8) Result {
-  info := inspect(source)
+fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
+  info := inspect_info(source)
   if !info.ok {
-    return Result{ error: -22 }
+    return DecodeWork{ error: -22 }
   }
   row_size := #cast(usize, info.width) * #cast(usize, info.channels)
   mark := mem.arena_mark(arena)
@@ -320,7 +361,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
 
 // Encodes tightly packed 8-bit grayscale, grayscale-alpha, RGB, or RGBA pixels
 // into arena.
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult {
+fn encode_work(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeWork {
   scanline_size := (#cast(usize, width) * #cast(usize, channels) + 1) * #cast(usize, height)
   compressed_size := scanline_size + (scanline_size / 65535 + 1) * 5 + 6
   mark := mem.arena_mark(arena)
@@ -336,4 +377,64 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, ch
   }
   mem.arena_rewind(arena, mark + #len(result.data))
   return result
+}
+
+// Checked before allocation; no hidden allocator and failures preserve the arena mark.
+fn pixel_count(width: u32, height: u32, channels: u8) usize {
+  limit := ~#cast(usize, 0)
+  w := #cast(usize, width)
+  h := #cast(usize, height)
+  if w > limit / h {
+    return 0
+  }
+  count := w * h
+  if count > limit / #cast(usize, channels) {
+    return 0
+  }
+  return count * #cast(usize, channels)
+}
+
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  info := inspect_info(source)
+  if !info.ok {
+    return Result{ kind: errors.Kind.InvalidInput, detail: -22 }
+  }
+  size := pixel_count(info.width, info.height, info.channels)
+  limit := ~#cast(usize, 0)
+  if size == 0 || size > limit - #cast(usize, info.height) {
+    return Result{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  scan := size + #cast(usize, info.height)
+  if size > limit - scan || #len(source) > limit - size - scan {
+    return Result{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  return decode_result(decode_work(arena, source))
+}
+
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult {
+  if width == 0 || height == 0 || channels < 1 || channels > 4 {
+    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+  }
+  size := pixel_count(width, height, channels)
+  limit := ~#cast(usize, 0)
+  if size == 0 || size > limit - #cast(usize, height) {
+    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  if size != #len(pixels) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -28 }
+  }
+  scan := size + #cast(usize, height)
+  overhead := (scan / 65535 + 1) * 5 + 6
+  if scan > limit - overhead {
+    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  compressed := scan + overhead
+  if scan > limit - 64 || compressed > (limit - 64 - scan) / 2 {
+    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  // PNG stores its IDAT length in a u32.
+  if compressed > 4294967295 {
+    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+  }
+  return encode_result(encode_work(arena, pixels, width, height, channels))
 }

@@ -7,8 +7,10 @@ import sys
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
-SOURCE = '''use "std/sync"
+SOURCE = r'''use "std/sync"
 use "std/thread"
+use "std/mem" mem
+use "std/errors" errors
 struct Shared {
   mutex: sync.Mutex, condition: sync.Condition, gate: sync.Semaphore,
   once: sync.Once, arrived: u32, completed: u32, total: u64, value: u64
@@ -37,13 +39,16 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
+  arena:mem.Arena
+  defer { mem.arena_release(&arena) }
   shared := Shared{}
   if !sync.try_lock(&shared.mutex) { #panic("initial trylock") }
   if sync.try_lock(&shared.mutex) { #panic("recursive trylock") }
   sync.unlock(&shared.mutex)
-  threads: [4]thread.Thread = []
+  threads: [4]*thread.Thread = []
   for i in 0..4 {
-    if thread.spawn_with_size(&threads[i], 131072, &worker, #cast(rawptr, &shared)) < 0 { #panic("spawn") }
+    spawned:=thread.spawn_with_size(&arena,131072,&worker,#cast(rawptr,&shared))
+    if !spawned.ok { #panic("spawn") } threads[i]=spawned.value
   }
   sync.lock(&shared.mutex)
   for shared.arrived != 4 { sync.condition_wait(&shared.condition, &shared.mutex) }
@@ -53,7 +58,7 @@ fn main() {
   for shared.completed != 4 { sync.condition_wait(&shared.condition, &shared.mutex) }
   if shared.total != 8000 { #panic("lost mutex updates") }
   sync.unlock(&shared.mutex)
-  for i in 0..4 { if thread.join(&threads[i]) != 0 { #panic("join") } }
+  for i in 0..4 { if !thread.join(threads[i]).ok { #panic("join") } }
   if sync.semaphore_try_wait(&shared.gate) || sync.once_begin(&shared.once) { #panic("consumed state") }
   sync.semaphore_post(&shared.gate)
   if !sync.semaphore_try_wait(&shared.gate) { #panic("semaphore try") }

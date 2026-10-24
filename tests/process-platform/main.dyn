@@ -13,7 +13,7 @@ fn main() {
   environment: [1][]const u8 = ["DYN_PROCESS_CHILD=yes"]
   options := process.Options{} options.environment = environment[..]
   output: [8]u8 = [] errors: [8]u8 = []
-  result := process.capture(&allocation,executable(),argv[..],options,output[..],errors[..],5000)
+  result := process.capture(&allocation,executable(),argv[..],options,process.CaptureOptions{timeout_milliseconds: 5000})
   if !result.ok || result.exit.code != 0 || #len(result.output) != 0 || #len(result.errors) != 0 { #panic("native process capture") }
   missing := process.spawn(&allocation,"no-such-dyn-process-executable",argv[..],options)
   if missing.ok { #panic("missing executable") }

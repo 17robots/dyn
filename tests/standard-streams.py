@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-standard-streams-') as temporary:
 use "std/bufio"
 use "std/time"
 fn main() {
-  clock := time.try_monotonic_now()
+  clock := time.monotonic_now()
   if !clock.ok { #panic("clock failed") }
   scratch: [8]u8 = []
   input := bufio.reader(io.stdin(), scratch[..])

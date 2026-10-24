@@ -1,4 +1,5 @@
 use "std/mem" mem
+use "std/errors" errors
 pub struct URL {
   scheme: []const u8,
   authority: []const u8,
@@ -7,7 +8,7 @@ pub struct URL {
   fragment: []const u8,
 }
 
-pub struct ParseResult { value: URL, ok: bool, offset: usize }
+pub struct ParseResult { value: URL, ok: bool, kind: errors.Kind, error: isize, offset: usize }
 
 pub fn parse(text: []const u8) ParseResult {
   empty := text[0..0]
@@ -24,14 +25,14 @@ pub fn parse(text: []const u8) ParseResult {
   }
   if colon >= 0 {
     if colon == 0 {
-      return ParseResult{ value: result, ok: false, offset: 0 }
+      return ParseResult{ value: result, ok: false, kind: errors.Kind.InvalidInput, error: 0, offset: 0 }
     }
     i: usize = 0
     for i < #cast(usize, colon) {
       byte := text[i]
       alpha := (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z')
       if !alpha && (i == 0 || !((byte >= '0' && byte <= '9') || byte == '+' || byte == '-' || byte == '.')) {
-        return ParseResult{ offset: i }
+        return ParseResult{ ok: false, kind: errors.Kind.InvalidInput, error: 0, offset: i }
       }
       i += 1
     }
@@ -65,10 +66,10 @@ pub fn parse(text: []const u8) ParseResult {
   if at < #len(text) && text[at] == '#' {
     result.fragment = text[at + 1..]
   }
-  return ParseResult{ value: result, ok: true, offset: 0 }
+  return ParseResult{ value: result, ok: true, kind: errors.Kind.None, error: 0, offset: 0 }
 }
 
-pub struct EncodingResult { data: []u8, ok: bool }
+pub struct EncodingResult { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize }
 fn unreserved(byte: u8) bool {
   return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
     (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' || byte == '~'
@@ -95,7 +96,7 @@ fn percent_encode_into(destination: []u8, source: []const u8) EncodingResult {
       amount = 1
     }
     if amount > #len(destination) - required {
-      return EncodingResult{ data: destination[..0] }
+      return EncodingResult{ value: destination[..0], ok: false, kind: errors.Kind.InvalidInput, error: 0, offset: 0 }
     }
     required += amount
   }
@@ -113,7 +114,7 @@ fn percent_encode_into(destination: []u8, source: []const u8) EncodingResult {
       at += 3
     }
   }
-  return EncodingResult{ data: destination[..at], ok: true }
+  return EncodingResult{ value: destination[..at], ok: true, kind: errors.Kind.None, error: 0, offset: 0 }
 }
 // Percent decoding treats '+' literally; it is not form-urlencoded decoding.
 fn percent_decode_into(destination: []u8, source: []const u8) EncodingResult {
@@ -122,12 +123,12 @@ fn percent_decode_into(destination: []u8, source: []const u8) EncodingResult {
   for i < #len(source) {
     if source[i] == '%' {
       if #len(source) - i < 3 || hex_value(source[i + 1]) < 0 || hex_value(source[i + 2]) < 0 {
-        return EncodingResult{ data: destination[..0] }
+        return EncodingResult{ value: destination[..0], ok: false, kind: errors.Kind.InvalidInput, error: 0, offset: i }
       }
       i += 2
     }
     if required == #len(destination) {
-      return EncodingResult{ data: destination[..0] }
+      return EncodingResult{ value: destination[..0], ok: false, kind: errors.Kind.InvalidInput, error: 0, offset: i }
     }
     required += 1
     i += 1
@@ -144,7 +145,7 @@ fn percent_decode_into(destination: []u8, source: []const u8) EncodingResult {
     }
     at += 1
   }
-  return EncodingResult{ data: destination[..at], ok: true }
+  return EncodingResult{ value: destination[..at], ok: true, kind: errors.Kind.None, error: 0, offset: 0 }
 }
 
 // One component percent-encoded, slashes included, in arena.
@@ -152,8 +153,8 @@ pub fn percent_encode(arena: *mem.Arena, source: []const u8) []u8 {
   mark := mem.arena_mark(arena)
   space := mem.push_bytes_uninit(arena, 3 * #len(source))
   encoded := percent_encode_into(space, source)
-  mem.arena_rewind(arena, mark + #len(encoded.data))
-  return encoded.data
+  mem.arena_rewind(arena, mark + #len(encoded.value))
+  return encoded.value
 }
 
 // source with %XX escapes decoded, in arena. '+' stays literal. ok is false,
@@ -164,8 +165,8 @@ pub fn percent_decode(arena: *mem.Arena, source: []const u8) EncodingResult {
   decoded := percent_decode_into(space, source)
   if !decoded.ok {
     mem.arena_rewind(arena, mark)
-    return EncodingResult{}
+    return EncodingResult{ ok: false, kind: decoded.kind, error: decoded.error, offset: decoded.offset }
   }
-  mem.arena_rewind(arena, mark + #len(decoded.data))
+  mem.arena_rewind(arena, mark + #len(decoded.value))
   return decoded
 }

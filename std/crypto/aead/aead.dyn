@@ -1,16 +1,112 @@
 use "vendor/openssl/crypto" provider
+use "std/mem" mem
+use "std/errors" errors
 
 pub enum Cipher { Aes256Gcm, Chacha20Poly1305 }
-pub type Result = provider.AeadResult
+pub struct Sealed { ciphertext: []u8, tag: []u8 }
+pub struct SealResult { value: Sealed, ok: bool, kind: errors.Kind, error: isize, provider_code: u64 }
+pub struct OpenResult { value: []u8, ok: bool, kind: errors.Kind, error: isize, provider_code: u64 }
+
 fn provider_kind(kind: Cipher) u8 {
   if kind == Cipher.Aes256Gcm {
     return provider.CipherAes256Gcm
   }
   return provider.CipherChacha20Poly1305
 }
-pub fn seal(kind: Cipher, ciphertext: []u8, tag: []u8, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
-  return provider.aead_seal(provider_kind(kind), ciphertext, tag, plaintext, additional, key, nonce)
+fn valid(kind: Cipher, count: usize, additional: []const u8, key: []const u8, nonce: []const u8) bool {
+  if kind != Cipher.Aes256Gcm && kind != Cipher.Chacha20Poly1305 {
+    return false
+  }
+  if #len(key) != 32 || #len(nonce) == 0 || #len(nonce) > 2147483647 || count > 2147483647 || #len(additional) > 2147483647 {
+    return false
+  }
+  // OpenSSL GCM accepts at most 128 IV bytes; ChaCha fixes its IV at 12.
+  if kind == Cipher.Aes256Gcm && #len(nonce) > 128 {
+    return false
+  }
+  if kind == Cipher.Chacha20Poly1305 && #len(nonce) != 12 {
+    return false
+  }
+  return true
 }
-pub fn open(kind: Cipher, plaintext: []u8, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) Result {
-  return provider.aead_open(provider_kind(kind), plaintext, ciphertext, tag, additional, key, nonce)
+fn overlaps(left: []const u8, right: []const u8) bool {
+  if #len(left) == 0 || #len(right) == 0 {
+    return false
+  }
+  a := #cast(usize, &left[0])
+  b := #cast(usize, &right[0])
+  if a <= b {
+    return b - a < #len(left)
+  }
+  return a - b < #len(right)
+}
+// Inspect the pending allocation before even zeroing bytes: inputs can borrow
+// unused arena backing. Lazy arenas have no backing that an input could alias.
+fn conflicts(arena: *mem.Arena, count: usize, first: []const u8, second: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) bool {
+  mark := mem.arena_mark(arena)
+  if mark > #len(arena.data) {
+    #panic("invalid arena offset")
+  }
+  if count > #len(arena.data) - mark {
+    return false
+  }
+  pending := arena.data[mark..mark + count]
+  return overlaps(pending, first) || overlaps(pending, second) || overlaps(pending, additional) || overlaps(pending, key) || overlaps(pending, nonce)
+}
+
+// Produces arena-owned ciphertext (same length as plaintext) and a 16-byte tag.
+// Views expire on the applicable arena rewind/reset/release. Inputs are borrowed
+// only for this call and must not overlap pending output. Key is 32 bytes; GCM
+// accepts 1..128 nonce bytes, ChaCha requires 12 bytes. Nonce uniqueness for a key
+// is the caller's responsibility. Exhaustion panics; failure returns empty
+// values, preserves the arena prefix, and consumes no arena bytes. error is
+// always zero; provider_code preserves the unsigned OpenSSL diagnostic exactly.
+pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) SealResult {
+  count := #len(plaintext)
+  if !valid(kind, count, additional, key, nonce) || count > ~#cast(usize, 0) - 16 {
+    return SealResult{kind: errors.Kind.InvalidInput}
+  }
+  empty: []const u8
+  if conflicts(arena, count + 16, plaintext, empty, additional, key, nonce) {
+    return SealResult{kind: errors.Kind.InvalidInput}
+  }
+  mark := mem.arena_mark(arena)
+  output := mem.push_bytes_uninit(arena, count + 16)
+  ciphertext := output[..count]
+  tag := output[count..]
+  result := provider.aead_seal(provider_kind(kind), ciphertext, tag, plaintext, additional, key, nonce)
+  if !result.ok || result.written != count {
+    mem.zero(output)
+    mem.arena_rewind(arena, mark)
+    return SealResult{kind: errors.Kind.System, provider_code: result.provider_code}
+  }
+  return SealResult{value: Sealed{ciphertext: ciphertext, tag: tag}, ok: true, provider_code: result.provider_code}
+}
+
+// Produces arena-owned authenticated plaintext of ciphertext length. Same
+// borrowing, nonce, exhaustion and lifetime rules as seal; tag must be 16 bytes.
+// On failure clears all allocated plaintext before rewinding. Authentication
+// rejection with no provider diagnostic is InvalidInput; other provider failures
+// are System. Neither failure publishes plaintext, including partial plaintext.
+pub fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) OpenResult {
+  count := #len(ciphertext)
+  if !valid(kind, count, additional, key, nonce) || #len(tag) != 16 {
+    return OpenResult{kind: errors.Kind.InvalidInput}
+  }
+  if conflicts(arena, count, ciphertext, tag, additional, key, nonce) {
+    return OpenResult{kind: errors.Kind.InvalidInput}
+  }
+  mark := mem.arena_mark(arena)
+  plaintext := mem.push_bytes_uninit(arena, count)
+  result := provider.aead_open(provider_kind(kind), plaintext, ciphertext, tag, additional, key, nonce)
+  if !result.ok || result.written != count {
+    mem.zero(plaintext)
+    mem.arena_rewind(arena, mark)
+    failure_kind := errors.Kind.System
+    if !result.ok && result.provider_code == 0 {
+      failure_kind = errors.Kind.InvalidInput
+    }
+    return OpenResult{kind: failure_kind, provider_code: result.provider_code}
+  }
+  return OpenResult{value: plaintext, ok: true, provider_code: result.provider_code}
 }

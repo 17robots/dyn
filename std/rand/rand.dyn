@@ -1,5 +1,6 @@
 // Deterministic caller-owned PRNG. Not suitable for cryptography.
 
+// A zero-initialized State lazily starts the same sequence as seeded(0).
 pub struct State { value: u64 }
 
 pub fn seeded(seed: u64) State {
@@ -11,6 +12,9 @@ pub fn seeded(seed: u64) State {
 }
 
 pub fn next_u64(state: *State) u64 {
+  if state.value == 0 {
+    state.value = 1
+  }
   state.value = (state.value * 48271) % 2147483647
   return state.value
 }

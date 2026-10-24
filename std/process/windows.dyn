@@ -307,8 +307,8 @@ fn read_native(value: isize, destination: []u8) ReadResult {
   }
   return ReadResult{ count: #cast(usize, read), ok: true }
 }
-fn milliseconds_native() u64 {
-  return win_ticks()
+fn milliseconds_native() MillisecondsResult {
+  return MillisecondsResult{value: win_ticks(), ok: true}
 }
 fn sleep_native() {
   win_sleep(1)

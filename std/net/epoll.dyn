@@ -84,9 +84,9 @@ pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Resu
   }
   start := clock.ClockResult{}
   if timeout_milliseconds > 0 {
-    start = clock.try_monotonic_now()
+    start = clock.monotonic_now()
     if !start.ok {
-      return Result{ value: start.error, error: start.error }
+      return Result{ value: start.error, error: start.error, kind: start.kind }
     }
   }
   remaining := timeout_milliseconds

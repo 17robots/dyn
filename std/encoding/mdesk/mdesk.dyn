@@ -1,3 +1,4 @@
+use "std/errors" errors
 use "std/bytes"
 use "std/mem"
 
@@ -40,8 +41,8 @@ pub struct Node {
   last_tag: *Node,
 }
 
-// root is never nil, also on failure, where it holds what parsed before the error.
-pub struct ParseResult { root: *Node, kind: ErrorKind, offset: usize, ok: bool }
+// root is never nil. Failure returns the read-only nil_node stub.
+pub struct ParseResult { root: *Node, kind: errors.Kind, error: isize, detail: ErrorKind, offset: usize, ok: bool }
 
 struct Parser {
   arena: *mem.Arena,
@@ -56,13 +57,20 @@ pub const nil_node: Node = Node{}
 
 // Nodes are pushed with mem.push, so a full fixed arena panics.
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
+  mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, source: source }
   root := mem.push(Node, arena)
   root.kind = Kind.Root
   parse_children(&parser, root, 0)
+  if parser.error != ErrorKind.None {
+    mem.arena_rewind(arena, mark)
+    return ParseResult{root: #cast(*Node, &nil_node), kind: errors.Kind.InvalidInput, error: 0, detail: parser.error, offset: parser.error_offset}
+  }
   return ParseResult{
     root: root,
-    kind: parser.error,
+    kind: errors.Kind.None,
+    error: 0,
+    detail: ErrorKind.None,
     offset: parser.error_offset,
     ok: parser.error == ErrorKind.None,
   }

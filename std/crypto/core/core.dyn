@@ -85,19 +85,29 @@ fn block(state: []u32, input: []const u8) {
   state[7] = add32(state[7], h)
 }
 
-pub struct Sha256 { state: [8]u32, tail: [64]u8, tail_length: usize, length: u64 }
+// Zero is an empty SHA-256 stream. Explicit init resets a used or failed stream.
+pub struct Sha256 { state: [8]u32, tail: [64]u8, tail_length: usize, length: u64, initialized: bool, failed: bool }
 
 pub fn sha256_init(context: *Sha256) {
   context.state = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225]
   context.tail_length = 0
   context.length = 0
+  context.initialized = true
+  context.failed = false
 }
 
 // Adds one chunk. False means the SHA-256 maximum input length was exceeded.
 pub fn sha256_update(context: *Sha256, input: []const u8) bool {
+  if !context.initialized {
+    sha256_init(context)
+  }
+  if context.failed {
+    return false
+  }
   input_length: u64 = #cast(u64, #len(input))
   maximum: u64 = 2305843009213693951
   if input_length > maximum - context.length {
+    context.failed = true
     return false
   }
   context.length += input_length
@@ -135,8 +145,15 @@ pub fn sha256_update(context: *Sha256, input: []const u8) bool {
   return true
 }
 
-// Finishes into 32 caller-owned bytes. The context may be reinitialized and reused.
+// Finishes into 32 caller-owned bytes, or returns an empty slice on failure.
+// An oversized update latches failed; init resets the context for reuse.
 pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
+  if !context.initialized {
+    sha256_init(context)
+  }
+  if context.failed {
+    return destination[..0]
+  }
   if #len(destination) < 32 {
     return destination[..0]
   }

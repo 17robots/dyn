@@ -63,6 +63,13 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
     return 0;
   if (op == 0xc4 && !rex && !prefix && !word16 && n - i >= 4) {
     unsigned v2 = p[i], v3 = p[i + 1], modrm = p[i + 3];
+    if ((v2 & 31) == 2 && p[i + 2] == 0xa9 && !(v3 & 4) && (v3 & 3) == 1 && (modrm >> 6) == 3) {
+      unsigned dest = ((modrm >> 3) & 7) + ((v2 & 0x80) ? 0 : 8);
+      unsigned source = (modrm & 7) + ((v2 & 0x20) ? 0 : 8);
+      unsigned middle = (~v3 >> 3) & 15;
+      snprintf(out,cap,"vfmadd213%s xmm%u, xmm%u, xmm%u",v3 & 0x80 ? "sd" : "ss",dest,middle,source);
+      return i + 4;
+    }
     if ((v2 & 31) != 2 || p[i + 2] != 0xf7 || (v3 & 4) || (modrm >> 6) != 3 ||
         !(v3 & 3))
       return 0;
@@ -125,6 +132,14 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
                (long long)(disp + i + imm));
     return i + imm;
   }
+  if (op == 0x0f && word16 && !prefix && n - i >= 4 && p[i] == 0x3a &&
+      (p[i + 1] == 0x0b || p[i + 1] == 0x0a) && (p[i + 2] >> 6) == 3) {
+    unsigned modrm = p[i + 2];
+    unsigned dest = ((modrm >> 3) & 7) + ((rex & 4) ? 8 : 0);
+    unsigned source = (modrm & 7) + ((rex & 1) ? 8 : 0);
+    snprintf(out,cap,"round%s xmm%u, xmm%u, %u",p[i + 1] == 0x0b ? "sd" : "ss",dest,source,p[i + 3]);
+    return i + 4;
+  }
   bool two = false, reverse = false, xmm = false;
   unsigned source_bits = bits;
   if (op == 0x0f) {
@@ -153,11 +168,13 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
     } else if (op == 0xaf) {
       name = "imul";
       reverse = true;
-    } else if (op == 0x10 || op == 0x11 || op == 0x58 || op == 0x59 ||
+    } else if (op == 0x10 || op == 0x11 || op == 0x28 || op == 0x29 || op == 0x51 || op == 0x58 || op == 0x59 ||
                op == 0x5c || op == 0x5e || op == 0x2e || op == 0x6e ||
                op == 0x7e || op == 0x2a || op == 0x2c || op == 0x5a ||
                op == 0x57) {
-      if (op == 0x57) {
+      if (op == 0x28 || op == 0x29) {
+        if (prefix) return 0;
+      } else if (op == 0x57) {
         if (prefix)
           return 0;
       } else if (op == 0x2e) {
@@ -172,11 +189,13 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
       source_bits = op == 0x6e || op == 0x2a ? (rex & 8 ? 64 : 32)
                     : op == 0x7e     ? (prefix == 0xf3 || (rex & 8) ? 64 : 32)
                     : op == 0x2e     ? (word16 ? 64 : 32)
-                    : op == 0x57     ? 128
+                    : op == 0x57 || op == 0x28 || op == 0x29 ? 128
                     : prefix == 0xf3 ? 32
                                      : 64;
-      reverse = op != 0x11 && op != 0x7e;
-      name = op == 0x10 || op == 0x11   ? (prefix == 0xf3 ? "movss" : "movsd")
+      reverse = op != 0x11 && op != 0x29 && op != 0x7e;
+      name = op == 0x28 || op == 0x29 ? (word16 ? "movapd" : "movaps")
+             : op == 0x10 || op == 0x11   ? (prefix == 0xf3 ? "movss" : "movsd")
+             : op == 0x51               ? (prefix == 0xf3 ? "sqrtss" : "sqrtsd")
              : op == 0x58               ? (prefix == 0xf3 ? "addss" : "addsd")
              : op == 0x59               ? (prefix == 0xf3 ? "mulss" : "mulsd")
              : op == 0x5c               ? (prefix == 0xf3 ? "subss" : "subsd")

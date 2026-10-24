@@ -918,6 +918,26 @@ static unsigned call(WG *g, const DynIrExpr *e) {
       args[i] = copy;
     }
   }
+  /* Only trusted SDK leaves carry this identity. Keep ordinary bodies and
+     address-taken calls available; unsupported operations retain their calls. */
+  if (f && f->return_type == DYN_TYPE_F64 && e->type == DYN_TYPE_F64 &&
+      !f->foreign && !f->variadic && n == e->item_count) {
+    unsigned opcode = 0, count = 1;
+    switch (f->math_intrinsic) {
+    case DYN_MATH_INTRINSIC_SQRT: opcode = 0x9f; break;
+    case DYN_MATH_INTRINSIC_FLOOR: opcode = 0x9c; break;
+    case DYN_MATH_INTRINSIC_CEIL: opcode = 0x9b; break;
+    case DYN_MATH_INTRINSIC_TRUNC: opcode = 0x9d; break;
+    case DYN_MATH_INTRINSIC_COPYSIGN: opcode = 0xa6; count = 2; break;
+    default: break; /* nearest is not ties-away round; Wasm has no fused FMA. */
+    }
+    if (opcode && n == count) {
+      for (unsigned i = 0; i < count; ++i) get(g, args[i]);
+      op(g, opcode);
+      free(args);
+      return save(g, 0x7c);
+    }
+  }
   if (f && f->variadic && f->foreign) {
     fprintf(stderr,
             "error: independent Wasm C variadic calls are unsupported\n");
@@ -1707,7 +1727,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
     free(args);
     const char *name =
         f->is_main     ? "__original_main"
-        : f->link_name ? f->link_name
+        : f->foreign && f->link_name ? f->link_name
                        : f->name; /* Root functions retain unmangled names. */
     bool exp = f->is_public && !f->foreign && strncmp(f->name, "dyn_m", 5) != 0;
     g.fn_symbol[i] = symbol(&g, name, 0,

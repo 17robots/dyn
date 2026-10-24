@@ -348,3 +348,62 @@ pub fn error_string(destination: []u8, code: u64) []u8 {
   }
   return destination[..length]
 }
+
+// Complete allocated subject text. Release with subject_text_free_owned.
+// A nil formatting buffer asks OpenSSL to allocate the complete representation.
+pub struct SubjectTextResult { value: *u8, provider_code: u64, ok: bool }
+extern fn provider_text_free "CRYPTO_free"(pointer: rawptr, file: *const u8, line: i32)
+pub fn subject_text_owned(certificate: Certificate) SubjectTextResult {
+  if certificate == nil {
+    return SubjectTextResult{}
+  }
+  provider_clear_error()
+  name := certificate_subject_name(certificate)
+  if name == nil {
+    return SubjectTextResult{provider_code: provider_error()}
+  }
+  text := name_text(name, nil, 0)
+  if text == nil {
+    return SubjectTextResult{provider_code: provider_error()}
+  }
+  return SubjectTextResult{value: text, ok: true}
+}
+pub fn subject_text_free_owned(text: *u8) {
+  provider_text_free(text, nil, 0)
+}
+// Structured variants preserve retry state and diagnostics; bool APIs above
+// remain available to raw-provider callers.
+pub fn shutdown_result(connection: Connection) Result {
+  if connection == nil {
+    return failure(ErrorKind.InvalidArgument, 0)
+  }
+  provider_clear_error()
+  status := ssl_shutdown(connection)
+  if status == 1 {
+    return Result{provider_status: status, ok: true}
+  }
+  if status == 0 {
+    return Result{error: ErrorKind.WantRead, provider_status: 0}
+  }
+  return operation_failure(connection, status)
+}
+pub fn set_alpn_result(connection: Connection, protocols: []const u8) Result {
+  if connection == nil || #len(protocols) == 0 || #len(protocols) > 4294967295 {
+    return failure(ErrorKind.InvalidArgument, 0)
+  }
+  index: usize = 0
+  for index < #len(protocols) {
+    length := #cast(usize, protocols[index])
+    index += 1
+    if length == 0 || length > #len(protocols) - index {
+      return failure(ErrorKind.InvalidArgument, 0)
+    }
+    index += length
+  }
+  provider_clear_error()
+  status := ssl_set_alpn(connection, &protocols[0], #cast(u32, #len(protocols)))
+  if status != 0 {
+    return failure(ErrorKind.Provider, status)
+  }
+  return Result{ok: true}
+}

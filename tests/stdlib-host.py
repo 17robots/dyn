@@ -146,13 +146,13 @@ fn main() {
   require(errors.darwin(minimum) == errors.Kind.System, "stdlib assertion 131")
   require(errors.windows(minimum) == errors.Kind.System, "stdlib assertion 132")
   require(errors.wasi(minimum) == errors.Kind.System, "stdlib assertion 133")
-  started := time.try_monotonic_now()
-  wall := time.try_realtime_now()
+  started := time.monotonic_now()
+  wall := time.realtime_now()
   require(started.ok && wall.ok && wall.value.seconds > 1700000000, "stdlib assertion 136")
-  require(time.sleep_result(time.Millisecond * 2).ok, "stdlib assertion 137")
-  finished := time.try_monotonic_now()
+  require(time.sleep(time.Millisecond * 2).ok, "stdlib assertion 137")
+  finished := time.monotonic_now()
   require(finished.ok && time.elapsed(started.value, finished.value).value >= time.Millisecond, "stdlib assertion 139")
-  require(time.sleep_result(0).ok, "stdlib assertion 140")
+  require(time.sleep(0).ok, "stdlib assertion 140")
   require(io.println(io.stdout(), "stdlib passed").status == io.Status.Complete, "stdlib assertion 141")
 }
 '''

@@ -10,6 +10,7 @@
 #include <string.h>
 #include "output.h"
 #include "dwarf.h"
+#include "native_cpu.h"
 
 /* Per-section and per-object byte bound; buffers grow on demand up to it. */
 #define LIMIT (1024u * 1024u * 1024u)
@@ -120,6 +121,7 @@ typedef struct {
   unsigned scope_count;
   bool vectorize, optimization_remarks;
   bool bmi2; /* Host-selected flag-preserving variable shifts. */
+  bool sse41, fma; /* Selected x86 scalar math extensions. */
   bool rv64;
   bool rv32; /* RV32 pairs each 64-bit model register (rv32.inc) */
   bool t32; /* Thumb-2 (ARMv7E-M) with the same 32-bit model (t32.inc) */
@@ -1298,6 +1300,31 @@ static bool call_with(BackendContext *ctx, const DynIrProgram *ir, const DynIrFu
         (!callee->variadic && callee->param_count != e->item_count) || callee->param_count>e->item_count ||
         !abi_supported(ir,callee->return_type)) return false;
     packed=callee->variadic&&!callee->foreign; variadic=callee->variadic&&!packed; fixed=callee->param_count;
+    /* Preflight the complete trusted signature before evaluating any operand.
+       Snapshot in source order: nested argument calls may destroy A/C/D. */
+    unsigned math_arity=callee->math_intrinsic == DYN_MATH_INTRINSIC_FMA ? 3 :
+                        callee->math_intrinsic == DYN_MATH_INTRINSIC_COPYSIGN ? 2 : 1;
+    bool native_math=!callee->variadic && callee->param_count == math_arity &&
+        e->item_count == math_arity && e->type == callee->return_type &&
+        callee->param_start <= ir->param_count && math_arity <= ir->param_count-callee->param_start &&
+        e->item_start <= ir->item_count && math_arity <= ir->item_count-e->item_start &&
+        isa_math_supported(ctx,callee->math_intrinsic,e->type);
+    for (unsigned i=0; native_math && i<math_arity; ++i) {
+      DynExprId argument=ir->items[e->item_start+i].expression;
+      native_math=ir->params[callee->param_start+i].type == e->type &&
+          argument < ir->expression_count && ir->expressions[argument].type == e->type;
+    }
+    if (native_math) {
+      for (unsigned i=0;i<math_arity;++i) {
+        if (!expression(ctx,ir,f,ir->items[e->item_start+i].expression,depth+1)) return false;
+        isa_push(ctx,R_A);
+      }
+      if (math_arity == 3) isa_pop(ctx,R_D);
+      if (math_arity >= 2) isa_pop(ctx,R_C);
+      isa_pop(ctx,R_A);
+      isa_math(ctx,callee->math_intrinsic,e->type);
+      return !ctx->text.failed && !ctx->relocation_failed;
+    }
     if (packed) {
       if (!dyn_type_is_slice(callee->variadic_type)) return false;
       pack_type=ir->slices[callee->variadic_type-DYN_TYPE_SLICE_BASE].element;
@@ -3279,11 +3306,22 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
       ? (!strcmp(dyn_context_target(&source->context)->name, "thumbv7em-none-nucleo-h753zi") ? 0x20001000u : 0x20301000u)
       : 0x87f01000u;
   ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64; ctx->shared = shared;
-  ctx->bmi2 = !a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32 && source->context.optimization && source->context.optimization->features &&
-              !strcmp(source->context.optimization->features, "+bmi2");
+  const char *features = source->context.optimization ? source->context.optimization->features : NULL;
+  bool x86 = !a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32;
+  ctx->bmi2 = x86 && dyn_cpu_has_feature(features, "+bmi2");
+  ctx->sse41 = x86 && dyn_cpu_has_feature(features, "+sse4.1");
+  ctx->fma = x86 && dyn_cpu_has_feature(features, "+fma");
   if (source->context.optimization && source->context.optimization->remarks &&
-      source->context.optimization->native_cpu)
-    fprintf(stderr, "remark: independent CPU selection: %s\n", ctx->bmi2 ? "+bmi2 variable shifts" : "baseline ISA (no additional implemented host features)");
+      source->context.optimization->native_cpu) {
+    fprintf(stderr, "remark: independent CPU selection: ");
+    const char *separator = "";
+    if (ctx->bmi2) { fprintf(stderr, "+bmi2 variable shifts"); separator = ", "; }
+    if (ctx->sse41) { fprintf(stderr, "%s+sse4.1 scalar rounding", separator); separator = ", "; }
+    if (ctx->fma) fprintf(stderr, "%s+fma fused multiply-add", separator);
+    if (!ctx->bmi2 && !ctx->sse41 && !ctx->fma)
+      fprintf(stderr, "baseline ISA (no additional implemented host features)");
+    fprintf(stderr, "\n");
+  }
   ctx->vectorize = !ctx->rv64 && !ctx->rv32 && !ctx->t32 && !debug && !debug_info && source->context.optimization && source->context.optimization->level >= 3;
   ctx->optimization_remarks = source->context.optimization && source->context.optimization->remarks;
   ctx->winarm64 = target == TARGET_A64_COFF;

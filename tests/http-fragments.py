@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """HTTP framing survives every transport split and byte-at-a-time delivery."""
 import json
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +14,7 @@ SOURCE = r'''
 use "std/io" io
 use "std/net/http" http
 use "std/bytes" bytes
+use "std/mem" mem
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
 fn read_feed(raw: rawptr, destination: []u8) io.Result {
   feed := #cast(*Feed, raw)
@@ -29,17 +31,18 @@ fn sink(raw: rawptr, data: []const u8) io.Result {
   _ = raw
   return io.Result{ transferred: #len(data), status: io.Status.Complete }
 }
-fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8, capacity: usize) {
+fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8) {
   splits := #len(wire) + 1
   if splits > 256 { splits = 2 }
   for cut in 0..splits {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
-      request: [256]u8 = [] response: [65536]u8 = []
-      got := http.client_do(io.Reader{ data: #cast(rawptr, &feed), read: &read_feed }, io.Writer{ write: &sink }, request[..], response[..capacity], method, "/", "host", "")
+      arena: mem.Arena
+      defer mem.arena_release(&arena)
+      got := http.client_do(&arena, io.Reader{ data: #cast(rawptr, &feed), read: &read_feed }, io.Writer{ write: &sink }, method, "/", "host", "")
       if got.ok != valid { #panic("response validity") }
       if valid && !bytes.equal(got.body, expected) { #panic("response body") }
-      if !valid && got.error != http.ErrorKind.Invalid { #panic("response error") }
+      if !valid && got.detail != http.ErrorKind.Invalid { #panic("response error") }
     }
   }
 }
@@ -54,7 +57,7 @@ fn server_check(wire: []const u8) {
       second := http.receive(&state)
       if !second.ok || !bytes.equal(second.request.body, "") || !bytes.equal(second.request.target, "/two") { #panic("second request") }
       last := http.receive(&state)
-      if last.ok || last.error != http.ErrorKind.End { #panic("request eof") }
+      if last.ok || last.detail != http.ErrorKind.End { #panic("request eof") }
     }
   }
 }
@@ -63,11 +66,14 @@ fn server_invalid(wire: []const u8) {
   storage: [256]u8 = []
   state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: &read_feed }, io.Writer{ write: &sink }, storage[..])
   got := http.receive(&state)
-  if got.ok || got.error != http.ErrorKind.Invalid { #panic("invalid request") }
+  if got.ok || got.detail != http.ErrorKind.Invalid { #panic("invalid request") }
 }
 fn main() {
 '''
-q = json.dumps
+def q(text):
+    # Dyn uses byte escapes, not JSON's Unicode/backspace/form-feed escapes.
+    encoded = json.dumps(text).replace('\\b', '\\x08').replace('\\f', '\\x0c')
+    return re.sub(r'\\u00([0-9a-fA-F]{2})', lambda m: '\\x' + m.group(1), encoded)
 chunk_head = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'
 chunk = chunk_head + '3;foo=bar\r\nabc\r\n2\r\nde\r\n0\r\nX-Trailer: yes\r\n\r\n'
 cases = [
@@ -81,13 +87,13 @@ cases = [
     ('HTTP/1.1 204 No Content\r\n\r\n', '', True, 'GET', 65536),
     ('HTTP/1.1 200 OK\r\n\r\n', '', True, 'CONNECT', 65536),
 ]
-for bad in ['g\r\n', ';x\r\n', '10000000000000000\r\n', '1\r\naXX', '0\r\nMissingColon\r\n\r\n', '0\r\nContent-Length: 1\r\n\r\n', '0\r\nTransfer-Encoding: chunked\r\n\r\n']:
+for bad in ['g\r\n', ';x\r\n', '10000000000000000\r\n', '1\r\naXX', '0\r\nMissingColon\r\n\r\n', '0\r\nContent-Length: 1\r\n\r\n', '0\r\nTransfer-Encoding: chunked\r\n\r\n', '0\r\nX: a\x00b\r\n\r\n', '0\r\nX: a\nb\r\n\r\n', '0\r\nX: a\x7fb\r\n\r\n']:
     cases.append((chunk_head + bad, '', False, 'GET', 65536))
 # Truncation anywhere in encoded framing or payload must never report success.
 for end in range(len(chunk_head), len(chunk)):
     cases.append((chunk[:end], '', False, 'GET', 65536))
 for wire, body, valid, method, capacity in cases:
-    SOURCE += f'  check({q(wire)}, {q(body)}, {str(valid).lower()}, {q(method)}, {capacity})\n'
+    SOURCE += f'  check({q(wire)}, {q(body)}, {str(valid).lower()}, {q(method)})\n'
 for malformed in ['bad\r\n\r\n', 'POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\na', 'POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n']:
     SOURCE += '  server_invalid(' + q(malformed) + ')\n'
 SOURCE += '  server_check(' + q('POST /one HTTP/1.1\r\nContent-Length: 3\r\n\r\nabcGET /two HTTP/1.1\r\n\r\n') + ')\n}\n'

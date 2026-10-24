@@ -1,4 +1,5 @@
 use "std/time" clock
+use "std/errors" benchmark_errors
 
 pub fn expect(condition: bool, message: []const u8) {
   if !condition {
@@ -75,20 +76,54 @@ pub fn random_below(generator: *Random, bound: usize) usize {
   return #cast(usize, (random_next(generator) % #cast(u64, bound)))
 }
 
-pub struct Benchmark { started: clock.Instant, iterations: usize }
+// Clock failures are retained by the benchmark and returned by later queries.
+pub struct Benchmark { started: clock.ClockResult, iterations: usize, failed: bool, error: isize, kind: benchmark_errors.Kind }
 pub fn benchmark_start(iterations: usize) Benchmark {
-  return Benchmark{ started: clock.monotonic_now(), iterations: iterations }
+  now := clock.monotonic_now()
+  return Benchmark{ started: now, iterations: iterations, failed: !now.ok, error: now.error, kind: now.kind }
 }
-pub fn benchmark_elapsed(benchmark: *const Benchmark) i64 {
-  duration := clock.elapsed(benchmark.started, clock.monotonic_now())
+fn benchmark_failure(benchmark: *Benchmark, kind: benchmark_errors.Kind, code: isize) clock.DurationResult {
+  if !benchmark.failed {
+    benchmark.failed = true
+    benchmark.kind = kind
+    benchmark.error = code
+  }
+  if benchmark.kind == benchmark_errors.Kind.None {
+    benchmark.kind = benchmark_errors.Kind.InvalidState
+  }
+  return clock.DurationResult{kind: benchmark.kind, error: benchmark.error}
+}
+pub fn benchmark_elapsed(benchmark: *Benchmark) clock.DurationResult {
+  if benchmark.failed {
+    return benchmark_failure(benchmark, benchmark.kind, benchmark.error)
+  }
+  if !benchmark.started.ok {
+    return benchmark_failure(benchmark, benchmark.started.kind, benchmark.started.error)
+  }
+  finished := clock.monotonic_now()
+  if !finished.ok {
+    return benchmark_failure(benchmark, finished.kind, finished.error)
+  }
+  duration := clock.elapsed(benchmark.started.value, finished.value)
   if !duration.ok {
-    return 0
+    return benchmark_failure(benchmark, benchmark_errors.Kind.Overflow, 0)
   }
-  return duration.value
+  return duration
 }
-pub fn benchmark_nanoseconds_each(benchmark: *const Benchmark) i64 {
-  if benchmark.iterations == 0 {
-    return 0
+pub fn benchmark_nanoseconds_each(benchmark: *Benchmark) clock.DurationResult {
+  if benchmark.failed {
+    return benchmark_failure(benchmark, benchmark.kind, benchmark.error)
   }
-  return benchmark_elapsed(benchmark) / #cast(i64, benchmark.iterations)
+  if !benchmark.started.ok && (benchmark.started.kind != benchmark_errors.Kind.None || benchmark.started.error != 0) {
+    return benchmark_failure(benchmark, benchmark.started.kind, benchmark.started.error)
+  }
+  if benchmark.iterations == 0 {
+    return clock.DurationResult{ok: true}
+  }
+  duration := benchmark_elapsed(benchmark)
+  if !duration.ok {
+    return duration
+  }
+  duration.value /= #cast(i64, benchmark.iterations)
+  return duration
 }

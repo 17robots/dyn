@@ -1,7 +1,6 @@
 #target(kernel: linux)
 
 use "std/sync"
-use "std/mem" mem
 
 pub struct Thread { tid: sync.AtomicU32, stack_owner: mem.Arena }
 
@@ -13,59 +12,72 @@ extern fn spawn_raw "dyn_thread_spawn"(
   tid: *sync.AtomicU32,
 ) isize
 
-// Ownership: borrows stack, thread, and context until successful join; keep them unmoved.
-// Allocation: none. Linux raw threads do not provide libc/pthread TLS.
-// Failure: negative native error; no worker starts on failure.
-// Thread safety: one caller controls each Thread's lifecycle; synchronize shared context.
-pub fn spawn(thread: *Thread, stack: []u8, entry: fn(rawptr) isize, context: rawptr) isize {
+// Ownership: returns a stable node in the caller arena. Do not move its storage
+// or rewind, reset, or release it before successful join. Stack and context are
+// borrowed until successful join. Linux raw threads do not provide libc/pthread TLS.
+// Allocation: one zeroed Thread; arena exhaustion panics.
+// Failure: invalid input has no native code; OS errors retain their negative code.
+// Failed creation rewinds the arena to its entry mark; no worker starts.
+// Thread safety: caller synchronizes arena access and shared context; one caller
+// controls each returned Thread's lifecycle.
+pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if #len(stack) < 256 || entry == nil {
-    return -22
+    return SpawnResult{ kind: errors.Kind.InvalidInput }
   }
-  if sync.load_u32(&thread.tid) != 0 || #len(thread.stack_owner.data) != 0 {
-    return -16
+  mark := mem.arena_mark(arena)
+  thread := mem.push(Thread, arena)
+  value := spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
+  if value < 0 {
+    mem.arena_rewind(arena, mark)
+    return SpawnResult{ kind: errors.linux(value), error: value }
   }
-  return spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
+  return SpawnResult{ value: thread, ok: true }
 }
 
-// Own a mapped stack until join. This avoids allocating an unused caller stack
-// for portable code; Windows/macOS use OS-managed stacks for the same API.
-// Ownership: keep Thread and context unmoved until successful join.
-pub fn spawn_with_size(thread: *Thread, size: usize, entry: fn(rawptr) isize, context: rawptr) isize {
+// Same stable caller-arena node and context lifetime as spawn. Owns a mapped
+// stack until successful join; failed creation releases it and rewinds the node.
+pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if size < 256 || entry == nil {
-    return -22
+    return SpawnResult{ kind: errors.Kind.InvalidInput }
   }
-  if sync.load_u32(&thread.tid) != 0 || #len(thread.stack_owner.data) != 0 {
-    return -16
-  }
+  mark := mem.arena_mark(arena)
+  thread := mem.push(Thread, arena)
   thread.stack_owner = mem.arena_create(size)
   value := spawn_raw(&thread.stack_owner.data[0], size, entry, context, &thread.tid)
   if value < 0 {
     mem.arena_release(&thread.stack_owner)
+    mem.arena_rewind(arena, mark)
+    return SpawnResult{ kind: errors.linux(value), error: value }
   }
-  return value
+  return SpawnResult{ value: thread, ok: true }
 }
 
 // Ownership: success ends worker access and releases any owned stack.
-// Failure: negative error retains the owner; do not reclaim worker context or stack.
+// The caller-arena node is not freed. Joining a zero or joined Thread succeeds.
+// Failure retains the owner; do not reclaim worker context or stack.
 // Thread safety: never join concurrently through copied Thread descriptors.
-pub fn join(thread: *Thread) isize {
+pub fn join(thread: *Thread) Result {
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
       mem.arena_release(&thread.stack_owner)
-      return 0
+      return Result{ ok: true }
     }
     result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)
     if result < 0 && result != -4 && result != -11 {
-      return result
+      return Result{ kind: errors.linux(result), error: result }
     }
   }
-  return 0
+  return Result{ ok: true }
 }
 
 pub fn id(thread: *const Thread) u32 {
   return sync.load_u32(&thread.tid)
 }
-pub fn yield_now() isize {
-  return #syscall(24)
+pub fn yield_now() Result {
+  value := #syscall(24)
+  if value < 0 {
+    return Result{ kind: errors.linux(value), error: value }
+  }
+  return Result{ value: value, ok: true }
 }

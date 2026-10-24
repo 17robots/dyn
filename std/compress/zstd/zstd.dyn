@@ -1,9 +1,9 @@
 use "vendor/zstd" provider
 use "std/io" stream
 use "std/mem" memory
-pub type Result = provider.Result
-pub type SizeResult = provider.SizeResult
-pub struct BufferResult { value: []u8, provider_code: usize, ok: bool }
+use "std/errors" errors
+pub struct SizeResult { size: u64, known: bool, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct BufferResult { value: []u8, provider_code: usize, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 pub struct Decoder {
   source_reader: stream.Reader,
   compressed_storage: []u8,
@@ -15,6 +15,9 @@ pub struct Decoder {
   saw_frame: bool,
   finished: bool,
   error: isize,
+  kind: errors.Kind,
+  failed: bool,
+  provider_code: usize,
 }
 pub fn version() u32 {
   return provider.version()
@@ -29,27 +32,37 @@ pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResu
   result := provider.compress(allocation[..capacity], source, level)
   if !result.ok {
     memory.arena_rewind(arena, mark)
-    return BufferResult{ provider_code: result.provider_code }
+    return BufferResult{ provider_code: result.provider_code, kind: errors.Kind.InvalidInput }
   }
   return BufferResult{ value: allocation[..result.written], provider_code: result.provider_code, ok: true }
 }
 pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   mark := memory.arena_mark(arena)
   size := frame_size(source)
-  if !size.ok || !size.known {
-    return BufferResult{}
+  if !size.ok {
+    return BufferResult{ kind: size.kind, error: size.error, offset: size.offset }
+  }
+  if !size.known {
+    return BufferResult{ kind: errors.Kind.Unsupported }
+  }
+  if size.size > #cast(u64, ~#cast(usize, 0)) {
+    return BufferResult{ kind: errors.Kind.Overflow }
   }
   capacity := #cast(usize, size.size)
   allocation := memory.arena_push_uninit(arena, capacity, 1)
   result := provider.decompress(allocation[..capacity], source)
   if !result.ok {
     memory.arena_rewind(arena, mark)
-    return BufferResult{ provider_code: result.provider_code }
+    return BufferResult{ provider_code: result.provider_code, kind: errors.Kind.InvalidInput }
   }
   return BufferResult{ value: allocation[..result.written], provider_code: result.provider_code, ok: true }
 }
 pub fn frame_size(source: []const u8) SizeResult {
-  return provider.frame_size(source)
+  result := provider.frame_size(source)
+  if !result.ok {
+    return SizeResult{ size: result.size, kind: errors.Kind.InvalidInput }
+  }
+  return SizeResult{ size: result.size, known: result.known, ok: true }
 }
 pub fn error_name(code: usize, maximum: usize) []const u8 {
   return provider.error_name(code, maximum)
@@ -64,17 +77,25 @@ pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, wi
   context := provider.stream_context(workspace, window_log)
   state := Decoder{ source_reader: input, compressed_storage: compressed_bytes, context: context }
   if !context.ok || #len(compressed_bytes) == 0 {
-    state.error = -28
+    state.failed = true
+    state.kind = errors.Kind.Capacity
+    state.provider_code = context.provider_code
   }
   return state
 }
 fn decoder_read(data: rawptr, destination: []u8) stream.Result {
   state := #cast(*Decoder, data)
+  if state.failed {
+    return stream.Result{ error: state.error, kind: state.kind, status: stream.Status.Error }
+  }
+  if state.offset > state.used || state.used > #len(state.compressed_storage) {
+    state.failed = true
+    state.kind = errors.Kind.InvalidState
+    state.error = 0
+    return stream.Result{ kind: state.kind, status: stream.Status.Error }
+  }
   if #len(destination) == 0 {
     return stream.Result{}
-  }
-  if state.error != 0 {
-    return stream.Result{ error: state.error, status: stream.Status.Error }
   }
   if state.finished {
     return stream.Result{ status: stream.Status.End }
@@ -84,7 +105,9 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     // before doing so would stall a caller while output is already available.
     decoded := provider.stream_decode(&state.context, destination, state.compressed_storage[state.offset..state.used])
     if !decoded.ok {
-      state.error = -74
+      state.failed = true
+      state.kind = errors.Kind.InvalidInput
+      state.provider_code = decoded.provider_code
       break
     }
     state.offset += decoded.consumed
@@ -100,7 +123,8 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     }
     if state.offset < state.used {
       if decoded.consumed == 0 {
-        state.error = -5
+        state.failed = true
+        state.kind = errors.Kind.System
         break
       }
       continue
@@ -110,25 +134,29 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
         state.finished = true
         return stream.Result{ status: stream.Status.End }
       }
-      state.error = -74
+      state.failed = true
+      state.kind = errors.Kind.InvalidInput
       break
     }
     input_result := stream.read(state.source_reader, state.compressed_storage)
     state.offset = 0
     state.used = input_result.transferred
     if input_result.status == stream.Status.Error {
+      state.failed = true
       state.error = input_result.error
+      state.kind = input_result.kind
       break
     }
     if input_result.status == stream.Status.End {
       state.source_ended = true
     }
     else if state.used == 0 {
-      state.error = -5
+      state.failed = true
+      state.kind = errors.Kind.System
       break
     }
   }
-  return stream.Result{ error: state.error, status: stream.Status.Error }
+  return stream.Result{ error: state.error, kind: state.kind, status: stream.Status.Error }
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
   return stream.Reader{ data: state, read: &decoder_read }

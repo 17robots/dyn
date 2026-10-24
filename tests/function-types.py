@@ -25,6 +25,10 @@ fn pick() fn(i32) i32 {
 fn double(value: i32) i32 {
   return value * 2
 }
+fn load(slot: *fn(i32) i32, argument: i32) i32 {
+  selected := slot.*
+  return selected(argument)
+}
 fn read(e: *const Entity) i32 {
   return e.hp
 }
@@ -41,7 +45,7 @@ fn main() {
     #panic("function values")
   }
   table: [2]fn(i32) i32 = [&double, &double]
-  if table[1](3) != 6 {
+  if table[1](3) != 6 || load(&table[1], 5) != 10 {
     #panic("arrays of functions")
   }
   stub := &nil_entity

@@ -1,22 +1,51 @@
 # Std standardization
 
-Status: agreed 2026-10-22 and 2026-10-23. Language changes and rules 1–7
-have landed through std-sticky-zero. The portable math API is implemented and
-qualified by the registered regression suite: 145/145 gates pass across the
-initial and resumed runs, including the artifact build and all 21 executions.
-This was not one uninterrupted invocation.
+Status: agreed 2026-10-22 and 2026-10-23; audited implementation closure
+recorded 2026-10-24. The concrete violations identified by the std audits are
+fixed and independently reviewed. The registered suite passes 183/183 gates
+across combined original and resumed runs, with no reported prerequisite skips.
+The final rerun from std lint onward passes 140/140 gates. This is not one
+uninterrupted final-state run or a proof of every native-platform path. See the
+[qualification record](qualification-20261024.md). Compatibility is not yet
+frozen; these intentional API breaks precede the required two-preview window.
 
 Math now includes scalar integer/float helpers, concrete vectors, matrices,
 quaternions and ranges. Independent reviews found and resolved range midpoint
 and operand-validation bugs and strengthened float/quaternion test coverage.
-Native math intrinsic lowering remains unfinished; portable implementations
-provide the API until that optimization is added. Floating-point sampling is
+Target-gated native math lowering now has focused SSA/tree, hardware-emulator
+and Wasm execution checks; unsupported operations retain portable calls. Floating-point sampling is
 not a global accuracy proof. See the qualification record below and the
 [std guide](../guide/std.md#math-conventions) for current conventions.
 
 The model is Ryan Fleury's: storage belongs to the caller, misses are not
 errors, arenas cannot fail, and real errors exist only where the program meets
 the outside world.
+
+## Current correction pass
+
+The 2026-10-24 pass fixes sticky buffered I/O, INI and WebSocket errors; lazy zero-state SHA-256 initialization; sort miss positions; and Metadesk failure rollback/stubs. Flags and regex now take arenas, with explicit payload ownership and portable result metadata. URL, semver, JSON, Metadesk, PNG/QOI, INI, DER/PEM/certificate, ZIP/zstd, Unicode and byte-codec results now carry portable diagnostics. Thread creation returns stable arena-backed pointers, and XML has an iterative document tree. The structural IR dump is implemented and its focused regression passes.
+
+Provider-backed crypto wrappers now use portable results and arena-backed AEAD
+outputs. The structural IR dump and target-gated native math lowering are
+implemented, reviewed and included in qualification. Physical board execution
+and the two-preview stability period remain separate milestones.
+
+The closure audits' concrete findings are resolved:
+
+- Zero PRNG and HTTP workers are safe; worker startup uses stable arena-backed thread nodes.
+- HTTP, buffered I/O, WebSocket and scanner/writer states preserve their first failures, including native error zero.
+- Complete HTTP, DNS and process-capture outputs belong to caller arenas; capture limits are explicit policy.
+- HTTP/WebSocket, TLS, terminal, capability, archive and codec results preserve portable and native diagnostics separately.
+- Certificate subjects use complete provider formatting rather than a fixed 1024-byte output ceiling.
+- Watchers preserve terminal failures on all three platform implementations; platform fault injection supplements cross-link checks.
+- Text/HTML template exhaustion follows the arena panic contract.
+- Clock reads and dependent waits, capture, profiling and benchmark operations return structured failures instead of panicking on OS errors.
+
+Fixed-size key and hash outputs, binary/UTF primitives, individual socket
+addresses, raw OS/C bindings and documented streaming buffers remain the narrow
+exceptions. They do not exempt ordinary complete producers or stream error
+diagnostics. Semantic regression tests and reviews establish this closure;
+syntactic std lint alone does not.
 
 ## Rules
 
@@ -240,8 +269,9 @@ Call sites in `tests/`, `projects/`, `vendor/` helpers and DNA move with each
 change. One migration note in `docs/migrations/` covers the whole pass, and
 `CHANGELOG.md` lists it under breaking changes.
 
-A checker in `tools/` flags out parameters, `_into`/`_size`/`_count` names,
-`-1` position returns and missing comment tags, so CI catches drift.
+The checker `tools/std-lint.py` flags selected out-parameter names, `_into`
+forms, caller-storage size/count companions and isize-returning find functions.
+It is a syntactic guard, not proof of every semantic rule or comment contract.
 
 ## Math
 
@@ -333,3 +363,29 @@ integer tests do not independently exhaust ILP32 width behavior.
 Logs and source hashes are retained under build/std-math-qualification,
 including resume2-20261023-181309/report.txt and results.json. No commit was
 made for this math layer in this continuation.
+
+Math was committed as 08e91f5f890b on 2026-10-24. The standalone SDK packaging
+and relocation gate passes for build/dist/dyn-0.1.0-dev-linux-x86_64.tar.gz.
+This is a local development package, not a published preview release.
+
+## Semantic compliance audit (2026-10-24)
+
+The audit finds that intrusive containers, read-only stubs, unsigned search
+positions, principal arena producers and active resource wrappers are migrated.
+The initial findings now have focused regression coverage:
+
+- `std-sticky.py` and `websocket-sticky.py`: first-error replay without later I/O, including empty buffered calls and zero native codes.
+- `sha256-zero.py`: lazy initialization, explicit reset and sticky oversized-input failure against hashlib at block boundaries.
+- `flags-arena.py` and `regex-arena.py`: ownership, rollback, borrowing, reusable workspace and exhaustion panics.
+- Parser/codec result suites: portable categories, native zero, offsets and empty failure payloads for the migrated modules. QOI marker/run validation and semver offending-byte diagnostics have negative regressions.
+- `std-miss-contracts.py` and `xml-tree.py`: sort length-on-miss, failure stubs, rollback, navigation and iterative deep XML trees.
+- `thread-results.py`: stable arena-backed descriptors, lifecycle, zero joins, validation rollback and exhaustion.
+- `producer-overlap.py`: ZIP and Unicode preflight preserve aliased input bytes. Official Unicode 17 conformance passes 403,031 vectors in each mode after arena migration.
+- `math-lowering.py`: generic/native x86 feature gates, SSA/tree numerical oracles, argument order, spills, AArch64/RV64 execution and Wasm behavior. RV32/Thumb hard/soft samples retain no-FP audits.
+- `std-lint.py`: multiline declaration recognition has independent scanner tests. It checks narrow syntactic heuristics, not ownership semantics or universal compliance.
+
+A fresh closure audit and complete registered qualification are still required. Provider-backed crypto migrations and ownership/cost comments remain under review. This record does not turn earlier math-only qualification into qualification of the current working tree.
+
+Fixed-size hash/key buffers, binary stores, encoding primitives, streaming and
+raw OS/C bindings retain their documented exceptions. These are not blanket
+exceptions for variable-size producers or stateful I/O after failure.

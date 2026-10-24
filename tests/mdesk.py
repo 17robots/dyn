@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/bytes"
 use "std/encoding/mdesk"
+use "std/errors"
 use "std/mem"
 
 fn expect(condition: bool, message: []const u8) {
@@ -19,8 +20,8 @@ fn expect(condition: bool, message: []const u8) {
 
 fn fails(arena: *mem.Arena, source: []const u8, error: mdesk.ErrorKind, offset: usize) {
   result := mdesk.parse(arena, source)
-  expect(!result.ok && result.kind == error && result.offset == offset, source)
-  expect(!mdesk.is_nil(result.root), "root on failure")
+  expect(!result.ok && result.kind == errors.Kind.InvalidInput && result.error == 0 && result.detail == error && result.offset == offset, source)
+  expect(result.root == &mdesk.nil_node && mdesk.is_nil(result.root), "stub root on failure")
 }
 
 fn main() {

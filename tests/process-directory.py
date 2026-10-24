@@ -29,7 +29,7 @@ fn main() {
   command: []const u8 = EXECUTABLE arguments: [1][]const u8 = [command]
   configuration := process.Options{} configuration.directory = DIRECTORY
   output: [32]u8 = [] error_output: [32]u8 = []
-  result := process.capture(&arena, command, arguments[..], configuration, output[..], error_output[..], 2000)
+  result := process.capture(&arena, command, arguments[..], configuration, process.CaptureOptions{timeout_milliseconds: 2000})
   if !result.ok || !bytes.equal(result.output, "child") {
     report := fs.create("capture-result")
     if report.ok { _ = io.println(fs.writer(&report.value), "ok={} error={} exit={} output={} stderr={}", result.ok, result.error, result.exit.code, result.output, result.errors) _ = fs.close(&report.value) }
@@ -43,7 +43,7 @@ fn main() {
   configuration.directory = "bad\\0directory"
   if process.spawn(&arena, command, arguments[..], configuration).kind != errors.Kind.InvalidInput { fail("NUL directory") }
   configuration.directory = ""
-  inherited := process.capture(&arena, command, arguments[..], configuration, output[..], error_output[..], 2000)
+  inherited := process.capture(&arena, command, arguments[..], configuration, process.CaptureOptions{timeout_milliseconds: 2000})
   if !inherited.ok || !bytes.equal(inherited.output, "parent") { fail("inherit directory") }
   owned := process.spawn(&arena, command, arguments[..], configuration)
   if !owned.ok { fail("spawn transfer") }

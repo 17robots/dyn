@@ -4,6 +4,77 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Keep SDK candidate order in sync with module.c's resolve_std, without a
+   frontend-only link dependency on the module resolver. Missing paths or OOM
+   simply leave this optional optimization unrecognized. */
+extern char *realpath(const char *, char *);
+static char *math_sdk_path(void) {
+  const char *path = "std/math/float.dyn";
+  const char *configured = getenv("DYN_SDK");
+  if (configured && *configured) {
+    char *root = realpath(configured, NULL);
+    if (root) {
+      char *candidate = dyn_path_join(root, path);
+      if (!candidate) { free(root); return NULL; }
+      char *resolved = realpath(candidate, NULL);
+      free(candidate);
+      size_t n = strlen(root);
+      bool within = resolved && !strncmp(root, resolved, n) &&
+                    (resolved[n] == 0 || resolved[n] == '/');
+      free(root);
+      if (within) return resolved;
+      free(resolved);
+    }
+  }
+  char executable[4096], candidate[4096];
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
+  if (n < 0) return NULL;
+  executable[n] = 0;
+  char *slash = strrchr(executable, '/');
+  if (!slash) return NULL;
+  *slash = 0;
+  const char *formats[] = {"%s/../compiler/%s", "%s/../%s", "%s/../share/dyn/%s"};
+  for (size_t i = 0; i < sizeof(formats) / sizeof(*formats); ++i) {
+    int length = snprintf(candidate, sizeof(candidate), formats[i], executable,
+                          i == 2 ? path + 4 : path);
+    if (length < 0 || (size_t)length >= sizeof(candidate)) continue;
+    char *resolved = realpath(candidate, NULL);
+    if (resolved) return resolved;
+  }
+  return NULL;
+}
+static DynMathIntrinsic math_identity(const DynSource *source,
+                                     const char *source_path, const char *sdk,
+                                     const DynIrProgram *ir, const DynIrFunction *fn) {
+  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
+      !fn->is_public || (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
+    return DYN_MATH_INTRINSIC_NONE;
+  char *canonical = realpath(source_path, NULL);
+  bool trusted = canonical && !strcmp(canonical, sdk);
+  free(canonical);
+  if (!trusted) return DYN_MATH_INTRINSIC_NONE;
+  const char *original, *ignored_path;
+  size_t length, offset;
+  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
+  size_t end = offset;
+  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') ||
+         (original[end] >= 'A' && original[end] <= 'Z') ||
+         (original[end] >= '0' && original[end] <= '9') || original[end] == '_')) ++end;
+  const char *names[] = {"sqrt64", "floor64", "ceil64", "trunc64", "round64", "copysign64", "fma64", "fma"};
+  for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i) {
+    if (end - offset != strlen(names[i]) || memcmp(original + offset, names[i], end - offset)) continue;
+    bool generic_fma = i == 7;
+    if (fn->instance != generic_fma || (!generic_fma && fn->return_type != DYN_TYPE_F64)) break;
+    uint32_t count = i >= 6 ? 3 : i == 5 ? 2 : 1;
+    if (fn->param_count != count || fn->param_start > ir->param_count ||
+        count > ir->param_count - fn->param_start) break;
+    for (uint32_t j = 0; j < count; ++j)
+      if (ir->params[fn->param_start + j].type != fn->return_type) return DYN_MATH_INTRINSIC_NONE;
+    return generic_fma ? DYN_MATH_INTRINSIC_FMA : (DynMathIntrinsic)(DYN_MATH_INTRINSIC_SQRT + i);
+  }
+  return DYN_MATH_INTRINSIC_NONE;
+}
+
 static bool allocate(void **out, size_t count, size_t size) {
   if (!count) {
     *out = NULL;
@@ -231,7 +302,7 @@ static bool validate_ir(const DynIrProgram *ir) {
     if ((size_t)ir->case_arms[i].pattern_start + ir->case_arms[i].pattern_count > ir->pattern_count || (size_t)ir->case_arms[i].body_start + ir->case_arms[i].body_count > ir->child_count) return false;
   return true;
 }
-bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir) {
+static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir, bool proofs) {
   memset(ir, 0, sizeof(*ir));
   size_t extra = 0;
   for (size_t i = 0; i < a->statement_count; ++i)
@@ -346,11 +417,13 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram 
   /* Function locations share line tables instead of rescanning every prefix. If indexing runs out of memory, lookup retains its unindexed fallback. */
   DynLocationIndex locations = {0};
   (void)dyn_location_build(&locations, source);
+  char *math_sdk = proofs ? math_sdk_path() : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     /* Instances share the generic's name; the suffix hashes the type arguments, so it stays stable when other code changes. */
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
+      free(math_sdk);
       dyn_location_free(&locations);
       dyn_ir_free(ir);
       return false;
@@ -383,6 +456,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram 
     size_t link_length = a->functions[i].link_name.end_byte - a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
+      free(math_sdk);
       dyn_location_free(&locations);
       dyn_ir_free(ir);
       return false;
@@ -407,7 +481,9 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram 
     ir->functions[i].is_public = a->functions[i].is_public;
     ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
+    ir->functions[i].math_intrinsic = math_identity(source, source_path, math_sdk, ir, &ir->functions[i]);
   }
+  free(math_sdk);
   dyn_location_free(&locations);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
@@ -519,7 +595,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram 
   for (size_t i = 0; i < ir->global_count; ++i) ir->globals[i].type = lower_type(a, ir->globals[i].type);
   for (size_t i = 0; i < ir->enum_count; ++i) ir->enums[i].tag_type = lower_type(a, ir->enums[i].tag_type);
   if (a->child_count) memcpy(ir->children, a->children, a->child_count * sizeof(*ir->children));
-  prove_unsigned_ranges(ir, dyn_target_pointer_bytes(dyn_context_target(&source->context)));
+  if (proofs) prove_unsigned_ranges(ir, dyn_target_pointer_bytes(dyn_context_target(&source->context)));
   for (size_t i = 0; i < ir->function_count; ++i) {
     if ((size_t)ir->functions[i].body_start + ir->functions[i].body_count > ir->child_count) {
       dyn_ir_free(ir);
@@ -534,6 +610,14 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram 
 }
 
 #include "ir_reachability.inc"
+
+bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir) {
+  return lower_ir(a, source, ir, true);
+}
+
+bool dyn_ir_lower_structural(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir) {
+  return lower_ir(a, source, ir, false);
+}
 
 bool dyn_ir_prune_functions(DynIrProgram *ir) {
   Reachability p = {.ir = ir};

@@ -3,10 +3,10 @@
 // ZIP64, encryption, multi-disk and self-extracting offset correction are unsupported.
 use "std/bytes" bytes
 
-pub struct OpenResult { value: ArchiveReader, kind: ErrorKind, ok: bool }
+pub struct OpenResult { value: ArchiveReader, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind, ok: bool }
 struct Central { entry: Entry, next: usize, error: ErrorKind, ok: bool }
 fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize) Central {
-  if at > limit || limit > #len(source) || limit - at < 46 || u32le(source, at) != 33639248 {
+  if data_limit > limit || at < data_limit || at > limit || limit > #len(source) || limit - at < 46 || u32le(source, at) != 33639248 {
     return Central{ error: ErrorKind.Syntax }
   }
   flags := u16le(source, at + 8)
@@ -64,8 +64,11 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 // Checks directory framing and every local-header/descriptor relationship up front.
 // Payload CRCs are verified by extract, without allocating or decompressing here.
 pub fn open_checked(source: []const u8) OpenResult {
+  if #len(source) > ((~#cast(usize, 0)) >> 1) {
+    return OpenResult{ kind: errors.Kind.Overflow, detail: ErrorKind.Syntax }
+  }
   if #len(source) < 22 {
-    return OpenResult{ kind: ErrorKind.Syntax }
+    return OpenResult{ kind: portable(ErrorKind.Syntax), detail: ErrorKind.Syntax }
   }
   end := #len(source) - 22
   floor: usize = 0
@@ -84,44 +87,47 @@ pub fn open_checked(source: []const u8) OpenResult {
     end -= 1
   }
   if !found {
-    return OpenResult{ kind: ErrorKind.Syntax }
+    return OpenResult{ kind: portable(ErrorKind.Syntax), offset: end, detail: ErrorKind.Syntax }
   }
   error := end_record(source[end..])
   if error != ErrorKind.None {
-    return OpenResult{ kind: error }
+    return OpenResult{ kind: portable(error), offset: end, detail: error }
   }
   start := #cast(usize, u32le(source, end + 16))
   size := #cast(usize, u32le(source, end + 12))
   if start == 4294967295 || size == 4294967295 {
-    return OpenResult{ kind: ErrorKind.Unsupported }
+    return OpenResult{ kind: portable(ErrorKind.Unsupported), offset: end, detail: ErrorKind.Unsupported }
   }
   if start > end || size != end - start {
-    return OpenResult{ kind: ErrorKind.Syntax }
+    return OpenResult{ kind: portable(ErrorKind.Syntax), offset: end, detail: ErrorKind.Syntax }
   }
   count := #cast(usize, u16le(source, end + 10))
   cursor := start
   for i in 0..count {
     entry := central_entry(source, cursor, end, start)
     if !entry.ok {
-      return OpenResult{ kind: entry.error }
+      return OpenResult{ kind: portable(entry.error), offset: cursor, detail: entry.error }
     }
     cursor = entry.next
   }
   if cursor != end {
-    return OpenResult{ kind: ErrorKind.Syntax }
+    return OpenResult{ kind: portable(ErrorKind.Syntax), offset: end, detail: ErrorKind.Syntax }
   }
   return OpenResult{ value: ArchiveReader{ source: source, offset: start, indexed: true,
-    directory_start: start, directory_end: end, remaining: count }, ok: true }
+    directory_start: start, directory_end: end, remaining: count }, offset: start, ok: true }
 }
 fn next_indexed(state: *ArchiveReader) EntryResult {
+  if state.failed {
+    return archive_failure(state, state.detail)
+  }
   if state.remaining == 0 {
-    return EntryResult{ kind: ErrorKind.End }
+    return EntryResult{ detail: ErrorKind.End, offset: state.offset }
   }
   item := central_entry(state.source, state.offset, state.directory_end, state.directory_start)
   if !item.ok {
-    return EntryResult{ kind: item.error }
+    return archive_failure(state, item.error)
   }
   state.offset = item.next
   state.remaining -= 1
-  return EntryResult{ value: item.entry, ok: true }
+  return EntryResult{ value: item.entry, offset: state.offset, ok: true }
 }

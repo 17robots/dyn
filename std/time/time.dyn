@@ -9,7 +9,7 @@ pub const Minute: i64 = 60000000000
 pub const Hour: i64 = 3600000000000
 
 pub struct Instant { seconds: i64, nanoseconds: i64 }
-pub struct DurationResult { value: i64, ok: bool }
+pub struct DurationResult { value: i64, kind: errors.Kind, error: isize, ok: bool }
 pub struct Deadline { at: Instant }
 pub struct DateTime {
   year: i32, month: u8, day: u8,
@@ -54,61 +54,70 @@ pub fn elapsed(start, end: Instant) DurationResult {
 
 pub struct ClockResult { value: Instant, error: isize, kind: errors.Kind, ok: bool }
 pub struct SleepResult { error: isize, kind: errors.Kind, ok: bool }
+pub struct DeadlineResult { value: Deadline, kind: errors.Kind, error: isize, ok: bool }
+pub struct ExpiredResult { value: bool, kind: errors.Kind, error: isize, ok: bool }
 // Monotonic instants are for elapsed time/deadlines; realtime instants use Unix epoch.
-pub fn try_monotonic_now() ClockResult {
+pub fn monotonic_now() ClockResult {
   return native_clock(true)
 }
-pub fn try_realtime_now() ClockResult {
+pub fn realtime_now() ClockResult {
   return native_clock(false)
 }
-pub fn monotonic_now() Instant {
-  result := try_monotonic_now()
-  if !result.ok {
-    #panic("monotonic clock failed")
-  }
-  return result.value
-}
-pub fn realtime_now() Instant {
-  result := try_realtime_now()
-  if !result.ok {
-    #panic("realtime clock failed")
-  }
-  return result.value
-}
-pub fn sleep_result(duration: i64) SleepResult {
+pub fn sleep(duration: i64) SleepResult {
   if duration <= 0 {
     return SleepResult{ ok: true }
   }
   return native_sleep(duration)
 }
-pub fn sleep(duration: i64) bool {
-  return sleep_result(duration).ok
-}
-pub fn deadline_after(duration: i64) Deadline {
+pub fn deadline_after(duration: i64) DeadlineResult {
   now := monotonic_now()
-  at := Instant{ seconds: now.seconds + duration / Second, nanoseconds: now.nanoseconds + duration % Second }
-  if at.nanoseconds >= Second {
-    at.seconds += 1
-    at.nanoseconds -= Second
+  if !now.ok {
+    return DeadlineResult{ kind: now.kind, error: now.error }
   }
-  if at.nanoseconds < 0 {
-    at.seconds -= 1
-    at.nanoseconds += Second
+  seconds := duration / Second
+  nanos := now.value.nanoseconds + duration % Second
+  if nanos >= Second {
+    seconds += 1
+    nanos -= Second
   }
-  return Deadline{ at: at }
+  if nanos < 0 {
+    seconds -= 1
+    nanos += Second
+  }
+  sum := checked_add(now.value.seconds, seconds)
+  if !sum.ok {
+    return DeadlineResult{ kind: errors.Kind.Overflow }
+  }
+  return DeadlineResult{ value: Deadline{ at: Instant{ seconds: sum.value, nanoseconds: nanos } }, ok: true }
 }
-pub fn deadline_expired(deadline: *const Deadline) bool {
-  now := monotonic_now()
-  return now.seconds > deadline.at.seconds ||
-    (now.seconds == deadline.at.seconds && now.nanoseconds >= deadline.at.nanoseconds)
-}
-pub fn deadline_remaining(deadline: *const Deadline) i64 {
-  now := monotonic_now()
-  result := elapsed(now, deadline.at)
-  if !result.ok || result.value < 0 {
-    return 0
+pub fn deadline_expired(deadline: *const Deadline) ExpiredResult {
+  if deadline == nil {
+    return ExpiredResult{ kind: errors.Kind.InvalidInput }
   }
-  return result.value
+  now := monotonic_now()
+  if !now.ok {
+    return ExpiredResult{ kind: now.kind, error: now.error }
+  }
+  return ExpiredResult{ value: now.value.seconds > deadline.at.seconds ||
+      (now.value.seconds == deadline.at.seconds && now.value.nanoseconds >= deadline.at.nanoseconds), ok: true }
+}
+pub fn deadline_remaining(deadline: *const Deadline) DurationResult {
+  if deadline == nil {
+    return DurationResult{ kind: errors.Kind.InvalidInput }
+  }
+  now := monotonic_now()
+  if !now.ok {
+    return DurationResult{ kind: now.kind, error: now.error }
+  }
+  if now.value.seconds > deadline.at.seconds ||
+    (now.value.seconds == deadline.at.seconds && now.value.nanoseconds >= deadline.at.nanoseconds) {
+    return DurationResult{ ok: true }
+  }
+  result := elapsed(now.value, deadline.at)
+  if !result.ok {
+    return DurationResult{ kind: errors.Kind.Overflow }
+  }
+  return result
 }
 
 fn leap_year(year: i32) bool {

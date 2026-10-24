@@ -819,6 +819,86 @@ static void isa_float_result(BackendContext *ctx, bool f32) {
   if (ctx->a64) { a64_word(ctx, f32 ? 0x1e260000 : 0x9e660000); return; }
   CODE(0x66,0x48,0x0f,0x7e,0xc0);
 }
+/* Pure capability query shared by tree and SSA. Thumb hard FP is FPv5-D16
+   (including double-precision VFMA); soft COPYSIGN uses only core integers. */
+static bool isa_math_supported(BackendContext *ctx, DynMathIntrinsic kind, DynType type) {
+  if (kind == DYN_MATH_INTRINSIC_COPYSIGN) return type == DYN_TYPE_F64;
+  if (ctx->soft_float) return false;
+  if (kind == DYN_MATH_INTRINSIC_SQRT) return type == DYN_TYPE_F64;
+  if (kind == DYN_MATH_INTRINSIC_FMA)
+    return (type == DYN_TYPE_F32 || type == DYN_TYPE_F64) &&
+           (ctx->a64 || ctx->rv32 || ctx->rv64 || ctx->t32 || ctx->fma);
+  if (ctx->sse41 && type == DYN_TYPE_F64 &&
+      (kind == DYN_MATH_INTRINSIC_FLOOR || kind == DYN_MATH_INTRINSIC_CEIL || kind == DYN_MATH_INTRINSIC_TRUNC)) return true;
+  return ctx->a64 && type == DYN_TYPE_F64 &&
+         (kind == DYN_MATH_INTRINSIC_FLOOR || kind == DYN_MATH_INTRINSIC_CEIL ||
+          kind == DYN_MATH_INTRINSIC_TRUNC || kind == DYN_MATH_INTRINSIC_ROUND);
+}
+/* Raw arguments A, C, D; raw result A. Preserve every other model register,
+   balance all temporary stack storage, and never cross an ABI boundary. */
+static void isa_math(BackendContext *ctx, DynMathIntrinsic kind, DynType type) {
+  if (!isa_math_supported(ctx, kind, type)) { ctx->text.failed = true; return; }
+  if (kind == DYN_MATH_INTRINSIC_COPYSIGN) {
+    if (ctx->t32) {
+      t32_dp(ctx,T32_EOR,false,T32_T1,4,5,T32_LSL,0);
+      t32_shift_imm(ctx,T32_LSR,T32_T1,T32_T1,31);
+      t32_shift_imm(ctx,T32_LSL,T32_T1,T32_T1,31);
+      t32_dp(ctx,T32_EOR,false,4,4,T32_T1,T32_LSL,0);
+    } else if (ctx->rv32 || ctx->rv64) {
+      unsigned a=ctx->rv32?18:10, c=ctx->rv32?19:5, shift=ctx->rv32?31:63;
+      rv_r(ctx,0x33,6,a,c,4,0); rv_i(ctx,0x13,6,6,shift,5);
+      rv_i(ctx,0x13,6,6,shift,1); rv_r(ctx,0x33,a,a,6,4,0);
+    } else if (ctx->a64) {
+      a64_word(ctx,0xca000000 | a64_reg[R_C]<<16 | a64_reg[R_A]<<5 | A64_SCRATCH);
+      a64_word(ctx,0x92410000 | A64_SCRATCH<<5 | A64_SCRATCH); /* and x16,x16,#sign */
+      a64_word(ctx,0xca000000 | A64_SCRATCH<<16 | a64_reg[R_A]<<5 | a64_reg[R_A]);
+    } else {
+      isa_push(ctx,R_C);
+      CODE(0x48,0xc1,0xe9,63,0x48,0xc1,0xe1,63); /* isolate sign */
+      CODE(0x48,0x0f,0xba,0xf0,63,0x48,0x09,0xc8); /* btr rax,63; or rax,rcx */
+      isa_pop(ctx,R_C);
+    }
+    return;
+  }
+  bool f32=type == DYN_TYPE_F32;
+  if (kind == DYN_MATH_INTRINSIC_FMA) {
+    isa_float_operands(ctx,f32);
+    if (ctx->t32) {
+      if (f32) t32_to_s(ctx,2,1);
+      else { t32_from_s(ctx,T32_T1,t32_hi[R_D]); t32_to_d(ctx,2,1,T32_T1); }
+      t32w(ctx,0xeea0,f32?0x1a20:0x2b01); /* vfma s2,s0,s1 / d2,d0,d1 */
+      t32w(ctx,0xeeb0,f32?0x0a41:0x0b42); /* move accumulator to result */
+    } else if (ctx->rv32 || ctx->rv64) {
+      if (ctx->rv32 && !f32) r32_pair_to_fp(ctx,12,r32_lo[R_D],r32_hi[R_D]);
+      else rv_fp_bits(ctx,true,f32,12,ctx->rv32?r32_lo[R_D]:rv_reg[R_D]);
+      word(ctx,f32?0x60b57543:0x62b57543); /* fmadd fa0,fa0,fa1,fa2,dyn */
+    } else if (ctx->a64) {
+      a64_word(ctx,(f32?0x1e270000:0x9e670000) | a64_reg[R_D]<<5 | 2);
+      a64_word(ctx,f32?0x1f010800:0x1f410800);
+    } else {
+      CODE(0x66,0x48,0x0f,0x6e,0xd2); /* xmm2 <- raw R_D (rdx) */
+      CODE(0xc4,0xe2); byte(ctx,f32?0x71:0xf1); CODE(0xa9,0xc2); /* vfmadd213s{s,d} xmm0,xmm1,xmm2 */
+    }
+    isa_float_result(ctx,f32);
+    return;
+  }
+  isa_a_to_float(ctx);
+  if (ctx->t32) t32w(ctx, 0xeeb1, 0x0bc0);
+  else if (ctx->rv32 || ctx->rv64) rv_r(ctx, 0x53, 10, 10, 0, 7, 0x2d);
+  else if (ctx->a64) {
+    uint32_t op=0x1e61c000;
+    if (kind == DYN_MATH_INTRINSIC_FLOOR) op=0x1e654000;
+    else if (kind == DYN_MATH_INTRINSIC_CEIL) op=0x1e64c000;
+    else if (kind == DYN_MATH_INTRINSIC_TRUNC) op=0x1e65c000;
+    else if (kind == DYN_MATH_INTRINSIC_ROUND) op=0x1e664000; /* ties away */
+    a64_word(ctx,op);
+  } else if (kind == DYN_MATH_INTRINSIC_SQRT) CODE(0xf2,0x0f,0x51,0xc0);
+  else {
+    CODE(0x66,0x0f,0x3a,0x0b,0xc0);
+    byte(ctx,kind == DYN_MATH_INTRINSIC_FLOOR ? 9 : kind == DYN_MATH_INTRINSIC_CEIL ? 10 : 11);
+  }
+  isa_float_result(ctx, false);
+}
 /* A <- 0/1 for an IEEE comparison; any NaN is unordered (only != holds). */
 static void isa_float_compare(BackendContext *ctx, bool f32, unsigned op) {
   if (ctx->t32) { t32_float_compare(ctx, f32, op); return; }

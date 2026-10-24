@@ -8,8 +8,10 @@ import sys
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build'/('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
-SOURCE = '''use "std/net"
+SOURCE = r'''use "std/net"
 use "std/thread"
+use "std/mem" mem
+use "std/errors" errors
 use "std/sync"
 use "std/bytes"
 struct Context { listener: net.Listener, ready: sync.AtomicU32, count: sync.AtomicU64 }
@@ -33,10 +35,14 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
+  arena:mem.Arena
+  defer { mem.arena_release(&arena) }
   idle := thread.Thread{}
-  if thread.join(&idle) != 0 || thread.id(&idle) != 0 { #panic("empty join") }
+  if !thread.join(&idle).ok || thread.id(&idle) != 0 { #panic("empty join") }
   stack: [131072]u8 = []
-  if thread.spawn(&idle, stack[..0], &worker, nil) >= 0 { #panic("short stack") }
+  mark:=mem.arena_mark(&arena)
+  rejected:=thread.spawn(&arena, stack[..0], &worker, nil)
+  if rejected.ok || rejected.kind!=errors.Kind.InvalidInput || rejected.error!=0 || rejected.value!=nil || mem.arena_mark(&arena)!=mark { #panic("short stack") }
   address := net.ipv4(127, 0, 0, 1, 0)
   opened := net.tcp_listen_ipv4(&address, 4)
   if !opened.ok { #panic("listen") }
@@ -46,9 +52,10 @@ fn main() {
   if !net.local_address(shared.listener.descriptor, &local).ok || local.length != 16 { #panic("local address") }
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   if port == 0 { #panic("ephemeral port") }
-  active := thread.Thread{}
-  if thread.spawn(&active, stack[..], &worker, #cast(rawptr, &shared)) < 0 { #panic("spawn") }
-  if thread.id(&active) == 0 || thread.spawn(&active, stack[..], &worker, #cast(rawptr, &shared)) >= 0 { #panic("active ownership") }
+  spawned:=thread.spawn(&arena, stack[..], &worker, #cast(rawptr, &shared))
+  if !spawned.ok || spawned.kind!=errors.Kind.None || spawned.error!=0 || spawned.value==nil { #panic("spawn") }
+  active:=spawned.value
+  if thread.id(active)==0 { #panic("active ownership") }
   sync.store_u32(&shared.ready, 1)
   address = net.ipv4(127, 0, 0, 1, port)
   connected := net.tcp_connect_ipv4(&address)
@@ -70,7 +77,7 @@ fn main() {
   }
   if !bytes.equal(buffer[..], "pong") { #panic("response") }
   if !net.connection_close(&connection).ok || net.connection_close(&connection).ok { #panic("connection close") }
-  if thread.join(&active) != 0 || thread.join(&active) != 0 || thread.id(&active) != 0 || sync.load_u64(&shared.count) != 10000 { #panic("join visibility") }
+  if !thread.join(active).ok || !thread.join(active).ok || thread.id(active) != 0 || sync.load_u64(&shared.count) != 10000 { #panic("join visibility") }
   udp := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
   if !udp.ok { #panic("udp socket") }
   defer { _ = net.close(udp.value) }

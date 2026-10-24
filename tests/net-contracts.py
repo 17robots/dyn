@@ -160,7 +160,9 @@ fn main() {
   events: [1]net.Event = []
   before := time.monotonic_now()
   outcome := OPERATION
-  duration := time.elapsed(before, time.monotonic_now())
+  after := time.monotonic_now()
+  if !before.ok || !after.ok { #panic("clock read") }
+  duration := time.elapsed(before.value, after.value)
   signals := stop()
   if !outcome.ok || !duration.ok { #panic("wait failed") }
   if TIMEOUT == 100 {

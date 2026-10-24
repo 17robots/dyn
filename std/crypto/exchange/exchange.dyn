@@ -1,8 +1,44 @@
 use "vendor/openssl/crypto" provider
-pub type Result = provider.KeyResult
+use "std/bytes"
+use "std/errors"
+
+// Fixed-size keys and signatures use caller storage by exception. Successful
+// values borrow destination; failures return an empty value. Validation leaves
+// storage untouched. Provider failures clear only the intended output prefix.
+pub struct Result {
+  value: []u8,
+  ok: bool,
+  kind: errors.Kind,
+  error: isize,
+  provider_code: u64,
+}
+
+fn result(destination: []u8, native: provider.KeyResult) Result {
+  if !native.ok {
+    for i in 0..#len(destination) {
+      destination[i] = 0
+    }
+    return Result{ kind: errors.Kind.System, provider_code: native.provider_code }
+  }
+  return Result{ value: destination[..native.written], ok: true, provider_code: native.provider_code }
+}
+
+// Destination must not overlap either borrowed input, including in its tail.
 pub fn x25519_public(destination: []u8, private_key: []const u8) Result {
-  return provider.x25519_public(destination, private_key)
+  if #len(destination) < 32 || #len(private_key) != 32 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if bytes.overlaps(destination, private_key) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return result(destination[..32], provider.x25519_public(destination[..32], private_key))
 }
 pub fn x25519(destination: []u8, private_key: []const u8, peer_public_key: []const u8) Result {
-  return provider.x25519_shared(destination, private_key, peer_public_key)
+  if #len(destination) < 32 || #len(private_key) != 32 || #len(peer_public_key) != 32 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, peer_public_key) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return result(destination[..32], provider.x25519_shared(destination[..32], private_key, peer_public_key))
 }

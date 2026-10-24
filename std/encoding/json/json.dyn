@@ -1,3 +1,4 @@
+use "std/errors" errors
 use "std/mem" memory
 use "std/strings" text
 use "std/io" stream
@@ -43,7 +44,7 @@ pub struct Value {
 pub const nil_value: Value = Value{}
 
 // root is the stub when parsing fails, so lookups work before ok is checked.
-pub struct ParseResult { root: *const Value, offset: usize, kind: ErrorKind, ok: bool }
+pub struct ParseResult { root: *const Value, offset: usize, kind: errors.Kind, error: isize, detail: ErrorKind, ok: bool }
 
 pub fn tokenizer(source: []const u8) Tokenizer {
   return Tokenizer{ source: source, offset: 0 }
@@ -662,9 +663,9 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     if root != nil {
       error = ErrorKind.TrailingData
     }
-    return ParseResult{ root: &nil_value, offset: cursor.at, kind: error, ok: false }
+    return ParseResult{ root: &nil_value, offset: cursor.at, kind: errors.Kind.InvalidInput, error: 0, detail: error, ok: false }
   }
-  return ParseResult{ root: root, offset: 0, kind: ErrorKind.None, ok: true }
+  return ParseResult{ root: root, offset: 0, kind: errors.Kind.None, error: 0, detail: ErrorKind.None, ok: true }
 }
 
 pub fn make_null(arena: *memory.Arena) *Value {

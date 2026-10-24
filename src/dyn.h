@@ -87,7 +87,7 @@ typedef enum { DYN_BACKEND_AUTO, DYN_BACKEND_NATIVE, DYN_BACKEND_LLVM } DynBacke
 typedef struct {
   const char *command, *input, *output, *target;
   DynOptimization optimization;
-  bool release, debug_info, debug_info_set, quiet, verbose, runtime_support, emit_object, emit_asm, no_link, shared, timings, no_cache;
+  bool release, debug_info, debug_info_set, quiet, verbose, runtime_support, emit_object, emit_asm, emit_ir, no_link, shared, timings, no_cache;
   DynBackend backend;
   bool native_backend; /* Resolved for this command; part of the build cache key. */
   bool format_check, docs_json, json_diagnostics;

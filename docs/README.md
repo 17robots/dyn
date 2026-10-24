@@ -43,3 +43,6 @@ contracts straight from the source.
 - [Reflection ABI](internals/reflection.md)
 - [Releasing](internals/release.md)
 - [Self-host plan](internals/selfhost-bootstrap.md)
+- [Readiness review](internals/readiness-20261024.md)
+- [Structural IR snapshot](internals/ir-dump.md)
+- [Std contract migration](migrations/std-contracts-20261024.md)

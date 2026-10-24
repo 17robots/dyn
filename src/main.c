@@ -3,6 +3,8 @@
 #include "dyn.h"
 #include "dyn_compact.h"
 #include "ir.h"
+#include "ir_dump.h"
+#include "frontend.h"
 #include "native_opt.h"
 #include "native_cpu.h"
 #include "native_asm.h"
@@ -194,6 +196,52 @@ static int emit_native(const DynSource *source, const DynIrProgram *ir, const ch
 static bool is_command(const DynOptions *o, const char *s) {
   return strcmp(o->command, s) == 0;
 }
+static int emit_ir_dump(const DynSources *sources, const char *main_path,
+                        const DynOptions *options) {
+  DynSource merged = {0};
+  int result = dyn_sources_merge(sources, main_path, &merged);
+  if (result) return result;
+  DynAstProgram ast = {0};
+  DynIrProgram ir = {0};
+  DynAnalysisResult analyzed = dyn_analyze(&merged, &ast,
+      (DynAnalysisOptions){.main_path = main_path, .require_main = !options->shared});
+  if (!analyzed.checked) result = 1;
+  else if (!dyn_ir_lower_structural(&ast, &merged, &ir)) {
+    fprintf(stderr, "error: failed to lower structural Dyn IR\n");
+    result = 2;
+  }
+  dyn_ast_program_free(&ast);
+  if (!result && !options->output) {
+    result = dyn_ir_dump(stdout, &ir, dyn_context_target(&merged.context));
+    if (fflush(stdout) || ferror(stdout)) result = 2;
+  } else if (!result) {
+    size_t length = strlen(options->output);
+    char *temporary = length <= SIZE_MAX - 12 ? malloc(length + 12) : NULL;
+    if (!temporary) result = 2;
+    else {
+      memcpy(temporary, options->output, length);
+      memcpy(temporary + length, ".tmp.XXXXXX", 12);
+      int descriptor = mkstemp(temporary);
+      if (descriptor < 0) result = 2;
+      else {
+        FILE *stream = fdopen(descriptor, "wb");
+        if (!stream) { close(descriptor); result = 2; }
+        else {
+          result = dyn_ir_dump(stream, &ir, dyn_context_target(&merged.context));
+          if (fflush(stream) || ferror(stream)) result = 2;
+          if (fclose(stream)) result = 2;
+        }
+        if (!result && rename(temporary, options->output)) result = 2;
+        if (result) remove(temporary);
+      }
+      free(temporary);
+    }
+  }
+  if (result == 2) fprintf(stderr, "error: failed to write Dyn IR dump\n");
+  dyn_ir_free(&ir);
+  dyn_source_free(&merged);
+  return result;
+}
 static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   unsigned vet_findings = 0;
@@ -248,18 +296,18 @@ static int execute_command(DynOptions *options, const char *compiler) {
     fprintf(stderr, "error: target '%s' is not implemented; supported targets: " "x86_64-linux, aarch64-linux, riscv64-linux, riscv64-none, riscv32-none, riscv32-none-soft, thumbv7em-none, thumbv7em-none-soft, thumbv7em-none-nucleo-h753zi, x86_64-macos, aarch64-macos, x86_64-windows, aarch64-windows, wasm32-browser, wasm32-wasi\n", options->target);
     return 2;
   }
-  if (!strcmp(context.target->kernel, "none") && (run || (options->shared && !options->no_link))) {
+  if (!options->emit_ir && !strcmp(context.target->kernel, "none") && (run || (options->shared && !options->no_link))) {
     fprintf(stderr, "error: bare-metal targets build static images only; run them under an emulator or on the board\n");
     return 2;
   }
-  if (!strcmp(context.target->arch, "wasm32") &&
+  if (!options->emit_ir && !strcmp(context.target->arch, "wasm32") &&
       (run || (is_command(options, "build") &&
        ((!strcmp(context.target->kernel, "browser") && !options->shared) ||
         (!strcmp(context.target->kernel, "wasi") && options->shared))))) {
     fprintf(stderr, "error: Wasm requires an external host; browser builds require --shared, WASI commands forbid --shared\n");
     return 2;
   }
-  bool native = (is_command(options, "build") || run);
+  bool native = (is_command(options, "build") || run) && !options->emit_ir;
   if (options->backend == DYN_BACKEND_LLVM) {
     fprintf(stderr, "error: LLVM backend was removed; use --backend native\n");
     return 2;
@@ -334,6 +382,12 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   if (options->timings) fprintf(stderr, "timing load %.3f ms\n", elapsed_ms(phase));
   char *main_path = dyn_path_join(options->input, "main.dyn");
+  if (options->emit_ir) {
+    result = main_path ? emit_ir_dump(&sources, main_path, options) : 2;
+    dyn_sources_free(&sources);
+    free(main_path);
+    return result;
+  }
   bool build = is_command(options, "build") || run;
   if (build && !options->no_link) {
     result = add_source_native_links(&context, &sources, options);
@@ -538,7 +592,10 @@ int main(int argc, char **argv) {
   DynOptions o;
   int cli = dyn_cli_parse(argc, argv, &o);
   if (cli) {
-    dyn_cli_help(NULL);
+    bool dump_requested = o.emit_ir;
+    for (int i = 2; i < argc; ++i)
+      if (!strcmp(argv[i], "--emit-ir")) dump_requested = true;
+    if (!dump_requested) dyn_cli_help(NULL);
     return cli;
   }
   /* CLI link inputs borrow argv; discovered libraries are owned suffix entries. Keep cleanup outside execution so every early return follows this path. */

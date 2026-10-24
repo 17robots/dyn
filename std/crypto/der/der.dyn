@@ -1,18 +1,32 @@
+use "std/errors" errors
+
 pub struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }
-pub struct Cursor { source: []const u8, offset: usize }
-pub struct Result { value: Element, offset: usize, ok: bool }
+pub struct Cursor { source: []const u8, offset: usize, kind: errors.Kind, error: isize, error_offset: usize }
+pub struct Result { value: Element, offset: usize, kind: errors.Kind, error: isize, ok: bool }
 
 pub fn cursor(source: []const u8) Cursor {
   return Cursor{ source: source }
 }
+fn fail(state: *Cursor, kind: errors.Kind, offset: usize) Result {
+  state.kind = kind
+  state.error_offset = offset
+  return Result{ kind: kind, offset: offset }
+}
+// EOF has ok=false and kind=None. Parse failures remain sticky on the cursor.
 pub fn next(state: *Cursor) Result {
+  if state.kind != errors.Kind.None {
+    return Result{ kind: state.kind, error: state.error, offset: state.error_offset }
+  }
   start := state.offset
-  if start + 2 > #len(state.source) {
+  if start == #len(state.source) {
     return Result{ offset: start }
+  }
+  if start > #len(state.source) || #len(state.source) - start < 2 {
+    return fail(state, errors.Kind.InvalidInput, start)
   }
   tag := state.source[start]
   if (tag & 31) == 31 {
-    return Result{ offset: start }
+    return fail(state, errors.Kind.InvalidInput, start)
   }
   at := start + 1
   first_length := state.source[at]
@@ -23,25 +37,28 @@ pub fn next(state: *Cursor) Result {
   }
   else {
     count := #cast(usize, (first_length & 127))
-    if count == 0 || count > #sizeof(usize) || at + count > #len(state.source) {
-      return Result{ offset: at - 1 }
+    if count == 0 || count > #len(state.source) - at {
+      return fail(state, errors.Kind.InvalidInput, at - 1)
+    }
+    if count > #sizeof(usize) {
+      return fail(state, errors.Kind.Overflow, at - 1)
     }
     if state.source[at] == 0 {
-      return Result{ offset: at }
+      return fail(state, errors.Kind.InvalidInput, at)
     }
     for i in 0..count {
       if length > (~#cast(usize, 0) - #cast(usize, state.source[at + i])) / 256 {
-        return Result{ offset: at + i }
+        return fail(state, errors.Kind.Overflow, at + i)
       }
       length = length * 256 + #cast(usize, state.source[at + i])
     }
     if length < 128 {
-      return Result{ offset: at }
+      return fail(state, errors.Kind.InvalidInput, at)
     }
     at += count
   }
   if length > #len(state.source) - at {
-    return Result{ offset: at }
+    return fail(state, errors.Kind.InvalidInput, at)
   }
   finish := at + length
   state.offset = finish
@@ -51,5 +68,5 @@ pub fn enter(element: Element) Cursor {
   return cursor(element.content)
 }
 pub fn finished(state: *const Cursor) bool {
-  return state.offset == #len(state.source)
+  return state.kind == errors.Kind.None && state.offset == #len(state.source)
 }

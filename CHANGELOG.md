@@ -14,6 +14,24 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Restored `dyn build --emit-ir` as versioned structural Dyn IR, with deterministic byte encoding and atomic `--output` files. This does not emit LLVM IR.
+- Standard-library contract corrections: buffered I/O, INI and WebSocket state retain their first failure; zero SHA-256 contexts initialize lazily; failed Metadesk parses return the stub; sort searches return the input length on a miss.
+- Breaking API migrations: flags parsing, regex compilation and thread creation take arenas first. Thread creation returns a stable arena-backed pointer. See [migration notes](docs/migrations/std-contracts-20261024.md). Flags, regex, URL, semver, PNG and QOI expose portable error categories and native error codes; codec payloads are under `value`. Remaining std migrations are tracked separately; these changes do not establish universal compliance.
+- **Breaking:** DNS answer collections, complete HTTP exchanges/chunk decoding,
+  process capture and AEAD outputs now use caller arenas. Capture limits are
+  explicit policy. HTTP/WebSocket controls, TLS, terminal operations and
+  capability reads return portable results; protocol diagnostics remain separate
+  from native codes. Watchers retain terminal failures. Zero PRNG and HTTP worker
+  states are safe, and worker startup takes an arena for stable thread nodes.
+- **Breaking:** clock reads, sleep, deadlines, profiling completion and benchmark
+  queries return structured failures; duplicate `try_*` clock names are removed.
+  OS clock failures propagate through network waits and process capture. CSV,
+  XML and TAR retain portable stream diagnostics. Text/HTML template exhaustion
+  follows the arena panic contract.
+- Trusted standard math calls use target-gated native instructions in tree,
+  SSA and Wasm emission. Unsupported operations keep portable implementations.
+  Native x86 optional instructions require CPU and OS capability checks.
+
 - Expanded `std/math` with integer bit/overflow/saturating helpers, portable
   floating-point functions, concrete vectors, column-major matrices,
   quaternions and half-open ranges. Vector normalization widens intermediates;
@@ -35,12 +53,12 @@ servers so they pick up the new `dyn`.
   `PathResult`, `DirectoryResult`, `AtomicResult`; `net.ConnectionResult`,
   `ListenerResult`, `http.AcceptResult`; `process.SpawnResult`,
   `ArgumentsResult`; `testing.TemporaryResult`; `watch.OpenResult`; `zip`
-  `EntryResult`, `ExtractResult`, `OpenResult`; `dns.Result`; `xml` and `ini`
+  `EntryResult`, `ExtractResult`, `OpenResult`; DNS address results; `xml` and `ini`
   scanner results; `semver`, `template`, `der` and `certificate` results.
   Network, watch and temporary-directory results gain `kind`. Parser results
-  use `kind` and `offset`: `json` and `mdesk` `ParseResult.error` is now `kind`
-  and `error_offset` is `offset`; `template`, `der` and `url` likewise; `ini`
-  `ParseResult` is `{value, kind, line, ok}`.
+  use portable `kind`, native `error`, and byte `offset`. Module-specific parser
+  diagnostics use `detail`; `ini` also retains its line number. JSON and Metadesk
+  retain `root` and return their read-only stub on failure.
 - **Breaking:** one way to produce variable-size data: the function takes
   `arena: *mem.Arena` first and returns the result in it. Removed the
   caller-buffer forms and size companions: `strings.clone_into`, `join_size`,

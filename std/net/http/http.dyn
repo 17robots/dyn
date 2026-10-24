@@ -18,13 +18,16 @@ pub fn accept(listener: *Listener) AcceptResult {
   accepted := network.listener_accept(listener)
   return AcceptResult{ value: accepted.value, error: accepted.error, kind: accepted.kind, ok: accepted.ok }
 }
-pub fn close(connection: *Connection) isize {
+pub fn close(connection: *Connection) Result {
   result := network.connection_close(connection)
-  return result.error
+  return Result{ error: result.error, kind: result.kind, ok: result.ok }
 }
 
 pub enum Framing { None, Length, Chunked, Close }
+// Parser offsets are byte positions in the supplied input; zero also denotes an
+// unavailable position for semantic URL/upgrade validation without a source cursor.
 pub struct HttpHead {
+  kind: errors.Kind, error: isize, offset: usize,
   framing: Framing,
   code: u16,
   header_length: usize,
@@ -33,10 +36,13 @@ pub struct HttpHead {
   chunked: bool,
   ok: bool,
 }
-pub struct HttpHeader { name: []const u8, value: []const u8, ok: bool }
-pub struct Url { scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool, ok: bool }
+pub struct HttpHeader { kind: errors.Kind, error: isize, offset: usize, name: []const u8, value: []const u8, ok: bool }
+pub struct Url { kind: errors.Kind, error: isize, offset: usize, scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool, ok: bool }
 
 pub struct HttpIoResult {
+  value: []u8,
+  kind: errors.Kind,
+  offset: usize,
   consumed: usize,
   count: usize,
   error: isize,
@@ -114,21 +120,21 @@ fn starts_ascii_case(input: []const u8, at: usize, expected: []const u8) bool {
   return true
 }
 
-struct Decimal { value: usize, ok: bool }
+struct Decimal { value: usize, offset: usize, ok: bool }
 
 fn parse_decimal(input: []const u8, start: usize, end: usize) Decimal {
   value: usize = 0
   i := start
   if start == end {
-    return Decimal{}
+    return Decimal{ offset: i }
   }
   for i < end {
     if input[i] < '0' || input[i] > '9' {
-      return Decimal{}
+      return Decimal{ offset: i }
     }
     digit := #cast(usize, (input[i] - '0'))
     if value > (~#cast(usize, 0) - digit) / 10 {
-      return Decimal{}
+      return Decimal{ offset: i }
     }
     value = value * 10 + digit
     i += 1
@@ -162,18 +168,28 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
     line_end += 1
   }
   if line_end + 1 >= #len(input) {
-    return HttpHead{}
+    return HttpHead{ kind: errors.Kind.InvalidInput, offset: #len(input) }
   }
   code: u16 = 0
   version := input[..0]
+  version_at: usize = 0
   if response {
-    if line_end < 12 || input[8] != ' ' || input[12] != ' ' {
-      return HttpHead{}
+    if line_end < 12 {
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: line_end }
+    }
+    if input[8] != ' ' {
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: 8 }
+    }
+    if input[12] != ' ' {
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: 12 }
     }
     version = input[..8]
     parsed_code := parse_decimal(input, 9, 12)
-    if !parsed_code.ok || parsed_code.value < 100 || parsed_code.value > 999 {
-      return HttpHead{}
+    if !parsed_code.ok {
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: parsed_code.offset }
+    }
+    if parsed_code.value < 100 || parsed_code.value > 999 {
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: 9 }
     }
     code = #cast(u16, parsed_code.value)
   } else {
@@ -182,19 +198,25 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
       first += 1
     }
     if first == 0 || first >= line_end || input[first] != ' ' {
-      return HttpHead{}
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: first }
     }
     second := first + 1
     for second < line_end && input[second] > 32 && input[second] != 127 {
       second += 1
     }
     if second == first + 1 || second >= line_end || input[second] != ' ' {
-      return HttpHead{}
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: second }
     }
-    version = input[second + 1..line_end]
+    version_at = second + 1
+    version = input[version_at..line_end]
   }
   if !bytes.equal(version, "HTTP/1.1") && !bytes.equal(version, "HTTP/1.0") {
-    return HttpHead{}
+    bad: usize = 0
+    expected: []const u8 = "HTTP/1.1"
+    for bad < #len(version) && bad < #len(expected) && version[bad] == expected[bad] {
+      bad += 1
+    }
+    return HttpHead{ kind: errors.Kind.InvalidInput, offset: version_at + bad }
   }
   cursor := line_end + 2
   content_length: usize = 0
@@ -206,7 +228,7 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
   for cursor + 1 < #len(input) {
     if input[cursor] == '\r' && input[cursor + 1] == '\n' {
       if has_transfer && has_length {
-        return HttpHead{}
+        return HttpHead{ kind: errors.Kind.InvalidInput, offset: cursor }
       }
       framing := Framing.None
       if chunked {
@@ -229,33 +251,41 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
       end += 1
     }
     if end + 1 >= #len(input) {
-      return HttpHead{}
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: #len(input) }
     }
     colon := cursor
     for colon < end && token_byte(input[colon]) {
       colon += 1
     }
     if colon == cursor || colon == end || input[colon] != ':' {
-      return HttpHead{}
+      return HttpHead{ kind: errors.Kind.InvalidInput, offset: colon }
     }
-    value := trim_ows(input[colon + 1..end])
-    for byte in value {
+    value_at := colon + 1
+    for value_at < end && (input[value_at] == ' ' || input[value_at] == '\t') {
+      value_at += 1
+    }
+    value := trim_ows(input[value_at..end])
+    for value_i in 0..#len(value) {
+      byte := value[value_i]
       if (byte < 32 && byte != '\t') || byte == 127 {
-        return HttpHead{}
+        return HttpHead{ kind: errors.Kind.InvalidInput, offset: value_at + value_i }
       }
     }
     name := input[cursor..colon]
     if ascii_equal(name, "Content-Length") {
       parsed_length := parse_decimal(value, 0, #len(value))
-      if !parsed_length.ok || (has_length && content_length != parsed_length.value) {
-        return HttpHead{}
+      if !parsed_length.ok {
+        return HttpHead{ kind: errors.Kind.InvalidInput, offset: value_at + parsed_length.offset }
+      }
+      if has_length && content_length != parsed_length.value {
+        return HttpHead{ kind: errors.Kind.InvalidInput, offset: value_at }
       }
       content_length = parsed_length.value
       has_length = true
     } else if ascii_equal(name, "Transfer-Encoding") {
       // Only chunked is implemented. Never silently ignore unknown codings.
       if has_transfer || !ascii_equal(value, "chunked") {
-        return HttpHead{}
+        return HttpHead{ kind: errors.Kind.InvalidInput, offset: value_at }
       }
       has_transfer = true
       chunked = true
@@ -268,11 +298,15 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
         }
         item := trim_ows(value[at..finish])
         if #len(item) == 0 {
-          return HttpHead{}
+          return HttpHead{ kind: errors.Kind.InvalidInput, offset: value_at + at }
         }
-        for connection_byte in item {
-          if !token_byte(connection_byte) {
-            return HttpHead{}
+        item_at := at
+        for item_at < finish && (value[item_at] == ' ' || value[item_at] == '\t') {
+          item_at += 1
+        }
+        for item_i in 0..#len(item) {
+          if !token_byte(item[item_i]) {
+            return HttpHead{ kind: errors.Kind.InvalidInput, offset: value_at + item_at + item_i }
           }
         }
         if ascii_equal(item, "close") {
@@ -289,7 +323,7 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
     }
     cursor = end + 2
   }
-  return HttpHead{}
+  return HttpHead{ kind: errors.Kind.InvalidInput, offset: cursor }
 }
 
 pub fn parse_response(input: []const u8) HttpHead {
@@ -300,12 +334,9 @@ pub fn parse_request(input: []const u8) HttpHead {
 }
 
 pub fn header(input: []const u8, name: []const u8) HttpHeader {
-  head := http_parse_head(input, false)
+  head := http_parse_head(input, starts_ascii_case(input, 0, "HTTP/"))
   if !head.ok {
-    head = http_parse_head(input, true)
-  }
-  if !head.ok {
-    return HttpHeader{}
+    return HttpHeader{ kind: head.kind, error: head.error, offset: head.offset }
   }
   cursor: usize = 0
   for cursor + 1 < head.header_length && !(input[cursor] == '\r' && input[cursor + 1] == '\n') {
@@ -330,7 +361,7 @@ pub fn header(input: []const u8, name: []const u8) HttpHeader {
     }
     cursor = end + 2
   }
-  return HttpHeader{}
+  return HttpHeader{ kind: errors.Kind.NotFound }
 }
 
 fn hex(value: u8) i16 {
@@ -352,17 +383,20 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
   for {
     if state.phase == 1 {
       if state.size > #len(input) - state.cursor {
-        return HttpIoResult{ error: -11 }
+        return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
       }
       end := state.cursor + state.size
       if #len(input) - end < 2 {
-        return HttpIoResult{ error: -11 }
+        return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
       }
-      if input[end] != '\r' || input[end + 1] != '\n' {
-        return HttpIoResult{ error: -22 }
+      if input[end] != '\r' {
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: end, error: 0 }
+      }
+      if input[end + 1] != '\n' {
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: end + 1, error: 0 }
       }
       if state.size > ~#cast(usize, 0) - state.count {
-        return HttpIoResult{ error: -28 }
+        return HttpIoResult{ kind: errors.Kind.Capacity, offset: state.line_scan, error: 0 }
       }
       state.count += state.size
       state.cursor = end + 2
@@ -378,29 +412,29 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
         if !state.extension && byte != ';' {
           value := hex(byte)
           if value < 0 || state.size > (~#cast(usize, 0) - #cast(usize, value)) / 16 {
-            return HttpIoResult{ error: -22 }
+            return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: state.line_scan, error: 0 }
           }
           state.size = state.size * 16 + #cast(usize, value)
           state.digits = true
         } else {
           if !state.digits || byte < 32 || byte == 127 {
-            return HttpIoResult{ error: -22 }
+            return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: state.line_scan, error: 0 }
           }
           state.extension = true
         }
         state.line_scan += 1
       }
       if state.line_scan == #len(input) {
-        return HttpIoResult{ error: -11 }
+        return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
       }
       if !state.digits {
-        return HttpIoResult{ error: -22 }
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: state.line_scan, error: 0 }
       }
       if state.line_scan + 1 >= #len(input) {
-        return HttpIoResult{ error: -11 }
+        return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
       }
       if input[state.line_scan + 1] != '\n' {
-        return HttpIoResult{ error: -22 }
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: state.line_scan + 1, error: 0 }
       }
       state.cursor = state.line_scan + 2
       state.line_scan = state.cursor
@@ -413,7 +447,7 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
         state.line_scan += 1
       }
       if state.line_scan + 1 >= #len(input) {
-        return HttpIoResult{ error: -11 }
+        return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
       }
       end := state.line_scan
       if end == state.cursor {
@@ -424,10 +458,16 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
         colon += 1
       }
       if colon == state.cursor || colon == end || input[colon] != ':' {
-        return HttpIoResult{ error: -22 }
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: colon, error: 0 }
+      }
+      for value_at in colon + 1..end {
+        byte := input[value_at]
+        if (byte < 32 && byte != '\t') || byte == 127 {
+          return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: value_at, error: 0 }
+        }
       }
       if ascii_equal(input[state.cursor..colon], "Content-Length") || ascii_equal(input[state.cursor..colon], "Transfer-Encoding") {
-        return HttpIoResult{ error: -22 }
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: state.cursor, error: 0 }
       }
       state.cursor = end + 2
       state.line_scan = state.cursor
@@ -457,29 +497,29 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
     for cursor < #len(input) && input[cursor] != '\r' && input[cursor] != ';' {
       value := hex(input[cursor])
       if value < 0 || size > (~#cast(usize, 0) - #cast(usize, value)) / 16 {
-        return HttpIoResult{ error: -22 }
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: cursor, error: 0 }
       }
       size = size * 16 + #cast(usize, value)
       cursor += 1
       digits += 1
     }
     if cursor == #len(input) {
-      return HttpIoResult{ error: -11 }
+      return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
     }
     if digits == 0 {
-      return HttpIoResult{ error: -22 }
+      return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: cursor, error: 0 }
     }
     for cursor < #len(input) && input[cursor] != '\r' {
       if input[cursor] < 32 || input[cursor] == 127 {
-        return HttpIoResult{ error: -22 }
+        return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: cursor, error: 0 }
       }
       cursor += 1
     }
     if cursor + 1 >= #len(input) {
-      return HttpIoResult{ error: -11 }
+      return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
     }
     if input[cursor + 1] != '\n' {
-      return HttpIoResult{ error: -22 }
+      return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: cursor + 1, error: 0 }
     }
     cursor += 2
     if size == 0 {
@@ -489,7 +529,7 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
           end += 1
         }
         if end + 1 >= #len(input) {
-          return HttpIoResult{ error: -11 }
+          return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
         }
         if end == cursor {
           return HttpIoResult{ count: output, consumed: end + 2, ok: true }
@@ -499,23 +539,29 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
           colon += 1
         }
         if colon == cursor || colon == end || input[colon] != ':' {
-          return HttpIoResult{ error: -22 }
+          return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: colon, error: 0 }
+        }
+        for value_at in colon + 1..end {
+          byte := input[value_at]
+          if (byte < 32 && byte != '\t') || byte == 127 {
+            return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: value_at, error: 0 }
+          }
         }
         if ascii_equal(input[cursor..colon], "Content-Length") || ascii_equal(input[cursor..colon], "Transfer-Encoding") {
-          return HttpIoResult{ error: -22 }
+          return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: cursor, error: 0 }
         }
         cursor = end + 2
       }
     }
     if size > #len(input) - cursor {
-      return HttpIoResult{ error: -11 }
+      return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
     }
     if size > ~#cast(usize, 0) - output {
-      return HttpIoResult{ error: -28 }
+      return HttpIoResult{ kind: errors.Kind.Capacity, offset: cursor, error: 0 }
     }
     if write {
       if size > #len(destination) - output {
-        return HttpIoResult{ error: -28 }
+        return HttpIoResult{ kind: errors.Kind.Capacity, offset: cursor, error: 0 }
       }
       for i in 0..size {
         destination[output + i] = input[cursor + i]
@@ -524,40 +570,52 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
     cursor += size
     output += size
     if cursor + 1 >= #len(input) {
-      return HttpIoResult{ error: -11 }
+      return HttpIoResult{ kind: errors.Kind.WouldBlock, offset: #len(input), error: 0 }
     }
-    if input[cursor] != '\r' || input[cursor + 1] != '\n' {
-      return HttpIoResult{ error: -22 }
+    if input[cursor] != '\r' {
+      return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: cursor, error: 0 }
+    }
+    if input[cursor + 1] != '\n' {
+      return HttpIoResult{ kind: errors.Kind.InvalidInput, offset: cursor + 1, error: 0 }
     }
     cursor += 2
   }
   return HttpIoResult{}
 }
-// Validate before decoding, so incomplete in-place input remains unchanged.
-pub fn decode_chunked(input: []const u8, destination: []u8) HttpIoResult {
-  scanned := scan_chunked(input, destination[..0], false)
+// Borrowed inputs may live below the mark, but must not overlap future writes.
+fn validate_borrow(arena: *memory.Arena, input: []const u8) {
+  if bytes.overlaps(input, arena.data[arena.offset..]) {
+    #panic("HTTP input overlaps arena output")
+  }
+}
+
+// Validate the complete wire before allocating or writing decoded payload.
+pub fn decode_chunked(arena: *memory.Arena, input: []const u8) HttpIoResult {
+  validate_borrow(arena, input)
+  scanned := scan_chunked(input, arena.data[..0], false)
   if !scanned.ok {
     return scanned
   }
-  if scanned.count > #len(destination) {
-    return HttpIoResult{ error: -28 }
-  }
-  return scan_chunked(input[..scanned.consumed], destination, true)
+  destination := memory.push_bytes_uninit(arena, scanned.count)
+  decoded := scan_chunked(input[..scanned.consumed], destination, true)
+  decoded.value = destination
+  return decoded
 }
 
 pub fn parse_url(input: []const u8) Url {
   parsed := urls.parse(input)
   if !parsed.ok {
-    return Url{}
+    return Url{ kind: parsed.kind, error: parsed.error, offset: parsed.offset }
   }
   value := parsed.value
   secure := ascii_equal(value.scheme, "https")
   if !secure && !ascii_equal(value.scheme, "http") {
-    return Url{}
+    return Url{ kind: errors.Kind.InvalidInput }
   }
+  authority_at := #len(value.scheme) + 3
   authority := value.authority
   if #len(authority) == 0 || bytes.find_byte(authority, '@') < #len(authority) {
-    return Url{}
+    return Url{ kind: errors.Kind.InvalidInput, offset: authority_at + bytes.find_byte(authority, '@') }
   }
   host_end := #len(authority)
   port_start := #len(authority)
@@ -565,13 +623,13 @@ pub fn parse_url(input: []const u8) Url {
   if authority[0] == '[' {
     bracket := bytes.find_byte(authority, ']')
     if bracket <= 1 || bracket == #len(authority) {
-      return Url{}
+      return Url{ kind: errors.Kind.InvalidInput, offset: authority_at + bracket }
     }
     host_start = 1
     host_end = bracket
     if host_end + 1 < #len(authority) {
       if authority[host_end + 1] != ':' {
-        return Url{}
+        return Url{ kind: errors.Kind.InvalidInput, offset: authority_at + host_end + 1 }
       }
       port_start = host_end + 2
     }
@@ -583,7 +641,7 @@ pub fn parse_url(input: []const u8) Url {
     }
   }
   if host_end == host_start {
-    return Url{}
+    return Url{ kind: errors.Kind.InvalidInput, offset: authority_at + host_start }
   }
   port: u16 = 80
   if secure {
@@ -591,12 +649,15 @@ pub fn parse_url(input: []const u8) Url {
   }
   if port_start < #len(authority) {
     number := parse_decimal(authority, port_start, #len(authority))
-    if !number.ok || number.value == 0 || number.value > 65535 {
-      return Url{}
+    if !number.ok {
+      return Url{ kind: errors.Kind.InvalidInput, offset: authority_at + number.offset }
+    }
+    if number.value == 0 || number.value > 65535 {
+      return Url{ kind: errors.Kind.InvalidInput, offset: authority_at + port_start }
     }
     port = #cast(u16, number.value)
   } else if authority[#len(authority) - 1] == ':' {
-    return Url{}
+    return Url{ kind: errors.Kind.InvalidInput, offset: authority_at + #len(authority) }
   }
   target: []const u8 = "/"
   // Borrow the original suffix to retain query bytes; fragments are never sent.
@@ -617,6 +678,18 @@ pub const StatusPayloadTooLarge: u16 = 413
 pub const StatusInternalServerError: u16 = 500
 
 pub enum ErrorKind { None, End, Invalid, Capacity, Io }
+fn http_kind(detail: ErrorKind) errors.Kind {
+  if detail == ErrorKind.Invalid {
+    return errors.Kind.InvalidInput
+  }
+  if detail == ErrorKind.Capacity {
+    return errors.Kind.Capacity
+  }
+  if detail == ErrorKind.Io {
+    return errors.Kind.System
+  }
+  return errors.Kind.None
+}
 
 pub struct Request {
   raw: []const u8,
@@ -630,6 +703,9 @@ pub struct Request {
 }
 
 pub struct Response {
+  failed: bool,
+  first: Result,
+  first_stream: stream.Result,
   output: stream.Writer,
   started: bool,
   finished: bool,
@@ -643,6 +719,9 @@ pub struct ResponseOptions {
 }
 
 pub struct Server {
+  failed: bool,
+  first: Result,
+  ended: bool,
   input: stream.Reader,
   output: stream.Writer,
   storage: []u8,
@@ -655,23 +734,31 @@ pub struct Server {
 pub struct ReceiveResult {
   request: Request,
   response: Response,
-  error: ErrorKind,
-  system_error: isize,
+  detail: ErrorKind,
+  kind: errors.Kind,
+  offset: usize,
+  error: isize,
   ok: bool,
 }
 
 pub struct Result {
-  error: ErrorKind,
-  system_error: isize,
+  detail: ErrorKind,
+  kind: errors.Kind,
+  offset: usize,
+  error: isize,
   ok: bool,
 }
 
 pub struct Body {
+  failed: bool,
+  first: Result,
+  first_stream: stream.Result,
   output: stream.Writer,
   finished: bool,
 }
 
 pub struct BodyResult {
+  kind: errors.Kind, error: isize, detail: ErrorKind,
   body: Body,
   result: Result,
   ok: bool,
@@ -695,8 +782,10 @@ pub struct ClientResponse {
   raw: []u8,
   body: []u8,
   status: u16,
-  error: ErrorKind,
-  system_error: isize,
+  detail: ErrorKind,
+  kind: errors.Kind,
+  offset: usize,
+  error: isize,
   ok: bool,
 }
 
@@ -706,13 +795,16 @@ pub fn router(storage: []Route, fallback: Handler) Router {
   return Router{ routes: storage, fallback: fallback }
 }
 
-pub fn route(state: *Router, method: []const u8, target: []const u8, handler: Handler) bool {
-  if state.count == #len(state.routes) || handler == nil {
-    return false
+pub fn route(state: *Router, method: []const u8, target: []const u8, handler: Handler) Result {
+  if handler == nil {
+    return Result{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Invalid }
+  }
+  if state.count >= #len(state.routes) {
+    return Result{ kind: errors.Kind.Capacity, detail: ErrorKind.Capacity }
   }
   state.routes[state.count] = Route{ method: method, target: target, handler: handler }
   state.count += 1
-  return true
+  return Result{ ok: true }
 }
 
 pub fn dispatch(state: *Router, response: *Response, request: *const Request) Result {
@@ -777,8 +869,22 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
   }
 }
 
+fn receive_failure(state: *Server, detail: ErrorKind, native: isize) ReceiveResult {
+  if !state.failed {
+    state.failed = true
+    state.first = Result{ detail: detail, kind: http_kind(detail), error: native }
+  }
+  return ReceiveResult{ detail: state.first.detail, kind: state.first.kind, offset: state.first.offset, error: state.first.error }
+}
+
 // Returned request slices borrow state.storage and remain valid only until the next receive call.
 pub fn receive(state: *Server) ReceiveResult {
+  if state.failed {
+    return receive_failure(state, ErrorKind.None, 0)
+  }
+  if state.used > #len(state.storage) || state.consumed > state.used || state.input.read == nil || state.output.write == nil {
+    return receive_failure(state, ErrorKind.Invalid, 0)
+  }
   shift_consumed(state)
   head := HttpHead{}
   head_scan: usize = 0
@@ -789,49 +895,72 @@ pub fn receive(state: *Server) ReceiveResult {
       head_checked = true
       // More bytes cannot repair a complete head that does not parse.
       if !head.ok {
-        return ReceiveResult{ error: ErrorKind.Invalid, ok: false }
+        failure := receive_failure(state, ErrorKind.Invalid, 0)
+        state.first.offset = head.offset
+        failure.offset = head.offset
+        return failure
       }
     }
     if head.ok {
       if head.chunked {
-        return ReceiveResult{ error: ErrorKind.Invalid, ok: false }
+        return receive_failure(state, ErrorKind.Invalid, 0)
       }
       if head.content_length > #len(state.storage) - head.header_length {
-        return ReceiveResult{ error: ErrorKind.Capacity, ok: false }
+        return receive_failure(state, ErrorKind.Capacity, 0)
       }
       total := head.header_length + head.content_length
       if state.used >= total {
         request := request_parts(state.storage[..state.used], head)
         request.context = state.context
         if #len(request.method) == 0 {
-          return ReceiveResult{ error: ErrorKind.Invalid, ok: false }
+          return receive_failure(state, ErrorKind.Invalid, 0)
         }
         state.consumed = total
         return ReceiveResult{
           request: request,
           response: Response{ output: state.output },
-          error: ErrorKind.None,
-          system_error: 0,
+          detail: ErrorKind.None,
+          error: 0,
           ok: true,
         }
       }
     }
+    // End is a transport state until all buffered requests have been consumed.
+    if state.ended {
+      if state.used == 0 {
+        return receive_failure(state, ErrorKind.End, 0)
+      }
+      failure := receive_failure(state, ErrorKind.Invalid, 0)
+      state.first.offset = state.used
+      failure.offset = state.used
+      return failure
+    }
     if state.used == #len(state.storage) {
-      return ReceiveResult{ error: ErrorKind.Capacity, ok: false }
+      return receive_failure(state, ErrorKind.Capacity, 0)
     }
     input := stream.read(state.input, state.storage[state.used..])
     if input.transferred > #len(state.storage) - state.used {
-      return ReceiveResult{ error: ErrorKind.Io, system_error: -5, ok: false }
+      return receive_failure(state, ErrorKind.Io, 0)
     }
     state.used += input.transferred
     if input.status == stream.Status.Error {
-      return ReceiveResult{ error: ErrorKind.Io, system_error: input.error, ok: false }
+      failure := receive_failure(state, ErrorKind.Io, input.error)
+      state.first.kind = input.kind
+      failure.kind = input.kind
+      return failure
     }
+    state.ended = input.status == stream.Status.End
     if input.transferred == 0 {
-      if state.used == 0 {
-        return ReceiveResult{ error: ErrorKind.End, ok: false }
+      if !state.ended {
+        return receive_failure(state, ErrorKind.Io, 0)
       }
-      return ReceiveResult{ error: ErrorKind.Invalid, ok: false }
+      if state.used == 0 {
+        return receive_failure(state, ErrorKind.End, 0)
+      }
+      failure := receive_failure(state, ErrorKind.Invalid, 0)
+      state.first.offset = state.used
+      failure.offset = state.used
+      return failure
     }
   }
   return ReceiveResult{}
@@ -867,14 +996,40 @@ fn decimal(destination: []u8, value: usize) []const u8 {
 fn write_output(destination: stream.Writer, bytes: []const u8) Result {
   written := stream.write_all(destination, bytes)
   if written.status == stream.Status.Error {
-    return Result{ error: ErrorKind.Io, system_error: written.error, ok: false }
+    return Result{ kind: written.kind, detail: ErrorKind.Io, error: written.error, ok: false }
   }
-  return Result{ error: ErrorKind.None, ok: true }
+  return Result{ detail: ErrorKind.None, ok: true }
+}
+
+fn response_failure(response: *Response, result: Result) Result {
+  if !response.failed {
+    response.failed = true
+    response.first = result
+    if response.first_stream.status != stream.Status.Error {
+      response.first_stream = stream.Result{ error: 0, kind: errors.Kind.InvalidState, status: stream.Status.Error }
+    }
+  }
+  return response.first
+}
+
+fn response_output(response: *Response, source: []const u8) Result {
+  if response.failed {
+    return response.first
+  }
+  written := stream.write_all(response.output, source)
+  if written.status == stream.Status.Error {
+    response.first_stream = stream.Result{ error: written.error, kind: written.kind, status: stream.Status.Error }
+    return response_failure(response, Result{ kind: written.kind, detail: ErrorKind.Io, error: written.error })
+  }
+  return Result{ ok: true }
 }
 
 fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool) Result {
-  if response.started || response.finished {
-    return Result{ error: ErrorKind.Invalid, ok: false }
+  if response.failed {
+    return response.first
+  }
+  if response.started || response.finished || response.output.write == nil {
+    return response_failure(response, Result{ kind: errors.Kind.InvalidState, detail: ErrorKind.Invalid })
   }
   status := options.status
   if status == 0 {
@@ -890,26 +1045,26 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
   }
   number_storage: [20]u8 = []
   status_text := decimal(number_storage[..], #cast(usize, status))
-  if !write_output(response.output, "HTTP/1.1 ").ok || !write_output(response.output, status_text).ok ||
-    !write_output(response.output, " ").ok || !write_output(response.output, reason).ok ||
-    !write_output(response.output, "\r\nContent-Type: ").ok || !write_output(response.output, content_type).ok {
-    return Result{ error: ErrorKind.Io, system_error: -5, ok: false }
+  if !response_output(response, "HTTP/1.1 ").ok || !response_output(response, status_text).ok ||
+    !response_output(response, " ").ok || !response_output(response, reason).ok ||
+    !response_output(response, "\r\nContent-Type: ").ok || !response_output(response, content_type).ok {
+    return response.first
   }
   if chunked {
-    if !write_output(response.output, "\r\nTransfer-Encoding: chunked").ok {
-      return Result{ error: ErrorKind.Io, system_error: -5, ok: false }
+    if !response_output(response, "\r\nTransfer-Encoding: chunked").ok {
+      return response.first
     }
   } else {
     length_text := decimal(number_storage[..], body_length)
-    if !write_output(response.output, "\r\nContent-Length: ").ok || !write_output(response.output, length_text).ok {
-      return Result{ error: ErrorKind.Io, system_error: -5, ok: false }
+    if !response_output(response, "\r\nContent-Length: ").ok || !response_output(response, length_text).ok {
+      return response.first
     }
   }
   connection := "\r\nConnection: keep-alive\r\n\r\n"
   if options.close_connection {
     connection = "\r\nConnection: close\r\n\r\n"
   }
-  result := write_output(response.output, connection)
+  result := response_output(response, connection)
   if result.ok {
     response.started = true
   }
@@ -921,7 +1076,7 @@ pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) 
   if !started.ok {
     return started
   }
-  written := write_output(response.output, body)
+  written := response_output(response, body)
   if written.ok {
     response.finished = true
   }
@@ -931,12 +1086,12 @@ pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) 
 pub fn respond_stream(response: *Response, options: ResponseOptions) BodyResult {
   started := response_begin(response, options, 0, true)
   if !started.ok {
-    return BodyResult{ result: started, ok: false }
+    return BodyResult{ kind: started.kind, error: started.error, detail: started.detail, body: Body{ failed: true, first: started, first_stream: response.first_stream }, result: started, ok: false }
   }
   response.finished = true
   return BodyResult{
     body: Body{ output: response.output },
-    result: Result{ error: ErrorKind.None, ok: true },
+    result: Result{ detail: ErrorKind.None, ok: true },
     ok: true,
   }
 }
@@ -960,53 +1115,92 @@ fn hex_size(destination: []u8, value: usize) []const u8 {
   return destination[end..]
 }
 
+fn body_failure(body: *Body, result: Result, native: stream.Result) Result {
+  if !body.failed {
+    body.failed = true
+    body.first = result
+    body.first_stream = stream.Result{ error: native.error, kind: native.kind, status: stream.Status.Error }
+  }
+  return body.first
+}
+
+fn body_invalid(body: *Body) Result {
+  return body_failure(body, Result{ kind: errors.Kind.InvalidState, detail: ErrorKind.Invalid }, stream.Result{ error: 0, kind: errors.Kind.InvalidState, status: stream.Status.Error })
+}
+
+fn body_output(body: *Body, source: []const u8) stream.Result {
+  if body.failed {
+    return body.first_stream
+  }
+  result := stream.write_all(body.output, source)
+  if result.status == stream.Status.Error {
+    _ = body_failure(body, Result{ kind: result.kind, detail: ErrorKind.Io, error: result.error }, result)
+  }
+  return result
+}
+
 fn body_write(data: rawptr, source: []const u8) stream.Result {
   body := #cast(*Body, data)
-  if body.finished {
-    return stream.Result{ error: -22, status: stream.Status.Error }
+  if body.failed {
+    return body.first_stream
+  }
+  if body.finished || body.output.write == nil {
+    _ = body_invalid(body)
+    return body.first_stream
   }
   if #len(source) == 0 {
     return stream.Result{ status: stream.Status.Complete }
   }
   size_storage: [16]u8 = []
   size := hex_size(size_storage[..], #len(source))
-  first := stream.write_all(body.output, size)
+  first := body_output(body, size)
   if first.status == stream.Status.Error {
     return first
   }
-  separator := stream.write_all(body.output, "\r\n")
+  separator := body_output(body, "\r\n")
   if separator.status == stream.Status.Error {
     return separator
   }
-  content := stream.write_all(body.output, source)
+  content := body_output(body, source)
   if content.status == stream.Status.Error {
     return content
   }
-  ending := stream.write_all(body.output, "\r\n")
+  ending := body_output(body, "\r\n")
   if ending.status == stream.Status.Error {
     return ending
   }
   return stream.Result{ transferred: #len(source), status: stream.Status.Complete }
 }
 
+// Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.
 pub fn body_writer(body: *Body) stream.Writer {
   return stream.Writer{ data: body, write: &body_write }
 }
 
 pub fn body_finish(body: *Body) Result {
-  if body.finished {
-    return Result{ error: ErrorKind.Invalid, ok: false }
+  if body.failed {
+    return body.first
   }
-  result := write_output(body.output, "0\r\n\r\n")
-  if result.ok {
-    body.finished = true
+  if body.finished || body.output.write == nil {
+    return body_invalid(body)
   }
-  return result
+  result := body_output(body, "0\r\n\r\n")
+  if result.status == stream.Status.Error {
+    return body.first
+  }
+  body.finished = true
+  return Result{ ok: true }
 }
 
 pub fn body_abort(body: *Body) Result {
+  if body.failed {
+    return body.first
+  }
+  if body.output.write == nil {
+    return body_invalid(body)
+  }
   body.finished = true
-  return Result{ error: ErrorKind.None, ok: true }
+  return Result{ detail: ErrorKind.None, ok: true }
 }
 
 pub fn serve_connection(connection: *network.Connection, storage: []u8, handler: Handler) Result {
@@ -1027,53 +1221,64 @@ pub fn serve_stream(input: stream.Reader, output: stream.Writer, storage: []u8, 
 // the handler casts back to its own type. The caller keeps it alive.
 pub fn serve_stream_context(input: stream.Reader, output: stream.Writer, storage: []u8, handler: Handler, context: rawptr) Result {
   if handler == nil || #len(storage) == 0 {
-    return Result{ error: ErrorKind.Invalid, ok: false }
+    return Result{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Invalid, ok: false }
   }
   state := connection_server(input, output, storage)
   state.context = context
   for true {
     received := receive(&state)
     if !received.ok {
-      if received.error == ErrorKind.End {
-        return Result{ error: ErrorKind.None, ok: true }
+      if received.detail == ErrorKind.End {
+        return Result{ detail: ErrorKind.None, ok: true }
       }
       // Tell the client why the connection closes. The reply is best effort:
       // the receive error is reported either way.
-      if received.error == ErrorKind.Invalid || received.error == ErrorKind.Capacity {
+      if received.detail == ErrorKind.Invalid || received.detail == ErrorKind.Capacity {
         rejected := Response{ output: output }
         options := ResponseOptions{ status: StatusBadRequest, content_type: "text/plain; charset=utf-8", close_connection: true }
         body := "bad request\n"
-        if received.error == ErrorKind.Capacity {
+        if received.detail == ErrorKind.Capacity {
           options.status = StatusPayloadTooLarge
           body = "request too large\n"
         }
         _ = respond(&rejected, body, options)
       }
-      return Result{ error: received.error, system_error: received.system_error, ok: false }
+      return Result{ detail: received.detail, kind: received.kind, offset: received.offset, error: received.error, ok: false }
     }
     handled := handler(&received.response, &received.request)
     if !handled.ok {
       return handled
     }
     if !received.request.keep_alive {
-      return Result{ error: ErrorKind.None, ok: true }
+      return Result{ detail: ErrorKind.None, ok: true }
     }
   }
-  return Result{ error: ErrorKind.None, ok: true }
+  return Result{ detail: ErrorKind.None, ok: true }
 }
 
-// Performs one bounded HTTP/1.1 exchange over any stream pair. This is the HTTPS
-// integration point: pass a TLS reader and writer. Returned slices borrow response_storage.
-pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: []u8, response_storage: []u8,
+// Complete exchange; returned response slices belong to arena. Failures rewind.
+pub fn client_do(arena: *memory.Arena, input: stream.Reader, output: stream.Writer,
   method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse {
-  request_bytes := request_into(request_storage, method, target, host, body)
-  if #len(request_bytes) == 0 {
-    return ClientResponse{ error: ErrorKind.Capacity }
-  }
+  validate_borrow(arena, method)
+  validate_borrow(arena, target)
+  validate_borrow(arena, host)
+  validate_borrow(arena, body)
+  mark := memory.arena_mark(arena)
+  request_bytes := write_request(arena, method, target, host, body)
   sent := stream.write_all(output, request_bytes)
+  memory.arena_rewind(arena, mark)
   if sent.status == stream.Status.Error {
-    return ClientResponse{ error: ErrorKind.Io, system_error: sent.error }
+    return ClientResponse{ kind: sent.kind, detail: ErrorKind.Io, error: sent.error }
   }
+  result := client_receive(arena, mark, input, method)
+  if !result.ok {
+    memory.arena_rewind(arena, mark)
+  }
+  return result
+}
+
+fn client_receive(arena: *memory.Arena, mark: usize, input: stream.Reader, method: []const u8) ClientResponse {
+  response_storage := arena.data[..0]
   used: usize = 0
   ended := false
   head := HttpHead{}
@@ -1084,6 +1289,9 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
     if !head_checked && head_complete(response_storage[..used], &head_scan) {
       head = parse_response(response_storage[..used])
       head_checked = true
+      if !head.ok {
+        return ClientResponse{ kind: head.kind, error: head.error, offset: head.offset, detail: ErrorKind.Invalid }
+      }
     }
     if head.ok {
       if head.code >= 100 && head.code < 200 && head.code != 101 {
@@ -1092,6 +1300,8 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
           response_storage[i] = response_storage[head.header_length + i]
         }
         used = remaining
+        memory.arena_rewind(arena, mark + used)
+        response_storage = response_storage[..used]
         head = HttpHead{}
         head_scan = 0
         head_checked = false
@@ -1104,9 +1314,6 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
       body_length: usize = 0
       complete := framing == Framing.None
       if framing == Framing.Length {
-        if head.content_length > #len(response_storage) - head.header_length {
-          return ClientResponse{ error: ErrorKind.Capacity }
-        }
         body_length = head.content_length
         complete = used - head.header_length >= body_length
       } else if framing == Framing.Close {
@@ -1123,55 +1330,65 @@ pub fn client_do(input: stream.Reader, output: stream.Writer, request_storage: [
           body_length = decoded.count
           complete = true
         }
-        else if decoded.error != -11 {
-          return ClientResponse{ error: ErrorKind.Invalid }
+        else if decoded.kind != errors.Kind.WouldBlock {
+          return ClientResponse{ kind: decoded.kind, error: decoded.error, offset: head.header_length + decoded.offset, detail: ErrorKind.Invalid }
         }
       }
       if complete {
         total := head.header_length + body_length
+        memory.arena_rewind(arena, mark + total)
         return ClientResponse{ raw: response_storage[..total], body: response_storage[head.header_length..total], status: head.code, ok: true }
       }
     }
     if ended {
-      return ClientResponse{ error: ErrorKind.Invalid }
+      return ClientResponse{ kind: errors.Kind.InvalidInput, offset: used, detail: ErrorKind.Invalid }
     }
-    if used == #len(response_storage) {
-      // A close-delimited response may exactly fill caller storage.
-      if head.ok && head.framing == Framing.Close {
-        probe: [1]u8 = []
-        extra := stream.read(input, probe[..])
-        if extra.status == stream.Status.Error {
-          return ClientResponse{ error: ErrorKind.Io, system_error: extra.error }
-        }
-        if extra.transferred == 0 && extra.status == stream.Status.End {
-          ended = true
-          continue
-        }
-      }
-      return ClientResponse{ error: ErrorKind.Capacity }
+    scratch: [4096]u8 = []
+    part := stream.read(input, scratch[..])
+    if part.transferred > #len(scratch) {
+      return ClientResponse{ kind: errors.Kind.System, detail: ErrorKind.Io }
     }
-    part := stream.read(input, response_storage[used..])
-    used += part.transferred
     if part.status == stream.Status.Error {
-      return ClientResponse{ error: ErrorKind.Io, system_error: part.error }
+      return ClientResponse{ kind: part.kind, detail: ErrorKind.Io, error: part.error }
     }
+    memory.append_many(arena, &response_storage, scratch[..part.transferred])
+    used += part.transferred
     ended = part.status == stream.Status.End
     if part.transferred == 0 && !ended {
-      return ClientResponse{ error: ErrorKind.Io, system_error: -5 }
+      return ClientResponse{ kind: errors.Kind.System, detail: ErrorKind.Io, error: 0 }
     }
   }
   return ClientResponse{}
 }
 
-pub fn client_do_connection(connection: *network.Connection, request_storage: []u8, response_storage: []u8,
+pub fn client_do_connection(arena: *memory.Arena, connection: *network.Connection,
   method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse {
-  return client_do(network.connection_reader(connection), network.connection_writer(connection), request_storage,
-    response_storage, method, target, host, body)
+  return client_do(arena, network.connection_reader(connection), network.connection_writer(connection),
+    method, target, host, body)
 }
 
 // A complete HTTP/1.1 request with Connection: close, in arena.
 pub fn write_request(arena: *memory.Arena, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8 {
-  size: usize = 64 + #len(method) + #len(target) + #len(host) + #len(body)
+  validate_borrow(arena, method)
+  validate_borrow(arena, target)
+  validate_borrow(arena, host)
+  validate_borrow(arena, body)
+  digits: usize = 1
+  number := #len(body)
+  for number >= 10 {
+    digits += 1
+    number /= 10
+  }
+  size: usize = 59 + digits
+  if #len(target) > 0 && target[0] == '?' {
+    size += 1
+  }
+  for length in [#len(method), #len(target), #len(host), #len(body)] {
+    if length > ~#cast(usize, 0) - size {
+      #panic("HTTP request size overflows")
+    }
+    size += length
+  }
   mark := memory.arena_mark(arena)
   space := memory.push_bytes_uninit(arena, size)
   output := request_into(space, method, target, host, body)

@@ -1,8 +1,9 @@
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
+use "std/errors" errors
 pub const UnicodeVersion: []const u8 = "17.0.0"
-enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
+pub enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
 struct Result { written: usize, error: ErrorKind, ok: bool }
 pub enum Form { NFD, NFC, NFKD, NFKC }
 pub enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }
@@ -326,12 +327,32 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
   return Result{ written: written, ok: true }
 }
 
-// Text in arena. ok is false, with nothing pushed, when the input is not
-// valid UTF-8.
-pub struct Converted { value: []u8, ok: bool }
+// value borrows arena storage until rewind/reset/release. Validation failures
+// leave the arena mark unchanged. kind is portable; error is zero (no native
+// failure), detail preserves the text diagnostic. offset is the first invalid
+// UTF-8 sequence's byte offset, or zero for other outcomes. Exhaustion panics.
+pub struct Converted { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind }
+
+// Return source length when valid, otherwise the first undecodable byte offset.
+// Preflight must run before allocation, including for an empty fixed arena.
+fn invalid_utf8_offset(source: []const u8, start: usize) usize {
+  at := start
+  for at < #len(source) {
+    decoded := utf8.decode(source, at)
+    if !decoded.ok {
+      return at
+    }
+    at += decoded.width
+  }
+  return #len(source)
+}
 
 // Locale-independent full default case folding, without normalization, into arena.
 pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
+  invalid := invalid_utf8_offset(source, 0)
+  if invalid != #len(source) {
+    return Converted{ kind: errors.Kind.InvalidInput, offset: invalid, detail: ErrorKind.InvalidUtf8 }
+  }
   capacity := mem.trial_size(arena, 2 * #len(source) + 16)
   for capacity > 0 {
     mark := mem.arena_mark(arena)
@@ -343,7 +364,7 @@ pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
     }
     mem.arena_rewind(arena, mark)
     if result.error != ErrorKind.Capacity {
-      return Converted{}
+      return Converted{ kind: errors.Kind.InvalidInput, detail: result.error }
     }
     capacity = mem.trial_next(arena, capacity)
   }
@@ -352,10 +373,21 @@ pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
 
 // source in normalization form, into arena.
 pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
+  invalid := invalid_utf8_offset(source, 0)
+  if invalid != #len(source) {
+    return Converted{ kind: errors.Kind.InvalidInput, offset: invalid, detail: ErrorKind.InvalidUtf8 }
+  }
   capacity := mem.trial_size(arena, 2 * #len(source) + 16)
   for capacity > 0 {
     mark := mem.arena_mark(arena)
-    work := mem.push_array(u32, arena, 2 * capacity)
+    work_size := mem.size_for(capacity, 2 * #sizeof(u32))
+    if !work_size.ok {
+      #panic("arena size overflow")
+    }
+    work_count := work_size.bytes / #sizeof(u32)
+    // Decomposition writes values before reading them; each sorted run fills
+    // temporary before copying it back. Leave work untouched until preflight.
+    work := (#cast(*u32, mem.arena_push_uninit(arena, work_size.bytes, #alignof(u32))))[..work_count]
     space := mem.push_bytes_uninit(arena, capacity)
     result := normalize_into(space, source, form, work)
     if result.ok {
@@ -364,7 +396,7 @@ pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
     }
     mem.arena_rewind(arena, mark)
     if result.error != ErrorKind.Capacity {
-      return Converted{}
+      return Converted{ kind: errors.Kind.InvalidInput, detail: result.error }
     }
     capacity = mem.trial_next(arena, capacity)
   }

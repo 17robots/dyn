@@ -347,6 +347,16 @@ static bool ssa32_boundary(Ssa *s, bool live) {
           !ssa32_float(s->values[v->a].cls) || !ssa32_operand(s, v->b, s->values[v->a].cls) ||
           v->c != -1 || v->aux < 0 || v->aux >= 6 || v->aux2 || v->cond) return false;
       break;
+    case SO_MATH: {
+      if (!ssa32_float(v->cls) || v->aux2 || v->cond || v->a < 0 || (uint32_t)v->a >= s->value_count ||
+          s->values[v->a].cls != v->cls || v->aux == DYN_MATH_INTRINSIC_COPYSIGN ||
+          !isa_math_supported(s->ctx, (DynMathIntrinsic)v->aux, v->cls == SC_F32 ? DYN_TYPE_F32 : DYN_TYPE_F64)) return false;
+      if (v->aux == DYN_MATH_INTRINSIC_FMA) {
+        if (v->b < 0 || v->c < 0 || (uint32_t)v->b >= s->value_count || (uint32_t)v->c >= s->value_count ||
+            s->values[v->b].cls != v->cls || s->values[v->c].cls != v->cls) return false;
+      } else if (v->b != -1 || v->c != -1) return false;
+      break;
+    }
     case SO_FNEG: case SO_ITOF: case SO_FTOI: case SO_FCVT: case SO_BITS: {
       if (v->a < 0 || (uint32_t)v->a >= s->value_count || v->b != -1 || v->c != -1 || v->aux2 || v->cond) return false;
       unsigned src = s->values[v->a].cls;
@@ -560,6 +570,12 @@ static void ssa32_value(Ssa *s, uint32_t id) {
   case SO_COPY: case SO_BITS:
     ssa32_get(s, v->a, R_A);
     if (v->cls == SC_F32 || s->values[v->a].cls == SC_F32) isa_extend(ctx, 32, false);
+    break;
+  case SO_MATH:
+    ssa32_get(s, v->a, R_A);
+    if (v->b >= 0) ssa32_get(s, v->b, R_C);
+    if (v->c >= 0) ssa32_get(s, v->c, R_D);
+    isa_math(ctx, (DynMathIntrinsic)v->aux, v->cls == SC_F32 ? DYN_TYPE_F32 : DYN_TYPE_F64);
     break;
   case SO_FNEG:
     ssa32_get(s, v->a, R_A);

@@ -17,7 +17,7 @@ void dyn_cli_help(const char *command) {
       "  cache    inspect or clean shared compilation cache\n"
       "  help     show help\n  version  show version\n\n"
       "Build options:\n  --output <path>  --debug  --release  --debug-info\n"
-      "  --emit-object  --emit-asm  --no-link  --shared\n"
+      "  --emit-object  --emit-asm  --emit-ir  --no-link  --shared\n"
       "  --target <x86_64-linux|aarch64-linux|riscv64-linux|riscv64-none|riscv32-none|riscv32-none-soft|thumbv7em-none|thumbv7em-none-soft|thumbv7em-none-nucleo-h753zi|x86_64-macos|aarch64-macos|x86_64-windows|aarch64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <1|2|3>  --opt-remarks\n"
@@ -122,8 +122,7 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     else if (strcmp(a, "--runtime-support") == 0)
       o->runtime_support = true;
     else if (strcmp(a, "--emit-ir") == 0) {
-      fprintf(stderr, "error: --emit-ir was removed; use --emit-asm\n");
-      return 2;
+      o->emit_ir = true;
     }
     else if (strcmp(a, "--emit-object") == 0)
       o->emit_object = true;
@@ -142,6 +141,13 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       fprintf(stderr, "error: unexpected argument '%s'\n", a);
       return 2;
     }
+  }
+  if (o->emit_ir && (strcmp(o->command, "build") || o->emit_object || o->emit_asm ||
+      o->no_link || o->runtime_support || o->link_input_count || o->release ||
+      o->debug_info_set || o->optimization.level || o->optimization.native_cpu ||
+      o->optimization.sample_profile || o->optimization.remarks || o->backend != DYN_BACKEND_AUTO)) {
+    fprintf(stderr, "error: --emit-ir requires build without code-generation, link or optimization options\n");
+    return 2;
   }
   if (o->docs_json && strcmp(o->command, "docs")) {
     fprintf(stderr, "error: --json is only supported by docs\n");

@@ -10,6 +10,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/mem"
 use "std/strings"
 use "std/encoding/ini"
+use "std/errors"
 use "std/container/list" list
 struct Slot { free_next: *Slot, value: u64 }
 const nil_slot: Slot = Slot{}
@@ -59,7 +60,7 @@ fn main() {
   expect(strings.equal(parsed.value[2].section, "window") && strings.equal(parsed.value[2].value, "25"))
   before := mem.arena_used(&arena)
   syntax := ini.parse(&arena, "x=1\ninvalid\n")
-  expect(!syntax.ok && syntax.kind == ini.ErrorKind.Syntax && syntax.line == 2)
+  expect(!syntax.ok && syntax.kind == errors.Kind.InvalidInput && syntax.error == 0 && syntax.detail == ini.ErrorKind.Syntax && syntax.offset == 4 && syntax.line == 2)
   expect(mem.arena_used(&arena) == before)
   tiny_storage: [1]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])

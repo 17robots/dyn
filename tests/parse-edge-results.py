@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Portable URL/semver errors, exact offsets, and arena rollback."""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+ROOT = Path(__file__).resolve().parents[1]
+DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
+SOURCE = 'use "std/semver" semver\nuse "std/net/url" url\nuse "std/mem" mem\nuse "std/errors" errors\nuse "std/strings" strings\nfn main() {\n  good := semver.parse("1.2.3-alpha.1+build")\n  if !good.ok || good.kind != errors.Kind.None || good.error != 0 || good.value.major != 1 { #panic("semver valid") }\n  for input in ["", "01.2.3", "1", "1.x.3", "1.2", "1.2.x", "1.2.3-", "1.2.3+", "1.2.3x", "1.2.3-01"] {\n    bad := semver.parse(input)\n    if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 { #panic("semver invalid") }\n  }\n  if semver.parse("1.2.3-alpha.x!").offset != 13 || semver.parse("01.2.3").offset != 1 { #panic("semver offending byte") }\n  zero := semver.parse("")\n  if zero.offset != 0 { #panic("semver zero") }\n  for input in ["4294967296.2.3", "1.4294967296.3", "1.2.4294967296"] {\n    bad := semver.parse(input)\n    if bad.ok || bad.kind != errors.Kind.Overflow || bad.error != 0 { #panic("semver overflow") }\n  }\n  parsed := url.parse("https://example.com/p?q#f")\n  if !parsed.ok || parsed.kind != errors.Kind.None || parsed.error != 0 || !strings.equal(parsed.value.path, "/p") { #panic("url valid") }\n  for input in [":x", "1:x", "a!:x"] {\n    bad := url.parse(input)\n    if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 { #panic("url invalid") }\n  }\n  if url.parse(":x").offset != 0 || url.parse("a!:x").offset != 1 { #panic("url offset") }\n  backing: [128]u8\n  arena := mem.arena_from_buffer(backing[..])\n  _ = mem.push_bytes_uninit(&arena, 7)\n  mark := mem.arena_mark(&arena)\n  for input in ["%", "%0", "%gg", "%0g"] {\n    bad := url.percent_decode(&arena, input)\n    if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 || bad.offset != 0 || #len(bad.value) != 0 || mem.arena_mark(&arena) != mark { #panic("decode zero rollback") }\n  }\n  for input in ["abc%", "abc%0", "abc%gg", "abc%0g"] {\n    bad := url.percent_decode(&arena, input)\n    if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 || bad.offset != 3 || mem.arena_mark(&arena) != mark { #panic("decode offset rollback") }\n  }\n  good_decode := url.percent_decode(&arena, "a%20b+")\n  if !good_decode.ok || good_decode.kind != errors.Kind.None || good_decode.error != 0 || good_decode.offset != 0 || !strings.equal(good_decode.value, "a b+") || mem.arena_mark(&arena) != mark + 4 { #panic("decode success ownership") }\n  encoded := url.percent_encode(&arena, "a b/")\n  if !strings.equal(encoded, "a%20b%2f") || mem.arena_mark(&arena) != mark + 12 { #panic("encode ownership") }\n  empty := url.percent_decode(&arena, "")\n  if !empty.ok || empty.kind != errors.Kind.None || empty.error != 0 || #len(empty.value) != 0 { #panic("decode empty") }\n}\n'
+with tempfile.TemporaryDirectory(prefix='dyn-parse-edges-') as directory:
+    work = Path(directory)
+    (work/'main.dyn').write_text(SOURCE)
+    for mode in ('debug', 'release'):
+        subprocess.run([DYN, 'build', str(work), '--'+mode, '--quiet', '--no-cache', '--output', str(work/'test')], check=True, timeout=120)
+        result = subprocess.run([str(work/'test')], capture_output=True, timeout=10)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        print('PASS URL/semver portable result contracts '+mode, flush=True)

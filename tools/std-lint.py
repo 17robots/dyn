@@ -1,54 +1,160 @@
 #!/usr/bin/env python3
-"""Flag std APIs that break the std standardization rules.
+"""Check narrow syntactic std API conventions, not semantic compliance.
 
-Checks every `pub fn` in std/:
-- names ending in _into (rule 4: produce into an arena);
-- a `name_size` or `name_count` next to a `name` that takes caller storage,
-  the size-query companion of a caller-buffer form (rule 4);
-- parameters named output or out with a pointer type (rule 3: return results);
-- find functions returning isize (rule 2: a miss returns the length).
-
-Exit status 1 lists each violation as path:line: message.
+Flag _into names, size/count companions of caller-storage APIs, pointer
+parameters named out/output, and find names returning isize. Comments, contract
+tags, ownership, and the behavior of function bodies are not checked.
 """
 from pathlib import Path
 import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-DECLARATION = re.compile(r'^pub fn (\w+)\((.*?)\)\s*(.*?)\s*\{?\s*$')
+
+
+def tokens(source):
+    """Yield (text, original line); discard strings and nested comments."""
+    i, line = 0, 1
+    while i < len(source):
+        start = i
+        if source.startswith('//', i):
+            end = source.find('\n', i)
+            i = len(source) if end < 0 else end
+        elif source.startswith('/*', i):
+            depth = 1
+            i += 2
+            while i < len(source) and depth:
+                if source.startswith('/*', i):
+                    depth += 1
+                    i += 2
+                elif source.startswith('*/', i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            line += source[start:i].count('\n')
+        elif source[i] in '\"\'':
+            quote = source[i]
+            i += 1
+            while i < len(source):
+                if source[i] == '\\':
+                    i += 2
+                elif source[i] == quote:
+                    i += 1
+                    break
+                else:
+                    i += 1
+            line += source[start:i].count('\n')
+        elif source[i].isspace():
+            if source[i] == '\n':
+                yield '\n', line
+                line += 1
+            i += 1
+        else:
+            match = re.match(r'[A-Za-z_][A-Za-z_0-9]*', source[i:])
+            i += len(match[0]) if match else 1
+            yield source[start:i], line
+
+
+def declarations(source):
+    """Collect public names, top-level parameter tokens and return tokens."""
+    stream = list(tokens(source))
+    # Newlines matter only when delimiting a return type.
+    def skip(i):
+        while i < len(stream) and stream[i][0] == '\n':
+            i += 1
+        return i
+
+    for start, (word, number) in enumerate(stream):
+        if word != 'pub':
+            continue
+        i = skip(start + 1)
+        raw = i < len(stream) and stream[i][0] == 'extern'
+        if raw:
+            i = skip(i + 1)
+        if i >= len(stream) or stream[i][0] != 'fn':
+            continue
+        i = skip(i + 1)
+        if i >= len(stream):
+            continue
+        name = stream[i][0]
+        i = skip(i + 1)
+        if i >= len(stream) or stream[i][0] != '(':
+            continue
+        i += 1
+        depth, parameters, parameter = 1, [], []
+        while i < len(stream) and depth:
+            token = stream[i][0]
+            i += 1
+            if token == '(':
+                depth += 1
+            elif token == ')':
+                depth -= 1
+                if not depth:
+                    break
+            if token == ',' and depth == 1:
+                parameters.append(parameter)
+                parameter = []
+            elif token != '\n':
+                parameter.append(token)
+        if depth:
+            continue
+        parameters.append(parameter)
+        result = []
+        i = skip(i)
+        depth = 0
+        while i < len(stream):
+            token = stream[i][0]
+            if depth == 0 and token in ('{', ';', '\n', 'pub', 'extern'):
+                break
+            if token in ('(', '['):
+                depth += 1
+            elif token in (')', ']'):
+                depth -= 1
+            if token != '\n':
+                result.append(token)
+            i += 1
+        yield name, number, parameters, result, raw
 
 
 def check(path):
+    path = Path(path)
     problems = []
-    names = {}
-    lines = path.read_text().split('\n')
-    for number, line in enumerate(lines, 1):
-        match = DECLARATION.match(line)
-        if match:
-            names[match.group(1)] = number
-    for name, number in names.items():
-        line = lines[number - 1]
-        _, parameters, result = DECLARATION.match(line).groups()
+    declarations_found = list(declarations(path.read_text()))
+    names = {name: parameters for name, _, parameters, _, _ in declarations_found}
+    # Raw extern declarations must preserve the platform/C ABI, including out
+    # pointers and signed results. This does not exempt ordinary wrappers in
+    # these directories, or extern declarations elsewhere in std.
+    raw_directory = any(path.parts[i:i + 2] in (('std', 'os'), ('std', 'c'))
+                        for i in range(len(path.parts) - 1))
+    for name, number, parameters, result, raw in declarations_found:
+        if raw and raw_directory:
+            continue
         if name.endswith('_into'):
             problems.append((number, f'{name}: caller-buffer form; take the arena first and drop _into'))
         for suffix in ('_size', '_count'):
             base = name[:-len(suffix)]
             if name.endswith(suffix) and base in names:
-                base_parameters = DECLARATION.match(lines[names[base] - 1]).group(2)
-                if re.search(r'\b(destination|storage)\s*:', base_parameters):
+                if any(p[:2] in (['destination', ':'], ['storage', ':']) for p in names[base]):
                     problems.append((number, f'{name}: size companion of {base}; size the output inside it'))
-        if re.search(r'\b(output|out)\s*:\s*\*', parameters):
+        if any(p[:3] in (['output', ':', '*'], ['out', ':', '*']) for p in parameters):
             problems.append((number, f'{name}: out parameter; return a {{value, ok}} result'))
-        if name.startswith('find') and result.strip() == 'isize':
+        if name.startswith('find') and result == ['isize']:
             problems.append((number, f'{name}: returns isize; return usize and the length on a miss'))
     return problems
 
 
-failures = 0
-for path in sorted((ROOT / 'std').rglob('*.dyn')):
-    for number, message in check(path):
-        print(f'{path.relative_to(ROOT)}:{number}: {message}')
-        failures += 1
-if failures:
-    sys.exit(1)
-print('PASS std lint: no _into forms, size companions, out parameters or -1 positions')
+def main():
+    failures = 0
+    for path in sorted((ROOT / 'std').rglob('*.dyn')):
+        for number, message in check(path):
+            print(f'{path.relative_to(ROOT)}:{number}: {message}')
+            failures += 1
+    if failures:
+        return 1
+    print('PASS std lint: no matches for the checked syntactic API heuristics')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

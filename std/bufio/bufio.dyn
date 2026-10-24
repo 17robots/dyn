@@ -1,6 +1,7 @@
 use "std/io"
 use "std/errors"
 
+// The first error is sticky; later writes and flushes transfer nothing.
 pub struct Writer {
   destination: io.Writer,
   storage: []u8,
@@ -18,12 +19,13 @@ pub fn writer_buffered(state: *const Writer) usize {
 }
 
 pub fn writer_flush(state: *Writer) io.Result {
+  if state.kind != errors.Kind.None {
+    return io.Result{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
+  }
   if state.used > #len(state.storage) {
     state.error = -22
     state.kind = errors.Kind.InvalidInput
-  }
-  if state.kind != errors.Kind.None {
-    return io.Result{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
+    return io.Result{ error: state.error, kind: state.kind, status: io.Status.Error }
   }
   if state.used == 0 {
     return io.Result{ transferred: 0, error: 0, status: io.Status.Complete }
@@ -45,15 +47,21 @@ pub fn writer_flush(state: *Writer) io.Result {
 
 fn writer_write(data: rawptr, source: []const u8) io.Result {
   state := #cast(*Writer, data)
-  if state.used > #len(state.storage) {
-    state.error = -22
-    state.kind = errors.Kind.InvalidInput
-  }
   if state.kind != errors.Kind.None {
     return io.Result{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
   }
+  if state.used > #len(state.storage) {
+    state.error = -22
+    state.kind = errors.Kind.InvalidInput
+    return io.Result{ error: state.error, kind: state.kind, status: io.Status.Error }
+  }
   if #len(state.storage) == 0 {
-    return io.write_all(state.destination, source)
+    result := io.write_all(state.destination, source)
+    if result.status == io.Status.Error {
+      state.error = result.error
+      state.kind = result.kind
+    }
+    return result
   }
   total: usize = 0
   for total < #len(source) {
@@ -94,6 +102,7 @@ pub fn writer_adapter(state: *Writer) io.Writer {
 }
 
 // Storage and the underlying source are borrowed; both must outlive Reader.
+// The first error is sticky; later reads consume nothing, including buffered bytes.
 pub struct Reader {
   source: io.Reader,
   storage: []u8,
@@ -112,8 +121,12 @@ pub fn reader(source: io.Reader, storage: []u8) Reader {
 
 fn reader_read(data: rawptr, destination: []u8) io.Result {
   state := #cast(*Reader, data)
+  if state.kind != errors.Kind.None {
+    return io.Result{ error: state.error, kind: state.kind, status: io.Status.Error }
+  }
   if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {
-    return io.Result{ kind: errors.Kind.InvalidState, status: io.Status.Error }
+    state.kind = errors.Kind.InvalidState
+    return io.Result{ error: state.error, kind: state.kind, status: io.Status.Error }
   }
   total: usize = 0
   for total < #len(destination) {
@@ -195,6 +208,9 @@ fn unread(state: *Reader, byte: u8) {
 }
 
 fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) ReadResult {
+  if state.kind != errors.Kind.None {
+    return ReadResult{ error: state.error, kind: state.kind, status: ReadStatus.Error }
+  }
   if #len(destination) == 0 {
     return ReadResult{ status: ReadStatus.More }
   }
@@ -208,8 +224,8 @@ fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) Rea
       }
       return ReadResult{ transferred: total, status: ReadStatus.End }
     }
-    // A source may return bytes alongside an error or EOF. Retain that status
-    // for the next read, after these bytes and any lookahead are consumed.
+    // A source may return bytes alongside an error or EOF. This call may
+    // consume returned bytes; a sticky error stops subsequent reads.
     if byte[0] == delimiter {
       return ReadResult{ transferred: total, status: ReadStatus.Complete }
     }
@@ -240,7 +256,8 @@ pub fn read_until(state: *Reader, destination: []u8, delimiter: u8) ReadResult {
 }
 
 // Accept LF and CRLF; preserve lone CR. A zero-length destination returns More
-// without consuming input. Returned bytes live in the caller's destination.
+// without consuming input unless an earlier error is being reported.
+// Returned bytes live in the caller's destination.
 pub fn read_line(state: *Reader, destination: []u8) ReadResult {
   return read_record(state, destination, 10, true)
 }

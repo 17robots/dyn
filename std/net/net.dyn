@@ -436,9 +436,9 @@ pub fn would_block(outcome: *const Result) bool {
 // Called only after EINTR for finite waits. Round remaining nanoseconds up so
 // converting back to a millisecond timeout cannot expire the deadline early.
 fn interrupted_timeout(start: clock.Instant, milliseconds: i32) Result {
-  now := clock.try_monotonic_now()
+  now := clock.monotonic_now()
   if !now.ok {
-    return Result{ value: now.error, error: now.error, kind: native_kind(now.error) }
+    return Result{ value: now.error, error: now.error, kind: now.kind }
   }
   elapsed := clock.elapsed(start, now.value)
   if !elapsed.ok || elapsed.value < 0 {
@@ -454,9 +454,9 @@ fn interrupted_timeout(start: clock.Instant, milliseconds: i32) Result {
 pub fn poll(descriptors: []PollDescriptor, timeout_milliseconds: i32) Result {
   start := clock.ClockResult{}
   if timeout_milliseconds > 0 {
-    start = clock.try_monotonic_now()
+    start = clock.monotonic_now()
     if !start.ok {
-      return Result{ value: start.error, error: start.error, kind: native_kind(start.error) }
+      return Result{ value: start.error, error: start.error, kind: start.kind }
     }
   }
   remaining := timeout_milliseconds

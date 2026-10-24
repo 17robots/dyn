@@ -48,7 +48,8 @@ pub fn sort(values: []$T) {
   }
 }
 
-// Binary search in sorted values. index is where target is or would be inserted.
+// Binary search in sorted values. A miss returns len(values), never an
+// insertion point, so index is always a valid slice boundary.
 pub fn search(values: []const $T, target: T) SearchResult {
   low: usize = 0
   high := #len(values)
@@ -60,5 +61,8 @@ pub fn search(values: []const $T, target: T) SearchResult {
       high = middle
     }
   }
-  return SearchResult{ index: low, found: low < #len(values) && values[low] == target }
+  if low < #len(values) && values[low] == target {
+    return SearchResult{ index: low, found: true }
+  }
+  return SearchResult{ index: #len(values) }
 }

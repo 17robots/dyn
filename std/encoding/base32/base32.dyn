@@ -1,3 +1,4 @@
+use "std/errors" errors
 use "std/mem" mem
 use "std/encoding" codec
 use "std/bytes" bytes
@@ -89,7 +90,8 @@ fn decoded_extent(source: []const u8) usize {
   return (#len(source) / 8) * 5 - (padding * 5 + 7) / 8
 }
 
-fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
+fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usize) Result {
+  offset.* = #len(source)
   if #len(source) == 0 {
     return Result{ data: destination[..0], ok: true }
   }
@@ -116,6 +118,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
       else {
         decoded := decode_symbol(byte)
         if decoded == 255 || padding_started {
+          offset.* = input_at + digit
           return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
         }
         block = (block << 5) | #cast(u64, decoded)
@@ -125,13 +128,16 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
     }
     bytes := (symbols * 5) / 8
     if symbols != 8 && symbols != 7 && symbols != 5 && symbols != 4 && symbols != 2 {
+      offset.* = input_at + symbols
       return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
     }
     if symbols != 8 && input_at + 8 != #len(source) {
+      offset.* = input_at + symbols
       return Result{ error: ErrorKind.InvalidInput }
     }
     unused := symbols * 5 - bytes * 8
     if unused > 0 && ((block >> ((8 - symbols) * 5)) & ((#cast(u64, 1) << unused) - 1)) != 0 {
+      offset.* = input_at + symbols - 1
       return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
     }
     for byte_at in 0..bytes {
@@ -147,7 +153,8 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
 
 
 fn decode_into(destination: []u8, source: []const u8) Result {
-  measured := decode_pass(destination[..0], source, false)
+  offset: usize = 0
+  measured := decode_pass(destination[..0], source, false, &offset)
   if !measured.ok {
     return measured
   }
@@ -157,41 +164,64 @@ fn decode_into(destination: []u8, source: []const u8) Result {
   if bytes.overlaps(destination[..measured.required], source) {
     return Result{ error: ErrorKind.Overlap, required: measured.required }
   }
-  _ = decode_pass(destination, source, true)
+  _ = decode_pass(destination, source, true, &offset)
   return Result{ data: destination[..measured.required], required: measured.required, ok: true }
 }
 
-struct Size { value: usize, ok: bool }
+struct Size { value: usize, ok: bool, offset: usize }
 
 // Validates the complete input and reports the exact decoded byte count.
 // ok with value zero is a valid empty encoding.
 fn decoded_size(source: []const u8) Size {
   empty: [0]u8 = []
-  measured := decode_pass(empty[..], source, false)
-  return Size{ value: measured.required, ok: measured.ok }
+  offset: usize = 0
+  measured := decode_pass(empty[..], source, false, &offset)
+  return Size{ value: measured.required, ok: measured.ok, offset: offset }
 }
 
-pub struct Decoded { value: []u8, ok: bool }
+pub struct Decoded { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: codec.ErrorKind }
 
-// Encodes source into arena. Panics when the size overflows.
+// Encodes source into arena. Size overflow or overlapping input/output panics.
 pub fn encode(arena: *mem.Arena, source: []const u8) []u8 {
   required := encoded_size(#len(source))
   if #len(source) != 0 && required == 0 {
     #panic("base32.encode: size overflows")
   }
   output := mem.push_bytes_uninit(arena, required)
-  _ = encode_into(output, source)
+  result := encode_into(output, source)
+  if !result.ok {
+    #panic("base32.encode: invalid source/output overlap")
+  }
   return output
 }
 
-// Decodes source into arena. ok is false, with nothing pushed, when source is
-// not valid base32.
+// Decodes validated input into arena. Failures preserve the arena and source;
+// offset identifies an offending byte, or the end of a truncated group.
+// Arena exhaustion panics. Pure codec failures have no native error code.
 pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
+  mark := mem.arena_mark(arena)
   size := decoded_size(source)
   if !size.ok {
-    return Decoded{}
+    return Decoded{ kind: errors.Kind.InvalidInput, offset: size.offset, detail: ErrorKind.InvalidInput }
+  }
+  if size.value > (~#cast(usize, 0)) - mark {
+    return Decoded{ kind: errors.Kind.Overflow, detail: ErrorKind.Overflow }
+  }
+  // Check borrowed backing before allocation or rewind can modify aliased input.
+  if mark <= #len(arena.data) && size.value <= #len(arena.data) - mark {
+    if bytes.overlaps(arena.data[mark..mark + size.value], source) {
+      return Decoded{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
+    }
   }
   output := mem.push_bytes_uninit(arena, size.value)
-  _ = decode_into(output, source)
+  result := decode_into(output, source)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+    kind := errors.Kind.InvalidInput
+    if result.error == ErrorKind.Overflow {
+      kind = errors.Kind.Overflow
+    }
+    return Decoded{ kind: kind, detail: result.error }
+  }
   return Decoded{ value: output, ok: true }
 }

@@ -27,13 +27,13 @@ pub enum Status { Event, Empty, Error }
 // `error` keeps the native code; `kind` is its portable category.
 pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, error: isize }
+pub struct EventResult { event: Event, status: Status, kind: errors.Kind, error: isize, ok: bool }
 // Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
 // Do not copy a live owner. Public operations are confined to one caller thread.
 // The caller output buffer must outlive the watcher; names expire on next Event.
 // FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
-pub struct Watcher { state: *State, storage: []u8, arena: mem.Arena, rescan_required: bool }
+pub struct Watcher { state: *State, storage: []u8, arena: mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
 pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
@@ -54,6 +54,7 @@ struct State {
   read: sync.AtomicU32, write: sync.AtomicU32, lost: sync.AtomicU32,
   slots: [16]Slot, records: [64]Record,
 }
+extern fn native_errno "__error"() *i32
 extern fn library_open "dlopen"(path: *const u8, flags: i32) rawptr
 extern fn library_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
 extern fn library_close "dlclose"(handle: rawptr) i32
@@ -142,7 +143,7 @@ pub fn open(storage: []u8) OpenResult {
   if !load(&state.api) {
     unload(&state.api)
     mem.arena_release(&arena)
-    return OpenResult{ error: -95, kind: errors.darwin(-95) }
+    return OpenResult{ error: -95, kind: errors.Kind.Unsupported }
   }
   state.queue = queue_create(nil, nil)
   if state.queue == nil {
@@ -258,7 +259,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(-22)
   }
   if (mask & SupportedEvents) == 0 {
-    return failure(-95)
+    return Result{ error: -95, kind: errors.Kind.Unsupported }
   }
   input: [1024]u8 = []
   cstring_space3 := mem.arena_from_buffer(input[..])
@@ -268,7 +269,8 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
   }
   canonical: [1024]u8 = []
   if state.api.canonical(terminated.value, &canonical[0]) == nil {
-    return failure(-2)
+    code := 0 - #cast(isize, native_errno().*)
+    return failure(code)
   }
   rooted := c.bytes_from_string(&canonical[0], 1024)
   if !rooted.ok || !utf8.valid(rooted.value) {
@@ -358,14 +360,29 @@ pub fn close(watcher: *Watcher) Result {
   watcher.rescan_required = false
   return Result{ ok: true }
 }
+// Terminal failures are sticky. Empty and rescan events remain protocol states.
+fn event_failure(watcher: *Watcher, code: isize) EventResult {
+  if !watcher.failed {
+    watcher.failed = true
+    watcher.error = code
+    watcher.kind = errors.darwin(code)
+    if watcher.kind == errors.Kind.None {
+      watcher.kind = errors.Kind.System
+    }
+  }
+  return EventResult{ status: Status.Error, error: watcher.error, kind: watcher.kind }
+}
 pub fn next(watcher: *Watcher) EventResult {
+  if watcher.failed {
+    return event_failure(watcher, watcher.error)
+  }
   state := watcher.state
   if state == nil {
-    return EventResult{ status: Status.Error, error: -9 }
+    return event_failure(watcher, -9)
   }
   if sync.exchange_u32(&state.lost, 0) != 0 {
     watcher.rescan_required = true
-    return EventResult{ status: Status.Event, event: Event{ watch: -1, name: watcher.storage[..0], rescan: true } }
+    return EventResult{ status: Status.Event, ok: true, event: Event{ watch: -1, name: watcher.storage[..0], rescan: true } }
   }
   for attempts in 0..64 {
     read := sync.load_u32(&state.read)
@@ -385,7 +402,7 @@ pub fn next(watcher: *Watcher) EventResult {
     }
     if record.length > #len(watcher.storage) {
       watcher.rescan_required = true
-      return EventResult{ status: Status.Event, event: Event{ watch: record.watch, name: watcher.storage[..0], rescan: true } }
+      return EventResult{ status: Status.Event, ok: true, event: Event{ watch: record.watch, name: watcher.storage[..0], rescan: true } }
     }
     for i in 0..record.length {
       watcher.storage[i] = record.name[i]
@@ -393,7 +410,7 @@ pub fn next(watcher: *Watcher) EventResult {
     if record.rescan {
       watcher.rescan_required = true
     }
-    return EventResult{ status: Status.Event, event: Event{ watch: record.watch, mask: record.mask, name: watcher.storage[..record.length], rescan: record.rescan } }
+    return EventResult{ status: Status.Event, ok: true, event: Event{ watch: record.watch, mask: record.mask, name: watcher.storage[..record.length], rescan: record.rescan } }
   }
   return EventResult{ status: Status.Empty }
 }

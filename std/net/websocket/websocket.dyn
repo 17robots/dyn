@@ -1,27 +1,42 @@
+use "std/errors" errors
 use "std/mem" mem
 use "std/io" stream
 use "std/encoding/base64" base64
 use "std/net/http" http
 
-pub struct WebSocketFrame { payload: []const u8, opcode: u8, mask: u32, consumed: usize, final: bool, masked: bool, ok: bool }
-pub struct WebSocketUpgrade { key: []const u8, ok: bool }
+pub struct WebSocketFrame { kind: errors.Kind, error: isize, offset: usize, payload: []const u8, opcode: u8, mask: u32, consumed: usize, final: bool, masked: bool, ok: bool }
+pub struct WebSocketUpgrade { kind: errors.Kind, error: isize, offset: usize, key: []const u8, ok: bool }
 pub enum WebSocketEventKind { None, Ready, Ping, Pong, Close, Error }
 pub struct WebSocketMessageState { used: usize, opcode: u8, fragmented: bool, closed: bool, enforce_mask: bool, masked: bool }
-pub struct WebSocketEvent { payload: []u8, kind: WebSocketEventKind, opcode: u8, close_code: u16, ok: bool }
+pub struct WebSocketEvent { payload: []u8, detail: WebSocketEventKind, kind: errors.Kind, error: isize, offset: usize, opcode: u8, close_code: u16, ok: bool }
 
 pub struct WebSocketConnection {
   input: http.StreamReader,
   output: http.StreamWriter,
   frames: []u8,
+  // Retain unread wire bytes; compact only on the next receive.
+  frame_used: usize,
+  frame_consumed: usize,
+  input_ended: bool,
   message: []u8,
   control: []u8,
   state: WebSocketMessageState,
   client: bool,
+  active: bool,
+  failed: bool,
+  kind: errors.Kind,
+  error: isize,
+  offset: usize,
+  close_sent: bool,
 }
+
+pub struct Result { kind: errors.Kind, error: isize, offset: usize, ok: bool }
 
 pub struct WebSocketResult {
   event: WebSocketEvent,
+  kind: errors.Kind,
   error: isize,
+  offset: usize,
   ok: bool,
 }
 
@@ -209,8 +224,11 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
 // Validates the HTTP request-side RFC 6455 upgrade fields. Returned key borrows request.
 fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   head := http.parse_request(request)
-  if !head.ok || #len(request) < 4 || !ws_equal(request[..4], "GET ") {
-    return WebSocketUpgrade{}
+  if !head.ok {
+    return WebSocketUpgrade{ kind: head.kind, error: head.error, offset: head.offset }
+  }
+  if #len(request) < 4 || !ws_equal(request[..4], "GET ") {
+    return WebSocketUpgrade{ kind: errors.Kind.InvalidInput }
   }
   upgrade := http.header(request, "Upgrade")
   connection_header := http.header(request, "Connection")
@@ -221,7 +239,7 @@ fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   if !upgrade.ok || !connection_header.ok || !version.ok || !key.ok || !ws_equal_case(upgrade.value, "websocket") ||
     !ws_equal_case(connection_header.value, "Upgrade") || !ws_equal(version.value, "13") ||
     #len(base64.decode(&scratch_arena, key.value).value) != 16 {
-    return WebSocketUpgrade{}
+    return WebSocketUpgrade{ kind: errors.Kind.InvalidInput }
   }
   return WebSocketUpgrade{ key: key.value, ok: true }
 }
@@ -330,57 +348,65 @@ fn websocket_write(destination: []u8, opcode: u8, payload: []const u8, final: bo
   return destination[..payload_at + #len(payload)]
 }
 
+// Offsets identify bytes in the supplied frame; semantic message/upgrade errors
+// without a single source cursor use zero.
 // Parses one complete frame prefix. Payload borrows input and remains masked.
 fn websocket_parse(input: []const u8) WebSocketFrame {
-  if #len(input) < 2 || (input[0] & WsU8Mask112) != WsU8Zero {
-    return WebSocketFrame{}
+  if #len(input) < 2 {
+    return WebSocketFrame{ kind: errors.Kind.WouldBlock, offset: #len(input) }
+  }
+  if (input[0] & WsU8Mask112) != WsU8Zero {
+    return WebSocketFrame{ kind: errors.Kind.InvalidInput, offset: 0 }
   }
   opcode := input[0] & WsU8Mask15
   opcode_value: usize = #cast(usize, opcode)
   final := (input[0] & WsU8Mask128) != WsU8Zero
   masked := (input[1] & WsU8Mask128) != WsU8Zero
   if opcode_value > 10 || (opcode_value >= 3 && opcode_value <= 7) {
-    return WebSocketFrame{}
+    return WebSocketFrame{ kind: errors.Kind.InvalidInput, offset: 0 }
   }
   length_byte := input[1] & WsU8Mask127
   size: usize = #cast(usize, length_byte)
   at: usize = 2
   if size == Ws126 {
     if #len(input) < WsFour {
-      return WebSocketFrame{}
+      return WebSocketFrame{ kind: errors.Kind.WouldBlock, offset: #len(input) }
     }
     high := #cast(usize, input[2])
     low := #cast(usize, input[3])
     size = high * Ws256 + low
     at = WsFour
     if size < Ws126 {
-      return WebSocketFrame{}
+      return WebSocketFrame{ kind: errors.Kind.InvalidInput, offset: 2 }
     }
   }
   else if size == 127 {
-    if #len(input) < 10 || (input[2] & WsU8Mask128) != WsU8Zero {
-      return WebSocketFrame{}
+    if #len(input) < 10 {
+      return WebSocketFrame{ kind: errors.Kind.WouldBlock, offset: #len(input) }
+    }
+    if (input[2] & WsU8Mask128) != WsU8Zero {
+      return WebSocketFrame{ kind: errors.Kind.InvalidInput, offset: 2 }
     }
     size = 0
     for i in 0..8 {
       next := #cast(usize, input[2 + i])
       if size > (WsMax - next) / Ws256 {
-        return WebSocketFrame{}
+        return WebSocketFrame{ kind: errors.Kind.InvalidInput, offset: 2 + i }
       }
       size = size * Ws256 + next
     }
     at = 10
     if size <= 65535 {
-      return WebSocketFrame{}
+      return WebSocketFrame{ kind: errors.Kind.InvalidInput, offset: 2 }
     }
   }
   if opcode_value >= 8 && (!final || size > 125) {
-    return WebSocketFrame{}
+    return WebSocketFrame{ kind: errors.Kind.InvalidInput, offset: 0 }
   }
   mask: u32 = 0
   if masked {
     if at + 4 > #len(input) {
-      return WebSocketFrame{}
+      return WebSocketFrame{ kind: errors.Kind.WouldBlock, offset: #len(input) }
     }
     m0: u32 = #cast(u32, input[at])
     m1: u32 = #cast(u32, input[at + 1])
@@ -390,7 +416,7 @@ fn websocket_parse(input: []const u8) WebSocketFrame {
     at += 4
   }
   if at > #len(input) || size > #len(input) - at {
-    return WebSocketFrame{}
+    return WebSocketFrame{ kind: errors.Kind.WouldBlock, offset: #len(input) }
   }
   return WebSocketFrame{ payload: input[at..at + size], opcode: opcode, mask: mask, consumed: at + size, final: final, masked: masked, ok: true }
 }
@@ -499,17 +525,23 @@ fn websocket_message_state(expect_masked: bool) WebSocketMessageState {
 // Advances one RFC 6455 message stream. All storage belongs to the caller.
 // Message storage persists across fragments; control storage may be reused per call.
 fn websocket_receive(state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent {
-  if !frame.ok || state.closed || (state.enforce_mask && frame.masked != state.masked) {
-    return WebSocketEvent{ kind: WebSocketEventKind.Error }
+  if !frame.ok {
+    return WebSocketEvent{ kind: frame.kind, error: frame.error, offset: frame.offset, detail: WebSocketEventKind.Error }
+  }
+  if state.closed {
+    return WebSocketEvent{ kind: errors.Kind.InvalidState, detail: WebSocketEventKind.Error }
+  }
+  if state.enforce_mask && frame.masked != state.masked {
+    return WebSocketEvent{ kind: errors.Kind.InvalidInput, detail: WebSocketEventKind.Error }
   }
   if frame.opcode >= WsU8Eight {
     if !ws_decode_at(control, 0, frame) {
-      return WebSocketEvent{ kind: WebSocketEventKind.Error }
+      return WebSocketEvent{ kind: errors.Kind.Capacity, detail: WebSocketEventKind.Error }
     }
     payload := control[..#len(frame.payload)]
     if frame.opcode == WsU8Eight {
       if #len(payload) == 1 {
-        return WebSocketEvent{ kind: WebSocketEventKind.Error }
+        return WebSocketEvent{ kind: errors.Kind.InvalidInput, detail: WebSocketEventKind.Error }
       }
       code: u16 = 0
       if #len(payload) >= 2 {
@@ -518,44 +550,44 @@ fn websocket_receive(state: *WebSocketMessageState, message: []u8, control: []u8
         code = first * WsU16Byte + second
       }
       if (#len(payload) >= 2 && !ws_close_code(code)) || (#len(payload) > 2 && !ws_utf8(payload[2..])) {
-        return WebSocketEvent{ kind: WebSocketEventKind.Error }
+        return WebSocketEvent{ kind: errors.Kind.InvalidInput, detail: WebSocketEventKind.Error }
       }
       state.closed = true
-      return WebSocketEvent{ payload: payload, kind: WebSocketEventKind.Close, opcode: frame.opcode, close_code: code, ok: true }
+      return WebSocketEvent{ payload: payload, detail: WebSocketEventKind.Close, opcode: frame.opcode, close_code: code, ok: true }
     }
     if frame.opcode == 9 {
-      return WebSocketEvent{ payload: payload, kind: WebSocketEventKind.Ping, opcode: frame.opcode, ok: true }
+      return WebSocketEvent{ payload: payload, detail: WebSocketEventKind.Ping, opcode: frame.opcode, ok: true }
     }
-    return WebSocketEvent{ payload: payload, kind: WebSocketEventKind.Pong, opcode: frame.opcode, ok: true }
+    return WebSocketEvent{ payload: payload, detail: WebSocketEventKind.Pong, opcode: frame.opcode, ok: true }
   }
   if frame.opcode == 0 {
     if !state.fragmented {
-      return WebSocketEvent{ kind: WebSocketEventKind.Error }
+      return WebSocketEvent{ kind: errors.Kind.InvalidInput, detail: WebSocketEventKind.Error }
     }
   } else {
     if state.fragmented || (frame.opcode != 1 && frame.opcode != 2) {
-      return WebSocketEvent{ kind: WebSocketEventKind.Error }
+      return WebSocketEvent{ kind: errors.Kind.InvalidInput, detail: WebSocketEventKind.Error }
     }
     state.used = 0
     state.opcode = frame.opcode
   }
   if !ws_decode_at(message, state.used, frame) {
-    return WebSocketEvent{ kind: WebSocketEventKind.Error }
+    return WebSocketEvent{ kind: errors.Kind.Capacity, detail: WebSocketEventKind.Error }
   }
   state.used += #len(frame.payload)
   if !frame.final {
     state.fragmented = true
-    return WebSocketEvent{ kind: WebSocketEventKind.None, opcode: state.opcode, ok: true }
+    return WebSocketEvent{ detail: WebSocketEventKind.None, opcode: state.opcode, ok: true }
   }
   state.fragmented = false
   result_payload := message[..state.used]
   message_opcode := state.opcode
   if message_opcode == 1 && !ws_utf8(result_payload) {
     state.used = 0
-    return WebSocketEvent{ kind: WebSocketEventKind.Error }
+    return WebSocketEvent{ kind: errors.Kind.InvalidInput, detail: WebSocketEventKind.Error }
   }
   state.used = 0
-  return WebSocketEvent{ payload: result_payload, kind: WebSocketEventKind.Ready, opcode: message_opcode, ok: true }
+  return WebSocketEvent{ payload: result_payload, detail: WebSocketEventKind.Ready, opcode: message_opcode, ok: true }
 }
 
 // Concise public names; websocket_* spellings remain as compatibility aliases.
@@ -576,8 +608,15 @@ pub fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8 {
   return output
 }
 
-pub fn validate_upgrade_response(response: []const u8, key: []const u8) bool {
-  return websocket_validate_upgrade_response(response, key)
+pub fn validate_upgrade_response(response: []const u8, key: []const u8) Result {
+  head := http.parse_response(response)
+  if !head.ok {
+    return Result{ kind: head.kind, error: head.error, offset: head.offset }
+  }
+  if !websocket_validate_upgrade_response(response, key) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return Result{ ok: true }
 }
 
 // One encoded frame, in arena.
@@ -609,6 +648,14 @@ pub fn receive(state: *WebSocketMessageState, message: []u8, control: []u8, fram
 
 // Stateful stream wrapper. All buffers are caller-owned; client controls require
 // a fresh unpredictable mask supplied to connection_send.
+// A zero connection is inactive. The first failure (including validation/capacity
+// failures) is sticky across all connection I/O, even when its native code is zero.
+// Portable categories and native codes are both retained by the first failure.
+// Close sends at most one frame and never closes the borrowed transport. After a
+// peer Close, receive returns a successful Close without reading again; a Close
+// reply is still allowed. Other sends after either Close return InvalidState with native code zero, not a sticky
+// failure. Reset by assigning a fresh connection(...) with fresh stream/buffer
+// state; clearing error alone does not reset the connection.
 pub fn connection(input: http.StreamReader, output: http.StreamWriter, frames: []u8, message: []u8,
   control: []u8, client: bool) WebSocketConnection {
   return WebSocketConnection{
@@ -619,55 +666,156 @@ pub fn connection(input: http.StreamReader, output: http.StreamWriter, frames: [
     control: control,
     state: websocket_message_state(!client),
     client: client,
+    active: true,
   }
 }
 
-pub fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32) isize {
-  frame := websocket_write(state.frames, opcode, payload, final, state.client, mask)
+fn ws_connection_fail(state: *WebSocketConnection, kind: errors.Kind, error: isize) Result {
+  if !state.failed {
+    state.failed = true
+    state.kind = kind
+    state.error = error
+  }
+  return Result{ kind: state.kind, error: state.error, offset: state.offset }
+}
+
+pub fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32) Result {
+  if state.failed {
+    return Result{ kind: state.kind, error: state.error, offset: state.offset }
+  }
+  if !state.active {
+    return ws_connection_fail(state, errors.Kind.InvalidState, 0)
+  }
+  if state.close_sent || (state.state.closed && opcode != WsU8Eight) {
+    return Result{ kind: errors.Kind.InvalidState, error: 0 }
+  }
+  if state.output.write == nil {
+    return ws_connection_fail(state, errors.Kind.InvalidState, 0)
+  }
+  if state.frame_used > #len(state.frames) || state.frame_consumed > state.frame_used {
+    return ws_connection_fail(state, errors.Kind.InvalidState, 0)
+  }
+  opcode_value := #cast(usize, opcode)
+  if opcode_value > 10 || (opcode_value >= 3 && opcode_value <= 7) || (opcode_value >= 8 && (!final || #len(payload) > 125)) {
+    return ws_connection_fail(state, errors.Kind.InvalidInput, 0)
+  }
+  // Sending must not overwrite wire bytes retained by receive.
+  if state.frame_consumed == state.frame_used {
+    state.frame_consumed = 0
+    state.frame_used = 0
+  }
+  frame := websocket_write(state.frames[..state.frame_consumed], opcode, payload, final, state.client, mask)
   if #len(frame) == 0 {
-    return -28
+    frame = websocket_write(state.frames[state.frame_used..], opcode, payload, final, state.client, mask)
+  }
+  if #len(frame) == 0 {
+    return ws_connection_fail(state, errors.Kind.Capacity, 0)
   }
   result := stream.write_all(state.output, frame)
   if result.status == stream.Status.Error {
-    return result.error
+    return ws_connection_fail(state, result.kind, result.error)
   }
-  return 0
+  if opcode == WsU8Eight {
+    state.close_sent = true
+  }
+  return Result{ ok: true }
 }
 
-pub fn connection_ping(state: *WebSocketConnection, payload: []const u8, mask: u32) isize {
+pub fn connection_ping(state: *WebSocketConnection, payload: []const u8, mask: u32) Result {
   return connection_send(state, 9, payload, true, mask)
 }
 
-pub fn connection_pong(state: *WebSocketConnection, payload: []const u8, mask: u32) isize {
+pub fn connection_pong(state: *WebSocketConnection, payload: []const u8, mask: u32) Result {
   return connection_send(state, 10, payload, true, mask)
 }
 
-pub fn connection_close(state: *WebSocketConnection, payload: []const u8, mask: u32) isize {
+pub fn connection_close(state: *WebSocketConnection, payload: []const u8, mask: u32) Result {
+  if state.failed {
+    return Result{ kind: state.kind, error: state.error, offset: state.offset }
+  }
+  if !state.active || state.close_sent {
+    return Result{ ok: true }
+  }
   return connection_send(state, 8, payload, true, mask)
 }
 
+// Event payload borrows message/control until the next receive call.
 pub fn connection_receive(state: *WebSocketConnection) WebSocketResult {
-  used: usize = 0
-  for used < #len(state.frames) {
-    input := stream.read(state.input, state.frames[used..])
-    if input.transferred > #len(state.frames) - used {
-      return WebSocketResult{ error: -5 }
-    }
-    used += input.transferred
-    frame := websocket_parse(state.frames[..used])
+  if state.failed {
+    return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+  }
+  if !state.active {
+    _ = ws_connection_fail(state, errors.Kind.InvalidState, 0)
+    return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+  }
+  if state.state.closed {
+    return WebSocketResult{ event: WebSocketEvent{ detail: WebSocketEventKind.Close, opcode: 8, ok: true }, ok: true }
+  }
+  if state.input.read == nil {
+    _ = ws_connection_fail(state, errors.Kind.InvalidState, 0)
+    return WebSocketResult{ kind: state.kind, error: state.error }
+  }
+  if state.frame_used > #len(state.frames) || state.frame_consumed > state.frame_used {
+    _ = ws_connection_fail(state, errors.Kind.InvalidState, 0)
+    return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+  }
+  remaining := state.frame_used - state.frame_consumed
+  for i in 0..remaining {
+    state.frames[i] = state.frames[state.frame_consumed + i]
+  }
+  state.frame_used = remaining
+  state.frame_consumed = 0
+  for true {
+    frame := websocket_parse(state.frames[..state.frame_used])
     if frame.ok {
       event := websocket_receive(&state.state, state.message, state.control, frame)
-      if event.kind == WebSocketEventKind.Error {
-        return WebSocketResult{ error: -22 }
+      if event.detail == WebSocketEventKind.Error {
+        state.offset = event.offset
+        _ = ws_connection_fail(state, event.kind, 0)
+        return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+      }
+      state.frame_consumed = frame.consumed
+      if event.detail == WebSocketEventKind.None {
+        remaining = state.frame_used - state.frame_consumed
+        for i in 0..remaining {
+          state.frames[i] = state.frames[state.frame_consumed + i]
+        }
+        state.frame_used = remaining
+        state.frame_consumed = 0
+        continue
       }
       return WebSocketResult{ event: event, ok: true }
     }
-    if input.status == stream.Status.Error {
-      return WebSocketResult{ error: input.error }
+    if frame.kind != errors.Kind.WouldBlock {
+      state.offset = frame.offset
+      _ = ws_connection_fail(state, frame.kind, 0)
+      return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
     }
-    if input.status == stream.Status.End || input.transferred == 0 {
-      return WebSocketResult{ error: -32 }
+    if state.input_ended {
+      state.offset = frame.offset
+      _ = ws_connection_fail(state, errors.Kind.InvalidState, 0)
+      return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+    }
+    if state.frame_used == #len(state.frames) {
+      _ = ws_connection_fail(state, errors.Kind.Capacity, 0)
+      return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+    }
+    input := stream.read(state.input, state.frames[state.frame_used..])
+    if input.transferred > #len(state.frames) - state.frame_used {
+      _ = ws_connection_fail(state, errors.Kind.System, 0)
+      return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+    }
+    if input.status == stream.Status.Error {
+      _ = ws_connection_fail(state, input.kind, input.error)
+      return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
+    }
+    state.frame_used += input.transferred
+    state.input_ended = input.status == stream.Status.End
+    if input.transferred == 0 {
+      state.offset = frame.offset
+      _ = ws_connection_fail(state, errors.Kind.InvalidState, 0)
+      return WebSocketResult{ kind: state.kind, error: state.error, offset: state.offset }
     }
   }
-  return WebSocketResult{ error: -28 }
+  return WebSocketResult{}
 }

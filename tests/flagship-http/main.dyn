@@ -111,7 +111,7 @@ fn main() {
   workers := mem.push_array(concurrent.Worker, &arena, WorkerCount)
   receive_storage := mem.push_array(u8, &arena, WorkerCount * 16 * mem.KiB)
   stacks := mem.push_array(u8, &arena, WorkerCount * 256 * mem.KiB)
-  started := concurrent.start_context(workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, &handle, state)
+  started := concurrent.start_context(&arena, workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, &handle, state)
   if !started.ok {
     #panic("cannot start workers")
   }
