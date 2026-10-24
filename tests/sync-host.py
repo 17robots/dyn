@@ -47,8 +47,9 @@ fn main() {
   sync.unlock(&shared.mutex)
   threads: [4]*thread.Thread = []
   for i in 0..4 {
-    spawned:=thread.spawn_with_size(&arena,131072,&worker,#cast(rawptr,&shared))
-    if !spawned.ok { #panic("spawn") } threads[i]=spawned.value
+    spawned:=thread.spawn_with_size(&arena,131072,worker,#cast(rawptr,&shared))
+    if !spawned.ok { #panic("spawn") }
+    threads[i]=spawned.value
   }
   sync.lock(&shared.mutex)
   for shared.arrived != 4 { sync.condition_wait(&shared.condition, &shared.mutex) }

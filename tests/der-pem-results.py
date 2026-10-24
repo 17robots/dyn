@@ -25,7 +25,8 @@ fn main() {
   }
   certificate_bytes[0]=49
   check(certificate.parse(certificate_bytes[..]).offset==0)
-  certificate_bytes[0]=48 certificate_bytes[8]=1
+  certificate_bytes[0]=48
+  certificate_bytes[8]=1
   check(certificate.parse(certificate_bytes[..]).offset==8)
 
   c: der.Cursor

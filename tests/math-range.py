@@ -16,9 +16,9 @@ for suffix, scalar in [('u64', 'u64'), ('i64', 'i64'), ('f32', 'f32')]:
     typename = 'Rng1' + suffix
     prefix = 'rng1' + suffix
     source.append(f'fn check_{suffix}(a,b,c,d,x:{scalar}) {{')
-    source.append(f'r:=m.{typename}{{min:a,max:b}} s:=m.{typename}{{min:c,max:d}}')
+    source.append(f'r:=m.{typename}{{min:a,max:b}}\ns:=m.{typename}{{min:c,max:d}}')
     source.append(f'if m.{prefix}_contains(r,x)!=(a<=x && x<b) {{ #panic("contains") }}')
-    source.append(f'i:=m.{prefix}_intersect(r,s) if i.min<i.max && (!m.{prefix}_overlaps(r,s)) {{ #panic("intersection") }}')
+    source.append(f'i:=m.{prefix}_intersect(r,s)\nif i.min<i.max && (!m.{prefix}_overlaps(r,s)) {{ #panic("intersection") }}')
     source.append('}')
 source.append('fn main() {')
 for suffix, scalar in [('u64', 'u64'), ('i64', 'i64'), ('f32', 'f32')]:
@@ -42,8 +42,8 @@ for suffix, scalar in [('u64', 'u64'), ('i64', 'i64'), ('f32', 'f32')]:
                    f's:=m.{typename}{{min:{literal(c)},max:{literal(d)}}}',
                    f'check_{suffix}({literal(a)},{literal(b)},{literal(c)},{literal(d)},{literal(x)})',
                    f'if m.{prefix}_center(r)!={literal(center)} || m.{prefix}_dimension(r)!={literal(b-a)} {{ #panic("center/dimension") }}',
-                   f'i:=m.{prefix}_intersect(r,s) if i.min!={literal(lo)} || i.max!={literal(hi)} {{ #panic("intersection endpoints") }}',
-                   f'u:=m.{prefix}_union(r,s) if u.min!={literal((c if a==b else a if c==d else min(a,c)))} || u.max!={literal((d if a==b else b if c==d else max(b,d)))} {{ #panic("union") }}',
+                   f'i:=m.{prefix}_intersect(r,s)\nif i.min!={literal(lo)} || i.max!={literal(hi)} {{ #panic("intersection endpoints") }}',
+                   f'u:=m.{prefix}_union(r,s)\nif u.min!={literal((c if a==b else a if c==d else min(a,c)))} || u.max!={literal((d if a==b else b if c==d else max(b,d)))} {{ #panic("union") }}',
                    f'if m.{prefix}_clamp(r,{literal(x)})!={literal(min(b,max(a,x)))} {{ #panic("clamp") }}',
                    '}']
         source.insert(len(source)-1, f'if m.{prefix}_overlaps(r,s)!={str(a<b and c<d and a<d and c<b).lower()} {{ #panic("overlap oracle") }}')
@@ -67,18 +67,24 @@ for suffix, vector in [('f32', 'Vec2'), ('i32', 'Vec2i')]:
     source += [f'''if true {{
 r:=m.Rng2{suffix}{{min:m.{vector}{{x:-3,y:2}},max:m.{vector}{{x:5,y:8}}}}
 s:=m.Rng2{suffix}{{min:m.{vector}{{x:1,y:4}},max:m.{vector}{{x:7,y:6}}}}
-i:=m.{p}_intersect(r,s) u:=m.{p}_union(r,s)
+i:=m.{p}_intersect(r,s)
+u:=m.{p}_union(r,s)
 if i.min.x!=1 || i.max.x!=5 || i.min.y!=4 || i.max.y!=6 {{ #panic("rect intersection") }}
 if u.min.x!= -3 || u.max.x!=7 || u.min.y!=2 || u.max.y!=8 {{ #panic("rect union") }}
-c:=m.{p}_center(r) d:=m.{p}_dimension(r) padded:=m.{p}_pad(r,2)
+c:=m.{p}_center(r)
+d:=m.{p}_dimension(r)
+padded:=m.{p}_pad(r,2)
 if c.x!=1 || c.y!=5 || d.x!=8 || d.y!=6 || padded.min.x!= -5 || padded.max.y!=10 {{ #panic("rect dimensions") }}
 if !m.{p}_contains(r,m.{vector}{{x:-3,y:2}}) || m.{p}_contains(r,m.{vector}{{x:5,y:8}}) {{ #panic("rect boundaries") }}
 empty:m.Rng2{suffix}
 touch:=m.Rng2{suffix}{{min:m.{vector}{{x:5,y:2}},max:m.{vector}{{x:9,y:8}}}}
 if !m.{p}_overlaps(r,s) || !m.{p}_overlaps(s,r) || m.{p}_overlaps(r,touch) || m.{p}_overlaps(empty,r) || m.{p}_overlaps(r,empty) {{ #panic("rect overlap") }}
-e:=m.{p}_intersect(r,touch) if !m.{p}_empty(e) {{ #panic("rect touching") }}
-ue:=m.{p}_union(empty,r) if ue.min.x!=r.min.x || ue.max.y!=r.max.y {{ #panic("rect empty union") }}
-cl:=m.{p}_clamp(r,m.{vector}{{x:-9,y:20}}) if cl.x!=r.min.x || cl.y!=r.max.y {{ #panic("rect clamp") }}
+e:=m.{p}_intersect(r,touch)
+if !m.{p}_empty(e) {{ #panic("rect touching") }}
+ue:=m.{p}_union(empty,r)
+if ue.min.x!=r.min.x || ue.max.y!=r.max.y {{ #panic("rect empty union") }}
+cl:=m.{p}_clamp(r,m.{vector}{{x:-9,y:20}})
+if cl.x!=r.min.x || cl.y!=r.max.y {{ #panic("rect clamp") }}
 
 }}''']
     if suffix == 'f32':

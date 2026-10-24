@@ -161,43 +161,43 @@ fn check_name(kind: u64) []const u8 {
   case kind {
     0 => {
       return "overflow.ok"
-    },
+    }
     1 => {
       return "divide.ok"
-    },
+    }
     2 => {
       return "division.overflow.ok"
-    },
+    }
     3 => {
       return "shift.count.ok"
-    },
+    }
     4 => {
       return "function.nonnull.ok"
-    },
+    }
     5 => {
       return "pointer.nonnull.ok"
-    },
+    }
     6 => {
       return "pointer.aligned.ok"
-    },
+    }
     7 => {
       return "index.ok"
-    },
+    }
     8 => {
       return "slice.order.ok"
-    },
+    }
     9 => {
       return "slice.bounds.ok"
-    },
+    }
     10 => {
       return "enum.cast.ok"
-    },
+    }
     11 => {
       return "enum.tag.ok"
-    },
+    }
     _ => {
       return "unknown"
-    },
+    }
   }
 }
 fn append_bytes(buffer: []u8, at: u64, text: []const u8) u64 {

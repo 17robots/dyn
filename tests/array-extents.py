@@ -18,7 +18,7 @@ pub fn grid() Grid { return Grid{} }
 ''')
     (project / 'layout/constants.dyn').write_text('''const Half: usize = 2
 fn private_callback() {}
-const UnusedCallback: fn() = &private_callback
+const UnusedCallback: fn() = private_callback
 ''')
     source = project / 'main.dyn'
     source.write_text('''use "std/mem"
@@ -56,16 +56,16 @@ fn main() {
 
     invalid = [
         'use "./layout"\nfn main() { _ = layout.Width }',
-        'fn main() { count := 4 data: [count]u8 = [] _ = data }',
-        'fn f(count: usize) { data: [count]u8 = [] _ = data } fn main() {}',
-        'const N: usize = M const M: usize = N fn main() { data: [N]u8 = [] _ = data }',
-        'fn main() { data: [1 - 2]u8 = [] _ = data }',
-        'fn main() { data: [1 / 0]u8 = [] _ = data }',
-        'fn main() { data: [18446744073709551615 + 1]u8 = [] _ = data }',
-        'fn main() { data: [1.5]u8 = [] _ = data }',
-        'const N: f64 = 4 fn main() { data: [N]u8 = [] _ = data }',
-        'fn main() { data: [1 << 64]u8 = [] _ = data }',
-        'fn main() { data: [N]u8 = [] const N: usize = 2 _ = data }',
+        'fn main() { count := 4\ndata: [count]u8 = []\n_ = data }',
+        'fn f(count: usize) { data: [count]u8 = []\n_ = data } fn main() {}',
+        'const N: usize = M const M: usize = N fn main() { data: [N]u8 = []\n_ = data }',
+        'fn main() { data: [1 - 2]u8 = []\n_ = data }',
+        'fn main() { data: [1 / 0]u8 = []\n_ = data }',
+        'fn main() { data: [18446744073709551615 + 1]u8 = []\n_ = data }',
+        'fn main() { data: [1.5]u8 = []\n_ = data }',
+        'const N: f64 = 4 fn main() { data: [N]u8 = []\n_ = data }',
+        'fn main() { data: [1 << 64]u8 = []\n_ = data }',
+        'fn main() { data: [N]u8 = []\nconst N: usize = 2\n_ = data }',
     ]
     for code in invalid:
         source.write_text(code)

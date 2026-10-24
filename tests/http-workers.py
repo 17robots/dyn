@@ -17,32 +17,35 @@ use "std/thread" thread
 use "std/sync" sync
 use "MODULE" workers
 fn handler(response: *http.Response, request: *const http.Request) http.Result {
-  _ = response _ = request
+  _ = response
+  _ = request
   return http.Result{ ok: true }
 }
 '''
 NATIVE = COMMON.replace('MODULE', 'std/net/http/concurrent') + r'''
 fn main() {
-  nodes: [4096]u8 = [] arena := mem.arena_from_buffer(nodes[..])
+  nodes: [4096]u8 = []
+  arena := mem.arena_from_buffer(nodes[..])
   pool: [2]workers.Worker = []
-  receive: [8192]u8 = [] stacks: [262144]u8 = []
+  receive: [8192]u8 = []
+  stacks: [262144]u8 = []
   workers.stop(pool[..])
   zero := workers.join(pool[..])
   if !zero.ok || zero.kind != errors.Kind.None || zero.error != 0 { #panic("zero lifecycle") }
   listener := http.Listener{}
   for size in [0, 255] {
-    bad := workers.start(&arena, pool[..], &listener, receive[..], 4096, stacks[..], #cast(usize, size), &handler)
+    bad := workers.start(&arena, pool[..], &listener, receive[..], 4096, stacks[..], #cast(usize, size), handler)
     if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 || bad.started != 0 || mem.arena_mark(&arena) != 0 { #panic("validation") }
   }
-  bad := workers.start(&arena, pool[..0], &listener, receive[..], 4096, stacks[..], 131072, &handler)
+  bad := workers.start(&arena, pool[..0], &listener, receive[..], 4096, stacks[..], 131072, handler)
   if bad.ok || bad.kind != errors.Kind.InvalidInput { #panic("empty validation") }
   address := net.ipv4(127, 0, 0, 1, 0)
   listening := net.tcp_listen_ipv4(&address, 4)
   if !listening.ok { #panic("listen") }
   listener = listening.value
-  started := workers.start_context(&arena, pool[..], &listener, receive[..], 4096, stacks[..], 131072, &handler, nil)
+  started := workers.start_context(&arena, pool[..], &listener, receive[..], 4096, stacks[..], 131072, handler, nil)
   if !started.ok || started.started != 2 || pool[0].thread == nil || pool[0].thread == pool[1].thread { #panic("start") }
-  busy := workers.start(&arena, pool[..], &listener, receive[..], 4096, stacks[..], 131072, &handler)
+  busy := workers.start(&arena, pool[..], &listener, receive[..], 4096, stacks[..], 131072, handler)
   if busy.ok || busy.kind != errors.Kind.InvalidState || busy.error != 0 { #panic("busy") }
   bound := net.Address{}
   if !net.local_address(listener.descriptor, &bound).ok { #panic("local address") }
@@ -79,7 +82,9 @@ pub struct Result { ok: bool, kind: errors.Kind, error: isize }
 pub struct State { spawns: usize, joins: usize, fail_at: usize, fail_join: bool }
 pub state: State
 pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
-  _ = stack _ = entry _ = context
+  _ = stack
+  _ = entry
+  _ = context
   state.spawns += 1
   if state.fail_at == state.spawns { return SpawnResult{ kind: errors.Kind.Capacity, error: -12 } }
   node := mem.push(Thread, arena)
@@ -97,16 +102,21 @@ pub const ShutdownBoth: isize = 2
 pub calls: usize
 pub last: isize
 pub fn shutdown(descriptor: isize, mode: isize) isize {
-  _ = mode calls += 1 last = descriptor return 0
+  _ = mode
+  calls += 1
+  last = descriptor
+  return 0
 }
 '''
 MOCK = COMMON.replace('MODULE', './workers').replace('use "std/thread" thread\n', '') + r'''
 use "./mock_thread" mock
 use "./mock_net" counter
 fn main() {
-  nodes: [4096]u8 = [] arena := mem.arena_from_buffer(nodes[..])
+  nodes: [4096]u8 = []
+  arena := mem.arena_from_buffer(nodes[..])
   pool: [3]workers.Worker = []
-  receive: [3072]u8 = [] stacks: [768]u8 = []
+  receive: [3072]u8 = []
+  stacks: [768]u8 = []
   workers.stop(pool[..])
   if counter.calls != 0 { #panic("zero worker shutdown") }
   // Descriptor zero is valid when explicitly owned.
@@ -116,18 +126,18 @@ fn main() {
   pool[0].active_socket = false
   listener := http.Listener{ descriptor: 55, active: true }
   mock.state = mock.State{ fail_at: 3 }
-  failed := workers.start(&arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, &handler)
+  failed := workers.start(&arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, handler)
   if failed.ok || failed.kind != errors.Kind.Capacity || failed.error != -12 || failed.started != 2 { #panic("spawn failure result") }
   if mock.state.joins != 2 || counter.calls != 3 || pool[0].thread != nil || pool[1].thread != nil { #panic("rollback drain") }
   mock.state = mock.State{}
-  started := workers.start(&arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, &handler)
+  started := workers.start(&arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, handler)
   if !started.ok { #panic("mock start") }
   pool[0].error = workers.Result{ kind: errors.Kind.InvalidInput, error: 0 }
   pool[1].error = workers.Result{ kind: errors.Kind.System, error: -9 }
   done := workers.join(pool[..])
   if done.ok || done.kind != errors.Kind.InvalidInput || done.error != 0 || done.started != 3 || mock.state.joins != 3 { #panic("first native zero error/all joins") }
   mock.state = mock.State{ fail_join: true }
-  _ = workers.start(&arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, &handler)
+  _ = workers.start(&arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, handler)
   done = workers.join(pool[..])
   if done.ok || done.error != -5 || done.started != 2 || mock.state.joins != 3 || pool[0].thread == nil { #panic("failed join retains node/all joins") }
   mock.state.fail_join = false

@@ -22,23 +22,31 @@ fn verify(bytes: []u8, start: usize, size: usize) {
   }
 }
 fn typed_array($T:type, count:usize, offset:usize) {
-  left:[512]u8=[] right:[512]u8=[]
-  fill(left[..]) fill(right[..])
+  left:[512]u8=[]
+  right:[512]u8=[]
+  fill(left[..])
+  fill(right[..])
   typed:=mem.arena_from_buffer(left[offset..])
   untyped:=mem.arena_from_buffer(right[offset..])
-  typed_events:[4]observe.Event=[] untyped_events:[4]observe.Event=[]
-  typed_log:=observe.log(typed_events[..]) untyped_log:=observe.log(untyped_events[..])
-  typed.events=&typed_log untyped.events=&untyped_log
-  typed.event_resource=83 untyped.event_resource=83
+  typed_events:[4]observe.Event=[]
+  untyped_events:[4]observe.Event=[]
+  typed_log:=observe.log(typed_events[..])
+  untyped_log:=observe.log(untyped_events[..])
+  typed.events=&typed_log
+  untyped.events=&untyped_log
+  typed.event_resource=83
+  untyped.event_resource=83
   values:=mem.push_array(T,&typed,count)
   raw:=mem.arena_push_array(&untyped,count,#sizeof(T),#alignof(T))
   expect(#len(values)==count && typed.offset==untyped.offset && typed.peak_used==untyped.peak_used)
   expect(typed_log.count==untyped_log.count)
-  if count==0 { expect(raw==nil && typed.offset==0 && typed_log.count==0) return }
+  if count==0 { expect(raw==nil && typed.offset==0 && typed_log.count==0)
+  return }
   start:=#cast(usize,&values[0])-#cast(usize,&left[0])
   other:=#cast(usize,raw)-#cast(usize,&right[0])
   expect(start==other && (#cast(usize,&values[0]) & (#alignof(T)-1))==0)
-  verify(left[..],start,count*#sizeof(T)) verify(right[..],other,count*#sizeof(T))
+  verify(left[..],start,count*#sizeof(T))
+  verify(right[..],other,count*#sizeof(T))
   expect(typed_log.count==1 && typed_events[0].kind==observe.Kind.Allocated)
   expect(typed_events[0].value==#cast(u64,count*#sizeof(T)) && typed_events[0].resource==83)
   expect(untyped_events[0].kind==typed_events[0].kind && untyped_events[0].value==typed_events[0].value)
@@ -52,7 +60,9 @@ fn typed_array($T:type, count:usize, offset:usize) {
 fn main() {
   for offset in 0..16 {
     for count in 0..8 {
-      typed_array(u32,count,offset) typed_array(u64,count,offset) typed_array(Padded,count,offset)
+      typed_array(u32,count,offset)
+      typed_array(u64,count,offset)
+      typed_array(Padded,count,offset)
     }
   }
   invalid:mem.Arena
@@ -166,8 +176,11 @@ fn cleanup(arena:*mem.Arena, log:*observe.Log) {
  _=io.println(io.stdout(),"FAILURE STATE PASS")
 }
 fn main() {
- backing:[16]u8=[] arena:=mem.arena_from_buffer(backing[..])
- events:[4]observe.Event=[] log:=observe.log(events[..]) arena.events=&log
+ backing:[16]u8=[]
+ arena:=mem.arena_from_buffer(backing[..])
+ events:[4]observe.Event=[]
+ log:=observe.log(events[..])
+ arena.events=&log
  _=mem.push_bytes_uninit(&arena,3)
  defer cleanup(&arena,&log)
  count:usize=COUNT

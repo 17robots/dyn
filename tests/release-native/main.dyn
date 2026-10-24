@@ -9,7 +9,7 @@ fn main() {
   value := Probe{tag: 9,value: 2.5,samples: [11,22,33]}
   if storage(&value,#sizeof(Probe),#alignof(Probe)) != 1 { #panic("storage ABI") }
   context: i64 = 3
-  if invoke(&callback,#cast(rawptr, &context)) != 7.5 { #panic("callback ABI") }
+  if invoke(callback,#cast(rawptr, &context)) != 7.5 { #panic("callback ABI") }
   arena := mem.arena_create(4096)
   bytes := mem.arena_push(&arena,64,8)[..64]
   bytes[63] = 42

@@ -33,7 +33,8 @@ fn main() {
  require(!first.ok && first.error == -9 && first.kind == errors.Kind.InvalidState)
  descriptors: [2]i32 = []
  require(#syscall(293, &descriptors[0], 2048) == 0)
- defer { _ = #syscall(3, descriptors[0]) _ = #syscall(3, descriptors[1]) }
+ defer { _ = #syscall(3, descriptors[0])
+ _ = #syscall(3, descriptors[1]) }
  byte: [1]u8 = [91]
  require(#syscall(1, descriptors[1], &byte[0], 1) == 1)
  state.descriptor = #cast(isize, descriptors[0])

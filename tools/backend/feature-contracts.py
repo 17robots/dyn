@@ -19,8 +19,10 @@ enum(i8) Signed { Low=-128, High=127 }
 enum(u64) Wide { Zero=0, High=18446744073709551615 }
 pub small_global:Small=Small.One
 pub signed_global:Signed=Signed.Low
-pub fn small_global_set(value:u8) i64 { small_global=#cast(Small, value) return #cast(i64, small_global) }
-pub fn signed_global_set(value:i64) i64 { signed_global=#cast(Signed, value) return #cast(i64, signed_global) }
+pub fn small_global_set(value:u8) i64 { small_global=#cast(Small, value)
+return #cast(i64, small_global) }
+pub fn signed_global_set(value:i64) i64 { signed_global=#cast(Signed, value)
+return #cast(i64, signed_global) }
 enum(u8) Message { Empty, Number: i64, Byte: u8 }
 struct Pair { a: i64, b: i64 }
 enum Box { Empty, Value: Pair }
@@ -28,24 +30,24 @@ pub fn enum_identity(value: Message) Message { return value }
 pub fn box_identity(value: Box) Box { return value }
 pub fn enum_cross(f:fn(Message) Message,value:i64) i64 {
   result := f(Message.Number(value))
-  case result { Message.Number number => { return number }, _ => { return -1 } }
+  case result { Message.Number number => { return number } _ => { return -1 } }
 }
 pub fn box_cross(f:fn(Box) Box,value:i64) i64 {
   result := f(Box.Value(Pair{a:value,b:7}))
-  case result { Box.Value pair => { return pair.a+pair.b }, _ => { return -1 } }
+  case result { Box.Value pair => { return pair.a+pair.b } _ => { return -1 } }
 }
 fn inspect(value: any) i64 {
   copy := value
   case copy {
-    is i64 number => { return number },
-    is bool yes => { if yes { return 1 } else { return 0 } },
-    is Pair pair => { return pair.a + pair.b },
-    is [2]i64 values => { return values[0]+values[1] },
-    is f64 number => { return #cast(i64, number) },
+    is i64 number => { return number }
+    is bool yes => { if yes { return 1 } else { return 0 } }
+    is Pair pair => { return pair.a + pair.b }
+    is [2]i64 values => { return values[0]+values[1] }
+    is f64 number => { return #cast(i64, number) }
     is Message message => {
-      case message { Message.Number number=>{return number}, _=>{return -2} }
-    },
-    is []const u8 text => { return #cast(i64, #len(text)) },
+      case message { Message.Number number=>{return number} _=>{return -2} }
+    }
+    is []const u8 text => { return #cast(i64, #len(text)) }
     _ => { return -1 }
   }
 }
@@ -61,20 +63,20 @@ fn mixed(values: ...any) i64 {
 }
 pub fn plain(value: u8) u64 {
   small := #cast(Small, value)
-  case small { Small.Zero => { return 11 }, Small.One => { return 22 } }
+  case small { Small.Zero => { return 11 } Small.One => { return 22 } }
 }
 pub fn signed_tag(value:i64) i64 { return #cast(i64, #cast(Signed, value)) }
 pub fn wide_tag(value:u64) u64 { return #cast(u64, #cast(Wide, value)) }
 pub fn wrong_signed_tag(value:i64) u64 { return #cast(u64, #cast(Wide, value)) }
 pub fn payload(value: i64) i64 {
   message := Message.Number(value)
-  case message { Message.Number *number => { number += 3 }, _ => {} }
+  case message { Message.Number *number => { number += 3 } _ => {} }
   copy := enum_identity(message)
-  case copy { Message.Number number => { return number }, _ => { return -1 } }
+  case copy { Message.Number number => { return number } _ => { return -1 } }
 }
 pub fn aggregate_payload(value: i64) i64 {
   box := box_identity(Box.Value(Pair{a:value, b:7}))
-  case box { Box.Value pair => { return pair.a + pair.b }, _ => { return -1 } }
+  case box { Box.Value pair => { return pair.a + pair.b } _ => { return -1 } }
 }
 pub fn boxed(value: i64) i64 { return inspect(value) }
 pub fn boxed_pair(value: i64) i64 { return inspect(Pair{a:value,b:7}) }
@@ -100,21 +102,23 @@ pub fn native_aggregate(value:i64) i64 { return pair_pack(Pair{a:value,b:2},Pair
 pub fn payload_copy(value:i64) i64 {
   original := Message.Number(value)
   copy := original
-  case original { Message.Number *number => { number=9 }, _=>{} }
-  case copy { Message.Number number => { return number }, _=>{ return -1 } }
+  case original { Message.Number *number => { number=9 } _=>{} }
+  case copy { Message.Number number => { return number } _=>{ return -1 } }
 }
 pub fn payload_pair_mutation(value:i64) i64 {
   original := Box.Value(Pair{a:value,b:2})
-  case original { Box.Value *pair => { pair=Pair{a:pair.a+3,b:4} }, _=>{} }
-  case original { Box.Value pair => { return pair.a+pair.b }, _=>{ return -1 } }
+  case original { Box.Value *pair => { pair=Pair{a:pair.a+3,b:4} } _=>{} }
+  case original { Box.Value pair => { return pair.a+pair.b } _=>{ return -1 } }
 }
 pub fn assignment_snapshot(value:i64) i64 {
   pair:=Pair{a:value,b:2}
   pair=Pair{a:pair.a+3,b:pair.b+4}
   return pair.a+pair.b
 }
-fn sum_sink(values:...i64) { total:i64=0 for value in values { total+=value } }
-fn any_sink(values:...any) { total:i64=0 for value in values { total+=inspect(value) } }
+fn sum_sink(values:...i64) { total:i64=0
+for value in values { total+=value } }
+fn any_sink(values:...any) { total:i64=0
+for value in values { total+=inspect(value) } }
 pub fn pack_defer(value:i64) i64 {
   defer sum_sink(value,2)
   defer any_sink(value,Pair{a:3,b:4})
@@ -127,11 +131,11 @@ pub fn pack_defer_panic(value:i64) i64 {
 extern fn c_sum "backend_variadic_sum"(count: u32, ...) i64
 extern fn c_float "backend_variadic_float"(count: u32, ...) f64
 pub fn foreign_pack(value: i8) i64 {
-  indirect := &c_sum
+  indirect := c_sum
   return c_sum(3,value,#cast(u16, 500),7) + indirect(2,value,9)
 }
 pub fn foreign_float(value: f32) f64 {
-  indirect := &c_float
+  indirect := c_float
   return c_float(3,value,#cast(f32, 2.5),3.0) + indirect(1,value)
 }
 pub fn foreign_spills(value:i8) i64 { return c_sum(10,value,1,2,3,4,5,6,7,8,9) }

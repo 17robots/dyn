@@ -45,7 +45,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-independent-wasm-') as directory:
     (stack/'main.dyn').write_text('''marker: u32 = 1234567
 pub fn value() u32 { return marker }
 pub fn exhaust(n: u32) u32 {
-  buffer: [65536]u8 buffer[0] = #cast(u8, n)
+  buffer: [65536]u8
+  buffer[0] = #cast(u8, n)
   if n == 0 { return #cast(u32, buffer[0]) }
   return exhaust(n - 1) + #cast(u32, buffer[0])
 }

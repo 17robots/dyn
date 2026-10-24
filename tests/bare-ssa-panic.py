@@ -44,10 +44,13 @@ pub fn empty() { #panic("") }
 pub fn dynamic(s:[]const u8) { #panic(s) }
 pub fn sliced(s:[]const u8,a:usize,b:usize) { #panic(s[a..b]) }
 pub fn nul() { #panic("a\0b") }
-fn message() []const u8 { _=io.write_all(io.stdout(),"EVAL\n") return "ordered" }
+fn message() []const u8 { _=io.write_all(io.stdout(),"EVAL\n")
+return "ordered" }
 pub fn ordered() { #panic(message()) }
-pub fn protected() { defer { _=io.write_all(io.stdout(),"CLEAN\n") } #panic(message()) }
-pub fn caller() { defer { _=io.write_all(io.stdout(),"OUTER\n") } dynamic("called") }
+pub fn protected() { defer { _=io.write_all(io.stdout(),"CLEAN\n") }
+#panic(message()) }
+pub fn caller() { defer { _=io.write_all(io.stdout(),"OUTER\n") }
+dynamic("called") }
 '''
 CASES = [
     ('literal', 'literal()', b'hello\n'),
@@ -175,7 +178,7 @@ def main():
                 tw = work/t
                 tw.mkdir()
                 cpacr = 'unsigned cpacr(void){'+('return 0;' if rv else 'return *(volatile unsigned*)0xe000ed88;')+'}'
-                check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU enabled") } ' if issoft and not rv else ''
+                check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU enabled") }\n' if issoft and not rv else ''
                 obj = object_file(tw, 'unsigned opaque(void){return 1;} '+cpacr, ff, rv)
                 for name, body, expected in CASES:
                     project = tw/name
@@ -188,7 +191,7 @@ def main():
                 for n in [0, 1, 17, 0x100000001, 0xfedcba9876543210, 'return']:
                     project = tw/('wide-'+str(n))
                     project.mkdir()
-                    (project/'main.dyn').write_text('extern fn opaque() u64\nextern fn keep(p:*u64)\nextern fn cpacr() u32\npub fn wide(n:u64) { keep(&n) #panic("X") }\nfn main(){'+check+'wide(opaque())}')
+                    (project/'main.dyn').write_text('extern fn opaque() u64\nextern fn keep(p:*u64)\nextern fn cpacr() u32\npub fn wide(n:u64) { keep(&n)\n#panic("X") }\nfn main(){'+check+'wide(opaque())}')
                     code = ('typedef unsigned long long U; extern void dyn_panic(const char*,U); '
                             'void keep(U*p){__asm__ volatile(""::"r"(p):"memory");} '
                             'U opaque(void){return '+str(0 if n == 'return' else n)+'ULL;} '+cpacr+

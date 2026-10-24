@@ -14,7 +14,8 @@ SOURCE='''
 struct Pair { a:u64,b:u64 }
 enum Box { Empty, Value:Pair }
 pub counter:u64
-fn next() u64 { counter+=1 return counter }
+fn next() u64 { counter+=1
+return counter }
 fn plus(value:u64) u64 { return value+10 }
 pub first:u64=next()
 pub second:u64=next()
@@ -22,12 +23,12 @@ pub items:[3]u64=[next(),next(),next()]
 pub pair:Pair=Pair{a:next(),b:next()}
 pub payload:Box=Box.Value(Pair{a:8,b:9})
 pub text:[]const u8="ok"
-pub callback:fn(u64) u64=&plus
+pub callback:fn(u64) u64=plus
 extern foreign_value "backend_foreign_value":u64
 const frozen:Pair=Pair{a:10,b:20}
 const frozen_table:[3]u8=[1,2,3]
 const frozen_text:[]const u8="ice"
-const frozen_callback:fn(u64) u64=&plus
+const frozen_callback:fn(u64) u64=plus
 const computed:u64=15
 pub fn constants() u64 {
   total:=frozen.a+frozen.b+#cast(u64, frozen_table[2])+#cast(u64, #len(frozen_text))+frozen_callback(1)+computed
@@ -36,9 +37,12 @@ pub fn constants() u64 {
 pub fn frozen_pointer() rawptr { return #cast(rawptr, &frozen) }
 pub fn state() u64 {
   total:=counter+first+second+items[0]+items[1]+items[2]+pair.a+pair.b+#cast(u64, #len(text))+callback(1)+foreign_value
-  case payload { Box.Value p=>{return total+p.a+p.b}, _=>{return 0} }
+  case payload { Box.Value p=>{return total+p.a+p.b} _=>{return 0} }
 }
-pub fn mutate(value:u64) u64 { pair.a=value items[1]=value foreign_value=value return pair.a+items[1]+foreign_value }
+pub fn mutate(value:u64) u64 { pair.a=value
+items[1]=value
+foreign_value=value
+return pair.a+items[1]+foreign_value }
 pub fn pid() isize { return #syscall(39) }
 pub fn unknown_syscall() isize { return #syscall(999999) }
 pub fn write_text() isize { return #syscall(1,1,&text[0],#len(text)) }
@@ -80,7 +84,7 @@ def main():
                 result=subprocess.run([sys.executable,'-c',code,str(path)],capture_output=True,text=True,timeout=10)
                 assert result.returncode==-11,(mode,path,result.returncode,result.stderr);checks+=1
             # Freestanding runtime calls main directly; no CRT constructor walker.
-            source.write_text(SOURCE+'\nfn main() { if state()!=76 { #panic("global startup") } _=write_text() return }\n')
+            source.write_text(SOURCE+'\nfn main() { if state()!=76 { #panic("global startup") }\n_=write_text()\nreturn }\n')
             executable=root/(mode+'-compiler');run([DYN,'build',root,'--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',executable])
             assert run([executable]).stdout=='ok';checks+=1
             for failure in (

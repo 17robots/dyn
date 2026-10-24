@@ -55,12 +55,16 @@ for n in range(0,11):
 source+=r'''
 state:Large
 extern fn checkcopy(x:Large,y:u32) u32
-pub fn changestate() u32 { state.a=999 return 3 }
-pub fn isolation() u32 { state=Large{a:11,b:22,c:33,d:44,e:55} return checkcopy(state,changestate()) }
+pub fn changestate() u32 { state.a=999
+return 3 }
+pub fn isolation() u32 { state=Large{a:11,b:22,c:33,d:44,e:55}
+return checkcopy(state,changestate()) }
 pub fn rawid(x:[3]u32) [3]u32 { return x }
 pub fn rawsum(x:[3]u32) u32 { return x[0]+x[1]+x[2] }
 pub fn rawnest(x:[3]u32) [3]u32 { return rawid(rawid(x)) }
-pub fn rawtest() u32 { x:[3]u32=[11,22,33] y:=rawnest(x) return rawsum(y) }
+pub fn rawtest() u32 { x:[3]u32=[11,22,33]
+y:=rawnest(x)
+return rawsum(y) }
 '''
 names+=['changestate','isolation','rawid','rawsum','rawnest','rawtest']
 c+='extern unsigned isolation(void),rawtest(void);unsigned checkcopy(Large x,unsigned y){return x.a==11 && x.e==55 && y==3 ? 0:999;}\n'
@@ -69,7 +73,9 @@ source+=r'''
 extern fn craw_addr() rawptr
 pub fn rawforeign(x:[3]u32) [3]u32 { return #cast(fn([3]u32) [3]u32,craw_addr())(x) }
 extern fn touch(p:rawptr)
-pub fn bigframe(x:Mixed) Mixed { a:[1025]u64=[] touch(&a) return cMixed(x) }
+pub fn bigframe(x:Mixed) Mixed { a:[1025]u64=[]
+touch(&a)
+return cMixed(x) }
 pub fn partialmix(x:Mixed) u32 { return cMixed(x).b }
 pub fn unusedmix(x:Mixed) { _=cMixed(x) }
 '''
@@ -89,7 +95,7 @@ source+=f'pub fn capacitycallee({pars}) Large {{ return Large{{a:#cast(u64,a0),b
 names+=['capacitycallee','capacitycall']
 c+='extern unsigned long long capacitycall(void*);extern void capacitycallee(void);\n'
 checks+=['if(capacitycall((void*)capacitycallee)!=510)return 107;']
-source+='extern fn oracle() u32\nfn main() { n:=oracle() if n!=0 { _=io.println(io.stdout(),"BAD {}",n) #panic("oracle") } _=io.write_all(io.stdout(),"ABI OK\\n") }\n'
+source+='extern fn oracle() u32\nfn main() { n:=oracle()\nif n!=0 { _=io.println(io.stdout(),"BAD {}",n)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"ABI OK\\n") }\n'
 c+='unsigned oracle(void){'+''.join(checks)+'return 0;}\n'
 
 

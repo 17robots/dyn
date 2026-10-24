@@ -51,17 +51,35 @@ pub fn first(x:[]const u8) u8 { return cdesc(x)[0] }
 pub fn partial(x:[]const u8) usize { return #len(cdesc(x)) }
 pub fn unused(x:[]const u8,y:any) { _=cdesc(x) }
 pub fn many(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,g:u32,x:any,y:[]const u8,z:any) u32 { return cmany(a,b,c,d,e,f,g,x,y,z) }
-pub fn cycle(x:[]const u8,y:[]const u8,n:u32) []const u8 { a:=x b:=y i:u32=0 for i<n { t:=a a=b b=t i=#wrap(i+1) } return a }
-pub fn localdesc(x:[]const u8) []const u8 { a:=x p:=&a p.*=cdesc(p.*) return a }
+pub fn cycle(x:[]const u8,y:[]const u8,n:u32) []const u8 { a:=x
+b:=y
+i:u32=0
+for i<n { t:=a
+a=b
+b=t
+i=#wrap(i+1) }
+return a }
+pub fn localdesc(x:[]const u8) []const u8 { a:=x
+p:=&a
+p.*=cdesc(p.*)
+return a }
 state:[]const u8
-pub fn mutate() []const u8 { state="changed" return state }
+pub fn mutate() []const u8 { state="changed"
+return state }
 extern fn paircheck_addr() rawptr
 fn paircheck(x:[]const u8,y:[]const u8) u32 { return #cast(fn([]const u8,[]const u8) u32,paircheck_addr())(x,y) }
-pub fn isolation(x:[]const u8) u32 { state=x return paircheck(state,mutate()) }
-fn main() { r:=oracle() if r!=0 { _=io.println(io.stdout(),"oracle {}",r) #panic("oracle") } _=io.write_all(io.stdout(),"DESCRIPTORS OK\n") }
+pub fn isolation(x:[]const u8) u32 { state=x
+return paircheck(state,mutate()) }
+fn main() { r:=oracle()
+if r!=0 { _=io.println(io.stdout(),"oracle {}",r)
+#panic("oracle") }
+_=io.write_all(io.stdout(),"DESCRIPTORS OK\n") }
 extern fn touch(p:rawptr)
-pub fn large(x:[]const u8) []const u8 { a:[1025]u64=[] touch(&a) return cdesc(x) }
-pub fn protecteddesc(x:[]const u8) []const u8 { defer { state="cleanup" } return cdesc(x) }
+pub fn large(x:[]const u8) []const u8 { a:[1025]u64=[]
+touch(&a)
+return cdesc(x) }
+pub fn protecteddesc(x:[]const u8) []const u8 { defer { state="cleanup" }
+return cdesc(x) }
 pub fn rawarg(x:[2]u64) u64 { return x[0] }
 '''
 

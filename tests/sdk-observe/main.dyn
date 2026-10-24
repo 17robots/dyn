@@ -5,9 +5,12 @@ struct Record { generation: u32, name: []const u8 }
 const nil_record: Record = Record{}
 fn expect(ok: bool) { if !ok { #panic("observe contract") } }
 fn main() {
-  events:[4]observe.Event=[] log:=observe.log(events[..])
-  storage:[64]u8=[] arena:=mem.arena_from_buffer(storage[..])
-  arena.events=&log arena.event_resource=42
+  events:[4]observe.Event=[]
+  log:=observe.log(events[..])
+  storage:[64]u8=[]
+  arena:=mem.arena_from_buffer(storage[..])
+  arena.events=&log
+  arena.event_resource=42
   _=mem.arena_push(&arena,16,1)
   failed:=mem.arena_try_push(&arena,100,1)
   expect(!failed.ok)
@@ -21,7 +24,8 @@ fn main() {
   expect(observed[1].kind==observe.Kind.AllocationFailed && observed[2].kind==observe.Kind.Reclaimed)
   expect(observed[3].kind==observe.Kind.Released)
   expect(!observe.record(&log,observe.Event{kind:observe.Kind.Checkpoint}) && log.dropped==1)
-  observe.clear(&log) expect(log.count==0 && log.dropped==0)
+  observe.clear(&log)
+  expect(log.count==0 && log.dropped==0)
   records:[1]Record=[]
   live:=&records[0]
   slots.reset(live)

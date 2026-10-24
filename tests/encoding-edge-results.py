@@ -60,7 +60,8 @@ fn bad(input: []const u8, off: usize, hex: bool) {
   for c in backing { if c != 99 { #panic("invalid touched dirty arena") } }
 }
 fn overlap(hex: bool, invalid: bool, start: usize) {
-  backing: [32]u8 = [] snapshot: [32]u8 = []
+  backing: [32]u8 = []
+  snapshot: [32]u8 = []
   mem.fill(backing[..], 99)
   input := "AAAA"
   if hex { input = "6162" }
@@ -82,7 +83,8 @@ fn overlap(hex: bool, invalid: bool, start: usize) {
   if mem.arena_mark(&a) != 4 || !bytes.equal(backing[..], snapshot[..]) { #panic("overlap changed source or arena") }
 }
 fn main() {
-  z := b.Decoded{} q := h.Decoded{}
+  z := b.Decoded{}
+  q := h.Decoded{}
   if z.ok || q.ok || #len(z.value) != 0 || #len(q.value) != 0 ||
      z.kind != errors.Kind.None || q.kind != errors.Kind.None || z.error != 0 || q.error != 0 ||
      z.offset != 0 || q.offset != 0 || z.detail != codec.ErrorKind.None || q.detail != codec.ErrorKind.None { #panic("zero initialization") }
@@ -143,12 +145,14 @@ def source():
 // Malformed input is validated even when no output storage remains.
 empty_backing: [0]u8 = []
 a := mem.arena_from_buffer(empty_backing[..])
-x := b.decode(&a, "AAAA!!!!") y := h.decode(&a, "6162!!")
+x := b.decode(&a, "AAAA!!!!")
+y := h.decode(&a, "6162!!")
 if x.ok || y.ok || x.offset != 4 || y.offset != 4 || x.error != 0 || y.error != 0 ||
    x.kind != errors.Kind.InvalidInput || y.kind != errors.Kind.InvalidInput ||
    x.detail != codec.ErrorKind.InvalidInput || y.detail != codec.ErrorKind.InvalidInput ||
    #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(&a) != 0 { #panic("validation before exhaustion") }
-x = b.decode(&a, "") y = h.decode(&a, "")
+x = b.decode(&a, "")
+y = h.decode(&a, "")
 if !x.ok || !y.ok || #len(x.value) != 0 || #len(y.value) != 0 || x.error != 0 || y.error != 0 ||
    x.kind != errors.Kind.None || y.kind != errors.Kind.None || x.offset != 0 || y.offset != 0 ||
    x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || mem.arena_mark(&a) != 0 { #panic("empty at capacity") }
@@ -189,7 +193,8 @@ fn main() {{
                 (work / 'main.dyn').write_text(f'''use "std/mem" mem
 use "std/encoding/{module}" codec
 fn main() {{
-  backing: [32]u8 = [] backing[0] = 'a'
+  backing: [32]u8 = []
+backing[0] = 'a'
   arena := mem.arena_from_buffer(backing[..])
   _ = codec.encode({arguments})
 }}

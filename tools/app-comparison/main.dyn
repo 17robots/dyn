@@ -259,7 +259,7 @@ fn serve() {
   workers := mem.push_array(concurrent.Worker, &arena, 4)
   receive := mem.push_array(u8, &arena, #cast(usize, 4) * (mem.MiB + 16384))
   stacks := mem.push_array(u8, &arena, #cast(usize, 4) * 512 * mem.KiB)
-  started := concurrent.start_context(&arena, workers, &listener, receive, mem.MiB + 16384, stacks, 512 * mem.KiB, &handle, state)
+  started := concurrent.start_context(&arena, workers, &listener, receive, mem.MiB + 16384, stacks, 512 * mem.KiB, handle, state)
   if !started.ok {
     #panic("workers")
   }

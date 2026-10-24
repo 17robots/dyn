@@ -41,7 +41,7 @@ fn main() {
   if !thread.join(&idle).ok || thread.id(&idle) != 0 { #panic("empty join") }
   stack: [131072]u8 = []
   mark:=mem.arena_mark(&arena)
-  rejected:=thread.spawn(&arena, stack[..0], &worker, nil)
+  rejected:=thread.spawn(&arena, stack[..0], worker, nil)
   if rejected.ok || rejected.kind!=errors.Kind.InvalidInput || rejected.error!=0 || rejected.value!=nil || mem.arena_mark(&arena)!=mark { #panic("short stack") }
   address := net.ipv4(127, 0, 0, 1, 0)
   opened := net.tcp_listen_ipv4(&address, 4)
@@ -52,7 +52,7 @@ fn main() {
   if !net.local_address(shared.listener.descriptor, &local).ok || local.length != 16 { #panic("local address") }
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   if port == 0 { #panic("ephemeral port") }
-  spawned:=thread.spawn(&arena, stack[..], &worker, #cast(rawptr, &shared))
+  spawned:=thread.spawn(&arena, stack[..], worker, #cast(rawptr, &shared))
   if !spawned.ok || spawned.kind!=errors.Kind.None || spawned.error!=0 || spawned.value==nil { #panic("spawn") }
   active:=spawned.value
   if thread.id(active)==0 { #panic("active ownership") }
@@ -92,7 +92,8 @@ fn main() {
   packet := net.receive_from(udp.value, buffer[..], 0, peer.bytes[..], &length)
   if !packet.ok || packet.value != 0 || length != 16 { #panic("empty datagram delivery") }
   if !net.nonblocking(udp.value, false).ok { #panic("blocking restore") }
-  loopback: [16]u8 = [] loopback[15] = 1
+  loopback: [16]u8 = []
+  loopback[15] = 1
   ipv6 := net.ipv6(loopback, 0, 0)
   v6 := net.socket(net.AddressFamilyIpv6, net.SocketDatagram, 0)
   if !v6.ok { #panic("ipv6 socket") }

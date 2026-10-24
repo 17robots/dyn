@@ -38,7 +38,8 @@ must not use that order as synchronization or as an implicit dependency. Cycles 
 Function types are written `fn(ParamTypes) Result`; omitted result means `void`. A function
 value is a code pointer, so there is no `*`; `*fn(...)` is a pointer to a function value.
 Parameters may be named for documentation, as in `fn(target: *Entity, damage: i32) bool`; the
-names do not affect the type. Function addresses require `&name`. Function pointers may be copied, stored in aggregates, and called with
+names do not affect the type. A function's name is its value: write `step: fn(u64) u64 = keeper`;
+`&keeper` is an error. Function pointers may be copied, stored in aggregates, and called with
 ordinary call syntax. Signature mismatches are errors, and calling `nil` traps at runtime.
 
 Foreign declarations use `extern fn local_name "link_symbol"(parameters) Result` and have no
@@ -116,7 +117,10 @@ apply only to struct literals: storage zeroed any other way, such as by
 `mem.push`, holds zeros. Design structs so that zero is a useful value.
 
 Implicit numeric conversion is allowed only when destination represents every source-type
-value exactly. Constants adapt when their specific value fits. Integers use checked
+value exactly. Constants adapt when their specific value fits, and a literal that does not fit
+its context is a compile error, checked again for each type a generic function is called with.
+An integer literal in a float context is that float when it is exact (up to 2^24 for `f32`,
+2^53 for `f64`), so `x * 2` works for any numeric `T`. Integers use checked
 arithmetic in debug and release. Floats use IEEE-754. Expression evaluation is left-to-right.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
 Explicit primitive locals without initializers start at zero. Inferred locals require an
@@ -215,6 +219,18 @@ pointers or native-width integers. It has no pointee,
 ownership, lifetime, arithmetic, indexing, or dereference operation.
 
 ## Control flow and cleanup
+
+Each statement starts on its own line; two statements on one line are a syntax error. A block
+with a single statement may stay on one line, as in `if done { return }`. `case` arms are not
+separated by commas; each arm's body is a block:
+
+```dyn
+case kind {
+  0 => { return "none" }
+  1 => { return "one" }
+  _ => { return "many" }
+}
+```
 
 Every `case` is exhaustive or contains `_`; integer interval analysis may prove exhaustive
 coverage. Patterns use literals/constants only. Arm order is irrelevant; duplicates,

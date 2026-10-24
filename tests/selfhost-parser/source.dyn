@@ -374,8 +374,8 @@ fn src_case(p: *Parser) u32 {
       flags = FlagWildcard
     }
     chain(p, &first, &last, mark(p, add_node(p, SrcCaseArm, begin, src_end(p, arm_last, begin), arm_first), flags))
-    if !take(p, ",") {
-      break
+    if token_is(p, ",") {
+      fail(p, p.token.start, "case arms are not separated by commas")
     }
   }
   end := p.token.end
@@ -563,10 +563,21 @@ fn src_block(p: *Parser) u32 {
   expect(p, "{")
   for !token_is(p, "}") && !p.tree.failed && p.token.kind != TokenKind.End {
     chain(p, &first, &last, src_statement(p))
+    if !p.tree.failed && !token_is(p, "}") && p.token.kind != TokenKind.End && !src_line_start(p, p.token.start) {
+      fail(p, p.token.start, "each statement must start on its own line")
+    }
   }
   end := p.token.end
   expect(p, "}")
   return add_node(p, SrcBlock, start, end, first)
+}
+// Whether only spaces and tabs separate offset from the start of its line.
+fn src_line_start(p: *Parser, offset: u32) bool {
+  at := offset
+  for at != 0 && (p.text[at - 1] == ' ' || p.text[at - 1] == '\t') {
+    at -= 1
+  }
+  return at == 0 || p.text[at - 1] == '\n'
 }
 
 fn src_param(p: *Parser, variadic_allowed: bool) u32 {

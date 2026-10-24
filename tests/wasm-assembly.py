@@ -34,7 +34,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-wasm-assembly-') as temporary:
     root = Path(temporary)
     project = root / 'project'; project.mkdir()
     (project / 'main.dyn').write_text(constants['SOURCE'] + '''
-pub fn constant_bits() f64 { value: u64 = 0x7ff8000000000042 return #bitcast(f64, value) }
+pub fn constant_bits() f64 { value: u64 = 0x7ff8000000000042
+return #bitcast(f64, value) }
 pub fn text() []const u8 { return "assembly data" }
 ''')
     empty = root / 'empty'; empty.mkdir()

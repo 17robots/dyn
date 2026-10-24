@@ -39,21 +39,48 @@ struct Descs { pre:u32,text:[]const u8,mid:u32,view:[]u8,post:u32 }
 struct Box { pre:u64,value:any,post:u64 }
 extern fn verifydescs(p:*Descs) u32
 extern fn verifybox(p:*Box) u64
-pub fn arrays(i:usize,x:u32) u32 { a:[8]u32=[] a[i]=x b:=a b[(i+1)%8]=7 return a[i]+b[i]+b[(i+1)%8] }
-pub fn nested(x:u64) u64 { a:=Outer{pre:19,inner:Inner{x:23,y:x},post:29} p:=&a p.inner.y=p.inner.y+1 return a.inner.y+#cast(u64,a.pre+a.inner.x+a.post) }
-pub fn descs(i:usize) u32 { a:[8]u8=[10,11,12,13,14,15,16,17] d:=Descs{pre:101,text:"abcdef",mid:103,view:a[..],post:107} p:=&d p.text="zyxwvu" p.view=a[1..7] return verifydescs(p)+#cast(u32,p.text[i])+#cast(u32,p.view[i])+#cast(u32,#len(p.text)+#len(p.view))+p.pre+p.mid+p.post }
-pub fn substr(i:usize) u32 { s:="abcdef" t:=s[1..5] return #cast(u32,t[i])+#cast(u32,#len(t)) }
-pub fn boxed(x:u64) u64 { a:=Box{pre:71,value:x,post:73} p:=&a check:=verifybox(p) b:=p.value case b { is u64 y=>{ return y+a.pre+a.post+check }, _=>{return 0} } }
+pub fn arrays(i:usize,x:u32) u32 { a:[8]u32=[]
+a[i]=x
+b:=a
+b[(i+1)%8]=7
+return a[i]+b[i]+b[(i+1)%8] }
+pub fn nested(x:u64) u64 { a:=Outer{pre:19,inner:Inner{x:23,y:x},post:29}
+p:=&a
+p.inner.y=p.inner.y+1
+return a.inner.y+#cast(u64,a.pre+a.inner.x+a.post) }
+pub fn descs(i:usize) u32 { a:[8]u8=[10,11,12,13,14,15,16,17]
+d:=Descs{pre:101,text:"abcdef",mid:103,view:a[..],post:107}
+p:=&d
+p.text="zyxwvu"
+p.view=a[1..7]
+return verifydescs(p)+#cast(u32,p.text[i])+#cast(u32,p.view[i])+#cast(u32,#len(p.text)+#len(p.view))+p.pre+p.mid+p.post }
+pub fn substr(i:usize) u32 { s:="abcdef"
+t:=s[1..5]
+return #cast(u32,t[i])+#cast(u32,#len(t)) }
+pub fn boxed(x:u64) u64 { a:=Box{pre:71,value:x,post:73}
+p:=&a
+check:=verifybox(p)
+b:=p.value
+case b { is u64 y=>{ return y+a.pre+a.post+check } _=>{return 0} } }
 pub fn copybytes(dst:*[33]u8,src:*[33]u8) { dst.*=src.* }
 pub fn zerobytes(dst:*[33]u8) { dst.*=[] }
-pub fn zeroforward(dst:*[8]u8) { a:[8]u8=[] dst.*=a }
-pub fn zerochain(dst:*[8]u8) { a:[8]u8=[] b:=a dst.*=b }
-pub fn zerocopy(dst:*[0]u8,src:*[0]u8) { dst.*=src.* dst.*=[] }
+pub fn zeroforward(dst:*[8]u8) { a:[8]u8=[]
+dst.*=a }
+pub fn zerochain(dst:*[8]u8) { a:[8]u8=[]
+b:=a
+dst.*=b }
+pub fn zerocopy(dst:*[0]u8,src:*[0]u8) { dst.*=src.*
+dst.*=[] }
 pub fn readptr(p:*u64) u64 { return p.* }
-pub fn indexfail(i:usize) u8 { a:[3]u8=[1,2,3] return a[i] }
-pub fn slicefail(a:usize,b:usize) usize { x:="abcdef" return #len(x[a..b]) }
+pub fn indexfail(i:usize) u8 { a:[3]u8=[1,2,3]
+return a[i] }
+pub fn slicefail(a:usize,b:usize) usize { x:="abcdef"
+return #len(x[a..b]) }
 extern fn oracle() i32
-fn main() { n:=oracle() if n!=0 { _=io.println(io.stdout(),"BAD {}",n) #panic("oracle") } _=io.write_all(io.stdout(),"LOCALS OK\n") }
+fn main() { n:=oracle()
+if n!=0 { _=io.println(io.stdout(),"BAD {}",n)
+#panic("oracle") }
+_=io.write_all(io.stdout(),"LOCALS OK\n") }
 '''
 
 C_SOURCE = r'''
@@ -111,9 +138,12 @@ GUARDS = [
     ('orderedslice', 'sliceorder(7,2)', 'sliceorder', 'slice.order.ok', 'MARK 7\nMARK 2\n'),
 ]
 ORDERED = r'''
-pub fn mark(x:usize) usize { _=io.println(io.stdout(),"MARK {}",x) return x }
-pub fn ordered(i:usize) u8 { a:[3]u8=[1,2,3] return a[mark(i)] }
-pub fn sliceorder(a:usize,b:usize) usize { x:="abcdef" return #len(x[mark(a)..mark(b)]) }
+pub fn mark(x:usize) usize { _=io.println(io.stdout(),"MARK {}",x)
+return x }
+pub fn ordered(i:usize) u8 { a:[3]u8=[1,2,3]
+return a[mark(i)] }
+pub fn sliceorder(a:usize,b:usize) usize { x:="abcdef"
+return #len(x[mark(a)..mark(b)]) }
 '''
 
 
@@ -220,7 +250,8 @@ def main():
             soft = soft.replace('extern fn verifydescs(p:*Descs) u32', 'fn verifydescs(p:*Descs) u32 { return 0 }')
             soft = soft.replace('extern fn verifybox(p:*Box) u64', 'fn verifybox(p:*Box) u64 { return 0 }')
             soft += r'''
-fn main() { if arrays(3,100)!=207 || descs(2)!=456 || boxed(123)!=267 { #panic("soft") } _=io.write_all(io.stdout(),"SOFT OK\n") }
+fn main() { if arrays(3,100)!=207 || descs(2)!=456 || boxed(123)!=267 { #panic("soft") }
+_=io.write_all(io.stdout(),"SOFT OK\n") }
 '''
             for mode in ('ssa', 'tree'):
                 execute('soft', soft, mode, (0, b'SOFT OK\n', b''),

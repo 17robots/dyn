@@ -54,30 +54,51 @@ pub fn split(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,g:u32,x:u64,y:u32,z:u64) u64 {
   return #wrap(#cast(u64,a)+#cast(u64,b)+#cast(u64,c)+#cast(u64,d)+#cast(u64,e)+#cast(u64,f)+#cast(u64,g)+x+#cast(u64,y)+z)
 }
 pub fn cycle(x:u64,y:u64,n:u32) u64 {
-  a:=x b:=y i:u32=0
-  for i<n { t:=a a=b b=t i=#wrap(i+1) }
+  a:=x
+  b:=y
+  i:u32=0
+  for i<n { t:=a
+  a=b
+  b=t
+  i=#wrap(i+1) }
   return a
 }
 pub fn cycle3(x:u64,y:u64,z:u64,n:u32) u64 {
-  a:=x b:=y c:=z i:u32=0
-  for i<n { t:=a a=b b=c c=t i=#wrap(i+1) }
+  a:=x
+  b:=y
+  c:=z
+  i:u32=0
+  for i<n { t:=a
+  a=b
+  b=c
+  c=t
+  i=#wrap(i+1) }
   return a
 }
-pub fn branch(x:i64,y:i64) i64 { if x>y { return x } return y }
+pub fn branch(x:i64,y:i64) i64 { if x>y { return x }
+return y }
 pub fn memory(a:i8,b:u16,c:i32,d:u64) u64 {
-  g8=a g16=b g32=c g64=d
+  g8=a
+  g16=b
+  g32=c
+  g64=d
   return #wrap(#bitcast(u64,#cast(i64,g8))+#cast(u64,g16)+#bitcast(u64,#cast(i64,g32))+g64)
 }
 pub fn readmem() u64 { return #wrap(#bitcast(u64,#cast(i64,g8))+#cast(u64,g16)+#bitcast(u64,#cast(i64,g32))+g64) }
-pub fn literal_negative(x:u64) u64 { if x==0 { #panic("fallback literal remains interned") } return x }
+pub fn literal_negative(x:u64) u64 { if x==0 { #panic("fallback literal remains interned") }
+return x }
 pub fn checked(x:u64,y:u64) u64 { return x+y }
 pub fn division(x:u64) u64 { return x/3 }
 pub fn floating(x:f64) f64 { return x*2.0 }
 pub fn called(x:u64) u64 { return add(x,1) }
 extern fn oracle() i32
-fn main() { if oracle()!=0 { #panic("oracle failed") } _=io.write_all(io.stdout(),"SSA32 PASS\n") }
+fn main() { if oracle()!=0 { #panic("oracle failed") }
+_=io.write_all(io.stdout(),"SSA32 PASS\n") }
 
-pub fn frame(x:u64) u64 { y:=x p:=&y p.*=#wrap(p.*+1) return y }
+pub fn frame(x:u64) u64 { y:=x
+p:=&y
+p.*=#wrap(p.*+1)
+return y }
 pub fn shiftvar(x:u64,n:u64) u64 { return #wrap(x << (n & 63)) }
 pub fn shruvar(x:u64,n:u64) u64 { return x >> (n & 63) }
 pub fn shrsvar(x:i64,n:u64) i64 { return x >> (n & 63) }
@@ -86,9 +107,10 @@ pub fn indirect_read(p:*u64) u64 { return p.* }
 struct Pair { a:u64,b:u64 }
 pub fn aggregate_negative(x:Pair) Pair { return x }
 pub fn descriptor_negative(x:[]u8) usize { return #len(x) }
-pub fn array_negative() u8 { a:[8]u8=[] return a[0] }
+pub fn array_negative() u8 { a:[8]u8=[]
+return a[0] }
 pub fn switch_negative(x:i64) i64 {
- case x { 0=>{return 10},1=>{return 11},2=>{return 12},3=>{return 13},4=>{return 14},5=>{return 15},_=>{return 99} }
+ case x { 0=>{return 10}1=>{return 11}2=>{return 12}3=>{return 13}4=>{return 14}5=>{return 15}_=>{return 99} }
 }
 '''
 

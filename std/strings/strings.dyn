@@ -524,20 +524,20 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
       ok := signed_into(text, base, -128, 127, &wide)
       p.* = #cast(i8, wide)
       return ok
-    },
+    }
     is *i16 p => {
       ok := signed_into(text, base, -32768, 32767, &wide)
       p.* = #cast(i16, wide)
       return ok
-    },
+    }
     is *i32 p => {
       ok := signed_into(text, base, -2147483648, 2147483647, &wide)
       p.* = #cast(i32, wide)
       return ok
-    },
+    }
     is *i64 p => {
       return parse_i64_into(text, base, p)
-    },
+    }
     is *isize p => {
       ok := parse_i64_into(text, base, &wide)
       if !ok || wide < #cast(i64, isize_minimum()) || wide > #cast(i64, isize_maximum()) {
@@ -545,33 +545,33 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
       }
       p.* = #cast(isize, wide)
       return true
-    },
+    }
     is *u8 p => {
       ok := unsigned_into(text, base, 255, &natural)
       p.* = #cast(u8, natural)
       return ok
-    },
+    }
     is *u16 p => {
       ok := unsigned_into(text, base, 65535, &natural)
       p.* = #cast(u16, natural)
       return ok
-    },
+    }
     is *u32 p => {
       ok := unsigned_into(text, base, 4294967295, &natural)
       p.* = #cast(u32, natural)
       return ok
-    },
+    }
     is *u64 p => {
       return unsigned_into(text, base, 18446744073709551615, p)
-    },
+    }
     is *usize p => {
       ok := unsigned_into(text, base, #cast(u64, usize_maximum()), &natural)
       p.* = #cast(usize, natural)
       return ok
-    },
+    }
     is *f64 p => {
       return base == 10 && parse_f64_into(text, p)
-    },
+    }
     is *f32 p => {
       value: f64
       if base != 10 || !parse_f64_into(text, &value) {
@@ -579,17 +579,17 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
       }
       p.* = #cast(f32, value)
       return true
-    },
+    }
     is *bool p => {
       if equal(text, "true") {
         p.* = true
         return true
       }
       return equal(text, "false")
-    },
+    }
     _ => {
       #panic("strings.parse: unsupported type")
-    },
+    }
   }
 }
 
@@ -761,7 +761,7 @@ fn count_write(data: rawptr, source: []const u8) io.Result {
 // Panics on a bad template or argument count.
 pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: []const any) []u8 {
   size: usize = 0
-  counted := io.print_arguments(io.Writer{ data: &size, write: &count_write }, template, arguments)
+  counted := io.print_arguments(io.Writer{ data: &size, write: count_write }, template, arguments)
   if counted.status == io.Status.Error {
     #panic("format template does not match its arguments")
   }

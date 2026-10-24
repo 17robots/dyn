@@ -184,11 +184,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-tls-results-') as temporary:
   if mode == 3 { detail = ErrorKind.Verification }
   if mode == 4 { detail = ErrorKind.Provider }
   return Result{error: detail, provider_code: 18446744073709551615, provider_status: -7}''')
-    provider = replace_body(provider, 'read', '  _ = destination return handshake(connection)')
-    provider = replace_body(provider, 'write', '  _ = source return handshake(connection)')
-    provider = replace_body(provider, 'set_alpn_result', '  _ = connection _ = protocols return Result{ok: true}')
-    provider = replace_body(provider, 'shutdown_result', '  _ = connection return Result{error: ErrorKind.WantRead, provider_status: 0}')
-    provider = replace_body(provider, 'subject_text_owned', '  _ = certificate return SubjectTextResult{provider_code: 18446744073709551615}')
+    provider = replace_body(provider, 'read', '  _ = destination\nreturn handshake(connection)')
+    provider = replace_body(provider, 'write', '  _ = source\nreturn handshake(connection)')
+    provider = replace_body(provider, 'set_alpn_result', '  _ = connection\n_ = protocols\nreturn Result{ok: true}')
+    provider = replace_body(provider, 'shutdown_result', '  _ = connection\nreturn Result{error: ErrorKind.WantRead, provider_status: 0}')
+    provider = replace_body(provider, 'subject_text_owned', '  _ = certificate\nreturn SubjectTextResult{provider_code: 18446744073709551615}')
     (mock / 'stub').mkdir()
     (mock / 'stub/stub.dyn').write_text(provider)
     for sibling in (ROOT / 'vendor/openssl/tls').glob('*.dyn'):

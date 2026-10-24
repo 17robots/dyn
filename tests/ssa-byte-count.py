@@ -37,14 +37,16 @@ pub fn count_usize(source:[]const u8, initial:usize) usize {
 }
 pub fn count_union(source:[]const u8, initial:u64) u64 {
  count:=initial
- for i in 0..#len(source) { b:=source[i] if b==34 || b==92 || b<32 { count+=1 } }
+ for i in 0..#len(source) { b:=source[i]
+ if b==34 || b==92 || b<32 { count+=1 } }
  return count
 }
 pub fn count_rounds(p:*const u8,n:usize,rounds:usize) u64 {
  source:=p[..n]
  count:u64=0
  for round in 0..rounds {
-  for i in 0..n { b:=source[i] if b=='"' || b=='\\' || b<32 { count+=1 } }
+  for i in 0..n { b:=source[i]
+  if b=='"' || b=='\\' || b<32 { count+=1 } }
  }
  return count
 }
@@ -86,7 +88,8 @@ INVERSE_PREDICATES = {
 for name, (predicate, _) in INVERSE_PREDICATES.items():
     FUNCTIONS += f'''pub fn {name}(source:[]const u8,initial:u64) u64 {{
  count:=initial
- for i in 0..#len(source) {{ b:=source[i] if {predicate} {{ count+=1 }} }}
+ for i in 0..#len(source) {{ b:=source[i]
+ if {predicate} {{ count+=1 }} }}
  return count
 }}
 '''

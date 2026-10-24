@@ -8,22 +8,28 @@ import tempfile
 DYN = str(Path(os.environ.get('DYN', './build/dyn-release')).resolve())
 cases = {
     'bounds': '''use "std/io"
-fn checked(index: usize) u8 { values: [1]u8 = [7] return values[index] }
-fn main() { defer { _ = io.println(io.stdout(), "cleanup") } _ = checked(2) }''',
+fn checked(index: usize) u8 { values: [1]u8 = [7]
+return values[index] }
+fn main() { defer { _ = io.println(io.stdout(), "cleanup") }
+_ = checked(2) }''',
     'direct': 'fn main() { #panic("owned panic message") }',
-    'local': '''use "std/io"\nuse "std/mem"
+    'local': '''use "std/io"
+use "std/mem"
 fn main() {
   owned := mem.arena_create(64)
-  defer { mem.arena_release(&owned) _ = io.println(io.stdout(), "cleanup") }
+  defer { mem.arena_release(&owned)
+  _ = io.println(io.stdout(), "cleanup") }
   text := mem.arena_push(&owned, 32, 1)[..32]
   _ = mem.copy(text, "owned panic message")
   #panic(text[..19])
 }''',
-    'caller': '''use "std/io"\nuse "std/mem"
+    'caller': '''use "std/io"
+use "std/mem"
 fn fail(text: []const u8) { #panic(text) }
 fn main() {
   owned := mem.arena_create(64)
-  defer { mem.arena_release(&owned) _ = io.println(io.stdout(), "cleanup") }
+  defer { mem.arena_release(&owned)
+  _ = io.println(io.stdout(), "cleanup") }
   text := mem.arena_push(&owned, 32, 1)[..32]
   _ = mem.copy(text, "owned panic message")
   fail(text[..19])
@@ -39,13 +45,15 @@ fn cleanup() {
 cases['bounded'] = '''use "std/io"
 fn main() {
   text: [6000]u8 = []
-  index: usize = 0 for index < 6000 { text[index] = 120 index += 1 }
+  index: usize = 0
+  for index < 6000 { text[index] = 120
+  index += 1 }
   defer { _ = io.println(io.stdout(), "cleanup") }
   #panic(text[..])
 }
 '''
 cases['unicode-bound'] = ('use "std/io"\nfn main() { '
-    'defer { _ = io.println(io.stdout(), "cleanup") } #panic("' +
+    'defer { _ = io.println(io.stdout(), "cleanup") }\n#panic("' +
     'x' + '🙂' * 1100 + '") }\n')
 with tempfile.TemporaryDirectory(prefix='dyn-panic-lifetime-') as temporary:
     root = Path(temporary)

@@ -796,76 +796,76 @@ fn read_into(value: *const Value, target: any) {
       if value.kind == KindString {
         p.* = value.text
       }
-    },
+    }
     is *bool p => {
       p.* = value.kind == KindBool && value.boolean
-    },
+    }
     is **const Value p => {
       p.* = value
-    },
+    }
     is *f64 p => {
       if value.kind == KindNumber {
         p.* = text.parse(f64, value.text)
       }
-    },
+    }
     is *f32 p => {
       if value.kind == KindNumber {
         p.* = text.parse(f32, value.text)
       }
-    },
+    }
     is *i64 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i64, value.text)
       }
-    },
+    }
     is *i32 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i32, value.text)
       }
-    },
+    }
     is *i16 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i16, value.text)
       }
-    },
+    }
     is *i8 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i8, value.text)
       }
-    },
+    }
     is *isize p => {
       if value.kind == KindNumber {
         p.* = text.parse(isize, value.text)
       }
-    },
+    }
     is *u64 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u64, value.text)
       }
-    },
+    }
     is *u32 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u32, value.text)
       }
-    },
+    }
     is *u16 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u16, value.text)
       }
-    },
+    }
     is *u8 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u8, value.text)
       }
-    },
+    }
     is *usize p => {
       if value.kind == KindNumber {
         p.* = text.parse(usize, value.text)
       }
-    },
+    }
     _ => {
       #panic("json.get: unsupported type")
-    },
+    }
   }
 }
 

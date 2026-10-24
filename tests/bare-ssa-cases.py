@@ -38,15 +38,25 @@ soft = module('bare-ssa-soft')
 SOURCE = r'''
 use "std/io"
 enum Key { A,B,C,D,E }
-pub fn dense(x:i64) i64 { case x { -2=>{return 12},-1=>{return 13},0,1=>{return 21},2=>{return 22},3=>{return 23},_=>{return 99} } }
-pub fn sparse(x:i64) i64 { case x { -9000000000..-8999999997=>{return 10},4294967297=>{return 20},9000000000=>{return 30},_=>{return 40} } }
-pub fn high(x:u64) u64 { case x { 18446744073709551612=>{return 12},18446744073709551613,18446744073709551614=>{return 13},18446744073709551615=>{return 15},_=>{return 99} } }
-pub fn first(x:i64) i64 { case x { 0..2=>{return 10},2,3,4,5=>{return 20},_=>{return 30} } }
-pub fn exhaustive(x:Key) i64 { case x { Key.A=>{return 11},Key.B,Key.C=>{return 22},Key.D=>{return 33},Key.E=>{return 44} } }
-pub fn enumwild(x:Key) i64 { case x { Key.A=>{return 11},_=>{return 55} } }
-pub fn cycle(x:i64,n:u32) i64 { a:i64=3 b:i64=7 c:i64=11 i:u32=0 for i<n { case x { 0,1=>{t:=a a=b b=c c=t},2=>{a=17},_=>{b=19} } i=#wrap(i+1) } return a*100+b*10+c }
-pub fn terminal(x:i64) i64 { case x { 1=>{return 71},9=>{return 79},_=>{return 99} } }
-pub fn protected(x:Key) i64 { defer { _=io.write_all(io.stdout(),"CLEAN\n") } case x { Key.A=>{return 11},Key.B=>{return 22},Key.C=>{return 22},Key.D=>{return 33},Key.E=>{return 44} } }
+pub fn dense(x:i64) i64 { case x { -2=>{return 12}-1=>{return 13}0,1=>{return 21}2=>{return 22}3=>{return 23}_=>{return 99} } }
+pub fn sparse(x:i64) i64 { case x { -9000000000..-8999999997=>{return 10}4294967297=>{return 20}9000000000=>{return 30}_=>{return 40} } }
+pub fn high(x:u64) u64 { case x { 18446744073709551612=>{return 12}18446744073709551613,18446744073709551614=>{return 13}18446744073709551615=>{return 15}_=>{return 99} } }
+pub fn first(x:i64) i64 { case x { 0..2=>{return 10}2,3,4,5=>{return 20}_=>{return 30} } }
+pub fn exhaustive(x:Key) i64 { case x { Key.A=>{return 11}Key.B,Key.C=>{return 22}Key.D=>{return 33}Key.E=>{return 44} } }
+pub fn enumwild(x:Key) i64 { case x { Key.A=>{return 11}_=>{return 55} } }
+pub fn cycle(x:i64,n:u32) i64 { a:i64=3
+b:i64=7
+c:i64=11
+i:u32=0
+for i<n { case x { 0,1=>{t:=a
+a=b
+b=c
+c=t}2=>{a=17}_=>{b=19} }
+i=#wrap(i+1) }
+return a*100+b*10+c }
+pub fn terminal(x:i64) i64 { case x { 1=>{return 71}9=>{return 79}_=>{return 99} } }
+pub fn protected(x:Key) i64 { defer { _=io.write_all(io.stdout(),"CLEAN\n") }
+case x { Key.A=>{return 11}Key.B=>{return 22}Key.C=>{return 22}Key.D=>{return 33}Key.E=>{return 44} } }
 extern fn oracle() u32
 extern fn badtag() Key
 extern fn cpacr() u32
@@ -168,9 +178,9 @@ def frontend_negatives(work, target):
     project = work/'frontend'
     project.mkdir()
     for name, source, diagnostic in [
-        ('overlap', 'case x { 0..3=>{return 10},2,3=>{return 20},_=>{return 30} }',
+        ('overlap', 'case x { 0..3=>{return 10} 2,3=>{return 20} _=>{return 30} }',
          'duplicate or overlapping case pattern'),
-        ('nonexhaustive', 'case x { 1=>{return 71},9=>{return 79} }',
+        ('nonexhaustive', 'case x { 1=>{return 71} 9=>{return 79} }',
          'case is not exhaustive'),
     ]:
         (project/'main.dyn').write_text('pub fn rejected(x:i64) i64 { '+source+' }\nfn main() {}\n')
@@ -193,7 +203,7 @@ def guests(work, compiler, target, flags, board, qemu, adapter, audit):
     if target.startswith('thumb'):
         b.arm_addends(obj)
     fixtures = [
-        ('success', r'n:=oracle() if n!=0 { _=io.println(io.stdout(),"BAD {}",n) #panic("oracle") } _=io.write_all(io.stdout(),"CASES OK\n")', (0, b'CASES OK\n', b'')),
+        ('success', 'n:=oracle()\nif n!=0 { _=io.println(io.stdout(),"BAD {}",n)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"CASES OK\\n")', (0, b'CASES OK\n', b'')),
         ('invalid', '_=exhaustive(badtag())', (101, b'runtime check failed (enum.tag.ok) in exhaustive\n', b'')),
         ('protected', '_=protected(badtag())', (101, b'CLEAN\nruntime check failed (enum.tag.ok) in protected\n', b'')),
     ]
@@ -202,8 +212,8 @@ def guests(work, compiler, target, flags, board, qemu, adapter, audit):
     for fixture, body, expected in fixtures:
         project = work/fixture
         project.mkdir()
-        check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU") } ' if audit and target.startswith('thumb') else ''
-        (project/'main.dyn').write_text(SOURCE+'fn main() { '+check+body+' '+check+'}\n')
+        check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU") }\n' if audit and target.startswith('thumb') else ''
+        (project/'main.dyn').write_text(SOURCE+'fn main() {\n'+check+body+'\n'+check+'}\n')
         for mode in ('ssa', 'tree'):
             image = work/f'{fixture}-{mode}.elf'
             result = subprocess.run([compiler, 'build', str(project), '--release', '--target', target,

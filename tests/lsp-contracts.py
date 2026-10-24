@@ -320,7 +320,7 @@ class Contracts(unittest.TestCase):
     def test_completion_nested_fields_in_incomplete_statements(self):
         definitions = 'struct Inner { value: i32 }\nstruct Outer { inner: Inner }\n' + 'fn make() Inner { return Inner{ value: 1 } }\n'
         for body in ['fn main() {\n if make().|\n}',
-                     'fn main() { item := Outer{ inner: Inner{ value: 1 } } item.inner.| }',
+                     'fn main() { item := Outer{ inner: Inner{ value: 1 } }\nitem.inner.| }',
                      'fn main() {\n item := Outer{ inner: Inner{ value: 1 } }\n if item.inner.|\n}',
                      'fn main() {\n item := Outer{ inner: Inner{ value: 1 } }\n for item.inner.|\n}']:
             with self.subTest(body=body):
@@ -399,7 +399,7 @@ class Contracts(unittest.TestCase):
                 with self.subTest(alias=alias, declaration=declaration):
                     qualifier = 'h' if alias else 'helper'
                     text = ('use "./helper"' + alias + '\n' + declaration + '\n'
-                            'fn main() { _ = value _ = ' + qualifier + '.answer() }\n')
+                            'fn main() { _ = value\n_ = ' + qualifier + '.answer() }\n')
                     path = self.file('main.dyn', text)
                     responses, stderr = run_lsp([opened(path, text)])
                     self.assertEqual(stderr, '')
@@ -409,7 +409,7 @@ class Contracts(unittest.TestCase):
         text = ('fn unused(value: i32) {}\n'
                 'fn used(value: i32) { _ = value }\n'
                 'struct Item { lonely: i32 }\n'
-                'fn main() { lonely := 1 item := Item{ lonely: 2 } _ = item.lonely used(3) }\n')
+                'fn main() { lonely := 1\nitem := Item{ lonely: 2 }\n_ = item.lonely\nused(3) }\n')
         path = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(path, text)])
         self.assertEqual(stderr, '')
@@ -419,7 +419,7 @@ class Contracts(unittest.TestCase):
         self.assertFalse(any(d.get('code') == 'unused-parameter' and d['range']['start']['line'] == 1 for d in warnings), warnings)
 
     def test_default_utf16_positions_and_edits(self):
-        text = 'fn main() { _ = "😀" missing() }\n'
+        text = 'fn main() { /* 😀 */ missing() }\n'
         path = self.file('main.dyn', text)
         start = len(text[:text.index('missing')].encode('utf-16-le')) // 2
         responses, stderr = run_lsp([opened(path, text), request('textDocument/didChange', {
@@ -435,7 +435,7 @@ class Contracts(unittest.TestCase):
         self.assertEqual(capabilities['positionEncoding'], 'utf-16')
 
     def test_utf8_negotiation_and_string_request_id(self):
-        text = 'fn main() { _ = "😀" missing() }\n'
+        text = 'fn main() { /* 😀 */ missing() }\n'
         path = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(path, text), request('unknown/method', {}, 'request-42')],
             {'capabilities': {'general': {'positionEncodings': ['utf-8', 'utf-16']}}})
@@ -476,7 +476,7 @@ class Contracts(unittest.TestCase):
 
     def test_rename_uses_each_documents_utf16_columns(self):
         declaration = self.file('helper.dyn', 'fn target() {}\n')
-        text = 'fn main() { _ = "😀" target() }\n'
+        text = 'fn main() { /* 😀 */ target() }\n'
         main = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(declaration, declaration.read_text()), opened(main, text),
             request('textDocument/rename', {'textDocument': {'uri': declaration.as_uri()},
@@ -492,7 +492,7 @@ class Contracts(unittest.TestCase):
         self.assertTrue(any(r.get('id') == -42 and r.get('error', {}).get('code') == -32601 for r in responses))
 
     def test_semantic_tokens_use_utf16_after_non_bmp_text(self):
-        text = 'fn main() { _ = "😀" const Thing: i32 = 42 _ = Thing }\n'
+        text = 'fn main() { /* 😀 */ _ = Thing + Thing }\nconst Thing: i32 = 42\n'
         path = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(path, text), request('textDocument/semanticTokens/full', {'textDocument': {'uri': path.as_uri()}}, 42)])
         self.assertEqual(stderr, '')
@@ -505,11 +505,12 @@ class Contracts(unittest.TestCase):
             column = offset if delta else column + offset
             if row == 0 and length == 5 and modifiers & 1:
                 found.append(column)
-        expected = [len(text[:offset].encode('utf-16-le')) // 2 for offset in (text.index('Thing'), text.rindex('Thing'))]
+        line = text.splitlines()[0]
+        expected = [len(line[:offset].encode('utf-16-le')) // 2 for offset in (line.index('Thing'), line.rindex('Thing'))]
         self.assertEqual(found, expected)
 
     def test_highlights_follow_local_bindings(self):
-        text = 'fn first(value: i32) { _ = value }\nfn second(value: i32) { _ = value }\nfn main() { first(1) second(2) }\n'
+        text = 'fn first(value: i32) { _ = value }\nfn second(value: i32) { _ = value }\nfn main() { first(1)\nsecond(2) }\n'
         path = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(path, text), request('textDocument/documentHighlight', {
             'textDocument': {'uri': path.as_uri()}, 'position': {'line': 0, 'character': 10}}, 42)])
@@ -537,7 +538,7 @@ class Contracts(unittest.TestCase):
 
     def test_imported_type_definition_has_original_range(self):
         helper = self.file('helper/helper.dyn', 'pub struct Item { value: i32 }\n')
-        text = 'use "./helper" h\nfn main() { item := h.Item{ value: 42 } _ = item }\n'
+        text = 'use "./helper" h\nfn main() { item := h.Item{ value: 42 }\n_ = item }\n'
         main = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(main, text), request('textDocument/typeDefinition', {
             'textDocument': {'uri': main.as_uri()}, 'position': {'line': 1, 'character': text.splitlines()[1].rindex('item')}}, 42)])
@@ -547,7 +548,7 @@ class Contracts(unittest.TestCase):
         self.assertEqual(result['range']['end']['character'] - result['range']['start']['character'], 4)
 
     def test_folding_columns_use_utf16(self):
-        text = 'fn main() { _ = "😀" if true {\n _ = 1\n}\n}\n'
+        text = 'fn main() { /* 😀 */ if true {\n _ = 1\n}\n}\n'
         path = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(path, text), request('textDocument/foldingRange', {'textDocument': {'uri': path.as_uri()}}, 42)])
         self.assertEqual(stderr, '')
@@ -573,7 +574,7 @@ class Contracts(unittest.TestCase):
         self.assertFalse(any(d.get('severity') == 1 for d in diagnostics(responses, path)), diagnostics(responses, path))
 
     def test_local_name_does_not_count_as_import_use(self):
-        text = 'use "std/io"\nfn main() { io := 42 _ = io }\n'
+        text = 'use "std/io"\nfn main() { io := 42\n_ = io }\n'
         path = self.file('main.dyn', text)
         responses, stderr = run_lsp([opened(path, text)])
         self.assertEqual(stderr, '')
@@ -629,8 +630,8 @@ class Contracts(unittest.TestCase):
         self.assertIsNone(next(r['result'] for r in responses if r.get('id') == 2))
 
     def test_hover_isolated_from_other_projects(self):
-        first = 'struct Item { first: i32 }\nfn main() { item := Item{} _ = item }\n'
-        second = 'struct Item { second: bool }\nfn main() { item := Item{} _ = item }\n'
+        first = 'struct Item { first: i32 }\nfn main() { item := Item{}\n_ = item }\n'
+        second = 'struct Item { second: bool }\nfn main() { item := Item{}\n_ = item }\n'
         one = self.file('one/main.dyn', first)
         two = self.file('two/main.dyn', second)
         responses, stderr = run_lsp([opened(one, first), opened(two, second), request('textDocument/hover', {
@@ -794,7 +795,7 @@ class Contracts(unittest.TestCase):
         import re
         library = self.file('library/module.dyn', 'pub fn answer() i32 { return 41 }\n')
         self.file('other/module.dyn', 'pub fn zero() i32 { return 0 }\n')
-        text = 'use "./library" lib\nuse "./other" o\nfn main() { _ = lib.answer() _ = o.zero() }\n'
+        text = 'use "./library" lib\nuse "./other" o\nfn main() { _ = lib.answer()\n_ = o.zero() }\n'
         path = self.file('main.dyn', text)
         def change(value, version):
             return request('textDocument/didChange', {'textDocument': {'uri': library.as_uri(), 'version': version},

@@ -107,7 +107,7 @@ pub fn start_context(arena: *mem.Arena, workers: []Worker, listener: *http.Liste
     workers[i] = Worker{ listener: listener, handler: handler, context: context,
       storage: receive_storage[i * worker_storage_size..(i + 1) * worker_storage_size] }
     spawned := threading.spawn(arena, stacks[i * stack_size..(i + 1) * stack_size],
-      &worker_main, &workers[i])
+      worker_main, &workers[i])
     if !spawned.ok {
       stop(workers[..i])
       _ = join(workers[..i])

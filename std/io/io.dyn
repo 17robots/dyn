@@ -102,52 +102,52 @@ fn print_value(writer: Writer, value: any) Result {
   case value {
     is f32 item => {
       return write_all(writer, format.f64_decimal(&scratch, #cast(f64, item), 6))
-    },
+    }
     is f64 item => {
       return write_all(writer, format.f64_decimal(&scratch, item, 6))
-    },
+    }
     is bool item => {
       if item {
         return write_all(writer, "true")
       }
       return write_all(writer, "false")
-    },
+    }
     is i8 item => {
       return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
-    },
+    }
     is i16 item => {
       return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
-    },
+    }
     is i32 item => {
       return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
-    },
+    }
     is i64 item => {
       return write_all(writer, format.i64_decimal(&scratch, item))
-    },
+    }
     is isize item => {
       return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
-    },
+    }
     is u8 item => {
       return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
-    },
+    }
     is u16 item => {
       return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
-    },
+    }
     is u32 item => {
       return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
-    },
+    }
     is u64 item => {
       return write_all(writer, format.u64_decimal(&scratch, item))
-    },
+    }
     is usize item => {
       return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
-    },
+    }
     is []u8 item => {
       return write_all(writer, item)
-    },
+    }
     is []const u8 item => {
       return write_all(writer, item)
-    },
+    }
     _ => {
       return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
     }
@@ -338,7 +338,7 @@ fn cursor_read(data: rawptr, destination: []u8) Result {
 }
 
 pub fn cursor_reader(state: *Cursor) Reader {
-  return Reader{ data: state, read: &cursor_read }
+  return Reader{ data: state, read: cursor_read }
 }
 
 pub struct BufferWriter {
@@ -379,5 +379,5 @@ fn buffer_write(data: rawptr, source: []const u8) Result {
 }
 
 pub fn buffer_writer_adapter(state: *BufferWriter) Writer {
-  return Writer{ data: state, write: &buffer_write }
+  return Writer{ data: state, write: buffer_write }
 }

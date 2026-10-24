@@ -1,7 +1,8 @@
 use "std/process" process
 use "std/mem" mem
 fn main() {
-  arena: mem.Arena child_mode := process.environment(&arena, "DYN_PROCESS_CHILD")
+  arena: mem.Arena
+  child_mode := process.environment(&arena, "DYN_PROCESS_CHILD")
   if !child_mode.ok { #panic("environment") }
   if child_mode.found {
     if #len(child_mode.value) != 3 || child_mode.value[0] != 'y' { #panic("child environment") }
@@ -11,8 +12,10 @@ fn main() {
   defer mem.arena_release(&allocation)
   argv: [4][]const u8 = [executable(),"argument with spaces","quote\"and\\slashes\\",""]
   environment: [1][]const u8 = ["DYN_PROCESS_CHILD=yes"]
-  options := process.Options{} options.environment = environment[..]
-  output: [8]u8 = [] errors: [8]u8 = []
+  options := process.Options{}
+  options.environment = environment[..]
+  output: [8]u8 = []
+  errors: [8]u8 = []
   result := process.capture(&allocation,executable(),argv[..],options,process.CaptureOptions{timeout_milliseconds: 5000})
   if !result.ok || result.exit.code != 0 || #len(result.output) != 0 || #len(result.errors) != 0 { #panic("native process capture") }
   missing := process.spawn(&allocation,"no-such-dyn-process-executable",argv[..],options)

@@ -17,7 +17,7 @@ CASES = {
     'unterminated-string': ('fn main() {\n  x := "abc\n}\n', '2:8: error: unterminated literal [range 2:8-2:9]'),
     'stray-character': ('fn main() {\n  x := 1;\n}\n', '2:9: error: unexpected character \';\' [range 2:9-2:10]'),
     'invisible-character': ('fn main() {\n  return \u2028\n}\n', '2:10: error: unexpected character U+2028 [range 2:10-2:13]'),
-    'trailing-expression': ('fn main() {\n  return 1 2\n}\n', '2:12: error: expression is not a statement [range 2:12-2:13]'),
+    'trailing-expression': ('fn main() {\n  return 1\n  2\n}\n', '3:3: error: expression is not a statement [range 3:3-3:4]'),
 }
 
 with tempfile.TemporaryDirectory(prefix='dyn-syntax-diagnostics-') as temporary:

@@ -52,7 +52,8 @@ fn copy(arena: *mem.Arena, source: []const u8) []u8 {
   return destination
 }
 fn main() {
-  storage: [2097152]u8 = [] arena := mem.arena_from_buffer(storage[..])
+  storage: [2097152]u8 = []
+  arena := mem.arena_from_buffer(storage[..])
   // Live argument bytes allocated before capture must survive setup and growth.
   command := copy(&arena, PYTHON)
   script := copy(&arena, SCRIPT)
@@ -106,8 +107,10 @@ fn main() {
         result = subprocess.run([str(program)], capture_output=True, timeout=10)
         assert result.returncode == 0, (mode, result.stdout, result.stderr)
         pidfile = root / ('pid-' + mode)
-        (project / 'main.dyn').write_text('''use "std/process"\nuse "std/mem"
-fn main() { storage: [16384]u8 = [] arena := mem.arena_from_buffer(storage[..])
+        (project / 'main.dyn').write_text('''use "std/process"
+use "std/mem"
+fn main() { storage: [16384]u8 = []
+arena := mem.arena_from_buffer(storage[..])
 argv: [4][]const u8 = [PYTHON, SCRIPT, "exhaust", PID]
 _ = process.capture(&arena, PYTHON, argv[..], process.Options{}, process.CaptureOptions{})
 }'''.replace('PYTHON', json.dumps(sys.executable)).replace('SCRIPT', json.dumps(str(child))).replace('PID', json.dumps(str(pidfile))))

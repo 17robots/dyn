@@ -79,7 +79,7 @@ def generate():
         lo, hi = (-(1<<63), (1<<63)-1) if signed else (0, (1<<64)-1)
         for a,b in [(hi,1),(lo,1),(hi,hi),(0,0),(-1,-1) if signed else (1,1)]:
             lines.append('if true {')
-            lines.append(f'a:=#bitcast({t},opaque({a & ((1<<64)-1)})) b:=#bitcast({t},opaque({b & ((1<<64)-1)}))')
+            lines.append(f'a:=#bitcast({t},opaque({a & ((1<<64)-1)}))\nb:=#bitcast({t},opaque({b & ((1<<64)-1)}))')
             for op, result in [('add',a+b),('sub',a-b),('mul',a*b)]:
                 flag(f'm.{op}_overflows(a,b) == {str(not lo<=result<=hi).lower()}', f'{t} {op} overflow')
                 lines.append(f's_{op}:{t}=m.saturating_{op}(a,b)')

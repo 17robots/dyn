@@ -28,25 +28,27 @@ fn request_check(body: []const u8, expected: []const u8) {
   arena := mem.Arena{}
   feed := Feed{ data: "HTTP/1.1 204 No Content\r\n\r\n", step: 1 }
   oracle := Oracle{ expected: expected }
-  got := http.client_do(&arena, io.Reader{ data: &feed, read: &read_feed }, io.Writer{ data: &oracle, write: &oracle_write }, "POST", "?x", "host", body)
+  got := http.client_do(&arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ data: &oracle, write: oracle_write }, "POST", "?x", "host", body)
   if !got.ok || oracle.at != #len(expected) { #panic("large request") }
   mem.arena_release(&arena)
 }
 fn error_read(raw: rawptr, data: []u8) io.Result {
-  _ = raw _ = data
+  _ = raw
+  _ = data
   return io.Result{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
 fn error_write(raw: rawptr, data: []const u8) io.Result {
-  _ = raw _ = data
+  _ = raw
+  _ = data
   return io.Result{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
 fn io_check(write_failure: bool) {
   arena := mem.Arena{}
   _ = mem.push_bytes_uninit(&arena, 7)
   mark := mem.arena_mark(&arena)
-  writer := io.Writer{ write: &sink }
-  if write_failure { writer.write = &error_write }
-  got := http.client_do(&arena, io.Reader{ read: &error_read }, writer, "GET", "/", "host", "")
+  writer := io.Writer{ write: sink }
+  if write_failure { writer.write = error_write }
+  got := http.client_do(&arena, io.Reader{ read: error_read }, writer, "GET", "/", "host", "")
   if got.ok || got.kind != errors.Kind.PermissionDenied || got.error != 0 || got.detail != http.ErrorKind.Io || #len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(&arena) != mark { #panic("I/O rollback") }
   mem.arena_release(&arena)
 }
@@ -76,7 +78,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
       _ = mem.push_bytes_uninit(&arena, 3)
       mark := mem.arena_mark(&arena)
       _ = capacity
-      got := http.client_do(&arena, io.Reader{ data: #cast(rawptr, &feed), read: &read_feed }, io.Writer{ write: &sink }, method, "/", "host", "")
+      got := http.client_do(&arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
       if got.ok != valid { #panic("response validity") }
       if valid && !bytes.equal(got.body, expected) { #panic("response body") }
       if !valid && got.detail != http.ErrorKind.Invalid { #panic("response error") }
@@ -105,7 +107,7 @@ fn live_alias_check() {
   method := mem.push_bytes_uninit(&arena, 4)
   _ = mem.copy(method, "HEAD")
   feed := Feed{ data: "HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n", step: 1 }
-  result := http.client_do(&arena, io.Reader{ data: &feed, read: &read_feed }, io.Writer{ write: &sink }, method, "/", "host", "")
+  result := http.client_do(&arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
   if !result.ok || #len(result.body) != 0 || !bytes.equal(method, "HEAD") { #panic("live method alias") }
   mem.arena_release(&arena)
 }
@@ -163,10 +165,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-fragments-') as temporary:
         subprocess.run([str(DYN), 'build', str(project), '--quiet', '--no-cache', '--output', str(binary), *mode], env=ENV, check=True, timeout=120)
         subprocess.run([str(binary)], env=ENV, check=True, timeout=30)
 PANICS = [
-    ('decode overlap', 'storage: [256]u8 = [] arena := mem.arena_from_buffer(storage[..]) _ = http.decode_chunked(&arena, storage[80..90])'),
-    ('client late argument overlap', 'storage: [256]u8 = [] arena := mem.arena_from_buffer(storage[..]) _ = http.client_do(&arena, io.Reader{ read: &error_read }, io.Writer{ write: &sink }, "GET", "/", "host", storage[80..90])'),
-    ('decode exhaustion', 'storage: [2]u8 = [] arena := mem.arena_from_buffer(storage[..]) _ = http.decode_chunked(&arena, "3\\r\\nabc\\r\\n0\\r\\n\\r\\n")'),
-    ('client exhaustion', 'storage: [128]u8 = [] arena := mem.arena_from_buffer(storage[..]) feed := Feed{ data: "HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\n\\r\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", step: 1 } _ = http.client_do(&arena, io.Reader{ data: &feed, read: &read_feed }, io.Writer{ write: &sink }, "GET", "/", "host", "")'),
+    ('decode overlap', 'storage: [256]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.decode_chunked(&arena, storage[80..90])'),
+    ('client late argument overlap', 'storage: [256]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.client_do(&arena, io.Reader{ read: error_read }, io.Writer{ write: sink }, "GET", "/", "host", storage[80..90])'),
+    ('decode exhaustion', 'storage: [2]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.decode_chunked(&arena, "3\\r\\nabc\\r\\n0\\r\\n\\r\\n")'),
+    ('client exhaustion', 'storage: [128]u8 = []\narena := mem.arena_from_buffer(storage[..])\nfeed := Feed{ data: "HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\n\\r\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", step: 1 }\n_ = http.client_do(&arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, "GET", "/", "host", "")'),
 ]
 with tempfile.TemporaryDirectory(prefix='dyn-http-arena-panic-') as temporary:
     project = Path(temporary)

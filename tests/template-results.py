@@ -70,7 +70,7 @@ fn main() {
     if mode == 0 { check(bytes.equal(io.buffer_writer_bytes(&buffer), "<b><&>\"'!!")) } else { check(bytes.equal(io.buffer_writer_bytes(&buffer), "<b>&lt;&amp;&gt;&quot;&#39;!!")) }
     for code in [0, -91] {
       sink := Sink{ code: code }
-      failing := io.Writer{ data: &sink, write: &fail }
+      failing := io.Writer{ data: &sink, write: fail }
       if mode == 0 { rendered = text.render(failing, &parsed.value, fields[..]) } else { rendered = html.render(failing, &parsed.value, fields[..]) }
       check(!rendered.ok && rendered.kind == errors.Kind.Capacity && rendered.error == #cast(isize, code) && rendered.detail == text.ErrorKind.Io && rendered.offset == 1 && sink.calls == 1)
       field_only := text.Template{ source: "{{x}}tail" }
@@ -81,7 +81,7 @@ fn main() {
     mem.arena_rewind(&arena, mark)
   }
   seam := text.Template{ source: "{{x}}tail" }
-  unchanged := text.render_with(writer, &seam, fields[..], &custom)
+  unchanged := text.render_with(writer, &seam, fields[..], custom)
   check(!unchanged.ok && unchanged.kind == errors.Kind.Unsupported && unchanged.error == -73 && unchanged.detail == text.ErrorKind.OutOfMemory && unchanged.offset == 97)
   check(text.render(writer, nil, fields[..]).kind == errors.Kind.InvalidInput)
   check(text.render_with(writer, &empty, fields[..], nil).kind == errors.Kind.InvalidInput)

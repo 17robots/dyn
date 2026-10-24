@@ -54,13 +54,13 @@ for name,fields in [('Byte',[('a','u8')]),('Odd',[(x,'u8') for x in 'abc']),('Co
  fn('ret'+name,f'x:{name}',name,f'return c{name}(x,#cast(f32,1.5),17)')
  c+=f'{name} c{name}({name} x,...){{va_list ap;va_start(ap,x);if(bits(va_arg(ap,double))!=0x3ff8000000000000ULL||va_arg(ap,int)!=17)x.a=0;va_end(ap);return x;}}\n'
  vals=','.join(f'{f}:#cast({t},3.0)' if t.startswith('f') else f'{f}:3' for f,t in fields)
- fn('test'+name,'','u32',f'x:=ret{name}({name}{{{vals}}}) return '+ '+'.join(f'#cast(u32,x.{f})' for f,t in fields))
+ fn('test'+name,'','u32',f'x:=ret{name}({name}{{{vals}}})\nreturn '+ '+'.join(f'#cast(u32,x.{f})' for f,t in fields))
  checks.append(f'test{name}()!={3*len(fields)}')
  for n in [3,7,9]:
   for scalar,ct,value in [('u32','W','7'),('f64','double','3.5')]:
    bank=f'agg{n}{name}{scalar}';pars=','.join(f'a{i}:{scalar}' for i in range(n));cp=','.join(f'{ct} a{i}' for i in range(n));args=','.join([value]*n)
    src+=f'extern fn c{bank}({pars},x:{name},...) {name}\n'
-   fn(bank,'','u32',f'x:=c{bank}({args},{name}{{{vals}}},#cast(f32,1.5),17) return '+ '+'.join(f'#cast(u32,x.{f})' for f,t in fields))
+   fn(bank,'','u32',f'x:=c{bank}({args},{name}{{{vals}}},#cast(f32,1.5),17)\nreturn '+ '+'.join(f'#cast(u32,x.{f})' for f,t in fields))
    named='||'.join((f'a{i}!=7' if scalar=='u32' else f'bits(a{i})!=0x400c000000000000ULL') for i in range(n))
    c+=f'{name} c{bank}({cp},{name} x,...){{va_list ap;va_start(ap,x);if({named}||bits(va_arg(ap,double))!=0x3ff8000000000000ULL||va_arg(ap,int)!=17)x.a=0;va_end(ap);return x;}}\n'
    checks.append(f'{bank}()!={3*len(fields)}')
@@ -70,42 +70,42 @@ for typ,ct,val,bits in [('f32','float','1.5','0x3fc00000'),('f64','double','3.5'
  c+=f'{ct} c{typ}(W x,...){{va_list ap;va_start(ap,x);U u=bits(va_arg(ap,double));va_end(ap);return u==0x3ff8000000000000ULL ? {val}:0;}}\n'
  checks.append(f'ret{typ}()!={val}')
 src+='extern fn cv(x:u32,...) u32\nextern fn choose() u32\n'
-fn('indirect','','u32','p:=&cv if choose()!=0 { p=&cvother } return p(1,#cast(f32,1.5),23)')
+fn('indirect','','u32','p:=cv\nif choose()!=0 { p=cvother }\nreturn p(1,#cast(f32,1.5),23)')
 src+='extern fn cvother(x:u32,...) u32\n'
 c+='W choose(void){return 0;} W cv(W x,...){va_list ap;va_start(ap,x);W ok=bits(va_arg(ap,double))==0x3ff8000000000000ULL && va_arg(ap,int)==23;va_end(ap);return ok?77:0;} W cvother(W x,...){return 99;}\n'
 checks.append('indirect()!=77')
 fn('callback','x:f64','f64','return x')
 src+='extern fn cb(p:fn(f64) f64,...) f64\n'
-fn('reentry','','f64','return cb(&callback,#cast(f32,1.5))')
+fn('reentry','','f64','return cb(callback,#cast(f32,1.5))')
 c+='double cb(double(*p)(double),...){va_list ap;va_start(ap,p);double x=va_arg(ap,double);va_end(ap);return p(x);}\n'
 checks.append('reentry()!=1.5')
 fn('nestedarg','','u32','return cv(1,callback(1.5),23)')
 checks.append('nestedarg()!=77')
 src+='seq:u32\n'
-fn('step','n:u32','u32','seq=seq*10+n return n')
+fn('step','n:u32','u32','seq=seq*10+n\nreturn n')
 src+='extern fn order(x:u32,...) u32\n'
-fn('ordering','','u32','seq=0 _=order(step(1),step(2),step(3)) return seq')
+fn('ordering','','u32','seq=0\n_=order(step(1),step(2),step(3))\nreturn seq')
 c+='W order(W x,...){va_list ap;va_start(ap,x);W a=va_arg(ap,W),b=va_arg(ap,W);va_end(ap);return x+a+b;}\n';checks.append('ordering()!=123')
 src+='state:Large\nextern fn snap(x:Large,...) u32\n'
-fn('change','','u32','state.a=99 return 7')
-fn('snapshot','','u32','state=Large{a:11,e:55} return snap(state,change())')
+fn('change','','u32','state.a=99\nreturn 7')
+fn('snapshot','','u32','state=Large{a:11,e:55}\nreturn snap(state,change())')
 c+='W snap(Large x,...){va_list ap;va_start(ap,x);W a=va_arg(ap,int);va_end(ap);return x.a==11 && x.e==55 && a==7?88:0;}\n';checks.append('snapshot()!=88')
 src+='extern fn touch(p:rawptr)\n';c+='void touch(void*p){__asm__ volatile(""::"r"(p):"memory");}\n'
-fn('largeframe','','u32','a:[2049]u64=[] touch(&a) return cv(1,#cast(f32,1.5),23)');checks.append('largeframe()!=77')
+fn('largeframe','','u32','a:[2049]u64=[]\ntouch(&a)\nreturn cv(1,#cast(f32,1.5),23)');checks.append('largeframe()!=77')
 src+='extern fn capacity(x:u32,...) u32\n'
 fn('capacitycall','','u32','return capacity(511,'+','.join(['1']*511)+')')
 c+='W capacity(W x,...){va_list ap;va_start(ap,x);W sum=0;for(W i=0;i<x;i++)sum+=va_arg(ap,int);va_end(ap);return sum;}\n';checks.append('capacitycall()!=511')
 src+='extern fn capret(n:u32,...) Large\n'
-fn('capsret','','u32','x:=capret(510,'+','.join(['1']*510)+') return #cast(u32,x.a)')
-fn('capsretindirect','','u32','p:=&capret x:=p(510,'+','.join(['1']*510)+') return #cast(u32,x.a)')
+fn('capsret','','u32','x:=capret(510,'+','.join(['1']*510)+')\nreturn #cast(u32,x.a)')
+fn('capsretindirect','','u32','p:=capret\nx:=p(510,'+','.join(['1']*510)+')\nreturn #cast(u32,x.a)')
 c+='Large capret(W n,...){va_list ap;va_start(ap,n);W sum=0;for(W i=0;i<n;i++)sum+=va_arg(ap,int);va_end(ap);Large r={sum,2,3,4,5};return r;}\n'
 checks+=['capsret()!=510','capsretindirect()!=510']
-src+='extern fn cpacr() u32\nfn main(){'+''.join(f'if {ch} {{ #panic("case {i}") }}' for i,ch in enumerate(checks))+'_ = io.write_all(io.stdout(),"VARARGS OK\\n") }\n'
+src+='extern fn cpacr() u32\nfn main(){'+''.join(f'if {ch} {{ #panic("case {i}") }}\n' for i,ch in enumerate(checks))+'_ = io.write_all(io.stdout(),"VARARGS OK\\n") }\n'
 
 cases={
 'bool':'x:=true', 'rawptr':'x:=#cast(rawptr,0)', 'array':'x:[2]u32=[1,2]',
-'aggregate':'x:=S{a:1}', 'string':'x:="abc"', 'slice':'a:[2]u32=[1,2] x:=a[0..2]',
-'pointer':'p:=&packed _=p(1)', 'any':'',
+'aggregate':'x:=S{a:1}', 'string':'x:="abc"', 'slice':'a:[2]u32=[1,2]\nx:=a[0..2]',
+'pointer':'p:=packed\n_=p(1)', 'any':'',
 }
 
 def run_guest(command):
@@ -134,7 +134,7 @@ def rejections(base):
         for name, body in cases.items():
             work = base/(target+'-'+name)
             work.mkdir()
-            source = 'struct S { a:u32 }\nextern fn cv(n:u32,...) u32\nfn packed(x:...u32) u32 { return 0 }\nfn main(){'+body+(' _=cv(1,x)' if name!='pointer' else '')+'}\n'
+            source = 'struct S { a:u32 }\nextern fn cv(n:u32,...) u32\nfn packed(x:...u32) u32 { return 0 }\nfn main(){'+body+('\n_=cv(1,x)' if name!='pointer' else '')+'}\n'
             if name == 'any':
                 source = 'extern fn cv(n:u32,...) u32\npub fn rejected(x:any){_=cv(1,x)}\nfn main(){}\n'
             (work/'main.dyn').write_text(source)
@@ -209,8 +209,8 @@ def main():
                         bd = board + ['-cpu', 'sifive-e31']
                     else:
                         source = source.replace('fn main(){',
-                            'fn main(){ if cpacr() & 0x00f00000 != 0 { #panic("FPU") }').replace(
-                            '_ = io.write_all', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU exit") } _ = io.write_all')
+                            'fn main(){ if cpacr() & 0x00f00000 != 0 { #panic("FPU") }\n').replace(
+                            '_ = io.write_all', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU exit") }\n_ = io.write_all')
                 (project/'main.dyn').write_text(source)
                 (work/'oracle.c').write_text(c)
                 obj = work/'oracle.o'

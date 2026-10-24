@@ -29,12 +29,12 @@ def program(width, shape):
         tail += '\n    other += total\n    total += other'
     if shape == 'branch':
         tail = 'if j % 2 == 0 { c[j] = sum } else { c[j] = -sum }\n    total += c[j]'
-    init = f'for j in 0..8 {{ b[j] = 1.0 }} b[0] = {large} b[2] = -{large} b[4] = {large} b[6] = -{large}'
+    init = f'for j in 0..8 {{ b[j] = 1.0 }}\n  b[0] = {large}\n  b[2] = -{large}\n  b[4] = {large}\n  b[6] = -{large}'
     if shape == 'special':
         # One quiet NaN payload and negative zero; compare every output bit.
         nan = 9221120237041090626 if width == 64 else 2143289410
         zero = 9223372036854775808 if width == 64 else 2147483648
-        init = f'zero: {u} = {zero} nan: {u} = {nan} for z in 0..32 {{ b[z] = #bitcast({t}, zero) }} b[3] = #bitcast({t}, nan)'
+        init = f'zero: {u} = {zero}\n  nan: {u} = {nan}\n  for z in 0..32 {{ b[z] = #bitcast({t}, zero) }}\n  b[3] = #bitcast({t}, nan)'
     return f'''use "std/io"
 b: [32]{t}
 c: [32]{t}

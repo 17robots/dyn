@@ -38,7 +38,7 @@ fn main() {
     // Nine fixed-length header segments followed by body; each can fail independently.
     for segment in 1..11 {
       sink := Sink{ fail: #cast(usize, segment), code: code }
-      response := http.Response{ output: io.Writer{ data: &sink, write: &write } }
+      response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       first := http.respond(&response, "body", http.ResponseOptions{})
       same(first, code)
       calls := sink.calls
@@ -49,7 +49,7 @@ fn main() {
     }
     for segment in 1..9 {
       sink := Sink{ fail: #cast(usize, segment), code: code }
-      response := http.Response{ output: io.Writer{ data: &sink, write: &write } }
+      response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       opened := http.respond_stream(&response, http.ResponseOptions{})
       same(opened.result, code)
       calls := sink.calls
@@ -61,7 +61,7 @@ fn main() {
     }
     for segment in 1..6 {
       sink := Sink{}
-      response := http.Response{ output: io.Writer{ data: &sink, write: &write } }
+      response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       opened := http.respond_stream(&response, http.ResponseOptions{})
       if !opened.ok { #panic("open body") }
       sink.fail = sink.calls + #cast(usize, segment)
@@ -89,11 +89,11 @@ fn main() {
     feed := Feed{ fail: true, code: code }
     sink := Sink{}
     storage: [128]u8 = []
-    state := http.server(io.Reader{ data: &feed, read: &read }, io.Writer{ data: &sink, write: &write }, storage[..])
+    state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     first := http.receive(&state)
     again := http.receive(&state)
     if first.detail != http.ErrorKind.Io || again.error != code || feed.calls != 1 { #panic("receive IO replay") }
-    state = http.server(io.Reader{ data: &feed, read: &read }, io.Writer{ data: &sink, write: &write }, storage[..])
+    state = http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     _ = http.receive(&state)
     if feed.calls != 2 { #panic("constructor reset") }
   }
@@ -101,7 +101,7 @@ fn main() {
     feed := Feed{ wire: wire }
     sink := Sink{}
     storage: [64]u8 = []
-    state := http.server(io.Reader{ data: &feed, read: &read }, io.Writer{ data: &sink, write: &write }, storage[..])
+    state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     first := http.receive(&state)
     if first.ok { first = http.receive(&state) }
     calls := feed.calls
@@ -111,7 +111,7 @@ fn main() {
   feed := Feed{ wire: "GET / HTTP/1.1\r\n\r\n" }
   sink_zero := Sink{}
   empty: [0]u8 = []
-  capacity := http.server(io.Reader{ data: &feed, read: &read }, io.Writer{ data: &sink_zero, write: &write }, empty[..])
+  capacity := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink_zero, write: write }, empty[..])
   if http.receive(&capacity).detail != http.ErrorKind.Capacity || http.receive(&capacity).detail != http.ErrorKind.Capacity || feed.calls != 0 { #panic("empty capacity IO") }
   zero := http.Server{}
   if http.receive(&zero).detail != http.ErrorKind.Invalid { #panic("zero server") }
@@ -122,7 +122,7 @@ fn main() {
   if writer.write(writer.data, "").status != io.Status.Error || http.body_abort(&body).ok || http.body_finish(&body).ok { #panic("zero body") }
   // Successful partial writes and empty callbacks remain usable.
   sink := Sink{ partial: true }
-  response = http.Response{ output: io.Writer{ data: &sink, write: &write } }
+  response = http.Response{ output: io.Writer{ data: &sink, write: write } }
   opened := http.respond_stream(&response, http.ResponseOptions{})
   writer = http.body_writer(&opened.body)
   if writer.write(writer.data, "").status == io.Status.Error || io.write_all(writer, "abc").transferred != 3 { #panic("partial success") }

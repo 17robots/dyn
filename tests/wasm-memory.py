@@ -12,21 +12,26 @@ pub fn allocate(slot: usize, size: usize) usize {
   arenas[slot] = made
   return #cast(usize, mem.arena_push(&arenas[slot], size, 1))
 }
-pub fn release(slot: usize) bool { mem.arena_release(&arenas[slot]) return true }
+pub fn release(slot: usize) bool { mem.arena_release(&arenas[slot])
+return true }
 pub fn fixed() bool {
-  bytes: [8]u8 arena := mem.arena_from_buffer(bytes[..])
+  bytes: [8]u8
+  arena := mem.arena_from_buffer(bytes[..])
   _ = mem.arena_push(&arena, 8, 1)
   return !mem.arena_try_push(&arena, 1, 1).ok
 }
 pub fn growing() bool {
   arena := mem.growing_create(65536)
-  first := mem.growing_push(&arena, 65536, 8) first.* = 42
-  second := mem.growing_push(&arena, 65536, 8) second.* = 17
+  first := mem.growing_push(&arena, 65536, 8)
+  first.* = 42
+  second := mem.growing_push(&arena, 65536, 8)
+  second.* = 17
   if first.* != 42 { return false }
   mem.growing_reset(&arena)
   reused := mem.growing_push(&arena, 65536, 8)
   ok := first == reused
-  mem.growing_release(&arena) return ok
+  mem.growing_release(&arena)
+  return ok
 }
 pub fn multiply(a: u64, b: u64) u64 { return a * b }
 '''

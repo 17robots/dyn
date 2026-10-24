@@ -14,6 +14,16 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking syntax:** each statement starts on its own line; `a := 1 b := 2` and
+  `defer { x() y() }` are syntax errors. Split them onto separate lines.
+- **Breaking syntax:** `case` arms are no longer separated by commas. Delete the
+  `,` after each arm's closing `}`.
+- **Breaking syntax:** a function's name is its value. Write `write: buffer_write`
+  instead of `write: &buffer_write`; `&function` is now an error.
+- Literals that do not fit their context are compile errors, including `-1` for
+  an unsigned type and inside generic instances. Integer literals work in float
+  contexts when exact, so generic code can write `value < 0` and `x * 2` instead
+  of `#cast(T, 0)` and `#cast(T, 2)`.
 - Restored `dyn build --emit-ir` as versioned structural Dyn IR, with deterministic byte encoding and atomic `--output` files. This does not emit LLVM IR.
 - Standard-library contract corrections: buffered I/O, INI and WebSocket state retain their first failure; zero SHA-256 contexts initialize lazily; failed Metadesk parses return the stub; sort searches return the input length on a miss.
 - Breaking API migrations: flags parsing, regex compilation and thread creation take arenas first. Thread creation returns a stable arena-backed pointer. See [migration notes](docs/migrations/std-contracts-20261024.md). Flags, regex, URL, semver, PNG and QOI expose portable error categories and native error codes; codec payloads are under `value`. Remaining std migrations are tracked separately; these changes do not establish universal compliance.

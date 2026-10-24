@@ -21,7 +21,8 @@ for length in (0, 1, 3, 55, 56, 63, 64, 65, 1000):
   sha.init(&explicit)
   middle:=#len(input)/2
   if !sha.update(&zero,input[..middle]) || !sha.update(&zero,input[middle..]) || !sha.update(&explicit,input) {{ #panic("update") }}
-  a:[32]u8=[] b:[32]u8=[]
+  a:[32]u8=[]
+b:[32]u8=[]
   if !bytes.equal(sha.finish(&zero,a[..]),expected[..]) || !bytes.equal(sha.finish(&explicit,b[..]),expected[..]) {{ #panic("digest") }}
   sha.init(&zero)
   if !sha.update(&zero,input) || !bytes.equal(sha.finish(&zero,a[..]),expected[..]) {{ #panic("reset") }}

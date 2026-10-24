@@ -40,15 +40,19 @@ fn read(data: rawptr, destination: []u8) io.Result {
  amount := #len(state.source) - state.at
  if amount > state.chunk { amount = state.chunk }
  if amount > #len(destination) { amount = #len(destination) }
- _ = mem.copy(destination[..amount], state.source[state.at..state.at + amount]) state.at += amount
- status := io.Status.Complete if state.at == #len(state.source) { status = io.Status.End }
+ _ = mem.copy(destination[..amount], state.source[state.at..state.at + amount])
+ state.at += amount
+ status := io.Status.Complete
+ if state.at == #len(state.source) { status = io.Status.End }
  return io.Result{ transferred: amount, status: status }
 }
 fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, window: u32, bad: bool, repeats: usize) {
  input := Input{ source: encoded, chunk: chunk }
- compressed: [113]u8 = [] output: [8191]u8 = []
- state := z.decoder(io.Reader{ data: #cast(rawptr, &input), read: &read }, compressed[..], workspace, window)
- reader := z.decoder_reader(&state) total: usize = 0
+ compressed: [113]u8 = []
+ output: [8191]u8 = []
+ state := z.decoder(io.Reader{ data: #cast(rawptr, &input), read: read }, compressed[..], workspace, window)
+ reader := z.decoder_reader(&state)
+ total: usize = 0
  for {
   result := io.read(reader, output[..])
   if result.status == io.Status.Error {
@@ -59,7 +63,8 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
   at: usize = 0
   for at < result.transferred {
    if total >= #len(raw) * repeats || output[at] != raw[total % #len(raw)] { #panic("zstd output") }
-   total += 1 at += 1
+   total += 1
+   at += 1
   }
   if result.status == io.Status.End {
    if bad || total != #len(raw) * repeats { #panic("zstd completion") }
@@ -76,7 +81,8 @@ source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "st
 extra = '''
 struct Failure { calls: usize, code: isize }
 fn fail(data: rawptr, destination: []u8) io.Result {
- state := #cast(*Failure, data) state.calls += 1
+ state := #cast(*Failure, data)
+ state.calls += 1
  return io.Result{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
@@ -97,8 +103,9 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
  code: isize = 0
  for code < 2 {
   upstream := Failure{ code: code }
-  compressed: [17]u8 = [] output: [11]u8 = []
-  state := z.decoder(io.Reader{ data: &upstream, read: &fail }, compressed[..], workspace, 21)
+  compressed: [17]u8 = []
+  output: [11]u8 = []
+  state := z.decoder(io.Reader{ data: &upstream, read: fail }, compressed[..], workspace, 21)
   reader := z.decoder_reader(&state)
   first := io.read(reader, output[..])
   callback := reader.read
@@ -106,9 +113,10 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
   if first.status != io.Status.Error || first.kind != errors.Kind.PermissionDenied || first.error != code || replay.status != io.Status.Error || replay.kind != first.kind || replay.error != code || upstream.calls != 1 || state.provider_code != 0 { #panic("sticky upstream native zero / empty callback") }
   code += 1
  }
- compressed: [17]u8 = [] output: [11]u8 = []
+ compressed: [17]u8 = []
+ output: [11]u8 = []
  input := Input{ source: "bad", chunk: 3 }
- state := z.decoder(io.Reader{ data: &input, read: &read }, compressed[..], workspace, 21)
+ state := z.decoder(io.Reader{ data: &input, read: read }, compressed[..], workspace, 21)
  reader := z.decoder_reader(&state)
  failed := io.read(reader, output[..])
  callback := reader.read
@@ -119,7 +127,8 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
 source = source + extra + r'''
 fn main() {
  invalid := z.Decoder{offset:1}
- adapter := z.decoder_reader(&invalid) destination: [1]u8
+ adapter := z.decoder_reader(&invalid)
+ destination: [1]u8
  failed_invalid := io.read(adapter,destination[..])
  if failed_invalid.status!=io.Status.Error || failed_invalid.kind!=errors.Kind.InvalidState || failed_invalid.error!=0 || !invalid.failed { #panic("invalid decoder cursor") }
  invalid.offset=0

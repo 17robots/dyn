@@ -29,7 +29,9 @@ def success_source():
 }}''']
             held = sum(a*b for a,b in zip(range(11,19), (1,3,5,7,11,13,17,19)))
             checks += [f'''{array}[0]=17
-{array}[{n}]=91 {array}[{n+1}]=92 {array}[{n+2}]=93
+{array}[{n}]=91
+{array}[{n+1}]=92
+{array}[{n+2}]=93
 if {name}(11,12,13,14,15,16,17,18)!={held+sum(range(11,19))+17*257+byte} {{ #panic("live/barrier {name}") }}
 for i in 0..{n} {{ if {array}[i]!={byte} {{ #panic("fill {name}") }} }}
 if {array}[{n}]!=91 || {array}[{n+1}]!=92 || {array}[{n+2}]!=93 {{ #panic("extent {name}") }}''']
@@ -39,7 +41,8 @@ if {array}[{n}]!=91 || {array}[{n+1}]!=92 || {array}[{n+2}]!=93 {{ #panic("exten
 pub fn full_length() { for i in 0..#len(whole) { whole[i]=128 } }
 data: [67]u8
 seen:u64
-pub fn observe() { seen+=#cast(u64,data[0]) data[1]=99 }
+pub fn observe() { seen+=#cast(u64,data[0])
+data[1]=99 }
 pub fn repeated(rounds:usize) {
   for round in 0..rounds {
     for i in 0..64 { data[i]=128 }
@@ -48,8 +51,8 @@ pub fn repeated(rounds:usize) {
     if data[0]!=255 || data[1]!=255 { #panic("call barrier") }
   }
 }''']
-    checks += ['full_length() for b in whole { if b!=128 { #panic("array length") } }',
-               'data[65]=77 data[66]=78 repeated(3) if seen!=384 || data[65]!=77 || data[66]!=78 { #panic("repeated/canary") }']
+    checks += ['full_length()\nfor b in whole { if b!=128 { #panic("array length") } }',
+               'data[65]=77\ndata[66]=78\nrepeated(3)\nif seen!=384 || data[65]!=77 || data[66]!=78 { #panic("repeated/canary") }']
     return '\n'.join(lines+['fn main() {', *checks, '_=io.write_all(io.stdout(),"OK\\n")', '}']), names
 
 
@@ -57,34 +60,29 @@ REJECT = '''use "std/io"
 small: [64]u8
 wide: [64]u16
 calls: u64
-pub fn effect() u8 { calls+=1 return 1 }
+pub fn effect() u8 { calls+=1
+return 1 }
 pub fn dynamic(n:usize) { for i in 0..n { small[i]=1 } }
 pub fn side_effect() { for i in 0..64 { small[i]=effect() } }
 pub fn offset() { for i in 1..64 { small[i]=128 } }
-pub fn local() u8 { a:[64]u8 for i in 0..64 { a[i]=255 } return a[0] }
+pub fn local() u8 { a:[64]u8
+for i in 0..64 { a[i]=255 }
+return a[0] }
 pub fn indirect(p:*[64]u8) { for i in 0..64 { p.*[i]=128 } }
 pub fn pointer_length(p:*[64]u8) { for i in 0..#len(p.*) { small[i]=1 } }
 pub fn sliced(p:[]u8) { for i in 0..#len(p) { small[i]=1 } }
-pub fn observed(p:[]u8) []u8 { calls+=1 return p }
+pub fn observed(p:[]u8) []u8 { calls+=1
+return p }
 pub fn effect_length() { for i in 0..#len(observed(small[..])) { small[i]=1 } }
 pub fn short() { for i in 0..63 { small[i]=1 } }
 pub fn other_type() { for i in 0..64 { wide[i]=255 } }
-pub fn extra() { for i in 0..64 { small[i]=1 calls+=1 } }
+pub fn extra() { for i in 0..64 { small[i]=1
+calls+=1 } }
 pub fn too_far() { for i in 0..65 { small[i]=1 } }
 '''
 CASES = [
     ('success', *success_source(), '', 'OK\n'),
-    ('rejected', REJECT+'''fn main() {
-small[0]=77 offset() if small[0]!=77 { #panic("offset") }
-side_effect() if calls!=64 { #panic("effects") }
-extra() if calls!=128 { #panic("extra") }
-dynamic(64) other_type() short()
-if local()!=255 || wide[63]!=255 { #panic("fallback") }
-indirect(&small) if small[0]!=128 || small[63]!=128 { #panic("pointer fallback") }
-pointer_length(&small) sliced(small[..]) effect_length()
-if calls!=129 || small[63]!=1 { #panic("length expression fallback") }
-_=io.write_all(io.stdout(),"OK\\n")
-}''', [], '', 'OK\n'),
+    ('rejected', REJECT+'fn main() {\nsmall[0]=77\noffset()\nif small[0]!=77 { #panic("offset") }\nside_effect()\nif calls!=64 { #panic("effects") }\nextra()\nif calls!=128 { #panic("extra") }\ndynamic(64)\nother_type()\nshort()\nif local()!=255 || wide[63]!=255 { #panic("fallback") }\nindirect(&small)\nif small[0]!=128 || small[63]!=128 { #panic("pointer fallback") }\npointer_length(&small)\nsliced(small[..])\neffect_length()\nif calls!=129 || small[63]!=1 { #panic("length expression fallback") }\n_=io.write_all(io.stdout(),"OK\\n")\n}', [], '', 'OK\n'),
     ('overbound', REJECT+'fn main() { too_far() }', [], 'index.ok', ''),
     ('dynamic-overbound', REJECT+'fn main() { dynamic(65) }', [], 'index.ok', ''),
 ]

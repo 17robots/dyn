@@ -14,13 +14,13 @@ fn describe(value: any) i64 {
   case value {
     is i64 number => {
       return number
-    },
+    }
     is bool => {
       return 1
-    },
+    }
     _ => {
       return 0
-    },
+    }
   }
 }
 
@@ -38,9 +38,9 @@ fn main() {
   case total {
     23 => {
       _ = io.write_all(io.stdout(), "ok\n")
-    },
+    }
     _ => {
       #panic("contextual keywords")
-    },
+    }
   }
 }

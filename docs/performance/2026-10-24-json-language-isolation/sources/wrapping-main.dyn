@@ -22,7 +22,8 @@ pub fn integers(p:*const u8,n:usize,rounds:usize) u64 {
     digit:=#cast(u64,b-'0')
     if value>1844674407370955161 || (value==1844674407370955161 && digit>5) { return 0 }
     value=#wrap(value*10+digit)
-   } else { sum=#wrap(sum+value) value=0 }
+   } else { sum=#wrap(sum+value)
+   value=0 }
   }
   sum=#wrap(sum+value)
  }
@@ -47,7 +48,8 @@ pub fn parse_lines(p:*const u8,n:usize,rounds:usize) u64 {
   start:usize=0
   for i in 0..n {
    if s[i]==10 {
-    if i==start { start=i+1 continue }
+    if i==start { start=i+1
+    continue }
     mem.arena_rewind(&arena,0)
     result:=json.parse(&arena,s[start..i])
     if !result.ok { return 0 }

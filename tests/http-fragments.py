@@ -39,7 +39,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       arena: mem.Arena
       defer mem.arena_release(&arena)
-      got := http.client_do(&arena, io.Reader{ data: #cast(rawptr, &feed), read: &read_feed }, io.Writer{ write: &sink }, method, "/", "host", "")
+      got := http.client_do(&arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
       if got.ok != valid { #panic("response validity") }
       if valid && !bytes.equal(got.body, expected) { #panic("response body") }
       if !valid && got.detail != http.ErrorKind.Invalid { #panic("response error") }
@@ -51,7 +51,7 @@ fn server_check(wire: []const u8) {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
       storage: [65536]u8 = []
-      state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: &read_feed }, io.Writer{ write: &sink }, storage[..])
+      state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
       first := http.receive(&state)
       if !first.ok || !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
       second := http.receive(&state)
@@ -64,7 +64,7 @@ fn server_check(wire: []const u8) {
 fn server_invalid(wire: []const u8) {
   feed := Feed{ data: wire, step: 1 }
   storage: [256]u8 = []
-  state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: &read_feed }, io.Writer{ write: &sink }, storage[..])
+  state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
   got := http.receive(&state)
   if got.ok || got.detail != http.ErrorKind.Invalid { #panic("invalid request") }
 }

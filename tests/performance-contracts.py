@@ -46,7 +46,7 @@ fn main() {''']
     body += ['''
   sink := Sink{}
   staging: [4]u8 = []
-  buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: &sink_write}, staging[..])
+  buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result := io.write_all(bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
   t.expect(result.transferred == 20 && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
   t.expect(bufio.writer_flush(&buffered).status == io.Status.Complete, "flush tail")
@@ -58,7 +58,7 @@ fn main() {''']
   _ = io.write_all(bufio.writer_adapter(&buffered), "z")
   t.expect(sink.calls == calls, "sticky direct failure")
   sink = Sink{fail_after: 1}
-  buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: &sink_write}, staging[..])
+  buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
   t.expect(result.status == io.Status.Error && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
   chunk_storage: [8]u8 = []
@@ -66,7 +66,7 @@ fn main() {''']
   for capacity in 1..9 {
     for size in 0..21 {
       sink = Sink{}
-      buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: &sink_write}, chunk_storage[..capacity])
+      buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, chunk_storage[..capacity])
       result = io.write_all(bufio.writer_adapter(&buffered), text[..size])
       expected: usize = 0
       if size > 0 { expected = (size - 1) % capacity + 1 }

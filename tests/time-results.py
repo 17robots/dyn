@@ -80,7 +80,8 @@ MOCK = REQUIRE + '''mock: ClockResult
 sleep_mock: SleepResult
 sleep_calls: i64 = 0
 fn native_clock(monotonic: bool) ClockResult { return mock }
-fn native_sleep(duration: i64) SleepResult { sleep_calls += 1 return sleep_mock }
+fn native_sleep(duration: i64) SleepResult { sleep_calls += 1
+return sleep_mock }
 fn main() {
   zero_clock := ClockResult{}
   zero_sleep := SleepResult{}

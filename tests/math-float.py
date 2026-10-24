@@ -222,8 +222,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-float-') as tmp:
         for op, name in enumerate(OPS):
             arity = 3 if name == 'fma' else 2 if name in ('copysign','atan2','pow','hypot') else 1
             expr = f'{name}({",".join(operand(v) for v in "abc"[:arity])})'
-            driver.append(f'{21*wide+op} => {{ return #cast(u64,#bitcast(u{width},{expr})) }},')
-    driver += ['_ => { return 0 },','} }',f'fn main() {{ if run_oracle(&dispatch,{COUNT},{SEED}) != 0 {{ #panic("math float oracle failed") }} }}']
+            driver.append(f'{21*wide+op} => {{ return #cast(u64,#bitcast(u{width},{expr})) }}')
+    driver += ['_ => { return 0 }','} }',f'fn main() {{ if run_oracle(dispatch,{COUNT},{SEED}) != 0 {{ #panic("math float oracle failed") }} }}']
     (source / 'main.dyn').write_text('\n'.join(driver))
     (work / 'oracle.c').write_text(C)
     subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-std=c11','-O2','-fno-fast-math','-frounding-math','-ffp-contract=off','-fno-builtin','-shared','-fPIC',str(work/'oracle.c'),'-lm','-o',str(work/'oracle.so')],check=True)

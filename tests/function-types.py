@@ -20,7 +20,7 @@ fn count() {
   calls += 1
 }
 fn pick() fn(i32) i32 {
-  return &double
+  return double
 }
 fn double(value: i32) i32 {
   return value * 2
@@ -34,17 +34,17 @@ fn read(e: *const Entity) i32 {
 }
 fn main() {
   e := Entity{hp: 5}
-  hooks := Hooks{on_hit: &hit}
+  hooks := Hooks{on_hit: hit}
   if hooks.on_hit(&e, 2) || e.hp != 3 {
     #panic("named parameters")
   }
-  run: fn() = &count
+  run: fn() = count
   hooks.slot = &run
   hooks.slot.*()
   if calls != 1 || pick()(4) != 8 {
     #panic("function values")
   }
-  table: [2]fn(i32) i32 = [&double, &double]
+  table: [2]fn(i32) i32 = [double, double]
   if table[1](3) != 6 || load(&table[1], 5) != 10 {
     #panic("arrays of functions")
   }
@@ -63,7 +63,7 @@ FAILURES = {
     'expected *E, found *const E':
         'struct E { hp: i32 }\nconst n: E = E{}\nfn w(p: *E) {\n  p.hp = 1\n}\nfn main() {\n  w(&n)\n}\n',
     'expected *fn(i32) i32, found fn(i32) i32':
-        'fn add(a: i32) i32 {\n  return a\n}\nfn main() {\n  f: *fn(i32) i32 = &add\n  _ = f\n}\n',
+        'fn add(a: i32) i32 {\n  return a\n}\nfn main() {\n  f: *fn(i32) i32 = add\n  _ = f\n}\n',
 }
 with tempfile.TemporaryDirectory(prefix='dyn-function-types-') as temporary:
     project = Path(temporary)

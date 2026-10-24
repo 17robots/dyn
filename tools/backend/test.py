@@ -72,16 +72,22 @@ pub fn or_div(a: u64, b: u64) bool { return a == 0 || (1 / b) > 0 }
 pub fn order_and(a: u64, b: u64, c: u64) bool { return (a + b) > 0 && (1 / c) > 0 }
 pub fn nested_chain(a: u64, b: u64, c: u64) bool { return a == 0 || b != 0 && (1 / c) > 0 }
 pub fn choose(a: u64, b: u64) u64 { if a > b { return a } else { return b } }
-pub fn early(a: i64, b: i64) i64 { if a < 0 { return a } if b < 0 { return b } return a + b }
+pub fn early(a: i64, b: i64) i64 { if a < 0 { return a }
+if b < 0 { return b }
+return a + b }
 pub fn nested_branch(a: u64, b: u64, c: u64) u64 {
-  if a == 0 { if b == 0 { return c } return b } else if b == 0 { return a }
+  if a == 0 { if b == 0 { return c }
+  return b } else if b == 0 { return a }
   return a + b
 }
 pub fn bool_branch(a: bool, b: bool) bool { if a { return b } else { return !b } }
 pub fn branch_div(a: u64, b: u64) u64 { if a == 0 { return 7 } else { return a / b } }
-pub fn branch_overflow(a: u64, b: u64) u64 { if a == 0 { return b } if b == 0 { return a } return a + b }
+pub fn branch_overflow(a: u64, b: u64) u64 { if a == 0 { return b }
+if b == 0 { return a }
+return a + b }
 pub fn condition_div(a: u64, b: u64) u64 { if (a / b) > 0 { return a } else { return b } }
-pub fn branch_shift(a: u64, b: u64) u64 { if a == 0 { return 0 } return a << b }
+pub fn branch_shift(a: u64, b: u64) u64 { if a == 0 { return 0 }
+return a << b }
 """
 
 SOURCE += """
@@ -103,11 +109,15 @@ pub fn call_six_nested(a: u64,b: u64,c: u64,d: u64,e: u64,f: u64) u64 {
 pub fn call_bool(a: bool, b: bool) bool { return logical_or(logical_and(a,b),invert(a)) }
 pub fn call_forward(a: u64) u64 { return forward_leaf(a) }
 pub fn forward_leaf(a: u64) u64 { return #wrap(a + 1) }
-pub fn factorial(n: u64) u64 { if n <= 1 { return 1 } return n * factorial(n - 1) }
-pub fn rec_panic(n: u64, denominator: u64) u64 { if n == 0 { return 1 / denominator } return rec_panic(n - 1, denominator) }
+pub fn factorial(n: u64) u64 { if n <= 1 { return 1 }
+return n * factorial(n - 1) }
+pub fn rec_panic(n: u64, denominator: u64) u64 { if n == 0 { return 1 / denominator }
+return rec_panic(n - 1, denominator) }
 pub fn rec_entry(n: u64, denominator: u64) u64 { return #wrap(call_identity(n) + rec_panic(n, denominator)) }
-pub fn mutual_even(n: u64) bool { if n == 0 { return true } return mutual_odd(n - 1) }
-pub fn mutual_odd(n: u64) bool { if n == 0 { return false } return mutual_even(n - 1) }
+pub fn mutual_even(n: u64) bool { if n == 0 { return true }
+return mutual_odd(n - 1) }
+pub fn mutual_odd(n: u64) bool { if n == 0 { return false }
+return mutual_even(n - 1) }
 pub fn div_leaf(a: u64, b: u64) u64 { return a / b }
 pub fn add_leaf(a: u64, b: u64) u64 { return a + b }
 pub fn call_order(a: u64,b: u64,c: u64) u64 { return call_pair(div_leaf(a,b),add_leaf(a,c)) }
@@ -118,31 +128,75 @@ pub fn call_branch(a: u64,b: u64) u64 { if a == 0 { return call_identity(b) } el
 
 SOURCE += """
 pub fn loop_sum(n:u64) u64 {
-  i:u64 = 0 total:u64 = 0
-  for i < n { i += 1 if i == 2 { continue } if i > 20 { break } total += call_identity(i) }
+  i:u64 = 0
+  total:u64 = 0
+  for i < n { i += 1
+  if i == 2 { continue }
+  if i > 20 { break }
+  total += call_identity(i) }
   return total
 }
 pub fn loop_nested(n:u64) u64 {
-  i:u64 = 0 total:u64 = 0
-  for i < n { i += 1 j:u64 = 0 for j < 4 { j += 1 if j == 2 { continue } if j == 4 { break } total += i + j } }
+  i:u64 = 0
+  total:u64 = 0
+  for i < n { i += 1
+  j:u64 = 0
+  for j < 4 { j += 1
+  if j == 2 { continue }
+  if j == 4 { break }
+  total += i + j } }
   return total
 }
-pub fn loop_early(n:u64) u64 { i:u64 = 0 for i < n { if i == 5 { return i } i += 1 } return i }
-pub fn loop_forever(n:u64) u64 { i:u64 = 0 for { if i == n { break } i += 1 } return i }
+pub fn loop_early(n:u64) u64 { i:u64 = 0
+for i < n { if i == 5 { return i }
+i += 1 }
+return i }
+pub fn loop_forever(n:u64) u64 { i:u64 = 0
+for { if i == n { break }
+i += 1 }
+return i }
 pub fn loop_label(n:u64) u64 {
-  i:u64 = 0 total:u64 = 0 outer: for i < n { i += 1
-    for { if i == 2 { continue:outer } if i > 5 { break:outer } total += i break }
-  } return total
+  i:u64 = 0
+  total:u64 = 0
+  outer: for i < n { i += 1
+    for { if i == 2 { continue:outer }
+    if i > 5 { break:outer }
+    total += i
+    break }
+  }
+  return total
 }
-pub fn loop_call_div(a:u64,b:u64) u64 { x := a for x > 0 { x = div_leaf(x,b) return x } return x }
-pub fn local_bool(a:bool) bool { b:bool = false b = a if b { b = !b } return b }
-pub fn local_zero() u64 { x:u64 return x }
-pub fn local_scope(a:u64) u64 { x := a if true { y := call_identity(99) y += 1 } return x }
-pub fn local_overflow(a:u64,b:u64) u64 { x := a for b > 0 { x += b break } return x }
-pub fn loop_div(a:u64,b:u64) u64 { x := a for x > 0 { x /= b return x } return x }
-pub fn loop_condition_div(a:u64,b:u64) u64 { x := a for x / b > 1 { x -= 1 } return x }
-pub fn local_signed(a:i64,b:i64) i64 { x := a x += b return x }
-pub fn local_wrap(a:u64,b:u64) u64 { x := a x = #wrap(x + b) return x }
+pub fn loop_call_div(a:u64,b:u64) u64 { x := a
+for x > 0 { x = div_leaf(x,b)
+return x }
+return x }
+pub fn local_bool(a:bool) bool { b:bool = false
+b = a
+if b { b = !b }
+return b }
+pub fn local_zero() u64 { x:u64
+return x }
+pub fn local_scope(a:u64) u64 { x := a
+if true { y := call_identity(99)
+y += 1 }
+return x }
+pub fn local_overflow(a:u64,b:u64) u64 { x := a
+for b > 0 { x += b
+break }
+return x }
+pub fn loop_div(a:u64,b:u64) u64 { x := a
+for x > 0 { x /= b
+return x }
+return x }
+pub fn loop_condition_div(a:u64,b:u64) u64 { x := a
+for x / b > 1 { x -= 1 }
+return x }
+pub fn local_signed(a:i64,b:i64) i64 { x := a
+x += b
+return x }
+pub fn local_wrap(a:u64,b:u64) u64 { x := a
+x = #wrap(x + b)
+return x }
 """
 SOURCE += 'pub fn large_frame_panic(a:u64,b:u64) u64 {' + ''.join(f'x{i} := call_identity(a) ' for i in range(24)) + 'x23 += b return x23 }\n'
 SOURCE += 'pub fn large_frame(a:u64) u64 {' + ''.join(f'x{i} := call_identity(a) ' for i in range(24)) + 'return #wrap(' + '+'.join(f'x{i}' for i in range(24)) + ') }\n'
@@ -213,23 +267,49 @@ extern fn abs(a:i32) i32
 pub fn foreign_abs32(a:i32) i32 { return abs(a) }
 extern fn llabs(a:i64) i64
 pub fn indirect_apply(f:fn(u64) u64,a:u64) u64 { return f(a) }
-pub fn indirect_use(a:u64) u64 { f := &call_identity return #wrap(a + indirect_apply(f,a)) }
-pub fn indirect_six(a:u64) u64 { f := &call_six return f(a,2,3,4,5,6) }
-pub fn indirect_stack(a:u64) u64 { f := &stack_div return f(0,0,0,0,0,0,a,1) }
-pub fn indirect_void(a:u64) { f := &void_work f(a,1) }
-pub fn indirect_foreign(a:i64) i64 { f := &llabs return f(a) }
-pub fn indirect_nil(a:u64) u64 { f:fn(u64) u64 = nil if a == 0 { return 0 } return f(a/(a-a)) }
-pub fn indirect_panic(a:u64,b:u64) u64 { f := &div_leaf return f(a,b) }
+pub fn indirect_use(a:u64) u64 { f := call_identity
+return #wrap(a + indirect_apply(f,a)) }
+pub fn indirect_six(a:u64) u64 { f := call_six
+return f(a,2,3,4,5,6) }
+pub fn indirect_stack(a:u64) u64 { f := stack_div
+return f(0,0,0,0,0,0,a,1) }
+pub fn indirect_void(a:u64) { f := void_work
+f(a,1) }
+pub fn indirect_foreign(a:i64) i64 { f := llabs
+return f(a) }
+pub fn indirect_nil(a:u64) u64 { f:fn(u64) u64 = nil
+if a == 0 { return 0 }
+return f(a/(a-a)) }
+pub fn indirect_panic(a:u64,b:u64) u64 { f := div_leaf
+return f(a,b) }
 pub fn foreign_abs(a:i64) i64 { return llabs(a) }
 pub fn void_empty() {}
-pub fn void_work(a:u64,b:u64) { _ = a / b return }
-pub fn void_caller(a:u64,b:u64) u64 { void_empty() void_work(a,b) return a }
-pub fn scalar_case(a:i64) i64 { case a { -5..=-1 => { return -1 }, 0,2,4 => { return 10 }, _ => { return 99 } } }
-pub fn case_update(a:u64) u64 { x:u64 = 0 case a { 0..=2 => { x = 10 }, _ => { x = 20 } } return x }
-pub fn case_panic(a:u64,b:u64) u64 { case a { 0 => { return 1 }, _ => { return a/b } } }
-pub fn range_controls(a:u64,b:u64) u64 { total:u64 = 0 for i in a..b { if i == 2 { continue } if i == 5 { break } total += i i = 99 } return total }
-pub fn range_nested(a:u64,b:u64) u64 { total:u64 = 0 lo:u64 = 0 hi:u64 = 3 outer: for i in a..b { for j in lo..hi { if i == 2 { continue:outer } if i == 5 { break:outer } total += i+j } } return total }
-pub fn range_bound_panic(a:u64,b:u64) u64 { total:u64 = 0 for i in (a/b)..(a+1) { total += i } return total }
+pub fn void_work(a:u64,b:u64) { _ = a / b
+return }
+pub fn void_caller(a:u64,b:u64) u64 { void_empty()
+void_work(a,b)
+return a }
+pub fn scalar_case(a:i64) i64 { case a { -5..=-1 => { return -1 } 0,2,4 => { return 10 } _ => { return 99 } } }
+pub fn case_update(a:u64) u64 { x:u64 = 0
+case a { 0..=2 => { x = 10 } _ => { x = 20 } }
+return x }
+pub fn case_panic(a:u64,b:u64) u64 { case a { 0 => { return 1 } _ => { return a/b } } }
+pub fn range_controls(a:u64,b:u64) u64 { total:u64 = 0
+for i in a..b { if i == 2 { continue }
+if i == 5 { break }
+total += i
+i = 99 }
+return total }
+pub fn range_nested(a:u64,b:u64) u64 { total:u64 = 0
+lo:u64 = 0
+hi:u64 = 3
+outer: for i in a..b { for j in lo..hi { if i == 2 { continue:outer }
+if i == 5 { break:outer }
+total += i+j } }
+return total }
+pub fn range_bound_panic(a:u64,b:u64) u64 { total:u64 = 0
+for i in (a/b)..(a+1) { total += i }
+return total }
 """
 for ty in ('i64','u64'):
     for reverse in (False,True):
@@ -275,16 +355,18 @@ params=','.join(f'f{i}:f64,i{i}:u64' for i in range(10));checks=' || '.join(f'i{
 SOURCE+=f'pub fn float_mixed({params}) f64 {{ if {checks} {{ return -1.0 }} return '+ '+'.join(f'f{i}' for i in range(10))+' }\n'
 args=','.join(f'{i}.25,{i}' for i in range(10))
 SOURCE+=f'pub fn float_mixed_call() f64 {{ return float_mixed({args}) }}\n'
-SOURCE+=f'pub fn float_mixed_indirect() f64 {{ f:=&float_mixed return f({args}) }}\n'
-SOURCE+='pub fn float_panic(a:f64,b:u64,c:u64) f64 { _ = b/c return a }\n'
+SOURCE+=f'pub fn float_mixed_indirect() f64 {{ f:=float_mixed return f({args}) }}\n'
+SOURCE+='pub fn float_panic(a:f64,b:u64,c:u64) f64 { _ = b/c\nreturn a }\n'
 SOURCE+='pub fn float_panic_call(a:u64,b:u64) f64 { return float_panic(1.25,a,b) }\n'
 
 SOURCE+='pub fn float_max('+','.join(f'a{i}:f64' for i in range(256))+') f64 { return a0+a7+a8+a127+a255 }\n'
-SOURCE+='pub fn float_max_call() f64 { return float_max('+','.join(f'{i}.0' for i in range(256))+') }\n'
+SOURCE+='pub fn float_max_call() f64 { return\nfloat_max('+','.join(f'{i}.0' for i in range(256))+') }\n'
 
 SOURCE += """
-pub fn generic_min(a,b:$T) T { if a < b { return a } return b }
-pub fn generic_count(n:$T) T { if n == 0 { return 0 } return generic_count(n-1)+1 }
+pub fn generic_min(a,b:$T) T { if a < b { return a }
+return b }
+pub fn generic_count(n:$T) T { if n == 0 { return 0 }
+return generic_count(n-1)+1 }
 pub fn generic_add(a,b:$T) T { return a+b }
 pub fn generic_i8(a:i8,b:i8) i8 { return generic_min(a,b) }
 pub fn generic_i64(a:i64,b:i64) i64 { return generic_min(a,b) }
@@ -305,34 +387,71 @@ pub global_flag:bool
 const global_constant:u64 = 99
 pub global_copy:u64 = global_constant
 pub global_callback:fn(u64) u64
-pub fn globals_f32(a:f32) f32 { global_f32=a return global_f32 }
-pub fn globals_i32(a:i32) i32 { global_i32=a return global_i32 }
-pub fn globals_u16(a:u16) u16 { global_u16=a return global_u16 }
+pub fn globals_f32(a:f32) f32 { global_f32=a
+return global_f32 }
+pub fn globals_i32(a:i32) i32 { global_i32=a
+return global_i32 }
+pub fn globals_u16(a:u16) u16 { global_u16=a
+return global_u16 }
 pub fn globals_read() u64 { return global_counter+global_copy }
-pub fn globals_update(a:u64) u64 { global_counter += a return global_counter }
+pub fn globals_update(a:u64) u64 { global_counter += a
+return global_counter }
 pub fn globals_reset(a:u64) { global_counter=a }
-pub fn globals_small(a:i8) i8 { global_small=a global_small+=1 return global_small }
-pub fn globals_float(a:f64) f64 { global_float+=a return global_float }
-pub fn globals_bool(a:bool) bool { global_flag=a return global_flag }
-pub fn globals_callback(a:u64) u64 { global_callback=&call_identity return global_callback(a) }
-pub fn globals_order(a:u64) u64 { global_counter=1 global_counter += globals_update(a) return global_counter }
+pub fn globals_small(a:i8) i8 { global_small=a
+global_small+=1
+return global_small }
+pub fn globals_float(a:f64) f64 { global_float+=a
+return global_float }
+pub fn globals_bool(a:bool) bool { global_flag=a
+return global_flag }
+pub fn globals_callback(a:u64) u64 { global_callback=call_identity
+return global_callback(a) }
+pub fn globals_order(a:u64) u64 { global_counter=1
+global_counter += globals_update(a)
+return global_counter }
 """
 
 SOURCE += """
 extern fn malloc(n:usize) rawptr
 extern fn free(p:rawptr)
-pub fn pointer_local(a:u64) u64 { x:=a p:=&x p.*+=call_identity(1) return x }
-pub fn pointer_global(a:u64) u64 { p:=&global_counter p.*=a return global_counter }
-pub fn pointer_retarget(p:**u64,q:*u64) u64 { p.*=q return 7 }
-pub fn pointer_alias(a:u64) u64 { x:=a y:u64=99 p:=&x p.*=pointer_retarget(&p,&y) return x*100+y }
-pub fn pointer_alias_add(a:u64) u64 { x:=a y:u64=99 p:=&x p.*+=pointer_retarget(&p,&y) return x*100+y }
-pub fn pointer_null(a:u64) u64 { if a==0 { return 0 } p:*u64=nil return p.* }
-pub fn pointer_unaligned(a:u64) u64 { if a==0 { return 0 } p:=#cast(*u64, a) return p.* }
+pub fn pointer_local(a:u64) u64 { x:=a
+p:=&x
+p.*+=call_identity(1)
+return x }
+pub fn pointer_global(a:u64) u64 { p:=&global_counter
+p.*=a
+return global_counter }
+pub fn pointer_retarget(p:**u64,q:*u64) u64 { p.*=q
+return 7 }
+pub fn pointer_alias(a:u64) u64 { x:=a
+y:u64=99
+p:=&x
+p.*=pointer_retarget(&p,&y)
+return x*100+y }
+pub fn pointer_alias_add(a:u64) u64 { x:=a
+y:u64=99
+p:=&x
+p.*+=pointer_retarget(&p,&y)
+return x*100+y }
+pub fn pointer_null(a:u64) u64 { if a==0 { return 0 }
+p:*u64=nil
+return p.* }
+pub fn pointer_unaligned(a:u64) u64 { if a==0 { return 0 }
+p:=#cast(*u64, a)
+return p.* }
 pub fn pointer_store_panic(a:u64,b:u64) u64 {
-  if a==0 && b==0 { return 0 } x:u64=0 p:=#cast(*u64, a)
-  if a==2 { p=&x } p.*=1/(b-b) return x
+  if a==0 && b==0 { return 0 }
+  x:u64=0
+  p:=#cast(*u64, a)
+  if a==2 { p=&x }
+  p.*=1/(b-b)
+  return x
 }
-pub fn pointer_heap(a:u64) u64 { p:=#cast(*u64, malloc(8)) p.*=a value:=p.* free(p) return value }
+pub fn pointer_heap(a:u64) u64 { p:=#cast(*u64, malloc(8))
+p.*=a
+value:=p.*
+free(p)
+return value }
 pub fn float_bits(a:f32) u32 { return #bitcast(u32, a) }
 pub fn bits_float(a:u32) f32 { return #bitcast(f32, a) }
 """
@@ -417,58 +536,144 @@ def inspect(path, debug):
 
 SOURCE += """
 pub fn defer_digit(a:u64) { global_counter = global_counter*10+a }
-pub fn defer_capture(a:u64) u64 { global_counter=0 x:=a defer defer_digit(x) x=9 defer { defer_digit(x) } return x+1 }
-pub fn defer_scope(a:u64) u64 { global_counter=0 if a>0 { defer defer_digit(1) defer defer_digit(2) } return global_counter }
-pub fn defer_loop(a:u64) u64 { global_counter=0 for i in 0..a { defer defer_digit(i+1) if i==0 { continue } if i==2 { break } } return global_counter }
-pub fn defer_early(a:u64) u64 { global_counter=0 defer defer_digit(1) if a>0 { defer defer_digit(2) return a } return a+1 }
-pub fn defer_call(a:u64) u64 { global_counter=0 defer defer_digit(3) return a+call_identity(a) }
-pub fn defer_indirect(a:u64) u64 { global_counter=0 f:=&defer_digit defer f(a) f=nil a=9 return a }
-pub fn defer_float(a:f64) f64 { defer defer_digit(1) return float_mixed_call()+a }
+pub fn defer_capture(a:u64) u64 { global_counter=0
+x:=a
+defer defer_digit(x)
+x=9
+defer { defer_digit(x) }
+return x+1 }
+pub fn defer_scope(a:u64) u64 { global_counter=0
+if a>0 { defer defer_digit(1)
+defer defer_digit(2) }
+return global_counter }
+pub fn defer_loop(a:u64) u64 { global_counter=0
+for i in 0..a { defer defer_digit(i+1)
+if i==0 { continue }
+if i==2 { break } }
+return global_counter }
+pub fn defer_early(a:u64) u64 { global_counter=0
+defer defer_digit(1)
+if a>0 { defer defer_digit(2)
+return a }
+return a+1 }
+pub fn defer_call(a:u64) u64 { global_counter=0
+defer defer_digit(3)
+return a+call_identity(a) }
+pub fn defer_indirect(a:u64) u64 { global_counter=0
+f:=defer_digit
+defer f(a)
+f=nil
+a=9
+return a }
+pub fn defer_float(a:f64) f64 { defer defer_digit(1)
+return float_mixed_call()+a }
 pub fn defer_read() u64 { return global_counter }
 extern fn write(fd:i32,data:rawptr,length:usize) isize
-pub fn defer_emit(a:u64) { c:=#cast(u8, (a+48)) _=write(1,#cast(rawptr, &c),1) }
+pub fn defer_emit(a:u64) { c:=#cast(u8, (a+48))
+_=write(1,#cast(rawptr, &c),1) }
 pub fn defer_panic_leaf(a:u64) u64 { return 1/a }
-pub fn defer_panic_call(a:u64) u64 { defer defer_emit(1) defer defer_emit(2) return 4+defer_panic_leaf(a) }
-pub fn defer_panic_guard(a:u64) u64 { defer defer_emit(1) defer defer_emit(2) return 1/a }
-pub fn defer_panic_capture(a:u64) u64 { defer defer_emit(1) defer defer_emit(1/a) return 7 }
-pub fn defer_panic_cleanup(a:u64) u64 { defer defer_emit(1) defer { _=1/a } return 4 }
-pub fn defer_panic_recursive(a:u64) u64 { defer defer_emit(a) if a>0 { return defer_panic_recursive(a-1) } return defer_panic_leaf(a) }
-pub fn defer_panic_parent(a:u64) u64 { defer defer_emit(8) return defer_panic_call(a) }
+pub fn defer_panic_call(a:u64) u64 { defer defer_emit(1)
+defer defer_emit(2)
+return 4+defer_panic_leaf(a) }
+pub fn defer_panic_guard(a:u64) u64 { defer defer_emit(1)
+defer defer_emit(2)
+return 1/a }
+pub fn defer_panic_capture(a:u64) u64 { defer defer_emit(1)
+defer defer_emit(1/a)
+return 7 }
+pub fn defer_panic_cleanup(a:u64) u64 { defer defer_emit(1)
+defer { _=1/a }
+return 4 }
+pub fn defer_panic_recursive(a:u64) u64 { defer defer_emit(a)
+if a>0 { return defer_panic_recursive(a-1) }
+return defer_panic_leaf(a) }
+pub fn defer_panic_parent(a:u64) u64 { defer defer_emit(8)
+return defer_panic_call(a) }
 """
 
 SOURCE += """
 struct Storage { tag:u8=3, wide:u64=7, small:i16=-2, values:[3]u64 }
 struct NestedStorage { first:u8, item:Storage, last:u16 }
-pub fn array_local(a:u64,i:usize) u64 { x:[3]u64=[a,2] x[2]=4 x[1]+=3 return x[i]+#cast(u64, #len(x)) }
-pub fn array_zero(i:usize) u64 { x:[8]u64 return x[i] }
-pub fn array_nested(a:u64) u64 { x:[2][3]u64=[[a,2,3],[4,5,6]] y:=x x[0][0]=8 return y[0][0]+x[1][2] }
-pub fn array_assign(a:u64) u64 { x:[3]u64=[a,2,3] y:[3]u64 y=x y=y return y[0]+y[1]+y[2] }
-pub fn array_pointer(p:*[3]u16,i:usize,a:u16) u16 { p.*[i]=a return p.*[i] }
+pub fn array_local(a:u64,i:usize) u64 { x:[3]u64=[a,2]
+x[2]=4
+x[1]+=3
+return x[i]+#cast(u64, #len(x)) }
+pub fn array_zero(i:usize) u64 { x:[8]u64
+return x[i] }
+pub fn array_nested(a:u64) u64 { x:[2][3]u64=[[a,2,3],[4,5,6]]
+y:=x
+x[0][0]=8
+return y[0][0]+x[1][2] }
+pub fn array_assign(a:u64) u64 { x:[3]u64=[a,2,3]
+y:[3]u64
+y=x
+y=y
+return y[0]+y[1]+y[2] }
+pub fn array_pointer(p:*[3]u16,i:usize,a:u16) u16 { p.*[i]=a
+return p.*[i] }
 pub fn array_copy(dst:*[3]u16,src:*[3]u16) { dst.*=src.* }
-pub fn struct_local(a:u64) u64 { x:=Storage{wide:a,values:[1,2,3]} y:=x x.wide+=2 y.values[1]=9 return x.wide+y.wide+#cast(u64, x.tag)+y.values[1] }
-pub fn struct_nested(a:u64) u64 { x:=NestedStorage{first:1,item:Storage{wide:a},last:2} x.item.wide+=3 return x.item.wide+#cast(u64, x.last) }
-pub fn struct_zero() u64 { x:Storage return x.wide+#cast(u64, x.tag) }
-pub fn struct_pointer(p:*Storage,a:u64) u64 { p.wide=a p.tag=8 p.small=-3 p.values[1]=a+1 return p.wide+p.values[1] }
-pub fn aggregate_defer(a:u64) u64 { global_counter=0 x:[2]u64=[a,2] defer { defer_digit(x[0]) } x[0]=3 return x[1] }
-pub fn array_panic(i:usize) u64 { x:[3]u64=[1,2,3] defer defer_emit(4) return x[i] }
+pub fn struct_local(a:u64) u64 { x:=Storage{wide:a,values:[1,2,3]}
+y:=x
+x.wide+=2
+y.values[1]=9
+return x.wide+y.wide+#cast(u64, x.tag)+y.values[1] }
+pub fn struct_nested(a:u64) u64 { x:=NestedStorage{first:1,item:Storage{wide:a},last:2}
+x.item.wide+=3
+return x.item.wide+#cast(u64, x.last) }
+pub fn struct_zero() u64 { x:Storage
+return x.wide+#cast(u64, x.tag) }
+pub fn struct_pointer(p:*Storage,a:u64) u64 { p.wide=a
+p.tag=8
+p.small=-3
+p.values[1]=a+1
+return p.wide+p.values[1] }
+pub fn aggregate_defer(a:u64) u64 { global_counter=0
+x:[2]u64=[a,2]
+defer { defer_digit(x[0]) }
+x[0]=3
+return x[1] }
+pub fn array_panic(i:usize) u64 { x:[3]u64=[1,2,3]
+defer defer_emit(4)
+return x[i] }
 """
 
 SOURCE += """
-pub fn slice_local(a:u64,i:usize) u64 { x:[4]u64=[a,2,3,4] s:=x[1..] s[0]+=5 t:=s[..2] return t[i]+#cast(u64, #len(s)) }
+pub fn slice_local(a:u64,i:usize) u64 { x:[4]u64=[a,2,3,4]
+s:=x[1..]
+s[0]+=5
+t:=s[..2]
+return t[i]+#cast(u64, #len(s)) }
 pub fn slice_read(s:[]const u64,i:usize) u64 { return s[i]+#cast(u64, #len(s)) }
 pub fn slice_identity(s:[]u64) []u64 { return s }
 pub fn slice_raw(p:*u64,n:usize) []u64 { return p[0..n] }
-pub fn slice_call(a:u64) u64 { x:[4]u64=[a,2,3,4] return slice_read(slice_identity(x[..]),0) }
+pub fn slice_call(a:u64) u64 { x:[4]u64=[a,2,3,4]
+return slice_read(slice_identity(x[..]),0) }
 pub fn slice_stack(a:u64,b:u64,c:u64,d:u64,e:u64,s:[]u64,t:[]u64) u64 { return a+b+c+d+e+s[0]+t[1] }
-pub fn slice_stack_call(a:u64) u64 { x:[3]u64=[a,2,3] f:=&slice_stack return f(1,2,3,4,5,x[..],x[1..]) }
-pub fn slice_capture(s:[]u64) u64 { global_counter=0 defer slice_observe(s) s=s[0..0] return 9 }
+pub fn slice_stack_call(a:u64) u64 { x:[3]u64=[a,2,3]
+f:=slice_stack
+return f(1,2,3,4,5,x[..],x[1..]) }
+pub fn slice_capture(s:[]u64) u64 { global_counter=0
+defer slice_observe(s)
+s=s[0..0]
+return 9 }
 pub fn slice_observe(s:[]u64) { global_counter=s[0]+#cast(u64, #len(s)) }
-pub fn slice_defer_return(s:[]u64) []u64 { defer defer_digit(1) return slice_identity(s) }
-pub fn slice_string(i:usize) u8 { s:[]const u8="abc" return s[i] }
-pub fn slice_bounds(a:usize,b:usize) u64 { x:[4]u64=[1,2,3,4] s:=x[a..b] return #cast(u64, #len(s)) }
-pub fn panic_replace(a:u64) u64 { defer { #panic("cleanup") } #panic("original") }
-pub fn panic_owned(a:u64) u64 { message:[2]u8=[111,107] defer { message[0]=120 defer_emit(5) } #panic(message[..]) }
-pub fn slice_nested_bounds(a:usize,b:usize) u64 { x:[5]u64=[1,2,3,4,5] s:=x[1..4] t:=s[a..b] return #cast(u64, #len(t)) }
+pub fn slice_defer_return(s:[]u64) []u64 { defer defer_digit(1)
+return slice_identity(s) }
+pub fn slice_string(i:usize) u8 { s:[]const u8="abc"
+return s[i] }
+pub fn slice_bounds(a:usize,b:usize) u64 { x:[4]u64=[1,2,3,4]
+s:=x[a..b]
+return #cast(u64, #len(s)) }
+pub fn panic_replace(a:u64) u64 { defer { #panic("cleanup") }
+#panic("original") }
+pub fn panic_owned(a:u64) u64 { message:[2]u8=[111,107]
+defer { message[0]=120
+defer_emit(5) }
+#panic(message[..]) }
+pub fn slice_nested_bounds(a:usize,b:usize) u64 { x:[5]u64=[1,2,3,4,5]
+s:=x[1..4]
+t:=s[a..b]
+return #cast(u64, #len(t)) }
 """
 
 ABI_STRUCTS = [
@@ -495,9 +700,11 @@ for name,fields,decl,field,value in ABI_STRUCTS:
     SOURCE+=f'pub fn abi_{name}_defer(x:Abi{name}) Abi{name} {{ defer {{ x.{field}+={increment} }} return x }}\n'
 SOURCE+="""
 packed struct AbiPacked { tag:u8,value:i64 }
-pub fn abi_Packed(x:AbiPacked) AbiPacked { x.value+=1 return x }
+pub fn abi_Packed(x:AbiPacked) AbiPacked { x.value+=1
+return x }
 pub fn abi_Packed_call(x:AbiPacked) AbiPacked { return abi_Packed(x) }
-pub fn abi_Packed_defer(x:AbiPacked) AbiPacked { defer { x.value+=1 } return x }
+pub fn abi_Packed_defer(x:AbiPacked) AbiPacked { defer { x.value+=1 }
+return x }
 pub fn abi_bytes_ptr(p:*AbiBytes) AbiBytes { return abi_Bytes(p.*) }
 pub fn abi_big_panic(a:u64) u64 { return abi_Three(AbiThree{a:1,b:2,value:a}).value }
 pub fn abi_pressure(a:u64,b:u64,c:u64,d:u64,e:u64,x:AbiTwo,f:u64) u64 { return a+b+c+d+e+x.other+x.value+f }
@@ -507,7 +714,11 @@ pub fn abi_fp_pressure_call() f64 { return abi_fp_pressure(1.0,2.0,3.0,4.0,5.0,6
 pub fn abi_no_local() AbiTwo { return AbiTwo{other:11,value:22} }
 pub fn abi_literal(a:u64) u64 { return abi_Two(AbiTwo{other:1,value:a}).value }
 pub fn abi_observe(x:AbiTwo) { global_counter=x.other+x.value }
-pub fn abi_capture(a:u64) u64 { global_counter=0 x:=AbiTwo{other:1,value:a} defer abi_observe(x) x.value=99 return x.value }
+pub fn abi_capture(a:u64) u64 { global_counter=0
+x:=AbiTwo{other:1,value:a}
+defer abi_observe(x)
+x.value=99
+return x.value }
 """
 
 CAST_TYPES=[('i8',ctypes.c_int8,8,True),('u8',ctypes.c_uint8,8,False),('i16',ctypes.c_int16,16,True),('u16',ctypes.c_uint16,16,False),('i32',ctypes.c_int32,32,True),('u32',ctypes.c_uint32,32,False),('i64',ctypes.c_int64,64,True),('u64',ctypes.c_uint64,64,False)]
@@ -525,21 +736,47 @@ for name,ty in ARRAY_ABI_TYPES:
         SOURCE+=f'pub fn arrayabi_{name}_{n}_apply(f:fn([{n}]{name}) [{n}]{name},a:{name}) {name} {{ x:[{n}]{name}=[{literal}] x[{n-1}]=a return f(x)[{n-1}] }}\n'
 SOURCE+="""
 pub fn arrayabi_gp(a:u64,b:u64,c:u64,d:u64,e:u64,x:[3]u8) [3]u8 { return x }
-pub fn arrayabi_gp_call() u64 { x:=arrayabi_gp(1,2,3,4,5,[7,8,9]) return #cast(u64,x[0])*100+#cast(u64,x[1])*10+#cast(u64,x[2]) }
+pub fn arrayabi_gp_call() u64 { x:=arrayabi_gp(1,2,3,4,5,[7,8,9])
+return #cast(u64,x[0])*100+#cast(u64,x[1])*10+#cast(u64,x[2]) }
 pub fn arrayabi_fp(a:f64,b:f64,c:f64,d:f64,e:f64,f:f64,g:f64,x:[3]f32) [3]f32 { return x }
-pub fn arrayabi_fp_call() f32 { x:=arrayabi_fp(1.0,2.0,3.0,4.0,5.0,6.0,7.0,[8.0,9.0,10.0]) return x[0]+x[1]+x[2] }
+pub fn arrayabi_fp_call() f32 { x:=arrayabi_fp(1.0,2.0,3.0,4.0,5.0,6.0,7.0,[8.0,9.0,10.0])
+return x[0]+x[1]+x[2] }
 struct ArrayMixed { a:u64,b:u64,c:u64,d:f32,e:f64,f:f32,g:f64 }
 pub fn arrayabi_mixed(x:[1]ArrayMixed) [1]ArrayMixed { return x }
-pub fn arrayabi_mixed_call() f64 { x:=arrayabi_mixed([ArrayMixed{a:1,b:2,c:3,d:4.0,e:5.0,f:6.0,g:7.0}]) return #cast(f64,(x[0].a+x[0].b+x[0].c))+#cast(f64,x[0].d)+x[0].e+#cast(f64,x[0].f)+x[0].g }
+pub fn arrayabi_mixed_call() f64 { x:=arrayabi_mixed([ArrayMixed{a:1,b:2,c:3,d:4.0,e:5.0,f:6.0,g:7.0}])
+return #cast(f64,(x[0].a+x[0].b+x[0].c))+#cast(f64,x[0].d)+x[0].e+#cast(f64,x[0].f)+x[0].g }
 pub fn arrayabi_nested(x:[2][2]u64) [2][2]u64 { return x }
-pub fn arrayabi_nested_call() u64 { x:=arrayabi_nested([[1,2],[3,4]]) return x[0][0]+x[0][1]*10+x[1][0]*100+x[1][1]*1000 }
-pub fn each_array(a:u64) u64 { x:[3]u64=[1,2,3] total:u64=0 for item in x { x[1]=9 total=total*10+item } return total }
-pub fn each_slice(a:u64) u64 { x:[3]u64=[1,2,3] total:u64=0 for item in x[..] { x[1]=9 total=total*10+item } return total }
-pub fn each_pointer(a:u64) u64 { x:[3]u64=[1,2,3] for *item in x { item.*+=a } return x[0]+x[1]+x[2] }
-pub fn each_reverse(a:u64) u64 { total:u64=0 for item in #reverse([1,2,3]) { total=total*10+#cast(u64,item) } return total }
-pub fn each_nested(a:u64) u64 { x:[2][2]u64=[[1,2],[3,4]] total:u64=0 for row in x { for item in row { total=total*10+item } } return total }
-pub fn each_defer(a:u64) u64 { global_counter=0 for item in [1,2,3,4] { defer defer_digit(#cast(u64,item)) if item==1 { continue } if item==3 { break } } return global_counter }
-pub fn each_early(a:u64) u64 { global_counter=0 for item in [1,2,3] { defer defer_digit(#cast(u64,item)) if #cast(u64,item)==a { return #cast(u64,item) } } return 0 }
+pub fn arrayabi_nested_call() u64 { x:=arrayabi_nested([[1,2],[3,4]])
+return x[0][0]+x[0][1]*10+x[1][0]*100+x[1][1]*1000 }
+pub fn each_array(a:u64) u64 { x:[3]u64=[1,2,3]
+total:u64=0
+for item in x { x[1]=9
+total=total*10+item }
+return total }
+pub fn each_slice(a:u64) u64 { x:[3]u64=[1,2,3]
+total:u64=0
+for item in x[..] { x[1]=9
+total=total*10+item }
+return total }
+pub fn each_pointer(a:u64) u64 { x:[3]u64=[1,2,3]
+for *item in x { item.*+=a }
+return x[0]+x[1]+x[2] }
+pub fn each_reverse(a:u64) u64 { total:u64=0
+for item in #reverse([1,2,3]) { total=total*10+#cast(u64,item) }
+return total }
+pub fn each_nested(a:u64) u64 { x:[2][2]u64=[[1,2],[3,4]]
+total:u64=0
+for row in x { for item in row { total=total*10+item } }
+return total }
+pub fn each_defer(a:u64) u64 { global_counter=0
+for item in [1,2,3,4] { defer defer_digit(#cast(u64,item))
+if item==1 { continue }
+if item==3 { break } }
+return global_counter }
+pub fn each_early(a:u64) u64 { global_counter=0
+for item in [1,2,3] { defer defer_digit(#cast(u64,item))
+if #cast(u64,item)==a { return #cast(u64,item) } }
+return 0 }
 """
 
 def configure(library, name, ty, argc):
@@ -1318,9 +1555,9 @@ raise AssertionError('overflow returned normally')
             panic_count += 1
     rejected = {
         'aggregate-deref-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:*E) E { return a.* }',
-        'unreachable-aggregate': 'pub fn fail(a:u64) u64 { if false { x:[2097153]u64 _=x } return a }',
-        'main-frame-limit': 'fn main() { x:[2097153]u64 _=x }',
-        'aggregate-local': 'pub fn fail(a: u64) u64 { b: [2097153]u64 return a }',
+        'unreachable-aggregate': 'pub fn fail(a:u64) u64 { if false { x:[2097153]u64\n_=x }\nreturn a }',
+        'main-frame-limit': 'fn main() { x:[2097153]u64\n_=x }',
+        'aggregate-local': 'pub fn fail(a: u64) u64 { b: [2097153]u64\nreturn a }',
         'frame-limit': 'pub fn fail() u64 {' + ''.join(f'x{i}:[1048576]u64 ' for i in range(3)) + 'return 0}',
         'enum-storage-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:E) E { return a }',
         'indirect-aggregate-limit': 'pub fn fail(f:fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',

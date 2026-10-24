@@ -196,10 +196,10 @@ for width, one, two, seven, half, inf, nan, sign in (
         (64, 0x3ff0000000000000, 0x4000000000000000, 0x401c000000000000, 0x3fe0000000000000, 0x7ff0000000000000, 0x7ff8000000000000, 0x8000000000000000)):
     exprs = ['a+b', 'a-b', 'a*b', 'a/b', 'a%b']
     D += [f'fn arithmetic{width}(op:i32, x:u{width}, y:u{width}) u{width} {{',
-          f'a := #bitcast(f{width}, x) b := #bitcast(f{width}, y)', 'case op {']
-    D += [f'{i} => {{ return #bitcast(u{width}, {expr}) }},' for i, expr in enumerate(exprs)]
-    D += [f'5 => {{ if a != b && !(a == b) && !(a < b) && !(a <= b) && !(a > b) && !(a >= b) {{ return 1 }} return 0 }},',
-          '_ => { return 0 },', '}', '}']
+          f'a := #bitcast(f{width}, x)\nb := #bitcast(f{width}, y)', 'case op {']
+    D += [f'{i} => {{ return #bitcast(u{width}, {expr}) }}' for i, expr in enumerate(exprs)]
+    D += [f'5 => {{ if a != b && !(a == b) && !(a < b) && !(a <= b) && !(a > b) && !(a >= b) {{ return 1 }}\nreturn 0 }}',
+          '_ => { return 0 }', '}', '}']
     vectors = [(0, one, one, two), (1, one, one, 0), (2, two, half, one),
                (3, one, two, half), (4, seven, two, one), (4, seven | sign, two, one | sign),
                (0, 1, 1, 2), (1, 2, 1, 1), (2, 2, half, 1), (3, 2, two, 1),
@@ -210,15 +210,15 @@ for width, one, two, seven, half, inf, nan, sign in (
           for i, (op, a, b, expected) in enumerate(vectors)]
     C += ['return 0; }']
     D += [f'extern fn arithmetic_check{width}(f:fn(i32,u{width},u{width}) u{width}) i32']
-    B += [f'if arithmetic_check{width}(&arithmetic{width}) != 0 {{ #panic("arithmetic f{width}") }}']
+    B += [f'if arithmetic_check{width}(arithmetic{width}) != 0 {{ #panic("arithmetic f{width}") }}']
 
 D += ['fn conversions(x:i64, y:u64, a:f32, b:f64) i32 {',
       'if #cast(f32,x) != -7.0 || #cast(f64,x) != -7.0 || #cast(f32,y) != 9.0 || #cast(f64,y) != 9.0 { return 1 }',
       'if #cast(i64,a) != -7 || #cast(i32,b) != 9 || #cast(u64,b) != 9 || #cast(u32,b) != 9 { return 2 }',
-      'if #cast(f64,a) != -7.5 || #cast(f32,b) != 9.5 { return 3 } return 0 }',
+      'if #cast(f64,a) != -7.5 || #cast(f32,b) != 9.5 { return 3 }\nreturn 0 }',
       'extern fn conversion_check(f:fn(i64,u64,f32,f64) i32) i32']
 C += ['int conversion_check(int (*fn)(int64_t,uint64_t,float,double)) { return fn(-7,9,(Fbits){.u=0xc0f00000}.f,(Dbits){.u=UINT64_C(0x4023000000000000)}.f); }']
-B += ['if conversion_check(&conversions) != 0 { #panic("conversions") }']
+B += ['if conversion_check(conversions) != 0 { #panic("conversions") }']
 D += ['fn widen(x:u32) u64 { return #bitcast(u64,#cast(f64,#bitcast(f32,x))) }',
       'fn narrow(x:u64) u32 { return #bitcast(u32,#cast(f32,#bitcast(f64,x))) }',
       'extern fn width_check(w:fn(u32) u64,n:fn(u64) u32) i32']
@@ -227,7 +227,7 @@ C += ['int width_check(uint64_t (*w)(uint32_t),uint32_t (*n)(uint64_t)) {',
       '&& n(UINT64_C(0x36a0000000000000))==1 && n(UINT64_C(0x3690000000000000))==0',
       '&& n(UINT64_C(0x3690000000000001))==1 && n(UINT64_C(0x3ff0000010000000))==0x3f800000',
       '&& n(UINT64_C(0x3ff0000010000001))==0x3f800001; }']
-B += ['if width_check(&widen,&narrow) != 1 { #panic("width conversion rounding") }']
+B += ['if width_check(widen,narrow) != 1 { #panic("width conversion rounding") }']
 
 
 # Identity transforms isolate the ABI oracle from compiler-rt float operations.
@@ -252,9 +252,9 @@ for name, ct, dt, ci, di, checks in (
               f'int cb_{key}({ct} (*fn)({",".join(cp)})) {{ {ct} x={ci}; {ct} r=fn({",".join(args)}); return {valid}; }}']
         D += [f'extern fn c_{key}({",".join(dp)}) {dt}',
               f'extern fn cb_{key}(f:fn({",".join(["i32"]*pressure+[dt,"i32"])}) {dt}) i32',
-              f'fn local_{key}({",".join(dp)}) {dt} {{ if {bad} {{ #panic("incoming {key}") }} return x }}']
-        B += [f'if cb_{key}(&local_{key}) != 1 {{ #panic("callback {key}") }}',
-              f'if cb_{key}(&c_{key}) != 1 {{ #panic("C control {key}") }}',
+              f'fn local_{key}({",".join(dp)}) {dt} {{ if {bad} {{ #panic("incoming {key}") }}\nreturn x }}']
+        B += [f'if cb_{key}(local_{key}) != 1 {{ #panic("callback {key}") }}',
+              f'if cb_{key}(c_{key}) != 1 {{ #panic("C control {key}") }}',
               f'x_{key} := {di}', f'r_{key} := c_{key}({",".join(args).replace("x",f"x_{key}")})']
         for field, bits, union in checks:
             width = 32 if union == 'Fbits' else 64
@@ -270,7 +270,7 @@ B += ['if variadic(17,23,#cast(f64,2.5),29) != 1 { #panic("variadic") }']
 # Volatile CPACR reads observe actual hardware state, before and after work.
 C += ['uint32_t cpacr(void) { return *(volatile uint32_t *)0xe000ed88u; }']
 D += ['extern fn cpacr() u32',
-      'fn recursive(n:i32, x:f64, wide:u64) f64 { if n == 0 { return x } saved := x + #cast(f64,wide) child := recursive(n-1,x+0.5,wide+1) return child + saved }']
+      'fn recursive(n:i32, x:f64, wide:u64) f64 { if n == 0 { return x }\nsaved := x + #cast(f64,wide)\nchild := recursive(n-1,x+0.5,wide+1)\nreturn child + saved }']
 B.insert(0, 'if cpacr() & 0x00f00000 != 0 { #panic("CP10/11 enabled at entry") }')
 B += ['if recursive(5,1.5,0x100000001) != 21474836511.5 { #panic("recursive frame bank") }',
       'if cpacr() & 0x00f00000 != 0 { #panic("CP10/11 enabled after work") }']
@@ -327,7 +327,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-thumb-soft-') as tmp:
         print(f'PASS thumb-soft {mode}: arithmetic/conversions, recursive frame bank, CPACR disabled, clang ABI, explicit mixed ABI rejection; {instructions} non-VFP instructions', flush=True)
     # Checked bounds panic unwinds recursively through live f64/u64 locals.
     # Release disables bounds checks; debug is the contract exercised here.
-    (source / 'main.dyn').write_text('use "std/io"\nextern fn cpacr() u32\nfn cleanup(x:f64, wide:u64) {\n  if x != 7.5 || wide != 0x123456789abcdef0 || cpacr() & 0x00f00000 != 0 { #panic("unwind bank corrupt") }\n  _ = io.println(io.stdout(), "UNWIND BANK PASS")\n}\nfn descend(n:i32, index:usize) {\n  x:f64 = 7.5 wide:u64 = 0x123456789abcdef0\n  defer cleanup(x,wide)\n  if n != 0 { descend(n-1,index) return }\n  values:[1]u8 = [7] _ = values[index]\n}\nfn main() { descend(3,2) }\n')
+    (source / 'main.dyn').write_text('use "std/io"\nextern fn cpacr() u32\nfn cleanup(x:f64, wide:u64) {\n  if x != 7.5 || wide != 0x123456789abcdef0 || cpacr() & 0x00f00000 != 0 { #panic("unwind bank corrupt") }\n  _ = io.println(io.stdout(), "UNWIND BANK PASS")\n}\nfn descend(n:i32, index:usize) {\n  x:f64 = 7.5\n  wide:u64 = 0x123456789abcdef0\n  defer cleanup(x,wide)\n  if n != 0 { descend(n-1,index)\n  return }\n  values:[1]u8 = [7]\n  _ = values[index]\n}\nfn main() { descend(3,2) }\n')
     image = work / 'panic.elf'
     run([DYN, 'build', str(source), '--target', 'thumbv7em-none-soft', '--no-cache', '--quiet', '--debug', '--link', str(obj), '--output', str(image)])
     check_image(image)

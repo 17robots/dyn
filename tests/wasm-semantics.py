@@ -20,15 +20,20 @@ pub fn goodenum(x: i64) i8 { return #cast(i8, #cast(Sign, x)) }
 pub fn divsmall(x: i8, y: i8) i8 { return x / y }
 pub fn remsmall(x: i8, y: i8) i8 { return x % y }
 pub fn deref(p: *i32) i32 { return p.* }
-pub fn cleanup(x: i32) i32 { defer { note(7) } return 10 / x }
-fn mutate(p: *Pair) i32 { p.x = 99 return 0 }
+pub fn cleanup(x: i32) i32 { defer { note(7) }
+return 10 / x }
+fn mutate(p: *Pair) i32 { p.x = 99
+return 0 }
 fn take(p: Pair, ignored: i32) i32 { return p.x }
-pub fn snapshot() i32 { p := Pair{x: 7, y: 9} return take(p, mutate(&p)) }
+pub fn snapshot() i32 { p := Pair{x: 7, y: 9}
+return take(p, mutate(&p)) }
 fn first(x: i32) i32 { return 11 }
 fn second(x: i32) i32 { return 22 }
-callback: fn(i32) i32 = &first
-fn change() i32 { callback = &second return 0 }
-pub fn order() i32 { callback = &first return callback(change()) }
+callback: fn(i32) i32 = first
+fn change() i32 { callback = second
+return 0 }
+pub fn order() i32 { callback = first
+return callback(change()) }
 '''
 JS = r'''
 const assert = require('node:assert/strict');

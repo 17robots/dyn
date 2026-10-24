@@ -138,7 +138,7 @@ cases['zstd'] = r'''input: [64]u8 = [] encoded: [256]u8 = [] decoded: [64]u8 = [
   if raw.ZSTD_isError(raw.ZSTD_decompress(#cast(rawptr, &decoded[0]), 64, #cast(rawptr, &encoded[0]), n - 1)) == 0 { #panic("truncated frame") }'''
 cases['sdl3'] = 'if !raw.SDL_Init(raw.SDL_INIT_EVENTS) { #panic("SDL events") } defer raw.SDL_Quit()\n' + cases['sdl3'] + r'''
   marker: u8 = 17
-  raw.SDL_SetEventFilter(&event_filter, #cast(rawptr, &marker))
+  raw.SDL_SetEventFilter(event_filter, #cast(rawptr, &marker))
   returned_filter: raw.SDL_EventFilter = nil returned_data: rawptr = nil
   if !raw.SDL_GetEventFilter(&returned_filter, &returned_data) || returned_filter == nil || returned_data != #cast(rawptr, &marker) { #panic("callback output") }
   if !returned_filter(returned_data, nil) { #panic("returned callback") }
@@ -180,7 +180,7 @@ try:
             if name in ('vulkan', 'opengl'):
                 imports += 'use "std/dynlib"\n#link("c")\n'
             if name == 'sdl3':
-                imports += 'fn event_filter(data: rawptr, event: *raw.SDL_Event) bool { _ = event return data != nil }\n'
+                imports += 'fn event_filter(data: rawptr, event: *raw.SDL_Event) bool { _ = event\nreturn data != nil }\n'
             if name == 'opengl':
                 imports += 'recorded_mask: u32 = 0\nfn record_clear(mask: u32) { recorded_mask = mask }\n'
             if name == 'stb_image_resize':

@@ -18,19 +18,26 @@ def source(guard):
     checks = []
     for size in SIZES:
         declarations += [f'struct Z{size} {{ a:[{size}]u8 }}',
-                         f'pub fn zero{size}(p:*Z{size}) {{ r:Z{size} p.*=r }}']
+                         f'pub fn zero{size}(p:*Z{size}) {{ r:Z{size}\np.*=r }}']
         checks += [f'''for offset in 0..16 {{
   for i in 0..320 {{ backing[i]=171 }}
   zero{size}(#cast(*Z{size},&backing[offset]))
-  for i in 0..320 {{ expected:u8=171 if i>=offset && i-offset<{size} {{ expected=0 }} expect(backing[i]==expected) }}
+  for i in 0..320 {{ expected:u8=171
+if i>=offset && i-offset<{size} {{ expected=0 }}
+expect(backing[i]==expected) }}
 }}''']
         if guard:
             checks += [f'''zero{size}(#cast(*Z{size},&page[0]))
 zero{size}(#cast(*Z{size},#cast(usize,&page[0])+4096-{size}))''']
     declarations += ['''struct Padded { a:u8,b:u64,c:u8 }
-pub fn padded(p:*Padded) { r:Padded p.*=r }
-pub fn partial(p:*Z64) { r:Z64 r.a[31]=91 p.*=r }
-pub fn unknown(p:*Z64,x:u8) { r:Z64 r.a[31]=x p.*=r }
+pub fn padded(p:*Padded) { r:Padded
+p.*=r }
+pub fn partial(p:*Z64) { r:Z64
+r.a[31]=91
+p.*=r }
+pub fn unknown(p:*Z64,x:u8) { r:Z64
+r.a[31]=x
+p.*=r }
 pub fn overlap() {
   r:[67]u8
   for i in 0..67 { r[i]=#cast(u8,i) }
@@ -45,14 +52,19 @@ pub fn overlap() {
   for i in 0..#sizeof(Padded) { expect(backing[i]==0) }
   for i in #sizeof(Padded)..320 { expect(backing[i]==171) }
   partial(#cast(*Z64,&backing[1]))
-  for i in 0..64 { expected:u8=0 if i==31 { expected=91 } expect(backing[i+1]==expected) }
+  for i in 0..64 { expected:u8=0
+if i==31 { expected=91 }
+expect(backing[i+1]==expected) }
   unknown(#cast(*Z64,&backing[3]),255)
-  for i in 0..64 { expected:u8=0 if i==31 { expected=255 } expect(backing[i+3]==expected) }
+  for i in 0..64 { expected:u8=0
+if i==31 { expected=255 }
+expect(backing[i+3]==expected) }
   overlap()''']
     pre = 'backing:[320]u8\n'
     if guard:
         pre += '''mapped:=#syscall(9,0,12288,0,34,-1,0)
-expect(mapped>0) expect(#syscall(10,mapped+4096,4096,3)==0)
+expect(mapped>0)
+expect(#syscall(10,mapped+4096,4096,3)==0)
 page:=(#cast(*u8,mapped+4096))[..4096]
 '''
         checks += ['expect(#syscall(11,mapped,12288)==0)']

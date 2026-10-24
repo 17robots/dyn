@@ -104,12 +104,12 @@ pub fn step(game: *Game, input: Input) {
   case input {
     Input.Left => {
       game.paddle -= PaddleSpeed
-    },
+    }
     Input.Right => {
       game.paddle += PaddleSpeed
-    },
+    }
     Input.None => {
-    },
+    }
   }
   game.paddle = clamp(game.paddle, 0, Width - PaddleWidth)
   game.ball_x += game.velocity_x

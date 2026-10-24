@@ -13,12 +13,16 @@ use "std/hash" hashing
 use "std/bytes" bytes
 use "std/errors" errors
 fn main() {
-  buffer:[16]u8=[] buffer[0]='a' buffer[1]='b' buffer[2]='c'
+  buffer:[16]u8=[]
+  buffer[0]='a'
+  buffer[1]='b'
+  buffer[2]='c'
   arena:=mem.arena_from_buffer(buffer[1..4])
   entry:=zip.Entry{payload:buffer[..3],compressed_size:3,uncompressed_size:3,checksum:hashing.crc32(buffer[..3])}
   result:=zip.extract(&arena,entry)
   if result.ok || result.kind!=errors.Kind.InvalidInput || result.detail!=zip.ErrorKind.Overlap || result.error!=0 || #len(result.value)!=0 || mem.arena_mark(&arena)!=0 || !bytes.equal(buffer[..3],"abc") { #panic("ZIP overlap preflight") }
-  backing:[1024]u8=[] backing[0]='a'
+  backing:[1024]u8=[]
+  backing[0]='a'
   unicodearena:=mem.arena_from_buffer(backing[..])
   converted:=text.normalize(&unicodearena,backing[..1],text.Form.NFC)
   if converted.ok || mem.arena_mark(&unicodearena)!=0 || backing[0]!='a' { #panic("normalization work overlap") }

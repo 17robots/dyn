@@ -60,7 +60,7 @@ for name, cf, df, init, field, expected in cases:
           f'{name} cb_{name}({name} (*f)({name}), {name} x) {{ return f(x); }}']
     dyn += [f'extern fn c_{name} "c_{name}"(x: {name}) {name}',
             f'extern fn cb_{name} "cb_{name}"(f: fn({name}) {name}, x: {name}) {name}',
-            f'fn local_{name}(x: {name}) {name} {{ value := x value.{field} += {increment} return value }}']
+            f'fn local_{name}(x: {name}) {name} {{ value := x\nvalue.{field} += {increment}\nreturn value }}']
     checksum = '+'.join(f'{2*i+1}*(double)x.{path}' for i,(path,_) in enumerate(leaves[name]))
     total = float(sum((2*i+1)*(value + (path == field)) for i,(path,value) in enumerate(leaves[name])))
     c.append(f'double sum_{name}({name} x) {{ return {checksum}; }}')
@@ -69,9 +69,9 @@ for name, cf, df, init, field, expected in cases:
              f'r_{name} := c_{name}(x_{name})',
              f'if sum_{name}(r_{name}) != {total} {{ #panic("all fields {name}") }}',
              f'if r_{name}.{field} != {updated} || x_{name}.{field} != {expected} {{ #panic("direct {name}") }}',
-             f'f_{name} := &c_{name}', f'r_{name} = f_{name}(x_{name})',
+             f'f_{name} := c_{name}', f'r_{name} = f_{name}(x_{name})',
              f'if r_{name}.{field} != {updated} {{ #panic("indirect {name}") }}',
-             f'r_{name} = cb_{name}(&local_{name}, x_{name})',
+             f'r_{name} = cb_{name}(local_{name}, x_{name})',
              f'if sum_{name}(r_{name}) != {total} {{ #panic("callback fields {name}") }}',
              f'if r_{name}.{field} != {updated} {{ #panic("callback {name}") }}']
 # A two-register struct cannot partially consume the final SysV argument register.
@@ -95,10 +95,10 @@ if a.riscv:
             'extern fn variadic_sum(n:i32, ...) f64',
             'fn narrow_return() u32 { return 0x80000000 }']
     body += ['if narrow_bits(0x80000000) != 0xffffffff80000000 { #panic("LP64D unsigned32 argument") }',
-             'if narrow_callback(&narrow_return) != 0xffffffff80000000 { #panic("LP64D unsigned32 return") }',
+             'if narrow_callback(narrow_return) != 0xffffffff80000000 { #panic("LP64D unsigned32 return") }',
              'if variadic_sum(9,0.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5) != 40.5 { #panic("LP64D variadic stack") }']
 source = work/'source'; source.mkdir(exist_ok=True)
-(source/'char_linux_arm.dyn').write_text('#target(kernel: linux, arch: aarch64)\nfn check_unsigned_char() { value: c.char = 255 _ = value }\n')
+(source/'char_linux_arm.dyn').write_text('#target(kernel: linux, arch: aarch64)\nfn check_unsigned_char() { value: c.char = 255\n_ = value }\n')
 (source/'main.dyn').write_text('\n'.join(dyn)+'\nfn main() {\n'+'\n'.join(body)+'\n}\n')
 (work/'provider.c').write_text('\n'.join(c)+'\n')
 targets = [('linux','x86_64-linux',shlex.split(os.environ.get('CC','cc')),True),

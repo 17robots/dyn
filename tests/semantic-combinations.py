@@ -22,11 +22,14 @@ fn callback(value: {alias}.Pair) {alias}.Pair {{
 }}
 fn early(stop: bool) i32 {{
   defer {{ calls += 10 }}
-  if stop {{ defer {{ calls += 100 }} return 7 }}
+  if stop {{
+    defer {{ calls += 100 }}
+    return 7
+  }}
   return 8
 }}
 fn main() {{
-  function := &callback
+  function := callback
   raw := #cast(rawptr, function)
   restored := #cast(fn({alias}.Pair) {alias}.Pair, raw)
   value := restored({alias}.Pair{{value: {alias}.Base}})
@@ -44,14 +47,14 @@ fn main() {{
             subprocess.run([str(output)],check=True,timeout=5)
             rows.append(dict(alias=alias,comment=bool(comment),expression=expression,release=release,cached=cached,status='passed'))
     # Forward constants and field defaults are validated after all names resolve.
-    (root/'main.dyn').write_text('const First: i64 = Second + 1\nconst Second: i64 = #cast(i64, 41)\nstruct Defaults { value: i64 = First }\nconst Arithmetic: i64 = '+ '+'.join(['1']*40)+'\nfn main() { value := Defaults{} if value.value != 42 || Arithmetic != 40 { #panic("constants") } }\n')
+    (root/'main.dyn').write_text('const First: i64 = Second + 1\nconst Second: i64 = #cast(i64, 41)\nstruct Defaults { value: i64 = First }\nconst Arithmetic: i64 = '+ '+'.join(['1']*40)+'\nfn main() { value := Defaults{}\nif value.value != 42 || Arithmetic != 40 { #panic("constants") } }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--output',str(root/'run')]+(['--release'] if release else []),check=True)
         subprocess.run([str(root/'run')],check=True)
     for source in ('use "./lib" data\nconst Bad: data.Count = 1.5\nfn main() {}',
                    'const A: i64 = B\nconst B: i64 = A\nfn main() {}',
-                   'use "./lib" data\nfn main() { _ = data.Pair(i32){value: 1} }',
-                   'use "./lib" data\nfn f(x: data.Pair) data.Pair { return x }\nfn main() { callback: fn(i32) i32 = &f _ = callback(1) }'):
+                   'use "./lib" data\nfn main() { _ = data.Pair(i32)\n{value: 1} }',
+                   'use "./lib" data\nfn f(x: data.Pair) data.Pair { return x }\nfn main() { callback: fn(i32) i32 = f\n_ = callback(1) }'):
         (root/'main.dyn').write_text(source)
         for command in ('check','build'):
             r=subprocess.run([DYN,command,str(root),'--quiet','--no-cache','--output',str(root/'run')],capture_output=True,text=True,timeout=30)
@@ -60,7 +63,7 @@ fn main() {{
     # defer must run even though the intervening C function has no cleanup hook.
     (root/'provider.c').write_text('void invoke(void (*callback)(void)) { callback(); }\n')
     subprocess.run(['cc','-fno-stack-protector','-c',str(root/'provider.c'),'-o',str(root/'provider.o')],check=True)
-    (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { _ = io.println(io.stdout(),"caller cleanup") } invoke(&fails) }\n')
+    (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { _ = io.println(io.stdout(),"caller cleanup") }\ninvoke(fails) }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--link',str(root/'provider.o'),'--output',str(root/'run')]+(['--release'] if release else []),check=True)
         r=subprocess.run([str(root/'run')],capture_output=True,text=True,timeout=5)

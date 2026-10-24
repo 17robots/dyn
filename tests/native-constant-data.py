@@ -19,7 +19,7 @@ DYN = Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve()
 LIBRARY = '''struct Pair { a: u64, b: u64 }
 fn plus(x: u64) u64 { return x + 1 }
 const frozen: Pair = Pair{a: 10, b: 20}
-const frozen_callback: fn(u64) u64 = &plus
+const frozen_callback: fn(u64) u64 = plus
 pub fn frozen_pointer() rawptr { return #cast(rawptr, &frozen) }
 pub fn frozen_total() u64 { return frozen.a + frozen.b + frozen_callback(1) }
 '''

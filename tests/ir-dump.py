@@ -20,8 +20,9 @@ fn callback(x:i32) i32 { return x+1 }
 fn work(values:[]i32,which:Tag) i64 {
   p:=Pair{left:7,right:1.5}
   for i in 0..#len(values) { values[i]+=global }
-  for value in values { if value>10 { continue } p.left+=#cast(i64,value) }
-  case which { Tag.A=>{ p.left+=1 },Tag.B=>{ p.left+=2 } }
+  for value in values { if value>10 { continue }
+  p.left+=#cast(i64,value) }
+  case which { Tag.A=>{ p.left+=1 }Tag.B=>{ p.left+=2 } }
   defer { global=4 }
   return identity(p.left)+d.read(d.Item{value:2})
 }
@@ -33,7 +34,7 @@ fn main() {
   _=pointer[..3]
   _=work(values[..],Tag.A)
   _=d.generic(d.Item{value:7})
-  target:fn(i32) i32=&callback
+  target:fn(i32) i32=callback
   _=target(1)
   _=#bitcast(u64,#cast(f64,1.5))
   _=message

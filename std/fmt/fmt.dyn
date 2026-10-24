@@ -200,49 +200,49 @@ pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
     case argument {
       is f32 value => {
         ok = write_f64(state, #cast(f64, value))
-      },
+      }
       is f64 value => {
         ok = write_f64(state, value)
-      },
+      }
       is bool value => {
         ok = write_bool(state, value)
-      },
+      }
       is i8 value => {
         ok = write_i64(state, #cast(i64, value))
-      },
+      }
       is i16 value => {
         ok = write_i64(state, #cast(i64, value))
-      },
+      }
       is i32 value => {
         ok = write_i64(state, #cast(i64, value))
-      },
+      }
       is i64 value => {
         ok = write_i64(state, value)
-      },
+      }
       is isize value => {
         ok = write_i64(state, #cast(i64, value))
-      },
+      }
       is u8 value => {
         ok = write_u64(state, #cast(u64, value))
-      },
+      }
       is u16 value => {
         ok = write_u64(state, #cast(u64, value))
-      },
+      }
       is u32 value => {
         ok = write_u64(state, #cast(u64, value))
-      },
+      }
       is u64 value => {
         ok = write_u64(state, value)
-      },
+      }
       is usize value => {
         ok = write_u64(state, #cast(u64, value))
-      },
+      }
       is []const u8 value => {
         ok = write(state, value)
-      },
+      }
       is []u8 value => {
         ok = write(state, value)
-      },
+      }
       _ => {
         ok = false
       }

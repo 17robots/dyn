@@ -12,26 +12,42 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = '''use "std/io"
 struct Pair { a: u64, b: u64 }
-fn repeat(p: *const u64) u64 { a := p.* b := p.* return a + b }
+fn repeat(p: *const u64) u64 { a := p.*
+b := p.*
+return a + b }
 fn store(p: *const u64, q: *u64) u64 {
-  a := p.* q.* = 41 return a * 100 + p.*
+  a := p.*
+  q.* = 41
+  return a * 100 + p.*
 }
 fn mutate(p: *u64) { p.* = 23 }
-fn call(p: *u64) u64 { a := p.* mutate(p) return a * 100 + p.* }
+fn call(p: *u64) u64 { a := p.*
+mutate(p)
+return a * 100 + p.* }
 fn narrow(p: *u64) u64 {
-  a := p.* byte := #cast(*u8, p) byte.* = 9 return a * 100 + p.*
+  a := p.*
+  byte := #cast(*u8, p)
+  byte.* = 9
+  return a * 100 + p.*
 }
 fn copy(p: *Pair, q: *const Pair) u64 {
-  a := p.a p.* = q.* return a * 100 + p.a
+  a := p.a
+  p.* = q.*
+  return a * 100 + p.a
 }
-fn clear(p: *Pair) u64 { a := p.a p.* = Pair{} return a * 100 + p.a }
+fn clear(p: *Pair) u64 { a := p.a
+p.* = Pair{}
+return a * 100 + p.a }
 fn loop(p: *u64) u64 {
   total: u64 = 0
-  for i in 0..8 { total += p.* p.* += 1 }
+  for i in 0..8 { total += p.*
+  p.* += 1 }
   return total
 }
 fn branch(p: *u64, change: bool) u64 {
-  a := p.* if change { p.* = 37 } return a * 100 + p.*
+  a := p.*
+  if change { p.* = 37 }
+  return a * 100 + p.*
 }
 fn main() {
   for i in 1..33 {
@@ -43,7 +59,8 @@ fn main() {
     value = #cast(u64, i)
     if narrow(&value) != (#cast(u64, i)) * 100 + 9 { #panic("partial store") }
     data: [4]u64 = [11, 13, 17, 19]
-    p := #cast(*Pair, &data[1]) q := #cast(*const Pair, &data[0])
+    p := #cast(*Pair, &data[1])
+    q := #cast(*const Pair, &data[0])
     if copy(p, q) != 1311 || p.a != 11 || p.b != 13 { #panic("overlap copy") }
     if clear(p) != 1100 || p.a != 0 || p.b != 0 { #panic("zero barrier") }
     value = 1

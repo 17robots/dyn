@@ -42,7 +42,7 @@ fn zero_scanners() {
     #panic("zero INI scanner lines")
   }
   // An empty stream holds one empty field, from the constructor or from zero.
-  empty := csv.StreamScanner{ input: io.Reader{ read: &read_nothing } }
+  empty := csv.StreamScanner{ input: io.Reader{ read: read_nothing } }
   storage: [4]u8 = []
   field := csv.next_stream(&empty, storage[..])
   if !field.ok || #len(field.text) != 0 || !field.end_input {

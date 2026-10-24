@@ -66,5 +66,5 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
 
 // Escapes text and quoted attribute values. Not a JS/CSS/URL-context sanitizer.
 pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult {
-  return core.render_with(destination, template, fields, &write_escaped)
+  return core.render_with(destination, template, fields, write_escaped)
 }

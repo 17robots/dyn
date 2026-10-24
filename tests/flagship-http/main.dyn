@@ -91,10 +91,10 @@ fn main() {
   defer mem.arena_release(&arena)
   state := mem.push(App, &arena)
   state.router = http.router(state.routes[..], nil)
-  _ = http.route(&state.router, "GET", "/health", &handle_health)
-  _ = http.route(&state.router, "GET", "/notes", &handle_list)
-  _ = http.route(&state.router, "POST", "/notes", &handle_add)
-  _ = http.route(&state.router, "POST", "/quit", &handle_quit)
+  _ = http.route(&state.router, "GET", "/health", handle_health)
+  _ = http.route(&state.router, "GET", "/notes", handle_list)
+  _ = http.route(&state.router, "POST", "/notes", handle_add)
+  _ = http.route(&state.router, "POST", "/quit", handle_quit)
 
   address := net.ipv4(127, 0, 0, 1, 0)
   listened := net.tcp_listen_ipv4(&address, 64)
@@ -111,7 +111,7 @@ fn main() {
   workers := mem.push_array(concurrent.Worker, &arena, WorkerCount)
   receive_storage := mem.push_array(u8, &arena, WorkerCount * 16 * mem.KiB)
   stacks := mem.push_array(u8, &arena, WorkerCount * 256 * mem.KiB)
-  started := concurrent.start_context(&arena, workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, &handle, state)
+  started := concurrent.start_context(&arena, workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, handle, state)
   if !started.ok {
     #panic("cannot start workers")
   }

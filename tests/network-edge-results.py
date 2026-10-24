@@ -107,16 +107,16 @@ fn main() {
   route := http.route(&router, "GET", "/", nil)
   metadata(route.ok, route.kind, route.error, route.offset, errors.Kind.InvalidInput, 0)
   if route.detail != http.ErrorKind.Invalid || router.count != 0 { #panic("invalid route result") }
-  route = http.route(&router, "GET", "/", &handler)
+  route = http.route(&router, "GET", "/", handler)
   if !route.ok || route.kind != errors.Kind.None || route.error != 0 || route.offset != 0 || router.count != 1 { #panic("route success result") }
-  route = http.route(&router, "GET", "/other", &handler)
+  route = http.route(&router, "GET", "/other", handler)
   metadata(route.ok, route.kind, route.error, route.offset, errors.Kind.Capacity, 0)
   if route.detail != http.ErrorKind.Capacity || router.count != 1 { #panic("route capacity result") }
 
   for native in [0, -73] {
     trace := Trace{ native: #cast(isize, native) }
-    reader := io.Reader{ data: &trace, read: &read }
-    writer := io.Writer{ data: &trace, write: &write }
+    reader := io.Reader{ data: &trace, read: read }
+    writer := io.Writer{ data: &trace, write: write }
     storage: [128]u8 = []
     server := http.server(reader, writer, storage[..])
     first := http.receive(&server)

@@ -389,7 +389,7 @@ fn missing_proc(name: *const u8) rawptr {
   return nil
 }
 fn main() {
-  missing := gl.load(&missing_proc)
+  missing := gl.load(missing_proc)
   if missing.ok || !strings.equal(missing.missing, "glClearColor") {
     #panic("missing symbol accepted")
   }
@@ -423,7 +423,7 @@ fn main() {
   if !sdl3.gl_make_current(window.value, context) {
     #panic("GL current")
   }
-  loaded := gl.load(&sdl3.gl_proc)
+  loaded := gl.load(sdl3.gl_proc)
   if !loaded.ok {
     _ = io.println(io.stderr(), "missing {}", loaded.missing)
     #panic("GL load")
@@ -536,12 +536,14 @@ use "std/mem"
 use "std/os/linux"
 use "std/strings"
 fn main() {
-  backing: [65536]u8 = [] arena := mem.arena_from_buffer(backing[..])
+  backing: [65536]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(&arena)
   if #len(args) != 3 { #panic("URL required") }
   if curl.init() != 0 { #panic("init") }
   defer curl.cleanup()
-  url: [4096]u8 = [] output: [256]u8 = []
+  url: [4096]u8 = []
+  output: [256]u8 = []
   result := curl.get_into(args[1], url[..], output[..], 5000)
   if !result.ok || result.http_status != 200 || !strings.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
   missing := curl.get_into(args[2], url[..], output[..], 5000)
@@ -568,15 +570,19 @@ extern fn color_size "oracle_color_size"() usize
 extern fn surface_valid "oracle_surface"(surface: sdl3.Surface) i32
 fn main() {
   if #sizeof(ts.Node) != node_size() || #alignof(ts.Node) != node_align() || #sizeof(ts.Edit) != edit_size() || #sizeof(sdl3.Color) != color_size() { #panic("provider ABI mismatch") }
-  backing: [65536]u8 = [] arena := mem.arena_from_buffer(backing[..])
-  args := linux.process_arguments(&arena) if #len(args) != 3 { #panic("image and font paths required") }
-  buffer: [4096]u8 = [] surface := image.load_owned(args[1], buffer[..])
+  backing: [65536]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  args := linux.process_arguments(&arena)
+  if #len(args) != 3 { #panic("image and font paths required") }
+  buffer: [4096]u8 = []
+  surface := image.load_owned(args[1], buffer[..])
   if !surface.ok { #panic("image") }
   defer sdl3.surface_destroy_owned(surface.value)
   if surface_valid(surface.value) == 0 { #panic("image dimensions") }
   if !ttf.init() { #panic("TTF init") }
   defer ttf.quit()
-  font := ttf.open_owned(args[2], buffer[..], 18.0) if !font.ok { #panic("font") }
+  font := ttf.open_owned(args[2], buffer[..], 18.0)
+  if !font.ok { #panic("font") }
   defer ttf.destroy_owned(font.value)
   rendered := ttf.render_owned(font.value, "Dyn", sdl3.Color{ red: 255, green: 127, blue: 64, alpha: 255 })
   if !rendered.ok { #panic("rendered text") }

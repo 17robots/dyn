@@ -20,7 +20,12 @@ fn show(label: []const u8, value: u64) {
 }
 fn churn(seed: u64) u64 {
   // Many live values push the allocator onto callee-saved registers.
-  a := seed * 3 b := seed * 5 c := seed * 7 d := seed * 11 e := seed * 13 f := seed * 17
+  a := seed * 3
+  b := seed * 5
+  c := seed * 7
+  d := seed * 11
+  e := seed * 13
+  f := seed * 17
   if seed == 99 {
     #panic("deep panic")
   }
@@ -28,15 +33,20 @@ fn churn(seed: u64) u64 {
   return #wrap(r + a + b + c + d + e + f)
 }
 fn keeper(seed: u64) u64 {
-  x := seed + 1 y := seed + 2 z := seed + 3 w := seed + 4 v := seed + 5
+  x := seed + 1
+  y := seed + 2
+  z := seed + 3
+  w := seed + 4
+  v := seed + 5
   defer { show("keeper", x + y * 10 + z * 100 + w * 1000 + v * 10000) }
   r := churn(seed)
   return #wrap(r + x + y + z + w + v)
 }
 fn twice(seed: u64) u64 {
-  p := seed * 2 q := seed * 4
+  p := seed * 2
+  q := seed * 4
   defer { show("twice", p + q) }
-  step: fn(u64) u64 = &keeper
+  step: fn(u64) u64 = keeper
   return step(seed) + p + q
 }
 fn main() {

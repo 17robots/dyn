@@ -24,7 +24,8 @@ fn main() {
   empty:[0]i32=[]
   if sort.search(empty[..],0).index!=0 || sort.search(empty[..],0).found { #panic("empty search") }
   arena:mem.Arena
-  prefix:=mem.push(u8,&arena) prefix.*=91
+  prefix:=mem.push(u8,&arena)
+  prefix.*=91
   mark:=mem.arena_mark(&arena)
   parsed:=mdesk.parse(&arena,"valid: 1\nbroken: {")
   if parsed.kind!=errors.Kind.InvalidInput || parsed.error!=0 || parsed.detail!=mdesk.ErrorKind.Unclosed { #panic("mdesk error fields") }

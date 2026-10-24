@@ -57,7 +57,7 @@ pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) i
   thread.context = context
   sync.store_u32(&thread.ready, 0)
   handle: rawptr = nil
-  error = create(&handle, &attributes, &trampoline, thread)
+  error = create(&handle, &attributes, trampoline, thread)
   if error != 0 {
     mem.arena_rewind(arena, mark)
     code := 0 - #cast(isize, error)

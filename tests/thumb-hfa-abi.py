@@ -124,8 +124,8 @@ for name, cf, df, init, leaves in cases:
                  f'r_{key} := c_{key}({",".join(args+[f"x_{key}","19","6.5","7.5"])})',
                  'if ' + ' || '.join(f'r_{key}.{path} != {value+1} || x_{key}.{path} != {value}' for path,value in leaves) +
                  f' {{ #panic("outgoing {key}") }}',
-                 f'if cb_{key}(&local_{key}) != 1 {{ #panic("return {key}") }}']
-        body += [f'fn_{key} := &c_{key}',
+                 f'if cb_{key}(local_{key}) != 1 {{ #panic("return {key}") }}']
+        body += [f'fn_{key} := c_{key}',
                  f'r_{key} = fn_{key}({",".join(args+[f"x_{key}","19","6.5","7.5"])})',
                  'if ' + ' || '.join(f'r_{key}.{path} != {value+1}' for path,value in leaves) +
                  f' {{ #panic("indirect {key}") }}']
@@ -145,7 +145,7 @@ for name, _, _, init, leaves in cases:
     for indirect in (False,True):
         suffix = f'{key}_{int(indirect)}'
         if indirect:
-            body += [f'fp_{key} := &{key}']
+            body += [f'fp_{key} := {key}']
         call = f'fp_{key}' if indirect else key
         body += [f'r_{suffix} := {call}(1,2,3,4,6.5,7.5,9,{name}{{{init}}},3)',
                  'if '+ ' || '.join(f'r_{suffix}.{path} != {value+3}' for path,value in leaves)+
@@ -156,7 +156,7 @@ for name in ('H1_f32','H1_f64'):
     key = f'core_{name}'
     c += [f'{name} {key}({name} x, ...) {{ va_list ap; va_start(ap,x); int n=va_arg(ap,int); va_end(ap); x.a += n; return x; }}']
     dyn += [f'extern fn {key}(x:{name}, ...) {name}']
-    body += [f'fp_{key} := &{key}', f'a_{key} := {key}({name}{{a:1.5}},3)',
+    body += [f'fp_{key} := {key}', f'a_{key} := {key}({name}{{a:1.5}},3)',
              f'b_{key} := fp_{key}({name}{{a:1.5}},3)',
              f'if a_{key}.a != 4.5 || b_{key}.a != 4.5 {{ #panic("{key}") }}']
     checks += 2
@@ -166,7 +166,7 @@ for kind, ct in [('f32','float'), ('f64','double')]:
     key = f'scalar_{kind}'
     c += [f'{ct} {key}(float a,double b, ...) {{ va_list ap; va_start(ap,b); int n=va_arg(ap,int); va_end(ap); return a+b+n; }}']
     dyn += [f'extern fn {key}(a:f32,b:f64, ...) {kind}']
-    body += [f'fp_{key} := &{key}', f'a_{key} := {key}(1.5,2.5,3)',
+    body += [f'fp_{key} := {key}', f'a_{key} := {key}(1.5,2.5,3)',
              f'b_{key} := fp_{key}(1.5,2.5,3)',
              f'if a_{key} != 7.0 || b_{key} != 7.0 {{ #panic("{key}") }}']
     checks += 2

@@ -20,10 +20,16 @@ fn touch(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) i64 {
   return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6
 }
 fn pressure(seed: i64) i64 {
-  a := seed + 1 b := seed + 2 c := seed + 3 d := seed + 4
-  e := seed + 5 f := seed + 6 g := seed + 7 h := seed + 8
+  a := seed + 1
+  b := seed + 2
+  c := seed + 3
+  d := seed + 4
+  e := seed + 5
+  f := seed + 6
+  g := seed + 7
+  h := seed + 8
   total: i64 = 0
-  callback := &touch
+  callback := touch
   for i in 0..30 {
     called := callback(a, b, c, d, e, f)
     if i % 2 == 0 { total += called + g * 7 + h * 8 }
@@ -68,8 +74,11 @@ for t in ('u32', 'i32', 'u64', 'i64'):
             operation = f'#wrap(a[i] {op} b[i])' if op in ('+', '-') else f'a[i] {op} b[i]'
             source += f'''
 fn {function}() {{
-  a: [{n}]{t} = [] b: [{n}]{t} = [] c: [{n}]{t} = []
-  for i in 0..{n} {{ a[i] = #cast({t}, i) b[i] = #cast({t}, -1) }}
+  a: [{n}]{t} = []
+  b: [{n}]{t} = []
+  c: [{n}]{t} = []
+  for i in 0..{n} {{ a[i] = #cast({t}, i)
+b[i] = #cast({t}, -1) }}
   for i in 0..{n} {{ c[i] = {operation} }}
   for i in 0..{n} {{ if c[i] != {operation} {{ #panic("SIMD scalar oracle") }} }}
   // Same-array destinations are safe because every lane uses the same index.
@@ -144,8 +153,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
     assert 'allocated to callee-saved registers' not in p.stderr, p.stderr
     assert 'vectorized' not in p.stderr, p.stderr
     (module/'main.dyn').write_text('''fn main() {
-  a: [19]u32 = [] b: [19]u32 = [] c: [19]u32 = []
-  for i in 0..19 { a[i] = 4294967295 b[i] = 1 }
+  a: [19]u32 = []
+  b: [19]u32 = []
+  c: [19]u32 = []
+  for i in 0..19 { a[i] = 4294967295
+  b[i] = 1 }
   for i in 0..19 { c[i] = a[i] + b[i] }
 }''')
     checked = work/'checked'

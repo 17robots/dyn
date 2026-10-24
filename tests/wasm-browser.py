@@ -53,7 +53,9 @@ pub fn pool_test() bool {
   same := list.free_pop(&first_free, &nil_slot)
   return same == first && second == &slots[1] && first_free == nil
 }
-pub fn heap_available() bool { created := mem.arena_create(32) mem.arena_release(&created) return true }
+pub fn heap_available() bool { created := mem.arena_create(32)
+mem.arena_release(&created)
+return true }
 pub fn wide_index(index: u64) u8 { return backing[index] }
 pub fn fail() { #panic("test trap") }
 '''

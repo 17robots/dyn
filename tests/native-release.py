@@ -26,7 +26,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-release-') as directory:
         subprocess.run([str(output)], check=True)
     # Checked overflow must still panic, with deferred cleanup executed first.
     source.write_text('''use "std/io"
-fn value() u8 { defer { _=io.println(io.stdout(), "cleanup") } value:u8=250 return value + 10 }
+fn value() u8 { defer { _=io.println(io.stdout(), "cleanup") }
+value:u8=250
+return value + 10 }
 fn main() { _=value() }
 ''')
     subprocess.run([str(DYN), 'build', str(root), '--backend', 'native', '--release',

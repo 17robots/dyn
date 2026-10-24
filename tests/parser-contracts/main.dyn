@@ -29,7 +29,7 @@ fn read_chunk(data: rawptr, destination: []u8) io.Result {
   return io.Result{ transferred: take }
 }
 fn input(state: *Chunk) io.Reader {
-  return io.Reader{ data: #cast(rawptr, state), read: &read_chunk }
+  return io.Reader{ data: #cast(rawptr, state), read: read_chunk }
 }
 fn csv_check(source: []const u8, expected: bool) {
   for limit in 1..4 {

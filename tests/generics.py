@@ -150,7 +150,7 @@ ERRORS = {
     'T is both u32 and i64 in this call': '  x: u32 = 1\n  y: i64 = 2\n  _ = min(x, y)',
     'expected a type argument': '  _ = make(3)',
     'a type is not a value': '  _ = min(Rect, 2)',
-    'a generic function can only be called': '  f := &min',
+    'a generic function can only be called': '  f := min',
     'generic instances nest too deeply': '  deep(1)',
     'function argument count mismatch': '  _ = make()',
 }

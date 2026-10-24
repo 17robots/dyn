@@ -26,16 +26,16 @@ fn name(op: Op) []const u8 {
   case op {
     Op.Nop => {
       return "nop"
-    },
+    }
     Op.Add => {
       return "add"
-    },
+    }
     Op.Sub => {
       return "sub"
-    },
+    }
     Op.Halt => {
       return "halt"
-    },
+    }
   }
 }
 
@@ -67,7 +67,7 @@ PANICS = {
   'wrapped division by zero': ('a: u8 = 0\n  _ = #wrap(a + 1 / a)', 'divide.ok'),
   'enum value missing': ('enum(u8) Op { Nop = 0, Add = 1, Halt = 0xFF }\nfn main() {\n  v: u16 = 3\n  _ = #cast(Op, v)', 'enum.cast.ok'),
   'enum value truncated': ('enum(u8) Op { Nop = 0, Add = 1 }\nfn main() {\n  v: u16 = 257\n  _ = #cast(Op, v)', 'enum.cast.ok'),
-  'enum corrupted tag': ('enum Color { Red, Green }\nfn name(c: Color) i64 {\n  case c {\n    Color.Red => { return 1 },\n    Color.Green => { return 2 },\n  }\n}\nfn main() {\n  c: Color = Color.Red\n  bits: *u32 = #cast(*u32, #cast(rawptr, &c))\n  bits.* = 7\n  _ = name(c)', 'enum.tag.ok'),
+  'enum corrupted tag': ('enum Color { Red, Green }\nfn name(c: Color) i64 {\n  case c {\n    Color.Red => { return 1 }\n    Color.Green => { return 2 }\n  }\n}\nfn main() {\n  c: Color = Color.Red\n  bits: *u32 = #cast(*u32, #cast(rawptr, &c))\n  bits.* = 7\n  _ = name(c)', 'enum.tag.ok'),
   'enum negative unsigned': ('enum(u64) Big { Zero = 0, Top = 0xFFFFFFFFFFFFFFFF }\nfn main() {\n  v: i64 = -1\n  _ = #cast(Big, v)', 'enum.cast.ok'),
 }
 ERRORS = {

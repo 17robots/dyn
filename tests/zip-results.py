@@ -39,11 +39,17 @@ fn read(data: rawptr, destination: []u8) io.Result {
  return io.Result{ transferred: take }
 }
 fn main() {
- invalid_data: [46]u8 = [] invalid_data[0]=80 invalid_data[1]=75 invalid_data[2]=1 invalid_data[3]=2 invalid_data[42]=100
+ invalid_data: [46]u8 = []
+ invalid_data[0]=80
+ invalid_data[1]=75
+ invalid_data[2]=1
+ invalid_data[3]=2
+ invalid_data[42]=100
  invalid_state := zip.ArchiveReader{source:invalid_data[..],indexed:true,directory_start:200,directory_end:46,remaining:1}
  invalid := zip.next(&invalid_state)
  check(!invalid.ok && invalid.kind==errors.Kind.InvalidInput && invalid.error==0 && invalid.detail==zip.ErrorKind.Syntax && invalid_state.failed)
- invalid_state.source="" invalid_state.remaining=0
+ invalid_state.source=""
+ invalid_state.remaining=0
  replay_invalid:=zip.next(&invalid_state)
  check(!replay_invalid.ok && replay_invalid.kind==errors.Kind.InvalidInput && replay_invalid.detail==zip.ErrorKind.Syntax)
  data: []const u8 = DATA
@@ -81,7 +87,7 @@ fn main() {
  payload: [64]u8 = []
  for limit in 0..72 {
    input := Input{ source: data, fail: limit }
-   stream := zip.stream_reader(io.Reader{ data: &input, read: &read },header[..],name[..],payload[..])
+   stream := zip.stream_reader(io.Reader{ data: &input, read: read },header[..],name[..],payload[..])
    item := zip.next_stream(&stream)
    for item.ok { item = zip.next_stream(&stream) }
    check(!item.ok && item.kind == errors.Kind.WouldBlock && item.error == 0 && item.offset == limit)
@@ -104,7 +110,7 @@ fn main() {
  check(zip.next_stream(&stream).ok)
  check(zip.next_stream(&stream).detail == zip.ErrorKind.End)
  native_input := Input{ source: data, fail: 32, native: -4 }
- native_stream := zip.stream_reader(io.Reader{ data: &native_input, read: &read },header[..],name[..],payload[..])
+ native_stream := zip.stream_reader(io.Reader{ data: &native_input, read: read },header[..],name[..],payload[..])
  native_result := zip.next_stream(&native_stream)
  check(native_result.kind == errors.Kind.WouldBlock && native_result.error == -4 && native_result.offset == 32)
  check(zip.next_stream(&native_stream).error == -4 && native_input.calls == 4)
@@ -115,7 +121,7 @@ fn main() {
  invalid_open := zip.open_checked("x")
  check(!invalid_open.ok && invalid_open.kind == errors.Kind.InvalidInput && invalid_open.error == 0)
  eof_input := Input{ source: "", fail: 100 }
- eof_stream := zip.stream_reader(io.Reader{ data: &eof_input, read: &read },header[..],name[..],payload[..])
+ eof_stream := zip.stream_reader(io.Reader{ data: &eof_input, read: read },header[..],name[..],payload[..])
  eof := zip.next_stream(&eof_stream)
  check(!eof.ok && eof.kind == errors.Kind.None && eof.error == 0 && eof.detail == zip.ErrorKind.End)
  check(zip.next_stream(&eof_stream).detail == zip.ErrorKind.End && eof_input.calls == 1)

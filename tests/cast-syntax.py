@@ -8,7 +8,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''calls: i32
-fn next() i32 { calls += 1 return 7 }
+fn next() i32 { calls += 1
+return 7 }
 fn identity(value: i32) i32 { return value }
 fn generic(value: $T) i64 { return #cast(i64, value) }
 struct Item { value: i32 }
@@ -25,7 +26,7 @@ fn main() {
   item := Item{value: 9}
   erased: rawptr = &item
   if #cast(*Item, erased).value != 9 { #panic("postfix field") }
-  if #cast(fn(i32) i32, &identity)(11) != 11 { #panic("postfix call") }
+  if #cast(fn(i32) i32, identity)(11) != 11 { #panic("postfix call") }
   if #cast(i32 /* target */, /* value */ 3 + 4) != 7 { #panic("comments") }
 }
 '''

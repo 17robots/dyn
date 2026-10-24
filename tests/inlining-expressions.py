@@ -13,36 +13,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve()
-SOURCE = '''use "std/io"
-trace:u64=0
-fn step(p:*u32) u32 {
- trace=trace*10+1
- p.*=#wrap(p.* * 1664525+1013904223)
- return p.*
-}
-fn after() u32 {trace=trace*10+2 return 3}
-pub fn nested(p:*u32) u64 {return #cast(u64,1+(step(p)>>8)%1000)}
-pub fn wrapped(p:*u32) u32 {return #wrap(step(p)+4294967295)}
-pub fn left(p:*u32) u64 {trace=0 v:=#cast(u64,step(p)+after()) return trace*10000000000+v}
-pub fn right_rejected(p:*u32) u64 {trace=0 v:=#cast(u64,after()+step(p)) return trace*10000000000+v}
-pub fn conditional(p:*u32, enabled:bool) u64 {trace=0 if enabled && step(p)>0 {return 90} return trace}
-struct Pair {value:u32}
-fn change(index:*usize) u32 {index.*=1 return 7}
-fn index_effect() usize {trace=trace*10+3 return 0}
-pub fn index_order(p:*u32) u64 {trace=0 a:[1]u32=[] a[index_effect()]=step(p) return trace}
-pub fn indexed(keep:*u32) u32 {a:[2]u32=[] i:usize=0 a[i]=change(&i) return a[0]*10+a[1]}
-pub fn field(keep:*u32) u32 {a:Pair=Pair{} a.value=change_field(&a) return a.value}
-fn change_field(a:*Pair) u32 {a.value=9 return 7}
-packed struct Packed {pad:u8, value:u64}
-packed struct PackedArray {pad:u8, values:[2]u64}
-fn wide() u64 {trace+=1 return trace}
-pub fn packed_field(p:*Packed, keep:*u64) u64 {p.value=wide() return p.value}
-pub fn packed_index(p:*PackedArray, keep:*u64) u64 {p.values[0]=wide() return p.values[0]}
-fn effect() u32 {_=io.write_all(io.stdout(),"RHS\\n") return 7}
-pub fn bad_index(i:usize) {a:[1]u32=[] a[i]=effect()}
-pub fn bad_pointer(p:*u32) {p.*=effect()}
-pub fn bad_overflow(p:*u32) u32 {return step(p)+4294967295}
-'''
+SOURCE = 'use "std/io"\ntrace:u64=0\nfn step(p:*u32) u32 {\n trace=trace*10+1\n p.*=#wrap(p.* * 1664525+1013904223)\n return p.*\n}\nfn after() u32 {trace=trace*10+2\nreturn 3}\npub fn nested(p:*u32) u64 {return #cast(u64,1+(step(p)>>8)%1000)}\npub fn wrapped(p:*u32) u32 {return #wrap(step(p)+4294967295)}\npub fn left(p:*u32) u64 {trace=0\nv:=#cast(u64,step(p)+after())\nreturn trace*10000000000+v}\npub fn right_rejected(p:*u32) u64 {trace=0\nv:=#cast(u64,after()+step(p))\nreturn trace*10000000000+v}\npub fn conditional(p:*u32, enabled:bool) u64 {trace=0\nif enabled && step(p)>0 {return 90}\nreturn trace}\nstruct Pair {value:u32}\nfn change(index:*usize) u32 {index.*=1\nreturn 7}\nfn index_effect() usize {trace=trace*10+3\nreturn 0}\npub fn index_order(p:*u32) u64 {trace=0\na:[1]u32=[]\na[index_effect()]=step(p)\nreturn trace}\npub fn indexed(keep:*u32) u32 {a:[2]u32=[]\ni:usize=0\na[i]=change(&i)\nreturn a[0]*10+a[1]}\npub fn field(keep:*u32) u32 {a:Pair=Pair{}\na.value=change_field(&a)\nreturn a.value}\nfn change_field(a:*Pair) u32 {a.value=9\nreturn 7}\npacked struct Packed {pad:u8, value:u64}\npacked struct PackedArray {pad:u8, values:[2]u64}\nfn wide() u64 {trace+=1\nreturn trace}\npub fn packed_field(p:*Packed, keep:*u64) u64 {p.value=wide()\nreturn p.value}\npub fn packed_index(p:*PackedArray, keep:*u64) u64 {p.values[0]=wide()\nreturn p.values[0]}\nfn effect() u32 {_=io.write_all(io.stdout(),"RHS\\n")\nreturn 7}\npub fn bad_index(i:usize) {a:[1]u32=[]\na[i]=effect()}\npub fn bad_pointer(p:*u32) {p.*=effect()}\npub fn bad_overflow(p:*u32) u32 {return step(p)+4294967295}\n'
 HARNESS = r'''
 #include "native_opt.c"
 #include <assert.h>

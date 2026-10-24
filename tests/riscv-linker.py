@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-riscv-linker-') as directory:
         if compiler.exists():
             library = work/'dyn-library';library.mkdir()
             client = work/'dyn-client';client.mkdir()
-            (library/'main.dyn').write_text('pub value:i64 = 5\npub fn calculate(x:i64) i64 { value += x return value }\n')
+            (library/'main.dyn').write_text('pub value:i64 = 5\npub fn calculate(x:i64) i64 { value += x\nreturn value }\n')
             (client/'main.dyn').write_text('extern fn calculate(x:i64) i64\nfn main() { if calculate(7) != 12 || calculate(3) != 15 { #panic("shared") } }\n')
             for mode in ('debug','release'):
                 shared = work/('dyn-'+mode+'.so');executable = work/('client-'+mode)

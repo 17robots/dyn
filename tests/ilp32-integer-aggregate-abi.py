@@ -266,14 +266,14 @@ def suite(target, batch):
                 for indirect in (False,True):
                     callee = f'c_{key}'
                     if indirect:
-                        body.append(f'fp_{key} := &c_{key}')
+                        body.append(f'fp_{key} := c_{key}')
                         callee = f'fp_{key}'
                     r = f'r_{key}_{int(indirect)}'
                     body.append(f'{r} := {callee}({dargs})')
                     failed = [f'{r}{path} != {int(v)+1}' for path,v in leaves] if returns_struct else [f'{r} != 1']
                     failed += [f'x_{key}{path} != {v}' for path,v in leaves]
                     body.append('if '+' || '.join(failed)+f' {{ #panic("outgoing {key}_{int(indirect)}") }}')
-                body.append(f'if cb_{key}(&local_{key}) != 1 {{ #panic("callback {key}") }}')
+                body.append(f'if cb_{key}(local_{key}) != 1 {{ #panic("callback {key}") }}')
                 checks += 3
     # Fixed RV32 pairs split at a7; unnamed pairs instead align to even GP
     # numbers and go wholly to stack. Thumb aligns both kinds to even pairs.
@@ -293,7 +293,7 @@ def suite(target, batch):
                  ' && '.join(f'p{i} == {i+1}' for i in range(n))+'; }')
         dyn.append(f'extern fn {key}({",".join(dp)},...) i32')
         args = ','.join([str(i+1) for i in range(n)]+['wide','19'])
-        body += [f'fp_{key} := &{key}',
+        body += [f'fp_{key} := {key}',
                  f'if {key}({args}) != 1 || fp_{key}({args}) != 1 {{ #panic("{key}") }}']
         checks += 2
     (work/'provider.c').write_text(('\n'.join(c)+'\n').replace('18364758544493064720', '18364758544493064720ULL'))

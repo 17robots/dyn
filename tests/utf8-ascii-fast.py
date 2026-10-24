@@ -58,7 +58,7 @@ fn check(data:*const u8,length:usize) i32 {
   return 0
 }
 fn main() {
-  if exercise(&check) != 0 { #panic("UTF8 reference mismatch") }
+  if exercise(check) != 0 { #panic("UTF8 reference mismatch") }
   _=io.println(io.stdout(),"UTF8 PASS")
 }
 '''

@@ -9,32 +9,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
-FUNCS = '''use "std/io"
-flags: [64]u8
-pub fn safe(round:usize) usize {
-  if round >= 4 { return 0 }
-  limit := #len(flags) - round * 3
-  for i in 2..limit {
-    flags[i] = 1
-    j := i * 2
-    for j < limit { flags[j] = 0 j += i }
-  }
-  return limit
-}
-pub fn unsigned(a:u64,b:u64) u64 { return a-b }
-pub fn signed(a:i64,b:i64) i64 { return a-b }
-pub fn narrow(a:i8,b:i8) i8 { return a-b }
-pub fn wrapped(a:u64,b:u64) u64 { return #wrap(a-b) }
-pub fn read(a:u64,b:u64) u8 { return flags[a-b] }
-pub fn read_wrap(a:u64,b:u64) u8 { return flags[#wrap(a-b)] }
-pub fn dynamic(n:usize) { for i in 0..n { flags[i] = 1 } }
-pub fn cleanup(a:u64,b:u64) u64 {
-  defer { _=io.write_all(io.stdout(),"CLEAN\\n") }
-  return a-b
-}
-pub fn left() u64 { _=io.write_all(io.stdout(),"LEFT\\n") return 0 }
-pub fn right() u64 { _=io.write_all(io.stdout(),"RIGHT\\n") return 1 }
-'''
+FUNCS = 'use "std/io"\nflags: [64]u8\npub fn safe(round:usize) usize {\n  if round >= 4 { return 0 }\n  limit := #len(flags) - round * 3\n  for i in 2..limit {\n    flags[i] = 1\n    j := i * 2\n    for j < limit { flags[j] = 0\n    j += i }\n  }\n  return limit\n}\npub fn unsigned(a:u64,b:u64) u64 { return a-b }\npub fn signed(a:i64,b:i64) i64 { return a-b }\npub fn narrow(a:i8,b:i8) i8 { return a-b }\npub fn wrapped(a:u64,b:u64) u64 { return #wrap(a-b) }\npub fn read(a:u64,b:u64) u8 { return flags[a-b] }\npub fn read_wrap(a:u64,b:u64) u8 { return flags[#wrap(a-b)] }\npub fn dynamic(n:usize) { for i in 0..n { flags[i] = 1 } }\npub fn cleanup(a:u64,b:u64) u64 {\n  defer { _=io.write_all(io.stdout(),"CLEAN\\n") }\n  return a-b\n}\npub fn left() u64 { _=io.write_all(io.stdout(),"LEFT\\n")\nreturn 0 }\npub fn right() u64 { _=io.write_all(io.stdout(),"RIGHT\\n")\nreturn 1 }\n'
 CASES = [
     ('safe', '''for r in 0..4 {
 if safe(r)!=64-r*3 { #panic("limit") }
@@ -71,7 +46,7 @@ def main():
                 if mode == 'tree':
                     env['DYN_NO_SSA'] = '1'
                 for name, body, panic, prefix in CASES:
-                    (work/'main.dyn').write_text(FUNCS+'\nfn main() { '+body+' _=io.write_all(io.stdout(),"OK\\n") }\n')
+                    (work/'main.dyn').write_text(FUNCS+'\nfn main() {\n'+body+'\n_=io.write_all(io.stdout(),"OK\\n") }\n')
                     binary = work/'test'
                     build = subprocess.run([DYN, 'build', str(work), '--release', '--opt-level', '3',
                         '--no-cache', '--quiet', '--opt-remarks', '--target', target,

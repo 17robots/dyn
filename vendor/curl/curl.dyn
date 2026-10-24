@@ -65,7 +65,7 @@ pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms
     code = native_setopt(easy, 155, #cast(c.long, timeout_ms))
   }
   if code == 0 {
-    code = native_setopt(easy, 20011, &receive)
+    code = native_setopt(easy, 20011, receive)
   }
   if code == 0 {
     code = native_setopt(easy, 10001, &sink)

@@ -100,25 +100,25 @@ fn precedence(p: *const Parser) i32 {
   case c {
     '<', '>' => {
       return 5
-    },
+    }
     '|' => {
       return 6
-    },
+    }
     '^' => {
       return 7
-    },
+    }
     '&' => {
       return 8
-    },
+    }
     '+', '-' => {
       return 10
-    },
+    }
     '*', '/', '%' => {
       return 11
-    },
+    }
     _ => {
       return 0
-    },
+    }
   }
 }
 

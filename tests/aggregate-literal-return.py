@@ -37,7 +37,9 @@ pub fn overlap(p:*Triple) Triple { return Triple{a:p.b,b:p.c,c:p.a} }
 pub fn effects(p:*u64) Triple { return Triple{c:p.*,a:mutate(p),b:p.*} }
 pub fn defaults() Defaults { return Defaults{b:mark(3),c:mark(4)} }
 pub fn cleanup(p:*Triple) Triple {
-  defer { p.a=99 p.b=98 p.c=97 }
+  defer { p.a=99
+  p.b=98
+  p.c=97 }
   return Triple{a:p.b,b:p.c,c:p.a}
 }
 pub fn mixed(x:f64,y:u64) Mixed { return Mixed{a:x,b:y} }
@@ -46,7 +48,9 @@ pub fn nested() Nested { return Nested{a:[7,8,9],text:"ok"} }
 pub fn raw() [3]u64 { return [7,8,9] }
 pub fn desc() []const u8 { return "ok" }
 pub fn checked(p:*u64,q:*u64) Triple { return Triple{a:p.*,b:q.*,c:mark(5)} }
-fn main() { r:=oracle() if r!=0 { _=io.println(io.stderr(),"oracle {}",r) #panic("C aggregate oracle") } }
+fn main() { r:=oracle()
+if r!=0 { _=io.println(io.stderr(),"oracle {}",r)
+#panic("C aggregate oracle") } }
 '''
 
 C_SOURCE = r'''
@@ -152,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-aggregate-literal-') as directory:
         failures = []
         for mode in ('ssa', 'tree'):
             env = dict(os.environ, DYN_NO_SSA='1' if mode == 'tree' else '0')
-            panic = SOURCE[:SOURCE.index('fn main()')] + 'fn main() { x:u64=1 _=checked('+arguments+') }\n'
+            panic = SOURCE[:SOURCE.index('fn main()')] + 'fn main() { x:u64=1\n_=checked('+arguments+') }\n'
             (source/'main.dyn').write_text(panic)
             output = work/('panic-'+mode)
             run([DYN, 'build', source, '--release', '--no-cache', '--link', work/'oracle.o', '--output', output], env=env)

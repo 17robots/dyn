@@ -38,8 +38,8 @@ fn callback_contracts() {
   scratch: [32]u8 = []
   for code in 0..2 {
     p := Probe{ code: 0 - #cast(isize, code * 13) }
-    reader := io.Reader{ data: #cast(rawptr, &p), read: &read }
-    sink := io.Writer{ data: #cast(rawptr, &p), write: &write }
+    reader := io.Reader{ data: #cast(rawptr, &p), read: read }
+    sink := io.Writer{ data: #cast(rawptr, &p), write: write }
     c := csv.stream_scanner(reader)
     f := csv.next_stream(&c, scratch[..])
     check(!f.ok && f.kind == errors.Kind.PermissionDenied && f.error == p.code && f.detail == csv.ErrorKind.Io)
@@ -70,12 +70,12 @@ fn callback_contracts() {
     check(xw.kind == errors.Kind.PermissionDenied && xw.error == saved && xw.detail == xml.ErrorKind.Io)
   }
   eof := Probe{ mode: 1 }
-  c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: &read })
+  c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read })
   f := csv.next_stream(&c, scratch[..])
   check(f.ok && #len(f.text) == 1 && f.end_input && f.kind == errors.Kind.None && f.error == 0)
   check(!csv.next_stream(&c, scratch[..]).ok && eof.calls == 1)
   eof.calls = 0
-  x := xml.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: &read }, scratch[..])
+  x := xml.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read }, scratch[..])
   xe := xml.next_stream(&x)
   check(xe.ok && xe.kind == errors.Kind.None && xe.error == 0 && xe.detail == xml.ErrorKind.None && bytes.equal(xe.value.text, "x"))
   check(!xml.next_stream(&x).ok && eof.calls == 1)
@@ -95,7 +95,7 @@ fn callback_contracts() {
   check(!ar.ok && ar.kind == errors.Kind.InvalidInput && ar.error == 0 && ar.detail == xml.ErrorKind.Syntax)
   check(xml.next_attribute(&attr).kind == ar.kind)
   p := Probe{}
-  w := xml.writer(io.Writer{ data: #cast(rawptr, &p), write: &write })
+  w := xml.writer(io.Writer{ data: #cast(rawptr, &p), write: write })
   check(!xml.write_start(&w, "") && w.failed && w.kind == errors.Kind.InvalidInput && w.error == 0 && w.detail == xml.ErrorKind.Syntax)
   check(!xml.write_text(&w, "later") && p.calls == 0)
 }
@@ -104,7 +104,7 @@ fn additional_contracts() {
   scratch: [32]u8 = []
   // Complete with no bytes is also EOF, and must never trigger another read.
   p := Probe{mode: 2}
-  reader := io.Reader{data: #cast(rawptr, &p), read: &read}
+  reader := io.Reader{data: #cast(rawptr, &p), read: read}
   c := csv.stream_scanner(reader)
   f := csv.next_stream(&c, scratch[..0])
   check(f.ok && #len(f.text) == 0 && f.end_input && f.end_record && f.kind == errors.Kind.None && f.error == 0 && f.detail == csv.ErrorKind.None)
@@ -147,12 +147,12 @@ fn additional_contracts() {
   er := xml.next(&eof)
   check(!er.ok && er.error == 0 && er.kind == errors.Kind.InvalidInput && er.detail == xml.ErrorKind.Syntax && eof.error_offset == 6)
   invalid: [1]u8 = [255]
-  w := xml.writer(io.Writer{data: #cast(rawptr, &p), write: &write})
+  w := xml.writer(io.Writer{data: #cast(rawptr, &p), write: write})
   check(!xml.write_text(&w, invalid[..]) && w.failed && w.kind == errors.Kind.InvalidInput && w.error == 0 && w.detail == xml.ErrorKind.Syntax)
   check(!xml.write_text(&w, "") && !xml.write_attribute(&w, "a", "") && !xml.write_end(&w, "a") && !xml.write_start_end(&w, false) && p.calls == 0)
   // Empty writes succeed before failure without touching the sink.
-  clean_csv := csv.writer(io.Writer{data: #cast(rawptr, &p), write: &write})
-  clean_xml := xml.writer(io.Writer{data: #cast(rawptr, &p), write: &write})
+  clean_csv := csv.writer(io.Writer{data: #cast(rawptr, &p), write: write})
+  clean_xml := xml.writer(io.Writer{data: #cast(rawptr, &p), write: write})
   check(csv.write_field(&clean_csv, "", false) && xml.write_text(&clean_xml, "") && p.calls == 0)
   check(clean_csv.kind == errors.Kind.None && clean_csv.error == 0 && clean_csv.detail == csv.ErrorKind.None)
   check(clean_xml.kind == errors.Kind.None && clean_xml.error == 0 && clean_xml.detail == xml.ErrorKind.None)
@@ -191,7 +191,7 @@ fn read_chunk(data: rawptr, destination: []u8) io.Result {
   return io.Result{ transferred: take }
 }
 fn input(state: *Chunk) io.Reader {
-  return io.Reader{ data: #cast(rawptr, state), read: &read_chunk }
+  return io.Reader{ data: #cast(rawptr, state), read: read_chunk }
 }
 fn csv_check(source: []const u8, expected: bool) {
   for limit in 1..4 {

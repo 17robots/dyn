@@ -1645,6 +1645,28 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       a->expressions[id].integer = global;
       return a->expressions[id].type = a->globals[global].type;
     }
+    uint32_t fn = sema_find_function(sema, a, a->expressions[id].span, s);
+    if (fn != UINT32_MAX) {
+      /* A function named without a call is its code pointer, spelled fn(...) R. */
+      if (a->functions[fn].is_generic) {
+        error_span(a->expressions[id].span, s, errors,
+                   "a generic function can only be called, not used as a value");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      if (a->functions[fn].variadic && !a->functions[fn].foreign) {
+        error_span(a->expressions[id].span, s, errors,
+                   "native variadic function pointers are not supported");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      if (!sema_c_abi_function(a, &a->functions[fn])) {
+        error_span(a->expressions[id].span, s, errors,
+                   "type has no supported C ABI; use C-compatible storage or a pointer adapter");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      a->expressions[id].kind = DYN_EXPR_FUNCTION;
+      a->expressions[id].integer = fn;
+      return a->expressions[id].type = function_pointer_type(a, fn);
+    }
     char message[256];
     error_span(a->expressions[id].span, s, errors,
                suggest_name(a, a->expressions[id].span, s, false, message, sizeof(message))
@@ -2102,6 +2124,18 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = a->fields[a->structs[sid].field_start + field].type;
   }
   if (a->expressions[id].kind == DYN_EXPR_INT) {
+    if (expected == DYN_TYPE_F32 || expected == DYN_TYPE_F64) {
+      /* An integer literal in a float context is that float when exact. */
+      uint64_t value = a->expressions[id].integer;
+      if (value > (expected == DYN_TYPE_F32 ? (UINT64_C(1) << 24) : (UINT64_C(1) << 53))) {
+        error_span(a->expressions[id].span, s, errors,
+                   "integer literal is not exactly representable in expected float type");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      a->expressions[id].kind = DYN_EXPR_FLOAT;
+      a->expressions[id].floating = (double)value;
+      return a->expressions[id].type = expected;
+    }
     if (expected != DYN_TYPE_INFER && !dyn_type_is_distinct(expected) &&
         integer(sema, expected)) {
       if (!literal_fits(sema, a->expressions[id].integer, expected)) {
@@ -2162,32 +2196,20 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].boolean = true;
     return a->expressions[id].type = expected;
   }
+  if (a->expressions[id].kind == DYN_EXPR_UNARY && a->expressions[id].op == DYN_OP_NEG &&
+      !dyn_type_is_distinct(expected) && integer(sema, expected) && !signed_int(sema, expected) &&
+      a->expressions[a->expressions[id].left].kind == DYN_EXPR_INT &&
+      a->expressions[a->expressions[id].left].integer != 0) {
+    error_span(a->expressions[id].span, s, errors,
+               "negative literal is not representable in expected type");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
   if (a->expressions[id].kind == DYN_EXPR_UNARY && a->expressions[id].op == DYN_OP_ADDRESS) {
     DynAstExpr *operand = &a->expressions[a->expressions[id].left];
-    if (operand->kind == DYN_EXPR_NAME) {
-      uint32_t fn = sema_find_function(sema, a, operand->span, s);
-      if (fn != UINT32_MAX) {
-        if (a->functions[fn].is_generic) {
-          error_span(a->expressions[id].span, s, errors,
-                     "a generic function can only be called, not used as a value");
-          return a->expressions[id].type = DYN_TYPE_ERROR;
-        }
-        if (a->functions[fn].variadic && !a->functions[fn].foreign) {
-          error_span(a->expressions[id].span, s, errors,
-                     "native variadic function pointers are not supported");
-          return a->expressions[id].type = DYN_TYPE_ERROR;
-        }
-        if (!sema_c_abi_function(a, &a->functions[fn])) {
-          error_span(a->expressions[id].span, s, errors,
-                     "type has no supported C ABI; use C-compatible storage or a pointer adapter");
-          return a->expressions[id].type = DYN_TYPE_ERROR;
-        }
-        a->expressions[id].kind = DYN_EXPR_FUNCTION;
-        a->expressions[id].op = DYN_OP_NONE;
-        a->expressions[id].integer = fn;
-        a->expressions[id].left = DYN_NO_EXPR;
-        return a->expressions[id].type = function_pointer_type(a, fn);
-      }
+    if (operand->kind == DYN_EXPR_NAME && find_local(sema, a, operand->span, s) == UINT32_MAX &&
+        sema_find_function(sema, a, operand->span, s) != UINT32_MAX) {
+      error_span(a->expressions[id].span, s, errors, "a function is already a value; drop the '&'");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     DynType value = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER);
     DynExprKind kind = a->expressions[a->expressions[id].left].kind;

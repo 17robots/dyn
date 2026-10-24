@@ -39,11 +39,11 @@ fn stderr_write(data: rawptr, source: []const u8) Result {
 
 // Borrow the process standard descriptors; callers do not own or close them.
 pub fn stdin() Reader {
-  return Reader{ read: &stdin_read }
+  return Reader{ read: stdin_read }
 }
 pub fn stdout() Writer {
-  return Writer{ write: &stdout_write }
+  return Writer{ write: stdout_write }
 }
 pub fn stderr() Writer {
-  return Writer{ write: &stderr_write }
+  return Writer{ write: stderr_write }
 }

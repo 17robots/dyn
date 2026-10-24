@@ -103,7 +103,7 @@ fn main() {
    limit := #cast(usize,raw_limit)
      input := Input{ source: data, fail: limit, native: native }
      header: [512]u8 = []
-     stream := tar.stream_reader(io.Reader{ data: &input, read: &read },header[..],header[..0])
+     stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],header[..0])
      item := tar.next_stream(&stream)
      for item.ok { item = tar.next_stream(&stream) }
      check(item.kind == errors.Kind.PermissionDenied && item.error == native && item.offset == limit)
@@ -113,7 +113,7 @@ fn main() {
    limit := #cast(usize,raw_limit)
      input := Input{ source: data, fail: limit, native: native }
      header: [512]u8 = []
-     stream := tar.stream_reader(io.Reader{ data: &input, read: &read },header[..],header[..0])
+     stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],header[..0])
      item := tar.next_stream(&stream)
      if item.ok {
        destination: [8]u8 = []
@@ -128,7 +128,7 @@ fn main() {
      input := Input{ source: PAX, fail: limit, native: native }
      header: [512]u8 = []
      metadata: [2048]u8 = []
-     stream := tar.stream_reader(io.Reader{ data: &input, read: &read },header[..],metadata[..])
+     stream := tar.stream_reader(io.Reader{ data: &input, read: read },header[..],metadata[..])
      item := tar.next_stream(&stream)
      check(!item.ok && item.kind == errors.Kind.PermissionDenied && item.error == native && item.offset == limit)
      replay(&stream,&input,native,limit)
@@ -159,7 +159,7 @@ fn main() {
  check(invalid_result.detail == tar.ErrorKind.InvalidOffset && invalid_result.kind == errors.Kind.InvalidInput && invalid_result.error == 0 && invalid_result.offset == #len(data)+1)
  checksum_input := Input{ source: bad_header[..], fail: 9999 }
  checksum_storage: [512]u8 = []
- checksum_stream := tar.stream_reader(io.Reader{ data: &checksum_input, read: &read },checksum_storage[..],checksum_storage[..0])
+ checksum_stream := tar.stream_reader(io.Reader{ data: &checksum_input, read: read },checksum_storage[..],checksum_storage[..0])
  checksum_result := tar.next_stream(&checksum_stream)
  check(!checksum_result.ok && checksum_result.kind == errors.Kind.InvalidInput && checksum_result.error == 0 && checksum_result.detail == tar.ErrorKind.Header && checksum_result.offset == 512)
  checksum_calls := checksum_input.calls

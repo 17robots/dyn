@@ -123,7 +123,7 @@ fn discard_slot(state: *State, slot: *Slot) {
     state.api.invalidate(slot.stream)
     // Invalidation prevents new deliveries; drain already queued callbacks
     // before releasing the context, root path, or reusing this stable slot.
-    queue_sync(state.queue, nil, &barrier)
+    queue_sync(state.queue, nil, barrier)
     state.api.stream_release(slot.stream)
   }
   if slot.paths != nil {
@@ -291,7 +291,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
       // Change the filter on the producer queue without stopping observation
       // or racing a callback. Preserve the existing watch identifier.
       update := MaskUpdate{ slot: &state.slots[i], mask: mask }
-      queue_sync(state.queue, &update, &update_mask)
+      queue_sync(state.queue, &update, update_mask)
       return Result{ value: state.slots[i].id, ok: true }
     }
   }
@@ -318,7 +318,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(-12)
   }
   context := Context{ info: slot }
-  slot.stream = state.api.create(nil, &callback, &context, slot.paths, 18446744073709551615, 0.01, 22)
+  slot.stream = state.api.create(nil, callback, &context, slot.paths, 18446744073709551615, 0.01, 22)
   if slot.stream == nil {
     discard_slot(state, slot)
     return failure(-5)

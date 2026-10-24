@@ -91,7 +91,9 @@ pub fn audit_callbacks() {
   pushed := mem.arena_push(&allocation,#sizeof(State),#alignof(State))
   state := #cast(*State, pushed)
   slot := &state.slots[0]
-  slot.owner = state slot.id = 7 slot.mask = Changes
+  slot.owner = state
+  slot.id = 7
+  slot.mask = Changes
   slot.stream = #cast(rawptr, #cast(usize, 1))
   root := "/watched"
   slot.length = #len(root)

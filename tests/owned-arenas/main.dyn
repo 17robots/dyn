@@ -13,13 +13,15 @@ fn main() {
   mem.arena_reset(arena)
   repeated := mem.arena_push(arena, 128, 1)
   expect(repeated == allocation && repeated.* == 0, "owned reset reuse and zero")
-  mem.arena_release(arena) mem.arena_release(arena)
+  mem.arena_release(arena)
+  mem.arena_release(arena)
   expect(mem.arena_capacity(arena) == 0, "release clears borrowed buffer")
 
   chain := mem.growing_create(32)
   a := mem.growing_push(&chain, 24, 8)
   b := mem.growing_push(&chain, 24, 8)
-  a.* = 20 b.* = 22
+  a.* = 20
+  b.* = 22
   expect(a != b && a.* + b.* == 42, "growing pointer stability")
   huge := mem.growing_try_push(&chain, #cast(usize, -1), 8)
   expect(!huge.ok && a.* == 20 && b.* == 22, "overflow leaves allocations intact")
@@ -30,7 +32,8 @@ fn main() {
   reused_a := mem.growing_push(&chain, 24, 8)
   reused_b := mem.growing_push(&chain, 24, 8)
   expect(reused_a == a && reused_b == b && reused_a.* == 0 && reused_b.* == 0, "reuse all retained blocks")
-  mem.growing_release(&chain) mem.growing_release(&chain)
+  mem.growing_release(&chain)
+  mem.growing_release(&chain)
   expect(chain.first == nil && chain.current == nil, "release clears chain")
   expect(mem.growing_try_push(&chain, 0, 1).ok, "empty allocation")
   expect(mem.growing_try_push(&chain, 1, 1).ok, "reuse released handle")

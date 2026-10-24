@@ -45,18 +45,35 @@ pub fn fromresult(x:u64) u64 { return ccallback()(x) }
 pub fn narrowcall(a:i8,b:u16,c:i32) i64 { return cnarrow(a,b,c) }
 pub fn ptrcall(p:rawptr) rawptr { return cptr(p) }
 pub fn zerocall() u64 { return czero() }
-pub fn discarded(x:u64) { _=cwide(x) cvoid(x) }
+pub fn discarded(x:u64) { _=cwide(x)
+cvoid(x) }
 pub fn mutate(x:u64) { g=x }
-pub fn state(x:u64) u64 { g=x a:=g mutate(#wrap(x+1)) return #wrap(a+g) }
-pub fn nested(x:u64,y:u64) u64 { a:=cwide(x) b:=cwide(cwide(y)) return #wrap(a+b+x+y) }
-pub fn phicalls(x:u64,y:u64,n:u32) u64 { a:=x b:=y i:u32=0 for i<n { t:=cwide(a) a=b b=t i=#wrap(i+1) } return #wrap(a+b) }
+pub fn state(x:u64) u64 { g=x
+a:=g
+mutate(#wrap(x+1))
+return #wrap(a+g) }
+pub fn nested(x:u64,y:u64) u64 { a:=cwide(x)
+b:=cwide(cwide(y))
+return #wrap(a+b+x+y) }
+pub fn phicalls(x:u64,y:u64,n:u32) u64 { a:=x
+b:=y
+i:u32=0
+for i<n { t:=cwide(a)
+a=b
+b=t
+i=#wrap(i+1) }
+return #wrap(a+b) }
 pub fn checkedcall(x:u64) u64 { return cwide(x)+1 }
 extern fn cfloat(x:f64) f64
 struct Pair { a:u64,b:u64 }
 extern fn cagg(x:Pair) Pair
 pub fn deadfloat() { _=cfloat(1.0) }
 pub fn deadagg() { _=cagg(Pair{a:1,b:2}) }
-fn main() { cb=&cwide status:=oracle() if status!=0 { _=io.println(io.stdout(),"oracle {}",status) #panic("oracle") } _=io.write_all(io.stdout(),"CALLS OK\n") }
+fn main() { cb=cwide
+status:=oracle()
+if status!=0 { _=io.println(io.stdout(),"oracle {}",status)
+#panic("oracle") }
+_=io.write_all(io.stdout(),"CALLS OK\n") }
 '''
 c=r'''
 typedef unsigned long long U; typedef unsigned W;
@@ -112,7 +129,8 @@ pub fn deaddesc() { _=cdesc("") }
 pub fn unreachablefp(x:u64) { if x!=x { _=cfarg(1.0) } }
 extern fn cvar(x:i32, ...) i32
 pub fn deadvariadic() { _=cvar(1,2) }
-pub fn protectedcall(x:u64) u64 { defer { g=0 } return cwide(x) }
+pub fn protectedcall(x:u64) u64 { defer { g=0 }
+return cwide(x) }
 """
 c += r"""
 void cnovoid(void) { saved=123; }
@@ -135,13 +153,13 @@ int extra(void) {
 }
 """
 src += 'extern fn extra() i32\n'
-src=src.replace('status:=oracle()', 'if extra()!=0 { #panic("extra") } status:=oracle()')
+src=src.replace('status:=oracle()', 'if extra()!=0 { #panic("extra") }\nstatus:=oracle()')
 # 512 scalar operands plus indirect target: exceed the old operand buffer.
 params=','.join(f'a{i}:u32' for i in range(512)); types=','.join(['u32']*512); args=','.join(str(i) for i in range(512))
 src+=f'\npub fn manycallee({params}) u64 {{ return #cast(u64,a0)+#cast(u64,a511) }}\npub fn manycall(p:fn({types}) u64) u64 {{ return p({args}) }}\n'
 c+='\nextern U manycall(void*); extern U manycallee();\n'
 # Include manycall from main; C oracle is kept straightforward.
-src=src.replace('status:=oracle()', 'if manycall(&manycallee)!=511 { #panic("many") } status:=oracle()')
+src=src.replace('status:=oracle()', 'if manycall(manycallee)!=511 { #panic("many") }\nstatus:=oracle()')
 positive='protectedcall deadvariadic deadagg deaddesc deadfloat deadfarg deadfret unreachablefp wide directsplit indirectsplit invoke frommem fromresult narrowcall ptrcall zerocall discarded mutate state nested phicalls checkedcall manycallee manycall mixcall ret_i8 ret_u16 ret_isize castfn indirectvoid directvoid'.split()
 
 FALLBACK = []
@@ -205,9 +223,9 @@ def main():
                 b.arm_addends(obj)
             cases = [
                 ('success', src, (0, b'CALLS OK\n', b'')),
-                ('null', src.replace('cb=&cwide', 'cb=&cwide _=invoke(nil,1)'),
+                ('null', src.replace('cb=cwide', 'cb=cwide\n_=invoke(nil,1)'),
                  (101, b'runtime check failed (function.nonnull.ok) in invoke\n', b'')),
-                ('overflow', src.replace('cb=&cwide', 'cb=&cwide _=checkedcall(0x6789abcde543210f)'),
+                ('overflow', src.replace('cb=cwide', 'cb=cwide\n_=checkedcall(0x6789abcde543210f)'),
                  (101, b'runtime check failed (overflow.ok) in checkedcall\n', b'')),
             ]
             for name, source, expected in cases:

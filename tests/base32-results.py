@@ -15,7 +15,8 @@ use "std/mem" mem
 use "std/errors" errors
 use "std/bytes" bytes
 fn good(raw,encoded:[]const u8) {
-  backing:[2048]u8 mem.fill(backing[..],99)
+  backing:[2048]u8
+  mem.fill(backing[..],99)
   arena:=mem.arena_from_buffer(backing[..])
   _=mem.push_bytes_uninit(&arena,7)
   decoded:=codec.decode(&arena,encoded)
@@ -23,9 +24,11 @@ fn good(raw,encoded:[]const u8) {
   if !bytes.equal(codec.encode(&arena,raw),encoded) { #panic("base32 encode") }
 }
 fn bad(encoded:[]const u8,offset:usize) {
-  backing:[256]u8 mem.fill(backing[..],99)
+  backing:[256]u8
+  mem.fill(backing[..],99)
   arena:=mem.arena_from_buffer(backing[..])
-  prefix:=mem.push_bytes_uninit(&arena,7) prefix[0]=91
+  prefix:=mem.push_bytes_uninit(&arena,7)
+  prefix[0]=91
   arena.poison_on_rewind=true
   decoded:=codec.decode(&arena,encoded)
   if decoded.ok || decoded.kind!=errors.Kind.InvalidInput || decoded.error!=0 || decoded.offset!=offset || decoded.detail!=encoding.ErrorKind.InvalidInput || #len(decoded.value)!=0 || mem.arena_mark(&arena)!=7 || prefix[0]!=91 || backing[7]!=99 { #panic("base32 failure preflight") }

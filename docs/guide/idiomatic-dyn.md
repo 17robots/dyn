@@ -219,8 +219,8 @@ enum State { Pending, Complete: usize }
 
 fn describe(state: State) []const u8 {
   case state {
-    State.Pending => { return "pending" },
-    State.Complete _ => { return "complete" },
+    State.Pending => { return "pending" }
+    State.Complete _ => { return "complete" }
   }
 }
 ```

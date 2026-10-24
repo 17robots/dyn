@@ -40,9 +40,11 @@ fn read(data: rawptr, destination: []u8) io.Result {
   }
   destination[0] = 136
   destination[1] = 0
-  if trace.mode == 4 { destination[0] = 129 destination[1] = 128 }
+  if trace.mode == 4 { destination[0] = 129
+  destination[1] = 128 }
   if trace.mode == 5 { return io.Result{ transferred: 2, error: -72, status: io.Status.Error } }
-  if trace.mode == 6 { destination[0] = 0 destination[1] = 0 }
+  if trace.mode == 6 { destination[0] = 0
+  destination[1] = 0 }
   if trace.mode == 7 { return io.Result{} }
   return io.Result{ transferred: 2 }
 }
@@ -54,7 +56,8 @@ fn write(data: rawptr, source: []const u8) io.Result {
   if trace.mode == 12 { return io.Result{ transferred: #len(source) + 1 } }
   if trace.mode == 13 { return io.Result{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
   if trace.mode == 14 {
-    if trace.writes == 1 { trace.bytes += 1 return io.Result{ transferred: 1 } }
+    if trace.writes == 1 { trace.bytes += 1
+    return io.Result{ transferred: 1 } }
     return io.Result{ error: -74, status: io.Status.Error }
   }
   trace.bytes += #len(source)
@@ -96,15 +99,19 @@ fn wire_read(raw: rawptr, destination: []u8) io.Result {
 fn coalesced() {
   isolated := Wire{data: "\x81\x01a", step: 32}
   single_sent := Trace{mode: 99}
-  available: [32]u8 = [] single_message: [32]u8 = [] controls: [125]u8 = []
-  reusable := ws.connection(io.Reader{data: &isolated, read: &wire_read}, io.Writer{data: &single_sent, write: &write}, available[..], single_message[..], controls[..], true)
+  available: [32]u8 = []
+  single_message: [32]u8 = []
+  controls: [125]u8 = []
+  reusable := ws.connection(io.Reader{data: &isolated, read: wire_read}, io.Writer{data: &single_sent, write: write}, available[..], single_message[..], controls[..], true)
   if !ws.connection_receive(&reusable).ok { #panic("single frame") }
   if !ws.connection_send(&reusable, 1, "abcdefghijklmnopqrstuvwxyz", true, 1).ok || single_sent.bytes != 32 { #panic("fully consumed capacity") }
   for step in [1, 2, 3, 4, 32] {
     wire := Wire{data: "\x81\x01a\x81\x01b\x88\x00", step: #cast(usize, step)}
-    frames: [32]u8 = [] message: [32]u8 = [] control: [125]u8 = []
+    frames: [32]u8 = []
+    message: [32]u8 = []
+    control: [125]u8 = []
     sent := Trace{mode: 99}
-    state := ws.connection(io.Reader{data: &wire, read: &wire_read}, io.Writer{data: &sent, write: &write}, frames[..], message[..], control[..], true)
+    state := ws.connection(io.Reader{data: &wire, read: wire_read}, io.Writer{data: &sent, write: write}, frames[..], message[..], control[..], true)
     a := ws.connection_receive(&state)
     if !a.ok || a.event.detail != ws.WebSocketEventKind.Ready || #len(a.event.payload) != 1 || a.event.payload[0] != 'a' { #panic("coalesced first") }
     if !ws.connection_pong(&state, "p", 1).ok || sent.writes != 1 || a.event.payload[0] != 'a' { #panic("send with pending frames") }
@@ -114,7 +121,7 @@ fn coalesced() {
     if !closed.ok || closed.event.detail != ws.WebSocketEventKind.Close { #panic("coalesced close") }
     if step == 32 && wire.calls != 1 { #panic("coalesced extra read") }
     wire = Wire{data: "\x01\x01a\x89\x01p\x80\x01b", step: #cast(usize, step)}
-    state = ws.connection(io.Reader{data: &wire, read: &wire_read}, io.Writer{data: &sent, write: &write}, frames[..], message[..], control[..], true)
+    state = ws.connection(io.Reader{data: &wire, read: wire_read}, io.Writer{data: &sent, write: write}, frames[..], message[..], control[..], true)
     ping := ws.connection_receive(&state)
     if !ping.ok || ping.event.detail != ws.WebSocketEventKind.Ping || #len(ping.event.payload) != 1 || ping.event.payload[0] != 'p' { #panic("fragmented ping") }
     if !ws.connection_pong(&state, ping.event.payload, 1).ok || sent.writes != 2 || ping.event.payload[0] != 'p' { #panic("send with pending continuation") }
@@ -129,8 +136,8 @@ fn main() {
   frames: [32]u8 = []
   message: [32]u8 = []
   control: [125]u8 = []
-  reader := io.Reader{ data: &trace, read: &read }
-  writer := io.Writer{ data: &trace, write: &write }
+  reader := io.Reader{ data: &trace, read: read }
+  writer := io.Writer{ data: &trace, write: write }
   zero := ws.WebSocketConnection{}
   if !success(ws.connection_close(&zero, "", 0)) || zero.failed { #panic("zero close") }
   failure(ws.connection_send(&zero, 1, "", true, 0), errors.Kind.InvalidState, 0, 0)

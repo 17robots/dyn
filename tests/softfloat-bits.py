@@ -220,9 +220,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-softfloat-bits-') as tmp:
                 body = f'if {expr} {{ return 1 }} return 0'
             else:
                 body = f'return #cast(u64, {expr})'
-            driver.append(f'{17*wide+op} => {{ {body} }},')
-    driver += ['_ => { return 0 },', '}', '}',
-               f'fn main() {{ if run_oracle(&dispatch, {COUNT}, {SEED}) != 0 {{ #panic("host IEEE oracle unsupported") }} }}']
+            driver.append(f'{17*wide+op} => {{ {body} }}')
+    driver += ['_ => { return 0 }', '}', '}',
+               f'fn main() {{ if run_oracle(dispatch, {COUNT}, {SEED}) != 0 {{ #panic("host IEEE oracle unsupported") }} }}']
     (source / 'main.dyn').write_text('\n'.join(driver).replace('dyn_soft_', 'test_soft_'))
     (work / 'oracle.c').write_text(C)
     subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), '-std=c11', '-O2',

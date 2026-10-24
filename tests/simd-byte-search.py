@@ -24,7 +24,8 @@ use "std/io"
 extern fn oracle() i32
 pub fn search(source:[]const u8,needle:u8) usize { return bytes.find_byte(source,needle) }
 pub fn substring(source:[]const u8,needle:[]const u8) usize { return bytes.find(source,needle) }
-pub fn substring_indirect(source:[]const u8,needle:[]const u8) usize { f:=&bytes.find return f(source,needle) }
+pub fn substring_indirect(source:[]const u8,needle:[]const u8) usize { f:=bytes.find
+return f(source,needle) }
 pub fn substring_floating(source:[]const u8,needle:[]const u8,a,b,c,d,e,f,g,h:f64) f64 {
  at:=bytes.find(source,needle)
  return a+b*2.0+c*3.0+d*4.0+e*5.0+f*6.0+g*7.0+h*8.0+#cast(f64,at)
@@ -34,7 +35,7 @@ pub fn substring_bits(source:[]const u8,needle:[]const u8,a,b,c,d,e,f,g,h:u64) u
  return a^b^c^d^e^f^g^h^#cast(u64,at)
 }
 pub fn indirect(source:[]const u8,needle:u8) usize {
- f:=&bytes.find_byte
+ f:=bytes.find_byte
  return f(source,needle)
 }
 pub fn floating(source:[]const u8,needle:u8,a,b,c,d,e,f,g,h:f64) f64 {
@@ -49,16 +50,22 @@ pub fn mutation() usize {
  data:[64]u8=[]
  data[20]=7
  first:=bytes.find_byte(data[..],7)
- data[20]=0 data[37]=7
+ data[20]=0
+ data[37]=7
  second:=bytes.find_byte(data[..],7)
- data[37]=0 data[52]=7
+ data[37]=0
+ data[52]=7
  needle:[1]u8=[7]
  third:=bytes.find(data[..],needle[..])
- data[52]=0 data[53]=7
+ data[52]=0
+ data[53]=7
  fourth:=bytes.find(data[..],needle[..])
  return first+second*100+third*10000+fourth*1000000
 }
-fn main() { if mutation()!=53523720 { #panic("search memory effects") } result:=oracle() if result!=0 { _=io.println(io.stderr(),"oracle {}",result) #panic("SSE byte oracle") } }
+fn main() { if mutation()!=53523720 { #panic("search memory effects") }
+result:=oracle()
+if result!=0 { _=io.println(io.stderr(),"oracle {}",result)
+#panic("SSE byte oracle") } }
 '''
 C=r'''
 #include <stdint.h>
@@ -153,8 +160,10 @@ use "std/bytes" bytes
 use "std/io"
 extern fn drive() i32
 observed:usize
-fn source_effect(source:[]const u8) []const u8 { observed=observed*10+1 return source }
-fn needle_effect() u8 { observed=observed*10+2 return 0 }
+fn source_effect(source:[]const u8) []const u8 { observed=observed*10+1
+return source }
+fn needle_effect() u8 { observed=observed*10+2
+return 0 }
 pub fn protected(source:[]const u8) {
  defer { _=io.println(io.stdout(),"cleanup {}",observed) }
  _=bytes.find_byte(source_effect(source),needle_effect())
@@ -205,8 +214,8 @@ def linux_proof(w):
   for label in ['empty','invalid','effects','argument-panic']:
    source=FAIL
    if operation=='find':
-    source=source.replace('fn needle_effect() u8 { observed=observed*10+2 return 0 }', 'fn needle_effect() []const u8 { observed=observed*10+2 return "x" }').replace('bytes.find_byte(source_effect(source),needle_effect())','bytes.find(source_effect(source),needle_effect())')
-   if label=='argument-panic':source=source.replace('observed=observed*10+2 return 0','observed=observed*10+2 p:*u8=nil return p.*').replace('observed=observed*10+2 return "x"','observed=observed*10+2 p:*u8=nil value:=p.* _=value return "x"')
+    source=source.replace('fn needle_effect() u8 { observed=observed*10+2\nreturn 0 }', 'fn needle_effect() []const u8 { observed=observed*10+2\nreturn "x" }').replace('bytes.find_byte(source_effect(source),needle_effect())','bytes.find(source_effect(source),needle_effect())')
+   if label=='argument-panic':source=source.replace('observed=observed*10+2\nreturn 0','observed=observed*10+2\np:*u8=nil\nreturn p.*').replace('observed=observed*10+2\nreturn "x"','observed=observed*10+2\np:*u8=nil\nvalue:=p.*\n_=value\nreturn "x"')
    (project/'main.dyn').write_text(source)
    pointer='data' if label in ('effects','argument-panic') else '0'
    length=0 if label=='empty' else 1

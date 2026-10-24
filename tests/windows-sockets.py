@@ -36,7 +36,7 @@ fn worker(context: rawptr) isize {
 fn main() {
   threads: [8]win.Thread = []
   for i in 0..8 {
-    if !win.thread_spawn(&threads[i], 65536, &worker, nil) { #panic("spawn") }
+    if !win.thread_spawn(&threads[i], 65536, worker, nil) { #panic("spawn") }
   }
   for sync.fetch_add_u32(&ready, 0) != 8 { win.thread_yield() }
   _ = sync.exchange_u32(&start, 1)

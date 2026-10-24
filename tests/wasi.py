@@ -14,13 +14,15 @@ fn main() {
   defer { mem.arena_release(&arena) }
   arguments := wasi.arguments(&arena)
   if !arguments.ok || #len(arguments.values) != 3 || #len(arguments.values[2]) != 5 { #panic("args") }
-  tiny: [1]u8 buffer := mem.arena_from_buffer(tiny[..])
+  tiny: [1]u8
+  buffer := mem.arena_from_buffer(tiny[..])
   failed := wasi.arguments(&buffer)
   if failed.ok || mem.arena_used(&buffer) != 0 { #panic("args rollback") }
   file := wasi.open_read(3, "input.txt")
   if #len(arguments.values[1]) == 4 {
     if file.ok { #panic("unexpected preopen") }
-    _ = io.println(io.stdout(), "denied") return
+    _ = io.println(io.stdout(), "denied")
+    return
   }
   if !file.ok { #panic("open") }
   defer { _ = wasi.close(file.fd) }
@@ -34,7 +36,8 @@ fn main() {
   if result.transferred != 3 { #panic("stdin") }
   _ = io.write_all(io.stdout(), data[..3])
   if wasi.random(data[..]) != 0 { #panic("random") }
-  now: u64 = 0 if wasi.clock_time(1, 0, &now) != 0 || now == 0 { #panic("clock") }
+  now: u64 = 0
+  if wasi.clock_time(1, 0, &now) != 0 || now == 0 { #panic("clock") }
 }
 '''
 js=r'''

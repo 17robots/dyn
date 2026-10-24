@@ -215,30 +215,30 @@ fn native_kind(code: isize) errors.Kind {
   case value {
     10004 => {
       return errors.Kind.Interrupted
-    },
+    }
     10009, 10038, 10056, 10057 => {
       return errors.Kind.InvalidState
-    },
+    }
     10013 => {
       return errors.Kind.PermissionDenied
-    },
+    }
     10022 => {
       return errors.Kind.InvalidInput
-    },
+    }
     10035 => {
       return errors.Kind.WouldBlock
-    },
+    }
     10048 => {
       return errors.Kind.AlreadyExists
-    },
+    }
     10055 => {
       return errors.Kind.Capacity
-    },
+    }
     10045, 10047 => {
       return errors.Kind.Unsupported
-    },
+    }
     _ => {
       return errors.Kind.System
-    },
+    }
   }
 }

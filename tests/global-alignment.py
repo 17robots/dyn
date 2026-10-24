@@ -135,7 +135,7 @@ pub const values: [3]i64 = [11, 13, 17]
 struct Holder {{ tag: u8, data: [17]u8, tail: u8 }}
 pub holder: Holder
 fn increment(value: usize) usize {{ return value + 1 }}
-pub const pointers: [4]fn(usize) usize = [&increment, &increment, &increment, &increment]
+pub const pointers: [4]fn(usize) usize = [increment, increment, increment, increment]
 fn main() {{
   if #sizeof([17]u8) != 17 || #alignof([17]u8) != 1 ||
      #alignof([4][9]i64) != 8 || #sizeof(Holder) != 19 ||

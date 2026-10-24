@@ -335,7 +335,7 @@ class Generator:
    if name in declared or name in self.needed or name in self.functions:continue
    if kind=='pointer':
     if value=='0':lines.append(f'pub const {ident(name)}: rawptr = nil')
-    else:lines.append(f'pub fn {ident(name)}() rawptr {{ address: usize = {value} return #cast(rawptr, address) }}')
+    else:lines.append(f'pub fn {ident(name)}() rawptr {{ address: usize = {value}\n  return #cast(rawptr, address) }}')
    else:lines.append(f'pub const {ident(name)}: '+('[]const u8' if kind=='string' else kind)+' = '+value)
   checks=[]
   for name in sorted(self.needed):

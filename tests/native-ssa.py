@@ -30,7 +30,7 @@ def division_program():
         if c < 1 << 63:
             lines += [f'  signed_divisor = {c}',
                       f'  if x / {c} != x / signed_divisor || x % {c} != x % signed_divisor {{ #panic("i64 {c}") }}']
-    lines += ['}', 'fn runtime(c: i64) i64 { signed_divisor = c return signed_divisor }', 'fn narrow(x: i32, y: u32) {']
+    lines += ['}', 'fn runtime(c: i64) i64 { signed_divisor = c\nreturn signed_divisor }', 'fn narrow(x: i32, y: u32) {']
     for c in (3, 7, 10, 1000, 65537, 2147483647):
         lines += [f'  if x / {c} != x / #cast(i32, runtime({c})) || x % {c} != x % #cast(i32, runtime({c})) {{ #panic("i32 {c}") }}',
                   f'  if y / {c} != y / #cast(u32, runtime({c})) || y % {c} != y % #cast(u32, runtime({c})) {{ #panic("u32 {c}") }}']
@@ -50,7 +50,10 @@ PROGRAMS = {
     'aggregate-snapshot': """
 struct Quad { a:i64, b:i64, c:i64, d:i64 }
 values: [3]Quad
-fn change(p:*Quad) { p.a = 99 p.b = 98 p.c = 97 p.d = 96 }
+fn change(p:*Quad) { p.a = 99
+p.b = 98
+p.c = 97
+p.d = 96 }
 fn main() {
   values[0] = Quad{a:1,b:2,c:3,d:4}
   values[1] = Quad{a:5,b:6,c:7,d:8}
@@ -80,7 +83,9 @@ seed: u8 = initial()
 fn initial() u8 { return 120 }
 fn main() {
   text: [6000]u8 = []
-  index: usize = 0 for index < 6000 { text[index] = seed + #cast(u8, (index % 7)) index += 1 }
+  index: usize = 0
+  for index < 6000 { text[index] = seed + #cast(u8, (index % 7))
+  index += 1 }
   _ = io.println(io.stdout(), "{} {} {}", text[0], text[4100], text[5999])
 }
 ''',
@@ -113,7 +118,9 @@ d: [1024]f32
 e: [99]f64
 f: [32]f32
 fn main() {
-  for i in 0..1024 { a[i] = #cast(f64, (i % 13)) * 0.37 b[i] = #cast(f64, (i % 7)) * -1.25 d[i] = #cast(f32, (i % 5)) * 0.5 }
+  for i in 0..1024 { a[i] = #cast(f64, (i % 13)) * 0.37
+  b[i] = #cast(f64, (i % 7)) * -1.25
+  d[i] = #cast(f32, (i % 5)) * 0.5 }
   n: usize = 32
   for i in 0..n {
     for j in 0..n {
@@ -180,31 +187,31 @@ fn main() {
 enum Key { Up, Down, Left, Right, Enter, Escape, Tab }
 fn pick(x: i64) i64 {
   case x {
-    0 => { return 10 },
-    1 => { return 11 },
-    2, 3 => { return 23 },
-    5 => { return 15 },
-    -1 => { return 99 },
-    7 => { return 17 },
+    0 => { return 10 }
+    1 => { return 11 }
+    2, 3 => { return 23 }
+    5 => { return 15 }
+    -1 => { return 99 }
+    7 => { return 17 }
     _ => { return -5 }
   }
 }
 fn letter(x: u8) u64 {
   case x {
-    65 => { return 1 },
-    66 => { return 2 },
-    67 => { return 3 },
-    70 => { return 4 },
+    65 => { return 1 }
+    66 => { return 2 }
+    67 => { return 3 }
+    70 => { return 4 }
     _ => { return 0 }
   }
 }
 fn key(k: Key) i64 {
   case k {
-    Key.Up => { return 1 },
-    Key.Down => { return 2 },
-    Key.Left => { return 3 },
-    Key.Right => { return 4 },
-    Key.Enter => { return 5 },
+    Key.Up => { return 1 }
+    Key.Down => { return 2 }
+    Key.Left => { return 3 }
+    Key.Right => { return 4 }
+    Key.Enter => { return 5 }
     _ => { return 6 }
   }
 }

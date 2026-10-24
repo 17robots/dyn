@@ -24,7 +24,8 @@ pub fn nested(s:[]const u8) u64 {
  defer cleanup()
  sum:u64=0
  for r in 0..opaque(2) {
-  for i in 0..#len(s) { if i==opaque(1) { continue } sum=#wrap(sum+#cast(u64,s[i])) }
+  for i in 0..#len(s) { if i==opaque(1) { continue }
+  sum=#wrap(sum+#cast(u64,s[i])) }
  }
  return sum
 }
@@ -40,12 +41,14 @@ pub fn false_edge(s:[]const u8,i:usize) u8 {
 }
 pub fn contradiction(s:[]const u8,i:usize) u8 {
  defer cleanup()
- if i<#len(s) { if i>=#len(s) { #panic("unreachable") } return s[i] }
+ if i<#len(s) { if i>=#len(s) { #panic("unreachable") }
+ return s[i] }
  return 0
 }
 pub fn swapped(s:[]const u8,i:usize) u8 {
  defer cleanup()
- if #len(s)>i { if #len(s)<=i { #panic("unreachable") } return s[i] }
+ if #len(s)>i { if #len(s)<=i { #panic("unreachable") }
+ return s[i] }
  return 0
 }
 pub fn joined(s:[]const u8,i:usize,choose:bool) u8 {
@@ -70,7 +73,9 @@ pub fn changed(s:[]const u8,i:usize) u8 {
 }
 pub fn phi(s:[]const u8,i:usize,choose:bool) u8 {
  defer cleanup()
- if i<#len(s) { at:=i if choose { at=#len(s) } return s[at] }
+ if i<#len(s) { at:=i
+ if choose { at=#len(s) }
+ return s[at] }
  return 0
 }
 '''

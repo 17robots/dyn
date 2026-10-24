@@ -59,7 +59,7 @@ for name in ('floor','ceil','trunc','round'):
         call=f'rounded_{name}(#bitcast(f64,opaque({bits(x)})))'
         condition=f'!m.is_nan({call})' if math.isnan(value) else f'#bitcast(u64,{call})!={bits(value)}'
         checks.append(f'if {condition} {{ #panic("{name} bits") }}')
-checks.append('trace=0 if fused64(mark(1),mark(2),mark(3))!=5.0 || trace!=123 { #panic("fused argument order") }')
+checks.append('trace=0\nif fused64(mark(1),mark(2),mark(3))!=5.0 || trace!=123 { #panic("fused argument order") }')
 params=','.join(f'p{i}:f64' for i in range(30))
 terms=[f'm.fma64(p{i},p{i+1},p{i+2})' for i in range(27,-1,-3)]+[f'p{i}' for i in range(30)]
 pressure='pub fn pressure('+params+') f64 { return '+'+'.join(terms)+' }\n'
@@ -72,8 +72,10 @@ use "fake" fake
 extern fn opaque "dyn_math_opaque"(x:u64) u64
 calls:i32
 trace:i32
-fn mark(x:i32) f64 { trace=trace*10+x return #cast(f64,x) }
-fn tick() f64 { calls+=1 return 9.0 }
+fn mark(x:i32) f64 { trace=trace*10+x
+return #cast(f64,x) }
+fn tick() f64 { calls+=1
+return 9.0 }
 pub fn square(x:f64) f64 { return m.sqrt64(x) }
 pub fn signed(x,y:f64) f64 { return m.copysign64(x,y) }
 pub fn fused64(x,y,z:f64) f64 { return m.fma64(x,y,z) }

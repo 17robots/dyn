@@ -135,7 +135,8 @@ use "vendor/openssl/crypto" raw
 use "std/bytes"
 use "std/errors"
 fn check(ok: bool) { if !ok { #panic("key contract") } }
-fn filled(data: []const u8, value: u8) bool { for i in 0..#len(data) { if data[i] != value { return false } } return true }
+fn filled(data: []const u8, value: u8) bool { for i in 0..#len(data) { if data[i] != value { return false } }
+return true }
 fn fill(data: []u8) { for i in 0..#len(data) { data[i] = 165 } }
 fn main() {
   alice: [32]u8 = [119, 7, 109, 10, 115, 24, 165, 125, 60, 22, 193, 114, 81, 178, 102, 69, 223, 76, 47, 135, 235, 192, 153, 42, 177, 119, 251, 165, 29, 185, 44, 42]
@@ -333,10 +334,15 @@ fn failure(destination: []u8, key: []const u8) KeyResult {
   return KeyResult{ provider_code: 18446744073709551615 }
 }
 pub fn x25519_public(destination: []u8, private_key: []const u8) KeyResult { return failure(destination, private_key) }
-pub fn x25519_shared(destination: []u8, private_key: []const u8, peer: []const u8) KeyResult { _ = peer return failure(destination, private_key) }
+pub fn x25519_shared(destination: []u8, private_key: []const u8, peer: []const u8) KeyResult { _ = peer
+return failure(destination, private_key) }
 pub fn ed25519_public(destination: []u8, private_key: []const u8) KeyResult { return failure(destination, private_key) }
-pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) KeyResult { _ = message return failure(destination, private_key) }
-pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool { _ = signature _ = message _ = public_key return false }
+pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) KeyResult { _ = message
+return failure(destination, private_key) }
+pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool { _ = signature
+_ = message
+_ = public_key
+return false }
 '''
 
 AEAD_PROVIDER = r'''pub const CipherAes256Gcm: u8 = 0
@@ -350,12 +356,19 @@ fn failure(output: []u8, key: []const u8) Result {
   return Result{ok: true, written: 1}
 }
 pub fn aead_seal(kind: u8, output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) Result {
-  _ = kind _ = input _ = aad _ = nonce
+  _ = kind
+  _ = input
+  _ = aad
+  _ = nonce
   for i in 0..#len(tag) { tag[i] = 77 }
   return failure(output, key)
 }
 pub fn aead_open(kind: u8, output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) Result {
-  _ = kind _ = input _ = tag _ = aad _ = nonce
+  _ = kind
+  _ = input
+  _ = tag
+  _ = aad
+  _ = nonce
   return failure(output, key)
 }
 '''

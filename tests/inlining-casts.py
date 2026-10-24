@@ -12,10 +12,16 @@ DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 ENV=dict(os.environ,DYN_SDK=str(ROOT))
 SOURCE=r'''
 calls:u64
-fn side(x:u64) u64 { calls+=1 defer { calls+=10 } return x }
-fn byte(x:u8) u8 { calls+=1 return x }
-fn raw(p:*u64) rawptr { calls+=1 return #cast(rawptr,p) }
-fn change(target:**u64,replacement:*u64) u64 { calls+=1 target.*=replacement return 7 }
+fn side(x:u64) u64 { calls+=1
+defer { calls+=10 }
+return x }
+fn byte(x:u8) u8 { calls+=1
+return x }
+fn raw(p:*u64) rawptr { calls+=1
+return #cast(rawptr,p) }
+fn change(target:**u64,replacement:*u64) u64 { calls+=1
+target.*=replacement
+return 7 }
 pub fn casted(x:u64) u8 { return #cast(u8,side(x)) }
 pub fn chain(x:u64) u16 { return #cast(u16,#cast(u8,side(x))) }
 pub fn bits(x:u64) f64 { return #bitcast(f64,side(x)) }
@@ -26,7 +32,9 @@ fn main() {
  if chain(43)!=43 || calls!=22 { #panic("cast chain") }
  if bits(4608308318706860032)!=1.25 || calls!=33 { #panic("bitcast") }
  if widen(255)!=255 || calls!=34 { #panic("implicit conversion") }
- old:u64=1 other:u64=2 pointer:=&old
+ old:u64=1
+ other:u64=2
+ pointer:=&old
  if typed(pointer)!=pointer || calls!=35 { #panic("pointer cast") }
  pointer.*=#cast(u64,change(&pointer,&other))
  if old!=7 || other!=2 || pointer!=&other || calls!=36 { #panic("target capture") }
@@ -35,7 +43,9 @@ fn main() {
 FAILURE=r'''
 use "std/io"
 calls:u64
-fn side(x:u64) u64 { calls+=1 defer { calls+=10 } return x }
+fn side(x:u64) u64 { calls+=1
+defer { calls+=10 }
+return x }
 enum Choice { A, B }
 fn checked(x:u64) Choice { return #cast(Choice,side(x)) }
 fn main() {
@@ -48,7 +58,8 @@ fn main() {
 TARGET_FAILURE=r'''
 use "std/io"
 calls:u64
-fn side(x:u64) u64 { calls+=1 return x }
+fn side(x:u64) u64 { calls+=1
+return x }
 fn main() {
  defer { _=io.println(io.stdout(),"{}",calls) }
  pointer:*u8=nil

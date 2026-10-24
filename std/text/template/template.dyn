@@ -95,7 +95,7 @@ fn write_literal(destination: stream.Writer, source: []const u8, offset: usize) 
 }
 
 pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult {
-  return render_with(destination, template, fields, &write)
+  return render_with(destination, template, fields, write)
 }
 
 // Field rendering seam shared by plain-text and HTML templates. Literal text is unchanged.

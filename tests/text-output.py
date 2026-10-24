@@ -23,11 +23,14 @@ extern fn packed_provider "packed_provider"(x: Packed) Packed
 counter: i32 = 0
 message: []const u8 = "bytes\x00with null"
 fn first(x: i32) i32 { return x + 2 }
-callback: fn(i32) i32 = &first
+callback: fn(i32) i32 = first
 fn add(p: *i32) { p.* += 1 }
 fn cleanup() { counter += 1 }
-fn checked(x: i32) i32 { defer cleanup() return 12 / x }
-fn aggregate(x: Pair) Pair { value := x value.integer += 1 return value }
+fn checked(x: i32) i32 { defer cleanup()
+return 12 / x }
+fn aggregate(x: Pair) Pair { value := x
+value.integer += 1
+return value }
 fn main() {
   floats := floats_provider(Floats{x:1.25,y:2.5})
   if floats.x != 2.25 || floats.y != 3.5 { #panic("HFA") }
@@ -35,7 +38,7 @@ fn main() {
   original := Pair{integer: 7, real: 2.5}
   local := aggregate(original)
   foreign := provider(original)
-  indirect := &provider
+  indirect := provider
   foreign = indirect(foreign)
   if original.integer != 7 || local.integer != 8 || foreign.integer != 9 || foreign.real != 4.5 { #panic("pair ABI") }
   large := Large{value: 41}

@@ -35,27 +35,27 @@ def fn(n,pars,ret,body):
  global src
  src+=f'pub fn {n}({pars}) {ret} {{ {body} }}\n';names.append(n)
 for n,t,expr,v in [('ints','u32','x[0]+x[1]','11,22'),('floats','f64','#cast(u32,x[0]+x[1])','11.0,22.0'),('texts','[]const u8','#cast(u32,#len(x[0])+#len(x[1]))','"hello","world!"'),('aggs','Big','#cast(u32,x[0].a+x[1].e)','Big{a:11},Big{e:22}')]:
- fn(n,f'x:...{t}','u32',f'if #len(x)==0 {{ return 0 }} return {expr}')
+ fn(n,f'x:...{t}','u32',f'if #len(x)==0 {{ return 0 }}\nreturn {expr}')
  fn(n+'call','','u32',f'return {n}()+{n}({v})'); checks.append(f'{n}call()!={11 if n=="texts" else 33}')
-fn('bigpack','x:...u32','Big','if #len(x)==0 { return Big{a:7} } return Big{a:#cast(u64,x[0]),e:#cast(u64,#len(x))}')
-fn('bigcall','','u32','a:=bigpack() b:=bigpack(11,22) return #cast(u32,a.a+b.a+b.e)');checks.append('bigcall()!=20')
+fn('bigpack','x:...u32','Big','if #len(x)==0 { return Big{a:7} }\nreturn Big{a:#cast(u64,x[0]),e:#cast(u64,#len(x))}')
+fn('bigcall','','u32','a:=bigpack()\nb:=bigpack(11,22)\nreturn #cast(u32,a.a+b.a+b.e)');checks.append('bigcall()!=20')
 for n in range(12):
  for t,val in [('u32','1'),('f64','1.0')]:
   name=f'bank{n}{t}';pars=','.join(f'a{i}:{t}' for i in range(n));args=','.join([val]*n)
   fn(name,(pars+',' if n else '')+'x:...u32','u32',('return #cast(u32,a0)+' if n else 'return ')+'#cast(u32,#len(x))')
   fn(name+'call','','u32',f'return {name}({args+"," if n else ""}11,22)');checks.append(name+f'call()!={3 if n else 2}')
 src+='g:Big\nseq:u32\n'
-fn('step','n:u32','u32','seq=seq*10+n return n')
-fn('change','','Big','g.a=99 return g')
+fn('step','n:u32','u32','seq=seq*10+n\nreturn n')
+fn('change','','Big','g.a=99\nreturn g')
 fn('snap','fixed:u32,x:...Big','u32','return fixed+#cast(u32,x[0].a+x[1].a)')
-fn('snapcall','','u32','g=Big{a:11} return snap(step(1),g,change())');checks.append('snapcall()!=111')
+fn('snapcall','','u32','g=Big{a:11}\nreturn snap(step(1),g,change())');checks.append('snapcall()!=111')
 fn('order','fixed:u32,x:...u32','u32','return fixed+x[0]+x[1]')
-fn('ordercall','','u32','seq=0 _=order(step(1),step(2),step(3)) return seq');checks.append('ordercall()!=123')
-fn('recurse','n:u32,x:...u32','u32','if n==0 { return x[0] } return recurse(n-1,x[0]+1)')
+fn('ordercall','','u32','seq=0\n_=order(step(1),step(2),step(3))\nreturn seq');checks.append('ordercall()!=123')
+fn('recurse','n:u32,x:...u32','u32','if n==0 { return x[0] }\nreturn recurse(n-1,x[0]+1)')
 fn('recursecall','','u32','return recurse(5,7)');checks.append('recursecall()!=12')
 fn('callback','p:fn(u32) u32,x:...u32','u32','return p(x[0])')
 fn('plus','x:u32','u32','return x+1')
-fn('callbackcall','','u32','return callback(&plus,41)');checks.append('callbackcall()!=42')
+fn('callbackcall','','u32','return callback(plus,41)');checks.append('callbackcall()!=42')
 fn('manyextras','x:...u32','u32','return #cast(u32,#len(x))+x[511]')
 fn('extrascall','','u32','return manyextras('+','.join(['1']*512)+')');checks.append('extrascall()!=513')
 for n,ret in [(510,'u32'),(509,'Big')]:
@@ -63,9 +63,9 @@ for n,ret in [(510,'u32'),(509,'Big')]:
  fn(name,pars+',x:...u32',ret,'return '+('a0+a'+str(n-1)+'+#cast(u32,#len(x))' if ret=='u32' else 'Big{a:#cast(u64,a0+a508)+#cast(u64,#len(x))}'))
  fn(name+'call','', 'u32', f'return '+(f'{name}({args})' if ret=='u32' else f'#cast(u32,{name}({args}).a)'));checks.append(name+'call()!=2')
 src+='descstate:[]const u8\n'
-fn('descchange','','[]const u8','descstate="longer" return descstate')
+fn('descchange','','[]const u8','descstate="longer"\nreturn descstate')
 fn('descsnap','x:...[]const u8','u32','return #cast(u32,#len(x[0])*10+#len(x[1]))')
-fn('descsnapcall','','u32','descstate="old" return descsnap(descstate,descchange())');checks.append('descsnapcall()!=36')
+fn('descsnapcall','','u32','descstate="old"\nreturn descsnap(descstate,descchange())');checks.append('descsnapcall()!=36')
 fn('nestedcall','','u32','return ints(ints(1,2),ints(3,4))');checks.append('nestedcall()!=10')
 for n,ret in [(510,'u32'),(509,'Big')]:
  name=f'cap{n}fullcall';args=','.join(['1']*n+['7'])
@@ -90,11 +90,11 @@ return 0; }
 W anyoracle(void) { W x=91; return anycall(0x1122334455667788ULL,(W)&x); }
 W cpacr(void){return *(volatile W*)0xe000ed88u;}
 '''
-src+='fn main() { anydebug() '+''.join(f'if {x} {{ #panic("case{i}") }} ' for i,x in enumerate(checks))+'_ = io.write_all(io.stdout(),"PACK OK\\n") }\n'
+src+='fn main() {\nanydebug()\n'+''.join(f'if {x} {{ #panic("case{i}") }}\n' for i,x in enumerate(checks))+'_ = io.write_all(io.stdout(),"PACK OK\\n") }\n'
 
 cases={
 'anyreturn':'pub fn bad(x:any) any { return x }\nfn main() {}',
-'pointer':'fn packed(x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { p:=&packed _=p(1) }',
+'pointer':'fn packed(x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { p:=packed\n_=p(1) }',
 'generic':'fn packed(x:...$T) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed(1) }',
 'groups512':'pub fn packed('+','.join(f'a{i}:u32' for i in range(512))+',x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed('+','.join(['1']*512)+') }',
 'extras513':'pub fn packed(x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed('+','.join(['1']*513)+') }'
@@ -184,7 +184,7 @@ def main():
                     else:
                         source = 'extern fn cpacr() u32\n' + source.replace('fn main() {',
                             'fn main() { if cpacr() & 0x00f00000 != 0 { #panic("FPU") }').replace(
-                            '_ = io.write_all', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU exit") } _ = io.write_all')
+                            '_ = io.write_all', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU exit") }\n_ = io.write_all')
                 (project/'main.dyn').write_text(source)
                 (work/'oracle.c').write_text(c)
                 obj = work/'oracle.o'

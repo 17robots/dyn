@@ -45,24 +45,26 @@ fn main() {
   if result.ok || result.value != 0 || result.kind != errors.Kind.None || result.error != 0 { #panic("zero result") }
   empty := thread.Thread{}
   if thread.id(&empty) != 0 { #panic("zero id") }
-  joined(&empty) joined(&empty)
+  joined(&empty)
+  joined(&empty)
   storage: [4096]u8 = []
   arena := mem.arena_from_buffer(storage[..])
   _ = mem.push_bytes_uninit(&arena, 7)
   mark := mem.arena_mark(&arena)
   stack: [131072]u8 = []
   for size in [0, 1, 255] {
-    invalid(thread.spawn_with_size(&arena, #cast(usize, size), &worker, nil), &arena, mark)
-    invalid(thread.spawn(&arena, stack[..size], &worker, nil), &arena, mark)
+    invalid(thread.spawn_with_size(&arena, #cast(usize, size), worker, nil), &arena, mark)
+    invalid(thread.spawn(&arena, stack[..size], worker, nil), &arena, mark)
   }
   invalid(thread.spawn_with_size(&arena, 131072, nil, nil), &arena, mark)
   invalid(thread.spawn(&arena, stack[..], nil, nil), &arena, mark)
-  first := Shared{} second := Shared{}
-  owned := thread.spawn_with_size(&arena, 131072, &worker, #cast(rawptr, &first))
+  first := Shared{}
+  second := Shared{}
+  owned := thread.spawn_with_size(&arena, 131072, worker, #cast(rawptr, &first))
   if !owned.ok || owned.value == nil || owned.kind != errors.Kind.None || owned.error != 0 { #panic("owned spawn") }
   stable := owned.value
   owned_mark := mem.arena_mark(&arena)
-  borrowed := thread.spawn(&arena, stack[..], &worker, #cast(rawptr, &second))
+  borrowed := thread.spawn(&arena, stack[..], worker, #cast(rawptr, &second))
   if !borrowed.ok || borrowed.value == nil || borrowed.kind != errors.Kind.None || borrowed.error != 0 { #panic("borrowed spawn") }
   if borrowed.value == stable || owned.value != stable || owned_mark <= mark { #panic("stable distinct nodes") }
   for sync.load_u32(&first.arrived) == 0 || sync.load_u32(&second.arrived) == 0 { _ = thread.yield_now() }
@@ -78,10 +80,13 @@ fn main() {
   tail := mem.push_bytes_uninit(&arena, 64)
   for *byte in tail { byte.* = 99 }
   retained := mem.arena_mark(&arena)
-  sync.store_u32(&first.gate, 1) sync.store_u32(&second.gate, 1)
-  joined(stable) joined(borrowed.value)
+  sync.store_u32(&first.gate, 1)
+  sync.store_u32(&second.gate, 1)
+  joined(stable)
+  joined(borrowed.value)
   if first.value != 42 || second.value != 42 { #panic("join visibility") }
-  joined(stable) joined(borrowed.value)
+  joined(stable)
+  joined(borrowed.value)
   if mem.arena_mark(&arena) != retained { #panic("join released caller nodes") }
   for byte in tail { if byte != 99 { #panic("join changed caller allocation") } }
   // Borrowed storage remains usable after join, even on hosts owning OS stacks.
@@ -90,7 +95,8 @@ fn main() {
 }
 '''
 EXHAUSTION = IMPORTS + r'''
-fn forbidden(context: rawptr) isize { if context == nil { #panic("WORKER_STARTED") } return 0 }
+fn forbidden(context: rawptr) isize { if context == nil { #panic("WORKER_STARTED") }
+return 0 }
 fn main() {
   backing: [1]u8 = []
   arena := mem.arena_from_buffer(backing[..0])
@@ -123,8 +129,8 @@ def main():
             output = build(work, SOURCE, mode)
             result = subprocess.run([str(output)], capture_output=True, timeout=20)
             assert result.returncode == 0, (mode, result.stdout, result.stderr)
-            for call in ('thread.spawn_with_size(&arena, 131072, &forbidden, nil)',
-                         'thread.spawn(&arena, stack[..], &forbidden, nil)'):
+            for call in ('thread.spawn_with_size(&arena, 131072, forbidden, nil)',
+                         'thread.spawn(&arena, stack[..], forbidden, nil)'):
                 output = build(work, EXHAUSTION.replace('SPAWN\n', '_ = ' + call + '\n'), mode)
                 result = subprocess.run([str(output)], capture_output=True, timeout=10)
                 diagnostic = result.stdout + result.stderr
@@ -133,7 +139,7 @@ def main():
             print('PASS native thread results and arena exhaustion ' + mode, flush=True)
             if args.cross:
                 for target in ('x86_64-windows', 'aarch64-macos'):
-                    for source in (SOURCE, EXHAUSTION.replace('SPAWN\n', '_ = thread.spawn_with_size(&arena, 131072, &forbidden, nil)\n')):
+                    for source in (SOURCE, EXHAUSTION.replace('SPAWN\n', '_ = thread.spawn_with_size(&arena, 131072, forbidden, nil)\n')):
                         build(work, source, mode, target)
                     print('PASS target link ' + target + ' ' + mode + ' (execution requires native host)', flush=True)
 

@@ -14,27 +14,46 @@ if platform.system() != 'Linux' or platform.machine() != 'x86_64':
     raise SystemExit(0)
 SOURCE = '''use "std/io"
 count:u64=0
-pub fn less(n:u64) u64 { if n<2 { return n } return less(n-1)+less(n-2) }
-pub fn alternate(n:u64) u64 { if n<=1 { return n } return alternate(n-2)+alternate(n-2) }
-pub fn equal(n:u64,base:u64) u64 { if n==0 { return base } return equal(n-1,base)+equal(n-1,base) }
-pub fn different(n:u64) u64 { if n!=0 { return n } return different(1) }
-pub fn above(n:u64) u64 { if n>200 { return n } return above(n+1) }
-pub fn at_least(n:u64) u64 { if n>=127 { return n } return at_least(n+1) }
+pub fn less(n:u64) u64 { if n<2 { return n }
+return less(n-1)+less(n-2) }
+pub fn alternate(n:u64) u64 { if n<=1 { return n }
+return alternate(n-2)+alternate(n-2) }
+pub fn equal(n:u64,base:u64) u64 { if n==0 { return base }
+return equal(n-1,base)+equal(n-1,base) }
+pub fn different(n:u64) u64 { if n!=0 { return n }
+return different(1) }
+pub fn above(n:u64) u64 { if n>200 { return n }
+return above(n+1) }
+pub fn at_least(n:u64) u64 { if n>=127 { return n }
+return at_least(n+1) }
 pub fn at_most(a:u64,b:u64,c:u64,d:u64,e:u64,n:u64) u64 {
-  if n<=1 { return a } return at_most(a,b,c,d,e,n-1)+at_most(a,b,c,d,e,n-1)
+  if n<=1 { return a }
+  return at_most(a,b,c,d,e,n-1)+at_most(a,b,c,d,e,n-1)
 }
-pub fn later(n:u64) u64 { if n<2 { return n } count+=1 return later(n-1)+later(n-2) }
-pub fn unsafe(n:u64) u64 { if n<1 { return n } return unsafe(n-2)+unsafe(n-1) }
-pub fn overflowing(n:u64) u64 { if n<2 { return n } return overflowing(n-1)*18446744073709551615+overflowing(n-2) }
-pub fn signed(n:i64) i64 { if n<2 { return n } return signed(n-1)+signed(n-2) }
-pub fn effect(n:u64) u64 { count+=1 if n<2 { return n } return effect(n-1)+effect(n-2) }
-pub fn cleanup(n:u64) u64 { defer { count+=1 } if n<2 { return n } return cleanup(n-1)+cleanup(n-2) }
+pub fn later(n:u64) u64 { if n<2 { return n }
+count+=1
+return later(n-1)+later(n-2) }
+pub fn unsafe(n:u64) u64 { if n<1 { return n }
+return unsafe(n-2)+unsafe(n-1) }
+pub fn overflowing(n:u64) u64 { if n<2 { return n }
+return overflowing(n-1)*18446744073709551615+overflowing(n-2) }
+pub fn signed(n:i64) i64 { if n<2 { return n }
+return signed(n-1)+signed(n-2) }
+pub fn effect(n:u64) u64 { count+=1
+if n<2 { return n }
+return effect(n-1)+effect(n-2) }
+pub fn cleanup(n:u64) u64 { defer { count+=1 }
+if n<2 { return n }
+return cleanup(n-1)+cleanup(n-2) }
 fn main() {
   _=io.println(io.stdout(),"{} {} {} {} {} {} {} {} {} {} {}",less(0),less(1),less(15),
     equal(0,7),equal(6,7),different(0),above(199),above(18446744073709551615),
     at_least(125),at_most(3,4,5,6,7,5),signed(15))
   _=io.println(io.stdout(),"{} {} {} {} {}",less(2),less(3),less(7),less(8),alternate(9))
-  _=later(7) _=effect(7) _=cleanup(7) _=io.println(io.stdout(),"{}",count)
+  _=later(7)
+  _=effect(7)
+  _=cleanup(7)
+  _=io.println(io.stdout(),"{}",count)
 }
 '''
 

@@ -209,7 +209,7 @@ static uint32_t src_case(Parser *p) {
     }
     expect(p, "=>"); append(p, &af, &al, src_block(p));
     append(p, &first, &last, mark(p, src_node(p, SRC_CASE_ARM, begin, src_end(p, al, begin), af), wildcard ? EXP_WILDCARD : 0));
-    if (!take(p, ",")) break;
+    if (is(p, ",")) fail(p, p->token.start, "case arms are not separated by commas");
   }
   uint32_t end = p->token.end; expect(p, "}");
   return src_node(p, SRC_CASE, start, end, first);
@@ -380,6 +380,8 @@ static uint32_t src_block(Parser *p) {
   while (!is(p, "}") && !p->tree->error && p->token.kind != END) {
     Parser saved = *p; uint32_t count = p->tree->count;
     uint32_t statement = src_statement(p);
+    if (!p->tree->error && !is(p, "}") && p->token.kind != END && !src_line_start(p, p->token.start))
+      fail(p, p->token.start, "each statement must start on its own line");
     if (p->tree->error) statement = src_recover(p, saved, count, false);
     append(p, &first, &last, statement);
   }

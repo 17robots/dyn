@@ -75,8 +75,8 @@ for name, cf, df, init, leaves in cases:
                  f'r_{key} := c_{key}({",".join(args+[f"x_{key}","19"])})',
                  'if ' + ' || '.join(f'r_{key}.{path} != {value+1} || x_{key}.{path} != {value}' for path,value in leaves) +
                  f' {{ #panic("outgoing {key}") }}',
-                 f'if cb_{key}(&local_{key}) != 1 {{ #panic("return {key}") }}']
-        body += [f'fn_{key} := &c_{key}',
+                 f'if cb_{key}(local_{key}) != 1 {{ #panic("return {key}") }}']
+        body += [f'fn_{key} := c_{key}',
                  f'r_{key} = fn_{key}({",".join(args+[f"x_{key}","19"])})',
                  'if ' + ' || '.join(f'r_{key}.{path} != {value+1}' for path,value in leaves) +
                  f' {{ #panic("indirect {key}") }}']

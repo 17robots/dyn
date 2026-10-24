@@ -14,7 +14,8 @@ fn scalar(h: []const u8, n: []const u8) usize {
   if #len(n)>#len(h) { return #len(h) }
   for i in 0..#len(h)-#len(n)+1 {
     matched:=true
-    for j in 0..#len(n) { if h[i+j]!=n[j] { matched=false break } }
+    for j in 0..#len(n) { if h[i+j]!=n[j] { matched=false
+    break } }
     if matched { return i }
   }
   return #len(h)
@@ -27,7 +28,9 @@ fn verify(h: []const u8, n: []const u8) {
 fn main() {
   empty: []const u8
   expect(bytes.find_byte(empty,0)==0)
-  verify(empty,empty) verify(empty,"a") verify("a",empty)
+  verify(empty,empty)
+  verify(empty,"a")
+  verify("a",empty)
   backing: [160]u8
   one: [1]u8
   for offset in 0..16 {
@@ -53,11 +56,13 @@ fn main() {
     seed=#wrap(seed*1664525+1013904223)
     offset:=#cast(usize,seed%16)
     size:=#cast(usize,(seed>>8)%129)
-    for i in 0..size { seed=#wrap(seed*1664525+1013904223) backing[offset+i]=#cast(u8,seed>>24) }
+    for i in 0..size { seed=#wrap(seed*1664525+1013904223)
+    backing[offset+i]=#cast(u8,seed>>24) }
     seed=#wrap(seed*1664525+1013904223)
     noffset:=#cast(usize,seed%8)
     nsize:=#cast(usize,(seed>>8)%33)
-    for i in 0..nsize { seed=#wrap(seed*1664525+1013904223) needle_storage[noffset+i]=#cast(u8,seed>>24) }
+    for i in 0..nsize { seed=#wrap(seed*1664525+1013904223)
+    needle_storage[noffset+i]=#cast(u8,seed>>24) }
     if nsize<=size && trial%2==0 {
       at:=#cast(usize,seed)%(size-nsize+1)
       for i in 0..nsize { needle_storage[noffset+i]=backing[offset+at+i] }
@@ -79,8 +84,10 @@ fn main() {
     right:=page[4096-size..]
     expect(bytes.find_byte(left,255)==size)
     expect(bytes.find_byte(right,255)==size)
-    verify(left,"ERROR") verify(right,"ERROR")
-    verify(left,page[4096..]) verify(right,page[..0])
+    verify(left,"ERROR")
+    verify(right,"ERROR")
+    verify(left,page[4096..])
+    verify(right,page[..0])
     for nsize in 0..size+2 {
       verify(left,page[4096-nsize..])
       verify(right,page[..nsize])

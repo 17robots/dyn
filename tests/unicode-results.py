@@ -58,7 +58,8 @@ fn bad(input: []const u8, off: usize) {
  }
 }
 fn overlap(start: usize, mode: usize) {
- backing: [1024]u8 = [] snapshot: [1024]u8 = []
+ backing: [1024]u8 = []
+ snapshot: [1024]u8 = []
  mem.fill(backing[..], 99)
  _ = mem.copy(backing[start..], "ABCD")
  _ = mem.copy(snapshot[..], backing[..])
@@ -88,7 +89,8 @@ fn main() {
  require(!z.ok && #len(z.value) == 0 && z.kind == errors.Kind.None && z.error == 0 && z.offset == 0 && z.detail == text.ErrorKind.None, "zero Converted")
  end(text.GraphemeResult{})
  empty := text.graphemes("")
- end(text.next_grapheme(&empty)) end(text.next_grapheme(&empty))
+ end(text.next_grapheme(&empty))
+ end(text.next_grapheme(&empty))
 '''
 
 
@@ -113,15 +115,19 @@ def source():
             program += f'bad({literal(prefix + invalid + b"Z")}, {len(prefix)})\n'
     program += '''for mode in 0..4 {
  // capacity=24: work occupies [8,200), output [200,224).
- overlap(8, mode) overlap(12, mode) overlap(200, mode) overlap(202, mode)
+ overlap(8, mode)
+overlap(12, mode)
+overlap(200, mode)
+overlap(202, mode)
 }
-overlap(8, 4) overlap(10, 4)
+overlap(8, 4)
+overlap(10, 4)
 '''
     clusters = ['a\u0301', '\r\n', '🇺🇸', '👩\u200d💻', '각']
     program += f'g := text.graphemes({literal("".join(clusters))})\n'
     for value in clusters:
         program += f'cluster(text.next_grapheme(&g), {literal(value)})\n'
-    program += 'end(text.next_grapheme(&g)) end(text.next_grapheme(&g))\n'
+    program += 'end(text.next_grapheme(&g))\nend(text.next_grapheme(&g))\n'
     program += f'partial := text.graphemes({literal(b"ab" + bytes([255]))})\n'
     program += 'cluster(text.next_grapheme(&partial), "a")\n'
     program += '''for repeat in 0..3 {

@@ -20,7 +20,7 @@ def run(name,s):
 s=(root/'std/fs/watch/windows.dyn').read_text().replace('#target(kernel: windows)','')
 def win(m):
  line=m[0]; name=re.search(r'fn (\w+)',line)[1]; sig=re.sub(r' "[^"]+"','',line.removeprefix('extern '))
- body={'native_error':'return mock_code','reset_event':'mock_resets += 1 return mock_reset','read_changes':'mock_reads += 1 return mock_read','native_open':'return #cast(rawptr, 1)','create_event':'return #cast(rawptr, 2)','native_close':'return 1','completion':'return 0','cancel':'return 1'}[name]
+ body={'native_error':'return mock_code','reset_event':'mock_resets += 1\nreturn mock_reset','read_changes':'mock_reads += 1\nreturn mock_read','native_open':'return #cast(rawptr, 1)','create_event':'return #cast(rawptr, 2)','native_close':'return 1','completion':'return 0','cancel':'return 1'}[name]
  return sig+' { '+body+' }'
 s=re.sub(r'^extern fn .+$',win,s,flags=re.M)
 s+='''
@@ -71,13 +71,15 @@ def mac(m):
 s=re.sub(r'^extern fn .+$',mac,s,flags=re.M)
 s+='''
 mock_errno: i32 = 13
-fn canonical_mock(path: *const u8, output: *u8) *u8 { _ = path _ = output return nil }
+fn canonical_mock(path: *const u8, output: *u8) *u8 { _ = path
+_ = output
+return nil }
 fn require(ok: bool) { if !ok { #panic("macos mock") } }
 fn main() {
  backing: [272]u8 = []
  opened := open(backing[..])
  require(!opened.ok && opened.error == -95 && opened.kind == errors.Kind.Unsupported)
- state := State{api: API{canonical: &canonical_mock}}
+ state := State{api: API{canonical: canonical_mock}}
  watcher := Watcher{state: &state}
  unsupported := add(&watcher, "test", CloseWrite)
  require(!unsupported.ok && unsupported.error == -95 && unsupported.kind == errors.Kind.Unsupported)

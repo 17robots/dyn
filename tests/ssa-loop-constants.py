@@ -26,7 +26,7 @@ pub fn guarded(s:[]const u8) u64 {
   }
   return value
 }
-callback:fn([]const u8) u64=&guarded
+callback:fn([]const u8) u64=guarded
 fn main() {
 CHECKS
   _=io.write_all(io.stdout(),"CONSTANT PASS\\n")

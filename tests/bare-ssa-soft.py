@@ -108,17 +108,17 @@ def extend(ns):
         generated = replace_once(generated, old, new)
     D[:] = generated.split('\n')
     for width,ct,bits in [(32,'float','0xffc12345U'),(64,'double','0xfff8123456789abcULL')]:
-        D += [f'fn fastarithmetic{width}(op:i32,x:u{width},y:u{width}) u{width} {{ a:=#bitcast(f{width},x) b:=#bitcast(f{width},y)']
+        D += [f'fn fastarithmetic{width}(op:i32,x:u{width},y:u{width}) u{width} {{ a:=#bitcast(f{width},x)\nb:=#bitcast(f{width},y)']
         D += [f'if op == {i} {{ return #bitcast(u{width},{expr}) }}' for i,expr in enumerate(['a+b','a-b','a*b','a/b','a%b'])]
-        D += ['if a != b && !(a == b) && !(a < b) && !(a <= b) && !(a > b) && !(a >= b) { return 1 } return 0 }']
-        B += [f'if arithmetic_check{width}(&fastarithmetic{width}) != 0 {{ #panic("SSA arithmetic") }}']
+        D += ['if a != b && !(a == b) && !(a < b) && !(a <= b) && !(a > b) && !(a >= b) { return 1 }\nreturn 0 }']
+        B += [f'if arithmetic_check{width}(fastarithmetic{width}) != 0 {{ #panic("SSA arithmetic") }}']
         D += [f'fn specialbits{width}(x:f{width}) f{width} {{ return x }}',
               f'fn remainder{width}(x:f{width},y:f{width}) f{width} {{ return x%y }}',
               f'extern fn extra{width}(p:fn(f{width}) f{width},r:fn(f{width},f{width}) f{width}) i32']
         union='Fbits' if width==32 else 'Dbits'
         sign='0x80000000U' if width==32 else '0x8000000000000000ULL'
         C += [f'int extra{width}({ct} (*p)({ct}),{ct} (*r)({ct},{ct})) {{ {union} x={{.u={bits}}}, z={{.u={sign}}}; return ({union}){{.f=p(x.f)}}.u==x.u && ({union}){{.f=r(z.f,2)}}.u==z.u && ({union}){{.f=r(-7,2)}}.u==({union}){{.f=-1}}.u; }}']
-        B += [f'if extra{width}(&specialbits{width},&remainder{width}) != 1 {{ #panic("specialbits/remainder") }}']
+        B += [f'if extra{width}(specialbits{width},remainder{width}) != 1 {{ #panic("specialbits/remainder") }}']
     ns["D"] = [line.replace("fn ", "pub fn ", 1) if line.startswith("fn ") else line for line in D]
 
 
@@ -147,7 +147,7 @@ def aggregates(g, ns, target, flags, board, qemu):
             # Verify CP10/11 remain disabled around the entire oracle.
             c += '\nunsigned cpacr(void){return *(volatile unsigned*)0xe000ed88u;}\n'
             source = 'extern fn cpacr() u32\n' + source
-            source = replace_once(source, 'n:=oracle()', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU entry") } n:=oracle() if cpacr() & 0x00f00000 != 0 { #panic("FPU exit") }')
+            source = replace_once(source, 'n:=oracle()', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU entry") }\nn:=oracle()\nif cpacr() & 0x00f00000 != 0 { #panic("FPU exit") }')
         project = work/'source'
         project.mkdir()
         (project/'main.dyn').write_text(source)

@@ -16,7 +16,8 @@ use "std/mem"
 use "std/bytes"
 use "std/errors"
 use "std/sync"
-fn require(value: bool, message: []const u8) { if !value { _ = io.println(io.stderr(), "{}", message) #panic(message) } }
+fn require(value: bool, message: []const u8) { if !value { _ = io.println(io.stderr(), "{}", message)
+#panic(message) } }
 fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usize) {
   cursor := io.cursor(text)
   scratch: [8]u8 = []
@@ -29,18 +30,22 @@ fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usi
   for {
     part := bufio.read_line(&input, chunk[..capacity])
     require(part.status != bufio.ReadStatus.Error, "stdlib assertion 30")
-    for byte in chunk[..part.transferred] { result[used] = byte used += 1 }
-    if part.status == bufio.ReadStatus.Complete { result[used] = '|' used += 1 }
+    for byte in chunk[..part.transferred] { result[used] = byte
+    used += 1 }
+    if part.status == bufio.ReadStatus.Complete { result[used] = '|'
+    used += 1 }
     if part.status == bufio.ReadStatus.End { break }
   }
   require(bytes.equal(result[..used], expected), "stdlib assertion 35")
 }
 fn error_read(data: rawptr, destination: []u8) io.Result {
-  _ = data destination[0] = 'x'
+  _ = data
+  destination[0] = 'x'
   return io.Result{ transferred: 1, kind: errors.Kind.PermissionDenied, status: io.Status.Error }
 }
 fn error_write(data: rawptr, source: []const u8) io.Result {
-  _ = data _ = source
+  _ = data
+  _ = source
   return io.Result{ kind: errors.Kind.PermissionDenied, status: io.Status.Error }
 }
 fn main() {
@@ -124,12 +129,12 @@ fn main() {
   }
   error_storage: [8]u8 = []
   for error_capacity in [0, 8] {
-    failing := bufio.reader(io.Reader{ read: &error_read }, error_storage[..#cast(usize, error_capacity)])
+    failing := bufio.reader(io.Reader{ read: error_read }, error_storage[..#cast(usize, error_capacity)])
     error_line := bufio.read_line(&failing, contents[..])
     require(error_line.status == bufio.ReadStatus.Error && error_line.transferred == 1, "stdlib assertion 114")
     require(contents[0] == 'x' && error_line.kind == errors.Kind.PermissionDenied && error_line.error == 0, "stdlib assertion 115")
   }
-  failed_output := bufio.writer(io.Writer{ write: &error_write }, error_storage[..])
+  failed_output := bufio.writer(io.Writer{ write: error_write }, error_storage[..])
   require(io.write_all(bufio.writer_adapter(&failed_output), "pending").status == io.Status.Complete, "stdlib assertion 118")
   require(bufio.writer_flush(&failed_output).kind == errors.Kind.PermissionDenied, "stdlib assertion 119")
   require(bufio.writer_flush(&failed_output).kind == errors.Kind.PermissionDenied, "stdlib assertion 120")

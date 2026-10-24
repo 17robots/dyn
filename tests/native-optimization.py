@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn')).resolve())
 SOURCE = '''
 state: i64 = 0
-fn effect() bool { state += 1 return true }
+fn effect() bool { state += 1
+return true }
 fn branches() i64 { if true { return 7 } else { return 9 } }
 fn polynomial(x: i64) i64 { return (x * 3 + 7) * 5 }
 fn main() {
@@ -26,7 +27,8 @@ fn main() {
   if false && effect() { #panic("short circuit") }
   if true || effect() { state += 4 }
   if state != 4 { #panic("effects") }
-  if true { defer { state += 8 } state += 2 } else { #panic("dead") }
+  if true { defer { state += 8 }
+  state += 2 } else { #panic("dead") }
   if state != 14 { #panic("defer") }
   if polynomial(19) != 320 { #panic("constant call") }
   a: i8 = -128
@@ -110,21 +112,27 @@ fn main() {
     # cleanup and all return paths. These cannot use constant-call evaluation.
     (module/'main.dyn').write_text('''
 state: i64 = 0
-fn next() i64 { state += 1 return state }
+fn next() i64 { state += 1
+return state }
 fn choose(a: i64, b: i64) i64 {
   defer { state += 100 }
   if a > b { return a - b }
   for i in 0..b { if i == a { return a + b } }
   return b
 }
-fn recursive(n: i64) i64 { if n == 0 { return 7 } return recursive(n - 1) }
+fn recursive(n: i64) i64 { if n == 0 { return 7 }
+return recursive(n - 1) }
 struct Pair { a: i64, b: i64 }
-fn pair(x: i64) Pair { defer { state += 10 } return Pair{a: x, b: x + 2} }
-fn mutate(p: *Pair) i64 { p.a = 999 return 0 }
+fn pair(x: i64) Pair { defer { state += 10 }
+return Pair{a: x, b: x + 2} }
+fn mutate(p: *Pair) i64 { p.a = 999
+return 0 }
 fn take(p: Pair, ignored: i64) Pair { return p }
-fn text(x: i64) []const u8 { if x > 0 { return "yes" } return "no" }
+fn text(x: i64) []const u8 { if x > 0 { return "yes" }
+return "no" }
 fn add(x: i64) { state += x }
-fn captures() { defer add(next()) state += 10 }
+fn captures() { defer add(next())
+state += 10 }
 pub fn exercise() {
   state = 0
   answer := choose(next(), next())
@@ -175,8 +183,10 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{}).then(({instance})=>
 }).catch(e=>{console.error(e);process.exit(1)});''', wasm)
 
     (module/'main.dyn').write_text('''use "std/io" io
-fn fail() { defer { _ = io.println(io.stdout(), "inner") } #panic("inline panic") }
-fn main() { defer { _ = io.println(io.stdout(), "outer") } fail() }
+fn fail() { defer { _ = io.println(io.stdout(), "inner") }
+#panic("inline panic") }
+fn main() { defer { _ = io.println(io.stdout(), "outer") }
+fail() }
 ''')
     for level in (2, 3):
         output = work/f'inline-panic-{level}'
@@ -192,7 +202,7 @@ fn main() { defer { _ = io.println(io.stdout(), "outer") } fail() }
         for i in range(24))
     (module/'main.dyn').write_text(
         f'fn fill(buffer: *[24]u64, value: u64) {{ {stores} }}\n' + wrappers +
-        '\nfn main() { buffer: [24]u64 = [] wrapper_0(&buffer, 7) '
+        '\nfn main() { buffer: [24]u64 = []\nwrapper_0(&buffer, 7)\n'
         'if buffer[23] != 30 { #panic("bounded inlining") } }\n')
     sizes = []
     for level in (2, 3):
@@ -204,7 +214,7 @@ fn main() { defer { _ = io.println(io.stdout(), "outer") } fail() }
     assert sizes[1] <= sizes[0] * 1.5, ('unbounded code growth', sizes)
 
     # Checked failure must remain a runtime failure at every optimization level.
-    (module/'main.dyn').write_text('fn main() { a: i8 = 127 b: i8 = 1 _ = a + b }\n')
+    (module/'main.dyn').write_text('fn main() { a: i8 = 127\nb: i8 = 1\n_ = a + b }\n')
     for level in (1, 2, 3):
         output = work/f'trap{level}'
         run(DYN, 'build', module, '--backend', 'native', '--release', '--opt-level', level,

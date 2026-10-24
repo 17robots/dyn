@@ -12,7 +12,8 @@ DYN = Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve()
 SOURCE = '''extern fn external "external"(x: u64) u64
 pub fn first(x: u64) u64 { return x + 1 }
 pub fn second(x: u64) u64 { return x * 3 }
-pub fn recursive(x: u64) u64 { if x < 2 { return x } return recursive(x-1)+recursive(x-2) }
+pub fn recursive(x: u64) u64 { if x < 2 { return x }
+return recursive(x-1)+recursive(x-2) }
 pub fn foreign_call(x: u64) u64 { return external(x) }
 '''
 NAMES = {'first', 'second', 'recursive', 'foreign_call'}
@@ -114,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-function-alignment-') as directory:
                 assert all(entries[name] % 64 == 0 for name in NAMES), (target, mode, entries)
     if platform.system() == 'Linux' and platform.machine() in ('x86_64', 'amd64'):
         (module/'main.dyn').write_text(SOURCE.split('pub fn foreign_call')[0].replace('extern fn external "external"(x: u64) u64\n', '')+
-                                       'callbacks: [3]fn(u64) u64 = [&first, &second, &recursive]\nfn main() { if callbacks[2](12) != 144 || callbacks[0](8) != 9 || callbacks[1](8) != 24 { #panic("aligned calls") } }\n')
+                                       'callbacks: [3]fn(u64) u64 = [first, second, recursive]\nfn main() { if callbacks[2](12) != 144 || callbacks[0](8) != 9 || callbacks[1](8) != 24 { #panic("aligned calls") } }\n')
         output = work/'linked'
         run(DYN, 'build', module, '--release', '--opt-level', '3', '--no-cache', '--quiet', '--output', output)
         _, entries, _ = elf(output.read_bytes())

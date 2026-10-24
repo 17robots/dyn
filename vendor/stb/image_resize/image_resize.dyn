@@ -18,7 +18,7 @@ pub fn resize(scratch: *mem.Arena, source: []const u8, width: i32, height: i32, 
   }
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
-  return native_resize(#cast(rawptr, &source[0]), #len(source), width, height, #cast(rawptr, &destination[0]), #len(destination), out_width, out_height, channels, srgb, #cast(rawptr, scratch), &scratch_allocate)
+  return native_resize(#cast(rawptr, &source[0]), #len(source), width, height, #cast(rawptr, &destination[0]), #len(destination), out_width, out_height, channels, srgb, #cast(rawptr, scratch), scratch_allocate)
 }
 // Private synchronous callback; provider scratch cannot outlive resize.
 fn scratch_allocate(context: rawptr, size: usize) rawptr {

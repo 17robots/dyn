@@ -84,7 +84,7 @@ fn twice(value: i32) i32 {
 fn main() {
   if add(1) != 42 { #panic("PLT call") }
   if read() != 41 { #panic("copied data") }
-  if call(&twice) != 84 { #panic("callback") }
+  if call(twice) != 84 { #panic("callback") }
   // The library writes the executable's copy, so both sides agree.
   if read() != 42 { #panic("shared copy") }
 }

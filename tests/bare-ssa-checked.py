@@ -30,22 +30,22 @@ funcs = ''
 for ty in ['u64', 'i64', 'u32', 'i32', 'u8', 'i8']:
     for name, op in [('add', '+'), ('sub', '-'), ('mul', '*'), ('div', '/'), ('rem', '%')]:
         funcs += f'pub fn {name}_{ty}(a:{ty},b:{ty}) {ty} {{ return a{op}b }}\n'
-funcs += 'pub fn preserved(a:u64,b:u64,c:u64) u64 { x:=a/b y:=a%b z:=b*c return #wrap(x+y+z+a+b+c) }\n'
+funcs += 'pub fn preserved(a:u64,b:u64,c:u64) u64 { x:=a/b\ny:=a%b\nz:=b*c\nreturn #wrap(x+y+z+a+b+c) }\n'
 success = []
 for ty in ['u64', 'i64', 'u32', 'i32', 'u8', 'i8']:
     for name, a, b, want in [('add', 50, 7, 57), ('sub', 50, 7, 43), ('mul', 12, 7, 84), ('div', 50, 7, 7), ('rem', 50, 7, 1)]:
         success.append(f'if {name}_{ty}({a},{b})!={want} {{ #panic("bad") }}')
 success += ['if div_i64(-9223372036854775807,3)!=-3074457345618258602 { #panic("signed") }', 'if rem_i64(-9223372036854775807,3)!=-1 { #panic("signed rem") }', 'if div_u64(18446744073709551615,3)!=6148914691236517205 { #panic("unsigned") }', 'if preserved(18446744073709551615,3,7)!=6148914691236517235 { #panic("preserve") }']
-cases = [('success', ' '.join(success), '')]
+cases = [('success', '\n'.join(success), '')]
 for ty, maximum, minimum in [('u64', 2 ** 64 - 1, 0), ('i64', 2 ** 63 - 1, -2 ** 63), ('u32', 2 ** 32 - 1, 0), ('i32', 2 ** 31 - 1, -2 ** 31), ('u8', 255, 0), ('i8', 127, -128)]:
     for op, a, b in [('add', maximum, 1), ('sub', minimum, 1), ('mul', maximum, 2), ('div', 1, 0), ('rem', 1, 0)]:
         cases.append((op + '_' + ty, f'_={op}_{ty}({a},{b})', 'division by zero' if op in ['div', 'rem'] else 'overflow'))
     if ty.startswith('i'):
         for op in ['div', 'rem']:
             cases.append((op + '_min_' + ty, f'_={op}_{ty}({minimum},-1)', 'division overflow'))
-funcs += '\npub fn ordered(a:u64,b:u64,c:u64,d:u64) u64 { return a/b+c*d }\npub fn shifts(a:u64,b:u64) u64 { return a<<b }\npub fn negated(a:i64) i64 { return -a }\npub fn shared(a:u64,b:u64,c:u64) u64 { return (a+b)+c }\nfn cleanup(a:u64,b:u64) u64 { defer { _=io.write_all(io.stdout(),"CLEAN\\n") } return a+b }\n'
-cases += [('ordered', '_=ordered(1,0,18446744073709551615,2)', 'divide'), ('shiftcount', '_=shifts(1,64)', 'shift'), ('shiftbits', '_=shifts(18446744073709551615,1)', 'overflow'), ('negated', '_=negated(-9223372036854775808)', 'overflow'), ('shared', '_=shared(1,2,18446744073709551615)', 'overflow'), ('cleanup', '_=cleanup(18446744073709551615,1)', 'overflow'), ('caller_cleanup', 'defer { _=io.write_all(io.stdout(),"OUTER\\n") } _=add_u64(18446744073709551615,1)', 'overflow')]
-cases += [('boundaries', 'if mul_i64(-9223372036854775808,1)!=-9223372036854775808 { #panic("mul min") } if mul_u64(18446744073709551615,1)!=18446744073709551615 { #panic("mul max") } if add_i64(-9223372036854775808,9223372036854775807)!=-1 { #panic("add") } if sub_i64(-1,9223372036854775807)!=-9223372036854775808 { #panic("sub") } if div_i64(-9223372036854775808,1)!=-9223372036854775808 { #panic("div") } if rem_i64(-9223372036854775808,1)!=0 { #panic("rem") }', '')]
+funcs += '\npub fn ordered(a:u64,b:u64,c:u64,d:u64) u64 { return a/b+c*d }\npub fn shifts(a:u64,b:u64) u64 { return a<<b }\npub fn negated(a:i64) i64 { return -a }\npub fn shared(a:u64,b:u64,c:u64) u64 { return (a+b)+c }\nfn cleanup(a:u64,b:u64) u64 { defer { _=io.write_all(io.stdout(),"CLEAN\\n") }\nreturn a+b }\n'
+cases += [('ordered', '_=ordered(1,0,18446744073709551615,2)', 'divide'), ('shiftcount', '_=shifts(1,64)', 'shift'), ('shiftbits', '_=shifts(18446744073709551615,1)', 'overflow'), ('negated', '_=negated(-9223372036854775808)', 'overflow'), ('shared', '_=shared(1,2,18446744073709551615)', 'overflow'), ('cleanup', '_=cleanup(18446744073709551615,1)', 'overflow'), ('caller_cleanup', 'defer { _=io.write_all(io.stdout(),"OUTER\\n") }\n_=add_u64(18446744073709551615,1)', 'overflow')]
+cases += [('boundaries', 'if mul_i64(-9223372036854775808,1)!=-9223372036854775808 { #panic("mul min") }\nif mul_u64(18446744073709551615,1)!=18446744073709551615 { #panic("mul max") }\nif add_i64(-9223372036854775808,9223372036854775807)!=-1 { #panic("add") }\nif sub_i64(-1,9223372036854775807)!=-9223372036854775808 { #panic("sub") }\nif div_i64(-9223372036854775808,1)!=-9223372036854775808 { #panic("div") }\nif rem_i64(-9223372036854775808,1)!=0 { #panic("rem") }', '')]
 
 
 def check_remarks(log, mode, names, fallback=()):
@@ -96,7 +96,7 @@ def main():
                 project = work/name
                 project.mkdir()
                 (project/'main.dyn').write_text('use "std/io"\n' + funcs +
-                    'fn main() { ' + body + ' _=io.write_all(io.stdout(),"OK\\n") }')
+                    'fn main() {\n' + body + '\n_=io.write_all(io.stdout(),"OK\\n") }')
                 names = [fn for fn in re.findall(r'pub fn (\w+)', funcs) if fn+'(' in body]
                 fallback = []
                 if name in ('cleanup', 'caller_cleanup'):

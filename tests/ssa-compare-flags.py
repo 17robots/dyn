@@ -17,27 +17,42 @@ pub fn inside8(x:u8) bool { return x>=48 && x<=57 }
 pub fn reversed8(x:u8) bool { return 57<x || 48>x }
 pub fn exclusive8(x:u8) bool { return x>47 && x<58 }
 pub fn inclusive8(x:u8) bool { return x<=47 || x>=58 }
-pub fn digit(x:u8) u8 { if x<48 || x>57 { return 255 } return x-48 }
-pub fn range16(x:u16) bool { if x>=123 && x<=60000 { return true } return false }
+pub fn digit(x:u8) u8 { if x<48 || x>57 { return 255 }
+return x-48 }
+pub fn range16(x:u16) bool { if x>=123 && x<=60000 { return true }
+return false }
 pub fn range32(x:u32) bool { return x<100000 || x>4000000000 }
-pub fn range64(x:u64) bool { if x>=18446744073709551500 && x<=18446744073709551614 { return true } return false }
+pub fn range64(x:u64) bool { if x>=18446744073709551500 && x<=18446744073709551614 { return true }
+return false }
 pub fn empty8(x:u8) bool { return x>200 && x<100 }
 pub fn signed(x:i64) bool { return x>=-10 && x<=10 }
 events:u64
-fn tick(x:u64) u64 { events+=1 return x }
+fn tick(x:u64) u64 { events+=1
+return x }
 pub fn effectful(x:u64) bool { return tick(x)<48 || tick(x)>57 }
 pub fn event_count() u64 { return events }
 pub fn reset_events() { events=0 }
-pub fn addressed(x:u64) bool { p:=&x return p.*<48 || p.*>57 }
-pub fn threshold(a:u64,b:u64) bool { if a>1844674407370955161 || (a==1844674407370955161 && b>5) { return true } return false }
-pub fn small_threshold(a:u64,b:u64) bool { if a>9 || (a==9 && b>5) { return true } return false }
-pub fn reversed_threshold(a:u64,b:u64) bool { if 9<a || (9==a && b>5) { return true } return false }
-pub fn signed_threshold(a:i64,b:u64) bool { if a> -9 || (a== -9 && b>5) { return true } return false }
-pub fn disturbed(a:u64,b:u64) bool { if a>9 { return true } events+=1 return a==9 && b>5 }
-pub fn changed(a:u64,b:u64) bool { if a>9 { return true } a+=1 if a==9 && b>5 { return true } return false }
+pub fn addressed(x:u64) bool { p:=&x
+return p.*<48 || p.*>57 }
+pub fn threshold(a:u64,b:u64) bool { if a>1844674407370955161 || (a==1844674407370955161 && b>5) { return true }
+return false }
+pub fn small_threshold(a:u64,b:u64) bool { if a>9 || (a==9 && b>5) { return true }
+return false }
+pub fn reversed_threshold(a:u64,b:u64) bool { if 9<a || (9==a && b>5) { return true }
+return false }
+pub fn signed_threshold(a:i64,b:u64) bool { if a> -9 || (a== -9 && b>5) { return true }
+return false }
+pub fn disturbed(a:u64,b:u64) bool { if a>9 { return true }
+events+=1
+return a==9 && b>5 }
+pub fn changed(a:u64,b:u64) bool { if a>9 { return true }
+a+=1
+if a==9 && b>5 { return true }
+return false }
 pub fn joined(a:u64,b:u64,choose:bool) bool {
  if choose { if a>9 { return true } } else { if b>11 { return false } }
- if a==9 && b>5 { return true } return false
+ if a==9 && b>5 { return true }
+ return false
 }
 '''
 

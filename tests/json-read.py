@@ -24,9 +24,9 @@ def check(node,v,label):
 values=[None,True,False,0,-0.0,1,-1,2**64-1,-2**63,2**53-1,1.25,1e300,1e-300,'','ascii','é😀','a\0b\n\\"',{'é😀':'café','a\0b':[True,None]},[],{},[1,2,{'x':'y'}]]
 values.append({'é😀':'café','a\0b':[True,None]})
 for i in range(60):values.append({'id':i,'key'+str(i):['x'*(i%17),'é😀',i%2==0,None,{'nested':i*19}],'escaped':'a\nb\t"\\'})
-lines=['use "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_create(mem.MiB) defer mem.arena_release(&arena)','_=mem.push_bytes_uninit(&arena,3)']
+lines=['use "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_create(mem.MiB)\ndefer mem.arena_release(&arena)','_=mem.push_bytes_uninit(&arena,3)']
 for i,v in enumerate(values):
- raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes_uninit(&arena,#len(original)) _=mem.copy(input,original)','mark:=mem.arena_mark(&arena)','result:=json.parse(&arena,input)','require(result.ok && result.kind==json.Kind.None && result.error==0,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
+ raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes_uninit(&arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(&arena)','result:=json.parse(&arena,input)','require(result.ok && result.kind==json.Kind.None && result.error==0,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
  # errors is not re-exported as Kind; use zero enum via cast.
  lines[-2]=lines[-2].replace('result.kind==json.Kind.None','#cast(usize,result.kind)==0')
  lines+=check('result.root',v,'value '+str(i));lines+=['mem.arena_rewind(&arena,mark)','mem.arena_rewind(&arena,3)','}']
@@ -34,7 +34,7 @@ invalid=[b'',b' ',b'01',b'1.',b'1e',b'-',b'true false',b'"x" trailing',b'{"a":}'
 invalid += [b'['*n for n in range(1,258)] + [b'{\"x\":'*n for n in range(1,65)]
 for i,raw in enumerate(invalid):lines+=['if true {',f'result:=json.parse(&arena,{quote(raw)})','require(!result.ok && json.kind(result.root)==json.KindMissing && mem.arena_mark(&arena)==3,"invalid rollback")','}']
 large=json.dumps(list(range(1000)),separators=(',',':')).encode();deep=b'['*256+b'0'+b']'*256
-lines += ['if true {',f'result:=json.parse(&arena,{quote(large)})','require(result.ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(&arena,3)','}',f'require(json.parse(&arena,{quote(deep)}).ok,"depth 256")','mem.arena_rewind(&arena,3)','if true {','backing:[512]u8=[] fixed:=mem.arena_from_buffer(backing[..])','result:=json.parse(&fixed,"{\\"x\\":1}")','require(result.ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8=[] fixed:=mem.arena_from_buffer(storage[..])','input:=storage[10..20] _=mem.copy(input,"[1,2,3,4] ")','result:=json.parse(&fixed,input)','require(!result.ok && fixed.offset==0 && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
+lines += ['if true {',f'result:=json.parse(&arena,{quote(large)})','require(result.ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(&arena,3)','}',f'require(json.parse(&arena,{quote(deep)}).ok,"depth 256")','mem.arena_rewind(&arena,3)','if true {','backing:[512]u8=[]\nfixed:=mem.arena_from_buffer(backing[..])','result:=json.parse(&fixed,"{\\"x\\":1}")','require(result.ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8=[]\nfixed:=mem.arena_from_buffer(storage[..])','input:=storage[10..20]\n_=mem.copy(input,"[1,2,3,4] ")','result:=json.parse(&fixed,input)','require(!result.ok && fixed.offset==0 && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
 edge_source = r'''
 if true {
   value:=json.parse(&arena,"-0")
@@ -71,7 +71,8 @@ for pad in 0..16 {
   require(item.ok && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).ok,"iterator decoded bytes")
 }
 if true {
-  backing:[80]u8=[] fixed:=mem.arena_from_buffer(backing[..])
+  backing:[80]u8=[]
+fixed:=mem.arena_from_buffer(backing[..])
   result:=json.parse(&fixed,"\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"")
   require(result.ok && fixed.offset==80 && fixed.peak_used==80,"scalar exact capacity")
 }
@@ -93,7 +94,7 @@ for name,flags in [('debug',[]),('release',['--release'])]:
 # Required arena storage follows the ordinary panic contract, including peak
 # growth capacity rather than just the final retained tree size.
 for raw,size in [(b'{"a":0}',56),(b'[0,1,2,3,4,5]',16)]:
- (P/'main.dyn').write_text('use "std/encoding/json/read" json\nuse "std/mem" mem\nfn main() { backing:['+str(size)+']u8=[] arena:=mem.arena_from_buffer(backing[..]) _=json.parse(&arena,'+quote(raw)+') }\n')
+ (P/'main.dyn').write_text('use "std/encoding/json/read" json\nuse "std/mem" mem\nfn main() { backing:['+str(size)+']u8=[]\narena:=mem.arena_from_buffer(backing[..])\n_=json.parse(&arena,'+quote(raw)+') }\n')
  for name,flags in [('debug',[]),('release',['--release'])]:
   binary=W/('panic-'+name);subprocess.run([str(DYN),'build',str(P),'--no-cache','--quiet','--output',str(binary),*flags],env=env,check=True,timeout=120)
   result=subprocess.run([str(binary)],capture_output=True,timeout=10);assert result.returncode==101,(name,result.returncode,result.stderr)
@@ -111,7 +112,8 @@ use "std/io"
 pub fn json_read_selected_kind(v:*const json.Value) u8 { return json.kind(v) }
 fn require(ok:bool) { if !ok { #panic("JSON read target") } }
 fn main() {
- backing:[8192]u8=[] arena:=mem.arena_from_buffer(backing[..])
+ backing:[8192]u8=[]
+ arena:=mem.arena_from_buffer(backing[..])
  require(#sizeof(json.Value)==16 && json_read_selected_kind(nil)==json.KindMissing)
  document:=json.parse(&arena,"{\"\":[0,true,\"a\\u0000b\"],\"utf\":\"caf\\u00e9\",\"i\":-9223372036854775808,\"u\":18446744073709551615,\"real\":1.25}")
  require(document.ok)
