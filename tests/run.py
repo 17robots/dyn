@@ -9,6 +9,7 @@ BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
 def run(*command, timeout=300):
     subprocess.run(list(map(str,command)),cwd=ROOT,check=True,timeout=timeout)
 run(sys.executable, ROOT/'tests/memory-ergonomics.py')
+run(sys.executable, ROOT/'tests/native-arena-fixtures.py')
 run(sys.executable, ROOT/'tests/arena-chain-contracts.py')
 run(sys.executable, ROOT/'tests/arena-native-errors.py')
 run(sys.executable, ROOT/'tests/arena-windows-header.py')

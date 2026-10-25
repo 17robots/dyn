@@ -7,7 +7,7 @@ fn expect(ok: bool) { if !ok { #panic("observe contract") } }
 fn main() {
   events:[4]observe.Event=[]
   log:=observe.log(events[..])
-  storage:[64]u8=[]
+  storage:[64 + mem.ArenaBufferOverhead]u8=[]
   arena:=mem.arena_from_buffer(storage[..])
   arena.events=&log
   arena.event_resource=42

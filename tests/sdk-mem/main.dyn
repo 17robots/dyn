@@ -5,11 +5,11 @@ struct Slot { free_next: *Slot, value: [16]u8 }
 const nil_slot: Slot = Slot{}
 
 fn main() {
-  backing: [512]u8 = []
+  backing: [512 + 3 * memory.ArenaBufferOverhead]u8 = []
   arena := memory.arena_from_buffer(backing[..])
 
   if memory.arena_try_push(arena, 1, 3).error != memory.ErrorKind.InvalidAlignment { #panic("arena invalid alignment detail") }
-  empty_child := memory.arena_sub(arena, 0)
+  empty_child := memory.arena_sub(arena, memory.ArenaHeader)
   if memory.arena_capacity(empty_child) != 0 { #panic("zero-capacity subarena succeeds") }
   first := memory.arena_try_push(arena, 13, 8)
   if !first.ok || first.size != 13 { #panic("arena allocation failed") }
@@ -25,15 +25,15 @@ fn main() {
   mark := memory.arena_mark(arena)
   _ = memory.arena_push(arena, 32, 16)
   memory.arena_rewind(arena, mark)
-  if memory.arena_used(arena) != mark { #panic("arena rewind failed") }
+  if memory.arena_mark(arena) != mark { #panic("arena rewind failed") }
 
-  child := memory.arena_sub(arena, 64)
+  child := memory.arena_sub(arena, memory.ArenaHeader + 64)
   if memory.arena_capacity(child) != 64 { #panic("sub-arena capacity failed") }
   _ = memory.arena_push(child, 64, 1)
   if memory.arena_remaining(child) != 0 { #panic("sub-arena allocation failed") }
 
-  first_scratch_storage: [64]u8 = []
-  second_scratch_storage: [64]u8 = []
+  first_scratch_storage: [64 + memory.ArenaBufferOverhead]u8 = []
+  second_scratch_storage: [64 + memory.ArenaBufferOverhead]u8 = []
   first_scratch := memory.arena_from_buffer(first_scratch_storage[..])
   second_scratch := memory.arena_from_buffer(second_scratch_storage[..])
   scratch := memory.scratch_begin(first_scratch, second_scratch, first_scratch)
@@ -47,7 +47,7 @@ fn main() {
   memory.scratch_end(&fallback_scratch)
 
   // Fixed-buffer reuse through an intrusive free list.
-  list_arena_storage: [256]u8 = []
+  list_arena_storage: [256 + memory.ArenaBufferOverhead]u8 = []
   list_arena := memory.arena_from_buffer(list_arena_storage[..])
   slots := memory.push_array(Slot, list_arena, 4)
   first_free: *Slot
