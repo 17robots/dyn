@@ -63,6 +63,30 @@ const bytes = require('node:fs').readFileSync(process.argv[1]);
   assert.deepEqual(notes,[7]);
 })().catch(e=>{console.error(e);process.exit(1)});
 '''
+# Release executable pruning retains function IDs, but the inliner rebuilds
+# body/local tables only for live functions. An unused std/io body must never
+# be emitted against those rebuilt tables. Keep an indirect global initializer
+# and callback call live as well, so function/table indices are checked at runtime.
+WASI_SOURCE = r'''
+use "std/io"
+fn increment(x: i64) i64 { return x + 1 }
+fn twice(f: fn(i64) i64, x: i64) i64 { return f(x) + f(x) }
+callback: fn(i64) i64 = increment
+fn unused() i64 { values: [32]i64
+for i in 0..#len(values) { values[i] = #cast(i64, i) }
+return values[31] }
+fn main() { _ = io.println(io.stdout(), "{}", twice(callback, 10)) }
+'''
+WASI_JS = r'''
+const fs = require('node:fs');
+const {WASI} = require('node:wasi');
+(async () => {
+  const wasi = new WASI({version:'preview1', args:[], env:{}, preopens:{}});
+  const module = await WebAssembly.compile(fs.readFileSync(process.argv[1]));
+  const instance = await WebAssembly.instantiate(module, {wasi_snapshot_preview1:wasi.wasiImport});
+  wasi.start(instance);
+})().catch(e=>{console.error(e);process.exit(1)});
+'''
 with tempfile.TemporaryDirectory(prefix='dyn-wasm-semantics-') as directory:
     work = Path(directory)
     module = work/'module'
@@ -73,4 +97,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-wasm-semantics-') as directory:
         subprocess.run([DYN, 'build', str(module), '--target', 'wasm32-browser',
                         '--shared', '--output', str(output), *flags], cwd=ROOT, check=True)
         subprocess.run(['node', '-e', JS, str(output)], check=True)
-print('PASS Wasm arithmetic, aliasing, evaluation order and cleanup')
+    (module/'main.dyn').write_text(WASI_SOURCE)
+    for flags in ([], ['--release']):
+        output = work/'live-functions.wasm'
+        subprocess.run([DYN, 'build', str(module), '--target', 'wasm32-wasi',
+                        '--no-cache', '--output', str(output), *flags], cwd=ROOT,
+                       check=True, timeout=120)
+        result = subprocess.run(['node', '-e', WASI_JS, str(output)],
+                                check=True, capture_output=True, text=True, timeout=30)
+        assert result.stdout == '22\n', result
+print('PASS Wasm arithmetic, aliasing, evaluation order, cleanup and live function indices')

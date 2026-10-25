@@ -172,7 +172,10 @@ def run(work):
             if target:
                 command += ['--target', target]
             subprocess.run(command, cwd=ROOT, check=True, timeout=120)
-            result = subprocess.run([*runner, str(output)], capture_output=True, timeout=60)
+            # Debug deliberately checks every surrounding byte after each extend.
+            # Shared CI CPUs need more time for this unchanged exhaustive corpus.
+            result = subprocess.run([*runner, str(output)], capture_output=True,
+                                    timeout=180 if not target and not release else 60)
             assert result.returncode == 0 and b'ARENA ZERO PASS' in result.stdout, (name, result.returncode, result.stdout, result.stderr)
             print('PASS arena zero', name, flush=True)
     for failure in ('overflow', 'exhaustion'):
