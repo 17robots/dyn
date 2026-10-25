@@ -69,13 +69,29 @@ const bytes = require('node:fs').readFileSync(process.argv[1]);
 # and callback call live as well, so function/table indices are checked at runtime.
 WASI_SOURCE = r'''
 use "std/io"
+struct Point { x: i64, y: i64 }
+points: [32]Point
+fn step(p: Point, d: Point) Point {
+  return Point{x: (p.x + d.x) % 1000003, y: (p.y * 3 + d.y) % 1000003}
+}
 fn increment(x: i64) i64 { return x + 1 }
 fn twice(f: fn(i64) i64, x: i64) i64 { return f(x) + f(x) }
 callback: fn(i64) i64 = increment
 fn unused() i64 { values: [32]i64
 for i in 0..#len(values) { values[i] = #cast(i64, i) }
 return values[31] }
-fn main() { _ = io.println(io.stdout(), "{}", twice(callback, 10)) }
+fn main() {
+  for i in 0..#len(points) {
+    points[i] = Point{x: #cast(i64, i), y: #cast(i64, i * 7)}
+  }
+  delta := Point{x: 5, y: 11}
+  for round in 0..2 {
+    for *p in points { p.* = step(p.*, delta) }
+  }
+  total: i64 = 0
+  for p in points { total += p.x + p.y }
+  _ = io.println(io.stdout(), "{}", total + twice(callback, 10))
+}
 '''
 WASI_JS = r'''
 const fs = require('node:fs');
@@ -105,5 +121,5 @@ with tempfile.TemporaryDirectory(prefix='dyn-wasm-semantics-') as directory:
                        check=True, timeout=120)
         result = subprocess.run(['node', '-e', WASI_JS, str(output)],
                                 check=True, capture_output=True, text=True, timeout=30)
-        assert result.stdout == '22\n', result
+        assert result.stdout == '33494\n', result
 print('PASS Wasm arithmetic, aliasing, evaluation order, cleanup and live function indices')

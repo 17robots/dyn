@@ -334,7 +334,7 @@ for ty,(bits,sign,ctype) in NARROW_TYPES.items():
     SOURCE+=f'pub fn narrow_{ty}_apply(f:fn({ty}) {ty},a:{ty}) {ty} {{ return f(a) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_stack(' + ','.join(f'a{i}:{ty}' for i in range(8)) + f') {ty} {{ return #wrap(a0+a6+a7) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_identity(a:{ty}) {ty} {{ return a }}\n'
-    SOURCE+=f'pub fn narrow_{ty}_call(a:{ty}) {ty} {{ f:=&narrow_{ty}_identity\nreturn f(a) }}\n'
+    SOURCE+=f'pub fn narrow_{ty}_call(a:{ty}) {ty} {{ f:=narrow_{ty}_identity\nreturn f(a) }}\n'
 
 SOURCE += 'extern fn difftime(a:i64,b:i64) f64\npub fn foreign_time(a:i64,b:i64) f64 { return difftime(a,b) }\n'
 for ty in ('f32','f64'):
@@ -343,7 +343,7 @@ for ty in ('f32','f64'):
     SOURCE+=f'pub fn float_{ty}_neg(a:{ty}) {ty} {{ return -a }}\n'
     SOURCE+=f'pub fn float_{ty}_constant() {ty} {{ return 1.25 }}\n'
     SOURCE+=f'pub fn float_{ty}_apply(f:fn({ty},{ty}) {ty},a:{ty},b:{ty}) {ty} {{ return f(a,b) }}\n'
-    SOURCE+=f'pub fn float_{ty}_call(a:{ty},b:{ty}) {ty} {{ f:=&float_{ty}_add\nreturn f(a,b) }}\n'
+    SOURCE+=f'pub fn float_{ty}_call(a:{ty},b:{ty}) {ty} {{ f:=float_{ty}_add\nreturn f(a,b) }}\n'
     SOURCE+=f'pub fn float_{ty}_local(a:{ty},b:{ty}) {ty} {{ x:=a\nx+=b\nif x>0.0 {{ return x }}\nreturn -x }}\n'
     for op,(symbol,_) in COMPARISONS.items():
         SOURCE+=f'pub fn float_{ty}_{op}(a:{ty},b:{ty}) bool {{ return a {symbol} b }}\n'
@@ -485,20 +485,31 @@ def inspect(path, debug):
     sections = {strings[h[0]:].split(b'\0')[0]: h for h in headers}
     assert sections[b'.text'][2] == 6
     assert sections[b'.rodata'][2] == 2 and sections[b'.rodata'][8] == 8
-    # Mutable globals are zero-filled storage: .bss (SHT_NOBITS), writable and allocated.
-    assert sections[b'.bss'][1] == 8 and sections[b'.bss'][2] == 3 and sections[b'.bss'][8] == 8
+    # Mutable globals use writable, allocated SHT_NOBITS storage. The section
+    # preserves the backend's 16-byte preferred global-array storage alignment;
+    # individual globals still retain their source ABI sizes.
+    assert sections[b'.bss'][1] == 8 and sections[b'.bss'][2] == 3 and sections[b'.bss'][8] == 16
     assert sections[b'.note.GNU-stack'][2] == 0
     table = sections[b'.symtab']
     symbols = [struct.unpack_from('<IBBHQQ', data, offset)
                for offset in range(table[4], table[4] + table[5], table[9])]
     assert all(s[1] >> 4 == 0 for s in symbols[:table[7]])
     assert all(s[1] >> 4 == 1 for s in symbols[table[7]:])
-    # Fixed symbols: dyn_check_failed and the local constant-literals label.
-    assert len(symbols) == SOURCE.count('pub fn ') + SOURCE.count('extern fn ') + GLOBAL_COUNT + 14 + (3 if debug else 1)
+    # Table-based release unwinding needs continue, but no set/link/unlink calls.
+    # Debug keeps those calls and the two tracing hooks. Both modes retain the
+    # local .text section symbol used by the unwind-table relocation.
+    runtime_symbols = {b'dyn_panic', b'dyn_unwind_continue', b'fmod', b'fmodf', b'dyn_check_failed'}
+    if debug:
+        runtime_symbols |= {b'dyn_trace_push', b'dyn_trace_pop', b'dyn_unwind_set', b'dyn_unwind_link', b'dyn_unwind_unlink'}
+    # Three generic templates produce five concrete instances. Fixed symbols:
+    # null, .rodata, .text, literals, initializer, and initialized flag.
+    concrete_functions = SOURCE.count('pub fn ') - 3 + 5
+    assert len(symbols) == concrete_functions + SOURCE.count('extern fn ') + GLOBAL_COUNT + 6 + len(runtime_symbols)
+    assert symbols[2][1] == 3 and symbols[2][3] == 1  # STT_SECTION for .text
     names = headers[table[6]]
     names = data[names[4]:names[4] + names[5]]
     undefined = {names[s[0]:].split(b'\0')[0] for s in symbols[2:] if s[3] == 0}
-    assert undefined == {b'llabs',b'abs',b'difftime',b'malloc',b'free',b'write',b'dyn_unwind_set',b'dyn_unwind_link',b'dyn_unwind_unlink',b'dyn_unwind_continue',b'fmod',b'fmodf',b'dyn_check_failed'} | ({b'dyn_panic', b'dyn_trace_push', b'dyn_trace_pop'} if debug else {b'dyn_panic'})
+    assert undefined == {b'llabs', b'abs', b'difftime', b'malloc', b'free', b'write'} | runtime_symbols
     constructors = sections[b'.init_array']
     assert constructors[1] == 14 and constructors[2] == 3 and constructors[5] == 8
     init_reloc = sections[b'.rela.init_array']
@@ -800,8 +811,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-scalar-backend-') as directory:
     source = root / 'main.dyn'
     source.write_text(SOURCE)
     support = root / 'support.o'
-    run([*CC, '-O2', '-fPIC', '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
-         '-c', ROOT / 'runtime/reference_support.c', '-o', support])
+    # Compile support against the current assembly runtime ABI, including
+    # table-based unwinding. Numeric and exact panic oracles remain below.
+    run([sys.executable, ROOT / 'tools/build-native-support.py', '--compiler', DYN,
+         '--target', 'x86_64-linux', '--output', support])
     rng = random.Random(1776)
     count = panic_count = 0
     u64, i64, boolean = ctypes.c_uint64, ctypes.c_int64, ctypes.c_bool
@@ -1558,7 +1571,7 @@ raise AssertionError('overflow returned normally')
         'unreachable-aggregate': 'pub fn fail(a:u64) u64 { if false { x:[2097153]u64\n_=x }\nreturn a }',
         'main-frame-limit': 'fn main() { x:[2097153]u64\n_=x }',
         'aggregate-local': 'pub fn fail(a: u64) u64 { b: [2097153]u64\nreturn a }',
-        'frame-limit': 'pub fn fail() u64 {' + ''.join(f'x{i}:[1048576]u64 ' for i in range(3)) + 'return 0}',
+        'frame-limit': 'pub fn fail() u64 {\n' + ''.join(f'x{i}:[1048576]u64\n' for i in range(3)) + 'return 0}',
         'enum-storage-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:E) E { return a }',
         'indirect-aggregate-limit': 'pub fn fail(f:fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',
         'global-aggregate-limit': 'stored:[536870912]u64 pub fn fail() u64 { return 0 }',

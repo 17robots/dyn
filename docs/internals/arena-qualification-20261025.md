@@ -1,5 +1,24 @@
 # Pointer-arena qualification (2026-10-25)
 
+## Merge qualification follow-up
+
+The counts below record earlier combined local evidence, not passing GitHub
+checks or merge readiness. Subsequent CI and integration runs exposed stale
+platform/vendor fixtures, a shared-runner timeout, and two product defects:
+optimized Wasm emission traversed dead function bodies after IR table rebuilding,
+and an invalid RV64 startup immediate rounded arena backing down into ELF BSS.
+Both defects now have regression controls that fail before their fixes.
+
+The follow-up executes all 23 generated raw providers and both raw examples in
+debug/release (50 executions), stages the complete native probe set, and builds
+45 benchmark artifacts across nine targets without claiming new timing results.
+The RV64 fix passes all 12 hard-target bare-metal hello/panic guests. The complete
+compiler stack is qualified against `main` in PR #136; merging remains conditional
+on its current checks. Earlier intermediate PR snapshots must not be treated as
+independently passing because later layers contain their fixes.
+
+## Earlier local qualification
+
 The pointer/chained-arena migration has **225/225 registered gates accounted for
 as passing**, including artifact construction and all 21 C artifact executions.
 No prerequisite SKIP was reported by these gates on this machine. This is an

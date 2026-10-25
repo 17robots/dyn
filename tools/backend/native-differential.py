@@ -371,10 +371,10 @@ def build_program(rng, per_function):
             if len(combos) >= per_function: break
         if not types: combos = {()}
         for combo in sorted(combos, key=str):
-            locals_ = ' '.join(f'v{k}: {t} = {v}' for k, (t, v) in enumerate(zip(types, combo)))
+            locals_ = '\n'.join(f'v{k}: {t} = {v}' for k, (t, v) in enumerate(zip(types, combo)))
             call = f'{name}(' + ', '.join(f'v{k}' for k in range(len(types))) + ')'
-            body = f'_ = io.println(io.stdout(), "{{}}", {call})' if result else f'{call} _ = io.println(io.stdout(), "void")'
-            cases.append(f'{locals_} {body}')
+            body = f'_ = io.println(io.stdout(), "{{}}", {call})' if result else f'{call}\n_ = io.println(io.stdout(), "void")'
+            cases.append(f'{locals_}\n{body}')
     # Keep the dispatcher below object-format function/unwind size limits while
     # retaining every generated case. Large-frame functions remain in the corpus.
     dispatchers = []
@@ -385,7 +385,7 @@ def build_program(rng, per_function):
                          for i, case in enumerate(cases[start:start + 128], start))
         dispatchers.append(f'fn dispatch_{group}(index:u64) {{ case index {{\n{arms}\n'
                            '    _ => { #panic("unknown case") }\n  }\n}\n')
-        dispatch_arms.append(f'    {group} => {{ dispatch_{group}(index) }},')
+        dispatch_arms.append(f'    {group} => {{ dispatch_{group}(index) }}')
     dispatch_source = '\n'.join(dispatchers)
     arms = '\n'.join(dispatch_arms)
     program = f'''use "std/io"

@@ -15,7 +15,7 @@ DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn')).resolve()
 CC = shlex.split(os.environ.get('CC', 'cc'))
 SOURCE = '''
 enum(u8) Small { Zero, One }
-enum(i8) Signed { Low=-128, High=127 }
+enum(i8) Signed { Low=-128, Zero=0, High=127 }
 enum(u64) Wide { Zero=0, High=18446744073709551615 }
 pub small_global:Small=Small.One
 pub signed_global:Signed=Signed.Low
@@ -192,7 +192,10 @@ def main():
                 runtime = root / 'runtime.o'
                 support = root / 'support.o'
                 run([*CC,'-fPIC','-DDYN_SHARED','-c',ROOT/'runtime/linux_x86_64_start.S','-o',runtime])
-                run([*CC,'-fPIC','-c',ROOT/'runtime/reference_support.c','-o',support])
+                # Match the assembly runtime's current unwind ABI. The Python
+                # values and compiler/panic comparisons remain independent.
+                run([sys.executable,ROOT/'tools/build-native-support.py','--compiler',DYN,
+                     '--target','x86_64-linux','--output',support])
                 native = root / (mode+'-native.so')
                 run([*CC,'-shared','-Wl,--no-undefined',obj,runtime,support,provider_obj,'-lm','-o',native])
                 paths.append(native)

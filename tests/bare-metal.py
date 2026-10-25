@@ -63,6 +63,62 @@ def check_image(path, bits, machine, low, high):
             assert low <= address and address + memory_size <= high, hex(address)
 
 
+
+def check_rv64_memory_start(path):
+    """Evaluate the linked leaf independently; backing must start after ELF BSS.
+
+    This catches truncated immediates even when image layout hides corruption.
+    Only the small integer instruction subset used by this leaf is accepted.
+    """
+    data = path.read_bytes()
+    shoff, = struct.unpack_from('<Q', data, 40)
+    shsize, shcount = struct.unpack_from('<HH', data, 58)
+    sections = [struct.unpack_from('<IIQQQQIIQQ', data, shoff + i * shsize)
+                for i in range(shcount)]
+    symbols = {}
+    for section in sections:
+        if section[1] != 2:  # SHT_SYMTAB
+            continue
+        strings = sections[section[6]]
+        names = data[strings[4]:strings[4] + strings[5]]
+        for at in range(section[4], section[4] + section[5], section[9]):
+            name, _, _, index, value, _ = struct.unpack_from('<IBBHQQ', data, at)
+            symbols[names[name:names.index(b'\0', name)].decode()] = (index, value)
+    index, pc = symbols['dyn_memory_start']
+    section = sections[index]
+    end = symbols['_end'][1]
+    registers = [0] * 32
+    mask = (1 << 64) - 1
+    def signed(value, bits):
+        return value - (1 << bits) if value & (1 << (bits - 1)) else value
+    for _ in range(32):
+        offset = section[4] + pc - section[3]
+        word, = struct.unpack_from('<I', data, offset)
+        op, rd, rs1, rs2 = word & 127, (word >> 7) & 31, (word >> 15) & 31, (word >> 20) & 31
+        funct = (word >> 12) & 7
+        if word == 0x00008067:  # ret
+            assert registers[10] == (end + 4095) & ~4095, (path, hex(end), hex(registers[10]))
+            return
+        if op == 0x17:  # auipc
+            value = pc + signed(word & 0xfffff000, 32)
+        elif op == 0x37:  # lui
+            value = signed(word & 0xfffff000, 32)
+        elif op == 0x13 and funct == 0:  # addi
+            value = registers[rs1] + signed(word >> 20, 12)
+        elif op == 0x13 and funct == 1:  # slli
+            value = registers[rs1] << ((word >> 20) & 63)
+        elif op == 0x33 and funct == 0 and word >> 25 == 0:  # add
+            value = registers[rs1] + registers[rs2]
+        elif op == 0x33 and funct == 7:  # and
+            value = registers[rs1] & registers[rs2]
+        else:
+            raise AssertionError(('unexpected memory-start instruction', hex(pc), hex(word)))
+        if rd:
+            registers[rd] = value & mask
+        pc += 4
+    raise AssertionError('memory-start leaf did not return')
+
+
 def run_guest(command):
     """Run QEMU in its own process group, keep at most 64 KiB of console
     output, and kill the whole group on timeout so no guest outlives the test."""
@@ -97,6 +153,8 @@ for target, bits, machine, low, high, variable, program, board in TARGETS:
                 subprocess.run([DYN, 'build', str(source), '--target', target, '--no-cache', '--quiet',
                                 '--output', str(image)] + (['--release'] if release else []), check=True, timeout=120)
                 check_image(image, bits, machine, low, high)
+                if target == 'riscv64-none':
+                    check_rv64_memory_start(image)
                 images.append((name, release, image))
         refused = subprocess.run([DYN, 'run', str(ROOT / 'tests/bare-metal'), '--target', target],
                                  capture_output=True, text=True, timeout=60)

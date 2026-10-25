@@ -59,7 +59,8 @@ dyn_console_write:
 .global dyn_memory_start
 dyn_memory_start:
     la a0, _end
-    addi a0, a0, 4095
+    li t0, 4095
+    add a0, a0, t0
     li t0, -4096
     and a0, a0, t0
     ret
