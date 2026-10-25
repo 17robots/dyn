@@ -70,11 +70,12 @@ fn handle_add(response: *http.Response, request: *const http.Request) http.Resul
   if !stored {
     return text(response, http.StatusPayloadTooLarge, "notes full\n")
   }
-  digits: [21]u8
-  scratch := mem.arena_from_buffer(digits[..20])
-  number := fmt.u64_decimal(&scratch, #cast(u64, count))
-  digits[#len(number)] = '\n'
-  return text(response, http.StatusOk, digits[..#len(number) + 1])
+  digits: [21 + mem.ArenaBufferOverhead]u8
+  scratch := mem.arena_from_buffer(digits[..])
+  number := fmt.u64_decimal(scratch, #cast(u64, count))
+  payload := (#cast(*u8, &number[0]))[..#len(number) + 1]
+  payload[#len(number)] = '\n'
+  return text(response, http.StatusOk, payload)
 }
 
 fn handle_quit(response: *http.Response, request: *const http.Request) http.Result {
@@ -88,8 +89,8 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
 
 fn main() {
   arena := mem.arena_create(16 * mem.MiB)
-  defer mem.arena_release(&arena)
-  state := mem.push(App, &arena)
+  defer mem.arena_release(arena)
+  state := mem.push(App, arena)
   state.router = http.router(state.routes[..], nil)
   _ = http.route(&state.router, "GET", "/health", handle_health)
   _ = http.route(&state.router, "GET", "/notes", handle_list)
@@ -108,18 +109,18 @@ fn main() {
   }
   port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
 
-  workers := mem.push_array(concurrent.Worker, &arena, WorkerCount)
-  receive_storage := mem.push_array(u8, &arena, WorkerCount * 16 * mem.KiB)
-  stacks := mem.push_array(u8, &arena, WorkerCount * 256 * mem.KiB)
-  started := concurrent.start_context(&arena, workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, handle, state)
+  workers := mem.push_array(concurrent.Worker, arena, WorkerCount)
+  receive_storage := mem.push_array(u8, arena, WorkerCount * 16 * mem.KiB)
+  stacks := mem.push_array(u8, arena, WorkerCount * 256 * mem.KiB)
+  started := concurrent.start_context(arena, workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, handle, state)
   if !started.ok {
     #panic("cannot start workers")
   }
 
-  digits: [20]u8
+  digits: [20 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
   _ = io.write_all(io.stdout(), "port ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(&scratch, port))
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, port))
   _ = io.write_all(io.stdout(), "\n")
 
   for sync.load_u32(&state.quit) == 0 {

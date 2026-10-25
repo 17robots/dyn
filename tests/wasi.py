@@ -11,13 +11,13 @@ use "std/io" io
 use "std/terminal" terminal
 fn main() {
   arena := mem.arena_create(65536)
-  defer { mem.arena_release(&arena) }
-  arguments := wasi.arguments(&arena)
+  defer { mem.arena_release(arena) }
+  arguments := wasi.arguments(arena)
   if !arguments.ok || #len(arguments.values) != 3 || #len(arguments.values[2]) != 5 { #panic("args") }
-  tiny: [1]u8
+  tiny: [1 + mem.ArenaBufferOverhead]u8
   buffer := mem.arena_from_buffer(tiny[..])
-  failed := wasi.arguments(&buffer)
-  if failed.ok || mem.arena_used(&buffer) != 0 { #panic("args rollback") }
+  failed := wasi.arguments(buffer)
+  if failed.ok || mem.arena_used(buffer) != 0 { #panic("args rollback") }
   file := wasi.open_read(3, "input.txt")
   if #len(arguments.values[1]) == 4 {
     if file.ok { #panic("unexpected preopen") }

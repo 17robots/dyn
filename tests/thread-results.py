@@ -49,22 +49,22 @@ fn main() {
   joined(&empty)
   storage: [4096]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  _ = mem.push_bytes_uninit(&arena, 7)
-  mark := mem.arena_mark(&arena)
+  _ = mem.push_bytes_uninit(arena, 7)
+  mark := mem.arena_mark(arena)
   stack: [131072]u8 = []
   for size in [0, 1, 255] {
-    invalid(thread.spawn_with_size(&arena, #cast(usize, size), worker, nil), &arena, mark)
-    invalid(thread.spawn(&arena, stack[..size], worker, nil), &arena, mark)
+    invalid(thread.spawn_with_size(arena, #cast(usize, size), worker, nil), arena, mark)
+    invalid(thread.spawn(arena, stack[..size], worker, nil), arena, mark)
   }
-  invalid(thread.spawn_with_size(&arena, 131072, nil, nil), &arena, mark)
-  invalid(thread.spawn(&arena, stack[..], nil, nil), &arena, mark)
+  invalid(thread.spawn_with_size(arena, 131072, nil, nil), arena, mark)
+  invalid(thread.spawn(arena, stack[..], nil, nil), arena, mark)
   first := Shared{}
   second := Shared{}
-  owned := thread.spawn_with_size(&arena, 131072, worker, #cast(rawptr, &first))
+  owned := thread.spawn_with_size(arena, 131072, worker, #cast(rawptr, &first))
   if !owned.ok || owned.value == nil || owned.kind != errors.Kind.None || owned.error != 0 { #panic("owned spawn") }
   stable := owned.value
-  owned_mark := mem.arena_mark(&arena)
-  borrowed := thread.spawn(&arena, stack[..], worker, #cast(rawptr, &second))
+  owned_mark := mem.arena_mark(arena)
+  borrowed := thread.spawn(arena, stack[..], worker, #cast(rawptr, &second))
   if !borrowed.ok || borrowed.value == nil || borrowed.kind != errors.Kind.None || borrowed.error != 0 { #panic("borrowed spawn") }
   if borrowed.value == stable || owned.value != stable || owned_mark <= mark { #panic("stable distinct nodes") }
   for sync.load_u32(&first.arrived) == 0 || sync.load_u32(&second.arrived) == 0 { _ = thread.yield_now() }
@@ -74,12 +74,12 @@ fn main() {
   first_address := #cast(usize, stable)
   second_address := #cast(usize, borrowed.value)
   if first_address < base || first_address >= end || second_address < base || second_address >= end { #panic("nodes outside caller arena") }
-  nodes := mem.arena_mark(&arena)
+  nodes := mem.arena_mark(arena)
   if nodes <= owned_mark { #panic("second node allocation") }
   // A later arena allocation must neither move nor overwrite either descriptor.
-  tail := mem.push_bytes_uninit(&arena, 64)
+  tail := mem.push_bytes_uninit(arena, 64)
   for *byte in tail { byte.* = 99 }
-  retained := mem.arena_mark(&arena)
+  retained := mem.arena_mark(arena)
   sync.store_u32(&first.gate, 1)
   sync.store_u32(&second.gate, 1)
   joined(stable)
@@ -87,7 +87,7 @@ fn main() {
   if first.value != 42 || second.value != 42 { #panic("join visibility") }
   joined(stable)
   joined(borrowed.value)
-  if mem.arena_mark(&arena) != retained { #panic("join released caller nodes") }
+  if mem.arena_mark(arena) != retained { #panic("join released caller nodes") }
   for byte in tail { if byte != 99 { #panic("join changed caller allocation") } }
   // Borrowed storage remains usable after join, even on hosts owning OS stacks.
   stack[0] = 77
@@ -98,8 +98,9 @@ EXHAUSTION = IMPORTS + r'''
 fn forbidden(context: rawptr) isize { if context == nil { #panic("WORKER_STARTED") }
 return 0 }
 fn main() {
-  backing: [1]u8 = []
-  arena := mem.arena_from_buffer(backing[..0])
+  backing: [mem.ArenaBufferOverhead]u8 = []
+  skip := (16-(#cast(usize,&backing[0]) & 15)) & 15
+  arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader])
   stack: [131072]u8 = []
   SPAWN
   #panic("SPAWN_RETURNED")
@@ -128,18 +129,18 @@ def main():
         for mode in ('debug', 'release'):
             output = build(work, SOURCE, mode)
             result = subprocess.run([str(output)], capture_output=True, timeout=20)
-            assert result.returncode == 0, (mode, result.stdout, result.stderr)
-            for call in ('thread.spawn_with_size(&arena, 131072, forbidden, nil)',
-                         'thread.spawn(&arena, stack[..], forbidden, nil)'):
+            assert result.returncode == 0, (mode, result.returncode, result.stdout, result.stderr)
+            for call in ('thread.spawn_with_size(arena, 131072, forbidden, nil)',
+                         'thread.spawn(arena, stack[..], forbidden, nil)'):
                 output = build(work, EXHAUSTION.replace('SPAWN\n', '_ = ' + call + '\n'), mode)
                 result = subprocess.run([str(output)], capture_output=True, timeout=10)
                 diagnostic = result.stdout + result.stderr
-                assert result.returncode != 0 and b'arena exhausted' in diagnostic, (mode, diagnostic)
+                assert result.returncode == 101 and b'arena exhausted or alignment invalid' in diagnostic, (mode, diagnostic)
                 assert b'WORKER_STARTED' not in diagnostic and b'SPAWN_RETURNED' not in diagnostic, diagnostic
             print('PASS native thread results and arena exhaustion ' + mode, flush=True)
             if args.cross:
                 for target in ('x86_64-windows', 'aarch64-macos'):
-                    for source in (SOURCE, EXHAUSTION.replace('SPAWN\n', '_ = thread.spawn_with_size(&arena, 131072, forbidden, nil)\n')):
+                    for source in (SOURCE, EXHAUSTION.replace('SPAWN\n', '_ = thread.spawn_with_size(arena, 131072, forbidden, nil)\n')):
                         build(work, source, mode, target)
                     print('PASS target link ' + target + ' ' + mode + ' (execution requires native host)', flush=True)
 

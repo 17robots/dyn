@@ -25,10 +25,7 @@ fn mac_error() isize {
   return 0 - #cast(isize, native_errno().*)
 }
 fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
-  allocation := mem.arena_push_uninit(arena, #len(value)+1, 1)
-  storage := allocation[..#len(value)+1]
-  cstring_space1 := mem.arena_from_buffer(storage)
-  return c.string_from_bytes(&cstring_space1, value).value
+  return c.string_from_bytes(arena, value).value
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
   if #len(values) > 2305843009213693950 {
@@ -224,8 +221,7 @@ fn sleep_native() {
 }
 fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   buffer: [4096]u8 = []
-  cstring_space2 := mem.arena_from_buffer(buffer[..])
-  key := c.string_from_bytes(&cstring_space2, name)
+  key := c.string_into(buffer[..], name)
   if !key.ok {
     return EnvironmentResult{ error: -28, kind: error_kinds.Kind.Capacity }
   }

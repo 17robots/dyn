@@ -12,11 +12,11 @@ struct Item { tag: u8, value: u64 }
 fn expect(ok: bool) { if !ok { #panic("memory ergonomics contract") } }
 fn main() {
   created := mem.arena_create(mem.KiB)
-  defer { mem.arena_release(&created) }
+  defer { mem.arena_release(created) }
   count: usize = 7
   size := mem.size_for(count, #sizeof(Item))
   expect(size.ok)
-  allocation := mem.arena_push_array(&created, count, #sizeof(Item), #alignof(Item))
+  allocation := mem.arena_push_array(created, count, #sizeof(Item), #alignof(Item))
   items := (#cast(*Item, allocation))[..count]
   for *item in items {
     expect(item.tag == 0 && item.value == 0)
@@ -26,10 +26,10 @@ fn main() {
   maximum := #cast(usize, -1)
   edge := mem.size_for(maximum / 8, 8)
   expect(edge.ok && edge.bytes == maximum - maximum % 8)
-  before := mem.arena_used(&created)
+  before := mem.arena_used(created)
   overflow := mem.size_for(maximum / 8 + 1, 8)
   expect(!overflow.ok && overflow.bytes == 0)
-  expect(mem.arena_used(&created) == before && items[6].value == 42)
+  expect(mem.arena_used(created) == before && items[6].value == 42)
   exact := mem.size_for(maximum, 1)
   expect(exact.ok && exact.bytes == maximum)
   zero_count := mem.size_for(0, maximum)
@@ -38,47 +38,37 @@ fn main() {
   expect(zero_size.ok && zero_size.bytes == 0)
   expect(mem.MiB == 1024 * mem.KiB && mem.GiB == 1024 * mem.MiB)
 
-  chain := mem.growing_create_bounded(128, mem.KiB)
-  defer { mem.growing_release(&chain) }
-  first := mem.growing_push(&chain, 128, 8)
+  chain := mem.arena_create_bounded(512, 4 * mem.KiB)
+  defer { mem.arena_release(chain) }
+  first := mem.push(u64, chain)
   first.* = 42
-  second := mem.growing_push(&chain, 128, 8)
+  _ = mem.arena_push(chain, 400, 8)
+  second := mem.push(u64, chain)
   second.* = 17
-  snapshot := mem.growing_snapshot(&chain)
-  expect(snapshot.blocks == 2 && snapshot.used >= 256)
-  expect(snapshot.backing_bytes <= mem.KiB)
-  // Live blocks cannot be trimmed, even when the target is zero.
-  mem.growing_trim(&chain, 0)
-  expect(mem.growing_snapshot(&chain).backing_bytes == snapshot.backing_bytes)
+  _ = mem.arena_push(chain, 400, 8)
+  snapshot := mem.arena_snapshot(chain)
+  expect(snapshot.blocks >= 2 && snapshot.used >= 816)
   expect(first.* == 42 && second.* == 17)
-  too_large := mem.growing_try_push(&chain, mem.KiB, 1)
+  too_large := mem.arena_try_push(chain, 8 * mem.KiB, 1)
   expect(!too_large.ok && too_large.error == mem.ErrorKind.Capacity)
-  expect(mem.growing_snapshot(&chain).backing_bytes == snapshot.backing_bytes)
-  expect(first.* == 42 && second.* == 17)
-  mem.growing_reset(&chain)
-  expect(mem.growing_snapshot(&chain).used == 0)
-  // Keep one live block and trim an empty tail; append must still work afterwards.
-  live := mem.growing_push(&chain, 128, 8)
-  live.* = 91
-  mem.growing_trim(&chain, 0)
-  expect(mem.growing_snapshot(&chain).blocks == 1 && live.* == 91)
-  _ = mem.growing_push(&chain, 128, 8)
-  expect(mem.growing_snapshot(&chain).blocks == 2 && live.* == 91)
+  expect(mem.arena_snapshot(chain).blocks == snapshot.blocks && first.* == 42 && second.* == 17)
+  mem.arena_reset(chain)
+  expect(mem.arena_snapshot(chain).used == 0 && mem.arena_snapshot(chain).blocks == 1)
   for cycle in 0..100 {
-    mem.growing_reset(&chain)
-    mem.growing_trim(&chain, 0)
-    expect(mem.growing_snapshot(&chain).backing_bytes == 0)
-    expect(chain.first == nil && chain.current == nil)
-    _ = mem.growing_push(&chain, 64, 8)
+    _ = mem.arena_push(chain, 400, 8)
+    _ = mem.arena_push(chain, 400, 8)
+    mem.arena_reset(chain)
+    expect(mem.arena_snapshot(chain).blocks == 1)
   }
-  tight := mem.growing_create_bounded(128, 1)
-  expect(mem.growing_try_push(&tight, 0, 1).ok)
-  expect(!mem.growing_try_push(&tight, 1, 1).ok)
-  expect(mem.growing_snapshot(&tight).blocks == 0)
-  unbounded := mem.GrowingArena{}
-  _ = mem.growing_push(&unbounded, 4096, 8)
-  expect(mem.growing_snapshot(&unbounded).blocks == 1)
-  mem.growing_release(&unbounded)
+  tight := mem.arena_create_bounded(mem.ArenaHeader, mem.ArenaHeader)
+  expect(mem.arena_try_push(tight, 0, 1).ok)
+  expect(!mem.arena_try_push(tight, 1, 1).ok)
+  expect(mem.arena_snapshot(tight).blocks == 1)
+  mem.arena_release(tight)
+  unbounded := mem.arena_create(0)
+  _ = mem.arena_push(unbounded, 4096, 8)
+  expect(mem.arena_snapshot(unbounded).blocks == 1)
+  mem.arena_release(unbounded)
 }
 '''
 

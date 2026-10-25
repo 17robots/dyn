@@ -65,9 +65,24 @@ For every returned pointer/slice or retained callback context, answer:
 Prefer bounded caller output slices when practical. Use separate output/scratch
 arenas for retained results and temporary work, with disjoint backing. Copy the
 retained result before scratch ends. Copying a slice descriptor does not copy data.
-Arena pushes do not fail, so there is no capacity branch to write for them; pick
-a budget, or use a zero `mem.Arena{}` that reserves address space on first push.
-Never independently allocate through copies of an arena or map descriptor.
+Ordinary arena pushes return memory or panic; use `arena_try_push` when your own
+code must report exhaustion. Create a `*mem.Arena` explicitly:
+`mem.arena_create(0)` selects the target's default block size, while
+`mem.arena_create_bounded(block_size, limit)` caps total backing, headers included.
+Owned arenas add blocks without moving earlier allocations. Reset releases later
+blocks and clears the first; rewind releases blocks added after its mark.
+
+A caller-buffer arena never grows. Its header consumes `mem.ArenaHeader` bytes
+plus up to 15 alignment bytes; reserve payload size plus `mem.ArenaBufferOverhead`
+to guarantee payload capacity. A buffer too small for the aligned header panics.
+Subarena capacity includes its header too. See [memory](memory.md) for exact limits.
+
+A nil arena pointer is inactive, not a lazy allocator. A struct may keep a nil
+owner until explicitly initialized. Pass arena pointers directly; do not construct
+or copy a live header with `arena.*`. Pointer handles do not enforce uncopiability.
+Release an owned arena once, then discard or nil its pointer: both it and its
+allocations are invalid. Releasing nil is safe; releasing a stale owned pointer
+again is not. Do not independently mutate copied owning resource descriptors.
 
 An arena parameter does not imply deep copying: `strings.split` allocates its table
 in the arena but borrows input bytes for every element. JSON `parse` allocates nodes
@@ -81,16 +96,17 @@ native resource first. An arena reset does not close files or join threads.
 | --- | --- | --- |
 | Compiler escape diagnostic | Direct escapes, straight-line aliases and proven reset misuse | Complete lifetime proof |
 | Bounds/nil/alignment checks | Those checked access conditions | Allocation still alive |
-| Slot-map handle lookup | Backing identity, index, live slot, generation | Forgery resistance or validity of retained raw views |
-| `slot_map.copy_into` | Checked copy into caller output; missing/capacity do not write | Independent lifetime if output overlaps the source backing |
+| Slot-map handle lookup | Index and live generation in the supplied slot array | Backing identity, forgery resistance or validity of retained raw views |
+| Explicit value copy | Independent storage for copied scalar or fixed-array fields | Deep copying of pointer/slice fields |
 | Arena poison | Diagnostic overwrite on rewind/reset | Reliable stale-access trap |
-| Arena/map snapshot | Current counters and arena peaks/failures as pointer-free values | Synchronization or whole-program tracing |
+| Arena snapshot | Current counters and arena peaks/failures as pointer-free values | Synchronization or whole-program tracing |
 | `std/profile` | Bounded timing events and overflow count | Unlimited retention or owned event-name strings |
 
 Use handles when objects die independently. Keep generation backing alive, initialize
 it to zero once, and preserve it on reinitialization. Never serialize handles or
 reuse cleared backing while stale handles exist. Reacquire borrowed slot views at
-the point of use; use disjoint caller storage with `copy_into` for retained values.
+the point of use; copy retained values into disjoint caller storage. Copy pointer
+and slice payloads separately when their backing must outlive the original.
 
 Represent meaningful alternatives with enums when that removes contradictory fields.
 Missing resources and validation failures remain normal program states. Do not add

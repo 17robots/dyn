@@ -7,18 +7,18 @@ struct Pair {
 }
 
 fn main() {
-  storage: [64]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  first := mem.try_push(Pair, &arena)
+  first := mem.try_push(Pair, arena)
   if first == nil || first.a != 0 { #panic("first") }
-  used := mem.arena_used(&arena)
-  big := mem.try_push_array(u64, &arena, 100)
-  if #len(big) != 0 || mem.arena_used(&arena) != used { #panic("big") }
-  huge := mem.try_push_array(u64, &arena, 0xFFFFFFFFFFFFFFFF)
+  used := mem.arena_used(arena)
+  big := mem.try_push_array(u64, arena, 100)
+  if #len(big) != 0 || mem.arena_used(arena) != used { #panic("big") }
+  huge := mem.try_push_array(u64, arena, 0xFFFFFFFFFFFFFFFF)
   if #len(huge) != 0 { #panic("overflow") }
-  small := mem.try_push_array(u64, &arena, 2)
+  small := mem.try_push_array(u64, arena, 2)
   if #len(small) != 2 { #panic("small") }
-  for mem.try_push(Pair, &arena) != nil {
+  for mem.try_push(Pair, arena) != nil {
   }
-  if mem.try_push(Pair, &arena) != nil { #panic("exhausted") }
+  if mem.try_push(Pair, arena) != nil { #panic("exhausted") }
 }

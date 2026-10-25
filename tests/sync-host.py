@@ -39,15 +39,15 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
-  arena:mem.Arena
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   shared := Shared{}
   if !sync.try_lock(&shared.mutex) { #panic("initial trylock") }
   if sync.try_lock(&shared.mutex) { #panic("recursive trylock") }
   sync.unlock(&shared.mutex)
   threads: [4]*thread.Thread = []
   for i in 0..4 {
-    spawned:=thread.spawn_with_size(&arena,131072,worker,#cast(rawptr,&shared))
+    spawned:=thread.spawn_with_size(arena,131072,worker,#cast(rawptr,&shared))
     if !spawned.ok { #panic("spawn") }
     threads[i]=spawned.value
   }

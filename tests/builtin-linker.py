@@ -56,14 +56,14 @@ fn mix(x: u64) u64 {
 }
 fn main() {
   arena := mem.arena_create(4096)
-  values := mem.arena_push(&arena, 64, 8)[..64]
+  values := mem.arena_push(arena, 64, 8)[..64]
   state: u64 = 1
   for i in 0..64 {
     state = mix(state + #cast(u64, i)) % 1000003
     values[i] = #cast(u8, state)
   }
   _ = io.println(io.stdout(), "{}", state)
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }
 '''
 LIBRARY = r'''

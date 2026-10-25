@@ -53,19 +53,19 @@ fn main() {
  replay_invalid:=zip.next(&invalid_state)
  check(!replay_invalid.ok && replay_invalid.kind==errors.Kind.InvalidInput && replay_invalid.detail==zip.ErrorKind.Syntax)
  data: []const u8 = DATA
- arena: mem.Arena
+ arena := mem.arena_create(0)
  state := zip.open(data)
  first := zip.next(&state)
  check(first.ok && first.kind == errors.Kind.None && first.error == 0 && first.offset == 36)
- decoded := zip.extract(&arena,first.value)
+ decoded := zip.extract(arena,first.value)
  check(decoded.ok && bytes.equal(decoded.value,"hello") && decoded.kind == errors.Kind.None)
- mark := mem.arena_used(&arena)
+ mark := mem.arena_used(arena)
  bad := first.value
  bad.checksum = 0
- crc := zip.extract(&arena,bad)
- check(!crc.ok && crc.kind == errors.Kind.InvalidInput && crc.detail == zip.ErrorKind.Checksum && #len(crc.value) == 0 && mem.arena_used(&arena) == mark)
+ crc := zip.extract(arena,bad)
+ check(!crc.ok && crc.kind == errors.Kind.InvalidInput && crc.detail == zip.ErrorKind.Checksum && #len(crc.value) == 0 && mem.arena_used(arena) == mark)
  empty := zip.next(&state)
- check(empty.ok && zip.extract(&arena,empty.value).ok)
+ check(empty.ok && zip.extract(arena,empty.value).ok)
  end := zip.next(&state)
  check(!end.ok && end.kind == errors.Kind.None && end.error == 0 && end.detail == zip.ErrorKind.End)
  opened := zip.open_checked(data)
@@ -145,17 +145,18 @@ fn main() {
  check(!zero_extract.ok && #len(zero_extract.value) == 0 && !zero_open.ok)
  zero_reader: zip.ArchiveReader
  check(zip.next(&zero_reader).detail == zip.ErrorKind.End)
- overflow := zip.extract(&arena,zip.Entry{ uncompressed_size: ~#cast(usize,0) })
- check(!overflow.ok && overflow.kind == errors.Kind.Overflow && mem.arena_used(&arena) == mark)
+ overflow := zip.extract(arena,zip.Entry{ uncompressed_size: ~#cast(usize,0) })
+ check(!overflow.ok && overflow.kind == errors.Kind.Overflow && mem.arena_used(arena) == mark)
 }
 '''
 
 ARENA_SOURCE = r'''use "std/archive/zip" zip
 use "std/mem" mem
 fn main() {
- storage: [1]u8 = []
- arena := mem.arena_from_buffer(storage[..])
- _ = zip.extract(&arena,zip.Entry{ payload: "hello", compressed_size: 5, uncompressed_size: 5 })
+ storage: [1+mem.ArenaBufferOverhead]u8 = []
+ pad := (16-(#cast(usize,&storage[0])&15))&15
+ arena := mem.arena_from_buffer(storage[pad..pad+mem.ArenaHeader+1])
+ _ = zip.extract(arena,zip.Entry{ payload: "hello", compressed_size: 5, uncompressed_size: 5 })
 }
 '''
 
@@ -172,7 +173,7 @@ with tempfile.TemporaryDirectory(prefix="dyn-zip-results-") as temporary:
                             mode, "--output", str(output)], check=True, timeout=90)
             result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15)
             if panic:
-                assert result.returncode != 0 and "arena exhausted" in result.stderr, (
+                assert result.returncode == 101 and "arena exhausted" in result.stderr, (
                     name, mode, result.returncode, result.stdout, result.stderr)
             else:
                 assert result.returncode == 0, (name, mode, result.stdout, result.stderr)

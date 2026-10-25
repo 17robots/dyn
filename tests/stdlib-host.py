@@ -65,9 +65,9 @@ fn main() {
   require(!sync.compare_exchange_u64(&counter64, 4294967298, 0), "atomic64 failed CAS")
   require(sync.compare_exchange_u64(&counter64, 4294967300, 17), "atomic64 CAS")
   require(sync.load_u64(&counter64) == 17, "atomic64 final")
-  backing: [131072]u8 = []
+  backing: [131072+mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  arguments := process.arguments(&arena)
+  arguments := process.arguments(arena)
   require(arguments.ok && #len(arguments.value) == 7, "stdlib assertion 49")
   require(bytes.equal(arguments.value[1], "space argument"), "stdlib assertion 50")
   require(bytes.equal(arguments.value[2], ""), "stdlib assertion 51")
@@ -75,8 +75,9 @@ fn main() {
   require(bytes.equal(arguments.value[4], "trailing\\"), "stdlib assertion 53")
   require(bytes.equal(arguments.value[5], "café 😀"), "stdlib assertion 54")
   require(bytes.equal(arguments.value[6], "slashes\\\\\"quote"), "stdlib assertion 55")
-  tiny_backing: [1]u8 = []
-  tiny := mem.arena_from_buffer(tiny_backing[..])
+  tiny_backing: [1+mem.ArenaBufferOverhead]u8 = []
+  tiny_pad := (16-(#cast(usize,&tiny_backing[0])&15))&15
+  tiny := mem.arena_from_buffer(tiny_backing[tiny_pad..tiny_pad+mem.ArenaHeader+1])
   unopened := fs.File{}
   require(!fs.is_open(&unopened), "stdlib assertion 61")
   require(fs.close(&unopened).kind == errors.Kind.InvalidState, "stdlib assertion 62")
@@ -105,15 +106,15 @@ fn main() {
   require(read.status == io.Status.Complete && bytes.equal(contents[..4], "cdef"), "stdlib assertion 85")
   require(io.read(fs.reader(&opened.value), contents[..]).status == io.Status.End, "stdlib assertion 86")
   require(fs.close(&opened.value).ok, "stdlib assertion 87")
-  mark := mem.arena_mark(&arena)
-  bounded := fs.read_all(&arena, "café-😀.txt", 5)
-  require(!bounded.ok && bounded.kind == errors.Kind.Overflow && mem.arena_mark(&arena) == mark, "stdlib assertion 90")
-  exhausted := fs.read_all(&tiny, "café-😀.txt", 100)
-  require(!exhausted.ok && exhausted.kind == errors.Kind.Capacity && mem.arena_mark(&tiny) == 0, "stdlib assertion 92")
-  all := fs.read_all(&arena, "café-😀.txt", 6)
+  mark := mem.arena_mark(arena)
+  bounded := fs.read_all(arena, "café-😀.txt", 5)
+  require(!bounded.ok && bounded.kind == errors.Kind.Overflow && mem.arena_mark(arena) == mark, "stdlib assertion 90")
+  exhausted := fs.read_all(tiny, "café-😀.txt", 100)
+  require(!exhausted.ok && exhausted.kind == errors.Kind.Capacity && mem.arena_mark(tiny) == mem.arena_start(tiny), "stdlib assertion 92")
+  all := fs.read_all(arena, "café-😀.txt", 6)
   require(all.ok && bytes.equal(all.value, "abcdef"), "stdlib assertion 94")
   require(fs.write_all("café-😀.txt", "z").ok, "stdlib assertion 95")
-  truncated := fs.read_all(&arena, "café-😀.txt", 1)
+  truncated := fs.read_all(arena, "café-😀.txt", 1)
   require(truncated.ok && bytes.equal(truncated.value, "z"), "stdlib assertion 97")
   buffering: usize = 0
   for buffering <= 8 {
@@ -143,7 +144,7 @@ fn main() {
   raw_input := bufio.reader(io.cursor_reader(&raw_cursor), error_storage[..1])
   raw_line := bufio.read_until(&raw_input, contents[..], 10)
   require(raw_line.status == bufio.ReadStatus.Complete && bytes.equal(contents[..raw_line.transferred], "a\r"), "stdlib assertion 125")
-  require(process.environment(&arena, "").kind == errors.Kind.InvalidInput, "stdlib assertion 126")
+  require(process.environment(arena, "").kind == errors.Kind.InvalidInput, "stdlib assertion 126")
   invalid_child := process.Child{}
   require(process.wait(&invalid_child, false).kind == errors.Kind.InvalidState, "stdlib assertion 128")
   minimum: isize = 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1

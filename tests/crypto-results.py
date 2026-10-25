@@ -12,6 +12,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
+WORKSPACE_TESTS = Path(os.environ.get("DYN_WORKSPACE_TESTS", ROOT / "tests/fixtures")).resolve()
 
 AEAD = r'''use "std/crypto/aead" aead
 use "std/crypto/aes" aes
@@ -26,68 +27,69 @@ fn main() {
  backing: [1024]u8
  mem.fill(backing[..], 165)
  arena := mem.arena_from_buffer(backing[..])
- prefix := mem.push_bytes_uninit(&arena, 7)
+ prefix := mem.push_bytes_uninit(arena, 7)
  mem.fill(prefix, 77)
  key: [32]u8
  nonce: [12]u8
  plain: [16]u8
- sealed := aes.gcm_seal(&arena, plain[..], "", key[..], nonce[..])
+ sealed := aes.gcm_seal(arena, plain[..], "", key[..], nonce[..])
  check(sealed.ok && sealed.kind == errors.Kind.None && sealed.error == 0 && sealed.provider_code == 0)
  check(mem.equal(sealed.value.ciphertext, "\xce\xa7\x40\x3d\x4d\x60\x6b\x6e\x07\x4e\xc5\xd3\xba\xf3\x9d\x18") && mem.equal(sealed.value.tag, "\xd0\xd1\xc8\xa7\x99\x99\x6b\xf0\x26\x5b\x98\xb5\xd4\x8a\xb9\x19"))
- opened := aes.gcm_open(&arena, sealed.value.ciphertext, sealed.value.tag, "", key[..], nonce[..])
- check(opened.ok && mem.equal(opened.value, plain[..]) && mem.arena_used(&arena) == 55)
- mark := mem.arena_mark(&arena)
+ opened := aes.gcm_open(arena, sealed.value.ciphertext, sealed.value.tag, "", key[..], nonce[..])
+ check(opened.ok && mem.equal(opened.value, plain[..]) && mem.arena_used(arena) == 55)
+ mark := mem.arena_mark(arena)
  sealed.value.tag[0] ^= 1
- bad := aes.gcm_open(&arena, sealed.value.ciphertext, sealed.value.tag, "", key[..], nonce[..])
- check(!bad.ok && bad.kind == errors.Kind.InvalidInput && bad.error == 0 && bad.provider_code == 0 && #len(bad.value) == 0 && mem.arena_used(&arena) == mark)
- for i in mark..mark + 16 { check(backing[i] == 0) }
- for i in 0..7 { check(backing[i] == 77) }
+ bad := aes.gcm_open(arena, sealed.value.ciphertext, sealed.value.tag, "", key[..], nonce[..])
+ check(!bad.ok && bad.kind == errors.Kind.InvalidInput && bad.error == 0 && bad.provider_code == 0 && #len(bad.value) == 0 && mem.arena_mark(arena) == mark)
+ for i in mark..mark + 16 { check(arena.data[i] == 0) }
+ for byte in prefix { check(byte == 77) }
  sealed.value.tag[0] ^= 1
- empty := aes.gcm_seal(&arena, "", "", key[..], nonce[..])
+ empty := aes.gcm_seal(arena, "", "", key[..], nonce[..])
  check(empty.ok && #len(empty.value.ciphertext) == 0 && mem.equal(empty.value.tag, "\x53\x0f\x8a\xfb\xc7\x45\x36\xb9\xa9\x63\xb4\xf1\xc4\xcb\x73\x8b"))
- empty_open := aes.gcm_open(&arena, "", empty.value.tag, "", key[..], nonce[..])
+ empty_open := aes.gcm_open(arena, "", empty.value.tag, "", key[..], nonce[..])
  check(empty_open.ok && #len(empty_open.value) == 0)
- ch := aead.seal(&arena, aead.Cipher.Chacha20Poly1305, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
+ ch := aead.seal(arena, aead.Cipher.Chacha20Poly1305, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
  check(ch.ok && mem.equal(ch.value.ciphertext, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02") && mem.equal(ch.value.tag, "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e"))
- co := aead.open(&arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
+ co := aead.open(arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", "\x46\x3e\x13\xac\xd0\x49\xe9\xc3\x29\x84\x24\x9a\xe9\x49\xc1\x4e", "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
  check(co.ok && mem.equal(co.value, "\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74"))
- mark = mem.arena_mark(&arena)
+ mark = mem.arena_mark(arena)
  ch.value.tag[0] ^= 1
- cb := aead.open(&arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", ch.value.tag, "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
- check(!cb.ok && cb.kind == errors.Kind.InvalidInput && cb.provider_code == 0 && #len(cb.value) == 0 && mem.arena_used(&arena) == mark)
- for i in mark..mark + #len("\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74") { check(backing[i] == 0) }
+ cb := aead.open(arena, aead.Cipher.Chacha20Poly1305, "\xe0\x95\x6c\x65\x59\x72\xcb\x24\xd2\xed\x4b\xd3\xd7\x6d\x6b\x0d\x9a\x23\xfe\xc7\x12\x1c\xcc\xfa\x8e\xf6\x0f\xaa\x07\xa1\xc5\x50\x89\xa0\x5c\x9f\x87\x77\xdf\xec\x52\x4a\x02", ch.value.tag, "\x62\x6f\x72\x72\x6f\x77\x65\x64\x20\x61\x61\x64", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b")
+ check(!cb.ok && cb.kind == errors.Kind.InvalidInput && cb.provider_code == 0 && #len(cb.value) == 0 && mem.arena_mark(arena) == mark)
+ for i in mark..mark + #len("\x69\x6e\x64\x65\x70\x65\x6e\x64\x65\x6e\x74\x20\x4f\x70\x65\x6e\x53\x53\x4c\x20\x43\x68\x61\x43\x68\x61\x20\x6f\x72\x61\x63\x6c\x65\x20\x70\x6c\x61\x69\x6e\x74\x65\x78\x74") { check(arena.data[i] == 0) }
  for k in 0..2 {
   kind := aead.Cipher.Aes256Gcm
   if k == 1 { kind = aead.Cipher.Chacha20Poly1305 }
-  check(!aead.seal(&arena, kind, "x", "", "short", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
-  check(!aead.seal(&arena, kind, "x", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "").ok)
-  check(!aead.open(&arena, kind, "x", "bad", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
+  check(!aead.seal(arena, kind, "x", "", "short", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
+  check(!aead.seal(arena, kind, "x", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "").ok)
+  check(!aead.open(arena, kind, "x", "bad", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
   huge := (&key[0])[..2147483648]
-  check(!aead.seal(&arena, kind, huge, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
-  check(!aead.seal(&arena, kind, "", huge, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
-  check(!aead.seal(&arena, kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", huge).ok)
+  check(!aead.seal(arena, kind, huge, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
+  check(!aead.seal(arena, kind, "", huge, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
+  check(!aead.seal(arena, kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", huge).ok)
  }
  invalid_kind := aead.Cipher.Aes256Gcm
  invalid_ptr := #cast(*u8, &invalid_kind)
  invalid_ptr.* = 99
- check(!aead.seal(&arena, invalid_kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
- check(!aead.seal(&arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678901").ok)
- check(!aead.seal(&arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "1234567890123").ok)
- check(mem.arena_used(&arena) == mark)
+ check(!aead.seal(arena, invalid_kind, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
+ check(!aead.seal(arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678901").ok)
+ check(!aead.seal(arena, aead.Cipher.Chacha20Poly1305, "", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "1234567890123").ok)
+ check(mem.arena_mark(arena) == mark)
  long_nonce: [129]u8
- check(!aes.gcm_seal(&arena, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", long_nonce[..]).ok && mem.arena_used(&arena) == mark)
+ check(!aes.gcm_seal(arena, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", long_nonce[..]).ok && mem.arena_mark(arena) == mark)
  // GCM retains its variable nonempty nonce support.
- nonstandard := aes.gcm_seal(&arena, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678")
- check(nonstandard.ok && aes.gcm_open(&arena, nonstandard.value.ciphertext, nonstandard.value.tag, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678").ok)
+ nonstandard := aes.gcm_seal(arena, "data", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678")
+ check(nonstandard.ok && aes.gcm_open(arena, nonstandard.value.ciphertext, nonstandard.value.tag, "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "12345678").ok)
  for algorithm in 0..2 {
  overlap_kind := aead.Cipher.Aes256Gcm
  if algorithm == 1 { overlap_kind = aead.Cipher.Chacha20Poly1305 }
  // Each borrowed input conflicts separately with the pending output.
  for which in 0..6 {
-  storage: [128]u8
-  mem.fill(storage[..], 42)
-  local := mem.arena_from_buffer(storage[..])
-  _ = mem.push_bytes_uninit(&local, 7)
+  overlap_backing: [mem.ArenaBufferOverhead+128]u8
+  mem.fill(overlap_backing[..], 42)
+  local := mem.arena_from_buffer(overlap_backing[..])
+  storage := local.data[mem.ArenaHeader..mem.ArenaHeader+128]
+  _ = mem.push_bytes_uninit(local, 7)
   p: []const u8 = "hello"
   ad: []const u8 = "aad"
   ke: []const u8 = "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"
@@ -98,15 +100,16 @@ fn main() {
   if which == 3 { no = storage[8..20] }
   if which == 4 { p = storage[..8] }
   if which == 5 { p = storage[25..30] }
-  failed := aead.seal(&local, overlap_kind, p, ad, ke, no)
-  check(!failed.ok && failed.kind == errors.Kind.InvalidInput && failed.error == 0 && failed.provider_code == 0 && #len(failed.value.ciphertext) == 0 && #len(failed.value.tag) == 0 && mem.arena_used(&local) == 7)
+  failed := aead.seal(local, overlap_kind, p, ad, ke, no)
+  check(!failed.ok && failed.kind == errors.Kind.InvalidInput && failed.error == 0 && failed.provider_code == 0 && #len(failed.value.ciphertext) == 0 && #len(failed.value.tag) == 0 && mem.arena_used(local) == 7)
   for byte in storage { check(byte == 42) }
  }
  for which in 0..5 {
-  storage: [128]u8
-  mem.fill(storage[..], 42)
-  local := mem.arena_from_buffer(storage[..])
-  _ = mem.push_bytes_uninit(&local, 7)
+  overlap_backing: [mem.ArenaBufferOverhead+128]u8
+  mem.fill(overlap_backing[..], 42)
+  local := mem.arena_from_buffer(overlap_backing[..])
+  storage := local.data[mem.ArenaHeader..mem.ArenaHeader+128]
+  _ = mem.push_bytes_uninit(local, 7)
   ci: []const u8 = "\xce\xa7\x40\x3d\x4d\x60\x6b\x6e\x07\x4e\xc5\xd3\xba\xf3\x9d\x18"
   ta: []const u8 = "\xd0\xd1\xc8\xa7\x99\x99\x6b\xf0\x26\x5b\x98\xb5\xd4\x8a\xb9\x19"
   ad: []const u8 = ""
@@ -117,15 +120,15 @@ fn main() {
   if which == 2 { ad = storage[8..11] }
   if which == 3 { ke = storage[8..40] }
   if which == 4 { no = storage[8..20] }
-  failed := aead.open(&local, overlap_kind, ci, ta, ad, ke, no)
-  check(!failed.ok && failed.kind == errors.Kind.InvalidInput && failed.error == 0 && failed.provider_code == 0 && #len(failed.value) == 0 && mem.arena_used(&local) == 7)
+  failed := aead.open(local, overlap_kind, ci, ta, ad, ke, no)
+  check(!failed.ok && failed.kind == errors.Kind.InvalidInput && failed.error == 0 && failed.provider_code == 0 && #len(failed.value) == 0 && mem.arena_used(local) == 7)
   for byte in storage { check(byte == 42) }
  }
  }
- mem.arena_release(&arena)
- lazy: mem.Arena
- check(aes.gcm_seal(&lazy, "lazy", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
- mem.arena_release(&lazy)
+ mem.arena_release(arena)
+ lazy := mem.arena_create(0)
+ check(aes.gcm_seal(lazy, "lazy", "", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f", "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b").ok)
+ mem.arena_release(lazy)
 }
 '''
 
@@ -382,28 +385,29 @@ fn main() {
     kind := aead.Cipher.Aes256Gcm
     if cipher == 1 { kind = aead.Cipher.Chacha20Poly1305 }
     for mode in 0..3 {
-      storage: [128]u8
-      mem.fill(storage[..], 165)
-      arena := mem.arena_from_buffer(storage[..])
-      _ = mem.push_bytes_uninit(&arena, 7)
+      backing: [mem.ArenaBufferOverhead+128]u8
+      mem.fill(backing[..], 165)
+      arena := mem.arena_from_buffer(backing[..])
+      storage := arena.data[mem.ArenaHeader..mem.ArenaHeader+128]
+      _ = mem.push_bytes_uninit(arena, 7)
       key: [32]u8
       nonce: [12]u8
       tag: [16]u8
       key[0] = #cast(u8, mode)
       code: u64 = 0
       if mode == 1 { code = 18446744073709551615 }
-      sealed := aead.seal(&arena, kind, "hello", "aad", key[..], nonce[..])
+      sealed := aead.seal(arena, kind, "hello", "aad", key[..], nonce[..])
       check(!sealed.ok && sealed.kind == errors.Kind.System && sealed.error == 0 && sealed.provider_code == code)
-      check(#len(sealed.value.ciphertext) == 0 && #len(sealed.value.tag) == 0 && mem.arena_used(&arena) == 7)
+      check(#len(sealed.value.ciphertext) == 0 && #len(sealed.value.tag) == 0 && mem.arena_used(arena) == 7)
       for i in 0..7 { check(storage[i] == 165) }
       for i in 7..28 { check(storage[i] == 0) }
       for i in 28..128 { check(storage[i] == 165) }
       mem.fill(storage[7..], 165)
-      opened := aead.open(&arena, kind, "hello", tag[..], "aad", key[..], nonce[..])
+      opened := aead.open(arena, kind, "hello", tag[..], "aad", key[..], nonce[..])
       expected := errors.Kind.System
       if mode == 0 { expected = errors.Kind.InvalidInput }
       check(!opened.ok && opened.kind == expected && opened.error == 0 && opened.provider_code == code)
-      check(#len(opened.value) == 0 && mem.arena_used(&arena) == 7)
+      check(#len(opened.value) == 0 && mem.arena_used(arena) == 7)
       for i in 0..7 { check(storage[i] == 165) }
       for i in 7..12 { check(storage[i] == 0) }
       for i in 12..128 { check(storage[i] == 165) }
@@ -420,7 +424,7 @@ def run(project, release, panic=False):
                    check=True, timeout=90)
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15)
     if panic:
-        assert result.returncode != 0 and "arena exhausted" in result.stderr, result
+        assert result.returncode == 101 and "arena exhausted or alignment invalid" in result.stderr, result
     elif result.returncode:
         raise AssertionError(f"{project.name}: {result.stdout}\n{result.stderr}")
 
@@ -457,7 +461,7 @@ with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
     aead_stub.mkdir()
     (aead_stub / "stub.dyn").write_text(AEAD_PROVIDER, encoding="utf-8")
     cases.append(aead_fault)
-    cases.append(project(root, "sdk-aead", (ROOT.parent / "tests/sdk-aead/main.dyn").read_text(encoding="utf-8")))
+    cases.append(project(root, "sdk-aead", (WORKSPACE_TESTS / "sdk-aead/main.dyn").read_text(encoding="utf-8")))
     exhaustion = []
     for cipher in ("Aes256Gcm", "Chacha20Poly1305"):
         for operation in ("seal", "open"):
@@ -465,10 +469,11 @@ with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
             if operation == "open":
                 arguments = '"hello", tag[..], "", key[..], nonce[..]'
             source = ('use "std/mem" mem\nuse "std/crypto/aead" aead\n'
-                      'fn main() {\n backing: [4]u8\n'
-                      ' arena := mem.arena_from_buffer(backing[..])\n'
+                      'fn main() {\n backing: [mem.ArenaBufferOverhead+4]u8\n'
+                      ' skip := (16-(#cast(usize,&backing[0]) & 15)) & 15\n'
+                      ' arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader+4])\n'
                       ' key: [32]u8\n nonce: [12]u8\n tag: [16]u8\n'
-                      f' _ = aead.{operation}(&arena, aead.Cipher.{cipher}, {arguments})\n}}\n')
+                      f' _ = aead.{operation}(arena, aead.Cipher.{cipher}, {arguments})\n}}\n')
             exhaustion.append(project(root, cipher + "-" + operation, source))
     for release in (False, True):
         for case in cases:

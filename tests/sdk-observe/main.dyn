@@ -11,13 +11,13 @@ fn main() {
   arena:=mem.arena_from_buffer(storage[..])
   arena.events=&log
   arena.event_resource=42
-  _=mem.arena_push(&arena,16,1)
-  failed:=mem.arena_try_push(&arena,100,1)
+  _=mem.arena_push(arena,16,1)
+  failed:=mem.arena_try_push(arena,100,1)
   expect(!failed.ok)
-  mem.arena_reset(&arena)
-  snapshot:=mem.arena_snapshot(&arena)
+  mem.arena_reset(arena)
+  snapshot:=mem.arena_snapshot(arena)
   expect(snapshot.used==0 && snapshot.peak_used==16 && snapshot.allocation_failures==1)
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
   observed:=observe.recorded(&log)
   expect(#len(observed)==4 && observed[0].kind==observe.Kind.Allocated)
   expect(observed[0].resource==42 && observed[0].value==16)

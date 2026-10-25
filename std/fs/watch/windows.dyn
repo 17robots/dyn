@@ -29,7 +29,7 @@ struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
 // Names borrow caller storage until the next next() call. Watches are nonrecursive.
 // Windows reports paired rename actions without cookies, and cannot distinguish
 // close-write, directory flags, or deletion/movement of the watched directory.
-pub struct Watcher { native: *Native, owner: mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
+pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
 pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
 // `error` keeps the native code; `kind` is its portable category.
 pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
@@ -67,7 +67,7 @@ pub fn open(storage: []u8) OpenResult {
     return OpenResult{ value: Watcher{}, error: -28, kind: errors.Kind.Capacity }
   }
   owner := mem.arena_create(#sizeof(Native))
-  native := mem.push(Native, &owner)
+  native := mem.push(Native, owner)
   native.next_id = 1
   return OpenResult{ value: Watcher{ native: native, owner: owner, storage: storage }, ok: true }
 }
@@ -183,7 +183,7 @@ pub fn close(state: *Watcher) Result {
       return failure(code)
     }
   }
-  mem.arena_release(&state.owner)
+  mem.arena_release(state.owner)
   state.native = nil
   state.storage = state.storage[..0]
   return Result{ ok: true }

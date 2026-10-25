@@ -5,8 +5,8 @@
 // until every newer mapping is released too.
 extern fn memory_start "dyn_memory_start"() usize
 extern fn memory_end "dyn_memory_end"() usize
-// A zero Arena takes this much of the region on its first push.
-const ZeroArenaReserve: usize = 1 * MiB
+// Region bytes each arena block takes by default.
+const DefaultBlock: usize = 1 * MiB
 // Bytes in use from the region start.
 bare_used: usize
 

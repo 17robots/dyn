@@ -13,9 +13,9 @@ use "std/mem" memory
 use "std/fmt" fmt
 use "std/bytes" bytes
 fn expect_decimal(value:f64, precision:usize, expected:[]const u8) {
-  output:[128]u8=[]
+  output:[128 + memory.ArenaBufferOverhead]u8=[]
   scratch:=memory.arena_from_buffer(output[..])
-  if !bytes.equal(fmt.f64_decimal(&scratch,value,precision),expected) { #panic("decimal rounding") }
+  if !bytes.equal(fmt.f64_decimal(scratch,value,precision),expected) { #panic("decimal rounding") }
 }
 fn main() {
   backing:[16384]u8=[]
@@ -24,23 +24,23 @@ fn main() {
   for i in 0..32 {
     control:[1]u8=[]
     control[0]=#cast(u8, i)
-    encoded:[16]u8=[]
+    encoded:[16 + memory.ArenaBufferOverhead]u8=[]
     encoded_arena:=memory.arena_from_buffer(encoded[..])
-    written:=json.write_string(&encoded_arena,control[..])
+    written:=json.write_string(encoded_arena,control[..])
     if #len(written)==0 { #panic("control escape") }
-    parsed:=json.parse(&arena,written)
+    parsed:=json.parse(arena,written)
     if !parsed.ok || #len(parsed.root.text)!=1 || parsed.root.text[0]!=control[0] { #panic("control roundtrip") }
-    roundtrip:[16]u8=[]
+    roundtrip:[16 + memory.ArenaBufferOverhead]u8=[]
     roundtrip_arena:=memory.arena_from_buffer(roundtrip[..])
-    if !bytes.equal(json.encode(&roundtrip_arena,parsed.root),written) { #panic("node encode") }
+    if !bytes.equal(json.encode(roundtrip_arena,parsed.root),written) { #panic("node encode") }
   }
-  memory.arena_reset(&arena)
+  memory.arena_reset(arena)
   source:[6002]u8=[]
   source[0]='"'
   for i in 0..1000 { _=memory.copy(source[1+i*6..],"\\u0061") }
   source[6001]='"'
-  parsed:=json.parse(&arena,source[..])
-  if !parsed.ok || #len(parsed.root.text)!=1000 || memory.arena_used(&arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
+  parsed:=json.parse(arena,source[..])
+  if !parsed.ok || #len(parsed.root.text)!=1000 || memory.arena_used(arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
   for byte in parsed.root.text { if byte!='a' { #panic("rewind changed retained bytes") } }
   expect_decimal(4503599627370497.0,0,"4503599627370497")
   expect_decimal(9007199254740991.0,0,"9007199254740991")
@@ -68,26 +68,26 @@ struct Entry {
 const nil_entry: Entry = Entry{}
 fn main() {
   owned := mem.arena_create(1000000)
-  table := hash.slots(Entry, &owned, 8)
-  entries := mem.push_array(Entry, &owned, 128)
+  table := hash.slots(Entry, owned, 8)
+  entries := mem.push_array(Entry, owned, 128)
   first_free: *Entry
   for i in 0..128 {
     list.free_push(&first_free, &entries[127 - i])
   }
   live: [128]*Entry = []
   handles: [128]slots.Handle = []
-  scratch: mem.Arena
+  scratch := mem.arena_create(0)
   seed: u64 = 7
   for step in 0..4000 {
     seed = (seed * 1664525 + 1013904223) % 4294967296
     index := #cast(usize, (seed % 128))
-    text := fmt.u64_decimal(&scratch, #cast(u64, index))
+    text := fmt.u64_decimal(scratch, #cast(u64, index))
     if (seed / 128) % 2 == 0 {
       if live[index] == nil {
         entry := list.free_pop(&first_free, &nil_entry)
         if entry == &nil_entry { #panic("free list exhausted") }
         slots.reset(entry)
-        entry.key = fmt.u64_decimal(&owned, #cast(u64, index))
+        entry.key = fmt.u64_decimal(owned, #cast(u64, index))
         entry.value = index
         entry.hash = hash.hash_bytes(1, entry.key)
         hash.insert(table, entry)
@@ -104,7 +104,7 @@ fn main() {
     }
     if step % 13 == 0 {
       for i in 0..128 {
-        name := fmt.u64_decimal(&scratch, #cast(u64, i))
+        name := fmt.u64_decimal(scratch, #cast(u64, i))
         found := hash.find(table, hash.hash_bytes(1, name), name, &nil_entry)
         if (found != &nil_entry) != (live[i] != nil) { #panic("collision chain") }
         if live[i] != nil {
@@ -113,7 +113,7 @@ fn main() {
       }
     }
   }
-  mem.arena_release(&owned)
+  mem.arena_release(owned)
 }
 ''',
 }

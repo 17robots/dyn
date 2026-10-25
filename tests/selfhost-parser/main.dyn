@@ -19,9 +19,9 @@ fn put(out: *Output, arena: *mem.Arena, text: []const u8) {
 }
 
 fn put_number(out: *Output, arena: *mem.Arena, value: u64) {
-  digits: [20]u8
+  digits: [20+mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
-  put(out, arena, fmt.u64_decimal(&scratch, value))
+  put(out, arena, fmt.u64_decimal(scratch, value))
 }
 
 fn dump(out: *Output, arena: *mem.Arena, tree: *const Tree, root: u32) {
@@ -52,36 +52,36 @@ fn dump(out: *Output, arena: *mem.Arena, tree: *const Tree, root: u32) {
 
 fn main() {
   arena := mem.arena_create(4 * mem.GiB)
-  defer mem.arena_release(&arena)
-  arguments := process.arguments(&arena)
+  defer mem.arena_release(arena)
+  arguments := process.arguments(arena)
   if !arguments.ok {
     #panic("cannot read arguments")
   }
   for path in arguments.value[1..] {
-    mark := mem.arena_mark(&arena)
+    mark := mem.arena_mark(arena)
     out := Output{}
-    put(&out, &arena, "== ")
-    put(&out, &arena, path)
-    put(&out, &arena, "\n")
-    source := fs.read_all(&arena, path, 64 * mem.MiB)
+    put(&out, arena, "== ")
+    put(&out, arena, path)
+    put(&out, arena, "\n")
+    source := fs.read_all(arena, path, 64 * mem.MiB)
     if !source.ok {
       #panic("cannot read source")
     }
     tree := Tree{}
-    root := parse_source(source.value, &tree, &arena)
+    root := parse_source(source.value, &tree, arena)
     if root == None {
-      put(&out, &arena, "error ")
-      put_number(&out, &arena, #cast(u64, tree.error_offset))
-      put(&out, &arena, " ")
-      put(&out, &arena, tree.error)
-      put(&out, &arena, "\n")
+      put(&out, arena, "error ")
+      put_number(&out, arena, #cast(u64, tree.error_offset))
+      put(&out, arena, " ")
+      put(&out, arena, tree.error)
+      put(&out, arena, "\n")
     } else {
-      dump(&out, &arena, &tree, root)
+      dump(&out, arena, &tree, root)
     }
     written := io.write_all(io.stdout(), out.data[..out.count])
     if written.status != io.Status.Complete {
       #panic("cannot write output")
     }
-    mem.arena_rewind(&arena, mark)
+    mem.arena_rewind(arena, mark)
   }
 }

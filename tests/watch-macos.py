@@ -87,8 +87,8 @@ fn main() {
 AUDIT = r'''
 pub fn audit_callbacks() {
   allocation := mem.arena_create(#sizeof(State))
-  defer { mem.arena_release(&allocation) }
-  pushed := mem.arena_push(&allocation,#sizeof(State),#alignof(State))
+  defer { mem.arena_release(allocation) }
+  pushed := mem.arena_push(allocation,#sizeof(State),#alignof(State))
   state := #cast(*State, pushed)
   slot := &state.slots[0]
   slot.owner = state

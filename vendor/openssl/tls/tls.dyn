@@ -80,10 +80,8 @@ pub fn context_free_owned(context: Context) {
 // Creates a server context and loads PEM certificate chain/private key.
 pub fn server_context_create_owned(certificate: []const u8, key: []const u8,
   certificate_buffer: []u8, key_buffer: []u8) ContextResult {
-  cstring_space1 := mem.arena_from_buffer(certificate_buffer)
-  certificate_path := c.string_from_bytes(&cstring_space1, certificate)
-  cstring_space2 := mem.arena_from_buffer(key_buffer)
-  key_path := c.string_from_bytes(&cstring_space2, key)
+  certificate_path := c.string_into(certificate_buffer, certificate)
+  key_path := c.string_into(key_buffer, key)
   if !certificate_path.ok || !key_path.ok {
     return ContextResult{ error: ErrorKind.InvalidArgument }
   }
@@ -203,8 +201,7 @@ pub fn connection_create_owned(context: Context, descriptor: i32, hostname: []co
   if context == nil || descriptor < 0 || #len(hostname) == 0 {
     return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, ok: false }
   }
-  cstring_space3 := mem.arena_from_buffer(name_buffer)
-  name := c.string_from_bytes(&cstring_space3, hostname)
+  name := c.string_into(name_buffer, hostname)
   if !name.ok {
     return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, ok: false }
   }

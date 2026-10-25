@@ -40,19 +40,19 @@ fn main() {
   check(!eof.ok && eof.kind == errors.Kind.None && eof.error == 0 && eof.offset == 5 && der.finished(&c))
   storage: [4096]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  prefix := mem.push_bytes_uninit(&arena, 7)
+  prefix := mem.push_bytes_uninit(arena, 7)
   prefix[0] = 42
-  mark := mem.arena_mark(&arena)
-  valid := pem.decode(&arena, "prefix\n-----BEGIN TEST-----\nAQID\n-----END TEST-----\ntail")
+  mark := mem.arena_mark(arena)
+  valid := pem.decode(arena, "prefix\n-----BEGIN TEST-----\nAQID\n-----END TEST-----\ntail")
   check(valid.ok && strings.equal(valid.label, "TEST") && valid.consumed == 52)
   check(#len(valid.value) == 3)
-  mem.arena_rewind(&arena, mark)
-  empty := pem.decode(&arena, "-----BEGIN TEST-----\n-----END TEST-----")
+  mem.arena_rewind(arena, mark)
+  empty := pem.decode(arena, "-----BEGIN TEST-----\n-----END TEST-----")
   check(empty.ok && #len(empty.value) == 0 && strings.equal(empty.label, "TEST") && empty.kind == errors.Kind.None && empty.error == 0)
-  mem.arena_rewind(&arena, mark)
-  bad := pem.decode(&arena, "-----BEGIN TEST-----\n!!!!\n-----END TEST-----")
+  mem.arena_rewind(arena, mark)
+  bad := pem.decode(arena, "-----BEGIN TEST-----\n!!!!\n-----END TEST-----")
   check(!bad.ok)
-  check(mem.arena_mark(&arena) == mark && prefix[0] == 42 && #len(bad.value) == 0 && bad.offset == 21 && bad.kind == errors.Kind.InvalidInput && bad.error == 0)
+  check(mem.arena_mark(arena) == mark && prefix[0] == 42 && #len(bad.value) == 0 && bad.offset == 21 && bad.kind == errors.Kind.InvalidInput && bad.error == 0)
   
   z: der.Result
   p: pem.Result
@@ -75,9 +75,9 @@ fn main() {
   check(der.next(&c).kind == errors.Kind.Overflow)
   failures: [6][]const u8 = ["", "-----BEGIN -----\n", "-----BEGIN TEST-----x", "-----BEGIN TEST-----\nAQID\n-----END NO-----", "-----BEGIN TEST-----\nAQID", "-----BEGIN TEST-----\nA\n-----END TEST-----"]
   for input in failures {
-    result := pem.decode(&arena, input)
+    result := pem.decode(arena, input)
     check(!result.ok && result.kind == errors.Kind.InvalidInput && result.error == 0 && #len(result.value) == 0 && #len(result.label) == 0 && result.consumed == 0 && result.offset <= #len(input))
-    check(mem.arena_mark(&arena) == mark && prefix[0] == 42)
+    check(mem.arena_mark(arena) == mark && prefix[0] == 42)
   }
 
   complete: []const u8 = "\x30\x03\x02\x01\x07"
@@ -89,8 +89,8 @@ fn main() {
   }
   arena.poison_on_rewind = true
   malformed_pem: []const u8 = "-----BEGIN TEST-----\nAQID\n-----END WRONG-----"
-  rejected := pem.decode(&arena, malformed_pem)
-  check(rejected.offset == 26 && rejected.kind == errors.Kind.InvalidInput && mem.arena_mark(&arena) == mark && prefix[0] == 42)
+  rejected := pem.decode(arena, malformed_pem)
+  check(rejected.offset == 26 && rejected.kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark && prefix[0] == 42)
 
 }
 '''

@@ -26,14 +26,14 @@ fn worker(raw: rawptr) isize {
   return 0
 }
 fn main() {
-  arena:mem.Arena
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   state := State{lock: sync.mutex(), ready: sync.condition(), gate: sync.semaphore(0), once: sync.once(), atomic: sync.atomic_u64(0)}
   stacks: [4][65536]u8 = []
   workers: [4]*thread.Thread = []
   i: usize = 0
   for i < 4 {
-    spawned:=thread.spawn(&arena,stacks[i][..],worker,#cast(rawptr,&state))
+    spawned:=thread.spawn(arena,stacks[i][..],worker,#cast(rawptr,&state))
     if !spawned.ok { #panic("spawn") }
     workers[i]=spawned.value
     i += 1

@@ -40,13 +40,10 @@ pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) ErrorKind
   if capacity <= #len(state.storage) {
     return ErrorKind.None
   }
-  if #len(state.storage) > 0 && arena.offset <= #len(arena.data) && arena.offset >= #len(state.storage) {
-    start := arena.offset - #len(state.storage)
-    if &state.storage[0] == &arena.data[start] {
-      _ = memory.arena_push_uninit(arena, capacity - #len(state.storage), 1)
-      state.storage = (&state.storage[0])[..capacity]
-      return ErrorKind.None
-    }
+  if #len(state.storage) > 0 && memory.arena_try_extend(arena, &state.storage[0],
+    #len(state.storage), capacity - #len(state.storage)) {
+    state.storage = (&state.storage[0])[..capacity]
+    return ErrorKind.None
   }
   allocated := memory.arena_push_uninit(arena, capacity, 1)
   storage := allocated[..capacity]

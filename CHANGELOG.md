@@ -14,6 +14,13 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking arena API:** constructors return `*mem.Arena`, with the header in
+  backing storage. Pass the pointer directly rather than `&arena`. Explicit
+  `arena_create(0)` selects the target default; zero arena values no longer
+  initialize themselves. Owned arenas chain blocks, while caller-buffer arenas
+  stay fixed. Release invalidates an owned handle. The separate `GrowingArena`
+  and `arena_take` APIs are removed. See [arena migration](docs/migrations/arena-handles-20261025.md).
+
 - **Breaking syntax:** each statement starts on its own line; `a := 1 b := 2` and
   `defer { x() y() }` are syntax errors. Split them onto separate lines.
 - **Breaking syntax:** `case` arms are no longer separated by commas. Delete the

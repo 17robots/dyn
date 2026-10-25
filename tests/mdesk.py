@@ -26,9 +26,9 @@ fn fails(arena: *mem.Arena, source: []const u8, error: mdesk.ErrorKind, offset: 
 
 fn main() {
   arena := mem.arena_create(mem.MiB)
-  defer mem.arena_release(&arena)
+  defer mem.arena_release(arena)
   source := #load("types.mdesk")
-  parsed := mdesk.parse(&arena, source)
+  parsed := mdesk.parse(arena, source)
   expect(parsed.ok, "parse")
   root := parsed.root
   expect(root.kind == mdesk.Kind.Root && mdesk.child_count(root) == 6, "root children")
@@ -50,7 +50,7 @@ fn main() {
   expect(bytes.equal(mdesk.child_at(mdesk.child(root, "path"), 0).string, "a \"b\" c"), "triple string")
   empty_string := mdesk.child_at(mdesk.child(root, "empty"), 0)
   expect(empty_string.label == mdesk.Label.String && #len(empty_string.string) == 0, "empty string")
-  nested := mdesk.parse(&arena, "op: + version: 1.2.3 a: b: c")
+  nested := mdesk.parse(arena, "op: + version: 1.2.3 a: b: c")
   expect(nested.ok && mdesk.child_count(nested.root) == 3, "chained children")
   expect(mdesk.child_at(mdesk.child(nested.root, "op"), 0).label == mdesk.Label.Symbol, "symbol")
   expect(bytes.equal(mdesk.child(mdesk.child(mdesk.child(nested.root, "a"), "b"), "c").string, "c"), "a: b: c")
@@ -60,12 +60,12 @@ fn main() {
   expect(#len(missing.string) == 0 && mdesk.child_count(missing) == 0 && !mdesk.has_tag(missing, "x"), "nil reads")
   expect(mdesk.line_of(source, types.offset) == 3, "line_of")
 
-  fails(&arena, "a: {b c", mdesk.ErrorKind.Unclosed, 3)
-  fails(&arena, "a }", mdesk.ErrorKind.Unexpected, 2)
-  fails(&arena, "a: \"open", mdesk.ErrorKind.UnterminatedString, 3)
-  fails(&arena, "/* open", mdesk.ErrorKind.UnterminatedComment, 0)
-  fails(&arena, "@ x", mdesk.ErrorKind.MissingTagName, 0)
-  fails(&arena, "a:", mdesk.ErrorKind.Unexpected, 2)
+  fails(arena, "a: {b c", mdesk.ErrorKind.Unclosed, 3)
+  fails(arena, "a }", mdesk.ErrorKind.Unexpected, 2)
+  fails(arena, "a: \"open", mdesk.ErrorKind.UnterminatedString, 3)
+  fails(arena, "/* open", mdesk.ErrorKind.UnterminatedComment, 0)
+  fails(arena, "@ x", mdesk.ErrorKind.MissingTagName, 0)
+  fails(arena, "a:", mdesk.ErrorKind.Unexpected, 2)
 }
 '''
 DATA = """// Sizes of the scalar types.

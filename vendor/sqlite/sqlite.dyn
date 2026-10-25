@@ -1,4 +1,3 @@
-use "std/mem" mem
 use "std/c"
 #link("sqlite3")
 
@@ -8,8 +7,7 @@ pub struct OpenResult { database: Database, code: i32, ok: bool }
 
 // Provider allocates database. Successful results require close; failures own nothing.
 pub fn open(name: []const u8, buffer: []u8) OpenResult {
-  cstring_space1 := mem.arena_from_buffer(buffer)
-  encoded := c.string_from_bytes(&cstring_space1, name)
+  encoded := c.string_into(buffer, name)
   if !encoded.ok {
     return OpenResult{ code: string_error(encoded.error) }
   }
@@ -35,8 +33,7 @@ pub fn execute(database: Database, sql: []const u8, buffer: []u8) i32 {
   if database == nil {
     return -1
   }
-  cstring_space2 := mem.arena_from_buffer(buffer)
-  encoded := c.string_from_bytes(&cstring_space2, sql)
+  encoded := c.string_into(buffer, sql)
   if !encoded.ok {
     return string_error(encoded.error)
   }

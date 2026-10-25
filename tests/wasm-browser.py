@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DYN = os.environ.get('DYN', str(ROOT / 'build/dyn'))
 def run(args, **kw):
+    kw.setdefault('timeout', 120)
     result = subprocess.run(list(map(str, args)), cwd=ROOT, text=True, capture_output=True, **kw)
     if result.returncode: raise RuntimeError(shlex.join(map(str,args))+"\n"+result.stdout+result.stderr)
     return result
@@ -19,15 +20,19 @@ struct Single { x: f32 }
 extern fn pair "c_pair"(p: Pair) Pair
 extern fn single "c_single"(p: Single) Single
 counter: i32 = host_add(20, 22)
-backing: [128]u8
-arena: mem.Arena = mem.arena_from_buffer(backing[..])
+backing: [128 + mem.ArenaBufferOverhead]u8
+fn fixed_arena() *mem.Arena {
+  created := mem.arena_from_buffer(backing[..])
+  return mem.arena_from_buffer(created.data[..mem.ArenaHeader + 128])
+}
+arena: *mem.Arena = fixed_arena()
 pub fn value() i32 { return counter }
 pub fn increment() { counter += 1 }
 pub fn layout() usize { return #sizeof(usize)*100 + #sizeof(rawptr)*10 + #sizeof([]u8) }
 pub fn arithmetic(a: isize, b: isize) isize { return a / b }
 pub fn big(a: i64) i64 { return a + 1 }
-pub fn alloc(n: usize) rawptr { return #cast(rawptr, mem.arena_try_push(&arena, n, 4).memory) }
-pub fn reset() { mem.arena_reset(&arena) }
+pub fn alloc(n: usize) rawptr { return #cast(rawptr, mem.arena_try_push(arena, n, 4).memory) }
+pub fn reset() { mem.arena_reset(arena) }
 pub fn total(data: *u32, n: usize) u32 {
   values := data[..n]
   result: u32 = 0
@@ -41,8 +46,8 @@ pub fn abi() bool {
   return p.x == 8 && p.y == 11 && s.x == 3.5 && input.x == 7 && input.y == 9
 }
 pub fn pool_test() bool {
-  mem.arena_reset(&arena)
-  slots := mem.push_array(Slot, &arena, 2)
+  mem.arena_reset(arena)
+  slots := mem.push_array(Slot, arena, 2)
   first_free: *Slot
   list.free_push(&first_free, &slots[1])
   list.free_push(&first_free, &slots[0])
@@ -53,9 +58,14 @@ pub fn pool_test() bool {
   same := list.free_pop(&first_free, &nil_slot)
   return same == first && second == &slots[1] && first_free == nil
 }
-pub fn heap_available() bool { created := mem.arena_create(32)
-mem.arena_release(&created)
-return true }
+pub fn heap_available() bool {
+  created := mem.arena_create(32 + mem.ArenaHeader)
+  _ = mem.arena_push(created, 32, 1)
+  mem.arena_release(created)
+  created = nil
+  mem.arena_release(created)
+  return true
+}
 pub fn wide_index(index: u64) u8 { return backing[index] }
 pub fn fail() { #panic("test trap") }
 '''
@@ -82,7 +92,7 @@ const bytes = require('node:fs').readFileSync(process.argv[1]);
   assert.equal(e.layout(),448); assert.equal(e.arithmetic(-9,2),-4); assert.equal(e.big(99n),100n);
   assert.equal(e.abi(),1); assert.equal(e.heap_available(),1);
   const p=e.alloc(16)>>>0; assert.ok(p); new Uint32Array(e.memory.buffer,p,4).set([7,8,9,10]);
-  assert.equal(e.total(p,4),34); assert.equal(e.alloc(256),0); e.reset(); assert.equal(e.alloc(16)>>>0,p);
+  assert.equal(e.total(p,4),34); assert.equal(e.alloc(256),0); assert.ok(e.alloc(112)); assert.equal(e.alloc(1),0); e.reset(); assert.equal(e.alloc(16)>>>0,p);
   assert.equal(e.pool_test(),1);
   const another = await WebAssembly.instantiate(bytes,{env:{host_add:(a,b)=>a+b}});
   another.instance.exports.dyn_initialize();
@@ -98,6 +108,6 @@ const assert=require('node:assert/strict');
 ''', output])
     for bad in ['pub fn size() usize { return #sizeof([4294967296]u8) }', 'struct Huge { a: [2147483648]u8, b: [2147483648]u8 } pub fn size() usize { return #sizeof(Huge) }', 'pub fn bad() usize { return 4294967296 }', 'pub fn bad() isize { return #syscall(1) }', 'pub fn dyn_initialize() {}']:
         (module/'main.dyn').write_text(bad)
-        result=subprocess.run([DYN,'build',str(module),'--target','wasm32-browser','--shared','--output',str(work/'bad.wasm')],cwd=ROOT,capture_output=True,text=True)
+        result=subprocess.run([DYN,'build',str(module),'--target','wasm32-browser','--shared','--output',str(work/'bad.wasm')],cwd=ROOT,capture_output=True,text=True,timeout=120)
         assert result.returncode and 'error:' in result.stderr, result.stderr
 print('PASS browser Wasm: JS imports/exports, 32-bit layout, C ABI, initialization, arenas, traps, canvas (debug/release)')

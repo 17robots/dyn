@@ -35,14 +35,14 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
-  arena:mem.Arena
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   idle := thread.Thread{}
   if !thread.join(&idle).ok || thread.id(&idle) != 0 { #panic("empty join") }
   stack: [131072]u8 = []
-  mark:=mem.arena_mark(&arena)
-  rejected:=thread.spawn(&arena, stack[..0], worker, nil)
-  if rejected.ok || rejected.kind!=errors.Kind.InvalidInput || rejected.error!=0 || rejected.value!=nil || mem.arena_mark(&arena)!=mark { #panic("short stack") }
+  mark:=mem.arena_mark(arena)
+  rejected:=thread.spawn(arena, stack[..0], worker, nil)
+  if rejected.ok || rejected.kind!=errors.Kind.InvalidInput || rejected.error!=0 || rejected.value!=nil || mem.arena_mark(arena)!=mark { #panic("short stack") }
   address := net.ipv4(127, 0, 0, 1, 0)
   opened := net.tcp_listen_ipv4(&address, 4)
   if !opened.ok { #panic("listen") }
@@ -52,7 +52,7 @@ fn main() {
   if !net.local_address(shared.listener.descriptor, &local).ok || local.length != 16 { #panic("local address") }
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   if port == 0 { #panic("ephemeral port") }
-  spawned:=thread.spawn(&arena, stack[..], worker, #cast(rawptr, &shared))
+  spawned:=thread.spawn(arena, stack[..], worker, #cast(rawptr, &shared))
   if !spawned.ok || spawned.kind!=errors.Kind.None || spawned.error!=0 || spawned.value==nil { #panic("spawn") }
   active:=spawned.value
   if thread.id(active)==0 { #panic("active ownership") }

@@ -4,8 +4,8 @@ use "std/mem"
 const Limit: usize = 100000000
 
 fn main() {
-  arena := mem.Arena{}
-  composite := mem.push_array(bool, &arena, Limit + 1)
+  arena := mem.arena_create(0)
+  composite := mem.push_array(bool, arena, Limit + 1)
   count: usize = 0
   for i in 2..=Limit {
     if !composite[i] {
@@ -18,5 +18,5 @@ fn main() {
     }
   }
   _ = io.println(io.stdout(), "{}", count)
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }

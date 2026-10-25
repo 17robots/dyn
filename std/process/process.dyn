@@ -133,29 +133,28 @@ pub struct CaptureOptions { timeout_milliseconds: i64 = -1, output_limit: usize,
 // Reject inputs in the arena's unallocated tail before native setup can overwrite
 // them. Already allocated arena inputs stay stable throughout capture.
 fn capture_input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) bool {
-  pending := arena.data[mem.arena_mark(arena)..]
-  if bytes.overlaps(pending, path) || bytes.overlaps(pending, configuration.directory) {
+  if mem.arena_overlaps_unallocated(arena, path) || mem.arena_overlaps_unallocated(arena, configuration.directory) {
     return true
   }
   if #len(arguments) > 0 {
     slots := (#cast(*const u8, &arguments[0]))[..#len(arguments) * #sizeof([]const u8)]
-    if bytes.overlaps(pending, slots) {
+    if mem.arena_overlaps_unallocated(arena, slots) {
       return true
     }
   }
   if #len(configuration.environment) > 0 {
     slots := (#cast(*const u8, &configuration.environment[0]))[..#len(configuration.environment) * #sizeof([]const u8)]
-    if bytes.overlaps(pending, slots) {
+    if mem.arena_overlaps_unallocated(arena, slots) {
       return true
     }
   }
   for argument in arguments {
-    if bytes.overlaps(pending, argument) {
+    if mem.arena_overlaps_unallocated(arena, argument) {
       return true
     }
   }
   for entry in configuration.environment {
-    if bytes.overlaps(pending, entry) {
+    if mem.arena_overlaps_unallocated(arena, entry) {
       return true
     }
   }

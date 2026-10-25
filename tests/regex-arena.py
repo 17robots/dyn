@@ -25,13 +25,13 @@ for index, (pattern, text) in enumerate(cases):
     expected = 'false' if match is None else 'true'
     span = '' if match is None else f' && r.value.start == {match.start()} && r.value.end == {match.end()}'
     checks.append(f'''if true {{
-    p := regex.compile(&arena, {json.dumps(pattern)})
+    p := regex.compile(arena, {json.dumps(pattern)})
     require(p.ok, "compile {index}")
-    before := mem.arena_used(&arena)
+    before := mem.arena_used(arena)
     for repeat in 0..3 {{
       r := regex.find(p.value, {json.dumps(text)})
       require(r.ok && r.value.ok == {expected}{span}, "case {index}")
-      require(mem.arena_used(&arena) == before, "match allocated")
+      require(mem.arena_used(arena) == before, "match allocated")
     }}
   }}''')
 source = '''use "std/text/regex" regex
@@ -39,24 +39,24 @@ use "std/mem" mem
 use "std/errors" errors
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {
-  arena: mem.Arena
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   pattern: [3]u8 = ['a', '+', 'b']
-  first := regex.compile(&arena, pattern[..])
-  second := regex.compile(&arena, "b+")
+  first := regex.compile(arena, pattern[..])
+  second := regex.compile(arena, "b+")
   pattern[0] = 'z'
   require(first.ok && second.ok && regex.matches(first.value, "aaab") && regex.matches(second.value, "bbb"), "independent owned patterns")
   invalid_program: regex.Program
   invalid_match := regex.find(invalid_program, "a")
   require(!invalid_match.ok && invalid_match.kind == errors.Kind.InvalidState && invalid_match.error == 0, "zero program")
-  mark := mem.arena_used(&arena)
+  mark := mem.arena_used(arena)
 ''' + '\n'.join(
-    f'  bad{n} := regex.compile(&arena, {json.dumps(pattern)} )\n'
+    f'  bad{n} := regex.compile(arena, {json.dumps(pattern)} )\n'
     f'  require(!bad{n}.ok && bad{n}.kind == errors.Kind.InvalidInput && bad{n}.error == 0 && bad{n}.offset == {offset}, "invalid offset {n}")\n'
     for n, (pattern, offset) in enumerate([('(', 0), ('ab)', 2), ('ab[', 2), ('ab\\', 2), ('a**', 2), ('a{2,1}', 1), ('', 0), ('a{18446744073709551616}', 1), ('(' * 129 + 'a' + ')' * 129, 128)])
 ) + '''
-  require(mem.arena_used(&arena) == mark, "invalid allocated")
-  captured := regex.compile(&arena, "(a)b|(a)c")
+  require(mem.arena_used(arena) == mark, "invalid allocated")
+  captured := regex.compile(arena, "(a)b|(a)c")
   one := regex.find(captured.value, "ac")
   require(one.ok && !one.captures[0].ok && one.captures[1].ok && one.captures[1].end == 1, "captures")
   two := regex.find(captured.value, "zz")
@@ -64,20 +64,20 @@ fn main() {
   backing: [32768]u8
   for i in 0..#len(backing) { backing[i] = 255 }
   fixed := mem.arena_from_buffer(backing[..])
-  fixed_program := regex.compile(&fixed, "(a)*")
+  fixed_program := regex.compile(fixed, "(a)*")
   require(fixed_program.ok && regex.find(fixed_program.value, "aaa").captures[0].start == 2, "dirty backing zero initialization")
-  long_program := regex.compile(&arena, "^(a)*$")
-  long_text := mem.push_array(u8, &arena, 100000)
+  long_program := regex.compile(arena, "^(a)*$")
+  long_text := mem.push_array(u8, arena, 100000)
   for i in 0..#len(long_text) { long_text[i] = 'a' }
   long_result := regex.find(long_program.value, long_text)
   require(long_result.value.ok && long_result.value.end == 100000 && long_result.captures[0].start == 99999, "long Thompson repetition")
-  iter_program := regex.compile(&arena, "(a+)")
+  iter_program := regex.compile(arena, "(a+)")
   iter := regex.iterator(iter_program.value, "aa baa")
   x := regex.next(&iter)
   require(x.value.start == 0 && x.value.end == 2, "iterator first")
   y := regex.next(&iter)
   require(y.value.start == 4 && y.captures[0].start == 4, "iterator capture offset")
-  anchored := regex.compile(&arena, "^a")
+  anchored := regex.compile(arena, "^a")
   anchored_iter := regex.iterator(anchored.value, "aa")
   require(regex.next(&anchored_iter).value.ok && !regex.next(&anchored_iter).value.ok, "iterator absolute anchors")
 ''' + '\n'.join(checks) + '\n}\n'
@@ -91,9 +91,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-regex-arena-') as temporary:
     (small / 'main.dyn').write_text('''use "std/mem" mem
 use "std/text/regex" regex
 fn main() {
-  backing: [8]u8
-  arena := mem.arena_from_buffer(backing[..])
-  _ = regex.compile(&arena, "abc")
+  backing: [8+mem.ArenaBufferOverhead]u8
+  pad := (16-(#cast(usize,&backing[0])&15))&15
+  arena := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+8])
+  _ = regex.compile(arena, "abc")
 }
 ''')
     for mode in ('--debug', '--release'):
@@ -101,5 +102,5 @@ fn main() {
             output = work / 'out'
             subprocess.run([str(DYN), 'build', str(project), '--no-cache', '--quiet', '--output', str(output), mode], cwd=ROOT, check=True, timeout=120)
             result = subprocess.run([str(output)], capture_output=True, timeout=30)
-            assert (result.returncode == 0) == success, (mode, project.name, result.stdout, result.stderr)
+            assert (result.returncode == 0 if success else result.returncode == 101 and b'arena exhausted' in result.stderr), (mode, project.name, result.stdout, result.stderr)
 print(f'PASS regex arena ownership, invalid offsets, capacity panic, zero init, reuse, captures, iterator; {len(cases)} Python-re cases (debug/release)')

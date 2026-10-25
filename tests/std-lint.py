@@ -88,6 +88,22 @@ pub fn output_value(output: *u8) {}
 ''')
         self.assertEqual([line for line, _ in problems], [3, 4, 5])
 
+    def test_only_fixed_c_string_adapter_name_is_exempt(self):
+        source = 'pub fn string_into(destination: []u8, source: []const u8) StringResult {}\n'
+        self.assertEqual(self.check_source(source, 'std/c/c.dyn'), [])
+        for relative in ('std/c/raw.dyn', 'std/other/c.dyn', 'mystd/c/c.dyn',
+                         'std/c/nested/c.dyn', 'std/c/c.dyn.extra'):
+            with self.subTest(relative=relative):
+                self.assertEqual(len(self.check_source(source, relative)), 1)
+        for name in ('strings_into', 'string_other_into', 'wrapper_into'):
+            with self.subTest(name=name):
+                self.assertEqual(len(self.check_source(source.replace('string_into', name),
+                                                       'std/c/c.dyn')), 1)
+        # Exempting the fixed adapter name must not exempt its other diagnostics.
+        problems = self.check_source('pub fn string_into(out: *u8) {}\n', 'std/c/c.dyn')
+        self.assertEqual(len(problems), 1)
+        self.assertIn('out parameter', problems[0][1])
+
     def test_only_raw_abi_bindings_in_os_and_c_are_exempt(self):
         source = '''pub extern fn find_raw_into "native_symbol"(
  out: *u8, callback: fn(u8) bool

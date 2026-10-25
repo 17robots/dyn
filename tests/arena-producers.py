@@ -33,29 +33,29 @@ fn check(ok: bool, message: []const u8) {{
   }}
 }}
 fn main() {{
-  arena: mem.Arena
-  check(strings.equal(strings.join(&arena, strings.split(&arena, "a,b,c", ","), "+"), "a+b+c"), "join split")
-  check(strings.equal(strings.replace(&arena, "a-b-c", "-", "::"), "a::b::c"), "replace")
-  check(strings.equal(fmt.i64_decimal(&arena, -42), "-42") && strings.equal(fmt.u64_base(&arena, 255, 16, false), "ff"), "fmt")
-  digits: [3]u8 = []
+  arena := mem.arena_create(0)
+  check(strings.equal(strings.join(arena, strings.split(arena, "a,b,c", ","), "+"), "a+b+c"), "join split")
+  check(strings.equal(strings.replace(arena, "a-b-c", "-", "::"), "a::b::c"), "replace")
+  check(strings.equal(fmt.i64_decimal(arena, -42), "-42") && strings.equal(fmt.u64_base(arena, 255, 16, false), "ff"), "fmt")
+  digits: [3 + mem.ArenaBufferOverhead]u8 = []
   fixed := mem.arena_from_buffer(digits[..])
-  check(strings.equal(fmt.u64_decimal(&fixed, 123), "123") && mem.arena_used(&fixed) == 3, "fixed storage")
-  encoded := base64.encode(&arena, "hello")
+  check(strings.equal(fmt.u64_decimal(fixed, 123), "123") && mem.arena_used(fixed) == 3, "fixed storage")
+  encoded := base64.encode(arena, "hello")
   check(strings.equal(encoded, "aGVsbG8="), "base64 encode")
-  before := mem.arena_used(&arena)
-  check(!base64.decode(&arena, "a!==").ok && mem.arena_used(&arena) == before, "failed decode pushes nothing")
-  check(strings.equal(base64.decode(&arena, encoded).value, "hello"), "base64 decode")
-  doc := json.make_object(&arena)
-  _ = json.add_member(doc, "name", json.make_string(&arena, "boss"))
-  check(strings.equal(json.encode(&arena, doc), "{{\\"name\\":\\"boss\\"}}"), "json encode")
-  mark := mem.arena_used(&arena)
-  big := deflate.inflate(&arena, {literal(DEFLATED)})
+  before := mem.arena_used(arena)
+  check(!base64.decode(arena, "a!==").ok && mem.arena_used(arena) == before, "failed decode pushes nothing")
+  check(strings.equal(base64.decode(arena, encoded).value, "hello"), "base64 decode")
+  doc := json.make_object(arena)
+  _ = json.add_member(doc, "name", json.make_string(arena, "boss"))
+  check(strings.equal(json.encode(arena, doc), "{{\\"name\\":\\"boss\\"}}"), "json encode")
+  mark := mem.arena_used(arena)
+  big := deflate.inflate(arena, {literal(DEFLATED)})
   check(big.ok && #len(big.value) == {len(PAYLOAD)} && big.value[{len(PAYLOAD) - 1}] == {PAYLOAD[-1]}, "inflate grows")
-  check(mem.arena_used(&arena) == mark + {len(PAYLOAD)}, "retries leave only the output")
-  member := gzip.decompress(&arena, {literal(GZIPPED)})
+  check(mem.arena_used(arena) == mark + {len(PAYLOAD)}, "retries leave only the output")
+  member := gzip.decompress(arena, {literal(GZIPPED)})
   check(member.ok && #len(member.value) == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
-  check(!deflate.inflate(&arena, "\\xff\\xff").ok, "corrupt inflate")
-  joined := path.join(&arena, "a/b", "c")
+  check(!deflate.inflate(arena, "\\xff\\xff").ok, "corrupt inflate")
+  joined := path.join(arena, "a/b", "c")
   check(joined.ok && strings.equal(joined.value, "a/b/c"), "path join")
 }}
 '''
@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-producers-') as temporary:
         subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output),
                         *(['--release'] if release else [])], check=True, timeout=120)
         subprocess.run([str(output)], check=True, timeout=20)
-    source.write_text('use "std/mem" mem\nuse "std/encoding/json" json\nfn main() {\n  storage: [8]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  _ = json.write_string(&arena, "a long string that cannot fit")\n}\n')
+    source.write_text('use "std/mem" mem\nuse "std/encoding/json" json\nfn main() {\n  storage: [8 + mem.ArenaBufferOverhead]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  _ = json.write_string(arena, "a long string that cannot fit")\n}\n')
     subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output)], check=True, timeout=120)
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert result.returncode != 0 and 'arena exhausted' in result.stderr, result.stderr

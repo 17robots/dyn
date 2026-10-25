@@ -1,6 +1,6 @@
 #target(kernel: linux)
-// Address space a zero Arena reserves on its first push. Only touched pages cost memory.
-const ZeroArenaReserve: usize = 64 * GiB
+// Address space each arena block reserves by default. Only touched pages cost memory.
+const DefaultBlock: usize = 64 * GiB
 fn mapping_allocate(size: usize) Mapping {
   address := #syscall(9, 0, size, 3, 16418, -1, 0)
   if address < 0 {

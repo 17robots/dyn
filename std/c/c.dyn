@@ -67,7 +67,10 @@ pub fn succeeded(value: isize) bool {
   return value >= 0
 }
 
-fn string_into(destination: []u8, source: []const u8) StringResult {
+// Raw C-ABI scratch conversion. Borrows caller storage; writes source plus NUL.
+// Invalid input or insufficient capacity leaves storage unchanged. This bounded
+// adapter allocates nothing; use string_from_bytes for arena-owned strings.
+pub fn string_into(destination: []u8, source: []const u8) StringResult {
   if #len(source) == #cast(usize, -1) {
     return StringResult{ error: ErrorKind.Overflow }
   }

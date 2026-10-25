@@ -69,30 +69,46 @@ fn do_work(scratch: *mem.Arena) {
 
 fn main() {
   root := mem.arena_create(mem.MiB)
-  defer mem.arena_release(&root)
-  do_work(&root)
+  defer mem.arena_release(root)
+  do_work(root)
 }
 ```
 
-Arena pushes cannot fail: exhausting an arena panics, so choosing the budget is the only decision.
-A zero `mem.Arena{}` also works: its first push reserves address space, so a struct holding an
-arena field is ready to use without a constructor. Release it with `mem.arena_release` either way.
-Code with a strict budget on a fixed arena can use `arena_try_push`, which reports exhaustion
-instead. Never copy an arena after it has begun allocating. Reset, rewind, or release invalidates every affected pointer and slice.
+An arena is a `*mem.Arena`, with its header in its first backing block. Create it
+explicitly: `mem.arena_create(0)` chooses the target's default block size. Owned
+arenas add blocks when needed without moving earlier allocations. For a backing
+budget, use `mem.arena_create_bounded(block_size, limit)`; the limit includes every
+block's header. Ordinary pushes succeed or panic; `arena_try_push` reports
+exhaustion when caller code needs a recoverable result.
+
+A nil owner pointer is inactive, not a lazily allocating arena. Pass the pointer
+directly. Never copy or reconstruct a live header through `arena.*`; pointer
+handles do not enforce uncopiability. Reset invalidates all allocations and frees
+later blocks, retaining the first block. Rewind invalidates later allocations and
+frees blocks added after the mark. Release invalidates the arena pointer too:
+release an owner once, then discard or nil the pointer. Releasing nil is safe.
+
+Caller-buffer arenas never grow. The aligned header consumes `mem.ArenaHeader`
+bytes plus up to 15 initial alignment bytes, so provide payload size plus
+`mem.ArenaBufferOverhead` bytes to guarantee that payload capacity. A smaller
+buffer that cannot hold the header panics. After releasing a buffer arena,
+initialize its backing with `arena_from_buffer` again before reuse.
 
 For long-running programs, partition one root arena by lifetime:
 
 ```dyn
 root := mem.arena_create(mem.MiB)
-defer mem.arena_release(&root)
-permanent := mem.arena_sub(&root, 512 * mem.KiB)
-frame := mem.arena_sub(&root, 256 * mem.KiB)
-scratch := mem.arena_sub(&root, 256 * mem.KiB)
+defer mem.arena_release(root)
+permanent := mem.arena_sub(root, 512 * mem.KiB)
+frame := mem.arena_sub(root, 256 * mem.KiB)
+scratch := mem.arena_sub(root, 256 * mem.KiB)
 ```
 
 Store application state in `permanent`, reset `frame` once per loop/request, and rewind `scratch`
-inside temporary operations. A result returned from a scratch operation must be copied into storage
-that lives long enough.
+inside temporary operations. Each child capacity includes its own header, and the
+parent also reserves a header. These three child regions can therefore require a
+second parent block. A result returned from a scratch operation must be copied
+into storage that lives long enough.
 
 `mem.KiB`, `mem.MiB`, and `mem.GiB` express binary byte units, not recommended
 budgets. The capacities above are illustrative. Name application limits and measure
@@ -273,7 +289,7 @@ promoted types. Do not expose Dyn slices, strings, `any`, or payload enums as if
 - Prefer `[]const u8` and `*const T` when mutation is unnecessary.
 - Use lossless implicit conversions; make lossy intent visible with `#cast`.
 - Check expected failures; panic only when continuing would violate an invariant.
-- Make zero a useful value for every struct you define.
+- Make zero a useful empty or inactive value; initialize arena pointers before allocation.
 - Keep imported names qualified and publish only the module's intended API.
 - Use `_ = function()` when intentionally discarding a non-void result.
 - Compile with `dyn check DIR`; test debug and release builds.

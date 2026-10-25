@@ -24,7 +24,7 @@ fn custom(destination: io.Writer, value: []const u8) text.RenderResult {
   return text.RenderResult{ kind: errors.Kind.Unsupported, error: -73, detail: text.ErrorKind.OutOfMemory, offset: 97 }
 }
 fn main() {
-  storage: [4096]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(storage[..])
   pzero: text.ParseResult
   rzero: html.RenderResult
@@ -38,27 +38,28 @@ fn main() {
   check(html.render(writer, &empty, fields[..]).ok)
   for mode in 0..2 {
     // Validation and empty input need no storage, even in a full fixed arena.
-    tiny_storage: [1]u8 = []
+    tiny_storage: [1 + mem.ArenaBufferOverhead]u8 = []
     tiny := mem.arena_from_buffer(tiny_storage[..])
-    _ = mem.arena_push(&tiny, 1, 1)
-    tiny_mark := mem.arena_mark(&tiny)
+    tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader + 1])
+    _ = mem.arena_push(tiny, 1, 1)
+    tiny_mark := mem.arena_mark(tiny)
     tiny_result := text.ParseResult{}
-    if mode == 0 { tiny_result = text.parse(&tiny, "") } else { tiny_result = html.parse(&tiny, "") }
-    check(tiny_result.ok && #len(tiny_result.value.source) == 0 && mem.arena_mark(&tiny) == tiny_mark)
-    if mode == 0 { tiny_result = text.parse(&tiny, "ab{{ }}") } else { tiny_result = html.parse(&tiny, "ab{{ }}") }
-    check(!tiny_result.ok && tiny_result.kind == errors.Kind.InvalidInput && tiny_result.error == 0 && tiny_result.detail == text.ErrorKind.Syntax && tiny_result.offset == 2 && #len(tiny_result.value.source) == 0 && mem.arena_mark(&tiny) == tiny_mark)
-    mark := mem.arena_mark(&arena)
+    if mode == 0 { tiny_result = text.parse(tiny, "") } else { tiny_result = html.parse(tiny, "") }
+    check(tiny_result.ok && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
+    if mode == 0 { tiny_result = text.parse(tiny, "ab{{ }}") } else { tiny_result = html.parse(tiny, "ab{{ }}") }
+    check(!tiny_result.ok && tiny_result.kind == errors.Kind.InvalidInput && tiny_result.error == 0 && tiny_result.detail == text.ErrorKind.Syntax && tiny_result.offset == 2 && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
+    mark := mem.arena_mark(arena)
     parsed := text.ParseResult{}
-    if mode == 0 { parsed = text.parse(&arena, "") } else { parsed = html.parse(&arena, "") }
-    check(parsed.ok && #len(parsed.value.source) == 0 && parsed.kind == errors.Kind.None && parsed.error == 0 && parsed.detail == text.ErrorKind.None && parsed.offset == 0 && mem.arena_mark(&arena) == mark)
+    if mode == 0 { parsed = text.parse(arena, "") } else { parsed = html.parse(arena, "") }
+    check(parsed.ok && #len(parsed.value.source) == 0 && parsed.kind == errors.Kind.None && parsed.error == 0 && parsed.detail == text.ErrorKind.None && parsed.offset == 0 && mem.arena_mark(arena) == mark)
     invalid: [3][]const u8 = ["{{", "ab{{ }}", "a{{x!}}"]
     offsets: [3]usize = [0, 2, 1]
     for i in 0..3 {
-      if mode == 0 { parsed = text.parse(&arena, invalid[i]) } else { parsed = html.parse(&arena, invalid[i]) }
-      check(!parsed.ok && parsed.kind == errors.Kind.InvalidInput && parsed.error == 0 && parsed.detail == text.ErrorKind.Syntax && parsed.offset == offsets[i] && #len(parsed.value.source) == 0 && mem.arena_mark(&arena) == mark)
+      if mode == 0 { parsed = text.parse(arena, invalid[i]) } else { parsed = html.parse(arena, invalid[i]) }
+      check(!parsed.ok && parsed.kind == errors.Kind.InvalidInput && parsed.error == 0 && parsed.detail == text.ErrorKind.Syntax && parsed.offset == offsets[i] && #len(parsed.value.source) == 0 && mem.arena_mark(arena) == mark)
     }
     source: [10]u8 = ['<','b','>','{','{','x','}','}','!','!']
-    if mode == 0 { parsed = text.parse(&arena, source[..]) } else { parsed = html.parse(&arena, source[..]) }
+    if mode == 0 { parsed = text.parse(arena, source[..]) } else { parsed = html.parse(arena, source[..]) }
     check(parsed.ok && parsed.kind == errors.Kind.None && parsed.error == 0 && parsed.detail == text.ErrorKind.None && parsed.offset == 0)
     source[0] = '?'
     check(parsed.value.source[0] == '<') // parse owns an arena copy.
@@ -78,7 +79,7 @@ fn main() {
       if mode == 0 { rendered = text.render(failing, &field_only, fields[..]) } else { rendered = html.render(failing, &field_only, fields[..]) }
       check(!rendered.ok && rendered.kind == errors.Kind.Capacity && rendered.error == #cast(isize, code) && rendered.detail == text.ErrorKind.Io && rendered.offset == 0 && sink.calls == 1)
     }
-    mem.arena_rewind(&arena, mark)
+    mem.arena_rewind(arena, mark)
   }
   seam := text.Template{ source: "{{x}}tail" }
   unchanged := text.render_with(writer, &seam, fields[..], custom)
@@ -93,9 +94,10 @@ fn main() {
 PANIC_SOURCE = r'''use "std/PACKAGE/template" template
 use "std/mem" mem
 fn main() {
-  storage: [1]u8 = []
+  storage: [1 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  _ = template.parse(&arena, "ab")
+  arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
+  _ = template.parse(arena, "ab")
 }
 '''
 

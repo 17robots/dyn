@@ -42,8 +42,7 @@ pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms
   if timeout_ms <= 0 {
     return Result{ code: -1 }
   }
-  cstring_space1 := mem.arena_from_buffer(url_buffer)
-  encoded := c.string_from_bytes(&cstring_space1, url)
+  encoded := c.string_into(url_buffer, url)
   if !encoded.ok {
     return Result{ code: -1 }
   }

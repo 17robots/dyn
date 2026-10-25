@@ -58,7 +58,7 @@ static void options_contract(void) {
   cancellation("a", false);
   cancellation("#sizeof([1]*u8)+f([1,2],#typeof(a+b))", false);
   cancellation("fn f(){x:=1}", true);
-  cancellation("fn f(){ if foo(x){ return Point{x:1} } for i in 0..=3 { foo(i) } }", true);
+  cancellation("fn f(){ if foo(x){ return Point{x:1} }\n for i in 0..=3 { foo(i) } }", true);
   /* UTF-8 and escapes can skip exact 1024-byte offsets. */
   char large[16390];
   large[0] = '"';
@@ -169,7 +169,7 @@ int main(void) {
   exp_free(&tree);
   const char *metadata = "use \"a\" mod #link(\"c\") pub packed struct S{x:i32} distinct type T=i32 "
       "extern fn f \"c_f\"(...) fn(i32)u8 fn g(p:*const T,x:[]const T){"
-      "for *const v in x{v.* = 1} case p{_=>{}} foo($T,#bitcast(u64,p)) }";
+      "for *const v in x{v.* = 1}\n case p{_=>{}}\n foo($T,#bitcast(u64,p)) }";
   cancellation(metadata, true);
   assert(exp_parse_source(metadata, strlen(metadata), &tree));
   assert(tree.nodes[tree.root].parent == NONE);

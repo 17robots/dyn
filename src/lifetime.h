@@ -86,7 +86,7 @@ static void life_forget(Life *l);
 typedef enum { LIFE_NOT_OWNER, LIFE_ARENA_OWNER, LIFE_HANDLE_OWNER } LifeOwner;
 static LifeOwner life_owner(Life *l, DynType type) {
   static const struct { const char *module, *name; LifeOwner kind; } owners[] = {
-    {"mem/", "Arena", LIFE_ARENA_OWNER}, {"mem/", "GrowingArena", LIFE_ARENA_OWNER},
+    {"mem/", "Arena", LIFE_ARENA_OWNER},
     {"fs/", "File", LIFE_HANDLE_OWNER}, {"fs/watch/", "Watcher", LIFE_HANDLE_OWNER},
     {"process/", "Child", LIFE_HANDLE_OWNER}, {"thread/", "Thread", LIFE_HANDLE_OWNER},
     {"net/", "Listener", LIFE_HANDLE_OWNER}, {"net/", "Connection", LIFE_HANDLE_OWNER},
@@ -116,7 +116,8 @@ static void life_warn_copy(Life *l, DynAstStmt *statement) {
   if (!l->source->context.vet || statement->expression == DYN_NO_EXPR) return;
   if (statement->kind != DYN_STMT_LOCAL && statement->kind != DYN_STMT_ASSIGN) return;
   DynAstExpr *value = &l->a->expressions[statement->expression];
-  if (value->kind != DYN_EXPR_NAME && value->kind != DYN_EXPR_FIELD) return;
+  if (value->kind != DYN_EXPR_NAME && value->kind != DYN_EXPR_FIELD &&
+      !(value->kind == DYN_EXPR_UNARY && value->op == DYN_OP_DEREF)) return;
   LifeOwner owner = life_owner(l, value->type);
   if (owner == LIFE_NOT_OWNER) return;
   // Only assignment destinations copy a value; `_ = arena` does not create an owner.
@@ -171,15 +172,22 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
       else if(item.expired) v.expired=true;
     }
     if(e->kind==DYN_EXPR_CALL && e->item_count) {
-      LifeValue first=life_expr(l,a->items[e->item_start].expression,depth+1);
+      DynExprId first_id=a->items[e->item_start].expression;
+      LifeValue first=life_expr(l,first_id,depth+1);
+      /* An arena is named by the local that holds it: an Arena value passed
+         by address, or a *Arena handle passed directly. */
+      uint32_t arena=first.address;
+      if(!arena && first_id<a->expression_count && a->expressions[first_id].kind==DYN_EXPR_NAME &&
+         life_local(l,(uint32_t)a->expressions[first_id].integer))
+        arena=(uint32_t)a->expressions[first_id].integer+1;
       bool push=life_push_call(l,e);
       if(push) {
-        v.arena=first.address;v.stack=false;
-        LifeValue *backing=first.address ? life_local(l,first.address-1) : NULL;
+        v.arena=arena;v.stack=false;
+        LifeValue *backing=arena ? life_local(l,arena-1) : NULL;
         if(backing) v.stack=backing->stack;
       }
       if(life_mem_call(l,e,"arena_from_buffer")) v.stack=first.stack;
-      if(life_mem_call(l,e,"arena_reset") || life_zero_rewind(l,e)) life_invalidate(l,first.address);
+      if(life_mem_call(l,e,"arena_reset") || life_zero_rewind(l,e)) life_invalidate(l,arena);
       /* Unknown callees may mutate any address-exposed local or alias. */
       if (!push &&
           !life_mem_call(l,e,"arena_from_buffer") && !life_mem_call(l,e,"arena_reset") && !life_zero_rewind(l,e)) life_forget(l);

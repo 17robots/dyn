@@ -99,14 +99,14 @@ fn main() {
   out := io.stdout()
   backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
-  node := mem.push(Node, &arena)
-  nodes := mem.push_array(Node, &arena, 4)
+  node := mem.push(Node, arena)
+  nodes := mem.push_array(Node, arena, 4)
   nodes[3].value = 7
   node.value = 9
   mem.clear(node)
-  one := mem.push(i64, &arena)
-  many := mem.push_array(u16, &arena, 3)
-  bytes := mem.push_bytes_uninit(&arena, 8)
+  one := mem.push(i64, arena)
+  many := mem.push_array(u16, arena, 3)
+  bytes := mem.push_bytes_uninit(arena, 8)
   mem.fill(bytes, 5)
   _ = io.println(out, "{} {} {} {} {}", node.value, nodes[3].value, one.*, many[2], bytes[7])
   xs: [4]i32 = [1, 2, 3, 4]
@@ -127,7 +127,7 @@ fn main() {
 '''
 STD_EXPECTED = '0 7 0 0 5\n3 1 false 0\n3 4 10 4 200\n-20 19 5 27 true'
 STD_ERRORS = {
-    'use of storage after arena_reset': '  b: [64]u8\n  a := mem.arena_from_buffer(b[..])\n  n := mem.push(Node, &a)\n  mem.arena_reset(&a)\n  _ = n.value',
+    'use of storage after arena_reset': '  b: [64]u8\n  a := mem.arena_from_buffer(b[..])\n  n := mem.push(Node, a)\n  mem.arena_reset(a)\n  _ = n.value',
     'in instance min(Node) required here': '  _ = math.min(Node{}, Node{})',
 }
 

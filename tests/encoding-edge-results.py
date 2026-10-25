@@ -27,60 +27,61 @@ use "std/errors" errors
 use "std/mem" mem
 use "std/bytes" bytes
 fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
-  backing: [4096]u8 = []
+  backing: [4096 + mem.ArenaBufferOverhead]u8 = []
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
-  _ = mem.push_bytes_uninit(&a, 7)
+  prefix := mem.push_bytes_uninit(a, 7)
   a.poison_on_rewind = true
-  x: h.Decoded = h.decode(&a, hx)
-  y: b.Decoded = b.decode(&a, b64)
-  z := h.decode(&a, upper)
+  x: h.Decoded = h.decode(a, hx)
+  y: b.Decoded = b.decode(a, b64)
+  z := h.decode(a, upper)
   if !x.ok || !y.ok || !z.ok || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
   if x.kind != errors.Kind.None || y.kind != errors.Kind.None || z.kind != errors.Kind.None ||
      x.error != 0 || y.error != 0 || z.error != 0 || x.offset != 0 || y.offset != 0 || z.offset != 0 ||
      x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || z.detail != codec.ErrorKind.None { #panic("success diagnostics") }
-  if mem.arena_mark(&a) != 7 + 3 * #len(raw) { #panic("exact decode allocation") }
-  if !bytes.equal(h.encode(&a, raw, false), hx) || !bytes.equal(h.encode(&a, raw, true), upper) || !bytes.equal(b.encode(&a, raw), b64) { #panic("encode oracle") }
-  for c in backing[..7] { if c != 99 { #panic("success changed prefix") } }
+  if mem.arena_mark(a) != mem.arena_start(a) + 7 + 3 * #len(raw) { #panic("exact decode allocation") }
+  if !bytes.equal(h.encode(a, raw, false), hx) || !bytes.equal(h.encode(a, raw, true), upper) || !bytes.equal(b.encode(a, raw), b64) { #panic("encode oracle") }
+  for c in prefix { if c != 99 { #panic("success changed prefix") } }
 }
 fn bad(input: []const u8, off: usize, hex: bool) {
-  backing: [128]u8 = []
+  backing: [128 + mem.ArenaBufferOverhead]u8 = []
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
-  _ = mem.push_bytes_uninit(&a, 7)
+  prefix := mem.push_bytes_uninit(a, 7)
   a.poison_on_rewind = true
   if hex {
-    r := h.decode(&a, input)
+    r := h.decode(a, input)
     if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != off || r.detail != codec.ErrorKind.InvalidInput { #panic("hex invalid diagnostics") }
   } else {
-    r := b.decode(&a, input)
+    r := b.decode(a, input)
     if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != off || r.detail != codec.ErrorKind.InvalidInput { #panic("base64 invalid diagnostics") }
   }
-  if mem.arena_mark(&a) != 7 { #panic("invalid rollback") }
-  for c in backing { if c != 99 { #panic("invalid touched dirty arena") } }
+  if mem.arena_mark(a) != mem.arena_start(a) + 7 { #panic("invalid rollback") }
+  for c in a.data[mem.ArenaHeader..] { if c != 99 { #panic("invalid touched dirty arena") } }
 }
 fn overlap(hex: bool, invalid: bool, start: usize) {
-  backing: [32]u8 = []
+  backing: [32 + mem.ArenaBufferOverhead]u8 = []
   snapshot: [32]u8 = []
   mem.fill(backing[..], 99)
   input := "AAAA"
   if hex { input = "6162" }
   if invalid { input = "!!!!" }
-  _ = mem.copy(backing[start..], input)
-  _ = mem.copy(snapshot[..], backing[..])
   a := mem.arena_from_buffer(backing[..])
-  _ = mem.push_bytes_uninit(&a, 4)
+  payload := a.data[mem.ArenaHeader..mem.ArenaHeader + 32]
+  _ = mem.copy(payload[start..], input)
+  _ = mem.copy(snapshot[..], payload)
+  _ = mem.push_bytes_uninit(a, 4)
   a.poison_on_rewind = true
   detail := codec.ErrorKind.Overlap
   if invalid { detail = codec.ErrorKind.InvalidInput }
   if hex {
-    r := h.decode(&a, backing[start..start + 4])
+    r := h.decode(a, payload[start..start + 4])
     if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != 0 || r.detail != detail { #panic("hex overlap preflight") }
   } else {
-    r := b.decode(&a, backing[start..start + 4])
+    r := b.decode(a, payload[start..start + 4])
     if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != 0 || r.detail != detail { #panic("base64 overlap preflight") }
   }
-  if mem.arena_mark(&a) != 4 || !bytes.equal(backing[..], snapshot[..]) { #panic("overlap changed source or arena") }
+  if mem.arena_mark(a) != mem.arena_start(a) + 4 || !bytes.equal(payload, snapshot[..]) { #panic("overlap changed source or arena") }
 }
 fn main() {
   z := b.Decoded{}
@@ -143,19 +144,20 @@ def source():
   }
 }
 // Malformed input is validated even when no output storage remains.
-empty_backing: [0]u8 = []
+empty_backing: [mem.ArenaBufferOverhead]u8 = []
 a := mem.arena_from_buffer(empty_backing[..])
-x := b.decode(&a, "AAAA!!!!")
-y := h.decode(&a, "6162!!")
+a = mem.arena_from_buffer(a.data[..mem.ArenaHeader])
+x := b.decode(a, "AAAA!!!!")
+y := h.decode(a, "6162!!")
 if x.ok || y.ok || x.offset != 4 || y.offset != 4 || x.error != 0 || y.error != 0 ||
    x.kind != errors.Kind.InvalidInput || y.kind != errors.Kind.InvalidInput ||
    x.detail != codec.ErrorKind.InvalidInput || y.detail != codec.ErrorKind.InvalidInput ||
-   #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(&a) != 0 { #panic("validation before exhaustion") }
-x = b.decode(&a, "")
-y = h.decode(&a, "")
+   #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(a) != mem.arena_start(a) { #panic("validation before exhaustion") }
+x = b.decode(a, "")
+y = h.decode(a, "")
 if !x.ok || !y.ok || #len(x.value) != 0 || #len(y.value) != 0 || x.error != 0 || y.error != 0 ||
    x.kind != errors.Kind.None || y.kind != errors.Kind.None || x.offset != 0 || y.offset != 0 ||
-   x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || mem.arena_mark(&a) != 0 { #panic("empty at capacity") }
+   x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || mem.arena_mark(a) != mem.arena_start(a) { #panic("empty at capacity") }
 }
 '''
     return program, len(cases)
@@ -179,9 +181,10 @@ def main():
                 (work / 'main.dyn').write_text(f'''use "std/mem" mem
 use "std/encoding/{module}" codec
 fn main() {{
-  backing: [1]u8 = []
+  backing: [mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  _ = codec.decode(&arena, "{encoded}")
+  arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader])
+  _ = codec.decode(arena, "{encoded}")
 }}
 ''')
                 build(work, mode)
@@ -189,13 +192,14 @@ fn main() {{
                 assert result.returncode != 0, (module, mode, 'exhaustion returned')
                 assert b'arena exhausted' in result.stderr, (module, mode, result.stderr)
                 print(f'PASS {module} exhaustion panic {mode}', flush=True)
-                arguments = '&arena, backing[..1], false' if module == 'hex' else '&arena, backing[..1]'
+                arguments = 'arena, input, false' if module == 'hex' else 'arena, input'
                 (work / 'main.dyn').write_text(f'''use "std/mem" mem
 use "std/encoding/{module}" codec
 fn main() {{
-  backing: [32]u8 = []
-backing[0] = 'a'
+  backing: [32 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(backing[..])
+  input := arena.data[mem.ArenaHeader..mem.ArenaHeader+1]
+  input[0] = 'a'
   _ = codec.encode({arguments})
 }}
 ''')

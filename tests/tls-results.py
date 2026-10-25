@@ -9,6 +9,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
+WORKSPACE_TESTS = Path(os.environ.get('DYN_WORKSPACE_TESTS', ROOT / 'tests/fixtures')).resolve()
 CC = shlex.split(os.environ.get('CC', 'cc'))
 
 # Construct a real certificate independently of Dyn's TLS provider. Repeated OUs
@@ -69,17 +70,17 @@ fn main() {
   backing: [16384]u8
   mem.fill(backing[..], 165)
   arena := mem.arena_from_buffer(backing[..])
-  prefix := mem.push_bytes_uninit(&arena, 7)
-  mark := mem.arena_mark(&arena)
-  invalid := tls.client_connection_create(&arena, nil, -1, "host")
+  prefix := mem.push_bytes_uninit(arena, 7)
+  mark := mem.arena_mark(arena)
+  invalid := tls.client_connection_create(arena, nil, -1, "host")
   check(!invalid.ok && invalid.value == nil && invalid.kind == errors.Kind.InvalidInput && invalid.detail == tls.ErrorKind.InvalidArgument && invalid.error == 0 && invalid.provider_code == 0)
-  config := tls.server_config_create(&arena, "/dyn/no-certificate.pem", "/dyn/no-key.pem")
+  config := tls.server_config_create(arena, "/dyn/no-certificate.pem", "/dyn/no-key.pem")
   check(!config.ok && config.value == nil && config.kind == errors.Kind.System && config.detail == tls.ErrorKind.Provider && config.error == 0 && config.provider_code != 0)
   bad := tls.handshake(nil)
   check(!bad.ok && bad.kind == errors.Kind.InvalidInput && bad.detail == tls.ErrorKind.InvalidArgument && bad.count == 0 && bad.error == 0 && bad.provider_code == 0 && bad.provider_status == 0)
   check(!tls.server_handshake(nil).ok && !tls.shutdown(nil).ok && !tls.set_alpn_protocols(nil, "\x02h2").ok)
-  missing := tls.certificate_subject(&arena, nil)
-  check(!missing.ok && missing.kind == errors.Kind.InvalidInput && missing.error == 0 && missing.provider_code == 0 && #len(missing.value) == 0 && mem.arena_mark(&arena) == mark)
+  missing := tls.certificate_subject(arena, nil)
+  check(!missing.ok && missing.kind == errors.Kind.InvalidInput && missing.error == 0 && missing.provider_code == 0 && #len(missing.value) == 0 && mem.arena_mark(arena) == mark)
   for byte in prefix { check(byte == 165) }
   pem: []const u8 = PEM
   bio := bio_new(&pem[0], #cast(i32, #len(pem)))
@@ -87,14 +88,14 @@ fn main() {
   cert := read_cert(bio, nil, nil, nil)
   _ = bio_free(bio)
   check(cert != nil)
-  subject := tls.certificate_subject(&arena, cert)
+  subject := tls.certificate_subject(arena, cert)
   check(subject.ok && subject.kind == errors.Kind.None && subject.error == 0 && subject.provider_code == 0 && #len(subject.value) > 1023 && mem.equal(subject.value, ORACLE))
-  check(mem.arena_mark(&arena) == mark + #len(subject.value))
+  check(mem.arena_mark(arena) == mark + #len(subject.value))
   tls.certificate_release(&cert)
   tls.certificate_release(&cert)
   check(cert == nil && mem.equal(subject.value, ORACLE))
   for byte in prefix { check(byte == 165) }
-  for i in mem.arena_used(&arena)..16384 { check(backing[i] == 165) }
+  for byte in arena.data[mem.arena_mark(arena)..] { check(byte == 165) }
 }
 '''
 
@@ -102,10 +103,11 @@ fn main() {
 # results. This keeps all type declarations and unused API signatures exact.
 MOCK = COMMON.replace('"std/net/tls"', '"tls"') + r'''
 fn main() {
-  storage: [32]u8
-  mem.fill(storage[..], 165)
-  arena := mem.arena_from_buffer(storage[..])
-  _ = mem.push_bytes_uninit(&arena, 7)
+  backing: [mem.ArenaBufferOverhead+32]u8
+  mem.fill(backing[..], 165)
+  arena := mem.arena_from_buffer(backing[..])
+  storage := arena.data[mem.ArenaHeader..mem.ArenaHeader+32]
+  _ = mem.push_bytes_uninit(arena, 7)
   for mode in 1..5 {
     conn := #cast(rawptr, mode)
     r := tls.handshake(conn)
@@ -127,8 +129,8 @@ fn main() {
   check(alpn.ok && alpn.kind == errors.Kind.None && alpn.detail == tls.ErrorKind.None && alpn.error == 0 && alpn.provider_code == 0)
   pending := tls.shutdown(#cast(rawptr, 1))
   check(!pending.ok && pending.kind == errors.Kind.WouldBlock && pending.detail == tls.ErrorKind.WantRead && pending.error == 0 && pending.provider_status == 0)
-  failed := tls.certificate_subject(&arena, #cast(rawptr, 1))
-  check(!failed.ok && failed.kind == errors.Kind.System && failed.error == 0 && failed.provider_code == 18446744073709551615 && #len(failed.value) == 0 && mem.arena_used(&arena) == 7)
+  failed := tls.certificate_subject(arena, #cast(rawptr, 1))
+  check(!failed.ok && failed.kind == errors.Kind.System && failed.error == 0 && failed.provider_code == 18446744073709551615 && #len(failed.value) == 0 && mem.arena_used(arena) == 7)
   for byte in storage { check(byte == 165) }
 }
 '''
@@ -156,7 +158,7 @@ def run(path, release, panic=False):
                    env=dict(os.environ, DYN_SDK=str(ROOT)), check=True, timeout=90)
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15)
     if panic:
-        assert result.returncode != 0 and 'arena exhausted' in result.stderr, result
+        assert result.returncode == 101 and 'arena exhausted or alignment invalid' in result.stderr, result
     else:
         assert result.returncode == 0, (path.name, result.stdout, result.stderr)
 
@@ -194,18 +196,19 @@ with tempfile.TemporaryDirectory(prefix='dyn-tls-results-') as temporary:
     for sibling in (ROOT / 'vendor/openssl/tls').glob('*.dyn'):
         if sibling.name != 'tls.dyn':
             (mock / 'stub' / sibling.name).write_text(sibling.read_text())
-    sdk = project(root, 'sdk', (ROOT.parent / 'tests/sdk-tls-native/main.dyn').read_text())
+    sdk = project(root, 'sdk', (WORKSPACE_TESTS / 'sdk-tls-native/main.dyn').read_text())
     # The real certificate also exercises arena exhaustion after provider allocation.
     exhausted = project(root, 'exhausted', real_source[:real_source.index('fn main()')] + '''fn main() {
-  backing: [1]u8
-  arena := mem.arena_from_buffer(backing[..])
+  backing: [mem.ArenaBufferOverhead]u8
+  skip := (16-(#cast(usize,&backing[0]) & 15)) & 15
+  arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader])
   pem: []const u8 = ''' + json.dumps(pem.read_text()) + '''
   bio := bio_new(&pem[0], #cast(i32, #len(pem)))
   check(bio != nil)
   cert := read_cert(bio, nil, nil, nil)
   _ = bio_free(bio)
   check(cert != nil)
-  _ = tls.certificate_subject(&arena, cert)
+  _ = tls.certificate_subject(arena, cert)
 }
 ''')
     for release in (False, True):

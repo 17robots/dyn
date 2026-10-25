@@ -17,7 +17,7 @@ static void *ast_test_calloc(size_t count, size_t size) {
 }
 
 int main(void) {
-  char text[] = "fn main() { case 1 { 1 => {}, _ => {}, } }\n";
+  char text[] = "fn main() { case 1 { 1 => {} _ => {} } }\n";
   DynSource source = {.path = "test.dyn", .text = text, .length = strlen(text)};
   for (unsigned test = 0; test < 2; ++test) {
     DynAstProgram ast = {0};

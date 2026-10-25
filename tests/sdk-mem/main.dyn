@@ -8,10 +8,10 @@ fn main() {
   backing: [512]u8 = []
   arena := memory.arena_from_buffer(backing[..])
 
-  if memory.arena_try_push(&arena, 1, 3).error != memory.ErrorKind.InvalidAlignment { #panic("arena invalid alignment detail") }
-  empty_child := memory.arena_sub(&arena, 0)
-  if memory.arena_capacity(&empty_child) != 0 { #panic("zero-capacity subarena succeeds") }
-  first := memory.arena_try_push(&arena, 13, 8)
+  if memory.arena_try_push(arena, 1, 3).error != memory.ErrorKind.InvalidAlignment { #panic("arena invalid alignment detail") }
+  empty_child := memory.arena_sub(arena, 0)
+  if memory.arena_capacity(empty_child) != 0 { #panic("zero-capacity subarena succeeds") }
+  first := memory.arena_try_push(arena, 13, 8)
   if !first.ok || first.size != 13 { #panic("arena allocation failed") }
   if (#cast(usize, first.memory) & 7) != 0 { #panic("arena alignment failed") }
   first_bytes := first.memory[..first.size]
@@ -22,34 +22,34 @@ fn main() {
     i += 1
   }
 
-  mark := memory.arena_mark(&arena)
-  _ = memory.arena_push(&arena, 32, 16)
-  memory.arena_rewind(&arena, mark)
-  if memory.arena_used(&arena) != mark { #panic("arena rewind failed") }
+  mark := memory.arena_mark(arena)
+  _ = memory.arena_push(arena, 32, 16)
+  memory.arena_rewind(arena, mark)
+  if memory.arena_used(arena) != mark { #panic("arena rewind failed") }
 
-  child := memory.arena_sub(&arena, 64)
-  if memory.arena_capacity(&child) != 64 { #panic("sub-arena capacity failed") }
-  _ = memory.arena_push(&child, 64, 1)
-  if memory.arena_remaining(&child) != 0 { #panic("sub-arena allocation failed") }
+  child := memory.arena_sub(arena, 64)
+  if memory.arena_capacity(child) != 64 { #panic("sub-arena capacity failed") }
+  _ = memory.arena_push(child, 64, 1)
+  if memory.arena_remaining(child) != 0 { #panic("sub-arena allocation failed") }
 
   first_scratch_storage: [64]u8 = []
   second_scratch_storage: [64]u8 = []
   first_scratch := memory.arena_from_buffer(first_scratch_storage[..])
   second_scratch := memory.arena_from_buffer(second_scratch_storage[..])
-  scratch := memory.scratch_begin(&first_scratch, &second_scratch, &first_scratch)
-  if scratch.arena != &second_scratch { #panic("scratch conflict selection failed") }
+  scratch := memory.scratch_begin(first_scratch, second_scratch, first_scratch)
+  if scratch.arena != second_scratch { #panic("scratch conflict selection failed") }
   _ = memory.arena_push(scratch.arena, 24, 8)
   memory.scratch_end(&scratch)
-  if memory.arena_used(&second_scratch) != 0 { #panic("scratch cleanup failed") }
+  if memory.arena_used(second_scratch) != 0 { #panic("scratch cleanup failed") }
 
-  fallback_scratch := memory.scratch_begin(nil, &second_scratch, &first_scratch)
-  if fallback_scratch.arena != &second_scratch { #panic("scratch nil first candidate") }
+  fallback_scratch := memory.scratch_begin(nil, second_scratch, first_scratch)
+  if fallback_scratch.arena != second_scratch { #panic("scratch nil first candidate") }
   memory.scratch_end(&fallback_scratch)
 
   // Fixed-buffer reuse through an intrusive free list.
   list_arena_storage: [256]u8 = []
   list_arena := memory.arena_from_buffer(list_arena_storage[..])
-  slots := memory.push_array(Slot, &list_arena, 4)
+  slots := memory.push_array(Slot, list_arena, 4)
   first_free: *Slot
   for *slot in slots { list.free_push(&first_free, slot) }
   taken: [4]*Slot = []
@@ -58,6 +58,6 @@ fn main() {
   list.free_push(&first_free, taken[2])
   if list.free_pop(&first_free, &nil_slot) != taken[2] { #panic("free-list reuse failed") }
 
-  memory.arena_reset(&arena)
-  if memory.arena_used(&arena) != 0 { #panic("arena reset failed") }
+  memory.arena_reset(arena)
+  if memory.arena_used(arena) != 0 { #panic("arena reset failed") }
 }

@@ -50,14 +50,18 @@ cases = {
       rect := raw.stbrp_rect{ id: 0, w: 2, h: 2 }
       raw.stbrp_init_target(&context, 8, 8, &nodes[0], 8)
       if raw.stbrp_pack_rects(&context, &rect, 1) != 1 || rect.was_packed == 0 { #panic("pack") }''',
-    'stb_image_resize': '''input: [4]u8 = [33, 33, 33, 33] output: [16]u8 = []
+    'stb_image_resize': '''input: [4]u8 = [33, 33, 33, 33]
+      output: [16]u8 = []
       if raw.stbir_resize_uint8_linear(&input[0], 2, 2, 0, &output[0], 4, 4, 0, raw.STBIR_1CHANNEL) == nil { #panic("resize") }
       if output[0] != 33 || output[15] != 33 { #panic("pixels") }
-      storage: [131072]u8 = [] arena := mem.arena_from_buffer(storage[..])
-      if !image.resize(&arena, input[..], 2, 2, output[..], 4, 4, 1, false) || mem.arena_mark(&arena) != 0 { #panic("arena wrapper coexistence") }
+      storage: [131072]u8 = []
+      arena := mem.arena_from_buffer(storage[..])
+      if !image.resize(arena, input[..], 2, 2, output[..], 4, 4, 1, false) || mem.arena_mark(arena) != mem.arena_start(arena) { #panic("arena wrapper coexistence") }
       if output[0] != 33 || output[15] != 33 { #panic("arena pixels") }
-      tiny: [1]u8 = [] exhausted := mem.arena_from_buffer(tiny[..])
-      if image.resize(&exhausted, input[..], 2, 2, output[..], 4, 4, 1, false) { #panic("arena allocator replaced") }''',
+      tiny: [1 + mem.ArenaBufferOverhead]u8 = []
+      pad := (16-(#cast(usize,&tiny[0])&15))&15
+      exhausted := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
+      if image.resize(exhausted, input[..], 2, 2, output[..], 4, 4, 1, false) { #panic("arena allocator replaced") }''',
     'vulkan': '''library := dynlib.open("libvulkan.so.1", dynlib.Now) if !library.ok { #panic("loader") }
       symbol := dynlib.symbol(library.value, "vkEnumerateInstanceVersion") if !symbol.ok { #panic("procedure") }
       version: u32 = 0

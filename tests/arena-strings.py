@@ -48,13 +48,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-strings-') as temporary:
     project = Path(temporary)
     (project / 'main.dyn').write_text(SOURCE)
     # Misuse and exhaustion panic instead of returning a result.
-    for name, body in (('template', 'strings.format(&arena, "{} {}", 1)'),
-                       ('separator', 'strings.split(&arena, "a,b", "")'),
-                       ('exhausted', 'strings.format(&arena, "{}", "too long for eight")')):
+    for name, body in (('template', 'strings.format(arena, "{} {}", 1)'),
+                       ('separator', 'strings.split(arena, "a,b", "")'),
+                       ('exhausted', 'strings.format(arena, "{}", "too long for eight")')):
         panic = project / name
         panic.mkdir()
         (panic / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\n\nfn main() {\n'
-                                        '  storage: [8]u8\n  arena := mem.arena_from_buffer(storage[..])\n'
+                                        '  storage: [8 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n'
                                         f'  _ = {body}\n}}\n')
         subprocess.run([DYN, 'build', str(panic), '--no-cache', '--quiet', '--output', str(panic / 'out')],
                        cwd=ROOT, check=True, timeout=120)

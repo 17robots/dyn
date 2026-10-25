@@ -30,8 +30,8 @@ checks = []
 deep = b'[' * 257 + b'"plain"' + b']' * 257
 checks.append(f'''  if true {{
     data: [{len(deep)}]u8 = {literal(deep)}
-    result := json.parse(&arena, data[..])
-    require(!result.ok && result.detail == json.ErrorKind.Syntax && mem.arena_mark(&arena) == 0, "depth rollback")
+    result := json.parse(arena, data[..])
+    require(!result.ok && result.detail == json.ErrorKind.Syntax && mem.arena_mark(arena) == mem.arena_start(arena), "depth rollback")
   }}''')
 for n, (raw, expected) in enumerate(valid):
     # Both object keys and values must survive mutation of all source bytes.
@@ -39,30 +39,30 @@ for n, (raw, expected) in enumerate(valid):
     checks.append(f'''  if true {{
     data: [{len(doc)}]u8 = {literal(doc)}
     expected: [{len(expected)}]u8 = {literal(expected)}
-    result := json.parse(&arena, data[..])
+    result := json.parse(arena, data[..])
     require(result.ok, "valid {n}")
     member := result.root.first
     for i in 0..#len(data) {{ data[i] = 255 }}
     require(mem.equal(member.key, expected[..]) && mem.equal(member.text, expected[..]), "owned key/value {n}")
-    mem.arena_reset(&arena)
+    mem.arena_reset(arena)
   }}''')
 for n, raw in enumerate(invalid):
     checks.append(f'''  if true {{
     data: [{len(raw)}]u8 = {literal(raw)}
-    mark := mem.arena_mark(&arena)
-    result := json.parse(&arena, data[..])
+    mark := mem.arena_mark(arena)
+    result := json.parse(arena, data[..])
     require(!result.ok && result.offset == 1 && result.detail == json.ErrorKind.Syntax && json.is_missing(result.root), "invalid {n}")
-    require(mem.arena_mark(&arena) == mark, "rollback {n}")
+    require(mem.arena_mark(arena) == mark, "rollback {n}")
   }}''')
 source = '''use "std/encoding/json" json
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {
-  arena: mem.Arena
-  defer mem.arena_release(&arena)
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
 ''' + '\n'.join(checks) + '''
-  trailing := json.parse(&arena, "\\\"abc\\\" x")
-  require(!trailing.ok && trailing.offset == 6 && trailing.detail == json.ErrorKind.TrailingData && mem.arena_mark(&arena) == 0, "trailing rollback")
+  trailing := json.parse(arena, "\\\"abc\\\" x")
+  require(!trailing.ok && trailing.offset == 6 && trailing.detail == json.ErrorKind.TrailingData && mem.arena_mark(arena) == mem.arena_start(arena), "trailing rollback")
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-json-string-') as directory:
@@ -72,19 +72,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-json-string-') as directory:
     (project / 'main.dyn').write_text(source)
     capacity = work / 'capacity'
     capacity.mkdir()
-    (capacity / 'main.dyn').write_text('''use "std/encoding/json" json
-use "std/mem" mem
-fn main() {
-  backing: [2]u8
-  arena := mem.arena_from_buffer(backing[..])
-  _ = json.parse(&arena, "\\\"plain\\\"")
-}
-''')
+    (capacity / 'main.dyn').write_text('use "std/encoding/json" json\nuse "std/mem" mem\nfn main() {\n  backing: [2+mem.ArenaBufferOverhead]u8\n  pad := (16-(#cast(usize,&backing[0])&15))&15\n  arena := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+2])\n  _ = json.parse(arena, "\\"plain\\"")\n}\n')
     for mode in ('--debug', '--release'):
         output = work / 'out'
         subprocess.run([str(DYN), 'build', str(project), '--no-cache', '--quiet', '--output', str(output), mode], cwd=ROOT, check=True, timeout=120)
         subprocess.run([str(output)], check=True, timeout=30)
         subprocess.run([str(DYN), 'build', str(capacity), '--no-cache', '--quiet', '--output', str(output), mode], cwd=ROOT, check=True, timeout=120)
         result = subprocess.run([str(output)], capture_output=True, timeout=30)
-        assert result.returncode != 0, (mode, 'fixed arena must panic')
+        assert result.returncode == 101 and b'arena exhausted' in result.stderr, (mode, 'fixed arena must panic')
 print(f'PASS JSON owned keys/strings, UTF-8, escapes, surrogates, controls, error offsets and rollback: {len(valid)} valid/{len(invalid)} invalid (debug/release)')

@@ -2,7 +2,7 @@
 
 use "std/sync"
 
-pub struct Thread { tid: sync.AtomicU32, stack_owner: mem.Arena }
+pub struct Thread { tid: sync.AtomicU32, stack_owner: *mem.Arena }
 
 extern fn spawn_raw "dyn_thread_spawn"(
   stack: *u8,
@@ -42,10 +42,12 @@ pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, 
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
-  thread.stack_owner = mem.arena_create(size)
-  value := spawn_raw(&thread.stack_owner.data[0], size, entry, context, &thread.tid)
+  // The stack follows the arena header in its own mapping.
+  thread.stack_owner = mem.arena_create(size + 256)
+  stack := mem.arena_push_uninit(thread.stack_owner, size, 16)
+  value := spawn_raw(stack, size, entry, context, &thread.tid)
   if value < 0 {
-    mem.arena_release(&thread.stack_owner)
+    mem.arena_release(thread.stack_owner)
     mem.arena_rewind(arena, mark)
     return SpawnResult{ kind: errors.linux(value), error: value }
   }
@@ -60,7 +62,8 @@ pub fn join(thread: *Thread) Result {
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
-      mem.arena_release(&thread.stack_owner)
+      mem.arena_release(thread.stack_owner)
+      thread.stack_owner = nil
       return Result{ ok: true }
     }
     result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)

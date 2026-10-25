@@ -30,12 +30,12 @@ fn main() {
   bytes: [2]u8 = []
   text := builder.from_buffer(bytes[..])
   _ = builder.append(&text, "abc")
-  arena: mem.Arena
-  check(text.error == builder.ErrorKind.Capacity && builder.append_grow(&text, &arena, "x") == builder.ErrorKind.Capacity, "builder keeps the first failure")
+  arena := mem.arena_create(0)
+  check(text.error == builder.ErrorKind.Capacity && builder.append_grow(&text, arena, "x") == builder.ErrorKind.Capacity, "builder keeps the first failure")
   builder.clear(&text)
-  check(text.error == builder.ErrorKind.None && builder.append_grow(&text, &arena, "grown") == builder.ErrorKind.None, "builder clear")
+  check(text.error == builder.ErrorKind.None && builder.append_grow(&text, arena, "grown") == builder.ErrorKind.None, "builder clear")
   arguments: [1][]const u8 = ["true"]
-  spawned := process.spawn(&arena, "/bin/true", arguments[..], process.Options{})
+  spawned := process.spawn(arena, "/bin/true", arguments[..], process.Options{})
   check(spawned.ok, "zero options spawn")
   exited := process.wait(&spawned.value, false)
   check(exited.ok && exited.code == 0, "zero options inherit")

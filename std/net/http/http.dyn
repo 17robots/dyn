@@ -60,9 +60,9 @@ fn append_bytes(destination: []u8, offset: usize, source: []const u8) usize {
 }
 
 fn append_usize(destination: []u8, offset: usize, value: usize) usize {
-  digits: [20]u8 = []
+  digits: [20 + memory.ArenaBufferOverhead]u8 = []
   scratch := memory.arena_from_buffer(digits[..])
-  return append_bytes(destination, offset, format.u64_decimal(&scratch, #cast(u64, value)))
+  return append_bytes(destination, offset, format.u64_decimal(scratch, #cast(u64, value)))
 }
 
 fn request_into(destination: []u8, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8 {
@@ -584,7 +584,7 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
 }
 // Borrowed inputs may live below the mark, but must not overlap future writes.
 fn validate_borrow(arena: *memory.Arena, input: []const u8) {
-  if bytes.overlaps(input, arena.data[arena.offset..]) {
+  if memory.arena_overlaps_unallocated(arena, input) {
     #panic("HTTP input overlaps arena output")
   }
 }
@@ -989,8 +989,16 @@ fn status_reason(status: u16) []const u8 {
 }
 
 fn decimal(destination: []u8, value: usize) []const u8 {
-  scratch := memory.arena_from_buffer(destination)
-  return format.u64_decimal(&scratch, #cast(u64, value))
+  digits: [20 + memory.ArenaBufferOverhead]u8 = []
+  scratch := memory.arena_from_buffer(digits[..])
+  text := format.u64_decimal(scratch, #cast(u64, value))
+  if #len(text) > #len(destination) {
+    return destination[..0]
+  }
+  for i in 0..#len(text) {
+    destination[i] = text[i]
+  }
+  return destination[..#len(text)]
 }
 
 fn write_output(destination: stream.Writer, bytes: []const u8) Result {
@@ -1270,14 +1278,14 @@ pub fn client_do(arena: *memory.Arena, input: stream.Reader, output: stream.Writ
   if sent.status == stream.Status.Error {
     return ClientResponse{ kind: sent.kind, detail: ErrorKind.Io, error: sent.error }
   }
-  result := client_receive(arena, mark, input, method)
+  result := client_receive(arena, input, method)
   if !result.ok {
     memory.arena_rewind(arena, mark)
   }
   return result
 }
 
-fn client_receive(arena: *memory.Arena, mark: usize, input: stream.Reader, method: []const u8) ClientResponse {
+fn client_receive(arena: *memory.Arena, input: stream.Reader, method: []const u8) ClientResponse {
   response_storage := arena.data[..0]
   used: usize = 0
   ended := false
@@ -1300,7 +1308,8 @@ fn client_receive(arena: *memory.Arena, mark: usize, input: stream.Reader, metho
           response_storage[i] = response_storage[head.header_length + i]
         }
         used = remaining
-        memory.arena_rewind(arena, mark + used)
+        response_mark := memory.arena_mark(arena) - #len(response_storage)
+        memory.arena_rewind(arena, response_mark + used)
         response_storage = response_storage[..used]
         head = HttpHead{}
         head_scan = 0
@@ -1336,7 +1345,10 @@ fn client_receive(arena: *memory.Arena, mark: usize, input: stream.Reader, metho
       }
       if complete {
         total := head.header_length + body_length
-        memory.arena_rewind(arena, mark + total)
+        // append_many can move the contiguous response into a later block.
+        // Its start is unrelated to the exchange's rollback entry mark.
+        response_mark := memory.arena_mark(arena) - #len(response_storage)
+        memory.arena_rewind(arena, response_mark + total)
         return ClientResponse{ raw: response_storage[..total], body: response_storage[head.header_length..total], status: head.code, ok: true }
       }
     }

@@ -56,14 +56,14 @@ fn main() {
   notifications: [1]net.Event = []
   waited := net.event_wait(queue.value, notifications[..], 10)
   require(!waited.ok && waited.error == -1 && waited.kind == errors.Kind.PermissionDenied)
-  arena: mem.Arena
-  defer mem.arena_release(&arena)
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
   server := net.ipv4(127,0,0,1,53)
-  resolved := dns.resolve_ipv4(&arena, "example.test", &server, 10)
-  require(!resolved.ok && resolved.error == -1 && resolved.kind == errors.Kind.PermissionDenied && #len(resolved.value) == 0 && mem.arena_mark(&arena) == 0)
+  resolved := dns.resolve_ipv4(arena, "example.test", &server, 10)
+  require(!resolved.ok && resolved.error == -1 && resolved.kind == errors.Kind.PermissionDenied && #len(resolved.value) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
   arguments: [3][]const u8 = ["sh", "-c", "exit 0"]
-  captured := process.capture(&arena, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:10})
-  require(!captured.ok && captured.error == -1 && captured.kind == errors.Kind.PermissionDenied && #len(captured.output) == 0 && #len(captured.errors) == 0 && mem.arena_mark(&arena) == 0)
+  captured := process.capture(arena, "/bin/sh", arguments[..], process.Options{}, process.CaptureOptions{timeout_milliseconds:10})
+  require(!captured.ok && captured.error == -1 && captured.kind == errors.Kind.PermissionDenied && #len(captured.output) == 0 && #len(captured.errors) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
   status: i32 = 0
   require(#syscall(61,-1,&status,1,0) == -10)
 }

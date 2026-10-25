@@ -10,22 +10,23 @@ fn read_nothing(data: rawptr, destination: []u8) io.Result {
   return io.Result{ status: io.Status.End }
 }
 
-// A zero Arena reserves on its first push and is reusable after release.
+// Explicit default arenas initialize zeroed payload; replacement follows release.
 fn zero_arena() {
-  arena := mem.Arena{}
-  first := mem.push(u64, &arena)
+  arena := mem.arena_create(0)
+  first := mem.push(u64, arena)
   first.* = 7
-  many := mem.push_array(u64, &arena, 100000)
+  many := mem.push_array(u64, arena, 100000)
   many[99999] = first.*
   if many[99999] != 7 || !arena.owns_memory {
     #panic("zero arena push")
   }
-  mem.arena_release(&arena)
-  again := mem.push(u32, &arena)
+  mem.arena_release(arena)
+  arena = mem.arena_create(0)
+  again := mem.push(u32, arena)
   if again.* != 0 {
     #panic("zero arena after release")
   }
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }
 
 fn zero_scanners() {
@@ -64,10 +65,10 @@ fn bytes_equal(a: []const u8, b: []const u8) bool {
 
 // Zeroed net handles are closed; closing one must not touch descriptor 0.
 fn zero_net_handles() {
-  arena := mem.Arena{}
-  defer mem.arena_release(&arena)
-  connection := mem.push(net.Connection, &arena)
-  listener := mem.push(net.Listener, &arena)
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
+  connection := mem.push(net.Connection, arena)
+  listener := mem.push(net.Listener, arena)
   if net.connection_close(connection).ok || net.listener_close(listener).ok {
     #panic("zero net handle closed")
   }
