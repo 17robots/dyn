@@ -59,7 +59,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/container/ring`, `bit_set` | Ring buffer and bit set over caller storage |
 | `std/sort` | In-place sort and binary search for any ordered element type |
 | `std/math` | Scalar arithmetic, bit helpers, concrete vectors, matrices, quaternions and ranges |
-| `std/hash` | Stable non-cryptographic hashes (FNV-1a) and checksums |
+| `std/hash` | Stable non-cryptographic hashes (FNV-1a, wyhash), CRC-32 and checksums |
 | `std/rand` | Deterministic caller-owned PRNG; not for cryptography |
 
 ### Encoding and formats
@@ -77,7 +77,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/semver` | Semantic Versioning 2.0 values |
 | `std/compress/deflate`, `gzip`, `zstd` | DEFLATE encode and decode, gzip members, zstd compress and decompress |
 | `std/archive/tar`, `zip` | TAR (ustar, PAX, GNU) and ZIP reading |
-| `std/image/png`, `qoi`, `color` | PNG encode and decode, QOI decode, into caller RGBA storage |
+| `std/image/png`, `qoi`, `color` | PNG and QOI encode and decode, with caller RGBA storage |
 
 ### Operating system
 

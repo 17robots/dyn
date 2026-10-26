@@ -20,6 +20,26 @@ are removed from the gap list.
   runs Linux natively and in a pseudo-terminal, and runs Windows under wine.
 - Status: done 2026-10-26. Real macOS and Windows console runs are pending CI.
 
+## Phase 1b: systems
+
+Requested 2026-10-26. Lands before GUI, which needs the event loop and text
+segmentation.
+
+1. Portable event loop over epoll, kqueue and IOCP (`std/event`).
+2. Job system: fixed workers, task queue over caller storage, wait groups
+   (`std/thread/pool`).
+3. Signals: interrupt and terminate handling, including the Windows console
+   handler (`std/process/signal`).
+4. Local time, time zones and calendar formatting (`std/time`).
+5. Read-only memory-mapped files (`fs.map`).
+6. Unicode grapheme, word and line segmentation (`std/unicode/segment`).
+7. Fast non-cryptographic hashes (wyhash) and CRC32 (`std/hash`).
+8. Shortest round-trip float formatting and exact parsing (verify `fmt`).
+9. Big integers (`std/math/big`).
+10. Portable 128-bit SIMD lanes (`std/simd`).
+11. Unix domain sockets, UDP multicast, IPv6 checks (`std/net`).
+12. Fuzzing support in `std/testing`.
+
 ## Phase 2: embedded helpers
 
 Move the board helpers out of `tests/bare-metal/board_*.dyn` into std beside
