@@ -110,6 +110,16 @@ This does not complete the GUI phase: TrueType/font atlas work, general text
 layout, native windows/input and GPU renderers remain open. Software text currently
 uses code-point advances and newline handling without kerning, wrapping or shaping.
 
+Qualification completed on 2026-10-26: focused UI and O2/O3 Wasm regressions
+passed, as did the browser/WASI, Wasm linker, assembly and semantics gates using
+the rebuilt release compiler. The broad registered regression run completed
+across an initial run and a resumed run after formatting the nested software
+renderer module explicitly. This is combined evidence, not an uninterrupted
+final-state run. `rv32-soft.py` was excluded because `qemu-system-riscv32` is
+unavailable; other missing system-emulator cases reported normal skips. All
+remaining gates and C regression binaries passed. UI source and example formatting
+and std lint pass. Real macOS and real Windows GUI execution remain unverified.
+
 ## Phase 4: vendor graphics and windowing without SDL
 
 - `vendor/window`: native windows and input for X11, Wayland, Win32 and
