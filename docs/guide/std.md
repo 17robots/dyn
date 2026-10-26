@@ -106,6 +106,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
+| `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
 | `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
 | `std/net/http`, `http/concurrent` | HTTP/1 client, server and router, and a worker-pool server |
@@ -191,3 +192,26 @@ and interface octets; an all-zero interface selects the system default.
 sets its TTL, and `multicast_leave_ipv4` drops membership. The loop option
 controls outgoing loopback on POSIX and receipt on Windows, matching the native
 socket semantics. Multicast delivery still depends on interface configuration.
+
+### Readiness queues
+
+`event.open(arena, capacity)` creates a single-owner, single-thread queue with
+caller-owned registration storage. Add nonblocking socket descriptors with
+`event.add(queue, descriptor, event.Readable | event.Writable, token)`, change
+interests with `modify`, and remove them before closing or reusing descriptors.
+The queue does not own registered sockets. Unix descriptors supported by the
+native backend may also be registered; Windows accepts sockets only.
+
+`event.wait(scratch, queue, milliseconds)` returns arena-owned events carrying
+the descriptor, caller token, and readiness/error/hangup flags. Use a separate
+scratch arena and rewind it between batches. Zero timeout polls; negative waits
+indefinitely. Interrupted finite waits preserve the original deadline. Readiness
+is level triggered and may become stale before an I/O call. macOS can return
+separate read and write events for one descriptor. Native control failures
+poison the queue because a multi-filter update can partially succeed: close and
+rebuild it. Validation errors do not poison it. Close is idempotent.
+
+Linux uses epoll, macOS uses kqueue, and Windows uses WSAPoll. Windows waits
+scan the registered sockets; this is not an IOCP operation-completion API.
+Timeouts let a caller run timers between batches; callbacks, timer scheduling,
+GUI message pumping and cross-thread wakeups remain application responsibilities.

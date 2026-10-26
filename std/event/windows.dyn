@@ -1,0 +1,49 @@
+#target(kernel: windows)
+// Readiness uses WSAPoll. IOCP reports completion of submitted operations and
+// cannot replace readiness without a separate operation/buffer lifetime API.
+fn native_open() net.Result {
+  return net.Result{ ok: true }
+}
+fn native_close(handle: isize) Result {
+  _ = handle
+  return Result{ ok: true }
+}
+fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
+  _ = queue
+  _ = index
+  _ = entry
+  return Result{ ok: true }
+}
+fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
+  count: usize = 0
+  for entry in queue.entries {
+    if entry.active {
+      count += 1
+    }
+  }
+  native := mem.push_array(net.PollDescriptor, arena, count)
+  indices := mem.push_array(usize, arena, count)
+  at: usize = 0
+  for i in 0..#len(queue.entries) {
+    entry := queue.entries[i]
+    if entry.active {
+      native[at] = net.PollDescriptor{ descriptor: entry.descriptor, events: #cast(i16, entry.events) }
+      indices[at] = i
+      at += 1
+    }
+  }
+  outcome := net.poll(native, timeout)
+  if !outcome.ok {
+    return WaitResult{ kind: outcome.kind, error: outcome.error }
+  }
+  events := mem.push_array(Event, arena, #cast(usize, outcome.value))
+  at = 0
+  for i in 0..count {
+    if native[i].returned != 0 {
+      entry := queue.entries[indices[i]]
+      events[at] = Event{ descriptor: entry.descriptor, token: entry.token, events: #cast(u32, native[i].returned) }
+      at += 1
+    }
+  }
+  return WaitResult{ value: events[..at], ok: true }
+}

@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/event` adds caller-owned readiness queues over epoll, kqueue and WSAPoll, with tokens and deadline-preserving waits.
+
 - IPv6 and Unix stream helpers, IPv4 UDP multicast membership and options, and loopback regression coverage. Unix paths reject embedded NULs.
 
 - `testing.fuzz` replays a corpus, then mutates it and shrinks failures; `testing.Source` decodes structured values from fuzz input.
