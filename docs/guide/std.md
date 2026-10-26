@@ -107,6 +107,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
+| `std/font`, `font/ui` | Initial TrueType simple-outline rasterizer, atlas packing and software UI font adapters |
 | `std/ui` | Immediate-mode buttons, checkboxes, integer sliders and arena-owned draw commands |
 | `std/ui/software` | RGBA software rendering with caller-provided bitmap glyphs |
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
@@ -290,5 +291,59 @@ build/dyn-release build tests/ui-demo --release --output build/ui-demo
 ```
 
 The example writes `build/ui-demo.png`. Its small bitmap alphabet belongs to the
-example; it is not a built-in std font. Native windows, OpenGL/Vulkan backends,
-TrueType rasterization and general text layout remain planned.
+example; it is not a built-in std font. Native windows, OpenGL/Vulkan backends and general text layout remain planned.
+Initial TrueType simple-outline support is described below.
+
+### TrueType fonts and atlases
+
+`font.open(bytes)` reads one SFNT TrueType face. The returned face borrows the
+bytes, which must remain immutable and alive. Unicode cmap formats 4 and 12,
+short/long loca, horizontal metrics and simple quadratic glyf outlines are
+supported. `glyph_index` returns glyph zero on a miss. `raster(arena, face,
+index, pixels_per_em)` produces an arena-owned alpha bitmap with horizontal
+advance and baseline-relative offsets. It ignores hint instructions and uses
+flattened quadratic curves with nonzero winding and 4x4 supersampling.
+
+This is initial simple-outline support, not full OpenType support. Composite
+glyphs return `Unsupported`; collections, CFF, variable-instance selection,
+hinting, kerning, shaping and general text layout are not implemented. A face
+can open successfully while an individual glyph returns `Unsupported` or
+`InvalidInput`. Structural checks are not a complete font-conformance validator;
+checksums are not verified. Parse errors use portable `kind`, native `error`
+(zero for parser failures), and `offset` when known. Failed raster/atlas calls
+rewind their arena allocations.
+
+Rasterization accepts 1..256 pixels per em. Limits are 8,192 outline points,
+1,048,576 bitmap pixels, 4,096 per dimension, and 16,777,216 pixel-edge pairs
+before supersampling. Larger work returns `Capacity`. Temporary storage includes
+points, flags and up to 129 edges per point; it is rewound before returning.
+This CPU reference renderer favors portability and bounded storage over speed.
+
+`font.atlas(arena, face, codepoints, pixels_per_em, width, height)` shelf-packs
+coverage into a caller-sized atlas with transparent padding. Codepoints must be
+strictly increasing Unicode scalars; dimensions are 1..4096. The atlas also
+caches glyph zero for lookup misses. `atlas_glyph` performs binary lookup and
+returns that fallback, or `nil_glyph` for an empty atlas. Atlas bytes and glyph
+records belong to the output arena. Cached output does not borrow font bytes.
+
+`font/ui.atlas_renderer(atlas)` adapts a stable atlas descriptor to the software
+renderer without allocation or rasterization. The direct `Adapter` alternative
+rasterizes on demand into its caller arena and keeps a sticky failure category;
+the software renderer returns `InvalidInput` for that failed callback. Both use
+hhea ascent/descent/line gap for baseline placement and newline spacing. Glyph
+coverage permits unused padding after the last row to be omitted, so atlas
+subregions do not require copied buffers.
+
+The [TrueType UI example](../../tests/font-ui-demo/main.dyn) accepts a font and
+output path. Font data is not bundled:
+
+```sh
+build/dyn-release build tests/font-ui-demo --release --output build/font-ui-demo
+build/font-ui-demo /path/to/simple-outline-font.ttf build/font-ui-demo.png
+```
+
+The reader follows the OpenType [glyf](https://learn.microsoft.com/en-us/typography/opentype/spec/glyf),
+[cmap](https://learn.microsoft.com/en-us/typography/opentype/spec/cmap),
+[head](https://learn.microsoft.com/en-us/typography/opentype/spec/head),
+[hhea](https://learn.microsoft.com/en-us/typography/opentype/spec/hhea) and
+[hmtx](https://learn.microsoft.com/en-us/typography/opentype/spec/hmtx) specifications.

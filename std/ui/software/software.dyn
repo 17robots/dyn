@@ -40,7 +40,12 @@ fn valid_glyph(glyph: *const Glyph) bool {
   if glyph.stride < #cast(usize, glyph.width) || glyph.stride == 0 {
     return false
   }
-  return #cast(usize, glyph.height) <= #len(glyph.pixels) / glyph.stride
+  width := #cast(usize, glyph.width)
+  if width > #len(glyph.pixels) {
+    return false
+  }
+  // Atlas views can end immediately after the last row's used pixels.
+  return #cast(usize, glyph.height - 1) <= (#len(glyph.pixels) - width) / glyph.stride
 }
 fn blend(surface: *Surface, x, y: i32, tint: ui.Color, coverage: u8) {
   alpha := (#cast(u32, tint.a) * #cast(u32, coverage) + 127) / 255

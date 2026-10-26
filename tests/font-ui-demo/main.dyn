@@ -1,0 +1,73 @@
+// Usage: font-ui-demo FONT.ttf OUTPUT.png. No platform font service is used.
+use "std/ui" ui
+use "std/ui/software" software
+use "std/mem" mem
+use "std/image/png" png
+use "std/fs" fs
+use "std/fmt" fmt
+use "std/font" font
+use "std/font/ui" font_ui
+use "std/process" process
+fn main() {
+  frame := mem.Arena{}
+  output := mem.Arena{}
+  defer {
+    mem.arena_release(&output)
+    mem.arena_release(&frame)
+  }
+  arguments := process.arguments(&output)
+  if !arguments.ok || #len(arguments.value) != 3 {
+    #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
+  }
+  bytes := fs.read_all(&output, arguments.value[1], 64000000)
+  if !bytes.ok {
+    #panic("cannot read font")
+  }
+  opened := font.open(bytes.value)
+  if !opened.ok {
+    #panic("unsupported or malformed TrueType font")
+  }
+  codepoints: [95]u32 = []
+  for i in 0..95 {
+    codepoints[i] = 32 + #cast(u32, i)
+  }
+  cached := font.atlas(&output, &opened.value, codepoints[..], 24, 512, 256)
+  if !cached.ok {
+    #panic("cannot cache font: simple outlines required")
+  }
+  context := ui.Context{}
+  viewport := ui.Rect{ width: 480, height: 240 }
+  count: i32 = 2
+  grid := true
+  // One press/release pair demonstrates the same input path as a window host.
+  ui.begin(&context, &frame, ui.Input{ x: 80, y: 110, pressed: true, released: true }, viewport)
+  ui.rectangle(&context, viewport, ui.Color{ r: 16, g: 20, b: 28, a: 255 })
+  ui.rectangle(&context, ui.Rect{ x: 16, y: 16, width: 448, height: 208 }, ui.Color{ r: 27, g: 33, b: 44, a: 255 })
+  ui.label(&context, ui.Rect{ x: 32, y: 30, width: 416, height: 24 }, "PORTABLE UI", context.style.foreground)
+  added := ui.button(&context, 1, ui.Rect{ x: 32, y: 100, width: 192, height: 32 }, "ADD", true)
+  if added.activated {
+    count += 1
+  }
+  reset := ui.button(&context, 2, ui.Rect{ x: 240, y: 100, width: 192, height: 32 }, "RESET", true)
+  if reset.activated {
+    count = 0
+  }
+  _ = ui.checkbox(&context, 3, ui.Rect{ x: 32, y: 152, width: 180, height: 24 }, "GRID", &grid, true)
+  _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
+  label_bytes: [32]u8 = []
+  label := fmt.buffer(label_bytes[..])
+  _ = fmt.write(&label, "COUNT ")
+  _ = fmt.write_i64(&label, #cast(i64, count))
+  ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
+  ui.end(&context)
+  pixels := mem.push_array(u8, &output, #cast(usize, 480 * 240 * 4))
+  surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
+  rendered := software.render(&surface, ui.first(&context), font_ui.atlas_renderer(&cached.value))
+  if !rendered.ok || count != 3 {
+    #panic("UI demo render")
+  }
+  encoded := png.encode(&output, pixels, 480, 240, 4)
+  if !encoded.ok || !fs.write_all(arguments.value[2], encoded.value).ok {
+    #panic("UI demo output")
+  }
+}

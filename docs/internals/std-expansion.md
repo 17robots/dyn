@@ -120,6 +120,33 @@ unavailable; other missing system-emulator cases reported normal skips. All
 remaining gates and C regression binaries passed. UI source and example formatting
 and std lint pass. Real macOS and real Windows GUI execution remain unverified.
 
+### Initial TrueType font slice (2026-10-26)
+
+`std/font` now loads single SFNT TrueType faces with cmap 4/12, horizontal metrics
+and short/long loca, rasterizes simple quadratic outlines without hinting, and
+packs caller-sized alpha atlases. `std/font/ui` connects direct or cached glyphs
+to the existing software renderer. The cache renders without new allocations.
+The font face borrows input bytes; rasterized bitmaps and atlases are arena-owned.
+
+Synthetic-font tests verify solid rectangles, oppositely wound holes, coverage
+against an analytic parabola, cmap/loca variants, truncation/mutation safety,
+failure rollback, atlas packing and rendering equivalence. The optional Liberation
+Sans example produces identical PNG output in debug/release and was inspected.
+No system font bytes are copied into the repository. Focused font and UI gates
+pass; font tests cross-build macOS and Windows ARM64 and execute on Linux,
+emulated ARM64/RISC-V64, Wine and WASI where available.
+
+This remains partial font support: composite glyphs explicitly return
+`Unsupported`. Composite transforms, hinting, collections, CFF, variable-instance
+selection, kerning, shaping and general text layout remain open. Native windows
+and GPU renderers are still pending. See the std guide for resource limits.
+
+Focused qualification also passes the existing UI, image-result and std memory
+contract gates in debug/release, plus the formatter and std lint. The full broad
+regression suite was not rerun for this isolated font slice. Native macOS and
+real Windows font execution remain unverified; cross-builds and Wine are distinct
+from native platform qualification.
+
 ## Phase 4: vendor graphics and windowing without SDL
 
 - `vendor/window`: native windows and input for X11, Wayland, Win32 and
