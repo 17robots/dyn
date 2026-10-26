@@ -1483,7 +1483,13 @@ static bool plan_dynamic(Linker *linker) {
     bool ok = true;
     if (preemptible(linker, symbol)) {
       ok = add_relocation(linker, &linker->got, i * 8, linker->glob_dat_type, symbol, 0) && add_dynsym(linker, symbol);
-    } else if (linker->shared_output && symbol->defined && !symbol->absolute) {
+    } else if (linker->shared_output &&
+               ((symbol->defined && !symbol->absolute) ||
+                (!symbol->defined && linker->outputs[OUT_DYN_UNWIND].count &&
+                 (!strcmp(symbol->name, "__start_dyn_unwind") ||
+                  !strcmp(symbol->name, "__stop_dyn_unwind"))))) {
+      /* Unwind boundaries are synthesized after layout; populated tables still
+         need the image base when their addresses are loaded through the GOT. */
       ok = add_relocation(linker, &linker->got, i * 8, linker->relative_type, symbol, 0);
     }
     if (!ok) return false;

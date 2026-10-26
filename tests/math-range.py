@@ -20,12 +20,20 @@ for suffix, scalar in [('u64', 'u64'), ('i64', 'i64'), ('f32', 'f32')]:
     source.append(f'if m.{prefix}_contains(r,x)!=(a<=x && x<b) {{ #panic("contains") }}')
     source.append(f'i:=m.{prefix}_intersect(r,s)\nif i.min<i.max && (!m.{prefix}_overlaps(r,s)) {{ #panic("intersection") }}')
     source.append('}')
-source.append('fn main() {')
+# Bound each generated function: one giant release-optimized main is a
+# compiler scaling workload, rather than a useful range-library regression.
+batches = []
 for suffix, scalar in [('u64', 'u64'), ('i64', 'i64'), ('f32', 'f32')]:
     typename, prefix = 'Rng1' + suffix, 'rng1' + suffix
     def literal(value):
         return f'#cast({scalar}, {value})'
     for case_index in range(120):
+        if case_index % 20 == 0:
+            if batches:
+                source.append('}')
+            name = f'range_cases_{suffix}_{case_index // 20}'
+            batches.append(name)
+            source.append(f'fn {name}() {{')
         a, b = sorted(randomizer.choices(range(0 if scalar == 'u64' else -100, 101), k=2))
         c, d = sorted(randomizer.choices(range(0 if scalar == 'u64' else -100, 101), k=2))
         if case_index == 0:
@@ -48,6 +56,7 @@ for suffix, scalar in [('u64', 'u64'), ('i64', 'i64'), ('f32', 'f32')]:
                    '}']
         source.insert(len(source)-1, f'if m.{prefix}_overlaps(r,s)!={str(a<b and c<d and a<d and c<b).lower()} {{ #panic("overlap oracle") }}')
         checks += 6
+source += ['}', 'fn main() {', *[f'{name}()' for name in batches]]
 source += ['''
 tiny:=#bitcast(f32,#cast(u32,1))
 twice:=#bitcast(f32,#cast(u32,2))
